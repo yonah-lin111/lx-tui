@@ -192,6 +192,23 @@ pub(crate) fn entry_hit(area: Rect, lx: &Lx, column: u16, row: u16) -> Option<Lx
         .map(|(entry, _)| entry)
 }
 
+/// 命中测试：AI Web 入口下，坐标落在某个站点标签内则返回该站点。
+pub(crate) fn ai_web_site_hit(
+    area: Rect,
+    lx: &Lx,
+    column: u16,
+    row: u16,
+) -> Option<crate::app::state::AiWebSite> {
+    if lx.entry != LxEntry::AiWeb {
+        return None;
+    }
+    let inv = layout(area, lx).inventory?;
+    brand::place_ai_web_sites(inv)
+        .into_iter()
+        .find(|(_, rect)| rect.contains((column, row).into()))
+        .map(|(site, _)| site)
+}
+
 /// 一段文案的落位；水平居中于 `width`。
 #[derive(Clone, Copy)]
 struct TextRect {
@@ -376,17 +393,19 @@ fn layout(area: Rect, lx: &Lx) -> Layout {
         .map(|(_, label)| u16::try_from(label.width()).unwrap_or(u16::MAX))
         .collect();
     let max_label = label_widths.iter().copied().max().unwrap_or(0);
+    let entry_count = u16::try_from(labels.len()).unwrap_or(0);
+    let entry_gaps = entry_count.saturating_sub(1);
     let horizontal_total = label_widths
         .iter()
         .fold(0u16, |sum, width| sum.saturating_add(*width))
-        .saturating_add(ENTRY_GAP.saturating_mul(2));
+        .saturating_add(ENTRY_GAP.saturating_mul(entry_gaps));
     let horizontal = horizontal_total <= content_w;
     let entries_h = if horizontal {
         ENTRY_HEIGHT
     } else {
         ENTRY_HEIGHT
-            .saturating_mul(3)
-            .saturating_add(ENTRY_VGAP.saturating_mul(2))
+            .saturating_mul(entry_count)
+            .saturating_add(ENTRY_VGAP.saturating_mul(entry_gaps))
     };
     let entries_fit = horizontal || max_label <= content_w;
 
@@ -462,10 +481,11 @@ fn place_entries(
 ) -> Vec<(LxEntry, Rect)> {
     let mut out = Vec::with_capacity(labels.len());
     if horizontal {
+        let gaps = u16::try_from(labels.len().saturating_sub(1)).unwrap_or(0);
         let total = label_widths
             .iter()
             .fold(0u16, |sum, entry| sum.saturating_add(*entry))
-            .saturating_add(ENTRY_GAP.saturating_mul(2));
+            .saturating_add(ENTRY_GAP.saturating_mul(gaps));
         let mut x = x0 + width.saturating_sub(total) / 2;
         for ((entry, _), label_w) in labels.iter().zip(label_widths) {
             out.push((*entry, Rect::new(x, top, *label_w, ENTRY_HEIGHT)));
@@ -513,7 +533,11 @@ fn build(
 
     brand::draw_entries(&mut grid, lx.entry, &lay.entries, lay.horizontal);
     if let Some(rect) = lay.inventory {
-        brand::draw_inventory(&mut grid, rect, lx.startup);
+        if lx.entry == LxEntry::AiWeb {
+            brand::draw_ai_web_sites(&mut grid, rect, lx.ai_web_site);
+        } else {
+            brand::draw_inventory(&mut grid, rect, lx.startup);
+        }
     }
 
     chat_bar::draw(&mut grid, lay.chat_bar, lx);

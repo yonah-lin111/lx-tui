@@ -2,6 +2,7 @@
 //!
 //! 统一负责“DB 落库 → 状态 → 回执”顺序；delta 与终态按 `(pane, session, generation)` 过滤。
 
+pub mod ai_web;
 pub mod ask;
 pub mod compact;
 pub mod connect;
@@ -23,7 +24,8 @@ pub mod user_shell;
 use crate::chat::ModelItem;
 pub use process_events::{handle_process_event, persist_terminal_snapshots};
 pub use process_page::{
-    apply_process_effects, refresh_open_task_pages, sync_background_task_counts, tick_task_pages,
+    apply_process_effects, refresh_open_task_pages, stop_turn_processes,
+    sync_background_task_counts, tick_task_pages,
 };
 pub use user_shell::pump_user_shells;
 // 工具握手与时间线辅助的实现在子模块；本模块保留唯一入口。
@@ -34,31 +36,6 @@ pub(crate) use timeline::{assemble_turn_request_with_context, prepare_turn, sche
 #[cfg(test)]
 pub(crate) use tool_calls::view_summary;
 pub(crate) use tool_calls::{begin_tool, finish_tool, flush_pending_tool_begins};
-
-/// 停止本轮进程（D9）：本轮新建集合 ∪ 当前正在等待/交互的进程。
-///
-/// 此前启动、本轮未操作的旧服务保持运行；停止在后台任务执行，事件循环继续渲染与响应输入。
-pub fn stop_turn_processes(streams: &mut ChatStreams, key: &RequestKey) {
-    let Some(runtime) = streams.runtimes.get(&key.session) else {
-        return;
-    };
-    let manager = runtime.manager().clone();
-    let Some(turn) = runtime.turn_context(&key.generation.to_string()) else {
-        return;
-    };
-    // 目标集合必须在事件循环里**同步**取定：放到 spawn 出去的任务里异步读，会与
-    // 「工具已换目标」竞态（读到的是下一刻的集合，可能漏杀或错杀）。
-    let targets: Vec<u64> = turn
-        .try_lock()
-        .map(|turn| turn.stop_targets().into_iter().collect())
-        .unwrap_or_default();
-    if targets.is_empty() {
-        return;
-    }
-    tokio::spawn(async move {
-        manager.stop_many(targets).await;
-    });
-}
 
 #[cfg(test)]
 mod tests;
@@ -326,12 +303,13 @@ pub fn pump_chat_streams(
         .effects
         .iter()
         .filter(|effect| {
-            matches!(
-                effect,
-                Effect::StartChatStream { .. }
-                    | Effect::CancelChatStream { .. }
-                    | Effect::AnswerAsk { .. }
-            )
+            ai_web::is_ai_web_effect(effect)
+                || matches!(
+                    effect,
+                    Effect::StartChatStream { .. }
+                        | Effect::CancelChatStream { .. }
+                        | Effect::AnswerAsk { .. }
+                )
         })
         .cloned()
         .collect();
@@ -340,17 +318,25 @@ pub fn pump_chat_streams(
         return changed;
     }
     state.effects.retain(|effect| {
-        !matches!(
-            effect,
-            Effect::StartChatStream { .. }
-                | Effect::CancelChatStream { .. }
-                | Effect::AnswerAsk { .. }
-        )
+        !ai_web::is_ai_web_effect(effect)
+            && !matches!(
+                effect,
+                Effect::StartChatStream { .. }
+                    | Effect::CancelChatStream { .. }
+                    | Effect::AnswerAsk { .. }
+            )
     });
     for effect in effects {
         match effect {
             Effect::StartChatStream { key, assistant_id } => {
                 changed |= start_stream(state, streams, sender, persistence, key, assistant_id);
+            }
+            Effect::StartAiWebStream { key, site, prompt } => {
+                changed |= ai_web::start_stream(state, streams, sender, key, site, prompt);
+            }
+            Effect::ResetAiWebSession { site } => {
+                ai_web::reset_session(site);
+                changed = true;
             }
             Effect::CancelChatStream { key } => {
                 // loop 在下一个检查点停止未开始的工具与后续采样。
@@ -914,17 +900,20 @@ pub fn handle_net_event(
     }
     match event {
         ChatNetEvent::Delta { key, deltas } => {
-            // 累计字节：超过间隔或阈值时入队一次 checkpoint（合并写盘）。
-            let bytes: usize = deltas.iter().map(ChatDelta::payload_bytes).sum();
-            let entry = streams
-                .checkpoints
-                .entry(key.clone())
-                .or_insert_with(|| (std::time::Instant::now(), 0));
-            entry.1 += bytes;
-            let due = entry.1 >= CHECKPOINT_BYTES || entry.0.elapsed() >= CHECKPOINT_INTERVAL;
-            if due {
-                *entry = (std::time::Instant::now(), 0);
-                schedule_checkpoint(state, &key);
+            // AI Web 是纯内存会话：不写 checkpoint，也不触发任何 DB 快照调度。
+            if !ai_web::is_ai_web_session(&key.session) {
+                // 累计字节：超过间隔或阈值时入队一次 checkpoint（合并写盘）。
+                let bytes: usize = deltas.iter().map(ChatDelta::payload_bytes).sum();
+                let entry = streams
+                    .checkpoints
+                    .entry(key.clone())
+                    .or_insert_with(|| (std::time::Instant::now(), 0));
+                entry.1 += bytes;
+                let due = entry.1 >= CHECKPOINT_BYTES || entry.0.elapsed() >= CHECKPOINT_INTERVAL;
+                if due {
+                    *entry = (std::time::Instant::now(), 0);
+                    schedule_checkpoint(state, &key);
+                }
             }
             update::on_stream_delta(state, &key, &deltas)
         }
@@ -935,6 +924,8 @@ pub fn handle_net_event(
             usage,
             billing,
         } => {
+            // 登录 / 驱动错误在 lx 窗格内立即可见（AI Web 没有 DB 历史可回溯）。
+            ai_web::notify_failure(state, &key, &reason);
             // 清除在途取消句柄、checkpoint 与冻结工作区。
             streams.finish(&key);
             // 防御 sweep：流程走完时不应还剩面板；留下就是悬挂 sender。

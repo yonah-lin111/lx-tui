@@ -15,6 +15,7 @@ use crate::db::chat::{ModelSnapshot, TurnOutcome, Usage};
 use crate::layout::PaneId;
 use crate::ui::text;
 
+pub mod ai_web;
 pub mod ask;
 pub mod compact;
 mod connect;
@@ -156,6 +157,10 @@ pub fn try_send(state: &mut AppState, pane: PaneId) -> bool {
         (entry, draft, busy, selection, session_id, generation)
     };
     let (entry, draft, busy, selection, session_id, generation) = context;
+    // AI Web 走纯内存网页会话：不校验本地模型/工作区，不写 SQLite。
+    if entry == crate::app::state::LxEntry::AiWeb {
+        return ai_web::try_send_ai_web(state, pane, draft, busy, generation);
+    }
     // 只有 Native Agent 发送；Hybrid/Automation 显示不可用提示。
     if entry != crate::app::state::LxEntry::Native {
         show_lx_hint(
@@ -559,6 +564,12 @@ pub fn on_stream_finished(
     if matches!(reason, StopReason::Cancelled) {
         target.lx.chat.main_stopped = true;
     }
+    // AI Web 是纯内存会话：消息已在上面结算，直接回 Idle，不入队 DB 终态写入。
+    if ai_web::is_ai_web_session(&key.session) {
+        target.lx.chat.request = RequestState::Idle;
+        refresh_lx_status(state, key.pane);
+        return true;
+    }
     target.lx.chat.request = RequestState::Finishing {
         key: key.clone(),
         reason: reason.clone(),
@@ -800,6 +811,16 @@ pub fn refresh_lx_status(state: &mut AppState, pane: PaneId) {
     let models = state.models.clone();
     if let Some(target) = state.pane_mut_anywhere(pane) {
         target.lx.chat.refresh_status(&models);
+        if target.lx.entry == crate::app::state::LxEntry::AiWeb
+            || target
+                .lx
+                .chat
+                .session_id
+                .as_deref()
+                .is_some_and(ai_web::is_ai_web_session)
+        {
+            ai_web::apply_ai_web_status(&mut target.lx);
+        }
     }
 }
 

@@ -10,7 +10,7 @@ pub mod todo;
 use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
 
 use crate::app::markdown::{BlockCommandId, TemplateCounts, TemplateStatus};
-use crate::app::state::{AppState, LxEntry, PaneView, WorkspaceIdentity};
+use crate::app::state::{AiWebSite, AppState, LxEntry, PaneView, WorkspaceIdentity};
 use crate::app::tooltip::{BlockButtonKind, TemplateButtonKind, TooltipTarget};
 use crate::detect::{AgentKind, AgentState};
 use crate::layout::PaneId;
@@ -225,10 +225,13 @@ pub const LX_SHELL_STOP_ARMED: &str = "Press Esc again to stop the running comma
 /// loading 行右端的回到底部控件：箭头 + 右侧说明文字。
 pub const LX_JUMP_BOTTOM: &str = "↓";
 pub const LX_JUMP_BOTTOM_HINT: &str = "jump to bottom";
-/// lx 页三个入口标签。
+/// lx 页四个入口标签。
 pub const LX_ENTRY_NATIVE: &str = "Native Agent";
 pub const LX_ENTRY_HYBRID: &str = "Hybrid Agent";
 pub const LX_ENTRY_AUTOMATION: &str = "Automation Agent";
+pub const LX_ENTRY_AI_WEB: &str = "AI Web";
+/// AI Web 目标站点标签。
+pub const AI_WEB_SITE_DEEPSEEK: &str = "DeepSeek";
 /// lx 页横排入口标签之间的分隔符。
 pub const LX_ENTRY_SEPARATOR: &str = "·";
 /// lx 页入口 Tip 提示前缀；前缀强调色、句子 muted。
@@ -243,6 +246,7 @@ pub const LX_HOME_ERRORS: &str = "errors";
 pub const LX_ENTRY_NATIVE_DESC: &str = "talks to the model directly";
 pub const LX_ENTRY_HYBRID_DESC: &str = "mixes native and external agents";
 pub const LX_ENTRY_AUTOMATION_DESC: &str = "runs your tasks automatically";
+pub const LX_ENTRY_AI_WEB_DESC: &str = "chat directly with web AI models";
 /// lx 页 md 格式面板边框标题。
 pub const LX_BLOCK_PANEL_TITLE: &str = "Markdown";
 
@@ -252,6 +256,7 @@ pub fn lx_entry_label(entry: LxEntry) -> &'static str {
         LxEntry::Native => LX_ENTRY_NATIVE,
         LxEntry::Hybrid => LX_ENTRY_HYBRID,
         LxEntry::Automation => LX_ENTRY_AUTOMATION,
+        LxEntry::AiWeb => LX_ENTRY_AI_WEB,
     }
 }
 
@@ -261,6 +266,14 @@ pub fn lx_entry_description(entry: LxEntry) -> &'static str {
         LxEntry::Native => LX_ENTRY_NATIVE_DESC,
         LxEntry::Hybrid => LX_ENTRY_HYBRID_DESC,
         LxEntry::Automation => LX_ENTRY_AUTOMATION_DESC,
+        LxEntry::AiWeb => LX_ENTRY_AI_WEB_DESC,
+    }
+}
+
+/// AI Web 站点显示名称。
+pub fn ai_web_site_label(site: AiWebSite) -> &'static str {
+    match site {
+        AiWebSite::Deepseek => AI_WEB_SITE_DEEPSEEK,
     }
 }
 
@@ -594,6 +607,9 @@ pub const PROMPT_TITLE_FAILED: &str = "Failed to generate title";
 /// 过长会被 `…` 截断。因此用短语而不是整句——多余的上下文由位置本身表达
 /// （它就贴在用户刚敲字的输入框上面）。
 pub const LX_CHAT_ENTRY_UNAVAILABLE: &str = "Native Agent only";
+pub const LX_AI_WEB_LOGIN_REQUIRED: &str = "Please sign in to DeepSeek in ego-browser";
+pub const LX_AI_WEB_EGO_UNAVAILABLE: &str = "ego-browser is not installed or unavailable";
+pub const LX_AI_WEB_ONLY_NEW_CMD: &str = "Only /new is available in AI Web";
 pub const LX_CHAT_NO_MODEL: &str = "No model configured";
 pub const LX_CHAT_NO_WORKSPACE: &str = "No workspace path";
 pub const LX_CHAT_COMMIT_FAILED: &str = "Send failed, retry";

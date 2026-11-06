@@ -651,6 +651,8 @@ impl Persistence {
             // 网络与进程效应由事件层执行（pump 已过滤；此处兜底忽略并记录）。
             // 进程句柄只存在于事件层的运行实例里，持久化层既读不到也停不了。
             Effect::StartChatStream { .. }
+            | Effect::StartAiWebStream { .. }
+            | Effect::ResetAiWebSession { .. }
             | Effect::CancelChatStream { .. }
             | Effect::AnswerAsk { .. } => {
                 tracing::warn!("chat network effect reached persistence pump");
@@ -875,6 +877,8 @@ fn is_network_effect(effect: &Effect) -> bool {
     matches!(
         effect,
         Effect::StartChatStream { .. }
+            | Effect::StartAiWebStream { .. }
+            | Effect::ResetAiWebSession { .. }
             | Effect::CancelChatStream { .. }
             | Effect::AnswerAsk { .. }
             // 进程效应与网络效应同一处置：持久化泵不碰，交给事件层。

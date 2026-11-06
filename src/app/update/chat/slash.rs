@@ -411,6 +411,23 @@ pub fn persist_default_model(state: &mut AppState, selection: &ModelSelection) -
 
 /// 命令采纳：`/model`、`/resume`、`/new` 的命令文本不被发送。
 pub fn apply_slash_command(state: &mut AppState, pane: PaneId, command: SlashCommand) -> bool {
+    // AI Web 只支持 `/new`：其余命令均为本地 Agent/DB 能力，给出统一提示。
+    if command != SlashCommand::New
+        && state
+            .pane_anywhere(pane)
+            .is_some_and(|target| target.lx.entry == crate::app::state::LxEntry::AiWeb)
+    {
+        if let Some(target) = state.pane_mut_anywhere(pane) {
+            target.lx.slash = None;
+        }
+        show_lx_hint(
+            state,
+            pane,
+            InputHintLevel::Warning,
+            text::LX_AI_WEB_ONLY_NEW_CMD,
+        );
+        return true;
+    }
     match command {
         SlashCommand::Model => open_model_picker(state, pane),
         SlashCommand::Resume => open_history(state, pane),
@@ -439,17 +456,31 @@ pub fn apply_slash_command(state: &mut AppState, pane: PaneId, command: SlashCom
 /// 返回 `true` 表示草稿是 `/rename` 命令（无论成功改名还是因空参/无会话被拦截），
 /// 调用方 `try_send` 应立即返回，绝不将其作为普通消息发给模型。
 pub fn try_submit_rename_command(state: &mut AppState, pane: PaneId) -> bool {
-    let Some((input, session_id)) = state.pane_anywhere(pane).and_then(|target| {
+    let Some((input, session_id, entry)) = state.pane_anywhere(pane).and_then(|target| {
         if target.view != crate::app::state::PaneView::Lx || target.lx.shell_mode() {
             return None;
         }
-        Some((target.lx.input.clone(), target.lx.chat.session_id.clone()))
+        Some((
+            target.lx.input.clone(),
+            target.lx.chat.session_id.clone(),
+            target.lx.entry,
+        ))
     }) else {
         return false;
     };
     let Some(title) = crate::app::state::lx::slash::parse_rename_command(&input) else {
         return false;
     };
+    // AI Web 没有本地会话记录可改名。
+    if entry == crate::app::state::LxEntry::AiWeb {
+        show_lx_hint(
+            state,
+            pane,
+            InputHintLevel::Warning,
+            text::LX_AI_WEB_ONLY_NEW_CMD,
+        );
+        return true;
+    }
     if title.is_empty() {
         // 用户未输入参数直接回车：保持 `/rename ` 回显与 `[name]` 提示，弹 Toast 提醒。
         if let Some(target) = state.pane_mut_anywhere(pane)
@@ -526,8 +557,9 @@ pub(crate) fn refresh_slash_panel(state: &mut AppState, pane: PaneId) {
     let query = state.pane_anywhere(pane).and_then(|target| {
         let masked = crate::app::paste::mask_pasted_text(&target.lx.input);
         crate::app::state::lx::slash::slash_trigger(&masked, target.lx.cursor)
+            .map(|query| (query, target.lx.entry))
     });
-    let Some(query) = query else {
+    let Some((query, entry)) = query else {
         // 离开命令位置时关闭命令候选面板（model/resume 面板不受影响）。
         if let Some(target) = state.pane_mut_anywhere(pane)
             && matches!(
@@ -540,7 +572,8 @@ pub(crate) fn refresh_slash_panel(state: &mut AppState, pane: PaneId) {
         return;
     };
     // `/` 前缀或更具体前缀：命令候选实时过滤；skill 归 `@` 面板管理。
-    let matching = crate::app::state::lx::slash::SlashPanel::command_entries(&query);
+    // AI Web 只暴露 `/new`，其余命令不出现在候选里。
+    let matching = crate::app::state::lx::slash::SlashPanel::command_entries_for(entry, &query);
     if let Some(target) = state.pane_mut_anywhere(pane) {
         if matching.is_empty() {
             if matches!(

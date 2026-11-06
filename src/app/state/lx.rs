@@ -61,17 +61,35 @@ pub use slash::{
 };
 pub use task::{AgentFilter, ProcessEntry, TaskPage, TaskTab};
 
-/// lx 页三个入口：原生 agent、混合 agent、自动化 agent。
+/// lx 页四个入口：原生 agent、混合 agent、自动化 agent、AI Web。
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum LxEntry {
     Native,
     Hybrid,
     Automation,
+    AiWeb,
 }
 
 impl LxEntry {
-    /// 三个入口的显示顺序。
-    pub const ALL: [LxEntry; 3] = [LxEntry::Native, LxEntry::Hybrid, LxEntry::Automation];
+    /// 四个入口的显示顺序。
+    pub const ALL: [LxEntry; 4] = [
+        LxEntry::Native,
+        LxEntry::Hybrid,
+        LxEntry::Automation,
+        LxEntry::AiWeb,
+    ];
+}
+
+/// AI Web 支持的目标站点（首期接入 DeepSeek）。
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub enum AiWebSite {
+    #[default]
+    Deepseek,
+}
+
+impl AiWebSite {
+    /// 全部 AI Web 站点的显示顺序。
+    pub const ALL: [AiWebSite; 1] = [AiWebSite::Deepseek];
 }
 
 /// 首页资源计数的一类（MCP server / skill）。
@@ -101,6 +119,8 @@ pub struct StartupCounts {
 pub struct Lx {
     /// 当前选中入口；仅鼠标点击切换，重启复位为 Native。
     pub entry: LxEntry,
+    /// AI Web 入口当前选中的目标站点。
+    pub ai_web_site: AiWebSite,
     /// 多行输入内容；Shell 模式下只存命令正文（不含 `!` 前缀）。
     pub input: String,
     /// 当前编辑模式；仅首个非空白字符决定，正文中的 `！` 不触发。
@@ -220,6 +240,7 @@ impl Lx {
     fn build(plain: bool) -> Self {
         Self {
             entry: LxEntry::Native,
+            ai_web_site: AiWebSite::Deepseek,
             input: String::new(),
             input_mode: LxInputMode::Chat,
             revision: 0,

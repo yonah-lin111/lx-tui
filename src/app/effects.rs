@@ -144,6 +144,16 @@ pub enum Effect {
         key: crate::app::state::lx::RequestKey,
         assistant_id: String,
     },
+    /// 启动 AI Web 网页对话流（通过本机 ego-browser 驱动网页端并以行协议回投）。
+    StartAiWebStream {
+        key: crate::app::state::lx::RequestKey,
+        site: crate::app::state::lx::AiWebSite,
+        prompt: String,
+    },
+    /// 重置 AI Web 网页端会话（`/new` 时触发网页开启新对话）。
+    ResetAiWebSession {
+        site: crate::app::state::lx::AiWebSite,
+    },
     /// 取消在途网络流（流取消后仍走 Finishing 收尾保存 partial）。
     CancelChatStream {
         key: crate::app::state::lx::RequestKey,

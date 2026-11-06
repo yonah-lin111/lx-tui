@@ -30,6 +30,15 @@ pub fn new_session(state: &mut AppState, pane: PaneId) -> bool {
     let Some(target) = state.pane_mut_anywhere(pane) else {
         return false;
     };
+    // AI Web 会话只存在内存：`/new` 同时要求网页端开启新对话。
+    let reset_ai_web = target.lx.entry == crate::app::state::LxEntry::AiWeb
+        || target
+            .lx
+            .chat
+            .session_id
+            .as_deref()
+            .is_some_and(super::ai_web::is_ai_web_session);
+    let ai_web_site = target.lx.ai_web_site;
     target.lx.chat.reset_session_view();
     target.lx.clear_agents();
     target.lx.compact.reset();
@@ -38,6 +47,11 @@ pub fn new_session(state: &mut AppState, pane: PaneId) -> bool {
     target.lx.text_paste_cancel();
     target.lx.clear_expanded_pastes();
     crate::app::update::clear_lx_selection_for(state, pane);
+    if reset_ai_web {
+        state
+            .effects
+            .push(crate::app::effects::Effect::ResetAiWebSession { site: ai_web_site });
+    }
     refresh_lx_status(state, pane);
     true
 }

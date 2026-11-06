@@ -62,6 +62,14 @@ pub(crate) fn icon_pixel(entry: LxEntry, ch: char) -> char {
             'n' => 'b',
             other => other,
         },
+        // 主粉与天蓝互换、深粉与冰蓝互换。
+        LxEntry::AiWeb => match ch {
+            'p' => 'b',
+            'b' => 'p',
+            'n' => 'c',
+            'c' => 'n',
+            other => other,
+        },
     }
 }
 
@@ -201,6 +209,61 @@ fn inventory_parts(count: StartupCount, label: &str, color: Style) -> Vec<(Strin
         parts.push((format!("{} {label}", count.errors), style::agent_fail()));
     }
     parts
+}
+
+/// 计算 AI Web 站点选择行内各站点的命中矩形（水平居中于 `rect`）。
+pub(super) fn place_ai_web_sites(rect: Rect) -> Vec<(crate::app::state::AiWebSite, Rect)> {
+    if rect.width == 0 || rect.height == 0 {
+        return Vec::new();
+    }
+    let sites = crate::app::state::AiWebSite::ALL;
+    let widths: Vec<u16> = sites
+        .iter()
+        .map(|site| u16::try_from(text::ai_web_site_label(*site).width()).unwrap_or(u16::MAX))
+        .collect();
+    let gaps = u16::try_from(sites.len().saturating_sub(1)).unwrap_or(0);
+    let total = widths
+        .iter()
+        .fold(0u16, |sum, w| sum.saturating_add(*w))
+        .saturating_add(3u16.saturating_mul(gaps));
+    let mut x = rect.x.saturating_add(rect.width.saturating_sub(total) / 2);
+    let mut out = Vec::with_capacity(sites.len());
+    for (site, w) in sites.into_iter().zip(widths) {
+        let clamped_w = w.min(rect.right().saturating_sub(x));
+        if clamped_w > 0 {
+            out.push((site, Rect::new(x, rect.y, clamped_w, 1)));
+        }
+        x = x.saturating_add(w).saturating_add(3);
+    }
+    out
+}
+
+/// 绘制 AI Web 站点选择行：替换欢迎页的 AGENTS.md / mcp / skills 计数行。
+pub(super) fn draw_ai_web_sites(
+    grid: &mut Grid,
+    rect: Rect,
+    selected: crate::app::state::AiWebSite,
+) {
+    let placed = place_ai_web_sites(rect);
+    for (index, (site, site_rect)) in placed.iter().enumerate() {
+        let label =
+            text::truncate_to_width(text::ai_web_site_label(*site), usize::from(site_rect.width));
+        let site_style = if *site == selected {
+            style::accent().add_modifier(ratatui::style::Modifier::BOLD)
+        } else {
+            style::muted()
+        };
+        grid.put(site_rect.x, site_rect.y, &label, site_style);
+        if let Some((_, next_rect)) = placed.get(index + 1) {
+            let gap = next_rect.x.saturating_sub(site_rect.right());
+            grid.put(
+                site_rect.right().saturating_add(gap / 2),
+                site_rect.y,
+                text::LX_ENTRY_SEPARATOR,
+                style::muted(),
+            );
+        }
+    }
 }
 
 /// 绘制 Tip 提示行：`Tip:` 前缀强调色、其后句子次要信息；整体居中、超宽截断。

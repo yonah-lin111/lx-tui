@@ -653,8 +653,20 @@ pub fn set_lx_entry(state: &mut AppState, id: PaneId, entry: crate::app::state::
     if let Some(pane) = state.pane_mut_anywhere(id) {
         pane.lx.text_paste_cancel();
         pane.lx.paste_cancel();
+        if pane.lx.entry != entry {
+            pane.lx.slash = None;
+        }
         pane.lx.entry = entry;
     }
+    super::chat::refresh_lx_status(state, id);
+}
+
+/// 切换 AI Web 目标站点；底边框状态行展示的站点名随之更新。
+pub fn set_ai_web_site(state: &mut AppState, id: PaneId, site: crate::app::state::AiWebSite) {
+    if let Some(pane) = state.pane_mut_anywhere(id) {
+        pane.lx.ai_web_site = site;
+    }
+    super::chat::refresh_lx_status(state, id);
 }
 
 /// 切换窗格主内容视图（lx 页 ↔ 终端）；返回是否变化。

@@ -672,6 +672,19 @@ impl SlashPanel {
             .collect()
     }
 
+    /// 按 lx 入口裁剪命令候选：AI Web 为纯网页对话，只保留 `/new`。
+    pub fn command_entries_for(entry: super::LxEntry, query: &str) -> Vec<SlashEntry> {
+        if entry == super::LxEntry::AiWeb {
+            Self::commands_matching(query)
+                .into_iter()
+                .filter(|command| *command == SlashCommand::New)
+                .map(SlashEntry::Command)
+                .collect()
+        } else {
+            Self::command_entries(query)
+        }
+    }
+
     /// 高亮项（命令面板）。
     pub fn active_command_entry(&self) -> Option<&SlashEntry> {
         match self {
