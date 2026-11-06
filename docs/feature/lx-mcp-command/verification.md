@@ -1,8 +1,8 @@
 # `/mcp` 命令与窗格级 MCP 管理 — 验证报告 (`verification.md`)
 
 - **特性目录**：`docs/feature/lx-mcp-command/`
-- **关联文档**：[`design.md`](design.md) · [`task.md`](task.md)
-- **验证工作区**：`.worktrees/lx-mcp-command`（分支 `feature/lx-mcp-command`）
+- **关联文档**：[`design.md`](design.md) · [`task.md`](task.md) · [`review.md`](review.md)
+- **验证工作区**：`.worktrees/lx-mcp-command`（分支 `feature/lx-mcp-command`，已合并入主工作区 `dev` 并清理）
 - **验证结论**：全部 8 个验证项通过（`PASS`）
 
 ---

@@ -1,8 +1,8 @@
 # `/mcp` 命令与窗格级 MCP 管理 — 执行任务清单 (`task.md`)
 
 - **特性目录**：`docs/feature/lx-mcp-command/`
-- **关联设计文档**：[`design.md`](design.md)
-- **当前状态**：已完成实现与验证
+- **关联设计文档**：[`design.md`](design.md) · [`verification.md`](verification.md) · [`review.md`](review.md)
+- **当前状态**：已完成实现、验证、评审修复并合并入主工作区 `dev` 分支（worktree 与特性分支已清理）
 - **数据库迁移**：无（`SCHEMA_VERSION` 保持不变）
 
 ---

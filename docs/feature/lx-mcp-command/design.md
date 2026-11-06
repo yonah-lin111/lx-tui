@@ -2,7 +2,7 @@
 
 - **特性目录**：`docs/feature/lx-mcp-command/`
 - **关联任务清单**：[`task.md`](task.md) · [`verification.md`](verification.md) · [`review.md`](review.md)
-- **当前状态**：已完成实现、CLI 扩展与评审修复
+- **当前状态**：已完成实现、CLI 扩展、评审修复并合并入主工作区 `dev` 分支（worktree 与特性分支已清理）
 - **参考实现**：`/Users/yonah/projects/agent/opencode-dev`
   - `packages/tui/src/component/dialog-mcp.tsx`（TUI `/mcps` 面板：名称排序、模糊过滤、状态标签、原地切换/重连）
   - `packages/app/src/providers/connect/mcp-dialog.tsx`（App `/mcp` 面板）
