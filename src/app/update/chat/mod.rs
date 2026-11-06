@@ -19,6 +19,7 @@ pub mod ask;
 pub mod compact;
 mod connect;
 mod fork;
+pub mod mcp;
 pub mod model_switch;
 mod process;
 pub mod rewind;
@@ -47,6 +48,10 @@ pub use connect::{
     set_connect_viewport,
 };
 pub use fork::{on_fork_completed, on_fork_failed, open_fork_panel};
+pub use mcp::{
+    build_panel_entries as build_mcp_panel_entries, mcp_root_for_pane, open_mcp_panel,
+    refresh_all_open_mcp_panels, refresh_pane_mcp_panel, toggle_mcp_entry,
+};
 pub use model_switch::{set_switches as set_model_switches, toggle_model_switch};
 pub use process::{
     activate_tool_card, apply_interaction_exit, apply_process_exit, apply_process_output,

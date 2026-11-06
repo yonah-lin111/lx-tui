@@ -93,11 +93,13 @@ pub enum SlashCommand {
     Rename,
     /// `/connect`：快捷连接预设供应商（API Key / OAuth）。
     Connect,
+    /// `/mcp`（别名 `/mcps`）：管理当前窗格的 MCP servers。
+    Mcp,
 }
 
 impl SlashCommand {
     /// 全部命令（固定顺序）。
-    pub const ALL: [SlashCommand; 9] = [
+    pub const ALL: [SlashCommand; 10] = [
         SlashCommand::Model,
         SlashCommand::Resume,
         SlashCommand::Fork,
@@ -107,6 +109,7 @@ impl SlashCommand {
         SlashCommand::Subagents,
         SlashCommand::Rename,
         SlashCommand::Connect,
+        SlashCommand::Mcp,
     ];
 
     /// 命令名（不含 `/`）。
@@ -121,6 +124,7 @@ impl SlashCommand {
             Self::Subagents => "subagents",
             Self::Rename => "rename",
             Self::Connect => "connect",
+            Self::Mcp => "mcp",
         }
     }
 
@@ -136,6 +140,7 @@ impl SlashCommand {
             Self::Subagents => &["agents"],
             Self::Rename => &["title"],
             Self::Connect => &[],
+            Self::Mcp => &["mcps"],
         }
     }
 
@@ -151,6 +156,7 @@ impl SlashCommand {
             Self::Subagents => "/subagents",
             Self::Rename => "/rename",
             Self::Connect => "/connect",
+            Self::Mcp => "/mcp",
         }
     }
 
@@ -166,6 +172,7 @@ impl SlashCommand {
             Self::Subagents => "Open background subagents panel",
             Self::Rename => crate::ui::text::LX_RENAME_COMMAND_DESC,
             Self::Connect => crate::ui::text::LX_CONNECT_COMMAND_DESC,
+            Self::Mcp => crate::ui::text::LX_MCP_COMMAND_DESC,
         }
     }
 
@@ -647,6 +654,8 @@ pub enum SlashPanel {
     Fork(Box<ForkPanel>),
     /// `/rewind` 四项动作面板。
     Rewind(Box<crate::app::state::lx::rewind::RewindPanel>),
+    /// `/mcp` 窗格级 MCP 管理面板。
+    Mcp(Box<crate::app::state::lx::mcp::McpPanel>),
 }
 
 impl SlashPanel {
@@ -705,6 +714,7 @@ impl SlashPanel {
             Self::Fork(panel) => panel.filtered.len(),
             // 动作集按目标类型不同（普通轮次四项 / compact 两项），以面板为准。
             Self::Rewind(panel) => panel.len(),
+            Self::Mcp(panel) => panel.filtered.len(),
         }
     }
 
@@ -716,6 +726,7 @@ impl SlashPanel {
             Self::History(panel) => panel.window,
             Self::Fork(panel) => panel.window,
             Self::Rewind(panel) => panel.window,
+            Self::Mcp(panel) => panel.window,
         }
     }
 
@@ -739,6 +750,7 @@ impl SlashPanel {
             }
             Self::Fork(_) => None,
             Self::Rewind(_) => None,
+            Self::Mcp(_) => None,
         }
     }
 
@@ -752,6 +764,7 @@ impl SlashPanel {
             Self::History(panel) => panel.window = window,
             Self::Fork(panel) => panel.window = window,
             Self::Rewind(panel) => panel.window = window,
+            Self::Mcp(panel) => panel.window = window,
         }
     }
 

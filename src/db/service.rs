@@ -670,8 +670,11 @@ impl Persistence {
                 tracing::warn!("rewind/compact/title effect reached persistence pump");
                 false
             }
-            Effect::BeginUserShell { .. } | Effect::CancelUserShells { .. } => {
-                tracing::warn!("user shell effect reached persistence pump");
+            Effect::BeginUserShell { .. }
+            | Effect::CancelUserShells { .. }
+            | Effect::RefreshMcpCatalog { .. }
+            | Effect::RestartMcpServer { .. } => {
+                tracing::warn!("user shell/mcp effect reached persistence pump");
                 false
             }
             // 聊天类效应已在入口由 `chat::handles` 分流到 `execute_chat_effect`。
@@ -889,6 +892,8 @@ fn is_network_effect(effect: &Effect) -> bool {
             | Effect::GeneratePromptBlockTitle { .. }
             | Effect::BeginUserShell { .. }
             | Effect::CancelUserShells { .. }
+            | Effect::RefreshMcpCatalog { .. }
+            | Effect::RestartMcpServer { .. }
     )
 }
 

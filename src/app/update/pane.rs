@@ -349,6 +349,11 @@ pub fn apply_lx_input(state: &mut AppState, command: LxInput) {
                 super::resume_edit::copy_resume_session_id(state, pane_id);
                 return;
             }
+            // `/mcp` 面板：`Space` 原地切换当前高亮 MCP 启用/禁用（保持面板打开，不写入输入框）。
+            LxInput::Char(' ') if matches!(slash, super::super::state::SlashPanel::Mcp(_)) => {
+                super::chat::apply_slash_enter(state, pane_id);
+                return;
+            }
             // `/model`、`/resume` 二级面板：其余编辑键放行，编辑后重算过滤
             // （`^C` 与 `⇧↵` 已在上方各自接管）。
             command if edits_text(command) && command != LxInput::Clear => {}

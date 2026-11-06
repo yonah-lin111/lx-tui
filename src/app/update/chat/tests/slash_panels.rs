@@ -904,6 +904,187 @@ fn escape_from_variant_stage_shows_full_list_after_input_cleared() {
     assert_eq!(picker.filtered.len(), total, "退回后显示全部模型");
 }
 
+fn seed_mcp_catalog(state: &mut AppState) {
+    use crate::app::state::{McpCatalogEntry, McpRuntimeState};
+
+    let root = state
+        .active_workspace()
+        .repo_key()
+        .expect("workspace root")
+        .to_path_buf();
+    state.mcp_catalog.insert(
+        root.clone(),
+        vec![
+            McpCatalogEntry {
+                name: "alpha".into(),
+                summary: "stdio: alpha-mcp".into(),
+                config_enabled: true,
+                runtime: McpRuntimeState::Ready { tools: 3 },
+            },
+            McpCatalogEntry {
+                name: "beta".into(),
+                summary: "stdio: beta-mcp".into(),
+                config_enabled: true,
+                runtime: McpRuntimeState::Failed {
+                    error: "spawn error".into(),
+                },
+            },
+            McpCatalogEntry {
+                name: "gamma".into(),
+                summary: "stdio: gamma-mcp".into(),
+                config_enabled: false,
+                runtime: McpRuntimeState::Connecting,
+            },
+        ],
+    );
+    let mentions = vec![
+        crate::app::prompt::McpMentionEntry::new("alpha", "stdio: alpha-mcp"),
+        crate::app::prompt::McpMentionEntry::new("beta", "stdio: beta-mcp"),
+    ];
+    for tab in &mut state.workspaces[0].tabs {
+        for id in tab.layout.pane_ids() {
+            if let Some(pane) = tab.pane_mut(id) {
+                pane.lx.set_mention_mcp_servers(mentions.clone());
+            }
+        }
+    }
+    state.sync_lx_inventory();
+}
+
+#[test]
+fn mcp_panel_toggles_per_pane_without_affecting_sibling_pane() {
+    use crate::app::state::{Direction, McpServerState, SlashCommand};
+
+    let mut state = ready_state("");
+    let pane1 = focus_pane(&state);
+    seed_mcp_catalog(&mut state);
+    let pane2 = state
+        .active_tab_mut()
+        .split_pane(pane1, Direction::Horizontal)
+        .expect("split pane");
+    state.sync_lx_inventory();
+
+    // Both panes initially see 2 enabled MCP servers (1 ready, 1 error).
+    assert_eq!(state.pane_anywhere(pane1).unwrap().lx.startup.mcp.total, 2);
+    assert_eq!(state.pane_anywhere(pane2).unwrap().lx.startup.mcp.total, 2);
+
+    // Open `/mcp` in pane1 and toggle "alpha" (index 0) to disabled.
+    assert!(apply_slash_command(&mut state, pane1, SlashCommand::Mcp));
+    assert!(apply_slash_enter(&mut state, pane1));
+
+    let p1 = &state.pane_anywhere(pane1).unwrap().lx;
+    let p2 = &state.pane_anywhere(pane2).unwrap().lx;
+    assert!(p1.is_mcp_server_disabled("alpha"));
+    assert!(!p2.is_mcp_server_disabled("alpha"));
+
+    // Pane 1's startup count and `@` mention candidates exclude "alpha", while Pane 2 is untouched.
+    assert_eq!(p1.startup.mcp.total, 1);
+    assert_eq!(p1.startup.mcp.ready, 0);
+    assert_eq!(p2.startup.mcp.total, 2);
+    assert_eq!(p2.startup.mcp.ready, 1);
+    assert_eq!(p1.mention().filtered_mcp_servers().len(), 1);
+    assert_eq!(p1.mention().filtered_mcp_servers()[0].name, "beta");
+    assert_eq!(p2.mention().filtered_mcp_servers().len(), 2);
+
+    // Panel remains open in pane1 with "alpha" now marked DisabledInPane.
+    let Some(SlashPanel::Mcp(panel)) = &p1.slash else {
+        panic!("mcp panel must stay open after toggle");
+    };
+    assert_eq!(panel.entries[0].state, McpServerState::DisabledInPane);
+
+    // Splitting from pane1 creates a new pane3 that defaults to all MCPs enabled.
+    let pane3 = state
+        .active_tab_mut()
+        .split_pane(pane1, Direction::Vertical)
+        .expect("split pane3");
+    state.sync_lx_inventory();
+    let p3 = &state.pane_anywhere(pane3).unwrap().lx;
+    assert!(p3.disabled_mcp_servers().is_empty());
+    assert_eq!(p3.startup.mcp.total, 2);
+}
+
+#[test]
+fn mcp_panel_space_and_enter_keep_panel_open_and_persist_across_new_session() {
+    use crate::app::actions::LxInput;
+    use crate::app::state::{McpServerState, SlashCommand};
+
+    let mut state = ready_state("");
+    let pane = focus_pane(&state);
+    seed_mcp_catalog(&mut state);
+
+    assert!(apply_slash_command(&mut state, pane, SlashCommand::Mcp));
+    // Pressing Space toggles "alpha" to DisabledInPane without inserting a space into input.
+    crate::app::update::apply_lx_input(&mut state, LxInput::Char(' '));
+    let lx = &state.pane_anywhere(pane).unwrap().lx;
+    assert!(lx.input.is_empty(), "Space must not insert into input");
+    assert!(lx.is_mcp_server_disabled("alpha"));
+    let Some(SlashPanel::Mcp(panel)) = &lx.slash else {
+        panic!("mcp panel remains open");
+    };
+    assert_eq!(panel.entries[0].state, McpServerState::DisabledInPane);
+
+    // Pressing Enter toggles "alpha" back to Connected.
+    crate::app::update::apply_lx_input(&mut state, LxInput::Enter);
+    let lx = &state.pane_anywhere(pane).unwrap().lx;
+    assert!(!lx.is_mcp_server_disabled("alpha"));
+    let Some(SlashPanel::Mcp(panel)) = &lx.slash else {
+        panic!("mcp panel remains open");
+    };
+    assert_eq!(
+        panel.entries[0].state,
+        McpServerState::Connected { tools: 3 }
+    );
+
+    // Disable again, close with Esc, and run `/new` — pane-level disable set persists.
+    crate::app::update::apply_lx_input(&mut state, LxInput::Char(' '));
+    crate::app::update::apply_lx_input(&mut state, LxInput::Escape);
+    assert!(state.pane_anywhere(pane).unwrap().lx.slash.is_none());
+    assert!(apply_slash_command(&mut state, pane, SlashCommand::New));
+    assert!(
+        state
+            .pane_anywhere(pane)
+            .unwrap()
+            .lx
+            .is_mcp_server_disabled("alpha")
+    );
+}
+
+#[test]
+fn mcp_panel_failed_entry_triggers_restart_and_settings_disabled_shows_warning() {
+    use crate::app::actions::LxInput;
+    use crate::app::effects::Effect;
+    use crate::app::state::{McpServerState, SlashCommand};
+
+    let mut state = ready_state("");
+    let pane = focus_pane(&state);
+    seed_mcp_catalog(&mut state);
+
+    assert!(apply_slash_command(&mut state, pane, SlashCommand::Mcp));
+    state.effects.clear();
+
+    // Move to "beta" (index 1, Failed) and press Enter -> triggers RestartMcpServer and transitions to Connecting.
+    crate::app::update::apply_lx_input(&mut state, LxInput::Down);
+    crate::app::update::apply_lx_input(&mut state, LxInput::Enter);
+    assert!(state.effects.iter().any(|effect| matches!(
+        effect,
+        Effect::RestartMcpServer { server, .. } if server == "beta"
+    )));
+    let Some(SlashPanel::Mcp(panel)) = &state.pane_anywhere(pane).unwrap().lx.slash else {
+        panic!("mcp panel");
+    };
+    assert_eq!(panel.entries[1].state, McpServerState::Connecting);
+
+    // Move to "gamma" (index 2, DisabledInSettings) and press Space -> shows warning toast in pane, state unchanged.
+    crate::app::update::apply_lx_input(&mut state, LxInput::Down);
+    crate::app::update::apply_lx_input(&mut state, LxInput::Char(' '));
+    let lx = &state.pane_anywhere(pane).unwrap().lx;
+    assert!(lx.toast.is_some(), "warning toast shown in pane");
+    let Some(SlashPanel::Mcp(panel)) = &lx.slash else {
+        panic!("mcp panel");
+    };
+    assert_eq!(panel.entries[2].state, McpServerState::DisabledInSettings);
+}
+
 #[test]
 fn selecting_rename_from_slash_panel_echoes_command_with_trailing_space() {
     use crate::app::actions::LxInput;

@@ -35,6 +35,8 @@ pub struct LxMention {
     skills: Vec<crate::skills::SkillEntry>,
     /// 当前可用 MCP server；由事件层在 MCP 配置初始化/刷新后写入。
     mcp_servers: Vec<McpMentionEntry>,
+    /// 当前窗格手动禁用的 MCP server 名称集合（过滤 `@` MCP 候选）。
+    disabled_mcp_servers: std::collections::BTreeSet<String>,
     /// 扫描代号：根变化或新一轮扫描递增，用于丢弃过期回执。
     generation: u64,
     /// 扫描是否在途。
@@ -151,6 +153,7 @@ impl LxMention {
         let query_lower = query.to_lowercase();
         self.mcp_servers
             .iter()
+            .filter(|server| !self.disabled_mcp_servers.contains(&server.name))
             .filter(|server| {
                 query_lower.is_empty()
                     || server.name.to_lowercase().contains(&query_lower)
@@ -561,6 +564,17 @@ impl LxMention {
     /// 写入当前可用 MCP server；有打开的 `@` 面板时立即重算候选。
     pub fn set_mcp_servers(&mut self, servers: Vec<McpMentionEntry>, text: &str, cursor: usize) {
         self.mcp_servers = servers;
+        self.refresh(text, cursor);
+    }
+
+    /// 同步本窗格已禁用的 MCP server 集合；有打开的 `@` 面板时立即重算候选。
+    pub fn set_disabled_mcp_servers(
+        &mut self,
+        disabled: std::collections::BTreeSet<String>,
+        text: &str,
+        cursor: usize,
+    ) {
+        self.disabled_mcp_servers = disabled;
         self.refresh(text, cursor);
     }
 }

@@ -139,6 +139,31 @@ pub(super) fn items<'a>(
                 }
             })
             .collect(),
+        SlashPanel::Mcp(panel) => {
+            if panel.entries.is_empty() {
+                return vec![CommandItem::Inline {
+                    label: text::LX_MCP_EMPTY,
+                    preview: "",
+                    tag: "",
+                }];
+            }
+            if panel.is_filter_empty() {
+                return vec![CommandItem::Inline {
+                    label: text::LX_SLASH_NO_MATCHES,
+                    preview: "",
+                    tag: "",
+                }];
+            }
+            panel
+                .visible()
+                .into_iter()
+                .map(|entry| CommandItem::Inline {
+                    label: entry.name.as_str(),
+                    preview: entry.preview.as_str(),
+                    tag: entry.status_tag(),
+                })
+                .collect()
+        }
     }
 }
 
@@ -179,6 +204,20 @@ fn is_placeholder(panel: &crate::app::state::SlashPanel) -> bool {
         crate::app::state::SlashPanel::Fork(_) => false,
         crate::app::state::SlashPanel::Commands { .. } => false,
         crate::app::state::SlashPanel::Rewind(_) => false,
+        crate::app::state::SlashPanel::Mcp(p) => p.entries.is_empty() || p.is_filter_empty(),
+    }
+}
+
+/// 面板各可见行的置灰掩码（仅 `/mcp` 面板对 `Disabled in settings` 行置灰）。
+fn disabled_mask(panel: &crate::app::state::SlashPanel) -> Option<Vec<bool>> {
+    match panel {
+        crate::app::state::SlashPanel::Mcp(mcp) if !is_placeholder(panel) => Some(
+            mcp.visible()
+                .into_iter()
+                .map(crate::app::state::McpPanelEntry::is_settings_disabled)
+                .collect(),
+        ),
+        _ => None,
     }
 }
 
@@ -186,6 +225,7 @@ fn is_placeholder(panel: &crate::app::state::SlashPanel) -> bool {
 fn view<'a>(
     items: &'a [CommandItem<'a>],
     panel: &'a crate::app::state::SlashPanel,
+    disabled: Option<&'a [bool]>,
     input: Rect,
     area: Rect,
 ) -> CommandPanelView<'a> {
@@ -220,6 +260,11 @@ fn view<'a>(
             panel.window,
             text::LX_REWIND_PANEL_FOOTER,
         ),
+        SlashPanel::Mcp(panel) => (
+            text::LX_MCP_PANEL_TITLE,
+            panel.window,
+            text::LX_MCP_PANEL_FOOTER,
+        ),
     };
     // 撤销面板顶边右侧固定说明恢复范围。
     let right_title = match panel {
@@ -250,7 +295,7 @@ fn view<'a>(
         placement: PanelPlacement::Above,
         borderless: true,
         hide_active_marker: is_placeholder(panel),
-        disabled: None,
+        disabled,
     }
 }
 
@@ -265,7 +310,11 @@ pub(crate) fn layout(area: Rect, lx: &Lx) -> Option<PanelLayout> {
     let input = super::input_rect(area, lx)?;
     let time_labels = history_time_labels(panel);
     let items = items(panel, &time_labels);
-    command_panel::layout(area_of(input, area), &view(&items, panel, input, area))
+    let disabled = disabled_mask(panel);
+    command_panel::layout(
+        area_of(input, area),
+        &view(&items, panel, disabled.as_deref(), input, area),
+    )
 }
 
 /// `/` 命令面板命中：返回被点/悬停的条目索引；未命中返回 None。
@@ -278,7 +327,11 @@ pub(crate) fn item_at(area: Rect, lx: &Lx, column: u16, row: u16) -> Option<usiz
     let input = super::input_rect(area, lx)?;
     let time_labels = history_time_labels(panel);
     let items = items(panel, &time_labels);
-    let layout = command_panel::layout(area_of(input, area), &view(&items, panel, input, area))?;
+    let disabled = disabled_mask(panel);
+    let layout = command_panel::layout(
+        area_of(input, area),
+        &view(&items, panel, disabled.as_deref(), input, area),
+    )?;
     command_panel::item_at(&layout, &items, column, row)
 }
 
@@ -292,5 +345,10 @@ pub(super) fn render(area: Rect, buf: &mut ratatui::buffer::Buffer, lx: &Lx) {
     };
     let time_labels = history_time_labels(panel);
     let items = items(panel, &time_labels);
-    command_panel::render(area_of(input, area), buf, &view(&items, panel, input, area));
+    let disabled = disabled_mask(panel);
+    command_panel::render(
+        area_of(input, area),
+        buf,
+        &view(&items, panel, disabled.as_deref(), input, area),
+    );
 }

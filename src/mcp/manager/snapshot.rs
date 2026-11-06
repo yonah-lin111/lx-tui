@@ -44,6 +44,36 @@ impl McpToolSnapshot {
         self.tools.iter().find(|tool| tool.qualified == qualified)
     }
 
+    /// 返回排除了 `disabled_servers` 后的快照；若无交集则直接克隆原 `Arc`（零拷贝）。
+    pub fn without_servers(
+        self: &Arc<Self>,
+        disabled_servers: &std::collections::BTreeSet<String>,
+    ) -> Arc<Self> {
+        if disabled_servers.is_empty()
+            || !self
+                .servers
+                .iter()
+                .any(|server| disabled_servers.contains(&server.name))
+        {
+            return Arc::clone(self);
+        }
+        Arc::new(Self {
+            project: self.project.clone(),
+            tools: self
+                .tools
+                .iter()
+                .filter(|tool| !disabled_servers.contains(&tool.server))
+                .cloned()
+                .collect(),
+            servers: self
+                .servers
+                .iter()
+                .filter(|server| !disabled_servers.contains(&server.name))
+                .cloned()
+                .collect(),
+        })
+    }
+
     /// `## MCP servers` 系统提示段；没有 Ready server 时返回 None。
     pub fn instructions_prompt(&self) -> Option<String> {
         if self.servers.is_empty() {

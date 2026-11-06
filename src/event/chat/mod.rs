@@ -1,10 +1,6 @@
 //! lx 聊天轮次编排：取走网络效应、装配上下文、启动 agent turn 任务并回投结果。
 //!
-//! 本模块是**唯一**负责“DB 落库 → 状态 → 回执”顺序的地方：[`pump_chat_streams`] 把
-//! `StartChatStream` 效应变成一次 [`crate::chat::agent_loop`] 任务（多步采样 + 串行工具
-//! 调度），后台任务只投递纯数据并经 oneshot 等回执；[`handle_agent_host_event`] 守住
-//! 工具持久化门槛（`BeginTool` 先提交 pending、`FinishTool` 先原子写结果，最后回执）。
-//! delta 与整轮终态仍按 `(pane, session, generation)` 过滤，旧 generation 一律丢弃。
+//! 统一负责“DB 落库 → 状态 → 回执”顺序；delta 与终态按 `(pane, session, generation)` 过滤。
 
 pub mod ask;
 pub mod compact;
@@ -593,9 +589,7 @@ fn start_stream(
             workspace_root.as_deref(),
             &background_tasks(pane.lx.chat.session_id.as_deref(), streams),
         );
-        // skill 目录与 MCP 快照在 turn 起点冻结：本轮所有采样复用同一份。
-        // 配置根取仓库主 checkout（同一仓库的 worktree 共用 MCP/skill 项目配置），
-        // 执行 cwd 仍是 workspace_root（worktree 本身）。
+        // skill 目录与 MCP 快照在 turn 起点冻结（配置根取仓库主 checkout，执行 cwd 为 workspace_root）。
         let config_root = state
             .chat_session_key_for_pane(key.pane)
             .or_else(|| workspace_root.clone());
@@ -603,7 +597,11 @@ fn start_stream(
             skills::catalog_prompt(persistence, config_root.as_deref(), false);
         let (draft_text, _) = timeline::latest_user_draft_and_attachments(&pane.lx.chat.messages);
         let skill_blocks = skills::reference_blocks(&draft_text);
-        let mcp_snapshot = mcp::snapshot_for_turn(persistence, config_root.as_deref());
+        let mcp_snapshot = mcp::snapshot_for_turn_with_disabled(
+            persistence,
+            config_root.as_deref(),
+            pane.lx.disabled_mcp_servers(),
+        );
         let mcp_prompt = mcp_snapshot.instructions_prompt();
         let model_identity = crate::chat::agent::ModelIdentity {
             display_name: state

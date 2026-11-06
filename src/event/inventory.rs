@@ -139,7 +139,36 @@ pub(crate) fn drain_mcp_events(
                         error: error.clone(),
                     },
                 );
+                if let Some(entries) = state.mcp_catalog.get_mut(&project)
+                    && let Some(entry) = entries.iter_mut().find(|entry| entry.name == server)
+                {
+                    match &status {
+                        ServerStatus::Disabled => {
+                            entry.config_enabled = false;
+                        }
+                        ServerStatus::Starting => {
+                            entry.config_enabled = true;
+                            entry.runtime = crate::app::state::McpRuntimeState::Connecting;
+                        }
+                        ServerStatus::Ready { tools } => {
+                            entry.config_enabled = true;
+                            entry.runtime =
+                                crate::app::state::McpRuntimeState::Ready { tools: *tools };
+                        }
+                        ServerStatus::Failed { error } => {
+                            entry.config_enabled = true;
+                            entry.runtime = crate::app::state::McpRuntimeState::Failed {
+                                error: error.clone(),
+                            };
+                        }
+                        ServerStatus::NeedsLogin => {
+                            entry.config_enabled = true;
+                            entry.runtime = crate::app::state::McpRuntimeState::NeedsLogin;
+                        }
+                    }
+                }
                 update_mcp_status(state, &project, mcp_statuses);
+                update::refresh_all_open_mcp_panels(state);
                 let notice = match &status {
                     ServerStatus::Failed { error } => Some((
                         text::mcp::start_failed(&server, error),
@@ -158,6 +187,12 @@ pub(crate) fn drain_mcp_events(
                 {
                     let panes = panes_for_project(state, &project);
                     for pane in panes {
+                        if state
+                            .pane_anywhere(pane)
+                            .is_some_and(|target| target.lx.is_mcp_server_disabled(&server))
+                        {
+                            continue;
+                        }
                         update::show_lx_toast(
                             state,
                             pane,
@@ -185,8 +220,10 @@ pub(crate) fn drain_mcp_events(
 
 /// 启动（或首次打开工作区）时按配置初始化 MCP 计数与 `@` 面板候选并后台预热。
 pub(crate) fn initialize_mcp(state: &mut AppState, persistence: &Persistence, roots: &[PathBuf]) {
+    let empty_statuses = BTreeMap::new();
     for root in roots {
         let effective = super::chat::mcp::effective_for_root(persistence, root);
+        sync_mcp_catalog_for_root(state, root, &effective, &empty_statuses);
         let mentions: Vec<crate::app::prompt::McpMentionEntry> = effective
             .iter()
             .filter(|server| server.config.enabled)
@@ -215,6 +252,7 @@ pub(crate) fn initialize_mcp(state: &mut AppState, persistence: &Persistence, ro
             },
         );
     }
+    update::refresh_all_open_mcp_panels(state);
     super::chat::mcp::prewarm_projects(persistence, roots);
 }
 
@@ -270,8 +308,10 @@ pub(crate) fn refresh_mcp(
     statuses: &BTreeMap<(PathBuf, String), McpStatusView>,
 ) {
     state.mcp_inventory.retain(|root, _| roots.contains(root));
+    state.mcp_catalog.retain(|root, _| roots.contains(root));
     for root in roots {
         let effective = super::chat::mcp::effective_for_root(persistence, root);
+        sync_mcp_catalog_for_root(state, root, &effective, statuses);
         let mentions: Vec<crate::app::prompt::McpMentionEntry> = effective
             .iter()
             .filter(|server| server.config.enabled)
@@ -287,7 +327,123 @@ pub(crate) fn refresh_mcp(
         state.mcp_inventory.entry(root.clone()).or_default().total = total;
         update_mcp_status(state, root, statuses);
     }
+    update::refresh_all_open_mcp_panels(state);
     super::chat::mcp::prewarm_projects(persistence, roots);
+}
+
+/// 同步指定项目根的 `state.mcp_catalog`（合并配置项、实时状态与缓存快照工具数）。
+pub(crate) fn sync_mcp_catalog_for_root(
+    state: &mut AppState,
+    root: &Path,
+    effective: &[crate::config::mcp::EffectiveServer],
+    statuses: &BTreeMap<(PathBuf, String), McpStatusView>,
+) {
+    let snapshot = crate::mcp::global_manager().cached_snapshot(root);
+    let previous = state.mcp_catalog.get(root);
+    let entries: Vec<crate::app::state::McpCatalogEntry> = effective
+        .iter()
+        .map(|server| {
+            let snapshot_tools = snapshot
+                .tools()
+                .iter()
+                .filter(|tool| tool.server == server.name)
+                .count();
+            let prev_entry =
+                previous.and_then(|list| list.iter().find(|item| item.name == server.name));
+            let prev_tools = prev_entry.and_then(|item| match item.runtime {
+                crate::app::state::McpRuntimeState::Ready { tools } => Some(tools),
+                _ => None,
+            });
+            let runtime = if !server.config.enabled {
+                crate::app::state::McpRuntimeState::Connecting
+            } else if let Some(view) = statuses.get(&(root.to_path_buf(), server.name.clone())) {
+                match view.status.as_str() {
+                    "ready" => crate::app::state::McpRuntimeState::Ready {
+                        tools: if snapshot_tools > 0 {
+                            snapshot_tools
+                        } else {
+                            prev_tools.unwrap_or(0)
+                        },
+                    },
+                    "failed" => crate::app::state::McpRuntimeState::Failed {
+                        error: view.error.clone().unwrap_or_default(),
+                    },
+                    "needs_login" => crate::app::state::McpRuntimeState::NeedsLogin,
+                    _ => crate::app::state::McpRuntimeState::Connecting,
+                }
+            } else if snapshot.server(&server.name).is_some() {
+                crate::app::state::McpRuntimeState::Ready {
+                    tools: snapshot_tools,
+                }
+            } else if let Some(prev) = prev_entry {
+                prev.runtime.clone()
+            } else {
+                crate::app::state::McpRuntimeState::Connecting
+            };
+            crate::app::state::McpCatalogEntry {
+                name: server.name.clone(),
+                summary: server.config.summary(),
+                config_enabled: server.config.enabled,
+                runtime,
+            }
+        })
+        .collect();
+    state.mcp_catalog.insert(root.to_path_buf(), entries);
+}
+
+/// 消费 `/mcp` 面板产生的效应（刷新目录、重启单个 server 连接）。
+pub(crate) fn apply_mcp_effects(
+    state: &mut AppState,
+    persistence: &Persistence,
+    statuses: &mut BTreeMap<(PathBuf, String), McpStatusView>,
+) -> bool {
+    let has_mcp_effects = state.effects.iter().any(|effect| {
+        matches!(
+            effect,
+            crate::app::effects::Effect::RefreshMcpCatalog { .. }
+                | crate::app::effects::Effect::RestartMcpServer { .. }
+        )
+    });
+    if !has_mcp_effects {
+        return false;
+    }
+    let effects = std::mem::take(&mut state.effects);
+    let mut remaining = Vec::with_capacity(effects.len());
+    let mut changed = false;
+    for effect in effects {
+        match effect {
+            crate::app::effects::Effect::RefreshMcpCatalog { pane } => {
+                if let Some(root) = update::mcp_root_for_pane(state, pane) {
+                    let effective = super::chat::mcp::effective_for_root(persistence, &root);
+                    sync_mcp_catalog_for_root(state, &root, &effective, statuses);
+                    update::refresh_pane_mcp_panel(state, pane);
+                    state.sync_lx_inventory();
+                    changed = true;
+                }
+            }
+            crate::app::effects::Effect::RestartMcpServer { pane, server } => {
+                if let Some(root) = update::mcp_root_for_pane(state, pane) {
+                    statuses.insert(
+                        (root.clone(), server.clone()),
+                        McpStatusView {
+                            project: root.clone(),
+                            server: server.clone(),
+                            status: "starting".into(),
+                            error: None,
+                        },
+                    );
+                    update_mcp_status(state, &root, statuses);
+                    super::chat::mcp::restart_projects(persistence, &[root], Some(&server));
+                    update::refresh_all_open_mcp_panels(state);
+                    state.sync_lx_inventory();
+                    changed = true;
+                }
+            }
+            other => remaining.push(other),
+        }
+    }
+    state.effects = remaining;
+    changed
 }
 
 /// 单个 server 状态或配置变化后，按项目重算 ready / error / loading。

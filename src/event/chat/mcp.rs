@@ -47,6 +47,15 @@ pub(crate) fn snapshot_for_turn(
     manager.cached_snapshot(root)
 }
 
+/// 取本轮冻结且排除了当前窗格已禁用 server 的 MCP 快照。
+pub(crate) fn snapshot_for_turn_with_disabled(
+    persistence: &Persistence,
+    workspace_root: Option<&Path>,
+    disabled_servers: &BTreeSet<String>,
+) -> Arc<McpToolSnapshot> {
+    snapshot_for_turn(persistence, workspace_root).without_servers(disabled_servers)
+}
+
 /// 当前打开工作区的仓库根（去重、保持稳定顺序）。
 pub(crate) fn project_roots(state: &AppState) -> Vec<PathBuf> {
     let mut seen = BTreeSet::new();

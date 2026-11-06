@@ -289,6 +289,14 @@ pub enum Effect {
     },
     /// 打开浏览器（OAuth 授权链接）。
     OpenBrowser { url: String },
+    // ===== `/mcp` 窗格级 MCP 管理 =====
+    /// 刷新指定窗格所属工作区的 MCP 目录快照并同步已打开的 `/mcp` 面板。
+    RefreshMcpCatalog { pane: crate::layout::PaneId },
+    /// 重启指定窗格所属工作区下的单个 MCP server 连接。
+    RestartMcpServer {
+        pane: crate::layout::PaneId,
+        server: String,
+    },
     /// 持久化一条已发送 prompt 到全局历史表（去重置顶、裁剪到上限）。
     ///
     /// 内存历史已在 `on_turn_committed` 同步更新；本效应只负责落库，

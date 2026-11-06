@@ -678,6 +678,24 @@ pub const LX_CHAT_STATS_SPEED_SUFFIX: &str = " tok/s";
 pub const LX_SLASH_PANEL_TITLE: &str = "/Command";
 /// `/` 命令面板底边快捷键提示（无边框面板里的单行 muted 提示）。
 pub const LX_SLASH_PANEL_FOOTER: &str = "↑↓ select · ↵ open · esc close";
+/// `/mcp` 命令描述。
+pub const LX_MCP_COMMAND_DESC: &str = "Manage MCP servers for this pane";
+/// `/mcp` 面板标题。
+pub const LX_MCP_PANEL_TITLE: &str = "MCP servers";
+/// `/mcp` 面板底栏按键提示。
+pub const LX_MCP_PANEL_FOOTER: &str = "↑↓ select · space/↵ toggle · esc close";
+/// `/mcp` 面板空态文案。
+pub const LX_MCP_EMPTY: &str = "No MCP servers configured";
+/// `/mcp` 面板状态标签。
+pub const LX_MCP_STATUS_CONNECTED: &str = "Connected";
+pub const LX_MCP_STATUS_CONNECTING: &str = "Connecting";
+pub const LX_MCP_STATUS_FAILED: &str = "Failed";
+pub const LX_MCP_STATUS_NEEDS_LOGIN: &str = "Needs login";
+pub const LX_MCP_STATUS_DISABLED: &str = "Disabled";
+pub const LX_MCP_STATUS_DISABLED_SETTINGS: &str = "Disabled in settings";
+/// 尝试切换已在全局/项目设置中禁用的 MCP 时的警告提示。
+pub const LX_MCP_DISABLED_IN_SETTINGS: &str =
+    "This MCP server is disabled in settings. Enable it in Settings first.";
 /// 路径粘贴面板底边快捷键提示。
 pub const LX_PASTE_PANEL_FOOTER: &str = "↑↓ select · ↵ confirm · esc cancel";
 /// 快捷引用面板底边快捷键提示。
