@@ -227,6 +227,16 @@ impl Selection {
         self.origin
     }
 
+    /// 按下起点（内容行、列坐标）。
+    pub fn anchor(&self) -> (i32, u16) {
+        self.anchor
+    }
+
+    /// 当前拖动终点（内容行、列坐标）。
+    pub fn cursor(&self) -> (i32, u16) {
+        self.cursor
+    }
+
     /// 扩展到新的拖动点。
     pub fn drag(&mut self, row: i32, col: u16) {
         if self.unit == SelectionUnit::Character {

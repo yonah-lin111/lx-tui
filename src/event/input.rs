@@ -460,9 +460,9 @@ fn copy_lx_selection(
     let Some(selection) = state.lx_selection.filter(|sel| sel.pane() == pane) else {
         return false;
     };
-    let Some(range) = selection.range() else {
+    if selection.range().is_none() {
         return false;
-    };
+    }
     let area = rects
         .iter()
         .find(|(id, _)| *id == pane)
@@ -473,7 +473,12 @@ fn copy_lx_selection(
     if target.view != PaneView::Lx {
         return false;
     }
-    let text = ui::main_content::lx::copy_text(area, &target.lx, range, cache.pane(pane));
+    let text = ui::main_content::lx::copy_text(
+        area,
+        &target.lx,
+        (selection.anchor(), selection.cursor()),
+        cache.pane(pane),
+    );
     if !text.is_empty() {
         copy_with_toast(state, &text, Some(pane));
     }

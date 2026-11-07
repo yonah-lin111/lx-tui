@@ -3,9 +3,14 @@
 //! 单元格先做行内渲染（折叠 `**` 等标记）再按列宽换行；`<br>` 变体换行成多物理行。
 //! 表格总宽绝不超过给定宽度（列宽按比例收缩、每列不低于其最宽字符宽）。
 
+use std::sync::Arc;
+
 use ratatui::style::Style;
 
-use super::{MdLine, char_width, display_width, inline_spans, style};
+use super::{
+    MdLine, TableCellSlice, TableColumnSpan, TableLayoutMeta, TableLineKind, TableLineRef,
+    TableLogicalRow, char_width, display_width, inline_spans, style,
+};
 
 /// 表格：表头 + 对齐行 + 数据行，用方框网格。
 ///
@@ -169,6 +174,14 @@ fn column_align(cell: &str) -> Align {
     }
 }
 
+/// 单个单元格折行后的单条物理行及真实文本几何。
+struct WrappedCellLine {
+    spans: Vec<(String, Style)>,
+    pad_before: u16,
+    text_width: u16,
+    hard_break: bool,
+}
+
 /// 方框网格表格：`┌─┬─┐` / `│ x │` / `├─┼─┤` / `└─┴─┘`。
 ///
 /// 单元格先做行内渲染（折叠 `**` 等标记，链接显示 `文字 (url)`），按列宽换行；
@@ -181,86 +194,185 @@ fn grid_table(
     align: &[Align],
     lines: &mut Vec<MdLine>,
 ) {
+    let mut columns = Vec::with_capacity(widths.len());
+    let mut cursor = 1u16;
+    for &w in widths {
+        let w_u16 = u16::try_from(w).unwrap_or(u16::MAX);
+        let box_start = cursor;
+        let content_start = cursor.saturating_add(1);
+        let content_end = content_start.saturating_add(w_u16);
+        let box_end = content_end.saturating_add(1);
+        columns.push(TableColumnSpan {
+            box_start,
+            box_end,
+            content_start,
+            content_end,
+        });
+        cursor = box_end.saturating_add(1);
+    }
+    let total_width = cursor;
+
     // 单元格行：两端与列间用 `│`，内容左右各留 1 空格；内容超出列宽时换行成多物理行。
     let border = |left: &str, fill: &str, mid: &str, right: &str| -> String {
         let segments: Vec<String> = widths.iter().map(|width| fill.repeat(width + 2)).collect();
         format!("{left}{}{right}", segments.join(mid))
     };
-    let row_lines = |cells: &[String], fallback: Style| -> Vec<Vec<(String, Style)>> {
+    let row_lines = |row_idx: usize,
+                     cells: &[String],
+                     fallback: Style|
+     -> Vec<(Vec<(String, Style)>, TableLineKind)> {
         let rule = style::md_read_rule();
-        // 每列：行内渲染 → 拆 `<br>` → 按列宽换行（保留分段样式与对齐）。
-        let wrapped: Vec<Vec<Vec<(String, Style)>>> = widths
+        // 每列：行内渲染 → 拆 `<br>` → 按列宽换行（保留分段样式、对齐与真实文本区间）。
+        let wrapped: Vec<Vec<WrappedCellLine>> = widths
             .iter()
             .enumerate()
             .map(|(column, width)| {
                 let empty = String::new();
                 let cell = cells.get(column).unwrap_or(&empty);
-                let align = align.get(column).copied().unwrap_or(Align::Left);
+                let col_align = align.get(column).copied().unwrap_or(Align::Left);
                 let rendered = render_cell_spans(cell, fallback);
                 let logical = split_br(&rendered);
-                let lines: Vec<Vec<(String, Style)>> = logical
-                    .iter()
-                    .flat_map(|line| wrap_cell_spans(line, *width, align))
-                    .collect();
-                if lines.is_empty() {
-                    vec![vec![(" ".repeat(*width), fallback)]]
+                let mut cell_lines: Vec<WrappedCellLine> = Vec::new();
+                for (seg_idx, seg) in logical.iter().enumerate() {
+                    let mut seg_wrapped = wrap_cell_spans(seg, *width, col_align);
+                    if seg_idx + 1 < logical.len()
+                        && let Some(last) = seg_wrapped.last_mut()
+                    {
+                        last.hard_break = true;
+                    }
+                    cell_lines.extend(seg_wrapped);
+                }
+                if cell_lines.is_empty() {
+                    vec![WrappedCellLine {
+                        spans: vec![(" ".repeat(*width), fallback)],
+                        pad_before: 0,
+                        text_width: 0,
+                        hard_break: false,
+                    }]
                 } else {
-                    lines
+                    cell_lines
                 }
             })
             .collect();
         let height = wrapped.iter().map(Vec::len).max().unwrap_or(1).max(1);
         let mut out = Vec::with_capacity(height);
-        for row in 0..height {
+        for line_in_row in 0..height {
             let mut spans = vec![("│".to_string(), rule)];
+            let mut slices = Vec::with_capacity(columns.len());
             for (column, cell_lines) in wrapped.iter().enumerate() {
-                let blank = vec![(" ".repeat(widths[column]), fallback)];
-                let line = cell_lines.get(row).unwrap_or(&blank);
-                spans.push((" ".to_string(), rule));
-                spans.extend(line.iter().cloned());
-                spans.push((" ".to_string(), rule));
-                spans.push(("│".to_string(), rule));
+                let col_span = columns.get(column).copied().unwrap_or(TableColumnSpan {
+                    box_start: 0,
+                    box_end: 0,
+                    content_start: 0,
+                    content_end: 0,
+                });
+                if let Some(wline) = cell_lines.get(line_in_row) {
+                    spans.push((" ".to_string(), rule));
+                    spans.extend(wline.spans.iter().cloned());
+                    spans.push((" ".to_string(), rule));
+                    spans.push(("│".to_string(), rule));
+                    let text_start = col_span.content_start.saturating_add(wline.pad_before);
+                    let text_end = text_start
+                        .saturating_add(wline.text_width)
+                        .min(col_span.content_end);
+                    slices.push(TableCellSlice {
+                        text_start,
+                        text_end,
+                        hard_break: wline.hard_break,
+                        is_filler: false,
+                    });
+                } else {
+                    spans.push((" ".to_string(), rule));
+                    spans.push((" ".repeat(widths[column]), fallback));
+                    spans.push((" ".to_string(), rule));
+                    spans.push(("│".to_string(), rule));
+                    slices.push(TableCellSlice {
+                        text_start: col_span.content_start,
+                        text_end: col_span.content_start,
+                        hard_break: false,
+                        is_filler: true,
+                    });
+                }
             }
-            out.push(spans);
+            out.push((
+                spans,
+                TableLineKind::Cells {
+                    row_idx,
+                    line_in_row,
+                    cells: slices,
+                },
+            ));
         }
         out
     };
-    lines.push(MdLine::plain(
-        0,
-        border("┌", "─", "┬", "┐"),
-        style::md_read_rule(),
-    ));
-    for spans in row_lines(header, style::text()) {
-        lines.push(MdLine::spans(0, spans));
+
+    let mut raw_lines: Vec<Vec<(String, Style)>> = Vec::new();
+    let mut line_kinds: Vec<TableLineKind> = Vec::new();
+    let mut logical_rows: Vec<TableLogicalRow> = Vec::with_capacity(1 + body.len());
+
+    raw_lines.push(vec![(border("┌", "─", "┬", "┐"), style::md_read_rule())]);
+    line_kinds.push(TableLineKind::Border { nearest_row: 0 });
+
+    let header_first = raw_lines.len();
+    for (spans, kind) in row_lines(0, header, style::text()) {
+        raw_lines.push(spans);
+        line_kinds.push(kind);
     }
+    let header_last = raw_lines.len().saturating_sub(1);
+    logical_rows.push(TableLogicalRow {
+        first_line: header_first,
+        last_line: header_last,
+    });
+
     // 表头之后、以及每一条数据行之后都补一条水平分割线（末尾与下边框合并）。
     // 第一列为空的行视为上一条目的**续行**（对齐 markdown 里「同组多行、首列留空」的写法）：
     // 其上方不画分割线，使同组内容视觉合并为一块。
-    lines.push(MdLine::plain(
-        0,
-        border("├", "─", "┼", "┤"),
-        style::md_read_rule(),
-    ));
+    raw_lines.push(vec![(border("├", "─", "┼", "┤"), style::md_read_rule())]);
+    line_kinds.push(TableLineKind::Border { nearest_row: 0 });
+
     for index in 0..body.len() {
-        for spans in row_lines(&body[index], style::text()) {
-            lines.push(MdLine::spans(0, spans));
+        let row_idx = index + 1;
+        let first_line = raw_lines.len();
+        for (spans, kind) in row_lines(row_idx, &body[index], style::text()) {
+            raw_lines.push(spans);
+            line_kinds.push(kind);
         }
+        let last_line = raw_lines.len().saturating_sub(1);
+        logical_rows.push(TableLogicalRow {
+            first_line,
+            last_line,
+        });
         let next_is_continuation = body
             .get(index + 1)
             .is_none_or(|next| is_continuation_row(next));
         if index + 1 < body.len() && !next_is_continuation {
-            lines.push(MdLine::plain(
-                0,
-                border("├", "─", "┼", "┤"),
-                style::md_read_rule(),
-            ));
+            raw_lines.push(vec![(border("├", "─", "┼", "┤"), style::md_read_rule())]);
+            line_kinds.push(TableLineKind::Border {
+                nearest_row: row_idx,
+            });
         }
     }
-    lines.push(MdLine::plain(
-        0,
-        border("└", "─", "┴", "┘"),
-        style::md_read_rule(),
-    ));
+    raw_lines.push(vec![(border("└", "─", "┴", "┘"), style::md_read_rule())]);
+    line_kinds.push(TableLineKind::Border {
+        nearest_row: body.len(),
+    });
+
+    let table_meta = Arc::new(TableLayoutMeta {
+        total_width,
+        columns,
+        logical_rows,
+        lines: line_kinds,
+    });
+    for (line_offset, spans) in raw_lines.into_iter().enumerate() {
+        lines.push(MdLine::with_table(
+            0,
+            spans,
+            TableLineRef {
+                table: Arc::clone(&table_meta),
+                line_offset,
+            },
+        ));
+    }
 }
 
 /// 续行判定：逻辑行第一列为空（首列留空即视为上一条目的续行，不单独画分割线）。
@@ -304,14 +416,18 @@ fn split_br(spans: &[(String, Style)]) -> Vec<Vec<(String, Style)>> {
         let mut rest = value.as_str();
         while let Some(index) = find_br(rest) {
             let head = &rest[..index];
-            if !head.is_empty() {
-                push_span(lines.last_mut().expect("line"), head, *style);
+            if !head.is_empty()
+                && let Some(last) = lines.last_mut()
+            {
+                push_span(last, head, *style);
             }
             lines.push(Vec::new());
             rest = &rest[index + br_len(&rest[index..])..];
         }
-        if !rest.is_empty() {
-            push_span(lines.last_mut().expect("line"), rest, *style);
+        if !rest.is_empty()
+            && let Some(last) = lines.last_mut()
+        {
+            push_span(last, rest, *style);
         }
     }
     lines
@@ -360,21 +476,22 @@ fn spans_text(spans: &[(String, Style)]) -> String {
 }
 
 /// 单元格按列宽换行（优先在空白处断行，超长不可断内容按显示列硬切），保留分段样式，
-/// 每物理行按对齐补空格到列宽。
-fn wrap_cell_spans(
-    line: &[(String, Style)],
-    width: usize,
-    align: Align,
-) -> Vec<Vec<(String, Style)>> {
+/// 每物理行按对齐补空格到列宽，并记录每条物理行的前导填充与真实文本宽度。
+fn wrap_cell_spans(line: &[(String, Style)], width: usize, align: Align) -> Vec<WrappedCellLine> {
     let width = width.max(1);
     let cells: Vec<(char, Style)> = line
         .iter()
         .flat_map(|(value, style)| value.chars().map(|ch| (ch, *style)))
         .collect();
     if cells.is_empty() {
-        return vec![vec![(" ".repeat(width), style::text())]];
+        return vec![WrappedCellLine {
+            spans: vec![(" ".repeat(width), style::text())],
+            pad_before: 0,
+            text_width: 0,
+            hard_break: false,
+        }];
     }
-    let mut out: Vec<Vec<(String, Style)>> = Vec::new();
+    let mut out: Vec<WrappedCellLine> = Vec::new();
     let mut current: Vec<(String, Style)> = Vec::new();
     let mut col = 0usize;
     // 以「词 + 尾随空白」为切分单位，中英文混排时中文逐字成词。
@@ -382,7 +499,7 @@ fn wrap_cell_spans(
     let flush_segment = |segment: &mut Vec<(char, Style)>,
                          current: &mut Vec<(String, Style)>,
                          col: &mut usize,
-                         out: &mut Vec<Vec<(String, Style)>>| {
+                         out: &mut Vec<WrappedCellLine>| {
         for (ch, style) in segment.drain(..) {
             let cell_w = char_width(ch) as usize;
             if *col + cell_w > width {
@@ -405,13 +522,18 @@ fn wrap_cell_spans(
         out.push(pad_line(&current, width, align));
     }
     if out.is_empty() {
-        out.push(vec![(" ".repeat(width), style::text())]);
+        out.push(WrappedCellLine {
+            spans: vec![(" ".repeat(width), style::text())],
+            pad_before: 0,
+            text_width: 0,
+            hard_break: false,
+        });
     }
     out
 }
 
-/// 把一条物理行按对齐把剩余空列补成空格分段。
-fn pad_line(line: &[(String, Style)], width: usize, align: Align) -> Vec<(String, Style)> {
+/// 把一条物理行按对齐把剩余空列补成空格分段，并返回真实文本宽度与前导填充列数。
+fn pad_line(line: &[(String, Style)], width: usize, align: Align) -> WrappedCellLine {
     let len = display_width(&spans_text(line));
     let pad = width.saturating_sub(len);
     let (before, after) = match align {
@@ -431,5 +553,10 @@ fn pad_line(line: &[(String, Style)], width: usize, align: Align) -> Vec<(String
     if out.is_empty() {
         out.push((" ".repeat(width), pad_style));
     }
-    out
+    WrappedCellLine {
+        spans: out,
+        pad_before: u16::try_from(before).unwrap_or(u16::MAX),
+        text_width: u16::try_from(len).unwrap_or(u16::MAX),
+        hard_break: false,
+    }
 }
