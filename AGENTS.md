@@ -6,6 +6,7 @@
 - `docs/standards/code-writing-standards.md`
 - `docs/standards/tui-design-requirements.md`
 - `docs/standards/html-assets.md`
+- `docs/standards/ai-web-deepseek.md`
 
 ## Agent 执行规则
 

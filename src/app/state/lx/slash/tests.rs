@@ -196,6 +196,7 @@ fn model_picker_reports_current_index_per_stage() {
 fn history_panel_reports_current_session() {
     let panel = HistoryPanel {
         entries: vec![entry("a", "A", 1), entry("b", "B", 2)],
+        loading: false,
         current: Some(1),
         now_ms: 10,
         window: PanelWindow::new(1),
@@ -226,6 +227,7 @@ fn commands_panel_has_no_current_item() {
 fn history_refilter_empty_query_restores_full_list() {
     let mut panel = HistoryPanel {
         entries: vec![entry("b", "Beta", 2), entry("a", "Alpha", 1)],
+        loading: false,
         current: None,
         now_ms: 10,
         window: PanelWindow::new(0),
@@ -248,6 +250,7 @@ fn history_refilter_matches_title_with_prefix_first() {
             entry("s2", "登录态过期修复", 2),
             entry("s3", "渲染性能", 1),
         ],
+        loading: false,
         current: None,
         now_ms: 10,
         window: PanelWindow::new(0),
@@ -269,6 +272,7 @@ fn history_refilter_matches_session_id() {
             entry("9a3f5c21e0b7", "Alpha", 2),
             entry("6f1c8d40aa11", "Beta", 1),
         ],
+        loading: false,
         current: None,
         now_ms: 10,
         window: PanelWindow::new(0),
@@ -285,6 +289,7 @@ fn history_refilter_matches_session_id() {
 fn history_refilter_is_case_insensitive() {
     let mut panel = HistoryPanel {
         entries: vec![entry("s1", "Login Fix", 1)],
+        loading: false,
         current: None,
         now_ms: 10,
         window: PanelWindow::new(0),
@@ -300,6 +305,7 @@ fn history_refilter_is_case_insensitive() {
 fn history_refilter_marks_filter_empty_only_when_no_match() {
     let mut panel = HistoryPanel {
         entries: vec![entry("s1", "Alpha", 1)],
+        loading: false,
         current: None,
         now_ms: 10,
         window: PanelWindow::new(0),
@@ -321,6 +327,7 @@ fn history_refilter_marks_filter_empty_only_when_no_match() {
 fn history_refilter_clamps_highlight_and_recovers_on_backspace() {
     let mut panel = HistoryPanel {
         entries: vec![entry("s1", "Alpha", 1), entry("s2", "Beta", 2)],
+        loading: false,
         current: None,
         now_ms: 10,
         window: PanelWindow::new(1),
@@ -341,6 +348,7 @@ fn history_refilter_clamps_highlight_and_recovers_on_backspace() {
 fn history_filtered_current_index_is_none_when_filtered_out() {
     let mut panel = HistoryPanel {
         entries: vec![entry("s1", "Alpha", 1), entry("s2", "Beta", 2)],
+        loading: false,
         current: Some(1),
         now_ms: 10,
         window: PanelWindow::new(0),
@@ -521,6 +529,7 @@ fn history_refilter_resets_selected_item_to_first() {
             entry("b", "Beta", 2),
             entry("c", "Charlie", 3),
         ],
+        loading: false,
         current: None,
         now_ms: 10,
         window: PanelWindow::new(2),

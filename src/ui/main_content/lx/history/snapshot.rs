@@ -654,11 +654,24 @@ impl Builder<'_> {
                                         att.kind == crate::db::chat::MessageAttachmentKind::Image
                                     })
                                     .count();
+                                let folder_count = message
+                                    .attachments
+                                    .iter()
+                                    .filter(|att| {
+                                        att.kind == crate::db::chat::MessageAttachmentKind::Folder
+                                    })
+                                    .count();
                                 if image_count > 0 {
                                     crate::ui::text::chat::image_message_preview(image_count)
                                         .to_string()
+                                } else if folder_count == message.attachments.len() {
+                                    crate::ui::text::chat::folder_message_preview(folder_count)
+                                        .to_string()
                                 } else {
-                                    display_text
+                                    crate::ui::text::chat::file_message_preview(
+                                        message.attachments.len(),
+                                    )
+                                    .to_string()
                                 }
                             } else {
                                 display_text

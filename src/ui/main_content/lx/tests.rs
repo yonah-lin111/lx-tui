@@ -1,8 +1,8 @@
 //! lx 页单元测试：图标数据一致性、布局降级、命中测试、渲染、md 面板与整页取词。
 
 use super::*;
-use crate::app::state::LxEntry;
 use crate::app::state::lx::{StartupCount, StartupCounts};
+use crate::app::state::{AiWebSite, LxEntry};
 use ratatui::buffer::{Buffer, CellDiffOption};
 use ratatui::style::Color;
 
@@ -35,18 +35,27 @@ fn entries_share_lx_shape_with_tweaked_colors() {
             }
         }
     }
-    let tinted = |entry| -> String {
-        ICON_LX
-            .iter()
-            .map(|row| {
-                row.chars()
-                    .map(|ch| icon_pixel(entry, ch))
-                    .collect::<String>()
-            })
-            .collect()
-    };
-    assert_ne!(tinted(LxEntry::Native), tinted(LxEntry::Hybrid));
-    assert_ne!(tinted(LxEntry::Hybrid), tinted(LxEntry::Automation));
+    let tinted: Vec<String> = LxEntry::ALL
+        .iter()
+        .map(|entry| {
+            ICON_LX
+                .iter()
+                .map(|row| {
+                    row.chars()
+                        .map(|ch| icon_pixel(*entry, ch))
+                        .collect::<String>()
+                })
+                .collect()
+        })
+        .collect();
+    for left in 0..tinted.len() {
+        for right in (left + 1)..tinted.len() {
+            assert_ne!(
+                tinted[left], tinted[right],
+                "入口 {left} 与 {right} 的图标配色必须不同"
+            );
+        }
+    }
 }
 
 #[test]
@@ -64,9 +73,14 @@ fn entry_label_gradients_are_distinct() {
         .iter()
         .map(|entry| style::lx_entry_gradient(*entry))
         .collect();
-    assert_ne!(endpoints[0], endpoints[1]);
-    assert_ne!(endpoints[1], endpoints[2]);
-    assert_ne!(endpoints[0], endpoints[2]);
+    for left in 0..endpoints.len() {
+        for right in (left + 1)..endpoints.len() {
+            assert_ne!(
+                endpoints[left], endpoints[right],
+                "入口 {left} 与 {right} 的渐变必须不同"
+            );
+        }
+    }
 }
 
 #[test]
@@ -128,13 +142,14 @@ fn entries_are_horizontal_and_centered_when_roomy() {
     let area = Rect::new(0, 0, 100, 20);
     let lay = layout(area, &Lx::new());
     assert!(lay.horizontal);
-    assert_eq!(lay.entries.len(), 3);
+    assert_eq!(lay.entries.len(), 4);
     let first_y = lay.entries[0].1.y;
     assert!(
         lay.entries.iter().all(|(_, rect)| rect.y == first_y),
         "同一行"
     );
-    assert!(lay.entries[0].1.x < lay.entries[1].1.x, "从左到右");
+    let xs: Vec<u16> = lay.entries.iter().map(|(_, rect)| rect.x).collect();
+    assert!(xs[0] < xs[1] && xs[1] < xs[2] && xs[2] < xs[3], "从左到右");
 }
 
 #[test]
@@ -143,7 +158,7 @@ fn narrow_page_stacks_entries_vertically() {
     let lay = layout(area, &Lx::new());
     assert!(!lay.horizontal);
     let ys: Vec<u16> = lay.entries.iter().map(|(_, rect)| rect.y).collect();
-    assert!(ys[1] > ys[0] && ys[2] > ys[1], "逐行堆叠");
+    assert!(ys[1] > ys[0] && ys[2] > ys[1] && ys[3] > ys[2], "逐行堆叠");
 }
 
 #[test]
@@ -170,13 +185,42 @@ fn wide_page_renders_brand_entries_and_input() {
         &mut PaneCache::default(),
     );
     let text = buffer_text(&buf);
-    assert!(text.contains("Native Agent"), "{text}");
-    assert!(text.contains("Hybrid Agent"), "{text}");
-    assert!(text.contains("Automation Agent"), "{text}");
+    assert!(text.contains("Native"), "{text}");
+    assert!(text.contains("Hybrid"), "{text}");
+    assert!(text.contains("Automation"), "{text}");
+    assert!(text.contains("AI Web"), "{text}");
     assert!(text.contains("Ask anything"), "{text}");
     assert!(text.contains("Tip:"), "Tip 前缀可见");
     assert!(text.contains('·'), "标签页分隔符可见");
     assert!(text.contains('─'), "输入框上下分割线可见");
+}
+
+#[test]
+fn ai_web_entry_replaces_inventory_with_deepseek_site_and_is_hittable() {
+    let area = Rect::new(0, 0, 100, 60);
+    let mut lx = Lx::new();
+    lx.entry = LxEntry::AiWeb;
+    let mut buf = Buffer::empty(area);
+    let _ = render(area, &mut buf, &lx, true, None, &mut PaneCache::default());
+    let text = buffer_text(&buf);
+    assert!(text.contains("DeepSeek"), "{text}");
+    assert!(text.contains("chat directly with web AI models"), "{text}");
+    assert!(!text.contains("AGENTS.md"), "{text}");
+    assert!(!text.contains("mcp"), "{text}");
+    assert!(!text.contains("skills"), "{text}");
+
+    let inventory = layout(area, &lx).inventory.expect("site row");
+    let (_, site_rect) = brand::place_ai_web_sites(inventory)
+        .into_iter()
+        .find(|(site, _)| *site == AiWebSite::Deepseek)
+        .expect("deepseek site");
+    assert_eq!(
+        ai_web_site_hit(area, &lx, site_rect.x, site_rect.y),
+        Some(AiWebSite::Deepseek)
+    );
+
+    lx.entry = LxEntry::Native;
+    assert_eq!(ai_web_site_hit(area, &lx, site_rect.x, site_rect.y), None);
 }
 
 #[test]

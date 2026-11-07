@@ -51,9 +51,13 @@ pub fn render(
     let rows = panel_page_rows(panel);
     if rows.is_empty() {
         if rows_area.height >= 1 {
+            let text_w = u16::try_from(text::PROMPT_PAGES_NO_MATCHES.width()).unwrap_or(u16::MAX);
+            let x = rows_area
+                .x
+                .saturating_add(rows_area.width.saturating_sub(text_w) / 2);
             tree::paint_text(
                 buf,
-                rows_area.x,
+                x,
                 rows_area.y,
                 text::PROMPT_PAGES_NO_MATCHES,
                 style::muted(),

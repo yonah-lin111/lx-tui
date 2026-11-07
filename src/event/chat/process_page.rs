@@ -5,6 +5,31 @@
 
 use super::*;
 
+/// 停止本轮进程（D9）：本轮新建集合 ∪ 当前正在等待/交互的进程。
+///
+/// 此前启动、本轮未操作的旧服务保持运行；停止在后台任务执行，事件循环继续渲染与响应输入。
+pub fn stop_turn_processes(streams: &mut ChatStreams, key: &RequestKey) {
+    let Some(runtime) = streams.runtimes.get(&key.session) else {
+        return;
+    };
+    let manager = runtime.manager().clone();
+    let Some(turn) = runtime.turn_context(&key.generation.to_string()) else {
+        return;
+    };
+    // 目标集合必须在事件循环里**同步**取定：放到 spawn 出去的任务里异步读，会与
+    // 「工具已换目标」竞态（读到的是下一刻的集合，可能漏杀或错杀）。
+    let targets: Vec<u64> = turn
+        .try_lock()
+        .map(|turn| turn.stop_targets().into_iter().collect())
+        .unwrap_or_default();
+    if targets.is_empty() {
+        return;
+    }
+    tokio::spawn(async move {
+        manager.stop_many(targets).await;
+    });
+}
+
 /// 执行进程类效应（后台任务页的列表与停止）。
 ///
 /// 与 `pump_chat_streams` 同一处置方式：从 `state.effects` 取出自己关心的效应执行，

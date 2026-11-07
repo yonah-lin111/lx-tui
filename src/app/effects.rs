@@ -144,6 +144,22 @@ pub enum Effect {
         key: crate::app::state::lx::RequestKey,
         assistant_id: String,
     },
+    /// 启动 AI Web 网页对话流（通过本机 ego-browser 驱动网页端并以行协议回投）。
+    StartAiWebStream {
+        key: crate::app::state::lx::RequestKey,
+        site: crate::app::state::lx::AiWebSite,
+        prompt: String,
+        /// 待通过 CDP `DOM.setFileInputFiles` 注入网页 `<input type="file">` 的本地文件绝对路径列表。
+        files: Vec<String>,
+        /// 原地编辑（`/rewind`）时需在网页编辑框内保留的已有云端附件文件名列表。
+        keep_files: Vec<String>,
+        /// 若本轮紧随 `/rewind` 之后发送，指示网页端应原地编辑第几条用户消息（0 基）。
+        edit_user_index: Option<usize>,
+    },
+    /// 重置 AI Web 网页端会话（`/new` 时触发网页开启新对话）。
+    ResetAiWebSession {
+        site: crate::app::state::lx::AiWebSite,
+    },
     /// 取消在途网络流（流取消后仍走 Finishing 收尾保存 partial）。
     CancelChatStream {
         key: crate::app::state::lx::RequestKey,

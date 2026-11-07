@@ -163,7 +163,7 @@ impl Persistence {
             let effects = std::mem::take(&mut state.effects);
             let mut deferred: Vec<Effect> = Vec::new();
             for effect in effects {
-                if is_network_effect(&effect) {
+                if is_network_effect(state, &effect) {
                     deferred.push(effect);
                     continue;
                 }
@@ -651,6 +651,8 @@ impl Persistence {
             // 网络与进程效应由事件层执行（pump 已过滤；此处兜底忽略并记录）。
             // 进程句柄只存在于事件层的运行实例里，持久化层既读不到也停不了。
             Effect::StartChatStream { .. }
+            | Effect::StartAiWebStream { .. }
+            | Effect::ResetAiWebSession { .. }
             | Effect::CancelChatStream { .. }
             | Effect::AnswerAsk { .. } => {
                 tracing::warn!("chat network effect reached persistence pump");
@@ -871,10 +873,29 @@ impl Persistence {
 }
 
 /// 是否为聊天网络/撤销效应（由事件层执行，非同步 DB 写）。
-fn is_network_effect(effect: &Effect) -> bool {
+fn is_network_effect(state: &AppState, effect: &Effect) -> bool {
+    match effect {
+        Effect::ListChatSessions { pane }
+            if state
+                .pane_anywhere(*pane)
+                .is_some_and(|p| p.lx.entry == crate::app::state::LxEntry::AiWeb) =>
+        {
+            return true;
+        }
+        Effect::LoadChatSession { session_id, .. }
+        | Effect::RenameChatSession { session_id, .. }
+        | Effect::DeleteChatSession { session_id, .. }
+            if crate::app::update::is_ai_web_session(session_id) =>
+        {
+            return true;
+        }
+        _ => {}
+    }
     matches!(
         effect,
         Effect::StartChatStream { .. }
+            | Effect::StartAiWebStream { .. }
+            | Effect::ResetAiWebSession { .. }
             | Effect::CancelChatStream { .. }
             | Effect::AnswerAsk { .. }
             // 进程效应与网络效应同一处置：持久化泵不碰，交给事件层。

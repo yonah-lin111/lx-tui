@@ -27,8 +27,13 @@ pub fn open_resume_session_edit(state: &mut AppState, pane: PaneId) -> bool {
     };
     let session_id = entry.session_id.clone();
     let title = entry.title.clone();
-    let Some(workspace) = state.chat_session_key_for_pane(pane) else {
-        return false;
+    let workspace = if crate::app::update::is_ai_web_session(&session_id) {
+        state.chat_session_key_for_pane(pane).unwrap_or_default()
+    } else {
+        let Some(workspace) = state.chat_session_key_for_pane(pane) else {
+            return false;
+        };
+        workspace
     };
     state.overlay = Some(Overlay::ResumeSessionEdit(ResumeSessionEdit {
         pane,
@@ -172,6 +177,12 @@ fn delete_target(state: &mut AppState) -> bool {
         return false;
     }
     close_overlay(state);
+    if state
+        .pane_anywhere(pane)
+        .is_some_and(|t| t.lx.chat.session_id.as_deref() == Some(session_id.as_str()))
+    {
+        let _ = crate::app::update::stop_stream(state, pane);
+    }
     crate::app::update::cancel_session_title(state, &session_id);
     state.effects.push(Effect::DeleteChatSession {
         workspace,
@@ -263,8 +274,15 @@ pub fn discard_stale_resume_edit(state: &mut AppState) -> bool {
         return false;
     };
     let focused = state.active_tab().layout.focus();
-    let workspace = state.chat_session_key_for_pane(edit.pane);
-    let stale = focused != edit.pane || workspace.as_deref() != Some(edit.workspace.as_path());
+    let stale = if crate::app::update::is_ai_web_session(&edit.session_id) {
+        let workspace = state
+            .chat_session_key_for_pane(edit.pane)
+            .unwrap_or_default();
+        focused != edit.pane || workspace.as_path() != edit.workspace.as_path()
+    } else {
+        let workspace = state.chat_session_key_for_pane(edit.pane);
+        focused != edit.pane || workspace.as_deref() != Some(edit.workspace.as_path())
+    };
     if !stale {
         return false;
     }

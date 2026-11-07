@@ -62,8 +62,13 @@ pub fn open_history(state: &mut AppState, pane: PaneId) -> bool {
     let Some(target) = state.pane_mut_anywhere(pane) else {
         return false;
     };
-    // 列表由事件层按需加载（Effect::ListChatSessions）；先打开面板骨架。
-    target.lx.slash = Some(SlashPanel::History(Box::default()));
+    // 列表由事件层按需加载（Effect::ListChatSessions）；先打开带 loading 标记的面板骨架。
+    target.lx.slash = Some(SlashPanel::History(Box::new(
+        crate::app::state::HistoryPanel {
+            loading: true,
+            ..Default::default()
+        },
+    )));
     state
         .effects
         .push(crate::app::effects::Effect::ListChatSessions { pane });
@@ -411,6 +416,25 @@ pub fn persist_default_model(state: &mut AppState, selection: &ModelSelection) -
 
 /// 命令采纳：`/model`、`/resume`、`/new` 的命令文本不被发送。
 pub fn apply_slash_command(state: &mut AppState, pane: PaneId, command: SlashCommand) -> bool {
+    // AI Web 开放 `/new`、`/resume`、`/rewind`、`/rename`：其余本地 Agent/DB 命令给出统一提示。
+    if !matches!(
+        command,
+        SlashCommand::New | SlashCommand::Resume | SlashCommand::Rewind | SlashCommand::Rename
+    ) && state
+        .pane_anywhere(pane)
+        .is_some_and(|target| target.lx.entry == crate::app::state::LxEntry::AiWeb)
+    {
+        if let Some(target) = state.pane_mut_anywhere(pane) {
+            target.lx.slash = None;
+        }
+        show_lx_hint(
+            state,
+            pane,
+            InputHintLevel::Warning,
+            text::LX_AI_WEB_ONLY_NEW_CMD,
+        );
+        return true;
+    }
     match command {
         SlashCommand::Model => open_model_picker(state, pane),
         SlashCommand::Resume => open_history(state, pane),
@@ -526,8 +550,9 @@ pub(crate) fn refresh_slash_panel(state: &mut AppState, pane: PaneId) {
     let query = state.pane_anywhere(pane).and_then(|target| {
         let masked = crate::app::paste::mask_pasted_text(&target.lx.input);
         crate::app::state::lx::slash::slash_trigger(&masked, target.lx.cursor)
+            .map(|query| (query, target.lx.entry))
     });
-    let Some(query) = query else {
+    let Some((query, entry)) = query else {
         // 离开命令位置时关闭命令候选面板（model/resume 面板不受影响）。
         if let Some(target) = state.pane_mut_anywhere(pane)
             && matches!(
@@ -540,7 +565,8 @@ pub(crate) fn refresh_slash_panel(state: &mut AppState, pane: PaneId) {
         return;
     };
     // `/` 前缀或更具体前缀：命令候选实时过滤；skill 归 `@` 面板管理。
-    let matching = crate::app::state::lx::slash::SlashPanel::command_entries(&query);
+    // AI Web 只暴露 `/new`，其余命令不出现在候选里。
+    let matching = crate::app::state::lx::slash::SlashPanel::command_entries_for(entry, &query);
     if let Some(target) = state.pane_mut_anywhere(pane) {
         if matching.is_empty() {
             if matches!(

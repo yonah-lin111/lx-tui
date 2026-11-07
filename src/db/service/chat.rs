@@ -539,6 +539,12 @@ impl Persistence {
             }
             Effect::ListChatSessions { pane } => {
                 let Some(workspace) = state.chat_session_key_for_pane(pane) else {
+                    if let Some(target) = state.pane_mut_anywhere(pane)
+                        && let Some(crate::app::state::SlashPanel::History(panel)) =
+                            target.lx.slash.as_mut()
+                    {
+                        panel.loading = false;
+                    }
                     return false;
                 };
                 // 主 checkout 的 workspace 行可能尚未登记（只开过 worktree）：
@@ -548,6 +554,12 @@ impl Persistence {
                     db.list_chat_sessions(&workspace, 0, crate::db::chat::SESSION_PAGE_SIZE)
                 });
                 let Some(entries) = entries else {
+                    if let Some(target) = state.pane_mut_anywhere(pane)
+                        && let Some(crate::app::state::SlashPanel::History(panel)) =
+                            target.lx.slash.as_mut()
+                    {
+                        panel.loading = false;
+                    }
                     return false;
                 };
                 let views: Vec<crate::app::state::HistoryEntry> = entries
@@ -563,9 +575,16 @@ impl Persistence {
             }
             Effect::LoadChatSession { pane, session_id } => {
                 let Some(workspace) = state.chat_session_key_for_pane(pane) else {
+                    if let Some(target) = state.pane_mut_anywhere(pane) {
+                        target.lx.chat.loading_session = false;
+                    }
                     return false;
                 };
-                self.load_chat_session_into_pane(state, pane, &workspace, &session_id)
+                let loaded = self.load_chat_session_into_pane(state, pane, &workspace, &session_id);
+                if !loaded && let Some(target) = state.pane_mut_anywhere(pane) {
+                    target.lx.chat.loading_session = false;
+                }
+                loaded
             }
             Effect::ForkChatSession {
                 pane,

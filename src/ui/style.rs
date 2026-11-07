@@ -1052,6 +1052,7 @@ pub fn lx_entry_gradient(entry: LxEntry) -> (Color, Color) {
         LxEntry::Native => (LX_PINK, LX_SKY_BLUE),
         LxEntry::Hybrid => (Color::Indexed(168), Color::Indexed(195)),
         LxEntry::Automation => (Color::Indexed(195), Color::Indexed(168)),
+        LxEntry::AiWeb => (LX_SKY_BLUE, LX_PINK),
     }
 }
 

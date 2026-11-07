@@ -679,13 +679,68 @@ fn edits_text(command: LxInput) -> bool {
     )
 }
 
-/// 切换 lx 页选中入口（仅鼠标点击触发）；切换入口会取消在途粘贴面板。
+/// 切换 lx 页选中入口（仅鼠标点击触发）；切换入口会取消在途粘贴面板并隔离跨模式会话。
 pub fn set_lx_entry(state: &mut AppState, id: PaneId, entry: crate::app::state::LxEntry) {
+    let crossing_ai_web = state.pane_anywhere(id).is_some_and(|pane| {
+        pane.lx.entry != entry
+            && (pane.lx.entry == crate::app::state::LxEntry::AiWeb
+                || entry == crate::app::state::LxEntry::AiWeb)
+    });
+    if crossing_ai_web
+        && state
+            .pane_anywhere(id)
+            .is_some_and(|pane| pane.lx.chat.request.is_busy())
+    {
+        let _ = super::chat::stop_stream(state, id);
+    }
     if let Some(pane) = state.pane_mut_anywhere(id) {
         pane.lx.text_paste_cancel();
         pane.lx.paste_cancel();
+        if pane.lx.entry != entry {
+            pane.lx.slash = None;
+        }
+        if crossing_ai_web {
+            let incompatible = pane
+                .lx
+                .chat
+                .session_id
+                .as_deref()
+                .is_some_and(|session_id| {
+                    let is_ai = super::chat::is_ai_web_session(session_id);
+                    if entry == crate::app::state::LxEntry::AiWeb {
+                        !is_ai
+                    } else {
+                        is_ai
+                    }
+                });
+            if incompatible {
+                pane.lx.chat.reset_session_view();
+            }
+            pane.lx.clear_rewind();
+            pane.lx.ai_web_edit_user_index = None;
+            pane.lx.ai_web_edit_cloud_files.clear();
+            pane.lx.chat.loading_session = false;
+        }
         pane.lx.entry = entry;
+        if entry == crate::app::state::LxEntry::AiWeb {
+            pane.lx
+                .mention_force_tab(crate::app::prompt::MentionTab::Files);
+            pane.lx.exit_shell_mode();
+            pane.lx.refresh_refer_panel();
+        }
     }
+    if crossing_ai_web {
+        super::selection::clear_lx_selection_for(state, id);
+    }
+    super::chat::refresh_lx_status(state, id);
+}
+
+/// 切换 AI Web 目标站点；底边框状态行展示的站点名随之更新。
+pub fn set_ai_web_site(state: &mut AppState, id: PaneId, site: crate::app::state::AiWebSite) {
+    if let Some(pane) = state.pane_mut_anywhere(id) {
+        pane.lx.ai_web_site = site;
+    }
+    super::chat::refresh_lx_status(state, id);
 }
 
 /// 切换窗格主内容视图（lx 页 ↔ 终端）；返回是否变化。

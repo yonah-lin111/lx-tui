@@ -27,7 +27,10 @@ fn submit(state: &mut AppState, pane: PaneId, frozen_cwd: Option<PathBuf>) -> bo
     let Some(target) = state.pane_anywhere(pane) else {
         return false;
     };
-    if target.view != crate::app::state::PaneView::Lx || !target.lx.shell_mode() {
+    if target.view != crate::app::state::PaneView::Lx
+        || !target.lx.shell_mode()
+        || target.lx.entry == crate::app::state::LxEntry::AiWeb
+    {
         return false;
     }
     // 只去掉模式前缀与首尾空白；正文中的换行/引号/管道原样交给 shell。
@@ -94,7 +97,10 @@ pub fn queue_shell(state: &mut AppState, pane: PaneId) -> bool {
     let Some(target) = state.pane_anywhere(pane) else {
         return false;
     };
-    if target.view != crate::app::state::PaneView::Lx || !target.lx.shell_mode() {
+    if target.view != crate::app::state::PaneView::Lx
+        || !target.lx.shell_mode()
+        || target.lx.entry == crate::app::state::LxEntry::AiWeb
+    {
         return false;
     }
     let busy = !target.lx.chat.request.can_send() || target.lx.chat.has_running_shell();

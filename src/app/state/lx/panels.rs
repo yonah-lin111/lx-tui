@@ -169,7 +169,12 @@ impl Lx {
     }
 
     /// 确认高亮提及条目：替换触发区间、落下光标并结束面板；返回是否消费。
+    ///
+    /// 在 `AI Web` 模式下不允许发送文件夹，确认目录条目时自动转为进入该目录挑选文件。
     pub fn mention_confirm(&mut self) -> bool {
+        if self.entry == super::LxEntry::AiWeb && self.mention.active_is_directory() {
+            return self.mention_enter_folder();
+        }
         let Some((range, insertion)) = self.mention.confirm(self.input.len()) else {
             return false;
         };
@@ -217,12 +222,21 @@ impl Lx {
 
     /// 提及面板切换 Tab：左右循环切换；面板不可见返回 false。
     pub fn mention_switch_tab(&mut self, delta: isize) -> bool {
-        self.mention.switch_tab(delta, &self.input, self.cursor)
+        let ai_web = self.entry == super::LxEntry::AiWeb;
+        self.mention
+            .switch_tab_for_entry(delta, &self.input, self.cursor, ai_web)
     }
 
     /// 提及面板直接设置 Tab。
     pub fn mention_set_tab(&mut self, tab: crate::app::prompt::MentionTab) -> bool {
-        self.mention.set_tab(tab, &self.input, self.cursor)
+        let ai_web = self.entry == super::LxEntry::AiWeb;
+        self.mention
+            .set_tab_for_entry(tab, &self.input, self.cursor, ai_web)
+    }
+
+    /// 无视可见性守卫，强制将提及面板 Tab 归位。
+    pub fn mention_force_tab(&mut self, tab: crate::app::prompt::MentionTab) {
+        self.mention.force_tab(tab);
     }
 
     /// 同步引用文件夹快照；内容变化时返回 true。
@@ -258,10 +272,18 @@ impl Lx {
             .iter()
             .map(|candidate| candidate.path.to_string_lossy().into_owned())
             .collect();
-        let reference = candidates
-            .iter()
-            .map(PasteCandidate::reference)
-            .collect::<Option<Vec<_>>>()
+        let allow_reference = self.entry != super::LxEntry::AiWeb
+            || candidates
+                .iter()
+                .all(|c| c.kind != crate::app::paste::PasteCandidateKind::Folder);
+        let reference = allow_reference
+            .then(|| {
+                candidates
+                    .iter()
+                    .map(PasteCandidate::reference)
+                    .collect::<Option<Vec<_>>>()
+            })
+            .flatten()
             .map(|references| self.paste_insertion(&references))
             .filter(|reference| !reference.is_empty());
         let insertion = self.paste_insertion(&plain);

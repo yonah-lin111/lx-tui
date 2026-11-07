@@ -11,7 +11,12 @@ use crate::platform::{
     sniff_image_file,
 };
 
+mod ai_web;
+
 pub use crate::platform::ImagePrepareError;
+pub use ai_web::{
+    AiWebPrepareError, PreparedAiWebMessage, is_image_filename, prepare_ai_web_message,
+};
 
 /// 草稿中的图片附件。
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -505,8 +510,10 @@ fn resolve_ref_content_target(
     // 尝试在已有的附件中匹配
     for att in existing_attachments {
         if let Some(src) = &att.source_path {
-            let normalized = src.trim_matches('/');
-            if normalized == trimmed_token || normalized.ends_with(&format!("/{trimmed_token}")) {
+            let normalized = src.trim_end_matches('/');
+            let normalized_rel = normalized.trim_start_matches('/');
+            if normalized_rel == trimmed_token || normalized.ends_with(&format!("/{trimmed_token}"))
+            {
                 let resolved = resolve_reference_path(workspace_root, normalized);
                 if std::fs::metadata(&resolved).is_ok() {
                     return Some((resolved, normalized.to_string()));

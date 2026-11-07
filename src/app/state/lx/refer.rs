@@ -76,6 +76,9 @@ impl Lx {
             }
         }
 
+        if self.entry == super::LxEntry::AiWeb {
+            candidates.retain(|c| c.tag != ReferTag::Folder);
+        }
         let filtered = filter_refer_candidates(candidates, &trigger.query);
         if filtered.is_empty() {
             self.refer = None;

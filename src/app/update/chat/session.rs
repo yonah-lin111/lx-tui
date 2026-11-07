@@ -30,6 +30,17 @@ pub fn new_session(state: &mut AppState, pane: PaneId) -> bool {
     let Some(target) = state.pane_mut_anywhere(pane) else {
         return false;
     };
+    // AI Web 会话只存在内存：`/new` 同时要求网页端开启新对话。
+    let reset_ai_web = target.lx.entry == crate::app::state::LxEntry::AiWeb
+        || target
+            .lx
+            .chat
+            .session_id
+            .as_deref()
+            .is_some_and(super::ai_web::is_ai_web_session);
+    let ai_web_site = target.lx.ai_web_site;
+    target.lx.ai_web_edit_user_index = None;
+    target.lx.ai_web_edit_cloud_files.clear();
     target.lx.chat.reset_session_view();
     target.lx.clear_agents();
     target.lx.compact.reset();
@@ -38,6 +49,11 @@ pub fn new_session(state: &mut AppState, pane: PaneId) -> bool {
     target.lx.text_paste_cancel();
     target.lx.clear_expanded_pastes();
     crate::app::update::clear_lx_selection_for(state, pane);
+    if reset_ai_web {
+        state
+            .effects
+            .push(crate::app::effects::Effect::ResetAiWebSession { site: ai_web_site });
+    }
     refresh_lx_status(state, pane);
     true
 }
@@ -86,6 +102,7 @@ pub fn on_history_listed(
     let Some(SlashPanel::History(panel)) = target.lx.slash.as_mut() else {
         return false;
     };
+    panel.loading = false;
     panel.entries = entries;
     panel.current = bound.as_deref().and_then(|session_id| {
         panel
@@ -132,9 +149,10 @@ pub fn resume_session(state: &mut AppState, pane: PaneId, session_id: &str) -> b
             pane,
             session_id: session_id.to_string(),
         });
-    // 面板先行关闭；列表数据到达后填充。
+    // 面板先行关闭并进入历史加载态；列表数据到达后填充。
     if let Some(target) = state.pane_mut_anywhere(pane) {
         target.lx.slash = None;
+        target.lx.chat.loading_session = true;
     }
     true
 }
@@ -168,6 +186,7 @@ pub fn on_session_loaded_full(
     let Some(target) = state.pane_mut_anywhere(pane) else {
         return false;
     };
+    target.lx.chat.loading_session = false;
     let session_changed = target.lx.chat.session_id.as_deref() != Some(session_id);
     if session_changed {
         // Agents 面板属于会话：不清理会把上一会话的 run、计数和 ^d 目标带过来。
@@ -250,6 +269,21 @@ pub fn on_session_loaded_full(
 /// 重命名会话。
 pub fn rename_session(state: &mut AppState, pane: PaneId, session_id: &str, title: &str) -> bool {
     super::title::cancel_session_title(state, session_id);
+    if super::ai_web::is_ai_web_session(session_id) {
+        let workspace = state.chat_session_key_for_pane(pane).unwrap_or_default();
+        state
+            .effects
+            .push(crate::app::effects::Effect::RenameChatSession {
+                workspace,
+                session_id: session_id.to_string(),
+                title: title.to_string(),
+            });
+        let panes = state.all_pane_ids();
+        for p in panes {
+            crate::app::update::on_session_renamed(state, p, session_id, title);
+        }
+        return true;
+    }
     let Some(workspace) = state.chat_session_key_for_pane(pane) else {
         return false;
     };
@@ -274,8 +308,13 @@ pub fn delete_session(state: &mut AppState, pane: PaneId, session_id: &str) -> b
         // 本地命令不占用 RequestState，必须单独停止；删除后迟到回执不得写回。
         super::user_shell::cancel_user_shells(state, pane);
     }
-    let Some(workspace) = state.chat_session_key_for_pane(pane) else {
-        return false;
+    let workspace = if super::ai_web::is_ai_web_session(session_id) {
+        state.chat_session_key_for_pane(pane).unwrap_or_default()
+    } else {
+        let Some(workspace) = state.chat_session_key_for_pane(pane) else {
+            return false;
+        };
+        workspace
     };
     state
         .effects
@@ -297,6 +336,8 @@ pub fn on_session_deleted(state: &mut AppState, pane: PaneId, session_id: &str) 
         target.lx.compact.reset();
         target.lx.model_switch.reset();
         target.lx.clear_rewind();
+        target.lx.ai_web_edit_user_index = None;
+        target.lx.ai_web_edit_cloud_files.clear();
         crate::app::update::clear_lx_selection_for(state, pane);
         return true;
     }

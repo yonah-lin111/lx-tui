@@ -653,6 +653,29 @@ fn render_items(buf: &mut Buffer, layout: &PanelLayout, view: &CommandPanelView<
     if layout.content.width == 0 || layout.content.height == 0 {
         return;
     }
+    if view.hide_active_marker
+        && let [
+            CommandItem::Inline {
+                label,
+                preview: "",
+                tag: "",
+            },
+        ] = view.items
+    {
+        let available = usize::from(layout.content.width);
+        let clipped = crate::ui::text::truncate_to_width(label, available);
+        let text_w = u16::try_from(clipped.width()).unwrap_or(0);
+        let x = layout
+            .content
+            .x
+            .saturating_add(layout.content.width.saturating_sub(text_w) / 2);
+        let y = layout
+            .content
+            .y
+            .saturating_add(layout.content.height.saturating_sub(1) / 2);
+        buf.set_stringn(x, y, &clipped, available, style::muted());
+        return;
+    }
     let label_width = view
         .items
         .iter()

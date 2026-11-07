@@ -838,11 +838,18 @@ pub(crate) fn handle_mouse_down_left(
                     *dirty = true;
                     return;
                 }
+                let site = state.pane_anywhere(pane).and_then(|target| {
+                    let lx = &target.lx;
+                    ui::main_content::lx::ai_web_site_hit(inner, lx, mouse.column, mouse.row)
+                });
                 let entry = state.pane_anywhere(pane).and_then(|target| {
                     ui::main_content::lx::entry_hit(inner, &target.lx, mouse.column, mouse.row)
                 });
                 update::clear_selection(state);
-                if let Some(entry) = entry {
+                if let Some(site) = site {
+                    update::set_ai_web_site(state, pane, site);
+                    update::clear_lx_selection(state);
+                } else if let Some(entry) = entry {
                     update::set_lx_entry(state, pane, entry);
                     update::clear_lx_selection(state);
                 } else if let Some((visual_row, col)) = state

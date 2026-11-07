@@ -6,7 +6,8 @@ use ratatui::Frame;
 use ratatui::layout::Rect;
 use ratatui::style::Style;
 use ratatui::text::{Line, Span};
-use ratatui::widgets::{Block, List, ListItem, ListState, Paragraph};
+use ratatui::widgets::{Block, List, ListItem, ListState};
+use unicode_width::UnicodeWidthStr;
 
 use crate::app::state::{AppState, Workspace, WorkspaceMode};
 use crate::detect::PaneAgentSnapshot;
@@ -616,11 +617,16 @@ pub fn render_agents(frame: &mut Frame<'_>, area: Rect, state: &AppState) {
     }
     let items = agent_items(state);
     if items.is_empty() {
-        let line = Line::from(Span::styled(
-            format!(" {}", text::AGENTS_EMPTY),
+        let clipped = text::truncate_to_width(text::AGENTS_EMPTY, usize::from(area.width));
+        let text_w = u16::try_from(clipped.width()).unwrap_or(0);
+        let x = area.x.saturating_add(area.width.saturating_sub(text_w) / 2);
+        frame.buffer_mut().set_stringn(
+            x,
+            area.y,
+            &clipped,
+            usize::from(area.width),
             style::muted(),
-        ));
-        frame.render_widget(Paragraph::new(line), area);
+        );
         return;
     }
     let scrollbar = agent_scrollbar_for(area, state);

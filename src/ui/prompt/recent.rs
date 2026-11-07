@@ -75,9 +75,11 @@ pub fn render(buf: &mut Buffer, data: &RecentRender<'_>) {
         return;
     }
     if rows.is_empty() || visible_entries == 0 {
+        let text_w = u16::try_from(text::PROMPT_RECENT_EMPTY.width()).unwrap_or(u16::MAX);
+        let x = area.x.saturating_add(area.width.saturating_sub(text_w) / 2);
         tree::paint_text(
             buf,
-            area.x.saturating_add(2),
+            x,
             area.y,
             text::PROMPT_RECENT_EMPTY,
             style::muted(),

@@ -61,17 +61,35 @@ pub use slash::{
 };
 pub use task::{AgentFilter, ProcessEntry, TaskPage, TaskTab};
 
-/// lx 页三个入口：原生 agent、混合 agent、自动化 agent。
+/// lx 页四个入口：原生 agent、混合 agent、自动化 agent、AI Web。
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum LxEntry {
     Native,
     Hybrid,
     Automation,
+    AiWeb,
 }
 
 impl LxEntry {
-    /// 三个入口的显示顺序。
-    pub const ALL: [LxEntry; 3] = [LxEntry::Native, LxEntry::Hybrid, LxEntry::Automation];
+    /// 四个入口的显示顺序。
+    pub const ALL: [LxEntry; 4] = [
+        LxEntry::Native,
+        LxEntry::Hybrid,
+        LxEntry::Automation,
+        LxEntry::AiWeb,
+    ];
+}
+
+/// AI Web 支持的目标站点（首期接入 DeepSeek）。
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub enum AiWebSite {
+    #[default]
+    Deepseek,
+}
+
+impl AiWebSite {
+    /// 全部 AI Web 站点的显示顺序。
+    pub const ALL: [AiWebSite; 1] = [AiWebSite::Deepseek];
 }
 
 /// 首页资源计数的一类（MCP server / skill）。
@@ -101,6 +119,12 @@ pub struct StartupCounts {
 pub struct Lx {
     /// 当前选中入口；仅鼠标点击切换，重启复位为 Native。
     pub entry: LxEntry,
+    /// AI Web 入口当前选中的目标站点。
+    pub ai_web_site: AiWebSite,
+    /// AI Web 撤回（`/rewind`）后待下一轮在网页端原地编辑的用户消息下标（0 基）。
+    pub ai_web_edit_user_index: Option<usize>,
+    /// AI Web 撤回（`/rewind`）时该轮原有的云端历史附件名（供重发时比对保留或移除网页卡片）。
+    pub ai_web_edit_cloud_files: Vec<String>,
     /// 多行输入内容；Shell 模式下只存命令正文（不含 `!` 前缀）。
     pub input: String,
     /// 当前编辑模式；仅首个非空白字符决定，正文中的 `！` 不触发。
@@ -220,6 +244,9 @@ impl Lx {
     fn build(plain: bool) -> Self {
         Self {
             entry: LxEntry::Native,
+            ai_web_site: AiWebSite::Deepseek,
+            ai_web_edit_user_index: None,
+            ai_web_edit_cloud_files: Vec::new(),
             input: String::new(),
             input_mode: LxInputMode::Chat,
             revision: 0,
@@ -376,8 +403,10 @@ impl Lx {
     }
 
     /// 新插入的文本若以首个非空白 `!`/`！` 开头，吸收该标记并进入 shell 模式。
+    ///
+    /// `AI Web` 模式下不支持本地 shell，保持普通对话输入。
     pub(super) fn adopt_shell_prefix(&mut self) {
-        if self.plain || self.input_mode == LxInputMode::Shell {
+        if self.plain || self.entry == LxEntry::AiWeb || self.input_mode == LxInputMode::Shell {
             return;
         }
         let Some(offset) = shell::marker_offset(&self.input) else {
@@ -398,6 +427,14 @@ impl Lx {
         self.mention.suppress();
         self.text_selection = None;
         self.touch();
+    }
+
+    /// 退出 Shell 输入模式回到普通对话模式（切换至不支持本地 Shell 的入口时使用）。
+    pub fn exit_shell_mode(&mut self) {
+        if self.input_mode == LxInputMode::Shell {
+            self.input_mode = LxInputMode::Chat;
+            self.touch();
+        }
     }
 
     /// 滚轮滚动输入框视口（正数向下）；返回视口是否移动。

@@ -380,6 +380,8 @@ fn civil_from_days(days: i64) -> (i64, u32, u32) {
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct HistoryPanel {
     pub entries: Vec<HistoryEntry>,
+    /// 列表是否仍在后台拉取中。
+    pub loading: bool,
     /// 当前窗格已绑定的会话在 `entries` 中的索引（行首 `❯` 与底色标记）。
     pub current: Option<usize>,
     /// 计算相对时间的"现在"（UTC 毫秒），由事件循环每轮 `tick` 刷新。
@@ -670,6 +672,27 @@ impl SlashPanel {
             .into_iter()
             .map(SlashEntry::Command)
             .collect()
+    }
+
+    /// 按 lx 入口裁剪命令候选：AI Web 开放 `/new`、`/resume`、`/rewind`、`/rename`。
+    pub fn command_entries_for(entry: super::LxEntry, query: &str) -> Vec<SlashEntry> {
+        if entry == super::LxEntry::AiWeb {
+            Self::commands_matching(query)
+                .into_iter()
+                .filter(|command| {
+                    matches!(
+                        *command,
+                        SlashCommand::New
+                            | SlashCommand::Resume
+                            | SlashCommand::Rewind
+                            | SlashCommand::Rename
+                    )
+                })
+                .map(SlashEntry::Command)
+                .collect()
+        } else {
+            Self::command_entries(query)
+        }
     }
 
     /// 高亮项（命令面板）。

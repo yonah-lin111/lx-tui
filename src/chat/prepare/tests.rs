@@ -220,3 +220,41 @@ fn prepare_resolves_deep_nested_ref_content_via_workspace_scan() {
 
     let _ = std::fs::remove_dir_all(&dir);
 }
+
+#[test]
+fn prepare_ai_web_message_handles_local_files_cloud_keep_files_and_rejects_folders() {
+    let dir = temp_dir("ai-web-prepare");
+    let file_path = dir.join("note.txt");
+    let sub_dir = dir.join("sub");
+    std::fs::create_dir_all(&sub_dir).expect("create sub dir");
+    std::fs::write(&file_path, "hello").expect("write note");
+
+    // 1. Local file + retained cloud image
+    let raw = format!(
+        "总结一下 @[refer-file]({}) @[refer-image](cloud_pic.png)",
+        file_path.display()
+    );
+    let prepared =
+        prepare_ai_web_message(&dir, "u-1", &raw, &["cloud_pic.png".to_string()]).expect("ok");
+    assert_eq!(prepared.web_prompt, "总结一下");
+    assert_eq!(prepared.files.len(), 1);
+    assert_eq!(prepared.keep_files, vec!["cloud_pic.png".to_string()]);
+    assert_eq!(prepared.attachments.len(), 2);
+    assert_eq!(prepared.attachments[0].kind, MessageAttachmentKind::File);
+    assert_eq!(prepared.attachments[1].kind, MessageAttachmentKind::Image);
+
+    // 2. Folder reference is rejected
+    let folder_raw = format!("看目录 @[refer-folder]({})", sub_dir.display());
+    assert_eq!(
+        prepare_ai_web_message(&dir, "u-2", &folder_raw, &[]),
+        Err(AiWebPrepareError::FolderUnsupported)
+    );
+
+    // 3. Skill/MCP reference is rejected
+    assert_eq!(
+        prepare_ai_web_message(&dir, "u-3", "用 @[refer-skill](/tmp/s) 处理", &[]),
+        Err(AiWebPrepareError::LocalReferenceUnsupported)
+    );
+
+    let _ = std::fs::remove_dir_all(&dir);
+}
