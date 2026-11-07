@@ -1,7 +1,7 @@
 # lx `AI Web` 入口与 DeepSeek 网页端接入（基于 `ego-browser`）— 设计文档
 
-> 状态：**已在 `.worktrees/lx-ai-web`（`feature/lx-ai-web`）完成实现、代码审查（[review.md](review.md)）与回归修复**（2026-11-07）
-> 执行任务清单见 [task.md](task.md)，审查报告见 [review.md](review.md)。
+> 状态：**已完成实现、代码审查（[review.md](review.md)）、全部回归修复并合并至 `dev`**（2026-11-07）
+> 执行任务清单见 [task.md](task.md)，审查报告见 [review.md](review.md)，驱动规范见 [`docs/standards/ai-web-deepseek.md`](../../standards/ai-web-deepseek.md)。
 
 ---
 
@@ -130,7 +130,7 @@ src/
    - 在 `/resume` 面板中按 `Shift+Enter` 打开编辑模态：支持修改会话标题（同步调用 `/api/v0/chat_session/update_title`）或按 `Ctrl+D` 删除会话（同步调用 `/api/v0/chat_session/delete`，若删除当前活跃会话则先停止在途流并解绑）。
    - 所有后台查询均受 30 秒超时保护，且若未收到预期终态事件必定回投 `ActionFailed` 清除 `loading` 状态。
 3. **1 步 `/rewind`（`/undo` / 空闲双击 `Esc`）**：
-   - 截断最新一轮问答，将该轮用户原始草稿（含 `@[refer-*]` 标记）回填至输入框，并记录 `ai_web_edit_user_index = Some(remaining_users)`；
+   - 截断最新一轮问答（若截断后 `messages` 为空回到欢迎首页，同步清空 `session_title` 与 `session_title_palette` 移除输入框右上角标题胶囊），将该轮用户原始草稿（含 `@[refer-*]` 标记）回填至输入框，并记录 `ai_web_edit_user_index = Some(remaining_users)`；
    - 下一轮发送时，脚本在网页端定位第 `editIndex` 条用户消息，点击编辑按钮打开 `textarea[name="user query"]` 原地修改并提交（若打开或提交编辑框失败则显式报错，绝不静默退化为底部发新消息）。
 
 ---

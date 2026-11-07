@@ -1,8 +1,8 @@
 # lx `AI Web` 入口与 DeepSeek 网页端接入 — 执行任务清单
 
-> 状态：**已在 `.worktrees/lx-ai-web`（`feature/lx-ai-web`）完成实现、代码审查（[review.md](review.md)）与 P0–P2 修复**（2026-11-07）
-> 设计依据：[design.md](design.md) · 审查报告：[review.md](review.md)
-> 阶段划分：P0（开工门槛与基线核对）→ P1（`app/` 状态模型与云同步会话更新）→ P2（`ui/` 欢迎页 4 入口、标题、居中加载/空态与底边框渲染）→ P3（`chat/ai_web` 与 `event/` 回环 HTTP 流、云会话与 CDP 文件上传）→ P4（单元测试与精确校验）→ P5（代码审查 P0–P2 问题闭环修复）。
+> 状态：**已完成实现、代码审查（[review.md](review.md)）、P0–P2 修复并合并至 `dev`**（2026-11-07）
+> 设计依据：[design.md](design.md) · 审查报告：[review.md](review.md) · 驱动规范：[`docs/standards/ai-web-deepseek.md`](../../standards/ai-web-deepseek.md)
+> 阶段划分：P0（开工门槛与基线核对）→ P1（`app/` 状态模型与云同步会话更新）→ P2（`ui/` 欢迎页 4 入口、标题、居中加载/空态与底边框渲染）→ P3（`chat/ai_web` 与 `event/` 回环 HTTP 流、云会话与 CDP 文件上传）→ P4（单元测试与精确校验）→ P5（代码审查 P0–P2 问题闭环修复与规范沉淀）。
 
 ---
 
@@ -73,3 +73,4 @@
 - [x] **P1-3**：为 `list_sessions` / `load_session` 增加 HTTP 响应校验、30 秒进程超时与未命中终态时的 `ActionFailed` 兜底；删除活跃会话时先停止在途流。
 - [x] **P1-4**：仅在收到有效 SSE 数据帧时置 `sseActive = true`，并要求显式收到 `Done` 事件才按 `Complete` 结算。
 - [x] **P2-1 ~ P2-3**：拆分 `deepseek_helpers.js` + `deepseek_script.js` 与 `src/chat/prepare/ai_web.rs`，将生产文件内联测试迁入同层 `tests.rs`，修复纯文件夹预览 `[Folder]` 与窄窗格 `loading history…` 截断，并同步更新 `design.md`、`task.md` 与 `review.md`。
+- [x] **交互回归与规范沉淀**：修复 `/rewind` 撤销全部轮次回到欢迎首页时输入框右上角会话标题胶囊未清空的问题（`ca5e6c1`），并编写 `docs/standards/ai-web-deepseek.md` 规范文档（`57f019a`）。
