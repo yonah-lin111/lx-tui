@@ -292,6 +292,10 @@ pub fn rewind_ai_web(state: &mut AppState, pane: PaneId) -> bool {
         return false;
     };
     target.lx.chat.messages.truncate(last_user_idx);
+    if target.lx.chat.messages.is_empty() {
+        target.lx.chat.session_title = None;
+        target.lx.chat.session_title_palette = 0;
+    }
     let remaining_users = target
         .lx
         .chat
@@ -326,7 +330,8 @@ pub fn on_ai_web_session_bound(
     }
     let mut changed = target.lx.chat.session_id.as_deref() != Some(session_id.as_str());
     target.lx.chat.session_id = Some(session_id);
-    if target.lx.chat.session_title.is_none()
+    if !target.lx.chat.messages.is_empty()
+        && target.lx.chat.session_title.is_none()
         && let Some(title) = title
     {
         changed |= target.lx.chat.set_session_title(Some(title));

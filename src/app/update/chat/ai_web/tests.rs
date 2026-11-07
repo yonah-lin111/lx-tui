@@ -261,11 +261,16 @@ fn rename_and_session_load_and_cloud_attachment_rewind_work_in_ai_web() {
         } if session_id == "ai-web-ds-uuid-1" && title == "New Cloud Title"
     )));
 
-    // Rewind the cloud-loaded turn: restores both cloud attachment markers
+    // Rewind the cloud-loaded turn: restores both cloud attachment markers and clears title when back at home screen
     state.effects.clear();
     draft(&mut state, pane, "/rewind");
     assert!(super::super::try_send(&mut state, pane));
     let target = state.pane_anywhere(pane).expect("pane");
+    assert!(target.lx.chat.messages.is_empty());
+    assert!(
+        target.lx.chat.session_title.is_none(),
+        "撤销全部轮次回到首页后，输入框右上角的会话标题必须清空"
+    );
     assert_eq!(
         target.lx.input,
         "hello @[refer-image](photo.png) @[refer-file](report.pdf)"
