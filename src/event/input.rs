@@ -165,6 +165,23 @@ pub(crate) fn handle_key_event(
                 *dirty = true;
                 return;
             }
+            // 确认删除浮层：Up/Down 按真实视口高度滚动待删列表，小屏下也能触达尾部。
+            if matches!(key, OverlayKey::Up | OverlayKey::Down)
+                && let Some(Overlay::ConfirmClose(confirm)) = state.overlay.as_ref()
+            {
+                let visible_rows =
+                    ui::overlay::confirm_close_layout(state, geometry.screen, confirm).map_or(
+                        crate::app::overlay::CONFIRM_DELETE_LIST_MAX_ROWS,
+                        |layout| layout.visible_rows,
+                    );
+                update::scroll_confirm_close_with_rows(
+                    state,
+                    if key == OverlayKey::Up { -1 } else { 1 },
+                    visible_rows,
+                );
+                *dirty = true;
+                return;
+            }
             let was_menu = matches!(state.overlay, Some(Overlay::Menu(_)));
             let was_worktree = matches!(state.overlay, Some(Overlay::WorktreeOpen(_)));
             let was_new_ws = matches!(

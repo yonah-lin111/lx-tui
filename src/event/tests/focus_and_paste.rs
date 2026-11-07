@@ -119,14 +119,14 @@ fn event_input_paste_overlay_and_prompt_routing() {
     let mut sessions = HashMap::new();
     let mut dirty = false;
 
-    // 1. 浮层打开时：粘贴被吞掉，dirty 保持 false。
-    state.overlay = Some(Overlay::ConfirmClose(crate::app::overlay::ConfirmClose {
-        target: crate::app::overlay::OverlayTarget::PromptPage {
-            workspace: 0,
-            owner: crate::app::prompt::PromptEditing::Item(1),
-            page: crate::app::prompt::PromptPageId::Saved(1),
+    // 1. 无输入框的浮层打开时：粘贴被吞掉，dirty 保持 false。
+    state.overlay = Some(Overlay::ReferencedFolderDelete(
+        crate::app::overlay::ReferencedFolderDelete {
+            key: None,
+            id: 7,
+            path: std::path::PathBuf::from("/tmp/lx-delete-confirm-paste"),
         },
-    }));
+    ));
 
     handle_terminal_event(
         TerminalEvent::Paste("echo test".to_string()),
@@ -137,7 +137,30 @@ fn event_input_paste_overlay_and_prompt_routing() {
         &mut ui::RenderCache::default(),
         &mut dirty,
     );
-    assert!(!dirty, "浮层激活时粘贴被吞掉");
+    assert!(!dirty, "无输入框浮层激活时粘贴被吞掉");
+
+    // 1a. 确认删除浮层带口令输入框：粘贴写入输入框，不穿透。
+    dirty = false;
+    state.overlay = Some(Overlay::ConfirmClose(
+        crate::app::overlay::ConfirmClose::new(
+            crate::app::overlay::OverlayTarget::MissingWorkspaces,
+        ),
+    ));
+    handle_terminal_event(
+        TerminalEvent::Paste("confirm delete".to_string()),
+        &mut state,
+        &mut sessions,
+        &geo,
+        &config,
+        &mut ui::RenderCache::default(),
+        &mut dirty,
+    );
+    assert!(dirty, "确认浮层粘贴使画面变脏");
+    let Some(Overlay::ConfirmClose(confirm)) = state.overlay.as_ref() else {
+        panic!("confirm overlay expected");
+    };
+    assert_eq!(confirm.input.text(), "confirm delete");
+    assert!(confirm.is_confirmed(), "粘贴口令即满足确认条件");
 
     // 1b. 带单行输入框的浮层：粘贴写入当前浮层，不穿透。
     state.overlay = Some(Overlay::Rename(crate::app::overlay::Rename {

@@ -15,7 +15,9 @@ use crate::layout::{self, PaneId};
 use crate::pty::PtySession;
 use crate::ui;
 
-use super::super::overlay::{handle_overlay_click, open_right_click_menu};
+use super::super::overlay::{
+    confirm_close_scrollbar_press, handle_overlay_click, open_right_click_menu,
+};
 use super::super::paste;
 use super::super::session::{Geometry, ensure_workspace_visible, reveal_active_tab, write_to_pane};
 use super::hit::{
@@ -41,29 +43,25 @@ pub(crate) fn handle_mouse_down_left(
     cache: &mut ui::RenderCache,
     dirty: &mut bool,
 ) {
-    let Geometry {
-        screen,
-        rects,
-        view,
-    } = geometry;
+    let (screen, rects, view) = (&geometry.screen, &geometry.rects, &geometry.view);
     if update::clear_tooltip(state) {
         *dirty = true;
     }
-    // 新的一次按下意味着上一轮 Down→Up 已经结束：指针在拖动中移出窗口会丢掉 Up，
-    // 残留现场若被这次无关的 Up 消费，会按旧行号误点（如点工具栏却折叠了树里的文件夹）。
+    // 新的一次按下意味着上一轮 Down→Up 已结束：拖出窗口丢失 Up 后残留的手势与滚动条状态在此清空。
     state.prompt_drag = None;
-    // 模态列表滚动条拖拽同理：丢失 Up 后下一次手势不得沿用旧 thumb 偏移。
     state.connect_scroll_drag = None;
     state.referenced_search_scroll_drag = None;
     state.referenced_menu_scroll_drag = None;
-    // 历史列表的搜索拖选/滚动条/行拖拽同理：丢失 Up 后下一次手势不得被旧状态劫持。
+    state.overlay_input_drag = false;
+    if let Some(Overlay::ConfirmClose(confirm)) = state.overlay.as_mut() {
+        confirm.scroll_drag = None;
+    }
     state.workspace_history.search_drag = false;
     state.workspace_history.scroll_drag = None;
     state.workspace_history.drag = None;
     state.workspace_history.dragging = false;
     state.workspace_history.drag_moved = false;
-    // 全局 toast 绘制在最顶层（含模态浮层之上）：点击 toast 盒内关闭并消费点击；
-    // 点击 toast 盒外先关闭 toast，再继续处理当前点击（含模态点击）。
+    // 全局 toast 绘制在模态浮层之上：盒内点击关闭并消费，盒外点击先关闭再继续处理。
     if let Some(toast) = ui::toast::rect(state, view, rects, *screen, config) {
         update::dismiss_toast(state);
         *dirty = true;
@@ -123,6 +121,11 @@ pub(crate) fn handle_mouse_down_left(
                 }
                 return;
             }
+        }
+        // 失效工作区确认弹窗的滚动条同上：命中轨道/thumb 时滚动列表视口后再走浮层点击。
+        if confirm_close_scrollbar_press(state, *screen, mouse.column, mouse.row) {
+            *dirty = true;
+            return;
         }
         let was_menu = matches!(state.overlay, Some(Overlay::Menu(_)));
         let menu_item_clicked = if let Some(Overlay::Menu(menu)) = state.overlay.as_ref() {

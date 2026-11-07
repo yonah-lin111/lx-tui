@@ -974,6 +974,92 @@ fn open_workspace_list_menu_offers_new_workspace_only() {
     assert_eq!(menu.anchor, (10, 5));
 }
 
+fn history_menu_entry(name: &str, path: PathBuf) -> WorkspaceHistoryEntry {
+    let exists = path.is_dir();
+    WorkspaceHistoryEntry {
+        name: name.into(),
+        path,
+        exists,
+        name_is_manual: true,
+        position: 0,
+        trusted: true,
+        git: None,
+    }
+}
+
+fn history_menu_commands(state: &AppState) -> Vec<MenuCommand> {
+    let Some(Overlay::Menu(menu)) = state.overlay.as_ref() else {
+        panic!("menu overlay expected");
+    };
+    menu.commands.clone()
+}
+
+#[test]
+fn open_workspace_list_menu_offers_delete_missing_only_in_history_with_missing_entries() {
+    let mut state = AppState::demo();
+    let missing =
+        std::env::temp_dir().join(format!("lx-nonexistent-list-menu-{}", std::process::id()));
+    apply_workspace_history(&mut state, vec![history_menu_entry("Missing", missing)]);
+
+    // 活跃工作区视图：即使历史中存在失效条目也不显示 Delete missing。
+    open_workspace_list_menu(&mut state, (0, 0));
+    assert_eq!(
+        history_menu_commands(&state),
+        vec![MenuCommand::NewWorkspace]
+    );
+
+    // 历史视图且存在失效条目：追加 Delete missing。
+    show_workspace_history(&mut state);
+    open_workspace_list_menu(&mut state, (0, 0));
+    assert_eq!(
+        history_menu_commands(&state),
+        vec![
+            MenuCommand::NewWorkspace,
+            MenuCommand::DeleteMissingWorkspaces
+        ]
+    );
+
+    // 全部条目存在：恢复为仅 New workspace。
+    apply_workspace_history(
+        &mut state,
+        vec![history_menu_entry("Existing", std::env::temp_dir())],
+    );
+    open_workspace_list_menu(&mut state, (0, 0));
+    assert_eq!(
+        history_menu_commands(&state),
+        vec![MenuCommand::NewWorkspace]
+    );
+}
+
+#[test]
+fn activate_menu_delete_missing_from_list_requires_two_clicks_and_opens_confirm() {
+    let mut state = AppState::demo();
+    let missing = std::env::temp_dir().join(format!(
+        "lx-nonexistent-list-activate-{}",
+        std::process::id()
+    ));
+    apply_workspace_history(&mut state, vec![history_menu_entry("Missing", missing)]);
+    show_workspace_history(&mut state);
+    open_workspace_list_menu(&mut state, (0, 0));
+    if let Some(Overlay::Menu(menu)) = state.overlay.as_mut() {
+        menu.selected = 1;
+    }
+
+    // 第 1 次点击仅进入行内确认态。
+    activate_menu(&mut state);
+    let Some(Overlay::Menu(menu)) = state.overlay.as_ref() else {
+        panic!("menu stays open on first click");
+    };
+    assert!(menu.confirming);
+
+    // 第 2 次点击打开 MissingWorkspaces 口令弹窗。
+    activate_menu(&mut state);
+    assert!(matches!(
+        state.overlay,
+        Some(Overlay::ConfirmClose(ref c)) if c.target == OverlayTarget::MissingWorkspaces
+    ));
+}
+
 #[test]
 fn activate_menu_new_workspace_from_list_opens_dialog() {
     let mut state = AppState::demo();

@@ -214,12 +214,10 @@ fn overlay_kind_reports_variant() {
         input: TextInput::new("a"),
     });
     assert_eq!(rename.kind(), OverlayKind::Rename);
-    let confirm = Overlay::ConfirmClose(ConfirmClose {
-        target: OverlayTarget::Tab {
-            workspace: 0,
-            tab: 1,
-        },
-    });
+    let confirm = Overlay::ConfirmClose(ConfirmClose::new(OverlayTarget::Tab {
+        workspace: 0,
+        tab: 1,
+    }));
     assert_eq!(confirm.kind(), OverlayKind::ConfirmClose);
     let new_ws = Overlay::NewWorkspace(NewWorkspace {
         input: TextInput::new(""),
@@ -337,6 +335,10 @@ fn menu_command_requires_confirm_for_destructive_and_cwd_actions() {
         MenuCommand::ClosePane,
         MenuCommand::DeleteFolder,
         MenuCommand::DeletePrompt,
+        MenuCommand::DeleteTodo,
+        MenuCommand::DeletePage,
+        MenuCommand::DeleteWorkspaceHistory,
+        MenuCommand::DeleteMissingWorkspaces,
         MenuCommand::SwitchToWorkspaceCwd,
         MenuCommand::SyncWorkspaceToTerminalCwd,
     ] {
@@ -352,6 +354,7 @@ fn menu_command_requires_confirm_for_destructive_and_cwd_actions() {
         MenuCommand::RenameWorkspace,
         MenuCommand::OpenWorktree,
         MenuCommand::OpenPrompt,
+        MenuCommand::OpenWorkspaceHistory,
         MenuCommand::RenameTab,
         MenuCommand::SplitRight,
         MenuCommand::SplitDown,
@@ -372,6 +375,34 @@ fn menu_command_requires_confirm_for_destructive_and_cwd_actions() {
             "{cmd:?} should execute immediately without inline confirm"
         );
     }
+}
+
+#[test]
+fn confirm_close_phrase_ignores_outer_whitespace_and_ascii_case() {
+    let mut confirm = ConfirmClose::new(OverlayTarget::WorkspaceHistory(0));
+    assert!(!confirm.is_confirmed());
+    for text in [
+        "delete",
+        "confirm",
+        "confirm  delete",
+        "confirm delete\nextra",
+    ] {
+        confirm.input = TextInput::new(text.to_string());
+        assert!(!confirm.is_confirmed(), "{text:?} must not confirm");
+    }
+    for text in ["confirm delete", "  Confirm Delete  ", "\tCONFIRM DELETE\n"] {
+        confirm.input = TextInput::new(text.to_string());
+        assert!(confirm.is_confirmed(), "{text:?} must confirm");
+    }
+}
+
+#[test]
+fn confirm_close_new_starts_with_empty_input_and_zero_scroll() {
+    let confirm = ConfirmClose::new(OverlayTarget::WorkspaceHistory(0));
+    assert!(confirm.input.text().is_empty());
+    assert_eq!(confirm.scroll, 0);
+    assert_eq!(confirm.scroll_drag, None);
+    assert_eq!(CONFIRM_DELETE_LIST_MAX_ROWS, 5);
 }
 
 #[test]

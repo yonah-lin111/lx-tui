@@ -281,6 +281,17 @@ pub(crate) fn handle_mouse_wheel(
             return;
         }
     }
+    if let Some(delta) = vertical_wheel_delta(mouse.kind)
+        && let Some(crate::app::overlay::Overlay::ConfirmClose(confirm)) = state.overlay.as_ref()
+        && let Some(layout) = ui::overlay::confirm_close_layout(state, geometry.screen, confirm)
+        && layout.shell.area.contains((mouse.column, mouse.row).into())
+    {
+        // 失效工作区列表在模态内滚动（列表高度受限），不穿透到底层。
+        if update::scroll_confirm_close_with_rows(state, delta, layout.visible_rows) {
+            *dirty = true;
+        }
+        return;
+    }
     if state.overlay.is_some() {
         return;
     }

@@ -223,26 +223,88 @@ impl WorkspaceHistoryPanel {
         block
     }
 
-    /// 删除该条目时会一并删除的同仓库 linked worktree 数量（不含自身）。
-    pub fn delete_worktree_count(&self, index: usize) -> usize {
+    /// 判断条目是否为归属于某个同列表中主 Git 仓库的 linked worktree 子项。
+    pub fn is_grouped_child(&self, entry: &WorkspaceHistoryEntry) -> bool {
+        entry.git.as_ref().is_some_and(|git| {
+            git.is_linked
+                && self.entries.iter().any(|parent| {
+                    parent
+                        .git
+                        .as_ref()
+                        .is_some_and(|pg| !pg.is_linked && pg.repo_root == git.repo_root)
+                })
+        })
+    }
+
+    /// 若 `index` 指向非 linked 的主 Git 仓库，返回其级联关联的全部同仓库 linked worktree 下标。
+    pub fn cascade_linked_worktree_indices(&self, index: usize) -> Vec<usize> {
         let Some(entry) = self.entries.get(index) else {
-            return 0;
+            return Vec::new();
         };
         let Some(git) = entry.git.as_ref() else {
-            return 0;
+            return Vec::new();
         };
         if git.is_linked {
-            return 0;
+            return Vec::new();
         }
         self.entries
             .iter()
-            .filter(|other| {
-                other.path != entry.path
+            .enumerate()
+            .filter_map(|(idx, other)| {
+                (idx != index
+                    && other.path != entry.path
                     && other.git.as_ref().is_some_and(|other_git| {
-                        other_git.repo_root == git.repo_root && other_git.is_linked
-                    })
+                        other_git.is_linked
+                            && (other_git.repo_root == entry.path
+                                || other_git.repo_root == git.repo_root)
+                    }))
+                .then_some(idx)
             })
-            .count()
+            .collect()
+    }
+
+    /// 删除该条目时会一并删除的同仓库 linked worktree 数量（不含自身）。
+    pub fn delete_worktree_count(&self, index: usize) -> usize {
+        self.cascade_linked_worktree_indices(index).len()
+    }
+
+    /// 获取确认删除浮层中待删除的工作区条目列表 `(显示名, 路径)`：
+    /// - 单条删除（`WorkspaceHistory(index)`）：返回该条目本身；若为主 Git 仓库，紧跟其同仓库全部 linked worktree；
+    /// - 批量清理失效项（`MissingWorkspaces`）：返回全部 `!entry.exists` 的失效条目；
+    /// - 其它目标返回空列表。
+    pub fn target_delete_entries(
+        &self,
+        target: &crate::app::overlay::OverlayTarget,
+    ) -> Vec<(String, PathBuf)> {
+        match target {
+            crate::app::overlay::OverlayTarget::WorkspaceHistory(index) => {
+                let Some(entry) = self.entries.get(*index) else {
+                    return Vec::new();
+                };
+                let mut out = vec![(
+                    entry.display_label(self.is_grouped_child(entry)),
+                    entry.path.clone(),
+                )];
+                for child_idx in self.cascade_linked_worktree_indices(*index) {
+                    if let Some(other) = self.entries.get(child_idx) {
+                        out.push((other.display_label(true), other.path.clone()));
+                    }
+                }
+                out
+            }
+            crate::app::overlay::OverlayTarget::MissingWorkspaces => self
+                .entries
+                .iter()
+                .filter(|entry| !entry.exists)
+                .map(|entry| {
+                    (
+                        entry.display_label(self.is_grouped_child(entry)),
+                        entry.path.clone(),
+                    )
+                })
+                .collect(),
+            _ => Vec::new(),
+        }
     }
 
     /// 计算当前可见的树形行列表（含折叠裁剪与搜索词过滤）。
@@ -421,6 +483,16 @@ impl WorkspaceHistoryPanel {
             }
         }
         changed
+    }
+
+    /// 当前历史列表中是否存在路径已失效（`!exists`）的工作区条目。
+    pub fn has_missing_entries(&self) -> bool {
+        self.entries.iter().any(|entry| !entry.exists)
+    }
+
+    /// 当前历史列表中路径已失效（`!exists`）的工作区条目数量。
+    pub fn missing_entry_count(&self) -> usize {
+        self.entries.iter().filter(|entry| !entry.exists).count()
     }
 
     /// 钳制选中项与滚动偏移；返回是否有变化。

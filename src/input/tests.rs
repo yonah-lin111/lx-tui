@@ -685,10 +685,10 @@ fn referenced_delete_routes_enter_and_esc_only() {
 }
 
 #[test]
-fn confirm_overlay_routes_enter_and_esc_only() {
-    let route_confirm = |code| {
+fn confirm_overlay_routes_editing_keys() {
+    let route_confirm = |event| {
         super::route(
-            key(code),
+            event,
             TermMode::empty(),
             crate::app::state::FocusedContainer::Panes,
             Some(OverlayKind::ConfirmClose),
@@ -696,14 +696,56 @@ fn confirm_overlay_routes_enter_and_esc_only() {
         )
     };
     assert_eq!(
-        route_confirm(KeyCode::Enter),
+        route_confirm(key(KeyCode::Enter)),
         Some(Routed::Overlay(OverlayKey::Enter))
     );
     assert_eq!(
-        route_confirm(KeyCode::Esc),
+        route_confirm(key(KeyCode::Esc)),
         Some(Routed::Overlay(OverlayKey::Esc))
     );
-    assert_eq!(route_confirm(KeyCode::Char('y')), None);
+    assert_eq!(
+        route_confirm(key(KeyCode::Char('c'))),
+        Some(Routed::Overlay(OverlayKey::Char('c')))
+    );
+    assert_eq!(
+        route_confirm(key(KeyCode::Backspace)),
+        Some(Routed::Overlay(OverlayKey::Backspace))
+    );
+    assert_eq!(
+        route_confirm(key(KeyCode::Left)),
+        Some(Routed::Overlay(OverlayKey::Left))
+    );
+    assert_eq!(
+        route_confirm(KeyEvent::new(KeyCode::Char('z'), KeyModifiers::CONTROL)),
+        Some(Routed::Overlay(OverlayKey::Undo))
+    );
+    // 失效工作区列表：上下键滚动视口，不得落进单行输入编辑键。
+    for (code, arrow) in [
+        (KeyCode::Up, OverlayKey::Up),
+        (KeyCode::Down, OverlayKey::Down),
+    ] {
+        assert_eq!(route_confirm(key(code)), Some(Routed::Overlay(arrow)));
+    }
+
+    // 信任浮层仍只放行 Esc / Enter，避免输入被误当成确认。
+    let route_trust = |code| {
+        super::route(
+            key(code),
+            TermMode::empty(),
+            crate::app::state::FocusedContainer::Panes,
+            Some(OverlayKind::TrustWorkspace),
+            false,
+        )
+    };
+    assert_eq!(
+        route_trust(KeyCode::Enter),
+        Some(Routed::Overlay(OverlayKey::Enter))
+    );
+    assert_eq!(
+        route_trust(KeyCode::Esc),
+        Some(Routed::Overlay(OverlayKey::Esc))
+    );
+    assert_eq!(route_trust(KeyCode::Char('y')), None);
 }
 
 #[test]
@@ -1139,6 +1181,7 @@ fn all_text_overlays_route_word_ops_and_cut() {
         OverlayKind::Rename,
         OverlayKind::NewWorkspace,
         OverlayKind::NewNode,
+        OverlayKind::ConfirmClose,
         OverlayKind::SaveDraft,
         OverlayKind::WorktreeOpen,
         OverlayKind::ReferencedFolderInput,

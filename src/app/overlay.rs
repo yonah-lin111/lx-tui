@@ -11,6 +11,12 @@ pub use text_input::TextInput;
 use super::prompt::{PromptEditing, PromptPageId};
 use super::trust::TrustWorkspace;
 
+/// 删除确认浮层要求输入的固定英文确认口令（忽略首尾空白与 ASCII 大小写）。
+pub const CONFIRM_DELETE_PHRASE: &str = "confirm delete";
+
+/// 删除确认浮层中待删除工作区列表的最大可视行数（超出时显示滚动条并支持滚动）。
+pub const CONFIRM_DELETE_LIST_MAX_ROWS: usize = 5;
+
 /// 浮层种类：按键路由与渲染按种类分派。
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum OverlayKind {
@@ -82,6 +88,7 @@ impl Overlay {
     pub fn input(&self) -> Option<&TextInput> {
         match self {
             Self::Rename(r) => Some(&r.input),
+            Self::ConfirmClose(c) => Some(&c.input),
             Self::NewWorkspace(ws) => Some(&ws.input),
             Self::WorktreeOpen(w) => Some(&w.query),
             Self::NewNode(n) => Some(&n.name),
@@ -98,6 +105,7 @@ impl Overlay {
     pub fn input_mut(&mut self) -> Option<&mut TextInput> {
         match self {
             Self::Rename(r) => Some(&mut r.input),
+            Self::ConfirmClose(c) => Some(&mut c.input),
             Self::NewWorkspace(ws) => Some(&mut ws.input),
             Self::WorktreeOpen(w) => Some(&mut w.query),
             Self::NewNode(n) => Some(&mut n.name),
@@ -121,6 +129,7 @@ impl Overlay {
     pub fn clear_selection(&mut self) {
         match self {
             Self::Rename(r) => r.input.clear_selection(),
+            Self::ConfirmClose(c) => c.input.clear_selection(),
             Self::NewWorkspace(ws) => ws.input.clear_selection(),
             Self::WorktreeOpen(w) => w.query.clear_selection(),
             Self::NewNode(n) => n.name.clear_selection(),
@@ -304,6 +313,8 @@ pub enum OverlayTarget {
     Workspace(usize),
     /// 工作区历史列表条目（`entries` 中的原始下标）。
     WorkspaceHistory(usize),
+    /// 工作区历史列表中全部路径不存在的失效条目。
+    MissingWorkspaces,
     /// 工作区列表空白区域。
     WorkspaceList,
     Tab {
@@ -405,12 +416,10 @@ pub enum MenuCommand {
     DeletePage,
     /// 工作区历史列表：打开该工作区。
     OpenWorkspaceHistory,
-    /// 工作区历史列表：删除工作区（3 击菜单确认 + 最终弹窗确认，级联删除）。
+    /// 工作区历史列表：删除工作区（菜单内 2 击确认 + 模态弹窗输入确认后级联删除）。
     DeleteWorkspaceHistory,
-    /// 工作区历史列表：删除第 1 次点击后的待确认态（1/2）。
-    DeleteWorkspaceHistoryStep1,
-    /// 工作区历史列表：删除第 2 次点击后的待确认态（2/2）。
-    DeleteWorkspaceHistoryStep2,
+    /// 工作区历史列表：一键删除全部路径不存在的工作区（菜单内 2 击确认 + 模态弹窗输入确认）。
+    DeleteMissingWorkspaces,
 }
 
 impl MenuCommand {
@@ -425,6 +434,8 @@ impl MenuCommand {
                 | Self::DeletePrompt
                 | Self::DeleteTodo
                 | Self::DeletePage
+                | Self::DeleteWorkspaceHistory
+                | Self::DeleteMissingWorkspaces
                 | Self::SwitchToWorkspaceCwd
                 | Self::SyncWorkspaceToTerminalCwd
         )
@@ -448,10 +459,35 @@ pub struct Rename {
     pub input: TextInput,
 }
 
-/// 关闭确认浮层：目标。
+/// 关闭/删除确认浮层：目标、确认短语单行输入与待删工作区列表滚动状态。
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ConfirmClose {
     pub target: OverlayTarget,
+    pub input: TextInput,
+    /// 待删除工作区列表的顶部滚动偏移（行）。
+    pub scroll: usize,
+    /// 待删除工作区列表滚动条拖拽锚点（按下时的 thumb 抓取偏移）。
+    pub scroll_drag: Option<u16>,
+}
+
+impl ConfirmClose {
+    /// 构造带空输入框与初始滚动位置的确认浮层。
+    pub fn new(target: OverlayTarget) -> Self {
+        Self {
+            target,
+            input: TextInput::new(String::new()),
+            scroll: 0,
+            scroll_drag: None,
+        }
+    }
+
+    /// 输入文本是否匹配 `confirm delete`（忽略首尾空格与 ASCII 大小写）。
+    pub fn is_confirmed(&self) -> bool {
+        self.input
+            .text()
+            .trim()
+            .eq_ignore_ascii_case(CONFIRM_DELETE_PHRASE)
+    }
 }
 
 /// 新建工作区浮层：单行路径输入。

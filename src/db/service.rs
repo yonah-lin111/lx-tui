@@ -625,9 +625,11 @@ impl Persistence {
                     }
                     offset += page_len;
                 }
-                // 仅对仍存在的 linked worktree（`.git` 为文件）持久化隐藏；
-                // 普通目录/仓库根删行后不会通过 `git worktree list` 自动复活，无需隐藏。
-                if path.join(".git").is_file() {
+                // 对 linked worktree（磁盘上 `.git` 为文件，或已作为 linked worktree 记入内存 `hidden_worktrees`）持久化隐藏；
+                // 即使其目录在磁盘上已被外部删除但尚未 `git worktree prune`，重启后也不会被主仓库 `git worktree list` 重新扫描复活。
+                if path.join(".git").is_file()
+                    || state.workspace_history.hidden_worktrees.contains(&path)
+                {
                     self.with_db(|db| db.hide_workspace(&path));
                 }
                 let deleted = self.with_db(|db| db.delete_workspace(&path));

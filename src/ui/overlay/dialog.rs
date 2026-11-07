@@ -2,7 +2,7 @@
 
 use ratatui::Frame;
 use ratatui::layout::Rect;
-use ratatui::text::Span;
+use ratatui::text::{Line, Span};
 use ratatui::widgets::Paragraph;
 
 use crate::app::overlay::{
@@ -22,10 +22,10 @@ const RENAME_HEIGHT: u16 = 7;
 const NEW_NODE_WIDTH: u16 = 42;
 const NEW_NODE_HEIGHT: u16 = 7;
 /// 新建工作区浮层尺寸（列，行）：顶栏 3 行 + 输入行 + 底栏 3 行。
-const NEW_WORKSPACE_WIDTH: u16 = 44;
+const NEW_WORKSPACE_WIDTH: u16 = 56;
 const NEW_WORKSPACE_HEIGHT: u16 = 7;
 /// 关闭确认浮层最小宽度（列）；高度 = 问题换行行数 + 顶栏 3 行 + 底栏 3 行。
-pub(crate) const CONFIRM_WIDTH: u16 = 40;
+pub(crate) const CONFIRM_WIDTH: u16 = 56;
 /// 信任浮层尺寸（列，行）：顶栏 3 行 + 问题行 + 路径行 + 底栏 3 行。
 const TRUST_WIDTH: u16 = 52;
 const TRUST_HEIGHT: u16 = 8;
@@ -117,6 +117,100 @@ fn confirm_shell_for(
 /// 关闭/删除确认浮层几何：固定宽度，问题按内容自动换行。
 pub fn confirm_shell(screen: Rect, question: &str) -> Option<widgets::modal::ModalShell> {
     confirm_shell_for(screen, question, CONFIRM_WIDTH)
+}
+
+/// 计算 `ConfirmClose` 浮层内单行确认输入框的矩形区域（紧接在问题文本下方）。
+pub fn confirm_close_input_rect(shell: &widgets::modal::ModalShell, question: &str) -> Rect {
+    let width = usize::from(shell.inner.width).max(1);
+    let lines = text::wrap(question, width);
+    let max_question_rows = usize::from(shell.inner.height.saturating_sub(3)).max(1);
+    let shown_rows = lines.len().min(max_question_rows) as u16;
+    let y = shell
+        .inner
+        .y
+        .saturating_add(shown_rows.min(shell.inner.height.saturating_sub(2)));
+    Rect::new(shell.inner.x, y, shell.inner.width, 1)
+}
+
+/// `ConfirmClose` 浮层完整几何：外框、待删工作区列表区（含可选滚动条）与单行口令输入框。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ConfirmCloseLayout {
+    pub shell: widgets::modal::ModalShell,
+    pub list: Option<Rect>,
+    pub scrollbar: Option<widgets::scrollbar::ScrollbarLayout>,
+    pub input: Rect,
+    pub visible_rows: usize,
+    pub scroll: usize,
+}
+
+/// 计算 `ConfirmClose` 浮层完整几何（含问题换行、最多 5 行可滚动待删工作区列表、输入框与底部按钮）。
+pub fn confirm_close_layout(
+    state: &AppState,
+    screen: Rect,
+    confirm: &ConfirmClose,
+) -> Option<ConfirmCloseLayout> {
+    let question = confirm_question(state, &confirm.target);
+    let items = state
+        .workspace_history
+        .target_delete_entries(&confirm.target);
+    let list_rows = items
+        .len()
+        .min(crate::app::overlay::CONFIRM_DELETE_LIST_MAX_ROWS);
+    let extra_rows = if list_rows > 0 { list_rows + 1 } else { 0 };
+    let width = CONFIRM_WIDTH.min(screen.width);
+    let inner_width = usize::from(width.saturating_sub(2)).max(1);
+    let q_lines = text::wrap(&question, inner_width).len().max(1);
+    let height = u16::try_from(q_lines.saturating_add(extra_rows))
+        .unwrap_or(u16::MAX)
+        .saturating_add(7)
+        .min(screen.height);
+    let shell = widgets::modal::layout(screen, width, height)?;
+    let max_q_rows = usize::from(
+        shell
+            .inner
+            .height
+            .saturating_sub(3u16.saturating_add(extra_rows as u16)),
+    )
+    .max(1);
+    let shown_q_rows = q_lines.min(max_q_rows) as u16;
+    if list_rows > 0 {
+        let list_y = shell.inner.y.saturating_add(shown_q_rows);
+        let avail_list_h = shell
+            .inner
+            .height
+            .saturating_sub(shown_q_rows.saturating_add(4));
+        let actual_list_rows = (list_rows as u16).min(avail_list_h);
+        let visible_rows = usize::from(actual_list_rows);
+        let max_scroll = items.len().saturating_sub(visible_rows);
+        let scroll = confirm.scroll.min(max_scroll);
+        let list_rect = (actual_list_rows > 0)
+            .then(|| Rect::new(shell.inner.x, list_y, shell.inner.width, actual_list_rows));
+        let scrollbar = list_rect
+            .and_then(|rect| widgets::scrollbar::layout(rect, items.len(), visible_rows, scroll));
+        let input_y = list_y
+            .saturating_add(actual_list_rows)
+            .saturating_add(1)
+            .min(shell.inner.bottom().saturating_sub(3));
+        let input = Rect::new(shell.inner.x, input_y, shell.inner.width, 1);
+        Some(ConfirmCloseLayout {
+            shell,
+            list: list_rect,
+            scrollbar,
+            input,
+            visible_rows,
+            scroll,
+        })
+    } else {
+        let input = confirm_close_input_rect(&shell, &question);
+        Some(ConfirmCloseLayout {
+            shell,
+            list: None,
+            scrollbar: None,
+            input,
+            visible_rows: 0,
+            scroll: 0,
+        })
+    }
 }
 
 /// 命中重命名按钮。
@@ -272,6 +366,9 @@ fn confirm_text(state: &AppState, target: &OverlayTarget) -> (&'static str, Stri
                 .map(|ws| ws.name.clone())
                 .unwrap_or_default(),
         ),
+        OverlayTarget::MissingWorkspaces => {
+            (text::CONFIRM_DELETE_MISSING_WORKSPACES_TITLE, String::new())
+        }
         _ => (text::CONFIRM_DELETE_PAGE_TITLE, String::new()),
     }
 }
@@ -287,6 +384,10 @@ pub fn confirm_question(state: &AppState, target: &OverlayTarget) -> String {
             } else {
                 text::confirm_delete_workspace_question(&name)
             }
+        }
+        OverlayTarget::MissingWorkspaces => {
+            let count = state.workspace_history.missing_entry_count();
+            text::confirm_delete_missing_workspaces_question(count)
         }
         OverlayTarget::Workspace(_) => text::confirm_delete_workspace_question(&name),
         _ => text::confirm_delete_page_question(&name),
@@ -403,19 +504,126 @@ pub(crate) fn render_new_node(
     )
 }
 
-/// 关闭确认浮层：问题与底部按钮；提示词删除按目标种类使用对应问题文案。
+/// 关闭/删除确认浮层：问题、口令输入框与底部按钮（口令匹配前 Confirm 按钮呈暗色禁用态）。
 pub(crate) fn render_confirm(
     frame: &mut Frame<'_>,
     screen: Rect,
     state: &AppState,
     confirm: &ConfirmClose,
-) {
+) -> Option<(u16, u16)> {
     let question = confirm_question(state, &confirm.target);
-    let Some(shell) = confirm_shell(screen, &question) else {
-        return;
-    };
+    let layout = confirm_close_layout(state, screen, confirm)?;
+    let shell = layout.shell;
     let (title, _) = confirm_text(state, &confirm.target);
-    render_confirm_dialog(frame, &shell, title, &question);
+    widgets::modal::render_danger(frame, &shell, title);
+    if shell.inner.width == 0 || shell.inner.height == 0 {
+        return None;
+    }
+    let width = usize::from(shell.inner.width);
+    let lines = text::wrap(&question, width);
+    let max_rows = usize::from(
+        layout
+            .list
+            .map_or(layout.input.y, |rect| rect.y)
+            .saturating_sub(shell.inner.y),
+    )
+    .max(1);
+    for (index, line) in lines.iter().take(max_rows).enumerate() {
+        let clipped = lines.len() > max_rows && index + 1 == max_rows;
+        let visible = if clipped {
+            text::ellipsize_width(&format!("{line}…"), width)
+        } else {
+            line.clone()
+        };
+        frame.render_widget(
+            Paragraph::new(Span::styled(visible, style::text())),
+            Rect::new(
+                shell.inner.x,
+                shell.inner.y.saturating_add(index as u16),
+                shell.inner.width,
+                1,
+            ),
+        );
+    }
+    if let Some(list_rect) = layout.list {
+        let items = state
+            .workspace_history
+            .target_delete_entries(&confirm.target);
+        let row_width = usize::from(
+            list_rect
+                .width
+                .saturating_sub(u16::from(layout.scrollbar.is_some())),
+        );
+        for (row_idx, (name, path)) in items
+            .iter()
+            .skip(layout.scroll)
+            .take(layout.visible_rows)
+            .enumerate()
+        {
+            let prefix = format!("  • {name}");
+            let path_text = format!(" ({})", path.display());
+            let prefix_width = unicode_width::UnicodeWidthStr::width(prefix.as_str());
+            let total_width =
+                prefix_width + unicode_width::UnicodeWidthStr::width(path_text.as_str());
+            let spans = if total_width > row_width {
+                if prefix_width > row_width {
+                    vec![Span::styled(
+                        text::ellipsize_width(&prefix, row_width),
+                        style::text(),
+                    )]
+                } else {
+                    let rem = row_width.saturating_sub(prefix_width);
+                    vec![
+                        Span::styled(prefix, style::text()),
+                        Span::styled(text::ellipsize_width(&path_text, rem), style::muted()),
+                    ]
+                }
+            } else {
+                vec![
+                    Span::styled(prefix, style::text()),
+                    Span::styled(path_text, style::muted()),
+                ]
+            };
+            frame.render_widget(
+                Paragraph::new(Line::from(spans)),
+                Rect::new(
+                    list_rect.x,
+                    list_rect.y.saturating_add(row_idx as u16),
+                    list_rect.width,
+                    1,
+                ),
+            );
+        }
+        if let Some(bar) = &layout.scrollbar {
+            widgets::scrollbar::render(frame, bar);
+        }
+    }
+    let confirm_style = if confirm.is_confirmed() {
+        style::button_danger()
+    } else {
+        style::muted()
+    };
+    render_buttons(
+        frame,
+        &widgets::modal::button_row(
+            shell.inner,
+            &CONFIRM_BUTTONS,
+            BUTTON_GAP,
+            shell.inner.height.saturating_sub(1),
+        ),
+        &[
+            (text::BUTTON_CONFIRM, confirm_style),
+            (text::BUTTON_CANCEL, style::button_secondary()),
+        ],
+    );
+    render_input(
+        frame,
+        layout.input,
+        confirm.input.text(),
+        confirm.input.cursor(),
+        confirm.input.selection(),
+        Some(text::CONFIRM_DELETE_INPUT_PLACEHOLDER),
+    )
 }
 
 /// 引用文件夹删除确认浮层：展示待删目录名与底部按钮。
@@ -684,3 +892,6 @@ pub(crate) fn render_input(
         placeholder,
     )
 }
+
+#[cfg(test)]
+mod tests;

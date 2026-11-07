@@ -30,9 +30,8 @@ pub(crate) fn handle_mouse_drag(
 ) {
     let Geometry { rects, view, .. } = geometry;
     if state.overlay_input_drag
-        && let Some(overlay) = state.overlay.as_mut()
-        && let Some((area, input)) =
-            super::super::overlay::overlay_input_hit_mut(geometry.screen, overlay)
+        && let Some(area) = super::super::overlay::overlay_input_rect(state, geometry.screen)
+        && let Some(input) = state.overlay.as_mut().and_then(Overlay::input_mut)
     {
         let text_x = area.x.saturating_add(2);
         let text_w = area.width.saturating_sub(2);
@@ -132,6 +131,19 @@ pub(crate) fn handle_mouse_drag(
                 if update::set_referenced_menu_viewport(state, offset, layout.visible()) {
                     *dirty = true;
                 }
+            }
+        }
+        return;
+    }
+    if let Some(Overlay::ConfirmClose(confirm)) = state.overlay.as_ref()
+        && let Some(grab) = confirm.scroll_drag
+    {
+        if let Some(layout) = ui::overlay::confirm_close_layout(state, geometry.screen, confirm)
+            && let Some(bar) = layout.scrollbar
+        {
+            let offset = ui::widgets::scrollbar::offset_from_drag_row(&bar, mouse.row, grab);
+            if update::set_confirm_close_scroll_with_rows(state, offset, layout.visible_rows) {
+                *dirty = true;
             }
         }
         return;
@@ -516,6 +528,15 @@ pub(crate) fn handle_mouse_up_left(
         *dirty = true;
         return;
     }
+    // 失效工作区确认弹窗的滚动条拖拽：必须在 `overlay.is_some()` 早退之前收尾，
+    // 否则 thumb 释放后拖拽标记会永久残留。
+    if let Some(Overlay::ConfirmClose(confirm)) = state.overlay.as_mut()
+        && confirm.scroll_drag.take().is_some()
+    {
+        state.overlay_input_drag = false;
+        *dirty = true;
+        return;
+    }
     // prompt 列表拖拽：必须在任何更早的早退之前收尾，保证一次 Down 必被一次 Up 清理；
     // 未跨行时这里走点击/双击语义（折叠与打开编辑器都发生在松开）。
     if state.prompt_drag.is_some() {
@@ -531,9 +552,8 @@ pub(crate) fn handle_mouse_up_left(
     }
     if state.overlay_input_drag {
         state.overlay_input_drag = false;
-        if let Some(overlay) = state.overlay.as_mut()
-            && let Some((_, input)) =
-                super::super::overlay::overlay_input_hit_mut(geometry.screen, overlay)
+        if super::super::overlay::overlay_input_rect(state, geometry.screen).is_some()
+            && let Some(input) = state.overlay.as_mut().and_then(Overlay::input_mut)
             && !input.has_selection()
         {
             input.clear_selection();

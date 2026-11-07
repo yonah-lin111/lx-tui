@@ -25,10 +25,7 @@ pub use worktree::{
 };
 
 #[cfg(test)]
-pub(crate) use dialog::{
-    BUTTON_GAP, NEW_NODE_BUTTONS, NEW_WORKSPACE_BUTTON_ROW, NEW_WORKSPACE_BUTTONS,
-    RENAME_BUTTON_ROW, TRUST_BUTTON_ROW, TRUST_BUTTONS,
-};
+pub(crate) use dialog::BUTTON_GAP;
 #[cfg(test)]
 pub(crate) use save_draft::SAVE_DRAFT_BUTTONS;
 
@@ -45,7 +42,7 @@ use crate::app::overlay::Overlay;
 use crate::app::state::AppState;
 use crate::ui::widgets;
 
-/// 渲染当前浮层；返回需要同步的硬件光标位置（重命名输入或新建工作区路径输入）。
+/// 渲染当前浮层；返回需要同步的硬件光标位置（重命名、新建工作区或删除确认口令输入）。
 pub fn render(frame: &mut Frame<'_>, screen: Rect, state: &AppState) -> Option<(u16, u16)> {
     match state.overlay.as_ref()? {
         Overlay::Menu(menu_state) => {
@@ -67,10 +64,7 @@ pub fn render(frame: &mut Frame<'_>, screen: Rect, state: &AppState) -> Option<(
             new_ws,
             state.workspace_history.new_workspace_confirming,
         ),
-        Overlay::ConfirmClose(confirm) => {
-            dialog::render_confirm(frame, screen, state, confirm);
-            None
-        }
+        Overlay::ConfirmClose(confirm) => dialog::render_confirm(frame, screen, state, confirm),
         Overlay::WorktreeOpen(dialog) => render_worktree_open(frame, screen, dialog),
         Overlay::TrustWorkspace(trust) => {
             dialog::render_trust(frame, screen, trust);

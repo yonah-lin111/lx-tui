@@ -8,6 +8,7 @@ use crate::app::overlay::{
 use crate::app::prompt::PromptMode;
 use crate::app::state::{LxEntry, PaneKind, PaneView, Workspace, WorkspaceGit};
 use crate::app::toast::{TOAST_DURATION, Toast, ToastKind};
+use crate::app::trust::TrustWorkspace;
 
 use crate::app::tooltip::{TOOLTIP_DELAY, Tooltip, TooltipTarget};
 use crate::app::update;
@@ -630,15 +631,37 @@ fn toast_over_prompt_search_hides_hardware_cursor() {
 #[test]
 fn modal_without_input_hides_prompt_hardware_cursor() {
     let mut state = focused_tree_state();
-    state.overlay = Some(Overlay::ConfirmClose(ConfirmClose {
-        target: OverlayTarget::PromptPage {
-            workspace: 0,
-            owner: crate::app::prompt::PromptEditing::Item(1),
-            page: crate::app::prompt::PromptPageId::Saved(1),
-        },
+    let path = PathBuf::from("/tmp/trusted-workspace");
+    state.overlay = Some(Overlay::TrustWorkspace(TrustWorkspace {
+        path: path.clone(),
+        trigger: crate::app::trust::TrustTrigger::CreateWorkspace { cwd: path },
     }));
     let (visible, _) = render_cursor(&state);
-    assert!(!visible, "模态接管后 prompt 搜索框硬件光标隐藏");
+    assert!(!visible, "无输入框的模态接管后 prompt 搜索框硬件光标隐藏");
+}
+
+#[test]
+fn confirm_close_moves_hardware_cursor_into_modal_input() {
+    let mut state = focused_tree_state();
+    let target = OverlayTarget::PromptPage {
+        workspace: 0,
+        owner: crate::app::prompt::PromptEditing::Item(1),
+        page: crate::app::prompt::PromptPageId::Saved(1),
+    };
+    state.overlay = Some(Overlay::ConfirmClose(ConfirmClose::new(target.clone())));
+    let screen = Rect::new(0, 0, 100, 24);
+    let question = crate::ui::overlay::confirm_question(&state, &target);
+    let Some(Overlay::ConfirmClose(confirm)) = state.overlay.as_ref() else {
+        panic!("confirm overlay expected");
+    };
+    let shell = crate::ui::overlay::confirm_close_layout(&state, screen, confirm)
+        .map(|layout| layout.shell)
+        .expect("dialog fits");
+    let input = crate::ui::overlay::confirm_close_input_rect(&shell, &question);
+    let expected_x = input.x + text::INPUT_PREFIX_ICON.chars().count() as u16 + 1;
+    let (visible, position) = render_cursor(&state);
+    assert!(visible, "ConfirmClose 输入框接管硬件光标");
+    assert_eq!(position, (expected_x, input.y));
 }
 
 #[test]

@@ -146,6 +146,20 @@ pub fn apply_overlay_key(state: &mut AppState, key: OverlayKey) -> Option<(PaneI
         apply_new_node_key(state, key);
         return None;
     }
+    // 删除确认浮层：待删除工作区列表超过可视行数时，Up/Down 滚动列表。
+    if matches!(state.overlay, Some(Overlay::ConfirmClose(_))) {
+        match key {
+            OverlayKey::Up => {
+                scroll_confirm_close(state, -1);
+                return None;
+            }
+            OverlayKey::Down => {
+                scroll_confirm_close(state, 1);
+                return None;
+            }
+            _ => {}
+        }
+    }
     match key {
         OverlayKey::Esc => {
             close_overlay(state);
@@ -221,7 +235,7 @@ pub fn apply_overlay_key(state: &mut AppState, key: OverlayKey) -> Option<(PaneI
     }
 }
 
-/// 对单行输入类浮层（重命名、新建工作区路径）执行一次编辑；其他浮层忽略。
+/// 对单行输入类浮层（重命名、新建工作区路径、删除确认口令）执行一次编辑；其他浮层忽略。
 fn edit_text_input(state: &mut AppState, key: OverlayKey) {
     if matches!(state.overlay, Some(Overlay::NewWorkspace(_))) {
         state.workspace_history.new_workspace_confirming = false;
@@ -240,15 +254,21 @@ pub(crate) fn commit_new_workspace(state: &mut AppState) {
         return;
     };
     let text_val = dialog.input.text().to_string();
+    // 手动输入与粘贴一律先做路径规范化，让解析使用去掉引号/shell 转义后的干净路径。
+    // 这里不再 `.trim()`：转义尾随空格（`/tmp/foo\ `）是合法目录名的一部分。
+    let normalized = crate::platform::normalize_pasted_path_input(&text_val);
     let base_cwd = state
         .active_workspace()
         .cwd
         .clone()
         .or_else(|| state.active_terminal_cwd());
-    match parse_workspace_path(&text_val, base_cwd.as_deref()) {
+    match parse_workspace_path(&normalized, base_cwd.as_deref()) {
         Ok(parsed_cwd) => match parsed_cwd {
             Some(path) => {
                 if !state.workspace_history.new_workspace_confirming {
+                    // 二次确认前一次性回填解析后的规范路径：单次 Enter 只产生 1 步 Undo。
+                    let resolved = path.to_string_lossy().into_owned();
+                    replace_new_workspace_input(state, &resolved);
                     state.workspace_history.new_workspace_confirming = true;
                     return;
                 }
@@ -284,6 +304,9 @@ pub(crate) fn commit_new_workspace(state: &mut AppState) {
         },
         Err(err) => {
             state.workspace_history.new_workspace_confirming = false;
+            if !normalized.is_empty() {
+                replace_new_workspace_input(state, &normalized);
+            }
             show_toast(
                 state,
                 Toast::new(ToastKind::Danger, err, None, Instant::now())
@@ -291,6 +314,18 @@ pub(crate) fn commit_new_workspace(state: &mut AppState) {
             );
         }
     }
+}
+
+/// 用规范文本替换新建工作区输入框内容：保持单步撤销，文本相同时不动光标。
+fn replace_new_workspace_input(state: &mut AppState, text: &str) {
+    let Some(Overlay::NewWorkspace(dialog)) = state.overlay.as_mut() else {
+        return;
+    };
+    if dialog.input.text() == text {
+        return;
+    }
+    dialog.input.select_all();
+    dialog.input.insert_str(text);
 }
 
 /// 提交重命名；空名不保存且浮层保持打开。
@@ -356,14 +391,112 @@ fn commit_rename(state: &mut AppState) {
     state.overlay = None;
 }
 
-/// 确认关闭浮层回调（含工作区级联删除最终弹窗确认）。
+/// 确认关闭浮层回调（要求确认短语匹配 `confirm delete` 后才执行工作区级联删除）。
 fn confirm_close(state: &mut AppState) {
+    let confirmed = matches!(
+        state.overlay.as_ref(),
+        Some(Overlay::ConfirmClose(confirm)) if confirm.is_confirmed()
+    );
+    if !confirmed {
+        return;
+    }
     let Some(Overlay::ConfirmClose(confirm)) = state.overlay.take() else {
         return;
     };
-    if let crate::app::overlay::OverlayTarget::WorkspaceHistory(entry_index) = confirm.target {
-        super::workspace_history::delete_workspace_history_entry(state, entry_index);
+    match confirm.target {
+        crate::app::overlay::OverlayTarget::WorkspaceHistory(entry_index) => {
+            super::workspace_history::delete_workspace_history_entry(state, entry_index);
+        }
+        crate::app::overlay::OverlayTarget::MissingWorkspaces => {
+            super::workspace_history::delete_missing_workspace_history_entries(state);
+        }
+        _ => {}
     }
+}
+
+/// 按行偏移滚动 `ConfirmClose` 浮层中的待删除工作区列表（默认按最大可视行数夹取，
+/// 供无屏幕几何的纯状态调用方使用）；返回滚动位置是否变化。
+pub fn scroll_confirm_close(state: &mut AppState, delta: isize) -> bool {
+    scroll_confirm_close_with_rows(
+        state,
+        delta,
+        crate::app::overlay::CONFIRM_DELETE_LIST_MAX_ROWS,
+    )
+}
+
+/// 按真实视口可见行数 `visible_rows` 与增量滚动确认删除浮层中的待删除工作区列表；
+/// 返回滚动位置是否变化。
+pub fn scroll_confirm_close_with_rows(
+    state: &mut AppState,
+    delta: isize,
+    visible_rows: usize,
+) -> bool {
+    let Some(Overlay::ConfirmClose(confirm)) = state.overlay.as_ref() else {
+        return false;
+    };
+    let total = state
+        .workspace_history
+        .target_delete_entries(&confirm.target)
+        .len();
+    if visible_rows == 0 {
+        return false;
+    }
+    let visible = total.min(visible_rows);
+    let max_scroll = total.saturating_sub(visible);
+    let Some(Overlay::ConfirmClose(confirm)) = state.overlay.as_mut() else {
+        return false;
+    };
+    let current = confirm.scroll.min(max_scroll);
+    let next = if delta < 0 {
+        current.saturating_sub(delta.unsigned_abs())
+    } else {
+        current.saturating_add(delta as usize).min(max_scroll)
+    };
+    if confirm.scroll == next {
+        return false;
+    }
+    confirm.scroll = next;
+    true
+}
+
+/// 直接设置 `ConfirmClose` 浮层中待删除工作区列表的顶部滚动偏移
+/// （默认按最大可视行数夹取）；返回滚动位置是否变化。
+pub fn set_confirm_close_scroll(state: &mut AppState, offset: usize) -> bool {
+    set_confirm_close_scroll_with_rows(
+        state,
+        offset,
+        crate::app::overlay::CONFIRM_DELETE_LIST_MAX_ROWS,
+    )
+}
+
+/// 按真实视口可见行数 `visible_rows` 直接设置确认删除浮层列表的顶部滚动偏移
+/// （夹取到合法区间）；返回滚动位置是否变化。
+pub fn set_confirm_close_scroll_with_rows(
+    state: &mut AppState,
+    offset: usize,
+    visible_rows: usize,
+) -> bool {
+    let Some(Overlay::ConfirmClose(confirm)) = state.overlay.as_ref() else {
+        return false;
+    };
+    let total = state
+        .workspace_history
+        .target_delete_entries(&confirm.target)
+        .len();
+    if visible_rows == 0 {
+        return false;
+    }
+    let visible = total.min(visible_rows);
+    let max_scroll = total.saturating_sub(visible);
+    let next = offset.min(max_scroll);
+    let Some(Overlay::ConfirmClose(confirm)) = state.overlay.as_mut() else {
+        return false;
+    };
+    if confirm.scroll == next {
+        return false;
+    }
+    confirm.scroll = next;
+    true
 }
 
 /// 终端粘贴进入当前浮层的单行输入框；返回是否实际写入。
@@ -380,12 +513,36 @@ pub fn apply_overlay_paste(state: &mut AppState, text: &str) -> bool {
             Overlay::Connect(panel) if panel.validating => return false,
             _ => {}
         }
+        let path_dialog = matches!(
+            overlay,
+            Overlay::NewWorkspace(_) | Overlay::ReferencedFolderInput(_)
+        );
         let Some(input) = overlay.input_mut() else {
             return false;
         };
-        if !input.insert_str(text) {
-            return false;
-        }
+        // 路径弹窗整框替换（空输入或全选）时先做粘贴规范化，避免把 shell 转义、
+        // 外层引号或 `file://` URI 原样塞进输入框。
+        let whole_replace = path_dialog && {
+            let current = input.text();
+            current.trim().is_empty()
+                || input
+                    .selection()
+                    .is_some_and(|(start, end)| start == 0 && end == current.chars().count())
+        };
+        if whole_replace {
+            let normalized = crate::platform::normalize_pasted_path_input(text);
+            // 纯引号/空 URI 归一化后没有有效路径：吞掉粘贴，不插入字面量 `''`。
+            if normalized.is_empty() {
+                return false;
+            }
+            // 纯空白内容同样视为整框替换：先全选再插入，避免保留前置空格。
+            if !input.text().is_empty() {
+                input.select_all();
+            }
+            input.insert_str(&normalized)
+        } else {
+            input.insert_str(text)
+        };
         match overlay {
             Overlay::ReferencedFolderInput(input) => input.error = None,
             Overlay::ResumeSessionEdit(edit) => edit.hint = None,
