@@ -612,11 +612,13 @@ fn build_chat(
     } else if lx.chat.loading_session {
         if history_rect.width > 0 && history_rect.height > 0 {
             let y = history_rect.y + history_rect.height.saturating_sub(1) / 2;
+            let label =
+                text::truncate_to_width(text::LX_SESSION_LOADING, usize::from(history_rect.width));
             grid.put_centered(
                 history_rect.x,
                 history_rect.width,
                 y,
-                text::LX_SESSION_LOADING,
+                &label,
                 style::muted(),
             );
         }

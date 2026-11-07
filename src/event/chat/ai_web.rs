@@ -12,8 +12,8 @@ use tokio::process::Command;
 use super::*;
 use crate::app::state::{AiWebSite, HistoryEntry};
 use crate::chat::ai_web::{
-    AiWebHistoryMessage, AiWebStreamEvent, DEEPSEEK_SCRIPT, parse_script_line,
-    resolve_ego_browser_bin,
+    AiWebHistoryMessage, AiWebStreamEvent, DEEPSEEK_HELPERS_SCRIPT, DEEPSEEK_SCRIPT,
+    parse_script_line, resolve_ego_browser_bin,
 };
 use crate::chat::events::{PartDelta, PartKind};
 
@@ -113,6 +113,7 @@ pub fn apply_effect(
             site,
             prompt,
             files,
+            keep_files,
             edit_user_index,
         } => start_stream(
             state,
@@ -122,6 +123,7 @@ pub fn apply_effect(
             site,
             prompt,
             files,
+            keep_files,
             edit_user_index,
         ),
         Effect::ResetAiWebSession { site } => {
@@ -187,6 +189,8 @@ pub fn notify_failure(state: &mut AppState, key: &RequestKey, reason: &StopReaso
 }
 
 /// 启动一轮 AI Web 流；key 已失效或已有在途流时不重复启动。
+// AI Web 流启动需同时接收状态表、流注册表、通道、请求键、站点、提示词与附件上下文，保持直接传参避免一次性包装结构体。
+#[allow(clippy::too_many_arguments)]
 pub fn start_stream(
     state: &mut AppState,
     streams: &mut ChatStreams,
@@ -195,6 +199,7 @@ pub fn start_stream(
     site: AiWebSite,
     prompt: String,
     files: Vec<String>,
+    keep_files: Vec<String>,
     edit_user_index: Option<usize>,
 ) -> bool {
     if active_assistant_id(state, &key).is_none() || streams.cancels.contains_key(&key) {
@@ -214,6 +219,7 @@ pub fn start_stream(
             site,
             prompt,
             files,
+            keep_files,
             first_turn,
             edit_user_index,
             &mut cancel_rx,
@@ -278,6 +284,10 @@ fn list_sessions(sender: mpsc::UnboundedSender<AppEvent>, pane: PaneId) {
                         _ => {}
                     }
                 }
+                let _ = sender.send(AppEvent::AiWeb(AiWebEvent::ActionFailed {
+                    pane,
+                    message: crate::ui::text::LX_AI_WEB_EGO_UNAVAILABLE.into(),
+                }));
             }
             Err(message) => {
                 let _ = sender.send(AppEvent::AiWeb(AiWebEvent::ActionFailed { pane, message }));
@@ -291,6 +301,10 @@ fn load_session(sender: mpsc::UnboundedSender<AppEvent>, pane: PaneId, session_i
     let Some(remote_id) =
         crate::app::update::ai_web_remote_session_id(&session_id).map(str::to_string)
     else {
+        let _ = sender.send(AppEvent::AiWeb(AiWebEvent::ActionFailed {
+            pane,
+            message: crate::ui::text::LX_AI_WEB_EGO_UNAVAILABLE.into(),
+        }));
         return;
     };
     tokio::spawn(async move {
@@ -335,6 +349,10 @@ fn load_session(sender: mpsc::UnboundedSender<AppEvent>, pane: PaneId, session_i
                         _ => {}
                     }
                 }
+                let _ = sender.send(AppEvent::AiWeb(AiWebEvent::ActionFailed {
+                    pane,
+                    message: crate::ui::text::LX_AI_WEB_EGO_UNAVAILABLE.into(),
+                }));
             }
             Err(message) => {
                 let _ = sender.send(AppEvent::AiWeb(AiWebEvent::ActionFailed { pane, message }));
@@ -375,6 +393,8 @@ fn delete_session(session_id: String) {
 }
 
 /// 一轮网页对话：拉起子进程、喂脚本、按行回投增量与终态。
+/// 驱动 `ego-browser nodejs` 执行一轮网页对话并把行协议转成 `ChatNetEvent`。
+// 异步对话任务需要完整持有通道、请求键、站点、提示词、附件与取消句柄，直接传参比额外定义生命周期包装结构更直观。
 #[allow(clippy::too_many_arguments)]
 async fn run_chat(
     sender: mpsc::UnboundedSender<AppEvent>,
@@ -382,6 +402,7 @@ async fn run_chat(
     site: AiWebSite,
     prompt: String,
     files: Vec<String>,
+    keep_files: Vec<String>,
     first_turn: bool,
     edit_user_index: Option<usize>,
     cancel: &mut watch::Receiver<bool>,
@@ -431,6 +452,7 @@ async fn run_chat(
         action: "chat",
         prompt: Some(&prompt),
         files: &files,
+        keep_files: &keep_files,
         first_turn,
         stream_url: stream_url.as_deref(),
         session_id: remote_session_id,
@@ -556,30 +578,11 @@ async fn run_chat(
                         }
                     },
                     None => {
-                        let pane = key.pane;
-                        let from_session = key.session.clone();
-                        let reason = if received {
-                            StopReason::Complete
-                        } else {
-                            let msg = last_diag
-                                .as_deref()
-                                .unwrap_or(crate::ui::text::LX_AI_WEB_EGO_UNAVAILABLE);
-                            failed(msg)
-                        };
-                        finished(&sender, key, reason);
-                        if received
-                            && let Some((id, title)) = bound_session
-                        {
-                            let _ = sender.send(AppEvent::AiWeb(AiWebEvent::SessionBound {
-                                pane,
-                                from_session_id: from_session,
-                                session_id: format!(
-                                    "{}{id}",
-                                    crate::app::update::AI_WEB_REMOTE_SESSION_PREFIX
-                                ),
-                                title,
-                            }));
-                        }
+                        let _ = received;
+                        let msg = last_diag
+                            .as_deref()
+                            .unwrap_or(crate::ui::text::LX_AI_WEB_EGO_UNAVAILABLE);
+                        finished(&sender, key, failed(msg));
                         return;
                     }
                 }
@@ -627,6 +630,7 @@ struct ScriptParams<'a> {
     action: &'a str,
     prompt: Option<&'a str>,
     files: &'a [String],
+    keep_files: &'a [String],
     first_turn: bool,
     stream_url: Option<&'a str>,
     session_id: Option<&'a str>,
@@ -634,7 +638,7 @@ struct ScriptParams<'a> {
     edit_user_index: Option<usize>,
 }
 
-/// 后台执行 `new` / `stop` 这类一次性无返回值脚本动作。
+/// 后台执行 `new` / `stop` 这类一次性无返回值脚本动作（带 30 秒超时保护）。
 fn spawn_action(params: ScriptParams<'static>) {
     let source = script_source(params);
     tokio::spawn(async move {
@@ -653,11 +657,11 @@ fn spawn_action(params: ScriptParams<'static>) {
         {
             let _ = stdin.shutdown().await;
         }
-        let _ = child.wait().await;
+        let _ = tokio::time::timeout(std::time::Duration::from_secs(30), child.wait()).await;
     });
 }
 
-/// 执行带返回协议行的脚本动作（`list_sessions` / `load_session` / `rename_session` / `delete_session`）。
+/// 执行带返回协议行的脚本动作（`list_sessions` / `load_session` / `rename_session` / `delete_session`，带 30 秒超时保护）。
 async fn run_query(params: ScriptParams<'_>) -> Result<Vec<AiWebStreamEvent>, String> {
     let mut child = Command::new(resolve_ego_browser_bin())
         .arg("nodejs")
@@ -675,9 +679,9 @@ async fn run_query(params: ScriptParams<'_>) -> Result<Vec<AiWebStreamEvent>, St
             .map_err(|_| crate::ui::text::LX_AI_WEB_EGO_UNAVAILABLE.to_string())?;
         let _ = stdin.shutdown().await;
     }
-    let output = child
-        .wait_with_output()
+    let output = tokio::time::timeout(std::time::Duration::from_secs(30), child.wait_with_output())
         .await
+        .map_err(|_| crate::ui::text::LX_AI_WEB_EGO_UNAVAILABLE.to_string())?
         .map_err(|_| crate::ui::text::LX_AI_WEB_EGO_UNAVAILABLE.to_string())?;
     let mut events = Vec::new();
     for bytes in [&output.stdout, &output.stderr] {
@@ -768,6 +772,8 @@ fn script_source(params: ScriptParams<'_>) -> String {
         .and_then(|idx| i64::try_from(idx).ok())
         .unwrap_or(-1);
     let files_json = serde_json::to_string(params.files).unwrap_or_else(|_| "[]".to_string());
+    let keep_files_json =
+        serde_json::to_string(params.keep_files).unwrap_or_else(|_| "[]".to_string());
     let mut source = String::from("const __LX_PARAMS = {\n");
     source.push_str("  action: ");
     source.push_str(&json_string(params.action));
@@ -775,6 +781,8 @@ fn script_source(params: ScriptParams<'_>) -> String {
     source.push_str(&json_string(params.prompt.unwrap_or("")));
     source.push_str(",\n  files: ");
     source.push_str(&files_json);
+    source.push_str(",\n  keepFiles: ");
+    source.push_str(&keep_files_json);
     source.push_str(",\n  firstTurn: ");
     source.push_str(if params.first_turn { "true" } else { "false" });
     source.push_str(",\n  streamUrl: ");
@@ -784,6 +792,8 @@ fn script_source(params: ScriptParams<'_>) -> String {
     source.push_str(",\n  title: ");
     source.push_str(&json_string(params.title.unwrap_or("")));
     source.push_str(&format!(",\n  editIndex: {edit_index},\n}};\n"));
+    source.push_str(DEEPSEEK_HELPERS_SCRIPT);
+    source.push('\n');
     source.push_str(DEEPSEEK_SCRIPT);
     source
 }

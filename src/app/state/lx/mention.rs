@@ -176,7 +176,7 @@ impl LxMention {
         self.switch_tab_for_entry(delta, text, cursor, false)
     }
 
-    /// 按当前入口切换 Tab：`ai_web` 为真时仅在 `Files` 与 `RefDir` 之间切换。
+    /// 按当前入口切换 Tab：`ai_web` 为真时仅保留 `Files`，禁止切换。
     pub fn switch_tab_for_entry(
         &mut self,
         delta: isize,
@@ -184,15 +184,10 @@ impl LxMention {
         cursor: usize,
         ai_web: bool,
     ) -> bool {
-        if self.view(text, cursor) == LxMentionView::Hidden {
+        if ai_web || self.view(text, cursor) == LxMentionView::Hidden {
             return false;
         }
-        let next = if ai_web {
-            match self.tab {
-                MentionTab::Files => MentionTab::RefDir,
-                _ => MentionTab::Files,
-            }
-        } else if delta > 0 {
+        let next = if delta > 0 {
             self.tab.next()
         } else {
             self.tab.prev()
@@ -212,7 +207,7 @@ impl LxMention {
         self.set_tab_for_entry(tab, text, cursor, false)
     }
 
-    /// 按当前入口直接设置活跃 Tab：`ai_web` 为真时忽略 `Skills` 与 `Mcp`。
+    /// 按当前入口直接设置活跃 Tab：`ai_web` 为真时仅允许 `Files`。
     pub fn set_tab_for_entry(
         &mut self,
         tab: MentionTab,
@@ -220,7 +215,7 @@ impl LxMention {
         cursor: usize,
         ai_web: bool,
     ) -> bool {
-        if ai_web && matches!(tab, MentionTab::Skills | MentionTab::Mcp) {
+        if ai_web && tab != MentionTab::Files {
             return false;
         }
         if self.view(text, cursor) == LxMentionView::Hidden || self.tab == tab {
@@ -231,6 +226,24 @@ impl LxMention {
         self.ref_anchor = 0;
         self.ref_viewport = None;
         true
+    }
+
+    /// 无视面板当前是否可见，强制重置活跃 Tab（用于切换至 AI Web 时归位到 `Files`）。
+    pub fn force_tab(&mut self, tab: MentionTab) {
+        self.tab = tab;
+        self.ref_active = 0;
+        self.ref_anchor = 0;
+        self.ref_viewport = None;
+    }
+
+    /// 当前 `Files` 面板高亮条目是否为目录。
+    pub fn active_is_directory(&self) -> bool {
+        self.tab == MentionTab::Files
+            && self
+                .panel
+                .as_ref()
+                .and_then(|panel| panel.items().get(panel.active()))
+                .is_some_and(|entry| entry.is_directory)
     }
 
     /// 会话结束：状态复位。

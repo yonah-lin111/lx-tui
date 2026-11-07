@@ -123,6 +123,11 @@ pub fn file_message_preview(count: usize) -> &'static str {
     if count <= 1 { "[File]" } else { "[Files]" }
 }
 
+/// 仅文件夹消息的单行预览占位文本。
+pub fn folder_message_preview(count: usize) -> &'static str {
+    if count <= 1 { "[Folder]" } else { "[Folders]" }
+}
+
 /// 图片准备与加载错误的用户可见提示文案。
 pub fn image_error_message(err: &crate::platform::ImagePrepareError) -> &'static str {
     match err {

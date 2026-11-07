@@ -54,26 +54,48 @@ pub fn try_send_ai_web(
     if draft.is_empty() || busy {
         return false;
     }
+    if state
+        .pane_anywhere(pane)
+        .is_some_and(|t| t.lx.chat.loading_session)
+    {
+        super::session::show_lx_hint(
+            state,
+            pane,
+            InputHintLevel::Warning,
+            text::LX_CHAT_SESSION_BUSY,
+        );
+        return true;
+    }
     if !draft.contains('\n') && draft.trim_start().starts_with('/') {
         let trimmed = draft.trim();
-        let name = trimmed.trim_start_matches('/');
-        if !name.is_empty() && !name.contains(char::is_whitespace) && !name.contains('/') {
-            if name.eq_ignore_ascii_case("new") || name.eq_ignore_ascii_case("clear") {
-                super::slash::clear_lx_input(state, pane);
-                super::session::new_session(state, pane);
-                return true;
+        let after_slash = trimmed.trim_start_matches('/');
+        let first_word = after_slash.split_whitespace().next().unwrap_or("");
+        let has_args = after_slash.split_whitespace().nth(1).is_some();
+        if !first_word.is_empty() && !first_word.contains('/') {
+            if !has_args {
+                if first_word.eq_ignore_ascii_case("new")
+                    || first_word.eq_ignore_ascii_case("clear")
+                {
+                    super::slash::clear_lx_input(state, pane);
+                    super::session::new_session(state, pane);
+                    return true;
+                }
+                if first_word.eq_ignore_ascii_case("resume")
+                    || first_word.eq_ignore_ascii_case("session")
+                {
+                    super::slash::clear_lx_input(state, pane);
+                    super::slash::open_history(state, pane);
+                    return true;
+                }
+                if first_word.eq_ignore_ascii_case("rewind")
+                    || first_word.eq_ignore_ascii_case("undo")
+                {
+                    super::slash::clear_lx_input(state, pane);
+                    rewind_ai_web(state, pane);
+                    return true;
+                }
             }
-            if name.eq_ignore_ascii_case("resume") || name.eq_ignore_ascii_case("session") {
-                super::slash::clear_lx_input(state, pane);
-                super::slash::open_history(state, pane);
-                return true;
-            }
-            if name.eq_ignore_ascii_case("rewind") || name.eq_ignore_ascii_case("undo") {
-                super::slash::clear_lx_input(state, pane);
-                rewind_ai_web(state, pane);
-                return true;
-            }
-            if !SlashPanel::commands_matching(&format!("/{name}")).is_empty() {
+            if !SlashPanel::commands_matching(&format!("/{first_word}")).is_empty() {
                 super::session::show_lx_hint(
                     state,
                     pane,
@@ -102,8 +124,17 @@ pub fn try_send_ai_web(
         .filter(|s| is_ai_web_session(s))
         .map(str::to_string)
         .unwrap_or_else(|| format!("{AI_WEB_SESSION_PREFIX}{}-{generation}", pane.raw()));
+    let cloud_files = state
+        .pane_anywhere(pane)
+        .map(|t| t.lx.ai_web_edit_cloud_files.clone())
+        .unwrap_or_default();
     let user_id = format!("{session_preview}-u-{generation}");
-    let prepared = match crate::chat::prepare_ai_web_message(&reference_root, &user_id, &draft) {
+    let prepared = match crate::chat::prepare_ai_web_message(
+        &reference_root,
+        &user_id,
+        &draft,
+        &cloud_files,
+    ) {
         Ok(prepared) => prepared,
         Err(err) => {
             let msg = match err {
@@ -119,7 +150,8 @@ pub fn try_send_ai_web(
             return true;
         }
     };
-    if prepared.web_prompt.is_empty() && prepared.files.is_empty() {
+    if prepared.web_prompt.is_empty() && prepared.files.is_empty() && prepared.keep_files.is_empty()
+    {
         return false;
     }
     state.prompt_history.record(&draft);
@@ -128,6 +160,7 @@ pub fn try_send_ai_web(
     };
     let site = target.lx.ai_web_site;
     let edit_user_index = target.lx.ai_web_edit_user_index.take();
+    target.lx.ai_web_edit_cloud_files.clear();
     target.lx.clear();
     target.lx.clear_rewind();
     target.lx.chat.loading_session = false;
@@ -218,6 +251,7 @@ pub fn try_send_ai_web(
         site,
         prompt: prepared.web_prompt,
         files: prepared.files,
+        keep_files: prepared.keep_files,
         edit_user_index,
     });
     super::refresh_lx_status(state, pane);
@@ -230,7 +264,10 @@ pub fn rewind_ai_web(state: &mut AppState, pane: PaneId) -> bool {
     let Some(target) = state.pane_anywhere(pane) else {
         return false;
     };
-    if target.lx.chat.request.is_busy() {
+    if target.lx.chat.request.is_busy()
+        || target.lx.chat.has_running_shell()
+        || target.lx.chat.loading_session
+    {
         super::session::show_lx_hint(state, pane, InputHintLevel::Warning, text::LX_REWIND_FAILED);
         return true;
     }
@@ -245,6 +282,12 @@ pub fn rewind_ai_web(state: &mut AppState, pane: PaneId) -> bool {
         return true;
     };
     let user_text = target.lx.chat.messages[last_user_idx].text();
+    let cloud_files: Vec<String> = target.lx.chat.messages[last_user_idx]
+        .attachments
+        .iter()
+        .filter(|att| att.source_path.is_none())
+        .map(|att| att.label.clone())
+        .collect();
     let Some(target) = state.pane_mut_anywhere(pane) else {
         return false;
     };
@@ -257,6 +300,7 @@ pub fn rewind_ai_web(state: &mut AppState, pane: PaneId) -> bool {
         .filter(|message| message.role == "user" && !message.is_user_shell())
         .count();
     target.lx.ai_web_edit_user_index = Some(remaining_users);
+    target.lx.ai_web_edit_cloud_files = cloud_files;
     target.lx.clear_rewind();
     target.lx.slash = None;
     target.lx.replace_input(&user_text);
@@ -308,6 +352,7 @@ pub fn on_ai_web_session_loaded(
     target.lx.model_switch.reset();
     target.lx.clear_rewind();
     target.lx.ai_web_edit_user_index = None;
+    target.lx.ai_web_edit_cloud_files.clear();
     target.lx.chat.session_id = Some(session_id.clone());
     target.lx.chat.set_session_title(title);
 
@@ -320,30 +365,35 @@ pub fn on_ai_web_session_loaded(
             if idx > 0 {
                 turn_index = turn_index.saturating_add(1);
             }
-            let attachments = item
-                .files
-                .into_iter()
-                .enumerate()
-                .map(|(att_idx, name)| {
-                    let kind = if crate::chat::is_image_filename(&name) {
-                        crate::db::chat::MessageAttachmentKind::Image
-                    } else {
-                        crate::db::chat::MessageAttachmentKind::File
-                    };
-                    crate::db::chat::MessageAttachmentMeta {
-                        id: format!("{msg_id}-att-{att_idx}"),
-                        position: i64::try_from(att_idx).unwrap_or(0),
-                        kind,
-                        label: name,
-                        marker_start: None,
-                        marker_end: None,
-                        source_path: None,
-                        mime: None,
-                        width: None,
-                        height: None,
-                    }
-                })
-                .collect();
+            let mut raw_content = item.text;
+            let mut attachments = Vec::with_capacity(item.files.len());
+            for (att_idx, name) in item.files.into_iter().enumerate() {
+                let is_img = crate::chat::is_image_filename(&name);
+                let kind = if is_img {
+                    crate::db::chat::MessageAttachmentKind::Image
+                } else {
+                    crate::db::chat::MessageAttachmentKind::File
+                };
+                let tag = if is_img { "refer-image" } else { "refer-file" };
+                if !raw_content.is_empty() && !raw_content.ends_with(' ') {
+                    raw_content.push(' ');
+                }
+                let marker_start = raw_content.len();
+                raw_content.push_str(&format!("@[{tag}]({name})"));
+                let marker_end = raw_content.len();
+                attachments.push(crate::db::chat::MessageAttachmentMeta {
+                    id: format!("{msg_id}-att-{att_idx}"),
+                    position: i64::try_from(att_idx).unwrap_or(0),
+                    kind,
+                    label: name,
+                    marker_start: Some(marker_start),
+                    marker_end: Some(marker_end),
+                    source_path: None,
+                    mime: None,
+                    width: None,
+                    height: None,
+                });
+            }
             views.push(ChatMessageView {
                 sequence,
                 id: msg_id.clone(),
@@ -356,7 +406,7 @@ pub fn on_ai_web_session_loaded(
                     position: 0,
                     part: ChatPartView {
                         kind: PartKind::Text,
-                        content: item.text,
+                        content: raw_content,
                         provider_metadata_json: None,
                         started_at_ms: None,
                         ended_at_ms: None,
@@ -433,371 +483,4 @@ pub fn on_ai_web_session_loaded(
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-    use crate::app::state::{AiWebSite, LxEntry};
-    use crate::chat::events::{ChatDelta, PartDelta, StopReason};
-    use crate::db::chat::Usage;
-
-    fn ai_web_state() -> (AppState, PaneId) {
-        let mut state = AppState::demo();
-        let pane = state.active_tab().layout.focus();
-        crate::app::update::set_lx_entry(&mut state, pane, LxEntry::AiWeb);
-        (state, pane)
-    }
-
-    fn draft(state: &mut AppState, pane: PaneId, text: &str) {
-        if let Some(target) = state.pane_mut_anywhere(pane) {
-            target.lx.input = text.into();
-        }
-    }
-
-    fn finish(state: &mut AppState, pane: PaneId) {
-        let key = match &state
-            .pane_anywhere(pane)
-            .map(|target| &target.lx.chat.request)
-        {
-            Some(RequestState::Streaming { key, .. }) => key.clone(),
-            _ => panic!("expected streaming request"),
-        };
-        let delta = ChatDelta::Part(PartDelta {
-            kind: PartKind::Text,
-            text: "reply".into(),
-            metadata: None,
-        });
-        assert!(super::super::on_stream_delta(state, &key, &[delta]));
-        assert!(super::super::on_stream_finished(
-            state,
-            &key,
-            &StopReason::Complete,
-            Usage::default(),
-            Usage::default(),
-        ));
-    }
-
-    #[test]
-    fn send_creates_memory_messages_and_starts_web_stream() {
-        let (mut state, pane) = ai_web_state();
-        draft(&mut state, pane, "hello");
-        assert!(super::super::try_send(&mut state, pane));
-        let target = state.pane_anywhere(pane).expect("pane");
-        assert_eq!(target.lx.chat.messages.len(), 2);
-        assert_eq!(target.lx.chat.messages[0].role, "user");
-        assert_eq!(target.lx.chat.messages[1].role, "assistant");
-        assert_eq!(target.lx.chat.messages[1].status, "streaming");
-        assert!(matches!(
-            target.lx.chat.request,
-            RequestState::Streaming { .. }
-        ));
-        assert_eq!(
-            target.lx.chat.status.model_name.as_deref(),
-            Some("DeepSeek")
-        );
-        assert!(
-            state
-                .effects
-                .iter()
-                .any(|effect| matches!(effect, Effect::StartAiWebStream { .. }))
-        );
-    }
-
-    #[test]
-    fn finished_web_stream_settles_in_memory_without_db_write() {
-        let (mut state, pane) = ai_web_state();
-        draft(&mut state, pane, "hello");
-        assert!(super::super::try_send(&mut state, pane));
-        finish(&mut state, pane);
-        let target = state.pane_anywhere(pane).expect("pane");
-        assert_eq!(target.lx.chat.request, RequestState::Idle);
-        let assistant = target.lx.chat.messages.last().expect("assistant");
-        assert_eq!(assistant.status, "complete");
-        assert_eq!(assistant.text(), "reply");
-        assert!(
-            !state
-                .effects
-                .iter()
-                .any(|effect| matches!(effect, Effect::FinishChatTurn { .. }))
-        );
-    }
-
-    #[test]
-    fn new_command_resets_messages_and_web_session() {
-        let (mut state, pane) = ai_web_state();
-        draft(&mut state, pane, "hello");
-        assert!(super::super::try_send(&mut state, pane));
-        finish(&mut state, pane);
-        draft(&mut state, pane, "/new");
-        assert!(super::super::try_send(&mut state, pane));
-        let target = state.pane_anywhere(pane).expect("pane");
-        assert!(target.lx.chat.messages.is_empty());
-        assert!(state.effects.iter().any(|effect| matches!(
-            effect,
-            Effect::ResetAiWebSession {
-                site: AiWebSite::Deepseek
-            }
-        )));
-    }
-
-    #[test]
-    fn model_command_is_rejected_in_ai_web() {
-        let (mut state, pane) = ai_web_state();
-        draft(&mut state, pane, "/model");
-        assert!(super::super::try_send(&mut state, pane));
-        let target = state.pane_anywhere(pane).expect("pane");
-        assert!(target.lx.chat.messages.is_empty());
-        assert_eq!(
-            target.lx.toast.as_ref().map(|toast| toast.message.as_str()),
-            Some(text::LX_AI_WEB_ONLY_NEW_CMD)
-        );
-    }
-
-    #[test]
-    fn multi_turn_send_advances_generation_and_keeps_qa_order() {
-        let (mut state, pane) = ai_web_state();
-        draft(&mut state, pane, "你是谁");
-        assert!(super::super::try_send(&mut state, pane));
-        finish(&mut state, pane);
-
-        draft(&mut state, pane, "最近有什么新闻");
-        assert!(super::super::try_send(&mut state, pane));
-        let key2 = match &state
-            .pane_anywhere(pane)
-            .map(|target| &target.lx.chat.request)
-        {
-            Some(RequestState::Streaming { key, .. }) => key.clone(),
-            _ => panic!("expected streaming request on turn 2"),
-        };
-        assert_eq!(key2.generation, 2);
-        let delta2 = ChatDelta::Part(PartDelta {
-            kind: PartKind::Text,
-            text: "second reply".into(),
-            metadata: None,
-        });
-        assert!(super::super::on_stream_delta(&mut state, &key2, &[delta2]));
-        assert!(super::super::on_stream_finished(
-            &mut state,
-            &key2,
-            &StopReason::Complete,
-            Usage::default(),
-            Usage::default(),
-        ));
-
-        let target = state.pane_anywhere(pane).expect("pane");
-        assert_eq!(target.lx.chat.messages.len(), 4);
-        assert_eq!(target.lx.chat.messages[0].text(), "你是谁");
-        assert_eq!(target.lx.chat.messages[1].text(), "reply");
-        assert_eq!(target.lx.chat.messages[2].text(), "最近有什么新闻");
-        assert_eq!(target.lx.chat.messages[3].text(), "second reply");
-    }
-
-    #[test]
-    fn rewind_pops_latest_turn_restores_input_and_marks_edit_index() {
-        let (mut state, pane) = ai_web_state();
-        draft(&mut state, pane, "第一问");
-        assert!(super::super::try_send(&mut state, pane));
-        finish(&mut state, pane);
-
-        draft(&mut state, pane, "第二问");
-        assert!(super::super::try_send(&mut state, pane));
-        finish(&mut state, pane);
-        state.effects.clear();
-
-        draft(&mut state, pane, "/rewind");
-        assert!(super::super::try_send(&mut state, pane));
-        let target = state.pane_anywhere(pane).expect("pane");
-        assert_eq!(target.lx.chat.messages.len(), 2);
-        assert_eq!(target.lx.input, "第二问");
-        assert_eq!(target.lx.ai_web_edit_user_index, Some(1));
-
-        draft(&mut state, pane, "修改后的第二问");
-        assert!(super::super::try_send(&mut state, pane));
-        assert!(state.effects.iter().any(|effect| matches!(
-            effect,
-            Effect::StartAiWebStream {
-                prompt,
-                edit_user_index: Some(1),
-                ..
-            } if prompt == "修改后的第二问"
-        )));
-    }
-
-    #[test]
-    fn rename_and_session_load_work_in_ai_web() {
-        let (mut state, pane) = ai_web_state();
-        on_ai_web_session_loaded(
-            &mut state,
-            pane,
-            "ai-web-ds-uuid-1".into(),
-            Some("Old Title".into()),
-            vec![
-                crate::chat::ai_web::AiWebHistoryMessage {
-                    role: "user".into(),
-                    thinking: String::new(),
-                    thinking_ms: None,
-                    text: "hello".into(),
-                    files: vec!["photo.png".into(), "report.pdf".into()],
-                    created_at_ms: 1000,
-                },
-                crate::chat::ai_web::AiWebHistoryMessage {
-                    role: "assistant".into(),
-                    thinking: "let me think".into(),
-                    thinking_ms: Some(1500),
-                    text: "world".into(),
-                    files: Vec::new(),
-                    created_at_ms: 2000,
-                },
-            ],
-        );
-        let target = state.pane_anywhere(pane).expect("pane");
-        assert_eq!(target.lx.chat.messages.len(), 2);
-        assert_eq!(target.lx.chat.messages[0].attachments.len(), 2);
-        assert_eq!(
-            target.lx.chat.messages[0].attachments[0].kind,
-            crate::db::chat::MessageAttachmentKind::Image
-        );
-        assert_eq!(
-            target.lx.chat.messages[0].attachments[1].kind,
-            crate::db::chat::MessageAttachmentKind::File
-        );
-        assert_eq!(target.lx.chat.session_title.as_deref(), Some("Old Title"));
-        assert!(!target.lx.chat.reasoning_expanded(1, 0));
-
-        draft(&mut state, pane, "/rename New Cloud Title");
-        assert!(super::super::try_send(&mut state, pane));
-        let target = state.pane_anywhere(pane).expect("pane");
-        assert_eq!(
-            target.lx.chat.session_title.as_deref(),
-            Some("New Cloud Title")
-        );
-        assert!(state.effects.iter().any(|effect| matches!(
-            effect,
-            Effect::RenameChatSession {
-                session_id,
-                title,
-                ..
-            } if session_id == "ai-web-ds-uuid-1" && title == "New Cloud Title"
-        )));
-    }
-
-    #[test]
-    fn file_and_image_upload_and_rewind_attachment_removal_work_in_ai_web() {
-        let dir =
-            std::env::temp_dir().join(format!("lx-ai-web-upload-test-{}", std::process::id()));
-        let _ = std::fs::create_dir_all(&dir);
-        let img_path = dir.join("diagram.png");
-        let doc_path = dir.join("notes.md");
-        // Write 1x1 PNG header and markdown text
-        std::fs::write(
-            &img_path,
-            [
-                0x89, b'P', b'N', b'G', 0x0D, 0x0A, 0x1A, 0x0A, 0x00, 0x00, 0x00, 0x0D, b'I', b'H',
-                b'D', b'R',
-            ],
-        )
-        .expect("write png");
-        std::fs::write(&doc_path, "# Notes\nhello\n").expect("write md");
-
-        let (mut state, pane) = ai_web_state();
-        let raw_draft = format!(
-            "请对比这两份材料 @[refer-image]({}) @[refer-file]({})",
-            img_path.display(),
-            doc_path.display()
-        );
-        draft(&mut state, pane, &raw_draft);
-        assert!(super::super::try_send(&mut state, pane));
-
-        let target = state.pane_anywhere(pane).expect("pane");
-        assert_eq!(target.lx.chat.messages[0].text(), raw_draft);
-        assert_eq!(target.lx.chat.messages[0].attachments.len(), 2);
-        assert!(state.effects.iter().any(|effect| matches!(
-            effect,
-            Effect::StartAiWebStream {
-                prompt,
-                files,
-                edit_user_index: None,
-                ..
-            } if prompt == "请对比这两份材料" && files.len() == 2
-        )));
-
-        finish(&mut state, pane);
-        state.effects.clear();
-
-        // Trigger /rewind: restores full draft with image and file tags
-        draft(&mut state, pane, "/rewind");
-        assert!(super::super::try_send(&mut state, pane));
-        let target = state.pane_anywhere(pane).expect("pane");
-        assert_eq!(target.lx.input, raw_draft);
-        assert_eq!(target.lx.ai_web_edit_user_index, Some(0));
-
-        // User removes the image and keeps only the markdown file
-        let edited_draft = format!("只看这份文档 @[refer-file]({})", doc_path.display());
-        draft(&mut state, pane, &edited_draft);
-        assert!(super::super::try_send(&mut state, pane));
-        assert!(state.effects.iter().any(|effect| matches!(
-            effect,
-            Effect::StartAiWebStream {
-                prompt,
-                files,
-                edit_user_index: Some(0),
-                ..
-            } if prompt == "只看这份文档" && files.len() == 1
-        )));
-
-        let _ = std::fs::remove_dir_all(&dir);
-    }
-
-    #[test]
-    fn folder_reference_is_rejected_in_ai_web_and_keeps_draft() {
-        let dir =
-            std::env::temp_dir().join(format!("lx-ai-web-folder-test-{}", std::process::id()));
-        let _ = std::fs::create_dir_all(&dir);
-        let (mut state, pane) = ai_web_state();
-        let raw_draft = format!("看看目录 @[refer-folder]({})", dir.display());
-        draft(&mut state, pane, &raw_draft);
-        assert!(super::super::try_send(&mut state, pane));
-        let target = state.pane_anywhere(pane).expect("pane");
-        assert!(target.lx.chat.messages.is_empty());
-        assert_eq!(target.lx.input, raw_draft, "被拦截时保留草稿");
-        assert_eq!(
-            target.lx.toast.as_ref().map(|t| t.message.as_str()),
-            Some(text::LX_AI_WEB_FOLDER_UNSUPPORTED)
-        );
-        let _ = std::fs::remove_dir_all(&dir);
-    }
-
-    #[test]
-    fn ai_web_mention_panel_cycles_only_files_and_ref_dir() {
-        let (mut state, pane) = ai_web_state();
-        if let Some(target) = state.pane_mut_anywhere(pane) {
-            target
-                .lx
-                .set_mention_root(Some(std::path::PathBuf::from("/tmp")));
-            target.lx.insert_char('@');
-            assert_eq!(
-                target.lx.mention_tab(),
-                crate::app::prompt::MentionTab::Files
-            );
-            assert!(target.lx.mention_switch_tab(1));
-            assert_eq!(
-                target.lx.mention_tab(),
-                crate::app::prompt::MentionTab::RefDir
-            );
-            assert!(target.lx.mention_switch_tab(1));
-            assert_eq!(
-                target.lx.mention_tab(),
-                crate::app::prompt::MentionTab::Files,
-                "AI Web 下右切直接从 RefDir 回到 Files，跳过 Skills 和 MCP"
-            );
-            assert!(
-                !target
-                    .lx
-                    .mention_set_tab(crate::app::prompt::MentionTab::Skills)
-            );
-            assert!(
-                !target
-                    .lx
-                    .mention_set_tab(crate::app::prompt::MentionTab::Mcp)
-            );
-        }
-    }
-}
+mod tests;

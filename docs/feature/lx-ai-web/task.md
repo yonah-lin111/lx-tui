@@ -1,69 +1,75 @@
 # lx `AI Web` 入口与 DeepSeek 网页端接入 — 执行任务清单
 
-> 状态：**已在 `.worktrees/lx-ai-web`（`feature/lx-ai-web`）完成实现与测试，待用户确认合并**（2026-11-06）
-> 设计依据：[design.md](design.md)
-> 阶段划分：P0（开工门槛与基线核对）→ P1（`app/` 状态模型与纯内存会话更新）→ P2（`ui/` 欢迎页 4 入口布局、站点行与底边框渲染）→ P3（`chat/ai_web` 与 `event/` 的 `ego-browser` DeepSeek 流式驱动）→ P4（单元测试与精确校验）。
+> 状态：**已在 `.worktrees/lx-ai-web`（`feature/lx-ai-web`）完成实现、代码审查（[review.md](review.md)）与 P0–P2 修复**（2026-11-07）
+> 设计依据：[design.md](design.md) · 审查报告：[review.md](review.md)
+> 阶段划分：P0（开工门槛与基线核对）→ P1（`app/` 状态模型与云同步会话更新）→ P2（`ui/` 欢迎页 4 入口、标题、居中加载/空态与底边框渲染）→ P3（`chat/ai_web` 与 `event/` 回环 HTTP 流、云会话与 CDP 文件上传）→ P4（单元测试与精确校验）→ P5（代码审查 P0–P2 问题闭环修复）。
 
 ---
 
 ## P0. 开工门槛与基线核对
 
 - [x] 用户审核确认 [design.md](design.md) 与本 `task.md` 后开始执行。
-- [x] 遵守 `AGENTS.md` 与 `docs/standards/*.md` 全部规范：生产代码禁止 `unwrap()` / `expect()`，TUI 用户可见文案 100% 英文并集中在 `src/ui/text.rs`，保持 `app/` 与 `ui/` 纯函数边界，单文件 `< 1000` 行。
+- [x] 遵守 `AGENTS.md` 与 `docs/standards/*.md` 全部规范：生产代码禁止 `unwrap()` / `expect()`，TUI 用户可见文案 100% 英文并集中在 `src/ui/text.rs`，保持 `app/` 与 `ui/` 纯函数边界，生产代码单文件 `< 1000` 行且测试分离至同层 `tests.rs`。
 
 ---
 
-## P1. 状态模型与纯内存会话更新（`src/app/`）
+## P1. 状态模型与云同步会话更新（`src/app/`）
 
 - [x] **扩展 `LxEntry` 与 `AiWebSite`（`src/app/state/lx.rs`、`src/app/effects.rs`）**：
   - 在 `LxEntry` 中新增 `AiWeb` 变体，更新 `LxEntry::ALL` 为 4 项 `[Native, Hybrid, Automation, AiWeb]`。
-  - 新增 `AiWebSite` 枚举（首期 `Deepseek`）并在 `Lx` 结构体中新增 `pub ai_web_site: AiWebSite`。
-  - 在 `Effect` 中新增 `StartAiWebStream { key: RequestKey, site: AiWebSite, prompt: String }` 与 `ResetAiWebSession { site: AiWebSite }`。
-- [x] **实现 `AI Web` 发送、状态栏刷新与 `/new` 重置（`src/app/update/chat/ai_web.rs`、`mod.rs`、`session.rs`、`slash.rs`、`pane.rs`）**：
-  - 新增 `src/app/update/chat/ai_web.rs`：实现 `try_send_ai_web`（直接构造内存态 user + streaming assistant 消息并入队 `Effect::StartAiWebStream`）。
-  - 在 `update::pane::set_lx_entry` 与新增的 `set_ai_web_site` 中调用 `refresh_lx_status`。
-  - 在 `refresh_lx_status` 中为 `LxEntry::AiWeb` 设置底边框状态行 `model_name = Some("DeepSeek")`，隐藏 `variant` 与 Token 占用。
-  - 在 `on_stream_finished` 中识别 `ai-web-` 内存会话，结算消息终态后直接将 `request` 置为 `RequestState::Idle`（不写 SQLite）。
-  - 在 `SlashPanel::command_entries_for` 与 `apply_slash_command` 中按 `LxEntry::AiWeb` 开放 `/new`（`/clear`）、`/resume`（`/session`，含云端列表加载、`Enter` 恢复历史消息、`Shift+Enter` 改名与 `Ctrl+D` 删除）、`/rename`（`/title`，同步更新云端会话标题与顶边框胶囊）与 `/rewind`（`/undo`，一键撤回最新一轮问答并回填输入框，下次发送走网页端原地编辑 `/api/v0/chat/edit_message` 分支）。
+  - 新增 `AiWebSite` 枚举（首期 `Deepseek`）并在 `Lx` 结构体中新增 `ai_web_site`、`ai_web_edit_user_index` 与 `ai_web_edit_cloud_files`。
+  - 在 `Effect` 中新增 `StartAiWebStream { key, site, prompt, files, keep_files, edit_user_index }` 与 `ResetAiWebSession { site }`。
+- [x] **实现 `AI Web` 发送、状态栏刷新、云会话管理与 `/rewind`（`src/app/update/chat/ai_web.rs`、`mod.rs`、`session.rs`、`slash.rs`、`rewind.rs`、`resume_edit.rs`）**：
+  - `try_send` 在 `LxEntry::AiWeb` 时调用 `try_send_ai_web`：创建内存态用户与助手消息，入队 `Effect::StartAiWebStream`，不触发任何 SQLite 写效应；在 `AI Web` 下屏蔽 `!` 本地 Shell 模式。
+  - `refresh_lx_status` 在 `LxEntry::AiWeb` 时将窗格底边框状态栏 `model_name` 设为 `"DeepSeek"`，清空 `provider_name`、`variant`、`context_limit`、`input_tokens`。
+  - 在 `AI Web` 下开放 `/new`（`/clear`）、`/resume`（`/session`）、`/rename`（`/title`）与 `/rewind`（`/undo` 及空闲双击 `Esc`），全部与 DeepSeek 网页端云同步（会话列表、历史恢复、`Shift+Enter` 编辑模态改名、`Ctrl+D` 删除、以及 1 步撤回后原地编辑重发）；对不支持的本地命令（含带参命令如 `/model foo`）弹出英文提示。
 
 ---
 
-## P2. 欢迎页 4 入口布局、站点选择行与底边框渲染（`src/ui/`）
+## P2. 欢迎页 4 入口布局、标题、居中空态/加载态与底边框渲染（`src/ui/`）
 
-- [x] **新增文案与配色（`src/ui/text.rs`、`src/ui/style.rs`）**：
-  - 在 `src/ui/text.rs` 新增 `LX_ENTRY_AI_WEB` (`"AI Web"`)、`LX_ENTRY_AI_WEB_DESC`、`AI_WEB_SITE_DEEPSEEK` (`"DeepSeek"`)、`ai_web_site_label` 及错误提示常量。
-  - 在 `src/ui/style.rs` 的 `lx_entry_gradient` 中补齐 `LxEntry::AiWeb => (LX_SKY_BLUE, LX_PINK)`。
-- [x] **扩展欢迎页品牌区与动态入口几何（`src/ui/main_content/lx/brand.rs`、`src/ui/main_content/lx.rs`）**：
-  - 在 `brand::icon_pixel` 中补齐 `LxEntry::AiWeb` 的调色板映射。
-  - 在 `brand.rs` 新增 `draw_ai_web_sites` 与 `place_ai_web_sites`：当 `lx.entry == LxEntry::AiWeb` 时，在 `lay.inventory` 行居中绘制站点选择标签（`DeepSeek`）及选中下划线。
-  - 在 `src/ui/main_content/lx.rs` 修复 `layout` 与 `place_entries` 的多入口间距/高度动态计算，并导出 `ai_web_site_hit` 命中函数。
-
----
-
-## P3. `ego-browser` DeepSeek 流式驱动与事件循环集成（`src/chat/ai_web/`、`src/event/`）
-
-- [x] **实现 `chat::ai_web` 模块与嵌入式脚本（`src/chat/ai_web/mod.rs`、`src/chat/ai_web/deepseek_script.js`）**：
-  - 编写 `deepseek_script.js`：通过 `useOrCreateTaskSpace('lx-tui-ai-web-deepseek')` 打开/复用 `https://chat.deepseek.com`；检测未登录（无 `userToken` 或 `/sign_in`）时跳转 `https://chat.deepseek.com/sign_in` 并调用 `handOffTaskSpace()`，输出 `login_required` 事件；已登录时注入 SSE/DOM 双通道流采集器，填入 prompt 发送并实时输出 `@@LX_AI_WEB@@` 前缀的 NDJSON 行（`thinking` / `text` / `done` / `error`）。
-  - 在 `src/chat/ai_web/mod.rs` 实现 NDJSON 行解析器 `parse_script_line`（映射为 `ChatDelta` / 登录提示 / 终态）及 `ego-browser` 可执行文件定位函数。
-- [x] **接入事件层流管理与鼠标点击（`src/event/chat/mod.rs`、`src/event/chat/ai_web.rs`、`src/event/mouse/press.rs`）**：
-  - 在 `src/event/mouse/press.rs` 中接入 `ai_web_site_hit` 左键点击切换。
-  - 在 `src/event/chat/mod.rs` 与 `src/event/chat/ai_web.rs` 中处理 `Effect::StartAiWebStream` 与 `Effect::ResetAiWebSession`：异步拉起 `ego-browser nodejs`、按行读取 stdout 转换投递 `ChatNetEvent::Delta` / `Finished`、在检测到 `login_required` 时弹出窗格内 Toast，并支持通过 `streams.cancels` 取消子进程。
-- [x] **实现 `AI Web` 图片与文件上传及 `/rewind` 附件撤销同步**：
-  - `@` 提及面板在 `LxEntry::AiWeb` 下仅展示并切换 `Files` 与 `refDir` 两个 Tab（隐藏 `Skills` 与 `MCP`）。
-  - 在 `try_send_ai_web` 中解析草稿中的 `@[refer-file]`、`@[refer-image]`、`@相对路径` 与 `@[ref-content]/` 附件（拦截文件夹与不存在的文件并给出提示），填充 `ChatMessageView.attachments`，并将清洗后的正文与去重绝对路径列表 `files` 随 `Effect::StartAiWebStream` 传入事件层。
-  - 在 `deepseek_script.js` 中：发送或原地编辑（`/rewind` 重发）前先清空目标容器内的旧 `.ds-animated-size-item` 附件卡片，再通过 CDP `DOM.setFileInputFiles` 注入当前草稿的 `files` 列表并等待上传/解析就绪后发送；在 `load_session` 中同步提取云端消息附件名以在 `/resume` 历史中展示。
+- [x] **收短入口标签、无方括号标题与渐变（`src/ui/text.rs`、`src/ui/panes.rs`、`src/ui/style.rs`、`src/ui/main_content/lx/brand.rs`）**：
+  - 将 4 个入口标签定义为 `"Native"`、`"Hybrid"`、`"Automation"`、`"AI Web"`；窗格左上角边框标题统一为 `lx-<entry>`（无方括号）。
+  - 为 `LxEntry::AiWeb` 配置独立渐变色与像素图标配色。
+- [x] **修复欢迎页多入口动态间距并新增站点选择行（`src/ui/main_content/lx.rs`、`src/ui/main_content/lx/brand.rs`）**：
+  - 将 `place_entries` 与 `layout` 中的入口数改为按 `labels.len()` 动态计算。
+  - 当 `lx.entry == LxEntry::AiWeb` 时，在 `lay.inventory` 槽位绘制 `DeepSeek` 站点选择行并提供 `ai_web_site_hit` 鼠标命中。
+- [x] **思考块默认折叠与全局空态/加载态居中（`src/ui/main_content/lx/history/`、`src/ui/main_content/lx/slash.rs`、`src/ui/overlay/`、`src/ui/prompt/`、`src/ui/sidebar*.rs`）**：
+  - `PartKind::Reasoning` 在流式生成中和完成后均保持默认折叠（`● Thinking` → `○ Thought · Xs`），手动展开跨完成态保持。
+  - `/resume` 列表加载中居中显示 `loading sessions…`，会话历史加载中在聊天视口正中央显示 `loading history…`（窄窗格自动截断）；统一将所有面板、弹窗、列表的空状态与加载状态文案居中渲染。
 
 ---
 
-## P4. 单元测试与改后精确校验
+## P3. `ego-browser` DeepSeek 回环 HTTP 流、云会话与图片/文件上传（`src/chat/`、`src/event/`）
 
-- [x] **补充与更新单元测试**：
-  - `src/ui/main_content/lx/tests.rs`：更新 4 入口布局测试，新增 `AiWeb` 入口渲染 `DeepSeek` 站点行、隐藏 `AGENTS.md · mcp · skills` 及 `ai_web_site_hit` 命中测试。
-  - `src/chat/ai_web/mod.rs`（内联或子测试模块）：验证 `@@LX_AI_WEB@@` NDJSON 行协议解析（`thinking`、`text`、`login_required`、`done`、`error` 与非协议噪声行过滤）。
-  - `src/app/update/chat/ai_web.rs`：验证 `LxEntry::AiWeb` 发送进入 `Streaming`、状态栏显示 `DeepSeek`、终态不触发 DB 写入效应，以及 `/new` 重置行为。
-- [x] **执行精确校验命令（优先使用 `rtk`）**：
-  - `rtk cargo fmt --check`
-  - `rtk cargo clippy --all-targets -- -D warnings`
-  - `rtk cargo test ui::main_content::lx::`
-  - `rtk cargo test chat::ai_web::`
-  - `rtk cargo test app::update::`
+- [x] **编写嵌入式 DeepSeek 驱动脚本与协议解析（`src/chat/ai_web/mod.rs`、`deepseek_helpers.js`、`deepseek_script.js`）**：
+  - 通过块级 `const __LX_PARAMS` 注入每轮参数，经本地回环 HTTP POST（`streamUrl`）+ stdout/stderr 回退实时推送 `thinking` / `text` / `session` / `sessions` / `session_loaded` / `login_required` / `done` / `error` 事件。
+  - 拦截 `/api/v0/chat/completion`、`/api/v0/chat/edit_message`、`/api/v0/chat/regenerate` 的 XHR/fetch SSE 流并附带 DOM 兜底。
+- [x] **实现 `AI Web` 图片/文件上传、禁用 `refDir`/文件夹及 `/rewind` 附件同步（`src/chat/prepare/ai_web.rs`、`src/ui/main_content/lx/mention.rs`、`deepseek_helpers.js`）**：
+  - `AI Web` 下禁用 `refDir` 与文件夹发送：`@` 面板仅展示 `Files` 单一 Tab，在 `Files` 中确认目录自动转为进入目录；快捷引用与路径粘贴面板不提供文件夹引用。
+  - `prepare_ai_web_message` 解析本地文件/图片引用与 `/rewind` 保留的云端附件名 `keep_files`，填充 `ChatMessageView.attachments` 并剥离正文引用标记。
+  - 脚本通过 CDP `DOM.setFileInputFiles` 注入本地文件，按 `keepFiles` 精准保留或关闭编辑框内旧附件卡片，等待全部卡片（`keptCount + FILES.length`）就绪后发送。
+
+---
+
+## P4. 单元测试与精确校验
+
+- [x] 更新并新增单元测试：
+  - `src/ui/main_content/lx/tests.rs` 与 `tests/slash_panels.rs`：4 入口欢迎页、站点命中、`lx-<entry>` 标题、居中 `loading sessions…` 与 `loading history…`。
+  - `src/ui/main_content/lx/history/tests.rs`：思考块流中与完成后默认折叠、手动展开保持。
+  - `src/chat/ai_web/tests.rs` 与 `src/chat/prepare/tests.rs`：协议行解析、`prepare_ai_web_message` 文件/图片解析、云端附件保留与目录拦截。
+  - `src/app/update/chat/ai_web/tests.rs`：`AI Web` 发送、`/new`、`/resume`、`/rename`、`/rewind`（含本地与云端附件增删同步）、带参斜杠命令拦截、入口切换会话隔离、`@` 面板仅保留 `Files` Tab 及目录确认进入子目录。
+
+---
+
+## P5. 代码审查（[review.md](review.md)）P0–P2 修复闭环
+
+- [x] **P0-1**：`AI Web` 下彻底禁用 `refDir` 与文件夹引用（`@` 面板仅保留 `Files` Tab、确认目录转为进入目录、入口切换强制重置 Tab、过滤快捷引用与粘贴面板的目录候选）。
+- [x] **P0-2**：修复多文件上传 `status.count > 0` 提前返回问题（改为轮询旧卡片降至 `keptCount` 并等待 `status.count >= keptCount + FILES.length`），并在状态检测前剥离已知文件名防止 `error.rs` 等误判失败。
+- [x] **P0-3**：修复纯图片/纯文件无文字消息（`PROMPT === ""`）发送后误点停止按钮中断回答的问题。
+- [x] **P0-4**：修复 `AI Web` 与 `Native` 互切入口时的会话状态泄漏，并在 `AI Web` 下屏蔽 `!` 本地 Shell 模式。
+- [x] **P1-1**：为 `/resume` 云端历史消息合成 `@[refer-*](filename)` 标记，支持 `/rewind` 后按 `keepFiles` 精准保留/移除云端卡片；原地编辑失败时显式报错，禁止静默退化为底部发新消息。
+- [x] **P1-2**：拦截 `AI Web` 下所有带参数的斜杠命令（如 `/model foo`），防止误发给网页端。
+- [x] **P1-3**：为 `list_sessions` / `load_session` 增加 HTTP 响应校验、30 秒进程超时与未命中终态时的 `ActionFailed` 兜底；删除活跃会话时先停止在途流。
+- [x] **P1-4**：仅在收到有效 SSE 数据帧时置 `sseActive = true`，并要求显式收到 `Done` 事件才按 `Complete` 结算。
+- [x] **P2-1 ~ P2-3**：拆分 `deepseek_helpers.js` + `deepseek_script.js` 与 `src/chat/prepare/ai_web.rs`，将生产文件内联测试迁入同层 `tests.rs`，修复纯文件夹预览 `[Folder]` 与窄窗格 `loading history…` 截断，并同步更新 `design.md`、`task.md` 与 `review.md`。

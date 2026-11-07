@@ -151,6 +151,8 @@ pub enum Effect {
         prompt: String,
         /// 待通过 CDP `DOM.setFileInputFiles` 注入网页 `<input type="file">` 的本地文件绝对路径列表。
         files: Vec<String>,
+        /// 原地编辑（`/rewind`）时需在网页编辑框内保留的已有云端附件文件名列表。
+        keep_files: Vec<String>,
         /// 若本轮紧随 `/rewind` 之后发送，指示网页端应原地编辑第几条用户消息（0 基）。
         edit_user_index: Option<usize>,
     },

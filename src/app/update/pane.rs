@@ -648,23 +648,54 @@ fn edits_text(command: LxInput) -> bool {
     )
 }
 
-/// 切换 lx 页选中入口（仅鼠标点击触发）；切换入口会取消在途粘贴面板。
+/// 切换 lx 页选中入口（仅鼠标点击触发）；切换入口会取消在途粘贴面板并隔离跨模式会话。
 pub fn set_lx_entry(state: &mut AppState, id: PaneId, entry: crate::app::state::LxEntry) {
+    let crossing_ai_web = state.pane_anywhere(id).is_some_and(|pane| {
+        pane.lx.entry != entry
+            && (pane.lx.entry == crate::app::state::LxEntry::AiWeb
+                || entry == crate::app::state::LxEntry::AiWeb)
+    });
+    if crossing_ai_web
+        && state
+            .pane_anywhere(id)
+            .is_some_and(|pane| pane.lx.chat.request.is_busy())
+    {
+        let _ = super::chat::stop_stream(state, id);
+    }
     if let Some(pane) = state.pane_mut_anywhere(id) {
         pane.lx.text_paste_cancel();
         pane.lx.paste_cancel();
         if pane.lx.entry != entry {
             pane.lx.slash = None;
         }
+        if crossing_ai_web {
+            let incompatible = pane
+                .lx
+                .chat
+                .session_id
+                .as_deref()
+                .is_some_and(|session_id| {
+                    let is_ai = super::chat::is_ai_web_session(session_id);
+                    if entry == crate::app::state::LxEntry::AiWeb {
+                        !is_ai
+                    } else {
+                        is_ai
+                    }
+                });
+            if incompatible {
+                pane.lx.chat.reset_session_view();
+            }
+            pane.lx.clear_rewind();
+            pane.lx.ai_web_edit_user_index = None;
+            pane.lx.ai_web_edit_cloud_files.clear();
+            pane.lx.chat.loading_session = false;
+        }
         pane.lx.entry = entry;
-        if entry == crate::app::state::LxEntry::AiWeb
-            && matches!(
-                pane.lx.mention_tab(),
-                crate::app::prompt::MentionTab::Skills | crate::app::prompt::MentionTab::Mcp
-            )
-        {
+        if entry == crate::app::state::LxEntry::AiWeb {
             pane.lx
-                .mention_set_tab(crate::app::prompt::MentionTab::Files);
+                .mention_force_tab(crate::app::prompt::MentionTab::Files);
+            pane.lx.exit_shell_mode();
+            pane.lx.refresh_refer_panel();
         }
     }
     super::chat::refresh_lx_status(state, id);

@@ -119,16 +119,10 @@ fn panel_area(area: Rect, input: Rect) -> Rect {
 fn panel_data(lx: &Lx, width: u16) -> Option<PanelData> {
     let tab = lx.mention().tab();
     let tabs = if lx.entry == crate::app::state::LxEntry::AiWeb {
-        vec![
-            PanelTab {
-                label: text::MENTION_TAB_FILES,
-                active: tab == MentionTab::Files,
-            },
-            PanelTab {
-                label: text::MENTION_TAB_REF_DIR,
-                active: tab == MentionTab::RefDir,
-            },
-        ]
+        vec![PanelTab {
+            label: text::MENTION_TAB_FILES,
+            active: tab == MentionTab::Files,
+        }]
     } else {
         vec![
             PanelTab {

@@ -40,6 +40,7 @@ pub fn new_session(state: &mut AppState, pane: PaneId) -> bool {
             .is_some_and(super::ai_web::is_ai_web_session);
     let ai_web_site = target.lx.ai_web_site;
     target.lx.ai_web_edit_user_index = None;
+    target.lx.ai_web_edit_cloud_files.clear();
     target.lx.chat.reset_session_view();
     target.lx.clear_agents();
     target.lx.compact.reset();
@@ -335,6 +336,8 @@ pub fn on_session_deleted(state: &mut AppState, pane: PaneId, session_id: &str) 
         target.lx.compact.reset();
         target.lx.model_switch.reset();
         target.lx.clear_rewind();
+        target.lx.ai_web_edit_user_index = None;
+        target.lx.ai_web_edit_cloud_files.clear();
         crate::app::update::clear_lx_selection_for(state, pane);
         return true;
     }
