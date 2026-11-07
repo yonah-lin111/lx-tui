@@ -190,6 +190,8 @@ pub enum AppEvent {
     TitleGenerated(chat::TitleGeneratedEvent),
     /// `/connect` 快捷连接的后台结果（凭证保存、OAuth 回调）。
     Connect(chat::connect::ConnectEvent),
+    /// AI Web 后台会话事件（会话绑定、历史列表、历史加载与错误提示）。
+    AiWeb(chat::ai_web::AiWebEvent),
 }
 
 /// 最小帧间隔；PTY 洪峰经此合并。
@@ -871,6 +873,9 @@ fn handle_app_event(
         }
         AppEvent::Connect(event) => {
             chat::connect::handle_event(state, event);
+        }
+        AppEvent::AiWeb(event) => {
+            chat::ai_web::handle_event(state, event);
         }
         AppEvent::ProcessesReaped {
             workspace,

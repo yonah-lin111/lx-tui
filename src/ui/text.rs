@@ -609,7 +609,8 @@ pub const PROMPT_TITLE_FAILED: &str = "Failed to generate title";
 pub const LX_CHAT_ENTRY_UNAVAILABLE: &str = "Native Agent only";
 pub const LX_AI_WEB_LOGIN_REQUIRED: &str = "Please sign in to DeepSeek in ego-browser";
 pub const LX_AI_WEB_EGO_UNAVAILABLE: &str = "ego-browser is not installed or unavailable";
-pub const LX_AI_WEB_ONLY_NEW_CMD: &str = "Only /new is available in AI Web";
+pub const LX_AI_WEB_ONLY_NEW_CMD: &str =
+    "Only /new, /resume, /rename, and /rewind are available in AI Web";
 pub const LX_CHAT_NO_MODEL: &str = "No model configured";
 pub const LX_CHAT_NO_WORKSPACE: &str = "No workspace path";
 pub const LX_CHAT_COMMIT_FAILED: &str = "Send failed, retry";

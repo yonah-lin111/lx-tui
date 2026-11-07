@@ -39,6 +39,7 @@ pub fn new_session(state: &mut AppState, pane: PaneId) -> bool {
             .as_deref()
             .is_some_and(super::ai_web::is_ai_web_session);
     let ai_web_site = target.lx.ai_web_site;
+    target.lx.ai_web_edit_user_index = None;
     target.lx.chat.reset_session_view();
     target.lx.clear_agents();
     target.lx.compact.reset();
@@ -264,6 +265,21 @@ pub fn on_session_loaded_full(
 /// 重命名会话。
 pub fn rename_session(state: &mut AppState, pane: PaneId, session_id: &str, title: &str) -> bool {
     super::title::cancel_session_title(state, session_id);
+    if super::ai_web::is_ai_web_session(session_id) {
+        let workspace = state.chat_session_key_for_pane(pane).unwrap_or_default();
+        state
+            .effects
+            .push(crate::app::effects::Effect::RenameChatSession {
+                workspace,
+                session_id: session_id.to_string(),
+                title: title.to_string(),
+            });
+        let panes = state.all_pane_ids();
+        for p in panes {
+            crate::app::update::on_session_renamed(state, p, session_id, title);
+        }
+        return true;
+    }
     let Some(workspace) = state.chat_session_key_for_pane(pane) else {
         return false;
     };
@@ -288,8 +304,13 @@ pub fn delete_session(state: &mut AppState, pane: PaneId, session_id: &str) -> b
         // 本地命令不占用 RequestState，必须单独停止；删除后迟到回执不得写回。
         super::user_shell::cancel_user_shells(state, pane);
     }
-    let Some(workspace) = state.chat_session_key_for_pane(pane) else {
-        return false;
+    let workspace = if super::ai_web::is_ai_web_session(session_id) {
+        state.chat_session_key_for_pane(pane).unwrap_or_default()
+    } else {
+        let Some(workspace) = state.chat_session_key_for_pane(pane) else {
+            return false;
+        };
+        workspace
     };
     state
         .effects

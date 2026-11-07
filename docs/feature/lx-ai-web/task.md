@@ -24,7 +24,7 @@
   - 在 `update::pane::set_lx_entry` 与新增的 `set_ai_web_site` 中调用 `refresh_lx_status`。
   - 在 `refresh_lx_status` 中为 `LxEntry::AiWeb` 设置底边框状态行 `model_name = Some("DeepSeek")`，隐藏 `variant` 与 Token 占用。
   - 在 `on_stream_finished` 中识别 `ai-web-` 内存会话，结算消息终态后直接将 `request` 置为 `RequestState::Idle`（不写 SQLite）。
-  - 在 `SlashPanel::command_entries_for` 与 `apply_slash_command` 中按 `LxEntry::AiWeb` 裁剪斜杠命令（仅保留 `/new`，其余提示 `Only /new is available in AI Web`），并在 `new_session` 时入队 `Effect::ResetAiWebSession`。
+  - 在 `SlashPanel::command_entries_for` 与 `apply_slash_command` 中按 `LxEntry::AiWeb` 开放 `/new`（`/clear`）、`/resume`（`/session`，含云端列表加载、`Enter` 恢复历史消息、`Shift+Enter` 改名与 `Ctrl+D` 删除）、`/rename`（`/title`，同步更新云端会话标题与顶边框胶囊）与 `/rewind`（`/undo`，一键撤回最新一轮问答并回填输入框，下次发送走网页端原地编辑 `/api/v0/chat/edit_message` 分支）。
 
 ---
 

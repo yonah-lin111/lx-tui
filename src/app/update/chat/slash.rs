@@ -411,11 +411,13 @@ pub fn persist_default_model(state: &mut AppState, selection: &ModelSelection) -
 
 /// 命令采纳：`/model`、`/resume`、`/new` 的命令文本不被发送。
 pub fn apply_slash_command(state: &mut AppState, pane: PaneId, command: SlashCommand) -> bool {
-    // AI Web 只支持 `/new`：其余命令均为本地 Agent/DB 能力，给出统一提示。
-    if command != SlashCommand::New
-        && state
-            .pane_anywhere(pane)
-            .is_some_and(|target| target.lx.entry == crate::app::state::LxEntry::AiWeb)
+    // AI Web 开放 `/new`、`/resume`、`/rewind`、`/rename`：其余本地 Agent/DB 命令给出统一提示。
+    if !matches!(
+        command,
+        SlashCommand::New | SlashCommand::Resume | SlashCommand::Rewind | SlashCommand::Rename
+    ) && state
+        .pane_anywhere(pane)
+        .is_some_and(|target| target.lx.entry == crate::app::state::LxEntry::AiWeb)
     {
         if let Some(target) = state.pane_mut_anywhere(pane) {
             target.lx.slash = None;
@@ -456,31 +458,17 @@ pub fn apply_slash_command(state: &mut AppState, pane: PaneId, command: SlashCom
 /// 返回 `true` 表示草稿是 `/rename` 命令（无论成功改名还是因空参/无会话被拦截），
 /// 调用方 `try_send` 应立即返回，绝不将其作为普通消息发给模型。
 pub fn try_submit_rename_command(state: &mut AppState, pane: PaneId) -> bool {
-    let Some((input, session_id, entry)) = state.pane_anywhere(pane).and_then(|target| {
+    let Some((input, session_id)) = state.pane_anywhere(pane).and_then(|target| {
         if target.view != crate::app::state::PaneView::Lx || target.lx.shell_mode() {
             return None;
         }
-        Some((
-            target.lx.input.clone(),
-            target.lx.chat.session_id.clone(),
-            target.lx.entry,
-        ))
+        Some((target.lx.input.clone(), target.lx.chat.session_id.clone()))
     }) else {
         return false;
     };
     let Some(title) = crate::app::state::lx::slash::parse_rename_command(&input) else {
         return false;
     };
-    // AI Web 没有本地会话记录可改名。
-    if entry == crate::app::state::LxEntry::AiWeb {
-        show_lx_hint(
-            state,
-            pane,
-            InputHintLevel::Warning,
-            text::LX_AI_WEB_ONLY_NEW_CMD,
-        );
-        return true;
-    }
     if title.is_empty() {
         // 用户未输入参数直接回车：保持 `/rename ` 回显与 `[name]` 提示，弹 Toast 提醒。
         if let Some(target) = state.pane_mut_anywhere(pane)

@@ -672,12 +672,20 @@ impl SlashPanel {
             .collect()
     }
 
-    /// 按 lx 入口裁剪命令候选：AI Web 为纯网页对话，只保留 `/new`。
+    /// 按 lx 入口裁剪命令候选：AI Web 开放 `/new`、`/resume`、`/rewind`、`/rename`。
     pub fn command_entries_for(entry: super::LxEntry, query: &str) -> Vec<SlashEntry> {
         if entry == super::LxEntry::AiWeb {
             Self::commands_matching(query)
                 .into_iter()
-                .filter(|command| *command == SlashCommand::New)
+                .filter(|command| {
+                    matches!(
+                        *command,
+                        SlashCommand::New
+                            | SlashCommand::Resume
+                            | SlashCommand::Rewind
+                            | SlashCommand::Rename
+                    )
+                })
                 .map(SlashEntry::Command)
                 .collect()
         } else {

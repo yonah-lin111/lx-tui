@@ -10,18 +10,137 @@ use tokio::net::TcpListener;
 use tokio::process::Command;
 
 use super::*;
-use crate::app::state::AiWebSite;
+use crate::app::state::{AiWebSite, HistoryEntry};
 use crate::chat::ai_web::{
-    AiWebStreamEvent, DEEPSEEK_SCRIPT, parse_script_line, resolve_ego_browser_bin,
+    AiWebHistoryMessage, AiWebStreamEvent, DEEPSEEK_SCRIPT, parse_script_line,
+    resolve_ego_browser_bin,
 };
 use crate::chat::events::{PartDelta, PartKind};
 
-/// 该效应属于 AI Web 流（启动或重置网页会话）。
-pub fn is_ai_web_effect(effect: &Effect) -> bool {
-    matches!(
-        effect,
-        Effect::StartAiWebStream { .. } | Effect::ResetAiWebSession { .. }
-    )
+/// AI Web 后台任务回投主事件循环的事件。
+#[derive(Debug)]
+pub enum AiWebEvent {
+    /// 首轮或多轮对话后绑定云端真实会话 ID 与标题。
+    SessionBound {
+        pane: PaneId,
+        from_session_id: String,
+        session_id: String,
+        title: Option<String>,
+    },
+    /// `/resume` 列表加载完成。
+    SessionsListed {
+        pane: PaneId,
+        entries: Vec<HistoryEntry>,
+    },
+    /// `/resume` 选中某条云端会话并加载完整消息。
+    SessionLoaded {
+        pane: PaneId,
+        session_id: String,
+        title: Option<String>,
+        messages: Vec<AiWebHistoryMessage>,
+    },
+    /// 后台会话动作失败提示。
+    ActionFailed { pane: PaneId, message: String },
+}
+
+/// 处理 `AppEvent::AiWeb` 回投事件。
+pub fn handle_event(state: &mut AppState, event: AiWebEvent) -> bool {
+    match event {
+        AiWebEvent::SessionBound {
+            pane,
+            from_session_id,
+            session_id,
+            title,
+        } => crate::app::update::on_ai_web_session_bound(
+            state,
+            pane,
+            &from_session_id,
+            session_id,
+            title,
+        ),
+        AiWebEvent::SessionsListed { pane, entries } => {
+            crate::app::update::on_history_listed(state, pane, entries)
+        }
+        AiWebEvent::SessionLoaded {
+            pane,
+            session_id,
+            title,
+            messages,
+        } => crate::app::update::on_ai_web_session_loaded(state, pane, session_id, title, messages),
+        AiWebEvent::ActionFailed { pane, message } => {
+            crate::app::update::show_lx_toast(
+                state,
+                pane,
+                Toast::new(ToastKind::Danger, message, Some(pane), Instant::now()),
+            );
+            true
+        }
+    }
+}
+
+/// 该效应是否属于 AI Web（流启动、重置，或 AI Web 窗格下的会话列表/加载/改名/删除）。
+pub fn is_ai_web_effect(state: &AppState, effect: &Effect) -> bool {
+    match effect {
+        Effect::StartAiWebStream { .. } | Effect::ResetAiWebSession { .. } => true,
+        Effect::ListChatSessions { pane } => state
+            .pane_anywhere(*pane)
+            .is_some_and(|p| p.lx.entry == crate::app::state::LxEntry::AiWeb),
+        Effect::LoadChatSession { session_id, .. }
+        | Effect::RenameChatSession { session_id, .. }
+        | Effect::DeleteChatSession { session_id, .. } => is_ai_web_session(session_id),
+        _ => false,
+    }
+}
+
+/// 执行一条 AI Web 效应；返回是否产生了立即可见的状态变化。
+pub fn apply_effect(
+    state: &mut AppState,
+    streams: &mut ChatStreams,
+    sender: &mpsc::UnboundedSender<AppEvent>,
+    effect: Effect,
+) -> bool {
+    match effect {
+        Effect::StartAiWebStream {
+            key,
+            site,
+            prompt,
+            edit_user_index,
+        } => start_stream(state, streams, sender, key, site, prompt, edit_user_index),
+        Effect::ResetAiWebSession { site } => {
+            reset_session(site);
+            true
+        }
+        Effect::ListChatSessions { pane } => {
+            list_sessions(sender.clone(), pane);
+            true
+        }
+        Effect::LoadChatSession { pane, session_id } => {
+            load_session(sender.clone(), pane, session_id);
+            true
+        }
+        Effect::RenameChatSession {
+            session_id, title, ..
+        } => {
+            rename_session(session_id.clone(), title.clone());
+            let panes = state.all_pane_ids();
+            let mut changed = false;
+            for pane in panes {
+                changed |= crate::app::update::on_session_renamed(state, pane, &session_id, &title);
+            }
+            changed
+        }
+        Effect::DeleteChatSession { session_id, .. } => {
+            delete_session(session_id.clone());
+            let panes = state.all_pane_ids();
+            let mut changed = false;
+            for pane in panes {
+                changed |= crate::app::update::on_session_deleted(state, pane, &session_id);
+                changed |= crate::app::update::on_session_removed(state, pane, &session_id);
+            }
+            changed
+        }
+        _ => false,
+    }
 }
 
 /// 会话标识是否为 AI Web 的内存会话。
@@ -57,25 +176,182 @@ pub fn start_stream(
     key: RequestKey,
     site: AiWebSite,
     prompt: String,
+    edit_user_index: Option<usize>,
 ) -> bool {
     if active_assistant_id(state, &key).is_none() || streams.cancels.contains_key(&key) {
         return false;
     }
-    let first_turn = state
-        .pane_anywhere(key.pane)
-        .is_some_and(|pane| pane.lx.chat.messages.len() <= 2);
+    let first_turn = edit_user_index.is_none()
+        && state
+            .pane_anywhere(key.pane)
+            .is_some_and(|pane| pane.lx.chat.messages.len() <= 2);
     let (cancel_tx, mut cancel_rx) = watch::channel(false);
     streams.cancels.insert(key.clone(), cancel_tx);
     let sender = sender.clone();
     tokio::spawn(async move {
-        run_chat(sender, key, site, prompt, first_turn, &mut cancel_rx).await;
+        run_chat(
+            sender,
+            key,
+            site,
+            prompt,
+            first_turn,
+            edit_user_index,
+            &mut cancel_rx,
+        )
+        .await;
     });
     true
 }
 
 /// `/new`：让网页端开启新对话；纯后台执行，失败不影响本地已清空的会话。
 pub fn reset_session(_site: AiWebSite) {
-    spawn_action("new", None);
+    spawn_action(ScriptParams {
+        action: "new",
+        ..Default::default()
+    });
+}
+
+/// `/resume`：异步拉取网页端历史会话列表。
+fn list_sessions(sender: mpsc::UnboundedSender<AppEvent>, pane: PaneId) {
+    tokio::spawn(async move {
+        match run_query(ScriptParams {
+            action: "list_sessions",
+            ..Default::default()
+        })
+        .await
+        {
+            Ok(events) => {
+                for event in events {
+                    match event {
+                        AiWebStreamEvent::Sessions(items) => {
+                            let entries = items
+                                .into_iter()
+                                .map(|item| HistoryEntry {
+                                    session_id: format!(
+                                        "{}{}",
+                                        crate::app::update::AI_WEB_REMOTE_SESSION_PREFIX,
+                                        item.id
+                                    ),
+                                    title: item.title,
+                                    status: "completed".into(),
+                                    updated_at_ms: item.updated_at_ms,
+                                })
+                                .collect();
+                            let _ = sender.send(AppEvent::AiWeb(AiWebEvent::SessionsListed {
+                                pane,
+                                entries,
+                            }));
+                            return;
+                        }
+                        AiWebStreamEvent::LoginRequired { .. } => {
+                            let _ = sender.send(AppEvent::AiWeb(AiWebEvent::ActionFailed {
+                                pane,
+                                message: crate::ui::text::LX_AI_WEB_LOGIN_REQUIRED.into(),
+                            }));
+                            return;
+                        }
+                        AiWebStreamEvent::Error(message) => {
+                            let _ = sender
+                                .send(AppEvent::AiWeb(AiWebEvent::ActionFailed { pane, message }));
+                            return;
+                        }
+                        _ => {}
+                    }
+                }
+            }
+            Err(message) => {
+                let _ = sender.send(AppEvent::AiWeb(AiWebEvent::ActionFailed { pane, message }));
+            }
+        }
+    });
+}
+
+/// `/resume` 选中某条云端会话：切换网页标签并拉取完整历史消息。
+fn load_session(sender: mpsc::UnboundedSender<AppEvent>, pane: PaneId, session_id: String) {
+    let Some(remote_id) =
+        crate::app::update::ai_web_remote_session_id(&session_id).map(str::to_string)
+    else {
+        return;
+    };
+    tokio::spawn(async move {
+        match run_query(ScriptParams {
+            action: "load_session",
+            session_id: Some(&remote_id),
+            ..Default::default()
+        })
+        .await
+        {
+            Ok(events) => {
+                for event in events {
+                    match event {
+                        AiWebStreamEvent::SessionLoaded {
+                            id,
+                            title,
+                            messages,
+                        } => {
+                            let _ = sender.send(AppEvent::AiWeb(AiWebEvent::SessionLoaded {
+                                pane,
+                                session_id: format!(
+                                    "{}{id}",
+                                    crate::app::update::AI_WEB_REMOTE_SESSION_PREFIX
+                                ),
+                                title,
+                                messages,
+                            }));
+                            return;
+                        }
+                        AiWebStreamEvent::LoginRequired { .. } => {
+                            let _ = sender.send(AppEvent::AiWeb(AiWebEvent::ActionFailed {
+                                pane,
+                                message: crate::ui::text::LX_AI_WEB_LOGIN_REQUIRED.into(),
+                            }));
+                            return;
+                        }
+                        AiWebStreamEvent::Error(message) => {
+                            let _ = sender
+                                .send(AppEvent::AiWeb(AiWebEvent::ActionFailed { pane, message }));
+                            return;
+                        }
+                        _ => {}
+                    }
+                }
+            }
+            Err(message) => {
+                let _ = sender.send(AppEvent::AiWeb(AiWebEvent::ActionFailed { pane, message }));
+            }
+        }
+    });
+}
+
+/// `/rename`：同步重命名网页端会话标题。
+fn rename_session(session_id: String, title: String) {
+    let remote_id = crate::app::update::ai_web_remote_session_id(&session_id).map(str::to_string);
+    tokio::spawn(async move {
+        let _ = run_query(ScriptParams {
+            action: "rename_session",
+            session_id: remote_id.as_deref(),
+            title: Some(&title),
+            ..Default::default()
+        })
+        .await;
+    });
+}
+
+/// 删除云端会话。
+fn delete_session(session_id: String) {
+    let Some(remote_id) =
+        crate::app::update::ai_web_remote_session_id(&session_id).map(str::to_string)
+    else {
+        return;
+    };
+    tokio::spawn(async move {
+        let _ = run_query(ScriptParams {
+            action: "delete_session",
+            session_id: Some(&remote_id),
+            ..Default::default()
+        })
+        .await;
+    });
 }
 
 /// 一轮网页对话：拉起子进程、喂脚本、按行回投增量与终态。
@@ -85,6 +361,7 @@ async fn run_chat(
     site: AiWebSite,
     prompt: String,
     first_turn: bool,
+    edit_user_index: Option<usize>,
     cancel: &mut watch::Receiver<bool>,
 ) {
     tracing::debug!(?site, session = %key.session, "ai web stream started");
@@ -127,7 +404,14 @@ async fn run_chat(
         );
         return;
     };
-    let source = script_source("chat", Some(&prompt), first_turn, stream_url.as_deref());
+    let source = script_source(ScriptParams {
+        action: "chat",
+        prompt: Some(&prompt),
+        first_turn,
+        stream_url: stream_url.as_deref(),
+        edit_user_index,
+        ..Default::default()
+    });
     if stdin.write_all(source.as_bytes()).await.is_err() || stdin.shutdown().await.is_err() {
         if let Some(handle) = listener_task {
             handle.abort();
@@ -179,6 +463,7 @@ async fn run_chat(
 
     let mut received = false;
     let mut last_diag: Option<String> = None;
+    let mut bound_session: Option<(String, Option<String>)> = None;
     loop {
         tokio::select! {
             changed = cancel.changed() => {
@@ -186,7 +471,10 @@ async fn run_chat(
                     continue;
                 }
                 let _ = child.kill().await;
-                spawn_action("stop", None);
+                spawn_action(ScriptParams {
+                    action: "stop",
+                    ..Default::default()
+                });
                 finished(&sender, key, StopReason::Cancelled);
                 return;
             }
@@ -201,6 +489,9 @@ async fn run_chat(
                             received = true;
                             send_delta(&sender, &key, PartKind::Text, delta);
                         }
+                        Some(AiWebStreamEvent::Session { id, title }) => {
+                            bound_session = Some((id, title));
+                        }
                         Some(AiWebStreamEvent::LoginRequired { .. }) => {
                             finished(
                                 &sender,
@@ -214,9 +505,23 @@ async fn run_chat(
                             return;
                         }
                         Some(AiWebStreamEvent::Done) => {
+                            let pane = key.pane;
+                            let from_session = key.session.clone();
                             finished(&sender, key, StopReason::Complete);
+                            if let Some((id, title)) = bound_session {
+                                let _ = sender.send(AppEvent::AiWeb(AiWebEvent::SessionBound {
+                                    pane,
+                                    from_session_id: from_session,
+                                    session_id: format!(
+                                        "{}{id}",
+                                        crate::app::update::AI_WEB_REMOTE_SESSION_PREFIX
+                                    ),
+                                    title,
+                                }));
+                            }
                             return;
                         }
+                        Some(AiWebStreamEvent::Sessions(_) | AiWebStreamEvent::SessionLoaded { .. }) => {}
                         None => {
                             let trimmed = line.trim();
                             if !trimmed.is_empty() && !trimmed.starts_with("[ego-browser:") {
@@ -226,6 +531,8 @@ async fn run_chat(
                         }
                     },
                     None => {
+                        let pane = key.pane;
+                        let from_session = key.session.clone();
                         let reason = if received {
                             StopReason::Complete
                         } else {
@@ -235,6 +542,19 @@ async fn run_chat(
                             failed(msg)
                         };
                         finished(&sender, key, reason);
+                        if received
+                            && let Some((id, title)) = bound_session
+                        {
+                            let _ = sender.send(AppEvent::AiWeb(AiWebEvent::SessionBound {
+                                pane,
+                                from_session_id: from_session,
+                                session_id: format!(
+                                    "{}{id}",
+                                    crate::app::update::AI_WEB_REMOTE_SESSION_PREFIX
+                                ),
+                                title,
+                            }));
+                        }
                         return;
                     }
                 }
@@ -277,32 +597,72 @@ fn failed(code: &str) -> StopReason {
     }
 }
 
-/// 后台执行 `new` / `stop` 这类一次性脚本动作。
-fn spawn_action(action: &'static str, prompt: Option<String>) {
+#[derive(Default)]
+struct ScriptParams<'a> {
+    action: &'a str,
+    prompt: Option<&'a str>,
+    first_turn: bool,
+    stream_url: Option<&'a str>,
+    session_id: Option<&'a str>,
+    title: Option<&'a str>,
+    edit_user_index: Option<usize>,
+}
+
+/// 后台执行 `new` / `stop` 这类一次性无返回值脚本动作。
+fn spawn_action(params: ScriptParams<'static>) {
+    let source = script_source(params);
     tokio::spawn(async move {
-        let mut command = Command::new(resolve_ego_browser_bin());
-        command
+        let Ok(mut child) = Command::new(resolve_ego_browser_bin())
             .arg("nodejs")
-            .env("LX_AI_WEB_ACTION", action)
             .stdin(Stdio::piped())
             .stdout(Stdio::null())
             .stderr(Stdio::null())
-            .kill_on_drop(true);
-        if let Some(prompt) = prompt.as_deref() {
-            command.env("LX_AI_WEB_PROMPT", prompt);
-        }
-        let Ok(mut child) = command.spawn() else {
-            tracing::warn!(action, "ai web: failed to start ego-browser");
+            .kill_on_drop(true)
+            .spawn()
+        else {
             return;
         };
-        if let Some(mut stdin) = child.stdin.take() {
-            let source = script_source(action, prompt.as_deref(), false, None);
-            if stdin.write_all(source.as_bytes()).await.is_ok() {
-                let _ = stdin.shutdown().await;
-            }
+        if let Some(mut stdin) = child.stdin.take()
+            && stdin.write_all(source.as_bytes()).await.is_ok()
+        {
+            let _ = stdin.shutdown().await;
         }
         let _ = child.wait().await;
     });
+}
+
+/// 执行带返回协议行的脚本动作（`list_sessions` / `load_session` / `rename_session` / `delete_session`）。
+async fn run_query(params: ScriptParams<'_>) -> Result<Vec<AiWebStreamEvent>, String> {
+    let mut child = Command::new(resolve_ego_browser_bin())
+        .arg("nodejs")
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .kill_on_drop(true)
+        .spawn()
+        .map_err(|_| crate::ui::text::LX_AI_WEB_EGO_UNAVAILABLE.to_string())?;
+    let source = script_source(params);
+    if let Some(mut stdin) = child.stdin.take() {
+        stdin
+            .write_all(source.as_bytes())
+            .await
+            .map_err(|_| crate::ui::text::LX_AI_WEB_EGO_UNAVAILABLE.to_string())?;
+        let _ = stdin.shutdown().await;
+    }
+    let output = child
+        .wait_with_output()
+        .await
+        .map_err(|_| crate::ui::text::LX_AI_WEB_EGO_UNAVAILABLE.to_string())?;
+    let mut events = Vec::new();
+    for bytes in [&output.stdout, &output.stderr] {
+        let text = String::from_utf8_lossy(bytes);
+        for line in text.lines() {
+            if let Some(ev) = parse_script_line(line) {
+                events.push(ev);
+            }
+        }
+    }
+    Ok(events)
 }
 
 /// 启动本地回环 HTTP 接收器：绕过 `ego-browser nodejs` 对 stdio 的进程级缓冲，
@@ -325,7 +685,7 @@ async fn spawn_stream_listener(
                     };
                     if n == 0 {
                         break None;
-                    }
+                    };
                     buf.extend_from_slice(&chunk[..n]);
                     if let Some(pos) = buf.windows(4).position(|w| w == b"\r\n\r\n") {
                         break Some(pos + 4);
@@ -376,24 +736,32 @@ async fn spawn_stream_listener(
 ///
 /// `ego-browser` 会剥离调用方的大部分环境变量，所以把动作与提示词显式写进脚本
 /// 前置赋值，脚本本身仍按 `LX_AI_WEB_*` 的约定读取。
-fn script_source(
-    action: &str,
-    prompt: Option<&str>,
-    first_turn: bool,
-    stream_url: Option<&str>,
-) -> String {
+fn script_source(params: ScriptParams<'_>) -> String {
     let mut source = String::from("process.env.LX_AI_WEB_ACTION = ");
-    source.push_str(&json_string(action));
+    source.push_str(&json_string(params.action));
     source.push_str(";\n");
-    if first_turn {
+    if params.first_turn {
         source.push_str("process.env.LX_AI_WEB_FIRST_TURN = \"1\";\n");
     }
-    if let Some(url) = stream_url {
+    if let Some(url) = params.stream_url {
         source.push_str("process.env.LX_AI_WEB_STREAM_URL = ");
         source.push_str(&json_string(url));
         source.push_str(";\n");
     }
-    if let Some(prompt) = prompt {
+    if let Some(session_id) = params.session_id {
+        source.push_str("process.env.LX_AI_WEB_SESSION_ID = ");
+        source.push_str(&json_string(session_id));
+        source.push_str(";\n");
+    }
+    if let Some(title) = params.title {
+        source.push_str("process.env.LX_AI_WEB_TITLE = ");
+        source.push_str(&json_string(title));
+        source.push_str(";\n");
+    }
+    if let Some(idx) = params.edit_user_index {
+        source.push_str(&format!("process.env.LX_AI_WEB_EDIT_INDEX = \"{idx}\";\n"));
+    }
+    if let Some(prompt) = params.prompt {
         source.push_str("process.env.LX_AI_WEB_PROMPT = ");
         source.push_str(&json_string(prompt));
         source.push_str(";\n");

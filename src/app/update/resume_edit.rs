@@ -27,8 +27,13 @@ pub fn open_resume_session_edit(state: &mut AppState, pane: PaneId) -> bool {
     };
     let session_id = entry.session_id.clone();
     let title = entry.title.clone();
-    let Some(workspace) = state.chat_session_key_for_pane(pane) else {
-        return false;
+    let workspace = if crate::app::update::is_ai_web_session(&session_id) {
+        state.chat_session_key_for_pane(pane).unwrap_or_default()
+    } else {
+        let Some(workspace) = state.chat_session_key_for_pane(pane) else {
+            return false;
+        };
+        workspace
     };
     state.overlay = Some(Overlay::ResumeSessionEdit(ResumeSessionEdit {
         pane,

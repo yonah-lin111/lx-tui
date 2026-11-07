@@ -163,7 +163,7 @@ impl Persistence {
             let effects = std::mem::take(&mut state.effects);
             let mut deferred: Vec<Effect> = Vec::new();
             for effect in effects {
-                if is_network_effect(&effect) {
+                if is_network_effect(state, &effect) {
                     deferred.push(effect);
                     continue;
                 }
@@ -873,7 +873,24 @@ impl Persistence {
 }
 
 /// 是否为聊天网络/撤销效应（由事件层执行，非同步 DB 写）。
-fn is_network_effect(effect: &Effect) -> bool {
+fn is_network_effect(state: &AppState, effect: &Effect) -> bool {
+    match effect {
+        Effect::ListChatSessions { pane }
+            if state
+                .pane_anywhere(*pane)
+                .is_some_and(|p| p.lx.entry == crate::app::state::LxEntry::AiWeb) =>
+        {
+            return true;
+        }
+        Effect::LoadChatSession { session_id, .. }
+        | Effect::RenameChatSession { session_id, .. }
+        | Effect::DeleteChatSession { session_id, .. }
+            if crate::app::update::is_ai_web_session(session_id) =>
+        {
+            return true;
+        }
+        _ => {}
+    }
     matches!(
         effect,
         Effect::StartChatStream { .. }

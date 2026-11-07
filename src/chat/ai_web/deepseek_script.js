@@ -12,6 +12,11 @@ const ACTION = process.env.LX_AI_WEB_ACTION || 'chat';
 const PROMPT = process.env.LX_AI_WEB_PROMPT || '';
 const FIRST_TURN = process.env.LX_AI_WEB_FIRST_TURN === '1';
 const STREAM_URL = process.env.LX_AI_WEB_STREAM_URL || '';
+const SESSION_ID = process.env.LX_AI_WEB_SESSION_ID || '';
+const TITLE = process.env.LX_AI_WEB_TITLE || '';
+const EDIT_INDEX = process.env.LX_AI_WEB_EDIT_INDEX !== undefined
+  ? Number.parseInt(process.env.LX_AI_WEB_EDIT_INDEX, 10)
+  : -1;
 
 async function emitMany(objs) {
   if (!objs || objs.length === 0) return;
@@ -86,12 +91,178 @@ async function main() {
     return;
   }
 
+  if (ACTION === 'list_sessions') {
+    const items = await js(String.raw`
+      (async () => {
+        const tokenObj = JSON.parse(localStorage.getItem('userToken') || '{}');
+        const token = tokenObj.value || '';
+        const resp = await fetch('/api/v0/chat_session/fetch_page?lte_cursor.pinned=false', {
+          headers: { authorization: 'Bearer ' + token },
+        }).then((r) => r.json());
+        const sessions = (resp && resp.data && resp.data.biz_data && resp.data.biz_data.chat_sessions) || [];
+        return sessions.map((s) => ({
+          id: String(s.id || ''),
+          title: String(s.title || 'New chat'),
+          updated_at_ms: Math.round(Number(s.updated_at || 0) * 1000),
+        })).filter((s) => s.id);
+      })()
+    `);
+    await emit({ event: 'sessions', items: Array.isArray(items) ? items : [] });
+    await emit({ event: 'done' });
+    return;
+  }
+
+  if (ACTION === 'load_session') {
+    if (!SESSION_ID) {
+      await emit({ event: 'error', message: 'missing session id' });
+      return;
+    }
+    await openOrReuseTab(HOME + '/a/chat/s/' + SESSION_ID, { wait: true, timeout: 25 });
+    const loaded = await js(`
+      (async () => {
+        const sessionId = ${JSON.stringify(SESSION_ID)};
+        const tokenObj = JSON.parse(localStorage.getItem('userToken') || '{}');
+        const token = tokenObj.value || '';
+        const headers = { authorization: 'Bearer ' + token };
+        const [historyResp, pageResp] = await Promise.all([
+          fetch('/api/v0/chat/history_messages?chat_session_id=' + encodeURIComponent(sessionId), { headers })
+            .then((r) => r.json())
+            .catch(() => null),
+          fetch('/api/v0/chat_session/fetch_page?lte_cursor.pinned=false', { headers })
+            .then((r) => r.json())
+            .catch(() => null),
+        ]);
+        const rawMessages = (historyResp && historyResp.data && historyResp.data.biz_data && historyResp.data.biz_data.chat_messages) || [];
+        const sessions = (pageResp && pageResp.data && pageResp.data.biz_data && pageResp.data.biz_data.chat_sessions) || [];
+        const foundSession = sessions.find((s) => String(s.id || '') === sessionId);
+        const title = (foundSession && foundSession.title) || '';
+        const byId = new Map();
+        for (const msg of rawMessages) {
+          if (msg && msg.message_id != null) {
+            byId.set(msg.message_id, msg);
+          }
+        }
+        let activeChain = rawMessages;
+        if (rawMessages.length > 0 && rawMessages[rawMessages.length - 1].message_id != null) {
+          const chain = [];
+          let cur = rawMessages[rawMessages.length - 1];
+          const visited = new Set();
+          while (cur && !visited.has(cur.message_id)) {
+            visited.add(cur.message_id);
+            chain.push(cur);
+            cur = cur.parent_id != null ? byId.get(cur.parent_id) : null;
+          }
+          chain.reverse();
+          if (chain.length > 0) activeChain = chain;
+        }
+        const cleanText = (text) => String(text || '').replace(/\\s*\\[(?:citation|reference):\\d+\\]/g, '');
+        const messages = activeChain.map((msg) => {
+          const role = String(msg.role || '').toUpperCase() === 'USER' ? 'user' : 'assistant';
+          const fragments = Array.isArray(msg.fragments) ? msg.fragments : [];
+          let thinking = '';
+          let thinkingMs = null;
+          let text = '';
+          for (const frag of fragments) {
+            if (!frag || typeof frag !== 'object') continue;
+            const ftype = String(frag.type || '').toUpperCase();
+            if (role === 'user' && (ftype === 'REQUEST' || !ftype)) {
+              text += String(frag.content || '');
+            } else if (role === 'assistant') {
+              if (ftype === 'THINK') {
+                thinking += cleanText(frag.content);
+                if (typeof frag.elapsed_secs === 'number' && Number.isFinite(frag.elapsed_secs)) {
+                  thinkingMs = Math.max(1, Math.round(frag.elapsed_secs * 1000));
+                }
+              } else if (ftype === 'RESPONSE') {
+                text += cleanText(frag.content);
+              }
+            }
+          }
+          return {
+            role,
+            thinking,
+            thinking_ms: thinkingMs,
+            text,
+            created_at_ms: Math.round(Number(msg.inserted_at || 0) * 1000),
+          };
+        });
+        return { id: sessionId, title, messages };
+      })()
+    `);
+    if (!loaded || !loaded.id) {
+      await emit({ event: 'error', message: 'failed to load DeepSeek session' });
+      return;
+    }
+    await emit({
+      event: 'session_loaded',
+      id: loaded.id,
+      title: loaded.title || null,
+      messages: Array.isArray(loaded.messages) ? loaded.messages : [],
+    });
+    await emit({ event: 'done' });
+    return;
+  }
+
+  if (ACTION === 'rename_session') {
+    if (TITLE) {
+      await js(`
+        (async () => {
+          const match = location.pathname.match(/\\/s\\/([a-zA-Z0-9-]+)/);
+          const sessionId = ${JSON.stringify(SESSION_ID)} || (match ? match[1] : '');
+          if (!sessionId) return false;
+          const tokenObj = JSON.parse(localStorage.getItem('userToken') || '{}');
+          const token = tokenObj.value || '';
+          await fetch('/api/v0/chat_session/update_title', {
+            method: 'POST',
+            headers: {
+              authorization: 'Bearer ' + token,
+              'content-type': 'application/json',
+            },
+            body: JSON.stringify({
+              chat_session_id: sessionId,
+              title: ${JSON.stringify(TITLE)},
+            }),
+          });
+          return true;
+        })()
+      `);
+    }
+    await emit({ event: 'done' });
+    return;
+  }
+
+  if (ACTION === 'delete_session') {
+    if (SESSION_ID) {
+      await js(`
+        (async () => {
+          const sessionId = ${JSON.stringify(SESSION_ID)};
+          const tokenObj = JSON.parse(localStorage.getItem('userToken') || '{}');
+          const token = tokenObj.value || '';
+          await fetch('/api/v0/chat_session/delete', {
+            method: 'POST',
+            headers: {
+              authorization: 'Bearer ' + token,
+              'content-type': 'application/json',
+            },
+            body: JSON.stringify({ chat_session_ids: [sessionId] }),
+          });
+          return true;
+        })()
+      `);
+      if (currentUrl.includes(SESSION_ID)) {
+        await openOrReuseTab(HOME, { wait: true, timeout: 20 });
+      }
+    }
+    await emit({ event: 'done' });
+    return;
+  }
+
   if (ACTION !== 'chat') {
     await emit({ event: 'error', message: 'unknown AI Web action: ' + ACTION });
     return;
   }
 
-  if (FIRST_TURN) {
+  if (FIRST_TURN && EDIT_INDEX < 0) {
     const clickedNew = await js(String.raw`
       (() => {
         if (location.pathname === '/' && document.querySelectorAll('.ds-message').length === 0) {
@@ -518,8 +689,13 @@ async function main() {
         },
       };
       window.__lxDeepSeekStream = stream;
-      if (!window.__lxXhrWrapped) {
-        window.__lxXhrWrapped = true;
+      const isStreamUrl = (u) => typeof u === 'string' && (
+        u.includes('/api/v0/chat/completion')
+        || u.includes('/api/v0/chat/edit_message')
+        || u.includes('/api/v0/chat/regenerate')
+      );
+      if (!window.__lxXhrWrappedV2) {
+        window.__lxXhrWrappedV2 = true;
         const origOpen = XMLHttpRequest.prototype.open;
         const origSend = XMLHttpRequest.prototype.send;
         XMLHttpRequest.prototype.open = function(method, url) {
@@ -527,9 +703,9 @@ async function main() {
           return origOpen.apply(this, arguments);
         };
         XMLHttpRequest.prototype.send = function() {
-          if (this.__lxUrl && this.__lxUrl.includes('/api/v0/chat/completion')) {
+          if (isStreamUrl(this.__lxUrl)) {
             const current = window.__lxDeepSeekStream;
-            if (current) {
+            if (current && !current.sseActive) {
               try {
                 current.attachXhr(this);
               } catch (e) {}
@@ -538,16 +714,16 @@ async function main() {
           return origSend.apply(this, arguments);
         };
       }
-      if (!window.__lxFetchWrapped) {
-        window.__lxFetchWrapped = true;
+      if (!window.__lxFetchWrappedV2) {
+        window.__lxFetchWrappedV2 = true;
         const originalFetch = window.fetch.bind(window);
         window.fetch = function(input, init) {
           const url = typeof input === 'string' ? input : (input && input.url) || '';
           const result = originalFetch(input, init);
-          if (url.includes('/api/v0/chat/completion')) {
+          if (isStreamUrl(url)) {
             result.then((response) => {
               const current = window.__lxDeepSeekStream;
-              if (!current) return;
+              if (!current || current.sseActive) return;
               try {
                 current.attach(response.clone());
               } catch (error) {
@@ -562,59 +738,112 @@ async function main() {
     })()
   `);
 
-  const filled = await js(`
-    (() => {
-      const textarea = document.querySelector('textarea[name="search"]')
-        || document.querySelector('textarea');
-      if (!textarea) return false;
-      textarea.focus();
-      const setter = Object.getOwnPropertyDescriptor(
-        HTMLTextAreaElement.prototype,
-        'value',
-      ).set;
-      setter.call(textarea, ${JSON.stringify(PROMPT)});
-      textarea.dispatchEvent(new Event('input', { bubbles: true }));
-      return true;
-    })()
-  `);
-  if (!filled) throw new Error('DeepSeek composer not found');
+  let submittedViaEdit = false;
+  if (EDIT_INDEX >= 0) {
+    submittedViaEdit = await js(`
+      (async () => {
+        const items = Array.from(document.querySelectorAll('[data-virtual-list-item-key]'));
+        const userItems = items.filter((el) => !el.querySelector('.ds-markdown, .ds-think-content'));
+        const target = userItems[${EDIT_INDEX}] || userItems[userItems.length - 1];
+        if (!target) return false;
+        const btns = Array.from(target.querySelectorAll('.ds-button, button, [role="button"]'));
+        const editBtn = btns[1] || btns[btns.length - 1];
+        if (!editBtn) return false;
+        const propKey = Object.keys(editBtn).find((k) => k.startsWith('__reactProps'));
+        if (propKey && editBtn[propKey] && typeof editBtn[propKey].onClick === 'function') {
+          editBtn[propKey].onClick({ stopPropagation() {}, preventDefault() {} });
+        } else {
+          editBtn.click();
+        }
+        await new Promise((r) => setTimeout(r, 80));
+        const editArea = document.querySelector('textarea[name="user query"]')
+          || target.querySelector('textarea');
+        if (!editArea) return false;
+        editArea.focus();
+        const descriptor = Object.getOwnPropertyDescriptor(
+          window.HTMLTextAreaElement.prototype,
+          'value',
+        );
+        if (descriptor && descriptor.set) {
+          descriptor.set.call(editArea, ${JSON.stringify(PROMPT)});
+        } else {
+          editArea.value = ${JSON.stringify(PROMPT)};
+        }
+        editArea.dispatchEvent(new Event('input', { bubbles: true }));
+        editArea.dispatchEvent(new Event('change', { bubbles: true }));
+        await new Promise((r) => setTimeout(r, 40));
+        const sendBtn = Array.from(target.querySelectorAll('.ds-button, button, [role="button"]'))
+          .find((b) => {
+            const label = (b.innerText || '').trim();
+            return label === '发送' || label === 'Send';
+          });
+        if (!sendBtn) return false;
+        const sendKey = Object.keys(sendBtn).find((k) => k.startsWith('__reactProps'));
+        if (sendKey && sendBtn[sendKey] && typeof sendBtn[sendKey].onClick === 'function') {
+          sendBtn[sendKey].onClick({ stopPropagation() {}, preventDefault() {} });
+        } else {
+          sendBtn.click();
+        }
+        return true;
+      })()
+    `).catch(() => false);
+  }
 
-  await js(`
-    (() => {
-      const textarea = document.querySelector('textarea[name="search"]')
-        || document.querySelector('textarea');
-      if (!textarea) return false;
-      const keyboard = {
-        key: 'Enter',
-        code: 'Enter',
-        keyCode: 13,
-        which: 13,
-        bubbles: true,
-        cancelable: true,
-      };
-      textarea.dispatchEvent(new KeyboardEvent('keydown', keyboard));
-      textarea.dispatchEvent(new KeyboardEvent('keyup', keyboard));
-      return true;
-    })()
-  `);
-  await new Promise((resolve) => setTimeout(resolve, 80));
-
-  const cleared = await js(`
-    (() => {
-      const textarea = document.querySelector('textarea[name="search"]')
-        || document.querySelector('textarea');
-      return !textarea || !textarea.value.trim();
-    })()
-  `);
-  if (!cleared) {
-    await js(`
+  if (!submittedViaEdit) {
+    const filled = await js(`
       (() => {
-        const button = document.querySelector('.ds-button--primary:not(.ds-button--disabled)');
-        if (!button) return false;
-        button.click();
+        const textarea = document.querySelector('textarea[name="search"]')
+          || document.querySelector('textarea');
+        if (!textarea) return false;
+        textarea.focus();
+        const setter = Object.getOwnPropertyDescriptor(
+          HTMLTextAreaElement.prototype,
+          'value',
+        ).set;
+        setter.call(textarea, ${JSON.stringify(PROMPT)});
+        textarea.dispatchEvent(new Event('input', { bubbles: true }));
         return true;
       })()
     `);
+    if (!filled) throw new Error('DeepSeek composer not found');
+
+    await js(`
+      (() => {
+        const textarea = document.querySelector('textarea[name="search"]')
+          || document.querySelector('textarea');
+        if (!textarea) return false;
+        const keyboard = {
+          key: 'Enter',
+          code: 'Enter',
+          keyCode: 13,
+          which: 13,
+          bubbles: true,
+          cancelable: true,
+        };
+        textarea.dispatchEvent(new KeyboardEvent('keydown', keyboard));
+        textarea.dispatchEvent(new KeyboardEvent('keyup', keyboard));
+        return true;
+      })()
+    `);
+    await new Promise((resolve) => setTimeout(resolve, 80));
+
+    const cleared = await js(`
+      (() => {
+        const textarea = document.querySelector('textarea[name="search"]')
+          || document.querySelector('textarea');
+        return !textarea || !textarea.value.trim();
+      })()
+    `);
+    if (!cleared) {
+      await js(`
+        (() => {
+          const button = document.querySelector('.ds-button--primary:not(.ds-button--disabled)');
+          if (!button) return false;
+          button.click();
+          return true;
+        })()
+      `);
+    }
   }
 
   const deadline = Date.now() + 300000;
@@ -637,6 +866,23 @@ async function main() {
       );
     }
     if (snapshot.done) {
+      const sessionMeta = await js(String.raw`
+        (() => {
+          const match = location.pathname.match(/\/s\/([a-zA-Z0-9-]+)/);
+          const id = match ? match[1] : '';
+          if (!id) return null;
+          const link = document.querySelector('a[href*="' + id + '"]');
+          const title = link ? (link.innerText || '').trim() : '';
+          return { id, title };
+        })()
+      `).catch(() => null);
+      if (sessionMeta && sessionMeta.id) {
+        await emit({
+          event: 'session',
+          id: sessionMeta.id,
+          title: sessionMeta.title || null,
+        });
+      }
       await emit({ event: 'done' });
       return;
     }

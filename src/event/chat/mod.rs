@@ -303,7 +303,7 @@ pub fn pump_chat_streams(
         .effects
         .iter()
         .filter(|effect| {
-            ai_web::is_ai_web_effect(effect)
+            ai_web::is_ai_web_effect(state, effect)
                 || matches!(
                     effect,
                     Effect::StartChatStream { .. }
@@ -317,26 +317,23 @@ pub fn pump_chat_streams(
         // 没有网络效应要取，但运行实例回收本身可能就是本帧唯一的变化。
         return changed;
     }
-    state.effects.retain(|effect| {
-        !ai_web::is_ai_web_effect(effect)
-            && !matches!(
-                effect,
-                Effect::StartChatStream { .. }
-                    | Effect::CancelChatStream { .. }
-                    | Effect::AnswerAsk { .. }
-            )
-    });
+    let taken: Vec<Effect> = std::mem::take(&mut state.effects);
+    state.effects = taken
+        .into_iter()
+        .filter(|effect| {
+            !ai_web::is_ai_web_effect(state, effect)
+                && !matches!(
+                    effect,
+                    Effect::StartChatStream { .. }
+                        | Effect::CancelChatStream { .. }
+                        | Effect::AnswerAsk { .. }
+                )
+        })
+        .collect();
     for effect in effects {
         match effect {
             Effect::StartChatStream { key, assistant_id } => {
                 changed |= start_stream(state, streams, sender, persistence, key, assistant_id);
-            }
-            Effect::StartAiWebStream { key, site, prompt } => {
-                changed |= ai_web::start_stream(state, streams, sender, key, site, prompt);
-            }
-            Effect::ResetAiWebSession { site } => {
-                ai_web::reset_session(site);
-                changed = true;
             }
             Effect::CancelChatStream { key } => {
                 // loop 在下一个检查点停止未开始的工具与后续采样。
@@ -353,7 +350,9 @@ pub fn pump_chat_streams(
             } => {
                 changed |= ask::answer(state, streams, &key, &call_id, answers);
             }
-            _ => {}
+            other => {
+                changed |= ai_web::apply_effect(state, streams, sender, other);
+            }
         }
     }
     changed

@@ -15,9 +15,19 @@ use crate::ui::text;
 /// AI Web 内存会话的 ID 前缀（不写库，仅供流事件归属判断）。
 pub const AI_WEB_SESSION_PREFIX: &str = "ai-web-";
 
+/// 映射自云端真实会话的 ID 前缀（仍以 `ai-web-` 开头）。
+pub const AI_WEB_REMOTE_SESSION_PREFIX: &str = "ai-web-ds-";
+
 /// 会话 ID 是否属于 AI Web 内存会话。
 pub fn is_ai_web_session(session_id: &str) -> bool {
     session_id.starts_with(AI_WEB_SESSION_PREFIX)
+}
+
+/// 提取云端真实会话 ID（若已关联云端会话）。
+pub fn ai_web_remote_session_id(session_id: &str) -> Option<&str> {
+    session_id
+        .strip_prefix(AI_WEB_REMOTE_SESSION_PREFIX)
+        .filter(|id| !id.is_empty())
 }
 
 /// 状态行展示站点名与流状态，隐藏 API 供应商与上下文占用。
@@ -32,7 +42,8 @@ pub fn apply_ai_web_status(lx: &mut Lx) {
 
 /// AI Web 发送：直接构造内存态 user + streaming assistant 消息并入队网页流。
 ///
-/// 只接受单行 `/new`（含别名 `/clear`）；其它斜杠命令按不支持提示，未知命令按未知提示。
+/// 支持单行 `/new`（`/clear`）、`/resume`（`/session`）、`/rewind`（`/undo`）；
+/// `/rename`（`/title`）已在上游 `try_submit_rename_command` 处理。
 pub fn try_send_ai_web(
     state: &mut AppState,
     pane: PaneId,
@@ -48,7 +59,18 @@ pub fn try_send_ai_web(
         let name = trimmed.trim_start_matches('/');
         if !name.is_empty() && !name.contains(char::is_whitespace) && !name.contains('/') {
             if name.eq_ignore_ascii_case("new") || name.eq_ignore_ascii_case("clear") {
+                super::slash::clear_lx_input(state, pane);
                 super::session::new_session(state, pane);
+                return true;
+            }
+            if name.eq_ignore_ascii_case("resume") || name.eq_ignore_ascii_case("session") {
+                super::slash::clear_lx_input(state, pane);
+                super::slash::open_history(state, pane);
+                return true;
+            }
+            if name.eq_ignore_ascii_case("rewind") || name.eq_ignore_ascii_case("undo") {
+                super::slash::clear_lx_input(state, pane);
+                rewind_ai_web(state, pane);
                 return true;
             }
             if !SlashPanel::commands_matching(&format!("/{name}")).is_empty() {
@@ -74,6 +96,7 @@ pub fn try_send_ai_web(
         return false;
     };
     let site = target.lx.ai_web_site;
+    let edit_user_index = target.lx.ai_web_edit_user_index.take();
     target.lx.clear();
     target.lx.clear_rewind();
     target.lx.chat.generation_counter = generation;
@@ -164,7 +187,192 @@ pub fn try_send_ai_web(
         key,
         site,
         prompt: draft,
+        edit_user_index,
     });
+    super::refresh_lx_status(state, pane);
+    true
+}
+
+/// AI Web `/rewind`（`/undo`）：一键撤回最新一轮问答并将用户原文回填输入框，
+/// 标记下一轮发送在网页端原地编辑该条用户消息以对齐云端分支。
+pub fn rewind_ai_web(state: &mut AppState, pane: PaneId) -> bool {
+    let Some(target) = state.pane_anywhere(pane) else {
+        return false;
+    };
+    if target.lx.chat.request.is_busy() {
+        super::session::show_lx_hint(state, pane, InputHintLevel::Warning, text::LX_REWIND_FAILED);
+        return true;
+    }
+    let Some(last_user_idx) = target
+        .lx
+        .chat
+        .messages
+        .iter()
+        .rposition(|message| message.role == "user" && !message.is_user_shell())
+    else {
+        super::session::show_lx_hint(state, pane, InputHintLevel::Warning, text::LX_REWIND_FAILED);
+        return true;
+    };
+    let user_text = target.lx.chat.messages[last_user_idx].text();
+    let Some(target) = state.pane_mut_anywhere(pane) else {
+        return false;
+    };
+    target.lx.chat.messages.truncate(last_user_idx);
+    let remaining_users = target
+        .lx
+        .chat
+        .messages
+        .iter()
+        .filter(|message| message.role == "user" && !message.is_user_shell())
+        .count();
+    target.lx.ai_web_edit_user_index = Some(remaining_users);
+    target.lx.clear_rewind();
+    target.lx.slash = None;
+    target.lx.replace_input(&user_text);
+    target.lx.chat.follow_bottom = true;
+    super::refresh_lx_status(state, pane);
+    true
+}
+
+/// 网页端首轮生成后绑定云端真实会话 ID 与自动标题。
+pub fn on_ai_web_session_bound(
+    state: &mut AppState,
+    pane: PaneId,
+    from_session_id: &str,
+    session_id: String,
+    title: Option<String>,
+) -> bool {
+    let Some(target) = state.pane_mut_anywhere(pane) else {
+        return false;
+    };
+    let current = target.lx.chat.session_id.as_deref();
+    if current != Some(from_session_id) && current != Some(session_id.as_str()) {
+        return false;
+    }
+    let mut changed = target.lx.chat.session_id.as_deref() != Some(session_id.as_str());
+    target.lx.chat.session_id = Some(session_id);
+    if target.lx.chat.session_title.is_none()
+        && let Some(title) = title
+    {
+        changed |= target.lx.chat.set_session_title(Some(title));
+    }
+    changed
+}
+
+/// `/resume` 选中云端会话后重建窗格消息视图。
+pub fn on_ai_web_session_loaded(
+    state: &mut AppState,
+    pane: PaneId,
+    session_id: String,
+    title: Option<String>,
+    messages: Vec<crate::chat::ai_web::AiWebHistoryMessage>,
+) -> bool {
+    let Some(target) = state.pane_mut_anywhere(pane) else {
+        return false;
+    };
+    let site_label = text::ai_web_site_label(target.lx.ai_web_site).to_string();
+    target.lx.chat.reset_session_view();
+    target.lx.clear_agents();
+    target.lx.compact.reset();
+    target.lx.model_switch.reset();
+    target.lx.clear_rewind();
+    target.lx.ai_web_edit_user_index = None;
+    target.lx.chat.session_id = Some(session_id.clone());
+    target.lx.chat.set_session_title(title);
+
+    let mut views = Vec::with_capacity(messages.len());
+    let mut turn_index: i64 = 0;
+    for (idx, item) in messages.into_iter().enumerate() {
+        let sequence = i64::try_from(idx + 1).unwrap_or(1);
+        let msg_id = format!("{session_id}-m-{}", idx + 1);
+        if item.role == "user" {
+            if idx > 0 {
+                turn_index = turn_index.saturating_add(1);
+            }
+            views.push(ChatMessageView {
+                sequence,
+                id: msg_id.clone(),
+                kind: "chat".into(),
+                role: "user".into(),
+                status: "complete".into(),
+                turn_index,
+                shell: None,
+                steps: vec![AssistantStepView::Part {
+                    position: 0,
+                    part: ChatPartView {
+                        kind: PartKind::Text,
+                        content: item.text,
+                        provider_metadata_json: None,
+                        started_at_ms: None,
+                        ended_at_ms: None,
+                        completed_at_ms: None,
+                    },
+                }],
+                model_label: None,
+                error_code: None,
+                input_tokens: None,
+                output_tokens: None,
+                cache_read_tokens: None,
+                duration_ms: None,
+                reports: Vec::new(),
+                attachments: Vec::new(),
+            });
+        } else {
+            let mut steps = Vec::new();
+            let completed_ms = item.created_at_ms.max(1);
+            if !item.thinking.is_empty() {
+                steps.push(AssistantStepView::Part {
+                    position: 0,
+                    part: ChatPartView {
+                        kind: PartKind::Reasoning,
+                        content: item.thinking,
+                        provider_metadata_json: None,
+                        started_at_ms: item.thinking_ms.map(|_| 0),
+                        ended_at_ms: item.thinking_ms,
+                        completed_at_ms: Some(completed_ms),
+                    },
+                });
+            }
+            if !item.text.is_empty() || steps.is_empty() {
+                let position = i64::try_from(steps.len()).unwrap_or(0);
+                steps.push(AssistantStepView::Part {
+                    position,
+                    part: ChatPartView {
+                        kind: PartKind::Text,
+                        content: item.text,
+                        provider_metadata_json: None,
+                        started_at_ms: None,
+                        ended_at_ms: None,
+                        completed_at_ms: Some(completed_ms),
+                    },
+                });
+            }
+            views.push(ChatMessageView {
+                sequence,
+                id: msg_id.clone(),
+                kind: "chat".into(),
+                role: "assistant".into(),
+                status: "complete".into(),
+                turn_index,
+                shell: None,
+                steps,
+                model_label: Some(site_label.clone()),
+                error_code: None,
+                input_tokens: None,
+                output_tokens: None,
+                cache_read_tokens: None,
+                duration_ms: None,
+                reports: Vec::new(),
+                attachments: Vec::new(),
+            });
+        }
+        if item.created_at_ms > 0 {
+            target.lx.chat.set_message_time(&msg_id, item.created_at_ms);
+        }
+    }
+    target.lx.chat.messages = views;
+    target.lx.chat.follow_bottom = true;
+    crate::app::update::clear_lx_selection_for(state, pane);
     super::refresh_lx_status(state, pane);
     true
 }
@@ -325,5 +533,83 @@ mod tests {
         assert_eq!(target.lx.chat.messages[1].text(), "reply");
         assert_eq!(target.lx.chat.messages[2].text(), "最近有什么新闻");
         assert_eq!(target.lx.chat.messages[3].text(), "second reply");
+    }
+
+    #[test]
+    fn rewind_pops_latest_turn_restores_input_and_marks_edit_index() {
+        let (mut state, pane) = ai_web_state();
+        draft(&mut state, pane, "第一问");
+        assert!(super::super::try_send(&mut state, pane));
+        finish(&mut state, pane);
+
+        draft(&mut state, pane, "第二问");
+        assert!(super::super::try_send(&mut state, pane));
+        finish(&mut state, pane);
+        state.effects.clear();
+
+        draft(&mut state, pane, "/rewind");
+        assert!(super::super::try_send(&mut state, pane));
+        let target = state.pane_anywhere(pane).expect("pane");
+        assert_eq!(target.lx.chat.messages.len(), 2);
+        assert_eq!(target.lx.input, "第二问");
+        assert_eq!(target.lx.ai_web_edit_user_index, Some(1));
+
+        draft(&mut state, pane, "修改后的第二问");
+        assert!(super::super::try_send(&mut state, pane));
+        assert!(state.effects.iter().any(|effect| matches!(
+            effect,
+            Effect::StartAiWebStream {
+                prompt,
+                edit_user_index: Some(1),
+                ..
+            } if prompt == "修改后的第二问"
+        )));
+    }
+
+    #[test]
+    fn rename_and_session_load_work_in_ai_web() {
+        let (mut state, pane) = ai_web_state();
+        on_ai_web_session_loaded(
+            &mut state,
+            pane,
+            "ai-web-ds-uuid-1".into(),
+            Some("Old Title".into()),
+            vec![
+                crate::chat::ai_web::AiWebHistoryMessage {
+                    role: "user".into(),
+                    thinking: String::new(),
+                    thinking_ms: None,
+                    text: "hello".into(),
+                    created_at_ms: 1000,
+                },
+                crate::chat::ai_web::AiWebHistoryMessage {
+                    role: "assistant".into(),
+                    thinking: "let me think".into(),
+                    thinking_ms: Some(1500),
+                    text: "world".into(),
+                    created_at_ms: 2000,
+                },
+            ],
+        );
+        let target = state.pane_anywhere(pane).expect("pane");
+        assert_eq!(target.lx.chat.messages.len(), 2);
+        assert_eq!(target.lx.chat.session_title.as_deref(), Some("Old Title"));
+        assert!(!target.lx.chat.reasoning_expanded(1, 0));
+
+        draft(&mut state, pane, "/rename New Cloud Title");
+        assert!(super::super::try_send(&mut state, pane));
+        let target = state.pane_anywhere(pane).expect("pane");
+        assert_eq!(
+            target.lx.chat.session_title.as_deref(),
+            Some("New Cloud Title")
+        );
+        assert!(state.effects.iter().any(|effect| matches!(
+            effect,
+            Effect::RenameChatSession {
+                session_id,
+                title,
+                ..
+            } if session_id == "ai-web-ds-uuid-1" && title == "New Cloud Title"
+        )));
     }
 }

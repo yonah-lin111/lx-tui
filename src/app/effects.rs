@@ -149,6 +149,8 @@ pub enum Effect {
         key: crate::app::state::lx::RequestKey,
         site: crate::app::state::lx::AiWebSite,
         prompt: String,
+        /// 若本轮紧随 `/rewind` 之后发送，指示网页端应原地编辑第几条用户消息（0 基）。
+        edit_user_index: Option<usize>,
     },
     /// 重置 AI Web 网页端会话（`/new` 时触发网页开启新对话）。
     ResetAiWebSession {

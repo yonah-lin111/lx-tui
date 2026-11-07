@@ -121,6 +121,8 @@ pub struct Lx {
     pub entry: LxEntry,
     /// AI Web 入口当前选中的目标站点。
     pub ai_web_site: AiWebSite,
+    /// AI Web 撤回（`/rewind`）后待下一轮在网页端原地编辑的用户消息下标（0 基）。
+    pub ai_web_edit_user_index: Option<usize>,
     /// 多行输入内容；Shell 模式下只存命令正文（不含 `!` 前缀）。
     pub input: String,
     /// 当前编辑模式；仅首个非空白字符决定，正文中的 `！` 不触发。
@@ -241,6 +243,7 @@ impl Lx {
         Self {
             entry: LxEntry::Native,
             ai_web_site: AiWebSite::Deepseek,
+            ai_web_edit_user_index: None,
             input: String::new(),
             input_mode: LxInputMode::Chat,
             revision: 0,

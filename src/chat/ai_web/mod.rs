@@ -9,6 +9,29 @@ pub const DEEPSEEK_SCRIPT: &str = include_str!("deepseek_script.js");
 /// 脚本输出行协议前缀。
 pub const PROTOCOL_PREFIX: &str = "@@LX_AI_WEB@@";
 
+/// 网页端单条历史会话摘要（供 `/resume` 列表展示）。
+#[derive(Debug, Clone, PartialEq, Eq, serde::Deserialize)]
+pub struct AiWebSessionSummary {
+    pub id: String,
+    pub title: String,
+    #[serde(default)]
+    pub updated_at_ms: i64,
+}
+
+/// 网页端单条历史消息（供 `/resume` 恢复对话展示）。
+#[derive(Debug, Clone, PartialEq, Eq, serde::Deserialize)]
+pub struct AiWebHistoryMessage {
+    pub role: String,
+    #[serde(default)]
+    pub thinking: String,
+    #[serde(default)]
+    pub thinking_ms: Option<i64>,
+    #[serde(default)]
+    pub text: String,
+    #[serde(default)]
+    pub created_at_ms: i64,
+}
+
 /// 脚本回投的一条流事件。
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum AiWebStreamEvent {
@@ -16,6 +39,16 @@ pub enum AiWebStreamEvent {
     Thinking(String),
     /// 回答正文增量。
     Text(String),
+    /// 当前对话已关联到云端会话（用于把本地临时 ID 升级为云端会话 ID 并同步标题）。
+    Session { id: String, title: Option<String> },
+    /// `/resume` 历史会话列表。
+    Sessions(Vec<AiWebSessionSummary>),
+    /// `/resume` 选中的历史会话完整消息。
+    SessionLoaded {
+        id: String,
+        title: Option<String>,
+        messages: Vec<AiWebHistoryMessage>,
+    },
     /// 网页未登录，需要用户在 ego-browser 中完成登录。
     LoginRequired { url: String },
     /// 本轮回答生成完毕。
@@ -36,9 +69,40 @@ pub fn parse_script_line(line: &str) -> Option<AiWebStreamEvent> {
             .unwrap_or_default()
             .to_string()
     };
+    let opt_str = |name: &str| {
+        value
+            .get(name)
+            .and_then(serde_json::Value::as_str)
+            .map(str::trim)
+            .filter(|s| !s.is_empty())
+            .map(str::to_string)
+    };
     match event {
         "thinking" => Some(AiWebStreamEvent::Thinking(field("delta"))),
         "text" => Some(AiWebStreamEvent::Text(field("delta"))),
+        "session" => {
+            let id = field("id");
+            (!id.is_empty()).then(|| AiWebStreamEvent::Session {
+                id,
+                title: opt_str("title"),
+            })
+        }
+        "sessions" => {
+            let items = serde_json::from_value(value.get("items")?.clone()).ok()?;
+            Some(AiWebStreamEvent::Sessions(items))
+        }
+        "session_loaded" => {
+            let id = field("id");
+            if id.is_empty() {
+                return None;
+            }
+            let messages = serde_json::from_value(value.get("messages")?.clone()).ok()?;
+            Some(AiWebStreamEvent::SessionLoaded {
+                id,
+                title: opt_str("title"),
+                messages,
+            })
+        }
         "login_required" => Some(AiWebStreamEvent::LoginRequired { url: field("url") }),
         "done" => Some(AiWebStreamEvent::Done),
         "error" => Some(AiWebStreamEvent::Error(field("message"))),
@@ -129,5 +193,42 @@ mod tests {
         );
         assert_eq!(parse_script_line(""), None);
         assert_eq!(parse_script_line("console output"), None);
+    }
+
+    #[test]
+    fn parses_session_events() {
+        assert_eq!(
+            parse(r#"{"event":"session","id":"s-1","title":"Hello"}"#),
+            Some(AiWebStreamEvent::Session {
+                id: "s-1".into(),
+                title: Some("Hello".into()),
+            })
+        );
+        assert_eq!(
+            parse(
+                r#"{"event":"sessions","items":[{"id":"s-1","title":"Chat 1","updated_at_ms":1000}]}"#
+            ),
+            Some(AiWebStreamEvent::Sessions(vec![AiWebSessionSummary {
+                id: "s-1".into(),
+                title: "Chat 1".into(),
+                updated_at_ms: 1000,
+            }]))
+        );
+        assert_eq!(
+            parse(
+                r#"{"event":"session_loaded","id":"s-1","title":"Chat 1","messages":[{"role":"user","thinking":"","thinking_ms":null,"text":"hi","created_at_ms":1000}]}"#
+            ),
+            Some(AiWebStreamEvent::SessionLoaded {
+                id: "s-1".into(),
+                title: Some("Chat 1".into()),
+                messages: vec![AiWebHistoryMessage {
+                    role: "user".into(),
+                    thinking: String::new(),
+                    thinking_ms: None,
+                    text: "hi".into(),
+                    created_at_ms: 1000,
+                }],
+            })
+        );
     }
 }
