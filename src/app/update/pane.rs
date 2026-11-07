@@ -657,6 +657,15 @@ pub fn set_lx_entry(state: &mut AppState, id: PaneId, entry: crate::app::state::
             pane.lx.slash = None;
         }
         pane.lx.entry = entry;
+        if entry == crate::app::state::LxEntry::AiWeb
+            && matches!(
+                pane.lx.mention_tab(),
+                crate::app::prompt::MentionTab::Skills | crate::app::prompt::MentionTab::Mcp
+            )
+        {
+            pane.lx
+                .mention_set_tab(crate::app::prompt::MentionTab::Files);
+        }
     }
     super::chat::refresh_lx_status(state, id);
 }

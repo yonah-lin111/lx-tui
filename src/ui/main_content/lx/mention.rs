@@ -51,7 +51,7 @@ struct PanelData {
     scope: Option<String>,
     /// 是否为交互候选（可点击采纳）；状态行时为 false。
     interactive: bool,
-    tabs: [PanelTab<'static>; 4],
+    tabs: Vec<PanelTab<'static>>,
 }
 
 impl PanelData {
@@ -118,24 +118,37 @@ fn panel_area(area: Rect, input: Rect) -> Rect {
 /// 提及面板渲染数据；面板不显示时返回 None。
 fn panel_data(lx: &Lx, width: u16) -> Option<PanelData> {
     let tab = lx.mention().tab();
-    let tabs = [
-        PanelTab {
-            label: text::MENTION_TAB_FILES,
-            active: tab == MentionTab::Files,
-        },
-        PanelTab {
-            label: text::MENTION_TAB_REF_DIR,
-            active: tab == MentionTab::RefDir,
-        },
-        PanelTab {
-            label: text::MENTION_TAB_SKILLS,
-            active: tab == MentionTab::Skills,
-        },
-        PanelTab {
-            label: text::MENTION_TAB_MCP,
-            active: tab == MentionTab::Mcp,
-        },
-    ];
+    let tabs = if lx.entry == crate::app::state::LxEntry::AiWeb {
+        vec![
+            PanelTab {
+                label: text::MENTION_TAB_FILES,
+                active: tab == MentionTab::Files,
+            },
+            PanelTab {
+                label: text::MENTION_TAB_REF_DIR,
+                active: tab == MentionTab::RefDir,
+            },
+        ]
+    } else {
+        vec![
+            PanelTab {
+                label: text::MENTION_TAB_FILES,
+                active: tab == MentionTab::Files,
+            },
+            PanelTab {
+                label: text::MENTION_TAB_REF_DIR,
+                active: tab == MentionTab::RefDir,
+            },
+            PanelTab {
+                label: text::MENTION_TAB_SKILLS,
+                active: tab == MentionTab::Skills,
+            },
+            PanelTab {
+                label: text::MENTION_TAB_MCP,
+                active: tab == MentionTab::Mcp,
+            },
+        ]
+    };
     let status = |label: &'static str| PanelData {
         rows: vec![PanelRow::Status(label)],
         active: 0,
@@ -143,7 +156,7 @@ fn panel_data(lx: &Lx, width: u16) -> Option<PanelData> {
         viewport: None,
         scope: None,
         interactive: false,
-        tabs,
+        tabs: tabs.clone(),
     };
     let detail_width = usize::from(width).saturating_sub(MENTION_DETAIL_MARGIN);
     match (tab, lx.mention().view(&lx.input, lx.cursor)) {

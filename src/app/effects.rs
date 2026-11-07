@@ -149,6 +149,8 @@ pub enum Effect {
         key: crate::app::state::lx::RequestKey,
         site: crate::app::state::lx::AiWebSite,
         prompt: String,
+        /// 待通过 CDP `DOM.setFileInputFiles` 注入网页 `<input type="file">` 的本地文件绝对路径列表。
+        files: Vec<String>,
         /// 若本轮紧随 `/rewind` 之后发送，指示网页端应原地编辑第几条用户消息（0 基）。
         edit_user_index: Option<usize>,
     },

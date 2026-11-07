@@ -91,6 +91,37 @@ pub fn try_send_ai_web(
             return true;
         }
     }
+    let reference_root = state
+        .pane_anywhere(pane)
+        .and_then(|p| p.cwd.clone())
+        .or_else(|| state.workspace_cwd_for_pane(pane))
+        .unwrap_or_else(|| std::path::PathBuf::from("."));
+    let session_preview = state
+        .pane_anywhere(pane)
+        .and_then(|t| t.lx.chat.session_id.as_deref())
+        .filter(|s| is_ai_web_session(s))
+        .map(str::to_string)
+        .unwrap_or_else(|| format!("{AI_WEB_SESSION_PREFIX}{}-{generation}", pane.raw()));
+    let user_id = format!("{session_preview}-u-{generation}");
+    let prepared = match crate::chat::prepare_ai_web_message(&reference_root, &user_id, &draft) {
+        Ok(prepared) => prepared,
+        Err(err) => {
+            let msg = match err {
+                crate::chat::AiWebPrepareError::FolderUnsupported => {
+                    text::LX_AI_WEB_FOLDER_UNSUPPORTED
+                }
+                crate::chat::AiWebPrepareError::FileNotFound => text::LX_AI_WEB_FILE_NOT_FOUND,
+                crate::chat::AiWebPrepareError::LocalReferenceUnsupported => {
+                    text::LX_AI_WEB_LOCAL_REF_UNSUPPORTED
+                }
+            };
+            super::session::show_lx_hint(state, pane, InputHintLevel::Warning, msg);
+            return true;
+        }
+    };
+    if prepared.web_prompt.is_empty() && prepared.files.is_empty() {
+        return false;
+    }
     state.prompt_history.record(&draft);
     let Some(target) = state.pane_mut_anywhere(pane) else {
         return false;
@@ -106,9 +137,8 @@ pub fn try_send_ai_web(
     let session_id = match target.lx.chat.session_id.as_deref() {
         Some(session) if is_ai_web_session(session) => session.to_string(),
         _ => {
-            let id = format!("{AI_WEB_SESSION_PREFIX}{}-{generation}", pane.raw());
-            target.lx.chat.session_id = Some(id.clone());
-            id
+            target.lx.chat.session_id = Some(session_preview.clone());
+            session_preview
         }
     };
     let base_seq = target.lx.chat.messages.last().map_or(0, |m| m.sequence);
@@ -118,7 +148,6 @@ pub fn try_send_ai_web(
         .messages
         .last()
         .map_or(0, |m| m.turn_index.saturating_add(1));
-    let user_id = format!("{session_id}-u-{generation}");
     let assistant_id = format!("{session_id}-a-{generation}");
     let now_ms = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
@@ -137,7 +166,7 @@ pub fn try_send_ai_web(
             position: 0,
             part: ChatPartView {
                 kind: PartKind::Text,
-                content: draft.clone(),
+                content: draft,
                 provider_metadata_json: None,
                 started_at_ms: None,
                 ended_at_ms: None,
@@ -151,7 +180,7 @@ pub fn try_send_ai_web(
         cache_read_tokens: None,
         duration_ms: None,
         reports: Vec::new(),
-        attachments: Vec::new(),
+        attachments: prepared.attachments,
     });
     target.lx.chat.messages.push(ChatMessageView {
         sequence: base_seq + 2,
@@ -187,7 +216,8 @@ pub fn try_send_ai_web(
     state.effects.push(Effect::StartAiWebStream {
         key,
         site,
-        prompt: draft,
+        prompt: prepared.web_prompt,
+        files: prepared.files,
         edit_user_index,
     });
     super::refresh_lx_status(state, pane);
@@ -290,6 +320,30 @@ pub fn on_ai_web_session_loaded(
             if idx > 0 {
                 turn_index = turn_index.saturating_add(1);
             }
+            let attachments = item
+                .files
+                .into_iter()
+                .enumerate()
+                .map(|(att_idx, name)| {
+                    let kind = if crate::chat::is_image_filename(&name) {
+                        crate::db::chat::MessageAttachmentKind::Image
+                    } else {
+                        crate::db::chat::MessageAttachmentKind::File
+                    };
+                    crate::db::chat::MessageAttachmentMeta {
+                        id: format!("{msg_id}-att-{att_idx}"),
+                        position: i64::try_from(att_idx).unwrap_or(0),
+                        kind,
+                        label: name,
+                        marker_start: None,
+                        marker_end: None,
+                        source_path: None,
+                        mime: None,
+                        width: None,
+                        height: None,
+                    }
+                })
+                .collect();
             views.push(ChatMessageView {
                 sequence,
                 id: msg_id.clone(),
@@ -316,7 +370,7 @@ pub fn on_ai_web_session_loaded(
                 cache_read_tokens: None,
                 duration_ms: None,
                 reports: Vec::new(),
-                attachments: Vec::new(),
+                attachments,
             });
         } else {
             let mut steps = Vec::new();
@@ -581,6 +635,7 @@ mod tests {
                     thinking: String::new(),
                     thinking_ms: None,
                     text: "hello".into(),
+                    files: vec!["photo.png".into(), "report.pdf".into()],
                     created_at_ms: 1000,
                 },
                 crate::chat::ai_web::AiWebHistoryMessage {
@@ -588,12 +643,22 @@ mod tests {
                     thinking: "let me think".into(),
                     thinking_ms: Some(1500),
                     text: "world".into(),
+                    files: Vec::new(),
                     created_at_ms: 2000,
                 },
             ],
         );
         let target = state.pane_anywhere(pane).expect("pane");
         assert_eq!(target.lx.chat.messages.len(), 2);
+        assert_eq!(target.lx.chat.messages[0].attachments.len(), 2);
+        assert_eq!(
+            target.lx.chat.messages[0].attachments[0].kind,
+            crate::db::chat::MessageAttachmentKind::Image
+        );
+        assert_eq!(
+            target.lx.chat.messages[0].attachments[1].kind,
+            crate::db::chat::MessageAttachmentKind::File
+        );
         assert_eq!(target.lx.chat.session_title.as_deref(), Some("Old Title"));
         assert!(!target.lx.chat.reasoning_expanded(1, 0));
 
@@ -612,5 +677,127 @@ mod tests {
                 ..
             } if session_id == "ai-web-ds-uuid-1" && title == "New Cloud Title"
         )));
+    }
+
+    #[test]
+    fn file_and_image_upload_and_rewind_attachment_removal_work_in_ai_web() {
+        let dir =
+            std::env::temp_dir().join(format!("lx-ai-web-upload-test-{}", std::process::id()));
+        let _ = std::fs::create_dir_all(&dir);
+        let img_path = dir.join("diagram.png");
+        let doc_path = dir.join("notes.md");
+        // Write 1x1 PNG header and markdown text
+        std::fs::write(
+            &img_path,
+            [
+                0x89, b'P', b'N', b'G', 0x0D, 0x0A, 0x1A, 0x0A, 0x00, 0x00, 0x00, 0x0D, b'I', b'H',
+                b'D', b'R',
+            ],
+        )
+        .expect("write png");
+        std::fs::write(&doc_path, "# Notes\nhello\n").expect("write md");
+
+        let (mut state, pane) = ai_web_state();
+        let raw_draft = format!(
+            "请对比这两份材料 @[refer-image]({}) @[refer-file]({})",
+            img_path.display(),
+            doc_path.display()
+        );
+        draft(&mut state, pane, &raw_draft);
+        assert!(super::super::try_send(&mut state, pane));
+
+        let target = state.pane_anywhere(pane).expect("pane");
+        assert_eq!(target.lx.chat.messages[0].text(), raw_draft);
+        assert_eq!(target.lx.chat.messages[0].attachments.len(), 2);
+        assert!(state.effects.iter().any(|effect| matches!(
+            effect,
+            Effect::StartAiWebStream {
+                prompt,
+                files,
+                edit_user_index: None,
+                ..
+            } if prompt == "请对比这两份材料" && files.len() == 2
+        )));
+
+        finish(&mut state, pane);
+        state.effects.clear();
+
+        // Trigger /rewind: restores full draft with image and file tags
+        draft(&mut state, pane, "/rewind");
+        assert!(super::super::try_send(&mut state, pane));
+        let target = state.pane_anywhere(pane).expect("pane");
+        assert_eq!(target.lx.input, raw_draft);
+        assert_eq!(target.lx.ai_web_edit_user_index, Some(0));
+
+        // User removes the image and keeps only the markdown file
+        let edited_draft = format!("只看这份文档 @[refer-file]({})", doc_path.display());
+        draft(&mut state, pane, &edited_draft);
+        assert!(super::super::try_send(&mut state, pane));
+        assert!(state.effects.iter().any(|effect| matches!(
+            effect,
+            Effect::StartAiWebStream {
+                prompt,
+                files,
+                edit_user_index: Some(0),
+                ..
+            } if prompt == "只看这份文档" && files.len() == 1
+        )));
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn folder_reference_is_rejected_in_ai_web_and_keeps_draft() {
+        let dir =
+            std::env::temp_dir().join(format!("lx-ai-web-folder-test-{}", std::process::id()));
+        let _ = std::fs::create_dir_all(&dir);
+        let (mut state, pane) = ai_web_state();
+        let raw_draft = format!("看看目录 @[refer-folder]({})", dir.display());
+        draft(&mut state, pane, &raw_draft);
+        assert!(super::super::try_send(&mut state, pane));
+        let target = state.pane_anywhere(pane).expect("pane");
+        assert!(target.lx.chat.messages.is_empty());
+        assert_eq!(target.lx.input, raw_draft, "被拦截时保留草稿");
+        assert_eq!(
+            target.lx.toast.as_ref().map(|t| t.message.as_str()),
+            Some(text::LX_AI_WEB_FOLDER_UNSUPPORTED)
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn ai_web_mention_panel_cycles_only_files_and_ref_dir() {
+        let (mut state, pane) = ai_web_state();
+        if let Some(target) = state.pane_mut_anywhere(pane) {
+            target
+                .lx
+                .set_mention_root(Some(std::path::PathBuf::from("/tmp")));
+            target.lx.insert_char('@');
+            assert_eq!(
+                target.lx.mention_tab(),
+                crate::app::prompt::MentionTab::Files
+            );
+            assert!(target.lx.mention_switch_tab(1));
+            assert_eq!(
+                target.lx.mention_tab(),
+                crate::app::prompt::MentionTab::RefDir
+            );
+            assert!(target.lx.mention_switch_tab(1));
+            assert_eq!(
+                target.lx.mention_tab(),
+                crate::app::prompt::MentionTab::Files,
+                "AI Web 下右切直接从 RefDir 回到 Files，跳过 Skills 和 MCP"
+            );
+            assert!(
+                !target
+                    .lx
+                    .mention_set_tab(crate::app::prompt::MentionTab::Skills)
+            );
+            assert!(
+                !target
+                    .lx
+                    .mention_set_tab(crate::app::prompt::MentionTab::Mcp)
+            );
+        }
     }
 }

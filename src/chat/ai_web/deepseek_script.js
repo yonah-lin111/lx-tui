@@ -11,6 +11,7 @@ const SIGN_IN = 'https://chat.deepseek.com/sign_in';
 const PARAMS = typeof __LX_PARAMS === 'object' && __LX_PARAMS !== null ? __LX_PARAMS : {};
 const ACTION = PARAMS.action || 'chat';
 const PROMPT = PARAMS.prompt || '';
+const FILES = Array.isArray(PARAMS.files) ? PARAMS.files : [];
 const FIRST_TURN = Boolean(PARAMS.firstTurn);
 const STREAM_URL = PARAMS.streamUrl || '';
 const SESSION_ID = PARAMS.sessionId || '';
@@ -72,6 +73,82 @@ async function ensureFreshChat() {
   if (!nowFresh) {
     await openOrReuseTab(HOME, { wait: true, timeout: 25 });
   }
+}
+
+async function syncContainerAttachments(inEditBox) {
+  const hadOldChips = await js(`
+    (() => {
+      const editArea = document.querySelector('textarea[name="user query"]');
+      const scope = ${inEditBox ? '(editArea ? editArea.closest("[data-virtual-list-item-key]") : null)' : 'document'};
+      if (!scope) return 0;
+      const items = Array.from(scope.querySelectorAll('.ds-animated-size-item')).filter(
+        (el) => !(${inEditBox ? 'false' : 'true'} && el.closest('[data-virtual-list-item-key]')),
+      );
+      let clicked = 0;
+      for (const item of items) {
+        const closeBtns = Array.from(item.querySelectorAll('[tabindex="0"]')).filter((el) =>
+          el.querySelector('svg[viewBox="0 0 14 14"]'),
+        );
+        for (const btn of closeBtns) {
+          const pk = Object.keys(btn).find((k) => k.startsWith('__reactProps'));
+          if (pk && btn[pk] && typeof btn[pk].onClick === 'function') {
+            btn[pk].onClick({ stopPropagation() {}, preventDefault() {} });
+          } else {
+            btn.click();
+          }
+          clicked += 1;
+        }
+      }
+      return clicked;
+    })()
+  `).catch(() => 0);
+  if (hadOldChips > 0) await new Promise((r) => setTimeout(r, 220));
+  if (!FILES || FILES.length === 0) return;
+
+  const doc = await cdp('DOM.getDocument', { depth: -1 });
+  const rootId = doc && doc.root && doc.root.nodeId;
+  if (!rootId) throw new Error('Failed to inspect DeepSeek DOM for file upload');
+  const selector = inEditBox ? '[data-virtual-list-item-key] input[type="file"]' : 'input[type="file"]';
+  const queried = await cdp('DOM.querySelectorAll', { nodeId: rootId, selector });
+  const nodeIds = (queried && queried.nodeIds) || [];
+  const targetNodeId = inEditBox ? nodeIds[0] : nodeIds[nodeIds.length - 1];
+  if (!targetNodeId) throw new Error('DeepSeek file upload input not found');
+  await cdp('DOM.setFileInputFiles', { nodeId: targetNodeId, files: FILES });
+
+  const uploadDeadline = Date.now() + 30000;
+  while (Date.now() < uploadDeadline) {
+    await new Promise((r) => setTimeout(r, 150));
+    const status = await js(`
+      (() => {
+        const editArea = document.querySelector('textarea[name="user query"]');
+        const scope = ${inEditBox ? '(editArea ? editArea.closest("[data-virtual-list-item-key]") : null)' : 'document'};
+        if (!scope) return { count: 0, uploading: true, error: null };
+        const items = Array.from(scope.querySelectorAll('.ds-animated-size-item')).filter(
+          (el) => !(${inEditBox ? 'false' : 'true'} && el.closest('[data-virtual-list-item-key]')),
+        );
+        if (items.length === 0) return { count: 0, uploading: true, error: null };
+        let uploading = false;
+        let error = null;
+        for (const item of items) {
+          const text = (item.innerText || '').trim();
+          if (/失败|不支持|超出|过大|error|failed|unsupported|exceed/i.test(text)) {
+            error = text.replace(/\\s+/g, ' ');
+            break;
+          }
+          if (/上传中|解析中|uploading|parsing/i.test(text) || item.querySelector('svg[viewBox="0 0 20 20"][role="img"]')) {
+            uploading = true;
+          }
+        }
+        return { count: items.length, uploading, error };
+      })()
+    `).catch(() => ({ count: 0, uploading: true, error: null }));
+    if (status.error) throw new Error('File upload rejected by DeepSeek: ' + status.error);
+    if (status.count > 0 && !status.uploading) {
+      await new Promise((r) => setTimeout(r, 100));
+      return;
+    }
+  }
+  throw new Error('Timed out waiting for DeepSeek file upload');
 }
 
 async function main() {
@@ -189,10 +266,24 @@ async function main() {
           let thinking = '';
           let thinkingMs = null;
           let text = '';
+          const files = [];
+          const pushFile = (f) => {
+            if (!f) return;
+            const name = typeof f === 'string' ? f : (f.file_name || f.name || '');
+            if (name && !files.includes(String(name))) files.push(String(name));
+          };
+          if (role === 'user' && Array.isArray(msg.files)) {
+            msg.files.forEach(pushFile);
+          }
           for (const frag of fragments) {
             if (!frag || typeof frag !== 'object') continue;
+            if (role === 'user' && Array.isArray(frag.files)) {
+              frag.files.forEach(pushFile);
+            }
             const ftype = String(frag.type || '').toUpperCase();
-            if (role === 'user' && (ftype === 'REQUEST' || !ftype)) {
+            if (role === 'user' && ftype === 'FILE') {
+              pushFile(frag);
+            } else if (role === 'user' && (ftype === 'REQUEST' || !ftype)) {
               text += String(frag.content || '');
             } else if (role === 'assistant') {
               if (ftype === 'THINK') {
@@ -210,6 +301,7 @@ async function main() {
             thinking,
             thinking_ms: thinkingMs,
             text,
+            files,
             created_at_ms: Math.round(Number(msg.inserted_at || 0) * 1000),
           };
         });
@@ -778,21 +870,16 @@ async function main() {
       })()
     `).catch(() => false);
     if (openedEdit) {
-      await new Promise((r) => setTimeout(r, 100));
+      await new Promise((r) => setTimeout(r, 120));
+      await syncContainerAttachments(true);
       submittedViaEdit = await js(`
         (() => {
           const editArea = document.querySelector('textarea[name="user query"]');
           if (!editArea) return false;
           editArea.focus();
-          const descriptor = Object.getOwnPropertyDescriptor(
-            window.HTMLTextAreaElement.prototype,
-            'value',
-          );
-          if (descriptor && descriptor.set) {
-            descriptor.set.call(editArea, ${JSON.stringify(PROMPT)});
-          } else {
-            editArea.value = ${JSON.stringify(PROMPT)};
-          }
+          const descriptor = Object.getOwnPropertyDescriptor(window.HTMLTextAreaElement.prototype, 'value');
+          if (descriptor && descriptor.set) descriptor.set.call(editArea, ${JSON.stringify(PROMPT)});
+          else editArea.value = ${JSON.stringify(PROMPT)};
           editArea.dispatchEvent(new Event('input', { bubbles: true }));
           editArea.dispatchEvent(new Event('change', { bubbles: true }));
           const container = editArea.closest('[data-virtual-list-item-key]') || document;
@@ -815,16 +902,13 @@ async function main() {
   }
 
   if (!submittedViaEdit) {
+    await syncContainerAttachments(false);
     const filled = await js(`
       (() => {
-        const textarea = document.querySelector('textarea[name="search"]')
-          || document.querySelector('textarea');
+        const textarea = document.querySelector('textarea[name="search"]') || document.querySelector('textarea');
         if (!textarea) return false;
         textarea.focus();
-        const setter = Object.getOwnPropertyDescriptor(
-          HTMLTextAreaElement.prototype,
-          'value',
-        ).set;
+        const setter = Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, 'value').set;
         setter.call(textarea, ${JSON.stringify(PROMPT)});
         textarea.dispatchEvent(new Event('input', { bubbles: true }));
         return true;
@@ -834,29 +918,23 @@ async function main() {
 
     await js(`
       (() => {
-        const textarea = document.querySelector('textarea[name="search"]')
-          || document.querySelector('textarea');
+        const textarea = document.querySelector('textarea[name="search"]') || document.querySelector('textarea');
         if (!textarea) return false;
-        const keyboard = {
-          key: 'Enter',
-          code: 'Enter',
-          keyCode: 13,
-          which: 13,
-          bubbles: true,
-          cancelable: true,
-        };
+        const keyboard = { key: 'Enter', code: 'Enter', keyCode: 13, which: 13, bubbles: true, cancelable: true };
         textarea.dispatchEvent(new KeyboardEvent('keydown', keyboard));
         textarea.dispatchEvent(new KeyboardEvent('keyup', keyboard));
         return true;
       })()
     `);
-    await new Promise((resolve) => setTimeout(resolve, 80));
+    await new Promise((resolve) => setTimeout(resolve, 90));
 
     const cleared = await js(`
       (() => {
-        const textarea = document.querySelector('textarea[name="search"]')
-          || document.querySelector('textarea');
-        return !textarea || !textarea.value.trim();
+        const textarea = document.querySelector('textarea[name="search"]') || document.querySelector('textarea');
+        const textEmpty = !textarea || !textarea.value.trim();
+        const composerChips = Array.from(document.querySelectorAll('.ds-animated-size-item'))
+          .filter((el) => !el.closest('[data-virtual-list-item-key]'));
+        return textEmpty && composerChips.length === 0 && ${PROMPT ? 'true' : 'false'};
       })()
     `);
     if (!cleared) {
@@ -864,7 +942,12 @@ async function main() {
         (() => {
           const button = document.querySelector('.ds-button--primary:not(.ds-button--disabled)');
           if (!button) return false;
-          button.click();
+          const pk = Object.keys(button).find((k) => k.startsWith('__reactProps'));
+          if (pk && button[pk] && typeof button[pk].onClick === 'function') {
+            button[pk].onClick({ stopPropagation() {}, preventDefault() {} });
+          } else {
+            button.click();
+          }
           return true;
         })()
       `);
@@ -878,17 +961,12 @@ async function main() {
         const stream = window.__lxDeepSeekStream;
         if (!stream) return null;
         stream.tickDom();
-        return {
-          queue: stream.queue.splice(0, stream.queue.length),
-          done: stream.done,
-        };
+        return { queue: stream.queue.splice(0, stream.queue.length), done: stream.done };
       })()
     `);
     if (!snapshot) throw new Error('DeepSeek stream collector was lost');
     if (snapshot.queue.length > 0) {
-      await emitMany(
-        snapshot.queue.map((item) => ({ event: item.kind, delta: item.delta })),
-      );
+      await emitMany(snapshot.queue.map((item) => ({ event: item.kind, delta: item.delta })));
     }
     if (snapshot.done) {
       const sessionMeta = await js(String.raw`
@@ -902,11 +980,7 @@ async function main() {
         })()
       `).catch(() => null);
       if (sessionMeta && sessionMeta.id) {
-        await emit({
-          event: 'session',
-          id: sessionMeta.id,
-          title: sessionMeta.title || null,
-        });
+        await emit({ event: 'session', id: sessionMeta.id, title: sessionMeta.title || null });
       }
       await emit({ event: 'done' });
       return;

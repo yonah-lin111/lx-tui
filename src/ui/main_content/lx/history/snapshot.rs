@@ -658,7 +658,10 @@ impl Builder<'_> {
                                     crate::ui::text::chat::image_message_preview(image_count)
                                         .to_string()
                                 } else {
-                                    display_text
+                                    crate::ui::text::chat::file_message_preview(
+                                        message.attachments.len(),
+                                    )
+                                    .to_string()
                                 }
                             } else {
                                 display_text

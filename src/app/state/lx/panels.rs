@@ -217,12 +217,16 @@ impl Lx {
 
     /// 提及面板切换 Tab：左右循环切换；面板不可见返回 false。
     pub fn mention_switch_tab(&mut self, delta: isize) -> bool {
-        self.mention.switch_tab(delta, &self.input, self.cursor)
+        let ai_web = self.entry == super::LxEntry::AiWeb;
+        self.mention
+            .switch_tab_for_entry(delta, &self.input, self.cursor, ai_web)
     }
 
     /// 提及面板直接设置 Tab。
     pub fn mention_set_tab(&mut self, tab: crate::app::prompt::MentionTab) -> bool {
-        self.mention.set_tab(tab, &self.input, self.cursor)
+        let ai_web = self.entry == super::LxEntry::AiWeb;
+        self.mention
+            .set_tab_for_entry(tab, &self.input, self.cursor, ai_web)
     }
 
     /// 同步引用文件夹快照；内容变化时返回 true。

@@ -48,6 +48,10 @@
 - [x] **接入事件层流管理与鼠标点击（`src/event/chat/mod.rs`、`src/event/chat/ai_web.rs`、`src/event/mouse/press.rs`）**：
   - 在 `src/event/mouse/press.rs` 中接入 `ai_web_site_hit` 左键点击切换。
   - 在 `src/event/chat/mod.rs` 与 `src/event/chat/ai_web.rs` 中处理 `Effect::StartAiWebStream` 与 `Effect::ResetAiWebSession`：异步拉起 `ego-browser nodejs`、按行读取 stdout 转换投递 `ChatNetEvent::Delta` / `Finished`、在检测到 `login_required` 时弹出窗格内 Toast，并支持通过 `streams.cancels` 取消子进程。
+- [x] **实现 `AI Web` 图片与文件上传及 `/rewind` 附件撤销同步**：
+  - `@` 提及面板在 `LxEntry::AiWeb` 下仅展示并切换 `Files` 与 `refDir` 两个 Tab（隐藏 `Skills` 与 `MCP`）。
+  - 在 `try_send_ai_web` 中解析草稿中的 `@[refer-file]`、`@[refer-image]`、`@相对路径` 与 `@[ref-content]/` 附件（拦截文件夹与不存在的文件并给出提示），填充 `ChatMessageView.attachments`，并将清洗后的正文与去重绝对路径列表 `files` 随 `Effect::StartAiWebStream` 传入事件层。
+  - 在 `deepseek_script.js` 中：发送或原地编辑（`/rewind` 重发）前先清空目标容器内的旧 `.ds-animated-size-item` 附件卡片，再通过 CDP `DOM.setFileInputFiles` 注入当前草稿的 `files` 列表并等待上传/解析就绪后发送；在 `load_session` 中同步提取云端消息附件名以在 `/resume` 历史中展示。
 
 ---
 

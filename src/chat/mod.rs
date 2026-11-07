@@ -30,6 +30,7 @@ pub use events::{
     ModelItem, ModelStepStop, PartDelta, PartKind, StopReason,
 };
 pub use prepare::{
-    DraftImageAttachment, PreparedUserMessage, prepare_user_message, strip_references_for_display,
+    AiWebPrepareError, DraftImageAttachment, PreparedAiWebMessage, PreparedUserMessage,
+    is_image_filename, prepare_ai_web_message, prepare_user_message, strip_references_for_display,
     strip_references_from_inputs,
 };

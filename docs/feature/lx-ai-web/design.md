@@ -188,3 +188,7 @@ src/
    - 当用户在 `ego-browser` GUI 中点击接管页面时，`ego-browser` 抛出 `user is controlling` 错误，脚本捕获后映射为友好提示并结束当前轮次，遵守 `ego-browser` 不强抢控制权的规范。
 3. **与 `Native Agent` 完全隔离**：
    - 若窗格在 `Native Agent` 下已有会话，用户在欢迎页（空白态）切到 `AI Web` 聊天，或通过 `/new` 重置后切回 `Native Agent`，两者的状态栏、斜杠命令与数据库互不污染。
+4. **`AI Web` 图片与文件上传及 `/rewind` 附件撤销同步**：
+   - **入口复用与 `@` 面板裁剪**：复用 `@` 提及（`Files` 工作区文件、`refDir` 引用文件夹）与终端拖拽/粘贴路径机制；在 `LxEntry::AiWeb` 下 `@` 面板仅展示 `Files` 与 `refDir` 两个 Tab（隐藏 `Skills` 与 `MCP`），且发送时拦截目录/本地 Skill 引用并提示仅支持上传单个文件或图片。
+   - **消息展示与网页文本清洗**：TUI 侧复用 `ChatMessageView.attachments`（自动剥离正文中的 `@[refer-*](...)` / `@path` 原始标记，并在用户消息下方渲染 `├─` / `└─` 附件树行，同时保留原始草稿供 `/rewind` 退回输入框）；发往网页 `textarea` 的文本剥离引用标记并展开折叠粘贴块；`/resume` 恢复云端会话时同步映射云端历史消息附带的文件名。
+   - **CDP 文件注入与 `/rewind` 附件撤销**：通过 `ego-browser` 的 CDP `DOM.setFileInputFiles` 将本地文件绝对路径直接注入 DeepSeek 网页的 `<input type="file" multiple>`，等待 `.ds-animated-size-item` 上传/解析就绪后再触发发送；在执行 `/rewind` 后重发（原地编辑 `edit_user_index`）或普通发送前，脚本先清空目标输入容器内已有的旧 `.ds-animated-size-item` 附件卡片，再按本次草稿保留的附件列表重新注入，确保在 TUI 中删改图片/文件后网页端同步撤下且不重复上传。

@@ -173,10 +173,26 @@ impl LxMention {
 
     /// 切换 Tab：循环左右切换；未处于可见状态返回 false。
     pub fn switch_tab(&mut self, delta: isize, text: &str, cursor: usize) -> bool {
+        self.switch_tab_for_entry(delta, text, cursor, false)
+    }
+
+    /// 按当前入口切换 Tab：`ai_web` 为真时仅在 `Files` 与 `RefDir` 之间切换。
+    pub fn switch_tab_for_entry(
+        &mut self,
+        delta: isize,
+        text: &str,
+        cursor: usize,
+        ai_web: bool,
+    ) -> bool {
         if self.view(text, cursor) == LxMentionView::Hidden {
             return false;
         }
-        let next = if delta > 0 {
+        let next = if ai_web {
+            match self.tab {
+                MentionTab::Files => MentionTab::RefDir,
+                _ => MentionTab::Files,
+            }
+        } else if delta > 0 {
             self.tab.next()
         } else {
             self.tab.prev()
@@ -193,6 +209,20 @@ impl LxMention {
 
     /// 直接设置活跃 Tab。
     pub fn set_tab(&mut self, tab: MentionTab, text: &str, cursor: usize) -> bool {
+        self.set_tab_for_entry(tab, text, cursor, false)
+    }
+
+    /// 按当前入口直接设置活跃 Tab：`ai_web` 为真时忽略 `Skills` 与 `Mcp`。
+    pub fn set_tab_for_entry(
+        &mut self,
+        tab: MentionTab,
+        text: &str,
+        cursor: usize,
+        ai_web: bool,
+    ) -> bool {
+        if ai_web && matches!(tab, MentionTab::Skills | MentionTab::Mcp) {
+            return false;
+        }
         if self.view(text, cursor) == LxMentionView::Hidden || self.tab == tab {
             return false;
         }

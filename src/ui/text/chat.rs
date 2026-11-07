@@ -118,6 +118,11 @@ pub fn image_message_preview(count: usize) -> &'static str {
     if count <= 1 { "[Image]" } else { "[Images]" }
 }
 
+/// 仅文件消息的单行预览占位文本。
+pub fn file_message_preview(count: usize) -> &'static str {
+    if count <= 1 { "[File]" } else { "[Files]" }
+}
+
 /// 图片准备与加载错误的用户可见提示文案。
 pub fn image_error_message(err: &crate::platform::ImagePrepareError) -> &'static str {
     match err {

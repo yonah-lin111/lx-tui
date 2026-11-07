@@ -112,8 +112,18 @@ pub fn apply_effect(
             key,
             site,
             prompt,
+            files,
             edit_user_index,
-        } => start_stream(state, streams, sender, key, site, prompt, edit_user_index),
+        } => start_stream(
+            state,
+            streams,
+            sender,
+            key,
+            site,
+            prompt,
+            files,
+            edit_user_index,
+        ),
         Effect::ResetAiWebSession { site } => {
             reset_session(site);
             true
@@ -184,6 +194,7 @@ pub fn start_stream(
     key: RequestKey,
     site: AiWebSite,
     prompt: String,
+    files: Vec<String>,
     edit_user_index: Option<usize>,
 ) -> bool {
     if active_assistant_id(state, &key).is_none() || streams.cancels.contains_key(&key) {
@@ -202,6 +213,7 @@ pub fn start_stream(
             key,
             site,
             prompt,
+            files,
             first_turn,
             edit_user_index,
             &mut cancel_rx,
@@ -363,11 +375,13 @@ fn delete_session(session_id: String) {
 }
 
 /// 一轮网页对话：拉起子进程、喂脚本、按行回投增量与终态。
+#[allow(clippy::too_many_arguments)]
 async fn run_chat(
     sender: mpsc::UnboundedSender<AppEvent>,
     key: RequestKey,
     site: AiWebSite,
     prompt: String,
+    files: Vec<String>,
     first_turn: bool,
     edit_user_index: Option<usize>,
     cancel: &mut watch::Receiver<bool>,
@@ -416,6 +430,7 @@ async fn run_chat(
     let source = script_source(ScriptParams {
         action: "chat",
         prompt: Some(&prompt),
+        files: &files,
         first_turn,
         stream_url: stream_url.as_deref(),
         session_id: remote_session_id,
@@ -611,6 +626,7 @@ fn failed(code: &str) -> StopReason {
 struct ScriptParams<'a> {
     action: &'a str,
     prompt: Option<&'a str>,
+    files: &'a [String],
     first_turn: bool,
     stream_url: Option<&'a str>,
     session_id: Option<&'a str>,
@@ -751,11 +767,14 @@ fn script_source(params: ScriptParams<'_>) -> String {
         .edit_user_index
         .and_then(|idx| i64::try_from(idx).ok())
         .unwrap_or(-1);
+    let files_json = serde_json::to_string(params.files).unwrap_or_else(|_| "[]".to_string());
     let mut source = String::from("const __LX_PARAMS = {\n");
     source.push_str("  action: ");
     source.push_str(&json_string(params.action));
     source.push_str(",\n  prompt: ");
     source.push_str(&json_string(params.prompt.unwrap_or("")));
+    source.push_str(",\n  files: ");
+    source.push_str(&files_json);
     source.push_str(",\n  firstTurn: ");
     source.push_str(if params.first_turn { "true" } else { "false" });
     source.push_str(",\n  streamUrl: ");

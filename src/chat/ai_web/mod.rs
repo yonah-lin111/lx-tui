@@ -29,6 +29,8 @@ pub struct AiWebHistoryMessage {
     #[serde(default)]
     pub text: String,
     #[serde(default)]
+    pub files: Vec<String>,
+    #[serde(default)]
     pub created_at_ms: i64,
 }
 
@@ -226,6 +228,7 @@ mod tests {
                     thinking: String::new(),
                     thinking_ms: None,
                     text: "hi".into(),
+                    files: Vec::new(),
                     created_at_ms: 1000,
                 }],
             })
