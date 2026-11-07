@@ -58,6 +58,7 @@ fn history_panel_lx() -> Lx {
                 updated_at_ms: 2_000,
             },
         ],
+        loading: false,
         current: Some(1),
         now_ms: 2_000 + 5 * 60_000,
         filter: String::new(),
@@ -652,4 +653,56 @@ fn mcp_panel_renders_statuses_and_dims_settings_disabled_rows() {
             .unwrap_or(ratatui::style::Color::Reset),
         "Disabled in settings 行的 ❯ 光标使用 muted 颜色"
     );
+}
+
+#[test]
+fn history_panel_loading_and_empty_states_are_centered() {
+    let area = Rect::new(0, 0, 80, 24);
+    let mut lx = Lx::new();
+    lx.slash = Some(SlashPanel::History(Box::new(HistoryPanel {
+        loading: true,
+        ..Default::default()
+    })));
+    let panel = slash_layout(area, &lx).expect("loading history layout");
+    let mut buf = Buffer::empty(area);
+    let _ = render(area, &mut buf, &lx, false, None, &mut PaneCache::default());
+    let row: String = (panel.content.x..panel.content.right())
+        .map(|x| buf[(x, panel.content.y)].symbol())
+        .collect();
+    assert!(row.contains(text::LX_HISTORY_LOADING), "{row:?}");
+    let left_pad = row.find(text::LX_HISTORY_LOADING).expect("loading text");
+    assert!(left_pad > 10, "加载文案在面板内水平居中: {row:?}");
+
+    if let Some(SlashPanel::History(h)) = lx.slash.as_mut() {
+        h.loading = false;
+    }
+    let mut buf2 = Buffer::empty(area);
+    let _ = render(area, &mut buf2, &lx, false, None, &mut PaneCache::default());
+    let row2: String = (panel.content.x..panel.content.right())
+        .map(|x| buf2[(x, panel.content.y)].symbol())
+        .collect();
+    assert!(row2.contains(text::LX_HISTORY_EMPTY), "{row2:?}");
+    let empty_pad = row2.find(text::LX_HISTORY_EMPTY).expect("empty text");
+    assert!(empty_pad > 10, "空状态文案在面板内水平居中: {row2:?}");
+}
+
+#[test]
+fn loading_session_renders_centered_in_chat_history_area() {
+    let area = Rect::new(0, 0, 80, 24);
+    let mut lx = Lx::new();
+    lx.chat.loading_session = true;
+    let mut buf = Buffer::empty(area);
+    let _ = render(area, &mut buf, &lx, false, None, &mut PaneCache::default());
+    let lines = buffer_lines(&buf, area);
+    let (row_idx, line) = lines
+        .iter()
+        .enumerate()
+        .find(|(_, line)| line.contains(text::LX_SESSION_LOADING))
+        .expect("loading history row");
+    assert!(
+        row_idx > 3 && row_idx < 18,
+        "会话历史加载文案在消息列表垂直居中: row={row_idx}"
+    );
+    let col_idx = line.find(text::LX_SESSION_LOADING).expect("col");
+    assert!(col_idx > 15, "会话历史加载文案水平居中: col={col_idx}");
 }

@@ -62,8 +62,13 @@ pub fn open_history(state: &mut AppState, pane: PaneId) -> bool {
     let Some(target) = state.pane_mut_anywhere(pane) else {
         return false;
     };
-    // 列表由事件层按需加载（Effect::ListChatSessions）；先打开面板骨架。
-    target.lx.slash = Some(SlashPanel::History(Box::default()));
+    // 列表由事件层按需加载（Effect::ListChatSessions）；先打开带 loading 标记的面板骨架。
+    target.lx.slash = Some(SlashPanel::History(Box::new(
+        crate::app::state::HistoryPanel {
+            loading: true,
+            ..Default::default()
+        },
+    )));
     state
         .effects
         .push(crate::app::effects::Effect::ListChatSessions { pane });

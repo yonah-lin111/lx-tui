@@ -273,13 +273,7 @@ pub(super) fn draw_agents_detail(
         }
         None => {
             if rect.width > 0 && rect.height > 0 {
-                grid.put_clipped(
-                    rect.x,
-                    rect.y,
-                    text::LX_TASK_AGENTS_EMPTY,
-                    style::muted(),
-                    rect.width,
-                );
+                draw_placeholder(grid, rect, text::LX_TASK_AGENTS_EMPTY);
             }
         }
     }
@@ -665,7 +659,7 @@ fn draw_processes(grid: &mut super::grid::Grid, list: Rect, page: &TaskPage) {
 }
 
 /// 空态/占位提示：水平居中、垂直取首行（与列表同一起点，视线不跳）。
-fn draw_placeholder(grid: &mut super::grid::Grid, list: Rect, label: &str) {
+pub(super) fn draw_placeholder(grid: &mut super::grid::Grid, list: Rect, label: &str) {
     let width = u16::try_from(label.width()).unwrap_or(u16::MAX);
     let x = list.x + list.width.saturating_sub(width) / 2;
     put_grid(grid, x, list.y, label, style::muted(), list.right());

@@ -6,8 +6,7 @@
 use ratatui::Frame;
 use ratatui::layout::Rect;
 use ratatui::style::Style;
-use ratatui::text::Span;
-use ratatui::widgets::{Block, Paragraph};
+use ratatui::widgets::Block;
 use unicode_width::UnicodeWidthStr;
 
 use crate::app::overlay::ReferencedFolderSearch;
@@ -255,12 +254,22 @@ pub fn render_referenced_search(
         None
     };
     if let Some(status) = status {
-        frame.render_widget(
-            Paragraph::new(Span::styled(format!(" {status}"), style::muted())),
-            Rect {
-                height: 1,
-                ..layout.list
-            },
+        let clipped = text::truncate_to_width(status, usize::from(layout.list.width));
+        let text_w = u16::try_from(clipped.width()).unwrap_or(0);
+        let x = layout
+            .list
+            .x
+            .saturating_add(layout.list.width.saturating_sub(text_w) / 2);
+        let y = layout
+            .list
+            .y
+            .saturating_add(layout.list.height.saturating_sub(1) / 2);
+        frame.buffer_mut().set_stringn(
+            x,
+            y,
+            &clipped,
+            usize::from(layout.list.width),
+            style::muted(),
         );
     } else {
         render_search_rows(frame, &layout, search);

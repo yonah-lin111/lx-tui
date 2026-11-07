@@ -423,6 +423,7 @@ fn layout(area: Rect, lx: &Lx) -> Layout {
     // （用户报的真实 bug）。
     let entries_ok = lx.task.is_none()
         && !history::has_history(lx)
+        && !lx.chat.loading_session
         && entries_fit
         && entries_top
             .saturating_add(entries_h)
@@ -510,7 +511,7 @@ fn build(
     cache: &mut PaneCache,
 ) -> (Grid, Option<(u16, u16)>, Option<history::StickyRow>) {
     let lay = layout(area, lx);
-    if history::has_history(lx) {
+    if history::has_history(lx) || lx.chat.loading_session {
         return build_chat(area, lx, focused, &lay, cache);
     }
     let mut grid = Grid::new(area);
@@ -607,6 +608,18 @@ fn build_chat(
     // 后台任务面板打开时**不画历史**（面板占用同一块矩形），但历史几何仍照常
     // 计算：滚动偏移与 `follow_bottom` 全程不动，关闭面板后消息列表原样回来。
     let sticky = if lay.task_output.is_some() {
+        None
+    } else if lx.chat.loading_session {
+        if history_rect.width > 0 && history_rect.height > 0 {
+            let y = history_rect.y + history_rect.height.saturating_sub(1) / 2;
+            grid.put_centered(
+                history_rect.x,
+                history_rect.width,
+                y,
+                text::LX_SESSION_LOADING,
+                style::muted(),
+            );
+        }
         None
     } else {
         let history_view = history::view(history_rect, lx, cache);

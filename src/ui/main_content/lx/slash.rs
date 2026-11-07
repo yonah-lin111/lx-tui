@@ -75,6 +75,13 @@ pub(super) fn items<'a>(
                 .collect()
         }
         SlashPanel::History(history) => {
+            if history.loading {
+                return vec![CommandItem::Inline {
+                    label: text::LX_HISTORY_LOADING,
+                    preview: "",
+                    tag: "",
+                }];
+            }
             if history.entries.is_empty() {
                 return vec![CommandItem::Inline {
                     label: text::LX_HISTORY_EMPTY,
@@ -200,7 +207,9 @@ pub(super) fn history_time_labels(panel: &crate::app::state::SlashPanel) -> Vec<
 fn is_placeholder(panel: &crate::app::state::SlashPanel) -> bool {
     match panel {
         crate::app::state::SlashPanel::Model(p) => p.stage_len() == 0 || p.is_filter_empty(),
-        crate::app::state::SlashPanel::History(h) => h.entries.is_empty() || h.is_filter_empty(),
+        crate::app::state::SlashPanel::History(h) => {
+            h.loading || h.entries.is_empty() || h.is_filter_empty()
+        }
         crate::app::state::SlashPanel::Fork(_) => false,
         crate::app::state::SlashPanel::Commands { .. } => false,
         crate::app::state::SlashPanel::Rewind(_) => false,

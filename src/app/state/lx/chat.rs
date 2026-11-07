@@ -523,6 +523,8 @@ pub struct LxChat {
     pub session_title: Option<String>,
     /// 当前会话标题胶囊锁定的配色槽位（`0..SESSION_TITLE_PALETTE_COUNT`），同一会话跨帧重绘保持稳定。
     pub session_title_palette: u8,
+    /// `/resume` 选中会话后，历史消息是否仍在后台拉取中。
+    pub loading_session: bool,
 }
 
 pub use crate::ui::style::SESSION_TITLE_PALETTE_COUNT;
@@ -623,6 +625,7 @@ impl LxChat {
             project_root: None,
             session_title: None,
             session_title_palette: 0,
+            loading_session: false,
         }
     }
 
@@ -699,6 +702,7 @@ impl LxChat {
         self.expanded_user_messages.clear();
         self.session_title = None;
         self.session_title_palette = 0;
+        self.loading_session = false;
     }
 
     /// 是否仍有本地命令在途（已提交待 spawn 或消息仍显示运行中）。

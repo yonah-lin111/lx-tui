@@ -7,6 +7,7 @@ use ratatui::Frame;
 use ratatui::layout::Rect;
 use ratatui::text::{Line, Span};
 use ratatui::widgets::Paragraph;
+use unicode_width::UnicodeWidthStr;
 
 use super::dialog::{BUTTON_GAP, render_buttons, render_input};
 
@@ -144,12 +145,20 @@ pub(super) fn render_worktree_open(
         None
     };
     if let Some(message) = message {
-        frame.render_widget(
-            Paragraph::new(Span::styled(format!(" {message}"), style::muted())),
-            Rect {
-                height: 1,
-                ..list_area
-            },
+        let clipped = text::truncate_to_width(message, usize::from(list_area.width));
+        let text_w = u16::try_from(clipped.width()).unwrap_or(0);
+        let x = list_area
+            .x
+            .saturating_add(list_area.width.saturating_sub(text_w) / 2);
+        let y = list_area
+            .y
+            .saturating_add(list_area.height.saturating_sub(1) / 2);
+        frame.buffer_mut().set_stringn(
+            x,
+            y,
+            &clipped,
+            usize::from(list_area.width),
+            style::muted(),
         );
     } else {
         let max_rows = worktree_dialog_max_rows(&shell);

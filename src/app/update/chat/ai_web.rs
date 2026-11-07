@@ -99,6 +99,7 @@ pub fn try_send_ai_web(
     let edit_user_index = target.lx.ai_web_edit_user_index.take();
     target.lx.clear();
     target.lx.clear_rewind();
+    target.lx.chat.loading_session = false;
     target.lx.chat.generation_counter = generation;
     target.lx.chat.stop_armed_at = None;
     target.lx.chat.main_stopped = false;

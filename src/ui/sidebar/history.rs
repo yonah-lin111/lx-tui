@@ -4,7 +4,7 @@ use ratatui::Frame;
 use ratatui::buffer::Buffer;
 use ratatui::layout::Rect;
 use ratatui::style::Style;
-use unicode_width::UnicodeWidthChar;
+use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
 
 use crate::app::state::{AppState, WorkspaceMode};
 use crate::layout::PROMPT_TREE_HEADER_HEIGHT;
@@ -133,9 +133,13 @@ fn paint_rows(buf: &mut Buffer, rows_area: Rect, state: &AppState) {
         } else {
             text::WORKSPACE_HISTORY_NO_MATCHES
         };
+        let text_w = u16::try_from(empty.width()).unwrap_or(u16::MAX);
+        let x = rows_area
+            .x
+            .saturating_add(rows_area.width.saturating_sub(text_w) / 2);
         paint_text(
             buf,
-            rows_area.x,
+            x,
             rows_area.y,
             empty,
             style::muted(),

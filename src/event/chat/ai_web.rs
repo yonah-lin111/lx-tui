@@ -68,6 +68,14 @@ pub fn handle_event(state: &mut AppState, event: AiWebEvent) -> bool {
             messages,
         } => crate::app::update::on_ai_web_session_loaded(state, pane, session_id, title, messages),
         AiWebEvent::ActionFailed { pane, message } => {
+            if let Some(target) = state.pane_mut_anywhere(pane) {
+                if let Some(crate::app::state::SlashPanel::History(panel)) =
+                    target.lx.slash.as_mut()
+                {
+                    panel.loading = false;
+                }
+                target.lx.chat.loading_session = false;
+            }
             crate::app::update::show_lx_toast(
                 state,
                 pane,

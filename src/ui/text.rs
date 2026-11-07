@@ -894,9 +894,12 @@ pub const LX_RENAME_ARG_HINT: &str = "[name]";
 pub const LX_RENAME_EMPTY_NAME: &str = "Session name cannot be empty";
 pub const LX_RENAME_NO_SESSION: &str = "No active session to rename";
 pub const LX_RENAME_STANDALONE_FAILED: &str = "Run /rename on its own line";
-/// `/resume` 历史面板标题与空态。
+/// `/resume` 历史面板标题、加载态与空态。
 pub const LX_HISTORY_PANEL_TITLE: &str = "Resume";
+pub const LX_HISTORY_LOADING: &str = "loading sessions…";
 pub const LX_HISTORY_EMPTY: &str = "no sessions yet";
+/// 会话历史加载中占位文案（消息列表区域居中展示）。
+pub const LX_SESSION_LOADING: &str = "loading history…";
 /// `/resume` 历史面板底边快捷键提示（`⇧↵` 打开会话编辑模态、`^c` 复制会话 id）。
 pub const LX_HISTORY_PANEL_FOOTER: &str = "↑↓ select · ↵ open · ^c copy · ⇧↵ edit · esc close";
 /// `/model` 面板标题。

@@ -62,6 +62,8 @@ fn user_visible_labels_are_clean_ascii() {
         MENTION_REF_DIR_EMPTY,
         LX_MENTION_LOADING,
         LX_MENTION_EMPTY,
+        LX_HISTORY_LOADING,
+        LX_SESSION_LOADING,
         LX_SLASH_PANEL_FOOTER,
         LX_HISTORY_PANEL_FOOTER,
         LX_REWIND_PANEL_FOOTER,

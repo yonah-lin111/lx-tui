@@ -101,6 +101,7 @@ pub fn on_history_listed(
     let Some(SlashPanel::History(panel)) = target.lx.slash.as_mut() else {
         return false;
     };
+    panel.loading = false;
     panel.entries = entries;
     panel.current = bound.as_deref().and_then(|session_id| {
         panel
@@ -147,9 +148,10 @@ pub fn resume_session(state: &mut AppState, pane: PaneId, session_id: &str) -> b
             pane,
             session_id: session_id.to_string(),
         });
-    // 面板先行关闭；列表数据到达后填充。
+    // 面板先行关闭并进入历史加载态；列表数据到达后填充。
     if let Some(target) = state.pane_mut_anywhere(pane) {
         target.lx.slash = None;
+        target.lx.chat.loading_session = true;
     }
     true
 }
@@ -183,6 +185,7 @@ pub fn on_session_loaded_full(
     let Some(target) = state.pane_mut_anywhere(pane) else {
         return false;
     };
+    target.lx.chat.loading_session = false;
     let session_changed = target.lx.chat.session_id.as_deref() != Some(session_id);
     if session_changed {
         // Agents 面板属于会话：不清理会把上一会话的 run、计数和 ^d 目标带过来。

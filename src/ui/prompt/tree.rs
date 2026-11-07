@@ -2,7 +2,7 @@
 
 use ratatui::buffer::Buffer;
 use ratatui::layout::Rect;
-use unicode_width::UnicodeWidthChar;
+use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
 
 use crate::app::prompt::{PromptDropHit, PromptPanel, PromptRow, PromptRowKind, PromptSection};
 use crate::app::state::{PromptDrag, PromptDropMark};
@@ -85,16 +85,20 @@ pub fn render(
             expanded,
         );
     }
-    // 无树行时显示空状态 / 无命中占位。
+    // 无树行时居中显示空状态 / 无命中占位。
     if rows.is_empty() && rows_area.height >= 1 {
         let empty = if panel.search.text().trim().is_empty() {
             text::PROMPT_TREE_EMPTY
         } else {
             text::PROMPT_TREE_NO_MATCHES
         };
+        let text_w = u16::try_from(empty.width()).unwrap_or(u16::MAX);
+        let x = rows_area
+            .x
+            .saturating_add(rows_area.width.saturating_sub(text_w) / 2);
         paint_text(
             buf,
-            rows_area.x,
+            x,
             rows_area.y,
             empty,
             style::muted(),

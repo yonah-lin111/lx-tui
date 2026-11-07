@@ -60,30 +60,28 @@ pub(crate) fn draw_empty_detail(
     loading_frame: usize,
 ) {
     if run.loaded {
-        grid.put_clipped(
-            rect.x,
-            rect.y,
-            text::LX_TASK_AGENTS_EMPTY,
-            style::muted(),
-            rect.width,
-        );
+        super::draw_placeholder(grid, rect, text::LX_TASK_AGENTS_EMPTY);
     } else {
-        // 历史 run 的消息流还在读库：用与主历史相同的呼吸圆点表达 loading。
+        // 历史 run 的消息流还在读库：用与主历史相同的呼吸圆点表达 loading，水平居中。
         let mark = crate::ui::main_content::lx::history::StepMark::Running;
         let mark_text = format!("{} ", mark.glyph(StepKind::Body, loading_frame, true));
+        let total_w = u16::try_from(mark_text.width() + text::LX_TASK_AGENTS_LOADING.width())
+            .unwrap_or(u16::MAX);
+        let x = rect.x + rect.width.saturating_sub(total_w) / 2;
         grid.put_clipped(
-            rect.x,
+            x,
             rect.y,
             &mark_text,
             style::chat_step_mark_running_body(),
-            rect.width,
+            rect.right().saturating_sub(x),
         );
+        let text_x = x.saturating_add(2);
         grid.put_clipped(
-            rect.x.saturating_add(2),
+            text_x,
             rect.y,
             text::LX_TASK_AGENTS_LOADING,
             style::muted(),
-            rect.width,
+            rect.right().saturating_sub(text_x),
         );
     }
 }
@@ -109,13 +107,7 @@ pub(super) fn draw_list(grid: &mut Grid, list: Rect, page: &TaskPage, agents: &A
         .filter_map(|index| agents.runs.get(*index))
         .collect();
     if visible_runs.is_empty() {
-        grid.put_clipped(
-            list.x,
-            list.y,
-            text::LX_TASK_AGENTS_EMPTY,
-            style::muted(),
-            list.width,
-        );
+        super::draw_placeholder(grid, list, text::LX_TASK_AGENTS_EMPTY);
         return;
     }
     let visible = usize::from(list.height);

@@ -235,13 +235,17 @@ fn long_names_are_ellipsized_within_width() {
 
 #[test]
 fn empty_tree_shows_placeholder_under_search_row() {
-    // 防御分支：无 temp 且无树行时显示空状态占位（进入列表恒有 default temp）。
+    // 防御分支：无 temp 且无树行时居中显示空状态占位（进入列表恒有 default temp）。
     let panel = panel_with(vec![], vec![]);
     let area = Rect::new(0, 0, 30, 5);
     let mut buf = Buffer::empty(area);
     render(area, &mut buf, &panel, false, None, None);
     let text = row_text(&buf, area, 2);
-    assert!(text.starts_with(text::PROMPT_TREE_EMPTY), "{text}");
+    assert!(text.contains(text::PROMPT_TREE_EMPTY), "{text}");
+    assert!(
+        !text.starts_with(text::PROMPT_TREE_EMPTY),
+        "居中显示而非贴左: {text}"
+    );
 }
 
 #[test]
@@ -265,7 +269,7 @@ fn filter_without_matches_shows_hint_placeholder() {
     let mut buf = Buffer::empty(area);
     render(area, &mut buf, &panel, false, None, None);
     let text = row_text(&buf, area, 2);
-    assert!(text.starts_with(text::PROMPT_TREE_NO_MATCHES), "{text}");
+    assert!(text.contains(text::PROMPT_TREE_NO_MATCHES), "{text}");
 }
 
 #[test]
@@ -497,7 +501,7 @@ fn empty_tree_keeps_placeholder_under_root_drop_mark() {
     );
     let placeholder = row_text(&buf, area, 2);
     assert!(
-        placeholder.starts_with(text::PROMPT_TREE_EMPTY),
+        placeholder.contains(text::PROMPT_TREE_EMPTY),
         "空状态占位仍可见: {placeholder}"
     );
     assert!(!placeholder.contains(text::PROMPT_TREE_DROP_ROOT));

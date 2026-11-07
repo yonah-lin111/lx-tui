@@ -211,20 +211,18 @@ fn render_menu_row(
     fill_row(frame, rect, base);
     match row {
         ReferencedFolderMenuRow::Empty => {
-            paint_text(
-                frame,
-                rect,
-                text::REFERENCED_MENU_EMPTY,
-                base.patch(style::muted()),
-            );
+            let clipped =
+                text::truncate_to_width(text::REFERENCED_MENU_EMPTY, usize::from(rect.width));
+            let text_w = u16::try_from(clipped.width()).unwrap_or(0);
+            let x = rect.x.saturating_add(rect.width.saturating_sub(text_w) / 2);
+            paint_text_x(frame, rect, x, &clipped, base.patch(style::muted()));
         }
         ReferencedFolderMenuRow::Unavailable => {
-            paint_text(
-                frame,
-                rect,
-                text::REFERENCED_DB_UNAVAILABLE,
-                base.patch(style::muted()),
-            );
+            let clipped =
+                text::truncate_to_width(text::REFERENCED_DB_UNAVAILABLE, usize::from(rect.width));
+            let text_w = u16::try_from(clipped.width()).unwrap_or(0);
+            let x = rect.x.saturating_add(rect.width.saturating_sub(text_w) / 2);
+            paint_text_x(frame, rect, x, &clipped, base.patch(style::muted()));
         }
         ReferencedFolderMenuRow::Add => {
             let x = paint_marker(frame, rect, selected, base);

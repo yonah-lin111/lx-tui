@@ -289,7 +289,23 @@ fn status_line(panel: &ConnectPanel) -> Option<(String, Style)> {
 fn render_rows(frame: &mut Frame<'_>, layout: &ConnectLayout, panel: &ConnectPanel) {
     if layout.rows.is_empty() {
         if let Some(placeholder) = empty_placeholder(panel) {
-            paint_text(frame, layout.list_rect, placeholder, style::muted());
+            let clipped = text::truncate_to_width(placeholder, usize::from(layout.list_rect.width));
+            let text_w = u16::try_from(clipped.width()).unwrap_or(0);
+            let x = layout
+                .list_rect
+                .x
+                .saturating_add(layout.list_rect.width.saturating_sub(text_w) / 2);
+            let y = layout
+                .list_rect
+                .y
+                .saturating_add(layout.list_rect.height.saturating_sub(1) / 2);
+            frame.buffer_mut().set_stringn(
+                x,
+                y,
+                &clipped,
+                usize::from(layout.list_rect.width),
+                style::muted(),
+            );
         }
         return;
     }
