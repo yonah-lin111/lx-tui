@@ -16,7 +16,7 @@
 
 1. **右侧面板 Todo 条目多行缩进显示与行内多行编辑（`src/ui/right_panel/todo/`）**：
    - 现状：Todo 条目固定为 1 行高，超出面板宽度直接硬截断；双击或新建进入行内编辑时仅支持单行水平滚动，长待办无法完整阅读与编辑。
-   - 目标：Todo 条目支持自动软折行，**最多显示 3 行内容**；第 2、3 行缩进 9 列与首行正文左对齐，超出 3 行在第 3 行末尾以 `…` 截断；行内编辑同样原地支持软折行并最多展开至 3 行高（超出 3 行在 3 行视口内随光标上下滚动）。
+   - 目标：Todo 条目支持自动软折行，**最多显示 3 行内容**；首行保留 9 列前缀（`❯ [ ] P0 `），第 2、3 行不再为优先级徽标 `P(n)` 缩进、左侧只缩进 6 列直接与 `P(n)` 左对齐，超出 3 行在第 3 行末尾以 `…` 截断；行内编辑同样原地支持软折行（续行同样缩进 6 列与 `P(n)` 左对齐）并最多展开至 3 行高（超出 3 行在 3 行视口内随光标上下滚动）。
 2. **后台任务面板内容区新增「回到底部」按钮（`src/ui/main_content/lx/`）**：
    - 现状：主 Agent 历史消息列表向上滚动后，在输入框上沿有 `↓ jump to bottom` 按钮；但打开后台任务面板（`Processes · Agents`）并在上方日志或子 Agent 详情区向上翻阅后，没有「回到底部」按钮，且 `chat_bar` 在任务面板打开时被整体隐藏。
    - 目标：参考主 Agent 的按钮样式与位置，在后台任务面板下方列表顶部分隔线正上方一行（`chat_bar` 位置），当 `Processes` 日志输出区或 `Agents` 消息详情区离开最底部时显示 `↓ jump to bottom` 按钮，点击后立即滚回最底部并恢复自动跟随。
@@ -32,7 +32,7 @@
 
 | 编号 | 决策维度 | 最终确认结论 |
 | :--- | :--- | :--- |
-| **Q1** | Todo item 最多 3 行、缩进与行内编辑 | 首行保留 9 列前缀（`❯ [ ] P0 `），第 2、3 行缩进 9 列与首行正文左对齐；非编辑态最多显示 3 行、超长在第 3 行末用 `…` 截断，选中/悬停底色铺满该条目全部视觉行（1~3 行）；编辑态原地支持软折行并最多展开至 3 行高，超过 3 行在 3 行视口内随光标上下滚动。 |
+| **Q1** | Todo item 最多 3 行、缩进与行内编辑 | 首行保留 9 列前缀（`❯ [ ] P0 `），第 2、3 行不再为 `P(n)` 缩进、仅缩进 6 列与 `P(n)` 左对齐；非编辑态最多显示 3 行、超长在第 3 行末用 `…` 截断，选中/悬停底色铺满该条目全部视觉行（1~3 行）；编辑态原地支持软折行（续行同样缩进 6 列）并最多展开至 3 行高，超过 3 行在 3 行视口内随光标上下滚动。 |
 | **Q2** | 后台任务面板「回到底部」按钮 | 同时覆盖 `Processes`（进程日志）和 `Agents`（子 Agent 消息流）两个 Tab；当当前 Tab 的上方内容区未处于底部跟随态时，在下方任务列表顶边横线上方一行（复用 `chat_bar` 右对齐位置与样式）显示 `↓ jump to bottom`，上方内容区自动让出 1 行；点击后跳回最底部并恢复自动跟随。 |
 | **Q3** | Ask 面板 Preview 下移、共用滚动条与选项描述换行 | 彻底取消左右分栏，选项区占满全宽；每个选项的 `description` 缩进 6 列后按全宽软折行完整展示；若当前题目没有任何选项带 `preview`，完全隐藏预览区（不显示 `(no preview)`）；若题目中有选项带 `preview`，预览区置于列表所有项正下方，且**移除字符图独立滚动条，问题选项与字符图共用面板右侧同一条滚动条**。 |
 | **Q4** | Ask 移除行内提交按钮与单选点击行为 | 所有题目（单选/多选）与 `Submit` 汇总页均不渲染行内提交按钮，直接使用键盘操作；单题单选移除顶部 Tab，按 `Enter`、`1..9` 或鼠标单击选项立即选中并完成提交；多题或单题多选通过 `Tab`/`←`/`→` 切到 `Submit` 汇总页按 `Enter` 提交。 |
@@ -67,14 +67,14 @@
 ├─ 2026/11/01 ───────────────────────── 26-01 ─┤
 │ ‹  Mon   Tue   Wed   Thu   Fri   Sat  [Sun •]›│
 │ ❯ [ ] P0 今天下午三点前必须把登录接口的超时   │ ← 第 1 行：9 列前缀 + 正文首行
-│          重试和日志埋点全部改完并提测上线，   │ ← 第 2 行：左侧 9 列空白缩进 + 正文第 2 行
-│          同时同步更新接口文档与测试用例…      │ ← 第 3 行：左侧 9 列空白缩进 + 末行超出截断 `…`
+│       重试和日志埋点全部改完并提测上线，同时 │ ← 第 2 行：左侧 6 列空白缩进（与 P0 左对齐）+ 正文第 2 行
+│       同步更新接口文档与测试用例…            │ ← 第 3 行：左侧 6 列空白缩进 + 末行超出截断 `…`
 │   [~] P1 补充单元测试用例                     │ ← 单行短条目：仍占 1 行，紧凑排列
 └──────────────────────────────────────────────┘
 ```
 - **前缀宽度常量**：
-  - `MARKER_WIDTH (1) + 1 + STATUS_WIDTH (3) + 1 + PRIORITY_WIDTH (2) + 1 = 9` 列（即 `row_text_x(list) - list.x == 9`）。
-  - 正文可用列宽：`text_width = list.right().saturating_sub(row_text_x(list))`。
+  - 首行前缀：`MARKER_WIDTH (1) + 1 + STATUS_WIDTH (3) + 1 + PRIORITY_WIDTH (2) + 1 = 9` 列（即 `row_text_x(list) - list.x == 9`），首行正文可用列宽：`text_width = list.right().saturating_sub(row_text_x(list))`。
+  - 续行前缀：`MARKER_WIDTH (1) + 1 + STATUS_WIDTH (3) + 1 = 6` 列（即 `row_priority_x(list) - list.x == 6`，`P(n)` 不缩进），续行正文可用列宽：`cont_width = list.right().saturating_sub(row_priority_x(list))`。
 - **最大显示行数常量**：
   - `pub const MAX_TODO_ITEM_ROWS: usize = 3;`
 
@@ -168,10 +168,10 @@ pub fn wrap_clamped_lines(text: &str, width: usize, max_rows: usize) -> Vec<Stri
 - 在 `src/ui/right_panel/todo.rs` 中构建统一的纯布局函数 `layout_visible_items(panel: Rect, state: &AppState) -> TodoListLayout`：
   - 每个逻辑条目 `display_idx`（含新建幽灵行）计算出其折行后的行数 `height: usize`（`1..=3`）；
   - 选中态（`row_selected`）或悬停态（`hovered`）时，将该条目在 `list` 视口内可见的所有视觉行 `Rect::new(list.x, row_y, list.width, visible_h)` **整块涂上 `style::selection()`**；
-  - 第 1 个视觉行绘制 `❯`、状态框 `[ ]`、优先级徽标 `P0` 与第 1 行文本；第 2、3 个视觉行左侧 9 列留空（保留选中背景色），从 `row_text_x(list)` 起绘制第 2、3 行文本；
+  - 第 1 个视觉行绘制 `❯`、状态框 `[ ]`、优先级徽标 `P0` 与第 1 行文本（从 `row_text_x(list)` 起）；第 2、3 个视觉行左侧 6 列留空（保留选中背景色），不缩进 `P(n)`，直接从 `row_priority_x(list)` 起绘制第 2、3 行文本；
   - `row_at(panel, state, column, row)`：通过同一份 `layout_visible_items` 查表，点击某条目的第 1、2、3 行均命中同一个 `display_idx`；
   - `priority_at(panel, state, column, row)`：仅当点击落在该条目的**首行**（`offset_in_item == 0`）且 X 坐标位于 `[row_priority_x, row_priority_x + PRIORITY_WIDTH)` 时才命中优先级徽标；
-  - `edit_input_char_at(panel, state, column, row)`：命中正在编辑的条目的任意可见行 `visual_row_offset`，结合 `column - text_x` 换算回全文字符索引，完整支持多行点击定位光标与鼠标拖拽选区。
+  - `edit_input_char_at(panel, state, column, row)`：命中正在编辑的条目的任意可见行 `visual_row_offset`，结合 `column - row_line_x(list, visual_row_offset)` 换算回全文字符索引，完整支持多行点击定位光标与鼠标拖拽选区。
 
 ---
 
@@ -417,7 +417,7 @@ pub fn wrap_clamped_lines(text: &str, width: usize, max_rows: usize) -> Vec<Stri
 | 模块 | 文件路径 | 修改内容概要 |
 | :--- | :--- | :--- |
 | **Todo 渲染与输入** | `src/ui/widgets/input.rs` | 新增多行软折行与 3 行截断/视口跟随辅助函数（`wrap_clamped_lines`、`multiline_view`、`multiline_char_index_at`） |
-| **Todo 面板 UI** | `src/ui/right_panel/todo.rs` | 条目渲染改为 1~3 行动态高度、续行 9 列缩进、3 行末 `…` 截断；行内编辑支持 1~3 行软折行与光标同步；更新 `row_at`/`priority_at`/`edit_input_char_at`/`scrollbar` |
+| **Todo 面板 UI** | `src/ui/right_panel/todo.rs` | 条目渲染改为 1~3 行动态高度、续行 6 列缩进（与 `P(n)` 左对齐）、3 行末 `…` 截断；行内编辑支持 1~3 行软折行与光标同步；更新 `row_at`/`priority_at`/`edit_input_char_at`/`scrollbar` |
 | **Todo 状态与更新** | `src/app/state/todo.rs`<br>`src/app/update/todo.rs` | 适配多行编辑视口与滚动可见性计算 |
 | **后台任务面板状态** | `src/app/state/lx/task.rs` | 新增 `TaskPage::is_at_bottom(&self, agents)` 判定 |
 | **聊天栏与回到底部** | `src/ui/main_content/lx/chat_bar.rs`<br>`src/ui/main_content/lx/history_hit.rs`<br>`src/app/update/chat/viewport.rs`<br>`src/event/mouse/` | 支持后台任务面板打开且未触底时显示 `↓ jump to bottom`，点击跳回 `Processes` 日志尾部或 `Agents` 消息流底部；支持 `Processes` 输出区滚轮滚动 |
@@ -431,7 +431,7 @@ pub fn wrap_clamped_lines(text: &str, width: usize, max_rows: usize) -> Vec<Stri
 ## 6. 验证与测试计划
 
 1. **Todo 面板单元测试（`src/ui/right_panel/todo/tests.rs`、`src/app/update/todo/tests.rs`）**：
-   - 验证短文本占 1 行、中长文本折为 2~3 行且第 2、3 行精确缩进 9 列（与首行正文对齐）；
+   - 验证短文本占 1 行、中长文本折为 2~3 行且第 2、3 行精确缩进 6 列（与 `P(n)` 左边缘对齐）；
    - 验证超 3 行文本在第 3 行末尾以 `…` 截断，总高不超过 3 行；
    - 验证多条多行待办溢出视口时键盘 `↓` 导航自动滚入视口、滚动条正确显示；
    - 验证选中与悬停高亮底色完整覆盖该条目的全部 1~3 行，且优先级徽标不被污染；
