@@ -482,6 +482,20 @@ fn text_input_wrapped_up_down_respects_hard_breaks() {
 }
 
 #[test]
+fn text_input_wrapped_indented_up_down_uses_distinct_first_and_cont_widths() {
+    // 首行宽 3 ("abc", 0..3)，续行宽 6 ("defghi", 3..9)，第 3 行 "jk" (9..11)。
+    let mut input = TextInput::new("abcdefghijk");
+    input.move_up_wrapped_indented(3, 6);
+    assert_eq!(input.cursor(), 5, "从第 3 行 col 2 上移到第 2 行 col 2");
+    input.move_up_wrapped_indented(3, 6);
+    assert_eq!(input.cursor(), 2, "从第 2 行 col 2 上移到首行 col 2");
+    input.move_down_wrapped_indented(3, 6);
+    assert_eq!(input.cursor(), 5);
+    input.move_down_wrapped_indented(3, 6);
+    assert_eq!(input.cursor(), 11);
+}
+
+#[test]
 fn text_input_apply_edit_key_covers_word_and_history_commands() {
     let mut input = TextInput::new("one two");
     assert!(input.apply_edit_key(OverlayKey::WordLeft));

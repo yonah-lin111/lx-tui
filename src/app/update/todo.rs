@@ -524,8 +524,9 @@ fn apply_todo_edit_key(state: &mut AppState, key: TodoKey) -> bool {
         TodoKey::Tab => cycle_editing_status(state),
         // 编辑态上下键：在软折行视觉行间移动光标，不退出编辑、不切行。
         TodoKey::Up | TodoKey::Down => {
-            let width = state.todo.edit_text_width();
-            if width == 0 {
+            let first_width = state.todo.edit_text_width();
+            let cont_width = state.todo.edit_cont_width();
+            if first_width == 0 {
                 return false;
             }
             let Some(input) = state.todo.edit_input_mut() else {
@@ -534,8 +535,8 @@ fn apply_todo_edit_key(state: &mut AppState, key: TodoKey) -> bool {
             let before = input.cursor();
             let had_sel = input.selection().is_some();
             match key {
-                TodoKey::Up => input.move_up_wrapped(width),
-                TodoKey::Down => input.move_down_wrapped(width),
+                TodoKey::Up => input.move_up_wrapped_indented(first_width, cont_width),
+                TodoKey::Down => input.move_down_wrapped_indented(first_width, cont_width),
                 _ => {}
             }
             input.cursor() != before || had_sel
@@ -933,11 +934,15 @@ pub fn apply_todo_button(state: &mut AppState, button: TodoButton) -> bool {
 ///
 /// `app/` 拿不到布局，几何只有渲染层一个来源；这里只做一次纯算术。
 pub fn resolve_todo_viewport(state: &mut AppState, panel: ratatui::layout::Rect) -> bool {
-    let (rows, item_rows, edit_scroll_row, edit_text_width) =
+    let (rows, item_rows, edit_scroll_row, edit_text_width, edit_cont_width) =
         crate::ui::right_panel::todo::viewport_metrics(panel, state);
-    state
-        .todo
-        .sync_viewport(rows, item_rows, edit_scroll_row, edit_text_width)
+    state.todo.sync_viewport_indented(
+        rows,
+        item_rows,
+        edit_scroll_row,
+        edit_text_width,
+        edit_cont_width,
+    )
 }
 
 #[cfg(test)]

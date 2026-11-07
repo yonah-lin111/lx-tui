@@ -1043,6 +1043,21 @@ fn todo_edit_up_down_moves_across_wrapped_rows() {
 }
 
 #[test]
+fn todo_edit_up_down_respects_wider_continuation_rows() {
+    // 首行宽 3 ("abc", 0..3)，续行宽 6 ("defghi", 3..9)，第 3 行 "jk" (9..11)。
+    let mut state = todo_state(&["abcdefghijk"]);
+    assert!(begin_todo_edit(&mut state, TodoEditTarget::Current(0)));
+    assert!(state.todo.sync_viewport_indented(5, vec![3], Some(0), 3, 6));
+    assert_eq!(state.todo.edit_text_width(), 3);
+    assert_eq!(state.todo.edit_cont_width(), 6);
+
+    assert!(apply_todo_key(&mut state, TodoKey::Up));
+    assert_eq!(state.todo.editing().unwrap().input.cursor(), 5);
+    assert!(apply_todo_key(&mut state, TodoKey::Up));
+    assert_eq!(state.todo.editing().unwrap().input.cursor(), 2);
+}
+
+#[test]
 fn todo_edit_select_all_and_replace() {
     let mut state = todo_state(&["abc"]);
     assert!(begin_todo_edit(&mut state, TodoEditTarget::Current(0)));

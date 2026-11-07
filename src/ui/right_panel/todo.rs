@@ -208,7 +208,7 @@ pub fn button_at(panel: Rect, column: u16, row: u16) -> Option<TodoButton> {
     })
 }
 
-/// 行内优先级徽标的起始 X 坐标。
+/// 行内优先级徽标的起始 X 坐标（同时也是折行续行的起始 X 坐标，左侧缩进 6 列）。
 fn row_priority_x(list: Rect) -> u16 {
     list.x
         .saturating_add(MARKER_WIDTH)
@@ -217,21 +217,34 @@ fn row_priority_x(list: Rect) -> u16 {
         .saturating_add(1)
 }
 
-/// 行内正文的起始 X 坐标（含优先级徽标及其后 1 列间隔）。
+/// 行内首行正文的起始 X 坐标（含优先级徽标及其后 1 列间隔，左侧缩进 9 列）。
 fn row_text_x(list: Rect) -> u16 {
     row_priority_x(list)
         .saturating_add(PRIORITY_WIDTH)
         .saturating_add(1)
 }
 
+/// 条目第 `offset` 个可见行的正文起始 X 坐标：
+/// 首行（`offset == 0`）在 `P(n) ` 右侧（缩进 9 列），
+/// 续行（`offset >= 1`）不缩进 `P(n)`，直接与 `P(n)` 左对齐（缩进 6 列）。
+fn row_line_x(list: Rect, offset: usize) -> u16 {
+    if offset == 0 {
+        row_text_x(list)
+    } else {
+        row_priority_x(list)
+    }
+}
+
 /// 可见列表项的纯几何：渲染、`row_at`、`priority_at` 与 `edit_input_char_at` 共用。
 #[derive(Debug, Clone)]
 struct VisibleList {
     list: Rect,
-    /// 正文起始列：续行同样从这里开始，左侧 9 列留空。
+    /// 首行正文起始列（左侧 9 列留给 `❯ [ ] P0 `）。
     text_x: u16,
-    /// 正文可用显示列数（至少 1，避免折行退化为死循环）。
+    /// 首行正文可用显示列数（至少 1，避免折行退化为死循环）。
     text_width: usize,
+    /// 续行正文可用显示列数（从 `P(n)` 左边缘起，左侧 6 列留给 `❯ [ ] `）。
+    cont_width: usize,
     items: Vec<VisibleItem>,
 }
 
@@ -254,14 +267,19 @@ impl VisibleList {
 }
 
 /// 计算当前面板宽度下的 Todo 列表视口度量：
-/// `(列表可见物理行数, 各显示条目视觉行高, 编辑视口起始行, 编辑框可用列宽)`。
+/// `(列表可见物理行数, 各显示条目视觉行高, 编辑视口起始行, 编辑框首行可用列宽, 编辑框续行可用列宽)`。
 ///
 /// 供 `resolve_todo_viewport` 与 `scrollbar` 复用同一份多行折行高度与最大滚动偏移。
-pub fn viewport_metrics(panel: Rect, state: &AppState) -> (usize, Vec<u16>, Option<usize>, usize) {
+pub fn viewport_metrics(
+    panel: Rect,
+    state: &AppState,
+) -> (usize, Vec<u16>, Option<usize>, usize, usize) {
     let list = effective_list_rect(panel, state);
     let rows = visible_rows_for(panel, state);
     let text_x = row_text_x(list);
+    let cont_x = row_priority_x(list);
     let text_width = usize::from(list.right().saturating_sub(text_x)).max(1);
+    let cont_width = usize::from(list.right().saturating_sub(cont_x)).max(1);
     let ghost = state
         .todo
         .editing()
@@ -269,13 +287,13 @@ pub fn viewport_metrics(panel: Rect, state: &AppState) -> (usize, Vec<u16>, Opti
         .map(|edit| edit.at);
     let total = state.todo.display_len();
     let heights = (0..total)
-        .map(|display| item_rows(state, display, ghost, text_width))
+        .map(|display| item_rows(state, display, ghost, text_width, cont_width))
         .collect();
     let edit_scroll_row = state
         .todo
         .editing()
-        .map(|edit| edit_view(edit, text_width).start_row);
-    (rows, heights, edit_scroll_row, text_width)
+        .map(|edit| edit_view(edit, text_width, cont_width).start_row);
+    (rows, heights, edit_scroll_row, text_width, cont_width)
 }
 
 /// 根据可见物理行数与各显示条目的视觉行高，计算能完整露出末尾条目的最大起始条目下标。
@@ -308,7 +326,9 @@ fn max_scroll_for(rows: usize, item_rows: &[u16]) -> usize {
 fn layout_visible_items(panel: Rect, state: &AppState) -> VisibleList {
     let list = effective_list_rect(panel, state);
     let text_x = row_text_x(list);
+    let cont_x = row_priority_x(list);
     let text_width = usize::from(list.right().saturating_sub(text_x)).max(1);
+    let cont_width = usize::from(list.right().saturating_sub(cont_x)).max(1);
     let ghost = state
         .todo
         .editing()
@@ -322,7 +342,7 @@ fn layout_visible_items(panel: Rect, state: &AppState) -> VisibleList {
         if display >= total {
             break;
         }
-        let height = item_rows(state, display, ghost, text_width);
+        let height = item_rows(state, display, ghost, text_width, cont_width);
         let rendered_rows = height.min(list.bottom().saturating_sub(y));
         items.push(VisibleItem {
             display,
@@ -335,43 +355,60 @@ fn layout_visible_items(panel: Rect, state: &AppState) -> VisibleList {
         list,
         text_x,
         text_width,
+        cont_width,
         items,
     }
 }
 
 /// 单个显示条目占用的视觉行数（`1..=MAX_TODO_ITEM_ROWS`）。
-fn item_rows(state: &AppState, display: usize, ghost: Option<usize>, text_width: usize) -> u16 {
+fn item_rows(
+    state: &AppState,
+    display: usize,
+    ghost: Option<usize>,
+    text_width: usize,
+    cont_width: usize,
+) -> u16 {
     if ghost == Some(display) {
         return state
             .todo
             .editing()
-            .map_or(1, |edit| edit_rows(edit, text_width));
+            .map_or(1, |edit| edit_rows(edit, text_width, cont_width));
     }
     let Some(record) = display_record(state, display) else {
         return 1;
     };
     if let Some(edit) = editing_row(state, record) {
-        return edit_rows(edit, text_width);
+        return edit_rows(edit, text_width, cont_width);
     }
-    let lines = widgets::input::wrap_clamped_lines(&record.text, text_width, MAX_TODO_ITEM_ROWS);
+    let lines = widgets::input::wrap_clamped_lines_indented(
+        &record.text,
+        text_width,
+        cont_width,
+        MAX_TODO_ITEM_ROWS,
+    );
     rows_of(lines.len())
 }
 
 /// 编辑态的视觉行数：空的新建幽灵行按 1 行占位，其余跟随软折行（上限 3 行）。
-fn edit_rows(edit: &TodoEdit, text_width: usize) -> u16 {
+fn edit_rows(edit: &TodoEdit, text_width: usize, cont_width: usize) -> u16 {
     if edit.input.text().is_empty() && edit.target.is_none() {
         return 1;
     }
-    let view = edit_view(edit, text_width);
+    let view = edit_view(edit, text_width, cont_width);
     rows_of(view.visible_lines.len())
 }
 
 /// 编辑现场的多行输入视口（复用 `edit.scroll_row` 保持滑动窗口稳定）。
-fn edit_view(edit: &TodoEdit, text_width: usize) -> widgets::input::MultilineInputView<'_> {
-    widgets::input::multiline_view_scrolled(
+fn edit_view(
+    edit: &TodoEdit,
+    text_width: usize,
+    cont_width: usize,
+) -> widgets::input::MultilineInputView<'_> {
+    widgets::input::multiline_view_scrolled_indented(
         edit.input.text(),
         edit.input.cursor(),
         text_width,
+        cont_width,
         MAX_TODO_ITEM_ROWS,
         edit.scroll_row,
     )
@@ -440,24 +477,27 @@ pub fn edit_input_char_at(panel: Rect, state: &AppState, column: u16, row: u16) 
     if row < item.y || row >= item.y.saturating_add(item.rendered_rows) {
         return None;
     }
-    if column < layout.text_x || column >= layout.list.right() {
+    let visual_row_offset = usize::from(row - item.y);
+    let line_x = row_line_x(layout.list, visual_row_offset);
+    if column < line_x || column >= layout.list.right() {
         return None;
     }
-    Some(widgets::input::multiline_char_index_at_scrolled(
+    Some(widgets::input::multiline_char_index_at_scrolled_indented(
         edit.input.text(),
         edit.input.cursor(),
         layout.text_width,
+        layout.cont_width,
         MAX_TODO_ITEM_ROWS,
         edit.scroll_row,
-        usize::from(row - item.y),
-        column - layout.text_x,
+        visual_row_offset,
+        column - line_x,
     ))
 }
 
 /// 拖拽选区时将鼠标坐标钳制到正在编辑的 Todo 文本区边界并换算为全文字符索引。
 ///
 /// 行号钳制到该编辑项的可见行范围 `[item.y, item.y + item.rendered_rows - 1]`，
-/// 列号落入左侧 9 列缩进区时钳为 `0`（行首），越过列表右缘时钳为 `u16::MAX`（行尾）。
+/// 列号落入该行左侧缩进区（首行 9 列、续行 6 列）时钳为 `0`（行首），越过列表右缘时钳为 `u16::MAX`（行尾）。
 pub fn edit_input_drag_char_at(
     panel: Rect,
     state: &AppState,
@@ -478,20 +518,23 @@ pub fn edit_input_drag_char_at(
         item.y,
         item.y.saturating_add(item.rendered_rows.saturating_sub(1)),
     );
-    let rel_col = if column < layout.text_x {
+    let visual_row_offset = usize::from(clamped_row - item.y);
+    let line_x = row_line_x(layout.list, visual_row_offset);
+    let rel_col = if column < line_x {
         0
     } else if column >= layout.list.right() {
         u16::MAX
     } else {
-        column - layout.text_x
+        column - line_x
     };
-    Some(widgets::input::multiline_char_index_at_scrolled(
+    Some(widgets::input::multiline_char_index_at_scrolled_indented(
         edit.input.text(),
         edit.input.cursor(),
         layout.text_width,
+        layout.cont_width,
         MAX_TODO_ITEM_ROWS,
         edit.scroll_row,
-        usize::from(clamped_row - item.y),
+        visual_row_offset,
         rel_col,
     ))
 }
@@ -507,7 +550,7 @@ pub fn scrollbar(panel: Rect, state: &AppState) -> Option<widgets::scrollbar::Sc
     }
     let list = effective_list_rect(panel, state);
     let slot = Rect::new(list.right(), list.y, 1, list.height);
-    let (visible, item_rows, _, _) = viewport_metrics(panel, state);
+    let (visible, item_rows, _, _, _) = viewport_metrics(panel, state);
     let max_scroll = max_scroll_for(visible, &item_rows);
     let total = if max_scroll > 0 {
         visible.saturating_add(max_scroll)
@@ -612,7 +655,13 @@ fn render_rows(panel: Rect, buf: &mut Buffer, state: &AppState) -> Option<(u16, 
     }
     let mut cursor = None;
     for item in &layout.items {
-        let Some(row) = row_view(state, *item, pending_new, layout.text_width) else {
+        let Some(row) = row_view(
+            state,
+            *item,
+            pending_new,
+            layout.text_width,
+            layout.cont_width,
+        ) else {
             continue;
         };
         cursor = cursor.or(render_item(buf, &layout, *item, &row));
@@ -637,6 +686,7 @@ fn row_view<'a>(
     item: VisibleItem,
     pending_new: Option<usize>,
     text_width: usize,
+    cont_width: usize,
 ) -> Option<RowView<'a>> {
     if pending_new == Some(item.display) {
         return Some(RowView {
@@ -655,7 +705,12 @@ fn row_view<'a>(
     Some(RowView {
         status: record.status,
         priority: record.priority,
-        lines: widgets::input::wrap_clamped_lines(&record.text, text_width, MAX_TODO_ITEM_ROWS),
+        lines: widgets::input::wrap_clamped_lines_indented(
+            &record.text,
+            text_width,
+            cont_width,
+            MAX_TODO_ITEM_ROWS,
+        ),
         selected: row_selected || hovered,
         marker: state.todo.selected() == Some(index),
         edit: editing_row(state, record),
@@ -718,7 +773,7 @@ fn render_item(
     }
 }
 
-/// 逐行绘制折行正文：首行与续行都从 `text_x` 起，续行左侧 9 列保持空白。
+/// 逐行绘制折行正文：首行从 `text_x`（缩进 9 列）起，续行从 `row_priority_x`（缩进 6 列，与 `P(n)` 左对齐）起。
 fn render_wrapped_text(
     buf: &mut Buffer,
     layout: &VisibleList,
@@ -734,7 +789,8 @@ fn render_wrapped_text(
         let y = item
             .y
             .saturating_add(u16::try_from(offset).unwrap_or(u16::MAX));
-        write_string_in(buf, layout.list, layout.text_x, y, line, cell_style);
+        let line_x = row_line_x(layout.list, offset);
+        write_string_in(buf, layout.list, line_x, y, line, cell_style);
     }
 }
 
@@ -783,9 +839,9 @@ fn editing_row<'a>(state: &'a AppState, record: &TodoRecord) -> Option<&'a TodoE
     (edit.target.as_deref() == Some(record.id.as_str())).then_some(edit)
 }
 
-/// 绘制行内编辑：1~3 行软折行、续行与正文左对齐，并返回硬件光标坐标。
+/// 绘制行内编辑：1~3 行软折行、续行与 `P(n)` 左对齐（缩进 6 列），并返回硬件光标坐标。
 ///
-/// 与行内多行输入共用 `widgets::input::multiline_view_scrolled` 的视口与光标算法。
+/// 与行内多行输入共用 `widgets::input::multiline_view_scrolled_indented` 的视口与光标算法。
 fn render_edit_item(
     buf: &mut Buffer,
     layout: &VisibleList,
@@ -809,7 +865,7 @@ fn render_edit_item(
         );
         return Some((text_x.min(list.right().saturating_sub(1)), item.y));
     }
-    let view = edit_view(edit, layout.text_width);
+    let view = edit_view(edit, layout.text_width, layout.cont_width);
     for (offset, line) in view
         .visible_lines
         .iter()
@@ -821,7 +877,7 @@ fn render_edit_item(
             .saturating_add(u16::try_from(offset).unwrap_or(u16::MAX));
         let spans =
             widgets::input::build_styled_spans(line.text, line.start_char, edit.input.selection());
-        let mut cur_x = text_x;
+        let mut cur_x = row_line_x(list, offset);
         for span in spans {
             if cur_x >= list.right() {
                 break;
@@ -833,7 +889,8 @@ fn render_edit_item(
             cur_x = cur_x.saturating_add(span_width);
         }
     }
-    let cursor_x = text_x
+    let cursor_line_x = row_line_x(list, usize::from(view.cursor_row_offset));
+    let cursor_x = cursor_line_x
         .saturating_add(view.cursor_col)
         .min(list.right().saturating_sub(1));
     let cursor_y = item
@@ -870,12 +927,20 @@ fn write_string_in(buf: &mut Buffer, list: Rect, x: u16, y: u16, value: &str, ce
     buf.set_stringn(x, y, value, available, cell_style);
 }
 
-/// 编辑行剩余宽度（测试与诊断用）。
+/// 编辑行首行剩余宽度（测试与诊断用）。
 #[cfg(test)]
 pub(crate) fn edit_row_width(panel: Rect) -> usize {
     let list = list_rect(panel);
     let text_x = row_text_x(list);
     usize::from(list.right().saturating_sub(text_x))
+}
+
+/// 编辑行续行剩余宽度（从 `P(n)` 左边缘起，测试与诊断用）。
+#[cfg(test)]
+pub(crate) fn edit_cont_row_width(panel: Rect) -> usize {
+    let list = list_rect(panel);
+    let cont_x = row_priority_x(list);
+    usize::from(list.right().saturating_sub(cont_x))
 }
 
 #[cfg(test)]

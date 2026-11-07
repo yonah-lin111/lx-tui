@@ -266,3 +266,37 @@ fn render_with_selection_highlights_reversed() {
     assert!(buffer[(3, 0)].modifier.contains(Modifier::REVERSED)); // 'd'
     assert!(!buffer[(4, 0)].modifier.contains(Modifier::REVERSED)); // 'e'
 }
+
+#[test]
+fn wrap_clamped_lines_indented_uses_wider_continuation_rows() {
+    // 首行宽 3，续行宽 6："abcdefghijklm" → 首行 "abc"（3），第 2 行 "defghi"（6），第 3 行超长截断为 "jkl…"（4 <= 6）。
+    let lines = wrap_clamped_lines_indented("abcdefghijklmnop", 3, 6, 3);
+    assert_eq!(
+        lines,
+        vec![
+            "abc".to_string(),
+            "defghi".to_string(),
+            "jklmn…".to_string()
+        ]
+    );
+    assert_eq!(unicode_width::UnicodeWidthStr::width(lines[2].as_str()), 6);
+}
+
+#[test]
+fn multiline_view_scrolled_indented_tracks_different_first_and_continuation_widths() {
+    // 首行宽 3，续行宽 6：第 0 行 "abc"(0..3)，第 1 行 "defghi"(3..9)，第 2 行 "jk"(9..11)。
+    let text = "abcdefghijk";
+    let view = multiline_view_scrolled_indented(text, 9, 3, 6, 3, 0);
+    assert_eq!(view.visible_lines.len(), 3);
+    assert_eq!(view.visible_lines[0].text, "abc");
+    assert_eq!(view.visible_lines[1].text, "defghi");
+    assert_eq!(view.visible_lines[2].text, "jk");
+    assert_eq!(view.cursor_row_offset, 2);
+    assert_eq!(view.cursor_col, 0);
+
+    // 点击续行（第 1 行）第 4 列 → 字符索引 3 + 4 = 7 ('h')。
+    assert_eq!(
+        multiline_char_index_at_scrolled_indented(text, 9, 3, 6, 3, 0, 1, 4),
+        7
+    );
+}

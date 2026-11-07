@@ -406,8 +406,13 @@ impl TextInput {
 
     /// 在给定折行宽度下将光标上移一个视觉行（首行再上移则落到行首）。
     pub fn move_up_wrapped(&mut self, width: usize) {
+        self.move_up_wrapped_indented(width, width);
+    }
+
+    /// 在给定首行宽度 `first_width` 与续行宽度 `cont_width` 下将光标上移一个视觉行（首行再上移则落到行首）。
+    pub fn move_up_wrapped_indented(&mut self, first_width: usize, cont_width: usize) {
         self.clear_selection();
-        let lines = self.wrapped_ranges(width);
+        let lines = self.wrapped_ranges(first_width, cont_width);
         let (row, col) = self.cursor_wrapped_pos(&lines);
         if row == 0 {
             self.cursor = lines.first().map_or(0, |line| line.start_char);
@@ -419,8 +424,13 @@ impl TextInput {
 
     /// 在给定折行宽度下将光标下移一个视觉行（末行再下移则落到行尾）。
     pub fn move_down_wrapped(&mut self, width: usize) {
+        self.move_down_wrapped_indented(width, width);
+    }
+
+    /// 在给定首行宽度 `first_width` 与续行宽度 `cont_width` 下将光标下移一个视觉行（末行再下移则落到行尾）。
+    pub fn move_down_wrapped_indented(&mut self, first_width: usize, cont_width: usize) {
         self.clear_selection();
-        let lines = self.wrapped_ranges(width);
+        let lines = self.wrapped_ranges(first_width, cont_width);
         let (row, col) = self.cursor_wrapped_pos(&lines);
         let Some(target) = lines.get(row + 1).copied() else {
             self.cursor = lines
@@ -473,19 +483,22 @@ impl TextInput {
     }
 
     /// 按显示宽度折行得到的视觉行字符区间（与渲染层 `widgets::input` 同一算法）。
-    fn wrapped_ranges(&self, width: usize) -> Vec<WrappedRange> {
-        let width = width.max(1);
+    fn wrapped_ranges(&self, first_width: usize, cont_width: usize) -> Vec<WrappedRange> {
+        let first_width = first_width.max(1);
+        let cont_width = cont_width.max(1);
+        let line_limit = |idx: usize| if idx == 0 { first_width } else { cont_width };
         let mut lines = Vec::new();
         let mut start_char = 0usize;
         let mut char_index = 0usize;
         let mut col = 0usize;
         for ch in self.text.chars() {
             if ch == '\n' {
+                let limit = line_limit(lines.len());
                 lines.push(WrappedRange {
                     start_char,
                     end_char: char_index,
                 });
-                if width > 1 && col == width {
+                if limit > 1 && col == limit {
                     lines.push(WrappedRange {
                         start_char: char_index,
                         end_char: char_index,
@@ -497,7 +510,8 @@ impl TextInput {
                 continue;
             }
             let cells = char_cells(ch);
-            if col + cells > width && col > 0 {
+            let limit = line_limit(lines.len());
+            if col + cells > limit && col > 0 {
                 lines.push(WrappedRange {
                     start_char,
                     end_char: char_index,
@@ -508,11 +522,12 @@ impl TextInput {
             col += cells;
             char_index += 1;
         }
+        let limit = line_limit(lines.len());
         lines.push(WrappedRange {
             start_char,
             end_char: char_index,
         });
-        if width > 1 && col == width {
+        if limit > 1 && col == limit {
             lines.push(WrappedRange {
                 start_char: char_index,
                 end_char: char_index,

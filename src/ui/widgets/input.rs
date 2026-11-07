@@ -103,13 +103,30 @@ pub struct MultilineInputView<'a> {
 ///
 /// 支持文本内换行符 `\n` 与按显示宽度的软折行；返回 `1..=max_rows` 行。
 pub fn wrap_clamped_lines(text: &str, width: usize, max_rows: usize) -> Vec<String> {
-    let width = width.max(1);
+    wrap_clamped_lines_indented(text, width, width, max_rows)
+}
+
+/// 按首行可用宽度 `first_width` 与续行可用宽度 `cont_width` 软折行，并限制最多 `max_rows` 行；
+/// 超出时在末行尾部用 `…` 截断。
+pub fn wrap_clamped_lines_indented(
+    text: &str,
+    first_width: usize,
+    cont_width: usize,
+    max_rows: usize,
+) -> Vec<String> {
+    let first_width = first_width.max(1);
+    let cont_width = cont_width.max(1);
     let max_rows = max_rows.max(1);
-    let mut lines = wrap_text(text, width);
+    let mut lines = wrap_text(text, first_width, cont_width);
     if lines.len() > max_rows {
         lines.truncate(max_rows);
+        let last_width = if max_rows <= 1 {
+            first_width
+        } else {
+            cont_width
+        };
         if let Some(last) = lines.last_mut() {
-            *last = truncate_with_ellipsis(last, width);
+            *last = truncate_with_ellipsis(last, last_width);
         }
     }
     lines
@@ -136,9 +153,22 @@ pub fn multiline_view_scrolled(
     max_rows: usize,
     scroll_row: usize,
 ) -> MultilineInputView<'_> {
-    let width = width.max(1);
+    multiline_view_scrolled_indented(text, cursor, width, width, max_rows, scroll_row)
+}
+
+/// 计算带首行宽度 `first_width`、续行宽度 `cont_width` 与滚动行偏移 `scroll_row` 的多行输入视口。
+pub fn multiline_view_scrolled_indented(
+    text: &str,
+    cursor: usize,
+    first_width: usize,
+    cont_width: usize,
+    max_rows: usize,
+    scroll_row: usize,
+) -> MultilineInputView<'_> {
+    let first_width = first_width.max(1);
+    let cont_width = cont_width.max(1);
     let max_rows = max_rows.max(1);
-    let lines = wrapped_lines(text, width);
+    let lines = wrapped_lines(text, first_width, cont_width);
     let (cursor_row, cursor_col) = cursor_position(&lines, cursor);
     let visible_count = lines.len().clamp(1, max_rows);
     let max_start = lines.len().saturating_sub(visible_count);
@@ -180,7 +210,39 @@ pub fn multiline_char_index_at_scrolled(
     visual_row_offset: usize,
     rel_col: u16,
 ) -> usize {
-    let view = multiline_view_scrolled(text, cursor, width, max_rows, scroll_row);
+    multiline_char_index_at_scrolled_indented(
+        text,
+        cursor,
+        width,
+        width,
+        max_rows,
+        scroll_row,
+        visual_row_offset,
+        rel_col,
+    )
+}
+
+/// 在给定首行宽度 `first_width`、续行宽度 `cont_width` 与 `scroll_row` 的多行视口下，
+/// 将视觉行偏移与列偏移换算回全文字符索引。
+#[allow(clippy::too_many_arguments)]
+pub fn multiline_char_index_at_scrolled_indented(
+    text: &str,
+    cursor: usize,
+    first_width: usize,
+    cont_width: usize,
+    max_rows: usize,
+    scroll_row: usize,
+    visual_row_offset: usize,
+    rel_col: u16,
+) -> usize {
+    let view = multiline_view_scrolled_indented(
+        text,
+        cursor,
+        first_width,
+        cont_width,
+        max_rows,
+        scroll_row,
+    );
     let Some(line) = view.visible_lines.get(visual_row_offset) else {
         return view.visible_lines.last().map_or(0, |line| line.end_char);
     };
@@ -200,15 +262,17 @@ pub fn multiline_char_index_at_scrolled(
     line.end_char
 }
 
-/// 按显示列宽完整折行（含 `\n`），不做行数限制。
-fn wrap_text(text: &str, width: usize) -> Vec<String> {
+/// 按显示列宽完整折行（含 `\n`），不做行数限制；首行使用 `first_width`，后续行使用 `cont_width`。
+fn wrap_text(text: &str, first_width: usize, cont_width: usize) -> Vec<String> {
+    let line_limit = |idx: usize| if idx == 0 { first_width } else { cont_width };
     let mut lines = Vec::new();
     for raw_line in text.split('\n') {
         let mut current = String::new();
         let mut col = 0usize;
         for ch in raw_line.chars() {
             let cells = char_cells(ch);
-            if col + cells > width && col > 0 {
+            let limit = line_limit(lines.len());
+            if col + cells > limit && col > 0 {
                 lines.push(std::mem::take(&mut current));
                 col = 0;
             }
@@ -243,8 +307,9 @@ fn truncate_with_ellipsis(line: &str, width: usize) -> String {
     out
 }
 
-/// 完整视觉行分片：记录每行的文本切片与字符区间。
-fn wrapped_lines(text: &str, width: usize) -> Vec<WrappedLine<'_>> {
+/// 完整视觉行分片：记录每行的文本切片与字符区间；首行使用 `first_width`，后续行使用 `cont_width`。
+fn wrapped_lines(text: &str, first_width: usize, cont_width: usize) -> Vec<WrappedLine<'_>> {
+    let line_limit = |idx: usize| if idx == 0 { first_width } else { cont_width };
     let mut lines = Vec::new();
     let mut start_byte = 0usize;
     let mut start_char = 0usize;
@@ -252,12 +317,13 @@ fn wrapped_lines(text: &str, width: usize) -> Vec<WrappedLine<'_>> {
     let mut col = 0usize;
     for (byte, ch) in text.char_indices() {
         if ch == '\n' {
+            let limit = line_limit(lines.len());
             lines.push(WrappedLine {
                 text: &text[start_byte..byte],
                 start_char,
                 end_char: char_index,
             });
-            if width > 1 && col == width {
+            if limit > 1 && col == limit {
                 lines.push(WrappedLine {
                     text: "",
                     start_char: char_index,
@@ -271,7 +337,8 @@ fn wrapped_lines(text: &str, width: usize) -> Vec<WrappedLine<'_>> {
             continue;
         }
         let cells = char_cells(ch);
-        if col + cells > width && col > 0 {
+        let limit = line_limit(lines.len());
+        if col + cells > limit && col > 0 {
             lines.push(WrappedLine {
                 text: &text[start_byte..byte],
                 start_char,
@@ -284,12 +351,13 @@ fn wrapped_lines(text: &str, width: usize) -> Vec<WrappedLine<'_>> {
         col += cells;
         char_index += 1;
     }
+    let limit = line_limit(lines.len());
     lines.push(WrappedLine {
         text: &text[start_byte..],
         start_char,
         end_char: char_index,
     });
-    if width > 1 && col == width {
+    if limit > 1 && col == limit {
         lines.push(WrappedLine {
             text: "",
             start_char: char_index,

@@ -125,8 +125,10 @@ pub struct TodoPanel {
     rows: usize,
     /// 最近一帧同步的各显示条目视觉行高（`1..=3`）；空切片时退回按单行估算。
     item_rows: Vec<u16>,
-    /// 最近一帧同步的编辑框可用列宽（软折行导航与渲染同源）。
+    /// 最近一帧同步的编辑框首行可用列宽（软折行导航与渲染同源）。
     edit_text_width: usize,
+    /// 最近一帧同步的编辑框续行可用列宽（`P(n)` 不缩进，比首行宽 3 列）。
+    edit_cont_width: usize,
     /// 是否自动将选中/编辑项滚入视口（键盘移动/选中/编辑时置 true，手动滚轮/滚动条置 false）。
     follow_selected: bool,
     /// 当前激活的统计图表类型。
@@ -158,6 +160,7 @@ impl TodoPanel {
             rows: 0,
             item_rows: Vec::new(),
             edit_text_width: 0,
+            edit_cont_width: 0,
             follow_selected: true,
             active_chart: TodoChartKind::StatusAndRate,
             rollover_dismissed: false,
@@ -448,12 +451,33 @@ impl TodoPanel {
         edit_scroll_row: Option<usize>,
         edit_text_width: usize,
     ) -> bool {
+        self.sync_viewport_indented(
+            rows,
+            item_rows,
+            edit_scroll_row,
+            edit_text_width,
+            edit_text_width,
+        )
+    }
+
+    /// 同步当前视口的物理行数、各显示条目的视觉行高（`1..=3`）、多行编辑视口起点、
+    /// 编辑框首行与续行可用列宽，并按需钳制 `scroll` 或跟随焦点项。
+    pub fn sync_viewport_indented(
+        &mut self,
+        rows: usize,
+        item_rows: Vec<u16>,
+        edit_scroll_row: Option<usize>,
+        edit_text_width: usize,
+        edit_cont_width: usize,
+    ) -> bool {
         let mut changed = self.rows != rows
             || self.item_rows != item_rows
-            || self.edit_text_width != edit_text_width;
+            || self.edit_text_width != edit_text_width
+            || self.edit_cont_width != edit_cont_width;
         self.rows = rows;
         self.item_rows = item_rows;
         self.edit_text_width = edit_text_width;
+        self.edit_cont_width = edit_cont_width;
         if let (Some(edit), Some(scroll_row)) = (self.editing.as_mut(), edit_scroll_row)
             && edit.scroll_row != scroll_row
         {
@@ -532,9 +556,14 @@ impl TodoPanel {
         self.editing.as_ref()
     }
 
-    /// 最近一帧同步的编辑框可用列宽（软折行导航用）。
+    /// 最近一帧同步的编辑框首行可用列宽（软折行导航用）。
     pub fn edit_text_width(&self) -> usize {
         self.edit_text_width
+    }
+
+    /// 最近一帧同步的编辑框续行可用列宽（软折行导航用）。
+    pub fn edit_cont_width(&self) -> usize {
+        self.edit_cont_width.max(self.edit_text_width)
     }
 
     /// 是否正在编辑。
