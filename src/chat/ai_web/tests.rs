@@ -111,5 +111,28 @@ fn scripts_for_site_returns_deepseek_and_gemini_driver_bundles() {
     let (gm_helpers, gm_main) = scripts_for_site(crate::app::state::AiWebSite::Gemini);
     assert!(gm_helpers.contains("lx-tui-ai-web-gemini"));
     assert!(gm_helpers.contains("bard-mode-menu-button"));
+    assert!(gm_helpers.contains("takeOverTaskSpace"));
     assert!(gm_main.contains("__lxGeminiStream"));
+    assert!(gm_main.contains("await activateTaskSpace()"));
+}
+
+#[test]
+fn diag_line_filter_preserves_primary_error_and_ignores_stack_or_exit_trailer() {
+    let mut last_diag: Option<&str> = None;
+    let lines = [
+        "[ego-browser:notice] attached",
+        "Error: listTabs: Control of this task space is with the user",
+        "This is a hard stop, not an obstacle to route around",
+        "at buildEgoError (file:////[eval1]:461:19)",
+        "ego's nodejs process exited with code 1.",
+    ];
+    for line in lines {
+        if should_record_diag_line(line, last_diag) {
+            last_diag = Some(line);
+        }
+    }
+    assert_eq!(
+        last_diag,
+        Some("Error: listTabs: Control of this task space is with the user")
+    );
 }

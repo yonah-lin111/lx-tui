@@ -35,6 +35,17 @@ async function emit(obj) {
   await emitMany([obj]);
 }
 
+async function activateTaskSpace() {
+  await useOrCreateTaskSpace(SPACE);
+  const spaces = await listTaskSpaces().catch(() => []);
+  const target = Array.isArray(spaces)
+    ? spaces.find((s) => s && (s.name === SPACE || s.taskId === SPACE))
+    : null;
+  if (target && target.ownership && target.ownership !== 'agent') {
+    await takeOverTaskSpace(SPACE).catch(() => {});
+  }
+}
+
 async function ensureFreshChat() {
   const alreadyFresh = await js(`
     location.pathname === '/' && document.querySelectorAll('[data-virtual-list-item-key]').length === 0

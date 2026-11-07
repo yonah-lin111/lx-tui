@@ -3,7 +3,7 @@
 // Requires `gemini_helpers.js` to be prepended ahead of this file.
 
 async function main() {
-  await useOrCreateTaskSpace(SPACE);
+  await activateTaskSpace();
   const current = await pageInfo().catch(() => null);
   const currentUrl = (current && current.url) || '';
   if (!currentUrl.startsWith('https://gemini.google.com')) {
@@ -43,11 +43,19 @@ async function main() {
   await ensureGeminiModelAndThinking();
 
   // Set up DOM stream collector on window.__lxGeminiStream.
+  const runId = String(Date.now()) + '-' + String(Math.random());
   await js(`
     (() => {
       const existingResponses = Array.from(document.querySelectorAll('model-response'));
-      const targetIndex = ${EDIT_INDEX >= 0 ? EDIT_INDEX : 'existingResponses.length'};
+      const targetIndex = ${
+        EDIT_INDEX >= 0
+          ? EDIT_INDEX
+          : FIRST_TURN
+            ? 0
+            : 'existingResponses.length'
+      };
       window.__lxGeminiStream = {
+        runId: ${JSON.stringify(runId)},
         queue: [],
         done: false,
         started: false,
@@ -63,6 +71,8 @@ async function main() {
           let delta = '';
           if (current.length > previous.length && current.startsWith(previous)) {
             delta = current.slice(previous.length);
+          } else if (kind === 'thinking' && previous.length > 0) {
+            delta = '\\n' + current;
           } else {
             let index = 0;
             while (
@@ -84,11 +94,18 @@ async function main() {
           if (!root) return '';
           const el = selectorList ? root.querySelector(selectorList) : root;
           if (!el) return '';
-          const clone = el.cloneNode(true);
+          const hidden = [];
           if (stripSelectors) {
-            clone.querySelectorAll(stripSelectors).forEach((n) => n.remove());
+            el.querySelectorAll(stripSelectors).forEach((n) => {
+              hidden.push([n, n.style.display]);
+              n.style.display = 'none';
+            });
           }
-          return (clone.innerText || '').replace(/\\r\\n/g, '\\n').trim();
+          const text = (el.innerText || '').replace(/\\r\\n/g, '\\n').trim();
+          for (const [n, prev] of hidden) {
+            n.style.display = prev;
+          }
+          return text;
         },
         pollDom() {
           const responses = Array.from(document.querySelectorAll('model-response'));
@@ -231,7 +248,7 @@ async function main() {
     const sent = await js(String.raw`
       (() => {
         const sendBtn = Array.from(
-          document.querySelectorAll('button.send-button, button[aria-label*="发送"], button[aria-label*="Send"]')
+          document.querySelectorAll('gem-icon-button.send-button button, button.send-button, button[aria-label*="发送"], button[aria-label*="Send"]')
         ).find((b) => !b.disabled && b.getAttribute('aria-disabled') !== 'true');
         if (sendBtn) {
           sendBtn.click();
@@ -258,15 +275,19 @@ async function main() {
   }
 
   const deadline = Date.now() + 300000;
-  while (Date.now() < deadline) {
-    const batch = await js(String.raw`
+  while (Date.now() < deadline && !STREAM_ABORTED) {
+    const batch = await js(`
       (() => {
         const s = window.__lxGeminiStream;
-        if (!s) return { items: [], done: true };
+        if (!s || s.runId !== ${JSON.stringify(runId)}) return { items: [], done: true, superseded: true };
         s.pollDom();
-        return { items: s.queue.splice(0, s.queue.length), done: s.done };
+        return { items: s.queue.splice(0, s.queue.length), done: s.done, superseded: false };
       })()
-    `).catch(() => ({ items: [], done: false }));
+    `).catch(() => ({ items: [], done: false, superseded: false }));
+
+    if (batch && batch.superseded) {
+      return;
+    }
 
     if (batch && Array.isArray(batch.items) && batch.items.length > 0) {
       const events = [];
@@ -312,4 +333,10 @@ async function main() {
   await emit({ event: 'error', message: 'Gemini stream timed out' });
 }
 
-await main();
+try {
+  await main();
+} catch (error) {
+  const raw = String((error && error.message) || error || 'Gemini web driver error');
+  const firstLine = raw.split('\n').map((s) => s.trim()).find(Boolean) || raw;
+  await emit({ event: 'error', message: firstLine });
+}

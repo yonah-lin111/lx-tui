@@ -3,7 +3,7 @@
 // Requires `deepseek_helpers.js` to be prepended ahead of this file.
 
 async function main() {
-  await useOrCreateTaskSpace(SPACE);
+  await activateTaskSpace();
   const current = await pageInfo().catch(() => null);
   const currentUrl = (current && current.url) || '';
   if (!currentUrl.startsWith(HOME)) {
@@ -647,5 +647,7 @@ async function main() {
 try {
   await main();
 } catch (error) {
-  await emit({ event: 'error', message: String((error && error.message) || error) });
+  const raw = String((error && error.message) || error || 'DeepSeek web driver error');
+  const firstLine = raw.split('\n').map((s) => s.trim()).find(Boolean) || raw;
+  await emit({ event: 'error', message: firstLine });
 }

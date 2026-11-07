@@ -129,6 +129,27 @@ pub fn parse_script_line(line: &str) -> Option<AiWebStreamEvent> {
     }
 }
 
+/// 过滤 `ego-browser nodejs` 的非协议标准错误行：保留首条真实异常摘要，
+/// 避免被后续调用栈（`at ...`）或通用退出尾注（`ego's nodejs process exited with code ...`）覆盖。
+pub fn should_record_diag_line(trimmed: &str, current: Option<&str>) -> bool {
+    if trimmed.is_empty()
+        || trimmed.starts_with("[ego-browser:")
+        || trimmed.starts_with("at ")
+        || (trimmed.starts_with("ego's nodejs process exited with code") && current.is_some())
+    {
+        return false;
+    }
+    if current.is_some_and(|prev| {
+        prev.starts_with("Error:")
+            || prev.starts_with("TypeError:")
+            || prev.starts_with("SyntaxError:")
+            || prev.starts_with("ReferenceError:")
+    }) {
+        return false;
+    }
+    true
+}
+
 /// 定位 `ego-browser`：环境变量优先，其次 `~/.local/bin`，最后交给 `PATH`。
 pub fn resolve_ego_browser_bin() -> std::path::PathBuf {
     if let Some(bin) = std::env::var_os("LX_EGO_BROWSER_BIN") {

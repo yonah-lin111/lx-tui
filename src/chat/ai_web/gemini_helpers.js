@@ -19,14 +19,19 @@ const SESSION_ID = PARAMS.sessionId || '';
 const TITLE = PARAMS.title || '';
 const EDIT_INDEX = typeof PARAMS.editIndex === 'number' ? PARAMS.editIndex : -1;
 
+let STREAM_ABORTED = false;
+
 async function emitMany(objs) {
-  if (!objs || objs.length === 0) return;
+  if (!objs || objs.length === 0 || STREAM_ABORTED) return;
   const payload = objs.map((obj) => PREFIX + JSON.stringify(obj) + '\n').join('');
   if (STREAM_URL) {
     try {
       await fetch(STREAM_URL, { method: 'POST', body: payload });
       return;
-    } catch (_) {}
+    } catch (_) {
+      STREAM_ABORTED = true;
+      return;
+    }
   }
   process.stdout.write(payload);
 }
@@ -35,8 +40,19 @@ async function emit(obj) {
   await emitMany([obj]);
 }
 
+async function activateTaskSpace() {
+  await useOrCreateTaskSpace(SPACE);
+  const spaces = await listTaskSpaces().catch(() => []);
+  const target = Array.isArray(spaces)
+    ? spaces.find((s) => s && (s.name === SPACE || s.taskId === SPACE))
+    : null;
+  if (target && target.ownership && target.ownership !== 'agent') {
+    await takeOverTaskSpace(SPACE).catch(() => {});
+  }
+}
+
 async function installPermissionGuard() {
-  await js(String.raw`
+  const guardSource = String.raw`
     (() => {
       try {
         if (typeof Notification !== 'undefined') {
@@ -61,20 +77,28 @@ async function installPermissionGuard() {
       } catch (_) {}
       return true;
     })()
-  `).catch(() => false);
+  `;
+  await cdp('Page.enable').catch(() => {});
+  await cdp('Page.addScriptToEvaluateOnNewDocument', { source: guardSource }).catch(() => {});
+  await js(guardSource).catch(() => false);
 }
 
 async function ensureFreshChat() {
-  const alreadyFresh = await js(`
-    (location.pathname === '/app' || location.pathname === '/app/')
-    && document.querySelectorAll('user-query, model-response').length === 0
-  `).catch(() => false);
-  if (alreadyFresh) return;
+  const isFresh = async () =>
+    Boolean(
+      await js(`
+        (location.pathname === '/app' || location.pathname === '/app/')
+        && document.querySelectorAll('user-query, model-response').length === 0
+        && Boolean(document.querySelector('.ql-editor[contenteditable="true"], rich-textarea'))
+      `).catch(() => false),
+    );
+
+  if (await isFresh()) return;
 
   const clicked = await js(String.raw`
     (() => {
       const btn = document.querySelector(
-        'a[aria-label*="发起新对话"], button[aria-label*="发起新对话"], a[aria-label*="New chat"], button[aria-label*="New chat"], [data-test-id="new-chat-button"]'
+        'a[aria-label*="发起新对话"], button[aria-label*="发起新对话"], a[aria-label*="New chat"], button[aria-label*="New chat"], [data-test-id="new-chat-button"], a[href="/app"]'
       );
       if (btn && !btn.disabled && btn.getAttribute('aria-disabled') !== 'true') {
         btn.click();
@@ -85,21 +109,27 @@ async function ensureFreshChat() {
   `).catch(() => false);
 
   if (clicked) {
-    await new Promise((r) => setTimeout(r, 350));
+    const clickDeadline = Date.now() + 2500;
+    while (Date.now() < clickDeadline) {
+      await new Promise((r) => setTimeout(r, 150));
+      if (await isFresh()) return;
+    }
   }
 
-  const nowFresh = await js(`
-    (location.pathname === '/app' || location.pathname === '/app/')
-    && document.querySelectorAll('user-query, model-response').length === 0
-  `).catch(() => false);
-  if (!nowFresh) {
-    await openOrReuseTab(HOME, { wait: true, timeout: 25 });
-    await installPermissionGuard();
+  await js(`location.assign(${JSON.stringify(HOME)})`).catch(() => {});
+  const navDeadline = Date.now() + 15000;
+  while (Date.now() < navDeadline) {
+    await new Promise((r) => setTimeout(r, 200));
+    if (await isFresh()) {
+      await installPermissionGuard();
+      return;
+    }
   }
+  await installPermissionGuard();
 }
 
 async function ensureGeminiModelAndThinking() {
-  const targetModel = String(MODEL || '3.8 Flash').trim();
+  const targetModel = String(MODEL || '3.8 Flash').trim().toLowerCase();
   const targetThinking = String(THINKING || 'low').trim().toLowerCase();
   const thinkingLabels = {
     low: ['低', 'low'],
@@ -107,26 +137,32 @@ async function ensureGeminiModelAndThinking() {
     high: ['高', 'high'],
   }[targetThinking] || ['低', 'low'];
 
-  // Step 1: Open mode menu and select the requested model if not already active.
+  // Step 1: Open mode menu if not already expanded and select the requested model.
   const menuOpened = await js(String.raw`
     (() => {
       const btn = document.querySelector('[data-test-id="bard-mode-menu-button"], button.input-area-switch');
       if (!btn) return false;
-      btn.click();
+      if (btn.getAttribute('aria-expanded') !== 'true') {
+        btn.click();
+      }
       return true;
     })()
   `).catch(() => false);
   if (!menuOpened) return;
-  await new Promise((r) => setTimeout(r, 280));
+  await new Promise((r) => setTimeout(r, 260));
 
   const modelSwitched = await js(`
     (() => {
-      const want = ${JSON.stringify(targetModel)}.toLowerCase();
-      const items = Array.from(document.querySelectorAll('.cdk-overlay-container [role="menuitemradio"]'));
-      const match = items.find((el) => (el.innerText || '').toLowerCase().includes(want));
+      const want = ${JSON.stringify(targetModel)};
+      const items = Array.from(
+        document.querySelectorAll('gem-menu-item[role="menuitemradio"], [role="menuitemradio"]')
+      ).filter((el) => !el.closest('.submenu-container'));
+      const match = items.find((el) => {
+        const lbl = (el.querySelector('.label')?.innerText || el.innerText || '').trim().toLowerCase();
+        return lbl === want || lbl.includes(want);
+      });
       if (!match) return { found: false, clicked: false };
-      const checked = match.getAttribute('aria-checked') === 'true' || Boolean(match.querySelector('.mat-icon, [ data-mat-icon-name="check" ]'));
-      if (!checked) {
+      if (match.getAttribute('aria-checked') !== 'true') {
         match.click();
         return { found: true, clicked: true };
       }
@@ -135,42 +171,59 @@ async function ensureGeminiModelAndThinking() {
   `).catch(() => ({ found: false, clicked: false }));
 
   if (modelSwitched && modelSwitched.clicked) {
-    await new Promise((r) => setTimeout(r, 320));
+    await new Promise((r) => setTimeout(r, 300));
     await js(String.raw`
       (() => {
         const btn = document.querySelector('[data-test-id="bard-mode-menu-button"], button.input-area-switch');
-        if (btn) btn.click();
+        if (btn && btn.getAttribute('aria-expanded') !== 'true') {
+          btn.click();
+        }
       })()
     `).catch(() => {});
-    await new Promise((r) => setTimeout(r, 280));
+    await new Promise((r) => setTimeout(r, 260));
   }
 
-  // Step 2: Open "思考等级 / Thinking level" submenu and pick the requested level.
-  const subMenuOpened = await js(String.raw`
+  // Step 2: Check if target thinking level is already selected; if not, open submenu and click it.
+  const thinkingAlreadyChecked = await js(`
     (() => {
-      const items = Array.from(document.querySelectorAll('.cdk-overlay-container [role="menuitem"]'));
-      const sub = items.find((el) => {
-        const t = (el.innerText || '').trim().toLowerCase();
-        return t.includes('思考等级') || t.includes('thinking level') || t.includes('reasoning');
+      const labels = ${JSON.stringify(thinkingLabels)};
+      const radios = Array.from(
+        document.querySelectorAll('.submenu-container gem-menu-item[role="menuitemradio"], gem-menu-item[role="menuitemradio"]')
+      );
+      const target = radios.find((el) => {
+        const lbl = (el.querySelector('.label')?.innerText || el.innerText || '').trim().toLowerCase();
+        return labels.some((kw) => lbl === kw || lbl.startsWith(kw + ' '));
       });
-      if (!sub) return false;
-      sub.dispatchEvent(new MouseEvent('mouseenter', { bubbles: true }));
-      sub.click();
-      return true;
+      return Boolean(target && target.getAttribute('aria-checked') === 'true');
     })()
   `).catch(() => false);
 
-  if (subMenuOpened) {
-    await new Promise((r) => setTimeout(r, 250));
+  if (!thinkingAlreadyChecked) {
+    await js(String.raw`
+      (() => {
+        const items = Array.from(document.querySelectorAll('gem-menu-item[role="menuitem"], [role="menuitem"]'));
+        const sub = items.find((el) => {
+          const t = (el.innerText || '').trim().toLowerCase();
+          return t.includes('思考等级') || t.includes('thinking level') || t.includes('reasoning');
+        });
+        if (!sub) return false;
+        sub.dispatchEvent(new MouseEvent('mouseenter', { bubbles: true }));
+        sub.click();
+        return true;
+      })()
+    `).catch(() => false);
+    await new Promise((r) => setTimeout(r, 240));
     await js(`
       (() => {
         const labels = ${JSON.stringify(thinkingLabels)};
-        const radios = Array.from(document.querySelectorAll('.cdk-overlay-container [role="menuitemradio"]'));
+        const radios = Array.from(
+          document.querySelectorAll('.submenu-container gem-menu-item[role="menuitemradio"], gem-menu-item[role="menuitemradio"]')
+        );
         const target = radios.find((el) => {
-          const text = (el.innerText || '').trim().toLowerCase();
-          return labels.some((kw) => text === kw || text.startsWith(kw + ' ') || text.includes(kw));
+          const lbl = (el.querySelector('.label')?.innerText || el.innerText || '').trim().toLowerCase();
+          return labels.some((kw) => lbl === kw || lbl.startsWith(kw + ' '));
         });
-        if (target) {
+        if (target && target.getAttribute('aria-checked') !== 'true') {
           target.click();
           return true;
         }
@@ -180,12 +233,15 @@ async function ensureGeminiModelAndThinking() {
     await new Promise((r) => setTimeout(r, 180));
   }
 
-  // Close any remaining menu backdrop.
+  // Close mode menu if still open.
   await js(String.raw`
     (() => {
+      const btn = document.querySelector('[data-test-id="bard-mode-menu-button"], button.input-area-switch');
+      if (btn && btn.getAttribute('aria-expanded') === 'true') {
+        btn.click();
+      }
       const backdrop = document.querySelector('.cdk-overlay-backdrop-showing');
       if (backdrop) backdrop.click();
-      document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }));
     })()
   `).catch(() => {});
 }
@@ -361,9 +417,13 @@ async function runNonChatAction(currentUrl) {
         nodes.forEach((node, idx) => {
           const tag = node.tagName.toLowerCase();
           if (tag === 'user-query') {
-            const clone = node.cloneNode(true);
-            clone.querySelectorAll('button, mat-icon, .cdk-visually-hidden').forEach((el) => el.remove());
-            const text = (clone.innerText || '').trim();
+            const hidden = [];
+            node.querySelectorAll('button, mat-icon, .cdk-visually-hidden').forEach((el) => {
+              hidden.push([el, el.style.display]);
+              el.style.display = 'none';
+            });
+            const text = (node.innerText || '').replace(/\\r\\n/g, '\\n').trim();
+            for (const [el, prev] of hidden) el.style.display = prev;
             const files = Array.from(node.querySelectorAll('[aria-label], .file-preview, img[alt]'))
               .map((el) => (el.getAttribute('alt') || el.getAttribute('aria-label') || '').trim())
               .filter((n) => n && n !== '修改' && n !== '复制' && !n.includes('提示'));
@@ -379,16 +439,24 @@ async function runNonChatAction(currentUrl) {
             const thoughtEl = node.querySelector('model-thoughts, thinking-overlay, .thoughts-content');
             let thinking = '';
             if (thoughtEl) {
-              const tClone = thoughtEl.cloneNode(true);
-              tClone.querySelectorAll('button, .cdk-visually-hidden').forEach((el) => el.remove());
-              thinking = (tClone.innerText || '').trim();
+              const hiddenT = [];
+              thoughtEl.querySelectorAll('button, mat-icon, .cdk-visually-hidden').forEach((el) => {
+                hiddenT.push([el, el.style.display]);
+                el.style.display = 'none';
+              });
+              thinking = (thoughtEl.innerText || '').replace(/\\r\\n/g, '\\n').trim();
+              for (const [el, prev] of hiddenT) el.style.display = prev;
             }
-            const msgEl = node.querySelector('message-content') || node;
-            const mClone = msgEl.cloneNode(true);
-            mClone.querySelectorAll(
+            const msgEl = node.querySelector('message-content .markdown, message-content') || node;
+            const hiddenM = [];
+            msgEl.querySelectorAll(
               '.cdk-visually-hidden, source-footnote, sources-carousel-inline, sources-list, button, mat-icon'
-            ).forEach((el) => el.remove());
-            const text = (mClone.innerText || '').trim();
+            ).forEach((el) => {
+              hiddenM.push([el, el.style.display]);
+              el.style.display = 'none';
+            });
+            const text = (msgEl.innerText || '').replace(/\\r\\n/g, '\\n').trim();
+            for (const [el, prev] of hiddenM) el.style.display = prev;
             messages.push({
               role: 'assistant',
               thinking,

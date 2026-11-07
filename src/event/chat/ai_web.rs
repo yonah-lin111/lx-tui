@@ -14,7 +14,7 @@ pub use crate::app::state::is_ai_web_session;
 use crate::app::state::{AiWebSite, HistoryEntry, ai_web_remote_session};
 use crate::chat::ai_web::{
     AiWebHistoryMessage, AiWebStreamEvent, parse_script_line, resolve_ego_browser_bin,
-    scripts_for_site,
+    scripts_for_site, should_record_diag_line,
 };
 use crate::chat::events::{PartDelta, PartKind};
 
@@ -607,7 +607,7 @@ async fn run_chat(
                         Some(AiWebStreamEvent::Sessions(_) | AiWebStreamEvent::SessionLoaded { .. }) => {}
                         None => {
                             let trimmed = line.trim();
-                            if !trimmed.is_empty() && !trimmed.starts_with("[ego-browser:") {
+                            if should_record_diag_line(trimmed, last_diag.as_deref()) {
                                 tracing::debug!(target: "lx::ai_web", %trimmed, "ego-browser output");
                                 last_diag = Some(trimmed.to_string());
                             }
