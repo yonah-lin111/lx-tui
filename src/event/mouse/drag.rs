@@ -142,7 +142,7 @@ pub(crate) fn handle_mouse_drag(
             && let Some(bar) = layout.scrollbar
         {
             let offset = ui::widgets::scrollbar::offset_from_drag_row(&bar, mouse.row, grab);
-            if update::set_confirm_close_scroll(state, offset) {
+            if update::set_confirm_close_scroll_with_rows(state, offset, layout.visible_rows) {
                 *dirty = true;
             }
         }
@@ -533,6 +533,7 @@ pub(crate) fn handle_mouse_up_left(
     if let Some(Overlay::ConfirmClose(confirm)) = state.overlay.as_mut()
         && confirm.scroll_drag.take().is_some()
     {
+        state.overlay_input_drag = false;
         *dirty = true;
         return;
     }

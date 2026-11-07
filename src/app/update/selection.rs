@@ -4,6 +4,7 @@ use std::time::{Duration, Instant};
 
 use ratatui::layout::Rect;
 
+use crate::app::overlay::Overlay;
 use crate::app::selection::{Selection, SelectionUnit};
 use crate::app::state::{AppState, AutoscrollDirection, PaneKind, SelectionAutoscroll};
 use crate::layout::PaneId;
@@ -339,6 +340,9 @@ pub fn stop_active_selection_drags(state: &mut AppState) {
     state.task_agents_scroll_drag = None;
     state.lx_input_drag = None;
     state.overlay_input_drag = false;
+    if let Some(Overlay::ConfirmClose(confirm)) = state.overlay.as_mut() {
+        confirm.scroll_drag = None;
+    }
     state.ask_input_drag = None;
     state.todo_input_drag = false;
     state.prompt_search_drag = false;

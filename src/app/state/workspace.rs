@@ -227,11 +227,9 @@ pub fn current_workspace_identity() -> (Option<PathBuf>, String) {
     }
 }
 
-/// HOME 环境变量；缺失或为空时 None。
+/// 当前用户家目录：优先 `HOME`，Windows 回退 `USERPROFILE` 及 `HOMEDRIVE` + `HOMEPATH`。
 pub fn home_dir() -> Option<PathBuf> {
-    std::env::var_os("HOME")
-        .filter(|home| !home.is_empty())
-        .map(PathBuf::from)
+    crate::platform::home_dir()
 }
 
 /// 标签标题：重命名后显示自定义名，否则按位置显示 `tab N`。

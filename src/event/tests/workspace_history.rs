@@ -1,8 +1,8 @@
 use super::test_support::*;
 use super::*;
 use crate::app::effects::Effect;
-use crate::app::overlay::{MenuCommand, OverlayTarget};
-use crate::app::state::WorkspaceMode;
+use crate::app::overlay::{ConfirmClose, MenuCommand, OverlayTarget, TextInput};
+use crate::app::state::{WorkspaceHistoryEntry, WorkspaceMode};
 use crate::db::{Database, service::Persistence};
 
 /// 左键单击：浮层按钮与列表行的点击都在按下时处理。
@@ -537,4 +537,285 @@ fn confirm_close_list_scrolls_with_wheel_and_deletes_all_missing() {
         .map(|entry| entry.path.clone())
         .collect();
     assert_eq!(remaining, vec![existing]);
+}
+
+/// 4 条失效历史条目：确认浮层列表测试的固定夹具。
+fn missing_history_entries() -> Vec<WorkspaceHistoryEntry> {
+    (0..4)
+        .map(|index| WorkspaceHistoryEntry {
+            name: format!("Missing{index}"),
+            path: PathBuf::from(format!("/tmp/lx-event-missing-{index}-99999")),
+            exists: false,
+            name_is_manual: true,
+            position: index,
+            trusted: true,
+            git: None,
+        })
+        .collect()
+}
+
+/// 确认浮层当前滚动偏移。
+fn confirm_scroll(state: &AppState) -> usize {
+    match state.overlay.as_ref() {
+        Some(Overlay::ConfirmClose(confirm)) => confirm.scroll,
+        other => panic!("confirmation modal expected, got {other:?}"),
+    }
+}
+
+#[test]
+fn confirm_close_wheel_reaches_tail_on_small_screen() {
+    let config = Config::default();
+    let mut state = demo_terminal();
+    state.workspace_history.entries = missing_history_entries();
+    state.overlay = Some(Overlay::ConfirmClose(ConfirmClose::new(
+        OverlayTarget::MissingWorkspaces,
+    )));
+    let geo = geometry(&state, &config, Rect::new(0, 0, 80, 11));
+
+    let (list_point, max_scroll) = {
+        let Some(Overlay::ConfirmClose(confirm)) = state.overlay.as_ref() else {
+            panic!("confirmation modal expected");
+        };
+        let layout =
+            ui::overlay::confirm_close_layout(&state, geo.screen, confirm).expect("confirm layout");
+        assert!(
+            layout.visible_rows < crate::app::overlay::CONFIRM_DELETE_LIST_MAX_ROWS,
+            "small screen must shrink the list viewport"
+        );
+        let list = layout.list.expect("workspace list");
+        (
+            (list.x + 1, list.y),
+            state
+                .workspace_history
+                .target_delete_entries(&confirm.target)
+                .len()
+                - layout.visible_rows,
+        )
+    };
+    assert_eq!(max_scroll, 2);
+
+    // 旧实现按固定 5 行夹取，max_scroll = 0：这里会停在顶部。
+    wheel(
+        &mut state,
+        &geo,
+        &config,
+        MouseEventKind::ScrollDown,
+        list_point,
+    );
+    assert_eq!(confirm_scroll(&state), max_scroll);
+    wheel(
+        &mut state,
+        &geo,
+        &config,
+        MouseEventKind::ScrollUp,
+        list_point,
+    );
+    assert_eq!(confirm_scroll(&state), 0);
+}
+
+#[test]
+fn mouse_down_clears_stale_confirm_scroll_drag_and_selects_input() {
+    let config = Config::default();
+    let mut state = demo_terminal();
+    state.workspace_history.entries = missing_history_entries();
+    let mut confirm = ConfirmClose::new(OverlayTarget::MissingWorkspaces);
+    confirm.input = TextInput::new("confirm delete");
+    confirm.scroll_drag = Some(0);
+    state.overlay = Some(Overlay::ConfirmClose(confirm));
+    // 模拟滚动条拖拽中指针移出窗口丢失 MouseUp：两个残留标志都不该劫持下一次按下。
+    state.overlay_input_drag = true;
+    let geo = geometry(&state, &config, Rect::new(0, 0, 120, 30));
+    let input = {
+        let Some(Overlay::ConfirmClose(confirm)) = state.overlay.as_ref() else {
+            panic!("confirmation modal expected");
+        };
+        ui::overlay::confirm_close_layout(&state, geo.screen, confirm)
+            .expect("confirm layout")
+            .input
+    };
+
+    press_mouse(
+        &mut state,
+        &geo,
+        &config,
+        MouseButton::Left,
+        (input.x + 2, input.y),
+    );
+    let Some(Overlay::ConfirmClose(confirm)) = state.overlay.as_ref() else {
+        panic!("confirmation modal expected");
+    };
+    assert!(confirm.scroll_drag.is_none(), "stale thumb drag must clear");
+    assert!(state.overlay_input_drag, "input drag starts on press");
+
+    let mut sessions = HashMap::new();
+    let mut dirty = false;
+    handle_terminal_event(
+        mouse(
+            MouseEventKind::Drag(MouseButton::Left),
+            input.x + 8,
+            input.y,
+        ),
+        &mut state,
+        &mut sessions,
+        &geo,
+        &config,
+        &mut ui::RenderCache::default(),
+        &mut dirty,
+    );
+    let Some(Overlay::ConfirmClose(confirm)) = state.overlay.as_ref() else {
+        panic!("confirmation modal expected");
+    };
+    assert!(
+        confirm.input.selection().is_some(),
+        "text selection must extend after the stale drag flag is cleared"
+    );
+}
+
+/// `git` 可用时才执行 worktree 相关用例。
+fn git_available() -> bool {
+    std::process::Command::new("git")
+        .arg("--version")
+        .output()
+        .is_ok_and(|out| out.status.success())
+}
+
+/// 在指定仓库中执行 git（失败即断言）。
+fn run_git(repo: &std::path::Path, args: &[&str]) {
+    let out = std::process::Command::new("git")
+        .arg("-C")
+        .arg(repo)
+        .args(args)
+        .output()
+        .expect("run git");
+    assert!(
+        out.status.success(),
+        "git {args:?} failed: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+}
+
+#[test]
+fn deleted_missing_linked_worktree_stays_hidden_after_reload() {
+    if !git_available() {
+        return;
+    }
+    let nanos = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|duration| duration.as_nanos())
+        .unwrap_or(0);
+    let base = std::env::temp_dir().join(format!("lx-event-missing-wt-{nanos}"));
+    std::fs::create_dir_all(&base).expect("base dir");
+    let base = std::fs::canonicalize(&base).expect("canon base");
+    let repo = base.join("repo");
+    let wt = repo.join(".worktrees").join("gone");
+    std::fs::create_dir_all(&repo).expect("repo dir");
+    run_git(&repo, &["init", "--quiet", "-b", "dev"]);
+    run_git(
+        &repo,
+        &[
+            "-c",
+            "user.email=test@example.invalid",
+            "-c",
+            "user.name=Test",
+            "commit",
+            "--quiet",
+            "--allow-empty",
+            "-m",
+            "init",
+        ],
+    );
+    run_git(
+        &repo,
+        &[
+            "worktree",
+            "add",
+            "--quiet",
+            "-b",
+            "feature/gone",
+            wt.to_str().expect("utf8"),
+        ],
+    );
+    let canon_wt = std::fs::canonicalize(&wt).expect("canon worktree");
+
+    let db = Database::open_in_memory().expect("in-memory db");
+    db.record_workspace_open(&repo, "Repo")
+        .expect("record repo");
+    db.trust_workspace(&repo, "Repo").expect("trust repo");
+    db.record_workspace_open(&canon_wt, "gone")
+        .expect("record worktree");
+    let mut persistence = Persistence::with_database(db);
+    let mut state = demo_terminal();
+    state.effects.push(Effect::LoadWorkspaceHistory);
+    persistence.pump(&mut state);
+    assert!(
+        state.workspace_history.entries.iter().any(|entry| {
+            entry.path == canon_wt && entry.git.as_ref().is_some_and(|git| git.is_linked)
+        }),
+        "linked worktree must load as a grouped child"
+    );
+
+    // 模拟 worktree 目录被外部删除但主仓库尚未执行 `git worktree prune`：
+    // `git worktree list` 仍会列出该 prunable 条目。
+    std::fs::remove_dir_all(&canon_wt).expect("remove worktree dir");
+
+    let config = Config::default();
+    update::show_workspace_history(&mut state);
+    let geo = geometry(&state, &config, Rect::new(0, 0, 120, 30));
+    let sections =
+        ui::layout::sidebar_sections(geo.view.sidebar, state.agents_collapsed).expect("sections");
+    let row_y = sections.workspaces.y + layout::PROMPT_TREE_HEADER_HEIGHT;
+    right_click(
+        &mut state,
+        &geo,
+        &config,
+        (sections.workspaces.x + 5, row_y),
+    );
+    let delete_missing = {
+        let Some(Overlay::Menu(menu)) = state.overlay.as_ref() else {
+            panic!("context menu expected");
+        };
+        menu.commands
+            .iter()
+            .position(|command| *command == MenuCommand::DeleteMissingWorkspaces)
+            .expect("delete missing item")
+    };
+    let first = menu_item_rect(&state, geo.screen, delete_missing);
+    click(&mut state, &geo, &config, (first.x + 1, first.y));
+    let second = menu_item_rect(&state, geo.screen, delete_missing);
+    click(&mut state, &geo, &config, (second.x + 1, second.y));
+    type_text(&mut state, &geo, &config, "confirm delete");
+    press(&mut state, &geo, &config, KeyCode::Enter);
+    assert!(state.overlay.is_none());
+    persistence.pump(&mut state);
+    assert!(
+        !state
+            .workspace_history
+            .entries
+            .iter()
+            .any(|entry| entry.path == canon_wt)
+    );
+
+    let hidden = persistence
+        .database()
+        .expect("db")
+        .hidden_workspace_paths()
+        .expect("hidden workspaces");
+    assert!(
+        hidden.contains(&canon_wt),
+        "missing linked worktree must be persisted in workspace_hidden"
+    );
+
+    // 清空内存隐藏集后重载：SQLite 的 workspace_hidden 必须阻止 prunable 条目复活。
+    state.workspace_history.hidden_worktrees.clear();
+    state.effects.push(Effect::LoadWorkspaceHistory);
+    persistence.pump(&mut state);
+    assert!(
+        !state
+            .workspace_history
+            .entries
+            .iter()
+            .any(|entry| entry.path == canon_wt),
+        "deleted missing linked worktree must not resurrect after reload"
+    );
+    let _ = std::fs::remove_dir_all(&base);
 }

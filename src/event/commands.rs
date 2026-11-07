@@ -229,25 +229,14 @@ fn validate_referenced_path(
 ) -> Result<PathBuf, crate::app::referenced::PathValidation> {
     use crate::app::referenced::PathValidation;
     let normalized = crate::platform::normalize_pasted_path_input(input);
-    let trimmed = normalized.trim();
-    if trimmed.is_empty() {
+    if normalized.is_empty() {
         return Err(PathValidation::Empty);
     }
-    // `~` / `~/...`（含 Windows `~\...`）按当前用户 HOME 展开后再走绝对路径校验。
-    let home_rest = trimmed
-        .strip_prefix('~')
-        .filter(|rest| rest.is_empty() || rest.starts_with('/') || rest.starts_with('\\'));
-    let expanded = if let Some(rest) = home_rest {
-        let Some(home) = crate::app::state::home_dir() else {
-            return Err(PathValidation::NotFound);
-        };
-        if rest.is_empty() {
-            home
-        } else {
-            home.join(rest.trim_start_matches(['/', '\\']))
-        }
+    // `~` / `~/...`（Windows 含 `~\...`）按当前用户家目录展开后再走绝对路径校验。
+    let expanded = if let Some(expanded) = crate::platform::expand_tilde_path(&normalized) {
+        expanded.map_err(|()| PathValidation::NotFound)?
     } else {
-        PathBuf::from(trimmed)
+        PathBuf::from(&normalized)
     };
     let path = expanded.as_path();
     if !path.is_absolute() {

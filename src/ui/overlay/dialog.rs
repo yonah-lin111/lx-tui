@@ -119,18 +119,6 @@ pub fn confirm_shell(screen: Rect, question: &str) -> Option<widgets::modal::Mod
     confirm_shell_for(screen, question, CONFIRM_WIDTH)
 }
 
-/// 带口令输入框的关闭/删除确认浮层几何：问题自动换行 + 下方 1 行输入框 + 1 行空白间隔 + 底部按钮行。
-pub fn confirm_close_shell(screen: Rect, question: &str) -> Option<widgets::modal::ModalShell> {
-    let width = CONFIRM_WIDTH.min(screen.width);
-    let inner_width = usize::from(width.saturating_sub(2)).max(1);
-    let lines = text::wrap(question, inner_width).len().max(1);
-    let height = u16::try_from(lines)
-        .unwrap_or(u16::MAX)
-        .saturating_add(7)
-        .min(screen.height);
-    widgets::modal::layout(screen, width, height)
-}
-
 /// 计算 `ConfirmClose` 浮层内单行确认输入框的矩形区域（紧接在问题文本下方）。
 pub fn confirm_close_input_rect(shell: &widgets::modal::ModalShell, question: &str) -> Rect {
     let width = usize::from(shell.inner.width).max(1);
@@ -543,7 +531,7 @@ pub(crate) fn render_confirm(
     for (index, line) in lines.iter().take(max_rows).enumerate() {
         let clipped = lines.len() > max_rows && index + 1 == max_rows;
         let visible = if clipped {
-            text::ellipsize(&format!("{line}…"), width)
+            text::ellipsize_width(&format!("{line}…"), width)
         } else {
             line.clone()
         };
@@ -580,14 +568,14 @@ pub(crate) fn render_confirm(
             let spans = if total_width > row_width {
                 if prefix_width > row_width {
                     vec![Span::styled(
-                        text::ellipsize(&prefix, row_width),
+                        text::ellipsize_width(&prefix, row_width),
                         style::text(),
                     )]
                 } else {
                     let rem = row_width.saturating_sub(prefix_width);
                     vec![
                         Span::styled(prefix, style::text()),
-                        Span::styled(text::ellipsize(&path_text, rem), style::muted()),
+                        Span::styled(text::ellipsize_width(&path_text, rem), style::muted()),
                     ]
                 }
             } else {
@@ -904,3 +892,6 @@ pub(crate) fn render_input(
         placeholder,
     )
 }
+
+#[cfg(test)]
+mod tests;

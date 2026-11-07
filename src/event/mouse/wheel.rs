@@ -287,7 +287,7 @@ pub(crate) fn handle_mouse_wheel(
         && layout.shell.area.contains((mouse.column, mouse.row).into())
     {
         // 失效工作区列表在模态内滚动（列表高度受限），不穿透到底层。
-        if update::scroll_confirm_close(state, delta) {
+        if update::scroll_confirm_close_with_rows(state, delta, layout.visible_rows) {
             *dirty = true;
         }
         return;

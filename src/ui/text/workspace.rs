@@ -414,6 +414,7 @@ pub const TOAST_WORKSPACE_TITLE: &str = "Workspace";
 pub const TOAST_WORKSPACE_WRITE_FAILED: &str = "Workspace update failed";
 /// 工作区路径不存在。
 pub const TOAST_DIRECTORY_NOT_FOUND: &str = "Directory does not exist";
+pub const TOAST_HOME_DIR_NOT_FOUND: &str = "Cannot resolve home directory";
 /// 工作区路径非目录。
 pub const TOAST_PATH_NOT_DIR: &str = "Path is not a directory";
 

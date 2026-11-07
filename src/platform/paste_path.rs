@@ -2,7 +2,61 @@
 //!
 //! 纯解析放在这里，核心模块不出现 `cfg(target_os)`；引用标记的格式与解析在 `app/markdown/`。
 
+use std::ffi::OsString;
 use std::path::{Path, PathBuf};
+
+/// 解析当前用户家目录：优先 `HOME`，回退 Windows `USERPROFILE` 及 `HOMEDRIVE` + `HOMEPATH`。
+pub fn home_dir() -> Option<PathBuf> {
+    home_dir_from_vars(
+        std::env::var_os("HOME"),
+        std::env::var_os("USERPROFILE"),
+        std::env::var_os("HOMEDRIVE"),
+        std::env::var_os("HOMEPATH"),
+    )
+}
+
+/// `home_dir` 的纯函数版本：空变量视为缺失，便于跨平台单测。
+pub(crate) fn home_dir_from_vars(
+    home: Option<OsString>,
+    userprofile: Option<OsString>,
+    homedrive: Option<OsString>,
+    homepath: Option<OsString>,
+) -> Option<PathBuf> {
+    if let Some(dir) = home.filter(|value| !value.is_empty()) {
+        return Some(PathBuf::from(dir));
+    }
+    if let Some(dir) = userprofile.filter(|value| !value.is_empty()) {
+        return Some(PathBuf::from(dir));
+    }
+    match (
+        homedrive.filter(|value| !value.is_empty()),
+        homepath.filter(|value| !value.is_empty()),
+    ) {
+        (Some(drive), Some(path)) => {
+            let mut combined = drive;
+            combined.push(path);
+            Some(PathBuf::from(combined))
+        }
+        _ => None,
+    }
+}
+
+/// 展开开头为 `~` 的路径：`~` 与 `~/...`（Windows 另支持 `~\...`）。
+///
+/// 外层 `None` 表示不是家目录形式；内层 `Err(())` 表示无法解析家目录。
+pub fn expand_tilde_path(input: &str) -> Option<Result<PathBuf, ()>> {
+    if input == "~" {
+        return Some(home_dir().ok_or(()));
+    }
+    if let Some(rest) = input.strip_prefix("~/") {
+        return Some(home_dir().map(|home| home.join(rest)).ok_or(()));
+    }
+    #[cfg(windows)]
+    if let Some(rest) = input.strip_prefix("~\\") {
+        return Some(home_dir().map(|home| home.join(rest)).ok_or(()));
+    }
+    None
+}
 
 /// 粘贴文本中的路径 → 实际存在的路径：优先原文；否则按跨平台粘贴规则归一化后再试。
 ///
@@ -34,8 +88,19 @@ pub fn resolve_pasted_path(path: &Path) -> Option<PathBuf> {
 /// 剥离单双引号、解码 `file://` URI，并把 shell 反斜杠转义还原成真实字符；
 /// Windows 原生反斜杠路径保持分隔符不变。返回空串表示没有有效内容。
 pub fn normalize_pasted_path_input(raw: &str) -> String {
-    let trimmed = raw.trim_start().trim_end_matches(['\r', '\n']);
-    let trimmed = trim_trailing_unescaped_spaces(trimmed);
+    let line = raw.trim_start().trim_end_matches(['\r', '\n']);
+    // 已是磁盘上真实存在的原样路径（例如文件名本身带尾随空格）时不再裁剪，
+    // 保证多次归一化结果稳定。
+    if !line.is_empty()
+        && !line.starts_with('\'')
+        && !line.starts_with('"')
+        && !line.starts_with("file://")
+        && !line.contains('\\')
+        && Path::new(line).exists()
+    {
+        return line.to_string();
+    }
+    let trimmed = trim_trailing_unescaped_spaces(line);
     if trimmed.is_empty() {
         return String::new();
     }
@@ -215,17 +280,20 @@ fn parse_path_line(line: &str) -> Option<PathBuf> {
     None
 }
 
-/// `file://` URI 解析：仅本机 host（空或 `localhost`）；百分号序列按 UTF-8 解码。
+/// `file://` URI 解析：仅本机 host（空或大小写不敏感的 `localhost`）；百分号序列按 UTF-8 解码。
 fn parse_file_uri(rest: &str) -> Option<PathBuf> {
-    let (host, path) = match rest.find('/') {
-        Some(0) => ("", rest),
-        Some(index) => (&rest[..index], &rest[index..]),
-        None => return None,
-    };
-    if !host.is_empty() && host != "localhost" {
+    let path_part = if let Some(stripped) = rest.strip_prefix('/') {
+        format!("/{stripped}")
+    } else if rest
+        .get(..10)
+        .is_some_and(|prefix| prefix.eq_ignore_ascii_case("localhost/"))
+    {
+        // `localhost` 为 9 个 ASCII 字节，第 10 个字节必是路径起始的 `/`。
+        rest[9..].to_string()
+    } else {
         return None;
-    }
-    let decoded = percent_decode(path)?;
+    };
+    let decoded = percent_decode(&path_part)?;
     #[cfg(windows)]
     {
         // `/C:/Users/x` → `C:/Users/x`；UNC 与非法盘符拒绝。
@@ -249,7 +317,7 @@ fn parse_file_uri(rest: &str) -> Option<PathBuf> {
     }
 }
 
-/// 百分号解码；非法序列或非 UTF-8 结果返回 None。
+/// 百分号解码；非法序列、非 UTF-8 结果或解码出 NUL 字符返回 None。
 fn percent_decode(input: &str) -> Option<String> {
     let mut bytes = Vec::with_capacity(input.len());
     let raw = input.as_bytes();
@@ -265,7 +333,9 @@ fn percent_decode(input: &str) -> Option<String> {
             index += 1;
         }
     }
-    String::from_utf8(bytes).ok()
+    String::from_utf8(bytes)
+        .ok()
+        .filter(|text| !text.contains('\0'))
 }
 
 #[cfg(test)]

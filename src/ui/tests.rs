@@ -651,7 +651,12 @@ fn confirm_close_moves_hardware_cursor_into_modal_input() {
     state.overlay = Some(Overlay::ConfirmClose(ConfirmClose::new(target.clone())));
     let screen = Rect::new(0, 0, 100, 24);
     let question = crate::ui::overlay::confirm_question(&state, &target);
-    let shell = crate::ui::overlay::confirm_close_shell(screen, &question).expect("dialog fits");
+    let Some(Overlay::ConfirmClose(confirm)) = state.overlay.as_ref() else {
+        panic!("confirm overlay expected");
+    };
+    let shell = crate::ui::overlay::confirm_close_layout(&state, screen, confirm)
+        .map(|layout| layout.shell)
+        .expect("dialog fits");
     let input = crate::ui::overlay::confirm_close_input_rect(&shell, &question);
     let expected_x = input.x + text::INPUT_PREFIX_ICON.chars().count() as u16 + 1;
     let (visible, position) = render_cursor(&state);

@@ -672,3 +672,124 @@ fn confirm_close_up_down_keys_scroll_list_when_overflowing() {
     apply_overlay_key(&mut state, OverlayKey::Down);
     assert_eq!(confirm_scroll(&state), Some(0));
 }
+
+#[test]
+fn delete_missing_ignores_entries_changed_after_confirmation_snapshot() {
+    let mut state = AppState::demo();
+    let base = std::env::temp_dir().join(format!("lx-missing-toctou-{}", std::process::id()));
+    let missing_a = base.join("a-missing-at-open");
+    let existing_b = base.join("b-existing-at-open");
+    std::fs::create_dir_all(&existing_b).expect("create existing dir");
+
+    apply_workspace_history(
+        &mut state,
+        vec![
+            plain_entry("GoneA", missing_a.clone()),
+            plain_entry("KeptB", existing_b.clone()),
+        ],
+    );
+    assert!(!state.workspace_history.entries[0].exists);
+    assert!(state.workspace_history.entries[1].exists);
+
+    // 弹窗打开后磁盘变化：B 被移除但快照仍标记存在，不得借机扩大删除集合。
+    std::fs::remove_dir_all(&existing_b).expect("remove existing dir");
+    state.effects.clear();
+
+    assert_eq!(delete_missing_workspace_history_entries(&mut state), 1);
+    let remaining: Vec<PathBuf> = state
+        .workspace_history
+        .entries
+        .iter()
+        .map(|entry| entry.path.clone())
+        .collect();
+    assert_eq!(
+        remaining,
+        vec![existing_b.clone()],
+        "只删除确认快照中已失效的条目"
+    );
+    let deleted: Vec<PathBuf> = state
+        .effects
+        .iter()
+        .filter_map(|effect| match effect {
+            Effect::DeleteWorkspaceHistory { path } => Some(path.clone()),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(deleted, vec![missing_a]);
+
+    let _ = std::fs::remove_dir_all(&base);
+}
+
+#[test]
+fn delete_missing_skips_entries_restored_after_confirmation_snapshot() {
+    let mut state = AppState::demo();
+    let base = std::env::temp_dir().join(format!("lx-missing-restored-{}", std::process::id()));
+    let restored = base.join("restored");
+    let still_missing = base.join("still-missing");
+    std::fs::create_dir_all(&base).expect("create base dir");
+
+    apply_workspace_history(
+        &mut state,
+        vec![
+            plain_entry("Restored", restored.clone()),
+            plain_entry("Gone", still_missing.clone()),
+        ],
+    );
+    assert!(!state.workspace_history.entries[0].exists);
+
+    // 弹窗打开后 A 被重建：确认时必须跳过已恢复的目录条目。
+    std::fs::create_dir_all(&restored).expect("restore dir");
+    state.effects.clear();
+
+    assert_eq!(delete_missing_workspace_history_entries(&mut state), 1);
+    let remaining: Vec<PathBuf> = state
+        .workspace_history
+        .entries
+        .iter()
+        .map(|entry| entry.path.clone())
+        .collect();
+    assert_eq!(remaining, vec![restored.clone()], "已恢复的目录不得被删除");
+    assert!(
+        state.workspace_history.entries[0].exists,
+        "已恢复目录的存在性需要同步回条目"
+    );
+    let deleted: Vec<PathBuf> = state
+        .effects
+        .iter()
+        .filter_map(|effect| match effect {
+            Effect::DeleteWorkspaceHistory { path } => Some(path.clone()),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(deleted, vec![still_missing]);
+
+    let _ = std::fs::remove_dir_all(&base);
+}
+
+#[test]
+fn target_delete_entries_missing_workspaces_uses_branch_label_for_grouped_child() {
+    let mut state = AppState::demo();
+    let base = std::env::temp_dir().join(format!("lx-target-missing-label-{}", std::process::id()));
+    let repo = base.join("repo");
+    let child = repo.join("wt-feature");
+    apply_workspace_history(
+        &mut state,
+        vec![
+            git_entry("repo", repo.clone(), git_meta(&repo, &repo, false)),
+            git_entry("wt-feature", child.clone(), git_meta(&repo, &child, true)),
+        ],
+    );
+
+    assert_eq!(
+        state
+            .workspace_history
+            .target_delete_entries(&OverlayTarget::MissingWorkspaces),
+        vec![
+            ("repo".to_string(), repo.clone()),
+            ("feature/x".to_string(), child.clone()),
+        ],
+        "未手动改名的分组子项必须显示分支标签"
+    );
+
+    let _ = std::fs::remove_dir_all(&base);
+}

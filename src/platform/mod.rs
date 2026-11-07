@@ -84,7 +84,8 @@ pub(crate) fn test_db_override() -> Option<std::path::PathBuf> {
 
 mod paste_path;
 pub use paste_path::{
-    normalize_pasted_path_input, parse_path_text, resolve_pasted_path, sniff_image_file,
+    expand_tilde_path, home_dir, normalize_pasted_path_input, parse_path_text, resolve_pasted_path,
+    sniff_image_file,
 };
 
 pub mod path_text;

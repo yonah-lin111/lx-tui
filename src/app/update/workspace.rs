@@ -56,22 +56,13 @@ pub fn parse_workspace_path(
         return Ok(None);
     }
     let normalized = crate::platform::normalize_pasted_path_input(input);
-    let trimmed = normalized.trim();
-    if trimmed.is_empty() {
+    if normalized.is_empty() {
         return Ok(None);
     }
-    let home_rest = trimmed
-        .strip_prefix('~')
-        .filter(|rest| rest.is_empty() || rest.starts_with('/') || rest.starts_with('\\'));
-    let path = if let Some(rest) = home_rest {
-        let home = home_dir().ok_or("Cannot resolve home directory")?;
-        if rest.is_empty() {
-            home
-        } else {
-            home.join(rest.trim_start_matches(['/', '\\']))
-        }
+    let path = if let Some(expanded) = crate::platform::expand_tilde_path(&normalized) {
+        expanded.map_err(|()| text::TOAST_HOME_DIR_NOT_FOUND)?
     } else {
-        let p = Path::new(trimmed);
+        let p = Path::new(&normalized);
         if p.is_relative() {
             if let Some(base) = base_cwd {
                 base.join(p)

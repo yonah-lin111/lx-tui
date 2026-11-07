@@ -436,7 +436,7 @@ pub(crate) fn confirm_close_scrollbar_press(
         }
         None => {
             let offset = ui::widgets::scrollbar::offset_from_track_row(&bar, row);
-            update::set_confirm_close_scroll(state, offset);
+            update::set_confirm_close_scroll_with_rows(state, offset, layout.visible_rows);
         }
     }
     true

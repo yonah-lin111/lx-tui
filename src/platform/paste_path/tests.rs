@@ -240,3 +240,72 @@ fn parse_path_text_accepts_quoted_escaped_and_file_uri_paths() {
     }
     let _ = std::fs::remove_dir_all(&dir);
 }
+
+#[test]
+fn home_dir_from_vars_prefers_home_then_userprofile_then_drive() {
+    let os = |value: &str| Some(std::ffi::OsString::from(value));
+
+    assert_eq!(
+        home_dir_from_vars(
+            os("/home/u"),
+            os("C:\\Users\\u"),
+            os("C:"),
+            os("\\Users\\u")
+        ),
+        Some(std::path::PathBuf::from("/home/u")),
+        "HOME 优先"
+    );
+    assert_eq!(
+        home_dir_from_vars(
+            Some(std::ffi::OsString::new()),
+            os("C:\\Users\\u"),
+            os("C:"),
+            os("\\Users\\u")
+        ),
+        Some(std::path::PathBuf::from("C:\\Users\\u")),
+        "空 HOME 视为缺失，回退 USERPROFILE"
+    );
+    assert_eq!(
+        home_dir_from_vars(None, None, os("C:"), os("\\Users\\u")),
+        Some(std::path::PathBuf::from("C:\\Users\\u")),
+        "最终回退 HOMEDRIVE + HOMEPATH"
+    );
+    assert_eq!(
+        home_dir_from_vars(None, None, None, os("\\Users\\u")),
+        None,
+        "缺少 HOMEDRIVE 时不拼接"
+    );
+    assert_eq!(home_dir_from_vars(None, None, None, None), None);
+}
+
+#[cfg(not(windows))]
+#[test]
+fn normalize_is_idempotent_for_existing_directory_with_trailing_space() {
+    let dir = std::env::temp_dir().join(format!("lx-tui-normalize-space-{}", std::process::id()));
+    let target = dir.join("test one ");
+    std::fs::create_dir_all(&target).expect("create trailing-space dir");
+    let display = target.display().to_string();
+    let escaped = display.replace(' ', "\\ ");
+
+    let once = normalize_pasted_path_input(&escaped);
+    assert_eq!(once, display, "转义形式必须还原为含尾随空格的真实目录");
+    assert_eq!(
+        normalize_pasted_path_input(&once),
+        display,
+        "已存在的原样路径再次归一化必须保持不变"
+    );
+
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[cfg(not(windows))]
+#[test]
+fn parse_file_uri_accepts_case_insensitive_localhost_and_rejects_nul() {
+    let parsed = parse_path_text("file://LOCALHOST/tmp/a%20b.png").expect("uri");
+    assert_eq!(parsed, vec![std::path::PathBuf::from("/tmp/a b.png")]);
+    assert_eq!(
+        parse_path_text("file:///tmp/a%00b.png"),
+        None,
+        "解码出 NUL 的 URI 必须拒绝"
+    );
+}

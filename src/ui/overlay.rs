@@ -25,10 +25,7 @@ pub use worktree::{
 };
 
 #[cfg(test)]
-pub(crate) use dialog::{
-    BUTTON_GAP, NEW_NODE_BUTTONS, NEW_WORKSPACE_BUTTON_ROW, NEW_WORKSPACE_BUTTONS,
-    RENAME_BUTTON_ROW, TRUST_BUTTON_ROW, TRUST_BUTTONS,
-};
+pub(crate) use dialog::BUTTON_GAP;
 #[cfg(test)]
 pub(crate) use save_draft::SAVE_DRAFT_BUTTONS;
 

@@ -254,23 +254,21 @@ pub(crate) fn commit_new_workspace(state: &mut AppState) {
         return;
     };
     let text_val = dialog.input.text().to_string();
-    // 手动输入与粘贴一律先做路径规范化，让输入框展示去掉引号/shell 转义后的干净路径。
+    // 手动输入与粘贴一律先做路径规范化，让解析使用去掉引号/shell 转义后的干净路径。
+    // 这里不再 `.trim()`：转义尾随空格（`/tmp/foo\ `）是合法目录名的一部分。
     let normalized = crate::platform::normalize_pasted_path_input(&text_val);
-    let normalized = normalized.trim();
-    if !normalized.is_empty() && normalized != text_val.trim() {
-        replace_new_workspace_input(state, normalized);
-    }
     let base_cwd = state
         .active_workspace()
         .cwd
         .clone()
         .or_else(|| state.active_terminal_cwd());
-    match parse_workspace_path(&text_val, base_cwd.as_deref()) {
+    match parse_workspace_path(&normalized, base_cwd.as_deref()) {
         Ok(parsed_cwd) => match parsed_cwd {
             Some(path) => {
                 if !state.workspace_history.new_workspace_confirming {
-                    // 二次确认前回填解析后的规范路径，用户看到的就是即将创建工作区的绝对路径。
-                    replace_new_workspace_input(state, &path.to_string_lossy());
+                    // 二次确认前一次性回填解析后的规范路径：单次 Enter 只产生 1 步 Undo。
+                    let resolved = path.to_string_lossy().into_owned();
+                    replace_new_workspace_input(state, &resolved);
                     state.workspace_history.new_workspace_confirming = true;
                     return;
                 }
@@ -306,6 +304,9 @@ pub(crate) fn commit_new_workspace(state: &mut AppState) {
         },
         Err(err) => {
             state.workspace_history.new_workspace_confirming = false;
+            if !normalized.is_empty() {
+                replace_new_workspace_input(state, &normalized);
+            }
             show_toast(
                 state,
                 Toast::new(ToastKind::Danger, err, None, Instant::now())
@@ -413,8 +414,23 @@ fn confirm_close(state: &mut AppState) {
     }
 }
 
-/// 按行偏移滚动 `ConfirmClose` 浮层中的待删除工作区列表；返回滚动位置是否变化。
+/// 按行偏移滚动 `ConfirmClose` 浮层中的待删除工作区列表（默认按最大可视行数夹取，
+/// 供无屏幕几何的纯状态调用方使用）；返回滚动位置是否变化。
 pub fn scroll_confirm_close(state: &mut AppState, delta: isize) -> bool {
+    scroll_confirm_close_with_rows(
+        state,
+        delta,
+        crate::app::overlay::CONFIRM_DELETE_LIST_MAX_ROWS,
+    )
+}
+
+/// 按真实视口可见行数 `visible_rows` 与增量滚动确认删除浮层中的待删除工作区列表；
+/// 返回滚动位置是否变化。
+pub fn scroll_confirm_close_with_rows(
+    state: &mut AppState,
+    delta: isize,
+    visible_rows: usize,
+) -> bool {
     let Some(Overlay::ConfirmClose(confirm)) = state.overlay.as_ref() else {
         return false;
     };
@@ -422,11 +438,19 @@ pub fn scroll_confirm_close(state: &mut AppState, delta: isize) -> bool {
         .workspace_history
         .target_delete_entries(&confirm.target)
         .len();
-    let visible = total.min(crate::app::overlay::CONFIRM_DELETE_LIST_MAX_ROWS);
+    if visible_rows == 0 {
+        return false;
+    }
+    let visible = total.min(visible_rows);
     let max_scroll = total.saturating_sub(visible);
-    let next = confirm.scroll.saturating_add_signed(delta).min(max_scroll);
     let Some(Overlay::ConfirmClose(confirm)) = state.overlay.as_mut() else {
         return false;
+    };
+    let current = confirm.scroll.min(max_scroll);
+    let next = if delta < 0 {
+        current.saturating_sub(delta.unsigned_abs())
+    } else {
+        current.saturating_add(delta as usize).min(max_scroll)
     };
     if confirm.scroll == next {
         return false;
@@ -435,8 +459,23 @@ pub fn scroll_confirm_close(state: &mut AppState, delta: isize) -> bool {
     true
 }
 
-/// 直接设置 `ConfirmClose` 浮层中待删除工作区列表的顶部滚动偏移（供滚动条点击/拖拽使用）。
+/// 直接设置 `ConfirmClose` 浮层中待删除工作区列表的顶部滚动偏移
+/// （默认按最大可视行数夹取）；返回滚动位置是否变化。
 pub fn set_confirm_close_scroll(state: &mut AppState, offset: usize) -> bool {
+    set_confirm_close_scroll_with_rows(
+        state,
+        offset,
+        crate::app::overlay::CONFIRM_DELETE_LIST_MAX_ROWS,
+    )
+}
+
+/// 按真实视口可见行数 `visible_rows` 直接设置确认删除浮层列表的顶部滚动偏移
+/// （夹取到合法区间）；返回滚动位置是否变化。
+pub fn set_confirm_close_scroll_with_rows(
+    state: &mut AppState,
+    offset: usize,
+    visible_rows: usize,
+) -> bool {
     let Some(Overlay::ConfirmClose(confirm)) = state.overlay.as_ref() else {
         return false;
     };
@@ -444,7 +483,10 @@ pub fn set_confirm_close_scroll(state: &mut AppState, offset: usize) -> bool {
         .workspace_history
         .target_delete_entries(&confirm.target)
         .len();
-    let visible = total.min(crate::app::overlay::CONFIRM_DELETE_LIST_MAX_ROWS);
+    if visible_rows == 0 {
+        return false;
+    }
+    let visible = total.min(visible_rows);
     let max_scroll = total.saturating_sub(visible);
     let next = offset.min(max_scroll);
     let Some(Overlay::ConfirmClose(confirm)) = state.overlay.as_mut() else {
@@ -487,14 +529,20 @@ pub fn apply_overlay_paste(state: &mut AppState, text: &str) -> bool {
                     .selection()
                     .is_some_and(|(start, end)| start == 0 && end == current.chars().count())
         };
-        let normalized = whole_replace.then(|| crate::platform::normalize_pasted_path_input(text));
-        let insert_text = normalized
-            .as_deref()
-            .filter(|value| !value.is_empty())
-            .unwrap_or(text);
-        if !input.insert_str(insert_text) {
-            return false;
-        }
+        if whole_replace {
+            let normalized = crate::platform::normalize_pasted_path_input(text);
+            // 纯引号/空 URI 归一化后没有有效路径：吞掉粘贴，不插入字面量 `''`。
+            if normalized.is_empty() {
+                return false;
+            }
+            // 纯空白内容同样视为整框替换：先全选再插入，避免保留前置空格。
+            if !input.text().is_empty() {
+                input.select_all();
+            }
+            input.insert_str(&normalized)
+        } else {
+            input.insert_str(text)
+        };
         match overlay {
             Overlay::ReferencedFolderInput(input) => input.error = None,
             Overlay::ResumeSessionEdit(edit) => edit.hint = None,

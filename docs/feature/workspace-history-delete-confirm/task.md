@@ -115,10 +115,32 @@
   - 测试单条 `Delete` 2 次点击打开 `ConfirmClose`，未输入口令时按 `Enter` 不删除，输入 `confirm delete` 后按 `Enter` 完成级联删除；
   - 测试 `Delete missing` 在有/无失效条目时的菜单显隐（条目菜单、历史空白菜单、活跃空白菜单）；
   - 测试 `Delete missing` 严格只清理 `!path.is_dir()` 的失效条目，保留同仓库存活的主工作区或子 worktree，且不受搜索过滤词限制。
-- [x] **4.2 UI 与事件层测试（`src/ui/overlay/tests.rs`、`src/ui/tests.rs`、`src/input/tests.rs`、`src/event/tests/workspace_history.rs`）**
+- [x] **4.2 UI 与事件层测试（`src/ui/overlay/tests.rs`、`src/ui/overlay/dialog/tests.rs`、`src/ui/tests.rs`、`src/input/tests.rs`、`src/event/tests/workspace_history.rs`）**
   - 测试 `ConfirmClose` 渲染问题、输入框占位符、硬件光标，以及输入匹配前后 `[Confirm]` 按钮从 `style::muted()` 到 `style::button_danger()` 的样式切换；
-  - 测试 `input::overlay_key` 在 `OverlayKind::ConfirmClose` 下映射字符输入、退格、编辑快捷键；
+  - 测试 `input::overlay_key` 在 `OverlayKind::ConfirmClose` 下映射字符输入、退格、编辑快捷键与 `Up`/`Down` 列表滚动；
   - 测试鼠标全链路：右键条目/空白处 → 2 次点击 `Delete` 或 `Delete missing` → 弹出 `ConfirmClose` → 未输入口令点击 `[Confirm]` 被拦截 → 键入 `confirm delete` 后点击 `[Confirm]` 执行删除。
+
+---
+
+### Phase 5：代码评审与 P0–P3 缺陷修复（依据 `review.md`）
+
+> 目标：按照 `docs/feature/workspace-history-delete-confirm/review.md` 的 P0 → P3 分级逐项完成修复与回归测试验证。
+
+- [x] **5.1 P0 修复：失效 Git linked worktree 删除后持久化隐藏（`src/db/service.rs`）**
+  - 修复 `Effect::DeleteWorkspaceHistory` 仅检查 `path.join(".git").is_file()` 导致磁盘已丢失的 linked worktree 未写入 `workspace_hidden`、重启后被 `git worktree list`（`prunable`）重新扫描复活的缺陷；当 `state.workspace_history.hidden_worktrees.contains(&path)` 时同步持久化隐藏。
+- [x] **5.2 P1 修复：确认删除快照一致性、小屏真实视口滚动与跨平台 `~` 展开**
+  - **P1-1（`src/app/state/workspace_history.rs`、`src/app/update/workspace_history/delete.rs`）**：统一 `delete_worktree_count`、`target_delete_entries` 与 `delete_workspace_history_entry` 的级联 worktree 谓词；`MissingWorkspaces` 列表统一使用 `entry.display_label(is_grouped_child)`；`delete_missing_workspace_history_entries` 仅清理已进入 `!entry.exists` 确认快照且当前仍 `!entry.path.is_dir()` 的条目，杜绝提交时二次扫描扩大删除范围（TOCTOU）。
+  - **P1-2（`src/app/update/dialog.rs`、`src/event/input.rs`、`src/event/overlay.rs`、`src/event/mouse/wheel.rs`、`src/event/mouse/drag.rs`）**：新增 `scroll_confirm_close_with_rows(state, delta, visible_rows)` 并更新 `set_confirm_close_scroll(state, offset, visible_rows)`，在事件层传入 `confirm_close_layout` 的真实 `visible_rows`，修复小屏下列表尾部不可达问题。
+  - **P1-3（`src/platform/paste_path.rs`、`src/platform/mod.rs`、`src/app/state/workspace.rs`、`src/app/update/workspace.rs`、`src/event/commands.rs`、`src/ui/text/workspace.rs`）**：将跨平台 `home_dir()`（依次回退 `HOME`、`USERPROFILE`、`HOMEDRIVE`+`HOMEPATH`）与 `expand_tilde_path()` 下沉到 `src/platform/paste_path.rs`，并新增 `text::TOAST_HOME_DIR_NOT_FOUND`。
+- [x] **5.3 P2 修复：尾随空格路径归一化幂等性、鼠标拖拽标志复位、宽字符列宽截断与粘贴边界**
+  - **P2-1（`src/platform/paste_path.rs`、`src/app/update/dialog.rs`、`src/app/update/workspace.rs`、`src/event/commands.rs`）**：`normalize_pasted_path_input` 对磁盘已存在的含尾随空格路径保持幂等，移除下游多余 `.trim()`；
+  - **P2-2（`src/event/mouse/press.rs`、`src/event/mouse/drag.rs`、`src/app/update/selection.rs`）**：在 `handle_mouse_down_left`、`handle_mouse_up_left` 与 `stop_active_selection_drags` 中统一复位 `confirm.scroll_drag = None` 与 `state.overlay_input_drag = false`；
+  - **P2-3（`src/ui/overlay/dialog.rs`）**：`render_confirm` 中问题与待删列表截断改用列宽感知的 `text::ellipsize_width`；
+  - **P2-4（`src/app/update/dialog.rs`、`src/platform/paste_path.rs`）**：`apply_overlay_paste` 在 `whole_replace` 时先 `select_all()` 覆盖旧空白并忽略空引号归一化结果；`commit_new_workspace` 合并首次确认回填为单步 Undo；`percent_decode` 拦截 `%00` 空字节并支持不区分大小写的 `localhost`。
+- [x] **5.4 P3 修复：拆分超限测试文件与补齐回归测试（`src/ui/overlay/dialog/tests.rs` 等）**
+  - 将 `src/ui/overlay/tests.rs`（1974 行）中属于 `dialog.rs` 的测试拆入 `src/ui/overlay/dialog/tests.rs`，使单测试文件严格 < 1500 行；
+  - 将新增的路径弹窗测试从 `src/app/update/tests.rs` 迁入 `src/app/update/dialog/tests.rs`；
+  - 移除未使用的 `confirm_close_shell` 并补齐 P0–P2 回归测试。
 
 ---
 

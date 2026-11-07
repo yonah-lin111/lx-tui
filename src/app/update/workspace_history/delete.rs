@@ -12,49 +12,50 @@ pub fn delete_workspace_history_entry(state: &mut AppState, entry_index: usize) 
     let Some(entry) = state.workspace_history.entries.get(entry_index).cloned() else {
         return false;
     };
-    let mut paths_to_delete = vec![entry.path.clone()];
-    if entry.git.as_ref().is_some_and(|git| !git.is_linked) {
-        for other in &state.workspace_history.entries {
-            if other.path != entry.path
-                && other
-                    .git
-                    .as_ref()
-                    .is_some_and(|git| git.repo_root == entry.path)
-            {
-                paths_to_delete.push(other.path.clone());
-            }
+    let cascade = state
+        .workspace_history
+        .cascade_linked_worktree_indices(entry_index);
+    let mut paths_to_delete = Vec::with_capacity(cascade.len() + 1);
+    let mut linked_paths = Vec::with_capacity(cascade.len() + 1);
+    if entry.git.as_ref().is_some_and(|git| git.is_linked) {
+        linked_paths.push(entry.path.clone());
+    }
+    paths_to_delete.push(entry.path.clone());
+    for child_idx in cascade {
+        if let Some(child) = state.workspace_history.entries.get(child_idx) {
+            paths_to_delete.push(child.path.clone());
+            linked_paths.push(child.path.clone());
         }
-    } else if entry.git.as_ref().is_some_and(|git| git.is_linked)
-        && !state
-            .workspace_history
-            .hidden_worktrees
-            .contains(&entry.path)
-    {
-        state
-            .workspace_history
-            .hidden_worktrees
-            .push(entry.path.clone());
+    }
+    for path in linked_paths {
+        if !state.workspace_history.hidden_worktrees.contains(&path) {
+            state.workspace_history.hidden_worktrees.push(path);
+        }
     }
 
     purge_workspace_history_paths(state, paths_to_delete);
     true
 }
 
-/// 一键级联删除全部路径不存在（`!path.is_dir()`）的工作区历史条目；返回实际删除的条目数。
+/// 一键级联删除确认快照中路径失效且当前仍不存在的工作区历史条目；返回实际删除的条目数。
 ///
+/// 只处理确认弹窗展示时已标记 `!exists` 且此刻磁盘上仍不存在的条目：
+/// 弹窗打开后才失效的目录不在此列（防止 TOCTOU 扩大删除集合），
+/// 快照中已恢复的目录也会被跳过并刷新存在性。
 /// 严格只清理磁盘上已不存在的条目本身，绝不连带删除磁盘上仍存在的同仓库主工作区或子 worktree。
 pub fn delete_missing_workspace_history_entries(state: &mut AppState) -> usize {
-    state.workspace_history.refresh_existence();
     let missing: Vec<(PathBuf, bool)> = state
         .workspace_history
         .entries
         .iter()
-        .filter(|entry| !entry.exists)
+        .filter(|entry| !entry.exists && !entry.path.is_dir())
         .map(|entry| {
             let linked = entry.git.as_ref().is_some_and(|git| git.is_linked);
             (entry.path.clone(), linked)
         })
         .collect();
+    // 快照中已被跳过（目录恢复或弹窗后才失效）的条目同步回真实存在态。
+    state.workspace_history.refresh_existence();
     if missing.is_empty() {
         return 0;
     }

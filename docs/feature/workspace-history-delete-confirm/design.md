@@ -661,9 +661,8 @@ pub(crate) fn overlay_input_rect(state: &AppState, screen: Rect) -> Option<Rect>
             Some(Rect::new(shell.inner.x, shell.inner.y, shell.inner.width, 1))
         }
         Overlay::ConfirmClose(confirm) => {
-            let question = ui::overlay::confirm_question(state, &confirm.target);
-            let shell = ui::overlay::confirm_close_shell(screen, &question)?;
-            Some(ui::overlay::confirm_close_input_rect(&shell, &question))
+            let layout = ui::overlay::confirm_close_layout(state, screen, confirm)?;
+            Some(layout.input)
         }
         Overlay::NewWorkspace(_) => {
             let shell = ui::overlay::new_workspace_shell(screen)?;
@@ -681,21 +680,24 @@ pub(crate) fn overlay_input_rect(state: &AppState, screen: Rect) -> Option<Rect>
 
 | 文件路径 | 操作 | 预估行数 | 说明（生产代码均 ≤ 1000 行） |
 | --- | --- | --- | --- |
-| `src/app/overlay.rs` | 修改 | ~520 | 移除 `DeleteWorkspaceHistoryStep1/2`，新增 `DeleteMissingWorkspaces`、`OverlayTarget::MissingWorkspaces`、`ConfirmClose { target, input }` 与 `is_confirmed()` |
-| `src/app/state/workspace_history.rs` | 修改 | ~535 | 新增 `has_missing_entries()` 与 `missing_entry_count()` |
+| `src/app/overlay.rs` | 修改 | ~640 | 移除 `DeleteWorkspaceHistoryStep1/2`，新增 `DeleteMissingWorkspaces`、`OverlayTarget::MissingWorkspaces`、`ConfirmClose { target, input, scroll, scroll_drag }` 与 `is_confirmed()` |
+| `src/app/state/workspace_history.rs` | 修改 | ~585 | 新增 `has_missing_entries()`、`missing_entry_count()`、`target_delete_entries()` 与统一级联 worktree 谓词 |
 | `src/app/update/menu.rs` | 修改 | ~655 | 菜单挂载 `DeleteMissingWorkspaces`、统一 2 次点击确认、移除 3 击步骤状态机 |
-| `src/app/update/dialog.rs` | 修改 | ~425 | `confirm_close` 校验 `confirm.is_confirmed()` 并分派单条或批量失效项删除 |
-| `src/app/update/workspace_history/mod.rs` | 拆分修改 | ~780 | 迁出删除函数，保留模式/排序/导航/打开/搜索逻辑并重导出 `delete::*` |
-| `src/app/update/workspace_history/delete.rs` | 新建 | ~210 | `delete_workspace_history_entry`、`delete_missing_workspace_history_entries`、`purge_workspace_history_paths` |
-| `src/app/update/workspace_history/delete/tests.rs` | 新建 | ~260 | 单条删除、父项组级联、批量删除失效项及边界测试 |
-| `src/input/mod.rs` | 修改 | ~530 | `OverlayKind::ConfirmClose` 接入 `overlay_text_edit_key` |
-| `src/event/overlay.rs` | 修改 | ~575 | `ConfirmClose` 改用 `confirm_close_shell`；`overlay_input_rect` 支持 `ConfirmClose` 输入框点击与拖选 |
-| `src/event/mouse/drag.rs` | 修改 | ~698 | 适配 `overlay_input_rect` |
-| `src/ui/text/workspace.rs` | 新建 | ~240 | 承接工作区/侧栏/菜单/确认弹窗英文文案，新增 `Delete missing` 与确认输入占位符文案 |
-| `src/ui/text.rs` | 修改 | ~950 | 重导出 `pub use workspace::*;`，生产代码降至 1000 行以内 |
-| `src/ui/overlay/menu.rs` | 修改 | ~195 | 映射 `MenuCommand::DeleteWorkspaceHistory` 与 `DeleteMissingWorkspaces` 的常规/行内确认文案 |
-| `src/ui/overlay/dialog.rs` | 修改 | ~710 | `confirm_close_shell`、`confirm_close_input_rect`、`render_confirm`（渲染输入框、按钮禁用/高亮与光标返回） |
-| `src/ui/overlay.rs` | 修改 | ~105 | `Overlay::ConfirmClose` 分支透传 `render_confirm` 返回的硬件光标 |
+| `src/app/update/dialog.rs` | 修改 | ~580 | `confirm_close` 校验 `confirm.is_confirmed()`、`scroll_confirm_close_with_rows` / `set_confirm_close_scroll` 按真实视口行数钳制、路径弹窗粘贴与单步 Undo 归一化 |
+| `src/app/update/workspace_history/mod.rs` | 拆分修改 | ~870 | 迁出删除函数，保留模式/排序/导航/打开/搜索逻辑并重导出 `delete::*` |
+| `src/app/update/workspace_history/delete.rs` | 新建 | ~175 | `delete_workspace_history_entry`、`delete_missing_workspace_history_entries`（基于已确认快照防 TOCTOU）、`purge_workspace_history_paths` |
+| `src/app/update/workspace_history/delete/tests.rs` | 新建 | ~730 | 单条删除、父项组级联、批量删除失效项、失效 linked worktree 持久化隐藏及 TOCTOU 边界测试 |
+| `src/db/service.rs` | 修改 | ~900 | `Effect::DeleteWorkspaceHistory` 对 `hidden_worktrees` 中的已丢失 linked worktree 同步写入 `workspace_hidden` 防重启复活 |
+| `src/platform/paste_path.rs` | 修改 | ~310 | `normalize_pasted_path_input`（幂等处理尾随转义空格/引号/`file://`）、跨平台 `home_dir()` 与 `expand_tilde_path()` |
+| `src/input/mod.rs` | 修改 | ~570 | `OverlayKind::ConfirmClose` 接入 `overlay_text_edit_key` 与 `Up`/`Down` 列表滚动 |
+| `src/event/overlay.rs` | 修改 | ~680 | `ConfirmClose` 改用 `confirm_close_layout`；支持输入框点击/拖选与右侧滚动条点击/拖拽 |
+| `src/event/mouse/drag.rs` | 修改 | ~735 | 适配 `overlay_input_rect` 与 `ConfirmClose` 滚动条拖拽及释放时双标志复位 |
+| `src/ui/text/workspace.rs` | 新建 | ~655 | 承接工作区/侧栏/菜单/确认弹窗英文文案，新增 `Delete missing`、确认输入占位符与 `TOAST_HOME_DIR_NOT_FOUND` |
+| `src/ui/text.rs` | 修改 | ~880 | 重导出 `pub use workspace::*;`，生产代码降至 1000 行以内 |
+| `src/ui/overlay/menu.rs` | 修改 | ~236 | 映射 `MenuCommand::DeleteWorkspaceHistory` 与 `DeleteMissingWorkspaces` 的常规/行内确认文案 |
+| `src/ui/overlay/dialog.rs` | 修改 | ~900 | 56 列宽度、`confirm_close_layout`、`render_confirm`（使用 `ellipsize_width` 渲染可滚动列表、输入框、按钮禁用/高亮与光标返回） |
+| `src/ui/overlay/dialog/tests.rs` | 新建 | ~950 | 从 `src/ui/overlay/tests.rs` 按职责拆出弹窗相关测试，保持单测试文件 < 1500 行 |
+| `src/ui/overlay.rs` | 修改 | ~101 | `Overlay::ConfirmClose` 分支透传 `render_confirm` 返回的硬件光标 |
 
 ---
 
