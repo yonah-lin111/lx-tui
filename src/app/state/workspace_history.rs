@@ -245,6 +245,53 @@ impl WorkspaceHistoryPanel {
             .count()
     }
 
+    /// 获取确认删除浮层中待删除的工作区条目列表 `(显示名, 路径)`：
+    /// - 单条删除（`WorkspaceHistory(index)`）：返回该条目本身；若为主 Git 仓库，紧跟其同仓库全部 linked worktree；
+    /// - 批量清理失效项（`MissingWorkspaces`）：返回全部 `!entry.exists` 的失效条目；
+    /// - 其它目标返回空列表。
+    pub fn target_delete_entries(
+        &self,
+        target: &crate::app::overlay::OverlayTarget,
+    ) -> Vec<(String, PathBuf)> {
+        match target {
+            crate::app::overlay::OverlayTarget::WorkspaceHistory(index) => {
+                let Some(entry) = self.entries.get(*index) else {
+                    return Vec::new();
+                };
+                let is_grouped_child = entry.git.as_ref().is_some_and(|git| {
+                    git.is_linked
+                        && self.entries.iter().any(|parent| {
+                            parent
+                                .git
+                                .as_ref()
+                                .is_some_and(|pg| !pg.is_linked && pg.repo_root == git.repo_root)
+                        })
+                });
+                let mut out = vec![(entry.display_label(is_grouped_child), entry.path.clone())];
+                if entry.git.as_ref().is_some_and(|git| !git.is_linked) {
+                    for other in &self.entries {
+                        if other.path != entry.path
+                            && other
+                                .git
+                                .as_ref()
+                                .is_some_and(|git| git.repo_root == entry.path && git.is_linked)
+                        {
+                            out.push((other.display_label(true), other.path.clone()));
+                        }
+                    }
+                }
+                out
+            }
+            crate::app::overlay::OverlayTarget::MissingWorkspaces => self
+                .entries
+                .iter()
+                .filter(|entry| !entry.exists)
+                .map(|entry| (entry.name.clone(), entry.path.clone()))
+                .collect(),
+            _ => Vec::new(),
+        }
+    }
+
     /// 计算当前可见的树形行列表（含折叠裁剪与搜索词过滤）。
     pub fn visible_rows(&self) -> Vec<WorkspaceHistoryRow> {
         let mut parent_by_repo: BTreeMap<&Path, usize> = BTreeMap::new();

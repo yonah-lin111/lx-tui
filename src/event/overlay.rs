@@ -121,11 +121,11 @@ pub(crate) fn handle_overlay_click(
             }
         }
         Some(Overlay::ConfirmClose(confirm)) => {
-            let question = ui::overlay::confirm_question(state, &confirm.target);
-            let Some(shell) = ui::overlay::confirm_close_shell(screen, &question) else {
+            let Some(layout) = ui::overlay::confirm_close_layout(state, screen, confirm) else {
                 update::close_overlay(state);
                 return None;
             };
+            let shell = layout.shell;
             if modal_dismissed(state, &shell, column, row) {
                 return None;
             }
@@ -407,6 +407,41 @@ pub(crate) fn handle_overlay_click(
     }
 }
 
+/// 失效工作区确认弹窗的滚动条按下：命中轨道/thumb 时更新视口或登记拖拽锚点。
+///
+/// 返回 `true` 表示事件已被滚动条消费，调用方不再继续浮层点击分派。
+pub(crate) fn confirm_close_scrollbar_press(
+    state: &mut AppState,
+    screen: Rect,
+    column: u16,
+    row: u16,
+) -> bool {
+    let Some(Overlay::ConfirmClose(confirm)) = state.overlay.as_ref() else {
+        return false;
+    };
+    let Some(layout) = ui::overlay::confirm_close_layout(state, screen, confirm) else {
+        return false;
+    };
+    let Some(bar) = layout.scrollbar else {
+        return false;
+    };
+    if !bar.track.contains((column, row).into()) {
+        return false;
+    }
+    match ui::widgets::scrollbar::thumb_grab_offset(&bar, row) {
+        Some(grab) => {
+            if let Some(Overlay::ConfirmClose(confirm)) = state.overlay.as_mut() {
+                confirm.scroll_drag = Some(grab);
+            }
+        }
+        None => {
+            let offset = ui::widgets::scrollbar::offset_from_track_row(&bar, row);
+            update::set_confirm_close_scroll(state, offset);
+        }
+    }
+    true
+}
+
 /// 获取当前浮层中单行输入框的屏幕矩形区域；无输入框或处于锁定态时返回 None。
 pub(crate) fn overlay_input_rect(state: &AppState, screen: Rect) -> Option<Rect> {
     match state.overlay.as_ref()? {
@@ -420,9 +455,7 @@ pub(crate) fn overlay_input_rect(state: &AppState, screen: Rect) -> Option<Rect>
             ))
         }
         Overlay::ConfirmClose(confirm) => {
-            let question = ui::overlay::confirm_question(state, &confirm.target);
-            let shell = ui::overlay::confirm_close_shell(screen, &question)?;
-            Some(ui::overlay::confirm_close_input_rect(&shell, &question))
+            ui::overlay::confirm_close_layout(state, screen, confirm).map(|layout| layout.input)
         }
         Overlay::NewWorkspace(_) => {
             let shell = ui::overlay::new_workspace_shell(screen)?;

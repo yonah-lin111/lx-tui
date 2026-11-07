@@ -2,7 +2,7 @@
 
 use ratatui::Frame;
 use ratatui::layout::Rect;
-use ratatui::text::Span;
+use ratatui::text::{Line, Span};
 use ratatui::widgets::Paragraph;
 
 use crate::app::overlay::{
@@ -142,6 +142,87 @@ pub fn confirm_close_input_rect(shell: &widgets::modal::ModalShell, question: &s
         .y
         .saturating_add(shown_rows.min(shell.inner.height.saturating_sub(2)));
     Rect::new(shell.inner.x, y, shell.inner.width, 1)
+}
+
+/// `ConfirmClose` 浮层完整几何：外框、待删工作区列表区（含可选滚动条）与单行口令输入框。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ConfirmCloseLayout {
+    pub shell: widgets::modal::ModalShell,
+    pub list: Option<Rect>,
+    pub scrollbar: Option<widgets::scrollbar::ScrollbarLayout>,
+    pub input: Rect,
+    pub visible_rows: usize,
+    pub scroll: usize,
+}
+
+/// 计算 `ConfirmClose` 浮层完整几何（含问题换行、最多 5 行可滚动待删工作区列表、输入框与底部按钮）。
+pub fn confirm_close_layout(
+    state: &AppState,
+    screen: Rect,
+    confirm: &ConfirmClose,
+) -> Option<ConfirmCloseLayout> {
+    let question = confirm_question(state, &confirm.target);
+    let items = state
+        .workspace_history
+        .target_delete_entries(&confirm.target);
+    let list_rows = items
+        .len()
+        .min(crate::app::overlay::CONFIRM_DELETE_LIST_MAX_ROWS);
+    let extra_rows = if list_rows > 0 { list_rows + 1 } else { 0 };
+    let width = CONFIRM_WIDTH.min(screen.width);
+    let inner_width = usize::from(width.saturating_sub(2)).max(1);
+    let q_lines = text::wrap(&question, inner_width).len().max(1);
+    let height = u16::try_from(q_lines.saturating_add(extra_rows))
+        .unwrap_or(u16::MAX)
+        .saturating_add(7)
+        .min(screen.height);
+    let shell = widgets::modal::layout(screen, width, height)?;
+    let max_q_rows = usize::from(
+        shell
+            .inner
+            .height
+            .saturating_sub(3u16.saturating_add(extra_rows as u16)),
+    )
+    .max(1);
+    let shown_q_rows = q_lines.min(max_q_rows) as u16;
+    if list_rows > 0 {
+        let list_y = shell.inner.y.saturating_add(shown_q_rows);
+        let avail_list_h = shell
+            .inner
+            .height
+            .saturating_sub(shown_q_rows.saturating_add(4));
+        let actual_list_rows = (list_rows as u16).min(avail_list_h);
+        let visible_rows = usize::from(actual_list_rows);
+        let max_scroll = items.len().saturating_sub(visible_rows);
+        let scroll = confirm.scroll.min(max_scroll);
+        let list_rect = (actual_list_rows > 0)
+            .then(|| Rect::new(shell.inner.x, list_y, shell.inner.width, actual_list_rows));
+        let scrollbar = list_rect
+            .and_then(|rect| widgets::scrollbar::layout(rect, items.len(), visible_rows, scroll));
+        let input_y = list_y
+            .saturating_add(actual_list_rows)
+            .saturating_add(1)
+            .min(shell.inner.bottom().saturating_sub(3));
+        let input = Rect::new(shell.inner.x, input_y, shell.inner.width, 1);
+        Some(ConfirmCloseLayout {
+            shell,
+            list: list_rect,
+            scrollbar,
+            input,
+            visible_rows,
+            scroll,
+        })
+    } else {
+        let input = confirm_close_input_rect(&shell, &question);
+        Some(ConfirmCloseLayout {
+            shell,
+            list: None,
+            scrollbar: None,
+            input,
+            visible_rows: 0,
+            scroll: 0,
+        })
+    }
 }
 
 /// 命中重命名按钮。
@@ -443,7 +524,8 @@ pub(crate) fn render_confirm(
     confirm: &ConfirmClose,
 ) -> Option<(u16, u16)> {
     let question = confirm_question(state, &confirm.target);
-    let shell = confirm_close_shell(screen, &question)?;
+    let layout = confirm_close_layout(state, screen, confirm)?;
+    let shell = layout.shell;
     let (title, _) = confirm_text(state, &confirm.target);
     widgets::modal::render_danger(frame, &shell, title);
     if shell.inner.width == 0 || shell.inner.height == 0 {
@@ -451,7 +533,13 @@ pub(crate) fn render_confirm(
     }
     let width = usize::from(shell.inner.width);
     let lines = text::wrap(&question, width);
-    let max_rows = usize::from(shell.inner.height.saturating_sub(3)).max(1);
+    let max_rows = usize::from(
+        layout
+            .list
+            .map_or(layout.input.y, |rect| rect.y)
+            .saturating_sub(shell.inner.y),
+    )
+    .max(1);
     for (index, line) in lines.iter().take(max_rows).enumerate() {
         let clipped = lines.len() > max_rows && index + 1 == max_rows;
         let visible = if clipped {
@@ -468,6 +556,59 @@ pub(crate) fn render_confirm(
                 1,
             ),
         );
+    }
+    if let Some(list_rect) = layout.list {
+        let items = state
+            .workspace_history
+            .target_delete_entries(&confirm.target);
+        let row_width = usize::from(
+            list_rect
+                .width
+                .saturating_sub(u16::from(layout.scrollbar.is_some())),
+        );
+        for (row_idx, (name, path)) in items
+            .iter()
+            .skip(layout.scroll)
+            .take(layout.visible_rows)
+            .enumerate()
+        {
+            let prefix = format!("  • {name}");
+            let path_text = format!(" ({})", path.display());
+            let prefix_width = unicode_width::UnicodeWidthStr::width(prefix.as_str());
+            let total_width =
+                prefix_width + unicode_width::UnicodeWidthStr::width(path_text.as_str());
+            let spans = if total_width > row_width {
+                if prefix_width > row_width {
+                    vec![Span::styled(
+                        text::ellipsize(&prefix, row_width),
+                        style::text(),
+                    )]
+                } else {
+                    let rem = row_width.saturating_sub(prefix_width);
+                    vec![
+                        Span::styled(prefix, style::text()),
+                        Span::styled(text::ellipsize(&path_text, rem), style::muted()),
+                    ]
+                }
+            } else {
+                vec![
+                    Span::styled(prefix, style::text()),
+                    Span::styled(path_text, style::muted()),
+                ]
+            };
+            frame.render_widget(
+                Paragraph::new(Line::from(spans)),
+                Rect::new(
+                    list_rect.x,
+                    list_rect.y.saturating_add(row_idx as u16),
+                    list_rect.width,
+                    1,
+                ),
+            );
+        }
+        if let Some(bar) = &layout.scrollbar {
+            widgets::scrollbar::render(frame, bar);
+        }
     }
     let confirm_style = if confirm.is_confirmed() {
         style::button_danger()
@@ -487,10 +628,9 @@ pub(crate) fn render_confirm(
             (text::BUTTON_CANCEL, style::button_secondary()),
         ],
     );
-    let input_rect = confirm_close_input_rect(&shell, &question);
     render_input(
         frame,
-        input_rect,
+        layout.input,
         confirm.input.text(),
         confirm.input.cursor(),
         confirm.input.selection(),

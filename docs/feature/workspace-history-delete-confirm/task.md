@@ -32,6 +32,9 @@
 - [x] **Q4（弹窗按钮样式与触发行为）**：
   - 底部按钮为 `[Confirm]  [Cancel]`；未匹配 `confirm delete` 时 `[Confirm]` 为暗色禁用态（`style::muted()`），匹配后高亮为危险红色（`style::button_danger()`）；
   - 未匹配时点击 `[Confirm]` 或按 `Enter` 均无反应、保持弹窗打开；匹配后既可鼠标点击 `[Confirm]` 执行删除，也可按 `Enter` 执行删除；`Esc`、点击 `[Cancel]` 或点击弹窗外部空白处取消并关闭弹窗。
+- [x] **Q5（弹窗待删除工作区列表与滚动）**：
+  - 在问题文案下方、输入框上方展示待删除工作区列表，每行格式为 `  • <name> (<path>)`；单条删除主仓库时一并列出级联子 worktree，`Delete missing` 时列出全部失效工作区；
+  - 列表区域最多展示 5 行（`CONFIRM_DELETE_LIST_MAX_ROWS = 5`），超过 5 行时显示右侧滚动条并支持鼠标滚轮、键盘 `Up`/`Down` 及滚动条点击/拖拽滚动。
 
 ---
 

@@ -2,11 +2,12 @@ use std::path::PathBuf;
 
 use super::*;
 use crate::app::actions::OverlayKey;
-use crate::app::overlay::{MenuCommand, Overlay, OverlayTarget};
+use crate::app::overlay::{ConfirmClose, MenuCommand, Overlay, OverlayTarget};
 use crate::app::state::{WorkspaceGit, WorkspaceHistoryEntry};
 use crate::app::update::{
     activate_menu, apply_overlay_key, apply_workspace_history, open_workspace_history_menu,
-    open_workspace_list_menu, show_workspace_history,
+    open_workspace_list_menu, scroll_confirm_close, set_confirm_close_scroll,
+    show_workspace_history,
 };
 
 fn plain_entry(name: &str, path: PathBuf) -> WorkspaceHistoryEntry {
@@ -502,4 +503,172 @@ fn delete_missing_without_missing_entries_is_noop() {
     assert_eq!(delete_missing_workspace_history_entries(&mut state), 0);
     assert_eq!(state.workspace_history.entries.len(), 1);
     assert!(state.effects.is_empty());
+}
+
+fn confirm_scroll(state: &AppState) -> Option<usize> {
+    state.overlay.as_ref().and_then(|overlay| match overlay {
+        Overlay::ConfirmClose(confirm) => Some(confirm.scroll),
+        _ => None,
+    })
+}
+
+fn missing_entries(count: usize, label: &str) -> Vec<WorkspaceHistoryEntry> {
+    let base = std::env::temp_dir().join(format!("lx-{label}-{}", std::process::id()));
+    (0..count)
+        .map(|index| plain_entry(&format!("Gone{index}"), base.join(format!("gone-{index}"))))
+        .collect()
+}
+
+#[test]
+fn target_delete_entries_single_workspace_returns_only_itself() {
+    let mut state = AppState::demo();
+    let path = std::env::temp_dir().join(format!("lx-target-delete-single-{}", std::process::id()));
+    apply_workspace_history(&mut state, vec![plain_entry("Solo", path.clone())]);
+
+    assert_eq!(
+        state
+            .workspace_history
+            .target_delete_entries(&OverlayTarget::WorkspaceHistory(0)),
+        vec![("Solo".to_string(), path)]
+    );
+    // 越界索引与不可删除目标返回空列表。
+    assert!(
+        state
+            .workspace_history
+            .target_delete_entries(&OverlayTarget::WorkspaceHistory(9))
+            .is_empty()
+    );
+    assert!(
+        state
+            .workspace_history
+            .target_delete_entries(&OverlayTarget::WorkspaceList)
+            .is_empty()
+    );
+}
+
+#[test]
+fn target_delete_entries_git_parent_includes_linked_worktrees() {
+    let mut state = AppState::demo();
+    let base = std::env::temp_dir().join(format!("lx-target-delete-repo-{}", std::process::id()));
+    let repo = base.join("repo");
+    let child = repo.join("wt");
+    std::fs::create_dir_all(&child).expect("create worktree");
+    apply_workspace_history(
+        &mut state,
+        vec![
+            git_entry("repo", repo.clone(), git_meta(&repo, &repo, false)),
+            git_entry("wt", child.clone(), git_meta(&repo, &child, true)),
+        ],
+    );
+
+    assert_eq!(
+        state
+            .workspace_history
+            .target_delete_entries(&OverlayTarget::WorkspaceHistory(0)),
+        vec![
+            ("repo".to_string(), repo.clone()),
+            ("feature/x".to_string(), child.clone()),
+        ]
+    );
+    // linked worktree 自身只返回自身，不反向级联主仓库。
+    assert_eq!(
+        state
+            .workspace_history
+            .target_delete_entries(&OverlayTarget::WorkspaceHistory(1)),
+        vec![("feature/x".to_string(), child)]
+    );
+
+    let _ = std::fs::remove_dir_all(&base);
+}
+
+#[test]
+fn target_delete_entries_missing_workspaces_returns_all_missing() {
+    let mut state = AppState::demo();
+    let base =
+        std::env::temp_dir().join(format!("lx-target-delete-missing-{}", std::process::id()));
+    let existing = base.join("existing");
+    std::fs::create_dir_all(&existing).expect("create existing");
+    let missing_a = base.join("missing-a");
+    let missing_b = base.join("missing-b");
+    apply_workspace_history(
+        &mut state,
+        vec![
+            plain_entry("Existing", existing),
+            plain_entry("GoneA", missing_a.clone()),
+            plain_entry("GoneB", missing_b.clone()),
+        ],
+    );
+
+    assert_eq!(
+        state
+            .workspace_history
+            .target_delete_entries(&OverlayTarget::MissingWorkspaces),
+        vec![
+            ("GoneA".to_string(), missing_a),
+            ("GoneB".to_string(), missing_b),
+        ]
+    );
+
+    let _ = std::fs::remove_dir_all(&base);
+}
+
+#[test]
+fn confirm_close_scroll_clamps_within_list_bounds() {
+    let mut state = AppState::demo();
+    apply_workspace_history(&mut state, missing_entries(8, "confirm-scroll"));
+    state.overlay = Some(Overlay::ConfirmClose(ConfirmClose::new(
+        OverlayTarget::MissingWorkspaces,
+    )));
+    assert_eq!(confirm_scroll(&state), Some(0));
+
+    // 8 条 - 5 行 = 最大偏移 3。
+    for _ in 0..10 {
+        scroll_confirm_close(&mut state, 1);
+    }
+    assert_eq!(confirm_scroll(&state), Some(3));
+    assert!(!scroll_confirm_close(&mut state, 1));
+
+    assert!(scroll_confirm_close(&mut state, -2));
+    assert_eq!(confirm_scroll(&state), Some(1));
+    assert!(scroll_confirm_close(&mut state, -10));
+    assert_eq!(confirm_scroll(&state), Some(0));
+    assert!(!scroll_confirm_close(&mut state, -1));
+
+    assert!(set_confirm_close_scroll(&mut state, 99));
+    assert_eq!(confirm_scroll(&state), Some(3));
+    assert!(!set_confirm_close_scroll(&mut state, 3));
+    assert!(set_confirm_close_scroll(&mut state, 0));
+    assert_eq!(confirm_scroll(&state), Some(0));
+
+    // 非 ConfirmClose 浮层不做任何滚动。
+    state.overlay = None;
+    assert!(!scroll_confirm_close(&mut state, 1));
+    assert!(!set_confirm_close_scroll(&mut state, 1));
+}
+
+#[test]
+fn confirm_close_up_down_keys_scroll_list_when_overflowing() {
+    let mut state = AppState::demo();
+    apply_workspace_history(&mut state, missing_entries(7, "confirm-keys"));
+    state.overlay = Some(Overlay::ConfirmClose(ConfirmClose::new(
+        OverlayTarget::MissingWorkspaces,
+    )));
+
+    apply_overlay_key(&mut state, OverlayKey::Down);
+    assert_eq!(confirm_scroll(&state), Some(1));
+    apply_overlay_key(&mut state, OverlayKey::Down);
+    assert_eq!(confirm_scroll(&state), Some(2));
+    apply_overlay_key(&mut state, OverlayKey::Down);
+    assert_eq!(confirm_scroll(&state), Some(2), "Down 到达底部后不再前进");
+    apply_overlay_key(&mut state, OverlayKey::Up);
+    assert_eq!(confirm_scroll(&state), Some(1));
+    assert!(
+        matches!(state.overlay, Some(Overlay::ConfirmClose(_))),
+        "Up/Down 不关闭删除确认浮层"
+    );
+
+    // 列表不超过 5 行时保持偏移 0。
+    state.workspace_history.entries.truncate(3);
+    apply_overlay_key(&mut state, OverlayKey::Down);
+    assert_eq!(confirm_scroll(&state), Some(0));
 }

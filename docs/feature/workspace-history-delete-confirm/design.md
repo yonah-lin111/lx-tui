@@ -40,6 +40,7 @@
 | **Q2** | **一键清理失效项（`Delete missing`）的作用范围与级联边界** | 1. **严格只删失效目录**：只删除 `path.is_dir() == false`（列表中标红）的条目本身及其数据库关联记录（会话、提示词、文件夹、引用目录），**绝不连带删除磁盘上仍然存在的任何同仓库主工作区或子 worktree**。<br>2. **全量历史范围**：作用于整个 `workspace_history.entries` 中的全部失效条目，不受顶部搜索框当前过滤词限制；打开弹窗与执行删除时均以实时磁盘存在性为准。 |
 | **Q3** | **模态弹窗确认输入短语、占位符与匹配规则** | 1. **确认短语**：`confirm delete`（常量 `CONFIRM_DELETE_PHRASE = "confirm delete"`）。<br>2. **输入框占位提示（Placeholder）**：`type "confirm delete" to confirm`。<br>3. **匹配规则**：去除首尾空白后**不区分 ASCII 大小写**精确匹配，即 `input.text().trim().eq_ignore_ascii_case("confirm delete")`，单条删除与批量清理失效项共用同一规则。 |
 | **Q4** | **模态弹窗按钮视觉状态与确认触发方式** | 1. **按钮组成与样式**：底部保留 `[Confirm]  [Cancel]` 两个按钮；当输入未匹配 `confirm delete` 时，`[Confirm]` 渲染为暗色禁用态（`style::muted()`），输入匹配后立即变为危险红色（`style::button_danger()`）。<br>2. **触发与拦截**：未匹配时无论按键盘 `Enter` 还是鼠标点击 `[Confirm]` 均为 no-op（不执行删除、不关闭弹窗）；匹配后**既支持鼠标点击 `[Confirm]` 执行删除，也支持按键盘 `Enter` 执行删除**；按 `Esc`、点击 `[Cancel]` 或点击模态框外部空白区域均取消并关闭弹窗。 |
+| **Q5** | **模态弹窗内「待删除工作区列表」展示与滚动** | 1. **每行格式与范围**：在问题文案下方、输入框上方以列表形式展示将被删除的 `ws item`，每行格式为 `  • <名称> (<路径>)`（名称用 `style::text()`，路径用 `style::muted()`）；单条删除 Git 主仓库时一并列出级联删除的全部子 worktree，批量清理失效项时列出全部失效工作区。<br>2. **最大可视行数与滚动**：列表最多展示 **5 行**（`CONFIRM_DELETE_LIST_MAX_ROWS = 5`）；超出 5 行时右侧渲染滚动条（`widgets::scrollbar`），支持**鼠标滚轮滚动**、**键盘 `Up`/`Down` 滚动**以及**滚动条点击/拖拽**。 |
 
 ---
 

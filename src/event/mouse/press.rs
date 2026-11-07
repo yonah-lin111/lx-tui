@@ -15,7 +15,9 @@ use crate::layout::{self, PaneId};
 use crate::pty::PtySession;
 use crate::ui;
 
-use super::super::overlay::{handle_overlay_click, open_right_click_menu};
+use super::super::overlay::{
+    confirm_close_scrollbar_press, handle_overlay_click, open_right_click_menu,
+};
 use super::super::paste;
 use super::super::session::{Geometry, ensure_workspace_visible, reveal_active_tab, write_to_pane};
 use super::hit::{
@@ -123,6 +125,11 @@ pub(crate) fn handle_mouse_down_left(
                 }
                 return;
             }
+        }
+        // 失效工作区确认弹窗的滚动条同上：命中轨道/thumb 时滚动列表视口后再走浮层点击。
+        if confirm_close_scrollbar_press(state, *screen, mouse.column, mouse.row) {
+            *dirty = true;
+            return;
         }
         let was_menu = matches!(state.overlay, Some(Overlay::Menu(_)));
         let menu_item_clicked = if let Some(Overlay::Menu(menu)) = state.overlay.as_ref() {

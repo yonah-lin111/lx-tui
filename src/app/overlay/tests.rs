@@ -397,6 +397,15 @@ fn confirm_close_phrase_ignores_outer_whitespace_and_ascii_case() {
 }
 
 #[test]
+fn confirm_close_new_starts_with_empty_input_and_zero_scroll() {
+    let confirm = ConfirmClose::new(OverlayTarget::WorkspaceHistory(0));
+    assert!(confirm.input.text().is_empty());
+    assert_eq!(confirm.scroll, 0);
+    assert_eq!(confirm.scroll_drag, None);
+    assert_eq!(CONFIRM_DELETE_LIST_MAX_ROWS, 5);
+}
+
+#[test]
 fn text_input_word_movement_and_deletion() {
     let mut input = TextInput::new("hello world foo");
     input.move_word_left();

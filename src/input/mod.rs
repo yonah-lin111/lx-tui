@@ -447,6 +447,8 @@ fn overlay_key(key: KeyEvent, kind: OverlayKind) -> Option<OverlayKey> {
         | OverlayKind::ConfirmClose => match key.code {
             KeyCode::Esc => Some(OverlayKey::Esc),
             KeyCode::Enter => Some(OverlayKey::Enter),
+            KeyCode::Up if kind == OverlayKind::ConfirmClose => Some(OverlayKey::Up),
+            KeyCode::Down if kind == OverlayKind::ConfirmClose => Some(OverlayKey::Down),
             _ => overlay_text_edit_key(key),
         },
         OverlayKind::WorktreeOpen | OverlayKind::SaveDraft => match key.code {

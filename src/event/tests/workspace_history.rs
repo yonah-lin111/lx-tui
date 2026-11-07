@@ -57,6 +57,27 @@ fn press_mouse(
     );
 }
 
+/// 纵向滚轮一格：走事件主循环的鼠标滚轮分派。
+fn wheel(
+    state: &mut AppState,
+    geo: &crate::event::session::Geometry,
+    config: &Config,
+    kind: MouseEventKind,
+    point: (u16, u16),
+) {
+    let mut sessions = HashMap::new();
+    let mut dirty = false;
+    handle_terminal_event(
+        mouse(kind, point.0, point.1),
+        state,
+        &mut sessions,
+        geo,
+        config,
+        &mut ui::RenderCache::default(),
+        &mut dirty,
+    );
+}
+
 /// 按下单个无修饰键。
 fn press(
     state: &mut AppState,
@@ -260,9 +281,15 @@ fn double_click_history_row_opens_workspace_and_right_click_missing_cascades_del
     );
 
     // 未输入口令就点击 [Confirm]：弹窗保持打开且不执行删除。
-    let question = ui::overlay::confirm_question(&state, &confirm.target);
-    let shell = ui::overlay::confirm_close_shell(geo.screen, &question).expect("confirm shell");
-    let confirm_point = confirm_button_point(&shell);
+    let confirm_point = {
+        let Some(Overlay::ConfirmClose(confirm)) = state.overlay.as_ref() else {
+            panic!("confirmation modal expected");
+        };
+        let shell = ui::overlay::confirm_close_layout(&state, geo.screen, confirm)
+            .expect("confirm layout")
+            .shell;
+        confirm_button_point(&shell)
+    };
     click(&mut state, &geo, &config, confirm_point);
     assert!(
         matches!(state.overlay, Some(Overlay::ConfirmClose(_))),
@@ -410,4 +437,104 @@ fn right_click_blank_delete_missing_removes_only_missing_entries() {
         .map(|entry| entry.path)
         .collect();
     assert_eq!(db_paths, vec![existing]);
+}
+
+#[test]
+fn confirm_close_list_scrolls_with_wheel_and_deletes_all_missing() {
+    let config = Config::default();
+    let mut state = demo_terminal();
+    let db = Database::open_in_memory().expect("in-memory db");
+    let existing = std::env::temp_dir();
+    db.record_workspace_open(&existing, "ExistingWS")
+        .expect("record existing");
+    let missing: Vec<PathBuf> = (0..8)
+        .map(|index| PathBuf::from(format!("/tmp/lx-event-history-scroll-{index}-99999")))
+        .collect();
+    for (index, path) in missing.iter().enumerate() {
+        db.record_workspace_open(path, &format!("Missing{index}"))
+            .expect("record missing");
+    }
+
+    let mut persistence = Persistence::with_database(db);
+    state.effects.push(Effect::LoadWorkspaceHistory);
+    persistence.pump(&mut state);
+    assert_eq!(state.workspace_history.entries.len(), 9);
+
+    update::show_workspace_history(&mut state);
+    let geo = geometry(&state, &config, Rect::new(0, 0, 120, 40));
+    let sections =
+        ui::layout::sidebar_sections(geo.view.sidebar, state.agents_collapsed).expect("sections");
+
+    // 右键任一条目（第 0 行）→ 2 次点击 `Delete missing` 打开确认模态。
+    let row_y = sections.workspaces.y + layout::PROMPT_TREE_HEADER_HEIGHT;
+    right_click(
+        &mut state,
+        &geo,
+        &config,
+        (sections.workspaces.x + 5, row_y),
+    );
+    let delete_missing = {
+        let Some(Overlay::Menu(menu)) = state.overlay.as_ref() else {
+            panic!("context menu expected");
+        };
+        menu.commands
+            .iter()
+            .position(|command| *command == MenuCommand::DeleteMissingWorkspaces)
+            .expect("delete missing item")
+    };
+    let first = menu_item_rect(&state, geo.screen, delete_missing);
+    click(&mut state, &geo, &config, (first.x + 1, first.y));
+    let second = menu_item_rect(&state, geo.screen, delete_missing);
+    click(&mut state, &geo, &config, (second.x + 1, second.y));
+
+    let (list_point, max_scroll) = {
+        let Some(Overlay::ConfirmClose(confirm)) = state.overlay.as_ref() else {
+            panic!("confirmation modal expected");
+        };
+        assert_eq!(confirm.target, OverlayTarget::MissingWorkspaces);
+        assert_eq!(confirm.scroll, 0);
+        let layout =
+            ui::overlay::confirm_close_layout(&state, geo.screen, confirm).expect("confirm layout");
+        assert_eq!(layout.visible_rows, 5);
+        let list = layout.list.expect("workspace list");
+        ((list.x + 1, list.y), missing.len() - layout.visible_rows)
+    };
+    assert_eq!(max_scroll, 3);
+
+    // 模态内滚轮滚动列表视口，弹窗保持打开。
+    wheel(
+        &mut state,
+        &geo,
+        &config,
+        MouseEventKind::ScrollDown,
+        list_point,
+    );
+    let Some(Overlay::ConfirmClose(confirm)) = state.overlay.as_ref() else {
+        panic!("wheel must not dismiss the modal");
+    };
+    assert_eq!(confirm.scroll, max_scroll);
+    wheel(
+        &mut state,
+        &geo,
+        &config,
+        MouseEventKind::ScrollUp,
+        list_point,
+    );
+    let Some(Overlay::ConfirmClose(confirm)) = state.overlay.as_ref() else {
+        panic!("wheel must not dismiss the modal");
+    };
+    assert_eq!(confirm.scroll, 0);
+
+    // 输入口令后回车：全部失效条目被清理，磁盘仍存在的条目保留。
+    type_text(&mut state, &geo, &config, "confirm delete");
+    press(&mut state, &geo, &config, KeyCode::Enter);
+    assert!(state.overlay.is_none());
+    persistence.pump(&mut state);
+    let remaining: Vec<_> = state
+        .workspace_history
+        .entries
+        .iter()
+        .map(|entry| entry.path.clone())
+        .collect();
+    assert_eq!(remaining, vec![existing]);
 }

@@ -135,6 +135,19 @@ pub(crate) fn handle_mouse_drag(
         }
         return;
     }
+    if let Some(Overlay::ConfirmClose(confirm)) = state.overlay.as_ref()
+        && let Some(grab) = confirm.scroll_drag
+    {
+        if let Some(layout) = ui::overlay::confirm_close_layout(state, geometry.screen, confirm)
+            && let Some(bar) = layout.scrollbar
+        {
+            let offset = ui::widgets::scrollbar::offset_from_drag_row(&bar, mouse.row, grab);
+            if update::set_confirm_close_scroll(state, offset) {
+                *dirty = true;
+            }
+        }
+        return;
+    }
     if let Some(grab) = state.task_scroll_drag {
         // 后台任务输出容器：按拖拽行换算目标偏移（与轨道点击同一套几何）。
         for (pane, rect) in rects {
@@ -512,6 +525,14 @@ pub(crate) fn handle_mouse_up_left(
         return;
     }
     if state.connect_scroll_drag.take().is_some() {
+        *dirty = true;
+        return;
+    }
+    // 失效工作区确认弹窗的滚动条拖拽：必须在 `overlay.is_some()` 早退之前收尾，
+    // 否则 thumb 释放后拖拽标记会永久残留。
+    if let Some(Overlay::ConfirmClose(confirm)) = state.overlay.as_mut()
+        && confirm.scroll_drag.take().is_some()
+    {
         *dirty = true;
         return;
     }

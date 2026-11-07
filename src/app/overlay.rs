@@ -14,6 +14,9 @@ use super::trust::TrustWorkspace;
 /// 删除确认浮层要求输入的固定英文确认口令（忽略首尾空白与 ASCII 大小写）。
 pub const CONFIRM_DELETE_PHRASE: &str = "confirm delete";
 
+/// 删除确认浮层中待删除工作区列表的最大可视行数（超出时显示滚动条并支持滚动）。
+pub const CONFIRM_DELETE_LIST_MAX_ROWS: usize = 5;
+
 /// 浮层种类：按键路由与渲染按种类分派。
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum OverlayKind {
@@ -456,19 +459,25 @@ pub struct Rename {
     pub input: TextInput,
 }
 
-/// 关闭/删除确认浮层：目标与确认短语单行输入。
+/// 关闭/删除确认浮层：目标、确认短语单行输入与待删工作区列表滚动状态。
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ConfirmClose {
     pub target: OverlayTarget,
     pub input: TextInput,
+    /// 待删除工作区列表的顶部滚动偏移（行）。
+    pub scroll: usize,
+    /// 待删除工作区列表滚动条拖拽锚点（按下时的 thumb 抓取偏移）。
+    pub scroll_drag: Option<u16>,
 }
 
 impl ConfirmClose {
-    /// 构造带空输入框的确认浮层。
+    /// 构造带空输入框与初始滚动位置的确认浮层。
     pub fn new(target: OverlayTarget) -> Self {
         Self {
             target,
             input: TextInput::new(String::new()),
+            scroll: 0,
+            scroll_drag: None,
         }
     }
 

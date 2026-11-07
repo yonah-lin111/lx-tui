@@ -146,6 +146,20 @@ pub fn apply_overlay_key(state: &mut AppState, key: OverlayKey) -> Option<(PaneI
         apply_new_node_key(state, key);
         return None;
     }
+    // 删除确认浮层：待删除工作区列表超过可视行数时，Up/Down 滚动列表。
+    if matches!(state.overlay, Some(Overlay::ConfirmClose(_))) {
+        match key {
+            OverlayKey::Up => {
+                scroll_confirm_close(state, -1);
+                return None;
+            }
+            OverlayKey::Down => {
+                scroll_confirm_close(state, 1);
+                return None;
+            }
+            _ => {}
+        }
+    }
     match key {
         OverlayKey::Esc => {
             close_overlay(state);
@@ -377,6 +391,50 @@ fn confirm_close(state: &mut AppState) {
         }
         _ => {}
     }
+}
+
+/// 按行偏移滚动 `ConfirmClose` 浮层中的待删除工作区列表；返回滚动位置是否变化。
+pub fn scroll_confirm_close(state: &mut AppState, delta: isize) -> bool {
+    let Some(Overlay::ConfirmClose(confirm)) = state.overlay.as_ref() else {
+        return false;
+    };
+    let total = state
+        .workspace_history
+        .target_delete_entries(&confirm.target)
+        .len();
+    let visible = total.min(crate::app::overlay::CONFIRM_DELETE_LIST_MAX_ROWS);
+    let max_scroll = total.saturating_sub(visible);
+    let next = confirm.scroll.saturating_add_signed(delta).min(max_scroll);
+    let Some(Overlay::ConfirmClose(confirm)) = state.overlay.as_mut() else {
+        return false;
+    };
+    if confirm.scroll == next {
+        return false;
+    }
+    confirm.scroll = next;
+    true
+}
+
+/// 直接设置 `ConfirmClose` 浮层中待删除工作区列表的顶部滚动偏移（供滚动条点击/拖拽使用）。
+pub fn set_confirm_close_scroll(state: &mut AppState, offset: usize) -> bool {
+    let Some(Overlay::ConfirmClose(confirm)) = state.overlay.as_ref() else {
+        return false;
+    };
+    let total = state
+        .workspace_history
+        .target_delete_entries(&confirm.target)
+        .len();
+    let visible = total.min(crate::app::overlay::CONFIRM_DELETE_LIST_MAX_ROWS);
+    let max_scroll = total.saturating_sub(visible);
+    let next = offset.min(max_scroll);
+    let Some(Overlay::ConfirmClose(confirm)) = state.overlay.as_mut() else {
+        return false;
+    };
+    if confirm.scroll == next {
+        return false;
+    }
+    confirm.scroll = next;
+    true
 }
 
 /// 终端粘贴进入当前浮层的单行输入框；返回是否实际写入。

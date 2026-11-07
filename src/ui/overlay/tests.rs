@@ -64,6 +64,35 @@ fn rename_state(name: &str) -> AppState {
     state
 }
 
+/// 工作区历史条目夹具；`git` 为所属仓库元数据（非 Git 目录为 None）。
+fn history_entry(
+    name: &str,
+    path: &str,
+    exists: bool,
+    git: Option<crate::app::state::WorkspaceGit>,
+) -> crate::app::state::WorkspaceHistoryEntry {
+    crate::app::state::WorkspaceHistoryEntry {
+        name: name.into(),
+        path: PathBuf::from(path),
+        exists,
+        name_is_manual: false,
+        position: 0,
+        trusted: true,
+        git,
+    }
+}
+
+/// Git 分组元数据：`repo_root` 同时作为 checkout 路径。
+fn git_group(repo_root: &str, is_linked: bool) -> crate::app::state::WorkspaceGit {
+    crate::app::state::WorkspaceGit {
+        repo_root: PathBuf::from(repo_root),
+        checkout_path: PathBuf::from(repo_root),
+        is_linked,
+        branch: Some("feature".into()),
+        main_branch: Some("dev".into()),
+    }
+}
+
 /// 模态输入行的 `> ` 前缀宽度（图标 + 空档）。
 fn input_prefix_width() -> u16 {
     text::INPUT_PREFIX_ICON.chars().count() as u16 + 1
@@ -508,6 +537,124 @@ fn missing_workspaces_confirm_shows_bulk_question_and_count() {
     assert!(joined.contains(text::BUTTON_CONFIRM), "{joined}");
     assert!(joined.contains(text::BUTTON_CANCEL), "{joined}");
     assert!(cursor.is_some(), "批量清理确认弹窗同样接管硬件光标");
+}
+
+#[test]
+fn confirm_delete_workspace_lists_target_and_linked_worktrees() {
+    let mut state = AppState::demo();
+    state.workspace_history.entries = vec![
+        history_entry("demo", "/repo", true, Some(git_group("/repo", false))),
+        history_entry("feature", "/repo/wt", true, Some(git_group("/repo", true))),
+    ];
+    state.overlay = Some(Overlay::ConfirmClose(ConfirmClose::new(
+        OverlayTarget::WorkspaceHistory(0),
+    )));
+    let Some(Overlay::ConfirmClose(confirm)) = state.overlay.as_ref() else {
+        panic!("confirm overlay expected");
+    };
+    let question = confirm_question(&state, &confirm.target);
+    let layout = confirm_close_layout(&state, SCREEN, confirm).expect("confirm modal fits");
+    let list = layout.list.expect("cascade workspace list rendered");
+    assert_eq!(layout.visible_rows, 2);
+    assert_eq!(
+        list.y,
+        layout.shell.inner.y
+            + text::wrap(&question, usize::from(layout.shell.inner.width)).len() as u16,
+        "列表紧接问题文案下方"
+    );
+    assert!(layout.input.y > list.bottom(), "输入框在列表下方");
+    assert!(layout.scrollbar.is_none(), "两行列表无需滚动条");
+
+    let (lines, cursor) = draw_overlay(&state);
+    assert!(
+        lines[layout.shell.inner.y as usize].contains("delete workspace"),
+        "问题位于列表上方: {lines:?}"
+    );
+    assert!(
+        lines[list.y as usize].contains("• demo (/repo)"),
+        "单个工作区行: {:?}",
+        lines[list.y as usize]
+    );
+    assert!(
+        lines[list.y as usize + 1].contains("• feature (/repo/wt)"),
+        "级联 worktree 行: {:?}",
+        lines[list.y as usize + 1]
+    );
+    assert!(
+        lines[layout.input.y as usize].contains(text::CONFIRM_DELETE_INPUT_PLACEHOLDER),
+        "列表与输入框互不覆盖: {:?}",
+        lines[layout.input.y as usize]
+    );
+    assert!(cursor.is_some(), "硬件光标落在口令输入行");
+}
+
+#[test]
+fn missing_workspaces_confirm_caps_list_scrolls_and_shows_scrollbar() {
+    let mut state = AppState::demo();
+    state.workspace_history.entries = (0..8)
+        .map(|index| {
+            let name = format!("gone-{index}");
+            let path = format!("/tmp/gone-{index}");
+            history_entry(&name, &path, false, None)
+        })
+        .collect();
+    state.overlay = Some(Overlay::ConfirmClose(ConfirmClose::new(
+        OverlayTarget::MissingWorkspaces,
+    )));
+    let Some(Overlay::ConfirmClose(confirm)) = state.overlay.as_ref() else {
+        panic!("confirm overlay expected");
+    };
+    let layout = confirm_close_layout(&state, SCREEN, confirm).expect("confirm modal fits");
+    let list = layout.list.expect("missing workspace list rendered");
+    assert_eq!(
+        layout.visible_rows,
+        crate::app::overlay::CONFIRM_DELETE_LIST_MAX_ROWS,
+        "可见列表高度封顶 5 行"
+    );
+    assert_eq!(usize::from(list.height), layout.visible_rows);
+    assert_eq!(layout.scroll, 0);
+    assert!(layout.scrollbar.is_some(), "超过 5 行时显示滚动条");
+    assert!(list.bottom() < layout.input.y, "输入框在列表下方");
+
+    let (lines, _) = draw_overlay(&state);
+    let first_view = lines[list.y as usize..list.bottom() as usize].join("\n");
+    for index in 0..5 {
+        assert!(
+            first_view.contains(&format!("• gone-{index} ")),
+            "第 {index} 个失效工作区可见: {first_view:?}"
+        );
+    }
+    assert!(
+        !first_view.contains("• gone-5 "),
+        "第 6 行需滚动后才可见: {first_view:?}"
+    );
+    assert!(
+        lines.join("\n").contains('▐'),
+        "滚动条 thumb 已绘制: {lines:?}"
+    );
+
+    if let Some(Overlay::ConfirmClose(confirm)) = state.overlay.as_mut() {
+        confirm.scroll = 3;
+    }
+    let Some(Overlay::ConfirmClose(confirm)) = state.overlay.as_ref() else {
+        panic!("confirm overlay expected");
+    };
+    let layout = confirm_close_layout(&state, SCREEN, confirm).expect("confirm modal fits");
+    assert_eq!(layout.scroll, 3, "滚动偏移传递到渲染几何");
+    let (lines, _) = draw_overlay(&state);
+    let scrolled_view = lines[list.y as usize..list.bottom() as usize].join("\n");
+    assert!(
+        scrolled_view.contains("• gone-3 "),
+        "滚动后从第 4 个失效项开始: {scrolled_view:?}"
+    );
+    assert!(
+        scrolled_view.contains("• gone-7 "),
+        "最后一行进入视口: {scrolled_view:?}"
+    );
+    assert!(
+        !scrolled_view.contains("• gone-2 "),
+        "前 3 行已滚出视口: {scrolled_view:?}"
+    );
 }
 
 #[test]

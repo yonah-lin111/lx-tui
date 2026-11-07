@@ -719,6 +719,13 @@ fn confirm_overlay_routes_editing_keys() {
         route_confirm(KeyEvent::new(KeyCode::Char('z'), KeyModifiers::CONTROL)),
         Some(Routed::Overlay(OverlayKey::Undo))
     );
+    // 失效工作区列表：上下键滚动视口，不得落进单行输入编辑键。
+    for (code, arrow) in [
+        (KeyCode::Up, OverlayKey::Up),
+        (KeyCode::Down, OverlayKey::Down),
+    ] {
+        assert_eq!(route_confirm(key(code)), Some(Routed::Overlay(arrow)));
+    }
 
     // 信任浮层仍只放行 Esc / Enter，避免输入被误当成确认。
     let route_trust = |code| {
