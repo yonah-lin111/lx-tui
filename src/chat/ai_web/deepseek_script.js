@@ -8,15 +8,14 @@ const PREFIX = '@@LX_AI_WEB@@';
 const SPACE = 'lx-tui-ai-web-deepseek';
 const HOME = 'https://chat.deepseek.com';
 const SIGN_IN = 'https://chat.deepseek.com/sign_in';
-const ACTION = process.env.LX_AI_WEB_ACTION || 'chat';
-const PROMPT = process.env.LX_AI_WEB_PROMPT || '';
-const FIRST_TURN = process.env.LX_AI_WEB_FIRST_TURN === '1';
-const STREAM_URL = process.env.LX_AI_WEB_STREAM_URL || '';
-const SESSION_ID = process.env.LX_AI_WEB_SESSION_ID || '';
-const TITLE = process.env.LX_AI_WEB_TITLE || '';
-const EDIT_INDEX = process.env.LX_AI_WEB_EDIT_INDEX !== undefined
-  ? Number.parseInt(process.env.LX_AI_WEB_EDIT_INDEX, 10)
-  : -1;
+const PARAMS = typeof __LX_PARAMS === 'object' && __LX_PARAMS !== null ? __LX_PARAMS : {};
+const ACTION = PARAMS.action || 'chat';
+const PROMPT = PARAMS.prompt || '';
+const FIRST_TURN = Boolean(PARAMS.firstTurn);
+const STREAM_URL = PARAMS.streamUrl || '';
+const SESSION_ID = PARAMS.sessionId || '';
+const TITLE = PARAMS.title || '';
+const EDIT_INDEX = typeof PARAMS.editIndex === 'number' ? PARAMS.editIndex : -1;
 
 async function emitMany(objs) {
   if (!objs || objs.length === 0) return;
@@ -32,6 +31,47 @@ async function emitMany(objs) {
 
 async function emit(obj) {
   await emitMany([obj]);
+}
+
+async function ensureFreshChat() {
+  const alreadyFresh = await js(`
+    location.pathname === '/' && document.querySelectorAll('[data-virtual-list-item-key]').length === 0
+  `).catch(() => false);
+  if (alreadyFresh) return;
+
+  const clicked = await js(`
+    (() => {
+      const candidates = Array.from(
+        document.querySelectorAll('[tabindex="0"], button, a, [role="button"], div, span'),
+      ).filter((el) => {
+        const label = (el.innerText || '').trim();
+        return label === '开启新对话' || label === 'New chat';
+      });
+      const clickable = candidates.find((el) => {
+        const pk = Object.keys(el).find((k) => k.startsWith('__reactProps'));
+        return pk && el[pk] && typeof el[pk].onClick === 'function';
+      }) || candidates[candidates.length - 1];
+      if (!clickable) return false;
+      const pk = Object.keys(clickable).find((k) => k.startsWith('__reactProps'));
+      if (pk && clickable[pk] && typeof clickable[pk].onClick === 'function') {
+        clickable[pk].onClick({ stopPropagation() {}, preventDefault() {} });
+      } else {
+        clickable.click();
+      }
+      return true;
+    })()
+  `).catch(() => false);
+
+  if (clicked) {
+    await new Promise((r) => setTimeout(r, 250));
+  }
+
+  const nowFresh = await js(`
+    location.pathname === '/' && document.querySelectorAll('[data-virtual-list-item-key]').length === 0
+  `).catch(() => false);
+  if (!nowFresh) {
+    await openOrReuseTab(HOME, { wait: true, timeout: 25 });
+  }
 }
 
 async function main() {
@@ -53,20 +93,7 @@ async function main() {
   }
 
   if (ACTION === 'new') {
-    await js(`
-      (() => {
-        if (location.pathname === '/' && document.querySelectorAll('.ds-message').length === 0) {
-          return false;
-        }
-        const target = Array.from(document.querySelectorAll('button, a, div, span')).find((el) => {
-          const label = (el.innerText || '').trim();
-          return label === '开启新对话' || label === 'New chat';
-        });
-        if (!target) return false;
-        (target.closest('button, a') || target).click();
-        return true;
-      })()
-    `);
+    await ensureFreshChat();
     await emit({ event: 'done' });
     return;
   }
@@ -263,23 +290,9 @@ async function main() {
   }
 
   if (FIRST_TURN && EDIT_INDEX < 0) {
-    const clickedNew = await js(String.raw`
-      (() => {
-        if (location.pathname === '/' && document.querySelectorAll('.ds-message').length === 0) {
-          return false;
-        }
-        const target = Array.from(document.querySelectorAll('button, a, div, span')).find((el) => {
-          const label = (el.innerText || '').trim();
-          return label === '开启新对话' || label === 'New chat';
-        });
-        if (!target) return false;
-        (target.closest('button, a, [tabindex="0"]') || target).click();
-        return true;
-      })()
-    `);
-    if (clickedNew) {
-      await new Promise((resolve) => setTimeout(resolve, 350));
-    }
+    await ensureFreshChat();
+  } else if (SESSION_ID && !currentUrl.includes(SESSION_ID)) {
+    await openOrReuseTab(HOME + '/a/chat/s/' + SESSION_ID, { wait: true, timeout: 25 });
   }
 
   // Ensure DeepThink ("深度思考") is enabled so reasoning deltas are streamed.
@@ -308,6 +321,7 @@ async function main() {
       const stream = {
         queue: [],
         done: false,
+        attached: false,
         sseActive: false,
         deltaState: { op: 'SET', path: '' },
         fragments: [],
@@ -600,7 +614,10 @@ async function main() {
           }
         },
         attachXhr(xhr) {
-          if (!xhr) return;
+          if (!xhr || xhr.__lxAttached || this.attached) return;
+          xhr.__lxAttached = true;
+          this.attached = true;
+          this.sseActive = true;
           let consumed = 0;
           const self = this;
           const pull = (isFinal) => {
@@ -623,11 +640,13 @@ async function main() {
           xhr.addEventListener('loadend', () => pull(true));
         },
         attach(response) {
-          if (!response || !response.body) return;
+          if (!response || !response.body || this.attached) return;
           const type = response.headers && response.headers.get
             ? (response.headers.get('content-type') || '')
             : '';
           if (type && !type.includes('text/event-stream')) return;
+          this.attached = true;
+          this.sseActive = true;
           const reader = response.body.getReader();
           const decoder = new TextDecoder();
           const self = this;
@@ -740,8 +759,8 @@ async function main() {
 
   let submittedViaEdit = false;
   if (EDIT_INDEX >= 0) {
-    submittedViaEdit = await js(`
-      (async () => {
+    const openedEdit = await js(`
+      (() => {
         const items = Array.from(document.querySelectorAll('[data-virtual-list-item-key]'));
         const userItems = items.filter((el) => !el.querySelector('.ds-markdown, .ds-think-content'));
         const target = userItems[${EDIT_INDEX}] || userItems[userItems.length - 1];
@@ -755,38 +774,44 @@ async function main() {
         } else {
           editBtn.click();
         }
-        await new Promise((r) => setTimeout(r, 80));
-        const editArea = document.querySelector('textarea[name="user query"]')
-          || target.querySelector('textarea');
-        if (!editArea) return false;
-        editArea.focus();
-        const descriptor = Object.getOwnPropertyDescriptor(
-          window.HTMLTextAreaElement.prototype,
-          'value',
-        );
-        if (descriptor && descriptor.set) {
-          descriptor.set.call(editArea, ${JSON.stringify(PROMPT)});
-        } else {
-          editArea.value = ${JSON.stringify(PROMPT)};
-        }
-        editArea.dispatchEvent(new Event('input', { bubbles: true }));
-        editArea.dispatchEvent(new Event('change', { bubbles: true }));
-        await new Promise((r) => setTimeout(r, 40));
-        const sendBtn = Array.from(target.querySelectorAll('.ds-button, button, [role="button"]'))
-          .find((b) => {
-            const label = (b.innerText || '').trim();
-            return label === '发送' || label === 'Send';
-          });
-        if (!sendBtn) return false;
-        const sendKey = Object.keys(sendBtn).find((k) => k.startsWith('__reactProps'));
-        if (sendKey && sendBtn[sendKey] && typeof sendBtn[sendKey].onClick === 'function') {
-          sendBtn[sendKey].onClick({ stopPropagation() {}, preventDefault() {} });
-        } else {
-          sendBtn.click();
-        }
         return true;
       })()
     `).catch(() => false);
+    if (openedEdit) {
+      await new Promise((r) => setTimeout(r, 100));
+      submittedViaEdit = await js(`
+        (() => {
+          const editArea = document.querySelector('textarea[name="user query"]');
+          if (!editArea) return false;
+          editArea.focus();
+          const descriptor = Object.getOwnPropertyDescriptor(
+            window.HTMLTextAreaElement.prototype,
+            'value',
+          );
+          if (descriptor && descriptor.set) {
+            descriptor.set.call(editArea, ${JSON.stringify(PROMPT)});
+          } else {
+            editArea.value = ${JSON.stringify(PROMPT)};
+          }
+          editArea.dispatchEvent(new Event('input', { bubbles: true }));
+          editArea.dispatchEvent(new Event('change', { bubbles: true }));
+          const container = editArea.closest('[data-virtual-list-item-key]') || document;
+          const sendBtn = Array.from(container.querySelectorAll('.ds-button, button, [role="button"]'))
+            .find((b) => {
+              const label = (b.innerText || '').trim();
+              return label === '发送' || label === 'Send';
+            });
+          if (!sendBtn) return false;
+          const sendKey = Object.keys(sendBtn).find((k) => k.startsWith('__reactProps'));
+          if (sendKey && sendBtn[sendKey] && typeof sendBtn[sendKey].onClick === 'function') {
+            sendBtn[sendKey].onClick({ stopPropagation() {}, preventDefault() {} });
+          } else {
+            sendBtn.click();
+          }
+          return true;
+        })()
+      `).catch(() => false);
+    }
   }
 
   if (!submittedViaEdit) {

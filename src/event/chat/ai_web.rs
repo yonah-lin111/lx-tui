@@ -404,11 +404,13 @@ async fn run_chat(
         );
         return;
     };
+    let remote_session_id = crate::app::update::ai_web_remote_session_id(&key.session);
     let source = script_source(ScriptParams {
         action: "chat",
         prompt: Some(&prompt),
         first_turn,
         stream_url: stream_url.as_deref(),
+        session_id: remote_session_id,
         edit_user_index,
         ..Default::default()
     });
@@ -734,38 +736,27 @@ async fn spawn_stream_listener(
 
 /// 组装交给 `ego-browser nodejs` 的脚本。
 ///
-/// `ego-browser` 会剥离调用方的大部分环境变量，所以把动作与提示词显式写进脚本
-/// 前置赋值，脚本本身仍按 `LX_AI_WEB_*` 的约定读取。
+/// `ego-browser nodejs` 在守护进程内执行脚本，`process.env` 会跨调用残留；
+/// 因此统一通过顶层块级常量 `const __LX_PARAMS = { ... };` 显式传入全部参数，避免跨轮串台。
 fn script_source(params: ScriptParams<'_>) -> String {
-    let mut source = String::from("process.env.LX_AI_WEB_ACTION = ");
+    let edit_index = params
+        .edit_user_index
+        .and_then(|idx| i64::try_from(idx).ok())
+        .unwrap_or(-1);
+    let mut source = String::from("const __LX_PARAMS = {\n");
+    source.push_str("  action: ");
     source.push_str(&json_string(params.action));
-    source.push_str(";\n");
-    if params.first_turn {
-        source.push_str("process.env.LX_AI_WEB_FIRST_TURN = \"1\";\n");
-    }
-    if let Some(url) = params.stream_url {
-        source.push_str("process.env.LX_AI_WEB_STREAM_URL = ");
-        source.push_str(&json_string(url));
-        source.push_str(";\n");
-    }
-    if let Some(session_id) = params.session_id {
-        source.push_str("process.env.LX_AI_WEB_SESSION_ID = ");
-        source.push_str(&json_string(session_id));
-        source.push_str(";\n");
-    }
-    if let Some(title) = params.title {
-        source.push_str("process.env.LX_AI_WEB_TITLE = ");
-        source.push_str(&json_string(title));
-        source.push_str(";\n");
-    }
-    if let Some(idx) = params.edit_user_index {
-        source.push_str(&format!("process.env.LX_AI_WEB_EDIT_INDEX = \"{idx}\";\n"));
-    }
-    if let Some(prompt) = params.prompt {
-        source.push_str("process.env.LX_AI_WEB_PROMPT = ");
-        source.push_str(&json_string(prompt));
-        source.push_str(";\n");
-    }
+    source.push_str(",\n  prompt: ");
+    source.push_str(&json_string(params.prompt.unwrap_or("")));
+    source.push_str(",\n  firstTurn: ");
+    source.push_str(if params.first_turn { "true" } else { "false" });
+    source.push_str(",\n  streamUrl: ");
+    source.push_str(&json_string(params.stream_url.unwrap_or("")));
+    source.push_str(",\n  sessionId: ");
+    source.push_str(&json_string(params.session_id.unwrap_or("")));
+    source.push_str(",\n  title: ");
+    source.push_str(&json_string(params.title.unwrap_or("")));
+    source.push_str(&format!(",\n  editIndex: {edit_index},\n}};\n"));
     source.push_str(DEEPSEEK_SCRIPT);
     source
 }
