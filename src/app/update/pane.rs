@@ -735,11 +735,30 @@ pub fn set_lx_entry(state: &mut AppState, id: PaneId, entry: crate::app::state::
     super::chat::refresh_lx_status(state, id);
 }
 
-/// 切换 AI Web 目标站点；底边框状态行展示的站点名随之更新。
+/// 切换 AI Web 目标站点；切换站点时停止在途流、清空跨站点残留会话与编辑态，并更新底边框状态行。
 pub fn set_ai_web_site(state: &mut AppState, id: PaneId, site: crate::app::state::AiWebSite) {
+    let changed = state
+        .pane_anywhere(id)
+        .is_some_and(|pane| pane.lx.ai_web_site != site);
+    if !changed {
+        return;
+    }
+    if state
+        .pane_anywhere(id)
+        .is_some_and(|pane| pane.lx.chat.request.is_busy())
+    {
+        let _ = super::chat::stop_stream(state, id);
+    }
     if let Some(pane) = state.pane_mut_anywhere(id) {
         pane.lx.ai_web_site = site;
+        pane.lx.chat.reset_session_view();
+        pane.lx.clear_rewind();
+        pane.lx.ai_web_edit_user_index = None;
+        pane.lx.ai_web_edit_cloud_files.clear();
+        pane.lx.chat.loading_session = false;
+        pane.lx.slash = None;
     }
+    super::selection::clear_lx_selection_for(state, id);
     super::chat::refresh_lx_status(state, id);
 }
 

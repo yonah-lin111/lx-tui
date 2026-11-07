@@ -35,8 +35,9 @@ mod view;
 mod viewport;
 
 pub use ai_web::{
-    AI_WEB_REMOTE_SESSION_PREFIX, ai_web_remote_session_id, is_ai_web_session,
-    on_ai_web_session_bound, on_ai_web_session_loaded, rewind_ai_web, try_send_ai_web,
+    AI_WEB_DEEPSEEK_SESSION_PREFIX, AI_WEB_GEMINI_SESSION_PREFIX, AI_WEB_REMOTE_SESSION_PREFIX,
+    ai_web_remote_session, ai_web_remote_session_id, is_ai_web_session, on_ai_web_session_bound,
+    on_ai_web_session_loaded, rewind_ai_web, try_send_ai_web,
 };
 pub use ask::{
     apply_ask_click, apply_ask_paste, apply_ask_wheel, apply_input as apply_ask_input, submit_all,

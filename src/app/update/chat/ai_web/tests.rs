@@ -103,17 +103,17 @@ fn new_command_resets_messages_and_web_session() {
 }
 
 #[test]
-fn model_and_multi_word_commands_are_rejected_in_ai_web() {
+fn model_command_opens_picker_and_unsupported_commands_are_rejected_in_ai_web() {
     let (mut state, pane) = ai_web_state();
     draft(&mut state, pane, "/model");
     assert!(super::super::try_send(&mut state, pane));
     let target = state.pane_anywhere(pane).expect("pane");
     assert!(target.lx.chat.messages.is_empty());
-    assert_eq!(
-        target.lx.toast.as_ref().map(|toast| toast.message.as_str()),
-        Some(text::LX_AI_WEB_ONLY_NEW_CMD)
-    );
+    assert!(matches!(target.lx.slash, Some(SlashPanel::Model(_))));
 
+    if let Some(target) = state.pane_mut_anywhere(pane) {
+        target.lx.slash = None;
+    }
     draft(&mut state, pane, "/model gpt-4o");
     assert!(super::super::try_send(&mut state, pane));
     let target = state.pane_anywhere(pane).expect("pane");
@@ -124,6 +124,126 @@ fn model_and_multi_word_commands_are_rejected_in_ai_web() {
     assert_eq!(
         target.lx.toast.as_ref().map(|toast| toast.message.as_str()),
         Some(text::LX_AI_WEB_ONLY_NEW_CMD)
+    );
+}
+
+#[test]
+fn gemini_two_stage_model_and_thinking_picker_updates_status_and_stream_without_persisting() {
+    let (mut state, pane) = ai_web_state();
+    crate::app::update::set_ai_web_site(&mut state, pane, AiWebSite::Gemini);
+    let target = state.pane_anywhere(pane).expect("pane");
+    assert_eq!(
+        target.lx.chat.status.model_name.as_deref(),
+        Some("Gemini · 3.8 Flash")
+    );
+    assert_eq!(target.lx.chat.status.variant.as_deref(), Some("low"));
+
+    // 打开 `/model` 第一级：展示 4 个 Gemini 模型，默认定位在 `3.8 Flash` (index 1)。
+    assert!(super::super::open_model_picker(&mut state, pane));
+    {
+        let target = state.pane_anywhere(pane).expect("pane");
+        let Some(SlashPanel::Model(picker)) = &target.lx.slash else {
+            panic!("expected model picker");
+        };
+        assert_eq!(picker.candidates.len(), 4);
+        assert_eq!(picker.current, Some(1));
+        assert_eq!(picker.window.active, 1);
+    }
+
+    // 选中第 4 个模型 `4 Argon` (index 3) 并按 Enter 进入第 2 级思考等级。
+    if let Some(target) = state.pane_mut_anywhere(pane)
+        && let Some(SlashPanel::Model(picker)) = target.lx.slash.as_mut()
+    {
+        picker.window.active = 3;
+    }
+    assert!(super::super::apply_slash_enter(&mut state, pane));
+    {
+        let target = state.pane_anywhere(pane).expect("pane");
+        let Some(SlashPanel::Model(picker)) = &target.lx.slash else {
+            panic!("expected variants stage");
+        };
+        let crate::app::state::ModelPickerStage::Variants { model, variants } = &picker.stage
+        else {
+            panic!("expected Variants stage");
+        };
+        assert_eq!(model.model, "4 Argon");
+        assert_eq!(variants, &vec!["low", "medium", "high"]);
+    }
+
+    // 选中 `high` (index 2) 并确认。
+    if let Some(target) = state.pane_mut_anywhere(pane)
+        && let Some(SlashPanel::Model(picker)) = target.lx.slash.as_mut()
+    {
+        picker.window.active = 2;
+    }
+    assert!(super::super::apply_slash_enter(&mut state, pane));
+
+    let target = state.pane_anywhere(pane).expect("pane");
+    assert!(target.lx.slash.is_none());
+    assert_eq!(
+        target.lx.chat.status.model_name.as_deref(),
+        Some("Gemini · 4 Argon")
+    );
+    assert_eq!(target.lx.chat.status.variant.as_deref(), Some("high"));
+    assert!(
+        !state.effects.iter().any(|e| matches!(
+            e,
+            Effect::SaveDefaultModel { .. } | Effect::SetChatSessionModel { .. }
+        )),
+        "AI Web 下切换模型不得写回 ai.json 或 SQLite"
+    );
+
+    // 发送消息时透传 Gemini 站点、模型 `4 Argon` 与思考等级 `high`。
+    draft(&mut state, pane, "Explain quantum computing");
+    assert!(super::super::try_send(&mut state, pane));
+    assert!(state.effects.iter().any(|effect| matches!(
+        effect,
+        Effect::StartAiWebStream {
+            site: AiWebSite::Gemini,
+            model,
+            thinking,
+            prompt,
+            ..
+        } if model == "4 Argon" && thinking == "high" && prompt == "Explain quantum computing"
+    )));
+}
+
+#[test]
+fn switching_ai_web_site_isolates_sessions_and_clears_rewind_state() {
+    let (mut state, pane) = ai_web_state();
+    draft(&mut state, pane, "DeepSeek question");
+    assert!(super::super::try_send(&mut state, pane));
+    finish(&mut state, pane);
+    on_ai_web_session_bound(
+        &mut state,
+        pane,
+        &format!("ai-web-{}-1", pane.raw()),
+        "ai-web-ds-123".into(),
+        Some("DS Chat".into()),
+    );
+    draft(&mut state, pane, "/rewind");
+    assert!(super::super::try_send(&mut state, pane));
+    assert_eq!(
+        state
+            .pane_anywhere(pane)
+            .and_then(|p| p.lx.ai_web_edit_user_index),
+        Some(0)
+    );
+
+    // 切换到 Gemini 站点：必须清空 DeepSeek 会话与 `/rewind` 待编辑状态。
+    crate::app::update::set_ai_web_site(&mut state, pane, AiWebSite::Gemini);
+    let target = state.pane_anywhere(pane).expect("pane");
+    assert_eq!(target.lx.ai_web_site, AiWebSite::Gemini);
+    assert!(target.lx.chat.session_id.is_none());
+    assert!(target.lx.chat.messages.is_empty());
+    assert!(target.lx.ai_web_edit_user_index.is_none());
+    assert_eq!(
+        ai_web_remote_session("ai-web-gm-abc123"),
+        Some((AiWebSite::Gemini, "abc123"))
+    );
+    assert_eq!(
+        ai_web_remote_session("ai-web-ds-xyz789"),
+        Some((AiWebSite::Deepseek, "xyz789"))
     );
 }
 
@@ -426,6 +546,28 @@ fn ai_web_mention_panel_exposes_only_files_tab_and_confirming_folder_enters_it()
         assert!(target.lx.mention_confirm());
         assert_eq!(target.lx.input, "@docs/");
     }
+}
+
+#[test]
+fn deepseek_model_picker_toggles_deepthink_and_off() {
+    let (mut state, pane) = ai_web_state();
+    let target = state.pane_anywhere(pane).expect("pane");
+    assert_eq!(
+        target.lx.chat.status.model_name.as_deref(),
+        Some("DeepSeek")
+    );
+    assert_eq!(target.lx.chat.status.variant.as_deref(), Some("deepthink"));
+
+    assert!(super::super::open_model_picker(&mut state, pane));
+    assert!(super::super::apply_slash_enter(&mut state, pane));
+    if let Some(target) = state.pane_mut_anywhere(pane)
+        && let Some(SlashPanel::Model(picker)) = target.lx.slash.as_mut()
+    {
+        picker.window.active = 1; // "off"
+    }
+    assert!(super::super::apply_slash_enter(&mut state, pane));
+    let target = state.pane_anywhere(pane).expect("pane");
+    assert_eq!(target.lx.chat.status.variant, None);
 }
 
 #[test]

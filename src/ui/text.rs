@@ -72,6 +72,19 @@ pub const LX_ENTRY_AUTOMATION: &str = "Automation";
 pub const LX_ENTRY_AI_WEB: &str = "AI Web";
 /// AI Web 目标站点标签。
 pub const AI_WEB_SITE_DEEPSEEK: &str = "DeepSeek";
+pub const AI_WEB_SITE_GEMINI: &str = "Gemini";
+/// Gemini 网页端可选模型标签。
+pub const GEMINI_WEB_MODEL_FLASH_LITE: &str = "3.5 Flash-Lite";
+pub const GEMINI_WEB_MODEL_FLASH: &str = "3.8 Flash";
+pub const GEMINI_WEB_MODEL_PRO: &str = "3.1 Pro";
+pub const GEMINI_WEB_MODEL_ARGON: &str = "4 Argon";
+/// Gemini 网页端思考等级标签。
+pub const GEMINI_THINKING_LOW: &str = "low";
+pub const GEMINI_THINKING_MEDIUM: &str = "medium";
+pub const GEMINI_THINKING_HIGH: &str = "high";
+/// DeepSeek 网页端深度思考模式标签。
+pub const DEEPSEEK_THINKING_ON: &str = "deepthink";
+pub const DEEPSEEK_THINKING_OFF: &str = "off";
 /// lx 页横排入口标签之间的分隔符。
 pub const LX_ENTRY_SEPARATOR: &str = "·";
 /// lx 页入口 Tip 提示前缀；前缀强调色、句子 muted。
@@ -114,6 +127,7 @@ pub fn lx_entry_description(entry: LxEntry) -> &'static str {
 pub fn ai_web_site_label(site: AiWebSite) -> &'static str {
     match site {
         AiWebSite::Deepseek => AI_WEB_SITE_DEEPSEEK,
+        AiWebSite::Gemini => AI_WEB_SITE_GEMINI,
     }
 }
 
@@ -226,9 +240,18 @@ pub const PROMPT_TITLE_FAILED: &str = "Failed to generate title";
 /// （它就贴在用户刚敲字的输入框上面）。
 pub const LX_CHAT_ENTRY_UNAVAILABLE: &str = "Native Agent only";
 pub const LX_AI_WEB_LOGIN_REQUIRED: &str = "Please sign in to DeepSeek in ego-browser";
+pub const LX_AI_WEB_GEMINI_LOGIN_REQUIRED: &str = "Please sign in to Gemini in ego-browser";
 pub const LX_AI_WEB_EGO_UNAVAILABLE: &str = "ego-browser is not installed or unavailable";
 pub const LX_AI_WEB_ONLY_NEW_CMD: &str =
-    "Only /new, /resume, /rename, and /rewind are available in AI Web";
+    "Only /model, /new, /resume, /rename, and /rewind are available in AI Web";
+
+/// 按 AI Web 站点返回未登录提示文案。
+pub fn lx_ai_web_login_required_for(site: AiWebSite) -> &'static str {
+    match site {
+        AiWebSite::Deepseek => LX_AI_WEB_LOGIN_REQUIRED,
+        AiWebSite::Gemini => LX_AI_WEB_GEMINI_LOGIN_REQUIRED,
+    }
+}
 pub const LX_AI_WEB_FOLDER_UNSUPPORTED: &str =
     "Folders cannot be uploaded in AI Web; select files instead";
 pub const LX_AI_WEB_FILE_NOT_FOUND: &str = "Attached file does not exist";

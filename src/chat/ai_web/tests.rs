@@ -101,3 +101,15 @@ fn parses_session_events() {
         })
     );
 }
+
+#[test]
+fn scripts_for_site_returns_deepseek_and_gemini_driver_bundles() {
+    let (ds_helpers, ds_main) = scripts_for_site(crate::app::state::AiWebSite::Deepseek);
+    assert!(ds_helpers.contains("lx-tui-ai-web-deepseek"));
+    assert!(ds_main.contains("ds-toggle-button"));
+
+    let (gm_helpers, gm_main) = scripts_for_site(crate::app::state::AiWebSite::Gemini);
+    assert!(gm_helpers.contains("lx-tui-ai-web-gemini"));
+    assert!(gm_helpers.contains("bard-mode-menu-button"));
+    assert!(gm_main.contains("__lxGeminiStream"));
+}

@@ -1,0 +1,315 @@
+// Google Gemini web chat stream driver for `ego-browser nodejs`.
+//
+// Requires `gemini_helpers.js` to be prepended ahead of this file.
+
+async function main() {
+  await useOrCreateTaskSpace(SPACE);
+  const current = await pageInfo().catch(() => null);
+  const currentUrl = (current && current.url) || '';
+  if (!currentUrl.startsWith('https://gemini.google.com')) {
+    await openOrReuseTab(HOME, { wait: true, timeout: 25 });
+  }
+  await installPermissionGuard();
+
+  const loggedIn = await js(String.raw`
+    (() => {
+      if (location.hostname !== 'gemini.google.com') return false;
+      const signInLink = document.querySelector('a[href*="accounts.google.com/ServiceLogin"]');
+      const hasComposer = Boolean(
+        document.querySelector('.ql-editor[contenteditable="true"], rich-textarea, [data-test-id="bard-mode-menu-button"]')
+      );
+      return !signInLink && hasComposer;
+    })()
+  `).catch(() => false);
+  if (!loggedIn) {
+    await handOffTaskSpace();
+    await emit({ event: 'login_required', url: HOME });
+    return;
+  }
+
+  if (ACTION !== 'chat') {
+    await runNonChatAction(currentUrl);
+    return;
+  }
+
+  if (FIRST_TURN && EDIT_INDEX < 0) {
+    await ensureFreshChat();
+  } else if (SESSION_ID && !currentUrl.includes(SESSION_ID)) {
+    await openOrReuseTab(HOME + '/' + SESSION_ID, { wait: true, timeout: 25 });
+    await installPermissionGuard();
+  }
+
+  // Synchronize selected Gemini model and thinking level in the web UI.
+  await ensureGeminiModelAndThinking();
+
+  // Set up DOM stream collector on window.__lxGeminiStream.
+  await js(`
+    (() => {
+      const existingResponses = Array.from(document.querySelectorAll('model-response'));
+      const targetIndex = ${EDIT_INDEX >= 0 ? EDIT_INDEX : 'existingResponses.length'};
+      window.__lxGeminiStream = {
+        queue: [],
+        done: false,
+        started: false,
+        targetIndex,
+        domThink: '',
+        domText: '',
+        lastSample: '',
+        stableTicks: 0,
+        pushDom(kind, current) {
+          const key = kind === 'thinking' ? 'domThink' : 'domText';
+          const previous = this[key] || '';
+          if (current === previous) return;
+          let delta = '';
+          if (current.length > previous.length && current.startsWith(previous)) {
+            delta = current.slice(previous.length);
+          } else {
+            let index = 0;
+            while (
+              index < current.length
+              && index < previous.length
+              && current[index] === previous[index]
+            ) {
+              index += 1;
+            }
+            delta = current.slice(index);
+          }
+          this[key] = current;
+          if (delta) {
+            this.started = true;
+            this.queue.push({ kind, delta });
+          }
+        },
+        extractCleanText(root, selectorList, stripSelectors) {
+          if (!root) return '';
+          const el = selectorList ? root.querySelector(selectorList) : root;
+          if (!el) return '';
+          const clone = el.cloneNode(true);
+          if (stripSelectors) {
+            clone.querySelectorAll(stripSelectors).forEach((n) => n.remove());
+          }
+          return (clone.innerText || '').replace(/\\r\\n/g, '\\n').trim();
+        },
+        pollDom() {
+          const responses = Array.from(document.querySelectorAll('model-response'));
+          const mr = responses[this.targetIndex] || responses[responses.length - 1];
+          const stopBtn = document.querySelector(
+            'button[aria-label*="停止"], button[aria-label*="Stop"], button.stop-button, .blue-circle.stop-icon'
+          );
+          const announcerBusy = mr
+            ? Boolean(mr.querySelector('.model-response-label-announcer[aria-busy="true"]'))
+            : false;
+          const isGenerating = Boolean(stopBtn) || announcerBusy;
+          if (isGenerating) {
+            this.started = true;
+          }
+          if (!mr || responses.length <= this.targetIndex && ${EDIT_INDEX < 0 ? 'true' : 'false'}) {
+            return;
+          }
+          const thinkText = this.extractCleanText(
+            mr,
+            'model-thoughts .thoughts-content, model-thoughts, thinking-overlay .thoughts-content, thinking-overlay',
+            'button, mat-icon, .cdk-visually-hidden'
+          );
+          const bodyText = this.extractCleanText(
+            mr,
+            'message-content .markdown, message-content',
+            '.cdk-visually-hidden, source-footnote, sources-carousel-inline, sources-list, button, mat-icon'
+          );
+          if (thinkText) this.pushDom('thinking', thinkText);
+          if (bodyText) this.pushDom('text', bodyText);
+
+          const sample = thinkText + '\\n---\\n' + bodyText;
+          if ((this.started || bodyText.length > 0 || thinkText.length > 0) && !isGenerating) {
+            if (sample === this.lastSample && (bodyText.length > 0 || thinkText.length > 0)) {
+              this.stableTicks += 1;
+              if (this.stableTicks >= 6) {
+                this.done = true;
+              }
+            } else {
+              this.lastSample = sample;
+              this.stableTicks = 0;
+            }
+          } else {
+            this.lastSample = sample;
+            this.stableTicks = 0;
+          }
+        },
+      };
+      return true;
+    })()
+  `);
+
+  // Submit either via inline edit (/rewind) or normal composer input.
+  if (EDIT_INDEX >= 0) {
+    const editClicked = await js(`
+      (() => {
+        const queries = Array.from(document.querySelectorAll('user-query'));
+        const target = queries[${EDIT_INDEX}];
+        if (!target) return false;
+        target.scrollIntoView({ block: 'center' });
+        const editBtn = target.querySelector(
+          'button[aria-label="修改"], button[aria-label*="修改"], button[aria-label*="Edit"]'
+        );
+        if (!editBtn) return false;
+        editBtn.click();
+        return true;
+      })()
+    `).catch(() => false);
+    if (!editClicked) {
+      await emit({ event: 'error', message: 'Gemini edit button not found for /rewind' });
+      return;
+    }
+    await new Promise((r) => setTimeout(r, 300));
+    await syncContainerAttachments(true);
+    const updated = await js(`
+      (() => {
+        const queries = Array.from(document.querySelectorAll('user-query'));
+        const target = queries[${EDIT_INDEX}] || document;
+        const textarea = target.querySelector('textarea') || document.querySelector('user-query textarea');
+        if (textarea) {
+          textarea.focus();
+          const setter = Object.getOwnPropertyDescriptor(window.HTMLTextAreaElement.prototype, 'value')?.set;
+          if (setter) setter.call(textarea, ${JSON.stringify(PROMPT)});
+          else textarea.value = ${JSON.stringify(PROMPT)};
+          textarea.dispatchEvent(new Event('input', { bubbles: true }));
+        } else {
+          const editable = target.querySelector('[contenteditable="true"]');
+          if (!editable) return false;
+          editable.focus();
+          document.execCommand('selectAll', false, null);
+          document.execCommand('insertText', false, ${JSON.stringify(PROMPT)});
+          editable.dispatchEvent(new Event('input', { bubbles: true }));
+        }
+        const buttons = Array.from(target.querySelectorAll('button'));
+        const submitBtn = buttons.find((b) => {
+          const t = (b.innerText || b.getAttribute('aria-label') || '').trim().toLowerCase();
+          return t === '更新' || t === 'update' || t.includes('更新') || t.includes('update');
+        });
+        if (!submitBtn) return false;
+        submitBtn.click();
+        return true;
+      })()
+    `).catch(() => false);
+    if (!updated) {
+      await emit({ event: 'error', message: 'Failed to submit edited Gemini prompt' });
+      return;
+    }
+  } else {
+    await syncContainerAttachments(false);
+    const filled = await js(`
+      (() => {
+        const editor = document.querySelector('.ql-editor[contenteditable="true"], rich-textarea [contenteditable="true"]');
+        if (editor) {
+          editor.focus();
+          document.execCommand('selectAll', false, null);
+          if (${JSON.stringify(PROMPT)}) {
+            document.execCommand('insertText', false, ${JSON.stringify(PROMPT)});
+          } else {
+            document.execCommand('delete', false, null);
+          }
+          editor.dispatchEvent(new Event('input', { bubbles: true }));
+          return true;
+        }
+        const textarea = document.querySelector('textarea');
+        if (textarea) {
+          textarea.focus();
+          const setter = Object.getOwnPropertyDescriptor(window.HTMLTextAreaElement.prototype, 'value')?.set;
+          if (setter) setter.call(textarea, ${JSON.stringify(PROMPT)});
+          else textarea.value = ${JSON.stringify(PROMPT)};
+          textarea.dispatchEvent(new Event('input', { bubbles: true }));
+          return true;
+        }
+        return false;
+      })()
+    `).catch(() => false);
+    if (!filled) {
+      await emit({ event: 'error', message: 'Gemini prompt input not found' });
+      return;
+    }
+    await new Promise((r) => setTimeout(r, 180));
+    const sent = await js(String.raw`
+      (() => {
+        const sendBtn = Array.from(
+          document.querySelectorAll('button.send-button, button[aria-label*="发送"], button[aria-label*="Send"]')
+        ).find((b) => !b.disabled && b.getAttribute('aria-disabled') !== 'true');
+        if (sendBtn) {
+          sendBtn.click();
+          return true;
+        }
+        const editor = document.querySelector('.ql-editor[contenteditable="true"], rich-textarea [contenteditable="true"]');
+        if (editor) {
+          editor.dispatchEvent(new KeyboardEvent('keydown', {
+            key: 'Enter',
+            code: 'Enter',
+            keyCode: 13,
+            which: 13,
+            bubbles: true,
+          }));
+          return true;
+        }
+        return false;
+      })()
+    `).catch(() => false);
+    if (!sent) {
+      await emit({ event: 'error', message: 'Gemini send button not available' });
+      return;
+    }
+  }
+
+  const deadline = Date.now() + 300000;
+  while (Date.now() < deadline) {
+    const batch = await js(String.raw`
+      (() => {
+        const s = window.__lxGeminiStream;
+        if (!s) return { items: [], done: true };
+        s.pollDom();
+        return { items: s.queue.splice(0, s.queue.length), done: s.done };
+      })()
+    `).catch(() => ({ items: [], done: false }));
+
+    if (batch && Array.isArray(batch.items) && batch.items.length > 0) {
+      const events = [];
+      for (const item of batch.items) {
+        if (item.kind === 'thinking' && item.delta) {
+          events.push({ event: 'thinking', delta: item.delta });
+        } else if (item.kind === 'text' && item.delta) {
+          events.push({ event: 'text', delta: item.delta });
+        }
+      }
+      await emitMany(events);
+    }
+
+    if (batch && batch.done) {
+      const sessionMeta = await js(String.raw`
+        (() => {
+          const m = location.pathname.match(/\/app\/([a-zA-Z0-9_-]{8,})/);
+          if (!m) return null;
+          const id = m[1];
+          const link = Array.from(document.querySelectorAll('a[href*="/app/"]')).find((a) =>
+            (a.getAttribute('href') || '').includes('/app/' + id)
+          );
+          const title = link
+            ? (link.getAttribute('aria-label') || link.innerText || '').trim().replace(/\s+/g, ' ')
+            : '';
+          return { id, title };
+        })()
+      `).catch(() => null);
+      if (sessionMeta && sessionMeta.id) {
+        await emit({
+          event: 'session',
+          id: sessionMeta.id,
+          title: sessionMeta.title || null,
+        });
+      }
+      await emit({ event: 'done' });
+      return;
+    }
+
+    await new Promise((r) => setTimeout(r, 60));
+  }
+
+  await emit({ event: 'error', message: 'Gemini stream timed out' });
+}
+
+await main();

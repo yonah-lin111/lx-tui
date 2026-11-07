@@ -148,6 +148,10 @@ pub enum Effect {
     StartAiWebStream {
         key: crate::app::state::lx::RequestKey,
         site: crate::app::state::lx::AiWebSite,
+        /// 当前站点选中的模型名称（如 `"3.8 Flash"` / `"4 Argon"` / `"DeepSeek"`）。
+        model: String,
+        /// 当前站点选中的思考等级（如 `"low"` / `"medium"` / `"high"` / `"deepthink"` / `"off"`）。
+        thinking: String,
         prompt: String,
         /// 待通过 CDP `DOM.setFileInputFiles` 注入网页 `<input type="file">` 的本地文件绝对路径列表。
         files: Vec<String>,

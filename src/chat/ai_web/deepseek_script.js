@@ -31,15 +31,17 @@ async function main() {
     await openOrReuseTab(HOME + '/a/chat/s/' + SESSION_ID, { wait: true, timeout: 25 });
   }
 
-  // Ensure DeepThink ("深度思考") is enabled so reasoning deltas are streamed.
-  await js(String.raw`
+  // Sync DeepThink ("深度思考") toggle state with THINKING ('deepthink' vs 'off').
+  await js(`
     (() => {
+      const wantDeepThink = ${JSON.stringify(THINKING)} !== 'off';
       const btn = Array.from(document.querySelectorAll('.ds-toggle-button')).find((el) => {
         const label = (el.innerText || '').trim();
         return label === '深度思考' || label === 'DeepThink';
       });
       if (btn) {
-        if (!btn.className.includes('ds-toggle-button--selected')) {
+        const isSelected = btn.className.includes('ds-toggle-button--selected');
+        if (isSelected !== wantDeepThink) {
           btn.click();
         }
         return true;

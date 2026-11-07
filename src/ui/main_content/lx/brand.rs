@@ -238,22 +238,39 @@ pub(super) fn place_ai_web_sites(rect: Rect) -> Vec<(crate::app::state::AiWebSit
     out
 }
 
-/// 绘制 AI Web 站点选择行：替换欢迎页的 AGENTS.md / mcp / skills 计数行。
+/// 绘制 AI Web 站点选择行：采用各站点品牌渐变色，选中项加粗并在下方绘制同色渐变下划线。
 pub(super) fn draw_ai_web_sites(
     grid: &mut Grid,
     rect: Rect,
     selected: crate::app::state::AiWebSite,
 ) {
     let placed = place_ai_web_sites(rect);
+    let can_underline = rect.height > UNDERLINE_ROWS;
     for (index, (site, site_rect)) in placed.iter().enumerate() {
         let label =
             text::truncate_to_width(text::ai_web_site_label(*site), usize::from(site_rect.width));
-        let site_style = if *site == selected {
-            style::accent().add_modifier(ratatui::style::Modifier::BOLD)
-        } else {
-            style::muted()
-        };
-        grid.put(site_rect.x, site_rect.y, &label, site_style);
+        let length = label.chars().count();
+        let is_selected = *site == selected;
+        for (position, ch) in label.chars().enumerate() {
+            let cell_style = style::ai_web_site_label_style(*site, position, length, is_selected);
+            grid.set(
+                site_rect.x.saturating_add(position as u16),
+                site_rect.y,
+                ch,
+                cell_style,
+            );
+        }
+        if is_selected && can_underline {
+            for position in 0..length {
+                let cell_style = style::ai_web_site_label_style(*site, position, length, false);
+                grid.set(
+                    site_rect.x.saturating_add(position as u16),
+                    site_rect.y + UNDERLINE_ROWS,
+                    ENTRY_UNDERLINE,
+                    cell_style,
+                );
+            }
+        }
         if let Some((_, next_rect)) = placed.get(index + 1) {
             let gap = next_rect.x.saturating_sub(site_rect.right());
             grid.put(

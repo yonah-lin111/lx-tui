@@ -10,6 +10,7 @@ use crate::app::prompt::text;
 use crate::app::selection::SelectionUnit;
 
 pub mod agent;
+pub mod ai_web;
 pub mod ask;
 pub mod chat;
 pub mod compact;
@@ -33,6 +34,11 @@ pub(crate) use history::HistoryMove;
 pub use shell::LxInputMode;
 
 pub use agent::{AgentsState, MAX_RESIDENT_SUBAGENT_CHATS, SubagentReportView, SubagentRun};
+pub use ai_web::{
+    AI_WEB_DEEPSEEK_SESSION_PREFIX, AI_WEB_GEMINI_SESSION_PREFIX, AI_WEB_SESSION_PREFIX,
+    AiWebConfig, AiWebSite, DeepseekThinkingMode, GeminiThinkingLevel, GeminiWebModel,
+    ai_web_remote_session, is_ai_web_session,
+};
 pub use ask::{AskEditor, AskHit, AskState, AskWheelZone};
 pub use chat::SHELL_SLOT;
 pub use chat::{
@@ -80,18 +86,6 @@ impl LxEntry {
     ];
 }
 
-/// AI Web 支持的目标站点（首期接入 DeepSeek）。
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
-pub enum AiWebSite {
-    #[default]
-    Deepseek,
-}
-
-impl AiWebSite {
-    /// 全部 AI Web 站点的显示顺序。
-    pub const ALL: [AiWebSite; 1] = [AiWebSite::Deepseek];
-}
-
 /// 首页资源计数的一类（MCP server / skill）。
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub struct StartupCount {
@@ -121,6 +115,8 @@ pub struct Lx {
     pub entry: LxEntry,
     /// AI Web 入口当前选中的目标站点。
     pub ai_web_site: AiWebSite,
+    /// AI Web 各站点的模型与思考等级配置（纯内存态，不写库）。
+    pub ai_web_config: AiWebConfig,
     /// AI Web 撤回（`/rewind`）后待下一轮在网页端原地编辑的用户消息下标（0 基）。
     pub ai_web_edit_user_index: Option<usize>,
     /// AI Web 撤回（`/rewind`）时该轮原有的云端历史附件名（供重发时比对保留或移除网页卡片）。
@@ -245,6 +241,7 @@ impl Lx {
         Self {
             entry: LxEntry::Native,
             ai_web_site: AiWebSite::Deepseek,
+            ai_web_config: AiWebConfig::default(),
             ai_web_edit_user_index: None,
             ai_web_edit_cloud_files: Vec::new(),
             input: String::new(),

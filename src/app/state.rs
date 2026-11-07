@@ -26,21 +26,23 @@ pub mod workspace_history;
 
 pub use lx::LxInputMode;
 pub use lx::{
-    AgentFilter, AgentsState, AiWebSite, AskAnsweredView, AskDetailView, AskEditor, AskHit,
-    AskState, AskWheelZone, AssistantStepView, CardSection, CardTarget, ChatMessageView,
+    AI_WEB_DEEPSEEK_SESSION_PREFIX, AI_WEB_GEMINI_SESSION_PREFIX, AI_WEB_SESSION_PREFIX,
+    AgentFilter, AgentsState, AiWebConfig, AiWebSite, AskAnsweredView, AskDetailView, AskEditor,
+    AskHit, AskState, AskWheelZone, AssistantStepView, CardSection, CardTarget, ChatMessageView,
     ChatPartView, CommandView, CompactNoticeView, ConnectManageAction, ConnectPanel,
-    ConnectPromptStep, ConnectProviderEntry, ConnectStage, DiffHunkView, DiffLineView,
-    FileChangeView, FileDiffDetailView, FileDiffView, ForkEntry, ForkPanel, FrozenModel,
-    HistoryEntry, HistoryPanel, InputHintLevel, InteractionAction, Lx, LxChat, LxCompact, LxEntry,
-    LxModelSwitch, MAX_RESIDENT_SUBAGENT_CHATS, McpCatalogEntry, McpDetailView, McpImageView,
-    McpPanel, McpPanelEntry, McpRuntimeState, McpServerState, ModelCandidate, ModelPicker,
-    ModelPickerStage, ModelSwitchNoticeView, ModelsSnapshot, PanelWindow, PendingShell,
-    PlanSnapshotView, PlanStepView, ProcessEntry, ProcessInteractionView, ProcessStateView,
-    QueuedSubmission, RequestKey, RequestState, RewindAction, RewindExecution, RewindNoticeView,
-    RewindPanel, RewindTarget, RewindTargetKind, SHELL_SLOT, SearchDetailView, SearchMatchView,
-    SlashCommand, SlashEntry, SlashPanel, SnapshotState, StartupCount, StartupCounts,
-    SubagentDetailView, SubagentReportView, SubagentRun, TaskPage, TaskTab, ToolCallView,
-    ToolDetailView, ToolStatus, ToolSummary, UserShellView, WebSearchDetailView,
+    ConnectPromptStep, ConnectProviderEntry, ConnectStage, DeepseekThinkingMode, DiffHunkView,
+    DiffLineView, FileChangeView, FileDiffDetailView, FileDiffView, ForkEntry, ForkPanel,
+    FrozenModel, GeminiThinkingLevel, GeminiWebModel, HistoryEntry, HistoryPanel, InputHintLevel,
+    InteractionAction, Lx, LxChat, LxCompact, LxEntry, LxModelSwitch, MAX_RESIDENT_SUBAGENT_CHATS,
+    McpCatalogEntry, McpDetailView, McpImageView, McpPanel, McpPanelEntry, McpRuntimeState,
+    McpServerState, ModelCandidate, ModelPicker, ModelPickerStage, ModelSwitchNoticeView,
+    ModelsSnapshot, PanelWindow, PendingShell, PlanSnapshotView, PlanStepView, ProcessEntry,
+    ProcessInteractionView, ProcessStateView, QueuedSubmission, RequestKey, RequestState,
+    RewindAction, RewindExecution, RewindNoticeView, RewindPanel, RewindTarget, RewindTargetKind,
+    SHELL_SLOT, SearchDetailView, SearchMatchView, SlashCommand, SlashEntry, SlashPanel,
+    SnapshotState, StartupCount, StartupCounts, SubagentDetailView, SubagentReportView,
+    SubagentRun, TaskPage, TaskTab, ToolCallView, ToolDetailView, ToolStatus, ToolSummary,
+    UserShellView, WebSearchDetailView, ai_web_remote_session, is_ai_web_session,
 };
 pub use pane::{Direction, Pane, PaneKind, PaneView, Tab};
 pub use prompt_history::{PROMPT_HISTORY_LIMIT, PROMPT_HISTORY_MAX_BYTES, PromptHistory};

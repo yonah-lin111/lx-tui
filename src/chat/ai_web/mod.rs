@@ -9,6 +9,20 @@ pub const DEEPSEEK_HELPERS_SCRIPT: &str = include_str!("deepseek_helpers.js");
 /// 嵌入式 DeepSeek 网页流式对话驱动主脚本。
 pub const DEEPSEEK_SCRIPT: &str = include_str!("deepseek_script.js");
 
+/// 嵌入式 Gemini 网页驱动辅助脚本（模式/思考等级切换、新对话、CDP 文件上传与会话管理）。
+pub const GEMINI_HELPERS_SCRIPT: &str = include_str!("gemini_helpers.js");
+
+/// 嵌入式 Gemini 网页流式对话驱动主脚本。
+pub const GEMINI_SCRIPT: &str = include_str!("gemini_script.js");
+
+/// 按目标站点返回 `(helpers_script, main_script)`。
+pub fn scripts_for_site(site: crate::app::state::AiWebSite) -> (&'static str, &'static str) {
+    match site {
+        crate::app::state::AiWebSite::Deepseek => (DEEPSEEK_HELPERS_SCRIPT, DEEPSEEK_SCRIPT),
+        crate::app::state::AiWebSite::Gemini => (GEMINI_HELPERS_SCRIPT, GEMINI_SCRIPT),
+    }
+}
+
 /// 脚本输出行协议前缀。
 pub const PROTOCOL_PREFIX: &str = "@@LX_AI_WEB@@";
 

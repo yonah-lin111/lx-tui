@@ -8,6 +8,8 @@ const HOME = 'https://chat.deepseek.com';
 const SIGN_IN = 'https://chat.deepseek.com/sign_in';
 const PARAMS = typeof __LX_PARAMS === 'object' && __LX_PARAMS !== null ? __LX_PARAMS : {};
 const ACTION = PARAMS.action || 'chat';
+const MODEL = PARAMS.model || 'DeepSeek';
+const THINKING = PARAMS.thinking || 'deepthink';
 const PROMPT = PARAMS.prompt || '';
 const FILES = Array.isArray(PARAMS.files) ? PARAMS.files : [];
 const KEEP_FILES = Array.isArray(PARAMS.keepFiles) ? PARAMS.keepFiles : [];
