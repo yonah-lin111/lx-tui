@@ -1,7 +1,7 @@
 use std::path::PathBuf;
 
 use super::*;
-use crate::app::overlay::{MenuCommand, Overlay, OverlayTarget, RenameTarget};
+use crate::app::overlay::{MenuCommand, Overlay, RenameTarget};
 use crate::app::state::{FocusedContainer, WorkspaceGit};
 use crate::app::trust::TrustTrigger;
 use crate::app::update::{
@@ -272,121 +272,6 @@ fn double_click_opens_existing_or_shows_toast_on_missing_directory() {
     assert!(open_workspace_history_row(&mut state, 0));
     assert!(!workspace_history_mode(&state));
     assert_eq!(state.workspaces.len(), count_after_first_open);
-}
-
-#[test]
-fn context_menu_offers_delete_for_all_and_requires_3_clicks_plus_modal_and_interrupts_agents() {
-    let mut state = AppState::demo();
-    let existing_dir = std::env::temp_dir();
-    let missing_dir = PathBuf::from("/tmp/lx-nonexistent-history-dir-777777");
-    state.workspaces[0].cwd = Some(existing_dir.clone());
-    // 模拟该活跃工作区中正在运行主 Agent 流、子 Agent 会话与本地 Shell 命令。
-    let pane_id = state.workspaces[0].root_pane().expect("root pane");
-    let active_key = crate::app::state::RequestKey {
-        pane: pane_id,
-        session: "sess-running-1".into(),
-        generation: 1,
-    };
-    if let Some(pane) = state.pane_mut_anywhere(pane_id) {
-        pane.lx.chat.session_id = Some("sess-running-1".into());
-        pane.lx.chat.request = crate::app::state::RequestState::Streaming {
-            key: active_key.clone(),
-            assistant_id: "asst-1".into(),
-        };
-    }
-
-    apply_workspace_history(
-        &mut state,
-        vec![
-            plain_entry("ValidWS", existing_dir.clone(), true),
-            plain_entry("BrokenWS", missing_dir, true),
-        ],
-    );
-    show_workspace_history(&mut state);
-
-    // 有效路径条目菜单：包含 Open、Rename 与 Delete（全部工作区均支持删除）。
-    open_workspace_history_menu(&mut state, 0, (5, 5));
-    let Some(Overlay::Menu(menu)) = state.overlay.as_ref() else {
-        panic!("menu expected");
-    };
-    assert_eq!(menu.target, OverlayTarget::WorkspaceHistory(0));
-    assert_eq!(
-        menu.commands,
-        vec![
-            MenuCommand::OpenWorkspaceHistory,
-            MenuCommand::RenameWorkspace,
-            MenuCommand::DeleteWorkspaceHistory
-        ]
-    );
-
-    // 选中 Delete（下标 2）：需 3 次点击/回车 + 最后确认弹窗确认。
-    if let Some(Overlay::Menu(menu)) = state.overlay.as_mut() {
-        menu.selected = 2;
-    }
-    state.effects.clear();
-
-    // 第 1 次点击：变为 DeleteWorkspaceHistoryStep1 ("Confirm delete (1/2)")。
-    activate_menu(&mut state);
-    let Some(Overlay::Menu(menu)) = state.overlay.as_ref() else {
-        panic!("menu stays open on step 1");
-    };
-    assert!(menu.confirming);
-    assert_eq!(menu.commands[2], MenuCommand::DeleteWorkspaceHistoryStep1);
-    assert_eq!(state.workspace_history.entries.len(), 2);
-
-    // 第 2 次点击：变为 DeleteWorkspaceHistoryStep2 ("Confirm delete (2/2)")。
-    activate_menu(&mut state);
-    let Some(Overlay::Menu(menu)) = state.overlay.as_ref() else {
-        panic!("menu stays open on step 2");
-    };
-    assert!(menu.confirming);
-    assert_eq!(menu.commands[2], MenuCommand::DeleteWorkspaceHistoryStep2);
-    assert_eq!(state.workspace_history.entries.len(), 2);
-
-    // 第 3 次点击：关闭菜单并打开最终确认弹窗（ConfirmClose）。
-    activate_menu(&mut state);
-    assert!(matches!(
-        state.overlay,
-        Some(Overlay::ConfirmClose(ref c)) if c.target == OverlayTarget::WorkspaceHistory(0)
-    ));
-    assert_eq!(
-        state.workspace_history.entries.len(),
-        2,
-        "最终弹窗确认前尚未删除"
-    );
-
-    // 最终弹窗确认（Enter）：中断运行中的 Agent 流、子 Agent 与本地命令，并登记级联删除效应。
-    apply_overlay_key(&mut state, OverlayKey::Enter);
-    assert!(state.overlay.is_none());
-    assert_eq!(state.workspace_history.entries.len(), 1);
-    assert!(
-        state
-            .effects
-            .iter()
-            .any(|eff| matches!(eff, Effect::CancelChatStream { key } if *key == active_key)),
-        "必须中断正在运行的 Agent 流"
-    );
-    assert!(
-        state.effects.iter().any(|eff| matches!(
-            eff,
-            Effect::CancelSubagents { session_id, agent_id: None } if session_id == "sess-running-1"
-        )),
-        "必须中断正在运行的子 Agent"
-    );
-    assert!(
-        state
-            .effects
-            .iter()
-            .any(|eff| matches!(eff, Effect::CancelUserShells { pane } if *pane == pane_id)),
-        "必须中断正在运行的本地命令"
-    );
-    assert!(
-        state.effects.iter().any(|eff| matches!(
-            eff,
-            Effect::DeleteWorkspaceHistory { path } if *path == existing_dir
-        )),
-        "必须登记数据库级联删除效应"
-    );
 }
 
 #[test]
@@ -734,24 +619,6 @@ fn clamp_limits_history_scroll_to_viewport() {
     assert_eq!(
         panel.scroll, 15,
         "滚动上限必须是 total - viewport，而非 total - 1"
-    );
-}
-
-#[test]
-fn deleting_only_open_workspace_keeps_it_open_and_queues_delete() {
-    let mut state = AppState::demo();
-    let cwd = state.active_workspace().cwd.clone().expect("demo cwd");
-    apply_workspace_history(&mut state, vec![plain_entry("demo", cwd.clone(), true)]);
-    state.effects.clear();
-
-    assert!(delete_workspace_history_entry(&mut state, 0));
-    assert!(state.workspace_history.entries.is_empty());
-    assert_eq!(state.workspaces.len(), 1, "最后一个工作区保持打开");
-    assert!(
-        state.effects.iter().any(
-            |effect| matches!(effect, Effect::DeleteWorkspaceHistory { path } if *path == cwd)
-        ),
-        "必须登记数据库删除效应"
     );
 }
 

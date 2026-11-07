@@ -69,7 +69,7 @@ pub fn open_workspace_menu(state: &mut AppState, target: usize, anchor: (u16, u1
     }));
 }
 
-/// 打开工作区列表空白区域右键菜单：仅新建工作区；同时结束可能残留的滚动条拖拽与排序拖拽。
+/// 打开工作区列表空白区域右键菜单：新建工作区；在历史列表模式下若存在失效条目则追加一键清理项。
 pub fn open_workspace_list_menu(state: &mut AppState, anchor: (u16, u16)) {
     state.workspace_scroll_drag = None;
     state.workspace_drag = None;
@@ -77,17 +77,24 @@ pub fn open_workspace_list_menu(state: &mut AppState, anchor: (u16, u16)) {
     state.workspace_drag_moved = false;
     state.workspace_history.scroll_drag = None;
     state.workspace_history.search_drag = false;
+    let mut commands = vec![MenuCommand::NewWorkspace];
+    if super::workspace_history::workspace_history_mode(state) {
+        state.workspace_history.refresh_existence();
+        if state.workspace_history.has_missing_entries() {
+            commands.push(MenuCommand::DeleteMissingWorkspaces);
+        }
+    }
     state.overlay = Some(Overlay::Menu(Menu {
         anchor,
         target: OverlayTarget::WorkspaceList,
-        commands: vec![MenuCommand::NewWorkspace],
+        commands,
         selected: 0,
         confirming: false,
     }));
 }
 
 /// 打开工作区历史列表条目右键菜单：
-/// 全部工作区均支持 `[Open, Rename, Delete]`（Delete 需 3 击菜单确认 + 最终弹窗确认后级联删除）。
+/// 全部工作区均支持 `[Open, Rename, Delete]`，若存在失效条目则追加 `Delete missing`。
 pub fn open_workspace_history_menu(state: &mut AppState, visible_row: usize, anchor: (u16, u16)) {
     state.workspace_history.scroll_drag = None;
     state.workspace_history.search_drag = false;
@@ -98,15 +105,18 @@ pub fn open_workspace_history_menu(state: &mut AppState, visible_row: usize, anc
     let Some(&entry_index) = state.workspace_history.filtered_indices().get(visible_row) else {
         return;
     };
-    let Some(entry) = state.workspace_history.entries.get_mut(entry_index) else {
+    state.workspace_history.refresh_existence();
+    if state.workspace_history.entries.get(entry_index).is_none() {
         return;
-    };
-    entry.exists = entry.path.is_dir();
-    let commands = vec![
+    }
+    let mut commands = vec![
         MenuCommand::OpenWorkspaceHistory,
         MenuCommand::RenameWorkspace,
         MenuCommand::DeleteWorkspaceHistory,
     ];
+    if state.workspace_history.has_missing_entries() {
+        commands.push(MenuCommand::DeleteMissingWorkspaces);
+    }
     state.overlay = Some(Overlay::Menu(Menu {
         anchor,
         target: OverlayTarget::WorkspaceHistory(entry_index),
@@ -224,7 +234,6 @@ pub fn move_menu_selection(state: &mut AppState, step: isize) {
     let next = (menu.selected as isize + step).rem_euclid(len) as usize;
     if next != menu.selected {
         menu.confirming = false;
-        reset_workspace_delete_steps(&mut menu.commands);
     }
     menu.selected = next;
     // 键盘移动同样显示高亮反馈。
@@ -242,23 +251,11 @@ pub fn set_menu_selection(state: &mut AppState, index: usize) -> bool {
     let selection_changed = menu.selected != index;
     if selection_changed {
         menu.confirming = false;
-        reset_workspace_delete_steps(&mut menu.commands);
     }
     let changed = selection_changed || !state.menu_hover;
     menu.selected = index;
     state.menu_hover = true;
     changed
-}
-
-fn reset_workspace_delete_steps(commands: &mut [MenuCommand]) {
-    for cmd in commands {
-        if matches!(
-            *cmd,
-            MenuCommand::DeleteWorkspaceHistoryStep1 | MenuCommand::DeleteWorkspaceHistoryStep2
-        ) {
-            *cmd = MenuCommand::DeleteWorkspaceHistory;
-        }
-    }
 }
 
 /// 指针离开菜单容器：移除悬停高亮反馈；返回是否变化。
@@ -276,27 +273,12 @@ pub fn clear_menu_hover(state: &mut AppState) -> bool {
 pub fn activate_menu(state: &mut AppState) -> Option<(PaneId, Vec<u8>)> {
     if let Some(Overlay::Menu(menu)) = state.overlay.as_mut()
         && let Some(command) = menu.commands.get(menu.selected).copied()
+        && command.requires_confirm()
+        && !menu.confirming
     {
-        match command {
-            MenuCommand::DeleteWorkspaceHistory => {
-                menu.commands[menu.selected] = MenuCommand::DeleteWorkspaceHistoryStep1;
-                menu.confirming = true;
-                state.menu_hover = true;
-                return None;
-            }
-            MenuCommand::DeleteWorkspaceHistoryStep1 => {
-                menu.commands[menu.selected] = MenuCommand::DeleteWorkspaceHistoryStep2;
-                menu.confirming = true;
-                state.menu_hover = true;
-                return None;
-            }
-            _ if command.requires_confirm() && !menu.confirming => {
-                menu.confirming = true;
-                state.menu_hover = true;
-                return None;
-            }
-            _ => {}
-        }
+        menu.confirming = true;
+        state.menu_hover = true;
+        return None;
     }
 
     let Some(Overlay::Menu(menu)) = state.overlay.take() else {
@@ -364,12 +346,25 @@ pub fn activate_menu(state: &mut AppState) -> Option<(PaneId, Vec<u8>)> {
             }));
         }
         (
-            Some(MenuCommand::DeleteWorkspaceHistoryStep2),
+            Some(MenuCommand::DeleteWorkspaceHistory),
             OverlayTarget::WorkspaceHistory(entry_index),
         ) => {
-            state.overlay = Some(Overlay::ConfirmClose(crate::app::overlay::ConfirmClose {
-                target: OverlayTarget::WorkspaceHistory(entry_index),
-            }));
+            state.overlay = Some(Overlay::ConfirmClose(
+                crate::app::overlay::ConfirmClose::new(OverlayTarget::WorkspaceHistory(
+                    entry_index,
+                )),
+            ));
+        }
+        (
+            Some(MenuCommand::DeleteMissingWorkspaces),
+            OverlayTarget::WorkspaceHistory(_) | OverlayTarget::WorkspaceList,
+        ) => {
+            state.workspace_history.refresh_existence();
+            if state.workspace_history.has_missing_entries() {
+                state.overlay = Some(Overlay::ConfirmClose(
+                    crate::app::overlay::ConfirmClose::new(OverlayTarget::MissingWorkspaces),
+                ));
+            }
         }
         (Some(MenuCommand::OpenWorktree), OverlayTarget::Workspace(target)) => {
             open_worktree_dialog(state, target);

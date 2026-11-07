@@ -423,6 +423,16 @@ impl WorkspaceHistoryPanel {
         changed
     }
 
+    /// 当前历史列表中是否存在路径已失效（`!exists`）的工作区条目。
+    pub fn has_missing_entries(&self) -> bool {
+        self.entries.iter().any(|entry| !entry.exists)
+    }
+
+    /// 当前历史列表中路径已失效（`!exists`）的工作区条目数量。
+    pub fn missing_entry_count(&self) -> usize {
+        self.entries.iter().filter(|entry| !entry.exists).count()
+    }
+
     /// 钳制选中项与滚动偏移；返回是否有变化。
     pub fn clamp(&mut self, visible_rows: usize) -> bool {
         let total = self.visible_rows().len();

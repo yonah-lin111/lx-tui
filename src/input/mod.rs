@@ -420,7 +420,7 @@ fn overlay_key(key: KeyEvent, kind: OverlayKind) -> Option<OverlayKey> {
             KeyCode::Char('c' | 'C') if ctrl => Some(OverlayKey::Copy),
             _ => overlay_text_edit_key(key),
         },
-        OverlayKind::ConfirmClose | OverlayKind::TrustWorkspace => match key.code {
+        OverlayKind::TrustWorkspace => match key.code {
             KeyCode::Esc => Some(OverlayKey::Esc),
             KeyCode::Enter => Some(OverlayKey::Enter),
             _ => None,
@@ -441,7 +441,10 @@ fn overlay_key(key: KeyEvent, kind: OverlayKind) -> Option<OverlayKey> {
             KeyCode::Char('r' | 'R') if ctrl => Some(OverlayKey::Refresh),
             _ => overlay_text_edit_key(key),
         },
-        OverlayKind::Rename | OverlayKind::NewWorkspace | OverlayKind::NewNode => match key.code {
+        OverlayKind::Rename
+        | OverlayKind::NewWorkspace
+        | OverlayKind::NewNode
+        | OverlayKind::ConfirmClose => match key.code {
             KeyCode::Esc => Some(OverlayKey::Esc),
             KeyCode::Enter => Some(OverlayKey::Enter),
             _ => overlay_text_edit_key(key),

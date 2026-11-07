@@ -23,14 +23,19 @@ pub(crate) fn handle_overlay_click(
     column: u16,
     row: u16,
 ) -> Option<(PaneId, Vec<u8>)> {
-    if let Some(char_idx) = state
-        .overlay
-        .as_mut()
-        .and_then(|overlay| overlay_input_hit_mut(screen, overlay))
-        .and_then(|(area, input)| {
-            let text_x = area.x.saturating_add(2);
-            let text_w = area.width.saturating_sub(2);
-            (row == area.y && column >= area.x && column < area.right()).then(|| {
+    let input_area = overlay_input_rect(state, screen);
+    if let Some(area) = input_area
+        && row == area.y
+        && column >= area.x
+        && column < area.right()
+    {
+        let char_idx = state
+            .overlay
+            .as_mut()
+            .and_then(Overlay::input_mut)
+            .map(|input| {
+                let text_x = area.x.saturating_add(2);
+                let text_w = area.width.saturating_sub(2);
                 let rel_col = column.saturating_sub(text_x);
                 ui::widgets::input::char_index_at_col(
                     input.text(),
@@ -38,9 +43,7 @@ pub(crate) fn handle_overlay_click(
                     usize::from(text_w),
                     rel_col,
                 )
-            })
-        })
-    {
+            })?;
         let clicks = crate::app::selection::next_click_count(
             &mut state.selection_click,
             column,
@@ -48,9 +51,7 @@ pub(crate) fn handle_overlay_click(
             Instant::now(),
         );
         update::clear_selection(state);
-        if let Some(overlay) = state.overlay.as_mut()
-            && let Some((_, input)) = overlay_input_hit_mut(screen, overlay)
-        {
+        if let Some(input) = state.overlay.as_mut().and_then(Overlay::input_mut) {
             input.begin_selection_with_clicks(char_idx, clicks);
             state.overlay_input_drag = true;
         }
@@ -121,7 +122,7 @@ pub(crate) fn handle_overlay_click(
         }
         Some(Overlay::ConfirmClose(confirm)) => {
             let question = ui::overlay::confirm_question(state, &confirm.target);
-            let Some(shell) = ui::overlay::confirm_shell(screen, &question) else {
+            let Some(shell) = ui::overlay::confirm_close_shell(screen, &question) else {
                 update::close_overlay(state);
                 return None;
             };
@@ -406,68 +407,84 @@ pub(crate) fn handle_overlay_click(
     }
 }
 
-/// 获取当前浮层中的单行输入区域与其可变引用。
-pub(crate) fn overlay_input_hit_mut(
-    screen: Rect,
-    overlay: &mut Overlay,
-) -> Option<(Rect, &mut crate::app::overlay::TextInput)> {
-    match overlay {
-        Overlay::Rename(r) => {
+/// 获取当前浮层中单行输入框的屏幕矩形区域；无输入框或处于锁定态时返回 None。
+pub(crate) fn overlay_input_rect(state: &AppState, screen: Rect) -> Option<Rect> {
+    match state.overlay.as_ref()? {
+        Overlay::Rename(_) => {
             let shell = ui::overlay::rename_shell(screen)?;
-            Some((
-                Rect::new(shell.inner.x, shell.inner.y, shell.inner.width, 1),
-                &mut r.input,
+            Some(Rect::new(
+                shell.inner.x,
+                shell.inner.y,
+                shell.inner.width,
+                1,
             ))
         }
-        Overlay::NewWorkspace(ws) => {
+        Overlay::ConfirmClose(confirm) => {
+            let question = ui::overlay::confirm_question(state, &confirm.target);
+            let shell = ui::overlay::confirm_close_shell(screen, &question)?;
+            Some(ui::overlay::confirm_close_input_rect(&shell, &question))
+        }
+        Overlay::NewWorkspace(_) => {
             let shell = ui::overlay::new_workspace_shell(screen)?;
-            Some((
-                Rect::new(shell.inner.x, shell.inner.y, shell.inner.width, 1),
-                &mut ws.input,
+            Some(Rect::new(
+                shell.inner.x,
+                shell.inner.y,
+                shell.inner.width,
+                1,
             ))
         }
-        Overlay::NewNode(n) => {
+        Overlay::NewNode(_) => {
             let shell = ui::overlay::new_node_shell(screen)?;
-            Some((
-                Rect::new(shell.inner.x, shell.inner.y, shell.inner.width, 1),
-                &mut n.name,
+            Some(Rect::new(
+                shell.inner.x,
+                shell.inner.y,
+                shell.inner.width,
+                1,
             ))
         }
         Overlay::SaveDraft(d) => {
             let shell = ui::overlay::save_draft_shell(screen, d.entries.len())?;
-            Some((
-                Rect::new(shell.inner.x, shell.inner.y, shell.inner.width, 1),
-                &mut d.name,
+            Some(Rect::new(
+                shell.inner.x,
+                shell.inner.y,
+                shell.inner.width,
+                1,
             ))
         }
         Overlay::WorktreeOpen(w) => {
             let shell = ui::overlay::worktree_dialog_shell(screen, w.entries.len())?;
-            Some((
-                Rect::new(shell.inner.x, shell.inner.y, shell.inner.width, 1),
-                &mut w.query,
+            Some(Rect::new(
+                shell.inner.x,
+                shell.inner.y,
+                shell.inner.width,
+                1,
             ))
         }
-        Overlay::ReferencedFolderInput(i) => {
+        Overlay::ReferencedFolderInput(i) if !i.validating => {
             let shell = ui::overlay::referenced_input_shell(screen)?;
-            Some((
-                Rect::new(shell.inner.x, shell.inner.y, shell.inner.width, 1),
-                &mut i.input,
+            Some(Rect::new(
+                shell.inner.x,
+                shell.inner.y,
+                shell.inner.width,
+                1,
             ))
         }
         Overlay::ReferencedFolderSearch(s) => {
             let layout = ui::overlay::referenced_search_layout(screen, s)?;
-            Some((layout.query, &mut s.query))
+            Some(layout.query)
         }
-        Overlay::ResumeSessionEdit(r) => {
+        Overlay::ResumeSessionEdit(r) if !r.confirming_delete => {
             let shell = ui::overlay::resume_edit_shell(screen)?;
-            Some((
-                Rect::new(shell.inner.x, shell.inner.y, shell.inner.width, 1),
-                &mut r.input,
+            Some(Rect::new(
+                shell.inner.x,
+                shell.inner.y,
+                shell.inner.width,
+                1,
             ))
         }
         Overlay::Connect(panel) if panel.has_text_input() && !panel.validating => {
             let layout = ui::overlay::connect_layout(screen, panel)?;
-            Some((layout.input_rect, &mut panel.input))
+            Some(layout.input_rect)
         }
         _ => None,
     }

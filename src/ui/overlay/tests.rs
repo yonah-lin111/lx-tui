@@ -328,18 +328,23 @@ fn confirm_modal_renders_question_and_buttons() {
         .prompt_panel
         .tree
         .replace(vec![], vec![item]);
-    state.overlay = Some(Overlay::ConfirmClose(ConfirmClose {
-        target: OverlayTarget::PromptPage {
+    state.overlay = Some(Overlay::ConfirmClose(ConfirmClose::new(
+        OverlayTarget::PromptPage {
             workspace: 0,
             owner: crate::app::prompt::PromptEditing::Item(1),
             page: page_id,
         },
-    }));
+    )));
     let (lines, cursor) = draw_overlay(&state);
-    assert_eq!(cursor, None);
     assert!(lines[9].contains(text::CONFIRM_DELETE_PAGE_TITLE));
     assert!(lines[11].contains("delete page \"Page 1\"?"));
-    let buttons = lines[13].clone();
+    assert!(
+        lines[12].contains(text::CONFIRM_DELETE_INPUT_PLACEHOLDER),
+        "输入行显示口令占位: {:?}",
+        lines[12]
+    );
+    assert_eq!(cursor, Some((23, 12)), "硬件光标落在口令输入行");
+    let buttons = lines[14].clone();
     assert!(buttons.contains(text::BUTTON_CONFIRM), "{buttons}");
     assert!(buttons.contains(text::BUTTON_CANCEL), "{buttons}");
 }
@@ -347,7 +352,7 @@ fn confirm_modal_renders_question_and_buttons() {
 #[test]
 fn confirm_buttons_hit_their_cells() {
     // 按真实按钮行几何取单元格：不写死列号。
-    let shell = confirm_shell(SCREEN, "delete page \"Page 1\"?").expect("confirm modal fits");
+    let shell = confirm_close_shell(SCREEN, "delete page \"Page 1\"?").expect("confirm modal fits");
     // 确认浮层的按钮行在内容区最后一行（与重命名浮层的固定行号不同）。
     let offset = shell.inner.height.saturating_sub(1);
     let rects = crate::ui::widgets::modal::button_row(
@@ -366,6 +371,23 @@ fn confirm_buttons_hit_their_cells() {
         Some(ConfirmButton::Cancel)
     );
     assert_eq!(confirm_button_at(&shell, rects[0].x, row + 1), None);
+}
+
+#[test]
+fn confirm_close_input_rect_sits_below_wrapped_question() {
+    let question =
+        "delete workspace \"demo\" with a very long name that wraps over multiple lines?";
+    let shell = confirm_close_shell(SCREEN, question).expect("dialog fits");
+    let lines = text::wrap(question, usize::from(shell.inner.width));
+    assert!(lines.len() > 1, "问题必须换行以覆盖动态高度");
+    let input = confirm_close_input_rect(&shell, question);
+    assert_eq!(input.y, shell.inner.y + lines.len() as u16);
+    assert_eq!(input.x, shell.inner.x);
+    assert_eq!(input.width, shell.inner.width);
+    assert!(
+        input.y + 2 <= shell.inner.bottom(),
+        "输入行下留空白与按钮行"
+    );
 }
 
 #[test]
@@ -394,15 +416,146 @@ fn confirm_question_wraps_and_dialog_grows() {
         page: page_id,
     };
     let question = confirm_question(&state, &target);
-    state.overlay = Some(Overlay::ConfirmClose(ConfirmClose { target }));
-    let shell = confirm_shell(SCREEN, &question).expect("dialog fits");
+    state.overlay = Some(Overlay::ConfirmClose(ConfirmClose::new(target)));
+    let shell = confirm_close_shell(SCREEN, &question).expect("dialog fits");
     assert!(shell.area.height > 4, "高度随换行增长: {:?}", shell.area);
-    let (lines, _) = draw_overlay(&state);
+    let (lines, cursor) = draw_overlay(&state);
     let joined = lines.join("\n");
     assert!(joined.contains("delete page \"Page 11111"), "{joined}");
     assert!(
         joined.contains("one line\"?"),
         "整段问题可见（自动换行）: {joined}"
+    );
+    assert!(
+        joined.contains(text::CONFIRM_DELETE_INPUT_PLACEHOLDER),
+        "问题换行后仍显示口令输入行: {joined}"
+    );
+    assert!(cursor.is_some(), "硬件光标在口令输入行");
+}
+
+#[test]
+fn confirm_button_switches_from_muted_to_danger_when_phrase_matches() {
+    let target = OverlayTarget::Workspace(0);
+    let mut state = AppState::demo();
+    state.overlay = Some(Overlay::ConfirmClose(ConfirmClose::new(target.clone())));
+    let question = confirm_question(&state, &target);
+    let shell = confirm_close_shell(SCREEN, &question).expect("dialog fits");
+    let rects = widgets::modal::button_row(
+        shell.inner,
+        &[text::BUTTON_CONFIRM, text::BUTTON_CANCEL],
+        BUTTON_GAP,
+        shell.inner.height.saturating_sub(1),
+    );
+    let button_cell = |state: &AppState| {
+        let mut terminal =
+            Terminal::new(TestBackend::new(80, 24)).expect("test backend is infallible");
+        if let Err(error) = terminal.draw(|frame| {
+            render(frame, frame.area(), state);
+        }) {
+            panic!("draw failed: {error}");
+        }
+        let buffer = terminal.backend().buffer().clone();
+        buffer[(rects[0].x, rects[0].y)].clone()
+    };
+    let idle = button_cell(&state);
+    assert_eq!(idle.fg, Color::Reset, "未匹配时 Confirm 按钮为暗色禁用态");
+    assert_eq!(idle.bg, Color::Reset, "未匹配时 Confirm 按钮无危险底色");
+    assert!(idle.modifier.contains(Modifier::DIM));
+
+    if let Some(Overlay::ConfirmClose(confirm)) = state.overlay.as_mut() {
+        confirm.input = TextInput::new("  Confirm Delete ");
+    }
+    let confirmed = button_cell(&state);
+    assert_eq!(confirmed.fg, style::button_danger().fg.unwrap());
+    assert_eq!(confirmed.bg, style::button_danger().bg.unwrap());
+    assert!(confirmed.modifier.contains(Modifier::BOLD));
+}
+
+#[test]
+fn missing_workspaces_confirm_shows_bulk_question_and_count() {
+    use crate::app::state::WorkspaceHistoryEntry;
+
+    let mut state = AppState::demo();
+    state.workspace_history.entries = (0..2)
+        .map(|index| WorkspaceHistoryEntry {
+            name: format!("gone-{index}"),
+            path: PathBuf::from(format!("/tmp/gone-{index}")),
+            exists: false,
+            name_is_manual: false,
+            position: index,
+            trusted: false,
+            git: None,
+        })
+        .collect();
+    let target = OverlayTarget::MissingWorkspaces;
+    assert_eq!(
+        confirm_question(&state, &target),
+        "delete 2 missing workspace(s) and all their data?"
+    );
+    state.overlay = Some(Overlay::ConfirmClose(ConfirmClose::new(target)));
+    let (lines, cursor) = draw_overlay(&state);
+    let joined = lines.join("\n");
+    assert!(
+        joined.contains(text::CONFIRM_DELETE_MISSING_WORKSPACES_TITLE),
+        "{joined}"
+    );
+    assert!(joined.contains("delete 2 missing workspace(s)"), "{joined}");
+    assert!(joined.contains("their data?"), "{joined}");
+    assert!(
+        joined.contains(text::CONFIRM_DELETE_INPUT_PLACEHOLDER),
+        "{joined}"
+    );
+    assert!(joined.contains(text::BUTTON_CONFIRM), "{joined}");
+    assert!(joined.contains(text::BUTTON_CANCEL), "{joined}");
+    assert!(cursor.is_some(), "批量清理确认弹窗同样接管硬件光标");
+}
+
+#[test]
+fn menu_labels_map_workspace_delete_and_delete_missing() {
+    let mut state = menu_state(
+        vec![
+            MenuCommand::DeleteWorkspaceHistory,
+            MenuCommand::DeleteMissingWorkspaces,
+        ],
+        0,
+    );
+    let Some(Overlay::Menu(menu)) = state.overlay.as_ref() else {
+        panic!("menu overlay expected");
+    };
+    assert_eq!(
+        menu_labels(menu),
+        vec![
+            text::MENU_DELETE_WORKSPACE_HISTORY,
+            text::MENU_DELETE_MISSING_WORKSPACES,
+        ]
+    );
+
+    if let Some(Overlay::Menu(menu)) = state.overlay.as_mut() {
+        menu.confirming = true;
+    }
+    let Some(Overlay::Menu(menu)) = state.overlay.as_ref() else {
+        panic!("menu overlay expected");
+    };
+    assert_eq!(
+        menu_labels(menu),
+        vec![
+            text::MENU_CONFIRM_DELETE,
+            text::MENU_DELETE_MISSING_WORKSPACES,
+        ]
+    );
+
+    if let Some(Overlay::Menu(menu)) = state.overlay.as_mut() {
+        menu.selected = 1;
+    }
+    let Some(Overlay::Menu(menu)) = state.overlay.as_ref() else {
+        panic!("menu overlay expected");
+    };
+    assert_eq!(
+        menu_labels(menu),
+        vec![
+            text::MENU_DELETE_WORKSPACE_HISTORY,
+            text::MENU_CONFIRM_DELETE_MISSING_WORKSPACES,
+        ]
     );
 }
 

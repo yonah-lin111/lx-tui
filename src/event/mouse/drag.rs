@@ -30,9 +30,8 @@ pub(crate) fn handle_mouse_drag(
 ) {
     let Geometry { rects, view, .. } = geometry;
     if state.overlay_input_drag
-        && let Some(overlay) = state.overlay.as_mut()
-        && let Some((area, input)) =
-            super::super::overlay::overlay_input_hit_mut(geometry.screen, overlay)
+        && let Some(area) = super::super::overlay::overlay_input_rect(state, geometry.screen)
+        && let Some(input) = state.overlay.as_mut().and_then(Overlay::input_mut)
     {
         let text_x = area.x.saturating_add(2);
         let text_w = area.width.saturating_sub(2);
@@ -531,9 +530,8 @@ pub(crate) fn handle_mouse_up_left(
     }
     if state.overlay_input_drag {
         state.overlay_input_drag = false;
-        if let Some(overlay) = state.overlay.as_mut()
-            && let Some((_, input)) =
-                super::super::overlay::overlay_input_hit_mut(geometry.screen, overlay)
+        if super::super::overlay::overlay_input_rect(state, geometry.screen).is_some()
+            && let Some(input) = state.overlay.as_mut().and_then(Overlay::input_mut)
             && !input.has_selection()
         {
             input.clear_selection();

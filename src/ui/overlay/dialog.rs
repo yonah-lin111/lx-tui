@@ -119,6 +119,31 @@ pub fn confirm_shell(screen: Rect, question: &str) -> Option<widgets::modal::Mod
     confirm_shell_for(screen, question, CONFIRM_WIDTH)
 }
 
+/// 带口令输入框的关闭/删除确认浮层几何：问题自动换行 + 下方 1 行输入框 + 1 行空白间隔 + 底部按钮行。
+pub fn confirm_close_shell(screen: Rect, question: &str) -> Option<widgets::modal::ModalShell> {
+    let width = CONFIRM_WIDTH.min(screen.width);
+    let inner_width = usize::from(width.saturating_sub(2)).max(1);
+    let lines = text::wrap(question, inner_width).len().max(1);
+    let height = u16::try_from(lines)
+        .unwrap_or(u16::MAX)
+        .saturating_add(7)
+        .min(screen.height);
+    widgets::modal::layout(screen, width, height)
+}
+
+/// 计算 `ConfirmClose` 浮层内单行确认输入框的矩形区域（紧接在问题文本下方）。
+pub fn confirm_close_input_rect(shell: &widgets::modal::ModalShell, question: &str) -> Rect {
+    let width = usize::from(shell.inner.width).max(1);
+    let lines = text::wrap(question, width);
+    let max_question_rows = usize::from(shell.inner.height.saturating_sub(3)).max(1);
+    let shown_rows = lines.len().min(max_question_rows) as u16;
+    let y = shell
+        .inner
+        .y
+        .saturating_add(shown_rows.min(shell.inner.height.saturating_sub(2)));
+    Rect::new(shell.inner.x, y, shell.inner.width, 1)
+}
+
 /// 命中重命名按钮。
 pub fn rename_button_at(
     shell: &widgets::modal::ModalShell,
@@ -272,6 +297,9 @@ fn confirm_text(state: &AppState, target: &OverlayTarget) -> (&'static str, Stri
                 .map(|ws| ws.name.clone())
                 .unwrap_or_default(),
         ),
+        OverlayTarget::MissingWorkspaces => {
+            (text::CONFIRM_DELETE_MISSING_WORKSPACES_TITLE, String::new())
+        }
         _ => (text::CONFIRM_DELETE_PAGE_TITLE, String::new()),
     }
 }
@@ -287,6 +315,10 @@ pub fn confirm_question(state: &AppState, target: &OverlayTarget) -> String {
             } else {
                 text::confirm_delete_workspace_question(&name)
             }
+        }
+        OverlayTarget::MissingWorkspaces => {
+            let count = state.workspace_history.missing_entry_count();
+            text::confirm_delete_missing_workspaces_question(count)
         }
         OverlayTarget::Workspace(_) => text::confirm_delete_workspace_question(&name),
         _ => text::confirm_delete_page_question(&name),
@@ -403,19 +435,67 @@ pub(crate) fn render_new_node(
     )
 }
 
-/// 关闭确认浮层：问题与底部按钮；提示词删除按目标种类使用对应问题文案。
+/// 关闭/删除确认浮层：问题、口令输入框与底部按钮（口令匹配前 Confirm 按钮呈暗色禁用态）。
 pub(crate) fn render_confirm(
     frame: &mut Frame<'_>,
     screen: Rect,
     state: &AppState,
     confirm: &ConfirmClose,
-) {
+) -> Option<(u16, u16)> {
     let question = confirm_question(state, &confirm.target);
-    let Some(shell) = confirm_shell(screen, &question) else {
-        return;
-    };
+    let shell = confirm_close_shell(screen, &question)?;
     let (title, _) = confirm_text(state, &confirm.target);
-    render_confirm_dialog(frame, &shell, title, &question);
+    widgets::modal::render_danger(frame, &shell, title);
+    if shell.inner.width == 0 || shell.inner.height == 0 {
+        return None;
+    }
+    let width = usize::from(shell.inner.width);
+    let lines = text::wrap(&question, width);
+    let max_rows = usize::from(shell.inner.height.saturating_sub(3)).max(1);
+    for (index, line) in lines.iter().take(max_rows).enumerate() {
+        let clipped = lines.len() > max_rows && index + 1 == max_rows;
+        let visible = if clipped {
+            text::ellipsize(&format!("{line}…"), width)
+        } else {
+            line.clone()
+        };
+        frame.render_widget(
+            Paragraph::new(Span::styled(visible, style::text())),
+            Rect::new(
+                shell.inner.x,
+                shell.inner.y.saturating_add(index as u16),
+                shell.inner.width,
+                1,
+            ),
+        );
+    }
+    let confirm_style = if confirm.is_confirmed() {
+        style::button_danger()
+    } else {
+        style::muted()
+    };
+    render_buttons(
+        frame,
+        &widgets::modal::button_row(
+            shell.inner,
+            &CONFIRM_BUTTONS,
+            BUTTON_GAP,
+            shell.inner.height.saturating_sub(1),
+        ),
+        &[
+            (text::BUTTON_CONFIRM, confirm_style),
+            (text::BUTTON_CANCEL, style::button_secondary()),
+        ],
+    );
+    let input_rect = confirm_close_input_rect(&shell, &question);
+    render_input(
+        frame,
+        input_rect,
+        confirm.input.text(),
+        confirm.input.cursor(),
+        confirm.input.selection(),
+        Some(text::CONFIRM_DELETE_INPUT_PLACEHOLDER),
+    )
 }
 
 /// 引用文件夹删除确认浮层：展示待删目录名与底部按钮。

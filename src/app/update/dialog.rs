@@ -221,7 +221,7 @@ pub fn apply_overlay_key(state: &mut AppState, key: OverlayKey) -> Option<(PaneI
     }
 }
 
-/// 对单行输入类浮层（重命名、新建工作区路径）执行一次编辑；其他浮层忽略。
+/// 对单行输入类浮层（重命名、新建工作区路径、删除确认口令）执行一次编辑；其他浮层忽略。
 fn edit_text_input(state: &mut AppState, key: OverlayKey) {
     if matches!(state.overlay, Some(Overlay::NewWorkspace(_))) {
         state.workspace_history.new_workspace_confirming = false;
@@ -356,13 +356,26 @@ fn commit_rename(state: &mut AppState) {
     state.overlay = None;
 }
 
-/// 确认关闭浮层回调（含工作区级联删除最终弹窗确认）。
+/// 确认关闭浮层回调（要求确认短语匹配 `confirm delete` 后才执行工作区级联删除）。
 fn confirm_close(state: &mut AppState) {
+    let confirmed = matches!(
+        state.overlay.as_ref(),
+        Some(Overlay::ConfirmClose(confirm)) if confirm.is_confirmed()
+    );
+    if !confirmed {
+        return;
+    }
     let Some(Overlay::ConfirmClose(confirm)) = state.overlay.take() else {
         return;
     };
-    if let crate::app::overlay::OverlayTarget::WorkspaceHistory(entry_index) = confirm.target {
-        super::workspace_history::delete_workspace_history_entry(state, entry_index);
+    match confirm.target {
+        crate::app::overlay::OverlayTarget::WorkspaceHistory(entry_index) => {
+            super::workspace_history::delete_workspace_history_entry(state, entry_index);
+        }
+        crate::app::overlay::OverlayTarget::MissingWorkspaces => {
+            super::workspace_history::delete_missing_workspace_history_entries(state);
+        }
+        _ => {}
     }
 }
 
