@@ -33,31 +33,43 @@ pub fn open_new_workspace_dialog(state: &mut AppState) {
 
 /// 解析用户输入的工作区路径：
 /// 1. 空输入或纯引号包裹的空串返回 Ok(None)（表示继承默认工作区路径）；
-/// 2. 剥离匹配的外层双引号/单引号；
-/// 3. 支持 `~` / `~/...` 展开为当前用户 HOME 目录；
+/// 2. 经平台粘贴规范化（剥离外层引号、`file://` URI、shell 反斜杠转义）；
+/// 3. 支持 `~` / `~/...`（含 Windows `~\...`）展开为当前用户 HOME 目录；
 /// 4. 相对路径以基准路径（当前工作区路径或进程路径）展开；
 /// 5. 校验目标路径必须在磁盘上存在且必须为目录。
 pub fn parse_workspace_path(
     input: &str,
     base_cwd: Option<&Path>,
 ) -> Result<Option<PathBuf>, &'static str> {
-    let mut trimmed = input.trim();
-    if trimmed.is_empty() {
+    let raw = input.trim();
+    if raw.is_empty() {
         return Ok(None);
     }
-    if (trimmed.starts_with('"') && trimmed.ends_with('"') && trimmed.len() >= 2)
-        || (trimmed.starts_with('\'') && trimmed.ends_with('\'') && trimmed.len() >= 2)
+    let unquoted = if (raw.starts_with('"') && raw.ends_with('"') && raw.len() >= 2)
+        || (raw.starts_with('\'') && raw.ends_with('\'') && raw.len() >= 2)
     {
-        trimmed = trimmed[1..trimmed.len() - 1].trim();
+        raw[1..raw.len() - 1].trim()
+    } else {
+        raw
+    };
+    if unquoted.is_empty() {
+        return Ok(None);
     }
+    let normalized = crate::platform::normalize_pasted_path_input(input);
+    let trimmed = normalized.trim();
     if trimmed.is_empty() {
         return Ok(None);
     }
-    let path = if trimmed == "~" {
-        home_dir().ok_or("Cannot resolve home directory")?
-    } else if let Some(rest) = trimmed.strip_prefix("~/") {
+    let home_rest = trimmed
+        .strip_prefix('~')
+        .filter(|rest| rest.is_empty() || rest.starts_with('/') || rest.starts_with('\\'));
+    let path = if let Some(rest) = home_rest {
         let home = home_dir().ok_or("Cannot resolve home directory")?;
-        home.join(rest)
+        if rest.is_empty() {
+            home
+        } else {
+            home.join(rest.trim_start_matches(['/', '\\']))
+        }
     } else {
         let p = Path::new(trimmed);
         if p.is_relative() {

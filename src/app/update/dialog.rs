@@ -254,6 +254,12 @@ pub(crate) fn commit_new_workspace(state: &mut AppState) {
         return;
     };
     let text_val = dialog.input.text().to_string();
+    // 手动输入与粘贴一律先做路径规范化，让输入框展示去掉引号/shell 转义后的干净路径。
+    let normalized = crate::platform::normalize_pasted_path_input(&text_val);
+    let normalized = normalized.trim();
+    if !normalized.is_empty() && normalized != text_val.trim() {
+        replace_new_workspace_input(state, normalized);
+    }
     let base_cwd = state
         .active_workspace()
         .cwd
@@ -263,6 +269,8 @@ pub(crate) fn commit_new_workspace(state: &mut AppState) {
         Ok(parsed_cwd) => match parsed_cwd {
             Some(path) => {
                 if !state.workspace_history.new_workspace_confirming {
+                    // 二次确认前回填解析后的规范路径，用户看到的就是即将创建工作区的绝对路径。
+                    replace_new_workspace_input(state, &path.to_string_lossy());
                     state.workspace_history.new_workspace_confirming = true;
                     return;
                 }
@@ -305,6 +313,18 @@ pub(crate) fn commit_new_workspace(state: &mut AppState) {
             );
         }
     }
+}
+
+/// 用规范文本替换新建工作区输入框内容：保持单步撤销，文本相同时不动光标。
+fn replace_new_workspace_input(state: &mut AppState, text: &str) {
+    let Some(Overlay::NewWorkspace(dialog)) = state.overlay.as_mut() else {
+        return;
+    };
+    if dialog.input.text() == text {
+        return;
+    }
+    dialog.input.select_all();
+    dialog.input.insert_str(text);
 }
 
 /// 提交重命名；空名不保存且浮层保持打开。
@@ -451,10 +471,28 @@ pub fn apply_overlay_paste(state: &mut AppState, text: &str) -> bool {
             Overlay::Connect(panel) if panel.validating => return false,
             _ => {}
         }
+        let path_dialog = matches!(
+            overlay,
+            Overlay::NewWorkspace(_) | Overlay::ReferencedFolderInput(_)
+        );
         let Some(input) = overlay.input_mut() else {
             return false;
         };
-        if !input.insert_str(text) {
+        // 路径弹窗整框替换（空输入或全选）时先做粘贴规范化，避免把 shell 转义、
+        // 外层引号或 `file://` URI 原样塞进输入框。
+        let whole_replace = path_dialog && {
+            let current = input.text();
+            current.trim().is_empty()
+                || input
+                    .selection()
+                    .is_some_and(|(start, end)| start == 0 && end == current.chars().count())
+        };
+        let normalized = whole_replace.then(|| crate::platform::normalize_pasted_path_input(text));
+        let insert_text = normalized
+            .as_deref()
+            .filter(|value| !value.is_empty())
+            .unwrap_or(text);
+        if !input.insert_str(insert_text) {
             return false;
         }
         match overlay {

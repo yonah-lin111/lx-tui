@@ -153,6 +153,90 @@ fn overlay_paste_respects_guard_states() {
 }
 
 #[test]
+fn overlay_paste_normalizes_path_text_in_path_dialogs() {
+    let dir = spaced_temp_dir("paste path");
+    let text = dir.to_string_lossy().to_string();
+    let forms = [
+        text.replace(' ', "\\ "),
+        format!("'{text}'"),
+        format!("\"{text}\""),
+        format!("file://{}", text.replace(' ', "%20")),
+    ];
+    for form in forms {
+        let mut state = AppState::demo();
+        state.overlay = Some(Overlay::NewWorkspace(NewWorkspace {
+            input: TextInput::new(""),
+        }));
+        assert!(apply_overlay_paste(&mut state, &form), "{form}");
+        assert_eq!(
+            state
+                .overlay
+                .as_ref()
+                .and_then(Overlay::input)
+                .expect("input")
+                .text(),
+            text,
+            "{form}"
+        );
+    }
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn overlay_paste_normalizes_path_in_referenced_folder_input() {
+    let dir = spaced_temp_dir("paste referenced");
+    let text = dir.to_string_lossy().to_string();
+    let mut state = AppState::demo();
+    state.overlay = Some(Overlay::ReferencedFolderInput(ReferencedFolderInput {
+        anchor: (0, 0),
+        input: TextInput::new(""),
+        key: None,
+        validating: false,
+        error: None,
+        request: None,
+    }));
+    let escaped = text.replace(' ', "\\ ");
+    assert!(apply_overlay_paste(&mut state, &escaped));
+    let Some(Overlay::ReferencedFolderInput(input)) = state.overlay.as_ref() else {
+        panic!("referenced input");
+    };
+    assert_eq!(input.input.text(), text);
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn overlay_paste_replaces_full_selection_with_normalized_path() {
+    let dir = spaced_temp_dir("paste selection");
+    let text = dir.to_string_lossy().to_string();
+    let mut state = AppState::demo();
+    state.overlay = Some(Overlay::NewWorkspace(NewWorkspace {
+        input: TextInput::new("/old path"),
+    }));
+    if let Some(input) = state.overlay.as_mut().and_then(Overlay::input_mut) {
+        input.select_all();
+    }
+    let escaped = text.replace(' ', "\\ ");
+    assert!(apply_overlay_paste(&mut state, &escaped));
+    assert_eq!(
+        state
+            .overlay
+            .as_ref()
+            .and_then(Overlay::input)
+            .expect("input")
+            .text(),
+        text
+    );
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// 建一个名字含空格的真实临时目录（路径粘贴规范化用例）。
+fn spaced_temp_dir(label: &str) -> PathBuf {
+    let path = std::env::temp_dir().join(format!("lx {label} {}", std::process::id()));
+    std::fs::create_dir_all(&path).expect("temp dir");
+    path
+}
+
+#[test]
 fn overlay_cut_copies_selection_and_is_one_undo_step() {
     let mut state = AppState::demo();
     state.overlay = Some(Overlay::Rename(Rename {

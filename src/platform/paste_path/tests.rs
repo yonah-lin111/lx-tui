@@ -107,3 +107,136 @@ fn resolve_pasted_path_prefers_literal_then_unescapes_shell_escapes() {
     );
     let _ = std::fs::remove_dir_all(&dir);
 }
+
+#[test]
+fn normalize_strips_shell_escapes_and_drag_trailing_space() {
+    assert_eq!(
+        normalize_pasted_path_input("/Users/yonah/Desktop/test\\ one"),
+        "/Users/yonah/Desktop/test one"
+    );
+    assert_eq!(
+        normalize_pasted_path_input("/Users/yonah/Desktop/test\\ one "),
+        "/Users/yonah/Desktop/test one",
+        "终端拖拽附带的尾随空格必须丢弃"
+    );
+    assert_eq!(
+        normalize_pasted_path_input("~/Desktop/test\\ one"),
+        "~/Desktop/test one"
+    );
+    assert_eq!(
+        normalize_pasted_path_input("/Users/yonah/Desktop/ai\\(1\\).md"),
+        "/Users/yonah/Desktop/ai(1).md"
+    );
+    assert_eq!(
+        normalize_pasted_path_input("/Users/yonah/Desktop/test\\ "),
+        "/Users/yonah/Desktop/test ",
+        "被转义的尾随空格属于路径本身，必须保留"
+    );
+    assert_eq!(normalize_pasted_path_input(" \t\r\n"), "");
+    assert_eq!(normalize_pasted_path_input(""), "");
+}
+
+#[test]
+fn normalize_strips_posix_single_quotes() {
+    assert_eq!(
+        normalize_pasted_path_input("'/Users/yonah/Desktop/test one'"),
+        "/Users/yonah/Desktop/test one"
+    );
+    assert_eq!(
+        normalize_pasted_path_input("'/Users/yonah/Desktop/test one' "),
+        "/Users/yonah/Desktop/test one"
+    );
+    assert_eq!(
+        normalize_pasted_path_input("'/Users/yonah/Desktop/it'\\''s one'"),
+        "/Users/yonah/Desktop/it's one",
+        "POSIX 单引号内的转义序列必须还原"
+    );
+}
+
+#[test]
+fn normalize_strips_double_quotes_and_keeps_windows_separators() {
+    assert_eq!(
+        normalize_pasted_path_input("\"/Users/yonah/Desktop/test one\""),
+        "/Users/yonah/Desktop/test one"
+    );
+    assert_eq!(
+        normalize_pasted_path_input("\"C:\\Users\\yonah\\Desktop\\test one\""),
+        "C:\\Users\\yonah\\Desktop\\test one",
+        "Windows 原生反斜杠路径保留分隔符"
+    );
+    assert_eq!(
+        normalize_pasted_path_input("\"/tmp/a\\\\b\""),
+        "/tmp/a\\b",
+        "非 Windows 路径的双引号转义还原为单个反斜杠"
+    );
+    assert_eq!(
+        normalize_pasted_path_input("\"\\\\server\\share\""),
+        "\\\\server\\share",
+        "UNC 路径保持反斜杠分隔符"
+    );
+}
+
+#[cfg(not(windows))]
+#[test]
+fn normalize_decodes_file_uris() {
+    assert_eq!(
+        normalize_pasted_path_input("file:///Users/yonah/Desktop/test%20one"),
+        "/Users/yonah/Desktop/test one"
+    );
+    assert_eq!(
+        normalize_pasted_path_input("file://localhost/Users/yonah/Desktop/test%20one"),
+        "/Users/yonah/Desktop/test one"
+    );
+    assert_eq!(
+        normalize_pasted_path_input("'file:///Users/yonah/Desktop/test%20one'"),
+        "/Users/yonah/Desktop/test one"
+    );
+}
+
+#[cfg(not(windows))]
+#[test]
+fn normalize_keeps_existing_literal_backslash_name() {
+    let dir = std::env::temp_dir().join("lx-tui-normalize-literal");
+    std::fs::create_dir_all(&dir).expect("temp dir");
+    let literal = dir.join("test\\one");
+    std::fs::write(&literal, b"x").expect("literal backslash file");
+    let text = literal.display().to_string();
+    assert_eq!(
+        normalize_pasted_path_input(&text),
+        text,
+        "文件名真含反斜杠时优先原文"
+    );
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[cfg(not(windows))]
+#[test]
+fn parse_path_text_accepts_quoted_escaped_and_file_uri_paths() {
+    let dir = std::env::temp_dir().join("lx-tui-paste-forms");
+    let target = dir.join("test one");
+    std::fs::create_dir_all(&target).expect("temp dir");
+    let display = target.display().to_string();
+    let escaped = format!("{} ", display.replace(' ', "\\ "));
+    let single = format!("'{display}'");
+    let double = format!("\"{display}\"");
+    let uri = format!("file://{}", display.replace(' ', "%20"));
+
+    for input in [&escaped, &single, &double, &uri] {
+        let parsed = parse_path_text(input).unwrap_or_else(|| panic!("解析失败: {input}"));
+        assert_eq!(parsed.len(), 1, "input={input}");
+        assert_eq!(
+            crate::platform::resolve_pasted_path(&parsed[0]),
+            Some(target.clone()),
+            "input={input}"
+        );
+    }
+    // 引号与 URI 形式解析后直接落到真实路径；转义形式由解析后的路径再归一化。
+    for input in [&single, &double, &uri] {
+        assert_eq!(
+            parse_path_text(input),
+            Some(vec![target.clone()]),
+            "input={input}"
+        );
+    }
+    let _ = std::fs::remove_dir_all(&dir);
+}

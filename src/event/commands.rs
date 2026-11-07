@@ -228,11 +228,28 @@ fn validate_referenced_path(
     known: &[PathBuf],
 ) -> Result<PathBuf, crate::app::referenced::PathValidation> {
     use crate::app::referenced::PathValidation;
-    let trimmed = input.trim();
+    let normalized = crate::platform::normalize_pasted_path_input(input);
+    let trimmed = normalized.trim();
     if trimmed.is_empty() {
         return Err(PathValidation::Empty);
     }
-    let path = std::path::Path::new(trimmed);
+    // `~` / `~/...`（含 Windows `~\...`）按当前用户 HOME 展开后再走绝对路径校验。
+    let home_rest = trimmed
+        .strip_prefix('~')
+        .filter(|rest| rest.is_empty() || rest.starts_with('/') || rest.starts_with('\\'));
+    let expanded = if let Some(rest) = home_rest {
+        let Some(home) = crate::app::state::home_dir() else {
+            return Err(PathValidation::NotFound);
+        };
+        if rest.is_empty() {
+            home
+        } else {
+            home.join(rest.trim_start_matches(['/', '\\']))
+        }
+    } else {
+        PathBuf::from(trimmed)
+    };
+    let path = expanded.as_path();
     if !path.is_absolute() {
         return Err(PathValidation::NotAbsolute);
     }

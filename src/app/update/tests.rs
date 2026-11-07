@@ -3802,6 +3802,83 @@ fn parse_workspace_path_errors_on_nonexistent_or_file() {
     }
 }
 
+/// 建一个名字含空格的真实临时目录（覆盖 shell 转义/引号/file URI 粘贴解析）。
+fn spaced_temp_dir(label: &str) -> PathBuf {
+    let path = std::env::temp_dir().join(format!("lx {label} {}", std::process::id()));
+    std::fs::create_dir_all(&path).expect("temp dir");
+    path
+}
+
+#[test]
+fn parse_workspace_path_normalizes_pasted_path_forms() {
+    let dir = spaced_temp_dir("parse path");
+    let canonical = dir.canonicalize().unwrap_or_else(|_| dir.clone());
+    let text = canonical.to_string_lossy().to_string();
+    let forms = [
+        text.replace(' ', "\\ "),
+        format!("'{text}'"),
+        format!("\"{text}\""),
+        format!("file://{}", text.replace(' ', "%20")),
+    ];
+    for form in forms {
+        assert_eq!(
+            parse_workspace_path(&form, None),
+            Ok(Some(canonical.clone())),
+            "{form}"
+        );
+    }
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn parse_workspace_path_expands_escaped_home_relative_path() {
+    let Some(home) = home_dir() else {
+        return;
+    };
+    let name = format!("lx home path {} with space", std::process::id());
+    let dir = home.join(&name);
+    std::fs::create_dir_all(&dir).expect("home temp dir");
+    let input = format!("~/{}", name.replace(' ', "\\ "));
+    let canonical = dir.canonicalize().unwrap_or_else(|_| dir.clone());
+    assert_eq!(parse_workspace_path(&input, None), Ok(Some(canonical)));
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn parse_workspace_path_escaped_file_path_reports_not_a_directory() {
+    let dir = spaced_temp_dir("parse file");
+    let file = dir.join("file.txt");
+    std::fs::write(&file, "x").expect("write test file");
+    let escaped = file.to_string_lossy().replace(' ', "\\ ");
+    assert_eq!(
+        parse_workspace_path(&escaped, None),
+        Err(crate::ui::text::TOAST_PATH_NOT_DIR)
+    );
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn commit_new_workspace_shows_normalized_path_before_confirming() {
+    let dir = spaced_temp_dir("commit confirm");
+    let canonical = dir.canonicalize().unwrap_or_else(|_| dir.clone());
+    let escaped = canonical.to_string_lossy().replace(' ', "\\ ");
+
+    let mut state = AppState::demo();
+    open_new_workspace_dialog(&mut state);
+    if let Some(Overlay::NewWorkspace(dialog)) = state.overlay.as_mut() {
+        dialog.input = TextInput::new(escaped);
+    }
+    commit_new_workspace(&mut state);
+
+    let Some(Overlay::NewWorkspace(dialog)) = state.overlay.as_ref() else {
+        panic!("dialog stays open for confirmation");
+    };
+    assert!(state.workspace_history.new_workspace_confirming);
+    let expected = canonical.to_string_lossy().into_owned();
+    assert_eq!(dialog.input.text(), expected);
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
 #[test]
 fn open_new_workspace_dialog_opens_empty_overlay() {
     let mut state = AppState::demo();

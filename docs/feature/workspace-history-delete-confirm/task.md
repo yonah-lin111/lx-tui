@@ -35,6 +35,10 @@
 - [x] **Q5（弹窗待删除工作区列表与滚动）**：
   - 在问题文案下方、输入框上方展示待删除工作区列表，每行格式为 `  • <name> (<path>)`；单条删除主仓库时一并列出级联子 worktree，`Delete missing` 时列出全部失效工作区；
   - 列表区域最多展示 5 行（`CONFIRM_DELETE_LIST_MAX_ROWS = 5`），超过 5 行时显示右侧滚动条并支持鼠标滚轮、键盘 `Up`/`Down` 及滚动条点击/拖拽滚动。
+- [x] **Q6（弹窗宽度扩宽与跨操作系统路径粘贴统一兼容）**：
+  - `CONFIRM_WIDTH` 与 `NEW_WORKSPACE_WIDTH` 统一调宽至 `56` 列；
+  - `src/platform/paste_path.rs` 提供 `normalize_pasted_path_input`，统一兼容 macOS/Linux 反斜杠转义（`/Users/yonah/Desktop/test\ one`）、单/双引号包裹（`'/path/test one'`、`"C:\path\test one"`）、`file://` URI（`file:///Users/yonah/Desktop/test%20one`）与拖拽尾随空格；
+  - 在 `New workspace` 与 `ReferencedFolderInput` 粘贴时即时净化为干净路径，并在 `parse_workspace_path`、`validate_referenced_path`、`parse_path_text`、`resolve_pasted_path` 统一生效。
 
 ---
 

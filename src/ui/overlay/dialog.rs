@@ -22,10 +22,10 @@ const RENAME_HEIGHT: u16 = 7;
 const NEW_NODE_WIDTH: u16 = 42;
 const NEW_NODE_HEIGHT: u16 = 7;
 /// 新建工作区浮层尺寸（列，行）：顶栏 3 行 + 输入行 + 底栏 3 行。
-const NEW_WORKSPACE_WIDTH: u16 = 44;
+const NEW_WORKSPACE_WIDTH: u16 = 56;
 const NEW_WORKSPACE_HEIGHT: u16 = 7;
 /// 关闭确认浮层最小宽度（列）；高度 = 问题换行行数 + 顶栏 3 行 + 底栏 3 行。
-pub(crate) const CONFIRM_WIDTH: u16 = 40;
+pub(crate) const CONFIRM_WIDTH: u16 = 56;
 /// 信任浮层尺寸（列，行）：顶栏 3 行 + 问题行 + 路径行 + 底栏 3 行。
 const TRUST_WIDTH: u16 = 52;
 const TRUST_HEIGHT: u16 = 8;

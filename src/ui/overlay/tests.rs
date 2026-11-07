@@ -372,7 +372,7 @@ fn confirm_modal_renders_question_and_buttons() {
         "输入行显示口令占位: {:?}",
         lines[12]
     );
-    assert_eq!(cursor, Some((23, 12)), "硬件光标落在口令输入行");
+    assert_eq!(cursor, Some((15, 12)), "硬件光标落在口令输入行");
     let buttons = lines[14].clone();
     assert!(buttons.contains(text::BUTTON_CONFIRM), "{buttons}");
     assert!(buttons.contains(text::BUTTON_CANCEL), "{buttons}");
@@ -447,6 +447,12 @@ fn confirm_question_wraps_and_dialog_grows() {
     let question = confirm_question(&state, &target);
     state.overlay = Some(Overlay::ConfirmClose(ConfirmClose::new(target)));
     let shell = confirm_close_shell(SCREEN, &question).expect("dialog fits");
+    assert_eq!(shell.area.width, 56, "确认弹窗固定 56 列");
+    assert_eq!(
+        text::wrap(&question, usize::from(shell.inner.width)).len(),
+        2,
+        "长工作区名在 54 列内容区仍换行成两行"
+    );
     assert!(shell.area.height > 4, "高度随换行增长: {:?}", shell.area);
     let (lines, cursor) = draw_overlay(&state);
     let joined = lines.join("\n");
@@ -460,6 +466,15 @@ fn confirm_question_wraps_and_dialog_grows() {
         "问题换行后仍显示口令输入行: {joined}"
     );
     assert!(cursor.is_some(), "硬件光标在口令输入行");
+}
+
+#[test]
+fn confirm_and_new_workspace_dialogs_width_is_56_on_wide_screen() {
+    let screen = Rect::new(0, 0, 100, 24);
+    let confirm = confirm_close_shell(screen, "delete page \"Notes\"?").expect("confirm fits");
+    assert_eq!(confirm.area.width, 56);
+    let workspace = new_workspace_shell(screen).expect("new workspace fits");
+    assert_eq!(workspace.area.width, 56);
 }
 
 #[test]
