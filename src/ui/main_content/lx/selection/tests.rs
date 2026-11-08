@@ -614,36 +614,36 @@ fn copy_text_on_code_block_skips_chrome_rows_and_strips_left_bar() {
     );
     assert_eq!(
         copied,
-        "● Intro line\n\nfn main() {\n    let x = 1;\n\n    println!(\"{x}\");\n}\n\n  Outro line"
+        "● Intro line\nfn main() {\n    let x = 1;\n\n    println!(\"{x}\");\n}\n\n  Outro line"
     );
 
-    // 2. 仅在顶边行（row=2）、头部行（row=3）或左侧 `▎` 栏列（row=4..=8, col=0..=2）上框选/双击时，
+    // 2. 仅在顶边行（row=1）、头部行（row=2）或左侧 `▎` 栏列（row=3..=7, col=0..=2）上框选/双击时，
     // 与表格边框一样不可复制且不反显。
     assert_eq!(
-        super::copy_text(area, &lx, ((2, 0), (3, 49)), &mut cache),
+        super::copy_text(area, &lx, ((1, 0), (2, 49)), &mut cache),
         "",
         "仅框选 `▂` 顶边与头部行不得复制出任何内容"
     );
     assert_eq!(
-        super::copy_text(area, &lx, ((4, 0), (8, 2)), &mut cache),
+        super::copy_text(area, &lx, ((3, 0), (7, 2)), &mut cache),
         "",
         "仅框选左侧 `▎` 栏列不得复制出任何内容"
     );
-    let word_on_bar = super::unit_cell_range(area, &lx, (4, 2), SelectionUnit::Word, &mut cache);
+    let word_on_bar = super::unit_cell_range(area, &lx, (3, 2), SelectionUnit::Word, &mut cache);
     assert_eq!(
         super::copy_text(area, &lx, word_on_bar, &mut cache),
         "",
         "在左侧 `▎` 上双击不得选中或复制出 `▎`"
     );
 
-    // 3. 渲染选区反显（paint_selection）：顶边（row=2）、头部行（row=3）与
-    // 正文行（row=4..=8）左侧 `▎`（col=2）均不得被 REVERSED 反显。
+    // 3. 渲染选区反显（paint_selection）：顶边（row=1）、头部行（row=2）与
+    // 正文行（row=3..=7）左侧 `▎`（col=2）均不得被 REVERSED 反显。
     let geom = super::content_geom(area, &lx, &mut cache).expect("geom");
     let sel = Selection::text_range(PaneId::from_raw_for_test(1), (0, 0), (15, 49));
     let mut buf = Buffer::empty(area);
     render(area, &mut buf, &lx, true, Some(&sel), &mut cache);
 
-    for row in [2u16, 3u16] {
+    for row in [1u16, 2u16] {
         let y = geom.rect.y + row;
         for x in geom.rect.x..(geom.rect.x + geom.rect.width) {
             assert!(
@@ -652,7 +652,7 @@ fn copy_text_on_code_block_skips_chrome_rows_and_strips_left_bar() {
             );
         }
     }
-    for row in 4u16..=8u16 {
+    for row in 3u16..=7u16 {
         let y = geom.rect.y + row;
         let bar_x = geom.rect.x + 2;
         assert!(

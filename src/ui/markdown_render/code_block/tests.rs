@@ -130,32 +130,27 @@ fn soft_wrapped_code_lines_and_blank_lines_prepend_left_bar_on_every_row() {
 }
 
 #[test]
-fn code_blocks_have_one_blank_line_above_and_below_surrounding_text() {
+fn code_blocks_have_one_blank_line_only_below_surrounding_text() {
     let src = "before\n\n```rust\nlet x = 1;\n```\n\nafter";
     let lines = render_wrapped_code_blocks(src, 30);
-    assert_eq!(
-        lines.len(),
-        7,
-        "正文 / 空行 / 顶边 / 头部 / 代码 / 空行 / 正文"
-    );
+    assert_eq!(lines.len(), 6, "正文 / 顶边 / 头部 / 代码 / 空行 / 正文");
     assert_eq!(lines[0].text(), "before");
-    assert_eq!(lines[1].width(), 0, "代码块前应有一行空行");
-    assert_eq!(lines[2].code, Some(CodeLineKind::TopBorder));
+    assert_eq!(lines[1].code, Some(CodeLineKind::TopBorder), "顶部不补空行");
     assert_eq!(
-        lines[2].text(),
+        lines[1].text(),
         text::CODE_BLOCK_TOP_BORDER.repeat(30),
-        "顶边在空行之后铺满整行"
+        "顶边紧接前一段正文"
     );
     assert_eq!(
-        lines[3].code,
+        lines[2].code,
         Some(CodeLineKind::Header {
             block_index: 0,
             button_cols: (26, 29),
         })
     );
-    assert_eq!(lines[4].text(), "▎let x = 1;");
-    assert_eq!(lines[5].width(), 0, "代码块后应有一行空行");
-    assert_eq!(lines[6].text(), "after");
+    assert_eq!(lines[3].text(), "▎let x = 1;");
+    assert_eq!(lines[4].width(), 0, "代码块后应有一行空行");
+    assert_eq!(lines[5].text(), "after");
 }
 
 #[test]
@@ -172,25 +167,24 @@ fn consecutive_code_blocks_share_a_single_blank_line_and_edges_stay_tight() {
     assert_eq!(lines[3].width(), 0, "相邻代码块之间恰好一行空行");
     assert_eq!(lines[6].text(), "▎let b = 2;", "第二个代码块正文紧接头部");
 
-    // 缩进代码块同样与前后正文各留一行空行。
+    // 缩进代码块同样只在下方留一行空行。
     let lines = render_wrapped_code_blocks("before\n\n    indented\n\nafter", 20);
     let texts: Vec<String> = lines.iter().map(MdLine::text).collect();
-    assert_eq!(texts.len(), 7);
+    assert_eq!(texts.len(), 6);
     assert_eq!(texts[0], "before");
-    assert_eq!(texts[1], "", "缩进代码块前应有一行空行");
     assert_eq!(
-        texts[2],
+        texts[1],
         text::CODE_BLOCK_TOP_BORDER.repeat(20),
-        "缩进代码块顶边"
+        "缩进代码块顶边紧接前一段正文"
     );
     assert!(
-        texts[3].starts_with("▎ text ") && texts[3].ends_with("[❐] "),
+        texts[2].starts_with("▎ text ") && texts[2].ends_with("[❐] "),
         "缩进代码块头部：{:?}",
-        texts[3]
+        texts[2]
     );
-    assert_eq!(texts[4], "▎indented");
-    assert_eq!(texts[5], "", "缩进代码块后应有一行空行");
-    assert_eq!(texts[6], "after");
+    assert_eq!(texts[3], "▎indented");
+    assert_eq!(texts[4], "", "缩进代码块后应有一行空行");
+    assert_eq!(texts[5], "after");
 }
 
 #[test]
