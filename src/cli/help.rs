@@ -413,7 +413,7 @@ Subcommands:
   chat [<PROMPT>] [--site <deepseek|gemini|grok>] [-m, --model <MODEL>]
        [-t, --thinking <THINKING>] [-s, --session <SESSION_ID>] [--first-turn]
        [--edit-index <N>] [--file <PATH>...] [--keep-file <NAME>...]
-      Send a message or inline-edit a previous turn (/rewind) on DeepSeek, Gemini, or Grok
+      Send a message or rewind a previous turn (/rewind) on DeepSeek, Gemini, or Grok
       Grok supports --model Fast|Build and has no thinking variants
       For Grok, --edit-index appends a retry turn because Grok web has no in-place edit
       --edit-index requires --session; --keep-file requires --edit-index;

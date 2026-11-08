@@ -508,6 +508,15 @@ async fn exec_chat(out: &Output, cwd: &Path, req: ChatRequest) -> Result<(), Str
         return Err("message cannot be empty".to_string());
     }
 
+    // Grok 的 /rewind 语义是追加重试且不能恢复附件；检查放在 prepare 之后，
+    // 这样内联 `@[refer-file]` / `@path` 也会被拦住，而不是只看 --file/--keep-file。
+    if req.site == AiWebSite::Grok
+        && req.edit_user_index.is_some()
+        && (!prepared.files.is_empty() || !prepared.keep_files.is_empty())
+    {
+        return Err(text::LX_AI_WEB_GROK_REWIND_ATTACHMENTS.to_string());
+    }
+
     // Grok 的 Edit 会清空旧用户消息并追加新轮次，无法原地替换；把 --edit-index
     // 降级为普通追加发送，保证云端历史线性一致，旧的轮次仍保留。
     let effective_edit_index = if req.site == AiWebSite::Grok {
@@ -659,16 +668,17 @@ async fn exec_chat(out: &Output, cwd: &Path, req: ChatRequest) -> Result<(), Str
                             .as_deref()
                             .map(|t| format!(" ({t})"))
                             .unwrap_or_default();
-                        writeln!(
-                            w,
-                            "{}",
-                            o.muted(&format!(
-                                "[session: {sid}{title_suffix}{sep}{model}{sep}{thinking}]",
-                                sep = text::LX_CHAT_MODEL_SEP,
-                                model = req.model,
-                                thinking = req.thinking
-                            ))
-                        )?;
+                        let mut meta = format!(
+                            "[session: {sid}{title_suffix}{sep}{model}",
+                            sep = text::LX_CHAT_MODEL_SEP,
+                            model = req.model
+                        );
+                        if !req.thinking.is_empty() {
+                            meta.push_str(text::LX_CHAT_MODEL_SEP);
+                            meta.push_str(&req.thinking);
+                        }
+                        meta.push(']');
+                        writeln!(w, "{}", o.muted(&meta))?;
                     }
                     Ok(())
                 });

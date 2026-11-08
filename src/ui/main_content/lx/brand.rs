@@ -211,6 +211,19 @@ fn inventory_parts(count: StartupCount, label: &str, color: Style) -> Vec<(Strin
     parts
 }
 
+/// 站点行标签按可用列截取：窄窗格不使用 `…`，否则 8 列的 Gemini/Grok
+/// 都会变成同一个 `G…`，用户无法区分。
+pub(super) fn ai_web_site_label_for_width(
+    site: crate::app::state::AiWebSite,
+    width: u16,
+) -> String {
+    let label = text::ai_web_site_label(site);
+    if label.width() <= usize::from(width) {
+        return label.to_string();
+    }
+    label.chars().take(usize::from(width)).collect()
+}
+
 /// 计算 AI Web 站点选择行内各站点的命中矩形（水平居中于 `rect`）。
 pub(super) fn place_ai_web_sites(rect: Rect) -> Vec<(crate::app::state::AiWebSite, Rect)> {
     if rect.width == 0 || rect.height == 0 {
@@ -227,9 +240,12 @@ pub(super) fn place_ai_web_sites(rect: Rect) -> Vec<(crate::app::state::AiWebSit
         .iter()
         .fold(0u16, |sum, w| sum.saturating_add(*w))
         .saturating_add(SITE_GAP.saturating_mul(gaps));
+    // 窄窗格优先保证三个站点都可见：把间隔从 3 降到 1，再按可用列均分。
+    // 8 列时得到 [2,2,2]，10 列时得到 [3,3,2]，避免后两个站点退化成同名单字母。
+    let gap = if natural > rect.width { 1 } else { SITE_GAP };
     if natural > rect.width {
         // 窄窗格：按可用列等分宽度，避免后一个站点被整体裁掉而无法点击。
-        let available = rect.width.saturating_sub(SITE_GAP.saturating_mul(gaps));
+        let available = rect.width.saturating_sub(gap.saturating_mul(gaps));
         let count = u16::try_from(sites.len()).unwrap_or(1).max(1);
         let base = (available / count).max(1);
         let remainder = available.saturating_sub(base.saturating_mul(count));
@@ -241,7 +257,7 @@ pub(super) fn place_ai_web_sites(rect: Rect) -> Vec<(crate::app::state::AiWebSit
     let total = widths
         .iter()
         .fold(0u16, |sum, w| sum.saturating_add(*w))
-        .saturating_add(SITE_GAP.saturating_mul(gaps));
+        .saturating_add(gap.saturating_mul(gaps));
     let mut x = rect.x.saturating_add(rect.width.saturating_sub(total) / 2);
     let mut out = Vec::with_capacity(sites.len());
     for (site, w) in sites.into_iter().zip(widths) {
@@ -249,7 +265,7 @@ pub(super) fn place_ai_web_sites(rect: Rect) -> Vec<(crate::app::state::AiWebSit
         if clamped_w > 0 {
             out.push((site, Rect::new(x, rect.y, clamped_w, 1)));
         }
-        x = x.saturating_add(w).saturating_add(SITE_GAP);
+        x = x.saturating_add(w).saturating_add(gap);
     }
     out
 }
@@ -263,8 +279,7 @@ pub(super) fn draw_ai_web_sites(
     let placed = place_ai_web_sites(rect);
     let can_underline = rect.height > UNDERLINE_ROWS;
     for (index, (site, site_rect)) in placed.iter().enumerate() {
-        let label =
-            text::truncate_to_width(text::ai_web_site_label(*site), usize::from(site_rect.width));
+        let label = ai_web_site_label_for_width(*site, site_rect.width);
         let length = label.chars().count();
         let is_selected = *site == selected;
         for (position, ch) in label.chars().enumerate() {

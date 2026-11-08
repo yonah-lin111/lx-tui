@@ -48,11 +48,88 @@ async function clickGrokSubmit(timeoutMs) {
   return false;
 }
 
+async function grokCounts() {
+  return await js(`
+    (() => ({
+      users: document.querySelectorAll('[data-testid="user-message"]').length,
+      assistants: document.querySelectorAll('[data-testid="assistant-message"]').length,
+    }))()
+  `).catch(() => null);
+}
+
+async function grokActiveStop() {
+  return await js(`
+    (() => Array.from(document.querySelectorAll(${JSON.stringify(GROK_STOP_SELECTOR)}))
+      .some((el) => !el.disabled && el.getAttribute('aria-disabled') !== 'true'))()
+  `).catch(() => false);
+}
+
+async function waitGrokSubmitted(before) {
+  const deadline = Date.now() + 5000;
+  while (Date.now() < deadline) {
+    const counts = await grokCounts();
+    if (
+      counts &&
+      before &&
+      (counts.users > before.users || counts.assistants > before.assistants)
+    ) {
+      return true;
+    }
+    if (await grokActiveStop()) return true;
+    await new Promise((r) => setTimeout(r, 100));
+  }
+  return false;
+}
+
+function normalizeGrokText(value) {
+  return String(value || '')
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+
+async function fillGrokPrompt() {
+  const filled = await js(`
+    (() => {
+      const editor = document.querySelector(${JSON.stringify(GROK_EDITOR_SELECTOR)});
+      if (!editor) return null;
+      editor.focus();
+      document.execCommand('selectAll', false, null);
+      const prompt = ${JSON.stringify(PROMPT)};
+      if (prompt) {
+        document.execCommand('insertText', false, prompt);
+      } else {
+        // 纯附件消息必须清空旧草稿，不能把用户上一次输入一起提交。
+        document.execCommand('delete', false, null);
+      }
+      editor.dispatchEvent(new Event('input', { bubbles: true }));
+      return { text: editor.innerText || '' };
+    })()
+  `).catch(() => null);
+  if (!filled) return false;
+  const expected = normalizeGrokText(PROMPT);
+  const actual = normalizeGrokText(filled.text);
+  if (expected) {
+    return actual.includes(expected.slice(0, Math.min(24, expected.length)));
+  }
+  return actual.length === 0;
+}
+
+async function submitGrokPrompt(timeoutMs) {
+  const before = await grokCounts();
+  if (!(await clickGrokSubmit(timeoutMs))) return false;
+  return await waitGrokSubmitted(before);
+}
+
 async function main() {
   await activateTaskSpace();
   const current = await pageInfo().catch(() => null);
   const currentUrl = (current && current.url) || '';
-  if (!currentUrl.startsWith('https://grok.com')) {
+  let onGrok = false;
+  try {
+    const parsed = new URL(currentUrl);
+    onGrok = parsed.protocol === 'https:' && parsed.hostname === 'grok.com';
+  } catch (_) {}
+  if (!onGrok) {
     await openOrReuseTab(HOME, { wait: true, timeout: 25 });
   }
   await dismissCookieBanner();
@@ -60,27 +137,37 @@ async function main() {
 
   // 登录态由 API 判定，不依赖页面是否渲染完成；登录后再等 composer，避免
   // 把“页面仍在冷启动”误判成“未登录”，也避免把登录页里的普通 sign-in 链接当成登录墙。
-  let loggedIn = false;
+  let loginState = { ok: false, status: -1 };
   const loginDeadline = Date.now() + 20000;
   while (Date.now() < loginDeadline) {
-    loggedIn = await grokLoggedIn();
-    if (loggedIn) break;
+    loginState = await grokLoginState();
+    if (loginState.ok) break;
+    // 401 或 200 且无 email 是明确的未登录；5xx/网络错误继续重试到 deadline。
+    if (loginState.status === 401 || loginState.status === 200) break;
     await new Promise((r) => setTimeout(r, 300));
   }
-  if (!loggedIn) {
-    await handOffTaskSpace();
-    await emit({ event: 'login_required', url: HOME });
+  if (!loginState.ok) {
+    if (loginState.status === 401 || loginState.status === 200) {
+      await emitLoginRequired();
+    } else {
+      await emit({
+        event: 'error',
+        message: 'Grok auth check failed (' + httpDetail(loginState) + ')',
+      });
+    }
+    return;
+  }
+
+  // 非 chat 动作只用 REST/页面导航，不需要 ProseMirror；先分派，避免冷启动
+  // composer 等待占满 CLI 的 60s 预算。
+  if (ACTION !== 'chat') {
+    await runNonChatAction(currentUrl);
     return;
   }
 
   // 冷启动/慢网络：ProseMirror 可能晚于登录态挂载。
   if (!(await ensureGrokComposer())) {
     await emit({ event: 'error', message: 'Grok composer not found' });
-    return;
-  }
-
-  if (ACTION !== 'chat') {
-    await runNonChatAction(currentUrl);
     return;
   }
 
@@ -122,18 +209,25 @@ async function main() {
         String(text || '')
           .replace(/<grok:render\b[^>]*>[\s\S]*?<\/grok:render>/gi, '')
           .replace(/<grok:render\b[^>]*\/>/gi, '')
-          .replace(/<grok:render\b[\s\S]*$/gi, '')
+          .replace(/<argument\b[^>]*>[\s\S]*?<\/argument>/gi, '')
+          .replace(/<argument\b[^>]*>?/gi, '')
+          .replace(/<\/argument>/gi, '')
+          .replace(/<grok:render\b[^>]*>/gi, '')
+          .replace(/<\/grok:render>/gi, '')
           .replace(/<\/?grok:[^>]*>?/gi, '')
+          .replace(/<grok:render\b[^>]*$/gi, '')
           .replace(/\u2060/g, ' ')
           .trim();
       const existingResponses = Array.from(document.querySelectorAll('[data-testid="assistant-message"]'));
-      const targetIndex = ${FIRST_TURN && EDIT_INDEX < 0 ? 0 : 'existingResponses.length'};
+      const baselineAssistants = existingResponses.length;
       window.__lxGrokStream = {
         runId: ${JSON.stringify(runId)},
         queue: [],
         done: false,
+        error: null,
         started: false,
-        targetIndex,
+        baselineAssistants,
+        emptySince: 0,
         lastText: '',
         lastSample: '',
         stableTicks: 0,
@@ -186,22 +280,43 @@ async function main() {
         },
         pollDom() {
           const messages = Array.from(document.querySelectorAll('[data-testid="assistant-message"]'));
-          const target = messages[this.targetIndex];
-          const stop = document.querySelector(${JSON.stringify(GROK_STOP_SELECTOR)});
-          const generating = Boolean(stop);
-          if (!target) {
-            // 新回答尚未挂载：绝不复用上一轮已存在的回答。
+          // 只认发送后新增的 assistant；历史晚挂载时 baseline 不变，旧回答不会被当成本轮输出。
+          if (messages.length <= this.baselineAssistants) {
             return;
           }
+          const target = messages[messages.length - 1];
+          const stops = Array.from(document.querySelectorAll(${JSON.stringify(GROK_STOP_SELECTOR)}))
+            .filter((el) => !el.disabled && el.getAttribute('aria-disabled') !== 'true');
+          const generating = stops.length > 0;
           if (generating) this.started = true;
           const text = this.extractText(target);
-          if (text) this.pushText(text);
+          if (text) {
+            this.emptySince = 0;
+            this.pushText(text);
+          } else if (!this.emptySince) {
+            this.emptySince = Date.now();
+          }
+
+          // 新 assistant 已出现但一直没有正文（Build 画布/错误横幅/限流）：
+          // 生成结束后 15s 仍为空就显式失败，不能空等 300s。
+          // 文件上传/慢网络会先挂一个空占位节点，5s 会误杀正常回答。
+          if (
+            !text &&
+            !generating &&
+            this.emptySince &&
+            Date.now() - this.emptySince >= 15000
+          ) {
+            this.error = 'Grok response has no text';
+            this.done = true;
+            return;
+          }
 
           const sample = text;
           if ((this.started || text.length > 0) && !generating) {
             if (sample === this.lastSample && text.length > 0) {
               this.stableTicks += 1;
-              if (this.stableTicks >= 10) this.done = true;
+              // 2s 稳定窗口，覆盖 Build/联网引用重排，避免 600ms 就截断。
+              if (this.stableTicks >= 30) this.done = true;
             } else {
               this.lastSample = sample;
               this.stableTicks = 0;
@@ -219,6 +334,13 @@ async function main() {
   // Submit either via inline edit (/rewind) or normal composer input.
   await ensureTaskSpaceControl();
   if (EDIT_INDEX >= 0) {
+    if (FILES.length > 0 || KEEP_FILES.length > 0) {
+      await emit({
+        event: 'error',
+        message: 'Grok /rewind cannot restore attachments; use /new or send without files',
+      });
+      return;
+    }
     const clicked = await js(`
       (() => {
         const users = Array.from(document.querySelectorAll('[data-testid="user-message"]'));
@@ -237,52 +359,31 @@ async function main() {
       return;
     }
     await new Promise((r) => setTimeout(r, 500));
-    const filled = await js(`
-      (() => {
-        const editor = document.querySelector(${JSON.stringify(GROK_EDITOR_SELECTOR)});
-        if (!editor) return false;
-        editor.focus();
-        document.execCommand('selectAll', false, null);
-        document.execCommand('insertText', false, ${JSON.stringify(PROMPT)});
-        editor.dispatchEvent(new Event('input', { bubbles: true }));
-        return true;
-      })()
-    `).catch(() => false);
-    if (!filled) {
-      await emit({ event: 'error', message: 'Grok edit composer not found' });
+    if (!(await fillGrokPrompt())) {
+      await emit({ event: 'error', message: 'Grok edit composer not found or prompt not applied' });
       return;
     }
     await new Promise((r) => setTimeout(r, 300));
-    if (!(await clickGrokSubmit(4000))) {
+    if (!(await submitGrokPrompt(4000))) {
       await emit({ event: 'error', message: 'Failed to submit edited Grok prompt' });
       return;
     }
   } else {
     // 普通发送：清理输入区残留附件，再注入本轮文件；/rewind 明确不支持附件。
     await syncComposerAttachments();
-    const filled = await js(`
-      (() => {
-        const editor = document.querySelector(${JSON.stringify(GROK_EDITOR_SELECTOR)});
-        if (!editor) return false;
-        editor.focus();
-        document.execCommand('selectAll', false, null);
-        document.execCommand('insertText', false, ${JSON.stringify(PROMPT)});
-        editor.dispatchEvent(new Event('input', { bubbles: true }));
-        return true;
-      })()
-    `).catch(() => false);
-    if (!filled) {
-      await emit({ event: 'error', message: 'Grok prompt input not found' });
+    if (!(await fillGrokPrompt())) {
+      await emit({ event: 'error', message: 'Grok prompt input not found or not applied' });
       return;
     }
-    if (!(await clickGrokSubmit(6000))) {
-      await emit({ event: 'error', message: 'Grok send button not available' });
+    if (!(await submitGrokPrompt(6000))) {
+      await emit({ event: 'error', message: 'Grok send button not available or message not submitted' });
       return;
     }
   }
 
   const deadline = Date.now() + 300000;
   let lastHeartbeat = Date.now();
+  let pollFailures = 0;
   while (Date.now() < deadline && !STREAM_ABORTED) {
     await ensureTaskSpaceControl();
     const batch = await js(`
@@ -292,11 +393,33 @@ async function main() {
           return { items: [], done: true, superseded: true };
         }
         s.pollDom();
-        return { items: s.queue.splice(0, s.queue.length), done: s.done, superseded: false };
+        return {
+          items: s.queue.splice(0, s.queue.length),
+          done: s.done,
+          error: s.error || null,
+          superseded: false,
+        };
       })()
-    `).catch(() => ({ items: [], done: false, superseded: false }));
+    `).catch(() => null);
 
-    if (batch && batch.superseded) {
+    if (!batch) {
+      pollFailures += 1;
+      if (pollFailures >= 10) {
+        await emit({ event: 'error', message: 'Grok stream collector unavailable' });
+        return;
+      }
+      await new Promise((r) => setTimeout(r, 100));
+      continue;
+    }
+    pollFailures = 0;
+
+    if (batch.superseded) {
+      await emit({ event: 'error', message: 'Grok stream was superseded by another pane' });
+      return;
+    }
+
+    if (batch.error) {
+      await emit({ event: 'error', message: String(batch.error) });
       return;
     }
 
@@ -319,9 +442,9 @@ async function main() {
     }
 
     if (batch && batch.done) {
-      // 会话 URL 与侧栏标题可能晚于正文完成，短暂重试后回投。
+      // 会话 URL 与侧栏标题可能晚于正文完成，慢网络下多等一会儿再回投。
       let sessionMeta = null;
-      const metaDeadline = Date.now() + 1800;
+      const metaDeadline = Date.now() + 5000;
       while (Date.now() < metaDeadline) {
         sessionMeta = await js(String.raw`
           (() => {
@@ -331,6 +454,7 @@ async function main() {
             const link = Array.from(document.querySelectorAll('a[href^="/c/"]'))
               .find((a) => (a.getAttribute('href') || '').startsWith('/c/' + id));
             let title = link ? (link.innerText || '').trim().replace(/\s+/g, ' ') : '';
+            if (/^new chat$/i.test(title)) title = '';
             if (!title) {
               title = (document.title || '').replace(/\s*-\s*Grok$/i, '').trim();
             }

@@ -284,12 +284,22 @@ fn grok_rewind_with_attachments_is_rejected_and_keeps_messages() {
     assert!(super::super::try_send(&mut state, pane));
     finish(&mut state, pane);
     state.effects.clear();
+    state
+        .pane_mut_anywhere(pane)
+        .expect("pane")
+        .lx
+        .rewind
+        .armed_at = Some(std::time::Instant::now());
 
     draft(&mut state, pane, "/rewind");
     assert!(super::super::try_send(&mut state, pane));
     let target = state.pane_anywhere(pane).expect("pane");
     assert_eq!(target.lx.chat.messages.len(), 2, "拒绝后消息不得被截断");
     assert_eq!(target.lx.ai_web_edit_user_index, None);
+    assert!(
+        target.lx.rewind.armed_at.is_none(),
+        "拒绝后必须清除双 Esc 待命状态"
+    );
     assert_eq!(
         target.lx.toast.as_ref().map(|t| t.message.as_str()),
         Some(text::LX_AI_WEB_GROK_REWIND_ATTACHMENTS)

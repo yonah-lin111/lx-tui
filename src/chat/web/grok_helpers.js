@@ -68,22 +68,57 @@ function parseCitationCards(cardAttachmentsJson) {
   return cards;
 }
 
+function citationMarkdown(url, label) {
+  const raw = String(url || '').trim();
+  if (!/^https?:\/\//i.test(raw)) return '';
+  const safeUrl = raw
+    .replace(/\(/g, '%28')
+    .replace(/\)/g, '%29')
+    .replace(/\s/g, '%20');
+  const safeLabel = String(label || 'source').replace(/[\[\]]/g, '').trim() || 'source';
+  return '[' + safeLabel + '](' + safeUrl + ')';
+}
+
+function citationFromAttrs(attrs, cards) {
+  const id = /card_id\s*=\s*["']([^"']+)["']/i.exec(attrs);
+  const card = id ? cards.get(id[1]) : null;
+  if (!card || !card.url) return '';
+  return citationMarkdown(card.url, citationSourceLabel(card.url));
+}
+
 function replaceGrokCitations(message, cardAttachmentsJson) {
   const cards = parseCitationCards(cardAttachmentsJson);
-  return String(message || '')
-    .replace(/<grok:render\b([^>]*)>[\s\S]*?<\/grok:render>/gi, (_full, attrs, offset, source) => {
-      const id = /card_id\s*=\s*["']([^"']+)["']/i.exec(attrs);
-      const card = id ? cards.get(id[1]) : null;
-      if (!card || !card.url) return '';
-      const url = String(card.url);
+  let out = String(message || '');
+  out = out.replace(
+    /<grok:render\b([^>]*)>[\s\S]*?<\/grok:render>/gi,
+    (_full, attrs, offset, source) => {
+      const link = citationFromAttrs(attrs, cards);
+      if (!link) return '';
       const before = source[offset - 1] || '';
       const gap = before && !/\s/.test(before) ? ' ' : '';
-      return gap + '[' + citationSourceLabel(url) + '](' + url + ')';
-    })
-    .replace(/<grok:render\b[^>]*\/>/gi, '')
+      return gap + link;
+    }
+  );
+  // 自闭合引用同样按 card_id 映射，不能无条件删除而丢掉来源链接。
+  out = out.replace(/<grok:render\b([^>]*)\/>/gi, (_full, attrs, offset, source) => {
+    const link = citationFromAttrs(attrs, cards);
+    if (!link) return '';
+    const before = source[offset - 1] || '';
+    const gap = before && !/\s/.test(before) ? ' ' : '';
+    return gap + link;
+  });
+  // 截断会话可能只剩 <argument> 或未闭合的 <grok:render>；逐类清掉，
+  // 避免把引用编号原样泄漏到 TUI。
+  out = out
+    .replace(/<argument\b[^>]*>[\s\S]*?<\/argument>/gi, '')
+    .replace(/<argument\b[^>]*>/gi, '')
+    .replace(/<\/argument>/gi, '')
+    .replace(/<grok:render\b[^>]*>/gi, '')
+    .replace(/<\/grok:render>/gi, '')
     .replace(/<\/?grok:[^>]*>?/gi, '')
     .replace(/\u2060/g, '')
     .trim();
+  return out;
 }
 
 let STREAM_ABORTED = false;
@@ -200,21 +235,32 @@ async function dismissCookieBanner() {
   `).catch(() => false);
 }
 
-async function grokLoggedIn() {
+async function emitLoginRequired() {
+  await handOffTaskSpace().catch(() => {});
+  await emit({ event: 'login_required', url: HOME });
+}
+
+async function grokLoginState() {
   // Grok 会给匿名访客自动建 userId，只看 cookie 会误判；必须要求 email 非空。
+  // 返回值保留 HTTP 状态：401/200 匿名才是未登录，5xx/网络错误不能伪装成登录墙。
   const state = await js(String.raw`
     (async () => {
       try {
         const res = await fetch('/rest/auth/get-user', { credentials: 'include' });
         if (!res.ok) return { ok: false, status: res.status };
         const user = await res.json();
-        return { ok: Boolean(user && user.email), user };
-      } catch (_) {
-        return { ok: false };
+        const email = Boolean(user && user.email);
+        return { ok: email, anonymous: !email, status: res.status };
+      } catch (error) {
+        return { ok: false, status: -1, message: String((error && error.message) || error) };
       }
     })()
-  `).catch(() => ({ ok: false }));
-  return Boolean(state && state.ok);
+  `).catch((error) => ({
+    ok: false,
+    status: -1,
+    message: String((error && error.message) || error),
+  }));
+  return state && typeof state === 'object' ? state : { ok: false, status: -1 };
 }
 
 async function ensureGrokComposer() {
@@ -232,70 +278,82 @@ async function ensureGrokComposer() {
 
 async function ensureGrokModel() {
   const want = String(MODEL || 'Fast').trim().toLowerCase();
-
-  // 模型按钮可能晚于 ProseMirror 挂载：按截止时间轮询，禁止单次查询误报。
-  const menuDeadline = Date.now() + 15000;
-  let menuOpen = false;
-  while (!menuOpen && Date.now() < menuDeadline) {
-    menuOpen = await js(`
-      (() => {
-        const btn = document.querySelector(${JSON.stringify(GROK_MODEL_BUTTON_SELECTOR)});
-        if (!btn) return false;
-        if (btn.getAttribute('aria-expanded') !== 'true') btn.click();
-        return true;
-      })()
-    `).catch(() => false);
-    if (!menuOpen) {
-      await new Promise((r) => setTimeout(r, 200));
-    }
-  }
-  if (!menuOpen) {
-    throw new Error('Grok model menu not found');
-  }
-  await new Promise((r) => setTimeout(r, 350));
-
-  const picked = await js(`
+  const matches = (value) => {
+    // 按钮标签可能是 "Build\nBeta"；只比较第一段模型名，菜单项仍按完整文本匹配。
+    const first = String(value || '').trim().toLowerCase().split(/\s+/)[0];
+    return first === want;
+  };
+  const buttonLabel = `
     (() => {
-      const want = ${JSON.stringify(want)};
-      const items = Array.from(document.querySelectorAll('[role="menuitemradio"]'));
-      const match = items.find((item) => (item.innerText || '').trim().toLowerCase() === want);
-      if (!match) return { found: false };
-      if (match.getAttribute('aria-checked') !== 'true') {
-        match.click();
-        return { found: true, clicked: true };
-      }
-      return { found: true, clicked: false };
+      const buttons = Array.from(document.querySelectorAll(${JSON.stringify(GROK_MODEL_BUTTON_SELECTOR)}));
+      const btn = buttons.find((b) => b.closest('form')) || buttons[0];
+      return btn ? (btn.innerText || '').trim() : '';
     })()
-  `).catch(() => ({ found: false }));
+  `;
+
+  // 已经是目标模型时不必开关菜单，避免无意义的 350ms 等待和误点其它同名按钮。
+  const current = await js(buttonLabel).catch(() => '');
+  if (matches(current)) return;
+
+  // 按钮和菜单项共用同一个 15s deadline；菜单动画/慢网络不再一次查询就硬失败。
+  const menuDeadline = Date.now() + 15000;
+  let picked = null;
+  while (Date.now() < menuDeadline) {
+    picked = await js(`
+      (() => {
+        const buttons = Array.from(document.querySelectorAll(${JSON.stringify(GROK_MODEL_BUTTON_SELECTOR)}));
+        const btn = buttons.find((b) => b.closest('form')) || buttons[0];
+        if (!btn) return { button: false, found: false };
+        if (btn.getAttribute('aria-expanded') !== 'true') btn.click();
+        const want = ${JSON.stringify(want)};
+        const items = Array.from(document.querySelectorAll('[role="menuitemradio"]'));
+        const match = items.find((item) => (item.innerText || '').trim().toLowerCase() === want);
+        if (!match) return { button: true, found: false };
+        if (match.getAttribute('aria-checked') !== 'true') match.click();
+        return { button: true, found: true, clicked: match.getAttribute('aria-checked') !== 'true' };
+      })()
+    `).catch(() => ({ button: false, found: false }));
+    if (picked && picked.found) break;
+    await new Promise((r) => setTimeout(r, 200));
+  }
   if (!picked || !picked.found) {
     throw new Error('Grok model "' + MODEL + '" not found');
   }
   await new Promise((r) => setTimeout(r, 350));
 
-  // 后置校验：按钮标签必须变成目标模型。
-  const label = await js(`
-    (() => {
-      const btn = document.querySelector(${JSON.stringify(GROK_MODEL_BUTTON_SELECTOR)});
-      return btn ? (btn.innerText || '').trim() : '';
-    })()
-  `).catch(() => '');
-  if (String(label).trim().toLowerCase() !== want) {
+  // 后置校验：按钮标签必须以目标模型开头（Build 会附带 "Beta"）。
+  const label = await js(buttonLabel).catch(() => '');
+  if (!matches(label)) {
     throw new Error('Grok model "' + MODEL + '" was not applied');
   }
 
   // 已选中时菜单不会自动收起，避免遮罩挡住后续输入。
   await js(`
     (() => {
-      const btn = document.querySelector(${JSON.stringify(GROK_MODEL_BUTTON_SELECTOR)});
+      const buttons = Array.from(document.querySelectorAll(${JSON.stringify(GROK_MODEL_BUTTON_SELECTOR)}));
+      const btn = buttons.find((b) => b.closest('form')) || buttons[0];
       if (btn && btn.getAttribute('aria-expanded') === 'true') btn.click();
       return true;
     })()
   `).catch(() => {});
 }
 
+async function grokAttachmentCount() {
+  return await js(`
+    (() => document.querySelectorAll(${JSON.stringify(GROK_ATTACHMENT_CHIP_SELECTOR)}).length)()
+  `).catch(() => -1);
+}
+
 async function syncComposerAttachments() {
   // 只清理输入框 <form> 内的附件 chip，绝不触碰消息气泡里的附件。
-  for (let round = 0; round < 5; round += 1) {
+  // 必须删到 0 个再上传；固定轮数会漏掉第 6 个及以后的残留附件。
+  const clearDeadline = Date.now() + 10000;
+  while (Date.now() < clearDeadline) {
+    const count = await grokAttachmentCount();
+    if (count === 0) break;
+    if (count < 0) {
+      throw new Error('Grok attachment list not accessible');
+    }
     const removed = await js(`
       (() => {
         const lists = Array.from(
@@ -315,8 +373,14 @@ async function syncComposerAttachments() {
         return false;
       })()
     `).catch(() => false);
-    if (!removed) break;
+    if (!removed) {
+      throw new Error('Grok attachment remove button not found');
+    }
     await new Promise((r) => setTimeout(r, 180));
+  }
+  const remaining = await grokAttachmentCount();
+  if (remaining !== 0) {
+    throw new Error('Grok could not clear existing attachments (chips=' + remaining + ')');
   }
 
   if (FILES.length === 0) return;
@@ -355,14 +419,17 @@ async function syncComposerAttachments() {
         const inputFiles = input && input.files ? input.files.length : 0;
         return { chips, inputFiles };
       })()
-    `).catch(() => ({ chips: 0, inputFiles: 0 }));
+    `).catch(() => ({ chips: -1, inputFiles: -1 }));
     lastCount = state.chips;
     lastInputFiles = state.inputFiles;
-    if (lastCount >= FILES.length) return;
+    // 清理后应为 0；上传完成后必须正好是本轮文件数，不能把旧 chip 当成新文件。
+    if (lastCount === FILES.length) return;
   }
   throw new Error(
     'Timed out waiting for Grok file upload (chips=' +
       lastCount +
+      ', expected=' +
+      FILES.length +
       ', inputFiles=' +
       lastInputFiles +
       ')'
@@ -437,7 +504,7 @@ async function runNonChatAction(currentUrl) {
       })()
     `).catch(() => ({ status: -1, ok: false, message: 'Grok session list request failed' }));
     if (result && result.status === 401) {
-      await emit({ event: 'login_required', url: HOME });
+      await emitLoginRequired();
       return;
     }
     if (!result || !result.ok) {
@@ -531,7 +598,7 @@ async function runNonChatAction(currentUrl) {
       })()
     `).catch(() => ({ status: -1, ok: false, message: 'Grok session load request failed' }));
     if (result && result.status === 401) {
-      await emit({ event: 'login_required', url: HOME });
+      await emitLoginRequired();
       return;
     }
     if (!result || !result.ok) {
@@ -545,7 +612,10 @@ async function runNonChatAction(currentUrl) {
       role: m.role,
       thinking: m.thinking,
       thinking_ms: m.thinking_ms,
-      text: replaceGrokCitations(m.text, m.cardAttachmentsJson),
+      text:
+        m.role === 'assistant'
+          ? replaceGrokCitations(m.text, m.cardAttachmentsJson)
+          : m.text,
       files: m.files,
       created_at_ms: m.created_at_ms,
     }));
@@ -587,7 +657,7 @@ async function runNonChatAction(currentUrl) {
       })()
     `).catch(() => ({ status: -1, ok: false, message: 'Grok rename request failed' }));
     if (result && result.status === 401) {
-      await emit({ event: 'login_required', url: HOME });
+      await emitLoginRequired();
       return;
     }
     if (!result || !result.ok) {
@@ -620,7 +690,7 @@ async function runNonChatAction(currentUrl) {
       })()
     `).catch(() => ({ status: -1, ok: false, message: 'Grok delete request failed' }));
     if (result && result.status === 401) {
-      await emit({ event: 'login_required', url: HOME });
+      await emitLoginRequired();
       return;
     }
     if (!result || !result.ok) {

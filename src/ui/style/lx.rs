@@ -304,6 +304,14 @@ fn lerp_indexed(from: Color, to: Color, t: f32) -> Color {
     let (Color::Indexed(a), Color::Indexed(b)) = (from, to) else {
         return if t < 0.5 { from } else { to };
     };
+    // 232..=255 是 256 色灰阶段，不是 cube；按灰阶序号插值，避免 Grok 的
+    // 255→250 被退化成“前段 255、后段 250”的硬切换。
+    if (232..=255).contains(&a) && (232..=255).contains(&b) {
+        let mixed = (f32::from(a) + (f32::from(b) - f32::from(a)) * t)
+            .round()
+            .clamp(232.0, 255.0) as u8;
+        return Color::Indexed(mixed);
+    }
     let (Some(rgb_a), Some(rgb_b)) = (cube_rgb(a), cube_rgb(b)) else {
         return if t < 0.5 { from } else { to };
     };

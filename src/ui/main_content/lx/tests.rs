@@ -281,6 +281,16 @@ fn ai_web_entry_replaces_inventory_with_three_sites_and_brand_gradients() {
     assert_eq!(buf[(gm_rect.x, gm_rect.y + 1)].symbol(), " ");
     assert_eq!(buf[(gk_rect.x, gk_rect.y)].fg, Color::Indexed(255));
     assert_eq!(
+        buf[(gk_rect.x + 1, gk_rect.y)].fg,
+        Color::Indexed(253),
+        "Grok 渐变第二个字符必须是灰阶插值，而不是硬切到 250"
+    );
+    assert_eq!(
+        buf[(gk_rect.x + 2, gk_rect.y)].fg,
+        Color::Indexed(252),
+        "Grok 渐变第三个字符必须是灰阶插值，而不是硬切到 250"
+    );
+    assert_eq!(
         buf[(gk_rect.x + gk_rect.width - 1, gk_rect.y)].fg,
         Color::Indexed(250),
         "Grok 标签末端必须落在白到浅灰的渐变终点"
@@ -314,8 +324,8 @@ fn ai_web_entry_replaces_inventory_with_three_sites_and_brand_gradients() {
 
 #[test]
 fn narrow_ai_web_site_row_keeps_three_sites_visible_and_hittable() {
-    // 最小可容纳三站点（3 个字符 + 2 个 3 列间隔 = 9）的窗格宽度起。
-    for width in [10, 12, 16] {
+    // 窄窗格把站点间隔降为 1：8 列即可放下 3 个 2 字符标签。
+    for width in [8, 9, 10, 12, 16] {
         let rect = Rect::new(0, 0, width, 2);
         let placed = brand::place_ai_web_sites(rect);
         assert_eq!(placed.len(), 3, "width={width} 必须同时放下三个站点");
@@ -334,6 +344,16 @@ fn narrow_ai_web_site_row_keeps_three_sites_visible_and_hittable() {
                 pair[0].1.right() <= pair[1].1.x,
                 "width={width} 相邻站点不得重叠"
             );
+        }
+        let labels: Vec<String> = placed
+            .iter()
+            .map(|(site, site_rect)| brand::ai_web_site_label_for_width(*site, site_rect.width))
+            .collect();
+        if width == 8 {
+            assert_eq!(labels, vec!["De", "Ge", "Gr"], "width=8 标签");
+        }
+        if width == 10 {
+            assert_eq!(labels, vec!["Dee", "Gem", "Gr"], "width=10 标签");
         }
     }
 }

@@ -322,6 +322,7 @@ pub fn rewind_ai_web(state: &mut AppState, pane: PaneId) -> bool {
             .is_empty()
     {
         if let Some(target) = state.pane_mut_anywhere(pane) {
+            target.lx.clear_rewind();
             target.lx.slash = None;
         }
         super::session::show_lx_hint(

@@ -357,12 +357,6 @@ fn parse_chat(args: &[String]) -> Result<WebCommand, String> {
         }
         None => (site_opt.unwrap_or_default(), None, None),
     };
-    if site == AiWebSite::Grok
-        && edit_user_index.is_some()
-        && (!files.is_empty() || !keep_files.is_empty())
-    {
-        return Err(text::LX_AI_WEB_GROK_REWIND_ATTACHMENTS.to_string());
-    }
     if edit_user_index.is_some() && session_id.is_none() {
         return Err(format!(
             "option '--edit-index' requires '--session <SESSION_ID>'; run '{help_cmd} --help' for usage"
@@ -377,6 +371,14 @@ fn parse_chat(args: &[String]) -> Result<WebCommand, String> {
         return Err(format!(
             "option '--keep-file' requires '--edit-index'; run '{help_cmd} --help' for usage"
         ));
+    }
+    // 结构校验之后再拦显式附件；内联 @[refer-file]/@path 在 exec_chat 的 prepare
+    // 之后还有一层检查，避免只看 flag 被绕过。
+    if site == AiWebSite::Grok
+        && edit_user_index.is_some()
+        && (!files.is_empty() || !keep_files.is_empty())
+    {
+        return Err(text::LX_AI_WEB_GROK_REWIND_ATTACHMENTS.to_string());
     }
     let (model, thinking) =
         resolve_model_and_thinking(site, model_opt.as_deref(), thinking_opt.as_deref())?;

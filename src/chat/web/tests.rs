@@ -111,6 +111,7 @@ fn scripts_for_site_returns_deepseek_gemini_and_grok_driver_bundles() {
     assert!(ds_main.contains("ds-toggle-button"));
     assert!(ds_main.contains("ds-markdown-cite"));
     assert!(ds_main.contains("readMarkdownText"));
+    assert!(ds_main.contains("this.cleanText(el.innerText || '', false)"));
     assert!(ds_main.contains("await ensureTaskSpaceControl()"));
     assert!(ds_helpers.contains("citation|reference"));
     assert!(ds_helpers.contains("[^\\\\]]*"));
@@ -132,11 +133,43 @@ fn scripts_for_site_returns_deepseek_gemini_and_grok_driver_bundles() {
     assert!(gk_helpers.contains("replaceGrokCitations"));
     assert!(gk_helpers.contains("cardAttachmentsJson"));
     assert!(gk_helpers.contains("grok:render"));
+    assert!(gk_helpers.contains("grokAttachmentCount"));
+    assert!(gk_helpers.contains("emitLoginRequired"));
+    assert!(gk_helpers.contains("citationMarkdown"));
     assert!(gk_main.contains("__lxGrokStream"));
     assert!(gk_main.contains("ensureGrokComposer"));
     assert!(gk_main.contains("stripGrokDirectives"));
+    assert!(gk_main.contains("baselineAssistants"));
+    assert!(gk_main.contains("fillGrokPrompt"));
+    assert!(gk_main.contains("submitGrokPrompt"));
+    assert!(gk_main.contains("Grok response has no text"));
+    assert!(gk_main.contains("Grok stream was superseded by another pane"));
     assert!(gk_main.contains("await activateTaskSpace()"));
     assert!(gk_main.contains("await ensureTaskSpaceControl()"));
+}
+
+#[test]
+fn grok_script_source_escapes_prompt_and_keeps_thinking_empty() {
+    let evil = "quote\" backtick` dollar${x}\nline</script>";
+    let source = script_source(
+        crate::app::state::AiWebSite::Grok,
+        ScriptParams {
+            action: "chat",
+            model: Some("Build"),
+            thinking: Some(""),
+            prompt: Some(evil),
+            ..Default::default()
+        },
+    );
+    assert!(source.contains(&serde_json::to_string(evil).expect("json prompt")));
+    assert!(
+        source.contains("thinking: \"\","),
+        "Grok must inject empty thinking"
+    );
+    assert!(
+        source.contains("model: \"Build\","),
+        "Grok Build model must be injected"
+    );
 }
 
 #[test]

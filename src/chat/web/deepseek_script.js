@@ -445,13 +445,15 @@ async function main() {
           const readMarkdownText = (el) => {
             if (!el) return '';
             const hidden = [];
-            el.querySelectorAll('.ds-markdown-cite').forEach((node) => {
-              hidden.push([node, node.style.display]);
-              node.style.display = 'none';
-            });
-            const out = el.innerText || '';
-            for (const [node, prev] of hidden) node.style.display = prev;
-            return out;
+            try {
+              el.querySelectorAll('.ds-markdown-cite').forEach((node) => {
+                hidden.push([node, node.style.display]);
+                node.style.display = 'none';
+              });
+              return this.cleanText(el.innerText || '', false);
+            } finally {
+              for (const [node, prev] of hidden) node.style.display = prev;
+            }
           };
           const think = target.querySelector('.ds-think-content');
           const text = target.querySelector('.ds-markdown');
