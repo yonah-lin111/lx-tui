@@ -103,7 +103,7 @@ fn parses_session_events() {
 }
 
 #[test]
-fn scripts_for_site_returns_deepseek_and_gemini_driver_bundles() {
+fn scripts_for_site_returns_deepseek_gemini_and_grok_driver_bundles() {
     let (ds_helpers, ds_main) = scripts_for_site(crate::app::state::AiWebSite::Deepseek);
     assert!(ds_helpers.contains("lx-tui-ai-web-deepseek"));
     assert!(ds_helpers.contains("takeOverTaskSpace"));
@@ -119,6 +119,16 @@ fn scripts_for_site_returns_deepseek_and_gemini_driver_bundles() {
     assert!(gm_main.contains("__lxGeminiStream"));
     assert!(gm_main.contains("await activateTaskSpace()"));
     assert!(gm_main.contains("await ensureTaskSpaceControl()"));
+
+    let (gk_helpers, gk_main) = scripts_for_site(crate::app::state::AiWebSite::Grok);
+    assert!(gk_helpers.contains("lx-tui-ai-web-grok"));
+    assert!(gk_helpers.contains("chat-submit"));
+    assert!(gk_helpers.contains("takeOverTaskSpace"));
+    assert!(gk_helpers.contains("claimTaskSpace"));
+    assert!(gk_main.contains("__lxGrokStream"));
+    assert!(gk_main.contains("ensureGrokComposer"));
+    assert!(gk_main.contains("await activateTaskSpace()"));
+    assert!(gk_main.contains("await ensureTaskSpaceControl()"));
 }
 
 #[test]

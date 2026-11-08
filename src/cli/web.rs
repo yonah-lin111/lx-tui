@@ -1,4 +1,4 @@
-//! `lx-tui web`：无头驱动网页端 AI 站点（DeepSeek / Gemini）的模型查询、流式对话、附件上传、`/rewind` 原地修改与云端会话管理。
+//! `lx-tui web`：无头驱动网页端 AI 站点（DeepSeek / Gemini / Grok）的模型查询、流式对话、附件上传、`/rewind` 原地修改与云端会话管理。
 
 mod exec;
 
@@ -7,7 +7,8 @@ use std::io::IsTerminal;
 use std::path::PathBuf;
 
 use crate::app::state::{
-    AiWebSite, DeepseekThinkingMode, GeminiThinkingLevel, GeminiWebModel, ai_web_remote_session,
+    AiWebSite, DeepseekThinkingMode, GeminiThinkingLevel, GeminiWebModel, GrokWebModel,
+    ai_web_remote_session,
 };
 use crate::cli::args::{
     GlobalOpts, extract_global_opts, parse_usize_flag, reject_unknown_flag, required_non_empty,
@@ -26,7 +27,7 @@ pub struct WebCli {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum WebCommand {
-    /// 列出双站点支持的模型、思考等级、默认值与会话 ID 前缀。
+    /// 列出三站点支持的模型、思考等级、默认值与会话 ID 前缀。
     Models { site: Option<AiWebSite> },
     /// 发送消息或对历史轮次执行 `/rewind` 原地修改（`action = "chat"`）。
     Chat {
@@ -106,8 +107,9 @@ pub fn parse_site(raw: &str) -> Result<AiWebSite, String> {
     match raw.trim().to_ascii_lowercase().as_str() {
         "deepseek" | "ds" => Ok(AiWebSite::Deepseek),
         "gemini" | "gm" => Ok(AiWebSite::Gemini),
+        "grok" | "gk" => Ok(AiWebSite::Grok),
         other => Err(format!(
-            "invalid '--site' value '{other}'; expected 'deepseek' or 'gemini'"
+            "invalid '--site' value '{other}'; expected 'deepseek', 'gemini', or 'grok'"
         )),
     }
 }
@@ -116,6 +118,7 @@ pub fn site_key(site: AiWebSite) -> &'static str {
     match site {
         AiWebSite::Deepseek => "deepseek",
         AiWebSite::Gemini => "gemini",
+        AiWebSite::Grok => "grok",
     }
 }
 
@@ -179,6 +182,24 @@ pub fn resolve_model_and_thinking(
                 None => GeminiThinkingLevel::default().id().to_string(),
             };
             Ok((model, thinking))
+        }
+        AiWebSite::Grok => {
+            let model = match model_opt {
+                Some(raw) => GrokWebModel::from_id(raw)
+                    .ok_or_else(|| {
+                        format!(
+                            "invalid '--model' value '{}' for Grok; expected 'Fast' or 'Build'",
+                            raw.trim()
+                        )
+                    })?
+                    .id()
+                    .to_string(),
+                None => GrokWebModel::default().id().to_string(),
+            };
+            if thinking_opt.is_some() {
+                return Err("Grok has no thinking variants; omit '--thinking'".to_string());
+            }
+            Ok((model, String::new()))
         }
     }
 }
@@ -336,6 +357,12 @@ fn parse_chat(args: &[String]) -> Result<WebCommand, String> {
         }
         None => (site_opt.unwrap_or_default(), None, None),
     };
+    if site == AiWebSite::Grok
+        && edit_user_index.is_some()
+        && (!files.is_empty() || !keep_files.is_empty())
+    {
+        return Err(text::LX_AI_WEB_GROK_REWIND_ATTACHMENTS.to_string());
+    }
     if edit_user_index.is_some() && session_id.is_none() {
         return Err(format!(
             "option '--edit-index' requires '--session <SESSION_ID>'; run '{help_cmd} --help' for usage"

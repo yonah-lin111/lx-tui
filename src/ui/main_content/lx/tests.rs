@@ -196,7 +196,7 @@ fn wide_page_renders_brand_entries_and_input() {
 }
 
 #[test]
-fn ai_web_entry_replaces_inventory_with_deepseek_and_gemini_sites_and_brand_gradients() {
+fn ai_web_entry_replaces_inventory_with_three_sites_and_brand_gradients() {
     let area = Rect::new(0, 0, 100, 60);
     let mut lx = Lx::new();
     lx.entry = LxEntry::AiWeb;
@@ -205,6 +205,7 @@ fn ai_web_entry_replaces_inventory_with_deepseek_and_gemini_sites_and_brand_grad
     let text = buffer_text(&buf);
     assert!(text.contains("DeepSeek"), "{text}");
     assert!(text.contains("Gemini"), "{text}");
+    assert!(text.contains("Grok"), "{text}");
     assert!(!text.contains("AI Web"), "{text}");
     assert!(text.contains("chat directly with web AI models"), "{text}");
     assert!(!text.contains("AGENTS.md"), "{text}");
@@ -214,7 +215,7 @@ fn ai_web_entry_replaces_inventory_with_deepseek_and_gemini_sites_and_brand_grad
     let inventory = layout(area, &lx).inventory.expect("site row");
     assert_eq!(inventory.height, 2, "站点行包含标签行 + 选中下划线行");
     let placed = brand::place_ai_web_sites(inventory);
-    assert_eq!(placed.len(), 2);
+    assert_eq!(placed.len(), 3);
     let (_, ds_rect) = placed
         .iter()
         .find(|(site, _)| *site == AiWebSite::Deepseek)
@@ -225,7 +226,15 @@ fn ai_web_entry_replaces_inventory_with_deepseek_and_gemini_sites_and_brand_grad
         .find(|(site, _)| *site == AiWebSite::Gemini)
         .copied()
         .expect("gemini site");
-    assert!(ds_rect.x < gm_rect.x, "Gemini 排在 DeepSeek 右侧");
+    let (_, gk_rect) = placed
+        .iter()
+        .find(|(site, _)| *site == AiWebSite::Grok)
+        .copied()
+        .expect("grok site");
+    assert!(
+        ds_rect.x < gm_rect.x && gm_rect.x < gk_rect.x,
+        "顺序必须是 DeepSeek · Gemini · Grok"
+    );
 
     assert_eq!(
         ai_web_site_hit(area, &lx, ds_rect.x, ds_rect.y),
@@ -235,8 +244,12 @@ fn ai_web_entry_replaces_inventory_with_deepseek_and_gemini_sites_and_brand_grad
         ai_web_site_hit(area, &lx, gm_rect.x, gm_rect.y),
         Some(AiWebSite::Gemini)
     );
+    assert_eq!(
+        ai_web_site_hit(area, &lx, gk_rect.x, gk_rect.y),
+        Some(AiWebSite::Grok)
+    );
 
-    // 默认选中 DeepSeek：DeepSeek 加粗且 y+1 有 `─` 下划线，Gemini 保持品牌渐变但无下划线。
+    // 默认选中 DeepSeek：DeepSeek 加粗且 y+1 有 `─` 下划线，其它站点保持品牌渐变但无下划线。
     assert_eq!(buf[(ds_rect.x, ds_rect.y)].fg, Color::Indexed(63));
     assert_eq!(
         buf[(ds_rect.x + ds_rect.width - 1, ds_rect.y)].fg,
@@ -266,17 +279,33 @@ fn ai_web_entry_replaces_inventory_with_deepseek_and_gemini_sites_and_brand_grad
             .contains(ratatui::style::Modifier::BOLD)
     );
     assert_eq!(buf[(gm_rect.x, gm_rect.y + 1)].symbol(), " ");
-
-    // 切换到 Gemini：Gemini 加粗且 y+1 出现同品牌渐变下划线。
-    lx.ai_web_site = AiWebSite::Gemini;
-    let mut buf2 = Buffer::empty(area);
-    let _ = render(area, &mut buf2, &lx, true, None, &mut PaneCache::default());
+    assert_eq!(buf[(gk_rect.x, gk_rect.y)].fg, Color::Indexed(255));
+    assert_eq!(
+        buf[(gk_rect.x + gk_rect.width - 1, gk_rect.y)].fg,
+        Color::Indexed(250),
+        "Grok 标签末端必须落在白到浅灰的渐变终点"
+    );
     assert!(
-        buf2[(gm_rect.x, gm_rect.y)]
+        !buf[(gk_rect.x, gk_rect.y)]
             .modifier
             .contains(ratatui::style::Modifier::BOLD)
     );
-    assert_eq!(buf2[(gm_rect.x, gm_rect.y + 1)].symbol(), "─");
+    assert_eq!(buf[(gk_rect.x, gk_rect.y + 1)].symbol(), " ");
+
+    // 切换到 Grok：Grok 加粗且 y+1 出现同品牌渐变下划线。
+    lx.ai_web_site = AiWebSite::Grok;
+    let mut buf2 = Buffer::empty(area);
+    let _ = render(area, &mut buf2, &lx, true, None, &mut PaneCache::default());
+    assert!(
+        buf2[(gk_rect.x, gk_rect.y)]
+            .modifier
+            .contains(ratatui::style::Modifier::BOLD)
+    );
+    assert_eq!(buf2[(gk_rect.x, gk_rect.y + 1)].symbol(), "─");
+    assert_eq!(
+        buf2[(gk_rect.x + gk_rect.width - 1, gk_rect.y + 1)].fg,
+        Color::Indexed(250)
+    );
     assert_eq!(buf2[(ds_rect.x, ds_rect.y + 1)].symbol(), " ");
 
     lx.entry = LxEntry::Native;
@@ -284,12 +313,12 @@ fn ai_web_entry_replaces_inventory_with_deepseek_and_gemini_sites_and_brand_grad
 }
 
 #[test]
-fn narrow_ai_web_site_row_keeps_both_sites_visible_and_hittable() {
-    // 最小窗格内容宽度附近：不能只留下 DeepSeek 而把 Gemini 整行裁掉。
-    for width in [8, 10, 12, 16] {
+fn narrow_ai_web_site_row_keeps_three_sites_visible_and_hittable() {
+    // 最小可容纳三站点（3 个字符 + 2 个 3 列间隔 = 9）的窗格宽度起。
+    for width in [10, 12, 16] {
         let rect = Rect::new(0, 0, width, 2);
         let placed = brand::place_ai_web_sites(rect);
-        assert_eq!(placed.len(), 2, "width={width} 必须同时放下两个站点");
+        assert_eq!(placed.len(), 3, "width={width} 必须同时放下三个站点");
         for (_, site_rect) in &placed {
             assert!(site_rect.width > 0, "width={width} 站点宽度必须大于 0");
             assert!(
@@ -299,10 +328,13 @@ fn narrow_ai_web_site_row_keeps_both_sites_visible_and_hittable() {
         }
         assert_eq!(placed[0].0, AiWebSite::Deepseek);
         assert_eq!(placed[1].0, AiWebSite::Gemini);
-        assert!(
-            placed[0].1.right() <= placed[1].1.x,
-            "width={width} 两个站点不得重叠"
-        );
+        assert_eq!(placed[2].0, AiWebSite::Grok);
+        for pair in placed.windows(2) {
+            assert!(
+                pair[0].1.right() <= pair[1].1.x,
+                "width={width} 相邻站点不得重叠"
+            );
+        }
     }
 }
 

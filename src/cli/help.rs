@@ -92,7 +92,7 @@ Usage:
 
 Commands:
   exec        Run lx agent non-interactively in the terminal
-  web         Drive Web AI sites (DeepSeek / Gemini) via ego-browser
+  web         Drive Web AI sites (DeepSeek / Gemini / Grok) via ego-browser
   session     List, inspect, rename, delete, fork, rewind, or compact chat sessions
   prompt      Manage workspace prompts, folders, pages, and referenced directories
   todo        Manage daily todos, priorities, rollovers, and completion stats
@@ -402,31 +402,33 @@ Global Options:
 ";
 
 const WEB_HELP: &str = "\
-Drive Web AI sites (DeepSeek / Gemini) via ego-browser
+Drive Web AI sites (DeepSeek / Gemini / Grok) via ego-browser
 
 Usage:
   lx-tui web <SUBCOMMAND> [OPTIONS]
 
 Subcommands:
-  models [--site <deepseek|gemini>]
+  models [--site <deepseek|gemini|grok>]
       List available Web models, thinking variants, defaults, and session prefixes
-  chat [<PROMPT>] [--site <deepseek|gemini>] [-m, --model <MODEL>]
+  chat [<PROMPT>] [--site <deepseek|gemini|grok>] [-m, --model <MODEL>]
        [-t, --thinking <THINKING>] [-s, --session <SESSION_ID>] [--first-turn]
        [--edit-index <N>] [--file <PATH>...] [--keep-file <NAME>...]
-      Send a message or inline-edit a previous turn (/rewind) on DeepSeek or Gemini
+      Send a message or inline-edit a previous turn (/rewind) on DeepSeek, Gemini, or Grok
+      Grok supports --model Fast|Build and has no thinking variants
+      For Grok, --edit-index appends a retry turn because Grok web has no in-place edit
       --edit-index requires --session; --keep-file requires --edit-index;
       --first-turn cannot be combined with --session or --edit-index
-  new [--site <deepseek|gemini>]
+  new [--site <deepseek|gemini|grok>]
       Reset the target Web site to a fresh conversation (/new)
-  stop [--site <deepseek|gemini>]
+  stop [--site <deepseek|gemini|grok>]
       Stop the active generation stream on the target Web site
-  list [--site <deepseek|gemini>] [--limit <N>]
-      List cloud sessions on DeepSeek or Gemini (/resume)
-  show <SESSION_ID> [--site <deepseek|gemini>] [--thinking]
+  list [--site <deepseek|gemini|grok>] [--limit <N>]
+      List cloud sessions on DeepSeek, Gemini, or Grok (/resume)
+  show <SESSION_ID> [--site <deepseek|gemini|grok>] [--thinking]
       Load and display all messages of a cloud session (/resume)
-  rename <SESSION_ID> <NEW_TITLE> [--site <deepseek|gemini>]
+  rename <SESSION_ID> <NEW_TITLE> [--site <deepseek|gemini|grok>]
       Rename a cloud session (/rename)
-  delete <SESSION_ID> [--site <deepseek|gemini>]
+  delete <SESSION_ID> [--site <deepseek|gemini|grok>]
       Delete a cloud session
 
 Global Options:

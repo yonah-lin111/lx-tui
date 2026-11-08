@@ -247,6 +247,8 @@ pub fn ai_web_site_gradient(site: AiWebSite) -> (Color, Color) {
     match site {
         AiWebSite::Deepseek => (Color::Indexed(63), Color::Indexed(39)),
         AiWebSite::Gemini => (Color::Indexed(69), Color::Indexed(204)),
+        // Grok / xAI 黑白品牌：近白到浅灰。
+        AiWebSite::Grok => (Color::Indexed(255), Color::Indexed(250)),
     }
 }
 
