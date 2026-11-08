@@ -246,6 +246,7 @@ fn render_blocks_stateful(
                 if !gap_emitted && (state.emitted_any || !lines.is_empty()) {
                     lines.push(MdLine::spans(0, Vec::new()));
                 }
+                lines.push(code_block::top_border_line(width));
                 lines.push(code_block::header_line(lang, block_index, width));
             }
             state.open_fence_lang = Some(lang.to_string());
@@ -417,6 +418,7 @@ fn indented_code(
         index += 1;
     }
     if code_chrome {
+        lines.push(code_block::top_border_line(width));
         lines.push(code_block::header_line("", block_index, width));
     }
     for line in &body {
@@ -764,7 +766,10 @@ pub(crate) fn md_bytes(lines: &[MdLine]) -> usize {
 /// 优先在空白/汉字边界断行（对齐 opencode/主流 agent 的 word wrap），
 /// 单个超宽字符单独成行；供表格外的段落/列表/引用/代码使用。
 fn wrap_md_line(line: &MdLine, width: usize, out: &mut Vec<MdLine>) {
-    if matches!(line.code, Some(CodeLineKind::Header { .. })) {
+    if matches!(
+        line.code,
+        Some(CodeLineKind::TopBorder | CodeLineKind::Header { .. })
+    ) {
         out.push(line.clone());
         return;
     }

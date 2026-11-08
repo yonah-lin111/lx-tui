@@ -2083,7 +2083,7 @@ fn lx_input_highlights_inline_code_and_list_markers() {
 
 #[test]
 fn code_block_renders_left_bar_with_lang_and_copy_button() {
-    // 助手正文代码块采用轻量单栏：左侧 `▎`、内部首行左侧语言名与右侧 `[❐]`，不再画整行顶边。
+    // 助手正文代码块：顶部 `▂` 边框 + 下一行 `─ js ─── [❐] ─` 头部 + 正文左侧 `▎`。
     let area = Rect::new(0, 0, 60, 24);
     let mut lx = Lx::new();
     let mut chat = LxChat::new();
@@ -2120,14 +2120,9 @@ fn code_block_renders_left_bar_with_lang_and_copy_button() {
     let mut buf = Buffer::empty(area);
     let _ = render(area, &mut buf, &lx, false, None, &mut PaneCache::default());
     let text = buffer_text(&buf);
-    assert!(
-        !text
-            .lines()
-            .any(|line| !line.is_empty() && line.chars().all(|ch| ch == '▂')),
-        "不再绘制整行 `▂` 顶边：{text}"
-    );
-    assert!(text.contains("▂ js "), "首行左侧显示语言名：{text}");
-    assert!(text.contains("[❐]"), "首行右侧显示 `[❐]` 复制按钮：{text}");
+    assert!(text.contains("▂▂▂▂▂▂"), "顶部 `▂` 边框：{text}");
+    assert!(text.contains("─ js "), "头部左侧显示语言名：{text}");
+    assert!(text.contains("[❐]"), "头部右侧显示 `[❐]` 复制按钮：{text}");
     assert!(
         text.contains("▎const a = 1;"),
         "代码正文带左侧 `▎` 单栏：{text}"

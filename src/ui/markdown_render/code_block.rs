@@ -1,8 +1,8 @@
-//! 面向阅读的 Markdown 代码块左侧栏、头部复制按钮布局与源码提取。
+//! 面向阅读的 Markdown 代码块边框装饰、头部复制按钮布局与源码提取。
 //!
-//! 采用轻量单栏结构，避免整行粗边框压过语法高亮：
-//! - 每个代码行（含软换行续行）首列绘制左 1/4 块 `▎`（[`text::CODE_BLOCK_BAR`]），样式 [`style::md_read_rule`]；
-//! - 内部第一行头部是一条规则线：`▂ <lang> ▂▂▂▂▂ <复制按钮> ▂`（语言缺省 `text`，按钮右对齐）。
+//! - 顶部独立一行铺满下 1/4 块 `▂`（[`text::CODE_BLOCK_TOP_BORDER`]），样式 [`style::md_read_rule`]；
+//! - 下一行头部是一条规则线：`─ <lang> ───── <复制按钮> ─`（语言缺省 `text`，按钮右对齐）；
+//! - 代码正文每个视觉行（含软换行续行）首列绘制左 1/4 块 `▎`（[`text::CODE_BLOCK_BAR`]）。
 
 use ratatui::style::Style;
 use unicode_width::UnicodeWidthChar;
@@ -14,10 +14,12 @@ use super::{MdLine, display_width, highlight, is_indented_code, list_item};
 /// 无语言标记或 4 空格缩进代码块的默认语言标签。
 pub const DEFAULT_CODE_LANG: &str = "text";
 
-/// 代码块单条渲染行的角色（仅在助手正文启用代码块左侧栏时附着于 [`MdLine`]）。
+/// 代码块单条渲染行的角色（仅在助手正文启用代码块边框装饰时附着于 [`MdLine`]）。
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum CodeLineKind {
-    /// 内部第一行头部：`▂ <lang> ▂▂▂▂▂ [❐] ▂` 规则线，语言名在左、复制按钮在右。
+    /// 顶部边框行（整行铺满 `▂`）。
+    TopBorder,
+    /// 顶部边框下一行的头部：`─ <lang> ───── [❐] ─` 规则线，语言名在左、复制按钮在右。
     Header {
         /// 当前 Markdown 文本块内的代码块序号（0-based，与 [`extract_code_block`] 一致）。
         block_index: usize,
@@ -28,17 +30,31 @@ pub enum CodeLineKind {
     Body,
 }
 
-/// 构造代码块内部第一行头部：`▂ <lang> ▂▂▂▂▂ [❐] ▂`。
+/// 构造代码块顶部边框行（整行铺满 `▂`）。
+pub(super) fn top_border_line(width: Option<usize>) -> MdLine {
+    let cols = width.unwrap_or(40).max(1);
+    MdLine {
+        indent: 0,
+        hang: 0,
+        spans: vec![(
+            text::CODE_BLOCK_TOP_BORDER.repeat(cols),
+            style::md_read_rule(),
+        )],
+        table: None,
+        code: Some(CodeLineKind::TopBorder),
+    }
+}
+
+/// 构造代码块头部：`─ <lang> ───── [❐] ─`。
 ///
-/// 两端固定为 `▂ ` 与 ` ▂`，语言名与按钮之间的空余宽度用 `▂` 铺满；
-/// 规则线沿用 prompt 模板块顶部边框的 1/4 块宽度；
+/// 两端固定为 `─ ` 与 ` ─`，语言名与按钮之间的空余宽度用 `─` 铺满；
 /// 极窄时先压缩语言名（超出以 `…` 截断），再压缩规则填充。
 pub(super) fn header_line(lang: &str, block_index: usize, width: Option<usize>) -> MdLine {
     let cols = width.unwrap_or(40).max(1);
     let label = normalize_lang_label(lang);
     let btn = text::TEMPLATE_BUTTON_COPY;
     let btn_w = display_width(btn);
-    // 固定开销：`▂ ` + 语言后空格 + 按钮前空格 + 按钮 + ` ▂`。
+    // 固定开销：`─ ` + 语言后空格 + 按钮前空格 + 按钮 + ` ─`。
     let fixed = 2 + 1 + 1 + btn_w + 2;
     let rule = style::md_read_rule();
 
@@ -66,17 +82,17 @@ pub(super) fn header_line(lang: &str, block_index: usize, width: Option<usize>) 
     let btn_end = btn_start + btn_w;
 
     let mut spans = Vec::with_capacity(7);
-    spans.push((format!("{} ", text::CODE_BLOCK_HEADER_RULE), rule));
+    spans.push(("─ ".to_string(), rule));
     if !lang_display.is_empty() {
         spans.push((lang_display, style::muted()));
     }
     spans.push((" ".to_string(), style::text()));
     if fill > 0 {
-        spans.push((text::CODE_BLOCK_HEADER_RULE.repeat(fill), rule));
+        spans.push(("─".repeat(fill), rule));
     }
     spans.push((" ".to_string(), style::text()));
     spans.push((btn.to_string(), style::template_button()));
-    spans.push((format!(" {}", text::CODE_BLOCK_HEADER_RULE), rule));
+    spans.push((" ─".to_string(), rule));
 
     let button_cols = (
         u16::try_from(btn_start).unwrap_or(u16::MAX),
