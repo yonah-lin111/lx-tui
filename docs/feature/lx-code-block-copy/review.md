@@ -2,7 +2,7 @@
 
 - 复审对象：`feat/lx-code-block-copy`（`ac1f174` 之后的工作区）
 - 复审范围：代码块渲染（`markdown_render/code_block.rs`、`markdown_render.rs`、`incremental.rs`）、lx 历史网格与选区、`[❐]` 命中与剪贴板反馈、相关测试与 feature 文档
-- 结论：P0 1 项（已在 `66ef242` 修复）、P1 2 项、P2 6 项、P3 6 项；P1/P2 在本轮修复并补测试。
+- 结论：P0 1 项（已在 `66ef242` 修复）、P1 2 项、P2 6 项、P3 7 项；P1/P2 在本轮修复并补测试。
 - 说明：下列“关键点/错误原因”记录复审时发现的问题；修复与验证列为当前状态，文档现状以本目录当前文件为准。
 - 关联设计：[design.md](./design.md)
 - 关联任务：[task.md](./task.md)
@@ -313,6 +313,22 @@
 
 `normalize_lang_label` 同时丢弃 `width() == Some(0)` 的字符，并新增组合字符标签的 `button_cols`/行宽测试。
 
+### P3-7 交互测试仍有非阻断缺口
+
+**关键点**
+
+- Agents 详情 `run.follow = false` + 非零 `run.scroll` 的 `[❐]` 命中未单独覆盖；主聊天滚动已加用例。
+- 代码块复制事件测试只发 `Down`，未单独断言 `Up` 之后选区/Toast 状态。
+- “代码块 + 表格 + 代码块”的连续拖选未覆盖。
+
+**错误原因**
+
+本轮优先覆盖会导致误复制、漏复制或按键吞掉的路径；以上属于同链路但风险较低的组合。
+
+**处理**
+
+记录为后续测试补强项，不阻塞本轮修复。
+
 ---
 
 ## 复审后验证
@@ -320,6 +336,6 @@
 - `cargo fmt --check`：通过
 - `cargo clippy --all-targets -- -D warnings`：通过
 - `cargo test markdown_render`：67 passed
-- `cargo test ui::main_content::lx`：623 passed，3 ignored
+- `cargo test ui::main_content::lx`：624 passed，3 ignored
 - `cargo test event::tests::lx_view`：16 passed
-- `cargo test --lib`：4869 passed，4 ignored（首次运行 `event::chat::tests::user_shell::short_script_runs_persists_output_without_model` 曾因登录 shell 管道环境偶发失败，单测重跑与全量重跑均通过，与本功能无关）
+- `cargo test --lib`：4870 passed，4 ignored（首次运行 `event::chat::tests::user_shell::short_script_runs_persists_output_without_model` 曾因登录 shell 管道环境偶发失败，单测重跑与全量重跑均通过，与本功能无关）

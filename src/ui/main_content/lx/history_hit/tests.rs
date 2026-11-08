@@ -154,6 +154,27 @@ fn chat_hit_copies_second_code_block_by_its_own_index() {
 }
 
 #[test]
+fn chat_hit_uses_scrolled_viewport_for_code_button() {
+    let area = Rect::new(0, 0, 40, 14);
+    let mut lx = Lx::new();
+    let mut chat = LxChat::new();
+    let mut content = "line\n".repeat(20);
+    content.push_str("```rust\nscrolled();\n```");
+    chat.messages.push(assistant_msg("a-scroll", &content));
+    lx.chat = chat;
+
+    let mut cache = PaneCache::default();
+    let mut buf = Buffer::empty(area);
+    render(area, &mut buf, &lx, true, None, &mut cache);
+    let (btn_x, btn_y) = find_copy_button_pos(&buf, area).expect("scrolled copy button");
+    assert_eq!(
+        chat_hit(area, &lx, btn_x, btn_y, &mut cache),
+        Some(LxChatHit::CopyCode("scrolled();".into())),
+        "滚动后按钮命中必须使用当前 view.scroll"
+    );
+}
+
+#[test]
 fn chat_hit_does_not_copy_stale_history_while_session_is_loading() {
     let area = Rect::new(0, 0, 50, 18);
     let mut lx = Lx::new();
