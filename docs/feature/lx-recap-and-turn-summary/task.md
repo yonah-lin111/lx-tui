@@ -1,6 +1,6 @@
 # lx Recap、消息尾部文件摘要与首页快捷键 — 执行任务清单
 
-> 状态：**执行中**（用户已授权按 [design.md](design.md) 与本清单直接执行，无需再次审阅）
+> 状态：**已完成（待合并）**（2026-11-09；实现、测试与提交均完成，等待用户确认合并）
 > 设计依据：[design.md](design.md)
 > 执行位置：`.worktrees/lx-recap-and-turn-summary`（新建 git 工作区）
 > 完成标准：实现 + 测试 + `cargo fmt` + `cargo clippy --all-targets -- -D warnings` + 定向/全量测试；完成后提交代码并询问用户是否合并。
@@ -209,7 +209,7 @@
 ## P8. 收尾
 
 - [x] `git status` 确认只包含本任务文件。
-- [ ] `git add` + `git commit`（提交信息：`feat(lx): add recap, turn file summary and home shortcuts`）。
-- [ ] 输出变更摘要、验证结果、风险与未验证部分。
+- [x] `git add` + `git commit`（提交信息：`feat(lx): add recap, turn file summary and home shortcuts`）。
+- [x] 输出变更摘要、验证结果、风险与未验证部分。
 - [ ] 询问用户是否合并回原分支；合并前核对 `SCHEMA_VERSION` 与迁移版本冲突。
 - [ ] 若用户确认合并，按项目规范处理 worktree 与隔离数据库清理。

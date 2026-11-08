@@ -1,6 +1,6 @@
 # lx Recap、消息尾部文件摘要与首页快捷键 — 设计文档
 
-> 状态：**执行中**（用户已授权按本设计与 `task.md` 直接执行，无需再次审阅）
+> 状态：**已完成（待合并）**（2026-11-09；实现与测试均通过，等待用户确认是否合并回 `dev`）
 > 日期：2026-11-09
 > 参考实现：
 > - `/Users/yonah/projects/agent/codex-main/codex-rs/tui/src/app/recap.rs`
