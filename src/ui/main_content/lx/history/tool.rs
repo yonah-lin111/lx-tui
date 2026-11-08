@@ -805,14 +805,16 @@ pub(super) fn wrap_spans(spans: &[Segment], width: usize) -> Vec<Vec<Segment>> {
     let mut rows: Vec<Vec<Segment>> = Vec::new();
     let mut current: Vec<Segment> = Vec::new();
     let mut col = 0usize;
-    let first_table = spans.iter().find_map(|s| s.table.clone());
     for source in spans {
         let mut buf = String::new();
+        let mut pending_table = source.table.clone();
         for ch in source.text.chars() {
             let cell = ch.width().unwrap_or(1).max(1);
             if col + cell > width && col > 0 {
                 if !buf.is_empty() {
-                    current.push(Segment::new(std::mem::take(&mut buf), source.style));
+                    let mut seg = Segment::new(std::mem::take(&mut buf), source.style);
+                    seg.table = pending_table.take();
+                    current.push(seg);
                 }
                 rows.push(std::mem::take(&mut current));
                 col = 0;
@@ -821,15 +823,18 @@ pub(super) fn wrap_spans(spans: &[Segment], width: usize) -> Vec<Vec<Segment>> {
             col += cell;
         }
         if !buf.is_empty() {
-            current.push(Segment::new(buf, source.style));
+            let mut seg = Segment::new(buf, source.style);
+            seg.table = pending_table.take();
+            current.push(seg);
         }
     }
     rows.push(current);
-    if rows.len() == 1
-        && let Some(table_ref) = first_table
-        && let Some(first_seg) = rows.first_mut().and_then(|r| r.first_mut())
-    {
-        first_seg.table = Some(table_ref);
+    if rows.len() > 1 {
+        for row in &mut rows {
+            for seg in row {
+                seg.table = None;
+            }
+        }
     }
     rows
 }

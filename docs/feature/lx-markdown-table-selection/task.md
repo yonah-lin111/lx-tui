@@ -1,7 +1,8 @@
 # `lx` 消息列表 Markdown 表格单元格长按拖选、高亮与去边框复制 — 执行任务清单 (`task.md`)
 
-- **状态**：已完成
+- **状态**：已完成实现、代码评审与 P0–P3 修复，并合入主工作区 `dev` 分支（worktree `.worktrees/lx-markdown-table-selection` 与分支 `feat/lx-markdown-table-selection` 已移除）
 - **设计依据**：`docs/feature/lx-markdown-table-selection/design.md`
+- **评审报告**：`docs/feature/lx-markdown-table-selection/review.md`
 - **参考代码库**：`/Users/yonah/projects/agent/opencode-dev`（`@opentui/core` `TextTableRenderable`）
 
 ---
@@ -82,6 +83,24 @@
   - 测试 6：跨表格与外部普通段落一起拖选复制。
   - 测试 7：单元格内双击选词与三击选整格（含多行单元格三击整格复制）。
   - 测试 8：思考块、工具/汇报块与 `TaskTab::Agents` 子智能体页中的表格单格多行拖选复制。
+
+### Phase 5：代码评审问题闭环修复（`docs/feature/lx-markdown-table-selection/review.md` P0 → P3）
+
+> 目标：对照 `review.md` 逐项修复 P0–P3 全部问题并补齐回归测试。
+
+- [x] **5.1 修复 P0-1：可折叠卡片（思考块、汇报块、工具输出卡片）内表格的双击选词与三击选整格可达性**
+  - 在 `src/ui/main_content/lx/selection.rs` 新增 `is_table_cell_at`（并在 `src/ui/main_content/lx.rs` 导出），在 `src/event/mouse/press.rs` 中对命中 Markdown 表格的点击走 `next_click_count` + `unit_cell_range` + `begin_lx_selection_range` 选区链路，不触发卡片误折叠。
+- [x] **5.2 修复 P0-2：折叠/截断表格下的可见行范围裁剪（防止表格下方普通行拖选误反显上方表头）**
+  - 在 `src/ui/main_content/lx/selection/table.rs` 新增 `rendered_table_row_bounds`，在 `paint_selection`、`copy_text` 与 `unit_cell_range`（`SelectionUnit::Line`）中严格按连续可见同表行范围裁剪。
+- [x] **5.3 修复 P1-1、P1-2、P1-3：空单元格 TSV 列占位、连续 `<br><br>` 空行保留与 CJK 双宽字符半格对齐**
+  - `extract_table_lines` 在 `ColumnLocked` / `Grid` 模式下保留空单元格 `""` 占位，防止后续列左移；
+  - 新增 `is_cell_line_selected` 处理连续 `<br><br>` 产生的空物理行 `hard_break` 结算；
+  - 新增 `align_wide_char_cols` 对齐双宽字符左右半格边界。
+- [x] **5.4 修复 P2-1、P2-2、P2-3、P2-4：边框/填充行双击防误选、表格左右外侧空白过滤、极窄宽度 `shrink_widths` 下限收缩与大表按需渲染优化**
+  - 单点选区落在水平边框、空白填充行或空单元格时返回 `None`；过滤 `< base_col` 与 `>= base_col + total_width` 的外侧点击与同侧拖选；
+  - 修复 `src/ui/markdown_render/table.rs` 中 `floor_total > available` 时的下限收缩及 `tool::wrap_spans` 段级 `table` 透传；
+  - 新增 `selected_line_offset_range`、`selected_col_ranges`、`same_table_meta`（`Arc::ptr_eq` 短路）与 `binary_search`。
+- [x] **5.5 完成 P3-1：子模块测试拆入 `src/ui/main_content/lx/selection/table/tests.rs` 并同步更新 `design.md`、`task.md`、`review.md`**
 
 ---
 

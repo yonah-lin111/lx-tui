@@ -506,3 +506,90 @@ fn table_selection_works_in_thinking_reports_and_subagent_detail_views() {
     let copied = copy_text(area, &agent_lx, range, &mut agent_cache);
     assert_eq!(copied, "思考块与子智能体表格单格多行复制正常");
 }
+
+/// P0-1 & P0-2 回归：
+/// 1) 折叠态汇报卡片（仅渲染表格前 2 行）下方提示行横向拖选不得误反显上方表头；
+/// 2) 展开态思考块/汇报块内表格通过 `is_table_cell_at` 精确识别表内与表外坐标。
+#[test]
+fn collapsed_report_drag_and_table_hit_detection_behave_accurately() {
+    let table_md = "| 阶段 | 结论 |\n| --- | --- |\n| 验证 | alpha_token beta_token |";
+    let area = Rect::new(0, 0, 50, 30);
+
+    // 1. P0-2：折叠态汇报块（expanded == false，仅前 2 行可见，第 3 行为 `… N more lines` 提示行）
+    let mut collapsed_lx = assistant_markdown_lx("正文");
+    collapsed_lx.chat.messages[0]
+        .reports
+        .push(SubagentReportView {
+            agent_id: "sub-collapsed".into(),
+            nickname: None,
+            title: "check".into(),
+            role: AgentRole::Explorer,
+            status: "completed".into(),
+            files_changed: 0,
+            changed_paths: Vec::new(),
+            duration_ms: Some(100),
+            body: table_md.into(),
+            delivered_at_ms: 1,
+        });
+    let mut cache = PaneCache::default();
+    let mut buf = Buffer::empty(area);
+    render(area, &mut buf, &collapsed_lx, true, None, &mut cache);
+    let geom = content_geom(area, &collapsed_lx, &mut cache).expect("geom");
+    let chunk_rect = Rect::new(0, 0, geom.rect.width, geom.rect.height);
+    let mut grid = super::super::grid::Grid::new(chunk_rect);
+    super::render_chunk(&mut grid, chunk_rect, &collapsed_lx, 0, &mut cache);
+
+    // 找到折叠汇报的表格表头行（line_offset == 1），下一行 `header_row + 1` 为 `… N more lines` 提示行。
+    let header_y = (0..geom.rect.height)
+        .find(|&y| {
+            grid.table_row_at(y)
+                .is_some_and(|tr| tr.line_ref.line_offset == 1)
+        })
+        .expect("collapsed report table header");
+    let header_tr = grid.table_row_at(header_y).expect("header tr").clone();
+    let hint_row = i32::from(header_y) + 1;
+    assert!(
+        grid.table_row_at(header_y + 1).is_none(),
+        "折叠汇报的第 3 行应为非表格提示行"
+    );
+
+    // `is_table_cell_at` 在表格表头行返回 true，在左侧缩进区或下方提示行返回 false。
+    assert!(super::is_table_cell_at(
+        area,
+        &collapsed_lx,
+        (i32::from(header_y), header_tr.base_col + 1),
+        &mut cache,
+    ));
+    assert!(!super::is_table_cell_at(
+        area,
+        &collapsed_lx,
+        (i32::from(header_y), 0),
+        &mut cache,
+    ));
+    assert!(!super::is_table_cell_at(
+        area,
+        &collapsed_lx,
+        (hint_row, header_tr.base_col + 1),
+        &mut cache,
+    ));
+
+    let sel = Selection::text_range(PaneId::from_raw_for_test(1), (hint_row, 4), (hint_row, 16));
+    let mut sel_buf = Buffer::empty(area);
+    render(
+        area,
+        &mut sel_buf,
+        &collapsed_lx,
+        true,
+        Some(&sel),
+        &mut cache,
+    );
+    let screen_header_y = geom.rect.y + header_y;
+    for x in geom.rect.x..(geom.rect.x + geom.rect.width) {
+        assert!(
+            !sel_buf[(x, screen_header_y)]
+                .modifier
+                .contains(Modifier::REVERSED),
+            "在折叠表格下方的提示行拖选，绝不能误反显上方表头 (x={x})"
+        );
+    }
+}

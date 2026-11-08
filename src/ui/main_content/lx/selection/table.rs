@@ -46,19 +46,66 @@ pub(super) struct TableSelectionPlan {
 }
 
 impl TableSelectionPlan {
+    /// 判定表格内 `line_offset` 行上某个单元格 `col_idx` 是否处于当前选区覆盖的行/列范围内（不含空白填充行）。
+    pub(super) fn is_cell_line_selected(&self, line_offset: usize, col_idx: usize) -> bool {
+        let Some(TableLineKind::Cells { row_idx, cells, .. }) = self.table.lines.get(line_offset)
+        else {
+            return false;
+        };
+        let Some(slice) = cells.get(col_idx) else {
+            return false;
+        };
+        if slice.is_filler {
+            return false;
+        }
+        match self.mode {
+            TableSelectionMode::SingleCell {
+                row_idx: target_row,
+                col_idx: target_col,
+            } => {
+                if *row_idx != target_row || col_idx != target_col {
+                    return false;
+                }
+                let Some(((start_line, _), (end_line, _))) = self.linear_bounds else {
+                    return false;
+                };
+                line_offset >= start_line && line_offset <= end_line
+            }
+            TableSelectionMode::ColumnLocked {
+                col_idx: target_col,
+                first_row_idx,
+                last_row_idx,
+            } => col_idx == target_col && *row_idx >= first_row_idx && *row_idx <= last_row_idx,
+            TableSelectionMode::Grid {
+                first_row_idx,
+                last_row_idx,
+                first_col_idx,
+                last_col_idx,
+            } => {
+                *row_idx >= first_row_idx
+                    && *row_idx <= last_row_idx
+                    && col_idx >= first_col_idx
+                    && col_idx <= last_col_idx
+            }
+        }
+    }
+
     /// 判定表格内 `line_offset` 行上某个单元格 `col_idx` 被选中的绝对内容列闭区间 `Some((col0, col1))`；
-    /// 未选中、水平边框行或空白填充行返回 `None`。
+    /// 未选中、水平边框行、空白填充行或空文本行返回 `None`。
     pub(super) fn selected_cell_cols(
         &self,
         line_offset: usize,
         col_idx: usize,
     ) -> Option<(u16, u16)> {
-        let TableLineKind::Cells { row_idx, cells, .. } = self.table.lines.get(line_offset)? else {
+        if !self.is_cell_line_selected(line_offset, col_idx) {
+            return None;
+        }
+        let TableLineKind::Cells { cells, .. } = self.table.lines.get(line_offset)? else {
             return None;
         };
         let col_span = self.table.columns.get(col_idx)?;
         let slice = cells.get(col_idx)?;
-        if slice.is_filler || slice.text_start >= slice.text_end {
+        if slice.text_start >= slice.text_end {
             return None;
         }
         let text_col0 = self.base_col.saturating_add(slice.text_start);
@@ -73,17 +120,8 @@ impl TableSelectionPlan {
             .saturating_sub(1);
 
         let (raw_col0, raw_col1) = match self.mode {
-            TableSelectionMode::SingleCell {
-                row_idx: target_row,
-                col_idx: target_col,
-            } => {
-                if *row_idx != target_row || col_idx != target_col {
-                    return None;
-                }
+            TableSelectionMode::SingleCell { .. } => {
                 let ((start_line, start_col), (end_line, end_col)) = self.linear_bounds?;
-                if line_offset < start_line || line_offset > end_line {
-                    return None;
-                }
                 let c0 = if line_offset == start_line {
                     start_col
                 } else {
@@ -96,29 +134,7 @@ impl TableSelectionPlan {
                 };
                 (c0, c1)
             }
-            TableSelectionMode::ColumnLocked {
-                col_idx: target_col,
-                first_row_idx,
-                last_row_idx,
-            } => {
-                if col_idx != target_col || *row_idx < first_row_idx || *row_idx > last_row_idx {
-                    return None;
-                }
-                (text_col0, text_col1)
-            }
-            TableSelectionMode::Grid {
-                first_row_idx,
-                last_row_idx,
-                first_col_idx,
-                last_col_idx,
-            } => {
-                if *row_idx < first_row_idx
-                    || *row_idx > last_row_idx
-                    || col_idx < first_col_idx
-                    || col_idx > last_col_idx
-                {
-                    return None;
-                }
+            TableSelectionMode::ColumnLocked { .. } | TableSelectionMode::Grid { .. } => {
                 (text_col0, text_col1)
             }
         };
@@ -128,19 +144,145 @@ impl TableSelectionPlan {
         (col0 <= col1).then_some((col0, col1))
     }
 
-    /// 判定表格物理行 `line_offset` 上的绝对内容列 `col` 是否应被反显高亮。
-    pub(super) fn contains_col(&self, line_offset: usize, col: u16) -> bool {
-        (0..self.table.columns.len()).any(|col_idx| {
-            self.selected_cell_cols(line_offset, col_idx)
-                .is_some_and(|(c0, c1)| col >= c0 && col <= c1)
-        })
+    /// 返回表格物理行 `line_offset` 上所有被选中的单元格列闭区间列表（供渲染反显一次性遍历）。
+    pub(super) fn selected_col_ranges(&self, line_offset: usize) -> Vec<(u16, u16)> {
+        let (first_col, last_col) = match self.mode {
+            TableSelectionMode::SingleCell { col_idx, .. }
+            | TableSelectionMode::ColumnLocked { col_idx, .. } => (col_idx, col_idx),
+            TableSelectionMode::Grid {
+                first_col_idx,
+                last_col_idx,
+                ..
+            } => (first_col_idx, last_col_idx),
+        };
+        let mut ranges = Vec::with_capacity(last_col.saturating_sub(first_col) + 1);
+        for col_idx in first_col..=last_col {
+            if let Some(range) = self.selected_cell_cols(line_offset, col_idx) {
+                ranges.push(range);
+            }
+        }
+        ranges
+    }
+
+    /// 返回当前选区计划实际涉及的表格物理行偏移闭区间 `(first_line_offset, last_line_offset)`。
+    pub(super) fn selected_line_offset_range(&self) -> (usize, usize) {
+        let (first_row_idx, last_row_idx) = match self.mode {
+            TableSelectionMode::SingleCell { row_idx, .. } => (row_idx, row_idx),
+            TableSelectionMode::ColumnLocked {
+                first_row_idx,
+                last_row_idx,
+                ..
+            }
+            | TableSelectionMode::Grid {
+                first_row_idx,
+                last_row_idx,
+                ..
+            } => (first_row_idx, last_row_idx),
+        };
+        let first_line = self
+            .table
+            .logical_rows
+            .get(first_row_idx)
+            .map_or(0, |r| r.first_line);
+        let last_line = self
+            .table
+            .logical_rows
+            .get(last_row_idx)
+            .map_or_else(|| self.table.lines.len().saturating_sub(1), |r| r.last_line);
+        (first_line, last_line.max(first_line))
     }
 }
 
-/// 根据当前表格行元数据与选区起止点（`anchor` 为按下点、`cursor` 为拖动点）解析表格选区计划。
+/// 判定两份表格布局元数据是否对应同一张表格：优先 `Arc::ptr_eq` O(1) 短路，未缓存路径回退结构比较。
+pub(super) fn same_table_meta(a: &Arc<TableLayoutMeta>, b: &Arc<TableLayoutMeta>) -> bool {
+    Arc::ptr_eq(a, b) || a == b
+}
+
+/// 将行内列闭区间 `[col0, col1]` 对齐到 `grid` 第 `y` 行的完整双宽字符（CJK 等）边界：
+/// - 若 `col0` 落在双宽字符右半格（`CONTINUATION`），左扩至主格 `col0 - 1`；
+/// - 若 `col1` 落在双宽字符主格且 `col1 + 1` 为 `CONTINUATION`，右扩至 `col1 + 1`。
+pub(super) fn align_wide_char_cols(grid: &Grid, y: u16, col0: u16, col1: u16) -> (u16, u16) {
+    let width = grid.area().width;
+    if width == 0 || col0 > col1 {
+        return (col0, col1);
+    }
+    let mut c0 = col0.min(width - 1);
+    let mut c1 = col1.min(width - 1);
+    if c0 > 0 && grid.cell(c0, y).ch == CONTINUATION {
+        c0 -= 1;
+    }
+    if c1 + 1 < width
+        && grid.cell(c1, y).ch != CONTINUATION
+        && grid.cell(c1 + 1, y).ch == CONTINUATION
+    {
+        c1 += 1;
+    }
+    (c0, c1)
+}
+
+/// 根据当前已渲染的 `grid` 扫描与 `table_row`（位于 `content_row`）同属一个连续可见表格片段的真实内容行上下界。
+///
+/// 当表格因汇报折叠（`REPORT_PREVIEW_ROWS`）或工具命令预览（`Preview::head_tail`）被截断时，
+/// 视口内紧邻的非表格行会将有效行区间严格截断，防止在表格外部拖选时误反显表格行。
+pub(super) fn rendered_table_row_bounds(
+    grid: &Grid,
+    grid_first_row: usize,
+    grid_y_offset: u16,
+    grid_rows: u16,
+    x_offset: u16,
+    table_row: &GridTableRow,
+    content_row: i32,
+) -> (i32, i32) {
+    let line_offset_i32 = i32::try_from(table_row.line_ref.line_offset).unwrap_or(0);
+    let theo_start = content_row.saturating_sub(line_offset_i32);
+    let total_lines_i32 = i32::try_from(table_row.line_ref.table.lines.len()).unwrap_or(0);
+    let theo_end = theo_start.saturating_add(total_lines_i32.saturating_sub(1));
+
+    let first_i32 = i32::try_from(grid_first_row).unwrap_or(0);
+    let cur_dy = u16::try_from(content_row.saturating_sub(first_i32).max(0)).unwrap_or(0);
+    let row_matches = |dy: u16, abs_row: i32| -> bool {
+        let Some(tr) = grid.table_row_at(grid_y_offset.saturating_add(dy)) else {
+            return false;
+        };
+        let tr_base = tr.base_col.saturating_sub(x_offset);
+        let off_i32 = i32::try_from(tr.line_ref.line_offset).unwrap_or(0);
+        abs_row.saturating_sub(off_i32) == theo_start
+            && tr_base == table_row.base_col
+            && same_table_meta(&tr.line_ref.table, &table_row.line_ref.table)
+    };
+
+    let mut actual_start = theo_start;
+    for d in (0..cur_dy).rev() {
+        let r = first_i32.saturating_add(i32::from(d));
+        if r < theo_start {
+            break;
+        }
+        if !row_matches(d, r) {
+            actual_start = r.saturating_add(1);
+            break;
+        }
+    }
+
+    let mut actual_end = theo_end;
+    for d in (cur_dy.saturating_add(1))..grid_rows {
+        let r = first_i32.saturating_add(i32::from(d));
+        if r > theo_end {
+            break;
+        }
+        if !row_matches(d, r) {
+            actual_end = r.saturating_sub(1);
+            break;
+        }
+    }
+
+    (actual_start, actual_end.max(actual_start))
+}
+
+/// 根据当前表格行元数据、实际渲染行上下界 `actual_bounds` 与选区起止点解析表格选区计划。
 pub(super) fn resolve_table_selection(
     table_row: &GridTableRow,
     content_row: i32,
+    actual_bounds: (i32, i32),
     anchor: (i32, u16),
     cursor: (i32, u16),
 ) -> Option<TableSelectionPlan> {
@@ -154,19 +296,30 @@ pub(super) fn resolve_table_selection(
     let total_lines_i32 = i32::try_from(table.lines.len()).unwrap_or(0);
     let table_end_row = table_start_row.saturating_add(total_lines_i32.saturating_sub(1));
 
+    let actual_start_row = actual_bounds.0.max(table_start_row);
+    let actual_end_row = actual_bounds.1.min(table_end_row).max(actual_start_row);
+
     let (min_pt, max_pt) = if anchor <= cursor {
         (anchor, cursor)
     } else {
         (cursor, anchor)
     };
-    if max_pt.0 < table_start_row || min_pt.0 > table_end_row {
+    if max_pt.0 < actual_start_row || min_pt.0 > actual_end_row {
         return None;
     }
 
-    let anchor_in_table = anchor.0 >= table_start_row && anchor.0 <= table_end_row;
-    let cursor_in_table = cursor.0 >= table_start_row && cursor.0 <= table_end_row;
+    let table_right = base_col.saturating_add(table.total_width);
+    let anchor_in_table = anchor.0 >= actual_start_row && anchor.0 <= actual_end_row;
+    let cursor_in_table = cursor.0 >= actual_start_row && cursor.0 <= actual_end_row;
 
     if anchor_in_table && cursor_in_table {
+        // 两端行号均在表内，但横坐标同时在表格左边界外侧或同时在右边界外侧：不触发内部单元格吸附。
+        if (anchor.1 < base_col && cursor.1 < base_col)
+            || (anchor.1 >= table_right && cursor.1 >= table_right)
+        {
+            return None;
+        }
+
         let max_line = table.lines.len().saturating_sub(1);
         let anchor_line = usize::try_from(anchor.0.saturating_sub(table_start_row))
             .unwrap_or(0)
@@ -177,6 +330,21 @@ pub(super) fn resolve_table_selection(
 
         let anchor_row_idx = resolve_line_logical_row(table, anchor_line);
         let anchor_col_idx = resolve_anchor_col(table, base_col, anchor.1);
+
+        // 单点零宽选区（如双击落在水平边框行、空白填充行或空单元格返回的退化点）：
+        // 若当前物理行在该列并无有效文本，直接返回 None，禁止钳入邻近行误选单字。
+        if anchor == cursor {
+            let valid_single_point = match table.lines.get(anchor_line) {
+                Some(TableLineKind::Cells { cells, .. }) => cells
+                    .get(anchor_col_idx)
+                    .is_some_and(|slice| !slice.is_filler && slice.text_start < slice.text_end),
+                _ => false,
+            };
+            if !valid_single_point {
+                return None;
+            }
+        }
+
         let focus_row_idx = resolve_focus_row(table, anchor_row_idx, cursor_line);
         let focus_col_idx = resolve_focus_col(table, base_col, anchor_col_idx, cursor.1);
 
@@ -205,7 +373,7 @@ pub(super) fn resolve_table_selection(
             return Some(TableSelectionPlan {
                 table: Arc::clone(table),
                 table_start_row,
-                table_end_row,
+                table_end_row: actual_end_row,
                 base_col,
                 mode: TableSelectionMode::SingleCell {
                     row_idx: anchor_row_idx,
@@ -221,7 +389,7 @@ pub(super) fn resolve_table_selection(
             return Some(TableSelectionPlan {
                 table: Arc::clone(table),
                 table_start_row,
-                table_end_row,
+                table_end_row: actual_end_row,
                 base_col,
                 mode: TableSelectionMode::ColumnLocked {
                     col_idx: anchor_col_idx,
@@ -237,7 +405,7 @@ pub(super) fn resolve_table_selection(
         return Some(TableSelectionPlan {
             table: Arc::clone(table),
             table_start_row,
-            table_end_row,
+            table_end_row: actual_end_row,
             base_col,
             mode: TableSelectionMode::Grid {
                 first_row_idx,
@@ -251,11 +419,13 @@ pub(super) fn resolve_table_selection(
 
     // 至少一端在表格外部（跨段落与表格联合拖选）：进入表格的部分按 Grid 选区处理。
     let max_line = table.lines.len().saturating_sub(1);
-    let last_logical_row = table.logical_rows.len().saturating_sub(1);
     let last_col = table.columns.len().saturating_sub(1);
 
-    let (first_row_idx, first_col_idx) = if min_pt.0 < table_start_row {
-        (0, 0)
+    let (first_row_idx, first_col_idx) = if min_pt.0 < actual_start_row {
+        let start_line_off = usize::try_from(actual_start_row.saturating_sub(table_start_row))
+            .unwrap_or(0)
+            .min(max_line);
+        (resolve_line_logical_row(table, start_line_off), 0)
     } else {
         let min_line = usize::try_from(min_pt.0.saturating_sub(table_start_row))
             .unwrap_or(0)
@@ -266,8 +436,11 @@ pub(super) fn resolve_table_selection(
         )
     };
 
-    let (last_row_idx, last_col_idx) = if max_pt.0 > table_end_row {
-        (last_logical_row, last_col)
+    let (last_row_idx, last_col_idx) = if max_pt.0 > actual_end_row {
+        let end_line_off = usize::try_from(actual_end_row.saturating_sub(table_start_row))
+            .unwrap_or(0)
+            .min(max_line);
+        (resolve_line_logical_row(table, end_line_off), last_col)
     } else {
         let max_line_off = usize::try_from(max_pt.0.saturating_sub(table_start_row))
             .unwrap_or(0)
@@ -281,7 +454,7 @@ pub(super) fn resolve_table_selection(
     Some(TableSelectionPlan {
         table: Arc::clone(table),
         table_start_row,
-        table_end_row,
+        table_end_row: actual_end_row,
         base_col,
         mode: TableSelectionMode::Grid {
             first_row_idx: first_row_idx.min(last_row_idx),
@@ -305,6 +478,11 @@ pub(super) fn table_unit_cell_range(
     if table.columns.is_empty() || table.logical_rows.is_empty() || table.lines.is_empty() {
         return None;
     }
+    let table_right = base_col.saturating_add(table.total_width);
+    if cell.1 < base_col || cell.1 >= table_right {
+        return None;
+    }
+
     let line_offset = table_row.line_ref.line_offset;
     let row_idx = resolve_line_logical_row(table, line_offset);
     let col_idx = resolve_anchor_col(table, base_col, cell.1);
@@ -383,8 +561,8 @@ pub(super) fn table_unit_cell_range(
 
 /// 从已渲染的表格网格行中提取选中文本：
 /// - 单元格内软折行无缝拼接（不插入多余 `\n`，且不含 `pad_line` 补齐空格）；
-/// - 单元格内显式 `<br>` 硬换行保留 `\n`；
-/// - 同一逻辑行多列以 `\t` 连接，跨逻辑行以 `\n` 连接，剔除全部表格边框字符。
+/// - 单元格内显式 `<br>`（含连续 `<br><br>`）硬换行保留 `\n`；
+/// - 同一逻辑行多列以 `\t` 连接（`ColumnLocked` / `Grid` 保留空单元格占位），跨逻辑行以 `\n` 连接，剔除全部表格边框字符。
 pub(super) fn extract_table_lines(
     grid: &Grid,
     grid_start_row: usize,
@@ -405,41 +583,37 @@ pub(super) fn extract_table_lines(
             last_col_idx,
         } => (first_row_idx, last_row_idx, first_col_idx, last_col_idx),
     };
+    let is_single_cell = matches!(plan.mode, TableSelectionMode::SingleCell { .. });
 
     let mut out_rows: Vec<String> = Vec::new();
     for row_idx in first_row_idx..=last_row_idx {
         let Some(logical) = plan.table.logical_rows.get(row_idx) else {
             continue;
         };
-        let mut row_cells: Vec<String> = Vec::new();
+        let row_has_rendered_line = (logical.first_line..=logical.last_line)
+            .any(|line_offset| present_line_offsets.binary_search(&line_offset).is_ok());
+        if !row_has_rendered_line {
+            continue;
+        }
+
+        let mut row_cells: Vec<String> = Vec::with_capacity(last_col_idx - first_col_idx + 1);
         for col_idx in first_col_idx..=last_col_idx {
             let mut cell_text = String::new();
             let mut prev_hard_break = false;
             let mut has_prev_line = false;
 
             for line_offset in logical.first_line..=logical.last_line {
-                if !present_line_offsets.contains(&line_offset) {
+                if present_line_offsets.binary_search(&line_offset).is_err() {
                     continue;
                 }
-                let Some((col0, col1)) = plan.selected_cell_cols(line_offset, col_idx) else {
+                if !plan.is_cell_line_selected(line_offset, col_idx) {
                     continue;
-                };
+                }
                 let Some(TableLineKind::Cells { cells, .. }) = plan.table.lines.get(line_offset)
                 else {
                     continue;
                 };
                 let Some(slice) = cells.get(col_idx) else {
-                    continue;
-                };
-                let offset_i32 = i32::try_from(line_offset).unwrap_or(0);
-                let content_row_i32 = plan.table_start_row.saturating_add(offset_i32);
-                let Ok(content_row) = usize::try_from(content_row_i32) else {
-                    continue;
-                };
-                let Some(rel_y) = content_row
-                    .checked_sub(grid_start_row)
-                    .and_then(|dy| u16::try_from(dy).ok())
-                else {
                     continue;
                 };
 
@@ -448,18 +622,35 @@ pub(super) fn extract_table_lines(
                     cell_text.truncate(trimmed_len);
                     cell_text.push('\n');
                 }
-                for col in col0..=col1 {
-                    let ch = grid.cell(col, rel_y).ch;
-                    if ch != CONTINUATION {
-                        cell_text.push(ch);
+
+                if let Some((raw_col0, raw_col1)) = plan.selected_cell_cols(line_offset, col_idx) {
+                    let offset_i32 = i32::try_from(line_offset).unwrap_or(0);
+                    let content_row_i32 = plan.table_start_row.saturating_add(offset_i32);
+                    if let Ok(content_row) = usize::try_from(content_row_i32)
+                        && let Some(rel_y) = content_row
+                            .checked_sub(grid_start_row)
+                            .and_then(|dy| u16::try_from(dy).ok())
+                    {
+                        let (col0, col1) = align_wide_char_cols(grid, rel_y, raw_col0, raw_col1);
+                        for col in col0..=col1 {
+                            let ch = grid.cell(col, rel_y).ch;
+                            if ch != CONTINUATION {
+                                cell_text.push(ch);
+                            }
+                        }
                     }
                 }
+
                 has_prev_line = true;
                 prev_hard_break = slice.hard_break;
             }
 
             let trimmed = cell_text.trim_end_matches(' ');
-            if !trimmed.is_empty() {
+            if is_single_cell {
+                if !trimmed.is_empty() {
+                    row_cells.push(trimmed.to_string());
+                }
+            } else {
                 row_cells.push(trimmed.to_string());
             }
         }
@@ -647,3 +838,6 @@ fn clamp_point_to_cell(
         (raw_line_offset, raw_col.clamp(content_col0, content_col1))
     }
 }
+
+#[cfg(test)]
+mod tests;

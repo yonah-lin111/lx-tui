@@ -91,10 +91,9 @@ fn shrink_widths(widths: &mut [usize], floors: &[usize], width: usize) {
     let available = width.saturating_sub(decorations);
     let floor_total: usize = floors.iter().copied().sum();
     if floor_total > available {
-        // 即使按最小列宽也放不下：只保证各列不低于最小字符宽（外层仍可能轻微超宽，
-        // 但不再出现「列宽小于单字」导致的错位）。
+        // 即使按最小列宽也放不下：收缩至各列的最小字符宽下限（避免保持自然宽度导致极度超宽）。
         for (slot, floor) in widths.iter_mut().zip(floors) {
-            *slot = (*slot).max(*floor);
+            *slot = (*floor).min(*slot).max(1);
         }
         return;
     }

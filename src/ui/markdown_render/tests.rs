@@ -770,4 +770,13 @@ fn table_lines_carry_shared_layout_meta_with_soft_wrap_and_br_flags() {
         };
         assert!(!cells[1].hard_break, "自动软折行不得标记 hard_break");
     }
+
+    // 极窄宽度（floor_total > available）下列宽应收缩至最小字符宽度 floor，而非保留自然超宽长度。
+    let wide_cjk = "| 一 | 二 | 三 | 四 |\n| --- | --- | --- | --- |\n| 很长的一段中文内容A | 很长的一段中文内容B | 很长的一段中文内容C | 很长的一段中文内容D |";
+    let narrow_lines = render_wrapped(wide_cjk, 18);
+    let natural_lines = render(wide_cjk);
+    assert!(
+        narrow_lines[0].width() < natural_lines[0].width(),
+        "极窄宽度下表格列宽应收缩至单字下限，不得保持自然总宽"
+    );
 }

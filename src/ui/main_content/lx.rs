@@ -31,7 +31,9 @@ use panels::{
 };
 pub(crate) use refer::{item_at as refer_item_at, layout as refer_layout};
 pub use selection::copy_text;
-pub(crate) use selection::{content_geom, unit_cell_range};
+#[cfg(test)]
+pub(crate) use selection::is_table_cell_at;
+pub(crate) use selection::{content_geom, press_content_hit, unit_cell_range};
 
 pub(crate) mod brand;
 pub(crate) mod chat_bar;

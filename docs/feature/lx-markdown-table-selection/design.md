@@ -2,7 +2,8 @@
 
 - **特性目录**：`docs/feature/lx-markdown-table-selection/`
 - **关联任务清单**：`docs/feature/lx-markdown-table-selection/task.md`
-- **当前状态**：已完成（全部阶段与回归测试已通过）
+- **关联评审报告**：`docs/feature/lx-markdown-table-selection/review.md`
+- **当前状态**：已完成实现、代码评审与 P0–P3 修复，并合入主工作区 `dev` 分支（worktree `.worktrees/lx-markdown-table-selection` 与分支 `feat/lx-markdown-table-selection` 已移除）
 - **参考基线**：`/Users/yonah/projects/agent/opencode-dev`（`@opentui/core` 中 `TextTableRenderable` 的三级选区解析 `single-cell` / `column-locked` / `grid` 与 `getSelectedText` 去边框 TSV 提取）
 - **目标范围**：
   - `src/app/selection.rs`（补充 `Selection::anchor()` 与 `Selection::cursor()` 访问器，供表格方向感知与边框防手抖吸附使用）
@@ -350,305 +351,48 @@ impl Grid {
 
 #### 关键点
 
-1. **表格实例定位（`TableInstance`）**：
-   - 给定任意一条携带 `GridTableRow` 的内容行 `content_row`，由 `line_ref.line_offset` 可直接推算该表格理想起点 `table_start_row = content_row - line_offset as i32` 与理想终点 `table_end_row = table_start_row + table.lines.len() as i32 - 1`。
-   - 同时支持折叠卡片中的部分可见表格（以实际渲染出的最小/最大 `line_offset` 为准）。
-2. **单元格留白与紧邻边框防手抖吸附（`resolve_endpoints`，对应 Q1 & Q3）**：
+1. **表格实例定位与可见段截断边界（`rendered_table_row_bounds`）**：
+   - 给定任意一条携带 `GridTableRow` 的内容行 `content_row`，由 `line_ref.line_offset` 可直接推算该表格理论起点 `table_start_row = content_row - line_offset as i32` 与理论终点 `table_end_row = table_start_row + table.lines.len() as i32 - 1`。
+   - 对折叠汇报卡片（`REPORT_PREVIEW_ROWS = 2`）、系统事件卡片或命令 `Preview::head_tail` 等仅渲染部分表格物理行的场景，通过 `rendered_table_row_bounds` 在当前 `Grid` 视口内上下扫描同一表格实例的连续边界 `[actual_start_row, actual_end_row]`，将紧邻的非表格行严格排除在表格选区之外，防止在表格下方普通行拖选时误反显上方表格行。
+2. **单元格留白、水平外侧过滤与紧邻边框防手抖吸附（`resolve_table_selection`，对应 Q1 & Q3）**：
+   - **水平外侧过滤**：若起止点行号在表格内但列坐标同时位于表格左边界外（`< base_col`）或同时位于右边界外（`>= base_col + table.total_width`），返回 `None`。
    - **起点 `anchor` 映射**：
      - 行映射：若 `anchor` 落在 `TableLineKind::Cells { row_idx, .. }` 则取 `row_idx`；若落在 `Border { nearest_row }` 则取 `nearest_row`。
      - 列映射：若 `anchor.col` 落在某列 `box_start..box_end`（含左右 1 格留白）则直接取该列；若恰好压在左/中/右竖线 `│` 上则吸附到紧邻列。
    - **终点 `cursor` 防手抖吸附**：
-     - 水平方向：设起点所在列为 `anchor_col`，其内框加左右自身竖线 `│` 的吸附区间为 `[base_col + box_start - 1, base_col + box_end]`（若 `anchor_col == 0` 则左扩到 `0`；若 `anchor_col` 为末列则右扩到 `u16::MAX`，防止在最左/最右列拖出表格边缘时跳出单列模式）。只要 `cursor.col` 仍在该区间内，`focus_col` 恒锁定为 `anchor_col`！
-     - 垂直方向：设起点所在逻辑行 `anchor_row` 的物理行区间为 `[row_top, row_bottom]`。若 `cursor.row` 压在该逻辑行紧邻的上下水平分割线（`row_top - 1` 或 `row_bottom + 1`）上，则 `focus_row` 仍吸附为 `anchor_row`，并将物理行钳回 `[row_top, row_bottom]`；若向其它逻辑行拖动时停在某条中间分割线 `├─┼─┤` 上，则归属到拖动方向上已进入的逻辑行，不会提前选中尚未进入的下一行。
+     - 水平方向：设起点所在列为 `anchor_col`，其内框加左右自身竖线 `│` 的吸附区间为 `[base_col + box_start - 1, base_col + box_end]`（若 `anchor_col == 0` 则左扩到 `0`；若 `anchor_col` 为末列则右扩到 `u16::MAX`）。只要 `cursor.col` 仍在该区间内，`focus_col` 恒锁定为 `anchor_col`。
+     - 垂直方向：设起点所在逻辑行 `anchor_row` 的物理行区间为 `[first_line, last_line]`。若 `cursor.row` 压在该逻辑行紧邻的上下水平分割线（`first_line - 1` 或 `last_line + 1`）上，则 `focus_row` 仍吸附为 `anchor_row`；若向其它逻辑行拖动时停在某条中间分割线 `├─┼─┤` 上，则归属到拖动方向上已滑过的逻辑行。
 3. **三级模式判定与单元格列区间裁剪（`TableSelectionPlan`，对应 Q1）**：
-   - **`SingleCell { row_idx, col_idx }`**：当 `anchor_row == focus_row && anchor_col == focus_col` 时触发。
-     - 将起止点钳入该单元格的非空白填充物理行区间 `[first_line..=last_non_filler_line]` 与内容槽列区间 `[c_start, c_last]`；
-     - 在首行选 `[start_col, c_last]`、中间物理行选 `[c_start, c_last]`、末行选 `[c_start, end_col]`，并与每条物理行的真实文本区间 `[base_col + slice.text_start, base_col + slice.text_end)` 求交集。
-   - **`ColumnLocked { col_idx, first_row_idx, last_row_idx }`**：当 `anchor_col == focus_col && anchor_row != focus_row` 时触发。
-     - 仅在 `col_idx` 列内从上方端点所在物理行延伸到下方端点所在物理行，跳过所有 `Border` 行与 `is_filler` 行，在每条物理行上与该列真实文本区间 `[text_start, text_end)` 求交集。
-   - **`Grid`（跨列多格或跨表格外部拖选）**：
-     - 按单元格阅读顺序 `(row_idx, col_idx)` 确定起止单元格 `start_cell..=end_cell`（对齐 `opencode-dev`：锚点格与中间格整格选中真实文本区间，焦点格选到焦点列位置；若从表格外拖入/穿过表格，则覆盖表格首格/末格）。
-4. **双击/三击选区（`table_unit_cell_range`，对应 Q4）**：
-   - `SelectionUnit::Word`：当点击点落在表格某单元格内时，将分词列边界严格钳在该单元格当行的真实文本列 `[base_col + slice.text_start, base_col + slice.text_end)` 内（若落在空白填充区则返回单点）。
-   - `SelectionUnit::Line`（三击）：返回该单元格首条物理行内容起点 `(cell_first_row, base_col + col_span.content_start)` 到最后一条非填充物理行内容终点 `(cell_last_row, base_col + col_span.content_end - 1)`，从而一键整格选中并自动锁定在 `SingleCell` 模式。
-5. **去边框与软折行无缝拼接复制（`extract_table_selection_lines`，对应 Q2 & Q3）**：
-   - 按逻辑行 `row_idx` 遍历 `plan.first_row_idx..=plan.last_row_idx`：
-     - 在每个逻辑行内按列 `col_idx` 遍历 `0..table.columns.len()`：
-       - 对该单元格内所有命中的非填充物理行，提取交集列区间 `[col0, col1]` 内的字符（跳过 `CONTINUATION`）；
-       - 若同一单元格存在下一条命中的非填充物理行：当当前物理行 `slice.hard_break == true`（即 `<br>`）时插入 `'\n'`；当 `slice.hard_break == false`（即列宽软折行）时**直接无缝拼接**；
-     - 同一逻辑行内所有非空单元格文本用 `"\t"` 拼接；
-   - 各逻辑行之间作为独立行推入输出列表，最终以 `"\n"` 连接。
-
-#### 关键代码（`src/ui/main_content/lx/selection/table.rs`）
-
-```rust
-use std::sync::Arc;
-
-use crate::app::selection::{CharClass, SelectionUnit, char_class};
-use crate::ui::markdown_render::{
-    TableCellSlice, TableColumnSpan, TableLayoutMeta, TableLineKind,
-};
-
-use super::super::grid::{CONTINUATION, Grid, GridTableRow};
-
-/// 表格内选区的三级锁定模式（对齐 `opencode-dev` `TextTableRenderable`）。
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(super) enum TableSelectionMode {
-    /// 起点与终点位于同一单元格内（含单元格内多行软折行或 `<br>`）。
-    SingleCell { row_idx: usize, col_idx: usize },
-    /// 起点与终点位于同一列的不同逻辑行。
-    ColumnLocked {
-        col_idx: usize,
-        first_row_idx: usize,
-        last_row_idx: usize,
-    },
-    /// 跨列或从表格外部跨入表格的网格选区。
-    Grid {
-        start_cell: (usize, usize),
-        end_cell: (usize, usize),
-        /// 焦点单元格若为部分选中，记录其在表格内的 `(line_offset, clamped_col, is_start_bound)`。
-        partial_focus: Option<((usize, usize), usize, u16, bool)>,
-    },
-}
-
-/// 针对单张表格解析出的选区计划。
-#[derive(Debug, Clone)]
-pub(super) struct TableSelectionPlan {
-    pub(super) table: Arc<TableLayoutMeta>,
-    pub(super) table_start_row: i32,
-    pub(super) base_col: u16,
-    pub(super) mode: TableSelectionMode,
-    /// 在 `SingleCell` 与 `ColumnLocked` 模式下规范化后的起止 `(line_offset, content_col)`。
-    pub(super) linear_bounds: Option<((usize, u16), (usize, u16))>,
-}
-
-impl TableSelectionPlan {
-    /// 判定内容行 `content_row`（对应表内 `line_offset`）上某个单元格 `col_idx`
-    /// 被选中的绝对内容列闭区间 `Some((col0, col1))`；未选中或空白填充行返回 `None`。
-    pub(super) fn selected_cell_cols(
-        &self,
-        line_offset: usize,
-        col_idx: usize,
-    ) -> Option<(u16, u16)> {
-        let TableLineKind::Cells { row_idx, cells, .. } = self.table.lines.get(line_offset)? else {
-            return None;
-        };
-        let col_span = self.table.columns.get(col_idx)?;
-        let slice = cells.get(col_idx)?;
-        if slice.is_filler || slice.text_start >= slice.text_end {
-            return None;
-        }
-        let text_col0 = self.base_col.saturating_add(slice.text_start);
-        let text_col1 = self
-            .base_col
-            .saturating_add(slice.text_end)
-            .saturating_sub(1);
-        let content_col0 = self.base_col.saturating_add(col_span.content_start);
-        let content_col1 = self
-            .base_col
-            .saturating_add(col_span.content_end)
-            .saturating_sub(1);
-
-        let (raw_col0, raw_col1) = match self.mode {
-            TableSelectionMode::SingleCell {
-                row_idx: target_row,
-                col_idx: target_col,
-            } => {
-                if *row_idx != target_row || col_idx != target_col {
-                    return None;
-                }
-                let ((start_line, start_col), (end_line, end_col)) = self.linear_bounds?;
-                if line_offset < start_line || line_offset > end_line {
-                    return None;
-                }
-                let c0 = if line_offset == start_line {
-                    start_col
-                } else {
-                    content_col0
-                };
-                let c1 = if line_offset == end_line {
-                    end_col
-                } else {
-                    content_col1
-                };
-                (c0, c1)
-            }
-            TableSelectionMode::ColumnLocked {
-                col_idx: target_col,
-                first_row_idx,
-                last_row_idx,
-            } => {
-                if col_idx != target_col || *row_idx < first_row_idx || *row_idx > last_row_idx {
-                    return None;
-                }
-                let ((start_line, start_col), (end_line, end_col)) = self.linear_bounds?;
-                if line_offset < start_line || line_offset > end_line {
-                    return None;
-                }
-                let c0 = if line_offset == start_line {
-                    start_col
-                } else {
-                    content_col0
-                };
-                let c1 = if line_offset == end_line {
-                    end_col
-                } else {
-                    content_col1
-                };
-                (c0, c1)
-            }
-            TableSelectionMode::Grid {
-                start_cell,
-                end_cell,
-                partial_focus,
-            } => {
-                let cell_pos = (*row_idx, col_idx);
-                if cell_pos < start_cell || cell_pos > end_cell {
-                    return None;
-                }
-                if let Some((focus_cell, focus_line, focus_col, is_start_bound)) = partial_focus
-                    && cell_pos == focus_cell
-                {
-                    if is_start_bound {
-                        if line_offset < focus_line {
-                            return None;
-                        }
-                        let c0 = if line_offset == focus_line {
-                            focus_col
-                        } else {
-                            content_col0
-                        };
-                        (c0, content_col1)
-                    } else {
-                        if line_offset > focus_line {
-                            return None;
-                        }
-                        let c1 = if line_offset == focus_line {
-                            focus_col
-                        } else {
-                            content_col1
-                        };
-                        (content_col0, c1)
-                    }
-                } else {
-                    (content_col0, content_col1)
-                }
-            }
-        };
-
-        let col0 = raw_col0.max(text_col0);
-        let col1 = raw_col1.min(text_col1);
-        (col0 <= col1).then_some((col0, col1))
-    }
-
-    /// 判定某条表格物理行上的绝对内容列 `col` 是否应被反显高亮。
-    pub(super) fn contains_col(&self, line_offset: usize, col: u16) -> bool {
-        (0..self.table.columns.len()).any(|col_idx| {
-            self.selected_cell_cols(line_offset, col_idx)
-                .is_some_and(|(c0, c1)| col >= c0 && col <= c1)
-        })
-    }
-}
-```
-
-```rust
-/// 从已渲染的表格网格行中提取选中文本（同行多列以 `\t` 连接，跨逻辑行以 `\n` 连接，
-/// 单元格内软折行无缝拼接、`<br>` 硬换行保留 `\n`）。
-pub(super) fn extract_table_lines(
-    grid: &Grid,
-    grid_start_row: usize,
-    plan: &TableSelectionPlan,
-    present_line_offsets: &[usize],
-) -> Vec<String> {
-    let (first_row_idx, last_row_idx) = match plan.mode {
-        TableSelectionMode::SingleCell { row_idx, .. } => (row_idx, row_idx),
-        TableSelectionMode::ColumnLocked {
-            first_row_idx,
-            last_row_idx,
-            ..
-        } => (first_row_idx, last_row_idx),
-        TableSelectionMode::Grid {
-            start_cell,
-            end_cell,
-            ..
-        } => (start_cell.0, end_cell.0),
-    };
-
-    let mut out_rows: Vec<String> = Vec::new();
-    for row_idx in first_row_idx..=last_row_idx {
-        let Some(logical) = plan.table.logical_rows.get(row_idx) else {
-            continue;
-        };
-        let mut row_cells: Vec<String> = Vec::new();
-        for col_idx in 0..plan.table.columns.len() {
-            let mut cell_text = String::new();
-            let mut prev_hard_break = false;
-            let mut has_prev_line = false;
-
-            for line_offset in logical.first_line..=logical.last_line {
-                if !present_line_offsets.contains(&line_offset) {
-                    continue;
-                }
-                let Some((col0, col1)) = plan.selected_cell_cols(line_offset, col_idx) else {
-                    continue;
-                };
-                let Some(TableLineKind::Cells { cells, .. }) = plan.table.lines.get(line_offset)
-                else {
-                    continue;
-                };
-                let Some(slice) = cells.get(col_idx) else {
-                    continue;
-                };
-                let content_row_i32 = plan.table_start_row.saturating_add(line_offset as i32);
-                let Ok(content_row) = usize::try_from(content_row_i32) else {
-                    continue;
-                };
-                let Some(rel_y) = content_row
-                    .checked_sub(grid_start_row)
-                    .and_then(|dy| u16::try_from(dy).ok())
-                else {
-                    continue;
-                };
-
-                if has_prev_line && prev_hard_break {
-                    cell_text.push('\n');
-                }
-                for col in col0..=col1 {
-                    let ch = grid.cell(col, rel_y).ch;
-                    if ch != CONTINUATION {
-                        cell_text.push(ch);
-                    }
-                }
-                has_prev_line = true;
-                prev_hard_break = slice.hard_break;
-            }
-
-            if !cell_text.is_empty() {
-                row_cells.push(cell_text);
-            }
-        }
-        if !row_cells.is_empty() {
-            out_rows.push(row_cells.join("\t"));
-        }
-    }
-    out_rows
-}
-```
+   - **`SingleCell { row_idx, col_idx }`**：当 `anchor_row == focus_row && anchor_col == focus_col` 时触发（若 `anchor == cursor` 且落在无文本的水平边框行、填充行或空单元格上则返回 `None`）。
+     - 将起止点钳入该单元格的非空白填充物理行区间 `[first_line..=last_non_filler]` 与内容槽列区间 `[content_col0, content_col1]`；
+     - 在首行选 `[start_col, content_col1]`、中间物理行选 `[content_col0, content_col1]`、末行选 `[content_col0, end_col]`，并与每条物理行的真实文本区间 `[text_col0, text_col1]` 求交集。
+   - **`ColumnLocked { col_idx, first_row_idx, last_row_idx }`**：当 `anchor_col == focus_col && anchor_row != focus_row` 时触发，锁定 `col_idx` 列并整格选中 `first_row_idx..=last_row_idx` 各逻辑行的真实文本区间。
+   - **`Grid { first_row_idx, last_row_idx, first_col_idx, last_col_idx }`**：跨列或从表格外部跨入表格时触发，整格选中矩形区间内各单元格的真实文本区间。
+   - **CJK 双宽字符边界对齐（`align_wide_char_cols`）**：渲染反显与文本提取时，若选中列起点落在 `CONTINUATION` 右半格则自动左扩 1 列至主格，若终点落在双宽字符主格则自动右扩 1 列包含右半格。
+4. **双击/三击选区与可折叠卡片穿透（`table_unit_cell_range` & `is_table_cell_at`，对应 Q4）**：
+   - `SelectionUnit::Word`：当点击点落在表格某单元格内时，将分词列边界严格钳在该单元格当行的真实文本列 `[text_col0, text_col1]` 内。
+   - `SelectionUnit::Line`（三击）：返回该单元格首条物理行内容起点到最后一条非填充物理行内容终点（并按 `rendered_table_row_bounds` 钳制在可见表格行内）。
+   - 在 `src/event/mouse/press.rs` 中通过 `lx::is_table_cell_at` 识别已展开思考块、汇报块与工具卡片内的 Markdown 表格点击，优先执行连击选词/选整格而不触发卡片折叠。
+5. **去边框、连续 `<br>` 保空行与 TSV 列对齐复制（`extract_table_lines`，对应 Q2 & Q3）**：
+   - 按逻辑行 `row_idx` 遍历 `first_row_idx..=last_row_idx`，在每个逻辑行内遍历 `first_col_idx..=last_col_idx`：
+     - 对选中范围内的非填充物理行（含连续 `<br><br>` 产生的空物理行），当上一条物理行 `prev_hard_break == true` 时裁剪行尾空格并压入 `'\n'`；当 `prev_hard_break == false`（自动软折行）时直接无缝拼接；
+     - `ColumnLocked` 与 `Grid` 模式下保留空单元格 `""` 占位并以 `"\t"` 连接同一逻辑行的各列，确保 TSV 列对齐不左移；`SingleCell` 模式下仅输出非空单元格文本。
 
 ---
 
-### 3.5 `paint_selection`、`unit_cell_range` 与 `copy_text` 接入（`src/ui/main_content/lx/selection.rs`）
+### 3.5 `paint_selection`、`is_table_cell_at`、`unit_cell_range` 与 `copy_text` 接入（`src/ui/main_content/lx/selection.rs`）
 
 #### 关键点
 
 1. `paint_selection(buf: &mut Buffer, grid: &Grid, geom: ContentGeom, selection: &Selection)`：
-   - 对视口内每一行 `dy in 0..geom.rect.height`，先检查 `grid.table_row_at(dy + (geom.rect.y - grid.area.y))`；
-   - 若该行属于某个 Markdown 表格，调用 `table::resolve_table_selection` 得到 `TableSelectionPlan`，仅当 `plan.contains_col(line_offset, dx)` 为 `true` 时才对 `(x, y)` 设置 `Modifier::REVERSED`；
-   - 若该行不属于表格，则保持原有的 `selection.contains(content_row, dx)` 逻辑。
-2. `unit_cell_range`：
-   - 渲染目标单行 `grid` 后，若 `grid.table_row_at(0)` 为 `Some(table_row)`，优先委托 `table::table_unit_cell_range(&grid, table_row, cell, unit)` 处理表格内的 `Word`（双击钳在单元格文本内）与 `Line`（三击直接返回整格起止坐标）。
+   - 对视口内每一行 `dy in 0..geom.rect.height`，检查 `grid.table_row_at(grid_dy)`；
+   - 若该行属于 Markdown 表格，先通过 `table::rendered_table_row_bounds` 计算可见连续表格上下界，再调用 `table::resolve_table_selection` 得到 `TableSelectionPlan`，通过 `plan.selected_col_ranges(line_offset)` 与 `align_wide_char_cols` 对齐双宽字符后反显目标区间；
+   - 若该行不属于表格，则按 `row_col_bounds` + `align_wide_char_cols` 反显普通正文行。
+2. `is_table_cell_at` & `unit_cell_range`：
+   - `is_table_cell_at` 判断点击坐标是否落在已渲染表格行的 `[base_col, base_col + table.total_width)` 内，供 `event/mouse/press.rs` 放行卡片内表格的双击/三击选区；
+   - `unit_cell_range` 在表格行上委托 `table::table_unit_cell_range`，并在 `SelectionUnit::Line` 三击时结合 `rendered_table_row_bounds` 钳制可见行范围。
 3. `copy_text`：
-   - 先收集 `[first_row..=last_row]` 涉及的渲染行；当遍历遇到 `GridTableRow` 时，若该表格实例的选中逻辑行超出当前 256 行分块边界，则按该表格的实际跨度渲染完整表格网格，调用 `table::extract_table_lines` 一次性提取该表在选区内的去边框文本行，并将游标推进到该表格末尾之后继续处理后续普通行。
+   - 遍历遇到 `GridTableRow` 时，通过 `plan.selected_line_offset_range()` 仅渲染选中逻辑行对应的物理行区间 `[t_first, t_last]`（避免大表全表分配渲染），使用 `same_table_meta`（`Arc::ptr_eq` O(1) 短路 + 值比较兜底）收集有序 `present_offsets`，调用 `table::extract_table_lines` 提取去边框 TSV 文本。
 
 ---
 
