@@ -265,6 +265,8 @@ fn web_cli_parses_subcommands_models_thinking_and_session_prefixes() {
         "4 Argon",
         "-t",
         "high",
+        "--session",
+        "ai-web-gm-abc123",
         "--edit-index",
         "0",
         "--keep-file",
@@ -336,6 +338,26 @@ fn web_cli_parses_subcommands_models_thinking_and_session_prefixes() {
     assert!(
         parse_cli([
             "lx-tui", "web", "chat", "--site", "deepseek", "-t", "high", "hi"
+        ])
+        .is_err()
+    );
+
+    // /rewind 索引必须绑定会话，附件保留必须绑定 edit-index，first-turn 不能复用旧会话。
+    let no_session = parse_cli(["lx-tui", "web", "chat", "--edit-index", "0", "hi"])
+        .expect_err("edit-index without session");
+    assert!(no_session.contains("requires '--session"));
+    let keep_without_edit = parse_cli(["lx-tui", "web", "chat", "--keep-file", "a.txt", "hi"])
+        .expect_err("keep-file without edit-index");
+    assert!(keep_without_edit.contains("requires '--edit-index"));
+    assert!(
+        parse_cli([
+            "lx-tui",
+            "web",
+            "chat",
+            "--session",
+            "ai-web-ds-abc",
+            "--first-turn",
+            "hi"
         ])
         .is_err()
     );

@@ -260,6 +260,7 @@ const VALUE_OPTIONS: &[&str] = &[
     "--disable-mcp",
     "--site",
     "--session",
+    "-t",
     "--edit-index",
     "--keep-file",
 ];

@@ -414,6 +414,8 @@ Subcommands:
        [-t, --thinking <THINKING>] [-s, --session <SESSION_ID>] [--first-turn]
        [--edit-index <N>] [--file <PATH>...] [--keep-file <NAME>...]
       Send a message or inline-edit a previous turn (/rewind) on DeepSeek or Gemini
+      --edit-index requires --session; --keep-file requires --edit-index;
+      --first-turn cannot be combined with --session or --edit-index
   new [--site <deepseek|gemini>]
       Reset the target Web site to a fresh conversation (/new)
   stop [--site <deepseek|gemini>]

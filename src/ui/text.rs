@@ -131,6 +131,14 @@ pub fn ai_web_site_label(site: AiWebSite) -> &'static str {
     }
 }
 
+/// 状态行与助手气泡中的 `Web` 模型标签：`Gemini · 3.8 Flash`；DeepSeek 仅显示站点名。
+pub fn ai_web_model_label(site: AiWebSite, model: &str) -> String {
+    match site {
+        AiWebSite::Deepseek => AI_WEB_SITE_DEEPSEEK.to_string(),
+        AiWebSite::Gemini => format!("{}{LX_CHAT_MODEL_SEP}{model}", AI_WEB_SITE_GEMINI),
+    }
+}
+
 /// @ 提及面板条目标记：目录 / 文件（标准单宽通用符号，兼容无 Nerd Font 的终端）。
 pub const MENTION_DIR_ICON: &str = "▸";
 pub const MENTION_FILE_ICON: &str = "•";
@@ -242,7 +250,7 @@ pub const LX_CHAT_ENTRY_UNAVAILABLE: &str = "Native Agent only";
 pub const LX_AI_WEB_LOGIN_REQUIRED: &str = "Please sign in to DeepSeek in ego-browser";
 pub const LX_AI_WEB_GEMINI_LOGIN_REQUIRED: &str = "Please sign in to Gemini in ego-browser";
 pub const LX_AI_WEB_EGO_UNAVAILABLE: &str = "ego-browser is not installed or unavailable";
-pub const LX_AI_WEB_ONLY_NEW_CMD: &str =
+pub const LX_WEB_ALLOWED_CMDS: &str =
     "Only /model, /new, /resume, /rename, and /rewind are available in Web";
 
 /// 按 AI Web 站点返回未登录提示文案。

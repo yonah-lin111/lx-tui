@@ -38,6 +38,14 @@ impl AiWebSite {
     pub fn format_remote_session_id(self, remote_id: &str) -> String {
         format!("{}{remote_id}", self.remote_session_prefix())
     }
+
+    /// 从 `/model` 候选的 `provider` 标签反解站点；非 AI Web 供应商返回 `None`。
+    pub fn from_label(label: &str) -> Option<Self> {
+        let label = label.trim();
+        Self::ALL
+            .into_iter()
+            .find(|site| text::ai_web_site_label(*site).eq_ignore_ascii_case(label))
+    }
 }
 
 /// Gemini 网页端支持的模型档位（对齐 `https://gemini.google.com/app` 模式选择器）。

@@ -53,12 +53,13 @@ async function main() {
   }
 
   // Channel A: intercept /api/v0/chat/completion over XMLHttpRequest & fetch.
-  await js(String.raw`
+  const runId = await js(String.raw`
     (() => {
       const existingKeys = Array.from(
         document.querySelectorAll('[data-virtual-list-item-key]'),
       ).map((el) => el.getAttribute('data-virtual-list-item-key') || '');
       const stream = {
+        runId: String(Date.now()) + '-' + String(Math.random()),
         queue: [],
         done: false,
         attached: false,
@@ -505,7 +506,7 @@ async function main() {
           return result;
         };
       }
-      return true;
+      return stream.runId;
     })()
   `);
 
@@ -515,50 +516,56 @@ async function main() {
       (() => {
         const items = Array.from(document.querySelectorAll('[data-virtual-list-item-key]'));
         const userItems = items.filter((el) => !el.querySelector('.ds-markdown, .ds-think-content'));
-        const target = userItems[${EDIT_INDEX}] || userItems[userItems.length - 1];
-        if (!target) return false;
+        const target = userItems[${EDIT_INDEX}];
+        if (!target) return { status: 'missing_turn' };
         const btns = Array.from(target.querySelectorAll('.ds-button, button, [role="button"]'));
         const editBtn = btns[1] || btns[btns.length - 1];
-        if (!editBtn) return false;
+        if (!editBtn) return { status: 'no_button' };
         const propKey = Object.keys(editBtn).find((k) => k.startsWith('__reactProps'));
         if (propKey && editBtn[propKey] && typeof editBtn[propKey].onClick === 'function') {
           editBtn[propKey].onClick({ stopPropagation() {}, preventDefault() {} });
         } else {
           editBtn.click();
         }
+        return { status: 'clicked' };
+      })()
+    `).catch(() => ({ status: 'error' }));
+    if (openedEdit && openedEdit.status === 'missing_turn') {
+      await emit({ event: 'error', message: 'DeepSeek /rewind target turn not found' });
+      return;
+    }
+    if (!openedEdit || openedEdit.status !== 'clicked') {
+      await emit({ event: 'error', message: 'DeepSeek edit button not found for /rewind' });
+      return;
+    }
+    await new Promise((r) => setTimeout(r, 120));
+    await syncContainerAttachments(true);
+    submittedViaEdit = await js(`
+      (() => {
+        const editArea = document.querySelector('textarea[name="user query"]');
+        if (!editArea) return false;
+        editArea.focus();
+        const descriptor = Object.getOwnPropertyDescriptor(window.HTMLTextAreaElement.prototype, 'value');
+        if (descriptor && descriptor.set) descriptor.set.call(editArea, ${JSON.stringify(PROMPT)});
+        else editArea.value = ${JSON.stringify(PROMPT)};
+        editArea.dispatchEvent(new Event('input', { bubbles: true }));
+        editArea.dispatchEvent(new Event('change', { bubbles: true }));
+        const container = editArea.closest('[data-virtual-list-item-key]') || document;
+        const sendBtn = Array.from(container.querySelectorAll('.ds-button, button, [role="button"]'))
+          .find((b) => {
+            const label = (b.innerText || '').trim();
+            return label === '发送' || label === 'Send';
+          });
+        if (!sendBtn) return false;
+        const sendKey = Object.keys(sendBtn).find((k) => k.startsWith('__reactProps'));
+        if (sendKey && sendBtn[sendKey] && typeof sendBtn[sendKey].onClick === 'function') {
+          sendBtn[sendKey].onClick({ stopPropagation() {}, preventDefault() {} });
+        } else {
+          sendBtn.click();
+        }
         return true;
       })()
     `).catch(() => false);
-    if (openedEdit) {
-      await new Promise((r) => setTimeout(r, 120));
-      await syncContainerAttachments(true);
-      submittedViaEdit = await js(`
-        (() => {
-          const editArea = document.querySelector('textarea[name="user query"]');
-          if (!editArea) return false;
-          editArea.focus();
-          const descriptor = Object.getOwnPropertyDescriptor(window.HTMLTextAreaElement.prototype, 'value');
-          if (descriptor && descriptor.set) descriptor.set.call(editArea, ${JSON.stringify(PROMPT)});
-          else editArea.value = ${JSON.stringify(PROMPT)};
-          editArea.dispatchEvent(new Event('input', { bubbles: true }));
-          editArea.dispatchEvent(new Event('change', { bubbles: true }));
-          const container = editArea.closest('[data-virtual-list-item-key]') || document;
-          const sendBtn = Array.from(container.querySelectorAll('.ds-button, button, [role="button"]'))
-            .find((b) => {
-              const label = (b.innerText || '').trim();
-              return label === '发送' || label === 'Send';
-            });
-          if (!sendBtn) return false;
-          const sendKey = Object.keys(sendBtn).find((k) => k.startsWith('__reactProps'));
-          if (sendKey && sendBtn[sendKey] && typeof sendBtn[sendKey].onClick === 'function') {
-            sendBtn[sendKey].onClick({ stopPropagation() {}, preventDefault() {} });
-          } else {
-            sendBtn.click();
-          }
-          return true;
-        })()
-      `).catch(() => false);
-    }
     if (!submittedViaEdit) {
       throw new Error('Failed to edit message in DeepSeek Web');
     }
@@ -638,11 +645,16 @@ async function main() {
     const snapshot = await js(`
       (() => {
         const stream = window.__lxDeepSeekStream;
-        if (!stream) return null;
+        if (!stream) return { superseded: true };
+        if (stream.runId !== ${JSON.stringify(runId)}) return { superseded: true };
         stream.tickDom();
-        return { queue: stream.queue.splice(0, stream.queue.length), done: stream.done };
+        return { queue: stream.queue.splice(0, stream.queue.length), done: stream.done, superseded: false };
       })()
     `);
+    if (snapshot && snapshot.superseded) {
+      await emit({ event: 'error', message: 'DeepSeek stream was superseded by another pane' });
+      return;
+    }
     if (!snapshot) throw new Error('DeepSeek stream collector was lost');
     if (snapshot.queue.length > 0) {
       lastHeartbeat = Date.now();

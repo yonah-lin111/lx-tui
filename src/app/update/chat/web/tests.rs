@@ -123,7 +123,7 @@ fn model_command_opens_picker_and_unsupported_commands_are_rejected_in_ai_web() 
     );
     assert_eq!(
         target.lx.toast.as_ref().map(|toast| toast.message.as_str()),
-        Some(text::LX_AI_WEB_ONLY_NEW_CMD)
+        Some(text::LX_WEB_ALLOWED_CMDS)
     );
 }
 
@@ -320,6 +320,9 @@ fn rewind_pops_latest_turn_restores_input_and_marks_edit_index() {
 #[test]
 fn rename_and_session_load_and_cloud_attachment_rewind_work_in_ai_web() {
     let (mut state, pane) = ai_web_state();
+    if let Some(target) = state.pane_mut_anywhere(pane) {
+        target.lx.chat.loading_session = true;
+    }
     on_ai_web_session_loaded(
         &mut state,
         pane,
@@ -592,4 +595,71 @@ fn switching_between_ai_web_and_native_isolates_sessions_and_blocks_shell_mode()
     let target = state.pane_anywhere(pane).expect("pane");
     assert!(target.lx.chat.session_id.is_none());
     assert!(target.lx.ai_web_edit_user_index.is_none());
+}
+
+#[test]
+fn stale_ai_web_session_loaded_is_ignored_without_loading_flag() {
+    let (mut state, pane) = ai_web_state();
+    // 用户已切走（`loading_session` 被清空）后，迟到的云端历史不得覆盖当前窗格或站点。
+    let changed = on_ai_web_session_loaded(
+        &mut state,
+        pane,
+        "ai-web-gm-stale".into(),
+        Some("Stale".into()),
+        Vec::new(),
+    );
+    assert!(!changed);
+    let target = state.pane_anywhere(pane).expect("pane");
+    assert_eq!(target.lx.ai_web_site, AiWebSite::Deepseek);
+    assert!(target.lx.chat.session_id.is_none());
+    assert!(target.lx.chat.messages.is_empty());
+}
+
+#[test]
+fn ai_web_model_selection_uses_candidate_site_not_pane_site() {
+    let (mut state, pane) = ai_web_state();
+    crate::app::update::set_ai_web_site(&mut state, pane, AiWebSite::Gemini);
+
+    // 面板在站点切换前构造：候选仍属于 DeepSeek，必须写 DeepSeek 配置而不是 Gemini。
+    super::super::slash::finish_model_selection(
+        &mut state,
+        pane,
+        crate::config::ai::ModelSelection {
+            provider: text::AI_WEB_SITE_DEEPSEEK.to_string(),
+            model: text::AI_WEB_SITE_DEEPSEEK.to_string(),
+            variant: Some(text::DEEPSEEK_THINKING_OFF.to_string()),
+        },
+    );
+    let config = state.pane_anywhere(pane).expect("pane").lx.ai_web_config;
+    assert_eq!(
+        config.deepseek_thinking,
+        crate::app::state::DeepseekThinkingMode::Off
+    );
+    assert_eq!(
+        config.gemini_thinking,
+        crate::app::state::GeminiThinkingLevel::Low
+    );
+    assert_eq!(
+        config.gemini_model,
+        crate::app::state::GeminiWebModel::Flash38
+    );
+}
+
+#[test]
+fn switching_ai_web_site_cancels_in_flight_stream() {
+    let (mut state, pane) = ai_web_state();
+    draft(&mut state, pane, "hello");
+    assert!(super::super::try_send(&mut state, pane));
+    state.effects.clear();
+
+    crate::app::update::set_ai_web_site(&mut state, pane, AiWebSite::Gemini);
+    assert!(
+        state
+            .effects
+            .iter()
+            .any(|effect| matches!(effect, Effect::CancelChatStream { .. }))
+    );
+    let target = state.pane_anywhere(pane).expect("pane");
+    assert!(target.lx.slash.is_none());
+    assert!(target.lx.chat.session_id.is_none());
 }

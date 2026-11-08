@@ -110,9 +110,9 @@ pub use viewport::{
 };
 pub(crate) use viewport::{resolve_lx_history, resolve_lx_rewind_center};
 pub use web::{
-    AI_WEB_DEEPSEEK_SESSION_PREFIX, AI_WEB_GEMINI_SESSION_PREFIX, AI_WEB_REMOTE_SESSION_PREFIX,
-    ai_web_remote_session, ai_web_remote_session_id, is_ai_web_session, on_ai_web_session_bound,
-    on_ai_web_session_loaded, rewind_ai_web, try_send_ai_web,
+    AI_WEB_DEEPSEEK_SESSION_PREFIX, AI_WEB_GEMINI_SESSION_PREFIX, ai_web_remote_session,
+    ai_web_remote_session_id, is_ai_web_session, on_ai_web_session_bound, on_ai_web_session_loaded,
+    rewind_ai_web, try_send_ai_web,
 };
 
 /// 尝试发送：校验 Native 入口、非空草稿、请求空闲与有效模型后冻结快照并入队效应。

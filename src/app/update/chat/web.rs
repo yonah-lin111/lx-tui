@@ -17,9 +17,6 @@ pub use crate::app::state::{
     ai_web_remote_session, is_ai_web_session,
 };
 
-/// 兼容旧常量名：默认指向 DeepSeek 云端会话前缀。
-pub const AI_WEB_REMOTE_SESSION_PREFIX: &str = AI_WEB_DEEPSEEK_SESSION_PREFIX;
-
 /// 提取云端真实会话 ID（若已关联 DeepSeek 或 Gemini 云端会话）。
 pub fn ai_web_remote_session_id(session_id: &str) -> Option<&str> {
     ai_web_remote_session(session_id).map(|(_, id)| id)
@@ -38,10 +35,9 @@ pub fn apply_ai_web_status(lx: &mut Lx) {
             };
         }
         crate::app::state::AiWebSite::Gemini => {
-            lx.chat.status.model_name = Some(format!(
-                "{} · {}",
-                text::AI_WEB_SITE_GEMINI,
-                lx.ai_web_config.gemini_model.id()
+            lx.chat.status.model_name = Some(text::ai_web_model_label(
+                crate::app::state::AiWebSite::Gemini,
+                lx.ai_web_config.gemini_model.id(),
             ));
             lx.chat.status.variant = Some(lx.ai_web_config.gemini_thinking.id().to_string());
         }
@@ -57,14 +53,11 @@ fn ai_web_assistant_label(
     site: crate::app::state::AiWebSite,
     config: crate::app::state::AiWebConfig,
 ) -> String {
-    match site {
-        crate::app::state::AiWebSite::Deepseek => text::AI_WEB_SITE_DEEPSEEK.to_string(),
-        crate::app::state::AiWebSite::Gemini => format!(
-            "{} · {}",
-            text::AI_WEB_SITE_GEMINI,
-            config.gemini_model.id()
-        ),
-    }
+    let model = match site {
+        crate::app::state::AiWebSite::Deepseek => text::AI_WEB_SITE_DEEPSEEK,
+        crate::app::state::AiWebSite::Gemini => config.gemini_model.id(),
+    };
+    text::ai_web_model_label(site, model)
 }
 
 /// AI Web 发送：直接构造内存态 user + streaming assistant 消息并入队网页流。
@@ -132,7 +125,7 @@ pub fn try_send_ai_web(
                     state,
                     pane,
                     InputHintLevel::Warning,
-                    text::LX_AI_WEB_ONLY_NEW_CMD,
+                    text::LX_WEB_ALLOWED_CMDS,
                 );
                 return true;
             }
@@ -217,11 +210,7 @@ pub fn try_send_ai_web(
         .last()
         .map_or(0, |m| m.turn_index.saturating_add(1));
     let assistant_id = format!("{session_id}-a-{generation}");
-    let now_ms = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .map_or(0, |duration| {
-            i64::try_from(duration.as_millis()).unwrap_or(0)
-        });
+    let now_ms = crate::db::now_ms();
     target.lx.chat.messages.push(ChatMessageView {
         sequence: base_seq + 1,
         id: user_id.clone(),
@@ -388,6 +377,11 @@ pub fn on_ai_web_session_loaded(
     let Some(target) = state.pane_mut_anywhere(pane) else {
         return false;
     };
+    // 用户可能在云端历史返回前切换入口/站点，此时 `loading_session` 已被清空；
+    // 迟到的结果不得覆盖当前窗格或把站点改回去。
+    if !target.lx.chat.loading_session {
+        return false;
+    }
     if let Some((site, _)) = ai_web_remote_session(&session_id) {
         target.lx.ai_web_site = site;
     }

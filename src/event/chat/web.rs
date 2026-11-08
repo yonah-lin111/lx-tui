@@ -5,6 +5,7 @@
 
 use std::process::Stdio;
 
+use sha2::{Digest, Sha256};
 use tokio::io::{AsyncBufReadExt, AsyncReadExt, AsyncWriteExt, BufReader};
 use tokio::net::TcpListener;
 use tokio::process::Command;
@@ -150,17 +151,16 @@ pub fn apply_effect(
         Effect::RenameChatSession {
             session_id, title, ..
         } => {
-            let fallback_site = state
+            let owner = state
                 .all_pane_ids()
                 .into_iter()
-                .find_map(|pane| {
-                    state.pane_anywhere(pane).and_then(|p| {
-                        (p.lx.chat.session_id.as_deref() == Some(session_id.as_str()))
-                            .then_some(p.lx.ai_web_site)
+                .find(|pane| {
+                    state.pane_anywhere(*pane).is_some_and(|p| {
+                        p.lx.chat.session_id.as_deref() == Some(session_id.as_str())
                     })
                 })
-                .unwrap_or_default();
-            rename_session(session_id.clone(), title.clone(), fallback_site);
+                .unwrap_or_else(|| state.active_tab().layout.focus());
+            rename_session(sender.clone(), owner, session_id.clone(), title.clone());
             let panes = state.all_pane_ids();
             let mut changed = false;
             for pane in panes {
@@ -169,7 +169,16 @@ pub fn apply_effect(
             changed
         }
         Effect::DeleteChatSession { session_id, .. } => {
-            delete_session(session_id.clone());
+            let owner = state
+                .all_pane_ids()
+                .into_iter()
+                .find(|pane| {
+                    state.pane_anywhere(*pane).is_some_and(|p| {
+                        p.lx.chat.session_id.as_deref() == Some(session_id.as_str())
+                    })
+                })
+                .unwrap_or_else(|| state.active_tab().layout.focus());
+            delete_session(sender.clone(), owner, session_id.clone());
             let panes = state.all_pane_ids();
             let mut changed = false;
             for pane in panes {
@@ -381,35 +390,60 @@ fn load_session(sender: mpsc::UnboundedSender<AppEvent>, pane: PaneId, session_i
     });
 }
 
-/// `/rename`：同步重命名网页端会话标题。
-fn rename_session(session_id: String, title: String, fallback_site: AiWebSite) {
-    let (site, remote_id) = match ai_web_remote_session(&session_id) {
-        Some((s, id)) => (s, Some(id.to_string())),
-        None => (fallback_site, None),
+/// `/rename`：同步重命名网页端会话标题；失败时回投提示，避免本地标题与云端分叉。
+fn rename_session(
+    sender: mpsc::UnboundedSender<AppEvent>,
+    pane: PaneId,
+    session_id: String,
+    title: String,
+) {
+    let Some((site, remote_id)) =
+        ai_web_remote_session(&session_id).map(|(s, id)| (s, id.to_string()))
+    else {
+        let _ = sender.send(AppEvent::AiWeb(AiWebEvent::ActionFailed {
+            pane,
+            message: "session is not linked to a cloud conversation".into(),
+        }));
+        return;
     };
     tokio::spawn(async move {
-        let _ = run_query(
+        match run_query(
             site,
             ScriptParams {
                 action: "rename_session",
-                session_id: remote_id.as_deref(),
+                session_id: Some(&remote_id),
                 title: Some(&title),
                 ..Default::default()
             },
         )
-        .await;
+        .await
+        {
+            Ok(events) => {
+                if let Some(message) = action_error(&events, site) {
+                    let _ =
+                        sender.send(AppEvent::AiWeb(AiWebEvent::ActionFailed { pane, message }));
+                }
+            }
+            Err(message) => {
+                let _ = sender.send(AppEvent::AiWeb(AiWebEvent::ActionFailed { pane, message }));
+            }
+        }
     });
 }
 
-/// 删除云端会话。
-fn delete_session(session_id: String) {
+/// 删除云端会话；失败时回投提示。
+fn delete_session(sender: mpsc::UnboundedSender<AppEvent>, pane: PaneId, session_id: String) {
     let Some((site, remote_id)) =
         ai_web_remote_session(&session_id).map(|(s, id)| (s, id.to_string()))
     else {
+        let _ = sender.send(AppEvent::AiWeb(AiWebEvent::ActionFailed {
+            pane,
+            message: "session is not linked to a cloud conversation".into(),
+        }));
         return;
     };
     tokio::spawn(async move {
-        let _ = run_query(
+        match run_query(
             site,
             ScriptParams {
                 action: "delete_session",
@@ -417,8 +451,30 @@ fn delete_session(session_id: String) {
                 ..Default::default()
             },
         )
-        .await;
+        .await
+        {
+            Ok(events) => {
+                if let Some(message) = action_error(&events, site) {
+                    let _ =
+                        sender.send(AppEvent::AiWeb(AiWebEvent::ActionFailed { pane, message }));
+                }
+            }
+            Err(message) => {
+                let _ = sender.send(AppEvent::AiWeb(AiWebEvent::ActionFailed { pane, message }));
+            }
+        }
     });
+}
+
+/// 从动作脚本事件里提取登录/执行失败提示。
+fn action_error(events: &[AiWebStreamEvent], site: AiWebSite) -> Option<String> {
+    events.iter().find_map(|event| match event {
+        AiWebStreamEvent::LoginRequired { .. } => {
+            Some(crate::ui::text::lx_ai_web_login_required_for(site).to_string())
+        }
+        AiWebStreamEvent::Error(message) => Some(message.clone()),
+        _ => None,
+    })
 }
 
 /// 一轮网页对话：拉起子进程、喂脚本、按行回投增量与终态。
@@ -441,8 +497,6 @@ async fn run_chat(
     tracing::debug!(?site, session = %key.session, "ai web stream started");
     let mut child = match Command::new(resolve_ego_browser_bin())
         .arg("nodejs")
-        .env("LX_AI_WEB_ACTION", "chat")
-        .env("LX_AI_WEB_PROMPT", &prompt)
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
@@ -495,7 +549,12 @@ async fn run_chat(
             ..Default::default()
         },
     );
-    if stdin.write_all(source.as_bytes()).await.is_err() || stdin.shutdown().await.is_err() {
+    let write_result = tokio::time::timeout(std::time::Duration::from_secs(30), async {
+        stdin.write_all(source.as_bytes()).await?;
+        stdin.shutdown().await
+    })
+    .await;
+    if !matches!(write_result, Ok(Ok(()))) {
         if let Some(handle) = listener_task {
             handle.abort();
         }
@@ -547,7 +606,6 @@ async fn run_chat(
         }
     });
 
-    let mut received = false;
     let mut last_diag: Option<String> = None;
     let mut bound_session: Option<(String, Option<String>)> = None;
     loop {
@@ -574,11 +632,9 @@ async fn run_chat(
                 match line {
                     Some(line) => match parse_script_line(&line) {
                         Some(AiWebStreamEvent::Thinking(delta)) => {
-                            received = true;
                             send_delta(&sender, &key, PartKind::Reasoning, delta);
                         }
                         Some(AiWebStreamEvent::Text(delta)) => {
-                            received = true;
                             send_delta(&sender, &key, PartKind::Text, delta);
                         }
                         Some(AiWebStreamEvent::Session { id, title }) => {
@@ -620,7 +676,6 @@ async fn run_chat(
                         }
                     },
                     None => {
-                        let _ = received;
                         let msg = last_diag
                             .as_deref()
                             .unwrap_or(crate::ui::text::LX_AI_WEB_EGO_UNAVAILABLE);
@@ -681,10 +736,15 @@ fn spawn_action(site: AiWebSite, params: ScriptParams<'static>) {
         else {
             return;
         };
-        if let Some(mut stdin) = child.stdin.take()
-            && stdin.write_all(source.as_bytes()).await.is_ok()
-        {
-            let _ = stdin.shutdown().await;
+        if let Some(mut stdin) = child.stdin.take() {
+            let write_result = tokio::time::timeout(std::time::Duration::from_secs(30), async {
+                stdin.write_all(source.as_bytes()).await?;
+                stdin.shutdown().await
+            })
+            .await;
+            if !matches!(write_result, Ok(Ok(()))) {
+                return;
+            }
         }
         let _ = tokio::time::timeout(std::time::Duration::from_secs(30), child.wait()).await;
     });
@@ -703,84 +763,137 @@ pub(crate) async fn run_query(
         .kill_on_drop(true)
         .spawn()
         .map_err(|_| crate::ui::text::LX_AI_WEB_EGO_UNAVAILABLE.to_string())?;
+    let action = params.action.to_string();
     let source = script_source(site, params);
     if let Some(mut stdin) = child.stdin.take() {
-        stdin
-            .write_all(source.as_bytes())
-            .await
-            .map_err(|_| crate::ui::text::LX_AI_WEB_EGO_UNAVAILABLE.to_string())?;
-        let _ = stdin.shutdown().await;
+        let write_result = tokio::time::timeout(std::time::Duration::from_secs(30), async {
+            stdin.write_all(source.as_bytes()).await?;
+            stdin.shutdown().await
+        })
+        .await;
+        if !matches!(write_result, Ok(Ok(()))) {
+            return Err(crate::ui::text::LX_AI_WEB_EGO_UNAVAILABLE.to_string());
+        }
     }
-    let output = tokio::time::timeout(std::time::Duration::from_secs(30), child.wait_with_output())
-        .await
-        .map_err(|_| crate::ui::text::LX_AI_WEB_EGO_UNAVAILABLE.to_string())?
-        .map_err(|_| crate::ui::text::LX_AI_WEB_EGO_UNAVAILABLE.to_string())?;
+    // `load_session` 内部先等标签页（25s）再等历史渲染（10s），预算必须高于两者之和。
+    let budget = if action == "load_session" { 60 } else { 30 };
+    let output = tokio::time::timeout(
+        std::time::Duration::from_secs(budget),
+        child.wait_with_output(),
+    )
+    .await
+    .map_err(|_| crate::ui::text::LX_AI_WEB_EGO_UNAVAILABLE.to_string())?
+    .map_err(|_| crate::ui::text::LX_AI_WEB_EGO_UNAVAILABLE.to_string())?;
     let mut events = Vec::new();
+    let mut last_diag: Option<String> = None;
     for bytes in [&output.stdout, &output.stderr] {
         let text = String::from_utf8_lossy(bytes);
         for line in text.lines() {
             if let Some(ev) = parse_script_line(line) {
                 events.push(ev);
+            } else {
+                let trimmed = line.trim();
+                if should_record_diag_line(trimmed, last_diag.as_deref()) {
+                    last_diag = Some(trimmed.to_string());
+                }
             }
         }
+    }
+    if events.is_empty() {
+        return Err(
+            last_diag.unwrap_or_else(|| crate::ui::text::LX_AI_WEB_EGO_UNAVAILABLE.to_string())
+        );
     }
     Ok(events)
 }
 
 /// 启动本地回环 HTTP 接收器：绕过 `ego-browser nodejs` 对 stdio 的进程级缓冲，
 /// 让脚本通过 `fetch(STREAM_URL, { method: 'POST' })` 实时推送每一个流分片。
+///
+/// URL 携带一次性 token，仅接受该路径；header/body 有上限，连接读写有超时，
+/// 避免同机任意进程向当前回复注入文本或耗尽内存。
 pub(crate) async fn spawn_stream_listener(
     line_tx: mpsc::UnboundedSender<String>,
 ) -> Option<(String, tokio::task::JoinHandle<()>)> {
+    const HEADER_LIMIT: usize = 16 * 1024;
+    const BODY_LIMIT: usize = 1024 * 1024;
+    const READ_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(5);
+
     let listener = TcpListener::bind("127.0.0.1:0").await.ok()?;
     let port = listener.local_addr().ok()?.port();
+    let token = new_stream_token();
+    let expected_path = format!("/{token}");
     let handle = tokio::spawn(async move {
-        let _keep_tx = line_tx.clone();
         while let Ok((mut socket, _)) = listener.accept().await {
             let tx = line_tx.clone();
+            let expected_path = expected_path.clone();
             tokio::spawn(async move {
                 let mut buf = Vec::with_capacity(2048);
                 let mut chunk = [0u8; 1024];
                 let header_end = loop {
-                    let Ok(n) = socket.read(&mut chunk).await else {
-                        return;
-                    };
-                    if n == 0 {
+                    let read =
+                        match tokio::time::timeout(READ_TIMEOUT, socket.read(&mut chunk)).await {
+                            Ok(Ok(read)) => read,
+                            _ => return,
+                        };
+                    if read == 0 {
                         break None;
-                    };
-                    buf.extend_from_slice(&chunk[..n]);
+                    }
+                    buf.extend_from_slice(&chunk[..read]);
+                    if buf.len() > HEADER_LIMIT {
+                        return;
+                    }
                     if let Some(pos) = buf.windows(4).position(|w| w == b"\r\n\r\n") {
                         break Some(pos + 4);
                     }
                 };
-                if let Some(body_start) = header_end {
-                    let header_str = String::from_utf8_lossy(&buf[..body_start]);
-                    let content_len = header_str
-                        .lines()
-                        .find_map(|line| {
-                            let (k, v) = line.split_once(':')?;
-                            k.trim()
-                                .eq_ignore_ascii_case("content-length")
-                                .then(|| v.trim().parse::<usize>().ok())?
-                        })
-                        .unwrap_or(0);
-                    let target_len = body_start.saturating_add(content_len);
-                    while buf.len() < target_len {
-                        let Ok(n) = socket.read(&mut chunk).await else {
-                            break;
+                let Some(body_start) = header_end else {
+                    return;
+                };
+                let header_str = String::from_utf8_lossy(&buf[..body_start]);
+                let request_path = header_str
+                    .lines()
+                    .next()
+                    .and_then(|line| line.split_whitespace().nth(1))
+                    .unwrap_or_default();
+                if request_path != expected_path {
+                    let _ = socket
+                        .write_all(
+                            b"HTTP/1.1 404 Not Found\r\nContent-Length: 0\r\nConnection: close\r\n\r\n",
+                        )
+                        .await;
+                    return;
+                }
+                let content_len = header_str.lines().find_map(|line| {
+                    let (key, value) = line.split_once(':')?;
+                    key.trim()
+                        .eq_ignore_ascii_case("content-length")
+                        .then(|| value.trim().parse::<usize>().ok())?
+                });
+                if content_len.is_some_and(|len| len > BODY_LIMIT) {
+                    return;
+                }
+                let target_len = body_start.saturating_add(content_len.unwrap_or(0));
+                while buf.len() < target_len {
+                    let read =
+                        match tokio::time::timeout(READ_TIMEOUT, socket.read(&mut chunk)).await {
+                            Ok(Ok(read)) => read,
+                            _ => break,
                         };
-                        if n == 0 {
-                            break;
-                        }
-                        buf.extend_from_slice(&chunk[..n]);
+                    if read == 0 {
+                        break;
                     }
-                    let end = target_len.min(buf.len());
-                    let body = String::from_utf8_lossy(&buf[body_start..end]);
-                    for line in body.lines() {
-                        let trimmed = line.trim();
-                        if !trimmed.is_empty() {
-                            let _ = tx.send(trimmed.to_string());
-                        }
+                    buf.extend_from_slice(&chunk[..read]);
+                    if buf.len() > body_start.saturating_add(BODY_LIMIT) {
+                        break;
+                    }
+                }
+                let end = target_len.min(buf.len());
+                let body = String::from_utf8_lossy(&buf[body_start..end]);
+                for line in body.lines() {
+                    let trimmed = line.trim();
+                    if !trimmed.is_empty() {
+                        let _ = tx.send(trimmed.to_string());
                     }
                 }
                 let _ = socket
@@ -791,5 +904,28 @@ pub(crate) async fn spawn_stream_listener(
             });
         }
     });
-    Some((format!("http://127.0.0.1:{port}"), handle))
+    Some((format!("http://127.0.0.1:{port}/{token}"), handle))
 }
+
+/// 生成一次性流监听 token（进程内单调 + 时间 + pid 的 SHA-256 前缀）。
+fn new_stream_token() -> String {
+    use std::sync::atomic::{AtomicU64, Ordering};
+    static SEQUENCE: AtomicU64 = AtomicU64::new(0);
+    let mut hasher = Sha256::new();
+    let nanos = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|duration| duration.as_nanos())
+        .unwrap_or(0);
+    hasher.update(nanos.to_le_bytes());
+    hasher.update(std::process::id().to_le_bytes());
+    hasher.update(SEQUENCE.fetch_add(1, Ordering::Relaxed).to_le_bytes());
+    hasher
+        .finalize()
+        .iter()
+        .take(16)
+        .map(|byte| format!("{byte:02x}"))
+        .collect()
+}
+
+#[cfg(test)]
+mod tests;

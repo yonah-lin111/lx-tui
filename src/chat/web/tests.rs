@@ -141,3 +141,41 @@ fn diag_line_filter_preserves_primary_error_and_ignores_stack_or_exit_trailer() 
         Some("Error: listTabs: Control of this task space is with the user")
     );
 }
+
+#[test]
+fn script_source_escapes_user_controlled_values() {
+    let files = vec![
+        "/tmp/a\"b.png".to_string(),
+        "/tmp/back`tick.pdf".to_string(),
+    ];
+    let keep = vec!["keep\nname.pdf".to_string()];
+    let evil = "quote\" backtick` dollar${x}\nline</script>\u{2028}end";
+    let source = script_source(
+        crate::app::state::AiWebSite::Gemini,
+        ScriptParams {
+            action: "chat",
+            model: Some(evil),
+            thinking: Some(evil),
+            prompt: Some(evil),
+            files: &files,
+            keep_files: &keep,
+            session_id: Some(evil),
+            title: Some(evil),
+            edit_user_index: Some(3),
+            ..Default::default()
+        },
+    );
+
+    // 所有用户可控值都必须以 serde_json 字符串字面量出现，换行/引号/反斜杠不得裸奔。
+    assert!(source.contains(&serde_json::to_string(evil).expect("json string")));
+    assert!(source.contains(&serde_json::to_string(&files).expect("json files")));
+    assert!(source.contains(&serde_json::to_string(&keep).expect("json keep files")));
+    let prompt_line = source
+        .lines()
+        .find(|line| line.trim_start().starts_with("prompt: "))
+        .expect("prompt field");
+    assert!(prompt_line.contains("\\nline</script>"), "{prompt_line}");
+    assert!(prompt_line.trim_end().ends_with("\","), "{prompt_line}");
+    assert!(source.contains("editIndex: 3,"));
+    assert!(source.starts_with("const __LX_PARAMS = {\n"));
+}

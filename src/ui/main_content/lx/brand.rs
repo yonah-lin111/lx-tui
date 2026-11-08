@@ -216,16 +216,32 @@ pub(super) fn place_ai_web_sites(rect: Rect) -> Vec<(crate::app::state::AiWebSit
     if rect.width == 0 || rect.height == 0 {
         return Vec::new();
     }
+    const SITE_GAP: u16 = 3;
     let sites = crate::app::state::AiWebSite::ALL;
-    let widths: Vec<u16> = sites
+    let mut widths: Vec<u16> = sites
         .iter()
         .map(|site| u16::try_from(text::ai_web_site_label(*site).width()).unwrap_or(u16::MAX))
         .collect();
     let gaps = u16::try_from(sites.len().saturating_sub(1)).unwrap_or(0);
+    let natural = widths
+        .iter()
+        .fold(0u16, |sum, w| sum.saturating_add(*w))
+        .saturating_add(SITE_GAP.saturating_mul(gaps));
+    if natural > rect.width {
+        // 窄窗格：按可用列等分宽度，避免后一个站点被整体裁掉而无法点击。
+        let available = rect.width.saturating_sub(SITE_GAP.saturating_mul(gaps));
+        let count = u16::try_from(sites.len()).unwrap_or(1).max(1);
+        let base = (available / count).max(1);
+        let remainder = available.saturating_sub(base.saturating_mul(count));
+        for (index, width) in widths.iter_mut().enumerate() {
+            let in_remainder = u16::try_from(index).is_ok_and(|i| i < remainder);
+            *width = base.saturating_add(u16::from(in_remainder));
+        }
+    }
     let total = widths
         .iter()
         .fold(0u16, |sum, w| sum.saturating_add(*w))
-        .saturating_add(3u16.saturating_mul(gaps));
+        .saturating_add(SITE_GAP.saturating_mul(gaps));
     let mut x = rect.x.saturating_add(rect.width.saturating_sub(total) / 2);
     let mut out = Vec::with_capacity(sites.len());
     for (site, w) in sites.into_iter().zip(widths) {
@@ -233,7 +249,7 @@ pub(super) fn place_ai_web_sites(rect: Rect) -> Vec<(crate::app::state::AiWebSit
         if clamped_w > 0 {
             out.push((site, Rect::new(x, rect.y, clamped_w, 1)));
         }
-        x = x.saturating_add(w).saturating_add(3);
+        x = x.saturating_add(w).saturating_add(SITE_GAP);
     }
     out
 }

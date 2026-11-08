@@ -4,7 +4,7 @@ use ratatui::style::{Color, Modifier, Style};
 
 use crate::app::state::{AiWebSite, LxEntry};
 
-use super::{accent, muted};
+use super::muted;
 
 // ===== 聊天步骤 / 工具行的配色（翡翠绿结构色 + 默认色参数）=====
 //
@@ -208,11 +208,6 @@ pub fn logo_pixel(ch: char) -> Option<Color> {
     }
 }
 
-/// lx 页入口按钮的像素边框：选中用强调色、未选中用次要信息。
-pub fn lx_entry_border(selected: bool) -> Style {
-    if selected { accent() } else { muted() }
-}
-
 /// lx 页入口标签的渐变端点色（粉 → 蓝），取该入口 logo 的两主色（字标 L 侧粉、X 侧蓝）。
 pub fn lx_entry_gradient(entry: LxEntry) -> (Color, Color) {
     match entry {
@@ -320,11 +315,6 @@ fn lerp_indexed(from: Color, to: Color, t: f32) -> Color {
         mix(rgb_a.1, rgb_b.1),
         mix(rgb_a.2, rgb_b.2),
     )))
-}
-
-/// lx 页输入框的像素边框：常态次要信息（焦点不改变输入框外观）。
-pub fn lx_input_border() -> Style {
-    muted()
 }
 
 /// 会话标题胶囊配色槽位总数。

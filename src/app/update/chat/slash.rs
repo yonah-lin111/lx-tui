@@ -250,7 +250,9 @@ fn current_variant_index_for_pane(
         .pane_anywhere(pane)
         .filter(|target| target.lx.entry == crate::app::state::LxEntry::AiWeb)
     {
-        let current = match target.lx.ai_web_site {
+        let site = crate::app::state::AiWebSite::from_label(&selection.provider)
+            .unwrap_or(target.lx.ai_web_site);
+        let current = match site {
             crate::app::state::AiWebSite::Gemini => target.lx.ai_web_config.gemini_thinking.id(),
             crate::app::state::AiWebSite::Deepseek => {
                 target.lx.ai_web_config.deepseek_thinking.id()
@@ -280,7 +282,9 @@ pub(crate) fn finish_model_selection(
     {
         if let Some(target) = state.pane_mut_anywhere(pane) {
             target.lx.slash = None;
-            match target.lx.ai_web_site {
+            let site = crate::app::state::AiWebSite::from_label(&selection.provider)
+                .unwrap_or(target.lx.ai_web_site);
+            match site {
                 crate::app::state::AiWebSite::Gemini => {
                     if let Some(model) =
                         crate::app::state::GeminiWebModel::from_id(&selection.model)
@@ -450,7 +454,9 @@ fn variant_keys_for_pane(
         .pane_anywhere(pane)
         .filter(|target| target.lx.entry == crate::app::state::LxEntry::AiWeb)
     {
-        return match target.lx.ai_web_site {
+        let site = crate::app::state::AiWebSite::from_label(&selection.provider)
+            .unwrap_or(target.lx.ai_web_site);
+        return match site {
             crate::app::state::AiWebSite::Gemini => crate::app::state::GeminiThinkingLevel::ALL
                 .into_iter()
                 .map(|level| level.id().to_string())
@@ -521,7 +527,7 @@ pub fn apply_slash_command(state: &mut AppState, pane: PaneId, command: SlashCom
             state,
             pane,
             InputHintLevel::Warning,
-            text::LX_AI_WEB_ONLY_NEW_CMD,
+            text::LX_WEB_ALLOWED_CMDS,
         );
         return true;
     }
@@ -655,7 +661,7 @@ pub(crate) fn refresh_slash_panel(state: &mut AppState, pane: PaneId) {
         return;
     };
     // `/` 前缀或更具体前缀：命令候选实时过滤；skill 归 `@` 面板管理。
-    // AI Web 只暴露 `/new`，其余命令不出现在候选里。
+    // AI Web 只暴露 `/model`、`/new`、`/resume`、`/rewind`、`/rename`，其余命令不进入候选。
     let matching = crate::app::state::lx::slash::SlashPanel::command_entries_for(entry, &query);
     if let Some(target) = state.pane_mut_anywhere(pane) {
         if matching.is_empty() {

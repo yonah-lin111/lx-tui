@@ -54,7 +54,15 @@ async function main() {
   }
 
   // Synchronize selected Gemini model and thinking level in the web UI.
-  await ensureGeminiModelAndThinking();
+  try {
+    await ensureGeminiModelAndThinking();
+  } catch (error) {
+    await emit({
+      event: 'error',
+      message: String((error && error.message) || error),
+    });
+    return;
+  }
 
   // Set up DOM stream collector on window.__lxGeminiStream.
   const runId = String(Date.now()) + '-' + String(Math.random());
@@ -213,6 +221,9 @@ async function main() {
           if (this.isEdit && !this.editResetSeen) {
             if (!mr) {
               this.editResetSeen = true;
+              this.domThink = '';
+              this.domText = '';
+              this.started = false;
               return;
             }
             const curThink = this.extractCleanText(
@@ -230,10 +241,17 @@ async function main() {
               curBody !== this.initialTargetText ||
               curThink !== this.initialThinkText
             ) {
+              // 旧回答可能仍在 DOM 中：清空已采集文本并跳过本帧，避免把旧回答当作新 delta 重发，
+              // 也避免 domText 停留在旧长度导致完成判定永远追不上。
               this.editResetSeen = true;
-            } else {
+              this.domThink = '';
+              this.domText = '';
+              this.started = false;
+              this.lastSample = '';
+              this.stableTicks = 0;
               return;
             }
+            return;
           }
           if (isGenerating) {
             this.started = true;
@@ -297,12 +315,24 @@ async function main() {
         const queries = Array.from(document.querySelectorAll('user-query'));
         const target = queries[${EDIT_INDEX}];
         if (!target) return { status: 'missing_turn' };
-        const existingFiles = target.querySelectorAll(
-          '.file-preview-container button, .file-preview-container a, gem-media-attachment, gem-attachment'
-        ).length;
-        const wantedFiles = ${FILES.length + KEEP_FILES.length};
-        if (${EDIT_INDEX === 0 ? 'true' : 'false'} && existingFiles !== wantedFiles) {
-          return { status: 'attachments_changed_turn0' };
+        const expected = ${JSON.stringify(
+          FILES.concat(KEEP_FILES)
+        )}
+          .map((p) => String(p).split(/[\\\\/]/).pop().toLowerCase())
+          .sort();
+        const existing = Array.from(
+          target.querySelectorAll(
+            'user-query-file-preview button[aria-label], .file-preview-container button[aria-label]'
+          )
+        )
+          .map((el) => (el.getAttribute('aria-label') || '').trim().toLowerCase())
+          .filter(Boolean)
+          .sort();
+        const sameAttachments =
+          existing.length === expected.length &&
+          existing.every((name, idx) => name === expected[idx]);
+        if (!sameAttachments) {
+          return { status: 'attachments_changed' };
         }
         target.scrollIntoView({ block: 'center' });
         const editBtn = target.querySelector(
@@ -376,16 +406,27 @@ async function main() {
         await emit({ event: 'error', message: 'Failed to submit edited Gemini prompt' });
         return;
       }
-    } else if (editCheck && editCheck.status === 'attachments_changed_turn0') {
-      await ensureFreshChat();
-      await js(`
-        (() => {
-          if (window.__lxGeminiStream) {
-            window.__lxGeminiStream.isEdit = false;
-            window.__lxGeminiStream.targetIndex = 0;
-          }
-        })()
-      `).catch(() => {});
+    } else if (editCheck && editCheck.status === 'attachments_changed') {
+      if (EDIT_INDEX === 0) {
+        // 第 0 轮允许以“新云端会话”承载新的附件集合。
+        await ensureFreshChat();
+        await js(`
+          (() => {
+            if (window.__lxGeminiStream) {
+              window.__lxGeminiStream.isEdit = false;
+              window.__lxGeminiStream.targetIndex = 0;
+            }
+          })()
+        `).catch(() => {});
+      } else {
+        // Gemini 的原地编辑只改文本，不能增删历史轮次附件；显式拒绝，避免本地与云端分叉。
+        await emit({
+          event: 'error',
+          message:
+            'Gemini /rewind cannot change attachments of an earlier turn; use /new or send without --file/--keep-file',
+        });
+        return;
+      }
     } else if (editCheck && editCheck.status === 'missing_turn') {
       if (EDIT_INDEX === 0) {
         await ensureFreshChat();
@@ -405,7 +446,7 @@ async function main() {
     }
   }
   if (!submittedViaEdit) {
-    await syncContainerAttachments(false);
+    await syncContainerAttachments();
     const filled = await js(`
       (() => {
         const editor = document.querySelector('.ql-editor[contenteditable="true"], rich-textarea [contenteditable="true"]');

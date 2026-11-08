@@ -1,6 +1,6 @@
 // DeepSeek web driver shared helpers, attachment sync, and session management actions.
 //
-// Prepended before `deepseek_script.js` by `src/event/chat/ai_web.rs`.
+// Prepended before `deepseek_script.js` by `src/event/chat/web.rs`.
 
 const PREFIX = '@@LX_AI_WEB@@';
 const SPACE = 'lx-tui-ai-web-deepseek';
@@ -8,7 +8,6 @@ const HOME = 'https://chat.deepseek.com';
 const SIGN_IN = 'https://chat.deepseek.com/sign_in';
 const PARAMS = typeof __LX_PARAMS === 'object' && __LX_PARAMS !== null ? __LX_PARAMS : {};
 const ACTION = PARAMS.action || 'chat';
-const MODEL = PARAMS.model || 'DeepSeek';
 const THINKING = PARAMS.thinking || 'deepthink';
 const PROMPT = PARAMS.prompt || '';
 const FILES = Array.isArray(PARAMS.files) ? PARAMS.files : [];
@@ -438,54 +437,68 @@ async function runNonChatAction(currentUrl) {
   }
 
   if (ACTION === 'rename_session') {
-    if (TITLE) {
-      await js(`
-        (async () => {
-          const match = location.pathname.match(/\\/s\\/([a-zA-Z0-9-]+)/);
-          const sessionId = ${JSON.stringify(SESSION_ID)} || (match ? match[1] : '');
-          if (!sessionId) return false;
-          const tokenObj = JSON.parse(localStorage.getItem('userToken') || '{}');
-          const token = tokenObj.value || '';
-          const res = await fetch('/api/v0/chat_session/update_title', {
-            method: 'POST',
-            headers: {
-              authorization: 'Bearer ' + token,
-              'content-type': 'application/json',
-            },
-            body: JSON.stringify({
-              chat_session_id: sessionId,
-              title: ${JSON.stringify(TITLE)},
-            }),
-          });
-          return res.ok;
-        })()
-      `);
+    if (!TITLE) {
+      await emit({ event: 'error', message: 'missing session title' });
+      return;
+    }
+    if (!SESSION_ID) {
+      await emit({ event: 'error', message: 'missing session id' });
+      return;
+    }
+    const renamed = await js(`
+      (async () => {
+        const sessionId = ${JSON.stringify(SESSION_ID)};
+        const tokenObj = JSON.parse(localStorage.getItem('userToken') || '{}');
+        const token = tokenObj.value || '';
+        const res = await fetch('/api/v0/chat_session/update_title', {
+          method: 'POST',
+          headers: {
+            authorization: 'Bearer ' + token,
+            'content-type': 'application/json',
+          },
+          body: JSON.stringify({
+            chat_session_id: sessionId,
+            title: ${JSON.stringify(TITLE)},
+          }),
+        });
+        return res.ok;
+      })()
+    `).catch(() => false);
+    if (!renamed) {
+      await emit({ event: 'error', message: 'DeepSeek rename failed' });
+      return;
     }
     await emit({ event: 'done' });
     return;
   }
 
   if (ACTION === 'delete_session') {
-    if (SESSION_ID) {
-      await js(`
-        (async () => {
-          const sessionId = ${JSON.stringify(SESSION_ID)};
-          const tokenObj = JSON.parse(localStorage.getItem('userToken') || '{}');
-          const token = tokenObj.value || '';
-          const res = await fetch('/api/v0/chat_session/delete', {
-            method: 'POST',
-            headers: {
-              authorization: 'Bearer ' + token,
-              'content-type': 'application/json',
-            },
-            body: JSON.stringify({ chat_session_ids: [sessionId] }),
-          });
-          return res.ok;
-        })()
-      `);
-      if (currentUrl.includes(SESSION_ID)) {
-        await openOrReuseTab(HOME, { wait: true, timeout: 20 });
-      }
+    if (!SESSION_ID) {
+      await emit({ event: 'error', message: 'missing session id' });
+      return;
+    }
+    const deleted = await js(`
+      (async () => {
+        const sessionId = ${JSON.stringify(SESSION_ID)};
+        const tokenObj = JSON.parse(localStorage.getItem('userToken') || '{}');
+        const token = tokenObj.value || '';
+        const res = await fetch('/api/v0/chat_session/delete', {
+          method: 'POST',
+          headers: {
+            authorization: 'Bearer ' + token,
+            'content-type': 'application/json',
+          },
+          body: JSON.stringify({ chat_session_ids: [sessionId] }),
+        });
+        return res.ok;
+      })()
+    `).catch(() => false);
+    if (!deleted) {
+      await emit({ event: 'error', message: 'DeepSeek delete failed' });
+      return;
+    }
+    if (currentUrl.includes(SESSION_ID)) {
+      await openOrReuseTab(HOME, { wait: true, timeout: 20 });
     }
     await emit({ event: 'done' });
     return;

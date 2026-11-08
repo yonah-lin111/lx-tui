@@ -205,6 +205,7 @@ fn ai_web_entry_replaces_inventory_with_deepseek_and_gemini_sites_and_brand_grad
     let text = buffer_text(&buf);
     assert!(text.contains("DeepSeek"), "{text}");
     assert!(text.contains("Gemini"), "{text}");
+    assert!(!text.contains("AI Web"), "{text}");
     assert!(text.contains("chat directly with web AI models"), "{text}");
     assert!(!text.contains("AGENTS.md"), "{text}");
     assert!(!text.contains("mcp"), "{text}");
@@ -237,13 +238,28 @@ fn ai_web_entry_replaces_inventory_with_deepseek_and_gemini_sites_and_brand_grad
 
     // 默认选中 DeepSeek：DeepSeek 加粗且 y+1 有 `─` 下划线，Gemini 保持品牌渐变但无下划线。
     assert_eq!(buf[(ds_rect.x, ds_rect.y)].fg, Color::Indexed(63));
+    assert_eq!(
+        buf[(ds_rect.x + ds_rect.width - 1, ds_rect.y)].fg,
+        Color::Indexed(39),
+        "DeepSeek 标签末端必须落在渐变终点"
+    );
     assert!(
         buf[(ds_rect.x, ds_rect.y)]
             .modifier
             .contains(ratatui::style::Modifier::BOLD)
     );
     assert_eq!(buf[(ds_rect.x, ds_rect.y + 1)].symbol(), "─");
+    assert_eq!(
+        buf[(ds_rect.x + ds_rect.width - 1, ds_rect.y + 1)].fg,
+        Color::Indexed(39),
+        "下划线沿用同一逐字渐变"
+    );
     assert_eq!(buf[(gm_rect.x, gm_rect.y)].fg, Color::Indexed(69));
+    assert_eq!(
+        buf[(gm_rect.x + gm_rect.width - 1, gm_rect.y)].fg,
+        Color::Indexed(204),
+        "Gemini 标签末端必须落在渐变终点"
+    );
     assert!(
         !buf[(gm_rect.x, gm_rect.y)]
             .modifier
@@ -265,6 +281,29 @@ fn ai_web_entry_replaces_inventory_with_deepseek_and_gemini_sites_and_brand_grad
 
     lx.entry = LxEntry::Native;
     assert_eq!(ai_web_site_hit(area, &lx, ds_rect.x, ds_rect.y), None);
+}
+
+#[test]
+fn narrow_ai_web_site_row_keeps_both_sites_visible_and_hittable() {
+    // 最小窗格内容宽度附近：不能只留下 DeepSeek 而把 Gemini 整行裁掉。
+    for width in [8, 10, 12, 16] {
+        let rect = Rect::new(0, 0, width, 2);
+        let placed = brand::place_ai_web_sites(rect);
+        assert_eq!(placed.len(), 2, "width={width} 必须同时放下两个站点");
+        for (_, site_rect) in &placed {
+            assert!(site_rect.width > 0, "width={width} 站点宽度必须大于 0");
+            assert!(
+                site_rect.right() <= rect.right(),
+                "width={width} 站点不得越过可用区域"
+            );
+        }
+        assert_eq!(placed[0].0, AiWebSite::Deepseek);
+        assert_eq!(placed[1].0, AiWebSite::Gemini);
+        assert!(
+            placed[0].1.right() <= placed[1].1.x,
+            "width={width} 两个站点不得重叠"
+        );
+    }
 }
 
 #[test]

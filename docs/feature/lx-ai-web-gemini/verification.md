@@ -371,14 +371,14 @@
   rtk cargo test ui::main_content::lx::tests
   ```
 - **验证步骤**：
-  1. 运行 `ui::main_content::lx::tests` 全部 112 个 UI 渲染与命中单元测试；
+  1. 运行 `ui::main_content::lx::tests` 全部 113 个 UI 渲染与命中单元测试；
   2. 检查顶部 4 模式（`Native · Hybrid · Automation · Web`）及 `Web` 模式下 `DeepSeek · Gemini` 的 256 色逐字品牌渐变、选中态 `Modifier::BOLD` 与 `y + 1` 行 `─` 同色渐变下划线。
 - **期望结果**：
-  - 112 个 UI 测试全部通过；
+  - 113 个 UI 测试全部通过；
   - `DeepSeek` 使用 `(Color::Indexed(63), Color::Indexed(39))` 渐变，`Gemini` 使用 `(Color::Indexed(69), Color::Indexed(204))` 渐变，选中项加粗并在正下方绘制渐变 `─` 下划线。
 - **实际验证结果（PASS）**：
   ```text
-  cargo test: 112 passed, 4786 filtered out (15 suites, 0.01s)
+  cargo test: 113 passed, 4792 filtered out (15 suites, 0.07s)
   ```
 
 ---
@@ -397,10 +397,52 @@
   2. 运行 `rtk cargo test web` 与 `rtk cargo test cli` 验证状态机、两级 `/model` 选择器（纯内存态 `ai_web_config`，不写 `ai.json`/SQLite）、跨站点切换自动清场与 CLI 参数路由。
 - **期望结果**：
   - `cargo fmt --check` 与 `cargo clippy --all-targets -- -D warnings` 零问题通过；
-  - `cargo test web`（93 passed）与 `cargo test cli`（305 passed）全部通过。
+  - `cargo test web`（100 passed）与 `cargo test cli`（305 passed）全部通过。
 - **实际验证结果（PASS）**：
   ```text
   cargo clippy: No issues found
-  cargo test web: 93 passed, 4805 filtered out (15 suites, 0.25s)
+  cargo test web: 100 passed, 4805 filtered out (15 suites, 0.26s)
   cargo test cli: 305 passed, 1 ignored, 4592 filtered out (15 suites, 8.07s)
+  ```
+
+---
+
+### 验证项 V11：`review.md` 修复回归（P1/P2 关键路径）
+
+- **输入内容**：
+  ```bash
+  ./target/debug/lx-tui web chat --site deepseek -t off --session "$DS_SID" --edit-index 9 "should not edit"
+  ./target/debug/lx-tui web rename ai-web-gm-deadbeef "Nope"
+  ./target/debug/lx-tui web rename ai-web-ds-deadbeef "Nope"
+  ./target/debug/lx-tui web chat --edit-index 0 "hi"
+  ./target/debug/lx-tui web chat --keep-file a.txt "hi"
+  ./target/debug/lx-tui web chat --session ai-web-ds-abc --first-turn "hi"
+  ./target/debug/lx-tui web chat --site gemini -m "3.8 Flash" -t medium "Compute 15 + 27 and reply with only: GM-FLASH-MEDIUM-42"
+  ./target/debug/lx-tui web chat --site gemini -m "3.5 Flash-Lite" -t high "Compute 15 + 27 and reply with only: GM-LITE-HIGH-42"
+  ./target/debug/lx-tui web chat --site gemini -m "3.8 Flash" -t low --session "$GM_SID" --edit-index 1 --file /tmp/new.txt "Read the attached file"
+  ```
+- **验证步骤**：
+  1. 对有效会话执行越界 `--edit-index`，确认不再静默编辑最后一条；
+  2. 对不存在的 Gemini/DeepSeek 会话执行 rename，确认错误可见且 CLI 非零退出；
+  3. 触发 CLI 参数组合约束，确认本地预检拦截；
+  4. 在 Gemini 连续切换 `3.8 Flash + medium` 与 `3.5 Flash-Lite + high`，确认模型与思考等级后置校验通过。
+- **期望结果**：
+  - 越界索引返回明确错误，不修改任何云端消息；
+  - 不存在的会话 rename 返回具体原因，不再假成功；
+  - 三条非法参数组合均被本地拦截；
+  - 两种模型/思考等级组合均正常返回目标文本，不出现 “model/thinking was not applied”；
+  - 对更早轮次新增附件时显式拒绝，不静默丢弃附件。
+- **实际验证结果（PASS）**：
+  ```text
+  lx-tui: DeepSeek /rewind target turn not found
+  lx-tui: Gemini session not found in sidebar
+  lx-tui: DeepSeek rename failed
+  lx-tui: option '--edit-index' requires '--session <SESSION_ID>'; run 'lx-tui web chat --help' for usage
+  lx-tui: option '--keep-file' requires '--edit-index'; run 'lx-tui web chat --help' for usage
+  lx-tui: option '--first-turn' cannot be combined with '--session' or '--edit-index'; run 'lx-tui web chat --help' for usage
+  lx-tui: Gemini /rewind cannot change attachments of an earlier turn; use /new or send without --file/--keep-file
+  ```
+  ```json
+  { "model": "3.8 Flash", "thinking": "medium", "text": "GM-FLASH-MEDIUM-42" }
+  { "model": "3.5 Flash-Lite", "thinking": "high", "text": "GM-LITE-HIGH-42" }
   ```

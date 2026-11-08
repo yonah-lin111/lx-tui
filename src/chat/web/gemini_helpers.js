@@ -1,11 +1,10 @@
 // Google Gemini web driver shared helpers, model/thinking switcher, attachment sync, and session actions.
 //
-// Prepended before `gemini_script.js` by `src/event/chat/ai_web.rs`.
+// Prepended before `gemini_script.js` by `src/event/chat/web.rs`.
 
 const PREFIX = '@@LX_AI_WEB@@';
 const SPACE = 'lx-tui-ai-web-gemini';
 const HOME = 'https://gemini.google.com/app';
-const SIGN_IN = 'https://accounts.google.com/ServiceLogin?continue=https://gemini.google.com/app';
 const PARAMS = typeof __LX_PARAMS === 'object' && __LX_PARAMS !== null ? __LX_PARAMS : {};
 const ACTION = PARAMS.action || 'chat';
 const MODEL = PARAMS.model || '3.8 Flash';
@@ -184,7 +183,9 @@ async function ensureGeminiModelAndThinking() {
       return true;
     })()
   `).catch(() => false);
-  if (!menuOpened) return;
+  if (!menuOpened) {
+    throw new Error('Gemini model menu not found');
+  }
   await new Promise((r) => setTimeout(r, 260));
 
   const modelSwitched = await js(`
@@ -205,6 +206,9 @@ async function ensureGeminiModelAndThinking() {
       return { found: true, clicked: false };
     })()
   `).catch(() => ({ found: false, clicked: false }));
+  if (!modelSwitched || !modelSwitched.found) {
+    throw new Error('Gemini model "' + MODEL + '" not found in the mode menu');
+  }
 
   if (modelSwitched && modelSwitched.clicked) {
     await new Promise((r) => setTimeout(r, 300));
@@ -217,6 +221,22 @@ async function ensureGeminiModelAndThinking() {
       })()
     `).catch(() => {});
     await new Promise((r) => setTimeout(r, 260));
+    const modelApplied = await js(`
+      (() => {
+        const want = ${JSON.stringify(targetModel)};
+        const items = Array.from(
+          document.querySelectorAll('gem-menu-item[role="menuitemradio"], [role="menuitemradio"]')
+        ).filter((el) => !el.closest('.submenu-container'));
+        const match = items.find((el) => {
+          const lbl = (el.querySelector('.label')?.innerText || el.innerText || '').trim().toLowerCase();
+          return lbl === want || lbl.includes(want);
+        });
+        return Boolean(match && match.getAttribute('aria-checked') === 'true');
+      })()
+    `).catch(() => false);
+    if (!modelApplied) {
+      throw new Error('Gemini model "' + MODEL + '" was not applied');
+    }
   }
 
   // Step 2: Check if target thinking level is already selected; if not, open submenu and click it.
@@ -235,7 +255,7 @@ async function ensureGeminiModelAndThinking() {
   `).catch(() => false);
 
   if (!thinkingAlreadyChecked) {
-    await js(String.raw`
+    const submenuOpened = await js(String.raw`
       (() => {
         const items = Array.from(document.querySelectorAll('gem-menu-item[role="menuitem"], [role="menuitem"]'));
         const sub = items.find((el) => {
@@ -248,8 +268,11 @@ async function ensureGeminiModelAndThinking() {
         return true;
       })()
     `).catch(() => false);
+    if (!submenuOpened) {
+      throw new Error('Gemini thinking level menu not found');
+    }
     await new Promise((r) => setTimeout(r, 240));
-    await js(`
+    const thinkingPick = await js(`
       (() => {
         const labels = ${JSON.stringify(thinkingLabels)};
         const radios = Array.from(
@@ -259,14 +282,21 @@ async function ensureGeminiModelAndThinking() {
           const lbl = (el.querySelector('.label')?.innerText || el.innerText || '').trim().toLowerCase();
           return labels.some((kw) => lbl === kw || lbl.startsWith(kw + ' '));
         });
-        if (target && target.getAttribute('aria-checked') !== 'true') {
+        if (!target) return { found: false, clicked: false };
+        if (target.getAttribute('aria-checked') !== 'true') {
           target.click();
-          return true;
+          return { found: true, clicked: true };
         }
-        return false;
+        return { found: true, clicked: false };
       })()
-    `).catch(() => false);
-    await new Promise((r) => setTimeout(r, 180));
+    `).catch(() => ({ found: false, clicked: false }));
+    if (!thinkingPick || !thinkingPick.found) {
+      throw new Error('Gemini thinking level "' + THINKING + '" not found');
+    }
+    if (thinkingPick.clicked) {
+      // 选择后面板会立即关闭，无法再从菜单读取 aria-checked；此处只保证目标项存在且点击成功。
+      await new Promise((r) => setTimeout(r, 180));
+    }
   }
 
   // Close mode menu if still open.
@@ -282,57 +312,37 @@ async function ensureGeminiModelAndThinking() {
   `).catch(() => {});
 }
 
-async function syncContainerAttachments(inEditBox) {
-  // Remove existing composer attachment previews not in KEEP_FILES.
-  const cleanupResult = await js(`
+async function syncContainerAttachments() {
+  // 普通发送前清空输入框里残留的附件 chip；`/rewind` 的附件由编辑流程单独校验。
+  const closedCount = await js(`
     (() => {
-      const keep = ${inEditBox ? JSON.stringify(KEEP_FILES) : '[]'}.slice();
       const chips = Array.from(
         document.querySelectorAll('uploader-file-preview, [data-test-id*="file-preview"]')
       );
       let closedCount = 0;
-      let keptCount = 0;
       for (const chip of chips) {
-        const img = chip.querySelector('img[alt]');
-        const text = (
-          (img && img.getAttribute('alt')) ||
-          chip.innerText ||
-          chip.getAttribute('aria-label') ||
-          ''
-        ).trim();
-        const keepIdx = keep.findIndex((name) => {
-          if (!name) return false;
-          const base = name.replace(/\\.[^.]+$/, '');
-          return text.includes(name) || (base && text.includes(base));
-        });
-        if (${inEditBox ? 'true' : 'false'} && keepIdx !== -1) {
-          keep.splice(keepIdx, 1);
-          keptCount += 1;
-          continue;
-        }
         const removeBtn = chip.querySelector(
-          'button[aria-label*="关闭"], button[aria-label*="移除"], button[aria-label*="删除"], button[aria-label^="close "], button[aria-label*="Remove"], button[aria-label*="Delete"], .gem-attachment-close-button button, button'
+          'button[aria-label*="关闭"], button[aria-label*="移除"], button[aria-label*="删除"], button[aria-label^="close "], button[aria-label*="Remove"], button[aria-label*="Delete"], .gem-attachment-close-button button'
         );
         if (removeBtn) {
           removeBtn.click();
           closedCount += 1;
         }
       }
-      return { closedCount, keptCount };
+      return closedCount;
     })()
-  `).catch(() => ({ closedCount: 0, keptCount: 0 }));
+  `).catch(() => 0);
 
-  if (cleanupResult && cleanupResult.closedCount > 0) {
+  if (closedCount > 0) {
     await new Promise((r) => setTimeout(r, 250));
   }
 
   if (!FILES || FILES.length === 0) return;
 
   // Open the upload drawer and poll until <input type="file"> is mounted in DOM.
-  // Angular lazy-loads <uploader> (~1.5s on a fresh chat), so only click the
-  // toggle button when aria-expanded !== 'true' to avoid closing it mid-load.
+  // Angular lazy-loads <uploader> (~1.5s on a fresh chat); never click while
+  // aria-expanded === 'true', otherwise we close the drawer mid-load.
   const openDeadline = Date.now() + 8000;
-  let lastClickAt = 0;
   let inputReady = false;
   while (Date.now() < openDeadline) {
     const count = await js(`document.querySelectorAll('input[type="file"]').length`).catch(() => 0);
@@ -340,25 +350,20 @@ async function syncContainerAttachments(inEditBox) {
       inputReady = true;
       break;
     }
-    const now = Date.now();
-    await js(`
+    await js(String.raw`
       (() => {
         const upBtn = document.querySelector(
           'button[aria-label*="上传和工具"], button[aria-label*="上传"], button[aria-label*="Upload"], simplified-input-menu button'
         );
         if (!upBtn) return false;
-        const expanded = upBtn.getAttribute('aria-expanded') === 'true';
-        if (!expanded || ${now - lastClickAt > 2500 ? 'true' : 'false'}) {
-          upBtn.click();
-          return true;
-        }
-        return false;
+        if (upBtn.getAttribute('aria-expanded') === 'true') return false;
+        const now = Date.now();
+        if (now - (window.__lxUploadClickAt || 0) < 1200) return false;
+        window.__lxUploadClickAt = now;
+        upBtn.click();
+        return true;
       })()
-    `)
-      .then((clicked) => {
-        if (clicked) lastClickAt = Date.now();
-      })
-      .catch(() => {});
+    `).catch(() => {});
     await new Promise((r) => setTimeout(r, 150));
   }
   if (!inputReady) {
@@ -390,20 +395,26 @@ async function syncContainerAttachments(inEditBox) {
     await cdp('DOM.setFileInputFiles', { nodeId: targetNodeId, files: fileList });
   }
 
-  if (mediaFiles.length > 0) {
-    await setFilesOnSelector(
-      `document.querySelector('input[type="file"][accept*="image"]') || document.querySelector('input[type="file"]')`,
-      mediaFiles
-    );
-  }
-  if (docFiles.length > 0) {
-    await setFilesOnSelector(
-      `document.querySelector('images-files-uploader input[type="file"]') || document.querySelector('input[type="file"]:not([accept*="image"])') || document.querySelector('input[type="file"]')`,
-      docFiles
-    );
+  const inputCount = await js(`document.querySelectorAll('input[type="file"]').length`).catch(() => 0);
+  if (inputCount <= 1) {
+    // 单个 input 接收全部文件：分两次注入会互相覆盖 FileList。
+    await setFilesOnSelector(`document.querySelector('input[type="file"]')`, FILES);
+  } else {
+    if (mediaFiles.length > 0) {
+      await setFilesOnSelector(
+        `document.querySelector('input[type="file"][accept*="image"]') || document.querySelector('input[type="file"]')`,
+        mediaFiles
+      );
+    }
+    if (docFiles.length > 0) {
+      await setFilesOnSelector(
+        `document.querySelector('images-files-uploader input[type="file"]') || document.querySelector('input[type="file"]:not([accept*="image"])') || document.querySelector('input[type="file"]')`,
+        docFiles
+      );
+    }
   }
 
-  const expectedCount = ((cleanupResult && cleanupResult.keptCount) || 0) + FILES.length;
+  const expectedCount = FILES.length;
   const uploadDeadline = Date.now() + 30000;
   let uploadedReady = false;
   while (Date.now() < uploadDeadline) {
@@ -627,112 +638,150 @@ async function runNonChatAction(currentUrl) {
   }
 
   if (ACTION === 'rename_session') {
-    if (TITLE) {
-      await ensureSidebarExpanded();
-      const menuOpened = await js(`
-        (() => {
-          const match = location.pathname.match(/\\/app\\/([a-zA-Z0-9_-]+)/);
-          const sessionId = ${JSON.stringify(SESSION_ID)} || (match ? match[1] : '');
-          if (!sessionId) return false;
-          const link = Array.from(
-            document.querySelectorAll('a.gem-nav-list-item[href^="/app/"], a[href^="/app/"]')
-          ).find((a) => (a.getAttribute('href') || '').startsWith('/app/' + sessionId));
-          const row = link ? link.parentElement : null;
-          const moreBtn = row ? row.querySelector('button[aria-label*="更多选项"], button[aria-label*="More options"], button') : null;
-          if (!moreBtn) return false;
-          moreBtn.click();
-          return true;
-        })()
-      `).catch(() => false);
-      if (menuOpened) {
-        await new Promise((r) => setTimeout(r, 250));
-        await js(String.raw`
-          (() => {
-            const items = Array.from(document.querySelectorAll('.cdk-overlay-container [role="menuitem"], .cdk-overlay-container button'));
-            const renameBtn = items.find((el) => {
-              const t = (el.innerText || el.getAttribute('aria-label') || '').trim().toLowerCase();
-              return t.includes('重命名') || t.includes('rename');
-            });
-            if (renameBtn) renameBtn.click();
-          })()
-        `).catch(() => {});
-        await new Promise((r) => setTimeout(r, 280));
-        await js(`
-          (() => {
-            const input = document.querySelector('.cdk-overlay-container input, mat-dialog-container input');
-            if (!input) return false;
-            input.focus();
-            if (typeof input.select === 'function') input.select();
-            const setter = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, 'value')?.set;
-            if (setter) setter.call(input, ${JSON.stringify(TITLE)});
-            else input.value = ${JSON.stringify(TITLE)};
-            input.dispatchEvent(new InputEvent('input', { bubbles: true, data: ${JSON.stringify(TITLE)}, inputType: 'insertText' }));
-            input.dispatchEvent(new Event('change', { bubbles: true }));
-            return true;
-          })()
-        `).catch(() => false);
-        await new Promise((r) => setTimeout(r, 180));
-        await js(String.raw`
-          (() => {
-            const buttons = Array.from(document.querySelectorAll('.cdk-overlay-container button, mat-dialog-container button'));
-            const saveBtn = buttons.find((b) => {
-              const t = (b.innerText || '').trim().toLowerCase();
-              return t === '重命名' || t === '保存' || t === 'rename' || t === 'save';
-            });
-            if (saveBtn && !saveBtn.disabled) saveBtn.click();
-          })()
-        `).catch(() => {});
-        await new Promise((r) => setTimeout(r, 400));
-      }
+    if (!TITLE) {
+      await emit({ event: 'error', message: 'missing session title' });
+      return;
     }
+    if (!SESSION_ID) {
+      await emit({ event: 'error', message: 'missing session id' });
+      return;
+    }
+    await ensureSidebarExpanded();
+    const menuOpened = await js(`
+      (() => {
+        const sessionId = ${JSON.stringify(SESSION_ID)};
+        const link = Array.from(
+          document.querySelectorAll('a.gem-nav-list-item[href^="/app/"], a[href^="/app/"]')
+        ).find((a) => (a.getAttribute('href') || '').startsWith('/app/' + sessionId));
+        const row = link ? link.parentElement : null;
+        const moreBtn = row ? row.querySelector('button[aria-label*="更多选项"], button[aria-label*="More options"]') : null;
+        if (!moreBtn) return false;
+        moreBtn.click();
+        return true;
+      })()
+    `).catch(() => false);
+    if (!menuOpened) {
+      await emit({ event: 'error', message: 'Gemini session not found in sidebar' });
+      return;
+    }
+    await new Promise((r) => setTimeout(r, 250));
+    const renameClicked = await js(String.raw`
+      (() => {
+        const items = Array.from(document.querySelectorAll('.cdk-overlay-container [role="menuitem"], .cdk-overlay-container button'));
+        const renameBtn = items.find((el) => {
+          const t = (el.innerText || el.getAttribute('aria-label') || '').trim().toLowerCase();
+          return t.includes('重命名') || t.includes('rename');
+        });
+        if (!renameBtn) return false;
+        renameBtn.click();
+        return true;
+      })()
+    `).catch(() => false);
+    if (!renameClicked) {
+      await emit({ event: 'error', message: 'Gemini rename menu item not found' });
+      return;
+    }
+    await new Promise((r) => setTimeout(r, 280));
+    const inputFilled = await js(`
+      (() => {
+        const input = document.querySelector('.cdk-overlay-container input, mat-dialog-container input');
+        if (!input) return false;
+        input.focus();
+        if (typeof input.select === 'function') input.select();
+        const setter = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, 'value')?.set;
+        if (setter) setter.call(input, ${JSON.stringify(TITLE)});
+        else input.value = ${JSON.stringify(TITLE)};
+        input.dispatchEvent(new InputEvent('input', { bubbles: true, data: ${JSON.stringify(TITLE)}, inputType: 'insertText' }));
+        input.dispatchEvent(new Event('change', { bubbles: true }));
+        return true;
+      })()
+    `).catch(() => false);
+    if (!inputFilled) {
+      await emit({ event: 'error', message: 'Gemini rename dialog not found' });
+      return;
+    }
+    await new Promise((r) => setTimeout(r, 180));
+    const saved = await js(String.raw`
+      (() => {
+        const buttons = Array.from(document.querySelectorAll('.cdk-overlay-container button, mat-dialog-container button'));
+        const saveBtn = buttons.find((b) => {
+          const t = (b.innerText || '').trim().toLowerCase();
+          return t === '重命名' || t === '保存' || t === 'rename' || t === 'save';
+        });
+        if (!saveBtn || saveBtn.disabled) return false;
+        saveBtn.click();
+        return true;
+      })()
+    `).catch(() => false);
+    if (!saved) {
+      await emit({ event: 'error', message: 'Gemini rename save button not found' });
+      return;
+    }
+    await new Promise((r) => setTimeout(r, 400));
     await emit({ event: 'done' });
     return;
   }
 
   if (ACTION === 'delete_session') {
-    if (SESSION_ID) {
-      await ensureSidebarExpanded();
-      const menuOpened = await js(`
-        (() => {
-          const sessionId = ${JSON.stringify(SESSION_ID)};
-          const link = Array.from(
-            document.querySelectorAll('a.gem-nav-list-item[href^="/app/"], a[href^="/app/"]')
-          ).find((a) => (a.getAttribute('href') || '').startsWith('/app/' + sessionId));
-          const row = link ? link.parentElement : null;
-          const moreBtn = row ? row.querySelector('button[aria-label*="更多选项"], button[aria-label*="More options"], button') : null;
-          if (!moreBtn) return false;
-          moreBtn.click();
-          return true;
-        })()
-      `).catch(() => false);
-      if (menuOpened) {
-        await new Promise((r) => setTimeout(r, 250));
-        await js(String.raw`
-          (() => {
-            const items = Array.from(document.querySelectorAll('.cdk-overlay-container [role="menuitem"], .cdk-overlay-container button'));
-            const delBtn = items.find((el) => {
-              const t = (el.innerText || el.getAttribute('aria-label') || '').trim().toLowerCase();
-              return t.includes('删除') || t.includes('delete');
-            });
-            if (delBtn) delBtn.click();
-          })()
-        `).catch(() => {});
-        await new Promise((r) => setTimeout(r, 280));
-        await js(String.raw`
-          (() => {
-            const buttons = Array.from(document.querySelectorAll('.cdk-overlay-container button, mat-dialog-container button'));
-            const confirmBtn = buttons.find((b) => {
-              const t = (b.innerText || '').trim().toLowerCase();
-              return t === '删除' || t === 'delete' || b.getAttribute('data-test-id') === 'confirm-button';
-            });
-            if (confirmBtn) confirmBtn.click();
-          })()
-        `).catch(() => {});
-        await new Promise((r) => setTimeout(r, 250));
-      }
-      if (currentUrl.includes(SESSION_ID)) {
-        await openOrReuseTab(HOME, { wait: true, timeout: 20 });
-      }
+    if (!SESSION_ID) {
+      await emit({ event: 'error', message: 'missing session id' });
+      return;
+    }
+    await ensureSidebarExpanded();
+    const menuOpened = await js(`
+      (() => {
+        const sessionId = ${JSON.stringify(SESSION_ID)};
+        const link = Array.from(
+          document.querySelectorAll('a.gem-nav-list-item[href^="/app/"], a[href^="/app/"]')
+        ).find((a) => (a.getAttribute('href') || '').startsWith('/app/' + sessionId));
+        const row = link ? link.parentElement : null;
+        const moreBtn = row ? row.querySelector('button[aria-label*="更多选项"], button[aria-label*="More options"]') : null;
+        if (!moreBtn) return false;
+        moreBtn.click();
+        return true;
+      })()
+    `).catch(() => false);
+    if (!menuOpened) {
+      await emit({ event: 'error', message: 'Gemini session not found in sidebar' });
+      return;
+    }
+    await new Promise((r) => setTimeout(r, 250));
+    const deleteClicked = await js(String.raw`
+      (() => {
+        const items = Array.from(document.querySelectorAll('.cdk-overlay-container [role="menuitem"], .cdk-overlay-container button'));
+        const delBtn = items.find((el) => {
+          const t = (el.innerText || el.getAttribute('aria-label') || '').trim().toLowerCase();
+          return t.includes('删除') || t.includes('delete');
+        });
+        if (!delBtn) return false;
+        delBtn.click();
+        return true;
+      })()
+    `).catch(() => false);
+    if (!deleteClicked) {
+      await emit({ event: 'error', message: 'Gemini delete menu item not found' });
+      return;
+    }
+    await new Promise((r) => setTimeout(r, 280));
+    const confirmed = await js(String.raw`
+      (() => {
+        const buttons = Array.from(document.querySelectorAll('.cdk-overlay-container button, mat-dialog-container button'));
+        const confirmBtn = buttons.find((b) => {
+          const t = (b.innerText || '').trim().toLowerCase();
+          return t === '删除' || t === 'delete' || b.getAttribute('data-test-id') === 'confirm-button';
+        });
+        if (!confirmBtn) return false;
+        confirmBtn.click();
+        return true;
+      })()
+    `).catch(() => false);
+    if (!confirmed) {
+      await emit({ event: 'error', message: 'Gemini delete confirmation not found' });
+      return;
+    }
+    await new Promise((r) => setTimeout(r, 250));
+    if (currentUrl.includes(SESSION_ID)) {
+      await openOrReuseTab(HOME, { wait: true, timeout: 20 });
     }
     await emit({ event: 'done' });
     return;

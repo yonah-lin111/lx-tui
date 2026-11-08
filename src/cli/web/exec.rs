@@ -300,12 +300,20 @@ async fn exec_show(
     }) else {
         return Err(text::LX_AI_WEB_EGO_UNAVAILABLE.to_string());
     };
-    let full_id = site.format_remote_session_id(&id);
-    let _ = session_id;
+    let remote_id = if id.is_empty() {
+        remote_session_id
+    } else {
+        id.as_str()
+    };
+    let full_id = if id.is_empty() {
+        session_id.to_string()
+    } else {
+        site.format_remote_session_id(&id)
+    };
     let payload = json!({
         "site": site_key(site),
         "sessionId": full_id,
-        "remoteSessionId": id,
+        "remoteSessionId": remote_id,
         "title": title,
         "messageCount": messages.len(),
         "messages": messages,
@@ -476,8 +484,6 @@ async fn exec_chat(out: &Output, cwd: &Path, req: ChatRequest) -> Result<(), Str
 
     let mut child = Command::new(resolve_ego_browser_bin())
         .arg("nodejs")
-        .env("LX_AI_WEB_ACTION", "chat")
-        .env("LX_AI_WEB_PROMPT", &prepared.web_prompt)
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
@@ -515,7 +521,12 @@ async fn exec_chat(out: &Output, cwd: &Path, req: ChatRequest) -> Result<(), Str
         },
     );
 
-    if stdin.write_all(source.as_bytes()).await.is_err() || stdin.shutdown().await.is_err() {
+    let write_result = tokio::time::timeout(std::time::Duration::from_secs(30), async {
+        stdin.write_all(source.as_bytes()).await?;
+        stdin.shutdown().await
+    })
+    .await;
+    if !matches!(write_result, Ok(Ok(()))) {
         if let Some(handle) = listener_task {
             handle.abort();
         }
@@ -616,8 +627,10 @@ async fn exec_chat(out: &Output, cwd: &Path, req: ChatRequest) -> Result<(), Str
                             w,
                             "{}",
                             o.muted(&format!(
-                                "[session: {sid}{title_suffix} · {} · {}]",
-                                req.model, req.thinking
+                                "[session: {sid}{title_suffix}{sep}{model}{sep}{thinking}]",
+                                sep = text::LX_CHAT_MODEL_SEP,
+                                model = req.model,
+                                thinking = req.thinking
                             ))
                         )?;
                     }

@@ -336,6 +336,21 @@ fn parse_chat(args: &[String]) -> Result<WebCommand, String> {
         }
         None => (site_opt.unwrap_or_default(), None, None),
     };
+    if edit_user_index.is_some() && session_id.is_none() {
+        return Err(format!(
+            "option '--edit-index' requires '--session <SESSION_ID>'; run '{help_cmd} --help' for usage"
+        ));
+    }
+    if first_turn && (session_id.is_some() || edit_user_index.is_some()) {
+        return Err(format!(
+            "option '--first-turn' cannot be combined with '--session' or '--edit-index'; run '{help_cmd} --help' for usage"
+        ));
+    }
+    if !keep_files.is_empty() && edit_user_index.is_none() {
+        return Err(format!(
+            "option '--keep-file' requires '--edit-index'; run '{help_cmd} --help' for usage"
+        ));
+    }
     let (model, thinking) =
         resolve_model_and_thinking(site, model_opt.as_deref(), thinking_opt.as_deref())?;
 
