@@ -481,6 +481,9 @@ fn draw_markdown(
             .x
             .saturating_add(STEP_GUTTER)
             .saturating_add(line.indent);
+        if let Some(ref line_ref) = line.table {
+            grid.set_table_row(cx, y, line_ref.clone());
+        }
         for (value, span_style) in &line.spans {
             for ch in value.chars() {
                 let cell = ch.width().unwrap_or(1).max(1) as u16;
@@ -586,6 +589,9 @@ fn draw_thinking(
             .x
             .saturating_add(body_indent)
             .saturating_add(line.indent);
+        if let Some(ref line_ref) = line.table {
+            grid.set_table_row(cx, y, line_ref.clone());
+        }
         for (value, span_style) in &line.spans {
             let cell_style = span_style.patch(style::muted());
             for ch in value.chars() {

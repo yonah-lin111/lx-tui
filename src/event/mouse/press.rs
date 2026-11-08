@@ -872,35 +872,17 @@ pub(crate) fn handle_mouse_down_left(
                     );
                 } else if let Some((content_row, content_col, target)) =
                     state.pane_anywhere(pane).and_then(|target| {
-                        let pane_cache = cache.pane(pane);
-                        let geom =
-                            ui::main_content::lx::content_geom(inner, &target.lx, pane_cache)?;
-                        if !geom.contains(mouse.column, mouse.row) {
-                            return None;
-                        }
-                        let (content_row, content_col) = geom.cell(mouse.column, mouse.row);
-                        let card = if target.lx.task.is_some() {
-                            ui::main_content::lx::task_agents_card_target_at(
-                                inner,
-                                &target.lx,
-                                mouse.column,
-                                mouse.row,
-                                pane_cache,
-                            )
-                        } else {
-                            ui::main_content::lx::card_target_at(
-                                inner,
-                                &target.lx,
-                                mouse.column,
-                                mouse.row,
-                                pane_cache,
-                            )
-                        };
-                        Some((content_row, content_col, card))
+                        ui::main_content::lx::press_content_hit(
+                            inner,
+                            &target.lx,
+                            mouse.column,
+                            mouse.row,
+                            cache.pane(pane),
+                        )
                     })
                 {
                     // 主消息列表与后台管理主内容区：可折叠卡片保持单击折叠/长按拖选语义；
-                    // 普通正文行支持双击选词、三击选行。
+                    // 普通正文行以及可折叠卡片内已渲染的 Markdown 表格行支持双击选词、三击选整格。
                     //
                     // **顺序不能反**：`begin_lx_selection*` 内部先 `clear_selection`（会清空
                     // `lx_card_press`），必须先开始选区再写 `lx_card_press`。

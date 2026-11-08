@@ -6,8 +6,19 @@ use ratatui::layout::Rect;
 use ratatui::style::Style;
 use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
 
+use crate::ui::markdown_render::TableLineRef;
+
 /// 宽字符占位单元格的标记；不参与绘制与取词。
 pub(super) const CONTINUATION: char = '\0';
+
+/// 网格中单行的表格几何（列偏移相对 `Grid.area.x`）。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct GridTableRow {
+    /// 表格左边框在内容网格中的起始列（相对 `area.x`）。
+    pub(crate) base_col: u16,
+    /// 表格结构元数据与行内偏移。
+    pub(crate) line_ref: TableLineRef,
+}
 
 /// 一个待绘制单元格。
 #[derive(Clone, Copy)]
@@ -29,6 +40,7 @@ impl Glyph {
 pub(crate) struct Grid {
     area: Rect,
     cells: Vec<Glyph>,
+    table_rows: Vec<Option<GridTableRow>>,
 }
 
 impl Grid {
@@ -36,7 +48,34 @@ impl Grid {
         Self {
             area,
             cells: vec![Glyph::blank(); usize::from(area.width) * usize::from(area.height)],
+            table_rows: vec![None; usize::from(area.height)],
         }
+    }
+
+    /// 网格对应的屏幕矩形。
+    pub(super) fn area(&self) -> Rect {
+        self.area
+    }
+
+    /// 登记第 `y` 行的表格结构元数据（`x` 为表格左边框的绝对屏幕列坐标）。
+    pub(super) fn set_table_row(&mut self, x: u16, y: u16, line_ref: TableLineRef) {
+        if x < self.area.x || y < self.area.y {
+            return;
+        }
+        let dy = y - self.area.y;
+        if dy < self.area.height {
+            self.table_rows[usize::from(dy)] = Some(GridTableRow {
+                base_col: x - self.area.x,
+                line_ref,
+            });
+        }
+    }
+
+    /// 读取相对行 `dy`（`0..area.height`）的表格行元数据。
+    pub(super) fn table_row_at(&self, dy: u16) -> Option<&GridTableRow> {
+        self.table_rows
+            .get(usize::from(dy))
+            .and_then(Option::as_ref)
     }
 
     fn index(&self, x: u16, y: u16) -> Option<usize> {

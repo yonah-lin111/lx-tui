@@ -16,6 +16,11 @@ use super::grid::{CONTINUATION, Grid};
 use super::history::{self, PaneCache};
 use super::task;
 
+mod table;
+
+#[cfg(test)]
+mod tests;
+
 /// 分段取词的单批最大行数：控制跨屏长选区时的临时网格内存占用。
 const COPY_CHUNK_ROWS: usize = 256;
 
@@ -131,25 +136,156 @@ pub(crate) fn content_geom(area: Rect, lx: &Lx, cache: &mut PaneCache) -> Option
 }
 
 /// 在已绘制的缓冲区上按内容行坐标反显选区（仅作用于正文列，绝不反显右侧滚动条列）。
-pub(super) fn paint_selection(buf: &mut Buffer, geom: ContentGeom, selection: &Selection) {
+///
+/// 对 Markdown 表格行自动按三级单元格选区（`SingleCell` / `ColumnLocked` / `Grid`）
+/// 仅反显命中的单元格真实文本区间，跳过所有表格框线与补齐留白。
+pub(super) fn paint_selection(
+    buf: &mut Buffer,
+    grid: &Grid,
+    geom: ContentGeom,
+    selection: &Selection,
+) {
+    if selection.range().is_none() {
+        return;
+    }
+    let anchor = selection.anchor();
+    let cursor = selection.cursor();
+    let (start, end) = if anchor <= cursor {
+        (anchor, cursor)
+    } else {
+        (cursor, anchor)
+    };
+    let x_offset = geom.rect.x.saturating_sub(grid.area().x);
+    let grid_y_offset = geom.rect.y.saturating_sub(grid.area().y);
     for dy in 0..geom.rect.height {
         let Ok(content_row) = i32::try_from(geom.scroll.saturating_add(usize::from(dy))) else {
             break;
         };
         let y = geom.rect.y.saturating_add(dy);
-        for dx in 0..geom.rect.width {
-            if !selection.contains(content_row, dx) {
+        let grid_dy = y.saturating_sub(grid.area().y);
+        if let Some(table_row) = grid.table_row_at(grid_dy) {
+            let local_table_row = super::grid::GridTableRow {
+                base_col: table_row.base_col.saturating_sub(x_offset),
+                line_ref: table_row.line_ref.clone(),
+            };
+            let actual_bounds = table::rendered_table_row_bounds(
+                grid,
+                geom.scroll,
+                grid_y_offset,
+                geom.rect.height,
+                x_offset,
+                &local_table_row,
+                content_row,
+            );
+            let Some(plan) = table::resolve_table_selection(
+                &local_table_row,
+                content_row,
+                actual_bounds,
+                anchor,
+                cursor,
+            ) else {
                 continue;
+            };
+            let line_offset = table_row.line_ref.line_offset;
+            for (raw_col0, raw_col1) in plan.selected_col_ranges(line_offset) {
+                let (g_col0, g_col1) = table::align_wide_char_cols(
+                    grid,
+                    grid_dy,
+                    x_offset.saturating_add(raw_col0),
+                    x_offset.saturating_add(raw_col1),
+                );
+                let col0 = g_col0.saturating_sub(x_offset);
+                let col1 = g_col1
+                    .saturating_sub(x_offset)
+                    .min(geom.rect.width.saturating_sub(1));
+                for dx in col0..=col1 {
+                    let x = geom.rect.x.saturating_add(dx);
+                    if let Some(cell) = buf.cell_mut((x, y))
+                        && cell.diff_option != CellDiffOption::Skip
+                    {
+                        let reversed = cell.style().add_modifier(Modifier::REVERSED);
+                        cell.set_style(reversed);
+                    }
+                }
             }
-            let x = geom.rect.x.saturating_add(dx);
-            if let Some(cell) = buf.cell_mut((x, y))
-                && cell.diff_option != CellDiffOption::Skip
-            {
-                let reversed = cell.style().add_modifier(Modifier::REVERSED);
-                cell.set_style(reversed);
+            continue;
+        }
+        let Ok(row_usize) = usize::try_from(content_row) else {
+            continue;
+        };
+        if let Some((raw_col0, raw_col1)) = row_col_bounds(row_usize, start, end, geom.rect.width) {
+            let (g_col0, g_col1) = table::align_wide_char_cols(
+                grid,
+                grid_dy,
+                x_offset.saturating_add(raw_col0),
+                x_offset.saturating_add(raw_col1),
+            );
+            let col0 = g_col0.saturating_sub(x_offset);
+            let col1 = g_col1
+                .saturating_sub(x_offset)
+                .min(geom.rect.width.saturating_sub(1));
+            for dx in col0..=col1 {
+                let x = geom.rect.x.saturating_add(dx);
+                if let Some(cell) = buf.cell_mut((x, y))
+                    && cell.diff_option != CellDiffOption::Skip
+                {
+                    let reversed = cell.style().add_modifier(Modifier::REVERSED);
+                    cell.set_style(reversed);
+                }
             }
         }
     }
+}
+
+/// 判定主内容区坐标 `cell`（内容行、正文列）是否落在已渲染的 Markdown 表格水平宽度内。
+pub(crate) fn is_table_cell_at(
+    area: Rect,
+    lx: &Lx,
+    cell: (i32, u16),
+    cache: &mut PaneCache,
+) -> bool {
+    let Some(geom) = content_geom(area, lx, cache) else {
+        return false;
+    };
+    if geom.rect.width == 0 || geom.total_rows == 0 || cell.0 < 0 {
+        return false;
+    }
+    let Ok(row) = usize::try_from(cell.0) else {
+        return false;
+    };
+    if row >= geom.total_rows {
+        return false;
+    }
+    let chunk_rect = Rect::new(0, 0, geom.rect.width, 1);
+    let mut grid = Grid::new(chunk_rect);
+    render_chunk(&mut grid, chunk_rect, lx, row, cache);
+    grid.table_row_at(0).is_some_and(|tr| {
+        let right = tr.base_col.saturating_add(tr.line_ref.table.total_width);
+        cell.1 >= tr.base_col && cell.1 < right
+    })
+}
+
+/// 解析主内容区鼠标左键按下命中的内容行、列以及可折叠卡片目标（表格区域自动放行选区连击）。
+pub(crate) fn press_content_hit(
+    area: Rect,
+    lx: &Lx,
+    column: u16,
+    row: u16,
+    cache: &mut PaneCache,
+) -> Option<(i32, u16, Option<crate::app::state::CardTarget>)> {
+    let geom = content_geom(area, lx, cache)?;
+    if !geom.contains(column, row) {
+        return None;
+    }
+    let (content_row, content_col) = geom.cell(column, row);
+    let card = if is_table_cell_at(area, lx, (content_row, content_col), cache) {
+        None
+    } else if lx.task.is_some() {
+        super::task_agents_card_target_at(area, lx, column, row, cache)
+    } else {
+        super::card_target_at(area, lx, column, row, cache)
+    };
+    Some((content_row, content_col, card))
 }
 
 /// 按选区粒度（单字 / 词 / 行）在主内容区计算 `cell` 所在词或行的列闭区间。
@@ -170,16 +306,42 @@ pub(crate) fn unit_cell_range(
         return (cell, cell);
     }
     let max_col = geom.rect.width - 1;
+    let row = usize::try_from(cell.0.max(0))
+        .unwrap_or(0)
+        .min(geom.total_rows - 1);
+    let row_i32 = i32::try_from(row).unwrap_or(cell.0);
+    let clamped_cell = (row_i32, cell.1);
+    let chunk_rect = Rect::new(0, 0, geom.rect.width, 1);
+    let mut grid = Grid::new(chunk_rect);
+    render_chunk(&mut grid, chunk_rect, lx, row, cache);
+    if let Some(table_row) = grid.table_row_at(0)
+        && let Some(range) = table::table_unit_cell_range(&grid, table_row, clamped_cell, unit)
+    {
+        if unit == SelectionUnit::Line && range.0.0 <= range.1.0 {
+            let r_first = usize::try_from(range.0.0.max(0))
+                .unwrap_or(0)
+                .min(geom.total_rows - 1);
+            let r_last = usize::try_from(range.1.0.max(0))
+                .unwrap_or(0)
+                .min(geom.total_rows - 1)
+                .max(r_first);
+            let r_rows = u16::try_from(r_last - r_first + 1).unwrap_or(1);
+            let r_rect = Rect::new(0, 0, geom.rect.width, r_rows);
+            let mut r_grid = Grid::new(r_rect);
+            render_chunk(&mut r_grid, r_rect, lx, r_first, cache);
+            let bounds = table::rendered_table_row_bounds(
+                &r_grid, r_first, 0, r_rows, 0, table_row, row_i32,
+            );
+            let c_start = range.0.0.clamp(bounds.0, bounds.1);
+            let c_end = range.1.0.clamp(bounds.0, bounds.1).max(c_start);
+            return ((c_start, range.0.1), (c_end, range.1.1));
+        }
+        return range;
+    }
     match unit {
         SelectionUnit::Character => (cell, cell),
         SelectionUnit::Line => ((cell.0, 0), (cell.0, max_col)),
         SelectionUnit::Word => {
-            let row = usize::try_from(cell.0.max(0))
-                .unwrap_or(0)
-                .min(geom.total_rows - 1);
-            let chunk_rect = Rect::new(0, 0, geom.rect.width, 1);
-            let mut grid = Grid::new(chunk_rect);
-            render_chunk(&mut grid, chunk_rect, lx, row, cache);
             let mut tokens: Vec<(u16, u16, crate::app::selection::CharClass)> =
                 Vec::with_capacity(usize::from(geom.rect.width));
             for x in 0..geom.rect.width {
@@ -218,17 +380,19 @@ pub(crate) fn unit_cell_range(
 ///
 /// 按内容行区间分段渲染到仅含正文列的网格（不含滚动条槽），因此：
 /// - 滚轮滚出当前视口的选中行仍能完整复制；
-/// - 右侧滚动条字符 `▐` 永远不会混入复制文本。
+/// - 右侧滚动条字符 `▐` 永远不会混入复制文本；
+/// - Markdown 表格行自动按三级单元格选区去边框提取（软折行无缝拼接、`<br>` 保换行、同行多列 `\t`）。
 pub fn copy_text(
     area: Rect,
     lx: &Lx,
     range: ((i32, u16), (i32, u16)),
     cache: &mut PaneCache,
 ) -> String {
-    let (start, end) = if range.0 <= range.1 {
-        range
+    let (anchor, cursor) = range;
+    let (start, end) = if anchor <= cursor {
+        (anchor, cursor)
     } else {
-        (range.1, range.0)
+        (cursor, anchor)
     };
     let Some(geom) = content_geom(area, lx, cache) else {
         return String::new();
@@ -256,21 +420,102 @@ pub fn copy_text(
         let chunk_rect = Rect::new(0, 0, geom.rect.width, chunk_rows);
         let mut grid = Grid::new(chunk_rect);
         render_chunk(&mut grid, chunk_rect, lx, chunk_start, cache);
-        for row in chunk_start..=chunk_end {
-            let Some((col0, col1)) = row_col_bounds(row, start, end, geom.rect.width) else {
-                continue;
-            };
+        let mut row = chunk_start;
+        while row <= chunk_end {
             let y = u16::try_from(row - chunk_start).unwrap_or(0);
-            let mut line = String::new();
-            for col in col0..=col1 {
-                let ch = grid.cell(col, y).ch;
-                if ch != CONTINUATION {
-                    line.push(ch);
+            if let Some(table_row) = grid.table_row_at(y).cloned() {
+                let row_i32 = i32::try_from(row).unwrap_or(i32::MAX);
+                let actual_bounds = table::rendered_table_row_bounds(
+                    &grid,
+                    chunk_start,
+                    0,
+                    chunk_rows,
+                    0,
+                    &table_row,
+                    row_i32,
+                );
+                if let Some(plan) = table::resolve_table_selection(
+                    &table_row,
+                    row_i32,
+                    actual_bounds,
+                    anchor,
+                    cursor,
+                ) {
+                    let (sel_first_off, sel_last_off) = plan.selected_line_offset_range();
+                    let sel_first_row = plan
+                        .table_start_row
+                        .saturating_add(i32::try_from(sel_first_off).unwrap_or(0))
+                        .max(actual_bounds.0);
+                    let sel_last_row = plan
+                        .table_start_row
+                        .saturating_add(i32::try_from(sel_last_off).unwrap_or(0))
+                        .min(actual_bounds.1)
+                        .max(sel_first_row);
+                    let t_first = usize::try_from(sel_first_row.max(0))
+                        .unwrap_or(0)
+                        .min(geom.total_rows - 1);
+                    let t_last = usize::try_from(sel_last_row.max(0))
+                        .unwrap_or(0)
+                        .min(geom.total_rows - 1)
+                        .max(t_first);
+                    let t_rows = u16::try_from(t_last - t_first + 1).unwrap_or(u16::MAX);
+                    let t_rect = Rect::new(0, 0, geom.rect.width, t_rows);
+                    let mut t_grid = Grid::new(t_rect);
+                    render_chunk(&mut t_grid, t_rect, lx, t_first, cache);
+
+                    let mut present_offsets = Vec::with_capacity(usize::from(t_rows));
+                    for ty in 0..t_rows {
+                        let abs_row = t_first.saturating_add(usize::from(ty));
+                        let abs_row_i32 = i32::try_from(abs_row).unwrap_or(i32::MAX);
+                        if let Some(tr) = t_grid.table_row_at(ty) {
+                            let off_i32 = i32::try_from(tr.line_ref.line_offset).unwrap_or(0);
+                            if abs_row_i32.saturating_sub(off_i32) == plan.table_start_row
+                                && tr.base_col == plan.base_col
+                                && table::same_table_meta(&tr.line_ref.table, &plan.table)
+                            {
+                                present_offsets.push(tr.line_ref.line_offset);
+                            }
+                        }
+                    }
+                    if !present_offsets.is_empty() {
+                        present_offsets.sort_unstable();
+                        present_offsets.dedup();
+                        lines.extend(table::extract_table_lines(
+                            &t_grid,
+                            t_first,
+                            &plan,
+                            &present_offsets,
+                        ));
+                        let table_end_in_sel = usize::try_from(plan.table_end_row.max(0))
+                            .unwrap_or(row)
+                            .min(last_row)
+                            .max(row);
+                        let next_row = table_end_in_sel.saturating_add(1);
+                        if next_row > chunk_end {
+                            chunk_start = next_row;
+                            break;
+                        }
+                        row = next_row;
+                        continue;
+                    }
                 }
             }
-            lines.push(line.trim_end().to_string());
+            if let Some((raw_col0, raw_col1)) = row_col_bounds(row, start, end, geom.rect.width) {
+                let (col0, col1) = table::align_wide_char_cols(&grid, y, raw_col0, raw_col1);
+                let mut line = String::new();
+                for col in col0..=col1 {
+                    let ch = grid.cell(col, y).ch;
+                    if ch != CONTINUATION {
+                        line.push(ch);
+                    }
+                }
+                lines.push(line.trim_end().to_string());
+            }
+            row = row.saturating_add(1);
         }
-        chunk_start = chunk_end.saturating_add(1);
+        if row > chunk_end {
+            chunk_start = chunk_end.saturating_add(1);
+        }
     }
     while lines.last().is_some_and(String::is_empty) {
         lines.pop();

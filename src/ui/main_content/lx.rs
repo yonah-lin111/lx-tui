@@ -31,7 +31,9 @@ use panels::{
 };
 pub(crate) use refer::{item_at as refer_item_at, layout as refer_layout};
 pub use selection::copy_text;
-pub(crate) use selection::{content_geom, unit_cell_range};
+#[cfg(test)]
+pub(crate) use selection::is_table_cell_at;
+pub(crate) use selection::{content_geom, press_content_hit, unit_cell_range};
 
 pub(crate) mod brand;
 pub(crate) mod chat_bar;
@@ -111,7 +113,7 @@ pub fn render(
     if let Some(sel) = selection
         && let Some(geom) = selection::content_geom(area, lx, cache)
     {
-        selection::paint_selection(buf, geom, sel);
+        selection::paint_selection(buf, &grid, geom, sel);
     }
     render_input_scrollbar(area, buf, lx);
     // 置顶用户消息行：表现层，blit 之后直写 Buffer（不进网格 → 不参与复制与选区）。

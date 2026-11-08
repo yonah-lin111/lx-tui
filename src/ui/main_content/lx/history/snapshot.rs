@@ -731,7 +731,10 @@ impl Builder<'_> {
                             message_index,
                             step_index,
                         ) {
-                            markdown_render::render_wrapped(&part.content, content_width)
+                            markdown_render::render_wrapped(
+                                &part.content,
+                                width.saturating_sub(super::thinking_body_indent(width)),
+                            )
                         } else {
                             Vec::new()
                         },

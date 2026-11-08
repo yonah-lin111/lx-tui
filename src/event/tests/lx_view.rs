@@ -986,3 +986,110 @@ fn lx_history_wheel_scrolls_by_wheel_lines_and_clamps() {
     assert!(chat.follow_bottom, "滚回底部恢复跟随");
     assert_eq!(chat.history_scroll, max_top);
 }
+
+#[test]
+fn lx_expanded_thinking_table_double_click_selects_word_without_collapsing_card() {
+    let config = Config::default();
+    let mut state = AppState::demo();
+    let geo = geometry(&state, &config, Rect::new(0, 0, 120, 30));
+    let pane = state.active_tab().layout.focus();
+    let inner = pane_inner(&geo, pane);
+    {
+        let target = state.pane_mut_anywhere(pane).expect("pane");
+        target.view = PaneView::Lx;
+        target
+            .lx
+            .chat
+            .messages
+            .push(crate::app::state::ChatMessageView {
+                sequence: 0,
+                id: "m-thinking-table".into(),
+                role: "assistant".into(),
+                status: "complete".into(),
+                turn_index: 0,
+                kind: "chat".into(),
+                shell: None,
+                steps: vec![crate::app::state::AssistantStepView::Part {
+                    position: 0,
+                    part: crate::app::state::ChatPartView {
+                        kind: crate::chat::events::PartKind::Reasoning,
+                        content:
+                            "| 阶段 | 结论 |\n| --- | --- |\n| 验证 | alpha_token beta_token |"
+                                .into(),
+                        provider_metadata_json: None,
+                        started_at_ms: Some(0),
+                        ended_at_ms: Some(500),
+                        completed_at_ms: Some(500),
+                    },
+                }],
+                model_label: None,
+                error_code: None,
+                input_tokens: None,
+                output_tokens: None,
+                cache_read_tokens: None,
+                duration_ms: None,
+                reports: Vec::new(),
+                attachments: Vec::new(),
+            });
+        target.lx.chat.toggle_reasoning(0, 0);
+        assert!(target.lx.chat.reasoning_expanded(0, 0));
+    }
+
+    let mut cache = ui::RenderCache::default();
+    let geom = ui::main_content::lx::content_geom(
+        inner,
+        &state.pane_anywhere(pane).expect("pane").lx,
+        cache.pane(pane),
+    )
+    .expect("content geom");
+    // 思考块标题在第 0 行，表格从第 1 行开始，第 4 行为首条数据行（`| 验证 | alpha_token beta_token |`）。
+    let click_y = geom.rect.y + 4;
+    let click_x = geom.rect.x + 16;
+    assert!(ui::main_content::lx::is_table_cell_at(
+        inner,
+        &state.pane_anywhere(pane).expect("pane").lx,
+        (4, 16),
+        cache.pane(pane),
+    ));
+
+    let mut sessions = HashMap::new();
+    let mut dirty = false;
+    for _ in 0..2 {
+        handle_terminal_event(
+            mouse(MouseEventKind::Down(MouseButton::Left), click_x, click_y),
+            &mut state,
+            &mut sessions,
+            &geo,
+            &config,
+            &mut cache,
+            &mut dirty,
+        );
+        handle_terminal_event(
+            mouse(MouseEventKind::Up(MouseButton::Left), click_x, click_y),
+            &mut state,
+            &mut sessions,
+            &geo,
+            &config,
+            &mut cache,
+            &mut dirty,
+        );
+    }
+
+    assert!(
+        state
+            .pane_anywhere(pane)
+            .expect("pane")
+            .lx
+            .chat
+            .reasoning_expanded(0, 0),
+        "在已展开思考块内的表格上双击选词不得把思考块折叠收起"
+    );
+    let sel = state.lx_selection.as_ref().expect("word selection active");
+    let copied = ui::main_content::lx::copy_text(
+        inner,
+        &state.pane_anywhere(pane).expect("pane").lx,
+        (sel.anchor(), sel.cursor()),
+        cache.pane(pane),
+    );
+    assert_eq!(copied, "alpha_token");
+}

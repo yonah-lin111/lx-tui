@@ -192,9 +192,14 @@ pub(super) fn md_line_segments(line: crate::ui::markdown_render::MdLine) -> Vec<
             style::muted(),
         ));
     }
+    let mut pending_table = line.table;
     for (value, span_style) in line.spans {
         if !value.is_empty() {
-            segments.push(Segment::new(value, span_style.patch(style::muted())));
+            let mut seg = Segment::new(value, span_style.patch(style::muted()));
+            if let Some(table_ref) = pending_table.take() {
+                seg.table = Some(table_ref);
+            }
+            segments.push(seg);
         }
     }
     segments
@@ -588,6 +593,7 @@ pub(super) fn card_regions(
 pub(crate) struct Segment {
     pub(crate) text: String,
     pub(crate) style: Style,
+    pub(crate) table: Option<crate::ui::markdown_render::TableLineRef>,
 }
 
 impl Segment {
@@ -595,6 +601,7 @@ impl Segment {
         Self {
             text: text.into(),
             style,
+            table: None,
         }
     }
 
@@ -781,6 +788,9 @@ pub(super) fn put_segments(grid: &mut Grid, x: u16, y: u16, width: u16, segments
         if remaining == 0 {
             return;
         }
+        if let Some(ref line_ref) = segment.table {
+            grid.set_table_row(cx, y, line_ref.clone());
+        }
         grid.put_clipped(cx, y, &segment.text, segment.style, remaining);
         cx = cx.saturating_add(u16::try_from(segment.cols()).unwrap_or(u16::MAX));
     }
@@ -797,11 +807,14 @@ pub(super) fn wrap_spans(spans: &[Segment], width: usize) -> Vec<Vec<Segment>> {
     let mut col = 0usize;
     for source in spans {
         let mut buf = String::new();
+        let mut pending_table = source.table.clone();
         for ch in source.text.chars() {
             let cell = ch.width().unwrap_or(1).max(1);
             if col + cell > width && col > 0 {
                 if !buf.is_empty() {
-                    current.push(Segment::new(std::mem::take(&mut buf), source.style));
+                    let mut seg = Segment::new(std::mem::take(&mut buf), source.style);
+                    seg.table = pending_table.take();
+                    current.push(seg);
                 }
                 rows.push(std::mem::take(&mut current));
                 col = 0;
@@ -810,10 +823,19 @@ pub(super) fn wrap_spans(spans: &[Segment], width: usize) -> Vec<Vec<Segment>> {
             col += cell;
         }
         if !buf.is_empty() {
-            current.push(Segment::new(buf, source.style));
+            let mut seg = Segment::new(buf, source.style);
+            seg.table = pending_table.take();
+            current.push(seg);
         }
     }
     rows.push(current);
+    if rows.len() > 1 {
+        for row in &mut rows {
+            for seg in row {
+                seg.table = None;
+            }
+        }
+    }
     rows
 }
 

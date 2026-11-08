@@ -709,3 +709,74 @@ fn blockquote_renders_inline_markdown_spans_with_quote_tint() {
         style::md_read_quote().patch(style::md_read_strong())
     );
 }
+
+#[test]
+fn table_lines_carry_shared_layout_meta_with_soft_wrap_and_br_flags() {
+    use super::TableLineKind;
+
+    let src = "| 名称 | 说明 |\n| :--- | :---: |\n| Go | 第一段<br>第二段 |\n| Python | 这是一段在窄列宽下自动软折行的说明文字 |";
+    let lines = render_wrapped(src, 26);
+    assert!(!lines.is_empty());
+
+    let first_ref = lines[0].table.as_ref().expect("table line ref");
+    let meta = &first_ref.table;
+    assert_eq!(meta.columns.len(), 2);
+    assert_eq!(meta.logical_rows.len(), 3);
+    assert_eq!(meta.lines.len(), lines.len());
+
+    // 所有表格物理行共享同一个 Arc<TableLayoutMeta>，且 line_offset 严格递增。
+    for (idx, line) in lines.iter().enumerate() {
+        let line_ref = line.table.as_ref().expect("every table line has ref");
+        assert!(std::sync::Arc::ptr_eq(&line_ref.table, meta));
+        assert_eq!(line_ref.line_offset, idx);
+    }
+
+    // 第 1 条数据行（row_idx = 1）：右列含 `<br>`，首条物理行应标记 `hard_break = true`，左列第 2 条物理行应为 `is_filler = true`。
+    let row1 = meta.logical_rows[1];
+    assert!(
+        row1.last_line > row1.first_line,
+        "含 <br> 的行至少 2 条物理行"
+    );
+    let TableLineKind::Cells {
+        row_idx,
+        cells: first_cells,
+        ..
+    } = &meta.lines[row1.first_line]
+    else {
+        panic!("expected Cells line");
+    };
+    assert_eq!(*row_idx, 1);
+    assert!(!first_cells[0].is_filler);
+    assert!(
+        first_cells[1].hard_break,
+        "<br> 拆出的首段末尾应标记 hard_break"
+    );
+
+    let TableLineKind::Cells {
+        cells: second_cells,
+        ..
+    } = &meta.lines[row1.first_line + 1]
+    else {
+        panic!("expected second Cells line");
+    };
+    assert!(second_cells[0].is_filler, "左列高度不足处应标记 is_filler");
+
+    // 第 2 条数据行（row_idx = 2）：右列自动软折行，所有物理行 `hard_break` 均应为 false。
+    let row2 = meta.logical_rows[2];
+    assert!(row2.last_line > row2.first_line, "窄列宽下长句应软折行");
+    for line_offset in row2.first_line..=row2.last_line {
+        let TableLineKind::Cells { cells, .. } = &meta.lines[line_offset] else {
+            panic!("expected Cells line");
+        };
+        assert!(!cells[1].hard_break, "自动软折行不得标记 hard_break");
+    }
+
+    // 极窄宽度（floor_total > available）下列宽应收缩至最小字符宽度 floor，而非保留自然超宽长度。
+    let wide_cjk = "| 一 | 二 | 三 | 四 |\n| --- | --- | --- | --- |\n| 很长的一段中文内容A | 很长的一段中文内容B | 很长的一段中文内容C | 很长的一段中文内容D |";
+    let narrow_lines = render_wrapped(wide_cjk, 18);
+    let natural_lines = render(wide_cjk);
+    assert!(
+        narrow_lines[0].width() < natural_lines[0].width(),
+        "极窄宽度下表格列宽应收缩至单字下限，不得保持自然总宽"
+    );
+}
