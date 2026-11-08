@@ -89,7 +89,7 @@ pub(super) fn header_line(lang: &str, block_index: usize, width: Option<usize>) 
     }
 
     let lang_budget = cols.saturating_sub(fixed);
-    let lang_display = truncate_with_ellipsis(label, lang_budget);
+    let lang_display = truncate_with_ellipsis(&label, lang_budget);
     let lang_w = display_width(&lang_display);
     let fill = cols.saturating_sub(bar_w + left_pad + lang_w + btn_w + right_pad);
     let btn_start = bar_w + left_pad + lang_w + fill;
@@ -192,14 +192,24 @@ pub(super) fn prepend_body_bar(
     out
 }
 
-/// 规范化语言名：空白或未指定时回退为 `"text"`。
-pub(super) fn normalize_lang_label(lang: &str) -> &str {
+/// 规范化语言名：空白或未指定时回退为 `"text"`；控制字符（含 `\t`）替换为空格，
+/// 保证 `display_width` 与网格实际落格宽度一致。
+pub(super) fn normalize_lang_label(lang: &str) -> Cow<'_, str> {
     let trimmed = lang.trim();
-    if trimmed.is_empty() {
+    let label = if trimmed.is_empty() {
         DEFAULT_CODE_LANG
     } else {
         trimmed
+    };
+    if !label.chars().any(char::is_control) {
+        return Cow::Borrowed(label);
     }
+    Cow::Owned(
+        label
+            .chars()
+            .map(|ch| if ch.is_control() { ' ' } else { ch })
+            .collect(),
+    )
 }
 
 fn truncate_with_ellipsis(text: &str, max_width: usize) -> String {
@@ -241,8 +251,20 @@ fn clip_width(text: &str, max_width: usize) -> String {
     out
 }
 
-/// 按与 [`super::render_blocks_stateful`] 完全一致的块级扫描口径，提取第 `target_index` 个
-/// 代码块（围栏或 4 空格缩进代码块）的原始未折行代码正文。
+/// 收集复制用的原始代码行：去掉行尾 `\r`，避免 CRLF 源把 `\r` 带进剪贴板。
+fn push_code_line<'a>(lines: &mut Vec<&'a str>, line: &'a str) {
+    lines.push(line.strip_suffix('\r').unwrap_or(line));
+}
+
+/// 缩进代码块单行：去 4 空格缩进，再去行尾 `\r`。
+fn strip_indent_and_cr(line: &str) -> &str {
+    let body = line.strip_prefix("    ").unwrap_or(line);
+    body.strip_suffix('\r').unwrap_or(body)
+}
+
+/// 按与 [`super::render_blocks_stateful`] 相同的块扫描顺序，提取第 `target_index` 个
+/// 代码块（围栏或 4 空格缩进代码块）的原始未折行代码正文；与当前解析器口径一致，
+/// 不额外支持 `~~~` 围栏或四反引号闭合长度等 CommonMark 细节。
 ///
 /// 未闭合的流式围栏代码块返回当前已生成的全部代码行。
 pub fn extract_code_block(source: &str, target_index: usize) -> Option<String> {
@@ -266,7 +288,7 @@ pub fn extract_code_block(source: &str, target_index: usize) -> Option<String> {
                 continue;
             }
             if current_block == target_index {
-                fence_lines.push(line);
+                push_code_line(&mut fence_lines, line);
             }
             index += 1;
             continue;
@@ -299,11 +321,7 @@ pub fn extract_code_block(source: &str, target_index: usize) -> Option<String> {
                     }
                     break;
                 }
-                body.push(
-                    source_lines[index]
-                        .strip_prefix("    ")
-                        .unwrap_or(source_lines[index]),
-                );
+                body.push(strip_indent_and_cr(source_lines[index]));
                 index += 1;
             }
             if current_block == target_index {

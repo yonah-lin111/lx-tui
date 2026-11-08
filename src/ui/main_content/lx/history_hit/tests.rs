@@ -85,7 +85,29 @@ fn chat_hit_returns_copy_code_on_assistant_code_block_button_and_misses_outside(
 }
 
 #[test]
-fn chat_hit_on_sticky_prompt_header_blocks_underlying_code_copy_button() {
+fn chat_hit_returns_raw_unwrapped_code_for_soft_wrapped_block() {
+    let area = Rect::new(0, 0, 40, 20);
+    let raw = "fn long() {\n    let value = aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa;\n\n    done();\n}";
+    let mut lx = Lx::new();
+    let mut chat = LxChat::new();
+    chat.messages
+        .push(assistant_msg("a-wrap", &format!("```rust\n{raw}\n```")));
+    lx.chat = chat;
+
+    let mut cache = PaneCache::default();
+    let mut buf = Buffer::empty(area);
+    render(area, &mut buf, &lx, true, None, &mut cache);
+
+    let (btn_x, btn_y) = find_copy_button_pos(&buf, area).expect("copy button in buffer");
+    assert_eq!(
+        chat_hit(area, &lx, btn_x, btn_y, &mut cache),
+        Some(LxChatHit::CopyCode(raw.into())),
+        "窄宽度软折行后仍必须复制原始未折行代码"
+    );
+}
+
+#[test]
+fn chat_hit_on_sticky_prompt_header_does_not_fall_through_to_history() {
     let area = Rect::new(0, 0, 50, 14);
     let mut lx = Lx::new();
     let mut chat = LxChat::new();

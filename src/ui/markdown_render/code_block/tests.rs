@@ -188,6 +188,52 @@ fn consecutive_code_blocks_share_a_single_blank_line_and_edges_stay_tight() {
 }
 
 #[test]
+fn ultra_narrow_header_and_body_stay_within_width() {
+    for width in 1..7u16 {
+        let lines = render_wrapped_code_blocks("```rust\nx\n```", width);
+        for line in &lines {
+            assert!(
+                line.width() <= usize::from(width),
+                "width={width} 时行宽 {} 越界：{:?}",
+                line.width(),
+                line.text()
+            );
+        }
+        assert!(
+            lines
+                .iter()
+                .any(|line| line.code == Some(CodeLineKind::TopBorder)),
+            "width={width} 时仍应保留顶边"
+        );
+    }
+}
+
+#[test]
+fn header_sanitizes_control_chars_in_language_label() {
+    let src = "```ru\tst\nlet x = 1;\n```";
+    let lines = render_wrapped_code_blocks(src, 20);
+    let header = &lines[1];
+    assert!(
+        !header.text().chars().any(char::is_control),
+        "语言标签不得把控制字符带进渲染行：{:?}",
+        header.text()
+    );
+    assert!(
+        header.text().starts_with("▎ ru st "),
+        "制表符应替换为空格后再参与排版：{:?}",
+        header.text()
+    );
+    assert_eq!(header.width(), 20);
+    assert_eq!(
+        header.code,
+        Some(CodeLineKind::Header {
+            block_index: 0,
+            button_cols: (16, 19),
+        })
+    );
+}
+
+#[test]
 fn code_lines_expand_tabs_and_replace_control_chars() {
     let src = "```rust\n\tlet x = 1;\r\n\u{1}bad\n```";
     let lines = render_wrapped_code_blocks(src, 40);
@@ -218,6 +264,38 @@ fn plain_render_wrapped_keeps_code_blocks_without_chrome_for_thinking_and_tools(
         assert_eq!(lines[0].code, None);
         assert_eq!(lines[0].text(), "let x = 1;");
     }
+}
+
+#[test]
+fn extract_code_block_strips_crlf_line_endings() {
+    let src = "```rust\r\nlet x = 1;\r\n\r\nlet y = 2;\r\n```";
+    assert_eq!(
+        extract_code_block(src, 0).as_deref(),
+        Some("let x = 1;\n\nlet y = 2;"),
+        "围栏代码块复制必须剥离 CRLF 的 `\\r`"
+    );
+
+    let src = "    indented();\r\n";
+    assert_eq!(
+        extract_code_block(src, 0).as_deref(),
+        Some("indented();"),
+        "缩进代码块复制必须剥离 CRLF 的 `\\r`"
+    );
+}
+
+#[test]
+fn extract_code_block_index_matches_render_after_list_quote_and_table() {
+    let src = "Intro\n\n- item\n\n> quoted\n\n| a | b |\n| - | - |\n| c | d |\n\n```rust\nfirst\n```\n\n    indented\n";
+    let headers: Vec<usize> = render_wrapped_code_blocks(src, 40)
+        .iter()
+        .filter_map(|line| match line.code {
+            Some(CodeLineKind::Header { block_index, .. }) => Some(block_index),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(headers, vec![0, 1], "列表/引用/表格之后的代码块序号");
+    assert_eq!(extract_code_block(src, 0).as_deref(), Some("first"));
+    assert_eq!(extract_code_block(src, 1).as_deref(), Some("indented"));
 }
 
 #[test]

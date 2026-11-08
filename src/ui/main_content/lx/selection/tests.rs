@@ -1,4 +1,4 @@
-//! `lx` 消息列表 Markdown 表格单元格长按拖选、局部反显高亮、防手抖吸附、双击/三击与去边框复制测试。
+//! `lx` 消息列表 Markdown 表格单元格长按拖选、代码块装饰行/左栏排除、局部反显高亮、防手抖吸附、双击/三击与去边框复制测试。
 
 use ratatui::buffer::Buffer;
 use ratatui::layout::Rect;
@@ -617,7 +617,7 @@ fn copy_text_on_code_block_skips_chrome_rows_and_strips_left_bar() {
         "● Intro line\nfn main() {\n    let x = 1;\n\n    println!(\"{x}\");\n}\n\n  Outro line"
     );
 
-    // 2. 仅在顶边行（row=1）、头部行（row=2）或左侧 `▎` 栏列（row=3..=7, col=0..=2）上框选/双击时，
+    // 2. 仅在顶边行（row=1）、头部行（row=2）或单行左侧 `▎` 栏列（row=3, col=0..=2）上框选/双击时，
     // 与表格边框一样不可复制且不反显。
     assert_eq!(
         super::copy_text(area, &lx, ((1, 0), (2, 49)), &mut cache),
@@ -625,9 +625,9 @@ fn copy_text_on_code_block_skips_chrome_rows_and_strips_left_bar() {
         "仅框选 `▂` 顶边与头部行不得复制出任何内容"
     );
     assert_eq!(
-        super::copy_text(area, &lx, ((3, 0), (7, 2)), &mut cache),
+        super::copy_text(area, &lx, ((3, 0), (3, 2)), &mut cache),
         "",
-        "仅框选左侧 `▎` 栏列不得复制出任何内容"
+        "仅框选单行左侧 `▎` 栏列不得复制出任何内容"
     );
     let word_on_bar = super::unit_cell_range(area, &lx, (3, 2), SelectionUnit::Word, &mut cache);
     assert_eq!(
@@ -664,4 +664,39 @@ fn copy_text_on_code_block_skips_chrome_rows_and_strips_left_bar() {
             "代码块正文行 row={row} 的代码内容区应正常反显"
         );
     }
+}
+
+#[test]
+fn copy_text_keeps_code_body_when_selection_endpoints_are_left_of_bar() {
+    let area = Rect::new(0, 0, 50, 20);
+    let lx = assistant_markdown_lx("Intro line\n\n```rust\nfn main() {}\n```\n\nOutro line");
+    let mut cache = PaneCache::default();
+
+    // 从左上普通行拖到左下普通行：两个端点都在第 0 列（`▎` 左侧），中间代码行
+    // 实际横跨整行，不能因为端点列而整段跳过。
+    let copied = super::copy_text(area, &lx, ((0, 0), (5, 0)), &mut cache);
+    assert!(
+        copied.contains("fn main() {}"),
+        "端点都在左侧时中间代码正文仍应被复制：{copied:?}"
+    );
+    assert!(
+        copied.starts_with("● Intro line\n"),
+        "代码块前的正文应保留：{copied:?}"
+    );
+
+    // 同样的选区在渲染层必须从 `bar_col + 1` 起反显代码内容，而不是整行跳过。
+    let geom = super::content_geom(area, &lx, &mut cache).expect("geom");
+    let sel = Selection::text_range(PaneId::from_raw_for_test(1), (0, 0), (5, 0));
+    let mut buf = Buffer::empty(area);
+    render(area, &mut buf, &lx, true, Some(&sel), &mut cache);
+    let y = geom.rect.y + 3;
+    let bar_x = geom.rect.x + 2;
+    assert!(
+        !buf[(bar_x, y)].modifier.contains(Modifier::REVERSED),
+        "左侧 `▎` 本身不得反显"
+    );
+    assert!(
+        buf[(bar_x + 1, y)].modifier.contains(Modifier::REVERSED),
+        "代码正文应从 `bar_col + 1` 起反显"
+    );
 }

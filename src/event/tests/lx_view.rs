@@ -1203,6 +1203,24 @@ fn lx_code_block_copy_button_click_shows_pane_toast_keeps_selection_and_ignores_
         state.pane_anywhere(pane).expect("pane").lx.toast.is_some(),
         "非空代码块点击 `[❐]` 应在当前 lx 窗格内弹出剪贴板 toast"
     );
+    let toast = state
+        .pane_anywhere(pane)
+        .expect("pane")
+        .lx
+        .toast
+        .as_ref()
+        .expect("clipboard toast");
+    assert_eq!(toast.anchor, Some(pane), "代码块复制 toast 锚定当前窗格");
+    assert_eq!(
+        toast.title.as_deref(),
+        Some(ui::text::TOAST_CLIPBOARD_TITLE),
+        "代码块复制 toast 标题为 Clipboard"
+    );
+    assert_eq!(
+        toast.message,
+        ui::text::toast_copied("let answer = 42;"),
+        "代码块复制 toast 显示原始代码字符数"
+    );
     assert!(
         state.lx_selection.is_some(),
         "点击 `[❐]` 复制按钮不得清除已有文本选区"

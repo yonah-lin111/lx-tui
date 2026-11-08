@@ -225,7 +225,7 @@ pub(super) fn paint_selection(
                 _ => 0,
             };
             let eff_col0 = raw_col0.max(min_col);
-            if eff_col0 > raw_col1 || (start.1 < min_col && end.1 < min_col) {
+            if eff_col0 > raw_col1 {
                 continue;
             }
             let (g_col0, g_col1) = table::align_wide_char_cols(
@@ -412,7 +412,8 @@ pub(crate) fn unit_cell_range(
 /// 按内容行区间分段渲染到仅含正文列的网格（不含滚动条槽），因此：
 /// - 滚轮滚出当前视口的选中行仍能完整复制；
 /// - 右侧滚动条字符 `▐` 永远不会混入复制文本；
-/// - Markdown 表格行自动按三级单元格选区去边框提取（软折行无缝拼接、`<br>` 保换行、同行多列 `\t`）。
+/// - Markdown 表格行自动按三级单元格选区去边框提取（软折行无缝拼接、`<br>` 保换行、同行多列 `\t`）；
+/// - 代码块顶边/头部行整行跳过，正文行剥离 `STEP_GUTTER` 与左侧 `▎`，保留代码缩进与空行。
 pub fn copy_text(
     area: Rect,
     lx: &Lx,
@@ -542,10 +543,6 @@ pub fn copy_text(
                     _ => 0,
                 };
                 let eff_col0 = raw_col0.max(min_col);
-                if start.1 < min_col && end.1 < min_col {
-                    row = row.saturating_add(1);
-                    continue;
-                }
                 if eff_col0 <= raw_col1 {
                     let (col0, col1) = table::align_wide_char_cols(&grid, y, eff_col0, raw_col1);
                     let mut line = String::new();

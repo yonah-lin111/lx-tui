@@ -129,7 +129,7 @@ pub fn sticky_prompt_jump(area: Rect, lx: &Lx, cache: &mut PaneCache) -> Option<
     Some(start.min(max_top))
 }
 
-/// 聊天模式命中测试：回到底部按钮 > 置顶行 > thinking 头部。
+/// 聊天模式命中测试：回到底部按钮 > Agents 详情代码复制 > 置顶行 > 主对话代码复制。
 /// 聊天区的几何是否「正在被画出来」——**所有基于历史几何的命中入口都必须先问它**。
 ///
 /// 后台任务面板打开时，输出容器与历史区是**同一块矩形**，但历史根本没画（`build_chat`
@@ -271,7 +271,7 @@ fn task_agents_code_copy_at(
         .selected_agent_index(&lx.agents)
         .and_then(|index| lx.agents.runs.get(index))?;
     let source = history::HistorySource::from_chat(&run.chat, &run.compact);
-    let view = history::view_source_plain(rect, source, cache);
+    let view = history::view_source_plain_ready(rect, source, cache);
     let visible = usize::from(view.body.height);
     let max = view.total_rows.saturating_sub(visible);
     let top = if run.follow { max } else { run.scroll.min(max) };
