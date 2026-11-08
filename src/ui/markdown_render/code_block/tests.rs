@@ -1,3 +1,5 @@
+use unicode_width::UnicodeWidthChar;
+
 use crate::ui::markdown_render::{
     CodeLineKind, DEFAULT_CODE_LANG, MdLine, extract_code_block, render_wrapped,
     render_wrapped_code_blocks, render_wrapped_literal_rules,
@@ -224,6 +226,30 @@ fn header_sanitizes_control_chars_in_language_label() {
         header.text()
     );
     assert_eq!(header.width(), 20);
+    assert_eq!(
+        header.code,
+        Some(CodeLineKind::Header {
+            block_index: 0,
+            button_cols: (16, 19),
+        })
+    );
+}
+
+#[test]
+fn header_drops_zero_width_language_chars() {
+    let src = "```e\u{0301}\nlet x = 1;\n```";
+    let lines = render_wrapped_code_blocks(src, 20);
+    let header = &lines[1];
+    assert!(
+        header.text().chars().all(|ch| ch.width().unwrap_or(0) > 0),
+        "语言标签不得把零宽/组合字符带进渲染行：{:?}",
+        header.text()
+    );
+    assert!(
+        header.text().starts_with("▎ e "),
+        "组合字符应被丢弃后再参与排版：{:?}",
+        header.text()
+    );
     assert_eq!(
         header.code,
         Some(CodeLineKind::Header {

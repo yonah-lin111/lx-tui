@@ -881,19 +881,22 @@ pub(crate) fn handle_mouse_down_left(
                             Instant::now(),
                         );
                         let unit = crate::app::selection::SelectionUnit::from_clicks(clicks);
-                        let (start, end) = state
-                            .pane_anywhere(pane)
-                            .map(|pane_target| {
-                                ui::main_content::lx::unit_cell_range(
-                                    inner,
-                                    &pane_target.lx,
-                                    (content_row, content_col),
-                                    unit,
-                                    cache.pane(pane),
-                                )
-                            })
-                            .unwrap_or(((content_row, content_col), (content_row, content_col)));
-                        update::begin_lx_selection_range(state, pane, start, end, unit);
+                        let range = state.pane_anywhere(pane).and_then(|pane_target| {
+                            ui::main_content::lx::unit_cell_range_opt(
+                                inner,
+                                &pane_target.lx,
+                                (content_row, content_col),
+                                unit,
+                                cache.pane(pane),
+                            )
+                        });
+                        if let Some((start, end)) = range {
+                            update::begin_lx_selection_range(state, pane, start, end, unit);
+                        } else {
+                            // 装饰行/左侧 `▎` 栏等不可选位置：不要留下折叠的 Word/Line
+                            // 选区，否则 Ctrl/Cmd+C 会被空选区吞掉。
+                            update::clear_selection(state);
+                        }
                     }
                 }
                 *dirty = true;

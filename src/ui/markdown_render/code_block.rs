@@ -193,7 +193,7 @@ pub(super) fn prepend_body_bar(
 }
 
 /// 规范化语言名：空白或未指定时回退为 `"text"`；控制字符（含 `\t`）替换为空格，
-/// 保证 `display_width` 与网格实际落格宽度一致。
+/// 零宽/组合字符直接丢弃，保证 `display_width` 与网格实际落格宽度一致。
 pub(super) fn normalize_lang_label(lang: &str) -> Cow<'_, str> {
     let trimmed = lang.trim();
     let label = if trimmed.is_empty() {
@@ -201,13 +201,24 @@ pub(super) fn normalize_lang_label(lang: &str) -> Cow<'_, str> {
     } else {
         trimmed
     };
-    if !label.chars().any(char::is_control) {
+    let needs_sanitize = label
+        .chars()
+        .any(|ch| ch.is_control() || ch.width().unwrap_or(0) == 0);
+    if !needs_sanitize {
         return Cow::Borrowed(label);
     }
     Cow::Owned(
         label
             .chars()
-            .map(|ch| if ch.is_control() { ' ' } else { ch })
+            .filter_map(|ch| {
+                if ch.is_control() {
+                    Some(' ')
+                } else if ch.width().unwrap_or(0) == 0 {
+                    None
+                } else {
+                    Some(ch)
+                }
+            })
             .collect(),
     )
 }

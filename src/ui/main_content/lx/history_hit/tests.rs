@@ -8,18 +8,23 @@ use crate::chat::events::PartKind;
 use crate::ui::PaneCache;
 use crate::ui::main_content::lx::{LxChatHit, chat_hit, render};
 
-fn find_copy_button_pos(buf: &Buffer, area: Rect) -> Option<(u16, u16)> {
+fn find_copy_button_positions(buf: &Buffer, area: Rect) -> Vec<(u16, u16)> {
+    let mut positions = Vec::new();
     for y in area.y..area.bottom() {
         for x in area.x..area.right().saturating_sub(2) {
             if buf[(x, y)].symbol() == "["
                 && buf[(x + 1, y)].symbol() == "❐"
                 && buf[(x + 2, y)].symbol() == "]"
             {
-                return Some((x + 1, y));
+                positions.push((x + 1, y));
             }
         }
     }
-    None
+    positions
+}
+
+fn find_copy_button_pos(buf: &Buffer, area: Rect) -> Option<(u16, u16)> {
+    find_copy_button_positions(buf, area).into_iter().next()
 }
 
 fn assistant_msg(id: &str, content: &str) -> ChatMessageView {
@@ -76,6 +81,24 @@ fn chat_hit_returns_copy_code_on_assistant_code_block_button_and_misses_outside(
         )),
         "点击 `[❐]` 应返回未折行的原始代码块内容"
     );
+    // 按钮左边缘 `[` 与右边缘 `]` 命中，右侧 1 列空白不命中。
+    assert_eq!(
+        chat_hit(area, &lx, btn_x - 1, btn_y, &mut cache),
+        Some(LxChatHit::CopyCode(
+            "fn demo() -> usize {\n    42\n}".into()
+        ))
+    );
+    assert_eq!(
+        chat_hit(area, &lx, btn_x + 1, btn_y, &mut cache),
+        Some(LxChatHit::CopyCode(
+            "fn demo() -> usize {\n    42\n}".into()
+        ))
+    );
+    assert_eq!(
+        chat_hit(area, &lx, btn_x + 2, btn_y, &mut cache),
+        None,
+        "按钮右侧 1 列空白不得命中复制"
+    );
     // 同一行左侧语言标签 `rust` 位置不应触发复制。
     assert_eq!(
         chat_hit(area, &lx, area.x + 4, btn_y, &mut cache),
@@ -103,6 +126,52 @@ fn chat_hit_returns_raw_unwrapped_code_for_soft_wrapped_block() {
         chat_hit(area, &lx, btn_x, btn_y, &mut cache),
         Some(LxChatHit::CopyCode(raw.into())),
         "窄宽度软折行后仍必须复制原始未折行代码"
+    );
+}
+
+#[test]
+fn chat_hit_copies_second_code_block_by_its_own_index() {
+    let area = Rect::new(0, 0, 50, 20);
+    let mut lx = Lx::new();
+    let mut chat = LxChat::new();
+    chat.messages.push(assistant_msg(
+        "a-multi",
+        "```rust\nfirst();\n```\n\n```python\nsecond();\n```",
+    ));
+    lx.chat = chat;
+
+    let mut cache = PaneCache::default();
+    let mut buf = Buffer::empty(area);
+    render(area, &mut buf, &lx, true, None, &mut cache);
+    let buttons = find_copy_button_positions(&buf, area);
+    assert_eq!(buttons.len(), 2, "两条代码块各有一个复制按钮");
+    let (btn_x, btn_y) = buttons[1];
+    assert_eq!(
+        chat_hit(area, &lx, btn_x, btn_y, &mut cache),
+        Some(LxChatHit::CopyCode("second();".into())),
+        "第二个代码块必须按 block_index=1 提取"
+    );
+}
+
+#[test]
+fn chat_hit_does_not_copy_stale_history_while_session_is_loading() {
+    let area = Rect::new(0, 0, 50, 18);
+    let mut lx = Lx::new();
+    let mut chat = LxChat::new();
+    chat.messages
+        .push(assistant_msg("a-loading", "```rust\nlet hidden = 1;\n```"));
+    lx.chat = chat;
+
+    let mut cache = PaneCache::default();
+    let mut buf = Buffer::empty(area);
+    render(area, &mut buf, &lx, true, None, &mut cache);
+    let (btn_x, btn_y) = find_copy_button_pos(&buf, area).expect("copy button");
+
+    lx.chat.loading_session = true;
+    assert_eq!(
+        chat_hit(area, &lx, btn_x, btn_y, &mut cache),
+        None,
+        "恢复会话加载中只画 loading 占位，旧历史按钮不得穿透命中"
     );
 }
 

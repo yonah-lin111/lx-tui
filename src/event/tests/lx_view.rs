@@ -1226,3 +1226,120 @@ fn lx_code_block_copy_button_click_shows_pane_toast_keeps_selection_and_ignores_
         "点击 `[❐]` 复制按钮不得清除已有文本选区"
     );
 }
+
+#[test]
+fn code_block_chrome_double_or_triple_click_does_not_leave_invisible_selection() {
+    let config = Config::default();
+    let mut state = AppState::demo();
+    let geo = geometry(&state, &config, Rect::new(0, 0, 120, 30));
+    let pane = state.active_tab().layout.focus();
+    let inner = pane_inner(&geo, pane);
+    if let Some(target) = state.pane_mut_anywhere(pane) {
+        target.view = PaneView::Lx;
+        target
+            .lx
+            .chat
+            .messages
+            .push(crate::app::state::ChatMessageView {
+                sequence: 1,
+                id: "m-code-chrome".into(),
+                role: "assistant".into(),
+                status: "complete".into(),
+                turn_index: 0,
+                kind: "chat".into(),
+                shell: None,
+                steps: vec![crate::app::state::AssistantStepView::Part {
+                    position: 0,
+                    part: crate::app::state::ChatPartView {
+                        kind: crate::chat::events::PartKind::Text,
+                        content: "```rust\nlet answer = 42;\n```".into(),
+                        provider_metadata_json: None,
+                        started_at_ms: None,
+                        ended_at_ms: None,
+                        completed_at_ms: None,
+                    },
+                }],
+                model_label: None,
+                error_code: None,
+                input_tokens: None,
+                output_tokens: None,
+                cache_read_tokens: None,
+                duration_ms: None,
+                reports: Vec::new(),
+                attachments: Vec::new(),
+            });
+    }
+
+    let mut cache = ui::RenderCache::default();
+    let lx = &state.pane_anywhere(pane).expect("pane").lx;
+    let geom = ui::main_content::lx::content_geom(inner, lx, cache.pane(pane)).expect("geom");
+    let mut sessions = HashMap::new();
+
+    // 顶边、语言标签、正文左侧 `▎`：双击不得留下不可见的 Word 选区。
+    for (row, col) in [(0u16, 5u16), (1, 5), (2, 2)] {
+        state.selection_click = None;
+        let mut dirty = false;
+        for _ in 0..2 {
+            handle_terminal_event(
+                mouse(
+                    MouseEventKind::Down(MouseButton::Left),
+                    geom.rect.x + col,
+                    geom.rect.y + row,
+                ),
+                &mut state,
+                &mut sessions,
+                &geo,
+                &config,
+                &mut cache,
+                &mut dirty,
+            );
+            handle_terminal_event(
+                mouse(
+                    MouseEventKind::Up(MouseButton::Left),
+                    geom.rect.x + col,
+                    geom.rect.y + row,
+                ),
+                &mut state,
+                &mut sessions,
+                &geo,
+                &config,
+                &mut cache,
+                &mut dirty,
+            );
+        }
+        assert!(
+            state.lx_selection.is_none(),
+            "row={row} col={col} 双击装饰区不得留下不可见选区"
+        );
+    }
+
+    // 三击顶边同样不得留下 Line 选区。
+    state.selection_click = None;
+    let mut dirty = false;
+    for _ in 0..3 {
+        let x = geom.rect.x + 5;
+        let y = geom.rect.y;
+        handle_terminal_event(
+            mouse(MouseEventKind::Down(MouseButton::Left), x, y),
+            &mut state,
+            &mut sessions,
+            &geo,
+            &config,
+            &mut cache,
+            &mut dirty,
+        );
+        handle_terminal_event(
+            mouse(MouseEventKind::Up(MouseButton::Left), x, y),
+            &mut state,
+            &mut sessions,
+            &geo,
+            &config,
+            &mut cache,
+            &mut dirty,
+        );
+    }
+    assert!(
+        state.lx_selection.is_none(),
+        "三击顶边不得留下不可见 Line 选区"
+    );
+}

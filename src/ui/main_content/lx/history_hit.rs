@@ -140,7 +140,7 @@ pub fn sticky_prompt_jump(area: Rect, lx: &Lx, cache: &mut PaneCache) -> Option<
 /// 聊天栏「回到底部」**不属于**历史几何：面板打开时它照样是活的，`chat_hit`
 /// 因此先判它、再问这个。
 pub(super) fn chat_geometry_is_live(lx: &Lx) -> bool {
-    lx.task.is_none() && super::history::has_history(lx)
+    lx.task.is_none() && !lx.chat.loading_session && super::history::has_history(lx)
 }
 
 pub fn chat_hit(

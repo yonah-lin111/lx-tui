@@ -2,7 +2,7 @@
 
 - 复审对象：`feat/lx-code-block-copy`（`ac1f174` 之后的工作区）
 - 复审范围：代码块渲染（`markdown_render/code_block.rs`、`markdown_render.rs`、`incremental.rs`）、lx 历史网格与选区、`[❐]` 命中与剪贴板反馈、相关测试与 feature 文档
-- 结论：P0 1 项（已在 `66ef242` 修复）、P1 2 项、P2 4 项、P3 5 项；P1/P2 在本轮修复并补测试。
+- 结论：P0 1 项（已在 `66ef242` 修复）、P1 2 项、P2 6 项、P3 6 项；P1/P2 在本轮修复并补测试。
 - 说明：下列“关键点/错误原因”记录复审时发现的问题；修复与验证列为当前状态，文档现状以本目录当前文件为准。
 - 关联设计：[design.md](./design.md)
 - 关联任务：[task.md](./task.md)
@@ -178,6 +178,52 @@
 
 - `chat_hit_supports_code_copy_button_in_task_agents_detail_view` 继续通过。
 
+### P2-5 恢复会话加载中仍可命中/选中不可见的旧历史
+
+**关键点**
+
+- `build_chat` 在 `lx.chat.loading_session` 为真时不画历史，只画居中的 loading 占位；但 `chat_geometry_is_live` 只判断 `task.is_none() && has_history`，没有判断 `loading_session`。
+- `resume_session` 只置 `loading_session = true`，不清旧消息；`has_history` 在加载期间仍为真。
+- 因此在会话 B 加载完成前，点击屏幕上原会话 A 的 `[❐]` 位置会按旧历史几何命中，复制 A 的代码并弹 Toast；`selection::content_geom` 不经过该 guard，加载态拖拽也会选中不可见旧历史。
+
+**错误原因**
+
+`chat_geometry_is_live` 的“几何正在被画出来”判定漏了 loading 态；`content_geom` 主历史分支没有复用同一判定。
+
+**修复**
+
+- `chat_geometry_is_live` 增加 `!lx.chat.loading_session`。
+- `selection::content_geom` 在主历史分支前复用 `chat_geometry_is_live`，加载态直接返回 `None`。
+- 新增“旧消息 + `loading_session = true` 时 `chat_hit` 返回 `None` / `content_geom` 返回 `None`”回归测试。
+
+**验证**
+
+- `chat_hit_does_not_copy_stale_history_while_session_is_loading`
+- `content_geom_is_none_while_session_is_loading`
+
+### P2-6 双击/三击装饰行或 `▎` 栏留下不可见的 Word/Line 选区，吞掉 Ctrl+C
+
+**关键点**
+
+- `unit_cell_range` 对 Chrome 行和正文 `▎` 栏返回折叠区间 `(cell, cell)`；`press.rs` 仍按 `Word`/`Line` 粒度调用 `begin_lx_selection_range`。
+- `Selection::range()` 只对 `Character` 折叠返回 `None`，Word/Line 折叠会保留一个没有反显的选区。
+- 之后 `Ctrl/Cmd+C` 走 `copy_text` 得到空串，`!text.is_empty()` 为假：不复制、不弹 Toast，但按键被消费，也不再走输入框清空分支。
+
+**错误原因**
+
+`unit_cell_range` 用折叠区间兼作“不可选位置”的返回值，丢失了“合法单字符词”与“装饰行/左栏”的语义区别；事件层无法判断是否应建立选区。
+
+**修复**
+
+- 新增 `unit_cell_range_opt`：Chrome 行、`▎` 栏、空 token 等不可选位置返回 `None`；合法的单字符 Word 仍返回 `Some((cell, cell))`。
+- `press.rs` 使用 opt 版本；`None` 时 `clear_selection(state)`，不建立 Word/Line 折叠选区。
+- 原 `unit_cell_range` 保留折叠回退，供拖拽/滚轮等已有选区路径使用。
+- 新增双击顶边、语言标签、正文 `▎` 与三击顶边的回归测试。
+
+**验证**
+
+- `code_block_chrome_double_or_triple_click_does_not_leave_invisible_selection`
+
 ---
 
 ## P3（可维护性 / 文档一致性 / 边缘行为）
@@ -252,13 +298,28 @@
 
 保留分支用于 match 穷尽，设计/任务文档已改为说明其不可达，不再声称由它启用 code chrome。
 
+### P3-6 语言标签中的零宽/组合字符仍会造成热区与绘制错位
+
+**关键点**
+
+- `normalize_lang_label` 最初只净化控制字符；组合字符（如 `e` + U+0301）与 ZWJ 的 `char.width()` 为 0。
+- `display_width` 按 0 列计算 `fill`/`button_cols`，`paint.rs` 的 `ch.width().unwrap_or(1).max(1)` 却按 1 列落格，绘制出的 `[❐]` 右移，命中区间留在左侧。
+
+**错误原因**
+
+语言标签净化只覆盖控制字符，没有覆盖零宽字符；宽度计算与绘制口径仍不一致。
+
+**处理**
+
+`normalize_lang_label` 同时丢弃 `width() == Some(0)` 的字符，并新增组合字符标签的 `button_cols`/行宽测试。
+
 ---
 
 ## 复审后验证
 
 - `cargo fmt --check`：通过
 - `cargo clippy --all-targets -- -D warnings`：通过
-- `cargo test markdown_render`：66 passed
-- `cargo test ui::main_content::lx`：620 passed，3 ignored
-- `cargo test event::tests::lx_view`：15 passed
-- `cargo test --lib`：4864 passed，4 ignored（首次运行 `event::chat::tests::user_shell::short_script_runs_persists_output_without_model` 曾因登录 shell 管道环境偶发失败，单测重跑与全量重跑均通过，与本功能无关）
+- `cargo test markdown_render`：67 passed
+- `cargo test ui::main_content::lx`：623 passed，3 ignored
+- `cargo test event::tests::lx_view`：16 passed
+- `cargo test --lib`：4869 passed，4 ignored（首次运行 `event::chat::tests::user_shell::short_script_runs_persists_output_without_model` 曾因登录 shell 管道环境偶发失败，单测重跑与全量重跑均通过，与本功能无关）

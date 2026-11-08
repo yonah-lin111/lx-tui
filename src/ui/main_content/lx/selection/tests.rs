@@ -595,6 +595,18 @@ fn collapsed_report_drag_and_table_hit_detection_behave_accurately() {
 }
 
 #[test]
+fn content_geom_is_none_while_session_is_loading() {
+    let area = Rect::new(0, 0, 50, 20);
+    let mut lx = assistant_markdown_lx("```rust\nlet hidden = 1;\n```");
+    lx.chat.loading_session = true;
+    let mut cache = PaneCache::default();
+    assert!(
+        content_geom(area, &lx, &mut cache).is_none(),
+        "恢复会话加载中旧历史不得参与选区几何"
+    );
+}
+
+#[test]
 fn copy_text_on_code_block_skips_chrome_rows_and_strips_left_bar() {
     let area = Rect::new(0, 0, 50, 20);
     let lx = assistant_markdown_lx(

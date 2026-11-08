@@ -34,7 +34,7 @@
 | **Q1** | 生效范围 | 仅助手正文 `PartKind::Text`（主对话与 `TaskTab::Agents` 子 Agent 详情）；用户气泡、思考块、工具卡片、Compact、ModelSwitch 不启用。 |
 | **Q2** | 视觉布局 | 顶部独立一行 `▂`（宽度 = 内容宽度，不预留右边距）；下一行无边框头部 `▎ <lang> ... [❐] `（语言左侧 1 列空白、按钮右侧 1 列空白）；正文每个视觉行（含软换行续行）首列 `▎`；无右边、底边、Header 下方分割线；`▂`/`▎` 用 `md_read_rule`，语言用 `muted`、按钮用 `template_button`（当前等价 `muted`）。 |
 | **Q3** | 复制与选区 | 点击 `[❐]` 复制原始未折行代码；空代码块不写剪贴板、不弹 Toast；Toast 标题 `Clipboard`、正文 `Copied N char(s)`，落当前 `lx` 窗格；点击后保留已有选区；无 Tooltip。拖拽复制跳过 `▂` 顶边与头部行，剥离 `STEP_GUTTER` 与 `▎`；从左侧起止的多行选区也必须保留中间代码正文。 |
-| **Q4** | 语言/窄屏/空块 | 围栏未写语言或缩进代码块显示 `text`；语言超宽以 `…` 截断，`[❐]` 常显优先；极窄宽度下裁剪按钮片段；代码行制表符按 4 列展开、控制字符替换为空格；复制时剥离 CRLF 行尾 `\r`。 |
+| **Q4** | 语言/窄屏/空块 | 围栏未写语言或缩进代码块显示 `text`；语言超宽以 `…` 截断，`[❐]` 常显优先；极窄宽度下裁剪按钮片段；语言中的控制字符替换为空格、零宽/组合字符丢弃；代码行制表符按 4 列展开、控制字符替换为空格；复制时剥离 CRLF 行尾 `\r`。 |
 
 ---
 
@@ -87,7 +87,7 @@ content_width = body.width - STEP_GUTTER
 - 按钮列区间 `[btn_start, btn_start + 3)`（相对 `MdLine` 起点，供命中使用）；最后一列固定为空；
 - `content_width < 7` 时走极窄兜底：`▎ ` + 裁剪后的按钮片段，避免越界。
 
-`normalize_lang_label` 负责空值回退 `text`，并把语言中的控制字符（含 `\t`）替换为空格，保证 `display_width` 与网格落格口径一致。
+`normalize_lang_label` 负责空值回退 `text`，把语言中的控制字符（含 `\t`）替换为空格，并丢弃零宽/组合字符，保证 `display_width` 与网格落格口径一致。
 
 ### 4.3 正文行
 
@@ -154,7 +154,9 @@ PartKind::Text (assistant)
 
 - `GridCodeRow::Chrome`：整行跳过（顶边与头部不复制、不反显）；
 - `GridCodeRow::Body { bar_col }`：有效起始列钳到 `bar_col + 1`，剥离 `STEP_GUTTER` 与 `▎`，保留代码自身缩进与空代码行；
-- 是否跳过只按**当前行**的实际列范围判断，不能用选区两个端点的列做全局跳过；否则“从左上拖到左下”的多行选区会漏掉中间代码正文。
+- 是否跳过只按**当前行**的实际列范围判断，不能用选区两个端点的列做全局跳过；否则“从左上拖到左下”的多行选区会漏掉中间代码正文；
+- `content_geom` 在 `loading_session` 为真时返回 `None`，`chat_geometry_is_live` 同步返回 false，加载态旧历史不参与命中或选区；
+- 双击/三击通过 `unit_cell_range_opt` 判断可选择性：Chrome 行、`▎` 栏等不可选位置返回 `None`，事件层直接清空选区，不留下折叠 Word/Line 选区。
 
 ---
 
@@ -186,11 +188,11 @@ PartKind::Text (assistant)
 - `src/ui/main_content/lx/tests.rs`
   - 真实渲染助手代码块：顶边、头部、正文左栏、制表符展开、无控制字符。
 - `src/ui/main_content/lx/history_hit/tests.rs`
-  - 主对话/子 Agent 详情页 `[❐]` 命中与原始代码返回；语言/右侧空白不命中。
+  - 主对话/子 Agent 详情页 `[❐]` 命中与原始代码返回；语言/右侧空白/按钮边缘不命中；多代码块按各自 `block_index` 提取；恢复会话加载中不命中旧历史。
 - `src/ui/main_content/lx/selection/tests.rs`
-  - Chrome 行不可复制/反显；正文左栏剥离；`(0,0) → (N,0)` 左侧起止多行选区保留代码。
+  - Chrome 行不可复制/反显；正文左栏剥离；`(0,0) → (N,0)` 左侧起止多行选区保留代码；恢复会话加载中 `content_geom` 返回 `None`。
 - `src/event/tests/lx_view.rs`
-  - 点击 `[❐]` 弹窗格内 Toast、空块不弹、选区保留、全局 `state.toast` 不被占用。
+  - 点击 `[❐]` 弹窗格内 Toast、空块不弹、选区保留、全局 `state.toast` 不被占用；双击/三击装饰行或 `▎` 栏不留下不可见 Word/Line 选区。
 
 验证命令：
 
@@ -215,6 +217,10 @@ cargo test --lib
 - **P2-1**：CRLF 复制带 `\r` —— 提取时剥离行尾 `\r`。
 - **P2-2**：设计/任务文档与实现不一致 —— 本文与 `task.md` 同步重写。
 - **P2-3**：补充选区、语言、CRLF、块序号测试。
+- **P2-4**：Agents 详情页命中改用 `view_source_plain_ready`。
+- **P2-5**：恢复会话加载中禁止命中/选中旧历史。
+- **P2-6**：双击/三击装饰行或 `▎` 栏不再留下不可见 Word/Line 选区。
+- **P3-6**：语言零宽/组合字符净化。
 
 ---
 

@@ -122,6 +122,10 @@ pub(crate) fn content_geom(area: Rect, lx: &Lx, cache: &mut PaneCache) -> Option
             total_rows,
         });
     }
+    // 恢复会话加载中：旧历史仍留在状态里但画面只画 loading 占位，禁止选区几何穿透。
+    if !super::history_hit::chat_geometry_is_live(lx) {
+        return None;
+    }
     // 选区几何在滚轮/拖拽事件里每帧都要算：只读已就绪快照，不在此同步重排。
     let view = super::history_hit::history_view_ready(area, lx, cache)?;
     let rect = history::content_rect(view.body);
@@ -303,6 +307,9 @@ pub(crate) fn press_content_hit(
 }
 
 /// 按选区粒度（单字 / 词 / 行）在主内容区计算 `cell` 所在词或行的列闭区间。
+///
+/// 折叠区间仍返回原坐标，供拖拽/滚轮等非“建立选区”路径使用；需要区分
+/// “不可选中的装饰行/左栏”与“合法的单字符词”时使用 [`unit_cell_range_opt`]。
 pub(crate) fn unit_cell_range(
     area: Rect,
     lx: &Lx,
@@ -310,14 +317,23 @@ pub(crate) fn unit_cell_range(
     unit: SelectionUnit,
     cache: &mut PaneCache,
 ) -> ((i32, u16), (i32, u16)) {
+    unit_cell_range_opt(area, lx, cell, unit, cache).unwrap_or((cell, cell))
+}
+
+/// [`unit_cell_range`] 的可判定版本：装饰行/左侧 `▎` 栏等不可选位置返回 `None`。
+pub(crate) fn unit_cell_range_opt(
+    area: Rect,
+    lx: &Lx,
+    cell: (i32, u16),
+    unit: SelectionUnit,
+    cache: &mut PaneCache,
+) -> Option<((i32, u16), (i32, u16))> {
     if unit == SelectionUnit::Character {
-        return (cell, cell);
+        return Some((cell, cell));
     }
-    let Some(geom) = content_geom(area, lx, cache) else {
-        return (cell, cell);
-    };
+    let geom = content_geom(area, lx, cache)?;
     if geom.rect.width == 0 || geom.total_rows == 0 {
-        return (cell, cell);
+        return None;
     }
     let max_col = geom.rect.width - 1;
     let row = usize::try_from(cell.0.max(0))
@@ -348,30 +364,30 @@ pub(crate) fn unit_cell_range(
             );
             let c_start = range.0.0.clamp(bounds.0, bounds.1);
             let c_end = range.1.0.clamp(bounds.0, bounds.1).max(c_start);
-            return ((c_start, range.0.1), (c_end, range.1.1));
+            return Some(((c_start, range.0.1), (c_end, range.1.1)));
         }
-        return range;
+        return Some(range);
     }
     let code_row = grid.code_row_at(0);
     if matches!(code_row, Some(super::grid::GridCodeRow::Chrome)) {
-        return (cell, cell);
+        return None;
     }
     let min_col = match code_row {
         Some(super::grid::GridCodeRow::Body { bar_col }) => bar_col.saturating_add(1),
         _ => 0,
     };
     match unit {
-        SelectionUnit::Character => (cell, cell),
+        SelectionUnit::Character => Some((cell, cell)),
         SelectionUnit::Line => {
             if min_col > max_col {
-                (cell, cell)
+                None
             } else {
-                ((cell.0, min_col), (cell.0, max_col))
+                Some(((cell.0, min_col), (cell.0, max_col)))
             }
         }
         SelectionUnit::Word => {
             if cell.1 < min_col || min_col > max_col {
-                return (cell, cell);
+                return None;
             }
             let mut tokens: Vec<(u16, u16, crate::app::selection::CharClass)> =
                 Vec::with_capacity(usize::from(geom.rect.width.saturating_sub(min_col)));
@@ -386,7 +402,7 @@ pub(crate) fn unit_cell_range(
                 }
             }
             if tokens.is_empty() {
-                return (cell, cell);
+                return None;
             }
             let target_col = cell.1.clamp(min_col, max_col);
             let idx = tokens
@@ -402,7 +418,7 @@ pub(crate) fn unit_cell_range(
             while right + 1 < tokens.len() && tokens[right + 1].2 == target_class {
                 right += 1;
             }
-            ((cell.0, tokens[left].0), (cell.0, tokens[right].1))
+            Some(((cell.0, tokens[left].0), (cell.0, tokens[right].1)))
         }
     }
 }

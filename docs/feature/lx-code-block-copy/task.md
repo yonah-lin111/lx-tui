@@ -50,6 +50,8 @@
 - [x] 助手正文增量 Markdown 路径（`cache.markdown_block`）启用 code chrome；`snapshot.rs` 的 `Text` fallback 仅作为 match 穷尽分支保留，非用户正文实际由外层 guard 捕获。
 - [x] `copy_text` / `paint_selection`：跳过 Chrome 行，正文从 `bar_col + 1` 起算，保留代码缩进与空代码行。
 - [x] 修复多行选区端点都在 `▎` 左侧时中间代码正文被整段跳过的问题。
+- [x] `content_geom` / `chat_geometry_is_live` 在恢复会话加载中返回不可用，旧历史不参与命中与选区。
+- [x] 双击/三击使用 `unit_cell_range_opt`：装饰行/左栏不建立 Word/Line 折叠选区。
 
 ### T3：复制按钮命中与 Toast
 
@@ -92,6 +94,10 @@
 - [x] **P2-1**：CRLF 复制带 `\r` —— `extract_code_block` 剥离行尾 `\r`，补测试。
 - [x] **P2-2**：设计与任务文档同步最终实现、测试落点与复审记录。
 - [x] **P2-3**：补齐选区、语言、CRLF、块序号对齐测试。
+- [x] **P2-4**：Agents 详情页 `[❐]` 命中改用 `view_source_plain_ready`。
+- [x] **P2-5**：恢复会话加载中禁止命中/选中旧历史；`chat_geometry_is_live` 与 `content_geom` 同步 guard。
+- [x] **P2-6**：双击/三击装饰行或 `▎` 栏不再留下不可见 Word/Line 选区；新增 `unit_cell_range_opt`。
+- [x] **P3-6**：语言标签零宽/组合字符净化，保证热区与绘制一致。
 
 ---
 
