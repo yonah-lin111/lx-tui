@@ -502,6 +502,8 @@ pub const SUPPLE_BUTTON_DEL: &str = TEMPLATE_BUTTON_DEL;
 pub const PROMPT_BLOCK_BAR: &str = "▎";
 /// prompt 块顶部边框字形：下 1/4 块（与左侧 `▎` 等厚，紧贴起始行顶部）。
 pub const PROMPT_BLOCK_TOP_BORDER: &str = "▂";
+/// Markdown 代码块左侧栏字形：细竖线（比 prompt 色条 `▎` 更轻，不压过语法高亮）。
+pub const CODE_BLOCK_BAR: &str = "│";
 /// 块结构分割线（标题下 / 绑定行上的空行）。
 pub const PROMPT_BLOCK_RULE: char = '─';
 

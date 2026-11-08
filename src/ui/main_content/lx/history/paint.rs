@@ -486,8 +486,7 @@ fn draw_markdown(
         }
         if let Some(code_kind) = line.code {
             let code_row = match code_kind {
-                crate::ui::markdown_render::CodeLineKind::TopBorder
-                | crate::ui::markdown_render::CodeLineKind::Header { .. } => {
+                crate::ui::markdown_render::CodeLineKind::Header { .. } => {
                     super::super::grid::GridCodeRow::Chrome
                 }
                 crate::ui::markdown_render::CodeLineKind::Body => {

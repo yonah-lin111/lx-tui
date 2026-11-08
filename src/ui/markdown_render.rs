@@ -125,7 +125,7 @@ pub fn render_wrapped(source: &str, width: u16) -> Vec<MdLine> {
     render_wrapped_with_options(source, width, true, false)
 }
 
-/// 与 [`render_wrapped`] 相同，但为代码块启用顶部 `▂` 边框、内部第一行 `<lang> ... [❐]` 头部与左侧 `▎` 边框。
+/// 与 [`render_wrapped`] 相同，但为代码块启用内部第一行 `<lang> ... [❐]` 头部与左侧 `│` 单栏。
 ///
 /// 供 `lx` 聊天历史的 AI 助手正文块（主对话与子 Agent 详情页）使用；
 /// 思考块与工具/汇报卡片内的压暗 Markdown 仍用 [`render_wrapped`] 或 [`render_wrapped_literal_rules`]。
@@ -229,7 +229,6 @@ fn render_blocks_stateful(
             let block_index = state.next_code_block_index;
             state.next_code_block_index += 1;
             if code_chrome {
-                lines.push(code_block::top_border_line(width));
                 lines.push(code_block::header_line(lang, block_index, width));
             }
             state.open_fence_lang = Some(lang.to_string());
@@ -394,7 +393,6 @@ fn indented_code(
         index += 1;
     }
     if code_chrome {
-        lines.push(code_block::top_border_line(width));
         lines.push(code_block::header_line("", block_index, width));
     }
     for line in &body {
@@ -742,10 +740,7 @@ pub(crate) fn md_bytes(lines: &[MdLine]) -> usize {
 /// 优先在空白/汉字边界断行（对齐 opencode/主流 agent 的 word wrap），
 /// 单个超宽字符单独成行；供表格外的段落/列表/引用/代码使用。
 fn wrap_md_line(line: &MdLine, width: usize, out: &mut Vec<MdLine>) {
-    if matches!(
-        line.code,
-        Some(CodeLineKind::TopBorder | CodeLineKind::Header { .. })
-    ) {
+    if matches!(line.code, Some(CodeLineKind::Header { .. })) {
         out.push(line.clone());
         return;
     }

@@ -602,66 +602,60 @@ fn copy_text_on_code_block_skips_chrome_rows_and_strips_left_bar() {
     );
     let mut cache = PaneCache::default();
 
-    // 1. 全选整段消息（跨段落、代码块顶边 `▂`、头部行 `▎rust ... [❐]`、带缩进与空行的代码正文、结尾段落）。
+    // 1. 全选整段消息（跨段落、代码块头部行 `│rust ... [❐]`、带缩进与空行的代码正文、结尾段落）。
     let copied = super::copy_text(area, &lx, ((0, 0), (15, 49)), &mut cache);
     assert!(
-        !copied.contains('▂'),
-        "拖拽选区复制应跳过顶部 `▂` 边框行：{copied:?}"
+        !copied.contains('│'),
+        "拖拽选区复制应剥离头部与正文的 `│` 左栏：{copied:?}"
     );
     assert!(
         !copied.contains("[❐]"),
         "拖拽选区复制应跳过第一行语言与复制按钮头部行：{copied:?}"
-    );
-    assert!(
-        !copied.contains('▎'),
-        "拖拽选区复制应剥离代码正文左侧 `▎` 色条：{copied:?}"
     );
     assert_eq!(
         copied,
         "● Intro line\nfn main() {\n    let x = 1;\n\n    println!(\"{x}\");\n}\n  Outro line"
     );
 
-    // 2. 仅在顶边行（row=1）、头部行（row=2）或左侧 `▎` 边框列（row=3..=7, col=0..=2）上框选/双击时，
+    // 2. 仅在头部行（row=1）或左侧 `│` 栏列（row=2..=6, col=0..=2）上框选/双击时，
     // 与表格边框一样不可复制且不反显。
     assert_eq!(
-        super::copy_text(area, &lx, ((1, 0), (2, 49)), &mut cache),
+        super::copy_text(area, &lx, ((1, 0), (1, 49)), &mut cache),
         "",
-        "仅框选顶边 `▂` 与头部行不得复制出任何内容"
+        "仅框选头部行不得复制出任何内容"
     );
     assert_eq!(
-        super::copy_text(area, &lx, ((3, 0), (7, 2)), &mut cache),
+        super::copy_text(area, &lx, ((2, 0), (6, 2)), &mut cache),
         "",
-        "仅框选左侧 `▎` 边框列不得复制出任何内容"
+        "仅框选左侧 `│` 栏列不得复制出任何内容"
     );
-    let word_on_bar = super::unit_cell_range(area, &lx, (3, 2), SelectionUnit::Word, &mut cache);
+    let word_on_bar = super::unit_cell_range(area, &lx, (2, 2), SelectionUnit::Word, &mut cache);
     assert_eq!(
         super::copy_text(area, &lx, word_on_bar, &mut cache),
         "",
-        "在左侧 `▎` 上双击不得选中或复制出 `▎`"
+        "在左侧 `│` 上双击不得选中或复制出 `│`"
     );
 
-    // 3. 渲染选区反显（paint_selection）：顶边 `▂`（row=1）、头部行（row=2）与
-    // 正文行（row=3..=7）左侧边框 `▎`（col=2）均不得被 REVERSED 反显。
+    // 3. 渲染选区反显（paint_selection）：头部行（row=1）与正文行（row=2..=6）左侧 `│`（col=2）
+    // 均不得被 REVERSED 反显。
     let geom = super::content_geom(area, &lx, &mut cache).expect("geom");
     let sel = Selection::text_range(PaneId::from_raw_for_test(1), (0, 0), (15, 49));
     let mut buf = Buffer::empty(area);
     render(area, &mut buf, &lx, true, Some(&sel), &mut cache);
 
-    for row in [1u16, 2u16] {
-        let y = geom.rect.y + row;
-        for x in geom.rect.x..(geom.rect.x + geom.rect.width) {
-            assert!(
-                !buf[(x, y)].modifier.contains(Modifier::REVERSED),
-                "代码块装饰行 row={row} x={x} 不得被选区反显"
-            );
-        }
+    let y = geom.rect.y + 1;
+    for x in geom.rect.x..(geom.rect.x + geom.rect.width) {
+        assert!(
+            !buf[(x, y)].modifier.contains(Modifier::REVERSED),
+            "代码块头部行 x={x} 不得被选区反显"
+        );
     }
-    for row in 3u16..=7u16 {
+    for row in 2u16..=6u16 {
         let y = geom.rect.y + row;
         let bar_x = geom.rect.x + 2;
         assert!(
             !buf[(bar_x, y)].modifier.contains(Modifier::REVERSED),
-            "代码块正文行 row={row} 的左侧 `▎` 边框不得被选区反显"
+            "代码块正文行 row={row} 的左侧 `│` 栏不得被选区反显"
         );
         assert!(
             buf[(bar_x + 1, y)].modifier.contains(Modifier::REVERSED),
