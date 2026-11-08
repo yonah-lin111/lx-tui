@@ -57,3 +57,9 @@
 - 恢复 `grok_helpers.js` 的 `SPACE = 'lx-tui-ai-web-grok'`；
 - 关闭临时任务空间；
 - 正式任务空间仍由用户持有，可在 ego-browser 中释放或关闭；下次 lx 运行时会按现有 `reclaimSpaceTarget` 逻辑接管。
+
+## 6. DeepSeek / Gemini 同类检查（2026-11-08）
+
+- **DeepSeek**：最新会话 `像素LX含义解析` 的 `/api/v0/chat/history_messages` 原文含 `[reference:0]`，已有 `cleanText` 清洗；实时 DOM 的 `.ds-markdown-cite` 原先把引用角标拆成 `-\n13`，已在 `tickDom` 读正文前临时隐藏该节点，实测残留消失。历史清洗正则同步放宽为 `[^\]]*`，与实时一致。
+- **Gemini**：最新会话与带联网引用的 `近期 AI 行业动态速递` 均只含正文；历史/实时提取都会隐藏 `source-footnote`、`sources-carousel-inline`、`sources-list`、`.cdk-visually-hidden`、按钮/图标，实测未出现 `<...>` 标签或引用占位符。无需改动。
+- 两边均未发现 Grok 那类 `<grok:render>` 原始标签。

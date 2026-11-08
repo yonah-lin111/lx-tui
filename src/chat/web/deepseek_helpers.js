@@ -387,7 +387,7 @@ async function runNonChatAction(currentUrl) {
           chain.reverse();
           if (chain.length > 0) activeChain = chain;
         }
-        const cleanText = (text) => String(text || '').replace(/\\s*\\[(?:citation|reference):\\d+\\]/g, '');
+        const cleanText = (text) => String(text || '').replace(/\\s*\\[(?:citation|reference):[^\\]]*\\]/g, '');
         const messages = activeChain.map((msg) => {
           const role = String(msg.role || '').toUpperCase() === 'USER' ? 'user' : 'assistant';
           const fragments = Array.isArray(msg.fragments) ? msg.fragments : [];

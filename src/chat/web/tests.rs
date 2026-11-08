@@ -109,7 +109,11 @@ fn scripts_for_site_returns_deepseek_gemini_and_grok_driver_bundles() {
     assert!(ds_helpers.contains("takeOverTaskSpace"));
     assert!(ds_helpers.contains("claimTaskSpace"));
     assert!(ds_main.contains("ds-toggle-button"));
+    assert!(ds_main.contains("ds-markdown-cite"));
+    assert!(ds_main.contains("readMarkdownText"));
     assert!(ds_main.contains("await ensureTaskSpaceControl()"));
+    assert!(ds_helpers.contains("citation|reference"));
+    assert!(ds_helpers.contains("[^\\\\]]*"));
 
     let (gm_helpers, gm_main) = scripts_for_site(crate::app::state::AiWebSite::Gemini);
     assert!(gm_helpers.contains("lx-tui-ai-web-gemini"));

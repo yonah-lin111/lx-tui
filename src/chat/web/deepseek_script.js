@@ -440,10 +440,23 @@ async function main() {
             }
           }
           if (!target) return;
+          // 引用角标内部是隐藏的 "-" 和可见编号，innerText 会拼成 "-\n13"；
+          // 读正文前临时隐藏 .ds-markdown-cite，避免编号残留在流式回答里。
+          const readMarkdownText = (el) => {
+            if (!el) return '';
+            const hidden = [];
+            el.querySelectorAll('.ds-markdown-cite').forEach((node) => {
+              hidden.push([node, node.style.display]);
+              node.style.display = 'none';
+            });
+            const out = el.innerText || '';
+            for (const [node, prev] of hidden) node.style.display = prev;
+            return out;
+          };
           const think = target.querySelector('.ds-think-content');
           const text = target.querySelector('.ds-markdown');
-          this.pushDom('thinking', think ? (think.innerText || '') : '');
-          this.pushDom('text', text ? (text.innerText || '') : '');
+          this.pushDom('thinking', readMarkdownText(think));
+          this.pushDom('text', readMarkdownText(text));
           const sample = (this.domThink || '') + ':::' + (this.domText || '');
           if (sample === this.domLastSample) {
             this.domStableTicks += 1;
