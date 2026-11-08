@@ -23,7 +23,7 @@ pub(crate) struct GridTableRow {
 /// 网格中单行的代码块装饰元数据（列偏移相对 `Grid.area.x`）。
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum GridCodeRow {
-    /// 内部第一行头部（`▎<lang> ... [❐]`）：选区不反显且复制时整行跳过。
+    /// 内部第一行头部（`─ <lang> ───── [❐] ─` 规则线）：选区不反显且复制时整行跳过。
     Chrome,
     /// 代码块正文行：`bar_col` 为左侧 `▎` 单栏所在的相对列偏移（选区仅作用于 `bar_col + 1` 右侧）。
     Body { bar_col: u16 },

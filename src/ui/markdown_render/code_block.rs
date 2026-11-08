@@ -1,8 +1,8 @@
 //! 面向阅读的 Markdown 代码块左侧栏、头部复制按钮布局与源码提取。
 //!
 //! 采用轻量单栏结构，避免整行粗边框压过语法高亮：
-//! - 每个视觉行（含头部、代码行与软换行续行）首列绘制左 1/4 块 `▎`（[`text::CODE_BLOCK_BAR`]），样式 [`style::md_read_rule`]；
-//! - 内部第一行左侧紧贴 `▎` 显示语言名（无语言或缩进代码块显示 `text`），右侧贴右缘显示 `[❐]`。
+//! - 每个代码行（含软换行续行）首列绘制左 1/4 块 `▎`（[`text::CODE_BLOCK_BAR`]），样式 [`style::md_read_rule`]；
+//! - 内部第一行头部是一条规则线：`─ <lang> ───── <复制按钮> ─`（语言缺省 `text`，按钮右对齐）。
 
 use ratatui::style::Style;
 use unicode_width::UnicodeWidthChar;
@@ -17,7 +17,7 @@ pub const DEFAULT_CODE_LANG: &str = "text";
 /// 代码块单条渲染行的角色（仅在助手正文启用代码块左侧栏时附着于 [`MdLine`]）。
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum CodeLineKind {
-    /// 内部第一行头部：左侧语言名、右侧 `[❐]` 复制按钮。
+    /// 内部第一行头部：`─ <lang> ───── [❐] ─` 规则线，语言名在左、复制按钮在右。
     Header {
         /// 当前 Markdown 文本块内的代码块序号（0-based，与 [`extract_code_block`] 一致）。
         block_index: usize,
@@ -28,39 +28,54 @@ pub enum CodeLineKind {
     Body,
 }
 
-/// 构造代码块内部第一行头部：`▎<lang> ... [❐]`。
+/// 构造代码块内部第一行头部：`─ <lang> ───── [❐] ─`。
 ///
-/// 右侧 `[❐]` 常显优先（极窄时钳到 `▎` 之后），左侧语言名超出 `[❐]` 左缘前 1 列空白时以 `…` 截断。
+/// 两端固定为 `─ ` 与 ` ─`，语言名与按钮之间的空余宽度用 `─` 铺满；
+/// 极窄时先压缩语言名（超出以 `…` 截断），再压缩规则填充。
 pub(super) fn header_line(lang: &str, block_index: usize, width: Option<usize>) -> MdLine {
     let cols = width.unwrap_or(40).max(1);
     let label = normalize_lang_label(lang);
     let btn = text::TEMPLATE_BUTTON_COPY;
     let btn_w = display_width(btn);
-    let bar_w = usize::from(cols >= 1);
-    let btn_start = cols.saturating_sub(btn_w).max(bar_w);
-    let btn_end = (btn_start + btn_w).min(cols);
-    let text_end = btn_start.saturating_sub(1).max(bar_w);
-    let max_lang_w = text_end.saturating_sub(bar_w);
+    // 固定开销：`─ ` + 语言后空格 + 按钮前空格 + 按钮 + ` ─`。
+    let fixed = 2 + 1 + 1 + btn_w + 2;
+    let rule = style::md_read_rule();
 
-    let lang_display = truncate_with_ellipsis(label, max_lang_w);
-    let lang_w = display_width(&lang_display);
-    let pad = btn_start.saturating_sub(bar_w + lang_w);
-    let btn_avail = btn_end.saturating_sub(btn_start);
-    let btn_display = clip_width(btn, btn_avail);
-
-    let mut spans = Vec::with_capacity(4);
-    if bar_w > 0 {
-        spans.push((text::CODE_BLOCK_BAR.to_string(), style::md_read_rule()));
+    if cols < fixed {
+        // 极窄兜底：宽度不足以容纳规则线时只保留可点击的按钮片段。
+        let btn_display = clip_width(btn, cols);
+        let btn_end = u16::try_from(display_width(&btn_display)).unwrap_or(u16::MAX);
+        return MdLine {
+            indent: 0,
+            hang: 0,
+            spans: vec![(btn_display, style::template_button())],
+            table: None,
+            code: Some(CodeLineKind::Header {
+                block_index,
+                button_cols: (0, btn_end),
+            }),
+        };
     }
+
+    let inner = cols.saturating_sub(fixed);
+    let lang_display = truncate_with_ellipsis(label, inner);
+    let lang_w = display_width(&lang_display);
+    let fill = inner.saturating_sub(lang_w);
+    let btn_start = 2 + lang_w + 1 + fill + 1;
+    let btn_end = btn_start + btn_w;
+
+    let mut spans = Vec::with_capacity(7);
+    spans.push(("─ ".to_string(), rule));
     if !lang_display.is_empty() {
         spans.push((lang_display, style::muted()));
     }
-    if pad > 0 {
-        spans.push((" ".repeat(pad), style::text()));
+    spans.push((" ".to_string(), style::text()));
+    if fill > 0 {
+        spans.push(("─".repeat(fill), rule));
     }
-    if !btn_display.is_empty() {
-        spans.push((btn_display, style::template_button()));
-    }
+    spans.push((" ".to_string(), style::text()));
+    spans.push((btn.to_string(), style::template_button()));
+    spans.push((" ─".to_string(), rule));
 
     let button_cols = (
         u16::try_from(btn_start).unwrap_or(u16::MAX),

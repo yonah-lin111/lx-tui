@@ -602,7 +602,7 @@ fn copy_text_on_code_block_skips_chrome_rows_and_strips_left_bar() {
     );
     let mut cache = PaneCache::default();
 
-    // 1. 全选整段消息（跨段落、代码块头部行 `▎rust ... [❐]`、带缩进与空行的代码正文、结尾段落）。
+    // 1. 全选整段消息（跨段落、代码块头部行 `─ rust ...─ [❐] ─`、带缩进与空行的代码正文、结尾段落）。
     let copied = super::copy_text(area, &lx, ((0, 0), (15, 49)), &mut cache);
     assert!(
         !copied.contains('▎'),
