@@ -109,6 +109,54 @@ fn soft_wrapped_code_lines_and_blank_lines_prepend_left_bar_on_every_row() {
 }
 
 #[test]
+fn code_blocks_have_one_blank_line_above_and_below_surrounding_text() {
+    let src = "before\n\n```rust\nlet x = 1;\n```\n\nafter";
+    let lines = render_wrapped_code_blocks(src, 30);
+    assert_eq!(lines.len(), 6, "正文 / 空行 / 头部 / 代码 / 空行 / 正文");
+    assert_eq!(lines[0].text(), "before");
+    assert_eq!(lines[1].width(), 0, "代码块前应有一行空行");
+    assert_eq!(
+        lines[2].code,
+        Some(CodeLineKind::Header {
+            block_index: 0,
+            button_cols: (27, 30),
+        })
+    );
+    assert_eq!(lines[3].text(), "▎let x = 1;");
+    assert_eq!(lines[4].width(), 0, "代码块后应有一行空行");
+    assert_eq!(lines[5].text(), "after");
+}
+
+#[test]
+fn consecutive_code_blocks_share_a_single_blank_line_and_edges_stay_tight() {
+    // 消息以代码块开头：不在首行前补空行（首行要承载步骤标记）。
+    let lines = render_wrapped_code_blocks("```rust\nlet a = 1;\n```", 20);
+    assert_eq!(lines.len(), 2, "起始代码块前后不补空行");
+
+    // 两个相邻代码块之间只保留一行空白，不叠加两行。
+    let lines =
+        render_wrapped_code_blocks("```rust\nlet a = 1;\n```\n\n```rust\nlet b = 2;\n```", 20);
+    assert_eq!(lines.len(), 5, "头部/代码/空行/头部/代码");
+    assert_eq!(lines[2].width(), 0, "相邻代码块之间恰好一行空行");
+    assert_eq!(lines[4].text(), "▎let b = 2;", "第二个代码块正文紧接头部");
+
+    // 缩进代码块同样与前后正文各留一行空行。
+    let lines = render_wrapped_code_blocks("before\n\n    indented\n\nafter", 20);
+    let texts: Vec<String> = lines.iter().map(MdLine::text).collect();
+    assert_eq!(texts.len(), 6);
+    assert_eq!(texts[0], "before");
+    assert_eq!(texts[1], "", "缩进代码块前应有一行空行");
+    assert!(
+        texts[2].starts_with("▎text") && texts[2].ends_with("[❐]"),
+        "缩进代码块头部：{:?}",
+        texts[2]
+    );
+    assert_eq!(texts[3], "▎indented");
+    assert_eq!(texts[4], "", "缩进代码块后应有一行空行");
+    assert_eq!(texts[5], "after");
+}
+
+#[test]
 fn plain_render_wrapped_keeps_code_blocks_without_chrome_for_thinking_and_tools() {
     let src = "```rust\nlet x = 1;\n```";
     for lines in [

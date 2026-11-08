@@ -1156,8 +1156,8 @@ fn lx_code_block_copy_button_click_shows_pane_toast_keeps_selection_and_ignores_
     // 第一个代码块：第 0 行头部 `▎rust ... [❐]`，按钮位于右缘。
     let btn_x = geom.rect.right() - 2;
     let first_header_y = geom.rect.y;
-    // 第二个（空）代码块：第 1 行是 `let answer = 42;`，第 2 行头部 `▎text ... [❐]`。
-    let empty_header_y = geom.rect.y + 2;
+    // 第 1 行是 `let answer = 42;`，第 2 行是代码块间隔空行，第 3 行是空代码块头部。
+    let empty_header_y = geom.rect.y + 3;
 
     let mut sessions = HashMap::new();
     let mut dirty = false;

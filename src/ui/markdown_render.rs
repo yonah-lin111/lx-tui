@@ -184,6 +184,10 @@ struct ParserState {
     open_fence_lang: Option<String>,
     /// 下一个代码块的 0-based 序号（围栏与 4 空格缩进代码块统一递增）。
     next_code_block_index: usize,
+    /// 是否已产出过内容行（跨增量分块保留，用于避免在消息开头补空行）。
+    emitted_any: bool,
+    /// 上一个块是代码块：下一个块前需补一行空白间隔（跨增量分块保留）。
+    after_code_block: bool,
 }
 
 /// 从给定跨行状态继续块级解析，返回新产出的行。
@@ -202,6 +206,9 @@ fn render_blocks_stateful(
         // 未闭合围栏内部：每行都是独立代码行（闭合行只推进状态）。
         if let Some(lang) = state.open_fence_lang.take() {
             if line.trim_start().starts_with("```") {
+                if code_chrome {
+                    state.after_code_block = true;
+                }
                 index += 1;
                 continue;
             }
@@ -220,6 +227,13 @@ fn render_blocks_stateful(
             index += 1;
             continue;
         }
+        // 代码块与前后块之间固定空一行（跨增量分块由 `after_code_block` 保留）。
+        let mut gap_emitted = false;
+        if code_chrome && state.after_code_block {
+            lines.push(MdLine::spans(0, Vec::new()));
+            state.after_code_block = false;
+            gap_emitted = true;
+        }
         let item = list_item(line);
         if item.is_none() {
             state.list_indents.clear();
@@ -229,6 +243,9 @@ fn render_blocks_stateful(
             let block_index = state.next_code_block_index;
             state.next_code_block_index += 1;
             if code_chrome {
+                if !gap_emitted && (state.emitted_any || !lines.is_empty()) {
+                    lines.push(MdLine::spans(0, Vec::new()));
+                }
                 lines.push(code_block::header_line(lang, block_index, width));
             }
             state.open_fence_lang = Some(lang.to_string());
@@ -247,6 +264,9 @@ fn render_blocks_stateful(
         if is_indented_code(line) {
             let block_index = state.next_code_block_index;
             state.next_code_block_index += 1;
+            if code_chrome && !gap_emitted && (state.emitted_any || !lines.is_empty()) {
+                lines.push(MdLine::spans(0, Vec::new()));
+            }
             index = indented_code(
                 &source_lines,
                 index,
@@ -255,6 +275,9 @@ fn render_blocks_stateful(
                 code_chrome,
                 &mut lines,
             );
+            if code_chrome {
+                state.after_code_block = true;
+            }
             continue;
         }
         if let Some((level, body)) = heading(trimmed) {
@@ -300,6 +323,7 @@ fn render_blocks_stateful(
         lines.push(MdLine::spans(0, inline_spans(trimmed)));
         index += 1;
     }
+    state.emitted_any |= !lines.is_empty();
     lines
 }
 
