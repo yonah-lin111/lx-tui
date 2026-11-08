@@ -504,6 +504,8 @@ pub const PROMPT_BLOCK_BAR: &str = "▎";
 pub const PROMPT_BLOCK_TOP_BORDER: &str = "▂";
 /// Markdown 代码块左侧栏字形：左 1/4 块，宽度与 prompt 色条 `▎` 一致。
 pub const CODE_BLOCK_BAR: &str = "▎";
+/// Markdown 代码块头部规则线字形：沿用 prompt 模板块顶部边框的下 1/4 块 `▂` 宽度。
+pub const CODE_BLOCK_HEADER_RULE: &str = PROMPT_BLOCK_TOP_BORDER;
 /// 块结构分割线（标题下 / 绑定行上的空行）。
 pub const PROMPT_BLOCK_RULE: char = '─';
 

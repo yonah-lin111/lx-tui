@@ -10,7 +10,7 @@ fn fenced_code_block_renders_header_and_left_bar() {
     let lines = render_wrapped_code_blocks(src, 30);
     assert_eq!(lines.len(), 4, "1 行头部 + 3 行代码正文");
 
-    // 第 0 行：`─ rust ─────...──── [❐] ─` 规则线，语言名在左、按钮在右。
+    // 第 0 行：`▂ rust ▂▂▂...▂ [❐] ▂` 规则线（1/4 块宽度），语言名在左、按钮在右。
     assert_eq!(
         lines[0].code,
         Some(CodeLineKind::Header {
@@ -19,9 +19,9 @@ fn fenced_code_block_renders_header_and_left_bar() {
         })
     );
     assert_eq!(lines[0].width(), 30);
-    assert!(lines[0].text().starts_with("─ rust "));
-    assert!(lines[0].text().ends_with("[❐] ─"));
-    assert_eq!(lines[0].spans[0], ("─ ".to_string(), style::md_read_rule()));
+    assert!(lines[0].text().starts_with("▂ rust "));
+    assert!(lines[0].text().ends_with("[❐] ▂"));
+    assert_eq!(lines[0].spans[0], ("▂ ".to_string(), style::md_read_rule()));
     assert_eq!(lines[0].spans[1], ("rust".to_string(), style::muted()));
     assert_eq!(
         lines[0].spans[5],
@@ -56,11 +56,11 @@ fn empty_lang_and_indented_code_block_fallback_to_text_label() {
         assert!(
             header
                 .text()
-                .starts_with(&format!("─ {DEFAULT_CODE_LANG} ")),
+                .starts_with(&format!("▂ {DEFAULT_CODE_LANG} ")),
             "默认语言应显示为 text：{:?}",
             header.text()
         );
-        assert!(header.text().ends_with("[❐] ─"));
+        assert!(header.text().ends_with("[❐] ▂"));
         assert_eq!(
             header.code,
             Some(CodeLineKind::Header {
@@ -74,9 +74,9 @@ fn empty_lang_and_indented_code_block_fallback_to_text_label() {
 #[test]
 fn narrow_width_truncates_language_with_ellipsis_and_keeps_copy_button() {
     let src = "```typescript\nconst x = 1;\n```";
-    // width = 10：`─ ` + 语言预算 1 列（`…`）+ ` ` + ` ` + `[❐]` + ` ─`。
+    // width = 10：`▂ ` + 语言预算 1 列（`…`）+ ` ` + ` ` + `[❐]` + ` ▂`。
     let lines = render_wrapped_code_blocks(src, 10);
-    assert_eq!(lines[0].text(), "─ …  [❐] ─");
+    assert_eq!(lines[0].text(), "▂ …  [❐] ▂");
     assert_eq!(lines[0].width(), 10);
     assert_eq!(
         lines[0].code,
@@ -149,7 +149,7 @@ fn consecutive_code_blocks_share_a_single_blank_line_and_edges_stay_tight() {
     assert_eq!(texts[0], "before");
     assert_eq!(texts[1], "", "缩进代码块前应有一行空行");
     assert!(
-        texts[2].starts_with("─ text ") && texts[2].ends_with("[❐] ─"),
+        texts[2].starts_with("▂ text ") && texts[2].ends_with("[❐] ▂"),
         "缩进代码块头部：{:?}",
         texts[2]
     );
