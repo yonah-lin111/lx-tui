@@ -130,4 +130,8 @@ fn running_recap_shows_placeholder_under_pending_message() {
     let text = rows_text(&buf, area).join("\n");
     assert!(text.contains(text::LX_RECAP_RUNNING), "{text}");
     assert!(text.contains("3s"), "{text}");
+    assert!(
+        text.contains(text::agent::STEP_MARK_DIAMOND_HOLLOW),
+        "生成中必须是空心菱形：{text}"
+    );
 }
