@@ -10,9 +10,12 @@ use crate::ui::main_content::lx::{LxChatHit, chat_hit, render};
 
 fn find_copy_button_pos(buf: &Buffer, area: Rect) -> Option<(u16, u16)> {
     for y in area.y..area.bottom() {
-        for x in area.x..area.right() {
-            if buf[(x, y)].symbol() == "❐" {
-                return Some((x, y));
+        for x in area.x..area.right().saturating_sub(2) {
+            if buf[(x, y)].symbol() == "["
+                && buf[(x + 1, y)].symbol() == "❐"
+                && buf[(x + 2, y)].symbol() == "]"
+            {
+                return Some((x + 1, y));
             }
         }
     }

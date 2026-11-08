@@ -218,26 +218,36 @@ pub(super) fn paint_selection(
             continue;
         }
         if let Some((raw_col0, raw_col1)) = row_col_bounds(row_usize, start, end, geom.rect.width) {
-            let min_col = match code_row {
-                Some(super::grid::GridCodeRow::Body { bar_col }) => {
-                    bar_col.saturating_sub(x_offset).saturating_add(1)
+            let (min_col, max_col) = match code_row {
+                Some(super::grid::GridCodeRow::Body {
+                    left_bar_col,
+                    right_bar_col,
+                }) => {
+                    let l = left_bar_col.saturating_sub(x_offset).saturating_add(1);
+                    let r = right_bar_col
+                        .saturating_sub(x_offset)
+                        .saturating_sub(1)
+                        .min(geom.rect.width.saturating_sub(1));
+                    (l, r)
                 }
-                _ => 0,
+                _ => (0, geom.rect.width.saturating_sub(1)),
             };
             let eff_col0 = raw_col0.max(min_col);
-            if eff_col0 > raw_col1 || (start.1 < min_col && end.1 < min_col) {
+            let eff_col1 = raw_col1.min(max_col);
+            if eff_col0 > eff_col1
+                || (start.1 < min_col && end.1 < min_col)
+                || (start.1 > max_col && end.1 > max_col)
+            {
                 continue;
             }
             let (g_col0, g_col1) = table::align_wide_char_cols(
                 grid,
                 grid_dy,
                 x_offset.saturating_add(eff_col0),
-                x_offset.saturating_add(raw_col1),
+                x_offset.saturating_add(eff_col1),
             );
             let col0 = g_col0.saturating_sub(x_offset).max(min_col);
-            let col1 = g_col1
-                .saturating_sub(x_offset)
-                .min(geom.rect.width.saturating_sub(1));
+            let col1 = g_col1.saturating_sub(x_offset).min(max_col);
             for dx in col0..=col1 {
                 let x = geom.rect.x.saturating_add(dx);
                 if let Some(cell) = buf.cell_mut((x, y))
@@ -356,9 +366,15 @@ pub(crate) fn unit_cell_range(
     if matches!(code_row, Some(super::grid::GridCodeRow::Chrome)) {
         return (cell, cell);
     }
-    let min_col = match code_row {
-        Some(super::grid::GridCodeRow::Body { bar_col }) => bar_col.saturating_add(1),
-        _ => 0,
+    let (min_col, max_col) = match code_row {
+        Some(super::grid::GridCodeRow::Body {
+            left_bar_col,
+            right_bar_col,
+        }) => (
+            left_bar_col.saturating_add(1),
+            right_bar_col.saturating_sub(1).min(max_col),
+        ),
+        _ => (0, max_col),
     };
     match unit {
         SelectionUnit::Character => (cell, cell),
@@ -370,12 +386,12 @@ pub(crate) fn unit_cell_range(
             }
         }
         SelectionUnit::Word => {
-            if cell.1 < min_col || min_col > max_col {
+            if cell.1 < min_col || cell.1 > max_col || min_col > max_col {
                 return (cell, cell);
             }
             let mut tokens: Vec<(u16, u16, crate::app::selection::CharClass)> =
-                Vec::with_capacity(usize::from(geom.rect.width.saturating_sub(min_col)));
-            for x in min_col..geom.rect.width {
+                Vec::with_capacity(usize::from(max_col.saturating_sub(min_col) + 1));
+            for x in min_col..=max_col {
                 let ch = grid.cell(x, 0).ch;
                 if ch == CONTINUATION {
                     if let Some(last) = tokens.last_mut() {
@@ -537,19 +553,29 @@ pub fn copy_text(
                 continue;
             }
             if let Some((raw_col0, raw_col1)) = row_col_bounds(row, start, end, geom.rect.width) {
-                let min_col = match code_row {
-                    Some(super::grid::GridCodeRow::Body { bar_col }) => bar_col.saturating_add(1),
-                    _ => 0,
+                let (min_col, max_col) = match code_row {
+                    Some(super::grid::GridCodeRow::Body {
+                        left_bar_col,
+                        right_bar_col,
+                    }) => (
+                        left_bar_col.saturating_add(1),
+                        right_bar_col
+                            .saturating_sub(1)
+                            .min(geom.rect.width.saturating_sub(1)),
+                    ),
+                    _ => (0, geom.rect.width.saturating_sub(1)),
                 };
                 let eff_col0 = raw_col0.max(min_col);
-                if start.1 < min_col && end.1 < min_col {
+                let eff_col1 = raw_col1.min(max_col);
+                if (start.1 < min_col && end.1 < min_col) || (start.1 > max_col && end.1 > max_col)
+                {
                     row = row.saturating_add(1);
                     continue;
                 }
-                if eff_col0 <= raw_col1 {
-                    let (col0, col1) = table::align_wide_char_cols(&grid, y, eff_col0, raw_col1);
+                if eff_col0 <= eff_col1 {
+                    let (col0, col1) = table::align_wide_char_cols(&grid, y, eff_col0, eff_col1);
                     let mut line = String::new();
-                    for col in col0.max(min_col)..=col1 {
+                    for col in col0.max(min_col)..=col1.min(max_col) {
                         let ch = grid.cell(col, y).ch;
                         if ch != CONTINUATION {
                             line.push(ch);

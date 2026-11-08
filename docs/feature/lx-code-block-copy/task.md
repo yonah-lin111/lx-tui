@@ -29,7 +29,7 @@
   - [x] 在 `src/ui/markdown_render.rs` 中定义 `CodeLineKind`（`TopBorder`、`Header { block_index, button_cols }`、`Body`），并在 `MdLine` 上新增 `pub code: Option<CodeLineKind>`。
   - [x] 新建 `src/ui/markdown_render/code_block.rs`，实现：
     - `top_border_line(width)`：整行铺满 `text::PROMPT_BLOCK_TOP_BORDER`（`▂`），样式 `style::md_read_rule()`；
-    - `header_line(lang, block_index, width)`：首列 `▎`（`style::md_read_rule()`），左侧语言名（空串或缩进块回退为 `"text"`，窄屏以 `…` 截断，样式 `style::muted()`），右侧右对齐 `❐`（`text::TEMPLATE_BUTTON_COPY`，样式 `style::template_button()`），记录 `button_cols`；
+    - `header_line(lang, block_index, width)`：首列 `▎`（`style::md_read_rule()`），左侧语言名（空串或缩进块回退为 `"text"`，窄屏以 `…` 截断，样式 `style::muted()`），右侧右对齐 `[❐]`（`text::TEMPLATE_BUTTON_COPY`，样式 `style::template_button()`），记录 `button_cols`；
     - `render_code_line(line, lang, code_chrome, lines)` 与 `prepend_body_bar(spans, width)`：代码行按 `width - 1` 折行后，每个视觉行（含软换行续行及空代码行）首列前置 `▎`（`style::md_read_rule()`）；
     - `extract_code_block(source, target_index)`：按与 `render_blocks_stateful` 完全同口径的块扫描规则，提取第 `target_index` 个代码块（含未闭合流式围栏代码块）的原始未折行代码正文。
   - [x] 在 `ParserState` 中新增 `next_code_block_index: usize`；新增 `pub fn render_wrapped_code_blocks(source: &str, width: u16) -> Vec<MdLine>`（启用 `code_chrome = true`），并在 `IncrementalMarkdownState::update` 中启用 `code_chrome = true`；保持 `render`、`render_wrapped`、`render_wrapped_literal_rules` 为 `code_chrome = false`（确保思考块与工具/汇报卡片不受影响）。
@@ -51,7 +51,7 @@
 
 ---
 
-### T3：接入 `❐` 复制按钮命中、剪贴板写入与窗格内 Toast
+### T3：接入 `[❐]` 复制按钮命中、剪贴板写入与窗格内 Toast
 
 - **目标文件**：
   - `src/ui/main_content/lx/history_hit.rs`
@@ -73,10 +73,10 @@
   - `src/event/tests/mouse_click.rs`
   - `docs/standards/tui-design-requirements.md`
 - **具体步骤**：
-  - [x] 在 `src/ui/markdown_render/tests.rs` 中新增 `render_wrapped_code_blocks` 与 `extract_code_block` 的单元测试（有语言/无语言默认 `text`/4 空格缩进块、窄屏语言名 `…` 截断、`❐` 常显、软换行续行 `▎` 前缀、多块/未闭合流式块/空块提取）。
+  - [x] 在 `src/ui/markdown_render/tests.rs` 中新增 `render_wrapped_code_blocks` 与 `extract_code_block` 的单元测试（有语言/无语言默认 `text`/4 空格缩进块、窄屏语言名 `…` 截断、`[❐]` 常显、软换行续行 `▎` 前缀、多块/未闭合流式块/空块提取）。
   - [x] 在 `src/ui/markdown_render/incremental/tests.rs` 中更新增量一致性基准为 `render_wrapped_code_blocks`，并新增多代码块流式定型测试。
   - [x] 在 `src/ui/main_content/lx/history/tests.rs` 与 `src/event/tests/mouse_click.rs` 中新增：
-    - 助手正文代码块渲染与 `❐` 点击复制 + `lx` 窗格内 Toast 测试；
+    - 助手正文代码块渲染与 `[❐]` 点击复制 + `lx` 窗格内 Toast 测试；
     - 空代码块点击不弹 Toast 测试；
     - 置顶用户行（sticky header）与候选面板遮挡防穿透测试；
     - 鼠标框选代码块 `copy_text` 自动剥离 `▂`、头部行与 `▎` 左边框的测试。

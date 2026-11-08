@@ -487,12 +487,20 @@ fn draw_markdown(
         if let Some(code_kind) = line.code {
             let code_row = match code_kind {
                 crate::ui::markdown_render::CodeLineKind::TopBorder
+                | crate::ui::markdown_render::CodeLineKind::BottomBorder
                 | crate::ui::markdown_render::CodeLineKind::Header { .. } => {
                     super::super::grid::GridCodeRow::Chrome
                 }
                 crate::ui::markdown_render::CodeLineKind::Body => {
+                    let left_bar_col = cx.saturating_sub(grid.area().x);
+                    let line_w = u16::try_from(line.width()).unwrap_or(u16::MAX);
+                    let right_x = cx
+                        .saturating_add(line_w.saturating_sub(1))
+                        .min(rect.right().saturating_sub(1));
+                    let right_bar_col = right_x.saturating_sub(grid.area().x).max(left_bar_col);
                     super::super::grid::GridCodeRow::Body {
-                        bar_col: cx.saturating_sub(grid.area().x),
+                        left_bar_col,
+                        right_bar_col,
                     }
                 }
             };
