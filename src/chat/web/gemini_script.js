@@ -12,10 +12,13 @@ async function main() {
   await installPermissionGuard();
 
   let loggedIn = false;
-  const loginDeadline = Date.now() + 8000;
+  // 冷启动/慢网络下 Gemini 的 Angular 外壳可能晚于标签页 load 事件完成渲染，
+  // 这里给足等待时间；真正的未登录页会命中 signIn 提前退出。
+  const loginDeadline = Date.now() + 20000;
   while (Date.now() < loginDeadline) {
     const state = await js(String.raw`
       (() => {
+        if (location.hostname === 'accounts.google.com') return { ready: false, signIn: true };
         if (location.hostname !== 'gemini.google.com') return { ready: false, signIn: false };
         const signInLink = Boolean(
           document.querySelector('a[href*="accounts.google.com/ServiceLogin"], a[aria-label*="登录"], a[aria-label*="Sign in"]')

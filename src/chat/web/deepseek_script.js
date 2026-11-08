@@ -31,6 +31,10 @@ async function main() {
     await openOrReuseTab(HOME + '/a/chat/s/' + SESSION_ID, { wait: true, timeout: 25 });
   }
 
+  if (!(await ensureDeepSeekComposer())) {
+    throw new Error('DeepSeek composer not found');
+  }
+
   // Sync DeepThink ("深度思考") toggle state with THINKING ('deepthink' vs 'off').
   const toggledDeepThink = await js(`
     (() => {

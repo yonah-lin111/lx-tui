@@ -173,16 +173,25 @@ async function ensureGeminiModelAndThinking() {
   }[targetThinking] || ['低', 'low'];
 
   // Step 1: Open mode menu if not already expanded and select the requested model.
-  const menuOpened = await js(String.raw`
-    (() => {
-      const btn = document.querySelector('[data-test-id="bard-mode-menu-button"], button.input-area-switch');
-      if (!btn) return false;
-      if (btn.getAttribute('aria-expanded') !== 'true') {
-        btn.click();
-      }
-      return true;
-    })()
-  `).catch(() => false);
+  // Gemini 是 Angular 应用：冷启动或页面尚未渲染完成时，输入框可能先于模式菜单按钮出现。
+  // 单次查询会把「还没渲染」误判成「菜单不存在」，因此按截止时间轮询等待按钮挂载。
+  const menuDeadline = Date.now() + 15000;
+  let menuOpened = false;
+  while (!menuOpened && Date.now() < menuDeadline) {
+    menuOpened = await js(String.raw`
+      (() => {
+        const btn = document.querySelector('[data-test-id="bard-mode-menu-button"], button.input-area-switch');
+        if (!btn) return false;
+        if (btn.getAttribute('aria-expanded') !== 'true') {
+          btn.click();
+        }
+        return true;
+      })()
+    `).catch(() => false);
+    if (!menuOpened) {
+      await new Promise((r) => setTimeout(r, 200));
+    }
+  }
   if (!menuOpened) {
     throw new Error('Gemini model menu not found');
   }

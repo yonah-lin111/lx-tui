@@ -127,6 +127,20 @@ async function ensureFreshChat() {
   }
 }
 
+async function ensureDeepSeekComposer() {
+  // DeepSeek 是 React 应用：标签页 URL 和登录态可能先于输入框挂载，
+  // 冷启动/慢网络下直接读取 composer 会误报 "DeepSeek composer not found"。
+  const deadline = Date.now() + 20000;
+  while (Date.now() < deadline) {
+    const ready = await js(
+      `Boolean(document.querySelector('textarea[name="search"]') || document.querySelector('textarea'))`
+    ).catch(() => false);
+    if (ready) return true;
+    await new Promise((r) => setTimeout(r, 200));
+  }
+  return false;
+}
+
 async function syncContainerAttachments(inEditBox) {
   const cleanupResult = await js(`
     (() => {
