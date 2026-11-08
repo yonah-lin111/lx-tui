@@ -31,6 +31,61 @@ const GROK_ATTACHMENT_CHIP_SELECTOR =
   'form [role="list"][aria-label*="attachments"] [role="listitem"], ' +
   'form [role="list"][aria-label*="Attachments"] [role="listitem"]';
 
+// `/responses` 的 message 会把引用以 `<grok:render ...>` 原样返回；网页端实际
+// 渲染为来源名链接。历史会话加载时按 cardAttachmentsJson 映射成 Markdown 链接。
+function citationSourceLabel(url) {
+  try {
+    const host = new URL(url).hostname.replace(/^www\./, '');
+    const parts = host.split('.').filter(Boolean);
+    let name = host;
+    if (parts.length >= 2) {
+      const last = parts[parts.length - 1];
+      const secondLast = parts[parts.length - 2];
+      const compound =
+        last.length === 2 &&
+        ['com', 'co', 'org', 'net', 'gov', 'edu', 'ac'].includes(secondLast) &&
+        parts.length >= 3;
+      name = compound ? parts[parts.length - 3] : secondLast;
+    }
+    if (!name) return host;
+    return name.charAt(0).toUpperCase() + name.slice(1);
+  } catch (_) {
+    return 'source';
+  }
+}
+
+function parseCitationCards(cardAttachmentsJson) {
+  const cards = new Map();
+  const list = Array.isArray(cardAttachmentsJson) ? cardAttachmentsJson : [];
+  for (const raw of list) {
+    try {
+      const card = typeof raw === 'string' ? JSON.parse(raw) : raw;
+      if (card && card.id && card.url) {
+        cards.set(String(card.id), card);
+      }
+    } catch (_) {}
+  }
+  return cards;
+}
+
+function replaceGrokCitations(message, cardAttachmentsJson) {
+  const cards = parseCitationCards(cardAttachmentsJson);
+  return String(message || '')
+    .replace(/<grok:render\b([^>]*)>[\s\S]*?<\/grok:render>/gi, (_full, attrs, offset, source) => {
+      const id = /card_id\s*=\s*["']([^"']+)["']/i.exec(attrs);
+      const card = id ? cards.get(id[1]) : null;
+      if (!card || !card.url) return '';
+      const url = String(card.url);
+      const before = source[offset - 1] || '';
+      const gap = before && !/\s/.test(before) ? ' ' : '';
+      return gap + '[' + citationSourceLabel(url) + '](' + url + ')';
+    })
+    .replace(/<grok:render\b[^>]*\/>/gi, '')
+    .replace(/<\/?grok:[^>]*>?/gi, '')
+    .replace(/\u2060/g, '')
+    .trim();
+}
+
 let STREAM_ABORTED = false;
 
 async function emitMany(objs) {
@@ -446,6 +501,9 @@ async function runNonChatAction(currentUrl) {
               text: String(r.message || ''),
               files,
               created_at_ms: Date.parse(r.createTime || '') || 0,
+              cardAttachmentsJson: Array.isArray(r.cardAttachmentsJson)
+                ? r.cardAttachmentsJson
+                : [],
             };
           });
           // responses 接口不含标题；从会话列表补一次，避免 /resume、show 丢标题。
@@ -483,11 +541,19 @@ async function runNonChatAction(currentUrl) {
       });
       return;
     }
+    const messages = (Array.isArray(result.messages) ? result.messages : []).map((m) => ({
+      role: m.role,
+      thinking: m.thinking,
+      thinking_ms: m.thinking_ms,
+      text: replaceGrokCitations(m.text, m.cardAttachmentsJson),
+      files: m.files,
+      created_at_ms: m.created_at_ms,
+    }));
     await emit({
       event: 'session_loaded',
       id: SESSION_ID,
       title: result.title || null,
-      messages: Array.isArray(result.messages) ? result.messages : [],
+      messages,
     });
     await emit({ event: 'done' });
     return;

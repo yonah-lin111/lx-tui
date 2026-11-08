@@ -117,6 +117,15 @@ async function main() {
   const runId = String(Date.now()) + '-' + String(Math.random());
   await js(String.raw`
     (() => {
+      // 页面上下文执行：不能引用 Node 侧函数。
+      const stripGrokDirectives = (text) =>
+        String(text || '')
+          .replace(/<grok:render\b[^>]*>[\s\S]*?<\/grok:render>/gi, '')
+          .replace(/<grok:render\b[^>]*\/>/gi, '')
+          .replace(/<grok:render\b[\s\S]*$/gi, '')
+          .replace(/<\/?grok:[^>]*>?/gi, '')
+          .replace(/\u2060/g, ' ')
+          .trim();
       const existingResponses = Array.from(document.querySelectorAll('[data-testid="assistant-message"]'));
       const targetIndex = ${FIRST_TURN && EDIT_INDEX < 0 ? 0 : 'existingResponses.length'};
       window.__lxGrokStream = {
@@ -134,9 +143,7 @@ async function main() {
           // 正文尚未挂载时回退到 innerText 会把标题误当成回答输出。
           const body = el.querySelector('.response-content-markdown');
           if (!body) return '';
-          return (body.innerText || '')
-            .replace(/\r\n/g, '\n')
-            .trim();
+          return stripGrokDirectives((body.innerText || '').replace(/\r\n/g, '\n'));
         },
         pushText(current) {
           if (!current) return;

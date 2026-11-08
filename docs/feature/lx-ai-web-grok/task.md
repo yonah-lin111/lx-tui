@@ -148,7 +148,7 @@
   - `new` → `ensureFreshChat`
   - `stop` → `button[aria-label="停止模型响应"]`
   - `list_sessions` → REST 列表；401 回 `login_required`，非 2xx 回 `error`
-  - `load_session` → REST `/responses` + parent 链回溯 + 附件名映射；`title` 从会话列表 REST 补；401/非 2xx 同上
+  - `load_session` → REST `/responses` + parent 链回溯 + 附件名映射；`title` 从会话列表 REST 补；`message` 内的 `<grok:render>` 按 `cardAttachmentsJson` 映射为 `[来源名](url)`；401/非 2xx 同上
   - `rename_session` → `PUT /rest/app-chat/conversations/{id}`；401 回 `login_required`，非 2xx 回 `error`
   - `delete_session` → `DELETE /rest/app-chat/conversations/{id}`；当前页命中则回首页
 - [ ] 所有失败路径 `emit({event:'error', message:...})`，不得静默。
@@ -233,7 +233,7 @@
 - [ ] 未登录场景：手动在 ego-browser 退出 Grok，再执行 `web chat`，应提示 `Please sign in to Grok in ego-browser` 并移交控制权。
 - [ ] 带附件轮次 `/rewind`：TUI 中执行 `/rewind` 应弹 `Grok /rewind cannot restore attachments...`，消息与输入不变。
 - [ ] 纯文本轮次 `/rewind`：TUI 中执行 `/rewind` 应保留旧消息、回填输入，并弹 `Grok /rewind appends a retry turn; use /new for a clean chat`；下一次发送追加新轮次。
-- [ ] 普通附件发送：`web chat --site grok --file <path> "Summarize"` 能上传并回答。
+- [ ] 普通附件发送：`web chat --site grok --file <path> "Summarize"` 能上传并回答。\n- [ ] 引用标签：对带联网引用的会话执行 `web show`，输出不得含 `<grok:render>`，应出现 `[来源名](url)`；实时 `web chat` 的联网回答也不得泄漏原始标签。
 
 ### 7.4 清理
 
@@ -265,4 +265,4 @@
 9. 生产代码不得出现 `unwrap()` / `expect()`。
 10. 单文件 `< 1000` 行。
 11. 正文只读 `.response-content-markdown`，禁止回退助手消息 `innerText`。
-12. 登录只信 `get-user` 的 `email`，不得因普通 `sign-in` 链接提前判未登录。
+12. 登录只信 `get-user` 的 `email`，不得因普通 `sign-in` 链接提前判未登录。\n13. 历史/实时回答都不得出现 `<grok:render>` 原始标签；历史标签必须按 `cardAttachmentsJson` 映射为来源链接。

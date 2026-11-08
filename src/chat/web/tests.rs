@@ -125,8 +125,12 @@ fn scripts_for_site_returns_deepseek_gemini_and_grok_driver_bundles() {
     assert!(gk_helpers.contains("chat-submit"));
     assert!(gk_helpers.contains("takeOverTaskSpace"));
     assert!(gk_helpers.contains("claimTaskSpace"));
+    assert!(gk_helpers.contains("replaceGrokCitations"));
+    assert!(gk_helpers.contains("cardAttachmentsJson"));
+    assert!(gk_helpers.contains("grok:render"));
     assert!(gk_main.contains("__lxGrokStream"));
     assert!(gk_main.contains("ensureGrokComposer"));
+    assert!(gk_main.contains("stripGrokDirectives"));
     assert!(gk_main.contains("await activateTaskSpace()"));
     assert!(gk_main.contains("await ensureTaskSpaceControl()"));
 }

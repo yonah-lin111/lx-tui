@@ -29,6 +29,8 @@
 | 8 | 长回答 + 4s 后 `web stop --site grok` | 已停止在 `one..eight`，未继续增长 |
 | 9 | `web chat --site grok --file <secret.txt> "Reply with the secret word..."` | 输出 `BANANA`，附件上传成功 |
 | 10 | `web delete ai-web-grok-<id> --site grok` × 4 | 4 个测试会话全部删除；`list` 只剩用户原有 2 个会话 |
+| 11 | `web show ai-web-grok-5ff186ff... --json`（带联网引用的用户会话） | 输出不含 `<grok:render>`；引用变为 `[Chinatimes](https://chinatimes.com.hk/...)` 等来源链接 |
+| 12 | `web chat --site grok "Search the web for today's top news headline..."` | 实时回答输出来源名，不含原始标签；测试会话已删除 |
 
 ## 3. 实测发现与修正
 
@@ -40,6 +42,7 @@
    - 带附件轮次仍拒绝；
    - CLI `--edit-index` 对 Grok 降级为普通追加，输出 `editIndex: null`。
 5. **会话标题**：`/responses` 不含标题；`load_session` 额外请求会话列表补标题。
+6. **引用标签泄漏**：`/responses` 的 `message` 原样包含 `<grok:render card_id="…" ...><argument name="citation_id">N</argument></grok:render>`；直接在 `/resume` / `web show` 显示会看到 XML。已按同条 response 的 `cardAttachmentsJson` 把 `card_id` 映射为 URL，替换为 `[来源名](url)`；实时 DOM 采集也兜底剥离完整/未闭合标签。实测来源名为 `Chinatimes` / `Cctv` / `Bbc` / `Sina` 等域名标签。
 
 ## 4. 未自动化验证
 
@@ -49,7 +52,7 @@
 
 ## 5. 任务空间说明
 
-正式任务空间 `lx-tui-ai-web-grok` 在第一次 `web chat` 时因旧版“sign-in 链接”误判触发 `handOffTaskSpace()`，控制权交给用户。按 ego-browser 规则未擅自夺回；修复登录判定后，用临时 `lx-tui-ai-web-grok-verify` 完成全部端到端验证，随后：
+正式任务空间 `lx-tui-ai-web-grok` 在第一次 `web chat` 时因旧版“sign-in 链接”误判触发 `handOffTaskSpace()`，控制权交给用户。按 ego-browser 规则未擅自夺回；修复登录判定后，用临时 `lx-tui-ai-web-grok-verify` 完成首轮端到端验证，引用标签修复使用临时 `inspect grok citations` 空间复验（验证后关闭），随后：
 
 - 恢复 `grok_helpers.js` 的 `SPACE = 'lx-tui-ai-web-grok'`；
 - 关闭临时任务空间；

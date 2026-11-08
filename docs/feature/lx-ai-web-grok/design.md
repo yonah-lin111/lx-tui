@@ -387,7 +387,7 @@ pub fn rewind_ai_web(state: &mut AppState, pane: PaneId) -> bool {
 5. **登录检测**：`fetch('/rest/auth/get-user')`，200 且 `email` 非空才算已登录；登录检测最多轮询 20s。**不要**因为页面上出现普通 `sign-in` 链接就提前判未登录（实测会把已登录页误判）；未登录 `handOffTaskSpace()` → `login_required`。
 6. **模型同步**：`ensureGrokModel()` 点击 `button[aria-label^="型号"]` / `button[aria-label^="Model"]`，在 `[role="menuitemradio"]` 中按文本匹配 `MODEL`，检查 `aria-checked`，切换后校验按钮标签。
 7. **附件同步**：`syncComposerAttachments()` 先删除输入框 `form [role="list"][aria-label*="对话附件"]` / `*attachments*` 内所有 `[role="listitem"]`（`button[aria-label="移除此附件"]` / `*Remove*`），再用 CDP `DOM.setFileInputFiles` 注入 `FILES`；隐藏 input 最多轮询 10s，chip 最多等待 60s（实测 chip 约 200ms 出现，但冷启动/上传处理可能更慢）。
-8. **会话动作**：`new` / `stop` / `list_sessions` / `load_session` / `rename_session` / `delete_session` 全部实现；所有 REST 调用必须检查 `res.ok`，401 回 `login_required`，其它失败回 `error`，不得静默。
+8. **会话动作**：`new` / `stop` / `list_sessions` / `load_session` / `rename_session` / `delete_session` 全部实现；所有 REST 调用必须检查 `res.ok`，401 回 `login_required`，其它失败回 `error`，不得静默。\n9. **引用标签清洗**：`/responses` 的 `message` 会把网页端引用以 `<grok:render card_id="…" ...><argument name="citation_id">N</argument></grok:render>` 原样返回；`load_session` 必须用同条 response 的 `cardAttachmentsJson` 把 `card_id` 映射成 URL，替换为 `[来源名](url)`，并清掉无映射的残留标签。实时 DOM 正常已渲染为来源名，但采集器仍要兜底剥离原始标签/部分标签。
 
 #### 关键代码
 
@@ -999,7 +999,7 @@ sleep 4
 10. **文件行数**：新增 JS 文件按 helpers/script 拆分，单个生产文件 `< 1000` 行；Rust 改动均为分支追加，不新建超大模块。
 11. **正文提取**：只能读 `.response-content-markdown`；禁止回退到助手消息 `innerText`，否则正文挂载前会把 `sr-only` 的 “Grok” 标题当成回答（已实测踩坑）。
 12. **附件 DOM**：chip 容器在输入框 `<form>` 内而不是 `drop-ui` 内；清理必须限定 `form`，隐藏 input 轮询 10s，chip 等待 60s。
-13. **Grok Edit 不可原地替换**：Edit 提交会清空旧用户消息正文并追加新轮次；任何“EDIT_INDEX 对应旧回答”的采集逻辑都会超时。
+13. **Grok Edit 不可原地替换**：Edit 提交会清空旧用户消息正文并追加新轮次；任何“EDIT_INDEX 对应旧回答”的采集逻辑都会超时。\n14. **引用标签不得泄漏**：历史 `message` 原样带 `<grok:render>`，必须按 `cardAttachmentsJson` 映射为来源链接；实时采集要及时剥离完整标签和尾部未闭合片段，否则 TUI 会显示原始 XML。
 
 ---
 
