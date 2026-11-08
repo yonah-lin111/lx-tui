@@ -11,6 +11,8 @@
 
 - V0-1–V0-5、V1–V17：**全部通过**（CLI）。
 - M1–M6：非 CLI 项；M5 的 Rust 逻辑由单元测试覆盖并通过，M1/M2 视觉待用户目测，M3/M4/M6 未执行。
+- Grok 历史/实时均未出现 `<grok:render>`；引用已映射为来源链接。
+- Gemini 未发现同类标签；DeepSeek 历史引用标记已被清洗，实时 `-\n13` 残渣已修复。
 
 ---
 
@@ -376,7 +378,7 @@
   2. 请求会话列表与目标会话历史。
   3. 扫描消息 `fragments[].content` 中的 `<...>` 标签与 `citation` / `reference` 标记。
 - **期望结果**：无 XML 渲染标签；引用标记为 `[reference:N]` 形式，并已被 `deepseek_helpers.js` 的 `cleanText` 清除。
-- **CLI 验证结果**：通过。原文含 `[reference:0]`，无 `<...>` 标签；`cleanText` 清洗后无引用标记。
+- **CLI 验证结果**：通过（DOM/API 审计）。原文含 `[reference:0]`，无 `<...>` 标签；`deepseek_helpers.js` 的 `cleanText` 正则覆盖该格式。未单独启动 DeepSeek TUI 会话复现。
 
 ### A2 DeepSeek 实时 DOM 引用残渣
 
