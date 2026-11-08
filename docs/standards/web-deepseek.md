@@ -5,6 +5,7 @@
   - 登录页：`https://chat.deepseek.com/sign_in`
   - 会话页：`https://chat.deepseek.com/a/chat/s/<session_id>`
 - **驱动运行时**：`ego-browser nodejs`（隔离任务空间 `SPACE = 'lx-tui-ai-web-deepseek'`）
+- **Gemini 驱动**：见 [`docs/feature/lx-ai-web-gemini/design.md`](../feature/lx-ai-web-gemini/design.md)
 
 本文档完整记录 `lx-tui` 第 4 入口 `Web`（`LxEntry::AiWeb`）对接 DeepSeek 网页端的端到端流程、脚本通信协议、DOM 选择器、React 事件触发方式、SSE JSON Patch 流解析规则、CDP 附件上传与云端 REST API 契约。当 DeepSeek 网页端后续改版导致选择器或接口漂移，或需要将同一套 `Web` 架构复刻到其它网页端 AI 站点时，以此文档为基准排查与修改。
 
@@ -217,7 +218,7 @@ DeepSeek 的 SSE 数据帧采用自定义的缩写 JSON Patch 协议：
 - **TUI 内存会话 ID 规则**：
   - 未绑定云端的临时新会话：`ai-web-1`、`ai-web-2`……
   - 已绑定 DeepSeek 云端 UUID 的会话：`ai-web-ds-<remote_uuid>`（通过 `AI_WEB_REMOTE_SESSION_PREFIX = "ai-web-ds-"` 转换）。
-- **与本地入口隔离**：`set_lx_entry` 在 `Native` / `Hybrid` / `Automation` 与 `AI Web` 之间切换时，自动清空跨侧会话状态、关闭残留面板并重置 `@` 提及标签页，防止本地 SQLite 会话与 `ai-web-*` 内存会话互相串染。
+- **与本地入口隔离**：`set_lx_entry` 在 `Native` / `Hybrid` / `Automation` 与 `Web` 之间切换时，自动清空跨侧会话状态、关闭残留面板并重置 `@` 提及标签页，防止本地 SQLite 会话与 `ai-web-*` 内存会话互相串染。
 
 ### 7.2 云端 REST API 契约（`2026-11-07` 基准）
 
@@ -255,7 +256,7 @@ DeepSeek 的 SSE 数据帧采用自定义的缩写 JSON Patch 协议：
 
 ### 7.3 `/rewind`（`/undo` 及空闲双击 `Esc`）原地编辑闭环
 
-1. 用户在 `AI Web` 下执行 `/rewind`（或 `/undo`、空闲双击 `Esc`）时：
+1. 用户在 `Web` 下执行 `/rewind`（或 `/undo`、空闲双击 `Esc`）时：
    - 定位最后一条非本地命令的用户消息 `last_user_idx`；
    - 提取该条消息中的云端附件文件名列表存入 `pane.lx.ai_web_edit_cloud_files`；
    - 截断 `messages.truncate(last_user_idx)`：若截断后 `messages.is_empty()`（即撤回全部轮次回到欢迎首页），同步清空 `session_title = None` 与 `session_title_palette = 0`，移除输入框右上角标题胶囊；
@@ -288,7 +289,7 @@ DeepSeek 的 SSE 数据帧采用自定义的缩写 JSON Patch 协议：
    - 检查 `localStorage.getItem('userToken')` 的键名或 JSON 结构是否变化；
    - 检查 `/api/v0/chat_session/fetch_page`、`/api/v0/chat/history_messages`、`/api/v0/chat_session/update_title`、`/api/v0/chat_session/delete` 四个接口的 URL 或 `biz_data` 响应层级是否调整。
 
-### 8.2 复刻到其它 AI Web 站点的标准步骤
+### 8.2 复刻到其它 Web 站点的标准步骤
 
 若需新增或替换其它网页端 AI 站点（如 ChatGPT Web、Claude Web、Kimi Web 等）：
 
