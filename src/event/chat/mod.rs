@@ -11,6 +11,7 @@ mod host;
 pub mod mcp;
 mod process_events;
 mod process_page;
+pub mod recap;
 pub mod rewind;
 mod runtime;
 pub(crate) mod skills;
@@ -27,6 +28,7 @@ pub use process_page::{
     apply_process_effects, refresh_open_task_pages, stop_turn_processes,
     sync_background_task_counts, tick_task_pages,
 };
+pub use recap::apply_recap_effects;
 pub use user_shell::pump_user_shells;
 // 工具握手与时间线辅助的实现在子模块；本模块保留唯一入口。
 pub use timeline::DRAFT_EXCEEDS_CONTEXT_CODE;

@@ -5,7 +5,7 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use super::*;
-use crate::db::chat::{ChatPart, ModelSnapshot, TurnOutcome, Usage};
+use crate::db::chat::{ChatPart, ModelSnapshot, RecapCommit, TurnOutcome, Usage};
 use crate::db::{DbError, SCHEMA_VERSION, now_ms};
 
 fn temp_db_path(label: &str) -> PathBuf {
@@ -981,4 +981,76 @@ fn v14_database_upgrades_to_v15_with_todo_table() {
         ))
         .expect("save todo");
     assert_eq!(database.list_todos().expect("list").len(), 1);
+}
+
+/// v24 → v25：补建 recap 表、索引与消息级联删除。
+#[test]
+fn v24_upgrades_to_v25_with_recap_table_and_cascade() {
+    let path = temp_db_path("v25-recap");
+    let database = Database::open(&path).expect("open v25");
+    database
+        .connection()
+        .execute_batch("DROP TABLE agent_message_recap; PRAGMA user_version = 24;")
+        .expect("downgrade to v24");
+    drop(database);
+
+    let database = Database::open(&path).expect("reopen v24");
+    let version: i64 = database
+        .connection()
+        .query_row("PRAGMA user_version", [], |row| row.get(0))
+        .expect("version");
+    assert_eq!(version, SCHEMA_VERSION);
+    let table: i64 = database
+        .connection()
+        .query_row(
+            "SELECT COUNT(*) FROM sqlite_master WHERE type = 'table' AND name = 'agent_message_recap'",
+            [],
+            |row| row.get(0),
+        )
+        .expect("table");
+    assert_eq!(table, 1);
+    let index: i64 = database
+        .connection()
+        .query_row(
+            "SELECT COUNT(*) FROM sqlite_master WHERE type = 'index' AND name = 'idx_agent_message_recap_session'",
+            [],
+            |row| row.get(0),
+        )
+        .expect("index");
+    assert_eq!(index, 1);
+
+    let workspace = workspace_path("v25-recap");
+    database.ensure_workspace(&workspace).expect("workspace");
+    let turn = database
+        .begin_turn(&workspace, None, "hello", &model())
+        .expect("turn");
+    database
+        .commit_recap(
+            &workspace,
+            &RecapCommit {
+                session_id: turn.session_id.clone(),
+                message_id: turn.assistant_message_id.clone(),
+                summary: "summary".into(),
+                next_action: "next".into(),
+                model: model(),
+                model_label: "Model".into(),
+                end_turn: 0,
+                end_sequence: turn.assistant_sequence,
+            },
+        )
+        .expect("recap");
+    database
+        .connection()
+        .execute(
+            "DELETE FROM agent_message WHERE external_id = ?1",
+            rusqlite::params![turn.assistant_message_id],
+        )
+        .expect("delete message");
+    let remaining: i64 = database
+        .connection()
+        .query_row("SELECT COUNT(*) FROM agent_message_recap", [], |row| {
+            row.get(0)
+        })
+        .expect("recap count");
+    assert_eq!(remaining, 0, "消息删除必须级联清理 recap");
 }

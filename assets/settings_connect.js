@@ -64,7 +64,7 @@ async function refreshQuickConnectState(targetIds) {
   // 指向已断开/已禁用预设的默认与标题选择立即清空，下次保存不再 422。
   const presetIds = new Set(latest.map((preset) => preset.id));
   const usable = new Set(latest.filter((preset) => preset.connected && preset.enabled).map((preset) => preset.id));
-  for (const key of ['defaultModel', 'titleSummary']) {
+  for (const key of ['defaultModel', 'titleSummary', 'recapSummary']) {
     const selection = modelsDraft[key];
     if (selection && presetIds.has(selection.provider) && !usable.has(selection.provider)) {
       modelsDraft[key] = null;
@@ -613,6 +613,10 @@ function initProviderFields() {
     if (!provider.enabled && modelsDraft.titleSummary && modelsDraft.titleSummary.provider === provider.id) {
       modelsDraft.titleSummary = null;
       showToast('Title model cleared (its provider was turned off)', 'info');
+    }
+    if (!provider.enabled && modelsDraft.recapSummary && modelsDraft.recapSummary.provider === provider.id) {
+      modelsDraft.recapSummary = null;
+      showToast('Recap model cleared (its provider was turned off)', 'info');
     }
     markModelsDirty();
     renderProviders();

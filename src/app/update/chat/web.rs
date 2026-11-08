@@ -390,6 +390,7 @@ pub fn on_ai_web_session_loaded(
     target.lx.clear_agents();
     target.lx.compact.reset();
     target.lx.model_switch.reset();
+    target.lx.recap.reset();
     target.lx.clear_rewind();
     target.lx.ai_web_edit_user_index = None;
     target.lx.ai_web_edit_cloud_files.clear();

@@ -346,6 +346,22 @@ pub enum Effect {
         prompt: String,
         model: crate::app::state::FrozenModel,
     },
+    /// 后台生成会话回顾（自动失焦触发或手动 `/recap`）。
+    GenerateRecap {
+        pane: crate::layout::PaneId,
+        workspace: PathBuf,
+        session_id: String,
+        /// 挂接的最后一条 assistant 消息 id。
+        message_id: String,
+        /// 请求代次；迟到回执按它丢弃。
+        generation: u64,
+        manual: bool,
+        end_turn: i64,
+        end_sequence: i64,
+        prompt: String,
+        model: crate::app::state::FrozenModel,
+        model_label: String,
+    },
     /// 后台生成 Prompt 模板块（`&&&` / `+++`）标题。
     GeneratePromptBlockTitle {
         request_id: u64,

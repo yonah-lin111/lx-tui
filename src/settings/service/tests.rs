@@ -61,6 +61,9 @@ async fn page_requires_token_and_serves_self_contained_assets() {
     assert!(html.contains("default-model-host"), "default model host");
     assert!(html.contains("title-model-host"), "title model host");
     assert!(html.contains("title-language-host"), "title language host");
+    assert!(html.contains("recap-enabled"), "recap toggle");
+    assert!(html.contains("recap-model-host"), "recap model host");
+    assert!(html.contains("<legend>Recap</legend>"), "recap fieldset");
     assert!(
         html.contains("<legend>Default Model</legend>")
             && html.contains("<legend>Title Generation</legend>"),
@@ -130,6 +133,8 @@ async fn page_requires_token_and_serves_self_contained_assets() {
         "deleteProvider",
         "fetchModels",
         "renderDefaultModel",
+        "recapModel",
+        "recapEnabled",
         "/api/models/settings",
         "/api/models/fetch",
     ] {

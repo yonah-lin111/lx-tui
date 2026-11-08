@@ -538,6 +538,7 @@ pub fn apply_slash_command(state: &mut AppState, pane: PaneId, command: SlashCom
         SlashCommand::New => new_session(state, pane),
         SlashCommand::Rewind => super::rewind::open_from_command(state, pane),
         SlashCommand::Compact => super::compact::compact_command(state, pane),
+        SlashCommand::Recap => super::recap::recap_command(state, pane),
         SlashCommand::Subagents => super::session::open_subagents_page(state, pane),
         SlashCommand::Connect => super::connect::open_connect_panel(state, pane),
         SlashCommand::Mcp => super::mcp::open_mcp_panel(state, pane),

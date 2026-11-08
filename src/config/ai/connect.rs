@@ -412,6 +412,12 @@ fn sanitize_runtime_selections(settings: &mut AiSettings) {
         &settings.providers,
         &enabled,
     );
+    super::sanitize_selection_slot(
+        "recap model",
+        &mut settings.recap_summary,
+        &settings.providers,
+        &enabled,
+    );
 }
 
 /// 采集所有预设环境变量（非空、去首尾空白）的快照，供 `app/` 层注入使用。
@@ -472,10 +478,12 @@ where
         let mut ai_settings = super::parse_ai_root(&text)?;
         let before_default = ai_settings.default_model.clone();
         let before_title = ai_settings.title_summary.clone();
+        let before_recap = ai_settings.recap_summary.clone();
         ai_settings.sanitize_optional_selections_with_connect(Some(&connect));
         for slot in [
             &mut ai_settings.default_model,
             &mut ai_settings.title_summary,
+            &mut ai_settings.recap_summary,
         ] {
             let dangling = slot.as_ref().is_some_and(|selection| {
                 find_preset(&selection.provider).is_some()
@@ -485,7 +493,9 @@ where
                 *slot = None;
             }
         }
-        if ai_settings.default_model != before_default || ai_settings.title_summary != before_title
+        if ai_settings.default_model != before_default
+            || ai_settings.title_summary != before_title
+            || ai_settings.recap_summary != before_recap
         {
             super::save_ai_with_connect(ai_path, &ai_settings, Some(&connect))?;
         }

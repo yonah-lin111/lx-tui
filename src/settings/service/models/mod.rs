@@ -76,6 +76,8 @@ fn revision_value(
     let mut value = json!({
         "defaultModel": &settings.default_model,
         "titleSummary": &settings.title_summary,
+        "recapEnabled": settings.recap_enabled,
+        "recapSummary": &settings.recap_summary,
         "titleLanguage": settings.effective_title_language().as_str(),
         "enabledProviders": &settings.enabled_providers,
         "providers": &settings.providers,
@@ -150,12 +152,25 @@ fn get_settings(state: &ServiceState) -> Response {
             })
         })
         .unwrap_or(Value::Null);
+    let recap_summary = settings
+        .recap_summary
+        .as_ref()
+        .map(|selection| {
+            json!({
+                "provider": selection.provider,
+                "model": selection.model,
+                "variant": selection.variant,
+            })
+        })
+        .unwrap_or(Value::Null);
     let body = json!({
         "providers": providers,
         "quickConnect": connect::quick_connect_json(&connect),
         "enabledProviders": settings.enabled_providers,
         "defaultModel": default_model,
         "titleSummary": title_summary,
+        "recapEnabled": settings.recap_enabled,
+        "recapSummary": recap_summary,
         "titleLanguage": settings.effective_title_language().as_str(),
         "streamIdleTimeoutMs": settings.idle_timeout_ms(),
         "revision": revision_of_with_connect(&settings, Some(&connect)),
@@ -314,6 +329,11 @@ fn merge_settings(
     // 默认模型、标题模型与标题语言选择。
     settings.default_model = parse_model_selection_field(body, "defaultModel")?;
     settings.title_summary = parse_model_selection_field(body, "titleSummary")?;
+    settings.recap_enabled = body
+        .get("recapEnabled")
+        .and_then(Value::as_bool)
+        .unwrap_or(settings.recap_enabled);
+    settings.recap_summary = parse_model_selection_field(body, "recapSummary")?;
     settings.title_language = match body.get("titleLanguage") {
         Some(Value::Null) | None => None,
         Some(Value::String(raw)) if raw.trim().is_empty() => None,

@@ -839,6 +839,32 @@ pub fn disable_mouse_capture(writer: &mut impl Write) -> io::Result<()> {
     }
 }
 
+/// 开启终端焦点上报（`CSI ? 1004 h`）：失焦/聚焦事件用于自动 recap。
+pub fn enable_focus_capture(writer: &mut impl Write) -> io::Result<()> {
+    #[cfg(windows)]
+    {
+        crossterm::execute!(writer, crossterm::event::EnableFocusChange)
+    }
+    #[cfg(not(windows))]
+    {
+        writer.write_all(b"\x1b[?1004h")?;
+        writer.flush()
+    }
+}
+
+/// 关闭终端焦点上报；必须在仍处于 raw 模式时调用并随后 drain。
+pub fn disable_focus_capture(writer: &mut impl Write) -> io::Result<()> {
+    #[cfg(windows)]
+    {
+        crossterm::execute!(writer, crossterm::event::DisableFocusChange)
+    }
+    #[cfg(not(windows))]
+    {
+        writer.write_all(b"\x1b[?1004l")?;
+        writer.flush()
+    }
+}
+
 /// 启用 kitty 键盘协议（DISAMBIGUATE_ESCAPE_CODES），让 Super/Cmd 组合可被收到；
 /// 不支持的终端忽略该私有序列；Windows legacy 控制台无此协议，直接 no-op。
 pub fn enable_keyboard_enhancement(writer: &mut impl Write) -> io::Result<()> {

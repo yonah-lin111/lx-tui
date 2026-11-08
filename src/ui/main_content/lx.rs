@@ -199,6 +199,22 @@ pub(crate) fn entry_hit(area: Rect, lx: &Lx, column: u16, row: u16) -> Option<Lx
         .map(|(entry, _)| entry)
 }
 
+/// 首页入口标签矩形（tooltip 与命中共用同一份布局）。
+pub(crate) fn entry_rects(area: Rect, lx: &Lx) -> Vec<(LxEntry, Rect)> {
+    layout(area, lx).entries
+}
+
+/// 首页 AI Web 站点标签矩形；非 Web 入口返回空。
+pub(crate) fn ai_web_site_rects(area: Rect, lx: &Lx) -> Vec<(crate::app::state::AiWebSite, Rect)> {
+    if lx.entry != LxEntry::AiWeb {
+        return Vec::new();
+    }
+    layout(area, lx)
+        .inventory
+        .map(brand::place_ai_web_sites)
+        .unwrap_or_default()
+}
+
 /// 命中测试：AI Web 入口下，坐标落在某个站点标签内则返回该站点。
 pub(crate) fn ai_web_site_hit(
     area: Rect,

@@ -43,6 +43,8 @@ pub(super) struct StatusLayout {
     pub variant: Rect,
     /// 上下文占用文字矩形（零宽表示已隐藏）；紧跟思考等级之后。
     pub context: Rect,
+    /// 缓存命中率文字矩形（零宽表示已隐藏）；紧跟上下文占用之后。
+    pub cache: Rect,
     /// 模型 · 思考等级 · 上下文可用矩形（运行指标之后）。
     pub label: Rect,
     /// 模型名实际绘制宽度（由布局的降级链得出，渲染必须用同一值，不得重算）。
@@ -56,6 +58,7 @@ fn hidden(left: u16, y: u16) -> StatusLayout {
         activity: Rect::new(left, y, 0, 1),
         variant: Rect::new(left, y, 0, 1),
         context: Rect::new(left, y, 0, 1),
+        cache: Rect::new(left, y, 0, 1),
         label: Rect::new(left, y, 0, 1),
         model_width: 0,
     }
@@ -102,29 +105,36 @@ pub(super) fn layout(
     // 这样任何字段都不会因为「别的字段可能需要空间」而被拖累，
     // 也不会出现字段被判放不下、模型名却仍被它占位压窄的错位。
     let ctx_w = field_width(context_text(status));
+    let cache_w = field_width(cache_text(status));
     let variant_w = field_width(variant_text(status));
     let model_only = model_width(status, content_budget);
-    let mut chosen = (false, false, model_only);
-    if ctx_w > 0 && model_only.saturating_add(sep_w()).saturating_add(ctx_w) <= content_budget {
-        chosen = (false, true, model_only);
-    }
-    if variant_w > 0
-        && model_only.saturating_add(sep_w()).saturating_add(variant_w) <= content_budget
-    {
-        chosen = (true, false, model_only);
-    }
-    if ctx_w > 0 && variant_w > 0 {
-        // 两者同显：`模型 · variant · ctx`。
-        let need = model_only
-            .saturating_add(sep_w())
-            .saturating_add(variant_w)
-            .saturating_add(sep_w())
-            .saturating_add(ctx_w);
+    // 候选组合保持现有优先级：cached 最先丢，其次上下文，再其次 variant。
+    // 全量 → 丢 cached → 丢上下文（保 variant）→ 丢 variant（保上下文）→ 仅模型。
+    let candidates = [
+        (variant_w > 0, ctx_w > 0, cache_w > 0),
+        (variant_w > 0, ctx_w > 0, false),
+        (variant_w > 0, false, false),
+        (false, ctx_w > 0, false),
+        (false, false, false),
+    ];
+    let mut chosen = (false, false, false, model_only);
+    for (keep_variant, keep_ctx, keep_cache) in candidates {
+        let mut need = model_only;
+        if keep_variant {
+            need = need.saturating_add(sep_w()).saturating_add(variant_w);
+        }
+        if keep_ctx {
+            need = need.saturating_add(sep_w()).saturating_add(ctx_w);
+        }
+        if keep_cache {
+            need = need.saturating_add(sep_w()).saturating_add(cache_w);
+        }
         if need <= content_budget {
-            chosen = (true, true, model_only);
+            chosen = (keep_variant, keep_ctx, keep_cache, model_only);
+            break;
         }
     }
-    let (keep_variant, keep_ctx, drawn_model) = chosen;
+    let (keep_variant, keep_ctx, keep_cache, drawn_model) = chosen;
     // 字段起点按实际绘制宽度递推（与渲染同一口径）。
     let variant_x = if keep_variant {
         left.saturating_add(drawn_model).saturating_add(sep_w())
@@ -140,6 +150,17 @@ pub(super) fn layout(
     } else {
         left
     };
+    let cache_x = if keep_cache {
+        if keep_ctx {
+            context_x.saturating_add(ctx_w).saturating_add(sep_w())
+        } else if keep_variant {
+            variant_x.saturating_add(variant_w).saturating_add(sep_w())
+        } else {
+            left.saturating_add(drawn_model).saturating_add(sep_w())
+        }
+    } else {
+        left
+    };
     let content_w = drawn_model
         .saturating_add(if keep_variant {
             sep_w().saturating_add(variant_w)
@@ -148,6 +169,11 @@ pub(super) fn layout(
         })
         .saturating_add(if keep_ctx {
             sep_w().saturating_add(ctx_w)
+        } else {
+            0
+        })
+        .saturating_add(if keep_cache {
+            sep_w().saturating_add(cache_w)
         } else {
             0
         });
@@ -172,6 +198,11 @@ pub(super) fn layout(
         },
         context: if keep_ctx {
             Rect::new(context_x, y, ctx_w, 1)
+        } else {
+            Rect::new(left, y, 0, 1)
+        },
+        cache: if keep_cache {
+            Rect::new(cache_x, y, cache_w, 1)
         } else {
             Rect::new(left, y, 0, 1)
         },
@@ -309,6 +340,13 @@ pub(crate) fn render(buf: &mut Buffer, inner: Rect, lx: &Lx) {
     if let Some(context) = context.filter(|_| lay.context.width > 0 && x < limit) {
         let value = format!("{}{context}", text::LX_CHAT_MODEL_SEP);
         put(buf, x, y, &value, style::chat_provider(), limit);
+        x = x
+            .saturating_add(sep_w())
+            .saturating_add(u16::try_from(context.width()).unwrap_or(u16::MAX));
+    }
+    if let Some(cache) = cache_text(status).filter(|_| lay.cache.width > 0 && x < limit) {
+        let value = format!("{}{cache}", text::LX_CHAT_MODEL_SEP);
+        put(buf, x, y, &value, style::chat_provider(), limit);
     }
     let end = inner.right().saturating_sub(EDGE_PAD);
     let notice_x = end.saturating_sub(notice_w);
@@ -442,10 +480,23 @@ fn cut_width(value: &str, max: usize) -> String {
     out
 }
 
+/// 整个对话累计缓存命中率文字（`70% cached`）；无数据或 0% 返回 None。
+fn cache_text(status: &ChatStatus) -> Option<String> {
+    status
+        .cache_hit_percent
+        .filter(|percent| *percent > 0)
+        .map(|percent| format!("{percent}%{}", text::LX_CHAT_CACHE_SUFFIX))
+}
+
 /// 上下文占用文字（测试用；None 表示整段隐藏）。
 #[cfg(test)]
 pub(super) fn context_text_for_test(status: &ChatStatus) -> Option<String> {
     context_text(status)
+}
+
+#[cfg(test)]
+pub(super) fn cache_text_for_test(status: &ChatStatus) -> Option<String> {
+    cache_text(status)
 }
 
 #[cfg(test)]

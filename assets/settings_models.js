@@ -50,10 +50,14 @@ function isModelSettingsDirty() {
   return JSON.stringify({
     defaultModel: modelsDraft.defaultModel,
     titleSummary: modelsDraft.titleSummary,
+    recapEnabled: modelsDraft.recapEnabled,
+    recapSummary: modelsDraft.recapSummary,
     titleLanguage: modelsDraft.titleLanguage
   }) !== JSON.stringify({
     defaultModel: modelsBaseline.defaultModel,
     titleSummary: modelsBaseline.titleSummary,
+    recapEnabled: modelsBaseline.recapEnabled,
+    recapSummary: modelsBaseline.recapSummary,
     titleLanguage: modelsBaseline.titleLanguage
   });
 }
@@ -179,6 +183,8 @@ function snapshotToDraft(snapshot) {
     streamIdleTimeoutMs: snapshot.streamIdleTimeoutMs,
     defaultModel: snapshot.defaultModel || null,
     titleSummary: snapshot.titleSummary || null,
+    recapEnabled: snapshot.recapEnabled !== false,
+    recapSummary: snapshot.recapSummary || null,
     titleLanguage: snapshot.titleLanguage || 'auto',
     providers: (snapshot.providers || []).map((provider) => ({
       key: provider.key,
@@ -331,6 +337,10 @@ function deleteProvider() {
     modelsDraft.titleSummary = null;
     showToast('Title model cleared', 'info');
   }
+  if (modelsDraft.recapSummary && modelsDraft.recapSummary.provider === provider.id) {
+    modelsDraft.recapSummary = null;
+    showToast('Recap model cleared', 'info');
+  }
   selectedProviderKey = null;
   markModelsDirty();
   renderModelsView();
@@ -370,6 +380,10 @@ function removeModel(provider, model) {
   if (modelsDraft.titleSummary && modelsDraft.titleSummary.provider === provider.id && modelsDraft.titleSummary.model === model.id) {
     modelsDraft.titleSummary = null;
     showToast('Title model cleared', 'info');
+  }
+  if (modelsDraft.recapSummary && modelsDraft.recapSummary.provider === provider.id && modelsDraft.recapSummary.model === model.id) {
+    modelsDraft.recapSummary = null;
+    showToast('Recap model cleared', 'info');
   }
   markModelsDirty();
   renderModelList();
@@ -635,6 +649,19 @@ function renderDefaultModel() {
   if (modelSelects.titleModel) {
     modelSelects.titleModel.setOptions(options, titleValue);
   }
+  let recapValue = modelsDraft.recapSummary ? modelsDraft.recapSummary.provider + '\u0000' + modelsDraft.recapSummary.model : '';
+  if (recapValue && !options.some((option) => option.value === recapValue)) {
+    modelsDraft.recapSummary = null;
+    recapValue = '';
+    showToast('Recap model cleared (its model was renamed or removed)', 'info');
+  }
+  if (modelSelects.recapModel) {
+    modelSelects.recapModel.setOptions(options, recapValue);
+  }
+  const recapToggle = document.getElementById('recap-enabled');
+  if (recapToggle) {
+    recapToggle.checked = modelsDraft.recapEnabled !== false;
+  }
   if (modelSelects.titleLanguage) {
     const lang = modelsDraft.titleLanguage || 'auto';
     modelSelects.titleLanguage.setOptions(TITLE_LANGUAGE_OPTIONS, lang);
@@ -749,11 +776,14 @@ function buildPayload() {
   // 选择可以指向 Custom 供应商，也可以指向已连接且启用的快捷连接供应商。
   const defaultModel = resolveDraftSelection(modelsDraft.defaultModel);
   const titleSummary = resolveDraftSelection(modelsDraft.titleSummary);
+  const recapSummary = resolveDraftSelection(modelsDraft.recapSummary);
   return {
     providers: providers,
     enabledProviders: enabledProviders,
     defaultModel: defaultModel,
     titleSummary: titleSummary,
+    recapEnabled: modelsDraft.recapEnabled !== false,
+    recapSummary: recapSummary,
     titleLanguage: modelsDraft.titleLanguage || 'auto',
     streamIdleTimeoutMs: modelsDraft.streamIdleTimeoutMs,
     revision: modelsDraft.revision
@@ -908,6 +938,31 @@ function initModelsView() {
       markModelsDirty();
     }
   });
+  modelSelects.recapModel = createSelect(document.getElementById('recap-model-host'), {
+    ariaLabel: 'Recap model',
+    placeholder: '(none)',
+    value: '',
+    options: [{value: '', label: '(none)'}],
+    onChange: (value) => {
+      if (!modelsDraft) { return; }
+      if (!value) {
+        modelsDraft.recapSummary = null;
+        markModelsDirty();
+        return;
+      }
+      const parts = value.split('\u0000');
+      modelsDraft.recapSummary = {provider: parts[0], model: parts[1], variant: null};
+      markModelsDirty();
+    }
+  });
+  const recapToggle = document.getElementById('recap-enabled');
+  if (recapToggle) {
+    recapToggle.onchange = () => {
+      if (!modelsDraft) { return; }
+      modelsDraft.recapEnabled = recapToggle.checked;
+      markModelsDirty();
+    };
+  }
   modelSelects.titleLanguage = createSelect(document.getElementById('title-language-host'), {
     ariaLabel: 'Title language',
     value: 'auto',

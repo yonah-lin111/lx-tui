@@ -4,6 +4,7 @@
 //! 渲染层只读：不克隆 `LxChat`、不访问 DB、不做 IO。
 
 use crate::app::state::RewindNoticeView;
+use crate::app::state::lx::LxRecap;
 use crate::app::state::{
     ChatMessageView, CompactNoticeView, Lx, LxChat, LxCompact, LxModelSwitch, ModelSwitchNoticeView,
 };
@@ -27,6 +28,8 @@ pub(crate) struct HistorySource<'a> {
     pub compact: &'a LxCompact,
     /// 模型切换状态。
     pub model_switch: &'a LxModelSwitch,
+    /// recap 状态；子 agent 详情没有独立 recap，使用 None。
+    pub recap: Option<&'a LxRecap>,
     /// 撤销面板当前选中的用户消息（渲染高亮用；无则 None）。
     pub selected_user_message: Option<&'a str>,
     /// 本会话仍有子 agent 在跑：统计行是任务收尾信息，必须等它们全部结束。
@@ -54,6 +57,7 @@ impl<'a> From<&'a Lx> for HistorySource<'a> {
                 && lx.ask.is_none(),
             compact: &lx.compact,
             model_switch: &lx.model_switch,
+            recap: Some(&lx.recap),
             selected_user_message: lx
                 .rewind
                 .selected
@@ -78,6 +82,7 @@ impl<'a> HistorySource<'a> {
             animating: chat.status.streaming || compact.is_running(),
             compact,
             model_switch: &EMPTY_MODEL_SWITCH,
+            recap: None,
             selected_user_message: None,
             subagents_running: false,
             // 详情区的滚动位在 `SubagentRun` 上，`LxChat` 里没有真实视口。
@@ -95,6 +100,7 @@ impl<'a> HistorySource<'a> {
             || !self.compact.is_empty()
             || self.compact.is_running()
             || !self.model_switch.is_empty()
+            || self.recap.is_some_and(|recap| !recap.is_empty())
     }
 }
 

@@ -27,7 +27,7 @@ use std::time::{SystemTime, UNIX_EPOCH};
 use rusqlite::{Connection, OptionalExtension, params};
 
 /// 当前 Schema 版本；版本号保留自管理截图资产的开发期结构，避免旧库被判为过新。
-const SCHEMA_VERSION: i64 = 24;
+const SCHEMA_VERSION: i64 = 25;
 
 /// 当前 Schema 版本（测试断言用；不暴露可变入口）。
 #[cfg(test)]
@@ -67,6 +67,8 @@ pub enum DbError {
     ForkBoundaryMissing,
     /// 目标 assistant 消息不存在或已进入终态（checkpoint/finish 只作用于 streaming）。
     MessageNotStreaming,
+    /// 目标 assistant 消息不存在，或不属于指定会话（recap 挂接校验）。
+    RecapMessageMissing,
     /// 会话正在被另一轮写入占用（同 session 的 begin_turn 串行化）。
     SessionBusy,
     /// 发送的草稿为空或仅空白；应用层应拦截，不落库。
@@ -131,6 +133,7 @@ impl fmt::Display for DbError {
             Self::SessionMissing => write!(formatter, "chat session not found"),
             Self::ForkBoundaryMissing => write!(formatter, "fork boundary message not found"),
             Self::MessageNotStreaming => write!(formatter, "assistant message is not streaming"),
+            Self::RecapMessageMissing => write!(formatter, "recap target message not found"),
             Self::SessionBusy => write!(formatter, "chat session is busy"),
             Self::InvalidDraft => write!(formatter, "empty draft"),
             Self::MessageTooLarge => write!(formatter, "message exceeds size limit"),
@@ -177,6 +180,7 @@ impl DbError {
             Self::SessionMissing => "session missing",
             Self::ForkBoundaryMissing => "fork boundary missing",
             Self::MessageNotStreaming => "message not streaming",
+            Self::RecapMessageMissing => "recap message missing",
             Self::SessionBusy => "session busy",
             Self::InvalidDraft => "invalid draft",
             Self::MessageTooLarge => "message too large",
@@ -317,6 +321,7 @@ impl Database {
             "agent_message_part",
             "agent_tool_call",
             "agent_subagent",
+            "agent_message_recap",
         ] {
             let count: i64 =
                 self.conn

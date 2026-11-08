@@ -210,6 +210,8 @@ pub struct AppState {
     pub selection_click: Option<(Instant, u16, u16, u8)>,
     /// 选区拖拽边缘自动滚动计划；None 表示未激活。
     pub selection_autoscroll: Option<SelectionAutoscroll>,
+    /// 终端失焦后自动 recap 的到期时刻；None 表示未计时/已取消。
+    pub recap_due_at: Option<Instant>,
     pub resizing_prompt: bool,
     pub prompt_hover: bool,
     pub prompt_collapsed: bool,
@@ -415,6 +417,7 @@ impl AppState {
             lx_card_press: None,
             selection_click: None,
             selection_autoscroll: None,
+            recap_due_at: None,
             resizing_prompt: false,
             prompt_hover: false,
             prompt_collapsed: false,

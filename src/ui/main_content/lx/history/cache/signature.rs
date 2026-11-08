@@ -128,6 +128,52 @@ fn list_signature(source: HistorySource<'_>, width: u16, skip_streaming_tail: bo
             hash.write_usize(step_index);
             step_signature(&mut hash, source, message, index, step_index, step);
         }
+        // 消息尾部文件变更摘要：每个文件行的展开状态与列表折叠状态都会改变行数。
+        let mut file_paths: Vec<&str> = Vec::new();
+        for step in &message.steps {
+            let AssistantStepView::Tool { call, .. } = step else {
+                continue;
+            };
+            let Some(view) = call.file_view() else {
+                continue;
+            };
+            for file in &view.files {
+                if !file_paths.contains(&file.path.as_str()) {
+                    file_paths.push(file.path.as_str());
+                }
+            }
+        }
+        for path in file_paths {
+            let slot = format!("file:{path}");
+            hash.write_str(&slot);
+            hash.write_u8(u8::from(source.chat.detail_is_expanded(&message.id, &slot)));
+        }
+        hash.write_u8(u8::from(source.chat.detail_is_expanded(
+            &message.id,
+            super::super::file_changes::MORE_SLOT,
+        )));
+        // recap 卡与生成中占位。
+        if let Some(recap) = source
+            .recap
+            .and_then(|recap| recap.entries.get(&message.id))
+        {
+            hash.write_str(&recap.id);
+            hash.write_str(&recap.summary);
+            hash.write_str(&recap.next_action);
+            hash.write_str(&recap.model_label);
+            hash.write_i64(recap.created_at_ms);
+            hash.write_u8(u8::from(
+                source.chat.detail_is_expanded(&message.id, "recap"),
+            ));
+        }
+        if let Some(pending) = source
+            .recap
+            .and_then(|recap| recap.pending.as_ref())
+            .filter(|pending| pending.message_id == message.id)
+        {
+            hash.write_str(&pending.message_id);
+            hash.write_i64(pending.elapsed_ms as i64 / 1000);
+        }
     }
     for notice in source.notices {
         hash.write_str(&notice.id);

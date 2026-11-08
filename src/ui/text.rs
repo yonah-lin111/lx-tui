@@ -343,7 +343,8 @@ pub const LX_CHAT_THOUGHT_LABEL: &str = "Thought";
 pub const LX_CHAT_STATS_SEP: &str = " · ";
 pub const LX_CHAT_STATS_INPUT_SUFFIX: &str = " in";
 pub const LX_CHAT_STATS_OUTPUT_SUFFIX: &str = " out";
-pub const LX_CHAT_STATS_CACHE_SUFFIX: &str = " cached";
+/// 输入框底边状态行的缓存命中率后缀（`70% cached`）。
+pub const LX_CHAT_CACHE_SUFFIX: &str = " cached";
 pub const LX_CHAT_STATS_SPEED_SUFFIX: &str = " tok/s";
 /// `/` 命令面板标题。
 pub const LX_SLASH_PANEL_TITLE: &str = "/Command";
@@ -454,6 +455,21 @@ pub const LX_SLASH_NO_MATCHES: &str = "no matches";
 
 /// 压缩命令的一句话描述（`/` 面板）。
 pub const LX_COMPACT_COMMAND_DESC: &str = "Summarize earlier context into a compact checkpoint";
+/// `/recap` 命令描述。
+pub const LX_RECAP_COMMAND_DESC: &str = "Summarize recent turns into a recap";
+/// recap 系统事件卡标题。
+pub const LX_RECAP_TITLE: &str = "Recap";
+/// recap 生成中的占位文案。
+pub const LX_RECAP_RUNNING: &str = "Generating recap...";
+/// recap 手动命令的反馈文案。
+pub const LX_RECAP_BUSY: &str = "Wait for the current turn to finish.";
+pub const LX_RECAP_PENDING: &str = "A recap is already being generated.";
+pub const LX_RECAP_EMPTY: &str = "There is no conversation history to recap.";
+pub const LX_RECAP_NO_MODEL: &str = "No recap model available.";
+pub const LX_RECAP_FAILED: &str = "Could not generate a recap. Please try again.";
+/// recap 卡片固定行前缀。
+pub const LX_RECAP_MODEL_PREFIX: &str = "model: ";
+pub const LX_RECAP_NEXT_PREFIX: &str = "Next: ";
 /// 有内容被压缩时的成功提示（toast）。
 pub const LX_COMPACT_DONE: &str = "Context compacted.";
 /// 没有可压缩的增量（已是最新检查点之后为空）。
@@ -753,6 +769,13 @@ pub fn tooltip_hint(target: TooltipTarget, state: &AppState) -> &'static str {
         TooltipTarget::CollapsePanes => "collapse panes",
         TooltipTarget::CollapseAgents if state.agents_collapsed => "expand agents",
         TooltipTarget::CollapseAgents => "collapse agents",
+        TooltipTarget::LxEntry(entry) => match entry {
+            crate::app::state::LxEntry::Native => "Alt+1",
+            crate::app::state::LxEntry::Hybrid => "Alt+2",
+            crate::app::state::LxEntry::Automation => "Alt+3",
+            crate::app::state::LxEntry::AiWeb => "Alt+4",
+        },
+        TooltipTarget::LxAiWebSite(_) => "Alt+W",
         TooltipTarget::PaneToggle(pane) => match state.pane_anywhere(pane).map(|pane| pane.view) {
             Some(PaneView::Lx) => "switch to terminal",
             Some(PaneView::Terminal) => "switch to lx",

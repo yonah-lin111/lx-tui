@@ -77,6 +77,12 @@ pub(crate) const MODEL_SWITCH_SLOT_BLOCK: usize = usize::MAX - 6;
 /// 时间线里的正在压缩 loading 条目。
 pub(crate) const RUNNING_COMPACT_SLOT_MESSAGE: usize = usize::MAX;
 pub(crate) const RUNNING_COMPACT_SLOT_BLOCK: usize = usize::MAX - 7;
+/// 消息尾部文件变更摘要（独立基数，避开报告块的 `MAX - 5 - index` 区间）。
+pub(crate) const FILE_CHANGES_SLOT_BLOCK: usize = usize::MAX / 2;
+/// 消息尾部 recap 卡。
+pub(crate) const RECAP_SLOT_BLOCK: usize = usize::MAX / 2 + 1;
+/// 消息尾部 recap 生成中占位。
+pub(crate) const RECAP_RUNNING_SLOT_BLOCK: usize = usize::MAX / 2 + 2;
 
 /// 滚离底部时，屏幕外流式增量的快照合并窗口（约 5 帧 @60fps）。
 #[cfg(not(test))]

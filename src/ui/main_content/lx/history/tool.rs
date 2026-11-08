@@ -31,7 +31,7 @@ use super::{StepKind, StepMark, truncate_with_ellipsis, visible_row};
 
 mod ask;
 mod command;
-mod file_diff;
+pub(crate) mod file_diff;
 mod file_summary;
 mod mcp;
 mod plan;

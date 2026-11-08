@@ -33,6 +33,10 @@ pub enum CardKind {
     },
     /// 模型切换提示条目：整块可点击展开/折叠详情与注入提示词。
     ModelSwitch { switch_id: String, expanded: bool },
+    /// 消息尾部文件变更行/折叠提示（按消息 ID + 槽位定位）。
+    FileChange { message_id: String, slot: String },
+    /// 消息尾部 recap 系统事件卡（按消息 ID 定位）。
+    Recap { message_id: String },
     /// 子 agent 汇报块：整块可点击展开/折叠正文。
     Report {
         message_id: String,

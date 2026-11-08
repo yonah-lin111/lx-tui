@@ -267,6 +267,19 @@ impl Database {
         if version < 24 {
             self.migrate_v24_workspace_hidden()?;
         }
+        if version < 25 {
+            self.migrate_v25_recap()?;
+        }
+        Ok(())
+    }
+
+    /// v25：每条 assistant 消息的回顾表；消息删除时级联清理。
+    fn migrate_v25_recap(&mut self) -> Result<()> {
+        let transaction = self.conn.unchecked_transaction()?;
+        transaction.execute_batch(SCHEMA_V25_RECAP)?;
+        ensure_no_foreign_key_violation(&transaction)?;
+        transaction.pragma_update(None, "user_version", 25)?;
+        transaction.commit()?;
         Ok(())
     }
 

@@ -645,3 +645,24 @@ CREATE TABLE IF NOT EXISTS workspace_hidden (
     hidden_at TEXT NOT NULL
 );
 "#;
+
+/// v25：每条 assistant 消息的回顾（summary + next_action + 生成模型/时间）。
+pub(super) const SCHEMA_V25_RECAP: &str = r#"
+CREATE TABLE IF NOT EXISTS agent_message_recap (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    external_id TEXT NOT NULL UNIQUE,
+    session_id TEXT NOT NULL REFERENCES agent_session(external_id) ON DELETE CASCADE,
+    message_id TEXT NOT NULL UNIQUE REFERENCES agent_message(external_id) ON DELETE CASCADE,
+    summary_text TEXT NOT NULL,
+    next_action TEXT NOT NULL DEFAULT '',
+    model_provider TEXT,
+    model_id TEXT,
+    variant TEXT,
+    model_label TEXT NOT NULL,
+    end_turn INTEGER NOT NULL DEFAULT 0,
+    end_sequence INTEGER NOT NULL DEFAULT 0,
+    created_at_ms INTEGER NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_agent_message_recap_session
+    ON agent_message_recap(session_id, created_at_ms);
+"#;

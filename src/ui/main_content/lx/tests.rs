@@ -1477,6 +1477,7 @@ fn initial_page_shows_status_on_pane_bottom_border() {
         variant: None,
         context_limit: Some(1_000_000),
         input_tokens: Some(720_000),
+        cache_hit_percent: None,
         streaming: false,
         omitted_turns: None,
         blocked_subagents: 0,

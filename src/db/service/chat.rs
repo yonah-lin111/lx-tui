@@ -25,6 +25,7 @@ type LoadedSession = (
     Vec<crate::db::chat::NoticeRecord>,
     Vec<crate::db::chat::CompactCheckpoint>,
     Vec<crate::db::chat::ModelSwitchRecord>,
+    Vec<crate::db::chat::MessageRecap>,
     i64,
 );
 
@@ -359,6 +360,16 @@ impl Persistence {
         db.finish_process(workspace, finish)
     }
 
+    /// 写入或覆盖一条消息回顾。
+    pub fn commit_recap(
+        &self,
+        workspace: &Path,
+        commit: &crate::db::chat::RecapCommit,
+    ) -> crate::db::Result<crate::db::chat::MessageRecap> {
+        let db = self.db.as_ref().ok_or(crate::db::DbError::Unavailable)?;
+        db.commit_recap(workspace, commit)
+    }
+
     /// 批量载入会话进程记录（重载时一次查询，不为每张卡片单独读库）。
     pub fn load_processes_for_session(
         &self,
@@ -395,6 +406,7 @@ impl Persistence {
                 .compact_checkpoints(workspace, session_id)
                 .unwrap_or_default();
             let switches = db.model_switches(workspace, session_id).unwrap_or_default();
+            let recaps = db.load_recaps(workspace, session_id).unwrap_or_default();
             let revision = db.session_revision(session_id).unwrap_or(0);
             Ok((
                 messages,
@@ -403,11 +415,20 @@ impl Persistence {
                 notices,
                 checkpoints,
                 switches,
+                recaps,
                 revision,
             ))
         });
-        let Some((Some(messages), model, processes, notices, checkpoints, switches, revision)) =
-            loaded
+        let Some((
+            Some(messages),
+            model,
+            processes,
+            notices,
+            checkpoints,
+            switches,
+            recaps,
+            revision,
+        )) = loaded
         else {
             // 加载失败发生在 lx 页：反馈落该窗格自己的槽（不占用全局覆盖层）。
             update::show_lx_toast(
@@ -440,6 +461,7 @@ impl Persistence {
         // 检查点与模型切换列表随会话一起回填（渲染与撤销都依赖它）。
         let checkpoints_changed = update::set_compact_checkpoints(state, pane, &checkpoints);
         let switches_changed = update::set_model_switches(state, pane, &switches);
+        let recaps_changed = update::set_message_recaps(state, pane, &recaps);
         // 会话视图建好之后再按进程记录校正（需要卡片已存在）。
         let drains = update::request_report_drain_if_idle(state, pane);
         update::reconcile_process_records(state, pane, &processes)
@@ -447,6 +469,7 @@ impl Persistence {
             | title_changed
             | checkpoints_changed
             | switches_changed
+            | recaps_changed
             | drains
     }
 

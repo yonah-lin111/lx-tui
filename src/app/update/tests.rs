@@ -4410,6 +4410,78 @@ fn lx_entry_and_selection_roundtrip() {
 }
 
 #[test]
+fn alt_entries_switch_only_on_lx_home() {
+    use crate::app::state::{LxEntry, PaneView};
+    let mut state = AppState::demo();
+    let pane = state.active_tab().layout.focus();
+    state.pane_mut_anywhere(pane).expect("pane").view = PaneView::Lx;
+    apply_lx_input(&mut state, LxInput::SwitchEntry(3));
+    assert_eq!(
+        state.pane_anywhere(pane).expect("pane").lx.entry,
+        LxEntry::AiWeb
+    );
+    // 有历史后首页入口不再可见，快捷键 no-op。
+    state
+        .pane_mut_anywhere(pane)
+        .expect("pane")
+        .lx
+        .chat
+        .messages
+        .push(ChatMessageView {
+            id: "m1".into(),
+            sequence: 0,
+            kind: "chat".into(),
+            role: "assistant".into(),
+            status: "complete".into(),
+            turn_index: 0,
+            shell: None,
+            steps: Vec::new(),
+            model_label: None,
+            error_code: None,
+            input_tokens: None,
+            output_tokens: None,
+            cache_read_tokens: None,
+            duration_ms: None,
+            reports: Vec::new(),
+            attachments: Vec::new(),
+        });
+    apply_lx_input(&mut state, LxInput::SwitchEntry(0));
+    assert_eq!(
+        state.pane_anywhere(pane).expect("pane").lx.entry,
+        LxEntry::AiWeb
+    );
+}
+
+#[test]
+fn alt_w_enters_web_then_toggles_site() {
+    use crate::app::state::{AiWebSite, LxEntry, PaneView};
+    let mut state = AppState::demo();
+    let pane = state.active_tab().layout.focus();
+    state.pane_mut_anywhere(pane).expect("pane").view = PaneView::Lx;
+    apply_lx_input(&mut state, LxInput::SwitchAiWebSite);
+    let target = state.pane_anywhere(pane).expect("pane");
+    assert_eq!(target.lx.entry, LxEntry::AiWeb);
+    assert_eq!(target.lx.ai_web_site, AiWebSite::Deepseek);
+    apply_lx_input(&mut state, LxInput::SwitchAiWebSite);
+    assert_eq!(
+        state.pane_anywhere(pane).expect("pane").lx.ai_web_site,
+        AiWebSite::Gemini
+    );
+}
+
+#[test]
+fn alt_shortcuts_ignored_on_terminal_view() {
+    use crate::app::state::LxEntry;
+    let mut state = demo_terminal();
+    let pane = state.active_tab().layout.focus();
+    apply_lx_input(&mut state, LxInput::SwitchEntry(3));
+    assert_eq!(
+        state.pane_anywhere(pane).expect("pane").lx.entry,
+        LxEntry::Native
+    );
+}
+
+#[test]
 fn clear_selection_clears_lx_selection() {
     let mut state = AppState::demo();
     let pane = state.active_tab().layout.focus();
@@ -5109,8 +5181,8 @@ fn lx_slash_fuzzy_matches_subsequence_and_aliases() {
         .collect();
     assert_eq!(
         names,
-        vec!["resume", "rewind", "rename", "fork"],
-        "前缀命中 /resume、/rewind 与 /rename；/fork 仅子序列命中排后"
+        vec!["resume", "rewind", "recap", "rename", "fork"],
+        "前缀命中 /resume、/rewind、/recap 与 /rename；/fork 仅子序列命中排后"
     );
     // 别名：/clear → new，/session → resume，/title → rename。
     let names: Vec<&str> = SlashPanel::commands_matching("/clear")

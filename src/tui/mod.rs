@@ -45,6 +45,7 @@ impl Tui {
         let mut stdout = io::stdout();
         execute!(stdout, EnterAlternateScreen, EnableBracketedPaste)?;
         crate::platform::enable_mouse_capture(&mut stdout)?;
+        crate::platform::enable_focus_capture(&mut stdout)?;
         crate::platform::enable_keyboard_enhancement(&mut stdout)?;
         stdout.write_all(CURSOR_BLINK_OFF)?;
         stdout.flush()?;
@@ -124,6 +125,7 @@ fn restore_terminal(
     restore_cooked: &mut dyn FnMut() -> io::Result<()>,
 ) -> io::Result<()> {
     crate::platform::disable_mouse_capture(writer)?;
+    crate::platform::disable_focus_capture(writer)?;
     drain();
     crate::platform::disable_keyboard_enhancement(writer)?;
     writer.write_all(CURSOR_BLINK_ON)?;

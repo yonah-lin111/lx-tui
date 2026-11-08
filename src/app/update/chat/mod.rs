@@ -22,6 +22,7 @@ mod fork;
 pub mod mcp;
 pub mod model_switch;
 mod process;
+pub mod recap;
 pub mod rewind;
 mod session;
 mod slash;
@@ -58,6 +59,10 @@ pub use process::{
     activate_tool_card, apply_interaction_exit, apply_process_exit, apply_process_output,
     apply_process_snapshot, commit_plan, open_task_for_selected_tool, reconcile_process_records,
     restore_plan, select_adjacent_tool, settle_tool_detail, toggle_tool_detail,
+};
+pub use recap::{
+    apply_recap, cancel_pending_recap, on_terminal_focus_gained, on_terminal_focus_lost,
+    recap_command, recap_failed, set_message_recaps, take_pending_recap, tick_recap,
 };
 pub use rewind::{
     apply_enter as apply_rewind_enter, apply_input as apply_rewind_input,
@@ -280,6 +285,8 @@ pub fn on_turn_committed(
     generation: u64,
     committed: &crate::db::chat::TurnCommitted,
 ) -> bool {
+    // 新轮开始：取消在途 recap（用户已继续对话，旧回顾不再贴当前上下文）。
+    let _ = recap::cancel_pending_recap(state, pane);
     let models = state.models.clone();
     // 先只读取出冻结草稿：历史记录要在拿窗格可变借用之前完成，避免同时借用 `state` 两处。
     let frozen_draft = {
@@ -510,6 +517,9 @@ pub fn on_stream_finished(
     usage: Usage,
     billing: Usage,
 ) -> bool {
+    // 失焦期间完成的轮次会把自动 recap 的计时起点推到本轮结束（对齐 codex
+    // `unfocused_since.max(last_turn_finished_at) + 30min`）。
+    let recap_unfocused = state.recap_due_at.is_some();
     let Some(target) = state.pane_mut_anywhere(key.pane) else {
         return false;
     };
@@ -539,6 +549,13 @@ pub fn on_stream_finished(
         .chat
         .turn_started_at_ms
         .map(|started| crate::db::now_ms().saturating_sub(started).max(0));
+    let completed_turn_index = target
+        .lx
+        .chat
+        .messages
+        .iter()
+        .find(|message| message.id == assistant_id)
+        .map(|message| message.turn_index);
     if let Some(message) = target
         .lx
         .chat
@@ -569,6 +586,12 @@ pub fn on_stream_finished(
     if matches!(reason, StopReason::Cancelled) {
         target.lx.chat.main_stopped = true;
     }
+    if matches!(reason, StopReason::Complete)
+        && !web::is_ai_web_session(&key.session)
+        && let Some(turn_index) = completed_turn_index
+    {
+        target.lx.recap.on_turn_completed(turn_index);
+    }
     // AI Web 是纯内存会话：消息已在上面结算，直接回 Idle，不入队 DB 终态写入。
     if web::is_ai_web_session(&key.session) {
         target.lx.chat.request = RequestState::Idle;
@@ -579,6 +602,9 @@ pub fn on_stream_finished(
         key: key.clone(),
         reason: reason.clone(),
     };
+    if recap_unfocused {
+        state.recap_due_at = Some(Instant::now() + super::recap::RECAP_IDLE);
+    }
     let outcome = match reason {
         StopReason::Complete => TurnOutcome::Complete {
             stop_reason: Some("complete".into()),

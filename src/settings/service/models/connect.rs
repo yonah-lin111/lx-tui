@@ -404,9 +404,11 @@ fn commit_connect_change(
     let runtime = merge_runtime_ai_settings(&custom, connect);
     if custom.default_model != runtime.default_model
         || custom.title_summary != runtime.title_summary
+        || custom.recap_summary != runtime.recap_summary
     {
         custom.default_model = runtime.default_model.clone();
         custom.title_summary = runtime.title_summary.clone();
+        custom.recap_summary = runtime.recap_summary.clone();
         crate::config::ai::save_ai(&ai_file, &custom)
             .map_err(|error| Response::error(500, &error.to_string()))?;
     }
@@ -563,9 +565,11 @@ fn persist_oauth_credential(
     // 清理后原子写回，避免下一次校验报 422。
     if custom.default_model != runtime.default_model
         || custom.title_summary != runtime.title_summary
+        || custom.recap_summary != runtime.recap_summary
     {
         custom.default_model = runtime.default_model.clone();
         custom.title_summary = runtime.title_summary.clone();
+        custom.recap_summary = runtime.recap_summary.clone();
         crate::config::ai::save_ai(ai_file, &custom).map_err(|error| error.to_string())?;
     }
     let _ = sender.send(SettingsEvent::ModelsChanged(Box::new(runtime)));

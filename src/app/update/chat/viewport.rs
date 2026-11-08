@@ -3,7 +3,7 @@
 //! 从 `chat/mod.rs` 拆出（单文件行数上限）；这些函数都只改窗格状态，
 //! 几何由事件循环或 UI 纯函数传入，不做 IO。
 
-use crate::app::state::{AppState, CardTarget};
+use crate::app::state::{AppState, CardSection, CardTarget};
 use crate::layout::PaneId;
 
 /// 滚动历史视图（正数向下）；`total`/`visible` 为渲染行数与视口行数；返回是否移动。
@@ -420,6 +420,26 @@ pub fn toggle_lx_card(state: &mut AppState, pane: PaneId, target: CardTarget) ->
         }
         CardTarget::ModelSwitch { switch_id } => {
             super::model_switch::toggle_model_switch(state, pane, &switch_id)
+        }
+        CardTarget::FileChange { message_id, slot } => {
+            super::pin_lx_viewport(state, pane);
+            let Some(target) = state.pane_mut_anywhere(pane) else {
+                return false;
+            };
+            target
+                .lx
+                .chat
+                .toggle_section(&message_id, &slot, CardSection::Body)
+        }
+        CardTarget::Recap { message_id } => {
+            super::pin_lx_viewport(state, pane);
+            let Some(target) = state.pane_mut_anywhere(pane) else {
+                return false;
+            };
+            target
+                .lx
+                .chat
+                .toggle_section(&message_id, "recap", CardSection::Body)
         }
         CardTarget::Report {
             message_id,

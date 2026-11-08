@@ -66,6 +66,8 @@ fn sample_models(with_title_model: bool) -> ModelsSnapshot {
                 model: "title-fast".to_string(),
                 variant: None,
             }),
+            recap_enabled: true,
+            recap_summary: None,
             title_language: None,
             stream_idle_timeout_ms: None,
             web_search: Default::default(),

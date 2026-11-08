@@ -49,10 +49,36 @@ impl LxChat {
             variant,
             context_limit,
             input_tokens: self.context_tokens,
+            cache_hit_percent: self.conversation_cache_hit_percent(),
             streaming: self.request.is_busy(),
             omitted_turns: self.omitted_turns_notice.take(),
             blocked_subagents: self.status.blocked_subagents,
         };
+    }
+
+    /// 整个对话累计缓存命中率：Σcache_read / Σinput；无输入或无缓存数据返回 None。
+    fn conversation_cache_hit_percent(&self) -> Option<u64> {
+        let mut total_input = 0u64;
+        let mut total_cache = 0u64;
+        for message in &self.messages {
+            if message.role != "assistant" {
+                continue;
+            }
+            if let Some(input) = message.input_tokens.filter(|value| *value > 0) {
+                total_input = total_input.saturating_add(u64::try_from(input).unwrap_or(0));
+            }
+            if let Some(cache) = message.cache_read_tokens.filter(|value| *value > 0) {
+                total_cache = total_cache.saturating_add(u64::try_from(cache).unwrap_or(0));
+            }
+        }
+        (total_input > 0 && total_cache > 0).then(|| {
+            total_cache
+                .saturating_mul(100)
+                .saturating_add(total_input / 2)
+                .checked_div(total_input)
+                .unwrap_or(0)
+                .min(100)
+        })
     }
 
     /// 合并同一次模型响应内分帧到达的 usage，并立即刷新上下文占用。

@@ -5,6 +5,7 @@
 
 use super::super::source::HistorySource;
 use super::signature::{Fnv, shell_signature};
+use super::tool_signature::tool_signature;
 
 /// 本地命令卡片的指纹（不含宽度）。
 pub(crate) fn shell_block_signature(
@@ -53,6 +54,55 @@ pub(crate) fn notice_block_signature(notice: &super::super::notice::Notice) -> u
 pub(crate) fn stats_block_signature(line: &str) -> u64 {
     let mut hash = Fnv::new();
     hash.write_str(line);
+    hash.finish()
+}
+
+/// 消息尾部文件变更摘要的指纹：工具详情 + 每个文件行/列表的展开状态。
+pub(crate) fn file_changes_block_signature(
+    source: HistorySource<'_>,
+    message: &crate::app::state::ChatMessageView,
+) -> u64 {
+    let mut hash = Fnv::new();
+    hash.write_str(&message.id);
+    let mut paths: Vec<&str> = Vec::new();
+    for step in &message.steps {
+        let crate::app::state::AssistantStepView::Tool { call, .. } = step else {
+            continue;
+        };
+        let Some(view) = call.file_view() else {
+            continue;
+        };
+        tool_signature(&mut hash, source, message, call);
+        for file in &view.files {
+            if !paths.contains(&file.path.as_str()) {
+                paths.push(file.path.as_str());
+            }
+        }
+    }
+    for path in paths {
+        let slot = format!("file:{path}");
+        hash.write_str(&slot);
+        hash.write_u8(u8::from(source.chat.detail_is_expanded(&message.id, &slot)));
+    }
+    hash.write_u8(u8::from(source.chat.detail_is_expanded(
+        &message.id,
+        super::super::file_changes::MORE_SLOT,
+    )));
+    hash.finish()
+}
+
+/// 消息尾部 recap 卡的指纹。
+pub(crate) fn recap_block_signature(
+    recap: &crate::app::state::lx::MessageRecapView,
+    expanded: bool,
+) -> u64 {
+    let mut hash = Fnv::new();
+    hash.write_str(&recap.id);
+    hash.write_str(&recap.summary);
+    hash.write_str(&recap.next_action);
+    hash.write_str(&recap.model_label);
+    hash.write_i64(recap.created_at_ms);
+    hash.write_u8(u8::from(expanded));
     hash.finish()
 }
 

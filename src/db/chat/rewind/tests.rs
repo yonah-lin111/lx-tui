@@ -1,7 +1,7 @@
 //! 撤销持久化：scope 封印、序号、线性检查、最终事务与提示隔离。
 
 use super::*;
-use crate::db::chat::{ModelSnapshot, TurnOutcome, Usage};
+use crate::db::chat::{ModelSnapshot, RecapCommit, TurnOutcome, Usage};
 
 fn temp(label: &str) -> (Database, std::path::PathBuf) {
     let nanos = std::time::SystemTime::now()
@@ -257,6 +257,39 @@ fn rewinding_only_turn_removes_session_and_related_data() {
         database.operation("op-only").expect("operation").is_none(),
         "操作日志随会话级联清理"
     );
+}
+
+#[test]
+fn rewind_cascades_recaps_of_removed_turns() {
+    let (database, workspace) = temp("recap");
+    let first = started(&database, &workspace);
+    sealed(&database, &workspace, &first);
+    let turn = next_turn(&database, &workspace, &first.session_id);
+    database
+        .commit_recap(
+            &workspace,
+            &RecapCommit {
+                session_id: turn.session_id.clone(),
+                message_id: turn.assistant_message_id.clone(),
+                summary: "summary".into(),
+                next_action: "next".into(),
+                model: model(),
+                model_label: "Model".into(),
+                end_turn: turn.turn_index,
+                end_sequence: turn.assistant_sequence,
+            },
+        )
+        .expect("recap");
+    commit_delete(&database, &workspace, &turn, "op-recap");
+    let remaining: i64 = database
+        .connection()
+        .query_row(
+            "SELECT COUNT(*) FROM agent_message_recap WHERE session_id = ?1",
+            rusqlite::params![turn.session_id],
+            |row| row.get(0),
+        )
+        .expect("count");
+    assert_eq!(remaining, 0, "rewind 必须级联删除 recap");
 }
 
 #[test]

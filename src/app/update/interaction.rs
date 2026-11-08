@@ -327,7 +327,8 @@ pub fn tick(state: &mut AppState, now: Instant) -> bool {
     let scrolled = tick_selection_autoscroll(state, now);
     // `/resume` 面板停留期间刷新"现在"，相对时间随之自然推进。
     let retimed = tick_slash_panel_clock(state);
-    expired || lx_expired || revealed || saved || scrolled || retimed
+    let recapped = super::chat::recap::tick_recap(state, now);
+    expired || lx_expired || revealed || saved || scrolled || retimed || recapped
 }
 
 /// 刷新打开中的 `/resume` / `/fork` 面板时间戳；返回是否有面板需要重绘。
@@ -405,8 +406,24 @@ pub fn next_deadline(state: &AppState) -> Option<Instant> {
             )
         })
         .then(|| Instant::now() + std::time::Duration::from_secs(5));
-    [toast, lx_toast, tooltip, autoscroll, autosave, slash_clock]
+    let recap = state.recap_due_at;
+    let recap_elapsed = state
+        .all_pane_ids()
         .into_iter()
-        .flatten()
-        .min()
+        .filter_map(|pane| state.pane_anywhere(pane))
+        .any(|target| target.lx.recap.pending.is_some())
+        .then(|| Instant::now() + std::time::Duration::from_secs(1));
+    [
+        toast,
+        lx_toast,
+        tooltip,
+        autoscroll,
+        autosave,
+        slash_clock,
+        recap,
+        recap_elapsed,
+    ]
+    .into_iter()
+    .flatten()
+    .min()
 }

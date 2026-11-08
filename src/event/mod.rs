@@ -188,6 +188,8 @@ pub enum AppEvent {
     },
     /// `lx` 会话自动标题或 Prompt 模板块 `/title` 后台生成完成。
     TitleGenerated(chat::TitleGeneratedEvent),
+    /// 会话回顾（recap）后台生成完成。
+    RecapGenerated(chat::recap::RecapGeneratedEvent),
     /// `/connect` 快捷连接的后台结果（凭证保存、OAuth 回调）。
     Connect(chat::connect::ConnectEvent),
     /// AI Web 后台会话事件（会话绑定、历史列表、历史加载与错误提示）。
@@ -403,6 +405,9 @@ async fn run_loop(
         }
         // 后台标题生成效应：轻量无工具流转入后台任务。
         if chat::apply_title_effects(state, &sender) {
+            dirty = true;
+        }
+        if chat::apply_recap_effects(state, &sender) {
             dirty = true;
         }
         if chat::prune_pending_guards(state, &mut chat_streams) {
@@ -685,7 +690,15 @@ fn handle_terminal_event(
         TerminalEvent::Mouse(mouse) => {
             mouse::handle_mouse_event(mouse, state, sessions, geometry, config, cache, dirty);
         }
-        TerminalEvent::FocusGained | TerminalEvent::FocusLost | TerminalEvent::Resize(..) => {}
+        TerminalEvent::FocusLost => {
+            update::on_terminal_focus_lost(state, Instant::now());
+        }
+        TerminalEvent::FocusGained => {
+            if update::on_terminal_focus_gained(state) {
+                *dirty = true;
+            }
+        }
+        TerminalEvent::Resize(..) => {}
     }
 }
 
@@ -853,6 +866,9 @@ fn handle_app_event(
         }
         AppEvent::TitleGenerated(event) => {
             chat::handle_title_generated(state, persistence, event);
+        }
+        AppEvent::RecapGenerated(event) => {
+            chat::recap::handle_recap_generated(state, persistence, event);
         }
         AppEvent::RewindFinished {
             pane,

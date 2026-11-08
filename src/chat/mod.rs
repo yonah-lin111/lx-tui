@@ -14,6 +14,7 @@ pub mod plan;
 pub mod prepare;
 pub mod process;
 pub mod prompt;
+pub mod recap;
 pub mod sse;
 pub mod thinking;
 pub mod title;

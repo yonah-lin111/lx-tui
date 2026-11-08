@@ -130,3 +130,30 @@ fn close_stream_without_usage_keeps_known_context() {
     chat.close_stream(&crate::chat::events::StopReason::Cancelled);
     assert_eq!(chat.context_tokens, Some(500));
 }
+
+/// 缓存命中率取整个对话累计值（Σcache / Σinput），不是最近一轮。
+#[test]
+fn refresh_status_aggregates_conversation_cache_hit() {
+    let mut chat = LxChat::new();
+    let mut first = message(1, "assistant", Some(1_000), Some(10));
+    first.cache_read_tokens = Some(500);
+    let mut second = message(3, "assistant", Some(1_000), Some(10));
+    second.cache_read_tokens = Some(300);
+    chat.messages = vec![
+        message(0, "user", None, None),
+        first,
+        message(2, "user", None, None),
+        second,
+    ];
+    chat.refresh_status(&ModelsSnapshot::default());
+    assert_eq!(chat.status.cache_hit_percent, Some(40));
+}
+
+/// 没有任何缓存读取时整段隐藏，不显示 0%。
+#[test]
+fn refresh_status_hides_cache_hit_without_cache_data() {
+    let mut chat = LxChat::new();
+    chat.messages = vec![message(1, "assistant", Some(1_000), Some(10))];
+    chat.refresh_status(&ModelsSnapshot::default());
+    assert_eq!(chat.status.cache_hit_percent, None);
+}

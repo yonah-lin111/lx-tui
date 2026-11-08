@@ -957,6 +957,8 @@ async fn put_and_get_round_trip_title_summary_model() {
   "enabledProviders": ["p"],
   "defaultModel": {{"provider": "p", "model": "m1"}},
   "titleSummary": {{"provider": "p", "model": "m2"}},
+  "recapEnabled": false,
+  "recapSummary": {{"provider": "p", "model": "m2"}},
   "titleLanguage": "en",
   "streamIdleTimeoutMs": 60000,
   "revision": ""
@@ -985,6 +987,11 @@ async fn put_and_get_round_trip_title_summary_model() {
         parsed["titleSummary"],
         serde_json::json!({"provider": "p", "model": "m2", "variant": null})
     );
+    assert_eq!(
+        parsed["recapSummary"],
+        serde_json::json!({"provider": "p", "model": "m2", "variant": null})
+    );
+    assert_eq!(parsed["recapEnabled"], serde_json::json!(false));
     assert_eq!(parsed["titleLanguage"], serde_json::json!("en"));
     service.shutdown();
 }

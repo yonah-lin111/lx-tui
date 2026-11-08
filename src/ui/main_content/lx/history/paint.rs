@@ -98,10 +98,14 @@ pub(crate) enum BlockPaint {
     Thinking { body: Vec<MdLine> },
     /// 完全静态的单色行块（统计行）。
     Static { lines: Vec<String>, style: Style },
-    /// 系统事件卡片（compact / 模型切换 / rewind）：标题与树体已排版，
+    /// 系统事件卡片（compact / 模型切换 / rewind / recap）：标题与树体已排版，
     /// 绘制直接复用，不再每帧重跑 Markdown 与树体排版。
     SystemEvent {
         card: Arc<super::system_event::SystemCard>,
+    },
+    /// 消息尾部文件变更摘要树（行与点击几何同源）。
+    FileChanges {
+        card: Arc<super::file_changes::FileChangesCard>,
     },
     /// 尚未接入内容缓存的块：缓存行数与点击面几何，绘制仍走原路径。
     Legacy { rows: usize, spans: Vec<CardSpan> },
@@ -121,6 +125,7 @@ impl BlockPaint {
             Self::Thinking { body } => 1 + body.len(),
             Self::Static { lines, .. } => lines.len(),
             Self::SystemEvent { card } => card.rows(),
+            Self::FileChanges { card } => card.rows(),
             Self::Legacy { rows, .. } => *rows,
         }
     }
@@ -133,7 +138,8 @@ impl BlockPaint {
             | Self::Markdown { .. }
             | Self::Thinking { .. }
             | Self::Static { .. }
-            | Self::SystemEvent { .. } => &[],
+            | Self::SystemEvent { .. }
+            | Self::FileChanges { .. } => &[],
         }
     }
 
@@ -157,6 +163,7 @@ impl BlockPaint {
             Self::Thinking { body } => md_bytes(body),
             // 系统事件卡片的正文已排版进 `SystemCard`，按行数记近似值。
             Self::SystemEvent { card } => card.rows() * 64,
+            Self::FileChanges { card } => card.rows() * 64,
             // 旧路径没有缓存正文，不占二级缓存预算（行数已在一级快照里）；
             // 点击面几何是小结构，按条数记个近似值。
             Self::Legacy { spans, .. } => spans.len() * std::mem::size_of::<CardSpan>(),
@@ -227,6 +234,10 @@ impl BlockPaint {
                 }
             }
             Self::SystemEvent { card } => {
+                let mut row = start;
+                card.draw(grid, rect, scroll, &mut row);
+            }
+            Self::FileChanges { card } => {
                 let mut row = start;
                 card.draw(grid, rect, scroll, &mut row);
             }

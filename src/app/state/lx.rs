@@ -21,6 +21,7 @@ pub mod mcp;
 pub mod mention;
 pub mod model_switch;
 mod panels;
+pub mod recap;
 pub mod refer;
 pub mod rewind;
 mod selection;
@@ -52,6 +53,7 @@ pub use connect::{
 pub use mcp::{McpCatalogEntry, McpPanel, McpPanelEntry, McpRuntimeState, McpServerState};
 pub use mention::{LxMention, LxMentionView};
 pub use model_switch::{LxModelSwitch, ModelSwitchNoticeView};
+pub use recap::{LxRecap, MessageRecapView, RecapPending};
 pub use rewind::{
     LxRewind, RewindAction, RewindExecution, RewindNoticeView, RewindPanel, RewindTarget,
     RewindTargetKind, SnapshotState,
@@ -167,6 +169,8 @@ pub struct Lx {
     pub compact: LxCompact,
     /// 会话中途模型切换记录与展开状态。
     pub model_switch: LxModelSwitch,
+    /// 本会话回顾：已生成条目、在途请求与自动触发进度。
+    pub recap: LxRecap,
     /// 本页自己的 toast 槽；`Some` 时覆盖绘制在**窗格内容区内部**。
     pub toast: Option<crate::app::toast::Toast>,
     /// 后台任务页面；`Some` 表示当前窗格正停在该页。
@@ -267,6 +271,7 @@ impl Lx {
             rewind: LxRewind::default(),
             compact: LxCompact::default(),
             model_switch: LxModelSwitch::default(),
+            recap: LxRecap::default(),
             toast: None,
             task: None,
             ask: None,
@@ -278,6 +283,21 @@ impl Lx {
             redo: Vec::new(),
             history: HistoryBrowse::default(),
         }
+    }
+
+    /// 首页是否可见：与 `ui::main_content::lx` 的 entries_ok 同口径（不含几何）。
+    ///
+    /// 有历史、任务页、加载中会话或任何时间线条目时入口标签不绘制，键盘快捷键
+    /// 也必须同样失效，避免在历史视图里误切入口。
+    pub fn home_visible(&self) -> bool {
+        self.task.is_none()
+            && !self.chat.loading_session
+            && self.chat.messages.is_empty()
+            && self.chat.notices.is_empty()
+            && self.compact.is_empty()
+            && !self.compact.is_running()
+            && self.model_switch.is_empty()
+            && self.recap.is_empty()
     }
 
     /// 当前窗格已禁用的 MCP server 集合。

@@ -290,6 +290,12 @@ fn lx_input_key(key: KeyEvent) -> Option<LxInput> {
         // Alt+↑/↓：在可展开工具卡片之间移动键盘选择（草稿与光标保持不变）。
         (false, true, KeyCode::Up) => Some(LxInput::SelectPrevTool),
         (false, true, KeyCode::Down) => Some(LxInput::SelectNextTool),
+        // Alt+1..4：首页入口切换（语义由 update 层判定）。
+        (false, true, KeyCode::Char(ch @ '1'..='4')) => {
+            Some(LxInput::SwitchEntry((ch as u8) - b'1'))
+        }
+        // Alt+W：进入 Web 或切换 AI Web 站点（终端可能报大写）。
+        (false, true, KeyCode::Char('w' | 'W')) => Some(LxInput::SwitchAiWebSite),
         (false, true, KeyCode::Char('b')) => Some(LxInput::WordLeft),
         (false, true, KeyCode::Char('f')) => Some(LxInput::WordRight),
         (false, true, KeyCode::Char('d')) => Some(LxInput::DeleteWordForward),

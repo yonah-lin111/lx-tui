@@ -9,6 +9,7 @@ mod compact;
 mod fork;
 mod model_switch;
 mod process;
+mod recap;
 pub mod rewind;
 mod subagent;
 mod tools;
@@ -25,6 +26,7 @@ pub use compact::{
 pub use fork::{ForkedChatSession, copy_session_images};
 pub use model_switch::{ModelSwitchCommit, ModelSwitchRecord};
 pub use process::{NewProcess, OutputSnapshot, ProcessFinish, ProcessRecord};
+pub use recap::{MessageRecap, RecapCommit};
 pub use rewind::{
     FileAvailability, ImageRecord, ImageWrite, LatestTurn, NoticeRecord, ObservedWrite,
     OperationRecord, PathMutationWrite, PreparedTicket, RestorePath, RestorePlan, RewindCommit,

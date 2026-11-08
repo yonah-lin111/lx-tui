@@ -211,6 +211,7 @@ pub fn handle_rewind_finished(
                         target.lx.chat.reset_session_view();
                         target.lx.compact.reset();
                         target.lx.model_switch.reset();
+                        target.lx.recap.reset();
                         target.lx.clear_rewind();
                     }
                 }

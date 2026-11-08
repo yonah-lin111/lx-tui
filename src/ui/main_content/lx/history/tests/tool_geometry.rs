@@ -388,7 +388,12 @@ fn terminal_tool_states_keep_a_filled_marker_in_every_frame() {
 // ===== 连续同种文件调用合并成一张卡 =====
 
 /// 构造一个带差异正文的文件工具步骤（`name` 决定 `edit` / `write`）。
-fn file_step(position: i64, call_id: &str, name: &str, status: ToolStatus) -> AssistantStepView {
+pub(super) fn file_step(
+    position: i64,
+    call_id: &str,
+    name: &str,
+    status: ToolStatus,
+) -> AssistantStepView {
     use crate::app::state::{FileChangeView, FileDiffDetailView, FileDiffView};
     use crate::chat::tools::{DiffHunk, DiffLine, DiffLineKind, FileChangeKind, FileDiff};
 
@@ -496,7 +501,13 @@ fn consecutive_file_tools_are_separate_cards() {
     assert!(!text.contains("2 files"), "不再出现合并标题：{text}");
     let mut buf = Buffer::empty(area);
     crate::ui::main_content::lx::render_history_for_test(area, &mut buf, &lx, 0);
-    let blanks: Vec<usize> = (1..computed.total_rows - 1)
+    let tool_cards: Vec<_> = computed
+        .cards
+        .iter()
+        .filter(|card| matches!(card.kind, CardKind::Tool { .. }))
+        .collect();
+    let blanks: Vec<usize> = (usize::from(tool_cards[0].card.bottom())
+        ..usize::from(tool_cards[1].card.y))
         .filter(|row| {
             row_text(&buf, area, u16::try_from(*row).unwrap_or(u16::MAX))
                 .trim()

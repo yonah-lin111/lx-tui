@@ -156,10 +156,18 @@ fn card_content_is_the_toggle_target() {
     lx.chat.messages = vec![file_message("call-edit")];
     lx.chat.follow_bottom = true;
     let view = history_view(area, &lx, &mut PaneCache::default()).expect("历史区");
-    let cards =
+    let cards: Vec<_> =
         crate::ui::main_content::lx::history::layout(view.body, &lx, &mut PaneCache::default())
-            .cards;
-    assert_eq!(cards.len(), 1, "一张卡片");
+            .cards
+            .into_iter()
+            .filter(|card| {
+                matches!(
+                    card.kind,
+                    crate::ui::main_content::lx::history::CardKind::Tool { .. }
+                )
+            })
+            .collect();
+    assert_eq!(cards.len(), 1, "一张工具卡片");
     let card = &cards[0];
     // 整块可点：折叠态点预览行就能展开。
     let top_y = card

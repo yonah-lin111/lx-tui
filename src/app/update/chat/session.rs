@@ -45,6 +45,7 @@ pub fn new_session(state: &mut AppState, pane: PaneId) -> bool {
     target.lx.clear_agents();
     target.lx.compact.reset();
     target.lx.model_switch.reset();
+    target.lx.recap.reset();
     target.lx.clear_rewind();
     target.lx.text_paste_cancel();
     target.lx.clear_expanded_pastes();
@@ -201,9 +202,10 @@ pub fn on_session_loaded_full(
         }
     }
     target.lx.chat.session_id = Some(session_id.to_string());
-    // 切会话：先清空 compact 与 model_switch 状态（列表随后由加载回执回填）。
+    // 切会话：先清空 compact / model_switch / recap 状态（列表随后由加载回执回填）。
     target.lx.compact.reset();
     target.lx.model_switch.reset();
+    target.lx.recap.reset();
     target.lx.clear_rewind();
     target.lx.text_paste_cancel();
     target.lx.clear_expanded_pastes();
@@ -335,6 +337,7 @@ pub fn on_session_deleted(state: &mut AppState, pane: PaneId, session_id: &str) 
         target.lx.clear_agents();
         target.lx.compact.reset();
         target.lx.model_switch.reset();
+        target.lx.recap.reset();
         target.lx.clear_rewind();
         target.lx.ai_web_edit_user_index = None;
         target.lx.ai_web_edit_cloud_files.clear();

@@ -553,6 +553,8 @@ fn parse_ai_sanitizes_dangling_title_summary_and_unknown_language_on_load() {
     "enabled_providers": ["example"],
     "defaultModel": {{"provider": "example", "model": "example-chat"}},
     "titleSummary": {{"provider": "deleted-prov", "model": "missing"}},
+    "recapEnabled": false,
+    "recapSummary": {{"provider": "deleted-prov", "model": "missing"}},
     "titleLanguage": "unknown-locale",
     "providers": {{
       "example": {{
@@ -571,6 +573,9 @@ fn parse_ai_sanitizes_dangling_title_summary_and_unknown_language_on_load() {
     let settings = parse_ai(&json).expect("dangling titleSummary must not break ai.json load");
     assert!(settings.providers.contains_key("example"));
     assert!(settings.title_summary.is_none());
+    assert!(!settings.recap_enabled, "显式 false 必须保留");
+    assert!(settings.recap_summary.is_none(), "悬空 recap 选择被清理");
+    assert!(AiSettings::empty().recap_enabled, "默认开启自动 recap");
     assert_eq!(settings.title_language, None);
     assert_eq!(settings.effective_title_language(), TitleLanguage::Auto);
 }

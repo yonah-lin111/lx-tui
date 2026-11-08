@@ -322,6 +322,10 @@ where
     }
 }
 
+fn default_true() -> bool {
+    true
+}
+
 /// `ai.json` 的 `ai` 节点。
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct AiSettings {
@@ -344,6 +348,16 @@ pub struct AiSettings {
         skip_serializing_if = "Option::is_none"
     )]
     pub title_summary: Option<ModelSelection>,
+    /// 是否启用自动 recap（`recapEnabled`，缺省 true）。
+    #[serde(default = "default_true", rename = "recapEnabled")]
+    pub recap_enabled: bool,
+    /// Recap 生成模型选择（`recapSummary`；None 表示回退当前会话/默认模型）。
+    #[serde(
+        default,
+        rename = "recapSummary",
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub recap_summary: Option<ModelSelection>,
     /// 标题生成输出语言（`titleLanguage`，缺省按 `Auto` 自动跟随输入语言处理）。
     #[serde(
         default,
@@ -374,6 +388,8 @@ impl AiSettings {
             providers: BTreeMap::new(),
             default_model: None,
             title_summary: None,
+            recap_enabled: true,
+            recap_summary: None,
             title_language: None,
             stream_idle_timeout_ms: None,
             web_search: WebSearchConfig::default(),
@@ -407,6 +423,13 @@ impl AiSettings {
         sanitize_selection_slot_with_connect(
             "title model",
             &mut self.title_summary,
+            &self.providers,
+            &enabled,
+            connect,
+        );
+        sanitize_selection_slot_with_connect(
+            "recap model",
+            &mut self.recap_summary,
             &self.providers,
             &enabled,
             connect,
@@ -491,6 +514,15 @@ impl AiSettings {
         if let Some(selection) = &self.title_summary {
             validate_selection_with_connect(
                 "title model",
+                selection,
+                &self.providers,
+                &enabled,
+                connect,
+            )?;
+        }
+        if let Some(selection) = &self.recap_summary {
+            validate_selection_with_connect(
+                "recap model",
                 selection,
                 &self.providers,
                 &enabled,

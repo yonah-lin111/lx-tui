@@ -670,6 +670,7 @@ impl Persistence {
             | Effect::ExecuteCompact(_)
             | Effect::RevertCompact(_)
             | Effect::GenerateSessionTitle { .. }
+            | Effect::GenerateRecap { .. }
             | Effect::GeneratePromptBlockTitle { .. } => {
                 tracing::warn!("rewind/compact/title effect reached persistence pump");
                 false
@@ -912,6 +913,7 @@ fn is_network_effect(state: &AppState, effect: &Effect) -> bool {
             | Effect::ExecuteCompact(_)
             | Effect::RevertCompact(_)
             | Effect::GenerateSessionTitle { .. }
+            | Effect::GenerateRecap { .. }
             | Effect::GeneratePromptBlockTitle { .. }
             | Effect::BeginUserShell { .. }
             | Effect::CancelUserShells { .. }

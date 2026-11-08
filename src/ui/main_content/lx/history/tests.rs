@@ -25,6 +25,7 @@ mod model_switch;
 mod rewind;
 mod sticky;
 mod transcript;
+mod turn_tail;
 mod user_folding;
 
 /// 滚动性能回归（`#[ignore]`）。
@@ -458,16 +459,35 @@ fn completed_assistant_shows_turn_stats_line() {
     completed.output_tokens = Some(307);
     completed.cache_read_tokens = Some(2_048);
     completed.duration_ms = Some(2_655);
-    let line = stats_line(&completed).expect("统计行");
+    let line = stats_line(&completed, 120).expect("统计行");
     assert!(line.starts_with("deepseek-v4.1-flash"), "{line}");
     assert!(line.contains("2.9k in"), "{line}");
     assert!(line.contains("307 out"), "{line}");
-    assert!(
-        line.contains("70% cached"),
-        "缓存命中 = cached/prompt：{line}"
-    );
+    assert!(!line.contains("cached"), "缓存命中率已移到状态行：{line}");
     assert!(line.contains("115.6 tok/s"), "tok/s = 输出 / 耗时：{line}");
     assert!(line.ends_with("2.7s"), "总耗时：{line}");
+}
+
+#[test]
+fn stats_line_degrades_to_one_line() {
+    let mut completed = message("assistant", "complete", vec![text_part("正文")]);
+    completed.model_label = Some("deepseek-v4.1-flash".into());
+    completed.input_tokens = Some(2_916);
+    completed.output_tokens = Some(307);
+    completed.duration_ms = Some(2_655);
+    let full = stats_line(&completed, 120).expect("full");
+    assert!(full.contains("2.9k in"), "{full}");
+    let medium = stats_line(&completed, 45).expect("medium");
+    assert!(!medium.contains(" in"), "先丢输入：{medium}");
+    assert!(!medium.contains(" out"), "输入输出成对隐藏：{medium}");
+    assert!(medium.contains("deepseek"), "模型名保留：{medium}");
+    assert!(medium.contains("tok/s"), "速度保留：{medium}");
+    let narrow = stats_line(&completed, 10).expect("narrow");
+    assert!(!narrow.contains("deepseek"), "再丢模型名：{narrow}");
+    assert!(
+        narrow.ends_with('s') || narrow.contains('…'),
+        "只保时长：{narrow}"
+    );
 }
 
 #[test]
@@ -734,10 +754,10 @@ fn streaming_assistant_has_no_stats_line() {
     streaming.input_tokens = Some(10);
     streaming.output_tokens = Some(2);
     streaming.duration_ms = Some(100);
-    assert_eq!(stats_line(&streaming), None, "流中不出统计行");
+    assert_eq!(stats_line(&streaming, 120), None, "流中不出统计行");
     // 无任何可用数据（如失败且未返回 usage）时也不出。
     let empty = message("assistant", "failed", vec![text_part("")]);
-    assert_eq!(stats_line(&empty), None);
+    assert_eq!(stats_line(&empty, 120), None);
 }
 
 #[test]

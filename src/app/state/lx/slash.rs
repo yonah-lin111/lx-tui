@@ -87,6 +87,8 @@ pub enum SlashCommand {
     Rewind,
     /// `/compact`：把增量历史压缩成可撤销的检查点。
     Compact,
+    /// `/recap`：生成最近对话的接续回顾。
+    Recap,
     /// `/subagents`（别名 `/agents`）：打开后台子 agent 面板。
     Subagents,
     /// `/rename`（别名 `/title`）：重命名当前会话。
@@ -99,13 +101,14 @@ pub enum SlashCommand {
 
 impl SlashCommand {
     /// 全部命令（固定顺序）。
-    pub const ALL: [SlashCommand; 10] = [
+    pub const ALL: [SlashCommand; 11] = [
         SlashCommand::Model,
         SlashCommand::Resume,
         SlashCommand::Fork,
         SlashCommand::New,
         SlashCommand::Rewind,
         SlashCommand::Compact,
+        SlashCommand::Recap,
         SlashCommand::Subagents,
         SlashCommand::Rename,
         SlashCommand::Connect,
@@ -121,6 +124,7 @@ impl SlashCommand {
             Self::New => "new",
             Self::Rewind => "rewind",
             Self::Compact => "compact",
+            Self::Recap => "recap",
             Self::Subagents => "subagents",
             Self::Rename => "rename",
             Self::Connect => "connect",
@@ -137,6 +141,7 @@ impl SlashCommand {
             Self::New => &["clear"],
             Self::Rewind => &["undo"],
             Self::Compact => &["summarize"],
+            Self::Recap => &[],
             Self::Subagents => &["agents"],
             Self::Rename => &["title"],
             Self::Connect => &[],
@@ -153,6 +158,7 @@ impl SlashCommand {
             Self::New => "/new",
             Self::Rewind => "/rewind",
             Self::Compact => "/compact",
+            Self::Recap => "/recap",
             Self::Subagents => "/subagents",
             Self::Rename => "/rename",
             Self::Connect => "/connect",
@@ -169,6 +175,7 @@ impl SlashCommand {
             Self::New => "Start a fresh blank session",
             Self::Rewind => "Undo the latest turn (files and conversation)",
             Self::Compact => crate::ui::text::LX_COMPACT_COMMAND_DESC,
+            Self::Recap => crate::ui::text::LX_RECAP_COMMAND_DESC,
             Self::Subagents => "Open background subagents panel",
             Self::Rename => crate::ui::text::LX_RENAME_COMMAND_DESC,
             Self::Connect => crate::ui::text::LX_CONNECT_COMMAND_DESC,

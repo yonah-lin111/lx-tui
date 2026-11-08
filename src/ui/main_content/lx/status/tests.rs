@@ -24,6 +24,7 @@ fn status(
         variant: None,
         context_limit: context,
         input_tokens: input,
+        cache_hit_percent: None,
         streaming,
         omitted_turns: None,
         blocked_subagents: 0,
@@ -508,4 +509,26 @@ fn narrow_drops_context_before_variant() {
     let lay = layout(inner, &lx.chat.status, lx.background_tasks, 0);
     assert_eq!(lay.variant.width, 0, "更窄时丢弃思考等级");
     assert!(lay.label.width > 0, "模型名仍在");
+}
+
+#[test]
+fn cache_hit_renders_after_context_and_drops_first() {
+    let mut st = status(Some("M"), Some("P"), Some(1_000), Some(500), false);
+    st.variant = Some("high".into());
+    st.cache_hit_percent = Some(70);
+    assert_eq!(cache_text_for_test(&st).as_deref(), Some("70% cached"));
+    let lx = lx_with_status(st);
+    let line = render_border(&lx, 80);
+    assert!(line.contains("500(50%)"), "上下文占用仍在：{line}");
+    assert!(
+        line.contains("70% cached"),
+        "缓存命中率跟在上下文右侧：{line}"
+    );
+
+    // 宽度不足时 cached 最先丢，上下文与 variant 保留。
+    let inner = Rect::new(0, 0, 21, 3);
+    let lay = layout(inner, &lx.chat.status, lx.background_tasks, 0);
+    assert_eq!(lay.cache.width, 0, "cached 先被丢弃");
+    assert!(lay.context.width > 0, "上下文保留");
+    assert!(lay.variant.width > 0, "variant 保留");
 }

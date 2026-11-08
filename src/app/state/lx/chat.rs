@@ -46,6 +46,11 @@ impl ModelsSnapshot {
         self.validated_selection(self.settings.title_summary.as_ref())
     }
 
+    /// 是否存在可发送的有效 recap 模型（provider 启用、模型存在、有 Key）。
+    pub fn recap_selection(&self) -> Option<ModelSelection> {
+        self.validated_selection(self.settings.recap_summary.as_ref())
+    }
+
     fn validated_selection(&self, selection: Option<&ModelSelection>) -> Option<ModelSelection> {
         let selection = selection?;
         let provider = self.settings.providers.get(&selection.provider)?;
@@ -92,6 +97,28 @@ impl ModelsSnapshot {
         fallback_selection: Option<&ModelSelection>,
     ) -> Option<FrozenModel> {
         if let Some(selection) = self.title_selection() {
+            let normalized = self.normalize_selection(selection);
+            if let Some(frozen) = FrozenModel::resolve(self, &normalized) {
+                return Some(frozen);
+            }
+        }
+        if let Some(selection) = self.validated_selection(fallback_selection) {
+            let normalized = self.normalize_selection(selection);
+            if let Some(frozen) = FrozenModel::resolve(self, &normalized) {
+                return Some(frozen);
+            }
+        }
+        let selection = self.default_selection()?;
+        let normalized = self.normalize_selection(selection);
+        FrozenModel::resolve(self, &normalized)
+    }
+
+    /// 为 recap 解析有效模型：优先 `recapSummary`，回退会话当前生效选择，再回退 `defaultModel`。
+    pub fn resolve_recap_model(
+        &self,
+        fallback_selection: Option<&ModelSelection>,
+    ) -> Option<FrozenModel> {
+        if let Some(selection) = self.recap_selection() {
             let normalized = self.normalize_selection(selection);
             if let Some(frozen) = FrozenModel::resolve(self, &normalized) {
                 return Some(frozen);
@@ -323,6 +350,8 @@ pub struct ChatStatus {
     pub context_limit: Option<u64>,
     /// 上下文占用分子：最近一次同模型请求的输入 + 输出 token（未知为 None）。
     pub input_tokens: Option<u64>,
+    /// 整个对话累计缓存命中率（Σcache_read / Σinput，0..=100）；无数据为 None。
+    pub cache_hit_percent: Option<u64>,
     /// 是否正在生成（决定 loading 行与 Esc 停止待命是否生效）。
     pub streaming: bool,
     /// 上下文裁剪省略提示（一次性）。
@@ -384,6 +413,10 @@ pub enum CardTarget {
     Compact { checkpoint_id: String },
     /// 模型切换提示条目（按切换记录 ID 定位；默认折叠）。
     ModelSwitch { switch_id: String },
+    /// 消息尾部文件变更行/折叠提示（按消息 ID + 槽位定位）。
+    FileChange { message_id: String, slot: String },
+    /// 消息尾部 recap 系统事件卡（按消息 ID 定位）。
+    Recap { message_id: String },
     /// 子 agent 汇报块（按消息 ID + agent ID 定位；槽位 `report:<agent_id>`）。
     Report {
         message_id: String,

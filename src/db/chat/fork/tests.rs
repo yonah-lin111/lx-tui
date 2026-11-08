@@ -8,7 +8,8 @@ use rusqlite::params;
 
 use super::*;
 use crate::db::chat::{
-    ChatPart, CompactCommit, ModelSnapshot, ModelSwitchCommit, TurnCommitted, TurnOutcome, Usage,
+    ChatPart, CompactCommit, ModelSnapshot, ModelSwitchCommit, RecapCommit, TurnCommitted,
+    TurnOutcome, Usage,
 };
 
 fn temp_paths(label: &str) -> (PathBuf, PathBuf) {
@@ -545,6 +546,53 @@ fn fork_copies_attachments() {
     assert_eq!(
         messages[0].attachments[0].source_path.as_deref(),
         Some("/tmp/a.txt")
+    );
+}
+
+#[test]
+fn fork_copies_recaps_with_remapped_message_ids() {
+    let (database, workspace) = database("recaps");
+    let committed = complete_turn(
+        &database,
+        &workspace,
+        None,
+        "question",
+        "answer",
+        Usage::default(),
+    );
+    database
+        .commit_recap(
+            &workspace,
+            &RecapCommit {
+                session_id: committed.session_id.clone(),
+                message_id: committed.assistant_message_id.clone(),
+                summary: "summary".into(),
+                next_action: "next".into(),
+                model: model(),
+                model_label: "Model".into(),
+                end_turn: 0,
+                end_sequence: committed.assistant_sequence,
+            },
+        )
+        .expect("recap");
+    let forked = database
+        .fork_chat_session(&workspace, &committed.session_id, None)
+        .expect("fork");
+    let recaps = database
+        .load_recaps(&workspace, &forked.session_id)
+        .expect("load recaps");
+    assert_eq!(recaps.len(), 1);
+    assert_ne!(recaps[0].message_id, committed.assistant_message_id);
+    assert_eq!(recaps[0].summary, "summary");
+    let messages = database
+        .load_chat_session(&workspace, &forked.session_id)
+        .expect("load")
+        .expect("exists");
+    assert!(
+        messages
+            .iter()
+            .any(|message| message.external_id == recaps[0].message_id),
+        "recap 必须挂到 fork 后的新 assistant 消息"
     );
 }
 
