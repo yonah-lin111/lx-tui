@@ -68,11 +68,16 @@ async function main() {
             ? 0
             : 'existingResponses.length'
       };
+      const initialMr = ${EDIT_INDEX >= 0 ? 'existingResponses[targetIndex]' : 'null'};
       window.__lxGeminiStream = {
         runId: ${JSON.stringify(runId)},
         queue: [],
         done: false,
         started: false,
+        isEdit: ${EDIT_INDEX >= 0 ? 'true' : 'false'},
+        editResetSeen: false,
+        initialThinkText: '',
+        initialTargetText: '',
         targetIndex,
         domThink: '',
         domText: '',
@@ -197,7 +202,7 @@ async function main() {
         },
         pollDom() {
           const responses = Array.from(document.querySelectorAll('model-response'));
-          const mr = responses[this.targetIndex] || responses[responses.length - 1];
+          const mr = responses[this.targetIndex];
           const stopBtn = document.querySelector(
             'button[aria-label*="停止"], button[aria-label*="Stop"], button.stop-button, .blue-circle.stop-icon'
           );
@@ -205,10 +210,35 @@ async function main() {
             ? Boolean(mr.querySelector('[aria-busy="true"]'))
             : false;
           const isGenerating = Boolean(stopBtn) || announcerBusy;
+          if (this.isEdit && !this.editResetSeen) {
+            if (!mr) {
+              this.editResetSeen = true;
+              return;
+            }
+            const curThink = this.extractCleanText(
+              mr,
+              'model-thoughts .thoughts-content, model-thoughts, thinking-overlay .thoughts-content, thinking-overlay',
+              'button, mat-icon, .cdk-visually-hidden'
+            );
+            const curBody = this.extractCleanText(
+              mr,
+              'message-content .markdown, message-content',
+              '.cdk-visually-hidden, source-footnote, sources-carousel-inline, sources-list, button, mat-icon'
+            );
+            if (
+              announcerBusy ||
+              curBody !== this.initialTargetText ||
+              curThink !== this.initialThinkText
+            ) {
+              this.editResetSeen = true;
+            } else {
+              return;
+            }
+          }
           if (isGenerating) {
             this.started = true;
           }
-          if (!mr || responses.length <= this.targetIndex && ${EDIT_INDEX < 0 ? 'true' : 'false'}) {
+          if (!mr) {
             return;
           }
           const thinkText = this.extractCleanText(
@@ -242,67 +272,139 @@ async function main() {
           }
         },
       };
+      if (initialMr) {
+        window.__lxGeminiStream.initialThinkText = window.__lxGeminiStream.extractCleanText(
+          initialMr,
+          'model-thoughts .thoughts-content, model-thoughts, thinking-overlay .thoughts-content, thinking-overlay',
+          'button, mat-icon, .cdk-visually-hidden'
+        );
+        window.__lxGeminiStream.initialTargetText = window.__lxGeminiStream.extractCleanText(
+          initialMr,
+          'message-content .markdown, message-content',
+          '.cdk-visually-hidden, source-footnote, sources-carousel-inline, sources-list, button, mat-icon'
+        );
+      }
       return true;
     })()
   `);
 
   // Submit either via inline edit (/rewind) or normal composer input.
   await ensureTaskSpaceControl();
+  let submittedViaEdit = false;
   if (EDIT_INDEX >= 0) {
-    const editClicked = await js(`
+    const editCheck = await js(`
       (() => {
         const queries = Array.from(document.querySelectorAll('user-query'));
         const target = queries[${EDIT_INDEX}];
-        if (!target) return false;
+        if (!target) return { status: 'missing_turn' };
+        const existingFiles = target.querySelectorAll(
+          '.file-preview-container button, .file-preview-container a, gem-media-attachment, gem-attachment'
+        ).length;
+        const wantedFiles = ${FILES.length + KEEP_FILES.length};
+        if (${EDIT_INDEX === 0 ? 'true' : 'false'} && existingFiles !== wantedFiles) {
+          return { status: 'attachments_changed_turn0' };
+        }
         target.scrollIntoView({ block: 'center' });
         const editBtn = target.querySelector(
           'button[aria-label="修改"], button[aria-label*="修改"], button[aria-label*="Edit"]'
         );
-        if (!editBtn) return false;
+        if (!editBtn) return { status: 'no_button' };
         editBtn.click();
-        return true;
+        return { status: 'clicked' };
       })()
-    `).catch(() => false);
-    if (!editClicked) {
+    `).catch(() => ({ status: 'error' }));
+
+    if (editCheck && editCheck.status === 'clicked') {
+      await new Promise((r) => setTimeout(r, 350));
+      const filledEdit = await js(`
+        (() => {
+          const queries = Array.from(document.querySelectorAll('user-query'));
+          const target = queries[${EDIT_INDEX}] || document;
+          const desired = ${JSON.stringify(PROMPT)};
+          const editable = target.querySelector('.ql-editor[contenteditable="true"], [contenteditable="true"]');
+          if (editable) {
+            const currentText = (editable.innerText || '').replace(/\\u200b/g, '').trim();
+            const nextText = currentText === desired.trim() ? desired + '\\u200b' : desired;
+            editable.focus();
+            document.execCommand('selectAll', false, null);
+            document.execCommand('insertText', false, nextText);
+            editable.dispatchEvent(new Event('input', { bubbles: true }));
+            return true;
+          }
+          const textarea = target.querySelector('textarea') || document.querySelector('user-query textarea');
+          if (textarea) {
+            const currentText = (textarea.value || '').replace(/\\u200b/g, '').trim();
+            const nextText = currentText === desired.trim() ? desired + '\\u200b' : desired;
+            textarea.focus();
+            const setter = Object.getOwnPropertyDescriptor(window.HTMLTextAreaElement.prototype, 'value')?.set;
+            if (setter) setter.call(textarea, nextText);
+            else textarea.value = nextText;
+            textarea.dispatchEvent(new Event('input', { bubbles: true }));
+            return true;
+          }
+          return false;
+        })()
+      `).catch(() => false);
+
+      if (filledEdit) {
+        const updateDeadline = Date.now() + 4000;
+        while (Date.now() < updateDeadline) {
+          await new Promise((r) => setTimeout(r, 150));
+          const clickedUpdate = await js(`
+            (() => {
+              const queries = Array.from(document.querySelectorAll('user-query'));
+              const target = queries[${EDIT_INDEX}] || document;
+              const buttons = Array.from(target.querySelectorAll('button'));
+              const submitBtn = buttons.find((b) => {
+                const t = (b.innerText || b.getAttribute('aria-label') || '').trim().toLowerCase();
+                return t === '更新' || t === 'update' || t.includes('更新') || t.includes('update');
+              });
+              if (!submitBtn || submitBtn.disabled || submitBtn.getAttribute('aria-disabled') === 'true') {
+                return false;
+              }
+              submitBtn.click();
+              return true;
+            })()
+          `).catch(() => false);
+          if (clickedUpdate) {
+            submittedViaEdit = true;
+            break;
+          }
+        }
+      }
+      if (!submittedViaEdit) {
+        await emit({ event: 'error', message: 'Failed to submit edited Gemini prompt' });
+        return;
+      }
+    } else if (editCheck && editCheck.status === 'attachments_changed_turn0') {
+      await ensureFreshChat();
+      await js(`
+        (() => {
+          if (window.__lxGeminiStream) {
+            window.__lxGeminiStream.isEdit = false;
+            window.__lxGeminiStream.targetIndex = 0;
+          }
+        })()
+      `).catch(() => {});
+    } else if (editCheck && editCheck.status === 'missing_turn') {
+      if (EDIT_INDEX === 0) {
+        await ensureFreshChat();
+      }
+      await js(`
+        (() => {
+          if (window.__lxGeminiStream) {
+            const existing = document.querySelectorAll('model-response').length;
+            window.__lxGeminiStream.isEdit = false;
+            window.__lxGeminiStream.targetIndex = ${EDIT_INDEX === 0 ? 0 : 'existing'};
+          }
+        })()
+      `).catch(() => {});
+    } else {
       await emit({ event: 'error', message: 'Gemini edit button not found for /rewind' });
       return;
     }
-    await new Promise((r) => setTimeout(r, 300));
-    await syncContainerAttachments(true);
-    const updated = await js(`
-      (() => {
-        const queries = Array.from(document.querySelectorAll('user-query'));
-        const target = queries[${EDIT_INDEX}] || document;
-        const textarea = target.querySelector('textarea') || document.querySelector('user-query textarea');
-        if (textarea) {
-          textarea.focus();
-          const setter = Object.getOwnPropertyDescriptor(window.HTMLTextAreaElement.prototype, 'value')?.set;
-          if (setter) setter.call(textarea, ${JSON.stringify(PROMPT)});
-          else textarea.value = ${JSON.stringify(PROMPT)};
-          textarea.dispatchEvent(new Event('input', { bubbles: true }));
-        } else {
-          const editable = target.querySelector('[contenteditable="true"]');
-          if (!editable) return false;
-          editable.focus();
-          document.execCommand('selectAll', false, null);
-          document.execCommand('insertText', false, ${JSON.stringify(PROMPT)});
-          editable.dispatchEvent(new Event('input', { bubbles: true }));
-        }
-        const buttons = Array.from(target.querySelectorAll('button'));
-        const submitBtn = buttons.find((b) => {
-          const t = (b.innerText || b.getAttribute('aria-label') || '').trim().toLowerCase();
-          return t === '更新' || t === 'update' || t.includes('更新') || t.includes('update');
-        });
-        if (!submitBtn) return false;
-        submitBtn.click();
-        return true;
-      })()
-    `).catch(() => false);
-    if (!updated) {
-      await emit({ event: 'error', message: 'Failed to submit edited Gemini prompt' });
-      return;
-    }
-  } else {
+  }
+  if (!submittedViaEdit) {
     await syncContainerAttachments(false);
     const filled = await js(`
       (() => {
