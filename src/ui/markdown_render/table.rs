@@ -7,10 +7,80 @@ use std::sync::Arc;
 
 use ratatui::style::Style;
 
-use super::{
-    MdLine, TableCellSlice, TableColumnSpan, TableLayoutMeta, TableLineKind, TableLineRef,
-    TableLogicalRow, char_width, display_width, inline_spans, style,
-};
+use super::{MdLine, char_width, display_width, inline_spans, style};
+
+/// 表格单列的水平区间（列偏移均相对表格左边框 `x = 0`）。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct TableColumnSpan {
+    /// 单元格内框起始列（左 `│` 右侧第 1 列，含左 1 格留白）。
+    pub box_start: u16,
+    /// 单元格内框结束列（开区间，右 `│` 所在列，含右 1 格留白）。
+    pub box_end: u16,
+    /// 单元格内容槽起始列（扣除左 1 格留白）。
+    pub content_start: u16,
+    /// 单元格内容槽结束列（开区间，扣除右 1 格留白）。
+    pub content_end: u16,
+}
+
+/// 单个单元格在某条物理行上的真实文本切片（列偏移均相对表格左边框 `x = 0`）。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct TableCellSlice {
+    /// 真实文本起始列（扣除居中/右对齐的前导填充空格）。
+    pub text_start: u16,
+    /// 真实文本结束列（开区间，扣除左对齐/居中的尾随填充空格）。
+    pub text_end: u16,
+    /// 当前物理行结束后是否为显式 `<br>` 硬换行（`false` 表示自动软折行或本单元格末行）。
+    pub hard_break: bool,
+    /// 当前物理行是否为同逻辑行其它列撑高产生的空白填充行。
+    pub is_filler: bool,
+}
+
+/// 表格单个逻辑行（`0` 为表头，`1..` 为数据行）在表格内的物理行偏移区间。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct TableLogicalRow {
+    /// 该逻辑行首条物理行在表格内的行偏移（相对顶边框 `0`）。
+    pub first_line: usize,
+    /// 该逻辑行末条物理行在表格内的行偏移（闭区间）。
+    pub last_line: usize,
+}
+
+/// 表格单条物理行的结构类型。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum TableLineKind {
+    /// 水平边框行（`┌─┬─┐`、`├─┼─┤`、`└─┴─┘`）；`nearest_row` 为紧邻的逻辑行下标。
+    Border { nearest_row: usize },
+    /// 表头或数据单元格行。
+    Cells {
+        /// 逻辑行下标（`0` 为表头，`1..` 为数据行）。
+        row_idx: usize,
+        /// 该逻辑行内的物理行偏移（`0..height`）。
+        line_in_row: usize,
+        /// 本条物理行上各列的文本切片（与 `columns` 等长）。
+        cells: Vec<TableCellSlice>,
+    },
+}
+
+/// 整张 Markdown 表格的排版与几何元数据（同一张表的所有物理行共享同一个 `Arc`）。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct TableLayoutMeta {
+    /// 表格总显示列宽（含首尾 `│`）。
+    pub total_width: u16,
+    /// 各列水平区间（长度等于列数）。
+    pub columns: Vec<TableColumnSpan>,
+    /// 各逻辑行的物理行起止偏移（下标即 `row_idx`）。
+    pub logical_rows: Vec<TableLogicalRow>,
+    /// 表格内每条物理行的类型与单元格切片（下标即 `line_offset`）。
+    pub lines: Vec<TableLineKind>,
+}
+
+/// 附加在 [`MdLine`] 上的表格行引用。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct TableLineRef {
+    /// 所属表格的完整几何元数据。
+    pub table: Arc<TableLayoutMeta>,
+    /// 当前物理行在表格内的行偏移（`0..table.lines.len()`）。
+    pub line_offset: usize,
+}
 
 /// 表格：表头 + 对齐行 + 数据行，用方框网格。
 ///

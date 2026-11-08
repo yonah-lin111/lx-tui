@@ -21,8 +21,8 @@ use super::super::overlay::{
 use super::super::paste;
 use super::super::session::{Geometry, ensure_workspace_visible, reveal_active_tab, write_to_pane};
 use super::hit::{
-    apply_block_button, apply_template_button, block_button_at, dismiss_lx_toast_outside,
-    handle_agent_scrollbar_press, handle_lx_history_scrollbar_press,
+    apply_block_button, apply_lx_chat_hit, apply_template_button, block_button_at,
+    dismiss_lx_toast_outside, handle_agent_scrollbar_press, handle_lx_history_scrollbar_press,
     handle_lx_input_scrollbar_press, handle_prompt_recent_scrollbar_press,
     handle_prompt_scrollbar_press, handle_sidebar_press, handle_task_agents_scrollbar_press,
     handle_terminal_scrollbar_press, handle_todo_scrollbar_press, handle_workspace_scrollbar_press,
@@ -806,24 +806,7 @@ pub(crate) fn handle_mouse_down_left(
                     )
                 });
                 if let Some(hit) = chat_hit {
-                    match hit {
-                        ui::main_content::lx::LxChatHit::PromptHeader => {
-                            let target = state.pane_anywhere(pane).and_then(|target| {
-                                ui::main_content::lx::sticky_prompt_jump(
-                                    inner,
-                                    &target.lx,
-                                    cache.pane(pane),
-                                )
-                            });
-                            if let Some(row) = target {
-                                update::jump_lx_history_to_prompt(state, pane, row);
-                            }
-                        }
-                        ui::main_content::lx::LxChatHit::JumpBottom => {
-                            update::jump_lx_history_bottom(state, pane);
-                        }
-                    }
-                    update::clear_lx_selection(state);
+                    apply_lx_chat_hit(state, pane, inner, hit, cache);
                     *dirty = true;
                     return;
                 }

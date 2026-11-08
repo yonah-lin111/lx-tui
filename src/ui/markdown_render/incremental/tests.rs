@@ -1,6 +1,6 @@
 //! 增量 Markdown 与全量渲染的逐行等价性回归。
 
-use crate::ui::markdown_render::{IncrementalMarkdownState, MdLine, render_wrapped};
+use crate::ui::markdown_render::{IncrementalMarkdownState, MdLine, render_wrapped_code_blocks};
 
 /// 逐步喂入每个字节边界，断言 `prefix + tail` 始终等于全量渲染。
 fn assert_equivalent(source: &str, width: u16) {
@@ -14,7 +14,7 @@ fn assert_equivalent(source: &str, width: u16) {
         got.extend(tail);
         assert_eq!(
             got,
-            render_wrapped(piece, width),
+            render_wrapped_code_blocks(piece, width),
             "width={width} 前缀在第 {end} 字节处与全量渲染不一致"
         );
     }
@@ -100,7 +100,7 @@ fn rewritten_source_resets_the_prefix() {
     let (prefix, _, tail) = state.update("完全不同的内容\n", 30);
     let mut got = (*prefix).clone();
     got.extend(tail);
-    assert_eq!(got, render_wrapped("完全不同的内容\n", 30));
+    assert_eq!(got, render_wrapped_code_blocks("完全不同的内容\n", 30));
 }
 
 /// 宽度变化必须全量重排（折行依赖宽度）。
@@ -112,7 +112,7 @@ fn width_change_reflows_everything() {
     let (prefix, _, tail) = state.update(source, 20);
     let mut got = (*prefix).clone();
     got.extend(tail);
-    assert_eq!(got, render_wrapped(source, 20));
+    assert_eq!(got, render_wrapped_code_blocks(source, 20));
 }
 
 /// 确定性伪随机块序列：覆盖标题/列表/引用/围栏/表格/缩进代码/空行的交错组合。
@@ -161,7 +161,7 @@ fn randomized_block_sequences_match_full_render() {
             got.extend(tail);
             assert_eq!(
                 got,
-                render_wrapped(piece, width),
+                render_wrapped_code_blocks(piece, width),
                 "随机块序列 case={case} width={width} 前缀在第 {end} 字节处不一致"
             );
             checked += 1;

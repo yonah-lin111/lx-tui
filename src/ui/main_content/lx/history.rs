@@ -50,6 +50,7 @@ pub(crate) mod user_shell;
 pub(crate) use cache::{PaneCache, RenderCache};
 #[cfg(test)]
 pub(crate) use layout::layout;
+pub(super) use paint::{BlockPaint, BlockSource};
 pub(crate) use render::{render, render_source};
 
 pub use timeline::has_history;

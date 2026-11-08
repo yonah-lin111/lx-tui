@@ -500,16 +500,30 @@ pub fn copy_text(
                     }
                 }
             }
+            let code_row = grid.code_row_at(y);
+            if matches!(code_row, Some(super::grid::GridCodeRow::Chrome)) {
+                row = row.saturating_add(1);
+                continue;
+            }
             if let Some((raw_col0, raw_col1)) = row_col_bounds(row, start, end, geom.rect.width) {
-                let (col0, col1) = table::align_wide_char_cols(&grid, y, raw_col0, raw_col1);
-                let mut line = String::new();
-                for col in col0..=col1 {
-                    let ch = grid.cell(col, y).ch;
-                    if ch != CONTINUATION {
-                        line.push(ch);
+                let min_col = match code_row {
+                    Some(super::grid::GridCodeRow::Body { bar_col }) => bar_col.saturating_add(1),
+                    _ => 0,
+                };
+                let eff_col0 = raw_col0.max(min_col);
+                if eff_col0 <= raw_col1 {
+                    let (col0, col1) = table::align_wide_char_cols(&grid, y, eff_col0, raw_col1);
+                    let mut line = String::new();
+                    for col in col0.max(min_col)..=col1 {
+                        let ch = grid.cell(col, y).ch;
+                        if ch != CONTINUATION {
+                            line.push(ch);
+                        }
                     }
+                    lines.push(line.trim_end().to_string());
+                } else if matches!(code_row, Some(super::grid::GridCodeRow::Body { .. })) {
+                    lines.push(String::new());
                 }
-                lines.push(line.trim_end().to_string());
             }
             row = row.saturating_add(1);
         }

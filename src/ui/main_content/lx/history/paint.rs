@@ -484,6 +484,20 @@ fn draw_markdown(
         if let Some(ref line_ref) = line.table {
             grid.set_table_row(cx, y, line_ref.clone());
         }
+        if let Some(code_kind) = line.code {
+            let code_row = match code_kind {
+                crate::ui::markdown_render::CodeLineKind::TopBorder
+                | crate::ui::markdown_render::CodeLineKind::Header { .. } => {
+                    super::super::grid::GridCodeRow::Chrome
+                }
+                crate::ui::markdown_render::CodeLineKind::Body => {
+                    super::super::grid::GridCodeRow::Body {
+                        bar_col: cx.saturating_sub(grid.area().x),
+                    }
+                }
+            };
+            grid.set_code_row(y, code_row);
+        }
         for (value, span_style) in &line.spans {
             for ch in value.chars() {
                 let cell = ch.width().unwrap_or(1).max(1) as u16;

@@ -61,7 +61,7 @@ impl IncrementalMarkdownState {
                 .strip_suffix('\n')
                 .unwrap_or(&rest[..boundary]);
             let produced =
-                render_blocks_stateful(committed, Some(wrap_width), true, &mut self.parser);
+                render_blocks_stateful(committed, Some(wrap_width), true, true, &mut self.parser);
             let mut wrapped = Vec::new();
             for line in &produced {
                 wrap_md_line(line, wrap_width, &mut wrapped);
@@ -76,6 +76,7 @@ impl IncrementalMarkdownState {
         let produced = render_blocks_stateful(
             &source[self.committed_bytes..],
             Some(wrap_width),
+            true,
             true,
             &mut parser,
         );

@@ -12,93 +12,23 @@
 //! 代码块做轻量语法高亮；表格用方框网格；任务列表复用 claude 一组复选框
 //! （`[x]`/`[ ]`）。
 
-use std::sync::Arc;
-
 use ratatui::style::Style;
 
 use crate::ui::style;
 
+mod code_block;
 mod highlight;
 mod incremental;
 mod table;
 
+pub use code_block::{CodeLineKind, DEFAULT_CODE_LANG, extract_code_block};
 /// 轻量词法高亮一行代码（文件差异卡片复用同一套分色，避免第二份实现）。
 pub(crate) use highlight::highlight_line;
 /// 流式 Markdown 增量渲染状态（稳定前缀 + 活跃尾部）。
 pub(crate) use incremental::IncrementalMarkdownState;
-
-/// 表格单列的水平区间（列偏移均相对表格左边框 `x = 0`）。
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct TableColumnSpan {
-    /// 单元格内框起始列（左 `│` 右侧第 1 列，含左 1 格留白）。
-    pub box_start: u16,
-    /// 单元格内框结束列（开区间，右 `│` 所在列，含右 1 格留白）。
-    pub box_end: u16,
-    /// 单元格内容槽起始列（扣除左 1 格留白）。
-    pub content_start: u16,
-    /// 单元格内容槽结束列（开区间，扣除右 1 格留白）。
-    pub content_end: u16,
-}
-
-/// 单个单元格在某条物理行上的真实文本切片（列偏移均相对表格左边框 `x = 0`）。
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct TableCellSlice {
-    /// 真实文本起始列（扣除居中/右对齐的前导填充空格）。
-    pub text_start: u16,
-    /// 真实文本结束列（开区间，扣除左对齐/居中的尾随填充空格）。
-    pub text_end: u16,
-    /// 当前物理行结束后是否为显式 `<br>` 硬换行（`false` 表示自动软折行或本单元格末行）。
-    pub hard_break: bool,
-    /// 当前物理行是否为同逻辑行其它列撑高产生的空白填充行。
-    pub is_filler: bool,
-}
-
-/// 表格单个逻辑行（`0` 为表头，`1..` 为数据行）在表格内的物理行偏移区间。
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct TableLogicalRow {
-    /// 该逻辑行首条物理行在表格内的行偏移（相对顶边框 `0`）。
-    pub first_line: usize,
-    /// 该逻辑行末条物理行在表格内的行偏移（闭区间）。
-    pub last_line: usize,
-}
-
-/// 表格单条物理行的结构类型。
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub enum TableLineKind {
-    /// 水平边框行（`┌─┬─┐`、`├─┼─┤`、`└─┴─┘`）；`nearest_row` 为紧邻的逻辑行下标。
-    Border { nearest_row: usize },
-    /// 表头或数据单元格行。
-    Cells {
-        /// 逻辑行下标（`0` 为表头，`1..` 为数据行）。
-        row_idx: usize,
-        /// 该逻辑行内的物理行偏移（`0..height`）。
-        line_in_row: usize,
-        /// 本条物理行上各列的文本切片（与 `columns` 等长）。
-        cells: Vec<TableCellSlice>,
-    },
-}
-
-/// 整张 Markdown 表格的排版与几何元数据（同一张表的所有物理行共享同一个 `Arc`）。
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct TableLayoutMeta {
-    /// 表格总显示列宽（含首尾 `│`）。
-    pub total_width: u16,
-    /// 各列水平区间（长度等于列数）。
-    pub columns: Vec<TableColumnSpan>,
-    /// 各逻辑行的物理行起止偏移（下标即 `row_idx`）。
-    pub logical_rows: Vec<TableLogicalRow>,
-    /// 表格内每条物理行的类型与单元格切片（下标即 `line_offset`）。
-    pub lines: Vec<TableLineKind>,
-}
-
-/// 附加在 [`MdLine`] 上的表格行引用。
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct TableLineRef {
-    /// 所属表格的完整几何元数据。
-    pub table: Arc<TableLayoutMeta>,
-    /// 当前物理行在表格内的行偏移（`0..table.lines.len()`）。
-    pub line_offset: usize,
-}
+pub use table::{
+    TableCellSlice, TableColumnSpan, TableLayoutMeta, TableLineKind, TableLineRef, TableLogicalRow,
+};
 
 /// 渲染出的一行：左缩进列 + 多色分段（拼接即该行纯文本）。
 #[derive(Debug, Clone, PartialEq)]
@@ -110,6 +40,8 @@ pub struct MdLine {
     pub spans: Vec<(String, Style)>,
     /// 若该行属于 Markdown 表格，记录其表格结构与行内偏移。
     pub table: Option<TableLineRef>,
+    /// 若该行属于启用了边框与复制按钮的代码块，记录其代码块行角色。
+    pub code: Option<CodeLineKind>,
 }
 
 impl MdLine {
@@ -120,6 +52,7 @@ impl MdLine {
             hang: 0,
             spans: vec![(value.into(), style)],
             table: None,
+            code: None,
         }
     }
 
@@ -130,6 +63,7 @@ impl MdLine {
             hang: 0,
             spans,
             table: None,
+            code: None,
         }
     }
 
@@ -144,6 +78,7 @@ impl MdLine {
             hang: 0,
             spans,
             table: Some(table),
+            code: None,
         }
     }
 
@@ -154,6 +89,7 @@ impl MdLine {
             hang,
             spans,
             table: None,
+            code: None,
         }
     }
 
@@ -177,7 +113,7 @@ impl MdLine {
 ///
 /// 调用方负责换行与宽度裁剪；本函数只做块级结构还原与行内标记折叠。
 pub fn render(source: &str) -> Vec<MdLine> {
-    render_blocks(source, None, true)
+    render_blocks(source, None, true, false)
 }
 
 /// 把 markdown 源码渲染成**恰好不超过 `width` 列**的行（块级：表格自适应宽度、其余软换行）。
@@ -186,32 +122,56 @@ pub fn render(source: &str) -> Vec<MdLine> {
 /// （对齐 opencode 的 markdown 表格），避免窄宽度下把方框网格硬折断成「变形」；
 /// 其余块（段落/列表/引用/代码）按词优先软换行，超长不可断的内容按字符切分。
 pub fn render_wrapped(source: &str, width: u16) -> Vec<MdLine> {
-    render_wrapped_with_options(source, width, true)
+    render_wrapped_with_options(source, width, true, false)
+}
+
+/// 与 [`render_wrapped`] 相同，但为代码块启用顶部 `▂` 边框、内部第一行 `<lang> ... [❐]` 头部与左侧 `▎` 边框。
+///
+/// 供 `lx` 聊天历史的 AI 助手正文块（主对话与子 Agent 详情页）使用；
+/// 思考块与工具/汇报卡片内的压暗 Markdown 仍用 [`render_wrapped`] 或 [`render_wrapped_literal_rules`]。
+pub fn render_wrapped_code_blocks(source: &str, width: u16) -> Vec<MdLine> {
+    render_wrapped_with_options(source, width, true, true)
 }
 
 /// 与 [`render_wrapped`] 相同，但水平分割线（`---` / `***` / `___`）保持原始文本而不拉满整行 `─` 横线。
 ///
 /// 供工具卡片展开内容、子 agent 汇报与 compact 摘要使用：输出中的 `---` 保持原样，不画成整行边框线；
-/// 思考块与主回答正文仍用 [`render_wrapped`]。
+/// 思考块仍用 [`render_wrapped`]，主回答正文用 [`render_wrapped_code_blocks`]。
 pub fn render_wrapped_literal_rules(source: &str, width: u16) -> Vec<MdLine> {
-    render_wrapped_with_options(source, width, false)
+    render_wrapped_with_options(source, width, false, false)
 }
 
-fn render_wrapped_with_options(source: &str, width: u16, expand_rules: bool) -> Vec<MdLine> {
+fn render_wrapped_with_options(
+    source: &str,
+    width: u16,
+    expand_rules: bool,
+    code_chrome: bool,
+) -> Vec<MdLine> {
     let width = usize::from(width.max(1));
     let mut out = Vec::new();
-    for line in render_blocks(source, Some(width), expand_rules) {
+    for line in render_blocks(source, Some(width), expand_rules, code_chrome) {
         wrap_md_line(&line, width, &mut out);
     }
     out
 }
 
 /// 块级解析：`width` 为 Some 时表格按可用宽度收缩（其余块仍按自然宽度产出，由调用方换行）。
-fn render_blocks(source: &str, width: Option<usize>, expand_rules: bool) -> Vec<MdLine> {
-    render_blocks_stateful(source, width, expand_rules, &mut ParserState::default())
+fn render_blocks(
+    source: &str,
+    width: Option<usize>,
+    expand_rules: bool,
+    code_chrome: bool,
+) -> Vec<MdLine> {
+    render_blocks_stateful(
+        source,
+        width,
+        expand_rules,
+        code_chrome,
+        &mut ParserState::default(),
+    )
 }
 
-/// 块级解析的跨行状态：列表缩进档位栈 + 未闭合围栏语言。
+/// 块级解析的跨行状态：列表缩进档位栈 + 未闭合围栏语言 + 代码块序号。
 ///
 /// 增量渲染的「稳定前缀 / 活跃尾部」两段共用它：尾部从中断处的状态继续解析，
 /// 保证与一次性全量渲染逐行一致。
@@ -222,6 +182,8 @@ struct ParserState {
     list_indents: Vec<usize>,
     /// `Some(lang)` 表示位于未闭合围栏代码块内（空串 = 围栏未写语言）。
     open_fence_lang: Option<String>,
+    /// 下一个代码块的 0-based 序号（围栏与 4 空格缩进代码块统一递增）。
+    next_code_block_index: usize,
 }
 
 /// 从给定跨行状态继续块级解析，返回新产出的行。
@@ -229,6 +191,7 @@ fn render_blocks_stateful(
     source: &str,
     width: Option<usize>,
     expand_rules: bool,
+    code_chrome: bool,
     state: &mut ParserState,
 ) -> Vec<MdLine> {
     let mut lines = Vec::new();
@@ -242,9 +205,10 @@ fn render_blocks_stateful(
                 index += 1;
                 continue;
             }
-            render_code(
-                &[line],
+            code_block::render_code_line(
+                line,
                 (!lang.is_empty()).then_some(lang.as_str()),
+                code_chrome,
                 &mut lines,
             );
             state.open_fence_lang = Some(lang);
@@ -262,6 +226,12 @@ fn render_blocks_stateful(
         }
         if trimmed.trim_start().starts_with("```") {
             let lang = line.trim().trim_start_matches('`').trim();
+            let block_index = state.next_code_block_index;
+            state.next_code_block_index += 1;
+            if code_chrome {
+                lines.push(code_block::top_border_line(width));
+                lines.push(code_block::header_line(lang, block_index, width));
+            }
             state.open_fence_lang = Some(lang.to_string());
             index += 1;
             continue;
@@ -276,7 +246,16 @@ fn render_blocks_stateful(
             continue;
         }
         if is_indented_code(line) {
-            index = indented_code(&source_lines, index, &mut lines);
+            let block_index = state.next_code_block_index;
+            state.next_code_block_index += 1;
+            index = indented_code(
+                &source_lines,
+                index,
+                width,
+                block_index,
+                code_chrome,
+                &mut lines,
+            );
             continue;
         }
         if let Some((level, body)) = heading(trimmed) {
@@ -388,7 +367,14 @@ fn image(line: &str) -> Option<(&str, &str)> {
 }
 
 /// 缩进代码块：收集连续 4 空格缩进行。
-fn indented_code(source: &[&str], start: usize, lines: &mut Vec<MdLine>) -> usize {
+fn indented_code(
+    source: &[&str],
+    start: usize,
+    width: Option<usize>,
+    block_index: usize,
+    code_chrome: bool,
+    lines: &mut Vec<MdLine>,
+) -> usize {
     let mut index = start;
     let mut body = Vec::new();
     while index < source.len()
@@ -407,19 +393,14 @@ fn indented_code(source: &[&str], start: usize, lines: &mut Vec<MdLine>) -> usiz
         body.push(source[index].strip_prefix("    ").unwrap_or(source[index]));
         index += 1;
     }
-    render_code(&body, None, lines);
-    index
-}
-
-/// 渲染代码块：**只画代码正文**（保留轻量语法高亮）。
-///
-/// 围栏、`language: xxx` 头部、复制按钮与上下分隔横线全部移除（用户要求）：
-/// 这些都属于「容器的装饰」，而代码本身就是内容——去掉它们之后，代码块与正文
-/// 之间只靠高亮配色区分，窄屏也不再被横线和按钮挤掉 2 列。
-fn render_code(body: &[&str], lang: Option<&str>, lines: &mut Vec<MdLine>) {
-    for line in body {
-        lines.push(MdLine::spans(0, highlight::highlight_line(lang, line)));
+    if code_chrome {
+        lines.push(code_block::top_border_line(width));
+        lines.push(code_block::header_line("", block_index, width));
     }
+    for line in &body {
+        code_block::render_code_line(line, None, code_chrome, lines);
+    }
+    index
 }
 
 /// 引用块：收集连续 `>` 行，用 `>` 作前缀（不用左边框），正文支持行内 markdown 折叠与着色。
@@ -761,6 +742,28 @@ pub(crate) fn md_bytes(lines: &[MdLine]) -> usize {
 /// 优先在空白/汉字边界断行（对齐 opencode/主流 agent 的 word wrap），
 /// 单个超宽字符单独成行；供表格外的段落/列表/引用/代码使用。
 fn wrap_md_line(line: &MdLine, width: usize, out: &mut Vec<MdLine>) {
+    if matches!(
+        line.code,
+        Some(CodeLineKind::TopBorder | CodeLineKind::Header { .. })
+    ) {
+        out.push(line.clone());
+        return;
+    }
+    if line.code == Some(CodeLineKind::Body) {
+        let body_width = width.saturating_sub(1).max(1);
+        let start_len = out.len();
+        wrap_md_line_inner(line, body_width, out);
+        for wrapped in &mut out[start_len..] {
+            let spans = std::mem::take(&mut wrapped.spans);
+            wrapped.spans = code_block::prepend_body_bar(spans, width);
+            wrapped.code = Some(CodeLineKind::Body);
+        }
+        return;
+    }
+    wrap_md_line_inner(line, width, out);
+}
+
+fn wrap_md_line_inner(line: &MdLine, width: usize, out: &mut Vec<MdLine>) {
     let first_indent = usize::from(line.indent);
     let hang = usize::from(line.hang);
     let cont_indent = first_indent.saturating_add(hang);

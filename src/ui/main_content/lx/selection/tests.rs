@@ -593,3 +593,31 @@ fn collapsed_report_drag_and_table_hit_detection_behave_accurately() {
         );
     }
 }
+
+#[test]
+fn copy_text_on_code_block_skips_chrome_rows_and_strips_left_bar() {
+    let area = Rect::new(0, 0, 50, 20);
+    let lx = assistant_markdown_lx(
+        "Intro line\n\n```rust\nfn main() {\n    let x = 1;\n\n    println!(\"{x}\");\n}\n```\n\nOutro line",
+    );
+    let mut cache = PaneCache::default();
+
+    // 全选整段消息（跨段落、代码块顶边 `▂`、头部行 `▎rust ... [❐]`、带缩进与空行的代码正文、结尾段落）。
+    let copied = super::copy_text(area, &lx, ((0, 0), (15, 49)), &mut cache);
+    assert!(
+        !copied.contains('▂'),
+        "拖拽选区复制应跳过顶部 `▂` 边框行：{copied:?}"
+    );
+    assert!(
+        !copied.contains("[❐]"),
+        "拖拽选区复制应跳过第一行语言与复制按钮头部行：{copied:?}"
+    );
+    assert!(
+        !copied.contains('▎'),
+        "拖拽选区复制应剥离代码正文左侧 `▎` 色条：{copied:?}"
+    );
+    assert_eq!(
+        copied,
+        "● Intro line\nfn main() {\n    let x = 1;\n\n    println!(\"{x}\");\n}\n  Outro line"
+    );
+}

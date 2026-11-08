@@ -723,7 +723,10 @@ impl Builder<'_> {
                     crate::chat::events::PartKind::Text => BlockPaint::Markdown {
                         prefix: Arc::new(Vec::new()),
                         prefix_bytes: 0,
-                        tail: markdown_render::render_wrapped(&part.content, content_width),
+                        tail: markdown_render::render_wrapped_code_blocks(
+                            &part.content,
+                            content_width,
+                        ),
                     },
                     crate::chat::events::PartKind::Reasoning => BlockPaint::Thinking {
                         body: if super::cache::reasoning_body_visible(

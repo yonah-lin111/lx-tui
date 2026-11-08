@@ -1093,3 +1093,118 @@ fn lx_expanded_thinking_table_double_click_selects_word_without_collapsing_card(
     );
     assert_eq!(copied, "alpha_token");
 }
+
+#[test]
+fn lx_code_block_copy_button_click_shows_pane_toast_keeps_selection_and_ignores_empty_block() {
+    let config = Config::default();
+    let mut state = AppState::demo();
+    let geo = geometry(&state, &config, Rect::new(0, 0, 120, 30));
+    let pane = state.active_tab().layout.focus();
+    let inner = pane_inner(&geo, pane);
+
+    if let Some(target) = state.pane_mut_anywhere(pane) {
+        target.view = PaneView::Lx;
+        target
+            .lx
+            .chat
+            .messages
+            .push(crate::app::state::ChatMessageView {
+                sequence: 1,
+                id: "m-code".into(),
+                role: "assistant".into(),
+                status: "complete".into(),
+                turn_index: 0,
+                kind: "chat".into(),
+                shell: None,
+                steps: vec![crate::app::state::AssistantStepView::Part {
+                    position: 0,
+                    part: crate::app::state::ChatPartView {
+                        kind: crate::chat::events::PartKind::Text,
+                        content: "```rust\nlet answer = 42;\n```\n\n```\n```".into(),
+                        provider_metadata_json: None,
+                        started_at_ms: None,
+                        ended_at_ms: None,
+                        completed_at_ms: None,
+                    },
+                }],
+                model_label: None,
+                error_code: None,
+                input_tokens: None,
+                output_tokens: None,
+                cache_read_tokens: None,
+                duration_ms: None,
+                reports: Vec::new(),
+                attachments: Vec::new(),
+            });
+    }
+
+    let mut cache = ui::RenderCache::default();
+    let geom = ui::main_content::lx::content_geom(
+        inner,
+        &state.pane_anywhere(pane).expect("pane").lx,
+        cache.pane(pane),
+    )
+    .expect("content geom");
+
+    // 预先设置一个选区，验证点击代码块 `[❐]` 不会清除已有选区。
+    state.lx_selection = Some(crate::app::selection::Selection::text_range(
+        pane,
+        (2, 0),
+        (2, 10),
+    ));
+
+    // 第一个代码块：第 0 行顶边 `▂`，第 1 行头部 `▎rust ... [❐]`，按钮位于右缘。
+    let btn_x = geom.rect.right() - 2;
+    let first_header_y = geom.rect.y + 1;
+    // 第二个（空）代码块：第 2 行是 `let answer = 42;`，第 3 行顶边 `▂`，第 4 行头部 `▎text ... [❐]`。
+    let empty_header_y = geom.rect.y + 4;
+
+    let mut sessions = HashMap::new();
+    let mut dirty = false;
+
+    // 1. 先点空代码块的 `[❐]`：不得弹出 `Copied 0 chars` toast。
+    handle_terminal_event(
+        mouse(
+            MouseEventKind::Down(MouseButton::Left),
+            btn_x,
+            empty_header_y,
+        ),
+        &mut state,
+        &mut sessions,
+        &geo,
+        &config,
+        &mut cache,
+        &mut dirty,
+    );
+    assert!(
+        state.pane_anywhere(pane).expect("pane").lx.toast.is_none(),
+        "空代码块点击 `[❐]` 不应弹出 toast"
+    );
+
+    // 2. 再点非空代码块的 `[❐]`：在当前 lx 窗格内弹出 toast（全局 state.toast 保持为 None），且选区保留。
+    handle_terminal_event(
+        mouse(
+            MouseEventKind::Down(MouseButton::Left),
+            btn_x,
+            first_header_y,
+        ),
+        &mut state,
+        &mut sessions,
+        &geo,
+        &config,
+        &mut cache,
+        &mut dirty,
+    );
+    assert!(
+        state.toast.is_none(),
+        "lx 代码块复制 toast 必须落在窗格内而非全局"
+    );
+    assert!(
+        state.pane_anywhere(pane).expect("pane").lx.toast.is_some(),
+        "非空代码块点击 `[❐]` 应在当前 lx 窗格内弹出剪贴板 toast"
+    );
+    assert!(
+        state.lx_selection.is_some(),
+        "点击 `[❐]` 复制按钮不得清除已有文本选区"
+    );
+}

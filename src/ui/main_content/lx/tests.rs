@@ -2082,9 +2082,8 @@ fn lx_input_highlights_inline_code_and_list_markers() {
 }
 
 #[test]
-fn code_block_renders_body_without_header_or_rules() {
-    // 代码块只画代码本身：没有 `language:` 头部、没有复制按钮、没有上下横线与竖条
-    // （用户要求移除这些装饰），语法高亮仍保留。
+fn code_block_renders_top_and_left_border_with_lang_and_copy_button() {
+    // 助手正文代码块参考 Prompt 区 `&&&` 模板块：顶边 `▂`、左边 `▎`、内部首行左侧语言名与右侧 `[❐]`。
     let area = Rect::new(0, 0, 60, 24);
     let mut lx = Lx::new();
     let mut chat = LxChat::new();
@@ -2121,11 +2120,17 @@ fn code_block_renders_body_without_header_or_rules() {
     let mut buf = Buffer::empty(area);
     let _ = render(area, &mut buf, &lx, false, None, &mut PaneCache::default());
     let text = buffer_text(&buf);
-    assert!(text.contains("const a = 1;"), "代码正文保留：{text}");
-    assert!(text.contains("const b = 2;"), "空行后的正文保留：{text}");
-    assert!(!text.contains("language:"), "不再显示语言头：{text}");
-    assert!(!text.contains("[❐]"), "不再有复制按钮：{text}");
-    assert!(!text.contains('│'), "不再有左侧竖条：{text}");
+    assert!(text.contains('▂'), "顶部 `▂` 边框保留：{text}");
+    assert!(text.contains("▎js"), "首行左侧显示语言名：{text}");
+    assert!(text.contains("[❐]"), "首行右侧显示复制按钮：{text}");
+    assert!(
+        text.contains("▎const a = 1;"),
+        "代码正文带左侧 `▎` 边框：{text}"
+    );
+    assert!(
+        text.contains("▎const b = 2;"),
+        "空行后的正文带左侧 `▎` 边框：{text}"
+    );
 }
 
 /// 流中 loading 行右侧给出输出 token 估算 `↓1.2k tok`；不流时不显示。

@@ -24,6 +24,8 @@ pub enum LxChatHit {
     PromptHeader,
     /// 点击「回到底部」按钮。
     JumpBottom,
+    /// 点击助手正文代码块右上角 `[❐]` 复制按钮（携带该块未折行原始代码文本）。
+    CopyCode(String),
 }
 
 /// 聊天历史视图（滚动偏移 / body / 置顶行结论）；无历史区时为 None。
@@ -155,6 +157,9 @@ pub fn chat_hit(
     {
         return Some(LxChatHit::JumpBottom);
     }
+    if let Some(code) = task_agents_code_copy_at(area, lx, column, row, cache) {
+        return Some(LxChatHit::CopyCode(code));
+    }
     if !chat_geometry_is_live(lx) {
         return None;
     }
@@ -170,7 +175,107 @@ pub fn chat_hit(
     if !view.body.contains((column, row).into()) {
         return None;
     }
+    code_copy_at_source(
+        view.body,
+        view.scroll,
+        history::HistorySource::from(lx),
+        column,
+        row,
+        cache,
+    )
+    .map(LxChatHit::CopyCode)
+}
+
+/// 在指定历史数据源与滚动视口下命中代码块 `[❐]` 复制按钮，返回该代码块的原始代码文本。
+pub(crate) fn code_copy_at_source(
+    body: Rect,
+    scroll: usize,
+    source: history::HistorySource<'_>,
+    column: u16,
+    row: u16,
+    cache: &mut PaneCache,
+) -> Option<String> {
+    if !body.contains((column, row).into()) {
+        return None;
+    }
+    let width = history::content_rect(body).width;
+    let snapshot = cache.snapshot_ready_source(width, source);
+    let content_row = scroll.saturating_add(usize::from(row.saturating_sub(body.y)));
+    let rel_col = column.saturating_sub(body.x);
+    if rel_col >= width {
+        return None;
+    }
+    for entry in &snapshot.entries {
+        if content_row < entry.start || content_row >= entry.end {
+            continue;
+        }
+        for block in &entry.blocks {
+            if content_row < block.start || content_row >= block.start.saturating_add(block.rows) {
+                continue;
+            }
+            let history::BlockSource::Step {
+                message_index,
+                step_index,
+            } = block.source
+            else {
+                continue;
+            };
+            let history::BlockPaint::Markdown { prefix, tail, .. } = block.paint.as_ref() else {
+                continue;
+            };
+            let offset = content_row - block.start;
+            let line = if offset < prefix.len() {
+                &prefix[offset]
+            } else {
+                tail.get(offset - prefix.len())?
+            };
+            let Some(crate::ui::markdown_render::CodeLineKind::Header {
+                block_index,
+                button_cols: (c0, c1),
+            }) = line.code
+            else {
+                return None;
+            };
+            let base = history::STEP_GUTTER.saturating_add(line.indent);
+            let start_col = base.saturating_add(c0);
+            let end_col = base.saturating_add(c1).min(width);
+            if rel_col < start_col || rel_col >= end_col {
+                return None;
+            }
+            let message = source.messages.get(message_index)?;
+            let Some(crate::app::state::AssistantStepView::Part { part, .. }) =
+                message.steps.get(step_index)
+            else {
+                return None;
+            };
+            return crate::ui::markdown_render::extract_code_block(&part.content, block_index);
+        }
+    }
     None
+}
+
+/// Agents 详情区指针下的代码块 `[❐]` 复制按钮。
+fn task_agents_code_copy_at(
+    area: Rect,
+    lx: &Lx,
+    column: u16,
+    row: u16,
+    cache: &mut PaneCache,
+) -> Option<String> {
+    let page = lx.task.as_ref()?;
+    if page.tab != crate::app::state::TaskTab::Agents {
+        return None;
+    }
+    let rect = task::task_output_rect(area, lx)?;
+    let run = page
+        .selected_agent_index(&lx.agents)
+        .and_then(|index| lx.agents.runs.get(index))?;
+    let source = history::HistorySource::from_chat(&run.chat, &run.compact);
+    let view = history::view_source_plain(rect, source, cache);
+    let visible = usize::from(view.body.height);
+    let max = view.total_rows.saturating_sub(visible);
+    let top = if run.follow { max } else { run.scroll.min(max) };
+    code_copy_at_source(view.body, top, source, column, row, cache)
 }
 
 /// 在任意历史数据源上做块命中（主聊天与子 agent 详情共用）。
@@ -431,3 +536,6 @@ fn target_of(kind: &history::CardKind) -> CardTarget {
         },
     }
 }
+
+#[cfg(test)]
+mod tests;

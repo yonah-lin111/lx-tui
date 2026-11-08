@@ -652,6 +652,36 @@ pub(crate) fn copy_with_toast(state: &mut AppState, text: &str, anchor: Option<P
     );
 }
 
+/// 应用 `lx` 聊天区命中动作（置顶跳转 / 回到底部 / 代码块复制按钮）。
+pub(crate) fn apply_lx_chat_hit(
+    state: &mut AppState,
+    pane: PaneId,
+    inner: Rect,
+    hit: ui::main_content::lx::LxChatHit,
+    cache: &mut ui::RenderCache,
+) {
+    match hit {
+        ui::main_content::lx::LxChatHit::PromptHeader => {
+            let target = state.pane_anywhere(pane).and_then(|target| {
+                ui::main_content::lx::sticky_prompt_jump(inner, &target.lx, cache.pane(pane))
+            });
+            if let Some(row) = target {
+                update::jump_lx_history_to_prompt(state, pane, row);
+            }
+            update::clear_lx_selection(state);
+        }
+        ui::main_content::lx::LxChatHit::JumpBottom => {
+            update::jump_lx_history_bottom(state, pane);
+            update::clear_lx_selection(state);
+        }
+        ui::main_content::lx::LxChatHit::CopyCode(code) => {
+            if !code.is_empty() {
+                copy_with_toast(state, &code, Some(pane));
+            }
+        }
+    }
+}
+
 /// 坐标是否落在 prompt 工具栏/分割线表头行（用于吞掉空白点击）。
 pub(crate) fn prompt_header_at(panel: Rect, column: u16, row: u16) -> bool {
     layout::prompt_header_rect(panel).is_some_and(|header| header.contains((column, row).into()))

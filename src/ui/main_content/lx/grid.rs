@@ -20,6 +20,15 @@ pub(crate) struct GridTableRow {
     pub(crate) line_ref: TableLineRef,
 }
 
+/// 网格中单行的代码块装饰元数据（列偏移相对 `Grid.area.x`）。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum GridCodeRow {
+    /// 顶部边框行（`▂`）或内部第一行头部（`<lang> ... [❐]`）：拖拽选区复制时整行跳过。
+    Chrome,
+    /// 代码块正文行：`bar_col` 为左侧 `▎` 色条所在的相对列偏移（选区复制时剥离 `0..=bar_col`）。
+    Body { bar_col: u16 },
+}
+
 /// 一个待绘制单元格。
 #[derive(Clone, Copy)]
 pub(super) struct Glyph {
@@ -41,6 +50,7 @@ pub(crate) struct Grid {
     area: Rect,
     cells: Vec<Glyph>,
     table_rows: Vec<Option<GridTableRow>>,
+    code_rows: Vec<Option<GridCodeRow>>,
 }
 
 impl Grid {
@@ -49,6 +59,7 @@ impl Grid {
             area,
             cells: vec![Glyph::blank(); usize::from(area.width) * usize::from(area.height)],
             table_rows: vec![None; usize::from(area.height)],
+            code_rows: vec![None; usize::from(area.height)],
         }
     }
 
@@ -76,6 +87,22 @@ impl Grid {
         self.table_rows
             .get(usize::from(dy))
             .and_then(Option::as_ref)
+    }
+
+    /// 登记第 `y` 行的代码块装饰元数据。
+    pub(super) fn set_code_row(&mut self, y: u16, row: GridCodeRow) {
+        if y < self.area.y {
+            return;
+        }
+        let dy = y - self.area.y;
+        if dy < self.area.height {
+            self.code_rows[usize::from(dy)] = Some(row);
+        }
+    }
+
+    /// 读取相对行 `dy`（`0..area.height`）的代码块行元数据。
+    pub(super) fn code_row_at(&self, dy: u16) -> Option<GridCodeRow> {
+        self.code_rows.get(usize::from(dy)).copied().flatten()
     }
 
     fn index(&self, x: u16, y: u16) -> Option<usize> {
