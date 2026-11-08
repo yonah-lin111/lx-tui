@@ -383,7 +383,7 @@ pub fn on_ai_web_session_loaded(
     pane: PaneId,
     session_id: String,
     title: Option<String>,
-    messages: Vec<crate::chat::ai_web::AiWebHistoryMessage>,
+    messages: Vec<crate::chat::web::AiWebHistoryMessage>,
 ) -> bool {
     let Some(target) = state.pane_mut_anywhere(pane) else {
         return false;

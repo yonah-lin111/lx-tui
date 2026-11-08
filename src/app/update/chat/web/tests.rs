@@ -326,7 +326,7 @@ fn rename_and_session_load_and_cloud_attachment_rewind_work_in_ai_web() {
         "ai-web-ds-uuid-1".into(),
         Some("Old Title".into()),
         vec![
-            crate::chat::ai_web::AiWebHistoryMessage {
+            crate::chat::web::AiWebHistoryMessage {
                 role: "user".into(),
                 thinking: String::new(),
                 thinking_ms: None,
@@ -334,7 +334,7 @@ fn rename_and_session_load_and_cloud_attachment_rewind_work_in_ai_web() {
                 files: vec!["photo.png".into(), "report.pdf".into()],
                 created_at_ms: 1000,
             },
-            crate::chat::ai_web::AiWebHistoryMessage {
+            crate::chat::web::AiWebHistoryMessage {
                 role: "assistant".into(),
                 thinking: "let me think".into(),
                 thinking_ms: Some(1500),

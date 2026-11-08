@@ -69,7 +69,7 @@ pub const LX_JUMP_BOTTOM_HINT: &str = "jump to bottom";
 pub const LX_ENTRY_NATIVE: &str = "Native";
 pub const LX_ENTRY_HYBRID: &str = "Hybrid";
 pub const LX_ENTRY_AUTOMATION: &str = "Automation";
-pub const LX_ENTRY_AI_WEB: &str = "AI Web";
+pub const LX_ENTRY_AI_WEB: &str = "Web";
 /// AI Web 目标站点标签。
 pub const AI_WEB_SITE_DEEPSEEK: &str = "DeepSeek";
 pub const AI_WEB_SITE_GEMINI: &str = "Gemini";
@@ -243,7 +243,7 @@ pub const LX_AI_WEB_LOGIN_REQUIRED: &str = "Please sign in to DeepSeek in ego-br
 pub const LX_AI_WEB_GEMINI_LOGIN_REQUIRED: &str = "Please sign in to Gemini in ego-browser";
 pub const LX_AI_WEB_EGO_UNAVAILABLE: &str = "ego-browser is not installed or unavailable";
 pub const LX_AI_WEB_ONLY_NEW_CMD: &str =
-    "Only /model, /new, /resume, /rename, and /rewind are available in AI Web";
+    "Only /model, /new, /resume, /rename, and /rewind are available in Web";
 
 /// 按 AI Web 站点返回未登录提示文案。
 pub fn lx_ai_web_login_required_for(site: AiWebSite) -> &'static str {
@@ -253,10 +253,10 @@ pub fn lx_ai_web_login_required_for(site: AiWebSite) -> &'static str {
     }
 }
 pub const LX_AI_WEB_FOLDER_UNSUPPORTED: &str =
-    "Folders cannot be uploaded in AI Web; select files instead";
+    "Folders cannot be uploaded in Web; select files instead";
 pub const LX_AI_WEB_FILE_NOT_FOUND: &str = "Attached file does not exist";
 pub const LX_AI_WEB_LOCAL_REF_UNSUPPORTED: &str =
-    "Skills and MCP references are not available in AI Web";
+    "Skills and MCP references are not available in Web";
 pub const LX_CHAT_NO_MODEL: &str = "No model configured";
 pub const LX_CHAT_NO_WORKSPACE: &str = "No workspace path";
 pub const LX_CHAT_COMMIT_FAILED: &str = "Send failed, retry";

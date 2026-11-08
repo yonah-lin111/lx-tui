@@ -10,7 +10,6 @@ use crate::app::prompt::text;
 use crate::app::selection::SelectionUnit;
 
 pub mod agent;
-pub mod ai_web;
 pub mod ask;
 pub mod chat;
 pub mod compact;
@@ -28,17 +27,13 @@ mod selection;
 pub mod shell;
 pub mod slash;
 pub mod task;
+pub mod web;
 
 use history::HistoryBrowse;
 pub(crate) use history::HistoryMove;
 pub use shell::LxInputMode;
 
 pub use agent::{AgentsState, MAX_RESIDENT_SUBAGENT_CHATS, SubagentReportView, SubagentRun};
-pub use ai_web::{
-    AI_WEB_DEEPSEEK_SESSION_PREFIX, AI_WEB_GEMINI_SESSION_PREFIX, AI_WEB_SESSION_PREFIX,
-    AiWebConfig, AiWebSite, DeepseekThinkingMode, GeminiThinkingLevel, GeminiWebModel,
-    ai_web_remote_session, is_ai_web_session,
-};
 pub use ask::{AskEditor, AskHit, AskState, AskWheelZone};
 pub use chat::SHELL_SLOT;
 pub use chat::{
@@ -66,6 +61,11 @@ pub use slash::{
     ModelPickerStage, PanelWindow, SlashCommand, SlashEntry, SlashPanel,
 };
 pub use task::{AgentFilter, ProcessEntry, TaskPage, TaskTab};
+pub use web::{
+    AI_WEB_DEEPSEEK_SESSION_PREFIX, AI_WEB_GEMINI_SESSION_PREFIX, AI_WEB_SESSION_PREFIX,
+    AiWebConfig, AiWebSite, DeepseekThinkingMode, GeminiThinkingLevel, GeminiWebModel,
+    ai_web_remote_session, is_ai_web_session,
+};
 
 /// lx 页四个入口：原生 agent、混合 agent、自动化 agent、AI Web。
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

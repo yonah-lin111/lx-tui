@@ -12,11 +12,11 @@ use tokio::process::Command;
 use super::*;
 pub use crate::app::state::is_ai_web_session;
 use crate::app::state::{AiWebSite, HistoryEntry, ai_web_remote_session};
-use crate::chat::ai_web::{
+use crate::chat::events::{PartDelta, PartKind};
+use crate::chat::web::{
     AiWebHistoryMessage, AiWebStreamEvent, parse_script_line, resolve_ego_browser_bin,
     scripts_for_site, should_record_diag_line,
 };
-use crate::chat::events::{PartDelta, PartKind};
 
 /// AI Web 后台任务回投主事件循环的事件。
 #[derive(Debug)]

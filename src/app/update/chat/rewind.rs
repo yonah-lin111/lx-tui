@@ -100,9 +100,9 @@ pub fn apply_input(state: &mut AppState, pane: PaneId, command: LxInput) -> Rout
                     .chat
                     .session_id
                     .as_deref()
-                    .is_some_and(super::ai_web::is_ai_web_session)
+                    .is_some_and(super::web::is_ai_web_session)
             {
-                super::ai_web::rewind_ai_web(state, pane);
+                super::web::rewind_ai_web(state, pane);
                 return Route::Consumed;
             }
             if select_latest(state, pane).is_some() {
@@ -266,9 +266,9 @@ pub fn open_from_command(state: &mut AppState, pane: PaneId) -> bool {
                 .chat
                 .session_id
                 .as_deref()
-                .is_some_and(super::ai_web::is_ai_web_session)
+                .is_some_and(super::web::is_ai_web_session)
     }) {
-        return super::ai_web::rewind_ai_web(state, pane);
+        return super::web::rewind_ai_web(state, pane);
     }
     if select_latest(state, pane).is_none() {
         show_lx_hint(state, pane, InputHintLevel::Warning, text::LX_REWIND_FAILED);

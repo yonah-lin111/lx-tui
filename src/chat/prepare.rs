@@ -11,12 +11,10 @@ use crate::platform::{
     sniff_image_file,
 };
 
-mod ai_web;
+mod web;
 
 pub use crate::platform::ImagePrepareError;
-pub use ai_web::{
-    AiWebPrepareError, PreparedAiWebMessage, is_image_filename, prepare_ai_web_message,
-};
+pub use web::{AiWebPrepareError, PreparedAiWebMessage, is_image_filename, prepare_ai_web_message};
 
 /// 草稿中的图片附件。
 #[derive(Debug, Clone, PartialEq, Eq)]
