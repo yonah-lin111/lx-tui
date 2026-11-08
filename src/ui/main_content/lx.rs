@@ -79,6 +79,11 @@ const SECTION_GAP: u16 = 1;
 /// 输入框上下分割线字符。
 const RULE: char = '─';
 
+/// 控制字符不得直接写入 ratatui cell（`cell_width` 会 panic），统一落为空格。
+fn drawable_char(ch: char) -> char {
+    if ch.is_control() { ' ' } else { ch }
+}
+
 /// 渲染 lx 页；返回聚焦时输入光标的相对坐标（行、列，相对内容区左上角）。
 ///
 /// `selection` 为当前 lx 选区（内容行、列，相对内容区左上角），用于反显高亮。
@@ -104,7 +109,7 @@ pub fn render(
                     cell.set_diff_option(CellDiffOption::Skip);
                     continue;
                 }
-                cell.set_char(glyph.ch);
+                cell.set_char(drawable_char(glyph.ch));
                 cell.set_style(glyph.style);
                 cell.set_diff_option(CellDiffOption::None);
             }
@@ -759,7 +764,7 @@ pub(crate) fn render_history_for_test(area: Rect, buf: &mut Buffer, lx: &Lx, scr
                     cell.set_diff_option(CellDiffOption::Skip);
                     continue;
                 }
-                cell.set_char(glyph.ch);
+                cell.set_char(drawable_char(glyph.ch));
                 cell.set_style(glyph.style);
                 cell.set_diff_option(CellDiffOption::None);
             }
@@ -778,7 +783,7 @@ pub(super) fn blit_grid(area: Rect, buf: &mut Buffer, grid: &Grid) {
                     cell.set_diff_option(CellDiffOption::Skip);
                     continue;
                 }
-                cell.set_char(glyph.ch);
+                cell.set_char(drawable_char(glyph.ch));
                 cell.set_style(glyph.style);
                 cell.set_diff_option(CellDiffOption::None);
             }

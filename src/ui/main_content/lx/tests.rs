@@ -2083,7 +2083,7 @@ fn lx_input_highlights_inline_code_and_list_markers() {
 
 #[test]
 fn code_block_renders_left_bar_with_lang_and_copy_button() {
-    // 助手正文代码块：顶部 `▂` 边框 + 下一行 `▎ js ... [❐]` 头部（无边框）+ 正文左侧 `▎`。
+    // 助手正文代码块：顶部 `▂` 边框 + 下一行 `▎ js ... [❐] ` 头部（无边框）+ 正文左侧 `▎`。
     let area = Rect::new(0, 0, 60, 24);
     let mut lx = Lx::new();
     let mut chat = LxChat::new();
@@ -2099,7 +2099,7 @@ fn code_block_renders_left_bar_with_lang_and_copy_button() {
             position: 0,
             part: ChatPartView {
                 kind: crate::chat::events::PartKind::Text,
-                content: "```js\nconst a = 1;\n\nconst b = 2;\n```".into(),
+                content: "```js\n\tconst a = 1;\r\n\nconst b = 2;\n```".into(),
                 provider_metadata_json: None,
                 started_at_ms: None,
                 ended_at_ms: None,
@@ -2124,8 +2124,12 @@ fn code_block_renders_left_bar_with_lang_and_copy_button() {
     assert!(text.contains("▎ js"), "头部左侧显示语言名：{text}");
     assert!(text.contains("[❐]"), "头部右侧显示 `[❐]` 复制按钮：{text}");
     assert!(
-        text.contains("▎const a = 1;"),
-        "代码正文带左侧 `▎` 单栏：{text}"
+        text.contains("▎    const a = 1;"),
+        "代码正文的制表符按 4 列展开：{text}"
+    );
+    assert!(
+        !text.chars().any(|ch| ch.is_control() && ch != '\n'),
+        "渲染结果不得包含控制字符：{text:?}"
     );
     assert!(
         text.contains("▎const b = 2;"),
