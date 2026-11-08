@@ -1,18 +1,19 @@
 # Grok 接入 Web 入口 — 验证报告 (`verification.md`)
 
-- **执行日期**：2026-11-08
+- **执行日期**：2026-11-08（首轮 E2E）；2026-11-09（Review 修复复验）
 - **工作区**：`.worktrees/lx-ai-web-grok`（分支 `feat/lx-ai-web-grok`，基线 `d6e8bada`）
-- **相关提交**：`a8fda29c`（Grok 接入）、`7b15a108`（引用标签修复）、`00d3c676`（DeepSeek 引用残渣修复）
+- **相关提交**：`a8fda29c`（Grok 接入）、`7b15a108`（引用标签修复）、`00d3c676`（DeepSeek 引用残渣修复）；Review 修复见 [`review.md`](review.md)
 - **二进制**：`./target/debug/lx-tui`（`cargo build` 通过）
-- **验证方式**：功能项 V1–V12、边界项 V13–V17 均通过 CLI 实测；静态项 V0 通过 Cargo/Node CLI 实测；TUI 鼠标与视觉项见 §4，不计入 CLI 通过项。
-- **任务空间**：首轮 E2E 使用临时 `lx-tui-ai-web-grok-verify`；引用修复复验使用临时 `inspect grok citations`；验证后均已关闭，代码常量已恢复为 `lx-tui-ai-web-grok`。
+- **验证方式**：功能项 V1–V12、边界项 V13–V17 均通过 CLI 实测；静态项 V0 通过 Cargo/Node CLI 实测；Review 修复复验见 §7；TUI 鼠标与视觉项见 §4，不计入 CLI 通过项。
+- **任务空间**：首轮 E2E 使用临时 `lx-tui-ai-web-grok-verify`；引用修复复验使用临时 `inspect grok citations`；Review 修复复验使用临时 `lx-tui-ai-web-grok-review`；验证后均已关闭，代码常量已恢复为 `lx-tui-ai-web-grok`。
 
 ## 结论
 
 - V0-1–V0-5、V1–V17：**全部通过**（CLI）。
-- M1–M6：非 CLI 项；M5 的 Rust 逻辑由单元测试覆盖并通过，M1/M2 视觉待用户目测，M3/M4/M6 未执行。
+- M1–M6：M5 的 Rust 逻辑由单元测试覆盖并通过，M6 `Build` 已执行并通过；M1/M2 视觉待用户目测，M3 冷启动、M4 未登录仍未执行。
 - Grok 历史/实时均未出现 `<grok:render>`；引用已映射为来源链接。
 - Gemini 未发现同类标签；DeepSeek 历史引用标记已被清洗，实时 `-\n13` 残渣已修复。
+- Review P1/P2 已修复并复验；完整清单见 [`review.md`](review.md)。
 
 ---
 
@@ -41,7 +42,7 @@
 - **验证步骤**：
   1. `cargo test`
 - **期望结果**：0 failed；允许项目既有的 ignored 测试。
-- **CLI 验证结果**：通过。最终全量 `4895 passed / 0 failed / 4 ignored`。早期一次 `event::chat::tests::user_shell::short_script_runs_persists_output_without_model` 失败为 shell 管道环境抖动，单独复跑通过，与本次改动无关。
+- **CLI 验证结果**：通过。Review 修复后全量 `4896 passed / 0 failed / 4 ignored`。早期一次 `event::chat::tests::user_shell::short_script_runs_persists_output_without_model` 失败为 shell 管道环境抖动，单独复跑通过，与本次改动无关。
 
 ### V0-4 JavaScript 语法检查
 
@@ -333,12 +334,12 @@
 
 ### M6 `Build` 模式
 
-- **输入内容**：`web chat --site grok --model Build "Reply with the single word OK."`。
+- **输入内容**：`web chat --site grok --model Build "Reply with the single word BUILD."`。
 - **验证步骤**：
-  1. `./target/debug/lx-tui web chat --site grok --model Build "Reply with the single word OK."`
+  1. `./target/debug/lx-tui web chat --site grok --model Build --json "Reply with the single word BUILD."`
   2. 检查回答与正文提取。
-- **期望结果**：回答 `OK`，正文不混入 `sr-only` 的 “Grok” 标题。
-- **CLI 验证结果**：未执行；本次仅实测 `Fast`，`Build` 正文提取逻辑相同但未发消息。
+- **期望结果**：回答 `BUILD`，正文不混入 `sr-only` 的 “Grok” 标题。
+- **CLI 验证结果**：通过。首次复验暴露按钮文本为 `Build\nBeta`，按完整字符串比较误报 “was not applied”；改为按第一段模型名匹配后通过，回答 `BUILD`。
 
 ---
 
@@ -399,3 +400,64 @@
   3. 读取 `message-content .markdown` 的 `innerText`，扫描 `<...>`、`citation`、`source` 标记。
 - **期望结果**：来源名随隐藏节点一起消失；正文无标签、无引用占位符。
 - **CLI 验证结果**：通过。`近期 AI 行业动态速递` 隐藏来源节点后只剩正文，`hasTag = false`、`hasCitation = false`；无需改动。
+
+---
+
+## 7. Review 修复复验
+
+### R1 附件清理与上传
+
+- **输入内容**：临时文件 `/tmp/grok-review-secret.txt`（内容 `BANANA`）；提示词 `Reply with the secret word from the attached file.`。
+- **验证步骤**：
+  1. 使用临时空间 `lx-tui-ai-web-grok-review`。
+  2. `./target/debug/lx-tui web chat --site grok --model Fast --json --file /tmp/grok-review-secret.txt "Reply with the secret word from the attached file."`
+  3. 检查回答与会话。
+- **期望结果**：上传成功，回答包含 `BANANA`，不因残留 chip 或提前完成报错。
+- **CLI 验证结果**：通过。回答 `The secret word is BANANA.`；测试会话已删除。6 个以上残留 chip 的人工场景未单独构造。
+- **内联引用拦截**：`web chat --site grok --session <id> --edit-index 0 "@[refer-file](/tmp/x.txt) retry"` 返回 `Grok /rewind cannot restore attachments...`，退出码 1，证明 `prepare` 之后的检查能拦住只写在提示词里的附件。
+
+### R2 附件无正文阈值
+
+- **输入内容**：同一附件提示词。
+- **验证步骤**：
+  1. 修复前 5s 无正文阈值：命令报 `Grok response has no text`，但网页已有 `BANANA`。
+  2. 将阈值放宽到 15s 后重跑。
+- **期望结果**：空占位节点不被误判；真实正文挂载后正常完成。
+- **CLI 验证结果**：通过。15s 阈值下回答 `BANANA`；5s 误判问题已记录并修复。
+
+### R3 `Build` 模型切换
+
+- **输入内容**：`--model Build`，提示词 `Reply with the single word BUILD.`。
+- **验证步骤**：
+  1. 先 `--model Fast` 发送一次，确认模型按钮为 `Fast`。
+  2. 再 `--model Build` 发送。
+- **期望结果**：菜单项 `Build` 被选中，按钮标签 `Build\nBeta` 被接受，回答 `BUILD`。
+- **CLI 验证结果**：通过。首次按完整标签比较误报 `was not applied`；改为比较第一段模型名后通过。
+
+### R4 窄窗格布局
+
+- **输入内容**：`place_ai_web_sites(Rect::new(0, 0, 8/9/10/12/16, 2))`。
+- **验证步骤**：
+  1. `cargo test ui::main_content::lx::tests::narrow_ai_web_site_row_keeps_three_sites_visible_and_hittable`
+  2. 检查三个站点矩形、顺序、不重叠、标签文本。
+- **期望结果**：8 列标签 `De/Ge/Gr`，10 列 `Dee/Gem/Gr`；三个站点均可见可点击。
+- **CLI 验证结果**：通过，测试通过。
+
+### R5 引用清洗边界
+
+- **输入内容**：完整标签、自闭合标签、未闭合 `<argument>`、Wikipedia URL（含括号）。
+- **验证步骤**：
+  1. 用 Node 直接调用 `replaceGrokCitations`，传入 `cardAttachmentsJson`。
+  2. 检查输出是否含原始标签、链接是否完整。
+- **期望结果**：完整/自闭合标签均生成来源链接；未闭合标签不泄漏 `<argument>`；URL 括号被转义。
+- **CLI 验证结果**：通过。自闭合输出 `[Wikipedia](https://en.wikipedia.org/wiki/Foo_%28bar%29)`；未闭合输出 `See`，无 `<argument>`。
+
+### R6 非 chat 动作
+
+- **输入内容**：`web new` / `web list` / `web delete`。
+- **验证步骤**：
+  1. `./target/debug/lx-tui web new --site grok --json`
+  2. `./target/debug/lx-tui web list --site grok --json`
+  3. 删除本轮测试会话。
+- **期望结果**：不等待 composer 也能完成；列表与删除正常。
+- **CLI 验证结果**：通过。`new` 返回 `ok: true`，`list` 返回 4 个会话（含用户 3 个），测试会话删除成功。

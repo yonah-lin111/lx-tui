@@ -30,7 +30,7 @@
 | **Grok 附件** | 隐藏 `input[type="file"]`（multiple）位于 `[data-testid="drop-ui"]`；附件 chip 容器实际在输入框 `<form>` 内（**不在** `drop-ui` 里），选择器 `form [role="list"][aria-label*="对话附件"]`（英文 `*attachments*`），单项 `[role="listitem"]`，移除按钮 `button[aria-label="移除此附件"]` / `*Remove*`。CDP `DOM.setFileInputFiles` 实测可用，chip 约 200ms 出现。 | 普通发送沿用 `syncContainerAttachments` 思路；清理必须限定在输入框 `form` 内，避免误删消息气泡附件。隐藏 input 需轮询最多 10s，chip 等待最多 60s。 |
 | **Cookie 弹窗** | `#onetrust-consent-sdk` 会挡住页面；`.ot-pc-refuse-all-handler` 可关闭。 | 每次进入页面先尝试关闭，失败不阻塞。 |
 | **Grok 会话 URL** | `https://grok.com/c/<uuid>`，可能带 `?rid=<uuid>`。 | 会话绑定用 `/c/([0-9a-f-]{8,})/` 提取，忽略 query。 |
-| **冷启动/慢网络（最新提交 `d6e8bada`）** | DeepSeek 增加 `ensureDeepSeekComposer()` 20s 轮询；Gemini 登录等待 20s、模式菜单 15s 轮询，避免把“尚未渲染”误判成“元素不存在”。 | Grok 同样必须在登录前等 composer、模型切换前轮询模型按钮，禁止单次查询直接报错。 |
+| **冷启动/慢网络（最新提交 `d6e8bada`）** | DeepSeek 增加 `ensureDeepSeekComposer()` 20s 轮询；Gemini 登录等待 20s、模式菜单 15s 轮询，避免把“尚未渲染”误判成“元素不存在”。 | Grok 登录检测通过后再等 composer；非 chat 的 REST 动作不等待 composer，避免冷启动拖满 CLI 预算；模型切换前轮询模型按钮/菜单项，禁止单次查询直接报错。 |
 
 ---
 
@@ -387,7 +387,8 @@ pub fn rewind_ai_web(state: &mut AppState, pane: PaneId) -> bool {
 5. **登录检测**：`fetch('/rest/auth/get-user')`，200 且 `email` 非空才算已登录；登录检测最多轮询 20s。**不要**因为页面上出现普通 `sign-in` 链接就提前判未登录（实测会把已登录页误判）；未登录 `handOffTaskSpace()` → `login_required`。
 6. **模型同步**：`ensureGrokModel()` 点击 `button[aria-label^="型号"]` / `button[aria-label^="Model"]`，在 `[role="menuitemradio"]` 中按文本匹配 `MODEL`，检查 `aria-checked`，切换后校验按钮标签。
 7. **附件同步**：`syncComposerAttachments()` 先删除输入框 `form [role="list"][aria-label*="对话附件"]` / `*attachments*` 内所有 `[role="listitem"]`（`button[aria-label="移除此附件"]` / `*Remove*`），再用 CDP `DOM.setFileInputFiles` 注入 `FILES`；隐藏 input 最多轮询 10s，chip 最多等待 60s（实测 chip 约 200ms 出现，但冷启动/上传处理可能更慢）。
-8. **会话动作**：`new` / `stop` / `list_sessions` / `load_session` / `rename_session` / `delete_session` 全部实现；所有 REST 调用必须检查 `res.ok`，401 回 `login_required`，其它失败回 `error`，不得静默。\n9. **引用标签清洗**：`/responses` 的 `message` 会把网页端引用以 `<grok:render card_id="…" ...><argument name="citation_id">N</argument></grok:render>` 原样返回；`load_session` 必须用同条 response 的 `cardAttachmentsJson` 把 `card_id` 映射成 URL，替换为 `[来源名](url)`，并清掉无映射的残留标签。实时 DOM 正常已渲染为来源名，但采集器仍要兜底剥离原始标签/部分标签。
+8. **会话动作**：`new` / `stop` / `list_sessions` / `load_session` / `rename_session` / `delete_session` 全部实现；所有 REST 调用必须检查 `res.ok`，401 回 `login_required` 并移交任务空间，其它失败回 `error`，不得静默。
+9. **引用标签清洗**：`/responses` 的 `message` 会把网页端引用以 `<grok:render card_id="…" ...><argument name="citation_id">N</argument></grok:render>` 原样返回；`load_session` 必须用同条 response 的 `cardAttachmentsJson` 把 `card_id` 映射成 URL，替换为 `[来源名](url)`，并清掉无映射的残留标签。实时 DOM 正常已渲染为来源名，但采集器仍要兜底剥离原始标签/部分标签。
 
 #### 关键代码
 
@@ -400,27 +401,30 @@ const THINKING = PARAMS.thinking || '';   // Grok 无思考档位，保留字段
 async function dismissCookieBanner() {
   await js(String.raw`
     (() => {
-      const reject = document.querySelector('.ot-pc-refuse-all-handler, button[aria-label="Close"]');
-      if (reject && getComputedStyle(reject).display !== 'none') reject.click();
+      const reject = document.querySelector('.ot-pc-refuse-all-handler');
+      if (!reject) return false;
+      const style = getComputedStyle(reject);
+      if (style.display === 'none' || style.visibility === 'hidden') return false;
+      reject.click();
       return true;
     })()
-  `).catch(() => {});
+  `).catch(() => false);
 }
 
-async function grokLoggedIn() {
-  const state = await js(String.raw`
+async function grokLoginState() {
+  return await js(String.raw`
     (async () => {
       try {
         const res = await fetch('/rest/auth/get-user', { credentials: 'include' });
         if (!res.ok) return { ok: false, status: res.status };
         const user = await res.json();
-        return { ok: Boolean(user && user.email), user };
-      } catch (_) {
-        return { ok: false };
+        const email = Boolean(user && user.email);
+        return { ok: email, anonymous: !email, status: res.status };
+      } catch (error) {
+        return { ok: false, status: -1, message: String((error && error.message) || error) };
       }
     })()
-  `).catch(() => ({ ok: false }));
-  return Boolean(state && state.ok);
+  `).catch((error) => ({ ok: false, status: -1, message: String((error && error.message) || error) }));
 }
 
 async function ensureGrokComposer() {
@@ -623,14 +627,14 @@ if (currentUrl.includes(SESSION_ID)) {
 
 #### 关键点
 
-1. **登录/动作分流**：先 `activateTaskSpace` → 导航到 `HOME` → `dismissCookieBanner` → 登录检测 → 非 `chat` 走 `runNonChatAction`。
+1. **登录/动作分流**：先 `activateTaskSpace` → 导航到 `HOME` → `dismissCookieBanner` → 登录检测（401/200 匿名才移交，5xx/网络错误回 `error`）→ 非 `chat` 走 `runNonChatAction` → chat 才等 composer。
 2. **新会话**：`FIRST_TURN && EDIT_INDEX < 0` 时 `ensureFreshChat()`；已有 `SESSION_ID` 且 URL 不匹配时导航到 `HOME + 'c/' + SESSION_ID`。
-3. **模型同步**：发送前 `ensureGrokModel()`，失败直接 `error`，不静默沿用旧模型。
-4. **普通发送**：`syncComposerAttachments()` → ProseMirror `focus()` + `execCommand('selectAll')` + `execCommand('insertText')` → 点击 `button[data-testid="chat-submit"]`；确认编辑器清空或出现停止按钮。
-5. **`/rewind` 重试追加**：TUI/CLI 对 Grok 不再传 `EDIT_INDEX`；Rust 层把 `/rewind` 降级为“回填最后一条用户文本 + 普通追加”。脚本保留 `EDIT_INDEX` 兼容分支，但即使调用 Edit，新回答也追加在 `existingResponses.length`；采集器不得盯 `EDIT_INDEX` 对应的旧回答，否则会 300s 超时。
-6. **DOM 流采集**：在 `window.__lxGrokStream` 上保存 `lastText` / `queue` / `stableTicks`；每 60ms 轮询最后一条 `[data-testid="assistant-message"]` 的 `.response-content-markdown`，用 Gemini 同款“尾部锚点对齐”算法计算增量，避免流式 Markdown 重渲染导致重复输出。
-7. **完成判定**：停止按钮 `button[aria-label="停止模型响应"]` 消失 + 文本连续 10 个 tick（约 600ms）不变 + `button[data-testid="chat-submit"]` 回到提交态。
-8. **会话绑定**：完成后从 `location.pathname.match(/\/c\/([0-9a-f-]{8,})/)` 取 ID；标题优先侧栏 `a[href^="/c/"]` 文本，其次 `document.title` 去掉 ` - Grok` 后缀。
+3. **模型同步**：发送前 `ensureGrokModel()`；按钮已是目标模型（允许 `Build` 附带的 `Beta` 文本）直接返回，否则在 15s 内轮询菜单项，失败直接 `error`，不静默沿用旧模型。
+4. **普通发送**：`syncComposerAttachments()` 循环删到 0 个 chip，再注入本轮文件并等待 `chips === FILES.length`；ProseMirror `focus()` + `execCommand('selectAll')` + `insertText`（空 prompt 用 `delete` 清空旧草稿）；提交后 5s 内要求 user/assistant 数量增加或出现有效停止按钮，否则立即报错。
+5. **`/rewind` 重试追加**：TUI/CLI 对 Grok 不再传 `EDIT_INDEX`；Rust 层把 `/rewind` 降级为“回填最后一条用户文本 + 普通追加”。脚本保留 `EDIT_INDEX` 兼容分支但显式拒绝附件和越界，采集器不得盯 `EDIT_INDEX` 对应的旧回答。
+6. **DOM 流采集**：在 `window.__lxGrokStream` 上保存 `baselineAssistants` / `lastText` / `queue` / `stableTicks`；每 60ms 轮询发送后新增的最后一个 `[data-testid="assistant-message"]`，只读 `.response-content-markdown`，用“尾部锚点对齐”计算增量。
+7. **完成判定**：有效停止按钮（过滤 disabled/`aria-disabled`）消失 + 文本连续 30 个 tick（约 1.8s）不变；助手节点出现但 15s 无正文时显式报 `Grok response has no text`，不空等 300s。不再把 `chat-submit` 作为完成信号（空 composer 时该按钮会消失）。
+8. **会话绑定**：完成后从 `location.pathname.match(/\/c\/([0-9a-f-]{8,})/)` 取 ID；最多等 5s，标题优先侧栏 `a[href^="/c/"]` 文本（过滤 `New chat` 占位），其次 `document.title` 去掉 ` - Grok` 后缀。
 9. **思考块**：不采集、不 emit `thinking`。
 
 #### 关键代码
@@ -640,33 +644,41 @@ async function main() {
   await activateTaskSpace();
   const current = await pageInfo().catch(() => null);
   const currentUrl = (current && current.url) || '';
-  if (!currentUrl.startsWith('https://grok.com')) {
+  let onGrok = false;
+  try {
+    const parsed = new URL(currentUrl);
+    onGrok = parsed.protocol === 'https:' && parsed.hostname === 'grok.com';
+  } catch (_) {}
+  if (!onGrok) {
     await openOrReuseTab(HOME, { wait: true, timeout: 25 });
   }
   await dismissCookieBanner();
 
-  // 登录只信 API，不因普通 sign-in 链接提前判未登录。
-  let loggedIn = false;
+  // 登录只信 API；401/200 匿名才是未登录，5xx/网络错误不能伪装成登录墙。
+  let loginState = { ok: false, status: -1 };
   const loginDeadline = Date.now() + 20000;
   while (Date.now() < loginDeadline) {
-    loggedIn = await grokLoggedIn();
-    if (loggedIn) break;
+    loginState = await grokLoginState();
+    if (loginState.ok) break;
+    if (loginState.status === 401 || loginState.status === 200) break;
     await new Promise((r) => setTimeout(r, 300));
   }
-  if (!loggedIn) {
-    await handOffTaskSpace();
-    await emit({ event: 'login_required', url: HOME });
+  if (!loginState.ok) {
+    if (loginState.status === 401 || loginState.status === 200) {
+      await emitLoginRequired();
+    } else {
+      await emit({ event: 'error', message: 'Grok auth check failed (' + httpDetail(loginState) + ')' });
+    }
     return;
   }
 
-  // 登录后再等 composer，避免把冷启动误判成未登录。
-  if (!(await ensureGrokComposer())) {
-    await emit({ event: 'error', message: 'Grok composer not found' });
-    return;
-  }
-
+  // 非 chat 的 REST 动作不等待 composer，避免冷启动拖满 CLI 预算。
   if (ACTION !== 'chat') {
     await runNonChatAction(currentUrl);
+    return;
+  }
+  if (!(await ensureGrokComposer())) {
+    await emit({ event: 'error', message: 'Grok composer not found' });
     return;
   }
 
@@ -921,7 +933,7 @@ pub fn ai_web_site_gradient(site: AiWebSite) -> (Color, Color) {
 }
 ```
 
-`place_ai_web_sites` / `draw_ai_web_sites` 已是 N 站点动态布局，不需要改算法；只更新测试期望。
+`place_ai_web_sites` / `draw_ai_web_sites` 原本按固定 3 列间隔布局；三站点后窄窗格必须把间隔降为 1，并在宽度不足时用 `ai_web_site_label_for_width` 取前 N 个字符（不用 `…`，否则 8 列的 Gemini/Grok 都会变成 `G…`）。宽 8 得到 `[2,2,2]`，宽 10 得到 `[3,3,2]`。
 
 ---
 
@@ -999,7 +1011,8 @@ sleep 4
 10. **文件行数**：新增 JS 文件按 helpers/script 拆分，单个生产文件 `< 1000` 行；Rust 改动均为分支追加，不新建超大模块。
 11. **正文提取**：只能读 `.response-content-markdown`；禁止回退到助手消息 `innerText`，否则正文挂载前会把 `sr-only` 的 “Grok” 标题当成回答（已实测踩坑）。
 12. **附件 DOM**：chip 容器在输入框 `<form>` 内而不是 `drop-ui` 内；清理必须限定 `form`，隐藏 input 轮询 10s，chip 等待 60s。
-13. **Grok Edit 不可原地替换**：Edit 提交会清空旧用户消息正文并追加新轮次；任何“EDIT_INDEX 对应旧回答”的采集逻辑都会超时。\n14. **引用标签不得泄漏**：历史 `message` 原样带 `<grok:render>`，必须按 `cardAttachmentsJson` 映射为来源链接；实时采集要及时剥离完整标签和尾部未闭合片段，否则 TUI 会显示原始 XML。
+13. **Grok Edit 不可原地替换**：Edit 提交会清空旧用户消息正文并追加新轮次；任何“EDIT_INDEX 对应旧回答”的采集逻辑都会超时。
+14. **引用标签不得泄漏**：历史 `message` 原样带 `<grok:render>`，必须按 `cardAttachmentsJson` 映射为来源链接；实时采集要及时剥离完整标签和尾部未闭合片段，否则 TUI 会显示原始 XML。
 
 ---
 
