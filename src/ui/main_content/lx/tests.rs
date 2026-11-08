@@ -2122,7 +2122,8 @@ fn code_block_renders_top_and_left_border_with_lang_and_copy_button() {
     let text = buffer_text(&buf);
     assert!(text.contains('▂'), "顶部 `▂` 边框保留：{text}");
     assert!(text.contains("▎js"), "首行左侧显示语言名：{text}");
-    assert!(text.contains("[❐]"), "首行右侧显示复制按钮：{text}");
+    assert!(text.contains('❐'), "首行右侧显示复制按钮：{text}");
+    assert!(!text.contains("[❐]"), "复制按钮移除方括号：{text}");
     assert!(
         text.contains("▎const a = 1;"),
         "代码正文带左侧 `▎` 边框：{text}"

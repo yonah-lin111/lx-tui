@@ -492,6 +492,8 @@ pub const SETTINGS_LABEL: &str = "[SET]";
 
 /// 模板块操作按钮文案（复制/清理/删除图标）。
 pub const TEMPLATE_BUTTON_COPY: &str = "[❐]";
+/// 代码块头部行右侧复制按钮文案（无方括号）。
+pub const CODE_BLOCK_BUTTON_COPY: &str = "❐";
 pub const TEMPLATE_BUTTON_CLEAN: &str = "[⌫]";
 pub const TEMPLATE_BUTTON_DEL: &str = "[✕]";
 

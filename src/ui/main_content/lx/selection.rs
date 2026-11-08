@@ -213,14 +213,28 @@ pub(super) fn paint_selection(
         let Ok(row_usize) = usize::try_from(content_row) else {
             continue;
         };
+        let code_row = grid.code_row_at(grid_dy);
+        if matches!(code_row, Some(super::grid::GridCodeRow::Chrome)) {
+            continue;
+        }
         if let Some((raw_col0, raw_col1)) = row_col_bounds(row_usize, start, end, geom.rect.width) {
+            let min_col = match code_row {
+                Some(super::grid::GridCodeRow::Body { bar_col }) => {
+                    bar_col.saturating_sub(x_offset).saturating_add(1)
+                }
+                _ => 0,
+            };
+            let eff_col0 = raw_col0.max(min_col);
+            if eff_col0 > raw_col1 || (start.1 < min_col && end.1 < min_col) {
+                continue;
+            }
             let (g_col0, g_col1) = table::align_wide_char_cols(
                 grid,
                 grid_dy,
-                x_offset.saturating_add(raw_col0),
+                x_offset.saturating_add(eff_col0),
                 x_offset.saturating_add(raw_col1),
             );
-            let col0 = g_col0.saturating_sub(x_offset);
+            let col0 = g_col0.saturating_sub(x_offset).max(min_col);
             let col1 = g_col1
                 .saturating_sub(x_offset)
                 .min(geom.rect.width.saturating_sub(1));
@@ -338,13 +352,30 @@ pub(crate) fn unit_cell_range(
         }
         return range;
     }
+    let code_row = grid.code_row_at(0);
+    if matches!(code_row, Some(super::grid::GridCodeRow::Chrome)) {
+        return (cell, cell);
+    }
+    let min_col = match code_row {
+        Some(super::grid::GridCodeRow::Body { bar_col }) => bar_col.saturating_add(1),
+        _ => 0,
+    };
     match unit {
         SelectionUnit::Character => (cell, cell),
-        SelectionUnit::Line => ((cell.0, 0), (cell.0, max_col)),
+        SelectionUnit::Line => {
+            if min_col > max_col {
+                (cell, cell)
+            } else {
+                ((cell.0, min_col), (cell.0, max_col))
+            }
+        }
         SelectionUnit::Word => {
+            if cell.1 < min_col || min_col > max_col {
+                return (cell, cell);
+            }
             let mut tokens: Vec<(u16, u16, crate::app::selection::CharClass)> =
-                Vec::with_capacity(usize::from(geom.rect.width));
-            for x in 0..geom.rect.width {
+                Vec::with_capacity(usize::from(geom.rect.width.saturating_sub(min_col)));
+            for x in min_col..geom.rect.width {
                 let ch = grid.cell(x, 0).ch;
                 if ch == CONTINUATION {
                     if let Some(last) = tokens.last_mut() {
@@ -357,7 +388,7 @@ pub(crate) fn unit_cell_range(
             if tokens.is_empty() {
                 return (cell, cell);
             }
-            let target_col = cell.1.min(max_col);
+            let target_col = cell.1.clamp(min_col, max_col);
             let idx = tokens
                 .iter()
                 .position(|(start, end, _)| *start <= target_col && target_col <= *end)
@@ -511,6 +542,10 @@ pub fn copy_text(
                     _ => 0,
                 };
                 let eff_col0 = raw_col0.max(min_col);
+                if start.1 < min_col && end.1 < min_col {
+                    row = row.saturating_add(1);
+                    continue;
+                }
                 if eff_col0 <= raw_col1 {
                     let (col0, col1) = table::align_wide_char_cols(&grid, y, eff_col0, raw_col1);
                     let mut line = String::new();
@@ -521,7 +556,10 @@ pub fn copy_text(
                         }
                     }
                     lines.push(line.trim_end().to_string());
-                } else if matches!(code_row, Some(super::grid::GridCodeRow::Body { .. })) {
+                } else if matches!(code_row, Some(super::grid::GridCodeRow::Body { .. }))
+                    && start.0 < end.0
+                    && i32::try_from(row).is_ok_and(|r| r > start.0 && r < end.0)
+                {
                     lines.push(String::new());
                 }
             }

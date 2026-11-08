@@ -16,23 +16,24 @@ fn fenced_code_block_renders_top_border_header_and_left_bar() {
     assert_eq!(lines[0].width(), 30);
     assert_eq!(lines[0].spans[0].1, style::md_read_rule());
 
-    // 第 1 行：首列 `▎` + `rust` + 空白填充 + 右对齐 `[❐]`。
+    // 第 1 行：首列 `▎` + `rust` + 空白填充 + 右对齐 `❐`。
     assert_eq!(
         lines[1].code,
         Some(CodeLineKind::Header {
             block_index: 0,
-            button_cols: (27, 30),
+            button_cols: (29, 30),
         })
     );
     assert_eq!(lines[1].width(), 30);
     assert!(lines[1].text().starts_with("▎rust"));
-    assert!(lines[1].text().ends_with(text::TEMPLATE_BUTTON_COPY));
+    assert!(lines[1].text().ends_with(text::CODE_BLOCK_BUTTON_COPY));
+    assert!(!lines[1].text().contains("[❐]"));
     assert_eq!(lines[1].spans[0], ("▎".to_string(), style::md_read_rule()));
     assert_eq!(lines[1].spans[1], ("rust".to_string(), style::muted()));
     assert_eq!(
         lines[1].spans.last().cloned(),
         Some((
-            text::TEMPLATE_BUTTON_COPY.to_string(),
+            text::CODE_BLOCK_BUTTON_COPY.to_string(),
             style::template_button()
         ))
     );
@@ -64,12 +65,12 @@ fn empty_lang_and_indented_code_block_fallback_to_text_label() {
             "默认语言应显示为 text：{:?}",
             header.text()
         );
-        assert!(header.text().ends_with(text::TEMPLATE_BUTTON_COPY));
+        assert!(header.text().ends_with(text::CODE_BLOCK_BUTTON_COPY));
         assert_eq!(
             header.code,
             Some(CodeLineKind::Header {
                 block_index: expected_idx,
-                button_cols: (21, 24),
+                button_cols: (23, 24),
             })
         );
     }
@@ -78,15 +79,15 @@ fn empty_lang_and_indented_code_block_fallback_to_text_label() {
 #[test]
 fn narrow_width_truncates_language_with_ellipsis_and_keeps_copy_button() {
     let src = "```typescript\nconst x = 1;\n```";
-    // width = 10：col 0 为 `▎`，col 7..10 为 `[❐]`，col 6 为间隔空格，语言预算为 5 列 -> `type…`。
-    let lines = render_wrapped_code_blocks(src, 10);
-    assert_eq!(lines[1].text(), "▎type… [❐]");
-    assert_eq!(lines[1].width(), 10);
+    // width = 8：col 0 为 `▎`，col 7..8 为 `❐`，col 6 为间隔空格，语言预算为 5 列 -> `type…`。
+    let lines = render_wrapped_code_blocks(src, 8);
+    assert_eq!(lines[1].text(), "▎type… ❐");
+    assert_eq!(lines[1].width(), 8);
     assert_eq!(
         lines[1].code,
         Some(CodeLineKind::Header {
             block_index: 0,
-            button_cols: (7, 10),
+            button_cols: (7, 8),
         })
     );
 }

@@ -2,7 +2,7 @@
 //!
 //! 视觉对齐 Prompt 区 `&&&` 模板块：
 //! - 顶部独立一行下 1/4 粗边 `▂`（[`text::PROMPT_BLOCK_TOP_BORDER`]），样式 [`style::md_read_rule`]；
-//! - 内部第一行左侧紧贴 `▎` 显示语言名（无语言或缩进代码块显示 `text`），右侧贴右缘显示 `[❐]`；
+//! - 内部第一行左侧紧贴 `▎` 显示语言名（无语言或缩进代码块显示 `text`），右侧贴右缘显示 `❐`；
 //! - 代码正文每个视觉行（含软换行续行）首列绘制 `▎`（[`text::PROMPT_BLOCK_BAR`]）。
 
 use ratatui::style::Style;
@@ -20,7 +20,7 @@ pub const DEFAULT_CODE_LANG: &str = "text";
 pub enum CodeLineKind {
     /// 顶部边框行（整行铺满 `▂`）。
     TopBorder,
-    /// 内部第一行头部：左侧语言名、右侧 `[❐]` 复制按钮。
+    /// 内部第一行头部：左侧语言名、右侧 `❐` 复制按钮。
     Header {
         /// 当前 Markdown 文本块内的代码块序号（0-based，与 [`extract_code_block`] 一致）。
         block_index: usize,
@@ -46,14 +46,14 @@ pub(super) fn top_border_line(width: Option<usize>) -> MdLine {
     }
 }
 
-/// 构造代码块内部第一行头部：`▎<lang> ... [❐]`。
+/// 构造代码块内部第一行头部：`▎<lang> ... ❐`。
 ///
-/// 对齐 Prompt 区 `&&&` 起始行按钮几何：右侧 `[❐]` 常显优先（极窄时钳到 `▎` 之后），
-/// 左侧语言名超出 `[❐]` 左缘前 1 列空白时以 `…` 截断。
+/// 对齐 Prompt 区 `&&&` 起始行按钮几何：右侧 `❐` 常显优先（极窄时钳到 `▎` 之后），
+/// 左侧语言名超出 `❐` 左缘前 1 列空白时以 `…` 截断。
 pub(super) fn header_line(lang: &str, block_index: usize, width: Option<usize>) -> MdLine {
     let cols = width.unwrap_or(40).max(1);
     let label = normalize_lang_label(lang);
-    let btn = text::TEMPLATE_BUTTON_COPY;
+    let btn = text::CODE_BLOCK_BUTTON_COPY;
     let btn_w = display_width(btn);
     let bar_w = usize::from(cols >= 1);
     let btn_start = cols.saturating_sub(btn_w).max(bar_w);
