@@ -532,6 +532,9 @@ async fn run_chat(
         })
     });
     drop(line_tx);
+    let mut listener_abort = listener_task
+        .as_ref()
+        .map(tokio::task::JoinHandle::abort_handle);
     tokio::spawn(async move {
         if let Some(t) = stdout_task {
             let _ = t.await;
@@ -552,6 +555,9 @@ async fn run_chat(
             changed = cancel.changed() => {
                 if changed.is_ok() && !*cancel.borrow() {
                     continue;
+                }
+                if let Some(abort) = listener_abort.take() {
+                    abort.abort();
                 }
                 let _ = child.kill().await;
                 spawn_action(

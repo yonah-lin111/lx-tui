@@ -101,23 +101,33 @@ async function main() {
         pushDom(kind, current) {
           const key = kind === 'thinking' ? 'domThink' : 'domText';
           const previous = this[key] || '';
-          if (current === previous) return;
-          let delta = '';
-          if (current.length > previous.length && current.startsWith(previous)) {
-            delta = current.slice(previous.length);
-          } else {
-            let index = 0;
-            while (
-              index < current.length
-              && index < previous.length
-              && current[index] === previous[index]
-            ) {
-              index += 1;
-            }
-            delta = current.slice(index);
+          if (!current || current === previous) return;
+          if (current.startsWith(previous)) {
+            const delta = current.slice(previous.length);
+            this[key] = current;
+            if (delta) this.queue.push({ kind: kind, delta: delta });
+            return;
           }
-          this[key] = current;
-          if (delta) this.queue.push({ kind: kind, delta: delta });
+          for (const len of [48, 32, 20, 12, 8, 5]) {
+            if (previous.length < len) continue;
+            const anchor = previous.slice(previous.length - len);
+            const pos = current.lastIndexOf(anchor);
+            if (pos >= 0 && pos + len >= current.length - 240) {
+              const delta = current.slice(pos + len);
+              if (delta.length > 0 || current.length >= previous.length) {
+                this[key] = current;
+              }
+              if (delta) this.queue.push({ kind: kind, delta: delta });
+              return;
+            }
+          }
+          const tailLen = Math.min(20, current.length);
+          if (tailLen >= 5 && previous.includes(current.slice(current.length - tailLen))) {
+            return;
+          }
+          if (current.length > previous.length) {
+            this[key] = current;
+          }
         },
         fragmentKind(fragment) {
           if (!fragment) return null;
@@ -609,7 +619,9 @@ async function main() {
   }
 
   const deadline = Date.now() + 300000;
-  while (Date.now() < deadline) {
+  let lastHeartbeat = Date.now();
+  while (Date.now() < deadline && !STREAM_ABORTED) {
+    await ensureTaskSpaceControl();
     const snapshot = await js(`
       (() => {
         const stream = window.__lxDeepSeekStream;
@@ -620,7 +632,13 @@ async function main() {
     `);
     if (!snapshot) throw new Error('DeepSeek stream collector was lost');
     if (snapshot.queue.length > 0) {
+      lastHeartbeat = Date.now();
       await emitMany(snapshot.queue.map((item) => ({ event: item.kind, delta: item.delta })));
+    } else if (Date.now() - lastHeartbeat >= 1000) {
+      lastHeartbeat = Date.now();
+      if (!(await checkStreamAlive())) {
+        return;
+      }
     }
     if (snapshot.done) {
       const sessionMeta = await js(String.raw`

@@ -40,14 +40,50 @@ async function emit(obj) {
   await emitMany([obj]);
 }
 
+async function checkStreamAlive() {
+  if (!STREAM_URL || STREAM_ABORTED) return !STREAM_ABORTED;
+  try {
+    await fetch(STREAM_URL, { method: 'POST', body: '' });
+    return true;
+  } catch (_) {
+    STREAM_ABORTED = true;
+    return false;
+  }
+}
+
+async function reclaimSpaceTarget(target) {
+  if (!target || !target.ownership || target.ownership === 'agent') return false;
+  if (target.ownership === 'agentDelegatedToUser') {
+    await takeOverTaskSpace(target.id).catch(async () => {
+      await claimTaskSpace(target.id).catch(() => {});
+    });
+  } else {
+    await claimTaskSpace(target.id).catch(async () => {
+      await takeOverTaskSpace(target.id).catch(() => {});
+    });
+  }
+  return true;
+}
+
 async function activateTaskSpace() {
+  const spaces = await listTaskSpaces().catch(() => []);
+  const target = Array.isArray(spaces)
+    ? spaces.find((s) => s && (s.name === SPACE || s.taskId === SPACE))
+    : null;
+  if (target) {
+    await reclaimSpaceTarget(target);
+  }
   await useOrCreateTaskSpace(SPACE);
+}
+
+async function ensureTaskSpaceControl() {
   const spaces = await listTaskSpaces().catch(() => []);
   const target = Array.isArray(spaces)
     ? spaces.find((s) => s && (s.name === SPACE || s.taskId === SPACE))
     : null;
   if (target && target.ownership && target.ownership !== 'agent') {
-    await takeOverTaskSpace(SPACE).catch(() => {});
+    await reclaimSpaceTarget(target);
+    await useOrCreateTaskSpace(SPACE).catch(() => {});
   }
 }
 
@@ -455,7 +491,19 @@ async function runNonChatAction(currentUrl) {
               hiddenM.push([el, el.style.display]);
               el.style.display = 'none';
             });
+            const tempCodeNodes = [];
+            const bt = String.fromCharCode(96);
+            msgEl.querySelectorAll('code').forEach((c) => {
+              if (!c.closest('pre, code-block')) {
+                const open = document.createTextNode(bt);
+                const close = document.createTextNode(bt);
+                c.insertBefore(open, c.firstChild);
+                c.appendChild(close);
+                tempCodeNodes.push(open, close);
+              }
+            });
             const text = (msgEl.innerText || '').replace(/\\r\\n/g, '\\n').trim();
+            for (const tn of tempCodeNodes) tn.remove();
             for (const [el, prev] of hiddenM) el.style.display = prev;
             messages.push({
               role: 'assistant',

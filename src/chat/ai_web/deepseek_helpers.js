@@ -19,14 +19,19 @@ const SESSION_ID = PARAMS.sessionId || '';
 const TITLE = PARAMS.title || '';
 const EDIT_INDEX = typeof PARAMS.editIndex === 'number' ? PARAMS.editIndex : -1;
 
+let STREAM_ABORTED = false;
+
 async function emitMany(objs) {
-  if (!objs || objs.length === 0) return;
+  if (!objs || objs.length === 0 || STREAM_ABORTED) return;
   const payload = objs.map((obj) => PREFIX + JSON.stringify(obj) + '\n').join('');
   if (STREAM_URL) {
     try {
       await fetch(STREAM_URL, { method: 'POST', body: payload });
       return;
-    } catch (_) {}
+    } catch (_) {
+      STREAM_ABORTED = true;
+      return;
+    }
   }
   process.stdout.write(payload);
 }
@@ -35,14 +40,50 @@ async function emit(obj) {
   await emitMany([obj]);
 }
 
+async function checkStreamAlive() {
+  if (!STREAM_URL || STREAM_ABORTED) return !STREAM_ABORTED;
+  try {
+    await fetch(STREAM_URL, { method: 'POST', body: '' });
+    return true;
+  } catch (_) {
+    STREAM_ABORTED = true;
+    return false;
+  }
+}
+
+async function reclaimSpaceTarget(target) {
+  if (!target || !target.ownership || target.ownership === 'agent') return false;
+  if (target.ownership === 'agentDelegatedToUser') {
+    await takeOverTaskSpace(target.id).catch(async () => {
+      await claimTaskSpace(target.id).catch(() => {});
+    });
+  } else {
+    await claimTaskSpace(target.id).catch(async () => {
+      await takeOverTaskSpace(target.id).catch(() => {});
+    });
+  }
+  return true;
+}
+
 async function activateTaskSpace() {
+  const spaces = await listTaskSpaces().catch(() => []);
+  const target = Array.isArray(spaces)
+    ? spaces.find((s) => s && (s.name === SPACE || s.taskId === SPACE))
+    : null;
+  if (target) {
+    await reclaimSpaceTarget(target);
+  }
   await useOrCreateTaskSpace(SPACE);
+}
+
+async function ensureTaskSpaceControl() {
   const spaces = await listTaskSpaces().catch(() => []);
   const target = Array.isArray(spaces)
     ? spaces.find((s) => s && (s.name === SPACE || s.taskId === SPACE))
     : null;
   if (target && target.ownership && target.ownership !== 'agent') {
-    await takeOverTaskSpace(SPACE).catch(() => {});
+    await reclaimSpaceTarget(target);
+    await useOrCreateTaskSpace(SPACE).catch(() => {});
   }
 }
 

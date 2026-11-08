@@ -106,14 +106,19 @@ fn parses_session_events() {
 fn scripts_for_site_returns_deepseek_and_gemini_driver_bundles() {
     let (ds_helpers, ds_main) = scripts_for_site(crate::app::state::AiWebSite::Deepseek);
     assert!(ds_helpers.contains("lx-tui-ai-web-deepseek"));
+    assert!(ds_helpers.contains("takeOverTaskSpace"));
+    assert!(ds_helpers.contains("claimTaskSpace"));
     assert!(ds_main.contains("ds-toggle-button"));
+    assert!(ds_main.contains("await ensureTaskSpaceControl()"));
 
     let (gm_helpers, gm_main) = scripts_for_site(crate::app::state::AiWebSite::Gemini);
     assert!(gm_helpers.contains("lx-tui-ai-web-gemini"));
     assert!(gm_helpers.contains("bard-mode-menu-button"));
     assert!(gm_helpers.contains("takeOverTaskSpace"));
+    assert!(gm_helpers.contains("claimTaskSpace"));
     assert!(gm_main.contains("__lxGeminiStream"));
     assert!(gm_main.contains("await activateTaskSpace()"));
+    assert!(gm_main.contains("await ensureTaskSpaceControl()"));
 }
 
 #[test]

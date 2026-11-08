@@ -67,27 +67,85 @@ async function main() {
         pushDom(kind, current) {
           const key = kind === 'thinking' ? 'domThink' : 'domText';
           const previous = this[key] || '';
-          if (current === previous) return;
-          let delta = '';
-          if (current.length > previous.length && current.startsWith(previous)) {
-            delta = current.slice(previous.length);
-          } else if (kind === 'thinking' && previous.length > 0) {
-            delta = '\\n' + current;
-          } else {
-            let index = 0;
-            while (
-              index < current.length
-              && index < previous.length
-              && current[index] === previous[index]
-            ) {
-              index += 1;
+          if (!current || current === previous) return;
+          if (kind === 'thinking') {
+            let delta = '';
+            if (!previous) {
+              delta = current;
+            } else if (current.length > previous.length && current.startsWith(previous)) {
+              delta = current.slice(previous.length);
+            } else if (!previous.includes(current)) {
+              delta = '\\n' + current;
             }
-            delta = current.slice(index);
+            this[key] = current;
+            if (delta) {
+              this.started = true;
+              this.queue.push({ kind, delta });
+            }
+            return;
           }
-          this[key] = current;
-          if (delta) {
+          if (!previous) {
+            this[key] = current;
             this.started = true;
-            this.queue.push({ kind, delta });
+            this.queue.push({ kind, delta: current });
+            return;
+          }
+          if (current.startsWith(previous)) {
+            const delta = current.slice(previous.length);
+            this[key] = current;
+            if (delta) {
+              this.started = true;
+              this.queue.push({ kind, delta });
+            }
+            return;
+          }
+          // Align the tail of previous near the end of current so mid-document
+          // citation animations do not re-emit already streamed paragraphs.
+          for (const len of [48, 32, 20, 12, 8, 5]) {
+            if (previous.length < len) continue;
+            const anchor = previous.slice(previous.length - len);
+            const pos = current.lastIndexOf(anchor);
+            if (pos >= 0 && pos + len >= current.length - 240) {
+              const delta = current.slice(pos + len);
+              if (delta.length > 0 || current.length >= previous.length) {
+                this[key] = current;
+              }
+              if (delta) {
+                this.started = true;
+                this.queue.push({ kind, delta });
+              }
+              return;
+            }
+          }
+          // If the tail of current was already emitted in previous (e.g. the final
+          // paragraph temporarily shrank while attaching citations), emit nothing and
+          // preserve previous until the re-animation catches up.
+          const tailLen = Math.min(20, current.length);
+          if (tailLen >= 5 && previous.includes(current.slice(current.length - tailLen))) {
+            return;
+          }
+          // Handle inline markdown delimiters stripped near the streaming cursor.
+          let lcp = 0;
+          while (lcp < current.length && lcp < previous.length && current[lcp] === previous[lcp]) {
+            lcp += 1;
+          }
+          if (previous.length - lcp <= 40) {
+            const remPrev = previous.slice(lcp).replace(/^[*_~\\s\\x60]+/, '');
+            if (remPrev.length > 0) {
+              const idx = current.indexOf(remPrev, lcp);
+              if (idx >= lcp && idx - lcp <= 10) {
+                const delta = current.slice(idx + remPrev.length);
+                this[key] = current;
+                if (delta) {
+                  this.started = true;
+                  this.queue.push({ kind, delta });
+                }
+                return;
+              }
+            }
+          }
+          if (current.length > previous.length) {
+            this[key] = current;
           }
         },
         extractCleanText(root, selectorList, stripSelectors) {
@@ -101,7 +159,23 @@ async function main() {
               n.style.display = 'none';
             });
           }
+          const tempCodeNodes = [];
+          if (selectorList && selectorList.includes('message-content')) {
+            const bt = String.fromCharCode(96);
+            el.querySelectorAll('code').forEach((c) => {
+              if (!c.closest('pre, code-block')) {
+                const open = document.createTextNode(bt);
+                const close = document.createTextNode(bt);
+                c.insertBefore(open, c.firstChild);
+                c.appendChild(close);
+                tempCodeNodes.push(open, close);
+              }
+            });
+          }
           const text = (el.innerText || '').replace(/\\r\\n/g, '\\n').trim();
+          for (const tn of tempCodeNodes) {
+            tn.remove();
+          }
           for (const [n, prev] of hidden) {
             n.style.display = prev;
           }
@@ -114,7 +188,7 @@ async function main() {
             'button[aria-label*="停止"], button[aria-label*="Stop"], button.stop-button, .blue-circle.stop-icon'
           );
           const announcerBusy = mr
-            ? Boolean(mr.querySelector('.model-response-label-announcer[aria-busy="true"]'))
+            ? Boolean(mr.querySelector('[aria-busy="true"]'))
             : false;
           const isGenerating = Boolean(stopBtn) || announcerBusy;
           if (isGenerating) {
@@ -137,10 +211,11 @@ async function main() {
           if (bodyText) this.pushDom('text', bodyText);
 
           const sample = thinkText + '\\n---\\n' + bodyText;
-          if ((this.started || bodyText.length > 0 || thinkText.length > 0) && !isGenerating) {
+          const caughtUp = bodyText.length >= (this.domText || '').length;
+          if ((this.started || bodyText.length > 0 || thinkText.length > 0) && !isGenerating && caughtUp) {
             if (sample === this.lastSample && (bodyText.length > 0 || thinkText.length > 0)) {
               this.stableTicks += 1;
-              if (this.stableTicks >= 6) {
+              if (this.stableTicks >= 10) {
                 this.done = true;
               }
             } else {
@@ -158,6 +233,7 @@ async function main() {
   `);
 
   // Submit either via inline edit (/rewind) or normal composer input.
+  await ensureTaskSpaceControl();
   if (EDIT_INDEX >= 0) {
     const editClicked = await js(`
       (() => {
@@ -275,7 +351,9 @@ async function main() {
   }
 
   const deadline = Date.now() + 300000;
+  let lastHeartbeat = Date.now();
   while (Date.now() < deadline && !STREAM_ABORTED) {
+    await ensureTaskSpaceControl();
     const batch = await js(`
       (() => {
         const s = window.__lxGeminiStream;
@@ -290,6 +368,7 @@ async function main() {
     }
 
     if (batch && Array.isArray(batch.items) && batch.items.length > 0) {
+      lastHeartbeat = Date.now();
       const events = [];
       for (const item of batch.items) {
         if (item.kind === 'thinking' && item.delta) {
@@ -299,6 +378,11 @@ async function main() {
         }
       }
       await emitMany(events);
+    } else if (Date.now() - lastHeartbeat >= 1000) {
+      lastHeartbeat = Date.now();
+      if (!(await checkStreamAlive())) {
+        return;
+      }
     }
 
     if (batch && batch.done) {
