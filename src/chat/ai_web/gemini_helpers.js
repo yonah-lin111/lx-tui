@@ -329,7 +329,10 @@ async function syncContainerAttachments(inEditBox) {
   if (!FILES || FILES.length === 0) return;
 
   // Open the upload drawer and poll until <input type="file"> is mounted in DOM.
-  const openDeadline = Date.now() + 5000;
+  // Angular lazy-loads <uploader> (~1.5s on a fresh chat), so only click the
+  // toggle button when aria-expanded !== 'true' to avoid closing it mid-load.
+  const openDeadline = Date.now() + 8000;
+  let lastClickAt = 0;
   let inputReady = false;
   while (Date.now() < openDeadline) {
     const count = await js(`document.querySelectorAll('input[type="file"]').length`).catch(() => 0);
@@ -337,15 +340,26 @@ async function syncContainerAttachments(inEditBox) {
       inputReady = true;
       break;
     }
-    await js(String.raw`
+    const now = Date.now();
+    await js(`
       (() => {
         const upBtn = document.querySelector(
           'button[aria-label*="上传和工具"], button[aria-label*="上传"], button[aria-label*="Upload"], simplified-input-menu button'
         );
-        if (upBtn) upBtn.click();
+        if (!upBtn) return false;
+        const expanded = upBtn.getAttribute('aria-expanded') === 'true';
+        if (!expanded || ${now - lastClickAt > 2500 ? 'true' : 'false'}) {
+          upBtn.click();
+          return true;
+        }
+        return false;
       })()
-    `).catch(() => {});
-    await new Promise((r) => setTimeout(r, 250));
+    `)
+      .then((clicked) => {
+        if (clicked) lastClickAt = Date.now();
+      })
+      .catch(() => {});
+    await new Promise((r) => setTimeout(r, 150));
   }
   if (!inputReady) {
     throw new Error('Gemini file upload input not found');

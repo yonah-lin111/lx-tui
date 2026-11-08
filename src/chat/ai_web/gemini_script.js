@@ -11,16 +11,30 @@ async function main() {
   }
   await installPermissionGuard();
 
-  const loggedIn = await js(String.raw`
-    (() => {
-      if (location.hostname !== 'gemini.google.com') return false;
-      const signInLink = document.querySelector('a[href*="accounts.google.com/ServiceLogin"]');
-      const hasComposer = Boolean(
-        document.querySelector('.ql-editor[contenteditable="true"], rich-textarea, [data-test-id="bard-mode-menu-button"]')
-      );
-      return !signInLink && hasComposer;
-    })()
-  `).catch(() => false);
+  let loggedIn = false;
+  const loginDeadline = Date.now() + 8000;
+  while (Date.now() < loginDeadline) {
+    const state = await js(String.raw`
+      (() => {
+        if (location.hostname !== 'gemini.google.com') return { ready: false, signIn: false };
+        const signInLink = Boolean(
+          document.querySelector('a[href*="accounts.google.com/ServiceLogin"], a[aria-label*="登录"], a[aria-label*="Sign in"]')
+        );
+        const hasComposer = Boolean(
+          document.querySelector('.ql-editor[contenteditable="true"], rich-textarea, [data-test-id="bard-mode-menu-button"]')
+        );
+        return { ready: !signInLink && hasComposer, signIn: signInLink && !hasComposer };
+      })()
+    `).catch(() => ({ ready: false, signIn: false }));
+    if (state && state.ready) {
+      loggedIn = true;
+      break;
+    }
+    if (state && state.signIn) {
+      break;
+    }
+    await new Promise((r) => setTimeout(r, 200));
+  }
   if (!loggedIn) {
     await handOffTaskSpace();
     await emit({ event: 'login_required', url: HOME });
