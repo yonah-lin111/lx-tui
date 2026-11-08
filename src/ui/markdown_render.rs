@@ -774,7 +774,8 @@ fn wrap_md_line(line: &MdLine, width: usize, out: &mut Vec<MdLine>) {
         return;
     }
     if line.code == Some(CodeLineKind::Body) {
-        let body_width = width.saturating_sub(1).max(1);
+        // 扣掉左侧 `▎` 与右侧预留的 1 列空白。
+        let body_width = width.saturating_sub(2).max(1);
         let start_len = out.len();
         wrap_md_line_inner(line, body_width, out);
         for wrapped in &mut out[start_len..] {

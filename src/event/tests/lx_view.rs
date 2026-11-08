@@ -1153,8 +1153,8 @@ fn lx_code_block_copy_button_click_shows_pane_toast_keeps_selection_and_ignores_
         (2, 10),
     ));
 
-    // 第一个代码块：第 0 行 `▂` 顶边，第 1 行头部 `─ rust ─...─ [❐] ─`，按钮位于右缘。
-    let btn_x = geom.rect.right() - 4;
+    // 第一个代码块：第 0 行 `▂` 顶边，第 1 行头部 `▎ rust ... [❐]`，按钮位于右缘内侧。
+    let btn_x = geom.rect.right() - 3;
     let first_header_y = geom.rect.y + 1;
     // 第 2 行是 `let answer = 42;`，第 3 行是代码块间隔空行，第 4 行是空代码块顶边，第 5 行是头部。
     let empty_header_y = geom.rect.y + 5;

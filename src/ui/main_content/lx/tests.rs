@@ -2083,7 +2083,7 @@ fn lx_input_highlights_inline_code_and_list_markers() {
 
 #[test]
 fn code_block_renders_left_bar_with_lang_and_copy_button() {
-    // 助手正文代码块：顶部 `▂` 边框 + 下一行 `─ js ─── [❐] ─` 头部 + 正文左侧 `▎`。
+    // 助手正文代码块：顶部 `▂` 边框 + 下一行 `▎ js ... [❐]` 头部（无边框）+ 正文左侧 `▎`。
     let area = Rect::new(0, 0, 60, 24);
     let mut lx = Lx::new();
     let mut chat = LxChat::new();
@@ -2121,7 +2121,7 @@ fn code_block_renders_left_bar_with_lang_and_copy_button() {
     let _ = render(area, &mut buf, &lx, false, None, &mut PaneCache::default());
     let text = buffer_text(&buf);
     assert!(text.contains("▂▂▂▂▂▂"), "顶部 `▂` 边框：{text}");
-    assert!(text.contains("─ js "), "头部左侧显示语言名：{text}");
+    assert!(text.contains("▎ js"), "头部左侧显示语言名：{text}");
     assert!(text.contains("[❐]"), "头部右侧显示 `[❐]` 复制按钮：{text}");
     assert!(
         text.contains("▎const a = 1;"),

@@ -10,31 +10,32 @@ fn fenced_code_block_renders_top_border_header_and_left_bar() {
     let lines = render_wrapped_code_blocks(src, 30);
     assert_eq!(lines.len(), 5, "1 行顶边 + 1 行头部 + 3 行代码正文");
 
-    // 第 0 行：顶边框铺满 30 列 `▂`，样式 md_read_rule。
+    // 第 0 行：顶边框铺满 29 列 `▂`（右侧预留 1 列空白），样式 md_read_rule。
     assert_eq!(lines[0].code, Some(CodeLineKind::TopBorder));
-    assert_eq!(lines[0].text(), text::CODE_BLOCK_TOP_BORDER.repeat(30));
-    assert_eq!(lines[0].width(), 30);
+    assert_eq!(lines[0].text(), text::CODE_BLOCK_TOP_BORDER.repeat(29));
+    assert_eq!(lines[0].width(), 29);
     assert_eq!(lines[0].spans[0].1, style::md_read_rule());
 
-    // 第 1 行：`─ rust ─────...──── [❐] ─` 规则线，语言名在左、按钮在右。
+    // 第 1 行：`▎ rust ... [❐]`，语言左侧 1 列空白、按钮右侧由右边距留白。
     assert_eq!(
         lines[1].code,
         Some(CodeLineKind::Header {
             block_index: 0,
-            button_cols: (25, 28),
+            button_cols: (26, 29),
         })
     );
-    assert_eq!(lines[1].width(), 30);
-    assert!(lines[1].text().starts_with("─ rust "));
-    assert!(lines[1].text().ends_with("[❐] ─"));
-    assert_eq!(lines[1].spans[0], ("─ ".to_string(), style::md_read_rule()));
-    assert_eq!(lines[1].spans[1], ("rust".to_string(), style::muted()));
+    assert_eq!(lines[1].width(), 29);
+    assert!(lines[1].text().starts_with("▎ rust "));
+    assert!(lines[1].text().ends_with("[❐]"));
+    assert_eq!(lines[1].spans[0], ("▎".to_string(), style::md_read_rule()));
+    assert_eq!(lines[1].spans[1], (" ".to_string(), style::text()));
+    assert_eq!(lines[1].spans[2], ("rust".to_string(), style::muted()));
     assert_eq!(
-        lines[1].spans[5],
-        (
+        lines[1].spans.last().cloned(),
+        Some((
             text::TEMPLATE_BUTTON_COPY.to_string(),
             style::template_button()
-        )
+        ))
     );
 
     // 第 2..=4 行：每行首列为 `▎`（md_read_rule），紧接高亮后的代码。
@@ -67,16 +68,17 @@ fn empty_lang_and_indented_code_block_fallback_to_text_label() {
         assert!(
             header
                 .text()
-                .starts_with(&format!("─ {DEFAULT_CODE_LANG} ")),
+                .starts_with(&format!("▎ {DEFAULT_CODE_LANG} ")),
             "默认语言应显示为 text：{:?}",
             header.text()
         );
-        assert!(header.text().ends_with("[❐] ─"));
+        assert!(header.text().ends_with("[❐]"));
+        assert_eq!(header.width(), 23, "右侧预留 1 列空白");
         assert_eq!(
             header.code,
             Some(CodeLineKind::Header {
                 block_index: expected_idx,
-                button_cols: (19, 22),
+                button_cols: (20, 23),
             })
         );
     }
@@ -85,16 +87,17 @@ fn empty_lang_and_indented_code_block_fallback_to_text_label() {
 #[test]
 fn narrow_width_truncates_language_with_ellipsis_and_keeps_copy_button() {
     let src = "```typescript\nconst x = 1;\n```";
-    // width = 10：第 0 行顶边，第 1 行 `─ ` + 语言预算 1 列（`…`）+ ` ` + ` ` + `[❐]` + ` ─`。
+    // width = 10：第 0 行顶边（9 列），第 1 行 `▎ ty… [❐]`（右侧预留 1 列空白）。
     let lines = render_wrapped_code_blocks(src, 10);
     assert_eq!(lines[0].code, Some(CodeLineKind::TopBorder));
-    assert_eq!(lines[1].text(), "─ …  [❐] ─");
-    assert_eq!(lines[1].width(), 10);
+    assert_eq!(lines[0].width(), 9);
+    assert_eq!(lines[1].text(), "▎ ty… [❐]");
+    assert_eq!(lines[1].width(), 9);
     assert_eq!(
         lines[1].code,
         Some(CodeLineKind::Header {
             block_index: 0,
-            button_cols: (5, 8),
+            button_cols: (6, 9),
         })
     );
 }
@@ -114,7 +117,11 @@ fn soft_wrapped_code_lines_and_blank_lines_prepend_left_bar_on_every_row() {
             "每个视觉行（含续行与空行）首列必须有 `▎`：{:?}",
             line.text()
         );
-        assert!(line.width() <= 14, "不得超过给定折行宽度：{}", line.width());
+        assert!(
+            line.width() <= 13,
+            "左侧 `▎` + 代码不超过 13 列（右侧预留 1 列）：{}",
+            line.width()
+        );
     }
     assert!(
         body_lines.iter().any(|line| line.text() == "▎"),
@@ -136,14 +143,14 @@ fn code_blocks_have_one_blank_line_above_and_below_surrounding_text() {
     assert_eq!(lines[2].code, Some(CodeLineKind::TopBorder));
     assert_eq!(
         lines[2].text(),
-        text::CODE_BLOCK_TOP_BORDER.repeat(30),
-        "顶边在空行之后铺满整行"
+        text::CODE_BLOCK_TOP_BORDER.repeat(29),
+        "顶边在空行之后铺满 29 列（右侧预留 1 列）"
     );
     assert_eq!(
         lines[3].code,
         Some(CodeLineKind::Header {
             block_index: 0,
-            button_cols: (25, 28),
+            button_cols: (26, 29),
         })
     );
     assert_eq!(lines[4].text(), "▎let x = 1;");
@@ -173,11 +180,11 @@ fn consecutive_code_blocks_share_a_single_blank_line_and_edges_stay_tight() {
     assert_eq!(texts[1], "", "缩进代码块前应有一行空行");
     assert_eq!(
         texts[2],
-        text::CODE_BLOCK_TOP_BORDER.repeat(20),
-        "缩进代码块顶边"
+        text::CODE_BLOCK_TOP_BORDER.repeat(19),
+        "缩进代码块顶边（右侧预留 1 列）"
     );
     assert!(
-        texts[3].starts_with("─ text ") && texts[3].ends_with("[❐] ─"),
+        texts[3].starts_with("▎ text ") && texts[3].ends_with("[❐]"),
         "缩进代码块头部：{:?}",
         texts[3]
     );
