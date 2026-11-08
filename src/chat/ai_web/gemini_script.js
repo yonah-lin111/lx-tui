@@ -513,20 +513,34 @@ async function main() {
     }
 
     if (batch && batch.done) {
-      const sessionMeta = await js(String.raw`
-        (() => {
-          const m = location.pathname.match(/\/app\/([a-zA-Z0-9_-]{8,})/);
-          if (!m) return null;
-          const id = m[1];
-          const link = Array.from(document.querySelectorAll('a[href*="/app/"]')).find((a) =>
-            (a.getAttribute('href') || '').includes('/app/' + id)
-          );
-          const title = link
-            ? (link.getAttribute('aria-label') || link.innerText || '').trim().replace(/\s+/g, ' ')
-            : '';
-          return { id, title };
-        })()
-      `).catch(() => null);
+      let sessionMeta = null;
+      const metaDeadline = Date.now() + 1800;
+      while (Date.now() < metaDeadline) {
+        sessionMeta = await js(String.raw`
+          (() => {
+            const m = location.pathname.match(/\/app\/([a-zA-Z0-9_-]{8,})/);
+            if (!m) return null;
+            const id = m[1];
+            const link = Array.from(
+              document.querySelectorAll('a.gem-nav-list-item[href^="/app/"], a[href^="/app/"]')
+            ).find((a) => (a.getAttribute('href') || '').startsWith('/app/' + id));
+            let title = link
+              ? (link.innerText || link.getAttribute('aria-label') || '').trim().replace(/\s+/g, ' ')
+              : '';
+            if (!title) {
+              const docTitle = (document.title || '').replace(/\s*-\s*Google Gemini$/i, '').trim();
+              if (docTitle && docTitle !== 'Google Gemini' && docTitle !== 'Gemini') {
+                title = docTitle;
+              }
+            }
+            return { id, title };
+          })()
+        `).catch(() => null);
+        if (sessionMeta && sessionMeta.id && sessionMeta.title) {
+          break;
+        }
+        await new Promise((r) => setTimeout(r, 250));
+      }
       if (sessionMeta && sessionMeta.id) {
         await emit({
           event: 'session',

@@ -444,7 +444,7 @@ async function syncContainerAttachments(inEditBox) {
 async function ensureSidebarExpanded() {
   await js(String.raw`
     (() => {
-      const links = document.querySelectorAll('a[href*="/app/"]');
+      const links = document.querySelectorAll('a.gem-nav-list-item[href^="/app/"], a[href^="/app/"]');
       if (links.length > 0) return true;
       const toggle = document.querySelector(
         'button[aria-label*="主菜单"], button[aria-label*="Main menu"], [data-test-id="side-nav-menu-button"]'
@@ -489,15 +489,17 @@ async function runNonChatAction(currentUrl) {
         const seen = new Set();
         const out = [];
         const now = Date.now();
-        const anchors = Array.from(document.querySelectorAll('a[href*="/app/"]'));
+        const anchors = Array.from(
+          document.querySelectorAll('a.gem-nav-list-item[href^="/app/"], a[href^="/app/"]')
+        );
         anchors.forEach((a, idx) => {
           const href = a.getAttribute('href') || '';
-          const m = href.match(/\/app\/([a-zA-Z0-9_-]{8,})/);
+          const m = href.match(/^\/app\/([a-zA-Z0-9_-]{8,})/);
           if (!m) return;
           const id = m[1];
           if (seen.has(id)) return;
           seen.add(id);
-          const rawTitle = (a.getAttribute('aria-label') || a.innerText || '').trim().replace(/\s+/g, ' ');
+          const rawTitle = (a.innerText || a.getAttribute('aria-label') || '').trim().replace(/\s+/g, ' ');
           out.push({
             id,
             title: rawTitle || 'Gemini chat',
@@ -528,12 +530,18 @@ async function runNonChatAction(currentUrl) {
     const loaded = await js(`
       (() => {
         const sessionId = ${JSON.stringify(SESSION_ID)};
-        const sideLink = Array.from(document.querySelectorAll('a[href*="/app/"]')).find((a) =>
-          (a.getAttribute('href') || '').includes('/app/' + sessionId)
-        );
-        const title = sideLink
-          ? (sideLink.getAttribute('aria-label') || sideLink.innerText || '').trim().replace(/\\s+/g, ' ')
+        const sideLink = Array.from(
+          document.querySelectorAll('a.gem-nav-list-item[href^="/app/"], a[href^="/app/"]')
+        ).find((a) => (a.getAttribute('href') || '').startsWith('/app/' + sessionId));
+        let title = sideLink
+          ? (sideLink.innerText || sideLink.getAttribute('aria-label') || '').trim().replace(/\\s+/g, ' ')
           : '';
+        if (!title) {
+          const docTitle = (document.title || '').replace(/\\s*-\\s*Google Gemini$/i, '').trim();
+          if (docTitle && docTitle !== 'Google Gemini' && docTitle !== 'Gemini') {
+            title = docTitle;
+          }
+        }
         const nodes = Array.from(document.querySelectorAll('user-query, model-response'));
         const messages = [];
         nodes.forEach((node, idx) => {
@@ -626,9 +634,9 @@ async function runNonChatAction(currentUrl) {
           const match = location.pathname.match(/\\/app\\/([a-zA-Z0-9_-]+)/);
           const sessionId = ${JSON.stringify(SESSION_ID)} || (match ? match[1] : '');
           if (!sessionId) return false;
-          const link = Array.from(document.querySelectorAll('a[href*="/app/"]')).find((a) =>
-            (a.getAttribute('href') || '').includes('/app/' + sessionId)
-          );
+          const link = Array.from(
+            document.querySelectorAll('a.gem-nav-list-item[href^="/app/"], a[href^="/app/"]')
+          ).find((a) => (a.getAttribute('href') || '').startsWith('/app/' + sessionId));
           const row = link ? link.parentElement : null;
           const moreBtn = row ? row.querySelector('button[aria-label*="更多选项"], button[aria-label*="More options"], button') : null;
           if (!moreBtn) return false;
@@ -679,9 +687,9 @@ async function runNonChatAction(currentUrl) {
       const menuOpened = await js(`
         (() => {
           const sessionId = ${JSON.stringify(SESSION_ID)};
-          const link = Array.from(document.querySelectorAll('a[href*="/app/"]')).find((a) =>
-            (a.getAttribute('href') || '').includes('/app/' + sessionId)
-          );
+          const link = Array.from(
+            document.querySelectorAll('a.gem-nav-list-item[href^="/app/"], a[href^="/app/"]')
+          ).find((a) => (a.getAttribute('href') || '').startsWith('/app/' + sessionId));
           const row = link ? link.parentElement : null;
           const moreBtn = row ? row.querySelector('button[aria-label*="更多选项"], button[aria-label*="More options"], button') : null;
           if (!moreBtn) return false;
