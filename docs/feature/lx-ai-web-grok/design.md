@@ -442,54 +442,35 @@ async function ensureGrokComposer() {
 
 async function ensureGrokModel() {
   const want = String(MODEL || 'Fast').trim().toLowerCase();
+  const matches = (value) =>
+    String(value || '').trim().toLowerCase().split(/\s+/)[0] === want; // Build\nBeta
 
-  // 模型按钮可能晚于 ProseMirror 挂载：按截止时间轮询，禁止单次查询误报。
-  const menuDeadline = Date.now() + 15000;
-  let menuOpen = false;
-  while (!menuOpen && Date.now() < menuDeadline) {
-    menuOpen = await js(`
+  const current = await js(`/* 读取 composer form 内模型按钮文本 */`).catch(() => '');
+  if (matches(current)) return;
+
+  const deadline = Date.now() + 15000;
+  let picked = null;
+  while (Date.now() < deadline) {
+    picked = await js(`
       (() => {
-        const btn = Array.from(document.querySelectorAll('button'))
-          .find((b) => /^(型号|Model)/.test((b.getAttribute('aria-label') || '').trim()));
-        if (!btn) return false;
+        const buttons = Array.from(document.querySelectorAll('button[aria-label^="型号"], button[aria-label^="Model"]'));
+        const btn = buttons.find((b) => b.closest('form')) || buttons[0];
+        if (!btn) return { found: false };
         if (btn.getAttribute('aria-expanded') !== 'true') btn.click();
-        return true;
+        const items = Array.from(document.querySelectorAll('[role="menuitemradio"]'));
+        const match = items.find((item) => (item.innerText || '').trim().toLowerCase() === ${JSON.stringify(want)});
+        if (!match) return { found: false };
+        if (match.getAttribute('aria-checked') !== 'true') match.click();
+        return { found: true };
       })()
-    `).catch(() => false);
-    if (!menuOpen) await new Promise((r) => setTimeout(r, 200));
+    `).catch(() => ({ found: false }));
+    if (picked.found) break;
+    await new Promise((r) => setTimeout(r, 200));
   }
-  if (!menuOpen) throw new Error('Grok model menu not found');
+  if (!picked || !picked.found) throw new Error('Grok model "' + MODEL + '" not found');
   await new Promise((r) => setTimeout(r, 350));
-
-  const picked = await js(`
-    (() => {
-      const want = ${JSON.stringify(want)};
-      const items = Array.from(document.querySelectorAll('[role="menuitemradio"]'));
-      const match = items.find((item) => (item.innerText || '').trim().toLowerCase() === want);
-      if (!match) return { found: false };
-      if (match.getAttribute('aria-checked') !== 'true') {
-        match.click();
-        return { found: true, clicked: true };
-      }
-      return { found: true, clicked: false };
-    })()
-  `).catch(() => ({ found: false }));
-  if (!picked || !picked.found) {
-    throw new Error('Grok model "' + MODEL + '" not found');
-  }
-  await new Promise((r) => setTimeout(r, 350));
-
-  // 后置校验：按钮标签必须变成目标模型。
-  const label = await js(`
-    (() => {
-      const btn = Array.from(document.querySelectorAll('button'))
-        .find((b) => /^(型号|Model)/.test((b.getAttribute('aria-label') || '').trim()));
-      return btn ? (btn.innerText || '').trim() : '';
-    })()
-  `).catch(() => '');
-  if (String(label).trim().toLowerCase() !== want) {
-    throw new Error('Grok model "' + MODEL + '" was not applied');
-  }
+  const label = await js(`/* 读取模型按钮文本 */`).catch(() => '');
+  if (!matches(label)) throw new Error('Grok model "' + MODEL + '" was not applied');
 }
 ```
 

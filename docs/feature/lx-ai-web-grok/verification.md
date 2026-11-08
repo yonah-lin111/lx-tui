@@ -2,7 +2,7 @@
 
 - **执行日期**：2026-11-08（首轮 E2E）；2026-11-09（Review 修复复验）
 - **工作区**：`.worktrees/lx-ai-web-grok`（分支 `feat/lx-ai-web-grok`，基线 `d6e8bada`）
-- **相关提交**：`a8fda29c`（Grok 接入）、`7b15a108`（引用标签修复）、`00d3c676`（DeepSeek 引用残渣修复）；Review 修复见 [`review.md`](review.md)
+- **相关提交**：`a8fda29c`（Grok 接入）、`7b15a108`（引用标签修复）、`00d3c676`（DeepSeek 引用残渣修复）、`faff8426`（Review 修复）
 - **二进制**：`./target/debug/lx-tui`（`cargo build` 通过）
 - **验证方式**：功能项 V1–V12、边界项 V13–V17 均通过 CLI 实测；静态项 V0 通过 Cargo/Node CLI 实测；Review 修复复验见 §7；TUI 鼠标与视觉项见 §4，不计入 CLI 通过项。
 - **任务空间**：首轮 E2E 使用临时 `lx-tui-ai-web-grok-verify`；引用修复复验使用临时 `inspect grok citations`；Review 修复复验使用临时 `lx-tui-ai-web-grok-review`；验证后均已关闭，代码常量已恢复为 `lx-tui-ai-web-grok`。

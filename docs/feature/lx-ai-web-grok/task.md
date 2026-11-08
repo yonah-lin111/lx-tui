@@ -140,7 +140,7 @@
 - [x] 复用 `emitMany` / `emit` / `checkStreamAlive` / `reclaimSpaceTarget` / `activateTaskSpace` / `ensureTaskSpaceControl`。
 - [x] `ensureGrokComposer()`：轮询 20s 等待 `[contenteditable="true"].ProseMirror`（对齐 `d6e8bada` 的冷启动修复）。
 - [x] `dismissCookieBanner()`：`.ot-pc-refuse-all-handler`。
-- [x] `grokLoggedIn()`：`GET /rest/auth/get-user` + `email` 非空；登录检测最多轮询 20s。**不要**因页面出现普通 `sign-in` 链接提前判未登录（会误判已登录页）。
+- [x] `grokLoginState()`：`GET /rest/auth/get-user` + `email` 非空；登录检测最多轮询 20s，仅 401/200 匿名移交，5xx/网络错误回 `error`。**不要**因页面出现普通 `sign-in` 链接提前判未登录（会误判已登录页）。
 - [x] `ensureFreshChat()`：URL 为 `/` 且无 `[data-testid="user-message"]` 即视为新会话；否则导航 `HOME`。
 - [x] `ensureGrokModel()`：模型按钮轮询 15s；菜单 + `aria-checked` + 后置标签校验。
 - [x] `syncComposerAttachments()`：只在输入框 `form [role="list"][aria-label*="对话附件"]` / `*attachments*` 内清理旧 chip；CDP 注入前轮询隐藏 input 最多 10s；注入后 chip 最多等 60s（不得误删消息气泡里的附件）。
