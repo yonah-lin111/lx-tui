@@ -1,7 +1,9 @@
 # lx `AI Web` 入口与 DeepSeek 网页端接入（基于 `ego-browser`）— 设计文档
 
+> **命名迁移提示**：该特性完成后，入口 `AI Web` 已统一更名为 `Web`，Rust 模块路径迁移至 `src/*/web*`，驱动规范更名为 `docs/standards/web-deepseek.md`；本文保留实现时的历史命名。
+
 > 状态：**已完成实现、代码审查（[review.md](review.md)）、全部回归修复并合并至 `dev`**（2026-11-07）
-> 执行任务清单见 [task.md](task.md)，审查报告见 [review.md](review.md)，驱动规范见 [`docs/standards/ai-web-deepseek.md`](../../standards/ai-web-deepseek.md)。
+> 执行任务清单见 [task.md](task.md)，审查报告见 [review.md](review.md)，驱动规范见 [`docs/standards/web-deepseek.md`](../../standards/web-deepseek.md)。
 
 ---
 

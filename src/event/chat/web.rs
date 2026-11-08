@@ -5,17 +5,19 @@
 
 use std::process::Stdio;
 
+use sha2::{Digest, Sha256};
 use tokio::io::{AsyncBufReadExt, AsyncReadExt, AsyncWriteExt, BufReader};
 use tokio::net::TcpListener;
 use tokio::process::Command;
 
 use super::*;
-use crate::app::state::{AiWebSite, HistoryEntry};
-use crate::chat::ai_web::{
-    AiWebHistoryMessage, AiWebStreamEvent, DEEPSEEK_HELPERS_SCRIPT, DEEPSEEK_SCRIPT,
-    parse_script_line, resolve_ego_browser_bin,
-};
+pub use crate::app::state::is_ai_web_session;
+use crate::app::state::{AiWebSite, HistoryEntry, ai_web_remote_session};
 use crate::chat::events::{PartDelta, PartKind};
+use crate::chat::web::{
+    AiWebHistoryMessage, AiWebStreamEvent, ScriptParams, parse_script_line,
+    resolve_ego_browser_bin, script_source, should_record_diag_line,
+};
 
 /// AI Web 后台任务回投主事件循环的事件。
 #[derive(Debug)]
@@ -111,6 +113,8 @@ pub fn apply_effect(
         Effect::StartAiWebStream {
             key,
             site,
+            model,
+            thinking,
             prompt,
             files,
             keep_files,
@@ -121,6 +125,8 @@ pub fn apply_effect(
             sender,
             key,
             site,
+            model,
+            thinking,
             prompt,
             files,
             keep_files,
@@ -131,7 +137,11 @@ pub fn apply_effect(
             true
         }
         Effect::ListChatSessions { pane } => {
-            list_sessions(sender.clone(), pane);
+            let site = state
+                .pane_anywhere(pane)
+                .map(|p| p.lx.ai_web_site)
+                .unwrap_or_default();
+            list_sessions(sender.clone(), pane, site);
             true
         }
         Effect::LoadChatSession { pane, session_id } => {
@@ -141,7 +151,16 @@ pub fn apply_effect(
         Effect::RenameChatSession {
             session_id, title, ..
         } => {
-            rename_session(session_id.clone(), title.clone());
+            let owner = state
+                .all_pane_ids()
+                .into_iter()
+                .find(|pane| {
+                    state.pane_anywhere(*pane).is_some_and(|p| {
+                        p.lx.chat.session_id.as_deref() == Some(session_id.as_str())
+                    })
+                })
+                .unwrap_or_else(|| state.active_tab().layout.focus());
+            rename_session(sender.clone(), owner, session_id.clone(), title.clone());
             let panes = state.all_pane_ids();
             let mut changed = false;
             for pane in panes {
@@ -150,7 +169,16 @@ pub fn apply_effect(
             changed
         }
         Effect::DeleteChatSession { session_id, .. } => {
-            delete_session(session_id.clone());
+            let owner = state
+                .all_pane_ids()
+                .into_iter()
+                .find(|pane| {
+                    state.pane_anywhere(*pane).is_some_and(|p| {
+                        p.lx.chat.session_id.as_deref() == Some(session_id.as_str())
+                    })
+                })
+                .unwrap_or_else(|| state.active_tab().layout.focus());
+            delete_session(sender.clone(), owner, session_id.clone());
             let panes = state.all_pane_ids();
             let mut changed = false;
             for pane in panes {
@@ -161,11 +189,6 @@ pub fn apply_effect(
         }
         _ => false,
     }
-}
-
-/// 会话标识是否为 AI Web 的内存会话。
-pub fn is_ai_web_session(session_id: &str) -> bool {
-    session_id.starts_with("ai-web-")
 }
 
 /// AI Web 失败终态在触发它的 lx 窗格内弹一条红色 Toast（登录 / 驱动不可用等）。
@@ -189,7 +212,7 @@ pub fn notify_failure(state: &mut AppState, key: &RequestKey, reason: &StopReaso
 }
 
 /// 启动一轮 AI Web 流；key 已失效或已有在途流时不重复启动。
-// AI Web 流启动需同时接收状态表、流注册表、通道、请求键、站点、提示词与附件上下文，保持直接传参避免一次性包装结构体。
+// AI Web 流启动需同时接收状态表、流注册表、通道、请求键、站点、模型、思考等级、提示词与附件上下文，保持直接传参避免一次性包装结构体。
 #[allow(clippy::too_many_arguments)]
 pub fn start_stream(
     state: &mut AppState,
@@ -197,6 +220,8 @@ pub fn start_stream(
     sender: &mpsc::UnboundedSender<AppEvent>,
     key: RequestKey,
     site: AiWebSite,
+    model: String,
+    thinking: String,
     prompt: String,
     files: Vec<String>,
     keep_files: Vec<String>,
@@ -217,6 +242,8 @@ pub fn start_stream(
             sender,
             key,
             site,
+            model,
+            thinking,
             prompt,
             files,
             keep_files,
@@ -230,20 +257,26 @@ pub fn start_stream(
 }
 
 /// `/new`：让网页端开启新对话；纯后台执行，失败不影响本地已清空的会话。
-pub fn reset_session(_site: AiWebSite) {
-    spawn_action(ScriptParams {
-        action: "new",
-        ..Default::default()
-    });
+pub fn reset_session(site: AiWebSite) {
+    spawn_action(
+        site,
+        ScriptParams {
+            action: "new",
+            ..Default::default()
+        },
+    );
 }
 
 /// `/resume`：异步拉取网页端历史会话列表。
-fn list_sessions(sender: mpsc::UnboundedSender<AppEvent>, pane: PaneId) {
+fn list_sessions(sender: mpsc::UnboundedSender<AppEvent>, pane: PaneId, site: AiWebSite) {
     tokio::spawn(async move {
-        match run_query(ScriptParams {
-            action: "list_sessions",
-            ..Default::default()
-        })
+        match run_query(
+            site,
+            ScriptParams {
+                action: "list_sessions",
+                ..Default::default()
+            },
+        )
         .await
         {
             Ok(events) => {
@@ -253,11 +286,7 @@ fn list_sessions(sender: mpsc::UnboundedSender<AppEvent>, pane: PaneId) {
                             let entries = items
                                 .into_iter()
                                 .map(|item| HistoryEntry {
-                                    session_id: format!(
-                                        "{}{}",
-                                        crate::app::update::AI_WEB_REMOTE_SESSION_PREFIX,
-                                        item.id
-                                    ),
+                                    session_id: site.format_remote_session_id(&item.id),
                                     title: item.title,
                                     status: "completed".into(),
                                     updated_at_ms: item.updated_at_ms,
@@ -272,7 +301,7 @@ fn list_sessions(sender: mpsc::UnboundedSender<AppEvent>, pane: PaneId) {
                         AiWebStreamEvent::LoginRequired { .. } => {
                             let _ = sender.send(AppEvent::AiWeb(AiWebEvent::ActionFailed {
                                 pane,
-                                message: crate::ui::text::LX_AI_WEB_LOGIN_REQUIRED.into(),
+                                message: crate::ui::text::lx_ai_web_login_required_for(site).into(),
                             }));
                             return;
                         }
@@ -298,8 +327,8 @@ fn list_sessions(sender: mpsc::UnboundedSender<AppEvent>, pane: PaneId) {
 
 /// `/resume` 选中某条云端会话：切换网页标签并拉取完整历史消息。
 fn load_session(sender: mpsc::UnboundedSender<AppEvent>, pane: PaneId, session_id: String) {
-    let Some(remote_id) =
-        crate::app::update::ai_web_remote_session_id(&session_id).map(str::to_string)
+    let Some((site, remote_id)) =
+        ai_web_remote_session(&session_id).map(|(s, id)| (s, id.to_string()))
     else {
         let _ = sender.send(AppEvent::AiWeb(AiWebEvent::ActionFailed {
             pane,
@@ -308,11 +337,14 @@ fn load_session(sender: mpsc::UnboundedSender<AppEvent>, pane: PaneId, session_i
         return;
     };
     tokio::spawn(async move {
-        match run_query(ScriptParams {
-            action: "load_session",
-            session_id: Some(&remote_id),
-            ..Default::default()
-        })
+        match run_query(
+            site,
+            ScriptParams {
+                action: "load_session",
+                session_id: Some(&remote_id),
+                ..Default::default()
+            },
+        )
         .await
         {
             Ok(events) => {
@@ -325,10 +357,7 @@ fn load_session(sender: mpsc::UnboundedSender<AppEvent>, pane: PaneId, session_i
                         } => {
                             let _ = sender.send(AppEvent::AiWeb(AiWebEvent::SessionLoaded {
                                 pane,
-                                session_id: format!(
-                                    "{}{id}",
-                                    crate::app::update::AI_WEB_REMOTE_SESSION_PREFIX
-                                ),
+                                session_id: site.format_remote_session_id(&id),
                                 title,
                                 messages,
                             }));
@@ -337,7 +366,7 @@ fn load_session(sender: mpsc::UnboundedSender<AppEvent>, pane: PaneId, session_i
                         AiWebStreamEvent::LoginRequired { .. } => {
                             let _ = sender.send(AppEvent::AiWeb(AiWebEvent::ActionFailed {
                                 pane,
-                                message: crate::ui::text::LX_AI_WEB_LOGIN_REQUIRED.into(),
+                                message: crate::ui::text::lx_ai_web_login_required_for(site).into(),
                             }));
                             return;
                         }
@@ -361,45 +390,103 @@ fn load_session(sender: mpsc::UnboundedSender<AppEvent>, pane: PaneId, session_i
     });
 }
 
-/// `/rename`：同步重命名网页端会话标题。
-fn rename_session(session_id: String, title: String) {
-    let remote_id = crate::app::update::ai_web_remote_session_id(&session_id).map(str::to_string);
-    tokio::spawn(async move {
-        let _ = run_query(ScriptParams {
-            action: "rename_session",
-            session_id: remote_id.as_deref(),
-            title: Some(&title),
-            ..Default::default()
-        })
-        .await;
-    });
-}
-
-/// 删除云端会话。
-fn delete_session(session_id: String) {
-    let Some(remote_id) =
-        crate::app::update::ai_web_remote_session_id(&session_id).map(str::to_string)
+/// `/rename`：同步重命名网页端会话标题；失败时回投提示，避免本地标题与云端分叉。
+fn rename_session(
+    sender: mpsc::UnboundedSender<AppEvent>,
+    pane: PaneId,
+    session_id: String,
+    title: String,
+) {
+    let Some((site, remote_id)) =
+        ai_web_remote_session(&session_id).map(|(s, id)| (s, id.to_string()))
     else {
+        let _ = sender.send(AppEvent::AiWeb(AiWebEvent::ActionFailed {
+            pane,
+            message: "session is not linked to a cloud conversation".into(),
+        }));
         return;
     };
     tokio::spawn(async move {
-        let _ = run_query(ScriptParams {
-            action: "delete_session",
-            session_id: Some(&remote_id),
-            ..Default::default()
-        })
-        .await;
+        match run_query(
+            site,
+            ScriptParams {
+                action: "rename_session",
+                session_id: Some(&remote_id),
+                title: Some(&title),
+                ..Default::default()
+            },
+        )
+        .await
+        {
+            Ok(events) => {
+                if let Some(message) = action_error(&events, site) {
+                    let _ =
+                        sender.send(AppEvent::AiWeb(AiWebEvent::ActionFailed { pane, message }));
+                }
+            }
+            Err(message) => {
+                let _ = sender.send(AppEvent::AiWeb(AiWebEvent::ActionFailed { pane, message }));
+            }
+        }
     });
+}
+
+/// 删除云端会话；失败时回投提示。
+fn delete_session(sender: mpsc::UnboundedSender<AppEvent>, pane: PaneId, session_id: String) {
+    let Some((site, remote_id)) =
+        ai_web_remote_session(&session_id).map(|(s, id)| (s, id.to_string()))
+    else {
+        let _ = sender.send(AppEvent::AiWeb(AiWebEvent::ActionFailed {
+            pane,
+            message: "session is not linked to a cloud conversation".into(),
+        }));
+        return;
+    };
+    tokio::spawn(async move {
+        match run_query(
+            site,
+            ScriptParams {
+                action: "delete_session",
+                session_id: Some(&remote_id),
+                ..Default::default()
+            },
+        )
+        .await
+        {
+            Ok(events) => {
+                if let Some(message) = action_error(&events, site) {
+                    let _ =
+                        sender.send(AppEvent::AiWeb(AiWebEvent::ActionFailed { pane, message }));
+                }
+            }
+            Err(message) => {
+                let _ = sender.send(AppEvent::AiWeb(AiWebEvent::ActionFailed { pane, message }));
+            }
+        }
+    });
+}
+
+/// 从动作脚本事件里提取登录/执行失败提示。
+fn action_error(events: &[AiWebStreamEvent], site: AiWebSite) -> Option<String> {
+    events.iter().find_map(|event| match event {
+        AiWebStreamEvent::LoginRequired { .. } => {
+            Some(crate::ui::text::lx_ai_web_login_required_for(site).to_string())
+        }
+        AiWebStreamEvent::Error(message) => Some(message.clone()),
+        _ => None,
+    })
 }
 
 /// 一轮网页对话：拉起子进程、喂脚本、按行回投增量与终态。
 /// 驱动 `ego-browser nodejs` 执行一轮网页对话并把行协议转成 `ChatNetEvent`。
-// 异步对话任务需要完整持有通道、请求键、站点、提示词、附件与取消句柄，直接传参比额外定义生命周期包装结构更直观。
+// 异步对话任务需要完整持有通道、请求键、站点、模型、思考等级、提示词、附件与取消句柄，直接传参比额外定义生命周期包装结构更直观。
 #[allow(clippy::too_many_arguments)]
 async fn run_chat(
     sender: mpsc::UnboundedSender<AppEvent>,
     key: RequestKey,
     site: AiWebSite,
+    model: String,
+    thinking: String,
     prompt: String,
     files: Vec<String>,
     keep_files: Vec<String>,
@@ -410,8 +497,6 @@ async fn run_chat(
     tracing::debug!(?site, session = %key.session, "ai web stream started");
     let mut child = match Command::new(resolve_ego_browser_bin())
         .arg("nodejs")
-        .env("LX_AI_WEB_ACTION", "chat")
-        .env("LX_AI_WEB_PROMPT", &prompt)
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
@@ -448,18 +533,28 @@ async fn run_chat(
         return;
     };
     let remote_session_id = crate::app::update::ai_web_remote_session_id(&key.session);
-    let source = script_source(ScriptParams {
-        action: "chat",
-        prompt: Some(&prompt),
-        files: &files,
-        keep_files: &keep_files,
-        first_turn,
-        stream_url: stream_url.as_deref(),
-        session_id: remote_session_id,
-        edit_user_index,
-        ..Default::default()
-    });
-    if stdin.write_all(source.as_bytes()).await.is_err() || stdin.shutdown().await.is_err() {
+    let source = script_source(
+        site,
+        ScriptParams {
+            action: "chat",
+            model: Some(&model),
+            thinking: Some(&thinking),
+            prompt: Some(&prompt),
+            files: &files,
+            keep_files: &keep_files,
+            first_turn,
+            stream_url: stream_url.as_deref(),
+            session_id: remote_session_id,
+            edit_user_index,
+            ..Default::default()
+        },
+    );
+    let write_result = tokio::time::timeout(std::time::Duration::from_secs(30), async {
+        stdin.write_all(source.as_bytes()).await?;
+        stdin.shutdown().await
+    })
+    .await;
+    if !matches!(write_result, Ok(Ok(()))) {
         if let Some(handle) = listener_task {
             handle.abort();
         }
@@ -496,6 +591,9 @@ async fn run_chat(
         })
     });
     drop(line_tx);
+    let mut listener_abort = listener_task
+        .as_ref()
+        .map(tokio::task::JoinHandle::abort_handle);
     tokio::spawn(async move {
         if let Some(t) = stdout_task {
             let _ = t.await;
@@ -508,7 +606,6 @@ async fn run_chat(
         }
     });
 
-    let mut received = false;
     let mut last_diag: Option<String> = None;
     let mut bound_session: Option<(String, Option<String>)> = None;
     loop {
@@ -517,11 +614,17 @@ async fn run_chat(
                 if changed.is_ok() && !*cancel.borrow() {
                     continue;
                 }
+                if let Some(abort) = listener_abort.take() {
+                    abort.abort();
+                }
                 let _ = child.kill().await;
-                spawn_action(ScriptParams {
-                    action: "stop",
-                    ..Default::default()
-                });
+                spawn_action(
+                    site,
+                    ScriptParams {
+                        action: "stop",
+                        ..Default::default()
+                    },
+                );
                 finished(&sender, key, StopReason::Cancelled);
                 return;
             }
@@ -529,11 +632,9 @@ async fn run_chat(
                 match line {
                     Some(line) => match parse_script_line(&line) {
                         Some(AiWebStreamEvent::Thinking(delta)) => {
-                            received = true;
                             send_delta(&sender, &key, PartKind::Reasoning, delta);
                         }
                         Some(AiWebStreamEvent::Text(delta)) => {
-                            received = true;
                             send_delta(&sender, &key, PartKind::Text, delta);
                         }
                         Some(AiWebStreamEvent::Session { id, title }) => {
@@ -543,7 +644,7 @@ async fn run_chat(
                             finished(
                                 &sender,
                                 key,
-                                failed(crate::ui::text::LX_AI_WEB_LOGIN_REQUIRED),
+                                failed(crate::ui::text::lx_ai_web_login_required_for(site)),
                             );
                             return;
                         }
@@ -559,10 +660,7 @@ async fn run_chat(
                                 let _ = sender.send(AppEvent::AiWeb(AiWebEvent::SessionBound {
                                     pane,
                                     from_session_id: from_session,
-                                    session_id: format!(
-                                        "{}{id}",
-                                        crate::app::update::AI_WEB_REMOTE_SESSION_PREFIX
-                                    ),
+                                    session_id: site.format_remote_session_id(&id),
                                     title,
                                 }));
                             }
@@ -571,14 +669,13 @@ async fn run_chat(
                         Some(AiWebStreamEvent::Sessions(_) | AiWebStreamEvent::SessionLoaded { .. }) => {}
                         None => {
                             let trimmed = line.trim();
-                            if !trimmed.is_empty() && !trimmed.starts_with("[ego-browser:") {
+                            if should_record_diag_line(trimmed, last_diag.as_deref()) {
                                 tracing::debug!(target: "lx::ai_web", %trimmed, "ego-browser output");
                                 last_diag = Some(trimmed.to_string());
                             }
                         }
                     },
                     None => {
-                        let _ = received;
                         let msg = last_diag
                             .as_deref()
                             .unwrap_or(crate::ui::text::LX_AI_WEB_EGO_UNAVAILABLE);
@@ -625,22 +722,9 @@ fn failed(code: &str) -> StopReason {
     }
 }
 
-#[derive(Default)]
-struct ScriptParams<'a> {
-    action: &'a str,
-    prompt: Option<&'a str>,
-    files: &'a [String],
-    keep_files: &'a [String],
-    first_turn: bool,
-    stream_url: Option<&'a str>,
-    session_id: Option<&'a str>,
-    title: Option<&'a str>,
-    edit_user_index: Option<usize>,
-}
-
 /// 后台执行 `new` / `stop` 这类一次性无返回值脚本动作（带 30 秒超时保护）。
-fn spawn_action(params: ScriptParams<'static>) {
-    let source = script_source(params);
+fn spawn_action(site: AiWebSite, params: ScriptParams<'static>) {
+    let source = script_source(site, params);
     tokio::spawn(async move {
         let Ok(mut child) = Command::new(resolve_ego_browser_bin())
             .arg("nodejs")
@@ -652,17 +736,25 @@ fn spawn_action(params: ScriptParams<'static>) {
         else {
             return;
         };
-        if let Some(mut stdin) = child.stdin.take()
-            && stdin.write_all(source.as_bytes()).await.is_ok()
-        {
-            let _ = stdin.shutdown().await;
+        if let Some(mut stdin) = child.stdin.take() {
+            let write_result = tokio::time::timeout(std::time::Duration::from_secs(30), async {
+                stdin.write_all(source.as_bytes()).await?;
+                stdin.shutdown().await
+            })
+            .await;
+            if !matches!(write_result, Ok(Ok(()))) {
+                return;
+            }
         }
         let _ = tokio::time::timeout(std::time::Duration::from_secs(30), child.wait()).await;
     });
 }
 
 /// 执行带返回协议行的脚本动作（`list_sessions` / `load_session` / `rename_session` / `delete_session`，带 30 秒超时保护）。
-async fn run_query(params: ScriptParams<'_>) -> Result<Vec<AiWebStreamEvent>, String> {
+pub(crate) async fn run_query(
+    site: AiWebSite,
+    params: ScriptParams<'_>,
+) -> Result<Vec<AiWebStreamEvent>, String> {
     let mut child = Command::new(resolve_ego_browser_bin())
         .arg("nodejs")
         .stdin(Stdio::piped())
@@ -671,84 +763,137 @@ async fn run_query(params: ScriptParams<'_>) -> Result<Vec<AiWebStreamEvent>, St
         .kill_on_drop(true)
         .spawn()
         .map_err(|_| crate::ui::text::LX_AI_WEB_EGO_UNAVAILABLE.to_string())?;
-    let source = script_source(params);
+    let action = params.action.to_string();
+    let source = script_source(site, params);
     if let Some(mut stdin) = child.stdin.take() {
-        stdin
-            .write_all(source.as_bytes())
-            .await
-            .map_err(|_| crate::ui::text::LX_AI_WEB_EGO_UNAVAILABLE.to_string())?;
-        let _ = stdin.shutdown().await;
+        let write_result = tokio::time::timeout(std::time::Duration::from_secs(30), async {
+            stdin.write_all(source.as_bytes()).await?;
+            stdin.shutdown().await
+        })
+        .await;
+        if !matches!(write_result, Ok(Ok(()))) {
+            return Err(crate::ui::text::LX_AI_WEB_EGO_UNAVAILABLE.to_string());
+        }
     }
-    let output = tokio::time::timeout(std::time::Duration::from_secs(30), child.wait_with_output())
-        .await
-        .map_err(|_| crate::ui::text::LX_AI_WEB_EGO_UNAVAILABLE.to_string())?
-        .map_err(|_| crate::ui::text::LX_AI_WEB_EGO_UNAVAILABLE.to_string())?;
+    // `load_session` 内部先等标签页（25s）再等历史渲染（10s），预算必须高于两者之和。
+    let budget = if action == "load_session" { 60 } else { 30 };
+    let output = tokio::time::timeout(
+        std::time::Duration::from_secs(budget),
+        child.wait_with_output(),
+    )
+    .await
+    .map_err(|_| crate::ui::text::LX_AI_WEB_EGO_UNAVAILABLE.to_string())?
+    .map_err(|_| crate::ui::text::LX_AI_WEB_EGO_UNAVAILABLE.to_string())?;
     let mut events = Vec::new();
+    let mut last_diag: Option<String> = None;
     for bytes in [&output.stdout, &output.stderr] {
         let text = String::from_utf8_lossy(bytes);
         for line in text.lines() {
             if let Some(ev) = parse_script_line(line) {
                 events.push(ev);
+            } else {
+                let trimmed = line.trim();
+                if should_record_diag_line(trimmed, last_diag.as_deref()) {
+                    last_diag = Some(trimmed.to_string());
+                }
             }
         }
+    }
+    if events.is_empty() {
+        return Err(
+            last_diag.unwrap_or_else(|| crate::ui::text::LX_AI_WEB_EGO_UNAVAILABLE.to_string())
+        );
     }
     Ok(events)
 }
 
 /// 启动本地回环 HTTP 接收器：绕过 `ego-browser nodejs` 对 stdio 的进程级缓冲，
 /// 让脚本通过 `fetch(STREAM_URL, { method: 'POST' })` 实时推送每一个流分片。
-async fn spawn_stream_listener(
+///
+/// URL 携带一次性 token，仅接受该路径；header/body 有上限，连接读写有超时，
+/// 避免同机任意进程向当前回复注入文本或耗尽内存。
+pub(crate) async fn spawn_stream_listener(
     line_tx: mpsc::UnboundedSender<String>,
 ) -> Option<(String, tokio::task::JoinHandle<()>)> {
+    const HEADER_LIMIT: usize = 16 * 1024;
+    const BODY_LIMIT: usize = 1024 * 1024;
+    const READ_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(5);
+
     let listener = TcpListener::bind("127.0.0.1:0").await.ok()?;
     let port = listener.local_addr().ok()?.port();
+    let token = new_stream_token();
+    let expected_path = format!("/{token}");
     let handle = tokio::spawn(async move {
-        let _keep_tx = line_tx.clone();
         while let Ok((mut socket, _)) = listener.accept().await {
             let tx = line_tx.clone();
+            let expected_path = expected_path.clone();
             tokio::spawn(async move {
                 let mut buf = Vec::with_capacity(2048);
                 let mut chunk = [0u8; 1024];
                 let header_end = loop {
-                    let Ok(n) = socket.read(&mut chunk).await else {
-                        return;
-                    };
-                    if n == 0 {
+                    let read =
+                        match tokio::time::timeout(READ_TIMEOUT, socket.read(&mut chunk)).await {
+                            Ok(Ok(read)) => read,
+                            _ => return,
+                        };
+                    if read == 0 {
                         break None;
-                    };
-                    buf.extend_from_slice(&chunk[..n]);
+                    }
+                    buf.extend_from_slice(&chunk[..read]);
+                    if buf.len() > HEADER_LIMIT {
+                        return;
+                    }
                     if let Some(pos) = buf.windows(4).position(|w| w == b"\r\n\r\n") {
                         break Some(pos + 4);
                     }
                 };
-                if let Some(body_start) = header_end {
-                    let header_str = String::from_utf8_lossy(&buf[..body_start]);
-                    let content_len = header_str
-                        .lines()
-                        .find_map(|line| {
-                            let (k, v) = line.split_once(':')?;
-                            k.trim()
-                                .eq_ignore_ascii_case("content-length")
-                                .then(|| v.trim().parse::<usize>().ok())?
-                        })
-                        .unwrap_or(0);
-                    let target_len = body_start.saturating_add(content_len);
-                    while buf.len() < target_len {
-                        let Ok(n) = socket.read(&mut chunk).await else {
-                            break;
+                let Some(body_start) = header_end else {
+                    return;
+                };
+                let header_str = String::from_utf8_lossy(&buf[..body_start]);
+                let request_path = header_str
+                    .lines()
+                    .next()
+                    .and_then(|line| line.split_whitespace().nth(1))
+                    .unwrap_or_default();
+                if request_path != expected_path {
+                    let _ = socket
+                        .write_all(
+                            b"HTTP/1.1 404 Not Found\r\nContent-Length: 0\r\nConnection: close\r\n\r\n",
+                        )
+                        .await;
+                    return;
+                }
+                let content_len = header_str.lines().find_map(|line| {
+                    let (key, value) = line.split_once(':')?;
+                    key.trim()
+                        .eq_ignore_ascii_case("content-length")
+                        .then(|| value.trim().parse::<usize>().ok())?
+                });
+                if content_len.is_some_and(|len| len > BODY_LIMIT) {
+                    return;
+                }
+                let target_len = body_start.saturating_add(content_len.unwrap_or(0));
+                while buf.len() < target_len {
+                    let read =
+                        match tokio::time::timeout(READ_TIMEOUT, socket.read(&mut chunk)).await {
+                            Ok(Ok(read)) => read,
+                            _ => break,
                         };
-                        if n == 0 {
-                            break;
-                        }
-                        buf.extend_from_slice(&chunk[..n]);
+                    if read == 0 {
+                        break;
                     }
-                    let end = target_len.min(buf.len());
-                    let body = String::from_utf8_lossy(&buf[body_start..end]);
-                    for line in body.lines() {
-                        let trimmed = line.trim();
-                        if !trimmed.is_empty() {
-                            let _ = tx.send(trimmed.to_string());
-                        }
+                    buf.extend_from_slice(&chunk[..read]);
+                    if buf.len() > body_start.saturating_add(BODY_LIMIT) {
+                        break;
+                    }
+                }
+                let end = target_len.min(buf.len());
+                let body = String::from_utf8_lossy(&buf[body_start..end]);
+                for line in body.lines() {
+                    let trimmed = line.trim();
+                    if !trimmed.is_empty() {
+                        let _ = tx.send(trimmed.to_string());
                     }
                 }
                 let _ = socket
@@ -759,46 +904,28 @@ async fn spawn_stream_listener(
             });
         }
     });
-    Some((format!("http://127.0.0.1:{port}"), handle))
+    Some((format!("http://127.0.0.1:{port}/{token}"), handle))
 }
 
-/// 组装交给 `ego-browser nodejs` 的脚本。
-///
-/// `ego-browser nodejs` 在守护进程内执行脚本，`process.env` 会跨调用残留；
-/// 因此统一通过顶层块级常量 `const __LX_PARAMS = { ... };` 显式传入全部参数，避免跨轮串台。
-fn script_source(params: ScriptParams<'_>) -> String {
-    let edit_index = params
-        .edit_user_index
-        .and_then(|idx| i64::try_from(idx).ok())
-        .unwrap_or(-1);
-    let files_json = serde_json::to_string(params.files).unwrap_or_else(|_| "[]".to_string());
-    let keep_files_json =
-        serde_json::to_string(params.keep_files).unwrap_or_else(|_| "[]".to_string());
-    let mut source = String::from("const __LX_PARAMS = {\n");
-    source.push_str("  action: ");
-    source.push_str(&json_string(params.action));
-    source.push_str(",\n  prompt: ");
-    source.push_str(&json_string(params.prompt.unwrap_or("")));
-    source.push_str(",\n  files: ");
-    source.push_str(&files_json);
-    source.push_str(",\n  keepFiles: ");
-    source.push_str(&keep_files_json);
-    source.push_str(",\n  firstTurn: ");
-    source.push_str(if params.first_turn { "true" } else { "false" });
-    source.push_str(",\n  streamUrl: ");
-    source.push_str(&json_string(params.stream_url.unwrap_or("")));
-    source.push_str(",\n  sessionId: ");
-    source.push_str(&json_string(params.session_id.unwrap_or("")));
-    source.push_str(",\n  title: ");
-    source.push_str(&json_string(params.title.unwrap_or("")));
-    source.push_str(&format!(",\n  editIndex: {edit_index},\n}};\n"));
-    source.push_str(DEEPSEEK_HELPERS_SCRIPT);
-    source.push('\n');
-    source.push_str(DEEPSEEK_SCRIPT);
-    source
+/// 生成一次性流监听 token（进程内单调 + 时间 + pid 的 SHA-256 前缀）。
+fn new_stream_token() -> String {
+    use std::sync::atomic::{AtomicU64, Ordering};
+    static SEQUENCE: AtomicU64 = AtomicU64::new(0);
+    let mut hasher = Sha256::new();
+    let nanos = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|duration| duration.as_nanos())
+        .unwrap_or(0);
+    hasher.update(nanos.to_le_bytes());
+    hasher.update(std::process::id().to_le_bytes());
+    hasher.update(SEQUENCE.fetch_add(1, Ordering::Relaxed).to_le_bytes());
+    hasher
+        .finalize()
+        .iter()
+        .take(16)
+        .map(|byte| format!("{byte:02x}"))
+        .collect()
 }
 
-/// JSON 字符串字面量；输入是任意用户文本，必须完整转义。
-fn json_string(value: &str) -> String {
-    serde_json::to_string(value).unwrap_or_else(|_| "\"\"".to_string())
-}
+#[cfg(test)]
+mod tests;

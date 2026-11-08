@@ -1,6 +1,6 @@
 // DeepSeek web driver shared helpers, attachment sync, and session management actions.
 //
-// Prepended before `deepseek_script.js` by `src/event/chat/ai_web.rs`.
+// Prepended before `deepseek_script.js` by `src/event/chat/web.rs`.
 
 const PREFIX = '@@LX_AI_WEB@@';
 const SPACE = 'lx-tui-ai-web-deepseek';
@@ -8,6 +8,7 @@ const HOME = 'https://chat.deepseek.com';
 const SIGN_IN = 'https://chat.deepseek.com/sign_in';
 const PARAMS = typeof __LX_PARAMS === 'object' && __LX_PARAMS !== null ? __LX_PARAMS : {};
 const ACTION = PARAMS.action || 'chat';
+const THINKING = PARAMS.thinking || 'deepthink';
 const PROMPT = PARAMS.prompt || '';
 const FILES = Array.isArray(PARAMS.files) ? PARAMS.files : [];
 const KEEP_FILES = Array.isArray(PARAMS.keepFiles) ? PARAMS.keepFiles : [];
@@ -17,20 +18,72 @@ const SESSION_ID = PARAMS.sessionId || '';
 const TITLE = PARAMS.title || '';
 const EDIT_INDEX = typeof PARAMS.editIndex === 'number' ? PARAMS.editIndex : -1;
 
+let STREAM_ABORTED = false;
+
 async function emitMany(objs) {
-  if (!objs || objs.length === 0) return;
+  if (!objs || objs.length === 0 || STREAM_ABORTED) return;
   const payload = objs.map((obj) => PREFIX + JSON.stringify(obj) + '\n').join('');
   if (STREAM_URL) {
     try {
       await fetch(STREAM_URL, { method: 'POST', body: payload });
       return;
-    } catch (_) {}
+    } catch (_) {
+      STREAM_ABORTED = true;
+      return;
+    }
   }
   process.stdout.write(payload);
 }
 
 async function emit(obj) {
   await emitMany([obj]);
+}
+
+async function checkStreamAlive() {
+  if (!STREAM_URL || STREAM_ABORTED) return !STREAM_ABORTED;
+  try {
+    await fetch(STREAM_URL, { method: 'POST', body: '' });
+    return true;
+  } catch (_) {
+    STREAM_ABORTED = true;
+    return false;
+  }
+}
+
+async function reclaimSpaceTarget(target) {
+  if (!target || !target.ownership || target.ownership === 'agent') return false;
+  if (target.ownership === 'agentDelegatedToUser') {
+    await takeOverTaskSpace(target.id).catch(async () => {
+      await claimTaskSpace(target.id).catch(() => {});
+    });
+  } else {
+    await claimTaskSpace(target.id).catch(async () => {
+      await takeOverTaskSpace(target.id).catch(() => {});
+    });
+  }
+  return true;
+}
+
+async function activateTaskSpace() {
+  const spaces = await listTaskSpaces().catch(() => []);
+  const target = Array.isArray(spaces)
+    ? spaces.find((s) => s && (s.name === SPACE || s.taskId === SPACE))
+    : null;
+  if (target) {
+    await reclaimSpaceTarget(target);
+  }
+  await useOrCreateTaskSpace(SPACE);
+}
+
+async function ensureTaskSpaceControl() {
+  const spaces = await listTaskSpaces().catch(() => []);
+  const target = Array.isArray(spaces)
+    ? spaces.find((s) => s && (s.name === SPACE || s.taskId === SPACE))
+    : null;
+  if (target && target.ownership && target.ownership !== 'agent') {
+    await reclaimSpaceTarget(target);
+  }
+  await useOrCreateTaskSpace(SPACE).catch(() => {});
 }
 
 async function ensureFreshChat() {
@@ -171,11 +224,39 @@ async function syncContainerAttachments(inEditBox) {
           for (const name of known) {
             if (name) statusText = statusText.split(name).join(' ');
           }
+          const fk = Object.keys(item).find(
+            (k) => k.startsWith('__reactFiber') || k.startsWith('__reactInternalInstance')
+          );
+          const childProps =
+            fk &&
+            item[fk] &&
+            item[fk].memoizedProps &&
+            item[fk].memoizedProps.children &&
+            item[fk].memoizedProps.children.props;
+          const fileObj = childProps && childProps.file;
+          const snapObj = childProps && childProps.snapshot;
+          if (
+            snapObj &&
+            ((snapObj.fileErrorState && snapObj.fileErrorState.hasError) ||
+              (snapObj.fileUploadInfo && snapObj.fileUploadInfo.failed))
+          ) {
+            error = String((fileObj && fileObj.errorCode) || statusText || 'upload failed').trim();
+            break;
+          }
+          if (fileObj && fileObj.status && /FAIL|ERROR|REJECT/i.test(String(fileObj.status))) {
+            error = String(fileObj.errorCode || fileObj.status);
+            break;
+          }
           if (/上传失败|解析失败|不支持|超出|过大|upload failed|parse failed|unsupported|exceed/i.test(statusText)) {
             error = statusText.replace(/\\s+/g, ' ').trim();
             break;
           }
-          if (/上传中|解析中|uploading|parsing/i.test(statusText) || item.querySelector('svg[viewBox="0 0 20 20"][role="img"]')) {
+          if (
+            (snapObj && snapObj.fileUploadInfo && snapObj.fileUploadInfo.isUploading) ||
+            (fileObj && fileObj.status !== 'SUCCESS') ||
+            /上传中|解析中|uploading|parsing/i.test(statusText) ||
+            item.querySelector('svg[viewBox="0 0 20 20"][role="img"]')
+          ) {
             uploading = true;
           }
         }
@@ -356,54 +437,68 @@ async function runNonChatAction(currentUrl) {
   }
 
   if (ACTION === 'rename_session') {
-    if (TITLE) {
-      await js(`
-        (async () => {
-          const match = location.pathname.match(/\\/s\\/([a-zA-Z0-9-]+)/);
-          const sessionId = ${JSON.stringify(SESSION_ID)} || (match ? match[1] : '');
-          if (!sessionId) return false;
-          const tokenObj = JSON.parse(localStorage.getItem('userToken') || '{}');
-          const token = tokenObj.value || '';
-          const res = await fetch('/api/v0/chat_session/update_title', {
-            method: 'POST',
-            headers: {
-              authorization: 'Bearer ' + token,
-              'content-type': 'application/json',
-            },
-            body: JSON.stringify({
-              chat_session_id: sessionId,
-              title: ${JSON.stringify(TITLE)},
-            }),
-          });
-          return res.ok;
-        })()
-      `);
+    if (!TITLE) {
+      await emit({ event: 'error', message: 'missing session title' });
+      return;
+    }
+    if (!SESSION_ID) {
+      await emit({ event: 'error', message: 'missing session id' });
+      return;
+    }
+    const renamed = await js(`
+      (async () => {
+        const sessionId = ${JSON.stringify(SESSION_ID)};
+        const tokenObj = JSON.parse(localStorage.getItem('userToken') || '{}');
+        const token = tokenObj.value || '';
+        const res = await fetch('/api/v0/chat_session/update_title', {
+          method: 'POST',
+          headers: {
+            authorization: 'Bearer ' + token,
+            'content-type': 'application/json',
+          },
+          body: JSON.stringify({
+            chat_session_id: sessionId,
+            title: ${JSON.stringify(TITLE)},
+          }),
+        });
+        return res.ok;
+      })()
+    `).catch(() => false);
+    if (!renamed) {
+      await emit({ event: 'error', message: 'DeepSeek rename failed' });
+      return;
     }
     await emit({ event: 'done' });
     return;
   }
 
   if (ACTION === 'delete_session') {
-    if (SESSION_ID) {
-      await js(`
-        (async () => {
-          const sessionId = ${JSON.stringify(SESSION_ID)};
-          const tokenObj = JSON.parse(localStorage.getItem('userToken') || '{}');
-          const token = tokenObj.value || '';
-          const res = await fetch('/api/v0/chat_session/delete', {
-            method: 'POST',
-            headers: {
-              authorization: 'Bearer ' + token,
-              'content-type': 'application/json',
-            },
-            body: JSON.stringify({ chat_session_ids: [sessionId] }),
-          });
-          return res.ok;
-        })()
-      `);
-      if (currentUrl.includes(SESSION_ID)) {
-        await openOrReuseTab(HOME, { wait: true, timeout: 20 });
-      }
+    if (!SESSION_ID) {
+      await emit({ event: 'error', message: 'missing session id' });
+      return;
+    }
+    const deleted = await js(`
+      (async () => {
+        const sessionId = ${JSON.stringify(SESSION_ID)};
+        const tokenObj = JSON.parse(localStorage.getItem('userToken') || '{}');
+        const token = tokenObj.value || '';
+        const res = await fetch('/api/v0/chat_session/delete', {
+          method: 'POST',
+          headers: {
+            authorization: 'Bearer ' + token,
+            'content-type': 'application/json',
+          },
+          body: JSON.stringify({ chat_session_ids: [sessionId] }),
+        });
+        return res.ok;
+      })()
+    `).catch(() => false);
+    if (!deleted) {
+      await emit({ event: 'error', message: 'DeepSeek delete failed' });
+      return;
+    }
+    if (currentUrl.includes(SESSION_ID)) {
+      await openOrReuseTab(HOME, { wait: true, timeout: 20 });
     }
     await emit({ event: 'done' });
     return;

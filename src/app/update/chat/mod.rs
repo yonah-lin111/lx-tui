@@ -15,7 +15,6 @@ use crate::db::chat::{ModelSnapshot, TurnOutcome, Usage};
 use crate::layout::PaneId;
 use crate::ui::text;
 
-pub mod ai_web;
 pub mod ask;
 pub mod compact;
 mod connect;
@@ -33,11 +32,8 @@ pub mod title;
 pub mod user_shell;
 mod view;
 mod viewport;
+pub mod web;
 
-pub use ai_web::{
-    AI_WEB_REMOTE_SESSION_PREFIX, ai_web_remote_session_id, is_ai_web_session,
-    on_ai_web_session_bound, on_ai_web_session_loaded, rewind_ai_web, try_send_ai_web,
-};
 pub use ask::{
     apply_ask_click, apply_ask_paste, apply_ask_wheel, apply_input as apply_ask_input, submit_all,
 };
@@ -113,6 +109,11 @@ pub use viewport::{
     toggle_thinking_at,
 };
 pub(crate) use viewport::{resolve_lx_history, resolve_lx_rewind_center};
+pub use web::{
+    AI_WEB_DEEPSEEK_SESSION_PREFIX, AI_WEB_GEMINI_SESSION_PREFIX, ai_web_remote_session,
+    ai_web_remote_session_id, is_ai_web_session, on_ai_web_session_bound, on_ai_web_session_loaded,
+    rewind_ai_web, try_send_ai_web,
+};
 
 /// 尝试发送：校验 Native 入口、非空草稿、请求空闲与有效模型后冻结快照并入队效应。
 ///
@@ -163,7 +164,7 @@ pub fn try_send(state: &mut AppState, pane: PaneId) -> bool {
     let (entry, draft, busy, selection, session_id, generation) = context;
     // AI Web 走纯内存网页会话：不校验本地模型/工作区，不写 SQLite。
     if entry == crate::app::state::LxEntry::AiWeb {
-        return ai_web::try_send_ai_web(state, pane, draft, busy, generation);
+        return web::try_send_ai_web(state, pane, draft, busy, generation);
     }
     // 只有 Native Agent 发送；Hybrid/Automation 显示不可用提示。
     if entry != crate::app::state::LxEntry::Native {
@@ -569,7 +570,7 @@ pub fn on_stream_finished(
         target.lx.chat.main_stopped = true;
     }
     // AI Web 是纯内存会话：消息已在上面结算，直接回 Idle，不入队 DB 终态写入。
-    if ai_web::is_ai_web_session(&key.session) {
+    if web::is_ai_web_session(&key.session) {
         target.lx.chat.request = RequestState::Idle;
         refresh_lx_status(state, key.pane);
         return true;
@@ -821,9 +822,9 @@ pub fn refresh_lx_status(state: &mut AppState, pane: PaneId) {
                 .chat
                 .session_id
                 .as_deref()
-                .is_some_and(ai_web::is_ai_web_session)
+                .is_some_and(web::is_ai_web_session)
         {
-            ai_web::apply_ai_web_status(&mut target.lx);
+            web::apply_ai_web_status(&mut target.lx);
         }
     }
 }

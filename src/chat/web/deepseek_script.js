@@ -3,7 +3,7 @@
 // Requires `deepseek_helpers.js` to be prepended ahead of this file.
 
 async function main() {
-  await useOrCreateTaskSpace(SPACE);
+  await activateTaskSpace();
   const current = await pageInfo().catch(() => null);
   const currentUrl = (current && current.url) || '';
   if (!currentUrl.startsWith(HOME)) {
@@ -31,30 +31,35 @@ async function main() {
     await openOrReuseTab(HOME + '/a/chat/s/' + SESSION_ID, { wait: true, timeout: 25 });
   }
 
-  // Ensure DeepThink ("深度思考") is enabled so reasoning deltas are streamed.
-  await js(String.raw`
+  // Sync DeepThink ("深度思考") toggle state with THINKING ('deepthink' vs 'off').
+  const toggledDeepThink = await js(`
     (() => {
+      const wantDeepThink = ${JSON.stringify(THINKING)} !== 'off';
       const btn = Array.from(document.querySelectorAll('.ds-toggle-button')).find((el) => {
         const label = (el.innerText || '').trim();
         return label === '深度思考' || label === 'DeepThink';
       });
-      if (btn) {
-        if (!btn.className.includes('ds-toggle-button--selected')) {
-          btn.click();
-        }
+      if (!btn) return false;
+      const isSelected = btn.className.includes('ds-toggle-button--selected');
+      if (isSelected !== wantDeepThink) {
+        btn.click();
         return true;
       }
       return false;
     })()
-  `);
+  `).catch(() => false);
+  if (toggledDeepThink) {
+    await new Promise((r) => setTimeout(r, 300));
+  }
 
   // Channel A: intercept /api/v0/chat/completion over XMLHttpRequest & fetch.
-  await js(String.raw`
+  const runId = await js(String.raw`
     (() => {
       const existingKeys = Array.from(
         document.querySelectorAll('[data-virtual-list-item-key]'),
       ).map((el) => el.getAttribute('data-virtual-list-item-key') || '');
       const stream = {
+        runId: String(Date.now()) + '-' + String(Math.random()),
         queue: [],
         done: false,
         attached: false,
@@ -99,23 +104,33 @@ async function main() {
         pushDom(kind, current) {
           const key = kind === 'thinking' ? 'domThink' : 'domText';
           const previous = this[key] || '';
-          if (current === previous) return;
-          let delta = '';
-          if (current.length > previous.length && current.startsWith(previous)) {
-            delta = current.slice(previous.length);
-          } else {
-            let index = 0;
-            while (
-              index < current.length
-              && index < previous.length
-              && current[index] === previous[index]
-            ) {
-              index += 1;
-            }
-            delta = current.slice(index);
+          if (!current || current === previous) return;
+          if (current.startsWith(previous)) {
+            const delta = current.slice(previous.length);
+            this[key] = current;
+            if (delta) this.queue.push({ kind: kind, delta: delta });
+            return;
           }
-          this[key] = current;
-          if (delta) this.queue.push({ kind: kind, delta: delta });
+          for (const len of [48, 32, 20, 12, 8, 5]) {
+            if (previous.length < len) continue;
+            const anchor = previous.slice(previous.length - len);
+            const pos = current.lastIndexOf(anchor);
+            if (pos >= 0 && pos + len >= current.length - 240) {
+              const delta = current.slice(pos + len);
+              if (delta.length > 0 || current.length >= previous.length) {
+                this[key] = current;
+              }
+              if (delta) this.queue.push({ kind: kind, delta: delta });
+              return;
+            }
+          }
+          const tailLen = Math.min(20, current.length);
+          if (tailLen >= 5 && previous.includes(current.slice(current.length - tailLen))) {
+            return;
+          }
+          if (current.length > previous.length) {
+            this[key] = current;
+          }
         },
         fragmentKind(fragment) {
           if (!fragment) return null;
@@ -491,7 +506,7 @@ async function main() {
           return result;
         };
       }
-      return true;
+      return stream.runId;
     })()
   `);
 
@@ -501,50 +516,56 @@ async function main() {
       (() => {
         const items = Array.from(document.querySelectorAll('[data-virtual-list-item-key]'));
         const userItems = items.filter((el) => !el.querySelector('.ds-markdown, .ds-think-content'));
-        const target = userItems[${EDIT_INDEX}] || userItems[userItems.length - 1];
-        if (!target) return false;
+        const target = userItems[${EDIT_INDEX}];
+        if (!target) return { status: 'missing_turn' };
         const btns = Array.from(target.querySelectorAll('.ds-button, button, [role="button"]'));
         const editBtn = btns[1] || btns[btns.length - 1];
-        if (!editBtn) return false;
+        if (!editBtn) return { status: 'no_button' };
         const propKey = Object.keys(editBtn).find((k) => k.startsWith('__reactProps'));
         if (propKey && editBtn[propKey] && typeof editBtn[propKey].onClick === 'function') {
           editBtn[propKey].onClick({ stopPropagation() {}, preventDefault() {} });
         } else {
           editBtn.click();
         }
+        return { status: 'clicked' };
+      })()
+    `).catch(() => ({ status: 'error' }));
+    if (openedEdit && openedEdit.status === 'missing_turn') {
+      await emit({ event: 'error', message: 'DeepSeek /rewind target turn not found' });
+      return;
+    }
+    if (!openedEdit || openedEdit.status !== 'clicked') {
+      await emit({ event: 'error', message: 'DeepSeek edit button not found for /rewind' });
+      return;
+    }
+    await new Promise((r) => setTimeout(r, 120));
+    await syncContainerAttachments(true);
+    submittedViaEdit = await js(`
+      (() => {
+        const editArea = document.querySelector('textarea[name="user query"]');
+        if (!editArea) return false;
+        editArea.focus();
+        const descriptor = Object.getOwnPropertyDescriptor(window.HTMLTextAreaElement.prototype, 'value');
+        if (descriptor && descriptor.set) descriptor.set.call(editArea, ${JSON.stringify(PROMPT)});
+        else editArea.value = ${JSON.stringify(PROMPT)};
+        editArea.dispatchEvent(new Event('input', { bubbles: true }));
+        editArea.dispatchEvent(new Event('change', { bubbles: true }));
+        const container = editArea.closest('[data-virtual-list-item-key]') || document;
+        const sendBtn = Array.from(container.querySelectorAll('.ds-button, button, [role="button"]'))
+          .find((b) => {
+            const label = (b.innerText || '').trim();
+            return label === '发送' || label === 'Send';
+          });
+        if (!sendBtn) return false;
+        const sendKey = Object.keys(sendBtn).find((k) => k.startsWith('__reactProps'));
+        if (sendKey && sendBtn[sendKey] && typeof sendBtn[sendKey].onClick === 'function') {
+          sendBtn[sendKey].onClick({ stopPropagation() {}, preventDefault() {} });
+        } else {
+          sendBtn.click();
+        }
         return true;
       })()
     `).catch(() => false);
-    if (openedEdit) {
-      await new Promise((r) => setTimeout(r, 120));
-      await syncContainerAttachments(true);
-      submittedViaEdit = await js(`
-        (() => {
-          const editArea = document.querySelector('textarea[name="user query"]');
-          if (!editArea) return false;
-          editArea.focus();
-          const descriptor = Object.getOwnPropertyDescriptor(window.HTMLTextAreaElement.prototype, 'value');
-          if (descriptor && descriptor.set) descriptor.set.call(editArea, ${JSON.stringify(PROMPT)});
-          else editArea.value = ${JSON.stringify(PROMPT)};
-          editArea.dispatchEvent(new Event('input', { bubbles: true }));
-          editArea.dispatchEvent(new Event('change', { bubbles: true }));
-          const container = editArea.closest('[data-virtual-list-item-key]') || document;
-          const sendBtn = Array.from(container.querySelectorAll('.ds-button, button, [role="button"]'))
-            .find((b) => {
-              const label = (b.innerText || '').trim();
-              return label === '发送' || label === 'Send';
-            });
-          if (!sendBtn) return false;
-          const sendKey = Object.keys(sendBtn).find((k) => k.startsWith('__reactProps'));
-          if (sendKey && sendBtn[sendKey] && typeof sendBtn[sendKey].onClick === 'function') {
-            sendBtn[sendKey].onClick({ stopPropagation() {}, preventDefault() {} });
-          } else {
-            sendBtn.click();
-          }
-          return true;
-        })()
-      `).catch(() => false);
-    }
     if (!submittedViaEdit) {
       throw new Error('Failed to edit message in DeepSeek Web');
     }
@@ -565,60 +586,84 @@ async function main() {
     `);
     if (!filled) throw new Error('DeepSeek composer not found');
 
-    await js(`
-      (() => {
-        const textarea = document.querySelector('textarea[name="search"]') || document.querySelector('textarea');
-        if (!textarea) return false;
-        const keyboard = { key: 'Enter', code: 'Enter', keyCode: 13, which: 13, bubbles: true, cancelable: true };
-        textarea.dispatchEvent(new KeyboardEvent('keydown', keyboard));
-        textarea.dispatchEvent(new KeyboardEvent('keyup', keyboard));
-        return true;
-      })()
-    `);
-    await new Promise((resolve) => setTimeout(resolve, 90));
-
-    const cleared = await js(`
-      (() => {
-        const textarea = document.querySelector('textarea[name="search"]') || document.querySelector('textarea');
-        const textEmpty = !textarea || !textarea.value.trim();
-        const composerChips = Array.from(document.querySelectorAll('.ds-animated-size-item'))
-          .filter((el) => !el.closest('[data-virtual-list-item-key]'));
-        if (${FILES.length > 0 ? 'true' : 'false'}) {
-          return textEmpty && composerChips.length === 0;
-        }
-        return textEmpty && ${PROMPT ? 'true' : 'false'};
-      })()
-    `);
-    if (!cleared) {
+    const submitDeadline = Date.now() + 8000;
+    let submitted = false;
+    while (Date.now() < submitDeadline) {
+      const cleared = await js(`
+        (() => {
+          const stream = window.__lxDeepSeekStream;
+          if (stream && stream.sseActive) return true;
+          const textarea = document.querySelector('textarea[name="search"]') || document.querySelector('textarea');
+          const textEmpty = !textarea || !textarea.value.trim();
+          const composerChips = Array.from(document.querySelectorAll('.ds-animated-size-item'))
+            .filter((el) => !el.closest('[data-virtual-list-item-key]'));
+          const stopIcon = Boolean(document.querySelector('.ds-icon-stop'));
+          if (stopIcon) return true;
+          if (${FILES.length > 0 ? 'true' : 'false'}) {
+            return textEmpty && composerChips.length === 0;
+          }
+          return textEmpty && ${PROMPT ? 'true' : 'false'};
+        })()
+      `).catch(() => false);
+      if (cleared) {
+        submitted = true;
+        break;
+      }
       await js(`
         (() => {
           const button = document.querySelector('.ds-button--primary:not(.ds-button--disabled)');
-          if (!button || button.querySelector('.ds-icon-stop')) return false;
-          const pk = Object.keys(button).find((k) => k.startsWith('__reactProps'));
-          if (pk && button[pk] && typeof button[pk].onClick === 'function') {
-            button[pk].onClick({ stopPropagation() {}, preventDefault() {} });
-          } else {
-            button.click();
+          if (button && button.getAttribute('aria-disabled') !== 'true' && !button.querySelector('.ds-icon-stop')) {
+            const pk = Object.keys(button).find((k) => k.startsWith('__reactProps'));
+            if (pk && button[pk] && typeof button[pk].onClick === 'function') {
+              button[pk].onClick({ stopPropagation() {}, preventDefault() {} });
+            } else {
+              button.click();
+            }
+            return true;
           }
-          return true;
+          const textarea = document.querySelector('textarea[name="search"]') || document.querySelector('textarea');
+          if (textarea) {
+            const keyboard = { key: 'Enter', code: 'Enter', keyCode: 13, which: 13, bubbles: true, cancelable: true };
+            textarea.dispatchEvent(new KeyboardEvent('keydown', keyboard));
+            textarea.dispatchEvent(new KeyboardEvent('keyup', keyboard));
+            return true;
+          }
+          return false;
         })()
-      `);
+      `).catch(() => false);
+      await new Promise((resolve) => setTimeout(resolve, 200));
+    }
+    if (!submitted) {
+      throw new Error('DeepSeek failed to submit message');
     }
   }
 
   const deadline = Date.now() + 300000;
-  while (Date.now() < deadline) {
+  let lastHeartbeat = Date.now();
+  while (Date.now() < deadline && !STREAM_ABORTED) {
+    await ensureTaskSpaceControl();
     const snapshot = await js(`
       (() => {
         const stream = window.__lxDeepSeekStream;
-        if (!stream) return null;
+        if (!stream) return { superseded: true };
+        if (stream.runId !== ${JSON.stringify(runId)}) return { superseded: true };
         stream.tickDom();
-        return { queue: stream.queue.splice(0, stream.queue.length), done: stream.done };
+        return { queue: stream.queue.splice(0, stream.queue.length), done: stream.done, superseded: false };
       })()
     `);
+    if (snapshot && snapshot.superseded) {
+      await emit({ event: 'error', message: 'DeepSeek stream was superseded by another pane' });
+      return;
+    }
     if (!snapshot) throw new Error('DeepSeek stream collector was lost');
     if (snapshot.queue.length > 0) {
+      lastHeartbeat = Date.now();
       await emitMany(snapshot.queue.map((item) => ({ event: item.kind, delta: item.delta })));
+    } else if (Date.now() - lastHeartbeat >= 1000) {
+      lastHeartbeat = Date.now();
+      if (!(await checkStreamAlive())) {
+        return;
+      }
     }
     if (snapshot.done) {
       const sessionMeta = await js(String.raw`
@@ -645,5 +690,7 @@ async function main() {
 try {
   await main();
 } catch (error) {
-  await emit({ event: 'error', message: String((error && error.message) || error) });
+  const raw = String((error && error.message) || error || 'DeepSeek web driver error');
+  const firstLine = raw.split('\n').map((s) => s.trim()).find(Boolean) || raw;
+  await emit({ event: 'error', message: firstLine });
 }

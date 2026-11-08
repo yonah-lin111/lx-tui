@@ -13,6 +13,7 @@ pub mod settings;
 pub mod skill;
 pub mod subagent;
 pub mod todo;
+pub mod web;
 pub mod workspace;
 
 #[cfg(test)]
@@ -40,6 +41,8 @@ pub enum CliAction {
     Version,
     /// `lx-tui exec ...`：无头运行 Agent。
     Exec(ExecCli),
+    /// `lx-tui web ...`：无头驱动网页端 AI 站点（DeepSeek / Gemini）。
+    Web(web::WebCli),
     /// `lx-tui session ...`：聊天会话管理。
     Session(session::SessionCli),
     /// `lx-tui prompt ...`：提示词库管理。
@@ -85,6 +88,7 @@ where
             Ok(exec::CliAction::Tui) => Ok(CliAction::Tui),
             Err(err) => Err(err),
         },
+        "web" => web::parse(tail),
         "session" => session::parse(tail),
         "prompt" => prompt::parse(tail),
         "todo" => todo::parse(tail),
@@ -117,6 +121,7 @@ pub fn run_cli(
             Ok(EXIT_OK)
         }
         CliAction::Exec(cli) => exec::run_main(cli, linked_worktree),
+        CliAction::Web(cli) => web::run(cli),
         CliAction::Session(cli) => session::run(cli, linked_worktree),
         CliAction::Prompt(cli) => prompt::run(cli, linked_worktree),
         CliAction::Todo(cli) => todo::run(cli, linked_worktree),
