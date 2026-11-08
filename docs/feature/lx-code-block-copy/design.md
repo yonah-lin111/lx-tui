@@ -1,6 +1,6 @@
 # lx 消息列表代码块样式与复制功能：设计方案
 
-> 状态：**已完成（含复审修复）**
+> 状态：**已完成（含复审修复，已合并到 dev）**
 > 日期：2026-11-08
 > 项目：`/Users/yonah/projects/agent/lx-tui`
 > 作用域：`src/ui/markdown_render*`、`src/ui/main_content/lx/*`、`src/event/mouse/*`、`src/ui/text/workspace.rs`、`docs/standards/tui-design-requirements.md`

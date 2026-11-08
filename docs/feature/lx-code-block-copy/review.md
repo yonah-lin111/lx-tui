@@ -1,6 +1,7 @@
 # lx 代码块样式与复制功能复审报告
 
 - 复审对象：`feat/lx-code-block-copy`（`ac1f174` 之后的工作区）
+- 合并状态：已合并到 `dev`（merge commit `5962b7f0`，`dev` 快进到该提交）
 - 复审范围：代码块渲染（`markdown_render/code_block.rs`、`markdown_render.rs`、`incremental.rs`）、lx 历史网格与选区、`[❐]` 命中与剪贴板反馈、相关测试与 feature 文档
 - 结论：P0 1 项（已在 `66ef242` 修复）、P1 3 项、P2 10 项、P3 8 项；P1/P2 在本轮修复并补测试。
 - 说明：下列“关键点/错误原因”记录复审时发现的问题；修复与验证列为当前状态，文档现状以本目录当前文件为准。
