@@ -211,6 +211,52 @@ fn ultra_narrow_header_and_body_stay_within_width() {
 }
 
 #[test]
+fn list_continuation_paragraph_is_not_treated_as_indented_code() {
+    for src in [
+        "1. step\n\n    explanation paragraph\n2. next",
+        "- item\n\n    explanation paragraph\n- next",
+    ] {
+        let lines = render_wrapped_code_blocks(src, 40);
+        assert!(
+            lines.iter().all(|line| line.code.is_none()),
+            "列表续段不得生成代码块 chrome：{src:?} -> {lines:?}"
+        );
+        assert!(
+            lines
+                .iter()
+                .any(|line| line.text().contains("explanation paragraph")),
+            "续段正文必须保留：{src:?} -> {lines:?}"
+        );
+    }
+
+    let src = "1. step\n\n    explanation\n2. next\n\n```rust\ncode\n```";
+    assert_eq!(
+        extract_code_block(src, 0).as_deref(),
+        Some("code"),
+        "列表续段不得占用代码块序号"
+    );
+}
+
+#[test]
+fn code_block_inside_list_keeps_sibling_list_indent() {
+    let src = "- a\n  - b\n    ```sh\n    cmd\n    ```\n  - c";
+    let lines = render_wrapped_code_blocks(src, 40);
+    let sibling = lines
+        .iter()
+        .find(|line| line.text() == "• c")
+        .expect("sibling list item");
+    assert_eq!(
+        sibling.indent, 2,
+        "列表内代码块之后的兄弟项仍保持二级缩进：{lines:?}"
+    );
+    assert_eq!(
+        extract_code_block(src, 0).as_deref(),
+        Some("    cmd"),
+        "列表内围栏代码块提取保持原始行"
+    );
+}
+
+#[test]
 fn header_sanitizes_control_chars_in_language_label() {
     let src = "```ru\tst\nlet x = 1;\n```";
     let lines = render_wrapped_code_blocks(src, 20);
@@ -257,6 +303,117 @@ fn header_drops_zero_width_language_chars() {
             button_cols: (16, 19),
         })
     );
+}
+
+#[test]
+fn ultra_narrow_wide_code_char_stays_within_width() {
+    for width in 1..=3u16 {
+        let lines = render_wrapped_code_blocks("```\n日\n```", width);
+        for line in &lines {
+            assert!(
+                line.width() <= usize::from(width),
+                "width={width} 时宽字符行宽 {} 越界：{:?}",
+                line.width(),
+                line.text()
+            );
+        }
+    }
+}
+
+#[test]
+fn width_one_code_line_does_not_explode_into_per_char_rows() {
+    let lines = render_wrapped_code_blocks("```\nabcdefghij\n```", 1);
+    let bodies: Vec<&MdLine> = lines
+        .iter()
+        .filter(|line| line.code == Some(CodeLineKind::Body))
+        .collect();
+    assert_eq!(bodies.len(), 1, "宽度 1 时一条逻辑代码行只留一条 `▎`");
+    assert_eq!(bodies[0].text(), "▎");
+}
+
+#[test]
+fn code_body_drops_zero_width_chars() {
+    let lines = render_wrapped_code_blocks("```\n👨\u{200d}👩\u{200d}👧 x\n```", 10);
+    let body = lines
+        .iter()
+        .find(|line| line.code == Some(CodeLineKind::Body))
+        .expect("body");
+    assert!(
+        body.text().chars().all(|ch| ch.width().unwrap_or(0) > 0),
+        "正文不得保留零宽/ZWJ 字符：{:?}",
+        body.text()
+    );
+    assert!(
+        body.text().contains('x'),
+        "正文内容不得被裁掉：{:?}",
+        body.text()
+    );
+    assert!(body.width() <= 10);
+}
+
+#[test]
+fn four_backtick_fence_is_not_closed_by_inner_three_backticks() {
+    let src = "````markdown\n```rust\nlet a = 1;\n```\n````";
+    let lines = render_wrapped_code_blocks(src, 40);
+    let bodies: Vec<&MdLine> = lines
+        .iter()
+        .filter(|line| line.code == Some(CodeLineKind::Body))
+        .collect();
+    assert_eq!(bodies.len(), 3, "内层三反引号是代码正文：{lines:?}");
+    assert_eq!(bodies[0].text(), "▎```rust");
+    assert_eq!(bodies[1].text(), "▎let a = 1;");
+    assert_eq!(bodies[2].text(), "▎```");
+    assert_eq!(
+        extract_code_block(src, 0).as_deref(),
+        Some("```rust\nlet a = 1;\n```"),
+        "四反引号围栏复制应保留内层三反引号"
+    );
+}
+
+#[test]
+fn extreme_widths_do_not_panic_or_overflow() {
+    for width in [0u16, 1, 2, u16::MAX] {
+        let limit = usize::from(width.max(1));
+        let lines = render_wrapped_code_blocks("```rust\n日\n```", width);
+        for line in &lines {
+            assert!(
+                line.width() <= limit,
+                "width={width} 时行宽 {} 越界：{:?}",
+                line.width(),
+                line.text()
+            );
+        }
+    }
+}
+
+#[test]
+fn unlimited_width_code_block_keeps_body() {
+    let lines = render_wrapped_code_blocks("```rust\nlet x = 1;\n```", u16::MAX);
+    assert!(lines.iter().any(|line| line.text() == "▎let x = 1;"));
+}
+
+#[test]
+fn unclosed_fence_trailing_newline_is_not_an_extra_code_line() {
+    let src = "```rust\nlet x = 1;\n";
+    let lines = render_wrapped_code_blocks(src, 30);
+    assert_eq!(lines.len(), 3, "顶边 / 头部 / 1 行正文");
+    assert_eq!(lines[2].text(), "▎let x = 1;");
+    assert_eq!(
+        extract_code_block(src, 0).as_deref(),
+        Some("let x = 1;"),
+        "复制不得带末尾换行"
+    );
+
+    let src = "```rust\n";
+    let lines = render_wrapped_code_blocks(src, 30);
+    assert_eq!(lines.len(), 2, "空围栏只有顶边与头部");
+    assert_eq!(extract_code_block(src, 0).as_deref(), Some(""));
+
+    let src = "```\n\n";
+    let lines = render_wrapped_code_blocks(src, 30);
+    assert_eq!(lines.len(), 3, "真正的空代码行必须保留");
+    assert_eq!(lines[2].text(), "▎");
+    assert_eq!(extract_code_block(src, 0).as_deref(), Some(""));
 }
 
 #[test]

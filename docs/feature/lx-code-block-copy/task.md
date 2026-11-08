@@ -34,7 +34,9 @@
 - [x] 实现 `render_code_line`、`sanitize_code_line`、`prepend_body_bar`：正文按 `width - 1` 折行，每个视觉行前置 `▎`；`\t` 按 4 列展开，其余控制字符替换为空格。
 - [x] 实现 `normalize_lang_label`：空语言回退 `text`，控制字符净化。
 - [x] 实现 `extract_code_block`：围栏/4 空格缩进/未闭合流式块，按块序号提取原始代码；剥离行尾 `\r`。
-- [x] `ParserState` 新增 `next_code_block_index` 与 `after_code_block`；`render_wrapped_code_blocks` 启用 `code_chrome = true`；`IncrementalMarkdownState::update` 同步启用。
+- [x] `ParserState` 新增 `list_content_indents` / `next_code_block_index` / `after_code_block` / `open_fence_ticks`；列表续段与缩进代码块按内容起始列区分；列表内代码块保留兄弟层级。
+- [x] `split_source_lines` 把末尾 `\n` 视为行终止符，未闭合围栏不多空行、不复制尾换行；反引号围栏按 opener 长度闭合。
+- [x] `render_wrapped_code_blocks` 启用 `code_chrome = true`；`IncrementalMarkdownState::update` 同步启用。
 - [x] 间距：代码块上方不补空行，下方有后续内容时补 1 行；消息末尾不补；相邻代码块共享 1 行。
 
 ### T2：lx 历史网格与拖拽选区
@@ -77,7 +79,7 @@
   - `src/event/tests/lx_view.rs`
   - `docs/standards/tui-design-requirements.md`
 
-- [x] 代码块几何、语言回退/截断、窄宽、软换行、空代码行、上下间距、制表符/控制字符、语言标签净化、CRLF 提取、围栏/缩进/未闭合提取、列表/引用/表格后的块序号对齐。
+- [x] 代码块几何、语言回退/截断、窄宽、软换行、空代码行、上下间距、制表符/控制字符、语言标签净化、CRLF 提取、围栏/缩进/未闭合提取、列表/引用/表格后的块序号对齐、列表续段、列表内代码块兄弟项缩进、未闭合尾换行、宽字符/宽度 1/零宽正文、四反引号围栏。
 - [x] 增量一致性基准改为 `render_wrapped_code_blocks`。
 - [x] lx 真实渲染：顶边、头部、正文左栏、制表符展开、无控制字符。
 - [x] `[❐]` 命中、原始代码返回、子 Agent 详情页、sticky 优先、空块不弹 Toast、窗格内 Toast、选区保留。
@@ -98,6 +100,12 @@
 - [x] **P2-5**：恢复会话加载中禁止命中/选中旧历史；`chat_geometry_is_live` 与 `content_geom` 同步 guard。
 - [x] **P2-6**：双击/三击装饰行或 `▎` 栏不再留下不可见 Word/Line 选区；新增 `unit_cell_range_opt`。
 - [x] **P3-6**：语言标签零宽/组合字符净化，保证热区与绘制一致。
+- [x] **P1-3**：列表续段不再被当成缩进代码块；列表内代码块保留兄弟项层级，提取侧同步列表上下文。
+- [x] **P2-7**：末尾换行不再生成额外空 `▎` 行或复制尾换行。
+- [x] **P2-8**：宽度 2 宽字符正文不越界，宽度 1 不再按字符爆行。
+- [x] **P2-9**：代码正文丢弃零宽/ZWJ 字符，测量与落格一致。
+- [x] **P2-10**：四反引号围栏按 opener 长度闭合，内层三反引号保留为代码。
+- [ ] **P3-8**：列表内代码块 chrome 视觉缩进未做，记录在 review.md。
 
 ---
 

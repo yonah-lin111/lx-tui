@@ -13,8 +13,8 @@
 use std::sync::Arc;
 
 use super::{
-    MdLine, ParserState, is_indented_code, list_item, md_bytes, render_blocks_stateful,
-    wrap_md_line,
+    MdLine, ParserState, fence_ticks, is_indented_code, list_item, md_bytes,
+    render_blocks_stateful, wrap_md_line,
 };
 
 /// 单个流式 Markdown 块的增量解析状态。
@@ -55,11 +55,9 @@ impl IncrementalMarkdownState {
                 break;
             }
             let boundary = line_offset(&lines, safe);
-            // 去掉最后一个换行：末尾空串属于**下一步**的活跃尾部，不能在这里
-            // 当成一条已完成的空行（围栏代码块里会多出一条空代码行）。
-            let committed = rest[..boundary]
-                .strip_suffix('\n')
-                .unwrap_or(&rest[..boundary]);
+            // 末尾换行交给 `source_lines` 按“行终止符”处理：既不会把末尾换行
+            // 误当成空代码行，也不会丢掉围栏内真正的空行（`\n\n`）。
+            let committed = &rest[..boundary];
             let produced =
                 render_blocks_stateful(committed, Some(wrap_width), true, true, &mut self.parser);
             let mut wrapped = Vec::new();
@@ -127,14 +125,16 @@ fn edges_hash(bytes: &[u8]) -> u64 {
 
 /// 可从当前状态安全固化的完整行数；遇到未闭合的表格/缩进代码块时停在其起始行。
 fn safe_line_count(lines: &[&str], state: &ParserState) -> usize {
-    // 围栏闭合只取决于行内容，用局部标记即可。
+    // 围栏闭合只取决于行内容与 opener 的反引号数量，用局部标记即可。
     let mut in_fence = state.open_fence_lang.is_some();
+    let mut open_ticks = state.open_fence_ticks;
     let mut index = 0;
     while index < lines.len() {
         let line = lines[index];
         if in_fence {
-            if line.trim_start().starts_with("```") {
+            if fence_ticks(line).is_some_and(|ticks| ticks >= open_ticks) {
                 in_fence = false;
+                open_ticks = 0;
             }
             index += 1;
             continue;
@@ -144,8 +144,9 @@ fn safe_line_count(lines: &[&str], state: &ParserState) -> usize {
             index += 1;
             continue;
         }
-        if trimmed.trim_start().starts_with("```") {
+        if let Some(ticks) = fence_ticks(line) {
             in_fence = true;
+            open_ticks = ticks;
             index += 1;
             continue;
         }
@@ -153,8 +154,8 @@ fn safe_line_count(lines: &[&str], state: &ParserState) -> usize {
             index += 1;
             continue;
         }
-        if is_indented_code(line) {
-            match indented_block_end(lines, index) {
+        if is_indented_code(line, 4) {
+            match indented_block_end(lines, index, 4) {
                 Some(end) => {
                     index = end;
                     continue;
@@ -179,17 +180,17 @@ fn safe_line_count(lines: &[&str], state: &ParserState) -> usize {
 }
 
 /// 缩进代码块的结束行下标；未闭合（一直延伸到最后一个完整行）返回 None。
-fn indented_block_end(lines: &[&str], start: usize) -> Option<usize> {
+fn indented_block_end(lines: &[&str], start: usize, min_indent: usize) -> Option<usize> {
     let mut index = start;
     while index < lines.len() {
-        if is_indented_code(lines[index]) {
+        if is_indented_code(lines[index], min_indent) {
             index += 1;
             continue;
         }
         if lines[index].trim().is_empty() {
             match lines.get(index + 1) {
                 // 空行后面仍是缩进行：空行属于代码块内部。
-                Some(next) if is_indented_code(next) => {
+                Some(next) if is_indented_code(next, min_indent) => {
                     index += 1;
                     continue;
                 }

@@ -149,7 +149,10 @@ const TAB_WIDTH: usize = 4;
 /// 把代码行中不能直接落格的字符转换为可见文本：`\t` 按 4 列制表位展开，
 /// 其余控制字符（`\r`、`\x1b` 等）替换为空格，避免 ratatui 的 cell_width panic。
 fn sanitize_code_line(line: &str) -> Cow<'_, str> {
-    if !line.chars().any(|ch| ch == '\t' || ch.is_control()) {
+    if !line
+        .chars()
+        .any(|ch| ch == '\t' || ch.is_control() || ch.width().unwrap_or(0) == 0)
+    {
         return Cow::Borrowed(line);
     }
     let mut out = String::with_capacity(line.len().saturating_add(TAB_WIDTH));
@@ -167,6 +170,7 @@ fn sanitize_code_line(line: &str) -> Cow<'_, str> {
                 out.push(' ');
                 col = col.saturating_add(1);
             }
+            ch if ch.width().unwrap_or(0) == 0 => {}
             ch => {
                 out.push(ch);
                 col = col.saturating_add(ch.width().unwrap_or(0));
@@ -176,7 +180,7 @@ fn sanitize_code_line(line: &str) -> Cow<'_, str> {
     Cow::Owned(out)
 }
 
-/// 为折行后的单个代码块正文视觉行前置左侧栏 `▎`。
+/// 为折行后的单个代码块正文视觉行前置左侧栏 `▎`，并裁剪到 `width` 列内。
 pub(super) fn prepend_body_bar(
     mut spans: Vec<(String, Style)>,
     width: usize,
@@ -184,10 +188,26 @@ pub(super) fn prepend_body_bar(
     if width == 0 {
         return spans;
     }
+    let max_body = width.saturating_sub(1);
     let mut out = Vec::with_capacity(spans.len() + 1);
     out.push((text::CODE_BLOCK_BAR.to_string(), style::md_read_rule()));
-    if width > 1 {
-        out.append(&mut spans);
+    let mut used = 0usize;
+    'spans: for (value, span_style) in spans.drain(..) {
+        let mut kept = String::new();
+        for ch in value.chars() {
+            let cell = ch.width().unwrap_or(0);
+            if used.saturating_add(cell) > max_body {
+                break 'spans;
+            }
+            kept.push(ch);
+            used = used.saturating_add(cell);
+        }
+        if !kept.is_empty() {
+            out.push((kept, span_style));
+        }
+        if used >= max_body {
+            break;
+        }
     }
     out
 }
@@ -275,25 +295,28 @@ fn strip_indent_and_cr(line: &str) -> &str {
 
 /// 按与 [`super::render_blocks_stateful`] 相同的块扫描顺序，提取第 `target_index` 个
 /// 代码块（围栏或 4 空格缩进代码块）的原始未折行代码正文；与当前解析器口径一致，
-/// 不额外支持 `~~~` 围栏或四反引号闭合长度等 CommonMark 细节。
+/// 反引号围栏按 opener 长度闭合，不额外支持 `~~~` 围栏。
 ///
 /// 未闭合的流式围栏代码块返回当前已生成的全部代码行。
 pub fn extract_code_block(source: &str, target_index: usize) -> Option<String> {
-    let source_lines: Vec<&str> = source.split('\n').collect();
+    let source_lines = super::split_source_lines(source);
     let mut index = 0;
     let mut open_fence = false;
+    let mut open_ticks = 0usize;
     let mut current_block = 0usize;
     let mut fence_lines: Vec<&str> = Vec::new();
+    let mut list_state = super::ParserState::default();
 
     while index < source_lines.len() {
         let line = source_lines[index];
         if open_fence {
-            if line.trim_start().starts_with("```") {
+            if super::fence_ticks(line).is_some_and(|ticks| ticks >= open_ticks) {
                 if current_block == target_index {
                     return Some(fence_lines.join("\n"));
                 }
                 fence_lines.clear();
                 open_fence = false;
+                open_ticks = 0;
                 current_block += 1;
                 index += 1;
                 continue;
@@ -309,23 +332,30 @@ pub fn extract_code_block(source: &str, target_index: usize) -> Option<String> {
             index += 1;
             continue;
         }
-        if trimmed.trim_start().starts_with("```") {
+        let item = list_item(line);
+        super::update_list_context(&mut list_state, item.as_ref(), line);
+        let min_indent = super::list_code_min_indent(&list_state);
+        if let Some(ticks) = super::fence_ticks(line) {
             open_fence = true;
+            open_ticks = ticks;
             fence_lines.clear();
             index += 1;
             continue;
         }
-        if list_item(line).is_some() {
+        if item.is_some() {
             index += 1;
             continue;
         }
-        if is_indented_code(line) {
+        if is_indented_code(line, min_indent) {
             let mut body = Vec::new();
             while index < source_lines.len()
-                && (is_indented_code(source_lines[index]) || source_lines[index].trim().is_empty())
+                && (is_indented_code(source_lines[index], min_indent)
+                    || source_lines[index].trim().is_empty())
             {
                 if source_lines[index].trim().is_empty() {
-                    if index + 1 < source_lines.len() && is_indented_code(source_lines[index + 1]) {
+                    if index + 1 < source_lines.len()
+                        && is_indented_code(source_lines[index + 1], min_indent)
+                    {
                         body.push("");
                         index += 1;
                         continue;

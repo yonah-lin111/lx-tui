@@ -180,12 +180,30 @@ struct ParserState {
     /// 列表缩进档位栈：把源码缩进列数换算成层级，跨行维护，非列表行清空（空行不清，
     /// 允许松散列表）。这样 2 空格（`- ` 对齐）与 3 空格（`1. ` 对齐）混用也能得到均匀层间距。
     list_indents: Vec<usize>,
+    /// 与 `list_indents` 平行的列表项内容起始列栈（最内层为 last）。
+    /// 用于区分“列表续段”和真正的 4 空格缩进代码块。
+    list_content_indents: Vec<usize>,
     /// `Some(lang)` 表示位于未闭合围栏代码块内（空串 = 围栏未写语言）。
     open_fence_lang: Option<String>,
+    /// 当前未闭合围栏 opener 的反引号数量；关闭行必须不少于该数量。
+    open_fence_ticks: usize,
     /// 下一个代码块的 0-based 序号（围栏与 4 空格缩进代码块统一递增）。
     next_code_block_index: usize,
     /// 上一个块是代码块：下一个块前需补一行空白间隔（跨增量分块保留）。
     after_code_block: bool,
+}
+
+/// 按行切分源码：末尾 `\n` 是行终止符，不额外产生一条空行；真正的空行
+/// （`\n\n`）仍保留。空源码返回零行。
+fn split_source_lines(source: &str) -> Vec<&str> {
+    if source.is_empty() {
+        return Vec::new();
+    }
+    let mut lines: Vec<&str> = source.split('\n').collect();
+    if lines.last() == Some(&"") {
+        lines.pop();
+    }
+    lines
 }
 
 /// 从给定跨行状态继续块级解析，返回新产出的行。
@@ -197,16 +215,17 @@ fn render_blocks_stateful(
     state: &mut ParserState,
 ) -> Vec<MdLine> {
     let mut lines = Vec::new();
-    let source_lines: Vec<&str> = source.split('\n').collect();
+    let source_lines = split_source_lines(source);
     let mut index = 0;
     while index < source_lines.len() {
         let line = source_lines[index];
         // 未闭合围栏内部：每行都是独立代码行（闭合行只推进状态）。
         if let Some(lang) = state.open_fence_lang.take() {
-            if line.trim_start().starts_with("```") {
+            if fence_ticks(line).is_some_and(|ticks| ticks >= state.open_fence_ticks) {
                 if code_chrome {
                     state.after_code_block = true;
                 }
+                state.open_fence_ticks = 0;
                 index += 1;
                 continue;
             }
@@ -231,10 +250,9 @@ fn render_blocks_stateful(
             state.after_code_block = false;
         }
         let item = list_item(line);
-        if item.is_none() {
-            state.list_indents.clear();
-        }
-        if trimmed.trim_start().starts_with("```") {
+        update_list_context(state, item.as_ref(), line);
+        let min_indent = list_code_min_indent(state);
+        if let Some(ticks) = fence_ticks(line) {
             let lang = line.trim().trim_start_matches('`').trim();
             let block_index = state.next_code_block_index;
             state.next_code_block_index += 1;
@@ -243,6 +261,7 @@ fn render_blocks_stateful(
                 lines.push(code_block::header_line(lang, block_index, width));
             }
             state.open_fence_lang = Some(lang.to_string());
+            state.open_fence_ticks = ticks;
             index += 1;
             continue;
         }
@@ -255,7 +274,7 @@ fn render_blocks_stateful(
             index += 1;
             continue;
         }
-        if is_indented_code(line) {
+        if is_indented_code(line, min_indent) {
             let block_index = state.next_code_block_index;
             state.next_code_block_index += 1;
             index = indented_code(
@@ -264,6 +283,7 @@ fn render_blocks_stateful(
                 width,
                 block_index,
                 code_chrome,
+                min_indent,
                 &mut lines,
             );
             if code_chrome {
@@ -362,11 +382,11 @@ fn is_rule(line: &str) -> bool {
 }
 
 /// 缩进代码块行：4 个以上前导空格且非空（列表项已在调用前按列表处理，走不到这里）。
-fn is_indented_code(line: &str) -> bool {
+fn is_indented_code(line: &str, min_indent: usize) -> bool {
     let indent = line.len() - line.trim_start_matches(' ').len();
     // 列表项不算缩进代码：块级分派已优先按列表处理，这里同时兜住 `indented_code` 的
     // 续行判断——紧跟在代码行后的 `- 子项` 形态的行会提前收尾代码块，不再漏成 `▎ - 子项`。
-    indent >= 4 && !line.trim().is_empty() && list_item(line).is_none()
+    indent >= min_indent && !line.trim().is_empty() && list_item(line).is_none()
 }
 
 /// 图片 `![alt](url)`。
@@ -386,16 +406,17 @@ fn indented_code(
     width: Option<usize>,
     block_index: usize,
     code_chrome: bool,
+    min_indent: usize,
     lines: &mut Vec<MdLine>,
 ) -> usize {
     let mut index = start;
     let mut body = Vec::new();
     while index < source.len()
-        && (is_indented_code(source[index]) || source[index].trim().is_empty())
+        && (is_indented_code(source[index], min_indent) || source[index].trim().is_empty())
     {
         if source[index].trim().is_empty() {
             // 段内空行保留，但行尾空行不追加。
-            if index + 1 < source.len() && is_indented_code(source[index + 1]) {
+            if index + 1 < source.len() && is_indented_code(source[index + 1], min_indent) {
                 body.push("");
                 index += 1;
                 continue;
@@ -464,6 +485,15 @@ impl ListItem<'_> {
             Self::Bullet { indent, .. }
             | Self::Ordered { indent, .. }
             | Self::Task { indent, .. } => indent,
+        }
+    }
+
+    /// 列表项正文起始列（标记宽度 + 一个空格）。
+    fn content_indent(&self) -> usize {
+        match *self {
+            Self::Bullet { indent, .. } => indent + 2,
+            Self::Ordered { indent, number, .. } => indent + number.len() + 2,
+            Self::Task { indent, .. } => indent + 6,
         }
     }
 
@@ -536,6 +566,45 @@ fn list_depth(stack: &mut Vec<usize>, indent: usize) -> usize {
         stack.push(indent);
     }
     stack.len() - 1
+}
+
+/// 维护列表上下文：列表项更新内容起始列栈；非列表行只有缩进小于当前列表
+/// 内容起始列时才结束列表上下文（列表续段/列表内代码块保留层级）。
+fn update_list_context(state: &mut ParserState, item: Option<&ListItem<'_>>, line: &str) {
+    if let Some(item) = item {
+        let depth = list_depth(&mut state.list_indents, item.indent());
+        state.list_content_indents.truncate(depth + 1);
+        if state.list_content_indents.len() <= depth {
+            state.list_content_indents.push(item.content_indent());
+        } else {
+            state.list_content_indents[depth] = item.content_indent();
+        }
+        return;
+    }
+    let indent = line.len() - line.trim_start_matches(' ').len();
+    let in_list = state
+        .list_content_indents
+        .last()
+        .is_some_and(|content| indent >= *content);
+    if !in_list {
+        state.list_indents.clear();
+        state.list_content_indents.clear();
+    }
+}
+
+/// 围栏 opener/closer 的反引号数量；不足 3 个返回 `None`。
+fn fence_ticks(line: &str) -> Option<usize> {
+    let rest = line.trim_start();
+    let ticks = rest.chars().take_while(|ch| *ch == '`').count();
+    (ticks >= 3).then_some(ticks)
+}
+
+/// 当前列表上下文下，缩进代码块所需的最小列数；不在列表内为 4。
+fn list_code_min_indent(state: &ParserState) -> usize {
+    state
+        .list_content_indents
+        .last()
+        .map_or(4, |content| content.saturating_add(4))
 }
 
 /// 标记的显示宽度（悬挂缩进列数）。
@@ -763,6 +832,17 @@ fn wrap_md_line(line: &MdLine, width: usize, out: &mut Vec<MdLine>) {
         return;
     }
     if line.code == Some(CodeLineKind::Body) {
+        // 宽度 1：只能显示左栏，禁止按字符拆成大量 `▎` 行。
+        if width <= 1 {
+            out.push(MdLine {
+                indent: 0,
+                hang: 0,
+                spans: code_block::prepend_body_bar(Vec::new(), width),
+                table: None,
+                code: Some(CodeLineKind::Body),
+            });
+            return;
+        }
         // 扣掉左侧 `▎` 的 1 列。
         let body_width = width.saturating_sub(1).max(1);
         let start_len = out.len();

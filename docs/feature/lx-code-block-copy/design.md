@@ -43,7 +43,7 @@
 | 文件 | 职责 |
 | :--- | :--- |
 | `src/ui/markdown_render/code_block.rs` | `CodeLineKind`（`TopBorder` / `Header { block_index, button_cols }` / `Body`）；`top_border_line`、`header_line`、`render_code_line`、`sanitize_code_line`、`prepend_body_bar`、`normalize_lang_label`、`extract_code_block` 等。 |
-| `src/ui/markdown_render.rs` | `MdLine.code` 元数据；`render_wrapped_code_blocks`；`ParserState` 的 `next_code_block_index` / `after_code_block`；`wrap_md_line` 的代码分支。 |
+| `src/ui/markdown_render.rs` | `MdLine.code` 元数据；`render_wrapped_code_blocks`；`ParserState` 的 `list_indents` / `list_content_indents` / `next_code_block_index` / `after_code_block` / `open_fence_ticks`；`wrap_md_line` 的代码分支；`split_source_lines` / `fence_ticks`。 |
 | `src/ui/markdown_render/incremental.rs` | 流式增量渲染继续使用 `code_chrome = true`，稳定前缀/活跃尾部与全量渲染逐行一致。 |
 | `src/ui/main_content/lx/grid.rs` | `GridCodeRow::{Chrome, Body { bar_col }}` 与逐行登记接口。 |
 | `src/ui/main_content/lx/history/paint.rs` | `draw_markdown` 按 `line.code` 登记代码行元数据。 |
@@ -95,7 +95,9 @@ content_width = body.width - STEP_GUTTER
 
 - 折行宽度 `content_width - 1`（扣除 `▎`）；
 - 每个视觉行（含空代码行、软换行续行）前置 `▎`；
-- 宽字符按显示宽度折行；单个超宽字符单独成行。
+- 宽字符按显示宽度折行；单个超宽字符单独成行；`prepend_body_bar` 再按 `content_width - 1` 裁剪，保证 `MdLine::width() <= content_width`；
+- 宽度 1 时每条逻辑代码行只产出一条 `▎`，不按字符爆行；
+- 零宽/组合字符直接丢弃，保证测量宽度与绘制落格一致。
 
 `sanitize_code_line` 在进入高亮/折行前：
 
@@ -107,7 +109,8 @@ content_width = body.width - STEP_GUTTER
 - 代码块上方不额外补空行（源码里的空行会被解析器跳过）；
 - 代码块之后若还有内容，固定补 1 行空行；消息末尾不补；
 - 相邻代码块共享这 1 行，不叠加；
-- 跨增量分块由 `ParserState.after_code_block` 保留，稳定前缀与尾部不重复/不丢失。
+- 跨增量分块由 `ParserState.after_code_block` 保留，稳定前缀与尾部不重复/不丢失；
+- `split_source_lines` 把末尾 `\n` 视为行终止符，不额外产生空代码行；真正的空行（`\n\n`）仍保留。
 
 ---
 
@@ -164,13 +167,14 @@ PartKind::Text (assistant)
 
 `extract_code_block(source, target_index)` 按与 `render_blocks_stateful` 相同的块扫描顺序遍历：
 
-1. 未闭合围栏内部：收集代码行，遇到 ``` 闭合；
-2. 围栏起始行：分配块序号；
-3. 列表项优先于缩进代码块；
-4. 4 空格缩进代码块：收集连续缩进行与段内空行；
+1. 未闭合围栏内部：收集代码行，关闭行反引号数量 >= opener 数量才闭合；
+2. 围栏起始行：分配块序号并记录 opener 反引号数量；
+3. 列表项优先于缩进代码块；列表续段按“当前列表内容起始列 + 4”判断，不占用代码块序号；
+4. 缩进代码块：阈值 = 列表内容起始列 + 4（无列表时为 4），收集连续缩进行与段内空行；
 5. 表格/引用整体跳过，不占用代码块序号；
 6. 未闭合围栏返回当前已生成代码；
-7. 围栏与缩进代码行均剥离行尾 `\r`（CRLF 源），其余内容保持原始未折行。
+7. `split_source_lines` 把末尾 `\n` 当行终止符，真正的空行仍保留；
+8. 围栏与缩进代码行均剥离行尾 `\r`（CRLF 源），其余内容保持原始未折行。
 
 空代码块返回空串，事件层据此 no-op。
 
@@ -181,7 +185,7 @@ PartKind::Text (assistant)
 实际测试落点：
 
 - `src/ui/markdown_render/code_block/tests.rs`
-  - 顶边/头部/正文几何、语言回退与截断、窄宽兜底、软换行与空代码行、上下间距、制表符/控制字符、语言标签净化、CRLF 提取、围栏/缩进/未闭合提取、列表/引用/表格后的块序号对齐；
+  - 顶边/头部/正文几何、语言回退与截断、窄宽兜底、软换行与空代码行、上下间距、制表符/控制字符、语言标签净化、CRLF 提取、围栏/缩进/未闭合提取、列表/引用/表格后的块序号对齐、列表续段、列表内代码块兄弟项缩进、未闭合尾换行、宽字符/宽度 1/零宽正文、四反引号围栏；
   - 思考块/工具使用 `render_wrapped` 时无 chrome。
 - `src/ui/markdown_render/incremental/tests.rs`
   - 逐字节增量与全量 `render_wrapped_code_blocks` 等价，含代码块与多块序列。
@@ -214,13 +218,19 @@ cargo test --lib
 - **P0-1**：控制字符导致 ratatui `cell_width` panic —— 已由 `66ef242` 修复（制表符展开 + blit 兜底）。
 - **P1-1**：左侧起止的多行选区漏掉代码正文 —— 删除基于选区端点的全局跳过，补复制/反显测试。
 - **P1-2**：语言标签控制字符导致排版/热区错位 —— 语言标签净化。
+- **P1-3**：列表续段误判为缩进代码、列表内代码块打断兄弟项层级 —— 列表内容缩进上下文与代码阈值同步。
 - **P2-1**：CRLF 复制带 `\r` —— 提取时剥离行尾 `\r`。
 - **P2-2**：设计/任务文档与实现不一致 —— 本文与 `task.md` 同步重写。
 - **P2-3**：补充选区、语言、CRLF、块序号测试。
 - **P2-4**：Agents 详情页命中改用 `view_source_plain_ready`。
 - **P2-5**：恢复会话加载中禁止命中/选中旧历史。
 - **P2-6**：双击/三击装饰行或 `▎` 栏不再留下不可见 Word/Line 选区。
+- **P2-7**：未闭合围栏末尾换行不再多空行/多复制 `\n`。
+- **P2-8**：宽度 1/2 的宽字符正文不再越界或爆行。
+- **P2-9**：代码正文零宽/ZWJ 字符净化。
+- **P2-10**：四反引号围栏按 opener 长度闭合。
 - **P3-6**：语言零宽/组合字符净化。
+- **P3-8**：列表内代码块 chrome 视觉缩进未做，记录为后续增强。
 
 ---
 
@@ -230,8 +240,8 @@ cargo test --lib
   - 不为 `[❐]` 添加 Tooltip 或 hover 变色；
   - 不在用户气泡、思考块、工具/命令/Subagent 汇报/Compact 中启用 chrome；
   - 不添加代码块右侧边框、底部边框或 Header 下方分割线；
-  - 不为 `~~~` 围栏或四反引号闭合长度引入新的 CommonMark 语义（与当前解析器保持一致）。
+  - 不引入 `~~~` 围栏语义；反引号围栏按 opener 长度支持四反引号及以上闭合。
 - **边界**：
   - 极窄 `content_width < 7` 时语言名可能完全让位给按钮，按钮片段可能被裁剪；
   - 单空行代码块与空代码块在提取结果上都为空串，按“空块不复制”处理；
-  - 宽字符在极窄宽度下可能单独成行，宽度上限由 `wrap_md_line` 的既有规则决定。
+  - 宽度 1/2 时宽字符正文可能被裁剪为仅剩 `▎`，但保证不越界、不爆行。

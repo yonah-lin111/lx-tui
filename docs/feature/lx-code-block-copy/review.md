@@ -2,7 +2,7 @@
 
 - 复审对象：`feat/lx-code-block-copy`（`ac1f174` 之后的工作区）
 - 复审范围：代码块渲染（`markdown_render/code_block.rs`、`markdown_render.rs`、`incremental.rs`）、lx 历史网格与选区、`[❐]` 命中与剪贴板反馈、相关测试与 feature 文档
-- 结论：P0 1 项（已在 `66ef242` 修复）、P1 2 项、P2 6 项、P3 7 项；P1/P2 在本轮修复并补测试。
+- 结论：P0 1 项（已在 `66ef242` 修复）、P1 3 项、P2 10 项、P3 8 项；P1/P2 在本轮修复并补测试。
 - 说明：下列“关键点/错误原因”记录复审时发现的问题；修复与验证列为当前状态，文档现状以本目录当前文件为准。
 - 关联设计：[design.md](./design.md)
 - 关联任务：[task.md](./task.md)
@@ -83,6 +83,33 @@
 **验证**
 
 - `header_sanitizes_control_chars_in_language_label`
+- `header_drops_zero_width_language_chars`
+
+### P1-3 列表续段被当成缩进代码块，列表内代码块打断兄弟项层级
+
+**关键点**
+
+- `1. step` 后接 4 空格解释段、`- item` 后接 4 空格续段，被 `is_indented_code` 当成缩进代码块，生成带 `[❐]` 的代码块并复制该段文字。
+- 围栏/缩进代码行触发 `list_indents.clear()`，列表内代码块之后的兄弟列表项丢失嵌套层级（`• c` 从 2 列缩进掉到 0）。
+- `extract_code_block` 使用同一套“只看 4 空格”的判定，块序号也会把列表续段算成代码块。
+
+**错误原因**
+
+`is_indented_code` 没有列表内容起始列上下文；列表项在遇到非列表行时无条件清空 `list_indents`，把续段/代码块都当成列表结束。
+
+**修复**
+
+- `ParserState` 增加与 `list_indents` 平行的 `list_content_indents`；列表项记录内容起始列（bullet +2、ordered +number+2、task +6）。
+- 非列表行只有缩进小于当前列表内容起始列时才结束列表上下文；列表续段、列表内围栏/缩进代码块保留层级。
+- 缩进代码阈值改为 `list_content_indent + 4`，不再固定 4。
+- 围栏/缩进代码块不再清空列表栈；`render_blocks_stateful`、`extract_code_block`、增量 `safe_line_count` 同步判定。
+- `extract` 使用同一个 `ParserState` 的列表上下文，块序号与渲染一致。
+- 新增列表续段、列表内代码块后兄弟项缩进、续段不占块序号测试。
+
+**验证**
+
+- `list_continuation_paragraph_is_not_treated_as_indented_code`
+- `code_block_inside_list_keeps_sibling_list_indent`
 
 ---
 
@@ -224,6 +251,91 @@
 
 - `code_block_chrome_double_or_triple_click_does_not_leave_invisible_selection`
 
+### P2-7 未闭合围栏末尾换行多渲染一条空 `▎` 行，复制多一个 `\n`
+
+**关键点**
+
+- `"```rust\nlet x = 1;\n"` 渲染出顶边/头部/正文/**额外空 `▎`**，`extract_code_block` 返回带尾换行。
+- `"```rust\n"` 渲染出顶边/头部/**空 `▎`**；闭合后该空行消失，流式高度跳 1 行，复制结果前后不一致。
+
+**错误原因**
+
+`split('\n')` 把末尾换行也当成一条空行；全量与增量路径各自用 `strip_suffix` 规避，但空 tail/未闭合路径又把它加回来。
+
+**修复**
+
+- 新增 `split_source_lines`：末尾 `\n` 视为行终止符，真正的空行（`\n\n`）仍保留。
+- `render_blocks_stateful`、`extract_code_block` 统一使用该切分；增量提交不再自行 `strip_suffix`。
+- 新增未闭合尾换行、空围栏、真正空代码行的行数与复制断言。
+
+**验证**
+
+- `unclosed_fence_trailing_newline_is_not_an_extra_code_line`
+- 增量 `prefix + tail` 等价测试继续通过。
+
+### P2-8 宽度 2 时宽字符正文越界，宽度 1 时按字符数爆行
+
+**关键点**
+
+- `render_wrapped_code_blocks("```\n日\n```", 2)` 产出 `▎日`，`width() == 3`，绘制时 `日` 被裁掉，只剩 `▎`。
+- 宽度 1 时 `body_width` 被 `max(1)` 拉成 1，1000 字符代码行变成 1000 行 `▎`。
+
+**错误原因**
+
+`prepend_body_bar` 无条件 append 折行结果；宽度 1 仍走逐字符折行后丢弃所有 span。
+
+**修复**
+
+- 宽度 1 的代码正文每条逻辑行只产出一条 `▎`，不进入字符折行。
+- `prepend_body_bar` 按 `width - 1` 裁剪拼接后的 span，宽字符放不下就停止，保证 `MdLine::width() <= width`。
+- 极窄宽度测试加入 CJK 与长 ASCII 行。
+
+**验证**
+
+- `ultra_narrow_wide_code_char_stays_within_width`
+- `width_one_code_line_does_not_explode_into_per_char_rows`
+
+### P2-9 代码正文零宽/ZWJ 字符导致测量宽度与落格宽度不一致
+
+**关键点**
+
+- 家庭 emoji 等 ZWJ 序列在 `display_width`/`wrap_md_line_inner` 中按 0 列计算，`paint.rs` 却按 1 列落格，行尾字符被裁掉。
+- 语言标签已由 `normalize_lang_label` 处理同类问题，正文路径仍存在。
+
+**错误原因**
+
+`sanitize_code_line` 只处理 `\t` 与控制字符，没有丢弃 `width() == 0` 的字符。
+
+**修复**
+
+- `sanitize_code_line` 同时丢弃零宽/组合字符，保证展示宽度与实际落格一致；复制仍保留原始源码。
+- 新增真实 `MdLine` 零宽正文测试。
+
+**验证**
+
+- `code_body_drops_zero_width_chars`
+
+### P2-10 四个及以上反引号围栏被三个反引号的行提前关闭
+
+**关键点**
+
+- ` ````markdown ` 围栏内出现 ` ```rust ` 时，旧扫描器把内层三反引号当成闭合，后续代码变成普通段落，两个空块都可复制空串。
+- 模型讲解 Markdown 时常用四反引号包住三反引号示例，复制功能让失败模式更明显。
+
+**错误原因**
+
+opener/closer 都只判断 `starts_with("```")`，没有记录 opener 的反引号长度。
+
+**修复**
+
+- `ParserState` 增加 `open_fence_ticks`；`fence_ticks` 统计行首反引号数量。
+- 仅当关闭行反引号数量 >= opener 数量时闭合；`render_blocks_stateful`、`incremental::safe_line_count`、`extract_code_block` 同步。
+- 新增四反引号围栏保留内层三反引号与复制原文测试。
+
+**验证**
+
+- `four_backtick_fence_is_not_closed_by_inner_three_backticks`
+
 ---
 
 ## P3（可维护性 / 文档一致性 / 边缘行为）
@@ -274,15 +386,15 @@
 
 **关键点**
 
-实现与 `render_blocks_stateful` 的块扫描顺序一致，但没有处理 `~~~` 围栏、四反引号闭合长度等 CommonMark 细节。
+实现与 `render_blocks_stateful` 的块扫描顺序一致，且已支持按 opener 长度闭合反引号围栏；但没有处理 `~~~` 围栏等 CommonMark 细节。
 
 **错误原因**
 
-文档沿用了旧表述；当前解析器本身也不支持这些形式。
+文档沿用了旧表述；当前解析器本身也不支持 `~~~`。
 
 **处理**
 
-源码注释与设计文档已改为“与当前解析器口径一致”，明确不支持的形式。
+源码注释与设计文档已改为“与当前解析器口径一致”，明确只支持反引号围栏。
 
 ### P3-5 `snapshot.rs` 的 `Text` fallback 分支不可达
 
@@ -329,13 +441,27 @@
 
 记录为后续测试补强项，不阻塞本轮修复。
 
+### P3-8 列表内代码块的 chrome 未按列表内容缩进
+
+**关键点**
+
+- 列表内代码块现在保留列表层级，兄弟列表项缩进正确；但代码块顶边/头部/正文仍从 `STEP_GUTTER` 左缘开始，没有跟随列表内容起始列。
+
+**错误原因**
+
+`top_border_line` / `header_line` / `render_code_line` 目前把 `MdLine.indent` 固定为 0，未把列表内容缩进并入代码块几何；直接缩进会要求顶边宽度、`button_cols` 与 `prepend_body_bar` 同步收窄。
+
+**处理**
+
+属于视觉对齐增强，不影响复制/选区正确性；本轮记录为 P3，后续如需要再做整体缩进几何。
+
 ---
 
 ## 复审后验证
 
 - `cargo fmt --check`：通过
 - `cargo clippy --all-targets -- -D warnings`：通过
-- `cargo test markdown_render`：67 passed
+- `cargo test markdown_render`：76 passed
 - `cargo test ui::main_content::lx`：624 passed，3 ignored
 - `cargo test event::tests::lx_view`：16 passed
-- `cargo test --lib`：4870 passed，4 ignored（首次运行 `event::chat::tests::user_shell::short_script_runs_persists_output_without_model` 曾因登录 shell 管道环境偶发失败，单测重跑与全量重跑均通过，与本功能无关）
+- `cargo test --lib`：4879 passed，4 ignored（首次运行 `event::chat::tests::user_shell::short_script_runs_persists_output_without_model` 曾因登录 shell 管道环境偶发失败，单测重跑与全量重跑均通过，与本功能无关）
