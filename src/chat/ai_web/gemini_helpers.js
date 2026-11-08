@@ -83,8 +83,8 @@ async function ensureTaskSpaceControl() {
     : null;
   if (target && target.ownership && target.ownership !== 'agent') {
     await reclaimSpaceTarget(target);
-    await useOrCreateTaskSpace(SPACE).catch(() => {});
   }
+  await useOrCreateTaskSpace(SPACE).catch(() => {});
 }
 
 async function installPermissionGuard() {
@@ -284,74 +284,146 @@ async function ensureGeminiModelAndThinking() {
 
 async function syncContainerAttachments(inEditBox) {
   // Remove existing composer attachment previews not in KEEP_FILES.
-  await js(`
+  const cleanupResult = await js(`
     (() => {
       const keep = ${inEditBox ? JSON.stringify(KEEP_FILES) : '[]'}.slice();
       const chips = Array.from(
-        document.querySelectorAll('uploader-file-preview, .uploader-file-preview-container, [data-test-id*="file-preview"]')
+        document.querySelectorAll('uploader-file-preview, [data-test-id*="file-preview"]')
       );
+      let closedCount = 0;
+      let keptCount = 0;
       for (const chip of chips) {
-        const text = (chip.innerText || chip.getAttribute('aria-label') || '').trim();
-        const keepIdx = keep.findIndex((name) => name && text.includes(name));
+        const img = chip.querySelector('img[alt]');
+        const text = (
+          (img && img.getAttribute('alt')) ||
+          chip.innerText ||
+          chip.getAttribute('aria-label') ||
+          ''
+        ).trim();
+        const keepIdx = keep.findIndex((name) => {
+          if (!name) return false;
+          const base = name.replace(/\\.[^.]+$/, '');
+          return text.includes(name) || (base && text.includes(base));
+        });
         if (${inEditBox ? 'true' : 'false'} && keepIdx !== -1) {
           keep.splice(keepIdx, 1);
+          keptCount += 1;
           continue;
         }
         const removeBtn = chip.querySelector(
-          'button[aria-label*="移除"], button[aria-label*="删除"], button[aria-label*="Remove"], button[aria-label*="Delete"], button'
+          'button[aria-label*="关闭"], button[aria-label*="移除"], button[aria-label*="删除"], button[aria-label^="close "], button[aria-label*="Remove"], button[aria-label*="Delete"], .gem-attachment-close-button button, button'
         );
-        if (removeBtn) removeBtn.click();
+        if (removeBtn) {
+          removeBtn.click();
+          closedCount += 1;
+        }
       }
-      return true;
+      return { closedCount, keptCount };
     })()
-  `).catch(() => false);
+  `).catch(() => ({ closedCount: 0, keptCount: 0 }));
+
+  if (cleanupResult && cleanupResult.closedCount > 0) {
+    await new Promise((r) => setTimeout(r, 250));
+  }
 
   if (!FILES || FILES.length === 0) return;
 
-  // Trigger upload menu if no <input type="file"> exists yet.
-  const hasFileInput = await js(`Boolean(document.querySelector('input[type="file"]'))`).catch(() => false);
-  if (!hasFileInput) {
+  // Open the upload drawer and poll until <input type="file"> is mounted in DOM.
+  const openDeadline = Date.now() + 5000;
+  let inputReady = false;
+  while (Date.now() < openDeadline) {
+    const count = await js(`document.querySelectorAll('input[type="file"]').length`).catch(() => 0);
+    if (count > 0) {
+      inputReady = true;
+      break;
+    }
     await js(String.raw`
       (() => {
         const upBtn = document.querySelector(
-          'button[aria-label*="上传和工具"], button[aria-label*="上传"], button[aria-label*="Upload"], uploader button'
+          'button[aria-label*="上传和工具"], button[aria-label*="上传"], button[aria-label*="Upload"], simplified-input-menu button'
         );
         if (upBtn) upBtn.click();
       })()
     `).catch(() => {});
     await new Promise((r) => setTimeout(r, 250));
-    await js(String.raw`
-      (() => {
-        const backdrop = document.querySelector('.cdk-overlay-backdrop-showing');
-        if (backdrop) backdrop.click();
-      })()
-    `).catch(() => {});
+  }
+  if (!inputReady) {
+    throw new Error('Gemini file upload input not found');
   }
 
-  const doc = await cdp('DOM.getDocument', { depth: -1 });
-  const rootId = doc && doc.root && doc.root.nodeId;
-  if (!rootId) throw new Error('Failed to inspect Gemini DOM for file upload');
-  const queried = await cdp('DOM.querySelectorAll', { nodeId: rootId, selector: 'input[type="file"]' });
-  const nodeIds = (queried && queried.nodeIds) || [];
-  const targetNodeId = nodeIds[nodeIds.length - 1];
-  if (!targetNodeId) throw new Error('Gemini file upload input not found');
-  await cdp('DOM.setFileInputFiles', { nodeId: targetNodeId, files: FILES });
+  const mediaFiles = FILES.filter((f) =>
+    /\.(png|jpe?g|webp|gif|bmp|svg|ico|avif|heic|heif|tiff?|mp4|mov|webm|mkv|avi|m4v)$/i.test(String(f))
+  );
+  const docFiles = FILES.filter(
+    (f) => !/\.(png|jpe?g|webp|gif|bmp|svg|ico|avif|heic|heif|tiff?|mp4|mov|webm|mkv|avi|m4v)$/i.test(String(f))
+  );
 
-  const uploadDeadline = Date.now() + 25000;
-  while (Date.now() < uploadDeadline) {
-    await new Promise((r) => setTimeout(r, 200));
-    const status = await js(String.raw`
-      (() => {
-        const busy = Boolean(
-          document.querySelector('uploader mat-progress-spinner, uploader-file-preview mat-progress-spinner, [aria-busy="true"] uploader-file-preview')
-        );
-        return { busy };
-      })()
-    `).catch(() => ({ busy: false }));
-    if (!status.busy) {
-      await new Promise((r) => setTimeout(r, 150));
+  async function setFilesOnSelector(selectorExpr, fileList) {
+    if (!fileList || fileList.length === 0) return;
+    const evalRes = await cdp('Runtime.evaluate', { expression: selectorExpr }).catch(() => null);
+    const objectId = evalRes && evalRes.result && evalRes.result.objectId;
+    if (objectId) {
+      await cdp('DOM.setFileInputFiles', { objectId, files: fileList });
       return;
     }
+    const doc = await cdp('DOM.getDocument', { depth: -1 });
+    const rootId = doc && doc.root && doc.root.nodeId;
+    if (!rootId) throw new Error('Failed to inspect Gemini DOM for file upload');
+    const queried = await cdp('DOM.querySelectorAll', { nodeId: rootId, selector: 'input[type="file"]' });
+    const nodeIds = (queried && queried.nodeIds) || [];
+    const targetNodeId = nodeIds[nodeIds.length - 1];
+    if (!targetNodeId) throw new Error('Gemini file upload input not found');
+    await cdp('DOM.setFileInputFiles', { nodeId: targetNodeId, files: fileList });
+  }
+
+  if (mediaFiles.length > 0) {
+    await setFilesOnSelector(
+      `document.querySelector('input[type="file"][accept*="image"]') || document.querySelector('input[type="file"]')`,
+      mediaFiles
+    );
+  }
+  if (docFiles.length > 0) {
+    await setFilesOnSelector(
+      `document.querySelector('images-files-uploader input[type="file"]') || document.querySelector('input[type="file"]:not([accept*="image"])') || document.querySelector('input[type="file"]')`,
+      docFiles
+    );
+  }
+
+  const expectedCount = ((cleanupResult && cleanupResult.keptCount) || 0) + FILES.length;
+  const uploadDeadline = Date.now() + 30000;
+  let uploadedReady = false;
+  while (Date.now() < uploadDeadline) {
+    await new Promise((r) => setTimeout(r, 200));
+    const status = await js(`
+      (() => {
+        const chips = Array.from(document.querySelectorAll('uploader-file-preview'));
+        const busy = Boolean(
+          document.querySelector(
+            'uploader mat-progress-spinner, uploader-file-preview mat-progress-spinner, uploader-file-preview [role="progressbar"], [aria-busy="true"] uploader-file-preview'
+          )
+        );
+        return { count: chips.length, busy };
+      })()
+    `).catch(() => ({ count: 0, busy: true }));
+    if (status.count >= expectedCount && !status.busy) {
+      uploadedReady = true;
+      await new Promise((r) => setTimeout(r, 200));
+      break;
+    }
+  }
+
+  // Close the upload drawer if it is still expanded.
+  await js(String.raw`
+    (() => {
+      const upBtn = document.querySelector('button[aria-label*="上传和工具"], button[aria-label*="Upload"]');
+      if (upBtn && upBtn.getAttribute('aria-expanded') === 'true') {
+        upBtn.click();
+      }
+    })()
+  `).catch(() => {});
+
+  if (!uploadedReady) {
+    throw new Error('Timed out waiting for Gemini file upload');
   }
 }
 

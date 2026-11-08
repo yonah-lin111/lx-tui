@@ -83,8 +83,8 @@ async function ensureTaskSpaceControl() {
     : null;
   if (target && target.ownership && target.ownership !== 'agent') {
     await reclaimSpaceTarget(target);
-    await useOrCreateTaskSpace(SPACE).catch(() => {});
   }
+  await useOrCreateTaskSpace(SPACE).catch(() => {});
 }
 
 async function ensureFreshChat() {
@@ -225,11 +225,39 @@ async function syncContainerAttachments(inEditBox) {
           for (const name of known) {
             if (name) statusText = statusText.split(name).join(' ');
           }
+          const fk = Object.keys(item).find(
+            (k) => k.startsWith('__reactFiber') || k.startsWith('__reactInternalInstance')
+          );
+          const childProps =
+            fk &&
+            item[fk] &&
+            item[fk].memoizedProps &&
+            item[fk].memoizedProps.children &&
+            item[fk].memoizedProps.children.props;
+          const fileObj = childProps && childProps.file;
+          const snapObj = childProps && childProps.snapshot;
+          if (
+            snapObj &&
+            ((snapObj.fileErrorState && snapObj.fileErrorState.hasError) ||
+              (snapObj.fileUploadInfo && snapObj.fileUploadInfo.failed))
+          ) {
+            error = String((fileObj && fileObj.errorCode) || statusText || 'upload failed').trim();
+            break;
+          }
+          if (fileObj && fileObj.status && /FAIL|ERROR|REJECT/i.test(String(fileObj.status))) {
+            error = String(fileObj.errorCode || fileObj.status);
+            break;
+          }
           if (/上传失败|解析失败|不支持|超出|过大|upload failed|parse failed|unsupported|exceed/i.test(statusText)) {
             error = statusText.replace(/\\s+/g, ' ').trim();
             break;
           }
-          if (/上传中|解析中|uploading|parsing/i.test(statusText) || item.querySelector('svg[viewBox="0 0 20 20"][role="img"]')) {
+          if (
+            (snapObj && snapObj.fileUploadInfo && snapObj.fileUploadInfo.isUploading) ||
+            (fileObj && fileObj.status !== 'SUCCESS') ||
+            /上传中|解析中|uploading|parsing/i.test(statusText) ||
+            item.querySelector('svg[viewBox="0 0 20 20"][role="img"]')
+          ) {
             uploading = true;
           }
         }

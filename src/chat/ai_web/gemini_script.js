@@ -320,30 +320,41 @@ async function main() {
       await emit({ event: 'error', message: 'Gemini prompt input not found' });
       return;
     }
-    await new Promise((r) => setTimeout(r, 180));
-    const sent = await js(String.raw`
-      (() => {
-        const sendBtn = Array.from(
-          document.querySelectorAll('gem-icon-button.send-button button, button.send-button, button[aria-label*="发送"], button[aria-label*="Send"]')
-        ).find((b) => !b.disabled && b.getAttribute('aria-disabled') !== 'true');
-        if (sendBtn) {
-          sendBtn.click();
-          return true;
-        }
-        const editor = document.querySelector('.ql-editor[contenteditable="true"], rich-textarea [contenteditable="true"]');
-        if (editor) {
-          editor.dispatchEvent(new KeyboardEvent('keydown', {
-            key: 'Enter',
-            code: 'Enter',
-            keyCode: 13,
-            which: 13,
-            bubbles: true,
-          }));
-          return true;
-        }
-        return false;
-      })()
-    `).catch(() => false);
+    const sendDeadline = Date.now() + 6000;
+    let sent = false;
+    while (Date.now() < sendDeadline) {
+      const attempt = await js(String.raw`
+        (() => {
+          const sendBtn = Array.from(
+            document.querySelectorAll('gem-icon-button.send-button button, button.send-button, button[aria-label*="发送"], button[aria-label*="Send"]')
+          ).find((b) => !b.disabled && b.getAttribute('aria-disabled') !== 'true');
+          if (sendBtn) {
+            sendBtn.click();
+            return true;
+          }
+          return false;
+        })()
+      `).catch(() => false);
+      await new Promise((r) => setTimeout(r, 200));
+      const cleared = await js(String.raw`
+        (() => {
+          const editor = document.querySelector('.ql-editor[contenteditable="true"], rich-textarea [contenteditable="true"]');
+          const textEmpty = !editor || editor.classList.contains('ql-blank') || !(editor.innerText || '').trim();
+          const chips = document.querySelectorAll('uploader-file-preview').length;
+          const stopBtn = Boolean(
+            document.querySelector('button[aria-label*="停止"], button[aria-label*="Stop"], button.stop-button, .blue-circle.stop-icon')
+          );
+          return stopBtn || (textEmpty && chips === 0);
+        })()
+      `).catch(() => false);
+      if (cleared) {
+        sent = true;
+        break;
+      }
+      if (attempt) {
+        sent = true;
+      }
+    }
     if (!sent) {
       await emit({ event: 'error', message: 'Gemini send button not available' });
       return;

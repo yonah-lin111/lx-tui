@@ -577,44 +577,55 @@ async function main() {
     `);
     if (!filled) throw new Error('DeepSeek composer not found');
 
-    await js(`
-      (() => {
-        const textarea = document.querySelector('textarea[name="search"]') || document.querySelector('textarea');
-        if (!textarea) return false;
-        const keyboard = { key: 'Enter', code: 'Enter', keyCode: 13, which: 13, bubbles: true, cancelable: true };
-        textarea.dispatchEvent(new KeyboardEvent('keydown', keyboard));
-        textarea.dispatchEvent(new KeyboardEvent('keyup', keyboard));
-        return true;
-      })()
-    `);
-    await new Promise((resolve) => setTimeout(resolve, 90));
-
-    const cleared = await js(`
-      (() => {
-        const textarea = document.querySelector('textarea[name="search"]') || document.querySelector('textarea');
-        const textEmpty = !textarea || !textarea.value.trim();
-        const composerChips = Array.from(document.querySelectorAll('.ds-animated-size-item'))
-          .filter((el) => !el.closest('[data-virtual-list-item-key]'));
-        if (${FILES.length > 0 ? 'true' : 'false'}) {
-          return textEmpty && composerChips.length === 0;
-        }
-        return textEmpty && ${PROMPT ? 'true' : 'false'};
-      })()
-    `);
-    if (!cleared) {
+    const submitDeadline = Date.now() + 8000;
+    let submitted = false;
+    while (Date.now() < submitDeadline) {
+      const cleared = await js(`
+        (() => {
+          const stream = window.__lxDeepSeekStream;
+          if (stream && stream.sseActive) return true;
+          const textarea = document.querySelector('textarea[name="search"]') || document.querySelector('textarea');
+          const textEmpty = !textarea || !textarea.value.trim();
+          const composerChips = Array.from(document.querySelectorAll('.ds-animated-size-item'))
+            .filter((el) => !el.closest('[data-virtual-list-item-key]'));
+          const stopIcon = Boolean(document.querySelector('.ds-icon-stop'));
+          if (stopIcon) return true;
+          if (${FILES.length > 0 ? 'true' : 'false'}) {
+            return textEmpty && composerChips.length === 0;
+          }
+          return textEmpty && ${PROMPT ? 'true' : 'false'};
+        })()
+      `).catch(() => false);
+      if (cleared) {
+        submitted = true;
+        break;
+      }
       await js(`
         (() => {
           const button = document.querySelector('.ds-button--primary:not(.ds-button--disabled)');
-          if (!button || button.querySelector('.ds-icon-stop')) return false;
-          const pk = Object.keys(button).find((k) => k.startsWith('__reactProps'));
-          if (pk && button[pk] && typeof button[pk].onClick === 'function') {
-            button[pk].onClick({ stopPropagation() {}, preventDefault() {} });
-          } else {
-            button.click();
+          if (button && button.getAttribute('aria-disabled') !== 'true' && !button.querySelector('.ds-icon-stop')) {
+            const pk = Object.keys(button).find((k) => k.startsWith('__reactProps'));
+            if (pk && button[pk] && typeof button[pk].onClick === 'function') {
+              button[pk].onClick({ stopPropagation() {}, preventDefault() {} });
+            } else {
+              button.click();
+            }
+            return true;
           }
-          return true;
+          const textarea = document.querySelector('textarea[name="search"]') || document.querySelector('textarea');
+          if (textarea) {
+            const keyboard = { key: 'Enter', code: 'Enter', keyCode: 13, which: 13, bubbles: true, cancelable: true };
+            textarea.dispatchEvent(new KeyboardEvent('keydown', keyboard));
+            textarea.dispatchEvent(new KeyboardEvent('keyup', keyboard));
+            return true;
+          }
+          return false;
         })()
-      `);
+      `).catch(() => false);
+      await new Promise((resolve) => setTimeout(resolve, 200));
+    }
+    if (!submitted) {
+      throw new Error('DeepSeek failed to submit message');
     }
   }
 
