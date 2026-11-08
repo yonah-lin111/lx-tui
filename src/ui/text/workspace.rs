@@ -500,12 +500,8 @@ pub const SUPPLE_BUTTON_CLEAN: &str = TEMPLATE_BUTTON_CLEAN;
 pub const SUPPLE_BUTTON_DEL: &str = TEMPLATE_BUTTON_DEL;
 /// prompt 块左侧色条字形（`&&&` 状态色 / `+++` 品红）。
 pub const PROMPT_BLOCK_BAR: &str = "▎";
-/// 代码块右侧边框字形：右 1/4 块（与左侧 `▎` 等宽，紧贴代码块右缘）。
-pub const CODE_BLOCK_RIGHT_BAR: &str = "🮇";
 /// prompt 块顶部边框字形：下 1/4 块（与左侧 `▎` 等厚，紧贴起始行顶部）。
 pub const PROMPT_BLOCK_TOP_BORDER: &str = "▂";
-/// 代码块底部边框字形：上 1/4 块（与顶部 `▂`、左侧 `▎` 等厚，紧贴末行底部）。
-pub const CODE_BLOCK_BOTTOM_BORDER: &str = "🮂";
 /// 块结构分割线（标题下 / 绑定行上的空行）。
 pub const PROMPT_BLOCK_RULE: char = '─';
 

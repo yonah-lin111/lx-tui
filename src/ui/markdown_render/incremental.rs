@@ -73,16 +73,13 @@ impl IncrementalMarkdownState {
         }
         // 尾部用状态副本解析：不得污染已固化的解析状态。
         let mut parser = self.parser.clone();
-        let mut produced = render_blocks_stateful(
+        let produced = render_blocks_stateful(
             &source[self.committed_bytes..],
             Some(wrap_width),
             true,
             true,
             &mut parser,
         );
-        if parser.open_fence_lang.is_some() {
-            produced.push(super::code_block::bottom_border_line(Some(wrap_width)));
-        }
         let mut tail = Vec::new();
         for line in &produced {
             wrap_md_line(line, wrap_width, &mut tail);

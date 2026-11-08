@@ -162,12 +162,13 @@ fn render_blocks(
     expand_rules: bool,
     code_chrome: bool,
 ) -> Vec<MdLine> {
-    let mut state = ParserState::default();
-    let mut lines = render_blocks_stateful(source, width, expand_rules, code_chrome, &mut state);
-    if code_chrome && state.open_fence_lang.is_some() {
-        lines.push(code_block::bottom_border_line(width));
-    }
-    lines
+    render_blocks_stateful(
+        source,
+        width,
+        expand_rules,
+        code_chrome,
+        &mut ParserState::default(),
+    )
 }
 
 /// 块级解析的跨行状态：列表缩进档位栈 + 未闭合围栏语言 + 代码块序号。
@@ -198,12 +199,9 @@ fn render_blocks_stateful(
     let mut index = 0;
     while index < source_lines.len() {
         let line = source_lines[index];
-        // 未闭合围栏内部：每行都是独立代码行（闭合行推进状态并补底边）。
+        // 未闭合围栏内部：每行都是独立代码行（闭合行只推进状态）。
         if let Some(lang) = state.open_fence_lang.take() {
             if line.trim_start().starts_with("```") {
-                if code_chrome {
-                    lines.push(code_block::bottom_border_line(width));
-                }
                 index += 1;
                 continue;
             }
@@ -401,9 +399,6 @@ fn indented_code(
     }
     for line in &body {
         code_block::render_code_line(line, None, code_chrome, lines);
-    }
-    if code_chrome {
-        lines.push(code_block::bottom_border_line(width));
     }
     index
 }
@@ -749,18 +744,18 @@ pub(crate) fn md_bytes(lines: &[MdLine]) -> usize {
 fn wrap_md_line(line: &MdLine, width: usize, out: &mut Vec<MdLine>) {
     if matches!(
         line.code,
-        Some(CodeLineKind::TopBorder | CodeLineKind::BottomBorder | CodeLineKind::Header { .. })
+        Some(CodeLineKind::TopBorder | CodeLineKind::Header { .. })
     ) {
         out.push(line.clone());
         return;
     }
     if line.code == Some(CodeLineKind::Body) {
-        let body_width = width.saturating_sub(2).max(1);
+        let body_width = width.saturating_sub(1).max(1);
         let start_len = out.len();
         wrap_md_line_inner(line, body_width, out);
         for wrapped in &mut out[start_len..] {
             let spans = std::mem::take(&mut wrapped.spans);
-            wrapped.spans = code_block::frame_body_row(spans, width);
+            wrapped.spans = code_block::prepend_body_bar(spans, width);
             wrapped.code = Some(CodeLineKind::Body);
         }
         return;
