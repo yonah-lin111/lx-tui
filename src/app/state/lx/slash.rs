@@ -674,7 +674,7 @@ impl SlashPanel {
             .collect()
     }
 
-    /// 按 lx 入口裁剪命令候选：AI Web 开放 `/new`、`/resume`、`/rewind`、`/rename`。
+    /// 按 lx 入口裁剪命令候选：AI Web 开放 `/model`、`/new`、`/resume`、`/rewind`、`/rename`。
     pub fn command_entries_for(entry: super::LxEntry, query: &str) -> Vec<SlashEntry> {
         if entry == super::LxEntry::AiWeb {
             Self::commands_matching(query)
@@ -682,7 +682,8 @@ impl SlashPanel {
                 .filter(|command| {
                     matches!(
                         *command,
-                        SlashCommand::New
+                        SlashCommand::Model
+                            | SlashCommand::New
                             | SlashCommand::Resume
                             | SlashCommand::Rewind
                             | SlashCommand::Rename

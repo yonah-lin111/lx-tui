@@ -12,11 +12,30 @@ use super::session::{new_session, rename_session, resume_session, show_lx_hint};
 
 /// `/model` 打开模型面板（第一级）。
 pub fn open_model_picker(state: &mut AppState, pane: PaneId) -> bool {
-    if !state
-        .pane_anywhere(pane)
-        .is_some_and(|target| target.view == crate::app::state::PaneView::Lx)
-    {
+    let Some((is_lx, is_ai_web, ai_web_site, ai_web_config)) =
+        state.pane_anywhere(pane).map(|target| {
+            (
+                target.view == crate::app::state::PaneView::Lx,
+                target.lx.entry == crate::app::state::LxEntry::AiWeb,
+                target.lx.ai_web_site,
+                target.lx.ai_web_config,
+            )
+        })
+    else {
         return false;
+    };
+    if !is_lx {
+        return false;
+    }
+    if is_ai_web {
+        let Some(target) = state.pane_mut_anywhere(pane) else {
+            return false;
+        };
+        target.lx.slash = Some(SlashPanel::Model(Box::new(ModelPicker::for_ai_web(
+            ai_web_site,
+            ai_web_config,
+        ))));
+        return true;
     }
     let candidates = ModelPicker::candidates(&state.models.settings);
     if candidates.is_empty() {
@@ -98,29 +117,18 @@ pub fn apply_slash_enter(state: &mut AppState, pane: PaneId) -> bool {
                     return true;
                 };
                 let selection = candidate.selection;
-                let variants = variant_keys(state, &selection);
+                let variants = variant_keys_for_pane(state, pane, &selection);
                 // 选中模型即清空过滤词：无论直接完成选择，还是换到第二级继续挑等级，
                 // 输入框里那段临时搜索词都不再保留。
                 clear_lx_input(state, pane);
                 if variants.is_empty() {
                     finish_model_selection(state, pane, selection);
                 } else {
-                    let active = default_variant_index(state, &selection, &variants);
+                    let active = default_variant_index_for_pane(state, pane, &selection, &variants);
                     // 当前生效的 variant（第一级高亮的模型若正是当前模型，其 variant
                     // 就是"现在生效"的那一档）；否则第二级没有"已生效项"。
                     let current_variant = (picker.current == Some(picker.window.active))
-                        .then(|| {
-                            state
-                                .models
-                                .settings
-                                .providers
-                                .get(&selection.provider)
-                                .and_then(|provider| provider.models.get(&selection.model))
-                                .and_then(|model| model.variant.clone())
-                                .and_then(|variant| {
-                                    variants.iter().position(|item| *item == variant)
-                                })
-                        })
+                        .then(|| current_variant_index_for_pane(state, pane, &selection, &variants))
                         .flatten();
                     let active = current_variant.unwrap_or(active);
                     if let Some(target) = state.pane_mut_anywhere(pane)
@@ -220,11 +228,38 @@ pub(crate) fn clear_lx_input(state: &mut AppState, pane: PaneId) {
 }
 
 /// 模型默认 variant 在候选中的索引（缺失或不在列表则 0）。
-fn default_variant_index(
+fn default_variant_index_for_pane(
     state: &AppState,
+    pane: PaneId,
     selection: &ModelSelection,
     variants: &[String],
 ) -> usize {
+    if let Some(idx) = current_variant_index_for_pane(state, pane, selection, variants) {
+        return idx;
+    }
+    0
+}
+
+fn current_variant_index_for_pane(
+    state: &AppState,
+    pane: PaneId,
+    selection: &ModelSelection,
+    variants: &[String],
+) -> Option<usize> {
+    if let Some(target) = state
+        .pane_anywhere(pane)
+        .filter(|target| target.lx.entry == crate::app::state::LxEntry::AiWeb)
+    {
+        let site = crate::app::state::AiWebSite::from_label(&selection.provider)
+            .unwrap_or(target.lx.ai_web_site);
+        let current = match site {
+            crate::app::state::AiWebSite::Gemini => target.lx.ai_web_config.gemini_thinking.id(),
+            crate::app::state::AiWebSite::Deepseek => {
+                target.lx.ai_web_config.deepseek_thinking.id()
+            }
+        };
+        return variants.iter().position(|item| item == current);
+    }
     state
         .models
         .settings
@@ -233,7 +268,6 @@ fn default_variant_index(
         .and_then(|provider| provider.models.get(&selection.model))
         .and_then(|model| model.variant.clone())
         .and_then(|variant| variants.iter().position(|item| *item == variant))
-        .unwrap_or(0)
 }
 
 /// 选择完成后写入窗格选择；已保存 session 同步 DB 三列与切换时间线；并写回配置默认（下次启动沿用）。
@@ -242,6 +276,43 @@ pub(crate) fn finish_model_selection(
     pane: PaneId,
     selection: ModelSelection,
 ) {
+    if state
+        .pane_anywhere(pane)
+        .is_some_and(|target| target.lx.entry == crate::app::state::LxEntry::AiWeb)
+    {
+        if let Some(target) = state.pane_mut_anywhere(pane) {
+            target.lx.slash = None;
+            let site = crate::app::state::AiWebSite::from_label(&selection.provider)
+                .unwrap_or(target.lx.ai_web_site);
+            match site {
+                crate::app::state::AiWebSite::Gemini => {
+                    if let Some(model) =
+                        crate::app::state::GeminiWebModel::from_id(&selection.model)
+                    {
+                        target.lx.ai_web_config.gemini_model = model;
+                    }
+                    if let Some(level) = selection
+                        .variant
+                        .as_deref()
+                        .and_then(crate::app::state::GeminiThinkingLevel::from_id)
+                    {
+                        target.lx.ai_web_config.gemini_thinking = level;
+                    }
+                }
+                crate::app::state::AiWebSite::Deepseek => {
+                    if let Some(mode) = selection
+                        .variant
+                        .as_deref()
+                        .and_then(crate::app::state::DeepseekThinkingMode::from_id)
+                    {
+                        target.lx.ai_web_config.deepseek_thinking = mode;
+                    }
+                }
+            }
+        }
+        super::refresh_lx_status(state, pane);
+        return;
+    }
     let models = state.models.clone();
     let workspace = state.chat_session_key_for_pane(pane);
     // 窗格真实 cwd 必须在可变借用窗格之前取：持久化层用它探测该目录（worktree/子目录）
@@ -374,7 +445,28 @@ pub(crate) fn next_pane_sequence(lx: &crate::app::state::Lx) -> i64 {
 }
 
 /// 模型的 variants 键列表。
-fn variant_keys(state: &AppState, selection: &ModelSelection) -> Vec<String> {
+fn variant_keys_for_pane(
+    state: &AppState,
+    pane: PaneId,
+    selection: &ModelSelection,
+) -> Vec<String> {
+    if let Some(target) = state
+        .pane_anywhere(pane)
+        .filter(|target| target.lx.entry == crate::app::state::LxEntry::AiWeb)
+    {
+        let site = crate::app::state::AiWebSite::from_label(&selection.provider)
+            .unwrap_or(target.lx.ai_web_site);
+        return match site {
+            crate::app::state::AiWebSite::Gemini => crate::app::state::GeminiThinkingLevel::ALL
+                .into_iter()
+                .map(|level| level.id().to_string())
+                .collect(),
+            crate::app::state::AiWebSite::Deepseek => crate::app::state::DeepseekThinkingMode::ALL
+                .into_iter()
+                .map(|mode| mode.id().to_string())
+                .collect(),
+        };
+    }
     state
         .models
         .settings
@@ -416,10 +508,14 @@ pub fn persist_default_model(state: &mut AppState, selection: &ModelSelection) -
 
 /// 命令采纳：`/model`、`/resume`、`/new` 的命令文本不被发送。
 pub fn apply_slash_command(state: &mut AppState, pane: PaneId, command: SlashCommand) -> bool {
-    // AI Web 开放 `/new`、`/resume`、`/rewind`、`/rename`：其余本地 Agent/DB 命令给出统一提示。
+    // AI Web 开放 `/model`、`/new`、`/resume`、`/rewind`、`/rename`：其余本地 Agent/DB 命令给出统一提示。
     if !matches!(
         command,
-        SlashCommand::New | SlashCommand::Resume | SlashCommand::Rewind | SlashCommand::Rename
+        SlashCommand::Model
+            | SlashCommand::New
+            | SlashCommand::Resume
+            | SlashCommand::Rewind
+            | SlashCommand::Rename
     ) && state
         .pane_anywhere(pane)
         .is_some_and(|target| target.lx.entry == crate::app::state::LxEntry::AiWeb)
@@ -431,7 +527,7 @@ pub fn apply_slash_command(state: &mut AppState, pane: PaneId, command: SlashCom
             state,
             pane,
             InputHintLevel::Warning,
-            text::LX_AI_WEB_ONLY_NEW_CMD,
+            text::LX_WEB_ALLOWED_CMDS,
         );
         return true;
     }
@@ -565,7 +661,7 @@ pub(crate) fn refresh_slash_panel(state: &mut AppState, pane: PaneId) {
         return;
     };
     // `/` 前缀或更具体前缀：命令候选实时过滤；skill 归 `@` 面板管理。
-    // AI Web 只暴露 `/new`，其余命令不出现在候选里。
+    // AI Web 只暴露 `/model`、`/new`、`/resume`、`/rewind`、`/rename`，其余命令不进入候选。
     let matching = crate::app::state::lx::slash::SlashPanel::command_entries_for(entry, &query);
     if let Some(target) = state.pane_mut_anywhere(pane) {
         if matching.is_empty() {

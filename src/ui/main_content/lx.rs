@@ -462,12 +462,19 @@ fn layout(area: Rect, lx: &Lx) -> Layout {
             entries_top,
         );
         // 计数行在入口标签下方，与入口块（含选中下划线）之间空一行。
+        // AI Web 站点行选中项同样在下方绘制 `─` 下划线，因此空间充足时分配 1 + UNDERLINE_ROWS 行。
         let inventory_top = entries_top
             .saturating_add(entries_h)
             .saturating_add(brand::UNDERLINE_ROWS)
             .saturating_add(1);
         if inventory_top < top_limit {
-            out.inventory = Some(Rect::new(content_x, inventory_top, content_w, 1));
+            let max_h = top_limit.saturating_sub(inventory_top);
+            let desired_h = if lx.entry == LxEntry::AiWeb {
+                (1 + brand::UNDERLINE_ROWS).min(max_h)
+            } else {
+                1
+            };
+            out.inventory = Some(Rect::new(content_x, inventory_top, content_w, desired_h));
         }
     }
     out

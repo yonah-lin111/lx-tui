@@ -6,7 +6,6 @@
 
 pub mod agent;
 pub mod agent_loop;
-pub mod ai_web;
 pub mod client;
 pub mod compact;
 pub mod context;
@@ -20,6 +19,7 @@ pub mod thinking;
 pub mod title;
 pub mod tools;
 pub mod transport;
+pub mod web;
 
 pub use context::{
     Assembly, AssemblyInput, MAX_TOOL_RESULT_REPLAY_BYTES, assemble, shrink_once,

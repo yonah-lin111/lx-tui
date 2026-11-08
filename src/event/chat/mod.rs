@@ -2,7 +2,6 @@
 //!
 //! 统一负责“DB 落库 → 状态 → 回执”顺序；delta 与终态按 `(pane, session, generation)` 过滤。
 
-pub mod ai_web;
 pub mod ask;
 pub mod compact;
 pub mod connect;
@@ -20,6 +19,7 @@ mod timeline;
 pub mod title;
 mod tool_calls;
 pub mod user_shell;
+pub mod web;
 
 use crate::chat::ModelItem;
 pub use process_events::{handle_process_event, persist_terminal_snapshots};
@@ -303,7 +303,7 @@ pub fn pump_chat_streams(
         .effects
         .iter()
         .filter(|effect| {
-            ai_web::is_ai_web_effect(state, effect)
+            web::is_ai_web_effect(state, effect)
                 || matches!(
                     effect,
                     Effect::StartChatStream { .. }
@@ -321,7 +321,7 @@ pub fn pump_chat_streams(
     state.effects = taken
         .into_iter()
         .filter(|effect| {
-            !ai_web::is_ai_web_effect(state, effect)
+            !web::is_ai_web_effect(state, effect)
                 && !matches!(
                     effect,
                     Effect::StartChatStream { .. }
@@ -351,7 +351,7 @@ pub fn pump_chat_streams(
                 changed |= ask::answer(state, streams, &key, &call_id, answers);
             }
             other => {
-                changed |= ai_web::apply_effect(state, streams, sender, other);
+                changed |= web::apply_effect(state, streams, sender, other);
             }
         }
     }
@@ -900,7 +900,7 @@ pub fn handle_net_event(
     match event {
         ChatNetEvent::Delta { key, deltas } => {
             // AI Web 是纯内存会话：不写 checkpoint，也不触发任何 DB 快照调度。
-            if !ai_web::is_ai_web_session(&key.session) {
+            if !web::is_ai_web_session(&key.session) {
                 // 累计字节：超过间隔或阈值时入队一次 checkpoint（合并写盘）。
                 let bytes: usize = deltas.iter().map(ChatDelta::payload_bytes).sum();
                 let entry = streams
@@ -924,7 +924,7 @@ pub fn handle_net_event(
             billing,
         } => {
             // 登录 / 驱动错误在 lx 窗格内立即可见（AI Web 没有 DB 历史可回溯）。
-            ai_web::notify_failure(state, &key, &reason);
+            web::notify_failure(state, &key, &reason);
             // 清除在途取消句柄、checkpoint 与冻结工作区。
             streams.finish(&key);
             // 防御 sweep：流程走完时不应还剩面板；留下就是悬挂 sender。

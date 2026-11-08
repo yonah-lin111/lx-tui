@@ -258,6 +258,11 @@ const VALUE_OPTIONS: &[&str] = &[
     "--allow-skills",
     "--nicknames",
     "--disable-mcp",
+    "--site",
+    "--session",
+    "-t",
+    "--edit-index",
+    "--keep-file",
 ];
 
 /// 扫描并剥离全局选项（`-C/--cd`、`--json`、`--color`、`-h/--help`），

@@ -12,37 +12,57 @@ use crate::chat::events::PartKind;
 use crate::layout::PaneId;
 use crate::ui::text;
 
-/// AI Web 内存会话的 ID 前缀（不写库，仅供流事件归属判断）。
-pub const AI_WEB_SESSION_PREFIX: &str = "ai-web-";
+pub use crate::app::state::{
+    AI_WEB_DEEPSEEK_SESSION_PREFIX, AI_WEB_GEMINI_SESSION_PREFIX, AI_WEB_SESSION_PREFIX,
+    ai_web_remote_session, is_ai_web_session,
+};
 
-/// 映射自云端真实会话的 ID 前缀（仍以 `ai-web-` 开头）。
-pub const AI_WEB_REMOTE_SESSION_PREFIX: &str = "ai-web-ds-";
-
-/// 会话 ID 是否属于 AI Web 内存会话。
-pub fn is_ai_web_session(session_id: &str) -> bool {
-    session_id.starts_with(AI_WEB_SESSION_PREFIX)
-}
-
-/// 提取云端真实会话 ID（若已关联云端会话）。
+/// 提取云端真实会话 ID（若已关联 DeepSeek 或 Gemini 云端会话）。
 pub fn ai_web_remote_session_id(session_id: &str) -> Option<&str> {
-    session_id
-        .strip_prefix(AI_WEB_REMOTE_SESSION_PREFIX)
-        .filter(|id| !id.is_empty())
+    ai_web_remote_session(session_id).map(|(_, id)| id)
 }
 
-/// 状态行展示站点名与流状态，隐藏 API 供应商与上下文占用。
+/// 状态行展示站点/模型名、思考等级（variant）与流状态，隐藏 API 供应商与上下文占用。
 pub fn apply_ai_web_status(lx: &mut Lx) {
-    lx.chat.status.model_name = Some(text::ai_web_site_label(lx.ai_web_site).to_string());
+    match lx.ai_web_site {
+        crate::app::state::AiWebSite::Deepseek => {
+            lx.chat.status.model_name = Some(text::AI_WEB_SITE_DEEPSEEK.to_string());
+            lx.chat.status.variant = match lx.ai_web_config.deepseek_thinking {
+                crate::app::state::DeepseekThinkingMode::DeepThink => {
+                    Some(text::DEEPSEEK_THINKING_ON.to_string())
+                }
+                crate::app::state::DeepseekThinkingMode::Off => None,
+            };
+        }
+        crate::app::state::AiWebSite::Gemini => {
+            lx.chat.status.model_name = Some(text::ai_web_model_label(
+                crate::app::state::AiWebSite::Gemini,
+                lx.ai_web_config.gemini_model.id(),
+            ));
+            lx.chat.status.variant = Some(lx.ai_web_config.gemini_thinking.id().to_string());
+        }
+    }
     lx.chat.status.provider_name = None;
-    lx.chat.status.variant = None;
     lx.chat.status.context_limit = None;
     lx.chat.status.input_tokens = None;
     lx.chat.status.streaming = lx.chat.request.is_busy();
 }
 
+/// AI Web 助手消息气泡顶部的模型显示标签。
+fn ai_web_assistant_label(
+    site: crate::app::state::AiWebSite,
+    config: crate::app::state::AiWebConfig,
+) -> String {
+    let model = match site {
+        crate::app::state::AiWebSite::Deepseek => text::AI_WEB_SITE_DEEPSEEK,
+        crate::app::state::AiWebSite::Gemini => config.gemini_model.id(),
+    };
+    text::ai_web_model_label(site, model)
+}
+
 /// AI Web 发送：直接构造内存态 user + streaming assistant 消息并入队网页流。
 ///
-/// 支持单行 `/new`（`/clear`）、`/resume`（`/session`）、`/rewind`（`/undo`）；
+/// 支持单行 `/model`、`/new`（`/clear`）、`/resume`（`/session`）、`/rewind`（`/undo`）；
 /// `/rename`（`/title`）已在上游 `try_submit_rename_command` 处理。
 pub fn try_send_ai_web(
     state: &mut AppState,
@@ -73,6 +93,11 @@ pub fn try_send_ai_web(
         let has_args = after_slash.split_whitespace().nth(1).is_some();
         if !first_word.is_empty() && !first_word.contains('/') {
             if !has_args {
+                if first_word.eq_ignore_ascii_case("model") {
+                    super::slash::clear_lx_input(state, pane);
+                    super::slash::open_model_picker(state, pane);
+                    return true;
+                }
                 if first_word.eq_ignore_ascii_case("new")
                     || first_word.eq_ignore_ascii_case("clear")
                 {
@@ -100,7 +125,7 @@ pub fn try_send_ai_web(
                     state,
                     pane,
                     InputHintLevel::Warning,
-                    text::LX_AI_WEB_ONLY_NEW_CMD,
+                    text::LX_WEB_ALLOWED_CMDS,
                 );
                 return true;
             }
@@ -159,6 +184,9 @@ pub fn try_send_ai_web(
         return false;
     };
     let site = target.lx.ai_web_site;
+    let config = target.lx.ai_web_config;
+    let (model_id, thinking_id) = config.active_model_and_thinking(site);
+    let assistant_model_label = ai_web_assistant_label(site, config);
     let edit_user_index = target.lx.ai_web_edit_user_index.take();
     target.lx.ai_web_edit_cloud_files.clear();
     target.lx.clear();
@@ -182,11 +210,7 @@ pub fn try_send_ai_web(
         .last()
         .map_or(0, |m| m.turn_index.saturating_add(1));
     let assistant_id = format!("{session_id}-a-{generation}");
-    let now_ms = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .map_or(0, |duration| {
-            i64::try_from(duration.as_millis()).unwrap_or(0)
-        });
+    let now_ms = crate::db::now_ms();
     target.lx.chat.messages.push(ChatMessageView {
         sequence: base_seq + 1,
         id: user_id.clone(),
@@ -224,7 +248,7 @@ pub fn try_send_ai_web(
         turn_index,
         shell: None,
         steps: Vec::new(),
-        model_label: Some(text::ai_web_site_label(site).to_string()),
+        model_label: Some(assistant_model_label),
         error_code: None,
         input_tokens: None,
         output_tokens: None,
@@ -249,6 +273,8 @@ pub fn try_send_ai_web(
     state.effects.push(Effect::StartAiWebStream {
         key,
         site,
+        model: model_id.to_string(),
+        thinking: thinking_id.to_string(),
         prompt: prepared.web_prompt,
         files: prepared.files,
         keep_files: prepared.keep_files,
@@ -346,12 +372,20 @@ pub fn on_ai_web_session_loaded(
     pane: PaneId,
     session_id: String,
     title: Option<String>,
-    messages: Vec<crate::chat::ai_web::AiWebHistoryMessage>,
+    messages: Vec<crate::chat::web::AiWebHistoryMessage>,
 ) -> bool {
     let Some(target) = state.pane_mut_anywhere(pane) else {
         return false;
     };
-    let site_label = text::ai_web_site_label(target.lx.ai_web_site).to_string();
+    // 用户可能在云端历史返回前切换入口/站点，此时 `loading_session` 已被清空；
+    // 迟到的结果不得覆盖当前窗格或把站点改回去。
+    if !target.lx.chat.loading_session {
+        return false;
+    }
+    if let Some((site, _)) = ai_web_remote_session(&session_id) {
+        target.lx.ai_web_site = site;
+    }
+    let site_label = ai_web_assistant_label(target.lx.ai_web_site, target.lx.ai_web_config);
     target.lx.chat.reset_session_view();
     target.lx.clear_agents();
     target.lx.compact.reset();

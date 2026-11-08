@@ -103,17 +103,17 @@ fn new_command_resets_messages_and_web_session() {
 }
 
 #[test]
-fn model_and_multi_word_commands_are_rejected_in_ai_web() {
+fn model_command_opens_picker_and_unsupported_commands_are_rejected_in_ai_web() {
     let (mut state, pane) = ai_web_state();
     draft(&mut state, pane, "/model");
     assert!(super::super::try_send(&mut state, pane));
     let target = state.pane_anywhere(pane).expect("pane");
     assert!(target.lx.chat.messages.is_empty());
-    assert_eq!(
-        target.lx.toast.as_ref().map(|toast| toast.message.as_str()),
-        Some(text::LX_AI_WEB_ONLY_NEW_CMD)
-    );
+    assert!(matches!(target.lx.slash, Some(SlashPanel::Model(_))));
 
+    if let Some(target) = state.pane_mut_anywhere(pane) {
+        target.lx.slash = None;
+    }
     draft(&mut state, pane, "/model gpt-4o");
     assert!(super::super::try_send(&mut state, pane));
     let target = state.pane_anywhere(pane).expect("pane");
@@ -123,7 +123,127 @@ fn model_and_multi_word_commands_are_rejected_in_ai_web() {
     );
     assert_eq!(
         target.lx.toast.as_ref().map(|toast| toast.message.as_str()),
-        Some(text::LX_AI_WEB_ONLY_NEW_CMD)
+        Some(text::LX_WEB_ALLOWED_CMDS)
+    );
+}
+
+#[test]
+fn gemini_two_stage_model_and_thinking_picker_updates_status_and_stream_without_persisting() {
+    let (mut state, pane) = ai_web_state();
+    crate::app::update::set_ai_web_site(&mut state, pane, AiWebSite::Gemini);
+    let target = state.pane_anywhere(pane).expect("pane");
+    assert_eq!(
+        target.lx.chat.status.model_name.as_deref(),
+        Some("Gemini · 3.8 Flash")
+    );
+    assert_eq!(target.lx.chat.status.variant.as_deref(), Some("low"));
+
+    // 打开 `/model` 第一级：展示 4 个 Gemini 模型，默认定位在 `3.8 Flash` (index 1)。
+    assert!(super::super::open_model_picker(&mut state, pane));
+    {
+        let target = state.pane_anywhere(pane).expect("pane");
+        let Some(SlashPanel::Model(picker)) = &target.lx.slash else {
+            panic!("expected model picker");
+        };
+        assert_eq!(picker.candidates.len(), 4);
+        assert_eq!(picker.current, Some(1));
+        assert_eq!(picker.window.active, 1);
+    }
+
+    // 选中第 4 个模型 `4 Argon` (index 3) 并按 Enter 进入第 2 级思考等级。
+    if let Some(target) = state.pane_mut_anywhere(pane)
+        && let Some(SlashPanel::Model(picker)) = target.lx.slash.as_mut()
+    {
+        picker.window.active = 3;
+    }
+    assert!(super::super::apply_slash_enter(&mut state, pane));
+    {
+        let target = state.pane_anywhere(pane).expect("pane");
+        let Some(SlashPanel::Model(picker)) = &target.lx.slash else {
+            panic!("expected variants stage");
+        };
+        let crate::app::state::ModelPickerStage::Variants { model, variants } = &picker.stage
+        else {
+            panic!("expected Variants stage");
+        };
+        assert_eq!(model.model, "4 Argon");
+        assert_eq!(variants, &vec!["low", "medium", "high"]);
+    }
+
+    // 选中 `high` (index 2) 并确认。
+    if let Some(target) = state.pane_mut_anywhere(pane)
+        && let Some(SlashPanel::Model(picker)) = target.lx.slash.as_mut()
+    {
+        picker.window.active = 2;
+    }
+    assert!(super::super::apply_slash_enter(&mut state, pane));
+
+    let target = state.pane_anywhere(pane).expect("pane");
+    assert!(target.lx.slash.is_none());
+    assert_eq!(
+        target.lx.chat.status.model_name.as_deref(),
+        Some("Gemini · 4 Argon")
+    );
+    assert_eq!(target.lx.chat.status.variant.as_deref(), Some("high"));
+    assert!(
+        !state.effects.iter().any(|e| matches!(
+            e,
+            Effect::SaveDefaultModel { .. } | Effect::SetChatSessionModel { .. }
+        )),
+        "AI Web 下切换模型不得写回 ai.json 或 SQLite"
+    );
+
+    // 发送消息时透传 Gemini 站点、模型 `4 Argon` 与思考等级 `high`。
+    draft(&mut state, pane, "Explain quantum computing");
+    assert!(super::super::try_send(&mut state, pane));
+    assert!(state.effects.iter().any(|effect| matches!(
+        effect,
+        Effect::StartAiWebStream {
+            site: AiWebSite::Gemini,
+            model,
+            thinking,
+            prompt,
+            ..
+        } if model == "4 Argon" && thinking == "high" && prompt == "Explain quantum computing"
+    )));
+}
+
+#[test]
+fn switching_ai_web_site_isolates_sessions_and_clears_rewind_state() {
+    let (mut state, pane) = ai_web_state();
+    draft(&mut state, pane, "DeepSeek question");
+    assert!(super::super::try_send(&mut state, pane));
+    finish(&mut state, pane);
+    on_ai_web_session_bound(
+        &mut state,
+        pane,
+        &format!("ai-web-{}-1", pane.raw()),
+        "ai-web-ds-123".into(),
+        Some("DS Chat".into()),
+    );
+    draft(&mut state, pane, "/rewind");
+    assert!(super::super::try_send(&mut state, pane));
+    assert_eq!(
+        state
+            .pane_anywhere(pane)
+            .and_then(|p| p.lx.ai_web_edit_user_index),
+        Some(0)
+    );
+
+    // 切换到 Gemini 站点：必须清空 DeepSeek 会话与 `/rewind` 待编辑状态。
+    crate::app::update::set_ai_web_site(&mut state, pane, AiWebSite::Gemini);
+    let target = state.pane_anywhere(pane).expect("pane");
+    assert_eq!(target.lx.ai_web_site, AiWebSite::Gemini);
+    assert!(target.lx.chat.session_id.is_none());
+    assert!(target.lx.chat.messages.is_empty());
+    assert!(target.lx.ai_web_edit_user_index.is_none());
+    assert_eq!(
+        ai_web_remote_session("ai-web-gm-abc123"),
+        Some((AiWebSite::Gemini, "abc123"))
+    );
+    assert_eq!(
+        ai_web_remote_session("ai-web-ds-xyz789"),
+        Some((AiWebSite::Deepseek, "xyz789"))
     );
 }
 
@@ -200,13 +320,16 @@ fn rewind_pops_latest_turn_restores_input_and_marks_edit_index() {
 #[test]
 fn rename_and_session_load_and_cloud_attachment_rewind_work_in_ai_web() {
     let (mut state, pane) = ai_web_state();
+    if let Some(target) = state.pane_mut_anywhere(pane) {
+        target.lx.chat.loading_session = true;
+    }
     on_ai_web_session_loaded(
         &mut state,
         pane,
         "ai-web-ds-uuid-1".into(),
         Some("Old Title".into()),
         vec![
-            crate::chat::ai_web::AiWebHistoryMessage {
+            crate::chat::web::AiWebHistoryMessage {
                 role: "user".into(),
                 thinking: String::new(),
                 thinking_ms: None,
@@ -214,7 +337,7 @@ fn rename_and_session_load_and_cloud_attachment_rewind_work_in_ai_web() {
                 files: vec!["photo.png".into(), "report.pdf".into()],
                 created_at_ms: 1000,
             },
-            crate::chat::ai_web::AiWebHistoryMessage {
+            crate::chat::web::AiWebHistoryMessage {
                 role: "assistant".into(),
                 thinking: "let me think".into(),
                 thinking_ms: Some(1500),
@@ -429,6 +552,28 @@ fn ai_web_mention_panel_exposes_only_files_tab_and_confirming_folder_enters_it()
 }
 
 #[test]
+fn deepseek_model_picker_toggles_deepthink_and_off() {
+    let (mut state, pane) = ai_web_state();
+    let target = state.pane_anywhere(pane).expect("pane");
+    assert_eq!(
+        target.lx.chat.status.model_name.as_deref(),
+        Some("DeepSeek")
+    );
+    assert_eq!(target.lx.chat.status.variant.as_deref(), Some("deepthink"));
+
+    assert!(super::super::open_model_picker(&mut state, pane));
+    assert!(super::super::apply_slash_enter(&mut state, pane));
+    if let Some(target) = state.pane_mut_anywhere(pane)
+        && let Some(SlashPanel::Model(picker)) = target.lx.slash.as_mut()
+    {
+        picker.window.active = 1; // "off"
+    }
+    assert!(super::super::apply_slash_enter(&mut state, pane));
+    let target = state.pane_anywhere(pane).expect("pane");
+    assert_eq!(target.lx.chat.status.variant, None);
+}
+
+#[test]
 fn switching_between_ai_web_and_native_isolates_sessions_and_blocks_shell_mode() {
     let (mut state, pane) = ai_web_state();
     if let Some(target) = state.pane_mut_anywhere(pane) {
@@ -450,4 +595,71 @@ fn switching_between_ai_web_and_native_isolates_sessions_and_blocks_shell_mode()
     let target = state.pane_anywhere(pane).expect("pane");
     assert!(target.lx.chat.session_id.is_none());
     assert!(target.lx.ai_web_edit_user_index.is_none());
+}
+
+#[test]
+fn stale_ai_web_session_loaded_is_ignored_without_loading_flag() {
+    let (mut state, pane) = ai_web_state();
+    // 用户已切走（`loading_session` 被清空）后，迟到的云端历史不得覆盖当前窗格或站点。
+    let changed = on_ai_web_session_loaded(
+        &mut state,
+        pane,
+        "ai-web-gm-stale".into(),
+        Some("Stale".into()),
+        Vec::new(),
+    );
+    assert!(!changed);
+    let target = state.pane_anywhere(pane).expect("pane");
+    assert_eq!(target.lx.ai_web_site, AiWebSite::Deepseek);
+    assert!(target.lx.chat.session_id.is_none());
+    assert!(target.lx.chat.messages.is_empty());
+}
+
+#[test]
+fn ai_web_model_selection_uses_candidate_site_not_pane_site() {
+    let (mut state, pane) = ai_web_state();
+    crate::app::update::set_ai_web_site(&mut state, pane, AiWebSite::Gemini);
+
+    // 面板在站点切换前构造：候选仍属于 DeepSeek，必须写 DeepSeek 配置而不是 Gemini。
+    super::super::slash::finish_model_selection(
+        &mut state,
+        pane,
+        crate::config::ai::ModelSelection {
+            provider: text::AI_WEB_SITE_DEEPSEEK.to_string(),
+            model: text::AI_WEB_SITE_DEEPSEEK.to_string(),
+            variant: Some(text::DEEPSEEK_THINKING_OFF.to_string()),
+        },
+    );
+    let config = state.pane_anywhere(pane).expect("pane").lx.ai_web_config;
+    assert_eq!(
+        config.deepseek_thinking,
+        crate::app::state::DeepseekThinkingMode::Off
+    );
+    assert_eq!(
+        config.gemini_thinking,
+        crate::app::state::GeminiThinkingLevel::Low
+    );
+    assert_eq!(
+        config.gemini_model,
+        crate::app::state::GeminiWebModel::Flash38
+    );
+}
+
+#[test]
+fn switching_ai_web_site_cancels_in_flight_stream() {
+    let (mut state, pane) = ai_web_state();
+    draft(&mut state, pane, "hello");
+    assert!(super::super::try_send(&mut state, pane));
+    state.effects.clear();
+
+    crate::app::update::set_ai_web_site(&mut state, pane, AiWebSite::Gemini);
+    assert!(
+        state
+            .effects
+            .iter()
+            .any(|effect| matches!(effect, Effect::CancelChatStream { .. }))
+    );
+    let target = state.pane_anywhere(pane).expect("pane");
+    assert!(target.lx.slash.is_none());
+    assert!(target.lx.chat.session_id.is_none());
 }

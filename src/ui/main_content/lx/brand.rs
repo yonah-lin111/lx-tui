@@ -216,16 +216,32 @@ pub(super) fn place_ai_web_sites(rect: Rect) -> Vec<(crate::app::state::AiWebSit
     if rect.width == 0 || rect.height == 0 {
         return Vec::new();
     }
+    const SITE_GAP: u16 = 3;
     let sites = crate::app::state::AiWebSite::ALL;
-    let widths: Vec<u16> = sites
+    let mut widths: Vec<u16> = sites
         .iter()
         .map(|site| u16::try_from(text::ai_web_site_label(*site).width()).unwrap_or(u16::MAX))
         .collect();
     let gaps = u16::try_from(sites.len().saturating_sub(1)).unwrap_or(0);
+    let natural = widths
+        .iter()
+        .fold(0u16, |sum, w| sum.saturating_add(*w))
+        .saturating_add(SITE_GAP.saturating_mul(gaps));
+    if natural > rect.width {
+        // 窄窗格：按可用列等分宽度，避免后一个站点被整体裁掉而无法点击。
+        let available = rect.width.saturating_sub(SITE_GAP.saturating_mul(gaps));
+        let count = u16::try_from(sites.len()).unwrap_or(1).max(1);
+        let base = (available / count).max(1);
+        let remainder = available.saturating_sub(base.saturating_mul(count));
+        for (index, width) in widths.iter_mut().enumerate() {
+            let in_remainder = u16::try_from(index).is_ok_and(|i| i < remainder);
+            *width = base.saturating_add(u16::from(in_remainder));
+        }
+    }
     let total = widths
         .iter()
         .fold(0u16, |sum, w| sum.saturating_add(*w))
-        .saturating_add(3u16.saturating_mul(gaps));
+        .saturating_add(SITE_GAP.saturating_mul(gaps));
     let mut x = rect.x.saturating_add(rect.width.saturating_sub(total) / 2);
     let mut out = Vec::with_capacity(sites.len());
     for (site, w) in sites.into_iter().zip(widths) {
@@ -233,27 +249,44 @@ pub(super) fn place_ai_web_sites(rect: Rect) -> Vec<(crate::app::state::AiWebSit
         if clamped_w > 0 {
             out.push((site, Rect::new(x, rect.y, clamped_w, 1)));
         }
-        x = x.saturating_add(w).saturating_add(3);
+        x = x.saturating_add(w).saturating_add(SITE_GAP);
     }
     out
 }
 
-/// 绘制 AI Web 站点选择行：替换欢迎页的 AGENTS.md / mcp / skills 计数行。
+/// 绘制 AI Web 站点选择行：采用各站点品牌渐变色，选中项加粗并在下方绘制同色渐变下划线。
 pub(super) fn draw_ai_web_sites(
     grid: &mut Grid,
     rect: Rect,
     selected: crate::app::state::AiWebSite,
 ) {
     let placed = place_ai_web_sites(rect);
+    let can_underline = rect.height > UNDERLINE_ROWS;
     for (index, (site, site_rect)) in placed.iter().enumerate() {
         let label =
             text::truncate_to_width(text::ai_web_site_label(*site), usize::from(site_rect.width));
-        let site_style = if *site == selected {
-            style::accent().add_modifier(ratatui::style::Modifier::BOLD)
-        } else {
-            style::muted()
-        };
-        grid.put(site_rect.x, site_rect.y, &label, site_style);
+        let length = label.chars().count();
+        let is_selected = *site == selected;
+        for (position, ch) in label.chars().enumerate() {
+            let cell_style = style::ai_web_site_label_style(*site, position, length, is_selected);
+            grid.set(
+                site_rect.x.saturating_add(position as u16),
+                site_rect.y,
+                ch,
+                cell_style,
+            );
+        }
+        if is_selected && can_underline {
+            for position in 0..length {
+                let cell_style = style::ai_web_site_label_style(*site, position, length, false);
+                grid.set(
+                    site_rect.x.saturating_add(position as u16),
+                    site_rect.y + UNDERLINE_ROWS,
+                    ENTRY_UNDERLINE,
+                    cell_style,
+                );
+            }
+        }
         if let Some((_, next_rect)) = placed.get(index + 1) {
             let gap = next_rect.x.saturating_sub(site_rect.right());
             grid.put(

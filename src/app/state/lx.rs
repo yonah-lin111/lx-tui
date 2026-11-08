@@ -27,6 +27,7 @@ mod selection;
 pub mod shell;
 pub mod slash;
 pub mod task;
+pub mod web;
 
 use history::HistoryBrowse;
 pub(crate) use history::HistoryMove;
@@ -60,6 +61,11 @@ pub use slash::{
     ModelPickerStage, PanelWindow, SlashCommand, SlashEntry, SlashPanel,
 };
 pub use task::{AgentFilter, ProcessEntry, TaskPage, TaskTab};
+pub use web::{
+    AI_WEB_DEEPSEEK_SESSION_PREFIX, AI_WEB_GEMINI_SESSION_PREFIX, AI_WEB_SESSION_PREFIX,
+    AiWebConfig, AiWebSite, DeepseekThinkingMode, GeminiThinkingLevel, GeminiWebModel,
+    ai_web_remote_session, is_ai_web_session,
+};
 
 /// lx 页四个入口：原生 agent、混合 agent、自动化 agent、AI Web。
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -78,18 +84,6 @@ impl LxEntry {
         LxEntry::Automation,
         LxEntry::AiWeb,
     ];
-}
-
-/// AI Web 支持的目标站点（首期接入 DeepSeek）。
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
-pub enum AiWebSite {
-    #[default]
-    Deepseek,
-}
-
-impl AiWebSite {
-    /// 全部 AI Web 站点的显示顺序。
-    pub const ALL: [AiWebSite; 1] = [AiWebSite::Deepseek];
 }
 
 /// 首页资源计数的一类（MCP server / skill）。
@@ -121,6 +115,8 @@ pub struct Lx {
     pub entry: LxEntry,
     /// AI Web 入口当前选中的目标站点。
     pub ai_web_site: AiWebSite,
+    /// AI Web 各站点的模型与思考等级配置（纯内存态，不写库）。
+    pub ai_web_config: AiWebConfig,
     /// AI Web 撤回（`/rewind`）后待下一轮在网页端原地编辑的用户消息下标（0 基）。
     pub ai_web_edit_user_index: Option<usize>,
     /// AI Web 撤回（`/rewind`）时该轮原有的云端历史附件名（供重发时比对保留或移除网页卡片）。
@@ -245,6 +241,7 @@ impl Lx {
         Self {
             entry: LxEntry::Native,
             ai_web_site: AiWebSite::Deepseek,
+            ai_web_config: AiWebConfig::default(),
             ai_web_edit_user_index: None,
             ai_web_edit_cloud_files: Vec::new(),
             input: String::new(),

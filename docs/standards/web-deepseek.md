@@ -1,4 +1,4 @@
-# DeepSeek Web（AI Web）驱动流程与适配规范
+# DeepSeek Web（Web）驱动流程与适配规范
 
 - **基准验证时间**：`2026-11-07`（北京时间 `2026-11-07 CST`）
 - **目标站点**：`https://chat.deepseek.com`
@@ -6,7 +6,7 @@
   - 会话页：`https://chat.deepseek.com/a/chat/s/<session_id>`
 - **驱动运行时**：`ego-browser nodejs`（隔离任务空间 `SPACE = 'lx-tui-ai-web-deepseek'`）
 
-本文档完整记录 `lx-tui` 第 4 入口 `AI Web`（`LxEntry::AiWeb`）对接 DeepSeek 网页端的端到端流程、脚本通信协议、DOM 选择器、React 事件触发方式、SSE JSON Patch 流解析规则、CDP 附件上传与云端 REST API 契约。当 DeepSeek 网页端后续改版导致选择器或接口漂移，或需要将同一套 `AI Web` 架构复刻到其它网页端 AI 站点时，以此文档为基准排查与修改。
+本文档完整记录 `lx-tui` 第 4 入口 `Web`（`LxEntry::AiWeb`）对接 DeepSeek 网页端的端到端流程、脚本通信协议、DOM 选择器、React 事件触发方式、SSE JSON Patch 流解析规则、CDP 附件上传与云端 REST API 契约。当 DeepSeek 网页端后续改版导致选择器或接口漂移，或需要将同一套 `Web` 架构复刻到其它网页端 AI 站点时，以此文档为基准排查与修改。
 
 ---
 
@@ -15,7 +15,7 @@
 ```text
 src/
   chat/
-    ai_web/
+    web/
       mod.rs                行协议前缀（@@LX_AI_WEB@@）、流事件枚举（AiWebStreamEvent）、
                             NDJSON 解析（parse_script_line）与 ego-browser 二进制路径探测
       deepseek_helpers.js   嵌入式辅助脚本：输出推送（emit/emitMany）、新对话重置（ensureFreshChat）、
@@ -24,16 +24,16 @@ src/
       deepseek_script.js    嵌入式主脚本：空间初始化、登录态检测、DeepThink 开关激活、
                             XHR/fetch SSE 拦截器 + DOM 兜底轮询、原地编辑（/rewind）与普通发送提交
     prepare/
-      ai_web.rs             发送前预处理（prepare_ai_web_message）：提取本地文件/图片绝对路径（files）
+      web.rs                发送前预处理（prepare_ai_web_message）：提取本地文件/图片绝对路径（files）
                             与 /rewind 保留的云端附件名（keep_files），拦截目录/Skill/MCP 引用
   event/
     chat/
-      ai_web.rs             子进程编排：启动 ego-browser nodejs、绑定 127.0.0.1:0 临时 HTTP 流监听、
+      web.rs                子进程编排：启动 ego-browser nodejs、绑定 127.0.0.1:0 临时 HTTP 流监听、
                             拼装 __LX_PARAMS 块级作用域脚本、取消/停止与 30s 超时保护
   app/
     update/
       chat/
-        ai_web.rs           纯状态机：内存会话（ai-web-* / ai-web-ds-*）、发送、流状态更新、
+        web.rs              纯状态机：内存会话（ai-web-* / ai-web-ds-*）、发送、流状态更新、
                             /rewind 撤回与云端附件标记回填、首轮云端 ID/标题绑定、/resume 历史还原
 ```
 
@@ -43,7 +43,7 @@ src/
 
 ### 2.1 块级作用域参数注入（`__LX_PARAMS`）
 
-`ego-browser nodejs` 在持久化的后台 daemon worker 中执行脚本。若直接在脚本顶层声明全局变量，同一 worker 连续执行多次动作会出现顶层 `const` 重复声明冲突。因此 `src/event/chat/ai_web.rs` 的 `script_source()` 将每次执行包裹在独立的块级作用域 `{ ... }` 内，经子进程 `stdin` 一次性写入并 `shutdown`：
+`ego-browser nodejs` 在持久化的后台 daemon worker 中执行脚本。若直接在脚本顶层声明全局变量，同一 worker 连续执行多次动作会出现顶层 `const` 重复声明冲突。因此 `src/event/chat/web.rs` 的 `script_source()` 将每次执行包裹在独立的块级作用域 `{ ... }` 内，经子进程 `stdin` 一次性写入并 `shutdown`：
 
 ```javascript
 {
@@ -179,7 +179,7 @@ DeepSeek 的 SSE 数据帧采用自定义的缩写 JSON Patch 协议：
 
 ## 6. 文件与图片上传及 `/rewind` 附件同步流程
 
-### 6.1 TUI 侧发送前预处理（`src/chat/prepare/ai_web.rs`）
+### 6.1 TUI 侧发送前预处理（`src/chat/prepare/web.rs`）
 
 - **仅允许文件与图片**：支持输入框 `@path/to/file`、粘贴图片芯片 `@[paste-image #N](path)`、文件引用芯片 `@[refer-file](path)`、图片引用芯片 `@[refer-image](path)`。
 - **严禁文件夹、Skill 与 MCP**：
@@ -293,7 +293,7 @@ DeepSeek 的 SSE 数据帧采用自定义的缩写 JSON Patch 协议：
 若需新增或替换其它网页端 AI 站点（如 ChatGPT Web、Claude Web、Kimi Web 等）：
 
 1. **保持 Rust 侧协议与状态机不变**：
-   - `src/chat/ai_web/mod.rs` 的 `@@LX_AI_WEB@@` NDJSON 协议、`src/event/chat/ai_web.rs` 的回环 HTTP 实时流监听器与 `__LX_PARAMS` 注入器、以及 `src/app/update/chat/ai_web.rs` 的状态机均与具体站点 DOM 解耦，可直接复用。
+   - `src/chat/web/mod.rs` 的 `@@LX_AI_WEB@@` NDJSON 协议、`src/event/chat/web.rs` 的回环 HTTP 实时流监听器与 `__LX_PARAMS` 注入器、以及 `src/app/update/chat/web.rs` 的状态机均与具体站点 DOM 解耦，可直接复用。
 2. **新增站点枚举与驱动脚本**：
    - 在 `AiWebSite` 中添加对应站点变体；
    - 参照 `deepseek_helpers.js` 与 `deepseek_script.js` 实现新站点的 7 个动作（`chat`、`new`、`stop`、`list_sessions`、`load_session`、`rename_session`、`delete_session`），对齐相同的 `__LX_PARAMS` 输入与 `emit(...)` 输出事件即可。
