@@ -32,6 +32,7 @@ fn top_level_routes_tui_version_and_all_help_topics() {
 
     let topics = [
         ("exec", HelpTopic::Exec),
+        ("web", HelpTopic::Web),
         ("session", HelpTopic::Session),
         ("prompt", HelpTopic::Prompt),
         ("todo", HelpTopic::Todo),
@@ -239,4 +240,103 @@ fn scope_args_and_secret_masking_behave_as_expected() {
     assert_eq!(mask_secret(""), "");
     assert_eq!(mask_secret("short123"), "***");
     assert_eq!(mask_secret("sk-1234567890abcd"), "sk-...abcd");
+}
+
+#[test]
+fn web_cli_parses_subcommands_models_thinking_and_session_prefixes() {
+    use crate::app::state::AiWebSite;
+    use crate::cli::web::WebCommand;
+
+    let models_act =
+        parse_cli(["lx-tui", "web", "models", "--site", "gemini", "--json"]).expect("web models");
+    assert!(matches!(
+        models_act,
+        CliAction::Web(ref cli)
+            if cli.global.json && cli.command == WebCommand::Models { site: Some(AiWebSite::Gemini) }
+    ));
+
+    let chat_act = parse_cli([
+        "lx-tui",
+        "web",
+        "chat",
+        "--site",
+        "gemini",
+        "-m",
+        "4 Argon",
+        "-t",
+        "high",
+        "--edit-index",
+        "0",
+        "--keep-file",
+        "report.pdf",
+        "updated prompt",
+    ])
+    .expect("web chat gemini");
+    assert!(matches!(
+        chat_act,
+        CliAction::Web(ref cli)
+            if matches!(
+                &cli.command,
+                WebCommand::Chat {
+                    site: AiWebSite::Gemini,
+                    model,
+                    thinking,
+                    prompt,
+                    edit_user_index: Some(0),
+                    keep_files,
+                    ..
+                } if model == "4 Argon"
+                    && thinking == "high"
+                    && prompt == "updated prompt"
+                    && keep_files == &vec!["report.pdf".to_string()]
+            )
+    ));
+
+    // 会话 ID 前缀自动推断站点（`ai-web-gm-*` -> Gemini，`ai-web-ds-*` -> Deepseek）。
+    let show_act =
+        parse_cli(["lx-tui", "web", "show", "ai-web-gm-abc123", "--thinking"]).expect("web show");
+    assert!(matches!(
+        show_act,
+        CliAction::Web(ref cli)
+            if cli.command
+                == WebCommand::Show {
+                    site: AiWebSite::Gemini,
+                    session_id: "ai-web-gm-abc123".into(),
+                    remote_session_id: "abc123".into(),
+                    show_thinking: true,
+                }
+    ));
+
+    // 前缀与 `--site` 冲突时必须报错拦截。
+    let mismatch = parse_cli([
+        "lx-tui",
+        "web",
+        "show",
+        "ai-web-gm-abc123",
+        "--site",
+        "deepseek",
+    ])
+    .expect_err("site prefix mismatch");
+    assert!(mismatch.contains("belongs to 'gemini'"));
+
+    // 非法模型或思考等级必须报错拦截。
+    assert!(
+        parse_cli([
+            "lx-tui",
+            "web",
+            "chat",
+            "--site",
+            "gemini",
+            "-m",
+            "bad-model",
+            "hi"
+        ])
+        .is_err()
+    );
+    assert!(
+        parse_cli([
+            "lx-tui", "web", "chat", "--site", "deepseek", "-t", "high", "hi"
+        ])
+        .is_err()
+    );
 }

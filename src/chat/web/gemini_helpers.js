@@ -662,19 +662,27 @@ async function runNonChatAction(currentUrl) {
             const input = document.querySelector('.cdk-overlay-container input, mat-dialog-container input');
             if (!input) return false;
             input.focus();
+            if (typeof input.select === 'function') input.select();
             const setter = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, 'value')?.set;
             if (setter) setter.call(input, ${JSON.stringify(TITLE)});
             else input.value = ${JSON.stringify(TITLE)};
-            input.dispatchEvent(new Event('input', { bubbles: true }));
+            input.dispatchEvent(new InputEvent('input', { bubbles: true, data: ${JSON.stringify(TITLE)}, inputType: 'insertText' }));
+            input.dispatchEvent(new Event('change', { bubbles: true }));
+            return true;
+          })()
+        `).catch(() => false);
+        await new Promise((r) => setTimeout(r, 180));
+        await js(String.raw`
+          (() => {
             const buttons = Array.from(document.querySelectorAll('.cdk-overlay-container button, mat-dialog-container button'));
             const saveBtn = buttons.find((b) => {
               const t = (b.innerText || '').trim().toLowerCase();
               return t === '重命名' || t === '保存' || t === 'rename' || t === 'save';
             });
-            if (saveBtn) saveBtn.click();
-            return true;
+            if (saveBtn && !saveBtn.disabled) saveBtn.click();
           })()
-        `).catch(() => false);
+        `).catch(() => {});
+        await new Promise((r) => setTimeout(r, 400));
       }
     }
     await emit({ event: 'done' });

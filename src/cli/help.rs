@@ -13,6 +13,7 @@ pub enum HelpTopic {
     Root,
     Exec,
     ExecResume,
+    Web,
     Session,
     Prompt,
     Todo,
@@ -46,6 +47,7 @@ pub fn parse_help(topics: &[OsString]) -> Result<CliAction, String> {
         (None, _) => HelpTopic::Root,
         (Some("exec"), None) => HelpTopic::Exec,
         (Some("exec"), Some("resume")) | (Some("resume"), None) => HelpTopic::ExecResume,
+        (Some("web"), None) => HelpTopic::Web,
         (Some("session"), None) => HelpTopic::Session,
         (Some("prompt"), None) => HelpTopic::Prompt,
         (Some("todo"), None) => HelpTopic::Todo,
@@ -67,6 +69,7 @@ pub fn help_text(topic: HelpTopic) -> &'static str {
         HelpTopic::Root => ROOT_HELP,
         HelpTopic::Exec => exec::help_text(exec::HelpTopic::Exec),
         HelpTopic::ExecResume => exec::help_text(exec::HelpTopic::ExecResume),
+        HelpTopic::Web => WEB_HELP,
         HelpTopic::Session => SESSION_HELP,
         HelpTopic::Prompt => PROMPT_HELP,
         HelpTopic::Todo => TODO_HELP,
@@ -89,6 +92,7 @@ Usage:
 
 Commands:
   exec        Run lx agent non-interactively in the terminal
+  web         Drive Web AI sites (DeepSeek / Gemini) via ego-browser
   session     List, inspect, rename, delete, fork, rewind, or compact chat sessions
   prompt      Manage workspace prompts, folders, pages, and referenced directories
   todo        Manage daily todos, priorities, rollovers, and completion stats
@@ -392,6 +396,39 @@ Subcommands:
 
 Global Options:
   -C, --cd <DIR>                Working directory for project settings context
+      --json                    Output as JSON
+      --color <auto|always|never>
+  -h, --help                    Print help
+";
+
+const WEB_HELP: &str = "\
+Drive Web AI sites (DeepSeek / Gemini) via ego-browser
+
+Usage:
+  lx-tui web <SUBCOMMAND> [OPTIONS]
+
+Subcommands:
+  models [--site <deepseek|gemini>]
+      List available Web models, thinking variants, defaults, and session prefixes
+  chat [<PROMPT>] [--site <deepseek|gemini>] [-m, --model <MODEL>]
+       [-t, --thinking <THINKING>] [-s, --session <SESSION_ID>] [--first-turn]
+       [--edit-index <N>] [--file <PATH>...] [--keep-file <NAME>...]
+      Send a message or inline-edit a previous turn (/rewind) on DeepSeek or Gemini
+  new [--site <deepseek|gemini>]
+      Reset the target Web site to a fresh conversation (/new)
+  stop [--site <deepseek|gemini>]
+      Stop the active generation stream on the target Web site
+  list [--site <deepseek|gemini>] [--limit <N>]
+      List cloud sessions on DeepSeek or Gemini (/resume)
+  show <SESSION_ID> [--site <deepseek|gemini>] [--thinking]
+      Load and display all messages of a cloud session (/resume)
+  rename <SESSION_ID> <NEW_TITLE> [--site <deepseek|gemini>]
+      Rename a cloud session (/rename)
+  delete <SESSION_ID> [--site <deepseek|gemini>]
+      Delete a cloud session
+
+Global Options:
+  -C, --cd <DIR>                Working directory for resolving @file references
       --json                    Output as JSON
       --color <auto|always|never>
   -h, --help                    Print help

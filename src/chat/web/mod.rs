@@ -27,7 +27,7 @@ pub fn scripts_for_site(site: crate::app::state::AiWebSite) -> (&'static str, &'
 pub const PROTOCOL_PREFIX: &str = "@@LX_AI_WEB@@";
 
 /// 网页端单条历史会话摘要（供 `/resume` 列表展示）。
-#[derive(Debug, Clone, PartialEq, Eq, serde::Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct AiWebSessionSummary {
     pub id: String,
     pub title: String,
@@ -36,7 +36,7 @@ pub struct AiWebSessionSummary {
 }
 
 /// 网页端单条历史消息（供 `/resume` 恢复对话展示）。
-#[derive(Debug, Clone, PartialEq, Eq, serde::Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct AiWebHistoryMessage {
     pub role: String,
     #[serde(default)]
@@ -165,6 +165,68 @@ pub fn resolve_ego_browser_bin() -> std::path::PathBuf {
         }
     }
     std::path::PathBuf::from("ego-browser")
+}
+
+/// 注入 `ego-browser nodejs` 的 `__LX_PARAMS` 参数集。
+#[derive(Debug, Clone, Default)]
+pub struct ScriptParams<'a> {
+    pub action: &'a str,
+    pub model: Option<&'a str>,
+    pub thinking: Option<&'a str>,
+    pub prompt: Option<&'a str>,
+    pub files: &'a [String],
+    pub keep_files: &'a [String],
+    pub first_turn: bool,
+    pub stream_url: Option<&'a str>,
+    pub session_id: Option<&'a str>,
+    pub title: Option<&'a str>,
+    pub edit_user_index: Option<usize>,
+}
+
+/// 组装交给 `ego-browser nodejs` 的脚本。
+///
+/// `ego-browser nodejs` 在守护进程内执行脚本，`process.env` 会跨调用残留；
+/// 因此统一通过顶层块级常量 `const __LX_PARAMS = { ... };` 显式传入全部参数，避免跨轮串台。
+pub fn script_source(site: crate::app::state::AiWebSite, params: ScriptParams<'_>) -> String {
+    let (helpers_script, main_script) = scripts_for_site(site);
+    let edit_index = params
+        .edit_user_index
+        .and_then(|idx| i64::try_from(idx).ok())
+        .unwrap_or(-1);
+    let files_json = serde_json::to_string(params.files).unwrap_or_else(|_| "[]".to_string());
+    let keep_files_json =
+        serde_json::to_string(params.keep_files).unwrap_or_else(|_| "[]".to_string());
+    let mut source = String::from("const __LX_PARAMS = {\n");
+    source.push_str("  action: ");
+    source.push_str(&json_string(params.action));
+    source.push_str(",\n  model: ");
+    source.push_str(&json_string(params.model.unwrap_or("")));
+    source.push_str(",\n  thinking: ");
+    source.push_str(&json_string(params.thinking.unwrap_or("")));
+    source.push_str(",\n  prompt: ");
+    source.push_str(&json_string(params.prompt.unwrap_or("")));
+    source.push_str(",\n  files: ");
+    source.push_str(&files_json);
+    source.push_str(",\n  keepFiles: ");
+    source.push_str(&keep_files_json);
+    source.push_str(",\n  firstTurn: ");
+    source.push_str(if params.first_turn { "true" } else { "false" });
+    source.push_str(",\n  streamUrl: ");
+    source.push_str(&json_string(params.stream_url.unwrap_or("")));
+    source.push_str(",\n  sessionId: ");
+    source.push_str(&json_string(params.session_id.unwrap_or("")));
+    source.push_str(",\n  title: ");
+    source.push_str(&json_string(params.title.unwrap_or("")));
+    source.push_str(&format!(",\n  editIndex: {edit_index},\n}};\n"));
+    source.push_str(helpers_script);
+    source.push('\n');
+    source.push_str(main_script);
+    source
+}
+
+/// JSON 字符串字面量；输入是任意用户文本，必须完整转义。
+fn json_string(value: &str) -> String {
+    serde_json::to_string(value).unwrap_or_else(|_| "\"\"".to_string())
 }
 
 #[cfg(test)]

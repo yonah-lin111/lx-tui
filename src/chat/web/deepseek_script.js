@@ -32,23 +32,25 @@ async function main() {
   }
 
   // Sync DeepThink ("深度思考") toggle state with THINKING ('deepthink' vs 'off').
-  await js(`
+  const toggledDeepThink = await js(`
     (() => {
       const wantDeepThink = ${JSON.stringify(THINKING)} !== 'off';
       const btn = Array.from(document.querySelectorAll('.ds-toggle-button')).find((el) => {
         const label = (el.innerText || '').trim();
         return label === '深度思考' || label === 'DeepThink';
       });
-      if (btn) {
-        const isSelected = btn.className.includes('ds-toggle-button--selected');
-        if (isSelected !== wantDeepThink) {
-          btn.click();
-        }
+      if (!btn) return false;
+      const isSelected = btn.className.includes('ds-toggle-button--selected');
+      if (isSelected !== wantDeepThink) {
+        btn.click();
         return true;
       }
       return false;
     })()
-  `);
+  `).catch(() => false);
+  if (toggledDeepThink) {
+    await new Promise((r) => setTimeout(r, 300));
+  }
 
   // Channel A: intercept /api/v0/chat/completion over XMLHttpRequest & fetch.
   await js(String.raw`

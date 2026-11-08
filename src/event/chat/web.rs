@@ -14,8 +14,8 @@ pub use crate::app::state::is_ai_web_session;
 use crate::app::state::{AiWebSite, HistoryEntry, ai_web_remote_session};
 use crate::chat::events::{PartDelta, PartKind};
 use crate::chat::web::{
-    AiWebHistoryMessage, AiWebStreamEvent, parse_script_line, resolve_ego_browser_bin,
-    scripts_for_site, should_record_diag_line,
+    AiWebHistoryMessage, AiWebStreamEvent, ScriptParams, parse_script_line,
+    resolve_ego_browser_bin, script_source, should_record_diag_line,
 };
 
 /// AI Web 后台任务回投主事件循环的事件。
@@ -667,21 +667,6 @@ fn failed(code: &str) -> StopReason {
     }
 }
 
-#[derive(Default)]
-struct ScriptParams<'a> {
-    action: &'a str,
-    model: Option<&'a str>,
-    thinking: Option<&'a str>,
-    prompt: Option<&'a str>,
-    files: &'a [String],
-    keep_files: &'a [String],
-    first_turn: bool,
-    stream_url: Option<&'a str>,
-    session_id: Option<&'a str>,
-    title: Option<&'a str>,
-    edit_user_index: Option<usize>,
-}
-
 /// 后台执行 `new` / `stop` 这类一次性无返回值脚本动作（带 30 秒超时保护）。
 fn spawn_action(site: AiWebSite, params: ScriptParams<'static>) {
     let source = script_source(site, params);
@@ -706,7 +691,7 @@ fn spawn_action(site: AiWebSite, params: ScriptParams<'static>) {
 }
 
 /// 执行带返回协议行的脚本动作（`list_sessions` / `load_session` / `rename_session` / `delete_session`，带 30 秒超时保护）。
-async fn run_query(
+pub(crate) async fn run_query(
     site: AiWebSite,
     params: ScriptParams<'_>,
 ) -> Result<Vec<AiWebStreamEvent>, String> {
@@ -744,7 +729,7 @@ async fn run_query(
 
 /// 启动本地回环 HTTP 接收器：绕过 `ego-browser nodejs` 对 stdio 的进程级缓冲，
 /// 让脚本通过 `fetch(STREAM_URL, { method: 'POST' })` 实时推送每一个流分片。
-async fn spawn_stream_listener(
+pub(crate) async fn spawn_stream_listener(
     line_tx: mpsc::UnboundedSender<String>,
 ) -> Option<(String, tokio::task::JoinHandle<()>)> {
     let listener = TcpListener::bind("127.0.0.1:0").await.ok()?;
@@ -807,50 +792,4 @@ async fn spawn_stream_listener(
         }
     });
     Some((format!("http://127.0.0.1:{port}"), handle))
-}
-
-/// 组装交给 `ego-browser nodejs` 的脚本。
-///
-/// `ego-browser nodejs` 在守护进程内执行脚本，`process.env` 会跨调用残留；
-/// 因此统一通过顶层块级常量 `const __LX_PARAMS = { ... };` 显式传入全部参数，避免跨轮串台。
-fn script_source(site: AiWebSite, params: ScriptParams<'_>) -> String {
-    let (helpers_script, main_script) = scripts_for_site(site);
-    let edit_index = params
-        .edit_user_index
-        .and_then(|idx| i64::try_from(idx).ok())
-        .unwrap_or(-1);
-    let files_json = serde_json::to_string(params.files).unwrap_or_else(|_| "[]".to_string());
-    let keep_files_json =
-        serde_json::to_string(params.keep_files).unwrap_or_else(|_| "[]".to_string());
-    let mut source = String::from("const __LX_PARAMS = {\n");
-    source.push_str("  action: ");
-    source.push_str(&json_string(params.action));
-    source.push_str(",\n  model: ");
-    source.push_str(&json_string(params.model.unwrap_or("")));
-    source.push_str(",\n  thinking: ");
-    source.push_str(&json_string(params.thinking.unwrap_or("")));
-    source.push_str(",\n  prompt: ");
-    source.push_str(&json_string(params.prompt.unwrap_or("")));
-    source.push_str(",\n  files: ");
-    source.push_str(&files_json);
-    source.push_str(",\n  keepFiles: ");
-    source.push_str(&keep_files_json);
-    source.push_str(",\n  firstTurn: ");
-    source.push_str(if params.first_turn { "true" } else { "false" });
-    source.push_str(",\n  streamUrl: ");
-    source.push_str(&json_string(params.stream_url.unwrap_or("")));
-    source.push_str(",\n  sessionId: ");
-    source.push_str(&json_string(params.session_id.unwrap_or("")));
-    source.push_str(",\n  title: ");
-    source.push_str(&json_string(params.title.unwrap_or("")));
-    source.push_str(&format!(",\n  editIndex: {edit_index},\n}};\n"));
-    source.push_str(helpers_script);
-    source.push('\n');
-    source.push_str(main_script);
-    source
-}
-
-/// JSON 字符串字面量；输入是任意用户文本，必须完整转义。
-fn json_string(value: &str) -> String {
-    serde_json::to_string(value).unwrap_or_else(|_| "\"\"".to_string())
 }
