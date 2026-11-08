@@ -10,7 +10,7 @@ fn fenced_code_block_renders_header_and_left_bar() {
     let lines = render_wrapped_code_blocks(src, 30);
     assert_eq!(lines.len(), 4, "1 行头部 + 3 行代码正文");
 
-    // 第 0 行：首列 `│` + `rust` + 空白填充 + 右对齐 `[❐]`。
+    // 第 0 行：首列 `▎` + `rust` + 空白填充 + 右对齐 `[❐]`。
     assert_eq!(
         lines[0].code,
         Some(CodeLineKind::Header {
@@ -19,9 +19,9 @@ fn fenced_code_block_renders_header_and_left_bar() {
         })
     );
     assert_eq!(lines[0].width(), 30);
-    assert!(lines[0].text().starts_with("│rust"));
+    assert!(lines[0].text().starts_with("▎rust"));
     assert!(lines[0].text().ends_with(text::TEMPLATE_BUTTON_COPY));
-    assert_eq!(lines[0].spans[0], ("│".to_string(), style::md_read_rule()));
+    assert_eq!(lines[0].spans[0], ("▎".to_string(), style::md_read_rule()));
     assert_eq!(lines[0].spans[1], ("rust".to_string(), style::muted()));
     assert_eq!(
         lines[0].spans.last().cloned(),
@@ -31,15 +31,15 @@ fn fenced_code_block_renders_header_and_left_bar() {
         ))
     );
 
-    // 第 1..=3 行：每行首列为 `│`（md_read_rule），紧接高亮后的代码。
-    for (idx, expected) in ["│fn main() {", "│    println!(\"hi\");", "│}"]
+    // 第 1..=3 行：每行首列为 `▎`（md_read_rule），紧接高亮后的代码。
+    for (idx, expected) in ["▎fn main() {", "▎    println!(\"hi\");", "▎}"]
         .into_iter()
         .enumerate()
     {
         let line = &lines[1 + idx];
         assert_eq!(line.code, Some(CodeLineKind::Body));
         assert_eq!(line.text(), expected);
-        assert_eq!(line.spans[0], ("│".to_string(), style::md_read_rule()));
+        assert_eq!(line.spans[0], ("▎".to_string(), style::md_read_rule()));
     }
 }
 
@@ -54,7 +54,7 @@ fn empty_lang_and_indented_code_block_fallback_to_text_label() {
     assert_eq!(headers.len(), 2, "围栏无语言块 + 缩进块各 1 个头部");
     for (expected_idx, header) in headers.iter().enumerate() {
         assert!(
-            header.text().starts_with(&format!("│{DEFAULT_CODE_LANG} ")),
+            header.text().starts_with(&format!("▎{DEFAULT_CODE_LANG} ")),
             "默认语言应显示为 text：{:?}",
             header.text()
         );
@@ -72,9 +72,9 @@ fn empty_lang_and_indented_code_block_fallback_to_text_label() {
 #[test]
 fn narrow_width_truncates_language_with_ellipsis_and_keeps_copy_button() {
     let src = "```typescript\nconst x = 1;\n```";
-    // width = 10：col 0 为 `│`，col 7..10 为 `[❐]`，col 6 为间隔空格，语言预算为 5 列 -> `type…`。
+    // width = 10：col 0 为 `▎`，col 7..10 为 `[❐]`，col 6 为间隔空格，语言预算为 5 列 -> `type…`。
     let lines = render_wrapped_code_blocks(src, 10);
-    assert_eq!(lines[0].text(), "│type… [❐]");
+    assert_eq!(lines[0].text(), "▎type… [❐]");
     assert_eq!(lines[0].width(), 10);
     assert_eq!(
         lines[0].code,
@@ -96,15 +96,15 @@ fn soft_wrapped_code_lines_and_blank_lines_prepend_left_bar_on_every_row() {
     assert!(body_lines.len() >= 4, "长行应软换行拆成多条视觉行");
     for line in &body_lines {
         assert!(
-            line.text().starts_with('│'),
-            "每个视觉行（含续行与空行）首列必须有 `│`：{:?}",
+            line.text().starts_with('▎'),
+            "每个视觉行（含续行与空行）首列必须有 `▎`：{:?}",
             line.text()
         );
         assert!(line.width() <= 14, "不得超过给定折行宽度：{}", line.width());
     }
     assert!(
-        body_lines.iter().any(|line| line.text() == "│"),
-        "空代码行也应保留首列 `│`"
+        body_lines.iter().any(|line| line.text() == "▎"),
+        "空代码行也应保留首列 `▎`"
     );
 }
 

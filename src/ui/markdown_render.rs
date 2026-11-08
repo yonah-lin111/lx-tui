@@ -125,7 +125,7 @@ pub fn render_wrapped(source: &str, width: u16) -> Vec<MdLine> {
     render_wrapped_with_options(source, width, true, false)
 }
 
-/// 与 [`render_wrapped`] 相同，但为代码块启用内部第一行 `<lang> ... [❐]` 头部与左侧 `│` 单栏。
+/// 与 [`render_wrapped`] 相同，但为代码块启用内部第一行 `<lang> ... [❐]` 头部与左侧 `▎` 单栏。
 ///
 /// 供 `lx` 聊天历史的 AI 助手正文块（主对话与子 Agent 详情页）使用；
 /// 思考块与工具/汇报卡片内的压暗 Markdown 仍用 [`render_wrapped`] 或 [`render_wrapped_literal_rules`]。
@@ -236,7 +236,7 @@ fn render_blocks_stateful(
             continue;
         }
         // 缩进列表项优先于缩进代码块：模型常用 4 空格嵌套（`- xxx` 下接 `    - aaa`），
-        // 若按 CommonMark 的 4 空格规则当成代码块，整段会被渲染成一坨 `│ - aaa` 贴最左，
+        // 若按 CommonMark 的 4 空格规则当成代码块，整段会被渲染成一坨 `▎ - aaa` 贴最左，
         // 列表看起来就“没有缩进”。真代码块请用围栏（```）。
         if let Some(item) = item {
             let depth = list_depth(&mut state.list_indents, item.indent());
@@ -351,7 +351,7 @@ fn is_rule(line: &str) -> bool {
 fn is_indented_code(line: &str) -> bool {
     let indent = line.len() - line.trim_start_matches(' ').len();
     // 列表项不算缩进代码：块级分派已优先按列表处理，这里同时兜住 `indented_code` 的
-    // 续行判断——紧跟在代码行后的 `- 子项` 形态的行会提前收尾代码块，不再漏成 `│ - 子项`。
+    // 续行判断——紧跟在代码行后的 `- 子项` 形态的行会提前收尾代码块，不再漏成 `▎ - 子项`。
     indent >= 4 && !line.trim().is_empty() && list_item(line).is_none()
 }
 

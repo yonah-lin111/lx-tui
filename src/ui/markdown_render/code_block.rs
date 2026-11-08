@@ -1,8 +1,8 @@
 //! 面向阅读的 Markdown 代码块左侧栏、头部复制按钮布局与源码提取。
 //!
 //! 采用轻量单栏结构，避免整行粗边框压过语法高亮：
-//! - 每个视觉行（含头部、代码行与软换行续行）首列绘制细竖线 `│`（[`text::CODE_BLOCK_BAR`]），样式 [`style::md_read_rule`]；
-//! - 内部第一行左侧紧贴 `│` 显示语言名（无语言或缩进代码块显示 `text`），右侧贴右缘显示 `[❐]`。
+//! - 每个视觉行（含头部、代码行与软换行续行）首列绘制左 1/4 块 `▎`（[`text::CODE_BLOCK_BAR`]），样式 [`style::md_read_rule`]；
+//! - 内部第一行左侧紧贴 `▎` 显示语言名（无语言或缩进代码块显示 `text`），右侧贴右缘显示 `[❐]`。
 
 use ratatui::style::Style;
 use unicode_width::UnicodeWidthChar;
@@ -24,13 +24,13 @@ pub enum CodeLineKind {
         /// 复制按钮在代码块行内的列区间 `[start_col, end_col)`（相对 `MdLine` 起点）。
         button_cols: (u16, u16),
     },
-    /// 代码块正文行（含软换行续行），首列固定为 `│` 左栏。
+    /// 代码块正文行（含软换行续行），首列固定为 `▎` 左栏。
     Body,
 }
 
-/// 构造代码块内部第一行头部：`│<lang> ... [❐]`。
+/// 构造代码块内部第一行头部：`▎<lang> ... [❐]`。
 ///
-/// 右侧 `[❐]` 常显优先（极窄时钳到 `│` 之后），左侧语言名超出 `[❐]` 左缘前 1 列空白时以 `…` 截断。
+/// 右侧 `[❐]` 常显优先（极窄时钳到 `▎` 之后），左侧语言名超出 `[❐]` 左缘前 1 列空白时以 `…` 截断。
 pub(super) fn header_line(lang: &str, block_index: usize, width: Option<usize>) -> MdLine {
     let cols = width.unwrap_or(40).max(1);
     let label = normalize_lang_label(lang);
@@ -79,7 +79,7 @@ pub(super) fn header_line(lang: &str, block_index: usize, width: Option<usize>) 
 }
 
 /// 渲染代码块中的单行代码正文（`code_chrome = true` 时标记为 [`CodeLineKind::Body`]，
-/// 由 `wrap_md_line` 折行时在每个视觉行首列统一前置 `│`）。
+/// 由 `wrap_md_line` 折行时在每个视觉行首列统一前置 `▎`）。
 pub(super) fn render_code_line(
     line: &str,
     lang: Option<&str>,
@@ -96,7 +96,7 @@ pub(super) fn render_code_line(
     });
 }
 
-/// 为折行后的单个代码块正文视觉行前置左侧栏 `│`。
+/// 为折行后的单个代码块正文视觉行前置左侧栏 `▎`。
 pub(super) fn prepend_body_bar(
     mut spans: Vec<(String, Style)>,
     width: usize,
