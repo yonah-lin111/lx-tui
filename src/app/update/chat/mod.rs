@@ -115,7 +115,8 @@ pub use viewport::{
     toggle_latest_thinking, toggle_lx_card, toggle_thinking_at,
 };
 pub(crate) use viewport::{
-    resolve_lx_history, resolve_lx_rewind_center, resolve_task_agents_visible,
+    invalidate_task_agent_rows, resolve_lx_history, resolve_lx_rewind_center,
+    resolve_task_agents_visible,
 };
 pub use web::{
     AI_WEB_DEEPSEEK_SESSION_PREFIX, AI_WEB_GEMINI_SESSION_PREFIX, AI_WEB_GROK_SESSION_PREFIX,
@@ -506,7 +507,7 @@ pub fn on_stream_delta(state: &mut AppState, key: &RequestKey, deltas: &[ChatDel
     }
     if changed {
         refresh_lx_status(state, key.pane);
-        changed |= subagent::request_subagent_cards_refresh(state, key.pane);
+        subagent::request_subagent_cards_refresh(state, key.pane);
     }
     changed
 }

@@ -371,7 +371,7 @@ pub struct AgentsState {
     pub runs: Vec<SubagentRun>,
     /// 父消息里的 `spawn_agent` / `wait_agent` 卡片待回填。
     ///
-    /// delta 只置位，事件循环每批最多全量对账一次；避免并行 subagent 时
+    /// delta 只置位，事件循环每帧绘制前最多全量对账一次；避免并行 subagent 时
     /// 每条 delta 都扫描“主聊天 + 所有 run 聊天”。
     pub cards_dirty: bool,
 }

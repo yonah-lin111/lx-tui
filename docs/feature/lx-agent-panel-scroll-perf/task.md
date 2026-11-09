@@ -3,9 +3,13 @@
 - **目录**：`docs/feature/lx-agent-panel-scroll-perf/`
 - **关联设计**：[`design.md`](design.md)
 - **验证记录**：[`verification.md`](verification.md)
+- **Review 记录**：[`review.md`](review.md)
 - **分支**：`feat/lx-agent-panel-scroll-perf`
 - **Worktree**：`.worktrees/lx-agent-panel-scroll-perf`
 - **状态**：已实现，自动化验证通过；交互与视觉待用户验收
+
+> 下方复选框保留为分阶段实施清单；实际实现、review 修复与验证结果以
+> [`review.md`](review.md) / [`verification.md`](verification.md) 为准。
 
 ---
 
@@ -47,13 +51,11 @@
 
 - [ ] 新增 `request_subagent_cards_refresh`：
   ```rust
-  pub fn request_subagent_cards_refresh(state: &mut AppState, pane: PaneId) -> bool {
+  pub fn request_subagent_cards_refresh(state: &mut AppState, pane: PaneId) {
       let Some(target) = state.pane_mut_anywhere(pane) else {
-          return false;
+          return;
       };
-      let was_dirty = target.lx.agents.cards_dirty;
       target.lx.agents.cards_dirty = true;
-      !was_dirty
   }
   ```
 - [ ] 新增 `flush_subagent_cards`：
@@ -86,13 +88,17 @@
 
 - [ ] `on_subagent_delta` 末尾（约 L126）：
   ```rust
-  let marked = request_subagent_cards_refresh(state, pane);
-  changed | marked
+  if changed {
+      request_subagent_cards_refresh(state, pane);
+  }
+  changed
   ```
+  **禁止**把 request 的返回值并入 `changed`；置位是调度信号，不是内容变更。
 - [ ] `on_subagent_tool_pending`（约 L177）同样替换。
 - [ ] `on_subagent_tool_running`（约 L192）同样替换。
 - [ ] `on_subagent_tool_settled`（约 L246）同样替换。
-- [ ] `set_subagent_list` 的卡片刷新（约 L309）改为 request。
+- [ ] `set_subagent_list` 的卡片刷新（约 L309）只在列表元数据真的变化时 request，
+  返回值只包含 `changed || focused || refresh_status`。
 - [ ] 检查 `on_subagent_finished` 内部是否有直接刷新；有则改 request。
 
 文件：`src/app/update/chat/session.rs`
@@ -116,27 +122,28 @@
 
 文件：`src/event/mod.rs`
 
-- [ ] 在 `if dirty && last_draw.elapsed() >= FRAME_INTERVAL` 之前加入：
+- [ ] 在 `if dirty && last_draw.elapsed() >= FRAME_INTERVAL` **内部、所有 resolve/draw 之前**加入：
   ```rust
-  // 同批 delta 只做一次委派卡片对账；视觉延迟最多一帧。
-  if update::flush_subagent_cards(state) {
-      dirty = true;
-  }
+  // 同帧内的 delta 只做一次委派卡片对账；视觉延迟最多一帧。
+  update::flush_subagent_cards(state);
   ```
-- [ ] 确认该位置在 `tokio::select!` 排空消息之后、`tui.draw` 之前。
+- [ ] 确认该位置在 `tokio::select!` 排空消息之后、`tui.draw` 之前；`cards_dirty`
+  只允许在会置循环 `dirty` 的 AppEvent/effect 分支中置位。
 
 ### 1.5 阶段一测试
 
 文件：`src/app/update/chat/tests/subagent.rs`
 
-- [ ] 新增 `parallel_deltas_coalesce_into_one_card_refresh`：
+- [ ] 新增 `parallel_deltas_are_coalesced_into_one_card_refresh`：
   - 构造 3 个 running run；
   - 连续调用 `on_subagent_delta` 3 次；
   - 断言 `cards_dirty == true`，父卡片尚未更新；
   - 调用 `flush_subagent_cards`，断言父卡片状态更新、`cards_dirty == false`；
   - 再次 flush 返回 false。
-- [ ] 新增 `request_refresh_marks_only_once`：
-  - 第一次 request 返回 true，第二次返回 false。
+- [ ] 新增 `request_subagent_cards_refresh_only_sets_the_flag`：
+  - request 返回 `()`；调用后 `cards_dirty == true`，flush 后复位。
+- [ ] `set_subagent_list_is_idempotent_and_keeps_local_runs` 在两次回投之间执行 flush：
+  - 第二次内容相同的回投必须返回 false，且不得重新置 `cards_dirty`。
 - [ ] 跑：
   ```bash
   cargo test app::update::chat::tests::subagent
@@ -345,12 +352,12 @@
 
 文件：`src/ui/main_content/lx/task/agents.rs`
 
-- [ ] 新增 `ListColumns` 结构与 `list_columns(runs, now_ms)`。
+- [ ] 新增 `ListColumns` 结构与 `list_columns(runs, prefixes, now_ms)`。
 - [ ] `tree_prefix` 保持现有“父节点不可见则不画连接符”的逻辑；返回的字符串只写入层级槽。
 - [ ] `draw_list` 重写为固定列：
   - 选择标记 `❯` 固定在 `list.x`；
   - 层级槽起点 `list.x + MARKER_COLS`，宽度 `columns.gutter`；
-  - 状态图标起点 = `list.x + columns.x_identity - mark_w - CELL_GAP`；
+  - 状态图标起点 = `list.x + columns.x_identity - STEP_MARK_COLS`；
   - 身份、状态、时长、标题按 `ListColumns` 的 x 坐标绘制；
   - 时长在 `age_w` 内右对齐；
   - 标题用 `clip_ellipsis`，宽度 = `list.right() - title_x`。
@@ -359,7 +366,7 @@
   - `token_label` / `token_w` / `show_token` / `fixed_with_token`
 - [ ] 实现降级顺序（设计 §3.5.3）：
   1. 标题放不下 → 不画标题；
-  2. 时长放不下 → 不画时长，标题起点回退；
+  2. 时长放不下 → 不画时长；标题仍固定在 `x_title`，不会回填到时长槽；
   3. 状态放不下 → 不画状态文字，图标保留；
   4. 身份放不下 → 只画标记 / 层级槽 / 状态图标；
   5. 身份极端窄时用 `…` 截断。
@@ -379,20 +386,26 @@
 
 文件：`src/ui/main_content/lx/task/tests/agent_list.rs`
 
-- [ ] `columns_align_across_identity_widths`：
-  - 构造 `Turing [explorer]`、`Noether [explorer]`、`Curie [reviewer]` 等不同宽度身份；
-  - 断言所有行的状态列、时长列、标题列起点一致。
-- [ ] `tree_gutter_is_uniform`：
-  - 构造 depth 1 / 2 / 3 的 run；
-  - 断言层级槽宽度 = 最大前缀宽度，所有行身份列对齐；
-  - 父节点被筛选隐藏时不画悬空连接符，但槽宽仍按可见集计算。
-- [ ] `title_truncates_with_ellipsis`：
+- [ ] `columns_align_across_identity_widths_and_depths`：
+  - 构造 `Turing [executor]`、`Curie [executor]`、`Ada [executor]` 等不同宽度身份与 depth 1/2/3；
+  - 断言所有行的身份、状态、标题列起点一致。
+- [ ] `deep_tree_prefix_does_not_leak_into_scrollbar`：
+  - 6..10 列窄窗 + depth 2；
+  - 层级槽/状态图标放不下时不得留下裸 `└─`，不得写入滚动条列。
+- [ ] `long_title_truncates_with_ellipsis`：
   - 超长标题；
-  - 断言最后一个字符是 `…`，且显示宽度不超过标题列。
+  - 断言含 `…`，且右侧哨兵列保持空白。
 - [ ] `narrow_width_drops_title_then_age_then_status`：
-  - 逐步收窄 rect；
-  - 断言降级顺序；
+  - 8..50 列 sweep；
+  - 断言标题 → 时长 → 状态的单调降级，标题不得回填时长槽；
   - 状态图标始终存在。
+- [ ] `coalesced_measure_keeps_rows_dirty_until_fresh`：
+  - 80ms 离屏窗口内 resolve 不得清 `rows_dirty`、不得写旧 `total_rows`；
+  - 窗口结束后重测。
+- [ ] `geometry_invalidation_refreshes_detail_width`：
+  - 宽度变化后 `total_rows` 必须重算。
+- [ ] `ready_snapshot_does_not_cross_pages`：
+  - 主历史与详情同宽度时，ready 路径不得复用对方快照。
 - [ ] `filter_pills_keep_gap_before_close`：
   - 断言 `all · active · done` 右端与 `[esc close]` 至少 `GAP` 列。
 - [ ] 跑：

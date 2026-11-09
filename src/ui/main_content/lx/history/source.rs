@@ -85,6 +85,13 @@ impl<'a> From<&'a Lx> for HistorySource<'a> {
 }
 
 impl<'a> HistorySource<'a> {
+    /// 数据源身份：主历史与某个子 agent 详情的 `LxChat` 地址不同。
+    ///
+    /// `PaneCache` 用它阻止同宽度下的跨页快照复用。
+    pub(crate) fn owner(&self) -> usize {
+        self.chat as *const LxChat as usize
+    }
+
     /// 只有一份 `LxChat` 的数据源（`Agents` 详情区）。
     pub(crate) fn from_chat(chat: &'a LxChat, compact: &'a LxCompact) -> HistorySource<'a> {
         static EMPTY_MODEL_SWITCH: LxModelSwitch = LxModelSwitch::EMPTY;

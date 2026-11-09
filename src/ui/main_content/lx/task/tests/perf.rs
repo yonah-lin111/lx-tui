@@ -77,7 +77,8 @@ fn perf_agents_panel() {
             }
         }
         let started = Instant::now();
-        update::refresh_subagent_cards(&mut state, pane);
+        update::request_subagent_cards_refresh(&mut state, pane);
+        update::flush_subagent_cards(&mut state);
         update::resolve_task_agents_visible(&mut state, &[(pane, area)], &mut cache);
         let Some(rect) = state.pane_anywhere(pane).and_then(|target| {
             crate::ui::main_content::lx::task_output_inner(
@@ -97,9 +98,9 @@ fn perf_agents_panel() {
     }
 
     let builds = cache.pane(pane).builds().saturating_sub(builds_before);
-    assert!(
-        builds <= FRAMES as u64,
-        "同一帧最多重建一次：{builds} builds / {FRAMES} frames"
+    assert_eq!(
+        builds, FRAMES as u64,
+        "每帧必须恰好重建一次：{builds} builds / {FRAMES} frames"
     );
     samples.sort_unstable();
     let p95 = samples[samples.len() * 95 / 100];

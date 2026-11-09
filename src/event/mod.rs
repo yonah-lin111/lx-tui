@@ -198,6 +198,8 @@ const FRAME_INTERVAL: Duration = Duration::from_millis(16);
 const IDLE_WAIT: Duration = Duration::from_secs(3600);
 /// lx loading 转轮每帧间隔（对齐 codex motion.rs 的 100ms）。
 const LOADING_FRAME_INTERVAL: Duration = Duration::from_millis(100);
+/// 后台任务面板列表轮询间隔：避免每轮事件循环都访问 SQLite。
+const TASK_PAGE_REFRESH_INTERVAL: Duration = Duration::from_millis(500);
 
 /// 同步入口：构造 tokio 运行时并阻塞到主循环结束；持久化服务由入口构造并移交。
 pub fn run(
@@ -279,6 +281,8 @@ async fn run_loop(
     let mut agent_check: Option<Instant> = None;
     // 对话框列表查询在途的仓库根；结果返回前不重复发起。
     let mut git_inflight: HashSet<PathBuf> = HashSet::new();
+    // 后台任务面板的列表轮询节拍：不能每个事件循环都拉一次 SQLite。
+    let mut task_page_refresh_at: Option<Instant> = None;
     // lx 聊天在途流的取消句柄 + 会话进程运行实例。
     let mut chat_streams = chat::ChatStreams::default();
     let connect_tasks = chat::connect::ConnectTasks::default();
@@ -424,9 +428,12 @@ async fn run_loop(
         if chat::sync_background_task_counts(state, &chat_streams) {
             dirty = true;
         }
-        // 面板打开期间每轮刷新进程列表（打开后才启动的进程也要能出现）。
-        // 这里不置脏：返回值表示「已压入请求」；真正重绘由 apply_process_effects / tick_task_pages 驱动。
-        chat::refresh_open_task_pages(state);
+        // 面板打开期间按 500ms 轮询列表（打开后才启动的进程也要能出现）。
+        // 不能每轮都拉：`ListSubagents` / `ListSessionProcesses` 都会在下一轮访问 SQLite。
+        if task_page_refresh_at.is_none_or(|at| Instant::now() >= at) {
+            chat::refresh_open_task_pages(state);
+            task_page_refresh_at = Some(Instant::now() + TASK_PAGE_REFRESH_INTERVAL);
+        }
         // 后台任务面板的运行时长节拍：`now_ms` 只在列表回投时更新会冻住时长。
         if chat::tick_task_pages(state) {
             dirty = true;
@@ -475,6 +482,7 @@ async fn run_loop(
         }
         if geometry.rects != last_rects || state.prompt_resize_pending {
             update::resize_panes(state, &geometry.rects);
+            update::invalidate_task_agent_rows(state);
             state.prompt_resize_pending = false;
             // 窗格集合变化：清掉已关闭窗格的历史缓存，避免泄漏。
             let alive: Vec<PaneId> = geometry.rects.iter().map(|(id, _)| *id).collect();

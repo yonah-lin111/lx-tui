@@ -30,8 +30,10 @@ pub fn open_task_page(state: &mut AppState, pane: PaneId) -> bool {
     let freshly_opened = target.lx.task.is_none();
     if freshly_opened {
         target.lx.task = Some(crate::app::state::TaskPage::default());
-    }
-    if freshly_opened {
+        // 面板打开期间不跑 resolve_lx_history；清掉上一帧的主历史锚点，
+        // 避免关闭后、下一帧 resolve 前用过期 viewport_top 把视口拉回去。
+        target.lx.chat.viewport_top = None;
+        target.lx.chat.suppressed_prompt_header = None;
         crate::app::update::clear_lx_selection_for(state, pane);
     }
     state
@@ -67,6 +69,8 @@ pub fn close_task_page(state: &mut AppState, pane: PaneId) -> bool {
     };
     let closed = target.lx.task.take().is_some();
     if closed {
+        target.lx.chat.viewport_top = None;
+        target.lx.chat.suppressed_prompt_header = None;
         // 清掉拖拽抓取标记：面板没了还留着 grab，会让后续**所有**拖拽事件
         // （窗格分割线、选区、prompt 滚动条）都被输出区滚动条那一支吞掉。
         state.task_scroll_drag = None;

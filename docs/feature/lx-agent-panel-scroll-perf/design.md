@@ -5,6 +5,7 @@
 - **Worktree**：`.worktrees/lx-agent-panel-scroll-perf`
 - **关联任务**：[`task.md`](task.md)
 - **验证记录**：[`verification.md`](verification.md)
+- **Review 记录**：[`review.md`](review.md)
 - **参考仓库**：`/Users/yonah/projects/agent/opencode-dev`
   - `packages/tui/src/util/scroll.ts`（`CustomSpeedScroll` / `MacOSScrollAccel` 配置）
   - `packages/tui/src/mini/footer.subagent.tsx`（`scrollbox` + `stickyScroll` + `scrollBy`）
@@ -60,7 +61,7 @@
 | 9 | 列宽计算范围 | **A：按当前筛选后的全部 run 计算**，滚动时不跳列 |
 | 10 | 窄窗格降级顺序 | **A：从右往左整列丢弃**（标题 → 时长 → 状态），身份与状态图标永远保留；标题用单字符 `…` 截断 |
 | 11 | 优化深度 | **B：不引入内容版本号**，保留现有指纹哈希；只消除重复全量排版与事件层全量扫描 |
-| 12 | `refresh_subagent_cards` 改造 | **B：按帧合并**，delta 只置 `cards_dirty`，每批最多全量刷新一次 |
+| 12 | `refresh_subagent_cards` 改造 | **B：按帧合并**，delta 只置 `cards_dirty`，每帧绘制前最多全量刷新一次 |
 | 13 | 对齐范围 | **A：只改 Agents 列表**；Processes 已有 command/cwd 列对齐不动；顺带补筛选胶囊与 `[esc close]` 的 2 列间距 |
 | 14 | 实现位置 | **A：独立 worktree + 分支**，`dev` 保持干净 |
 | 15 | 文档目录 | **A：`docs/feature/lx-agent-panel-scroll-perf/`** |
@@ -221,7 +222,7 @@ pub struct AgentsState {
     pub runs: Vec<SubagentRun>,
     /// 父消息里的 `spawn_agent` / `wait_agent` 卡片待回填。
     ///
-    /// delta 只置位，事件循环每批最多全量对账一次；避免并行 subagent 时
+    /// delta 只置位，事件循环每帧绘制前最多全量对账一次；避免并行 subagent 时
     /// 每条 delta 都扫描“主聊天 + 所有 run 聊天”。
     pub cards_dirty: bool,
 }
@@ -232,19 +233,18 @@ pub struct AgentsState {
 `src/app/update/chat/subagent_cards.rs` 新增：
 
 ```rust
-/// 标记本窗格委派卡片待刷新；返回是否是第一次标记。
+/// 标记本窗格委派卡片待刷新。
 ///
-/// 真正的全量对账由事件循环每批调用 [`flush_subagent_cards`] 执行一次。
-pub fn request_subagent_cards_refresh(state: &mut AppState, pane: PaneId) -> bool {
+/// 这是**调度信号**，不是内容变更信号；调用方不得把返回值并入 `changed`。
+/// 真正的全量对账由事件循环每帧绘制前调用 [`flush_subagent_cards`] 执行一次。
+pub fn request_subagent_cards_refresh(state: &mut AppState, pane: PaneId) {
     let Some(target) = state.pane_mut_anywhere(pane) else {
-        return false;
+        return;
     };
-    let was_dirty = target.lx.agents.cards_dirty;
     target.lx.agents.cards_dirty = true;
-    !was_dirty
 }
 
-/// 每个事件批次后执行一次：把本批 delta 产生的卡片状态变化统一回填。
+/// 每帧绘制前执行一次：把本帧 delta 产生的卡片状态变化统一回填。
 pub fn flush_subagent_cards(state: &mut AppState) -> bool {
     let panes: Vec<PaneId> = state
         .all_pane_ids()
@@ -272,15 +272,10 @@ pub fn flush_subagent_cards(state: &mut AppState) -> bool {
 
 把以下调用从“立即全量刷新”改成“置位”：
 
-- `src/app/update/chat/subagent.rs:126`（delta）
-- `src/app/update/chat/subagent.rs:177`（tool pending）
-- `src/app/update/chat/subagent.rs:192`（tool running）
-- `src/app/update/chat/subagent.rs:246`（tool settled）
-- `src/app/update/chat/subagent.rs:309`（列表回投）
-- `src/app/update/chat/session.rs:266`
-- `src/app/update/chat/process.rs:71`
-- `src/app/update/chat/mod.rs:506`
-- `src/event/chat/subagent/settle.rs:261`
+- `on_subagent_delta` / `on_subagent_tool_pending` / `on_subagent_tool_running` /
+  `on_subagent_tool_settled`：仅在内容真的变化时置位，并返回 `changed`；
+- `set_subagent_list`：仅在列表元数据变化时置位，返回值不再包含调度位；
+- `session.rs` / `process.rs` / `mod.rs` / `settle.rs`：事件驱动的显式同步场景直接置位。
 
 示例：
 
@@ -289,24 +284,38 @@ pub fn flush_subagent_cards(state: &mut AppState) -> bool {
 changed | refresh_subagent_cards(state, pane)
 
 // 改后
-let marked = request_subagent_cards_refresh(state, pane);
-changed | marked
+if changed {
+    request_subagent_cards_refresh(state, pane);
+}
+changed
 ```
+
+> 关键修复：`request_subagent_cards_refresh` 返回 `()`。把“置调度位”当成
+> “内容变化”返回，会让 `set_subagent_list` 在每轮列表回投时都返回 true，
+> 配合 `refresh_open_task_pages` 形成 60fps 空转重绘。
 
 `refresh_subagent_cards` 本身保持“立即全量对账”的语义，只由 `flush_subagent_cards` 调用；文档注释标明“不要在 delta 路径直接调用”。
 
 #### 3.1.4 事件循环接入
 
-`src/event/mod.rs` 在绘制判断之前（当前 `if dirty && last_draw.elapsed() >= FRAME_INTERVAL` 上方）加：
+`src/event/mod.rs` 在绘制门控内部、所有 resolve/draw 之前加：
 
 ```rust
-// 同批 delta 只做一次委派卡片对账；视觉延迟最多一帧。
-if update::flush_subagent_cards(state) {
-    dirty = true;
+if dirty && last_draw.elapsed() >= FRAME_INTERVAL {
+    // 同帧内的 delta 只做一次委派卡片对账；视觉延迟最多一帧。
+    update::flush_subagent_cards(state);
+    // ... resolve 与 draw
 }
 ```
 
-事件循环本来就用 `while let Ok(message) = receiver.try_recv()` 排空同批消息（`src/event/mod.rs:581-600`），所以这里天然是“每批一次”，无需额外时间轮。
+事件循环用 `while let Ok(message) = receiver.try_recv()` 排空同批消息，并在
+`dirty` 门控内每帧最多 flush 一次；因此不会出现同帧多次全量扫描。
+
+> 调度位只在 AppEvent/effect 分支置位，而这两个分支都会把循环 `dirty` 置 true；
+> 当前不变量成立。新增调用方必须确保置位后本帧会进入绘制门控。
+>
+> 面板列表（`ListSubagents` / `ListSessionProcesses`）由事件循环按 **500ms** 轮询，
+> 不再每个事件循环访问 SQLite；打开面板仍立即压入首次请求。
 
 ### 3.2 隐藏历史：面板打开时跳过主聊天排版
 
@@ -382,19 +391,24 @@ pub(crate) fn detail_rows(
 
 ```rust
 /// 只量总行数；复用调用方的跨帧缓存（Agents 详情区的滚动上限用）。
+/// 第二返回值：false = 命中 80ms 离屏合并窗口，快照不是最新，调用方必须保留 rows_dirty。
 pub(crate) fn measure_cached(
     width: u16,
     source: HistorySource<'_>,
     cache: &mut PaneCache,
-) -> usize {
+) -> (usize, bool) {
     if width == 0 {
-        return 0;
+        return (0, true);
     }
-    cache.snapshot_source(width, source).total_rows
+    let (snapshot, fresh) = cache.snapshot_source_fresh(width, source);
+    (snapshot.total_rows, fresh)
 }
 ```
 
 删除 `history::measure`（全仓只有 `detail_rows` 一个调用方）。
+
+`PaneCache::snapshot_source_fresh` 还记录 `snapshot_owner = source.owner()`；主历史与
+Agents 详情的宽度可能相同，ready 路径必须校验 owner，不能只凭宽度复用。
 
 #### 3.3.2 事件循环接入
 
@@ -515,11 +529,14 @@ let source = HistorySource::from_chat(&run.chat, &run.compact)
 #### 3.5.1 目标形态
 
 ```text
-❯ ■ Turing [explorer]     running     2m 59s  Count Rust files
-  └─ ■ Curie [explorer]   completed   9s      Find SCHEMA_VERSION
-    └─ ■ Euler [explorer] running     1m 06s  List top-level modules
-  ■ Noether [explorer]    completed   4s      Report crate metadata
+❯      ■ Noether [explorer]  completed  4s      Report crate metadata
+  ├─   ■ Turing [explorer]    running    2m 59s  Count Rust files
+    └─ ■ Euler [explorer]     running    1m 06s  List top-level modules
+  └─   ■ Curie [explorer]     completed  9s      Find SCHEMA_VERSION
 ```
+
+> 示意按最大深度 3 的 gutter=5 绘制；第一层同样留空占位，所有状态图标
+> `■` 严格同列。
 
 - `❯` 选择标记固定在 `list.x`；
 - 层级槽固定在 `list.x + MARKER_COLS` 起，宽度 = 当前筛选结果最大前缀宽度；
@@ -550,45 +567,37 @@ struct ListColumns {
 计算规则：
 
 ```rust
-fn list_columns(runs: &[&SubagentRun], now_ms: i64) -> ListColumns {
-    let mark_w = /* StepMark::segment 宽度，恒 2 */;
-    let gutter = runs
+fn list_columns(
+    runs: &[&SubagentRun],
+    prefixes: &[Option<String>],
+    now_ms: i64,
+) -> ListColumns {
+    let gutter = prefixes
         .iter()
-        .enumerate()
-        .filter_map(|(index, run)| tree_prefix(run, runs, index))
-        .map(|prefix| u16::try_from(prefix.width()).unwrap_or(0))
+        .flatten()
+        .map(|prefix| text_width(prefix))
         .max()
         .unwrap_or(0);
     let identity_w = runs
         .iter()
-        .map(|run| u16::try_from(run.display_identity().width()).unwrap_or(0))
+        .map(|run| text_width(&run.display_identity()))
         .max()
         .unwrap_or(0)
         .max(ROLE_MIN);
     let status_w = runs
         .iter()
-        .map(|run| {
-            u16::try_from(
-                text::agent_status_with_queue(&run.status, run.queued_count).width(),
-            )
-            .unwrap_or(0)
-        })
+        .map(|run| text_width(&text::agent_status_with_queue(&run.status, run.queued_count)))
         .max()
         .unwrap_or(0)
         .max(STATUS_MIN);
     let age_w = runs
         .iter()
-        .map(|run| {
-            u16::try_from(
-                crate::app::state::lx::task::age_label(run.elapsed_ms(now_ms)).width(),
-            )
-            .unwrap_or(0)
-        })
+        .map(|run| text_width(&crate::app::state::lx::task::age_label(run.elapsed_ms(now_ms))))
         .max()
         .unwrap_or(0);
     let x_identity = super::MARKER_COLS
         .saturating_add(gutter)
-        .saturating_add(mark_w);
+        .saturating_add(STEP_MARK_COLS);
     let x_status = x_identity.saturating_add(identity_w).saturating_add(CELL_GAP);
     let x_age = x_status.saturating_add(status_w).saturating_add(CELL_GAP);
     let x_title = x_age.saturating_add(age_w).saturating_add(CELL_GAP);
@@ -597,18 +606,21 @@ fn list_columns(runs: &[&SubagentRun], now_ms: i64) -> ListColumns {
 ```
 
 > `tree_prefix` 仍按现有逻辑判断“父节点是否在当前筛选可见集中”，父节点被隐藏时返回 `None`；此时该行在层级槽里留空，但不会破坏列对齐。
+> `text_width` 必须逐字符求和，与 `Grid::put` 的写入口径一致；不能用会把 ZWJ
+> emoji 合并成 2 列的 `UnicodeWidthStr::width`。
 
 #### 3.5.3 绘制与降级
 
 `draw_list` 改为：
 
 ```rust
-let columns = list_columns(&visible_runs, now);
+let prefixes = list_prefixes(&visible_runs);
+let columns = list_columns(&visible_runs, &prefixes, now);
 
 for (offset, run) in visible_runs.iter().skip(start).take(visible).enumerate() {
     // 选择标记
     // 层级槽：tree_prefix 写入 [list.x + MARKER_COLS, + gutter)
-    // 状态图标：固定 x = list.x + columns.x_identity - mark_w - CELL_GAP
+    // 状态图标：固定 x = list.x + columns.x_identity - STEP_MARK_COLS
     // 身份：x = list.x + columns.x_identity，宽度 identity_w
     // 状态：x = list.x + columns.x_status，宽度 status_w
     // 时长：x = list.x + columns.x_age，右对齐在 age_w 内
@@ -619,8 +631,8 @@ for (offset, run) in visible_runs.iter().skip(start).take(visible).enumerate() {
 降级顺序（从右往左）：
 
 1. 标题宽度 = `list.right() - title_x`；若 `<= 0` 不画标题；
-2. 若 `age_x + age_w > list.right()`：不画时长，标题起点回退到 `age_x`；
-3. 若 `status_x + status_w > list.right()`：不画状态文字（状态图标保留），时长/标题起点回退到 `status_x`；
+2. 若 `age_x + age_w > list.right()`：不画时长；标题仍固定在 `x_title`，因此也不会出现；
+3. 若 `status_x + status_w > list.right()`：不画状态文字（状态图标保留），时长/标题同样不会出现；
 4. 若 `identity_x >= list.right()`：只画选择标记、层级槽、状态图标；
 5. 身份在极端窄窗格用 `…` 截断（正常宽度下不截断，见决策 9）。
 
@@ -659,10 +671,10 @@ fn clip_ellipsis(text: &str, max: u16) -> String {
 当前图标是 `format!("{} ", glyph)`，宽度 2。固定列下：
 
 ```text
-x_identity = MARKER_COLS + gutter + mark_w
+x_identity = MARKER_COLS + gutter + STEP_MARK_COLS
 ```
 
-因此图标起点 = `x_identity - mark_w`。这样身份列在所有行严格对齐，状态图标也不会侵占层级槽。
+因此图标起点 = `x_identity - STEP_MARK_COLS`。这样身份列在所有行严格对齐，状态图标也不会侵占层级槽。
 
 ### 3.6 筛选胶囊间距
 
@@ -738,18 +750,20 @@ let right = close.map_or(rect.right(), |close| close.x.saturating_sub(GAP));
 //! Agents 详情滚动性能回归（`#[ignore]`，release 下手动跑）。
 //!
 //! 口径：6 个并行 subagent × 每个 200 条消息；连续 120 帧的
-//! `layout + render` P95 ≤ 16ms。
+//! `refresh + resolve + layout + render` P95 ≤ 16ms。
 //!
 //! cargo test --release -- --ignored perf_agents_panel
 ```
 
 测试内容：
 
-1. 构造 6 个 `SubagentRun`，每个 200 条消息（正文 + 工具卡 + thinking）；
+1. 构造 6 个 `SubagentRun`，每个 200 条纯正文消息（3 行/条，覆盖流式正文重排）；
 2. 每帧给每个 run 追加一行流式正文，模拟并行 delta；
-3. 调用 `resolve_task_agents_visible` + `draw_agents_detail`（等价于事件循环顺序）；
+3. 依次调用 `request_subagent_cards_refresh` + `flush_subagent_cards`，再走
+   `resolve_task_agents_visible` + `draw_agents_detail`（等价于事件循环顺序）；
 4. 统计 120 帧 P95，断言 ≤ 16ms；
-5. 同时断言 `PaneCache::builds()` 增量不超过帧数（不允许同帧重建两次）。
+5. 同时断言 `PaneCache::builds()` 增量严格等于帧数（每帧一次，不允许同帧重建两次，
+   也不允许漏重建）。
 
 ### 5.3 验证命令
 

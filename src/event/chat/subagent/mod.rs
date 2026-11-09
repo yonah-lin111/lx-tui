@@ -812,19 +812,27 @@ pub fn apply_subagent_effects(
                 // 更深层级的 queued_count。
                 if let Some(target) = state.pane_mut_anywhere(pane) {
                     for (agent_id, queue) in &queue_states {
-                        if let Some(run) = target.lx.agents.by_agent_mut(agent_id) {
+                        if let Some(run) = target.lx.agents.by_agent_mut(agent_id)
+                            && run.queued_count != queue.queued_count
+                        {
                             run.queued_count = queue.queued_count;
+                            changed = true;
                         }
                     }
                 }
-                runner::sync_agent_ui_queue(
+                if runner::sync_agent_ui_queue(
                     state,
                     streams,
                     persistence,
                     pane,
                     &workspace,
                     &parent_session,
-                );
+                ) {
+                    changed = true;
+                }
+                if changed {
+                    update::request_subagent_cards_refresh(state, pane);
+                }
             }
             Effect::LoadSubagentSession {
                 pane,

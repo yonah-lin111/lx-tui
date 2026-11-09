@@ -186,6 +186,24 @@ pub fn resolve_task_output_visible(
     changed
 }
 
+/// 窗格几何变化后让所有 Agents 详情重新量行。
+///
+/// `total_rows` 只在 `rows_dirty` 时重算；resize 不产生 delta，必须显式失效，
+/// 否则滚动条总量、翻页与拖拽钳制会一直沿用旧宽度下的行数。
+pub(crate) fn invalidate_task_agent_rows(state: &mut AppState) {
+    for pane in state.all_pane_ids() {
+        let Some(target) = state.pane_mut_anywhere(pane) else {
+            continue;
+        };
+        if target.view != crate::app::state::PaneView::Lx {
+            continue;
+        }
+        for run in &mut target.lx.agents.runs {
+            run.rows_dirty = true;
+        }
+    }
+}
+
 /// 每轮把 Agents 详情区的可见行数与总行数落状态（翻页/滚动条几何用）。
 ///
 /// 只在消息流变化后重量一次：历史正文的 markdown 排版是这里最贵的一步，
@@ -219,7 +237,7 @@ pub(crate) fn resolve_task_agents_visible(
         else {
             continue;
         };
-        let total = if needs_measure {
+        let measured = if needs_measure {
             state
                 .pane_anywhere(*pane)
                 .and_then(|target| {
@@ -229,7 +247,7 @@ pub(crate) fn resolve_task_agents_visible(
                         cache.pane(*pane),
                     )
                 })
-                .map(|(_, total)| total)
+                .map(|(_, total, fresh)| (total, fresh))
         } else {
             None
         };
@@ -245,7 +263,13 @@ pub(crate) fn resolve_task_agents_visible(
         let Some(run) = target.lx.agents.runs.get_mut(active) else {
             continue;
         };
-        let total = total.unwrap_or(run.total_rows);
+        let (measured_total, fresh) = measured.unwrap_or((run.total_rows, true));
+        // 旧快照的 total 不能覆盖已经落状态的值；只用它参与本帧的保守钳制。
+        let total = if fresh {
+            measured_total
+        } else {
+            run.total_rows
+        };
         let max = total.saturating_sub(visible);
         let should_follow = run.follow || total <= visible.saturating_add(1) || run.scroll >= max;
         let next_scroll = if should_follow {
@@ -260,8 +284,10 @@ pub(crate) fn resolve_task_agents_visible(
             || run.scroll != next_scroll
         {
             run.visible = visible;
-            run.total_rows = total;
-            run.rows_dirty = false;
+            if fresh {
+                run.total_rows = total;
+                run.rows_dirty = false;
+            }
             run.follow = should_follow;
             run.scroll = next_scroll;
             changed = true;

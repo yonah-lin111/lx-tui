@@ -829,7 +829,7 @@ pub(super) fn agents_rows(
     area: Rect,
     lx: &crate::app::state::Lx,
     cache: &mut crate::ui::PaneCache,
-) -> Option<(usize, usize)> {
+) -> Option<(usize, usize, bool)> {
     let page = lx.task.as_ref()?;
     if page.tab != TaskTab::Agents {
         return None;
@@ -838,8 +838,6 @@ pub(super) fn agents_rows(
     let run = page
         .selected_agent_index(&lx.agents)
         .and_then(|index| lx.agents.runs.get(index))?;
-    Some((
-        usize::from(rect.height),
-        agents::detail_rows(rect, run, cache),
-    ))
+    let (total, fresh) = agents::detail_rows(rect, run, cache);
+    Some((usize::from(rect.height), total, fresh))
 }

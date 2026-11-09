@@ -3,8 +3,9 @@
 - **分支**：`feat/lx-agent-panel-scroll-perf`
 - **Worktree**：`.worktrees/lx-agent-panel-scroll-perf`
 - **基线**：`fac77938`（`dev`）
-- **验证日期**：2026-11-09
-- **状态**：自动化验证通过；交互与视觉待用户 `cargo run` 验收
+- **验证日期**：2026-11-10
+- **状态**：review 后修复完成，自动化验证通过；交互与视觉待用户 `cargo run` 验收
+- **Review 记录**：[`review.md`](review.md)
 
 ---
 
@@ -14,11 +15,16 @@
 | --- | --- |
 | `cargo fmt --check` | 通过 |
 | `cargo clippy --all-targets -- -D warnings` | 通过，无 warning |
-| `cargo test` | 4970 passed，0 failed，5 ignored |
-| `cargo test --release --lib -- --ignored perf_agents_panel` | 通过；P95 **656µs**（6 × 200，120 帧） |
+| `cargo test` | 4976 passed，0 failed，5 ignored |
+| `cargo test --release --lib -- --ignored perf_agents_panel` | 通过；P95 **318µs**（6 × 200，120 帧） |
 | `cargo test --release --lib -- --ignored perf_lx_history` | 2 passed（主历史性能未回退） |
 
-> `perf_agents_panel` 每帧同时执行 `refresh_subagent_cards + resolve_task_agents_visible + draw_agents_detail`，120 帧快照重建 120 次，即**每帧一次**，没有同帧双重建。
+> `perf_agents_panel` 每帧执行 `request_subagent_cards_refresh + flush_subagent_cards +
+> resolve_task_agents_visible + draw_agents_detail`，120 帧快照重建严格等于 120 次，
+> 即**每帧一次**，没有同帧双重建。
+>
+> review 修复前该测试直接调 `refresh_subagent_cards`，且 `builds <= FRAMES` 可被漏重建
+> 骗过；现改为真实事件链路并断言等号。
 
 ---
 
@@ -32,8 +38,8 @@
   - 连续 3 条 delta 后父卡片保持旧值、`cards_dirty == true`；
   - `flush_subagent_cards` 后父卡片拿到 `running`，标志复位；
   - 再次 flush 返回 false，不再全量扫描。
-- `request_subagent_cards_refresh_marks_only_once`
-  - 首次请求 true，重复请求 false。
+- `request_subagent_cards_refresh_only_sets_the_flag`
+  - request 返回 `()`，只置 `cards_dirty`；flush 后复位。
 
 ### 2.2 隐藏主历史不排版
 
@@ -56,6 +62,30 @@
 - `detail_follow_bottom_never_coalesces`
   - 贴底跟随时立即重建。
 
+### 2.3.1 Review 后补充的回归
+
+`ui/main_content/lx/task/tests/agent_list.rs`：
+
+- `coalesced_measure_keeps_rows_dirty_until_fresh`
+  - 80ms 离屏窗口内 resolve 保留 `rows_dirty`，不写旧 total；窗口结束后重测。
+- `geometry_invalidation_refreshes_detail_width`
+  - 宽度变化后 `total_rows` 必须重算。
+- `ready_snapshot_does_not_cross_pages`
+  - 主历史与详情同宽度时不得复用对方快照（`snapshot_owner`）。
+- `zwj_emoji_identity_keeps_columns_aligned`
+  - ZWJ emoji 身份与 ASCII 身份的状态列对齐、无越界。
+- `deep_tree_prefix_does_not_leak_into_scrollbar`
+  - 极窄深树不留裸连接符、不写滚动条列。
+- `tree_sibling_parent_comparison_is_case_insensitive`
+  - 同级兄弟父路径大小写不同仍正确判断末项。
+
+`app/update/chat/tests/subagent.rs`：
+
+- `set_subagent_list_is_idempotent_and_keeps_local_runs` 在两次回投之间 flush，
+  锁住“无内容变化不得重新置脏”的 P0 修复。
+- `refresh_subagent_cards_updates_nested_spawn_cards` 断言嵌套卡片变化会置
+  `run.rows_dirty`。
+
 ### 2.4 列表固定列
 
 `ui/main_content/lx/task/tests/agent_list.rs`：
@@ -65,8 +95,10 @@
 - `long_title_truncates_with_ellipsis`
   - 超长标题以 `…` 收尾且不越界。
 - `narrow_width_drops_title_then_age_then_status`
-  - 18 列：状态/时长/标题整列丢弃，身份与状态图标保留；
-  - 8 列：身份用 `…` 截断，状态图标仍在。
+  - 8..50 列 sweep：标题 → 时长 → 状态单调降级；
+  - 33..36 列时标题不得回填时长槽；
+  - 身份放不下时用 `…` 截断，状态图标保留；
+  - 右侧哨兵列始终空白。
 - `filter_pills_keep_gap_before_close`
   - 筛选胶囊与 `[esc close]` 之间固定 2 列。
 
@@ -96,4 +128,5 @@
 - 父卡片实时动作文案最多延迟一帧（约 16ms）。
 - 面板打开期间主聊天 `viewport_top` 不更新，关闭后下一帧重算一次。
 - 上翻阅读时滚动条总行数最多滞后 80ms。
+- 任务面板列表改为 500ms 轮询；打开后新启动的进程/子 agent 最多延迟 500ms 出现。
 - 列宽随筛选结果/时长位数变化，切换筛选或跨过时间阈值时整列位移一次。

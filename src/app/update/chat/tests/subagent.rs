@@ -122,13 +122,23 @@ fn set_subagent_list_is_idempotent_and_keeps_local_runs() {
         "sess-parent",
         std::slice::from_ref(&record),
     ));
-    // 第二次回投内容相同：不置脏。
+    // flush 清掉调度位后，第二次回投内容相同：不置脏、不重复请求卡片对账。
+    let _ = update::flush_subagent_cards(&mut state);
     assert!(!update::set_subagent_list(
         &mut state,
         pane,
         "sess-parent",
         &[record]
     ));
+    assert!(
+        !state
+            .pane_anywhere(pane)
+            .expect("pane")
+            .lx
+            .agents
+            .cards_dirty,
+        "无内容变化时不得重新置脏"
+    );
     let agents = &state.pane_anywhere(pane).expect("pane").lx.agents;
     assert_eq!(agents.runs.len(), 1);
     assert_eq!(agents.runs[0].status, "completed");
@@ -1169,13 +1179,17 @@ fn parallel_deltas_are_coalesced_into_one_card_refresh() {
 }
 
 #[test]
-fn request_subagent_cards_refresh_marks_only_once() {
+fn request_subagent_cards_refresh_only_sets_the_flag() {
     let mut state = AppState::demo();
     let pane = state.active_tab().layout.focus();
-    assert!(update::request_subagent_cards_refresh(&mut state, pane));
+    update::request_subagent_cards_refresh(&mut state, pane);
     assert!(
-        !update::request_subagent_cards_refresh(&mut state, pane),
-        "重复请求不再置脏"
+        state
+            .pane_anywhere(pane)
+            .expect("pane")
+            .lx
+            .agents
+            .cards_dirty
     );
     let _ = update::flush_subagent_cards(&mut state);
     assert!(
@@ -1219,9 +1233,27 @@ fn refresh_subagent_cards_updates_nested_spawn_cards() {
     child.parent_session_id = "sess-a".into();
     child.title = "scan".into();
     assert!(update::on_subagent_started(&mut state, pane, child));
+    if let Some(parent) = state
+        .pane_mut_anywhere(pane)
+        .expect("pane")
+        .lx
+        .agents
+        .by_agent_mut("sub-a")
+    {
+        parent.rows_dirty = false;
+    }
 
     assert!(update::refresh_subagent_cards(&mut state, pane));
     let target = state.pane_anywhere(pane).expect("pane");
+    assert!(
+        target
+            .lx
+            .agents
+            .by_agent("sub-a")
+            .expect("parent")
+            .rows_dirty,
+        "嵌套卡片变化必须让详情总行数失效"
+    );
     let parent = target.lx.agents.by_agent("sub-a").expect("parent run");
     let view = parent
         .chat

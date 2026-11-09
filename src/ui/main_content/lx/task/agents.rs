@@ -96,10 +96,10 @@ pub(crate) fn detail_rows(
     rect: Rect,
     run: &SubagentRun,
     cache: &mut crate::ui::PaneCache,
-) -> usize {
+) -> (usize, bool) {
     let content_width = history::content_rect(rect).width;
     if content_width == 0 {
-        return usize::from(rect.height);
+        return (usize::from(rect.height), true);
     }
     let source = HistorySource::from_chat(&run.chat, &run.compact).with_viewport(HistoryViewport {
         scroll: run.scroll,
@@ -138,8 +138,13 @@ fn list_prefixes(runs: &[&SubagentRun]) -> Vec<Option<String>> {
         .collect()
 }
 
+/// 逐字符宽度，与 [`Grid::put`] / [`Grid::put_clipped`] 的写入口径一致。
+///
+/// 不能用 `UnicodeWidthStr::width`：它会把 ZWJ emoji 序列合并成 2 列，
+/// 而 Grid 是按字符逐格写入的，混用会让列宽和实际占用脱节。
 fn text_width(value: &str) -> u16 {
-    u16::try_from(value.width()).unwrap_or(u16::MAX)
+    let width: usize = value.chars().map(|ch| ch.width().unwrap_or(0)).sum();
+    u16::try_from(width).unwrap_or(u16::MAX)
 }
 
 /// 按当前筛选结果计算固定列；滚动时列不跳。
@@ -213,7 +218,7 @@ pub(super) fn draw_list(grid: &mut Grid, list: Rect, page: &TaskPage, agents: &A
     }
     let visible = usize::from(list.height);
     let start = window_start(page, agents, visible);
-    let now = crate::db::now_ms();
+    let now = page.now_ms;
     let prefixes = list_prefixes(&visible_runs);
     let columns = list_columns(&visible_runs, &prefixes, now);
     let right = list.right();
@@ -237,6 +242,12 @@ pub(super) fn draw_list(grid: &mut Grid, list: Rect, page: &TaskPage, agents: &A
         };
         // 层级槽：前缀只写在自己的槽内；第一层不画连接符，但同样留空占位。
         let gutter_x = list.x.saturating_add(super::MARKER_COLS);
+        let mark_x = gutter_x.saturating_add(columns.gutter);
+        // 连层级槽 + 状态图标都放不下时只保留选择标记，禁止把连接符写进滚动条列，
+        // 也禁止留下没有图标收口的裸 `└─`。
+        if gutter_x >= right || mark_x.saturating_add(STEP_MARK_COLS) > right {
+            continue;
+        }
         if let Some(prefix) = prefixes.get(index).and_then(Option::as_deref) {
             grid.put_clipped(
                 gutter_x,
@@ -245,10 +256,6 @@ pub(super) fn draw_list(grid: &mut Grid, list: Rect, page: &TaskPage, agents: &A
                 style::chat_notice_connector(),
                 columns.gutter,
             );
-        }
-        let mark_x = gutter_x.saturating_add(columns.gutter);
-        if mark_x.saturating_add(STEP_MARK_COLS) > right {
-            continue;
         }
         // 行首：步骤标记（与历史同一套字形：运行中 `●`、失败/取消/完成各自语义）。
         let mark = if run.is_running() {
@@ -298,17 +305,15 @@ pub(super) fn draw_list(grid: &mut Grid, list: Rect, page: &TaskPage, agents: &A
         };
         grid.put_clipped(status_x, y, &status_label, status_style, columns.status_w);
         let age_x = list.x.saturating_add(columns.x_age);
-        let show_age = age_x.saturating_add(columns.age_w) <= right;
-        let title_x = if show_age {
+        if age_x.saturating_add(columns.age_w) <= right {
             let age = crate::app::state::lx::task::age_label(run.elapsed_ms(now));
             let age_w = text_width(&age);
             // 时长是数字列，右对齐在固定宽度内，不把标题起点带跑。
             let age_start = age_x.saturating_add(columns.age_w).saturating_sub(age_w);
             grid.put_clipped(age_start, y, &age, style::agent_step_detail(), age_w);
-            list.x.saturating_add(columns.x_title)
-        } else {
-            age_x
-        };
+        }
+        // 严格从右往左降级：标题先于时长消失，绝不回填到空出来的时长槽。
+        let title_x = list.x.saturating_add(columns.x_title);
         let title_w = right.saturating_sub(title_x);
         let title = run.display_title();
         if title_w > 0 && !title.is_empty() {
@@ -370,7 +375,9 @@ fn tree_prefix(run: &SubagentRun, runs: &[&SubagentRun], index: usize) -> Option
         rest.iter()
             .find(|other| other.depth() <= depth)
             .is_some_and(|other| {
-                other.depth() == depth && parent_path(&other.agent_path) == Some(parent)
+                other.depth() == depth
+                    && parent_path(&other.agent_path)
+                        .is_some_and(|other_parent| other_parent.eq_ignore_ascii_case(parent))
             })
     });
     let connector = if last {

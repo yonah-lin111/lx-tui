@@ -748,8 +748,12 @@ pub fn task_output_inner(area: Rect, lx: &Lx) -> Option<Rect> {
     task::task_output_rect(area, lx)
 }
 
-/// Agents 详情区的 `(可见行数, 总行数)`；不在 Agents 页或无高亮项返回 None。
-pub fn task_agents_rows(area: Rect, lx: &Lx, cache: &mut PaneCache) -> Option<(usize, usize)> {
+/// Agents 详情区的 `(可见行数, 总行数, 快照是否最新)`；不在 Agents 页或无高亮项返回 None。
+pub fn task_agents_rows(
+    area: Rect,
+    lx: &Lx,
+    cache: &mut PaneCache,
+) -> Option<(usize, usize, bool)> {
     task::agents_rows(area, lx, cache)
 }
 

@@ -122,11 +122,11 @@ pub fn on_subagent_delta(state: &mut AppState, child_session: &str, deltas: &[Ch
     let changed = apply_deltas(&mut run.chat, deltas);
     if changed {
         run.rows_dirty = true;
+        // 子 agent 的实时动作（在途工具 / 思考 / 正文）挂在父消息的 spawn 卡片上：
+        // 只置调度位，事件循环每帧对账一次，避免每条 delta 都全量扫描。
+        request_subagent_cards_refresh(state, pane);
     }
-    // 子 agent 的实时动作（在途工具 / 思考 / 正文）挂在父消息的 spawn 卡片上：
-    // 先置位，事件循环每批对账一次，避免每条 delta 都全量扫描。
-    let marked = request_subagent_cards_refresh(state, pane);
-    changed | marked
+    changed
 }
 
 /// 把一批增量应用到子 agent 的消息模型（与主聊天同一套方法）。
@@ -177,8 +177,10 @@ pub fn on_subagent_tool_pending(state: &mut AppState, child_session: &str, call_
         return false;
     };
     let changed = run.chat.mark_tool_pending(call_id);
-    let marked = request_subagent_cards_refresh(state, pane);
-    changed | marked
+    if changed {
+        request_subagent_cards_refresh(state, pane);
+    }
+    changed
 }
 
 /// 工具 running（子会话）。
@@ -193,8 +195,10 @@ pub fn on_subagent_tool_running(state: &mut AppState, child_session: &str, call_
         return false;
     };
     let changed = run.chat.mark_tool_running(call_id);
-    let marked = request_subagent_cards_refresh(state, pane);
-    changed | marked
+    if changed {
+        request_subagent_cards_refresh(state, pane);
+    }
+    changed
 }
 
 /// 工具结算（子会话）：写终态、摘要、结果体与类型化详情。
@@ -248,8 +252,10 @@ pub fn on_subagent_tool_settled(
         }
         changed = true;
     }
-    let marked = request_subagent_cards_refresh(state, pane);
-    changed | marked
+    if changed {
+        request_subagent_cards_refresh(state, pane);
+    }
+    changed
 }
 
 /// 列表元数据回投（幂等：内容相同返回 false）。
@@ -310,11 +316,12 @@ pub fn set_subagent_list(
         restore_selected_task_agent(&mut target.lx, selected.as_deref());
     }
     let focused = consume_agent_focus(&mut target.lx);
-    let changed = changed || focused;
-    // 历史主消息里的 spawn 卡片也要拿 run 状态；置位后由事件循环每批对账一次。
-    let cards = request_subagent_cards_refresh(state, pane);
-    refresh_status(state, pane);
-    changed || cards
+    // 历史主消息里的 spawn 卡片也要拿 run 状态；仅在列表元数据真的变化时置调度位。
+    if changed {
+        request_subagent_cards_refresh(state, pane);
+    }
+    let status_changed = refresh_status(state, pane);
+    changed || focused || status_changed
 }
 
 /// 打开 Agents 面板并定位到指定 agent；列表尚未回投时留下一次性定位请求。
@@ -327,9 +334,14 @@ pub fn open_agent_page(state: &mut AppState, pane: PaneId, agent_id: &str) -> bo
             return false;
         };
         let lx = &mut target.lx;
+        let freshly_opened = lx.task.is_none();
         let page = lx
             .task
             .get_or_insert_with(crate::app::state::TaskPage::default);
+        if freshly_opened {
+            lx.chat.viewport_top = None;
+            lx.chat.suppressed_prompt_header = None;
+        }
         page.select_tab(crate::app::state::TaskTab::Agents);
         page.agents_focus = Some(agent_id.to_string());
         let focused = consume_agent_focus(lx);
