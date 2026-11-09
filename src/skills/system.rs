@@ -2,7 +2,8 @@
 //!
 //! `lx-guide` 的 `SKILL.md` 与 references 通过 `include_str!` 编译进二进制，
 //! 每次扫描前镜像到 `<user_root>/.system/`。marker 文件保存全部内嵌内容的
-//! FNV-1a 指纹，指纹一致且文件齐全时不产生任何写盘。
+//! FNV-1a 指纹，指纹一致且文件齐全时不产生任何写盘。内容变化时只原子替换
+//! `lx-guide` 内的目标文件，不删除 `.system` 里的其它条目。
 
 use std::path::{Path, PathBuf};
 
@@ -10,6 +11,9 @@ use std::path::{Path, PathBuf};
 const SYSTEM_SKILLS_DIR_NAME: &str = ".system";
 /// 内容指纹文件名。
 const SYSTEM_SKILLS_MARKER_FILENAME: &str = ".lx-system-skills.marker";
+
+/// 进程内安装互斥：并发调用串行化，避免同名临时文件互相覆盖。
+static INSTALL_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
 
 /// 内嵌 `lx-guide` 文件：相对 `.system` 的路径与正文。
 const LX_GUIDE_FILES: &[(&str, &str)] = &[
@@ -38,9 +42,16 @@ pub fn system_skills_root(user_root: &Path) -> PathBuf {
 
 /// 把内嵌系统 skill 同步到 `<user_root>/.system/`。
 ///
-/// 指纹一致且所有内嵌文件都存在时直接返回（零写盘）；否则重建整个目录。
+/// 指纹一致且所有内嵌文件都存在时直接返回（零写盘）；否则就地创建目录并
+/// 逐个原子替换文件，保留 `.system` 下的其它内容。
 pub fn install_system_skills(user_root: &Path) -> std::io::Result<()> {
+    let _guard = INSTALL_LOCK
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
     let dest_system = system_skills_root(user_root);
+    if dest_system.is_file() || dest_system.is_symlink() {
+        std::fs::remove_file(&dest_system)?;
+    }
     let marker_path = dest_system.join(SYSTEM_SKILLS_MARKER_FILENAME);
     let fingerprint = fingerprint();
     if dest_system.is_dir()
@@ -51,19 +62,11 @@ pub fn install_system_skills(user_root: &Path) -> std::io::Result<()> {
     {
         return Ok(());
     }
-    match std::fs::remove_dir_all(&dest_system) {
-        Ok(()) => {}
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
-        Err(error) => return Err(error),
-    }
+    std::fs::create_dir_all(dest_system.join("lx-guide/references"))?;
     for (relative, content) in LX_GUIDE_FILES {
-        let path = dest_system.join(relative);
-        if let Some(parent) = path.parent() {
-            std::fs::create_dir_all(parent)?;
-        }
-        std::fs::write(&path, content)?;
+        crate::platform::write_file_atomic(&dest_system.join(relative), content.as_bytes())?;
     }
-    std::fs::write(&marker_path, format!("{fingerprint}\n"))
+    crate::platform::write_file_atomic(&marker_path, format!("{fingerprint}\n").as_bytes())
 }
 
 /// 全部内嵌文件的确定性 FNV-1a 64 位指纹（十六进制）。

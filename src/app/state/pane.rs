@@ -85,17 +85,12 @@ impl Tab {
         self.layout.pane_ids().into_iter().next()
     }
 
-    /// 在指定窗格处按方向分割：新窗格继承源窗格视图并获得焦点；源窗格不存在返回 None。
+    /// 在指定窗格处按方向分割：新窗格继承源窗格视图与 `@` 候选快照并获得焦点；
+    /// 源窗格不存在返回 None。
     pub fn split_pane(&mut self, source: PaneId, direction: Direction) -> Option<PaneId> {
-        let (view, startup, skills, mcp_servers, subagent_roles) = {
+        let (view, startup) = {
             let pane = self.pane(source)?;
-            (
-                pane.view,
-                pane.lx.startup,
-                pane.lx.mention_skills(),
-                pane.lx.mention_mcp_servers(),
-                pane.lx.mention_subagent_roles(),
-            )
+            (pane.view, pane.lx.startup)
         };
         if !self.layout.focus_pane(source) {
             return None;
@@ -104,9 +99,9 @@ impl Tab {
         let mut pane = Pane::new();
         pane.view = view;
         pane.lx.startup = startup;
-        pane.lx.set_mention_skills(skills);
-        pane.lx.set_mention_mcp_servers(mcp_servers);
-        pane.lx.set_mention_subagent_roles(subagent_roles);
+        if let Some(source_pane) = self.pane(source) {
+            pane.copy_mention_inventory_from(source_pane);
+        }
         self.panes.insert(id, pane);
         Some(id)
     }
@@ -143,5 +138,18 @@ impl Pane {
             cwd: None,
             agent: None,
         }
+    }
+
+    /// 复制源窗格已加载的 `@` 候选快照（引用文件夹 / skills / MCP server / subagent 角色），
+    /// 用于新窗格与新标签页免等待事件层回填即可展示完整候选。
+    pub fn copy_mention_inventory_from(&mut self, source: &Pane) {
+        self.lx
+            .set_referenced_folders(source.lx.referenced_folders().to_vec());
+        self.lx
+            .set_mention_skills(source.lx.mention_skills().to_vec());
+        self.lx
+            .set_mention_mcp_servers(source.lx.mention_mcp_servers().to_vec());
+        self.lx
+            .set_mention_subagent_roles(source.lx.mention_subagent_roles().to_vec());
     }
 }

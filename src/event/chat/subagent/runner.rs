@@ -944,6 +944,7 @@ pub(super) fn sync_agent_ui_queue(
     }
     target.lx.chat.status.blocked_subagents = target.lx.agents.blocked_count();
     crate::app::update::restore_selected_task_agent(&mut target.lx, selected_agent_id.as_deref());
+    target.lx.sync_mention_subagent_runs();
 }
 
 /// 解析父会话的最新模型快照：

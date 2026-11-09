@@ -120,12 +120,12 @@ pub fn mcp_row(name: &str, detail: &str, detail_width: usize) -> MentionRow {
     }
 }
 
-/// 构造 subagent 候选条目展示：首行 `◆ label`，次行类别与状态/描述明细。
+/// 构造 subagent 候选条目展示：首行 `● label`，次行类别与状态/描述明细。
 pub fn subagent_row(label: &str, detail: &str, detail_width: usize) -> MentionRow {
     MentionRow {
-        icon: text::MENTION_SKILL_ICON,
+        icon: text::MENTION_SUBAGENT_ICON,
         is_directory: false,
-        is_skill: true,
+        is_skill: false,
         label: label.to_string(),
         detail: text::truncate_to_width(detail, detail_width),
     }

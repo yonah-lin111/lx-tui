@@ -28,13 +28,13 @@ What each reference does when the message is sent:
 - File, folder, and image tokens become message attachments. Images are loaded and resized as image input.
 - `@[refer-skill](...)` injects the referenced `SKILL.md` body into the current turn (truncated to 8,000 bytes).
 - `@[refer-mcp](...)` marks an MCP server by name so the main agent knows which server the question targets. It does not enable a disabled server; MCP tools come from the pane's active MCP configuration, and the reference is carried as plain text.
-- `@[refer-subagent](...)` injects a `<subagent_reference>` block describing the role or live instance; see `references/subagents.md`.
+- `@[refer-subagent](...)` injects a `<subagent_reference>` block describing the role or instance; see `references/subagents.md`.
 
 The right-hand Prompt panel keeps the original four tabs (`Files`, `refDir`, `Skills`, `MCP`); it does not show `Subagents`. The `AiWeb` entry shows only the `Files` tab: sending a folder reference is rejected as folder-unsupported, and `refer-skill`, `refer-mcp`, or `refer-subagent` references are rejected as local-reference-unsupported.
 
 ## Slash commands (`/`)
 
-Type `/` at the start of a line in the composer to open the command panel. Built-in commands are matched by prefix or fuzzy subsequence, and `/` commands are only recognized as a single line without spaces; anything else is sent as ordinary text.
+Type `/` at the start of a line in the composer to open the command panel. Built-in commands are matched by prefix or fuzzy subsequence while the current line is a single command token (no spaces). Commands normally run from that single-token line; `/rename` and its alias `/title` are the exception and accept a space-separated title argument on the same line (`/rename New session title`). Any other line containing spaces is sent as ordinary text.
 
 | Command | Aliases | Description |
 | --- | --- | --- |
@@ -47,11 +47,12 @@ Type `/` at the start of a line in the composer to open the command panel. Built
 | `/connect` | — | Connect a preset provider with an API key or OAuth. |
 | `/subagents` | `/agents` | Open the background subagents panel. |
 | `/mcp` | `/mcps` | Enable, disable, or manage MCP servers for the current pane. |
-| `/rename` | `/title` | Rename the current session. |
+| `/rename` | `/title` | Rename the current session; `/rename <title>` (or `/title <title>`) takes the new title on the same line. |
 
 Notes:
 
-- There is no built-in `/skills` or `/settings` slash command in this build. Use `lx-tui skill` for skills and `lx-tui settings` (or `lx-tui settings open` for the browser UI) for settings. Those names can still exist as user-defined custom slash commands.
+- There is no built-in `/skills` or `/settings` slash command in this build. Use `lx-tui skill list` (see `lx-tui skill --help` for the full command set) and `lx-tui settings show` (or `lx-tui settings open` for the browser UI) for settings. Those names can still exist as user-defined custom slash commands.
+- In `lx-tui exec`, point at a skill in the prompt with `$<skill-name>` (for example, `Use $shell-style and refactor ...`) to inject that skill's `SKILL.md` body into the run.
 - Custom slash commands (`agentMD` and `agentBlock`) are managed with `lx-tui command` or the browser settings page and appear in the same `/` panel with a `User` or `Project` source tag.
 - The Prompt editor uses the same `/` panel for template and supplemental block commands.
 
@@ -70,16 +71,32 @@ Common Prompt panel keys:
 
 ## Settings
 
-`lx-tui settings` manages layout settings and the browser settings UI:
+`lx-tui settings` requires a subcommand; it manages layout settings and the browser settings UI:
 
 - `lx-tui settings show` prints the current layout settings and config paths.
 - `lx-tui settings set ...` updates `settings.json` (sidebar width and minimum window/pane sizes).
 - `lx-tui settings reset` restores defaults.
 - `lx-tui settings open [--no-open]` starts the local browser settings server on `127.0.0.1` until `Ctrl+C`.
 
-The browser settings page covers providers and models, connect/OAuth, MCP servers, skills, custom slash commands, and subagent roles. In the TUI, the sidebar's `[SET]` button opens the same page. The `Subagents`, `Skills`, and `MCP` sections write user-scoped config under `<data_root>/` (`config/subagents.json`, `config/skills.json`, and the MCP config), while project-scoped roles and skills stay inside the workspace.
+The browser settings page covers providers and models, connect/OAuth, MCP servers, skills, custom slash commands, and subagent roles. In the TUI, the sidebar's `[SET]` button opens the same page. The `Subagents`, `Skills`, and `MCP` sections write user-scoped config under `<data_root>/` (`config/subagents.json`, `config/skills.json`, and the MCP config).
 
 Most settings changes are hot-reloaded: the settings service emits a change event and the TUI re-scans skills, MCP servers, commands, models, or subagent roles without a restart.
+
+## Skill and subagent storage
+
+Skills are discovered from five roots; earlier roots win when two skills share a name:
+
+| Priority | Source | Location |
+| --- | --- | --- |
+| 1 | Project lx skill | `<data_root>/skills/projects/<scope>/` |
+| 2 | Project `.agents` skill | `<workspace>/.agents/skills/` |
+| 3 | User lx skill | `<data_root>/skills/` |
+| 4 | User `.agents` skill | `~/.agents/skills/` |
+| 5 | Built-in system skill | `<data_root>/skills/.system/lx-guide/` |
+
+Only lx-owned skills are editable from the settings page and CLI. `.agents` skills are read-only and disabled by default; enable one explicitly from the Skills page or with `lx-tui skill enable <name>`. The built-in `lx-guide` system skill is installed automatically and is also read-only.
+
+Project subagent roles live in `<workspace>/.lx/agents/*.json` and `<workspace>/.agents/roles/*.json`. The browser `/settings` Subagents page edits the user-level `<data_root>/config/subagents.json` (`subagents.roles`).
 
 ## Keybindings
 

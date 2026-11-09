@@ -15,6 +15,7 @@
 | **T4** | TUI 渲染层接入 `Subagents` Tab 与 `subagent_row` 双行展示 | `src/ui/text/workspace.rs`<br>`src/ui/mention.rs`<br>`src/ui/main_content/lx/mention.rs` | `ui/mention.rs`: ~195 行<br>`lx/mention.rs`: ~335 行 | 已完成 |
 | **T5** | 单元测试覆盖与精准验证（`cargo fmt`、`clippy`、受影响模块测试） | `src/app/markdown/refer/tests.rs`<br>`src/app/state/lx/mention/tests.rs`<br>`src/chat/prepare/tests.rs`<br>`src/event/chat/tests/subagent_roles.rs` | `lx/mention/tests.rs`: ~650 行<br>`prepare/tests.rs`: ~310 行 | 已完成 |
 | **T6** | 对齐 Codex 内嵌 `lx-guide` 系统自省 Skill 并补全 `<subagent_reference>` 自身规格注入 | `src/skills/system.rs`<br>`src/skills/assets/lx-guide/*`<br>`src/skills/mod.rs`<br>`src/skills/discover.rs`<br>`src/event/chat/skills.rs`<br>`src/settings/service/skills.rs`<br>`assets/settings_skills.js`<br>`src/event/chat/subagent/snapshot.rs` | `skills/system.rs`: ~120 行<br>`skills/discover.rs`: ~325 行<br>`snapshot.rs`: ~410 行 | 已完成 |
+| **T7** | Review 问题修复（P0–P3 全量闭环，见 `review.md`） | `src/app/state/lx/*`、`src/app/state/pane.rs`、`src/app/update/{workspace,chat/subagent}.rs`、`src/event/chat/{mod,subagent/*}.rs`、`src/ui/widgets/command_panel.rs`、`src/skills/*`、`src/settings/service/skills.rs`、`assets/settings_skills.js` | `snapshot.rs`: ~620 行<br>`event/chat/mod.rs`: ~998 行<br>`runner.rs`: ~990 行 | 已完成 |
 
 ---
 
@@ -183,7 +184,7 @@
 - **新增测试用例清单**：
   1. `subagents_tab_lists_active_runs_then_builtin_then_custom_roles_and_inserts_references`（覆盖三类候选排序、模糊过滤、选中存活实例插入 `@[refer-subagent](Turing:explorer) `、选中角色插入 `@[refer-subagent](explorer) `、一次退格整块原子删除）；
   2. `ai_web_entry_blocks_subagents_tab_and_rejects_subagent_reference`（覆盖 `AiWeb` 入口 Tab 锁定与 `prepare_ai_web_message` 返回 `LocalReferenceUnsupported`）；
-  3. `subagent_reference_blocks_render_active_instance_and_role_guidance`（覆盖当轮 `<subagent_reference>` 英文引导块生成、去重与存活实例结束后的角色回退）。
+  3. `subagent_reference_blocks_render_active_instance_and_role_guidance`（覆盖当轮 `<subagent_reference>` 英文引导块生成、去重、已结束实例 `finished_instance` 保留与仅在无实例时回退角色）。
 - **最终校验命令**：
   - `rtk cargo fmt --check`
   - `rtk cargo clippy --all-targets -- -D warnings`
@@ -213,13 +214,35 @@
   - `src/event/chat/tests/subagent_roles.rs`
 - **关键要点**：
   1. **内嵌 `lx-guide` 系统自省 Skill（`src/skills/system.rs` + `src/skills/assets/lx-guide/`）**：
-     - 对齐 Codex `install_system_skills`：使用 `include_str!` 内嵌 `SKILL.md`、`references/subagents.md`、`references/commands-and-mentions.md`；
+     - 对齐 Codex `install_system_skills`：使用 `include_str!` 内嵌 `SKILL.md`、`references/tools.md`、`references/subagents.md`、`references/commands-and-mentions.md`；
      - `system_skills_root(user_root: &Path) -> PathBuf` 返回 `user_root.join(".system")`；
-     - `install_system_skills(user_root: &Path) -> std::io::Result<()>` 计算内嵌文件列表的确定性 FNV-1a 哈希指纹并与 `<user_root>/.system/.lx-system-skills.marker` 比对，一致则跳过，不一致则重建 `<user_root>/.system/lx-guide/` 并写回 marker；
+     - `install_system_skills(user_root: &Path) -> std::io::Result<()>` 计算内嵌文件列表的确定性 FNV-1a 哈希指纹并与 `<user_root>/.system/.lx-system-skills.marker` 比对，一致且文件齐全则跳过；不一致时通过 `INSTALL_LOCK` 串行、逐文件 `platform::write_file_atomic` 原子替换 `.system/lx-guide/` 内容并写回 marker（不删除 `.system` 整目录）；
      - `SkillSource` 新增 `System`（`as_str() => "system"`，`editable() => false`，默认启用 `!disabled.contains(&canonical)`）；
      - `skills::discover` 在 `user_agents_root` 之后扫描 `system_skills_root(user_root)`（若存在），优先级最低，允许被用户或项目同名 skill 覆盖；
-     - 在 `event::chat::skills::build_job`、`settings::service::skills::list_skills`、`cli::skill::exec::catalog`、`chat::agent::exec::discover_workspace_skills` 中调用 `let _ = crate::skills::install_system_skills(&user_root);`；
-     - 在 `assets/settings_skills.js` 中将 `entry.source === 'system'` 显示为 `'system (built-in)'`。
+     - 在 `event::chat::skills::build_job`、`settings::service::skills::list_skills`、`cli::skill::exec::catalog`、`chat::agent::exec::discover_workspace_skills` 中调用 `install_system_skills`，失败时 `tracing::warn!`；
+     - 在 `assets/settings_skills.js` 中将 `entry.source === 'system'` 显示为 `'system (built-in)'`，且新建技能重名检查只针对同作用域可编辑条目，允许用户覆盖内置 skill。
   2. **补全 `<subagent_reference>` 当轮自身规格注入（`src/event/chat/subagent/snapshot.rs`）**：
-     - 角色块（`kind: role`）新增 `tools`（按 `ToolSurface::from_role` + `spec.capabilities` 计算生效工具名）、`capabilities`（`allow_web_search`、`allow_mcp`、`allow_skills`）、`model`（`inherits parent model` 或显式模型及是否锁定）、`system_prompt`（`spec.system_prompt_override` 或内置 `AgentRole::from(spec.base_role).system_prompt()`），以及区分“解释询问”与“任务委派”的双意图英文 `guidance`；
-     - 存活实例块（`kind: active_instance`）新增 `title`、`task`（非空时）与 `latest_report`（若有），以及区分“询问状态/任务”与“追加指令/等待”的双意图英文 `guidance`。
+     - 角色块（`kind: role`）新增 `tools`（按 `ToolSurface::from_role` + `spec.capabilities` 计算生效工具名；`executor` 在 `max_depth > 1` 时追加 8 个控制工具说明）、`capabilities`（`allow_web_search`、`allow_mcp`、`allow_skills`）、`model`（`inherits parent model` 或显式模型及是否锁定）、`system_prompt`（`spec.system_prompt_override` 或内置 `AgentRole::from(spec.base_role).system_prompt()`），以及区分“解释询问”与“任务委派”的双意图英文 `guidance`；
+     - 活动实例块（`kind: active_instance`）新增 `title`、`task`（非空时）与 `latest_report`（若有），以及区分“询问状态/任务”与“追加指令/等待”的双意图英文 `guidance`；
+     - 已结束实例块（`kind: finished_instance`）保留 `agent_id` / `status` / `latest_report`，引导 `resume_agent` / `send_input`，仅在 `runs` 完全无匹配时回退 `kind: role`。
+
+---
+
+## Task 7 (T7)：Review 问题修复（P0–P3 全量闭环）
+
+- **涉及文件**：
+  - `src/app/state/lx/mention.rs`、`src/app/state/lx/mention/tests.rs`、`src/app/state/lx/panels.rs`
+  - `src/app/state/pane.rs`、`src/app/update/workspace.rs`、`src/app/update/chat/subagent.rs`
+  - `src/event/chat/subagent/{settle,runner,launch,mod,snapshot}.rs`
+  - `src/event/chat/mod.rs`、`src/chat/agent/exec/mod.rs`、`src/config/subagents.rs`
+  - `src/ui/widgets/command_panel.rs`、`src/ui/main_content/lx/mention.rs`、`src/ui/main_content/lx/tests/slash_panels.rs`
+  - `src/app/prompt/mention.rs`
+  - `src/skills/system.rs`、`src/skills/assets/lx-guide/*`、`src/skills/discover/tests.rs`
+  - `src/event/chat/skills.rs`、`src/cli/skill/exec.rs`、`src/settings/service/skills.rs`、`assets/settings_skills.js`
+  - `src/event/chat/tests/subagent_roles.rs`
+- **关键要点**：
+  1. **P0**：`<subagent_reference>` 对已结束实例输出 `kind: finished_instance`，不再静默退化为角色规格并丢失 `agent_id`/`latest_report`。
+  2. **P1**：`sync_mention_subagent_runs` 覆盖 settle/队列/恢复/关闭/切换 Tab 全部状态变更；新标签页/同路径工作区继承源窗格 `@` 快照；`lx-guide` description ≤200 字符；`install_system_skills` 原子安装、进程内串行、不删除 `.system`；自定义昵称拒绝 `:`/`(`/`)`。
+  3. **P2**：`<subagent_reference>` 字段单行化 + 闭合标签转义 + 分字段截断 + 单轮 8 块上限；`executor` 工具面补齐控制工具说明；合成报告轮跳过引用块；`lx-tui exec` 接入 `subagent_reference_blocks`；窄窗格 Tab 滑动窗口保证第 5 个 Tab 可达；`SubagentMentionItem<'a>` 改为借用避免每帧深拷贝；`take_scan_request` 仅 `Files` Tab 触发；`view()` 全空判定纳入 subagents。
+  4. **P3**：移除 `MentionState::confirm` 的 `unreachable!()`；状态字符串归一化；`lx-guide` 文档修正 `/rename`、存储路径、CLI 示例与 `spawn_agent`/`send_input` 参数表。
+- **验证**：见 `review.md` 复审验证章节。

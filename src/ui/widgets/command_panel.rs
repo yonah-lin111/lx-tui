@@ -117,6 +117,21 @@ pub struct CommandPanelView<'a> {
     pub disabled: Option<&'a [bool]>,
 }
 
+/// 顶边栏 Tab 布局槽位：`rect` 为绘制/命中矩形，`index` 为在 `tabs` 中的原始下标。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct TabSlot {
+    pub rect: Rect,
+    pub index: usize,
+}
+
+impl std::ops::Deref for TabSlot {
+    type Target = Rect;
+
+    fn deref(&self) -> &Rect {
+        &self.rect
+    }
+}
+
 /// 面板布局：面板矩形、条目内容区、滚动条、首个可见条目与可见条目数。
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PanelLayout {
@@ -127,7 +142,7 @@ pub struct PanelLayout {
     pub scrollbar: Option<ScrollbarLayout>,
     pub start: usize,
     pub visible: usize,
-    pub tabs: Vec<Rect>,
+    pub tabs: Vec<TabSlot>,
 }
 
 /// 计算面板布局；空间不足或没有可见条目时返回 None。
@@ -249,8 +264,7 @@ pub fn layout(area: Rect, view: &CommandPanelView<'_>) -> Option<PanelLayout> {
     let show_header = view.borderless || top_rows > 1;
     let tabs = match view.tabs {
         Some(tabs) if !tabs.is_empty() && show_header => {
-            let mut out = Vec::with_capacity(tabs.len());
-            let mut x = if view.borderless {
+            let start_x = if view.borderless {
                 if let Some(title) = view.title {
                     let text_w = u16::try_from(UnicodeWidthStr::width(title)).unwrap_or(0);
                     rect.x
@@ -270,15 +284,28 @@ pub fn layout(area: Rect, view: &CommandPanelView<'_>) -> Option<PanelLayout> {
                 rect.x.saturating_add(2)
             };
             let right_limit = rect.right().saturating_sub(1);
-            for tab in tabs {
-                let width = u16::try_from(UnicodeWidthStr::width(tab.label))
-                    .unwrap_or(u16::MAX)
-                    .saturating_add(2);
-                if x.saturating_add(width) > right_limit {
+            let widths: Vec<u16> = tabs
+                .iter()
+                .map(|tab| {
+                    u16::try_from(UnicodeWidthStr::width(tab.label))
+                        .unwrap_or(u16::MAX)
+                        .saturating_add(2)
+                })
+                .collect();
+            let active_idx = tabs.iter().position(|tab| tab.active).unwrap_or(0);
+            // 窄面板右移窗口起点，保证当前 Tab 可见；命中仍映射回原始下标。
+            let start_idx = tab_window_start(&widths, active_idx, start_x, right_limit);
+            let mut out = Vec::with_capacity(widths.len().saturating_sub(start_idx));
+            let mut x = start_x;
+            for (index, width) in widths.iter().enumerate().skip(start_idx) {
+                if x.saturating_add(*width) > right_limit {
                     break;
                 }
-                out.push(Rect::new(x, tab_y, width, 1));
-                x = x.saturating_add(width).saturating_add(1);
+                out.push(TabSlot {
+                    rect: Rect::new(x, tab_y, *width, 1),
+                    index,
+                });
+                x = x.saturating_add(*width).saturating_add(1);
             }
             out
         }
@@ -293,6 +320,27 @@ pub fn layout(area: Rect, view: &CommandPanelView<'_>) -> Option<PanelLayout> {
         visible,
         tabs,
     })
+}
+
+/// 选择能让当前活跃 Tab 落入可用宽度的窗口起点；不必要时保持 0。
+fn tab_window_start(widths: &[u16], active_idx: usize, start_x: u16, right_limit: u16) -> usize {
+    let mut start = 0;
+    while start < active_idx {
+        let mut x = start_x;
+        let mut fits = true;
+        for width in &widths[start..=active_idx] {
+            if x.saturating_add(*width) > right_limit {
+                fits = false;
+                break;
+            }
+            x = x.saturating_add(*width).saturating_add(1);
+        }
+        if fits {
+            break;
+        }
+        start += 1;
+    }
+    start
 }
 
 /// 在内容区内绘制命令面板；返回实际绘制矩形，空间不足时返回 None。
@@ -316,23 +364,24 @@ pub fn render(area: Rect, buf: &mut Buffer, view: &CommandPanelView<'_>) -> Opti
         }
     }
     if let Some(tabs) = view.tabs {
-        for (i, tab_rect) in layout.tabs.iter().enumerate() {
-            if let Some(tab) = tabs.get(i) {
-                let tab_style = if tab.active {
-                    style::right_tab_active()
-                } else {
-                    style::muted()
-                };
-                let text = format!(" {} ", tab.label);
-                buf.set_style(*tab_rect, Style::reset());
-                buf.set_stringn(
-                    tab_rect.x,
-                    tab_rect.y,
-                    &text,
-                    usize::from(tab_rect.width),
-                    tab_style,
-                );
-            }
+        for tab_rect in &layout.tabs {
+            let Some(tab) = tabs.get(tab_rect.index) else {
+                continue;
+            };
+            let tab_style = if tab.active {
+                style::right_tab_active()
+            } else {
+                style::muted()
+            };
+            let text = format!(" {} ", tab.label);
+            buf.set_style(tab_rect.rect, Style::reset());
+            buf.set_stringn(
+                tab_rect.rect.x,
+                tab_rect.rect.y,
+                &text,
+                usize::from(tab_rect.rect.width),
+                tab_style,
+            );
         }
     }
     render_items(buf, &layout, view);
@@ -369,7 +418,7 @@ fn render_bordered_header(
     if has_tabs {
         for (i, tab_rect) in layout.tabs.iter().enumerate() {
             if i + 1 < layout.tabs.len() {
-                let sep_x = tab_rect.right();
+                let sep_x = tab_rect.rect.right();
                 if sep_x < rect.right().saturating_sub(1)
                     && let Some(cell) = buf.cell_mut((sep_x, header_y))
                 {
@@ -379,7 +428,7 @@ fn render_bordered_header(
             }
         }
         if let Some(last_tab) = layout.tabs.last() {
-            left_end = last_tab.right();
+            left_end = last_tab.rect.right();
         }
     }
     if let Some(right_title) = view.right_title {
@@ -443,7 +492,7 @@ fn render_top_rule(
     if has_tabs {
         for (i, tab_rect) in layout.tabs.iter().enumerate() {
             if i + 1 < layout.tabs.len() {
-                let sep_x = tab_rect.right();
+                let sep_x = tab_rect.rect.right();
                 if sep_x < rect.right().saturating_sub(1)
                     && let Some(cell) = buf.cell_mut((sep_x, header_y))
                 {
@@ -453,7 +502,7 @@ fn render_top_rule(
             }
         }
         if let Some(last_tab) = layout.tabs.last() {
-            left_end = last_tab.right();
+            left_end = last_tab.rect.right();
         }
     }
     if let Some(right_title) = view.right_title {
@@ -471,12 +520,13 @@ fn render_top_rule(
     }
 }
 
-/// 命中面板顶边框 Tab：返回 Tab 索引；未命中返回 None。
+/// 命中面板顶边框 Tab：返回该 Tab 在原始列表中的下标；未命中返回 None。
 pub fn tab_at(layout: &PanelLayout, column: u16, row: u16) -> Option<usize> {
     layout
         .tabs
         .iter()
-        .position(|rect| rect.contains(Position::new(column, row)))
+        .find(|slot| slot.rect.contains(Position::new(column, row)))
+        .map(|slot| slot.index)
 }
 
 /// 命中面板内某条目：返回条目索引；未命中返回 None。

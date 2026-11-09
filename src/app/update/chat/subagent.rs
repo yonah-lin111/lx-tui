@@ -51,8 +51,8 @@ pub fn on_subagent_started(state: &mut AppState, pane: PaneId, mut run: Subagent
     let selected = current_selected_agent_id(&target.lx);
     run.chat.set_project_root(project_root);
     target.lx.agents.runs.push(run);
-    target.lx.sync_mention_subagent_runs();
     restore_selected_task_agent(&mut target.lx, selected.as_deref());
+    target.lx.sync_mention_subagent_runs();
     refresh_status(state, pane);
     true
 }

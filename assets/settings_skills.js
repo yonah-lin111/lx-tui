@@ -19,6 +19,7 @@ let skillNewDraft = null;
 function entryToSkillRecord(entry, prevBase) {
   return {
     path: entry.path,
+    dir: entry.dir || entry.name,
     name: entry.name,
     scope: entry.scope,
     editable: !!entry.editable,
@@ -373,7 +374,7 @@ async function saveSkill() {
       const base = skillBaselines.get(path);
       try {
         if (base.editable && draft.bodyLoaded && (draft.description !== base.description || draft.body !== base.body)) {
-          await api(skillPath(draft.name, draft.scope), {
+          await api(skillPath(draft.dir || draft.name, draft.scope), {
             method: 'PUT',
             body: JSON.stringify({description: draft.description, body: draft.body})
           });
@@ -401,7 +402,7 @@ async function saveSkill() {
         newSkill();
         throw new Error('skill name is required');
       }
-      const duplicate = Array.from(skillBaselines.values()).some((item) => item.scope === scope && item.name === name);
+      const duplicate = Array.from(skillBaselines.values()).some((item) => item.editable && item.scope === scope && item.name === name);
       if (duplicate) {
         newSkill();
         throw new Error('Skill "' + name + '" already exists');
@@ -451,7 +452,7 @@ function deleteSkill() {
   if (!skillsSelected) { return; }
   if (!window.confirm('Delete skill "' + skillsSelected.name + '"?')) { return; }
   const deletingPath = selectedSkillPath;
-  api(skillPath(skillsSelected.name, skillsSelected.scope), {method: 'DELETE'}).then(() => {
+  api(skillPath(skillsSelected.dir || skillsSelected.name, skillsSelected.scope), {method: 'DELETE'}).then(() => {
     if (deletingPath) {
       skillDrafts.delete(deletingPath);
       skillBaselines.delete(deletingPath);

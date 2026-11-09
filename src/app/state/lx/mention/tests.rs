@@ -72,13 +72,27 @@ fn root_change_invalidates_cache_and_generation() {
 #[test]
 fn no_root_yields_no_scan_request() {
     let mut lx = Lx::new();
+    // 清空 subagent 角色，模拟全部候选来源都为空：无根时不显示面板。
+    lx.set_mention_subagent_roles(Vec::new());
     lx.insert_char('@');
     assert!(lx.take_mention_scan_request().is_none(), "无根不发起扫描");
     assert_eq!(
         lx.mention().view(&lx.input, lx.cursor),
         LxMentionView::Hidden,
-        "无根不显示面板"
+        "无根且无任何候选来源时不显示面板"
     );
+}
+
+#[test]
+fn subagents_tab_stays_reachable_without_filesystem_root() {
+    let mut lx = Lx::new();
+    lx.insert_char('@');
+    assert!(
+        lx.mention_set_tab(MentionTab::Subagents),
+        "内置角色存在时，无文件扫描根也可切到 Subagents"
+    );
+    assert_eq!(lx.mention_tab(), MentionTab::Subagents);
+    assert!(lx.mention_open(), "默认内置角色使 Subagents 可交互");
 }
 
 #[test]
@@ -716,6 +730,27 @@ fn subagents_tab_orders_active_runs_then_builtin_then_custom_roles() {
     let filtered = lx.mention().filtered_subagents();
     assert_eq!(filtered.len(), 1, "仅昵称命中: {filtered:?}");
     assert_eq!(filtered[0].reference_target(), "Turing:explorer");
+}
+
+#[test]
+fn switching_to_subagents_tab_refreshes_runs_without_typing() {
+    let mut lx = ready("@", entries());
+    lx.agents.runs.push(subagent_run(
+        "running-agent",
+        Some("Turing"),
+        crate::chat::agent::AgentRole::Explorer,
+        "running",
+        "map the repository",
+    ));
+    // 不显式同步：切换 Tab 时由面板自行拉取最新存活实例。
+    assert!(lx.mention_set_tab(MentionTab::Subagents));
+    let runs = lx.mention().subagent_runs();
+    assert_eq!(runs.len(), 1, "切到 Subagents 即刷新存活实例");
+    assert_eq!(runs[0].status, "running");
+    assert_eq!(
+        lx.mention().filtered_subagents()[0].reference_target(),
+        "Turing:explorer"
+    );
 }
 
 #[test]

@@ -149,6 +149,8 @@ pub fn ai_web_model_label(site: AiWebSite, model: &str) -> String {
 pub const MENTION_DIR_ICON: &str = "▸";
 pub const MENTION_FILE_ICON: &str = "•";
 pub const MENTION_SKILL_ICON: &str = "◆";
+/// `@` 面板 subagent 条目使用代理身份圆点，与 skill/MCP 的菱形区分。
+pub const MENTION_SUBAGENT_ICON: &str = "●";
 /// `@` 面板 skill 条目的详情前缀。
 pub const MENTION_SKILL_LABEL: &str = "Skill";
 

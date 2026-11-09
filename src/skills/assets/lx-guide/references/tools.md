@@ -81,7 +81,7 @@ The patch envelope is deliberately restricted to this grammar:
 
 Rules:
 
-- The text must start with `*** Begin Patch` and end with `*** End Patch`. Unknown markers, unified-diff headers (`---`, `+++`, `@@ -1,2 +1,3 @@`), heredoc wrapping, binary patches, and Git metadata are rejected with `patch_invalid`; the parser never guesses.
+- The text must start with `*** Begin Patch` and end with `*** End Patch`. Content after the closing `*** End Patch` is ignored. Unknown markers, unified-diff headers (`---`, `+++`, `@@ -1,2 +1,3 @@`), heredoc wrapping, binary patches, and Git metadata are rejected with `patch_invalid`; the parser never guesses. A blank line inside a hunk is treated as an empty context line, so include the leading space explicitly for context lines that are blank.
 - `*** Add File:` body lines must all start with `+`. The target must not already exist.
 - `*** Update File:` may be followed by one `*** Move to:` before the first `@@` block. The move destination must not exist; an existing destination is refused.
 - Context lines start with a space, removed lines with `-`, and added lines with `+`. Each hunk must match the current file exactly once. Exact text is tried first, then a line-end-trimmed fallback; a missing or non-unique match fails the whole call with `patch_context_mismatch`.
@@ -185,7 +185,7 @@ A user can run a local shell command by typing `!` as the first non-whitespace c
 
 - `!<cmd>` runs immediately in the active pane's working directory with a login shell. It does not create a model turn, does not ask for approval, and is not a tool call. The model cannot invoke it.
 - The command is persisted as a `user_shell` message. While it runs, the pane shows a shell card; once it reaches a terminal state, the command and output are replayed to the model as a `<user_shell_command>` context block containing `State`, `Exit code`, `Duration`, and `Output`.
-- Replay output is truncated at 64 KiB with an explicit dropped-byte count. A user shell command has a one-hour lifetime limit.
+- Replay output is truncated at 64 KiB with a trailing `…[truncated]` marker (no byte count); process-output truncation in `exec_command` results, in contrast, does report the dropped byte count. A user shell command has a one-hour lifetime limit.
 - For model-initiated commands, use `exec_command`; `!<cmd>` belongs to the user.
 
 ## Web, Interaction, Planning, and Utility Tools

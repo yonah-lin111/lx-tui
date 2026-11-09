@@ -69,7 +69,10 @@ pub(crate) fn layout(area: Rect, lx: &Lx) -> Option<PanelLayout> {
     let input = super::input_rect(area, lx)?;
     let data = panel_data(lx, input.width)?;
     let items = data.items();
-    command_panel::layout(panel_area(area, input), &view(&items, &data, input, area))
+    command_panel::layout(
+        panel_area(area, input),
+        &view(&items, &data, input, area, lx),
+    )
 }
 
 /// 提及面板顶部 Tab 命中：返回被点中的 Tab 索引；面板未打开或未命中返回 None。
@@ -86,7 +89,10 @@ pub(crate) fn item_at(area: Rect, lx: &Lx, column: u16, row: u16) -> Option<usiz
         return None;
     }
     let items = data.items();
-    let layout = command_panel::layout(panel_area(area, input), &view(&items, &data, input, area))?;
+    let layout = command_panel::layout(
+        panel_area(area, input),
+        &view(&items, &data, input, area, lx),
+    )?;
     command_panel::item_at(&layout, &items, column, row)
 }
 
@@ -102,7 +108,7 @@ pub(crate) fn render(area: Rect, buf: &mut Buffer, lx: &Lx) {
     command_panel::render(
         panel_area(area, input),
         buf,
-        &view(&items, &data, input, area),
+        &view(&items, &data, input, area, lx),
     );
 }
 
@@ -287,6 +293,7 @@ fn view<'a>(
     data: &'a PanelData,
     input: Rect,
     area: Rect,
+    lx: &Lx,
 ) -> CommandPanelView<'a> {
     let above = input.y.saturating_sub(area.y);
     let cap = above.min(
@@ -294,6 +301,7 @@ fn view<'a>(
             .saturating_add(PANEL_BORDER_ROWS)
             .saturating_add(PANEL_FOOTER_ROWS),
     );
+    let is_files = lx.mention_tab() == MentionTab::Files;
     CommandPanelView {
         items,
         active: data.active,
@@ -306,7 +314,7 @@ fn view<'a>(
         title: Some(text::MENTION_PANEL_TITLE),
         tabs: Some(&data.tabs),
         right_title: data.scope.as_deref(),
-        footer: Some(if data.tabs[0].active {
+        footer: Some(if is_files {
             text::LX_MENTION_FOOTER_FILES
         } else {
             text::LX_MENTION_FOOTER_REF_DIR

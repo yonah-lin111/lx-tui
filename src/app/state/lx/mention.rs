@@ -62,15 +62,15 @@ impl SubagentRunMentionEntry {
 }
 
 /// `@` 面板 `Subagents` Tab 归一化后的可展示候选（存活实例 / 内置角色 / 自定义角色）。
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub enum SubagentMentionItem {
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SubagentMentionItem<'a> {
     /// 当前会话存活的 subagent 实例（`running` / `idle` / `blocked`）。
-    Active(SubagentRunMentionEntry),
+    Active(&'a SubagentRunMentionEntry),
     /// 内置或自定义角色规格。
-    Role(crate::config::subagents::ResolvedRoleSpec),
+    Role(&'a crate::config::subagents::ResolvedRoleSpec),
 }
 
-impl SubagentMentionItem {
+impl SubagentMentionItem<'_> {
     /// 确认选择时写入 `@[refer-subagent](<target>)` 的 `<target>`。
     pub fn reference_target(&self) -> String {
         match self {
@@ -278,34 +278,27 @@ impl LxMention {
 
     /// 获取基于当前触发词过滤后的 subagent 候选：存活实例 → 内置角色 →
     /// 项目级自定义角色 → 用户级自定义角色。
-    pub fn filtered_subagents(&self) -> Vec<SubagentMentionItem> {
+    pub fn filtered_subagents(&self) -> Vec<SubagentMentionItem<'_>> {
         let query_lower = self
             .trigger
             .as_ref()
             .map(|t| t.query.to_lowercase())
             .unwrap_or_default();
-        let active_iter = self
-            .subagent_runs
-            .iter()
-            .cloned()
-            .map(SubagentMentionItem::Active);
+        let active_iter = self.subagent_runs.iter().map(SubagentMentionItem::Active);
         let builtin_iter = self
             .subagent_roles
             .iter()
             .filter(|role| role.is_builtin)
-            .cloned()
             .map(SubagentMentionItem::Role);
         let project_custom_iter = self
             .subagent_roles
             .iter()
             .filter(|role| !role.is_builtin && role.is_project_scoped)
-            .cloned()
             .map(SubagentMentionItem::Role);
         let user_custom_iter = self
             .subagent_roles
             .iter()
             .filter(|role| !role.is_builtin && !role.is_project_scoped)
-            .cloned()
             .map(SubagentMentionItem::Role);
         active_iter
             .chain(builtin_iter)
@@ -439,6 +432,8 @@ impl LxMention {
             && self.referenced_folders.is_empty()
             && self.skills.is_empty()
             && self.mcp_servers.is_empty()
+            && self.subagent_roles.is_empty()
+            && self.subagent_runs.is_empty()
             && self.tab == MentionTab::Files
         {
             return LxMentionView::Hidden;
@@ -479,9 +474,10 @@ impl LxMention {
         true
     }
 
-    /// 需要新扫描时返回（代号，扫描根）并标记在途；已有缓存或在途时返回 None。
+    /// 需要新扫描时返回（代号，扫描根）并标记在途；仅 `Files` Tab 生效，
+    /// 已有缓存或在途时返回 None。
     pub fn take_scan_request(&mut self, text: &str, cursor: usize) -> Option<(u64, PathBuf)> {
-        if self.pending || self.cache.is_some() {
+        if self.tab != MentionTab::Files || self.pending || self.cache.is_some() {
             return None;
         }
         let root = self.root.clone()?;
@@ -664,7 +660,7 @@ impl LxMention {
                     .unwrap_or_else(|| format!("@[refer-mcp]({})", server.name))
                 }
                 MentionTab::Subagents => {
-                    let item = self.filtered_subagents().get(self.ref_active)?.clone();
+                    let item = *self.filtered_subagents().get(self.ref_active)?;
                     let target = item.reference_target();
                     crate::app::markdown::format_reference(
                         crate::app::markdown::ReferKind::Subagent,
@@ -782,6 +778,11 @@ impl LxMention {
     ) {
         self.disabled_mcp_servers = disabled;
         self.refresh(text, cursor);
+    }
+
+    /// 当前引用文件夹快照；新建窗格/标签时复制给新窗格。
+    pub fn referenced_folders(&self) -> &[crate::app::referenced::ReferencedFolder] {
+        &self.referenced_folders
     }
 
     /// 当前可用 subagent 角色快照；分割窗格时复制给新窗格。

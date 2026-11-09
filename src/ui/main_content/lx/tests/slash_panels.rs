@@ -421,6 +421,36 @@ fn mention_panel_tabs_render_and_hit_test_in_lx() {
 }
 
 #[test]
+fn mention_subagents_tab_stays_visible_in_narrow_pane() {
+    // 42 列下五个 Tab 放不下：窗口右移保证当前 Subagents 可见，命中仍返回原始下标 4。
+    let area = Rect::new(0, 0, 42, 24);
+    let mut lx = mention_lx(vec![MentionEntry {
+        path: "src/main.rs".into(),
+        is_directory: false,
+    }]);
+    assert!(lx.mention_set_tab(crate::app::prompt::MentionTab::Subagents));
+    let panel = mention::layout(area, &lx).expect("mention layout");
+    let slot = panel
+        .tabs
+        .iter()
+        .find(|slot| slot.index == 4)
+        .expect("Subagents Tab 必须可见");
+    assert_eq!(
+        mention_tab_at(area, &lx, slot.rect.x, slot.rect.y),
+        Some(4),
+        "命中映射回原始 Tab 下标"
+    );
+    assert_eq!(
+        crate::app::prompt::MentionTab::from_index(4),
+        Some(crate::app::prompt::MentionTab::Subagents)
+    );
+    assert!(
+        panel.tabs.iter().all(|slot| slot.index != 0),
+        "窗口从 Files 右移后才放得下当前 Tab"
+    );
+}
+
+#[test]
 fn rename_input_renders_muted_argument_hint_until_user_types_argument() {
     let area = Rect::new(0, 0, 80, 24);
     let mut lx = Lx::new();

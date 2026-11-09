@@ -68,7 +68,9 @@ fn catalog(ctx: &WorkspaceContext, trusted: bool) -> Result<SkillCatalog, String
     let disabled: HashSet<PathBuf> = file.disabled_set().into_iter().collect();
     let enabled: HashSet<PathBuf> = file.enabled_set().into_iter().collect();
     let user = user_skills_root().map_err(|error| error.to_string())?;
-    let _ = crate::skills::install_system_skills(&user);
+    if let Err(error) = crate::skills::install_system_skills(&user) {
+        tracing::warn!(target: "lx::skills", %error, "system skill install failed");
+    }
     let user_agents = user_agents_skills_root().map_err(|error| error.to_string())?;
     let project = if trusted {
         Some(ProjectSkillRoots::for_project(

@@ -4,7 +4,7 @@ use std::path::{Path, PathBuf};
 
 use crate::app::overlay::{NewWorkspace, Overlay, TextInput};
 use crate::app::state::{
-    AppState, PaneKind, PaneView, Tab, Workspace, current_workspace_identity, home_dir,
+    AppState, Pane, PaneKind, PaneView, Tab, Workspace, current_workspace_identity, home_dir,
     unique_workspace_name, workspace_label,
 };
 use crate::layout::PaneId;
@@ -126,6 +126,24 @@ pub fn create_workspace_with_cwd(state: &mut AppState, target_cwd: Option<PathBu
     });
     let mut workspace = Workspace::single_terminal(name, cwd.clone());
     workspace.name_is_manual = saved_manual.is_some();
+    // 同路径工作区已加载过 `@` 候选时直接继承，新建工作区首帧即可展示完整候选。
+    if let Some(source) = cwd
+        .as_deref()
+        .and_then(|path| {
+            state
+                .workspaces
+                .iter()
+                .find(|existing| existing.cwd.as_deref() == Some(path))
+        })
+        .and_then(mention_inventory_source)
+        && let Some(pane_id) = workspace.root_pane()
+        && let Some(pane) = workspace
+            .tabs
+            .first_mut()
+            .and_then(|tab| tab.pane_mut(pane_id))
+    {
+        pane.copy_mention_inventory_from(source);
+    }
     state.workspaces.push(workspace);
     let from = state.active_workspace;
     state.active_workspace = state.workspaces.len().saturating_sub(1);
@@ -166,6 +184,12 @@ pub fn create_terminal_in_workspace(state: &mut AppState, target: usize) {
         && let Some(pane) = tab.pane_mut(id)
     {
         pane.view = PaneView::Terminal;
+    }
+    if let Some(source) = mention_inventory_source(workspace)
+        && let Some(id) = tab.root_pane()
+        && let Some(pane) = tab.pane_mut(id)
+    {
+        pane.copy_mention_inventory_from(source);
     }
     workspace.tabs.push(tab);
     workspace.active_tab = workspace.tabs.len().saturating_sub(1);
@@ -321,10 +345,23 @@ pub fn switch_workspace(state: &mut AppState, index: usize) {
 /// 新建标签并激活：追加自动命名标签；PTY 由事件循环按状态对齐启动。
 pub fn create_tab(state: &mut AppState) {
     let workspace = state.active_workspace_mut();
-    workspace.tabs.push(Tab::single_terminal());
+    let mut tab = Tab::single_terminal();
+    if let Some(source) = mention_inventory_source(workspace)
+        && let Some(id) = tab.root_pane()
+        && let Some(pane) = tab.pane_mut(id)
+    {
+        pane.copy_mention_inventory_from(source);
+    }
+    workspace.tabs.push(tab);
     workspace.active_tab = workspace.tabs.len().saturating_sub(1);
     clear_selection(state);
     super::focus::focus_panes(state);
+}
+
+/// 取工作区活跃标签根窗格作为 `@` 候选快照来源。
+fn mention_inventory_source(workspace: &Workspace) -> Option<&Pane> {
+    let tab = workspace.tabs.get(workspace.active_tab)?;
+    tab.root_pane().and_then(|id| tab.pane(id))
 }
 
 /// 切换当前工作区的标签；越界忽略。

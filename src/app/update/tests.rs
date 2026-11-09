@@ -1854,6 +1854,32 @@ fn create_tab_appends_and_activates_auto_named_tab() {
 }
 
 #[test]
+fn create_tab_inherits_mention_inventory_from_source_pane() {
+    let mut state = AppState::demo();
+    let source_id = state.active_tab().root_pane().expect("root pane");
+    let role = crate::config::subagents::CustomRoleConfig {
+        name: "auditor".into(),
+        description: "Audit things".into(),
+        system_prompt: "You audit.".into(),
+        ..Default::default()
+    };
+    let mut section = crate::config::subagents::SubagentsSection::default();
+    section.roles.push(role);
+    let source = state.pane_mut_anywhere(source_id).expect("source pane");
+    source.lx.set_mention_subagent_roles(section.all_roles());
+
+    create_tab(&mut state);
+
+    let new_id = state.active_tab().root_pane().expect("new root pane");
+    let new_pane = state.pane_mut_anywhere(new_id).expect("new pane");
+    let roles = new_pane.lx.mention_subagent_roles();
+    assert!(
+        roles.iter().any(|role| role.name == "auditor"),
+        "custom role inherited: {roles:?}"
+    );
+}
+
+#[test]
 fn switch_tab_switches_and_ignores_out_of_range() {
     let mut state = AppState::demo();
     create_tab(&mut state);

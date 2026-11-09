@@ -662,9 +662,12 @@ fn validate_nicknames(role_name: &str, list: &[String]) -> Result<(), SubagentsC
                 "role '{role_name}' nickname '{trimmed}' exceeds {MAX_NICKNAME_CHARS} characters"
             )));
         }
-        if trimmed.chars().any(|c| c == ',' || c.is_control()) {
+        if trimmed
+            .chars()
+            .any(|c| c == ',' || c == ':' || c == '(' || c == ')' || c.is_control())
+        {
             return Err(SubagentsConfigError::Invalid(format!(
-                "role '{role_name}' nickname '{trimmed}' must not contain commas or control characters"
+                "role '{role_name}' nickname '{trimmed}' must not contain commas, colons, parentheses, or control characters"
             )));
         }
     }

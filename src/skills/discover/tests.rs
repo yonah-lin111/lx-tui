@@ -154,6 +154,19 @@ fn install_system_skills_is_idempotent_and_discovered_as_readonly_system_skill()
         "unchanged embedded content must keep the same fingerprint"
     );
 
+    // 内容变化时只原子替换 lx-guide 文件，`.system` 下的其它条目必须保留。
+    std::fs::write(&marker, "stale\n").expect("stale marker");
+    std::fs::write(guide.join("references/tools.md"), "stale").expect("stale reference");
+    crate::skills::install_system_skills(&user).expect("refresh system skills");
+    assert!(
+        sentinel.is_file(),
+        "a content refresh must not delete other `.system` entries"
+    );
+    assert_eq!(
+        std::fs::read_to_string(guide.join("references/tools.md")).expect("restored reference"),
+        tools,
+    );
+
     let catalog = discover(&user, &agents, None, &HashSet::new(), &HashSet::new());
     let entry = catalog
         .entries
@@ -162,6 +175,11 @@ fn install_system_skills_is_idempotent_and_discovered_as_readonly_system_skill()
         .expect("lx-guide discovered");
     assert_eq!(entry.scope, SkillScope::User);
     assert_eq!(entry.source, SkillSource::System);
+    assert!(
+        entry.description.chars().count() <= crate::skills::MAX_CATALOG_DESCRIPTION_CHARS,
+        "lx-guide description must fit the catalog budget ({} chars)",
+        entry.description.chars().count()
+    );
     assert!(entry.enabled);
     assert!(!entry.source.editable());
     assert!(

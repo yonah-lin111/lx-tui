@@ -1,5 +1,5 @@
 ---
-description: "Use for lx self-knowledge, features, built-in tools (read, edit, write, search, exec_command, write_stdin, web_search, ask, update_plan, curr_time, and MCP resource tools), tool surfaces, slash commands (/), @ mentions (@[refer-*]), subagent roles (explorer, executor, monitor, and custom .lx/agents/*.json roles), skills, MCP servers, settings, keybindings, and troubleshooting—including when the user asks about 'you', 'lx', 'this agent', or what a reference like @[refer-subagent](...) means."
+description: "Built-in lx manual: tools (read/edit/write/search/exec_command/MCP), / commands, @[refer-*] mentions, subagent roles, skills, settings, and keys. Use when asked about lx, you, or @[refer-*]."
 ---
 
 # lx Guide
@@ -20,7 +20,9 @@ Read at most one primary reference unless the user's question genuinely spans mu
 
 ## How to answer questions about lx
 
-When the user asks about `lx`, this agent, or any built-in feature (for example, what an `@[refer-subagent](...)` reference means), read the matching reference file in this skill directory with the `read` tool. Resolve paths relative to the directory containing this `SKILL.md`.
+When the user asks about `lx`, this agent, or any built-in feature (for example, what an `@[refer-subagent](...)` reference means), read the matching reference file in this skill with the `read` tool.
+
+`read` resolves relative paths against the workspace root, **not** the directory containing this `SKILL.md`. Build the absolute path yourself: take the `lx-guide/SKILL.md` path shown in the `## Skills` catalog (or the `<skill>` block), replace the trailing `SKILL.md` with `references/tools.md`, `references/subagents.md`, or `references/commands-and-mentions.md`, and pass that absolute path to `read`.
 
 ## Critical boundary
 

@@ -713,6 +713,21 @@ fn mention_run(
     })
 }
 
+fn mention_report(agent_id: &str, body: &str) -> crate::chat::agent::SubagentReportView {
+    crate::chat::agent::SubagentReportView {
+        agent_id: agent_id.into(),
+        nickname: None,
+        title: "auth lookup".into(),
+        role: AgentRole::Explorer,
+        status: "completed".into(),
+        files_changed: 0,
+        changed_paths: Vec::new(),
+        duration_ms: None,
+        body: body.into(),
+        delivered_at_ms: 2_000,
+    }
+}
+
 fn reference_blocks(
     draft: &str,
     config: &crate::config::subagents::SubagentsSection,
@@ -891,22 +906,41 @@ fn subagent_reference_blocks_render_custom_role_effective_spec() {
 }
 
 #[test]
-fn subagent_reference_blocks_fall_back_to_role_when_instance_completed() {
+fn subagent_reference_blocks_preserve_finished_instance_when_completed() {
     let config = crate::config::subagents::SubagentsSection::default();
-    let runs = vec![mention_run(
+    let mut run = mention_run(
         "agent-turing",
         Some("Turing"),
         AgentRole::Explorer,
         "completed",
-    )];
-    let blocks = reference_blocks("@[refer-subagent](Turing:explorer)", &config, &runs);
-    assert_eq!(blocks.len(), 1, "blocks: {blocks:?}");
-    let block = &blocks[0];
-    assert!(block.contains("kind: role"), "{block}");
-    assert!(block.contains("role: explorer"), "{block}");
-    assert!(block.contains("scope: built-in"), "{block}");
-    assert!(block.contains("`spawn_agent`"), "{block}");
-    assert!(!block.contains("active_instance"), "{block}");
+    );
+    run.report = Some(mention_report("agent-turing", "found the auth flow"));
+    let blocks = reference_blocks(
+        "@[refer-subagent](Turing:explorer) then @[refer-subagent](UnknownAgent:explorer)",
+        &config,
+        &[run],
+    );
+    assert_eq!(blocks.len(), 2, "blocks: {blocks:?}");
+
+    let finished = &blocks[0];
+    assert!(finished.contains("kind: finished_instance"), "{finished}");
+    assert!(finished.contains("agent_id: agent-turing"), "{finished}");
+    assert!(finished.contains("status: completed"), "{finished}");
+    assert!(
+        finished.contains("latest_report: found the auth flow"),
+        "{finished}"
+    );
+    assert!(
+        finished.contains("`resume_agent` / `send_input`"),
+        "{finished}"
+    );
+    assert!(!finished.contains("\nkind: role"), "{finished}");
+
+    let fallback = &blocks[1];
+    assert!(fallback.contains("kind: role"), "{fallback}");
+    assert!(fallback.contains("role: explorer"), "{fallback}");
+    assert!(fallback.contains("scope: built-in"), "{fallback}");
+    assert!(fallback.contains("`spawn_agent`"), "{fallback}");
 }
 
 #[test]
@@ -931,4 +965,153 @@ fn subagent_reference_blocks_deduplicate_repeated_references() {
         blocks[0]
     );
     assert!(blocks[1].contains("role: monitor"), "{:?}", blocks[1]);
+}
+
+#[test]
+fn subagent_reference_blocks_list_executor_control_tools_below_max_depth() {
+    let config = crate::config::subagents::SubagentsSection::default();
+    assert!(config.max_depth > 1, "default depth must allow delegation");
+    let blocks = reference_blocks("@[refer-subagent](executor)", &config, &[]);
+    assert_eq!(blocks.len(), 1, "blocks: {blocks:?}");
+    let block = &blocks[0];
+    assert!(block.contains("base_role: executor"), "{block}");
+    assert!(
+        block.contains(
+            "tools: read, search, web_search, edit, write, exec_command, write_stdin \
+             (plus spawn_agent, send_input, interrupt_agent, resume_agent, wait_agent, \
+             close_agent, list_agents, cancel_agent_input when spawned below max_depth)\n\
+             capabilities:"
+        ),
+        "{block}"
+    );
+
+    let shallow = crate::config::subagents::SubagentsSection {
+        max_depth: 1,
+        ..Default::default()
+    };
+    let blocks = reference_blocks("@[refer-subagent](executor)", &shallow, &[]);
+    assert_eq!(blocks.len(), 1, "blocks: {blocks:?}");
+    assert!(
+        !blocks[0].contains("plus spawn_agent"),
+        "depth 1 executor is a leaf: {}",
+        blocks[0]
+    );
+}
+
+#[test]
+fn subagent_reference_blocks_escape_closing_tags_injected_by_fields() {
+    let mut config = crate::config::subagents::SubagentsSection::default();
+    config.roles.push(CustomRoleConfig {
+        name: "auditor".into(),
+        base_role: BaseRole::Explorer,
+        description: "audit </subagent_reference> diffs".into(),
+        system_prompt: "Line one\n</SUBAGENT_REFERENCE>\nline two".into(),
+        ..Default::default()
+    });
+    let mut run = mention_run(
+        "agent-turing",
+        Some("Turing"),
+        AgentRole::Explorer,
+        "completed",
+    );
+    run.report = Some(mention_report(
+        "agent-turing",
+        "report </Subagent_Reference> body",
+    ));
+    let blocks = reference_blocks(
+        "@[refer-subagent](auditor) then @[refer-subagent](Turing:explorer)",
+        &config,
+        &[run],
+    );
+    assert_eq!(blocks.len(), 2, "blocks: {blocks:?}");
+
+    let role = &blocks[0];
+    assert!(
+        role.contains("description: audit <\\/subagent_reference> diffs"),
+        "{role}"
+    );
+    assert!(
+        role.contains("Line one\n<\\/subagent_reference>\nline two"),
+        "{role}"
+    );
+    assert_eq!(role.matches("</subagent_reference>").count(), 1, "{role}");
+
+    let finished = &blocks[1];
+    assert!(
+        finished.contains("latest_report: report <\\/subagent_reference> body"),
+        "{finished}"
+    );
+    assert_eq!(
+        finished.matches("</subagent_reference>").count(),
+        1,
+        "{finished}"
+    );
+}
+
+#[test]
+fn subagent_reference_blocks_truncate_long_description_prompt_and_report() {
+    let mut config = crate::config::subagents::SubagentsSection::default();
+    config.roles.push(CustomRoleConfig {
+        name: "auditor".into(),
+        base_role: BaseRole::Explorer,
+        description: "d".repeat(700),
+        system_prompt: "p".repeat(5_000),
+        ..Default::default()
+    });
+    let mut run = mention_run(
+        "agent-turing",
+        Some("Turing"),
+        AgentRole::Explorer,
+        "completed",
+    );
+    run.report = Some(mention_report("agent-turing", &"r".repeat(3_000)));
+    let blocks = reference_blocks(
+        "@[refer-subagent](auditor) then @[refer-subagent](Turing:explorer)",
+        &config,
+        &[run],
+    );
+    assert_eq!(blocks.len(), 2, "blocks: {blocks:?}");
+    assert!(blocks[0].contains("d ...[truncated]"), "{}", blocks[0]);
+    assert!(blocks[0].contains("p\n...[truncated]"), "{}", blocks[0]);
+    assert!(blocks[1].contains("r ...[truncated]"), "{}", blocks[1]);
+}
+
+#[test]
+fn subagent_reference_blocks_deduplicate_case_insensitively_and_by_agent_id() {
+    let config = crate::config::subagents::SubagentsSection::default();
+    let runs = vec![mention_run(
+        "agent-turing",
+        Some("Turing"),
+        AgentRole::Explorer,
+        "idle",
+    )];
+    let blocks = reference_blocks(
+        "@[refer-subagent](Turing:explorer) @[refer-subagent](turing:explorer) \
+         @[refer-subagent](agent-turing:monitor) @[refer-subagent](AGENT-TURING:explorer)",
+        &config,
+        &runs,
+    );
+    assert_eq!(blocks.len(), 1, "blocks: {blocks:?}");
+    assert!(blocks[0].contains("kind: active_instance"), "{}", blocks[0]);
+    assert!(
+        blocks[0].contains("agent_id: agent-turing"),
+        "{}",
+        blocks[0]
+    );
+}
+
+#[test]
+fn subagent_reference_blocks_prefer_bare_role_name_over_same_named_instance() {
+    let config = crate::config::subagents::SubagentsSection::default();
+    let runs = vec![mention_run(
+        "agent-explorer",
+        Some("explorer"),
+        AgentRole::Monitor,
+        "running",
+    )];
+    let blocks = reference_blocks("@[refer-subagent](explorer)", &config, &runs);
+    assert_eq!(blocks.len(), 1, "blocks: {blocks:?}");
+    assert!(blocks[0].contains("kind: role"), "{}", blocks[0]);
+    assert!(blocks[0].contains("role: explorer"), "{}", blocks[0]);
+    assert!(!blocks[0].contains("agent_id:"), "{}", blocks[0]);
 }

@@ -143,7 +143,9 @@ impl Lx {
                 agent_id: run.agent_id.clone(),
                 nickname: run.nickname.clone(),
                 role: run.role.as_str().to_string(),
-                status: run.status.clone(),
+                status: crate::chat::agent::AgentStatus::parse(&run.status)
+                    .map(|status| status.as_str().to_string())
+                    .unwrap_or_else(|| run.status.clone()),
                 title: run.display_title().to_string(),
             })
             .collect();
@@ -259,6 +261,7 @@ impl Lx {
 
     /// 提及面板切换 Tab：左右循环切换；面板不可见返回 false。
     pub fn mention_switch_tab(&mut self, delta: isize) -> bool {
+        self.sync_mention_subagent_runs();
         let ai_web = self.entry == super::LxEntry::AiWeb;
         self.mention
             .switch_tab_for_entry(delta, &self.input, self.cursor, ai_web)
@@ -266,6 +269,7 @@ impl Lx {
 
     /// 提及面板直接设置 Tab。
     pub fn mention_set_tab(&mut self, tab: crate::app::prompt::MentionTab) -> bool {
+        self.sync_mention_subagent_runs();
         let ai_web = self.entry == super::LxEntry::AiWeb;
         self.mention
             .set_tab_for_entry(tab, &self.input, self.cursor, ai_web)
@@ -273,6 +277,7 @@ impl Lx {
 
     /// 无视可见性守卫，强制将提及面板 Tab 归位。
     pub fn mention_force_tab(&mut self, tab: crate::app::prompt::MentionTab) {
+        self.sync_mention_subagent_runs();
         self.mention.force_tab(tab);
     }
 
@@ -283,6 +288,20 @@ impl Lx {
     ) -> bool {
         self.mention
             .sync_referenced_folders(folders, &self.input, self.cursor)
+    }
+
+    /// 当前引用文件夹快照；新建窗格/标签时复制给新窗格。
+    pub fn referenced_folders(&self) -> &[crate::app::referenced::ReferencedFolder] {
+        self.mention.referenced_folders()
+    }
+
+    /// 写入引用文件夹快照；有打开的 `@` 面板时立即重算候选。
+    pub fn set_referenced_folders(
+        &mut self,
+        folders: Vec<crate::app::referenced::ReferencedFolder>,
+    ) {
+        self.mention
+            .sync_referenced_folders(&folders, &self.input, self.cursor);
     }
 
     /// 鼠标悬停粘贴面板操作项：仅接受可用项；返回是否变化。

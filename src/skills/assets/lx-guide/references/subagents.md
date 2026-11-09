@@ -1,22 +1,23 @@
 # Subagents
 
-`lx` can delegate work to subagents: isolated child agent sessions with their own role, tool whitelist, model, and context. The main `lx` agent orchestrates them through the subagent control tools; the user can point at a role or a live instance from the `@` mention panel in the composer.
+`lx` can delegate work to subagents: isolated child agent sessions with their own role, tool whitelist, model, and context. The main `lx` agent orchestrates them through the subagent control tools; the user can point at a role or an instance from the `@` mention panel in the composer.
 
 ## `@[refer-subagent](...)`
 
 The `Subagents` tab of the `@` mention panel inserts one of two reference forms:
 
 - `@[refer-subagent](<role>)` — a built-in or custom role, for example `@[refer-subagent](explorer)`.
-- `@[refer-subagent](<nickname_or_id>:<role>)` — a live subagent instance in the current session, for example `@[refer-subagent](Turing:explorer)`. Only instances in `running`, `idle`, or `blocked` state are listed.
+- `@[refer-subagent](<nickname_or_id>:<role>)` — a subagent instance in the current session, for example `@[refer-subagent](Turing:explorer)`. The panel lists active instances in `running`, `idle`, or `blocked` state; finished instances can still be referenced by nickname or agent id.
 
 The panel ordering is: active session instances first, then the built-in roles (`explorer`, `executor`, `monitor`), then custom roles (project-scoped first, then user-scoped). Filtering is case-insensitive over nickname, agent id, role, status, title, description, and category words.
 
 On submission, `lx` stores the reference as plain text in the user message and injects an English `<subagent_reference>` block into the current turn's model context. The block is not persisted and does not create a new message.
 
 - For a role reference, the block contains the full role specification: `role`, `base_role`, `scope` (`built-in`, `custom (project)`, or `custom (user)`), `description`, the effective `tools` whitelist, `capabilities` (`allow_web_search`, `allow_mcp`, `allow_skills`), `model` (`inherits parent model` or an explicit provider/model and whether it is locked), and the effective `system_prompt`.
-- For a live instance reference, the block contains `agent_id`, `nickname`, `role`, `status`, `agent_path`, `title`, `task`, and `latest_report` when available.
+- For an active instance reference, the block contains `kind: active_instance`, `agent_id`, `nickname`, `role`, `status`, `agent_path`, `title`, `task`, and `latest_report` when available.
+- For a finished instance (`completed`, `failed`, or `interrupted`), the block contains `kind: finished_instance` with the same identifying fields and its `latest_report`. Resume it with `resume_agent`, then continue it with `send_input`.
 
-The guidance in the block distinguishes two intents: if the user is asking what the role or instance is, the main agent answers directly from the injected specification without searching the workspace; if the user is delegating a task, the main agent calls `spawn_agent` for the role or `send_input` / `wait_agent` for the live instance.
+The guidance in the block distinguishes two intents: if the user is asking what the role or instance is, the main agent answers directly from the injected specification without searching the workspace; if the user is delegating a task, the main agent calls `spawn_agent` for the role, `send_input` / `wait_agent` for the active instance, or `resume_agent` followed by `send_input` for a finished instance.
 
 Referencing a subagent does not bypass the main agent and does not send a private message to the child. Direct conversation with a child is done from the `/subagents` panel (`TaskPage::Agents`), where `Enter` opens an inline reply box.
 
@@ -119,6 +120,11 @@ The main agent has 8 control tools:
 | `close_agent` | Close a subagent and its whole subtree without a partial report; history and queue are kept for a later resume. |
 | `list_agents` | List the subagent tree of the root session, optionally filtered by `agent_path` prefix. |
 | `cancel_agent_input` | Cancel queued (including `blocked`) input without touching a running turn or terminal state. |
+
+Key parameters:
+
+- `spawn_agent`: `role` (required), `title` (required), `task` or `items` (one of; `items` holds ordered `text`, `local_image`, and `image` entries), `task_name`, `fork_context`, `fork_turns`, `max_tokens`, `model`, and `reasoning_effort`.
+- `send_input`: `target` (required), `message` or `items` (one of), `interrupt`, and `trigger_turn`.
 
 ## Statuses
 

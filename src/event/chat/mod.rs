@@ -14,7 +14,7 @@ mod process_page;
 pub mod rewind;
 mod runtime;
 pub(crate) mod skills;
-mod subagent;
+pub(crate) mod subagent;
 mod timeline;
 pub mod title;
 mod tool_calls;
@@ -581,7 +581,13 @@ fn start_stream(
         let (skills, skill_omitted) =
             skills::catalog_prompt(persistence, config_root.as_deref(), false);
         let (draft_text, _) = timeline::latest_user_draft_and_attachments(&pane.lx.chat.messages);
-        let mut skill_blocks = skills::reference_blocks(&draft_text);
+        // 合成汇报轮的草稿是注入的报告文本，不是用户输入：跳过 `@` 引用块提取。
+        let synthetic_report = subagent::snapshot::is_synthetic_report_turn(&pane.lx.chat.messages);
+        let mut skill_blocks = if synthetic_report {
+            Vec::new()
+        } else {
+            skills::reference_blocks(&draft_text)
+        };
         let mcp_snapshot = mcp::snapshot_for_turn_with_disabled(
             persistence,
             config_root.as_deref(),
@@ -598,23 +604,23 @@ fn start_stream(
             supports_image_input: frozen.supports_image_input,
         }
         .render_prompt_section();
-        let workspace_trusted = workspace_root
-            .as_deref()
-            .is_some_and(|cwd| persistence.is_trusted(cwd))
-            || config_root
-                .as_deref()
-                .is_some_and(|root| persistence.is_trusted(root));
+        let workspace_trusted = [workspace_root.as_deref(), config_root.as_deref()]
+            .into_iter()
+            .flatten()
+            .any(|path| persistence.is_trusted(path));
         let effective_subagents = crate::config::subagents::merge_project_roles_for_paths(
             &state.subagents_config,
             config_root.as_deref(),
             workspace_root.as_deref(),
             workspace_trusted,
         );
-        skill_blocks.extend(subagent::snapshot::subagent_reference_blocks(
-            &draft_text,
-            &effective_subagents,
-            &pane.lx.agents.runs,
-        ));
+        if !synthetic_report {
+            skill_blocks.extend(subagent::snapshot::subagent_reference_blocks(
+                &draft_text,
+                &effective_subagents,
+                &pane.lx.agents.runs,
+            ));
+        }
         let loaded_instructions = crate::chat::agent::load_instructions(
             crate::config::user_data_root().ok().as_deref(),
             config_root.as_deref(),

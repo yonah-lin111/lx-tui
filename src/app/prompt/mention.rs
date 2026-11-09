@@ -611,7 +611,7 @@ impl MentionState {
                     )
                     .unwrap_or_else(|| format!("@[refer-mcp]({})", server.name))
                 }
-                MentionTab::Files | MentionTab::Subagents => unreachable!(),
+                MentionTab::Files | MentionTab::Subagents => return None,
             };
             let insertion = format!("{ref_text} ");
             self.reset_session();

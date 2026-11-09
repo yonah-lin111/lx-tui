@@ -258,6 +258,9 @@ pub(crate) fn finish_subagent_with_billing(
         &handle.workspace,
         &handle.parent.session,
     );
+    if let Some(target) = state.pane_mut_anywhere(handle.parent.pane) {
+        target.lx.sync_mention_subagent_runs();
+    }
     update::refresh_subagent_cards(state, handle.parent.pane);
     if !continued {
         let _ = handle.done.send(true);

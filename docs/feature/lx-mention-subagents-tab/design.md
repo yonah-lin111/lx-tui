@@ -552,110 +552,23 @@ pub fn subagent_item_text(
 
 ### 3.5 发送时当轮模型上下文提示注入 (`src/event/chat/subagent/snapshot.rs`, `src/event/chat/mod.rs`)
 
-当用户发送包含 `@[refer-subagent](...)` 的消息时，在 `src/event/chat/subagent/snapshot.rs` 中解析引用并生成英文 `<subagent_reference>` 提示块，与 `skill_blocks` 一起作为当轮附加用户上下文发给主模型（不写库、不污染气泡展示）：
+当用户发送包含 `@[refer-subagent](...)` 的消息时，`src/event/chat/subagent/snapshot.rs::subagent_reference_blocks` 解析引用并生成英文 `<subagent_reference>` 提示块，与 `skill_blocks` 一起作为当轮附加用户上下文发给主模型（不写库、不污染气泡展示）。
 
-```rust
-/// 从用户当轮草稿中提取 `@[refer-subagent](...)` 引用，生成英文调度提示块（仅当轮注入，不落库）。
-pub(crate) fn subagent_reference_blocks(
-    draft_text: &str,
-    effective_subagents: &crate::config::subagents::SubagentsSection,
-    runs: &[crate::app::state::SubagentRun],
-) -> Vec<String> {
-    let mut blocks = Vec::new();
-    let mut seen = std::collections::HashSet::new();
-    let masked = crate::app::paste::mask_pasted_text(draft_text);
-    for reference in crate::app::markdown::parse_references(&masked) {
-        if reference.kind != crate::app::markdown::ReferKind::Subagent {
-            continue;
-        }
-        let raw_target = reference.path.trim();
-        if raw_target.is_empty() || !seen.insert(raw_target.to_string()) {
-            continue;
-        }
-        // 1. 优先匹配 `<nickname_or_id>:<role>` 格式或当前会话中的存活 subagent 实例
-        let instance_key = raw_target
-            .split_once(':')
-            .map(|(head, _)| head.trim())
-            .unwrap_or(raw_target);
-        if let Some(run) = runs.iter().find(|run| {
-            crate::app::state::AgentFilter::Active.matches(run)
-                && (run.agent_id.eq_ignore_ascii_case(instance_key)
-                    || run
-                        .nickname
-                        .as_deref()
-                        .is_some_and(|nick| nick.eq_ignore_ascii_case(instance_key)))
-        }) {
-            let nickname = run.nickname.as_deref().unwrap_or(run.agent_id.as_str());
-            blocks.push(format!(
-                "<subagent_reference>\n\
-                 kind: active_instance\n\
-                 reference: @[refer-subagent]({raw_target})\n\
-                 agent_id: {}\n\
-                 nickname: {nickname}\n\
-                 role: {}\n\
-                 status: {}\n\
-                 agent_path: {}\n\
-                 guidance: The user explicitly referenced this active subagent in the current session. \
-                 Prefer interacting with it directly using `send_input` (target=\"{}\") or `wait_agent` \
-                 instead of spawning a duplicate subagent.\n\
-                 </subagent_reference>",
-                run.agent_id,
-                run.role.as_str(),
-                run.status,
-                run.agent_path,
-                run.agent_id,
-            ));
-            continue;
-        }
+#### 3.5.1 解析顺序与块类型
+1. **裸角色名优先走角色解析**：target 不含 `:` 且 `effective_subagents.resolve_role(target)` 命中时，直接生成 `kind: role`。这样即使某个活动实例的自定义昵称恰好等于 `explorer`，`@[refer-subagent](explorer)` 仍稳定指向内置角色。
+2. **`<nickname_or_id>:<role>` 走实例解析**：使用 `rsplit_once(':')` 切分（避免昵称含 `:` 时误切），先按 `agent_id`/`nickname`（大小写不敏感）在 `runs` 中查找**活动实例**（`running`/`idle`/`blocked`），生成 `kind: active_instance`；找不到活动实例时，再按 `runs.iter().rev()` 查找**当前会话中已结束的实例**（`completed`/`failed`/`interrupted`/`cancelled`），生成 `kind: finished_instance` 并保留 `agent_id`、`status`、`title`、`task`、`latest_report`。只有 `runs` 中完全不存在该实例时，才回退到冒号后的角色规格。
+3. **实例块 guidance 按状态分流**：活动实例优先 `send_input` / `wait_agent`；已结束实例要求先基于 `latest_report` 回答，后续工作使用 `resume_agent` / `send_input` 复用原实例，禁止 spawn 重复子 Agent；角色块区分“解释询问”与 `spawn_agent` 委派。
+4. **去重**：`raw_target` 小写化后去重，并额外用 `seen_agent_ids` 去重（同一实例同时用昵称与 `agent_id` 引用只生成一块）；单轮最多 8 个块。
 
-        // 2. 匹配内置或自定义角色（或存活实例已结束时回退到其 `<role>`）
-        let role_name = raw_target
-            .split_once(':')
-            .map(|(_, role)| role.trim())
-            .unwrap_or(raw_target);
-        if let Some(spec) = effective_subagents.resolve_role(role_name) {
-            let scope = if spec.is_builtin {
-                "built-in"
-            } else if spec.is_project_scoped {
-                "custom (project)"
-            } else {
-                "custom (user)"
-            };
-            blocks.push(format!(
-                "<subagent_reference>\n\
-                 kind: role\n\
-                 reference: @[refer-subagent]({raw_target})\n\
-                 role: {}\n\
-                 base_role: {}\n\
-                 scope: {scope}\n\
-                 description: {}\n\
-                 guidance: The user explicitly referenced the `{}` subagent role. \
-                 Delegate the relevant task by calling `spawn_agent` with `role: \"{}\"`.\n\
-                 </subagent_reference>",
-                spec.name,
-                spec.base_role.as_str(),
-                spec.description,
-                spec.name,
-                spec.name,
-            ));
-        }
-    }
-    blocks
-}
-```
+#### 3.5.2 字段安全与预算
+- `description` / `title` / `task` / `nickname` / `model` / `agent_path` 统一单行化、剥离控制字符（`system_prompt` 保留换行），并按 600 字符截断。
+- `latest_report` 单独放宽到 2400 字符，`system_prompt` 限制 4000 字符，截断时追加 `...[truncated]`。
+- 所有动态字段对大小写不敏感的 `</subagent_reference` 闭合标签做转义（替换为 `<\/subagent_reference`），避免自定义角色 description/systemPrompt 或子 Agent 报告闭合标签、伪造块结构。
+- `BaseRole::Executor` 在 `max_depth > 1` 时，`tools` 行追加 8 个 subagent 控制工具的说明，与 `lx-guide/references/tools.md` 的 `ExecutorCoordinator` (15) 保持一致。
 
-在 `src/event/chat/mod.rs::start_stream` 中：
-```rust
-let mut turn_reference_blocks = skills::reference_blocks(&draft_text);
-turn_reference_blocks.extend(subagent::snapshot::subagent_reference_blocks(
-    &draft_text,
-    &effective_subagents,
-    &pane.lx.agents.runs,
-));
-```
-随后将 `&turn_reference_blocks` 传给 `assemble_turn_request_with_context`。
-
-### 3.6 对齐 Codex 的 `lx-guide` 内置系统 Skill 与 `<subagent_reference>` 完整自身规格注入
+#### 3.5.3 调用点
+- TUI：`src/event/chat/mod.rs::start_stream` 中仅在真实用户输入轮提取引用；由子 Agent 报告合成的 user 消息（`is_synthetic_report_turn`）跳过 skill 与 subagent 引用块，避免报告正文中的 `@[refer-*]` 反向注入父 Agent 上下文。
+- Headless：`src/chat/agent/exec/mod.rs` 同样把 `subagent_reference_blocks` 接入 `lx-tui exec` 的当轮注入（实例列表为空，仅角色规格）。
 
 #### 3.6.1 根因与设计目标
 在真实会话测试中，当用户输入 `@[refer-subagent](explorer) 这个是什么` 时，若 `<subagent_reference>` 仅注入一行简短 `description` 与单向的 `spawn_agent` 派活指令，且系统缺少关于 `lx` 自身功能的手册，模型会被迫在当前工作区执行大量 `search`/`read` 去翻找源码（在非 `lx-tui` 目录则完全无法获知自身角色提示词与功能细节）。
@@ -669,17 +582,25 @@ turn_reference_blocks.extend(subagent::snapshot::subagent_reference_blocks(
      - `model`: `inherits parent model` 或显式配置的 `<provider>/<model> (default | locked)`；
      - `system_prompt`: 该角色生效的完整系统提示词（`spec.system_prompt_override` 或内置 `EXPLORER_PROMPT` / `EXECUTOR_PROMPT` / `MONITOR_PROMPT`）；
      - 双意图 `guidance`：若用户在询问该角色是什么、有哪些工具/权限/提示词，直接基于上述规格（及内置 `lx-guide` skill）回答，**禁止去搜索当前工作区文件**；若用户在指派具体任务，则调用 `spawn_agent(role="<name>")` 委派。
-   - **点名存活实例（`kind: active_instance`）**：除 `agent_id`、`nickname`、`role`、`status`、`agent_path` 外，直接内联：
+   - **点名存活实例（`kind: active_instance` / `kind: finished_instance`）**：除 `agent_id`、`nickname`、`role`、`status`、`agent_path` 外，直接内联：
      - `title`: 实例短标题；
      - `task`: 实例被派发的任务描述（非空时附上）；
      - `latest_report`: 最新结算摘要（若有）；
-     - 双意图 `guidance`：若用户在询问该实例的任务、状态或进展，直接基于上述信息回答（或调用 `list_agents` 查看会话树），**禁止搜索工作区文件**；若用户在追加指令或等待结果，优先调用 `send_input` / `wait_agent`。
+     - 双意图 `guidance`：活动实例优先 `send_input` / `wait_agent`；已结束实例先基于 `latest_report` 回答，后续工作使用 `resume_agent` / `send_input` 复用原实例（`agent_id` 仍保留），均**禁止搜索工作区文件**。
 
 2. **层 2：内嵌 `lx-guide` 系统级自省 Skill（`src/skills/system.rs` + `src/skills/assets/lx-guide/`）**
    - 对标 Codex `install_system_skills`：通过 `include_str!` 将 `lx-guide`（`SKILL.md`、`references/tools.md`、`references/subagents.md`、`references/commands-and-mentions.md`）编译进二进制。
-   - 启动/扫描时调用 `skills::install_system_skills(&user_root)`，将内嵌文件同步到 `<data>/skills/.system/lx-guide/`，并写入内容指纹 `.lx-system-skills.marker`（指纹一致时直接跳过写盘，零多余 IO）。
+   - 扫描/请求前调用 `skills::install_system_skills(&user_root)`，将内嵌文件同步到 `<data>/skills/.system/lx-guide/`，并写入内容指纹 `.lx-system-skills.marker`（指纹一致且文件齐全时直接跳过写盘，零多余 IO）。安装由进程内 `INSTALL_LOCK` 串行化，逐文件通过 `platform::write_file_atomic`（同目录临时文件 + rename）原子替换，不删除 `.system` 整目录，也不影响 `.system` 下用户放置的其他内容；安装失败在调用点 `tracing::warn!`。
+   - `lx-guide/SKILL.md` 的 `description` 必须 ≤ `MAX_CATALOG_DESCRIPTION_CHARS`（200），确保 `## Skills` 目录中的触发词（tools、slash commands、subagents、skills、MCP、settings）不被截断；正文明确 `read` 的相对路径以 workspace root 为基准，必须使用 skill 的绝对路径拼接 `references/*.md`。
    - `references/tools.md` 完整记录 `lx` 的工具面矩阵（`Main` 18 / `ExecMain` 17 / `ExecutorCoordinator` 15 / `Executor` 7 / `Monitor` 4 / `Explorer` 3）、文件与代码工具（`read` 文本+图片多模态与 `file_version`、`edit` 的 `*** Begin Patch` 语法与 `read_versions` 乐观锁、`write`、`search`）、进程工具（`exec_command`、`write_stdin` 与 `!<cmd>`）、交互/检索/计划工具（`web_search`、`ask`、`update_plan`、`curr_time`）以及 MCP 动态工具与 3 个资源工具（`list_resources`、`list_resource_templates`、`read_resource`）。
-   - `SkillSource` 新增 `System`（`"system"`，只读不可编辑/删除，默认启用且支持在设置页与 `skills.json` 中开关），`skills::discover` 在用户级根之后扫描 `<user_root>/.system`（优先级：`Project::Lx` → `Project::Agents` → `User::Lx` → `User::Agents` → `User::System`），因此在系统提示 `## Skills`、`@` 提及面板 `Skills` Tab 与浏览器设置页中均开箱可见。
+   - `SkillSource` 新增 `System`（`"system"`，只读不可编辑/删除，默认启用且支持在设置页与 `skills.json` 中开关），`skills::discover` 在用户级根之后扫描 `<user_root>/.system`（优先级：`Project::Lx` → `Project::Agents` → `User::Lx` → `User::Agents` → `User::System`），因此在系统提示 `## Skills`、`@` 提及面板 `Skills` Tab 与浏览器设置页中均开箱可见；同名用户/项目 skill 仍可覆盖它。
+
+### 3.7 多窗格 `@` 快照一致性与窄窗格 Tab 可达性
+
+1. **新窗格继承快照**：`skills` / `mcp_servers` / `subagent_roles` / `referenced_folders` 按窗格保存。`Pane::copy_mention_inventory_from` 统一复制；`Tab::split_pane`、`create_tab`、`create_terminal_in_workspace`、同路径 `create_workspace_with_cwd` 均从源窗格/同路径工作区复制，避免新标签页退回空 Skills/MCP 或只剩 3 个内置角色。
+2. **状态同步**：`sync_mention_subagent_runs` 在 `mention_switch_tab` / `mention_set_tab` / `mention_force_tab` 切换前执行，并在 `settle`、`sync_agent_ui_queue`、`launch_child_turn`、`close_agent`、`on_subagent_started`（排序后）补齐；状态字符串经 `AgentStatus::parse` 归一化，`pending`/`complete` 等 DB 旧别名不会原样出现在 `@` 面板。
+3. **性能与触发面**：`SubagentMentionItem<'a>` 仅借用 `SubagentRunMentionEntry` / `ResolvedRoleSpec`，渲染每帧不再深拷贝 16k 系统提示词；`take_scan_request` 仅 `Files` Tab 发起工作区文件扫描；`view()` 的全空 `Hidden` 判定纳入 `subagent_roles` / `subagent_runs`，保证 `Subagents` 始终可达。
+4. **窄窗格**：`command_panel::layout` 用滑动窗口渲染 Tab，`TabSlot.index` 保留原始下标，活跃 Tab（含第 5 个 `Subagents`）在窄窗格中始终可见且鼠标命中映射正确；底部提示按 `lx.mention_tab()` 判定而非 `tabs[0]`。
 
 ---
 
@@ -690,7 +611,10 @@ turn_reference_blocks.extend(subagent::snapshot::subagent_reference_blocks(
 | **默认开箱状态** | 新建 `Lx` 实例输入 `@` 切到 `Subagents` Tab，无需外部异步事件即可看到 `explorer`、`executor`、`monitor` 三个内置角色。 | `src/app/state/lx/mention/tests.rs` |
 | **三类候选排序与存活过滤** | `agents.runs` 中同时存在 `running`、`idle`、`blocked`、`completed`、`cancelled` 实例，且配置含项目级与用户级自定义角色时：仅 `running`/`idle`/`blocked` 出现在顶部，其后为 3 个内置角色，再后为项目级自定义角色与用户级自定义角色。 | `src/app/state/lx/mention/tests.rs` |
 | **确认插入与原子退格删除** | 选中存活实例插入 `@[refer-subagent](Turing:explorer) `，选中角色插入 `@[refer-subagent](explorer) `；紧跟末尾空格按一次 `Backspace` 整块删除，按 `Ctrl+Z` 一步还原。 | `src/app/state/lx/mention/tests.rs` |
-| **左右方向键 5-Tab vs 4-Tab 循环** | `lx` 主输入框在 `Files` 按 `←` 跳到 `Subagents`，在 `Subagents` 按 `→` 跳回 `Files`；右侧 `Prompt` 编辑器在 `Files` 按 `←` 仍跳到 `Mcp`，不进入 `Subagents`。 | `src/app/state/lx/mention/tests.rs`、`src/app/prompt/tests.rs` |
+| **左右方向键 5-Tab vs 4-Tab 循环** | `lx` 主输入框在 `Files` 按 `←` 跳到 `Subagents`，在 `Subagents` 按 `→` 跳回 `Files`；右侧 `Prompt` 编辑器在 `Files` 按 `←` 仍跳到 `Mcp`，不进入 `Subagents`。 | `src/app/state/lx/mention/tests.rs`、`src/app/prompt/mention/tests.rs` |
 | **`AiWeb` 入口防护** | `AiWeb` 入口下 `mention_switch_tab` / `mention_set_tab(MentionTab::Subagents)` 返回 `false`，顶栏仅渲染 `Files`；含 `@[refer-subagent](...)` 的草稿在 `prepare_ai_web_message` 返回 `Err(AiWebPrepareError::LocalReferenceUnsupported)`。 | `src/chat/prepare/tests.rs`、`src/app/state/lx/mention/tests.rs` |
 | **当轮模型上下文提示块生成（含自身规格）** | 草稿含 `@[refer-subagent](Turing:explorer)` 与 `@[refer-subagent](monitor)` 时，`subagent_reference_blocks` 分别产出 `active_instance`（含 `agent_id`、`title`、`task` 与双意图引导）和 `role`（含 `tools`、`capabilities`、`model`、`system_prompt` 与双意图引导）的英文 `<subagent_reference>` 块，重复点名自动去重。 | `src/event/chat/tests/subagent_roles.rs` |
-| **内置系统 Skill `lx-guide` 自动同步与发现** | `install_system_skills` 将内嵌 `lx-guide`（含 `SKILL.md` 与 `references/*.md`）按指纹幂等写入 `<user_root>/.system/lx-guide/`；`discover` 将其识别为 `SkillSource::System`（默认启用、只读），在 `## Skills` 目录、`@` 面板 `Skills` Tab 与设置页可见，且可被同名用户/项目 skill 覆盖。 | `src/skills/discover/tests.rs` |
+| **已结束实例引用** | `@[refer-subagent](Turing:explorer)` 在发送前 Turing 已进入 `completed`/`failed`/`interrupted`/`cancelled` 时，仍产出 `kind: finished_instance`，保留 `agent_id`、`status`、`latest_report`，引导 `resume_agent` / `send_input`；仅当 `runs` 完全无该实例时才回退 `kind: role`。 | `src/event/chat/tests/subagent_roles.rs` |
+| **字段转义、截断与去重** | `description` / `system_prompt` / `latest_report` 中的 `</subagent_reference>` 被转义，`latest_report` 截断到 2400 字符、`system_prompt` 截断到 4000 字符并附 `[truncated]`；大小写不同或同一实例的昵称/`agent_id` 双引用只生成一块。 | `src/event/chat/tests/subagent_roles.rs` |
+| **多窗格快照与窄窗格 Tab** | 新建标签页/同路径工作区复制源窗格的 skills、MCP、subagent roles；切换到 `Subagents` 前同步 runs；42 列窄窗格下活跃 `Subagents` Tab 仍可见且鼠标 `tab_at` 返回 `Some(4)`。 | `src/app/state/lx/mention/tests.rs`、`src/ui/main_content/lx/tests/slash_panels.rs` |
+| **内置系统 Skill `lx-guide` 自动同步与发现** | `install_system_skills` 将内嵌 `lx-guide`（含 `SKILL.md` 与 `references/*.md`）按指纹幂等、逐文件原子写入 `<user_root>/.system/lx-guide/`；`discover` 将其识别为 `SkillSource::System`（默认启用、只读），在 `## Skills` 目录、`@` 面板 `Skills` Tab 与设置页可见，且可被同名用户/项目 skill 覆盖；description 长度不超过 200 字符。 | `src/skills/discover/tests.rs` |
