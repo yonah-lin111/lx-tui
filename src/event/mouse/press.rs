@@ -25,10 +25,10 @@ use super::hit::{
     dismiss_lx_toast_outside, handle_agent_scrollbar_press, handle_lx_history_scrollbar_press,
     handle_lx_input_scrollbar_press, handle_prompt_recent_scrollbar_press,
     handle_prompt_scrollbar_press, handle_sidebar_press, handle_task_agents_scrollbar_press,
-    handle_terminal_scrollbar_press, handle_todo_scrollbar_press, handle_workspace_scrollbar_press,
-    lx_toast_at, mention_item_at, mention_tab_at, pane_at, pane_boundary_draggable,
-    pane_content_inner, pane_toggle_button_at, panel_item_at, prompt_boundary_hit,
-    prompt_header_at, slash_item_at, template_button_at,
+    handle_task_list_scrollbar_press, handle_terminal_scrollbar_press, handle_todo_scrollbar_press,
+    handle_workspace_scrollbar_press, lx_toast_at, mention_item_at, mention_tab_at, pane_at,
+    pane_boundary_draggable, pane_content_inner, pane_toggle_button_at, panel_item_at,
+    prompt_boundary_hit, prompt_header_at, slash_item_at, template_button_at,
 };
 use super::hover::reset_pointer_shape;
 use super::wheel::forward_pane_mouse_event;
@@ -706,6 +706,11 @@ pub(crate) fn handle_mouse_down_left(
                     mouse.row,
                     cache,
                 ) {
+                    update::focus_pane(state, pane);
+                    *dirty = true;
+                    return;
+                }
+                if handle_task_list_scrollbar_press(state, pane, inner, mouse.column, mouse.row) {
                     update::focus_pane(state, pane);
                     *dirty = true;
                     return;

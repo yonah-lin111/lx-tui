@@ -263,6 +263,8 @@ pub struct AppState {
     pub prompt_scroll_drag: Option<u16>,
     /// 拖拽后台任务输出容器滚动条 thumb 时相对顶部的抓取偏移。
     pub task_scroll_drag: Option<u16>,
+    /// 拖拽后台任务 item 列表滚动条 thumb：窗格与相对顶部的抓取偏移。
+    pub task_list_scroll_drag: Option<(PaneId, u16)>,
     /// 拖拽 Agents 详情滚动条 thumb：窗格与相对顶部的抓取偏移。
     pub task_agents_scroll_drag: Option<(PaneId, u16)>,
     /// prompt 树行最近一次左键点击（可见行索引、时刻）；双击判定用。
@@ -453,6 +455,7 @@ impl AppState {
             workspace_scroll_drag: None,
             prompt_scroll_drag: None,
             task_scroll_drag: None,
+            task_list_scroll_drag: None,
             task_agents_scroll_drag: None,
             prompt_row_click: None,
             page_row_click: None,

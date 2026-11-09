@@ -70,6 +70,7 @@ pub fn close_task_page(state: &mut AppState, pane: PaneId) -> bool {
         // 清掉拖拽抓取标记：面板没了还留着 grab，会让后续**所有**拖拽事件
         // （窗格分割线、选区、prompt 滚动条）都被输出区滚动条那一支吞掉。
         state.task_scroll_drag = None;
+        state.task_list_scroll_drag = None;
         state.task_agents_scroll_drag = None;
         crate::app::update::clear_lx_selection_for(state, pane);
     }
@@ -89,6 +90,7 @@ pub fn select_task_tab(state: &mut AppState, pane: PaneId, position: usize) -> b
     };
     let changed = page.select_tab(tab);
     if changed {
+        state.task_list_scroll_drag = None;
         crate::app::update::clear_lx_selection_for(state, pane);
     }
     changed
@@ -153,6 +155,27 @@ pub fn scroll_task_list(state: &mut AppState, pane: PaneId, delta: isize) -> boo
             crate::ui::main_content::lx::task::LIST_MAX,
             agents_len,
         ),
+    }
+}
+
+/// 直接设置 item 列表视口起点（滚动条轨道点击/thumb 拖拽）；返回是否变化。
+pub fn set_task_list_scroll(state: &mut AppState, pane: PaneId, offset: usize) -> bool {
+    let Some(target) = state.pane_mut_anywhere(pane) else {
+        return false;
+    };
+    let Some(filter) = target.lx.task.as_ref().map(|page| page.agent_filter) else {
+        return false;
+    };
+    let agents_len = target.lx.agents.filtered_indices(filter).len();
+    let Some(page) = target.lx.task.as_mut() else {
+        return false;
+    };
+    let visible = crate::ui::main_content::lx::task::LIST_MAX;
+    match page.tab {
+        crate::app::state::TaskTab::Processes => page.set_window_scroll(offset, visible),
+        crate::app::state::TaskTab::Agents => {
+            page.set_agents_window_scroll(offset, visible, agents_len)
+        }
     }
 }
 

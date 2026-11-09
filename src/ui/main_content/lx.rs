@@ -752,6 +752,16 @@ pub fn task_agents_rows(area: Rect, lx: &Lx) -> Option<(usize, usize)> {
     task::agents_rows(area, lx)
 }
 
+/// 后台任务面板 item 列表的滚动条几何；未打开或内容装得下时返回 None。
+pub fn task_list_scrollbar(
+    area: Rect,
+    lx: &Lx,
+) -> Option<crate::ui::widgets::scrollbar::ScrollbarLayout> {
+    let rects = task_rects(area, lx)?;
+    let page = lx.task.as_ref()?;
+    task::list_scrollbar(rects.list, page, &lx.agents)
+}
+
 /// `ask` 统一列表的 `(窗口起点, 总行数, 可视行数)`；滚轮基准与绘制同源。
 pub fn ask_list_window(area: Rect, lx: &Lx) -> Option<(usize, usize, usize)> {
     ask::list_window(area, lx)

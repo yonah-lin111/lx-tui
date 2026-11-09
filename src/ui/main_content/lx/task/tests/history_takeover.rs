@@ -600,3 +600,127 @@ fn resizing_the_window_keeps_a_manually_scrolled_output_position() {
     page.resize_output_viewport(6);
     assert_eq!(page.output_scroll, 94, "贴尾状态下继续跟随底部");
 }
+
+#[test]
+fn task_list_scrollbar_appears_only_when_items_overflow() {
+    let mut lx = lx_with_messages();
+    // 3 个进程（未溢出，LIST_MAX = 6）：没有滚动条。
+    let few_processes = vec![entry(1, "cmd1"), entry(2, "cmd2"), entry(3, "cmd3")];
+    lx.task = Some(page_with(few_processes));
+    let area = Rect::new(0, 0, 70, 30);
+    assert!(
+        crate::ui::main_content::lx::task_list_scrollbar(area, &lx).is_none(),
+        "进程数不超过 LIST_MAX 时不得出现滚动条"
+    );
+
+    // 10 个进程（溢出）：必须出现滚动条，且贴最右一列、只画 thumb。
+    let many_processes: Vec<ProcessEntry> =
+        (1..=10).map(|i| entry(i, &format!("cmd{i}"))).collect();
+    lx.task = Some(page_with(many_processes));
+    let bar = crate::ui::main_content::lx::task_list_scrollbar(area, &lx)
+        .expect("条目数超限时必须出现滚动条");
+    let rects = crate::ui::main_content::lx::task_rects(area, &lx).expect("面板矩形");
+    assert_eq!(bar.track.x, rects.list.right() - 1, "贴列表最右一列");
+    assert_eq!(
+        bar.track.y,
+        rects.list.y + TOP_BORDER + TAB_ROW,
+        "滚动条位于 tab 行下方"
+    );
+    assert_eq!(
+        bar.track.height, LIST_MAX as u16,
+        "轨道覆盖 item 列表可见行高度"
+    );
+    assert_eq!(bar.total, 10);
+    assert_eq!(bar.visible, LIST_MAX);
+
+    let lines = render_lines(&lx, 70, 30);
+    let list_top = usize::from(rects.list.y + TOP_BORDER + TAB_ROW);
+    let list_bottom = list_top + LIST_MAX;
+    let list_has_thumb = lines[list_top..list_bottom]
+        .iter()
+        .any(|line| line.contains('▐'));
+    assert!(list_has_thumb, "列表区必须画出 thumb 字符：{lines:#?}");
+
+    // 切到 Agents 页签同理：条目少时不显示，超量时显示。
+    let mut page = page_with(vec![entry(1, "cmd1")]);
+    page.tab = TaskTab::Agents;
+    lx.task = Some(page);
+    lx.agents = AgentsState::default();
+    assert!(
+        crate::ui::main_content::lx::task_list_scrollbar(area, &lx).is_none(),
+        "Agents 为空时不显示滚动条"
+    );
+
+    for i in 1..=10 {
+        lx.agents
+            .runs
+            .push(crate::app::state::SubagentRun::from_record(
+                &crate::db::chat::SubagentRecord {
+                    agent_id: format!("agent-{i}"),
+                    nickname: None,
+                    agent_path: format!("/root/agent-{i}"),
+                    child_session_id: format!("s-{i}"),
+                    parent_session_id: "root".into(),
+                    spawn_message_id: None,
+                    role: crate::chat::agent::AgentRole::Executor,
+                    model_provider: String::new(),
+                    model_id: String::new(),
+                    model_variant: None,
+                    status: "running".into(),
+                    title: format!("task {i}"),
+                    created_at_ms: 0,
+                    completed_at_ms: None,
+                    report_json: None,
+                    report_delivered: false,
+                },
+            ));
+    }
+    let agent_bar = crate::ui::main_content::lx::task_list_scrollbar(area, &lx)
+        .expect("Agents 超限时必须出现滚动条");
+    assert_eq!(agent_bar.total, 10);
+    assert_eq!(agent_bar.visible, LIST_MAX);
+}
+
+#[test]
+fn task_list_scrollbar_jump_and_drag_updates_viewport() {
+    let mut state = crate::app::state::AppState::demo();
+    let pane = state.active_tab().layout.focus();
+    let many_processes: Vec<ProcessEntry> =
+        (1..=10).map(|i| entry(i, &format!("cmd{i}"))).collect();
+    let mut page = page_with(many_processes);
+    page.window.active = 0;
+    let target = state.pane_mut_anywhere(pane).expect("pane");
+    target.lx.task = Some(page);
+
+    // 初始状态视口起点跟随 active (0)。
+    assert!(
+        crate::app::update::set_task_list_scroll(&mut state, pane, 3),
+        "滚动视口到 3"
+    );
+    let target = state.pane_anywhere(pane).expect("pane");
+    assert_eq!(
+        target.lx.task.as_ref().unwrap().window.viewport,
+        Some(3),
+        "视口更新为 3"
+    );
+
+    // 越界夹取：最多滚动到 10 - 6 = 4。
+    assert!(
+        crate::app::update::set_task_list_scroll(&mut state, pane, 99),
+        "滚动到越界位置"
+    );
+    let target = state.pane_anywhere(pane).expect("pane");
+    assert_eq!(
+        target.lx.task.as_ref().unwrap().window.viewport,
+        Some(4),
+        "视口被钳制到最大偏移 4"
+    );
+
+    // 关闭后台任务页清空 drag 状态。
+    state.task_list_scroll_drag = Some((pane, 2));
+    assert!(crate::app::update::close_task_page(&mut state, pane));
+    assert!(
+        state.task_list_scroll_drag.is_none(),
+        "关闭页面后清空拖拽标记"
+    );
+}

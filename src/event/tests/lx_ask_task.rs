@@ -771,3 +771,87 @@ fn task_page_agent_reply_renders_selection_and_supports_copy_cut_and_esc() {
         "Ctrl+X 剪切后追问框文本清空"
     );
 }
+
+#[test]
+fn task_list_scrollbar_mouse_press_and_drag_events() {
+    let config = Config::default();
+    let mut state = AppState::demo();
+    let geo = geometry(&state, &config, Rect::new(0, 0, 120, 24));
+    let pane = state.active_tab().layout.focus();
+    let inner = pane_inner(&geo, pane);
+    {
+        let target = state.pane_mut_anywhere(pane).expect("pane");
+        target.view = PaneView::Lx;
+        let many_processes: Vec<crate::app::state::ProcessEntry> = (1..=10)
+            .map(|i| crate::app::state::ProcessEntry {
+                session_id: i,
+                command: format!("proc-{i}"),
+                cwd: "/w".into(),
+                tty: false,
+                started_at_ms: 0,
+            })
+            .collect();
+        let mut page = crate::app::state::TaskPage::default();
+        page.set_processes(many_processes, 0);
+        target.lx.task = Some(page);
+    }
+    let bar = {
+        let target = state.pane_anywhere(pane).expect("pane");
+        ui::main_content::lx::task_list_scrollbar(inner, &target.lx)
+            .expect("item 列表溢出时必须有滚动条")
+    };
+    let mut sessions = HashMap::new();
+    let mut cache = ui::RenderCache::default();
+    let mut dirty = false;
+
+    // 1. 点击轨道 thumb 处按下：开始拖拽
+    let thumb_row = bar.thumb.y;
+    handle_terminal_event(
+        mouse(
+            MouseEventKind::Down(MouseButton::Left),
+            bar.track.x,
+            thumb_row,
+        ),
+        &mut state,
+        &mut sessions,
+        &geo,
+        &config,
+        &mut cache,
+        &mut dirty,
+    );
+    assert!(state.task_list_scroll_drag.is_some(), "点击 thumb 开启拖拽");
+
+    // 2. 拖拽到轨道底端：视口滚动到底部
+    handle_terminal_event(
+        mouse(
+            MouseEventKind::Drag(MouseButton::Left),
+            bar.track.x,
+            bar.track.bottom().saturating_sub(1),
+        ),
+        &mut state,
+        &mut sessions,
+        &geo,
+        &config,
+        &mut cache,
+        &mut dirty,
+    );
+    let target = state.pane_anywhere(pane).expect("pane");
+    let page = target.lx.task.as_ref().expect("page");
+    assert_eq!(page.window.viewport, Some(4), "拖拽到底部对应视口偏移 4");
+
+    // 3. 鼠标松开：结束拖拽
+    handle_terminal_event(
+        mouse(
+            MouseEventKind::Up(MouseButton::Left),
+            bar.track.x,
+            bar.track.bottom().saturating_sub(1),
+        ),
+        &mut state,
+        &mut sessions,
+        &geo,
+        &config,
+        &mut cache,
+        &mut dirty,
+    );
+    assert!(state.task_list_scroll_drag.is_none(), "松开鼠标清除拖拽");
+}

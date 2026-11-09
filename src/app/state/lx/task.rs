@@ -389,6 +389,17 @@ impl TaskPage {
         scroll_window(&mut self.agents_window, len, delta, visible)
     }
 
+    /// 直接设置进程列表显式视口起点（滚动条轨道点击/thumb 拖拽）；返回是否变化。
+    pub fn set_window_scroll(&mut self, offset: usize, visible: usize) -> bool {
+        let len = self.processes.len();
+        set_window_scroll(&mut self.window, len, offset, visible)
+    }
+
+    /// 直接设置 Agents 列表显式视口起点（滚动条轨道点击/thumb 拖拽）；返回是否变化。
+    pub fn set_agents_window_scroll(&mut self, offset: usize, visible: usize, len: usize) -> bool {
+        set_window_scroll(&mut self.agents_window, len, offset, visible)
+    }
+
     /// 翻动输出区（负数向上）；返回视口是否移动。
     pub fn scroll_output(&mut self, delta: isize) -> bool {
         let max = self.output_max_scroll();
@@ -472,6 +483,24 @@ fn scroll_window(window: &mut PanelWindow, len: usize, delta: isize, visible: us
     let next = (current as isize)
         .saturating_add(delta)
         .clamp(0, max as isize) as usize;
+    if next == current && window.viewport.is_some() {
+        return false;
+    }
+    window.viewport = Some(next);
+    true
+}
+
+/// 直接设置任意列表显式视口起点（滚动条轨道点击/thumb 拖拽）。
+fn set_window_scroll(window: &mut PanelWindow, len: usize, offset: usize, visible: usize) -> bool {
+    if len == 0 || visible == 0 {
+        return false;
+    }
+    let max = len.saturating_sub(visible);
+    let current = window.viewport.unwrap_or_else(|| {
+        let active = window.active.min(len - 1);
+        active.saturating_sub(visible - 1).min(max)
+    });
+    let next = offset.min(max);
     if next == current && window.viewport.is_some() {
         return false;
     }
