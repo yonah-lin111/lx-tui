@@ -86,7 +86,7 @@ pub fn restore_selected_task_agent(
         page.agents_window.active = position;
         page.agents_window.anchor = position;
     }
-    page.agents_window.clamp(filtered.len());
+    crate::app::state::lx::task::clamp_task_window(&mut page.agents_window, filtered.len());
 }
 
 /// 同步底边框的 blocked 计数（子 agent 状态变化后调用）。

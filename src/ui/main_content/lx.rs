@@ -285,10 +285,11 @@ pub struct TaskRects {
 /// 面板打开时的两段矩形；未打开返回 None。
 pub fn task_rects(area: Rect, lx: &Lx) -> Option<TaskRects> {
     let lay = layout(area, lx);
-    Some(TaskRects {
-        list: lay.task_list?,
-        output: lay.task_output?,
-    })
+    let list = lay.task_list?;
+    let output = lay
+        .task_output
+        .unwrap_or_else(|| Rect::new(list.x, list.y, list.width, 0));
+    Some(TaskRects { list, output })
 }
 
 /// 计算整页布局。
@@ -621,7 +622,7 @@ fn build_chat(
     //
     // 后台任务面板打开时**不画历史**（面板占用同一块矩形），但历史几何仍照常
     // 计算：滚动偏移与 `follow_bottom` 全程不动，关闭面板后消息列表原样回来。
-    let sticky = if lay.task_output.is_some() {
+    let sticky = if lx.task.is_some() {
         None
     } else if lx.chat.loading_session {
         if history_rect.width > 0 && history_rect.height > 0 {

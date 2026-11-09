@@ -334,6 +334,7 @@ pub(crate) fn handle_task_agents_scrollbar_press(
     true
 }
 
+/// 后台任务面板 item 列表滚动条按下：thumb 拖拽或轨道跳转（含右侧 1 列边距容差）；返回是否命中。
 pub(crate) fn handle_task_list_scrollbar_press(
     state: &mut AppState,
     pane: PaneId,

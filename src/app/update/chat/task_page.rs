@@ -90,7 +90,10 @@ pub fn select_task_tab(state: &mut AppState, pane: PaneId, position: usize) -> b
     };
     let changed = page.select_tab(tab);
     if changed {
+        page.clamp(&target.lx.agents);
+        state.task_scroll_drag = None;
         state.task_list_scroll_drag = None;
+        state.task_agents_scroll_drag = None;
         crate::app::update::clear_lx_selection_for(state, pane);
     }
     changed

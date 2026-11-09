@@ -616,7 +616,7 @@ pub(crate) fn hit(
     }
     // item 行：进程列表走原逻辑，Agents 列表按同一套窗口起点命中。
     let list_y = rect.y.saturating_add(TOP_BORDER + TAB_ROW);
-    if page.tab != TaskTab::Agents || row < list_y {
+    if page.tab != TaskTab::Agents || row < list_y || column < rect.x || column >= rect.right() {
         return None;
     }
     // 排除右侧滚动条所在列：点击滚动条不能误触 Agent 条目选中。

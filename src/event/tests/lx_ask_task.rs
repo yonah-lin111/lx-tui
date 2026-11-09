@@ -803,89 +803,95 @@ fn task_list_scrollbar_mouse_press_and_drag_events() {
     let mut sessions = HashMap::new();
     let mut cache = ui::RenderCache::default();
     let mut dirty = false;
+    let mut send = |kind, col, row, state: &mut AppState| {
+        handle_terminal_event(
+            mouse(kind, col, row),
+            state,
+            &mut sessions,
+            &geo,
+            &config,
+            &mut cache,
+            &mut dirty,
+        );
+    };
 
-    // 1. 点击轨道 thumb 处按下：开始拖拽
-    let thumb_row = bar.thumb.y;
-    handle_terminal_event(
-        mouse(
-            MouseEventKind::Down(MouseButton::Left),
-            bar.track.x,
-            thumb_row,
-        ),
+    // 1. 点击轨道 thumb 处按下并拖到底端，松开结束拖拽
+    send(
+        MouseEventKind::Down(MouseButton::Left),
+        bar.track.x,
+        bar.thumb.y,
         &mut state,
-        &mut sessions,
-        &geo,
-        &config,
-        &mut cache,
-        &mut dirty,
     );
     assert!(state.task_list_scroll_drag.is_some(), "点击 thumb 开启拖拽");
-
-    // 2. 拖拽到轨道底端：视口滚动到底部
-    handle_terminal_event(
-        mouse(
-            MouseEventKind::Drag(MouseButton::Left),
-            bar.track.x,
-            bar.track.bottom().saturating_sub(1),
-        ),
+    let bottom_row = bar.track.bottom().saturating_sub(1);
+    send(
+        MouseEventKind::Drag(MouseButton::Left),
+        bar.track.x,
+        bottom_row,
         &mut state,
-        &mut sessions,
-        &geo,
-        &config,
-        &mut cache,
-        &mut dirty,
     );
-    let target = state.pane_anywhere(pane).expect("pane");
-    let page = target.lx.task.as_ref().expect("page");
-    assert_eq!(page.window.viewport, Some(4), "拖拽到底部对应视口偏移 4");
-
-    // 3. 鼠标松开：结束拖拽
-    handle_terminal_event(
-        mouse(
-            MouseEventKind::Up(MouseButton::Left),
-            bar.track.x,
-            bar.track.bottom().saturating_sub(1),
-        ),
+    assert_eq!(
+        state
+            .pane_anywhere(pane)
+            .unwrap()
+            .lx
+            .task
+            .as_ref()
+            .unwrap()
+            .window
+            .viewport,
+        Some(4),
+        "拖拽到底部对应视口偏移 4"
+    );
+    send(
+        MouseEventKind::Up(MouseButton::Left),
+        bar.track.x,
+        bottom_row,
         &mut state,
-        &mut sessions,
-        &geo,
-        &config,
-        &mut cache,
-        &mut dirty,
     );
     assert!(state.task_list_scroll_drag.is_none(), "松开鼠标清除拖拽");
 
-    // 4. 点击滚动条右侧边距一列（容错命中）：跳转视口
-    handle_terminal_event(
-        mouse(
-            MouseEventKind::Down(MouseButton::Left),
-            inner.right().saturating_sub(1),
-            bar.track.y,
-        ),
+    // 2. 点击滚动条右侧边距一列（容错命中）：跳转视口到顶部
+    send(
+        MouseEventKind::Down(MouseButton::Left),
+        inner.right().saturating_sub(1),
+        bar.track.y,
         &mut state,
-        &mut sessions,
-        &geo,
-        &config,
-        &mut cache,
-        &mut dirty,
     );
-    let target = state.pane_anywhere(pane).expect("pane");
-    let page = target.lx.task.as_ref().expect("page");
-    assert_eq!(page.window.viewport, Some(0), "点击顶部轨道跳回视口 0");
+    assert_eq!(
+        state
+            .pane_anywhere(pane)
+            .unwrap()
+            .lx
+            .task
+            .as_ref()
+            .unwrap()
+            .window
+            .viewport,
+        Some(0),
+        "点击顶部轨道跳回视口 0"
+    );
 
-    // 5. 在滚动条列使用滚轮滚动：视口正常向下滚动
-    handle_terminal_event(
-        mouse(MouseEventKind::ScrollDown, bar.track.x, bar.track.y + 1),
+    // 3. 在滚动条列使用滚轮滚动：视口正常向下滚动
+    send(
+        MouseEventKind::ScrollDown,
+        bar.track.x,
+        bar.track.y + 1,
         &mut state,
-        &mut sessions,
-        &geo,
-        &config,
-        &mut cache,
-        &mut dirty,
     );
-    let target = state.pane_anywhere(pane).expect("pane");
-    let page = target.lx.task.as_ref().expect("page");
-    assert_eq!(page.window.viewport, Some(3), "滚轮向下滚动 3 行");
+    assert_eq!(
+        state
+            .pane_anywhere(pane)
+            .unwrap()
+            .lx
+            .task
+            .as_ref()
+            .unwrap()
+            .window
+            .viewport,
+        Some(3),
+        "滚轮向下滚动 3 行"
+    );
 }
 
 #[test]
@@ -938,75 +944,49 @@ fn task_agents_list_scrollbar_preserves_viewport_across_refresh_and_selection() 
     let mut sessions = HashMap::new();
     let mut cache = ui::RenderCache::default();
     let mut dirty = false;
-
-    // 1. 拖拽 Agents 列表滚动条到底部
-    handle_terminal_event(
-        mouse(
-            MouseEventKind::Down(MouseButton::Left),
-            bar.track.x,
-            bar.thumb.y,
-        ),
-        &mut state,
-        &mut sessions,
-        &geo,
-        &config,
-        &mut cache,
-        &mut dirty,
-    );
-    handle_terminal_event(
-        mouse(
-            MouseEventKind::Drag(MouseButton::Left),
-            bar.track.x,
-            bar.track.bottom().saturating_sub(1),
-        ),
-        &mut state,
-        &mut sessions,
-        &geo,
-        &config,
-        &mut cache,
-        &mut dirty,
-    );
-    handle_terminal_event(
-        mouse(
-            MouseEventKind::Up(MouseButton::Left),
-            bar.track.x,
-            bar.track.bottom().saturating_sub(1),
-        ),
-        &mut state,
-        &mut sessions,
-        &geo,
-        &config,
-        &mut cache,
-        &mut dirty,
-    );
-    {
-        let target = state.pane_anywhere(pane).expect("pane");
-        let page = target.lx.task.as_ref().expect("page");
-        assert_eq!(page.agents_window.viewport, Some(2), "拖拽到底部后视口为 2");
-    }
-
-    // 2. 模拟每帧 ListSubagents / sync_agent_ui_queue 调用的 restore_selected_task_agent：
-    //    视口绝不能被清空为 None。
-    {
-        let target = state.pane_mut_anywhere(pane).expect("pane");
-        update::restore_selected_task_agent(&mut target.lx, Some("sub-3"));
-        let page = target.lx.task.as_ref().expect("page");
-        assert_eq!(
-            page.agents_window.viewport,
-            Some(2),
-            "后台列表同步不得重置滚动条视口"
+    let bottom_row = bar.track.bottom().saturating_sub(1);
+    for kind in [
+        MouseEventKind::Down(MouseButton::Left),
+        MouseEventKind::Drag(MouseButton::Left),
+        MouseEventKind::Up(MouseButton::Left),
+    ] {
+        let row = if matches!(kind, MouseEventKind::Down(_)) {
+            bar.thumb.y
+        } else {
+            bottom_row
+        };
+        handle_terminal_event(
+            mouse(kind, bar.track.x, row),
+            &mut state,
+            &mut sessions,
+            &geo,
+            &config,
+            &mut cache,
+            &mut dirty,
         );
     }
+    let agents_viewport = |state: &AppState| {
+        state
+            .pane_anywhere(pane)
+            .unwrap()
+            .lx
+            .task
+            .as_ref()
+            .unwrap()
+            .agents_window
+            .viewport
+    };
+    assert_eq!(agents_viewport(&state), Some(2), "拖拽到底部后视口为 2");
 
-    // 3. 点击当前视口内的某条 Agent：不得把视口弹回 0。
+    // 后台列表同步与点击当前视口内条目均不得把视口重置回 None/0
+    update::restore_selected_task_agent(
+        &mut state.pane_mut_anywhere(pane).expect("pane").lx,
+        Some("sub-3"),
+    );
     assert!(update::select_task_agent(&mut state, pane, 2));
-    {
-        let target = state.pane_anywhere(pane).expect("pane");
-        let page = target.lx.task.as_ref().expect("page");
-        assert_eq!(
-            page.agents_window.viewport,
-            Some(2),
-            "点选条目保持当前滚动视口"
-        );
-    }
+    assert_eq!(
+        agents_viewport(&state),
+        Some(2),
+        "后台刷新与点选条目保持当前滚动视口"
+    );
 }
