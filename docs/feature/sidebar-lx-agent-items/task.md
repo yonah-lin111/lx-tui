@@ -1,6 +1,6 @@
 # 左侧侧栏 Agents 分区新增 lx 模式条目 — 执行任务清单
 
-> 状态：**已在 `.worktrees/sidebar-lx-agent-items` 完成实现、代码复审与 P0–P3 闭环修复，待用户确认合并**（2026-11-09）
+> 状态：**已完成实现、代码复审与 P0–P3 闭环修复，已合并至 `dev` 并移除临时 worktree `.worktrees/sidebar-lx-agent-items` 与分支 `feat/sidebar-lx-agent-items`**（2026-11-09）
 > 设计依据：[design.md](design.md) · 评审报告：[review.md](review.md)
 > 阶段划分：P0（开工门槛与基线核对）→ P1（`app` 层状态派生与视图跳转）→ P2（`ui` 与 `event` 层渲染、文案与点击接入）→ P3（单元测试与改后精确校验）→ P4（代码评审问题闭环修复）。
 

@@ -1,6 +1,6 @@
 # 左侧侧栏 Agents 分区新增 lx 模式条目 — 设计文档
 
-> 状态：**已在 `.worktrees/sidebar-lx-agent-items` 完成实现、代码复审与 P0–P3 闭环修复，待用户确认合并**（2026-11-09）
+> 状态：**已完成实现、代码复审与 P0–P3 闭环修复，已合并至 `dev` 并移除临时 worktree `.worktrees/sidebar-lx-agent-items` 与分支 `feat/sidebar-lx-agent-items`**（2026-11-09）
 > 规范依据：
 > - [`AGENTS.md`](../../../AGENTS.md)
 > - [`docs/standards/project-directory-structure.md`](../../standards/project-directory-structure.md)

@@ -1,8 +1,9 @@
 # 左侧栏 `Agents` 分区展示 `lx` 模式条目 — 代码评审报告 (`review.md`)
 
-- **评审范围**：`feat/sidebar-lx-agent-items` 分支（worktree：`.worktrees/sidebar-lx-agent-items`），初版实现提交 `476f2fc`（对比基准：`dev` @ `42e70535`）
+- **评审范围**：`feat/sidebar-lx-agent-items` 分支（worktree：`.worktrees/sidebar-lx-agent-items`），初版实现提交 `476f2fcf`（对比基准：`dev` @ `42e70535`）
+- **修复提交**：`f6580f0d`（code + review/docs）
 - **特性目录**：`docs/feature/sidebar-lx-agent-items/`
-- **合并状态**：已在 `.worktrees/sidebar-lx-agent-items` 完成 P0–P3 全部问题修复与回归测试，待用户确认后合并回 `dev`
+- **合并状态**：已合并至 `dev`，临时 worktree `.worktrees/sidebar-lx-agent-items`、分支 `feat/sidebar-lx-agent-items` 及隔离开发库已移除
 - **关联文档**：[design.md](design.md) · [task.md](task.md)
 - **评审方式**：使用 `codegraph` 与 `codebase-memory-mcp` 检索调用链与爆炸半径，并委派并行子 Agent 分别对 `Lx` 会话生命周期状态机、侧栏渲染/命中/滚动钳制与跨容器交互进行深度源码审计
 - **结论**：共发现 **5 项问题（P0 1 项、P1 2 项、P2 1 项、P3 1 项）**，已全部闭环修复并通过回归测试。
