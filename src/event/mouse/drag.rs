@@ -192,6 +192,26 @@ pub(crate) fn handle_mouse_drag(
         }
         return;
     }
+    if let Some((pane, grab)) = state.task_list_scroll_drag {
+        // 后台任务 item 列表滚动条：按拖拽行换算目标偏移（与轨道点击同一套几何）。
+        let bar = rects
+            .iter()
+            .find(|(id, _)| *id == pane)
+            .and_then(|(_, rect)| {
+                let inner = layout::pane_inner_rect(*rect);
+                state
+                    .pane_anywhere(pane)
+                    .and_then(|target| ui::main_content::lx::task_list_scrollbar(inner, &target.lx))
+            });
+        let Some(bar) = bar else {
+            return;
+        };
+        let offset = ui::widgets::scrollbar::offset_from_drag_row(&bar, mouse.row, grab);
+        if update::set_task_list_scroll(state, pane, offset) {
+            *dirty = true;
+        }
+        return;
+    }
     if let Some(grab) = state.prompt_recent_scroll_drag {
         let Some(bar) = ui::prompt_frame::prompt_recent_scrollbar(view.prompt, state) else {
             return;
@@ -586,6 +606,15 @@ pub(crate) fn handle_mouse_up_left(
         *dirty = true;
         return;
     }
+    if state.task_scroll_drag.take().is_some() {
+        return;
+    }
+    if state.task_agents_scroll_drag.take().is_some() {
+        return;
+    }
+    if state.task_list_scroll_drag.take().is_some() {
+        return;
+    }
     if state.overlay.is_some() {
         return;
     }
@@ -604,12 +633,6 @@ pub(crate) fn handle_mouse_up_left(
     // 漏掉这一条会让 drag 分支永久停在 Todo 滚动条上：之后拖分隔线、拖选区、
     // 拖 lx 卡片全部被静默吞掉（只有再点一次 Todo 滚动条才能解除）。
     if state.todo_scroll_drag.take().is_some() {
-        return;
-    }
-    if state.task_scroll_drag.take().is_some() {
-        return;
-    }
-    if state.task_agents_scroll_drag.take().is_some() {
         return;
     }
     if state.agent_scroll_drag.take().is_some() {

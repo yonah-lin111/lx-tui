@@ -239,19 +239,74 @@ pub(super) fn draw_list(
         }
     }
 
-    let list = Rect::new(
+    let list = list_rect(rect);
+    if list.height == 0 {
+        return;
+    }
+    let bar = list_scrollbar(rect, page, agents);
+    let content = match bar.as_ref() {
+        Some(_) => Rect::new(list.x, list.y, list.width.saturating_sub(1), list.height),
+        None => list,
+    };
+    match page.tab {
+        TaskTab::Processes => draw_processes(grid, content, page),
+        TaskTab::Agents => agents::draw_list(grid, content, page, agents),
+    }
+    if let Some(bar) = bar {
+        for y in bar.thumb.y..bar.thumb.bottom() {
+            grid.put_char(bar.thumb.x, y, THUMB_CHAR, style::text());
+        }
+    }
+}
+
+/// item 列表正文区域（顶边框 + tab 行之下）。
+pub(super) fn list_rect(rect: Rect) -> Rect {
+    Rect::new(
         rect.x,
         rect.y.saturating_add(TOP_BORDER + TAB_ROW),
         rect.width,
         rect.height.saturating_sub(TOP_BORDER + TAB_ROW),
-    );
-    if list.height == 0 {
-        return;
-    }
+    )
+}
+
+/// item 列表的滚动条槽矩形（最右一列）；宽度不足时 None。
+pub(super) fn list_scrollbar_rect(rect: Rect) -> Option<Rect> {
+    let list = list_rect(rect);
+    (list.width >= 2 && list.height > 0)
+        .then(|| Rect::new(list.right() - 1, list.y, 1, list.height))
+}
+
+/// item 列表的条目总数、可见行数与视口起始偏移。
+pub(crate) fn list_metrics(
+    rect: Rect,
+    page: &TaskPage,
+    agents: &crate::app::state::AgentsState,
+) -> (usize, usize, usize) {
+    let list = list_rect(rect);
+    let visible = usize::from(list.height);
     match page.tab {
-        TaskTab::Processes => draw_processes(grid, list, page),
-        TaskTab::Agents => agents::draw_list(grid, list, page, agents),
+        TaskTab::Processes => {
+            let total = page.processes.len();
+            let start = window_start(page, visible);
+            (total, visible, start)
+        }
+        TaskTab::Agents => {
+            let total = agents.filtered_indices(page.agent_filter).len();
+            let start = agents::window_start(page, agents, visible);
+            (total, visible, start)
+        }
     }
+}
+
+/// item 列表的滚动条几何（命中与绘制用）：内容溢出时才有。
+pub(crate) fn list_scrollbar(
+    rect: Rect,
+    page: &TaskPage,
+    agents: &crate::app::state::AgentsState,
+) -> Option<crate::ui::widgets::scrollbar::ScrollbarLayout> {
+    let slot = list_scrollbar_rect(rect)?;
+    let (total, visible, start) = list_metrics(rect, page, agents);
+    crate::ui::widgets::scrollbar::layout(slot, total, visible, start)
 }
 
 /// Agents 详情区：有高亮项时画子 agent 消息流，否则回退到进程输出容器。
@@ -561,7 +616,13 @@ pub(crate) fn hit(
     }
     // item 行：进程列表走原逻辑，Agents 列表按同一套窗口起点命中。
     let list_y = rect.y.saturating_add(TOP_BORDER + TAB_ROW);
-    if page.tab != TaskTab::Agents || row < list_y {
+    if page.tab != TaskTab::Agents || row < list_y || column < rect.x || column >= rect.right() {
+        return None;
+    }
+    // 排除右侧滚动条所在列：点击滚动条不能误触 Agent 条目选中。
+    if let Some(bar) = list_scrollbar(rect, page, agents)
+        && column >= bar.track.x
+    {
         return None;
     }
     let visible = usize::from(rect.height.saturating_sub(TOP_BORDER + TAB_ROW));

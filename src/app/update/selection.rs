@@ -337,6 +337,8 @@ pub fn stop_active_selection_drags(state: &mut AppState) {
     state.lx_card_press = None;
     state.lx_scroll_drag = None;
     state.lx_history_scroll_drag = None;
+    state.task_scroll_drag = None;
+    state.task_list_scroll_drag = None;
     state.task_agents_scroll_drag = None;
     state.lx_input_drag = None;
     state.overlay_input_drag = false;

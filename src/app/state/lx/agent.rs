@@ -182,7 +182,7 @@ impl SubagentRun {
         None
     }
 
-    /// 运行中子 agent 的实时动作摘要（主历史 `spawn_agent` 卡片用）。
+    /// 运行中子 agent 的实时动作摘要（供状态回填快照记录，主历史 `spawn_agent` 卡片已精简不渲染）。
     ///
     /// 只读本地消息模型：先看最新 assistant 消息里是否还有在途工具，
     /// 否则退回最后一步的思考/正文预览；终态返回 None。

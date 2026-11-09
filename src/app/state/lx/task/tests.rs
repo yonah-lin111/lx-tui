@@ -152,3 +152,37 @@ fn tab_labels_cover_every_tab() {
         assert!(!tab.label().is_empty(), "{tab:?} 缺少标签");
     }
 }
+
+#[test]
+fn shrinking_list_clamps_viewport_to_max_scroll_and_up_arrow_recovers_scrolled_top() {
+    let mut page = page_with(10);
+    assert!(page.set_window_scroll(4, 6));
+    assert_eq!(page.window.viewport, Some(4));
+
+    // 列表从 10 条缩到 7 条（最大窗口起点 = 7 - 6 = 1）：viewport 立即钳到 1，首次上滚即可归 0。
+    let shorter = (1..=7).map(entry).collect();
+    assert!(page.set_processes(shorter, 0));
+    assert_eq!(
+        page.window.viewport,
+        Some(1),
+        "列表缩短时视口钳到 len - visible"
+    );
+    assert!(
+        page.scroll_window(-1, 6),
+        "首次上滚不再被未钳制的旧偏移吞掉"
+    );
+    assert_eq!(page.window.viewport, Some(0));
+
+    // active 在首项但鼠标下滚到 viewport = Some(1) 时，按 ↑ 先把视口收回顶部（返回 true，不误关面板）。
+    assert!(page.set_window_scroll(1, 6));
+    assert_eq!(page.window.active, 0);
+    assert!(
+        page.move_active(&AgentsState::default(), -1),
+        "视口不在顶部时按 ↑ 先收回视口"
+    );
+    assert_eq!(page.window.viewport, None);
+    assert!(
+        !page.move_active(&AgentsState::default(), -1),
+        "视口与高亮都在顶部时再按 ↑ 返回 false 退出面板"
+    );
+}

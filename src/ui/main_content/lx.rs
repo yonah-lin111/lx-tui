@@ -285,10 +285,11 @@ pub struct TaskRects {
 /// 面板打开时的两段矩形；未打开返回 None。
 pub fn task_rects(area: Rect, lx: &Lx) -> Option<TaskRects> {
     let lay = layout(area, lx);
-    Some(TaskRects {
-        list: lay.task_list?,
-        output: lay.task_output?,
-    })
+    let list = lay.task_list?;
+    let output = lay
+        .task_output
+        .unwrap_or_else(|| Rect::new(list.x, list.y, list.width, 0));
+    Some(TaskRects { list, output })
 }
 
 /// 计算整页布局。
@@ -621,7 +622,7 @@ fn build_chat(
     //
     // 后台任务面板打开时**不画历史**（面板占用同一块矩形），但历史几何仍照常
     // 计算：滚动偏移与 `follow_bottom` 全程不动，关闭面板后消息列表原样回来。
-    let sticky = if lay.task_output.is_some() {
+    let sticky = if lx.task.is_some() {
         None
     } else if lx.chat.loading_session {
         if history_rect.width > 0 && history_rect.height > 0 {
@@ -750,6 +751,16 @@ pub fn task_output_inner(area: Rect, lx: &Lx) -> Option<Rect> {
 /// Agents 详情区的 `(可见行数, 总行数)`；不在 Agents 页或无高亮项返回 None。
 pub fn task_agents_rows(area: Rect, lx: &Lx) -> Option<(usize, usize)> {
     task::agents_rows(area, lx)
+}
+
+/// 后台任务面板 item 列表的滚动条几何；未打开或内容装得下时返回 None。
+pub fn task_list_scrollbar(
+    area: Rect,
+    lx: &Lx,
+) -> Option<crate::ui::widgets::scrollbar::ScrollbarLayout> {
+    let rects = task_rects(area, lx)?;
+    let page = lx.task.as_ref()?;
+    task::list_scrollbar(rects.list, page, &lx.agents)
 }
 
 /// `ask` 统一列表的 `(窗口起点, 总行数, 可视行数)`；滚轮基准与绘制同源。

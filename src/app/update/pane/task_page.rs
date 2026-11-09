@@ -296,8 +296,11 @@ fn cycle_agent_filter(state: &mut AppState, pane: PaneId) -> bool {
     page.agent_filter = page.agent_filter.next();
     page.agent_reply = None;
     page.agent_reply_target = None;
+    page.agents_focus = None;
+    page.agents_window.viewport = None;
     let filtered = target.lx.agents.filtered_indices(page.agent_filter).len();
-    page.agents_window.clamp(filtered);
+    crate::app::state::lx::task::clamp_task_window(&mut page.agents_window, filtered);
+    state.task_list_scroll_drag = None;
     true
 }
 
@@ -317,7 +320,7 @@ fn clamp_agents_window(state: &mut AppState, pane: PaneId) {
         .pane_mut_anywhere(pane)
         .and_then(|target| target.lx.task.as_mut())
     {
-        page.agents_window.clamp(filtered);
+        crate::app::state::lx::task::clamp_task_window(&mut page.agents_window, filtered);
     }
 }
 
@@ -378,11 +381,14 @@ pub fn select_task_agent_filter(
         page.agent_filter = filter;
         page.agent_reply = None;
         page.agent_reply_target = None;
+        page.agents_focus = None;
+        page.agents_window.viewport = None;
         let filtered = target.lx.agents.filtered_indices(filter).len();
-        page.agents_window.clamp(filtered);
+        crate::app::state::lx::task::clamp_task_window(&mut page.agents_window, filtered);
         true
     };
     if changed {
+        state.task_list_scroll_drag = None;
         ensure_selected_agent_loaded(state, pane);
         crate::app::update::clear_lx_selection_for(state, pane);
     }
@@ -453,6 +459,9 @@ pub(super) fn apply_task_page_input(state: &mut AppState, pane: PaneId, command:
                 .and_then(|target| target.lx.task.as_mut())
                 .is_some_and(|page| page.cycle_tab(-1));
             if cycled {
+                state.task_scroll_drag = None;
+                state.task_list_scroll_drag = None;
+                state.task_agents_scroll_drag = None;
                 clamp_agents_window(state, pane);
                 ensure_selected_agent_loaded(state, pane);
                 crate::app::update::clear_lx_selection_for(state, pane);
@@ -464,6 +473,9 @@ pub(super) fn apply_task_page_input(state: &mut AppState, pane: PaneId, command:
                 .and_then(|target| target.lx.task.as_mut())
                 .is_some_and(|page| page.cycle_tab(1));
             if cycled {
+                state.task_scroll_drag = None;
+                state.task_list_scroll_drag = None;
+                state.task_agents_scroll_drag = None;
                 clamp_agents_window(state, pane);
                 ensure_selected_agent_loaded(state, pane);
                 crate::app::update::clear_lx_selection_for(state, pane);

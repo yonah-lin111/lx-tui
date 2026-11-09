@@ -250,9 +250,11 @@ impl TaskPage {
 
     /// 按当前 tab 集合钳制高亮窗口。
     pub fn clamp(&mut self, agents: &AgentsState) {
-        self.window.clamp(self.processes.len());
-        self.agents_window
-            .clamp(agents.filtered_indices(self.agent_filter).len());
+        clamp_task_window(&mut self.window, self.processes.len());
+        clamp_task_window(
+            &mut self.agents_window,
+            agents.filtered_indices(self.agent_filter).len(),
+        );
     }
 
     /// 切换 tab（←/→ 轮转），并钳制高亮。
@@ -273,7 +275,7 @@ impl TaskPage {
         // 窗口状态属于**进程列表**，与当前 tab 的条目数无关：`Agents` 恒为 0，
         // 若按 `self.len()` 钳制会把 `active/anchor/viewport` 全部抹成 0，
         // 切回 Processes 时用户原来选的那项已经丢了（`^d` 会停错进程）。
-        self.window.clamp(self.processes.len());
+        clamp_task_window(&mut self.window, self.processes.len());
         true
     }
 
@@ -285,7 +287,7 @@ impl TaskPage {
         self.tab = tab;
         self.agent_reply = None;
         self.agent_reply_target = None;
-        self.window.clamp(self.processes.len());
+        clamp_task_window(&mut self.window, self.processes.len());
         true
     }
 
@@ -304,17 +306,35 @@ impl TaskPage {
         if len == 0 {
             return false;
         }
+        let visible = crate::ui::main_content::lx::task::LIST_MAX;
+        let max_scroll = len.saturating_sub(visible);
         let last = len - 1;
-        let active = self.active_window().active;
+        let active = self.active_window().active.min(last);
+        let current_viewport = self.active_window().viewport.map(|v| v.min(max_scroll));
         let next = (active as isize + delta).clamp(0, last as isize) as usize;
         if next == active {
+            // 高亮已在首项但视口被鼠标滚到了下方：按 ↑ 先把视口收回顶部，不误关面板。
+            if delta < 0 && current_viewport.is_some_and(|v| v > 0) {
+                self.active_window_mut().viewport = None;
+                return true;
+            }
             return false;
         }
         let tab = self.tab;
         let window = self.active_window_mut();
         window.active = next;
         window.anchor = next;
-        window.viewport = None;
+        window.viewport = current_viewport.map(|v| {
+            if next < v {
+                next
+            } else if visible > 0 && next >= v.saturating_add(visible) {
+                next.saturating_add(1)
+                    .saturating_sub(visible)
+                    .min(max_scroll)
+            } else {
+                v
+            }
+        });
         if tab == TaskTab::Processes {
             // 换任务就把输出贴到尾部：用户点开/切到某条任务，关心的是它**最新**的输出。
             self.pin_output_to_tail();
@@ -389,6 +409,17 @@ impl TaskPage {
         scroll_window(&mut self.agents_window, len, delta, visible)
     }
 
+    /// 直接设置进程列表显式视口起点（滚动条轨道点击/thumb 拖拽）；返回是否变化。
+    pub fn set_window_scroll(&mut self, offset: usize, visible: usize) -> bool {
+        let len = self.processes.len();
+        set_window_scroll(&mut self.window, len, offset, visible)
+    }
+
+    /// 直接设置 Agents 列表显式视口起点（滚动条轨道点击/thumb 拖拽）；返回是否变化。
+    pub fn set_agents_window_scroll(&mut self, offset: usize, visible: usize, len: usize) -> bool {
+        set_window_scroll(&mut self.agents_window, len, offset, visible)
+    }
+
     /// 翻动输出区（负数向上）；返回视口是否移动。
     pub fn scroll_output(&mut self, delta: isize) -> bool {
         let max = self.output_max_scroll();
@@ -440,7 +471,7 @@ impl TaskPage {
         self.now_ms = now_ms;
         // 列表长度变了才需要钳制（且按进程列表长度，不看当前 tab）。
         if changed {
-            self.window.clamp(self.processes.len());
+            clamp_task_window(&mut self.window, self.processes.len());
         }
         changed
     }
@@ -453,18 +484,30 @@ impl TaskPage {
         if self.processes.len() == before {
             return false;
         }
-        self.window.clamp(self.processes.len());
+        clamp_task_window(&mut self.window, self.processes.len());
         true
+    }
+}
+
+/// 按后台任务列表可见高度钳制高亮与显式视口起点（`len <= LIST_MAX` 时归 `None`）。
+pub(crate) fn clamp_task_window(window: &mut PanelWindow, len: usize) {
+    window.clamp(len);
+    let visible = crate::ui::main_content::lx::task::LIST_MAX;
+    if len <= visible {
+        window.viewport = None;
+    } else if let Some(viewport) = window.viewport.as_mut() {
+        *viewport = (*viewport).min(len - visible);
     }
 }
 
 /// 滚轮移动任意列表的显式视口（进程与 Agents 共用）。
 fn scroll_window(window: &mut PanelWindow, len: usize, delta: isize, visible: usize) -> bool {
-    if len == 0 || visible == 0 {
+    if len == 0 || visible == 0 || len <= visible {
+        window.viewport = None;
         return false;
     }
     let max = len.saturating_sub(visible);
-    let current = window.viewport.unwrap_or_else(|| {
+    let current = window.viewport.map(|v| v.min(max)).unwrap_or_else(|| {
         // 没有显式视口时以高亮为准（与渲染的 `window_start` 同口径）。
         let active = window.active.min(len - 1);
         active.saturating_sub(visible - 1).min(max)
@@ -472,7 +515,32 @@ fn scroll_window(window: &mut PanelWindow, len: usize, delta: isize, visible: us
     let next = (current as isize)
         .saturating_add(delta)
         .clamp(0, max as isize) as usize;
-    if next == current && window.viewport.is_some() {
+    if next == current {
+        if let Some(viewport) = window.viewport.as_mut() {
+            *viewport = next;
+        }
+        return false;
+    }
+    window.viewport = Some(next);
+    true
+}
+
+/// 直接设置任意列表显式视口起点（滚动条轨道点击/thumb 拖拽）。
+fn set_window_scroll(window: &mut PanelWindow, len: usize, offset: usize, visible: usize) -> bool {
+    if len == 0 || visible == 0 || len <= visible {
+        window.viewport = None;
+        return false;
+    }
+    let max = len.saturating_sub(visible);
+    let current = window.viewport.map(|v| v.min(max)).unwrap_or_else(|| {
+        let active = window.active.min(len - 1);
+        active.saturating_sub(visible - 1).min(max)
+    });
+    let next = offset.min(max);
+    if next == current {
+        if let Some(viewport) = window.viewport.as_mut() {
+            *viewport = next;
+        }
         return false;
     }
     window.viewport = Some(next);

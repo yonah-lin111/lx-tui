@@ -128,8 +128,8 @@ fn refresh_messages_with_runs(
                         changed = true;
                     }
                     if view.live_activity != run.live_activity {
+                        // `spawn_agent` 卡片已精简不展示 `live_activity`：仅同步状态字段，不单独置脏触发无效重绘。
                         view.live_activity = run.live_activity.clone();
-                        changed = true;
                     }
                 } else if let Some(report) =
                     reports.iter().find(|report| report.agent_id == agent_id)

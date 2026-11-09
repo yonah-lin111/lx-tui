@@ -94,8 +94,8 @@ pub use subagent::{
 };
 pub use task_page::{
     close_task_page, on_process_listed, on_task_output, open_task_page, open_task_page_at,
-    scroll_task_list, scroll_task_output, select_task_tab, set_task_output_scroll,
-    stop_selected_process,
+    scroll_task_list, scroll_task_output, select_task_tab, set_task_list_scroll,
+    set_task_output_scroll, stop_selected_process,
 };
 pub use title::{
     apply_generated_session_title, cancel_session_title, flush_prompt_title_action,

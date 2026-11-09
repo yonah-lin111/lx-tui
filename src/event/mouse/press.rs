@@ -25,10 +25,10 @@ use super::hit::{
     dismiss_lx_toast_outside, handle_agent_scrollbar_press, handle_lx_history_scrollbar_press,
     handle_lx_input_scrollbar_press, handle_prompt_recent_scrollbar_press,
     handle_prompt_scrollbar_press, handle_sidebar_press, handle_task_agents_scrollbar_press,
-    handle_terminal_scrollbar_press, handle_todo_scrollbar_press, handle_workspace_scrollbar_press,
-    lx_toast_at, mention_item_at, mention_tab_at, pane_at, pane_boundary_draggable,
-    pane_content_inner, pane_toggle_button_at, panel_item_at, prompt_boundary_hit,
-    prompt_header_at, slash_item_at, template_button_at,
+    handle_task_list_scrollbar_press, handle_terminal_scrollbar_press, handle_todo_scrollbar_press,
+    handle_workspace_scrollbar_press, lx_toast_at, mention_item_at, mention_tab_at, pane_at,
+    pane_boundary_draggable, pane_content_inner, pane_toggle_button_at, panel_item_at,
+    prompt_boundary_hit, prompt_header_at, slash_item_at, template_button_at,
 };
 use super::hover::reset_pointer_shape;
 use super::wheel::forward_pane_mouse_event;
@@ -52,6 +52,9 @@ pub(crate) fn handle_mouse_down_left(
     state.connect_scroll_drag = None;
     state.referenced_search_scroll_drag = None;
     state.referenced_menu_scroll_drag = None;
+    state.task_scroll_drag = None;
+    state.task_list_scroll_drag = None;
+    state.task_agents_scroll_drag = None;
     state.overlay_input_drag = false;
     if let Some(Overlay::ConfirmClose(confirm)) = state.overlay.as_mut() {
         confirm.scroll_drag = None;
@@ -662,19 +665,6 @@ pub(crate) fn handle_mouse_down_left(
                     *dirty = true;
                     return;
                 }
-                // 后台任务面板：左上角 tab 与右上角 `[esc]` 都可点击。
-                let task_hit = state.pane_anywhere(pane).and_then(|target| {
-                    target.lx.task.as_ref()?;
-                    let rects = ui::main_content::lx::task_rects(inner, &target.lx)?;
-                    let page = target.lx.task.as_ref()?;
-                    ui::main_content::lx::task::hit(
-                        rects.list,
-                        page,
-                        &target.lx.agents,
-                        mouse.column,
-                        mouse.row,
-                    )
-                });
                 // 输出容器的滚动条：thumb 开始拖拽，轨道点击跳转。
                 if let Some(rects) = state
                     .pane_anywhere(pane)
@@ -710,6 +700,24 @@ pub(crate) fn handle_mouse_down_left(
                     *dirty = true;
                     return;
                 }
+                if handle_task_list_scrollbar_press(state, pane, inner, mouse.column, mouse.row) {
+                    update::focus_pane(state, pane);
+                    *dirty = true;
+                    return;
+                }
+                // 后台任务面板：左上角 tab、右上角 `[esc]`、筛选胶囊与 Agents 列表行点击（置于滚动条之后）。
+                let task_hit = state.pane_anywhere(pane).and_then(|target| {
+                    target.lx.task.as_ref()?;
+                    let rects = ui::main_content::lx::task_rects(inner, &target.lx)?;
+                    let page = target.lx.task.as_ref()?;
+                    ui::main_content::lx::task::hit(
+                        rects.list,
+                        page,
+                        &target.lx.agents,
+                        mouse.column,
+                        mouse.row,
+                    )
+                });
                 if let Some(hit) = task_hit {
                     match hit {
                         ui::main_content::lx::task::TaskHit::Tab(index) => {
