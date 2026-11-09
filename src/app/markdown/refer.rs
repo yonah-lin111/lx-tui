@@ -13,6 +13,8 @@ pub enum ReferKind {
     Skill,
     /// 用户显式点名的 MCP server（`@[refer-mcp](<server_name>)`）。
     Mcp,
+    /// 用户显式点名的 subagent 角色或存活实例（`@[refer-subagent](<role | nickname:role>)`）。
+    Subagent,
 }
 
 impl ReferKind {
@@ -24,6 +26,7 @@ impl ReferKind {
             Self::Image => "image",
             Self::Skill => "skill",
             Self::Mcp => "mcp",
+            Self::Subagent => "subagent",
         }
     }
 
@@ -35,6 +38,7 @@ impl ReferKind {
             "image" => Some(Self::Image),
             "skill" => Some(Self::Skill),
             "mcp" => Some(Self::Mcp),
+            "subagent" => Some(Self::Subagent),
             _ => None,
         }
     }

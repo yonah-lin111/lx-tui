@@ -100,6 +100,7 @@ pub(crate) fn drain_settings_events(
             }
             SettingsEvent::SubagentsChanged(subagents) => {
                 state.subagents_config = *subagents;
+                refresh_subagent_mentions(state, persistence);
             }
         }
         changed = true;
@@ -653,6 +654,38 @@ pub(crate) fn refresh_agents_md(state: &mut AppState, persistence: &Persistence)
         )
         .active_count();
         state.agents_md_inventory.insert(workspace_root, count);
+    }
+}
+
+/// 刷新所有打开窗格的 `@` 面板 Subagents 角色候选
+/// （内置角色 + 全局自定义 + 已信任工作区的项目级角色）。
+pub(crate) fn refresh_subagent_mentions(state: &mut AppState, persistence: &Persistence) {
+    for workspace in &mut state.workspaces {
+        let config_root = workspace
+            .repo_key()
+            .map(Path::to_path_buf)
+            .or_else(|| workspace.cwd.clone());
+        let workspace_root = workspace.cwd.clone();
+        let trusted = workspace_root
+            .as_deref()
+            .is_some_and(|cwd| persistence.is_trusted(cwd))
+            || config_root
+                .as_deref()
+                .is_some_and(|root| persistence.is_trusted(root));
+        let effective = crate::config::subagents::merge_project_roles_for_paths(
+            &state.subagents_config,
+            config_root.as_deref(),
+            workspace_root.as_deref(),
+            trusted,
+        );
+        let roles = effective.all_roles();
+        for tab in &mut workspace.tabs {
+            for id in tab.layout.pane_ids() {
+                if let Some(pane) = tab.pane_mut(id) {
+                    pane.lx.set_mention_subagent_roles(roles.clone());
+                }
+            }
+        }
     }
 }
 

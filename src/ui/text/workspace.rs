@@ -498,10 +498,15 @@ pub const MENTION_TAB_FILES: &str = "Files";
 pub const MENTION_TAB_REF_DIR: &str = "refDir";
 pub const MENTION_TAB_SKILLS: &str = "Skills";
 pub const MENTION_TAB_MCP: &str = "MCP";
+pub const MENTION_TAB_SUBAGENTS: &str = "Subagents";
 pub const MENTION_REF_DIR_EMPTY: &str = "no matching folders";
 pub const MENTION_SKILLS_EMPTY: &str = "no matching skills";
 pub const MENTION_MCP_EMPTY: &str = "no matching MCP servers";
+pub const MENTION_SUBAGENTS_EMPTY: &str = "no matching subagents";
 pub const MENTION_MCP_LABEL: &str = "MCP";
+pub const MENTION_SUBAGENT_ACTIVE_LABEL: &str = "Active";
+pub const MENTION_SUBAGENT_BUILTIN_LABEL: &str = "Built-in";
+pub const MENTION_SUBAGENT_CUSTOM_LABEL: &str = "Custom";
 pub const SLASH_PANEL_TITLE: &str = "/Command";
 pub const WORKTREE_PANEL_TITLE: &str = "Worktrees";
 

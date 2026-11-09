@@ -1,7 +1,8 @@
 //! `lx-tui exec`：终端无头执行一轮 agent。
 //!
 //! 模块边界（design §9）：只依赖 `chat` / `config` / `db` / `mcp` / `git` / `platform`，
-//! 绝不导入 `app` / `ui` / `tui` / `event`——无头路径不初始化终端，也不经过事件循环。
+//! 不导入 `app` / `ui` / `tui`；唯一例外是复用 `event::chat::subagent::snapshot` 的纯提示块
+//! 渲染函数——无头路径不初始化终端，也不经过事件循环。
 //! 本文件只做顶层编排；协议、输出与宿主状态机分别由 `events` / `processor` / `runner` 负责。
 
 use std::io::IsTerminal;
@@ -128,8 +129,21 @@ pub(crate) fn assemble_exec_turn_with_snapshot(
     let draft_images = load_draft_images(cwd, image_paths, model)?;
     let prepared = crate::chat::prepare_user_message(cwd, raw_prompt, &draft_images)
         .map_err(|error| format!("failed to prepare prompt: {}", error.code()))?;
+    let subagents_config = crate::config::subagents::merge_project_roles_for_paths(
+        &crate::config::subagents::load_subagents_or_default(),
+        Some(workspace),
+        Some(cwd),
+        true,
+    );
     let skills = skills_catalog_prompt(workspace, false);
-    let skill_blocks = skill_reference_blocks(workspace, raw_prompt);
+    let mut skill_blocks = skill_reference_blocks(workspace, raw_prompt);
+    skill_blocks.extend(
+        crate::event::chat::subagent::snapshot::subagent_reference_blocks(
+            &prepared.raw_text,
+            &subagents_config,
+            &[],
+        ),
+    );
     let mut messages = Vec::new();
     if let Some(session_id) = existing_session {
         messages = db
@@ -234,12 +248,6 @@ pub(crate) fn assemble_exec_turn_with_snapshot(
         &assembly.item_image_attachments,
         &prepared.model_images,
         &mut request.items,
-    );
-    let subagents_config = crate::config::subagents::merge_project_roles_for_paths(
-        &crate::config::subagents::load_subagents_or_default(),
-        Some(workspace),
-        Some(cwd),
-        true,
     );
     request.purpose = RequestPurpose::ExecTurn;
     request.system_prompt = Some(assembly.system_prompt);
@@ -625,6 +633,9 @@ fn discover_workspace_skills(workspace: &Path) -> crate::skills::SkillCatalog {
     else {
         return crate::skills::SkillCatalog::default();
     };
+    if let Err(error) = crate::skills::install_system_skills(&user_root) {
+        tracing::warn!(target: "lx::skills", %error, "system skill install failed");
+    }
     let project = cfg::project_skills_root(workspace)
         .ok()
         .map(|lx| crate::skills::ProjectSkillRoots::for_project(workspace, lx));

@@ -114,6 +114,98 @@ fn depth_limit_is_six() {
     let _ = std::fs::remove_dir_all(base);
 }
 
+#[test]
+fn install_system_skills_is_idempotent_and_discovered_as_readonly_system_skill() {
+    let base = temp_dir("system");
+    let user = base.join("user");
+    let agents = base.join("agents");
+    std::fs::create_dir_all(&user).expect("user");
+
+    crate::skills::install_system_skills(&user).expect("install system skills");
+    let guide = user.join(".system").join("lx-guide");
+    assert!(guide.join("SKILL.md").is_file());
+    assert!(guide.join("references/tools.md").is_file());
+    assert!(guide.join("references/subagents.md").is_file());
+    assert!(guide.join("references/commands-and-mentions.md").is_file());
+    let tools =
+        std::fs::read_to_string(guide.join("references/tools.md")).expect("tools reference");
+    assert!(tools.contains("edit"), "tools reference documents edit");
+    assert!(
+        tools.contains("*** Begin Patch"),
+        "tools reference documents the patch envelope"
+    );
+    assert!(
+        tools.contains("list_resources"),
+        "tools reference documents MCP resource tools"
+    );
+    let marker = user.join(".system").join(".lx-system-skills.marker");
+    let fingerprint = std::fs::read_to_string(&marker).expect("marker");
+    assert!(!fingerprint.trim().is_empty());
+    let sentinel = user.join(".system").join("idempotent-sentinel");
+    std::fs::write(&sentinel, "keep").expect("sentinel");
+    crate::skills::install_system_skills(&user).expect("idempotent reinstall");
+    assert!(
+        sentinel.is_file(),
+        "a matching fingerprint must skip rewriting the system directory"
+    );
+    assert_eq!(
+        std::fs::read_to_string(&marker).expect("marker"),
+        fingerprint,
+        "unchanged embedded content must keep the same fingerprint"
+    );
+
+    // 内容变化时只原子替换 lx-guide 文件，`.system` 下的其它条目必须保留。
+    std::fs::write(&marker, "stale\n").expect("stale marker");
+    std::fs::write(guide.join("references/tools.md"), "stale").expect("stale reference");
+    crate::skills::install_system_skills(&user).expect("refresh system skills");
+    assert!(
+        sentinel.is_file(),
+        "a content refresh must not delete other `.system` entries"
+    );
+    assert_eq!(
+        std::fs::read_to_string(guide.join("references/tools.md")).expect("restored reference"),
+        tools,
+    );
+
+    let catalog = discover(&user, &agents, None, &HashSet::new(), &HashSet::new());
+    let entry = catalog
+        .entries
+        .iter()
+        .find(|entry| entry.name == "lx-guide")
+        .expect("lx-guide discovered");
+    assert_eq!(entry.scope, SkillScope::User);
+    assert_eq!(entry.source, SkillSource::System);
+    assert!(
+        entry.description.chars().count() <= crate::skills::MAX_CATALOG_DESCRIPTION_CHARS,
+        "lx-guide description must fit the catalog budget ({} chars)",
+        entry.description.chars().count()
+    );
+    assert!(entry.enabled);
+    assert!(!entry.source.editable());
+    assert!(
+        entry
+            .path
+            .to_string_lossy()
+            .contains("/.system/lx-guide/SKILL.md"),
+        "{:?}",
+        entry.path
+    );
+    assert!(entry.shadowed_by.is_none());
+
+    skill(&user, "lx-guide");
+    let catalog = discover(&user, &agents, None, &HashSet::new(), &HashSet::new());
+    let system = catalog
+        .entries
+        .iter()
+        .find(|entry| entry.source == SkillSource::System)
+        .expect("system skill still listed");
+    assert!(
+        system.shadowed_by.is_some(),
+        "a user skill with the same name shadows the system skill"
+    );
+    let _ = std::fs::remove_dir_all(base);
+}
+
 #[cfg(unix)]
 #[test]
 fn symlink_cycles_are_not_followed_forever() {

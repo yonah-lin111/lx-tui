@@ -51,7 +51,7 @@ pub use connect::{
     ConnectManageAction, ConnectPanel, ConnectPromptStep, ConnectProviderEntry, ConnectStage,
 };
 pub use mcp::{McpCatalogEntry, McpPanel, McpPanelEntry, McpRuntimeState, McpServerState};
-pub use mention::{LxMention, LxMentionView};
+pub use mention::{LxMention, LxMentionView, SubagentMentionItem, SubagentRunMentionEntry};
 pub use model_switch::{LxModelSwitch, ModelSwitchNoticeView};
 pub use recap::{LxRecap, MessageRecapView, RecapPending};
 pub use rewind::{
@@ -316,6 +316,7 @@ impl Lx {
     /// 清空子 agent 展示态（会话切换/新建时随会话一起复位）。
     pub fn clear_agents(&mut self) {
         self.agents = AgentsState::default();
+        self.sync_mention_subagent_runs();
     }
 
     /// 清除撤销状态，并关闭 `/rewind` 动作面板。

@@ -91,7 +91,7 @@ pub fn prepare_ai_web_message(
 
         match reference.kind {
             ReferKind::Folder => return Err(AiWebPrepareError::FolderUnsupported),
-            ReferKind::Skill | ReferKind::Mcp => {
+            ReferKind::Skill | ReferKind::Mcp | ReferKind::Subagent => {
                 return Err(AiWebPrepareError::LocalReferenceUnsupported);
             }
             ReferKind::File | ReferKind::Image => {

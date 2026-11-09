@@ -258,3 +258,26 @@ fn prepare_ai_web_message_handles_local_files_cloud_keep_files_and_rejects_folde
 
     let _ = std::fs::remove_dir_all(&dir);
 }
+
+#[test]
+fn prepare_keeps_subagent_references_as_plain_text() {
+    let dir = temp_dir("subagent-ref");
+    let text = "Ask @[refer-subagent](explorer) and @[refer-subagent](Turing:explorer) to help";
+    let prepared = prepare_user_message(&dir, text, &[]).expect("prepare");
+    assert_eq!(prepared.raw_text, text);
+    assert!(prepared.attachments.is_empty());
+    assert!(prepared.model_images.is_empty());
+
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn prepare_ai_web_rejects_subagent_reference() {
+    let dir = temp_dir("ai-web-subagent");
+    assert_eq!(
+        prepare_ai_web_message(&dir, "u-1", "Ask @[refer-subagent](explorer) now", &[]),
+        Err(AiWebPrepareError::LocalReferenceUnsupported)
+    );
+
+    let _ = std::fs::remove_dir_all(&dir);
+}

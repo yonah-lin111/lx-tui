@@ -16,7 +16,7 @@ mod launch;
 mod model_resolve;
 mod runner;
 mod settle;
-mod snapshot;
+pub(crate) mod snapshot;
 #[cfg(test)]
 mod tests;
 mod tools;
@@ -459,6 +459,9 @@ fn close(
         {
             run.status = STATUS_CANCELLED.to_string();
         }
+    }
+    if let Some(pane) = state.pane_mut_anywhere(key.pane) {
+        pane.lx.sync_mention_subagent_runs();
     }
     Ok(SubagentOutcome::Closed {
         agent_id: canonical_id,

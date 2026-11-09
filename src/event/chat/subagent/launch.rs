@@ -161,6 +161,7 @@ pub(super) fn launch_child_turn(
             run.loaded = true;
             pane.lx.agents.runs.push(run);
         }
+        pane.lx.sync_mention_subagent_runs();
     }
 
     let (cancel_sender, cancel) = watch::channel(false);

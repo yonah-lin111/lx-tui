@@ -352,3 +352,83 @@ fn drain_mcp_events_updates_open_mcp_panel_and_suppresses_toast_on_disabled_pane
         "retrying a failed server must re-arm failure toast for the same error"
     );
 }
+
+#[test]
+fn refresh_subagent_mentions_syncs_user_and_trusted_project_roles_to_panes() {
+    let dir = std::env::temp_dir().join(format!(
+        "lx-inventory-subagent-mentions-{}",
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_nanos())
+            .unwrap_or(0)
+    ));
+    let project_agents_dir = dir.join(".lx").join("agents");
+    std::fs::create_dir_all(&project_agents_dir).expect("create .lx/agents");
+    std::fs::write(
+        project_agents_dir.join("reviewer.json"),
+        r#"{"name":"reviewer","baseRole":"explorer","description":"Project security reviewer","systemPrompt":"Audit security."}"#,
+    )
+    .expect("write reviewer.json");
+
+    let db_path = dir.join("lx.db");
+    let database = crate::db::Database::open(&db_path).expect("open db");
+    let mut persistence = Persistence::with_database(database);
+
+    let mut state = AppState::demo();
+    state.workspaces[0].cwd = Some(dir.clone());
+    state.workspaces[0].git = None;
+    state
+        .subagents_config
+        .roles
+        .push(crate::config::subagents::CustomRoleConfig {
+            name: "user_auditor".into(),
+            base_role: crate::config::subagents::BaseRole::Explorer,
+            description: "User global auditor".into(),
+            system_prompt: String::new(),
+            model: None,
+            lock_model: false,
+            nickname_candidates: Vec::new(),
+            capabilities: crate::config::subagents::RoleCapabilities::default(),
+            is_project_scoped: false,
+        });
+
+    // 未授信时仅同步内置角色 + 用户全局自定义角色，不包含项目级 reviewer。
+    refresh_subagent_mentions(&mut state, &persistence);
+    let untrusted_roles: Vec<String> = state
+        .active_pane()
+        .expect("pane")
+        .lx
+        .mention_subagent_roles()
+        .into_iter()
+        .map(|r| r.name)
+        .collect();
+    assert!(untrusted_roles.contains(&"user_auditor".to_string()));
+    assert!(!untrusted_roles.contains(&"reviewer".to_string()));
+
+    // 授予工作区信任后，项目级角色 reviewer 一并同步进窗格 `@` 提及候选。
+    state.effects.push(crate::app::effects::Effect::GrantTrust {
+        path: dir.clone(),
+        name: "repo".to_string(),
+    });
+    assert!(persistence.pump(&mut state));
+    refresh_subagent_mentions(&mut state, &persistence);
+    let trusted_roles = state
+        .active_pane()
+        .expect("pane")
+        .lx
+        .mention_subagent_roles();
+    assert!(
+        trusted_roles
+            .iter()
+            .any(|r| r.name == "reviewer" && r.is_project_scoped),
+        "授信后应包含项目级自定义角色 reviewer: {trusted_roles:?}"
+    );
+    assert!(
+        trusted_roles
+            .iter()
+            .any(|r| r.name == "user_auditor" && !r.is_project_scoped),
+        "应保留用户级自定义角色 user_auditor: {trusted_roles:?}"
+    );
+
+    let _ = std::fs::remove_dir_all(&dir);
+}

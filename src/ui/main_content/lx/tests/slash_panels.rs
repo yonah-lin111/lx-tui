@@ -358,10 +358,10 @@ fn mention_panel_tabs_render_and_hit_test_in_lx() {
     let panel = mention::layout(area, &lx).expect("mention layout");
     assert_eq!(
         panel.tabs.len(),
-        4,
-        "顶栏包含 Files / refDir / Skills / MCP 四个 Tab"
+        5,
+        "顶栏包含 Files / refDir / Skills / MCP / Subagents 五个 Tab"
     );
-    for idx in 0..4 {
+    for idx in 0..5 {
         assert_eq!(
             mention_tab_at(area, &lx, panel.tabs[idx].x, panel.tabs[idx].y),
             Some(idx)
@@ -406,6 +406,47 @@ fn mention_panel_tabs_render_and_hit_test_in_lx() {
     assert!(
         all.contains("MCP · stdio · codegraph serve --mcp"),
         "MCP 描述可见: {all}"
+    );
+
+    // 切到 Subagents Tab 渲染默认内置角色条目。
+    assert!(lx.mention_switch_tab(1));
+    let mut buf = Buffer::empty(area);
+    let _ = render(area, &mut buf, &lx, true, None, &mut PaneCache::default());
+    let all = buffer_lines(&buf, area).join("\n");
+    assert!(all.contains("explorer"), "Subagents 内置角色可见: {all}");
+    assert!(
+        all.contains("Built-in ·"),
+        "Subagents 内置角色描述前缀可见: {all}"
+    );
+}
+
+#[test]
+fn mention_subagents_tab_stays_visible_in_narrow_pane() {
+    // 42 列下五个 Tab 放不下：窗口右移保证当前 Subagents 可见，命中仍返回原始下标 4。
+    let area = Rect::new(0, 0, 42, 24);
+    let mut lx = mention_lx(vec![MentionEntry {
+        path: "src/main.rs".into(),
+        is_directory: false,
+    }]);
+    assert!(lx.mention_set_tab(crate::app::prompt::MentionTab::Subagents));
+    let panel = mention::layout(area, &lx).expect("mention layout");
+    let slot = panel
+        .tabs
+        .iter()
+        .find(|slot| slot.index == 4)
+        .expect("Subagents Tab 必须可见");
+    assert_eq!(
+        mention_tab_at(area, &lx, slot.rect.x, slot.rect.y),
+        Some(4),
+        "命中映射回原始 Tab 下标"
+    );
+    assert_eq!(
+        crate::app::prompt::MentionTab::from_index(4),
+        Some(crate::app::prompt::MentionTab::Subagents)
+    );
+    assert!(
+        panel.tabs.iter().all(|slot| slot.index != 0),
+        "窗口从 Files 右移后才放得下当前 Tab"
     );
 }
 

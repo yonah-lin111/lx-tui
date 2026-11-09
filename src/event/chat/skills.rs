@@ -153,6 +153,9 @@ fn build_job(
         })
         .unwrap_or_default();
     let user_root = skills_config::user_skills_root().ok()?;
+    if let Err(error) = crate::skills::install_system_skills(&user_root) {
+        tracing::warn!(target: "lx::skills", %error, "system skill install failed");
+    }
     let user_agents = skills_config::user_agents_skills_root().ok()?;
     let project = workspace_root
         .filter(|root| persistence.is_trusted(root))

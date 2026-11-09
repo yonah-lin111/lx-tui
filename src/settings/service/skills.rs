@@ -75,6 +75,9 @@ fn list_skills(state: &ServiceState) -> Response {
     let disabled = disabled_set(&root);
     let enabled = enabled_set(&root);
     let user_root = user_skills_root(&root);
+    if let Err(error) = crate::skills::install_system_skills(&user_root) {
+        tracing::warn!(target: "lx::skills", %error, "system skill install failed");
+    }
     let user_agents =
         skills_config::user_agents_skills_root().unwrap_or_else(|_| root.join("agents-skills"));
     let mut entries: Vec<SkillEntry> = Vec::new();
@@ -142,8 +145,15 @@ fn list_skills(state: &ServiceState) -> Response {
 }
 
 fn entry_json(entry: &SkillEntry, scope: &str) -> serde_json::Value {
+    let dir = entry
+        .path
+        .parent()
+        .and_then(Path::file_name)
+        .and_then(|name| name.to_str())
+        .unwrap_or(&entry.name);
     json!({
         "name": entry.name,
+        "dir": dir,
         "description": entry.description,
         "path": entry.path.display().to_string(),
         "scope": scope,
@@ -167,6 +177,10 @@ fn skill_detail(request: &Request, state: &ServiceState) -> Response {
         return Response::error(403, "skill path is not in a managed root");
     }
     let path = PathBuf::from(path);
+    let path = std::fs::canonicalize(&path).unwrap_or(path);
+    let user_root = user_skills_root(&root);
+    let system_root = crate::skills::system_skills_root(&user_root);
+    let system_root = std::fs::canonicalize(&system_root).unwrap_or(system_root);
     match crate::skills::read_skill_at(&path) {
         Ok((name, description, body)) => {
             let scope = state
@@ -181,12 +195,13 @@ fn skill_detail(request: &Request, state: &ServiceState) -> Response {
                 })
                 .map(|project| project.scope)
                 .unwrap_or_else(|| "user".into());
-            let editable = path.starts_with(user_skills_root(&root))
-                || state.projects().iter().any(|project| {
-                    project.trusted
-                        && project_skills_root(&root, &project.root)
-                            .is_some_and(|root| path.starts_with(root))
-                });
+            let editable = !path.starts_with(&system_root)
+                && (path.starts_with(&user_root)
+                    || state.projects().iter().any(|project| {
+                        project.trusted
+                            && project_skills_root(&root, &project.root)
+                                .is_some_and(|root| path.starts_with(root))
+                    }));
             Response::json(
                 200,
                 json!({
@@ -271,6 +286,10 @@ fn delete_skill(state: &ServiceState, scope: &str, name: &str) -> Response {
         Ok(value) => value,
         Err(response) => return response,
     };
+    // 可写根下没有该目录，但同名条目来自 `.system` / `.agents`：明确告知只读。
+    if !root.join(name).exists() && read_only_skill_named(state, scope, name) {
+        return Response::error(403, "built-in or .agents skill is read-only");
+    }
     match crate::skills::delete_skill(&root, name) {
         Ok(()) => {
             let _ = state.sender().send(SettingsEvent::SkillsChanged);
@@ -278,6 +297,45 @@ fn delete_skill(state: &ServiceState, scope: &str, name: &str) -> Response {
         }
         Err(error) => Response::error(422, &error),
     }
+}
+
+/// 在对应作用域内查找同名只读来源条目（内置 system 或 `.agents`）。
+fn read_only_skill_named(state: &ServiceState, scope: &str, name: &str) -> bool {
+    let Ok(root) = data_root(state) else {
+        return false;
+    };
+    let disabled = disabled_set(&root);
+    let enabled = enabled_set(&root);
+    let catalog = if scope == "user" {
+        let user_root = user_skills_root(&root);
+        if let Err(error) = crate::skills::install_system_skills(&user_root) {
+            tracing::warn!(target: "lx::skills", %error, "system skill install failed");
+        }
+        let user_agents =
+            skills_config::user_agents_skills_root().unwrap_or_else(|_| root.join("agents-skills"));
+        discover(&user_root, &user_agents, None, &disabled, &enabled)
+    } else {
+        let Some(project) = state.project_for_scope(scope) else {
+            return false;
+        };
+        let Some(lx_root) = project_skills_root(&root, &project.root) else {
+            return false;
+        };
+        let roots = ProjectSkillRoots {
+            lx: Some(lx_root),
+            agents: Some(skills_config::project_agents_skills_root(&project.root)),
+        };
+        discover(
+            empty_root(),
+            empty_root(),
+            Some(&roots),
+            &disabled,
+            &enabled,
+        )
+    };
+    catalog.entries.iter().any(|entry| {
+        entry.name == name && matches!(entry.source, SkillSource::System | SkillSource::Agents)
+    })
 }
 
 /// PUT `/api/skills/enabled`：写 `skills.json` 的 disabled 列表。

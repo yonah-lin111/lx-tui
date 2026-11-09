@@ -21,7 +21,7 @@ pub(super) const PANEL_BORDER_ROWS: u16 = 2;
 /// 面板底部快捷键提示块占用的行数（1 行空行间隔 + 1 行提示）。
 pub(super) const PANEL_FOOTER_ROWS: u16 = 2;
 
-/// 提及面板条目文本：候选文件/目录/skill/MCP（双行）或状态行（单行）。
+/// 提及面板条目文本：候选文件/目录/skill/MCP/subagent（双行）或状态行（单行）。
 enum PanelRow {
     File(mention::MentionRow),
     Status(&'static str),
@@ -69,7 +69,10 @@ pub(crate) fn layout(area: Rect, lx: &Lx) -> Option<PanelLayout> {
     let input = super::input_rect(area, lx)?;
     let data = panel_data(lx, input.width)?;
     let items = data.items();
-    command_panel::layout(panel_area(area, input), &view(&items, &data, input, area))
+    command_panel::layout(
+        panel_area(area, input),
+        &view(&items, &data, input, area, lx),
+    )
 }
 
 /// 提及面板顶部 Tab 命中：返回被点中的 Tab 索引；面板未打开或未命中返回 None。
@@ -86,7 +89,10 @@ pub(crate) fn item_at(area: Rect, lx: &Lx, column: u16, row: u16) -> Option<usiz
         return None;
     }
     let items = data.items();
-    let layout = command_panel::layout(panel_area(area, input), &view(&items, &data, input, area))?;
+    let layout = command_panel::layout(
+        panel_area(area, input),
+        &view(&items, &data, input, area, lx),
+    )?;
     command_panel::item_at(&layout, &items, column, row)
 }
 
@@ -102,7 +108,7 @@ pub(crate) fn render(area: Rect, buf: &mut Buffer, lx: &Lx) {
     command_panel::render(
         panel_area(area, input),
         buf,
-        &view(&items, &data, input, area),
+        &view(&items, &data, input, area, lx),
     );
 }
 
@@ -140,6 +146,10 @@ fn panel_data(lx: &Lx, width: u16) -> Option<PanelData> {
             PanelTab {
                 label: text::MENTION_TAB_MCP,
                 active: tab == MentionTab::Mcp,
+            },
+            PanelTab {
+                label: text::MENTION_TAB_SUBAGENTS,
+                active: tab == MentionTab::Subagents,
             },
         ]
     };
@@ -248,6 +258,30 @@ fn panel_data(lx: &Lx, width: u16) -> Option<PanelData> {
                 tabs,
             })
         }
+        (MentionTab::Subagents, LxMentionView::Empty | LxMentionView::Loading) => {
+            Some(status(text::MENTION_SUBAGENTS_EMPTY))
+        }
+        (MentionTab::Subagents, LxMentionView::Items) => {
+            let filtered = lx.mention().filtered_subagents();
+            if filtered.is_empty() {
+                return Some(status(text::MENTION_SUBAGENTS_EMPTY));
+            }
+            Some(PanelData {
+                rows: filtered
+                    .iter()
+                    .map(|item| {
+                        let (label, detail) = mention::subagent_item_text(item);
+                        PanelRow::File(mention::subagent_row(&label, &detail, detail_width))
+                    })
+                    .collect(),
+                active: lx.mention().ref_active(),
+                anchor: Some(lx.mention().ref_anchor()),
+                viewport: lx.mention().ref_viewport(),
+                scope: None,
+                interactive: true,
+                tabs,
+            })
+        }
     }
 }
 
@@ -259,6 +293,7 @@ fn view<'a>(
     data: &'a PanelData,
     input: Rect,
     area: Rect,
+    lx: &Lx,
 ) -> CommandPanelView<'a> {
     let above = input.y.saturating_sub(area.y);
     let cap = above.min(
@@ -266,6 +301,7 @@ fn view<'a>(
             .saturating_add(PANEL_BORDER_ROWS)
             .saturating_add(PANEL_FOOTER_ROWS),
     );
+    let is_files = lx.mention_tab() == MentionTab::Files;
     CommandPanelView {
         items,
         active: data.active,
@@ -278,7 +314,7 @@ fn view<'a>(
         title: Some(text::MENTION_PANEL_TITLE),
         tabs: Some(&data.tabs),
         right_title: data.scope.as_deref(),
-        footer: Some(if data.tabs[0].active {
+        footer: Some(if is_files {
             text::LX_MENTION_FOOTER_FILES
         } else {
             text::LX_MENTION_FOOTER_REF_DIR
