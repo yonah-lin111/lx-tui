@@ -41,6 +41,7 @@ pub struct SetArgs {
     pub min_height: Option<u16>,
     pub min_pane_width: Option<u16>,
     pub min_pane_height: Option<u16>,
+    pub image_download_dir: Option<String>,
 }
 
 /// 解析 `lx-tui settings` 参数。
@@ -150,6 +151,11 @@ fn parse_set(args: &[String]) -> Result<SetArgs, String> {
         if matched {
             continue;
         }
+        if let Some(value) = take_opt(args, &mut i, "", "--image-download-dir")? {
+            parsed.image_download_dir = Some(value.trim().to_string());
+            i += 1;
+            continue;
+        }
         reject_unknown_flag(&args[i], "lx-tui settings set")?;
         return Err(format!(
             "unexpected argument '{}'; run 'lx-tui settings set --help' for usage",
@@ -183,6 +189,7 @@ fn config_json(config: &Config) -> serde_json::Value {
             "minHeight": config.min_height,
             "minPaneWidth": config.min_pane_width,
             "minPaneHeight": config.min_pane_height,
+            "imageDownloadDir": config.image_download_dir,
         }
     })
 }
@@ -262,6 +269,9 @@ fn run_set(out: &Output, args: &SetArgs) -> Result<(), String> {
     }
     if let Some(value) = args.min_pane_height {
         config.min_pane_height = value;
+    }
+    if let Some(value) = &args.image_download_dir {
+        config.image_download_dir = value.clone();
     }
     config.validate().map_err(|error| error.to_string())?;
     config::save_settings(&config).map_err(|error| error.to_string())?;

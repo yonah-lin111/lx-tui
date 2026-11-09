@@ -107,6 +107,96 @@ impl UserRefLine {
     }
 }
 
+/// 助手消息下方单条生成图片引用行（含预览标记、下划线文件名与原图下载按钮状态）。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct AssistantRefLine {
+    pub attachment_id: String,
+    pub is_last: bool,
+    pub label: String,
+    pub preview_path: Option<String>,
+    pub download_state: Option<crate::app::state::OriginalImageDownloadState>,
+}
+
+impl AssistantRefLine {
+    pub(crate) fn from_message(
+        message: &crate::app::state::ChatMessageView,
+        chat: &crate::app::state::LxChat,
+    ) -> Vec<Self> {
+        let len = message.attachments.len();
+        message
+            .attachments
+            .iter()
+            .enumerate()
+            .map(|(i, att)| Self {
+                attachment_id: att.id.clone(),
+                is_last: i + 1 == len,
+                label: att.label.clone(),
+                preview_path: att.source_path.clone(),
+                download_state: chat
+                    .image_originals
+                    .get(&att.id)
+                    .map(|orig| orig.state.clone()),
+            })
+            .collect()
+    }
+
+    pub(crate) fn button_text(&self, loading_frame: usize) -> Option<String> {
+        match self.download_state.as_ref()? {
+            crate::app::state::OriginalImageDownloadState::Idle => {
+                Some(crate::ui::text::agent::ASSISTANT_IMAGE_DOWNLOAD_ORIGINAL.to_string())
+            }
+            crate::app::state::OriginalImageDownloadState::Downloading => {
+                const FRAMES: [char; 4] = ['◐', '◓', '◑', '◒'];
+                let glyph = FRAMES[(loading_frame / 2) % FRAMES.len()];
+                Some(format!(
+                    "[{glyph}{}",
+                    crate::ui::text::agent::ASSISTANT_IMAGE_DOWNLOADING_SUFFIX
+                ))
+            }
+            crate::app::state::OriginalImageDownloadState::Downloaded { .. } => {
+                Some(crate::ui::text::agent::ASSISTANT_IMAGE_DOWNLOADED.to_string())
+            }
+        }
+    }
+
+    pub(crate) fn push_card_regions(
+        &self,
+        row: usize,
+        cards: &mut Vec<super::snapshot::CardRegion>,
+    ) {
+        let conn_cols = USER_INDENT + 3;
+        let prefix_cols =
+            conn_cols + crate::ui::text::agent::ASSISTANT_REF_IMAGE_PREVIEW_PREFIX.len() as u16;
+        let label_cols = unicode_width::UnicodeWidthStr::width(self.label.as_str()) as u16;
+        if let Some(path) = &self.preview_path {
+            cards.push(super::snapshot::CardRegion {
+                kind: super::CardKind::Attachment { path: path.clone() },
+                card_start: row,
+                card_rows: 1,
+                card_cols: Some((conn_cols, prefix_cols.saturating_add(label_cols))),
+                clickable: true,
+            });
+        }
+        if let Some(btn_text) = self.button_text(0) {
+            let btn_col = prefix_cols.saturating_add(label_cols).saturating_add(2);
+            let btn_cols = unicode_width::UnicodeWidthStr::width(btn_text.as_str()) as u16;
+            let clickable = !matches!(
+                self.download_state,
+                Some(crate::app::state::OriginalImageDownloadState::Downloading)
+            );
+            cards.push(super::snapshot::CardRegion {
+                kind: super::CardKind::DownloadOriginalImage {
+                    attachment_id: self.attachment_id.clone(),
+                },
+                card_start: row,
+                card_rows: 1,
+                card_cols: Some((btn_col, btn_col.saturating_add(btn_cols))),
+                clickable,
+            });
+        }
+    }
+}
+
 /// 一个块的绘制数据。
 #[derive(Debug)]
 pub(crate) enum BlockPaint {
@@ -132,8 +222,8 @@ pub(crate) enum BlockPaint {
     SystemEvent {
         card: Arc<super::system_event::SystemCard>,
     },
-    /// 助手消息末尾的附件引用树（如 AI Web 生成图片 `├─ Image: ...` / `└─ Image: ...`）。
-    RefLines { ref_lines: Vec<UserRefLine> },
+    /// 助手消息末尾的生成图片附件引用树（`├─ Image (preview): ...  [Download original]`）。
+    RefLines { ref_lines: Vec<AssistantRefLine> },
     /// 尚未接入内容缓存的块：缓存行数与点击面几何，绘制仍走原路径。
     Legacy { rows: usize, spans: Vec<CardSpan> },
 }
@@ -275,7 +365,15 @@ impl BlockPaint {
                 }
             }
             Self::RefLines { ref_lines } => {
-                draw_ref_lines(grid, rect, scroll, start, viewport_end, ref_lines);
+                draw_assistant_ref_lines(
+                    grid,
+                    rect,
+                    scroll,
+                    start,
+                    viewport_end,
+                    ref_lines,
+                    history.chat.loading_frame,
+                );
             }
             Self::Legacy { .. } => draw_legacy(grid, rect, history, source, scroll, start),
         }
@@ -501,6 +599,75 @@ fn draw_ref_lines(
             label_style,
             rect.width.saturating_sub(prefix_cols),
         );
+    }
+}
+
+/// 绘制助手消息末尾的生成图片附件行（带 `(preview)`、文件名下划线与原图下载按钮）。
+fn draw_assistant_ref_lines(
+    grid: &mut Grid,
+    rect: Rect,
+    scroll: usize,
+    mut current_row: usize,
+    viewport_end: usize,
+    ref_lines: &[AssistantRefLine],
+    loading_frame: usize,
+) {
+    for ref_line in ref_lines {
+        let row = current_row;
+        current_row += 1;
+        if row < scroll || row >= viewport_end {
+            continue;
+        }
+        let Some(y) = visible_row(rect, scroll, row) else {
+            continue;
+        };
+        let connector = if ref_line.is_last {
+            crate::ui::text::agent::TREE_LEAF
+        } else {
+            crate::ui::text::agent::TREE_BRANCH
+        };
+        let kind_prefix = crate::ui::text::agent::ASSISTANT_REF_IMAGE_PREVIEW_PREFIX;
+        let label_style =
+            style::user_ref_image().add_modifier(ratatui::style::Modifier::UNDERLINED);
+        let conn_cols = USER_INDENT + 3;
+        let prefix_cols = conn_cols + kind_prefix.len() as u16;
+        let label_cols = unicode_width::UnicodeWidthStr::width(ref_line.label.as_str()) as u16;
+        grid.put_clipped(rect.x, y, connector, Style::default(), rect.width);
+        grid.put_clipped(
+            rect.x.saturating_add(conn_cols),
+            y,
+            kind_prefix,
+            Style::default(),
+            rect.width.saturating_sub(conn_cols),
+        );
+        grid.put_clipped(
+            rect.x.saturating_add(prefix_cols),
+            y,
+            &ref_line.label,
+            label_style,
+            rect.width.saturating_sub(prefix_cols),
+        );
+        if let Some(btn_text) = ref_line.button_text(loading_frame) {
+            let btn_col = prefix_cols.saturating_add(label_cols).saturating_add(2);
+            if btn_col < rect.width {
+                let btn_style = match &ref_line.download_state {
+                    Some(crate::app::state::OriginalImageDownloadState::Downloading) => {
+                        style::user_ref_folder()
+                    }
+                    Some(crate::app::state::OriginalImageDownloadState::Downloaded { .. }) => {
+                        style::user_ref_file()
+                    }
+                    _ => style::muted(),
+                };
+                grid.put_clipped(
+                    rect.x.saturating_add(btn_col),
+                    y,
+                    &btn_text,
+                    btn_style,
+                    rect.width.saturating_sub(btn_col),
+                );
+            }
+        }
     }
 }
 

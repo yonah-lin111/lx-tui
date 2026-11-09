@@ -112,6 +112,7 @@ fn save_then_load_round_trip_and_no_temp_left() {
     let config = Config {
         sidebar_width: 32,
         narrow_width: 90,
+        image_download_dir: "~/Pictures/lx".into(),
         ..Config::default()
     };
     save(&path, &config).expect("save ok");

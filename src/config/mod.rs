@@ -33,6 +33,8 @@ pub struct Config {
     pub min_pane_width: u16,
     /// 窗格最小高度（含边框行）。
     pub min_pane_height: u16,
+    /// AI Web 原图下载保存目录（空串代表默认桌面 `~/Desktop`）。
+    pub image_download_dir: String,
 }
 
 impl Default for Config {
@@ -46,6 +48,7 @@ impl Default for Config {
             min_height: 10,
             min_pane_width: 10,
             min_pane_height: 3,
+            image_download_dir: String::new(),
         }
     }
 }
@@ -80,7 +83,35 @@ impl Config {
         if self.narrow_width < 1 {
             return Err(ConfigError::Invalid("narrow_width must be >= 1".into()));
         }
+        if self.image_download_dir.chars().any(char::is_control) {
+            return Err(ConfigError::Invalid(
+                "image_download_dir must not contain control characters".into(),
+            ));
+        }
         Ok(())
+    }
+
+    /// 解析原图下载保存目录：未配置（空串）时默认 `~/Desktop`，支持 `~` 与 `~/...` 展开。
+    pub fn resolved_image_download_dir(&self) -> Result<PathBuf, ConfigError> {
+        let trimmed = self.image_download_dir.trim();
+        if trimmed.is_empty() {
+            let home = std::env::var_os("HOME")
+                .map(PathBuf::from)
+                .ok_or(ConfigError::HomeMissing)?;
+            return Ok(home.join("Desktop"));
+        }
+        if trimmed == "~" {
+            return std::env::var_os("HOME")
+                .map(PathBuf::from)
+                .ok_or(ConfigError::HomeMissing);
+        }
+        if let Some(rest) = trimmed.strip_prefix("~/") {
+            let home = std::env::var_os("HOME")
+                .map(PathBuf::from)
+                .ok_or(ConfigError::HomeMissing)?;
+            return Ok(home.join(rest));
+        }
+        Ok(PathBuf::from(trimmed))
     }
 
     /// 序列化为 `settings.json` 文本（缩进两空格，键序固定）。
@@ -95,7 +126,8 @@ impl Config {
                 "  \"min_width\": {},\n",
                 "  \"min_height\": {},\n",
                 "  \"min_pane_width\": {},\n",
-                "  \"min_pane_height\": {}\n",
+                "  \"min_pane_height\": {},\n",
+                "  \"image_download_dir\": {}\n",
                 "}}\n"
             ),
             self.sidebar_width,
@@ -106,6 +138,7 @@ impl Config {
             self.min_height,
             self.min_pane_width,
             self.min_pane_height,
+            escape_json_string(&self.image_download_dir),
         )
     }
 
@@ -114,6 +147,19 @@ impl Config {
         let value = parse_json_object(text)?;
         let mut config = Self::default();
         for (key, value) in &value {
+            if key == "image_download_dir" {
+                match value {
+                    JsonValue::String(dir) => {
+                        config.image_download_dir = dir.trim().to_string();
+                        continue;
+                    }
+                    _ => {
+                        return Err(ConfigError::Invalid(
+                            "image_download_dir must be a string".into(),
+                        ));
+                    }
+                }
+            }
             let slot = match key.as_str() {
                 "sidebar_width" => &mut config.sidebar_width,
                 "sidebar_min_width" => &mut config.sidebar_min_width,
@@ -239,6 +285,7 @@ fn parse_json_object(text: &str) -> Result<Vec<(String, JsonValue)>, ConfigError
 /// 极简 JSON 值：数字（u64）或字符串（其它类型报错由调用方处理）。
 enum JsonValue {
     Number(u64),
+    String(String),
     Other,
 }
 
@@ -246,8 +293,25 @@ enum JsonValue {
 fn json_u16(value: &JsonValue) -> Option<u16> {
     match value {
         JsonValue::Number(number) => u16::try_from(*number).ok(),
-        JsonValue::Other => None,
+        JsonValue::String(_) | JsonValue::Other => None,
     }
+}
+
+fn escape_json_string(text: &str) -> String {
+    let mut out = String::with_capacity(text.len() + 2);
+    out.push('"');
+    for ch in text.chars() {
+        match ch {
+            '"' => out.push_str("\\\""),
+            '\\' => out.push_str("\\\\"),
+            '\n' => out.push_str("\\n"),
+            '\r' => out.push_str("\\r"),
+            '\t' => out.push_str("\\t"),
+            _ => out.push(ch),
+        }
+    }
+    out.push('"');
+    out
 }
 
 /// 极简 JSON 解析器：扁平对象、数字与字符串，负数与浮点按非法处理。
@@ -297,10 +361,7 @@ impl<'a> JsonParser<'a> {
     /// 解析一个值；数组与嵌套对象跳过内容后记为 `Other`，字符串与数字如实记录。
     fn value(&mut self) -> Result<JsonValue, ConfigError> {
         match self.peek() {
-            Some(b'"') => {
-                self.string()?;
-                Ok(JsonValue::Other)
-            }
+            Some(b'"') => Ok(JsonValue::String(self.string()?)),
             Some(b'{') | Some(b'[') => {
                 self.skip_compound()?;
                 Ok(JsonValue::Other)

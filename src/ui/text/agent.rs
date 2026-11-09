@@ -132,6 +132,13 @@ pub const USER_REF_FOLDER_PREFIX: &str = "Folder: ";
 pub const USER_REF_IMAGE_PREFIX: &str = "Image: ";
 pub const USER_REF_SKILL_PREFIX: &str = "Skill: ";
 
+/// 助手消息下方生成图片的预览类型前缀（冒号后跟带下划线的预览图文件名）。
+pub const ASSISTANT_REF_IMAGE_PREVIEW_PREFIX: &str = "Image (preview): ";
+/// 助手生成图片右侧的原图下载按钮文案。
+pub const ASSISTANT_IMAGE_DOWNLOAD_ORIGINAL: &str = "[Download original]";
+pub const ASSISTANT_IMAGE_DOWNLOADING_SUFFIX: &str = " Downloading…]";
+pub const ASSISTANT_IMAGE_DOWNLOADED: &str = "[✓ Downloaded]";
+
 /// 目录读取的条目数：`12 files` / `1 file`。
 pub fn read_dir_count(count: usize) -> String {
     let suffix = if count == 1 { "file" } else { "files" };

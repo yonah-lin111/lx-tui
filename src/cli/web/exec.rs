@@ -634,10 +634,19 @@ async fn exec_chat(out: &Output, cwd: &Path, req: ChatRequest) -> Result<(), Str
             Some(AiWebStreamEvent::Text(delta)) => {
                 answer_text.push_str(&delta);
             }
-            Some(AiWebStreamEvent::GeneratedImage { label, path }) => {
+            Some(AiWebStreamEvent::GeneratedImage {
+                label,
+                path,
+                original_url,
+                preview_url,
+                file_stem,
+            }) => {
                 generated_images.push(crate::chat::web::AiWebGeneratedImage {
                     label,
                     path: (!path.is_empty()).then_some(path),
+                    original_url: (!original_url.is_empty()).then_some(original_url),
+                    preview_url: (!preview_url.is_empty()).then_some(preview_url),
+                    file_stem: (!file_stem.is_empty()).then_some(file_stem),
                 });
             }
             Some(AiWebStreamEvent::Session { id, title }) => {

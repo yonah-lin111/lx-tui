@@ -42,12 +42,18 @@ pub struct AiWebSessionSummary {
     pub updated_at_ms: i64,
 }
 
-/// 网页端生成的单张图片元数据（供 `/resume` 恢复对话展示与本地点击打开）。
+/// 网页端生成的单张图片元数据（供 `/resume` 恢复对话展示、本地预览与原图下载）。
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct AiWebGeneratedImage {
     pub label: String,
     #[serde(default)]
     pub path: Option<String>,
+    #[serde(default)]
+    pub original_url: Option<String>,
+    #[serde(default)]
+    pub preview_url: Option<String>,
+    #[serde(default)]
+    pub file_stem: Option<String>,
 }
 
 /// 网页端单条历史消息（供 `/resume` 恢复对话展示）。
@@ -76,7 +82,13 @@ pub enum AiWebStreamEvent {
     /// 回答正文增量。
     Text(String),
     /// 网页端生成的图片已落盘到本地会话图片目录。
-    GeneratedImage { label: String, path: String },
+    GeneratedImage {
+        label: String,
+        path: String,
+        original_url: String,
+        preview_url: String,
+        file_stem: String,
+    },
     /// 当前对话已关联到云端会话（用于把本地临时 ID 升级为云端会话 ID 并同步标题）。
     Session { id: String, title: Option<String> },
     /// `/resume` 历史会话列表。
@@ -123,6 +135,9 @@ pub fn parse_script_line(line: &str) -> Option<AiWebStreamEvent> {
             (!label.is_empty()).then(|| AiWebStreamEvent::GeneratedImage {
                 label,
                 path: field("path"),
+                original_url: field("original_url"),
+                preview_url: field("preview_url"),
+                file_stem: field("file_stem"),
             })
         }
         "session" => {
@@ -208,6 +223,10 @@ pub struct ScriptParams<'a> {
     pub title: Option<&'a str>,
     pub edit_user_index: Option<usize>,
     pub sessions_root: Option<&'a str>,
+    pub download_url: Option<&'a str>,
+    pub fallback_url: Option<&'a str>,
+    pub download_dir: Option<&'a str>,
+    pub download_stem: Option<&'a str>,
 }
 
 /// 组装交给 `ego-browser nodejs` 的脚本。
@@ -253,6 +272,14 @@ pub fn script_source(site: crate::app::state::AiWebSite, params: ScriptParams<'_
     source.push_str(&json_string(params.title.unwrap_or("")));
     source.push_str(",\n  sessionsRoot: ");
     source.push_str(&json_string(sessions_root));
+    source.push_str(",\n  downloadUrl: ");
+    source.push_str(&json_string(params.download_url.unwrap_or("")));
+    source.push_str(",\n  fallbackUrl: ");
+    source.push_str(&json_string(params.fallback_url.unwrap_or("")));
+    source.push_str(",\n  downloadDir: ");
+    source.push_str(&json_string(params.download_dir.unwrap_or("")));
+    source.push_str(",\n  downloadStem: ");
+    source.push_str(&json_string(params.download_stem.unwrap_or("")));
     source.push_str(&format!(",\n  editIndex: {edit_index},\n}};\n"));
     source.push_str(helpers_script);
     source.push('\n');

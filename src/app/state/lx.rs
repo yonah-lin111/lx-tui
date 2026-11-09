@@ -40,11 +40,11 @@ pub use chat::SHELL_SLOT;
 pub use chat::{
     AskAnsweredView, AskDetailView, AssistantStepView, CardSection, CardTarget, ChatMessageView,
     ChatPartView, CommandView, DiffHunkView, DiffLineView, FileChangeView, FileDiffDetailView,
-    FileDiffView, FrozenModel, InputHintLevel, InteractionAction, LxChat, McpDetailView,
-    McpImageView, ModelsSnapshot, PendingShell, PlanSnapshotView, PlanStepView,
-    ProcessInteractionView, ProcessStateView, QueuedSubmission, RequestKey, RequestState,
-    SearchDetailView, SearchMatchView, SubagentDetailView, ToolCallView, ToolDetailView,
-    ToolStatus, ToolSummary, UserShellView, WebSearchDetailView,
+    FileDiffView, FrozenModel, GeneratedImageOriginal, InputHintLevel, InteractionAction, LxChat,
+    McpDetailView, McpImageView, ModelsSnapshot, OriginalImageDownloadState, PendingShell,
+    PlanSnapshotView, PlanStepView, ProcessInteractionView, ProcessStateView, QueuedSubmission,
+    RequestKey, RequestState, SearchDetailView, SearchMatchView, SubagentDetailView, ToolCallView,
+    ToolDetailView, ToolStatus, ToolSummary, UserShellView, WebSearchDetailView,
 };
 pub use compact::{CompactNoticeView, LxCompact};
 pub use connect::{

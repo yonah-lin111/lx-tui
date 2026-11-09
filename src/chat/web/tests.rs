@@ -84,10 +84,15 @@ fn parses_session_events() {
         }]))
     );
     assert_eq!(
-        parse(r#"{"event":"image","label":"grok-r1-1.jpg","path":"/tmp/grok-r1-1.jpg"}"#),
+        parse(
+            r#"{"event":"image","label":"grok-r1-1.jpg","path":"/tmp/grok-r1-1.jpg","original_url":"https://assets.grok.com/u/original_image.jpg","preview_url":"https://assets.grok.com/u/image.jpg","file_stem":"grok-s1-r1-1-orig"}"#
+        ),
         Some(AiWebStreamEvent::GeneratedImage {
             label: "grok-r1-1.jpg".into(),
             path: "/tmp/grok-r1-1.jpg".into(),
+            original_url: "https://assets.grok.com/u/original_image.jpg".into(),
+            preview_url: "https://assets.grok.com/u/image.jpg".into(),
+            file_stem: "grok-s1-r1-1-orig".into(),
         })
     );
     assert_eq!(

@@ -130,9 +130,21 @@ fn list_signature(source: HistorySource<'_>, width: u16, skip_streaming_tail: bo
         }
         hash.write_usize(message.attachments.len());
         for att in &message.attachments {
+            hash.write_str(&att.id);
             hash.write_str(att.kind.as_str());
             hash.write_str(&att.label);
             hash.write_str(att.source_path.as_deref().unwrap_or(""));
+            match source.chat.image_originals.get(&att.id).map(|o| &o.state) {
+                None => hash.write_u8(0),
+                Some(crate::app::state::OriginalImageDownloadState::Idle) => hash.write_u8(1),
+                Some(crate::app::state::OriginalImageDownloadState::Downloading) => {
+                    hash.write_u8(2);
+                }
+                Some(crate::app::state::OriginalImageDownloadState::Downloaded { path }) => {
+                    hash.write_u8(3);
+                    hash.write_str(path);
+                }
+            }
         }
         // recap 卡与生成中占位。
         if let Some(recap) = source

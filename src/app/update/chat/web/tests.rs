@@ -825,12 +825,20 @@ fn ai_web_generated_images_attach_to_assistant_in_stream_and_resume() {
     assert!(on_ai_web_image_generated(
         &mut state,
         &key,
-        "grok-r1-1.jpg".into(),
-        "/tmp/grok-r1-1.jpg".into(),
+        crate::chat::web::AiWebGeneratedImage {
+            label: "grok-r1-1.jpg".into(),
+            path: Some("/tmp/grok-r1-1.jpg".into()),
+            original_url: Some(
+                "https://assets.grok.com/users/u1/generated/g1/original_image.jpg".into()
+            ),
+            preview_url: Some("https://assets.grok.com/users/u1/generated/g1/image.jpg".into()),
+            file_stem: Some("grok-94cea5fe-r1-1-orig".into()),
+        },
     ));
     let target = state.pane_anywhere(pane).expect("pane");
     let assistant = target.lx.chat.messages.last().expect("assistant");
     assert_eq!(assistant.attachments.len(), 1);
+    let att_id = assistant.attachments[0].id.clone();
     assert_eq!(
         assistant.attachments[0].kind,
         crate::db::chat::MessageAttachmentKind::Image
@@ -840,6 +848,46 @@ fn ai_web_generated_images_attach_to_assistant_in_stream_and_resume() {
         assistant.attachments[0].source_path.as_deref(),
         Some("/tmp/grok-r1-1.jpg")
     );
+    assert_eq!(
+        target
+            .lx
+            .chat
+            .image_originals
+            .get(&att_id)
+            .map(|o| &o.state),
+        Some(&crate::app::state::OriginalImageDownloadState::Idle)
+    );
+
+    // 点击下载原图：进入 Downloading 状态并发出 DownloadAiWebOriginalImage 效应。
+    state.effects.clear();
+    assert!(super::trigger_ai_web_original_image_download(
+        &mut state, pane, &att_id
+    ));
+    assert!(state.has_streaming_lx(), "原图下载中必须驱动转轮心跳");
+    assert!(state.effects.iter().any(|e| matches!(
+        e,
+        Effect::DownloadAiWebOriginalImage { attachment_id, .. } if attachment_id == &att_id
+    )));
+    // 下载完成：变为 Downloaded 状态，再次点击则在文件管理器中定位原图。
+    let cur_sid = state
+        .pane_anywhere(pane)
+        .and_then(|p| p.lx.chat.session_id.clone())
+        .expect("sid");
+    assert!(super::on_ai_web_original_image_downloaded(
+        &mut state,
+        pane,
+        &cur_sid,
+        &att_id,
+        "/tmp/Desktop/grok-94cea5fe-r1-1-orig.jpg".into(),
+    ));
+    state.effects.clear();
+    assert!(super::trigger_ai_web_original_image_download(
+        &mut state, pane, &att_id
+    ));
+    assert!(state.effects.iter().any(|e| matches!(
+        e,
+        Effect::RevealInFileManager { path } if path == std::path::Path::new("/tmp/Desktop/grok-94cea5fe-r1-1-orig.jpg")
+    )));
 
     if let Some(target) = state.pane_mut_anywhere(pane) {
         target.lx.chat.loading_session = true;
@@ -847,7 +895,7 @@ fn ai_web_generated_images_attach_to_assistant_in_stream_and_resume() {
     assert!(on_ai_web_session_loaded(
         &mut state,
         pane,
-        "ai-web-gk-dog".into(),
+        "ai-web-grok-dog".into(),
         Some("Draw a dog".into()),
         vec![
             crate::chat::web::AiWebHistoryMessage {
@@ -868,6 +916,13 @@ fn ai_web_generated_images_attach_to_assistant_in_stream_and_resume() {
                 images: vec![crate::chat::web::AiWebGeneratedImage {
                     label: "grok-r1-1.jpg".into(),
                     path: Some("/tmp/grok-r1-1.jpg".into()),
+                    original_url: Some(
+                        "https://assets.grok.com/users/u1/generated/g1/original_image.jpg".into()
+                    ),
+                    preview_url: Some(
+                        "https://assets.grok.com/users/u1/generated/g1/image.jpg".into()
+                    ),
+                    file_stem: Some("grok-dog-r1-1-orig".into()),
                 }],
                 created_at_ms: 2000,
             },

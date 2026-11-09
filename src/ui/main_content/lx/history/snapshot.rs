@@ -19,7 +19,7 @@ use super::cache::{
     recap_block_signature, report_block_signature, rewind_block_signature, shell_block_signature,
     stats_block_signature,
 };
-use super::paint::{BlockPaint, BlockSource, CardSpan, UserRefLine};
+use super::paint::{AssistantRefLine, BlockPaint, BlockSource, CardSpan, UserRefLine};
 use super::source::{HistorySource, is_legacy_report_row};
 use super::timeline::{TimelineEntry, timeline};
 use super::{
@@ -836,23 +836,15 @@ impl Builder<'_> {
                 message_index,
                 step_index: super::cache::ATTACHMENTS_SLOT_BLOCK,
                 width: self.width,
-                sig: attachments_block_signature(message),
+                sig: attachments_block_signature(source, message),
             };
             let block = self.block(key, BlockSource::Plain, start, || BlockPaint::RefLines {
-                ref_lines: UserRefLine::from_attachments(&message.attachments),
+                ref_lines: AssistantRefLine::from_message(message, source.chat),
             });
             self.rows += block.rows;
             if let BlockPaint::RefLines { ref_lines } = &*block.paint {
                 for (idx, ref_line) in ref_lines.iter().enumerate() {
-                    if let Some(path) = &ref_line.source_path {
-                        self.snapshot.cards.push(CardRegion {
-                            kind: CardKind::Attachment { path: path.clone() },
-                            card_start: start.saturating_add(idx),
-                            card_rows: 1,
-                            card_cols: None,
-                            clickable: true,
-                        });
-                    }
+                    ref_line.push_card_regions(start.saturating_add(idx), &mut self.snapshot.cards);
                 }
             }
             blocks.push(block);

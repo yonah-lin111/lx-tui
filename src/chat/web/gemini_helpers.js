@@ -17,6 +17,10 @@ const STREAM_URL = PARAMS.streamUrl || '';
 const SESSION_ID = PARAMS.sessionId || '';
 const TITLE = PARAMS.title || '';
 const SESSIONS_ROOT = PARAMS.sessionsRoot || '';
+const DOWNLOAD_URL = PARAMS.downloadUrl || '';
+const FALLBACK_URL = PARAMS.fallbackUrl || '';
+const DOWNLOAD_DIR = PARAMS.downloadDir || '';
+const DOWNLOAD_STEM = PARAMS.downloadStem || '';
 const EDIT_INDEX = typeof PARAMS.editIndex === 'number' ? PARAMS.editIndex : -1;
 
 function detectImageExt(buf, contentType, url) {
@@ -41,12 +45,66 @@ function detectImageExt(buf, contentType, url) {
   return 'png';
 }
 
+function toGeminiOriginalImageUrl(previewUrl) {
+  const s = String(previewUrl || '').trim();
+  if (!s) return '';
+  const base = s.replace(/=[^=/]+$/, '');
+  return base + '=s0-d-I?alr=yes';
+}
+
+async function downloadImageBuffer(frameId, startUrl) {
+  if (!frameId || !startUrl) return null;
+  let curUrl = startUrl;
+  for (let hop = 0; hop < 5; hop += 1) {
+    try {
+      const netRes = await cdp('Network.loadNetworkResource', {
+        frameId,
+        url: curUrl,
+        options: { disableCache: false, includeCredentials: true },
+      });
+      const resource = netRes && netRes.resource;
+      if (!resource || resource.httpStatusCode !== 200 || !resource.stream) {
+        return null;
+      }
+      const headers = resource.headers || {};
+      const contentType = headers['content-type'] || headers['Content-Type'] || '';
+      const chunks = [];
+      while (true) {
+        const part = await cdp('IO.read', { handle: resource.stream, size: 65536 });
+        if (part && part.data) {
+          chunks.push(
+            part.base64Encoded
+              ? Buffer.from(part.data, 'base64')
+              : Buffer.from(part.data, 'utf8')
+          );
+        }
+        if (!part || part.eof) break;
+      }
+      await cdp('IO.close', { handle: resource.stream }).catch(() => {});
+      const buf = Buffer.concat(chunks);
+      const asText = buf.length < 4096 ? buf.toString('utf8').trim() : '';
+      if (/^https?:\/\//i.test(asText)) {
+        curUrl = asText;
+        continue;
+      }
+      if (buf.length > 0) {
+        return { buf, contentType, finalUrl: curUrl };
+      }
+      return null;
+    } catch (_) {
+      return null;
+    }
+  }
+  return null;
+}
+
 async function saveGeneratedImages(siteTag, sessionPrefix, rawSessionId, turnNum, urls) {
   const list = Array.isArray(urls) ? Array.from(new Set(urls.filter(Boolean))) : [];
   if (list.length === 0) return [];
   const nodeFs = await import('node:fs');
   const nodePath = await import('node:path');
   const cleanSid = String(rawSessionId || 'temp').replace(/[^a-zA-Z0-9_-]/g, '_') || 'temp';
+  const shortSid = cleanSid.slice(0, 8);
   const fullSessionId = sessionPrefix + cleanSid;
   const imageDir = SESSIONS_ROOT ? nodePath.join(SESSIONS_ROOT, fullSessionId, 'image') : '';
   if (imageDir) {
@@ -62,8 +120,10 @@ async function saveGeneratedImages(siteTag, sessionPrefix, rawSessionId, turnNum
 
   const out = [];
   for (let i = 0; i < list.length; i += 1) {
-    const url = list[i];
+    const previewUrl = list[i];
+    const originalUrl = toGeminiOriginalImageUrl(previewUrl);
     const baseStem = siteTag + '-r' + String(turnNum) + '-' + String(i + 1);
+    const fileStem = siteTag + '-' + shortSid + '-r' + String(turnNum) + '-' + String(i + 1) + '-orig';
     if (imageDir) {
       let cached = null;
       for (const ext of ['jpg', 'png', 'webp', 'gif']) {
@@ -71,7 +131,13 @@ async function saveGeneratedImages(siteTag, sessionPrefix, rawSessionId, turnNum
         try {
           const st = nodeFs.statSync(cand);
           if (st.isFile() && st.size > 0) {
-            cached = { label: baseStem + '.' + ext, path: cand };
+            cached = {
+              label: baseStem + '.' + ext,
+              path: cand,
+              original_url: originalUrl,
+              preview_url: previewUrl,
+              file_stem: fileStem,
+            };
             break;
           }
         } catch (_) {}
@@ -81,38 +147,10 @@ async function saveGeneratedImages(siteTag, sessionPrefix, rawSessionId, turnNum
         continue;
       }
     }
-    let buf = null;
-    let contentType = '';
-    if (frameId) {
-      try {
-        const netRes = await cdp('Network.loadNetworkResource', {
-          frameId,
-          url,
-          options: { disableCache: false, includeCredentials: true },
-        });
-        const resource = netRes && netRes.resource;
-        const stream = resource && resource.stream;
-        const headers = (resource && resource.headers) || {};
-        contentType = headers['content-type'] || headers['Content-Type'] || '';
-        if (stream) {
-          const chunks = [];
-          while (true) {
-            const part = await cdp('IO.read', { handle: stream, size: 65536 });
-            if (part && part.data) {
-              chunks.push(
-                part.base64Encoded
-                  ? Buffer.from(part.data, 'base64')
-                  : Buffer.from(part.data, 'utf8')
-              );
-            }
-            if (!part || part.eof) break;
-          }
-          await cdp('IO.close', { handle: stream }).catch(() => {});
-          buf = Buffer.concat(chunks);
-        }
-      } catch (_) {}
-    }
-    const ext = detectImageExt(buf, contentType, url);
+    const fetched = await downloadImageBuffer(frameId, previewUrl);
+    const buf = fetched && fetched.buf;
+    const contentType = (fetched && fetched.contentType) || '';
+    const ext = detectImageExt(buf, contentType, previewUrl);
     const label = baseStem + '.' + ext;
     let savedPath = '';
     if (imageDir && buf && buf.length > 0) {
@@ -122,7 +160,13 @@ async function saveGeneratedImages(siteTag, sessionPrefix, rawSessionId, turnNum
         savedPath = target;
       } catch (_) {}
     }
-    out.push({ label, path: savedPath || null });
+    out.push({
+      label,
+      path: savedPath || null,
+      original_url: originalUrl,
+      preview_url: previewUrl,
+      file_stem: fileStem,
+    });
   }
   return out;
 }
@@ -589,6 +633,50 @@ async function ensureSidebarExpanded() {
 }
 
 async function runNonChatAction(currentUrl) {
+  if (ACTION === 'download_image') {
+    const nodeFs = await import('node:fs');
+    const nodePath = await import('node:path');
+    if (!DOWNLOAD_DIR || (!DOWNLOAD_URL && !FALLBACK_URL)) {
+      await emit({ event: 'error', message: 'Missing download target parameters' });
+      return;
+    }
+    let frameId = '';
+    try {
+      const tree = await cdp('Page.getResourceTree');
+      frameId = (tree && tree.frameTree && tree.frameTree.frame && tree.frameTree.frame.id) || '';
+    } catch (_) {}
+    let fetched = DOWNLOAD_URL ? await downloadImageBuffer(frameId, DOWNLOAD_URL) : null;
+    if ((!fetched || !fetched.buf) && FALLBACK_URL) {
+      fetched = await downloadImageBuffer(frameId, FALLBACK_URL);
+    }
+    if (!fetched || !fetched.buf || fetched.buf.length === 0) {
+      await emit({ event: 'error', message: 'Failed to download original image from Gemini' });
+      return;
+    }
+    const ext = detectImageExt(fetched.buf, fetched.contentType, fetched.finalUrl || DOWNLOAD_URL);
+    const fileName = (DOWNLOAD_STEM || 'gemini-orig') + '.' + ext;
+    try {
+      nodeFs.mkdirSync(DOWNLOAD_DIR, { recursive: true });
+      const target = nodePath.join(DOWNLOAD_DIR, fileName);
+      nodeFs.writeFileSync(target, fetched.buf);
+      await emit({
+        event: 'image',
+        label: fileName,
+        path: target,
+        original_url: DOWNLOAD_URL,
+        preview_url: FALLBACK_URL,
+        file_stem: DOWNLOAD_STEM,
+      });
+      await emit({ event: 'done' });
+    } catch (error) {
+      await emit({
+        event: 'error',
+        message: 'Failed to save original image: ' + String((error && error.message) || error),
+      });
+    }
+    return;
+  }
+
   if (ACTION === 'new') {
     await ensureFreshChat();
     await emit({ event: 'done' });

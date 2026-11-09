@@ -33,8 +33,10 @@ pub enum CardKind {
     },
     /// 模型切换提示条目：整块可点击展开/折叠详情与注入提示词。
     ModelSwitch { switch_id: String, expanded: bool },
-    /// 消息末尾的附件行（`├─ Image: ...` / `└─ File: ...`）：点击调用系统默认应用打开本地文件。
+    /// 消息末尾的预览图片附件文件名（点击在系统文件管理器中定位该文件）。
     Attachment { path: String },
+    /// 助手生成图片右侧的原图下载按钮（点击下载原图或定位已下载原图）。
+    DownloadOriginalImage { attachment_id: String },
     /// 消息尾部 recap 系统事件卡（按消息 ID 定位）。
     Recap { message_id: String },
     /// 子 agent 汇报块：整块可点击展开/折叠正文。

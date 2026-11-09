@@ -32,18 +32,18 @@ pub use lx::{
     CardTarget, ChatMessageView, ChatPartView, CommandView, CompactNoticeView, ConnectManageAction,
     ConnectPanel, ConnectPromptStep, ConnectProviderEntry, ConnectStage, DeepseekThinkingMode,
     DiffHunkView, DiffLineView, FileChangeView, FileDiffDetailView, FileDiffView, ForkEntry,
-    ForkPanel, FrozenModel, GeminiThinkingLevel, GeminiWebModel, GrokWebModel, HistoryEntry,
-    HistoryPanel, InputHintLevel, InteractionAction, Lx, LxChat, LxCompact, LxEntry, LxModelSwitch,
-    MAX_RESIDENT_SUBAGENT_CHATS, McpCatalogEntry, McpDetailView, McpImageView, McpPanel,
-    McpPanelEntry, McpRuntimeState, McpServerState, ModelCandidate, ModelPicker, ModelPickerStage,
-    ModelSwitchNoticeView, ModelsSnapshot, PanelWindow, PendingShell, PlanSnapshotView,
-    PlanStepView, ProcessEntry, ProcessInteractionView, ProcessStateView, QueuedSubmission,
-    RequestKey, RequestState, RewindAction, RewindExecution, RewindNoticeView, RewindPanel,
-    RewindScope, RewindTarget, RewindTargetKind, SHELL_SLOT, SearchDetailView, SearchMatchView,
-    SlashCommand, SlashEntry, SlashPanel, SnapshotState, StartupCount, StartupCounts,
-    SubagentDetailView, SubagentReportView, SubagentRun, TaskPage, TaskTab, ToolCallView,
-    ToolDetailView, ToolStatus, ToolSummary, UserShellView, WebSearchDetailView,
-    ai_web_remote_session, is_ai_web_session,
+    ForkPanel, FrozenModel, GeminiThinkingLevel, GeminiWebModel, GeneratedImageOriginal,
+    GrokWebModel, HistoryEntry, HistoryPanel, InputHintLevel, InteractionAction, Lx, LxChat,
+    LxCompact, LxEntry, LxModelSwitch, MAX_RESIDENT_SUBAGENT_CHATS, McpCatalogEntry, McpDetailView,
+    McpImageView, McpPanel, McpPanelEntry, McpRuntimeState, McpServerState, ModelCandidate,
+    ModelPicker, ModelPickerStage, ModelSwitchNoticeView, ModelsSnapshot,
+    OriginalImageDownloadState, PanelWindow, PendingShell, PlanSnapshotView, PlanStepView,
+    ProcessEntry, ProcessInteractionView, ProcessStateView, QueuedSubmission, RequestKey,
+    RequestState, RewindAction, RewindExecution, RewindNoticeView, RewindPanel, RewindScope,
+    RewindTarget, RewindTargetKind, SHELL_SLOT, SearchDetailView, SearchMatchView, SlashCommand,
+    SlashEntry, SlashPanel, SnapshotState, StartupCount, StartupCounts, SubagentDetailView,
+    SubagentReportView, SubagentRun, TaskPage, TaskTab, ToolCallView, ToolDetailView, ToolStatus,
+    ToolSummary, UserShellView, WebSearchDetailView, ai_web_remote_session, is_ai_web_session,
 };
 pub use pane::{Direction, Pane, PaneKind, PaneView, Tab};
 pub use prompt_history::{PROMPT_HISTORY_LIMIT, PROMPT_HISTORY_MAX_BYTES, PromptHistory};
@@ -739,7 +739,9 @@ impl AppState {
             self.pane_anywhere(pane).is_some_and(|target| {
                 target.lx.chat.status.streaming
                     || target.lx.chat.has_running_shell()
+                    || target.lx.chat.has_downloading_image()
                     || target.lx.compact.is_running()
+                    || target.lx.recap.pending.is_some()
                     // 子 agent 在后台跑时主 loading 也要扫描，即使 Agents 面板没开。
                     || target.lx.agents.runs.iter().any(|run| run.is_running())
             })

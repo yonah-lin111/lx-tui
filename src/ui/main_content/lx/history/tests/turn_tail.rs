@@ -17,7 +17,7 @@ fn rows_text(buf: &Buffer, area: Rect) -> Vec<String> {
 }
 
 #[test]
-fn assistant_image_attachments_render_like_user_refs_and_register_clicks() {
+fn assistant_image_attachments_render_preview_underline_and_download_original_button() {
     let area = Rect::new(0, 0, 80, 20);
     let mut msg = message("assistant", "complete", vec![text_part("Generated image")]);
     msg.model_label = Some("Gemini · 3.8 Flash".into());
@@ -48,12 +48,53 @@ fn assistant_image_attachments_render_like_user_refs_and_register_clicks() {
             height: None,
         },
     ];
-    let lx = lx_with(vec![msg]);
+    let mut lx = lx_with(vec![msg]);
+    lx.chat.image_originals.insert(
+        "att-1".into(),
+        crate::app::state::GeneratedImageOriginal {
+            site: crate::app::state::AiWebSite::Gemini,
+            session_id: "ai-web-gm-123".into(),
+            original_url: "https://lh3.googleusercontent.com/gg/abc=s0-d-I?alr=yes".into(),
+            fallback_url: "https://lh3.googleusercontent.com/gg/abc=s1024-rw".into(),
+            file_stem: "gemini-123-r1-1-orig".into(),
+            state: crate::app::state::OriginalImageDownloadState::Idle,
+        },
+    );
+    lx.chat.image_originals.insert(
+        "att-2".into(),
+        crate::app::state::GeneratedImageOriginal {
+            site: crate::app::state::AiWebSite::Gemini,
+            session_id: "ai-web-gm-123".into(),
+            original_url: "https://lh3.googleusercontent.com/gg/def=s0-d-I?alr=yes".into(),
+            fallback_url: "https://lh3.googleusercontent.com/gg/def=s1024-rw".into(),
+            file_stem: "gemini-123-r1-2-orig".into(),
+            state: crate::app::state::OriginalImageDownloadState::Downloading,
+        },
+    );
     let mut buf = Buffer::empty(area);
     crate::ui::main_content::lx::render_history_for_test(area, &mut buf, &lx, 0);
     let text = rows_text(&buf, area).join("\n");
-    assert!(text.contains("├─ Image: gemini-r1-1.webp"), "{text}");
-    assert!(text.contains("└─ Image: gemini-r1-2.webp"), "{text}");
+    assert!(
+        text.contains("├─ Image (preview): gemini-r1-1.webp  [Download original]"),
+        "{text}"
+    );
+    assert!(
+        text.contains("└─ Image (preview): gemini-r1-2.webp  [◐ Downloading…]"),
+        "{text}"
+    );
+    // 文件名本身带下划线。
+    let row_y = (0..area.height)
+        .find(|&y| rows_text(&buf, area)[usize::from(y)].contains("gemini-r1-1.webp"))
+        .expect("row");
+    let label_x = rows_text(&buf, area)[usize::from(row_y)]
+        .find("gemini-r1-1.webp")
+        .expect("col") as u16;
+    let cell = buf.cell((label_x, row_y)).expect("cell");
+    assert!(
+        cell.modifier.contains(ratatui::style::Modifier::UNDERLINED),
+        "filename must be underlined: {:?}",
+        cell.modifier
+    );
 
     let view = layout(area, &lx, &mut cache());
     let paths: Vec<&str> = view
@@ -68,6 +109,17 @@ fn assistant_image_attachments_render_like_user_refs_and_register_clicks() {
         paths,
         vec!["/tmp/gemini-r1-1.webp", "/tmp/gemini-r1-2.webp"]
     );
+    let dl_buttons: Vec<(&str, bool)> = view
+        .cards
+        .iter()
+        .filter_map(|card| match &card.kind {
+            CardKind::DownloadOriginalImage { attachment_id } => {
+                Some((attachment_id.as_str(), card.clickable))
+            }
+            _ => None,
+        })
+        .collect();
+    assert_eq!(dl_buttons, vec![("att-1", true), ("att-2", false)]);
 }
 
 #[test]

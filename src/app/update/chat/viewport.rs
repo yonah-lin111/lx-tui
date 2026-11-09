@@ -425,9 +425,15 @@ pub fn toggle_lx_card(state: &mut AppState, pane: PaneId, target: CardTarget) ->
             if !path.is_empty() {
                 state
                     .effects
-                    .push(crate::app::effects::Effect::OpenBrowser { url: path });
+                    .push(crate::app::effects::Effect::RevealInFileManager {
+                        path: std::path::PathBuf::from(path),
+                    });
             }
             true
+        }
+        CardTarget::DownloadOriginalImage { attachment_id } => {
+            super::pin_lx_viewport(state, pane);
+            super::web::trigger_ai_web_original_image_download(state, pane, &attachment_id)
         }
         CardTarget::Recap { message_id } => {
             super::pin_lx_viewport(state, pane);

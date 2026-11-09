@@ -21,7 +21,9 @@ async function main() {
         if (location.hostname === 'accounts.google.com') return { ready: false, signIn: true };
         if (location.hostname !== 'gemini.google.com') return { ready: false, signIn: false };
         const signInLink = Boolean(
-          document.querySelector('a[href*="accounts.google.com/ServiceLogin"], a[aria-label*="登录"], a[aria-label*="Sign in"]')
+          document.querySelector(
+            'a[href*="accounts.google.com/ServiceLogin"], a[aria-label="登录"]:not([href^="/app/"]), a[aria-label="Sign in"]:not([href^="/app/"])'
+          )
         );
         const hasComposer = Boolean(
           document.querySelector('.ql-editor[contenteditable="true"], rich-textarea, [data-test-id="bard-mode-menu-button"]')
@@ -631,7 +633,14 @@ async function main() {
           });
         }
         for (const img of saved) {
-          await emit({ event: 'image', label: img.label, path: img.path || '' });
+          await emit({
+            event: 'image',
+            label: img.label,
+            path: img.path || '',
+            original_url: img.original_url || '',
+            preview_url: img.preview_url || '',
+            file_stem: img.file_stem || '',
+          });
         }
       }
       if (sessionMeta && sessionMeta.id) {

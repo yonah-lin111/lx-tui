@@ -57,14 +57,27 @@ pub(crate) fn stats_block_signature(line: &str) -> u64 {
 }
 
 /// 助手消息末尾附件引用树的指纹。
-pub(crate) fn attachments_block_signature(message: &crate::app::state::ChatMessageView) -> u64 {
+pub(crate) fn attachments_block_signature(
+    source: HistorySource<'_>,
+    message: &crate::app::state::ChatMessageView,
+) -> u64 {
     let mut hash = Fnv::new();
     hash.write_str(&message.id);
     hash.write_usize(message.attachments.len());
     for att in &message.attachments {
+        hash.write_str(&att.id);
         hash.write_str(att.kind.as_str());
         hash.write_str(&att.label);
         hash.write_str(att.source_path.as_deref().unwrap_or(""));
+        match source.chat.image_originals.get(&att.id).map(|o| &o.state) {
+            None => hash.write_u8(0),
+            Some(crate::app::state::OriginalImageDownloadState::Idle) => hash.write_u8(1),
+            Some(crate::app::state::OriginalImageDownloadState::Downloading) => hash.write_u8(2),
+            Some(crate::app::state::OriginalImageDownloadState::Downloaded { path }) => {
+                hash.write_u8(3);
+                hash.write_str(path);
+            }
+        }
     }
     hash.finish()
 }

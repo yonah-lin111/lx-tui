@@ -548,7 +548,7 @@ pub fn toggle_agent_card(state: &mut AppState, pane: PaneId, target: CardTarget)
             .toggle_section(&message_id, crate::app::state::SHELL_SLOT, section),
         CardTarget::Compact { checkpoint_id } => run.compact.toggle(&checkpoint_id),
         CardTarget::ModelSwitch { .. } => false,
-        CardTarget::Attachment { .. } => false,
+        CardTarget::Attachment { .. } | CardTarget::DownloadOriginalImage { .. } => false,
         CardTarget::Recap { message_id } => {
             run.chat
                 .toggle_section(&message_id, "recap", crate::app::state::CardSection::Body)

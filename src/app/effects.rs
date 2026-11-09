@@ -164,6 +164,18 @@ pub enum Effect {
     ResetAiWebSession {
         site: crate::app::state::lx::AiWebSite,
     },
+    /// 在系统文件管理器中定位并选中指定文件（macOS Finder `open -R` / Windows Explorer `/select,` / Linux 打开父目录）。
+    RevealInFileManager { path: PathBuf },
+    /// 下载 AI Web（Gemini / Grok）生成图片的原图到配置目录（默认 `~/Desktop`）。
+    DownloadAiWebOriginalImage {
+        pane: crate::layout::PaneId,
+        session_id: String,
+        attachment_id: String,
+        site: crate::app::state::lx::AiWebSite,
+        original_url: String,
+        fallback_url: String,
+        file_stem: String,
+    },
     /// 取消在途网络流（流取消后仍走 Finishing 收尾保存 partial）。
     CancelChatStream {
         key: crate::app::state::lx::RequestKey,

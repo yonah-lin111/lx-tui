@@ -413,8 +413,10 @@ pub enum CardTarget {
     Compact { checkpoint_id: String },
     /// 模型切换提示条目（按切换记录 ID 定位；默认折叠）。
     ModelSwitch { switch_id: String },
-    /// 消息末尾的附件行（点击打开本地图片/文件）。
+    /// 消息末尾的预览图片附件文件名（点击在系统文件管理器中定位该文件）。
     Attachment { path: String },
+    /// 助手生成图片右侧的原图下载按钮（点击下载原图到配置目录，已下载则定位原图）。
+    DownloadOriginalImage { attachment_id: String },
     /// 消息尾部 recap 系统事件卡（按消息 ID 定位）。
     Recap { message_id: String },
     /// 子 agent 汇报块（按消息 ID + agent ID 定位；槽位 `report:<agent_id>`）。
@@ -451,6 +453,25 @@ pub enum CardSection {
 /// 本地命令卡片在 [`LxChat::detail_expanded`] 里的槽位（它没有 call_id）。
 pub const SHELL_SLOT: &str = "shell";
 
+/// AI Web 生成图片的原图下载状态。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum OriginalImageDownloadState {
+    Idle,
+    Downloading,
+    Downloaded { path: String },
+}
+
+/// AI Web 生成图片的原图下载信息（按附件 ID 索引）。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct GeneratedImageOriginal {
+    pub site: super::web::AiWebSite,
+    pub session_id: String,
+    pub original_url: String,
+    pub fallback_url: String,
+    pub file_stem: String,
+    pub state: OriginalImageDownloadState,
+}
+
 /// 单窗格的聊天状态：会话引用、历史视图与请求状态机。
 #[derive(Debug)]
 pub struct LxChat {
@@ -465,6 +486,8 @@ pub struct LxChat {
     /// 不塞进 `ChatMessageView` 是为了避免给大量测试/构造点补字段；加载会话时整体重建，
     /// 新轮提交时追加。未知 id 返回 None，面板时间列留空。
     pub message_times: std::collections::HashMap<String, i64>,
+    /// AI Web 助手生成图片的原图下载元数据与状态（attachment_id → 原图信息）。
+    pub image_originals: std::collections::HashMap<String, GeneratedImageOriginal>,
     /// 独立持久化的撤销提示（不进入 messages / 模型上下文）。
     pub notices: Vec<super::rewind::RewindNoticeView>,
     /// 会话 revision（撤销预检与迟到结果防护）。
@@ -626,6 +649,7 @@ impl LxChat {
             selection: None,
             messages: Vec::new(),
             message_times: std::collections::HashMap::new(),
+            image_originals: std::collections::HashMap::new(),
             notices: Vec::new(),
             revision: 0,
             request: RequestState::Idle,
@@ -713,6 +737,7 @@ impl LxChat {
         self.session_id = None;
         self.messages.clear();
         self.message_times.clear();
+        self.image_originals.clear();
         self.notices.clear();
         self.revision = 0;
         self.follow_bottom = true;
@@ -736,6 +761,13 @@ impl LxChat {
         self.session_title = None;
         self.session_title_palette = 0;
         self.loading_session = false;
+    }
+
+    /// 是否存在正在下载原图的 AI Web 生成图片（驱动按钮 loading 转轮）。
+    pub fn has_downloading_image(&self) -> bool {
+        self.image_originals
+            .values()
+            .any(|orig| matches!(orig.state, OriginalImageDownloadState::Downloading))
     }
 
     /// 是否仍有本地命令在途（已提交待 spawn 或消息仍显示运行中）。

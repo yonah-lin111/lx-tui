@@ -559,6 +559,11 @@ fn target_of(kind: &history::CardKind) -> CardTarget {
             switch_id: switch_id.clone(),
         },
         history::CardKind::Attachment { path } => CardTarget::Attachment { path: path.clone() },
+        history::CardKind::DownloadOriginalImage { attachment_id } => {
+            CardTarget::DownloadOriginalImage {
+                attachment_id: attachment_id.clone(),
+            }
+        }
         history::CardKind::Recap { message_id } => CardTarget::Recap {
             message_id: message_id.clone(),
         },

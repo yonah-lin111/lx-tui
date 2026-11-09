@@ -451,10 +451,20 @@ fn merge_web_search(
     Ok(config)
 }
 
-/// 解析 8 个已知键；未知键忽略，非法值报错。
+/// 解析已知配置键；未知键忽略，非法值报错。
 fn config_from_json(entries: Vec<(String, JsonValue)>) -> Result<Config, String> {
     let mut config = Config::default();
     for (key, value) in entries {
+        if key == "image_download_dir" {
+            match value {
+                JsonValue::String(text) => {
+                    config.image_download_dir = text.trim().to_string();
+                    continue;
+                }
+                JsonValue::Null => continue,
+                _ => return Err("image_download_dir must be a string".into()),
+            }
+        }
         let slot = match key.as_str() {
             "sidebar_width" => &mut config.sidebar_width,
             "sidebar_min_width" => &mut config.sidebar_min_width,
@@ -674,7 +684,7 @@ fn command_view_json(view: &CommandView) -> String {
 /// 配置 → JSON（键序固定）。
 fn config_json(config: &Config) -> String {
     format!(
-        "{{\"sidebar_width\":{},\"sidebar_min_width\":{},\"sidebar_max_width\":{},\"narrow_width\":{},\"min_width\":{},\"min_height\":{},\"min_pane_width\":{},\"min_pane_height\":{}}}",
+        "{{\"sidebar_width\":{},\"sidebar_min_width\":{},\"sidebar_max_width\":{},\"narrow_width\":{},\"min_width\":{},\"min_height\":{},\"min_pane_width\":{},\"min_pane_height\":{},\"image_download_dir\":{}}}",
         config.sidebar_width,
         config.sidebar_min_width,
         config.sidebar_max_width,
@@ -683,6 +693,7 @@ fn config_json(config: &Config) -> String {
         config.min_height,
         config.min_pane_width,
         config.min_pane_height,
+        json_string(&config.image_download_dir),
     )
 }
 

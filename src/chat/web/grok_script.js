@@ -236,9 +236,20 @@ async function main() {
           if (!el) return '';
           // 只读正文容器。助手消息头部有一个 sr-only 的 "Grok" 标题，
           // 正文尚未挂载时回退到 innerText 会把标题误当成回答输出。
+          // 同时临时隐藏 .not-prose（生图卡片及其“生成图片中...”加载占位、按钮），
+          // 避免把生图过程中的占位提示当成正文增量流式推给 TUI。
           const body = el.querySelector('.response-content-markdown');
           if (!body) return '';
-          return stripGrokDirectives((body.innerText || '').replace(/\r\n/g, '\n'));
+          const hidden = [];
+          body.querySelectorAll('.not-prose, button, svg, [data-no-copy="true"]').forEach((node) => {
+            hidden.push([node, node.style.display]);
+            node.style.display = 'none';
+          });
+          const raw = (body.innerText || '').replace(/\r\n/g, '\n');
+          for (const [node, prev] of hidden) {
+            node.style.display = prev;
+          }
+          return stripGrokDirectives(raw);
         },
         pushText(current) {
           if (!current) return;
@@ -506,7 +517,14 @@ async function main() {
           });
         }
         for (const img of saved) {
-          await emit({ event: 'image', label: img.label, path: img.path || '' });
+          await emit({
+            event: 'image',
+            label: img.label,
+            path: img.path || '',
+            original_url: img.original_url || '',
+            preview_url: img.preview_url || '',
+            file_stem: img.file_stem || '',
+          });
         }
       }
       if (sessionMeta && sessionMeta.id) {

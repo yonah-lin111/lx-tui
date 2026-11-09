@@ -332,6 +332,8 @@ function generalValues() {
   for (const key of CONFIG_KEYS) {
     values[key] = document.getElementById(key).value;
   }
+  const dlEl = document.getElementById('image_download_dir');
+  values.image_download_dir = dlEl ? dlEl.value : '';
   for (const key of WEB_SEARCH_KEYS) {
     const el = document.getElementById(key);
     values[key] = el ? el.value : '';
@@ -349,6 +351,8 @@ function resetGeneral() {
   for (const key of CONFIG_KEYS) {
     document.getElementById(key).value = generalBaseline[key];
   }
+  const dlEl = document.getElementById('image_download_dir');
+  if (dlEl) { dlEl.value = generalBaseline.image_download_dir || ''; }
   for (const key of WEB_SEARCH_KEYS) {
     const el = document.getElementById(key);
     if (el) { el.value = generalBaseline[key] || ''; }
@@ -360,6 +364,8 @@ async function saveGeneral() {
   for (const key of CONFIG_KEYS) {
     config[key] = Number(document.getElementById(key).value);
   }
+  const dlEl = document.getElementById('image_download_dir');
+  config.image_download_dir = ((dlEl && dlEl.value) || '').trim();
   const web_search = {
     exa_api_key: (document.getElementById('web_search_exa_api_key').value || '').trim(),
     tavily_api_key: (document.getElementById('web_search_tavily_api_key').value || '').trim()
@@ -378,6 +384,8 @@ function applyGeneralData(data) {
   for (const key of CONFIG_KEYS) {
     document.getElementById(key).value = data.config[key];
   }
+  const dlEl = document.getElementById('image_download_dir');
+  if (dlEl) { dlEl.value = (data.config && data.config.image_download_dir) || ''; }
   const webSearch = data.web_search || {};
   document.getElementById('web_search_exa_api_key').value = webSearch.exa_api_key || '';
   document.getElementById('web_search_tavily_api_key').value = webSearch.tavily_api_key || '';

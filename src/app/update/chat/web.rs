@@ -395,8 +395,7 @@ pub fn rewind_ai_web(state: &mut AppState, pane: PaneId) -> bool {
 pub fn on_ai_web_image_generated(
     state: &mut AppState,
     key: &RequestKey,
-    label: String,
-    path: String,
+    img: crate::chat::web::AiWebGeneratedImage,
 ) -> bool {
     let Some(target) = state.pane_mut_anywhere(key.pane) else {
         return false;
@@ -404,6 +403,8 @@ pub fn on_ai_web_image_generated(
     if target.lx.chat.session_id.as_deref() != Some(key.session.as_str()) {
         return false;
     }
+    let site = target.lx.ai_web_site;
+    let session_id = target.lx.chat.session_id.clone().unwrap_or_default();
     let Some(assistant) = target
         .lx
         .chat
@@ -416,21 +417,136 @@ pub fn on_ai_web_image_generated(
     };
     let pos = i64::try_from(assistant.attachments.len()).unwrap_or(0);
     let att_id = format!("{}-img-{}", assistant.id, assistant.attachments.len());
+    let original_url = img.original_url.unwrap_or_default();
+    let preview_url = img.preview_url.unwrap_or_default();
+    let file_stem = img
+        .file_stem
+        .filter(|s| !s.is_empty())
+        .unwrap_or_else(|| format!("{}-orig", img.label));
     assistant
         .attachments
         .push(crate::db::chat::MessageAttachmentMeta {
-            id: att_id,
+            id: att_id.clone(),
             position: pos,
             kind: crate::db::chat::MessageAttachmentKind::Image,
-            label,
+            label: img.label,
             marker_start: None,
             marker_end: None,
-            source_path: (!path.is_empty()).then_some(path),
+            source_path: img.path.filter(|p| !p.is_empty()),
             mime: None,
             width: None,
             height: None,
         });
+    if !original_url.is_empty() || !preview_url.is_empty() {
+        target.lx.chat.image_originals.insert(
+            att_id,
+            crate::app::state::GeneratedImageOriginal {
+                site,
+                session_id,
+                original_url,
+                fallback_url: preview_url,
+                file_stem,
+                state: crate::app::state::OriginalImageDownloadState::Idle,
+            },
+        );
+    }
     target.lx.chat.follow_bottom = true;
+    true
+}
+
+/// 触发下载 AI Web 生成图片的原图（或已下载时直接在资源管理器中定位原图）。
+pub fn trigger_ai_web_original_image_download(
+    state: &mut AppState,
+    pane: PaneId,
+    attachment_id: &str,
+) -> bool {
+    let Some(target) = state.pane_mut_anywhere(pane) else {
+        return false;
+    };
+    let Some(orig) = target.lx.chat.image_originals.get_mut(attachment_id) else {
+        return false;
+    };
+    match &orig.state {
+        crate::app::state::OriginalImageDownloadState::Downloading => false,
+        crate::app::state::OriginalImageDownloadState::Downloaded { path } => {
+            let path = std::path::PathBuf::from(path);
+            state.effects.push(Effect::RevealInFileManager { path });
+            true
+        }
+        crate::app::state::OriginalImageDownloadState::Idle => {
+            orig.state = crate::app::state::OriginalImageDownloadState::Downloading;
+            let effect = Effect::DownloadAiWebOriginalImage {
+                pane,
+                session_id: orig.session_id.clone(),
+                attachment_id: attachment_id.to_string(),
+                site: orig.site,
+                original_url: orig.original_url.clone(),
+                fallback_url: orig.fallback_url.clone(),
+                file_stem: orig.file_stem.clone(),
+            };
+            state.effects.push(effect);
+            true
+        }
+    }
+}
+
+/// 原图下载完成：切换按钮为 `[✓ Downloaded]` 并在窗格内显示保存路径提示。
+pub fn on_ai_web_original_image_downloaded(
+    state: &mut AppState,
+    pane: PaneId,
+    session_id: &str,
+    attachment_id: &str,
+    path: String,
+) -> bool {
+    let Some(target) = state.pane_mut_anywhere(pane) else {
+        return false;
+    };
+    if target.lx.chat.session_id.as_deref() != Some(session_id) {
+        return false;
+    }
+    let Some(orig) = target.lx.chat.image_originals.get_mut(attachment_id) else {
+        return false;
+    };
+    orig.state = crate::app::state::OriginalImageDownloadState::Downloaded { path: path.clone() };
+    crate::app::update::show_lx_toast(
+        state,
+        pane,
+        crate::app::toast::Toast::new(
+            crate::app::toast::ToastKind::Default,
+            format!("Saved original image to {path}"),
+            Some(pane),
+            std::time::Instant::now(),
+        ),
+    );
+    true
+}
+
+/// 原图下载失败：恢复按钮为 `[Download original]` 并在窗格内提示错误。
+pub fn on_ai_web_original_image_download_failed(
+    state: &mut AppState,
+    pane: PaneId,
+    session_id: &str,
+    attachment_id: &str,
+    message: String,
+) -> bool {
+    let Some(target) = state.pane_mut_anywhere(pane) else {
+        return false;
+    };
+    if target.lx.chat.session_id.as_deref() == Some(session_id)
+        && let Some(orig) = target.lx.chat.image_originals.get_mut(attachment_id)
+    {
+        orig.state = crate::app::state::OriginalImageDownloadState::Idle;
+    }
+    crate::app::update::show_lx_toast(
+        state,
+        pane,
+        crate::app::toast::Toast::new(
+            crate::app::toast::ToastKind::Danger,
+            message,
+            Some(pane),
+            std::time::Instant::now(),
+        ),
+    );
     true
 }
 
@@ -450,7 +566,12 @@ pub fn on_ai_web_session_bound(
         return false;
     }
     let mut changed = target.lx.chat.session_id.as_deref() != Some(session_id.as_str());
-    target.lx.chat.session_id = Some(session_id);
+    target.lx.chat.session_id = Some(session_id.clone());
+    for orig in target.lx.chat.image_originals.values_mut() {
+        if orig.session_id == from_session_id {
+            orig.session_id.clone_from(&session_id);
+        }
+    }
     if !target.lx.chat.messages.is_empty()
         && target.lx.chat.session_title.is_none()
         && let Some(title) = title
@@ -573,12 +694,31 @@ pub fn on_ai_web_session_loaded(
                     },
                 });
             }
-            let attachments: Vec<crate::db::chat::MessageAttachmentMeta> = item
-                .images
-                .into_iter()
-                .enumerate()
-                .map(|(att_idx, img)| crate::db::chat::MessageAttachmentMeta {
-                    id: format!("{msg_id}-img-{att_idx}"),
+            let site = target.lx.ai_web_site;
+            let mut attachments = Vec::with_capacity(item.images.len());
+            for (att_idx, img) in item.images.into_iter().enumerate() {
+                let att_id = format!("{msg_id}-img-{att_idx}");
+                let original_url = img.original_url.unwrap_or_default();
+                let preview_url = img.preview_url.unwrap_or_default();
+                let file_stem = img
+                    .file_stem
+                    .filter(|s| !s.is_empty())
+                    .unwrap_or_else(|| format!("{}-orig", img.label));
+                if !original_url.is_empty() || !preview_url.is_empty() {
+                    target.lx.chat.image_originals.insert(
+                        att_id.clone(),
+                        crate::app::state::GeneratedImageOriginal {
+                            site,
+                            session_id: session_id.clone(),
+                            original_url,
+                            fallback_url: preview_url,
+                            file_stem,
+                            state: crate::app::state::OriginalImageDownloadState::Idle,
+                        },
+                    );
+                }
+                attachments.push(crate::db::chat::MessageAttachmentMeta {
+                    id: att_id,
                     position: i64::try_from(att_idx).unwrap_or(0),
                     kind: crate::db::chat::MessageAttachmentKind::Image,
                     label: img.label,
@@ -588,8 +728,8 @@ pub fn on_ai_web_session_loaded(
                     mime: None,
                     width: None,
                     height: None,
-                })
-                .collect();
+                });
+            }
             let text_content = if item.text.trim().is_empty() && !attachments.is_empty() {
                 text::ai_web_generated_images_label(attachments.len())
             } else {

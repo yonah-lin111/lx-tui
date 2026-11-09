@@ -453,6 +453,47 @@ pub fn terminate_process_group(pid: u32, force: bool) {
     }
 }
 
+/// 在系统文件管理器中定位并选中指定路径（macOS Finder `open -R` / Windows Explorer `/select,` / Linux 打开父目录）。
+///
+/// 调用方须在后台线程执行。
+pub fn reveal_in_file_manager(path: &std::path::Path) -> io::Result<()> {
+    #[cfg(target_os = "macos")]
+    {
+        let path_str = path
+            .to_str()
+            .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidInput, "invalid utf-8 path"))?;
+        native_open("open", &["-R", path_str])
+    }
+    #[cfg(target_os = "linux")]
+    {
+        let target = if path.is_dir() {
+            path
+        } else {
+            path.parent().unwrap_or(path)
+        };
+        let target_str = target
+            .to_str()
+            .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidInput, "invalid utf-8 path"))?;
+        match native_open("xdg-open", &[target_str]) {
+            Ok(()) => Ok(()),
+            Err(error) => native_open("gio", &["open", target_str]).map_err(|_| error),
+        }
+    }
+    #[cfg(windows)]
+    {
+        let select_arg = format!("/select,{}", path.display());
+        native_open("explorer", &[&select_arg])
+    }
+    #[cfg(not(any(target_os = "macos", target_os = "linux", windows)))]
+    {
+        let _ = path;
+        Err(io::Error::new(
+            io::ErrorKind::Unsupported,
+            "revealing a file in file manager is not supported on this platform",
+        ))
+    }
+}
+
 /// 在系统默认浏览器中打开 URL；OS 命令按 cfg 门控，失败返回错误。///
 /// 调用方须在后台线程执行（进程启动会短暂阻塞）；`open`/`xdg-open` 等命令
 /// 本身立即返回，不等待浏览器窗口。
