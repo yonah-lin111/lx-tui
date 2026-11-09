@@ -4,7 +4,7 @@ use super::*;
 use crate::app::state::AppState;
 use crate::app::update;
 use crate::config::Config;
-use crate::detect::{AgentKind, AgentState};
+use crate::detect::{AgentKind, AgentState, PaneAgentSnapshot};
 use crate::layout::PaneId;
 use crate::ui::render;
 use ratatui::Terminal as RatatuiTerminal;
@@ -68,9 +68,16 @@ fn agent_snapshot(kind: AgentKind, state: AgentState) -> PaneAgentSnapshot {
     }
 }
 
-/// 给当前标签的焦点窗格挂一个 Agent 快照；返回窗格标识。
+/// 给当前标签的焦点窗格挂一个终端 Agent 快照并切到终端视图；返回窗格标识。
 fn add_agent(state: &mut AppState, kind: AgentKind, agent_state: AgentState) -> PaneId {
     let pane = state.active_tab().layout.focus();
+    if state
+        .active_tab()
+        .pane(pane)
+        .is_some_and(|target| target.view == PaneView::Lx)
+    {
+        update::toggle_pane_view(state, pane);
+    }
     update::update_pane_agent(state, pane, Some(agent_snapshot(kind, agent_state)));
     pane
 }
@@ -402,5 +409,151 @@ fn hover_row_gets_selection_background() {
         buffer[(sections.agents.x, sections.agents.y)].style().bg,
         style::selection().bg,
         "hovered agent row must use selection background"
+    );
+}
+
+#[test]
+fn lx_entry_only_appears_in_agents_when_session_is_open_and_renders_mode_labels() {
+    use crate::app::state::{AiWebSite, LxEntry};
+
+    let mut state = AppState::demo();
+    let pane = state.active_tab().layout.focus();
+    assert!(
+        agent_items(&state).is_empty(),
+        "welcome page without session must not appear in agents list"
+    );
+
+    if let Some(target) = state.active_tab_mut().pane_mut(pane) {
+        target.lx.chat.session_id = Some("ses-1".to_string());
+    }
+    let cases = [
+        (LxEntry::Native, AiWebSite::Deepseek, "lx-native"),
+        (LxEntry::Hybrid, AiWebSite::Deepseek, "lx-hybrid"),
+        (LxEntry::Automation, AiWebSite::Deepseek, "lx-automation"),
+        (LxEntry::AiWeb, AiWebSite::Deepseek, "lx-web-deepseek"),
+        (LxEntry::AiWeb, AiWebSite::Gemini, "lx-web-gemini"),
+        (LxEntry::AiWeb, AiWebSite::Grok, "lx-web-grok"),
+    ];
+    for (entry, site, expected_label) in cases {
+        if let Some(target) = state.active_tab_mut().pane_mut(pane) {
+            target.lx.entry = entry;
+            target.lx.ai_web_site = site;
+        }
+        let items = agent_items(&state);
+        assert_eq!(items.len(), 1);
+        assert_eq!(text::sidebar_agent_label(items[0].kind), expected_label);
+        let row = agents_row_text(&state);
+        assert!(
+            row.starts_with(&format!(
+                "{} {} ",
+                text::AGENT_SELECTED_MARKER,
+                text::AGENT_STATUS_RING
+            )),
+            "focused lx session row must show marker and idle ring: {row:?}"
+        );
+    }
+
+    if let Some(target) = state.active_tab_mut().pane_mut(pane) {
+        target.lx.chat.session_id = None;
+    }
+    assert!(
+        agent_items(&state).is_empty(),
+        "closing/resetting session removes lx item from agents list"
+    );
+}
+
+#[test]
+fn single_pane_renders_both_lx_and_terminal_agent_rows_and_marker_follows_view() {
+    let mut state = AppState::demo();
+    let pane = add_agent(&mut state, AgentKind::Claude, AgentState::Working);
+    if let Some(target) = state.active_tab_mut().pane_mut(pane) {
+        target.lx.chat.session_id = Some("ses-dual".to_string());
+    }
+
+    let items = agent_items(&state);
+    assert_eq!(
+        items.len(),
+        2,
+        "same pane with lx session and claude yields 2 rows"
+    );
+    assert_eq!(text::sidebar_agent_label(items[0].kind), "lx-native");
+    assert_eq!(text::sidebar_agent_label(items[1].kind), "claude");
+
+    // 当前在 Terminal 视图：第 0 行 lx-native 不带 ❯，第 1 行 claude 带 ❯。
+    let row0_terminal = agents_row_text_at(&state, 0);
+    let row1_terminal = agents_row_text_at(&state, 1);
+    assert!(
+        row0_terminal.starts_with("  ○ lx-native"),
+        "background lx row has no marker when viewing terminal: {row0_terminal:?}"
+    );
+    assert!(
+        row1_terminal.starts_with(&format!(
+            "{} {} clau",
+            text::AGENT_SELECTED_MARKER,
+            text::AGENT_STATUS_DOT
+        )),
+        "visible terminal agent row has marker: {row1_terminal:?}"
+    );
+
+    // 切回 Lx 视图：第 0 行 lx-native 带 ❯，第 1 行 claude 不带 ❯。
+    update::toggle_pane_view(&mut state, pane);
+    let row0_lx = agents_row_text_at(&state, 0);
+    let row1_lx = agents_row_text_at(&state, 1);
+    assert!(
+        row0_lx.starts_with(&format!(
+            "{} {} lx-native",
+            text::AGENT_SELECTED_MARKER,
+            text::AGENT_STATUS_RING
+        )),
+        "visible lx row has marker when viewing lx: {row0_lx:?}"
+    );
+    assert!(
+        row1_lx.starts_with("  ● clau"),
+        "background terminal agent row has no marker when viewing lx: {row1_lx:?}"
+    );
+
+    let view = view_for(&state);
+    let sections = layout::sidebar_sections(view.sidebar, false).expect("sections are visible");
+    assert_eq!(
+        agent_target_at(&view, &state, sections.agents.x, sections.agents.y),
+        Some((pane, PaneView::Lx))
+    );
+    assert_eq!(
+        agent_target_at(&view, &state, sections.agents.x, sections.agents.y + 1),
+        Some((pane, PaneView::Terminal))
+    );
+}
+
+#[test]
+fn lx_agent_dot_tracks_idle_working_and_blocked_states() {
+    use crate::app::state::{AskState, RequestKey};
+
+    let mut state = AppState::demo();
+    let pane = state.active_tab().layout.focus();
+    if let Some(target) = state.active_tab_mut().pane_mut(pane) {
+        target.lx.chat.session_id = Some("ses-status".to_string());
+    }
+    assert_eq!(agent_items(&state)[0].state, AgentState::Idle);
+
+    if let Some(target) = state.active_tab_mut().pane_mut(pane) {
+        target.lx.chat.status.streaming = true;
+    }
+    assert_eq!(agent_items(&state)[0].state, AgentState::Working);
+
+    if let Some(target) = state.active_tab_mut().pane_mut(pane) {
+        target.lx.ask = Some(AskState::new(
+            RequestKey {
+                pane,
+                session: "ses-status".to_string(),
+                generation: 1,
+            },
+            "call-1".to_string(),
+            Vec::new(),
+        ));
+    }
+    assert_eq!(
+        agent_items(&state)[0].state,
+        AgentState::Blocked,
+        "pending ask takes priority as Blocked"
     );
 }

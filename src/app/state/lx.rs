@@ -338,6 +338,37 @@ impl Lx {
         self.ask.is_some()
     }
 
+    /// 是否已打开或正在建立 lx 会话（侧栏 `Agents` 列表收录条件）。
+    ///
+    /// 空白欢迎页（尚未发送消息、`/new` 重置后或会话删除后）返回 `false`；
+    /// 一旦已绑定 `session_id`、正在加载历史会话（`/resume`）、请求在途/流式生成中，
+    /// 或有本地 `!` 命令在途，即视为会话已打开。
+    pub fn has_active_session(&self) -> bool {
+        self.chat.session_id.is_some()
+            || self.chat.loading_session
+            || self.chat.status.streaming
+            || self.chat.request.is_busy()
+            || self.chat.has_running_shell()
+    }
+
+    /// 映射当前 lx 会话的运行状态（供侧栏 `Agents` 圆点着色：阻塞优先于运行，其余为空闲）。
+    pub fn agent_state(&self) -> crate::detect::AgentState {
+        use crate::detect::AgentState;
+        if self.has_pending_ask() || self.agents.blocked_count() > 0 {
+            AgentState::Blocked
+        } else if self.chat.status.streaming
+            || self.chat.request.is_busy()
+            || self.chat.has_running_shell()
+            || self.compact.is_running()
+            || self.rewind.is_executing()
+            || (!self.chat.main_stopped && self.agents.running_count() > 0)
+        {
+            AgentState::Working
+        } else {
+            AgentState::Idle
+        }
+    }
+
     /// 输入框视口首视觉行索引。
     pub fn scroll(&self) -> usize {
         self.scroll

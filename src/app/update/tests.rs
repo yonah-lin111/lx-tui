@@ -4035,6 +4035,28 @@ fn focus_agent_pane_rejects_foreign_pane() {
 }
 
 #[test]
+fn focus_agent_pane_view_switches_between_lx_and_terminal_on_same_pane() {
+    let mut state = AppState::demo();
+    let pane = state.active_tab().layout.focus();
+    assert_eq!(
+        state.active_tab().pane(pane).map(|target| target.view),
+        Some(PaneView::Lx)
+    );
+
+    assert!(focus_agent_pane_view(&mut state, pane, PaneView::Terminal));
+    assert_eq!(
+        state.active_tab().pane(pane).map(|target| target.view),
+        Some(PaneView::Terminal)
+    );
+
+    assert!(focus_agent_pane_view(&mut state, pane, PaneView::Lx));
+    assert_eq!(
+        state.active_tab().pane(pane).map(|target| target.view),
+        Some(PaneView::Lx)
+    );
+}
+
+#[test]
 fn agent_panes_follow_active_workspace() {
     use crate::detect::{AgentKind, AgentState};
 
@@ -4047,6 +4069,15 @@ fn agent_panes_follow_active_workspace() {
     };
     update_pane_agent(&mut state, first, Some(snapshot));
     assert_eq!(state.agent_panes(), vec![(0, first)]);
+
+    if let Some(target) = state.active_tab_mut().pane_mut(first) {
+        target.lx.chat.session_id = Some("ses-1".to_string());
+    }
+    assert_eq!(
+        state.agent_panes(),
+        vec![(0, first), (0, first)],
+        "pane with active lx session and terminal agent contributes 2 rows"
+    );
 
     create_workspace(&mut state);
     assert!(

@@ -44,7 +44,7 @@ pub use lx::{
     SubagentReportView, SubagentRun, TaskPage, TaskTab, ToolCallView, ToolDetailView, ToolStatus,
     ToolSummary, UserShellView, WebSearchDetailView, ai_web_remote_session, is_ai_web_session,
 };
-pub use pane::{Direction, Pane, PaneKind, PaneView, Tab};
+pub use pane::{Direction, Pane, PaneKind, PaneView, SidebarAgentEntry, SidebarAgentKind, Tab};
 pub use prompt_history::{PROMPT_HISTORY_LIMIT, PROMPT_HISTORY_MAX_BYTES, PromptHistory};
 pub use todo::{TodoChartKind, TodoEdit, TodoEditTarget, TodoPanel, WeekDayView};
 pub use workspace::{
@@ -751,19 +751,47 @@ impl AppState {
             .collect()
     }
 
-    /// 当前工作区内探测到 Agent 的窗格（标签索引，窗格标识），按标签与树序排列；
-    /// Agents 分区渲染、命中与滚动计数共用。
-    pub fn agent_panes(&self) -> Vec<(usize, PaneId)> {
+    /// 当前工作区内所有启用的 Agent 条目（按标签与窗格树序排列；同一窗格先排 lx 会话、再排终端外部 Agent）。
+    ///
+    /// Agents 分区渲染、命中与滚动计数共用唯一数据源。
+    pub fn agent_entries(&self) -> Vec<SidebarAgentEntry> {
         let workspace = self.active_workspace();
-        let mut panes = Vec::new();
+        let mut entries = Vec::new();
         for (tab_index, tab) in workspace.tabs.iter().enumerate() {
-            for id in tab.layout.pane_ids() {
-                if tab.pane(id).is_some_and(|pane| pane.agent.is_some()) {
-                    panes.push((tab_index, id));
+            for pane_id in tab.layout.pane_ids() {
+                let Some(pane) = tab.pane(pane_id) else {
+                    continue;
+                };
+                if pane.lx.has_active_session() {
+                    entries.push(SidebarAgentEntry {
+                        tab_index,
+                        pane_id,
+                        kind: SidebarAgentKind::Lx {
+                            entry: pane.lx.entry,
+                            ai_web_site: pane.lx.ai_web_site,
+                        },
+                        state: pane.lx.agent_state(),
+                    });
+                }
+                if let Some(snapshot) = pane.agent.as_ref() {
+                    entries.push(SidebarAgentEntry {
+                        tab_index,
+                        pane_id,
+                        kind: SidebarAgentKind::Terminal(snapshot.kind),
+                        state: snapshot.state,
+                    });
                 }
             }
         }
-        panes
+        entries
+    }
+
+    /// 当前工作区内 Agents 分区各行对应的（标签索引，窗格标识），与 [`Self::agent_entries`] 一一对应。
+    pub fn agent_panes(&self) -> Vec<(usize, PaneId)> {
+        self.agent_entries()
+            .into_iter()
+            .map(|entry| (entry.tab_index, entry.pane_id))
+            .collect()
     }
 
     /// 当前工作区焦点终端窗格的实时 cwd；非终端或尚未轮询到时 None。
