@@ -887,3 +887,126 @@ fn task_list_scrollbar_mouse_press_and_drag_events() {
     let page = target.lx.task.as_ref().expect("page");
     assert_eq!(page.window.viewport, Some(3), "滚轮向下滚动 3 行");
 }
+
+#[test]
+fn task_agents_list_scrollbar_preserves_viewport_across_refresh_and_selection() {
+    let config = Config::default();
+    let mut state = AppState::demo();
+    let geo = geometry(&state, &config, Rect::new(0, 0, 120, 24));
+    let pane = state.active_tab().layout.focus();
+    let inner = pane_inner(&geo, pane);
+    {
+        let target = state.pane_mut_anywhere(pane).expect("pane");
+        target.view = PaneView::Lx;
+        for i in 1..=8 {
+            target
+                .lx
+                .agents
+                .runs
+                .push(crate::app::state::SubagentRun::from_record(
+                    &crate::db::chat::SubagentRecord {
+                        agent_id: format!("sub-{i}"),
+                        child_session_id: format!("child-{i}"),
+                        parent_session_id: "parent".into(),
+                        spawn_message_id: None,
+                        role: crate::chat::agent::AgentRole::Explorer,
+                        status: "completed".into(),
+                        title: format!("Task {i}"),
+                        created_at_ms: i,
+                        completed_at_ms: Some(i + 1),
+                        report_json: None,
+                        report_delivered: true,
+                        nickname: Some(format!("Agent{i}")),
+                        agent_path: format!("/root/agent{i}"),
+                        model_provider: String::new(),
+                        model_id: String::new(),
+                        model_variant: None,
+                    },
+                ));
+        }
+        let mut page = crate::app::state::TaskPage::default();
+        page.select_tab(crate::app::state::TaskTab::Agents);
+        page.agents_window.active = 2;
+        page.agents_window.anchor = 2;
+        target.lx.task = Some(page);
+    }
+    let bar = {
+        let target = state.pane_anywhere(pane).expect("pane");
+        ui::main_content::lx::task_list_scrollbar(inner, &target.lx)
+            .expect("8 个子 agent 时列表必须有滚动条")
+    };
+    let mut sessions = HashMap::new();
+    let mut cache = ui::RenderCache::default();
+    let mut dirty = false;
+
+    // 1. 拖拽 Agents 列表滚动条到底部
+    handle_terminal_event(
+        mouse(
+            MouseEventKind::Down(MouseButton::Left),
+            bar.track.x,
+            bar.thumb.y,
+        ),
+        &mut state,
+        &mut sessions,
+        &geo,
+        &config,
+        &mut cache,
+        &mut dirty,
+    );
+    handle_terminal_event(
+        mouse(
+            MouseEventKind::Drag(MouseButton::Left),
+            bar.track.x,
+            bar.track.bottom().saturating_sub(1),
+        ),
+        &mut state,
+        &mut sessions,
+        &geo,
+        &config,
+        &mut cache,
+        &mut dirty,
+    );
+    handle_terminal_event(
+        mouse(
+            MouseEventKind::Up(MouseButton::Left),
+            bar.track.x,
+            bar.track.bottom().saturating_sub(1),
+        ),
+        &mut state,
+        &mut sessions,
+        &geo,
+        &config,
+        &mut cache,
+        &mut dirty,
+    );
+    {
+        let target = state.pane_anywhere(pane).expect("pane");
+        let page = target.lx.task.as_ref().expect("page");
+        assert_eq!(page.agents_window.viewport, Some(2), "拖拽到底部后视口为 2");
+    }
+
+    // 2. 模拟每帧 ListSubagents / sync_agent_ui_queue 调用的 restore_selected_task_agent：
+    //    视口绝不能被清空为 None。
+    {
+        let target = state.pane_mut_anywhere(pane).expect("pane");
+        update::restore_selected_task_agent(&mut target.lx, Some("sub-3"));
+        let page = target.lx.task.as_ref().expect("page");
+        assert_eq!(
+            page.agents_window.viewport,
+            Some(2),
+            "后台列表同步不得重置滚动条视口"
+        );
+    }
+
+    // 3. 点击当前视口内的某条 Agent：不得把视口弹回 0。
+    assert!(update::select_task_agent(&mut state, pane, 2));
+    {
+        let target = state.pane_anywhere(pane).expect("pane");
+        let page = target.lx.task.as_ref().expect("page");
+        assert_eq!(
+            page.agents_window.viewport,
+            Some(2),
+            "点选条目保持当前滚动视口"
+        );
+    }
+}

@@ -85,10 +85,8 @@ pub fn restore_selected_task_agent(
     {
         page.agents_window.active = position;
         page.agents_window.anchor = position;
-        page.agents_window.viewport = None;
-    } else {
-        page.agents_window.clamp(filtered.len());
     }
+    page.agents_window.clamp(filtered.len());
 }
 
 /// 同步底边框的 blocked 计数（子 agent 状态变化后调用）。
@@ -449,7 +447,6 @@ pub fn select_task_agent(state: &mut AppState, pane: PaneId, index: usize) -> bo
     }
     page.agents_window.active = position;
     page.agents_window.anchor = position;
-    page.agents_window.viewport = None;
     page.agents_focus = None;
     if let Some(run) = target.lx.agents.runs.get_mut(index) {
         run.follow = true;
