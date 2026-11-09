@@ -128,30 +128,12 @@ fn list_signature(source: HistorySource<'_>, width: u16, skip_streaming_tail: bo
             hash.write_usize(step_index);
             step_signature(&mut hash, source, message, index, step_index, step);
         }
-        // 消息尾部文件变更摘要：每个文件行的展开状态与列表折叠状态都会改变行数。
-        let mut file_paths: Vec<&str> = Vec::new();
-        for step in &message.steps {
-            let AssistantStepView::Tool { call, .. } = step else {
-                continue;
-            };
-            let Some(view) = call.file_view() else {
-                continue;
-            };
-            for file in &view.files {
-                if !file_paths.contains(&file.path.as_str()) {
-                    file_paths.push(file.path.as_str());
-                }
-            }
+        hash.write_usize(message.attachments.len());
+        for att in &message.attachments {
+            hash.write_str(att.kind.as_str());
+            hash.write_str(&att.label);
+            hash.write_str(att.source_path.as_deref().unwrap_or(""));
         }
-        for path in file_paths {
-            let slot = format!("file:{path}");
-            hash.write_str(&slot);
-            hash.write_u8(u8::from(source.chat.detail_is_expanded(&message.id, &slot)));
-        }
-        hash.write_u8(u8::from(source.chat.detail_is_expanded(
-            &message.id,
-            super::super::file_changes::MORE_SLOT,
-        )));
         // recap 卡与生成中占位。
         if let Some(recap) = source
             .recap

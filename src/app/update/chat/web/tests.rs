@@ -481,6 +481,7 @@ fn rename_and_session_load_and_cloud_attachment_rewind_work_in_ai_web() {
                 thinking_ms: None,
                 text: "hello".into(),
                 files: vec!["photo.png".into(), "report.pdf".into()],
+                images: Vec::new(),
                 created_at_ms: 1000,
             },
             crate::chat::web::AiWebHistoryMessage {
@@ -489,6 +490,7 @@ fn rename_and_session_load_and_cloud_attachment_rewind_work_in_ai_web() {
                 thinking_ms: Some(1500),
                 text: "world".into(),
                 files: Vec::new(),
+                images: Vec::new(),
                 created_at_ms: 2000,
             },
         ],
@@ -808,4 +810,77 @@ fn switching_ai_web_site_cancels_in_flight_stream() {
     let target = state.pane_anywhere(pane).expect("pane");
     assert!(target.lx.slash.is_none());
     assert!(target.lx.chat.session_id.is_none());
+}
+
+#[test]
+fn ai_web_generated_images_attach_to_assistant_in_stream_and_resume() {
+    let (mut state, pane) = ai_web_state();
+    crate::app::update::set_ai_web_site(&mut state, pane, AiWebSite::Grok);
+    draft(&mut state, pane, "draw a dog");
+    assert!(super::super::try_send(&mut state, pane));
+    let key = match &state.pane_anywhere(pane).expect("pane").lx.chat.request {
+        RequestState::Streaming { key, .. } => key.clone(),
+        other => panic!("expected streaming, got {other:?}"),
+    };
+    assert!(on_ai_web_image_generated(
+        &mut state,
+        &key,
+        "grok-r1-1.jpg".into(),
+        "/tmp/grok-r1-1.jpg".into(),
+    ));
+    let target = state.pane_anywhere(pane).expect("pane");
+    let assistant = target.lx.chat.messages.last().expect("assistant");
+    assert_eq!(assistant.attachments.len(), 1);
+    assert_eq!(
+        assistant.attachments[0].kind,
+        crate::db::chat::MessageAttachmentKind::Image
+    );
+    assert_eq!(assistant.attachments[0].label, "grok-r1-1.jpg");
+    assert_eq!(
+        assistant.attachments[0].source_path.as_deref(),
+        Some("/tmp/grok-r1-1.jpg")
+    );
+
+    if let Some(target) = state.pane_mut_anywhere(pane) {
+        target.lx.chat.loading_session = true;
+    }
+    assert!(on_ai_web_session_loaded(
+        &mut state,
+        pane,
+        "ai-web-gk-dog".into(),
+        Some("Draw a dog".into()),
+        vec![
+            crate::chat::web::AiWebHistoryMessage {
+                role: "user".into(),
+                thinking: String::new(),
+                thinking_ms: None,
+                text: "draw a dog".into(),
+                files: Vec::new(),
+                images: Vec::new(),
+                created_at_ms: 1000,
+            },
+            crate::chat::web::AiWebHistoryMessage {
+                role: "assistant".into(),
+                thinking: String::new(),
+                thinking_ms: None,
+                text: String::new(),
+                files: Vec::new(),
+                images: vec![crate::chat::web::AiWebGeneratedImage {
+                    label: "grok-r1-1.jpg".into(),
+                    path: Some("/tmp/grok-r1-1.jpg".into()),
+                }],
+                created_at_ms: 2000,
+            },
+        ],
+    ));
+    let target = state.pane_anywhere(pane).expect("pane");
+    assert_eq!(target.lx.chat.messages.len(), 2);
+    assert_eq!(target.lx.chat.messages[1].text(), "Generated image");
+    assert_eq!(target.lx.chat.messages[1].attachments.len(), 1);
+    assert_eq!(
+        target.lx.chat.messages[1].attachments[0]
+            .source_path
+            .as_deref(),
+        Some("/tmp/grok-r1-1.jpg")
+    );
 }

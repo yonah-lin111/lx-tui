@@ -364,6 +364,10 @@ async fn exec_show(
             if !msg.files.is_empty() {
                 writeln!(w, "  files: {}", msg.files.join(", "))?;
             }
+            if !msg.images.is_empty() {
+                let labels: Vec<&str> = msg.images.iter().map(|img| img.label.as_str()).collect();
+                writeln!(w, "  images: {}", labels.join(", "))?;
+            }
             if show_thinking && !msg.thinking.trim().is_empty() {
                 writeln!(w, "  thinking: {}", o.muted(msg.thinking.trim()))?;
             }
@@ -425,6 +429,7 @@ async fn exec_delete(
     )
     .await?;
     check_action_events(site, &events)?;
+    crate::platform::remove_session_images(session_id);
     let payload = json!({
         "site": site_key(site),
         "sessionId": session_id,
@@ -616,6 +621,7 @@ async fn exec_chat(out: &Output, cwd: &Path, req: ChatRequest) -> Result<(), Str
 
     let mut thinking_text = String::new();
     let mut answer_text = String::new();
+    let mut generated_images: Vec<crate::chat::web::AiWebGeneratedImage> = Vec::new();
     let mut bound_remote_id = req.remote_session_id.clone();
     let mut bound_title: Option<String> = None;
     let mut last_diag: Option<String> = None;
@@ -627,6 +633,12 @@ async fn exec_chat(out: &Output, cwd: &Path, req: ChatRequest) -> Result<(), Str
             }
             Some(AiWebStreamEvent::Text(delta)) => {
                 answer_text.push_str(&delta);
+            }
+            Some(AiWebStreamEvent::GeneratedImage { label, path }) => {
+                generated_images.push(crate::chat::web::AiWebGeneratedImage {
+                    label,
+                    path: (!path.is_empty()).then_some(path),
+                });
             }
             Some(AiWebStreamEvent::Session { id, title }) => {
                 bound_remote_id = Some(id);
@@ -654,6 +666,7 @@ async fn exec_chat(out: &Output, cwd: &Path, req: ChatRequest) -> Result<(), Str
                     "title": bound_title,
                     "thinkingText": thinking_text,
                     "text": answer_text,
+                    "images": generated_images,
                     "files": prepared.files,
                     "keepFiles": prepared.keep_files,
                     "editIndex": effective_edit_index,
@@ -663,6 +676,19 @@ async fn exec_chat(out: &Output, cwd: &Path, req: ChatRequest) -> Result<(), Str
                         writeln!(w, "{}", o.muted(thinking_text.trim()))?;
                     }
                     writeln!(w, "{answer_text}")?;
+                    for (idx, img) in generated_images.iter().enumerate() {
+                        let branch = if idx + 1 == generated_images.len() {
+                            text::agent::TREE_LEAF
+                        } else {
+                            text::agent::TREE_BRANCH
+                        };
+                        writeln!(
+                            w,
+                            "{branch}{}{}",
+                            text::agent::USER_REF_IMAGE_PREFIX,
+                            img.label
+                        )?;
+                    }
                     if let Some(sid) = &final_session_id {
                         let title_suffix = bound_title
                             .as_deref()

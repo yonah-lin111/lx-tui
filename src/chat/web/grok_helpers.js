@@ -16,7 +16,159 @@ const FIRST_TURN = Boolean(PARAMS.firstTurn);
 const STREAM_URL = PARAMS.streamUrl || '';
 const SESSION_ID = PARAMS.sessionId || '';
 const TITLE = PARAMS.title || '';
+const SESSIONS_ROOT = PARAMS.sessionsRoot || '';
 const EDIT_INDEX = typeof PARAMS.editIndex === 'number' ? PARAMS.editIndex : -1;
+
+function detectImageExt(buf, contentType, url) {
+  if (buf && buf.length >= 12) {
+    if (buf[0] === 0xff && buf[1] === 0xd8) return 'jpg';
+    if (buf[0] === 0x89 && buf[1] === 0x50 && buf[2] === 0x4e && buf[3] === 0x47) return 'png';
+    if (
+      buf.slice(0, 4).toString('ascii') === 'RIFF' &&
+      buf.slice(8, 12).toString('ascii') === 'WEBP'
+    ) {
+      return 'webp';
+    }
+    if (buf.slice(0, 3).toString('ascii') === 'GIF') return 'gif';
+  }
+  const ct = String(contentType || '').toLowerCase();
+  if (ct.includes('jpeg') || ct.includes('jpg')) return 'jpg';
+  if (ct.includes('webp')) return 'webp';
+  if (ct.includes('gif')) return 'gif';
+  if (ct.includes('png')) return 'png';
+  const m = String(url || '').match(/\.(jpe?g|png|webp|gif)(?:[?#]|$)/i);
+  if (m) return m[1].toLowerCase().replace('jpeg', 'jpg');
+  return 'jpg';
+}
+
+function resolveGrokAssetUrl(raw) {
+  const s = String(raw || '').trim();
+  if (!s) return '';
+  if (/^https?:\/\//i.test(s)) return s;
+  return 'https://assets.grok.com/' + s.replace(/^\/+/, '');
+}
+
+function extractGrokGeneratedImageUrls(r) {
+  if (!r || r.sender === 'human') return [];
+  const urls = [];
+  const cards = Array.isArray(r.cardAttachmentsJson) ? r.cardAttachmentsJson : [];
+  for (const raw of cards) {
+    try {
+      const card = typeof raw === 'string' ? JSON.parse(raw) : raw;
+      if (
+        card &&
+        (card.cardType === 'generated_image_card' || card.type === 'render_generated_image') &&
+        card.image_chunk &&
+        card.image_chunk.imageUrl
+      ) {
+        const u = resolveGrokAssetUrl(card.image_chunk.imageUrl);
+        if (u) urls.push(u);
+      }
+    } catch (_) {}
+  }
+  const genUrls = Array.isArray(r.generatedImageUrls) ? r.generatedImageUrls : [];
+  for (const u of genUrls) {
+    const resolved = resolveGrokAssetUrl(u);
+    if (resolved) urls.push(resolved);
+  }
+  if (urls.length === 0) {
+    const meta = Array.isArray(r.fileAttachmentsMetadata) ? r.fileAttachmentsMetadata : [];
+    for (const f of meta) {
+      const uri = String((f && f.fileUri) || '');
+      if (uri.includes('/generated/')) {
+        const resolved = resolveGrokAssetUrl(uri);
+        if (resolved) urls.push(resolved);
+      }
+    }
+  }
+  return Array.from(new Set(urls));
+}
+
+async function saveGeneratedImages(siteTag, sessionPrefix, rawSessionId, turnNum, urls) {
+  const list = Array.isArray(urls) ? Array.from(new Set(urls.filter(Boolean))) : [];
+  if (list.length === 0) return [];
+  const nodeFs = await import('node:fs');
+  const nodePath = await import('node:path');
+  const cleanSid = String(rawSessionId || 'temp').replace(/[^a-zA-Z0-9_-]/g, '_') || 'temp';
+  const fullSessionId = sessionPrefix + cleanSid;
+  const imageDir = SESSIONS_ROOT ? nodePath.join(SESSIONS_ROOT, fullSessionId, 'image') : '';
+  if (imageDir) {
+    try {
+      nodeFs.mkdirSync(imageDir, { recursive: true, mode: 0o700 });
+    } catch (_) {}
+  }
+  let frameId = '';
+  try {
+    const tree = await cdp('Page.getResourceTree');
+    frameId = (tree && tree.frameTree && tree.frameTree.frame && tree.frameTree.frame.id) || '';
+  } catch (_) {}
+
+  const out = [];
+  for (let i = 0; i < list.length; i += 1) {
+    const url = list[i];
+    const baseStem = siteTag + '-r' + String(turnNum) + '-' + String(i + 1);
+    if (imageDir) {
+      let cached = null;
+      for (const ext of ['jpg', 'png', 'webp', 'gif']) {
+        const cand = nodePath.join(imageDir, baseStem + '.' + ext);
+        try {
+          const st = nodeFs.statSync(cand);
+          if (st.isFile() && st.size > 0) {
+            cached = { label: baseStem + '.' + ext, path: cand };
+            break;
+          }
+        } catch (_) {}
+      }
+      if (cached) {
+        out.push(cached);
+        continue;
+      }
+    }
+    let buf = null;
+    let contentType = '';
+    if (frameId) {
+      try {
+        const netRes = await cdp('Network.loadNetworkResource', {
+          frameId,
+          url,
+          options: { disableCache: false, includeCredentials: true },
+        });
+        const resource = netRes && netRes.resource;
+        const stream = resource && resource.stream;
+        const headers = (resource && resource.headers) || {};
+        contentType = headers['content-type'] || headers['Content-Type'] || '';
+        if (stream) {
+          const chunks = [];
+          while (true) {
+            const part = await cdp('IO.read', { handle: stream, size: 65536 });
+            if (part && part.data) {
+              chunks.push(
+                part.base64Encoded
+                  ? Buffer.from(part.data, 'base64')
+                  : Buffer.from(part.data, 'utf8')
+              );
+            }
+            if (!part || part.eof) break;
+          }
+          await cdp('IO.close', { handle: stream }).catch(() => {});
+          buf = Buffer.concat(chunks);
+        }
+      } catch (_) {}
+    }
+    const ext = detectImageExt(buf, contentType, url);
+    const label = baseStem + '.' + ext;
+    let savedPath = '';
+    if (imageDir && buf && buf.length > 0) {
+      const target = nodePath.join(imageDir, label);
+      try {
+        nodeFs.writeFileSync(target, buf, { mode: 0o600 });
+        savedPath = target;
+      } catch (_) {}
+    }
+    out.push({ label, path: savedPath || null });
+  }
+  return out;
+}
 
 const GROK_EDITOR_SELECTOR = '[contenteditable="true"].ProseMirror, [contenteditable="true"]';
 const GROK_SUBMIT_SELECTOR = 'button[data-testid="chat-submit"]';
@@ -545,7 +697,9 @@ async function runNonChatAction(currentUrl) {
             node = node.parentResponseId ? byId.get(node.parentResponseId) : null;
           }
           chain.reverse();
+          let assistantTurn = 0;
           const messages = chain.map((r) => {
+            if (r.sender !== 'human') assistantTurn += 1;
             const meta = Array.isArray(r.fileAttachmentsMetadata) ? r.fileAttachmentsMetadata : [];
             const raw = Array.isArray(r.fileAttachments) ? r.fileAttachments : [];
             const files =
@@ -567,10 +721,15 @@ async function runNonChatAction(currentUrl) {
               thinking_ms: null,
               text: String(r.message || ''),
               files,
+              turnNum: assistantTurn,
               created_at_ms: Date.parse(r.createTime || '') || 0,
               cardAttachmentsJson: Array.isArray(r.cardAttachmentsJson)
                 ? r.cardAttachmentsJson
                 : [],
+              generatedImageUrls: Array.isArray(r.generatedImageUrls)
+                ? r.generatedImageUrls
+                : [],
+              fileAttachmentsMetadata: meta,
             };
           });
           // responses 接口不含标题；从会话列表补一次，避免 /resume、show 丢标题。
@@ -608,17 +767,40 @@ async function runNonChatAction(currentUrl) {
       });
       return;
     }
-    const messages = (Array.isArray(result.messages) ? result.messages : []).map((m) => ({
-      role: m.role,
-      thinking: m.thinking,
-      thinking_ms: m.thinking_ms,
-      text:
-        m.role === 'assistant'
-          ? replaceGrokCitations(m.text, m.cardAttachmentsJson)
-          : m.text,
-      files: m.files,
-      created_at_ms: m.created_at_ms,
-    }));
+    const rawMessages = Array.isArray(result.messages) ? result.messages : [];
+    const messages = [];
+    for (const m of rawMessages) {
+      let images = [];
+      if (m.role === 'assistant') {
+        const imageUrls = extractGrokGeneratedImageUrls({
+          sender: 'assistant',
+          cardAttachmentsJson: m.cardAttachmentsJson,
+          generatedImageUrls: m.generatedImageUrls,
+          fileAttachmentsMetadata: m.fileAttachmentsMetadata,
+        });
+        if (imageUrls.length > 0) {
+          images = await saveGeneratedImages(
+            'grok',
+            'ai-web-grok-',
+            SESSION_ID,
+            m.turnNum || 1,
+            imageUrls
+          );
+        }
+      }
+      messages.push({
+        role: m.role,
+        thinking: m.thinking,
+        thinking_ms: m.thinking_ms,
+        text:
+          m.role === 'assistant'
+            ? replaceGrokCitations(m.text, m.cardAttachmentsJson)
+            : m.text,
+        files: m.files,
+        images,
+        created_at_ms: m.created_at_ms,
+      });
+    }
     await emit({
       event: 'session_loaded',
       id: SESSION_ID,

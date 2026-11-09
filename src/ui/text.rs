@@ -507,6 +507,15 @@ pub const LX_RECAP_FAILED: &str = "Could not generate a recap. Please try again.
 /// recap 卡片固定行前缀。
 pub const LX_RECAP_MODEL_PREFIX: &str = "model: ";
 pub const LX_RECAP_NEXT_PREFIX: &str = "Next: ";
+
+/// AI Web 纯生图回复的无正文占位文案。
+pub fn ai_web_generated_images_label(count: usize) -> String {
+    if count <= 1 {
+        "Generated image".to_string()
+    } else {
+        format!("Generated {count} images")
+    }
+}
 /// 有内容被压缩时的成功提示（toast）。
 pub const LX_COMPACT_DONE: &str = "Context compacted.";
 /// 没有可压缩的增量（已是最新检查点之后为空）。

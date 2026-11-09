@@ -391,6 +391,49 @@ pub fn rewind_ai_web(state: &mut AppState, pane: PaneId) -> bool {
     true
 }
 
+/// 网页端实时生成图片落盘后回填到当前助手消息的附件列表。
+pub fn on_ai_web_image_generated(
+    state: &mut AppState,
+    key: &RequestKey,
+    label: String,
+    path: String,
+) -> bool {
+    let Some(target) = state.pane_mut_anywhere(key.pane) else {
+        return false;
+    };
+    if target.lx.chat.session_id.as_deref() != Some(key.session.as_str()) {
+        return false;
+    }
+    let Some(assistant) = target
+        .lx
+        .chat
+        .messages
+        .iter_mut()
+        .rev()
+        .find(|message| message.role == "assistant")
+    else {
+        return false;
+    };
+    let pos = i64::try_from(assistant.attachments.len()).unwrap_or(0);
+    let att_id = format!("{}-img-{}", assistant.id, assistant.attachments.len());
+    assistant
+        .attachments
+        .push(crate::db::chat::MessageAttachmentMeta {
+            id: att_id,
+            position: pos,
+            kind: crate::db::chat::MessageAttachmentKind::Image,
+            label,
+            marker_start: None,
+            marker_end: None,
+            source_path: (!path.is_empty()).then_some(path),
+            mime: None,
+            width: None,
+            height: None,
+        });
+    target.lx.chat.follow_bottom = true;
+    true
+}
+
 /// 网页端首轮生成后绑定云端真实会话 ID 与自动标题。
 pub fn on_ai_web_session_bound(
     state: &mut AppState,
@@ -530,13 +573,35 @@ pub fn on_ai_web_session_loaded(
                     },
                 });
             }
-            if !item.text.is_empty() || steps.is_empty() {
+            let attachments: Vec<crate::db::chat::MessageAttachmentMeta> = item
+                .images
+                .into_iter()
+                .enumerate()
+                .map(|(att_idx, img)| crate::db::chat::MessageAttachmentMeta {
+                    id: format!("{msg_id}-img-{att_idx}"),
+                    position: i64::try_from(att_idx).unwrap_or(0),
+                    kind: crate::db::chat::MessageAttachmentKind::Image,
+                    label: img.label,
+                    marker_start: None,
+                    marker_end: None,
+                    source_path: img.path.filter(|p| !p.is_empty()),
+                    mime: None,
+                    width: None,
+                    height: None,
+                })
+                .collect();
+            let text_content = if item.text.trim().is_empty() && !attachments.is_empty() {
+                text::ai_web_generated_images_label(attachments.len())
+            } else {
+                item.text
+            };
+            if !text_content.is_empty() || steps.is_empty() {
                 let position = i64::try_from(steps.len()).unwrap_or(0);
                 steps.push(AssistantStepView::Part {
                     position,
                     part: ChatPartView {
                         kind: PartKind::Text,
-                        content: item.text,
+                        content: text_content,
                         provider_metadata_json: None,
                         started_at_ms: None,
                         ended_at_ms: None,
@@ -560,7 +625,7 @@ pub fn on_ai_web_session_loaded(
                 cache_read_tokens: None,
                 duration_ms: None,
                 reports: Vec::new(),
-                attachments: Vec::new(),
+                attachments,
             });
         }
         if item.created_at_ms > 0 {

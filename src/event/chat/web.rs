@@ -22,6 +22,12 @@ use crate::chat::web::{
 /// AI Web 后台任务回投主事件循环的事件。
 #[derive(Debug)]
 pub enum AiWebEvent {
+    /// 网页端生成的图片已落盘到本地会话图片目录。
+    ImageGenerated {
+        key: RequestKey,
+        label: String,
+        path: String,
+    },
     /// 首轮或多轮对话后绑定云端真实会话 ID 与标题。
     SessionBound {
         pane: PaneId,
@@ -48,6 +54,9 @@ pub enum AiWebEvent {
 /// 处理 `AppEvent::AiWeb` 回投事件。
 pub fn handle_event(state: &mut AppState, event: AiWebEvent) -> bool {
     match event {
+        AiWebEvent::ImageGenerated { key, label, path } => {
+            crate::app::update::on_ai_web_image_generated(state, &key, label, path)
+        }
         AiWebEvent::SessionBound {
             pane,
             from_session_id,
@@ -457,6 +466,8 @@ fn delete_session(sender: mpsc::UnboundedSender<AppEvent>, pane: PaneId, session
                 if let Some(message) = action_error(&events, site) {
                     let _ =
                         sender.send(AppEvent::AiWeb(AiWebEvent::ActionFailed { pane, message }));
+                } else {
+                    crate::platform::remove_session_images(&session_id);
                 }
             }
             Err(message) => {
@@ -636,6 +647,13 @@ async fn run_chat(
                         }
                         Some(AiWebStreamEvent::Text(delta)) => {
                             send_delta(&sender, &key, PartKind::Text, delta);
+                        }
+                        Some(AiWebStreamEvent::GeneratedImage { label, path }) => {
+                            let _ = sender.send(AppEvent::AiWeb(AiWebEvent::ImageGenerated {
+                                key: key.clone(),
+                                label,
+                                path,
+                            }));
                         }
                         Some(AiWebStreamEvent::Session { id, title }) => {
                             bound_session = Some((id, title));

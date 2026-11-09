@@ -81,14 +81,6 @@ pub const STEP_BREATH_TICKS: usize = 4;
 /// 不另写一份字符串。
 pub const VERB_TOOL_READ: &str = VERB_READ;
 pub const VERB_TOOL_SEARCH: &str = "Search";
-/// 消息尾部文件变更摘要的动词（小写，区别于工具卡标题）。
-pub const CHANGE_ADD: &str = "add";
-pub const CHANGE_EDIT: &str = "edit";
-pub const CHANGE_DEL: &str = "del";
-/// 文件变更列表折叠提示。
-pub const FILE_CHANGES_MORE_PREFIX: &str = "…";
-pub const FILE_CHANGES_MORE_FILE: &str = "more file";
-pub const FILE_CHANGES_MORE_FILES: &str = "more files";
 pub const VERB_TOOL_EDIT: &str = "Edit";
 pub const VERB_TOOL_WRITE: &str = "Write";
 /// `web_search` 卡片动词。

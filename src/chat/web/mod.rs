@@ -42,6 +42,14 @@ pub struct AiWebSessionSummary {
     pub updated_at_ms: i64,
 }
 
+/// 网页端生成的单张图片元数据（供 `/resume` 恢复对话展示与本地点击打开）。
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub struct AiWebGeneratedImage {
+    pub label: String,
+    #[serde(default)]
+    pub path: Option<String>,
+}
+
 /// 网页端单条历史消息（供 `/resume` 恢复对话展示）。
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct AiWebHistoryMessage {
@@ -55,6 +63,8 @@ pub struct AiWebHistoryMessage {
     #[serde(default)]
     pub files: Vec<String>,
     #[serde(default)]
+    pub images: Vec<AiWebGeneratedImage>,
+    #[serde(default)]
     pub created_at_ms: i64,
 }
 
@@ -65,6 +75,8 @@ pub enum AiWebStreamEvent {
     Thinking(String),
     /// 回答正文增量。
     Text(String),
+    /// 网页端生成的图片已落盘到本地会话图片目录。
+    GeneratedImage { label: String, path: String },
     /// 当前对话已关联到云端会话（用于把本地临时 ID 升级为云端会话 ID 并同步标题）。
     Session { id: String, title: Option<String> },
     /// `/resume` 历史会话列表。
@@ -106,6 +118,13 @@ pub fn parse_script_line(line: &str) -> Option<AiWebStreamEvent> {
     match event {
         "thinking" => Some(AiWebStreamEvent::Thinking(field("delta"))),
         "text" => Some(AiWebStreamEvent::Text(field("delta"))),
+        "image" => {
+            let label = field("label");
+            (!label.is_empty()).then(|| AiWebStreamEvent::GeneratedImage {
+                label,
+                path: field("path"),
+            })
+        }
         "session" => {
             let id = field("id");
             (!id.is_empty()).then(|| AiWebStreamEvent::Session {
@@ -188,6 +207,7 @@ pub struct ScriptParams<'a> {
     pub session_id: Option<&'a str>,
     pub title: Option<&'a str>,
     pub edit_user_index: Option<usize>,
+    pub sessions_root: Option<&'a str>,
 }
 
 /// 组装交给 `ego-browser nodejs` 的脚本。
@@ -200,6 +220,13 @@ pub fn script_source(site: crate::app::state::AiWebSite, params: ScriptParams<'_
         .edit_user_index
         .and_then(|idx| i64::try_from(idx).ok())
         .unwrap_or(-1);
+    let default_sessions_root = crate::platform::sessions_root_dir()
+        .ok()
+        .map(|p| p.to_string_lossy().into_owned());
+    let sessions_root = params
+        .sessions_root
+        .or(default_sessions_root.as_deref())
+        .unwrap_or("");
     let files_json = serde_json::to_string(params.files).unwrap_or_else(|_| "[]".to_string());
     let keep_files_json =
         serde_json::to_string(params.keep_files).unwrap_or_else(|_| "[]".to_string());
@@ -224,6 +251,8 @@ pub fn script_source(site: crate::app::state::AiWebSite, params: ScriptParams<'_
     source.push_str(&json_string(params.session_id.unwrap_or("")));
     source.push_str(",\n  title: ");
     source.push_str(&json_string(params.title.unwrap_or("")));
+    source.push_str(",\n  sessionsRoot: ");
+    source.push_str(&json_string(sessions_root));
     source.push_str(&format!(",\n  editIndex: {edit_index},\n}};\n"));
     source.push_str(helpers_script);
     source.push('\n');

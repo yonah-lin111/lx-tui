@@ -84,6 +84,13 @@ fn parses_session_events() {
         }]))
     );
     assert_eq!(
+        parse(r#"{"event":"image","label":"grok-r1-1.jpg","path":"/tmp/grok-r1-1.jpg"}"#),
+        Some(AiWebStreamEvent::GeneratedImage {
+            label: "grok-r1-1.jpg".into(),
+            path: "/tmp/grok-r1-1.jpg".into(),
+        })
+    );
+    assert_eq!(
         parse(
             r#"{"event":"session_loaded","id":"s-1","title":"Chat 1","messages":[{"role":"user","thinking":"","thinking_ms":null,"text":"hi","created_at_ms":1000}]}"#
         ),
@@ -96,6 +103,7 @@ fn parses_session_events() {
                 thinking_ms: None,
                 text: "hi".into(),
                 files: Vec::new(),
+                images: Vec::new(),
                 created_at_ms: 1000,
             }],
         })

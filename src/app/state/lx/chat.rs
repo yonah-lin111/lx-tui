@@ -413,8 +413,8 @@ pub enum CardTarget {
     Compact { checkpoint_id: String },
     /// 模型切换提示条目（按切换记录 ID 定位；默认折叠）。
     ModelSwitch { switch_id: String },
-    /// 消息尾部文件变更行/折叠提示（按消息 ID + 槽位定位）。
-    FileChange { message_id: String, slot: String },
+    /// 消息末尾的附件行（点击打开本地图片/文件）。
+    Attachment { path: String },
     /// 消息尾部 recap 系统事件卡（按消息 ID 定位）。
     Recap { message_id: String },
     /// 子 agent 汇报块（按消息 ID + agent ID 定位；槽位 `report:<agent_id>`）。

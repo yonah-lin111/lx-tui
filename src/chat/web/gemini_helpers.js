@@ -16,7 +16,116 @@ const FIRST_TURN = Boolean(PARAMS.firstTurn);
 const STREAM_URL = PARAMS.streamUrl || '';
 const SESSION_ID = PARAMS.sessionId || '';
 const TITLE = PARAMS.title || '';
+const SESSIONS_ROOT = PARAMS.sessionsRoot || '';
 const EDIT_INDEX = typeof PARAMS.editIndex === 'number' ? PARAMS.editIndex : -1;
+
+function detectImageExt(buf, contentType, url) {
+  if (buf && buf.length >= 12) {
+    if (buf[0] === 0xff && buf[1] === 0xd8) return 'jpg';
+    if (buf[0] === 0x89 && buf[1] === 0x50 && buf[2] === 0x4e && buf[3] === 0x47) return 'png';
+    if (
+      buf.slice(0, 4).toString('ascii') === 'RIFF' &&
+      buf.slice(8, 12).toString('ascii') === 'WEBP'
+    ) {
+      return 'webp';
+    }
+    if (buf.slice(0, 3).toString('ascii') === 'GIF') return 'gif';
+  }
+  const ct = String(contentType || '').toLowerCase();
+  if (ct.includes('jpeg') || ct.includes('jpg')) return 'jpg';
+  if (ct.includes('webp')) return 'webp';
+  if (ct.includes('gif')) return 'gif';
+  if (ct.includes('png')) return 'png';
+  const m = String(url || '').match(/\.(jpe?g|png|webp|gif)(?:[?#]|$)/i);
+  if (m) return m[1].toLowerCase().replace('jpeg', 'jpg');
+  return 'png';
+}
+
+async function saveGeneratedImages(siteTag, sessionPrefix, rawSessionId, turnNum, urls) {
+  const list = Array.isArray(urls) ? Array.from(new Set(urls.filter(Boolean))) : [];
+  if (list.length === 0) return [];
+  const nodeFs = await import('node:fs');
+  const nodePath = await import('node:path');
+  const cleanSid = String(rawSessionId || 'temp').replace(/[^a-zA-Z0-9_-]/g, '_') || 'temp';
+  const fullSessionId = sessionPrefix + cleanSid;
+  const imageDir = SESSIONS_ROOT ? nodePath.join(SESSIONS_ROOT, fullSessionId, 'image') : '';
+  if (imageDir) {
+    try {
+      nodeFs.mkdirSync(imageDir, { recursive: true, mode: 0o700 });
+    } catch (_) {}
+  }
+  let frameId = '';
+  try {
+    const tree = await cdp('Page.getResourceTree');
+    frameId = (tree && tree.frameTree && tree.frameTree.frame && tree.frameTree.frame.id) || '';
+  } catch (_) {}
+
+  const out = [];
+  for (let i = 0; i < list.length; i += 1) {
+    const url = list[i];
+    const baseStem = siteTag + '-r' + String(turnNum) + '-' + String(i + 1);
+    if (imageDir) {
+      let cached = null;
+      for (const ext of ['jpg', 'png', 'webp', 'gif']) {
+        const cand = nodePath.join(imageDir, baseStem + '.' + ext);
+        try {
+          const st = nodeFs.statSync(cand);
+          if (st.isFile() && st.size > 0) {
+            cached = { label: baseStem + '.' + ext, path: cand };
+            break;
+          }
+        } catch (_) {}
+      }
+      if (cached) {
+        out.push(cached);
+        continue;
+      }
+    }
+    let buf = null;
+    let contentType = '';
+    if (frameId) {
+      try {
+        const netRes = await cdp('Network.loadNetworkResource', {
+          frameId,
+          url,
+          options: { disableCache: false, includeCredentials: true },
+        });
+        const resource = netRes && netRes.resource;
+        const stream = resource && resource.stream;
+        const headers = (resource && resource.headers) || {};
+        contentType = headers['content-type'] || headers['Content-Type'] || '';
+        if (stream) {
+          const chunks = [];
+          while (true) {
+            const part = await cdp('IO.read', { handle: stream, size: 65536 });
+            if (part && part.data) {
+              chunks.push(
+                part.base64Encoded
+                  ? Buffer.from(part.data, 'base64')
+                  : Buffer.from(part.data, 'utf8')
+              );
+            }
+            if (!part || part.eof) break;
+          }
+          await cdp('IO.close', { handle: stream }).catch(() => {});
+          buf = Buffer.concat(chunks);
+        }
+      } catch (_) {}
+    }
+    const ext = detectImageExt(buf, contentType, url);
+    const label = baseStem + '.' + ext;
+    let savedPath = '';
+    if (imageDir && buf && buf.length > 0) {
+      const target = nodePath.join(imageDir, label);
+      try {
+        nodeFs.writeFileSync(target, buf, { mode: 0o600 });
+        savedPath = target;
+      } catch (_) {}
+    }
+    out.push({ label, path: savedPath || null });
+  }
+  return out;
+}
 
 let STREAM_ABORTED = false;
 
@@ -547,6 +656,24 @@ async function runNonChatAction(currentUrl) {
       if (count > 0) break;
       await new Promise((r) => setTimeout(r, 200));
     }
+    const imgDeadline = Date.now() + 3000;
+    while (Date.now() < imgDeadline) {
+      const pendingImg = await js(String.raw`
+        (() => {
+          const containers = Array.from(
+            document.querySelectorAll('model-response generated-image, model-response single-image, model-response .generated-images')
+          );
+          if (containers.length === 0) return false;
+          return containers.some((c) => {
+            const img = c.querySelector('img');
+            const src = img ? (img.currentSrc || img.src || '').trim() : '';
+            return !/^https?:\/\//i.test(src);
+          });
+        })()
+      `).catch(() => false);
+      if (!pendingImg) break;
+      await new Promise((r) => setTimeout(r, 200));
+    }
     const loaded = await js(`
       (() => {
         const sessionId = ${JSON.stringify(SESSION_ID)};
@@ -564,6 +691,7 @@ async function runNonChatAction(currentUrl) {
         }
         const nodes = Array.from(document.querySelectorAll('user-query, model-response'));
         const messages = [];
+        let assistantTurn = 0;
         nodes.forEach((node, idx) => {
           const tag = node.tagName.toLowerCase();
           if (tag === 'user-query') {
@@ -583,9 +711,11 @@ async function runNonChatAction(currentUrl) {
               thinking_ms: null,
               text,
               files,
+              images: [],
               created_at_ms: Date.now() - (nodes.length - idx) * 1000,
             });
           } else if (tag === 'model-response') {
+            assistantTurn += 1;
             const thoughtEl = node.querySelector('model-thoughts, thinking-overlay, .thoughts-content');
             let thinking = '';
             if (thoughtEl) {
@@ -619,12 +749,19 @@ async function runNonChatAction(currentUrl) {
             const text = (msgEl.innerText || '').replace(/\\r\\n/g, '\\n').trim();
             for (const tn of tempCodeNodes) tn.remove();
             for (const [el, prev] of hiddenM) el.style.display = prev;
+            const imageUrls = Array.from(
+              node.querySelectorAll('generated-image img, single-image img, .generated-images img')
+            )
+              .map((img) => (img.currentSrc || img.src || '').trim())
+              .filter((u) => /^https?:\\/\\//i.test(u));
             messages.push({
               role: 'assistant',
               thinking,
               thinking_ms: thinking ? 1000 : null,
               text,
               files: [],
+              turnNum: assistantTurn,
+              imageUrls,
               created_at_ms: Date.now() - (nodes.length - idx) * 1000,
             });
           }
@@ -636,11 +773,34 @@ async function runNonChatAction(currentUrl) {
       await emit({ event: 'error', message: 'failed to load Gemini session' });
       return;
     }
+    const rawMessages = Array.isArray(loaded.messages) ? loaded.messages : [];
+    const messages = [];
+    for (const m of rawMessages) {
+      let images = [];
+      if (m.role === 'assistant' && Array.isArray(m.imageUrls) && m.imageUrls.length > 0) {
+        images = await saveGeneratedImages(
+          'gemini',
+          'ai-web-gm-',
+          loaded.id,
+          m.turnNum || 1,
+          m.imageUrls
+        );
+      }
+      messages.push({
+        role: m.role,
+        thinking: m.thinking || '',
+        thinking_ms: m.thinking_ms || null,
+        text: m.text || '',
+        files: Array.isArray(m.files) ? m.files : [],
+        images,
+        created_at_ms: m.created_at_ms || 0,
+      });
+    }
     await emit({
       event: 'session_loaded',
       id: loaded.id,
       title: loaded.title || null,
-      messages: Array.isArray(loaded.messages) ? loaded.messages : [],
+      messages,
     });
     await emit({ event: 'done' });
     return;

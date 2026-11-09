@@ -14,7 +14,7 @@ use crate::app::state::{AssistantStepView, UserShellView};
 use crate::ui::markdown_render;
 
 use super::cache::{
-    BlockKey, PaneCache, SHELL_SLOT_BLOCK, compact_block_signature, file_changes_block_signature,
+    BlockKey, PaneCache, SHELL_SLOT_BLOCK, attachments_block_signature, compact_block_signature,
     model_switch_block_signature, notice_block_signature, part_block_signature,
     recap_block_signature, report_block_signature, rewind_block_signature, shell_block_signature,
     stats_block_signature,
@@ -23,8 +23,8 @@ use super::paint::{BlockPaint, BlockSource, CardSpan, UserRefLine};
 use super::source::{HistorySource, is_legacy_report_row};
 use super::timeline::{TimelineEntry, timeline};
 use super::{
-    CardKind, FileChangesCard, Folds, MessageRows, compact, folds_of, model_switch, notice, recap,
-    report_block, rewind, shell_folds, stats_line, tool, tool_rows, user_shell,
+    CardKind, Folds, MessageRows, compact, folds_of, model_switch, notice, recap, report_block,
+    rewind, shell_folds, stats_line, tool, tool_rows, user_shell,
 };
 
 /// 时间线条目类别（与 [`TimelineEntry`] 一一对应，但可跨帧独立持有）。
@@ -697,23 +697,7 @@ impl Builder<'_> {
                         } else {
                             (wrapped, None)
                         };
-                        let display_attachments: Vec<_> = message
-                            .attachments
-                            .iter()
-                            .filter(|att| {
-                                !att.label
-                                    .starts_with(crate::app::markdown::REF_CONTENT_PREFIX)
-                            })
-                            .collect();
-                        let ref_lines = display_attachments
-                            .iter()
-                            .enumerate()
-                            .map(|(i, att)| UserRefLine {
-                                is_last: i + 1 == display_attachments.len(),
-                                kind: att.kind,
-                                label: att.label.clone(),
-                            })
-                            .collect();
+                        let ref_lines = UserRefLine::from_attachments(&message.attachments);
                         BlockPaint::UserText {
                             text_lines,
                             paste_spans,
@@ -845,6 +829,35 @@ impl Builder<'_> {
         blocks: &mut Vec<SnapBlock>,
     ) {
         let mut has_previous = !blocks.is_empty();
+        // 助手消息末尾的附件引用树（如 AI Web 生成图片）：紧贴在正文步骤下方，不隔空行。
+        if message.role != "user" && !message.attachments.is_empty() {
+            let start = self.rows;
+            let key = BlockKey {
+                message_index,
+                step_index: super::cache::ATTACHMENTS_SLOT_BLOCK,
+                width: self.width,
+                sig: attachments_block_signature(message),
+            };
+            let block = self.block(key, BlockSource::Plain, start, || BlockPaint::RefLines {
+                ref_lines: UserRefLine::from_attachments(&message.attachments),
+            });
+            self.rows += block.rows;
+            if let BlockPaint::RefLines { ref_lines } = &*block.paint {
+                for (idx, ref_line) in ref_lines.iter().enumerate() {
+                    if let Some(path) = &ref_line.source_path {
+                        self.snapshot.cards.push(CardRegion {
+                            kind: CardKind::Attachment { path: path.clone() },
+                            card_start: start.saturating_add(idx),
+                            card_rows: 1,
+                            card_cols: None,
+                            clickable: true,
+                        });
+                    }
+                }
+            }
+            blocks.push(block);
+            has_previous = true;
+        }
         if let Some(notice) = notice(message) {
             if has_previous {
                 self.spacer();
@@ -896,42 +909,6 @@ impl Builder<'_> {
                 style: crate::ui::style::muted(),
             });
             self.rows += block.rows;
-            blocks.push(block);
-            has_previous = true;
-        }
-        // 文件变更摘要：只统计当前 assistant 消息自己的文件工具结果。
-        // 它不属于「任务收尾统计」，因此不受 stats_ready（子 agent/报告链）门控：
-        // 主消息已经落盘的文件改动必须始终可见。
-        if FileChangesCard::has_changes(message) {
-            if has_previous {
-                self.spacer();
-            }
-            let start = self.rows;
-            let width = self.width;
-            let key = BlockKey {
-                message_index,
-                step_index: super::cache::FILE_CHANGES_SLOT_BLOCK,
-                width: self.width,
-                sig: file_changes_block_signature(source, message),
-            };
-            let block = self.block(key, BlockSource::Plain, start, || BlockPaint::FileChanges {
-                card: Arc::new(FileChangesCard::new(message, width, source.chat)),
-            });
-            self.rows += block.rows;
-            if let BlockPaint::FileChanges { card } = &*block.paint {
-                for span in card.click_spans() {
-                    self.snapshot.cards.push(CardRegion {
-                        kind: CardKind::FileChange {
-                            message_id: message.id.clone(),
-                            slot: span.slot.clone(),
-                        },
-                        card_start: start.saturating_add(span.offset),
-                        card_rows: span.rows,
-                        card_cols: None,
-                        clickable: span.clickable,
-                    });
-                }
-            }
             blocks.push(block);
             has_previous = true;
         }

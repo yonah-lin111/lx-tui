@@ -72,12 +72,39 @@ pub(crate) struct CardSpan {
     pub clickable: bool,
 }
 
-/// 用户消息下方单条引用树分支。
+/// 消息下方单条引用树分支（用户 `@文件` 或助手生成图片）。
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct UserRefLine {
     pub is_last: bool,
     pub kind: crate::db::chat::MessageAttachmentKind,
     pub label: String,
+    pub source_path: Option<String>,
+}
+
+impl UserRefLine {
+    /// 从消息附件元数据组装可见引用树行。
+    pub(crate) fn from_attachments(
+        attachments: &[crate::db::chat::MessageAttachmentMeta],
+    ) -> Vec<Self> {
+        let display: Vec<_> = attachments
+            .iter()
+            .filter(|att| {
+                !att.label
+                    .starts_with(crate::app::markdown::REF_CONTENT_PREFIX)
+            })
+            .collect();
+        let len = display.len();
+        display
+            .into_iter()
+            .enumerate()
+            .map(|(i, att)| Self {
+                is_last: i + 1 == len,
+                kind: att.kind,
+                label: att.label.clone(),
+                source_path: att.source_path.clone(),
+            })
+            .collect()
+    }
 }
 
 /// 一个块的绘制数据。
@@ -105,10 +132,8 @@ pub(crate) enum BlockPaint {
     SystemEvent {
         card: Arc<super::system_event::SystemCard>,
     },
-    /// 消息尾部文件变更摘要树（行与点击几何同源）。
-    FileChanges {
-        card: Arc<super::file_changes::FileChangesCard>,
-    },
+    /// 助手消息末尾的附件引用树（如 AI Web 生成图片 `├─ Image: ...` / `└─ Image: ...`）。
+    RefLines { ref_lines: Vec<UserRefLine> },
     /// 尚未接入内容缓存的块：缓存行数与点击面几何，绘制仍走原路径。
     Legacy { rows: usize, spans: Vec<CardSpan> },
 }
@@ -127,7 +152,7 @@ impl BlockPaint {
             Self::Thinking { body } => 1 + body.len(),
             Self::Static { lines, .. } => lines.len(),
             Self::SystemEvent { card } => card.rows(),
-            Self::FileChanges { card } => card.rows(),
+            Self::RefLines { ref_lines } => ref_lines.len(),
             Self::Legacy { rows, .. } => *rows,
         }
     }
@@ -141,7 +166,7 @@ impl BlockPaint {
             | Self::Thinking { .. }
             | Self::Static { .. }
             | Self::SystemEvent { .. }
-            | Self::FileChanges { .. } => &[],
+            | Self::RefLines { .. } => &[],
         }
     }
 
@@ -165,7 +190,9 @@ impl BlockPaint {
             Self::Thinking { body } => md_bytes(body),
             // 系统事件卡片的正文已排版进 `SystemCard`，按行数记近似值。
             Self::SystemEvent { card } => card.rows() * 64,
-            Self::FileChanges { card } => card.rows() * 64,
+            Self::RefLines { ref_lines } => {
+                ref_lines.iter().map(|r| r.label.len() + 24).sum::<usize>()
+            }
             // 旧路径没有缓存正文，不占二级缓存预算（行数已在一级快照里）；
             // 点击面几何是小结构，按条数记个近似值。
             Self::Legacy { spans, .. } => spans.len() * std::mem::size_of::<CardSpan>(),
@@ -247,9 +274,8 @@ impl BlockPaint {
                     }
                 }
             }
-            Self::FileChanges { card } => {
-                let mut row = start;
-                card.draw(grid, rect, scroll, &mut row);
+            Self::RefLines { ref_lines } => {
+                draw_ref_lines(grid, rect, scroll, start, viewport_end, ref_lines);
             }
             Self::Legacy { .. } => draw_legacy(grid, rect, history, source, scroll, start),
         }
@@ -414,6 +440,18 @@ fn draw_user_text(
         }
     }
 
+    draw_ref_lines(grid, rect, scroll, current_row, viewport_end, ref_lines);
+}
+
+/// 绘制 `├─ Image: ...` / `└─ File: ...` 树形附件行（用户消息与助手消息共用）。
+fn draw_ref_lines(
+    grid: &mut Grid,
+    rect: Rect,
+    scroll: usize,
+    mut current_row: usize,
+    viewport_end: usize,
+    ref_lines: &[UserRefLine],
+) {
     for ref_line in ref_lines {
         let row = current_row;
         current_row += 1;

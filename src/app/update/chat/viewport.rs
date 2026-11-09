@@ -421,15 +421,13 @@ pub fn toggle_lx_card(state: &mut AppState, pane: PaneId, target: CardTarget) ->
         CardTarget::ModelSwitch { switch_id } => {
             super::model_switch::toggle_model_switch(state, pane, &switch_id)
         }
-        CardTarget::FileChange { message_id, slot } => {
-            super::pin_lx_viewport(state, pane);
-            let Some(target) = state.pane_mut_anywhere(pane) else {
-                return false;
-            };
-            target
-                .lx
-                .chat
-                .toggle_section(&message_id, &slot, CardSection::Body)
+        CardTarget::Attachment { path } => {
+            if !path.is_empty() {
+                state
+                    .effects
+                    .push(crate::app::effects::Effect::OpenBrowser { url: path });
+            }
+            true
         }
         CardTarget::Recap { message_id } => {
             super::pin_lx_viewport(state, pane);

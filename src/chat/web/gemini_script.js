@@ -92,6 +92,7 @@ async function main() {
         targetIndex,
         domThink: '',
         domText: '',
+        imageUrls: [],
         lastSample: '',
         stableTicks: 0,
         pushDom(kind, current) {
@@ -274,11 +275,30 @@ async function main() {
           );
           if (thinkText) this.pushDom('thinking', thinkText);
           if (bodyText) this.pushDom('text', bodyText);
+          const imageUrls = Array.from(
+            mr.querySelectorAll('generated-image img, single-image img, .generated-images img')
+          )
+            .map((img) => (img.currentSrc || img.src || '').trim())
+            .filter((u) => /^https?:\\/\\//i.test(u));
+          this.imageUrls = imageUrls;
+          const pendingImage =
+            Boolean(mr.querySelector('generated-image, single-image, .generated-images')) &&
+            imageUrls.length === 0;
+          if (pendingImage) {
+            this.started = true;
+          }
 
-          const sample = thinkText + '\\n---\\n' + bodyText;
+          const sample = thinkText + '\\n---\\n' + bodyText + '\\n---\\n' + imageUrls.join('\\n');
           const caughtUp = bodyText.length >= (this.domText || '').length;
-          if ((this.started || bodyText.length > 0 || thinkText.length > 0) && !isGenerating && caughtUp) {
-            if (sample === this.lastSample && (bodyText.length > 0 || thinkText.length > 0)) {
+          const hasOutput =
+            bodyText.length > 0 || thinkText.length > 0 || imageUrls.length > 0;
+          if (
+            (this.started || hasOutput) &&
+            !isGenerating &&
+            !pendingImage &&
+            caughtUp
+          ) {
+            if (sample === this.lastSample && hasOutput) {
               this.stableTicks += 1;
               if (this.stableTicks >= 10) {
                 this.done = true;
@@ -530,7 +550,14 @@ async function main() {
         const s = window.__lxGeminiStream;
         if (!s || s.runId !== ${JSON.stringify(runId)}) return { items: [], done: true, superseded: true };
         s.pollDom();
-        return { items: s.queue.splice(0, s.queue.length), done: s.done, superseded: false };
+        return {
+          items: s.queue.splice(0, s.queue.length),
+          done: s.done,
+          imageUrls: s.imageUrls || [],
+          turnNum: (s.targetIndex || 0) + 1,
+          hadText: Boolean(s.domText && s.domText.trim()),
+          superseded: false,
+        };
       })()
     `).catch(() => ({ items: [], done: false, superseded: false }));
 
@@ -584,6 +611,28 @@ async function main() {
           break;
         }
         await new Promise((r) => setTimeout(r, 250));
+      }
+      const resolvedSid = (sessionMeta && sessionMeta.id) || SESSION_ID || 'temp';
+      if (Array.isArray(batch.imageUrls) && batch.imageUrls.length > 0) {
+        const saved = await saveGeneratedImages(
+          'gemini',
+          'ai-web-gm-',
+          resolvedSid,
+          batch.turnNum || 1,
+          batch.imageUrls
+        );
+        if (!batch.hadText && saved.length > 0) {
+          await emit({
+            event: 'text',
+            delta:
+              saved.length === 1
+                ? 'Generated image'
+                : 'Generated ' + saved.length + ' images',
+          });
+        }
+        for (const img of saved) {
+          await emit({ event: 'image', label: img.label, path: img.path || '' });
+        }
       }
       if (sessionMeta && sessionMeta.id) {
         await emit({

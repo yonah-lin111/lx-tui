@@ -31,7 +31,6 @@ use super::notice;
 mod cache;
 mod cards;
 mod compact;
-mod file_changes;
 #[cfg(test)]
 mod layout;
 mod model_switch;
@@ -50,7 +49,6 @@ pub(crate) mod tool;
 pub(crate) mod user_shell;
 
 pub(crate) use cache::{PaneCache, RenderCache};
-pub(crate) use file_changes::FileChangesCard;
 #[cfg(test)]
 pub(crate) use layout::layout;
 pub(super) use paint::{BlockPaint, BlockSource};

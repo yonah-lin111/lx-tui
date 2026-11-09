@@ -2,8 +2,9 @@ use ratatui::buffer::Buffer;
 use ratatui::layout::Rect;
 
 use super::*;
+use crate::app::state::CardSection;
 use crate::app::state::lx::{MessageRecapView, RecapPending};
-use crate::app::state::{CardSection, ToolStatus};
+use crate::db::chat::{MessageAttachmentKind, MessageAttachmentMeta};
 
 fn rows_text(buf: &Buffer, area: Rect) -> Vec<String> {
     (0..area.height)
@@ -15,61 +16,58 @@ fn rows_text(buf: &Buffer, area: Rect) -> Vec<String> {
         .collect()
 }
 
-fn file_summary_message() -> ChatMessageView {
-    let mut message = message("assistant", "complete", vec![text_part("done")]);
-    message.steps = (1..=6)
-        .map(|index| {
-            super::tool_geometry::file_step(
-                index,
-                &format!("call-{index}"),
-                "edit",
-                ToolStatus::Completed,
-            )
-        })
-        .collect();
-    message
-}
-
 #[test]
-fn file_changes_fold_after_five_and_expand_on_click() {
-    let area = Rect::new(0, 0, 80, 60);
-    let lx = lx_with(vec![file_summary_message()]);
+fn assistant_image_attachments_render_like_user_refs_and_register_clicks() {
+    let area = Rect::new(0, 0, 80, 20);
+    let mut msg = message("assistant", "complete", vec![text_part("Generated image")]);
+    msg.model_label = Some("Gemini · 3.8 Flash".into());
+    msg.duration_ms = Some(4000);
+    msg.attachments = vec![
+        MessageAttachmentMeta {
+            id: "att-1".into(),
+            position: 0,
+            kind: MessageAttachmentKind::Image,
+            label: "gemini-r1-1.webp".into(),
+            marker_start: None,
+            marker_end: None,
+            source_path: Some("/tmp/gemini-r1-1.webp".into()),
+            mime: None,
+            width: None,
+            height: None,
+        },
+        MessageAttachmentMeta {
+            id: "att-2".into(),
+            position: 1,
+            kind: MessageAttachmentKind::Image,
+            label: "gemini-r1-2.webp".into(),
+            marker_start: None,
+            marker_end: None,
+            source_path: Some("/tmp/gemini-r1-2.webp".into()),
+            mime: None,
+            width: None,
+            height: None,
+        },
+    ];
+    let lx = lx_with(vec![msg]);
     let mut buf = Buffer::empty(area);
     crate::ui::main_content::lx::render_history_for_test(area, &mut buf, &lx, 0);
     let text = rows_text(&buf, area).join("\n");
-    assert!(text.contains("… 1 more file"), "{text}");
-    assert_eq!(text.matches("edit").count(), 5, "默认只显示 5 行：{text}");
+    assert!(text.contains("├─ Image: gemini-r1-1.webp"), "{text}");
+    assert!(text.contains("└─ Image: gemini-r1-2.webp"), "{text}");
 
-    let mut expanded = lx_with(vec![file_summary_message()]);
-    assert!(expanded.chat.toggle_section(
-        "assistant-1",
-        super::file_changes::MORE_SLOT,
-        CardSection::Body,
-    ));
-    let mut buf = Buffer::empty(area);
-    crate::ui::main_content::lx::render_history_for_test(area, &mut buf, &expanded, 0);
-    let text = rows_text(&buf, area).join("\n");
-    assert!(!text.contains("more file"), "{text}");
-    assert_eq!(text.matches("edit").count(), 6, "展开后显示全部：{text}");
-}
-
-#[test]
-fn file_change_row_expands_its_diff_in_place() {
-    let area = Rect::new(0, 0, 80, 60);
-    let lx = lx_with(vec![file_summary_message()]);
-    let before = layout(area, &lx, &mut cache()).total_rows;
-    let mut expanded = lx_with(vec![file_summary_message()]);
-    assert!(
-        expanded
-            .chat
-            .toggle_section("assistant-1", "file:src/file1.rs", CardSection::Body,)
+    let view = layout(area, &lx, &mut cache());
+    let paths: Vec<&str> = view
+        .cards
+        .iter()
+        .filter_map(|card| match &card.kind {
+            CardKind::Attachment { path } => Some(path.as_str()),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(
+        paths,
+        vec!["/tmp/gemini-r1-1.webp", "/tmp/gemini-r1-2.webp"]
     );
-    let after = layout(area, &expanded, &mut cache()).total_rows;
-    assert!(after > before, "展开文件行必须增加 diff 正文行");
-    let mut buf = Buffer::empty(area);
-    crate::ui::main_content::lx::render_history_for_test(area, &mut buf, &expanded, 0);
-    let text = rows_text(&buf, area).join("\n");
-    assert!(text.contains("new1"), "展开后显示文件 diff：{text}");
 }
 
 #[test]

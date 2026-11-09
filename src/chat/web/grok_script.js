@@ -229,6 +229,7 @@ async function main() {
         baselineAssistants,
         emptySince: 0,
         lastText: '',
+        imageUrls: [],
         lastSample: '',
         stableTicks: 0,
         extractText(el) {
@@ -290,18 +291,34 @@ async function main() {
           const generating = stops.length > 0;
           if (generating) this.started = true;
           const text = this.extractText(target);
+          const imageUrls = Array.from(
+            new Set(
+              Array.from(
+                target.querySelectorAll(
+                  'img[src*="/generated/"], .group\\/grok-image img, [data-testid] .group\\/image img'
+                )
+              )
+                .map((img) => (img.currentSrc || img.src || '').trim())
+                .filter((u) => /^https?:\/\//i.test(u))
+            )
+          );
+          this.imageUrls = imageUrls;
           if (text) {
             this.emptySince = 0;
             this.pushText(text);
+          } else if (imageUrls.length > 0) {
+            this.emptySince = 0;
+            this.started = true;
           } else if (!this.emptySince) {
             this.emptySince = Date.now();
           }
 
-          // 新 assistant 已出现但一直没有正文（Build 画布/错误横幅/限流）：
+          // 新 assistant 已出现但一直没有正文或生成图（Build 画布/错误横幅/限流）：
           // 生成结束后 15s 仍为空就显式失败，不能空等 300s。
           // 文件上传/慢网络会先挂一个空占位节点，5s 会误杀正常回答。
           if (
             !text &&
+            imageUrls.length === 0 &&
             !generating &&
             this.emptySince &&
             Date.now() - this.emptySince >= 15000
@@ -311,9 +328,10 @@ async function main() {
             return;
           }
 
-          const sample = text;
-          if ((this.started || text.length > 0) && !generating) {
-            if (sample === this.lastSample && text.length > 0) {
+          const sample = text + '\n---\n' + imageUrls.join('\n');
+          const hasOutput = text.length > 0 || imageUrls.length > 0;
+          if ((this.started || hasOutput) && !generating) {
+            if (sample === this.lastSample && hasOutput) {
               this.stableTicks += 1;
               // 2s 稳定窗口，覆盖 Build/联网引用重排，避免 600ms 就截断。
               if (this.stableTicks >= 30) this.done = true;
@@ -397,6 +415,9 @@ async function main() {
           items: s.queue.splice(0, s.queue.length),
           done: s.done,
           error: s.error || null,
+          imageUrls: s.imageUrls || [],
+          turnNum: (s.baselineAssistants || 0) + 1,
+          hadText: Boolean(s.lastText && s.lastText.trim()),
           superseded: false,
         };
       })()
@@ -465,6 +486,28 @@ async function main() {
           break;
         }
         await new Promise((r) => setTimeout(r, 250));
+      }
+      const resolvedSid = (sessionMeta && sessionMeta.id) || SESSION_ID || 'temp';
+      if (Array.isArray(batch.imageUrls) && batch.imageUrls.length > 0) {
+        const saved = await saveGeneratedImages(
+          'grok',
+          'ai-web-grok-',
+          resolvedSid,
+          batch.turnNum || 1,
+          batch.imageUrls
+        );
+        if (!batch.hadText && saved.length > 0) {
+          await emit({
+            event: 'text',
+            delta:
+              saved.length === 1
+                ? 'Generated image'
+                : 'Generated ' + saved.length + ' images',
+          });
+        }
+        for (const img of saved) {
+          await emit({ event: 'image', label: img.label, path: img.path || '' });
+        }
       }
       if (sessionMeta && sessionMeta.id) {
         await emit({

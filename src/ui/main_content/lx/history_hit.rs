@@ -558,10 +558,7 @@ fn target_of(kind: &history::CardKind) -> CardTarget {
         history::CardKind::ModelSwitch { switch_id, .. } => CardTarget::ModelSwitch {
             switch_id: switch_id.clone(),
         },
-        history::CardKind::FileChange { message_id, slot } => CardTarget::FileChange {
-            message_id: message_id.clone(),
-            slot: slot.clone(),
-        },
+        history::CardKind::Attachment { path } => CardTarget::Attachment { path: path.clone() },
         history::CardKind::Recap { message_id } => CardTarget::Recap {
             message_id: message_id.clone(),
         },
