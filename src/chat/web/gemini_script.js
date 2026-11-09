@@ -277,15 +277,25 @@ async function main() {
           );
           if (thinkText) this.pushDom('thinking', thinkText);
           if (bodyText) this.pushDom('text', bodyText);
-          const imageUrls = Array.from(
+          const imgEls = Array.from(
             mr.querySelectorAll('generated-image img, single-image img, .generated-images img')
-          )
-            .map((img) => (img.currentSrc || img.src || '').trim())
-            .filter((u) => /^https?:\\/\\//i.test(u));
+          );
+          const loadedImgs = imgEls.filter((img) => {
+            const u = (img.currentSrc || img.src || '').trim();
+            return (
+              /^(https?:|blob:)/i.test(u) &&
+              img.complete &&
+              img.naturalWidth > 0
+            );
+          });
+          const imageUrls = Array.from(
+            new Set(loadedImgs.map((img) => (img.currentSrc || img.src || '').trim()))
+          );
           this.imageUrls = imageUrls;
-          const pendingImage =
-            Boolean(mr.querySelector('generated-image, single-image, .generated-images')) &&
-            imageUrls.length === 0;
+          const hasImageContainer = Boolean(
+            mr.querySelector('generated-image, single-image, .generated-images')
+          );
+          const pendingImage = hasImageContainer && loadedImgs.length === 0;
           if (pendingImage) {
             this.started = true;
           }
@@ -616,12 +626,39 @@ async function main() {
       }
       const resolvedSid = (sessionMeta && sessionMeta.id) || SESSION_ID || 'temp';
       if (Array.isArray(batch.imageUrls) && batch.imageUrls.length > 0) {
+        const targetIdx = Math.max(0, (batch.turnNum || 1) - 1);
+        const imageItems = await js(`
+          (() => {
+            const responses = Array.from(document.querySelectorAll('model-response'));
+            const mr = responses[${targetIdx}] || responses[responses.length - 1];
+            if (!mr) return [];
+            const out = [];
+            const seen = new Set();
+            mr.querySelectorAll('generated-image img, single-image img, .generated-images img').forEach((img) => {
+              const u = (img.currentSrc || img.src || '').trim();
+              if (!u || seen.has(u)) return;
+              seen.add(u);
+              let dataUrl = '';
+              if (u.startsWith('blob:') && img.complete && img.naturalWidth > 0) {
+                try {
+                  const c = document.createElement('canvas');
+                  c.width = img.naturalWidth;
+                  c.height = img.naturalHeight;
+                  c.getContext('2d').drawImage(img, 0, 0);
+                  dataUrl = c.toDataURL('image/webp', 0.92);
+                } catch (_) {}
+              }
+              out.push({ previewUrl: u, dataUrl });
+            });
+            return out;
+          })()
+        `).catch(() => batch.imageUrls);
         const saved = await saveGeneratedImages(
           'gemini',
           'ai-web-gm-',
           resolvedSid,
           batch.turnNum || 1,
-          batch.imageUrls
+          Array.isArray(imageItems) && imageItems.length > 0 ? imageItems : batch.imageUrls
         );
         if (!batch.hadText && saved.length > 0) {
           await emit({

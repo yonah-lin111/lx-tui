@@ -98,8 +98,18 @@ async function downloadImageBuffer(frameId, startUrl) {
   return null;
 }
 
-async function saveGeneratedImages(siteTag, sessionPrefix, rawSessionId, turnNum, urls) {
-  const list = Array.isArray(urls) ? Array.from(new Set(urls.filter(Boolean))) : [];
+async function saveGeneratedImages(siteTag, sessionPrefix, rawSessionId, turnNum, items) {
+  const rawList = Array.isArray(items) ? items.filter(Boolean) : [];
+  if (rawList.length === 0) return [];
+  const list = [];
+  const seen = new Set();
+  for (const entry of rawList) {
+    const previewUrl = typeof entry === 'string' ? entry : entry.previewUrl || '';
+    const dataUrl = typeof entry === 'object' && entry.dataUrl ? entry.dataUrl : '';
+    if (!previewUrl || seen.has(previewUrl)) continue;
+    seen.add(previewUrl);
+    list.push({ previewUrl, dataUrl });
+  }
   if (list.length === 0) return [];
   const nodeFs = await import('node:fs');
   const nodePath = await import('node:path');
@@ -120,10 +130,14 @@ async function saveGeneratedImages(siteTag, sessionPrefix, rawSessionId, turnNum
 
   const out = [];
   for (let i = 0; i < list.length; i += 1) {
-    const previewUrl = list[i];
-    const originalUrl = toGeminiOriginalImageUrl(previewUrl);
+    const { previewUrl, dataUrl } = list[i];
+    const isHttp = /^https?:\/\//i.test(previewUrl);
+    const originalUrl = isHttp
+      ? toGeminiOriginalImageUrl(previewUrl)
+      : 'gemini-session://' + cleanSid + '/' + String(turnNum) + '/' + String(i + 1);
     const baseStem = siteTag + '-r' + String(turnNum) + '-' + String(i + 1);
-    const fileStem = siteTag + '-' + shortSid + '-r' + String(turnNum) + '-' + String(i + 1) + '-orig';
+    const fileStem =
+      siteTag + '-' + shortSid + '-r' + String(turnNum) + '-' + String(i + 1) + '-orig';
     if (imageDir) {
       let cached = null;
       for (const ext of ['jpg', 'png', 'webp', 'gif']) {
@@ -147,9 +161,19 @@ async function saveGeneratedImages(siteTag, sessionPrefix, rawSessionId, turnNum
         continue;
       }
     }
-    const fetched = await downloadImageBuffer(frameId, previewUrl);
-    const buf = fetched && fetched.buf;
-    const contentType = (fetched && fetched.contentType) || '';
+    let buf = null;
+    let contentType = '';
+    if (dataUrl && dataUrl.startsWith('data:image/')) {
+      const comma = dataUrl.indexOf(',');
+      if (comma > 0) {
+        buf = Buffer.from(dataUrl.slice(comma + 1), 'base64');
+        contentType = dataUrl.slice(5, comma).split(';')[0] || 'image/webp';
+      }
+    } else if (isHttp) {
+      const fetched = await downloadImageBuffer(frameId, previewUrl);
+      buf = fetched && fetched.buf;
+      contentType = (fetched && fetched.contentType) || '';
+    }
     const ext = detectImageExt(buf, contentType, previewUrl);
     const label = baseStem + '.' + ext;
     let savedPath = '';
@@ -640,20 +664,83 @@ async function runNonChatAction(currentUrl) {
       await emit({ event: 'error', message: 'Missing download target parameters' });
       return;
     }
+    let resolvedDownloadUrl = DOWNLOAD_URL;
+    let resolvedFallbackUrl = FALLBACK_URL;
+    const sessionMatch = String(DOWNLOAD_URL || '').match(
+      /^gemini-session:\/\/([a-zA-Z0-9_-]+)\/(\d+)\/(\d+)/
+    );
+    if (sessionMatch) {
+      const [, sid, turnStr, idxStr] = sessionMatch;
+      const turnIdx = Math.max(0, Number(turnStr) - 1);
+      const imgIdx = Math.max(0, Number(idxStr) - 1);
+      const readHttpSrc = () =>
+        js(String.raw`
+          (() => {
+            const responses = Array.from(document.querySelectorAll('model-response'));
+            const mr = responses[${turnIdx}] || responses[responses.length - 1];
+            if (!mr) return '';
+            const imgs = Array.from(
+              mr.querySelectorAll('generated-image img, single-image img, .generated-images img')
+            );
+            const img = imgs[${imgIdx}] || imgs[0];
+            const src = img ? (img.currentSrc || img.src || '').trim() : '';
+            if (/^https?:\/\//i.test(src)) return src;
+            const allImgs = Array.from(
+              document.querySelectorAll('model-response generated-image img, model-response single-image img, model-response .generated-images img')
+            );
+            const flatIdx = img ? allImgs.indexOf(img) : -1;
+            const ggUrls = Array.from(new Set(
+              performance.getEntriesByType('resource')
+                .map((e) => e.name)
+                .filter((n) => /^https:\/\/lh3\.googleusercontent\.com\/gg\//i.test(n))
+                .map((n) => n.replace(/\?alr=yes$/i, ''))
+            ));
+            if (flatIdx >= 0 && flatIdx < ggUrls.length) return ggUrls[flatIdx];
+            if (ggUrls.length > 0) return ggUrls[ggUrls.length - 1];
+            return '';
+          })()
+        `).catch(() => '');
+      // Reload the saved conversation URL so Gemini populates permanent FIFE gg/ URLs in resource timings.
+      if (sid && sid !== 'temp') {
+        if (!currentUrl.includes(sid)) {
+          await openOrReuseTab(HOME + '/' + sid, { wait: true, timeout: 25 });
+        } else if (!(await readHttpSrc())) {
+          await cdp('Page.reload', { ignoreCache: false }).catch(() => {});
+          await new Promise((r) => setTimeout(r, 1500));
+        }
+        await installPermissionGuard();
+        const waitDeadline = Date.now() + 12000;
+        while (Date.now() < waitDeadline) {
+          const foundUrl = await readHttpSrc();
+          if (foundUrl) {
+            resolvedFallbackUrl = foundUrl;
+            resolvedDownloadUrl = toGeminiOriginalImageUrl(foundUrl);
+            break;
+          }
+          await new Promise((r) => setTimeout(r, 250));
+        }
+      }
+    }
     let frameId = '';
     try {
       const tree = await cdp('Page.getResourceTree');
       frameId = (tree && tree.frameTree && tree.frameTree.frame && tree.frameTree.frame.id) || '';
     } catch (_) {}
-    let fetched = DOWNLOAD_URL ? await downloadImageBuffer(frameId, DOWNLOAD_URL) : null;
-    if ((!fetched || !fetched.buf) && FALLBACK_URL) {
-      fetched = await downloadImageBuffer(frameId, FALLBACK_URL);
+    let fetched = /^https?:\/\//i.test(resolvedDownloadUrl)
+      ? await downloadImageBuffer(frameId, resolvedDownloadUrl)
+      : null;
+    if ((!fetched || !fetched.buf) && /^https?:\/\//i.test(resolvedFallbackUrl)) {
+      fetched = await downloadImageBuffer(frameId, resolvedFallbackUrl);
     }
     if (!fetched || !fetched.buf || fetched.buf.length === 0) {
       await emit({ event: 'error', message: 'Failed to download original image from Gemini' });
       return;
     }
-    const ext = detectImageExt(fetched.buf, fetched.contentType, fetched.finalUrl || DOWNLOAD_URL);
+    const ext = detectImageExt(
+      fetched.buf,
+      fetched.contentType,
+      fetched.finalUrl || resolvedDownloadUrl
+    );
     const fileName = (DOWNLOAD_STEM || 'gemini-orig') + '.' + ext;
     try {
       nodeFs.mkdirSync(DOWNLOAD_DIR, { recursive: true });
@@ -663,8 +750,8 @@ async function runNonChatAction(currentUrl) {
         event: 'image',
         label: fileName,
         path: target,
-        original_url: DOWNLOAD_URL,
-        preview_url: FALLBACK_URL,
+        original_url: resolvedDownloadUrl,
+        preview_url: resolvedFallbackUrl,
         file_stem: DOWNLOAD_STEM,
       });
       await emit({ event: 'done' });
@@ -755,7 +842,7 @@ async function runNonChatAction(currentUrl) {
           return containers.some((c) => {
             const img = c.querySelector('img');
             const src = img ? (img.currentSrc || img.src || '').trim() : '';
-            return !/^https?:\/\//i.test(src);
+            return !(/^(https?:|blob:)/i.test(src) && img.complete && img.naturalWidth > 0);
           });
         })()
       `).catch(() => false);
@@ -777,6 +864,20 @@ async function runNonChatAction(currentUrl) {
             title = docTitle;
           }
         }
+        const allGeneratedImgs = Array.from(
+          document.querySelectorAll(
+            'model-response generated-image img, model-response single-image img, model-response .generated-images img'
+          )
+        );
+        const ggUrls = Array.from(
+          new Set(
+            performance
+              .getEntriesByType('resource')
+              .map((e) => e.name)
+              .filter((n) => n.startsWith('https://lh3.googleusercontent.com/gg/'))
+              .map((n) => n.replace(/[?]alr=yes$/i, ''))
+          )
+        );
         const nodes = Array.from(document.querySelectorAll('user-query, model-response'));
         const messages = [];
         let assistantTurn = 0;
@@ -837,11 +938,30 @@ async function runNonChatAction(currentUrl) {
             const text = (msgEl.innerText || '').replace(/\\r\\n/g, '\\n').trim();
             for (const tn of tempCodeNodes) tn.remove();
             for (const [el, prev] of hiddenM) el.style.display = prev;
-            const imageUrls = Array.from(
-              node.querySelectorAll('generated-image img, single-image img, .generated-images img')
-            )
-              .map((img) => (img.currentSrc || img.src || '').trim())
-              .filter((u) => /^https?:\\/\\//i.test(u));
+            const imageUrls = [];
+            const seenImg = new Set();
+            node
+              .querySelectorAll('generated-image img, single-image img, .generated-images img')
+              .forEach((img) => {
+                let u = (img.currentSrc || img.src || '').trim();
+                if (!/^(https?:|blob:)/i.test(u) || seenImg.has(u)) return;
+                seenImg.add(u);
+                let dataUrl = '';
+                if (u.startsWith('blob:') && img.complete && img.naturalWidth > 0) {
+                  try {
+                    const c = document.createElement('canvas');
+                    c.width = img.naturalWidth;
+                    c.height = img.naturalHeight;
+                    c.getContext('2d').drawImage(img, 0, 0);
+                    dataUrl = c.toDataURL('image/webp', 0.92);
+                  } catch (_) {}
+                  const flatIdx = allGeneratedImgs.indexOf(img);
+                  if (flatIdx >= 0 && flatIdx < ggUrls.length) {
+                    u = ggUrls[flatIdx];
+                  }
+                }
+                imageUrls.push({ previewUrl: u, dataUrl });
+              });
             messages.push({
               role: 'assistant',
               thinking,
