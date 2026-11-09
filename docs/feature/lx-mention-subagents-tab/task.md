@@ -14,6 +14,7 @@
 | **T3** | 打通存活实例与角色配置同步链路，以及当轮 `<subagent_reference>` 上下文注入 | `src/app/state/pane.rs`<br>`src/app/update/chat/subagent.rs`<br>`src/db/service/chat.rs`<br>`src/event/inventory.rs`<br>`src/event/mod.rs`<br>`src/event/chat/subagent/snapshot.rs`<br>`src/event/chat/mod.rs` | `inventory.rs`: ~695 行<br>`snapshot.rs`: ~310 行<br>`event/chat/mod.rs`: ~902 行 | 已完成 |
 | **T4** | TUI 渲染层接入 `Subagents` Tab 与 `subagent_row` 双行展示 | `src/ui/text/workspace.rs`<br>`src/ui/mention.rs`<br>`src/ui/main_content/lx/mention.rs` | `ui/mention.rs`: ~195 行<br>`lx/mention.rs`: ~335 行 | 已完成 |
 | **T5** | 单元测试覆盖与精准验证（`cargo fmt`、`clippy`、受影响模块测试） | `src/app/markdown/refer/tests.rs`<br>`src/app/state/lx/mention/tests.rs`<br>`src/chat/prepare/tests.rs`<br>`src/event/chat/tests/subagent_roles.rs` | `lx/mention/tests.rs`: ~650 行<br>`prepare/tests.rs`: ~310 行 | 已完成 |
+| **T6** | 对齐 Codex 内嵌 `lx-guide` 系统自省 Skill 并补全 `<subagent_reference>` 自身规格注入 | `src/skills/system.rs`<br>`src/skills/assets/lx-guide/*`<br>`src/skills/mod.rs`<br>`src/skills/discover.rs`<br>`src/event/chat/skills.rs`<br>`src/settings/service/skills.rs`<br>`assets/settings_skills.js`<br>`src/event/chat/subagent/snapshot.rs` | `skills/system.rs`: ~120 行<br>`skills/discover.rs`: ~325 行<br>`snapshot.rs`: ~410 行 | 已完成 |
 
 ---
 
@@ -189,3 +190,35 @@
   - `rtk cargo test --lib app::state::lx::mention`
   - `rtk cargo test --lib chat::prepare`
   - `rtk cargo test --lib event::chat::tests::subagent_roles`
+
+---
+
+## Task 6 (T6)：对齐 Codex 内嵌 `lx-guide` 系统自省 Skill 并补全 `<subagent_reference>` 自身规格注入
+
+- **涉及文件**：
+  - `src/skills/assets/lx-guide/SKILL.md`
+  - `src/skills/assets/lx-guide/references/subagents.md`
+  - `src/skills/assets/lx-guide/references/commands-and-mentions.md`
+  - `src/skills/system.rs`
+  - `src/skills/mod.rs`
+  - `src/skills/discover.rs`
+  - `src/skills/discover/tests.rs`
+  - `src/event/chat/skills.rs`
+  - `src/chat/agent/exec/mod.rs`
+  - `src/cli/skill/exec.rs`
+  - `src/settings/service/skills.rs`
+  - `assets/settings_skills.js`
+  - `src/event/chat/subagent/snapshot.rs`
+  - `src/event/chat/tests/subagent_roles.rs`
+- **关键要点**：
+  1. **内嵌 `lx-guide` 系统自省 Skill（`src/skills/system.rs` + `src/skills/assets/lx-guide/`）**：
+     - 对齐 Codex `install_system_skills`：使用 `include_str!` 内嵌 `SKILL.md`、`references/subagents.md`、`references/commands-and-mentions.md`；
+     - `system_skills_root(user_root: &Path) -> PathBuf` 返回 `user_root.join(".system")`；
+     - `install_system_skills(user_root: &Path) -> std::io::Result<()>` 计算内嵌文件列表的确定性 FNV-1a 哈希指纹并与 `<user_root>/.system/.lx-system-skills.marker` 比对，一致则跳过，不一致则重建 `<user_root>/.system/lx-guide/` 并写回 marker；
+     - `SkillSource` 新增 `System`（`as_str() => "system"`，`editable() => false`，默认启用 `!disabled.contains(&canonical)`）；
+     - `skills::discover` 在 `user_agents_root` 之后扫描 `system_skills_root(user_root)`（若存在），优先级最低，允许被用户或项目同名 skill 覆盖；
+     - 在 `event::chat::skills::build_job`、`settings::service::skills::list_skills`、`cli::skill::exec::catalog`、`chat::agent::exec::discover_workspace_skills` 中调用 `let _ = crate::skills::install_system_skills(&user_root);`；
+     - 在 `assets/settings_skills.js` 中将 `entry.source === 'system'` 显示为 `'system (built-in)'`。
+  2. **补全 `<subagent_reference>` 当轮自身规格注入（`src/event/chat/subagent/snapshot.rs`）**：
+     - 角色块（`kind: role`）新增 `tools`（按 `ToolSurface::from_role` + `spec.capabilities` 计算生效工具名）、`capabilities`（`allow_web_search`、`allow_mcp`、`allow_skills`）、`model`（`inherits parent model` 或显式模型及是否锁定）、`system_prompt`（`spec.system_prompt_override` 或内置 `AgentRole::from(spec.base_role).system_prompt()`），以及区分“解释询问”与“任务委派”的双意图英文 `guidance`；
+     - 存活实例块（`kind: active_instance`）新增 `title`、`task`（非空时）与 `latest_report`（若有），以及区分“询问状态/任务”与“追加指令/等待”的双意图英文 `guidance`。

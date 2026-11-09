@@ -109,7 +109,10 @@ function renderSkillList() {
   while (list.firstChild) { list.removeChild(list.firstChild); }
   const groups = new Map();
   for (const entry of skillsState.entries) {
-    const key = skillScopeLabel(entry.scope) + ' · ' + (entry.source === 'agents' ? '.agents (read-only)' : 'lx');
+    const sourceLabel = entry.source === 'agents'
+      ? '.agents (read-only)'
+      : (entry.source === 'system' ? 'system (built-in)' : 'lx');
+    const key = skillScopeLabel(entry.scope) + ' · ' + sourceLabel;
     if (!groups.has(key)) { groups.set(key, []); }
     groups.get(key).push(entry);
   }

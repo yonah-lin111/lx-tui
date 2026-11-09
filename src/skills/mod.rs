@@ -7,6 +7,7 @@ pub mod discover;
 pub mod parse;
 pub mod render;
 pub mod store;
+pub mod system;
 
 use std::path::{Path, PathBuf};
 
@@ -16,6 +17,7 @@ pub use render::{
     render_catalog, render_catalog_with_omitted, render_injection, render_replay_line,
 };
 pub use store::{delete_skill, read_skill, read_skill_at, serialize_skill, write_skill};
+pub use system::{install_system_skills, system_skills_root};
 
 /// skill 文件的标准文件名。
 pub const SKILL_FILE_NAME: &str = "SKILL.md";
@@ -81,11 +83,12 @@ impl SkillScope {
     }
 }
 
-/// skill 来源：lx 自有目录（可编辑）或 `.agents` 目录（只读）。
+/// skill 来源：lx 自有目录（可编辑）、`.agents` 目录（只读）或内嵌系统 skill（只读）。
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 pub enum SkillSource {
     Lx,
     Agents,
+    System,
 }
 
 impl SkillSource {
@@ -94,10 +97,11 @@ impl SkillSource {
         match self {
             Self::Lx => "lx",
             Self::Agents => "agents",
+            Self::System => "system",
         }
     }
 
-    /// lx 自有目录可编辑；`.agents` 只读。
+    /// lx 自有目录可编辑；`.agents` 与内嵌系统 skill 只读。
     pub const fn editable(self) -> bool {
         matches!(self, Self::Lx)
     }

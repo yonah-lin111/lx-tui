@@ -1,4 +1,4 @@
-//! skill 目录发现：四个根、优先级、隐藏目录跳过、深度/数量上限与符号链接去重。
+//! skill 目录发现：五个根、优先级、隐藏目录跳过、深度/数量上限与符号链接去重。
 
 use std::collections::HashSet;
 use std::path::{Path, PathBuf};
@@ -30,7 +30,7 @@ impl ProjectSkillRoots {
 
 /// 按优先级发现全部 skill。
 ///
-/// 顺序：项目 lx → 项目 `.agents` → 用户 lx → 用户 `.agents`。
+/// 顺序：项目 lx → 项目 `.agents` → 用户 lx → 用户 `.agents` → 用户 `.system`。
 /// 同名只保留第一个，其余带 `shadowed_by` 保留在列表里供设置页展示。
 pub fn discover(
     user_root: &Path,
@@ -63,6 +63,12 @@ pub fn discover(
         user_agents_root.to_path_buf(),
         SkillScope::User,
         SkillSource::Agents,
+        false,
+    ));
+    roots.push((
+        crate::skills::system_skills_root(user_root),
+        SkillScope::User,
+        SkillSource::System,
         false,
     ));
 
@@ -199,6 +205,7 @@ pub fn catalog_signature(
     }
     roots.push((user_root.to_path_buf(), true));
     roots.push((user_agents_root.to_path_buf(), false));
+    roots.push((crate::skills::system_skills_root(user_root), false));
     for (root, skip_projects) in roots {
         mix(root.to_string_lossy().as_bytes());
         hash_root_signature(&root, skip_projects, &mut mix);
@@ -294,7 +301,7 @@ fn push_skill(
         source,
         enabled: match source {
             SkillSource::Agents => enabled.contains(&canonical) && !disabled.contains(&canonical),
-            SkillSource::Lx => !disabled.contains(&canonical),
+            SkillSource::Lx | SkillSource::System => !disabled.contains(&canonical),
         },
         shadowed_by: None,
     });

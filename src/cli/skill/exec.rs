@@ -68,6 +68,7 @@ fn catalog(ctx: &WorkspaceContext, trusted: bool) -> Result<SkillCatalog, String
     let disabled: HashSet<PathBuf> = file.disabled_set().into_iter().collect();
     let enabled: HashSet<PathBuf> = file.enabled_set().into_iter().collect();
     let user = user_skills_root().map_err(|error| error.to_string())?;
+    let _ = crate::skills::install_system_skills(&user);
     let user_agents = user_agents_skills_root().map_err(|error| error.to_string())?;
     let project = if trusted {
         Some(ProjectSkillRoots::for_project(
@@ -359,9 +360,14 @@ fn run_edit(
     let catalog = catalog(ctx, trusted)?;
     let entry = find_entry(&catalog.entries, name, Some(scope))?;
     if !entry.source.editable() {
-        return Err(format!(
-            "skill '{name}' comes from '.agents' and is read-only"
-        ));
+        return Err(match entry.source {
+            SkillSource::System => {
+                format!("skill '{name}' is a built-in system skill and is read-only")
+            }
+            SkillSource::Lx | SkillSource::Agents => {
+                format!("skill '{name}' comes from '.agents' and is read-only")
+            }
+        });
     }
     let (skill_name, current_description, body) = crate::skills::store::read_skill_at(&entry.path)?;
     let description = description
@@ -405,9 +411,14 @@ fn run_delete(
     let catalog = catalog(ctx, trusted)?;
     let entry = find_entry(&catalog.entries, name, Some(scope))?;
     if !entry.source.editable() {
-        return Err(format!(
-            "skill '{name}' comes from '.agents' and is read-only"
-        ));
+        return Err(match entry.source {
+            SkillSource::System => {
+                format!("skill '{name}' is a built-in system skill and is read-only")
+            }
+            SkillSource::Lx | SkillSource::Agents => {
+                format!("skill '{name}' comes from '.agents' and is read-only")
+            }
+        });
     }
     crate::skills::store::delete_skill(&scope_root(entry.scope, ctx)?, entry_dir_name(&entry))?;
     out.emit(

@@ -625,6 +625,7 @@ fn discover_workspace_skills(workspace: &Path) -> crate::skills::SkillCatalog {
     else {
         return crate::skills::SkillCatalog::default();
     };
+    let _ = crate::skills::install_system_skills(&user_root);
     let project = cfg::project_skills_root(workspace)
         .ok()
         .map(|lx| crate::skills::ProjectSkillRoots::for_project(workspace, lx));

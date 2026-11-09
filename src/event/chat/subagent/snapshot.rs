@@ -7,8 +7,11 @@ use std::path::Path;
 use std::time::Instant;
 
 use super::*;
-use crate::chat::agent::{AgentStatus, SubagentInputItem};
+use crate::chat::agent::{AgentRole, AgentStatus, BaseRole, SubagentInputItem, ToolSurface};
 use crate::db::Database;
+
+/// `@[refer-subagent]` 提示块内联字段的单行化截断上限（限住当轮上下文体量）。
+const MAX_REFERENCE_FIELD_CHARS: usize = 600;
 
 /// 环境快照最多列出的子 agent 条数。
 pub const MAX_SNAPSHOT_SUBAGENTS: usize = 8;
@@ -123,7 +126,7 @@ pub(crate) fn running_subagent_lines(streams: &ChatStreams, parent_session: &str
     known_subagent_lines(streams, None, None, parent_session)
 }
 
-/// 从用户当轮草稿中提取 `@[refer-subagent](...)` 引用，生成英文调度提示块
+/// 从用户当轮草稿中提取 `@[refer-subagent](...)` 引用，生成英文自身规格与调度提示块
 /// （仅当轮注入，不落库）。重复点名同一目标只生成一个块。
 pub(crate) fn subagent_reference_blocks(
     draft_text: &str,
@@ -155,7 +158,8 @@ pub(crate) fn subagent_reference_blocks(
                         .is_some_and(|nick| nick.eq_ignore_ascii_case(instance_key)))
         }) {
             let nickname = run.nickname.as_deref().unwrap_or(run.agent_id.as_str());
-            blocks.push(format!(
+            let title = first_line(&run.title);
+            let mut block = format!(
                 "<subagent_reference>\n\
                  kind: active_instance\n\
                  reference: @[refer-subagent]({raw_target})\n\
@@ -164,16 +168,33 @@ pub(crate) fn subagent_reference_blocks(
                  role: {}\n\
                  status: {}\n\
                  agent_path: {}\n\
-                 guidance: The user explicitly referenced this active subagent in the current session. \
-                 Prefer interacting with it directly using `send_input` (target=\"{}\") or `wait_agent` \
-                 instead of spawning a duplicate subagent.\n\
-                 </subagent_reference>",
+                 title: {title}",
                 run.agent_id,
                 run.role.as_str(),
                 run.status,
                 run.agent_path,
-                run.agent_id,
+            );
+            if let Some(task) = reference_field(&run.task) {
+                block.push_str(&format!("\ntask: {task}"));
+            }
+            if let Some(report) = run
+                .report
+                .as_ref()
+                .and_then(|report| reference_field(&report.body))
+            {
+                block.push_str(&format!("\nlatest_report: {report}"));
+            }
+            let target = run.agent_id.as_str();
+            block.push_str(&format!(
+                "\nguidance: The user explicitly referenced this active subagent in the current session. \
+                 If the user is asking about this subagent (its role, task, status, or progress), \
+                 answer directly from the details above (or call `list_agents` to inspect the session tree) \
+                 without searching workspace files. If the user is assigning follow-up work or waiting \
+                 for completion, prefer interacting with it directly using `send_input` (target=\"{target}\") \
+                 or `wait_agent` instead of spawning a duplicate subagent.\n\
+                 </subagent_reference>"
             ));
+            blocks.push(block);
             continue;
         }
 
@@ -190,6 +211,48 @@ pub(crate) fn subagent_reference_blocks(
             } else {
                 "custom (user)"
             };
+            let base_agent_role = match spec.base_role {
+                BaseRole::Explorer => AgentRole::Explorer,
+                BaseRole::Executor => AgentRole::Executor,
+                BaseRole::Monitor => AgentRole::Monitor,
+            };
+            let tools = ToolSurface::from_role(base_agent_role)
+                .names()
+                .iter()
+                .filter(|name| spec.capabilities.allow_web_search || **name != "web_search")
+                .copied()
+                .collect::<Vec<_>>()
+                .join(", ");
+            let capabilities = format!(
+                "allow_web_search={}, allow_mcp={}, allow_skills={}",
+                spec.capabilities.allow_web_search,
+                spec.capabilities.allow_mcp,
+                spec.capabilities.allow_skills,
+            );
+            let model = match spec.default_model.as_ref() {
+                Some(selection) => {
+                    let variant = selection
+                        .variant
+                        .as_deref()
+                        .map(|variant| format!(" ({variant})"))
+                        .unwrap_or_default();
+                    let mode = if spec.lock_model {
+                        "locked"
+                    } else {
+                        "default (overridable)"
+                    };
+                    format!(
+                        "{}/{}{variant} ({mode})",
+                        selection.provider, selection.model
+                    )
+                }
+                None => "inherits parent model".to_string(),
+            };
+            let system_prompt = spec
+                .system_prompt_override
+                .as_deref()
+                .filter(|prompt| !prompt.trim().is_empty())
+                .unwrap_or_else(|| base_agent_role.system_prompt());
             blocks.push(format!(
                 "<subagent_reference>\n\
                  kind: role\n\
@@ -198,8 +261,18 @@ pub(crate) fn subagent_reference_blocks(
                  base_role: {}\n\
                  scope: {scope}\n\
                  description: {}\n\
+                 tools: {tools}\n\
+                 capabilities: {capabilities}\n\
+                 model: {model}\n\
+                 system_prompt:\n\
+                 {system_prompt}\n\
                  guidance: The user explicitly referenced the `{}` subagent role. \
-                 Delegate the relevant task by calling `spawn_agent` with `role: \"{}\"`.\n\
+                 Its complete specification, tool surface, capabilities, and role system prompt are \
+                 provided above (and general lx subagent documentation is available in the built-in \
+                 `lx-guide` skill). If the user is asking what this subagent role is, how it works, \
+                 or what tools/prompt it uses, answer directly from the specification above without \
+                 searching workspace files. If the user is asking to perform a task with this role, \
+                 delegate the relevant task by calling `spawn_agent` with `role: \"{}\"`.\n\
                  </subagent_reference>",
                 spec.name,
                 spec.base_role.as_str(),
@@ -371,4 +444,18 @@ fn first_line(text: &str) -> String {
         .chars()
         .take(120)
         .collect()
+}
+
+/// 单行化并截断提示块的内联字段；空字段返回 `None`（不输出空行）。
+fn reference_field(text: &str) -> Option<String> {
+    let single_line = text.split_whitespace().collect::<Vec<_>>().join(" ");
+    if single_line.is_empty() {
+        return None;
+    }
+    Some(
+        single_line
+            .chars()
+            .take(MAX_REFERENCE_FIELD_CHARS)
+            .collect(),
+    )
 }

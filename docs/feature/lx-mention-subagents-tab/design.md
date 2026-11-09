@@ -655,6 +655,31 @@ turn_reference_blocks.extend(subagent::snapshot::subagent_reference_blocks(
 ```
 随后将 `&turn_reference_blocks` 传给 `assemble_turn_request_with_context`。
 
+### 3.6 对齐 Codex 的 `lx-guide` 内置系统 Skill 与 `<subagent_reference>` 完整自身规格注入
+
+#### 3.6.1 根因与设计目标
+在真实会话测试中，当用户输入 `@[refer-subagent](explorer) 这个是什么` 时，若 `<subagent_reference>` 仅注入一行简短 `description` 与单向的 `spawn_agent` 派活指令，且系统缺少关于 `lx` 自身功能的手册，模型会被迫在当前工作区执行大量 `search`/`read` 去翻找源码（在非 `lx-tui` 目录则完全无法获知自身角色提示词与功能细节）。
+
+对标 Codex（`codex-rs/skills/src/lib.rs` 的 `install_system_skills` + `openai-docs/references/codex-self-knowledge.md`），采用**双层自省设计（零新增工具，直接复用现有 `Skills` 目录与 `read` 工具）**：
+
+1. **层 1：`<subagent_reference>` 当轮完整自身规格与双意图引导（`src/event/chat/subagent/snapshot.rs`）**
+   - **点名角色（`kind: role`）**：除 `role`、`base_role`、`scope`、`description` 外，直接内联：
+     - `tools`: 该角色生效的工具白名单（如 `explorer` 为 `read, search, web_search`；按 `ToolSurface` 与 `spec.capabilities` 计算）；
+     - `capabilities`: `allow_web_search`、`allow_mcp`、`allow_skills` 开关；
+     - `model`: `inherits parent model` 或显式配置的 `<provider>/<model> (default | locked)`；
+     - `system_prompt`: 该角色生效的完整系统提示词（`spec.system_prompt_override` 或内置 `EXPLORER_PROMPT` / `EXECUTOR_PROMPT` / `MONITOR_PROMPT`）；
+     - 双意图 `guidance`：若用户在询问该角色是什么、有哪些工具/权限/提示词，直接基于上述规格（及内置 `lx-guide` skill）回答，**禁止去搜索当前工作区文件**；若用户在指派具体任务，则调用 `spawn_agent(role="<name>")` 委派。
+   - **点名存活实例（`kind: active_instance`）**：除 `agent_id`、`nickname`、`role`、`status`、`agent_path` 外，直接内联：
+     - `title`: 实例短标题；
+     - `task`: 实例被派发的任务描述（非空时附上）；
+     - `latest_report`: 最新结算摘要（若有）；
+     - 双意图 `guidance`：若用户在询问该实例的任务、状态或进展，直接基于上述信息回答（或调用 `list_agents` 查看会话树），**禁止搜索工作区文件**；若用户在追加指令或等待结果，优先调用 `send_input` / `wait_agent`。
+
+2. **层 2：内嵌 `lx-guide` 系统级自省 Skill（`src/skills/system.rs` + `src/skills/assets/lx-guide/`）**
+   - 对标 Codex `install_system_skills`：通过 `include_str!` 将 `lx-guide`（`SKILL.md`、`references/subagents.md`、`references/commands-and-mentions.md`）编译进二进制。
+   - 启动/扫描时调用 `skills::install_system_skills(&user_root)`，将内嵌文件同步到 `<data>/skills/.system/lx-guide/`，并写入内容指纹 `.lx-system-skills.marker`（指纹一致时直接跳过写盘，零多余 IO）。
+   - `SkillSource` 新增 `System`（`"system"`，只读不可编辑/删除，默认启用且支持在设置页与 `skills.json` 中开关），`skills::discover` 在用户级根之后扫描 `<user_root>/.system`（优先级：`Project::Lx` → `Project::Agents` → `User::Lx` → `User::Agents` → `User::System`），因此在系统提示 `## Skills`、`@` 提及面板 `Skills` Tab 与浏览器设置页中均开箱可见。
+
 ---
 
 ## 4. 边界条件与测试矩阵
@@ -666,4 +691,5 @@ turn_reference_blocks.extend(subagent::snapshot::subagent_reference_blocks(
 | **确认插入与原子退格删除** | 选中存活实例插入 `@[refer-subagent](Turing:explorer) `，选中角色插入 `@[refer-subagent](explorer) `；紧跟末尾空格按一次 `Backspace` 整块删除，按 `Ctrl+Z` 一步还原。 | `src/app/state/lx/mention/tests.rs` |
 | **左右方向键 5-Tab vs 4-Tab 循环** | `lx` 主输入框在 `Files` 按 `←` 跳到 `Subagents`，在 `Subagents` 按 `→` 跳回 `Files`；右侧 `Prompt` 编辑器在 `Files` 按 `←` 仍跳到 `Mcp`，不进入 `Subagents`。 | `src/app/state/lx/mention/tests.rs`、`src/app/prompt/tests.rs` |
 | **`AiWeb` 入口防护** | `AiWeb` 入口下 `mention_switch_tab` / `mention_set_tab(MentionTab::Subagents)` 返回 `false`，顶栏仅渲染 `Files`；含 `@[refer-subagent](...)` 的草稿在 `prepare_ai_web_message` 返回 `Err(AiWebPrepareError::LocalReferenceUnsupported)`。 | `src/chat/prepare/tests.rs`、`src/app/state/lx/mention/tests.rs` |
-| **当轮模型上下文提示块生成** | 草稿含 `@[refer-subagent](Turing:explorer)` 与 `@[refer-subagent](monitor)` 时，`subagent_reference_blocks` 分别产出 `active_instance`（含 `agent_id` 与 `send_input` 引导）和 `role`（含 `spawn_agent` 引导）的英文 `<subagent_reference>` 块，重复点名自动去重。 | `src/event/chat/tests/subagent_roles.rs` |
+| **当轮模型上下文提示块生成（含自身规格）** | 草稿含 `@[refer-subagent](Turing:explorer)` 与 `@[refer-subagent](monitor)` 时，`subagent_reference_blocks` 分别产出 `active_instance`（含 `agent_id`、`title`、`task` 与双意图引导）和 `role`（含 `tools`、`capabilities`、`model`、`system_prompt` 与双意图引导）的英文 `<subagent_reference>` 块，重复点名自动去重。 | `src/event/chat/tests/subagent_roles.rs` |
+| **内置系统 Skill `lx-guide` 自动同步与发现** | `install_system_skills` 将内嵌 `lx-guide`（含 `SKILL.md` 与 `references/*.md`）按指纹幂等写入 `<user_root>/.system/lx-guide/`；`discover` 将其识别为 `SkillSource::System`（默认启用、只读），在 `## Skills` 目录、`@` 面板 `Skills` Tab 与设置页可见，且可被同名用户/项目 skill 覆盖。 | `src/skills/discover/tests.rs` |

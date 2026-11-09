@@ -153,6 +153,7 @@ fn build_job(
         })
         .unwrap_or_default();
     let user_root = skills_config::user_skills_root().ok()?;
+    let _ = crate::skills::install_system_skills(&user_root);
     let user_agents = skills_config::user_agents_skills_root().ok()?;
     let project = workspace_root
         .filter(|root| persistence.is_trusted(root))

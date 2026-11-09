@@ -75,6 +75,7 @@ fn list_skills(state: &ServiceState) -> Response {
     let disabled = disabled_set(&root);
     let enabled = enabled_set(&root);
     let user_root = user_skills_root(&root);
+    let _ = crate::skills::install_system_skills(&user_root);
     let user_agents =
         skills_config::user_agents_skills_root().unwrap_or_else(|_| root.join("agents-skills"));
     let mut entries: Vec<SkillEntry> = Vec::new();
@@ -167,6 +168,10 @@ fn skill_detail(request: &Request, state: &ServiceState) -> Response {
         return Response::error(403, "skill path is not in a managed root");
     }
     let path = PathBuf::from(path);
+    let path = std::fs::canonicalize(&path).unwrap_or(path);
+    let user_root = user_skills_root(&root);
+    let system_root = crate::skills::system_skills_root(&user_root);
+    let system_root = std::fs::canonicalize(&system_root).unwrap_or(system_root);
     match crate::skills::read_skill_at(&path) {
         Ok((name, description, body)) => {
             let scope = state
@@ -181,12 +186,13 @@ fn skill_detail(request: &Request, state: &ServiceState) -> Response {
                 })
                 .map(|project| project.scope)
                 .unwrap_or_else(|| "user".into());
-            let editable = path.starts_with(user_skills_root(&root))
-                || state.projects().iter().any(|project| {
-                    project.trusted
-                        && project_skills_root(&root, &project.root)
-                            .is_some_and(|root| path.starts_with(root))
-                });
+            let editable = !path.starts_with(&system_root)
+                && (path.starts_with(&user_root)
+                    || state.projects().iter().any(|project| {
+                        project.trusted
+                            && project_skills_root(&root, &project.root)
+                                .is_some_and(|root| path.starts_with(root))
+                    }));
             Response::json(
                 200,
                 json!({

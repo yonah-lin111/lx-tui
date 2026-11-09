@@ -741,6 +741,13 @@ fn subagent_reference_blocks_render_active_instance_and_role_guidance() {
     assert!(active.contains("agent_id: agent-turing"), "{active}");
     assert!(active.contains("nickname: Turing"), "{active}");
     assert!(active.contains("status: running"), "{active}");
+    assert!(active.contains("title: auth lookup"), "{active}");
+    assert!(active.contains("\ntask: auth lookup\n"), "{active}");
+    assert!(
+        active.contains("without searching workspace files"),
+        "{active}"
+    );
+    assert!(active.contains("`list_agents`"), "{active}");
     assert!(active.contains("`send_input`"), "{active}");
     assert!(active.contains("`wait_agent`"), "{active}");
     assert!(!active.contains("spawn_agent"), "{active}");
@@ -750,28 +757,137 @@ fn subagent_reference_blocks_render_active_instance_and_role_guidance() {
     assert!(role.contains("role: monitor"), "{role}");
     assert!(role.contains("base_role: monitor"), "{role}");
     assert!(role.contains("scope: built-in"), "{role}");
-    assert!(role.contains("`spawn_agent`"), "{role}");
+    assert!(
+        role.contains("tools: read, search, exec_command, write_stdin\ncapabilities:"),
+        "{role}"
+    );
+    assert!(
+        role.contains("capabilities: allow_web_search=true, allow_mcp=true, allow_skills=true"),
+        "{role}"
+    );
+    assert!(role.contains("model: inherits parent model"), "{role}");
+    assert!(
+        role.contains("system_prompt:\nYou are a monitor subagent:"),
+        "{role}"
+    );
+    assert!(role.contains("without searching workspace files"), "{role}");
+    assert!(
+        role.contains("`spawn_agent` with `role: \"monitor\"`"),
+        "{role}"
+    );
 }
 
 #[test]
-fn subagent_reference_blocks_resolve_custom_role_spec() {
+fn subagent_reference_blocks_render_builtin_role_full_spec() {
+    let config = crate::config::subagents::SubagentsSection::default();
+    let blocks = reference_blocks(
+        "@[refer-subagent](explorer) then @[refer-subagent](monitor)",
+        &config,
+        &[],
+    );
+    assert_eq!(blocks.len(), 2, "blocks: {blocks:?}");
+
+    let explorer = &blocks[0];
+    assert!(explorer.contains("role: explorer"), "{explorer}");
+    assert!(explorer.contains("base_role: explorer"), "{explorer}");
+    assert!(
+        explorer.contains("tools: read, search, web_search\ncapabilities:"),
+        "{explorer}"
+    );
+    assert!(
+        explorer.contains("capabilities: allow_web_search=true, allow_mcp=true, allow_skills=true"),
+        "{explorer}"
+    );
+    assert!(
+        explorer.contains("model: inherits parent model"),
+        "{explorer}"
+    );
+    assert!(
+        explorer.contains("system_prompt:\nYou are an explorer:"),
+        "{explorer}"
+    );
+    assert!(
+        explorer.contains("without searching workspace files"),
+        "{explorer}"
+    );
+    assert!(
+        explorer.contains("`spawn_agent` with `role: \"explorer\"`"),
+        "{explorer}"
+    );
+
+    let monitor = &blocks[1];
+    assert!(monitor.contains("role: monitor"), "{monitor}");
+    assert!(monitor.contains("base_role: monitor"), "{monitor}");
+    assert!(
+        monitor.contains("tools: read, search, exec_command, write_stdin\ncapabilities:"),
+        "{monitor}"
+    );
+    assert!(
+        monitor.contains("model: inherits parent model"),
+        "{monitor}"
+    );
+    assert!(
+        monitor.contains("system_prompt:\nYou are a monitor subagent:"),
+        "{monitor}"
+    );
+    assert!(
+        monitor.contains("without searching workspace files"),
+        "{monitor}"
+    );
+    assert!(
+        monitor.contains("`spawn_agent` with `role: \"monitor\"`"),
+        "{monitor}"
+    );
+}
+
+#[test]
+fn subagent_reference_blocks_render_custom_role_effective_spec() {
     let mut config = crate::config::subagents::SubagentsSection::default();
     config.roles.push(CustomRoleConfig {
-        name: "reviewer".into(),
-        base_role: BaseRole::Executor,
-        description: "review diffs".into(),
-        system_prompt: "review role prompt".into(),
+        name: "auditor".into(),
+        base_role: BaseRole::Explorer,
+        description: "audit diffs before merge".into(),
+        system_prompt: "You are the auditor: verify diffs before merge.".into(),
+        model: Some(crate::config::ai::ModelSelection {
+            provider: "p".into(),
+            model: "m".into(),
+            variant: None,
+        }),
+        lock_model: true,
+        capabilities: RoleCapabilities {
+            allow_web_search: false,
+            ..Default::default()
+        },
         ..Default::default()
     });
-    let blocks = reference_blocks("@[refer-subagent](reviewer)", &config, &[]);
+    let blocks = reference_blocks("@[refer-subagent](auditor)", &config, &[]);
     assert_eq!(blocks.len(), 1, "blocks: {blocks:?}");
     let block = &blocks[0];
     assert!(block.contains("kind: role"), "{block}");
-    assert!(block.contains("role: reviewer"), "{block}");
-    assert!(block.contains("base_role: executor"), "{block}");
+    assert!(block.contains("role: auditor"), "{block}");
+    assert!(block.contains("base_role: explorer"), "{block}");
     assert!(block.contains("scope: custom (user)"), "{block}");
-    assert!(block.contains("description: review diffs"), "{block}");
-    assert!(block.contains("role: \"reviewer\""), "{block}");
+    assert!(
+        block.contains("description: audit diffs before merge"),
+        "{block}"
+    );
+    assert!(
+        block.contains("tools: read, search\ncapabilities:"),
+        "web_search must be stripped: {block}"
+    );
+    assert!(
+        block.contains("capabilities: allow_web_search=false, allow_mcp=true, allow_skills=true"),
+        "{block}"
+    );
+    assert!(block.contains("model: p/m (locked)"), "{block}");
+    assert!(
+        block.contains("system_prompt:\nYou are the auditor: verify diffs before merge."),
+        "{block}"
+    );
+    assert!(
+        block.contains("`spawn_agent` with `role: \"auditor\"`"),
+        "{block}"
+    );
 }
 
 #[test]
