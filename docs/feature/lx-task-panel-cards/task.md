@@ -70,3 +70,15 @@
 - [x] 切 tab 往返不丢进程高亮；`[open]` 定位等列表回投后落地
 - [x] 面板打开期间不再每轮置脏（消除 60fps 空转）
 - [x] 全层代码评审（29 条缺陷全部修复，见 `lx-agent-command-plan-tools/review.md`）
+
+### 8. item 列表滚动条与 spawn 卡片精简（`feat/lx-task-list-scrollbar`，已合并）
+
+- [x] Processes / Agents 列表溢出时渲染最右列 thumb `▐`
+- [x] 支持滚轮 / 轨道点击 / thumb 拖拽，命中含右侧 1 列边距
+- [x] 视口按 `len - LIST_MAX` 钳制，列表缩短 / 切筛选 / 切 tab 清理拖拽与失效视口
+- [x] 鼠标显式视口与 `↑/↓` 平滑衔接，首项下滚后按 `↑` 不误关面板
+- [x] 矮窗格下列表 / 滚动条命中有效，面板期间不泄漏聊天历史
+- [x] `spawn_agent` 卡片移除 `live_activity` 行，折叠态仅标题 + 单目标节点
+- [x] 修复后台刷新 / 点选条目重置 `agents_window.viewport` 的 P0 问题
+- [x] P0–P3 复审修复，`cargo fmt` / `clippy` / 全量 `cargo test` 通过
+- [x] 已合并至 `dev`，删除临时 worktree `.worktrees/lx-task-list-scrollbar`、分支与隔离开发库

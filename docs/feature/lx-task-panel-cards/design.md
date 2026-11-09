@@ -1,8 +1,9 @@
 # 后台任务卡片橙色态与输出迁移到任务面板 — 设计
 
 - 分支：`feat/lx-agent-command-plan-tools`（已合并入 `dev`；原 worktree 已删除）
-- 状态：已实现、已合并。**本文档记录的是最初的 11 轮盘问结论；其中配色与面板形态在后续
-  五轮用户验收反馈中被推翻并改定，最终结论以 §2 的「现行」列与 §6 为准。**
+- 后续：`feat/lx-task-list-scrollbar`（已合并入 `dev` 并删除 worktree/分支，见 §6.5、§6.6）
+- 状态：已实现、已合并。**本文档记录的是最初的 11 轮盘问结论；其中配色、面板形态与 item 列表
+  滚动交互在后续用户验收与复审中被修订，最终结论以 §2 的「现行」列与 §6 为准。**
 - 总设计见 [`lx-agent-command-plan-tools/design.md`](../lx-agent-command-plan-tools/design.md)，
   缺陷清单见 [`lx-agent-command-plan-tools/review.md`](../lx-agent-command-plan-tools/review.md)。
 
@@ -152,3 +153,23 @@
 - 切 tab 往返不丢进程高亮（窗口状态按进程列表长度钳制，而非当前 tab 的条目数）。
 - `[open]` / `^o` 的定位请求要等列表回投后才落地（早先在列表为空时就 `take()` 掉了）。
 - 面板打开期间不再每轮置脏（原先空闲也按 60fps 重绘并反复克隆全部进程快照）。
+
+### 6.5 item 列表滚动条（`feat/lx-task-list-scrollbar`，2026-11-09）
+
+- `Processes` / `Agents` 底部 item 列表保持固定 6 行高度；条目超过 6 行时占用最右一列渲染
+  thumb `▐`，不溢出时不占列。
+- 支持鼠标滚轮（每次 3 行）、轨道点击跳转与 thumb 拖拽；命中范围包含列表右侧 1 列边距，
+  滚轮区按列表矩形上下沿 + 窗格内容区左右沿判定，避免整行误触。
+- 视口按 `len - LIST_MAX` 钳制：列表缩短、切换筛选或切 tab 时同步钳制/重置 `viewport`，
+  清理三类滚动条拖拽状态，避免首次上滚被吞或拖拽标记泄漏到后续交互。
+- 鼠标只改 `viewport`、键盘改 `active`：显式视口存在时 `↑/↓` 平滑跟随并保持当前视口，
+  `active` 已在首项但视口下滚时按 `↑` 先收回顶部，不再误关面板。
+- 矮窗格中 `task_output` 高度为 0 时，item 列表与滚动条命中仍有效；面板打开期间始终不绘制
+  底层聊天历史。
+
+### 6.6 `spawn_agent` 卡片精简（`feat/lx-task-list-scrollbar`，2026-11-09）
+
+- 移除运行中的 `live_activity` 实时动作行；折叠态固定为标题 `■ Spawn agent · <status>` +
+  单节点 `└─ <Identity> · <Title>`（有模型覆写 / fork 时按既有规则追加）。
+- `live_activity` 仍由状态回填写入快照记录，但不再触发无视觉变化的脏标记重绘；展开态仍显示
+  最终报告。

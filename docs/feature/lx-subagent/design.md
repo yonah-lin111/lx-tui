@@ -1052,16 +1052,18 @@ pub struct SubagentDetailView {
 渲染：
 
 ```text
-■ Spawn agent
-  └─ explorer · 查一下 compact 触发链上谁改了 revision
+■ Spawn agent · completed
+  └─ Turing [explorer] · 查一下 compact 触发链上谁改了 revision
 ```
 
 - 第 1 行标题按 `call.name`：`spawn_agent` → `Spawn agent`、`wait_agent` → `Wait agents`、`close_agent` → `Close agent`。
 - `spawn_agent` 是“已派出”的动作：工具返回后方块与动词立即用完成绿，不跟随子 agent 的 running 状态黄色呼吸；只有子 agent 失败才转红。
-- 第 2 行：`role · task 首行`（`spawn`）/ wait 条件（`wait`）/ `agent_id · previous_status`（`close`）。
+- `spawn_agent` 树体只有一个目标节点：`identity · title`（有模型覆写 / fork 时按既有规则追加）；不展示 task 原文与运行中的 `live_activity`。点击节点打开 Agents 面板并定位（2026-11-09 `feat/lx-task-list-scrollbar` 精简）。
+- 第 2 行：wait 条件（`wait`）/ `agent_id · previous_status`（`close`）。
 - `wait_agent` 头部右侧显示等待停止参数而不是 `running/completed`：`all · until done`、`any · 5m`、`2 targets · all · until done`、`1 target · any · 5m`；`timed_out` 追加 `· timed out`，时间来自本次调用的 `timeout_ms`。
 - wait 的目标行只显示静态绿/黄/红方块（完成/等待或取消/失败）与 `role · title`，不再显示 `completed`/`waiting`/`failed` 文案，也不参与呼吸动画。
-- 折叠态只显示目标/摘要行；目标行不显示 `status` 文字，只用绿/黄/红静态方块表达；展开显示 `task` 全文、`agent_id`、`targets` 与报告正文。
+- 折叠态只显示目标/摘要行；wait 目标行不显示 `status` 文字，只用绿/黄/红静态方块表达。
+- 展开态：`spawn_agent` / `wait_agent` 追加最终报告正文，`close_agent` 追加 `agent_id`；不再显示 `task` 全文。
 - `wait_agent` 展开态在目标列表之后按 agent 追加 `Report · role · title` + 报告正文；`spawn_agent` 展开态同样显示最终报告。`wait` 消费的报告因此不需要另插主历史消息。
 - `rows()` 分派加一支（`history/tool.rs:107`）；`draw_animated` 加一支（`:182`）。
 - `cache.rs` 的 `tool_signature` 加该变体的字段（`role`/`task`/`agent_id`/`targets`/`wait_for`/`timeout_ms`/`timed_out`/`agents` 的 report 正文/`report`）。
