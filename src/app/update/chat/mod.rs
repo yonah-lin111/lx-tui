@@ -940,12 +940,11 @@ pub fn advance_lx_loading(state: &mut AppState) -> bool {
             || target.lx.chat.has_running_shell();
         let compacting = target.lx.compact.is_running();
         let recapping = target.lx.recap.pending.is_some();
-        let downloading_img = target.lx.chat.has_downloading_image();
         // 仍有子 agent 在跑：推进同一套 loading 帧，供 Agents 详情步骤动画，
         // 以及主轮自然结束后的“Waiting for agents...”等待行；用户显式停止主轮后
         // 等待行隐藏，但详情动画仍继续。
         let agents_running = target.lx.agents.runs.iter().any(|run| run.is_running());
-        if !streaming && !compacting && !recapping && !downloading_img && !agents_running {
+        if !streaming && !compacting && !recapping && !agents_running {
             continue;
         }
         // ask 等待用户作答：本轮耗时完全冻结，主会话的扫描帧也不再推进
@@ -984,7 +983,7 @@ pub fn advance_lx_loading(state: &mut AppState) -> bool {
         }
         // 扫描帧两种场景共用：压缩中的文案同样有扫描高亮。
         // ask 暂停期间只有压缩或子 agent 在跑才继续推进（见 [`paused`]）。
-        if !paused || compacting || recapping || downloading_img || agents_running {
+        if !paused || compacting || recapping || agents_running {
             target.lx.chat.loading_frame = target.lx.chat.loading_frame.wrapping_add(1);
             if agents_running {
                 let frame = target.lx.chat.loading_frame;

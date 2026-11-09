@@ -763,13 +763,6 @@ impl LxChat {
         self.loading_session = false;
     }
 
-    /// 是否存在正在下载原图的 AI Web 生成图片（驱动按钮 loading 转轮）。
-    pub fn has_downloading_image(&self) -> bool {
-        self.image_originals
-            .values()
-            .any(|orig| matches!(orig.state, OriginalImageDownloadState::Downloading))
-    }
-
     /// 是否仍有本地命令在途（已提交待 spawn 或消息仍显示运行中）。
     pub fn has_running_shell(&self) -> bool {
         !self.pending_shells.is_empty()

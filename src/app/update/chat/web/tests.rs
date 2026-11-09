@@ -858,17 +858,19 @@ fn ai_web_generated_images_attach_to_assistant_in_stream_and_resume() {
         Some(&crate::app::state::OriginalImageDownloadState::Idle)
     );
 
-    // 点击下载原图：进入 Downloading 状态并发出 DownloadAiWebOriginalImage 效应。
+    // 点击下载原图：进入 Downloading 状态并发出 DownloadAiWebOriginalImage 效应，
+    // 且经过 Persistence::pump 后不被吞掉，保留给事件层 pump_chat_streams 执行。
     state.effects.clear();
     assert!(super::trigger_ai_web_original_image_download(
         &mut state, pane, &att_id
     ));
-    assert!(state.has_streaming_lx(), "原图下载中必须驱动转轮心跳");
+    let mut persistence = crate::db::service::Persistence::without_database();
+    persistence.pump(&mut state);
     assert!(state.effects.iter().any(|e| matches!(
         e,
         Effect::DownloadAiWebOriginalImage { attachment_id, .. } if attachment_id == &att_id
     )));
-    // 下载完成：变为 Downloaded 状态，再次点击则在文件管理器中定位原图。
+    // 下载完成：变为 Downloaded 状态，再次点击则在文件管理器中定位原图（同样不被 Persistence::pump 吞掉）。
     let cur_sid = state
         .pane_anywhere(pane)
         .and_then(|p| p.lx.chat.session_id.clone())
@@ -884,6 +886,7 @@ fn ai_web_generated_images_attach_to_assistant_in_stream_and_resume() {
     assert!(super::trigger_ai_web_original_image_download(
         &mut state, pane, &att_id
     ));
+    persistence.pump(&mut state);
     assert!(state.effects.iter().any(|e| matches!(
         e,
         Effect::RevealInFileManager { path } if path == std::path::Path::new("/tmp/Desktop/grok-94cea5fe-r1-1-orig.jpg")

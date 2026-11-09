@@ -79,9 +79,18 @@ fn assistant_image_attachments_render_preview_underline_and_download_original_bu
         "{text}"
     );
     assert!(
-        text.contains("└─ Image (preview): gemini-r1-2.webp  [◐ Downloading…]"),
+        text.contains("└─ Image (preview): gemini-r1-2.webp  [downloading...]"),
         "{text}"
     );
+    // 下载中按钮为黄色。
+    let dl_row_y = (0..area.height)
+        .find(|&y| rows_text(&buf, area)[usize::from(y)].contains("[downloading...]"))
+        .expect("dl row");
+    let dl_x = rows_text(&buf, area)[usize::from(dl_row_y)]
+        .find("[downloading...]")
+        .expect("dl col") as u16;
+    let dl_cell = buf.cell((dl_x, dl_row_y)).expect("dl cell");
+    assert_eq!(dl_cell.fg, ratatui::style::Color::Yellow);
     // 文件名本身带下划线。
     let row_y = (0..area.height)
         .find(|&y| rows_text(&buf, area)[usize::from(y)].contains("gemini-r1-1.webp"))

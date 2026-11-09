@@ -136,7 +136,7 @@ pub const USER_REF_SKILL_PREFIX: &str = "Skill: ";
 pub const ASSISTANT_REF_IMAGE_PREVIEW_PREFIX: &str = "Image (preview): ";
 /// 助手生成图片右侧的原图下载按钮文案。
 pub const ASSISTANT_IMAGE_DOWNLOAD_ORIGINAL: &str = "[Download original]";
-pub const ASSISTANT_IMAGE_DOWNLOADING_SUFFIX: &str = " Downloading…]";
+pub const ASSISTANT_IMAGE_DOWNLOADING: &str = "[downloading...]";
 pub const ASSISTANT_IMAGE_DOWNLOADED: &str = "[✓ Downloaded]";
 
 /// 目录读取的条目数：`12 files` / `1 file`。

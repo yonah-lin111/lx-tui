@@ -739,7 +739,6 @@ impl AppState {
             self.pane_anywhere(pane).is_some_and(|target| {
                 target.lx.chat.status.streaming
                     || target.lx.chat.has_running_shell()
-                    || target.lx.chat.has_downloading_image()
                     || target.lx.compact.is_running()
                     || target.lx.recap.pending.is_some()
                     // 子 agent 在后台跑时主 loading 也要扫描，即使 Agents 面板没开。

@@ -683,6 +683,11 @@ pub fn user_ref_image() -> Style {
     Style::default().fg(Color::LightMagenta)
 }
 
+/// 助手生成图片右侧原图下载按钮的下载中状态色（黄色）。
+pub fn assistant_image_downloading() -> Style {
+    Style::default().fg(Color::Yellow)
+}
+
 /// `@[ref-content]/...` 快捷引用：柔紫（Indexed 141）加粗、无下划线。
 pub fn markdown_ref_content() -> Style {
     Style::default()

@@ -673,6 +673,11 @@ async function runNonChatAction(currentUrl) {
       const [, sid, turnStr, idxStr] = sessionMatch;
       const turnIdx = Math.max(0, Number(turnStr) - 1);
       const imgIdx = Math.max(0, Number(idxStr) - 1);
+      let effectiveSid = sid && sid !== 'temp' ? sid : '';
+      if (!effectiveSid) {
+        const m = String(currentUrl || '').match(/\/app\/([a-zA-Z0-9_-]{8,})/);
+        if (m) effectiveSid = m[1];
+      }
       const readHttpSrc = () =>
         js(String.raw`
           (() => {
@@ -695,15 +700,20 @@ async function runNonChatAction(currentUrl) {
                 .filter((n) => /^https:\/\/lh3\.googleusercontent\.com\/gg\//i.test(n))
                 .map((n) => n.replace(/\?alr=yes$/i, ''))
             ));
-            if (flatIdx >= 0 && flatIdx < ggUrls.length) return ggUrls[flatIdx];
-            if (ggUrls.length > 0) return ggUrls[ggUrls.length - 1];
+            if (
+              flatIdx >= 0 &&
+              flatIdx < ggUrls.length &&
+              ggUrls.length >= allImgs.length
+            ) {
+              return ggUrls[flatIdx];
+            }
             return '';
           })()
         `).catch(() => '');
       // Reload the saved conversation URL so Gemini populates permanent FIFE gg/ URLs in resource timings.
-      if (sid && sid !== 'temp') {
-        if (!currentUrl.includes(sid)) {
-          await openOrReuseTab(HOME + '/' + sid, { wait: true, timeout: 25 });
+      if (effectiveSid) {
+        if (!currentUrl.includes(effectiveSid)) {
+          await openOrReuseTab(HOME + '/' + effectiveSid, { wait: true, timeout: 25 });
         } else if (!(await readHttpSrc())) {
           await cdp('Page.reload', { ignoreCache: false }).catch(() => {});
           await new Promise((r) => setTimeout(r, 1500));
@@ -731,6 +741,41 @@ async function runNonChatAction(currentUrl) {
       : null;
     if ((!fetched || !fetched.buf) && /^https?:\/\//i.test(resolvedFallbackUrl)) {
       fetched = await downloadImageBuffer(frameId, resolvedFallbackUrl);
+    }
+    if ((!fetched || !fetched.buf) && sessionMatch) {
+      const turnIdx = Math.max(0, Number(sessionMatch[2]) - 1);
+      const imgIdx = Math.max(0, Number(sessionMatch[3]) - 1);
+      const dataUrl = await js(`
+        (() => {
+          const responses = Array.from(document.querySelectorAll('model-response'));
+          const mr = responses[${turnIdx}] || responses[responses.length - 1];
+          if (!mr) return '';
+          const imgs = Array.from(
+            mr.querySelectorAll('generated-image img, single-image img, .generated-images img')
+          );
+          const img = imgs[${imgIdx}] || imgs[0];
+          if (!img || !img.complete || img.naturalWidth === 0) return '';
+          try {
+            const c = document.createElement('canvas');
+            c.width = img.naturalWidth;
+            c.height = img.naturalHeight;
+            c.getContext('2d').drawImage(img, 0, 0);
+            return c.toDataURL('image/png');
+          } catch (_) {
+            return '';
+          }
+        })()
+      `).catch(() => '');
+      if (dataUrl && dataUrl.startsWith('data:image/')) {
+        const comma = dataUrl.indexOf(',');
+        if (comma > 0) {
+          fetched = {
+            buf: Buffer.from(dataUrl.slice(comma + 1), 'base64'),
+            contentType: 'image/png',
+            finalUrl: '',
+          };
+        }
+      }
     }
     if (!fetched || !fetched.buf || fetched.buf.length === 0) {
       await emit({ event: 'error', message: 'Failed to download original image from Gemini' });

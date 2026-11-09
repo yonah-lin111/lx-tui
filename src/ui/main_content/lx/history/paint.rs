@@ -140,21 +140,16 @@ impl AssistantRefLine {
             .collect()
     }
 
-    pub(crate) fn button_text(&self, loading_frame: usize) -> Option<String> {
+    pub(crate) fn button_text(&self) -> Option<&'static str> {
         match self.download_state.as_ref()? {
             crate::app::state::OriginalImageDownloadState::Idle => {
-                Some(crate::ui::text::agent::ASSISTANT_IMAGE_DOWNLOAD_ORIGINAL.to_string())
+                Some(crate::ui::text::agent::ASSISTANT_IMAGE_DOWNLOAD_ORIGINAL)
             }
             crate::app::state::OriginalImageDownloadState::Downloading => {
-                const FRAMES: [char; 4] = ['◐', '◓', '◑', '◒'];
-                let glyph = FRAMES[(loading_frame / 2) % FRAMES.len()];
-                Some(format!(
-                    "[{glyph}{}",
-                    crate::ui::text::agent::ASSISTANT_IMAGE_DOWNLOADING_SUFFIX
-                ))
+                Some(crate::ui::text::agent::ASSISTANT_IMAGE_DOWNLOADING)
             }
             crate::app::state::OriginalImageDownloadState::Downloaded { .. } => {
-                Some(crate::ui::text::agent::ASSISTANT_IMAGE_DOWNLOADED.to_string())
+                Some(crate::ui::text::agent::ASSISTANT_IMAGE_DOWNLOADED)
             }
         }
     }
@@ -173,13 +168,13 @@ impl AssistantRefLine {
                 kind: super::CardKind::Attachment { path: path.clone() },
                 card_start: row,
                 card_rows: 1,
-                card_cols: Some((conn_cols, prefix_cols.saturating_add(label_cols))),
+                card_cols: Some((USER_INDENT, prefix_cols.saturating_add(label_cols))),
                 clickable: true,
             });
         }
-        if let Some(btn_text) = self.button_text(0) {
+        if let Some(btn_text) = self.button_text() {
             let btn_col = prefix_cols.saturating_add(label_cols).saturating_add(2);
-            let btn_cols = unicode_width::UnicodeWidthStr::width(btn_text.as_str()) as u16;
+            let btn_cols = unicode_width::UnicodeWidthStr::width(btn_text) as u16;
             let clickable = !matches!(
                 self.download_state,
                 Some(crate::app::state::OriginalImageDownloadState::Downloading)
@@ -365,15 +360,7 @@ impl BlockPaint {
                 }
             }
             Self::RefLines { ref_lines } => {
-                draw_assistant_ref_lines(
-                    grid,
-                    rect,
-                    scroll,
-                    start,
-                    viewport_end,
-                    ref_lines,
-                    history.chat.loading_frame,
-                );
+                draw_assistant_ref_lines(grid, rect, scroll, start, viewport_end, ref_lines);
             }
             Self::Legacy { .. } => draw_legacy(grid, rect, history, source, scroll, start),
         }
@@ -610,7 +597,6 @@ fn draw_assistant_ref_lines(
     mut current_row: usize,
     viewport_end: usize,
     ref_lines: &[AssistantRefLine],
-    loading_frame: usize,
 ) {
     for ref_line in ref_lines {
         let row = current_row;
@@ -647,12 +633,12 @@ fn draw_assistant_ref_lines(
             label_style,
             rect.width.saturating_sub(prefix_cols),
         );
-        if let Some(btn_text) = ref_line.button_text(loading_frame) {
+        if let Some(btn_text) = ref_line.button_text() {
             let btn_col = prefix_cols.saturating_add(label_cols).saturating_add(2);
             if btn_col < rect.width {
                 let btn_style = match &ref_line.download_state {
                     Some(crate::app::state::OriginalImageDownloadState::Downloading) => {
-                        style::user_ref_folder()
+                        style::assistant_image_downloading()
                     }
                     Some(crate::app::state::OriginalImageDownloadState::Downloaded { .. }) => {
                         style::user_ref_file()
@@ -662,7 +648,7 @@ fn draw_assistant_ref_lines(
                 grid.put_clipped(
                     rect.x.saturating_add(btn_col),
                     y,
-                    &btn_text,
+                    btn_text,
                     btn_style,
                     rect.width.saturating_sub(btn_col),
                 );

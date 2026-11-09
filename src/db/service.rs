@@ -656,6 +656,8 @@ impl Persistence {
             Effect::StartChatStream { .. }
             | Effect::StartAiWebStream { .. }
             | Effect::ResetAiWebSession { .. }
+            | Effect::RevealInFileManager { .. }
+            | Effect::DownloadAiWebOriginalImage { .. }
             | Effect::CancelChatStream { .. }
             | Effect::AnswerAsk { .. } => {
                 tracing::warn!("chat network effect reached persistence pump");
@@ -902,6 +904,8 @@ fn is_network_effect(state: &AppState, effect: &Effect) -> bool {
         Effect::StartChatStream { .. }
             | Effect::StartAiWebStream { .. }
             | Effect::ResetAiWebSession { .. }
+            | Effect::RevealInFileManager { .. }
+            | Effect::DownloadAiWebOriginalImage { .. }
             | Effect::CancelChatStream { .. }
             | Effect::AnswerAsk { .. }
             // 进程效应与网络效应同一处置：持久化泵不碰，交给事件层。
@@ -915,6 +919,8 @@ fn is_network_effect(state: &AppState, effect: &Effect) -> bool {
             | Effect::ExecuteRewind(_)
             | Effect::ExecuteCompact(_)
             | Effect::RevertCompact(_)
+            | Effect::RevertModelSwitch(_)
+            | Effect::DeleteRecap(_)
             | Effect::GenerateSessionTitle { .. }
             | Effect::GenerateRecap { .. }
             | Effect::GeneratePromptBlockTitle { .. }
