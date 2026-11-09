@@ -3,7 +3,7 @@
 - **特性目录**：`docs/feature/lx-mention-subagents-tab/`
 - **关联任务**：[`task.md`](task.md)
 - **目标范围**：`src/app/markdown/`、`src/app/prompt/mention.rs`、`src/app/state/lx/`、`src/app/update/`、`src/ui/mention.rs`、`src/ui/main_content/lx/mention.rs`、`src/ui/text/workspace.rs`、`src/chat/prepare/`、`src/event/inventory.rs`、`src/event/chat/`、`src/db/service/chat.rs`
-- **当前状态**：**已完成**
+- **当前状态**：**已完成并合并到 `dev`（merge commit `b8d8533c`）**
 
 ---
 

@@ -1,7 +1,9 @@
 # lx 输入框 `@` 命令新增 `Subagents` Tab — 实施任务拆解 (`task.md`)
 
 - **关联设计**：[`design.md`](design.md)
+- **关联复审**：[`review.md`](review.md)
 - **执行前提**：用户审核确认 `design.md` 与本 `task.md` 后，按以下任务顺序逐步落地并执行精准校验。
+- **当前状态**：T1–T7 全部完成，已合并到 `dev`（merge commit `b8d8533c`）。
 
 ---
 

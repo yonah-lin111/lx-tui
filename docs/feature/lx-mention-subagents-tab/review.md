@@ -1,9 +1,9 @@
 # lx `@` 提及 `Subagents` Tab、`lx-guide` 自省 Skill 与 `<subagent_reference>` — Review 与修复清单 (`review.md`)
 
 - **特性目录**：`docs/feature/lx-mention-subagents-tab/`
-- **Review 基线**：`feat/lx-mention-subagents-tab` @ `a293fb3c`（worktree `.worktrees/lx-mention-subagents-tab`；分支基点 `42e70535`，当前 `dev` 为 `fac77938`）
-- **修复提交**：见 `git log` 中 `fix(lx): close subagent mention and lx-guide review findings`
-- **合并状态**：未合并（等待用户确认并先与最新 `dev` 对齐）
+- **Review 基线**：`feat/lx-mention-subagents-tab` @ `a293fb3c`（worktree `.worktrees/lx-mention-subagents-tab`；分支基点 `42e70535`，合并前 `dev` 为 `fac77938`）
+- **修复提交**：`236145a7`（`fix(lx): close subagent mention and lx-guide review findings`）
+- **合并提交**：`b8d8533c`（`Merge branch 'feat/lx-mention-subagents-tab' into dev`）
 - **关联文档**：
   - [design.md](design.md)
   - [task.md](task.md)
@@ -203,18 +203,23 @@
 
 ---
 
-## 5. 复审后验证
+## 5. 复审与合并后验证
 
-在 `.worktrees/lx-mention-subagents-tab` 执行：
+### 5.1 合并前（worktree）
 
 - `rtk cargo fmt --check`：通过
 - `rtk cargo clippy --all-targets -- -D warnings`：通过（0 warnings）
-- `rtk cargo test --lib -- skills::discover event::chat::tests::subagent_roles settings::service::tests cli::tests::config_domains_tests app::state::lx::mention chat::prepare ui::main_content::lx::tests app::update::tests`：**461 passed, 0 failed**
+- 受影响模块精准回归（`skills::discover`、`event::chat::tests::subagent_roles`、`settings::service::tests`、`cli::tests::config_domains_tests`、`app::state::lx::mention`、`chat::prepare`、`ui::main_content::lx::tests`、`app::update::tests`）：**461 passed, 0 failed**
 - `rtk cargo test --lib`：**4918 passed, 1 failed, 4 ignored**
-- 唯一失败项 `db::chat::subagent::tests::dev_database_copy_migrates_to_current_version_and_passes_integrity_check` 报 `UnsupportedSchema(25)`：
-  - 原因：本分支基于 `dev@42e70535`（`SCHEMA_VERSION = 24`），而开发库已被最新 `dev` 的 recap 特性迁移到 v25；该测试读取真实开发库并迁移，与本特性代码无关。
-  - 交叉验证：在主 checkout 的 `dev` 上运行同一测试通过（`1 passed`）。
-  - 处理：合并最新 `dev` 后该测试自然恢复；本分支未新增数据库迁移，无需改动 `SCHEMA_VERSION`。
+- 唯一失败项 `db::chat::subagent::tests::dev_database_copy_migrates_to_current_version_and_passes_integrity_check` 报 `UnsupportedSchema(25)`：分支基点为 `dev@42e70535`（`SCHEMA_VERSION = 24`），开发库已被最新 `dev` 迁移到 v25；在 `dev` 上运行同一测试通过，确认与环境版本错位有关，与本特性代码无关。
+
+### 5.2 合并后（dev）
+
+- 合并方式：`git merge --no-ff feat/lx-mention-subagents-tab`；11 个双方均修改的文件（含 `src/event/chat/mod.rs`、`src/app/state/{pane,lx}.rs`、`src/ui/text.rs`、`src/app/update/{tests,workspace,chat/subagent}.rs`）全部自动合并，无冲突。
+- `rtk cargo fmt --check`：通过
+- `rtk cargo clippy --all-targets -- -D warnings`：通过（0 warnings）
+- `node --check assets/settings_skills.js`：通过
+- `rtk cargo test`：**5047 passed, 4 ignored, 0 failed**（16 个测试套件；`SCHEMA_VERSION = 25`，原 `UnsupportedSchema(25)` 问题随合并消失）
 
 ---
 
