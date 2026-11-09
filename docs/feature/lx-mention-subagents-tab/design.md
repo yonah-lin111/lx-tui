@@ -676,8 +676,9 @@ turn_reference_blocks.extend(subagent::snapshot::subagent_reference_blocks(
      - 双意图 `guidance`：若用户在询问该实例的任务、状态或进展，直接基于上述信息回答（或调用 `list_agents` 查看会话树），**禁止搜索工作区文件**；若用户在追加指令或等待结果，优先调用 `send_input` / `wait_agent`。
 
 2. **层 2：内嵌 `lx-guide` 系统级自省 Skill（`src/skills/system.rs` + `src/skills/assets/lx-guide/`）**
-   - 对标 Codex `install_system_skills`：通过 `include_str!` 将 `lx-guide`（`SKILL.md`、`references/subagents.md`、`references/commands-and-mentions.md`）编译进二进制。
+   - 对标 Codex `install_system_skills`：通过 `include_str!` 将 `lx-guide`（`SKILL.md`、`references/tools.md`、`references/subagents.md`、`references/commands-and-mentions.md`）编译进二进制。
    - 启动/扫描时调用 `skills::install_system_skills(&user_root)`，将内嵌文件同步到 `<data>/skills/.system/lx-guide/`，并写入内容指纹 `.lx-system-skills.marker`（指纹一致时直接跳过写盘，零多余 IO）。
+   - `references/tools.md` 完整记录 `lx` 的工具面矩阵（`Main` 18 / `ExecMain` 17 / `ExecutorCoordinator` 15 / `Executor` 7 / `Monitor` 4 / `Explorer` 3）、文件与代码工具（`read` 文本+图片多模态与 `file_version`、`edit` 的 `*** Begin Patch` 语法与 `read_versions` 乐观锁、`write`、`search`）、进程工具（`exec_command`、`write_stdin` 与 `!<cmd>`）、交互/检索/计划工具（`web_search`、`ask`、`update_plan`、`curr_time`）以及 MCP 动态工具与 3 个资源工具（`list_resources`、`list_resource_templates`、`read_resource`）。
    - `SkillSource` 新增 `System`（`"system"`，只读不可编辑/删除，默认启用且支持在设置页与 `skills.json` 中开关），`skills::discover` 在用户级根之后扫描 `<user_root>/.system`（优先级：`Project::Lx` → `Project::Agents` → `User::Lx` → `User::Agents` → `User::System`），因此在系统提示 `## Skills`、`@` 提及面板 `Skills` Tab 与浏览器设置页中均开箱可见。
 
 ---

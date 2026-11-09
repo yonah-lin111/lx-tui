@@ -197,6 +197,7 @@
 
 - **涉及文件**：
   - `src/skills/assets/lx-guide/SKILL.md`
+  - `src/skills/assets/lx-guide/references/tools.md`
   - `src/skills/assets/lx-guide/references/subagents.md`
   - `src/skills/assets/lx-guide/references/commands-and-mentions.md`
   - `src/skills/system.rs`

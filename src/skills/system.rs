@@ -18,6 +18,10 @@ const LX_GUIDE_FILES: &[(&str, &str)] = &[
         include_str!("assets/lx-guide/SKILL.md"),
     ),
     (
+        "lx-guide/references/tools.md",
+        include_str!("assets/lx-guide/references/tools.md"),
+    ),
+    (
         "lx-guide/references/subagents.md",
         include_str!("assets/lx-guide/references/subagents.md"),
     ),

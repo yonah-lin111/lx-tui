@@ -124,8 +124,20 @@ fn install_system_skills_is_idempotent_and_discovered_as_readonly_system_skill()
     crate::skills::install_system_skills(&user).expect("install system skills");
     let guide = user.join(".system").join("lx-guide");
     assert!(guide.join("SKILL.md").is_file());
+    assert!(guide.join("references/tools.md").is_file());
     assert!(guide.join("references/subagents.md").is_file());
     assert!(guide.join("references/commands-and-mentions.md").is_file());
+    let tools =
+        std::fs::read_to_string(guide.join("references/tools.md")).expect("tools reference");
+    assert!(tools.contains("edit"), "tools reference documents edit");
+    assert!(
+        tools.contains("*** Begin Patch"),
+        "tools reference documents the patch envelope"
+    );
+    assert!(
+        tools.contains("list_resources"),
+        "tools reference documents MCP resource tools"
+    );
     let marker = user.join(".system").join(".lx-system-skills.marker");
     let fingerprint = std::fs::read_to_string(&marker).expect("marker");
     assert!(!fingerprint.trim().is_empty());
