@@ -369,6 +369,23 @@ pub fn apply_lx_input(state: &mut AppState, command: LxInput) {
             return;
         }
     }
+    // 空输入 Backspace：撤回最近一条待生效 steer（有内容时仍是正常删字）。
+    let recall_steer = command == LxInput::Backspace
+        && lx.input.is_empty()
+        && lx.cursor == 0
+        && !lx.has_text_selection()
+        && lx.input_mode() == crate::app::state::LxInputMode::Chat
+        && lx.panel.is_none()
+        && lx.slash.is_none()
+        && !lx.chat.pending_steers.is_empty()
+        && matches!(
+            lx.chat.request,
+            crate::app::state::RequestState::Streaming { .. }
+        );
+    if recall_steer {
+        super::chat::recall_last_lx_steer(state, pane_id);
+        return;
+    }
     let panel_open = lx.panel.is_some();
     match command {
         LxInput::Up if panel_open => lx.panel_move(-1),

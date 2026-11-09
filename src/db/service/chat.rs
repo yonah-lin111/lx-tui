@@ -274,6 +274,30 @@ impl Persistence {
         db.finish_tool_call(workspace, ticket, result)
     }
 
+    /// steer 提交：同一事务关闭旧 streaming assistant 并开启新轮；失败不产生半轮。
+    #[allow(clippy::too_many_arguments)]
+    pub fn begin_steer_turn(
+        &self,
+        workspace: &Path,
+        session_id: &str,
+        previous_assistant_id: &str,
+        previous_parts: &[crate::db::chat::ChatPart],
+        user_text: &str,
+        attachments: &[crate::db::chat::MessageAttachmentInput],
+        model: &crate::db::chat::ModelSnapshot,
+    ) -> crate::db::Result<crate::db::chat::TurnCommitted> {
+        let db = self.db.as_ref().ok_or(crate::db::DbError::Unavailable)?;
+        db.begin_steer_turn(
+            workspace,
+            session_id,
+            previous_assistant_id,
+            previous_parts,
+            user_text,
+            attachments,
+            model,
+        )
+    }
+
     /// 工具 pending 前的 parts 快照同步：让 DB 的时间线位置与 app 步骤时间线一致。
     ///
     /// `begin_tool_call` 按该消息内 parts/tools 的 `MAX(position) + 1` 分配工具位置，

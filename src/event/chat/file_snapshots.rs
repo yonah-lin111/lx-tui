@@ -44,7 +44,8 @@ pub struct HostRecorderFactory {
     sender: mpsc::UnboundedSender<AppEvent>,
     workspace: PathBuf,
     session_id: String,
-    user_message_id: String,
+    /// 当前 mutation 归属的 user message id；steer 生效时由事件层原地更新。
+    user_message_id: Arc<std::sync::RwLock<String>>,
 }
 
 impl HostRecorderFactory {
@@ -52,7 +53,7 @@ impl HostRecorderFactory {
         sender: mpsc::UnboundedSender<AppEvent>,
         workspace: PathBuf,
         session_id: String,
-        user_message_id: String,
+        user_message_id: Arc<std::sync::RwLock<String>>,
     ) -> Self {
         Self {
             sender,
@@ -65,11 +66,16 @@ impl HostRecorderFactory {
 
 impl MutationRecorderFactory for HostRecorderFactory {
     fn for_call(&self, call_id: &str) -> Arc<dyn MutationRecorder> {
+        let user_message_id = self
+            .user_message_id
+            .read()
+            .map(|id| id.clone())
+            .unwrap_or_else(|poison| poison.into_inner().clone());
         Arc::new(HostRecorder {
             sender: self.sender.clone(),
             workspace: self.workspace.clone(),
             session_id: self.session_id.clone(),
-            user_message_id: self.user_message_id.clone(),
+            user_message_id,
             tool_call_id: call_id.to_string(),
         })
     }

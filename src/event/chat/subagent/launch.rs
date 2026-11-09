@@ -211,7 +211,7 @@ pub(super) fn launch_child_turn(
         net_sender.clone(),
         workspace.to_path_buf(),
         record.child_session_id.clone(),
-        child_user_message_id.to_string(),
+        std::sync::Arc::new(std::sync::RwLock::new(child_user_message_id.to_string())),
     );
     let executor = AgentTools::new(manager, turn)
         .with_recorder(std::sync::Arc::new(recorder))

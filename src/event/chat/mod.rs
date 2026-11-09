@@ -15,6 +15,7 @@ pub mod recap;
 pub mod rewind;
 mod runtime;
 pub(crate) mod skills;
+pub(crate) mod steer;
 pub(crate) mod subagent;
 mod timeline;
 pub mod title;
@@ -93,6 +94,8 @@ pub struct ChatStreams {
     /// 会话的 **DB 工作区键**（`/resume` 共享键，通常是仓库主 checkout），不是工具执行
     /// cwd：linked worktree 里执行时仍用共享键落库，用执行 cwd 会报 `workspace missing`。
     db_workspaces: HashMap<RequestKey, PathBuf>,
+    /// 本轮 mutation 归属的当前 user message id；steer 生效时原地更新。
+    mutation_users: HashMap<RequestKey, std::sync::Arc<std::sync::RwLock<String>>>,
     /// 本轮持有的跨进程 session guard；直到终态才释放。
     guards: HashMap<RequestKey, crate::platform::FileGuard>,
     /// `BeginChatTurn` 之前就取得的 guard：续轮必须在 DB 事务之前锁住会话。
@@ -241,6 +244,7 @@ impl ChatStreams {
         self.cancels.remove(key);
         self.checkpoints.remove(key);
         self.db_workspaces.remove(key);
+        self.mutation_users.remove(key);
         self.guards.remove(key);
         self.user_shell_injected.remove(key);
         self.pending_begins.retain(|pending| &pending.key != key);
@@ -745,14 +749,6 @@ fn start_stream(
         .insert(key.clone(), session_key.clone());
     // spawn 时冻结的模型：父会话登记一份，子 agent 从这里取。
     streams.frozen.insert(key.session.clone(), frozen.clone());
-    // 运行实例：同一聊天会话跨轮复用同一进程管理器；本轮执行上下文独立。
-    let turn_slot = key.session.clone();
-    let Some(runtime) = streams.runtime_for(prepared.cwd.clone(), &turn_slot) else {
-        // 没有进程事件通道（测试或非进程环境）：仍可执行文件工具，进程工具按失败返回。
-        fail_turn(sender, key, "process runtime unavailable");
-        return true;
-    };
-    let turn = runtime.turn(&key.generation.to_string());
     // 每轮绑定稳定 user message id：文件 mutation 的归属来自这里，不按 turn_index 猜。
     let Some(user_message_id) = state.pane_anywhere(key.pane).and_then(|pane| {
         pane.lx
@@ -767,11 +763,23 @@ fn start_stream(
         fail_turn(sender, key, "user message unavailable");
         return true;
     };
+    let mutation_user = std::sync::Arc::new(std::sync::RwLock::new(user_message_id));
+    streams
+        .mutation_users
+        .insert(key.clone(), mutation_user.clone());
+    // 运行实例：同一聊天会话跨轮复用同一进程管理器；本轮执行上下文独立。
+    let turn_slot = key.session.clone();
+    let Some(runtime) = streams.runtime_for(prepared.cwd.clone(), &turn_slot) else {
+        // 没有进程事件通道（测试或非进程环境）：仍可执行文件工具，进程工具按失败返回。
+        fail_turn(sender, key, "process runtime unavailable");
+        return true;
+    };
+    let turn = runtime.turn(&key.generation.to_string());
     let recorder = file_snapshots::HostRecorderFactory::new(
         sender.clone(),
         session_key.clone(),
         key.session.clone(),
-        user_message_id,
+        mutation_user,
     );
     // 读后版本保护：登记表按会话隔离，跨轮保留（读过的文件在后续轮次仍可用同一 token）。
     let reads = crate::chat::tools::read_registry(&key.session);
@@ -980,6 +988,13 @@ pub fn handle_agent_host_event(
             // 只读握手：命令结果仍以数据库为事实来源。
             let updates = user_shell::poll_updates(state, streams, persistence, &key);
             let _ = reply.send(updates);
+            false
+        }
+        AgentHostEvent::SteerInputs { key, reply } => {
+            steer::deliver(state, streams, persistence, key, reply)
+        }
+        AgentHostEvent::HasPendingSteers { key, reply } => {
+            let _ = reply.send(steer::has_pending(state, &key));
             false
         }
         AgentHostEvent::Subagent {

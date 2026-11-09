@@ -489,6 +489,8 @@ fn pump(
                 AgentHostEvent::Subagent { .. } => {
                     // 子 agent 不在这些用例的覆盖范围（需要真实 DB 与运行时）。
                 }
+                // steer 的 event 层处理由独立测试覆盖；这里不消费 pending。
+                AgentHostEvent::SteerInputs { .. } | AgentHostEvent::HasPendingSteers { .. } => {}
                 AgentHostEvent::BeginTool { call, .. } => trace
                     .lock()
                     .expect("lock")
@@ -718,6 +720,7 @@ mod guard;
 mod limits;
 mod process_tools;
 mod resume;
+mod steer;
 mod subagent;
 mod subagent_roles;
 mod user_shell;

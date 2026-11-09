@@ -229,6 +229,30 @@ impl ModelContext {
         }
     }
 
+    /// 注入一次当前轮的 steer 输入：用户消息（含图片）与随行 skill 正文块。
+    ///
+    /// 与 turn 起点 assembly 一致：skill 块排在当前用户消息之后；工具与模型快照
+    /// 在本轮内保持冻结，usage/billing 也不重置。
+    pub(super) fn push_steer_input(&mut self, input: super::SteerInput) {
+        // turns：旧纯文本视图也要能看到 steer（transports 的 items 为空时才回退）。
+        self.request.turns.push(crate::chat::events::ChatTurn {
+            role: "user".into(),
+            text: input.text.clone(),
+            reasoning_metadata: None,
+        });
+        if input.images.is_empty() {
+            self.items.push(ModelItem::UserText(input.text));
+        } else {
+            self.items.push(ModelItem::UserContent {
+                text: input.text,
+                images: input.images,
+            });
+        }
+        for block in input.skill_blocks {
+            self.items.push(ModelItem::UserText(block));
+        }
+    }
+
     /// 追加一条本地命令结果（user 角色事实，排在已闭合工具对之后）。
     ///
     /// 同时进入 `turns` 纯文本视图与 `items` 结构化视图：不支持 item 的 transport

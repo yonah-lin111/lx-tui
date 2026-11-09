@@ -43,6 +43,7 @@ mod history_hit;
 pub(crate) mod notice;
 pub(crate) mod slash;
 pub(crate) mod status;
+pub(crate) mod steer_strip;
 pub(crate) mod task;
 pub(crate) mod toast;
 
@@ -235,6 +236,8 @@ struct Layout {
     input_visible: usize,
     /// 输入框上方聊天栏（loading 转轮 + 右端回到底部按钮）；无则为 None。
     chat_bar: Option<Rect>,
+    /// 聊天栏上方的 pending steer 提示区（每条一行，最多 `MAX_VISIBLE` 行）；无则为 None。
+    pending: Option<Rect>,
     /// 后台任务**输出容器**矩形：占用原历史区（消息列表的位置）；未打开时为 None。
     task_output: Option<Rect>,
     /// 后台任务 **item 列表**矩形：仍在输入框原来的位置（替换输入框）；未打开时为 None。
@@ -258,6 +261,7 @@ impl Layout {
             input_scroll: 0,
             input_visible: 0,
             chat_bar: None,
+            pending: None,
             task_output: None,
             task_list: None,
             panel: None,
@@ -354,6 +358,17 @@ fn layout(area: Rect, lx: &Lx) -> Layout {
         out.chat_bar = chat_bar::rect(area, input);
     }
 
+    // pending steer 提示区：贴在聊天栏（无聊天栏时贴输入框）上沿，最多 `MAX_VISIBLE` 行。
+    // task/ask 打开时 `height` 为 0；上方放不下的极小窗格整块隐藏，避免压到顶边。
+    let bar_top = out.chat_bar.map_or(input.y, |bar| bar.y);
+    let pending_h = steer_strip::height(lx);
+    if pending_h > 0
+        && let Some(y) = bar_top.checked_sub(pending_h)
+        && y >= area.y
+    {
+        out.pending = Some(Rect::new(input.x, y, input.width, pending_h));
+    }
+
     // 后台任务面板：**两段式**布局（用户明确要求）
     //
     //   ┌──────────────────────────────┐
@@ -368,7 +383,7 @@ fn layout(area: Rect, lx: &Lx) -> Layout {
     // 输出容器吃掉**历史区**（`history_rect` 同一份几何），item 列表继续占输入框
     // 矩形并沿用原本的固定高度；两者之间是面板自己的分隔行。
     if lx.task.is_some() {
-        let bottom = out.chat_bar.map_or(input.y, |bar| bar.y);
+        let bottom = stack_top(&out, input);
         let height = bottom.saturating_sub(area.y);
         if height > 0 {
             out.task_output = Some(Rect::new(input.x, area.y, input.width, height));
@@ -376,8 +391,8 @@ fn layout(area: Rect, lx: &Lx) -> Layout {
         out.task_list = Some(input);
     }
 
-    // md 格式面板：贴输入框上方（聊天栏之上）；后台任务页打开时或放不下则省略。
-    let panel_base = out.chat_bar.map_or(input.y, |bar| bar.y);
+    // md 格式面板：贴输入框上方（聊天栏与 pending 提示区之上）；后台任务页打开时或放不下则省略。
+    let panel_base = stack_top(&out, input);
     if lx.task.is_none()
         && let Some(panel) = lx.panel.as_ref()
     {
@@ -418,8 +433,8 @@ fn layout(area: Rect, lx: &Lx) -> Layout {
     let entries_fit = horizontal || max_label <= content_w;
 
     let tip_h = ENTRY_HEIGHT;
-    // 入口区与 Tip 的上限：输入框上沿（有聊天栏时为其上沿）。
-    let top_limit = out.chat_bar.map_or(input.y, |bar| bar.y);
+    // 入口区与 Tip 的上限：pending 提示区 / 聊天栏（有其一）上沿。
+    let top_limit = stack_top(&out, input);
 
     // 入口按钮行对齐窗格垂直中心（与主区/prompt 交换按钮同一行），且不与输入框重叠。
     let center = area.y + area.height / 2;
@@ -484,6 +499,30 @@ fn layout(area: Rect, lx: &Lx) -> Layout {
         }
     }
     out
+}
+
+/// 输入框上方堆叠区（pending 提示区 → 聊天栏 → 输入框）的最上沿。
+fn stack_top(lay: &Layout, input: Rect) -> u16 {
+    lay.pending.map_or_else(
+        || lay.chat_bar.map_or(input.y, |bar| bar.y),
+        |pending| pending.y,
+    )
+}
+
+/// 历史区底边：pending 提示区上沿 > 聊天栏上沿 > 输入框/ask/task 列表上沿。
+fn history_bottom(area: Rect, lay: &Layout) -> u16 {
+    if let Some(pending) = lay.pending {
+        return pending.y;
+    }
+    let bottom_box = lay.input.or(lay.ask).or(lay.task_list);
+    if bottom_box.is_some() {
+        lay.chat_bar.map_or_else(
+            || bottom_box.map(|rect| rect.y).unwrap_or(area.bottom()),
+            |bar| bar.y,
+        )
+    } else {
+        area.bottom()
+    }
 }
 
 /// 放置入口标签：横排整体居中、竖排逐行居中。
@@ -603,20 +642,13 @@ fn build_chat(
     let mut grid = Grid::new(area);
     // 输入框、ask 面板与后台任务列表占据同一矩形：历史区上沿与宽度都跟它走。
     let bottom_box = lay.input.or(lay.ask).or(lay.task_list);
-    let history_bottom = if bottom_box.is_some() {
-        lay.chat_bar.map_or_else(
-            || bottom_box.map(|input| input.y).unwrap_or(area.bottom()),
-            |bar| bar.y,
-        )
-    } else {
-        area.bottom()
-    };
-    // 历史区与输入框同宽对齐（列 = 输入框列），高度到输入框（或聊天栏）上沿。
+    let bottom = history_bottom(area, lay);
+    // 历史区与输入框同宽对齐（列 = 输入框列），高度到 pending 提示区 / 聊天栏 / 输入框上沿。
     let history_rect = Rect::new(
         bottom_box.map(|input| input.x).unwrap_or(area.x),
         area.y,
         bottom_box.map(|input| input.width).unwrap_or(area.width),
-        history_bottom.saturating_sub(area.y),
+        bottom.saturating_sub(area.y),
     );
     // 历史视图：滚动偏移 / body（置顶行让位）/ 置顶行结论，统一由纯函数给出。
     //
@@ -653,6 +685,10 @@ fn build_chat(
         history::sticky_rect(&history_view)
     };
 
+    // pending steer 提示区：在历史之后、聊天栏/输入框之前绘制（不写选区、不进复制）。
+    if let Some(rect) = lay.pending {
+        steer_strip::draw(&mut grid, rect, lx);
+    }
     chat_bar::draw(&mut grid, lay.chat_bar, lx);
     let mut cursor = None;
     // 后台任务面板：输出容器占原消息列表位置，item 列表仍在原输入框位置。
@@ -698,11 +734,8 @@ pub fn history_rect(area: Rect, lx: &Lx) -> Option<Rect> {
     }
     let lay = layout(area, lx);
     let bottom_box = lay.input.or(lay.ask).or(lay.task_list);
-    // 历史区上沿到输入框（有聊天栏时为其上沿）。
-    let bottom = lay.chat_bar.map_or_else(
-        || bottom_box.map(|input| input.y).unwrap_or(area.bottom()),
-        |bar| bar.y,
-    );
+    // pending 提示区 > 聊天栏 > 输入框上沿。
+    let bottom = history_bottom(area, &lay);
     let height = bottom.saturating_sub(area.y);
     if height == 0 {
         return None;

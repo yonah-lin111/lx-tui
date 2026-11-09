@@ -1,5 +1,7 @@
 //! 聊天持久化测试：轮次事务、checkpoint 覆盖、终态幂等、恢复与跨工作区隔离。
 
+mod steer;
+
 use std::path::PathBuf;
 
 use super::*;

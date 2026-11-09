@@ -3,6 +3,7 @@
 //! 这里证明的是**编排不变量**：ordinal 串行顺序、DB ack 门槛、取消语义、限额与 usage
 //! 累加。端到端（真 DB + 真文件 + 事件层握手）由 `src/event/chat/tests.rs` 覆盖。
 
+use std::collections::VecDeque;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
@@ -24,6 +25,20 @@ enum HostTrace {
     Finish(String, bool),
 }
 
+/// 脚本化的 `take_steer_inputs` 回执队列；用尽后返回空批次。
+type SteerScript = VecDeque<Result<Vec<SteerInput>, HostError>>;
+
+/// steer 相关往返的可观测顺序（与工具 trace 分开，避免影响旧用例的精确断言）。
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum SteerTrace {
+    /// `take_steer_inputs`
+    Take,
+    /// `has_pending_steers` 的回执值
+    HasPending(bool),
+    /// `notify_auto_compact`（压缩检查点已持久化）
+    AutoCompact,
+}
+
 /// 可控 host：记录每次请求，并按脚本注入失败。
 #[derive(Clone)]
 struct RecordingHost {
@@ -40,6 +55,12 @@ struct RecordingHost {
     subagent_result: Arc<Mutex<Result<crate::chat::agent::SubagentOutcome, HostError>>>,
     /// 收到的子 agent 控制操作（断言有没有真正下发给事件层）。
     subagent_ops: Arc<Mutex<Vec<crate::chat::agent::SubagentOp>>>,
+    /// 依次消费的 steer 批次；用尽后返回空批次。
+    steer_batches: Arc<Mutex<SteerScript>>,
+    /// 依次消费的 `has_pending_steers` 回执；用尽后 false。
+    pending_steers: Arc<Mutex<VecDeque<bool>>>,
+    /// steer / 压缩的调用顺序。
+    steer_trace: Arc<Mutex<Vec<SteerTrace>>>,
 }
 
 impl Default for RecordingHost {
@@ -52,6 +73,9 @@ impl Default for RecordingHost {
             ask_result: Arc::new(Mutex::new(Ok(AskAnswers::new()))),
             subagent_result: Arc::new(Mutex::new(Err(HostError::Cancelled))),
             subagent_ops: Arc::new(Mutex::new(Vec::new())),
+            steer_batches: Arc::new(Mutex::new(VecDeque::new())),
+            pending_steers: Arc::new(Mutex::new(VecDeque::new())),
+            steer_trace: Arc::new(Mutex::new(Vec::new())),
         }
     }
 }
@@ -101,6 +125,34 @@ impl RecordingHost {
     fn trace(&self) -> Vec<HostTrace> {
         self.trace.lock().expect("lock").clone()
     }
+
+    /// 下一次 `take_steer_inputs` 返回这一批 steer。
+    fn with_steer_batch(self, inputs: Vec<SteerInput>) -> Self {
+        self.steer_batches
+            .lock()
+            .expect("lock")
+            .push_back(Ok(inputs));
+        self
+    }
+
+    /// 下一次 `take_steer_inputs` 注入错误。
+    fn with_steer_error(self, error: HostError) -> Self {
+        self.steer_batches
+            .lock()
+            .expect("lock")
+            .push_back(Err(error));
+        self
+    }
+
+    /// 依次返回 `has_pending_steers` 的探测结果；用尽后 false。
+    fn with_pending_steers(self, pending: impl IntoIterator<Item = bool>) -> Self {
+        self.pending_steers.lock().expect("lock").extend(pending);
+        self
+    }
+
+    fn steer_trace(&self) -> Vec<SteerTrace> {
+        self.steer_trace.lock().expect("lock").clone()
+    }
 }
 
 impl AgentHost for RecordingHost {
@@ -108,6 +160,32 @@ impl AgentHost for RecordingHost {
         match request {
             AgentHostRequest::UserShellUpdates { reply } => {
                 let _ = reply.send(Vec::new());
+            }
+            AgentHostRequest::SteerInputs { reply } => {
+                self.steer_trace
+                    .lock()
+                    .expect("lock")
+                    .push(SteerTrace::Take);
+                let result = self
+                    .steer_batches
+                    .lock()
+                    .expect("lock")
+                    .pop_front()
+                    .unwrap_or_else(|| Ok(Vec::new()));
+                let _ = reply.send(result);
+            }
+            AgentHostRequest::HasPendingSteers { reply } => {
+                let pending = self
+                    .pending_steers
+                    .lock()
+                    .expect("lock")
+                    .pop_front()
+                    .unwrap_or(false);
+                self.steer_trace
+                    .lock()
+                    .expect("lock")
+                    .push(SteerTrace::HasPending(pending));
+                let _ = reply.send(pending);
             }
             AgentHostRequest::Subagent { op, reply, .. } => {
                 self.subagent_ops.lock().expect("lock").push(op);
@@ -186,6 +264,17 @@ impl AgentHost for RecordingHost {
                 });
             }
         }
+    }
+
+    fn notify_auto_compact(
+        &mut self,
+        _notice: &crate::chat::compact::AutoCompactNotice,
+    ) -> impl std::future::Future<Output = Result<(), HostError>> + Send {
+        self.steer_trace
+            .lock()
+            .expect("lock")
+            .push(SteerTrace::AutoCompact);
+        async { Ok(()) }
     }
 }
 
@@ -665,6 +754,7 @@ async fn unclosed_tool_input_fails_without_execution() {
 mod ask_turn;
 mod context;
 mod limits;
+mod steer;
 
 /// 子 agent 上下文里伪造控制工具：必须按工具级失败回给模型，且不触发 host。
 #[tokio::test]

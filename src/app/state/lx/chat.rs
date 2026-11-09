@@ -11,6 +11,7 @@ use crate::db::chat::Usage;
 pub mod file_diff;
 mod image;
 pub mod shell;
+pub mod steer;
 mod steps;
 mod stream;
 pub mod subagent_view;
@@ -20,6 +21,7 @@ mod usage;
 pub use file_diff::{DiffHunkView, DiffLineView, FileChangeView, FileDiffDetailView, FileDiffView};
 pub use image::{GeneratedImageOriginal, OriginalImageDownloadState};
 pub use shell::{PendingShell, QueuedSubmission, UserShellView};
+pub use steer::{PendingSteer, SteerBatch, build_batch};
 pub use steps::{
     AssistantStepView, ChatMessageView, ChatPartView, ToolCallView, ToolStatus, ToolSummary,
     relativize_project_path,
@@ -552,6 +554,10 @@ pub struct LxChat {
     pub pending_shells: Vec<PendingShell>,
     /// 忙时排队、空闲后按 FIFO 分派的提交（只保存在内存，重启不执行）。
     pub queue: Vec<QueuedSubmission>,
+    /// 已提交、尚未注入当前轮的 steer（按提交顺序；只存在内存）。
+    pub pending_steers: Vec<PendingSteer>,
+    /// 正常结束后正在提升为下一轮的 pending 条数；`on_turn_committed` 据此消费。
+    pub promoting_steers: usize,
     /// 当前所属项目根目录（用于剥离工具卡片里的当前项目绝对路径前缀）。
     pub project_root: Option<std::path::PathBuf>,
     /// 当前会话在输入框顶边框右上角展示的标题胶囊文本（自动生成完成、手动 `/rename` 或 `/resume` 恢复时写入）。
@@ -658,6 +664,8 @@ impl LxChat {
             plan: None,
             pending_shells: Vec::new(),
             queue: Vec::new(),
+            pending_steers: Vec::new(),
+            promoting_steers: 0,
             project_root: None,
             session_title: None,
             session_title_palette: 0,
@@ -733,6 +741,8 @@ impl LxChat {
         // 会话解绑：未执行的命令与排队项不得漂移到新会话执行。
         self.pending_shells.clear();
         self.queue.clear();
+        self.pending_steers.clear();
+        self.promoting_steers = 0;
         self.expanded_user_messages.clear();
         self.session_title = None;
         self.session_title_palette = 0;

@@ -20,6 +20,8 @@ pub(crate) use super::slash::finish_model_selection;
 
 /// `/new`：解绑当前窗格会话；在途请求继续按原 session 完成写入。
 pub fn new_session(state: &mut AppState, pane: PaneId) -> bool {
+    // 未生效 steer 不搬进新会话：先提示并清空。
+    super::steer::discard_for_session_change(state, pane);
     let Some(target) = state.pane_mut_anywhere(pane) else {
         return false;
     };
@@ -184,11 +186,17 @@ pub fn on_session_loaded_full(
 ) -> bool {
     let models = state.models.clone();
     let project_root = state.project_root_for_pane(pane);
+    let session_changed = state
+        .pane_anywhere(pane)
+        .is_some_and(|target| target.lx.chat.session_id.as_deref() != Some(session_id));
+    if session_changed {
+        // 未生效 steer 不搬进新会话：先提示并清空。
+        super::steer::discard_for_session_change(state, pane);
+    }
     let Some(target) = state.pane_mut_anywhere(pane) else {
         return false;
     };
     target.lx.chat.loading_session = false;
-    let session_changed = target.lx.chat.session_id.as_deref() != Some(session_id);
     if session_changed {
         // Agents 面板属于会话：不清理会把上一会话的 run、计数和 ^d 目标带过来。
         target.lx.clear_agents();
@@ -329,6 +337,12 @@ pub fn delete_session(state: &mut AppState, pane: PaneId, session_id: &str) -> b
 
 /// 删除完成：解绑当前窗格（若正是该会话）。
 pub fn on_session_deleted(state: &mut AppState, pane: PaneId, session_id: &str) -> bool {
+    let was_current = state
+        .pane_anywhere(pane)
+        .is_some_and(|target| target.lx.chat.session_id.as_deref() == Some(session_id));
+    if was_current {
+        super::steer::discard_for_session_change(state, pane);
+    }
     let Some(target) = state.pane_mut_anywhere(pane) else {
         return false;
     };

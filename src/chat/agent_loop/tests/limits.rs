@@ -196,6 +196,12 @@ async fn cancel_after_begin_ack_settles_cancelled_without_execution() {
                 AgentHostRequest::Subagent { reply, .. } => {
                     let _ = reply.send(Err(HostError::Cancelled));
                 }
+                AgentHostRequest::SteerInputs { reply } => {
+                    let _ = reply.send(Ok(Vec::new()));
+                }
+                AgentHostRequest::HasPendingSteers { reply } => {
+                    let _ = reply.send(false);
+                }
                 AgentHostRequest::BeginTool { call, reply } => {
                     self.trace
                         .lock()

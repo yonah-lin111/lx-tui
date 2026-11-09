@@ -89,6 +89,17 @@ pub enum HostError {
     Failed { code: String },
 }
 
+/// 一次注入当前轮的 steer 内容（已由事件层合并）。
+#[derive(Debug, Clone)]
+pub struct SteerInput {
+    /// 原始用户输入（保留 `@` 引用、skill 标记与图片占位符）。
+    pub text: String,
+    /// 当前模型可用的图片字节；无图时为空。
+    pub images: Vec<crate::chat::events::ModelImage>,
+    /// skill 正文块；与 turn 起点 assembly 的注入位置一致。
+    pub skill_blocks: Vec<String>,
+}
+
 /// 一次工具调用的结算输入。
 ///
 /// `Executed` 携带真实执行结果（成功或工具级失败）；`Cancelled` 表示调用已入库
@@ -131,6 +142,12 @@ pub enum AgentHostRequest {
     },
     /// 下一次采样前取已落库的本地命令结果（按提交序的连续终态前缀）。
     UserShellUpdates { reply: oneshot::Sender<Vec<String>> },
+    /// 下一次采样前取当前轮的 steer 批次（事件层负责落库与 UI 推进）。
+    SteerInputs {
+        reply: oneshot::Sender<Result<Vec<SteerInput>, HostError>>,
+    },
+    /// 只读探测当前轮是否还有未注入的 steer（不消费、不写库）。
+    HasPendingSteers { reply: oneshot::Sender<bool> },
     /// 子 agent 控制工具（spawn / send_input / resume / wait / close / list / cancel_input）。
     Subagent {
         call_id: Option<String>,
@@ -255,6 +272,38 @@ pub trait AgentHost: Send {
             let (reply, receiver) = oneshot::channel();
             self.send(AgentHostRequest::UserShellUpdates { reply });
             receiver.await.unwrap_or_default()
+        }
+    }
+
+    /// 下一次采样前取当前轮的 steer 批次。
+    ///
+    /// 回执丢失（事件循环退出、窗格关闭）等价于取消：pending 仍留在 state，
+    /// 由终态 handler 决定提升或退回输入框。
+    fn take_steer_inputs(
+        &mut self,
+    ) -> impl Future<Output = Result<Vec<SteerInput>, HostError>> + Send
+    where
+        Self: Sized,
+    {
+        async move {
+            let (reply, receiver) = oneshot::channel();
+            self.send(AgentHostRequest::SteerInputs { reply });
+            match receiver.await {
+                Ok(result) => result,
+                Err(_) => Err(HostError::Cancelled),
+            }
+        }
+    }
+
+    /// 只读探测是否还有 pending steer；回执丢失（事件循环退出）按无 steer 处理。
+    fn has_pending_steers(&mut self) -> impl Future<Output = bool> + Send
+    where
+        Self: Sized,
+    {
+        async move {
+            let (reply, receiver) = oneshot::channel();
+            self.send(AgentHostRequest::HasPendingSteers { reply });
+            receiver.await.unwrap_or(false)
         }
     }
 
@@ -477,6 +526,10 @@ where
     context.absorb_runtime_summary();
     let mut usage = Usage::default();
     let mut billing = Usage::default();
+    // 首次采样前不注入 steer：避免抢在起始 prompt 前面；第一次流返回后才允许。
+    let mut can_drain_steer = false;
+    // 最终响应后因 pending steer 而继续；下一次 take 为空说明用户已撤回，直接收轮。
+    let mut awaited_steer = false;
     // 不设步数/调用数上限：子 agent 靠自动压缩控制上下文，主会话靠用户停止与
     // `/compact`。这里只保留取消与协议错误两类终止条件。
     loop {
@@ -496,6 +549,27 @@ where
                     TurnSummary::failed(code, usage).with_billing(billing)
                 }
             };
+        }
+        // 安全边界注入：只在 loop 顶部（工具批处理全部结算、压缩完成之后）。
+        if can_drain_steer {
+            match host.take_steer_inputs().await {
+                Ok(inputs) => {
+                    if inputs.is_empty() && awaited_steer {
+                        // 等待期间用户撤回了 pending：不要空跑一次模型。
+                        return TurnSummary::complete(usage).with_billing(billing);
+                    }
+                    for input in inputs {
+                        context.push_steer_input(input);
+                    }
+                    awaited_steer = false;
+                }
+                Err(HostError::Cancelled) => {
+                    return TurnSummary::interrupted(usage).with_billing(billing);
+                }
+                Err(HostError::Failed { code }) => {
+                    return TurnSummary::failed(code, usage).with_billing(billing);
+                }
+            }
         }
         let outcome = stream_one(context.next_request(), cancel.clone()).await;
         // 上下文占用只认最后一次模型响应的 usage；账单口径单独跨步累加。
@@ -529,10 +603,17 @@ where
         };
         context.push_response(assistant_text(&outcome.deltas), &calls);
         let stop = model_stop(&outcome.deltas);
+        can_drain_steer = true;
         if calls.is_empty() {
             return match stop {
                 // 无工具的 Final（以及没有 `ResponseFinished` 的旧式纯文本流）即整轮完成。
                 Some(ModelStepStop::Final) | None => {
+                    // 只探测、不在这里注入：回到 loop 顶部先压缩再 take，
+                    // 避免刚注入的 steer 被紧接着的压缩摘要吞掉。
+                    if host.has_pending_steers().await {
+                        awaited_steer = true;
+                        continue;
+                    }
                     TurnSummary::complete(usage).with_billing(billing)
                 }
                 Some(

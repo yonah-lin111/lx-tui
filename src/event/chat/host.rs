@@ -8,8 +8,8 @@ use tokio::sync::{mpsc, oneshot, watch};
 
 use crate::app::state::RequestKey;
 use crate::chat::agent_loop::{
-    AgentHost, AgentHostRequest, AgentTools, HostError, ModelContext, ReadyToolCall, ToolExecutor,
-    ToolOutcome, TurnSummary, run_agent_turn,
+    AgentHost, AgentHostRequest, AgentTools, HostError, ModelContext, ReadyToolCall, SteerInput,
+    ToolExecutor, ToolOutcome, TurnSummary, run_agent_turn,
 };
 use crate::chat::client::StreamOutcome;
 use crate::chat::events::ChatRequest;
@@ -63,6 +63,16 @@ pub enum AgentHostEvent {
     UserShellUpdates {
         key: RequestKey,
         reply: oneshot::Sender<Vec<String>>,
+    },
+    /// 下一次采样前注入当前轮的 steer 批次；事件层负责建轮、落库与可见状态推进。
+    SteerInputs {
+        key: RequestKey,
+        reply: oneshot::Sender<Result<Vec<SteerInput>, HostError>>,
+    },
+    /// 只读探测是否还有 pending steer（不消费、不写库）。
+    HasPendingSteers {
+        key: RequestKey,
+        reply: oneshot::Sender<bool>,
     },
     /// 子 agent 控制操作（spawn / send_input / resume / wait / close / list / cancel_input）。
     Subagent {
@@ -130,6 +140,14 @@ impl AgentHost for EventHost {
             },
             // mutation 请求不经 `EventHost`（由文件 recorder 直接投递）。
             AgentHostRequest::UserShellUpdates { reply } => AgentHostEvent::UserShellUpdates {
+                key: self.key.clone(),
+                reply,
+            },
+            AgentHostRequest::SteerInputs { reply } => AgentHostEvent::SteerInputs {
+                key: self.key.clone(),
+                reply,
+            },
+            AgentHostRequest::HasPendingSteers { reply } => AgentHostEvent::HasPendingSteers {
                 key: self.key.clone(),
                 reply,
             },
