@@ -5,11 +5,11 @@ use std::path::PathBuf;
 
 pub use ratatui::layout::Direction;
 
-use crate::detect::PaneAgentSnapshot;
+use crate::detect::{AgentKind, AgentState, PaneAgentSnapshot};
 use crate::layout::{PaneId, TileLayout};
 use crate::terminal::Terminal;
 
-use super::lx::Lx;
+use super::lx::{AiWebSite, Lx, LxEntry};
 
 /// 新建窗格的初始网格尺寸；首帧后由真实几何覆盖。
 pub const DEFAULT_COLS: u16 = 80;
@@ -37,6 +37,37 @@ pub enum PaneView {
     Lx,
     /// 终端网格。
     Terminal,
+}
+
+/// 侧栏 `Agents` 分区条目的身份类型。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SidebarAgentKind {
+    /// 窗格内置 lx 会话（携带当前入口模式与 AI Web 站点）。
+    Lx {
+        entry: LxEntry,
+        ai_web_site: AiWebSite,
+    },
+    /// 窗格终端前台进程探测到的外部 CLI Agent。
+    Terminal(AgentKind),
+}
+
+impl SidebarAgentKind {
+    /// 该条目对应的窗格主内容视图（供行首 `❯` 标记比对与左键点击跳转使用）。
+    pub const fn target_view(self) -> PaneView {
+        match self {
+            Self::Lx { .. } => PaneView::Lx,
+            Self::Terminal(_) => PaneView::Terminal,
+        }
+    }
+}
+
+/// 侧栏 `Agents` 分区的单行条目数据。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct SidebarAgentEntry {
+    pub tab_index: usize,
+    pub pane_id: PaneId,
+    pub kind: SidebarAgentKind,
+    pub state: AgentState,
 }
 
 /// 窗格载荷：种类、主内容视图、终端仿真状态与退出标记。

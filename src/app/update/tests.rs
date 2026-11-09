@@ -4035,6 +4035,28 @@ fn focus_agent_pane_rejects_foreign_pane() {
 }
 
 #[test]
+fn focus_agent_pane_view_switches_between_lx_and_terminal_on_same_pane() {
+    let mut state = AppState::demo();
+    let pane = state.active_tab().layout.focus();
+    assert_eq!(
+        state.active_tab().pane(pane).map(|target| target.view),
+        Some(PaneView::Lx)
+    );
+
+    assert!(focus_agent_pane_view(&mut state, pane, PaneView::Terminal));
+    assert_eq!(
+        state.active_tab().pane(pane).map(|target| target.view),
+        Some(PaneView::Terminal)
+    );
+
+    assert!(focus_agent_pane_view(&mut state, pane, PaneView::Lx));
+    assert_eq!(
+        state.active_tab().pane(pane).map(|target| target.view),
+        Some(PaneView::Lx)
+    );
+}
+
+#[test]
 fn agent_panes_follow_active_workspace() {
     use crate::detect::{AgentKind, AgentState};
 
@@ -4048,11 +4070,48 @@ fn agent_panes_follow_active_workspace() {
     update_pane_agent(&mut state, first, Some(snapshot));
     assert_eq!(state.agent_panes(), vec![(0, first)]);
 
+    if let Some(target) = state.active_tab_mut().pane_mut(first) {
+        target.lx.chat.session_id = Some("ses-1".to_string());
+    }
+    assert_eq!(
+        state.agent_panes(),
+        vec![(0, first), (0, first)],
+        "pane with active lx session and terminal agent contributes 2 rows"
+    );
+
     create_workspace(&mut state);
     assert!(
         state.agent_panes().is_empty(),
         "agents are scoped to the active workspace"
     );
+}
+
+#[test]
+fn clamp_agent_scroll_and_close_containers_clear_stale_agent_hover_and_drag() {
+    let mut state = AppState::demo();
+    let pane = state.active_tab().layout.focus();
+    if let Some(target) = state.active_tab_mut().pane_mut(pane) {
+        target.lx.chat.session_id = Some("ses-hover".to_string());
+    }
+    state.agent_hover = Some(0);
+    state.agent_scroll_drag = Some(0);
+
+    // `/new` 关闭会话后列表变空，`clamp_agent_scroll` 清理越界 hover 与失效拖拽。
+    assert!(new_session(&mut state, pane));
+    assert!(clamp_agent_scroll(&mut state, 5));
+    assert_eq!(state.agent_hover, None);
+    assert_eq!(state.agent_scroll_drag, None);
+
+    // 关闭当前激活工作区时同步复位 `agent_scroll`、`agent_hover` 与 `agent_scroll_drag`。
+    create_workspace(&mut state);
+    state.agent_scroll = 3;
+    state.agent_hover = Some(2);
+    state.agent_scroll_drag = Some(1);
+    let active = state.active_workspace;
+    close_workspace(&mut state, active);
+    assert_eq!(state.agent_scroll, 0);
+    assert_eq!(state.agent_hover, None);
+    assert_eq!(state.agent_scroll_drag, None);
 }
 
 // ===== 粘贴二级面板按键路由 =====

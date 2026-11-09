@@ -137,4 +137,27 @@ impl LxChat {
             u64::try_from(input.saturating_add(output)).unwrap_or(u64::MAX)
         });
     }
+
+    /// 流中已产生的**输出 token 估算值**（rough）：ASCII 约 4 字符 1 token，
+    /// 非 ASCII（CJK 等）约 1 字符 1 token；只统计正文与思考正文。
+    /// 仅用于 loading 行的 `↓1.2k tok` 提示；真实 usage 由消息底部统计行给出。
+    pub fn stream_output_tokens(&self) -> Option<u64> {
+        let message = self.streaming_message()?;
+        let mut ascii = 0u64;
+        let mut wide = 0u64;
+        for step in &message.steps {
+            let Some(part) = step.part() else {
+                continue;
+            };
+            for ch in part.content.chars() {
+                if ch.is_ascii() {
+                    ascii += 1;
+                } else {
+                    wide += 1;
+                }
+            }
+        }
+        let tokens = ascii / 4 + wide;
+        (tokens > 0).then_some(tokens)
+    }
 }

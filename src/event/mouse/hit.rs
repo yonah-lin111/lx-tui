@@ -61,8 +61,8 @@ pub(crate) fn handle_sidebar_press(
     row: u16,
     dirty: &mut bool,
 ) -> bool {
-    if let Some(pane) = ui::agent_item_at(view, state, column, row) {
-        if update::focus_agent_pane(state, pane) {
+    if let Some((pane, target_view)) = ui::agent_target_at(view, state, column, row) {
+        if update::focus_agent_pane_view(state, pane, target_view) {
             ensure_workspace_visible(state, view);
             reveal_active_tab(state, view);
             *dirty = true;

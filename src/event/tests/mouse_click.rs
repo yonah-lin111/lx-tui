@@ -345,6 +345,68 @@ fn mouse_click_agent_item_switches_tab_and_terminal_view() {
 }
 
 #[test]
+fn clicking_dual_agent_rows_on_same_pane_switches_between_lx_and_terminal_views() {
+    use crate::detect::{AgentKind, AgentState};
+
+    let mut state = demo_terminal();
+    let mut sessions = HashMap::new();
+    let config = Config::default();
+    let screen = Rect::new(0, 0, 100, 24);
+
+    let pane = mount_agent(&mut state, AgentKind::Claude, AgentState::Working);
+    if let Some(target) = state.active_tab_mut().pane_mut(pane) {
+        target.lx.chat.session_id = Some("ses-dual".to_string());
+    }
+    assert_eq!(
+        state.active_tab().pane(pane).map(|target| target.view),
+        Some(PaneView::Terminal)
+    );
+
+    let geo = geometry(&state, &config, screen);
+    let sections =
+        ui::layout::sidebar_sections(geo.view.sidebar, false).expect("sections are visible");
+    let mut dirty = false;
+
+    // 点击第 0 行（lx-native）：切回 PaneView::Lx。
+    handle_terminal_event(
+        mouse(
+            MouseEventKind::Down(MouseButton::Left),
+            sections.agents.x + 1,
+            sections.agents.y,
+        ),
+        &mut state,
+        &mut sessions,
+        &geo,
+        &config,
+        &mut ui::RenderCache::default(),
+        &mut dirty,
+    );
+    assert_eq!(
+        state.active_tab().pane(pane).map(|target| target.view),
+        Some(PaneView::Lx)
+    );
+
+    // 点击第 1 行（claude）：切到 PaneView::Terminal。
+    handle_terminal_event(
+        mouse(
+            MouseEventKind::Down(MouseButton::Left),
+            sections.agents.x + 1,
+            sections.agents.y + 1,
+        ),
+        &mut state,
+        &mut sessions,
+        &geo,
+        &config,
+        &mut ui::RenderCache::default(),
+        &mut dirty,
+    );
+    assert_eq!(
+        state.active_tab().pane(pane).map(|target| target.view),
+        Some(PaneView::Terminal)
+    );
+}
+
+#[test]
 fn mouse_hover_agent_item_tracks_hover() {
     use crate::detect::{AgentKind, AgentState};
 

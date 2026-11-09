@@ -715,6 +715,9 @@ pub fn set_lx_entry(state: &mut AppState, id: PaneId, entry: crate::app::state::
                 });
             if incompatible {
                 pane.lx.chat.reset_session_view();
+                pane.lx.clear_agents();
+                pane.lx.compact.reset();
+                pane.lx.model_switch.reset();
             }
             pane.lx.recap.reset();
             pane.lx.clear_rewind();
@@ -753,6 +756,9 @@ pub fn set_ai_web_site(state: &mut AppState, id: PaneId, site: crate::app::state
     if let Some(pane) = state.pane_mut_anywhere(id) {
         pane.lx.ai_web_site = site;
         pane.lx.chat.reset_session_view();
+        pane.lx.clear_agents();
+        pane.lx.compact.reset();
+        pane.lx.model_switch.reset();
         pane.lx.recap.reset();
         pane.lx.clear_rewind();
         pane.lx.ai_web_edit_user_index = None;
@@ -909,8 +915,8 @@ pub fn update_pane_agent(
     true
 }
 
-/// 点击 Agents 条目：切到所属标签、聚焦窗格、lx 视图切回终端、收回 prompt 焦点；返回是否成功。
-pub fn focus_agent_pane(state: &mut AppState, pane: PaneId) -> bool {
+/// 点击 Agents 条目：切到所属标签、聚焦窗格、将窗格主视图切至条目对应的 `target_view`（`Lx` 或 `Terminal`）、收回 prompt 焦点；返回是否成功。
+pub fn focus_agent_pane_view(state: &mut AppState, pane: PaneId, target_view: PaneView) -> bool {
     let Some(tab_index) = state
         .active_workspace()
         .tabs
@@ -920,15 +926,22 @@ pub fn focus_agent_pane(state: &mut AppState, pane: PaneId) -> bool {
         return false;
     };
     state.active_workspace_mut().active_tab = tab_index;
-    if let Some(target) = state.active_tab_mut().pane_mut(pane)
-        && target.view == PaneView::Lx
+    if state
+        .active_tab()
+        .pane(pane)
+        .is_some_and(|target| target.view != target_view)
     {
-        target.view = PaneView::Terminal;
-        target.lx.toast = None;
+        toggle_pane_view(state, pane);
     }
     super::focus::focus_pane(state, pane);
     clear_selection(state);
     true
+}
+
+/// 点击 Agents 条目（仅测试兼容）：切到所属标签、聚焦窗格、lx 视图切回终端、收回 prompt 焦点；返回是否成功。
+#[cfg(test)]
+pub fn focus_agent_pane(state: &mut AppState, pane: PaneId) -> bool {
+    focus_agent_pane_view(state, pane, PaneView::Terminal)
 }
 
 /// 把终端窗格视口移动到距内容顶部 `offset` 行（0 为最旧一屏）；返回视口是否移动。

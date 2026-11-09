@@ -3,7 +3,7 @@
 use unicode_width::UnicodeWidthStr;
 
 use crate::app::markdown::{TemplateCounts, TemplateStatus};
-use crate::app::state::WorkspaceIdentity;
+use crate::app::state::{AiWebSite, LxEntry, SidebarAgentKind, WorkspaceIdentity};
 use crate::detect::{AgentKind, AgentState};
 use crate::layout::PaneId;
 
@@ -28,8 +28,16 @@ pub const CURRENT_ITEM_MARKER: &str = AGENT_SELECTED_MARKER;
 pub const AGENT_STATUS_DOT: &str = "●";
 pub const AGENT_STATUS_RING: &str = "○";
 
+/// 侧栏 Agents 分区中 lx 各模式的稳定小写名称。
+pub const LX_AGENT_NATIVE: &str = "lx-native";
+pub const LX_AGENT_HYBRID: &str = "lx-hybrid";
+pub const LX_AGENT_AUTOMATION: &str = "lx-automation";
+pub const LX_AGENT_WEB_DEEPSEEK: &str = "lx-web-deepseek";
+pub const LX_AGENT_WEB_GEMINI: &str = "lx-web-gemini";
+pub const LX_AGENT_WEB_GROK: &str = "lx-web-grok";
+
 /// Agent 名称标签：稳定英文小写值（与进程匹配别名一致）。
-pub fn agent_label(kind: AgentKind) -> &'static str {
+pub const fn agent_label(kind: AgentKind) -> &'static str {
     match kind {
         AgentKind::Claude => "claude",
         AgentKind::Codex => "codex",
@@ -39,6 +47,28 @@ pub fn agent_label(kind: AgentKind) -> &'static str {
         AgentKind::Cursor => "cursor",
         AgentKind::Pi => "pi",
         AgentKind::Kimi => "kimi",
+    }
+}
+
+/// lx 入口模式与 AI Web 站点对应的侧栏 Agent 名称标签。
+pub const fn lx_agent_label(entry: LxEntry, site: AiWebSite) -> &'static str {
+    match entry {
+        LxEntry::Native => LX_AGENT_NATIVE,
+        LxEntry::Hybrid => LX_AGENT_HYBRID,
+        LxEntry::Automation => LX_AGENT_AUTOMATION,
+        LxEntry::AiWeb => match site {
+            AiWebSite::Deepseek => LX_AGENT_WEB_DEEPSEEK,
+            AiWebSite::Gemini => LX_AGENT_WEB_GEMINI,
+            AiWebSite::Grok => LX_AGENT_WEB_GROK,
+        },
+    }
+}
+
+/// 侧栏 Agents 条目的显示名称（统一全小写英文）。
+pub const fn sidebar_agent_label(kind: SidebarAgentKind) -> &'static str {
+    match kind {
+        SidebarAgentKind::Lx { entry, ai_web_site } => lx_agent_label(entry, ai_web_site),
+        SidebarAgentKind::Terminal(agent) => agent_label(agent),
     }
 }
 

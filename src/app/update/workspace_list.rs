@@ -31,7 +31,7 @@ pub fn set_workspace_scroll(state: &mut AppState, offset: usize, visible: usize)
 
 /// Agents 列表滚动上限。
 fn agent_scroll_max(state: &AppState, visible: usize) -> usize {
-    state.agent_panes().len().saturating_sub(visible.max(1))
+    state.agent_entry_count().saturating_sub(visible.max(1))
 }
 
 /// 滚动 Agents 列表；越界钳制；返回是否变化。
@@ -56,14 +56,23 @@ pub fn set_agent_scroll(state: &mut AppState, offset: usize, visible: usize) -> 
     true
 }
 
-/// 钳制 Agents 滚动偏移（几何或列表变化后调用）；返回是否变化。
+/// 钳制 Agents 滚动偏移与悬停/拖拽态（几何或列表变化后调用）；返回是否变化。
 pub fn clamp_agent_scroll(state: &mut AppState, visible: usize) -> bool {
-    let max = agent_scroll_max(state, visible);
-    if state.agent_scroll <= max {
-        return false;
+    let total = state.agent_entry_count();
+    let max = total.saturating_sub(visible.max(1));
+    let mut changed = false;
+    if state.agent_scroll > max {
+        state.agent_scroll = max;
+        state.agent_hover = None;
+        changed = true;
+    } else if state.agent_hover.is_some_and(|slot| slot >= total) {
+        state.agent_hover = None;
+        changed = true;
     }
-    state.agent_scroll = max;
-    true
+    if max == 0 && state.agent_scroll_drag.take().is_some() {
+        changed = true;
+    }
+    changed
 }
 
 /// 更新 Agents 悬停槽位；返回是否变化。

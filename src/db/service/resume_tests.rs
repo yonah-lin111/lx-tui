@@ -438,6 +438,34 @@ fn resume_restores_persisted_model_switches() {
     );
 }
 
+#[test]
+fn resume_missing_session_clears_loading_flag_and_removes_sidebar_entry() {
+    let (mut service, mut state, _, _) = trusted_service("resume-missing-clears-loading");
+    let pane = focused_pane(&state);
+
+    assert!(crate::app::update::resume_session(
+        &mut state,
+        pane,
+        "missing-session-id"
+    ));
+    assert_eq!(
+        state.agent_entry_count(),
+        1,
+        "while loading_session is true, sidebar shows the lx entry"
+    );
+
+    service.pump(&mut state);
+    let target = state.pane_anywhere(pane).expect("pane");
+    assert!(
+        !target.lx.chat.loading_session,
+        "failed load must clear loading_session"
+    );
+    assert!(
+        state.agent_entries().is_empty(),
+        "failed load must not leave a phantom lx entry in sidebar"
+    );
+}
+
 /// 切换模型时持久化层必须用窗格真实 cwd 探测 `AGENTS.md`，补齐 `core/agents_md` 后
 /// 重新渲染权威 `injected_prompt`，并把时间线与模型选择同步到共享同一会话的所有窗格。
 #[test]

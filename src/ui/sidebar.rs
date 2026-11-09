@@ -9,8 +9,8 @@ use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, List, ListItem, ListState};
 use unicode_width::UnicodeWidthStr;
 
-use crate::app::state::{AppState, Workspace, WorkspaceMode};
-use crate::detect::PaneAgentSnapshot;
+use crate::app::state::{AppState, PaneView, SidebarAgentKind, Workspace, WorkspaceMode};
+use crate::detect::AgentState;
 use crate::layout::{COLLAPSED_STRIP, PaneId};
 
 use super::{PANEL_BUTTON_MARGIN, PANEL_BUTTON_WIDTH, layout, style, text, widgets};
@@ -502,32 +502,25 @@ pub(super) fn agents_button_area(sidebar: Rect, divider: Rect) -> Rect {
     )
 }
 
-/// Agents 分区条目：标签索引、窗格标识与 Agent 快照；渲染与命中一一对应。
-#[derive(Debug, Clone, PartialEq, Eq)]
+/// Agents 分区条目：标签索引、窗格标识、Agent 种类与运行状态；渲染与命中一一对应。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct AgentListItem {
     pub tab_index: usize,
     pub pane_id: PaneId,
-    pub snapshot: PaneAgentSnapshot,
+    pub kind: SidebarAgentKind,
+    pub state: AgentState,
 }
 
-/// 当前激活工作区的 Agents 条目（按标签与树序，与 `AppState::agent_panes` 一致）。
+/// 当前激活工作区的 Agents 条目（按标签与树序，同一窗格先 lx 后终端 Agent）。
 pub fn agent_items(state: &AppState) -> Vec<AgentListItem> {
-    let workspace = state.active_workspace();
     state
-        .agent_panes()
+        .agent_entries()
         .into_iter()
-        .filter_map(|(tab_index, pane_id)| {
-            let snapshot = workspace
-                .tabs
-                .get(tab_index)?
-                .pane(pane_id)?
-                .agent
-                .clone()?;
-            Some(AgentListItem {
-                tab_index,
-                pane_id,
-                snapshot,
-            })
+        .map(|entry| AgentListItem {
+            tab_index: entry.tab_index,
+            pane_id: entry.pane_id,
+            kind: entry.kind,
+            state: entry.state,
         })
         .collect()
 }
@@ -547,19 +540,15 @@ pub fn agent_scrollbar(
     state: &AppState,
 ) -> Option<widgets::scrollbar::ScrollbarLayout> {
     let list = agents_list_rect(view, state)?;
-    agent_scrollbar_for(list, state)
+    agent_scrollbar_for(list, state, state.agent_entry_count())
 }
 
 fn agent_scrollbar_for(
     list: Rect,
     state: &AppState,
+    total: usize,
 ) -> Option<widgets::scrollbar::ScrollbarLayout> {
-    widgets::scrollbar::layout(
-        list,
-        state.agent_panes().len(),
-        usize::from(list.height),
-        state.agent_scroll,
-    )
+    widgets::scrollbar::layout(list, total, usize::from(list.height), state.agent_scroll)
 }
 
 /// Agents 列表可见行数；分区缺失或折叠时为 None。
@@ -588,7 +577,8 @@ pub fn agent_item_index_at(
     if !list.contains((column, row).into()) {
         return None;
     }
-    let content_width = match agent_scrollbar_for(list, state) {
+    let total = state.agent_entry_count();
+    let content_width = match agent_scrollbar_for(list, state, total) {
         Some(_) => list.width.saturating_sub(1),
         None => list.width,
     };
@@ -596,18 +586,32 @@ pub fn agent_item_index_at(
         return None;
     }
     let slot = state.agent_scroll.saturating_add(usize::from(row - list.y));
-    (slot < state.agent_panes().len()).then_some(slot)
+    (slot < total).then_some(slot)
 }
 
-/// Agents 条目命中：返回被点窗格标识；未命中返回 None。
+/// Agents 条目命中：返回被点窗格标识及目标视图 `(PaneId, PaneView)`；未命中返回 None。
+pub fn agent_target_at(
+    view: &layout::ViewLayout,
+    state: &AppState,
+    column: u16,
+    row: u16,
+) -> Option<(PaneId, PaneView)> {
+    let index = agent_item_index_at(view, state, column, row)?;
+    state
+        .agent_entries()
+        .get(index)
+        .map(|entry| (entry.pane_id, entry.kind.target_view()))
+}
+
+/// Agents 条目命中（仅测试兼容）：返回被点窗格标识；未命中返回 None。
+#[cfg(test)]
 pub fn agent_item_at(
     view: &layout::ViewLayout,
     state: &AppState,
     column: u16,
     row: u16,
 ) -> Option<PaneId> {
-    let index = agent_item_index_at(view, state, column, row)?;
-    state.agent_panes().get(index).map(|(_, pane)| *pane)
+    agent_target_at(view, state, column, row).map(|(pane, _)| pane)
 }
 
 /// Agents 分区：条目列表（状态圆点 + Agent 名称 + 弱化归属）、空状态与滚动条。
@@ -629,7 +633,7 @@ pub fn render_agents(frame: &mut Frame<'_>, area: Rect, state: &AppState) {
         );
         return;
     }
-    let scrollbar = agent_scrollbar_for(area, state);
+    let scrollbar = agent_scrollbar_for(area, state, items.len());
     let list_area = match &scrollbar {
         Some(_) => Rect {
             width: area.width.saturating_sub(1),
@@ -645,7 +649,7 @@ pub fn render_agents(frame: &mut Frame<'_>, area: Rect, state: &AppState) {
     }
 }
 
-/// Agents 条目行：悬停使用高亮底色；聚焦窗格对应条目用行首符号标记（不独立着色）；
+/// Agents 条目行：悬停使用高亮底色；聚焦窗格且与条目目标视图匹配时用行首符号标记（不独立着色）；
 /// 工作/阻塞实心圆点着色、空闲空心圆点弱化；归属标签固定右对齐，宽度不足先截断名称。
 fn agent_list_items<'a>(
     state: &'a AppState,
@@ -654,30 +658,33 @@ fn agent_list_items<'a>(
 ) -> Vec<ListItem<'a>> {
     let active_tab = state.active_workspace().active_tab;
     let focused = state.active_tab().layout.focus();
+    let focused_view = state.active_tab().pane(focused).map(|pane| pane.view);
     let mut rows = Vec::with_capacity(items.len());
     for (slot, item) in items.iter().enumerate() {
-        let snapshot = &item.snapshot;
         let highlight = if state.agent_hover == Some(slot) {
             style::selection()
         } else {
             Style::default()
         };
-        let marker = if item.tab_index == active_tab && item.pane_id == focused {
+        let is_active_item = item.tab_index == active_tab
+            && item.pane_id == focused
+            && focused_view == Some(item.kind.target_view());
+        let marker = if is_active_item {
             format!("{} ", text::AGENT_SELECTED_MARKER)
         } else {
             "  ".to_string()
         };
-        let dot = format!("{} ", text::agent_status_dot(snapshot.state));
+        let dot = format!("{} ", text::agent_status_dot(item.state));
         let location = text::agent_location(item.tab_index);
         let fixed = marker.chars().count() + dot.chars().count() + location.chars().count();
         let name = text::ellipsize(
-            text::agent_label(snapshot.kind),
+            text::sidebar_agent_label(item.kind),
             width.saturating_sub(fixed + 1),
         );
         let padding = width.saturating_sub(fixed + name.chars().count());
         let marker_style = style::strong().patch(highlight);
         // 状态圆点特殊色叠在行底之上：hover 只提供背景，不覆盖运行/阻塞状态色。
-        let dot_style = highlight.patch(style::agent_status(snapshot.state));
+        let dot_style = highlight.patch(style::agent_status(item.state));
         let spans = vec![
             Span::styled(marker, marker_style),
             Span::styled(dot, dot_style),
