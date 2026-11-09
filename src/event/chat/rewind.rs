@@ -209,6 +209,7 @@ pub fn handle_rewind_finished(
                     }) && let Some(target) = state.pane_mut_anywhere(target_pane)
                     {
                         target.lx.chat.reset_session_view();
+                        target.lx.clear_agents();
                         target.lx.compact.reset();
                         target.lx.model_switch.reset();
                         target.lx.clear_rewind();

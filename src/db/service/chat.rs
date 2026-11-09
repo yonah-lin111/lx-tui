@@ -409,6 +409,9 @@ impl Persistence {
         let Some((Some(messages), model, processes, notices, checkpoints, switches, revision)) =
             loaded
         else {
+            if let Some(target) = state.pane_mut_anywhere(pane) {
+                target.lx.chat.loading_session = false;
+            }
             // 加载失败发生在 lx 页：反馈落该窗格自己的槽（不占用全局覆盖层）。
             update::show_lx_toast(
                 state,

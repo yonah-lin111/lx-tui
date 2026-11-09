@@ -715,6 +715,9 @@ pub fn set_lx_entry(state: &mut AppState, id: PaneId, entry: crate::app::state::
                 });
             if incompatible {
                 pane.lx.chat.reset_session_view();
+                pane.lx.clear_agents();
+                pane.lx.compact.reset();
+                pane.lx.model_switch.reset();
             }
             pane.lx.clear_rewind();
             pane.lx.ai_web_edit_user_index = None;
@@ -752,6 +755,9 @@ pub fn set_ai_web_site(state: &mut AppState, id: PaneId, site: crate::app::state
     if let Some(pane) = state.pane_mut_anywhere(id) {
         pane.lx.ai_web_site = site;
         pane.lx.chat.reset_session_view();
+        pane.lx.clear_agents();
+        pane.lx.compact.reset();
+        pane.lx.model_switch.reset();
         pane.lx.clear_rewind();
         pane.lx.ai_web_edit_user_index = None;
         pane.lx.ai_web_edit_cloud_files.clear();
@@ -930,7 +936,8 @@ pub fn focus_agent_pane_view(state: &mut AppState, pane: PaneId, target_view: Pa
     true
 }
 
-/// 点击 Agents 条目：切到所属标签、聚焦窗格、lx 视图切回终端、收回 prompt 焦点；返回是否成功。
+/// 点击 Agents 条目（仅测试兼容）：切到所属标签、聚焦窗格、lx 视图切回终端、收回 prompt 焦点；返回是否成功。
+#[cfg(test)]
 pub fn focus_agent_pane(state: &mut AppState, pane: PaneId) -> bool {
     focus_agent_pane_view(state, pane, PaneView::Terminal)
 }

@@ -340,24 +340,38 @@ impl Lx {
 
     /// 是否已打开或正在建立 lx 会话（侧栏 `Agents` 列表收录条件）。
     ///
-    /// 空白欢迎页（尚未发送消息、`/new` 重置后或会话删除后）返回 `false`；
-    /// 一旦已绑定 `session_id`、正在加载历史会话（`/resume`）、请求在途/流式生成中，
+    /// 空白欢迎页（尚未发送消息、`/new` 重置后、跨模式/站点重置后或会话删除后）返回 `false`；
+    /// 一旦已绑定 `session_id`、正在加载历史会话（`/resume`）、首次提交请求在途（`Committing`），
     /// 或有本地 `!` 命令在途，即视为会话已打开。
     pub fn has_active_session(&self) -> bool {
         self.chat.session_id.is_some()
             || self.chat.loading_session
-            || self.chat.status.streaming
-            || self.chat.request.is_busy()
+            || matches!(
+                self.chat.request,
+                crate::app::state::lx::chat::RequestState::Committing { .. }
+            )
             || self.chat.has_running_shell()
     }
 
     /// 映射当前 lx 会话的运行状态（供侧栏 `Agents` 圆点着色：阻塞优先于运行，其余为空闲）。
     pub fn agent_state(&self) -> crate::detect::AgentState {
         use crate::detect::AgentState;
+        let request_busy = self
+            .chat
+            .request
+            .is_busy_for_session(self.chat.session_id.as_deref());
+        let streaming = match &self.chat.request {
+            crate::app::state::lx::chat::RequestState::Streaming { key, .. }
+            | crate::app::state::lx::chat::RequestState::Finishing { key, .. } => {
+                self.chat.session_id.as_deref() == Some(key.session.as_str())
+            }
+            _ => self.chat.status.streaming,
+        };
         if self.has_pending_ask() || self.agents.blocked_count() > 0 {
             AgentState::Blocked
-        } else if self.chat.status.streaming
-            || self.chat.request.is_busy()
+        } else if streaming
+            || request_busy
+            || self.chat.loading_session
             || self.chat.has_running_shell()
             || self.compact.is_running()
             || self.rewind.is_executing()

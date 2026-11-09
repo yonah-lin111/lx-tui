@@ -434,6 +434,7 @@ pub fn on_ai_web_session_loaded(
         return false;
     }
     if let Some((site, _)) = ai_web_remote_session(&session_id) {
+        target.lx.entry = crate::app::state::LxEntry::AiWeb;
         target.lx.ai_web_site = site;
     }
     let site_label = ai_web_assistant_label(target.lx.ai_web_site, target.lx.ai_web_config);

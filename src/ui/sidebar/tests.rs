@@ -526,11 +526,30 @@ fn single_pane_renders_both_lx_and_terminal_agent_rows_and_marker_follows_view()
 
 #[test]
 fn lx_agent_dot_tracks_idle_working_and_blocked_states() {
-    use crate::app::state::{AskState, RequestKey};
+    use crate::app::state::{AskState, RequestKey, RequestState};
 
     let mut state = AppState::demo();
     let pane = state.active_tab().layout.focus();
+    // 首次提交阶段（Committing，尚未落库生成 session_id）：收录并显示 Working。
     if let Some(target) = state.active_tab_mut().pane_mut(pane) {
+        target.lx.chat.request = RequestState::Committing {
+            generation: 1,
+            draft: "hello".to_string(),
+        };
+    }
+    assert_eq!(agent_items(&state).len(), 1);
+    assert_eq!(agent_items(&state)[0].state, AgentState::Working);
+
+    // `/resume` 加载中（loading_session）：收录并显示 Working。
+    if let Some(target) = state.active_tab_mut().pane_mut(pane) {
+        target.lx.chat.request = RequestState::Idle;
+        target.lx.chat.loading_session = true;
+    }
+    assert_eq!(agent_items(&state).len(), 1);
+    assert_eq!(agent_items(&state)[0].state, AgentState::Working);
+
+    if let Some(target) = state.active_tab_mut().pane_mut(pane) {
+        target.lx.chat.loading_session = false;
         target.lx.chat.session_id = Some("ses-status".to_string());
     }
     assert_eq!(agent_items(&state)[0].state, AgentState::Idle);
@@ -555,5 +574,68 @@ fn lx_agent_dot_tracks_idle_working_and_blocked_states() {
         agent_items(&state)[0].state,
         AgentState::Blocked,
         "pending ask takes priority as Blocked"
+    );
+}
+
+#[test]
+fn slash_new_and_site_switch_while_streaming_immediately_remove_lx_agent_row() {
+    use crate::app::state::{AiWebSite, LxEntry, RequestKey, RequestState};
+
+    let mut state = AppState::demo();
+    let pane = state.active_tab().layout.focus();
+    if let Some(target) = state.active_tab_mut().pane_mut(pane) {
+        target.lx.chat.session_id = Some("sess-1".to_string());
+        target.lx.chat.request = RequestState::Streaming {
+            key: RequestKey {
+                pane,
+                session: "sess-1".to_string(),
+                generation: 1,
+            },
+            assistant_id: "a1".to_string(),
+        };
+        target.lx.chat.status.streaming = true;
+    }
+    assert_eq!(agent_items(&state).len(), 1);
+    assert_eq!(agent_items(&state)[0].state, AgentState::Working);
+
+    // 流式中执行 `/new`：旧请求仍在后台取消收尾，但侧栏条目必须立即移除。
+    assert!(update::new_session(&mut state, pane));
+    assert!(
+        agent_items(&state).is_empty(),
+        "slash /new while streaming must immediately remove lx agent item"
+    );
+    assert_eq!(state.agent_entry_count(), 0);
+
+    // 若此时加载另一个空闲会话 `sess-2`，旧会话 `sess-1` 的后台 Streaming 不得把 `sess-2` 污染为 Working。
+    if let Some(target) = state.active_tab_mut().pane_mut(pane) {
+        target.lx.chat.session_id = Some("sess-2".to_string());
+    }
+    assert_eq!(agent_items(&state).len(), 1);
+    assert_eq!(
+        agent_items(&state)[0].state,
+        AgentState::Idle,
+        "unbound old streaming request must not mark newly loaded session as Working"
+    );
+
+    // 加载 AI Web 云端会话时自动同步 `entry = LxEntry::AiWeb` 与站点名称，切站点后立即移除。
+    if let Some(target) = state.active_tab_mut().pane_mut(pane) {
+        target.lx.entry = LxEntry::Native;
+        target.lx.chat.loading_session = true;
+    }
+    assert!(update::on_ai_web_session_loaded(
+        &mut state,
+        pane,
+        "ai-web-grok-42".to_string(),
+        Some("Grok Chat".to_string()),
+        Vec::new(),
+    ));
+    let items = agent_items(&state);
+    assert_eq!(items.len(), 1);
+    assert_eq!(text::sidebar_agent_label(items[0].kind), "lx-web-grok");
+
+    update::set_ai_web_site(&mut state, pane, AiWebSite::Gemini);
+    assert!(
+        agent_items(&state).is_empty(),
+        "switching ai web site resets session and removes lx agent item"
     );
 }

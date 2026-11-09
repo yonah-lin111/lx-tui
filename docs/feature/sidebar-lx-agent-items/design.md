@@ -1,12 +1,12 @@
 # 左侧侧栏 Agents 分区新增 lx 模式条目 — 设计文档
 
-> 状态：**已在 `.worktrees/sidebar-lx-agent-items` 完成实现与验证，待用户确认合并**（2026-11-09）
+> 状态：**已在 `.worktrees/sidebar-lx-agent-items` 完成实现、代码复审与 P0–P3 闭环修复，待用户确认合并**（2026-11-09）
 > 规范依据：
 > - [`AGENTS.md`](../../../AGENTS.md)
 > - [`docs/standards/project-directory-structure.md`](../../standards/project-directory-structure.md)
 > - [`docs/standards/code-writing-standards.md`](../../standards/code-writing-standards.md)
 > - [`docs/standards/tui-design-requirements.md`](../../standards/tui-design-requirements.md)
-> 执行任务清单见 [task.md](task.md)。
+> 配套文档：[task.md](task.md) · [review.md](review.md)。
 
 ---
 
@@ -74,24 +74,38 @@ src/
 ```rust
     /// 是否已打开或正在建立 lx 会话（侧栏 `Agents` 列表收录条件）。
     ///
-    /// 空白欢迎页（尚未发送消息、`/new` 重置后或会话删除后）返回 `false`；
-    /// 一旦已绑定 `session_id`、正在加载历史会话（`/resume`）、请求在途/流式生成中，
+    /// 空白欢迎页（尚未发送消息、`/new` 重置后、跨模式/站点重置后或会话删除后）返回 `false`；
+    /// 一旦已绑定 `session_id`、正在加载历史会话（`/resume`）、首次提交请求在途（`Committing`），
     /// 或有本地 `!` 命令在途，即视为会话已打开。
     pub fn has_active_session(&self) -> bool {
         self.chat.session_id.is_some()
             || self.chat.loading_session
-            || self.chat.status.streaming
-            || self.chat.request.is_busy()
+            || matches!(
+                self.chat.request,
+                crate::app::state::lx::chat::RequestState::Committing { .. }
+            )
             || self.chat.has_running_shell()
     }
 
     /// 映射当前 lx 会话的运行状态（供侧栏 `Agents` 圆点着色：阻塞优先于运行，其余为空闲）。
     pub fn agent_state(&self) -> crate::detect::AgentState {
         use crate::detect::AgentState;
+        let request_busy = self
+            .chat
+            .request
+            .is_busy_for_session(self.chat.session_id.as_deref());
+        let streaming = match &self.chat.request {
+            crate::app::state::lx::chat::RequestState::Streaming { key, .. }
+            | crate::app::state::lx::chat::RequestState::Finishing { key, .. } => {
+                self.chat.session_id.as_deref() == Some(key.session.as_str())
+            }
+            _ => self.chat.status.streaming,
+        };
         if self.has_pending_ask() || self.agents.blocked_count() > 0 {
             AgentState::Blocked
-        } else if self.chat.status.streaming
-            || self.chat.request.is_busy()
+        } else if streaming
+            || request_busy
+            || self.chat.loading_session
             || self.chat.has_running_shell()
             || self.compact.is_running()
             || self.rewind.is_executing()
@@ -427,4 +441,14 @@ pub(crate) fn handle_sidebar_press(
 3. **窄侧栏截断保障**：
    - 最长名称 `lx-web-deepseek`（15 字符）在侧栏宽度收窄时，由 `text::ellipsize` 优先截断名称末尾并保留右侧 `[tab N]` 归属标签不丢失。
 4. **会话关闭/重置即时清理**：
-   - `/new`、删除会话、跨 `Native`/`AiWeb` 切换或切换 `AiWebSite` 触发 `reset_session_view()` 后，`lx-*` 条目立即从 `agent_entries()` 消失，且每帧末尾 `event/mod.rs` 的 `clamp_agent_scroll` 自动夹取滚动偏移，防止越界空白。
+   - `/new`、删除会话、跨 `Native`/`AiWeb` 切换或切换 `AiWebSite` 触发 `reset_session_view()` 后，`lx-*` 条目立即从 `agent_entries()` 消失，且每帧末尾 `event/mod.rs` 的 `clamp_agent_scroll` 自动夹取滚动偏移并清理越界 `agent_hover` 与 `agent_scroll_drag`。
+
+---
+
+## 5. 复审修复摘要（对应 `review.md` P0 → P3）
+
+- **P0-1（流中 `/new` / 删除会话 / 切换会话的请求归属隔离）**：在 `RequestState` 新增 `is_busy_for_session(session_id)`，并在 `reset_session_view()` 复位 `status.streaming = false` 及未建流的 `Committing` 状态；`has_active_session()` 与 `agent_state()` 严格按当前 `session_id` 判定在途请求，确保流中 `/new` 后侧栏条目立即消失且旧请求不污染新会话。
+- **P1-1（`/resume` 失败复位、加载态圆点与跨模式清理）**：`load_chat_session_into_pane` 失败分支复位 `loading_session = false`；`agent_state()` 将 `loading_session` 纳入 `Working`；`on_ai_web_session_loaded` 同步 `entry = LxEntry::AiWeb`；`set_lx_entry`、`set_ai_web_site` 与 `on_rewind_finished`（`session_deleted`）统一补齐 `clear_agents()`、`compact.reset()`、`model_switch.reset()`。
+- **P1-2（高频几何与悬停查询免分配优化）**：在 `AppState` 新增 `agent_entry_count(&self) -> usize`，使 `agent_scroll_max`、`clamp_agent_scroll`、`agent_scrollbar`、`agent_item_index_at` 零分配且免去 `agent_state()` 全消息遍历。
+- **P2-1（列表收缩与容器关闭时的悬停/拖拽态清理）**：`clamp_agent_scroll` 在滚动回退或槽位越界时清空 `agent_hover`、在无需滚动条时清空 `agent_scroll_drag`；`close_workspace`、`close_tab`、`close_pane` 同步复位侧栏 `Agents` 悬停与拖拽态。
+- **P3-1（旧兼容接口测试门控与 `const fn` 收敛）**：将 `ui::agent_item_at` 与 `update::focus_agent_pane` 标记为 `#[cfg(test)]`，并将 `agent_label` 与 `sidebar_agent_label` 声明为 `pub const fn`。

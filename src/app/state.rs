@@ -786,6 +786,26 @@ impl AppState {
         entries
     }
 
+    /// 当前工作区内启用的 Agent 条目总数（不计算 `agent_state`、不分配 `Vec`，供滚动钳制与命中边界高频查询）。
+    pub fn agent_entry_count(&self) -> usize {
+        let workspace = self.active_workspace();
+        let mut count = 0;
+        for tab in &workspace.tabs {
+            for pane_id in tab.layout.pane_ids() {
+                let Some(pane) = tab.pane(pane_id) else {
+                    continue;
+                };
+                if pane.lx.has_active_session() {
+                    count += 1;
+                }
+                if pane.agent.is_some() {
+                    count += 1;
+                }
+            }
+        }
+        count
+    }
+
     /// 当前工作区内 Agents 分区各行对应的（标签索引，窗格标识），与 [`Self::agent_entries`] 一一对应。
     pub fn agent_panes(&self) -> Vec<(usize, PaneId)> {
         self.agent_entries()

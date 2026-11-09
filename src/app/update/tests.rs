@@ -4086,6 +4086,34 @@ fn agent_panes_follow_active_workspace() {
     );
 }
 
+#[test]
+fn clamp_agent_scroll_and_close_containers_clear_stale_agent_hover_and_drag() {
+    let mut state = AppState::demo();
+    let pane = state.active_tab().layout.focus();
+    if let Some(target) = state.active_tab_mut().pane_mut(pane) {
+        target.lx.chat.session_id = Some("ses-hover".to_string());
+    }
+    state.agent_hover = Some(0);
+    state.agent_scroll_drag = Some(0);
+
+    // `/new` 关闭会话后列表变空，`clamp_agent_scroll` 清理越界 hover 与失效拖拽。
+    assert!(new_session(&mut state, pane));
+    assert!(clamp_agent_scroll(&mut state, 5));
+    assert_eq!(state.agent_hover, None);
+    assert_eq!(state.agent_scroll_drag, None);
+
+    // 关闭当前激活工作区时同步复位 `agent_scroll`、`agent_hover` 与 `agent_scroll_drag`。
+    create_workspace(&mut state);
+    state.agent_scroll = 3;
+    state.agent_hover = Some(2);
+    state.agent_scroll_drag = Some(1);
+    let active = state.active_workspace;
+    close_workspace(&mut state, active);
+    assert_eq!(state.agent_scroll, 0);
+    assert_eq!(state.agent_hover, None);
+    assert_eq!(state.agent_scroll_drag, None);
+}
+
 // ===== 粘贴二级面板按键路由 =====
 
 /// 打开一个含普通文件候选的粘贴面板。

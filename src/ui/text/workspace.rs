@@ -37,7 +37,7 @@ pub const LX_AGENT_WEB_GEMINI: &str = "lx-web-gemini";
 pub const LX_AGENT_WEB_GROK: &str = "lx-web-grok";
 
 /// Agent 名称标签：稳定英文小写值（与进程匹配别名一致）。
-pub fn agent_label(kind: AgentKind) -> &'static str {
+pub const fn agent_label(kind: AgentKind) -> &'static str {
     match kind {
         AgentKind::Claude => "claude",
         AgentKind::Codex => "codex",
@@ -65,7 +65,7 @@ pub const fn lx_agent_label(entry: LxEntry, site: AiWebSite) -> &'static str {
 }
 
 /// 侧栏 Agents 条目的显示名称（统一全小写英文）。
-pub fn sidebar_agent_label(kind: SidebarAgentKind) -> &'static str {
+pub const fn sidebar_agent_label(kind: SidebarAgentKind) -> &'static str {
     match kind {
         SidebarAgentKind::Lx { entry, ai_web_site } => lx_agent_label(entry, ai_web_site),
         SidebarAgentKind::Terminal(agent) => agent_label(agent),

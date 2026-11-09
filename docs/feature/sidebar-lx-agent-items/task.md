@@ -1,8 +1,8 @@
 # 左侧侧栏 Agents 分区新增 lx 模式条目 — 执行任务清单
 
-> 状态：**已在 `.worktrees/sidebar-lx-agent-items` 完成实现与验证，待用户确认合并**（2026-11-09）
-> 设计依据：[design.md](design.md)
-> 阶段划分：P0（开工门槛与基线核对）→ P1（`app` 层状态派生与视图跳转）→ P2（`ui` 与 `event` 层渲染、文案与点击接入）→ P3（单元测试与改后精确校验）。
+> 状态：**已在 `.worktrees/sidebar-lx-agent-items` 完成实现、代码复审与 P0–P3 闭环修复，待用户确认合并**（2026-11-09）
+> 设计依据：[design.md](design.md) · 评审报告：[review.md](review.md)
+> 阶段划分：P0（开工门槛与基线核对）→ P1（`app` 层状态派生与视图跳转）→ P2（`ui` 与 `event` 层渲染、文案与点击接入）→ P3（单元测试与改后精确校验）→ P4（代码评审问题闭环修复）。
 
 ---
 
@@ -66,3 +66,22 @@
   - `rtk cargo test event::tests::mouse_click::`
   - `rtk cargo clippy --all-targets -- -D warnings`
   - `rtk cargo fmt --check`
+
+---
+
+## P4. 代码评审修复与回归验证（对应 [review.md](review.md) P0 → P3）
+
+- [x] **P0-1：流中 `/new`、删除会话或切换会话时的在途请求归属隔离（`src/app/state/lx/chat.rs`、`src/app/state/lx.rs`）**：
+  - `RequestState` 新增 `is_busy_for_session(&self, session_id: Option<&str>) -> bool`。
+  - `LxChat::reset_session_view()` 复位 `status.streaming = false` 并将未建流的 `Committing` 状态置回 `RequestState::Idle`。
+  - `Lx::has_active_session()` 与 `Lx::agent_state()` 按当前 `session_id` 校验在途请求归属，并新增回归测试 `slash_new_and_site_switch_while_streaming_immediately_remove_lx_agent_row`。
+- [x] **P1-1：`/resume` 加载失败复位、加载中 `Working` 圆点与跨模式清理对齐（`src/db/service/chat.rs`、`src/app/state/lx.rs`、`src/app/update/chat/web.rs`、`src/app/update/pane.rs`、`src/event/chat/rewind.rs`）**：
+  - `load_chat_session_into_pane` 失败分支复位 `loading_session = false`，新增回归测试 `resume_missing_session_clears_loading_flag_and_removes_sidebar_entry`。
+  - `Lx::agent_state()` 将 `loading_session` 纳入 `AgentState::Working`。
+  - `on_ai_web_session_loaded` 同步 `entry = LxEntry::AiWeb`；`set_lx_entry`、`set_ai_web_site` 与 `on_rewind_finished`（`session_deleted`）统一补齐 `clear_agents()`、`compact.reset()`、`model_switch.reset()`。
+- [x] **P1-2：侧栏高频几何、滚动与悬停路径免分配优化（`src/app/state.rs`、`src/app/update/workspace_list.rs`、`src/ui/sidebar.rs`）**：
+  - 新增 `AppState::agent_entry_count(&self) -> usize`，`agent_scroll_max`、`clamp_agent_scroll`、`agent_scrollbar`、`agent_item_index_at` 统一使用轻量计数，消除高频 `Vec` 分配与 `agent_state()` 全消息扫描。
+- [x] **P2-1：列表收缩与容器关闭时同步清理 `agent_hover` 与 `agent_scroll_drag`（`src/app/update/workspace_list.rs`、`src/app/update/workspace.rs`）**：
+  - 扩展 `clamp_agent_scroll` 清理越界/错位 `agent_hover` 与失效 `agent_scroll_drag`；在 `close_workspace`、`close_tab`、`close_pane` 中同步复位，新增回归测试 `clamp_agent_scroll_and_close_containers_clear_stale_agent_hover_and_drag`。
+- [x] **P3-1：旧兼容接口 `#[cfg(test)]` 门控与 `const fn` 收敛（`src/ui/sidebar.rs`、`src/ui/mod.rs`、`src/app/update/pane.rs`、`src/ui/text/workspace.rs`）**：
+  - `ui::agent_item_at` 与 `update::focus_agent_pane` 标记为 `#[cfg(test)]`；`agent_label` 与 `sidebar_agent_label` 声明为 `pub const fn`。

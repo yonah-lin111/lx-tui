@@ -368,6 +368,9 @@ pub(crate) fn close_workspace(state: &mut AppState, target: usize) {
     state.workspaces.remove(target);
     if removed_active {
         state.active_workspace = state.active_workspace.min(state.workspaces.len() - 1);
+        state.agent_scroll = 0;
+        state.agent_hover = None;
+        state.agent_scroll_drag = None;
     } else if target < state.active_workspace {
         state.active_workspace -= 1;
     }
@@ -400,6 +403,10 @@ pub(crate) fn close_tab(state: &mut AppState, workspace: usize, tab: usize) {
     } else if tab == workspace_state.active_tab {
         workspace_state.active_tab = workspace_state.active_tab.min(last);
     }
+    if workspace == state.active_workspace {
+        state.agent_hover = None;
+        state.agent_scroll_drag = None;
+    }
     clear_selection(state);
 }
 
@@ -414,6 +421,10 @@ pub(crate) fn close_pane(state: &mut AppState, workspace: usize, tab: usize, pan
     };
     if !tab_state.remove_pane(pane) {
         return;
+    }
+    if workspace == state.active_workspace {
+        state.agent_hover = None;
+        state.agent_scroll_drag = None;
     }
     if state.toast.as_ref().and_then(|toast| toast.anchor) == Some(pane) {
         state.toast = None;

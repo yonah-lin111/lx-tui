@@ -298,6 +298,21 @@ impl RequestState {
         !matches!(self, Self::Idle)
     }
 
+    /// 在途请求是否属于当前窗格已绑定的会话（或首次提交前的 `Committing`）。
+    ///
+    /// 当执行 `/new`、删除会话、跨模式/跨站点重置或切换到其它会话后，
+    /// 旧会话的 `Streaming` / `Finishing` 请求仍在后台收尾，但其 `key.session`
+    /// 已与当前 `session_id` 不一致，不应将当前空白页或新会话判定为运行中。
+    pub fn is_busy_for_session(&self, session_id: Option<&str>) -> bool {
+        match self {
+            Self::Idle => false,
+            Self::Committing { .. } => true,
+            Self::Streaming { key, .. } | Self::Finishing { key, .. } => {
+                session_id == Some(key.session.as_str())
+            }
+        }
+    }
+
     /// 在途请求的 session 与 generation（取消/删除竞争用）。
     pub fn active(&self) -> Option<(&str, u64)> {
         match self {
@@ -703,6 +718,10 @@ impl LxChat {
         self.session_title = None;
         self.session_title_palette = 0;
         self.loading_session = false;
+        self.status.streaming = false;
+        if matches!(self.request, RequestState::Committing { .. }) {
+            self.request = RequestState::Idle;
+        }
     }
 
     /// 是否仍有本地命令在途（已提交待 spawn 或消息仍显示运行中）。

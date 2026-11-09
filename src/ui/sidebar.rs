@@ -540,19 +540,15 @@ pub fn agent_scrollbar(
     state: &AppState,
 ) -> Option<widgets::scrollbar::ScrollbarLayout> {
     let list = agents_list_rect(view, state)?;
-    agent_scrollbar_for(list, state)
+    agent_scrollbar_for(list, state, state.agent_entry_count())
 }
 
 fn agent_scrollbar_for(
     list: Rect,
     state: &AppState,
+    total: usize,
 ) -> Option<widgets::scrollbar::ScrollbarLayout> {
-    widgets::scrollbar::layout(
-        list,
-        state.agent_panes().len(),
-        usize::from(list.height),
-        state.agent_scroll,
-    )
+    widgets::scrollbar::layout(list, total, usize::from(list.height), state.agent_scroll)
 }
 
 /// Agents 列表可见行数；分区缺失或折叠时为 None。
@@ -581,7 +577,8 @@ pub fn agent_item_index_at(
     if !list.contains((column, row).into()) {
         return None;
     }
-    let content_width = match agent_scrollbar_for(list, state) {
+    let total = state.agent_entry_count();
+    let content_width = match agent_scrollbar_for(list, state, total) {
         Some(_) => list.width.saturating_sub(1),
         None => list.width,
     };
@@ -589,7 +586,7 @@ pub fn agent_item_index_at(
         return None;
     }
     let slot = state.agent_scroll.saturating_add(usize::from(row - list.y));
-    (slot < state.agent_panes().len()).then_some(slot)
+    (slot < total).then_some(slot)
 }
 
 /// Agents 条目命中：返回被点窗格标识及目标视图 `(PaneId, PaneView)`；未命中返回 None。
@@ -606,7 +603,8 @@ pub fn agent_target_at(
         .map(|entry| (entry.pane_id, entry.kind.target_view()))
 }
 
-/// Agents 条目命中：返回被点窗格标识；未命中返回 None。
+/// Agents 条目命中（仅测试兼容）：返回被点窗格标识；未命中返回 None。
+#[cfg(test)]
 pub fn agent_item_at(
     view: &layout::ViewLayout,
     state: &AppState,
@@ -635,7 +633,7 @@ pub fn render_agents(frame: &mut Frame<'_>, area: Rect, state: &AppState) {
         );
         return;
     }
-    let scrollbar = agent_scrollbar_for(area, state);
+    let scrollbar = agent_scrollbar_for(area, state, items.len());
     let list_area = match &scrollbar {
         Some(_) => Rect {
             width: area.width.saturating_sub(1),
