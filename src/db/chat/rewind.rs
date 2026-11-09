@@ -721,6 +721,10 @@ impl Database {
                 "DELETE FROM agent_model_switch WHERE session_id = ?1 AND sequence >= ?2",
                 params![commit.session_id, target_sequence],
             )?;
+            transaction.execute(
+                "DELETE FROM agent_compact_checkpoint WHERE session_id = ?1 AND sequence >= ?2",
+                params![commit.session_id, target_sequence],
+            )?;
         }
         // 删掉最后一轮后会话只剩提示（或什么都没有）：整体移除会话及其提示、快照、
         // mutation、操作日志与进程记录；不保留“只剩 Rewind 提示”的空会话。

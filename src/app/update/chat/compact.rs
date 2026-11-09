@@ -75,6 +75,7 @@ pub fn compact_command(state: &mut AppState, pane: PaneId) -> bool {
     let Some(target) = state.pane_mut_anywhere(pane) else {
         return false;
     };
+    target.lx.recap.cancel_pending();
     target.lx.compact.start(operation_id.clone(), started_at_ms);
     state.effects.push(Effect::ExecuteCompact(CompactRequest {
         pane,

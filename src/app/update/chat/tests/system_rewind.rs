@@ -167,3 +167,38 @@ fn latest_recap_is_selected_and_opens_recap_panel() {
             if request.message_id == "a1"
     )));
 }
+
+#[test]
+fn compact_at_bottom_is_selected_before_recap_or_user_turn() {
+    let (mut state, pane) = system_state();
+    {
+        let target = state.pane_mut_anywhere(pane).expect("pane");
+        target.lx.recap.entries.insert("a1".into(), recap_view());
+        target
+            .lx
+            .compact
+            .replace(vec![crate::app::state::CompactNoticeView {
+                id: "c1".into(),
+                sequence: 2,
+                model_label: "M".into(),
+                created_at_ms: 0,
+                start_sequence: 0,
+                end_sequence: 1,
+                summary: "sum".into(),
+                active: false,
+                auto: false,
+            }]);
+    }
+
+    crate::app::update::chat::rewind::select_latest(&mut state, pane).expect("selection");
+    let selected = state
+        .pane_anywhere(pane)
+        .expect("pane")
+        .lx
+        .rewind
+        .selected
+        .clone()
+        .expect("selected");
+    assert_eq!(selected.kind, RewindTargetKind::Compact);
+    assert_eq!(selected.user_message_id, "c1");
+}

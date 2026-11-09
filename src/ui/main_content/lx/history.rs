@@ -55,6 +55,7 @@ pub(crate) use file_changes::FileChangesCard;
 pub(crate) use layout::layout;
 pub(super) use paint::{BlockPaint, BlockSource};
 pub(crate) use render::{render, render_source};
+pub(super) use snapshot::{HistorySnapshot, SnapEntryKind};
 
 pub use timeline::has_history;
 use tool::Folds;

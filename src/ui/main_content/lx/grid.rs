@@ -179,6 +179,15 @@ impl Grid {
         }
     }
 
+    /// 为整段（`width` 列）叠底色，保留已有字符与前景样式（系统事件卡片选中态）。
+    pub(super) fn tint_row_bg(&mut self, x: u16, y: u16, width: u16, style: Style) {
+        for offset in 0..width {
+            if let Some(index) = self.index(x.saturating_add(offset), y) {
+                self.cells[index].style = self.cells[index].style.patch(style);
+            }
+        }
+    }
+
     pub(super) fn put_centered(
         &mut self,
         x0: u16,

@@ -489,6 +489,7 @@ pub const LX_RECAP_RUNNING: &str = "Generating recap...";
 pub const LX_RECAP_BUSY: &str = "Wait for the current turn to finish.";
 pub const LX_RECAP_PENDING: &str = "A recap is already being generated.";
 pub const LX_RECAP_EMPTY: &str = "There is no conversation history to recap.";
+pub const LX_RECAP_AFTER_COMPACT: &str = "Context is already compacted at the bottom.";
 pub const LX_RECAP_NO_MODEL: &str = "No recap model available.";
 pub const LX_RECAP_FAILED: &str = "Could not generate a recap. Please try again.";
 /// recap 卡片固定行前缀。

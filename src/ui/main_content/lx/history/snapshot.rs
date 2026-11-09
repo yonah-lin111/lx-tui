@@ -952,8 +952,10 @@ impl Builder<'_> {
                 width: self.width,
                 sig: recap_block_signature(recap_view, expanded),
             };
-            let block = self.block(key, BlockSource::Plain, start, || BlockPaint::SystemEvent {
-                card: Arc::new(recap::build(recap_view, width, expanded)),
+            let block = self.block(key, BlockSource::Recap { message_index }, start, || {
+                BlockPaint::SystemEvent {
+                    card: Arc::new(recap::build(recap_view, width, expanded)),
+                }
             });
             self.rows += block.rows;
             if let BlockPaint::SystemEvent { card } = &*block.paint

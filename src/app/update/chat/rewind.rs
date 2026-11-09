@@ -143,12 +143,15 @@ fn arm(state: &mut AppState, pane: PaneId) -> Option<()> {
         || target.lx.compact.is_running()
         || !target.lx.input.trim().is_empty()
         || target.lx.chat.session_id.is_none()
-        || !target
+        || (!target
             .lx
             .chat
             .messages
             .iter()
             .any(|message| message.role == "user" && !message.is_user_shell())
+            && target.lx.compact.checkpoints.is_empty()
+            && target.lx.model_switch.switches.is_empty()
+            && target.lx.recap.entries.is_empty())
     {
         return None;
     }
@@ -194,7 +197,7 @@ pub fn select_latest(state: &mut AppState, pane: PaneId) -> Option<()> {
         {
             consider_latest(&mut latest, message.sequence, LatestKind::Turn);
         }
-        if let Some(checkpoint) = target.lx.compact.active() {
+        if let Some(checkpoint) = target.lx.compact.checkpoints.last() {
             consider_latest(&mut latest, checkpoint.sequence, LatestKind::Compact);
         }
         if let Some(switch) = target.lx.model_switch.switches.last() {
@@ -294,7 +297,7 @@ fn select_model_switch(state: &mut AppState, pane: PaneId, session_id: &str) -> 
     target.lx.rewind.snapshot = SnapshotState::KnownEmpty;
     target.lx.rewind.selected = Some(RewindTarget {
         session_id: session_id.to_string(),
-        user_message_id: switch_id,
+        user_message_id: switch_id.clone(),
         expected_revision: revision,
         pane,
         input_at_open,
@@ -303,7 +306,7 @@ fn select_model_switch(state: &mut AppState, pane: PaneId, session_id: &str) -> 
     });
     target.lx.rewind.panel = None;
     target.lx.chat.follow_bottom = true;
-    target.lx.rewind.center_target = None;
+    target.lx.rewind.center_target = Some(switch_id);
     Some(())
 }
 
@@ -319,7 +322,7 @@ fn select_recap(state: &mut AppState, pane: PaneId, session_id: &str) -> Option<
     target.lx.rewind.snapshot = SnapshotState::KnownEmpty;
     target.lx.rewind.selected = Some(RewindTarget {
         session_id: session_id.to_string(),
-        user_message_id: message_id,
+        user_message_id: message_id.clone(),
         expected_revision: revision,
         pane,
         input_at_open,
@@ -328,14 +331,14 @@ fn select_recap(state: &mut AppState, pane: PaneId, session_id: &str) -> Option<
     });
     target.lx.rewind.panel = None;
     target.lx.chat.follow_bottom = true;
-    target.lx.rewind.center_target = None;
+    target.lx.rewind.center_target = Some(message_id);
     Some(())
 }
 
-/// 选中最近的 active compact 检查点：只冻结检查点 id 与 revision，不请求文件预检。
+/// 选中最近的 compact 检查点：只冻结检查点 id 与 revision，不请求文件预检。
 fn select_compact(state: &mut AppState, pane: PaneId, session_id: &str) -> Option<()> {
     let target = state.pane_anywhere(pane)?;
-    let checkpoint = target.lx.compact.active()?.clone();
+    let checkpoint = target.lx.compact.checkpoints.last()?.clone();
     let revision = target.lx.chat.revision;
     let input_at_open = target.lx.input.clone();
     let target = state.pane_mut_anywhere(pane)?;
@@ -353,7 +356,7 @@ fn select_compact(state: &mut AppState, pane: PaneId, session_id: &str) -> Optio
     });
     target.lx.rewind.panel = None;
     target.lx.chat.follow_bottom = true;
-    target.lx.rewind.center_target = None;
+    target.lx.rewind.center_target = Some(checkpoint.id);
     Some(())
 }
 

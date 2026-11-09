@@ -47,6 +47,8 @@ pub(crate) enum BlockSource {
         last: usize,
         expanded: bool,
     },
+    /// 消息尾部的 recap 系统事件卡片。
+    Recap { message_index: usize },
     /// 消息内的汇报块（第 `index` 份）。
     Report { message_index: usize, index: usize },
     /// 与 `Lx` 无关的静态块（统计行）：样式已随绘制数据存好，绘制不需要回查状态。
@@ -236,6 +238,14 @@ impl BlockPaint {
             Self::SystemEvent { card } => {
                 let mut row = start;
                 card.draw(grid, rect, scroll, &mut row);
+                if system_event_selected(history, source) {
+                    let bg = style::chat_user_target_bg();
+                    for content_row in start..row {
+                        if let Some(y) = visible_row(rect, scroll, content_row) {
+                            grid.tint_row_bg(rect.x, y, rect.width, bg);
+                        }
+                    }
+                }
             }
             Self::FileChanges { card } => {
                 let mut row = start;
@@ -243,6 +253,28 @@ impl BlockPaint {
             }
             Self::Legacy { .. } => draw_legacy(grid, rect, history, source, scroll, start),
         }
+    }
+}
+
+/// 系统事件卡片（compact / 模型切换 / recap）是否被 `/rewind` 选中。
+fn system_event_selected(history: HistorySource<'_>, source: BlockSource) -> bool {
+    let Some(selected_id) = history.selected_user_message else {
+        return false;
+    };
+    match source {
+        BlockSource::Compact { index, .. } => history
+            .checkpoints
+            .get(index)
+            .is_some_and(|item| item.id == selected_id),
+        BlockSource::ModelSwitch { last, .. } => history
+            .switches
+            .get(last)
+            .is_some_and(|item| item.id == selected_id),
+        BlockSource::Recap { message_index } => history
+            .messages
+            .get(message_index)
+            .is_some_and(|item| item.id == selected_id),
+        _ => false,
     }
 }
 
@@ -689,7 +721,8 @@ fn draw_legacy(
         // Legacy 路径不再构造这三个来源，保留空分支只为穷尽匹配。
         BlockSource::Rewind { .. }
         | BlockSource::Compact { .. }
-        | BlockSource::ModelSwitch { .. } => {}
+        | BlockSource::ModelSwitch { .. }
+        | BlockSource::Recap { .. } => {}
         BlockSource::RunningCompact => {
             super::compact::draw_running(
                 grid,

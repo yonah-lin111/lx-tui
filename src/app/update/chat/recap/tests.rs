@@ -174,3 +174,44 @@ fn recap_entries_are_empty_by_default() {
     let lx = Lx::new();
     assert!(lx.recap.is_empty());
 }
+
+#[test]
+fn recap_is_prohibited_when_compact_is_at_bottom() {
+    let mut state = AppState::demo();
+    let pane = pane_id(&state);
+    let target = state.pane_mut_anywhere(pane).expect("pane");
+    target.view = PaneView::Lx;
+    target.lx.entry = LxEntry::Native;
+    target.lx.chat.session_id = Some("sess-1".into());
+    target.lx.chat.messages = vec![
+        text_message("u0", 0, "user", "first"),
+        text_message("a0", 0, "assistant", "answer"),
+    ];
+    target
+        .lx
+        .compact
+        .replace(vec![crate::app::state::CompactNoticeView {
+            id: "compact-1".into(),
+            sequence: 2,
+            model_label: "M".into(),
+            created_at_ms: 0,
+            start_sequence: 0,
+            end_sequence: 1,
+            summary: "summary".into(),
+            active: true,
+            auto: false,
+        }]);
+    for turn in [0, 1, 2] {
+        target.lx.recap.on_turn_completed(turn);
+    }
+    assert!(compact_at_bottom(&target.lx));
+    assert_eq!(auto_eligibility(&state, pane), Eligibility::Ineligible);
+
+    assert!(recap_command(&mut state, pane));
+    let target = state.pane_anywhere(pane).expect("pane");
+    assert!(target.lx.recap.pending.is_none());
+    assert_eq!(
+        target.lx.toast.as_ref().map(|toast| toast.message.as_str()),
+        Some(text::LX_RECAP_AFTER_COMPACT)
+    );
+}

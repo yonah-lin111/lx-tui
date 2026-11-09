@@ -214,11 +214,11 @@ impl Database {
         })
     }
 
-    /// 撤销一次 compact：只切检查点状态与 revision，**不触碰任何消息或文件**。
+    /// 撤销一次 compact：删除目标检查点并推进 revision，**不触碰任何消息或文件**。
     ///
     /// 撤销记录复用既有 `agent_rewind_operation`（`action = 'restore_compact'`），
     /// 不建立平行撤销系统：本函数在同一事务内写 operation 行并直接推进到 committed。
-    /// 幂等：同 `operation_id` 已把目标检查点标成 reverted 时返回原结果。
+    /// 幂等：同 `operation_id` 重放时直接返回已撤销快照。
     pub fn revert_compact(
         &self,
         workspace: &Path,
@@ -238,31 +238,48 @@ impl Database {
         if owned.is_none() {
             return Err(DbError::SessionMissing);
         }
-        let existing: Option<(String, String, i64, Option<String>)> = transaction
+        // 幂等重放只认同一次操作：已提交的同 operation_id 直接返回，其它 operation 报目标已变。
+        let committed_op: Option<(String, String)> = transaction
             .query_row(
-                r#"SELECT external_id, state, sequence, reverted_by_operation_id
+                r#"SELECT target_user_message_id, phase
+                   FROM agent_rewind_operation
+                   WHERE operation_id = ?1 AND session_id = ?2 AND action = 'restore_compact'"#,
+                params![revert.operation_id, revert.session_id],
+                |row| Ok((row.get(0)?, row.get(1)?)),
+            )
+            .optional()?;
+        if let Some((target_id, phase)) = committed_op
+            && phase == "committed"
+            && target_id == revert.checkpoint_id
+        {
+            transaction.commit()?;
+            return Ok(CompactCheckpoint {
+                id: target_id,
+                sequence: 0,
+                operation_id: revert.operation_id.clone(),
+                base_checkpoint_id: None,
+                start_sequence: 0,
+                end_sequence: 0,
+                summary_text: String::new(),
+                model_label: String::new(),
+                state: COMPACT_REVERTED.to_string(),
+                created_at_ms: 0,
+            });
+        }
+        let existing: Option<String> = transaction
+            .query_row(
+                r#"SELECT external_id
                    FROM agent_compact_checkpoint
                    WHERE external_id = ?1 AND session_id = ?2"#,
                 params![revert.checkpoint_id, revert.session_id],
-                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?)),
+                |row| row.get(0),
             )
             .optional()?;
-        let Some((id, state, _sequence, reverted_by)) = existing else {
+        let Some(id) = existing else {
             return Err(DbError::RewindTargetChanged);
         };
-        if state == COMPACT_REVERTED {
-            // 幂等重放只认同一次操作：换一个 operation 再来是过期目标，不是成功。
-            if reverted_by.as_deref() != Some(revert.operation_id.as_str()) {
-                return Err(DbError::RewindTargetChanged);
-            }
-            let checkpoint =
-                checkpoint_by_id(&transaction, &id)?.ok_or(DbError::RewindTargetChanged)?;
-            transaction.commit()?;
-            return Ok(checkpoint);
-        }
-        if reverted_by.is_some() {
-            return Err(DbError::MutationConflict);
-        }
+        let mut checkpoint =
+            checkpoint_by_id(&transaction, &id)?.ok_or(DbError::RewindTargetChanged)?;
         let revision: i64 = transaction.query_row(
             "SELECT revision FROM agent_session WHERE external_id = ?1",
             params![revert.session_id],
@@ -271,15 +288,13 @@ impl Database {
         if revision != revert.expected_revision {
             return Err(DbError::RewindTargetChanged);
         }
-        // 只能撤销当前生效的最新检查点：更晚的 active 检查点存在时目标已过期。
+        // 只能撤销时间线上最新的一条检查点：更晚的检查点存在时目标已过期。
         let later: Option<String> = transaction
             .query_row(
                 r#"SELECT external_id FROM agent_compact_checkpoint
-                   WHERE session_id = ?1 AND state = 'active' AND sequence > (
-                       SELECT sequence FROM agent_compact_checkpoint WHERE external_id = ?2
-                   )
+                   WHERE session_id = ?1 AND sequence > ?2
                    ORDER BY sequence DESC LIMIT 1"#,
-                params![revert.session_id, id],
+                params![revert.session_id, checkpoint.sequence],
                 |row| row.get(0),
             )
             .optional()?;
@@ -305,17 +320,14 @@ impl Database {
             ],
         )?;
         transaction.execute(
-            r#"UPDATE agent_compact_checkpoint
-               SET state = 'reverted', reverted_by_operation_id = ?1
-               WHERE external_id = ?2"#,
-            params![revert.operation_id, id],
+            "DELETE FROM agent_compact_checkpoint WHERE external_id = ?1 AND session_id = ?2",
+            params![id, revert.session_id],
         )?;
         transaction.execute(
             "UPDATE agent_session SET revision = revision + 1, updated_at_ms = ?1 WHERE external_id = ?2",
             params![now, revert.session_id],
         )?;
-        let checkpoint =
-            checkpoint_by_id(&transaction, &id)?.ok_or(DbError::RewindTargetChanged)?;
+        checkpoint.state = COMPACT_REVERTED.to_string();
         transaction.commit()?;
         Ok(checkpoint)
     }

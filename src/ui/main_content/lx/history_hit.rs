@@ -64,25 +64,75 @@ pub(crate) fn history_center_target(
         return None;
     }
     let rect = history_rect(area, lx)?;
-    // 只要行数与消息区间：直接读快照，不构造每张卡片的 `CardHit`。
+    // 只要行数与条目区间：直接读快照，不构造每张卡片的 `CardHit`。
     let snapshot = cache.snapshot(history::content_rect(rect).width, lx);
-    let index = lx
-        .chat
-        .messages
-        .iter()
-        .position(|message| message.id == message_id)?;
-    let rows = snapshot.messages.get(index)?;
+    let (start, end) = target_row_range(lx, &snapshot, message_id)?;
     let height = usize::from(rect.height.max(1));
     let max_top = snapshot.total_rows.saturating_sub(height);
     if max_top == 0 {
         return None;
     }
-    let block = rows.end.saturating_sub(rows.start).min(height);
-    let top = rows
-        .start
+    let block = end.saturating_sub(start).min(height);
+    let top = start
         .saturating_sub(height.saturating_sub(block) / 2)
         .min(max_top);
     Some((top, max_top))
+}
+
+/// 解析居中目标的起止行（支持用户消息、compact 检查点、模型切换与 recap 块）。
+fn target_row_range(
+    lx: &Lx,
+    snapshot: &history::HistorySnapshot,
+    target_id: &str,
+) -> Option<(usize, usize)> {
+    if let Some(index) = lx
+        .chat
+        .messages
+        .iter()
+        .position(|message| message.id == target_id)
+    {
+        if lx.rewind.selected.as_ref().is_some_and(|selected| {
+            selected.kind == crate::app::state::RewindTargetKind::Recap
+                && selected.user_message_id == target_id
+        }) {
+            for entry in &snapshot.entries {
+                for block in &entry.blocks {
+                    if matches!(
+                        block.source,
+                        history::BlockSource::Recap { message_index } if message_index == index
+                    ) {
+                        return Some((block.start, block.start.saturating_add(block.rows)));
+                    }
+                }
+            }
+        }
+        let rows = snapshot.messages.get(index)?;
+        return Some((rows.start, rows.end));
+    }
+    for entry in &snapshot.entries {
+        match entry.kind {
+            history::SnapEntryKind::Compact(index)
+                if lx
+                    .compact
+                    .checkpoints
+                    .get(index)
+                    .is_some_and(|item| item.id == target_id) =>
+            {
+                return Some((entry.start, entry.end));
+            }
+            history::SnapEntryKind::ModelSwitch { last, .. }
+                if lx
+                    .model_switch
+                    .switches
+                    .get(last)
+                    .is_some_and(|item| item.id == target_id) =>
+            {
+                return Some((entry.start, entry.end));
+            }
+            _ => {}
+        }
+    }
+    None
 }
 
 /// 聊天历史滚动条几何（贴右缘一列；无消息或内容未溢出时为 None）。

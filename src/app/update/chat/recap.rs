@@ -41,6 +41,7 @@ enum ScheduleError {
     NoWorkspace,
     NoModel,
     NoHistory,
+    CompactAtBottom,
 }
 
 impl ScheduleError {
@@ -51,6 +52,7 @@ impl ScheduleError {
             Self::NoSession | Self::NoHistory => text::LX_RECAP_EMPTY,
             Self::NoWorkspace => text::LX_CHAT_NO_WORKSPACE,
             Self::NoModel => text::LX_RECAP_NO_MODEL,
+            Self::CompactAtBottom => text::LX_RECAP_AFTER_COMPACT,
         }
     }
 }
@@ -233,7 +235,7 @@ fn auto_eligibility(state: &AppState, pane: PaneId) -> Eligibility {
     if target.lx.chat.session_id.is_none() || target.lx.recap.pending.is_some() {
         return Eligibility::Ineligible;
     }
-    if !target.lx.recap.auto_eligible() {
+    if !target.lx.recap.auto_eligible() || compact_at_bottom(&target.lx) {
         return Eligibility::Ineligible;
     }
     if target_busy(&target.lx) || session_busy(state, pane) {
@@ -256,6 +258,23 @@ fn target_busy(lx: &Lx) -> bool {
         || lx.chat.has_running_shell()
         || lx.agents.running_count() > 0
         || !lx.chat.queue.is_empty()
+}
+
+/// 时间线底部已是上下文压缩条目（晚于最后一条完成态 assistant 回复）时禁止 recap：
+/// recap 挂在最后一条 assistant 消息尾部，若底部有更新的 compact，回顾会落到压缩块上方。
+fn compact_at_bottom(lx: &Lx) -> bool {
+    let Some(checkpoint) = lx.compact.checkpoints.last() else {
+        return false;
+    };
+    let last_assistant_sequence = lx
+        .chat
+        .messages
+        .iter()
+        .rev()
+        .find(|message| message.role == "assistant" && message.status == "complete")
+        .map(|message| message.sequence)
+        .unwrap_or(i64::MIN);
+    checkpoint.sequence > last_assistant_sequence
 }
 
 fn session_busy(state: &AppState, pane: PaneId) -> bool {
@@ -291,10 +310,6 @@ fn schedule_recap(state: &mut AppState, pane: PaneId, manual: bool) -> Result<()
         let Some(workspace) = state.chat_session_key_for_pane(pane) else {
             return Err(ScheduleError::NoWorkspace);
         };
-        let fallback = target.lx.chat.effective_selection(&state.models);
-        let Some(frozen) = state.models.resolve_recap_model(fallback.as_ref()) else {
-            return Err(ScheduleError::NoModel);
-        };
         let Some(last) = target
             .lx
             .chat
@@ -304,6 +319,13 @@ fn schedule_recap(state: &mut AppState, pane: PaneId, manual: bool) -> Result<()
             .find(|message| message.role == "assistant" && message.status == "complete")
         else {
             return Err(ScheduleError::NoHistory);
+        };
+        if compact_at_bottom(&target.lx) {
+            return Err(ScheduleError::CompactAtBottom);
+        }
+        let fallback = target.lx.chat.effective_selection(&state.models);
+        let Some(frozen) = state.models.resolve_recap_model(fallback.as_ref()) else {
+            return Err(ScheduleError::NoModel);
         };
         let compact_summary = target
             .lx
