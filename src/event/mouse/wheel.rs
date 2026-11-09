@@ -86,7 +86,7 @@ fn wheel_lx_selection(
     let step = direction.saturating_mul(WHEEL_LINES);
     let moved = if has_task {
         update::resolve_task_output_visible(state, rects);
-        update::resolve_task_agents_visible(state, rects);
+        update::resolve_task_agents_visible(state, rects, cache);
         let agents_tab = state
             .pane_anywhere(pane)
             .and_then(|target| target.lx.task.as_ref())
@@ -508,7 +508,7 @@ pub(crate) fn handle_mouse_wheel(
                 && (task_rects.output.y..task_rects.list.y).contains(&mouse.row)
             {
                 update::resolve_task_output_visible(state, rects);
-                update::resolve_task_agents_visible(state, rects);
+                update::resolve_task_agents_visible(state, rects, cache);
                 let agents_tab = state
                     .pane_anywhere(pane)
                     .and_then(|target| target.lx.task.as_ref())

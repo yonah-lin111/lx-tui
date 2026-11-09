@@ -258,7 +258,7 @@ pub(crate) fn finish_subagent_with_billing(
         &handle.workspace,
         &handle.parent.session,
     );
-    update::refresh_subagent_cards(state, handle.parent.pane);
+    update::request_subagent_cards_refresh(state, handle.parent.pane);
     if !continued {
         let _ = handle.done.send(true);
         let _ = drain_reports(state, persistence, handle.parent.pane);

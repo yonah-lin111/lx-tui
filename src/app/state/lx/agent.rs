@@ -369,6 +369,11 @@ pub fn seed_chat_model(
 pub struct AgentsState {
     /// 运行记录：按 `agent_path` 树形前序排列（兄弟间保持创建顺序）。
     pub runs: Vec<SubagentRun>,
+    /// 父消息里的 `spawn_agent` / `wait_agent` 卡片待回填。
+    ///
+    /// delta 只置位，事件循环每批最多全量对账一次；避免并行 subagent 时
+    /// 每条 delta 都扫描“主聊天 + 所有 run 聊天”。
+    pub cards_dirty: bool,
 }
 
 impl AgentsState {

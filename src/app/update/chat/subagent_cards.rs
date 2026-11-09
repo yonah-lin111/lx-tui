@@ -50,6 +50,9 @@ impl RunCardSnapshot {
 /// - 运行中的 `wait_agent` 目标状态用当前 run 快照实时填充。
 ///
 /// spawn 的工具调用在子 agent 启动时就已经返回，不能拿工具状态冒充运行状态。
+///
+/// **delta 路径不要直接调用**：先用 [`request_subagent_cards_refresh`] 置位，
+/// 由事件循环每批调用 [`flush_subagent_cards`] 对账一次。
 pub fn refresh_subagent_cards(state: &mut AppState, pane: PaneId) -> bool {
     let Some(target) = state.pane_mut_anywhere(pane) else {
         return false;
@@ -78,6 +81,40 @@ pub fn refresh_subagent_cards(state: &mut AppState, pane: PaneId) -> bool {
     // 子 agent 的消息流里还有更下一层的工具卡片；相对路径按该 run 的位置解析。
     for run in &mut target.lx.agents.runs {
         changed |= refresh_messages_with_runs(&mut run.chat.messages, &runs, &run.agent_path);
+    }
+    changed
+}
+
+/// 标记本窗格委派卡片待刷新；返回是否是第一次标记。
+///
+/// 真正的全量对账由事件循环每帧绘制前调用 [`flush_subagent_cards`] 执行一次。
+pub fn request_subagent_cards_refresh(state: &mut AppState, pane: PaneId) -> bool {
+    let Some(target) = state.pane_mut_anywhere(pane) else {
+        return false;
+    };
+    let was_dirty = target.lx.agents.cards_dirty;
+    target.lx.agents.cards_dirty = true;
+    !was_dirty
+}
+
+/// 每帧绘制前执行一次：把本帧 delta 产生的卡片状态变化统一回填。
+pub fn flush_subagent_cards(state: &mut AppState) -> bool {
+    let panes: Vec<PaneId> = state
+        .all_pane_ids()
+        .into_iter()
+        .filter(|pane| {
+            state
+                .pane_anywhere(*pane)
+                .is_some_and(|target| target.lx.agents.cards_dirty)
+        })
+        .collect();
+    let mut changed = false;
+    for pane in panes {
+        // 先落回 false 再对账，避免 `refresh_subagent_cards` 的 `&mut state` 重借。
+        if let Some(target) = state.pane_mut_anywhere(pane) {
+            target.lx.agents.cards_dirty = false;
+        }
+        changed |= refresh_subagent_cards(state, pane);
     }
     changed
 }

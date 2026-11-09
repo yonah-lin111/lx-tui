@@ -379,6 +379,29 @@ fn state_with_lx_history() -> (AppState, PaneId, ratatui::layout::Rect) {
 }
 
 #[test]
+fn task_page_skips_hidden_history_layout() {
+    let (mut state, pane, rect) = state_with_lx_history();
+    state.pane_mut_anywhere(pane).expect("pane").lx.task =
+        Some(crate::app::state::TaskPage::default());
+    let rects = [(pane, rect)];
+    let mut cache = crate::ui::RenderCache::default();
+    assert!(!resolve_lx_history(&mut state, &rects, &mut cache));
+    assert_eq!(
+        cache.pane(pane).builds(),
+        0,
+        "面板打开时主历史不可见，不得排版"
+    );
+
+    state.pane_mut_anywhere(pane).expect("pane").lx.task = None;
+    let _ = resolve_lx_history(&mut state, &rects, &mut cache);
+    assert_eq!(
+        cache.pane(pane).builds(),
+        1,
+        "关闭面板后下一帧恢复主历史并重建一次"
+    );
+}
+
+#[test]
 fn resolve_writes_sticky_suppression_memory_from_pure_view() {
     let (mut state, pane, rect) = state_with_lx_history();
     let rects = [(pane, rect)];

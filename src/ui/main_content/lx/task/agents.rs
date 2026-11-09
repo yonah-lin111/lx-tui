@@ -5,10 +5,10 @@
 //! 绝不把关键段截成半截。
 
 use ratatui::layout::Rect;
-use unicode_width::UnicodeWidthStr;
+use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
 
 use crate::app::state::{AgentsState, SubagentRun, TaskPage};
-use crate::ui::main_content::lx::history::{self, HistorySource};
+use crate::ui::main_content::lx::history::{self, HistorySource, HistoryViewport};
 use crate::ui::{style, text};
 
 use super::super::Grid;
@@ -33,7 +33,10 @@ pub(crate) fn draw_detail(
     if rect.width == 0 || rect.height == 0 {
         return 0;
     }
-    let source = HistorySource::from_chat(&run.chat, &run.compact);
+    let source = HistorySource::from_chat(&run.chat, &run.compact).with_viewport(HistoryViewport {
+        scroll,
+        follow_bottom: run.follow,
+    });
     if run.chat.messages.is_empty() {
         draw_empty_detail(grid, rect, run, loading_frame);
         return 1;
@@ -88,18 +91,116 @@ pub(crate) fn draw_empty_detail(
 
 /// 详情区行数（`resolve_task_agents_visible` 用）。
 ///
-/// 这里用一次性缓存量一次行数：Agents 页打开时只有一个高亮项，成本低于
-/// 把渲染缓存搬进 `app/`；真正的绘制仍走事件循环的跨帧缓存。
-pub(crate) fn detail_rows(rect: Rect, run: &SubagentRun) -> usize {
+/// 复用事件循环的跨帧 `PaneCache`：量行与绘制命中同一份快照，一轮 delta 只排版一次。
+pub(crate) fn detail_rows(
+    rect: Rect,
+    run: &SubagentRun,
+    cache: &mut crate::ui::PaneCache,
+) -> usize {
     let content_width = history::content_rect(rect).width;
     if content_width == 0 {
         return usize::from(rect.height);
     }
-    let source = HistorySource::from_chat(&run.chat, &run.compact);
-    history::measure(content_width, source)
+    let source = HistorySource::from_chat(&run.chat, &run.compact).with_viewport(HistoryViewport {
+        scroll: run.scroll,
+        follow_bottom: run.follow,
+    });
+    // `resolve` 先于绘制，首帧也要有视口行数，离屏合并才能判定。
+    cache.set_viewport_rows(usize::from(rect.height));
+    history::measure_cached(content_width, source, cache)
 }
 
-/// 列表绘制：`❯ ● explorer  running  14s  <task 首行>`。
+/// 步骤标记文本（`■ `）占用的列数。
+const STEP_MARK_COLS: u16 = 2;
+
+/// 固定列几何；所有 x 都是相对 `list.x` 的偏移。
+#[derive(Debug, Clone, Copy)]
+struct ListColumns {
+    /// 树形层级槽宽度（第一层也留空占位）。
+    gutter: u16,
+    /// 身份列最大宽度。
+    identity_w: u16,
+    /// 状态列最大宽度。
+    status_w: u16,
+    /// 时长列最大宽度。
+    age_w: u16,
+    x_identity: u16,
+    x_status: u16,
+    x_age: u16,
+    x_title: u16,
+}
+
+/// 当前筛选集的树形前缀：列宽计算与绘制共用，避免每行重复回溯兄弟节点。
+fn list_prefixes(runs: &[&SubagentRun]) -> Vec<Option<String>> {
+    runs.iter()
+        .enumerate()
+        .map(|(index, run)| tree_prefix(run, runs, index))
+        .collect()
+}
+
+fn text_width(value: &str) -> u16 {
+    u16::try_from(value.width()).unwrap_or(u16::MAX)
+}
+
+/// 按当前筛选结果计算固定列；滚动时列不跳。
+fn list_columns(runs: &[&SubagentRun], prefixes: &[Option<String>], now_ms: i64) -> ListColumns {
+    let gutter = prefixes
+        .iter()
+        .flatten()
+        .map(|prefix| text_width(prefix))
+        .max()
+        .unwrap_or(0);
+    let identity_w = runs
+        .iter()
+        .map(|run| text_width(&run.display_identity()))
+        .max()
+        .unwrap_or(0)
+        .max(ROLE_MIN);
+    let status_w = runs
+        .iter()
+        .map(|run| {
+            text_width(&text::agent_status_with_queue(
+                &run.status,
+                run.queued_count,
+            ))
+        })
+        .max()
+        .unwrap_or(0)
+        .max(STATUS_MIN);
+    let age_w = runs
+        .iter()
+        .map(|run| {
+            text_width(&crate::app::state::lx::task::age_label(
+                run.elapsed_ms(now_ms),
+            ))
+        })
+        .max()
+        .unwrap_or(0);
+    // 状态图标本身是 `■ ` 两列；身份紧跟其后，不再额外加 gap。
+    let x_identity = super::MARKER_COLS
+        .saturating_add(gutter)
+        .saturating_add(STEP_MARK_COLS);
+    let x_status = x_identity
+        .saturating_add(identity_w)
+        .saturating_add(CELL_GAP);
+    let x_age = x_status.saturating_add(status_w).saturating_add(CELL_GAP);
+    let x_title = x_age.saturating_add(age_w).saturating_add(CELL_GAP);
+    ListColumns {
+        gutter,
+        identity_w,
+        status_w,
+        age_w,
+        x_identity,
+        x_status,
+        x_age,
+        x_title,
+    }
+}
+
+/// 列表绘制：`❯ ■ Turing [explorer]  running  2m 59s  <task 首行>`。
+///
+/// 固定列：状态图标、身份、状态、时长、标题在所有行同一起点；窄窗格从右往左
+/// 整列丢弃（标题 → 时长 → 状态），身份与状态图标永远保留。
 pub(super) fn draw_list(grid: &mut Grid, list: Rect, page: &TaskPage, agents: &AgentsState) {
     let indices = agents.filtered_indices(page.agent_filter);
     let visible_runs: Vec<&SubagentRun> = indices
@@ -113,6 +214,9 @@ pub(super) fn draw_list(grid: &mut Grid, list: Rect, page: &TaskPage, agents: &A
     let visible = usize::from(list.height);
     let start = window_start(page, agents, visible);
     let now = crate::db::now_ms();
+    let prefixes = list_prefixes(&visible_runs);
+    let columns = list_columns(&visible_runs, &prefixes, now);
+    let right = list.right();
     for (offset, run) in visible_runs.iter().skip(start).take(visible).enumerate() {
         let index = start + offset;
         let y = list.y + u16::try_from(offset).unwrap_or(0);
@@ -126,26 +230,26 @@ pub(super) fn draw_list(grid: &mut Grid, list: Rect, page: &TaskPage, agents: &A
                 list.width,
             );
         }
-        let mut row_x = list.x.saturating_add(super::MARKER_COLS);
-        let mut row_w = list.width.saturating_sub(super::MARKER_COLS);
-        if row_w == 0 {
-            continue;
-        }
-        if let Some(prefix) = tree_prefix(run, &visible_runs, index) {
-            let prefix_w = u16::try_from(prefix.width()).unwrap_or(0);
-            // 连前缀都放不下时整行丢弃，不能留下悬空的 `└─`。
-            if row_w <= prefix_w {
-                continue;
-            }
-            grid.put_clipped(row_x, y, &prefix, style::chat_notice_connector(), row_w);
-            row_x = row_x.saturating_add(prefix_w);
-            row_w = row_w.saturating_sub(prefix_w);
-        }
         let row_style = if selected {
             style::text()
         } else {
             style::muted()
         };
+        // 层级槽：前缀只写在自己的槽内；第一层不画连接符，但同样留空占位。
+        let gutter_x = list.x.saturating_add(super::MARKER_COLS);
+        if let Some(prefix) = prefixes.get(index).and_then(Option::as_deref) {
+            grid.put_clipped(
+                gutter_x,
+                y,
+                prefix,
+                style::chat_notice_connector(),
+                columns.gutter,
+            );
+        }
+        let mark_x = gutter_x.saturating_add(columns.gutter);
+        if mark_x.saturating_add(STEP_MARK_COLS) > right {
+            continue;
+        }
         // 行首：步骤标记（与历史同一套字形：运行中 `●`、失败/取消/完成各自语义）。
         let mark = if run.is_running() {
             crate::ui::main_content::lx::history::StepMark::Running
@@ -161,69 +265,88 @@ pub(super) fn draw_list(grid: &mut Grid, list: Rect, page: &TaskPage, agents: &A
         };
         // 列表标记保持静态：运行状态由文字与状态色表达，闪烁只留给详情里的步骤。
         let mark_text = format!("{} ", mark.glyph(StepKind::Tool, 0, false));
-        let mark_style = mark.style(StepKind::Tool, false);
-        let mark_w = u16::try_from(mark_text.width()).unwrap_or(2);
-        grid.put_clipped(row_x, y, &mark_text, mark_style, row_w);
-        let mut x = row_x.saturating_add(mark_w);
-        // 身份（昵称 + 角色） / 状态 / 时长三段固定宽度优先；title 吃掉剩余。
-        let age = crate::app::state::lx::task::age_label(run.elapsed_ms(now));
-        let age_w = u16::try_from(age.width()).unwrap_or(0);
-        let identity = run.display_identity();
-        let role_w = u16::try_from(identity.width()).unwrap_or(0).max(ROLE_MIN);
-        let status_label = text::agent_status_with_queue(&run.status, run.queued_count);
-        let status_w = u16::try_from(status_label.width())
-            .unwrap_or(0)
-            .max(STATUS_MIN);
-        let base_fixed = role_w
-            .saturating_add(CELL_GAP)
-            .saturating_add(status_w)
-            .saturating_add(CELL_GAP)
-            .saturating_add(age_w)
-            .saturating_add(CELL_GAP);
-        // Token 列只为「有用量」的 run 出现；窄窗格先牺牲它，身份/状态/时长不动。
-        let token_label = run
-            .total_tokens()
-            .map(|tokens| format!("{} tok", text::token_count(tokens as u64)));
-        let token_w = token_label
-            .as_ref()
-            .map_or(0, |token| u16::try_from(token.width()).unwrap_or(0));
-        let fixed_with_token = base_fixed.saturating_add(token_w).saturating_add(CELL_GAP);
-        let show_token =
-            token_label.is_some() && fixed_with_token.saturating_add(ROLE_MIN) <= row_w;
-        let fixed = if show_token {
-            fixed_with_token
-        } else {
-            base_fixed
-        };
-        // 窄窗格：放不下身份 + 状态就整项丢弃（只留标记，与进程行同一规则）。
-        if fixed.saturating_add(ROLE_MIN) > row_w {
+        grid.put_clipped(
+            mark_x,
+            y,
+            &mark_text,
+            mark.style(StepKind::Tool, false),
+            STEP_MARK_COLS,
+        );
+        let identity_x = list.x.saturating_add(columns.x_identity);
+        let identity_room = right.saturating_sub(identity_x);
+        if identity_room == 0 {
             continue;
         }
-        let role_right = x.saturating_add(role_w);
-        grid.put_clipped(x, y, &identity, row_style, role_right);
-        x = role_right.saturating_add(CELL_GAP);
-        let status_right = x.saturating_add(status_w);
+        let identity = run.display_identity();
+        if columns.identity_w <= identity_room {
+            grid.put_clipped(identity_x, y, &identity, row_style, columns.identity_w);
+        } else {
+            // 极端窄窗格：身份也必须保留，按显示宽度用单字符省略号收尾。
+            let clipped = clip_ellipsis(&identity, identity_room);
+            grid.put_clipped(identity_x, y, &clipped, row_style, identity_room);
+            continue;
+        }
+        let status_x = list.x.saturating_add(columns.x_status);
+        if status_x.saturating_add(columns.status_w) > right {
+            continue;
+        }
+        let status_label = text::agent_status_with_queue(&run.status, run.queued_count);
         let status_style = match run.status.as_str() {
             "running" | "blocked" | "interrupted" => style::agent_warn(),
             "failed" => style::agent_fail(),
             _ => style::agent_step_detail(),
         };
-        grid.put_clipped(x, y, &status_label, status_style, status_right);
-        x = status_right.saturating_add(CELL_GAP);
-        let age_right = x.saturating_add(age_w);
-        grid.put_clipped(x, y, &age, style::agent_step_detail(), age_right);
-        x = age_right.saturating_add(CELL_GAP);
-        if show_token && let Some(token) = token_label.as_deref() {
-            let token_right = x.saturating_add(token_w);
-            grid.put_clipped(x, y, token, style::agent_step_detail(), token_right);
-            x = token_right.saturating_add(CELL_GAP);
-        }
-        // 只显示短标题；绝不把 task 提示词塞进列表（旧记录没有标题则留空）。
+        grid.put_clipped(status_x, y, &status_label, status_style, columns.status_w);
+        let age_x = list.x.saturating_add(columns.x_age);
+        let show_age = age_x.saturating_add(columns.age_w) <= right;
+        let title_x = if show_age {
+            let age = crate::app::state::lx::task::age_label(run.elapsed_ms(now));
+            let age_w = text_width(&age);
+            // 时长是数字列，右对齐在固定宽度内，不把标题起点带跑。
+            let age_start = age_x.saturating_add(columns.age_w).saturating_sub(age_w);
+            grid.put_clipped(age_start, y, &age, style::agent_step_detail(), age_w);
+            list.x.saturating_add(columns.x_title)
+        } else {
+            age_x
+        };
+        let title_w = right.saturating_sub(title_x);
         let title = run.display_title();
-        if x < list.right() && !title.is_empty() {
-            grid.put_clipped(x, y, title, row_style, list.right());
+        if title_w > 0 && !title.is_empty() {
+            grid.put_clipped(
+                title_x,
+                y,
+                &clip_ellipsis(title, title_w),
+                row_style,
+                title_w,
+            );
         }
     }
+}
+
+/// 按显示宽度裁剪并用单字符 `…` 收尾；宽字符不会写半格。
+fn clip_ellipsis(text: &str, max: u16) -> String {
+    if max == 0 {
+        return String::new();
+    }
+    if text_width(text) <= max {
+        return text.to_string();
+    }
+    if max == 1 {
+        return "…".to_string();
+    }
+    let budget = usize::from(max) - 1;
+    let mut out = String::new();
+    let mut width = 0usize;
+    for ch in text.chars() {
+        let cell = ch.width().unwrap_or(0);
+        if width.saturating_add(cell) > budget {
+            break;
+        }
+        out.push(ch);
+        width = width.saturating_add(cell);
+    }
+    out.push('…');
+    out
 }
 
 /// 树形缩进前缀：直接子 agent 不缩进；孙辈起用 `├─ `/`└─ ` 表示同级末项。

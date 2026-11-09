@@ -749,8 +749,8 @@ pub fn task_output_inner(area: Rect, lx: &Lx) -> Option<Rect> {
 }
 
 /// Agents 详情区的 `(可见行数, 总行数)`；不在 Agents 页或无高亮项返回 None。
-pub fn task_agents_rows(area: Rect, lx: &Lx) -> Option<(usize, usize)> {
-    task::agents_rows(area, lx)
+pub fn task_agents_rows(area: Rect, lx: &Lx, cache: &mut PaneCache) -> Option<(usize, usize)> {
+    task::agents_rows(area, lx, cache)
 }
 
 /// 后台任务面板 item 列表的滚动条几何；未打开或内容装得下时返回 None。

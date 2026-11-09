@@ -86,11 +86,13 @@ pub use slash::{
     open_history, open_model_picker, persist_default_model,
 };
 pub use subagent::{
-    apply_deltas as apply_subagent_deltas, on_report_batch_committed, on_subagent_auto_compact,
-    on_subagent_delta, on_subagent_finished, on_subagent_loaded, on_subagent_started,
-    on_subagent_tool_pending, on_subagent_tool_running, on_subagent_tool_settled, open_agent_page,
-    refresh_subagent_cards, restore_selected_task_agent, scroll_agents_detail, select_task_agent,
-    set_subagent_list, set_task_agents_scroll, stop_selected_subagent, toggle_agent_card,
+    apply_deltas as apply_subagent_deltas, flush_subagent_cards, on_report_batch_committed,
+    on_subagent_auto_compact, on_subagent_delta, on_subagent_finished, on_subagent_loaded,
+    on_subagent_started, on_subagent_tool_pending, on_subagent_tool_running,
+    on_subagent_tool_settled, open_agent_page, refresh_subagent_cards,
+    request_subagent_cards_refresh, restore_selected_task_agent, scroll_agents_detail,
+    select_task_agent, set_subagent_list, set_task_agents_scroll, stop_selected_subagent,
+    toggle_agent_card,
 };
 pub use task_page::{
     close_task_page, on_process_listed, on_task_output, open_task_page, open_task_page_at,
@@ -109,11 +111,12 @@ pub use user_shell::{
 pub(crate) use view::view_message_of;
 pub use viewport::{
     hover_lx_chat, hover_lx_jump_bottom, jump_lx_history_bottom, jump_lx_history_to_prompt,
-    resolve_ask_list_window, resolve_task_agents_visible, resolve_task_output_visible,
-    scroll_lx_history, set_lx_history_scroll, toggle_latest_thinking, toggle_lx_card,
-    toggle_thinking_at,
+    resolve_ask_list_window, resolve_task_output_visible, scroll_lx_history, set_lx_history_scroll,
+    toggle_latest_thinking, toggle_lx_card, toggle_thinking_at,
 };
-pub(crate) use viewport::{resolve_lx_history, resolve_lx_rewind_center};
+pub(crate) use viewport::{
+    resolve_lx_history, resolve_lx_rewind_center, resolve_task_agents_visible,
+};
 pub use web::{
     AI_WEB_DEEPSEEK_SESSION_PREFIX, AI_WEB_GEMINI_SESSION_PREFIX, AI_WEB_GROK_SESSION_PREFIX,
     ai_web_remote_session, ai_web_remote_session_id, is_ai_web_session, on_ai_web_image_generated,
@@ -503,7 +506,7 @@ pub fn on_stream_delta(state: &mut AppState, key: &RequestKey, deltas: &[ChatDel
     }
     if changed {
         refresh_lx_status(state, key.pane);
-        changed |= subagent::refresh_subagent_cards(state, key.pane);
+        changed |= subagent::request_subagent_cards_refresh(state, key.pane);
     }
     changed
 }

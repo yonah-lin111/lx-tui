@@ -9,7 +9,9 @@
 use ratatui::buffer::Buffer;
 use ratatui::layout::Rect;
 
+mod agent_list;
 mod history_takeover;
+mod perf;
 
 use super::*;
 use crate::app::state::{
@@ -578,6 +580,7 @@ fn clicking_an_agents_row_selects_it_with_the_scroll_offset() {
         ..TaskPage::default()
     };
     let agents = crate::app::state::AgentsState {
+        cards_dirty: false,
         runs: (0..8)
             .map(|index| {
                 crate::app::state::SubagentRun::from_record(&crate::db::chat::SubagentRecord {
@@ -796,7 +799,7 @@ fn agents_list_renders_queued_counts_and_projected_statuses_without_overlap() {
     }
 }
 
-/// 多级子 agent：孙辈起用树形连接符缩进，并在耗时后展示紧凑 token 用量。
+/// 多级子 agent：孙辈起用树形连接符缩进；第一层也占层级槽，所有列严格对齐。
 fn tree_agent(
     agent_id: &str,
     agent_path: &str,
@@ -930,7 +933,7 @@ fn filtered_view_omits_dangling_tree_connectors() {
 }
 
 #[test]
-fn agents_list_indents_subtree_and_shows_tokens() {
+fn agents_list_indents_subtree_with_fixed_columns() {
     let mut lx = lx_with_messages();
     lx.task = Some(TaskPage {
         tab: TaskTab::Agents,
@@ -959,6 +962,10 @@ fn agents_list_indents_subtree_and_shows_tokens() {
         .iter()
         .find(|line| line.contains("first"))
         .expect("first child row");
+    let parent = lines
+        .iter()
+        .find(|line| line.contains("parent"))
+        .expect("parent row");
     let second = lines
         .iter()
         .find(|line| line.contains("second"))
@@ -970,9 +977,38 @@ fn agents_list_indents_subtree_and_shows_tokens() {
     assert!(first.contains("├─ "), "非末项用分支连接符：{first}");
     assert!(second.contains("└─ "), "末项用收口连接符：{second}");
     assert!(grand.contains("  └─ "), "孙辈再缩进一级并收口：{grand}");
+    let column = |line: &str, needle: &str| {
+        let byte = line.find(needle).expect("column");
+        line[..byte].chars().count()
+    };
+    let identity_col = |line: &str| column(line, "executor");
+    assert_eq!(
+        identity_col(parent),
+        identity_col(first),
+        "第一层与子层身份列对齐：{parent:?} / {first:?}"
+    );
+    assert_eq!(identity_col(first), identity_col(grand));
+    let status_col = |line: &str| {
+        if line.contains("completed") {
+            column(line, "completed")
+        } else {
+            column(line, "running")
+        }
+    };
+    assert_eq!(
+        status_col(parent),
+        status_col(first),
+        "状态列对齐：{parent:?} / {first:?}"
+    );
+    assert_eq!(status_col(first), status_col(second));
+    let title_col = |line: &str, title: &str| column(line, title);
+    let parent_title = title_col(parent, "parent");
+    assert_eq!(parent_title, title_col(first, "first"));
+    assert_eq!(parent_title, title_col(second, "second"));
+    assert_eq!(parent_title, title_col(grand, "grand"));
     assert!(
-        lines.iter().any(|line| line.contains("1.8k tok")),
-        "运行/终态 token 用量可见：{lines:?}"
+        !lines.iter().any(|line| line.contains(" tok")),
+        "列表不再显示 token 列：{lines:?}"
     );
     for line in &lines {
         assert!(line.chars().count() <= 80);

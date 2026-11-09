@@ -509,13 +509,15 @@ async fn run_loop(
         }
 
         if dirty && last_draw.elapsed() >= FRAME_INTERVAL {
+            // 同帧内的 delta 只做一次委派卡片对账；视觉延迟最多一帧。
+            update::flush_subagent_cards(state);
             // 双击 Esc 选中的最新用户消息：先按几何滚到视口居中，再算置顶/顶部行。
             update::resolve_lx_rewind_center(state, &geometry.rects, &mut ui_cache);
             // 视口顶部行与置顶抑制记忆：一次几何计算同时落两处状态（渲染层只读）。
             update::resolve_lx_history(state, &geometry.rects, &mut ui_cache);
             // 后台任务面板的输出/Agents 详情/ask/Todo 可见行数：供翻页与滚动条钳制。
             update::resolve_task_output_visible(state, &geometry.rects);
-            update::resolve_task_agents_visible(state, &geometry.rects);
+            update::resolve_task_agents_visible(state, &geometry.rects, &mut ui_cache);
             update::resolve_ask_list_window(state, &geometry.rects);
             update::resolve_todo_viewport(state, geometry.view.prompt);
             ui_cache.begin_frame();

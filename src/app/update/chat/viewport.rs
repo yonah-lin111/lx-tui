@@ -120,7 +120,11 @@ pub(crate) fn resolve_lx_history(
         let inner = crate::layout::pane_inner_rect(*rect);
         let resolved = state
             .pane_anywhere(*pane)
-            .filter(|target| target.view == crate::app::state::PaneView::Lx)
+            .filter(|target| {
+                // 面板打开时历史区被任务输出替换，没人消费 viewport_top / 置顶记忆；
+                // 这里若继续排版，会与 Agents 详情抢同一个 PaneCache 单快照槽。
+                target.view == crate::app::state::PaneView::Lx && target.lx.task.is_none()
+            })
             .and_then(|target| {
                 crate::ui::main_content::lx::history_view(inner, &target.lx, cache.pane(*pane))
             })
@@ -186,9 +190,10 @@ pub fn resolve_task_output_visible(
 ///
 /// 只在消息流变化后重量一次：历史正文的 markdown 排版是这里最贵的一步，
 /// 每帧重算会白白吃掉整帧预算。
-pub fn resolve_task_agents_visible(
+pub(crate) fn resolve_task_agents_visible(
     state: &mut AppState,
     rects: &[(PaneId, ratatui::layout::Rect)],
+    cache: &mut crate::ui::RenderCache,
 ) -> bool {
     let mut changed = false;
     for (pane, rect) in rects {
@@ -217,7 +222,13 @@ pub fn resolve_task_agents_visible(
         let total = if needs_measure {
             state
                 .pane_anywhere(*pane)
-                .and_then(|target| crate::ui::main_content::lx::task_agents_rows(inner, &target.lx))
+                .and_then(|target| {
+                    crate::ui::main_content::lx::task_agents_rows(
+                        inner,
+                        &target.lx,
+                        cache.pane(*pane),
+                    )
+                })
                 .map(|(_, total)| total)
         } else {
             None

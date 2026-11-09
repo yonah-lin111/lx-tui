@@ -9,6 +9,15 @@ use crate::app::state::{
     ChatMessageView, CompactNoticeView, Lx, LxChat, LxCompact, LxModelSwitch, ModelSwitchNoticeView,
 };
 
+/// 离屏流式合并判定用的视口锚点。
+#[derive(Debug, Clone, Copy)]
+pub(crate) struct HistoryViewport {
+    /// 当前视口顶部行（绝对行号）。
+    pub scroll: usize,
+    /// 是否贴底跟随；跟随时禁用合并，保证最新内容立即出现。
+    pub follow_bottom: bool,
+}
+
 /// 历史渲染的只读数据源。
 #[derive(Debug, Clone, Copy)]
 pub(crate) struct HistorySource<'a> {
@@ -36,9 +45,11 @@ pub(crate) struct HistorySource<'a> {
     pub subagents_running: bool,
     /// 是否允许「滚离底部时屏幕外流式合并」。
     ///
-    /// 主聊天用 `LxChat::history_scroll` 作为视口位置；子 agent 详情用的是
-    /// `SubagentRun::scroll`（不在 `LxChat` 里），拿不到真实视口，必须关闭合并。
+    /// 主聊天从 `LxChat` 取视口；子 agent 详情通过 [`HistorySource::with_viewport`]
+    /// 传入 `SubagentRun` 的滚动状态。命中/取词等只读路径不参与合并。
     pub coalesce_offscreen: bool,
+    /// 离屏合并的视口锚点；`None` = 不参与合并。
+    pub viewport: Option<HistoryViewport>,
 }
 
 impl<'a> From<&'a Lx> for HistorySource<'a> {
@@ -65,6 +76,10 @@ impl<'a> From<&'a Lx> for HistorySource<'a> {
                 .map(|target| target.user_message_id.as_str()),
             subagents_running: lx.agents.runs.iter().any(|run| run.is_running()),
             coalesce_offscreen: true,
+            viewport: Some(HistoryViewport {
+                scroll: lx.chat.history_scroll,
+                follow_bottom: lx.chat.follow_bottom,
+            }),
         }
     }
 }
@@ -85,9 +100,17 @@ impl<'a> HistorySource<'a> {
             recap: None,
             selected_user_message: None,
             subagents_running: false,
-            // 详情区的滚动位在 `SubagentRun` 上，`LxChat` 里没有真实视口。
+            // 详情区默认不参与离屏合并；滚动路径用 `with_viewport` 显式传入。
             coalesce_offscreen: false,
+            viewport: None,
         }
+    }
+
+    /// 给数据源绑定真实的滚动视口（Agents 详情用 `SubagentRun` 的滚动状态）。
+    pub(crate) fn with_viewport(mut self, viewport: HistoryViewport) -> Self {
+        self.viewport = Some(viewport);
+        self.coalesce_offscreen = true;
+        self
     }
 
     /// 是否有可绘制的历史。

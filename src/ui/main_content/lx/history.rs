@@ -257,7 +257,7 @@ pub struct HistoryLayout {
 
 pub use sticky::StickyRow;
 mod source;
-pub(crate) use source::HistorySource;
+pub(crate) use source::{HistorySource, HistoryViewport};
 use sticky::sticky_candidate;
 
 pub(crate) use sticky::{render_sticky_prompt, sticky_rect, truncate_with_ellipsis};
@@ -446,16 +446,19 @@ fn view_source_inner(
     view
 }
 
-/// 历史区滚动条几何（贴右缘一列；内容未溢出时为 None）。
-/// 只量总行数（一次性缓存）：`Agents` 详情区的滚动上限用。
-pub(crate) fn measure(width: u16, source: HistorySource<'_>) -> usize {
+/// 只量总行数：复用调用方的跨帧缓存（`Agents` 详情区的滚动上限用）。
+pub(crate) fn measure_cached(
+    width: u16,
+    source: HistorySource<'_>,
+    cache: &mut PaneCache,
+) -> usize {
     if width == 0 {
         return 0;
     }
-    let mut cache = PaneCache::default();
     cache.snapshot_source(width, source).total_rows
 }
 
+/// 历史区滚动条几何（贴右缘一列；内容未溢出时为 None）。
 pub(super) fn scrollbar(
     area: Rect,
     total: usize,

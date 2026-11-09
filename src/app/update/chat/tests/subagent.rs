@@ -411,6 +411,7 @@ fn task_page_switches_between_process_and_agent_lists() {
     }
     let agents = AgentsState {
         runs: vec![run("sess-a", "sub-a", AgentRole::Explorer)],
+        cards_dirty: false,
     };
     let mut page = TaskPage::default();
     assert_eq!(page.len(&agents), 0, "进程 tab 没有条目");
@@ -1087,6 +1088,103 @@ fn subagent_loaded_and_finished_trigger_idle_eviction() {
             .count(),
         6,
         "终态后同样回收超限会话"
+    );
+}
+
+#[test]
+fn parallel_deltas_are_coalesced_into_one_card_refresh() {
+    let mut state = AppState::demo();
+    let pane = state.active_tab().layout.focus();
+    state
+        .pane_mut_anywhere(pane)
+        .expect("pane")
+        .lx
+        .chat
+        .session_id = Some("sess-parent".into());
+
+    let mut started = run("sess-a", "sub-a", AgentRole::Executor);
+    started.agent_path = "/root/turing".into();
+    seed_chat(&mut started, key(pane, "sess-a"), "msg-a");
+    assert!(update::on_subagent_started(&mut state, pane, started));
+
+    let mut detail = SubagentDetailView::from_arguments(
+        "spawn_agent",
+        r#"{"role":"executor","task":"run tests","title":"run tests"}"#,
+    )
+    .expect("spawn detail");
+    detail.agent_id = Some("sub-a".into());
+    state
+        .pane_mut_anywhere(pane)
+        .expect("pane")
+        .lx
+        .chat
+        .messages
+        .push(parent_tool_message(
+            "spawn_agent",
+            detail,
+            ToolStatus::Completed,
+        ));
+
+    for text in ["one", "two", "three"] {
+        assert!(update::on_subagent_delta(
+            &mut state,
+            "sess-a",
+            &[text_delta(text)]
+        ));
+    }
+    assert!(
+        state
+            .pane_anywhere(pane)
+            .expect("pane")
+            .lx
+            .agents
+            .cards_dirty,
+        "delta 只置位，不立即全量回填"
+    );
+    assert_eq!(
+        first_subagent_view(&state, pane).agent_status,
+        None,
+        "flush 前父卡片保持旧值"
+    );
+
+    assert!(update::flush_subagent_cards(&mut state));
+    assert_eq!(
+        first_subagent_view(&state, pane).agent_status.as_deref(),
+        Some("running"),
+        "flush 后父卡片拿到 run 状态"
+    );
+    assert!(
+        !state
+            .pane_anywhere(pane)
+            .expect("pane")
+            .lx
+            .agents
+            .cards_dirty,
+        "flush 后复位"
+    );
+    assert!(
+        !update::flush_subagent_cards(&mut state),
+        "没有新 delta 时不再全量扫描"
+    );
+}
+
+#[test]
+fn request_subagent_cards_refresh_marks_only_once() {
+    let mut state = AppState::demo();
+    let pane = state.active_tab().layout.focus();
+    assert!(update::request_subagent_cards_refresh(&mut state, pane));
+    assert!(
+        !update::request_subagent_cards_refresh(&mut state, pane),
+        "重复请求不再置脏"
+    );
+    let _ = update::flush_subagent_cards(&mut state);
+    assert!(
+        !state
+            .pane_anywhere(pane)
+            .expect("pane")
+            .lx
+            .agents
+            .cards_dirty
     );
 }
 

@@ -447,7 +447,7 @@ fn filter_row_rects(rect: Rect, page: &TaskPage) -> Vec<(AgentFilter, u16, u16)>
         return Vec::new();
     };
     let tabs_end = last_x.saturating_add(last_w);
-    let right = close.map_or(rect.right(), |close| close.x);
+    let right = close.map_or(rect.right(), |close| close.x.saturating_sub(GAP));
     let sep_w = u16::try_from(text::LX_TASK_TAB_SEP.width()).unwrap_or(0);
     let labels: Vec<(AgentFilter, u16)> = AgentFilter::ALL
         .iter()
@@ -825,7 +825,11 @@ pub(super) fn task_output_rect(area: Rect, lx: &crate::app::state::Lx) -> Option
 }
 
 /// Agents 详情区的 `(可见行数, 总行数)`；不在该页或无高亮项返回 None。
-pub(super) fn agents_rows(area: Rect, lx: &crate::app::state::Lx) -> Option<(usize, usize)> {
+pub(super) fn agents_rows(
+    area: Rect,
+    lx: &crate::app::state::Lx,
+    cache: &mut crate::ui::PaneCache,
+) -> Option<(usize, usize)> {
     let page = lx.task.as_ref()?;
     if page.tab != TaskTab::Agents {
         return None;
@@ -834,5 +838,8 @@ pub(super) fn agents_rows(area: Rect, lx: &crate::app::state::Lx) -> Option<(usi
     let run = page
         .selected_agent_index(&lx.agents)
         .and_then(|index| lx.agents.runs.get(index))?;
-    Some((usize::from(rect.height), agents::detail_rows(rect, run)))
+    Some((
+        usize::from(rect.height),
+        agents::detail_rows(rect, run, cache),
+    ))
 }

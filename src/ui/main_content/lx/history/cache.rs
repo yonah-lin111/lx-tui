@@ -272,9 +272,12 @@ impl PaneCache {
         width: u16,
         source: super::source::HistorySource<'_>,
     ) -> bool {
+        let Some(viewport) = source.viewport else {
+            return false;
+        };
         if self.offscreen_coalesce.is_zero()
             || !source.coalesce_offscreen
-            || source.chat.follow_bottom
+            || viewport.follow_bottom
             || self.viewport_rows == 0
         {
             return false;
@@ -299,11 +302,7 @@ impl PaneCache {
             return false;
         };
         // 流式消息整块位于视口下方：重排不会改变可见像素。
-        last.start
-            >= source
-                .chat
-                .history_scroll
-                .saturating_add(self.viewport_rows)
+        last.start >= viewport.scroll.saturating_add(self.viewport_rows)
     }
 
     /// 取块级绘制数据：命中直接复用；未命中调用 `build` 并记账。
