@@ -1,7 +1,8 @@
-# lx Recap 与消息尾部文件摘要 — 执行任务清单
+# lx Recap、系统事件撤销与 AI Web 生图 — 执行任务清单
 
-> 状态：**已完成（待合并）**（2026-11-09；实现、测试与提交均完成，等待用户确认合并）
+> 状态：**已完成（待合并）**（2026-11-09；实现、Review 修复、测试与提交均完成，等待用户确认合并）
 > 设计依据：[design.md](design.md)
+> Review 与修复清单：[review.md](review.md)
 > 执行位置：`.worktrees/lx-recap-and-turn-summary`（新建 git 工作区）
 > 完成标准：实现 + 测试 + `cargo fmt` + `cargo clippy --all-targets -- -D warnings` + 定向/全量测试；完成后提交代码并询问用户是否合并。
 
@@ -81,7 +82,7 @@
 ### P4.1 状态
 
 - [x] `src/app/state/lx/recap.rs`：`LxRecap`、`RecapPending`、`MessageRecapView`、`EMPTY`、`reset`、`reset_for_session`、`is_empty`。
-- [x] `src/app/state/lx.rs`：`pub recap: LxRecap`；`Lx::build` 初始化；`home_visible()`；会话切换/重置点清理。
+- [x] `src/app/state/lx.rs`：`pub recap: LxRecap`；`Lx::build` 初始化；会话切换/重置点清理。
 - [x] `src/app/state/lx/chat.rs`：
   - [x] `ChatStatus.cache_hit_percent`；
   - [x] `recap_selection`、`resolve_recap_model`；
@@ -126,7 +127,7 @@
 
 ---
 
-## P5. UI：统计行、状态行、文件变更卡、Recap 卡
+## P5. UI：统计行、状态行、Recap 卡（文件变更卡已移除）
 
 ### P5.1 统计行
 
@@ -144,7 +145,9 @@
   - [x] 渲染 ` · 70% cached`。
 - [x] 测试：累计命中率、布局降级、渲染文本。
 
-### P5.3 文件变更卡
+### P5.3 文件变更卡（已按用户要求移除）
+
+> 后续变更：`FileChangesCard`、`BlockPaint::FileChanges`、`CardKind::FileChange`、`CardTarget::FileChange`、`FILE_CHANGES_SLOT_BLOCK` 及相关指纹/测试均已删除（review P2-12）。以下为历史记录。
 
 - [x] 新增 `src/ui/main_content/lx/history/file_changes.rs`：
   - [x] `FileChangeSummary` 聚合（同路径合并、kind 规则、计数求和）；
@@ -152,12 +155,12 @@
   - [x] `change_header`（add/edit/del、moved、计数未知）；
   - [x] 复用 `file_diff::file_body` / `apply_body_prefixes`（改为 `pub(super)`）。
 - [x] `src/ui/main_content/lx/history/paint.rs`：`BlockPaint::FileChanges`，补 rows/bytes/draw/card_spans。
-- [x] `src/ui/main_content/lx/history/cache.rs`：`FILE_CHANGES_SLOT_BLOCK` / `RECAP_SLOT_BLOCK` / `RECAP_RUNNING_SLOT_BLOCK`。
-- [x] `src/ui/main_content/lx/history/cache/block_signature.rs`：`file_changes_block_signature`、`recap_block_signature`。
-- [x] `src/ui/main_content/lx/history/cache/signature.rs`：列表指纹加入文件行/列表/recap 展开状态与 recap 数据。
-- [x] `src/ui/main_content/lx/history/snapshot.rs`：`tail()` 追加文件变更块并登记 `CardRegion`。
-- [x] `src/ui/main_content/lx/history/cards.rs`：`CardKind::FileChange { message_id, slot }`、`CardKind::Recap { message_id }`。
-- [x] `src/app/state/lx/chat.rs`：`CardTarget::FileChange { message_id, slot }`、`CardTarget::Recap { message_id }`。
+- [x] `src/ui/main_content/lx/history/cache.rs`：`RECAP_SLOT_BLOCK` / `RECAP_RUNNING_SLOT_BLOCK`（文件块槽位已移除）。
+- [x] `src/ui/main_content/lx/history/cache/block_signature.rs`：`recap_block_signature`（`file_changes_block_signature` 已移除）。
+- [x] `src/ui/main_content/lx/history/cache/signature.rs`：列表指纹加入 recap 展开状态与 recap 数据。
+- [x] `src/ui/main_content/lx/history/snapshot.rs`：`tail()` 追加 recap 块并登记 `CardRegion`。
+- [x] `src/ui/main_content/lx/history/cards.rs`：`CardKind::Recap { message_id }`（`FileChange` 已移除）。
+- [x] `src/app/state/lx/chat.rs`：`CardTarget::Recap { message_id }`（`FileChange` 已移除）。
 - [x] `src/ui/main_content/lx/history_hit.rs`：`target_of` 映射。
 - [x] `src/app/update/chat/viewport.rs`：`toggle_lx_card` 分支（pin viewport + toggle_section）。
 - [x] `src/app/update/chat/subagent.rs`：`toggle_agent_card` 分支。
@@ -199,6 +202,8 @@
 - [x] `cargo test config::ai`
 - [x] `cargo test settings::service`
 - [x] `cargo test app::update::chat::recap`
+- [x] `cargo test app::update::chat::web`
+- [x] `cargo test chat::web`
 - [x] `cargo test ui::main_content::lx`
 - [x] `cargo test input::`
 - [x] `cargo test tui::`
@@ -211,10 +216,60 @@
 ## P9. 后续修正（2026-11-09）
 
 - [x] 移除首页快捷键与入口 tooltip（`Alt+1..4` / `Alt+W`、`LxInput` 变体、`home_visible`、相关测试）。
-- [x] `/rewind` 目标扩展到模型切换、compact 检查点与 recap：模型切换回滚会话模型并删除条目；compact 恢复上下文；recap 删除回顾。
+- [x] 移除 `FileChangesCard` 文件变更摘要卡及其 `BlockPaint` / `CardKind` / `CardTarget` / 指纹 / 测试。
+- [x] `/rewind` 目标扩展到模型切换、compact 检查点与 recap，按 `sequence` 取最新事件：
+  - [x] 模型切换：回滚会话模型并删除 `agent_model_switch` 条目；
+  - [x] compact：`Database::revert_compact` **物理删除**检查点行（不再保留 `state='reverted'`），并把该会话剩余最新检查点恢复为 `active`；更晚的 active 检查点存在时拒绝；
+  - [x] recap：删除 `agent_message_recap` 行并移除内存视图。
+- [x] `compact_at_bottom` 统一只看 `active` 检查点；自动与手动 `/recap` 在时间线底部存在晚于最后一条完成态 assistant 的 `◆ Context compacted` 检查点时均被拒绝。
+- [x] `migrate_v25_recap` 清理旧库遗留的 `state='reverted'` compact 检查点。
 - [x] 普通轮次 rewind 后同步重载 recap 列表，避免已删消息的回顾残留。
 - [x] compact / recap 运行中耗时统一为秒级（`3s` / `1m 12s`），不显示毫秒或十分之一秒。
-- [x] 补充 DB 与交互测试：模型切换回滚、recap 删除、系统事件 rewind 面板。
+- [x] 补充 DB 与交互测试：模型切换回滚、compact 物理删除、recap 删除、系统事件 rewind 面板。
+
+### P9.1 AI Web 生成图片预览与原图下载
+
+- [x] `src/app/update/chat/web.rs`：`on_ai_web_image_generated` 把生图附件挂到最后一条 assistant 消息并登记 `image_originals`。
+- [x] 消息尾部预览树：`├─/└─ Image (preview): <下划线文件名>  [Download original]`；只显示 `MessageAttachmentKind::Image` 且 `source_path` 非空的附件。
+- [x] 点击文件名 → `CardKind::Attachment` → `Effect::RevealInFileManager`，在系统文件管理器中定位本地预览图。
+- [x] 点击 `[Download original]` → 黄色 `[downloading...]` → `[✓ Downloaded]`；再次点击 `[✓ Downloaded]` 定位原图；失败恢复 `[Download original]` 并 toast。
+- [x] `Config.image_download_dir`（`settings.json`；浏览器 Settings `General → Downloads`；CLI `--image-download-dir`；空串默认 `~/Desktop`），跨平台展开 `~` / `~\`。
+- [x] Gemini：`blob:` 预览用 `<canvas>` 提取；原图 URL 先剥离查询串再追加 `=s0-d-I?alr=yes`；`download_image` 重载会话页从 `performance` 恢复永久 `gg/` URL。
+- [x] Grok：正文提取临时隐藏 `.not-prose`（生图卡片/加载占位/按钮），`try/finally` 保证恢复。
+- [x] 实时生图 `saveGeneratedImages(..., overwrite = true)` 覆盖同名旧缓存；`load_session` 保持缓存复用；`turnNum` / `DOWNLOAD_STEM` 防御性清洗。
+- [x] Gemini 多图等待全部加载（最多 250 ticks，约 15s）；生成停止且文本稳定 14 ticks 后放行 `caughtUp`。
+
+---
+
+## P10. Review 与修复（2026-11-09）
+
+> 依据：[review.md](review.md)。结论：未发现 P0；3 个 P1、12 个 P2、10 个 P3 全部按优先级修复并通过回归测试。
+
+- [x] **P1-1** 原图下载在 `SessionBound` 前发起时，回执按 `attachment_id` 定位并兼容临时/真实会话 ID，按钮不再卡在 `[downloading...]`；新增 pending → bound → 回执回归测试。
+- [x] **P1-2** 自动 recap 在轮次运行中/compact 条件暂不满足时统一 `Retry`（30 秒后复检），并移除 `FocusArea::Panes` 限制。
+- [x] **P1-3** `compact_at_bottom` / `select_latest` / `select_compact` 只看 `active` 检查点；`revert_compact` 增加 `state = 'active'` 条件并恢复前一条；v25 迁移清理 `reverted` 残留。
+- [x] **P2-1** `recap_exchanges` 排除子 agent 报告轮次；多段文本改用换行拼接。
+- [x] **P2-2** recap 跨窗格互斥、取消与回填广播；compact 撤销清理同会话窗格选中态。
+- [x] **P2-3** `parse_generated_recap` 容忍额外字段、提取首个 JSON 对象、超长文本按字符边界截断。
+- [x] **P2-4** 累计缓存命中率按单条消息配对分子/分母。
+- [x] **P2-5** 状态行 `omitted turns` 预留宽度，避免覆盖 `context` / `cache`。
+- [x] **P2-6** 助手图片仅在 `preview_path.is_some()` 时加下划线，并过滤非图片/空路径附件。
+- [x] **P2-7** `saveGeneratedImages` 新增 `overwrite` 参数；`/rewind` 清理被截断消息的 `image_originals`。
+- [x] **P2-8** Gemini 多图等待全部加载 + 250 ticks 上限；`caughtUp` 在文本稳定 14 ticks 后放行。
+- [x] **P2-9** `toGeminiOriginalImageUrl` 先剥离 query 再剥离尺寸后缀。
+- [x] **P2-10** `resolved_image_download_dir` / `sessions_root_dir` 复用跨平台 `home_dir` / `expand_tilde_path`。
+- [x] **P2-11** 生产文件拆分至 < 1000 行；Gemini 图片逻辑拆到 `src/chat/web/gemini_images.js`。
+- [x] **P2-12** `design.md` / `task.md` 同步移除 `FileChangesCard` 与首页快捷键，并补充系统事件 rewind、底部 compact 禁 recap、AI Web 生图与原图下载。
+- [x] **P3-1** `LxRecap::reset` 保留 `next_generation` 单调递增；修正 `set_message_recaps` 返回值；清理死字段。
+- [x] **P3-2** `try_send` 提交前取消 pending recap；`on_turn_committed` 先校验 generation；关闭开关时清理自动计时器与自动 pending。
+- [x] **P3-3** 删除 `UserRefLine.source_path` 死字段；收紧 `file_diff` 可见性；补齐 `RefLines` 字节估算。
+- [x] **P3-4** 速度过滤门槛改为 `speed >= 0.05`；`list_signature` 补 `message.turn_index`。
+- [x] **P3-5** Gemini `extractCleanText` / Grok `extractText` 使用 `try/finally` 恢复临时隐藏节点。
+- [x] **P3-6** `turnNum` 规范化为正整数；`DOWNLOAD_STEM` 经 `path.basename` 与非法字符过滤。
+- [x] **P3-7** `--image-download-dir` 加入 `VALUE_OPTIONS`、help 与 `settings show`；`Config::from_json` 接受 `null`。
+- [x] **P3-8** 设置页 Recap 开关文案改为 `Automatically generate a recap after 30 minutes away`。
+- [x] **P3-9** Linux `reveal_in_file_manager` 对无父目录裸文件名回退 `.`。
+- [x] **P3-10** 同步更新 `history.rs` / `status.rs` / `compact.rs` / `compact` 状态模块头注释。
 
 ---
 

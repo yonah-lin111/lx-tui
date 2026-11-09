@@ -91,27 +91,19 @@ impl Config {
         Ok(())
     }
 
-    /// 解析原图下载保存目录：未配置（空串）时默认 `~/Desktop`，支持 `~` 与 `~/...` 展开。
+    /// 解析原图下载保存目录：未配置（空串）时默认 `~/Desktop`，支持 `~`、`~/...`
+    /// 与 Windows `~\...` 展开（统一走跨平台家目录解析）。
     pub fn resolved_image_download_dir(&self) -> Result<PathBuf, ConfigError> {
         let trimmed = self.image_download_dir.trim();
         if trimmed.is_empty() {
-            let home = std::env::var_os("HOME")
-                .map(PathBuf::from)
-                .ok_or(ConfigError::HomeMissing)?;
+            let home = crate::platform::home_dir().ok_or(ConfigError::HomeMissing)?;
             return Ok(home.join("Desktop"));
         }
-        if trimmed == "~" {
-            return std::env::var_os("HOME")
-                .map(PathBuf::from)
-                .ok_or(ConfigError::HomeMissing);
+        match crate::platform::expand_tilde_path(trimmed) {
+            Some(Ok(path)) => Ok(path),
+            Some(Err(())) => Err(ConfigError::HomeMissing),
+            None => Ok(PathBuf::from(trimmed)),
         }
-        if let Some(rest) = trimmed.strip_prefix("~/") {
-            let home = std::env::var_os("HOME")
-                .map(PathBuf::from)
-                .ok_or(ConfigError::HomeMissing)?;
-            return Ok(home.join(rest));
-        }
-        Ok(PathBuf::from(trimmed))
     }
 
     /// 序列化为 `settings.json` 文本（缩进两空格，键序固定）。
@@ -151,6 +143,11 @@ impl Config {
                 match value {
                     JsonValue::String(dir) => {
                         config.image_download_dir = dir.trim().to_string();
+                        continue;
+                    }
+                    // 手写/旧版设置页可能写 `null`：按未配置处理（默认桌面）。
+                    JsonValue::Null => {
+                        config.image_download_dir = String::new();
                         continue;
                     }
                     _ => {
@@ -282,10 +279,11 @@ fn parse_json_object(text: &str) -> Result<Vec<(String, JsonValue)>, ConfigError
     Ok(entries)
 }
 
-/// 极简 JSON 值：数字（u64）或字符串（其它类型报错由调用方处理）。
+/// 极简 JSON 值：数字（u64）、字符串、`null` 或其它（其它类型报错由调用方处理）。
 enum JsonValue {
     Number(u64),
     String(String),
+    Null,
     Other,
 }
 
@@ -293,7 +291,7 @@ enum JsonValue {
 fn json_u16(value: &JsonValue) -> Option<u16> {
     match value {
         JsonValue::Number(number) => u16::try_from(*number).ok(),
-        JsonValue::String(_) | JsonValue::Other => None,
+        JsonValue::String(_) | JsonValue::Null | JsonValue::Other => None,
     }
 }
 
@@ -369,11 +367,18 @@ impl<'a> JsonParser<'a> {
             Some(b'-') => Err(invalid("negative values are not supported")),
             Some(byte) if byte.is_ascii_digit() => Ok(JsonValue::Number(self.number()?)),
             Some(byte) if byte.is_ascii_alphabetic() => {
-                // `true` / `false` / `null` 等裸词：跳到分隔符，记为其它类型。
+                // `true` / `false` / `null` 等裸词：跳到分隔符；`null` 单独成值，
+                // 其余（布尔等）记为其它类型。
+                let start = self.index;
                 while self.peek().is_some_and(|byte| byte.is_ascii_alphanumeric()) {
                     self.index += 1;
                 }
-                Ok(JsonValue::Other)
+                let is_null = &self.bytes[start..self.index] == b"null";
+                Ok(if is_null {
+                    JsonValue::Null
+                } else {
+                    JsonValue::Other
+                })
             }
             _ => Err(invalid("expected a value")),
         }

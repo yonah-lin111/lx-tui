@@ -942,3 +942,193 @@ fn ai_web_generated_images_attach_to_assistant_in_stream_and_resume() {
         Some("/tmp/grok-r1-1.jpg")
     );
 }
+
+#[test]
+fn original_image_download_receipt_survives_pending_session_binding() {
+    let (mut state, pane) = ai_web_state();
+    crate::app::update::set_ai_web_site(&mut state, pane, AiWebSite::Gemini);
+    draft(&mut state, pane, "draw a cat");
+    assert!(super::super::try_send(&mut state, pane));
+    let key = match &state.pane_anywhere(pane).expect("pane").lx.chat.request {
+        RequestState::Streaming { key, .. } => key.clone(),
+        other => panic!("expected streaming, got {other:?}"),
+    };
+    assert!(on_ai_web_image_generated(
+        &mut state,
+        &key,
+        crate::chat::web::AiWebGeneratedImage {
+            label: "gemini-r1-1.png".into(),
+            path: Some("/tmp/gemini-r1-1.png".into()),
+            original_url: Some("https://lh3.googleusercontent.com/gg/cat=s0-d-I?alr=yes".into()),
+            preview_url: Some("https://lh3.googleusercontent.com/gg/cat=w512".into()),
+            file_stem: Some("gemini-cat-r1-1-orig".into()),
+        },
+    ));
+    let (att_id, pending_sid) = {
+        let target = state.pane_anywhere(pane).expect("pane");
+        let att_id = target.lx.chat.messages[1].attachments[0].id.clone();
+        let pending_sid = target.lx.chat.session_id.clone().expect("pending session");
+        assert!(pending_sid.starts_with("ai-web-"), "{pending_sid}");
+        (att_id, pending_sid)
+    };
+
+    // 点击 `[Download original]` 时仍处于临时会话，效应冻结该临时 ID。
+    state.effects.clear();
+    assert!(super::trigger_ai_web_original_image_download(
+        &mut state, pane, &att_id
+    ));
+    let effect_sid = state
+        .effects
+        .iter()
+        .find_map(|effect| match effect {
+            Effect::DownloadAiWebOriginalImage {
+                session_id,
+                attachment_id,
+                ..
+            } if attachment_id == &att_id => Some(session_id.clone()),
+            _ => None,
+        })
+        .expect("download effect");
+    assert_eq!(effect_sid, pending_sid);
+
+    // 下载在途时 `SessionBound` 把窗格与原图项升级为云端真实会话 ID。
+    assert!(on_ai_web_session_bound(
+        &mut state,
+        pane,
+        &pending_sid,
+        "ai-web-gm-real123".into(),
+        Some("Cat".into()),
+    ));
+    {
+        let target = state.pane_anywhere(pane).expect("pane");
+        assert_eq!(
+            target.lx.chat.session_id.as_deref(),
+            Some("ai-web-gm-real123")
+        );
+        assert_eq!(
+            target
+                .lx
+                .chat
+                .image_originals
+                .get(&att_id)
+                .map(|o| o.session_id.as_str()),
+            Some("ai-web-gm-real123")
+        );
+    }
+
+    // 成功回执携带旧临时 ID，仍必须更新按钮为 `[✓ Downloaded]`。
+    assert!(super::on_ai_web_original_image_downloaded(
+        &mut state,
+        pane,
+        &pending_sid,
+        &att_id,
+        "/tmp/Desktop/gemini-cat-r1-1-orig.png".into(),
+    ));
+    {
+        let target = state.pane_anywhere(pane).expect("pane");
+        assert!(matches!(
+            target.lx.chat.image_originals.get(&att_id).map(|o| &o.state),
+            Some(crate::app::state::OriginalImageDownloadState::Downloaded { path })
+                if path == "/tmp/Desktop/gemini-cat-r1-1-orig.png"
+        ));
+        assert!(
+            target
+                .lx
+                .toast
+                .as_ref()
+                .is_some_and(|t| t.message.contains("Saved original image"))
+        );
+    }
+
+    // 失败回执携带旧临时 ID 时同样恢复为 `[Download original]` 并提示错误。
+    if let Some(orig) = state
+        .pane_mut_anywhere(pane)
+        .and_then(|p| p.lx.chat.image_originals.get_mut(&att_id))
+    {
+        orig.state = crate::app::state::OriginalImageDownloadState::Downloading;
+    }
+    assert!(super::on_ai_web_original_image_download_failed(
+        &mut state,
+        pane,
+        &pending_sid,
+        &att_id,
+        "network error".into(),
+    ));
+    let target = state.pane_anywhere(pane).expect("pane");
+    assert_eq!(
+        target
+            .lx
+            .chat
+            .image_originals
+            .get(&att_id)
+            .map(|o| &o.state),
+        Some(&crate::app::state::OriginalImageDownloadState::Idle)
+    );
+    assert_eq!(
+        target.lx.toast.as_ref().map(|t| t.message.as_str()),
+        Some("network error")
+    );
+}
+
+#[test]
+fn rewind_drops_original_image_metadata_for_truncated_messages() {
+    let (mut state, pane) = ai_web_state();
+    draft(&mut state, pane, "draw a cat");
+    assert!(super::super::try_send(&mut state, pane));
+    let first_key = match &state.pane_anywhere(pane).expect("pane").lx.chat.request {
+        RequestState::Streaming { key, .. } => key.clone(),
+        other => panic!("expected streaming, got {other:?}"),
+    };
+    finish(&mut state, pane);
+    assert!(on_ai_web_image_generated(
+        &mut state,
+        &first_key,
+        crate::chat::web::AiWebGeneratedImage {
+            label: "grok-r1-1.jpg".into(),
+            path: Some("/tmp/grok-r1-1.jpg".into()),
+            original_url: Some("https://assets.grok.com/u/original_image.jpg".into()),
+            preview_url: Some("https://assets.grok.com/u/image.jpg".into()),
+            file_stem: Some("grok-cat-r1-1-orig".into()),
+        },
+    ));
+
+    draft(&mut state, pane, "draw a dog");
+    assert!(super::super::try_send(&mut state, pane));
+    let second_key = match &state.pane_anywhere(pane).expect("pane").lx.chat.request {
+        RequestState::Streaming { key, .. } => key.clone(),
+        other => panic!("expected streaming, got {other:?}"),
+    };
+    finish(&mut state, pane);
+    assert!(on_ai_web_image_generated(
+        &mut state,
+        &second_key,
+        crate::chat::web::AiWebGeneratedImage {
+            label: "grok-r2-1.jpg".into(),
+            path: Some("/tmp/grok-r2-1.jpg".into()),
+            original_url: Some("https://assets.grok.com/u/original_image2.jpg".into()),
+            preview_url: Some("https://assets.grok.com/u/image2.jpg".into()),
+            file_stem: Some("grok-dog-r2-1-orig".into()),
+        },
+    ));
+    let (first_att, second_att) = {
+        let target = state.pane_anywhere(pane).expect("pane");
+        assert_eq!(target.lx.chat.image_originals.len(), 2);
+        (
+            target.lx.chat.messages[1].attachments[0].id.clone(),
+            target.lx.chat.messages[3].attachments[0].id.clone(),
+        )
+    };
+
+    draft(&mut state, pane, "/rewind");
+    assert!(super::super::try_send(&mut state, pane));
+    let target = state.pane_anywhere(pane).expect("pane");
+    assert_eq!(target.lx.chat.messages.len(), 2);
+    assert!(
+        target.lx.chat.image_originals.contains_key(&first_att),
+        "kept message keeps its original image metadata"
+    );
+    assert!(
+        !target.lx.chat.image_originals.contains_key(&second_att),
+        "truncated message metadata must be dropped"
+    );
+}

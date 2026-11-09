@@ -494,9 +494,26 @@ pub fn apply_models_changed(
 ) -> bool {
     let changed = state.models.settings != *settings;
     state.models.settings = settings.clone();
+    let mut cleaned = false;
+    // 关闭自动 recap：清计时器与在途自动请求；手动请求保留，用户仍在等结果。
+    if !state.models.settings.recap_enabled {
+        cleaned |= state.recap_due_at.take().is_some();
+        for pane in state.all_pane_ids() {
+            if let Some(target) = state.pane_mut_anywhere(pane)
+                && target
+                    .lx
+                    .recap
+                    .pending
+                    .as_ref()
+                    .is_some_and(|pending| !pending.manual)
+            {
+                cleaned |= target.lx.recap.cancel_pending();
+            }
+        }
+    }
     // 立即更新所有窗格的上限/标签（旧模型分子清理由 refresh 内部处理）。
     refresh_all_lx_status(state);
-    changed
+    changed || cleaned
 }
 
 /// 把窗格当前选择的模型写回 `ai.json` 的 `defaultModel`（下次启动沿用）。

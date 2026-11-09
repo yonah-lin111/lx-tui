@@ -148,9 +148,8 @@ pub fn try_send(state: &mut AppState, pane: PaneId) -> bool {
         }
         let entry = target.lx.entry;
         let draft = target.lx.input.trim().to_string();
-        // 压缩进行中同样不能发送：检查点提交会整体替换上下文指针。
-        // 会话级：同一会话的其它 pane 在压缩/跑轮次时，本 pane 的发送会推进 revision，
-        // 让那次压缩在 commit 阶段失败。
+        // 压缩进行中不能发送；同会话其它 pane 在压缩/跑轮次时，本 pane 发送会推进
+        // revision，让那次压缩在 commit 阶段失败。
         let session_busy = target.lx.chat.session_id.as_deref().is_some_and(|session| {
             state.all_pane_ids().into_iter().any(|other| {
                 other != pane
@@ -247,6 +246,8 @@ pub fn try_send(state: &mut AppState, pane: PaneId) -> bool {
         };
         show_lx_hint(state, pane, InputHintLevel::Warning, message);
     }
+    // 发送已通过全部校验：取消同会话在途 recap，避免旧回顾挂到推进后的时间线上。
+    let _ = recap::cancel_pending_recap(state, pane);
     let Some(target) = state.pane_mut_anywhere(pane) else {
         return false;
     };
@@ -279,7 +280,6 @@ pub fn try_send(state: &mut AppState, pane: PaneId) -> bool {
 }
 
 /// DB begin_turn 成功回执：绑定 session/message、清冻结草稿、启动网络流。
-///
 /// 若期间用户继续编辑，新草稿不被清掉（只清与冻结草稿相同的输入）。
 pub fn on_turn_committed(
     state: &mut AppState,
@@ -287,8 +287,6 @@ pub fn on_turn_committed(
     generation: u64,
     committed: &crate::db::chat::TurnCommitted,
 ) -> bool {
-    // 新轮开始：取消在途 recap（用户已继续对话，旧回顾不再贴当前上下文）。
-    let _ = recap::cancel_pending_recap(state, pane);
     let models = state.models.clone();
     // 先只读取出冻结草稿：历史记录要在拿窗格可变借用之前完成，避免同时借用 `state` 两处。
     let frozen_draft = {
@@ -303,6 +301,9 @@ pub fn on_turn_committed(
             _ => return false,
         }
     };
+    // 新轮开始：取消在途 recap（用户已继续对话，旧回顾不再贴当前上下文）。
+    // 必须放在 generation 校验之后：迟到的旧回执不能取消新一次 recap。
+    let _ = recap::cancel_pending_recap(state, pane);
     // 记录到全局 prompt 历史：DB ack 已确认这一轮真正入库，才值得留在历史里。
     // 只有无附件的纯文本草稿才记录，带附件轮次不向纯文本历史记录（避免 ↑ 召回缺图草稿）。
     // 内存先记录（`↑` 立即可用），持久化走独立效应；两者互不阻塞。
@@ -437,9 +438,7 @@ pub fn on_turn_failed(state: &mut AppState, pane: PaneId, generation: u64) -> bo
 }
 
 /// 流 delta 回投：只更新匹配 `(pane, session, generation)` 的视图。
-///
-/// 整轮终态 `Finished` 由 `on_stream_finished` 处理，这里只做增量与响应收尾；
-/// 旧 generation / 其它窗格的事件在状态机校验处被丢弃（不回写任何状态）。
+/// 整轮终态由 `on_stream_finished` 处理；旧 generation / 其它窗格事件在此丢弃。
 pub fn on_stream_delta(state: &mut AppState, key: &RequestKey, deltas: &[ChatDelta]) -> bool {
     let project_root = state.project_root_for_pane(key.pane);
     let Some(target) = state.pane_mut_anywhere(key.pane) else {
@@ -510,7 +509,6 @@ pub fn on_stream_delta(state: &mut AppState, key: &RequestKey, deltas: &[ChatDel
 }
 
 /// 流终态回投（完整 deltas 先经 on_stream_delta 消费；本函数只处理结束）。
-///
 /// 取消/失败/完成均先转 Finishing，再入队最终 DB 写入。
 pub fn on_stream_finished(
     state: &mut AppState,
@@ -519,8 +517,7 @@ pub fn on_stream_finished(
     usage: Usage,
     billing: Usage,
 ) -> bool {
-    // 失焦期间完成的轮次会把自动 recap 的计时起点推到本轮结束（对齐 codex
-    // `unfocused_since.max(last_turn_finished_at) + 30min`）。
+    // 失焦期间完成的轮次把自动 recap 计时起点推到本轮结束（对齐 codex 30min）。
     let recap_unfocused = state.recap_due_at.is_some();
     let Some(target) = state.pane_mut_anywhere(key.pane) else {
         return false;
@@ -892,16 +889,9 @@ pub(crate) mod test_hooks {
 
 /// 退出「跟随底部」前把**当前视口顶部行**固化进状态（锚定视口）。
 ///
-/// `follow_bottom = true` 时 `history_scroll` 不参与渲染（顶部行由 `total - height`
-/// 现算），因此它是**过期值**（通常是 0）。任何「切换展开状态」都必须先锚定再改动：
-/// 否则下一帧按过期的 0 渲染，视口会直接跳回历史最顶部——用户看到的是
-/// 「点了没反应 / 展不开」（思考块恰好滚出屏幕，屏幕上只剩对话开头）。
-///
-/// 顶部行取自事件循环每帧写入的 [`crate::app::state::LxChat::viewport_top`]：它是
-/// **上一次绘制实际用的行号**，也就是用户此刻正看着的那一行。尚未绘制过时无从锚定，
-/// 直接保持原状（此时也还没有任何可见内容可点）。
-///
-/// 已在阅读态（`follow_bottom == false`）时无需锚定：顶部行本来就是绝对行号。
+/// `follow_bottom = true` 时 `history_scroll` 是过期值（顶部行由 `total - height` 现算）；
+/// 切换展开状态前必须用 [`crate::app::state::LxChat::viewport_top`]（上次实际绘制行号）
+/// 锚定，否则下一帧按 0 渲染会跳回历史顶部。已在阅读态时无需锚定。
 pub fn pin_lx_viewport(state: &mut AppState, pane: PaneId) -> bool {
     let Some(target) = state.pane_anywhere(pane) else {
         return false;
@@ -922,10 +912,7 @@ pub fn pin_lx_viewport(state: &mut AppState, pane: PaneId) -> bool {
 
 /// 推进流中窗格的 loading 转轮帧、刷新压缩耗时；返回是否需要重绘。
 ///
-/// 两个来源共用同一个 100ms 心跳：
-/// - 流中（`chat.status.streaming`）或本地命令在跑：推进扫描帧与本轮耗时；
-/// - `/compact` 正在执行：摘要请求没有流式输出，但输入框上方那一行要显示
-///   「压缩中 + 已耗时」，因此同样需要按帧刷新 `elapsed_ms` 并推进扫描帧。
+/// 流中/本地命令在跑推进扫描帧与本轮耗时；`/compact` 摘要无流式输出，同样按帧刷新 `elapsed_ms`。
 pub fn advance_lx_loading(state: &mut AppState) -> bool {
     let mut changed = false;
     for pane in state.all_pane_ids() {
@@ -940,15 +927,12 @@ pub fn advance_lx_loading(state: &mut AppState) -> bool {
             || target.lx.chat.has_running_shell();
         let compacting = target.lx.compact.is_running();
         let recapping = target.lx.recap.pending.is_some();
-        // 仍有子 agent 在跑：推进同一套 loading 帧，供 Agents 详情步骤动画，
-        // 以及主轮自然结束后的“Waiting for agents...”等待行；用户显式停止主轮后
-        // 等待行隐藏，但详情动画仍继续。
+        // 仍有子 agent 在跑：推进同一套 loading 帧（Agents 详情动画与等待行）。
         let agents_running = target.lx.agents.runs.iter().any(|run| run.is_running());
         if !streaming && !compacting && !recapping && !agents_running {
             continue;
         }
-        // ask 等待用户作答：本轮耗时完全冻结，主会话的扫描帧也不再推进
-        // （历史里的工具方块因此保持静态实心）。子 agent 的详情动画不受影响。
+        // ask 等待用户作答：主会话本轮耗时与扫描帧冻结，子 agent 动画不受影响。
         let paused = target.lx.ask.is_some();
         let mut advanced = false;
         // 压缩耗时：摘要请求没有任何流式输出，这一行只有计时能证明它还在跑。
@@ -981,8 +965,7 @@ pub fn advance_lx_loading(state: &mut AppState) -> bool {
                 advanced = true;
             }
         }
-        // 扫描帧两种场景共用：压缩中的文案同样有扫描高亮。
-        // ask 暂停期间只有压缩或子 agent 在跑才继续推进（见 [`paused`]）。
+        // 扫描帧两种场景共用；ask 暂停期间只有压缩或子 agent 在跑才继续推进。
         if !paused || compacting || recapping || agents_running {
             target.lx.chat.loading_frame = target.lx.chat.loading_frame.wrapping_add(1);
             if agents_running {

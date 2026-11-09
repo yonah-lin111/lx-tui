@@ -44,9 +44,6 @@ pub struct RecapPending {
     pub manual: bool,
     /// 挂接的 assistant 消息 id。
     pub message_id: String,
-    /// 覆盖到的轮次与 sequence。
-    pub end_turn: i64,
-    pub end_sequence: i64,
     /// 请求开始时刻与已耗时（渲染 `Generating recap... · Ns`）。
     pub started_at: Instant,
     pub elapsed_ms: u64,
@@ -67,8 +64,6 @@ pub struct LxRecap {
     pub completed_turn_indices: BTreeSet<i64>,
     /// 上次成功 recap 覆盖到的 turn_index；None 表示本会话尚未 recap。
     pub last_recap_turn: Option<i64>,
-    /// 上次成功 recap 覆盖到的 DB sequence。
-    pub last_recap_sequence: i64,
 }
 
 impl LxRecap {
@@ -77,15 +72,13 @@ impl LxRecap {
         self.entries.is_empty() && self.pending.is_none()
     }
 
-    /// 会话切换/新建时整体清空。
+    /// 会话切换/新建时整体清空；请求代次保持单调，避免重载后碰撞旧回执。
     pub fn reset(&mut self) {
         self.entries.clear();
         self.pending = None;
-        self.next_generation = 0;
         self.completed_turns = 0;
         self.completed_turn_indices.clear();
         self.last_recap_turn = None;
-        self.last_recap_sequence = 0;
     }
 
     /// 加载会话后按消息与已存回顾重建进度。
@@ -93,14 +86,12 @@ impl LxRecap {
         &mut self,
         completed_turn_indices: BTreeSet<i64>,
         last_recap_turn: Option<i64>,
-        last_recap_sequence: i64,
     ) {
         self.entries.clear();
         self.pending = None;
         self.completed_turns = u32::try_from(completed_turn_indices.len()).unwrap_or(u32::MAX);
         self.completed_turn_indices = completed_turn_indices;
         self.last_recap_turn = last_recap_turn;
-        self.last_recap_sequence = last_recap_sequence;
     }
 
     /// 一轮正常完成（StopReason::Complete）；同一轮重复完成只计一次。

@@ -57,18 +57,28 @@ impl LxChat {
     }
 
     /// 整个对话累计缓存命中率：Σcache_read / Σinput；无输入或无缓存数据返回 None。
+    ///
+    /// 分子与分母按单条消息绑定：缺失 `input_tokens` 的消息不贡献缓存分子，
+    /// 且单条 `cache_read_tokens` 截断到该条的 `input_tokens`，避免越界数据
+    /// 把累计命中率抬高。
     fn conversation_cache_hit_percent(&self) -> Option<u64> {
         let mut total_input = 0u64;
         let mut total_cache = 0u64;
-        for message in &self.messages {
-            if message.role != "assistant" {
+        for message in self.messages.iter().filter(|m| m.role == "assistant") {
+            let Some(input) = message
+                .input_tokens
+                .filter(|value| *value > 0)
+                .and_then(|value| u64::try_from(value).ok())
+            else {
                 continue;
-            }
-            if let Some(input) = message.input_tokens.filter(|value| *value > 0) {
-                total_input = total_input.saturating_add(u64::try_from(input).unwrap_or(0));
-            }
-            if let Some(cache) = message.cache_read_tokens.filter(|value| *value > 0) {
-                total_cache = total_cache.saturating_add(u64::try_from(cache).unwrap_or(0));
+            };
+            total_input = total_input.saturating_add(input);
+            if let Some(cache) = message
+                .cache_read_tokens
+                .filter(|value| *value > 0)
+                .and_then(|value| u64::try_from(value).ok())
+            {
+                total_cache = total_cache.saturating_add(cache.min(input));
             }
         }
         (total_input > 0 && total_cache > 0).then(|| {

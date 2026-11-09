@@ -15,7 +15,7 @@
 //! - thinking：头部为圆点 + `Thinking`（生成中）/ `Thought · 6.3s`（完成后，无折叠
 //!   箭头——圆点即状态标记）；点击头部或 Ctrl+T 折叠/展开；正文同样走 markdown
 //!   渲染并整体压暗（对齐 opencode 的思考显示）。
-//! - 本轮统计行（assistant 末尾）：模型名、输入/输出 token、缓存命中、tok/s 与耗时。
+//! - 本轮统计行（assistant 末尾）：模型名、输入/输出 token、tok/s 与耗时。
 //! - 右侧预留一列滚动条（内容溢出时显示），宽度与输入框对齐。
 
 use ratatui::layout::Rect;

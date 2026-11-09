@@ -75,10 +75,44 @@ fn parse_plain_text_fallback() {
 }
 
 #[test]
-fn parse_rejects_empty_or_too_long_summary() {
+fn parse_rejects_empty_and_truncates_overlong_plain_text() {
     assert!(parse_generated_recap("").is_none());
-    assert!(parse_generated_recap(&"x".repeat(RECAP_MAX_SUMMARY_CHARS + 1)).is_none());
+    let long = parse_generated_recap(&"x".repeat(RECAP_MAX_SUMMARY_CHARS + 1)).expect("truncated");
+    assert_eq!(long.summary.chars().count(), RECAP_MAX_SUMMARY_CHARS);
     assert!(parse_generated_recap(r#"{"summary":"ok","next_action":"x"}"#).is_some());
+}
+
+#[test]
+fn parse_json_with_extra_fields_and_surrounding_text() {
+    let parsed = parse_generated_recap(
+        "Here is the recap:\n{\"summary\":\"Done.\",\"next_action\":null,\"confidence\":0.9}\nEnd.",
+    )
+    .expect("json");
+    assert_eq!(parsed.summary, "Done.");
+    assert_eq!(parsed.next_action, None);
+}
+
+#[test]
+fn parse_truncates_overlong_json_fields() {
+    let summary = "s".repeat(RECAP_MAX_SUMMARY_CHARS + 10);
+    let next_action = "n".repeat(RECAP_MAX_NEXT_ACTION_CHARS + 10);
+    let raw = format!("{{\"summary\":\"{summary}\",\"next_action\":\"{next_action}\"}}");
+    let parsed = parse_generated_recap(&raw).expect("truncated");
+    assert_eq!(parsed.summary.chars().count(), RECAP_MAX_SUMMARY_CHARS);
+    assert_eq!(
+        parsed
+            .next_action
+            .as_deref()
+            .map(|action| action.chars().count()),
+        Some(RECAP_MAX_NEXT_ACTION_CHARS)
+    );
+}
+
+#[test]
+fn parse_rejects_broken_json_fragments() {
+    assert!(parse_generated_recap("{").is_none());
+    assert!(parse_generated_recap("{\n\"summary\":").is_none());
+    assert!(parse_generated_recap("\"unterminated").is_none());
 }
 
 #[test]

@@ -388,12 +388,7 @@ fn terminal_tool_states_keep_a_filled_marker_in_every_frame() {
 // ===== 连续同种文件调用合并成一张卡 =====
 
 /// 构造一个带差异正文的文件工具步骤（`name` 决定 `edit` / `write`）。
-pub(super) fn file_step(
-    position: i64,
-    call_id: &str,
-    name: &str,
-    status: ToolStatus,
-) -> AssistantStepView {
+fn file_step(position: i64, call_id: &str, name: &str, status: ToolStatus) -> AssistantStepView {
     use crate::app::state::{FileChangeView, FileDiffDetailView, FileDiffView};
     use crate::chat::tools::{DiffHunk, DiffLine, DiffLineKind, FileChangeKind, FileDiff};
 

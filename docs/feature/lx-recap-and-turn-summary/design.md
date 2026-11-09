@@ -1,8 +1,9 @@
-# lx Recap 与消息尾部文件摘要 — 设计文档
+# lx Recap、系统事件撤销与 AI Web 生图 — 设计文档
 
-> 状态：**已完成（待合并）**（2026-11-09；实现与测试均通过，等待用户确认是否合并回 `dev`）
+> 状态：**已完成（待合并）**（2026-11-09；实现、Review 修复与测试均通过，等待用户确认是否合并回 `dev`）
 >
-> **后续变更（2026-11-09）**：按用户要求移除首页快捷键（`Alt+1..4` / `Alt+W`）及入口 tooltip；下文 D6/D13、§3.4、§4.7 仅保留历史设计记录，不再实现。同时 `/rewind` 目标扩展到模型切换、compact 与 recap 系统事件；compact/recap 运行中耗时统一为秒级。
+> **后续变更（2026-11-09）**：按用户要求移除首页快捷键（`Alt+1..4` / `Alt+W`）、入口 tooltip 与 `FileChangesCard` 文件变更摘要卡；下文 D4/D6/D10/D13、§3.2 的文件变更块、§3.4、§4.5、§4.7 仅保留历史设计记录，不再实现。同时 `/rewind` 目标扩展到模型切换、compact 与 recap 系统事件；compact/recap 运行中耗时统一为秒级；AI Web（Gemini / Grok）新增生成图片预览树与原图下载。
+> Review 与修复清单：[review.md](review.md)
 > 日期：2026-11-09
 > 参考实现：
 > - `/Users/yonah/projects/agent/codex-main/codex-rs/tui/src/app/recap.rs`
@@ -17,18 +18,20 @@
 
 ## 0. 背景与目标
 
-本任务包含四块互相独立但共享消息尾部渲染链路的能力：
+本任务包含六块互相独立但共享消息尾部渲染链路的能力：
 
 1. **Recap（回顾）**：参考 codex，在用户离开终端 30 分钟后自动生成一段“回到任务”的接续摘要；同时提供手动 `/recap`。摘要只读用户/助手可见正文，不读工具输出、思考与子 agent 报告。
 2. **Recap 设置**：浏览器设置页 `Model` Tab 新增 `Recap` fieldset，支持开关与专用模型；配置写入 `ai.json`。
 3. **消息尾部信息重排**：
    - 统计行强制单行，宽度不足按 `in/out → 模型名 → tok/s → 截断` 降级；
    - 缓存命中率从每轮统计行移到输入框底部状态行的上下文占用右侧，并改为**整个对话累计值**；
-   - 统计行下方新增“本轮文件变更”树，超过 5 个文件折叠，点击文件行就地展开该文件 diff；
-   - 文件变更下方新增 recap 系统事件卡。
+   - 统计行下方新增 recap 系统事件卡。
+   - ~~“本轮文件变更”树~~：**后续已按用户要求移除**，不再实现（见 review P2-12）。
 4. ~~lx 首页快捷键~~：**后续已按用户要求移除**，不再实现。
+5. **系统事件撤销**：`/rewind` 除普通用户轮次外，还支持撤销 compact 检查点、模型切换与 recap；compact 撤销改为物理删除检查点行。
+6. **AI Web 生图**：Gemini / Grok 网页端生成的图片落盘为本地预览，消息尾部显示 `├─/└─ Image (preview): <filename>  [Download original]`；点击文件名在系统文件管理器中定位，点击 `[Download original]` 下载原图到 `image_download_dir`（默认 `~/Desktop`）。
 
-成功标准：上述行为在真实 TUI 中可见、可点击、可持久化；`/resume` 后 recap 仍在；`/rewind` 后 recap 跟随删除；`/fork` 后 recap 跟随复制；设置页保存后行为即时生效；所有新增逻辑有单元测试覆盖。
+成功标准：上述行为在真实 TUI 中可见、可点击、可持久化；`/resume` 后 recap 仍在；`/rewind` 后 recap 跟随删除；`/fork` 后 recap 跟随复制；设置页保存后行为即时生效；AI Web 生图预览与原图下载可用；所有新增逻辑有单元测试覆盖。
 
 ---
 
@@ -65,15 +68,15 @@
 | D1 | Recap 触发方式 | 完整对齐 codex：自动 + 手动 `/recap`。自动条件：TUI 失焦满 30 分钟、会话 ≥3 个已完成轮次、距上次 recap 至少新增 2 轮；重新聚焦取消在途自动请求。手动不受开关与轮次门槛限制。 |
 | D2 | Recap 归属与持久化 | 挂在“生成时最后一条 assistant 消息”底部，落库持久化；同一会话多次 recap 各自保留，每条消息最多一条；`/resume` 保留，`/rewind` 跟随删除，`/fork` 跟随复制；不进入模型上下文。 |
 | D3 | Recap 视觉形态 | 走 lx 系统事件卡：`◆ Recap`（生成中 `◇ Generating recap... · Ns`），固定元信息行 + 可折叠摘要 + `Next:` 行；摘要默认保留 2 行 + `… N more lines`，点击展开；与上方块空一行。 |
-| D4 | 文件变更列表交互 | 只统计当前 assistant 消息自己的 `edit`/`write` 结果；同路径合并、`+/-` 求和；文件数 >5 默认显示前 5 + `… N more files`，点击展开全部；点击文件行就地展开该文件 diff，再点收起；不跳转工具卡。 |
+| D4 | ~~文件变更列表交互~~ | **已移除**（用户后续取消 `FileChangesCard`）；不再统计或渲染本轮文件变更摘要。 |
 | D5 | Recap 设置 | Settings `Model` 页新增 `Recap` fieldset：`Enable automatic recap`（默认开启）+ `Recap model`（可留空）。配置键 `recapEnabled: bool`、`recapSummary: Option<ModelSelection>`；模型回退 `recapSummary → 当前会话模型 → defaultModel`；三者都不可用时自动静默跳过、手动 Warning toast。 |
 | D6 | ~~首页快捷键~~ | **已移除**（用户后续取消）；不再注册 `Alt+1..4` / `Alt+W`，也不再新增入口 tooltip。 |
 | D7 | 自动 recap 作用域 | 只给失焦时刻当前聚焦的 lx 窗格所属会话生成；其他 lx 窗格不自动生成；手动 `/recap` 作用于当前聚焦窗格。 |
 | D8 | Recap 输入/输出 | 最近 8 组用户/助手交换；只取用户正文与助手最终正文；不读思考、工具、工具输出、子 agent 报告；8 KiB 上限；输出严格 JSON `{summary, next_action|null}`；summary 40–60 词、最多 80 词（硬上限 700 字符），next_action 最多 200 字符；提示词英文，摘要语言跟随用户最新消息；自动失败 30 秒后重试一次，手动直接 toast。 |
 | D9 | 统计行与缓存 | 统计行字段 `模型 · in · out · tok/s · 时长`，强制单行；宽度不足依次隐藏 `in+out` → 模型名 → tok/s → 时长尾部 `…`；缓存命中率移到状态行上下文右侧，取整个对话累计 `Σ cache_read / Σ input`，无数据隐藏；状态行降级优先丢 cached，再按现有优先级丢上下文/variant。 |
-| D10 | 文件变更统计范围 | 只统计当前消息 `steps` 里的 `edit`/`write` 工具结果；按真实 `FileChangeKind` 分类；失败但已提交部分改动的调用仍统计；无结果 JSON 的中断调用不统计；子 agent 报告与用户 shell 造成的改动不计入。 |
+| D10 | ~~文件变更统计范围~~ | **已移除**（随 `FileChangesCard` 一起取消）；不再从消息 `steps` 聚合文件变更。 |
 | D11 | Recap 与 compact | 输入带上当前生效的 compact 摘要作为 `Earlier context (compacted)`，再拼最近 8 组对话；8 KiB 超限时先裁旧交换，最后才裁 compact 摘要。 |
-| D12 | 手动 `/recap` 行为 | 只在本机会话（Native/Hybrid/Automation）可用，AI Web 不显示；无历史/已有在途/主轮忙分别 toast；生成中插入 `◇ Generating recap...`，成功替换 `◆ Recap`，失败移除占位卡并 toast；用户发送新消息或 `/rewind` 时取消在途请求并移除占位卡；自动失败只 `tracing::warn`。 |
+| D12 | 手动 `/recap` 行为 | 只在本机会话（Native/Hybrid/Automation）可用，AI Web 不显示；无历史/已有在途/主轮忙/底部 active compact 分别 toast；生成中插入 `◇ Generating recap...`，成功替换 `◆ Recap`，失败移除占位卡并 toast；用户发送新消息或 `/rewind` 时取消在途请求并移除占位卡；自动失败只 `tracing::warn`。 |
 | D13 | ~~快捷键提示~~ | **已移除**（随首页快捷键一起取消）。 |
 
 ---
@@ -122,10 +125,16 @@ assistant 消息正文 / 思考 / 工具步骤
 统计行（单行，muted）
         │
         ▼ 空一行
-文件变更树（无标题，muted 连接符；>5 折叠；点击文件行展开 diff）
-        │
-        ▼ 空一行
 Recap 系统事件卡（◆ Recap；固定元信息 + Next + 可折叠摘要）
+```
+
+> 文件变更树已按用户要求移除（review P2-12）；统计行与 recap 卡之间直接空一行。
+
+AI Web 助手消息的生成图片引用树独立挂在消息末尾：
+
+```text
+├─ Image (preview): gemini-r1-1.webp  [Download original]
+└─ Image (preview): gemini-r1-2.webp  [✓ Downloaded]
 ```
 
 所有空行只由 `snapshot.rs::Builder::spacer()` 累加；绘制路径不得另算。
@@ -146,7 +155,9 @@ ChatStatus.cache_hit_percent = round(Σcache / Σinput * 100)
 
 统计行只读当前消息：`模型 · in · out · tok/s · 时长`，按宽度降级，不再出现 `cached`。
 
-### 3.4 首页快捷键
+### 3.4 首页快捷键（已移除）
+
+> 按用户要求移除：`Alt+1..4` / `Alt+W`、`LxInput` 变体、`home_visible`、入口 tooltip 与相关测试均已删除。以下仅保留历史设计记录。
 
 ```text
 Alt+1..4 / Alt+W
@@ -161,7 +172,7 @@ Alt+1..4 / Alt+W
 
 ## 4. 详细设计
 
-### 4.1 配置与设置页（`ai.json` / Settings Model Tab）
+### 4.1 配置与设置页（`ai.json` / `settings.json` / Settings）
 
 #### 4.1.1 `AiSettings` 字段
 
@@ -238,7 +249,7 @@ fn default_true() -> bool {
     <div class="field-wide">
       <label class="field-hint">
         <input id="recap-enabled" type="checkbox">
-        Generate a recap after each assistant reply
+        Automatically generate a recap after 30 minutes away
       </label>
     </div>
     <div class="field-wide">
@@ -260,6 +271,20 @@ fn default_true() -> bool {
 - `assets/settings_connect.js`：悬空清理列表加入 `recapSummary`；关闭 provider 时清理 recap。
 
 保存链路复用现有 `PUT /api/models/settings`、乐观锁 revision 与 `saveModels`，不新增接口。
+
+#### 4.1.4 原图下载目录（`settings.json`）
+
+AI Web 原图下载目录属于全局 `Config`（`settings.json`），不写入 `ai.json`：
+
+```rust
+/// 原图下载保存目录；空串表示默认 `~/Desktop`，支持 `~` 与 Windows `~\` 展开。
+pub image_download_dir: String,
+```
+
+- 解析：`Config::resolved_image_download_dir()` 空串回退 `~/Desktop`，统一走 `platform::home_dir()` / `expand_tilde_path()`（跨平台，见 review P2-10）。
+- 浏览器设置页 `General → Downloads`：`assets/settings.html` 的 `#image_download_dir` 输入框，`assets/settings.js` 读写 `image_download_dir`。
+- CLI：`lx settings --image-download-dir <path>`，并出现在 `settings show` 的 JSON 输出中。
+- `Config::from_json` 接受 `"image_download_dir": null` 并归一化为空串。
 
 ---
 
@@ -725,22 +750,20 @@ TerminalEvent::FocusGained => {
 TerminalEvent::Resize(..) => {}
 ```
 
-自动 eligibility：
+自动 eligibility（按判定顺序）：
 
 ```text
-active pane.view == Lx
-&& active pane.lx.entry == Native
-&& session_id.is_some()
-&& request 处于 Idle
-&& !compact.is_running()
-&& !chat.has_running_shell()
-&& agents.running_count() == 0
-&& chat.queue.is_empty()
-&& 同会话其它 pane 不忙（复用 compact_command 的 session_busy 判定）
-&& recap.completed_turns >= 3
-&& turns_since_last_recap >= 2   // 按 turn_index 比较，不是轮次总数相减
-&& resolve_recap_model(current_selection).is_some()
+1. active pane.view == Lx && entry == Native && session_id.is_some() && recap.pending.is_none()
+2. request/compact/shell/agents/queue 或同会话其它 pane 忙
+   → Eligibility::Retry（30 秒后复检，见 review P1-2）
+3. recap.completed_turns >= 3
+4. turns_since_last_recap >= 2   // 按 turn_index 比较，不是轮次总数相减
+5. !compact_at_bottom(lx)        // 底部是 active compact 检查点时禁止
+6. resolve_recap_model(current_selection).is_some()
+→ 全部通过 → Eligibility::Ready
 ```
+
+> 自动触发不再要求 `state.focused == FocusArea::Panes`：焦点在 Prompt/Todo/Sidebar 时仍按当前活动工作区活动标签页的 `focused_pane` 判定（review P1-2）。
 
 完成轮次计数：`on_stream_finished` 的 `StopReason::Complete` 且非 AI Web 会话时调用 `target.lx.recap.on_turn_completed(turn_index)`；内部把 `turn_index` 插入 `completed_turn_indices` 并重算 `completed_turns`，同一轮多条 assistant（含报告自动轮）只计一次。取消/失败不计。
 
@@ -784,9 +807,12 @@ AI Web 的 `command_entries_for` 白名单不加入 Recap，因此 AI Web 面板
 2. `pending.is_some()` → Warning toast `A recap is already being generated.`
 3. 主轮忙/压缩中/子 agent/队列非空 → Warning toast `Wait for the current turn to finish.`
 4. 无 session 或无可用 assistant 消息 → Warning toast `There is no conversation history to recap.`
-5. 模型解析失败 → Warning toast `No recap model available.`
-6. 构造 prompt 为空 → Warning toast `There is no conversation history to recap.`
-7. 设置 pending + `Effect::GenerateRecap`，返回 true。
+5. 时间线底部存在晚于最后一条完成态 assistant 的 active compact 检查点（`compact_at_bottom`）→ Warning toast（recap 会落到 `◆ Context compacted` 上方，语义错位）。
+6. 模型解析失败 → Warning toast `No recap model available.`
+7. 构造 prompt 为空 → Warning toast `There is no conversation history to recap.`
+8. 设置 pending + `Effect::GenerateRecap`，返回 true。
+
+自动与手动共用同一条 `compact_at_bottom` 判定：自动在 eligibility 中直接 `Ineligible`，手动在 `recap_command` 中返回 Warning。
 
 发送新消息 / `/rewind` / 切会话时：
 
@@ -842,17 +868,15 @@ pub(super) fn running_line(pending: &RecapPending) -> String {
 }
 ```
 
-在 `snapshot.rs::tail()` 中：
+在 `snapshot.rs::tail()` 中（文件变更卡已移除，见 review P2-12）：
 
 1. 统计行（若 `stats_ready` 且 `stats_line(message, width)` 非空）。
-2. 文件变更卡（若 `stats_ready` 且 `FileChangesCard::build(message, width, chat)` 非空）。
-3. Recap 卡（若 `source.recap.entries.get(&message.id)` 存在）。
-4. 运行中占位（若 `message` 是最后一条 assistant 且 `source.recap.pending` 的 `message_id == message.id`）。
+2. Recap 卡（若 `source.recap.entries.get(&message.id)` 存在）。
+3. 运行中占位（若 `message` 是最后一条 assistant 且 `source.recap.pending` 的 `message_id == message.id`）。
 
 块键：
 
 ```rust
-FILE_CHANGES_SLOT_BLOCK = usize::MAX / 2;
 RECAP_SLOT_BLOCK = usize::MAX / 2 + 1;
 RECAP_RUNNING_SLOT_BLOCK = usize::MAX / 2 + 2;
 ```
@@ -863,7 +887,9 @@ Recap 卡点击面：`SystemCard::click_span()` → `CardRegion { kind: CardKind
 
 ---
 
-### 4.5 文件变更摘要
+### 4.5 文件变更摘要（已按用户要求移除）
+
+> **状态：已移除**（review P2-12）。`src/ui/main_content/lx/history/file_changes.rs`、`BlockPaint::FileChanges`、`CardKind::FileChange`、`CardTarget::FileChange`、`FILE_CHANGES_SLOT_BLOCK` 及相关指纹/测试均已删除。以下仅保留历史设计记录。
 
 新增 `src/ui/main_content/lx/history/file_changes.rs`。
 
@@ -1092,7 +1118,9 @@ fn cache_text(status: &ChatStatus) -> Option<String> {
 
 ---
 
-### 4.7 首页快捷键
+### 4.7 首页快捷键（已按用户要求移除）
+
+> **状态：已移除**（review P2-12）。`Alt+1..4` / `Alt+W`、`LxInput::SwitchEntry` / `SwitchAiWebSite`、`Lx::home_visible()`、入口 tooltip 与相关测试均已删除。以下仅保留历史设计记录。
 
 #### 4.7.1 输入层
 
@@ -1216,6 +1244,82 @@ restore_terminal:
 
 ---
 
+### 4.9 系统事件 `/rewind`（Compact / ModelSwitch / Recap）
+
+`/rewind` 的目标不再只有用户轮次：`select_latest` 在四类时间线事件中取 `sequence` 最大者（recap 使用挂接消息的 `end_sequence`），每次只撤销最新一项。
+
+```text
+用户轮次 / compact checkpoint / model switch / recap
+        │  比较 sequence，取最新
+        ▼
+select_turn | select_compact | select_model_switch | select_recap
+        │
+        ▼
+RewindPanel（for_turn / for_compact / for_model_switch / for_recap）
+        │  确认
+        ▼
+Effect::CommitRewind | RevertCompact | RevertModelSwitch | DeleteRecap
+```
+
+- **Compact**：确认后冻结 `checkpoint_id` + `revision`，入队 `Effect::RevertCompact`。
+- **ModelSwitch**：回滚会话模型并删除对应 `agent_model_switch` 条目，随后重载会话。
+- **Recap**：删除该消息的 `agent_message_recap` 行并移除内存视图。
+- 只考虑 `active` 的 compact 检查点（`checkpoints.iter().rev().find(|c| c.active)`），旧库遗留的 `state='reverted'` 行不参与选择。
+- 撤销 compact 后同步清理同会话其它窗格的 `selected_compact` 与失效 rewind 面板（review P2-2）。
+
+`Database::revert_compact`（`src/db/chat/compact.rs`）改为**物理删除**：
+
+1. 校验 `operation_id` 幂等、目标检查点存在、`revision` 未变；
+2. 更晚的 active 检查点存在时返回 `RewindTargetChanged`；
+3. 写 `agent_rewind_operation`（`action = 'restore_compact'`，直接 committed）；
+4. `DELETE FROM agent_compact_checkpoint` 删除目标行；
+5. 把该会话剩余最新一条检查点恢复为 `state = 'active'`。
+
+`migrate_v25_recap` 会清理旧库残留的 `state='reverted'` 行；`compact_checkpoints` 查询只加载 `active`。
+
+**底部 compact 禁 `/recap`**：`compact_at_bottom(lx)` 判断是否存在 `sequence > 最后一条 complete assistant sequence` 的 active 检查点。自动 recap 在 eligibility 中返回 `Ineligible`，手动 `/recap` 返回 Warning toast，避免回顾卡挂到 `◆ Context compacted` 上方。
+
+---
+
+### 4.10 AI Web 生成图片预览与原图下载
+
+#### 4.10.1 消息尾部预览树
+
+助手消息的图片附件在正文下方渲染为引用树（`AssistantRefLine`，`src/ui/main_content/lx/history/paint.rs`）：
+
+```text
+├─ Image (preview): gemini-r1-1.webp  [Download original]
+└─ Image (preview): gemini-r1-2.webp  [✓ Downloaded]
+```
+
+- 连接符复用 `TREE_BRANCH` / `TREE_LEAF`；只有 `MessageAttachmentKind::Image` 且 `source_path` 非空的附件显示下划线。
+- 点击**文件名**：`CardKind::Attachment { path }` → `Effect::RevealInFileManager { path }`，在系统文件管理器中定位本地预览图。
+- 点击 **`[Download original]`**：`trigger_ai_web_original_image_download` 将状态置为 `Downloading`，按钮变黄显示 `[downloading...]`，入队 `Effect::DownloadAiWebOriginalImage`。
+- 下载成功：`OriginalImageDownloadState::Downloaded { path }`，按钮显示 `[✓ Downloaded]` 并 toast 保存路径；再次点击 `[✓ Downloaded]` 在文件管理器中定位**原图**。
+- 下载失败：恢复 `Idle`（`[Download original]`）并 toast 错误；回执按 `attachment_id` 定位，兼容 `SessionBound` 前后的临时/真实会话 ID（review P1-1）。
+- `/rewind` 截断消息后，`image_originals` 只保留仍存在于 `messages` 附件中的条目（review P2-7）。
+
+#### 4.10.2 原图下载目录与 URL 解析
+
+- 下载目录：`Config::image_download_dir`（`settings.json`；浏览器 Settings `General → Downloads`；CLI `--image-download-dir`；空串默认 `~/Desktop`）。
+- Gemini：
+  - 预览 URL 常为 `blob:`，驱动用 `<canvas>` 读取已加载图片并 `toDataURL('image/webp')` 落盘（review P2-11）。
+  - 原图 URL 先剥离查询串再去掉尺寸后缀，追加 `=s0-d-I?alr=yes`：
+    ```js
+    const base = s.replace(/\?.*$/, '').replace(/=[^=/]+$/, '');
+    return base + '=s0-d-I?alr=yes';
+    ```
+  - `download_image` 会重载会话页，从 `performance` 资源计时中恢复永久 `lh3.googleusercontent.com/gg/` URL，失败时回退 canvas。
+- Grok：
+  - 正文提取临时隐藏 `.not-prose`（生图卡片/加载占位/按钮），并用 `try/finally` 保证恢复（review P3-5）。
+  - 原图 URL 由 `image.<ext>` 替换为 `original_image.<ext>`。
+- 落盘：
+  - `saveGeneratedImages(..., turnNum, ..., overwrite = false)`（Gemini 第 5 参数为 `{previewUrl, dataUrl}` 列表，Grok 为 URL 列表）；实时流传 `overwrite = true` 强制覆盖同名旧图，`load_session` 保持缓存复用（review P2-7）。
+  - `turnNum` 规范化为正整数；`DOWNLOAD_STEM` 经 `path.basename` + 非法字符过滤（review P3-6）。
+  - Gemini 多图等待全部加载完成，最多 250 ticks（约 15s），坏图不会拖满 300s（review P2-8）。
+
+---
+
 ## 5. 关键代码清单（文件/符号）
 
 | 文件 | 变更 |
@@ -1235,7 +1339,7 @@ restore_terminal:
 | `src/db/chat/fork.rs` | copy_recaps（两处） |
 | `src/db/service/chat.rs` | LoadedSession + load_recaps + set_message_recaps |
 | `src/app/state/lx/recap.rs` | LxRecap / RecapPending / MessageRecapView |
-| `src/app/state/lx.rs` | `pub recap: LxRecap`、home_visible、reset |
+| `src/app/state/lx.rs` | `pub recap: LxRecap`、reset |
 | `src/app/state/lx/chat.rs` | ChatStatus.cache_hit_percent、recap model resolve、refresh_status |
 | `src/app/state/lx/chat/usage.rs` | 累计缓存命中率计算 |
 | `src/app/effects.rs` | GenerateRecap |
@@ -1249,27 +1353,41 @@ restore_terminal:
 | `src/app/update/chat/slash.rs` | `/recap` dispatch |
 | `src/app/state/lx/slash.rs` | SlashCommand::Recap |
 | `src/app/update/interaction.rs` | tick / next_deadline |
-| `src/app/update/pane.rs` | Alt+1..4 / Alt+W 入口切换 |
-| `src/input/mod.rs` | 快捷键映射 |
-| `src/app/actions.rs` | LxInput 变体 |
-| `src/platform/mod.rs` | enable/disable focus capture |
+| `src/app/update/chat/rewind.rs` | 系统事件选择与撤销（Compact / ModelSwitch / Recap） |
+| `src/event/chat/rewind.rs` | RevertCompact / RevertModelSwitch 执行 |
+| `src/db/chat/compact.rs` | `revert_compact` 物理删除 + 前一条恢复 active |
+| `src/app/update/chat/compact.rs` | compact 撤销后的内存/跨窗格清理 |
+| `src/app/update/pane.rs` | ~~Alt+1..4 / Alt+W 入口切换~~（已移除） |
+| `src/input/mod.rs` | ~~快捷键映射~~（已移除） |
+| `src/app/actions.rs` | ~~LxInput 变体~~（已移除） |
+| `src/platform/mod.rs` | enable/disable focus capture、跨平台 home/tilde 解析 |
+| `src/config/mod.rs` | `image_download_dir` 与 `resolved_image_download_dir` |
+| `src/cli/settings.rs` | `--image-download-dir` 与 `settings show` 输出 |
+| `src/app/update/chat/web.rs` | AI Web 生图附件、原图下载状态机、rewind 清理 |
+| `src/event/chat/web.rs` | DownloadAiWebOriginalImage / RevealInFileManager 执行 |
+| `src/chat/web/mod.rs` | Gemini 三段脚本拼接、`GEMINI_IMAGES_JS` |
+| `src/chat/web/gemini_helpers.js` | Gemini 页面/会话动作（图片逻辑已拆出） |
+| `src/chat/web/gemini_images.js` | Gemini 生图落盘、原图 URL、`download_image` |
+| `src/chat/web/gemini_script.js` | Gemini 流式采集、图片等待与 `caughtUp` 兜底 |
+| `src/chat/web/grok_helpers.js` | Grok 生图落盘、原图下载 |
+| `src/chat/web/grok_script.js` | Grok 流式采集、`.not-prose` 过滤 |
 | `src/tui/mod.rs` | init/restore focus capture |
 | `src/ui/main_content/lx/history/stats.rs` | 单行降级、移除 cached |
 | `src/ui/main_content/lx/status.rs` | cache 字段、布局、渲染 |
-| `src/ui/main_content/lx/history/file_changes.rs` | 文件摘要卡 |
+| `src/ui/main_content/lx/history/file_changes.rs` | ~~文件摘要卡~~（已移除） |
 | `src/ui/main_content/lx/history/recap.rs` | recap 系统卡 |
-| `src/ui/main_content/lx/history/snapshot.rs` | tail 追加两个块 |
-| `src/ui/main_content/lx/history/paint.rs` | FileChanges 变体 |
-| `src/ui/main_content/lx/history/cards.rs` | CardKind 新变体 |
-| `src/ui/main_content/lx/history/cache.rs` | 槽位常量 |
-| `src/ui/main_content/lx/history/cache/signature.rs` | 列表指纹 |
-| `src/ui/main_content/lx/history/cache/block_signature.rs` | 块指纹 |
-| `src/ui/main_content/lx/history_hit.rs` | CardTarget 映射 |
-| `src/app/state/lx/chat.rs` | CardTarget 新变体 |
-| `src/app/update/chat/viewport.rs` | toggle_lx_card 分支 |
+| `src/ui/main_content/lx/history/snapshot.rs` | tail 追加 recap 块与生成图片引用行 |
+| `src/ui/main_content/lx/history/paint.rs` | 生成图片引用树、原图下载按钮状态 |
+| `src/ui/main_content/lx/history/cards.rs` | CardKind Recap / Attachment / DownloadOriginalImage |
+| `src/ui/main_content/lx/history/cache.rs` | recap 槽位常量 |
+| `src/ui/main_content/lx/history/cache/signature.rs` | 列表指纹（recap + 图片下载状态） |
+| `src/ui/main_content/lx/history/cache/block_signature.rs` | 块指纹（recap + 图片下载状态） |
+| `src/ui/main_content/lx/history_hit.rs` | CardTarget 映射（含原图下载） |
+| `src/app/state/lx/chat.rs` | CardTarget 新变体、`image_originals` |
+| `src/app/update/chat/viewport.rs` | toggle_lx_card、原图下载/定位分支 |
 | `src/app/update/chat/subagent.rs` | toggle_agent_card 分支 |
-| `src/ui/text.rs` | recap 文案、缓存后缀 |
-| `src/ui/style.rs` | 如需新增样式 token |
+| `src/ui/text.rs` | recap 文案、缓存后缀、原图下载按钮文案 |
+| `src/ui/style.rs` | `assistant_image_downloading` 等样式 token |
 
 ---
 
@@ -1292,12 +1410,15 @@ restore_terminal:
 - `src/db/chat/recap/tests.rs`：commit/upsert/load/工作区隔离/非 assistant 消息拒绝。
 - `src/db/chat/rewind/tests.rs`：rewind 删除消息级联删除 recap。
 - `src/db/chat/fork/tests.rs`：fork 复制 recap、message_id 重映射、边界前不复制。
+- `src/db/chat/compact/tests.rs`：`revert_compact` 物理删除、更晚 active 检查点拒绝、前一条恢复 active、幂等重放。
+- `src/db/migration/tests.rs`：v25 清理旧库 `state='reverted'` 残留。
 
 ### 6.3 配置与设置
 
 - `src/config/ai/tests.rs`：recapEnabled 默认 true、false 解析、悬空 recapSummary 清理、validate。
+- `src/config/tests.rs`：`image_download_dir` 默认值、`null` 归一化、`~/...` 展开。
 - `src/settings/service/models/tests.rs`：PUT/GET round-trip、revision 变化、旧 payload 缺字段保留默认。
-- `src/settings/service/tests.rs`：HTML 包含 `recap-enabled` / `recap-model-host`；JS 包含 `recapModel`。
+- `src/settings/service/tests.rs`：HTML 包含 `recap-enabled` / `recap-model-host` / `image_download_dir`；JS 包含 `recapModel` / `image_download_dir`。
 - JS 逻辑无法在 Rust 单测覆盖，执行阶段用 `cargo run` 人工验证设置页（用户可自行确认）。
 
 ### 6.4 App/事件
@@ -1309,21 +1430,24 @@ restore_terminal:
   - 成功 apply 更新 map / last_recap_turn；
   - 失败清 pending、手动 toast、自动静默；
   - 新消息/rewind/切会话取消。
+- `src/app/update/chat/tests/system_rewind.rs`：compact / model switch / recap 与用户轮次按 sequence 取最新；compact 撤销清理同会话窗格选中态。
+- `src/app/update/chat/recap/tests.rs`：底部 active compact 时自动与手动 `/recap` 均被拒绝。
+- `src/app/update/chat/web/tests.rs`：生成图片附件与原图下载状态机；pending 会话点击下载 → `SessionBound` → 旧 ID 回执仍更新 `Downloaded` / 失败恢复 `Idle`（review P1-1）；`/rewind` 清理失效 `image_originals`。
+- `src/chat/web/tests.rs`：脚本拼接顺序（helpers → images → main）、原图 URL 先剥查询串、`imageWaitTicks < 250`、`caughtUp` 兜底；`try/finally` 为 JS 代码审查项。
 - `src/event/tests/`：FocusLost 设置 deadline、FocusGained 取消；`/recap` 在 AI Web 被拒。
 - `src/app/update/chat/title/tests.rs` 等：`AiSettings` 字面量补字段后保持通过。
 
 ### 6.5 UI
 
-- `src/ui/main_content/lx/history/tests.rs`：
+- `src/ui/main_content/lx/history/tests/turn_tail.rs`：
   - 统计行单行、窄宽度降级顺序；
-  - 文件变更卡 >5 折叠、点击展开列表、点击文件行展开 diff、无 diff 不可点；
   - recap 卡渲染、Next 行、折叠/展开、运行中占位；
+  - 生成图片引用树 `├─/└─ Image (preview): ...  [Download original]`、下划线与下载状态；
   - 块间空行。
 - `src/ui/main_content/lx/status.rs` 测试：
   - 累计缓存命中率计算；
   - 状态行布局降级（cache 先丢、ctx/variant 顺序）。
-- `src/ui/main_content/lx/tests.rs`：首页入口快捷键后的选中态、历史存在时快捷键不生效。
-- `src/input/tests.rs`：Alt+1..4 / Alt+W 路由；Alt+W 大小写。
+- ~~`src/ui/main_content/lx/tests.rs` / `src/input/tests.rs` 首页快捷键测试~~（已随功能移除）。
 
 ### 6.6 TUI 恢复顺序
 
@@ -1337,11 +1461,14 @@ restore_terminal:
 |---|---|---|
 | 终端不支持 focus reporting | 自动 recap 永不触发 | 手动 `/recap` 仍可用；在文档/设置页说明；不阻塞其他功能 |
 | 30 分钟自动请求产生费用 | 用户不知情 | 默认开启但设置页可关；只在失焦 + 3 轮 + 2 轮 gap 时触发；不与其他窗格并发 |
-| 文件 diff 展开导致行数/几何不一致 | 滚动错位、点击错位 | rows 与 click_spans 同源构建；列表/块双指纹包含展开状态；单元测试覆盖 |
 | 统计行降级破坏现有布局测试 | 测试失败 | 更新现有断言；新增窄宽度矩阵测试 |
 | Schema v25 与并行分支冲突 | 迁移被跳过 | 合并前核对 SCHEMA_VERSION；本任务独占 v25；合并时若已被占用则顺延并补测试 |
 | 焦点上报残留泄漏进 shell | 退出后终端出现 `ESC[I/O` | 严格按“关鼠标 → 关焦点 → drain → 离开备用屏 → cooked”顺序；TUI 顺序测试 |
 | Recap 模型悬空 | 设置页选择失效 | 加载时 sanitize；设置页删除 provider/model 时清理；回退当前/默认模型 |
+| 首轮生图下载早于 `SessionBound` | 按钮卡在 `[downloading...]` | 回执按 `attachment_id` 定位，兼容临时/真实会话 ID；回归测试覆盖 |
+| 实时生图复用同名旧缓存 | 预览指向旧图、原图 URL 指向新图 | `saveGeneratedImages(..., overwrite = true)` 覆盖写入；`/rewind` 清理失效 `image_originals` |
+| Gemini 坏图/引用重排 | 轮次卡满 300s 或 `caughtUp` 永不满足 | 图片等待上限 250 ticks；文本稳定 14 ticks 放行 `caughtUp` |
+| JS 文件超 1000 行 | 违反项目规范 | 图片逻辑拆到 `gemini_images.js`；`gemini_helpers.js` 与 `grok_helpers.js` 均低于 1000 行 |
 
 回滚：
 
@@ -1364,16 +1491,18 @@ restore_terminal:
    - `cargo test config::ai`
    - `cargo test settings::service`
    - `cargo test app::update::chat::recap`
+   - `cargo test app::update::chat::web`
+   - `cargo test chat::web`
    - `cargo test ui::main_content::lx`
-   - `cargo test input::`
    - `cargo test tui::`
 4. 真实 TUI：
-   - 首页 `Alt+1..4` 切换入口，`Alt+W` 进 Web / 切站点；
    - 设置页 Model Tab 可开关自动 recap、选择 recap 模型并保存；
+   - 设置页 General → Downloads 可配置原图下载目录；
    - 失焦 30 分钟（或测试缩短常量）后出现 `◇ Generating recap...` → `◆ Recap`；
-   - `/recap` 手动生成；
+   - `/recap` 手动生成；底部有 `◆ Context compacted` 时拒绝；
+   - `/rewind` 可撤销用户轮次、compact 检查点、模型切换与 recap；
    - 统计行单行，窄窗格按顺序丢字段；
    - 输入框底边显示 `70% cached`（累计值）；
-   - 文件变更列表 >5 折叠，点击文件行展开 diff；
+   - AI Web 生图显示预览树，点击文件名定位预览、点击 `[Download original]` → `[✓ Downloaded]`；
    - `/resume` 后 recap 仍在；`/rewind` 后 recap 消失；`/fork` 后 recap 复制。
-5. 所有新增生产代码文件 < 1000 行；测试文件按模块拆分，单文件 < 1500 行。
+5. 所有生产代码文件 < 1000 行（`gemini_helpers.js` / `gemini_images.js` 已拆分）；测试文件按模块拆分，单文件 < 1500 行。

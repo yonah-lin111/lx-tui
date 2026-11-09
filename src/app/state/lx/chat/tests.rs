@@ -149,6 +149,29 @@ fn refresh_status_aggregates_conversation_cache_hit() {
     assert_eq!(chat.status.cache_hit_percent, Some(40));
 }
 
+/// 缓存分子与分母按单条消息绑定：缺 input 的消息不计缓存，超出 input 的缓存被截断。
+#[test]
+fn refresh_status_binds_cache_to_input_and_clamps_per_message() {
+    // 缺 `input_tokens` 的 assistant 只带 cache：不得计入分子（否则 1000/1000=100%）。
+    let mut orphan = message(1, "assistant", None, Some(10));
+    orphan.cache_read_tokens = Some(900);
+    let mut measured = message(3, "assistant", Some(1_000), Some(10));
+    measured.cache_read_tokens = Some(100);
+    let mut chat = LxChat::new();
+    chat.messages = vec![orphan, measured];
+    chat.refresh_status(&ModelsSnapshot::default());
+    assert_eq!(chat.status.cache_hit_percent, Some(10));
+
+    // 单条 cache 超过 input 时按 input 截断：5000 → 1000，累计 1000/2000=50%。
+    let mut inflated = message(5, "assistant", Some(1_000), Some(10));
+    inflated.cache_read_tokens = Some(5_000);
+    let mut plain = message(7, "assistant", Some(1_000), Some(10));
+    plain.cache_read_tokens = Some(0);
+    chat.messages = vec![inflated, plain];
+    chat.refresh_status(&ModelsSnapshot::default());
+    assert_eq!(chat.status.cache_hit_percent, Some(50));
+}
+
 /// 没有任何缓存读取时整段隐藏，不显示 0%。
 #[test]
 fn refresh_status_hides_cache_hit_without_cache_data() {

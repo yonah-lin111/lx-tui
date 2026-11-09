@@ -54,6 +54,14 @@ fn invalid_values_are_rejected() {
 }
 
 #[test]
+fn null_image_download_dir_is_treated_as_empty() {
+    let parsed = Config::from_json(r#"{"image_download_dir": null}"#).expect("null value accepted");
+    assert_eq!(parsed.image_download_dir, "");
+    // 其他非字符串类型仍按非法拒绝。
+    assert!(Config::from_json(r#"{"image_download_dir": true}"#).is_err());
+}
+
+#[test]
 fn validate_enforces_width_relationships() {
     assert!(
         Config {

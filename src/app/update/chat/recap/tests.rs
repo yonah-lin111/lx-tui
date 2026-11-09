@@ -1,5 +1,5 @@
 use super::*;
-use crate::app::state::{ChatMessageView, Lx, LxEntry, PaneView};
+use crate::app::state::{ChatMessageView, Lx, LxEntry, PaneView, RequestKey, RequestState};
 use crate::chat::events::PartKind;
 use crate::db::chat::MessageRecap;
 
@@ -118,8 +118,6 @@ fn focus_gained_cancels_auto_but_keeps_manual_pending() {
         generation: 1,
         manual: false,
         message_id: "a0".into(),
-        end_turn: 0,
-        end_sequence: 0,
         started_at: Instant::now(),
         elapsed_ms: 0,
     });
@@ -140,8 +138,6 @@ fn focus_gained_cancels_auto_but_keeps_manual_pending() {
         generation: 2,
         manual: true,
         message_id: "a0".into(),
-        end_turn: 0,
-        end_sequence: 0,
         started_at: Instant::now(),
         elapsed_ms: 0,
     });
@@ -167,6 +163,61 @@ fn manual_recap_without_session_warns() {
     target.lx.entry = LxEntry::Native;
     assert!(recap_command(&mut state, pane));
     assert!(state.pane_anywhere(pane).expect("pane").lx.toast.is_some());
+}
+
+#[test]
+fn exchanges_skip_subagent_report_auto_turns() {
+    let mut report = text_message(
+        "report",
+        0,
+        "user",
+        "<subagent_report>done</subagent_report>",
+    );
+    report.reports.push(crate::chat::agent::SubagentReportView {
+        agent_id: "agent-1".into(),
+        nickname: None,
+        title: "report".into(),
+        role: crate::chat::agent::AgentRole::Explorer,
+        status: "completed".into(),
+        files_changed: 0,
+        changed_paths: Vec::new(),
+        duration_ms: None,
+        body: "done".into(),
+        delivered_at_ms: 0,
+    });
+    let messages = vec![
+        report,
+        text_message("a0", 0, "assistant", "answer"),
+        text_message("u1", 1, "user", "second"),
+        text_message("a1", 1, "assistant", "answer2"),
+    ];
+    let exchanges = recap_exchanges(&messages);
+    assert_eq!(exchanges.len(), 1);
+    assert_eq!(exchanges[0].user, "second");
+}
+
+#[test]
+fn busy_turn_at_deadline_retries_instead_of_dropping_recap() {
+    let mut state = AppState::demo();
+    let pane = pane_id(&state);
+    let target = state.pane_mut_anywhere(pane).expect("pane");
+    target.view = PaneView::Lx;
+    target.lx.entry = LxEntry::Native;
+    target.lx.chat.session_id = Some("sess-1".into());
+    target.lx.recap.on_turn_completed(0);
+    target.lx.recap.on_turn_completed(1);
+    target.lx.chat.request = RequestState::Streaming {
+        key: RequestKey {
+            pane,
+            session: "sess-1".into(),
+            generation: 1,
+        },
+        assistant_id: "a2".into(),
+    };
+    let now = Instant::now();
+    state.recap_due_at = Some(now);
+    assert!(tick_recap(&mut state, now));
+    assert_eq!(state.recap_due_at, Some(now + RECAP_RETRY));
 }
 
 #[test]

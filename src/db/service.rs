@@ -1,8 +1,7 @@
 //! 同步持久化服务：打开数据库、执行 `app` 层效应出箱、按需载入提示词树。
 //!
-//! 事件循环持有唯一实例；app 层保持纯内存，所有 DB 读写经此收口。
-//! 启动信任门由入口在进入应用前调用：`is_trusted` 配合事件层解析仓库根给出待信任路径，
-//! 信任页确认后以 `trust_path` 登记；应用内部触发的信任检查仍走模态浮层。
+//! 事件循环持有唯一实例；app 层保持纯内存，所有 DB 读写经此收口。启动信任门由入口
+//! 在进入应用前调用；应用内部触发的信任检查仍走模态浮层。
 
 use std::path::{Path, PathBuf};
 use std::time::Instant;
@@ -41,8 +40,7 @@ pub struct Persistence {
 impl Persistence {
     /// 打开默认数据库；库不可用时降级为无持久化模式。
     ///
-    /// `linked_worktree` 由入口解析：开发构建在 linked worktree 内使用独立库文件，
-    /// 避免不同分支的 Schema 互相判废。
+    /// `linked_worktree` 由入口解析，开发构建使用独立库文件，避免不同分支 Schema 互相判废。
     /// 不做启动信任门，由入口在进入 TUI 前处理（见 `untrusted_startup_path`）。
     pub fn start(linked_worktree: Option<&Path>) -> Self {
         let path = default_database_path(linked_worktree);
@@ -111,8 +109,7 @@ impl Persistence {
     }
 
     /// 载入全局 todo 列表并写入状态（启动时调用一次）。
-    ///
-    /// 库不可用或读取失败时保持空列表：todo 是便利功能，不应阻断启动。
+    /// 库不可用或读取失败时保持空列表：todo 不应阻断启动。
     pub fn load_todos(&self, state: &mut AppState) {
         let Some(db) = self.db.as_ref() else {
             return;
@@ -124,8 +121,7 @@ impl Persistence {
     }
 
     /// 载入全局 prompt 历史并写入状态（启动时调用一次）。
-    ///
-    /// 库不可用或读取失败时保持空历史：历史是便利功能，不应阻断启动。
+    /// 库不可用或读取失败时保持空历史：历史不应阻断启动。
     pub fn load_prompt_history(&self, state: &mut AppState) {
         let Some(db) = self.db.as_ref() else {
             return;
@@ -152,9 +148,7 @@ impl Persistence {
 
     /// 执行全部待办效应并惰性载入显示中工作区的提示词树；返回状态是否有变化。
     ///
-    /// 聊天的网络效应（StartChatStream/CancelChatStream）不在此执行——
-    /// 事件层 `pump_chat_streams` 取走后到 Tokio 任务运行；本函数把它们
-    /// 原样放回队列尾部。
+    /// 聊天网络效应不在此执行：事件层 `pump_chat_streams` 取走后本函数原样放回队尾。
     pub fn pump(&mut self, state: &mut AppState) -> bool {
         let mut changed = false;
         for _ in 0..MAX_EFFECT_ROUNDS {
@@ -591,8 +585,7 @@ impl Persistence {
                 self.reload_workspace_history(state)
             }
             Effect::DeleteWorkspaceHistory { path } => {
-                // 最后一个打开的工作区无法关闭；删除其历史数据后需要保留一条已信任的
-                // 隐藏行，供仍运行的终端/后续 prompt 保存使用，否则会以未信任默认名复活。
+                // 最后一个打开的工作区无法关闭：删除历史后保留一条已信任隐藏行，避免以未信任默认名复活。
                 let open_name = state
                     .workspaces
                     .iter()
@@ -626,8 +619,7 @@ impl Persistence {
                     }
                     offset += page_len;
                 }
-                // 对 linked worktree（磁盘上 `.git` 为文件，或已作为 linked worktree 记入内存 `hidden_worktrees`）持久化隐藏；
-                // 即使其目录在磁盘上已被外部删除但尚未 `git worktree prune`，重启后也不会被主仓库 `git worktree list` 重新扫描复活。
+                // linked worktree（`.git` 为文件或已记入 hidden_worktrees）持久化隐藏，避免被主仓库重新扫描复活。
                 if path.join(".git").is_file()
                     || state.workspace_history.hidden_worktrees.contains(&path)
                 {
@@ -696,8 +688,7 @@ impl Persistence {
     }
 
     /// 执行一次数据库操作并透出错误类型；库不可用时返回 [`super::DbError::Unavailable`]。
-    ///
-    /// 与 [`Self::with_db`] 同样记录 `tracing::warn!`，区别只在调用方能按错误分流文案。
+    /// 与 [`Self::with_db`] 同样记录警告，区别只在调用方能按错误分流文案。
     fn db_result<T>(
         &self,
         operation: impl FnOnce(&Database) -> super::Result<T>,
@@ -707,9 +698,7 @@ impl Persistence {
     }
 
     /// 执行一次 todo 写操作：失败时记录日志并提示用户（内存列表不回滚）。
-    ///
-    /// 与 [`Self::with_db`] 的区别只有失败反馈：todo 的写入是用户可见动作，
-    /// 静默失败会让「明明加了一条、重启就没了」变得不可解释。
+    /// 与 [`Self::with_db`] 的区别只有失败反馈：todo 写入是用户可见动作，不能静默失败。
     fn todo_write(
         &self,
         state: &mut AppState,
@@ -979,9 +968,7 @@ fn canonical_path(path: &Path) -> PathBuf {
 }
 
 /// 会话被占用/不可删除的反馈：优先落到绑定该会话的 lx 窗格自己的 toast 槽。
-///
-/// 会话级效应没有单一窗格可比锚定——同一会话可能被多个窗格共享，也可能一个都
-/// 没绑定（此时只能退化为全局 toast，否则用户看不到任何反馈）。
+/// 同一会话可能被多个窗格共享或一个都没绑定，后者退化为全局 toast。
 fn session_busy_feedback(state: &mut AppState, session_id: &str) {
     let toast = Toast::new(
         ToastKind::Danger,

@@ -1,6 +1,6 @@
 //! 会话 fork：从源会话的某条用户消息之前复制出一个独立新会话。
 //!
-//! 复制范围：消息、parts、工具调用、附件元数据、边界内仍生效的 compact 检查点、
+//! 复制范围：消息、parts、工具调用、附件元数据、回顾、边界内仍生效的 compact 检查点、
 //! 边界前的模型切换记录；图片目录一并复制并改写受管路径。
 //!
 //! 刻意**不复制**文件撤销状态（`agent_turn_file_scope` / `agent_file_mutation` /
@@ -14,6 +14,8 @@ use std::path::Path;
 use rusqlite::{Connection, OptionalExtension, params};
 
 use super::{Database, DbError, Result, new_external_id, now_ms};
+
+mod recap;
 
 /// fork 结果：新会话 id 与被选中消息的原始正文（`Full session` 为 None）。
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -350,7 +352,7 @@ impl Database {
             boundary,
             image_rewrite,
         )?;
-        copy_recaps(&transaction, new_session_id, &message_ids, source_session)?;
+        recap::copy_recaps(&transaction, new_session_id, &message_ids, source_session)?;
         copy_checkpoints(&transaction, new_session_id, source_session, 0, boundary)?;
         copy_switches(&transaction, new_session_id, source_session, 0, boundary)?;
         transaction.commit()?;
@@ -557,7 +559,7 @@ pub(super) fn copy_completed_history_window_to_child(
             boundary,
             image_rewrite,
         )?;
-        copy_recaps(transaction, child_session_id, &message_ids, source_session)?;
+        recap::copy_recaps(transaction, child_session_id, &message_ids, source_session)?;
         copy_checkpoints(
             transaction,
             child_session_id,
@@ -821,66 +823,6 @@ fn copy_attachments(
                 row.mime,
                 row.width,
                 row.height,
-            ],
-        )?;
-    }
-    Ok(())
-}
-
-/// 复制源会话的回顾行；只复制 `message_ids` 里已随 fork 复制过去的消息。
-fn copy_recaps(
-    conn: &Connection,
-    new_session_id: &str,
-    message_ids: &HashMap<String, String>,
-    source_session: &str,
-) -> Result<()> {
-    let mut statement = conn.prepare(
-        r#"SELECT message_id, summary_text, next_action, model_provider, model_id,
-                  variant, model_label, end_turn, end_sequence, created_at_ms
-           FROM agent_message_recap
-           WHERE session_id = ?1"#,
-    )?;
-    let rows = statement
-        .query_map(params![source_session], |row| {
-            Ok((
-                row.get::<_, String>(0)?,
-                row.get::<_, String>(1)?,
-                row.get::<_, String>(2)?,
-                row.get::<_, Option<String>>(3)?,
-                row.get::<_, Option<String>>(4)?,
-                row.get::<_, Option<String>>(5)?,
-                row.get::<_, String>(6)?,
-                row.get::<_, i64>(7)?,
-                row.get::<_, i64>(8)?,
-                row.get::<_, i64>(9)?,
-            ))
-        })?
-        .collect::<std::result::Result<Vec<_>, _>>()?;
-    for (old_message_id, summary, next_action, provider, model, variant, label, turn, seq, at) in
-        rows
-    {
-        let Some(new_message_id) = message_ids.get(&old_message_id) else {
-            continue;
-        };
-        conn.execute(
-            r#"INSERT INTO agent_message_recap
-                   (external_id, session_id, message_id, summary_text, next_action,
-                    model_provider, model_id, variant, model_label, end_turn,
-                    end_sequence, created_at_ms)
-               VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12)"#,
-            params![
-                new_external_id("recap"),
-                new_session_id,
-                new_message_id,
-                summary,
-                next_action,
-                provider,
-                model,
-                variant,
-                label,
-                turn,
-                seq,
-                at,
             ],
         )?;
     }

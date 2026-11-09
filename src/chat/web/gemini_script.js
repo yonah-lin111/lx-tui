@@ -1,6 +1,6 @@
 // Google Gemini web chat stream driver for `ego-browser nodejs`.
 //
-// Requires `gemini_helpers.js` to be prepended ahead of this file.
+// Requires `gemini_helpers.js` and `gemini_images.js` to be prepended ahead of this file.
 
 async function main() {
   await activateTaskSpace();
@@ -97,6 +97,7 @@ async function main() {
         imageUrls: [],
         lastSample: '',
         stableTicks: 0,
+        imageWaitTicks: 0,
         pushDom(kind, current) {
           const key = kind === 'thinking' ? 'domThink' : 'domText';
           const previous = this[key] || '';
@@ -186,33 +187,35 @@ async function main() {
           const el = selectorList ? root.querySelector(selectorList) : root;
           if (!el) return '';
           const hidden = [];
-          if (stripSelectors) {
-            el.querySelectorAll(stripSelectors).forEach((n) => {
-              hidden.push([n, n.style.display]);
-              n.style.display = 'none';
-            });
-          }
           const tempCodeNodes = [];
-          if (selectorList && selectorList.includes('message-content')) {
-            const bt = String.fromCharCode(96);
-            el.querySelectorAll('code').forEach((c) => {
-              if (!c.closest('pre, code-block')) {
-                const open = document.createTextNode(bt);
-                const close = document.createTextNode(bt);
-                c.insertBefore(open, c.firstChild);
-                c.appendChild(close);
-                tempCodeNodes.push(open, close);
-              }
-            });
+          try {
+            if (stripSelectors) {
+              el.querySelectorAll(stripSelectors).forEach((n) => {
+                hidden.push([n, n.style.display]);
+                n.style.display = 'none';
+              });
+            }
+            if (selectorList && selectorList.includes('message-content')) {
+              const bt = String.fromCharCode(96);
+              el.querySelectorAll('code').forEach((c) => {
+                if (!c.closest('pre, code-block')) {
+                  const open = document.createTextNode(bt);
+                  const close = document.createTextNode(bt);
+                  c.insertBefore(open, c.firstChild);
+                  c.appendChild(close);
+                  tempCodeNodes.push(open, close);
+                }
+              });
+            }
+            return (el.innerText || '').replace(/\\r\\n/g, '\\n').trim();
+          } finally {
+            for (const tn of tempCodeNodes) {
+              tn.remove();
+            }
+            for (const [n, prev] of hidden) {
+              n.style.display = prev;
+            }
           }
-          const text = (el.innerText || '').replace(/\\r\\n/g, '\\n').trim();
-          for (const tn of tempCodeNodes) {
-            tn.remove();
-          }
-          for (const [n, prev] of hidden) {
-            n.style.display = prev;
-          }
-          return text;
         },
         pollDom() {
           const responses = Array.from(document.querySelectorAll('model-response'));
@@ -255,6 +258,7 @@ async function main() {
               this.started = false;
               this.lastSample = '';
               this.stableTicks = 0;
+              this.imageWaitTicks = 0;
               return;
             }
             return;
@@ -295,24 +299,34 @@ async function main() {
           const hasImageContainer = Boolean(
             mr.querySelector('generated-image, single-image, .generated-images')
           );
-          const pendingImage = hasImageContainer && loadedImgs.length === 0;
+          const allImagesLoaded = imgEls.length > 0 && loadedImgs.length >= imgEls.length;
+          if (hasImageContainer && !allImagesLoaded) {
+            this.imageWaitTicks += 1;
+          } else if (allImagesLoaded) {
+            this.imageWaitTicks = 0;
+          }
+          // 同一轮多图必须等全部加载完成；坏图最多等 250 ticks（约 15s），
+          // 不能让它拖满 300s 的整轮超时。
+          const pendingImage =
+            hasImageContainer &&
+            (imgEls.length === 0 || loadedImgs.length < imgEls.length) &&
+            this.imageWaitTicks < 250;
           if (pendingImage) {
             this.started = true;
           }
 
           const sample = thinkText + '\\n---\\n' + bodyText + '\\n---\\n' + imageUrls.join('\\n');
-          const caughtUp = bodyText.length >= (this.domText || '').length;
+          // 生成停止后引用重排可能让 bodyText 暂时短于已流出的 domText：
+          // 文本稳定 14 ticks 后放行，避免 caughtUp 永远为 false。
+          const caughtUp =
+            bodyText.length >= (this.domText || '').length ||
+            (!isGenerating && this.stableTicks >= 14);
           const hasOutput =
             bodyText.length > 0 || thinkText.length > 0 || imageUrls.length > 0;
-          if (
-            (this.started || hasOutput) &&
-            !isGenerating &&
-            !pendingImage &&
-            caughtUp
-          ) {
+          if ((this.started || hasOutput) && !isGenerating && !pendingImage) {
             if (sample === this.lastSample && hasOutput) {
               this.stableTicks += 1;
-              if (this.stableTicks >= 10) {
+              if (caughtUp && this.stableTicks >= 10) {
                 this.done = true;
               }
             } else {
@@ -658,7 +672,8 @@ async function main() {
           'ai-web-gm-',
           resolvedSid,
           batch.turnNum || 1,
-          Array.isArray(imageItems) && imageItems.length > 0 ? imageItems : batch.imageUrls
+          Array.isArray(imageItems) && imageItems.length > 0 ? imageItems : batch.imageUrls,
+          true
         );
         if (!batch.hadText && saved.length > 0) {
           await emit({

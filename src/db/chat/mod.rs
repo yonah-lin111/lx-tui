@@ -1,8 +1,7 @@
 //! 聊天会话持久化：会话列表、轮次写入、流式 checkpoint 与终态提交。
 //!
-//! 所有读写以 `workspace + session` 双条件校验，跨工作区操作返回拒绝或空结果；
-//! `sequence` 只在持有写事务时读取递增，配合 worker 串行化保证同 session 单调。
-//! `checkpoint`/`finish` 以 `status='streaming'` 条件更新，迟到事件不能覆盖终态。
+//! 所有读写以 `workspace + session` 双条件校验；`sequence` 只在写事务内递增，
+//! `checkpoint`/`finish` 以 `status='streaming'` 更新，迟到事件不能覆盖终态。
 
 pub mod attachment;
 mod compact;
@@ -213,9 +212,7 @@ impl Database {
     }
 
     /// 加载单个会话及全部有序消息（含 parts 与工具调用）；跨工作区或不存在返回 None。
-    ///
-    /// 消息、parts、tools 各一次批量查询（不逐消息 N+1）；parts 与 tools 分别按
-    /// `position` 有序并关联到所属消息，调用方据此合并为单条步骤时间线。
+    /// 消息、parts、tools 各一次批量查询（不逐消息 N+1），按 `position` 关联到所属消息。
     pub fn load_chat_session(
         &self,
         workspace: &Path,
@@ -333,9 +330,7 @@ impl Database {
     }
 
     /// 开启一轮：同事务写入 user message（含 text part）与 streaming assistant message；
-    /// 首轮（`existing_session` 为 None）先建 session。
-    ///
-    /// 失败返回错误且不产生半轮（整个事务回滚）。空草稿由应用层拦截，不进库。
+    /// 首轮先建 session；失败整事务回滚，空草稿由应用层拦截。
     pub fn begin_turn(
         &self,
         workspace: &Path,
@@ -347,9 +342,7 @@ impl Database {
     }
 
     /// 开启一轮（支持附件）：同事务写入 user message、attachments、text part 与 streaming assistant；
-    /// 首轮（`existing_session` 为 None）先建 session。
-    ///
-    /// 文本与附件均为空时才拒绝；纯图片草稿正常建轮。
+    /// 首轮先建 session；文本与附件均为空才拒绝，纯图片草稿正常建轮。
     pub fn begin_turn_with_attachments(
         &self,
         workspace: &Path,
@@ -547,9 +540,7 @@ impl Database {
     }
 
     /// 终态提交：写最后 parts、状态、usage 与 session 时间；重复 finish 幂等。
-    ///
-    /// `usage` 同时作为消息级与会话级口径（单步轮次的便捷入口）；需要区分上下文
-    /// 单步与会话账单时用 [`Self::finish_with_billing`]。
+    /// `usage` 同时作为消息级与会话级口径；需要区分账单时用 [`Self::finish_with_billing`]。
     pub fn finish(
         &self,
         workspace: &Path,
@@ -569,9 +560,7 @@ impl Database {
     }
 
     /// 终态提交：消息行写最后一次响应的 `usage`，会话账单累计整轮 `billing`。
-    ///
-    /// usage 只累计实际返回的 provider 值；重复投递同结果不重复累计 token。
-    /// 与 checkpoint 一致：保留传入 position 与 part 完成时刻，不动已落库的工具行。
+    /// 只累计实际返回的 provider 值；保留 position/完成时刻，不动已落库工具行。
     pub fn finish_with_billing(
         &self,
         workspace: &Path,
@@ -787,9 +776,7 @@ impl Database {
     }
 
     /// 异常重启恢复：把遗留 `streaming` assistant 标记为 `interrupted`，
-    /// 同事务补齐这些消息里仍缺完成时刻的 reasoning part。
-    ///
-    /// 保留最后 checkpoint 的 parts，不自动重发或生成第二条用户消息。
+    /// 同事务补齐 reasoning part 的完成时刻；保留最后 checkpoint 的 parts。
     /// 幂等：第二次调用不再改动任何行，返回 0。
     pub fn recover_interrupted_streams(&self, sessions: &[String]) -> Result<usize> {
         if sessions.is_empty() {

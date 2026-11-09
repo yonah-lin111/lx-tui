@@ -145,17 +145,17 @@ async function downloadImageBuffer(frameId, startUrl) {
   return null;
 }
 
-async function saveGeneratedImages(siteTag, sessionPrefix, rawSessionId, turnNum, urls) {
+async function saveGeneratedImages(siteTag, sessionPrefix, rawSessionId, turnNum, urls, overwrite = false) {
   const rawList = Array.isArray(urls) ? urls.filter(Boolean) : [];
   if (rawList.length === 0) return [];
+  const safeTurn = Math.max(1, Math.trunc(Number(turnNum) || 1));
   const items = [];
   const seenPreview = new Set();
   for (const entry of rawList) {
     const previewUrl = typeof entry === 'string' ? entry : entry.previewUrl;
     if (!previewUrl || seenPreview.has(previewUrl)) continue;
     seenPreview.add(previewUrl);
-    const originalUrl =
-      (typeof entry === 'object' && entry.originalUrl) || toGrokOriginalImageUrl(previewUrl);
+    const originalUrl = (typeof entry === 'object' && entry.originalUrl) || toGrokOriginalImageUrl(previewUrl);
     items.push({ previewUrl, originalUrl });
   }
   const nodeFs = await import('node:fs');
@@ -178,9 +178,9 @@ async function saveGeneratedImages(siteTag, sessionPrefix, rawSessionId, turnNum
   const out = [];
   for (let i = 0; i < items.length; i += 1) {
     const { previewUrl, originalUrl } = items[i];
-    const baseStem = siteTag + '-r' + String(turnNum) + '-' + String(i + 1);
-    const fileStem = siteTag + '-' + shortSid + '-r' + String(turnNum) + '-' + String(i + 1) + '-orig';
-    if (imageDir) {
+    const baseStem = siteTag + '-r' + String(safeTurn) + '-' + String(i + 1);
+    const fileStem = siteTag + '-' + shortSid + '-r' + String(safeTurn) + '-' + String(i + 1) + '-orig';
+    if (imageDir && !overwrite) {
       let cached = null;
       for (const ext of ['jpg', 'png', 'webp', 'gif']) {
         const cand = nodePath.join(imageDir, baseStem + '.' + ext);
@@ -687,7 +687,8 @@ async function runNonChatAction(currentUrl) {
       return;
     }
     const ext = detectImageExt(fetched.buf, fetched.contentType, fetched.finalUrl || DOWNLOAD_URL);
-    const fileName = (DOWNLOAD_STEM || 'grok-orig') + '.' + ext;
+    const downloadStem = nodePath.basename(String(DOWNLOAD_STEM || 'grok-orig')).replace(/[^a-zA-Z0-9._-]/g, '_') || 'grok-orig';
+    const fileName = downloadStem + '.' + ext;
     try {
       nodeFs.mkdirSync(DOWNLOAD_DIR, { recursive: true });
       const target = nodePath.join(DOWNLOAD_DIR, fileName);
@@ -698,7 +699,7 @@ async function runNonChatAction(currentUrl) {
         path: target,
         original_url: DOWNLOAD_URL,
         preview_url: FALLBACK_URL,
-        file_stem: DOWNLOAD_STEM,
+        file_stem: downloadStem,
       });
       await emit({ event: 'done' });
     } catch (error) {

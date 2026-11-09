@@ -134,9 +134,19 @@ fn scripts_for_site_returns_deepseek_gemini_and_grok_driver_bundles() {
     assert!(gm_helpers.contains("bard-mode-menu-button"));
     assert!(gm_helpers.contains("takeOverTaskSpace"));
     assert!(gm_helpers.contains("claimTaskSpace"));
+    assert!(
+        !gm_helpers.contains("async function saveGeneratedImages"),
+        "Gemini image helpers must live in gemini_images.js"
+    );
+    assert!(GEMINI_IMAGES_JS.contains("toGeminiOriginalImageUrl"));
+    assert!(GEMINI_IMAGES_JS.contains("async function saveGeneratedImages"));
+    assert!(GEMINI_IMAGES_JS.contains("async function runGeminiImageDownload"));
+    assert!(GEMINI_IMAGES_JS.contains(r"s.replace(/\?.*$/, '').replace(/=[^=/]+$/, '')"));
     assert!(gm_main.contains("__lxGeminiStream"));
     assert!(gm_main.contains("await activateTaskSpace()"));
     assert!(gm_main.contains("await ensureTaskSpaceControl()"));
+    assert!(gm_main.contains("imageWaitTicks < 250"));
+    assert!(gm_main.contains("!isGenerating && this.stableTicks >= 14"));
 
     let (gk_helpers, gk_main) = scripts_for_site(crate::app::state::AiWebSite::Grok);
     assert!(gk_helpers.contains("lx-tui-ai-web-grok"));
@@ -242,4 +252,29 @@ fn script_source_escapes_user_controlled_values() {
     assert!(prompt_line.trim_end().ends_with("\","), "{prompt_line}");
     assert!(source.contains("editIndex: 3,"));
     assert!(source.starts_with("const __LX_PARAMS = {\n"));
+}
+
+#[test]
+fn gemini_script_source_concatenates_image_helpers_before_main_script() {
+    let source = script_source(
+        crate::app::state::AiWebSite::Gemini,
+        ScriptParams {
+            action: "download_image",
+            ..Default::default()
+        },
+    );
+    let helpers_at = source
+        .find("async function runNonChatAction")
+        .expect("gemini helpers");
+    let images_at = source
+        .find("async function saveGeneratedImages")
+        .expect("gemini image helpers");
+    let main_at = source
+        .find("async function main()")
+        .expect("gemini main script");
+    assert!(
+        helpers_at < images_at && images_at < main_at,
+        "image helpers must sit between helpers and main script"
+    );
+    assert!(source.contains("await runGeminiImageDownload(currentUrl);"));
 }

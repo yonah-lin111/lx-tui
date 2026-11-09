@@ -275,7 +275,7 @@ fn revert_only_flips_state_and_restores_previous_active() {
         )
         .expect("revert");
     assert_eq!(reverted.state, COMPACT_REVERTED);
-    // 原始消息保留（只切状态）。
+    // 原始消息保留（只删除检查点行）。
     let messages = database
         .load_chat_session(&workspace, &first.session_id)
         .expect("load")
@@ -287,6 +287,12 @@ fn revert_only_flips_state_and_restores_previous_active() {
         .expect("active")
         .expect("some");
     assert_eq!(active.id, one.checkpoint.id);
+    // 撤销是物理删除：时间线列表不再包含已撤销的检查点。
+    let remaining = database
+        .compact_checkpoints(&workspace, &first.session_id)
+        .expect("list");
+    assert_eq!(remaining.len(), 1);
+    assert_eq!(remaining[0].id, one.checkpoint.id);
 }
 
 #[test]

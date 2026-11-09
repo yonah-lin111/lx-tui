@@ -21,7 +21,7 @@ pub struct CompactNoticeView {
     pub end_sequence: i64,
     /// 摘要正文（展开后显示）。
     pub summary: String,
-    /// 是否仍生效；已撤销的条目保留在时间线上但明确标记。
+    /// 是否仍生效；撤销会物理删除记录，不再保留已撤销条目。
     pub active: bool,
     /// 是否由子 agent 运行时自动压缩产生。
     ///
@@ -80,7 +80,7 @@ impl CompactNoticeView {
 /// 每个窗格的 compact 状态。
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct LxCompact {
-    /// 检查点列表（按 sequence 升序，含已撤销）。
+    /// 检查点列表（按 sequence 升序；撤销会删除记录，不再保留已撤销条目）。
     pub checkpoints: Vec<CompactNoticeView>,
     /// 已展开的检查点 ID（默认折叠：只有用户显式展开才进这个集合）。
     pub expanded: Vec<String>,

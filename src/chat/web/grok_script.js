@@ -241,15 +241,18 @@ async function main() {
           const body = el.querySelector('.response-content-markdown');
           if (!body) return '';
           const hidden = [];
-          body.querySelectorAll('.not-prose, button, svg, [data-no-copy="true"]').forEach((node) => {
-            hidden.push([node, node.style.display]);
-            node.style.display = 'none';
-          });
-          const raw = (body.innerText || '').replace(/\r\n/g, '\n');
-          for (const [node, prev] of hidden) {
-            node.style.display = prev;
+          try {
+            body.querySelectorAll('.not-prose, button, svg, [data-no-copy="true"]').forEach((node) => {
+              hidden.push([node, node.style.display]);
+              node.style.display = 'none';
+            });
+            const raw = (body.innerText || '').replace(/\r\n/g, '\n');
+            return stripGrokDirectives(raw);
+          } finally {
+            for (const [node, prev] of hidden) {
+              node.style.display = prev;
+            }
           }
-          return stripGrokDirectives(raw);
         },
         pushText(current) {
           if (!current) return;
@@ -505,7 +508,8 @@ async function main() {
           'ai-web-grok-',
           resolvedSid,
           batch.turnNum || 1,
-          batch.imageUrls
+          batch.imageUrls,
+          true
         );
         if (!batch.hadText && saved.length > 0) {
           await emit({

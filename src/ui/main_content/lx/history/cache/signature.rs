@@ -90,6 +90,7 @@ fn list_signature(source: HistorySource<'_>, width: u16, skip_streaming_tail: bo
         hash.write_usize(index);
         hash.write_str(&message.id);
         hash.write_i64(message.sequence);
+        hash.write_i64(message.turn_index);
         hash.write_str(&message.role);
         hash.write_str(&message.status);
         hash.write_str(&message.kind);

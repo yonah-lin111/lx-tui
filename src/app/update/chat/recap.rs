@@ -130,11 +130,24 @@ pub fn recap_command(state: &mut AppState, pane: PaneId) -> bool {
     }
 }
 
-/// 取消指定窗格的在途 recap（新消息 / `/rewind` / 切会话）。
+/// 取消指定窗格及同会话其它窗格的在途 recap（新消息 / `/rewind` / 切会话）。
 pub fn cancel_pending_recap(state: &mut AppState, pane: PaneId) -> bool {
-    state
-        .pane_mut_anywhere(pane)
-        .is_some_and(|target| target.lx.recap.cancel_pending())
+    let session_id = state
+        .pane_anywhere(pane)
+        .and_then(|target| target.lx.chat.session_id.clone());
+    let mut changed = false;
+    for other in state.all_pane_ids() {
+        if let Some(target) = state.pane_mut_anywhere(other) {
+            let same_session = match session_id.as_deref() {
+                Some(session) => target.lx.chat.session_id.as_deref() == Some(session),
+                None => other == pane,
+            };
+            if same_session {
+                changed |= target.lx.recap.cancel_pending();
+            }
+        }
+    }
+    changed
 }
 
 /// 校验回执代次并消费 pending；不匹配时保留原状态。
@@ -172,19 +185,29 @@ pub fn recap_failed(state: &mut AppState, pane: PaneId, manual: bool) -> bool {
     had || manual
 }
 
-/// 回执成功：写入内存视图并更新上次 recap 进度。
+/// 回执成功：写入同会话全部窗格的内存视图并更新上次 recap 进度。
 pub fn apply_recap(state: &mut AppState, pane: PaneId, record: &MessageRecap) -> bool {
-    let Some(target) = state.pane_mut_anywhere(pane) else {
+    let Some(session_id) = state
+        .pane_anywhere(pane)
+        .and_then(|target| target.lx.chat.session_id.clone())
+    else {
         return false;
     };
-    target.lx.recap.entries.insert(
-        record.message_id.clone(),
-        MessageRecapView::from_record(record),
-    );
-    target.lx.recap.pending = None;
-    target.lx.recap.last_recap_turn = Some(record.end_turn);
-    target.lx.recap.last_recap_sequence = record.end_sequence;
-    true
+    let mut changed = false;
+    for other in state.all_pane_ids() {
+        if let Some(target) = state.pane_mut_anywhere(other)
+            && target.lx.chat.session_id.as_deref() == Some(session_id.as_str())
+        {
+            target.lx.recap.entries.insert(
+                record.message_id.clone(),
+                MessageRecapView::from_record(record),
+            );
+            target.lx.recap.pending = None;
+            target.lx.recap.last_recap_turn = Some(record.end_turn);
+            changed = true;
+        }
+    }
+    changed
 }
 
 /// 会话加载：回填 recap 映射与自动触发进度。
@@ -192,6 +215,7 @@ pub fn set_message_recaps(state: &mut AppState, pane: PaneId, recaps: &[MessageR
     let Some(target) = state.pane_mut_anywhere(pane) else {
         return false;
     };
+    let had_entries = !target.lx.recap.entries.is_empty();
     let completed: std::collections::BTreeSet<i64> = target
         .lx
         .chat
@@ -201,29 +225,18 @@ pub fn set_message_recaps(state: &mut AppState, pane: PaneId, recaps: &[MessageR
         .map(|message| message.turn_index)
         .collect();
     let last_turn = recaps.iter().map(|recap| recap.end_turn).max();
-    let last_sequence = recaps
-        .iter()
-        .map(|recap| recap.end_sequence)
-        .max()
-        .unwrap_or(0);
-    target
-        .lx
-        .recap
-        .reset_for_session(completed, last_turn, last_sequence);
+    target.lx.recap.reset_for_session(completed, last_turn);
     for record in recaps {
         target.lx.recap.entries.insert(
             record.message_id.clone(),
             MessageRecapView::from_record(record),
         );
     }
-    !recaps.is_empty()
+    had_entries || !recaps.is_empty()
 }
 
 fn auto_eligibility(state: &AppState, pane: PaneId) -> Eligibility {
     if !state.models.settings.recap_enabled {
-        return Eligibility::Ineligible;
-    }
-    if state.focused != crate::app::state::FocusedContainer::Panes {
         return Eligibility::Ineligible;
     }
     let Some(target) = state.pane_anywhere(pane) else {
@@ -235,11 +248,13 @@ fn auto_eligibility(state: &AppState, pane: PaneId) -> Eligibility {
     if target.lx.chat.session_id.is_none() || target.lx.recap.pending.is_some() {
         return Eligibility::Ineligible;
     }
-    if !target.lx.recap.auto_eligible() || compact_at_bottom(&target.lx) {
-        return Eligibility::Ineligible;
-    }
+    // 在途运行先判：计时到期时轮次/compact 条件可能暂时不满足，30 秒后需复检，
+    // 不能因为暂时不足 3 轮或底部是 compact 就永久丢掉本次自动触发。
     if target_busy(&target.lx) || session_busy(state, pane) {
         return Eligibility::Retry;
+    }
+    if !target.lx.recap.auto_eligible() || compact_at_bottom(&target.lx) {
+        return Eligibility::Ineligible;
     }
     let fallback = target.lx.chat.effective_selection(&state.models);
     if state
@@ -263,7 +278,7 @@ fn target_busy(lx: &Lx) -> bool {
 /// 时间线底部已是上下文压缩条目（晚于最后一条完成态 assistant 回复）时禁止 recap：
 /// recap 挂在最后一条 assistant 消息尾部，若底部有更新的 compact，回顾会落到压缩块上方。
 fn compact_at_bottom(lx: &Lx) -> bool {
-    let Some(checkpoint) = lx.compact.checkpoints.last() else {
+    let Some(checkpoint) = lx.compact.checkpoints.iter().rev().find(|c| c.active) else {
         return false;
     };
     let last_assistant_sequence = lx
@@ -287,7 +302,9 @@ fn session_busy(state: &AppState, pane: PaneId) -> bool {
     state.all_pane_ids().into_iter().any(|other| {
         state.pane_anywhere(other).is_some_and(|target| {
             target.lx.chat.session_id.as_deref() == Some(session_id)
-                && (target.lx.chat.request.is_busy() || target.lx.compact.is_running())
+                && (target.lx.chat.request.is_busy()
+                    || target.lx.compact.is_running()
+                    || target.lx.recap.pending.is_some())
         })
     })
 }
@@ -363,8 +380,6 @@ fn schedule_recap(state: &mut AppState, pane: PaneId, manual: bool) -> Result<()
         generation,
         manual,
         message_id: message_id.clone(),
-        end_turn,
-        end_sequence,
         started_at: Instant::now(),
         elapsed_ms: 0,
     });
@@ -393,6 +408,10 @@ fn recap_exchanges(messages: &[ChatMessageView]) -> Vec<RecapExchange> {
             continue;
         }
         if message.role != "user" && message.role != "assistant" {
+            continue;
+        }
+        // 子 agent 报告自动轮以 user 消息落库，但正文是报告信封，不属于用户输入。
+        if !message.reports.is_empty() {
             continue;
         }
         let text = message_text(message);
@@ -438,13 +457,15 @@ fn message_text(message: &ChatMessageView) -> String {
         .steps
         .iter()
         .filter_map(|step| match step {
-            AssistantStepView::Part { part, .. } if part.kind == PartKind::Text => {
+            AssistantStepView::Part { part, .. }
+                if part.kind == PartKind::Text && !part.content.is_empty() =>
+            {
                 Some(part.content.as_str())
             }
             _ => None,
         })
         .collect::<Vec<_>>()
-        .join("")
+        .join("\n")
 }
 
 #[cfg(test)]

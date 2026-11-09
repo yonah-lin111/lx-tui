@@ -1,18 +1,19 @@
-//! 聊天状态：运行指标 + 模型名 · 思考等级 · 上下文占用，绘制在**窗格底边框**上。
+//! 聊天状态：模型名 · 思考等级 · 上下文占用 · 缓存命中率，绘制在**窗格底边框**上。
 //!
 //! 输入框保留自己的上下 `─` 分割线；状态数据**覆盖**在 main content 的底边框（`╰──╯`）上：
 //! 只改写文字落到的单元格，其余底边线保留为 `─`（边框始终可见）。
-//! 左端先画运行指标（后台任务 / 子 agent，形如 `1 process · 2 subagents`），
-//! 再画 ` 模型名 · 思考等级 · 上下文占用 `（模型名用入口标签同款粉→蓝渐变，
-//! 上下文占用用次要信息色；形如 `258.7k(26%)`——**不带 `context:` 前缀**，
-//! 紧跟模型名之后即语义明确）。
+//! 左端依次画 `模型名 · 思考等级 · 上下文占用 · 缓存命中率`（模型名用入口标签同款
+//! 粉→蓝渐变，上下文占用用次要信息色；形如 `258.7k(26%)`——**不带 `context:` 前缀**，
+//! 紧跟模型名之后即语义明确）；运行指标（后台任务 / 子 agent，形如
+//! `1 process · 2 subagents`）紧凑贴在这组字段右侧。
 //! 思考等级（variant 原始 key，如 `high`）紧跟模型名之后，**加粗黄字**（对齐
 //! opencode 的 `theme.text.feedback.warning.base` + BOLD），分隔符仍用次要信息色；
 //! 模型无 variants 时整段不显示。
 //! 供应商名不再显示（对用户无信息量，位置让给上下文占用）。
 //! 用量取最近一次同模型请求的分子、百分比 = 用量 / 模型上限（四舍五入），夹到 100%；
 //! **未知用量、未知上限或零消耗整段隐藏**。
-//! 宽度不足时依次丢弃上下文占用、丢弃思考等级、再硬切模型名（不使用省略号）；
+//! 宽度不足时依次丢弃缓存命中率、上下文占用、思考等级，再硬切模型名（不使用省略号）；
+//! 右侧一次性 `omitted turns` 提示优先占位，左段在扣除它之后的预算内降级；
 //! 运行指标优先于模型名保留。
 //! 停止生成不再有按钮：流中按 `Esc`（单击待命提示、双击停止，对齐 opencode）。
 //! 两端角字符保留，各控件矩形由同一布局函数派生。
@@ -248,8 +249,28 @@ fn variant_text(status: &ChatStatus) -> Option<String> {
 /// 在窗格底边框行上覆盖绘制状态（两端角与未被覆盖的底边线保留为 `─`）。
 pub(crate) fn render(buf: &mut Buffer, inner: Rect, lx: &Lx) {
     let status = &lx.chat.status;
+    // 右侧一次性省略提示先占位：布局只在扣除后的有效宽度内跑降级链，
+    // 避免提示右对齐绘制时覆盖已经画出的上下文/缓存字段。
+    let notice = status
+        .omitted_turns
+        .map(|omitted| format!("{} {omitted}", text::LX_CHAT_OMITTED_PREFIX));
+    let notice_w = notice
+        .as_ref()
+        .map_or(0, |value| u16::try_from(value.width()).unwrap_or(u16::MAX));
+    let usable = inner.width.saturating_sub(EDGE_PAD.saturating_mul(2));
+    let notice_reserve = if notice_w > 0 && notice_w.saturating_add(GAP) <= usable {
+        notice_w.saturating_add(GAP)
+    } else {
+        0
+    };
+    let effective = Rect::new(
+        inner.x,
+        inner.y,
+        inner.width.saturating_sub(notice_reserve),
+        inner.height,
+    );
     let lay = layout(
-        inner,
+        effective,
         status,
         lx.background_tasks,
         lx.agents.running_count(),
@@ -295,32 +316,14 @@ pub(crate) fn render(buf: &mut Buffer, inner: Rect, lx: &Lx) {
         }
     }
     // 供应商已移除；上下文占用紧跟模型名（`模型名 · 258.7k(26%)`）。
-    let notice = status
-        .omitted_turns
-        .map(|omitted| format!("{} {omitted}", text::LX_CHAT_OMITTED_PREFIX));
-    let notice_w = notice
-        .as_ref()
-        .map_or(0, |value| u16::try_from(value.width()).unwrap_or(u16::MAX));
     let context = context_text(status);
     // 模型名宽度直接取布局的结论（`model_width`），不在这里重算——
     // 重算必然与降级链的判断分叉，导致「布局判放不下、渲染却画出来」的错位。
-    // 有省略提示时再让出它的位置，避免提示压住模型名。
-    let notice_reserve = if lay.activity.width == 0
-        && notice_w > 0
-        && notice_w.saturating_add(GAP) < lay.label.width
-    {
-        notice_w.saturating_add(GAP)
-    } else {
-        0
-    };
-    let model_budget = lay
-        .model_width
-        .min(lay.label.width.saturating_sub(notice_reserve));
     let model = status
         .model_name
         .clone()
         .unwrap_or_else(|| text::LX_CHAT_NO_MODEL_SHORT.to_string());
-    let model = cut_width(&model, usize::from(model_budget));
+    let model = cut_width(&model, usize::from(lay.model_width));
     let mut x = lay.label.x;
     let limit = lay.label.right();
     if !model.is_empty() && x < limit {

@@ -78,7 +78,6 @@ pub(crate) struct UserRefLine {
     pub is_last: bool,
     pub kind: crate::db::chat::MessageAttachmentKind,
     pub label: String,
-    pub source_path: Option<String>,
 }
 
 impl UserRefLine {
@@ -101,7 +100,6 @@ impl UserRefLine {
                 is_last: i + 1 == len,
                 kind: att.kind,
                 label: att.label.clone(),
-                source_path: att.source_path.clone(),
             })
             .collect()
     }
@@ -122,16 +120,20 @@ impl AssistantRefLine {
         message: &crate::app::state::ChatMessageView,
         chat: &crate::app::state::LxChat,
     ) -> Vec<Self> {
-        let len = message.attachments.len();
-        message
+        let images: Vec<_> = message
             .attachments
             .iter()
+            .filter(|att| att.kind == crate::db::chat::MessageAttachmentKind::Image)
+            .collect();
+        let len = images.len();
+        images
+            .into_iter()
             .enumerate()
             .map(|(i, att)| Self {
                 attachment_id: att.id.clone(),
                 is_last: i + 1 == len,
                 label: att.label.clone(),
-                preview_path: att.source_path.clone(),
+                preview_path: att.source_path.clone().filter(|path| !path.is_empty()),
                 download_state: chat
                     .image_originals
                     .get(&att.id)
@@ -162,7 +164,8 @@ impl AssistantRefLine {
         let conn_cols = USER_INDENT + 3;
         let prefix_cols =
             conn_cols + crate::ui::text::agent::ASSISTANT_REF_IMAGE_PREVIEW_PREFIX.len() as u16;
-        let label_cols = unicode_width::UnicodeWidthStr::width(self.label.as_str()) as u16;
+        let label_cols = u16::try_from(unicode_width::UnicodeWidthStr::width(self.label.as_str()))
+            .unwrap_or(u16::MAX);
         if let Some(path) = &self.preview_path {
             cards.push(super::snapshot::CardRegion {
                 kind: super::CardKind::Attachment { path: path.clone() },
@@ -174,7 +177,8 @@ impl AssistantRefLine {
         }
         if let Some(btn_text) = self.button_text() {
             let btn_col = prefix_cols.saturating_add(label_cols).saturating_add(2);
-            let btn_cols = unicode_width::UnicodeWidthStr::width(btn_text) as u16;
+            let btn_cols =
+                u16::try_from(unicode_width::UnicodeWidthStr::width(btn_text)).unwrap_or(u16::MAX);
             let clickable = !matches!(
                 self.download_state,
                 Some(crate::app::state::OriginalImageDownloadState::Downloading)
@@ -275,9 +279,15 @@ impl BlockPaint {
             Self::Thinking { body } => md_bytes(body),
             // 系统事件卡片的正文已排版进 `SystemCard`，按行数记近似值。
             Self::SystemEvent { card } => card.rows() * 64,
-            Self::RefLines { ref_lines } => {
-                ref_lines.iter().map(|r| r.label.len() + 24).sum::<usize>()
-            }
+            Self::RefLines { ref_lines } => ref_lines
+                .iter()
+                .map(|r| {
+                    r.label.len()
+                        + 24
+                        + r.attachment_id.len()
+                        + r.preview_path.as_ref().map_or(0, String::len)
+                })
+                .sum::<usize>(),
             // 旧路径没有缓存正文，不占二级缓存预算（行数已在一级快照里）；
             // 点击面几何是小结构，按条数记个近似值。
             Self::Legacy { spans, .. } => spans.len() * std::mem::size_of::<CardSpan>(),
@@ -613,11 +623,16 @@ fn draw_assistant_ref_lines(
             crate::ui::text::agent::TREE_BRANCH
         };
         let kind_prefix = crate::ui::text::agent::ASSISTANT_REF_IMAGE_PREVIEW_PREFIX;
-        let label_style =
-            style::user_ref_image().add_modifier(ratatui::style::Modifier::UNDERLINED);
+        let mut label_style = style::user_ref_image();
+        if ref_line.preview_path.is_some() {
+            label_style = label_style.add_modifier(ratatui::style::Modifier::UNDERLINED);
+        }
         let conn_cols = USER_INDENT + 3;
         let prefix_cols = conn_cols + kind_prefix.len() as u16;
-        let label_cols = unicode_width::UnicodeWidthStr::width(ref_line.label.as_str()) as u16;
+        let label_cols = u16::try_from(unicode_width::UnicodeWidthStr::width(
+            ref_line.label.as_str(),
+        ))
+        .unwrap_or(u16::MAX);
         grid.put_clipped(rect.x, y, connector, Style::default(), rect.width);
         grid.put_clipped(
             rect.x.saturating_add(conn_cols),

@@ -388,6 +388,7 @@ Subcommands:
   set [--sidebar-width <N>] [--sidebar-min-width <N>] [--sidebar-max-width <N>]
       [--narrow-width <N>] [--min-width <N>] [--min-height <N>]
       [--min-pane-width <N>] [--min-pane-height <N>]
+      [--image-download-dir <DIR>]
       Update layout settings in settings.json
   reset
       Reset settings.json to default values

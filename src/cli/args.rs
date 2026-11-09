@@ -230,6 +230,7 @@ const VALUE_OPTIONS: &[&str] = &[
     "--context-limit",
     "--output-limit",
     "--image-input",
+    "--image-download-dir",
     "--filter",
     "--to",
     "--id",

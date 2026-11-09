@@ -197,7 +197,14 @@ pub fn select_latest(state: &mut AppState, pane: PaneId) -> Option<()> {
         {
             consider_latest(&mut latest, message.sequence, LatestKind::Turn);
         }
-        if let Some(checkpoint) = target.lx.compact.checkpoints.last() {
+        if let Some(checkpoint) = target
+            .lx
+            .compact
+            .checkpoints
+            .iter()
+            .rev()
+            .find(|checkpoint| checkpoint.active)
+        {
             consider_latest(&mut latest, checkpoint.sequence, LatestKind::Compact);
         }
         if let Some(switch) = target.lx.model_switch.switches.last() {
@@ -338,7 +345,14 @@ fn select_recap(state: &mut AppState, pane: PaneId, session_id: &str) -> Option<
 /// 选中最近的 compact 检查点：只冻结检查点 id 与 revision，不请求文件预检。
 fn select_compact(state: &mut AppState, pane: PaneId, session_id: &str) -> Option<()> {
     let target = state.pane_anywhere(pane)?;
-    let checkpoint = target.lx.compact.checkpoints.last()?.clone();
+    let checkpoint = target
+        .lx
+        .compact
+        .checkpoints
+        .iter()
+        .rev()
+        .find(|checkpoint| checkpoint.active)?
+        .clone();
     let revision = target.lx.chat.revision;
     let input_at_open = target.lx.input.clone();
     let target = state.pane_mut_anywhere(pane)?;

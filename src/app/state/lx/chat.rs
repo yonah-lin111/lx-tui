@@ -9,6 +9,7 @@ use crate::config::ai::{AiSettings, ModelSelection};
 use crate::db::chat::Usage;
 
 pub mod file_diff;
+mod image;
 pub mod shell;
 mod steps;
 mod stream;
@@ -17,6 +18,7 @@ pub mod tool_view;
 mod usage;
 
 pub use file_diff::{DiffHunkView, DiffLineView, FileChangeView, FileDiffDetailView, FileDiffView};
+pub use image::{GeneratedImageOriginal, OriginalImageDownloadState};
 pub use shell::{PendingShell, QueuedSubmission, UserShellView};
 pub use steps::{
     AssistantStepView, ChatMessageView, ChatPartView, ToolCallView, ToolStatus, ToolSummary,
@@ -453,25 +455,6 @@ pub enum CardSection {
 /// 本地命令卡片在 [`LxChat::detail_expanded`] 里的槽位（它没有 call_id）。
 pub const SHELL_SLOT: &str = "shell";
 
-/// AI Web 生成图片的原图下载状态。
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub enum OriginalImageDownloadState {
-    Idle,
-    Downloading,
-    Downloaded { path: String },
-}
-
-/// AI Web 生成图片的原图下载信息（按附件 ID 索引）。
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct GeneratedImageOriginal {
-    pub site: super::web::AiWebSite,
-    pub session_id: String,
-    pub original_url: String,
-    pub fallback_url: String,
-    pub file_stem: String,
-    pub state: OriginalImageDownloadState,
-}
-
 /// 单窗格的聊天状态：会话引用、历史视图与请求状态机。
 #[derive(Debug)]
 pub struct LxChat {
@@ -481,10 +464,7 @@ pub struct LxChat {
     pub selection: Option<ModelSelection>,
     /// 展示用消息列表（含流中 partial；DB 恢复时重建）。
     pub messages: Vec<ChatMessageView>,
-    /// 消息创建时刻（message_id → UTC 毫秒）；供 `/fork` 面板时间列使用。
-    ///
-    /// 不塞进 `ChatMessageView` 是为了避免给大量测试/构造点补字段；加载会话时整体重建，
-    /// 新轮提交时追加。未知 id 返回 None，面板时间列留空。
+    /// 消息创建时刻（message_id → UTC 毫秒）；供 `/fork` 面板时间列使用，加载会话时整体重建。
     pub message_times: std::collections::HashMap<String, i64>,
     /// AI Web 助手生成图片的原图下载元数据与状态（attachment_id → 原图信息）。
     pub image_originals: std::collections::HashMap<String, GeneratedImageOriginal>,
@@ -496,16 +476,12 @@ pub struct LxChat {
     pub request: RequestState,
     /// 历史视图滚动：是否跟随底部（用户上滚后暂停）。
     pub follow_bottom: bool,
-    /// 上下文占用分子：最近一次**同模型**请求的输入 + 输出 token
-    /// （codex 口径 `total_tokens`——下一轮请求的输入近似为其上一轮输入加输出）；
-    /// None 表示未知（状态行整段隐藏上下文占用）。
+    /// 上下文占用分子：最近一次**同模型**请求的输入 + 输出 token；None 表示未知（整段隐藏）。
     pub context_tokens: Option<u64>,
     /// 该占用分子对应模型（切换模型时分子清空）。
     pub last_tokens_model: Option<String>,
-    /// 当前流式模型响应内分帧到达的 usage 聚合槽（`ResponseFinished` 时重置）。
-    ///
-    /// Anthropic 在 `message_start` 报 input、`message_delta` 报 output；必须先在
-    /// 同一步内合并，才能算出 `context_tokens = input + output`。
+    /// 当前流式模型响应内分帧到达的 usage 聚合槽（`ResponseFinished` 时重置）：
+    /// Anthropic 的 input 在 `message_start`、output 在 `message_delta`，必须同一步合并。
     pub step_usage: Usage,
     /// 上下文裁剪省略提示（一次性显示；读取后清除）。
     pub omitted_turns_notice: Option<usize>,
@@ -520,43 +496,31 @@ pub struct LxChat {
     /// 历史视图滚动偏移（跟随底部时忽略）。
     pub history_scroll: usize,
     /// 上一帧实际绘制的**顶部内容行号**（事件循环每次绘制前写入，渲染层只读）。
-    ///
-    /// 跟随时 `history_scroll` 是过期值（顶部行由 `total - height` 现算），而「切换
-    /// 展开状态」必须知道**用户当前正看着哪一行**才能原地展开。把它作为跨帧记忆存
-    /// 在这里，与 [`Self::suppressed_prompt_header`] 同一套做法（渲染不改状态）。
+    /// 跟随时 `history_scroll` 是过期值（顶部行由 `total - height` 现算），而切换展开
+    /// 状态必须知道用户当前正看着哪一行才能原地展开；与置顶抑制记忆同一套做法。
     pub viewport_top: Option<usize>,
     /// loading 转轮帧序号（按时间推进，仅流中递增）。
     pub loading_frame: usize,
-    /// 鼠标悬停的可折叠块；None 表示不在任何卡片上。
-    ///
-    /// 渲染层只读：只有思考块用它把压暗的头部恢复品红（工具卡片与本地命令卡片的
-    /// 折叠内容不随悬停变色）。
+    /// 鼠标悬停的可折叠块；None 表示不在任何卡片上。渲染层只读：只有思考块用它
+    /// 把压暗的头部恢复品红（工具卡片与本地命令卡片不随悬停变色）。
     pub hover: Option<CardTarget>,
-    /// 本轮已耗时（毫秒），由事件循环在流中每帧刷新。
-    ///
-    /// 渲染层不取时钟（纯渲染），因此时钟只在 `advance_lx_loading` 里读一次写在这里；
-    /// loading 行据此显示 `(2.7s · ↑1.6k ↓320 tok)`。
+    /// 本轮已耗时（毫秒），由事件循环在流中每帧刷新：渲染层不取时钟（纯渲染），
+    /// 时钟只在 `advance_lx_loading` 里读一次；loading 行据此显示 `(2.7s · ↑1.6k ↓320 tok)`。
     pub turn_elapsed_ms: Option<i64>,
     /// 鼠标是否悬停在「回到底部」按钮上（决定其高亮）。
     pub jump_bottom_hover: bool,
     /// Esc 停止待命时刻：流中首次按 Esc 只待命并显示提示，窗口内再按一次才真正停止
     /// （对齐 opencode 的双击停止）；超时或流结束清除。
     pub stop_armed_at: Option<std::time::Instant>,
-    /// 主轮是否被用户显式停止（Esc 双击）。
-    ///
-    /// 停止后常驻后台的子 agent 不撑输入框上方 loading；它们仍在底边框计数。
-    /// 下一次用户发送或自动报告轮开始时清为 false。
+    /// 主轮是否被用户显式停止（Esc 双击）：停止后常驻后台的子 agent 不撑 loading，
+    /// 仍在底边框计数；下一次用户发送或自动报告轮开始时清为 false。
     pub main_stopped: bool,
     /// 置顶行抑制记忆（跨帧状态，唯一必须落库到 app 侧的部分）；见 [`StickySuppression`]。
-    /// 由事件循环每轮 `resolve_lx_history` 写入，渲染层只读（渲染不改状态）；
-    /// "要钉哪条消息"本身是纯函数结果，渲染/命中各自现算，不存第二份真相。
+    /// 由事件循环每轮 `resolve_lx_history` 写入，渲染层只读（渲染不改状态）。
     pub suppressed_prompt_header: Option<StickySuppression>,
-    /// 卡片展开状态：(message_id, slot, 区域, 是否展开)。
-    ///
-    /// 用稳定 ID 而不是数组下标定位：历史增删、重载与切会话都不会把展开状态
-    /// 误挂到别的卡片上；重启或切会话后默认折叠（本字段随窗格内存存在）。
-    /// `slot` 是工具调用的 call_id（本地命令卡片固定为 [`SHELL_SLOT`]）；
-    /// 命令卡片的参数与输出各占一条记录，互不影响。
+    /// 卡片展开状态：(message_id, slot, 区域, 是否展开)。用稳定 ID 而不是数组下标
+    /// 定位，历史增删/重载/切会话都不会把状态误挂到别的卡片上；`slot` 是工具调用的
+    /// call_id（本地命令卡片固定为 [`SHELL_SLOT`]），命令参数与输出各占一条记录。
     pub detail_expanded: Vec<(String, String, CardSection, bool)>,
     /// 用户消息正文展开状态（按 message ID 记录，默认折叠）。
     pub expanded_user_messages: std::collections::HashSet<String>,
@@ -728,11 +692,8 @@ impl LxChat {
         changed
     }
 
-    /// 复位**会话级**展示状态（`/new`、会话删除、切换到别的会话共用）。
-    ///
-    /// 三条路径的口径必须一致：`plan` 不只是展示——`start_stream` 会把它拼进本轮的
-    /// system 上下文（`current plan: …`），漏清会让新会话继承上一会话的待办；
-    /// `selected_tool` 残留会让 `^o` 指向已删除的消息而静默失去定位能力。
+    /// 复位**会话级**展示状态（`/new`、会话删除、切换到别的会话共用）：`plan` 会拼进
+    /// 本轮 system 上下文，`selected_tool` 残留会指向已删除的消息，两者都不能跨会话继承。
     pub fn reset_session_view(&mut self) {
         self.session_id = None;
         self.messages.clear();
@@ -872,10 +833,7 @@ impl LxChat {
     }
 
     /// thinking 块是否展开：**默认折叠**（生成中也不自动展开），只有用户显式点击头部或
-    /// `Ctrl+T` 才展开；状态一直保留——生成结束不会强制展开或强制收起（对齐 opencode 的
-    /// hide 模式：单击展开、再点收起）。
-    ///
-    /// `step_index` 是**时间线步骤下标**（含工具步骤），与 UI 命中几何同源。
+    /// `Ctrl+T` 才展开；生成结束不会强制展开或收起。`step_index` 是时间线步骤下标。
     pub fn reasoning_expanded(&self, message_index: usize, step_index: usize) -> bool {
         self.thinking_toggled
             .iter()
@@ -884,9 +842,7 @@ impl LxChat {
     }
 
     /// 该思考块是否仍在生成：该步骤是 Reasoning、其独立完成字段为空、且消息仍在流中。
-    ///
-    /// **不再**要求它是最后一个 reasoning 块或所属消息是最后一条：思考块自己的完成
-    /// 字段才是唯一依据（`reasoning -> text -> reasoning` 交错时同样正确）。
+    /// 不要求它是最后一个 reasoning 块（`reasoning -> text -> reasoning` 交错同样正确）。
     pub fn reasoning_streaming(&self, message_index: usize, step_index: usize) -> bool {
         let Some(message) = self.messages.get(message_index) else {
             return false;
@@ -919,11 +875,7 @@ impl LxChat {
 
     /// 流中已产生的**输出 token 估算值**（rough）：ASCII 约 4 字符 1 token，
     /// 非 ASCII（CJK 等）约 1 字符 1 token；只统计正文与思考正文。
-    ///
-    /// 用途仅限输入框上方 loading 行的 `↓1.2k tok` 提示——真实 usage 只在请求
-    /// 结束时回来，那时 loading 行已经消失（真实值由消息底部统计行给出）。
-    /// 因此这里是估算而不是统计：宁可给出「还在往外吐多少字」的活信号，也不让
-    /// 用户在漫长的流里盯着一个没有数字的 `Working...`。
+    /// 仅用于 loading 行的 `↓1.2k tok` 提示；真实 usage 由消息底部统计行给出。
     pub fn stream_output_tokens(&self) -> Option<u64> {
         let message = self.streaming_message()?;
         let mut ascii = 0u64;
@@ -944,10 +896,8 @@ impl LxChat {
         (tokens > 0).then_some(tokens)
     }
 
-    /// 当前选择；无窗格级选择时回落配置默认。
-    ///
-    /// 统一规范化：显式 variant 失效或缺失时回落模型默认思考等级（`normalize_selection`），
-    /// 否则「只配了模型默认等级」的模型永远不会带上思考参数。
+    /// 当前选择；无窗格级选择时回落配置默认。统一规范化：显式 variant 失效或缺失时
+    /// 回落模型默认思考等级，否则「只配了模型默认等级」的模型永远不会带上思考参数。
     pub fn effective_selection(&self, models: &ModelsSnapshot) -> Option<ModelSelection> {
         // 窗格选择若已失效（provider/model 被删）回落默认。
         if let Some(selection) = &self.selection
@@ -964,10 +914,8 @@ impl LxChat {
             .map(|selection| models.normalize_selection(selection))
     }
 
-    /// 当前仍在流转的 assistant 消息的只读引用。
-    ///
-    /// **按本轮 `assistant_id` 定位**，不能取 `messages.last()`：本地命令记录可能追加在
-    /// 流式 assistant 之后，最后一条已不是模型消息。
+    /// 当前仍在流转的 assistant 消息的只读引用。**按本轮 `assistant_id` 定位**，
+    /// 不能取 `messages.last()`：本地命令记录可能追加在流式 assistant 之后。
     pub fn streaming_message(&self) -> Option<&ChatMessageView> {
         match &self.request {
             RequestState::Streaming { assistant_id, .. } => self
@@ -1000,7 +948,6 @@ impl LxChat {
     }
 
     /// 提取当前会话中用户历史消息发送过的所有文件及引用路径（按最近使用逆序去重）。
-    /// 返回 `(相对路径, 是否目录)`。
     pub fn user_history_reference_paths(&self) -> Vec<(String, bool)> {
         let mut seen = std::collections::HashSet::new();
         let mut results = Vec::new();

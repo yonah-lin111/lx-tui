@@ -194,6 +194,15 @@ fn config_json(config: &Config) -> serde_json::Value {
     })
 }
 
+/// 人类可读输出里的原图下载目录：空串表示默认桌面。
+fn image_download_dir_label(config: &Config) -> String {
+    if config.image_download_dir.is_empty() {
+        "(default: ~/Desktop)".to_string()
+    } else {
+        config.image_download_dir.clone()
+    }
+}
+
 fn run_show(ctx: &WorkspaceContext, out: &Output) -> Result<(), String> {
     let config = config::load_settings().map_err(|error| error.to_string())?;
     let data_root = config::user_data_root().map_err(|error| error.to_string())?;
@@ -233,6 +242,12 @@ fn run_show(ctx: &WorkspaceContext, out: &Output) -> Result<(), String> {
         writeln!(w, "{:<22}{}", "Min height:", config.min_height)?;
         writeln!(w, "{:<22}{}", "Min pane width:", config.min_pane_width)?;
         writeln!(w, "{:<22}{}", "Min pane height:", config.min_pane_height)?;
+        writeln!(
+            w,
+            "{:<22}{}",
+            "Image download dir:",
+            image_download_dir_label(&config)
+        )?;
         writeln!(w)?;
         writeln!(w, "{:<22}{}", "Data root:", data_root.display())?;
         writeln!(w, "{:<22}{}", "Settings file:", settings_path.display())?;
@@ -281,7 +296,13 @@ fn run_set(out: &Output, args: &SetArgs) -> Result<(), String> {
         writeln!(w, "{:<22}{}", "Sidebar width:", config.sidebar_width)?;
         writeln!(w, "{:<22}{}", "Narrow width:", config.narrow_width)?;
         writeln!(w, "{:<22}{}", "Min width:", config.min_width)?;
-        writeln!(w, "{:<22}{}", "Min height:", config.min_height)
+        writeln!(w, "{:<22}{}", "Min height:", config.min_height)?;
+        writeln!(
+            w,
+            "{:<22}{}",
+            "Image download dir:",
+            image_download_dir_label(&config)
+        )
     })
 }
 

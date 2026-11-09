@@ -532,3 +532,27 @@ fn cache_hit_renders_after_context_and_drops_first() {
     assert!(lay.context.width > 0, "上下文保留");
     assert!(lay.variant.width > 0, "variant 保留");
 }
+
+/// 右侧 `omitted turns` 提示必须先占位：窄窗格里不得覆盖已画出的上下文/缓存字段。
+#[test]
+fn omitted_turns_notice_does_not_overwrite_context_or_cache() {
+    let mut st = status(Some("M"), Some("P"), Some(1_000), Some(500), false);
+    st.cache_hit_percent = Some(70);
+    st.omitted_turns = Some(3);
+    let lx = lx_with_status(st);
+    // 32 列内容区：不预留提示时布局会保留 `70% cached`，提示右对齐后正好压在它上面。
+    let line = render_border(&lx, 34);
+    assert!(line.contains("500(50%)"), "上下文占用保留：{line}");
+    assert!(line.contains("omitted turns: 3"), "省略提示显示：{line}");
+    assert!(!line.contains("70% cached"), "缓存让位给省略提示：{line}");
+    let context_end = line
+        .find("500(50%)")
+        .map(|index| index + "500(50%)".len())
+        .unwrap_or(0);
+    let notice_start = line.find("omitted turns: 3").unwrap_or(0);
+    assert!(notice_start > context_end, "提示在上下文之后：{line}");
+    assert!(
+        line[context_end..notice_start].chars().all(|ch| ch == '─'),
+        "提示与上下文之间只剩底边线，不得覆盖字段：{line}"
+    );
+}

@@ -110,9 +110,9 @@ pub(super) fn draw(
 ///
 /// 底色必须与分段分开携带：`put_segments` 逐字符写入网格，不会替空格铺背景。
 #[derive(Debug)]
-pub(crate) struct Row {
-    pub(crate) segments: Vec<Segment>,
-    pub(crate) fill: Option<Style>,
+struct Row {
+    segments: Vec<Segment>,
+    fill: Option<Style>,
 }
 
 impl Row {
@@ -298,7 +298,7 @@ fn draws_body_tree(width: u16) -> bool {
 }
 
 /// 把正文行包上树体前缀：首行 `├─`/`└─`，续行 `│`/空白。
-pub(crate) fn apply_body_prefixes(rows: &mut [Row], last: bool, width: u16) {
+fn apply_body_prefixes(rows: &mut [Row], last: bool, width: u16) {
     if !draws_body_tree(width) {
         return;
     }
@@ -320,7 +320,7 @@ pub(crate) fn apply_body_prefixes(rows: &mut [Row], last: bool, width: u16) {
 }
 
 /// 文件正文行（预览或完整展开），不含树体前缀。
-pub(crate) fn file_body(file: &FileChangeView, width: u16, expanded: bool) -> Vec<Row> {
+fn file_body(file: &FileChangeView, width: u16, expanded: bool) -> Vec<Row> {
     let available =
         usize::from(width).saturating_sub(if draws_body_tree(width) { TREE_COLS } else { 0 });
     let Some(diff) = file.diff.as_ref() else {

@@ -29,7 +29,7 @@ pub(crate) fn stats_line(message: &ChatMessageView, width: u16) -> Option<String
     let duration = message.duration_ms.filter(|duration| *duration > 0);
     let speed = output.zip(duration).and_then(|(output, duration)| {
         let speed = output as f64 / (duration as f64 / 1000.0);
-        (speed.is_finite() && speed > 0.0)
+        (speed.is_finite() && speed >= 0.05)
             .then(|| format!("{speed:.1}{}", text::LX_CHAT_STATS_SPEED_SUFFIX))
     });
     let duration_label = duration.map(format_duration);

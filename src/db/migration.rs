@@ -273,7 +273,7 @@ impl Database {
         Ok(())
     }
 
-    /// v25：每条 assistant 消息的回顾表；消息删除时级联清理。
+    /// v25：每条 assistant 消息的回顾表（消息删除时级联清理），并清理旧版遗留的已撤销 compact 行。
     fn migrate_v25_recap(&mut self) -> Result<()> {
         let transaction = self.conn.unchecked_transaction()?;
         transaction.execute_batch(SCHEMA_V25_RECAP)?;

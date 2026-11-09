@@ -71,7 +71,6 @@ pub struct RecapResult {
 }
 
 #[derive(serde::Deserialize)]
-#[serde(deny_unknown_fields)]
 struct GeneratedRecap {
     summary: String,
     #[serde(deserialize_with = "Option::deserialize")]
@@ -181,40 +180,45 @@ pub fn build_recap_request(prompt: &str, model: &ModelSnapshot) -> ChatRequest {
     }
 }
 
-/// 解析模型输出：优先严格 JSON；失败时把首个非空行当作纯文本摘要。
+/// 解析模型输出：优先 JSON（容忍外围解释与额外字段）；失败时把首个非空行当作纯文本摘要。
 pub fn parse_generated_recap(raw: &str) -> Option<RecapResult> {
     let stripped = strip_think_blocks(raw);
     let unfenced = strip_code_fences(&stripped);
     if unfenced.is_empty() {
         return None;
     }
-    if let Ok(mut recap) = serde_json::from_str::<GeneratedRecap>(unfenced) {
-        recap.summary = recap.summary.trim().to_string();
-        if recap.summary.is_empty() || recap.summary.chars().count() > RECAP_MAX_SUMMARY_CHARS {
+    let parsed = serde_json::from_str::<GeneratedRecap>(unfenced)
+        .ok()
+        .or_else(|| {
+            let start = unfenced.find('{')?;
+            let end = unfenced.rfind('}')?;
+            if end <= start {
+                return None;
+            }
+            serde_json::from_str::<GeneratedRecap>(&unfenced[start..=end]).ok()
+        });
+    if let Some(mut recap) = parsed {
+        let summary = truncate_chars(recap.summary.trim(), RECAP_MAX_SUMMARY_CHARS);
+        if summary.is_empty() {
             return None;
         }
+        recap.summary = summary;
         recap.next_action = recap
             .next_action
             .map(|action| action.trim().to_string())
-            .filter(|action| !action.is_empty());
-        if recap
-            .next_action
-            .as_ref()
-            .is_some_and(|action| action.chars().count() > RECAP_MAX_NEXT_ACTION_CHARS)
-        {
-            return None;
-        }
+            .filter(|action| !action.is_empty())
+            .map(|action| truncate_chars(&action, RECAP_MAX_NEXT_ACTION_CHARS));
         return Some(RecapResult {
             summary: recap.summary,
             next_action: recap.next_action,
         });
     }
     let summary = first_non_empty_line(unfenced).trim().to_string();
-    if summary.is_empty() || summary.chars().count() > RECAP_MAX_SUMMARY_CHARS {
+    if summary.is_empty() {
         return None;
     }
     Some(RecapResult {
-        summary,
+        summary: truncate_chars(&summary, RECAP_MAX_SUMMARY_CHARS),
         next_action: None,
     })
 }
@@ -234,8 +238,17 @@ fn strip_code_fences(text: &str) -> &str {
 fn first_non_empty_line(text: &str) -> &str {
     text.lines()
         .map(str::trim)
-        .find(|line| !line.is_empty() && !line.starts_with("```"))
+        .find(|line| {
+            !line.is_empty()
+                && !line.starts_with("```")
+                && !matches!(line.chars().next(), Some('{' | '}' | '[' | ']' | '"'))
+        })
         .unwrap_or("")
+}
+
+/// 按字符数截断（不按字节切分，避免破坏 UTF-8）。
+fn truncate_chars(text: &str, max_chars: usize) -> String {
+    text.chars().take(max_chars).collect()
 }
 
 /// 头尾截断并插入 excerpt 标记；按 UTF-8 字符边界安全切分。

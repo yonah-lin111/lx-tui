@@ -369,6 +369,15 @@ pub fn rewind_ai_web(state: &mut AppState, pane: PaneId) -> bool {
         return false;
     };
     target.lx.chat.messages.truncate(last_user_idx);
+    // 被截断消息的原图元数据必须一并清理，避免 `/rewind` 后旧附件 ID 残留。
+    target.lx.chat.image_originals.retain(|att_id, _| {
+        target
+            .lx
+            .chat
+            .messages
+            .iter()
+            .any(|m| m.attachments.iter().any(|a| &a.id == att_id))
+    });
     if target.lx.chat.messages.is_empty() {
         target.lx.chat.session_title = None;
         target.lx.chat.session_title_palette = 0;
@@ -501,12 +510,17 @@ pub fn on_ai_web_original_image_downloaded(
     let Some(target) = state.pane_mut_anywhere(pane) else {
         return false;
     };
-    if target.lx.chat.session_id.as_deref() != Some(session_id) {
-        return false;
-    }
     let Some(orig) = target.lx.chat.image_originals.get_mut(attachment_id) else {
         return false;
     };
+    // 下载效应冻结的是点击时刻的会话 ID：首轮生图可能在 `SessionBound` 前触发下载，
+    // 回执到达时窗格已升级为云端真实 ID。只要窗格仍处于同一会话（当前 ID 或原图项
+    // 记录的 ID 任一匹配）就接受回执，避免按钮永久卡在 `[downloading...]`。
+    if target.lx.chat.session_id.as_deref() != Some(session_id)
+        && target.lx.chat.session_id.as_deref() != Some(orig.session_id.as_str())
+    {
+        return false;
+    }
     orig.state = crate::app::state::OriginalImageDownloadState::Downloaded { path: path.clone() };
     crate::app::update::show_lx_toast(
         state,
@@ -532,10 +546,16 @@ pub fn on_ai_web_original_image_download_failed(
     let Some(target) = state.pane_mut_anywhere(pane) else {
         return false;
     };
-    if target.lx.chat.session_id.as_deref() == Some(session_id)
-        && let Some(orig) = target.lx.chat.image_originals.get_mut(attachment_id)
-    {
-        orig.state = crate::app::state::OriginalImageDownloadState::Idle;
+    let Some(orig) = target.lx.chat.image_originals.get_mut(attachment_id) else {
+        return false;
+    };
+    // 失败回执同样可能携带绑定前的临时会话 ID：附件存在即恢复按钮，
+    // 避免 `SessionBound` 竞态下永久停留在 `[downloading...]`。
+    orig.state = crate::app::state::OriginalImageDownloadState::Idle;
+    let same_session = target.lx.chat.session_id.as_deref() == Some(session_id)
+        || target.lx.chat.session_id.as_deref() == Some(orig.session_id.as_str());
+    if !same_session {
+        return false;
     }
     crate::app::update::show_lx_toast(
         state,

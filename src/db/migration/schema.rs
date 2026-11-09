@@ -646,7 +646,7 @@ CREATE TABLE IF NOT EXISTS workspace_hidden (
 );
 "#;
 
-/// v25：每条 assistant 消息的回顾（summary + next_action + 生成模型/时间）。
+/// v25：每条 assistant 消息的回顾（summary + next_action + 生成模型/时间），并清理旧版遗留的已撤销 compact 行。
 pub(super) const SCHEMA_V25_RECAP: &str = r#"
 CREATE TABLE IF NOT EXISTS agent_message_recap (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -665,4 +665,6 @@ CREATE TABLE IF NOT EXISTS agent_message_recap (
 );
 CREATE INDEX IF NOT EXISTS idx_agent_message_recap_session
     ON agent_message_recap(session_id, created_at_ms);
+-- 旧版本把撤销的 compact 检查点保留为 state='reverted'；新语义是物理删除，升级时清掉残留。
+DELETE FROM agent_compact_checkpoint WHERE state = 'reverted';
 "#;

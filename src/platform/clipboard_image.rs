@@ -111,10 +111,7 @@ pub fn sessions_root_dir() -> Result<PathBuf, ImagePrepareError> {
     if let Some(home) = super::test_home_override() {
         return Ok(home.join(".lx-t-dev").join("session"));
     }
-    let home = std::env::var_os("HOME")
-        .filter(|h| !h.is_empty())
-        .map(PathBuf::from)
-        .ok_or(ImagePrepareError::IoError)?;
+    let home = super::home_dir().ok_or(ImagePrepareError::IoError)?;
     let root = if super::dev_environment() {
         ".lx-t-dev"
     } else {

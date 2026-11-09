@@ -4,11 +4,12 @@
 //! - 只接触 rusqlite，不发起网络请求、不读文件；
 //! - 检查点与撤销共用 `agent_session.revision`：提交时比对期望 revision，变化即
 //!   `RewindTargetChanged`（零写入）；
-//! - 原始消息只追加、不删除：撤销只切换 `state` 与 `reverted_by_operation_id`；
+//! - 原始消息只追加、不删除：撤销物理删除检查点行并推进 revision，前一条 active 自动恢复；
 //! - `sequence` 与消息、撤销提示共用编号空间（时间线合并的前提），只在同一事务内取号。
 //!
 //! 「active 指针」不是新表：它就是 `state='active'` 的最新检查点。装配上下文取
 //! 最新 active 检查点的 `end_sequence` 作为起点，因此撤销后自然回退到上一个 active。
+//! 旧库遗留的 `state='reverted'` 行由 v25 迁移清理，查询也不再加载。
 
 use std::path::Path;
 
@@ -102,7 +103,7 @@ impl Database {
             .map_err(DbError::from)
     }
 
-    /// 会话内全部检查点（按 sequence 升序；时间线渲染要含已撤销的条目）。
+    /// 会话内全部生效检查点（按 sequence 升序；撤销会删除记录，不再保留已撤销条目）。
     pub fn compact_checkpoints(
         &self,
         workspace: &Path,
@@ -115,7 +116,7 @@ impl Database {
             r#"SELECT external_id, sequence, operation_id, base_checkpoint_id, start_sequence,
                       end_sequence, summary_text, model_label, state, created_at_ms
                FROM agent_compact_checkpoint
-               WHERE session_id = ?1
+               WHERE session_id = ?1 AND state = 'active'
                ORDER BY sequence"#,
         )?;
         let rows = statement.query_map(params![session_id], read_checkpoint)?;
@@ -288,11 +289,11 @@ impl Database {
         if revision != revert.expected_revision {
             return Err(DbError::RewindTargetChanged);
         }
-        // 只能撤销时间线上最新的一条检查点：更晚的检查点存在时目标已过期。
+        // 只能撤销时间线上最新的一条生效检查点：更晚的 active 检查点存在时目标已过期。
         let later: Option<String> = transaction
             .query_row(
                 r#"SELECT external_id FROM agent_compact_checkpoint
-                   WHERE session_id = ?1 AND sequence > ?2
+                   WHERE session_id = ?1 AND sequence > ?2 AND state = 'active'
                    ORDER BY sequence DESC LIMIT 1"#,
                 params![revert.session_id, checkpoint.sequence],
                 |row| row.get(0),
@@ -322,6 +323,18 @@ impl Database {
         transaction.execute(
             "DELETE FROM agent_compact_checkpoint WHERE external_id = ?1 AND session_id = ?2",
             params![id, revert.session_id],
+        )?;
+        // 删除最新检查点后，前一条仍生效的检查点（若存在）恢复为 active，作为新的上下文起点。
+        transaction.execute(
+            r#"UPDATE agent_compact_checkpoint
+               SET state = 'active', reverted_by_operation_id = NULL
+               WHERE id = (
+                   SELECT id FROM agent_compact_checkpoint
+                   WHERE session_id = ?1 AND state = 'active'
+                   ORDER BY sequence DESC, id DESC
+                   LIMIT 1
+               )"#,
+            params![revert.session_id],
         )?;
         transaction.execute(
             "UPDATE agent_session SET revision = revision + 1, updated_at_ms = ?1 WHERE external_id = ?2",

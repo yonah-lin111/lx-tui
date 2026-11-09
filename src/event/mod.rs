@@ -102,8 +102,7 @@ pub enum AppEvent {
     /// lx 聊天网络流事件（delta / finished）；按 request key 过滤。
     ChatNet(chat::ChatNetEvent),
     /// lx agent loop 的工具调用握手（pending/running/结果落库 ack）。
-    ///
-    /// 事件层在 **DB 与状态都就绪后**才回执，因此 loop 拿到 ticket 才执行文件 IO。
+    /// 事件层在 DB 与状态都就绪后才回执，因此 loop 拿到 ticket 才执行文件 IO。
     AgentHost(chat::AgentHostEvent),
     /// 子 agent 轮次终态（需要 DB，回投事件循环结算）。
     SubagentFinished {
@@ -133,10 +132,7 @@ pub enum AppEvent {
             Result<crate::chat::agent::SubagentOutcome, crate::chat::agent_loop::HostError>,
         >,
     },
-    /// 会话运行实例被回收（切会话 / `/new` / 关窗格）后，其进程的终态快照。
-    ///
-    /// 停止发生在后台任务里，而 `Persistence` 不跨线程：终态必须回投事件层落库，
-    /// 否则库里永远留着 `running` 行（设计 §8「清理进程并记录终态」）。
+    /// 会话运行实例被回收后其进程的终态快照；停止在后台执行，终态必须回投落库。
     ProcessesReaped {
         workspace: PathBuf,
         epoch: String,
@@ -222,8 +218,7 @@ async fn run_loop(
     config: &Config,
     persistence: &mut Persistence,
 ) -> io::Result<()> {
-    // 启动恢复：在进入事件循环前按 session guard 结算遗留 journal 与旧流/工具/进程。
-    // 必须在任何新轮次之前，且只处理拿得到 guard 的会话。
+    // 启动恢复：进入事件循环前按 session guard 结算遗留 journal 与旧流/工具/进程。
     if let Some(database) = persistence.database() {
         chat::rewind::recover_startup(database);
     }
@@ -353,7 +348,7 @@ async fn run_loop(
         }
         // 显示工作区变化或设置页写入后重载自定义命令；git 元数据到达后同步仓库根。
         let prompt_workspace = state.prompt_workspace();
-        // `/resume` 编辑模态归属失效（切工作区/切焦点窗格）即作废，丢弃未保存标题。
+        // `/resume` 编辑模态归属失效即作废，丢弃未保存标题。
         if update::discard_stale_resume_edit(state) {
             dirty = true;
         }
@@ -366,7 +361,7 @@ async fn run_loop(
         let repo_changed = commands::sync_prompt_repo(state);
         if commands::reload_custom_commands(state, commands_reload) || repo_changed {
             dirty = true;
-            // 命令集变化时刷新设置页快照（避免每帧克隆全量命令）。
+            // 命令集变化时刷新设置页快照，避免每帧克隆全量命令。
             if let Some(service) = settings_service.as_ref() {
                 service.set_commands_snapshot(&commands::command_views(state));
             }
@@ -429,12 +424,8 @@ async fn run_loop(
         if chat::sync_background_task_counts(state, &chat_streams) {
             dirty = true;
         }
-        // 面板打开期间每轮刷新进程列表：打开之后才启动的进程也要能出现。
-        //
-        // 这里**不置脏**：返回值的语义是「已压入请求」，不是「画面需要变」。
-        // 早先把它当变化用，导致面板一打开就每帧 dirty、空闲也按 60fps 重绘
-        // 并反复克隆全部进程快照（用户观感：停在后台任务页风扇就转）。
-        // 真正的重绘由 `apply_process_effects` / `tick_task_pages` 的实际变化驱动。
+        // 面板打开期间每轮刷新进程列表（打开后才启动的进程也要能出现）。
+        // 这里不置脏：返回值表示「已压入请求」；真正重绘由 apply_process_effects / tick_task_pages 驱动。
         chat::refresh_open_task_pages(state);
         // 后台任务面板的运行时长节拍：`now_ms` 只在列表回投时更新会冻住时长。
         if chat::tick_task_pages(state) {
@@ -456,24 +447,21 @@ async fn run_loop(
         if update::sync_all_lx_mention_roots(state) {
             dirty = true;
         }
-        // 资源计数按项目集中维护：每帧同步到所有窗格，新分割/新打开的工作区
-        // 不会显示成 0。
+        // 资源计数按项目集中维护：每帧同步到所有窗格，新窗格不会显示成 0。
         if state.sync_lx_inventory() {
             dirty = true;
         }
         pump_lx_mention_scan(state, &sender);
         git::pump_git_queries(state, &sender, &mut git_inflight);
         let geometry = session::current_geometry(tui, state, &config)?;
-        // 工具调用 loading 门槛按「窗格本帧是否可见」决定是否等一帧；每帧都刷新，
-        // 避免首帧（几何未变化）误判为不可见而跳过渲染门槛。
+        // 工具调用 loading 门槛按「窗格本帧是否可见」决定是否等一帧；每帧都刷新以避免首帧误判。
         chat_streams.set_visible_panes(&geometry.rects);
         if let Some(rows) = ui::agent_list_rows(&geometry.view, state)
             && update::clamp_agent_scroll(state, rows)
         {
             dirty = true;
         }
-        // 历史列表的滚动与选中项：折叠 Agents / 终端变高后夹取偏移，
-        // 并在进入/新建/重载后把选中项滚入可见区（渲染层只读，不能自行修正）。
+        // 历史列表滚动与选中项：折叠后夹取偏移，并在进入/新建/重载后把选中项滚入可见区。
         if let Some(rows) = ui::workspace_history_visible_rows(&geometry.view, state) {
             let mut changed = state.workspace_history.clamp(rows);
             if state.workspace_history.reveal_selected {
@@ -506,8 +494,7 @@ async fn run_loop(
         if update::tick(state, Instant::now()) {
             dirty = true;
         }
-        // lx loading 转轮：流中/压缩中每 `LX_LOADING_FRAME_MS` 推进一帧
-        // （前者推扫描帧，后者还刷新本次压缩耗时；无流、无压缩时不计时）。
+        // lx loading 转轮：流中/压缩中每 `LX_LOADING_FRAME_MS` 推进一帧（空闲不计时）。
         let streaming = state.has_streaming_lx();
         if streaming {
             let at = spinner_at.get_or_insert_with(|| Instant::now() + LOADING_FRAME_INTERVAL);
@@ -523,30 +510,25 @@ async fn run_loop(
 
         if dirty && last_draw.elapsed() >= FRAME_INTERVAL {
             // 双击 Esc 选中的最新用户消息：先按几何滚到视口居中，再算置顶/顶部行。
-            // 本帧紧接着绘制，无需再次置脏。
             update::resolve_lx_rewind_center(state, &geometry.rects, &mut ui_cache);
             // 视口顶部行与置顶抑制记忆：一次几何计算同时落两处状态（渲染层只读）。
             update::resolve_lx_history(state, &geometry.rects, &mut ui_cache);
-            // 后台任务面板的输出可见行数：同上，供翻页与滚动条几何钳制。
+            // 后台任务面板的输出/Agents 详情/ask/Todo 可见行数：供翻页与滚动条钳制。
             update::resolve_task_output_visible(state, &geometry.rects);
-            // Agents 详情区可见行数：与上一条同款。
             update::resolve_task_agents_visible(state, &geometry.rects);
-            // ask 统一列表窗口：同上，供 PageUp/PageDown 钳制滚动。
             update::resolve_ask_list_window(state, &geometry.rects);
-            // Todo 列表可见行数：本帧紧接着绘制，钳制结果直接生效，无需再置脏。
             update::resolve_todo_viewport(state, geometry.view.prompt);
             ui_cache.begin_frame();
             tui.draw(|frame| ui::render_cached(frame, state, &config, &mut ui_cache))?;
             dirty = false;
             last_draw = Instant::now();
-            // 工具调用 loading 已绘制：推进 pending → running 并回执 ticket，
-            // loop 此刻才被允许执行文件 IO（不靠 sleep 保证可见性）。
+            // 工具调用 loading 已绘制：推进 pending → running 并回执 ticket，loop 才执行文件 IO。
             if chat::flush_pending_tool_begins(state, &mut chat_streams, persistence) {
                 dirty = true;
             }
         }
 
-        // 待执行效应（如自动保存落库）必须尽快进入下一轮 pump，不随空闲睡死。
+        // 待执行效应必须尽快进入下一轮 pump，不随空闲睡死。
         let mut wait = if dirty || !state.effects.is_empty() {
             FRAME_INTERVAL.saturating_sub(last_draw.elapsed())
         } else {
@@ -940,10 +922,8 @@ fn handle_app_event(
             failed,
         } => {
             git_inflight.remove(&repo_root);
-            // 面板不可交互时丢弃结果：`apply_worktree_entries` 结尾会无条件
-            // `mention.refresh`，而 `clear()` 只 bump generation、不清 cache，
-            // 于是 Todo 期间到达的回调会把刚收起的提及面板重新置 Some——
-            // 一个看不见、却仍能吞滚轮的面板。
+            // 面板不可交互时丢弃结果：clear() 只 bump generation、不清 cache，
+            // 否则 Todo 期间到达的回调会把刚收起的提及面板重新置 Some（看不见却仍吞滚轮）。
             if !update::prompt_panel_active(state) {
                 return;
             }

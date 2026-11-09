@@ -132,6 +132,81 @@ fn assistant_image_attachments_render_preview_underline_and_download_original_bu
 }
 
 #[test]
+fn assistant_image_without_source_path_has_no_underline_or_attachment_region() {
+    let area = Rect::new(0, 0, 80, 20);
+    let mut msg = message("assistant", "complete", vec![text_part("Generated image")]);
+    msg.model_label = Some("Gemini · 3.8 Flash".into());
+    msg.attachments = vec![MessageAttachmentMeta {
+        id: "att-1".into(),
+        position: 0,
+        kind: MessageAttachmentKind::Image,
+        label: "gemini-r1-1.webp".into(),
+        marker_start: None,
+        marker_end: None,
+        source_path: None,
+        mime: None,
+        width: None,
+        height: None,
+    }];
+    let mut lx = lx_with(vec![msg]);
+    lx.chat.image_originals.insert(
+        "att-1".into(),
+        crate::app::state::GeneratedImageOriginal {
+            site: crate::app::state::AiWebSite::Gemini,
+            session_id: "ai-web-gm-123".into(),
+            original_url: "https://lh3.googleusercontent.com/gg/abc=s0-d-I?alr=yes".into(),
+            fallback_url: "https://lh3.googleusercontent.com/gg/abc=s1024-rw".into(),
+            file_stem: "gemini-123-r1-1-orig".into(),
+            state: crate::app::state::OriginalImageDownloadState::Idle,
+        },
+    );
+    let mut buf = Buffer::empty(area);
+    crate::ui::main_content::lx::render_history_for_test(area, &mut buf, &lx, 0);
+    let text = rows_text(&buf, area).join("\n");
+    assert!(
+        text.contains("└─ Image (preview): gemini-r1-1.webp  [Download original]"),
+        "{text}"
+    );
+    // 没有落盘预览图：文件名不带下划线。
+    let row_y = (0..area.height)
+        .find(|&y| rows_text(&buf, area)[usize::from(y)].contains("gemini-r1-1.webp"))
+        .expect("row");
+    let label_x = rows_text(&buf, area)[usize::from(row_y)]
+        .find("gemini-r1-1.webp")
+        .expect("col") as u16;
+    let cell = buf.cell((label_x, row_y)).expect("cell");
+    assert!(
+        !cell.modifier.contains(ratatui::style::Modifier::UNDERLINED),
+        "missing preview must not underline: {:?}",
+        cell.modifier
+    );
+
+    let view = layout(area, &lx, &mut cache());
+    assert!(
+        !view
+            .cards
+            .iter()
+            .any(|card| matches!(card.kind, CardKind::Attachment { .. })),
+        "no preview path -> no attachment region"
+    );
+    let buttons: Vec<(&str, bool)> = view
+        .cards
+        .iter()
+        .filter_map(|card| match &card.kind {
+            CardKind::DownloadOriginalImage { attachment_id } => {
+                Some((attachment_id.as_str(), card.clickable))
+            }
+            _ => None,
+        })
+        .collect();
+    assert_eq!(
+        buttons,
+        vec![("att-1", true)],
+        "download original button still works"
+    );
+}
+
+#[test]
 fn recap_card_renders_title_next_and_folds_summary() {
     let area = Rect::new(0, 0, 80, 60);
     let mut message = message("assistant", "complete", vec![text_part("done")]);
@@ -179,8 +254,6 @@ fn running_recap_shows_placeholder_under_pending_message() {
         generation: 1,
         manual: true,
         message_id: "assistant-running".into(),
-        end_turn: 0,
-        end_sequence: 0,
         started_at: std::time::Instant::now(),
         elapsed_ms: 3_000,
     });

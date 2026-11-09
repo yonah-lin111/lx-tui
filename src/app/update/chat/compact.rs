@@ -72,10 +72,10 @@ pub fn compact_command(state: &mut AppState, pane: PaneId) -> bool {
     let operation_id = crate::db::new_external_id("compact-op");
     // 计时起点与幂等键一起冻结：输入框上方那一行据此显示「压缩中 + 已耗时」。
     let started_at_ms = crate::db::now_ms();
+    super::recap::cancel_pending_recap(state, pane);
     let Some(target) = state.pane_mut_anywhere(pane) else {
         return false;
     };
-    target.lx.recap.cancel_pending();
     target.lx.compact.start(operation_id.clone(), started_at_ms);
     state.effects.push(Effect::ExecuteCompact(CompactRequest {
         pane,
@@ -205,8 +205,8 @@ pub fn on_compact_revert_failed(state: &mut AppState, pane: PaneId, message: &st
 
 /// compact 撤销成功：回填检查点列表并提示（不改草稿：没有可回填的用户原文）。
 ///
-/// `checkpoints` 为 `None` 表示撤销已提交但回填读库失败：本地把目标检查点标成
-/// 已撤销（上下文指针必须立刻回退，不能继续使用已撤销的摘要），下一次重载补齐列表。
+/// `checkpoints` 为 `None` 表示撤销已提交但回填读库失败：本地移除目标检查点
+/// （上下文指针必须立刻回退，不能继续使用已撤销的摘要），下一次重载补齐列表。
 pub fn on_compact_reverted(
     state: &mut AppState,
     pane: PaneId,
@@ -236,6 +236,7 @@ pub fn on_compact_reverted(
     }
     // 边界回退：按新的生效检查点重算占用（撤销后恢复压缩前的最后一条回复）。
     target.lx.chat.recompute_context_tokens(&target.lx.compact);
+    target.lx.chat.selected_compact = None;
     target.lx.rewind.clear();
     if matches!(
         target.lx.slash,
@@ -251,6 +252,26 @@ pub fn on_compact_reverted(
     );
     if let Some(target) = state.pane_mut_anywhere(pane) {
         target.lx.chat.follow_bottom = true;
+    }
+    // 同会话其它窗格的检查点选中态随删除失效；已选中的 rewind 目标同样作废。
+    for other in state.all_pane_ids() {
+        if other == pane {
+            continue;
+        }
+        if let Some(other_target) = state.pane_mut_anywhere(other)
+            && other_target.lx.chat.session_id.as_deref() == Some(session_id)
+        {
+            other_target.lx.chat.selected_compact = None;
+            if other_target.lx.rewind.selected.is_some() {
+                other_target.lx.rewind.clear();
+                if matches!(
+                    other_target.lx.slash,
+                    Some(crate::app::state::SlashPanel::Rewind(_))
+                ) {
+                    other_target.lx.slash = None;
+                }
+            }
+        }
     }
     refresh_lx_status(state, pane);
     true

@@ -12,6 +12,9 @@ pub const DEEPSEEK_SCRIPT: &str = include_str!("deepseek_script.js");
 /// 嵌入式 Gemini 网页驱动辅助脚本（模式/思考等级切换、新对话、CDP 文件上传与会话管理）。
 pub const GEMINI_HELPERS_SCRIPT: &str = include_str!("gemini_helpers.js");
 
+/// 嵌入式 Gemini 网页驱动图片辅助脚本（预览下载、原图 URL、生图落盘与原图下载）。
+pub const GEMINI_IMAGES_JS: &str = include_str!("gemini_images.js");
+
 /// 嵌入式 Gemini 网页流式对话驱动主脚本。
 pub const GEMINI_SCRIPT: &str = include_str!("gemini_script.js");
 
@@ -22,6 +25,9 @@ pub const GROK_HELPERS_SCRIPT: &str = include_str!("grok_helpers.js");
 pub const GROK_SCRIPT: &str = include_str!("grok_script.js");
 
 /// 按目标站点返回 `(helpers_script, main_script)`。
+///
+/// Gemini 的图片辅助脚本 [`GEMINI_IMAGES_JS`] 由 [`script_source`] 额外拼接，
+/// 不包含在返回的 helpers 中。
 pub fn scripts_for_site(site: crate::app::state::AiWebSite) -> (&'static str, &'static str) {
     match site {
         crate::app::state::AiWebSite::Deepseek => (DEEPSEEK_HELPERS_SCRIPT, DEEPSEEK_SCRIPT),
@@ -283,6 +289,12 @@ pub fn script_source(site: crate::app::state::AiWebSite, params: ScriptParams<'_
     source.push_str(&format!(",\n  editIndex: {edit_index},\n}};\n"));
     source.push_str(helpers_script);
     source.push('\n');
+    // Gemini 的生图辅助函数单独成文件（`gemini_helpers.js` 已接近千行上限），
+    // 三份脚本共享同一顶层作用域，函数声明可直接互相调用。
+    if site == crate::app::state::AiWebSite::Gemini {
+        source.push_str(GEMINI_IMAGES_JS);
+        source.push('\n');
+    }
     source.push_str(main_script);
     source
 }
