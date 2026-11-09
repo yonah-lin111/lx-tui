@@ -560,7 +560,7 @@ pub fn select_paste(state: &mut AppState, index: usize) {
 
 /// 鼠标点击提及面板顶部 Tab：切换当前 Tab。
 pub fn switch_mention_tab(state: &mut AppState, tab: usize) {
-    if let Some(tab) = crate::app::prompt::MentionTab::from_index(tab) {
+    if let Some(tab) = crate::app::prompt::MentionTab::from_prompt_index(tab) {
         state.prompt.mention_set_tab(tab);
     }
 }

@@ -120,6 +120,60 @@ pub fn mcp_row(name: &str, detail: &str, detail_width: usize) -> MentionRow {
     }
 }
 
+/// 构造 subagent 候选条目展示：首行 `◆ label`，次行类别与状态/描述明细。
+pub fn subagent_row(label: &str, detail: &str, detail_width: usize) -> MentionRow {
+    MentionRow {
+        icon: text::MENTION_SKILL_ICON,
+        is_directory: false,
+        is_skill: true,
+        label: label.to_string(),
+        detail: text::truncate_to_width(detail, detail_width),
+    }
+}
+
+/// 组装 subagent 候选项的 `(label, detail)` 文案。
+pub fn subagent_item_text(item: &crate::app::state::SubagentMentionItem) -> (String, String) {
+    let sep = text::LX_CHAT_TOOL_STATUS_SEP;
+    match item {
+        crate::app::state::SubagentMentionItem::Active(run) => {
+            let label = run.display_label();
+            let detail = if run.title.trim().is_empty() {
+                format!("{}{sep}{}", text::MENTION_SUBAGENT_ACTIVE_LABEL, run.status)
+            } else {
+                format!(
+                    "{}{sep}{}{sep}{}",
+                    text::MENTION_SUBAGENT_ACTIVE_LABEL,
+                    run.status,
+                    run.title.trim()
+                )
+            };
+            (label, detail)
+        }
+        crate::app::state::SubagentMentionItem::Role(role) => {
+            let prefix = if role.is_builtin {
+                text::MENTION_SUBAGENT_BUILTIN_LABEL.to_string()
+            } else {
+                let scope = if role.is_project_scoped {
+                    "project"
+                } else {
+                    "user"
+                };
+                format!(
+                    "{} ({scope}{sep}{})",
+                    text::MENTION_SUBAGENT_CUSTOM_LABEL,
+                    role.base_role.as_str()
+                )
+            };
+            let detail = if role.description.trim().is_empty() {
+                prefix
+            } else {
+                format!("{prefix}{sep}{}", role.description.trim())
+            };
+            (role.name.clone(), detail)
+        }
+    }
+}
+
 /// 构造引用文件夹条目展示：第一行目录图标 + 目录名 `/`，第二行 `└─ 绝对路径`。
 pub fn folder_row(name: &str, path: &str, detail_width: usize) -> MentionRow {
     let label = format!("{name}/");

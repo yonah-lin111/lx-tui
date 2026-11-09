@@ -123,6 +123,95 @@ pub(crate) fn running_subagent_lines(streams: &ChatStreams, parent_session: &str
     known_subagent_lines(streams, None, None, parent_session)
 }
 
+/// 从用户当轮草稿中提取 `@[refer-subagent](...)` 引用，生成英文调度提示块
+/// （仅当轮注入，不落库）。重复点名同一目标只生成一个块。
+pub(crate) fn subagent_reference_blocks(
+    draft_text: &str,
+    effective_subagents: &crate::config::subagents::SubagentsSection,
+    runs: &[crate::app::state::SubagentRun],
+) -> Vec<String> {
+    let mut blocks = Vec::new();
+    let mut seen = std::collections::HashSet::new();
+    let masked = crate::app::paste::mask_pasted_text(draft_text);
+    for reference in crate::app::markdown::parse_references(&masked) {
+        if reference.kind != crate::app::markdown::ReferKind::Subagent {
+            continue;
+        }
+        let raw_target = reference.path.trim();
+        if raw_target.is_empty() || !seen.insert(raw_target.to_string()) {
+            continue;
+        }
+        // 1. 优先匹配当前会话中的存活实例：`<nickname_or_id>:<role>` 取冒号前的实例键。
+        let instance_key = raw_target
+            .split_once(':')
+            .map(|(head, _)| head.trim())
+            .unwrap_or(raw_target);
+        if let Some(run) = runs.iter().find(|run| {
+            crate::app::state::AgentFilter::Active.matches(run)
+                && (run.agent_id.eq_ignore_ascii_case(instance_key)
+                    || run
+                        .nickname
+                        .as_deref()
+                        .is_some_and(|nick| nick.eq_ignore_ascii_case(instance_key)))
+        }) {
+            let nickname = run.nickname.as_deref().unwrap_or(run.agent_id.as_str());
+            blocks.push(format!(
+                "<subagent_reference>\n\
+                 kind: active_instance\n\
+                 reference: @[refer-subagent]({raw_target})\n\
+                 agent_id: {}\n\
+                 nickname: {nickname}\n\
+                 role: {}\n\
+                 status: {}\n\
+                 agent_path: {}\n\
+                 guidance: The user explicitly referenced this active subagent in the current session. \
+                 Prefer interacting with it directly using `send_input` (target=\"{}\") or `wait_agent` \
+                 instead of spawning a duplicate subagent.\n\
+                 </subagent_reference>",
+                run.agent_id,
+                run.role.as_str(),
+                run.status,
+                run.agent_path,
+                run.agent_id,
+            ));
+            continue;
+        }
+
+        // 2. 匹配内置或自定义角色（存活实例已结束时回退到其冒号后的 `<role>`）。
+        let role_name = raw_target
+            .split_once(':')
+            .map(|(_, role)| role.trim())
+            .unwrap_or(raw_target);
+        if let Some(spec) = effective_subagents.resolve_role(role_name) {
+            let scope = if spec.is_builtin {
+                "built-in"
+            } else if spec.is_project_scoped {
+                "custom (project)"
+            } else {
+                "custom (user)"
+            };
+            blocks.push(format!(
+                "<subagent_reference>\n\
+                 kind: role\n\
+                 reference: @[refer-subagent]({raw_target})\n\
+                 role: {}\n\
+                 base_role: {}\n\
+                 scope: {scope}\n\
+                 description: {}\n\
+                 guidance: The user explicitly referenced the `{}` subagent role. \
+                 Delegate the relevant task by calling `spawn_agent` with `role: \"{}\"`.\n\
+                 </subagent_reference>",
+                spec.name,
+                spec.base_role.as_str(),
+                spec.description,
+                spec.name,
+                spec.name,
+            ));
+        }
+    }
+    blocks
+}
+
 /// 面板内联追问：目标已结束时自动 `resume`，随后投递并立即触发新一轮。
 pub(super) fn send_user_input_from_panel(
     state: &mut AppState,

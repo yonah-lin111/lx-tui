@@ -41,8 +41,9 @@ pub use lx::{
     RequestKey, RequestState, RewindAction, RewindExecution, RewindNoticeView, RewindPanel,
     RewindTarget, RewindTargetKind, SHELL_SLOT, SearchDetailView, SearchMatchView, SlashCommand,
     SlashEntry, SlashPanel, SnapshotState, StartupCount, StartupCounts, SubagentDetailView,
-    SubagentReportView, SubagentRun, TaskPage, TaskTab, ToolCallView, ToolDetailView, ToolStatus,
-    ToolSummary, UserShellView, WebSearchDetailView, ai_web_remote_session, is_ai_web_session,
+    SubagentMentionItem, SubagentReportView, SubagentRun, SubagentRunMentionEntry, TaskPage,
+    TaskTab, ToolCallView, ToolDetailView, ToolStatus, ToolSummary, UserShellView,
+    WebSearchDetailView, ai_web_remote_session, is_ai_web_session,
 };
 pub use pane::{Direction, Pane, PaneKind, PaneView, Tab};
 pub use prompt_history::{PROMPT_HISTORY_LIMIT, PROMPT_HISTORY_MAX_BYTES, PromptHistory};

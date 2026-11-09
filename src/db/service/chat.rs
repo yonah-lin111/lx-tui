@@ -434,6 +434,12 @@ impl Persistence {
         let changed = update::on_session_loaded_full(
             state, pane, session_id, &messages, &notices, revision, selection,
         );
+        // 恢复会话后立即列出子 agent：回投后填充 `pane.lx.agents.runs`，
+        // 并把其中 `running` / `idle` / `blocked` 的实例同步进 `@` 面板。
+        state.effects.push(Effect::ListSubagents {
+            pane,
+            parent_session: session_id.to_string(),
+        });
         let title_changed = state
             .pane_mut_anywhere(pane)
             .is_some_and(|target| target.lx.chat.set_session_title(session_title));

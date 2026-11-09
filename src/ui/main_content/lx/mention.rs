@@ -21,7 +21,7 @@ pub(super) const PANEL_BORDER_ROWS: u16 = 2;
 /// 面板底部快捷键提示块占用的行数（1 行空行间隔 + 1 行提示）。
 pub(super) const PANEL_FOOTER_ROWS: u16 = 2;
 
-/// 提及面板条目文本：候选文件/目录/skill/MCP（双行）或状态行（单行）。
+/// 提及面板条目文本：候选文件/目录/skill/MCP/subagent（双行）或状态行（单行）。
 enum PanelRow {
     File(mention::MentionRow),
     Status(&'static str),
@@ -141,6 +141,10 @@ fn panel_data(lx: &Lx, width: u16) -> Option<PanelData> {
                 label: text::MENTION_TAB_MCP,
                 active: tab == MentionTab::Mcp,
             },
+            PanelTab {
+                label: text::MENTION_TAB_SUBAGENTS,
+                active: tab == MentionTab::Subagents,
+            },
         ]
     };
     let status = |label: &'static str| PanelData {
@@ -238,6 +242,30 @@ fn panel_data(lx: &Lx, width: u16) -> Option<PanelData> {
                     .iter()
                     .map(|server| {
                         PanelRow::File(mention::mcp_row(&server.name, &server.detail, detail_width))
+                    })
+                    .collect(),
+                active: lx.mention().ref_active(),
+                anchor: Some(lx.mention().ref_anchor()),
+                viewport: lx.mention().ref_viewport(),
+                scope: None,
+                interactive: true,
+                tabs,
+            })
+        }
+        (MentionTab::Subagents, LxMentionView::Empty | LxMentionView::Loading) => {
+            Some(status(text::MENTION_SUBAGENTS_EMPTY))
+        }
+        (MentionTab::Subagents, LxMentionView::Items) => {
+            let filtered = lx.mention().filtered_subagents();
+            if filtered.is_empty() {
+                return Some(status(text::MENTION_SUBAGENTS_EMPTY));
+            }
+            Some(PanelData {
+                rows: filtered
+                    .iter()
+                    .map(|item| {
+                        let (label, detail) = mention::subagent_item_text(item);
+                        PanelRow::File(mention::subagent_row(&label, &detail, detail_width))
                     })
                     .collect(),
                 active: lx.mention().ref_active(),

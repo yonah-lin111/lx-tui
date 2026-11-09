@@ -684,3 +684,135 @@ async fn trigger_turn_false_stays_idle_after_running_turn_and_uses_message_envel
         "trigger_turn=false input must use MESSAGE envelope: {items:?}"
     );
 }
+
+// ===== T3: @[refer-subagent] 当轮提示块 =====
+
+fn mention_run(
+    agent_id: &str,
+    nickname: Option<&str>,
+    role: AgentRole,
+    status: &str,
+) -> crate::app::state::SubagentRun {
+    crate::app::state::SubagentRun::from_record(&crate::db::chat::SubagentRecord {
+        agent_id: agent_id.into(),
+        nickname: nickname.map(str::to_string),
+        agent_path: "/root/turing".into(),
+        child_session_id: format!("child-{agent_id}"),
+        parent_session_id: "sess-parent".into(),
+        spawn_message_id: None,
+        role,
+        model_provider: String::new(),
+        model_id: String::new(),
+        model_variant: None,
+        status: status.into(),
+        title: "auth lookup".into(),
+        created_at_ms: 1_000,
+        completed_at_ms: None,
+        report_json: None,
+        report_delivered: false,
+    })
+}
+
+fn reference_blocks(
+    draft: &str,
+    config: &crate::config::subagents::SubagentsSection,
+    runs: &[crate::app::state::SubagentRun],
+) -> Vec<String> {
+    crate::event::chat::subagent::snapshot::subagent_reference_blocks(draft, config, runs)
+}
+
+#[test]
+fn subagent_reference_blocks_render_active_instance_and_role_guidance() {
+    let config = crate::config::subagents::SubagentsSection::default();
+    let runs = vec![mention_run(
+        "agent-turing",
+        Some("Turing"),
+        AgentRole::Explorer,
+        "running",
+    )];
+    let blocks = reference_blocks(
+        "@[refer-subagent](Turing:explorer) then @[refer-subagent](monitor)",
+        &config,
+        &runs,
+    );
+    assert_eq!(blocks.len(), 2, "blocks: {blocks:?}");
+    let active = &blocks[0];
+    assert!(active.contains("kind: active_instance"), "{active}");
+    assert!(active.contains("agent_id: agent-turing"), "{active}");
+    assert!(active.contains("nickname: Turing"), "{active}");
+    assert!(active.contains("status: running"), "{active}");
+    assert!(active.contains("`send_input`"), "{active}");
+    assert!(active.contains("`wait_agent`"), "{active}");
+    assert!(!active.contains("spawn_agent"), "{active}");
+
+    let role = &blocks[1];
+    assert!(role.contains("kind: role"), "{role}");
+    assert!(role.contains("role: monitor"), "{role}");
+    assert!(role.contains("base_role: monitor"), "{role}");
+    assert!(role.contains("scope: built-in"), "{role}");
+    assert!(role.contains("`spawn_agent`"), "{role}");
+}
+
+#[test]
+fn subagent_reference_blocks_resolve_custom_role_spec() {
+    let mut config = crate::config::subagents::SubagentsSection::default();
+    config.roles.push(CustomRoleConfig {
+        name: "reviewer".into(),
+        base_role: BaseRole::Executor,
+        description: "review diffs".into(),
+        system_prompt: "review role prompt".into(),
+        ..Default::default()
+    });
+    let blocks = reference_blocks("@[refer-subagent](reviewer)", &config, &[]);
+    assert_eq!(blocks.len(), 1, "blocks: {blocks:?}");
+    let block = &blocks[0];
+    assert!(block.contains("kind: role"), "{block}");
+    assert!(block.contains("role: reviewer"), "{block}");
+    assert!(block.contains("base_role: executor"), "{block}");
+    assert!(block.contains("scope: custom (user)"), "{block}");
+    assert!(block.contains("description: review diffs"), "{block}");
+    assert!(block.contains("role: \"reviewer\""), "{block}");
+}
+
+#[test]
+fn subagent_reference_blocks_fall_back_to_role_when_instance_completed() {
+    let config = crate::config::subagents::SubagentsSection::default();
+    let runs = vec![mention_run(
+        "agent-turing",
+        Some("Turing"),
+        AgentRole::Explorer,
+        "completed",
+    )];
+    let blocks = reference_blocks("@[refer-subagent](Turing:explorer)", &config, &runs);
+    assert_eq!(blocks.len(), 1, "blocks: {blocks:?}");
+    let block = &blocks[0];
+    assert!(block.contains("kind: role"), "{block}");
+    assert!(block.contains("role: explorer"), "{block}");
+    assert!(block.contains("scope: built-in"), "{block}");
+    assert!(block.contains("`spawn_agent`"), "{block}");
+    assert!(!block.contains("active_instance"), "{block}");
+}
+
+#[test]
+fn subagent_reference_blocks_deduplicate_repeated_references() {
+    let config = crate::config::subagents::SubagentsSection::default();
+    let runs = vec![mention_run(
+        "agent-turing",
+        Some("Turing"),
+        AgentRole::Explorer,
+        "idle",
+    )];
+    let blocks = reference_blocks(
+        "@[refer-subagent](Turing:explorer) and again @[refer-subagent](Turing:explorer) \
+         plus @[refer-subagent](monitor) and @[refer-subagent](monitor)",
+        &config,
+        &runs,
+    );
+    assert_eq!(blocks.len(), 2, "blocks: {blocks:?}");
+    assert!(
+        blocks[0].contains("kind: active_instance"),
+        "{:?}",
+        blocks[0]
+    );
+    assert!(blocks[1].contains("role: monitor"), "{:?}", blocks[1]);
+}

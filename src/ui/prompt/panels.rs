@@ -721,6 +721,7 @@ fn mention_panel_data(prompt: &Prompt, width: u16) -> Option<MentionPanelData> {
                 root_label: None,
             })
         }
+        crate::app::prompt::MentionTab::Subagents => None,
     }
 }
 

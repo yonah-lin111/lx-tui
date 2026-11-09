@@ -295,6 +295,7 @@ async fn run_loop(
     let mut skill_roots = inventory::skill_roots(state);
     let mut agents_scopes = inventory::agents_md_scopes(state, persistence);
     inventory::refresh_agents_md(state, persistence);
+    inventory::refresh_subagent_mentions(state, persistence);
     inventory::initialize_mcp(state, persistence, &mcp_roots);
     inventory::spawn_skills_preload(state, persistence, &sender);
 
@@ -374,6 +375,7 @@ async fn run_loop(
             skills_reload = false;
             agents_scopes = inventory::agents_md_scopes(state, persistence);
             inventory::refresh_agents_md(state, persistence);
+            inventory::refresh_subagent_mentions(state, persistence);
             inventory::spawn_skills_preload(state, persistence, &sender);
         }
         // 撤销、压缩、续轮 session guard、`/connect`、`/mcp` 与持久化泵效应按序执行。
@@ -388,6 +390,7 @@ async fn run_loop(
         if current_agents_scopes != agents_scopes {
             agents_scopes = current_agents_scopes;
             inventory::refresh_agents_md(state, persistence);
+            inventory::refresh_subagent_mentions(state, persistence);
             let roots = chat::mcp::project_roots(state);
             inventory::prune_mcp_statuses(persistence, &roots, &mut mcp_statuses);
             inventory::refresh_mcp(state, persistence, &roots, &mcp_statuses);

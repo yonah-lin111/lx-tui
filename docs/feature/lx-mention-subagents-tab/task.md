@@ -1,0 +1,191 @@
+# lx 输入框 `@` 命令新增 `Subagents` Tab — 实施任务拆解 (`task.md`)
+
+- **关联设计**：[`design.md`](design.md)
+- **执行前提**：用户审核确认 `design.md` 与本 `task.md` 后，按以下任务顺序逐步落地并执行精准校验。
+
+---
+
+## 任务总览
+
+| 任务 ID | 任务名称 | 涉及核心文件 | 预计改动后行数（红线 ≤1000/1500） | 状态 |
+| :--- | :--- | :--- | :--- | :--- |
+| **T1** | 扩展 `ReferKind::Subagent` 引用语法、编辑器高亮、快捷引用与发送预处理 | `src/app/markdown/refer.rs`<br>`src/app/markdown/refer_shortcut.rs`<br>`src/ui/markdown.rs`<br>`src/chat/prepare.rs`<br>`src/chat/prepare/web.rs` | `refer.rs`: ~215 行<br>`refer_shortcut.rs`: ~495 行<br>`ui/markdown.rs`: ~390 行<br>`prepare.rs`: ~625 行<br>`prepare/web.rs`: ~288 行 | 已完成 |
+| **T2** | 扩展 `MentionTab`（5-Tab vs 4-Tab 隔离）、`LxMention` 候选模型、三类排序过滤与确认插入 | `src/app/prompt/mention.rs`<br>`src/app/update/editor.rs`<br>`src/app/state/lx/mention.rs`<br>`src/app/state/lx/panels.rs`<br>`src/app/state/lx.rs` | `prompt/mention.rs`: ~685 行<br>`lx/mention.rs`: ~750 行<br>`lx/panels.rs`: ~345 行 | 已完成 |
+| **T3** | 打通存活实例与角色配置同步链路，以及当轮 `<subagent_reference>` 上下文注入 | `src/app/state/pane.rs`<br>`src/app/update/chat/subagent.rs`<br>`src/db/service/chat.rs`<br>`src/event/inventory.rs`<br>`src/event/mod.rs`<br>`src/event/chat/subagent/snapshot.rs`<br>`src/event/chat/mod.rs` | `inventory.rs`: ~695 行<br>`snapshot.rs`: ~310 行<br>`event/chat/mod.rs`: ~902 行 | 已完成 |
+| **T4** | TUI 渲染层接入 `Subagents` Tab 与 `subagent_row` 双行展示 | `src/ui/text/workspace.rs`<br>`src/ui/mention.rs`<br>`src/ui/main_content/lx/mention.rs` | `ui/mention.rs`: ~195 行<br>`lx/mention.rs`: ~335 行 | 已完成 |
+| **T5** | 单元测试覆盖与精准验证（`cargo fmt`、`clippy`、受影响模块测试） | `src/app/markdown/refer/tests.rs`<br>`src/app/state/lx/mention/tests.rs`<br>`src/chat/prepare/tests.rs`<br>`src/event/chat/tests/subagent_roles.rs` | `lx/mention/tests.rs`: ~650 行<br>`prepare/tests.rs`: ~310 行 | 已完成 |
+
+---
+
+## 详细任务步骤与关键代码检查点
+
+### Task 1 (T1)：扩展 `ReferKind::Subagent` 引用语法、编辑器高亮与发送预处理
+
+- **目标文件**：
+  - `src/app/markdown/refer.rs`
+  - `src/app/markdown/refer_shortcut.rs`
+  - `src/ui/markdown.rs`
+  - `src/chat/prepare.rs`
+  - `src/chat/prepare/web.rs`
+- **实施细节与关键代码**：
+  1. **`src/app/markdown/refer.rs`**：
+     - 在 `ReferKind` 枚举新增 `Subagent` 变体；
+     - `ReferKind::as_str` 返回 `"subagent"`，`ReferKind::parse("subagent")` 返回 `Some(Self::Subagent)`。
+  2. **`src/app/markdown/refer_shortcut.rs`**：
+     - 在 `ReferTag::label` 中新增分支：
+       ```rust
+       Self::Refer(ReferKind::Subagent) => "refer-subagent",
+       ```
+  3. **`src/ui/markdown.rs`**：
+     - 在 `refer_token` 中将 `markdown::ReferKind::Subagent` 映射到 `TokenKind::ReferFile`：
+       ```rust
+       markdown::ReferKind::Skill
+       | markdown::ReferKind::Mcp
+       | markdown::ReferKind::Subagent => TokenKind::ReferFile,
+       ```
+  4. **`src/chat/prepare.rs` & `src/chat/prepare/web.rs`**：
+     - `prepare_user_message` 中将 `ReferKind::Subagent` 与 `ReferKind::Mcp` 合并：
+       ```rust
+       ReferKind::Mcp | ReferKind::Subagent => {
+           // MCP 与 Subagent 引用为编辑器纯文本语法糖（已记入 claimed_ranges），随正文原样发送。
+       }
+       ```
+     - `prepare_ai_web_message` 中将 `ReferKind::Subagent` 与 `ReferKind::Skill | ReferKind::Mcp` 合并返回 `Err(AiWebPrepareError::LocalReferenceUnsupported)`。
+- **验证点**：
+  - `rtk cargo test --lib app::markdown::refer`
+  - `rtk cargo test --lib chat::prepare`
+
+---
+
+### Task 2 (T2)：扩展 `MentionTab`、`LxMention` 候选模型、三类排序过滤与确认插入
+
+- **目标文件**：
+  - `src/app/prompt/mention.rs`
+  - `src/app/update/editor.rs`
+  - `src/app/state/lx/mention.rs`
+  - `src/app/state/lx/panels.rs`
+  - `src/app/state/lx.rs`
+- **实施细节与关键代码**：
+  1. **`MentionTab` 扩展与右侧 `Prompt` 4-Tab 隔离 (`src/app/prompt/mention.rs`, `src/app/update/editor.rs`)**：
+     - `MentionTab` 新增 `Subagents` 变体；
+     - `MentionTab::ALL` 更新为 5 项 `[Files, RefDir, Skills, Mcp, Subagents]`，新增 `PROMPT_ALL: [Self; 4] = [Files, RefDir, Skills, Mcp]` 与 `from_prompt_index`、`next_prompt`、`prev_prompt`；
+     - `MentionState::switch_tab` 改调 `next_prompt()` / `prev_prompt()`，`MentionState::set_tab` 对 `MentionTab::Subagents` 返回 `false`；
+     - `src/app/update/editor.rs::switch_mention_tab` 改调 `MentionTab::from_prompt_index(tab)`。
+  2. **`SubagentRunMentionEntry` 与 `SubagentMentionItem` (`src/app/state/lx/mention.rs`)**：
+     - 定义 `SubagentRunMentionEntry { agent_id, nickname, role, status, title }` 与 `SubagentMentionItem { Active(SubagentRunMentionEntry), Role(ResolvedRoleSpec) }`；
+     - 在 `src/app/state/mod.rs`（或 `src/app/state/lx.rs`）导出 `SubagentMentionItem` 与 `SubagentRunMentionEntry` 供 `ui::mention` 使用；
+     - 手动实现 `Default for LxMention`，使 `subagent_roles` 默认填充 `crate::config::subagents::SubagentsSection::default().all_roles()`（3 个内置角色 `explorer` / `executor` / `monitor`）；
+     - 实现 `LxMention::filtered_subagents(&self) -> Vec<SubagentMentionItem>`：
+       ```rust
+       pub fn filtered_subagents(&self) -> Vec<SubagentMentionItem> {
+           let query_lower = self
+               .trigger
+               .as_ref()
+               .map(|t| t.query.to_lowercase())
+               .unwrap_or_default();
+           let active_iter = self
+               .subagent_runs
+               .iter()
+               .cloned()
+               .map(SubagentMentionItem::Active);
+           let builtin_iter = self
+               .subagent_roles
+               .iter()
+               .filter(|role| role.is_builtin)
+               .cloned()
+               .map(SubagentMentionItem::Role);
+           let project_custom_iter = self
+               .subagent_roles
+               .iter()
+               .filter(|role| !role.is_builtin && role.is_project_scoped)
+               .cloned()
+               .map(SubagentMentionItem::Role);
+           let user_custom_iter = self
+               .subagent_roles
+               .iter()
+               .filter(|role| !role.is_builtin && !role.is_project_scoped)
+               .cloned()
+               .map(SubagentMentionItem::Role);
+           active_iter
+               .chain(builtin_iter)
+               .chain(project_custom_iter)
+               .chain(user_custom_iter)
+               .filter(|item| item.matches_query(&query_lower))
+               .collect()
+       }
+       ```
+     - 扩展 `secondary_count()`、`is_open()`、`view()`、`escape()` 与 `confirm()` 支持 `MentionTab::Subagents`：
+       - 选中 `SubagentMentionItem::Active(run)` 插入 `@[refer-subagent](<nickname_or_id>:<role>) `；
+       - 选中 `SubagentMentionItem::Role(role)` 插入 `@[refer-subagent](<role_name>) `。
+  3. **`Lx` 包装方法 (`src/app/state/lx/panels.rs`, `src/app/state/lx.rs`)**：
+     - 新增 `mention_subagent_roles(&self)`、`set_mention_subagent_roles(&mut self, roles)`、`sync_mention_subagent_runs(&mut self) -> bool`；
+     - 在 `Lx::refresh_panel(&mut self)` 与 `Lx::clear_agents(&mut self)` 中调用 `self.sync_mention_subagent_runs()`。
+- **验证点**：
+  - `rtk cargo test --lib app::state::lx::mention`
+  - `rtk cargo test --lib app::prompt`
+
+---
+
+### Task 3 (T3)：打通存活实例与角色配置同步链路，以及当轮 `<subagent_reference>` 上下文注入
+
+- **目标文件**：
+  - `src/app/state/pane.rs`
+  - `src/app/update/chat/subagent.rs`
+  - `src/db/service/chat.rs`
+  - `src/event/inventory.rs`
+  - `src/event/mod.rs`
+  - `src/event/chat/subagent/snapshot.rs`
+  - `src/event/chat/mod.rs`
+- **实施细节与关键代码**：
+  1. **窗格分割复制与运行态同步 (`src/app/state/pane.rs`, `src/app/update/chat/subagent.rs`, `src/db/service/chat.rs`)**：
+     - `src/app/state/pane.rs` 分屏复制源窗格时，同步 `new_pane.lx.set_mention_subagent_roles(source.lx.mention_subagent_roles())`；
+     - `src/app/update/chat/subagent.rs`：在 `on_subagent_started`、`on_subagent_finished`、`set_subagent_list` 中调用 `target.lx.sync_mention_subagent_runs()`；
+     - `src/db/service/chat.rs::load_chat_session_into_pane`：加载会话后推入 `Effect::ListSubagents { pane, parent_session: session_id.to_string() }`，确保 `/resume` 恢复会话后立即同步该会话的存活子 Agent。
+  2. **配置与项目角色同步 (`src/event/inventory.rs`, `src/event/mod.rs`)**：
+     - 在 `src/event/inventory.rs` 实现 `refresh_subagent_mentions(state, persistence)`；
+     - 在 `SettingsEvent::SubagentsChanged` 分支调用 `refresh_subagent_mentions(state, persistence)`；
+     - 在 `src/event/mod.rs` 启动初始化、`skills_reload` 与 `current_agents_scopes != agents_scopes` 分支调用 `inventory::refresh_subagent_mentions(state, persistence)`。
+  3. **当轮模型上下文提示块生成 (`src/event/chat/subagent/snapshot.rs`, `src/event/chat/mod.rs`)**：
+     - 在 `src/event/chat/subagent/snapshot.rs` 实现 `subagent_reference_blocks(draft_text, effective_subagents, runs) -> Vec<String>`；
+     - 在 `src/event/chat/mod.rs::start_stream` 中将 `subagent_reference_blocks` 追加到 `skill_blocks`（命名为 `turn_reference_blocks`）传入 `assemble_turn_request_with_context`。
+- **验证点**：
+  - `rtk cargo test --lib event::chat`
+  - `rtk cargo test --lib event::inventory`
+
+---
+
+### Task 4 (T4)：TUI 渲染层接入 `Subagents` Tab 与 `subagent_row` 双行展示
+
+- **目标文件**：
+  - `src/ui/text/workspace.rs`
+  - `src/ui/mention.rs`
+  - `src/ui/main_content/lx/mention.rs`
+- **实施细节与关键代码**：
+  1. **`src/ui/text/workspace.rs`**：
+     - 新增常量 `MENTION_TAB_SUBAGENTS`、`MENTION_SUBAGENTS_EMPTY`、`MENTION_SUBAGENT_ACTIVE_LABEL`、`MENTION_SUBAGENT_BUILTIN_LABEL`、`MENTION_SUBAGENT_CUSTOM_LABEL`（并在 `src/ui/text.rs` 自动导出）。
+  2. **`src/ui/mention.rs`**：
+     - 新增 `subagent_row(label, detail, detail_width) -> MentionRow` 与 `subagent_item_text(item) -> (String, String)`。
+  3. **`src/ui/main_content/lx/mention.rs`**：
+     - 在 `panel_data` 的非 `AiWeb` Tab 数组末尾加入 `PanelTab { label: text::MENTION_TAB_SUBAGENTS, active: tab == MentionTab::Subagents }`；
+     - 新增 `(MentionTab::Subagents, LxMentionView::Empty | LxMentionView::Loading)` 与 `(MentionTab::Subagents, LxMentionView::Items)` 渲染分支。
+- **验证点**：
+  - `rtk cargo test --lib ui::main_content::lx`
+
+---
+
+### Task 5 (T5)：单元测试补充与精准校验
+
+- **目标文件**：
+  - `src/app/state/lx/mention/tests.rs`
+  - `src/chat/prepare/tests.rs`
+  - `src/event/chat/tests/subagent_roles.rs`
+- **新增测试用例清单**：
+  1. `subagents_tab_lists_active_runs_then_builtin_then_custom_roles_and_inserts_references`（覆盖三类候选排序、模糊过滤、选中存活实例插入 `@[refer-subagent](Turing:explorer) `、选中角色插入 `@[refer-subagent](explorer) `、一次退格整块原子删除）；
+  2. `ai_web_entry_blocks_subagents_tab_and_rejects_subagent_reference`（覆盖 `AiWeb` 入口 Tab 锁定与 `prepare_ai_web_message` 返回 `LocalReferenceUnsupported`）；
+  3. `subagent_reference_blocks_render_active_instance_and_role_guidance`（覆盖当轮 `<subagent_reference>` 英文引导块生成、去重与存活实例结束后的角色回退）。
+- **最终校验命令**：
+  - `rtk cargo fmt --check`
+  - `rtk cargo clippy --all-targets -- -D warnings`
+  - `rtk cargo test --lib app::state::lx::mention`
+  - `rtk cargo test --lib chat::prepare`
+  - `rtk cargo test --lib event::chat::tests::subagent_roles`

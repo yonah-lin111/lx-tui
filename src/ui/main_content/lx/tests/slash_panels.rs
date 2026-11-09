@@ -358,10 +358,10 @@ fn mention_panel_tabs_render_and_hit_test_in_lx() {
     let panel = mention::layout(area, &lx).expect("mention layout");
     assert_eq!(
         panel.tabs.len(),
-        4,
-        "顶栏包含 Files / refDir / Skills / MCP 四个 Tab"
+        5,
+        "顶栏包含 Files / refDir / Skills / MCP / Subagents 五个 Tab"
     );
-    for idx in 0..4 {
+    for idx in 0..5 {
         assert_eq!(
             mention_tab_at(area, &lx, panel.tabs[idx].x, panel.tabs[idx].y),
             Some(idx)
@@ -406,6 +406,17 @@ fn mention_panel_tabs_render_and_hit_test_in_lx() {
     assert!(
         all.contains("MCP · stdio · codegraph serve --mcp"),
         "MCP 描述可见: {all}"
+    );
+
+    // 切到 Subagents Tab 渲染默认内置角色条目。
+    assert!(lx.mention_switch_tab(1));
+    let mut buf = Buffer::empty(area);
+    let _ = render(area, &mut buf, &lx, true, None, &mut PaneCache::default());
+    let all = buffer_lines(&buf, area).join("\n");
+    assert!(all.contains("explorer"), "Subagents 内置角色可见: {all}");
+    assert!(
+        all.contains("Built-in ·"),
+        "Subagents 内置角色描述前缀可见: {all}"
     );
 }
 

@@ -581,7 +581,7 @@ fn start_stream(
         let (skills, skill_omitted) =
             skills::catalog_prompt(persistence, config_root.as_deref(), false);
         let (draft_text, _) = timeline::latest_user_draft_and_attachments(&pane.lx.chat.messages);
-        let skill_blocks = skills::reference_blocks(&draft_text);
+        let mut skill_blocks = skills::reference_blocks(&draft_text);
         let mcp_snapshot = mcp::snapshot_for_turn_with_disabled(
             persistence,
             config_root.as_deref(),
@@ -610,6 +610,11 @@ fn start_stream(
             workspace_root.as_deref(),
             workspace_trusted,
         );
+        skill_blocks.extend(subagent::snapshot::subagent_reference_blocks(
+            &draft_text,
+            &effective_subagents,
+            &pane.lx.agents.runs,
+        ));
         let loaded_instructions = crate::chat::agent::load_instructions(
             crate::config::user_data_root().ok().as_deref(),
             config_root.as_deref(),

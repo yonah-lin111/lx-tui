@@ -5,6 +5,7 @@ use crate::app::markdown::{
 };
 use crate::app::paste::{PasteAction, PasteCandidate, PastePanel};
 
+use super::mention::SubagentRunMentionEntry;
 use super::{Lx, LxInputMode, LxMention, LxMentionView, LxPaste};
 
 impl Lx {
@@ -35,6 +36,7 @@ impl Lx {
             self.scroll_cursor_into_view();
             return;
         }
+        self.sync_mention_subagent_runs();
         let masked = crate::app::paste::mask_pasted_text(&self.input).into_owned();
         self.mention.unsuppress();
         self.mention.refresh(&masked, self.cursor);
@@ -113,6 +115,41 @@ impl Lx {
         let text = self.input.clone();
         let cursor = self.cursor;
         self.mention.set_mcp_servers(servers, &text, cursor);
+    }
+
+    /// 当前 subagent 角色候选快照；分割窗格时复制给新窗格。
+    pub fn mention_subagent_roles(&self) -> Vec<crate::config::subagents::ResolvedRoleSpec> {
+        self.mention.subagent_roles().to_vec()
+    }
+
+    /// 写入 subagent 角色候选；由事件层在角色配置初始化/刷新后调用。
+    pub fn set_mention_subagent_roles(
+        &mut self,
+        roles: Vec<crate::config::subagents::ResolvedRoleSpec>,
+    ) {
+        let masked = crate::app::paste::mask_pasted_text(&self.input).into_owned();
+        self.mention.set_subagent_roles(roles, &masked, self.cursor);
+    }
+
+    /// 从 `self.agents.runs` 提取当前会话存活（`running` / `idle` / `blocked`）的 subagent，
+    /// 同步至 `@` 提及面板；内容变化时自动重算面板。
+    pub fn sync_mention_subagent_runs(&mut self) -> bool {
+        let active_runs: Vec<SubagentRunMentionEntry> = self
+            .agents
+            .filtered_indices(super::task::AgentFilter::Active)
+            .into_iter()
+            .filter_map(|index| self.agents.runs.get(index))
+            .map(|run| SubagentRunMentionEntry {
+                agent_id: run.agent_id.clone(),
+                nickname: run.nickname.clone(),
+                role: run.role.as_str().to_string(),
+                status: run.status.clone(),
+                title: run.display_title().to_string(),
+            })
+            .collect();
+        let masked = crate::app::paste::mask_pasted_text(&self.input).into_owned();
+        self.mention
+            .sync_subagent_runs(active_runs, &masked, self.cursor)
     }
 
     /// 同步 `@` 提及扫描根；根变化时作废旧候选并重算面板；返回根是否变化。

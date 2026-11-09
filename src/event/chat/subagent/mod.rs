@@ -16,7 +16,7 @@ mod launch;
 mod model_resolve;
 mod runner;
 mod settle;
-mod snapshot;
+pub(crate) mod snapshot;
 #[cfg(test)]
 mod tests;
 mod tools;

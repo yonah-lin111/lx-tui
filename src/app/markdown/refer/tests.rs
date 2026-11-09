@@ -57,6 +57,46 @@ fn format_reference_rejects_newline_paths() {
 }
 
 #[test]
+fn subagent_references_roundtrip_format_and_parse() {
+    let marker = format_reference(ReferKind::Subagent, Path::new("explorer"));
+    assert_eq!(marker.as_deref(), Some("@[refer-subagent](explorer)"));
+    let marker = format_reference(ReferKind::Subagent, Path::new("Turing:explorer"));
+    assert_eq!(
+        marker.as_deref(),
+        Some("@[refer-subagent](Turing:explorer)")
+    );
+
+    let text = "use @[refer-subagent](explorer) and @[refer-subagent](Turing:explorer)";
+    let parsed = parse_references(text);
+    assert_eq!(parsed.len(), 2);
+    assert_eq!(parsed[0].kind, ReferKind::Subagent);
+    assert_eq!(parsed[0].path, "explorer");
+    assert_eq!(
+        &text[parsed[0].range.clone()],
+        "@[refer-subagent](explorer)"
+    );
+    assert_eq!(parsed[1].kind, ReferKind::Subagent);
+    assert_eq!(parsed[1].path, "Turing:explorer");
+}
+
+#[test]
+fn subagent_reference_deletes_atomically_after_trailing_space() {
+    let text = "delegate @[refer-subagent](Turing:explorer) now";
+    let start = text.find("@[refer-subagent]").expect("marker");
+    let cursor = text.find(") now").expect("trailing space") + 2;
+    assert_eq!(
+        crate::app::markdown::reference_deletion_range(text, cursor),
+        Some(start..cursor)
+    );
+
+    let text = "@[refer-subagent](explorer) ";
+    assert_eq!(
+        crate::app::markdown::reference_deletion_range(text, text.len()),
+        Some(0..text.len())
+    );
+}
+
+#[test]
 fn parse_references_reads_tokens_and_decodes() {
     let text = "前 @[refer-file](/tmp/a\\(1\\).txt) 后 @[refer-image](/tmp/x.png)";
     let parsed = parse_references(text);

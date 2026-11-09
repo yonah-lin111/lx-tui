@@ -28,28 +28,68 @@ pub enum MentionTab {
     RefDir,
     Skills,
     Mcp,
+    Subagents,
 }
 
 impl MentionTab {
-    pub const ALL: [Self; 4] = [Self::Files, Self::RefDir, Self::Skills, Self::Mcp];
+    /// `lx` 主输入框完整 Tab 列表（5 项）。
+    pub const ALL: [Self; 5] = [
+        Self::Files,
+        Self::RefDir,
+        Self::Skills,
+        Self::Mcp,
+        Self::Subagents,
+    ];
 
-    /// 由顶栏 Tab 下标（0..4）解析。
+    /// 右侧 `Prompt` 编辑器 Tab 列表（保持 4 项，不含会话态 `Subagents`）。
+    pub const PROMPT_ALL: [Self; 4] = [Self::Files, Self::RefDir, Self::Skills, Self::Mcp];
+
+    /// 由顶栏 Tab 下标（0..5）解析。
     pub fn from_index(index: usize) -> Option<Self> {
         Self::ALL.get(index).copied()
     }
 
+    /// 由右侧 `Prompt` 顶栏 Tab 下标（0..4）解析。
+    pub fn from_prompt_index(index: usize) -> Option<Self> {
+        Self::PROMPT_ALL.get(index).copied()
+    }
+
+    /// `lx` 主输入框向后循环切换（5 Tab）。
     pub fn next(self) -> Self {
         match self {
             Self::Files => Self::RefDir,
             Self::RefDir => Self::Skills,
             Self::Skills => Self::Mcp,
-            Self::Mcp => Self::Files,
+            Self::Mcp => Self::Subagents,
+            Self::Subagents => Self::Files,
         }
     }
 
+    /// `lx` 主输入框向前循环切换（5 Tab）。
     pub fn prev(self) -> Self {
         match self {
-            Self::Files => Self::Mcp,
+            Self::Files => Self::Subagents,
+            Self::RefDir => Self::Files,
+            Self::Skills => Self::RefDir,
+            Self::Mcp => Self::Skills,
+            Self::Subagents => Self::Mcp,
+        }
+    }
+
+    /// 右侧 `Prompt` 编辑器向后循环切换（4 Tab）。
+    pub fn next_prompt(self) -> Self {
+        match self {
+            Self::Files => Self::RefDir,
+            Self::RefDir => Self::Skills,
+            Self::Skills => Self::Mcp,
+            Self::Mcp | Self::Subagents => Self::Files,
+        }
+    }
+
+    /// 右侧 `Prompt` 编辑器向前循环切换（4 Tab）。
+    pub fn prev_prompt(self) -> Self {
+        match self {
+            Self::Files | Self::Subagents => Self::Mcp,
             Self::RefDir => Self::Files,
             Self::Skills => Self::RefDir,
             Self::Mcp => Self::Skills,
@@ -246,7 +286,7 @@ impl MentionState {
 
     fn secondary_count(&self) -> usize {
         match self.tab {
-            MentionTab::Files => 0,
+            MentionTab::Files | MentionTab::Subagents => 0,
             MentionTab::RefDir => self.filtered_ref_folders().len(),
             MentionTab::Skills => self.filtered_skills().len(),
             MentionTab::Mcp => self.filtered_mcp_servers().len(),
@@ -264,9 +304,9 @@ impl MentionState {
             return false;
         }
         let next = if delta > 0 {
-            self.tab.next()
+            self.tab.next_prompt()
         } else {
-            self.tab.prev()
+            self.tab.prev_prompt()
         };
         if next == self.tab {
             return false;
@@ -278,9 +318,9 @@ impl MentionState {
         true
     }
 
-    /// 直接设置活跃 Tab。
+    /// 直接设置活跃 Tab；右侧 `Prompt` 不支持会话态 `Subagents`。
     pub fn set_tab(&mut self, tab: MentionTab) -> bool {
-        if !self.view_open() || self.tab == tab {
+        if tab == MentionTab::Subagents || !self.view_open() || self.tab == tab {
             return false;
         }
         self.tab = tab;
@@ -571,7 +611,7 @@ impl MentionState {
                     )
                     .unwrap_or_else(|| format!("@[refer-mcp]({})", server.name))
                 }
-                MentionTab::Files => unreachable!(),
+                MentionTab::Files | MentionTab::Subagents => unreachable!(),
             };
             let insertion = format!("{ref_text} ");
             self.reset_session();

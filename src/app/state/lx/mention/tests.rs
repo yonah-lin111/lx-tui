@@ -192,10 +192,13 @@ fn skill_and_mcp_candidates_switch_via_tabs_and_insert_references() {
     assert!(lx.mention_confirm());
     assert_eq!(lx.input, "@[refer-skill](/skills/pdf/SKILL.md) ");
 
-    // 再次输入 `@code`，按左键直接切到最后一个 Tab（MCP），选中插入 `@[refer-mcp](codegraph) `
+    // 再次输入 `@code`，按左键先到最后一个 Tab（Subagents），再按左键切到 MCP，
+    // 选中插入 `@[refer-mcp](codegraph) `
     for ch in "@code".chars() {
         lx.insert_char(ch);
     }
+    assert!(lx.mention_switch_tab(-1));
+    assert_eq!(lx.mention_tab(), MentionTab::Subagents);
     assert!(lx.mention_switch_tab(-1));
     assert_eq!(lx.mention_tab(), MentionTab::Mcp);
     assert!(lx.mention_open());
@@ -538,4 +541,237 @@ fn mention_files_tab_origin_change_resets_selected_item_to_first() {
     lx.insert_char('@');
     let panel = lx.mention().panel().expect("panel");
     assert_eq!(panel.active(), 0, "跨触发起点切换时高亮必须重置为首项");
+}
+
+/// 构造一条 subagent 运行记录（测试展示态同步用）。
+fn subagent_run(
+    agent_id: &str,
+    nickname: Option<&str>,
+    role: crate::chat::agent::AgentRole,
+    status: &str,
+    title: &str,
+) -> crate::app::state::SubagentRun {
+    crate::app::state::SubagentRun::from_record(&crate::db::chat::SubagentRecord {
+        agent_id: agent_id.into(),
+        nickname: nickname.map(str::to_string),
+        agent_path: format!("/root/{agent_id}"),
+        child_session_id: format!("sess-{agent_id}"),
+        parent_session_id: "sess-parent".into(),
+        spawn_message_id: None,
+        role,
+        model_provider: String::new(),
+        model_id: String::new(),
+        model_variant: None,
+        status: status.into(),
+        title: title.into(),
+        created_at_ms: 0,
+        completed_at_ms: None,
+        report_json: None,
+        report_delivered: false,
+    })
+}
+
+/// 构造一个自定义 subagent 角色配置。
+fn custom_role(
+    name: &str,
+    base_role: crate::config::subagents::BaseRole,
+    project: bool,
+) -> crate::config::subagents::CustomRoleConfig {
+    crate::config::subagents::CustomRoleConfig {
+        name: name.into(),
+        base_role,
+        description: format!("{name} custom role"),
+        system_prompt: "do the work".into(),
+        is_project_scoped: project,
+        ..Default::default()
+    }
+}
+
+/// 循环右键切换到 `Subagents` Tab。
+fn open_subagents_tab(lx: &mut Lx) {
+    while lx.mention_tab() != MentionTab::Subagents {
+        assert!(lx.mention_switch_tab(1), "面板可见时允许切换 Tab");
+    }
+}
+
+#[test]
+fn subagents_tab_defaults_to_builtin_roles_without_events() {
+    let mut lx = ready("@", entries());
+    assert_eq!(MentionTab::Files.prev(), MentionTab::Subagents);
+    assert_eq!(MentionTab::Subagents.next(), MentionTab::Files);
+    open_subagents_tab(&mut lx);
+    assert_eq!(lx.mention_tab(), MentionTab::Subagents);
+    assert!(lx.mention_open(), "默认内置角色使面板可交互");
+    let names: Vec<String> = lx
+        .mention()
+        .filtered_subagents()
+        .into_iter()
+        .map(|item| item.reference_target())
+        .collect();
+    assert_eq!(names, vec!["explorer", "executor", "monitor"]);
+}
+
+#[test]
+fn subagents_tab_orders_active_runs_then_builtin_then_custom_roles() {
+    let mut lx = ready("@", entries());
+    for run in [
+        subagent_run(
+            "running-agent",
+            Some("Turing"),
+            crate::chat::agent::AgentRole::Explorer,
+            "running",
+            "map the repository",
+        ),
+        subagent_run(
+            "completed-agent",
+            None,
+            crate::chat::agent::AgentRole::Executor,
+            "completed",
+            "finished work",
+        ),
+        subagent_run(
+            "idle-agent",
+            None,
+            crate::chat::agent::AgentRole::Executor,
+            "idle",
+            "waiting for input",
+        ),
+        subagent_run(
+            "blocked-agent",
+            Some("Curie"),
+            crate::chat::agent::AgentRole::Monitor,
+            "blocked",
+            "needs approval",
+        ),
+        subagent_run(
+            "cancelled-agent",
+            None,
+            crate::chat::agent::AgentRole::Executor,
+            "cancelled",
+            "cancelled work",
+        ),
+        subagent_run(
+            "failed-agent",
+            None,
+            crate::chat::agent::AgentRole::Executor,
+            "failed",
+            "failed work",
+        ),
+        subagent_run(
+            "interrupted-agent",
+            None,
+            crate::chat::agent::AgentRole::Executor,
+            "interrupted",
+            "interrupted work",
+        ),
+    ] {
+        lx.agents.runs.push(run);
+    }
+    assert!(lx.sync_mention_subagent_runs(), "首次同步存活实例");
+
+    let mut section = crate::config::subagents::SubagentsSection::default();
+    section.roles.push(custom_role(
+        "project_helper",
+        crate::config::subagents::BaseRole::Explorer,
+        true,
+    ));
+    section.roles.push(custom_role(
+        "user_helper",
+        crate::config::subagents::BaseRole::Executor,
+        false,
+    ));
+    lx.set_mention_subagent_roles(section.all_roles());
+
+    open_subagents_tab(&mut lx);
+    let targets: Vec<String> = lx
+        .mention()
+        .filtered_subagents()
+        .into_iter()
+        .map(|item| item.reference_target())
+        .collect();
+    assert_eq!(
+        targets,
+        vec![
+            "Turing:explorer",
+            "idle-agent:executor",
+            "Curie:monitor",
+            "explorer",
+            "executor",
+            "monitor",
+            "project_helper",
+            "user_helper",
+        ],
+        "存活实例 → 内置角色 → 项目自定义 → 用户自定义，已结束实例不展示"
+    );
+
+    // 大小写不敏感查询过滤。
+    for ch in "TURING".chars() {
+        lx.insert_char(ch);
+    }
+    assert_eq!(
+        lx.mention_tab(),
+        MentionTab::Subagents,
+        "输入过滤不切回 Files"
+    );
+    let filtered = lx.mention().filtered_subagents();
+    assert_eq!(filtered.len(), 1, "仅昵称命中: {filtered:?}");
+    assert_eq!(filtered[0].reference_target(), "Turing:explorer");
+}
+
+#[test]
+fn subagents_tab_inserts_references_and_backspace_deletes_atomically() {
+    let mut lx = ready("@", entries());
+    lx.agents.runs.push(subagent_run(
+        "running-agent",
+        Some("Turing"),
+        crate::chat::agent::AgentRole::Explorer,
+        "running",
+        "map the repository",
+    ));
+    assert!(lx.sync_mention_subagent_runs());
+
+    // 选中存活实例：插入 `<nickname>:<role>`。
+    open_subagents_tab(&mut lx);
+    assert_eq!(
+        lx.mention().filtered_subagents()[0].reference_target(),
+        "Turing:explorer"
+    );
+    assert!(lx.mention_confirm());
+    assert_eq!(lx.input, "@[refer-subagent](Turing:explorer) ");
+    lx.backspace();
+    assert_eq!(lx.input, "", "尾随空格处一次退格整块删除");
+    lx.undo();
+    assert_eq!(
+        lx.input, "@[refer-subagent](Turing:explorer) ",
+        "整块删除是一步撤销"
+    );
+
+    // 选中角色：插入 `<role>`。
+    lx.backspace();
+    assert_eq!(lx.input, "");
+    for ch in "@executor".chars() {
+        lx.insert_char(ch);
+    }
+    open_subagents_tab(&mut lx);
+    assert_eq!(
+        lx.mention().filtered_subagents()[0].reference_target(),
+        "executor"
+    );
+    assert!(lx.mention_confirm());
+    assert_eq!(lx.input, "@[refer-subagent](executor) ");
+    lx.backspace();
+    assert_eq!(lx.input, "", "角色引用同样原子删除");
+}
+
+#[test]
+fn ai_web_entry_blocks_subagents_tab() {
+    let mut lx = ready("@", entries());
+    lx.entry = crate::app::state::LxEntry::AiWeb;
+    assert!(!lx.mention_switch_tab(-1), "AiWeb 仅允许 Files");
+    assert_eq!(lx.mention_tab(), MentionTab::Files);
+    assert!(
+        !lx.mention_set_tab(MentionTab::Subagents),
+        "AiWeb 直接设置 Subagents 被拒绝"
+    );
+    assert_eq!(lx.mention_tab(), MentionTab::Files);
 }

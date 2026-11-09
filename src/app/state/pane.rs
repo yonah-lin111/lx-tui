@@ -87,13 +87,14 @@ impl Tab {
 
     /// 在指定窗格处按方向分割：新窗格继承源窗格视图并获得焦点；源窗格不存在返回 None。
     pub fn split_pane(&mut self, source: PaneId, direction: Direction) -> Option<PaneId> {
-        let (view, startup, skills, mcp_servers) = {
+        let (view, startup, skills, mcp_servers, subagent_roles) = {
             let pane = self.pane(source)?;
             (
                 pane.view,
                 pane.lx.startup,
                 pane.lx.mention_skills(),
                 pane.lx.mention_mcp_servers(),
+                pane.lx.mention_subagent_roles(),
             )
         };
         if !self.layout.focus_pane(source) {
@@ -105,6 +106,7 @@ impl Tab {
         pane.lx.startup = startup;
         pane.lx.set_mention_skills(skills);
         pane.lx.set_mention_mcp_servers(mcp_servers);
+        pane.lx.set_mention_subagent_roles(subagent_roles);
         self.panes.insert(id, pane);
         Some(id)
     }
