@@ -776,7 +776,12 @@ pub(crate) async fn run_query(
         }
     }
     // `load_session` 内部先等标签页（25s）再等历史渲染（10s），预算必须高于两者之和。
-    let budget = if action == "load_session" { 60 } else { 30 };
+    // Grok 冷启动还要叠加登录检测，非 chat 动作统一给 60s，避免 UI 等待被 Rust 先杀掉。
+    let budget = if action == "load_session" || site == AiWebSite::Grok {
+        60
+    } else {
+        30
+    };
     let output = tokio::time::timeout(
         std::time::Duration::from_secs(budget),
         child.wait_with_output(),

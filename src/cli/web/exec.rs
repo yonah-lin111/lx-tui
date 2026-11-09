@@ -8,7 +8,9 @@ use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 use tokio::process::Command;
 use tokio::sync::mpsc;
 
-use crate::app::state::{AiWebSite, DeepseekThinkingMode, GeminiThinkingLevel, GeminiWebModel};
+use crate::app::state::{
+    AiWebSite, DeepseekThinkingMode, GeminiThinkingLevel, GeminiWebModel, GrokWebModel,
+};
 use crate::chat::prepare::{AiWebPrepareError, prepare_ai_web_message};
 use crate::chat::web::{
     AiWebStreamEvent, ScriptParams, parse_script_line, resolve_ego_browser_bin, script_source,
@@ -165,6 +167,33 @@ fn exec_models(out: &Output, site_filter: Option<AiWebSite>) -> Result<(), Strin
                         default_mark,
                         site.remote_session_prefix().into(),
                         "lx-tui-ai-web-gemini".into(),
+                    ]);
+                }
+            }
+            AiWebSite::Grok => {
+                let models: Vec<&str> = GrokWebModel::ALL.iter().map(|m| m.id()).collect();
+                entries.push(json!({
+                    "site": "grok",
+                    "label": text::AI_WEB_SITE_GROK,
+                    "taskSpace": "lx-tui-ai-web-grok",
+                    "sessionPrefix": site.remote_session_prefix(),
+                    "defaultModel": GrokWebModel::default().id(),
+                    "defaultThinking": "",
+                    "models": models,
+                    "thinkingVariants": [],
+                }));
+                for model in GrokWebModel::ALL {
+                    rows.push(vec![
+                        "grok".into(),
+                        model.id().into(),
+                        "-".into(),
+                        if model == GrokWebModel::default() {
+                            GrokWebModel::default().id().into()
+                        } else {
+                            "-".into()
+                        },
+                        site.remote_session_prefix().into(),
+                        "lx-tui-ai-web-grok".into(),
                     ]);
                 }
             }
@@ -479,8 +508,24 @@ async fn exec_chat(out: &Output, cwd: &Path, req: ChatRequest) -> Result<(), Str
         return Err("message cannot be empty".to_string());
     }
 
+    // Grok 的 /rewind 语义是追加重试且不能恢复附件；检查放在 prepare 之后，
+    // 这样内联 `@[refer-file]` / `@path` 也会被拦住，而不是只看 --file/--keep-file。
+    if req.site == AiWebSite::Grok
+        && req.edit_user_index.is_some()
+        && (!prepared.files.is_empty() || !prepared.keep_files.is_empty())
+    {
+        return Err(text::LX_AI_WEB_GROK_REWIND_ATTACHMENTS.to_string());
+    }
+
+    // Grok 的 Edit 会清空旧用户消息并追加新轮次，无法原地替换；把 --edit-index
+    // 降级为普通追加发送，保证云端历史线性一致，旧的轮次仍保留。
+    let effective_edit_index = if req.site == AiWebSite::Grok {
+        None
+    } else {
+        req.edit_user_index
+    };
     let first_turn =
-        req.first_turn || (req.remote_session_id.is_none() && req.edit_user_index.is_none());
+        req.first_turn || (req.remote_session_id.is_none() && effective_edit_index.is_none());
 
     let mut child = Command::new(resolve_ego_browser_bin())
         .arg("nodejs")
@@ -516,7 +561,7 @@ async fn exec_chat(out: &Output, cwd: &Path, req: ChatRequest) -> Result<(), Str
             first_turn,
             stream_url: stream_url.as_deref(),
             session_id: req.remote_session_id.as_deref(),
-            edit_user_index: req.edit_user_index,
+            edit_user_index: effective_edit_index,
             ..Default::default()
         },
     );
@@ -611,7 +656,7 @@ async fn exec_chat(out: &Output, cwd: &Path, req: ChatRequest) -> Result<(), Str
                     "text": answer_text,
                     "files": prepared.files,
                     "keepFiles": prepared.keep_files,
-                    "editIndex": req.edit_user_index,
+                    "editIndex": effective_edit_index,
                 });
                 return out.emit(&payload, |o, w| {
                     if !thinking_text.trim().is_empty() {
@@ -623,16 +668,17 @@ async fn exec_chat(out: &Output, cwd: &Path, req: ChatRequest) -> Result<(), Str
                             .as_deref()
                             .map(|t| format!(" ({t})"))
                             .unwrap_or_default();
-                        writeln!(
-                            w,
-                            "{}",
-                            o.muted(&format!(
-                                "[session: {sid}{title_suffix}{sep}{model}{sep}{thinking}]",
-                                sep = text::LX_CHAT_MODEL_SEP,
-                                model = req.model,
-                                thinking = req.thinking
-                            ))
-                        )?;
+                        let mut meta = format!(
+                            "[session: {sid}{title_suffix}{sep}{model}",
+                            sep = text::LX_CHAT_MODEL_SEP,
+                            model = req.model
+                        );
+                        if !req.thinking.is_empty() {
+                            meta.push_str(text::LX_CHAT_MODEL_SEP);
+                            meta.push_str(&req.thinking);
+                        }
+                        meta.push(']');
+                        writeln!(w, "{}", o.muted(&meta))?;
                     }
                     Ok(())
                 });

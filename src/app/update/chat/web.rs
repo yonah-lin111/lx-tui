@@ -13,11 +13,11 @@ use crate::layout::PaneId;
 use crate::ui::text;
 
 pub use crate::app::state::{
-    AI_WEB_DEEPSEEK_SESSION_PREFIX, AI_WEB_GEMINI_SESSION_PREFIX, AI_WEB_SESSION_PREFIX,
-    ai_web_remote_session, is_ai_web_session,
+    AI_WEB_DEEPSEEK_SESSION_PREFIX, AI_WEB_GEMINI_SESSION_PREFIX, AI_WEB_GROK_SESSION_PREFIX,
+    AI_WEB_SESSION_PREFIX, ai_web_remote_session, is_ai_web_session,
 };
 
-/// 提取云端真实会话 ID（若已关联 DeepSeek 或 Gemini 云端会话）。
+/// 提取云端真实会话 ID（若已关联 DeepSeek、Gemini 或 Grok 云端会话）。
 pub fn ai_web_remote_session_id(session_id: &str) -> Option<&str> {
     ai_web_remote_session(session_id).map(|(_, id)| id)
 }
@@ -41,6 +41,13 @@ pub fn apply_ai_web_status(lx: &mut Lx) {
             ));
             lx.chat.status.variant = Some(lx.ai_web_config.gemini_thinking.id().to_string());
         }
+        crate::app::state::AiWebSite::Grok => {
+            lx.chat.status.model_name = Some(text::ai_web_model_label(
+                crate::app::state::AiWebSite::Grok,
+                lx.ai_web_config.grok_model.id(),
+            ));
+            lx.chat.status.variant = None;
+        }
     }
     lx.chat.status.provider_name = None;
     lx.chat.status.context_limit = None;
@@ -56,6 +63,7 @@ fn ai_web_assistant_label(
     let model = match site {
         crate::app::state::AiWebSite::Deepseek => text::AI_WEB_SITE_DEEPSEEK,
         crate::app::state::AiWebSite::Gemini => config.gemini_model.id(),
+        crate::app::state::AiWebSite::Grok => config.grok_model.id(),
     };
     text::ai_web_model_label(site, model)
 }
@@ -307,6 +315,49 @@ pub fn rewind_ai_web(state: &mut AppState, pane: PaneId) -> bool {
         super::session::show_lx_hint(state, pane, InputHintLevel::Warning, text::LX_REWIND_FAILED);
         return true;
     };
+    // Grok 的编辑态不会带回原附件：带附件的轮次拒绝撤回，避免本地视图与云端分支静默错位。
+    if target.lx.ai_web_site == crate::app::state::AiWebSite::Grok
+        && !target.lx.chat.messages[last_user_idx]
+            .attachments
+            .is_empty()
+    {
+        if let Some(target) = state.pane_mut_anywhere(pane) {
+            target.lx.clear_rewind();
+            target.lx.slash = None;
+        }
+        super::session::show_lx_hint(
+            state,
+            pane,
+            InputHintLevel::Warning,
+            text::LX_AI_WEB_GROK_REWIND_ATTACHMENTS,
+        );
+        return true;
+    }
+    // Grok 的 Edit 会清空旧用户消息并追加新轮次，无法原地替换。这里保留旧轮次，
+    // 只回填最后一条用户文本；下一次发送走普通追加，保证本地与云端历史一致。
+    if target.lx.ai_web_site == crate::app::state::AiWebSite::Grok {
+        let user_text = target.lx.chat.messages[last_user_idx].text();
+        {
+            let Some(target) = state.pane_mut_anywhere(pane) else {
+                return false;
+            };
+            target.lx.ai_web_edit_user_index = None;
+            target.lx.ai_web_edit_cloud_files.clear();
+            target.lx.clear_rewind();
+            target.lx.slash = None;
+            target.lx.replace_input(&user_text);
+            target.lx.chat.follow_bottom = true;
+        }
+        crate::app::update::clear_lx_selection_for(state, pane);
+        super::session::show_lx_hint(
+            state,
+            pane,
+            InputHintLevel::Warning,
+            text::LX_AI_WEB_GROK_REWIND_RETRY,
+        );
+        super::refresh_lx_status(state, pane);
+        return true;
+    }
     let user_text = target.lx.chat.messages[last_user_idx].text();
     let cloud_files: Vec<String> = target.lx.chat.messages[last_user_idx]
         .attachments

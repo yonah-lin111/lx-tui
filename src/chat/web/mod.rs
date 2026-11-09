@@ -15,11 +15,18 @@ pub const GEMINI_HELPERS_SCRIPT: &str = include_str!("gemini_helpers.js");
 /// 嵌入式 Gemini 网页流式对话驱动主脚本。
 pub const GEMINI_SCRIPT: &str = include_str!("gemini_script.js");
 
+/// 嵌入式 Grok 网页驱动辅助脚本（模型切换、新对话、CDP 文件上传与会话管理）。
+pub const GROK_HELPERS_SCRIPT: &str = include_str!("grok_helpers.js");
+
+/// 嵌入式 Grok 网页流式对话驱动主脚本。
+pub const GROK_SCRIPT: &str = include_str!("grok_script.js");
+
 /// 按目标站点返回 `(helpers_script, main_script)`。
 pub fn scripts_for_site(site: crate::app::state::AiWebSite) -> (&'static str, &'static str) {
     match site {
         crate::app::state::AiWebSite::Deepseek => (DEEPSEEK_HELPERS_SCRIPT, DEEPSEEK_SCRIPT),
         crate::app::state::AiWebSite::Gemini => (GEMINI_HELPERS_SCRIPT, GEMINI_SCRIPT),
+        crate::app::state::AiWebSite::Grok => (GROK_HELPERS_SCRIPT, GROK_SCRIPT),
     }
 }
 

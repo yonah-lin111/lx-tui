@@ -257,6 +257,8 @@ fn current_variant_index_for_pane(
             crate::app::state::AiWebSite::Deepseek => {
                 target.lx.ai_web_config.deepseek_thinking.id()
             }
+            // Grok 没有第二级思考档位，选中模型即完成。
+            crate::app::state::AiWebSite::Grok => return None,
         };
         return variants.iter().position(|item| item == current);
     }
@@ -306,6 +308,12 @@ pub(crate) fn finish_model_selection(
                         .and_then(crate::app::state::DeepseekThinkingMode::from_id)
                     {
                         target.lx.ai_web_config.deepseek_thinking = mode;
+                    }
+                }
+                crate::app::state::AiWebSite::Grok => {
+                    if let Some(model) = crate::app::state::GrokWebModel::from_id(&selection.model)
+                    {
+                        target.lx.ai_web_config.grok_model = model;
                     }
                 }
             }
@@ -465,6 +473,8 @@ fn variant_keys_for_pane(
                 .into_iter()
                 .map(|mode| mode.id().to_string())
                 .collect(),
+            // Grok 没有第二级思考档位；空列表让 Enter 直接完成选择。
+            crate::app::state::AiWebSite::Grok => Vec::new(),
         };
     }
     state

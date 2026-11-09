@@ -73,6 +73,10 @@ pub const LX_ENTRY_AI_WEB: &str = "Web";
 /// AI Web 目标站点标签。
 pub const AI_WEB_SITE_DEEPSEEK: &str = "DeepSeek";
 pub const AI_WEB_SITE_GEMINI: &str = "Gemini";
+pub const AI_WEB_SITE_GROK: &str = "Grok";
+/// Grok 网页端可选模型标签。
+pub const GROK_WEB_MODEL_FAST: &str = "Fast";
+pub const GROK_WEB_MODEL_BUILD: &str = "Build";
 /// Gemini 网页端可选模型标签。
 pub const GEMINI_WEB_MODEL_FLASH_LITE: &str = "3.5 Flash-Lite";
 pub const GEMINI_WEB_MODEL_FLASH: &str = "3.8 Flash";
@@ -128,6 +132,7 @@ pub fn ai_web_site_label(site: AiWebSite) -> &'static str {
     match site {
         AiWebSite::Deepseek => AI_WEB_SITE_DEEPSEEK,
         AiWebSite::Gemini => AI_WEB_SITE_GEMINI,
+        AiWebSite::Grok => AI_WEB_SITE_GROK,
     }
 }
 
@@ -136,6 +141,7 @@ pub fn ai_web_model_label(site: AiWebSite, model: &str) -> String {
     match site {
         AiWebSite::Deepseek => AI_WEB_SITE_DEEPSEEK.to_string(),
         AiWebSite::Gemini => format!("{}{LX_CHAT_MODEL_SEP}{model}", AI_WEB_SITE_GEMINI),
+        AiWebSite::Grok => format!("{}{LX_CHAT_MODEL_SEP}{model}", AI_WEB_SITE_GROK),
     }
 }
 
@@ -249,6 +255,11 @@ pub const PROMPT_TITLE_FAILED: &str = "Failed to generate title";
 pub const LX_CHAT_ENTRY_UNAVAILABLE: &str = "Native Agent only";
 pub const LX_AI_WEB_LOGIN_REQUIRED: &str = "Please sign in to DeepSeek in ego-browser";
 pub const LX_AI_WEB_GEMINI_LOGIN_REQUIRED: &str = "Please sign in to Gemini in ego-browser";
+pub const LX_AI_WEB_GROK_LOGIN_REQUIRED: &str = "Please sign in to Grok in ego-browser";
+pub const LX_AI_WEB_GROK_REWIND_ATTACHMENTS: &str =
+    "Grok /rewind cannot restore attachments; use /new or send without files";
+pub const LX_AI_WEB_GROK_REWIND_RETRY: &str =
+    "Grok /rewind appends a retry turn; use /new for a clean chat";
 pub const LX_AI_WEB_EGO_UNAVAILABLE: &str = "ego-browser is not installed or unavailable";
 pub const LX_WEB_ALLOWED_CMDS: &str =
     "Only /model, /new, /resume, /rename, and /rewind are available in Web";
@@ -258,6 +269,7 @@ pub fn lx_ai_web_login_required_for(site: AiWebSite) -> &'static str {
     match site {
         AiWebSite::Deepseek => LX_AI_WEB_LOGIN_REQUIRED,
         AiWebSite::Gemini => LX_AI_WEB_GEMINI_LOGIN_REQUIRED,
+        AiWebSite::Grok => LX_AI_WEB_GROK_LOGIN_REQUIRED,
     }
 }
 pub const LX_AI_WEB_FOLDER_UNSUPPORTED: &str =

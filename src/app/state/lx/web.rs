@@ -1,4 +1,4 @@
-//! AI Web 双站点（DeepSeek / Gemini）、模型与思考等级配置及云端会话前缀。
+//! AI Web 三站点（DeepSeek / Gemini / Grok）、模型与思考等级配置及云端会话前缀。
 
 use crate::config::ai::ModelSelection;
 use crate::ui::text;
@@ -14,23 +14,28 @@ pub const AI_WEB_DEEPSEEK_SESSION_PREFIX: &str = "ai-web-ds-";
 /// 映射自 Gemini 云端真实会话的 ID 前缀。
 pub const AI_WEB_GEMINI_SESSION_PREFIX: &str = "ai-web-gm-";
 
+/// 映射自 Grok 云端真实会话的 ID 前缀。
+pub const AI_WEB_GROK_SESSION_PREFIX: &str = "ai-web-grok-";
+
 /// AI Web 支持的目标站点。
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub enum AiWebSite {
     #[default]
     Deepseek,
     Gemini,
+    Grok,
 }
 
 impl AiWebSite {
     /// 全部 AI Web 站点的显示顺序。
-    pub const ALL: [AiWebSite; 2] = [AiWebSite::Deepseek, AiWebSite::Gemini];
+    pub const ALL: [AiWebSite; 3] = [AiWebSite::Deepseek, AiWebSite::Gemini, AiWebSite::Grok];
 
     /// 该站点关联云端真实会话时的本地 ID 前缀。
     pub fn remote_session_prefix(self) -> &'static str {
         match self {
             Self::Deepseek => AI_WEB_DEEPSEEK_SESSION_PREFIX,
             Self::Gemini => AI_WEB_GEMINI_SESSION_PREFIX,
+            Self::Grok => AI_WEB_GROK_SESSION_PREFIX,
         }
     }
 
@@ -69,6 +74,32 @@ impl GeminiWebModel {
             Self::Flash38 => text::GEMINI_WEB_MODEL_FLASH,
             Self::Pro31 => text::GEMINI_WEB_MODEL_PRO,
             Self::Argon4 => text::GEMINI_WEB_MODEL_ARGON,
+        }
+    }
+
+    pub fn from_id(id: &str) -> Option<Self> {
+        Self::ALL
+            .into_iter()
+            .find(|m| m.id().eq_ignore_ascii_case(id.trim()))
+    }
+}
+
+/// Grok 网页端支持的模型档位（对齐 `https://grok.com/` 的模型菜单）。
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub enum GrokWebModel {
+    #[default]
+    Fast,
+    Build,
+}
+
+impl GrokWebModel {
+    pub const ALL: [GrokWebModel; 2] = [Self::Fast, Self::Build];
+
+    /// 模型唯一键（用于 `ModelSelection.model` 与脚本参数 `PARAMS.model`）。
+    pub fn id(self) -> &'static str {
+        match self {
+            Self::Fast => text::GROK_WEB_MODEL_FAST,
+            Self::Build => text::GROK_WEB_MODEL_BUILD,
         }
     }
 
@@ -137,6 +168,7 @@ pub struct AiWebConfig {
     pub gemini_model: GeminiWebModel,
     pub gemini_thinking: GeminiThinkingLevel,
     pub deepseek_thinking: DeepseekThinkingMode,
+    pub grok_model: GrokWebModel,
 }
 
 impl AiWebConfig {
@@ -145,6 +177,7 @@ impl AiWebConfig {
         match site {
             AiWebSite::Deepseek => (text::AI_WEB_SITE_DEEPSEEK, self.deepseek_thinking.id()),
             AiWebSite::Gemini => (self.gemini_model.id(), self.gemini_thinking.id()),
+            AiWebSite::Grok => (self.grok_model.id(), ""),
         }
     }
 }
@@ -167,6 +200,12 @@ pub fn ai_web_remote_session(session_id: &str) -> Option<(AiWebSite, &str)> {
         .filter(|id| !id.is_empty())
     {
         return Some((AiWebSite::Gemini, id));
+    }
+    if let Some(id) = session_id
+        .strip_prefix(AI_WEB_GROK_SESSION_PREFIX)
+        .filter(|id| !id.is_empty())
+    {
+        return Some((AiWebSite::Grok, id));
     }
     None
 }
@@ -204,6 +243,24 @@ impl ModelPicker {
                     model_name: text::AI_WEB_SITE_DEEPSEEK.to_string(),
                 }];
                 (list, Some(0))
+            }
+            AiWebSite::Grok => {
+                let list: Vec<ModelCandidate> = GrokWebModel::ALL
+                    .into_iter()
+                    .map(|model| ModelCandidate {
+                        selection: ModelSelection {
+                            provider: text::AI_WEB_SITE_GROK.to_string(),
+                            model: model.id().to_string(),
+                            variant: None,
+                        },
+                        provider_name: text::AI_WEB_SITE_GROK.to_string(),
+                        model_name: model.id().to_string(),
+                    })
+                    .collect();
+                let current_idx = GrokWebModel::ALL
+                    .into_iter()
+                    .position(|model| model == config.grok_model);
+                (list, current_idx)
             }
         };
         let active = current.unwrap_or(0);

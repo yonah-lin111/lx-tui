@@ -321,6 +321,75 @@ fn web_cli_parses_subcommands_models_thinking_and_session_prefixes() {
     .expect_err("site prefix mismatch");
     assert!(mismatch.contains("belongs to 'gemini'"));
 
+    // Grok：别名、模型、无 thinking 档位、会话前缀推断。
+    let grok_models =
+        parse_cli(["lx-tui", "web", "models", "--site", "gk"]).expect("web models grok");
+    assert!(matches!(
+        grok_models,
+        CliAction::Web(ref cli)
+            if cli.command == WebCommand::Models { site: Some(AiWebSite::Grok) }
+    ));
+    let grok_chat = parse_cli([
+        "lx-tui", "web", "chat", "--site", "grok", "-m", "Build", "hi",
+    ])
+    .expect("web chat grok");
+    assert!(matches!(
+        grok_chat,
+        CliAction::Web(ref cli)
+            if matches!(
+                &cli.command,
+                WebCommand::Chat {
+                    site: AiWebSite::Grok,
+                    model,
+                    thinking,
+                    ..
+                } if model == "Build" && thinking.is_empty()
+            )
+    ));
+    assert!(
+        parse_cli(["lx-tui", "web", "chat", "--site", "grok", "-t", "low", "hi"]).is_err(),
+        "Grok 没有 thinking 档位"
+    );
+    let grok_edit_files = parse_cli([
+        "lx-tui",
+        "web",
+        "chat",
+        "--site",
+        "grok",
+        "--session",
+        "ai-web-grok-abc123",
+        "--edit-index",
+        "0",
+        "--keep-file",
+        "report.pdf",
+        "updated prompt",
+    ])
+    .expect_err("Grok /rewind cannot restore attachments");
+    assert!(grok_edit_files.contains("cannot restore attachments"));
+    let grok_show =
+        parse_cli(["lx-tui", "web", "show", "ai-web-grok-abc123"]).expect("web show grok prefix");
+    assert!(matches!(
+        grok_show,
+        CliAction::Web(ref cli)
+            if cli.command
+                == WebCommand::Show {
+                    site: AiWebSite::Grok,
+                    session_id: "ai-web-grok-abc123".into(),
+                    remote_session_id: "abc123".into(),
+                    show_thinking: false,
+                }
+    ));
+    let grok_mismatch = parse_cli([
+        "lx-tui",
+        "web",
+        "show",
+        "ai-web-grok-abc123",
+        "--site",
+        "gemini",
+    ])
+    .expect_err("grok prefix mismatch");
+    assert!(grok_mismatch.contains("belongs to 'grok'"));
+
     // 非法模型或思考等级必须报错拦截。
     assert!(
         parse_cli([
@@ -360,5 +429,12 @@ fn web_cli_parses_subcommands_models_thinking_and_session_prefixes() {
             "hi"
         ])
         .is_err()
+    );
+
+    let web_help = help_text(HelpTopic::Web);
+    assert!(web_help.contains("deepseek|gemini|grok"), "{web_help}");
+    assert!(
+        web_help.contains("Grok supports --model Fast|Build"),
+        "{web_help}"
     );
 }

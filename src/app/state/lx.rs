@@ -64,9 +64,9 @@ pub use slash::{
 };
 pub use task::{AgentFilter, ProcessEntry, TaskPage, TaskTab};
 pub use web::{
-    AI_WEB_DEEPSEEK_SESSION_PREFIX, AI_WEB_GEMINI_SESSION_PREFIX, AI_WEB_SESSION_PREFIX,
-    AiWebConfig, AiWebSite, DeepseekThinkingMode, GeminiThinkingLevel, GeminiWebModel,
-    ai_web_remote_session, is_ai_web_session,
+    AI_WEB_DEEPSEEK_SESSION_PREFIX, AI_WEB_GEMINI_SESSION_PREFIX, AI_WEB_GROK_SESSION_PREFIX,
+    AI_WEB_SESSION_PREFIX, AiWebConfig, AiWebSite, DeepseekThinkingMode, GeminiThinkingLevel,
+    GeminiWebModel, GrokWebModel, ai_web_remote_session, is_ai_web_session,
 };
 
 /// lx 页四个入口：原生 agent、混合 agent、自动化 agent、AI Web。

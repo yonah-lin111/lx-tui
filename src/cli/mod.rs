@@ -41,7 +41,7 @@ pub enum CliAction {
     Version,
     /// `lx-tui exec ...`：无头运行 Agent。
     Exec(ExecCli),
-    /// `lx-tui web ...`：无头驱动网页端 AI 站点（DeepSeek / Gemini）。
+    /// `lx-tui web ...`：无头驱动网页端 AI 站点（DeepSeek / Gemini / Grok）。
     Web(web::WebCli),
     /// `lx-tui session ...`：聊天会话管理。
     Session(session::SessionCli),

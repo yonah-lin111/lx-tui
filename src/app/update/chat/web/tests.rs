@@ -1,5 +1,5 @@
 use super::*;
-use crate::app::state::{AiWebSite, LxEntry};
+use crate::app::state::{AiWebSite, GrokWebModel, LxEntry};
 use crate::chat::events::{ChatDelta, PartDelta, StopReason};
 use crate::db::chat::Usage;
 
@@ -209,6 +209,148 @@ fn gemini_two_stage_model_and_thinking_picker_updates_status_and_stream_without_
 }
 
 #[test]
+fn grok_single_stage_model_picker_applies_fast_and_build_without_variants() {
+    let (mut state, pane) = ai_web_state();
+    crate::app::update::set_ai_web_site(&mut state, pane, AiWebSite::Grok);
+    let target = state.pane_anywhere(pane).expect("pane");
+    assert_eq!(
+        target.lx.chat.status.model_name.as_deref(),
+        Some("Grok · Fast")
+    );
+    assert_eq!(target.lx.chat.status.variant, None);
+
+    // 第一级只有 Fast / Build 两项，默认定位 Fast；没有第二级思考面板。
+    assert!(super::super::open_model_picker(&mut state, pane));
+    {
+        let target = state.pane_anywhere(pane).expect("pane");
+        let Some(SlashPanel::Model(picker)) = &target.lx.slash else {
+            panic!("expected model picker");
+        };
+        assert_eq!(picker.candidates.len(), 2);
+        assert_eq!(picker.current, Some(0));
+        assert_eq!(picker.window.active, 0);
+    }
+
+    // 选中 Build 回车即完成，不进入空的 Variants 阶段。
+    if let Some(target) = state.pane_mut_anywhere(pane)
+        && let Some(SlashPanel::Model(picker)) = target.lx.slash.as_mut()
+    {
+        picker.window.active = 1;
+    }
+    assert!(super::super::apply_slash_enter(&mut state, pane));
+    let target = state.pane_anywhere(pane).expect("pane");
+    assert!(target.lx.slash.is_none());
+    assert_eq!(target.lx.ai_web_config.grok_model, GrokWebModel::Build);
+    assert_eq!(
+        target.lx.chat.status.model_name.as_deref(),
+        Some("Grok · Build")
+    );
+    assert_eq!(target.lx.chat.status.variant, None);
+    assert!(
+        !state.effects.iter().any(|e| matches!(
+            e,
+            Effect::SaveDefaultModel { .. } | Effect::SetChatSessionModel { .. }
+        )),
+        "AI Web 下切换模型不得写回 ai.json 或 SQLite"
+    );
+
+    // 发送时透传 Grok 站点、Build 模型与空 thinking。
+    draft(&mut state, pane, "Explain quantum computing");
+    assert!(super::super::try_send(&mut state, pane));
+    assert!(state.effects.iter().any(|effect| matches!(
+        effect,
+        Effect::StartAiWebStream {
+            site: AiWebSite::Grok,
+            model,
+            thinking,
+            prompt,
+            ..
+        } if model == "Build" && thinking.is_empty() && prompt == "Explain quantum computing"
+    )));
+}
+
+#[test]
+fn grok_rewind_with_attachments_is_rejected_and_keeps_messages() {
+    let dir =
+        std::env::temp_dir().join(format!("lx-ai-web-grok-rewind-test-{}", std::process::id()));
+    let _ = std::fs::create_dir_all(&dir);
+    let doc_path = dir.join("notes.md");
+    std::fs::write(&doc_path, "# Notes\nhello\n").expect("write md");
+
+    let (mut state, pane) = ai_web_state();
+    crate::app::update::set_ai_web_site(&mut state, pane, AiWebSite::Grok);
+    let raw_draft = format!("summarize @[refer-file]({})", doc_path.display());
+    draft(&mut state, pane, &raw_draft);
+    assert!(super::super::try_send(&mut state, pane));
+    finish(&mut state, pane);
+    state.effects.clear();
+    state
+        .pane_mut_anywhere(pane)
+        .expect("pane")
+        .lx
+        .rewind
+        .armed_at = Some(std::time::Instant::now());
+
+    draft(&mut state, pane, "/rewind");
+    assert!(super::super::try_send(&mut state, pane));
+    let target = state.pane_anywhere(pane).expect("pane");
+    assert_eq!(target.lx.chat.messages.len(), 2, "拒绝后消息不得被截断");
+    assert_eq!(target.lx.ai_web_edit_user_index, None);
+    assert!(
+        target.lx.rewind.armed_at.is_none(),
+        "拒绝后必须清除双 Esc 待命状态"
+    );
+    assert_eq!(
+        target.lx.toast.as_ref().map(|t| t.message.as_str()),
+        Some(text::LX_AI_WEB_GROK_REWIND_ATTACHMENTS)
+    );
+    assert!(
+        !state
+            .effects
+            .iter()
+            .any(|effect| matches!(effect, Effect::StartAiWebStream { .. }))
+    );
+
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn grok_text_rewind_restores_prompt_without_truncating_and_next_send_appends() {
+    let (mut state, pane) = ai_web_state();
+    crate::app::update::set_ai_web_site(&mut state, pane, AiWebSite::Grok);
+    draft(&mut state, pane, "first question");
+    assert!(super::super::try_send(&mut state, pane));
+    finish(&mut state, pane);
+    draft(&mut state, pane, "second question");
+    assert!(super::super::try_send(&mut state, pane));
+    finish(&mut state, pane);
+    state.effects.clear();
+
+    draft(&mut state, pane, "/rewind");
+    assert!(super::super::try_send(&mut state, pane));
+    let target = state.pane_anywhere(pane).expect("pane");
+    assert_eq!(target.lx.chat.messages.len(), 4, "Grok 撤回不截断旧轮次");
+    assert_eq!(target.lx.input, "second question");
+    assert_eq!(target.lx.ai_web_edit_user_index, None);
+    assert_eq!(
+        target.lx.toast.as_ref().map(|t| t.message.as_str()),
+        Some(text::LX_AI_WEB_GROK_REWIND_RETRY)
+    );
+
+    draft(&mut state, pane, "second question edited");
+    assert!(super::super::try_send(&mut state, pane));
+    assert!(state.effects.iter().any(|effect| matches!(
+        effect,
+        Effect::StartAiWebStream {
+            site: AiWebSite::Grok,
+            prompt,
+            edit_user_index: None,
+            ..
+        } if prompt == "second question edited"
+    )));
+}
+
+#[test]
 fn switching_ai_web_site_isolates_sessions_and_clears_rewind_state() {
     let (mut state, pane) = ai_web_state();
     draft(&mut state, pane, "DeepSeek question");
@@ -244,6 +386,10 @@ fn switching_ai_web_site_isolates_sessions_and_clears_rewind_state() {
     assert_eq!(
         ai_web_remote_session("ai-web-ds-xyz789"),
         Some((AiWebSite::Deepseek, "xyz789"))
+    );
+    assert_eq!(
+        ai_web_remote_session("ai-web-grok-abc123"),
+        Some((AiWebSite::Grok, "abc123"))
     );
 }
 
