@@ -1,4 +1,4 @@
-# lx Recap、消息尾部文件摘要与首页快捷键 — 执行任务清单
+# lx Recap 与消息尾部文件摘要 — 执行任务清单
 
 > 状态：**已完成（待合并）**（2026-11-09；实现、测试与提交均完成，等待用户确认合并）
 > 设计依据：[design.md](design.md)
@@ -171,7 +171,9 @@
 
 ---
 
-## P6. 首页快捷键
+## P6. 首页快捷键（已按用户要求移除）
+
+> 后续变更：本阶段实现已全部撤销；`LxInput` 快捷键、input 映射、pane 切换、`home_visible`、入口 tooltip 与相关测试均已删除。以下为历史记录。
 
 - [x] `src/app/actions.rs`：`LxInput::SwitchEntry(u8)`、`SwitchAiWebSite`。
 - [x] `src/input/mod.rs`：Alt+1..4、Alt+W 映射（大小写兼容）。
@@ -203,6 +205,16 @@
 - [x] `cargo test`（全量；若时间允许）
 - [x] 修正所有失败；禁止用 `unwrap()`/`expect()` 进生产代码。
 - [x] 检查新增生产文件行数 < 1000，测试文件 < 1500。
+
+---
+
+## P9. 后续修正（2026-11-09）
+
+- [x] 移除首页快捷键与入口 tooltip（`Alt+1..4` / `Alt+W`、`LxInput` 变体、`home_visible`、相关测试）。
+- [x] `/rewind` 目标扩展到模型切换、compact 检查点与 recap：模型切换回滚会话模型并删除条目；compact 恢复上下文；recap 删除回顾。
+- [x] 普通轮次 rewind 后同步重载 recap 列表，避免已删消息的回顾残留。
+- [x] compact / recap 运行中耗时统一为秒级（`3s` / `1m 12s`），不显示毫秒或十分之一秒。
+- [x] 补充 DB 与交互测试：模型切换回滚、recap 删除、系统事件 rewind 面板。
 
 ---
 

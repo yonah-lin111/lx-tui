@@ -12,6 +12,9 @@ use rusqlite::{OptionalExtension, Row, params};
 
 use super::{Database, DbError, ModelSnapshot, Result, new_external_id, now_ms};
 
+/// 切换记录的源模型行：`(sequence, provider, model, variant)`。
+type SwitchOrigin = (i64, Option<String>, Option<String>, Option<String>);
+
 /// 一条已持久化的模型切换时间线记录（供时间线渲染与上下文 `<system-update>` 注入读取）。
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ModelSwitchRecord {
@@ -177,6 +180,101 @@ impl Database {
             injected_prompt: commit.injected_prompt.clone(),
             created_at_ms: now,
         }))
+    }
+
+    /// 撤销最新一次模型切换：会话模型回滚到切换前，并删除该时间线条目。
+    ///
+    /// 只能撤销当前最新的一条切换；返回 `None` 表示切换前会话没有显式模型。
+    pub fn revert_model_switch(
+        &self,
+        workspace: &Path,
+        session_id: &str,
+        switch_id: &str,
+        expected_revision: i64,
+        operation_id: &str,
+    ) -> Result<Option<ModelSnapshot>> {
+        let workspace_external = self
+            .workspace_external_id(workspace)?
+            .ok_or(DbError::WorkspaceMissing)?;
+        let transaction = self.conn.unchecked_transaction()?;
+        let owned: Option<i64> = transaction
+            .query_row(
+                "SELECT id FROM agent_session WHERE external_id = ?1 AND workspace_id = ?2",
+                params![session_id, workspace_external],
+                |row| row.get(0),
+            )
+            .optional()?;
+        if owned.is_none() {
+            return Err(DbError::SessionMissing);
+        }
+        let revision: i64 = transaction.query_row(
+            "SELECT revision FROM agent_session WHERE external_id = ?1",
+            params![session_id],
+            |row| row.get(0),
+        )?;
+        if revision != expected_revision {
+            return Err(DbError::RewindTargetChanged);
+        }
+        let switch: Option<SwitchOrigin> = transaction
+            .query_row(
+                r#"SELECT sequence, from_provider, from_model, from_variant
+                   FROM agent_model_switch
+                   WHERE external_id = ?1 AND session_id = ?2"#,
+                params![switch_id, session_id],
+                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?)),
+            )
+            .optional()?;
+        let Some((sequence, from_provider, from_model, from_variant)) = switch else {
+            return Err(DbError::RewindTargetChanged);
+        };
+        // 只能撤销最新一条：更晚的切换存在时目标已过期。
+        let later: Option<String> = transaction
+            .query_row(
+                r#"SELECT external_id FROM agent_model_switch
+                   WHERE session_id = ?1 AND sequence > ?2
+                   ORDER BY sequence DESC LIMIT 1"#,
+                params![session_id, sequence],
+                |row| row.get(0),
+            )
+            .optional()?;
+        if later.is_some() {
+            return Err(DbError::RewindTargetChanged);
+        }
+        let now = now_ms();
+        transaction.execute(
+            r#"UPDATE agent_session
+               SET model_provider = ?1, model_id = ?2, variant = ?3,
+                   revision = revision + 1, updated_at_ms = ?4
+               WHERE external_id = ?5"#,
+            params![from_provider, from_model, from_variant, now, session_id],
+        )?;
+        transaction.execute(
+            "DELETE FROM agent_model_switch WHERE external_id = ?1 AND session_id = ?2",
+            params![switch_id, session_id],
+        )?;
+        transaction.execute(
+            r#"INSERT INTO agent_rewind_operation
+                   (external_id, operation_id, session_id, action, target_user_message_id,
+                    expected_revision, phase, user_text, created_at_ms, updated_at_ms)
+               VALUES (?1, ?2, ?3, 'restore_model', ?4, ?5, 'committed', '', ?6, ?6)"#,
+            params![
+                new_external_id("op"),
+                operation_id,
+                session_id,
+                switch_id,
+                expected_revision,
+                now,
+            ],
+        )?;
+        transaction.commit()?;
+        Ok(match (from_provider, from_model) {
+            (Some(provider), Some(model)) => Some(ModelSnapshot {
+                provider,
+                model,
+                variant: from_variant,
+            }),
+            _ => None,
+        })
     }
 }
 

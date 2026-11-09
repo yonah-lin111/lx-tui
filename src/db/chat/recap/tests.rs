@@ -87,6 +87,31 @@ fn load_is_workspace_scoped() {
 }
 
 #[test]
+fn delete_recap_removes_row_and_bumps_revision() {
+    let (db, workspace, turn) = setup();
+    db.commit_recap(&workspace, &commit(&turn, "summary"))
+        .expect("commit");
+    let revision = db.session_revision(&turn.session_id).expect("revision");
+    db.delete_recap(
+        &workspace,
+        &turn.session_id,
+        &turn.assistant_message_id,
+        revision,
+        "op-delete-recap",
+    )
+    .expect("delete recap");
+    assert!(
+        db.load_recaps(&workspace, &turn.session_id)
+            .expect("load")
+            .is_empty()
+    );
+    assert_eq!(
+        db.session_revision(&turn.session_id).expect("revision"),
+        revision + 1
+    );
+}
+
+#[test]
 fn delete_message_cascades_recap() {
     let (db, workspace, turn) = setup();
     db.commit_recap(&workspace, &commit(&turn, "summary"))

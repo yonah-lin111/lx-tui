@@ -115,6 +115,67 @@ impl Database {
         Ok(recap)
     }
 
+    /// 删除一条消息回顾（只删 recap，不动消息），并推进会话 revision。
+    pub fn delete_recap(
+        &self,
+        workspace: &Path,
+        session_id: &str,
+        message_id: &str,
+        expected_revision: i64,
+        operation_id: &str,
+    ) -> Result<()> {
+        let workspace_external = self
+            .workspace_external_id(workspace)?
+            .ok_or(DbError::WorkspaceMissing)?;
+        let transaction = self.conn.unchecked_transaction()?;
+        let owned: Option<i64> = transaction
+            .query_row(
+                "SELECT id FROM agent_session WHERE external_id = ?1 AND workspace_id = ?2",
+                params![session_id, workspace_external],
+                |row| row.get(0),
+            )
+            .optional()?;
+        if owned.is_none() {
+            return Err(DbError::SessionMissing);
+        }
+        let revision: i64 = transaction.query_row(
+            "SELECT revision FROM agent_session WHERE external_id = ?1",
+            params![session_id],
+            |row| row.get(0),
+        )?;
+        if revision != expected_revision {
+            return Err(DbError::RewindTargetChanged);
+        }
+        let deleted = transaction.execute(
+            "DELETE FROM agent_message_recap WHERE session_id = ?1 AND message_id = ?2",
+            params![session_id, message_id],
+        )?;
+        if deleted == 0 {
+            return Err(DbError::RewindTargetChanged);
+        }
+        let now = now_ms();
+        transaction.execute(
+            "UPDATE agent_session SET revision = revision + 1, updated_at_ms = ?1 WHERE external_id = ?2",
+            params![now, session_id],
+        )?;
+        transaction.execute(
+            r#"INSERT INTO agent_rewind_operation
+                   (external_id, operation_id, session_id, action, target_user_message_id,
+                    expected_revision, phase, user_text, created_at_ms, updated_at_ms)
+               VALUES (?1, ?2, ?3, 'delete_recap', ?4, ?5, 'committed', '', ?6, ?6)"#,
+            params![
+                new_external_id("op"),
+                operation_id,
+                session_id,
+                message_id,
+                expected_revision,
+                now,
+            ],
+        )?;
+        transaction.commit()?;
+        Ok(())
+    }
+
     /// 按会话批量加载全部回顾（双条件校验工作区归属）。
     pub fn load_recaps(&self, workspace: &Path, session_id: &str) -> Result<Vec<MessageRecap>> {
         let Some(workspace_external) = self.workspace_external_id(workspace)? else {

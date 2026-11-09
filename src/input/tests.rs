@@ -1498,31 +1498,3 @@ fn prompt_ctrl_or_cmd_shift_a_selects_all_while_ctrl_a_keeps_line_start() {
         );
     }
 }
-
-#[test]
-fn lx_home_shortcuts_route_to_switch_inputs() {
-    for (index, ch) in ['1', '2', '3', '4'].into_iter().enumerate() {
-        assert_eq!(
-            super::route(
-                KeyEvent::new(KeyCode::Char(ch), KeyModifiers::ALT),
-                TermMode::empty(),
-                crate::app::state::FocusedContainer::Panes,
-                None,
-                true
-            ),
-            Some(Routed::Lx(LxInput::SwitchEntry(index as u8)))
-        );
-    }
-    for ch in ['w', 'W'] {
-        assert_eq!(
-            super::route(
-                KeyEvent::new(KeyCode::Char(ch), KeyModifiers::ALT),
-                TermMode::empty(),
-                crate::app::state::FocusedContainer::Panes,
-                None,
-                true
-            ),
-            Some(Routed::Lx(LxInput::SwitchAiWebSite))
-        );
-    }
-}

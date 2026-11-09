@@ -155,10 +155,6 @@ pub enum LxInput {
     /// PageUp / PageDown：后台任务面板里翻滚动上方的消息列表。
     PageUp,
     PageDown,
-    /// Alt+1..4：首页入口索引（0..=3，对应 LxEntry::ALL）。
-    SwitchEntry(u8),
-    /// Alt+W：进入 Web 或切换 AI Web 站点。
-    SwitchAiWebSite,
 }
 
 /// prompt 编辑器的输入命令；仅在 prompt 获得焦点时产生。

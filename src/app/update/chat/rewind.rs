@@ -140,6 +140,7 @@ fn arm(state: &mut AppState, pane: PaneId) -> Option<()> {
     if !matches!(target.lx.chat.request, RequestState::Idle)
         || target.lx.shell_mode()
         || target.lx.chat.has_running_shell()
+        || target.lx.compact.is_running()
         || !target.lx.input.trim().is_empty()
         || target.lx.chat.session_id.is_none()
         || !target
@@ -163,43 +164,93 @@ fn arm(state: &mut AppState, pane: PaneId) -> Option<()> {
     Some(())
 }
 
-/// 选中最新**可撤销操作**：普通对话轮次或 compact 检查点，按时间线取更晚者。
+/// 选中最新**可撤销操作**：用户轮次、compact、模型切换或 recap，按时间线取更晚者。
 ///
-/// 顺序与 design §2.4 一致：先撤销 compact 之后产生的最新普通轮次；没有更晚轮次后，
-/// 再撤销最近的 compact 检查点。两者都用同一 `sequence` 编号空间比较，
-/// 因此不需要额外的“操作类型优先级”规则。
+/// 四者共用同一 `sequence` 编号空间（recap 用挂接消息的 `end_sequence`）；先撤销
+/// 最新事件，下一次 `/rewind` 才会轮到更早的条目。
 pub fn select_latest(state: &mut AppState, pane: PaneId) -> Option<()> {
+    let (session_id, kind) = {
+        let target = state.pane_anywhere(pane)?;
+        // 本地命令在途时拒绝：截断会删掉正在运行命令的记录，而进程仍在写文件。
+        if !matches!(target.lx.chat.request, RequestState::Idle)
+            || target.lx.chat.has_running_shell()
+            || target.lx.compact.is_running()
+        {
+            return None;
+        }
+        // 待命后可能经粘贴等非键盘路径写入草稿：选中时再复核一次空输入。
+        if !target.lx.input.trim().is_empty() {
+            return None;
+        }
+        let session_id = target.lx.chat.session_id.clone()?;
+        let mut latest: Option<(i64, LatestKind)> = None;
+        if let Some(message) = target
+            .lx
+            .chat
+            .messages
+            .iter()
+            .rev()
+            .find(|message| message.role == "user" && !message.is_user_shell())
+        {
+            consider_latest(&mut latest, message.sequence, LatestKind::Turn);
+        }
+        if let Some(checkpoint) = target.lx.compact.active() {
+            consider_latest(&mut latest, checkpoint.sequence, LatestKind::Compact);
+        }
+        if let Some(switch) = target.lx.model_switch.switches.last() {
+            consider_latest(&mut latest, switch.sequence, LatestKind::ModelSwitch);
+        }
+        if let Some((_, recap)) = latest_recap(&target.lx.recap) {
+            consider_latest(&mut latest, recap.end_sequence, LatestKind::Recap);
+        }
+        let kind = latest.map(|(_, kind)| kind)?;
+        (session_id, kind)
+    };
+    // 开始撤销即取消在途 recap：避免回执在时间线被改动后重新挂回。
+    let _ = super::recap::cancel_pending_recap(state, pane);
+    match kind {
+        LatestKind::Turn => select_turn(state, pane, &session_id),
+        LatestKind::Compact => select_compact(state, pane, &session_id),
+        LatestKind::ModelSwitch => select_model_switch(state, pane, &session_id),
+        LatestKind::Recap => select_recap(state, pane, &session_id),
+    }
+}
+
+/// 可撤销的最新时间线事件类型。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum LatestKind {
+    Turn,
+    Compact,
+    ModelSwitch,
+    Recap,
+}
+
+fn consider_latest(best: &mut Option<(i64, LatestKind)>, sequence: i64, kind: LatestKind) {
+    if best.as_ref().is_none_or(|(current, _)| sequence > *current) {
+        *best = Some((sequence, kind));
+    }
+}
+
+/// 最新一条 recap（按挂接消息的 sequence 排序）。
+fn latest_recap(
+    recap: &crate::app::state::lx::LxRecap,
+) -> Option<(&String, &crate::app::state::lx::MessageRecapView)> {
+    recap
+        .entries
+        .iter()
+        .max_by_key(|(_, value)| value.end_sequence)
+}
+
+/// 选中最新用户轮次（文件 scope + 对话）。
+fn select_turn(state: &mut AppState, pane: PaneId, session_id: &str) -> Option<()> {
     let target = state.pane_anywhere(pane)?;
-    // 本地命令在途时拒绝：截断会删掉正在运行命令的记录，而进程仍在写文件。
-    if !matches!(target.lx.chat.request, RequestState::Idle) || target.lx.chat.has_running_shell() {
-        return None;
-    }
-    // 待命后可能经粘贴等非键盘路径写入草稿：选中时再复核一次空输入。
-    if !target.lx.input.trim().is_empty() {
-        return None;
-    }
-    let session_id = target.lx.chat.session_id.clone()?;
     let message = target
         .lx
         .chat
         .messages
         .iter()
         .rev()
-        .find(|message| message.role == "user" && !message.is_user_shell());
-    let checkpoint = target.lx.compact.active().cloned();
-    // 最新的可撤销操作：sequence 更大者。两者都没有时无目标。
-    let latest_turn_sequence = message.map(|message| message.sequence).unwrap_or(i64::MIN);
-    let latest_checkpoint_sequence = checkpoint
-        .as_ref()
-        .map(|item| item.sequence)
-        .unwrap_or(i64::MIN);
-    if latest_checkpoint_sequence > latest_turn_sequence {
-        return select_compact(state, pane, &session_id);
-    }
-    let Some(message) = message else {
-        // 只有检查点可撤销：即便轮次已被压缩，仍允许撤销 compact。
-        return checkpoint.and_then(|_| select_compact(state, pane, &session_id));
-    };
+        .find(|message| message.role == "user" && !message.is_user_shell())?;
     let user_text = message
         .text_parts()
         .map(|part| part.content.as_str())
@@ -211,7 +262,7 @@ pub fn select_latest(state: &mut AppState, pane: PaneId) -> Option<()> {
     target.lx.rewind.armed_at = None;
     target.lx.rewind.snapshot = SnapshotState::Loading;
     target.lx.rewind.selected = Some(RewindTarget {
-        session_id: session_id.clone(),
+        session_id: session_id.to_string(),
         user_message_id: user_message_id.clone(),
         expected_revision: revision,
         pane,
@@ -225,9 +276,59 @@ pub fn select_latest(state: &mut AppState, pane: PaneId) -> Option<()> {
     target.lx.rewind.center_target = Some(user_message_id.clone());
     state.effects.push(Effect::PrepareRewind {
         pane,
-        session_id,
+        session_id: session_id.to_string(),
         user_message_id,
     });
+    Some(())
+}
+
+/// 选中最新模型切换条目（只回滚模型，不碰消息与文件）。
+fn select_model_switch(state: &mut AppState, pane: PaneId, session_id: &str) -> Option<()> {
+    let target = state.pane_anywhere(pane)?;
+    let switch = target.lx.model_switch.switches.last()?;
+    let switch_id = switch.id.clone();
+    let revision = target.lx.chat.revision;
+    let input_at_open = target.lx.input.clone();
+    let target = state.pane_mut_anywhere(pane)?;
+    target.lx.rewind.armed_at = None;
+    target.lx.rewind.snapshot = SnapshotState::KnownEmpty;
+    target.lx.rewind.selected = Some(RewindTarget {
+        session_id: session_id.to_string(),
+        user_message_id: switch_id,
+        expected_revision: revision,
+        pane,
+        input_at_open,
+        user_text: String::new(),
+        kind: crate::app::state::RewindTargetKind::ModelSwitch,
+    });
+    target.lx.rewind.panel = None;
+    target.lx.chat.follow_bottom = true;
+    target.lx.rewind.center_target = None;
+    Some(())
+}
+
+/// 选中最新 recap 条目（只删回顾，不碰消息与文件）。
+fn select_recap(state: &mut AppState, pane: PaneId, session_id: &str) -> Option<()> {
+    let target = state.pane_anywhere(pane)?;
+    let (message_id, _) = latest_recap(&target.lx.recap)?;
+    let message_id = message_id.clone();
+    let revision = target.lx.chat.revision;
+    let input_at_open = target.lx.input.clone();
+    let target = state.pane_mut_anywhere(pane)?;
+    target.lx.rewind.armed_at = None;
+    target.lx.rewind.snapshot = SnapshotState::KnownEmpty;
+    target.lx.rewind.selected = Some(RewindTarget {
+        session_id: session_id.to_string(),
+        user_message_id: message_id,
+        expected_revision: revision,
+        pane,
+        input_at_open,
+        user_text: String::new(),
+        kind: crate::app::state::RewindTargetKind::Recap,
+    });
+    target.lx.rewind.panel = None;
+    target.lx.chat.follow_bottom = true;
+    target.lx.rewind.center_target = None;
     Some(())
 }
 
@@ -287,10 +388,11 @@ fn open_panel(state: &mut AppState, pane: PaneId) -> bool {
     let Some(selected) = target.lx.rewind.selected.as_ref() else {
         return false;
     };
-    let panel = if selected.kind == crate::app::state::RewindTargetKind::Compact {
-        RewindPanel::for_compact()
-    } else {
-        RewindPanel::new(target.lx.rewind.snapshot)
+    let panel = match selected.kind {
+        crate::app::state::RewindTargetKind::Turn => RewindPanel::new(target.lx.rewind.snapshot),
+        crate::app::state::RewindTargetKind::Compact => RewindPanel::for_compact(),
+        crate::app::state::RewindTargetKind::ModelSwitch => RewindPanel::for_model_switch(),
+        crate::app::state::RewindTargetKind::Recap => RewindPanel::for_recap(),
     };
     target.lx.rewind.panel = Some(panel.clone());
     target.lx.slash = Some(SlashPanel::Rewind(Box::new(panel)));
@@ -385,9 +487,20 @@ pub fn apply_enter(state: &mut AppState, pane: PaneId) -> bool {
         show_lx_hint(state, pane, InputHintLevel::Warning, reason);
         return true;
     }
-    // compact 撤销只回退上下文指针：不建文件操作、不碰消息。
-    if selected.kind == crate::app::state::RewindTargetKind::Compact {
-        return apply_compact_enter(state, pane, &selected);
+    match selected.kind {
+        // compact 撤销只回退上下文指针：不建文件操作、不碰消息。
+        crate::app::state::RewindTargetKind::Compact => {
+            return apply_compact_enter(state, pane, &selected);
+        }
+        // 模型切换只回滚会话模型并删除时间线条目。
+        crate::app::state::RewindTargetKind::ModelSwitch => {
+            return apply_model_switch_enter(state, pane, &selected, action);
+        }
+        // recap 只删除回顾，不动消息与文件。
+        crate::app::state::RewindTargetKind::Recap => {
+            return apply_recap_enter(state, pane, &selected, action);
+        }
+        crate::app::state::RewindTargetKind::Turn => {}
     }
     let operation_id = crate::db::new_external_id("rewind-op");
     let Some(workspace) = state.chat_session_key_for_pane(pane) else {
@@ -451,6 +564,86 @@ fn apply_compact_enter(state: &mut AppState, pane: PaneId, selected: &RewindTarg
             workspace,
             session_id: selected.session_id.clone(),
             checkpoint_id: selected.user_message_id.clone(),
+            expected_revision: selected.expected_revision,
+            operation_id,
+        },
+    ));
+    true
+}
+
+/// 模型切换撤销执行：冻结切换 id 与 revision，入队 `RevertModelSwitch`。
+fn apply_model_switch_enter(
+    state: &mut AppState,
+    pane: PaneId,
+    selected: &RewindTarget,
+    action: RewindAction,
+) -> bool {
+    let Some(workspace) = state.chat_session_key_for_pane(pane) else {
+        show_lx_hint(
+            state,
+            pane,
+            InputHintLevel::Error,
+            text::LX_CHAT_NO_WORKSPACE,
+        );
+        return true;
+    };
+    let operation_id = crate::db::new_external_id("model-rewind-op");
+    let Some(target) = state.pane_mut_anywhere(pane) else {
+        return false;
+    };
+    target.lx.rewind.executing = Some(RewindExecution {
+        operation_id: operation_id.clone(),
+        action,
+        target: selected.clone(),
+    });
+    target.lx.rewind.panel = None;
+    target.lx.slash = None;
+    state.effects.push(Effect::RevertModelSwitch(
+        crate::app::effects::ModelSwitchRevertRequest {
+            pane,
+            workspace,
+            session_id: selected.session_id.clone(),
+            switch_id: selected.user_message_id.clone(),
+            expected_revision: selected.expected_revision,
+            operation_id,
+        },
+    ));
+    true
+}
+
+/// recap 撤销执行：冻结消息 id 与 revision，入队 `DeleteRecap`。
+fn apply_recap_enter(
+    state: &mut AppState,
+    pane: PaneId,
+    selected: &RewindTarget,
+    action: RewindAction,
+) -> bool {
+    let Some(workspace) = state.chat_session_key_for_pane(pane) else {
+        show_lx_hint(
+            state,
+            pane,
+            InputHintLevel::Error,
+            text::LX_CHAT_NO_WORKSPACE,
+        );
+        return true;
+    };
+    let operation_id = crate::db::new_external_id("recap-rewind-op");
+    let Some(target) = state.pane_mut_anywhere(pane) else {
+        return false;
+    };
+    target.lx.rewind.executing = Some(RewindExecution {
+        operation_id: operation_id.clone(),
+        action,
+        target: selected.clone(),
+    });
+    target.lx.rewind.panel = None;
+    target.lx.slash = None;
+    state.effects.push(Effect::DeleteRecap(
+        crate::app::effects::RecapDeleteRequest {
+            pane,
+            workspace,
+            session_id: selected.session_id.clone(),
+            message_id: selected.user_message_id.clone(),
             expected_revision: selected.expected_revision,
             operation_id,
         },

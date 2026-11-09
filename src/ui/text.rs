@@ -312,6 +312,22 @@ pub fn token_count_precise(tokens: u64) -> String {
     scaled(tokens as f64 / 1_000_000.0, "M")
 }
 
+/// 运行中耗时：最小单位秒（`0s` / `2s` / `1m 12s`）。
+///
+/// 用于 compact / recap 的“正在执行”行：毫秒级抖动没有信息量，禁止出现 `0.3s`。
+pub fn format_duration_seconds(ms: i64) -> String {
+    let seconds = elapsed_seconds(ms);
+    if seconds < 60 {
+        return format!("{seconds}s");
+    }
+    format!("{}m {}s", seconds / 60, seconds % 60)
+}
+
+/// 秒级耗时的取整值（四舍五入到秒）；缓存指纹与显示必须共用它。
+pub fn elapsed_seconds(ms: i64) -> i64 {
+    (ms.max(0) + 500) / 1_000
+}
+
 /// 耗时短格式（对齐 lx-agent）：`820ms`、`4.2s`、`38s`、`1m 12s`。
 ///
 /// 放在 `text` 里而不是某个渲染子模块：本轮统计行、思考耗时与 loading 行的
@@ -391,6 +407,14 @@ pub const LX_REWIND_ACTION_REVERT_AND_DELETE: &str = "Restore files and undo con
 pub const LX_REWIND_ACTION_DELETE_ONLY: &str = "Undo conversation only";
 pub const LX_REWIND_ACTION_REVERT_ONLY: &str = "Restore files only";
 pub const LX_REWIND_ACTION_CANCEL: &str = "Cancel";
+pub const LX_REWIND_ACTION_RESTORE_MODEL: &str = "Undo model switch";
+pub const LX_REWIND_ACTION_DELETE_RECAP: &str = "Delete recap";
+/// 系统事件撤销面板的范围说明。
+pub const LX_MODEL_SWITCH_SCOPE: &str = "Restore the previous session model";
+pub const LX_RECAP_SCOPE: &str = "Delete this recap only";
+/// 系统事件撤销成功提示。
+pub const LX_MODEL_SWITCH_REWOUND: &str = "Model switch undone.";
+pub const LX_RECAP_REWOUND: &str = "Recap deleted.";
 /// 含文件动作不可用时的说明。
 pub const LX_REWIND_SNAPSHOT_UNAVAILABLE: &str = "File snapshot unavailable";
 pub const LX_REWIND_SNAPSHOT_INCOMPLETE: &str = "File snapshot incomplete";
@@ -485,6 +509,8 @@ pub const LX_COMPACT_REWIND_FAILED: &str =
     "Restore failed; conversation and checkpoints were left unchanged.";
 /// 撤销 compact 的提示（`/rewind` 成功后）。
 pub const LX_COMPACT_REWOUND: &str = "Context restored to the previous checkpoint.";
+/// compact 撤销面板的范围说明。
+pub const LX_COMPACT_SCOPE: &str = "Restore context only; messages and files stay unchanged";
 /// compact 撤销面板的唯一动作文案。
 pub const LX_COMPACT_ACTION_RESTORE: &str = "Restore the context before this checkpoint";
 /// 检查点条目标题（独立时间线条目）。
@@ -769,13 +795,6 @@ pub fn tooltip_hint(target: TooltipTarget, state: &AppState) -> &'static str {
         TooltipTarget::CollapsePanes => "collapse panes",
         TooltipTarget::CollapseAgents if state.agents_collapsed => "expand agents",
         TooltipTarget::CollapseAgents => "collapse agents",
-        TooltipTarget::LxEntry(entry) => match entry {
-            crate::app::state::LxEntry::Native => "Alt+1",
-            crate::app::state::LxEntry::Hybrid => "Alt+2",
-            crate::app::state::LxEntry::Automation => "Alt+3",
-            crate::app::state::LxEntry::AiWeb => "Alt+4",
-        },
-        TooltipTarget::LxAiWebSite(_) => "Alt+W",
         TooltipTarget::PaneToggle(pane) => match state.pane_anywhere(pane).map(|pane| pane.view) {
             Some(PaneView::Lx) => "switch to terminal",
             Some(PaneView::Terminal) => "switch to lx",

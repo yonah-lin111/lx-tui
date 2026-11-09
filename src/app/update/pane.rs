@@ -5,7 +5,7 @@ use std::path::Path;
 use ratatui::layout::Rect;
 
 use crate::app::actions::LxInput;
-use crate::app::state::{AiWebSite, AppState, Lx, LxEntry, PaneKind, PaneView};
+use crate::app::state::{AppState, Lx, PaneKind, PaneView};
 use crate::detect::PaneAgentSnapshot;
 use crate::layout::{self, PaneId};
 
@@ -86,17 +86,6 @@ pub fn apply_lx_input(state: &mut AppState, command: LxInput) {
         return;
     }
     let pane_id = state.active_tab().layout.focus();
-    match command {
-        LxInput::SwitchEntry(index) => {
-            switch_lx_entry_from_home(state, pane_id, index);
-            return;
-        }
-        LxInput::SwitchAiWebSite => {
-            switch_ai_web_site_from_home(state, pane_id);
-            return;
-        }
-        _ => {}
-    }
     // 主内容区或底部输入框存在非空选区（且非 /resume 历史面板）时，
     // Ctrl/Cmd+C 只负责复制选区（由事件层处理），不清空输入框草稿。
     if command == LxInput::Clear
@@ -688,43 +677,6 @@ fn edits_text(command: LxInput) -> bool {
             | LxInput::Clear
             | LxInput::Cut
     )
-}
-
-/// Alt+1..4：首页入口切换；只在首页可见时生效（与鼠标入口同一门槛）。
-fn switch_lx_entry_from_home(state: &mut AppState, pane: PaneId, index: u8) {
-    let Some(entry) = LxEntry::ALL.get(usize::from(index)).copied() else {
-        return;
-    };
-    let Some(target) = state.pane_anywhere(pane) else {
-        return;
-    };
-    if target.view != PaneView::Lx || !target.lx.home_visible() || target.lx.entry == entry {
-        return;
-    }
-    set_lx_entry(state, pane, entry);
-    super::selection::clear_lx_selection_for(state, pane);
-}
-
-/// Alt+W：非 Web 入口先进入 Web；已在 Web 时切换 DeepSeek ↔ Gemini。
-fn switch_ai_web_site_from_home(state: &mut AppState, pane: PaneId) {
-    let Some(target) = state.pane_anywhere(pane) else {
-        return;
-    };
-    if target.view != PaneView::Lx || !target.lx.home_visible() {
-        return;
-    }
-    if target.lx.entry != LxEntry::AiWeb {
-        set_lx_entry(state, pane, LxEntry::AiWeb);
-    } else {
-        let current = target.lx.ai_web_site;
-        let next = AiWebSite::ALL
-            .iter()
-            .position(|site| *site == current)
-            .map(|index| AiWebSite::ALL[(index + 1) % AiWebSite::ALL.len()])
-            .unwrap_or(AiWebSite::Deepseek);
-        set_ai_web_site(state, pane, next);
-    }
-    super::selection::clear_lx_selection_for(state, pane);
 }
 
 /// 切换 lx 页选中入口（仅鼠标点击触发）；切换入口会取消在途粘贴面板并隔离跨模式会话。

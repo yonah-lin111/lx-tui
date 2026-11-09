@@ -159,18 +159,6 @@ fn focus_gained_cancels_auto_but_keeps_manual_pending() {
 }
 
 #[test]
-fn home_visible_only_without_history() {
-    let mut state = AppState::demo();
-    let pane = pane_id(&state);
-    let target = state.pane_mut_anywhere(pane).expect("pane");
-    target.view = PaneView::Lx;
-    target.lx.entry = LxEntry::Native;
-    assert!(target.lx.home_visible());
-    target.lx.chat.messages = vec![text_message("u0", 0, "user", "hello")];
-    assert!(!target.lx.home_visible());
-}
-
-#[test]
 fn manual_recap_without_session_warns() {
     let mut state = AppState::demo();
     let pane = pane_id(&state);

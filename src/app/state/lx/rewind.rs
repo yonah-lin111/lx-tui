@@ -24,6 +24,10 @@ pub enum RewindAction {
     Cancel,
     /// 恢复到此 compact 检查点之前（上下文指针回退，消息与文件保持原样）。
     RestoreCompact,
+    /// 撤销一次模型切换：会话模型回滚到切换前，并删除该时间线条目。
+    RestoreModel,
+    /// 删除一条 recap（只删回顾，不动消息与文件）。
+    DeleteRecap,
 }
 
 impl RewindAction {
@@ -43,6 +47,8 @@ impl RewindAction {
             Self::RevertOnly => "revert_only",
             Self::Cancel => "cancel",
             Self::RestoreCompact => "restore_compact",
+            Self::RestoreModel => "restore_model",
+            Self::DeleteRecap => "delete_recap",
         }
     }
 
@@ -67,7 +73,7 @@ impl RewindAction {
     }
 }
 
-/// 撤销目标的种类：普通对话轮次或 compact 检查点。
+/// 撤销目标的种类：普通对话轮次或系统事件（compact / 模型切换 / recap）。
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum RewindTargetKind {
     /// 最新用户轮次（文件 scope + 对话）。
@@ -75,13 +81,18 @@ pub enum RewindTargetKind {
     Turn,
     /// compact 检查点（只回退上下文指针）。
     Compact,
+    /// 模型切换记录（会话模型回滚到切换前）。
+    ModelSwitch,
+    /// 消息 recap（只删除回顾）。
+    Recap,
 }
 
 /// 冻结的撤销目标：稳定 user message ID（compact 时为检查点 ID）+ 会话 revision。
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct RewindTarget {
     pub session_id: String,
-    /// 普通轮次为用户消息 ID；compact 为检查点 ID。
+    /// 普通轮次为用户消息 ID；compact 为检查点 ID；模型切换为 switch ID；
+    /// recap 为挂接的 assistant 消息 ID。
     pub user_message_id: String,
     pub expected_revision: u64,
     pub pane: PaneId,
@@ -142,6 +153,15 @@ impl SnapshotState {
     }
 }
 
+/// 撤销面板的范围类型（UI 据此选择说明文案）。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum RewindScope {
+    Turn,
+    Compact,
+    ModelSwitch,
+    Recap,
+}
+
 /// 撤销动作面板状态。
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct RewindPanel {
@@ -167,6 +187,37 @@ impl RewindPanel {
             window: PanelWindow::new(0),
             snapshot: SnapshotState::KnownEmpty,
             actions: vec![RewindAction::RestoreCompact, RewindAction::Cancel],
+        }
+    }
+
+    /// 模型切换条目的面板：只有「撤销模型切换」与「取消」。
+    pub fn for_model_switch() -> Self {
+        Self {
+            window: PanelWindow::new(0),
+            snapshot: SnapshotState::KnownEmpty,
+            actions: vec![RewindAction::RestoreModel, RewindAction::Cancel],
+        }
+    }
+
+    /// recap 条目的面板：只有「删除回顾」与「取消」。
+    pub fn for_recap() -> Self {
+        Self {
+            window: PanelWindow::new(0),
+            snapshot: SnapshotState::KnownEmpty,
+            actions: vec![RewindAction::DeleteRecap, RewindAction::Cancel],
+        }
+    }
+
+    /// 面板范围类型；文案映射在 UI 层完成，状态层不依赖 `ui`。
+    pub fn scope(&self) -> RewindScope {
+        if self.actions.contains(&RewindAction::RestoreCompact) {
+            RewindScope::Compact
+        } else if self.actions.contains(&RewindAction::RestoreModel) {
+            RewindScope::ModelSwitch
+        } else if self.actions.contains(&RewindAction::DeleteRecap) {
+            RewindScope::Recap
+        } else {
+            RewindScope::Turn
         }
     }
 

@@ -83,7 +83,7 @@ fn needs_single_line(raw: &str) -> bool {
 pub fn stream_stats_label(elapsed_ms: Option<i64>, output: Option<u64>) -> Option<String> {
     let mut parts: Vec<String> = Vec::new();
     if let Some(elapsed) = elapsed_ms.filter(|value| *value > 0) {
-        parts.push(format_duration_seconds(elapsed));
+        parts.push(super::format_duration_seconds(elapsed));
     }
     if let Some(output) = output {
         parts.push(format!(
@@ -92,18 +92,6 @@ pub fn stream_stats_label(elapsed_ms: Option<i64>, output: Option<u64>) -> Optio
         ));
     }
     (!parts.is_empty()).then(|| format!("({})", parts.join(" · ")))
-}
-
-/// loading 行的耗时格式：**最小单位是秒**（`0s` / `2s` / `1m 12s`）。
-///
-/// 与统计行的 [`crate::ui::text::format_duration`] 分开：那个要精确到毫秒（本轮统计
-/// 用），这里只回答「这轮跑了多久」，毫秒级的抖动没有信息量。
-fn format_duration_seconds(ms: i64) -> String {
-    let seconds = (ms.max(0) + 500) / 1_000;
-    if seconds < 60 {
-        return format!("{seconds}s");
-    }
-    format!("{}m {}s", seconds / 60, seconds % 60)
 }
 
 /// 未知命令提示前缀（后面直接跟命令名，整体保持一行短语）。

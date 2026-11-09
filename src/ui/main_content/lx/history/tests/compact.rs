@@ -289,7 +289,7 @@ fn running_compact_displays_breathing_glyph_and_elapsed() {
         .join("\n");
     assert!(text.contains("Compacting context..."), "{text}");
     assert!(text.contains('◆'), "相位 0 必须为实心菱形：{text}");
-    assert!(text.contains("3.2s"), "耗时格式化为秒：{text}");
+    assert!(text.contains("3s"), "耗时最小单位为秒：{text}");
 
     // 相位 4（呼吸到空心菱形）
     lx.chat.loading_frame = crate::ui::text::agent::STEP_BREATH_TICKS;

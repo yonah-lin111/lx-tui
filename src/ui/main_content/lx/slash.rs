@@ -183,6 +183,8 @@ fn action_label(action: crate::app::state::RewindAction) -> &'static str {
         RewindAction::RevertOnly => text::LX_REWIND_ACTION_REVERT_ONLY,
         RewindAction::Cancel => text::LX_REWIND_ACTION_CANCEL,
         RewindAction::RestoreCompact => text::LX_COMPACT_ACTION_RESTORE,
+        RewindAction::RestoreModel => text::LX_REWIND_ACTION_RESTORE_MODEL,
+        RewindAction::DeleteRecap => text::LX_REWIND_ACTION_DELETE_RECAP,
     }
 }
 
@@ -277,7 +279,12 @@ fn view<'a>(
     };
     // 撤销面板顶边右侧固定说明恢复范围。
     let right_title = match panel {
-        SlashPanel::Rewind(_) => Some(text::LX_REWIND_SCOPE),
+        SlashPanel::Rewind(panel) => Some(match panel.scope() {
+            crate::app::state::RewindScope::Turn => text::LX_REWIND_SCOPE,
+            crate::app::state::RewindScope::Compact => text::LX_COMPACT_SCOPE,
+            crate::app::state::RewindScope::ModelSwitch => text::LX_MODEL_SWITCH_SCOPE,
+            crate::app::state::RewindScope::Recap => text::LX_RECAP_SCOPE,
+        }),
         _ => None,
     };
     let above = input.y.saturating_sub(area.y);

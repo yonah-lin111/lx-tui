@@ -337,6 +337,10 @@ pub enum Effect {
     ExecuteCompact(CompactRequest),
     /// 撤销一次 compact 检查点（只切状态与指针，不触碰文件）。
     RevertCompact(CompactRevertRequest),
+    /// 撤销一次模型切换（会话模型回滚 + 删除时间线条目）。
+    RevertModelSwitch(ModelSwitchRevertRequest),
+    /// 删除一条消息 recap（只删回顾，不动消息与文件）。
+    DeleteRecap(RecapDeleteRequest),
     /// 后台生成新对话标题（首轮提交后并行触发，不阻塞主对话流）。
     GenerateSessionTitle {
         workspace: PathBuf,
@@ -472,6 +476,29 @@ pub struct CompactRevertRequest {
     pub session_id: String,
     pub checkpoint_id: String,
     /// 发起时冻结的会话 revision。
+    pub expected_revision: u64,
+    pub operation_id: String,
+}
+
+/// 一次模型切换撤销请求。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ModelSwitchRevertRequest {
+    pub pane: crate::layout::PaneId,
+    pub workspace: PathBuf,
+    pub session_id: String,
+    pub switch_id: String,
+    pub expected_revision: u64,
+    pub operation_id: String,
+}
+
+/// 一次 recap 删除请求。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RecapDeleteRequest {
+    pub pane: crate::layout::PaneId,
+    pub workspace: PathBuf,
+    pub session_id: String,
+    /// 被删 recap 挂接的 assistant 消息 id（表内唯一）。
+    pub message_id: String,
     pub expected_revision: u64,
     pub operation_id: String,
 }

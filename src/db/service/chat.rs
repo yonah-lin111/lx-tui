@@ -205,12 +205,14 @@ impl Persistence {
         let notices = db.load_notices(workspace, session_id)?;
         let checkpoints = db.compact_checkpoints(workspace, session_id)?;
         let switches = db.model_switches(workspace, session_id)?;
+        let recaps = db.load_recaps(workspace, session_id)?;
         let revision = db.session_revision(session_id)?;
         Ok(super::RewindView {
             messages,
             notices,
             checkpoints,
             switches,
+            recaps,
             revision,
         })
     }
@@ -368,6 +370,44 @@ impl Persistence {
     ) -> crate::db::Result<crate::db::chat::MessageRecap> {
         let db = self.db.as_ref().ok_or(crate::db::DbError::Unavailable)?;
         db.commit_recap(workspace, commit)
+    }
+
+    /// 撤销最新一次模型切换。
+    pub fn revert_model_switch(
+        &self,
+        workspace: &Path,
+        session_id: &str,
+        switch_id: &str,
+        expected_revision: i64,
+        operation_id: &str,
+    ) -> crate::db::Result<Option<crate::db::chat::ModelSnapshot>> {
+        let db = self.db.as_ref().ok_or(crate::db::DbError::Unavailable)?;
+        db.revert_model_switch(
+            workspace,
+            session_id,
+            switch_id,
+            expected_revision,
+            operation_id,
+        )
+    }
+
+    /// 删除一条消息回顾。
+    pub fn delete_recap(
+        &self,
+        workspace: &Path,
+        session_id: &str,
+        message_id: &str,
+        expected_revision: i64,
+        operation_id: &str,
+    ) -> crate::db::Result<()> {
+        let db = self.db.as_ref().ok_or(crate::db::DbError::Unavailable)?;
+        db.delete_recap(
+            workspace,
+            session_id,
+            message_id,
+            expected_revision,
+            operation_id,
+        )
     }
 
     /// 批量载入会话进程记录（重载时一次查询，不为每张卡片单独读库）。

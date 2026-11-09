@@ -1,6 +1,8 @@
-# lx Recap、消息尾部文件摘要与首页快捷键 — 设计文档
+# lx Recap 与消息尾部文件摘要 — 设计文档
 
 > 状态：**已完成（待合并）**（2026-11-09；实现与测试均通过，等待用户确认是否合并回 `dev`）
+>
+> **后续变更（2026-11-09）**：按用户要求移除首页快捷键（`Alt+1..4` / `Alt+W`）及入口 tooltip；下文 D6/D13、§3.4、§4.7 仅保留历史设计记录，不再实现。同时 `/rewind` 目标扩展到模型切换、compact 与 recap 系统事件；compact/recap 运行中耗时统一为秒级。
 > 日期：2026-11-09
 > 参考实现：
 > - `/Users/yonah/projects/agent/codex-main/codex-rs/tui/src/app/recap.rs`
@@ -24,7 +26,7 @@
    - 缓存命中率从每轮统计行移到输入框底部状态行的上下文占用右侧，并改为**整个对话累计值**；
    - 统计行下方新增“本轮文件变更”树，超过 5 个文件折叠，点击文件行就地展开该文件 diff；
    - 文件变更下方新增 recap 系统事件卡。
-4. **lx 首页快捷键**：`Alt+1..4` 切换 Native / Hybrid / Automation / Web，`Alt+W` 进入 Web 或切换 DeepSeek ↔ Gemini。
+4. ~~lx 首页快捷键~~：**后续已按用户要求移除**，不再实现。
 
 成功标准：上述行为在真实 TUI 中可见、可点击、可持久化；`/resume` 后 recap 仍在；`/rewind` 后 recap 跟随删除；`/fork` 后 recap 跟随复制；设置页保存后行为即时生效；所有新增逻辑有单元测试覆盖。
 
@@ -65,14 +67,14 @@
 | D3 | Recap 视觉形态 | 走 lx 系统事件卡：`◆ Recap`（生成中 `◇ Generating recap... · Ns`），固定元信息行 + 可折叠摘要 + `Next:` 行；摘要默认保留 2 行 + `… N more lines`，点击展开；与上方块空一行。 |
 | D4 | 文件变更列表交互 | 只统计当前 assistant 消息自己的 `edit`/`write` 结果；同路径合并、`+/-` 求和；文件数 >5 默认显示前 5 + `… N more files`，点击展开全部；点击文件行就地展开该文件 diff，再点收起；不跳转工具卡。 |
 | D5 | Recap 设置 | Settings `Model` 页新增 `Recap` fieldset：`Enable automatic recap`（默认开启）+ `Recap model`（可留空）。配置键 `recapEnabled: bool`、`recapSummary: Option<ModelSelection>`；模型回退 `recapSummary → 当前会话模型 → defaultModel`；三者都不可用时自动静默跳过、手动 Warning toast。 |
-| D6 | 首页快捷键 | `Alt+1/2/3/4` 对应 Native/Hybrid/Automation/Web；`Alt+W` 当前不在 Web 时进入 Web（保持上次站点），已在 Web 时切换 DeepSeek ↔ Gemini；仅焦点在窗格且当前窗格是 lx 时生效；切换语义复用鼠标入口逻辑；同入口重复按键 no-op。 |
+| D6 | ~~首页快捷键~~ | **已移除**（用户后续取消）；不再注册 `Alt+1..4` / `Alt+W`，也不再新增入口 tooltip。 |
 | D7 | 自动 recap 作用域 | 只给失焦时刻当前聚焦的 lx 窗格所属会话生成；其他 lx 窗格不自动生成；手动 `/recap` 作用于当前聚焦窗格。 |
 | D8 | Recap 输入/输出 | 最近 8 组用户/助手交换；只取用户正文与助手最终正文；不读思考、工具、工具输出、子 agent 报告；8 KiB 上限；输出严格 JSON `{summary, next_action|null}`；summary 40–60 词、最多 80 词（硬上限 700 字符），next_action 最多 200 字符；提示词英文，摘要语言跟随用户最新消息；自动失败 30 秒后重试一次，手动直接 toast。 |
 | D9 | 统计行与缓存 | 统计行字段 `模型 · in · out · tok/s · 时长`，强制单行；宽度不足依次隐藏 `in+out` → 模型名 → tok/s → 时长尾部 `…`；缓存命中率移到状态行上下文右侧，取整个对话累计 `Σ cache_read / Σ input`，无数据隐藏；状态行降级优先丢 cached，再按现有优先级丢上下文/variant。 |
 | D10 | 文件变更统计范围 | 只统计当前消息 `steps` 里的 `edit`/`write` 工具结果；按真实 `FileChangeKind` 分类；失败但已提交部分改动的调用仍统计；无结果 JSON 的中断调用不统计；子 agent 报告与用户 shell 造成的改动不计入。 |
 | D11 | Recap 与 compact | 输入带上当前生效的 compact 摘要作为 `Earlier context (compacted)`，再拼最近 8 组对话；8 KiB 超限时先裁旧交换，最后才裁 compact 摘要。 |
 | D12 | 手动 `/recap` 行为 | 只在本机会话（Native/Hybrid/Automation）可用，AI Web 不显示；无历史/已有在途/主轮忙分别 toast；生成中插入 `◇ Generating recap...`，成功替换 `◆ Recap`，失败移除占位卡并 toast；用户发送新消息或 `/rewind` 时取消在途请求并移除占位卡；自动失败只 `tracing::warn`。 |
-| D13 | 快捷键提示 | 不常显；鼠标悬停入口时用 tooltip 显示 `Alt+1..4` / `Alt+W`；不改变入口标签宽度与布局。 |
+| D13 | ~~快捷键提示~~ | **已移除**（随首页快捷键一起取消）。 |
 
 ---
 

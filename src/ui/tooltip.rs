@@ -6,7 +6,7 @@ use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, Paragraph};
 
 use crate::app::overlay::Overlay;
-use crate::app::state::{AppState, PaneKind, PaneView, RightTab};
+use crate::app::state::{AppState, PaneKind, RightTab};
 use crate::app::tooltip::{BlockButtonKind, TemplateButtonKind, TooltipTarget};
 use crate::layout::{self, PaneId};
 use crate::ui::layout::ViewLayout;
@@ -112,22 +112,7 @@ fn targets(
             targets.push((TooltipTarget::PaneToggle(*pane), area));
         }
     }
-    // lx 首页入口与 AI Web 站点：悬停显示对应快捷键。
-    for (pane, rect) in pane_rects {
-        let Some(target) = state.pane_anywhere(*pane) else {
-            continue;
-        };
-        if target.view != PaneView::Lx || !target.lx.home_visible() {
-            continue;
-        }
-        let inner = layout::pane_inner_rect(*rect);
-        for (entry, area) in main_content::lx::entry_rects(inner, &target.lx) {
-            targets.push((TooltipTarget::LxEntry(entry), area));
-        }
-        for (site, area) in main_content::lx::ai_web_site_rects(inner, &target.lx) {
-            targets.push((TooltipTarget::LxAiWebSite(site), area));
-        }
-    }
+
     if let Some(area) = sidebar::workspace_mode_button(view) {
         targets.push((TooltipTarget::WorkspaceMode, area));
     }

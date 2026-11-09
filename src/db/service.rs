@@ -27,6 +27,7 @@ pub struct RewindView {
     pub notices: Vec<crate::db::chat::NoticeRecord>,
     pub checkpoints: Vec<crate::db::chat::CompactCheckpoint>,
     pub switches: Vec<crate::db::chat::ModelSwitchRecord>,
+    pub recaps: Vec<crate::db::chat::MessageRecap>,
     pub revision: i64,
 }
 
@@ -669,6 +670,8 @@ impl Persistence {
             | Effect::ExecuteRewind(_)
             | Effect::ExecuteCompact(_)
             | Effect::RevertCompact(_)
+            | Effect::RevertModelSwitch(_)
+            | Effect::DeleteRecap(_)
             | Effect::GenerateSessionTitle { .. }
             | Effect::GenerateRecap { .. }
             | Effect::GeneratePromptBlockTitle { .. } => {

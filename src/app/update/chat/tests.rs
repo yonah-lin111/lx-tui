@@ -14,6 +14,7 @@ mod session;
 mod slash_panels;
 mod stop;
 mod subagent;
+mod system_rewind;
 mod task_page;
 mod timeline;
 mod user_shell;

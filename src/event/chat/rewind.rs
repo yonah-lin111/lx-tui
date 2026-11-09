@@ -53,7 +53,10 @@ pub fn apply_rewind_effects(
         .filter(|effect| {
             matches!(
                 effect,
-                Effect::PrepareRewind { .. } | Effect::ExecuteRewind(_)
+                Effect::PrepareRewind { .. }
+                    | Effect::ExecuteRewind(_)
+                    | Effect::RevertModelSwitch(_)
+                    | Effect::DeleteRecap(_)
             )
         })
         .cloned()
@@ -64,7 +67,10 @@ pub fn apply_rewind_effects(
     state.effects.retain(|effect| {
         !matches!(
             effect,
-            Effect::PrepareRewind { .. } | Effect::ExecuteRewind(_)
+            Effect::PrepareRewind { .. }
+                | Effect::ExecuteRewind(_)
+                | Effect::RevertModelSwitch(_)
+                | Effect::DeleteRecap(_)
         )
     });
     for effect in effects {
@@ -75,10 +81,151 @@ pub fn apply_rewind_effects(
                 user_message_id,
             } => prepare(state, pane, &session_id, &user_message_id, persistence),
             Effect::ExecuteRewind(request) => execute(sender, persistence, request),
+            Effect::RevertModelSwitch(request) => revert_model_switch(state, persistence, request),
+            Effect::DeleteRecap(request) => delete_recap(state, persistence, request),
             _ => {}
         }
     }
     true
+}
+
+/// 模型切换撤销：同步 DB 事务后重载切换列表并把会话选择回滚到切换前。
+fn revert_model_switch(
+    state: &mut AppState,
+    persistence: &Persistence,
+    request: crate::app::effects::ModelSwitchRevertRequest,
+) {
+    let expected_revision = i64::try_from(request.expected_revision).unwrap_or(-1);
+    let result = persistence.revert_model_switch(
+        &request.workspace,
+        &request.session_id,
+        &request.switch_id,
+        expected_revision,
+        &request.operation_id,
+    );
+    match result {
+        Ok(previous) => {
+            let models = state.models.clone();
+            let loaded = persistence.load_rewind_view(&request.workspace, &request.session_id);
+            let selection = previous.map(|snapshot| {
+                models.normalize_selection(crate::config::ai::ModelSelection {
+                    provider: snapshot.provider,
+                    model: snapshot.model,
+                    variant: snapshot.variant,
+                })
+            });
+            // 同一会话可能被多个 pane 绑定：模型与切换列表必须一起回滚。
+            for pane in state.all_pane_ids() {
+                if !state.pane_anywhere(pane).is_some_and(|target| {
+                    target.lx.chat.session_id.as_deref() == Some(request.session_id.as_str())
+                }) {
+                    continue;
+                }
+                match &loaded {
+                    Ok(view) => {
+                        crate::app::update::set_model_switches(state, pane, &view.switches);
+                        if let Some(target) = state.pane_mut_anywhere(pane) {
+                            target.lx.chat.revision = u64::try_from(view.revision).unwrap_or(0);
+                        }
+                    }
+                    Err(error) => {
+                        tracing::warn!(%error, "model switch reverted but reload failed");
+                        if let Some(target) = state.pane_mut_anywhere(pane) {
+                            target
+                                .lx
+                                .model_switch
+                                .switches
+                                .retain(|switch| switch.id != request.switch_id);
+                        }
+                    }
+                }
+                if let Some(target) = state.pane_mut_anywhere(pane) {
+                    target.lx.chat.selection = selection.clone();
+                    target.lx.clear_rewind();
+                    if matches!(
+                        target.lx.slash,
+                        Some(crate::app::state::SlashPanel::Rewind(_))
+                    ) {
+                        target.lx.slash = None;
+                    }
+                    target.lx.chat.follow_bottom = true;
+                }
+                crate::app::update::refresh_lx_status(state, pane);
+            }
+            crate::app::update::show_lx_hint(
+                state,
+                request.pane,
+                crate::app::state::InputHintLevel::Warning,
+                crate::ui::text::LX_MODEL_SWITCH_REWOUND,
+            );
+        }
+        Err(error) => {
+            crate::app::update::on_rewind_failed(state, request.pane, error.code());
+        }
+    }
+}
+
+/// recap 删除：同步 DB 事务后重载回顾列表。
+fn delete_recap(
+    state: &mut AppState,
+    persistence: &Persistence,
+    request: crate::app::effects::RecapDeleteRequest,
+) {
+    let expected_revision = i64::try_from(request.expected_revision).unwrap_or(-1);
+    let result = persistence.delete_recap(
+        &request.workspace,
+        &request.session_id,
+        &request.message_id,
+        expected_revision,
+        &request.operation_id,
+    );
+    match result {
+        Ok(()) => {
+            let loaded = persistence.load_rewind_view(&request.workspace, &request.session_id);
+            // 同一会话可能被多个 pane 绑定：recap 列表必须一起刷新。
+            for pane in state.all_pane_ids() {
+                if !state.pane_anywhere(pane).is_some_and(|target| {
+                    target.lx.chat.session_id.as_deref() == Some(request.session_id.as_str())
+                }) {
+                    continue;
+                }
+                match &loaded {
+                    Ok(view) => {
+                        crate::app::update::set_message_recaps(state, pane, &view.recaps);
+                        if let Some(target) = state.pane_mut_anywhere(pane) {
+                            target.lx.chat.revision = u64::try_from(view.revision).unwrap_or(0);
+                        }
+                    }
+                    Err(error) => {
+                        tracing::warn!(%error, "recap deleted but reload failed");
+                        if let Some(target) = state.pane_mut_anywhere(pane) {
+                            target.lx.recap.entries.remove(&request.message_id);
+                        }
+                    }
+                }
+                if let Some(target) = state.pane_mut_anywhere(pane) {
+                    target.lx.clear_rewind();
+                    if matches!(
+                        target.lx.slash,
+                        Some(crate::app::state::SlashPanel::Rewind(_))
+                    ) {
+                        target.lx.slash = None;
+                    }
+                    target.lx.chat.follow_bottom = true;
+                }
+                crate::app::update::refresh_lx_status(state, pane);
+            }
+            crate::app::update::show_lx_hint(
+                state,
+                request.pane,
+                crate::app::state::InputHintLevel::Warning,
+                crate::ui::text::LX_RECAP_REWOUND,
+            );
+        }
+        Err(error) => {
+            crate::app::update::on_rewind_failed(state, request.pane, error.code());
+        }
+    }
 }
 
 /// 同步预检：只读 DB，更新面板可用性；失败按 unavailable 处理。
@@ -257,6 +404,7 @@ pub fn handle_rewind_finished(
                                 &view.checkpoints,
                             );
                             crate::app::update::set_model_switches(state, other, &view.switches);
+                            crate::app::update::set_message_recaps(state, other, &view.recaps);
                             if let Some(selection) = &restored_selection
                                 && let Some(target) = state.pane_mut_anywhere(other)
                             {

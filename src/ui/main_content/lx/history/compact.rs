@@ -56,7 +56,7 @@ fn running_header_segments(
         style::chat_step_mark_alive(),
     )];
     if let Some(elapsed) = compact.elapsed_ms.filter(|&ms| ms > 0) {
-        let dur = text::agent::duration_label(elapsed as u64);
+        let dur = text::format_duration_seconds(elapsed);
         segments.push(Segment::new(format!(" · {dur}"), style::muted()));
     }
     segments

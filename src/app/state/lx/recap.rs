@@ -137,13 +137,18 @@ impl LxRecap {
             return false;
         };
         let elapsed = u64::try_from(pending.started_at.elapsed().as_millis()).unwrap_or(u64::MAX);
-        let before = pending.elapsed_ms / 1000;
+        let before = elapsed_seconds(pending.elapsed_ms);
         pending.elapsed_ms = elapsed;
-        before != elapsed / 1000
+        before != elapsed_seconds(elapsed)
     }
 
     /// 丢弃在途请求（聚焦恢复/新消息/切会话）。
     pub fn cancel_pending(&mut self) -> bool {
         self.pending.take().is_some()
     }
+}
+
+/// 秒级耗时取整：与 UI 的 `format_duration_seconds` 同一口径。
+fn elapsed_seconds(ms: u64) -> u64 {
+    ms.saturating_add(500) / 1_000
 }

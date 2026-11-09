@@ -35,10 +35,6 @@ pub enum TooltipTarget {
     CollapseAgents,
     /// 窗格顶边框的视图切换按钮。
     PaneToggle(PaneId),
-    /// lx 首页入口标签（悬停显示 Alt+1..4）。
-    LxEntry(crate::app::state::LxEntry),
-    /// lx 首页 AI Web 站点标签（悬停显示 Alt+W）。
-    LxAiWebSite(crate::app::state::AiWebSite),
     WorkspaceMode,
     AddWorkspace,
     AddTab,

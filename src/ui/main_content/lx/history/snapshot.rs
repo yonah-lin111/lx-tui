@@ -986,7 +986,10 @@ impl Builder<'_> {
                 message_index,
                 step_index: super::cache::RECAP_RUNNING_SLOT_BLOCK,
                 width: self.width,
-                sig: pending.elapsed_ms / 1000,
+                sig: u64::try_from(crate::ui::text::elapsed_seconds(
+                    i64::try_from(pending.elapsed_ms).unwrap_or(i64::MAX),
+                ))
+                .unwrap_or(0),
             };
             let line = recap::running_line(pending);
             let block = self.block(key, BlockSource::Plain, start, || BlockPaint::Static {

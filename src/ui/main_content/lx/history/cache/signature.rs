@@ -172,7 +172,9 @@ fn list_signature(source: HistorySource<'_>, width: u16, skip_streaming_tail: bo
             .filter(|pending| pending.message_id == message.id)
         {
             hash.write_str(&pending.message_id);
-            hash.write_i64(pending.elapsed_ms as i64 / 1000);
+            hash.write_i64(crate::ui::text::elapsed_seconds(
+                i64::try_from(pending.elapsed_ms).unwrap_or(i64::MAX),
+            ));
         }
     }
     for notice in source.notices {
@@ -202,7 +204,9 @@ fn list_signature(source: HistorySource<'_>, width: u16, skip_streaming_tail: bo
     }
     if let Some(running_id) = &source.compact.running {
         hash.write_str(running_id);
-        hash.write_i64(source.compact.elapsed_ms.unwrap_or(0) / 1000);
+        hash.write_i64(crate::ui::text::elapsed_seconds(
+            source.compact.elapsed_ms.unwrap_or(0),
+        ));
     }
     for sw in source.switches {
         hash.write_str(&sw.id);

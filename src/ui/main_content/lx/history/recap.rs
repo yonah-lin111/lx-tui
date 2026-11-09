@@ -42,8 +42,8 @@ pub(super) fn running_line(pending: &RecapPending) -> String {
     // 强制空心相：占位行不是「已完成」，不能画实心菱形。
     let mark = StepMark::Running.segment(StepKind::System, text::agent::STEP_BREATH_TICKS, true);
     format!(
-        "{mark}{} · {}s",
+        "{mark}{} · {}",
         text::LX_RECAP_RUNNING,
-        pending.elapsed_ms / 1000
+        text::format_duration_seconds(i64::try_from(pending.elapsed_ms).unwrap_or(i64::MAX))
     )
 }

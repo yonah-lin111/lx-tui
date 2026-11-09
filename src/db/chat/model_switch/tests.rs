@@ -135,6 +135,66 @@ fn record_model_switch_allocates_shared_sequence_and_skips_unchanged() {
 }
 
 #[test]
+fn revert_model_switch_restores_previous_model_and_deletes_latest() {
+    let (db, workspace) = open_test_db("revert-switch");
+    let model_a = ModelSnapshot {
+        provider: "anthropic".into(),
+        model: "claude-sonnet-4".into(),
+        variant: Some("high".into()),
+    };
+    let model_b = ModelSnapshot {
+        provider: "9router".into(),
+        model: "deepseek-v4.1-flash".into(),
+        variant: Some("max".into()),
+    };
+    let turn = db
+        .begin_turn(&workspace, None, "hello", &model_a)
+        .expect("turn");
+    let switch = db
+        .record_model_switch(
+            &workspace,
+            &ModelSwitchCommit {
+                session_id: turn.session_id.clone(),
+                model: model_b.clone(),
+                from_label: Some("Claude".into()),
+                to_label: "DeepSeek".into(),
+                updated_sources: vec!["core/model".into()],
+                injected_prompt: "prompt b".into(),
+                cwd: None,
+                to_identity: identity(&model_b, "DeepSeek"),
+            },
+        )
+        .expect("switch")
+        .expect("created");
+    let revision = db.session_revision(&turn.session_id).expect("revision");
+    let previous = db
+        .revert_model_switch(
+            &workspace,
+            &turn.session_id,
+            &switch.id,
+            revision,
+            "op-revert-model",
+        )
+        .expect("revert");
+    assert_eq!(previous, Some(model_a.clone()));
+    assert!(
+        db.model_switches(&workspace, &turn.session_id)
+            .expect("switches")
+            .is_empty(),
+        "撤销后时间线条目必须删除"
+    );
+    assert_eq!(
+        db.chat_session_model(&workspace, &turn.session_id)
+            .expect("session model"),
+        Some(model_a)
+    );
+    assert_eq!(
+        db.session_revision(&turn.session_id).expect("revision"),
+        revision + 1
+    );
+}
+
+#[test]
 fn rewind_deletes_model_switches_at_or_after_rewound_turn() {
     let (db, workspace) = open_test_db("rewind");
     let model_a = ModelSnapshot {

@@ -38,9 +38,9 @@ pub use lx::{
     McpServerState, ModelCandidate, ModelPicker, ModelPickerStage, ModelSwitchNoticeView,
     ModelsSnapshot, PanelWindow, PendingShell, PlanSnapshotView, PlanStepView, ProcessEntry,
     ProcessInteractionView, ProcessStateView, QueuedSubmission, RequestKey, RequestState,
-    RewindAction, RewindExecution, RewindNoticeView, RewindPanel, RewindTarget, RewindTargetKind,
-    SHELL_SLOT, SearchDetailView, SearchMatchView, SlashCommand, SlashEntry, SlashPanel,
-    SnapshotState, StartupCount, StartupCounts, SubagentDetailView, SubagentReportView,
+    RewindAction, RewindExecution, RewindNoticeView, RewindPanel, RewindScope, RewindTarget,
+    RewindTargetKind, SHELL_SLOT, SearchDetailView, SearchMatchView, SlashCommand, SlashEntry,
+    SlashPanel, SnapshotState, StartupCount, StartupCounts, SubagentDetailView, SubagentReportView,
     SubagentRun, TaskPage, TaskTab, ToolCallView, ToolDetailView, ToolStatus, ToolSummary,
     UserShellView, WebSearchDetailView, ai_web_remote_session, is_ai_web_session,
 };

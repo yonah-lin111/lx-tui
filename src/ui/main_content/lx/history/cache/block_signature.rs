@@ -142,7 +142,9 @@ pub(crate) fn compact_block_signature(
 pub(crate) fn running_compact_block_signature(compact: &crate::app::state::LxCompact) -> u64 {
     let mut hash = Fnv::new();
     hash.write_str(compact.running.as_deref().unwrap_or(""));
-    hash.write_i64(compact.elapsed_ms.unwrap_or(0) / 1000);
+    hash.write_i64(crate::ui::text::elapsed_seconds(
+        compact.elapsed_ms.unwrap_or(0),
+    ));
     hash.finish()
 }
 
