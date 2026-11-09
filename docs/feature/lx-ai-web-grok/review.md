@@ -2,7 +2,8 @@
 
 - **特性目录**：`docs/feature/lx-ai-web-grok/`
 - **Review 基线**：`feat/lx-ai-web-grok` @ `84745ee1`（相对 `dev` `d6e8bada`）
-- **修复提交**：`faff8426`（code）、`aa039534`（review/docs）
+- **修复提交**：`faff8426`（code）、`aa039534` / `a7cbf620`（review/docs）
+- **合并状态**：已合并至 `dev`，临时 worktree `.worktrees/lx-ai-web-grok` 与分支 `feat/lx-ai-web-grok` 已移除
 - **Review 范围**：Grok 站点枚举/状态机、`/model`、`/rewind`、CLI、首页品牌渐变、Grok 浏览器驱动、历史引用清洗、DeepSeek 引用残渣修复、跨站点回归、测试与三份特性文档
 - **验证方式**：三路只读代码审查（Rust / Grok JS / 跨站点与文档）+ `cargo test`/`clippy`/`fmt` + 六个 JS 文件 `node --check` + ego-browser DOM 抽查
 - **结论**：未发现 P0；发现 **5 个 P1、7 个 P2、14 个 P3**。P1/P2 全部修复；P3 修复文档、布局、渐变、CLI 与清洗类问题，结构性遗留单列。

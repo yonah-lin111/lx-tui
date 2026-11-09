@@ -6,6 +6,7 @@
   - 会话页：`https://chat.deepseek.com/a/chat/s/<session_id>`
 - **驱动运行时**：`ego-browser nodejs`（隔离任务空间 `SPACE = 'lx-tui-ai-web-deepseek'`）
 - **Gemini 驱动**：见 [`docs/feature/lx-ai-web-gemini/design.md`](../feature/lx-ai-web-gemini/design.md)
+- **Grok 驱动**：见 [`docs/feature/lx-ai-web-grok/design.md`](../feature/lx-ai-web-grok/design.md)
 
 本文档完整记录 `lx-tui` 第 4 入口 `Web`（`LxEntry::AiWeb`）对接 DeepSeek 网页端的端到端流程、脚本通信协议、DOM 选择器、React 事件触发方式、SSE JSON Patch 流解析规则、CDP 附件上传与云端 REST API 契约。当 DeepSeek 网页端后续改版导致选择器或接口漂移，或需要将同一套 `Web` 架构复刻到其它网页端 AI 站点时，以此文档为基准排查与修改。
 
@@ -24,6 +25,10 @@ src/
                             非对话动作（new / stop / list_sessions / load_session / rename_session / delete_session）
       deepseek_script.js    嵌入式主脚本：空间初始化、登录态检测、DeepThink 开关激活、
                             XHR/fetch SSE 拦截器 + DOM 兜底轮询、原地编辑（/rewind）与普通发送提交
+      gemini_helpers.js     Gemini 网页端辅助脚本：模型/思考档位切换、附件同步、会话动作
+      gemini_script.js      Gemini 网页端主脚本：DOM 流采集、普通发送与 /rewind 原地编辑
+      grok_helpers.js       Grok 网页端辅助脚本：登录判定、Fast/Build 切换、附件同步、REST 历史与引用链接映射
+      grok_script.js        Grok 网页端主脚本：DOM 流采集、引用标签剥离、普通发送与 /rewind 重试追加
     prepare/
       web.rs                发送前预处理（prepare_ai_web_message）：提取本地文件/图片绝对路径（files）
                             与 /rewind 保留的云端附件名（keep_files），拦截目录/Skill/MCP 引用
@@ -138,7 +143,7 @@ DeepSeek Web 基于 React 构建，部分组件（如开启新对话、编辑按
    - DeepSeek Web 实际通过 `XMLHttpRequest`（部分场景或版本为 `fetch`）发起流式请求，响应 `Content-Type: text/event-stream`。
    - 直接解析 SSE 原始 JSON Patch 能实时获取**未丢失格式的 Markdown 源码**（代码块围栏、表格、列表缩进）与精确的 `THINK` / `RESPONSE` 片段边界。
 2. **Channel B（DOM 轮询，兜底通道）**：
-   - 若页面脚本注入前连接已建立或响应流不可克隆，Channel B 每 60ms 扫描新增的 `[data-virtual-list-item-key]` 节点并提取 `.ds-think-content` 与 `.ds-markdown` 的文本增量；一旦连续 6 个 tick（约 360ms）文本不变且发送按钮回到 `.ds-button--disabled`、无 `.ds-icon-stop` 时判定完成。
+   - 若页面脚本注入前连接已建立或响应流不可克隆，Channel B 每 60ms 扫描新增的 `[data-virtual-list-item-key]` 节点并提取 `.ds-think-content` 与 `.ds-markdown` 的文本增量（读取前经 `readMarkdownText` 以 `try/finally` 临时隐藏 `.ds-markdown-cite` 并调用 `cleanText(text, false)`，避免引用角标产生 `-\n<N>` 残渣）；一旦连续 6 个 tick（约 360ms）文本不变且发送按钮回到 `.ds-button--disabled`、无 `.ds-icon-stop` 时判定完成。
    - **互斥规则**：只要 Channel A 收到任何一行 SSE `data:`（`stream.sseActive = true`），Channel B 立即静默退出，绝不双写。
 
 ### 5.2 拦截的流式 API 路径（`isStreamUrl`）

@@ -6,7 +6,7 @@
   - [`docs/standards/web-deepseek.md`](../../standards/web-deepseek.md)
   - [`docs/feature/lx-ai-web/design.md`](../lx-ai-web/design.md)
   - [`docs/feature/lx-ai-web-gemini/design.md`](../lx-ai-web-gemini/design.md)
-- **当前状态**：已实现并完成端到端验证（见 [`verification.md`](verification.md)）；`/rewind` 语义已根据 Grok 实测行为调整为“重试追加”
+- **当前状态**：已完成实现、CLI 端到端验证与 Review 修复（见 [`review.md`](review.md)、[`verification.md`](verification.md)），已合并至 `dev` 并移除临时 worktree 与分支；`/rewind` 语义已根据 Grok 实测行为调整为“重试追加”
 - **目标**：在 `LxEntry::AiWeb` 下新增第三个站点 `Grok`，保留与 DeepSeek / Gemini 对齐的基础 `/` 命令，并用 `lx-tui web` 做端到端验证。
 
 ---
@@ -16,7 +16,7 @@
 | 维度 | 实测结果（2026-11-08） | 对本设计的影响 |
 | --- | --- | --- |
 | **站点枚举** | `src/app/state/lx/web.rs`：`AiWebSite` 仅 `Deepseek` / `Gemini`，`ALL: [AiWebSite; 2]`；`AiWebConfig` 只含 Gemini 与 DeepSeek 配置。 | 扩展为 `Deepseek` / `Gemini` / `Grok`，`ALL: [AiWebSite; 3]`，新增 `GrokWebModel` 与 `grok_model`。 |
-| **首页站点行** | `src/ui/main_content/lx/brand.rs:214-300`：`place_ai_web_sites` 按 `AiWebSite::ALL` 动态计算宽度与命中矩形；`draw_ai_web_sites` 按品牌渐变逐字绘制，选中加粗并画下划线。 | 不需要改布局算法；只需新增 Grok 标签与渐变，排序追加到末尾。 |
+| **首页站点行** | `src/ui/main_content/lx/brand.rs:214-300`：`place_ai_web_sites` 按 `AiWebSite::ALL` 动态计算宽度与命中矩形；`draw_ai_web_sites` 按品牌渐变逐字绘制，选中加粗并画下划线。 | 新增 Grok 标签与白到浅灰渐变（`232..=255` 灰阶序号插值）；窄窗格时把站点间隔降为 1 并用 `ai_web_site_label_for_width` 截取前缀字符，保证 8/10 列下三站点均可见且可区分。 |
 | **会话前缀与路由** | `src/app/state/lx/web.rs:157-172`：`ai_web_remote_session` 依次识别 `ai-web-ds-` / `ai-web-gm-`；`src/chat/web/mod.rs:19-24`：`scripts_for_site` 二选一。 | 新增 `ai-web-grok-` 前缀与 `GROK_HELPERS_SCRIPT` / `GROK_SCRIPT`。 |
 | **脚本参数** | `src/chat/web/mod.rs:170-225`：`ScriptParams` 已含 `model` / `thinking` / `files` / `keep_files` / `session_id` / `edit_user_index`。 | Rust 协议层零改动；Grok 脚本只读 `MODEL`，忽略 `THINKING`。 |
 | **状态栏与 `/model`** | `src/app/update/chat/web.rs:26-49` 与 `src/app/update/chat/slash.rs:448-478`：按站点分支。 | 增加 `Grok` 分支：状态栏 `Grok · Fast`，无 variant，单级 `/model`。 |
