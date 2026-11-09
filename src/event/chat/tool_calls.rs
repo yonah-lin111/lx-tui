@@ -62,7 +62,9 @@ pub(crate) fn begin_tool(
         Ok(ticket) => ticket,
         Err(error) => {
             tracing::warn!(
-                target: "lx::agent",
+                target: "lx::agent::tool",
+                pane = key.pane.raw(),
+                session = %key.session,
                 call_id = %call.call_id,
                 name = %call.name,
                 code = error.code(),
@@ -74,6 +76,15 @@ pub(crate) fn begin_tool(
             return true;
         }
     };
+    tracing::debug!(
+        target: "lx::agent::tool",
+        pane = key.pane.raw(),
+        session = %key.session,
+        call_id = %call.call_id,
+        name = %call.name,
+        arguments_bytes = call.arguments_json.len(),
+        "tool call started"
+    );
     // ② 状态转 Pending（DB 已提交）；调用方随后安排下一帧，用户先看到 loading。
     update::on_tool_pending(state, &key, &call.call_id);
     let pending = PendingBegin {
@@ -258,10 +269,15 @@ pub(crate) fn finish_tool(
                 changed |= update::commit_plan(state, key.pane, snapshot);
             }
             tracing::debug!(
-                target: "lx::agent",
+                target: "lx::agent::tool",
+                pane = key.pane.raw(),
+                session = %key.session,
                 call_id = %ticket.call_id,
                 status = status_text(status),
-                duration_ms = started.elapsed().as_millis() as u64,
+                duration_ms = crate::db::now_ms().saturating_sub(ticket.started_at_ms),
+                settle_ms = started.elapsed().as_millis() as u64,
+                is_error = result.error_text.is_some(),
+                result_bytes = result.result_json.as_ref().map_or(0, String::len),
                 "tool call settled"
             );
             let _ = reply.send(Ok(()));

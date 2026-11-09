@@ -61,7 +61,10 @@ pub(crate) fn drain_settings_events(
     let mut changed = false;
     while let Ok(event) = receiver.try_recv() {
         match event {
-            SettingsEvent::ConfigChanged(updated) => *config = updated,
+            SettingsEvent::ConfigChanged(updated) => {
+                crate::logging::apply(&updated);
+                *config = updated;
+            }
             SettingsEvent::CommandsChanged => *commands_reload = true,
             SettingsEvent::ModelsChanged(settings) => {
                 // 模型配置已落盘：更新快照；在途请求继续持有旧快照到结束，

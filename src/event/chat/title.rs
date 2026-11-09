@@ -71,8 +71,9 @@ pub fn apply_title_effects(state: &mut AppState, sender: &mpsc::UnboundedSender<
                 model,
             } => {
                 let sender = sender.clone();
+                let title_session = Some(session_id.clone());
                 tokio::spawn(async move {
-                    let title = execute_title_stream(&prompt, &model).await;
+                    let title = execute_title_stream(&prompt, &model, "title", title_session).await;
                     let _ = sender.send(AppEvent::TitleGenerated(TitleGeneratedEvent::Session {
                         workspace,
                         session_id,
@@ -93,7 +94,7 @@ pub fn apply_title_effects(state: &mut AppState, sender: &mpsc::UnboundedSender<
             } => {
                 let sender = sender.clone();
                 tokio::spawn(async move {
-                    let title = execute_title_stream(&prompt, &model).await;
+                    let title = execute_title_stream(&prompt, &model, "title_block", None).await;
                     let _ =
                         sender.send(AppEvent::TitleGenerated(TitleGeneratedEvent::PromptBlock {
                             request_id,
@@ -209,7 +210,12 @@ pub fn handle_prompt_block_title_generated(
     )
 }
 
-async fn execute_title_stream(prompt: &str, model: &FrozenModel) -> Option<String> {
+async fn execute_title_stream(
+    prompt: &str,
+    model: &FrozenModel,
+    kind: &'static str,
+    session_id: Option<String>,
+) -> Option<String> {
     let snapshot = ModelSnapshot {
         provider: model.provider.clone(),
         model: model.model.clone(),
@@ -217,12 +223,18 @@ async fn execute_title_stream(prompt: &str, model: &FrozenModel) -> Option<Strin
     };
     let chat_request = title::build_title_request(prompt, &snapshot);
     let (_cancel_sender, cancel) = client::uncancellable();
-    let stream_fut = client::run_stream(
+    let stream_log = client::StreamLog {
+        kind,
+        session_id,
+        ..client::StreamLog::default()
+    };
+    let stream_fut = client::run_stream_with_log(
         &model.transport,
         &model.base_url,
         Some(model.api_key.as_str()),
         Duration::from_millis(model.idle_timeout_ms),
         chat_request,
+        &stream_log,
         cancel,
         |_| {},
     );

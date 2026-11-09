@@ -5,6 +5,7 @@
 //! 与 `config` 的存储函数。浏览器启动由 `src/platform/` 负责。
 
 mod handlers;
+mod logs;
 mod mcp;
 mod models;
 mod page;

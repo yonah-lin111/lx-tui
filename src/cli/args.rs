@@ -175,6 +175,8 @@ const VALUE_OPTIONS: &[&str] = &[
     "-f",
     "--file",
     "--description",
+    "--log-level",
+    "--log-payload",
     "--prompt",
     "--title",
     "--name",

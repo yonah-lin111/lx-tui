@@ -138,12 +138,19 @@ async fn run_compact(
     // `watch::Receiver::changed()` 立刻返回，请求在发出前就被当成用户取消
     // （历史 bug：`summary request failed: cancelled`）。
     let (_cancel_sender, cancel) = crate::chat::client::uncancellable();
-    let outcome = crate::chat::client::run_stream(
+    let stream_log = crate::chat::client::StreamLog {
+        kind: "compact",
+        pane: Some(request.pane.raw()),
+        session_id: Some(request.session_id.clone()),
+        ..crate::chat::client::StreamLog::default()
+    };
+    let outcome = crate::chat::client::run_stream_with_log(
         &request.transport,
         &request.base_url,
         Some(request.api_key.as_str()),
         std::time::Duration::from_millis(request.idle_timeout_ms),
         chat_request,
+        &stream_log,
         cancel,
         |_| {},
     )

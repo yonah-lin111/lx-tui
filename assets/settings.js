@@ -327,6 +327,9 @@ document.addEventListener('change', refreshActionBars);
 const CONFIG_KEYS = ['sidebar_width','sidebar_min_width','sidebar_max_width','narrow_width','min_width','min_height','min_pane_width','min_pane_height'];
 const WEB_SEARCH_KEYS = ['web_search_exa_api_key', 'web_search_tavily_api_key'];
 let generalBaseline = null;
+let currentLogPath = '';
+let logLevelSelect = null;
+const LOG_LEVELS = ['trace','debug','info','warn','error','off'];
 function generalValues() {
   const values = {};
   for (const key of CONFIG_KEYS) {
@@ -334,6 +337,9 @@ function generalValues() {
   }
   const dlEl = document.getElementById('image_download_dir');
   values.image_download_dir = dlEl ? dlEl.value : '';
+  values.log_level = logLevelSelect ? logLevelSelect.value() : 'info';
+  const payloadEl = document.getElementById('log_payload');
+  values.log_payload = payloadEl ? payloadEl.checked : false;
   for (const key of WEB_SEARCH_KEYS) {
     const el = document.getElementById(key);
     values[key] = el ? el.value : '';
@@ -353,6 +359,9 @@ function resetGeneral() {
   }
   const dlEl = document.getElementById('image_download_dir');
   if (dlEl) { dlEl.value = generalBaseline.image_download_dir || ''; }
+  if (logLevelSelect) { logLevelSelect.setValue(generalBaseline.log_level || 'info'); }
+  const payloadEl = document.getElementById('log_payload');
+  if (payloadEl) { payloadEl.checked = !!generalBaseline.log_payload; }
   for (const key of WEB_SEARCH_KEYS) {
     const el = document.getElementById(key);
     if (el) { el.value = generalBaseline[key] || ''; }
@@ -366,6 +375,8 @@ async function saveGeneral() {
   }
   const dlEl = document.getElementById('image_download_dir');
   config.image_download_dir = ((dlEl && dlEl.value) || '').trim();
+  config.log_level = logLevelSelect ? logLevelSelect.value() : 'info';
+  config.log_payload = document.getElementById('log_payload').checked;
   const web_search = {
     exa_api_key: (document.getElementById('web_search_exa_api_key').value || '').trim(),
     tavily_api_key: (document.getElementById('web_search_tavily_api_key').value || '').trim()
@@ -386,6 +397,15 @@ function applyGeneralData(data) {
   }
   const dlEl = document.getElementById('image_download_dir');
   if (dlEl) { dlEl.value = (data.config && data.config.image_download_dir) || ''; }
+  if (logLevelSelect) {
+    logLevelSelect.setValue((data.config && data.config.log_level) || 'info');
+  }
+  const payloadEl = document.getElementById('log_payload');
+  if (payloadEl) { payloadEl.checked = !!(data.config && data.config.log_payload); }
+  const logging = data.logging || {};
+  currentLogPath = logging.dir || '';
+  const pathEl = document.getElementById('log_path');
+  if (pathEl) { pathEl.textContent = logging.file || logging.dir || '-'; }
   const webSearch = data.web_search || {};
   document.getElementById('web_search_exa_api_key').value = webSearch.exa_api_key || '';
   document.getElementById('web_search_tavily_api_key').value = webSearch.tavily_api_key || '';
@@ -393,6 +413,26 @@ function applyGeneralData(data) {
   document.getElementById('general-status').textContent = 'Settings loaded';
   document.getElementById('general-status').className = 'status ok';
 }
+
+async function copyLogPath() {
+  if (!currentLogPath) { return; }
+  try {
+    await navigator.clipboard.writeText(currentLogPath);
+    showToast('Log path copied', 'ok');
+  } catch (error) {
+    showToast('Copy failed: ' + error.message, 'error');
+  }
+}
+
+async function openLogFolder() {
+  try {
+    await api('/api/logs/open', {method: 'POST', body: '{}'});
+    showToast('Log folder opened', 'ok');
+  } catch (error) {
+    showToast(error.message, 'error');
+  }
+}
+
 // 小眼睛：在 password / text 之间切换，只影响本次显示，不改动输入值。
 function bindPasswordReveal(inputId, buttonId) {
   const input = document.getElementById(inputId);
@@ -515,6 +555,16 @@ function syncCommandBaselines(commands, discardDrafts) {
     document.getElementById('editor').classList.add('hidden');
     document.getElementById('editor-empty').classList.remove('hidden');
   }
+}
+
+function initLoggingSelect() {
+  const host = document.getElementById('log-level-host');
+  if (!host) { return; }
+  logLevelSelect = createSelect(host, {
+    ariaLabel: 'Log level',
+    value: 'info',
+    options: LOG_LEVELS.map((level) => ({value: level, label: level})),
+  });
 }
 
 function initCommandSelects() {
@@ -952,5 +1002,6 @@ actionBars.commands = createActionBar('actions-commands', {
   save: saveCommand,
   reset: resetCommandEditor
 });
+initLoggingSelect();
 initCommandSelects();
 loadState();

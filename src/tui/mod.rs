@@ -158,6 +158,18 @@ impl Drop for Tui {
 fn install_panic_hook() {
     let default_hook = std::panic::take_hook();
     std::panic::set_hook(Box::new(move |panic_info| {
+        // 先落日志再恢复终端：恢复失败时 panic 原因仍可回溯。
+        tracing::error!(
+            target: "lx::panic",
+            panic = %panic_info,
+            location = panic_info.location().map(|location| format!(
+                "{}:{}:{}",
+                location.file(),
+                location.line(),
+                location.column()
+            )).as_deref(),
+            "panic; restoring terminal"
+        );
         let _ = restore_raw();
         default_hook(panic_info);
     }));

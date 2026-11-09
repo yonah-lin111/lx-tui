@@ -632,6 +632,9 @@ async fn state_returns_config_defaults() {
     assert_eq!(status(&response), 200);
     let json = body(&response);
     assert!(json.contains("\"sidebar_width\":24"), "{json}");
+    assert!(json.contains("\"log_level\":\"info\""), "{json}");
+    assert!(json.contains("\"log_payload\":false"), "{json}");
+    assert!(json.contains("\"logging\":{\"dir\":"), "{json}");
     assert!(json.contains("\"commands\":[]"), "{json}");
     service.shutdown();
 }
@@ -673,13 +676,30 @@ async fn config_save_validates_origin_and_values() {
         "invalid config not written"
     );
 
+    // 非法日志级别同样拒绝。
+    let invalid_level = request(
+        port,
+        &write(
+            "PUT",
+            &url,
+            "{\"config\":{\"log_level\":\"verbose\"}}",
+            Some("http://127.0.0.1"),
+        ),
+    )
+    .await;
+    assert_eq!(status(&invalid_level), 422);
+    assert!(
+        !dir.join("settings.json").exists(),
+        "invalid log level not written"
+    );
+
     // 合法值保存并投递事件。
     let valid = request(
         port,
         &write(
             "PUT",
             &url,
-            "{\"config\":{\"sidebar_width\":30,\"sidebar_min_width\":18,\"sidebar_max_width\":40,\"narrow_width\":80,\"min_width\":40,\"min_height\":10,\"min_pane_width\":10,\"min_pane_height\":3}}",
+            "{\"config\":{\"sidebar_width\":30,\"sidebar_min_width\":18,\"sidebar_max_width\":40,\"narrow_width\":80,\"min_width\":40,\"min_height\":10,\"min_pane_width\":10,\"min_pane_height\":3,\"log_level\":\"debug\",\"log_payload\":true}}",
             Some(&format!("http://127.0.0.1:{port}")),
         ),
     )
@@ -687,9 +707,15 @@ async fn config_save_validates_origin_and_values() {
     assert_eq!(status(&valid), 200);
     let saved = std::fs::read_to_string(dir.join("settings.json")).expect("settings written");
     assert!(saved.contains("\"sidebar_width\": 30"), "{saved}");
+    assert!(saved.contains("\"log_level\": \"debug\""), "{saved}");
+    assert!(saved.contains("\"log_payload\": true"), "{saved}");
     let event = events.try_recv().expect("config event");
     match event {
-        SettingsEvent::ConfigChanged(config) => assert_eq!(config.sidebar_width, 30),
+        SettingsEvent::ConfigChanged(config) => {
+            assert_eq!(config.sidebar_width, 30);
+            assert_eq!(config.log_level, "debug");
+            assert!(config.log_payload);
+        }
         other => panic!("unexpected event: {other:?}"),
     }
     service.shutdown();

@@ -417,12 +417,18 @@ pub fn run_compact(
         let mut text = String::new();
         let mut saw_tool_call = false;
         let (cancel_tx, cancel_rx) = tokio::sync::watch::channel(false);
-        let outcome = crate::chat::client::run_stream(
+        let stream_log = crate::chat::client::StreamLog {
+            kind: "compact",
+            session_id: Some(session_id.to_string()),
+            ..crate::chat::client::StreamLog::default()
+        };
+        let outcome = crate::chat::client::run_stream_with_log(
             &target.transport,
             &target.base_url,
             Some(target.api_key.as_str()),
             Duration::from_millis(target.idle_timeout_ms),
             request,
+            &stream_log,
             cancel_rx,
             |deltas: &[ChatDelta]| {
                 for delta in deltas {

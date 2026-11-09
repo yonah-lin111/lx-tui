@@ -35,6 +35,8 @@ lx-tui/
       settings.rs               通用设置与浏览器设置服务
       tests/                    按领域拆分的 CLI 测试（args/session/prompt/config_domains/config_regressions）
     layout.rs                   BSP 平铺模型（含折叠窄条）与几何计算，纯函数、不渲染
+    logging/                    日志：按天滚动初始化（mod.rs）、热更新与 request id、URL/header/正文脱敏（redact.rs）、
+                                payload JSONL 捕获与体积上限（payload.rs）
     app/                        应用状态与更新逻辑，纯数据、无 IO、可测试
       mod.rs
       state.rs                  唯一应用状态定义（含窗格种类与终端仿真状态）
@@ -155,7 +157,7 @@ lx-tui/
       service.rs                回环 HTTP 服务：静态设置页、JSON API 与事件投递（路由 async，禁止在运行时内再建运行时）
       service/models/           模型设置与 Quick Connect API：GET/PUT `/api/models/settings`、POST `/api/models/fetch`（mod.rs）、
                                 `/api/models/connect/*` 预设保存/断开与 OAuth 授权流（connect.rs）
-    platform/                   OS 专属实现（剪贴板、会话图片归档与 30 天 GC、鼠标捕获与指针形状、默认 shell、进程 cwd、打开浏览器、文件/目录权限、随机数填充、原子文件替换）
+    platform/                   OS 专属实现（剪贴板、会话图片归档与 30 天 GC、日志目录推导 log.rs、鼠标捕获与指针形状、默认 shell、进程 cwd、打开浏览器、文件/目录权限、随机数填充、原子文件替换）
   tests/                        集成测试
   scripts/                      开发与维护脚本，按需创建
   assets/                       浏览器前端资源（HTML/CSS/JS），经 include_str! 嵌入二进制

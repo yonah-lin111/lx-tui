@@ -10,45 +10,66 @@ use lx_tui::db::service::Persistence;
 use lx_tui::event;
 use lx_tui::git;
 use lx_tui::tui::Tui;
-use tracing_subscriber::EnvFilter;
 
 fn main() {
-    match run() {
-        Ok(EXIT_OK) => {}
-        Ok(code) => std::process::exit(code),
+    // guard 必须活到顶层错误分支之后，否则最后一条 error 日志会在 worker 关闭后丢失。
+    let (result, log_guard) = run();
+    match result {
+        Ok(EXIT_OK) => drop(log_guard),
+        Ok(code) => {
+            drop(log_guard);
+            std::process::exit(code);
+        }
         Err(error) => {
             tracing::error!(error = %error, "lx-tui exited with error");
             // 顶层错误需要让用户看到；终端已恢复，这不是调试输出。
             eprintln!("lx-tui: {error}");
+            drop(log_guard);
             std::process::exit(EXIT_ERR);
         }
     }
 }
 
 /// 入口分发：帮助/版本/无头 exec 直接返回退出码，无参数进入 TUI。
-fn run() -> Result<i32, Box<dyn std::error::Error>> {
-    init_tracing()?;
-    tracing::info!("lx-tui starting");
-
+fn run() -> (
+    Result<i32, Box<dyn std::error::Error>>,
+    Option<lx_tui::logging::LogGuard>,
+) {
     let action = match parse_cli(std::env::args_os()) {
         Ok(action) => action,
         Err(usage_error) => {
             eprintln!("lx-tui: {usage_error}");
-            return Ok(EXIT_ERR);
+            return (Ok(EXIT_ERR), None);
         }
     };
-    match action {
-        CliAction::Tui => {
-            run_tui()?;
-            Ok(EXIT_OK)
-        }
+    let (config, config_error) = match lx_tui::config::load_settings() {
+        Ok(config) => (config, None),
+        Err(error) => (Config::default(), Some(error)),
+    };
+    let log_guard = lx_tui::logging::init(&config, role_of(&action));
+    if let Some(error) = config_error {
+        tracing::warn!(target: "lx::config", %error, "settings.json load failed; using defaults");
+    }
+    tracing::info!(target: "lx::logging", "lx-tui starting");
+
+    let result = match action {
+        CliAction::Tui => run_tui(config).map(|()| EXIT_OK),
         other => run_cli(other, database_worktree().as_deref()),
+    };
+    (result, Some(log_guard))
+}
+
+/// 日志角色：TUI 与 CLI 子命令共用一份日志，用字段区分。
+fn role_of(action: &CliAction) -> &'static str {
+    if matches!(action, CliAction::Tui) {
+        "tui"
+    } else {
+        "cli"
     }
 }
 
 /// TUI 启动编排：配置 -> 信任页（行内）-> 终端 -> 事件循环。
-fn run_tui() -> Result<(), Box<dyn std::error::Error>> {
-    let config = Config::default();
+fn run_tui(config: Config) -> Result<(), Box<dyn std::error::Error>> {
     if let Ok(root) = lx_tui::config::user_data_root() {
         let _ = lx_tui::chat::agent::ensure_global_agents_md(&root);
     }
@@ -80,17 +101,4 @@ fn database_worktree() -> Option<PathBuf> {
         return None;
     }
     git::linked_worktree_root(Path::new("."))
-}
-
-/// 日志写入临时目录文件；TUI 运行期间 stdout 不可用。
-fn init_tracing() -> std::io::Result<()> {
-    let log_path = std::env::temp_dir().join("lx-tui.log");
-    let file = std::fs::File::create(log_path)?;
-    let filter = EnvFilter::try_from_env("LX_TUI_LOG").unwrap_or_else(|_| EnvFilter::new("info"));
-    let _ = tracing_subscriber::fmt()
-        .with_env_filter(filter)
-        .with_ansi(false)
-        .with_writer(std::sync::Mutex::new(file))
-        .try_init();
-    Ok(())
 }

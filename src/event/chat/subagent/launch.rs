@@ -206,6 +206,15 @@ pub(super) fn launch_child_turn(
 
     let net_sender = sender.clone();
     let stream_key = child_key;
+    let stream_log = crate::chat::client::StreamLog {
+        kind: "subagent",
+        pane: Some(stream_key.pane.raw()),
+        session_id: Some(stream_key.session.clone()),
+        generation: Some(stream_key.generation),
+        agent_id: Some(record.agent_id.clone()),
+        parent_session: Some(parent_key.session.clone()),
+        ..crate::chat::client::StreamLog::default()
+    };
     let reads = crate::chat::tools::read_registry(&record.child_session_id);
     let recorder = super::super::file_snapshots::HostRecorderFactory::new(
         net_sender.clone(),
@@ -256,14 +265,16 @@ pub(super) fn launch_child_turn(
             let transport = transport.clone();
             let base_url = base_url.clone();
             let api_key = api_key.clone();
+            let stream_log = stream_log.clone();
             let emit = request.purpose != RequestPurpose::CompactSummary;
             async move {
-                crate::chat::client::run_stream(
+                crate::chat::client::run_stream_with_log(
                     &transport,
                     &base_url,
                     Some(api_key.as_str()),
                     idle_timeout,
                     request,
+                    &stream_log,
                     cancel,
                     move |deltas| {
                         if emit {

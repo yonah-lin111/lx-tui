@@ -389,7 +389,8 @@ Subcommands:
       [--narrow-width <N>] [--min-width <N>] [--min-height <N>]
       [--min-pane-width <N>] [--min-pane-height <N>]
       [--image-download-dir <DIR>]
-      Update layout settings in settings.json
+      [--log-level <trace|debug|info|warn|error|off>] [--log-payload <true|false>]
+      Update layout and logging settings in settings.json
   reset
       Reset settings.json to default values
   open [--no-open]

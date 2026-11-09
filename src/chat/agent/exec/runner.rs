@@ -70,12 +70,17 @@ impl ExecStreamFactory for RealStreamFactory {
         let api_key = model.api_key.clone();
         let idle_timeout = std::time::Duration::from_millis(model.idle_timeout_ms);
         Box::pin(async move {
-            crate::chat::client::run_stream(
+            let stream_log = crate::chat::client::StreamLog {
+                kind: "exec",
+                ..crate::chat::client::StreamLog::default()
+            };
+            crate::chat::client::run_stream_with_log(
                 &transport,
                 &base_url,
                 Some(&api_key),
                 idle_timeout,
                 request,
+                &stream_log,
                 cancel,
                 move |deltas| on_delta(deltas),
             )

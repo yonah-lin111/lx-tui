@@ -42,6 +42,8 @@ pub struct SetArgs {
     pub min_pane_width: Option<u16>,
     pub min_pane_height: Option<u16>,
     pub image_download_dir: Option<String>,
+    pub log_level: Option<String>,
+    pub log_payload: Option<bool>,
 }
 
 /// 解析 `lx-tui settings` 参数。
@@ -156,6 +158,20 @@ fn parse_set(args: &[String]) -> Result<SetArgs, String> {
             i += 1;
             continue;
         }
+        if let Some(value) = take_opt(args, &mut i, "", "--log-level")? {
+            parsed.log_level = Some(value.trim().to_ascii_lowercase());
+            i += 1;
+            continue;
+        }
+        if let Some(value) = take_opt(args, &mut i, "", "--log-payload")? {
+            parsed.log_payload = Some(match value.trim().to_ascii_lowercase().as_str() {
+                "true" | "1" | "on" => true,
+                "false" | "0" | "off" => false,
+                _ => return Err("'--log-payload' must be true or false".into()),
+            });
+            i += 1;
+            continue;
+        }
         reject_unknown_flag(&args[i], "lx-tui settings set")?;
         return Err(format!(
             "unexpected argument '{}'; run 'lx-tui settings set --help' for usage",
@@ -190,6 +206,10 @@ fn config_json(config: &Config) -> serde_json::Value {
             "minPaneWidth": config.min_pane_width,
             "minPaneHeight": config.min_pane_height,
             "imageDownloadDir": config.image_download_dir,
+        },
+        "logging": {
+            "level": config.log_level,
+            "payload": config.log_payload,
         }
     })
 }
@@ -215,6 +235,7 @@ fn run_show(ctx: &WorkspaceContext, out: &Output) -> Result<(), String> {
         config::subagents::subagents_config_path().map_err(|error| error.to_string())?;
     let value = json!({
         "layout": config_json(&config)["layout"],
+        "logging": config_json(&config)["logging"],
         "paths": {
             "dataRoot": data_root,
             "settings": settings_path,
@@ -248,6 +269,8 @@ fn run_show(ctx: &WorkspaceContext, out: &Output) -> Result<(), String> {
             "Image download dir:",
             image_download_dir_label(&config)
         )?;
+        writeln!(w, "{:<22}{}", "Log level:", config.log_level)?;
+        writeln!(w, "{:<22}{}", "Log payload:", config.log_payload)?;
         writeln!(w)?;
         writeln!(w, "{:<22}{}", "Data root:", data_root.display())?;
         writeln!(w, "{:<22}{}", "Settings file:", settings_path.display())?;
@@ -288,6 +311,12 @@ fn run_set(out: &Output, args: &SetArgs) -> Result<(), String> {
     if let Some(value) = &args.image_download_dir {
         config.image_download_dir = value.clone();
     }
+    if let Some(value) = &args.log_level {
+        config.log_level = value.clone();
+    }
+    if let Some(value) = args.log_payload {
+        config.log_payload = value;
+    }
     config.validate().map_err(|error| error.to_string())?;
     config::save_settings(&config).map_err(|error| error.to_string())?;
     let value = config_json(&config);
@@ -302,7 +331,9 @@ fn run_set(out: &Output, args: &SetArgs) -> Result<(), String> {
             "{:<22}{}",
             "Image download dir:",
             image_download_dir_label(&config)
-        )
+        )?;
+        writeln!(w, "{:<22}{}", "Log level:", config.log_level)?;
+        writeln!(w, "{:<22}{}", "Log payload:", config.log_payload)
     })
 }
 

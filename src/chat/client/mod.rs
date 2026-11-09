@@ -5,9 +5,11 @@
 //! （活动流不受固定总时长误杀）。Key 只出现在请求 header/URL，
 //! 不进入错误消息与日志。
 
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use tokio::sync::{mpsc, watch};
+
+use crate::logging::{PayloadCapture, PayloadMeta, PayloadRequest};
 
 use super::events::{ChatDelta, ChatRequest, MAX_FRAME_BYTES, MAX_TOTAL_TEXT_BYTES, StopReason};
 use super::sse::{SseFrame, SseParser};
@@ -53,6 +55,46 @@ pub fn uncancellable() -> (watch::Sender<bool>, watch::Receiver<bool>) {
     watch::channel(false)
 }
 
+/// 网络流的关联快照；由调用点构造，供日志与 payload 使用。
+#[derive(Debug, Clone)]
+pub struct StreamLog {
+    pub kind: &'static str,
+    pub pane: Option<u32>,
+    pub session_id: Option<String>,
+    pub turn_index: Option<i64>,
+    pub generation: Option<u64>,
+    pub agent_id: Option<String>,
+    pub parent_session: Option<String>,
+}
+
+impl Default for StreamLog {
+    fn default() -> Self {
+        Self {
+            kind: "unknown",
+            pane: None,
+            session_id: None,
+            turn_index: None,
+            generation: None,
+            agent_id: None,
+            parent_session: None,
+        }
+    }
+}
+
+impl StreamLog {
+    fn payload_meta(&self) -> PayloadMeta {
+        PayloadMeta {
+            kind: self.kind,
+            pane: self.pane,
+            session_id: self.session_id.clone(),
+            turn_index: self.turn_index,
+            generation: self.generation,
+            agent_id: self.agent_id.clone(),
+            parent_session: self.parent_session.clone(),
+        }
+    }
+}
+
 /// 连接超时。
 const CONNECT_TIMEOUT: Duration = Duration::from_secs(15);
 /// 首字节超时（TTFB）。
@@ -80,12 +122,51 @@ pub async fn run_stream(
     api_key: Option<&str>,
     idle_timeout: Duration,
     request: ChatRequest,
+    cancel: watch::Receiver<bool>,
+    on_delta: impl FnMut(&[ChatDelta]),
+) -> StreamOutcome {
+    run_stream_with_log(
+        transport_kind,
+        base_url,
+        api_key,
+        idle_timeout,
+        request,
+        &StreamLog::default(),
+        cancel,
+        on_delta,
+    )
+    .await
+}
+
+/// 与 [`run_stream`] 相同，但带上会话/轮次关联字段用于日志与 payload。
+pub async fn run_stream_with_log(
+    transport_kind: &str,
+    base_url: &str,
+    api_key: Option<&str>,
+    idle_timeout: Duration,
+    request: ChatRequest,
+    log: &StreamLog,
     mut cancel: watch::Receiver<bool>,
     mut on_delta: impl FnMut(&[ChatDelta]),
 ) -> StreamOutcome {
+    let request_id = crate::logging::new_request_id();
+    let started = Instant::now();
     let built = match transport::build_request(transport_kind, base_url, api_key, &request) {
         Ok(built) => built,
         Err(code) => {
+            tracing::warn!(
+                target: "lx::agent::request",
+                request_id = %request_id,
+                kind = log.kind,
+                pane = ?log.pane,
+                session = ?log.session_id,
+                turn = ?log.turn_index,
+                transport = transport_kind,
+                provider = %request.model.provider,
+                model = %request.model.model,
+                code = %code,
+                "agent request build failed"
+            );
             let stop = StopReason::Failed { code };
             return StreamOutcome {
                 deltas: vec![ChatDelta::Finished {
@@ -95,9 +176,34 @@ pub async fn run_stream(
             };
         }
     };
+    tracing::info!(
+        target: "lx::agent::request",
+        request_id = %request_id,
+        kind = log.kind,
+        pane = ?log.pane,
+        session = ?log.session_id,
+        turn = ?log.turn_index,
+        generation = ?log.generation,
+        agent_id = ?log.agent_id,
+        parent_session = ?log.parent_session,
+        transport = transport_kind,
+        provider = %request.model.provider,
+        model = %request.model.model,
+        variant = ?request.model.variant,
+        purpose = ?request.purpose,
+        turns = request.turns.len(),
+        items = request.items.len(),
+        tools = request.tools.len(),
+        body_bytes = built.body.len(),
+        system_bytes = request.system_prompt.as_ref().map_or(0, String::len),
+        url = %crate::logging::url_origin_and_path(&built.url),
+        "agent request built"
+    );
     let mut deltas = Vec::new();
     let mut attempt = 0u32;
     let stop = loop {
+        let attempt_started = Instant::now();
+        let before = deltas.len();
         let reason = stream_once(
             &built,
             transport_kind,
@@ -105,8 +211,20 @@ pub async fn run_stream(
             &mut cancel,
             &mut deltas,
             &mut on_delta,
+            &request_id,
+            log,
+            attempt,
         )
         .await;
+        tracing::debug!(
+            target: "lx::agent::request",
+            request_id = %request_id,
+            attempt,
+            reason = reason.as_str(),
+            attempt_deltas = deltas.len().saturating_sub(before),
+            elapsed_ms = attempt_started.elapsed().as_millis() as u64,
+            "agent request attempt finished"
+        );
         // 只在“本响应零增量、零工具输入”时重试：已有 partial 说明请求已被接受，
         // 重试会导致重复内容；已出现工具输入说明可能有文件副作用，绝不重试。
         let retryable = can_retry(&deltas, &reason) && attempt < MAX_RETRIES;
@@ -118,9 +236,25 @@ pub async fn run_stream(
         let backoff = RETRY_BASE_DELAY
             .saturating_mul(1u32 << (attempt - 1).min(4))
             .min(RETRY_MAX_DELAY);
+        tracing::warn!(
+            target: "lx::agent::request",
+            request_id = %request_id,
+            attempt,
+            reason = reason.as_str(),
+            backoff_ms = backoff.as_millis() as u64,
+            "agent request retrying"
+        );
         tokio::select! {
             _ = tokio::time::sleep(backoff) => {}
-            _ = wait_cancel(&mut cancel) => break StopReason::Cancelled,
+            _ = wait_cancel(&mut cancel) => {
+                tracing::debug!(
+                    target: "lx::agent::request",
+                    request_id = %request_id,
+                    stage = "backoff",
+                    "agent request cancelled"
+                );
+                break StopReason::Cancelled;
+            }
         }
     };
     // 保证 deltas 恰好含一个终态（stream_once 中途路径可能尚未追加）。
@@ -132,6 +266,19 @@ pub async fn run_stream(
             reason: stop.clone(),
         });
     }
+    tracing::info!(
+        target: "lx::agent::request",
+        request_id = %request_id,
+        kind = log.kind,
+        pane = ?log.pane,
+        session = ?log.session_id,
+        turn = ?log.turn_index,
+        attempts = attempt + 1,
+        reason = stop.as_str(),
+        deltas = deltas.len(),
+        elapsed_ms = started.elapsed().as_millis() as u64,
+        "agent request finished"
+    );
     StreamOutcome { deltas, stop }
 }
 
@@ -204,23 +351,15 @@ pub(crate) fn http_error_code_for_tests(status: u16, detail: Option<&str>, tools
 
 /// 把 HTTP 错误体裁剪成一行、单行、限长的可读说明（脱敏后进入 UI/DB）。
 fn sanitize_error_detail(body: &str) -> String {
-    let single: String = body
-        .chars()
-        .map(|ch| if ch.is_control() { ' ' } else { ch })
-        .collect();
-    single
-        .split_whitespace()
-        .collect::<Vec<_>>()
-        .join(" ")
-        .chars()
-        .take(160)
-        .collect()
+    crate::logging::sanitize_text(body, 160)
 }
 
 /// 单次尝试执行流：返回结束原因（已收 partial 在 `deltas`）。
 ///
 /// 每次解析出新增量后立即把**新增切片**交给 `on_delta`（打字机效果），
 /// 同时累计进 `deltas` 供终态与 usage 使用。
+// 参数承载请求、取消、增量与日志上下文，拆结构体反而掩盖执行顺序。
+#[allow(clippy::too_many_arguments)]
 async fn stream_once(
     built: &TransportRequest,
     transport_kind: &str,
@@ -228,6 +367,50 @@ async fn stream_once(
     cancel: &mut watch::Receiver<bool>,
     deltas: &mut Vec<ChatDelta>,
     on_delta: &mut impl FnMut(&[ChatDelta]),
+    request_id: &str,
+    log: &StreamLog,
+    attempt: u32,
+) -> StopReason {
+    let mut capture = PayloadCapture::start(
+        crate::logging::payload_enabled(),
+        crate::logging::active_log_dir(),
+        request_id,
+        attempt,
+        log.payload_meta(),
+        PayloadRequest {
+            method: "POST",
+            url: &built.url,
+            headers: &built.headers,
+            body: &built.body,
+            tools_requested: built.tools_requested,
+        },
+    );
+    let reason = stream_once_inner(
+        built,
+        transport_kind,
+        idle_timeout,
+        cancel,
+        deltas,
+        on_delta,
+        request_id,
+        &mut capture,
+    )
+    .await;
+    capture.finish(Some(reason.as_str()));
+    reason
+}
+
+// 同上：与 stream_once 保持一一对应，避免额外抽象层。
+#[allow(clippy::too_many_arguments)]
+async fn stream_once_inner(
+    built: &TransportRequest,
+    transport_kind: &str,
+    idle_timeout: Duration,
+    cancel: &mut watch::Receiver<bool>,
+    deltas: &mut Vec<ChatDelta>,
+    on_delta: &mut impl FnMut(&[ChatDelta]),
+    request_id: &str,
+    capture: &mut PayloadCapture,
 ) -> StopReason {
     let client = match reqwest::Client::builder()
         .connect_timeout(CONNECT_TIMEOUT)
@@ -236,6 +419,12 @@ async fn stream_once(
     {
         Ok(client) => client,
         Err(error) => {
+            tracing::warn!(
+                target: "lx::agent::request",
+                request_id,
+                code = %format!("client build failed: {error}"),
+                "agent http client build failed"
+            );
             return StopReason::Failed {
                 code: format!("client build failed: {error}"),
             };
@@ -259,28 +448,67 @@ async fn stream_once(
                 .send(),
         ) => match response {
             Ok(Ok(response)) => response,
-            Ok(Err(error)) => return StopReason::Failed { code: request_error_code(&error) },
+            Ok(Err(error)) => {
+                let code = request_error_code(&error);
+                tracing::warn!(
+                    target: "lx::agent::request",
+                    request_id,
+                    code = %code,
+                    "agent http request failed"
+                );
+                return StopReason::Failed { code };
+            }
             Err(_) => {
+                tracing::warn!(
+                    target: "lx::agent::request",
+                    request_id,
+                    timeout_ms = first_byte_timeout.as_millis() as u64,
+                    "agent http first byte timeout"
+                );
                 return StopReason::Failed {
                     code: "timeout".into(),
                 };
             }
         },
-        _ = wait_cancel(cancel) => return StopReason::Cancelled,
+        _ = wait_cancel(cancel) => {
+            tracing::debug!(
+                target: "lx::agent::request",
+                request_id,
+                stage = "send",
+                "agent request cancelled"
+            );
+            return StopReason::Cancelled;
+        }
     };
     let status = response.status();
+    capture.response_status(status.as_u16());
     if !status.is_success() {
         // 读取错误体用于诊断，但只取截断/脱敏后的一段说明（设计允许：错误体经裁剪
         // 后可进入 UI/DB，且不得含密钥——Key 只在 header）。
-        let detail = tokio::time::timeout(idle_timeout, response.text())
+        let raw_body = tokio::time::timeout(idle_timeout, response.text())
             .await
             .ok()
-            .and_then(Result::ok)
-            .map(|body| sanitize_error_detail(&body))
+            .and_then(Result::ok);
+        if let Some(body) = raw_body.as_deref() {
+            capture.response_body(body);
+        }
+        let detail = raw_body
+            .as_deref()
+            .map(sanitize_error_detail)
             .filter(|detail| !detail.is_empty());
-        return StopReason::Failed {
-            code: http_error_code(status.as_u16(), detail.as_deref(), built.tools_requested),
-        };
+        let code = http_error_code(status.as_u16(), detail.as_deref(), built.tools_requested);
+        tracing::warn!(
+            target: "lx::agent::request",
+            request_id,
+            status = status.as_u16(),
+            tools_requested = built.tools_requested,
+            detail = %crate::logging::sanitize_text(
+                raw_body.as_deref().unwrap_or_default(),
+                2048
+            ),
+            "agent http error response"
+        );
+        return StopReason::Failed { code };
     }
     // 逐 chunk 喂入 SSE 解析器。
     let mut stream = response.bytes_stream();
@@ -295,17 +523,28 @@ async fn stream_once(
             chunk = tokio::time::timeout(idle_timeout, stream.next()) => match chunk {
                 Ok(Some(Ok(bytes))) => bytes,
                 Ok(Some(Err(error))) => {
+                    let code = request_error_code(&error);
+                    tracing::warn!(
+                        target: "lx::agent::request",
+                        request_id,
+                        code = %code,
+                        "agent stream read failed"
+                    );
                     return finalize_partial(
                         decoder.as_mut(),
                         deltas,
-                        StopReason::Failed {
-                            code: request_error_code(&error),
-                        },
+                        StopReason::Failed { code },
                         on_delta,
                     );
                 }
                 Ok(None) => break,
                 Err(_) => {
+                    tracing::warn!(
+                        target: "lx::agent::request",
+                        request_id,
+                        timeout_ms = idle_timeout.as_millis() as u64,
+                        "agent stream idle timeout"
+                    );
                     return finalize_partial(
                         decoder.as_mut(),
                         deltas,
@@ -317,6 +556,12 @@ async fn stream_once(
                 }
             },
             _ = wait_cancel(cancel) => {
+                tracing::debug!(
+                    target: "lx::agent::request",
+                    request_id,
+                    stage = "stream",
+                    "agent request cancelled"
+                );
                 return finalize_partial(
                     decoder.as_mut(),
                     deltas,
@@ -326,6 +571,12 @@ async fn stream_once(
             }
         };
         if let Err(_too_large) = parser.feed(&chunk, MAX_FRAME_BYTES) {
+            tracing::warn!(
+                target: "lx::agent::request",
+                request_id,
+                max_frame_bytes = MAX_FRAME_BYTES,
+                "agent stream frame exceeds size limit"
+            );
             return finalize_partial(
                 decoder.as_mut(),
                 deltas,
@@ -336,9 +587,18 @@ async fn stream_once(
             );
         }
         for frame in parser.take_frames() {
+            capture.record_frame(frame.event.as_deref(), &frame.data);
             match decode_frame(decoder.as_mut(), &frame, deltas, &mut total_text, on_delta) {
                 Ok(()) => {}
                 Err(code) => {
+                    tracing::warn!(
+                        target: "lx::agent::request",
+                        request_id,
+                        code = %code,
+                        frame_event = ?frame.event,
+                        frame_bytes = frame.data.len(),
+                        "agent stream frame decode failed"
+                    );
                     return finalize_partial(
                         decoder.as_mut(),
                         deltas,
@@ -350,15 +610,25 @@ async fn stream_once(
         }
     }
     // EOF：半帧 flush（协议层判定完成性）。
-    if let Some(frame) = parser.flush()
-        && let Err(code) = decode_frame(decoder.as_mut(), &frame, deltas, &mut total_text, on_delta)
-    {
-        return finalize_partial(
-            decoder.as_mut(),
-            deltas,
-            StopReason::Failed { code },
-            on_delta,
-        );
+    if let Some(frame) = parser.flush() {
+        capture.record_frame(frame.event.as_deref(), &frame.data);
+        if let Err(code) = decode_frame(decoder.as_mut(), &frame, deltas, &mut total_text, on_delta)
+        {
+            tracing::warn!(
+                target: "lx::agent::request",
+                request_id,
+                code = %code,
+                frame_event = ?frame.event,
+                frame_bytes = frame.data.len(),
+                "agent stream frame decode failed"
+            );
+            return finalize_partial(
+                decoder.as_mut(),
+                deltas,
+                StopReason::Failed { code },
+                on_delta,
+            );
+        }
     }
     let residual = decoder.finish();
     if !residual.is_empty() {
@@ -367,6 +637,11 @@ async fn stream_once(
     }
     // EOF 时工具参数仍未闭合：半截 JSON 不得执行，按协议错误结束（不补造 Ended）。
     if decoder.has_open_tool_input() {
+        tracing::warn!(
+            target: "lx::agent::request",
+            request_id,
+            "agent stream ended with open tool input"
+        );
         return StopReason::Failed {
             code: super::transport::tools::TOOL_INPUT_TRUNCATED_CODE.to_string(),
         };
@@ -379,13 +654,20 @@ async fn stream_once(
     }) {
         return reason;
     }
-    if decoder.has_completion() {
+    let reason = if decoder.has_completion() {
         StopReason::Complete
     } else {
         StopReason::Failed {
             code: "stream ended without completion".into(),
         }
-    }
+    };
+    tracing::debug!(
+        target: "lx::agent::request",
+        request_id,
+        reason = reason.as_str(),
+        "agent stream eof"
+    );
+    reason
 }
 
 /// 解码一帧并累计正文大小；新增量即时回调 `on_delta`（打字机效果）。
