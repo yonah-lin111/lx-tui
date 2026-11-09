@@ -854,4 +854,36 @@ fn task_list_scrollbar_mouse_press_and_drag_events() {
         &mut dirty,
     );
     assert!(state.task_list_scroll_drag.is_none(), "松开鼠标清除拖拽");
+
+    // 4. 点击滚动条右侧边距一列（容错命中）：跳转视口
+    handle_terminal_event(
+        mouse(
+            MouseEventKind::Down(MouseButton::Left),
+            inner.right().saturating_sub(1),
+            bar.track.y,
+        ),
+        &mut state,
+        &mut sessions,
+        &geo,
+        &config,
+        &mut cache,
+        &mut dirty,
+    );
+    let target = state.pane_anywhere(pane).expect("pane");
+    let page = target.lx.task.as_ref().expect("page");
+    assert_eq!(page.window.viewport, Some(0), "点击顶部轨道跳回视口 0");
+
+    // 5. 在滚动条列使用滚轮滚动：视口正常向下滚动
+    handle_terminal_event(
+        mouse(MouseEventKind::ScrollDown, bar.track.x, bar.track.y + 1),
+        &mut state,
+        &mut sessions,
+        &geo,
+        &config,
+        &mut cache,
+        &mut dirty,
+    );
+    let target = state.pane_anywhere(pane).expect("pane");
+    let page = target.lx.task.as_ref().expect("page");
+    assert_eq!(page.window.viewport, Some(3), "滚轮向下滚动 3 行");
 }

@@ -347,7 +347,10 @@ pub(crate) fn handle_task_list_scrollbar_press(
     else {
         return false;
     };
-    if !bar.track.contains((column, row).into()) {
+    let in_track = (bar.track.y..bar.track.bottom()).contains(&row)
+        && column >= bar.track.x
+        && column < inner.right();
+    if !in_track {
         return false;
     }
     match ui::widgets::scrollbar::thumb_grab_offset(&bar, row) {

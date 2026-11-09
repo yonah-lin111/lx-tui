@@ -532,7 +532,8 @@ pub(crate) fn handle_mouse_wheel(
                 && let Some(rects) = state
                     .pane_anywhere(pane)
                     .and_then(|target| ui::main_content::lx::task_rects(inner, &target.lx))
-                && rects.list.contains((mouse.column, mouse.row).into())
+                && (rects.list.y..rects.list.bottom()).contains(&mouse.row)
+                && (inner.x..inner.right()).contains(&mouse.column)
             {
                 if update::scroll_task_list(state, pane, delta) {
                     *dirty = true;

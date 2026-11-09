@@ -291,14 +291,6 @@ fn built(call: &ToolCallView, width: u16, expanded: bool) -> Built {
                     .links
                     .push((0, view.agent_id.clone().unwrap_or_default()));
             }
-            if view.agent_status.as_deref() == Some("running")
-                && let Some(activity) = view.live_activity.as_deref().filter(|s| !s.is_empty())
-            {
-                built.nodes.push(Node::text(
-                    single_line(activity, TEXT_SAMPLE_CHARS),
-                    style::muted(),
-                ));
-            }
             if expanded && let Some(report) = &view.report {
                 built
                     .nodes
@@ -821,7 +813,7 @@ mod tests {
     }
 
     #[test]
-    fn spawn_card_shows_live_activity_only_while_running() {
+    fn spawn_card_never_shows_live_activity() {
         let mut view = SubagentDetailView::from_arguments(
             "spawn_agent",
             r#"{"role":"explorer","task":"investigate","title":"investigate"}"#,
@@ -831,11 +823,16 @@ mod tests {
         view.agent_status = Some("running".into());
         view.live_activity = Some("$ cargo test".into());
         let text = flat(&call("spawn_agent", view.clone()), 80, false);
-        assert!(text.contains("$ cargo test"), "{text}");
+        assert!(
+            !text.contains("$ cargo test"),
+            "运行中不显示当前步骤：{text}"
+        );
+        assert!(text.contains("└─"), "单节点以 └─ 结尾：{text}");
 
         view.agent_status = Some("completed".into());
         let text = flat(&call("spawn_agent", view), 80, false);
         assert!(!text.contains("$ cargo test"), "完成后收起：{text}");
+        assert!(text.contains("└─"), "完成态保持单节点 └─：{text}");
     }
 
     #[test]
