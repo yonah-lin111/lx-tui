@@ -2,6 +2,8 @@
 
 - **特性目录**：`docs/feature/lx-recap-and-turn-summary/`
 - **Review 基线**：`feat/lx-recap-and-turn-summary` @ `b7d56d15`（相对 `dev`）
+- **修复提交**：`8423e37e`
+- **合并状态**：已合并至 `dev`，临时 worktree `.worktrees/lx-recap-and-turn-summary`、分支 `feat/lx-recap-and-turn-summary` 及隔离开发库已移除
 - **关联文档**：
   - [design.md](design.md)
   - [task.md](task.md)

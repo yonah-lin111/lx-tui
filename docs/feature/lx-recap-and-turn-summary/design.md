@@ -1,6 +1,6 @@
 # lx Recap、系统事件撤销与 AI Web 生图 — 设计文档
 
-> 状态：**已完成（待合并）**（2026-11-09；实现、Review 修复与测试均通过，等待用户确认是否合并回 `dev`）
+> 状态：**已完成实现、代码复审与 P1–P3 闭环修复，已合并至 `dev` 并移除临时 worktree `.worktrees/lx-recap-and-turn-summary` 与分支 `feat/lx-recap-and-turn-summary`**（2026-11-09）
 >
 > **后续变更（2026-11-09）**：按用户要求移除首页快捷键（`Alt+1..4` / `Alt+W`）、入口 tooltip 与 `FileChangesCard` 文件变更摘要卡；下文 D4/D6/D10/D13、§3.2 的文件变更块、§3.4、§4.5、§4.7 仅保留历史设计记录，不再实现。同时 `/rewind` 目标扩展到模型切换、compact 与 recap 系统事件；compact/recap 运行中耗时统一为秒级；AI Web（Gemini / Grok）新增生成图片预览树与原图下载。
 > Review 与修复清单：[review.md](review.md)

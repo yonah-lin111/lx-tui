@@ -379,6 +379,7 @@ impl Lx {
             || self.chat.loading_session
             || self.chat.has_running_shell()
             || self.compact.is_running()
+            || self.recap.pending.is_some()
             || self.rewind.is_executing()
             || (!self.chat.main_stopped && self.agents.running_count() > 0)
         {

@@ -1,6 +1,6 @@
 # lx Recap、系统事件撤销与 AI Web 生图 — 执行任务清单
 
-> 状态：**已完成（待合并）**（2026-11-09；实现、Review 修复、测试与提交均完成，等待用户确认合并）
+> 状态：**已完成实现、代码复审与 P1–P3 闭环修复，已合并至 `dev` 并移除临时 worktree `.worktrees/lx-recap-and-turn-summary` 与分支 `feat/lx-recap-and-turn-summary`**（2026-11-09）
 > 设计依据：[design.md](design.md)
 > Review 与修复清单：[review.md](review.md)
 > 执行位置：`.worktrees/lx-recap-and-turn-summary`（新建 git 工作区）
@@ -278,5 +278,5 @@
 - [x] `git status` 确认只包含本任务文件。
 - [x] `git add` + `git commit`（提交信息：`feat(lx): add recap, turn file summary and home shortcuts`）。
 - [x] 输出变更摘要、验证结果、风险与未验证部分。
-- [ ] 询问用户是否合并回原分支；合并前核对 `SCHEMA_VERSION` 与迁移版本冲突。
-- [ ] 若用户确认合并，按项目规范处理 worktree 与隔离数据库清理。
+- [x] 询问用户是否合并回原分支；合并前核对 `SCHEMA_VERSION` 与迁移版本冲突（`dev` 为 v24，本分支顺延至 v25 无冲突）。
+- [x] 若用户确认合并，按项目规范处理 worktree 与隔离数据库清理。
