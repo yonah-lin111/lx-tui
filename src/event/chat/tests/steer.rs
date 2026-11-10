@@ -622,3 +622,83 @@ fn session_reload_rebuilds_steered_user_messages_and_hides_steered_assistant_dur
         "被 steer 截断的旧 assistant 重载后同样不带 duration_ms"
     );
 }
+
+#[test]
+fn deliver_injects_subagent_reference_blocks_and_checks_session_binding() {
+    let fixture = Fixture::new("steer-subagent-ref");
+    let database = fixture.database();
+    let persistence = Persistence::with_database_at(database, fixture.db_path());
+    let committed = persistence
+        .database()
+        .expect("db")
+        .begin_turn(fixture.workspace(), None, "initial", &snapshot())
+        .expect("begin turn");
+    let mut state = AppState::demo();
+    state.models = models_with();
+    let pane = state.active_tab().layout.focus();
+    let key = RequestKey {
+        pane,
+        session: committed.session_id.clone(),
+        generation: 1,
+    };
+    {
+        let target = state.pane_mut_anywhere(pane).expect("pane");
+        target.lx.chat.session_id = Some(committed.session_id.clone());
+        target.lx.chat.request = RequestState::Streaming {
+            key: key.clone(),
+            assistant_id: committed.assistant_message_id.clone(),
+        };
+        target.lx.chat.turn_started_at_ms = Some(committed.created_at_ms);
+        target.lx.chat.messages.push(assistant_view(&committed));
+        target.lx.chat.pending_steers.push(PendingSteer {
+            text: "Use @[refer-subagent](explorer) here".into(),
+            attachments: Vec::new(),
+            model_images: Vec::new(),
+            model: snapshot(),
+        });
+    }
+    let mut streams = ChatStreams::default();
+    streams
+        .db_workspaces
+        .insert(key.clone(), fixture.workspace().to_path_buf());
+    streams.frozen.insert(key.session.clone(), frozen());
+
+    let (reply, mut rx) = tokio::sync::oneshot::channel();
+    assert!(super::super::steer::deliver(
+        &mut state,
+        &mut streams,
+        &persistence,
+        key.clone(),
+        reply,
+    ));
+    let delivered = rx.try_recv().expect("reply").expect("deliver ok");
+    assert_eq!(delivered.len(), 1);
+    assert!(
+        delivered[0]
+            .skill_blocks
+            .iter()
+            .any(|block| block.contains("<subagent_reference>") && block.contains("explorer")),
+        "steer 中 @[refer-subagent](explorer) 应注入 <subagent_reference> 块：{:?}",
+        delivered[0].skill_blocks
+    );
+
+    // 窗格 session_id 被切走但 request 尚未清理时，deliver 必须拒绝并返回 Cancelled。
+    state
+        .pane_mut_anywhere(key.pane)
+        .expect("pane")
+        .lx
+        .chat
+        .session_id = Some("other-session".into());
+    let (reply2, mut rx2) = tokio::sync::oneshot::channel();
+    assert!(!super::super::steer::deliver(
+        &mut state,
+        &mut streams,
+        &persistence,
+        key,
+        reply2,
+    ));
+    assert_eq!(
+        rx2.try_recv().expect("reply2").unwrap_err(),
+        HostError::Cancelled
+    );
+}

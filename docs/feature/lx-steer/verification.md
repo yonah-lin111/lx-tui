@@ -5,7 +5,7 @@
 | 校验维度 | 执行命令 | 结果 |
 | :--- | :--- | :--- |
 | 格式与静态检查 | `cargo fmt --check && cargo clippy --all-targets -- -D warnings` | PASS（0 warnings / 0 errors） |
-| Steer 专项单测套件 | `cargo test --lib steer` | PASS（49 passed / 0 failed） |
+| Steer 专项单测套件 | `cargo test --lib steer` | PASS（52 passed / 0 failed） |
 | `lx-tui exec` & `session` CLI 实机校验 | `./target/debug/lx-tui exec / session show / fork / rewind` | PASS（Exit Code 0） |
 
 ---

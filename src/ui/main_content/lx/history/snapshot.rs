@@ -883,10 +883,15 @@ impl Builder<'_> {
                 !next.reports.is_empty()
                     && !is_legacy_report_row(source.messages, message_index.saturating_add(1))
             });
-        // 下一条是流中 steer 插入的用户消息时，当前 assistant 只是被截断的前半段，不显示底部统计。
+        // 下一条聊天消息（跳过流中并行插入的本地 shell 命令）是流中 steer 插入的用户消息时，
+        // 当前 assistant 只是被截断的前半段，不显示底部统计。
         let followed_by_steer = source
             .messages
-            .get(message_index.saturating_add(1))
+            .get(message_index.saturating_add(1)..)
+            .and_then(|rest| {
+                rest.iter()
+                    .find(|next| next.kind == "chat" && next.shell.is_none())
+            })
             .is_some_and(|next| source.chat.is_steered_user_message(&next.id));
         let stats_ready = !source.subagents_running && !followed_by_report && !followed_by_steer;
         if stats_ready && let Some(line) = stats_line(message, self.width) {

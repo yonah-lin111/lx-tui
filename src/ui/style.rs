@@ -753,7 +753,7 @@ pub fn chat_user_bg() -> Style {
 
 /// 流中 steer 插入的用户消息整块底色（低饱和暗海蓝 `#1b2a38`，复用会话标题胶囊同款柔和暗底，与普通用户消息和 `/rewind` 选中区分）。
 pub fn chat_user_steer_bg() -> Style {
-    Style::default().bg(Color::Rgb(0x1b, 0x2a, 0x38))
+    Style::default().bg(LX_STEER_USER_BG)
 }
 
 /// 撤销选中的最新用户消息整块底色（深青蓝，与普通用户消息区分）。

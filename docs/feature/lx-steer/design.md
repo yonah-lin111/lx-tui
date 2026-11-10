@@ -1,8 +1,8 @@
 # lx 流中 steer（mid-turn user input）设计
 
-> 状态：待用户评审，未开始编码。
+> 状态：已实现并完成验证（见 `verification.md` 与 `review.md`）。
 > 参考：codex `turn/steer`（`TurnSteerParams.input` / pending input queue）、opencode `SessionInbox`（`delivery: steer | queue`）。
-> 适用分支：`dev`，主 checkout。
+> 适用分支：`feat/lx-steer`（基于 `dev`）。
 > 需求位置：`src/ui/main_content/lx/`（pending 提示区），核心链路落在 app / event / chat / db。
 
 ---
@@ -43,7 +43,7 @@
 | 7 | 允许状态 | 仅 Native 主会话 `Streaming`；`Committing`/`Finishing`/`/compact`/shell/AI Web 不 steer |
 | 8 | 带附件合并 | 与文本一样合并；超过单条上限时只发第一条，其余留到下一个边界 |
 | 9 | 撤回/编辑 | v1 支持撤回并拉回输入框编辑；不跨重启 |
-| 10 | 撤回具体交互 | 提示行 `×` 鼠标点击；输入框为空时 `Backspace` 撤回最近一条 |
+| 10 | 撤回具体交互 | 流中单次 `Esc` 按 LIFO 依次弹出最新一条并覆盖回显到输入框（不合并拼接；队列排空后才进入双击 `Esc` 停流）；移除提示区 `×` 关闭按钮与空输入框 `Backspace` 撤回 |
 | 11 | 自动压缩 | 等压缩完成后注入，steer 不参与摘要 |
 | 12 | 切换会话/关闭窗格 | 丢弃 pending，并 toast 提示；不搬进新会话输入框 |
 | 13 | 安全边界 | 本轮工具全部结算之后；绝不在一次模型请求/工具执行中途注入 |
@@ -668,13 +668,12 @@ DB finish ack 成功
 
 ```text
 steer::restore_pending_to_input(state, pane)
-  1. 按提交顺序取出所有 pending（合并文本用空行分隔）；
-  2. 若输入框已有草稿：pending 文本放在前面 + "\n\n" + 现有草稿；
-  3. lx.import_full_text(merged)；promoting_steers = 0；
-  4. 可选 toast：N 条未生效 steer 已退回输入框。
+  1. 按提交顺序取出所有 pending；
+  2. 对每条 pending 依次调用 lx.import_full_text(&item.text)（前序条目自动压入编辑器 undo 栈，最后一条回显在输入框，绝不将多条合并拼接）；
+  3. promoting_steers = 0。
 ```
 
-- **不自动发送**；用户可编辑后重新 Enter。
+- **不自动发送**；用户可编辑后重新 Enter，或按 `Ctrl+Z` 回溯前序条目。
 - 若 pending 为空，无动作。
 - 失败（HTTP/DB）与用户取消同一路径；避免错误重试。
 
@@ -682,18 +681,21 @@ steer::restore_pending_to_input(state, pane)
 
 - `new_session`（`src/app/update/chat/session.rs`）：在 `reset_session_view()` 前统计 pending，清空并 toast。
 - `on_session_loaded_full` 的 `session_changed` 分支：清空 pending 并 toast；不搬进新会话输入框。
-- 删除当前会话（`delete_session`）同样清空并 toast；随后走现有会话复位路径。
+- 删除当前会话（`delete_session`）同样清空并 toast；工作区级联删除关闭工作区时将未展示的窗格 toast 提升为全局 toast。
 - `LxChat::reset_session_view()`：兜底 `pending_steers.clear(); promoting_steers = 0;`。
 - 关闭窗格：状态随窗格销毁，无需 toast。
 - toast 文案：`Discarded N undelivered steer(s)`（英文，用户可见文案统一英文）。
 
 ### 8.4 撤回 / 编辑
 
-- 提示行右侧 `×`：鼠标点击 → `steer::recall(state, pane, index)`。
-- 输入框为空、光标在 0、无选区、Chat 模式、无面板、`RequestState::Streaming` 时按 `Backspace` → 撤回最近一条。
-- 撤回 = 从 pending 移除 + 文本按 Q3 规则合并回输入框；不是丢弃。
+- 流中按下 `Esc`（`escape_stop`）且未打开 `ask` 面板时，若 `pending_steers` 非空，优先调用 `steer::recall_last(state, pane)`：
+  - 按后进先出（LIFO，`pop()`）弹出最新一条 pending；
+  - 直接调用 `lx.import_full_text(&pending.text)` 覆盖回显到输入框（覆盖前草稿自动进入编辑器 `undo` 栈，绝不与现有内容拼接合并，也不提前写入持久化 `prompt_history`）；
+  - 重置 `stop_armed_at = None`，单次 `Esc` 即完成回退。
+- 待 `pending_steers` 全部排空后再按 `Esc`，才进入原有的双击 `Esc` 停止生成逻辑。
+- 移除提示行右侧 `×` 关闭按钮及空输入框 `Backspace` 撤回。
 - `RequestState` 不是 `Streaming` 时（Committing/Finishing）提示区可见但不可撤回，避免与终态提升竞争。
-- 撤回与交付竞争：事件循环串行处理，先到者生效；若交付已成功，pending 已被移除，撤回自然落空（可选 toast：`Steer already delivered`）。
+- 撤回与交付竞争：事件循环串行处理，先到者生效；若交付已成功，pending 已被移除，撤回自然落空。
 
 ---
 
@@ -711,8 +713,8 @@ input box
 status border
 ```
 
-- 只要 `pending_steers` 非空且未打开 task 页 / ask 面板就显示；`Committing`/`Finishing` 期间仍可见，但 `×`/Backspace 只在 `Streaming` 生效（见 §8.4）。
-- 宽度与输入框一致（`input.x/input.width`）。
+- 只要 `pending_steers` 非空且未打开 task 页 / ask 面板就显示；`Committing`/`Finishing` 期间仍可见，但单次 `Esc` 撤回只在 `Streaming` 生效（见 §8.4）。
+- 宽度与输入框一致（`input.x/input.width`），内部左右各留 1 列缩进（`INDENT = 1`），与下方 `chat_bar` 左上角 `loading` 文案保持同一列左对齐。
 - `layout` 新增 `pending: Option<Rect>`；渲染用 `history_rect` 的底边改为 pending 上沿（有 pending 时）；`panel_base` / `top_limit` 也贴 pending 上沿；`history_wheel_region` 可继续到输入框上沿（含 pending 与 chat bar），滚轮在提示区上仍滚历史。
 - 输入框、聊天栏、历史滚动条几何不变；pending 只是从历史区底部扣掉 N 行。
 
@@ -725,83 +727,42 @@ pub(crate) const MAX_VISIBLE: usize = 3;
 
 pub(crate) fn height(lx: &Lx) -> u16;
 pub(crate) fn draw(grid: &mut Grid, rect: Rect, lx: &Lx);
-pub(crate) fn recall_hit(area: Rect, lx: &Lx, column: u16, row: u16) -> Option<usize>;
 ```
 
-单行格式：
+单行格式（左缩进 1 列对齐 `loading`，无右侧 `×` 关闭按钮）：
 
 ```text
-Steering  <单行截断文本>  · 2 attachments                    ×
+ Steering  <单行截断文本>  · 2 attachments
 ```
 
-- 标签 `Steering` 用 `style::muted()`；文本用 `style::muted()`；`×` 用 `style::muted()`（可加 hover 再亮，v1 可不做）。
+- 标签 `Steering` 用 `style::muted()`；文本与附件后缀用 `style::muted()`。
 - 文本预处理：`\n`/`\t`/控制字符 → 空格；连续空白折叠；按可用宽度截断并加 `…`。
-- 附件后缀：`attachments` 数量 = `pending.attachments.len()`；为 0 时省略。
-- `×` 固定在最右一列（`rect.right()-1`）；宽度不足时优先保 `×` 与 `Steering`，文本整体省略。
-- 超过 `MAX_VISIBLE`：显示前 `MAX_VISIBLE` 条；若还有更多，最后一行改为 `+N more pending`（不可点击），保证不无限挤占历史。
+- 附件后缀：`attachments` 数量 = `pending.attachments.len()`；为 0 时省略；为 1 时显示 `1 attachment`，大于 1 显示 `N attachments`。
+- 超过 `MAX_VISIBLE`：前 `MAX_VISIBLE - 1` 行显示 steer，最后一行显示 `+N more pending`（同样左缩进 1 列），保证不无限挤占历史。
 - 不写选区块、不进入复制文本（pending 不是历史内容）。
 
-用户可见文案（英文，`src/ui/text.rs`）：
+用户可见文案（英文，`src/ui/text/steer.rs`，由 `src/ui/text.rs` 重导出）：
 
-| 常量 | 文案 |
+| 常量 / 函数 | 文案 |
 |------|------|
 | `LX_STEER_LABEL` | `Steering` |
-| `LX_STEER_MORE` | `+{n} more pending` |
-| `LX_STEER_ATTACHMENTS` | `{n} attachments` |
-| `LX_STEER_DISCARDED` | `Discarded {n} undelivered steer(s)` |
+| `lx_steer_more(n)` | `+{n} more pending` |
+| `lx_steer_attachments(n)` | `1 attachment` / `{n} attachments` |
+| `lx_steer_discarded(n)` | `Discarded {n} undelivered steer(s)` |
 | `LX_STEER_SLASH_UNSUPPORTED` | `Slash commands can't be sent while steering` |
 | `LX_STEER_TEXT_LIMIT` | `Steer is too large` |
 
-### 9.3 鼠标命中
+### 9.3 键盘 `Esc` 回退接线
 
-`src/event/mouse/press.rs` 在 `chat_hit` 之前、`text_paste_cancel` 之后插入：
+- `src/app/update/chat/mod.rs::escape_stop`：在 `target.lx.ask.is_none()` 时优先调用 `steer::recall_last(state, pane)`；成功回退一条即返回 `true`。
+- `src/app/update/pane.rs::lx_history_route`：流中存在 `pending_steers` 时，按 `Esc` 不被 `EndBrowse` 提前吞掉，直接进入 `escape_stop` 执行 `recall_last` 并同步退出历史浏览态。
 
-```rust
-if let Some(index) = state.pane_anywhere(pane).and_then(|target| {
-    ui::main_content::lx::steer_strip::recall_hit(
-        inner,
-        &target.lx,
-        mouse.column,
-        mouse.row,
-    )
-}) {
-    update::recall_lx_steer(state, pane, index);
-    *dirty = true;
-    return;
-}
-```
+### 9.4 历史中的 steer 与 `@` 面板 Subagents 视觉区分
 
-- 命中只覆盖 `×` 的单列矩形；点文本行其它位置不拦截，继续走历史/输入命中。
-- `ui::main_content::lx` re-export `steer_strip::{height, draw, recall_hit}`。
-
-### 9.4 键盘
-
-`src/app/update/pane.rs::apply_lx_input` 在处理完 text paste / path paste / mention / refer / slash 面板之后、主编辑 match 之前：
-
-```rust
-let recall_steer = command == LxInput::Backspace
-    && lx.input.is_empty()
-    && lx.cursor == 0
-    && !lx.has_text_selection()
-    && lx.input_mode() == crate::app::state::LxInputMode::Chat
-    && !lx.shell_mode()
-    && lx.panel.is_none()
-    && matches!(lx.chat.request, crate::app::state::RequestState::Streaming { .. })
-    && !lx.chat.pending_steers.is_empty();
-if recall_steer {
-    return super::chat::steer::recall_last(state, pane_id);
-}
-```
-
-- 输入框有内容时 Backspace 仍正常删字；shell 模式在光标 0 仍退出 shell 模式（现有行为优先）。
-- 不新增全局快捷键。
-
-### 9.5 历史中的 steer
-
-- 生效后就是普通 `ChatMessageView { role: "user", kind: "chat", status: "complete" }`；现有 user message 渲染、附件芯片、复制、`/rewind` 全部复用。
-- 后续 assistant 是新消息，不是旧消息追加；历史按 `sequence` 自然排序。
-- 旧 assistant 片段关闭后显示为完整消息；工具卡片、思考块、统计行均按现有逻辑。
-- 不新增历史卡片类型。
+- `Database::begin_steer_turn`（`src/db/chat/steer.rs`）在封口旧 assistant（`stop_reason = 'steer'`）的同时，对新插入的 steer `user` 消息也写入 `stop_reason = 'steer'`。
+- 被 steer 截断的旧 assistant：事件层 `deliver` 与 `view_message_of` 均保持 `duration_ms = None`、不触发中间 `recap`，且 `snapshot.rs`（`followed_by_steer`，跳过流中夹杂的 `user_shell`）抑制其底部模型名与数据统计行渲染，仅最终完成段显示统计。
+- Steer 插入的用户消息：由 `LxChat.steered_user_messages` 追踪（会话重载与子 Agent 分叉历史加载时通过 `rebuild_steered_user_messages` 重建，兼容旧库并跳过 `user_shell`），历史正文气泡、折叠提示行与置顶行（`sticky.rs`）统一使用柔和暗海蓝底色 `style::chat_user_steer_bg()`（`LX_STEER_USER_BG = Color::Rgb(0x1b, 0x2a, 0x38)`）。
+- `@` 命令面板 `Subagents` 列表条目（`src/ui/mention.rs` & `src/ui/style/lx.rs`）：首行 `● + 名称` 按类别与运行状态分色——存活实例 `running` 用琥珀橙 `Indexed(208)`、`idle` 用翡翠绿 `Indexed(42)`、`blocked` 用黄色 `Color::Yellow`；内置角色用品牌冰蓝 `Indexed(117)`；自定义角色用品牌柔粉 `Indexed(218)`。
 
 ---
 
@@ -809,26 +770,26 @@ if recall_steer {
 
 | 层 | 文件 | 改动 |
 |----|------|------|
-| app 状态 | `src/app/state/lx/chat.rs` | `pending_steers`、`promoting_steers` 字段；new/reset 初始化与清理 |
-| app 状态 | `src/app/state/lx/chat/steer.rs` | `PendingSteer`、`SteerBatch`、`build_batch`、预算常量 |
-| app 更新 | `src/app/update/chat/steer.rs` | `try_submit`、`recall`、`recall_last`、`restore_pending_to_input`、`promote_after_finish`、`discard_for_session_change` |
-| app 更新 | `src/app/update/chat/mod.rs` | `try_send` 挂载 steer；`on_finish_ack` 分流；`on_turn_committed` 消费 `promoting_steers`；`on_turn_failed` 复位 |
-| app 更新 | `src/app/update/chat/session.rs` | `/new`、切换会话丢弃 pending + toast |
-| app 更新 | `src/app/update/pane.rs` | 空输入 Backspace 撤回 |
-| app 更新 | `src/app/update.rs` / `src/app/update/chat/mod.rs` | 新增 `recall_lx_steer` 薄封装（供 event/mouse 调用） |
-| 事件层 | `src/event/chat/steer.rs` | `deliver(...)`：校验、合并、DB、状态更新、回执 |
-| 事件层 | `src/event/chat/host.rs` | `AgentHostEvent::SteerInputs`；`EventHost::send` 映射 |
+| app 状态 | `src/app/state/lx/chat.rs` | `pending_steers`、`promoting_steers`、`steered_user_messages` 字段；new/reset 初始化与清理 |
+| app 状态 | `src/app/state/lx/chat/steer.rs` | `PendingSteer`、`SteerBatch`、`build_batch`（图片先去重再判上限）、预算常量、`LxChat` steer 标记方法 |
+| app 更新 | `src/app/update/chat/steer.rs` | `try_submit`、`recall_last`、`restore_pending_to_input`、`promote_after_finish`（含 `batch.model` 回退）、`discard_for_session_change`、`on_finish_ack` |
+| app 更新 | `src/app/update/chat/mod.rs` | `try_send` 挂载 steer；`escape_stop` 优先单次 `Esc` 回退 steer；`on_turn_committed` 消费 `promoting_steers`；`on_turn_failed` 复位 |
+| app 更新 | `src/app/update/chat/session.rs` | `/new`、切换/删除会话丢弃 pending + toast；重载重建 `steered_user_messages` |
+| app 更新 | `src/app/update/pane.rs` | 流中有 pending 时 `Esc` 直达 `escape_stop` |
+| 事件层 | `src/event/chat/steer.rs` | `deliver(...)`（含 `streams.subagents` 分流、`session_id` 校验、`<subagent_reference>` 注入、旧段 `duration_ms = None`）与 `has_pending` |
+| 事件层 | `src/event/chat/host.rs` | `AgentHostEvent::{SteerInputs, HasPendingSteers}`；`EventHost::send` 映射 |
 | 事件层 | `src/event/chat/file_snapshots.rs` | `HostRecorderFactory.user_message_id` 改为共享 `Arc<RwLock<String>>` |
 | 事件层 | `src/event/chat/mod.rs` | `ChatStreams.mutation_users`；`start_stream` 注入；`finish` 清理；`handle_agent_host_event` 增加分支 |
-| agent loop | `src/chat/agent_loop/mod.rs` | `SteerInput`、`AgentHostRequest::SteerInputs/HasPendingSteers`、`take_steer_inputs`、loop 注入点 |
+| agent loop | `src/chat/agent_loop/mod.rs` | `SteerInput`、`AgentHostRequest::{SteerInputs, HasPendingSteers}`、安全边界注入与新段 `usage` 重置 |
 | agent loop | `src/chat/agent_loop/context.rs` | `push_steer_input` |
 | exec host | `src/chat/agent/exec/runner.rs`、`src/chat/agent/exec/subagent/turn.rs` | 穷举 match 新增分支：空 steer / false |
-| DB | `src/db/chat/mod.rs` | `begin_steer_turn`；`MAX_MESSAGE_BYTES` 提升为 `pub(crate)` |
+| DB | `src/db/chat/steer.rs`、`src/db/chat/mod.rs` | `Database::begin_steer_turn`；`MAX_MESSAGE_BYTES` 提升为 `pub(crate)` |
 | DB service | `src/db/service/chat.rs` | `Persistence::begin_steer_turn` 包装 |
-| UI | `src/ui/main_content/lx.rs` | `Layout.pending`；history/panel/top_limit 几何；draw 调用 |
-| UI | `src/ui/main_content/lx/steer_strip.rs` | 新增：height/draw/recall_hit |
-| UI 文本 | `src/ui/text.rs` | `LX_STEER_*` 英文常量 |
-| 鼠标 | `src/event/mouse/press.rs` | `×` 命中 → recall |
+| UI | `src/ui/main_content/lx.rs` | `Layout.pending`；history/panel/top_limit 几何；draw 与 sticky steer 底色调用 |
+| UI | `src/ui/main_content/lx/steer_strip.rs` | 新增：`height`/`draw`（左缩进 1 列对齐 loading，无 `×` 按钮） |
+| UI | `src/ui/main_content/lx/history/{paint,snapshot,sticky}.rs` | Steer 用户消息暗海蓝底色与被截断 assistant 统计行隐藏 |
+| UI | `src/ui/mention.rs`、`src/ui/style/{mod,lx}.rs` | `chat_user_steer_bg` 与 `@` 面板 `Subagents` 分类/状态配色 |
+| UI 文本 | `src/ui/text/steer.rs`、`src/ui/text.rs` | `LX_STEER_*` 英文常量与格式化函数 |
 | 测试 | 各模块 `tests.rs` / `tests/` | 见 §11 |
 
 ---
@@ -872,31 +833,25 @@ if recall_steer {
 
 - 正常完成 + pending：`on_finish_ack` 入队 `BeginChatTurn`；`on_turn_committed` 消费 `promoting_steers`，不清用户新草稿；剩余 pending 保留。
 - `BeginChatTurn` 失败：`promoting_steers=0`，pending 保留，可再次触发。
-- Esc/失败 + pending：退回输入框，合并顺序正确，不自动发送。
+- Esc/失败 + pending：逐条压入编辑器 `undo` 栈并回显最新一条（绝不拼接合并），不自动发送。
 - 切换会话/`/new`：pending 清空 + toast；新会话输入框不被污染。
-- 撤回：`×` 与空输入 Backspace；已有草稿时前置合并；`Committing`/`Finishing` 不可撤回。
+- 撤回：流中单次 `Esc` 按 LIFO 依次回退并直接覆盖回显输入框（排空后才进入双击 `Esc` 停流）；`Committing`/`Finishing` 不可撤回。
 
 ### 11.6 UI
 
 - `steer_strip::height`：0（无 pending/task/ask）、1..3、超过 3 时 `+N more pending`。
-- 绘制：标签、截断、附件计数、`×` 在最右列；宽字符不半写；不进入历史复制。
-- `recall_hit`：只命中 `×`；坐标边界；滚动条/历史命中不穿透。
+- 绘制：左缩进 1 列对齐 `chat_bar` loading、标签、截断、附件计数（`1 attachment` / `N attachments`）、无 `×` 按钮；宽字符不半写；不进入历史复制。
 - `layout`：history 底部扣掉 pending 行；chat bar/输入框位置不变；面板贴 pending 上方；task/ask 隐藏。
-- 鼠标点击 `×` 只撤回对应项；Backspace 撤回最近一条。
+- 被 steer 截断的旧 assistant 隐藏底部统计行；steer 用户消息正文气泡与 sticky 置顶行渲染柔和暗海蓝底色 `#1b2a38`；`@` 面板 `Subagents` 条目按存活状态与内置/自定义类别分色。
 
 ### 11.7 验证命令
 
 ```bash
-cargo fmt
+cargo fmt --check
 cargo clippy --all-targets -- -D warnings
-cargo test app::state::lx::chat::steer
-cargo test app::update::chat::steer
-cargo test app::update::chat::tests::steer
-cargo test db::chat::steer
-cargo test event::chat::steer
-cargo test chat::agent_loop
-cargo test ui::main_content::lx::steer_strip
-cargo test event::mouse
+cargo test --lib steer
+cargo test --lib event::chat::subagent
+cargo test --lib slash_panels
 ```
 
 ---

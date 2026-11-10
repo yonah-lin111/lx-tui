@@ -558,6 +558,10 @@ where
                         // 等待期间用户撤回了 pending：不要空跑一次模型。
                         return TurnSummary::complete(usage).with_billing(billing);
                     }
+                    if !inputs.is_empty() {
+                        // 已切换到新的 assistant 消息：重置单段上下文用量，保留跨段 billing。
+                        usage = Usage::default();
+                    }
                     for input in inputs {
                         context.push_steer_input(input);
                     }

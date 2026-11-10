@@ -5,6 +5,7 @@ pub mod chat;
 pub mod connect;
 pub mod mcp;
 pub mod skills;
+mod steer;
 pub mod todo;
 pub mod workspace;
 
@@ -19,15 +20,11 @@ use crate::app::tooltip::{BlockButtonKind, TemplateButtonKind, TooltipTarget};
 use crate::layout::PaneId;
 
 pub use connect::*;
+pub use steer::*;
 pub use todo::*;
 pub use workspace::*;
 
-/// 快捷键符号（全项目唯一来源，禁止在组件里另写字形）。
-///
-/// 统一规则：**修饰键与"需要按下的键"用符号，动作词保留全拼**——
-/// 修饰键（Shift `⇧`、Ctrl `^`、Cmd `⌘`）用符号省地方、窄面板里不易被截断；
-/// 动作词（`esc`/`cancel`/`close`）用文字一眼懂，全符号化（`⎋`/`⇥`）在部分
-/// 终端字体缺字形会显示成豆腐块。
+/// 快捷键符号（全项目唯一来源，禁止在组件里另写字形）：修饰键与动作键用符号，动作词保留全拼。
 pub mod key {
     /// Shift 修饰键。
     pub const SHIFT: &str = "⇧";
@@ -293,41 +290,6 @@ pub const LX_CHAT_STOP_PHRASES: [&str; 4] = [
     "esc again: stop",
     "esc stop",
 ];
-
-// ===== 流中 steer（输入框上方 pending 提示区）=====
-
-/// pending 提示区行首标签。
-pub const LX_STEER_LABEL: &str = "Steering";
-/// 附件计数后缀（`N attachments`）。
-pub const LX_STEER_ATTACHMENTS: &str = "attachments";
-/// 超过可见条数时末行提示的后缀（`+N more pending`）。
-pub const LX_STEER_MORE: &str = "more pending";
-/// 丢弃未生效 steer 的提示前缀。
-pub const LX_STEER_DISCARDED_PREFIX: &str = "Discarded";
-pub const LX_STEER_DISCARDED: &str = "undelivered steer(s)";
-/// 流中 `/` 命令拒绝提示。
-pub const LX_STEER_SLASH_UNSUPPORTED: &str = "Slash commands can't be sent while steering";
-/// pending 条数达到上限。
-pub const LX_STEER_TOO_MANY: &str = "Too many pending steers";
-/// pending 图片总字节超预算。
-pub const LX_STEER_IMAGE_LIMIT: &str = "Too many pending images";
-/// 单条 steer 文本超过消息上限。
-pub const LX_STEER_TEXT_LIMIT: &str = "Steer is too large";
-
-/// `+N more pending`：超出提示区可见条数时的末行文案。
-pub fn lx_steer_more(count: usize) -> String {
-    format!("+{count} {LX_STEER_MORE}")
-}
-
-/// `N attachments`：单条 pending steer 的附件数量。
-pub fn lx_steer_attachments(count: usize) -> String {
-    format!("{count} {LX_STEER_ATTACHMENTS}")
-}
-
-/// `Discarded N undelivered steer(s)`：会话切换/关闭时丢弃 pending 的提示。
-pub fn lx_steer_discarded(count: usize) -> String {
-    format!("{LX_STEER_DISCARDED_PREFIX} {count} {LX_STEER_DISCARDED}")
-}
 
 /// 数值 + 单位后缀（保留一位小数，整数值去掉 `.0`）：`1.2k` / `720k` / `1M`。
 fn scaled(value: f64, suffix: &str) -> String {

@@ -957,34 +957,6 @@ impl LxChat {
         }
     }
 
-    /// 标记一条用户消息为流中 steer 插入。
-    pub fn mark_steered_user_message(&mut self, message_id: &str) {
-        self.steered_user_messages.insert(message_id.to_string());
-    }
-
-    /// 该消息是否为流中 steer 插入的用户消息。
-    pub fn is_steered_user_message(&self, message_id: &str) -> bool {
-        self.steered_user_messages.contains(message_id)
-    }
-
-    /// 根据 DB 消息列表重建 steer 用户消息集合（兼容旧库仅在被截断 assistant 上写 `stop_reason = 'steer'`）。
-    pub fn rebuild_steered_user_messages(&mut self, messages: &[crate::db::chat::ChatMessage]) {
-        self.steered_user_messages.clear();
-        for (index, message) in messages.iter().enumerate() {
-            if message.role != "user" {
-                continue;
-            }
-            let by_self = message.stop_reason.as_deref() == Some("steer");
-            let by_previous = index > 0
-                && messages[index - 1].role == "assistant"
-                && messages[index - 1].stop_reason.as_deref() == Some("steer");
-            if by_self || by_previous {
-                self.steered_user_messages
-                    .insert(message.external_id.clone());
-            }
-        }
-    }
-
     /// 提取当前会话中用户历史消息发送过的所有文件及引用路径（按最近使用逆序去重）。
     pub fn user_history_reference_paths(&self) -> Vec<(String, bool)> {
         let mut seen = std::collections::HashSet::new();

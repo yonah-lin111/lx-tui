@@ -99,3 +99,15 @@ fn build_batch_stops_at_text_limit() {
 fn build_batch_empty_returns_none() {
     assert!(build_batch(&[]).is_none());
 }
+
+#[test]
+fn build_batch_deduplicates_images_before_checking_max_attached_images() {
+    let mut first = pending("first");
+    first.model_images = vec![image(b"a"), image(b"b"), image(b"c")];
+    let mut second = pending("second");
+    // 含 1 张重复图 b"a" + 1 张新图 b"d"，去重后共 4 张（未超 4 张上限）。
+    second.model_images = vec![image(b"a"), image(b"d")];
+    let batch = build_batch(&[first, second]).expect("batch");
+    assert_eq!(batch.consumed, 2);
+    assert_eq!(batch.model_images.len(), 4);
+}

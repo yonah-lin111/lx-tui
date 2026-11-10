@@ -176,49 +176,42 @@ cargo test app::update::chat::tests::steer
 
 ---
 
-### T1.2 撤回 / 拉回输入框
+### T1.2 单次 `Esc` LIFO 逐条撤回 / 拉回输入框
 
 **文件**
 
 - `src/app/update/chat/steer.rs`
+- `src/app/update/chat/mod.rs`
 - `src/app/update/pane.rs`
-- `src/app/update.rs` 或 `src/app/update/chat/mod.rs`（`recall_lx_steer` 薄封装）
 - `src/app/update/chat/tests/steer.rs`
 
 **关键点**
 
-1. `steer::recall(state, pane, index)`：
+1. `steer::recall_last(state, pane)`：
    - 仅 `Streaming`；
-   - 从 `pending_steers` 移除指定项；
-   - 文本按 Q3 规则合并回输入框：
-     - 输入为空：`pending.text`；
-     - 输入非空：`pending.text + "\n\n" + input`；
-   - `import_full_text`；
+   - 按后进先出（`pending_steers.pop()`）弹出最新一条；
+   - 调用 `target.lx.end_history_browse()` 与 `target.lx.import_full_text(&pending.text)` 直接覆盖回显到输入框（覆盖前草稿自动压入编辑器 `undo` 栈，绝不将多条 steer 用 `"\n\n"` 合并拼接，也不提前写入持久化 `prompt_history`）；
+   - `stop_armed_at = None`；
    - `refresh_lx_status`。
-2. `steer::recall_last` 取最后一条。
-3. `apply_lx_input` 在面板处理之后、主编辑 match 之前：
-   - 条件：`Backspace` + 空输入 + cursor 0 + 无选区 + Chat + 非 shell + 无 md 面板 + `Streaming` + pending 非空；
-   - 调 `recall_last` 并 return。
-4. 鼠标 `×` 命中后调 `recall`（UI 阶段 T3.2 接线）。
-5. 撤回与生效竞争：事件循环串行，先到者生效；撤回后 pending 不存在则无动作。
+2. `escape_stop`（`src/app/update/chat/mod.rs`）：
+   - 当 `ask` 面板未打开时，优先调用 `steer::recall_last`；队列非空时单次 `Esc` 即回退一条并返回 `true`；
+   - 仅当 `pending_steers` 排空后，才进入原有的双击 `Esc` 停止生成逻辑。
+3. 移除提示区 `×` 按钮鼠标命中与空输入框 `Backspace` 撤回。
 
 **测试**
 
 ```bash
-cargo test app::update::chat::tests::steer
-cargo test app::update::tests
+cargo test --lib app::update::chat::tests::steer
 ```
 
 覆盖：
 
-- 空输入 Backspace 撤回最近一条；
-- 有内容时 Backspace 正常删字；
-- shell 模式 Backspace 仍退出 shell；
-- 已有草稿时前置合并；
-- `Committing`/`Finishing` 不可撤回；
-- 两次 Backspace 撤回两条。
+- 流中连续按 `Esc` 按 LIFO 依次回显 `"third"` → `"second"` → `"first"` 且不合并；
+- 队列排空后再按两次 `Esc` 才触发停止流；
+- 空输入框与非空输入框按 `Backspace` 均不撤回 pending steer；
+- `Committing`/`Finishing` 不可撤回。
 
-**完成标准**：不新增全局快捷键；现有输入编辑测试全过。
+**完成标准**：不新增全局快捷键；单次 `Esc` 逐条回退与双击 `Esc` 停流干净解耦。
 
 **依赖**：T1.1。
 
@@ -231,14 +224,15 @@ cargo test app::update::tests
 - `src/app/update/chat/steer.rs`
 - `src/app/update/chat/mod.rs`
 - `src/app/update/chat/session.rs`
+- `src/app/update/workspace.rs`
 - `src/app/update/chat/tests/steer.rs`
 
 **关键点**
 
-1. `on_finish_ack` 在设置 `Idle` 前读取 `Finishing.reason`。
+1. `on_finish_ack`（位于 `src/app/update/chat/steer.rs`）在设置 `Idle` 前读取 `Finishing.reason`。
 2. 成功 + `Complete` + pending 非空：
    - `build_batch`；
-   - 优先当前有效 selection，回退 `batch.model`；新模型不支持图片则退回输入框并提示；
+   - 优先当前有效 selection，为 `None` 时回退 `batch.model`；新模型不支持图片则退回输入框并提示；
    - 无 workspace/session 时退回输入框并提示；
    - `promoting_steers = batch.consumed`；
    - `RequestState::Committing { generation, draft: batch.text }`；
@@ -250,13 +244,13 @@ cargo test app::update::tests
    - 若 `promoting_steers > 0`：归零并 `restore_pending_to_input`（提升失败不自动重试）；
    - 普通发送失败：pending 不动。
 5. 成功 + 非 `Complete`，或 `success == false`：
-   - `restore_pending_to_input`：全部 pending 按顺序合并到输入框前面，不自动发送；
+   - `restore_pending_to_input`：按顺序对每条 pending 调用 `import_full_text` 压入编辑器 `undo` 栈并最终回显最新一条（绝不将多条拼接合并，也不丢带附件的前序条目），不自动发送；
    - `promoting_steers = 0`。
 6. `on_finish_ack` 顺序：`Idle` → `promote_after_finish`（若启动下一轮）→ 未启动时才 `user_shell::on_user_shell_terminal` → `request_report_drain_if_idle`。pending steer 优先于排队项。
 7. `new_session` / `on_session_loaded_full(session_changed)` / `delete_session`：
    - 统计 pending，清空，toast `Discarded N undelivered steer(s)`；
+   - 工作区级联删除关闭工作区时保留未展示的 toast 至全局 `state.toast`；
    - `reset_session_view` 兜底清空。
-8. 关闭窗格：随状态销毁，无额外逻辑。
 
 **测试**
 
@@ -436,105 +430,24 @@ cargo test chat::agent_loop
 2. `layout`：
    - 有 pending 时高度 = `min(len, 3)`；
    - 位置在 chat bar 上方；
-   - `history_bottom` / `panel_base` / `top_limit` / `history_rect` / `history_wheel_region` 使用 pending 上沿；
+   - `history_bottom` / `panel_base` / `top_limit` / `history_rect` 使用 pending 上沿，`history_wheel_region` 仍到输入框上沿；
    - task/ask 打开时隐藏 pending。
-3. `steer_strip::height/draw/recall_hit`：
-   - 单行 `Steering  <截断文本>  · N attachments  ×`；
+3. `steer_strip::height/draw`：
+   - 左右内边距 `INDENT = 1`（`start_x = rect.x + 1`，与下方 `chat_bar` 左上角 `loading` 严格对齐）；
+   - 单行 ` Steering  <截断文本>  · 1 attachment / N attachments`（无右侧 `×` 关闭按钮）；
    - 文本折叠空白/控制字符；
-   - `×` 最右列；
-   - 超过 3 条显示 `+N more pending`；
+   - 超过 3 条末行显示 ` +N more pending`；
    - 不进入历史复制。
-4. `ui/text.rs` 新增英文常量：
-   - `LX_STEER_LABEL`
-   - `LX_STEER_MORE`
-   - `LX_STEER_ATTACHMENTS`
-   - `LX_STEER_DISCARDED`
-   - `LX_STEER_SLASH_UNSUPPORTED`
+4. `src/ui/text/steer.rs`（由 `src/ui/text.rs` 重导出）新增英文常量与单复数格式化函数。
 5. `build_chat` 调用 `steer_strip::draw`。
+6. 被 steer 截断的旧 assistant 隐藏底部统计行（`snapshot.rs` `followed_by_steer`）；steer 用户消息气泡与 sticky 置顶行渲染柔和暗海蓝底色 `Color::Rgb(0x1b, 0x2a, 0x38)`；`@` 面板 `Subagents` 列表条目按存活状态与内置/自定义角色分色。
 
 **测试**
 
 ```bash
-cargo test ui::main_content::lx::steer_strip
-cargo test ui::main_content::lx
+cargo test --lib ui::main_content::lx::steer_strip
+cargo test --lib slash_panels
 ```
-
-覆盖：
-
-- 高度 0/1/3/超过 3；
-- 宽度不足时保 `×`；
-- 宽字符不半写；
-- history 底部扣减正确；
-- task/ask 隐藏；
-- 文本截断与附件计数文案。
-
-**完成标准**：不与 chat bar/输入框/面板重叠；现有布局测试全过。
-
-**依赖**：T0.1。
-
----
-
-### T3.2 鼠标 `×` 命中
-
-**文件**
-
-- `src/ui/main_content/lx/steer_strip.rs`
-- `src/ui/main_content/lx.rs`
-- `src/event/mouse/press.rs`
-- `src/event/tests/`
-
-**关键点**
-
-1. `recall_hit` 只覆盖 `×` 列，返回可见 pending 的原索引。
-2. `press.rs` 在 `chat_hit` 前、`text_paste_cancel` 后插入命中分支。
-3. 调 `update::recall_lx_steer(state, pane, index)`，置 dirty 并 return。
-4. 不拦截文本行其它位置，避免影响历史选区/滚动。
-
-**测试**
-
-```bash
-cargo test event::mouse
-cargo test ui::main_content::lx::steer_strip
-```
-
-覆盖：
-
-- 点击 `×` 撤回对应项；
-- 点击文本/空白不撤回；
-- 任务页/ask 无命中；
-- 坐标边界。
-
-**完成标准**：鼠标点击不穿透到历史/输入框；现有鼠标测试全过。
-
-**依赖**：T1.2、T3.1。
-
----
-
-### T3.3 输入框 Backspace 接线
-
-**文件**
-
-- `src/app/update/pane.rs`
-- `src/app/update/chat/steer.rs`
-- `src/app/update/chat/tests/steer.rs`
-
-**关键点**
-
-1. 在处理完所有面板分支之后、主编辑 match 之前判断。
-2. 条件见 `design.md §9.4`。
-3. 调 `steer::recall_last` 并 return。
-4. 不改变 shell 模式光标 0 退出 shell 的现有行为。
-
-**测试**
-
-```bash
-cargo test app::update::chat::tests::steer
-cargo test app::update::tests
-```
-
-**完成标准**：现有输入编辑/mention/slash 测试全过。
-
-**依赖**：T1.2、T3.1（提示区可见性不影响键盘，但需 pending 状态）。
 
 ---
 
@@ -543,42 +456,32 @@ cargo test app::update::tests
 ### T4.1 精确验证
 
 ```bash
-cargo fmt
+cargo fmt --check
 cargo clippy --all-targets -- -D warnings
-cargo test app::state::lx::chat::steer
-cargo test app::update::chat::steer
-cargo test app::update::chat::tests::steer
-cargo test db::chat::steer
-cargo test event::chat::steer
-cargo test chat::agent_loop
-cargo test ui::main_content::lx::steer_strip
-cargo test event::mouse
+cargo test --lib steer
+cargo test --lib event::chat::subagent
+cargo test --lib slash_panels
 ```
 
 ### T4.2 回归检查
 
-- `try_send` 普通发送路径：
-  - 空闲 Enter；
-  - shell 命令；
-  - `/rename`；
-  - shell 运行中聊天入队；
-  - 图片/技能发送。
+- `try_send` 普通发送路径（空闲 Enter、shell 命令、`/rename`、shell 运行中聊天入队、图片/技能发送）。
 - `on_finish_ack` 普通路径（无 pending）不变化。
 - `/new`、`/resume`、删除会话不回归。
-- 历史渲染、`/rewind`、`/compact`、recap 不回归。
+- 历史渲染、`/rewind`、`/compact`、recap 与 TUI 子 Agent 委派不回归。
 
 ### T4.3 用户手工确认（TUI）
 
 Agent 无法交互式验证 TUI；以下由用户 `cargo run` 确认：
 
-1. 流中按 Enter，输入框上方出现 `Steering` 提示，历史不立即变化。
-2. 下一次工具边界后，提示消失，历史出现普通用户消息，助手继续输出。
-3. 多条 steer 合并成一条用户消息。
-4. `×` 点击 / 空输入 Backspace 能撤回并回到输入框。
-5. Esc 停止后 pending 回到输入框，不自动发送。
+1. 流中按 Enter，输入框上方出现与 `loading` 左对齐的 `Steering` 提示（无 `×` 按钮），历史不立即变化。
+2. 下一次工具边界后，提示消失，历史出现暗海蓝底色的 steer 用户消息，被截断的上一段 assistant 不显示底部统计，助手继续输出。
+3. 多条 steer 在同一安全边界合并成一条用户消息。
+4. 流中按单次 `Esc` 按 LIFO 依次撤回并回显到输入框（绝不合并），排空后再按两次 `Esc` 才停止当前流。
+5. Esc 停止后 pending 回到输入框（前序条目可通过 `Ctrl+Z` 回退），不自动发送。
 6. 正常完成后 pending 自动成为下一轮。
 7. 切换会话后旧 pending 不进入新会话，并有 toast。
-8. 重启 lx 后已生效 steer 仍在历史，未生效 pending 不保留。
+8. `@` 面板 `Subagents` 列表中运行中/空闲实例、内置角色与自定义角色显示不同颜色。
 
 ---
 

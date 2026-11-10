@@ -114,6 +114,7 @@ pub(super) fn launch_child_turn(
                 .iter()
                 .map(|msg| crate::app::update::view_message_of(msg, &models_snapshot))
                 .collect();
+            chat.rebuild_steered_user_messages(existing);
             chat.request = RequestState::Streaming {
                 key: child_key.clone(),
                 assistant_id: child_assistant_id.to_string(),

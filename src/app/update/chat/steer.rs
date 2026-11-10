@@ -162,37 +162,25 @@ pub(super) fn try_submit(state: &mut AppState, pane: PaneId) -> bool {
     true
 }
 
-/// 流中单次 `Esc`：按 LIFO 弹出最近一条 pending steer 并直接回显到输入框（不与现有内容拼接合并）。
+/// 流中单次 `Esc`：按 LIFO 弹出最近一条 pending steer 并直接回显到输入框（不与现有内容拼接合并，也不提前污染持久化历史）。
 pub fn recall_last(state: &mut AppState, pane: PaneId) -> bool {
-    let (text, record_history) = {
-        let Some(target) = state.pane_mut_anywhere(pane) else {
-            return false;
-        };
-        if !matches!(target.lx.chat.request, RequestState::Streaming { .. }) {
-            return false;
-        }
-        let Some(pending) = target.lx.chat.pending_steers.pop() else {
-            return false;
-        };
-        let text = pending.text;
-        let record_history = pending.attachments.is_empty();
-        target.lx.end_history_browse();
-        target.lx.import_full_text(&text);
-        target.lx.chat.stop_armed_at = None;
-        (text, record_history)
+    let Some(target) = state.pane_mut_anywhere(pane) else {
+        return false;
     };
-    if record_history && state.prompt_history.record(&text) {
-        state
-            .effects
-            .push(crate::app::effects::Effect::RecordPromptHistory {
-                text: text.trim().to_string(),
-            });
+    if !matches!(target.lx.chat.request, RequestState::Streaming { .. }) {
+        return false;
     }
+    let Some(pending) = target.lx.chat.pending_steers.pop() else {
+        return false;
+    };
+    target.lx.end_history_browse();
+    target.lx.import_full_text(&pending.text);
+    target.lx.chat.stop_armed_at = None;
     refresh_lx_status(state, pane);
     true
 }
 
-/// 终态失败/取消：把最新一条 pending 直接回显到输入框（其余纯文本写入历史），绝不将多条合并拼接。
+/// 终态失败/取消：按顺序将每条 pending 压入输入框撤销栈并最终回显最新一条（绝不将多条合并拼接，也不丢失带附件的前序条目）。
 pub fn restore_pending_to_input(state: &mut AppState, pane: PaneId) -> usize {
     let pending = {
         let Some(target) = state.pane_mut_anywhere(pane) else {
@@ -205,20 +193,11 @@ pub fn restore_pending_to_input(state: &mut AppState, pane: PaneId) -> usize {
         std::mem::take(&mut target.lx.chat.pending_steers)
     };
     let count = pending.len();
-    for item in &pending {
-        if item.attachments.is_empty() && state.prompt_history.record(&item.text) {
-            state
-                .effects
-                .push(crate::app::effects::Effect::RecordPromptHistory {
-                    text: item.text.trim().to_string(),
-                });
-        }
-    }
-    if let Some(last) = pending.last()
-        && let Some(target) = state.pane_mut_anywhere(pane)
-    {
+    if let Some(target) = state.pane_mut_anywhere(pane) {
         target.lx.end_history_browse();
-        target.lx.import_full_text(&last.text);
+        for item in &pending {
+            target.lx.import_full_text(&item.text);
+        }
     }
     refresh_lx_status(state, pane);
     count
@@ -252,14 +231,19 @@ pub fn promote_after_finish(state: &mut AppState, pane: PaneId) -> bool {
         restore_pending_to_input(state, pane);
         return false;
     };
-    // 提升为普通下一轮时必须能按**当前**配置解析模型；否则 StartChatStream 会
-    // 在 DB 已消费 pending 后失败，导致文本落进一个失败轮次。
-    let Some(current) = target
+    // 提升为普通下一轮时优先按当前配置解析模型，无配置时回退到提交 steer 时冻结的 `batch.model`。
+    let fallback_selection = crate::config::ai::ModelSelection {
+        provider: batch.model.provider.clone(),
+        model: batch.model.model.clone(),
+        variant: batch.model.variant.clone(),
+    };
+    let resolved = target
         .lx
         .chat
         .effective_selection(&state.models)
-        .and_then(|selection| FrozenModel::resolve(&state.models, &selection))
-    else {
+        .and_then(|selection| FrozenModel::resolve(&state.models, &selection).map(|m| (m, false)))
+        .or_else(|| FrozenModel::resolve(&state.models, &fallback_selection).map(|m| (m, true)));
+    let Some((current, used_fallback)) = resolved else {
         restore_pending_to_input(state, pane);
         show_lx_hint(state, pane, InputHintLevel::Error, text::LX_CHAT_NO_MODEL);
         return false;
@@ -281,6 +265,9 @@ pub fn promote_after_finish(state: &mut AppState, pane: PaneId) -> bool {
     let Some(target) = state.pane_mut_anywhere(pane) else {
         return false;
     };
+    if used_fallback && target.lx.chat.selection.is_none() {
+        target.lx.chat.selection = Some(fallback_selection);
+    }
     target.lx.chat.generation_counter = generation;
     target.lx.chat.promoting_steers = batch.consumed;
     target.lx.chat.main_stopped = false;
@@ -324,4 +311,58 @@ pub fn discard_for_session_change(state: &mut AppState, pane: PaneId) -> usize {
         text::lx_steer_discarded(count),
     );
     count
+}
+
+/// 最终 DB 写入成功：回 Idle；失败保留内存 partial 并提示保存失败。
+pub fn on_finish_ack(
+    state: &mut AppState,
+    key: &crate::app::state::RequestKey,
+    success: bool,
+) -> bool {
+    let reason = {
+        let Some(target) = state.pane_mut_anywhere(key.pane) else {
+            return false;
+        };
+        if !matches!(
+            &target.lx.chat.request,
+            RequestState::Finishing {
+                key: active,
+                ..
+            } if active == key
+        ) {
+            return false;
+        }
+        let RequestState::Finishing { reason, .. } = &target.lx.chat.request else {
+            return false;
+        };
+        reason.clone()
+    };
+    if success {
+        if let Some(target) = state.pane_mut_anywhere(key.pane) {
+            target.lx.chat.request = RequestState::Idle;
+        }
+        let promoted = matches!(reason, crate::chat::events::StopReason::Complete)
+            && promote_after_finish(state, key.pane);
+        if !promoted {
+            if !matches!(reason, crate::chat::events::StopReason::Complete) {
+                // Esc 停止或失败：未生效 steer 退回输入框，不自动发送。
+                restore_pending_to_input(state, key.pane);
+            }
+            // 模型轮次结束后按 FIFO 分派排队项（忙时 Tab 排队的 shell 在这里开始）。
+            super::user_shell::on_user_shell_terminal(state, key.pane);
+            // 没有用户提交占位时，才允许后台报告自动起轮。用户输入优先。
+            super::request_report_drain_if_idle(state, key.pane);
+        }
+    } else {
+        // Finishing（保存失败）：保留内存 partial，不能伪装成可恢复历史。
+        restore_pending_to_input(state, key.pane);
+        show_lx_hint(
+            state,
+            key.pane,
+            InputHintLevel::Error,
+            text::LX_CHAT_SAVE_FAILED,
+        );
+    }
+    refresh_lx_status(state, key.pane);
+    true
 }

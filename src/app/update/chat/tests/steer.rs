@@ -134,6 +134,14 @@ fn escape_recalls_pending_steers_sequentially_in_lifo_without_merging() {
     // 第 5 次 Esc：真正停止当前流。
     crate::app::update::apply_lx_input(&mut state, crate::app::actions::LxInput::Escape);
     assert!(state.pane_anywhere(pane).unwrap().lx.chat.main_stopped);
+    // 撤回尚未落库的 steer 不应污染持久化 prompt_history。
+    assert!(
+        !state.effects.iter().any(|effect| matches!(
+            effect,
+            crate::app::effects::Effect::RecordPromptHistory { .. }
+        )),
+        "未发送落库的撤回草稿不得派发 RecordPromptHistory"
+    );
 }
 
 #[test]
@@ -182,10 +190,15 @@ fn cancelled_finish_restores_latest_pending_without_merging() {
         reason: StopReason::Cancelled,
     };
     assert!(on_finish_ack(&mut state, &key, true));
-    let target = state.pane_anywhere(pane).unwrap();
+    let target = state.pane_mut_anywhere(pane).unwrap();
     assert!(target.lx.chat.pending_steers.is_empty());
     assert_eq!(target.lx.input, "second");
     assert!(matches!(target.lx.chat.request, RequestState::Idle));
+    // 前序条目已压入编辑器 undo 栈，不丢失且不合并。
+    target.lx.undo();
+    assert_eq!(target.lx.input, "first");
+    target.lx.undo();
+    assert_eq!(target.lx.input, "draft");
 }
 
 #[test]

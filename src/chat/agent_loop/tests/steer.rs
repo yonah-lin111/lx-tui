@@ -376,3 +376,58 @@ async fn failed_steer_stops_the_turn() {
     );
     assert_eq!(script.request_count(), 1, "失败后不再采样");
 }
+
+#[tokio::test]
+async fn steer_injection_resets_step_usage_for_new_assistant_while_preserving_billing() {
+    let fixture = Fixture::new("steer-reset-step-usage");
+    let first_usage = crate::db::chat::Usage {
+        input: Some(120),
+        output: Some(40),
+        cache_read: None,
+        cache_write: None,
+    };
+    let read_args = r#"{"path":"."}"#.to_string();
+    let step = Arc::new(Mutex::new(0usize));
+    let step_clone = step.clone();
+    let stream_one = move |_request: ChatRequest, _cancel: watch::Receiver<bool>| {
+        let mut current = step_clone.lock().expect("lock");
+        let idx = *current;
+        *current += 1;
+        let outcome = if idx == 0 {
+            let mut deltas = tool_calls(&[("c1", "read", &read_args, 0)], Some((120, 40)));
+            deltas.push(ChatDelta::Finished {
+                reason: StopReason::Complete,
+            });
+            StreamOutcome {
+                deltas,
+                stop: StopReason::Complete,
+            }
+        } else {
+            StreamOutcome {
+                deltas: Vec::new(),
+                stop: StopReason::Cancelled,
+            }
+        };
+        std::future::ready(outcome)
+    };
+    let host = RecordingHost::new().with_steer_batch(vec![steer_text("redirect")]);
+    let summary = run_agent_turn(
+        context(fixture.path()),
+        host,
+        RecordingExecutor::new(),
+        stream_one,
+        no_cancel(),
+    )
+    .await;
+
+    assert_eq!(summary.outcome, TurnOutcome::Interrupted);
+    assert_eq!(
+        summary.usage,
+        crate::db::chat::Usage::default(),
+        "新 assistant 段尚未产生 usage 即取消时不得沿用旧段 usage"
+    );
+    assert_eq!(
+        summary.billing, first_usage,
+        "整轮 billing 仍保留已产生的首段用量"
+    );
+}

@@ -43,6 +43,13 @@ pub(crate) fn deliver(
         let _ = reply.send(Err(HostError::Cancelled));
         return false;
     };
+    if state
+        .pane_anywhere(key.pane)
+        .is_none_or(|pane| pane.lx.chat.session_id.as_deref() != Some(key.session.as_str()))
+    {
+        let _ = reply.send(Err(HostError::Cancelled));
+        return false;
+    }
     let Some(batch) = state.pane_anywhere(key.pane).and_then(|pane| {
         crate::app::state::lx::chat::steer::build_batch(&pane.lx.chat.pending_steers)
     }) else {
@@ -214,7 +221,28 @@ pub(crate) fn deliver(
             });
     }
     crate::app::update::refresh_lx_status(state, key.pane);
-    let skill_blocks = super::skills::reference_blocks(&text);
+    let mut skill_blocks = super::skills::reference_blocks(&text);
+    let workspace_root = state.workspace_cwd_for_pane(key.pane);
+    let config_root = state
+        .chat_session_key_for_pane(key.pane)
+        .or_else(|| workspace_root.clone());
+    let workspace_trusted = [workspace_root.as_deref(), config_root.as_deref()]
+        .into_iter()
+        .flatten()
+        .any(|path| persistence.is_trusted(path));
+    let effective_subagents = crate::config::subagents::merge_project_roles_for_paths(
+        &state.subagents_config,
+        config_root.as_deref(),
+        workspace_root.as_deref(),
+        workspace_trusted,
+    );
+    if let Some(pane) = state.pane_anywhere(key.pane) {
+        skill_blocks.extend(super::subagent::snapshot::subagent_reference_blocks(
+            &text,
+            &effective_subagents,
+            &pane.lx.agents.runs,
+        ));
+    }
     let _ = reply.send(Ok(vec![SteerInput {
         text,
         images: batch.model_images,

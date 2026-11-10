@@ -86,10 +86,7 @@ pub use slash::{
     accept_slash_command, apply_models_changed, apply_slash_command, apply_slash_enter,
     open_history, open_model_picker, persist_default_model,
 };
-pub use steer::{
-    discard_for_session_change, promote_after_finish, recall_last as recall_last_lx_steer,
-    restore_pending_to_input,
-};
+pub use steer::on_finish_ack;
 pub use subagent::{
     apply_deltas as apply_subagent_deltas, on_report_batch_committed, on_subagent_auto_compact,
     on_subagent_delta, on_subagent_finished, on_subagent_loaded, on_subagent_started,
@@ -645,56 +642,6 @@ pub fn on_stream_finished(
             usage,
             billing,
         });
-    true
-}
-
-/// 最终 DB 写入成功：回 Idle；失败保留内存 partial 并提示保存失败。
-pub fn on_finish_ack(state: &mut AppState, key: &RequestKey, success: bool) -> bool {
-    let reason = {
-        let Some(target) = state.pane_mut_anywhere(key.pane) else {
-            return false;
-        };
-        if !matches!(
-            &target.lx.chat.request,
-            RequestState::Finishing {
-                key: active,
-                ..
-            } if active == key
-        ) {
-            return false;
-        }
-        let RequestState::Finishing { reason, .. } = &target.lx.chat.request else {
-            return false;
-        };
-        reason.clone()
-    };
-    if success {
-        if let Some(target) = state.pane_mut_anywhere(key.pane) {
-            target.lx.chat.request = RequestState::Idle;
-        }
-        let promoted =
-            matches!(reason, StopReason::Complete) && steer::promote_after_finish(state, key.pane);
-        if !promoted {
-            if !matches!(reason, StopReason::Complete) {
-                // Esc 停止或失败：未生效 steer 退回输入框，不自动发送。
-                steer::restore_pending_to_input(state, key.pane);
-            }
-            // 模型轮次结束后按 FIFO 分派排队项（忙时 Tab 排队的 shell 在这里开始）。
-            user_shell::on_user_shell_terminal(state, key.pane);
-            // 没有用户提交占位时，才允许后台报告自动起轮。用户输入优先。
-            request_report_drain_if_idle(state, key.pane);
-        }
-    } else {
-        // Finishing（保存失败）：保留内存 partial，不能伪装成可恢复历史。
-        steer::restore_pending_to_input(state, key.pane);
-        show_lx_hint(
-            state,
-            key.pane,
-            InputHintLevel::Error,
-            text::LX_CHAT_SAVE_FAILED,
-        );
-    }
-    refresh_lx_status(state, key.pane);
     true
 }
 
