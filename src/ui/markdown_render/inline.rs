@@ -34,6 +34,7 @@ pub(super) fn is_web_url(url: &str) -> bool {
 }
 
 /// 行内渲染：吃掉粗体/斜体/粗斜体/删除线/行内代码标记；网页链接仅显示带下划线的 `文字`。
+#[cfg(test)]
 pub(super) fn inline_spans(text: &str) -> Vec<(String, Style)> {
     inline_spans_with_links(text)
         .into_iter()
@@ -60,6 +61,28 @@ pub(super) fn marker_spans_and_links(
     )
 }
 
+/// 标题行内渲染与超链接列区间：非超链接文本统一采用 `heading_style`，超链接文本叠加链接蓝与下划线。
+pub(super) fn heading_spans_and_links(
+    body: &str,
+    heading_style: Style,
+) -> (Vec<(String, Style)>, Vec<MdLinkSpan>) {
+    let inline: Vec<InlineSpan> = inline_spans_with_links(body)
+        .into_iter()
+        .map(|mut span| {
+            span.style = if span.link.is_some() {
+                heading_style.patch(style::md_read_link_text())
+            } else {
+                heading_style
+            };
+            span
+        })
+        .collect();
+    if inline.is_empty() {
+        return (vec![(body.to_string(), heading_style)], Vec::new());
+    }
+    build_spans_and_links(None, inline, None)
+}
+
 fn build_spans_and_links(
     lead: Option<(String, Style)>,
     inline: Vec<InlineSpan>,
@@ -69,6 +92,7 @@ fn build_spans_and_links(
         Vec::with_capacity(inline.len() + usize::from(lead.is_some()));
     let mut links: Vec<MdLinkSpan> = Vec::new();
     let mut cursor_col = 0u16;
+    let mut prev_link: Option<String> = None;
     if let Some((marker, style)) = lead {
         cursor_col = u16::try_from(display_width(&marker)).unwrap_or(u16::MAX);
         spans.push((marker, style));
@@ -76,19 +100,20 @@ fn build_spans_and_links(
     for span in inline {
         let cols = u16::try_from(display_width(&span.text)).unwrap_or(u16::MAX);
         let next_col = cursor_col.saturating_add(cols);
-        if let Some(url) = span.link
+        let span_link = span.link;
+        if let Some(ref url) = span_link
             && cursor_col < next_col
         {
             if let Some(last) = links.last_mut()
                 && last.end_col == cursor_col
-                && last.url == url
+                && last.url == *url
             {
                 last.end_col = next_col;
             } else {
                 links.push(MdLinkSpan {
                     start_col: cursor_col,
                     end_col: next_col,
-                    url,
+                    url: url.clone(),
                 });
             }
         }
@@ -99,11 +124,13 @@ fn build_spans_and_links(
         };
         if let Some(last) = spans.last_mut()
             && last.1 == final_style
+            && prev_link == span_link
         {
             last.0.push_str(&span.text);
         } else {
             spans.push((span.text, final_style));
         }
+        prev_link = span_link;
     }
     (spans, links)
 }
@@ -141,6 +168,7 @@ pub(super) fn slice_spans_and_links(
     let mut spans: Vec<(String, Style)> = Vec::new();
     let mut links: Vec<MdLinkSpan> = Vec::new();
     let mut col = 0u16;
+    let mut prev_link: Option<&str> = None;
     for (ch, span_style, link) in trimmed {
         let w = char_width(*ch);
         let next_col = col.saturating_add(w);
@@ -163,11 +191,13 @@ pub(super) fn slice_spans_and_links(
         col = next_col;
         if let Some(last) = spans.last_mut()
             && last.1 == *span_style
+            && prev_link == *link
         {
             last.0.push(*ch);
         } else {
             spans.push((ch.to_string(), *span_style));
         }
+        prev_link = *link;
     }
     (spans, links)
 }
@@ -291,9 +321,16 @@ pub(super) fn inline_spans_with_links(text: &str) -> Vec<InlineSpan> {
                 continue;
             }
         }
-        // 裸 URL。
+        // 裸 URL（扫描右边界时遇到非 ASCII、空白、控制字符或 HTML/Markdown 分隔符即截断）。
         if rest.starts_with("http://") || rest.starts_with("https://") {
-            let raw_end = rest.find(char::is_whitespace).unwrap_or(rest.len());
+            let raw_end = rest
+                .find(|ch: char| {
+                    !ch.is_ascii()
+                        || ch.is_whitespace()
+                        || ch.is_control()
+                        || matches!(ch, '<' | '>' | '"' | '`' | '|' | '\\' | '^')
+                })
+                .unwrap_or(rest.len());
             let end = trim_bare_url_end(&rest[..raw_end]);
             let candidate = &rest[..end];
             if is_web_url(candidate) {

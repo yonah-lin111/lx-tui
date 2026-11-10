@@ -28,7 +28,9 @@ pub(crate) use highlight::highlight_line;
 /// 流式 Markdown 增量渲染状态（稳定前缀 + 活跃尾部）。
 pub(crate) use incremental::IncrementalMarkdownState;
 pub use inline::MdLinkSpan;
-use inline::{inline_spans, marker_spans_and_links, spans_and_links};
+#[cfg(test)]
+use inline::inline_spans;
+use inline::{heading_spans_and_links, marker_spans_and_links, spans_and_links};
 pub use table::{
     TableCellSlice, TableColumnSpan, TableLayoutMeta, TableLineKind, TableLineRef, TableLogicalRow,
 };
@@ -206,8 +208,13 @@ enum ListKind {
 /// 上一个已产出块的种类（供 `code_chrome == true` 的块间距状态机判定是否插入前导空行）。
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum PrevBlock {
-    /// 普通段落或图片行；`in_list` 表示该行是否作为列表项内的缩进续段，`depth` 为其所属列表层级。
-    Paragraph { in_list: bool, depth: usize },
+    /// 普通段落或图片行；`in_list` 表示该行是否作为列表项内的缩进续段，`depth` 为其所属列表层级，
+    /// `loose` 表示该列表内续段是否由空行（`\n\n`）引导。
+    Paragraph {
+        in_list: bool,
+        depth: usize,
+        loose: bool,
+    },
     /// 标题行（`#`..`######`）。
     Heading,
     /// 列表项（记录换算后的层级 `depth` 与列表种类 `kind`）。
@@ -308,17 +315,18 @@ fn should_insert_blank_line(
             PrevBlock::Paragraph {
                 in_list: true,
                 depth: prev_depth,
+                loose,
             } => {
                 if depth > prev_depth {
                     false
                 } else {
-                    saw_blank_line || depth < prev_depth
+                    saw_blank_line || loose || depth < prev_depth
                 }
             }
             _ => true,
         },
         // 段落或图片行：区分顶层段落、列表内紧凑续行、列表内松散续段与退出列表。
-        PrevBlock::Paragraph { in_list, depth } => match prev {
+        PrevBlock::Paragraph { in_list, depth, .. } => match prev {
             PrevBlock::Heading
             | PrevBlock::CodeBlock
             | PrevBlock::Table
@@ -328,9 +336,17 @@ fn should_insert_blank_line(
             PrevBlock::Paragraph {
                 in_list: prev_in_list,
                 depth: prev_depth,
+                ..
             } => saw_blank_line || (prev_in_list && (!in_list || depth != prev_depth)),
         },
     }
+}
+
+/// 清空列表缩进栈（进入标题、分割线、表格、引用块等独立顶层块时调用）。
+fn clear_list_context(state: &mut ParserState) {
+    state.list_indents.clear();
+    state.list_content_indents.clear();
+    state.list_hangs.clear();
 }
 
 /// 从给定跨行状态继续块级解析，返回新产出的行。
@@ -424,12 +440,14 @@ fn render_blocks_stateful(
             continue;
         }
         if let Some((level, body)) = heading(trimmed) {
+            clear_list_context(state);
             transition_block(state, PrevBlock::Heading, code_chrome, &mut lines);
             lines.push(heading_line(level, body));
             index += 1;
             continue;
         }
         if is_rule(trimmed) {
+            clear_list_context(state);
             transition_block(state, PrevBlock::Rule, code_chrome, &mut lines);
             if expand_rules {
                 let rule_width = width.unwrap_or(40).max(1);
@@ -445,11 +463,13 @@ fn render_blocks_stateful(
             continue;
         }
         if trimmed.trim_start().starts_with('|') {
+            clear_list_context(state);
             transition_block(state, PrevBlock::Table, code_chrome, &mut lines);
             index = table::table(&source_lines, index, &mut lines, width);
             continue;
         }
         if trimmed.trim_start().starts_with('>') {
+            clear_list_context(state);
             transition_block(state, PrevBlock::Quote, code_chrome, &mut lines);
             lines.push(blockquote_line(trimmed));
             index += 1;
@@ -457,25 +477,27 @@ fn render_blocks_stateful(
         }
         let in_list = !state.list_indents.is_empty();
         let depth = state.list_indents.len().saturating_sub(1);
+        let loose = in_list
+            && (state.saw_blank_line
+                || matches!(
+                    state.prev_block,
+                    Some(PrevBlock::Paragraph {
+                        in_list: true,
+                        loose: true,
+                        ..
+                    })
+                ));
         transition_block(
             state,
-            PrevBlock::Paragraph { in_list, depth },
+            PrevBlock::Paragraph {
+                in_list,
+                depth,
+                loose,
+            },
             code_chrome,
             &mut lines,
         );
-        if let Some((alt, url)) = image(trimmed) {
-            lines.push(MdLine::spans(
-                0,
-                vec![
-                    (alt.to_string(), style::text()),
-                    (" ".to_string(), style::text()),
-                    (format!("({url})"), style::md_read_image()),
-                ],
-            ));
-            index += 1;
-            continue;
-        }
-        // 普通段落行：行内渲染（若仍处于列表上下文内，续段按当前列表层级的正文列缩进）。
+        // 普通段落或图片行：行内渲染（若仍处于列表上下文内，续段按当前列表层级的正文列缩进）。
         let cont_indent = if !in_list {
             0
         } else {
@@ -487,6 +509,18 @@ fn render_blocks_stateful(
         } else {
             trimmed
         };
+        if let Some((alt, url)) = image(body) {
+            lines.push(MdLine::spans(
+                cont_indent,
+                vec![
+                    (alt.to_string(), style::text()),
+                    (" ".to_string(), style::text()),
+                    (format!("({url})"), style::md_read_image()),
+                ],
+            ));
+            index += 1;
+            continue;
+        }
         let (spans, links) = spans_and_links(body);
         lines.push(MdLine::spans_with_links(cont_indent, spans, links));
         index += 1;
@@ -514,15 +548,10 @@ fn heading(line: &str) -> Option<(u8, &str)> {
     (spaces > 0).then(|| (hashes as u8, rest[spaces..].trim_end()))
 }
 
-/// 渲染一行标题：隐藏 `#` 标记，正文用分级样式（若内含行内标记则先剥离标记文本）。
+/// 渲染一行标题：隐藏 `#` 标记，正文用分级样式（含网页超链接时保留链接热区与下划线）。
 fn heading_line(level: u8, body: &str) -> MdLine {
-    let clean: String = inline_spans(body).into_iter().map(|(s, _)| s).collect();
-    let display = if clean.is_empty() {
-        body
-    } else {
-        clean.as_str()
-    };
-    MdLine::plain(0, display, style::md_read_heading_level(level))
+    let (spans, links) = heading_spans_and_links(body, style::md_read_heading_level(level));
+    MdLine::spans_with_links(0, spans, links)
 }
 
 /// 水平线：仅由同一种 `-`/`*`/`_` 组成且至少 3 个。

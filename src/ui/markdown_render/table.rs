@@ -136,7 +136,8 @@ pub(super) fn table(
                 std::iter::once(&header)
                     .chain(body.iter())
                     .filter_map(|row| row.get(column))
-                    .flat_map(|cell| cell.chars())
+                    .flat_map(|cell| render_cell_spans(cell, style::text()))
+                    .flat_map(|span| span.text.chars().collect::<Vec<_>>())
                     .map(|ch| char_width(ch) as usize)
                     .max()
                     .unwrap_or(1)
@@ -175,8 +176,9 @@ fn shrink_widths(widths: &mut [usize], floors: &[usize], width: usize) {
     // 按比例分配，再补齐/削减到 [floor, original] 区间。
     let mut scaled = vec![0usize; columns];
     for index in 0..columns {
+        let floor = floors[index].min(widths[index]);
         let share = widths[index].saturating_mul(available) / total;
-        scaled[index] = share.clamp(floors[index], widths[index]);
+        scaled[index] = share.clamp(floor, widths[index]);
     }
     let mut used: usize = scaled.iter().sum();
     while used > available {
@@ -654,8 +656,9 @@ fn pad_line(line: &[InlineSpan], width: usize, align: Align) -> WrappedCellLine 
         Align::Center => (pad / 2, pad - pad / 2),
     };
     let mut out = Vec::new();
-    let mut links = Vec::new();
-    let pad_style = line.first().map(|span| span.style).unwrap_or_default();
+    let mut links: Vec<MdLinkSpan> = Vec::new();
+    let pad_style = style::text();
+    let mut prev_link: Option<&str> = None;
     if before > 0 {
         out.push((" ".repeat(before), pad_style));
     }
@@ -666,23 +669,39 @@ fn pad_line(line: &[InlineSpan], width: usize, align: Align) -> WrappedCellLine 
         if let Some(ref url) = span.link
             && cursor_col < next_col
         {
-            links.push(MdLinkSpan {
-                start_col: cursor_col,
-                end_col: next_col,
-                url: url.clone(),
-            });
+            if let Some(last) = links.last_mut()
+                && last.end_col == cursor_col
+                && last.url == *url
+            {
+                last.end_col = next_col;
+            } else {
+                links.push(MdLinkSpan {
+                    start_col: cursor_col,
+                    end_col: next_col,
+                    url: url.clone(),
+                });
+            }
         }
         cursor_col = next_col;
         if let Some(last) = out.last_mut()
             && last.1 == span.style
+            && prev_link == span.link.as_deref()
         {
             last.0.push_str(&span.text);
         } else {
             out.push((span.text.clone(), span.style));
         }
+        prev_link = span.link.as_deref();
     }
     if after > 0 {
-        out.push((" ".repeat(after), pad_style));
+        if let Some(last) = out.last_mut()
+            && last.1 == pad_style
+            && prev_link.is_none()
+        {
+            last.0.push_str(&" ".repeat(after));
+        } else {
+            out.push((" ".repeat(after), pad_style));
+        }
     }
     if out.is_empty() {
         out.push((" ".repeat(width), pad_style));

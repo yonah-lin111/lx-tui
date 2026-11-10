@@ -719,4 +719,21 @@ fn assistant_report_layout_separates_sections_lists_and_paragraphs_while_non_ass
             "非助手正文不得插入块间空行：{compact_lines:?}"
         );
     }
+
+    // P1-3：列表项含松散续段（`\n\n` 引导）后进入下一条同级列表项，续段上下均空 1 行。
+    let loose_cont = "1. step\n\n    explanation\n2. next";
+    let loose_texts: Vec<String> = render_wrapped_code_blocks(loose_cont, 80)
+        .iter()
+        .map(MdLine::text)
+        .collect();
+    assert_eq!(
+        loose_texts,
+        vec![
+            "1. step".to_string(),
+            String::new(),
+            "explanation".to_string(),
+            String::new(),
+            "2. next".to_string(),
+        ]
+    );
 }

@@ -916,3 +916,51 @@ fn web_links_preserve_link_spans_across_soft_wraps_and_strip_trailing_punctuatio
         "裸 URL 应保留配对括号并剥离句末中文句号"
     );
 }
+
+#[test]
+fn review_regressions_table_shrink_with_hidden_cjk_url_heading_links_and_bare_url_cjk_boundary() {
+    use ratatui::style::Modifier;
+
+    // P0-1 & P2-1：短标签隐藏含中文路径的 URL 在窄视口收缩列宽时不 panic，且右侧填充空白不带下划线。
+    let table_src = "| 序号 | 说明 |\n| --- | --- |\n| [1](https://example.com/中文路径) | 这是一段非常长的说明文字用于触发列宽收缩 |";
+    let table_lines = render_wrapped_code_blocks(table_src, 26);
+    assert!(!table_lines.is_empty());
+    let link_row = table_lines
+        .iter()
+        .find(|line| !line.links.is_empty())
+        .expect("table link row");
+    assert_eq!(link_row.links[0].url, "https://example.com/中文路径");
+    for (text, span_style) in &link_row.spans {
+        if text.trim().is_empty() && !text.is_empty() {
+            assert!(
+                !span_style.add_modifier.contains(Modifier::UNDERLINED),
+                "单元格空白填充列不得继承下划线：{:?}",
+                link_row.spans
+            );
+        }
+    }
+
+    // P1-2：标题内网页链接隐藏 (url) 并保留 MdLinkSpan。
+    let heading_lines =
+        render_wrapped_code_blocks("### 参考：[Rust Book](https://doc.rust-lang.org)", 80);
+    assert_eq!(heading_lines.len(), 1);
+    assert_eq!(heading_lines[0].text(), "参考：Rust Book");
+    assert_eq!(heading_lines[0].links.len(), 1);
+    assert_eq!(heading_lines[0].links[0].url, "https://doc.rust-lang.org");
+
+    // P2-2 & P2-3：裸 URL 紧接中文标点与正文时不吞入后文，相邻链接保持独立分段。
+    let inline_lines = render_wrapped_code_blocks(
+        "详见 https://example.com/a，后文不断开；以及 [A](https://a.com)[B](https://b.com)",
+        80,
+    );
+    assert_eq!(inline_lines[0].links.len(), 3);
+    assert_eq!(inline_lines[0].links[0].url, "https://example.com/a");
+    assert_eq!(inline_lines[0].links[1].url, "https://a.com");
+    assert_eq!(inline_lines[0].links[2].url, "https://b.com");
+    assert!(
+        inline_lines[0].spans.iter().any(|(text, _)| text == "A")
+            && inline_lines[0].spans.iter().any(|(text, _)| text == "B"),
+        "相邻不同 URL 的链接分段不得合并：{:?}",
+        inline_lines[0].spans
+    );
+}

@@ -5,7 +5,7 @@
 > 项目：`/Users/yonah/projects/agent/lx-tui`（工作区：`.worktrees/lx-markdown-block-spacing`）
 > 参考实现：`/Users/yonah/projects/agent/opencode-dev`（`@opentui/core` `Markdown.ts`、`packages/tui/src/ui/link.tsx`）、`/Users/yonah/projects/agent/codex-main`（`codex-rs/tui/src/markdown_render.rs`、`markdown_render/web_links.rs`）
 > 作用域：`src/ui/markdown_render*`、`src/ui/main_content/lx/*`、`src/app/state/lx/chat.rs`、`src/app/update/chat/*`、`src/event/mouse/*`、`docs/standards/tui-design-requirements.md`
-> 配套文档：[task.md](./task.md)
+> 配套文档：[task.md](./task.md) · [review.md](./review.md)
 
 ---
 
@@ -77,8 +77,13 @@ enum ListKind {
 /// 上一个已产出块的种类（供 `code_chrome == true` 的块间距状态机判定是否插入前导空行）。
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum PrevBlock {
-    /// 普通段落或图片行；`in_list` 表示该行是否作为列表项内的缩进续段，`depth` 为其所属列表层级。
-    Paragraph { in_list: bool, depth: usize },
+    /// 普通段落或图片行；`in_list` 表示该行是否作为列表项内的缩进续段，`depth` 为其所属列表层级，
+    /// `loose` 表示该列表内续段是否由空行（`\n\n`）引导。
+    Paragraph {
+        in_list: bool,
+        depth: usize,
+        loose: bool,
+    },
     /// 标题行（`#`..`######`）。
     Heading,
     /// 列表项（记录换算后的层级 `depth` 与列表种类 `kind`）。
@@ -132,7 +137,7 @@ struct ParserState {
 | 非 `Quote` | `Quote` | **1** | **1** | 进入引用块前恒隔 1 行。 |
 | 非列表块（顶层段落/标题/代码/表/引用/线） | `ListItem { .. }` | **1** | **1** | 从非列表块进入列表恒隔 1 行。 |
 | `ListItem { prev_depth, prev_kind }` | `ListItem { depth, kind }` | 若 `depth > prev_depth`：**0**<br>若 `depth < prev_depth`：**1**<br>同级：`prev_kind != kind` 时 **1**，否则 **0** | 若 `depth > prev_depth`：**0**<br>其余：**1** | 父项→嵌套子列表恒 0 行；子列表退回外层或同级切列表类型自动空 1 行；松散同级列表项空 1 行；紧凑同级列表项 0 行。 |
-| `Paragraph { in_list: true, prev_depth }` | `ListItem { depth, .. }` | 若 `depth > prev_depth`：**0**，否则 **1** | 若 `depth > prev_depth`：**0**，否则 **1** | 列表项带续段后，进入下一条同级或外层列表项前空 1 行；若续段下紧跟更深层子列表则紧贴。 |
+| `Paragraph { in_list: true, prev_depth, loose }` | `ListItem { depth, .. }` | 若 `depth > prev_depth`：**0**<br>若 `depth < prev_depth` 或 `loose`：**1**<br>否则：**0** | 若 `depth > prev_depth`：**0**，否则 **1** | 列表项带松散续段后，进入下一条同级或外层列表项前空 1 行；紧凑续行后接同级列表项保持 0 行；若续段下紧跟更深层子列表则紧贴。 |
 | `Heading` / `CodeBlock` / `Table` / `Quote` / `Rule` | `Paragraph { .. }` | **1** | **1** | 离开独立结构块进入段落恒隔 1 行。 |
 | `ListItem { .. }` | `Paragraph { in_list, .. }` | `!in_list` 时 **1**，`in_list` 时 **0** | **1** | 未缩进段落退出列表时空 1 行；紧贴的缩进续行 0 行；隔了 `\n\n` 的缩进续段空 1 行。 |
 | `Paragraph { prev_in_list, prev_depth }` | `Paragraph { in_list, depth }` | `prev_in_list && (!in_list \|\| depth != prev_depth)` 时 **1**，否则 **0** | **1** | 同一段落内单 `\n` 换行 0 行；`\n\n` 分段空 1 行；从列表内续段退出到顶层段落或跨层回退时空 1 行。 |
@@ -202,11 +207,18 @@ fn should_insert_blank_line(
             PrevBlock::Paragraph {
                 in_list: true,
                 depth: prev_depth,
-            } => depth <= prev_depth,
+                loose,
+            } => {
+                if depth > prev_depth {
+                    false
+                } else {
+                    saw_blank_line || loose || depth < prev_depth
+                }
+            }
             _ => true,
         },
         // 段落或图片行：区分顶层段落、列表内紧凑续行、列表内松散续段与退出列表。
-        PrevBlock::Paragraph { in_list, depth } => match prev {
+        PrevBlock::Paragraph { in_list, depth, .. } => match prev {
             PrevBlock::Heading
             | PrevBlock::CodeBlock
             | PrevBlock::Table
@@ -216,6 +228,7 @@ fn should_insert_blank_line(
             PrevBlock::Paragraph {
                 in_list: prev_in_list,
                 depth: prev_depth,
+                ..
             } => saw_blank_line || (prev_in_list && (!in_list || depth != prev_depth)),
         },
     }
@@ -440,7 +453,7 @@ fn render_blocks_stateful(
 
 ---
 
-## 7. Phase 2：Markdown 超链接渲染优化与 `Ctrl/Cmd + 点击` 打开（含 AI Web 生图行）
+## 7. Phase 2：Markdown 超链接渲染优化与 `Ctrl + 点击` 打开（含 AI Web 生图行）
 
 ### 7.1 背景与已确认边界（Grill Me 结论）
 
@@ -449,8 +462,8 @@ fn render_blocks_stateful(
 | 编号 | 决策项 | 已确认方案 |
 | :--- | :--- | :--- |
 | **Q5** | **`[文字](url)` 渲染格式** | 当 `url` 为 `http://` 或 `https://` 网页链接且 `文字` 非空时，**仅渲染 `文字`**（样式 `style::md_read_link_text()`：链接蓝 `#4493f8` + 下划线），**彻底隐藏 `(url)`**；当 `文字` 为空（`[](https://...)`）、自动链接（`<https://...>`）或裸网址（`https://...`）时，直接渲染网址本身并带下划线；当 `url` 为非 `http(s)://` 本地相对路径（如 `[说明](docs/readme.md)`）时，保留显示 `说明 (docs/readme.md)` 且不作为网页链接打开。 |
-| **Q6** | **Markdown 超链接点击与选区复制** | 在 `lx` 聊天区所有 Markdown 文本（主对话与子 Agent 详情页的段落、列表、引用、表格单元格、思考块与汇报/工具卡片，含软换行折成多行的长链接标题）中，按住 **`Ctrl / Cmd` + 鼠标左键单击**链接文字任意位置，即调用系统默认浏览器打开目标 `http(s)://` 网址（`Effect::OpenBrowser`）；普通左键拖拽选区复制（`Ctrl/Cmd+C`）时仅复制界面可见文字。 |
-| **Q7** | **AI Web 生成图片行的点击打开方式** | 助手消息底部的 AI Web 生图行（`└─ [image](preview): xxx.png  [↓ Download original]`）：<br>1. 左侧带下划线的预览图文件名 `xxx.png`（`CardTarget::Attachment`）与右侧下载完成后的 `[✓ Downloaded]`，**改为必须按住 `Ctrl / Cmd` + 鼠标左键单击**才在系统文件管理器（Finder / Explorer）中定位打开（普通左键点击不再弹出外部窗口，避免拖选文本时误触）；<br>2. 未下载状态的 `[↓ Download original]`（`OriginalImageDownloadState::Idle`）保留普通左键单击（兼容 `Ctrl/Cmd + 点击`）立即触发后台下载。 |
+| **Q6** | **Markdown 超链接点击与选区复制** | 在 `lx` 聊天区所有 Markdown 文本（主对话与子 Agent 详情页的段落、标题、列表、引用、表格单元格、思考块与汇报/工具卡片，含软换行折成多行的长链接标题）中，统一按住 **`Ctrl` + 鼠标点击**链接文字任意位置（兼容 macOS 终端将 `Ctrl + 左键` 映射为带 `CONTROL` 的右键事件），即调用系统默认浏览器打开目标 `http(s)://` 网址（`Effect::OpenBrowser`）；普通左键拖拽选区复制（`Ctrl/Cmd+C`）时仅复制界面可见文字。 |
+| **Q7** | **AI Web 生成图片行的点击打开方式** | 助手消息底部的 AI Web 生图行（`└─ [image](preview): xxx.png  [↓ Download original]`）：<br>1. 左侧带下划线的预览图文件名 `xxx.png`（`CardTarget::Attachment`）与右侧下载完成后的 `[✓ Downloaded]`，**统一为按住 `Ctrl` + 鼠标点击**才在系统文件管理器（Finder / Explorer）中定位打开（普通左键点击不再弹出外部窗口，避免拖选文本时误触）；<br>2. 未下载状态的 `[↓ Download original]`（`OriginalImageDownloadState::Idle`）保留普通左键单击（兼容 `Ctrl + 点击`）立即触发后台下载。 |
 
 ### 7.2 核心数据结构与链路设计
 
@@ -531,7 +544,7 @@ pub(crate) struct GridLinkSpan {
 - `draw_markdown`、`draw_thinking` 与 `tool::put_segments` 在向 `Grid` 写入 `MdLine` / `Segment` 时，调用 `grid.set_link_span(x, y, cols, url)` 登记屏幕列区间；
 - `selection::link_at_cell(area, lx, (content_row, content_col), cache)` 复用 1 行 `Grid`（`render_chunk(&mut grid, chunk_rect, lx, row, cache)`），调用 `grid.link_at(content_col, 0)` 即可在 O(1) 行开销内精确返回命中的 `url`（天然支持主聊天流与 `TaskTab::Agents` 子 Agent 详情页）。
 
-#### 3. `Ctrl / Cmd + 鼠标左键点击` 交互分派（`src/event/mouse/press.rs`、`src/ui/main_content/lx/selection.rs`、`src/app/update/chat/viewport.rs`）
+#### 3. `Ctrl + 鼠标点击` 交互分派（`src/event/mouse/press.rs`、`src/event/mouse/press/lx.rs`、`src/ui/main_content/lx/selection.rs`、`src/app/update/chat/viewport.rs`）
 
 ```rust
 /// 是否按下用于“打开外部链接/文件”的 `Ctrl` 修饰键。
@@ -541,9 +554,12 @@ pub(crate) fn is_open_modifier(modifiers: crossterm::event::KeyModifiers) -> boo
 ```
 
 - 在 `CardTarget` 中新增 `OpenUrl { url: String }`；
-- 在 `press_content_hit(area, lx, column, row, modifiers, cache)` 中：
-  1. 若 `is_open_modifier(modifiers)` 为真，优先调用 `link_at_cell`：命中超链接时直接返回 `Some(CardTarget::OpenUrl { url })`（即使该链接位于表格单元格或已展开的思考块/汇报卡内，也优先打开链接而非折叠卡片）；
+- 在 `press_content_hit(area, lx, column, row, modifiers, cache)` 中通过 `probe_row_cell(&geom, lx, (content_row, content_col), cache)` 单次渲染 1 行 `Grid` 同时获取 `(link_url, in_table)`：
+  1. 若 `is_open_modifier(modifiers)` 为真且 `link_url` 命中 `http(s)://` 链接，优先返回 `Some(CardTarget::OpenUrl { url })`（即使该链接位于表格单元格或已展开的思考块/汇报卡内，也优先打开链接而非折叠卡片）；
   2. 对卡片命中结果做修饰键门控：
      - `CardTarget::Attachment { .. }`（AI Web 预览图文件名）：仅当 `is_open_modifier(modifiers)` 为真时返回，普通左键点击返回 `None`（退回普通文本选区）；
-     - `CardTarget::DownloadOriginalImage { attachment_id }`：当状态为 `OriginalImageDownloadState::Idle`（`[↓ Download original]`）时普通左键与 `Ctrl/Cmd + 点击` 均放行；当状态为 `Downloaded`（`[✓ Downloaded]`）时仅在 `is_open_modifier(modifiers)` 为真时放行。
+     - `CardTarget::DownloadOriginalImage { attachment_id }`：当状态为 `OriginalImageDownloadState::Idle`（`[↓ Download original]`）时普通左键与 `Ctrl + 点击` 均放行；当状态为 `Downloaded`（`[✓ Downloaded]`）时仅在 `is_open_modifier(modifiers)` 为真时放行。
+- 在 `event::mouse::press::lx` 中：
+  - `Ctrl + 左键按下` 命中 `OpenUrl` / `Attachment` / `DownloadOriginalImage` 时立即分派 `toggle_lx_card` / `toggle_agent_card`；
+  - 兼容 macOS 终端将 `Ctrl + 左键点击` 映射为 `MouseButton::Right + CONTROL`：排除 Toast、命令面板与 Ask 面板遮挡后直接触发打开，不弹右键菜单。
 - 在 `toggle_lx_card` 与 `toggle_agent_card` 中处理 `CardTarget::OpenUrl { url }`：推入 `Effect::OpenBrowser { url }`，由后台线程调用 `platform::open_browser(&url)` 在系统默认浏览器中打开。

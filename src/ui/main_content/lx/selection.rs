@@ -255,7 +255,34 @@ pub(super) fn paint_selection(
     }
 }
 
-/// 判定主内容区坐标 `cell`（内容行、正文列）是否落在已渲染的 Markdown 表格水平宽度内。
+/// 在已算好的 `geom` 下对单行 `cell.0` 执行一次 1 行 `Grid` 渲染，返回 `(超链接 URL, 是否落在表格内)`。
+fn probe_row_cell(
+    geom: &ContentGeom,
+    lx: &Lx,
+    cell: (i32, u16),
+    cache: &mut PaneCache,
+) -> (Option<String>, bool) {
+    if geom.rect.width == 0 || geom.total_rows == 0 || cell.0 < 0 {
+        return (None, false);
+    }
+    let Ok(row) = usize::try_from(cell.0) else {
+        return (None, false);
+    };
+    if row >= geom.total_rows {
+        return (None, false);
+    }
+    let chunk_rect = Rect::new(0, 0, geom.rect.width, 1);
+    let mut grid = Grid::new(chunk_rect);
+    render_chunk(&mut grid, chunk_rect, lx, row, cache);
+    let link = grid.link_at(cell.1, 0).map(str::to_string);
+    let in_table = grid.table_row_at(0).is_some_and(|tr| {
+        let right = tr.base_col.saturating_add(tr.line_ref.table.total_width);
+        cell.1 >= tr.base_col && cell.1 < right
+    });
+    (link, in_table)
+}
+
+#[cfg(test)]
 pub(crate) fn is_table_cell_at(
     area: Rect,
     lx: &Lx,
@@ -265,22 +292,7 @@ pub(crate) fn is_table_cell_at(
     let Some(geom) = content_geom(area, lx, cache) else {
         return false;
     };
-    if geom.rect.width == 0 || geom.total_rows == 0 || cell.0 < 0 {
-        return false;
-    }
-    let Ok(row) = usize::try_from(cell.0) else {
-        return false;
-    };
-    if row >= geom.total_rows {
-        return false;
-    }
-    let chunk_rect = Rect::new(0, 0, geom.rect.width, 1);
-    let mut grid = Grid::new(chunk_rect);
-    render_chunk(&mut grid, chunk_rect, lx, row, cache);
-    grid.table_row_at(0).is_some_and(|tr| {
-        let right = tr.base_col.saturating_add(tr.line_ref.table.total_width);
-        cell.1 >= tr.base_col && cell.1 < right
-    })
+    probe_row_cell(&geom, lx, cell, cache).1
 }
 
 /// 是否按下用于“打开外部链接/文件”的 `Ctrl` 修饰键。
@@ -288,31 +300,10 @@ pub(crate) fn is_open_modifier(modifiers: crossterm::event::KeyModifiers) -> boo
     modifiers.contains(crossterm::event::KeyModifiers::CONTROL)
 }
 
-/// 读取主内容区单元格 `(content_row, content_col)` 处的 Markdown 超链接 URL。
-pub(crate) fn link_at_cell(
-    area: Rect,
-    lx: &Lx,
-    cell: (i32, u16),
-    cache: &mut PaneCache,
-) -> Option<String> {
-    let geom = content_geom(area, lx, cache)?;
-    if geom.rect.width == 0 || geom.total_rows == 0 {
-        return None;
-    }
-    let row = usize::try_from(cell.0).ok()?;
-    if row >= geom.total_rows {
-        return None;
-    }
-    let chunk_rect = Rect::new(0, 0, geom.rect.width, 1);
-    let mut grid = Grid::new(chunk_rect);
-    render_chunk(&mut grid, chunk_rect, lx, row, cache);
-    grid.link_at(cell.1, 0).map(str::to_string)
-}
-
-/// 解析主内容区鼠标左键按下命中的内容行、列以及可折叠/可打开目标：
-/// - 按住 `Ctrl/Cmd` 点击 Markdown 超链接时优先返回 [`CardTarget::OpenUrl`]；
+/// 解析主内容区鼠标按下命中的内容行、列以及可折叠/可打开目标：
+/// - 按住 `Ctrl` 点击 Markdown 超链接时优先返回 [`CardTarget::OpenUrl`]；
 /// - AI Web 预览图文件名（[`CardTarget::Attachment`]）与已下载原图按钮（[`CardTarget::DownloadOriginalImage`] 的 `Downloaded` 态）
-///   仅在按住 `Ctrl/Cmd` 时触发定位打开，普通左键点击退回文本选区；
+///   仅在按住 `Ctrl` 时触发定位打开，普通左键点击退回文本选区；
 /// - 未下载态 `[↓ Download original]` 按钮保留普通左键单击即可触发下载。
 pub(crate) fn press_content_hit(
     area: Rect,
@@ -328,9 +319,10 @@ pub(crate) fn press_content_hit(
     }
     let (content_row, content_col) = geom.cell(column, row);
     let open_mod = is_open_modifier(modifiers);
+    let (link_url, in_table) = probe_row_cell(&geom, lx, (content_row, content_col), cache);
     if open_mod
-        && let Some(url) = link_at_cell(area, lx, (content_row, content_col), cache)
-            .filter(|url| url.starts_with("https://") || url.starts_with("http://"))
+        && let Some(url) =
+            link_url.filter(|url| url.starts_with("https://") || url.starts_with("http://"))
     {
         return Some((
             content_row,
@@ -338,7 +330,7 @@ pub(crate) fn press_content_hit(
             Some(crate::app::state::CardTarget::OpenUrl { url }),
         ));
     }
-    let raw_card = if is_table_cell_at(area, lx, (content_row, content_col), cache) {
+    let raw_card = if in_table {
         None
     } else if lx.task.is_some() {
         super::task_agents_card_target_at(area, lx, column, row, cache)
