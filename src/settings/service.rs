@@ -127,11 +127,17 @@ impl ServiceState {
         self.user_root.clone()
     }
 
-    /// 数据库文件（`db/lx.db`）路径：测试注入的用户根优先，否则按环境推导。
+    /// 数据库文件（`db/lx.db`）路径：测试注入的用户根优先，否则按环境与 linked worktree 推导。
     pub fn db_path(&self) -> PathBuf {
         match &self.user_root {
             Some(root) => root.join("db").join("lx.db"),
-            None => crate::db::default_db_path().unwrap_or_else(|_| PathBuf::from("lx.db")),
+            None => {
+                let linked_worktree = crate::db::is_dev_environment()
+                    .then(|| crate::git::linked_worktree_root(std::path::Path::new(".")))
+                    .flatten();
+                crate::db::default_db_path(linked_worktree.as_deref())
+                    .unwrap_or_else(|_| PathBuf::from("lx.db"))
+            }
         }
     }
 

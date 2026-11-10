@@ -870,8 +870,8 @@ pub fn database_path(is_dev: bool, linked_worktree: Option<&Path>) -> Result<Pat
     Ok(dir.join("lx.db"))
 }
 
-/// 默认数据库路径（尊重测试覆盖、`LX_TUI_DB_PATH` 与当前环境）。
-pub fn default_db_path() -> Result<PathBuf> {
+/// 默认数据库路径（尊重测试覆盖、`LX_TUI_DB_PATH`、当前环境与 linked worktree 隔离）。
+pub fn default_db_path(linked_worktree: Option<&Path>) -> Result<PathBuf> {
     #[cfg(test)]
     if let Some(overridden) = crate::platform::test_db_override() {
         return Ok(overridden);
@@ -879,7 +879,7 @@ pub fn default_db_path() -> Result<PathBuf> {
     if let Some(overridden) = std::env::var_os("LX_TUI_DB_PATH").filter(|path| !path.is_empty()) {
         return Ok(PathBuf::from(overridden));
     }
-    database_path(is_dev_environment(), None)
+    database_path(is_dev_environment(), linked_worktree)
 }
 
 /// 作用域目录名：与项目级 MCP / skill 目录共用同一实现。

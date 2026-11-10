@@ -329,3 +329,82 @@ async fn usage_overview_and_logs_filter_and_paginate_accurately() {
 
     service.shutdown();
 }
+
+#[tokio::test]
+async fn custom_provider_internal_id_is_synced_to_display_name() {
+    let (service, _rx, _dir) = start_usage_service("provider-name-sync").await;
+    let user_root = service.user_root_for_tests();
+    let ai_config_dir = user_root.join("config");
+    std::fs::create_dir_all(&ai_config_dir).expect("config dir");
+    std::fs::write(
+        ai_config_dir.join("ai.json"),
+        r#"{
+            "ai": {
+                "enabled_providers": ["provider-alq374"],
+                "providers": {
+                    "provider-alq374": {
+                        "id": "provider-alq374",
+                        "type": "openai-compatible",
+                        "name": "9router-lx-t",
+                        "options": { "baseURL": "https://api.example.com/v1" },
+                        "models": {
+                            "deepseek-v3": {
+                                "id": "deepseek-v3",
+                                "name": "DeepSeek V3"
+                            }
+                        }
+                    }
+                }
+            }
+        }"#,
+    )
+    .expect("write ai.json");
+
+    let db = Database::open(&db_path_for(&service)).expect("open db");
+    db.record_usage_log(&UsageLogInsert {
+        external_id: "ulog-custom-prov-1".into(),
+        session_id: None,
+        workspace_id: None,
+        purpose: UsagePurpose::Chat,
+        provider: "provider-alq374".into(),
+        model: "deepseek-v3".into(),
+        tokens: UsageTokens {
+            input: 1_000,
+            output: 200,
+            cache_read: 0,
+            cache_write: 0,
+        },
+        rates: UsageRates::default(),
+        duration_ms: Some(500),
+        status: UsageStatus::Success,
+        error_message: None,
+        created_at_ms: 1_762_780_000_000,
+    })
+    .expect("record log");
+    drop(db);
+
+    let port = service.port();
+    let token = service
+        .usage_url()
+        .split("token=")
+        .nth(1)
+        .unwrap_or("")
+        .to_string();
+
+    let overview_resp = request(port, &get(&format!("/api/usage/overview?token={token}"))).await;
+    assert_eq!(status(&overview_resp), 200);
+    let overview: Value = serde_json::from_str(body(&overview_resp)).expect("overview json");
+    assert_eq!(
+        overview["filters"]["providers"],
+        serde_json::json!(["9router-lx-t"])
+    );
+    assert_eq!(overview["providers"][0]["provider"], "9router-lx-t");
+    assert_eq!(overview["models"][0]["model"], "deepseek-v3");
+
+    let logs_resp = request(port, &get(&format!("/api/usage/logs?token={token}"))).await;
+    assert_eq!(status(&logs_resp), 200);
+    let logs: Value = serde_json::from_str(body(&logs_resp)).expect("logs json");
+    assert_eq!(logs["rows"][0]["provider"], "9router-lx-t");
+
+    service.shutdown();
+}

@@ -501,7 +501,7 @@ impl AiSettings {
     }
 
     /// 按优先级查询指定供应商与模型的 Token 单价（USD / 1,000,000 tokens）：
-    /// 1. 当前配置中 `provider_id` 下的 `model_id`；
+    /// 1. 当前配置中 `provider_id`（键、`id` 或 `name`）下的 `model_id`；
     /// 2. 当前配置中任意供应商下的同名 `model_id`；
     /// 3. 预设目录（含云端同步缓存）中 `provider_id` 或任意供应商下的同名 `model_id`。
     pub fn resolve_model_pricing(&self, provider_id: &str, model_id: &str) -> Option<ModelPricing> {
@@ -516,8 +516,11 @@ impl AiSettings {
                         .and_then(ModelConfig::parsed_pricing)
                 })
         };
-        if let Some(provider) = self.providers.get(provider_id)
-            && let Some(pricing) = find_in(&provider.models)
+        if let Some(provider) = self.providers.get(provider_id).or_else(|| {
+            self.providers
+                .values()
+                .find(|p| p.id == provider_id || p.name.trim() == provider_id)
+        }) && let Some(pricing) = find_in(&provider.models)
         {
             return Some(pricing);
         }
@@ -525,6 +528,48 @@ impl AiSettings {
             return Some(pricing);
         }
         presets::catalog_model_pricing(provider_id, model_id)
+    }
+
+    /// 将供应商内部标识（如 `provider-alq374`）解析为可读展示名（`provider.name`）。
+    ///
+    /// 优先匹配 `self.providers` 的键或 `provider.id`；若未配置或名称为空则退回原标识。
+    pub fn resolve_provider_name(&self, provider_id: &str) -> String {
+        let trimmed = provider_id.trim();
+        if trimmed.is_empty() {
+            return "unknown".to_string();
+        }
+        if let Some(provider) = self.providers.get(trimmed) {
+            let name = provider.name.trim();
+            if !name.is_empty() {
+                return name.to_string();
+            }
+        }
+        for provider in self.providers.values() {
+            if provider.id == trimmed {
+                let name = provider.name.trim();
+                if !name.is_empty() {
+                    return name.to_string();
+                }
+            }
+        }
+        trimmed.to_string()
+    }
+
+    /// 返回内部供应商 ID 到可读展示名（`provider.name`）的映射表（仅含名称非空且与 ID 不同的项）。
+    pub fn provider_name_map(&self) -> BTreeMap<String, String> {
+        let mut map = BTreeMap::new();
+        for (key, provider) in &self.providers {
+            let name = provider.name.trim();
+            if !name.is_empty() {
+                if key != name {
+                    map.insert(key.clone(), name.to_string());
+                }
+                if provider.id != name {
+                    map.insert(provider.id.clone(), name.to_string());
+                }
+            }
+        }
+        map
     }
 
     /// 校验整体一致性：provider id 匹配、默认选择指向存在且启用的模型、

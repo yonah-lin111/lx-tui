@@ -50,6 +50,11 @@ pub(super) fn route(request: &Request, state: &ServiceState) -> Response {
         Err(error) => return Response::error(500, &error.to_string()),
     };
 
+    // 将历史回填或存量记录中的内部供应商 ID（如 `provider-alq374`）同步为可读 `provider.name`。
+    if let Ok(Some(settings)) = crate::config::ai::load_ai(&super::ai_path(state)) {
+        let _ = db.sync_usage_provider_names(&settings.provider_name_map());
+    }
+
     match request.path.as_str() {
         "/api/usage/overview" => overview_json(&db, &params),
         "/api/usage/logs" => logs_json(&db, &params),

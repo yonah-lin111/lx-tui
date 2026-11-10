@@ -223,12 +223,27 @@ async fn put_settings(request: &Request, state: &ServiceState) -> Response {
     if !provided.is_empty() && provided != current_revision && provided != current_legacy_revision {
         return Response::error(409, "configuration changed elsewhere; reload and retry");
     }
+    let old_providers = current.providers.clone();
     let merged = match merge_settings(Some(current), &body, Some(&connect)) {
         Ok(settings) => settings,
         Err(message) => return Response::error(422, &message),
     };
     if let Err(error) = crate::config::ai::save_ai(&path, &merged) {
         return Response::error(500, &error.to_string());
+    }
+    // 同步 `usage_log` 中的供应商名称（含 `provider-xxx -> name` 与重命名 `old_name -> new_name`）。
+    if let Ok(db) = crate::db::Database::open(&state.db_path()) {
+        let mut name_map = merged.provider_name_map();
+        for (key, old_prov) in &old_providers {
+            if let Some(new_prov) = merged.providers.get(key) {
+                let old_name = old_prov.name.trim();
+                let new_name = new_prov.name.trim();
+                if !old_name.is_empty() && !new_name.is_empty() && old_name != new_name {
+                    name_map.insert(old_name.to_string(), new_name.to_string());
+                }
+            }
+        }
+        let _ = db.sync_usage_provider_names(&name_map);
     }
     // TUI 需要完整运行时快照：自定义供应商 + 已连接的快捷连接供应商。
     let runtime = crate::config::ai::connect::merge_runtime_ai_settings(&merged, &connect);

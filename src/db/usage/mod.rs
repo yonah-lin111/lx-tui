@@ -369,6 +369,26 @@ fn build_where(
 }
 
 impl Database {
+    /// 将 `usage_log` 中的供应商内部 ID（如 `provider-alq374`）同步替换为可读名称（`provider.name`）。
+    pub fn sync_usage_provider_names(
+        &self,
+        name_map: &std::collections::BTreeMap<String, String>,
+    ) -> Result<usize> {
+        let mut updated = 0usize;
+        for (raw_id, display_name) in name_map {
+            let id = raw_id.trim();
+            let name = display_name.trim();
+            if id.is_empty() || name.is_empty() || id == name {
+                continue;
+            }
+            updated += self.conn.execute(
+                "UPDATE usage_log SET provider = ?1 WHERE provider = ?2",
+                params![name, id],
+            )?;
+        }
+        Ok(updated)
+    }
+
     /// 写入单条模型调用统计日志（`external_id` 冲突时幂等忽略）。
     ///
     /// 若 `entry.workspace_id` 为空且提供了 `entry.session_id`，自动从 `agent_session` 反查补齐。

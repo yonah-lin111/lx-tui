@@ -174,17 +174,32 @@ pub fn record_stream_to_db(
     db.record_usage_log(&entry)
 }
 
-/// 从运行时配置（`ai.json` + `connect.json`）与内置目录查询模型单价。
-fn resolve_runtime_pricing(provider_id: &str, model_id: &str) -> Option<ModelPricing> {
-    crate::config::ai::ai_config_path()
-        .ok()
-        .and_then(|path| {
-            crate::config::ai::connect::load_runtime_ai(&path)
-                .ok()
-                .flatten()
-        })
+/// 从运行时配置（`ai.json` + `connect.json`）与内置目录解析供应商可读名称与模型单价。
+fn resolve_runtime_provider_and_pricing(
+    provider_id: &str,
+    model_id: &str,
+) -> (String, Option<ModelPricing>) {
+    let runtime_settings = crate::config::ai::ai_config_path().ok().and_then(|path| {
+        crate::config::ai::connect::load_runtime_ai(&path)
+            .ok()
+            .flatten()
+    });
+    let provider_name = runtime_settings
+        .as_ref()
+        .map(|settings| settings.resolve_provider_name(provider_id))
+        .unwrap_or_else(|| {
+            let trimmed = provider_id.trim();
+            if trimmed.is_empty() {
+                "unknown".to_string()
+            } else {
+                trimmed.to_string()
+            }
+        });
+    let pricing = runtime_settings
+        .as_ref()
         .and_then(|settings| settings.resolve_model_pricing(provider_id, model_id))
-        .or_else(|| crate::config::ai::presets::catalog_model_pricing(provider_id, model_id))
+        .or_else(|| crate::config::ai::presets::catalog_model_pricing(provider_id, model_id));
+    (provider_name, pricing)
 }
 
 /// 在 `run_stream_with_log` 结束时采集并持久化单次模型请求统计。
@@ -214,8 +229,10 @@ pub fn record_stream_finish(
         let Some(db_path) = target_path else {
             return;
         };
-        let pricing = resolve_runtime_pricing(&request.model.provider, &request.model.model);
-        let entry = build_usage_log_insert(log, request, deltas, stop, duration_ms, pricing);
+        let (provider_name, pricing) =
+            resolve_runtime_provider_and_pricing(&request.model.provider, &request.model.model);
+        let mut entry = build_usage_log_insert(log, request, deltas, stop, duration_ms, pricing);
+        entry.provider = provider_name;
         if let Err(error) =
             crate::db::Database::open(&db_path).and_then(|db| db.record_usage_log(&entry))
         {
@@ -232,8 +249,10 @@ pub fn record_stream_finish(
         if log.kind == "unknown" {
             return;
         }
-        let pricing = resolve_runtime_pricing(&request.model.provider, &request.model.model);
-        let entry = build_usage_log_insert(log, request, deltas, stop, duration_ms, pricing);
+        let (provider_name, pricing) =
+            resolve_runtime_provider_and_pricing(&request.model.provider, &request.model.model);
+        let mut entry = build_usage_log_insert(log, request, deltas, stop, duration_ms, pricing);
+        entry.provider = provider_name;
         std::thread::spawn(move || {
             let linked_worktree = crate::db::is_dev_environment()
                 .then(|| crate::git::linked_worktree_root(std::path::Path::new(".")))
