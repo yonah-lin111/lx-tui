@@ -139,12 +139,15 @@ fn task_and_ask_hide_the_strip() {
 }
 
 #[test]
-fn draw_renders_label_and_text_without_cancel_button() {
+fn draw_renders_label_and_text_aligned_with_loading_without_cancel_button() {
     let lx = streaming_lx(2);
     let (grid, rect) = draw_strip(&lx, 60);
     let first = row_text(&grid, rect, rect.y);
     let second = row_text(&grid, rect, rect.y + 1);
-    assert!(first.starts_with(text::LX_STEER_LABEL), "{first:?}");
+    assert!(
+        first.starts_with(&format!(" {}", text::LX_STEER_LABEL)),
+        "左缩进 1 列对齐 loading：{first:?}"
+    );
     assert!(first.contains("steer 0"), "{first:?}");
     assert!(second.contains("steer 1"), "{second:?}");
     assert!(!first.contains('×'), "移除 × 关闭按钮：{first:?}");
@@ -159,7 +162,7 @@ fn more_than_three_shows_summary_row() {
     assert!(row_text(&grid, rect, rect.y).contains("steer 0"));
     assert!(row_text(&grid, rect, rect.y + 1).contains("steer 1"));
     let last = row_text(&grid, rect, rect.y + 2);
-    assert!(last.contains("+3 more pending"), "{last:?}");
+    assert!(last.starts_with(" +3 more pending"), "{last:?}");
     assert!(!last.contains('×'), "{last:?}");
 }
 
@@ -190,10 +193,10 @@ fn attachments_suffix_reports_count() {
 #[test]
 fn narrow_strip_keeps_label_and_hides_text() {
     let lx = streaming_lx(1);
-    // 标签 8 列 + 空档 2 列；10 列放得下标签，但正文没有预算。
-    let (grid, rect) = draw_strip(&lx, 10);
+    // 左右各 1 列缩进 + 标签 8 列 + 空档 2 列；12 列放得下标签，但正文没有预算。
+    let (grid, rect) = draw_strip(&lx, 12);
     let row = row_text(&grid, rect, rect.y);
-    assert!(row.starts_with("Steering"), "{row:?}");
+    assert!(row.starts_with(" Steering"), "{row:?}");
     assert!(!row.contains("steer"), "宽度不足时正文整体省略：{row:?}");
 }
 
@@ -201,7 +204,7 @@ fn narrow_strip_keeps_label_and_hides_text() {
 fn wide_chars_are_never_half_written() {
     let mut lx = streaming_lx(1);
     lx.chat.pending_steers[0].text = "中文中文中文中文".into();
-    let (grid, rect) = draw_strip(&lx, 18);
+    let (grid, rect) = draw_strip(&lx, 20);
     let row = row_text(&grid, rect, rect.y);
     assert!(row.contains('…'), "超宽正文以省略号收尾：{row:?}");
     let trimmed = row.trim_end();
@@ -216,10 +219,10 @@ fn wide_chars_are_never_half_written() {
         "{row:?}"
     );
 
-    // 正文预算只有 1 列（总宽 11 列 = 标签 8 列 + 空档 2 列 + 正文 1 列）：一个汉字都放不下时只画省略号，绝不半写。
+    // 正文预算只有 1 列（总宽 13 列 = 左右各 1 列缩进 + 标签 8 列 + 空档 2 列 + 正文 1 列）：一个汉字都放不下时只画省略号，绝不半写。
     let mut narrow = streaming_lx(1);
     narrow.chat.pending_steers[0].text = "中".into();
-    let (grid, rect) = draw_strip(&narrow, 11);
+    let (grid, rect) = draw_strip(&narrow, 13);
     let row = row_text(&grid, rect, rect.y);
     assert!(row.contains('…') && !row.contains('中'), "{row:?}");
 }

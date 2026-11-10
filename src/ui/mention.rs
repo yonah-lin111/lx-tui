@@ -12,33 +12,24 @@ use crate::ui::widgets::command_panel::CommandItem;
 /// 父目录明细相对面板宽度的留白（图标列 + 两边框 + 左侧内边距）。
 pub const MENTION_DETAIL_MARGIN: usize = 5;
 
-/// 提及条目的展示行：文件/目录/skill/MCP（图标 + 名称 + 次行明细）。
+/// 提及条目的展示行：文件/目录/skill/MCP/subagent（图标 + 名称 + 次行明细）。
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct MentionRow {
     icon: &'static str,
-    is_directory: bool,
-    is_skill: bool,
+    icon_style: ratatui::style::Style,
+    label_style: ratatui::style::Style,
     label: String,
     detail: String,
 }
 
 impl MentionRow {
-    /// 组装命令面板条目：目录、文件与 skill/MCP 分色。
+    /// 组装命令面板条目：目录、文件、skill/MCP 与各类 subagent 分色。
     pub fn item(&self) -> CommandItem<'_> {
-        let (icon_style, label_style) = if self.is_skill {
-            let skill = crate::ui::style::chat_tool_param();
-            (skill, skill)
-        } else if self.is_directory {
-            let directory = crate::ui::style::directory();
-            (directory, directory)
-        } else {
-            (crate::ui::style::muted(), crate::ui::style::text())
-        };
         CommandItem::Stacked {
             icon: Some(self.icon),
-            icon_style,
+            icon_style: self.icon_style,
             label: &self.label,
-            label_style,
+            label_style: self.label_style,
             detail: &self.detail,
         }
     }
@@ -69,10 +60,16 @@ pub fn file_row(entry: &MentionEntry, detail_width: usize) -> MentionRow {
     } else {
         text::MENTION_FILE_ICON
     };
+    let (icon_style, label_style) = if entry.is_directory {
+        let directory = crate::ui::style::directory();
+        (directory, directory)
+    } else {
+        (crate::ui::style::muted(), crate::ui::style::text())
+    };
     MentionRow {
         icon,
-        is_directory: entry.is_directory,
-        is_skill: false,
+        icon_style,
+        label_style,
         label,
         detail,
     }
@@ -90,10 +87,11 @@ pub fn skill_row(name: &str, description: &str, detail_width: usize) -> MentionR
             description
         )
     };
+    let skill = crate::ui::style::chat_tool_param();
     MentionRow {
         icon: text::MENTION_SKILL_ICON,
-        is_directory: false,
-        is_skill: true,
+        icon_style: skill,
+        label_style: skill,
         label: name.to_string(),
         detail: text::truncate_to_width(&detail, detail_width),
     }
@@ -111,23 +109,45 @@ pub fn mcp_row(name: &str, detail: &str, detail_width: usize) -> MentionRow {
             detail
         )
     };
+    let skill = crate::ui::style::chat_tool_param();
     MentionRow {
         icon: text::MENTION_SKILL_ICON,
-        is_directory: false,
-        is_skill: true,
+        icon_style: skill,
+        label_style: skill,
         label: name.to_string(),
         detail: text::truncate_to_width(&detail_text, detail_width),
     }
 }
 
-/// 构造 subagent 候选条目展示：首行 `● label`，次行类别与状态/描述明细。
-pub fn subagent_row(label: &str, detail: &str, detail_width: usize) -> MentionRow {
+/// 按 subagent 候选类别与存活状态返回首行 `● + 名称` 的样式。
+pub fn subagent_item_style(item: &crate::app::state::SubagentMentionItem) -> ratatui::style::Style {
+    match item {
+        crate::app::state::SubagentMentionItem::Active(run) => {
+            crate::ui::style::mention_subagent_active(&run.status)
+        }
+        crate::app::state::SubagentMentionItem::Role(role) => {
+            if role.is_builtin {
+                crate::ui::style::mention_subagent_builtin()
+            } else {
+                crate::ui::style::mention_subagent_custom()
+            }
+        }
+    }
+}
+
+/// 构造 subagent 候选条目展示：首行 `● label`（按类型/状态着色），次行类别与状态/描述明细。
+pub fn subagent_row(
+    item: &crate::app::state::SubagentMentionItem,
+    detail_width: usize,
+) -> MentionRow {
+    let (label, detail) = subagent_item_text(item);
+    let style = subagent_item_style(item);
     MentionRow {
         icon: text::MENTION_SUBAGENT_ICON,
-        is_directory: false,
-        is_skill: false,
-        label: label.to_string(),
-        detail: text::truncate_to_width(detail, detail_width),
+        icon_style: style,
+        label_style: style,
+        label,
+        detail: text::truncate_to_width(&detail, detail_width),
     }
 }
 
@@ -180,10 +200,11 @@ pub fn folder_row(name: &str, path: &str, detail_width: usize) -> MentionRow {
     let prefix = format!("{} ", text::WORKSPACE_TREE_LAST);
     let path_width = detail_width.saturating_sub(prefix.width());
     let detail = format!("{prefix}{}", text::ellipsize_middle(path, path_width));
+    let directory = crate::ui::style::directory();
     MentionRow {
         icon: text::MENTION_DIR_ICON,
-        is_directory: true,
-        is_skill: false,
+        icon_style: directory,
+        label_style: directory,
         label,
         detail,
     }

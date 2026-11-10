@@ -125,6 +125,25 @@ pub fn chat_agents_md() -> Style {
     Style::default().fg(LX_SKY_BLUE)
 }
 
+/// `@` 面板 `Subagents` 存活实例（`Active`）样式：按运行状态分色（`running` 琥珀橙、`blocked` 警告黄、`idle` 翡翠绿）。
+pub fn mention_subagent_active(status: &str) -> Style {
+    match status {
+        "running" => Style::default().fg(Color::Indexed(CHAT_STEP_AMBER)),
+        "blocked" => Style::default().fg(Color::Yellow),
+        _ => Style::default().fg(Color::Indexed(CHAT_STEP_GREEN)),
+    }
+}
+
+/// `@` 面板 `Subagents` 内置角色（`explorer` / `executor` / `monitor`）样式：品牌冰蓝（`Indexed 117`）。
+pub fn mention_subagent_builtin() -> Style {
+    Style::default().fg(LX_SKY_BLUE)
+}
+
+/// `@` 面板 `Subagents` 自定义角色（User / Project）样式：品牌柔粉（`Indexed 218`）。
+pub fn mention_subagent_custom() -> Style {
+    Style::default().fg(LX_PINK)
+}
+
 /// 工具行的固定动词（`Read` / `Search` / `Edit` / `Write`）：已完成——翡翠绿、不加粗。
 pub fn chat_tool_verb() -> Style {
     Style::default().fg(Color::Indexed(CHAT_STEP_GREEN))

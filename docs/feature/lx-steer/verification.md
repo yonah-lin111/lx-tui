@@ -47,10 +47,10 @@
 - **验证步骤**：执行 `cargo test --lib event::chat::tests::steer`。
 - **期望结果**：`deliver` 成功后旧 assistant 标为 `complete`（`duration_ms = None`，不触发中间 recap）、`RequestState::Streaming` 切换至新 `assistant_id`、`HostRecorderFactory` 共享 `mutation_users` 原地更新为新 `user_message_id`；TUI 子 Agent（`streams.subagents.contains_key(&key.session)`）请求 `SteerInputs` 时直接返回 `Ok(Vec::new())` 而不被误判为 `Cancelled`；针对 steer 轮次的 `restore_plan` 仅回滚 `after.txt` 而不触碰 `before.txt`；图片不支持或 DB 失败时返回 `HostError::Failed` 且不消费 `pending_steers`（PASS）。
 
-### V08 — TUI `Steering` 提示区渲染（无关闭按钮）、被截断 Assistant 统计行隐藏与 Steer 用户消息底色
-- **输入内容**：0/1/3/5 条 `pending_steers`（含换行/控制字符、中文宽字符 `"中文..."`、极窄 11 列宽度、多附件）、打开 `task`/`ask` 面板，以及含被 steer 截断旧 assistant 与 steer 插入用户消息的时间线。
-- **验证步骤**：执行 `cargo test --lib ui::main_content::lx::steer_strip::tests`。
-- **期望结果**：高度封顶 3 行，超过 3 条末行渲染 `+N more pending`；单行渲染 `Steering  <折叠截断正文>  · N attachments`（已移除行尾 `×` 关闭按钮，宽字符绝不半写）；被 steer 截断的上一段 assistant 底部不出现模型名称与数据统计行（如 `deepseek-v4.1-flash · 3.9s`），仅最终完成段显示统计；steer 插入的用户消息气泡与置顶行（sticky）使用区分底色 `style::chat_user_steer_bg()`（`Color::Rgb(0x1b, 0x2a, 0x38)` 柔和暗海蓝，区别于普通用户消息 `Indexed(236)`）（PASS）。
+### V08 — TUI `Steering` 提示区缩进对齐、被截断 Assistant 统计行隐藏、Steer 用户消息底色与 `@` 面板 Subagents 分色
+- **输入内容**：0/1/3/5 条 `pending_steers`（含换行/控制字符、中文宽字符 `"中文..."`、极窄 13 列宽度、多附件）、打开 `task`/`ask` 面板、含被 steer 截断旧 assistant 与 steer 插入用户消息的时间线，以及 `@` 命令面板 `Subagents` 列表中的存活实例（`running` / `idle` / `blocked`）、内置角色与自定义角色。
+- **验证步骤**：执行 `cargo test --lib ui::main_content::lx::steer_strip::tests` 与 `cargo test --lib slash_panels::mention_subagents_items_use_distinct_colors_by_kind_and_status`。
+- **期望结果**：高度封顶 3 行，超过 3 条末行渲染 `+N more pending`；`Steering  <折叠截断正文>  · N attachments` 与汇总行统一左缩进 1 列（`rect.x + 1`），与输入框左上角 `chat_bar` loading 文案严格左对齐；被 steer 截断的上一段 assistant 底部不出现模型名称与数据统计行；steer 插入的用户消息气泡与置顶行（sticky）使用柔和暗海蓝底色 `Color::Rgb(0x1b, 0x2a, 0x38)`；`@` 面板 `Subagents` 条目首行 `● + 名称` 按类型/状态区分颜色（`running` 琥珀橙 `Indexed(208)`、`idle` 翡翠绿 `Indexed(42)`、`blocked` 黄、内置角色冰蓝 `Indexed(117)`、自定义角色柔粉 `Indexed(218)`）（PASS）。
 
 ### V09 — `lx-tui` CLI 实机验证（`exec` / `subagent` / `session show` / `fork` / `rewind`）
 - **输入内容**：
