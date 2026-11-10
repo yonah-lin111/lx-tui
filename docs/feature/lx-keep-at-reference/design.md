@@ -1,6 +1,6 @@
 # lx 消息列表与置顶行保留 `@` 引用内容设计 (`design.md`)
 
-状态：已实现并完成代码审查与缺陷修复（worktree `.worktrees/lx-keep-at-reference`，分支 `feat/lx-keep-at-reference`）。
+状态：已实现并完成代码审查、缺陷修复与合并入 `dev` 主分支（合并提交 `ebd3d8e0`）。
 
 ## 1. 目标与验收口径
 

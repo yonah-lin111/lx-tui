@@ -2,6 +2,8 @@
 
 - **特性目录**：`docs/feature/lx-keep-at-reference/`
 - **Review 基线**：`feat/lx-keep-at-reference` @ `762e2606`（worktree `.worktrees/lx-keep-at-reference`）
+- **修复提交**：`84162f74`（`fix(lx): resolve P0-P3 review findings for @ reference retention and sync feature docs`）
+- **合并提交**：`ebd3d8e0`（`Merge branch 'feat/lx-keep-at-reference' into dev`）
 - **关联文档**：
   - [design.md](design.md)
   - [task.md](task.md)

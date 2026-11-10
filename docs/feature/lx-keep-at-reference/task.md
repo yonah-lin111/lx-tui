@@ -1,6 +1,6 @@
 # lx 消息列表与置顶行保留 `@` 引用内容开发任务 (`task.md`)
 
-状态：已完成代码实现、Review 审查与 P0-P3 缺陷修复，待用户确认合并。
+状态：已完成代码实现、Review 审查与 P0-P3 缺陷修复，已合并入 `dev` 主分支（`ebd3d8e0`）并清理工作区与分支。
 对应设计：`docs/feature/lx-keep-at-reference/design.md`。
 审查报告：`docs/feature/lx-keep-at-reference/review.md`。
 
@@ -38,3 +38,4 @@
 - [x] 3.6 修复 **[P2-2]**：更新 `src/chat/prepare.rs` 文档注释，并同步更新关联特性文档（`lx-input-refer-and-quick-delete`、`lx-image-attachments-and-user-messages`、`lx-ai-web`）与 `docs/standards/tui-design-requirements.md`
 - [x] 3.7 修复 **[P3-1]**：修正 `src/ui/main_content/lx/history/tests/user_folding.rs` 中 `user_message_filters_ref_content_from_reference_tree_at_bottom` 越界的 `marker_end` 测试夹具数据
 - [x] 3.8 执行 `cargo fmt --check`、`cargo clippy --all-targets -- -D warnings` 及受影响模块单元测试全部通过
+- [x] 3.9 合并 `feat/lx-keep-at-reference` 入 `dev` 主分支（`ebd3d8e0`），移除 `.worktrees/lx-keep-at-reference` 工作区与临时分支
