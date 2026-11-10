@@ -1,9 +1,9 @@
 # lx `AI Web` 入口与 DeepSeek 网页端接入（基于 `ego-browser`）— 设计文档
 
-> **命名迁移提示**：该特性完成后，入口 `AI Web` 已统一更名为 `Web`，Rust 模块路径迁移至 `src/*/web*`，驱动规范更名为 `docs/standards/web-deepseek.md`；本文保留实现时的历史命名。
+> **命名迁移提示**：该特性完成后，入口 `AI Web` 已统一更名为 `Web`，Rust 模块路径迁移至 `src/*/web*`，驱动规范迁移至 [`docs/web/web-deepseek.md`](../../web/web-deepseek.md)（并新增 [`docs/web/web-gemini.md`](../../web/web-gemini.md) 与 [`docs/web/web-grok.md`](../../web/web-grok.md)）；本文保留首期实现时的历史命名，并在 §2 / §3.2 增补 Web Markdown 保真提取与 TUI 渲染增强架构。
 
-> 状态：**已完成实现、代码审查（[review.md](review.md)）、全部回归修复并合并至 `dev`**（2026-11-07）
-> 执行任务清单见 [task.md](task.md)，审查报告见 [review.md](review.md)，驱动规范见 [`docs/standards/web-deepseek.md`](../../standards/web-deepseek.md)。
+> 状态：**已完成实现、代码审查（[review.md](review.md)）、全部回归修复并合并至 `dev`**（2026-11-10 更新 Markdown 保真架构与专项 Review）
+> 执行任务清单见 [task.md](task.md)，审查报告见 [review.md](review.md)，驱动规范见 [`docs/web/web-deepseek.md`](../../web/web-deepseek.md)、[`docs/web/web-gemini.md`](../../web/web-gemini.md)、[`docs/web/web-grok.md`](../../web/web-grok.md)。
 
 ---
 
@@ -65,12 +65,17 @@ src/
     prepare/
       ai_web.rs                 prepare_ai_web_message：解析本地文件/图片与保留的云端附件名 keep_files，拦截目录/Skill/MCP
       tests.rs                  补充 prepare_ai_web_message 单元测试
-    ai_web/
-      mod.rs                    嵌入脚本常量、AiWebSessionSummary / AiWebHistoryMessage / AiWebStreamEvent 与 NDJSON 解析
-      tests.rs                  协议行解析单元测试
-      deepseek_helpers.js       DeepSeek 网页驱动辅助函数：输出发射、新对话切换、CDP 附件上传与卡片清理、会话列表/加载/改名/删除
-      deepseek_script.js        DeepSeek 网页对话主流程：SSE/XHR/fetch 流采集、原地编辑（edit_message）与底部输入框提交
-  event/
+    ai_web/ (现 `src/chat/web/`)
+      mod.rs                    嵌入 DOM_MARKDOWN_JS 与各站点脚本常量、AiWebSessionSummary / AiWebHistoryMessage / AiWebStreamEvent 与 NDJSON 解析
+      tests.rs                  协议行解析、DOM→Markdown 保真序列化、流式前缀单调性与 SSE/XHR 回归测试
+      dom_markdown.js           跨站点共享 DOM → Markdown 序列化器（`lxHtmlToMarkdown` + `window.__lxHtmlToMarkdown`，支持 `streaming` 尾部闭合标记暂缓）
+      deepseek_helpers.js       DeepSeek 网页驱动辅助函数：输出发射、新对话切换、CDP 附件上传与卡片清理、会话列表/加载（含代码块安全引用清洗）/改名/删除
+      deepseek_script.js        DeepSeek 网页对话主流程：SSE/XHR/fetch 原始 Markdown 流采集、React Fiber + `window.__lxHtmlToMarkdown` DOM 兜底、原地编辑与提交
+  ui/
+    markdown_render.rs          面向阅读的块级 Markdown 渲染：列表续段按 `list_hangs` 栈悬挂列对齐、逐层回退列表上下文栈
+    markdown_render/
+      inline.rs                 递归解析强调块（`**`/`*`/`***`/`~~`）内部的行内代码、链接与内层强调，支持多反引号 `` ``code`` `` 与尾随 `***` 对齐
+      code_block.rs             代码块渲染与复制提取（剥离列表内围栏前导缩进）
     mod.rs                      AppEvent::AiWeb(AiWebEvent)
     mouse/press.rs              欢迎页 ai_web_site_hit 鼠标左键点击切换
     chat/
@@ -109,15 +114,25 @@ src/
 
 ---
 
-### 3.2 实时流协议：本地回环 HTTP 监听 + `const __LX_PARAMS`（`src/event/chat/ai_web.rs`）
+### 3.2 实时流协议与 Markdown 保真提取：回环 HTTP 监听 + `dom_markdown.js` + TUI 渲染增强
 
-1. **块级参数注入（防跨轮污染）**：
-   - `ego-browser nodejs` 在同一任务空间守护进程内执行脚本时，修改 `process.env` 会在后续轮次残留。因此 `script_source` 每次生成脚本时在顶部拼接块级 `const __LX_PARAMS = { action, prompt, files, keepFiles, firstTurn, streamUrl, sessionId, title, editIndex };`，随后拼接 `deepseek_helpers.js` 与 `deepseek_script.js`。
+1. **块级参数注入与共享 `dom_markdown.js` 预置**：
+   - `ego-browser nodejs` 在同一任务空间守护进程内执行脚本时，修改 `process.env` 会在后续轮次残留。因此 `script_source`（`src/chat/web/mod.rs:245-305`）每次生成脚本时在顶部拼接块级 `const __LX_PARAMS = { ... };`，紧接着注入跨站点共享的 `DOM_MARKDOWN_JS`（`src/chat/web/dom_markdown.js`），再拼接站点 `helpers.js` 与 `script.js`。
 2. **本地回环 HTTP 实时流 + stdout/stderr 双重回退**：
-   - 启动 `chat` 流前，Rust 绑定 `TcpListener::bind("127.0.0.1:0")` 并传入 `streamUrl`。
-   - 脚本在浏览器页面内挂载 `XMLHttpRequest` 与 `window.fetch` 拦截器（监听 `/api/v0/chat/completion`、`/api/v0/chat/edit_message`、`/api/v0/chat/regenerate`）及 DOM 兜底观察器，每 60ms 将新增的 `thinking` / `text` 增量通过 `fetch(STREAM_URL, { method: 'POST', body })` 实时推回 Rust，彻底绕过 `ego-browser` 子进程 stdio 缓冲。
-   - 仅当收到有效 SSE `data:` 帧（或 `response.ok` 的流式响应）时才置 `sseActive = true`；仅当收到显式 `AiWebStreamEvent::Done` 时才按 `StopReason::Complete` 结算。
-3. **思考块默认折叠**：
+   - 启动 `chat` 流前，Rust 绑定 `TcpListener::bind("127.0.0.1:0")` 并传入一次性鉴权 `streamUrl`。
+   - 脚本在浏览器页面内挂载 `XMLHttpRequest` 与 `window.fetch` 拦截器（监听 `/api/v0/chat/completion`、`/api/v0/chat/edit_message`、`/api/v0/chat/regenerate`、`/api/v0/chat/continue`、`/api/v0/chat/resume_stream`）及 DOM 兜底观察器，每 60ms 将新增的 `thinking` / `text` 增量通过 `fetch(STREAM_URL, { method: 'POST', body })` 实时推回 Rust。
+   - **非 SSE 业务质询过滤**：`attachXhr`（`deepseek_script.js:497-538`）校验响应 `Content-Type` 是否包含 `text/event-stream` 或前 256 字节是否匹配 `/(?:^|\n)(?:event|data|:)/`，防止前置 JSON 质询请求将 `sseActive` 锁死而漏掉紧随其后的真实 SSE 请求。
+3. **DeepSeek 原始 Markdown 流采集与双通道严格隔离（`src/chat/web/deepseek_script.js`）**：
+   - **Channel A（SSE 优先，零损原始 Markdown）**：直接解析 SSE JSON Patch（`o: "SET" | "APPEND" | "BATCH"`），对正文片段调用代码块感知的 `cleanText(nextRaw, true)`（`deepseek_script.js:93-125`）：仅在围栏代码块 ```` ``` ```` 外部剥离 `[citation:...]` / `[reference:...]`，且流中 `holdIncomplete = true` 暂缓末尾未闭合的 `[c...` / `[r...` 前缀；流结束时由 `finishSse()`（`deepseek_script.js:422-436`）以 `holdIncomplete = false` 补刷末尾被暂缓的合法字符（如数学区间 `[0, 1[` 的末尾 `[`）。
+   - **Channel B（DOM / React Fiber 兜底，严禁 `innerText`）**：一旦 `sseThinking || sseText` 为真，严禁 DOM 通道混入（`tickDom` 仅在停止图标消失且主按钮禁用连续 15 ticks 时触发 `finishSse()` 防止 SSE 断流无 `finish` 帧卡死 300s）。当 SSE 未命中且超过 `sseSeenAt` / `pollStartedAt` 1200ms 宽限期时，`readMarkdownText(el, streamingFlag)`（`deepseek_script.js:629-645`）在完成态优先从 `readFiberMarkdown(el)`（限制向上最多 10 层 Fiber 且检查 `stateNode` 不越出当前 `el` 边界）读取原始 Markdown，流式与常规态统一调用 `window.__lxHtmlToMarkdown(el, { streaming })` 还原完整 Markdown，彻底废除会抹平 `#`、`**`、```` ``` ```` 与表格的 `el.innerText`。
+   - **思考块流式标志与正文切换**：`thinkStreaming = isStreaming && !bodyText && !this.domTextStarted`（`deepseek_script.js:662`），正文一旦开始输出即以 `streaming: false` 结算思考块，确保思考块末尾的闭合 `**` 或 ```` ``` ```` 在首个 `text` 增量前刷出，绝不在正文后分裂出第二个 `○ Thought` 块。
+4. **跨站点共享 DOM → Markdown 序列化器（`src/chat/web/dom_markdown.js`）**：
+   - `lxHtmlToMarkdown(root, { streaming })`（100% 自包含纯函数，经 `installDomMarkdown()` 注入 `window.__lxHtmlToMarkdown`）递归遍历 DOM 树，还原标题（`#`～`######`）、粗体/斜体/删除线、行内代码（含反引号自动升级 `` `` ``）、围栏代码块（提取 DeepSeek `.md-code-block-infostring`、Gemini `.code-block-decoration span`、Grok `span.font-mono` / Shiki `span.line`，对 `markdown`/`md`/`mdx` 语言固定使用 ` ```` ` 四反引号围栏防止内层三反引号提前闭合）、GFM 表格（过滤嵌套子表、转义单元格内 `|` 为 `｜`）、无序/有序/任务列表（支持 `<li><p><strong>小标题</strong></p><p>续段</p></li>` 续段缩进对齐、列表项首块为代码块/数学块/表格/引用时自动换行缩进、列表项内 `h1`–`h6` 转为 `**标题**`）与 KaTeX/MathML 公式（`$...$` / `$$...$$`）。
+   - **流式尾部暂缓（`streaming && isTail(el)`）**：对位于 DOM 末尾仍在增长的 `<strong>`/`<em>`/`<del>`/`<code>`/`<a>`/代码块/数学块/末行未完成 `<tr>` 暂缓输出右闭合标记，保证相邻采样帧满足前缀单调性（或仅在 `pushDom` 的 160 字符 LCP / 1024 字符尾部锚点窗口内闭合）。
+5. **TUI 面向阅读的 Markdown 渲染增强（`src/ui/markdown_render.rs`、`src/ui/markdown_render/inline.rs`）**：
+   - **强调块内部递归解析**：`inline_spans`（`src/ui/markdown_render/inline.rs:10-117`）通过 `push_nested_spans` 递归解析 `***...***`、`**...**`、`__...__`、`~~...~~`、`*...*`、`_..._` 内部嵌套的 `` `code` ``、`[label](url)` 与内层强调并合成样式；`code_span` 支持任意长度反引号对；`delimited_emphasis` 跳过反引号代码片段并在尾随同字符链（如 `***`）上精准对齐外层闭合位置。
+   - **列表续段悬挂缩进对齐与层级回退**：`ParserState` 维护与 `list_indents` 平行的 `list_content_indents` 与 `list_hangs` 栈（`src/ui/markdown_render.rs:180-190, 605-629`），使无序列表（`• `，2 列）、有序列表（`1. `，3 列；`10. `，4 列）和任务列表（`[x] `，4 列）下的多段续行严格对齐各自正文起始列，且内层子列表结束后的外层续段按缩进逐层 `pop()` 回退到外层列而非清空整栈；列表内缩进围栏代码块在 `code_block.rs` 中自动剥离围栏前导缩进。
+6. **思考块默认折叠**：
    - `PartKind::Reasoning` 在流式生成期间与生成完成后均默认折叠（生成中显示 `● Thinking`，完成后显示 `○ Thought · Xs`），用户点击可随时展开/折叠。
 
 ---

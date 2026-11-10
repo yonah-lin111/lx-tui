@@ -387,7 +387,22 @@ async function runNonChatAction(currentUrl) {
           chain.reverse();
           if (chain.length > 0) activeChain = chain;
         }
-        const cleanText = (text) => String(text || '').replace(/\\s*\\[(?:citation|reference):[^\\]]*\\]/g, '');
+        const stripCitePlain = (s) =>
+          String(s || '').replace(/[ \\t]*\\[(?:citation|reference):[^\\]]*\\]/g, '');
+        const cleanText = (raw) => {
+          const text = String(raw || '');
+          let out = '';
+          let last = 0;
+          const fence = new RegExp('\\\\x60{3}[\\\\s\\\\S]*?(?:\\\\x60{3}|$)', 'g');
+          let match;
+          while ((match = fence.exec(text)) !== null) {
+            out += stripCitePlain(text.slice(last, match.index));
+            out += match[0];
+            last = match.index + match[0].length;
+          }
+          out += stripCitePlain(text.slice(last));
+          return out;
+        };
         const messages = activeChain.map((msg) => {
           const role = String(msg.role || '').toUpperCase() === 'USER' ? 'user' : 'assistant';
           const fragments = Array.isArray(msg.fragments) ? msg.fragments : [];

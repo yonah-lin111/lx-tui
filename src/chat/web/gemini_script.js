@@ -70,6 +70,7 @@ async function main() {
   }
 
   // Set up DOM stream collector on window.__lxGeminiStream.
+  await installDomMarkdown();
   const runId = String(Date.now()) + '-' + String(Math.random());
   await js(`
     (() => {
@@ -99,25 +100,10 @@ async function main() {
         stableTicks: 0,
         imageWaitTicks: 0,
         pushDom(kind, current) {
+          if (kind === 'thinking' && this.domText) return;
           const key = kind === 'thinking' ? 'domThink' : 'domText';
           const previous = this[key] || '';
           if (!current || current === previous) return;
-          if (kind === 'thinking') {
-            let delta = '';
-            if (!previous) {
-              delta = current;
-            } else if (current.length > previous.length && current.startsWith(previous)) {
-              delta = current.slice(previous.length);
-            } else if (!previous.includes(current)) {
-              delta = '\\n' + current;
-            }
-            this[key] = current;
-            if (delta) {
-              this.started = true;
-              this.queue.push({ kind, delta });
-            }
-            return;
-          }
           if (!previous) {
             this[key] = current;
             this.started = true;
@@ -139,7 +125,7 @@ async function main() {
             if (previous.length < len) continue;
             const anchor = previous.slice(previous.length - len);
             const pos = current.lastIndexOf(anchor);
-            if (pos >= 0 && pos + len >= current.length - 240) {
+            if (pos >= 0 && pos + len >= current.length - 1024) {
               const delta = current.slice(pos + len);
               if (delta.length > 0 || current.length >= previous.length) {
                 this[key] = current;
@@ -158,64 +144,56 @@ async function main() {
           if (tailLen >= 5 && previous.includes(current.slice(current.length - tailLen))) {
             return;
           }
-          // Handle inline markdown delimiters stripped near the streaming cursor.
+          // Handle inline markdown delimiters stripped or closed near the streaming cursor.
           let lcp = 0;
           while (lcp < current.length && lcp < previous.length && current[lcp] === previous[lcp]) {
             lcp += 1;
           }
-          if (previous.length - lcp <= 40) {
+          if (previous.length - lcp <= 160) {
             const remPrev = previous.slice(lcp).replace(/^[*_~\\s\\x60]+/, '');
-            if (remPrev.length > 0) {
-              const idx = current.indexOf(remPrev, lcp);
-              if (idx >= lcp && idx - lcp <= 10) {
-                const delta = current.slice(idx + remPrev.length);
-                this[key] = current;
-                if (delta) {
-                  this.started = true;
-                  this.queue.push({ kind, delta });
-                }
-                return;
+            if (remPrev.length === 0) {
+              const delta = current.slice(lcp);
+              this[key] = current;
+              if (delta) {
+                this.started = true;
+                this.queue.push({ kind, delta });
               }
+              return;
+            }
+            const idx = current.indexOf(remPrev, lcp);
+            if (idx >= lcp && idx - lcp <= 24) {
+              const delta = current.slice(idx + remPrev.length);
+              this[key] = current;
+              if (delta) {
+                this.started = true;
+                this.queue.push({ kind, delta });
+              }
+              return;
             }
           }
           if (current.length > previous.length) {
             this[key] = current;
           }
         },
-        extractCleanText(root, selectorList, stripSelectors) {
+        extractCleanText(root, selectorList, _stripSelectors, streaming) {
           if (!root) return '';
-          const el = selectorList ? root.querySelector(selectorList) : root;
-          if (!el) return '';
-          const hidden = [];
-          const tempCodeNodes = [];
-          try {
-            if (stripSelectors) {
-              el.querySelectorAll(stripSelectors).forEach((n) => {
-                hidden.push([n, n.style.display]);
-                n.style.display = 'none';
-              });
+          let el = null;
+          if (selectorList) {
+            for (const sel of selectorList.split(',').map((s) => s.trim()).filter(Boolean)) {
+              const found = root.querySelector(sel);
+              if (found) {
+                el = found;
+                break;
+              }
             }
-            if (selectorList && selectorList.includes('message-content')) {
-              const bt = String.fromCharCode(96);
-              el.querySelectorAll('code').forEach((c) => {
-                if (!c.closest('pre, code-block')) {
-                  const open = document.createTextNode(bt);
-                  const close = document.createTextNode(bt);
-                  c.insertBefore(open, c.firstChild);
-                  c.appendChild(close);
-                  tempCodeNodes.push(open, close);
-                }
-              });
-            }
-            return (el.innerText || '').replace(/\\r\\n/g, '\\n').trim();
-          } finally {
-            for (const tn of tempCodeNodes) {
-              tn.remove();
-            }
-            for (const [n, prev] of hidden) {
-              n.style.display = prev;
-            }
+          } else {
+            el = root;
           }
+          if (!el) return '';
+          if (typeof window.__lxHtmlToMarkdown === 'function') {
+            return window.__lxHtmlToMarkdown(el, { streaming: Boolean(streaming) });
+          }
+          return (el.textContent || '').replace(/\\r\\n/g, '\\n').trim();
         },
         pollDom() {
           const responses = Array.from(document.querySelectorAll('model-response'));
@@ -238,15 +216,17 @@ async function main() {
             const curThink = this.extractCleanText(
               mr,
               'model-thoughts .thoughts-content, model-thoughts, thinking-overlay .thoughts-content, thinking-overlay',
-              'button, mat-icon, .cdk-visually-hidden'
+              'button, mat-icon, .cdk-visually-hidden',
+              false
             );
             const curBody = this.extractCleanText(
               mr,
               'message-content .markdown, message-content',
-              '.cdk-visually-hidden, source-footnote, sources-carousel-inline, sources-list, button, mat-icon'
+              '.cdk-visually-hidden, source-footnote, sources-carousel-inline, sources-list, button, mat-icon',
+              false
             );
             if (
-              announcerBusy ||
+              isGenerating ||
               curBody !== this.initialTargetText ||
               curThink !== this.initialThinkText
             ) {
@@ -269,15 +249,18 @@ async function main() {
           if (!mr) {
             return;
           }
-          const thinkText = this.extractCleanText(
-            mr,
-            'model-thoughts .thoughts-content, model-thoughts, thinking-overlay .thoughts-content, thinking-overlay',
-            'button, mat-icon, .cdk-visually-hidden'
-          );
           const bodyText = this.extractCleanText(
             mr,
             'message-content .markdown, message-content',
-            '.cdk-visually-hidden, source-footnote, sources-carousel-inline, sources-list, button, mat-icon'
+            '.cdk-visually-hidden, source-footnote, sources-carousel-inline, sources-list, button, mat-icon',
+            isGenerating
+          );
+          const thinkStreaming = isGenerating && !bodyText && !this.domText;
+          const thinkText = this.extractCleanText(
+            mr,
+            'model-thoughts .thoughts-content, thinking-overlay .thoughts-content, model-thoughts, thinking-overlay',
+            'button, mat-icon, .cdk-visually-hidden',
+            thinkStreaming
           );
           if (thinkText) this.pushDom('thinking', thinkText);
           if (bodyText) this.pushDom('text', bodyText);

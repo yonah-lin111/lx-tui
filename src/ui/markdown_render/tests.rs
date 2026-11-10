@@ -780,3 +780,89 @@ fn table_lines_carry_shared_layout_meta_with_soft_wrap_and_br_flags() {
         "极窄宽度下表格列宽应收缩至单字下限，不得保持自然总宽"
     );
 }
+
+#[test]
+fn list_continuation_paragraph_keeps_list_indent_across_soft_wraps() {
+    let src = "### 一、强制提高社保与生育意愿的直接冲突\n\n- **实际到手收入承压**\n  低收入群体与初入职场的青年人群体抗风险能力最弱。严格按实际工资基数缴纳社保后，个人扣缴部分直接减少了当期可支配现金。\n- **隔代抚养支持链条受阻**\n  中国绝大多数双职工家庭的育儿模式高度依赖祖辈照料。";
+    let lines = render_wrapped_code_blocks(src, 40);
+    assert_eq!(lines[0].text(), "一、强制提高社保与生育意愿的直接冲突");
+    assert_eq!(lines[0].spans[0].1, style::md_read_heading_level(3));
+
+    let first_bullet = lines
+        .iter()
+        .position(|line| line.text().starts_with("• "))
+        .expect("first bullet");
+    let second_bullet = lines[first_bullet + 1..]
+        .iter()
+        .position(|line| line.text().starts_with("• "))
+        .map(|idx| first_bullet + 1 + idx)
+        .expect("second bullet");
+    assert!(
+        second_bullet > first_bullet + 2,
+        "continuation paragraph should wrap into multiple lines: {lines:?}"
+    );
+    for cont_line in &lines[first_bullet + 1..second_bullet] {
+        assert_eq!(
+            cont_line.indent, 2,
+            "every wrapped line of list continuation paragraph must stay indented at column 2: {cont_line:?}"
+        );
+    }
+}
+
+#[test]
+fn nested_inline_code_links_and_emphasis_render_without_leaking_delimiters() {
+    let src = "- **修改 `config.toml` 文件**\n- **[官方文档](https://example.com)**\n- **bold *italic***\n- ``code ` inner``";
+    let lines = render(src);
+    assert_eq!(lines[0].text(), "• 修改 config.toml 文件");
+    assert!(
+        lines[0]
+            .spans
+            .iter()
+            .any(|(t, s)| t == "config.toml" && *s == style::md_read_inline_code()),
+        "inline code inside bold must use inline_code style: {:?}",
+        lines[0].spans
+    );
+    assert_eq!(lines[1].text(), "• 官方文档 (https://example.com)");
+    assert_eq!(lines[2].text(), "• bold italic");
+    assert!(
+        lines[2]
+            .spans
+            .iter()
+            .any(|(t, s)| t == "italic" && *s == style::md_read_strong_emphasis()),
+        "italic inside bold must combine into strong_emphasis: {:?}",
+        lines[2].spans
+    );
+    assert_eq!(lines[3].text(), "• code ` inner");
+}
+
+#[test]
+fn ordered_task_list_continuations_and_indented_fences_keep_exact_columns() {
+    let src = "1. **第一步**\n   有序续段\n- [x] **已完成**\n      任务续段\n- 外层项\n  - 内层项\n  外层续段\n  ```rust\nlet x = 1;\n  ```";
+    let lines = render_wrapped_code_blocks(src, 60);
+    let ordered_cont = lines
+        .iter()
+        .find(|l| l.text() == "有序续段")
+        .expect("ordered continuation");
+    assert_eq!(ordered_cont.indent, 3, "1. continuation aligns at col 3");
+
+    let task_cont = lines
+        .iter()
+        .find(|l| l.text() == "任务续段")
+        .expect("task continuation");
+    assert_eq!(task_cont.indent, 4, "[x] continuation aligns at col 4");
+
+    let outer_cont = lines
+        .iter()
+        .find(|l| l.text() == "外层续段")
+        .expect("outer continuation after nested list");
+    assert_eq!(
+        outer_cont.indent, 2,
+        "outer continuation after nested list pops back to col 2"
+    );
+
+    assert_eq!(
+        extract_code_block(src, 0).as_deref(),
+        Some("let x = 1;"),
+        "indented fenced code block inside list must strip fence indent"
+    );
+}

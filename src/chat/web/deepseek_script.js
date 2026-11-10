@@ -56,6 +56,8 @@ async function main() {
     await new Promise((r) => setTimeout(r, 300));
   }
 
+  await installDomMarkdown();
+
   // Channel A: intercept /api/v0/chat/completion over XMLHttpRequest & fetch.
   const runId = await js(String.raw`
     (() => {
@@ -66,8 +68,15 @@ async function main() {
         runId: String(Date.now()) + '-' + String(Math.random()),
         queue: [],
         done: false,
-        attached: false,
         sseActive: false,
+        sseSeen: false,
+        sseSeenAt: 0,
+        sseText: false,
+        sseThinking: false,
+        domTextStarted: false,
+        domThinkingStarted: false,
+        submittedAt: Date.now(),
+        activeXhr: null,
         deltaState: { op: 'SET', path: '' },
         fragments: [],
         thinkingContent: '',
@@ -81,7 +90,7 @@ async function main() {
         sseBuffer: '',
         sseEventName: '',
         sseDataLines: [],
-        cleanText(text, holdIncomplete) {
+        cleanPlain(text, holdIncomplete) {
           if (!text || typeof text !== 'string') return '';
           let out = text.replace(/\[(?:citation|reference):[^\]]*\]/g, '');
           if (holdIncomplete) {
@@ -100,31 +109,61 @@ async function main() {
           }
           return out;
         },
+        cleanText(text, holdIncomplete) {
+          if (!text || typeof text !== 'string') return '';
+          let out = '';
+          let last = 0;
+          const fence = new RegExp('\\x60{3}[\\s\\S]*?(?:\\x60{3}|$)', 'g');
+          let match;
+          while ((match = fence.exec(text)) !== null) {
+            out += this.cleanPlain(text.slice(last, match.index), false);
+            out += match[0];
+            last = match.index + match[0].length;
+          }
+          out += this.cleanPlain(text.slice(last), holdIncomplete);
+          return out;
+        },
         push(kind, delta) {
           if (!kind || !delta) return;
+          if (kind === 'text' && this.domTextStarted) return;
+          if (kind === 'thinking' && (this.domThinkingStarted || this.domTextStarted || this.sseText)) {
+            return;
+          }
           this.sseActive = true;
+          if (kind === 'text') this.sseText = true;
+          if (kind === 'thinking') this.sseThinking = true;
           this.queue.push({ kind: kind, delta: delta });
         },
         pushDom(kind, current) {
+          if (kind === 'text' && this.sseText) return;
+          if (kind === 'thinking' && (this.sseThinking || this.sseText || this.domTextStarted)) {
+            return;
+          }
           const key = kind === 'thinking' ? 'domThink' : 'domText';
           const previous = this[key] || '';
           if (!current || current === previous) return;
+          const emitDelta = (delta) => {
+            if (!delta) return;
+            if (kind === 'text') this.domTextStarted = true;
+            if (kind === 'thinking') this.domThinkingStarted = true;
+            this.queue.push({ kind: kind, delta: delta });
+          };
           if (current.startsWith(previous)) {
             const delta = current.slice(previous.length);
             this[key] = current;
-            if (delta) this.queue.push({ kind: kind, delta: delta });
+            emitDelta(delta);
             return;
           }
           for (const len of [48, 32, 20, 12, 8, 5]) {
             if (previous.length < len) continue;
             const anchor = previous.slice(previous.length - len);
             const pos = current.lastIndexOf(anchor);
-            if (pos >= 0 && pos + len >= current.length - 240) {
+            if (pos >= 0 && pos + len >= current.length - 1024) {
               const delta = current.slice(pos + len);
               if (delta.length > 0 || current.length >= previous.length) {
                 this[key] = current;
               }
-              if (delta) this.queue.push({ kind: kind, delta: delta });
+              emitDelta(delta);
               return;
             }
           }
@@ -132,21 +171,50 @@ async function main() {
           if (tailLen >= 5 && previous.includes(current.slice(current.length - tailLen))) {
             return;
           }
+          let lcp = 0;
+          while (lcp < current.length && lcp < previous.length && current[lcp] === previous[lcp]) {
+            lcp += 1;
+          }
+          if (previous.length - lcp <= 160) {
+            const remPrev = previous.slice(lcp).replace(/^[*_~\s\x60]+/, '');
+            if (remPrev.length === 0) {
+              const delta = current.slice(lcp);
+              this[key] = current;
+              emitDelta(delta);
+              return;
+            }
+            const idx = current.indexOf(remPrev, lcp);
+            if (idx >= lcp && idx - lcp <= 24) {
+              const delta = current.slice(idx + remPrev.length);
+              this[key] = current;
+              emitDelta(delta);
+              return;
+            }
+          }
           if (current.length > previous.length) {
             this[key] = current;
           }
         },
         fragmentKind(fragment) {
           if (!fragment) return null;
-          if (fragment.type === 'THINK') return 'thinking';
-          if (!fragment.type || fragment.type === 'RESPONSE') return 'text';
+          const type = String(fragment.type || '').toUpperCase();
+          if (type === 'THINK' || type === 'THINKING' || type === 'REASONING') return 'thinking';
+          if (!type || type === 'RESPONSE' || type === 'TEXT' || type === 'TEMPLATE_RESPONSE') {
+            return 'text';
+          }
           return null;
         },
         parseDeltas(raw, state) {
           if (!raw || typeof raw !== 'object') return [];
           const target = state || this.deltaState;
           const op = raw.o !== undefined ? raw.o : target.op;
-          const path = raw.p !== undefined ? raw.p : target.path;
+          let path = raw.p !== undefined ? raw.p : target.path;
+          if (typeof path === 'string' && ! state) {
+            if (path.startsWith('/')) path = path.slice(1);
+            if (path && path !== 'response' && !path.startsWith('response/')) {
+              path = 'response/' + path;
+            }
+          }
           target.op = op;
           target.path = path;
           if (op !== 'BATCH') {
@@ -158,8 +226,13 @@ async function main() {
           for (const entry of raw.v) {
             const nested = this.parseDeltas(entry, childState);
             for (const item of nested) {
+              let fullPath = (path ? path + '/' : '') + item.path;
+              if (fullPath.startsWith('/')) fullPath = fullPath.slice(1);
+              if (fullPath && fullPath !== 'response' && !fullPath.startsWith('response/')) {
+                fullPath = 'response/' + fullPath;
+              }
               out.push({
-                path: (path ? path + '/' : '') + item.path,
+                path: fullPath,
                 op: item.op,
                 value: item.value,
               });
@@ -181,22 +254,27 @@ async function main() {
         },
         applyValue(path, op, value) {
           if (value && typeof value === 'object' && !Array.isArray(value) && value.response) {
-            this.applyValue('response', op, value.response);
+            this.deltaState.path = 'response';
+            this.deltaState.op = 'SET';
+            this.applyValue('response', 'SET', value.response);
             return;
           }
           if (typeof path !== 'string') return;
           if (path === 'response') {
             if (!value || typeof value !== 'object') return;
+            const hasFragments = Array.isArray(value.fragments) && value.fragments.length > 0;
             if (value.fragments !== undefined) this.applyFragments('SET', value.fragments);
-            if (value.thinking_content !== undefined) {
-              this.applyScalar('thinking', op, value.thinking_content);
+            if (!hasFragments) {
+              if (value.thinking_content !== undefined) {
+                this.applyScalar('thinking', op, value.thinking_content);
+              }
+              if (value.content !== undefined) this.applyScalar('text', op, value.content);
             }
-            if (value.content !== undefined) this.applyScalar('text', op, value.content);
-            if (value.status === 'FINISHED') this.done = true;
+            if (value.status === 'FINISHED') this.finishSse();
             return;
           }
           if (path === 'response/status' && value === 'FINISHED') {
-            this.done = true;
+            this.finishSse();
             return;
           }
           if (path === 'response/fragments') {
@@ -210,7 +288,8 @@ async function main() {
               const index = rawIndex < 0 ? Math.max(0, this.fragments.length + rawIndex) : rawIndex;
               const field = parts[3];
               const fragment = this.fragments[index] || (this.fragments[index] = { content: '' });
-              if (field === 'content') {
+              if (field === 'content' || field === 'thinking_content') {
+                if (field === 'thinking_content' && !fragment.type) fragment.type = 'THINK';
                 this.applyFragmentContent(index, op, value);
               } else if (field === 'type') {
                 fragment.type = value;
@@ -225,6 +304,18 @@ async function main() {
             return;
           }
           if (path === 'response/content') {
+            this.applyScalar('text', op, value);
+            return;
+          }
+          if (
+            typeof value === 'string'
+            && (path === '' || path === 'response' || path === 'response/fragments')
+          ) {
+            const index = this.fragments.length - 1;
+            if (index >= 0) {
+              this.applyFragmentContent(index, op === 'SET' ? 'SET' : 'APPEND', value);
+              return;
+            }
             this.applyScalar('text', op, value);
           }
         },
@@ -244,7 +335,8 @@ async function main() {
           this.push(kind, delta);
         },
         applyFragments(op, value) {
-          if (!Array.isArray(value)) return;
+          if (!value) return;
+          if (!Array.isArray(value)) value = [value];
           if (op === 'APPEND') {
             for (const fragment of value) {
               if (!fragment || typeof fragment !== 'object') continue;
@@ -256,8 +348,11 @@ async function main() {
                 sepEmitted: false,
               };
               this.fragments.push(entry);
-              if (typeof fragment.content === 'string' && fragment.content) {
-                this.applyFragmentContent(index, 'SET', fragment.content);
+              const text = typeof fragment.content === 'string'
+                ? fragment.content
+                : (typeof fragment.thinking_content === 'string' ? fragment.thinking_content : '');
+              if (text) {
+                this.applyFragmentContent(index, 'SET', text);
               }
             }
             return;
@@ -272,10 +367,16 @@ async function main() {
             };
             if (fragment.type) current.type = fragment.type;
             this.fragments[index] = current;
-            if (typeof fragment.content === 'string') {
-              this.applyFragmentContent(index, 'SET', fragment.content);
+            const text = typeof fragment.content === 'string'
+              ? fragment.content
+              : (typeof fragment.thinking_content === 'string' ? fragment.thinking_content : null);
+            if (typeof text === 'string') {
+              this.applyFragmentContent(index, 'SET', text);
             }
           });
+          if (this.fragments.length > value.length) {
+            this.fragments.length = value.length;
+          }
         },
         applyFragmentContent(index, op, value) {
           if (typeof value !== 'string') return;
@@ -311,26 +412,41 @@ async function main() {
             fragment.sepEmitted = true;
             const hasEarlierThink = this.fragments
               .slice(0, index)
-              .some((item) => item && item.type === 'THINK' && item.emitted);
+              .some((item) => item && this.fragmentKind(item) === 'thinking' && item.emitted);
             if (hasEarlierThink) {
               delta = '\n\n' + delta;
             }
           }
           this.push(kind, delta);
         },
+        finishSse() {
+          for (let i = 0; i < this.fragments.length; i += 1) {
+            const frag = this.fragments[i];
+            if (!frag || this.fragmentKind(frag) !== 'text') continue;
+            const raw = typeof frag.content === 'string' ? frag.content : '';
+            if (!raw) continue;
+            const cleaned = this.cleanText(raw, false);
+            const prev = typeof frag.emitted === 'string' ? frag.emitted : '';
+            if (cleaned.length > prev.length && cleaned.startsWith(prev)) {
+              frag.emitted = cleaned;
+              this.push('text', cleaned.slice(prev.length));
+            }
+          }
+          this.done = true;
+        },
         flushSseFrame() {
           const data = this.sseDataLines.join('\n').trim();
           const name = this.sseEventName;
           this.sseDataLines = [];
           this.sseEventName = '';
-          if (name === 'finish' || name === 'close') this.done = true;
+          if (name === 'finish' || name === 'close') this.finishSse();
           if (!data) return;
           if (data === '[DONE]') {
-            this.done = true;
+            this.finishSse();
             return;
           }
           try {
-            if (!name || name === 'delta') {
+            if (!name || name === 'delta' || name === 'message') {
               this.applyEvent(JSON.parse(data));
             }
           } catch (error) {
@@ -352,6 +468,10 @@ async function main() {
             if (line.startsWith('event:')) {
               this.sseEventName = line.slice(6).trim();
             } else if (line.startsWith('data:')) {
+              if (!this.sseSeen) {
+                this.sseSeen = true;
+                this.sseSeenAt = Date.now();
+              }
               this.sseActive = true;
               this.sseDataLines.push(trimLeadingSpace(line.slice(5)));
             }
@@ -359,6 +479,10 @@ async function main() {
           if (isFinal) {
             if (this.sseBuffer.trim()) {
               if (this.sseBuffer.startsWith('data:')) {
+                if (!this.sseSeen) {
+                  this.sseSeen = true;
+                  this.sseSeenAt = Date.now();
+                }
                 this.sseActive = true;
                 this.sseDataLines.push(trimLeadingSpace(this.sseBuffer.slice(5)));
               } else if (this.sseBuffer.startsWith('event:')) {
@@ -367,19 +491,35 @@ async function main() {
               this.sseBuffer = '';
             }
             this.flushSseFrame();
-            if (this.sseActive) this.done = true;
+            if (this.sseActive) this.finishSse();
           }
         },
         attachXhr(xhr) {
-          if (!xhr || xhr.__lxAttached || this.attached) return;
+          if (!xhr || xhr.__lxAttached) return;
           xhr.__lxAttached = true;
-          this.attached = true;
           let consumed = 0;
           const self = this;
           const pull = (isFinal) => {
             try {
               if (xhr.status >= 400) return;
+              const type = String(
+                (xhr.getResponseHeader && xhr.getResponseHeader('content-type')) || '',
+              ).toLowerCase();
               const full = typeof xhr.responseText === 'string' ? xhr.responseText : '';
+              if (!full) {
+                if (isFinal && self.activeXhr === xhr && self.sseActive) {
+                  self.feedSseChunk('', true);
+                }
+                return;
+              }
+              // Non-SSE challenge / JSON responses must not lock out replayed SSE requests.
+              const looksSse = /(?:^|\n)(?:event|data|:)/.test(full.slice(0, 256));
+              if (type && !type.includes('text/event-stream') && !looksSse) return;
+              if (!type && !looksSse) return;
+              if (self.activeXhr && self.activeXhr !== xhr && (self.sseText || self.sseThinking)) {
+                return;
+              }
+              self.activeXhr = xhr;
               if (full.length > consumed) {
                 const delta = full.slice(consumed);
                 consumed = full.length;
@@ -397,13 +537,15 @@ async function main() {
           xhr.addEventListener('loadend', () => pull(true));
         },
         attach(response) {
-          if (!response || !response.ok || !response.body || this.attached) return;
+          if (!response || !response.ok || !response.body) return;
           const type = response.headers && response.headers.get
-            ? (response.headers.get('content-type') || '')
+            ? (response.headers.get('content-type') || '').toLowerCase()
             : '';
           if (type && !type.includes('text/event-stream')) return;
-          this.attached = true;
-          this.sseActive = true;
+          if (!this.sseSeen) {
+            this.sseSeen = true;
+            this.sseSeenAt = Date.now();
+          }
           const reader = response.body.getReader();
           const decoder = new TextDecoder();
           const self = this;
@@ -419,8 +561,51 @@ async function main() {
           });
           pump();
         },
+        readFiberMarkdown(el) {
+          if (!el) return '';
+          const key = Object.keys(el).find(
+            (k) => k.startsWith('__reactFiber$') || k.startsWith('__reactInternalInstance$'),
+          );
+          let fiber = key ? el[key] : null;
+          for (let depth = 0; fiber && depth < 10; depth += 1, fiber = fiber.return) {
+            if (
+              depth > 0
+              && fiber.stateNode instanceof Element
+              && fiber.stateNode !== el
+              && !el.contains(fiber.stateNode)
+            ) {
+              break;
+            }
+            const props = fiber.memoizedProps;
+            if (!props || typeof props !== 'object') continue;
+            if (
+              'citeProps' in props
+              || 'cacheKey' in props
+              || 'mergeConsecutiveCites' in props
+            ) {
+              if (typeof props.content === 'string') return props.content;
+              if (typeof props.markdown === 'string') return props.markdown;
+            }
+          }
+          return '';
+        },
         tickDom() {
-          if (this.sseActive) return;
+          const idleButton = Boolean(
+            document.querySelector('.ds-button--primary.ds-button--disabled'),
+          );
+          const stopIcon = Boolean(document.querySelector('.ds-icon-stop'));
+          // Once Channel A (SSE) has emitted thinking or text, never let DOM pre-empt or mix.
+          if (this.sseThinking || this.sseText) {
+            if (idleButton && !stopIcon) {
+              this.sseIdleTicks = (this.sseIdleTicks || 0) + 1;
+              if (this.sseIdleTicks >= 15) {
+                this.finishSse();
+              }
+            } else {
+              this.sseIdleTicks = 0;
+            }
+            return;
+          }
           const items = Array.from(document.querySelectorAll('[data-virtual-list-item-key]'));
           let target = null;
           if (this.targetKey) {
@@ -440,25 +625,44 @@ async function main() {
             }
           }
           if (!target) return;
-          // 引用角标内部是隐藏的 "-" 和可见编号，innerText 会拼成 "-\n13"；
-          // 读正文前临时隐藏 .ds-markdown-cite，避免编号残留在流式回答里。
-          const readMarkdownText = (el) => {
+          const isStreaming = stopIcon || !idleButton;
+          const readMarkdownText = (el, streamingFlag) => {
             if (!el) return '';
-            const hidden = [];
-            try {
-              el.querySelectorAll('.ds-markdown-cite').forEach((node) => {
-                hidden.push([node, node.style.display]);
-                node.style.display = 'none';
-              });
-              return this.cleanText(el.innerText || '', false);
-            } finally {
-              for (const [node, prev] of hidden) node.style.display = prev;
+            if (!streamingFlag) {
+              const fiberMd = this.readFiberMarkdown(el);
+              if (fiberMd) {
+                return this.cleanText(fiberMd, false);
+              }
             }
+            if (typeof window.__lxHtmlToMarkdown === 'function') {
+              return this.cleanText(
+                window.__lxHtmlToMarkdown(el, { streaming: Boolean(streamingFlag) }),
+                false,
+              );
+            }
+            const fiberMd = this.readFiberMarkdown(el);
+            return fiberMd ? this.cleanText(fiberMd, Boolean(streamingFlag)) : '';
           };
-          const think = target.querySelector('.ds-think-content');
-          const text = target.querySelector('.ds-markdown');
-          this.pushDom('thinking', readMarkdownText(think));
-          this.pushDom('text', readMarkdownText(text));
+          const now = Date.now();
+          if (!this.pollStartedAt) this.pollStartedAt = now;
+          const graceOver = this.sseSeen
+            ? now - this.sseSeenAt >= 1200
+            : now - this.pollStartedAt >= 1200;
+          if (graceOver || !isStreaming) {
+            const thinkEl =
+              target.querySelector('.ds-think-content .ds-markdown')
+              || target.querySelector('.ds-think-content');
+            const textEl =
+              target.querySelector('.ds-markdown.ds-assistant-message-main-content')
+              || Array.from(target.querySelectorAll('.ds-markdown')).find(
+                (el) => !el.closest('.ds-think-content'),
+              )
+              || null;
+            const bodyText = readMarkdownText(textEl, isStreaming);
+            const thinkStreaming = isStreaming && !bodyText && !this.domTextStarted;
+            this.pushDom('thinking', readMarkdownText(thinkEl, thinkStreaming));
+            this.pushDom('text', bodyText);
+          }
           const sample = (this.domThink || '') + ':::' + (this.domText || '');
           if (sample === this.domLastSample) {
             this.domStableTicks += 1;
@@ -466,13 +670,10 @@ async function main() {
             this.domLastSample = sample;
             this.domStableTicks = 0;
           }
-          const idleButton = Boolean(
-            document.querySelector('.ds-button--primary.ds-button--disabled'),
-          );
           if (
             this.domStableTicks >= 6
             && idleButton
-            && !document.querySelector('.ds-icon-stop')
+            && !stopIcon
             && (this.domThink || this.domText)
           ) {
             this.done = true;
@@ -480,23 +681,36 @@ async function main() {
         },
       };
       window.__lxDeepSeekStream = stream;
+      const urlOf = (input) => {
+        if (typeof input === 'string') return input;
+        if (input && typeof input.url === 'string') return input.url;
+        if (input && typeof input.href === 'string') return input.href;
+        try {
+          return String(input || '');
+        } catch (_) {
+          return '';
+        }
+      };
       const isStreamUrl = (u) => typeof u === 'string' && (
         u.includes('/api/v0/chat/completion')
         || u.includes('/api/v0/chat/edit_message')
         || u.includes('/api/v0/chat/regenerate')
+        || u.includes('/api/v0/chat/continue')
+        || u.includes('/api/v0/chat/resume_stream')
       );
-      if (!window.__lxXhrWrappedV2) {
-        window.__lxXhrWrappedV2 = true;
+      if (!XMLHttpRequest.prototype.open.__lxWrapped) {
         const origOpen = XMLHttpRequest.prototype.open;
         const origSend = XMLHttpRequest.prototype.send;
-        XMLHttpRequest.prototype.open = function(method, url) {
-          this.__lxUrl = typeof url === 'string' ? url : String(url || '');
+        const wrappedOpen = function(method, url) {
+          this.__lxUrl = urlOf(url);
           return origOpen.apply(this, arguments);
         };
-        XMLHttpRequest.prototype.send = function() {
+        wrappedOpen.__lxWrapped = true;
+        XMLHttpRequest.prototype.open = wrappedOpen;
+        const wrappedSend = function() {
           if (isStreamUrl(this.__lxUrl)) {
             const current = window.__lxDeepSeekStream;
-            if (current && !current.sseActive) {
+            if (current) {
               try {
                 current.attachXhr(this);
               } catch (e) {}
@@ -504,17 +718,18 @@ async function main() {
           }
           return origSend.apply(this, arguments);
         };
+        wrappedSend.__lxWrapped = true;
+        XMLHttpRequest.prototype.send = wrappedSend;
       }
-      if (!window.__lxFetchWrappedV2) {
-        window.__lxFetchWrappedV2 = true;
+      if (typeof window.fetch === 'function' && !window.fetch.__lxWrapped) {
         const originalFetch = window.fetch.bind(window);
-        window.fetch = function(input, init) {
-          const url = typeof input === 'string' ? input : (input && input.url) || '';
+        const wrappedFetch = function(input, init) {
+          const url = urlOf(input);
           const result = originalFetch(input, init);
           if (isStreamUrl(url)) {
             result.then((response) => {
               const current = window.__lxDeepSeekStream;
-              if (!current || current.sseActive) return;
+              if (!current) return;
               try {
                 current.attach(response.clone());
               } catch (error) {
@@ -524,6 +739,8 @@ async function main() {
           }
           return result;
         };
+        wrappedFetch.__lxWrapped = true;
+        window.fetch = wrappedFetch;
       }
       return stream.runId;
     })()

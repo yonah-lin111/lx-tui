@@ -19,6 +19,7 @@ use crate::ui::style;
 mod code_block;
 mod highlight;
 mod incremental;
+mod inline;
 mod table;
 
 pub use code_block::{CodeLineKind, DEFAULT_CODE_LANG, extract_code_block};
@@ -26,6 +27,7 @@ pub use code_block::{CodeLineKind, DEFAULT_CODE_LANG, extract_code_block};
 pub(crate) use highlight::highlight_line;
 /// 流式 Markdown 增量渲染状态（稳定前缀 + 活跃尾部）。
 pub(crate) use incremental::IncrementalMarkdownState;
+use inline::inline_spans;
 pub use table::{
     TableCellSlice, TableColumnSpan, TableLayoutMeta, TableLineKind, TableLineRef, TableLogicalRow,
 };
@@ -183,6 +185,8 @@ struct ParserState {
     /// 与 `list_indents` 平行的列表项内容起始列栈（最内层为 last）。
     /// 用于区分“列表续段”和真正的 4 空格缩进代码块。
     list_content_indents: Vec<usize>,
+    /// 与 `list_indents` 平行的列表项标记悬挂宽度栈（无序 `2`、有序 `N. ` 宽度、任务 `4`）。
+    list_hangs: Vec<u16>,
     /// `Some(lang)` 表示位于未闭合围栏代码块内（空串 = 围栏未写语言）。
     open_fence_lang: Option<String>,
     /// 当前未闭合围栏 opener 的反引号数量；关闭行必须不少于该数量。
@@ -330,8 +334,20 @@ fn render_blocks_stateful(
             index += 1;
             continue;
         }
-        // 普通段落行：行内渲染。
-        lines.push(MdLine::spans(0, inline_spans(trimmed)));
+        // 普通段落行：行内渲染（若仍处于列表上下文内，续段按当前列表层级的正文列缩进）。
+        let cont_indent = if state.list_indents.is_empty() {
+            0
+        } else {
+            let depth = state.list_indents.len() - 1;
+            let hang = state.list_hangs.get(depth).copied().unwrap_or(2);
+            indent(depth).saturating_add(hang)
+        };
+        let body = if cont_indent > 0 {
+            trimmed.trim_start()
+        } else {
+            trimmed
+        };
+        lines.push(MdLine::spans(cont_indent, inline_spans(body)));
         index += 1;
     }
     lines
@@ -347,6 +363,7 @@ const TASK_OPEN: &str = "[ ]";
 
 /// ATX 标题：`#{1,6}` 加后随空白；返回（级别、正文）。
 fn heading(line: &str) -> Option<(u8, &str)> {
+    let line = line.trim_start_matches(' ');
     let hashes = line.bytes().take_while(|byte| *byte == b'#').count();
     if !(1..=6).contains(&hashes) {
         return None;
@@ -356,9 +373,15 @@ fn heading(line: &str) -> Option<(u8, &str)> {
     (spaces > 0).then(|| (hashes as u8, rest[spaces..].trim_end()))
 }
 
-/// 渲染一行标题：隐藏 `#` 标记，正文用分级样式。
+/// 渲染一行标题：隐藏 `#` 标记，正文用分级样式（若内含行内标记则先剥离标记文本）。
 fn heading_line(level: u8, body: &str) -> MdLine {
-    MdLine::plain(0, body, style::md_read_heading_level(level))
+    let clean: String = inline_spans(body).into_iter().map(|(s, _)| s).collect();
+    let display = if clean.is_empty() {
+        body
+    } else {
+        clean.as_str()
+    };
+    MdLine::plain(0, display, style::md_read_heading_level(level))
 }
 
 /// 水平线：仅由同一种 `-`/`*`/`_` 组成且至少 3 个。
@@ -497,6 +520,15 @@ impl ListItem<'_> {
         }
     }
 
+    /// 渲染后的列表项标记悬挂宽度（用于续段与换行对齐正文列）。
+    fn hang_width(&self) -> u16 {
+        match *self {
+            Self::Bullet { .. } => marker_width("• "),
+            Self::Ordered { number, .. } => marker_width(&format!("{number}. ")),
+            Self::Task { .. } => marker_width(&format!("{TASK_OPEN} ")),
+        }
+    }
+
     /// 渲染一行列表项（lx：`•` 项目符号；任务用 claude 一组 `[x]`/`[ ]`）；
     /// `depth` 为换算后的层级（0 = 顶层）。
     fn render(&self, depth: usize) -> MdLine {
@@ -568,27 +600,31 @@ fn list_depth(stack: &mut Vec<usize>, indent: usize) -> usize {
     stack.len() - 1
 }
 
-/// 维护列表上下文：列表项更新内容起始列栈；非列表行只有缩进小于当前列表
-/// 内容起始列时才结束列表上下文（列表续段/列表内代码块保留层级）。
+/// 维护列表上下文：列表项更新内容起始列栈；非列表行按缩进逐层回退，
+/// 直到找到满足 `indent >= content_indent` 的外层列表（列表续段/列表内代码块保留层级）。
 fn update_list_context(state: &mut ParserState, item: Option<&ListItem<'_>>, line: &str) {
     if let Some(item) = item {
         let depth = list_depth(&mut state.list_indents, item.indent());
         state.list_content_indents.truncate(depth + 1);
+        state.list_hangs.truncate(depth + 1);
         if state.list_content_indents.len() <= depth {
             state.list_content_indents.push(item.content_indent());
+            state.list_hangs.push(item.hang_width());
         } else {
             state.list_content_indents[depth] = item.content_indent();
+            state.list_hangs[depth] = item.hang_width();
         }
         return;
     }
     let indent = line.len() - line.trim_start_matches(' ').len();
-    let in_list = state
+    while state
         .list_content_indents
         .last()
-        .is_some_and(|content| indent >= *content);
-    if !in_list {
-        state.list_indents.clear();
-        state.list_content_indents.clear();
+        .is_some_and(|&content| indent < content)
+    {
+        state.list_indents.pop();
+        state.list_content_indents.pop();
+        state.list_hangs.pop();
     }
 }
 
@@ -648,155 +684,6 @@ fn list_item(line: &str) -> Option<ListItem<'_>> {
         });
     }
     None
-}
-
-/// 行内渲染：吃掉粗体/斜体/粗斜体/删除线/行内代码标记；链接显示 `文字 (url)`。
-fn inline_spans(text: &str) -> Vec<(String, Style)> {
-    let mut spans = Vec::new();
-    let mut plain = String::new();
-    let bytes = text.as_bytes();
-    let mut index = 0;
-    while index < bytes.len() {
-        let prev = text[..index].chars().next_back();
-        let rest = &text[index..];
-        // 行内代码：`code`（内部不再解析）。
-        if let Some(inner) = delimited(rest, "`", "`") {
-            flush(&mut plain, &mut spans);
-            spans.push((inner.to_string(), style::md_read_inline_code()));
-            index += inner.len() + 2;
-            continue;
-        }
-        // 粗斜体 `***…***`。
-        if let Some(inner) = delimited_emphasis(rest, "***", prev) {
-            flush(&mut plain, &mut spans);
-            spans.push((inner.to_string(), style::md_read_strong_emphasis()));
-            index += inner.len() + 6;
-            continue;
-        }
-        // 粗体 `**…**` / `__…__`。
-        if let Some(inner) =
-            delimited_emphasis(rest, "**", prev).or_else(|| delimited_emphasis(rest, "__", prev))
-        {
-            flush(&mut plain, &mut spans);
-            spans.push((inner.to_string(), style::md_read_strong()));
-            index += inner.len() + 4;
-            continue;
-        }
-        // 删除线 `~~…~~`。
-        if let Some(inner) = delimited_emphasis(rest, "~~", prev) {
-            flush(&mut plain, &mut spans);
-            spans.push((inner.to_string(), style::md_read_strikethrough()));
-            index += inner.len() + 4;
-            continue;
-        }
-        // 斜体 `*…*` / `_…_`（排除双写与词内下划线）。
-        if let Some(inner) = emphasis(rest, prev) {
-            flush(&mut plain, &mut spans);
-            spans.push((inner.to_string(), style::md_read_emphasis()));
-            index += inner.len() + 2;
-            continue;
-        }
-        // 链接 `[文字](url)`。
-        if rest.starts_with('[')
-            && let Some((label, url, consumed)) = link(rest)
-        {
-            flush(&mut plain, &mut spans);
-            spans.push((label.to_string(), style::md_read_link_text()));
-            spans.push((format!(" ({url})"), style::md_read_url()));
-            index += consumed;
-            continue;
-        }
-        // 自动链接 `<url>`。
-        if rest.starts_with('<')
-            && let Some(close) = rest.find('>')
-        {
-            let url = &rest[1..close];
-            if url.starts_with("http://") || url.starts_with("https://") {
-                flush(&mut plain, &mut spans);
-                spans.push((url.to_string(), style::md_read_url()));
-                index += close + 1;
-                continue;
-            }
-        }
-        // 裸 URL。
-        if rest.starts_with("http://") || rest.starts_with("https://") {
-            let end = rest.find(char::is_whitespace).unwrap_or(rest.len());
-            flush(&mut plain, &mut spans);
-            spans.push((rest[..end].to_string(), style::md_read_url()));
-            index += end;
-            continue;
-        }
-        let ch = rest.chars().next().unwrap_or('\0');
-        plain.push(ch);
-        index += ch.len_utf8();
-    }
-    flush(&mut plain, &mut spans);
-    spans
-}
-
-/// 把累积的普通文本刷入 spans（正文色）。
-fn flush(plain: &mut String, spans: &mut Vec<(String, Style)>) {
-    if !plain.is_empty() {
-        spans.push((std::mem::take(plain), style::text()));
-    }
-}
-
-/// 匹配 `open … close` 并返回内部文本（需非空）。
-fn delimited<'a>(rest: &'a str, open: &str, close: &str) -> Option<&'a str> {
-    let after = rest.strip_prefix(open)?;
-    let end = after.find(close)?;
-    (end > 0).then(|| &after[..end])
-}
-
-/// 匹配强调类对称标记（`***` / `**` / `__` / `~~` / `*` / `_`）：
-/// - 遵循 CommonMark 规则：开标记后与闭标记前均不得紧邻空白（防止 `2 * 3 * 4` 或 `*.rs *.toml` 误配对）；
-/// - 下划线标记（`_` / `__`）不得在 ASCII 字母或数字词内开闭（防止 `exec_command / write_stdin` 吞掉 `_`）。
-fn delimited_emphasis<'a>(rest: &'a str, delim: &str, prev: Option<char>) -> Option<&'a str> {
-    let delim_char = delim.chars().next()?;
-    let is_underscore = delim_char == '_';
-    if is_underscore && prev.is_some_and(|ch| ch.is_ascii_alphanumeric() || ch == '_') {
-        return None;
-    }
-    let after = rest.strip_prefix(delim)?;
-    let first = after.chars().next()?;
-    if first == delim_char || first.is_whitespace() {
-        return None;
-    }
-    let mut search_from = 0;
-    while let Some(pos) = after[search_from..].find(delim) {
-        let end = search_from + pos;
-        let inner = &after[..end];
-        let tail = &after[end + delim.len()..];
-        let before_close = inner.chars().next_back();
-        let after_close = tail.chars().next();
-        let valid_before = before_close.is_some_and(|ch| !ch.is_whitespace() && ch != delim_char);
-        let valid_after = after_close
-            .is_none_or(|ch| ch != delim_char && (!is_underscore || !ch.is_ascii_alphanumeric()));
-        if valid_before && valid_after {
-            return Some(inner);
-        }
-        search_from = end + delim.len();
-    }
-    None
-}
-
-/// 斜体 `*…*` / `_…_`；排除双写前缀与词内下划线。
-fn emphasis(rest: &str, prev: Option<char>) -> Option<&str> {
-    let ch = rest.chars().next()?;
-    if ch != '*' && ch != '_' {
-        return None;
-    }
-    delimited_emphasis(rest, if ch == '*' { "*" } else { "_" }, prev)
-}
-
-/// 链接 `[文字](url)`；返回（文字、URL、消耗字节数）。
-fn link(rest: &str) -> Option<(&str, &str, usize)> {
-    let after = rest.strip_prefix('[')?;
-    let label_close = after.find(']')?;
-    let url_start = after.get(label_close + 1..)?.strip_prefix('(')?;
-    let url_close = url_start.find(')')?;
-    let consumed = 1 + label_close + 1 + 1 + url_close + 1;
-    Some((&after[..label_close], &url_start[..url_close], consumed))
 }
 
 /// 字符串的显示宽度（按字符宽度求和）。

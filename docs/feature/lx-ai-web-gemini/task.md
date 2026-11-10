@@ -1,8 +1,8 @@
 # `Web` 接入 Google Gemini 网页端、双站点品牌渐变与 `/model` 模型/思考等级切换 — 执行任务清单 (`task.md`)
 
-- **状态**：已完成实现、CLI 端到端验证与 review 修复（位于 `.worktrees/lx-ai-web-gemini` 工作区 `feat/lx-ai-web-gemini` 分支）
+- **状态**：已完成实现、CLI 端到端验证、DOM Markdown 保真提取与 review 修复（见 [`verification.md`](verification.md)、[`review.md`](review.md)）
 - **设计依据**：[`docs/feature/lx-ai-web-gemini/design.md`](design.md)
-- **参考驱动规范**：[`docs/standards/web-deepseek.md`](../../standards/web-deepseek.md)
+- **参考驱动规范**：[`docs/web/web-deepseek.md`](../../web/web-deepseek.md) · [`docs/web/web-gemini.md`](../../web/web-gemini.md)
 - **验证报告**：[`verification.md`](verification.md) · **Review 与修复**：[`review.md`](review.md)
 
 ---
@@ -166,6 +166,22 @@
 - [x] **6.4 回归验证**
   - `rtk cargo fmt --check`、`rtk cargo clippy --all-targets -- -D warnings`、`rtk cargo test` 全绿；
   - `lx-tui web` 对 DeepSeek / Gemini 的模型切换、流式对话、文件上传、`/rewind`、rename/delete 与错误路径实测通过。
+
+---
+
+### Phase 7：DOM → Markdown 保真提取、TUI 渲染增强与专项 Review（P0–P3）修复（`src/chat/web/` & `src/ui/markdown_render*`）
+
+- [x] **7.1 接入跨站点 `dom_markdown.js` 并在 Gemini / DeepSeek 全链路替换 `innerText`**
+  - 新增 `src/chat/web/dom_markdown.js`（`lxHtmlToMarkdown` + `window.__lxHtmlToMarkdown`），支持 `<code-block>`（`.code-block-decoration > span` 语言提取与 `code[data-test-id="code-content"]`）、`<table-block>`、多 `<p>` 列表项续段缩进、粗体/斜体/行内代码/公式及 `streaming` 尾部闭合标记暂缓；
+  - `gemini_script.js` 与 `gemini_helpers.js`（`load_session`）全面切换至 `window.__lxHtmlToMarkdown`，彻底移除 `el.innerText` 降级。
+- [x] **7.2 TUI Markdown 阅读渲染器增强（`src/ui/markdown_render.rs`、`inline.rs`、`code_block.rs`）**
+  - `inline.rs`：递归解析 `**...**` / `*...*` / `***...***` / `~~...~~` 内部的行内代码、链接与内层强调，支持多反引号 `` ``code`` ``，修复尾随 `***` 与代码内 `**` 闭合错位；
+  - `markdown_render.rs` & `code_block.rs`：新增 `list_hangs` 栈对齐无序/有序/任务列表续段列，子列表结束后按缩进逐层 `pop()` 回退，并剥离列表内围栏代码块前导缩进。
+- [x] **7.3 专项 Review（P0 → P3）修复与回归测试**
+  - **P0-1**：修复 `gemini_script.js` / `deepseek_script.js` 正文流式期间思考块仍传 `streaming: true` 导致末尾闭合 `**` / ```` ``` ```` 晚于 `text` 发出、分裂出第二个 `○ Thought` 块的问题（`thinkStreaming = isGenerating && !bodyText && !this.domText` + `pushDom` 硬门禁）；
+  - **P0-3**：修复 `deepseek_script.js` DeepThink 思考超 1.2s 时 `tickDom` 抢跑及 `readFiberMarkdown` 向上 20 层无宿主边界检查问题；
+  - **P1-1 ~ P1-4**：修复 `dom_markdown.js` 列表项首块围栏倒置/列表内 `###`/代码块正文多余缩进、`inline.rs` 嵌套行内解析、`markdown_render.rs` 列表续段缩进与层级回退、以及 DeepSeek `finishSse()` 尾刷 `[` 与历史代码块引用保护；
+  - **P2-1 ~ P2-2 & P3-1**：修复 `extractCleanText` 逗号选择器按书写优先级逐个查询（优先 `.thoughts-content`）、`hasMeaningfulContent` 图片/空公式判定与 `markdown` 四反引号围栏、`/rewind` 重置检测统一使用 `isGenerating`、DeepSeek SSE 断流 15 ticks 空闲完结兜底，以及 `pushDom` 尾部锚点窗口（`1024`）与 LCP 窗口（`160`）扩充。
 
 ---
 
