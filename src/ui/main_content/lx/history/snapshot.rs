@@ -642,9 +642,8 @@ impl Builder<'_> {
             _ => self.block(key, block_source, 0, || match step {
                 AssistantStepView::Part { part, .. } => match part.kind {
                     crate::chat::events::PartKind::Text if is_user => {
-                        let trimmed = part.content.trim();
-                        let display_text = if trimmed.is_empty() && !message.attachments.is_empty()
-                        {
+                        let is_blank = part.content.trim().is_empty();
+                        let display_text = if is_blank && !message.attachments.is_empty() {
                             let image_count = message
                                 .attachments
                                 .iter()
@@ -671,8 +670,13 @@ impl Builder<'_> {
                                 )
                                 .to_string()
                             }
+                        } else if is_blank {
+                            String::new()
                         } else {
-                            trimmed.to_string()
+                            part.content
+                                .trim_matches(['\r', '\n'])
+                                .trim_end()
+                                .to_string()
                         };
                         let expanded_pastes = history.chat.user_expanded_pastes(&message.id);
                         let has_expanded_paste = !expanded_pastes.is_empty();

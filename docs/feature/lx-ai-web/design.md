@@ -91,7 +91,7 @@ src/
       lx/brand.rs               icon_pixel 支持 LxEntry::AiWeb；draw_ai_web_sites 渲染站点行
       lx/mention.rs             AI Web 下顶栏仅展示 Files 单一 Tab
       lx/slash.rs               HistoryPanel.loading 居中渲染 loading sessions…
-      lx/history/snapshot.rs    用户消息气泡剥离引用标记、渲染附件树行，区分图片/文件夹/文件空正文预览
+      lx/history/snapshot.rs    用户消息气泡保留 `@` 引用原文、渲染附件树行，区分图片/文件夹/文件空正文预览
       lx/history/cache/signature.rs 思考块在流式与完成态下默认折叠，手动展开可跨完成态保持
 ```
 
@@ -162,7 +162,7 @@ src/
      - 发送时 `prepare_ai_web_message` 拦截任何手写的 `@[refer-folder]`、`@dir/`、`@[refer-skill]`、`@[refer-mcp]` 并给出英文提示（保留草稿）。
 2. **气泡附件树渲染与网页文本清洗**：
    - `prepare_ai_web_message` 解析草稿中的 `@[refer-image](...)`、`@[refer-file](...)`、`@相对路径`、`@[ref-content]/...` 与 `@ref/...`，生成 `ChatMessageView.attachments`（在气泡下方渲染 `├─` / `└─` 附件树行，无正文时按类型显示 `[Image]` / `[File]` 预览），同时剥离引用标记、展开折叠粘贴块得到发往网页输入框的 `web_prompt` 与去重本地绝对路径列表 `files`。
-   - `/resume` 加载云端历史消息时，为带 `files` 的用户消息自动合成 `@[refer-image](name)` / `@[refer-file](name)` 标记与 `marker_start`/`marker_end`（气泡展示时自动剥离标记，`/rewind` 时则完整回填输入框）。
+   - `/resume` 加载云端历史消息时，为带 `files` 的用户消息自动合成经 `encode_path` 转义的 `@[refer-image](name)` / `@[refer-file](name)` 标记与 `marker_start`/`marker_end`（气泡展示与 `/rewind` 回填输入框均完整保留该 `@` 引用原文）。
 3. **CDP 文件注入与 `/rewind` 附件精准保留/移除**：
    - 在普通发送或 `/rewind` 原地编辑重发时，`syncContainerAttachments` 先扫描目标容器内的 `.ds-animated-size-item` 卡片：
      - 若为原地编辑且存在 `keepFiles`（用户在输入框中保留未删的云端历史附件名），则按文件名 1:1 保留对应卡片，仅点击关闭被用户删掉的卡片，并轮询等待旧卡片数降至 `keptCount`；

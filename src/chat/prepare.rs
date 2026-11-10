@@ -536,8 +536,9 @@ fn resolve_ref_content_target(
     None
 }
 
-/// 移除展示用正文中的有效引用标记，并清理多余空白。
-/// 快捷引用（`@[ref-content]/`）保留在正文中，不被剥离。
+/// 移除用户消息正文中的有效引用标记并清理多余空白，供会话标题生成与纯文本摘要提取使用
+/// （消息列表气泡与置顶悬浮行保留 `@` 引用原文，不再调用本函数剥离）。
+/// 快捷引用（`@[ref-content]/`）同样保留在结果中，不被剥离。
 pub fn strip_references_for_display(
     raw_text: &str,
     attachments: &[crate::db::chat::MessageAttachmentMeta],

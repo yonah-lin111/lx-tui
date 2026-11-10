@@ -1132,3 +1132,66 @@ fn rewind_drops_original_image_metadata_for_truncated_messages() {
         "truncated message metadata must be dropped"
     );
 }
+
+#[test]
+fn resumed_cloud_session_with_parentheses_in_filename_renders_and_rewinds_roundtrip() {
+    let (mut state, pane) = ai_web_state();
+    if let Some(target) = state.pane_mut_anywhere(pane) {
+        target.lx.chat.loading_session = true;
+    }
+    assert!(on_ai_web_session_loaded(
+        &mut state,
+        pane,
+        "ai-web-ds-paren".into(),
+        Some("Paren File".into()),
+        vec![
+            crate::chat::web::AiWebHistoryMessage {
+                role: "user".into(),
+                thinking: String::new(),
+                thinking_ms: None,
+                text: "check this".into(),
+                files: vec!["shot (1).png".into()],
+                images: Vec::new(),
+                created_at_ms: 1000,
+            },
+            crate::chat::web::AiWebHistoryMessage {
+                role: "assistant".into(),
+                thinking: String::new(),
+                thinking_ms: None,
+                text: "done".into(),
+                files: Vec::new(),
+                images: Vec::new(),
+                created_at_ms: 2000,
+            },
+        ],
+    ));
+    let target = state.pane_anywhere(pane).expect("pane");
+    assert_eq!(
+        target.lx.chat.messages[0].text(),
+        r"check this @[refer-image](shot \(1\).png)"
+    );
+
+    // Rewind restores the escaped reference into the input box and resend matches cloud keep_files
+    state.effects.clear();
+    draft(&mut state, pane, "/rewind");
+    assert!(super::super::try_send(&mut state, pane));
+    let target = state.pane_anywhere(pane).expect("pane");
+    assert_eq!(
+        target.lx.input,
+        r"check this @[refer-image](shot \(1\).png)"
+    );
+
+    assert!(super::super::try_send(&mut state, pane));
+    assert!(state.effects.iter().any(|effect| matches!(
+        effect,
+        Effect::StartAiWebStream {
+            prompt,
+            files,
+            keep_files,
+            edit_user_index: Some(0),
+            ..
+        } if prompt == "check this"
+            && files.is_empty()
+            && keep_files == &vec!["shot (1).png".to_string()]
+    )));
+}

@@ -233,3 +233,34 @@ fn sticky_text_keeps_at_references_with_attachment_markers() {
         Some(raw)
     );
 }
+
+#[test]
+fn sticky_text_skips_empty_leading_text_part_and_falls_back_on_attachment_only_message() {
+    let multi = message(
+        "user",
+        "complete",
+        vec![text_part("   "), text_part("第二段含 @src/lib.rs 引用")],
+    );
+    assert_eq!(
+        super::super::sticky::sticky_text(&multi).as_deref(),
+        Some("第二段含 @src/lib.rs 引用")
+    );
+
+    let mut att_only = message("user", "complete", vec![text_part("")]);
+    att_only.attachments = vec![crate::db::chat::MessageAttachmentMeta {
+        id: "att-folder".into(),
+        position: 0,
+        kind: crate::db::chat::MessageAttachmentKind::Folder,
+        label: String::new(),
+        marker_start: None,
+        marker_end: None,
+        source_path: Some("src/ui".into()),
+        mime: None,
+        width: None,
+        height: None,
+    }];
+    assert_eq!(
+        super::super::sticky::sticky_text(&att_only).as_deref(),
+        Some("[Folder]")
+    );
+}

@@ -197,7 +197,9 @@ fn user_message_renders_reference_tree_without_user_background() {
 
 #[test]
 fn user_message_filters_ref_content_from_reference_tree_at_bottom() {
-    let mut msg = user_msg_with_text("u1", "Check this: @[ref-content]/src/ui/");
+    let raw = "Check this: @[ref-content]/src/ui/";
+    let mut msg = user_msg_with_text("u1", raw);
+    let ref_start = raw.find("@[ref-content]/src/ui/").expect("ref-content");
     msg.attachments = vec![
         MessageAttachmentMeta {
             id: "att-1".into(),
@@ -216,8 +218,8 @@ fn user_message_filters_ref_content_from_reference_tree_at_bottom() {
             position: 1,
             kind: MessageAttachmentKind::Folder,
             label: "@[ref-content]/src/ui/".into(),
-            marker_start: Some(12),
-            marker_end: Some(37),
+            marker_start: Some(ref_start),
+            marker_end: Some(raw.len()),
             source_path: Some("src/ui".into()),
             mime: None,
             width: None,
@@ -430,4 +432,34 @@ fn user_message_with_only_at_reference_keeps_raw_at_text_instead_of_generic_plac
 
     assert_eq!(row_text(&buf, area, 0), "> @src/main.rs");
     assert_eq!(row_text(&buf, area, 1), "  └─ File: src/main.rs");
+}
+
+#[test]
+fn user_message_preserves_first_line_indentation_and_at_references() {
+    let raw = "    fn main() {\n        check(@src/main.rs);\n    }";
+    let mut msg = user_msg_with_text("u-indent", raw);
+    let at_start = raw.find("@src/main.rs").expect("@src/main.rs");
+    let at_end = at_start + "@src/main.rs".len();
+    msg.attachments = vec![MessageAttachmentMeta {
+        id: "att-1".into(),
+        position: 0,
+        kind: MessageAttachmentKind::File,
+        label: "src/main.rs".into(),
+        marker_start: Some(at_start),
+        marker_end: Some(at_end),
+        source_path: Some("src/main.rs".into()),
+        mime: None,
+        width: None,
+        height: None,
+    }];
+
+    let lx = lx_with(vec![msg]);
+    let area = Rect::new(0, 0, 60, 5);
+    let mut buf = Buffer::empty(area);
+    crate::ui::main_content::lx::render_history_for_test(area, &mut buf, &lx, 0);
+
+    assert_eq!(row_text(&buf, area, 0), ">     fn main() {");
+    assert_eq!(row_text(&buf, area, 1), "          check(@src/main.rs);");
+    assert_eq!(row_text(&buf, area, 2), "      }");
+    assert_eq!(row_text(&buf, area, 3), "  └─ File: src/main.rs");
 }
