@@ -114,6 +114,15 @@ fn title_status(state: ProcessStateView, duration_ms: Option<u64>) -> String {
     parts.join(text::LX_CHAT_TOOL_STATUS_SEP)
 }
 
+/// 组内调用体要保留的原标题状态。
+fn status_of(call: &ToolCallView) -> Option<String> {
+    match call.detail.as_deref() {
+        Some(ToolDetailView::Command(view)) => Some(title_status(view.state, view.duration_ms)),
+        Some(ToolDetailView::Interaction(view)) => Some(title_status(view.state, view.duration_ms)),
+        _ => plain_status_label(call.status),
+    }
+}
+
 /// 命令参数块：`$ 命令`；运行中把引导语作为同一节点的续行。
 fn param_section(call: &ToolCallView, folded: bool) -> Section {
     let Some(command) = command_of(call) else {
@@ -378,6 +387,31 @@ pub(super) fn draw(
         row_index,
         &tree::layout(&all, rect.width).rows,
     );
+}
+
+/// 合并组内调用体：跳过标题，状态追加到命令行尾部。
+#[allow(clippy::too_many_arguments)]
+pub(super) fn draw_body(
+    grid: &mut Grid,
+    rect: Rect,
+    scroll: usize,
+    row_index: &mut usize,
+    call: &ToolCallView,
+    _loading_frame: usize,
+    folds: Folds,
+    _animating: bool,
+    last: bool,
+) {
+    if rect.width == 0 {
+        return;
+    }
+    let (params, output) = sections(call, rect.width, folds);
+    let mut all = params;
+    all.extend(output);
+    let mut layout = tree::layout(&all, rect.width);
+    tree::append_status(&mut layout.rows, status_of(call), rect.width);
+    tree::apply_group_connector(&mut layout.rows, last);
+    tree::draw(grid, rect, scroll, row_index, &layout.rows);
 }
 
 /// 进程存活时标题的橙色档位（橙 = 还在跑，绿 = 停了）。

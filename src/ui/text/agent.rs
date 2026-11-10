@@ -169,6 +169,18 @@ pub fn matches_label(count: usize) -> String {
     };
     format!("{count} {suffix}")
 }
+
+/// 合并工具组头：`3 calls` / `1 call`。
+pub fn group_calls_label(count: usize) -> String {
+    let suffix = if count == 1 { "call" } else { "calls" };
+    format!("{count} {suffix}")
+}
+
+/// 快照工具组头：`3 updates` / `1 update`。
+pub fn group_updates_label(count: usize) -> String {
+    let suffix = if count == 1 { "update" } else { "updates" };
+    format!("{count} {suffix}")
+}
 /// 新增行数：`+12`。
 pub fn added_label(count: usize) -> String {
     format!("{TOOL_DIFF_ADD_PREFIX}{count}")

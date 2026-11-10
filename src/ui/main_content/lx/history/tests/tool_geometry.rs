@@ -12,7 +12,9 @@ fn cache() -> PaneCache {
     PaneCache::default()
 }
 use crate::app::state::{
-    AssistantStepView, ChatMessageView, ToolCallView, ToolStatus, ToolSummary,
+    AskAnsweredView, AskDetailView, AssistantStepView, ChatMessageView, CommandView,
+    InteractionAction, PlanSnapshotView, PlanStepView, ProcessInteractionView, ProcessStateView,
+    SearchDetailView, ToolCallView, ToolDetailView, ToolStatus, ToolSummary,
 };
 
 /// 构造一个 `read` 工具步骤（可选状态）。
@@ -221,10 +223,9 @@ fn tool_steps_occupy_a_header_plus_one_or_two_detail_rows() {
     }
 }
 
-/// 连续的工具步骤之间**留一行空行**：每个调用是独立的动作记录，
-/// 两行式的 `■ 动词` / `  └─ 详情` 之间空一行才分得清彼此的边界。
+/// 连续同名工具合并为一组：一个组头 + 逐调用树体，组内不空行。
 #[test]
-fn consecutive_tool_steps_have_a_blank_line_between_them() {
+fn consecutive_tool_steps_share_one_group_header() {
     let mut message = message("assistant", "complete", Vec::new());
     for (index, status) in [
         ToolStatus::Completed,
@@ -245,38 +246,333 @@ fn consecutive_tool_steps_have_a_blank_line_between_them() {
     let lx = lx_with(vec![message]);
     let area = Rect::new(0, 0, 60, 14);
     let computed = layout(area, &lx, &mut cache());
-    // completed 2（标题+路径）+ failed 2（标题+错误）+ running 2（标题+路径）
-    // + 2 个块间空行 + 呼吸 1 = 9。
-    assert_eq!(computed.total_rows, 9, "连续工具之间各留一行空行");
-    assert_eq!(render_rows(area, &lx, 0), 9);
+    // 组头 1 + 三个调用体各 1 + 呼吸行 1 = 5。
+    assert_eq!(computed.total_rows, 5, "合并组只用一个组头");
+    assert_eq!(render_rows(area, &lx, 0), 5);
 
     let mut buf = Buffer::empty(area);
     crate::ui::main_content::lx::render_history_for_test(area, &mut buf, &lx, 0);
-    let rows: Vec<String> = (0..9).map(|row| row_text(&buf, area, row)).collect();
+    let rows: Vec<String> = (0..5).map(|row| row_text(&buf, area, row)).collect();
+    assert!(rows[0].contains("3 calls"), "组头写调用数：{rows:?}");
+    assert!(rows[0].contains("1 failed"), "组头聚合失败：{rows:?}");
+    assert!(rows[0].contains("1 running"), "组头聚合运行中：{rows:?}");
     assert!(
-        rows[0].starts_with(text::agent::STEP_MARK_FILLED),
-        "第 1 行是标题：{rows:?}"
+        rows[1].starts_with(text::agent::TREE_BRANCH),
+        "非末调用用 ├─：{rows:?}"
     );
+    assert!(rows[1].contains("src/ui/style.rs"), "{rows:?}");
+    assert!(rows[2].contains("boom"), "{rows:?}");
     assert!(
-        rows[1].contains("src/ui/style.rs"),
-        "第 2 行是路径：{rows:?}"
+        rows[3].starts_with(text::agent::TREE_LEAF),
+        "末调用用 └─：{rows:?}"
     );
-    assert!(rows[2].trim().is_empty(), "第 3 行是空行：{rows:?}");
+    assert!(rows[4].trim().is_empty(), "末尾呼吸行：{rows:?}");
+}
+
+/// 合并后的命令组保留每个调用的退出状态，组头只出现一次动词。
+#[test]
+fn command_group_keeps_each_exit_status_on_its_body() {
+    let mut message = message("assistant", "complete", Vec::new());
+    for (position, id, code) in [(1, 0, 0), (2, 1, 1)] {
+        message.steps.push(command_step(position, id, code));
+    }
+    let lx = lx_with(vec![message]);
+    let area = Rect::new(0, 0, 70, 12);
+    let text = rendered_text(&lx, area);
+    assert_eq!(
+        text.matches(text::agent::VERB_EXEC_COMMAND).count(),
+        1,
+        "组头只出现一次 Run command：{text}"
+    );
+    assert!(text.contains("2 calls"), "{text}");
+    assert!(text.contains("$ cargo check"), "{text}");
+    assert!(text.contains("$ cargo test"), "{text}");
+    assert!(text.contains("Exited 0"), "{text}");
+    assert!(text.contains("exit 1"), "{text}");
+    let area = Rect::new(0, 0, 70, 12);
+    assert_eq!(
+        render_rows(area, &lx, 0),
+        layout(area, &lx, &mut cache()).total_rows,
+        "组内每行都计入快照"
+    );
+}
+
+/// 合并后的搜索组把总命中数放组头，单调用命中数留在各自首行。
+#[test]
+fn search_group_aggregates_matches_and_keeps_each_status() {
+    let mut message = message("assistant", "complete", Vec::new());
+    for (position, matches) in [(1, 3), (2, 2)] {
+        message.steps.push(search_step(position, matches));
+    }
+    let lx = lx_with(vec![message]);
+    let area = Rect::new(0, 0, 80, 10);
+    let text = rendered_text(&lx, area);
+    assert_eq!(
+        text.matches(text::agent::VERB_TOOL_SEARCH).count(),
+        1,
+        "组头只出现一次 Search：{text}"
+    );
+    assert!(text.contains("2 calls"), "{text}");
+    assert!(text.contains("5 matches"), "组头汇总命中：{text}");
+    assert!(text.contains("3 matches"), "首调用保留命中：{text}");
+    assert!(text.contains("2 matches"), "次调用保留命中：{text}");
+    assert_eq!(
+        render_rows(area, &lx, 0),
+        layout(area, &lx, &mut cache()).total_rows
+    );
+}
+
+/// 组头不可点击，调用体各自可点。
+#[test]
+fn group_header_has_no_tool_card_region() {
+    let mut message = message("assistant", "complete", Vec::new());
+    message
+        .steps
+        .push(file_step(1, "call-a", "edit", ToolStatus::Completed));
+    message
+        .steps
+        .push(file_step(2, "call-b", "edit", ToolStatus::Completed));
+    let lx = lx_with(vec![message]);
+    let area = Rect::new(0, 0, 60, 10);
+    let mut cache = cache();
+    let snapshot = cache.snapshot(super::content_rect(area).width, &lx);
+    let header_start = snapshot
+        .entries
+        .first()
+        .and_then(|entry| {
+            entry.blocks.iter().find_map(|block| match block.source {
+                BlockSource::ToolGroupHeader { .. } => Some(block.start),
+                _ => None,
+            })
+        })
+        .expect("组头块");
     assert!(
-        rows[3].starts_with(text::agent::STEP_MARK_FILLED),
-        "第 4 行是失败工具标题：{rows:?}"
+        snapshot.cards.iter().all(|card| match card.kind {
+            CardKind::Tool { .. } => card.card_start != header_start,
+            _ => true,
+        }),
+        "组头不得登记工具点击面：{:?}",
+        snapshot.cards
     );
-    assert!(rows[4].contains("boom"), "第 5 行是错误详情：{rows:?}");
-    assert!(rows[5].trim().is_empty(), "第 6 行是空行：{rows:?}");
-    assert!(
-        rows[6].starts_with(text::agent::STEP_MARK_FILLED),
-        "第 7 行是运行中工具标题：{rows:?}"
+    assert_eq!(
+        snapshot
+            .cards
+            .iter()
+            .filter(|card| matches!(card.kind, CardKind::Tool { .. }))
+            .count(),
+        2,
+        "两个调用体各自一个点击面"
     );
-    assert!(
-        rows[7].contains("src/ui/style.rs"),
-        "第 8 行是路径：{rows:?}"
+}
+
+/// `write_stdin` 按显示动词分组：读输出与写入不混组。
+#[test]
+fn write_stdin_groups_by_display_verb() {
+    let mut message = message("assistant", "complete", Vec::new());
+    message.steps.push(write_stdin_step(
+        1,
+        InteractionAction::ReadOutput,
+        "cargo test",
+    ));
+    message.steps.push(write_stdin_step(
+        2,
+        InteractionAction::ReadOutput,
+        "cargo test",
+    ));
+    message.steps.push(write_stdin_step(
+        3,
+        InteractionAction::SendInput,
+        "cargo test",
+    ));
+    let lx = lx_with(vec![message]);
+    let area = Rect::new(0, 0, 80, 16);
+    let text = rendered_text(&lx, area);
+    assert_eq!(
+        text.matches(text::agent::VERB_READ_OUTPUT).count(),
+        1,
+        "读输出组头只出现一次：{text}"
     );
-    assert!(rows[8].trim().is_empty(), "第 9 行是呼吸空行：{rows:?}");
+    assert!(text.contains("2 calls"), "{text}");
+    assert_eq!(
+        text.matches(text::agent::VERB_SEND_INPUT).count(),
+        1,
+        "写入单独成组：{text}"
+    );
+}
+
+/// `ask` 是阻塞交互，连续两次也各自一张卡。
+#[test]
+fn ask_calls_are_never_grouped() {
+    let mut message = message("assistant", "complete", Vec::new());
+    message.steps.push(ask_step(1, "first?"));
+    message.steps.push(ask_step(2, "second?"));
+    let lx = lx_with(vec![message]);
+    let area = Rect::new(0, 0, 60, 12);
+    let text = rendered_text(&lx, area);
+    assert_eq!(
+        text.matches(text::agent::VERB_TOOL_ASK).count(),
+        2,
+        "每次 ask 都有自己的标题：{text}"
+    );
+    assert!(!text.contains("2 calls"), "{text}");
+}
+
+fn write_stdin_step(position: i64, action: InteractionAction, command: &str) -> AssistantStepView {
+    AssistantStepView::Tool {
+        position,
+        call: ToolCallView {
+            call_id: format!("call-stdin-{position}"),
+            name: "write_stdin".into(),
+            position,
+            arguments_json: String::new(),
+            status: ToolStatus::Completed,
+            summary: None,
+            error: None,
+            result_json: None,
+            detail: Some(Box::new(ToolDetailView::Interaction(
+                ProcessInteractionView {
+                    action,
+                    process_session_id: 1,
+                    command: command.into(),
+                    input_preview: (action == InteractionAction::SendInput)
+                        .then(|| "y\\n".to_string()),
+                    output: "ok".into(),
+                    state: ProcessStateView::Running,
+                    exit_code: None,
+                    duration_ms: None,
+                    truncated: false,
+                    dropped_bytes: 0,
+                },
+            ))),
+        },
+    }
+}
+
+fn ask_step(position: i64, question: &str) -> AssistantStepView {
+    AssistantStepView::Tool {
+        position,
+        call: ToolCallView {
+            call_id: format!("call-ask-{position}"),
+            name: "ask".into(),
+            position,
+            arguments_json: String::new(),
+            status: ToolStatus::Completed,
+            summary: None,
+            error: None,
+            result_json: None,
+            detail: Some(Box::new(ToolDetailView::Ask(AskDetailView {
+                questions: vec![AskAnsweredView {
+                    header: "Q".into(),
+                    question: question.into(),
+                    answers: vec!["yes".into()],
+                }],
+            }))),
+        },
+    }
+}
+
+/// 计划快照只显示最新一次，组头写 updates 而不是 calls。
+#[test]
+fn plan_snapshot_group_shows_only_the_latest_update() {
+    let mut message = message("assistant", "complete", Vec::new());
+    message.steps.push(plan_step(1, "old step"));
+    message.steps.push(plan_step(2, "new step"));
+    let lx = lx_with(vec![message]);
+    let area = Rect::new(0, 0, 60, 10);
+    let text = rendered_text(&lx, area);
+    assert_eq!(
+        text.matches(text::agent::VERB_UPDATE_PLAN).count(),
+        1,
+        "组头只出现一次 Plan：{text}"
+    );
+    assert!(text.contains("2 updates"), "{text}");
+    assert!(text.contains("new step"), "{text}");
+    assert!(!text.contains("old step"), "旧快照不铺列表：{text}");
+    assert_eq!(
+        render_rows(area, &lx, 0),
+        layout(area, &lx, &mut cache()).total_rows
+    );
+}
+
+fn plan_step(position: i64, step: &str) -> AssistantStepView {
+    AssistantStepView::Tool {
+        position,
+        call: ToolCallView {
+            call_id: format!("call-plan-{position}"),
+            name: "update_plan".into(),
+            position,
+            arguments_json: String::new(),
+            status: ToolStatus::Completed,
+            summary: None,
+            error: None,
+            result_json: None,
+            detail: Some(Box::new(ToolDetailView::Plan(PlanSnapshotView {
+                revision: position as u64,
+                explanation: None,
+                steps: vec![(step.to_string(), PlanStepView::Completed)],
+            }))),
+        },
+    }
+}
+
+fn command_step(position: i64, id: i32, exit: i32) -> AssistantStepView {
+    AssistantStepView::Tool {
+        position,
+        call: ToolCallView {
+            call_id: format!("call-cmd-{position}"),
+            name: "exec_command".into(),
+            position,
+            arguments_json: String::new(),
+            status: ToolStatus::Completed,
+            summary: None,
+            error: None,
+            result_json: None,
+            detail: Some(Box::new(ToolDetailView::Command(CommandView {
+                process_session_id: Some(id.unsigned_abs().into()),
+                command: if id == 0 {
+                    "cargo check".into()
+                } else {
+                    "cargo test".into()
+                },
+                cwd: "/w".into(),
+                tty: false,
+                state: ProcessStateView::Exited { code: Some(exit) },
+                duration_ms: Some(1_200),
+                output_preview: Vec::new(),
+                truncated: false,
+                dropped_bytes: 0,
+                output_tail: String::new(),
+                started_at_ms: None,
+                ended_at_ms: None,
+            }))),
+        },
+    }
+}
+
+fn search_step(position: i64, matches: usize) -> AssistantStepView {
+    AssistantStepView::Tool {
+        position,
+        call: ToolCallView {
+            call_id: format!("call-search-{position}"),
+            name: "search".into(),
+            position,
+            arguments_json: String::new(),
+            status: ToolStatus::Completed,
+            summary: Some(Box::new(ToolSummary {
+                path: Some("src".into()),
+                pattern: Some("fixme".into()),
+                matches: Some(matches),
+                ..ToolSummary::default()
+            })),
+            error: None,
+            result_json: None,
+            detail: Some(Box::new(ToolDetailView::Search(SearchDetailView {
+                matches: Vec::new(),
+                truncated: false,
+                files_scanned: 1,
+            }))),
+        },
+    }
 }
 
 /// 工具与正文之间的空行仍在（异构块保留空行）。
@@ -472,9 +768,9 @@ fn card_hits(lx: &Lx, area: Rect) -> usize {
         .count()
 }
 
-/// 连续文件工具**不再合并**：每个调用各自一张卡、一个空行、一个独立点击面。
+/// 连续文件工具合并为一个组头；每个调用仍有独立点击面，组内不空行。
 #[test]
-fn consecutive_file_tools_are_separate_cards() {
+fn consecutive_file_tools_share_a_group_header() {
     let area = Rect::new(0, 0, 60, 24);
     let mut message = message("assistant", "complete", Vec::new());
     message
@@ -485,15 +781,16 @@ fn consecutive_file_tools_are_separate_cards() {
         .push(file_step(2, "call-b", "edit", ToolStatus::Completed));
     let lx = lx_with(vec![message.clone()]);
     let computed = layout(area, &lx, &mut cache());
-    assert_eq!(card_hits(&lx, area), 2, "两个调用各一张卡");
+    assert_eq!(card_hits(&lx, area), 2, "两个调用各一张点击面");
     assert_eq!(render_rows(area, &lx, 0), computed.total_rows);
     let text = rendered_text(&lx, area);
     assert_eq!(
         text.matches(text::agent::VERB_TOOL_EDIT).count(),
-        2,
-        "每张卡都有自己的标题：{text}"
+        1,
+        "组头只出现一次 Edit：{text}"
     );
-    assert!(!text.contains("2 files"), "不再出现合并标题：{text}");
+    assert!(text.contains("2 calls"), "组头写调用数：{text}");
+    assert!(!text.contains("2 files"), "不再出现旧合并标题：{text}");
     let mut buf = Buffer::empty(area);
     crate::ui::main_content::lx::render_history_for_test(area, &mut buf, &lx, 0);
     let tool_cards: Vec<_> = computed
@@ -509,14 +806,14 @@ fn consecutive_file_tools_are_separate_cards() {
                 .is_empty()
         })
         .collect();
-    assert_eq!(blanks.len(), 1, "两张卡之间只隔一行空行：{blanks:?}");
+    assert_eq!(blanks.len(), 0, "组内调用之间不空行：{blanks:?}");
 
-    // 点第一张卡只展开第一张。
+    // 点第一个调用只展开第一个，不影响同组第二个。
     let mut expanded = lx_with(vec![message.clone()]);
     assert!(expanded.chat.toggle_detail("assistant-1", "call-a"));
     let expanded_layout = layout(area, &expanded, &mut cache());
     assert_eq!(render_rows(area, &expanded, 0), expanded_layout.total_rows);
-    assert_eq!(card_hits(&expanded, area), 2, "展开后仍是两张卡");
+    assert_eq!(card_hits(&expanded, area), 2, "展开后仍是两个调用体");
 }
 
 /// 正文步骤打断即分组：`edit` → 正文 → `edit` 是两张卡。

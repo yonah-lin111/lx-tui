@@ -115,9 +115,9 @@ fn empty_file_has_no_range_noise() {
     assert!(detail_text(&call, 80).contains("empty.txt"));
 }
 
-/// 执行阶段被截断：路径之后单列事实。
+/// 执行阶段被截断也不再占第二行：`read` 只保留路径。
 #[test]
-fn truncated_read_reports_output_limited() {
+fn truncated_read_keeps_only_the_path() {
     let call = read_call(
         Some(ReadKind::File),
         ToolSummary {
@@ -130,7 +130,9 @@ fn truncated_read_reports_output_limited() {
     );
     let detail = detail_text(&call, 80);
     assert!(detail.contains("big.rs"), "{detail}");
-    assert!(detail.contains(text::agent::OUTPUT_LIMITED), "{detail}");
+    assert!(!detail.contains(text::agent::OUTPUT_LIMITED), "{detail}");
+    assert!(!detail.contains("lines"), "{detail}");
+    assert_eq!(detail.lines().count(), 1, "只有一条路径：{detail:?}");
 }
 
 #[test]
@@ -296,7 +298,15 @@ fn long_path_lives_in_the_title_and_never_overflows() {
             );
         }
     }
-    assert!(has_expandable_content(&call, 80), "超长路径折叠后可以展开");
+    assert!(
+        !has_expandable_content(&call, 80),
+        "长路径单行省略，不再提供展开"
+    );
+    assert_eq!(
+        file_summary::detail(&call, 80, true).len(),
+        1,
+        "展开态也只有一条路径"
+    );
 }
 
 /// 短摘要恒为一个节点、不可展开。
@@ -316,12 +326,13 @@ fn completed_read_is_a_single_title_row() {
     assert!(!has_expandable_content(&call, 80));
 }
 
-/// `read` 完成态无摘要：只有标题，不留空 `└─`。
+/// `read` 完成态无摘要：保留一行空收口，不产生 0 行块。
 #[test]
-fn read_without_summary_leaves_no_dangling_leaf() {
+fn read_without_summary_keeps_one_empty_leaf() {
     let call = tool_call("read", ToolStatus::Completed, None, None);
-    assert_eq!(detail_text(&call, 60), "");
-    assert_eq!(rows(&call, 60, Folds::default()), 1);
+    let detail = detail_text(&call, 60);
+    assert_eq!(detail, text::agent::TREE_LEAF);
+    assert_eq!(rows(&call, 60, Folds::default()), 2);
 }
 
 /// 失败：只显示错误，不显示路径/计数；错误仍用正常前景。

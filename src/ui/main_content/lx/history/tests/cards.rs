@@ -191,7 +191,7 @@ fn file_call(call_id: &str, path: &str) -> crate::app::state::ToolCallView {
 
 /// 消息内**每两块之间都必须空一行**，合并文件组也不例外。
 ///
-/// 回归：快照重写时漏了合并组的块前空行，正文下面直接顶着 `▣ Write 2 files`。
+/// 回归：快照重写时漏了合并组的块前空行，正文下面直接顶着 `■ Edit · 2 calls`。
 #[test]
 fn every_block_is_separated_by_a_blank_row() {
     // 正文 + 两步连续 write（合并成一组）+ 一段思考 + 一句正文。
@@ -230,10 +230,16 @@ fn every_block_is_separated_by_a_blank_row() {
         entry.blocks.len()
     );
     for pair in entry.blocks.windows(2) {
+        // 组头与组内调用体是同一张合并卡，连续放置；组内调用体之间也不空行。
+        let gap = match (&pair[0].source, &pair[1].source) {
+            (super::BlockSource::ToolGroupHeader { .. }, _)
+            | (super::BlockSource::ToolBody { .. }, super::BlockSource::ToolBody { .. }) => 0,
+            _ => 1,
+        };
         assert_eq!(
             pair[1].start,
-            pair[0].start + pair[0].rows + 1,
-            "块之间必须空一行：{:?} 结束于 {}，下一块从 {} 开始",
+            pair[0].start + pair[0].rows + gap,
+            "块间距不符：{:?} 结束于 {}，下一块从 {} 开始",
             pair[0].source,
             pair[0].start + pair[0].rows,
             pair[1].start

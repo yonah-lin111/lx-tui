@@ -21,11 +21,13 @@
 
 use ratatui::layout::Rect;
 use ratatui::style::Style;
+use unicode_width::UnicodeWidthStr;
 
 use crate::ui::style;
 
 use super::super::{Grid, visible_row};
 use super::{Segment, TREE_COLS, put_segments, wrap_spans};
+use crate::ui::main_content::lx::history::truncate_with_ellipsis;
 use crate::ui::text;
 
 /// 折叠预览：保留前 `head` 行与后 `tail` 行（`tail == 0` 表示只保留前 `head` 行）。
@@ -260,6 +262,41 @@ pub(crate) fn layout(sections: &[Section], width: u16) -> Layout {
         node_rows,
         total,
         hidden,
+    }
+}
+
+/// 组内非末调用：把首行 `└─` 改成 `├─`，避免一组出现多个收口符。
+pub(crate) fn apply_group_connector(rows: &mut [Row], last: bool) {
+    if last {
+        return;
+    }
+    let Some(first) = rows.first_mut() else {
+        return;
+    };
+    if first.prefix == text::agent::TREE_LEAF {
+        first.prefix = text::agent::TREE_BRANCH;
+    }
+}
+
+/// 把原单卡标题状态追加到首个可见树节点尾部；不改变行数。
+pub(crate) fn append_status(rows: &mut [Row], status: Option<String>, width: u16) {
+    let Some(status) = status else {
+        return;
+    };
+    let Some(row) = rows.first_mut() else {
+        return;
+    };
+    let used = UnicodeWidthStr::width(row.prefix)
+        .saturating_add(row.segments.iter().map(Segment::cols).sum::<usize>());
+    let available = usize::from(width).saturating_sub(used);
+    if available == 0 {
+        return;
+    }
+    let tail = format!("{}{status}", text::LX_CHAT_TOOL_STATUS_SEP);
+    let tail = truncate_with_ellipsis(&tail, available);
+    if !tail.is_empty() {
+        row.segments
+            .push(Segment::new(tail, style::agent_step_detail()));
     }
 }
 

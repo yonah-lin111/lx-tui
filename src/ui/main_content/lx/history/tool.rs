@@ -11,7 +11,8 @@
 //!   `search` 的命中数、`plan` 的完成计数、委派卡片的调用条件；失败/中断只保留错误详情。
 //! - **树体**回答「对什么做了什么」：一个节点是一段内容（命令、路径、命中、步骤块、
 //!   问答对、diff 正文），首行画 `├─`/`└─`，同一节点的续行左对齐或画 `│`。
-//! - 每个工具调用是独立卡片，块之间空一行；连续文件工具**不再合并**标题。
+//! - 连续同名工具调用合并为“组头 + 逐调用树体”；组内不空行，组与前后块空一行。
+//! - 每个调用保留自己的可折叠树体；组头只占一行、不可点击。
 //! - 参数/输出各自可独立折叠（[`Folds`]），折叠提示只是续行，不单独收口。
 //! - 参数一律取自 [`ToolCallView::summary`]（参数派生 + 结果体补全，见
 //!   `ToolSummary::from_arguments` / `absorb_result_json`）；只有摘要缺字段时才回退解析
@@ -33,12 +34,18 @@ mod ask;
 mod command;
 mod file_diff;
 mod file_summary;
+mod group;
 mod mcp;
 mod plan;
 mod search;
 mod subagent;
 pub(crate) mod tree;
 mod web_search;
+
+pub(crate) use group::{
+    GroupMode, body_card_regions, body_rows, draw_body_animated, draw_group_header, group_key,
+    group_mode, is_groupable,
+};
 
 #[cfg(test)]
 use file_summary::{fallback_parse_count, reset_fallback_parse_count};
@@ -67,14 +74,14 @@ impl Folds {
 
 /// 一个可交互区域的几何（相对步骤块首：标题行是偏移 0）。
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(super) struct RowSpan {
+pub(crate) struct RowSpan {
     pub offset: usize,
     pub rows: usize,
 }
 
 /// 卡片内的一个交互区域：点击面与它折叠的是哪一块。
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(super) struct CardRegion {
+pub(crate) struct CardRegion {
     pub section: CardSection,
     pub card: RowSpan,
     /// 点击是否真的会改变内容（false 时不登记点击面）。
@@ -729,7 +736,6 @@ pub(super) fn header_with_mark(
     status: Option<String>,
     mark: StepMark,
 ) -> Vec<Segment> {
-    let limit = usize::from(width);
     // 终态整行同色（方块 + 动词）：失败红、中断黄。取消不是错误态，保持工具色
     // （方块与 title 统一；详情行的 `cancelled` 已经说明它没有产出结果）。
     let tint = match call.status {
@@ -737,6 +743,20 @@ pub(super) fn header_with_mark(
         ToolStatus::Interrupted => Some(style::agent_warn()),
         _ => None,
     };
+    header_with_tint(tint, width, loading_frame, animating, verb, status, mark)
+}
+
+/// 同上，但整行语义色由调用方指定（合并组头取组内最差状态）。
+pub(super) fn header_with_tint(
+    tint: Option<Style>,
+    width: u16,
+    loading_frame: usize,
+    animating: bool,
+    verb: &str,
+    status: Option<String>,
+    mark: StepMark,
+) -> Vec<Segment> {
+    let limit = usize::from(width);
     let paint = |segment: Segment| match tint {
         Some(tint) => Segment::new(segment.text, tint),
         None => segment,

@@ -26,6 +26,7 @@ use super::{
     CardKind, Folds, MessageRows, compact, folds_of, model_switch, notice, recap, report_block,
     rewind, shell_folds, stats_line, tool, tool_rows, user_shell,
 };
+mod steps;
 
 /// 时间线条目类别（与 [`TimelineEntry`] 一一对应，但可跨帧独立持有）。
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -201,12 +202,10 @@ struct Builder<'a> {
 }
 
 impl Builder<'_> {
-    /// 块间空行：**一律留**（含连续工具步骤之间、相邻正文块之间）。
+    /// 块间空行：**一律留**（正文/思考/单个工具卡/合并组/通知之间）。
     ///
-    /// 每个工具调用是独立的动作记录，`■ 动词` / `  └─ 详情` 与下一个调用之间空一行
-    /// 才分得清边界——不留会被读成一棵树，误以为 `└─` 属于上一个调用。规则不区分
-    /// 块类别，因此没有谓词：`if has_previous { self.spacer() }` 就是全部。
-    /// 空行只在这里累加（AGENTS：绘制路径不得另算）。
+    /// 合并组内部由 `steps()` 直接串联组头与调用体，不调用本函数；组与前后块
+    /// 仍由这里累加一行。空行只在这里累加（AGENTS：绘制路径不得另算）。
     fn spacer(&mut self) {
         self.rows += 1;
     }
@@ -526,76 +525,6 @@ impl Builder<'_> {
             });
         }
         blocks.push(block);
-    }
-
-    /// assistant/用户消息的步骤时间线（含合并组、工具卡片与 thinking 头部）。
-    fn steps(
-        &mut self,
-        source: HistorySource<'_>,
-        message_index: usize,
-        message: &crate::app::state::ChatMessageView,
-        blocks: &mut Vec<SnapBlock>,
-    ) {
-        let mut has_previous = false;
-        let mut step_index = 0usize;
-        while let Some(step) = message.steps.get(step_index) {
-            // 先取块（命中二级缓存时不再重排正文），行数**只**从 paint 取。
-            let mut block = self.build_step(source, message_index, step_index, message, step);
-            if block.rows == 0 {
-                step_index += 1;
-                continue; // 空正文块不占行，也不引入块间空行。
-            }
-            if has_previous {
-                self.spacer();
-            }
-            has_previous = true;
-            block.start = self.rows;
-            let block_start = self.rows;
-            if let AssistantStepView::Tool { call, .. } = step {
-                // 链接行必须**先于**整卡折叠面登记：命中取第一条重叠区域，整卡面
-                // 覆盖链接行会把打开 Agents 的点击永久吞掉。
-                for (offset, agent_id) in tool::agent_links(call, self.width) {
-                    self.snapshot.cards.push(CardRegion {
-                        kind: CardKind::AgentLink { agent_id },
-                        card_start: block_start.saturating_add(offset),
-                        card_rows: 1,
-                        card_cols: None,
-                        clickable: true,
-                    });
-                }
-                self.tool_cards(
-                    message,
-                    call,
-                    block.paint.card_spans(),
-                    block.rows,
-                    block_start,
-                );
-            }
-            if matches!(
-                step,
-                AssistantStepView::Part { part, .. }
-                    if part.kind == crate::chat::events::PartKind::Reasoning
-            ) {
-                let expanded = source.chat.reasoning_expanded(message_index, step_index);
-                self.snapshot
-                    .thinking
-                    .push((message_index, step_index, (block_start, 1)));
-                self.snapshot.cards.push(CardRegion {
-                    kind: CardKind::Thinking {
-                        message_index,
-                        step_index,
-                        expanded,
-                    },
-                    card_start: block_start,
-                    card_rows: block.rows,
-                    card_cols: None,
-                    clickable: true,
-                });
-            }
-            self.rows = block_start.saturating_add(block.rows);
-            blocks.push(block);
-            step_index += 1;
-        }
     }
 
     /// 单个步骤块：用户正文 / markdown 正文 / thinking / 单个工具。

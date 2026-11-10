@@ -269,5 +269,28 @@ pub(super) fn draw(
     );
 }
 
+/// 合并组内调用体：跳过标题，状态追加到首个查询行尾部。
+#[allow(clippy::too_many_arguments)]
+pub(super) fn draw_body(
+    grid: &mut Grid,
+    rect: Rect,
+    scroll: usize,
+    row_index: &mut usize,
+    call: &ToolCallView,
+    view: &WebSearchDetailView,
+    _loading_frame: usize,
+    folds: Folds,
+    _animating: bool,
+    last: bool,
+) {
+    if rect.width == 0 {
+        return;
+    }
+    let mut layout = layout(call, view, rect.width, folds).layout;
+    tree::append_status(&mut layout.rows, title_status(call, view), rect.width);
+    tree::apply_group_connector(&mut layout.rows, last);
+    tree::draw(grid, rect, scroll, row_index, &layout.rows);
+}
+
 #[cfg(test)]
 mod tests;

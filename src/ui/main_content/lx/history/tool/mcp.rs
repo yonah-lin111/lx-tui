@@ -183,6 +183,28 @@ pub(super) fn has_more(call: &ToolCallView, view: &McpDetailView, width: u16) ->
     layout.arguments_expandable || layout.result_expandable
 }
 
+/// 标题状态：耗时、结果截断与图片数；失败/中断交给标题染色。
+fn status_of(call: &ToolCallView, view: &McpDetailView) -> Option<String> {
+    if matches!(call.status, ToolStatus::Failed | ToolStatus::Interrupted) {
+        return None;
+    }
+    let mut parts = Vec::new();
+    if let Some(duration) = view.duration_ms {
+        parts.push(text::agent::duration_label(duration));
+    }
+    if call
+        .summary
+        .as_deref()
+        .is_some_and(|summary| summary.truncated)
+    {
+        parts.push(text::mcp::RESULT_TRUNCATED.to_string());
+    }
+    if !view.images.is_empty() {
+        parts.push(text::mcp::images_label(view.images.len()));
+    }
+    (!parts.is_empty()).then(|| parts.join(text::LX_CHAT_TOOL_STATUS_SEP))
+}
+
 /// 绘制 MCP 卡片；推进行数必须与 [`rows`] 严格相等。
 #[allow(clippy::too_many_arguments)]
 pub(super) fn draw(
@@ -200,27 +222,15 @@ pub(super) fn draw(
         return;
     }
     if let Some(y) = visible_row(rect, scroll, *row_index) {
-        let status = if matches!(call.status, ToolStatus::Failed | ToolStatus::Interrupted) {
-            None
-        } else {
-            let mut parts = Vec::new();
-            if let Some(duration) = view.duration_ms {
-                parts.push(text::agent::duration_label(duration));
-            }
-            if call
-                .summary
-                .as_deref()
-                .is_some_and(|summary| summary.truncated)
-            {
-                parts.push(text::mcp::RESULT_TRUNCATED.to_string());
-            }
-            if !view.images.is_empty() {
-                parts.push(text::mcp::images_label(view.images.len()));
-            }
-            (!parts.is_empty()).then(|| parts.join(text::LX_CHAT_TOOL_STATUS_SEP))
-        };
         let verb = format!("{} · {}", view.server, view.tool);
-        let segments = header_with_verb(call, rect.width, loading_frame, animating, &verb, status);
+        let segments = header_with_verb(
+            call,
+            rect.width,
+            loading_frame,
+            animating,
+            &verb,
+            status_of(call, view),
+        );
         put_segments(grid, rect.x, y, rect.width, &segments);
     }
     *row_index += 1;
@@ -231,6 +241,29 @@ pub(super) fn draw(
         row_index,
         &layout(call, view, rect.width, folds).layout.rows,
     );
+}
+
+/// 合并组内调用体：跳过标题，状态追加到首个参数节点尾部。
+#[allow(clippy::too_many_arguments)]
+pub(super) fn draw_body(
+    grid: &mut Grid,
+    rect: Rect,
+    scroll: usize,
+    row_index: &mut usize,
+    call: &ToolCallView,
+    view: &McpDetailView,
+    _loading_frame: usize,
+    folds: Folds,
+    _animating: bool,
+    last: bool,
+) {
+    if rect.width == 0 {
+        return;
+    }
+    let mut layout = layout(call, view, rect.width, folds).layout;
+    tree::append_status(&mut layout.rows, status_of(call, view), rect.width);
+    tree::apply_group_connector(&mut layout.rows, last);
+    tree::draw(grid, rect, scroll, row_index, &layout.rows);
 }
 
 #[cfg(test)]

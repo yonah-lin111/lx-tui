@@ -27,7 +27,7 @@ use super::{
 };
 
 /// 标题动词（按工具名）。
-fn verb(name: &str) -> &'static str {
+pub(super) fn verb(name: &str) -> &'static str {
     match name {
         "spawn_agent" => text::agent::VERB_TOOL_SPAWN_AGENT,
         "send_input" => text::agent::VERB_TOOL_SEND_INPUT,
@@ -434,7 +434,7 @@ fn agent_mark(view: &SubagentDetailView, call: &ToolCallView, loading_frame: usi
 }
 
 /// 标题状态：spawn/send_input/resume/cancel_agent_input 显示状态；wait 显示调用条件；close 无。
-fn header_status(call: &ToolCallView, view: &SubagentDetailView) -> Option<String> {
+pub(super) fn header_status(call: &ToolCallView, view: &SubagentDetailView) -> Option<String> {
     match call.name.as_str() {
         "spawn_agent" | "send_input" | "resume_agent" | "cancel_agent_input" => Some(
             view.agent_status
@@ -495,6 +495,31 @@ pub(super) fn draw(
         row_index,
         &layout(call, rect.width, expanded).0.rows,
     );
+}
+
+/// 合并组内调用体：跳过标题，状态追加到首个树节点尾部。
+#[allow(clippy::too_many_arguments)]
+pub(super) fn draw_body(
+    grid: &mut Grid,
+    rect: Rect,
+    scroll: usize,
+    row_index: &mut usize,
+    call: &ToolCallView,
+    _loading_frame: usize,
+    expanded: bool,
+    _animating: bool,
+    last: bool,
+) {
+    if rect.width == 0 {
+        return;
+    }
+    let Some(view) = view(call) else {
+        return;
+    };
+    let mut layout = layout(call, rect.width, expanded).0;
+    tree::append_status(&mut layout.rows, header_status(call, view), rect.width);
+    tree::apply_group_connector(&mut layout.rows, last);
+    tree::draw(grid, rect, scroll, row_index, &layout.rows);
 }
 
 #[cfg(test)]

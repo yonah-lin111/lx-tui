@@ -7,7 +7,8 @@
 //!      2 + 下一行
 //! ```
 //!
-//! - 标题只写裸动词（`Edit` / `Write`），不再有 `2 files` 合并标题；
+//! - 标题只写裸动词（`Edit` / `Write`），不再有旧的 `2 files` 合并标题；连续同名
+//!   调用由上层合并为组头，本模块只负责单个调用体的文件树；
 //! - 每个文件：路径+计数是首节点，差异正文是一个多行节点（首行 `└─`，其余行
 //!   左对齐）；多个文件依次用 `├─` 连接，最后一个文件收口；
 //! - **没有动作按钮**：整块卡片本身就是点击面——点折叠内容展开、点展开内容收起；
@@ -87,6 +88,48 @@ pub(super) fn draw(
         if let Some(y) = visible_row(rect, scroll, *row_index) {
             // 先铺**整行**底色（100% 宽，含左侧缩进与行尾空白）再写字：
             // `put_segments` 只写字符，不负责行背景，行尾留白会掉色。
+            match row.fill {
+                Some(fill) => {
+                    grid.background_row(rect.x, y, rect.width, fill);
+                    let tinted: Vec<Segment> = row
+                        .segments
+                        .iter()
+                        .map(|segment| {
+                            Segment::new(segment.text.clone(), segment.style.patch(fill))
+                        })
+                        .collect();
+                    put_segments(grid, rect.x, y, rect.width, &tinted);
+                }
+                None => put_segments(grid, rect.x, y, rect.width, &row.segments),
+            }
+        }
+        *row_index += 1;
+    }
+}
+
+/// 合并组内调用体：跳过标题，非末调用把首个 `└─` 改成 `├─`。
+pub(super) fn draw_body(
+    grid: &mut Grid,
+    rect: Rect,
+    scroll: usize,
+    row_index: &mut usize,
+    call: &ToolCallView,
+    expanded: bool,
+    last: bool,
+) {
+    if rect.width == 0 {
+        return;
+    }
+    let mut rows = layout(call, rect.width, expanded);
+    if !last
+        && let Some(first) = rows.first_mut()
+        && let Some(segment) = first.segments.first_mut()
+        && segment.text == text::agent::TREE_LEAF
+    {
+        segment.text = text::agent::TREE_BRANCH.to_string();
+    }
+    for row in rows {
+        if let Some(y) = visible_row(rect, scroll, *row_index) {
             match row.fill {
                 Some(fill) => {
                     grid.background_row(rect.x, y, rect.width, fill);
@@ -228,7 +271,7 @@ fn files_of(call: &ToolCallView) -> Vec<&FileChangeView> {
 }
 
 /// 工具名 → 卡片动词（非文件工具回退 `Edit`）。
-fn verb_of(call: &ToolCallView) -> &'static str {
+pub(super) fn verb_of(call: &ToolCallView) -> &'static str {
     match call.name.as_str() {
         "write" => text::agent::VERB_TOOL_WRITE,
         _ => text::agent::VERB_TOOL_EDIT,

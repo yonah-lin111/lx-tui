@@ -20,8 +20,9 @@ use crate::ui::style;
 use super::super::Grid;
 use super::rows::{UserPasteSpan, UserSpanKind, UserTextLine};
 use super::tool::{self, Folds};
-use super::user_shell;
 use super::{STEP_GUTTER, StepKind, StepMark, USER_INDENT, USER_PREFIX, visible_row};
+
+mod legacy;
 
 /// 块在 `Lx` 里的定位（绘制动态样式与回退路径时用）。
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -30,6 +31,19 @@ pub(crate) enum BlockSource {
     Step {
         message_index: usize,
         step_index: usize,
+    },
+    /// 连续同名工具组的组头（一行，不登记点击面）。
+    ToolGroupHeader {
+        message_index: usize,
+        first_step: usize,
+        count: usize,
+        snapshot: bool,
+    },
+    /// 合并组里的一个调用体（只画树体，不画标题）。
+    ToolBody {
+        message_index: usize,
+        step_index: usize,
+        group: GroupSlot,
     },
     /// 本地命令卡片（整条消息一个块）。
     Shell { message_index: usize },
@@ -70,6 +84,19 @@ pub(crate) struct CardSpan {
     pub offset: usize,
     pub rows: usize,
     pub clickable: bool,
+}
+
+/// 工具合并组内的位置：`index` 从 0 开始，`count` 是本组实际展示的调用数。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct GroupSlot {
+    pub(crate) index: usize,
+    pub(crate) count: usize,
+}
+
+impl GroupSlot {
+    pub(crate) fn is_last(self) -> bool {
+        self.index.saturating_add(1) >= self.count
+    }
 }
 
 /// 消息下方单条引用树分支（用户 `@文件` 或助手生成图片）。
@@ -372,7 +399,7 @@ impl BlockPaint {
             Self::RefLines { ref_lines } => {
                 draw_assistant_ref_lines(grid, rect, scroll, start, viewport_end, ref_lines);
             }
-            Self::Legacy { .. } => draw_legacy(grid, rect, history, source, scroll, start),
+            Self::Legacy { .. } => legacy::draw_legacy(grid, rect, history, source, scroll, start),
         }
     }
 }
@@ -885,106 +912,5 @@ fn draw_thinking(
                 cx = cx.saturating_add(cell);
             }
         }
-    }
-}
-
-/// 尚未接入内容缓存的块：保留原绘制路径（行数由快照给出）。
-fn draw_legacy(
-    grid: &mut Grid,
-    rect: Rect,
-    history: HistorySource<'_>,
-    source: BlockSource,
-    scroll: usize,
-    start: usize,
-) {
-    let mut row = start;
-    match source {
-        BlockSource::Step { message_index, .. } => {
-            let calls = calls_of(history, source);
-            let Some(call) = calls.first() else {
-                return;
-            };
-            tool::draw_animated(
-                grid,
-                rect,
-                scroll,
-                &mut row,
-                call,
-                history.chat.loading_frame,
-                folds_at(history, message_index, call),
-                history.animating,
-            );
-        }
-        BlockSource::Shell { message_index } => {
-            let Some(message) = history.messages.get(message_index) else {
-                return;
-            };
-            let Some(shell) = message.shell.as_ref() else {
-                return;
-            };
-            user_shell::draw(
-                grid,
-                rect,
-                scroll,
-                &mut row,
-                shell,
-                history.chat.loading_frame,
-                history.animating || shell.is_running(),
-                super::shell_folds(history, &message.id),
-            );
-        }
-        BlockSource::Notice { message_index } => {
-            let Some(message) = history.messages.get(message_index) else {
-                return;
-            };
-            let Some(notice) = super::notice(message) else {
-                return;
-            };
-            super::notice::draw(grid, &notice, rect, scroll, &mut row);
-        }
-        // compact / 模型切换 / rewind 已由 `BlockPaint::SystemEvent` 承载：
-        // Legacy 路径不再构造这三个来源，保留空分支只为穷尽匹配。
-        BlockSource::Rewind { .. }
-        | BlockSource::Compact { .. }
-        | BlockSource::ModelSwitch { .. }
-        | BlockSource::Recap { .. } => {}
-        BlockSource::RunningCompact => {
-            super::compact::draw_running(
-                grid,
-                history.compact,
-                rect,
-                scroll,
-                &mut row,
-                history.chat.loading_frame,
-                history.animating,
-            );
-        }
-        BlockSource::Report {
-            message_index,
-            index,
-        } => {
-            let Some(message) = history.messages.get(message_index) else {
-                return;
-            };
-            let Some(report) = message.reports.get(index) else {
-                return;
-            };
-            let slot = format!("report:{}", report.agent_id);
-            let expanded = history.chat.detail_is_expanded(&message.id, &slot);
-            let more_steps = history.chat.report_expand_steps(&message.id, &slot);
-            super::report_block::draw(
-                grid,
-                rect,
-                report,
-                scroll,
-                &mut row,
-                history.chat.loading_frame,
-                history.animating,
-                expanded,
-                more_steps,
-            );
-        }
-        // 静态块的绘制数据自带样式，没有需要回查的动态状态。
-        BlockSource::Plain => {}
     }
 }
