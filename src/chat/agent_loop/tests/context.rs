@@ -157,11 +157,11 @@ async fn frozen_system_prompt_is_reused_by_every_sampling() {
     );
 }
 
-/// 本轮单条工具结果超 64 KiB：进入下一次采样时截断并显式标记。
+/// 本轮 read 结果受 50 KiB 输出上限保护：进入下一次采样时完整保留，不再被回放层二次截断。
 #[tokio::test]
-async fn current_turn_truncates_oversized_tool_result() {
-    let fixture = Fixture::new("context-truncate");
-    // 写一个多行大文件：每行 60 字符 × 4000 行 ≈ 240 KiB，read 默认取 2000 行仍超 64 KiB。
+async fn current_turn_read_result_stays_inside_replay_budget() {
+    let fixture = Fixture::new("context-read-budget");
+    // 每行 60 字符 × 4000 行 ≈ 240 KiB；read 默认取 2000 行仍超 50 KiB。
     let line = "x".repeat(59);
     let big = format!("{line}\n").repeat(4_000);
     std::fs::write(fixture.path().join("big.txt"), &big).expect("write fixture file");
@@ -193,11 +193,18 @@ async fn current_turn_truncates_oversized_tool_result() {
         })
         .expect("read result present");
     assert!(
-        content.len() <= MAX_TOOL_RESULT_REPLAY_BYTES,
-        "本轮结果同样受回放上限约束: {}",
+        content.len() < MAX_TOOL_RESULT_REPLAY_BYTES,
+        "read result must already fit the replay budget: {}",
         content.len()
     );
-    assert!(content.ends_with("[truncated]"), "截断必须显式标记");
+    assert!(
+        content.contains("more lines available with offset="),
+        "read itself must report paging: {content}"
+    );
+    assert!(
+        !content.ends_with("[truncated]"),
+        "read must not be truncated again by the replay layer"
+    );
 }
 
 /// 直接调用累计接口：结果截断口径与历史装配一致（同一常量、同一标记）。

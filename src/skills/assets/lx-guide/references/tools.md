@@ -50,8 +50,8 @@ Behavior:
 - Text files return a header with the requested range and total line count, a `file_version` token, then numbered lines as `{line}: {text}` with 1-based line numbers. The line-number prefix does not alter the file content.
 - `file_version` is the optimistic-concurrency token for this session. Pass it as `read_version` to `write`, or in `read_versions` to `edit`. Writes to a file that was not read in this session, or that changed after the read, are rejected with `stale_read`.
 - `offset` beyond the last line fails with `offset_out_of_range`. An empty file reports zero lines and still returns a `file_version`.
-- A single text file larger than 16 MiB is rejected with `too_large`. Output is capped at 2000 lines, 256 KiB, and 4000 characters per line; truncation is reported explicitly and the remaining lines can be read with a later `offset`.
-- Directory paths return a sorted listing with `[dir]` and `[file]` prefixes. At most 50,000 entries are collected; a truncated listing says so.
+- A single text file larger than 16 MiB is rejected with `too_large`. Output is capped at 2000 lines or 50 KiB (whichever comes first), and each line is clipped at 2000 characters; truncation is reported explicitly and the remaining lines can be read with a later `offset`.
+- Directory paths return a sorted listing with `[dir]` and `[file]` prefixes. At most 50,000 entries are collected; the same 50 KiB output cap applies. When the collection cap is hit the result says the listing may be incomplete; `next_offset` continues the listing when more collected entries are available.
 - Image files are detected by header: PNG, JPEG, GIF, WebP, BMP, and TIFF are supported. A single image larger than 20 MiB is rejected with `too_large`. When the active model supports image input, the image is decoded, scaled so its longest side is at most 2048 px, and re-encoded as PNG or JPEG; a PNG/JPEG already within 2048 px is passed through unchanged. The image is attached directly to the conversation for visual inspection. When the model does not support image input, reading an image fails with `binary`.
 - Image and directory reads do not return a `file_version`.
 

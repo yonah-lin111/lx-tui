@@ -19,6 +19,8 @@ fn read_text_states_range_and_next_offset() {
         end_line: 2,
         next_offset: Some(3),
         truncated: true,
+        line_truncated: false,
+        entries_truncated: false,
         total_lines: 9,
         version: None,
         image: None,
@@ -41,6 +43,8 @@ fn read_text_distinguishes_empty_file_and_directory() {
         end_line: 0,
         next_offset: None,
         truncated: false,
+        line_truncated: false,
+        entries_truncated: false,
         total_lines: 0,
         version: None,
         image: None,
@@ -55,6 +59,8 @@ fn read_text_distinguishes_empty_file_and_directory() {
         end_line: 1,
         next_offset: None,
         truncated: false,
+        line_truncated: false,
+        entries_truncated: false,
         total_lines: 1,
         version: None,
         image: None,
@@ -62,6 +68,211 @@ fn read_text_distinguishes_empty_file_and_directory() {
     let text = format_for_model(&dir);
     assert!(text.contains("Listed 1 entries"));
     assert!(text.contains("[file] a.txt"));
+}
+
+/// 文件分页：给出剩余行数与可继续的 offset。
+#[test]
+fn read_file_paged_reports_remaining_lines_and_offset() {
+    let result = ToolExecutionResult::Read {
+        path: PathBuf::from("/tmp/big.rs"),
+        kind: ReadKind::File,
+        content: "1: a\n".into(),
+        start_line: 1,
+        end_line: 824,
+        next_offset: Some(825),
+        truncated: true,
+        line_truncated: false,
+        entries_truncated: false,
+        total_lines: 5000,
+        version: None,
+        image: None,
+    };
+    let text = format_for_model(&result);
+    assert!(
+        text.contains("4176 more lines available with offset=825"),
+        "text: {text}"
+    );
+    assert!(text.contains("next_offset: 825"), "text: {text}");
+    assert!(!text.contains("clipped"), "text: {text}");
+}
+
+/// 单行截断：明确告诉模型 offset 救不回被切掉的尾部。
+#[test]
+fn read_file_line_clamp_reports_unrecoverable_tail() {
+    let result = ToolExecutionResult::Read {
+        path: PathBuf::from("/tmp/min.js"),
+        kind: ReadKind::File,
+        content: "1: x…[truncated]\n".into(),
+        start_line: 1,
+        end_line: 1,
+        next_offset: None,
+        truncated: true,
+        line_truncated: true,
+        entries_truncated: false,
+        total_lines: 1,
+        version: None,
+        image: None,
+    };
+    let text = format_for_model(&result);
+    assert!(
+        text.contains(
+            "line(s) longer than 2000 characters were clipped; \
+             the clipped tail cannot be recovered with offset"
+        ),
+        "text: {text}"
+    );
+    assert!(!text.contains("more lines"), "text: {text}");
+    assert!(!text.contains("next_offset:"), "text: {text}");
+}
+
+/// 分页与单行截断同时出现：两个原因都要报告。
+#[test]
+fn read_file_reports_paging_and_clamp_together() {
+    let result = ToolExecutionResult::Read {
+        path: PathBuf::from("/tmp/mixed.txt"),
+        kind: ReadKind::File,
+        content: "1: x…[truncated]\n".into(),
+        start_line: 1,
+        end_line: 100,
+        next_offset: Some(101),
+        truncated: true,
+        line_truncated: true,
+        entries_truncated: false,
+        total_lines: 1000,
+        version: None,
+        image: None,
+    };
+    let text = format_for_model(&result);
+    assert!(
+        text.contains("900 more lines available with offset=101"),
+        "text: {text}"
+    );
+    assert!(
+        text.contains("clipped; the clipped tail cannot be recovered with offset"),
+        "text: {text}"
+    );
+}
+
+/// 目录分页：给出剩余条目数与继续 offset。
+#[test]
+fn read_directory_paged_reports_remaining_entries() {
+    let result = ToolExecutionResult::Read {
+        path: PathBuf::from("/tmp/dir"),
+        kind: ReadKind::Directory,
+        content: "[file] a\n".into(),
+        start_line: 1,
+        end_line: 50,
+        next_offset: Some(51),
+        truncated: true,
+        line_truncated: false,
+        entries_truncated: false,
+        total_lines: 100,
+        version: None,
+        image: None,
+    };
+    let text = format_for_model(&result);
+    assert!(
+        text.contains("50 more entries available with offset=51"),
+        "text: {text}"
+    );
+    assert!(!text.contains("collection cap"), "text: {text}");
+}
+
+/// 目录收集触顶：即使没有下一页，也要说明 listing 可能不完整。
+#[test]
+fn read_directory_collection_cap_reports_incomplete_listing() {
+    let result = ToolExecutionResult::Read {
+        path: PathBuf::from("/tmp/huge"),
+        kind: ReadKind::Directory,
+        content: "[file] a\n".into(),
+        start_line: 1,
+        end_line: 50_000,
+        next_offset: None,
+        truncated: true,
+        line_truncated: false,
+        entries_truncated: true,
+        total_lines: 50_000,
+        version: None,
+        image: None,
+    };
+    let text = format_for_model(&result);
+    assert!(
+        text.contains("listing stopped at the 50000-entry collection cap; more entries may exist"),
+        "text: {text}"
+    );
+    assert!(!text.contains("next_offset:"), "text: {text}");
+}
+
+/// 目录分页与收集触顶同时出现：先报剩余条目，再报 listing 可能不完整。
+#[test]
+fn read_directory_reports_paging_and_collection_cap_together() {
+    let result = ToolExecutionResult::Read {
+        path: PathBuf::from("/tmp/huge"),
+        kind: ReadKind::Directory,
+        content: "[file] a\n".into(),
+        start_line: 1,
+        end_line: 48_800,
+        next_offset: Some(48_801),
+        truncated: true,
+        line_truncated: false,
+        entries_truncated: true,
+        total_lines: 50_000,
+        version: None,
+        image: None,
+    };
+    let text = format_for_model(&result);
+    assert!(
+        text.contains(
+            "1200 more entries available with offset=48801; \
+             listing stopped at the 50000-entry collection cap; more entries may exist"
+        ),
+        "text: {text}"
+    );
+    assert!(text.contains("next_offset: 48801"), "text: {text}");
+}
+
+/// 落库 JSON 携带两个精确截断字段（文件与目录各自独立）。
+#[test]
+fn read_json_carries_truncation_flags() {
+    let file = ToolExecutionResult::Read {
+        path: PathBuf::from("/tmp/min.js"),
+        kind: ReadKind::File,
+        content: "1: x…[truncated]\n".into(),
+        start_line: 1,
+        end_line: 1,
+        next_offset: None,
+        truncated: true,
+        line_truncated: true,
+        entries_truncated: false,
+        total_lines: 1,
+        version: None,
+        image: None,
+    };
+    let value: serde_json::Value =
+        serde_json::from_str(&to_result_json(&file).expect("json")).expect("parse");
+    assert_eq!(value["truncated"], true);
+    assert_eq!(value["line_truncated"], true);
+    assert_eq!(value["entries_truncated"], false);
+
+    let directory = ToolExecutionResult::Read {
+        path: PathBuf::from("/tmp/huge"),
+        kind: ReadKind::Directory,
+        content: "[file] a\n".into(),
+        start_line: 1,
+        end_line: 50_000,
+        next_offset: None,
+        truncated: true,
+        line_truncated: false,
+        entries_truncated: true,
+        total_lines: 50_000,
+        version: None,
+        image: None,
+    };
+    let value: serde_json::Value =
+        serde_json::from_str(&to_result_json(&directory).expect("json")).expect("parse");
+    assert_eq!(value["truncated"], true);
+    assert_eq!(value["line_truncated"], false);
+    assert_eq!(value["entries_truncated"], true);
 }
 
 /// 搜索文本含命中、计数与截断标志；无命中时明确说明。
@@ -249,6 +460,8 @@ fn result_json_covers_every_variant() {
         end_line: 1,
         next_offset: None,
         truncated: false,
+        line_truncated: false,
+        entries_truncated: false,
         total_lines: 1,
         version: None,
         image: None,
@@ -433,9 +646,9 @@ fn oversized_web_search_json_shrinks_text_only() {
     assert_eq!(value["queries"], serde_json::json!(["huge"]));
 }
 
-/// 超大 read 结果的 JSON 被截断并显式标记 `truncated: true`。
+/// 超大 read 结果的 JSON 被截断，且两个精确截断字段在存储截断后仍保留。
 #[test]
-fn oversized_result_json_is_truncated_with_flag() {
+fn oversized_read_json_preserves_truncation_flags() {
     let content = "x".repeat(super::MAX_TOOL_RESULT_BYTES + 1024);
     let result = ToolExecutionResult::Read {
         path: PathBuf::from("/tmp/big.txt"),
@@ -444,7 +657,9 @@ fn oversized_result_json_is_truncated_with_flag() {
         start_line: 1,
         end_line: 1,
         next_offset: Some(2),
-        truncated: true,
+        truncated: false,
+        line_truncated: true,
+        entries_truncated: false,
         total_lines: 10,
         version: None,
         image: None,
@@ -453,6 +668,8 @@ fn oversized_result_json_is_truncated_with_flag() {
     assert!(json.len() <= super::MAX_TOOL_RESULT_BYTES);
     let value: serde_json::Value = serde_json::from_str(&json).expect("parse");
     assert_eq!(value["truncated"], true);
+    assert_eq!(value["line_truncated"], true);
+    assert_eq!(value["entries_truncated"], false);
     assert_eq!(value["next_offset"], 2);
 }
 
@@ -549,6 +766,8 @@ fn to_result_json_round_trips_into_summary() {
                 end_line: 40,
                 next_offset: Some(41),
                 truncated: true,
+                line_truncated: false,
+                entries_truncated: false,
                 total_lines: 1000,
                 version: None,
                 image: None,
@@ -565,6 +784,8 @@ fn to_result_json_round_trips_into_summary() {
                 end_line: 40,
                 next_offset: None,
                 truncated: false,
+                line_truncated: false,
+                entries_truncated: false,
                 total_lines: 40,
                 version: None,
                 image: None,
@@ -581,6 +802,8 @@ fn to_result_json_round_trips_into_summary() {
                 end_line: 2,
                 next_offset: None,
                 truncated: false,
+                line_truncated: false,
+                entries_truncated: false,
                 total_lines: 2,
                 version: None,
                 image: None,
@@ -597,6 +820,8 @@ fn to_result_json_round_trips_into_summary() {
                 end_line: 0,
                 next_offset: None,
                 truncated: false,
+                line_truncated: false,
+                entries_truncated: false,
                 total_lines: 0,
                 version: None,
                 image: None,

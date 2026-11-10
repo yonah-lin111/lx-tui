@@ -40,6 +40,8 @@ pub(super) fn read_result() -> ToolExecutionResult {
         end_line: 57,
         next_offset: None,
         truncated: false,
+        line_truncated: false,
+        entries_truncated: false,
         total_lines: 57,
         version: Some("v1".to_string()),
         image: None,

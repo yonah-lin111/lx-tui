@@ -5,11 +5,11 @@
 
 use serde_json::{Value, json};
 
-use super::MAX_TOOL_RESULT_BYTES;
 use super::diff::FileDiff;
 use super::types::{
     FileChange, FileChangeKind, ReadKind, SearchMatch, ToolExecutionResult, ToolSummary,
 };
+use super::{MAX_READ_LINE_CHARS, MAX_TOOL_RESULT_BYTES};
 
 mod file;
 
@@ -26,20 +26,23 @@ pub fn format_for_model(result: &ToolExecutionResult) -> String {
             start_line,
             end_line,
             next_offset,
-            truncated,
             total_lines,
             version,
-        } => format_read(
+            line_truncated,
+            entries_truncated,
+            ..
+        } => format_read(ReadReport {
             path,
-            *kind,
+            kind: *kind,
             content,
-            *start_line,
-            *end_line,
-            *next_offset,
-            *truncated,
-            *total_lines,
-            version.as_deref(),
-        ),
+            start_line: *start_line,
+            end_line: *end_line,
+            next_offset: *next_offset,
+            total_lines: *total_lines,
+            version: version.as_deref(),
+            line_truncated: *line_truncated,
+            entries_truncated: *entries_truncated,
+        }),
         ToolExecutionResult::Search {
             matches,
             truncated,
@@ -391,22 +394,38 @@ fn format_ask(questions: &[crate::chat::tools::AnsweredQuestion]) -> String {
     json!({ "answers": answers }).to_string()
 }
 
+/// `format_read` 的只读输入：把 `read` 结果拆成文本渲染所需字段。
+struct ReadReport<'a> {
+    path: &'a std::path::Path,
+    kind: ReadKind,
+    content: &'a str,
+    start_line: usize,
+    end_line: usize,
+    next_offset: Option<usize>,
+    total_lines: usize,
+    version: Option<&'a str>,
+    line_truncated: bool,
+    entries_truncated: bool,
+}
+
 /// `read` 的文本表示：首行给出范围与文件总行数，末行给出截断续读信息。
 ///
 /// 文件读取额外给出 `file_version`：修改该文件时必须把它作为 `read_version`
 /// 参数交给 `edit`/`write`，否则写入会被拒绝。
-#[allow(clippy::too_many_arguments)]
-fn format_read(
-    path: &std::path::Path,
-    kind: ReadKind,
-    content: &str,
-    start_line: usize,
-    end_line: usize,
-    next_offset: Option<usize>,
-    truncated: bool,
-    total_lines: usize,
-    version: Option<&str>,
-) -> String {
+fn format_read(report: ReadReport<'_>) -> String {
+    let ReadReport {
+        path,
+        kind,
+        content,
+        start_line,
+        end_line,
+        next_offset,
+        total_lines,
+        version,
+        line_truncated,
+        entries_truncated,
+    } = report;
+
     let mut text = String::new();
     match kind {
         ReadKind::Image => {
@@ -422,9 +441,20 @@ fn format_read(
                 total_lines,
                 path.display()
             ));
-            if truncated {
-                text.push_str("truncated: true (only the first entries are shown)\n");
+            let mut cuts = Vec::new();
+            if let Some(next) = next_offset {
+                let remaining = total_lines.saturating_sub(end_line);
+                let unit = if remaining == 1 { "entry" } else { "entries" };
+                cuts.push(format!(
+                    "{remaining} more {unit} available with offset={next}"
+                ));
             }
+            if entries_truncated {
+                cuts.push(format!(
+                    "listing stopped at the {total_lines}-entry collection cap; more entries may exist"
+                ));
+            }
+            push_truncation(&mut text, cuts);
         }
         ReadKind::File => {
             if start_line == 0 {
@@ -446,9 +476,21 @@ fn format_read(
                     "file_version: {version} (pass this as read_version when editing this file)\n"
                 ));
             }
-            if truncated {
-                text.push_str("truncated: true (long lines and/or output size were cut)\n");
+            let mut cuts = Vec::new();
+            if let Some(next) = next_offset {
+                let remaining = total_lines.saturating_sub(end_line);
+                let unit = if remaining == 1 { "line" } else { "lines" };
+                cuts.push(format!(
+                    "{remaining} more {unit} available with offset={next}"
+                ));
             }
+            if line_truncated {
+                cuts.push(format!(
+                    "line(s) longer than {MAX_READ_LINE_CHARS} characters were clipped; \
+                     the clipped tail cannot be recovered with offset"
+                ));
+            }
+            push_truncation(&mut text, cuts);
         }
     }
     text.push_str("---\n");
@@ -462,6 +504,13 @@ fn format_read(
         ));
     }
     text
+}
+
+/// 把多个截断原因合并成一行 `truncated: true (...)`；空列表不输出。
+fn push_truncation(text: &mut String, cuts: Vec<String>) {
+    if !cuts.is_empty() {
+        text.push_str(&format!("truncated: true ({})\n", cuts.join("; ")));
+    }
 }
 
 /// `search` 的文本表示：每行 `path:line: text`，行截断在末尾显式标注。
@@ -695,6 +744,8 @@ pub fn to_result_json(result: &ToolExecutionResult) -> Option<String> {
             end_line,
             next_offset,
             truncated,
+            line_truncated,
+            entries_truncated,
             total_lines,
             version,
         } => json!({
@@ -710,6 +761,8 @@ pub fn to_result_json(result: &ToolExecutionResult) -> Option<String> {
             "end_line": end_line,
             "next_offset": next_offset,
             "truncated": truncated,
+            "line_truncated": line_truncated,
+            "entries_truncated": entries_truncated,
             "total_lines": total_lines,
             "file_version": version,
             "image": image,

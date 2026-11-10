@@ -137,6 +137,18 @@ pub(crate) fn expect_read(
     }
 }
 
+/// 取出 `read` 的精确截断标志：`(line_truncated, entries_truncated)`。
+pub(crate) fn expect_read_flags(result: &ToolExecutionResult) -> (bool, bool) {
+    match result {
+        ToolExecutionResult::Read {
+            line_truncated,
+            entries_truncated,
+            ..
+        } => (*line_truncated, *entries_truncated),
+        other => panic!("expected read result, got {other:?}"),
+    }
+}
+
 /// 取出 `search` 的命中与截断标志。
 pub(crate) fn expect_search(result: &ToolExecutionResult) -> (&[super::SearchMatch], bool, usize) {
     match result {
