@@ -173,7 +173,34 @@ fn render_blocks(
     )
 }
 
-/// 块级解析的跨行状态：列表缩进档位栈 + 未闭合围栏语言 + 代码块序号。
+/// 列表项种类：用于区分无序、有序与任务列表，同级切换列表类型时视作新列表。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ListKind {
+    Bullet,
+    Ordered,
+    Task,
+}
+
+/// 上一个已产出块的种类（供 `code_chrome == true` 的块间距状态机判定是否插入前导空行）。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum PrevBlock {
+    /// 普通段落或图片行；`in_list` 表示该行是否作为列表项内的缩进续段，`depth` 为其所属列表层级。
+    Paragraph { in_list: bool, depth: usize },
+    /// 标题行（`#`..`######`）。
+    Heading,
+    /// 列表项（记录换算后的层级 `depth` 与列表种类 `kind`）。
+    ListItem { depth: usize, kind: ListKind },
+    /// 围栏代码块或 4 空格缩进代码块。
+    CodeBlock,
+    /// 表格块。
+    Table,
+    /// 引用块（`>`）。
+    Quote,
+    /// 水平分割线（`---` / `***` / `___`）。
+    Rule,
+}
+
+/// 块级解析的跨行状态：列表缩进档位栈 + 未闭合围栏语言 + 代码块序号 + 块间距前驱状态。
 ///
 /// 增量渲染的「稳定前缀 / 活跃尾部」两段共用它：尾部从中断处的状态继续解析，
 /// 保证与一次性全量渲染逐行一致。
@@ -193,8 +220,10 @@ struct ParserState {
     open_fence_ticks: usize,
     /// 下一个代码块的 0-based 序号（围栏与 4 空格缩进代码块统一递增）。
     next_code_block_index: usize,
-    /// 上一个块是代码块：下一个块前需补一行空白间隔（跨增量分块保留）。
-    after_code_block: bool,
+    /// 上一个已产出的块种类（跨增量分块保留；`None` 表示尚未产出任何块）。
+    prev_block: Option<PrevBlock>,
+    /// 自上一个块产出后，源码中是否至少出现过一条空行（跨增量分块保留）。
+    saw_blank_line: bool,
 }
 
 /// 按行切分源码：末尾 `\n` 是行终止符，不额外产生一条空行；真正的空行
@@ -208,6 +237,78 @@ fn split_source_lines(source: &str) -> Vec<&str> {
         lines.pop();
     }
     lines
+}
+
+/// 在产出下一个非空块 `curr` 之前，按块间距规则推入至多 1 行空行并推进 `state`。
+fn transition_block(
+    state: &mut ParserState,
+    curr: PrevBlock,
+    code_chrome: bool,
+    lines: &mut Vec<MdLine>,
+) {
+    if code_chrome && should_insert_blank_line(state.prev_block, state.saw_blank_line, curr) {
+        lines.push(MdLine::spans(0, Vec::new()));
+    }
+    state.prev_block = Some(curr);
+    state.saw_blank_line = false;
+}
+
+/// 判定前驱块 `prev` 与当前块 `curr` 之间是否需要插入 1 行空行。
+fn should_insert_blank_line(
+    prev: Option<PrevBlock>,
+    saw_blank_line: bool,
+    curr: PrevBlock,
+) -> bool {
+    let Some(prev) = prev else {
+        return false;
+    };
+    match curr {
+        // 代码块自带 `▂` 顶边（上半截 7/8 留白），仅在连续两个代码块之间补 1 行空行。
+        PrevBlock::CodeBlock => prev == PrevBlock::CodeBlock,
+        // 标题、表格、分割线作为独立顶层块，上方恒隔 1 行。
+        PrevBlock::Heading | PrevBlock::Table | PrevBlock::Rule => true,
+        // 引用块：连续 `>` 行（无空行分隔）同属一个引用块，其余情况上方隔 1 行。
+        PrevBlock::Quote => prev != PrevBlock::Quote || saw_blank_line,
+        // 列表项：区分进入列表、父进子、子退父、同级异类切换与松紧列表。
+        PrevBlock::ListItem { depth, kind } => match prev {
+            PrevBlock::ListItem {
+                depth: prev_depth,
+                kind: prev_kind,
+            } => {
+                if depth > prev_depth {
+                    false
+                } else if saw_blank_line || depth < prev_depth {
+                    true
+                } else {
+                    prev_kind != kind
+                }
+            }
+            PrevBlock::Paragraph {
+                in_list: true,
+                depth: prev_depth,
+            } => {
+                if depth > prev_depth {
+                    false
+                } else {
+                    saw_blank_line || depth < prev_depth
+                }
+            }
+            _ => true,
+        },
+        // 段落或图片行：区分顶层段落、列表内紧凑续行、列表内松散续段与退出列表。
+        PrevBlock::Paragraph { in_list, depth } => match prev {
+            PrevBlock::Heading
+            | PrevBlock::CodeBlock
+            | PrevBlock::Table
+            | PrevBlock::Quote
+            | PrevBlock::Rule => true,
+            PrevBlock::ListItem { .. } => saw_blank_line || !in_list,
+            PrevBlock::Paragraph {
+                in_list: prev_in_list,
+                depth: prev_depth,
+            } => saw_blank_line || (prev_in_list && (!in_list || depth != prev_depth)),
+        },
+    }
 }
 
 /// 从给定跨行状态继续块级解析，返回新产出的行。
@@ -226,9 +327,8 @@ fn render_blocks_stateful(
         // 未闭合围栏内部：每行都是独立代码行（闭合行只推进状态）。
         if let Some(lang) = state.open_fence_lang.take() {
             if fence_ticks(line).is_some_and(|ticks| ticks >= state.open_fence_ticks) {
-                if code_chrome {
-                    state.after_code_block = true;
-                }
+                state.prev_block = Some(PrevBlock::CodeBlock);
+                state.saw_blank_line = false;
                 state.open_fence_ticks = 0;
                 index += 1;
                 continue;
@@ -245,18 +345,17 @@ fn render_blocks_stateful(
         }
         let trimmed = line.trim_end();
         if trimmed.is_empty() {
+            if state.prev_block.is_some() {
+                state.saw_blank_line = true;
+            }
             index += 1;
             continue;
-        }
-        // 代码块之后与下一个块之间固定空一行（跨增量分块由 `after_code_block` 保留）。
-        if code_chrome && state.after_code_block {
-            lines.push(MdLine::spans(0, Vec::new()));
-            state.after_code_block = false;
         }
         let item = list_item(line);
         update_list_context(state, item.as_ref(), line);
         let min_indent = list_code_min_indent(state);
         if let Some(ticks) = fence_ticks(line) {
+            transition_block(state, PrevBlock::CodeBlock, code_chrome, &mut lines);
             let lang = line.trim().trim_start_matches('`').trim();
             let block_index = state.next_code_block_index;
             state.next_code_block_index += 1;
@@ -274,11 +373,21 @@ fn render_blocks_stateful(
         // 列表看起来就“没有缩进”。真代码块请用围栏（```）。
         if let Some(item) = item {
             let depth = list_depth(&mut state.list_indents, item.indent());
+            transition_block(
+                state,
+                PrevBlock::ListItem {
+                    depth,
+                    kind: item.kind(),
+                },
+                code_chrome,
+                &mut lines,
+            );
             lines.push(item.render(depth));
             index += 1;
             continue;
         }
         if is_indented_code(line, min_indent) {
+            transition_block(state, PrevBlock::CodeBlock, code_chrome, &mut lines);
             let block_index = state.next_code_block_index;
             state.next_code_block_index += 1;
             index = indented_code(
@@ -290,17 +399,16 @@ fn render_blocks_stateful(
                 min_indent,
                 &mut lines,
             );
-            if code_chrome {
-                state.after_code_block = true;
-            }
             continue;
         }
         if let Some((level, body)) = heading(trimmed) {
+            transition_block(state, PrevBlock::Heading, code_chrome, &mut lines);
             lines.push(heading_line(level, body));
             index += 1;
             continue;
         }
         if is_rule(trimmed) {
+            transition_block(state, PrevBlock::Rule, code_chrome, &mut lines);
             if expand_rules {
                 let rule_width = width.unwrap_or(40).max(1);
                 lines.push(MdLine::plain(
@@ -315,13 +423,24 @@ fn render_blocks_stateful(
             continue;
         }
         if trimmed.trim_start().starts_with('|') {
+            transition_block(state, PrevBlock::Table, code_chrome, &mut lines);
             index = table::table(&source_lines, index, &mut lines, width);
             continue;
         }
         if trimmed.trim_start().starts_with('>') {
-            index = blockquote(&source_lines, index, &mut lines);
+            transition_block(state, PrevBlock::Quote, code_chrome, &mut lines);
+            lines.push(blockquote_line(trimmed));
+            index += 1;
             continue;
         }
+        let in_list = !state.list_indents.is_empty();
+        let depth = state.list_indents.len().saturating_sub(1);
+        transition_block(
+            state,
+            PrevBlock::Paragraph { in_list, depth },
+            code_chrome,
+            &mut lines,
+        );
         if let Some((alt, url)) = image(trimmed) {
             lines.push(MdLine::spans(
                 0,
@@ -335,10 +454,9 @@ fn render_blocks_stateful(
             continue;
         }
         // 普通段落行：行内渲染（若仍处于列表上下文内，续段按当前列表层级的正文列缩进）。
-        let cont_indent = if state.list_indents.is_empty() {
+        let cont_indent = if !in_list {
             0
         } else {
-            let depth = state.list_indents.len() - 1;
             let hang = state.list_hangs.get(depth).copied().unwrap_or(2);
             indent(depth).saturating_add(hang)
         };
@@ -460,25 +578,18 @@ fn indented_code(
     index
 }
 
-/// 引用块：收集连续 `>` 行，用 `>` 作前缀（不用左边框），正文支持行内 markdown 折叠与着色。
-fn blockquote(source: &[&str], start: usize, lines: &mut Vec<MdLine>) -> usize {
-    let mut index = start;
-    while index < source.len() {
-        let trimmed = source[index].trim_start();
-        let Some(rest) = trimmed.strip_prefix('>') else {
-            break;
-        };
-        let body = rest.strip_prefix(' ').unwrap_or(rest);
-        let marker = format!("{QUOTE_MARKER} ");
-        let quote_style = style::md_read_quote();
-        let mut spans = vec![(marker.clone(), quote_style)];
-        for (value, span_style) in inline_spans(body) {
-            spans.push((value, quote_style.patch(span_style)));
-        }
-        lines.push(MdLine::hanging(0, marker_width(&marker), spans));
-        index += 1;
+/// 引用行：用 `>` 作前缀（不用左边框），正文支持行内 markdown 折叠与着色。
+fn blockquote_line(line: &str) -> MdLine {
+    let trimmed = line.trim_start();
+    let rest = trimmed.strip_prefix('>').unwrap_or(trimmed);
+    let body = rest.strip_prefix(' ').unwrap_or(rest);
+    let marker = format!("{QUOTE_MARKER} ");
+    let quote_style = style::md_read_quote();
+    let mut spans = vec![(marker.clone(), quote_style)];
+    for (value, span_style) in inline_spans(body) {
+        spans.push((value, quote_style.patch(span_style)));
     }
-    index
+    MdLine::hanging(0, marker_width(&marker), spans)
 }
 
 /// 列表项（无序 / 有序 / 任务）；`indent` 是源码里的**原始缩进列数**，
@@ -502,6 +613,15 @@ enum ListItem<'a> {
 }
 
 impl ListItem<'_> {
+    /// 列表项种类。
+    fn kind(&self) -> ListKind {
+        match *self {
+            Self::Bullet { .. } => ListKind::Bullet,
+            Self::Ordered { .. } => ListKind::Ordered,
+            Self::Task { .. } => ListKind::Task,
+        }
+    }
+
     /// 源码缩进列数。
     fn indent(&self) -> usize {
         match *self {

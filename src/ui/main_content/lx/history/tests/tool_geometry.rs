@@ -568,6 +568,7 @@ fn long_markdown_scroll_reads_prefix_and_tail() {
         .collect();
     assert!(rows[0].contains("line 78"), "{rows:?}");
     assert!(rows[1].contains("line 79"), "{rows:?}");
-    assert!(rows[2].contains('┌'), "表格尾部紧跟前缀：{rows:?}");
+    assert!(rows[2].trim().is_empty(), "段落与表格之间空一行：{rows:?}");
+    assert!(rows[3].contains('┌'), "表格尾部在空行后紧接前缀：{rows:?}");
     assert!(rows.iter().any(|row| row.contains('甲')), "{rows:?}");
 }
