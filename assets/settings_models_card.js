@@ -163,10 +163,19 @@ function modelCard(provider, model) {
   if (!model.pricing || typeof model.pricing !== 'object') {
     model.pricing = normalizePricing(null);
   }
-  const key = provider.key + '\u0000' + model.id;
+  let key = provider.key + '\u0000' + model.id;
   const card = element('div', 'model-card');
   const head = element('div', 'model-head');
-  const idField = labeledInput('Model ID', model.id, (value) => { model.id = value; markModelsDirty(); });
+  const idField = labeledInput('Model ID', model.id, (value) => {
+    const nextKey = provider.key + '\u0000' + value;
+    if (expandedModels.has(key)) {
+      expandedModels.delete(key);
+      expandedModels.add(nextKey);
+    }
+    key = nextKey;
+    model.id = value;
+    markModelsDirty();
+  });
   idField.input.addEventListener('change', () => { renderDefaultModel(); });
   const nameField = labeledInput('Display name', model.name, (value) => { model.name = value; markModelsDirty(); });
   nameField.input.addEventListener('change', () => { renderProviders(); renderDefaultModel(); });

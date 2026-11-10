@@ -23,7 +23,7 @@
   - [x] 在 `migration_report()` 的 `table_counts` 中加入 `"usage_log"`。
 - [x] **`src/db/migration/schema.rs`**：
   - [x] 新增 `pub(super) const SCHEMA_V26: &str`，包含：
-    - `CREATE TABLE IF NOT EXISTS usage_log (...)`（19 列：`id`、`external_id`、`session_id`、`workspace_id`、`purpose`、`provider`、`model`、`input_tokens`、`output_tokens`、`cache_read_tokens`、`cache_write_tokens`、`input_cost_usd`、`output_cost_usd`、`cache_read_cost_usd`、`cache_write_cost_usd`、`total_cost_usd`、`duration_ms`、`status`、`error_message`、`created_at_ms`）。
+    - `CREATE TABLE IF NOT EXISTS usage_log (...)`（20 列：`id`、`external_id`、`session_id`、`workspace_id`、`purpose`、`provider`、`model`、`input_tokens`、`output_tokens`、`cache_read_tokens`、`cache_write_tokens`、`input_cost_usd`、`output_cost_usd`、`cache_read_cost_usd`、`cache_write_cost_usd`、`total_cost_usd`、`duration_ms`、`status`、`error_message`、`created_at_ms`）。
     - 5 个索引：`idx_usage_log_created_at`、`idx_usage_log_model`、`idx_usage_log_provider`、`idx_usage_log_workspace`、`idx_usage_log_session`。
     - 幂等历史回填 SQL：`INSERT OR IGNORE INTO usage_log (...) SELECT 'ulog-backfill-' || m.external_id, ... FROM agent_message m LEFT JOIN agent_session s ON s.external_id = m.session_id WHERE m.role = 'assistant' AND m.kind = 'chat' ...`。
 - [x] **`src/db/migration.rs`**：
@@ -66,14 +66,14 @@
 ## P3. 模型请求全链路拦截与异步落库（`src/chat/usage_recorder.rs`）
 
 - [x] **`src/chat/events.rs` & `src/chat/compact.rs`**：
-  - [x] 在 `RequestPurpose` 中增加 `Compaction` 变体（或等效标识），并在 `compact::summary_request` 与 `compact::summary_request_from_transcript` 中设置 `purpose: RequestPurpose::Compaction`，使子代理自动压缩请求（`maybe_auto_compact`）与主对话手动压缩均能被精确识别为 `UsagePurpose::Compaction`。
+  - [x] 在 `RequestPurpose` 中复用/标识 `CompactSummary`，并在 `compact::summary_request` 与 `compact::summary_request_from_transcript` 中设置 `purpose: RequestPurpose::CompactSummary`，使子代理自动压缩请求（`maybe_auto_compact`）与主对话手动压缩均能被精确识别为 `UsagePurpose::Compaction`。
 - [x] **新增 `src/chat/usage_recorder.rs`**：
   - [x] 实现 `pub fn record_stream_finish(log: &StreamLog, request: &ChatRequest, deltas: &[ChatDelta], stop: &StopReason, duration_ms: i64)`。
   - [x] 实现 `extract_step_usage(deltas: &[ChatDelta]) -> Usage`（与 `agent_loop::step_usage` 同口径）。
   - [x] 实现 `resolve_purpose(log: &StreamLog, request: &ChatRequest) -> UsagePurpose`：
-    - `log.kind == "compact"` 或 `RequestPurpose::Compaction` → `Compaction`
-    - `log.kind == "title"` → `Title`
+    - `log.kind == "title" | "title_block"` → `Title`
     - `log.kind == "recap"` → `Recap`
+    - `log.kind == "compact"` 或 `RequestPurpose::CompactSummary` → `Compaction`
     - `log.kind == "subagent"` 或 `RequestPurpose::Subagent(_)` → `Subagent`
     - 其余 → `Chat`
   - [x] 实现 `resolve_status(stop: &StopReason) -> (UsageStatus, Option<String>)`。
@@ -182,3 +182,30 @@
 - [x] 执行 `cargo clippy --all-targets -- -D warnings` 确保零警告。
 - [x] 执行受影响模块及全量测试 `cargo test` 确保全部通过。
 - [x] 核查所有新增/修改文件的行数，确认生产代码单文件均 `< 1000` 行（子模块控制在 500 行左右），测试文件均 `< 1500` 行。
+
+---
+
+## P9. 代码审查（Review）与 P0–P3 缺陷修复
+
+- [x] **编写 `docs/feature/lx-usage-dashboard/review.md`**：按 `P0` → `P3` 梳理全部审查关键点、根因与修复方案。
+- [x] **P0 修复**：
+  - [x] `P0-1`：修正 `src/chat/usage_recorder.rs` 中 `resolve_purpose` 分支顺序并补齐 `"title_block"`，修复 `Title` 与 `Recap` 因 `RequestPurpose::CompactSummary` 被误记为 `Compaction` 的问题。
+  - [x] `P0-2`：在 `assets/settings_connect.js` 的 `buildPresetModels` 补传 `pricing: serializePricing(model.pricing, id)`，并在 `src/settings/service/models/connect.rs` 回退默认模型单价基线，防止保存快捷连接时清空目录单价。
+- [x] **P1 修复**：
+  - [x] `P1-1`：移除 `src/settings/service/usage.rs` 中重复的 `url_decode`，修复含 `+` 或 `%XX` 的筛选条件被二次解码失配的问题。
+  - [x] `P1-2`：修复 `merge_provider_models` 单价合并条件、旧缓存 ETag 无单价刷新、跨供应商单价优先匹配官方正数单价，以及新增 `Database::backfill_usage_costs` 补齐存量历史记录的 `NULL` 成本。
+  - [x] `P1-3`：在 `src/config/ai/pricing.rs` 中区分自定义供应商与未改名内置预设，并在 `usage_recorder` 测试路径隔离宿主机配置。
+  - [x] `P1-4`：`sync_usage_provider_names` 增加只读预检与单事务 `CASE WHEN` 原子更新，避免每次 GET 请求触发无谓写锁或重命名链式覆盖。
+  - [x] `P1-5`：`assets/usage.js` 引入 `requestSeq` 替代布尔锁早退，并在 `syncFilterOptions` 重置失效筛选项后自动触发重拉。
+  - [x] `P1-6`：`resolveTimeRange` 将截至今日的 `endTime` 钳制到 `Date.now()`，且 `fillUsageSeries` 超 366 天时保留最近数据桶。
+  - [x] `P1-7`：在 `renderCharts`、`renderEmptyChart` 与全局 `scroll` 中调用 `hideChartTooltip()` 防止悬浮提示残留。
+  - [x] `P1-8`：`renderProviderDistributionChart` 对齐 `design.md` D4 与 `lx-agent`（有单价按花费占比，无单价退回按 Token 占比）。
+- [x] **P2 修复**：
+  - [x] `P2-1`：钳制 `title` / `recap` 流的 `idle_timeout`，并为 `UsageRates::compute` 与 `record_usage_log` 增加 `.is_finite()` 校验。
+  - [x] `P2-2`：`usage_filter_options` 在非 Session 维度排除 `session_id`，优化无标题会话短码回退与工作区排序。
+  - [x] `P2-3`：无成本时隐藏趋势图右 Y 轴刻度，并将请求数柱状图 `maxReq` 向上取整为 4 的倍数。
+  - [x] `P2-4`：设置页跨 Tab 校验报错自动切回 `Custom` 页签，修改 `Model ID` 时同步迁移展开态键。
+  - [x] `P2-5`：汇总卡 `Requests` 副标题展示成功率与平均耗时并补齐 `title`、下拉菜单右边界钳制、`.range-btn` `aria-pressed` 与窄屏紧凑布局。
+- [x] **P3 修复**：
+  - [x] `P3-1`：将 `ModelPricing` 与单价/名称解析拆入 `src/config/ai/pricing.rs`，将侧栏控件测试拆入 `src/ui/controls/tests.rs`。
+  - [x] `P3-2`：清理 `src/event/mouse/press.rs` 死分支并在 `src/event/mod.rs` 补齐服务不可用 Toast，同步更新 `design.md` 与 `task.md`。

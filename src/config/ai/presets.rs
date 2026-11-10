@@ -231,6 +231,24 @@ pub fn default_models_for_preset(id: &str) -> BTreeMap<String, ModelConfig> {
 
 /// 从进程内预设目录（含云端同步缓存）查询模型单价：优先匹配 `provider_id`，未命中时跨供应商按 `model_id` 兜底。
 pub fn catalog_model_pricing(provider_id: &str, model_id: &str) -> Option<super::ModelPricing> {
+    /// 预设目录（含云端同步缓存）模型单价查询与供应商可读名称解析定义在 [`pricing`] 子模块。
+    const PRIMARY_PRICING_PROVIDERS: &[&str] = &[
+        "anthropic",
+        "openai",
+        "google",
+        "deepseek",
+        "xai",
+        "mistral",
+        "moonshotai",
+        "alibaba",
+        "zhipuai",
+        "minimax",
+    ];
+    let provider_id = provider_id.trim();
+    let model_id = model_id.trim();
+    if model_id.is_empty() {
+        return None;
+    }
     let models = catalog()
         .models
         .read()
@@ -246,8 +264,31 @@ pub fn catalog_model_pricing(provider_id: &str, model_id: &str) -> Option<super:
                     .and_then(ModelConfig::parsed_pricing)
             })
     };
-    if let Some(provider_models) = models.get(provider_id)
-        && let Some(pricing) = find_in(provider_models)
+    if let Some(provider_models) = models.get(provider_id).or_else(|| {
+        all_presets()
+            .iter()
+            .find(|spec| {
+                spec.id.eq_ignore_ascii_case(provider_id)
+                    || spec.name.eq_ignore_ascii_case(provider_id)
+            })
+            .and_then(|spec| models.get(spec.id))
+    }) && let Some(pricing) = find_in(provider_models)
+    {
+        return Some(pricing);
+    }
+    // 跨供应商兜底：优先匹配主流官方供应商的正数单价，避免被 github-copilot 等 0 单价免费渠道截胡。
+    for &primary_id in PRIMARY_PRICING_PROVIDERS {
+        if let Some(provider_models) = models.get(primary_id)
+            && let Some(pricing) =
+                find_in(provider_models).filter(super::ModelPricing::has_positive)
+        {
+            return Some(pricing);
+        }
+    }
+    if let Some(pricing) = models
+        .values()
+        .filter_map(find_in)
+        .find(super::ModelPricing::has_positive)
     {
         return Some(pricing);
     }
@@ -299,7 +340,7 @@ pub(super) fn merge_provider_models(
             {
                 model.variant = existing.variant.clone();
             }
-            if existing.pricing.is_some() {
+            if model.pricing.is_none() && existing.pricing.is_some() {
                 model.pricing = existing.pricing.clone();
             }
         }

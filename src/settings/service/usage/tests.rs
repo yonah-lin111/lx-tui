@@ -348,9 +348,10 @@ async fn custom_provider_internal_id_is_synced_to_display_name() {
                         "name": "9router-lx-t",
                         "options": { "baseURL": "https://api.example.com/v1" },
                         "models": {
-                            "deepseek-v3": {
-                                "id": "deepseek-v3",
-                                "name": "DeepSeek V3"
+                            "deepseek-v3+plus": {
+                                "id": "deepseek-v3+plus",
+                                "name": "DeepSeek V3+",
+                                "pricing": { "input": 2.0, "output": 8.0 }
                             }
                         }
                     }
@@ -367,7 +368,7 @@ async fn custom_provider_internal_id_is_synced_to_display_name() {
         workspace_id: None,
         purpose: UsagePurpose::Chat,
         provider: "provider-alq374".into(),
-        model: "deepseek-v3".into(),
+        model: "deepseek-v3+plus".into(),
         tokens: UsageTokens {
             input: 1_000,
             output: 200,
@@ -399,12 +400,26 @@ async fn custom_provider_internal_id_is_synced_to_display_name() {
         serde_json::json!(["9router-lx-t"])
     );
     assert_eq!(overview["providers"][0]["provider"], "9router-lx-t");
-    assert_eq!(overview["models"][0]["model"], "deepseek-v3");
+    assert_eq!(overview["models"][0]["model"], "deepseek-v3+plus");
+    // 验证存量 NULL 成本被自动回填：(1000 * 2.0 + 200 * 8.0) / 1_000_000 = 0.0036
+    let backfilled_cost = overview["summary"]["totalCostUsd"]
+        .as_f64()
+        .expect("backfilled cost");
+    assert!((backfilled_cost - 0.0036).abs() < 1e-9);
 
-    let logs_resp = request(port, &get(&format!("/api/usage/logs?token={token}"))).await;
+    // 验证含 `+`（编码为 `%2B`）的 model 查询参数不会被二次解码为空格
+    let logs_resp = request(
+        port,
+        &get(&format!(
+            "/api/usage/logs?token={token}&model=deepseek-v3%2Bplus"
+        )),
+    )
+    .await;
     assert_eq!(status(&logs_resp), 200);
     let logs: Value = serde_json::from_str(body(&logs_resp)).expect("logs json");
+    assert_eq!(logs["total"], 1);
     assert_eq!(logs["rows"][0]["provider"], "9router-lx-t");
+    assert_eq!(logs["rows"][0]["model"], "deepseek-v3+plus");
 
     service.shutdown();
 }

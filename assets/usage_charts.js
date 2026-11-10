@@ -201,8 +201,18 @@ function fillUsageSeries(points, rangeOrGranularity, startTimeArg, endTimeArg) {
 
   const cursor = new Date(rangeStart);
   cursor.setHours(0, 0, 0, 0);
-  const endDate = new Date(endTime !== undefined && endTime !== null ? endTime : Date.now());
+  const fallbackEnd = list.length > 0 ? parseBucketTimestamp(list[list.length - 1].date, granularity) : Date.now();
+  const endDate = new Date(
+    endTime !== undefined && endTime !== null
+      ? endTime
+      : Math.max(Date.now(), fallbackEnd || Date.now())
+  );
   endDate.setHours(0, 0, 0, 0);
+  const maxSpanStart = new Date(endDate);
+  maxSpanStart.setDate(maxSpanStart.getDate() - 365);
+  if (cursor.getTime() < maxSpanStart.getTime()) {
+    cursor.setTime(maxSpanStart.getTime());
+  }
   for (let i = 0; i < 366 && cursor.getTime() <= endDate.getTime(); i += 1) {
     const key = toLocalDateKey(cursor.getTime());
     result.push(pointMap.get(key) || createEmptyBucket(key));
@@ -262,6 +272,7 @@ function hideChartTooltip() {
 }
 
 function renderEmptyChart(host, message) {
+  hideChartTooltip();
   host.replaceChildren();
   host.appendChild(domEl('div', 'chart-empty', message || 'No usage data in the selected range.'));
 }
@@ -314,7 +325,8 @@ function renderTrendChart(host, series, granularity) {
     };
   });
 
-  const maxTokens = Math.max(1, ...computed.map((d) => d.y4));
+  const maxTokens = Math.max(4, ...computed.map((d) => d.y4));
+  const hasAnyCost = computed.some((d) => d.cost !== null);
   const maxCost = Math.max(0.0001, ...computed.map((d) => d.cost || 0));
   const n = computed.length;
   const xAt = (idx) => (n <= 1 ? padL + plotW / 2 : padL + (idx / (n - 1)) * plotW);
@@ -350,10 +362,12 @@ function renderTrendChart(host, series, granularity) {
       x: padL - 8, y: y + 4,
       fill: CHART_COLORS.axis, 'font-size': '11', 'text-anchor': 'end'
     }, formatCompact(maxTokens * ratio)));
-    svg.appendChild(svgEl('text', {
-      x: W - padR + 8, y: y + 4,
-      fill: CHART_COLORS.axis, 'font-size': '11', 'text-anchor': 'start'
-    }, formatUsdShort(maxCost * ratio)));
+    if (hasAnyCost) {
+      svg.appendChild(svgEl('text', {
+        x: W - padR + 8, y: y + 4,
+        fill: CHART_COLORS.axis, 'font-size': '11', 'text-anchor': 'start'
+      }, formatUsdShort(maxCost * ratio)));
+    }
   }
 
   // X 轴标签（最多约 8 个均匀分布刻度）
@@ -474,7 +488,8 @@ function renderRequestsChart(host, series, granularity) {
   const plotW = W - padL - padR;
   const plotH = H - padT - padB;
 
-  const maxReq = Math.max(1, ...list.map((p) => Number(p.requestCount || 0)));
+  const rawMaxReq = Math.max(1, ...list.map((p) => Number(p.requestCount || 0)));
+  const maxReq = Math.max(4, Math.ceil(rawMaxReq / 4) * 4);
   const n = list.length;
   const slotW = plotW / n;
   const barW = Math.max(3, Math.min(28, slotW * 0.68));
@@ -704,6 +719,7 @@ function renderDonutWithLegend(host, slices, centerPrimary, centerSecondary) {
     const swatch = domEl('span', 'legend-swatch');
     swatch.style.background = slice.color;
     const name = domEl('span', 'donut-legend-name', slice.name);
+    name.title = String(slice.name);
     const val = domEl('span', 'donut-legend-val', slice.legendRight);
     row.appendChild(swatch);
     row.appendChild(name);
@@ -721,38 +737,56 @@ function renderDonutWithLegend(host, slices, centerPrimary, centerSecondary) {
 function renderProviderDistributionChart(host, providers, subtitleEl) {
   if (!host) { return; }
   const subEl = subtitleEl || document.getElementById('chart-providers-subtitle');
-  if (subEl) { subEl.textContent = 'Top 8 by request count'; }
-  const list = (Array.isArray(providers) ? providers : [])
-    .filter((p) => Number(p.requestCount || 0) > 0)
-    .slice()
-    .sort((a, b) => Number(b.requestCount || 0) - Number(a.requestCount || 0))
-    .slice(0, 8);
-  const totalReqs = list.reduce((acc, p) => acc + Number(p.requestCount || 0), 0);
-  if (!list.length || totalReqs <= 0) {
+  const list = (Array.isArray(providers) ? providers : []).filter((p) => Number(p.requestCount || 0) > 0);
+  if (!list.length) {
+    if (subEl) { subEl.textContent = 'Top 8 by cost (USD)'; }
     renderEmptyChart(host);
     return;
   }
 
-  const slices = list.map((p, idx) => {
-    const reqs = Number(p.requestCount || 0);
-    const share = (reqs / totalReqs) * 100;
+  const hasPricing = list.some((p) => p.totalCostUsd !== null && p.totalCostUsd !== undefined && Number(p.totalCostUsd) > 0);
+  if (subEl) {
+    subEl.textContent = hasPricing ? 'Top 8 by cost (USD)' : 'No pricing configured — showing token volume';
+  }
+
+  const sorted = list.slice().sort((a, b) => {
+    if (hasPricing) {
+      return Number(b.totalCostUsd || 0) - Number(a.totalCostUsd || 0);
+    }
+    return Number(b.totalTokens || 0) - Number(a.totalTokens || 0);
+  }).slice(0, 8);
+
+  const totalMetric = sorted.reduce((acc, p) => acc + (hasPricing ? Number(p.totalCostUsd || 0) : Number(p.totalTokens || 0)), 0);
+  if (totalMetric <= 0) {
+    renderEmptyChart(host);
+    return;
+  }
+
+  const slices = sorted.map((p, idx) => {
+    const metricVal = hasPricing ? Number(p.totalCostUsd || 0) : Number(p.totalTokens || 0);
+    const share = (metricVal / totalMetric) * 100;
     const color = PROVIDER_PALETTE[idx % PROVIDER_PALETTE.length];
     return {
       name: String(p.provider || 'unknown'),
-      value: reqs,
+      value: metricVal,
       color: color,
-      legendRight: formatNumber(reqs) + ' (' + formatPercent(share, 1) + ')',
+      legendRight: (hasPricing ? formatUsd(metricVal) : formatCompact(metricVal)) + ' (' + formatPercent(share, 1) + ')',
       tooltipRows: [
-        {label: 'Requests', value: formatNumber(reqs) + ' (' + formatPercent(share, 1) + ')', color: color},
+        {label: 'Cost', value: formatUsd(p.totalCostUsd), color: color},
         {label: 'Total Tokens', value: formatNumber(p.totalTokens)},
-        {label: 'Cost', value: formatUsd(p.totalCostUsd)},
+        {label: 'Requests', value: formatNumber(p.requestCount)},
         {label: 'Success Rate', value: formatPercent(p.successRate)},
         {label: 'Avg Duration', value: formatDuration(p.avgDurationMs)}
       ]
     };
   });
 
-  renderDonutWithLegend(host, slices, formatCompact(totalReqs), 'requests');
+  renderDonutWithLegend(
+    host,
+    slices,
+    hasPricing ? formatUsd(totalMetric) : formatCompact(totalMetric),
+    hasPricing ? 'total cost' : 'tokens'
+  );
 }
 
 // ===== Chart 5: Token Composition (4 类 Token 构成环形图) =====

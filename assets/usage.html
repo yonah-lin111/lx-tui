@@ -34,11 +34,11 @@
       <section class="usage-filters" aria-label="Usage filters">
         <div class="filter-range-row">
           <div class="range-group" role="group" aria-label="Time range">
-            <button type="button" class="range-btn" data-range="today">Today</button>
-            <button type="button" class="range-btn active" data-range="7d">7d</button>
-            <button type="button" class="range-btn" data-range="30d">30d</button>
-            <button type="button" class="range-btn" data-range="all">All</button>
-            <button type="button" class="range-btn" data-range="custom">Custom</button>
+            <button type="button" class="range-btn" data-range="today" aria-pressed="false">Today</button>
+            <button type="button" class="range-btn active" data-range="7d" aria-pressed="true">7d</button>
+            <button type="button" class="range-btn" data-range="30d" aria-pressed="false">30d</button>
+            <button type="button" class="range-btn" data-range="all" aria-pressed="false">All</button>
+            <button type="button" class="range-btn" data-range="custom" aria-pressed="false">Custom</button>
           </div>
           <div id="custom-range-wrap" class="custom-range-wrap hidden">
             <input type="date" id="custom-start" aria-label="Start date">
@@ -113,7 +113,7 @@
       <div class="chart-head">
         <div>
           <h2 class="chart-title">Provider Distribution</h2>
-          <p id="chart-providers-subtitle" class="chart-subtitle">Top 8 by request count</p>
+          <p id="chart-providers-subtitle" class="chart-subtitle">Top 8 by cost (USD)</p>
         </div>
       </div>
       <div id="chart-providers" class="chart-body"></div>
@@ -137,7 +137,7 @@
       <button type="button" class="provider-tab" data-tab="providers" id="tab-btn-providers" role="tab" aria-selected="false">Provider Stats (0)</button>
     </div>
 
-    <div id="table-container" class="table-wrap"></div>
+    <div id="table-container" class="table-wrap" role="tabpanel"></div>
 
     <div id="logs-pagination" class="pagination-bar">
       <span id="pagination-info" class="pagination-info">Page 1 of 1 · 0 requests</span>

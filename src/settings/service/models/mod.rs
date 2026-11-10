@@ -231,22 +231,37 @@ async fn put_settings(request: &Request, state: &ServiceState) -> Response {
     if let Err(error) = crate::config::ai::save_ai(&path, &merged) {
         return Response::error(500, &error.to_string());
     }
-    // 同步 `usage_log` 中的供应商名称（含 `provider-xxx -> name` 与重命名 `old_name -> new_name`）。
+    // TUI 需要完整运行时快照：自定义供应商 + 已连接的快捷连接供应商。
+    let runtime = crate::config::ai::connect::merge_runtime_ai_settings(&merged, &connect);
+    // 同步 `usage_log` 中的供应商名称（含 `provider-xxx -> name` 与无冲突重命名）及新增单价的存量成本。
     if let Ok(db) = crate::db::Database::open(&state.db_path()) {
         let mut name_map = merged.provider_name_map();
         for (key, old_prov) in &old_providers {
             if let Some(new_prov) = merged.providers.get(key) {
                 let old_name = old_prov.name.trim();
                 let new_name = new_prov.name.trim();
-                if !old_name.is_empty() && !new_name.is_empty() && old_name != new_name {
+                let is_unique_old_name = !old_name.is_empty()
+                    && old_name != "New Provider"
+                    && crate::config::ai::presets::all_presets()
+                        .iter()
+                        .all(|spec| spec.id != old_name && spec.name != old_name)
+                    && old_providers
+                        .iter()
+                        .filter(|(k, _)| *k != key)
+                        .all(|(_, p)| p.id != old_name && p.name.trim() != old_name)
+                    && merged
+                        .providers
+                        .iter()
+                        .filter(|(k, _)| *k != key)
+                        .all(|(_, p)| p.id != old_name && p.name.trim() != old_name);
+                if is_unique_old_name && !new_name.is_empty() && old_name != new_name {
                     name_map.insert(old_name.to_string(), new_name.to_string());
                 }
             }
         }
         let _ = db.sync_usage_provider_names(&name_map);
+        let _ = db.backfill_usage_costs(&runtime);
     }
-    // TUI 需要完整运行时快照：自定义供应商 + 已连接的快捷连接供应商。
-    let runtime = crate::config::ai::connect::merge_runtime_ai_settings(&merged, &connect);
     let _ = state
         .sender()
         .send(SettingsEvent::ModelsChanged(Box::new(runtime)));

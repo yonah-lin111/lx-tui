@@ -68,19 +68,21 @@ pub fn extract_step_usage(deltas: &[ChatDelta]) -> Usage {
 /// 根据网络流上下文 [`StreamLog`] 与请求快照 [`ChatRequest`] 推导统计用途分类。
 ///
 /// 判定优先级：
-/// 1. `log.kind == "compact"` 或 `RequestPurpose::CompactSummary` → `Compaction`
+/// 1. `log.kind == "title"` 或 `"title_block"` → `Title`
+///    （`build_title_request` 会复用 `RequestPurpose::CompactSummary` 以禁用工具，故必须优先按 `log.kind` 判定）；
+/// 2. `log.kind == "recap"` → `Recap`
+///    （`build_recap_request` 同样复用 `RequestPurpose::CompactSummary`）；
+/// 3. `log.kind == "compact"` 或 `RequestPurpose::CompactSummary` → `Compaction`
 ///    （确保子代理自动压缩在 `log.kind == "subagent"` 下仍归类为压缩而非普通子代理对话）；
-/// 2. `log.kind == "title"` → `Title`；
-/// 3. `log.kind == "recap"` → `Recap`；
 /// 4. `log.kind == "subagent"` 或 `RequestPurpose::Subagent(_)` → `Subagent`；
 /// 5. 其余（`chat` / `exec` 等）→ `Chat`。
 pub fn resolve_purpose(log: &StreamLog, request: &ChatRequest) -> UsagePurpose {
-    if log.kind == "compact" || matches!(request.purpose, RequestPurpose::CompactSummary) {
-        UsagePurpose::Compaction
-    } else if log.kind == "title" {
+    if log.kind == "title" || log.kind == "title_block" {
         UsagePurpose::Title
     } else if log.kind == "recap" {
         UsagePurpose::Recap
+    } else if log.kind == "compact" || matches!(request.purpose, RequestPurpose::CompactSummary) {
+        UsagePurpose::Compaction
     } else if log.kind == "subagent" || matches!(request.purpose, RequestPurpose::Subagent(_)) {
         UsagePurpose::Subagent
     } else {
@@ -175,6 +177,7 @@ pub fn record_stream_to_db(
 }
 
 /// 从运行时配置（`ai.json` + `connect.json`）与内置目录解析供应商可读名称与模型单价。
+#[cfg(not(test))]
 fn resolve_runtime_provider_and_pricing(
     provider_id: &str,
     model_id: &str,
@@ -229,10 +232,11 @@ pub fn record_stream_finish(
         let Some(db_path) = target_path else {
             return;
         };
-        let (provider_name, pricing) =
-            resolve_runtime_provider_and_pricing(&request.model.provider, &request.model.model);
-        let mut entry = build_usage_log_insert(log, request, deltas, stop, duration_ms, pricing);
-        entry.provider = provider_name;
+        let pricing = crate::config::ai::presets::catalog_model_pricing(
+            &request.model.provider,
+            &request.model.model,
+        );
+        let entry = build_usage_log_insert(log, request, deltas, stop, duration_ms, pricing);
         if let Err(error) =
             crate::db::Database::open(&db_path).and_then(|db| db.record_usage_log(&entry))
         {

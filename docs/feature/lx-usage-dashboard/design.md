@@ -50,8 +50,10 @@
 | **D1** | 数据源与表结构 | 升级数据库至 `SCHEMA_VERSION = 26`，新建独立 `usage_log` 表；每次底层模型 HTTP 请求完成时写入单次请求明细（覆盖 `chat`、`subagent`、`compaction`、`title`、`recap`）；v26 迁移时将存量 `agent_message` 历史助手消息幂等回填至 `usage_log`。 |
 | **D2** | 侧栏入口按钮 | 在左侧容器底边框 `[SET]` 右侧新增 `[USE]` 按钮（间距 1 列边框线 `─`，位于 `view.sidebar.x + 7`，宽 5 列，纯 ASCII + `style::accent()` 逐格绘制，最小侧栏宽度门槛 `17` 列）；Hover Tooltip 为 `open usage`；点击后在系统默认浏览器打开 `/usage?token=<token>`。 |
 | **D3** | 服务承载与资源 | 复用现有 `SettingsService` 本地回环 HTTP 服务（不另起端口）；新增页面路由 `GET /usage?token=<token>` 与 API 路由 `/api/usage/*`；前端资源拆分为 `assets/usage.html`、`assets/usage.css`、`assets/usage.js`、`assets/usage_charts.js`，与 `settings.html` 保持页面独立。 |
-| **D4** | 成本计算与单价 | 完整支持美元成本（Cost USD）统计；`catalog_refresh.rs` 从 `models.dev` 自动提取 `cost.{input,output,cache_read,cache_write}` 填入 `ModelConfig.pricing`；`settings.html` Models 页支持手动查看/修改 4 项单价（USD / 1M tokens）；未配置单价时成本列存 `NULL`，界面显示 `--`，模型/供应商分布图自动退回按 Token 数量绘图。 |
+| **D4** | 成本计算与单价 | 完整支持美元成本（Cost USD）统计；`catalog_refresh.rs` 从 `models.dev` 自动提取 `cost.{input,output,cache_read,cache_write}` 填入 `ModelConfig.pricing`；`settings.html` Models 页（含 Custom 与 Quick Connect）支持手动查看/修改 4 项单价（USD / 1M tokens）；未配置单价时成本列存 `NULL`，界面显示 `--`，模型/供应商分布图自动退回按 Token 数量绘图。 |
 | **D5** | 看板布局与风格 | 完整对齐 `lx-agent` 的看板结构（顶部筛选栏 + 汇总卡片［含 Tokens Processed、Fresh Input、Output、Cache Write、Cache Read、Cache Hit Rate、Requests、Total Cost］+ 5 张图表 + 底部 3 个 Tab 表格［Request Logs / Model Stats / Provider Stats］）；采用原生 SVG 实现交互图表与悬浮 Tooltip；视觉完全复用 `settings.css` 的 `:root` 黑白灰工业风暗色令牌。 |
+| **D6** | 固定紧凑顶栏 | 将标题栏（`.usage-header`）与单行筛选栏（`.usage-filters`）合并收拢在顶部固定容器 `<header class="usage-topbar">`（`flex-shrink: 0`、紧凑高度 ~72px、去除冗余字段标签），下方 `<main class="usage-main">` 独立纵向滚动。 |
+| **D7** | 供应商可读名称与历史成本补齐 | 自定义供应商内部生成 ID（如 `provider-alq374`）在落库与查询时解析为用户配置的 `provider.name`（如 `9router-lx-t`）；`/api/usage/*` 与设置保存时通过只读预检 + 单事务 `CASE WHEN` 原子同步存量名称，并对 `total_cost_usd IS NULL` 的历史记录按已知正数单价自动回填美元成本。 |
 
 ---
 
@@ -95,7 +97,7 @@
 │     ├─ 加载 /usage.css、/usage_charts.js、/usage.js（静态白名单免 token）   │
 │     └─► usage.js 发起并发请求（或组合请求）：                               │
 │           ├─ GET /api/usage/overview?token=...&startTime=...&endTime=...   │
-│           │    └─ 返回 { summary, series, models, providers, filters }     │
+│           │    └─ 返回 { summary, daily, models, providers, filters }      │
 │           └─ GET /api/usage/logs?token=...&page=1&pageSize=50&...          │
 │                └─ 返回 { rows, total, page, pageSize }                     │
 │         │                                                                  │
@@ -513,9 +515,9 @@ crate::chat::usage_recorder::record_stream_finish(
   - 默认仅当 `log.kind != "unknown"` 时触发记录（单元测试若直接调 `run_stream` 使用默认的 `kind: "unknown"`，不会污染磁盘库）。
   - 提供线程局部/全局测试钩子（或在测试中通过 `LX_TUI_DB_PATH` / `test_home_override()` 指向临时目录），确保 `cargo test` 绝不写入开发者的 `~/.lx-t-dev/db/lx.db`。
 - **用途（`UsagePurpose`）精确判定**：
-  - 若 `log.kind == "compact"` 或 `matches!(request.purpose, RequestPurpose::Compaction)` → `UsagePurpose::Compaction`（覆盖主会话 `/compact`、CLI `session compact` 以及子代理 `maybe_auto_compact`）。
-  - 若 `log.kind == "title"` → `UsagePurpose::Title`。
-  - 若 `log.kind == "recap"` → `UsagePurpose::Recap`。
+  - 若 `log.kind == "title"` 或 `"title_block"` → `UsagePurpose::Title`（由于 `build_title_request` 复用 `RequestPurpose::CompactSummary` 以禁用工具，必须优先匹配 `log.kind`）。
+  - 若 `log.kind == "recap"` → `UsagePurpose::Recap`（`build_recap_request` 同样复用 `RequestPurpose::CompactSummary`）。
+  - 若 `log.kind == "compact"` 或 `matches!(request.purpose, RequestPurpose::CompactSummary)` → `UsagePurpose::Compaction`（覆盖主会话 `/compact`、CLI `session compact` 以及子代理 `maybe_auto_compact`）。
   - 若 `log.kind == "subagent"` 或 `matches!(request.purpose, RequestPurpose::Subagent(_))` → `UsagePurpose::Subagent`。
   - 其余（`log.kind == "chat"` / `"exec"`）→ `UsagePurpose::Chat`。
 - **非阻塞落库**：
@@ -796,7 +798,7 @@ pub fn usage_url(&self) -> String {
    - **Chart 3 `Model Distribution`**：
      - 原生 SVG 横向条形图（Top 8 模型），有计价时按 `totalCostUsd` 排行，无计价时自动按 `totalTokens` 排行并在副标题提示 `No pricing configured — showing token volume`。
    - **Chart 4 `Provider Distribution`**：
-     - 原生 SVG 环形饼图（Donut Chart，Top 8 供应商），中心显示总计，右侧显示图例与占比，悬停扇区高亮并弹出 Tooltip。
+     - 原生 SVG 环形饼图（Donut Chart，Top 8 供应商），有计价时按 `totalCostUsd` 排行（副标题 `Top 8 by cost (USD)`，中心显示总花费），无计价时退回按 `totalTokens` 排行（副标题 `No pricing configured — showing token volume`，中心显示总 Token），右侧显示图例与占比，悬停扇区高亮并弹出 Tooltip。
    - **Chart 5 `Token Composition`**：
      - 原生 SVG 环形/实心饼图，展示 `Fresh Input` / `Output` / `Cache Read` / `Cache Write` 四部分占比与图例。
 5. **底部三合一数据表（`.table-section`）**：

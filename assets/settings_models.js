@@ -413,7 +413,11 @@ function buildPayload() {
     } catch (error) {
       error.tab = 'provider';
       selectedProviderKey = provider.key;
-      renderModelsView();
+      if (activeProviderTab !== 'custom') {
+        switchProviderTab('custom');
+      } else {
+        renderModelsView();
+      }
       throw error;
     }
   }

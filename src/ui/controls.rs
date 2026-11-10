@@ -442,3 +442,6 @@ pub(crate) fn render_usage_button(
         }
     }
 }
+
+#[cfg(test)]
+mod tests;

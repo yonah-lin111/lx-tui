@@ -17,6 +17,7 @@ const usageState = {
   autoRefreshMs: 0,
   autoRefreshTimer: null,
   loading: false,
+  requestSeq: 0,
   overview: null,
   logPage: null
 };
@@ -54,6 +55,7 @@ function createSelect(host, config) {
   button.className = 'select-button';
   button.disabled = !!optionsConfig.disabled;
   button.setAttribute('aria-haspopup', 'listbox');
+  button.setAttribute('aria-expanded', 'false');
   if (optionsConfig.ariaLabel) {
     button.setAttribute('aria-label', optionsConfig.ariaLabel);
   }
@@ -98,8 +100,10 @@ function createSelect(host, config) {
     const spaceBelow = window.innerHeight - rect.bottom - 8;
     const spaceAbove = rect.top - 8;
     const openUp = spaceBelow < 140 && spaceAbove > spaceBelow;
-    menu.style.left = rect.left + 'px';
-    menu.style.width = Math.max(rect.width, 140) + 'px';
+    const menuWidth = Math.max(rect.width, 140);
+    const clampedLeft = Math.max(8, Math.min(rect.left, window.innerWidth - menuWidth - 8));
+    menu.style.left = clampedLeft + 'px';
+    menu.style.width = menuWidth + 'px';
     menu.style.maxHeight = Math.min(240, Math.max(120, openUp ? spaceAbove : spaceBelow)) + 'px';
     if (openUp) {
       menu.style.top = 'auto';
@@ -197,7 +201,10 @@ document.addEventListener('click', (evt) => {
   });
 });
 window.addEventListener('resize', () => openSelects.forEach((inst) => inst.reposition()));
-window.addEventListener('scroll', () => openSelects.forEach((inst) => inst.reposition()), true);
+window.addEventListener('scroll', () => {
+  openSelects.forEach((inst) => inst.reposition());
+  hideChartTooltip();
+}, true);
 
 // ===== API 与时间范围解析 =====
 
@@ -235,13 +242,13 @@ function resolveTimeRange(preset, customStart, customEnd) {
     return {startTime: undefined, endTime: undefined, granularity: 'day'};
   }
   if (preset === 'today') {
-    return {startTime: startOfToday.getTime(), endTime: endOfToday.getTime(), granularity: 'hour'};
+    return {startTime: startOfToday.getTime(), endTime: now, granularity: 'hour'};
   }
   if (preset === '7d' || preset === '30d') {
     const days = preset === '7d' ? 7 : 30;
     const start = new Date(startOfToday);
     start.setDate(start.getDate() - (days - 1));
-    return {startTime: start.getTime(), endTime: endOfToday.getTime(), granularity: 'day'};
+    return {startTime: start.getTime(), endTime: now, granularity: 'day'};
   }
   if (preset === 'custom') {
     let sKey = customStart || toLocalDateKey(now);
@@ -257,7 +264,7 @@ function resolveTimeRange(preset, customStart, customEnd) {
     const endMs = new Date(eParts[0], eParts[1] - 1, eParts[2], 23, 59, 59, 999).getTime();
     return {
       startTime: Number.isFinite(startMs) ? startMs : startOfToday.getTime(),
-      endTime: Number.isFinite(endMs) ? endMs : endOfToday.getTime(),
+      endTime: Number.isFinite(endMs) ? Math.min(endMs, now) : now,
       granularity: sKey === eKey ? 'hour' : 'day'
     };
   }
@@ -298,7 +305,7 @@ function setErrorBanner(message) {
 }
 
 async function loadUsageDashboard() {
-  if (usageState.loading) { return; }
+  const reqId = ++usageState.requestSeq;
   usageState.loading = true;
   setStatusIndicator('loading', 'Refreshing…');
   const range = resolveTimeRange(usageState.rangePreset, usageState.customStart, usageState.customEnd);
@@ -313,9 +320,13 @@ async function loadUsageDashboard() {
       apiGet('/api/usage/overview', baseParams),
       apiGet('/api/usage/logs', logParams)
     ]);
+    if (reqId !== usageState.requestSeq) { return; }
     usageState.overview = overview || {};
     usageState.logPage = logPage || {rows: [], total: 0, page: 1, pageSize: usageState.pageSize};
-    syncFilterOptions(usageState.overview.filters || {});
+    if (syncFilterOptions(usageState.overview.filters || {})) {
+      usageState.page = 1;
+      return loadUsageDashboard();
+    }
     renderSummaryCards(usageState.overview.summary || null);
     renderCharts(usageState.overview, range);
     renderTableSection();
@@ -323,36 +334,44 @@ async function loadUsageDashboard() {
     const nowText = new Date().toLocaleTimeString('en-US', {hour12: false});
     setStatusIndicator('clean', 'Updated ' + nowText);
   } catch (error) {
+    if (reqId !== usageState.requestSeq) { return; }
     setStatusIndicator('error', 'Load failed');
     setErrorBanner('Failed to load usage analytics: ' + error.message);
     showToast(error.message, 'error');
   } finally {
-    usageState.loading = false;
+    if (reqId === usageState.requestSeq) {
+      usageState.loading = false;
+    }
   }
 }
 
 async function loadUsageLogsPage(nextPage) {
-  if (usageState.loading) { return; }
-  usageState.page = Math.max(1, nextPage);
+  const targetPage = Math.max(1, nextPage);
+  const reqId = ++usageState.requestSeq;
   usageState.loading = true;
   setStatusIndicator('loading', 'Loading page…');
   const range = resolveTimeRange(usageState.rangePreset, usageState.customStart, usageState.customEnd);
   const logParams = Object.assign({}, buildFilterParams(range), {
-    page: usageState.page,
+    page: targetPage,
     pageSize: usageState.pageSize
   });
 
   try {
     const logPage = await apiGet('/api/usage/logs', logParams);
-    usageState.logPage = logPage || {rows: [], total: 0, page: usageState.page, pageSize: usageState.pageSize};
+    if (reqId !== usageState.requestSeq) { return; }
+    usageState.page = targetPage;
+    usageState.logPage = logPage || {rows: [], total: 0, page: targetPage, pageSize: usageState.pageSize};
     renderTableSection();
     const nowText = new Date().toLocaleTimeString('en-US', {hour12: false});
     setStatusIndicator('clean', 'Updated ' + nowText);
   } catch (error) {
+    if (reqId !== usageState.requestSeq) { return; }
     setStatusIndicator('error', 'Load failed');
     showToast(error.message, 'error');
   } finally {
-    usageState.loading = false;
+    if (reqId === usageState.requestSeq) {
+      usageState.loading = false;
+    }
   }
 }
 
@@ -364,17 +383,22 @@ function syncFilterOptions(filters) {
     : (Array.isArray(filters.projects) ? filters.projects : []);
   const sessions = Array.isArray(filters.sessions) ? filters.sessions : [];
 
+  let resetAny = false;
   if (usageState.provider && !providers.includes(usageState.provider)) {
     usageState.provider = '';
+    resetAny = true;
   }
   if (usageState.model && !models.includes(usageState.model)) {
     usageState.model = '';
+    resetAny = true;
   }
   if (usageState.workspaceId && !workspaces.some((w) => w.id === usageState.workspaceId)) {
     usageState.workspaceId = '';
+    resetAny = true;
   }
   if (usageState.sessionId && !sessions.some((s) => s.id === usageState.sessionId)) {
     usageState.sessionId = '';
+    resetAny = true;
   }
 
   selects.provider.setOptions(
@@ -393,6 +417,7 @@ function syncFilterOptions(filters) {
     [{value: '', label: 'All sessions'}].concat(sessions.map((s) => ({value: s.id, label: s.name || s.id}))),
     usageState.sessionId
   );
+  return resetAny;
 }
 
 // ===== 8 张汇总卡片渲染 =====
@@ -454,7 +479,8 @@ function renderSummaryCards(summary) {
     {
       label: 'Requests',
       value: formatNumber(requestCount),
-      sub: 'ok ' + formatNumber(successCount) + ' · err ' + formatNumber(errorCount) + ' · abort ' + formatNumber(abortedCount) + ' · avg ' + formatDuration(s.avgDurationMs)
+      sub: 'success ' + (requestCount > 0 ? formatPercent(s.successRate !== undefined ? s.successRate : (successCount / requestCount) * 100, 1) : '--') + ' · avg ' + formatDuration(s.avgDurationMs),
+      subTitle: 'ok ' + formatNumber(successCount) + ' · err ' + formatNumber(errorCount) + ' · abort ' + formatNumber(abortedCount) + ' · avg ' + formatDuration(s.avgDurationMs)
     },
     {
       label: 'Total Cost',
@@ -466,7 +492,9 @@ function renderSummaryCards(summary) {
   for (const item of cards) {
     const card = domEl('div', 'summary-card');
     card.appendChild(domEl('div', 'summary-label', item.label));
-    card.appendChild(domEl('div', 'summary-value', item.value));
+    const valEl = domEl('div', 'summary-value', item.value);
+    valEl.title = String(item.value);
+    card.appendChild(valEl);
     if (item.meter !== undefined) {
       const meter = domEl('div', 'cache-hit-meter');
       const fill = domEl('div', 'cache-hit-fill');
@@ -474,7 +502,9 @@ function renderSummaryCards(summary) {
       meter.appendChild(fill);
       card.appendChild(meter);
     }
-    card.appendChild(domEl('div', 'summary-sub', item.sub));
+    const subEl = domEl('div', 'summary-sub', item.sub);
+    subEl.title = String(item.subTitle || item.sub);
+    card.appendChild(subEl);
     host.appendChild(card);
   }
 }
@@ -482,6 +512,7 @@ function renderSummaryCards(summary) {
 // ===== 5 张图表联动渲染 =====
 
 function renderCharts(overview, range) {
+  hideChartTooltip();
   const rawSeries = (overview && (overview.daily || overview.series)) || [];
   const filledSeries = fillUsageSeries(rawSeries, {
     granularity: range.granularity,
@@ -616,8 +647,12 @@ function renderLogsTable(container, logPage) {
     purposeTd.appendChild(domEl('span', 'purpose-badge purpose-' + purpose, purpose));
     tr.appendChild(purposeTd);
 
-    tr.appendChild(domEl('td', 'cell-truncate', row.provider || '--'));
-    tr.appendChild(domEl('td', 'cell-truncate', row.model || '--'));
+    const provTd = domEl('td', 'cell-truncate', row.provider || '--');
+    provTd.title = String(row.provider || '--');
+    tr.appendChild(provTd);
+    const modelTd = domEl('td', 'cell-truncate', row.model || '--');
+    modelTd.title = String(row.model || '--');
+    tr.appendChild(modelTd);
     tr.appendChild(domEl('td', 'num', formatNumber(tokens.input)));
     tr.appendChild(domEl('td', 'num', formatNumber(tokens.output)));
     tr.appendChild(domEl('td', 'num', formatNumber(tokens.cacheRead)));
@@ -658,7 +693,9 @@ function renderModelsTable(container, models) {
   }
   for (const m of models) {
     const tr = domEl('tr');
-    tr.appendChild(domEl('td', 'cell-truncate', m.model || '--'));
+    const modelTd = domEl('td', 'cell-truncate', m.model || '--');
+    modelTd.title = String(m.model || '--');
+    tr.appendChild(modelTd);
     tr.appendChild(domEl('td', 'num', formatNumber(m.requestCount)));
     tr.appendChild(domEl('td', 'num', formatNumber(m.inputTokens)));
     tr.appendChild(domEl('td', 'num', formatNumber(m.outputTokens)));
@@ -690,7 +727,9 @@ function renderProvidersTable(container, providers) {
   }
   for (const p of providers) {
     const tr = domEl('tr');
-    tr.appendChild(domEl('td', 'cell-truncate', p.provider || '--'));
+    const provTd = domEl('td', 'cell-truncate', p.provider || '--');
+    provTd.title = String(p.provider || '--');
+    tr.appendChild(provTd);
     tr.appendChild(domEl('td', 'num', formatNumber(p.requestCount)));
     tr.appendChild(domEl('td', 'num', formatNumber(p.totalTokens)));
     tr.appendChild(domEl('td', 'num', formatUsd(p.totalCostUsd)));
@@ -742,7 +781,6 @@ function initUsageDashboard() {
     startInput.value = usageState.customStart;
     startInput.addEventListener('change', () => {
       usageState.customStart = startInput.value;
-      usageState.sessionId = '';
       usageState.page = 1;
       loadUsageDashboard();
     });
@@ -751,7 +789,6 @@ function initUsageDashboard() {
     endInput.value = usageState.customEnd;
     endInput.addEventListener('change', () => {
       usageState.customEnd = endInput.value;
-      usageState.sessionId = '';
       usageState.page = 1;
       loadUsageDashboard();
     });
@@ -761,10 +798,11 @@ function initUsageDashboard() {
     btn.addEventListener('click', () => {
       const preset = btn.dataset.range || '7d';
       usageState.rangePreset = preset;
-      usageState.sessionId = '';
       usageState.page = 1;
       for (const other of document.querySelectorAll('.range-btn')) {
-        other.classList.toggle('active', other === btn);
+        const isCurrent = other === btn;
+        other.classList.toggle('active', isCurrent);
+        other.setAttribute('aria-pressed', isCurrent ? 'true' : 'false');
       }
       const customWrap = document.getElementById('custom-range-wrap');
       if (customWrap) {

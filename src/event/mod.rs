@@ -341,17 +341,17 @@ async fn run_loop(
         // 侧栏底边框 `[SET]` / `[USE]` 点击：后台打开对应本地页面，不阻塞事件循环。
         for (requested, resolve_url, page) in [
             (
-                &mut state.settings_open_requested,
+                std::mem::take(&mut state.settings_open_requested),
                 SettingsService::url as fn(&SettingsService) -> String,
                 "settings",
             ),
             (
-                &mut state.usage_open_requested,
+                std::mem::take(&mut state.usage_open_requested),
                 SettingsService::usage_url,
                 "usage",
             ),
         ] {
-            if std::mem::take(requested) {
+            if requested {
                 if let Some(url) = settings_service.as_ref().map(resolve_url) {
                     tokio::task::spawn_blocking(move || {
                         if let Err(error) = crate::platform::open_browser(&url) {
@@ -360,6 +360,16 @@ async fn run_loop(
                     });
                 } else {
                     tracing::warn!(page, "settings web service is unavailable");
+                    update::show_toast(
+                        state,
+                        crate::app::toast::Toast::new(
+                            crate::app::toast::ToastKind::Danger,
+                            ui::text::TOAST_SETTINGS_UNAVAILABLE,
+                            None,
+                            Instant::now(),
+                        ),
+                    );
+                    dirty = true;
                 }
             }
         }

@@ -50,9 +50,13 @@ pub(super) fn route(request: &Request, state: &ServiceState) -> Response {
         Err(error) => return Response::error(500, &error.to_string()),
     };
 
-    // 将历史回填或存量记录中的内部供应商 ID（如 `provider-alq374`）同步为可读 `provider.name`。
-    if let Ok(Some(settings)) = crate::config::ai::load_ai(&super::ai_path(state)) {
+    // 将历史回填或存量记录中的内部供应商 ID（如 `provider-alq374`）同步为可读 `provider.name`，
+    // 并按最新配置与内置目录补齐 `total_cost_usd IS NULL` 的历史成本。
+    if let Ok(settings) =
+        crate::config::ai::connect::load_runtime_ai_or_empty(&super::ai_path(state))
+    {
         let _ = db.sync_usage_provider_names(&settings.provider_name_map());
+        let _ = db.backfill_usage_costs(&settings);
     }
 
     match request.path.as_str() {
@@ -140,7 +144,7 @@ fn parse_params(query: &HashMap<String, String>) -> Result<ParsedUsageParams, St
     let session_id = parse_optional_string(query, "sessionId");
     let granularity = query
         .get("granularity")
-        .map(|raw| UsageGranularity::parse(&url_decode(raw)))
+        .map(|raw| UsageGranularity::parse(raw.trim()))
         .unwrap_or(UsageGranularity::Day);
     let page = parse_optional_usize(query, "page")?.unwrap_or(1);
     let page_size = parse_optional_usize(query, "pageSize")?.unwrap_or(50);
@@ -163,8 +167,7 @@ fn parse_params(query: &HashMap<String, String>) -> Result<ParsedUsageParams, St
 fn parse_optional_string(query: &HashMap<String, String>, key: &str) -> Option<String> {
     query
         .get(key)
-        .map(|raw| url_decode(raw))
-        .map(|decoded| decoded.trim().to_string())
+        .map(|raw| raw.trim().to_string())
         .filter(|value| !value.is_empty())
 }
 
@@ -172,8 +175,7 @@ fn parse_optional_i64(query: &HashMap<String, String>, key: &str) -> Result<Opti
     let Some(raw) = query.get(key) else {
         return Ok(None);
     };
-    let decoded = url_decode(raw);
-    let trimmed = decoded.trim();
+    let trimmed = raw.trim();
     if trimmed.is_empty() {
         return Ok(None);
     }
@@ -190,8 +192,7 @@ fn parse_optional_usize(
     let Some(raw) = query.get(key) else {
         return Ok(None);
     };
-    let decoded = url_decode(raw);
-    let trimmed = decoded.trim();
+    let trimmed = raw.trim();
     if trimmed.is_empty() {
         return Ok(None);
     }
@@ -202,36 +203,6 @@ fn parse_optional_usize(
         return Err(format!("query parameter '{key}' must be >= 1"));
     }
     Ok(Some(parsed))
-}
-
-/// 解码 `%XX` 十六进制序列与 `+` 空格（兼容直接构造 `Request` 的调用方）。
-fn url_decode(raw: &str) -> String {
-    let bytes = raw.as_bytes();
-    let mut out = Vec::with_capacity(bytes.len());
-    let mut index = 0;
-    while index < bytes.len() {
-        match bytes[index] {
-            b'%' if index + 2 < bytes.len() => {
-                let hex = |byte: u8| (byte as char).to_digit(16);
-                if let (Some(high), Some(low)) = (hex(bytes[index + 1]), hex(bytes[index + 2])) {
-                    out.push((high * 16 + low) as u8);
-                    index += 3;
-                    continue;
-                }
-                out.push(bytes[index]);
-                index += 1;
-            }
-            b'+' => {
-                out.push(b' ');
-                index += 1;
-            }
-            byte => {
-                out.push(byte);
-                index += 1;
-            }
-        }
-    }
-    String::from_utf8_lossy(&out).into_owned()
 }
 
 #[cfg(test)]

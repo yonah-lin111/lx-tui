@@ -499,6 +499,7 @@ function buildPresetModels(preset) {
       name: (model.name || '').trim() || id,
       transport: model.transport || null,
       limit: limitOf(model, id),
+      pricing: serializePricing(model.pricing, id),
       variant: variant,
       variants: variants,
       modalities: modalitiesOf(model)

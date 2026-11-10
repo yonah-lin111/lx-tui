@@ -309,6 +309,11 @@ async fn fetch_catalog(
     let mut request = client.get(url).header("Accept", "application/json");
     if let Some(cache) = cache
         && cache.source.as_deref() == Some(url)
+        && cache
+            .models
+            .values()
+            .flat_map(BTreeMap::values)
+            .any(|model| model.pricing.is_some())
         && let Some(etag) = cache.etag.as_deref()
     {
         request = request.header("If-None-Match", etag);

@@ -157,26 +157,36 @@ fn resolve_purpose_covers_all_five_categories_and_prioritizes_compaction() {
         UsagePurpose::Compaction
     );
 
-    // 4. Title：会话标题生成。
+    // 4. Title：会话标题与提示词模板块标题生成（真实调用链中 request.purpose 为 CompactSummary）。
     assert_eq!(
         resolve_purpose(
             &StreamLog {
                 kind: "title",
                 ..StreamLog::default()
             },
-            &chat_req
+            &compact_req
+        ),
+        UsagePurpose::Title
+    );
+    assert_eq!(
+        resolve_purpose(
+            &StreamLog {
+                kind: "title_block",
+                ..StreamLog::default()
+            },
+            &compact_req
         ),
         UsagePurpose::Title
     );
 
-    // 5. Recap：轮次摘要生成。
+    // 5. Recap：轮次摘要生成（真实调用链中 request.purpose 为 CompactSummary）。
     assert_eq!(
         resolve_purpose(
             &StreamLog {
                 kind: "recap",
                 ..StreamLog::default()
             },
-            &chat_req
+            &compact_req
         ),
         UsagePurpose::Recap
     );
