@@ -283,12 +283,9 @@ pub(crate) fn is_table_cell_at(
     })
 }
 
-/// 是否按下用于“打开外部链接/文件”的修饰键（Ctrl 或 Cmd/Super；兼容 SGR 鼠标协议将 Cmd 编码为 Meta/Alt）。
+/// 是否按下用于“打开外部链接/文件”的 `Ctrl` 修饰键。
 pub(crate) fn is_open_modifier(modifiers: crossterm::event::KeyModifiers) -> bool {
-    use crossterm::event::KeyModifiers;
-    modifiers.intersects(
-        KeyModifiers::CONTROL | KeyModifiers::SUPER | KeyModifiers::META | KeyModifiers::ALT,
-    )
+    modifiers.contains(crossterm::event::KeyModifiers::CONTROL)
 }
 
 /// 读取主内容区单元格 `(content_row, content_col)` 处的 Markdown 超链接 URL。

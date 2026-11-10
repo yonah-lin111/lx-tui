@@ -878,10 +878,31 @@ pub(crate) fn handle_mouse_down_left(
                     //
                     // **顺序不能反**：`begin_lx_selection*` 内部先 `clear_selection`（会清空
                     // `lx_card_press`），必须先开始选区再写 `lx_card_press`。
-                    if target.is_some() {
+                    if let Some(card) = target {
                         state.selection_click = None;
-                        update::begin_lx_selection(state, pane, content_row, content_col);
-                        state.lx_card_press = target.map(|card| (pane, card));
+                        if mouse
+                            .modifiers
+                            .contains(crossterm::event::KeyModifiers::CONTROL)
+                            && matches!(
+                                card,
+                                crate::app::state::CardTarget::OpenUrl { .. }
+                                    | crate::app::state::CardTarget::Attachment { .. }
+                                    | crate::app::state::CardTarget::DownloadOriginalImage { .. }
+                            )
+                        {
+                            let agents_tab = state
+                                .pane_anywhere(pane)
+                                .and_then(|target| target.lx.task.as_ref())
+                                .is_some_and(|page| page.tab == crate::app::state::TaskTab::Agents);
+                            if agents_tab {
+                                update::toggle_agent_card(state, pane, card);
+                            } else {
+                                update::toggle_lx_card(state, pane, card);
+                            }
+                        } else {
+                            update::begin_lx_selection(state, pane, content_row, content_col);
+                            state.lx_card_press = Some((pane, card));
+                        }
                     } else {
                         let clicks = crate::app::selection::next_click_count(
                             &mut state.selection_click,
@@ -948,9 +969,53 @@ pub(crate) fn handle_mouse_down_right(
     mouse: &MouseEvent,
     state: &mut AppState,
     geometry: &Geometry,
+    cache: &mut ui::RenderCache,
     dirty: &mut bool,
 ) {
     let Geometry { rects, view, .. } = geometry;
+    // macOS 部分终端/触控板会将 `Ctrl + 左键点击` 映射为带 CONTROL 修饰键的右键事件：
+    // 若落在 lx 聊天区的超链接或 AI Web 生图目标上，直接按 `Ctrl + 点击` 打开，不弹右键菜单。
+    if state.overlay.is_none()
+        && mouse
+            .modifiers
+            .contains(crossterm::event::KeyModifiers::CONTROL)
+        && let Some((pane, inner)) = pane_at(rects, mouse.column, mouse.row)
+    {
+        let inner = pane_content_inner(state, view, pane, inner);
+        if let Some((_, _, Some(card))) = state
+            .pane_anywhere(pane)
+            .filter(|target| target.kind == PaneKind::Terminal && target.view == PaneView::Lx)
+            .and_then(|target| {
+                ui::main_content::lx::press_content_hit(
+                    inner,
+                    &target.lx,
+                    mouse.column,
+                    mouse.row,
+                    mouse.modifiers,
+                    cache.pane(pane),
+                )
+            })
+            && matches!(
+                card,
+                crate::app::state::CardTarget::OpenUrl { .. }
+                    | crate::app::state::CardTarget::Attachment { .. }
+                    | crate::app::state::CardTarget::DownloadOriginalImage { .. }
+            )
+        {
+            update::focus_pane(state, pane);
+            let agents_tab = state
+                .pane_anywhere(pane)
+                .and_then(|target| target.lx.task.as_ref())
+                .is_some_and(|page| page.tab == crate::app::state::TaskTab::Agents);
+            if agents_tab {
+                update::toggle_agent_card(state, pane, card);
+            } else {
+                update::toggle_lx_card(state, pane, card);
+            }
+            *dirty = true;
+            return;
+        }
+    }
     // 菜单打开时右键不穿透：标签、工作区项或窗格上改挂菜单，其余位置关闭。
     if matches!(state.overlay, Some(Overlay::Menu(_))) {
         if open_right_click_menu(state, rects, view, mouse.column, mouse.row) {

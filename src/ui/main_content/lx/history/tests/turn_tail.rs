@@ -6,21 +6,11 @@ use crate::app::state::CardSection;
 use crate::app::state::lx::{MessageRecapView, RecapPending};
 use crate::db::chat::{MessageAttachmentKind, MessageAttachmentMeta};
 
-fn strip_osc8(symbol: &str) -> &str {
-    if let Some(rest) = symbol.strip_prefix("\x1b]8;;")
-        && let Some(bel) = rest.find('\x07')
-        && let Some(inner) = rest[bel + 1..].strip_suffix("\x1b]8;;\x07")
-    {
-        return inner;
-    }
-    symbol
-}
-
 fn rows_text(buf: &Buffer, area: Rect) -> Vec<String> {
     (0..area.height)
         .map(|y| {
             (0..area.width)
-                .filter_map(|x| buf.cell((x, y)).map(|cell| strip_osc8(cell.symbol())))
+                .filter_map(|x| buf.cell((x, y)).map(|cell| cell.symbol()))
                 .collect::<String>()
         })
         .collect()
@@ -348,7 +338,7 @@ fn markdown_links_and_ai_web_images_require_ctrl_or_cmd_click_to_open() {
     crate::ui::main_content::lx::render(area, &mut buf, &lx, true, None, &mut pane_cache);
     let rows = rows_text(&buf, area);
 
-    // 1. Markdown 超链接：普通左键不触发 OpenUrl，Ctrl/Cmd + 点击触发 OpenUrl。
+    // 1. Markdown 超链接：普通左键或 Cmd 不触发 OpenUrl，仅 Ctrl + 点击触发 OpenUrl。
     let link_y = (0..area.height)
         .find(|&y| rows[usize::from(y)].contains("Daily World Briefing"))
         .expect("link row");
@@ -358,42 +348,37 @@ fn markdown_links_and_ai_web_images_require_ctrl_or_cmd_click_to_open() {
         .windows("Daily".chars().count())
         .position(|w| w == ['D', 'a', 'i', 'l', 'y'])
         .expect("link col") as u16;
-    assert_eq!(
-        buf.cell((link_x, link_y)).expect("link cell").symbol(),
-        "\x1b]8;;https://english.news.cn/20261110/c.html\x07D\x1b]8;;\x07",
-        "Markdown 超链接单元格必须注入 OSC 8 转义序列以支持 macOS 终端原生 Cmd+Click"
-    );
-    let plain_link_hit = crate::ui::main_content::lx::press_content_hit(
-        area,
-        &lx,
-        link_x,
-        link_y,
-        KeyModifiers::NONE,
-        &mut pane_cache,
-    )
-    .expect("plain hit");
-    assert_eq!(plain_link_hit.2, None, "普通点击超链接不得触发外部打开");
-
-    for modifier in [KeyModifiers::CONTROL, KeyModifiers::SUPER] {
-        let mod_link_hit = crate::ui::main_content::lx::press_content_hit(
+    for non_ctrl in [KeyModifiers::NONE, KeyModifiers::SUPER] {
+        let hit = crate::ui::main_content::lx::press_content_hit(
             area,
             &lx,
             link_x,
             link_y,
-            modifier,
+            non_ctrl,
             &mut pane_cache,
         )
-        .expect("mod hit");
-        assert_eq!(
-            mod_link_hit.2,
-            Some(CardTarget::OpenUrl {
-                url: "https://english.news.cn/20261110/c.html".into(),
-            }),
-            "{modifier:?} + 点击超链接应返回 OpenUrl"
-        );
+        .expect("non-ctrl hit");
+        assert_eq!(hit.2, None, "{non_ctrl:?} 点击超链接不得触发外部打开");
     }
 
-    // 2. AI Web 预览图文件名：普通左键不触发 Attachment，Ctrl/Cmd + 点击触发 Attachment。
+    let ctrl_link_hit = crate::ui::main_content::lx::press_content_hit(
+        area,
+        &lx,
+        link_x,
+        link_y,
+        KeyModifiers::CONTROL,
+        &mut pane_cache,
+    )
+    .expect("ctrl hit");
+    assert_eq!(
+        ctrl_link_hit.2,
+        Some(CardTarget::OpenUrl {
+            url: "https://english.news.cn/20261110/c.html".into(),
+        }),
+        "Ctrl + 点击超链接应返回 OpenUrl"
+    );
+
+    // 2. AI Web 预览图文件名：普通左键不触发 Attachment，Ctrl + 点击触发 Attachment。
     let img1_y = (0..area.height)
         .find(|&y| rows[usize::from(y)].contains("gemini-r1-1.webp"))
         .expect("img1 row");
@@ -403,11 +388,6 @@ fn markdown_links_and_ai_web_images_require_ctrl_or_cmd_click_to_open() {
         .windows("gemini".chars().count())
         .position(|w| w == ['g', 'e', 'm', 'i', 'n', 'i'])
         .expect("img1 col") as u16;
-    assert_eq!(
-        buf.cell((img1_x, img1_y)).expect("img1 cell").symbol(),
-        "\x1b]8;;file:///tmp/gemini-r1-1.webp\x07g\x1b]8;;\x07",
-        "AI Web 预览图文件名单元格必须注入 file:// OSC 8 转义序列"
-    );
     let plain_img_hit = crate::ui::main_content::lx::press_content_hit(
         area,
         &lx,
@@ -439,7 +419,7 @@ fn markdown_links_and_ai_web_images_require_ctrl_or_cmd_click_to_open() {
     );
 
     // 3. 未下载态 `[Download original]` 按钮：普通左键即可触发下载；
-    // 已下载态 `[✓ Downloaded]`：必须 Ctrl/Cmd + 点击才触发定位原图。
+    // 已下载态 `[✓ Downloaded]`：必须 Ctrl + 点击才触发定位原图。
     let dl_idle_x = rows[usize::from(img1_y)]
         .find("[Download original]")
         .expect("idle btn col") as u16;
@@ -480,20 +460,20 @@ fn markdown_links_and_ai_web_images_require_ctrl_or_cmd_click_to_open() {
         "已下载原图按钮在普通左键下不弹出文件管理器"
     );
 
-    let cmd_dl_done = crate::ui::main_content::lx::press_content_hit(
+    let ctrl_dl_done = crate::ui::main_content::lx::press_content_hit(
         area,
         &lx,
         dl_done_x,
         img2_y,
-        KeyModifiers::SUPER,
+        KeyModifiers::CONTROL,
         &mut pane_cache,
     )
-    .expect("cmd dl done");
+    .expect("ctrl dl done");
     assert_eq!(
-        cmd_dl_done.2,
+        ctrl_dl_done.2,
         Some(CardTarget::DownloadOriginalImage {
             attachment_id: "att-done".into(),
         }),
-        "Cmd/Ctrl + 点击已下载原图按钮触发定位原图"
+        "Ctrl + 点击已下载原图按钮触发定位原图"
     );
 }

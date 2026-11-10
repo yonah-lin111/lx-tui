@@ -32,7 +32,7 @@ pub(crate) fn handle_mouse_event(
             press::handle_mouse_down_left(&mouse, state, sessions, geometry, config, cache, dirty);
         }
         MouseEventKind::Down(MouseButton::Right) => {
-            press::handle_mouse_down_right(&mouse, state, geometry, dirty);
+            press::handle_mouse_down_right(&mouse, state, geometry, cache, dirty);
         }
         MouseEventKind::Drag(MouseButton::Left) => {
             drag::handle_mouse_drag(&mouse, state, sessions, geometry, config, cache, dirty);

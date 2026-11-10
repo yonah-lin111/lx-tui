@@ -534,12 +534,9 @@ pub(crate) struct GridLinkSpan {
 #### 3. `Ctrl / Cmd + 鼠标左键点击` 交互分派（`src/event/mouse/press.rs`、`src/ui/main_content/lx/selection.rs`、`src/app/update/chat/viewport.rs`）
 
 ```rust
-/// 是否按下用于“打开外部链接/文件”的修饰键（Ctrl 或 Cmd/Super；兼容 SGR 鼠标协议将 Cmd 编码为 Meta/Alt）。
+/// 是否按下用于“打开外部链接/文件”的 `Ctrl` 修饰键。
 pub(crate) fn is_open_modifier(modifiers: crossterm::event::KeyModifiers) -> bool {
-    use crossterm::event::KeyModifiers;
-    modifiers.intersects(
-        KeyModifiers::CONTROL | KeyModifiers::SUPER | KeyModifiers::META | KeyModifiers::ALT,
-    )
+    modifiers.contains(crossterm::event::KeyModifiers::CONTROL)
 }
 ```
 
