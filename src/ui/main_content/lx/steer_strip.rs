@@ -1,17 +1,16 @@
 //! 输入框上方的 pending steer 提示区：每条一行，最多 [`MAX_VISIBLE`] 行。
 //!
 //! 纯几何 + 纯渲染：只读 `Lx`、只写 lx 页网格；pending 属于临时交互态，不进入
-//! 历史、不写选区、不参与整页复制。行内 `×` 固定在最右一列，命中只覆盖这一列，
-//! 点文本其它位置不拦截（继续走历史/输入命中）。
+//! 历史、不写选区、不参与整页复制。流中按单次 `Esc` 即可按 LIFO 依次回退并回显到输入框。
 //!
-//! 单行格式：`Steering  <截断文本>  · N attachments  ×`；超过可见条数时末行改为
-//! `+N more pending` 且不可点击。
+//! 单行格式：`Steering  <截断文本>  · N attachments`；超过可见条数时末行改为
+//! `+N more pending`。
 
 use ratatui::layout::Rect;
 use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
 
+use crate::app::state::Lx;
 use crate::app::state::lx::chat::steer::PendingSteer;
-use crate::app::state::{Lx, RequestState};
 use crate::ui::{style, text};
 
 use super::Grid;
@@ -20,12 +19,8 @@ use super::Grid;
 pub(crate) const MAX_VISIBLE: usize = 3;
 /// 行首标签与正文之间的空档（列）。
 const LABEL_GAP: u16 = 2;
-/// 正文与 `×` 之间的空档（列）。
-const CANCEL_GAP: u16 = 1;
 /// 正文与附件后缀之间的分隔（列宽参与预算）。
 const ATTACHMENTS_SEP: &str = "  · ";
-/// `×` 字形。
-const CANCEL: char = '×';
 
 /// 当前要展示的 pending 列表；task/ask 打开时整块隐藏。
 fn pending(lx: &Lx) -> &[PendingSteer] {
@@ -65,21 +60,13 @@ pub(crate) fn draw(grid: &mut Grid, rect: Rect, lx: &Lx) {
     }
 }
 
-/// 画一条 steer：标签、单行截断正文、附件后缀与最右列 `×`。
+/// 画一条 steer：标签、单行截断正文与附件后缀（无关闭按钮，统一由单次 `Esc` 回退）。
 fn draw_steer(grid: &mut Grid, rect: Rect, y: u16, steer: &PendingSteer) {
     let muted = style::muted();
-    let cancel_x = rect.right().saturating_sub(1);
     let label_width = u16::try_from(text::LX_STEER_LABEL.width()).unwrap_or(u16::MAX);
-    // 标签优先保留：先裁掉 `×` 所在列，正文再按剩余宽度决定是否出现。
-    grid.put_clipped(
-        rect.x,
-        y,
-        text::LX_STEER_LABEL,
-        muted,
-        rect.width.saturating_sub(1),
-    );
+    grid.put_clipped(rect.x, y, text::LX_STEER_LABEL, muted, rect.width);
     let text_x = rect.x.saturating_add(label_width).saturating_add(LABEL_GAP);
-    let text_right = cancel_x.saturating_sub(CANCEL_GAP);
+    let text_right = rect.right();
     if text_x < text_right {
         let total = text_right - text_x;
         let mut suffix = String::new();
@@ -113,7 +100,6 @@ fn draw_steer(grid: &mut Grid, rect: Rect, y: u16, steer: &PendingSteer) {
             );
         }
     }
-    grid.put_char(cancel_x, y, CANCEL, muted);
 }
 
 /// 单行化并截断到 `budget` 列：换行/制表/控制字符与连续空白折叠为单个空格，
@@ -165,31 +151,6 @@ fn folded_prefix(text: &str, budget: u16) -> String {
         chars.push('…');
     }
     chars.into_iter().collect()
-}
-
-/// `×` 命中：仅 `Streaming` 且该行确有可撤回的 steer 时返回其原索引。
-///
-/// 最后一行是 `+N more pending` 汇总（不可点击），因此超过 [`MAX_VISIBLE`] 时
-/// 只有前 `MAX_VISIBLE - 1` 行可命中；索引与 `pending_steers` 的 Vec 对齐。
-pub(crate) fn recall_hit(area: Rect, lx: &Lx, column: u16, row: u16) -> Option<usize> {
-    if !matches!(lx.chat.request, RequestState::Streaming { .. }) {
-        return None;
-    }
-    let rect = super::layout(area, lx).pending?;
-    if !rect.contains((column, row).into()) {
-        return None;
-    }
-    if column != rect.right().saturating_sub(1) {
-        return None;
-    }
-    let total = lx.chat.pending_steers.len();
-    let steer_rows = if total > MAX_VISIBLE {
-        MAX_VISIBLE - 1
-    } else {
-        total.min(MAX_VISIBLE)
-    };
-    let index = usize::from(row.saturating_sub(rect.y));
-    (index < steer_rows).then_some(index)
 }
 
 #[cfg(test)]

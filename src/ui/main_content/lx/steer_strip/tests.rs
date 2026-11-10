@@ -1,4 +1,4 @@
-//! pending steer 提示区测试：高度/隐藏条件、单行折叠与截断、`×` 命中边界、
+//! pending steer 提示区测试：高度/隐藏条件、单行折叠与截断、
 //! 以及提示区从历史区底部扣减后的布局不变量。
 
 use ratatui::buffer::Buffer;
@@ -7,7 +7,7 @@ use ratatui::layout::Rect;
 use super::*;
 use crate::app::state::lx::task::TaskPage;
 use crate::app::state::{
-    AskState, AssistantStepView, ChatMessageView, ChatPartView, LxChat, RequestKey,
+    AskState, AssistantStepView, ChatMessageView, ChatPartView, LxChat, RequestKey, RequestState,
 };
 use crate::db::chat::ModelSnapshot;
 use crate::db::chat::attachment::{MessageAttachmentInput, MessageAttachmentKind};
@@ -139,7 +139,7 @@ fn task_and_ask_hide_the_strip() {
 }
 
 #[test]
-fn draw_renders_label_text_and_cancel() {
+fn draw_renders_label_and_text_without_cancel_button() {
     let lx = streaming_lx(2);
     let (grid, rect) = draw_strip(&lx, 60);
     let first = row_text(&grid, rect, rect.y);
@@ -147,12 +147,12 @@ fn draw_renders_label_text_and_cancel() {
     assert!(first.starts_with(text::LX_STEER_LABEL), "{first:?}");
     assert!(first.contains("steer 0"), "{first:?}");
     assert!(second.contains("steer 1"), "{second:?}");
-    assert!(first.ends_with('×'), "× 固定最右列：{first:?}");
-    assert!(second.ends_with('×'), "× 固定最右列：{second:?}");
+    assert!(!first.contains('×'), "移除 × 关闭按钮：{first:?}");
+    assert!(!second.contains('×'), "移除 × 关闭按钮：{second:?}");
 }
 
 #[test]
-fn more_than_three_shows_summary_row_without_cancel() {
+fn more_than_three_shows_summary_row() {
     let lx = streaming_lx(5);
     let (grid, rect) = draw_strip(&lx, 60);
     assert_eq!(rect.height, 3);
@@ -160,7 +160,7 @@ fn more_than_three_shows_summary_row_without_cancel() {
     assert!(row_text(&grid, rect, rect.y + 1).contains("steer 1"));
     let last = row_text(&grid, rect, rect.y + 2);
     assert!(last.contains("+3 more pending"), "{last:?}");
-    assert!(!last.contains('×'), "汇总行不可点击、不画 ×：{last:?}");
+    assert!(!last.contains('×'), "{last:?}");
 }
 
 #[test]
@@ -188,13 +188,12 @@ fn attachments_suffix_reports_count() {
 }
 
 #[test]
-fn narrow_strip_keeps_cancel_and_hides_text() {
+fn narrow_strip_keeps_label_and_hides_text() {
     let lx = streaming_lx(1);
-    // 标签 8 列 + 空档 2 列 + ×；10 列放得下标签与 ×，但正文没有预算。
+    // 标签 8 列 + 空档 2 列；10 列放得下标签，但正文没有预算。
     let (grid, rect) = draw_strip(&lx, 10);
     let row = row_text(&grid, rect, rect.y);
     assert!(row.starts_with("Steering"), "{row:?}");
-    assert!(row.ends_with('×'), "{row:?}");
     assert!(!row.contains("steer"), "宽度不足时正文整体省略：{row:?}");
 }
 
@@ -202,66 +201,27 @@ fn narrow_strip_keeps_cancel_and_hides_text() {
 fn wide_chars_are_never_half_written() {
     let mut lx = streaming_lx(1);
     lx.chat.pending_steers[0].text = "中文中文中文中文".into();
-    let (grid, rect) = draw_strip(&lx, 20);
+    let (grid, rect) = draw_strip(&lx, 18);
     let row = row_text(&grid, rect, rect.y);
     assert!(row.contains('…'), "超宽正文以省略号收尾：{row:?}");
-    assert!(row.ends_with('×'), "{row:?}");
+    let trimmed = row.trim_end();
+    assert!(trimmed.ends_with('…'), "{row:?}");
     // 省略号前一个可见字符必须是完整汉字，而不是宽字符占位列。
     assert!(
-        row.chars()
+        trimmed
+            .chars()
             .rev()
             .nth(1)
             .is_some_and(|ch| ch != CONTINUATION),
         "{row:?}"
     );
 
-    // 正文预算只有 1 列：一个汉字都放不下时只画省略号，绝不半写。
+    // 正文预算只有 1 列（总宽 11 列 = 标签 8 列 + 空档 2 列 + 正文 1 列）：一个汉字都放不下时只画省略号，绝不半写。
     let mut narrow = streaming_lx(1);
     narrow.chat.pending_steers[0].text = "中".into();
-    let (grid, rect) = draw_strip(&narrow, 13);
+    let (grid, rect) = draw_strip(&narrow, 11);
     let row = row_text(&grid, rect, rect.y);
     assert!(row.contains('…') && !row.contains('中'), "{row:?}");
-}
-
-#[test]
-fn recall_hit_only_matches_the_cancel_column() {
-    let area = Rect::new(0, 0, 60, 16);
-    let lx = streaming_lx(2);
-    let rect = layout(area, &lx).pending.expect("pending strip");
-    assert_eq!(recall_hit(area, &lx, rect.right() - 1, rect.y), Some(0));
-    assert_eq!(recall_hit(area, &lx, rect.right() - 1, rect.y + 1), Some(1));
-    assert_eq!(
-        recall_hit(area, &lx, rect.right() - 2, rect.y),
-        None,
-        "仅 × 单列命中"
-    );
-    assert_eq!(
-        recall_hit(area, &lx, rect.right() - 1, rect.bottom()),
-        None,
-        "行边界之外"
-    );
-}
-
-#[test]
-fn recall_hit_skips_the_more_row_and_requires_streaming() {
-    let area = Rect::new(0, 0, 60, 16);
-    let lx = streaming_lx(5);
-    let rect = layout(area, &lx).pending.expect("pending strip");
-    assert_eq!(recall_hit(area, &lx, rect.right() - 1, rect.y), Some(0));
-    assert_eq!(recall_hit(area, &lx, rect.right() - 1, rect.y + 1), Some(1));
-    assert_eq!(
-        recall_hit(area, &lx, rect.right() - 1, rect.y + 2),
-        None,
-        "汇总行不可撤回"
-    );
-
-    let mut idle = streaming_lx(2);
-    idle.chat.request = RequestState::Idle;
-    assert_eq!(
-        recall_hit(area, &idle, 59, rect.y),
-        None,
-        "非 Streaming 一律不命中"
-    );
 }
 
 #[test]

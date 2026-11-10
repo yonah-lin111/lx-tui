@@ -803,19 +803,6 @@ pub(crate) fn handle_mouse_down_left(
                     *dirty = true;
                     return;
                 }
-                // 待生效 steer 的 ×：只撤回对应项，不穿透到历史/输入框。
-                if let Some(index) = state.pane_anywhere(pane).and_then(|target| {
-                    ui::main_content::lx::steer_strip::recall_hit(
-                        inner,
-                        &target.lx,
-                        mouse.column,
-                        mouse.row,
-                    )
-                }) {
-                    update::recall_lx_steer(state, pane, index);
-                    *dirty = true;
-                    return;
-                }
                 // 聊天控件：thinking 折叠头部 / 停止按钮 / 历史入口。
                 let chat_hit = state.pane_anywhere(pane).and_then(|target| {
                     ui::main_content::lx::chat_hit(

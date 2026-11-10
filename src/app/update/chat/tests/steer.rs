@@ -82,28 +82,69 @@ fn slash_draft_is_not_steered() {
 }
 
 #[test]
-fn recall_prepends_pending_to_existing_draft() {
+fn escape_recalls_pending_steers_sequentially_in_lifo_without_merging() {
     let (mut state, pane, _) = streaming_state("s");
-    let target = state.pane_mut_anywhere(pane).unwrap();
-    target.lx.chat.pending_steers.push(pending("first"));
-    target.lx.chat.pending_steers.push(pending("second"));
-    target.lx.input = "draft".into();
-    assert!(super::super::steer::recall(&mut state, pane, 1));
-    let target = state.pane_anywhere(pane).unwrap();
-    assert_eq!(target.lx.chat.pending_steers.len(), 1);
-    assert_eq!(target.lx.input, "second\n\ndraft");
+    {
+        let target = state.pane_mut_anywhere(pane).unwrap();
+        target.lx.chat.pending_steers.push(pending("first"));
+        target.lx.chat.pending_steers.push(pending("second"));
+        target.lx.chat.pending_steers.push(pending("third"));
+    }
+
+    // 第 1 次 Esc：回退最新一条 "third"，直接覆盖回显输入框，不触发停流待命。
+    crate::app::update::apply_lx_input(&mut state, crate::app::actions::LxInput::Escape);
+    {
+        let target = state.pane_anywhere(pane).unwrap();
+        assert_eq!(target.lx.chat.pending_steers.len(), 2);
+        assert_eq!(target.lx.input, "third");
+        assert!(target.lx.chat.stop_armed_at.is_none());
+        assert!(!target.lx.chat.main_stopped);
+    }
+
+    // 第 2 次 Esc：回退 "second"，直接替换为 "second"，绝不与 "third" 合并。
+    crate::app::update::apply_lx_input(&mut state, crate::app::actions::LxInput::Escape);
+    {
+        let target = state.pane_anywhere(pane).unwrap();
+        assert_eq!(target.lx.chat.pending_steers.len(), 1);
+        assert_eq!(target.lx.input, "second");
+        assert!(target.lx.chat.stop_armed_at.is_none());
+    }
+
+    // 第 3 次 Esc：回退 "first"，队列排空，输入框回显 "first"。
+    crate::app::update::apply_lx_input(&mut state, crate::app::actions::LxInput::Escape);
+    {
+        let target = state.pane_anywhere(pane).unwrap();
+        assert!(target.lx.chat.pending_steers.is_empty());
+        assert_eq!(target.lx.input, "first");
+        assert!(target.lx.chat.stop_armed_at.is_none());
+    }
+
+    // 第 4 次 Esc（队列已空）：进入原有的双击 Esc 停止待命。
+    crate::app::update::apply_lx_input(&mut state, crate::app::actions::LxInput::Escape);
+    assert!(
+        state
+            .pane_anywhere(pane)
+            .unwrap()
+            .lx
+            .chat
+            .stop_armed_at
+            .is_some()
+    );
+
+    // 第 5 次 Esc：真正停止当前流。
+    crate::app::update::apply_lx_input(&mut state, crate::app::actions::LxInput::Escape);
+    assert!(state.pane_anywhere(pane).unwrap().lx.chat.main_stopped);
 }
 
 #[test]
-fn recall_last_on_empty_input() {
+fn backspace_on_empty_input_does_not_recall_pending_steer() {
     let (mut state, pane, _) = streaming_state("s");
     let target = state.pane_mut_anywhere(pane).unwrap();
-    target.lx.chat.pending_steers.push(pending("first"));
-    target.lx.chat.pending_steers.push(pending("second"));
-    assert!(super::super::steer::recall_last(&mut state, pane));
+    target.lx.chat.pending_steers.push(pending("keep"));
+    crate::app::update::apply_lx_input(&mut state, crate::app::actions::LxInput::Backspace);
     let target = state.pane_anywhere(pane).unwrap();
     assert_eq!(target.lx.chat.pending_steers.len(), 1);
-    assert_eq!(target.lx.input, "second");
+    assert!(target.lx.input.is_empty());
 }
 
 #[test]
@@ -130,7 +171,7 @@ fn complete_finish_promotes_pending_to_next_turn() {
 }
 
 #[test]
-fn cancelled_finish_restores_pending_to_input() {
+fn cancelled_finish_restores_latest_pending_without_merging() {
     let (mut state, pane, key) = streaming_state("s");
     let target = state.pane_mut_anywhere(pane).unwrap();
     target.lx.chat.pending_steers.push(pending("first"));
@@ -143,7 +184,7 @@ fn cancelled_finish_restores_pending_to_input() {
     assert!(on_finish_ack(&mut state, &key, true));
     let target = state.pane_anywhere(pane).unwrap();
     assert!(target.lx.chat.pending_steers.is_empty());
-    assert_eq!(target.lx.input, "first\n\nsecond\n\ndraft");
+    assert_eq!(target.lx.input, "second");
     assert!(matches!(target.lx.chat.request, RequestState::Idle));
 }
 
@@ -172,17 +213,6 @@ fn promotion_commit_consumes_pending_without_clearing_new_draft() {
     assert!(target.lx.chat.pending_steers.is_empty());
     assert_eq!(target.lx.chat.promoting_steers, 0);
     assert_eq!(target.lx.input, "fresh draft");
-}
-
-#[test]
-fn empty_input_backspace_recalls_last_pending() {
-    let (mut state, pane, _) = streaming_state("s");
-    let target = state.pane_mut_anywhere(pane).unwrap();
-    target.lx.chat.pending_steers.push(pending("recall me"));
-    crate::app::update::apply_lx_input(&mut state, crate::app::actions::LxInput::Backspace);
-    let target = state.pane_anywhere(pane).unwrap();
-    assert!(target.lx.chat.pending_steers.is_empty());
-    assert_eq!(target.lx.input, "recall me");
 }
 
 #[test]

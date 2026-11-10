@@ -87,8 +87,8 @@ pub use slash::{
     open_history, open_model_picker, persist_default_model,
 };
 pub use steer::{
-    discard_for_session_change, promote_after_finish, recall as recall_lx_steer,
-    recall_last as recall_last_lx_steer, restore_pending_to_input,
+    discard_for_session_change, promote_after_finish, recall_last as recall_last_lx_steer,
+    restore_pending_to_input,
 };
 pub use subagent::{
     apply_deltas as apply_subagent_deltas, on_report_batch_committed, on_subagent_auto_compact,
@@ -725,9 +725,16 @@ pub(crate) fn request_report_drain_if_idle(state: &mut AppState, pane: PaneId) -
 /// Esc 停止的待命窗口：窗口内再按一次才真正停止（与撤销待命统一为 3 秒）。
 pub const STOP_ARM_WINDOW: Duration = Duration::from_secs(3);
 
-/// 流中按 `Esc`（对齐 opencode 的双击停止）：首次只**待命**并显示提示，
-/// 窗口内再按一次才停止；非流中吞掉（返回 false 不置脏）。
+/// 流中按 `Esc`：若存在待生效的 pending steer，单次 `Esc` 优先按 LIFO 弹出最近一条并回显输入框；
+/// 队列为空时（对齐 opencode 的双击停止）首次只**待命**并显示提示，窗口内再按一次才停止。
 pub fn escape_stop(state: &mut AppState, pane: PaneId) -> bool {
+    if state
+        .pane_anywhere(pane)
+        .is_some_and(|target| target.lx.ask.is_none())
+        && steer::recall_last(state, pane)
+    {
+        return true;
+    }
     let Some(target) = state.pane_mut_anywhere(pane) else {
         return false;
     };

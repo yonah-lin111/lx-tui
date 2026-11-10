@@ -162,64 +162,64 @@ pub(super) fn try_submit(state: &mut AppState, pane: PaneId) -> bool {
     true
 }
 
-/// 撤回指定 pending（`×` 点击）；文本前置合并回输入框。
-pub fn recall(state: &mut AppState, pane: PaneId, index: usize) -> bool {
-    let Some(target) = state.pane_mut_anywhere(pane) else {
-        return false;
+/// 流中单次 `Esc`：按 LIFO 弹出最近一条 pending steer 并直接回显到输入框（不与现有内容拼接合并）。
+pub fn recall_last(state: &mut AppState, pane: PaneId) -> bool {
+    let (text, record_history) = {
+        let Some(target) = state.pane_mut_anywhere(pane) else {
+            return false;
+        };
+        if !matches!(target.lx.chat.request, RequestState::Streaming { .. }) {
+            return false;
+        }
+        let Some(pending) = target.lx.chat.pending_steers.pop() else {
+            return false;
+        };
+        let text = pending.text;
+        let record_history = pending.attachments.is_empty();
+        target.lx.end_history_browse();
+        target.lx.import_full_text(&text);
+        target.lx.chat.stop_armed_at = None;
+        (text, record_history)
     };
-    if !matches!(target.lx.chat.request, RequestState::Streaming { .. }) {
-        return false;
+    if record_history && state.prompt_history.record(&text) {
+        state
+            .effects
+            .push(crate::app::effects::Effect::RecordPromptHistory {
+                text: text.trim().to_string(),
+            });
     }
-    if index >= target.lx.chat.pending_steers.len() {
-        return false;
-    }
-    let pending = target.lx.chat.pending_steers.remove(index);
-    prepend_to_input(&mut target.lx, &pending.text);
-    target.lx.chat.stop_armed_at = None;
     refresh_lx_status(state, pane);
     true
 }
 
-/// 空输入 Backspace：撤回最近一条 pending。
-pub fn recall_last(state: &mut AppState, pane: PaneId) -> bool {
-    let Some(index) = state
-        .pane_anywhere(pane)
-        .and_then(|target| target.lx.chat.pending_steers.len().checked_sub(1))
-    else {
-        return false;
-    };
-    recall(state, pane, index)
-}
-
-/// 把一条 pending 文本按提交顺序前置到现有草稿前（空行分隔）。
-fn prepend_to_input(lx: &mut crate::app::state::Lx, text: &str) {
-    let merged = if lx.input.trim().is_empty() {
-        text.to_string()
-    } else {
-        format!("{}\n\n{}", text, lx.input)
-    };
-    lx.import_full_text(&merged);
-}
-
-/// 终态失败/取消：把所有 pending 按顺序合并回输入框；不自动发送。
+/// 终态失败/取消：把最新一条 pending 直接回显到输入框（其余纯文本写入历史），绝不将多条合并拼接。
 pub fn restore_pending_to_input(state: &mut AppState, pane: PaneId) -> usize {
-    let Some(target) = state.pane_mut_anywhere(pane) else {
-        return 0;
-    };
-    target.lx.chat.promoting_steers = 0;
-    if target.lx.chat.pending_steers.is_empty() {
-        return 0;
-    }
-    let pending = std::mem::take(&mut target.lx.chat.pending_steers);
-    let count = pending.len();
-    let mut text = String::new();
-    for (index, item) in pending.iter().enumerate() {
-        if index > 0 {
-            text.push_str("\n\n");
+    let pending = {
+        let Some(target) = state.pane_mut_anywhere(pane) else {
+            return 0;
+        };
+        target.lx.chat.promoting_steers = 0;
+        if target.lx.chat.pending_steers.is_empty() {
+            return 0;
         }
-        text.push_str(&item.text);
+        std::mem::take(&mut target.lx.chat.pending_steers)
+    };
+    let count = pending.len();
+    for item in &pending {
+        if item.attachments.is_empty() && state.prompt_history.record(&item.text) {
+            state
+                .effects
+                .push(crate::app::effects::Effect::RecordPromptHistory {
+                    text: item.text.trim().to_string(),
+                });
+        }
     }
-    prepend_to_input(&mut target.lx, &text);
+    if let Some(last) = pending.last()
+        && let Some(target) = state.pane_mut_anywhere(pane)
+    {
+        target.lx.end_history_browse();
+        target.lx.import_full_text(&last.text);
+    }
     refresh_lx_status(state, pane);
     count
 }

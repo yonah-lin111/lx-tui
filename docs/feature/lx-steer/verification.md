@@ -5,7 +5,7 @@
 | 校验维度 | 执行命令 | 结果 |
 | :--- | :--- | :--- |
 | 格式与静态检查 | `cargo fmt --check && cargo clippy --all-targets -- -D warnings` | PASS（0 warnings / 0 errors） |
-| Steer 专项单测套件 | `cargo test --lib steer` | PASS（52 passed / 0 failed） |
+| Steer 专项单测套件 | `cargo test --lib steer` | PASS（49 passed / 0 failed） |
 | `lx-tui exec` & `session` CLI 实机校验 | `./target/debug/lx-tui exec / session show / fork / rewind` | PASS（Exit Code 0） |
 
 ---
@@ -27,15 +27,15 @@
 - **验证步骤**：执行 `cargo test --lib app::update::chat::tests::steer`。
 - **期望结果**：仅 Native 主会话 `Streaming` 时接受输入追加至 `pending_steers` 并清空输入框；`Committing` 不入队；`/` 开头草稿与超限输入弹出窗格内英文 Warning Toast 且保留原草稿（PASS）。
 
-### V04 — 撤回交互（`×` 点击与空输入框 `Backspace`）
-- **输入内容**：`pending_steers = ["first", "second"]`；分别在输入框为空（`cursor == 0`）与输入框含 `"draft"` / `"abc"` 时触发 `Backspace` 或按索引调用 `recall`。
-- **验证步骤**：执行 `cargo test --lib app::update::chat::tests::steer::empty_input_backspace_recalls_last_pending`、`backspace_with_draft_still_deletes_text` 与 `recall_prepends_pending_to_existing_draft`。
-- **期望结果**：空输入框按 `Backspace` 撤回最后一条 `"second"` 回填输入框；非空输入框按 `Backspace` 正常删字（`"abc" -> "ab"`）不动 pending；撤回指定项时按 `"{recalled}\n\n{draft}"` 前置合并到现有草稿前（PASS）。
+### V04 — 单次 `Esc` LIFO 逐条回退与输入框覆盖回显（无 `×` 按钮、无合并）
+- **输入内容**：`pending_steers = ["first", "second", "third"]`；流中连续按 `Esc`，以及在输入框为空/非空时按 `Backspace`。
+- **验证步骤**：执行 `cargo test --lib app::update::chat::tests::steer::escape_recalls_pending_steers_sequentially_in_lifo_without_merging`、`backspace_on_empty_input_does_not_recall_pending_steer` 与 `backspace_with_draft_still_deletes_text`。
+- **期望结果**：流中存在 pending steer 时，每按一次 `Esc` 按 LIFO 顺序弹出最新一条并直接覆盖回显到输入框（依次显示 `"third"` → `"second"` → `"first"`，绝不出现多条合并拼接，且不触发停流待命）；待队列排空后再按 `Esc` 才进入原有的双击 `Esc` 停止生成逻辑；`Backspace` 仅负责普通删字，不再撤回 steer（PASS）。
 
 ### V05 — 轮次终态分流：正常完成提升、取消/失败退回与切会话丢弃
 - **输入内容**：本轮结束时仍存留未生效 `pending_steers`，分别触发：1) `StopReason::Complete` 正常完成（含收尾期间用户新写草稿 `"fresh draft"`）；2) `StopReason::Cancelled` 或保存失败；3) `/new`、`/resume` 切会话或删除会话。
-- **验证步骤**：执行 `cargo test --lib app::update::chat::tests::steer::complete_finish_promotes_pending_to_next_turn`、`promotion_commit_consumes_pending_without_clearing_new_draft`、`cancelled_finish_restores_pending_to_input` 与 `session_change_discards_pending`。
-- **期望结果**：正常完成自动发起 `Effect::BeginChatTurn` 提升为下一轮且提交成功后不清空用户在输入框新写的 `"fresh draft"`；取消或失败将全部 pending 按顺序退回输入框且不自动发送；切换/新建/删除会话清空 pending 并弹出 `Discarded N undelivered steer(s)`（PASS）。
+- **验证步骤**：执行 `cargo test --lib app::update::chat::tests::steer::complete_finish_promotes_pending_to_next_turn`、`promotion_commit_consumes_pending_without_clearing_new_draft`、`cancelled_finish_restores_latest_pending_without_merging` 与 `session_change_discards_pending`。
+- **期望结果**：正常完成自动发起 `Effect::BeginChatTurn` 提升为下一轮且提交成功后不清空用户在输入框新写的 `"fresh draft"`；取消或失败仅将最后一条 pending 直接回显到输入框（其余纯文本写入 `prompt_history`，绝不合并拼接）；切换/新建/删除会话清空 pending 并弹出 `Discarded N undelivered steer(s)`（PASS）。
 
 ### V06 — Agent Loop 安全边界注入、Auto-Compact 顺序与撤回竞态
 - **输入内容**：模型流式采样与工具调用序列、触发阈值的 `maybe_auto_compact`、`Final` 响应到达时的 pending 探测，以及压缩等待期间用户撤回全部 pending 的竞态。
@@ -47,10 +47,10 @@
 - **验证步骤**：执行 `cargo test --lib event::chat::tests::steer`。
 - **期望结果**：`deliver` 成功后旧 assistant 标为 `complete`（`duration_ms = None`，不触发中间 recap）、`RequestState::Streaming` 切换至新 `assistant_id`、`HostRecorderFactory` 共享 `mutation_users` 原地更新为新 `user_message_id`；TUI 子 Agent（`streams.subagents.contains_key(&key.session)`）请求 `SteerInputs` 时直接返回 `Ok(Vec::new())` 而不被误判为 `Cancelled`；针对 steer 轮次的 `restore_plan` 仅回滚 `after.txt` 而不触碰 `before.txt`；图片不支持或 DB 失败时返回 `HostError::Failed` 且不消费 `pending_steers`（PASS）。
 
-### V08 — TUI `Steering` 提示区渲染、被截断 Assistant 统计行隐藏、Steer 用户消息底色与鼠标 `×` 命中
-- **输入内容**：0/1/3/5 条 `pending_steers`（含换行/控制字符、中文宽字符 `"中文..."`、极窄 13 列宽度、多附件）、打开 `task`/`ask` 面板、鼠标点击最右列 `×` 与正文区域，以及含被 steer 截断旧 assistant 与 steer 插入用户消息的时间线。
+### V08 — TUI `Steering` 提示区渲染（无关闭按钮）、被截断 Assistant 统计行隐藏与 Steer 用户消息底色
+- **输入内容**：0/1/3/5 条 `pending_steers`（含换行/控制字符、中文宽字符 `"中文..."`、极窄 11 列宽度、多附件）、打开 `task`/`ask` 面板，以及含被 steer 截断旧 assistant 与 steer 插入用户消息的时间线。
 - **验证步骤**：执行 `cargo test --lib ui::main_content::lx::steer_strip::tests`。
-- **期望结果**：高度封顶 3 行，超过 3 条末行渲染 `+N more pending`（不可点击）；单行渲染 `Steering  <折叠截断正文>  · N attachments  ×`，极窄宽度保留 `×` 且宽字符绝不半写；被 steer 截断的上一段 assistant 底部不出现模型名称与数据统计行（如 `deepseek-v4.1-flash · 3.9s`），仅最终完成段显示统计；steer 插入的用户消息气泡与置顶行（sticky）使用区分底色 `style::chat_user_steer_bg()`（`Color::Indexed(58)` 暗琥珀，区别于普通用户消息 `Indexed(236)`）；`recall_hit` 仅在 `Streaming` 且点击最右列 `×` 时命中对应索引（PASS）。
+- **期望结果**：高度封顶 3 行，超过 3 条末行渲染 `+N more pending`；单行渲染 `Steering  <折叠截断正文>  · N attachments`（已移除行尾 `×` 关闭按钮，宽字符绝不半写）；被 steer 截断的上一段 assistant 底部不出现模型名称与数据统计行（如 `deepseek-v4.1-flash · 3.9s`），仅最终完成段显示统计；steer 插入的用户消息气泡与置顶行（sticky）使用区分底色 `style::chat_user_steer_bg()`（`Color::Rgb(0x1b, 0x2a, 0x38)` 柔和暗海蓝，区别于普通用户消息 `Indexed(236)`）（PASS）。
 
 ### V09 — `lx-tui` CLI 实机验证（`exec` / `subagent` / `session show` / `fork` / `rewind`）
 - **输入内容**：
