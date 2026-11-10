@@ -116,7 +116,18 @@ function lxHtmlToMarkdown(root, options) {
     if (shouldSkipElement(node)) return false;
     const tag = node.tagName.toLowerCase();
     if (tag === 'br' || tag === 'hr') return true;
-    if (isMathContainer(node)) return true;
+    if (tag === 'img') {
+      const src = ((node.getAttribute && node.getAttribute('src')) || '').trim();
+      return /^https?:\/\//i.test(src);
+    }
+    if (isMathContainer(node)) {
+      const ann =
+        node.querySelector && node.querySelector('annotation[encoding="application/x-tex"]');
+      const tex = ann
+        ? cleanText(ann.textContent || '').trim()
+        : cleanText(node.textContent || '').trim();
+      return tex.length > 0;
+    }
     if (isCodeBlockContainer(node)) {
       const pre =
         tag === 'pre'
@@ -219,7 +230,7 @@ function lxHtmlToMarkdown(root, options) {
     const tail = streaming && isTail(el);
     if (tail && !code) return '';
     const lang = extractCodeLanguage(el, pre, codeEl);
-    let maxTicks = 2;
+    let maxTicks = /^(?:markdown|md|mdx)$/i.test(lang) ? 3 : 2;
     const tickMatches = code.match(/`+/g);
     if (tickMatches) {
       for (const m of tickMatches) {
@@ -474,7 +485,9 @@ function lxHtmlToMarkdown(root, options) {
     for (let i = 0; i < segments.length; i += 1) {
       const seg = segments[i];
       const cleaned = seg.text.replace(/^[☑□✅]\s*/, '');
-      if (i === 0 && seg.kind !== 'list') {
+      const isFenceBlock = /^`{3,}/.test(cleaned);
+      const requiresOwnLine = isFenceBlock || /^(?:\$\$\n|\| |> )/.test(cleaned);
+      if (i === 0 && seg.kind !== 'list' && !requiresOwnLine) {
         const lines = cleaned.split('\n');
         out +=
           indent +
@@ -485,10 +498,18 @@ function lxHtmlToMarkdown(root, options) {
             : '');
       } else if (seg.kind === 'list') {
         out += (out ? '\n' : indent + marker.trimEnd() + '\n') + seg.text;
+      } else if (isFenceBlock) {
+        const lines = cleaned.split('\n');
+        const formatted = lines
+          .map((l, idx) =>
+            idx === 0 || (idx === lines.length - 1 && /^`{3,}$/.test(l)) ? contIndent + l : l,
+          )
+          .join('\n');
+        out += (out ? '\n' : indent + marker.trimEnd() + '\n') + formatted;
       } else {
         const lines = cleaned.split('\n');
         const indented = lines.map((l) => (l ? contIndent + l : '')).join('\n');
-        out += (out ? '\n' : indent + marker) + indented;
+        out += (out ? '\n' : indent + marker.trimEnd() + '\n') + indented;
       }
     }
     return out;
@@ -540,6 +561,9 @@ function lxHtmlToMarkdown(root, options) {
 
     const tag = el.tagName.toLowerCase();
     if (/^h[1-6]$/.test(tag)) {
+      if (ctx.inListItem) {
+        return wrapInline(el, '**', 'inStrong', ctx).trim();
+      }
       const level = Number(tag[1]);
       const body = serializeInlineNodes(el.childNodes, ctx).replace(/\s+/g, ' ').trim();
       return body ? '#'.repeat(level) + ' ' + body : '';

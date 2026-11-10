@@ -15,6 +15,7 @@ lx-tui/
   README.md                     项目说明
   docs/
     standards/                  项目规范（本文件所在）
+    web/                        Web 驱动流程与适配规范（`web-deepseek.md`、`web-gemini.md`、`web-grok.md`）
     feature/                    功能设计与任务文档，按需创建
   src/
     main.rs                     启动编排：日志、终端初始化与恢复
@@ -70,6 +71,7 @@ lx-tui/
       text.rs                   全部用户可见文案
       markdown.rs               编辑器 markdown 高亮（保留标记上色）
       markdown_render.rs        面向阅读的 markdown 渲染器（折叠标记；UI 页 agent 回答与 lx 聊天共用）
+      markdown_render/inline.rs CommonMark 行内 markdown 渲染（递归嵌套强调、多反引号代码与词内下划线保护）
       markdown_render/table.rs  markdown 表格渲染（列宽收缩、单元格行内渲染与 `<br>` 换行）
       main_content.rs           主内容渲染：按视图分派 lx 页与终端网格（含 lx 子模块）
       main_content/lx/          lx 页渲染：欢迎页（brand.rs 品牌区）、网格（grid.rs）、输入框关联几何与浮层面板（panels.rs）、命令面板（slash.rs）、历史（history.rs（置顶用户消息行在 history/sticky.rs；本轮统计行在 history/stats.rs；卡片命中类型 CardKind/CardHit 在 history/cards.rs）；history/tool.rs 是工具步骤分派与共用行能力：方块/动词/路径/行范围/增删计数与状态，样式 token 与文案均取自 style / text::agent；history/tool/file_summary.rs 是普通工具的第二行摘要组装；history/tool/file_diff.rs 是 edit/write 的文件差异卡片——每文件 3 行预览与完整展开、连续同种调用的合并卡、增删行底色与轻量语法高亮，rows/draw 共用同一布局）；history/user_shell.rs 是本地命令卡片：与工具步骤共用直角树体（`│`/`└─`），标题 `■ Running` / `■ You run command · exit 0 · 1.2s` 不带连接符；参数区与输出区各自独立折叠（参数恒为浅黄、不响应 hover（`… N more lines` 同色）；输出折叠 dim、悬停或展开为默认前景（只有真的能展开才响应 hover），不铺灰底；`└─` 只收口参数区），运行中只给 `open task panel · live output` 一行引导，rows/draw/regions 共用同一布局）、聊天历史命中与视口入口（history_hit.rs：置顶行/回到底部、工具卡片点击面与折叠内容 hover 区（`CardHit { card, fold }`）、滚动条与行数口径）、消息底部通知（notice.rs）、状态（status.rs，覆盖绘制在窗格底边框）、聊天栏（chat_bar.rs，动态任务/阶段文案 `修复输入框布局 (3s · ↓320 tok)`——会话计划当前的 `in_progress` 步骤，无 todo 时 `Thinking...` / `Running tools...` / `Working...`；统计优先布局、长 todo 截断不挤掉统计、极窄降级 + Esc 待命提示 + 回到底部；提示类反馈已改走 main content 的 toast；组件测试在 chat_bar/tests.rs 及 tests/{label,layout,animation,stop_and_lifecycle,task_panel}.rs）、提及面板
@@ -150,6 +152,9 @@ lx-tui/
                                 文件变更持久化桥（mutation.rs）、子 agent 池状态与控制入口及子轮装配/结算
                                 （subagent/{mod,turn,settle}.rs）；单元测试按被测模块拆在
                                 tests/{cli,processor,events,runner,subagent}_tests.rs
+      web/                      AI Web 三站点（DeepSeek / Gemini / Grok）驱动：行协议解析与脚本组装（mod.rs）、
+                                共享 DOM → Markdown 序列化器（dom_markdown.js）及各站点嵌入式脚本
+                                （详见 `docs/web/web-deepseek.md`、`docs/web/web-gemini.md`、`docs/web/web-grok.md`）
     settings/                   设置与命令文件持久化，及本地回环设置 Web 服务
       commands.rs               自定义命令 Markdown 文件的读写
       service.rs                回环 HTTP 服务：静态设置页、JSON API 与事件投递（路由 async，禁止在运行时内再建运行时）

@@ -3,7 +3,9 @@
 - **特性目录**：`docs/feature/lx-ai-web-grok/`
 - **关联任务清单**：[`task.md`](task.md)
 - **参考实现**：
-  - [`docs/standards/web-deepseek.md`](../../standards/web-deepseek.md)
+  - [`docs/web/web-deepseek.md`](../../web/web-deepseek.md)
+  - [`docs/web/web-gemini.md`](../../web/web-gemini.md)
+  - [`docs/web/web-grok.md`](../../web/web-grok.md)
   - [`docs/feature/lx-ai-web/design.md`](../lx-ai-web/design.md)
   - [`docs/feature/lx-ai-web-gemini/design.md`](../lx-ai-web-gemini/design.md)
 - **当前状态**：已完成实现、CLI 端到端验证与 Review 修复（见 [`review.md`](review.md)、[`verification.md`](verification.md)），已合并至 `dev` 并移除临时 worktree 与分支；`/rewind` 语义已根据 Grok 实测行为调整为“重试追加”
@@ -22,7 +24,7 @@
 | **状态栏与 `/model`** | `src/app/update/chat/web.rs:26-49` 与 `src/app/update/chat/slash.rs:448-478`：按站点分支。 | 增加 `Grok` 分支：状态栏 `Grok · Fast`，无 variant，单级 `/model`。 |
 | **Grok 登录态** | `GET /rest/auth/get-user` 返回 200 且 `email` 非空即已登录；匿名访客也会自动建 `userId`，只看 cookie 会误判。 | 登录判定必须看 `email`，未登录走 `handOffTaskSpace()`。 |
 | **Grok 会话 REST** | 列表：`GET /rest/app-chat/conversations?pageSize=60&excludeProjects=true`；历史：`GET /rest/app-chat/conversations/{id}/responses`；改名：`PUT /rest/app-chat/conversations/{id}` body `{title}`；删除：`DELETE /rest/app-chat/conversations/{id}`。均已实测 200。 | `/resume`、`/rename`、`/delete` 全部走 REST，不依赖侧栏菜单的 hover/动画。 |
-| **Grok 流式输出** | 发送后走 **WebSocket**，帧内带 `castle_request_token` 反爬令牌；Network 层无法像 DeepSeek 那样拦截 HTTP SSE。 | 不伪造 WebSocket；一律通过 UI 输入 + 发送按钮，正文用 DOM 轮询采集。 |
+| **Grok 流式输出** | 发送后走 **WebSocket**（帧内带 `castle_request_token` 反爬令牌，禁止自行构造发送帧），但可通过 CDP `Network.webSocketFrameReceived` 被动监听服务端下发的 `response.chunk`（`CHANNEL_ASSISTANT_RESPONSE` 原始 Markdown、`render_citation` 引用 URL、`tool_usage_card` 工具步进），并以 `.response-content-markdown` 的 `window.__lxHtmlToMarkdown` DOM 序列化作为双保险兜底。 | 一律通过 UI 输入 + 发送按钮触发请求；Channel A 被动监听 CDP WebSocket 帧提取零损原始 Markdown，Channel B 用 `window.__lxHtmlToMarkdown` 序列化 `.response-content-markdown`（严禁使用会丢失格式的 `body.innerText`）。 |
 | **Grok DOM** | 输入：`[contenteditable="true"].ProseMirror`（tiptap）；发送：`button[data-testid="chat-submit"]`（`aria-label="提交"/"Submit"`）；停止：`button[aria-label="停止模型响应"]`；用户消息：`[data-testid="user-message"]`；助手消息：`[data-testid="assistant-message"]`；正文：`.response-content-markdown`。 | 驱动脚本全部基于稳定 `data-testid` 与 `aria-label`，不依赖 Tailwind class。 |
 | **Grok 模型菜单** | `button[aria-label^="型号:"]` 打开 `[role="menuitemradio"]` 列表：`Fast`（默认）、`Build`；`Auto` / `Expert` / `Heavy` 标注“需要 SuperGrok”。 | 只暴露 `Fast` / `Build`；`Build` 可选中但按 best-effort 支持。 |
 | **Grok 思考内容** | `.thinking-container` 只有 `button[data-testid="canvas-trigger"]`，文案为“工作了 4s”，不是可展开的推理文本。 | 不显示 `Thinking` 块，只推正文；不伪造思考。 |
@@ -66,10 +68,16 @@ src/
         web/tests.rs              [改] Grok 站点切换、/model、/rewind 附件拒绝、状态栏测试
   chat/
     web/
-      mod.rs                      [改] 嵌入 GROK_HELPERS_SCRIPT / GROK_SCRIPT，scripts_for_site 三分支
-      grok_helpers.js             [新增] Grok 网页驱动辅助：登录、Cookie、模型、附件、会话 REST、动作分发
-      grok_script.js              [新增] Grok 网页对话主流程：DOM 轮询流、普通发送、/rewind 重试追加
-      tests.rs                    [改] Grok 脚本常量与 bundled 关键字测试
+      mod.rs                      [改] 嵌入 DOM_MARKDOWN_JS 与 GROK_HELPERS_SCRIPT / GROK_SCRIPT，scripts_for_site 三分支
+      dom_markdown.js             [新增] 跨站点共享 DOM → Markdown 序列化器（`lxHtmlToMarkdown` + `window.__lxHtmlToMarkdown`，支持 `streaming` 尾部闭合标记暂缓）
+      grok_helpers.js             [新增] Grok 网页驱动辅助：登录、Cookie、模型、附件、会话 REST、引用卡片映射、动作分发
+      grok_script.js              [新增] Grok 网页对话主流程：CDP WebSocket 原始 Markdown 帧监听 + `window.__lxHtmlToMarkdown` DOM 轮询流、普通发送、/rewind 重试追加
+      tests.rs                    [改] Grok 脚本常量、DOM→Markdown 保真序列化与 bundled 关键字测试
+  ui/
+    markdown_render.rs            [改] 列表续段按 `list_hangs` 栈悬挂列对齐、逐层回退列表上下文栈
+    markdown_render/
+      inline.rs                   [改] 强调块（`**`/`*`/`***`/`~~`）内部递归解析行内代码、链接与内层强调，支持多反引号 `` ``code`` ``
+      code_block.rs               [改] 剥离列表内围栏代码块前导缩进
   cli/
     web.rs                        [改] --site grok/gk、site_key、resolve_model_and_thinking
     web/exec.rs                   [改] models 输出 Grok 条目
@@ -604,7 +612,7 @@ if (currentUrl.includes(SESSION_ID)) {
 
 ---
 
-### 3.6 Grok 对话主流程与 DOM 流采集（`src/chat/web/grok_script.js`）
+### 3.6 Grok 对话主流程、WebSocket 原始 Markdown 帧监听与 DOM 保真采集（`src/chat/web/grok_script.js`）
 
 #### 关键点
 
@@ -613,7 +621,9 @@ if (currentUrl.includes(SESSION_ID)) {
 3. **模型同步**：发送前 `ensureGrokModel()`；按钮已是目标模型（允许 `Build` 附带的 `Beta` 文本）直接返回，否则在 15s 内轮询菜单项，失败直接 `error`，不静默沿用旧模型。
 4. **普通发送**：`syncComposerAttachments()` 循环删到 0 个 chip，再注入本轮文件并等待 `chips === FILES.length`；ProseMirror `focus()` + `execCommand('selectAll')` + `insertText`（空 prompt 用 `delete` 清空旧草稿）；提交后 5s 内要求 user/assistant 数量增加或出现有效停止按钮，否则立即报错。
 5. **`/rewind` 重试追加**：TUI/CLI 对 Grok 不再传 `EDIT_INDEX`；Rust 层把 `/rewind` 降级为“回填最后一条用户文本 + 普通追加”。脚本保留 `EDIT_INDEX` 兼容分支但显式拒绝附件和越界，采集器不得盯 `EDIT_INDEX` 对应的旧回答。
-6. **DOM 流采集**：在 `window.__lxGrokStream` 上保存 `baselineAssistants` / `lastText` / `queue` / `stableTicks`；每 60ms 轮询发送后新增的最后一个 `[data-testid="assistant-message"]`，只读 `.response-content-markdown`，用“尾部锚点对齐”计算增量。
+6. **双通道流式 Markdown 保真采集（CDP WebSocket 优先 + `window.__lxHtmlToMarkdown` DOM 兜底）**：
+   - **Channel A（CDP `Network.webSocketFrameReceived` 原始 Markdown 流）**：通过 `await cdp('Network.enable')` 与 `drainEvents()` 监听 `response.created`、`response.chunk` 与 `response.done`。累积 `chunk.text.channel === 'CHANNEL_ASSISTANT_RESPONSE'` 的原始 Markdown 文本与 `chunk.render_citation.url`（转换为 `[Source](url)`）；遇到 `chunk.tool_usage_card` 时记录 `wsLastToolStep = stepId` 并在已有前文时置 `wsAfterToolCard = true`，后续新步骤正文自动补齐 `\n\n` 分段后继续由 WS 通道输出（绝不半途抛弃 WS 导致 `s.wsActive` 死锁）；通过 `cleanGrokWsBuffer(wsRawBuffer, !wsDoneSeen)` 在累积缓冲区上剥离 `<grok:render>` / `<argument>` 并暂缓末尾跨帧拆分的半闭合标签。
+   - **Channel B（DOM `window.__lxHtmlToMarkdown` 兜底，严禁 `body.innerText`）**：在 `window.__lxGrokStream` 上保存 `baselineAssistants` / `wsSeen` / `wsActive` / `domStarted` / `lastText` / `queue` / `stableTicks`；当 WS 通道未激活且超过 1200ms 宽限期（或生成结束）时，每 60ms 轮询发送后新增的最后一个 `[data-testid="assistant-message"]`，只读 `.response-content-markdown` 并调用 `window.__lxHtmlToMarkdown(body, { streaming: isStreaming })`（保留 Shiki `span.line` 代码块、标题、粗体、列表与表格），再经 `stripGrokDirectives(raw, isStreaming)`（流式期间不调用 `.trim()` 以保留代码行缩进空格）和 1024 字符尾部锚点 / 160 字符 LCP 对齐计算增量。
 7. **完成判定**：有效停止按钮（过滤 disabled/`aria-disabled`）消失 + 文本连续 30 个 tick（约 1.8s）不变；助手节点出现但 15s 无正文时显式报 `Grok response has no text`，不空等 300s。不再把 `chat-submit` 作为完成信号（空 composer 时该按钮会消失）。
 8. **会话绑定**：完成后从 `location.pathname.match(/\/c\/([0-9a-f-]{8,})/)` 取 ID；最多等 5s，标题优先侧栏 `a[href^="/c/"]` 文本（过滤 `New chat` 占位），其次 `document.title` 去掉 ` - Grok` 后缀。
 9. **思考块**：不采集、不 emit `thinking`。
@@ -720,9 +730,11 @@ async function main() {
             if (previous.length < len) continue;
             const anchor = previous.slice(previous.length - len);
             const pos = current.lastIndexOf(anchor);
-            if (pos >= 0 && pos + len >= current.length - 240) {
+            if (pos >= 0 && pos + len >= current.length - 1024) {
               const delta = current.slice(pos + len);
-              this.lastText = current;
+              if (delta.length > 0 || current.length >= previous.length) {
+                this.lastText = current;
+              }
               if (delta) {
                 this.started = true;
                 this.queue.push({ kind: 'text', delta });
@@ -740,9 +752,9 @@ async function main() {
           if (generating) this.started = true;
           if (!last) return;
           const body = last.querySelector('.response-content-markdown');
-          // 只读正文容器：助手消息头部的 sr-only "Grok" 标题不能回退成回答。
-          const text = body
-            ? (body.innerText || '').replace(/\\r\\n/g, '\\n').trim()
+          // 只读正文容器并用 window.__lxHtmlToMarkdown 保真序列化为 Markdown（严禁使用 body.innerText）。
+          const text = body && typeof window.__lxHtmlToMarkdown === 'function'
+            ? stripGrokDirectives(window.__lxHtmlToMarkdown(body, { streaming: generating }), generating)
             : '';
           if (text) this.pushText(text);
           const sample = text;
@@ -990,7 +1002,7 @@ sleep 4
 8. **Cookie 弹窗**：只点击拒绝按钮，不修改用户偏好；失败继续，不能用 `display:none` 绕过。
 9. **无数据库迁移**：`ai-web-grok-*` 只存在内存；切换入口/站点时由现有 `set_lx_entry` / `set_ai_web_site` 清理。
 10. **文件行数**：新增 JS 文件按 helpers/script 拆分，单个生产文件 `< 1000` 行；Rust 改动均为分支追加，不新建超大模块。
-11. **正文提取**：只能读 `.response-content-markdown`；禁止回退到助手消息 `innerText`，否则正文挂载前会把 `sr-only` 的 “Grok” 标题当成回答（已实测踩坑）。
+11. **正文提取**：DOM 兜底只能读 `.response-content-markdown` 并调用 `window.__lxHtmlToMarkdown(body, { streaming })` 保真序列化 Markdown；禁止使用 `body.innerText` 或回退到助手消息 `innerText`，否则会丢失 Markdown 结构或把 `sr-only` 的 “Grok” 标题当成回答。
 12. **附件 DOM**：chip 容器在输入框 `<form>` 内而不是 `drop-ui` 内；清理必须限定 `form`，隐藏 input 轮询 10s，chip 等待 60s。
 13. **Grok Edit 不可原地替换**：Edit 提交会清空旧用户消息正文并追加新轮次；任何“EDIT_INDEX 对应旧回答”的采集逻辑都会超时。
 14. **引用标签不得泄漏**：历史 `message` 原样带 `<grok:render>`，必须按 `cardAttachmentsJson` 映射为来源链接；实时采集要及时剥离完整标签和尾部未闭合片段，否则 TUI 会显示原始 XML。

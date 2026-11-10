@@ -100,6 +100,7 @@ async function main() {
         stableTicks: 0,
         imageWaitTicks: 0,
         pushDom(kind, current) {
+          if (kind === 'thinking' && this.domText) return;
           const key = kind === 'thinking' ? 'domThink' : 'domText';
           const previous = this[key] || '';
           if (!current || current === previous) return;
@@ -124,7 +125,7 @@ async function main() {
             if (previous.length < len) continue;
             const anchor = previous.slice(previous.length - len);
             const pos = current.lastIndexOf(anchor);
-            if (pos >= 0 && pos + len >= current.length - 240) {
+            if (pos >= 0 && pos + len >= current.length - 1024) {
               const delta = current.slice(pos + len);
               if (delta.length > 0 || current.length >= previous.length) {
                 this[key] = current;
@@ -148,7 +149,7 @@ async function main() {
           while (lcp < current.length && lcp < previous.length && current[lcp] === previous[lcp]) {
             lcp += 1;
           }
-          if (previous.length - lcp <= 40) {
+          if (previous.length - lcp <= 160) {
             const remPrev = previous.slice(lcp).replace(/^[*_~\\s\\x60]+/, '');
             if (remPrev.length === 0) {
               const delta = current.slice(lcp);
@@ -160,7 +161,7 @@ async function main() {
               return;
             }
             const idx = current.indexOf(remPrev, lcp);
-            if (idx >= lcp && idx - lcp <= 12) {
+            if (idx >= lcp && idx - lcp <= 24) {
               const delta = current.slice(idx + remPrev.length);
               this[key] = current;
               if (delta) {
@@ -176,7 +177,18 @@ async function main() {
         },
         extractCleanText(root, selectorList, _stripSelectors, streaming) {
           if (!root) return '';
-          const el = selectorList ? root.querySelector(selectorList) : root;
+          let el = null;
+          if (selectorList) {
+            for (const sel of selectorList.split(',').map((s) => s.trim()).filter(Boolean)) {
+              const found = root.querySelector(sel);
+              if (found) {
+                el = found;
+                break;
+              }
+            }
+          } else {
+            el = root;
+          }
           if (!el) return '';
           if (typeof window.__lxHtmlToMarkdown === 'function') {
             return window.__lxHtmlToMarkdown(el, { streaming: Boolean(streaming) });
@@ -214,7 +226,7 @@ async function main() {
               false
             );
             if (
-              announcerBusy ||
+              isGenerating ||
               curBody !== this.initialTargetText ||
               curThink !== this.initialThinkText
             ) {
@@ -237,17 +249,18 @@ async function main() {
           if (!mr) {
             return;
           }
-          const thinkText = this.extractCleanText(
-            mr,
-            'model-thoughts .thoughts-content, model-thoughts, thinking-overlay .thoughts-content, thinking-overlay',
-            'button, mat-icon, .cdk-visually-hidden',
-            isGenerating
-          );
           const bodyText = this.extractCleanText(
             mr,
             'message-content .markdown, message-content',
             '.cdk-visually-hidden, source-footnote, sources-carousel-inline, sources-list, button, mat-icon',
             isGenerating
+          );
+          const thinkStreaming = isGenerating && !bodyText && !this.domText;
+          const thinkText = this.extractCleanText(
+            mr,
+            'model-thoughts .thoughts-content, thinking-overlay .thoughts-content, model-thoughts, thinking-overlay',
+            'button, mat-icon, .cdk-visually-hidden',
+            thinkStreaming
           );
           if (thinkText) this.pushDom('thinking', thinkText);
           if (bodyText) this.pushDom('text', bodyText);

@@ -776,10 +776,23 @@ xhr2.send();
 xhr2.readyState = 3;
 const frames = [
   'data: {{"o":"SET","v":{{"response":{{"fragments":[{{"id":1,"type":"THINK","content":"**思考中**"}}]}}}}}}\n\n',
-  'data: {{"p":"response/fragments","o":"APPEND","v":[{{"id":2,"type":"RESPONSE","content":"### 标题\\n\\n- **要点**[citation:2]\\n```rust\\nlet s = \\"[citation:1]\\";\\n```"}}]}}\n\n',
+];
+xhr2.responseText += frames[0];
+xhr2._emit('progress');
+
+// Simulate DeepThink > 1.2s before text arrives: tickDom() must NOT pre-empt SSE text
+stream.sseSeenAt = Date.now() - 5000;
+stream.pollStartedAt = Date.now() - 5000;
+stream.tickDom();
+if (stream.domTextStarted || stream.domThinkingStarted) {{
+  throw new Error('tickDom must not pre-empt active SSE stream during DeepThink');
+}}
+
+const moreFrames = [
+  'data: {{"p":"response/fragments","o":"APPEND","v":[{{"id":2,"type":"RESPONSE","content":"### 标题\\n\\n- **要点**[citation:2]\\n```rust\\nlet s = \\"[citation:1]\\";\\n```\\n区间 [0, 1["}}]}}\n\n',
   'event: finish\ndata: {{}}\n\n',
 ];
-for (const frame of frames) {{
+for (const frame of moreFrames) {{
   xhr2.responseText += frame;
   xhr2._emit('progress');
 }}
@@ -820,6 +833,6 @@ process.stdout.write(JSON.stringify({{
     assert_eq!(thinking, "**思考中**");
     assert_eq!(
         text,
-        "### 标题\n\n- **要点**\n```rust\nlet s = \"[citation:1]\";\n```"
+        "### 标题\n\n- **要点**\n```rust\nlet s = \"[citation:1]\";\n```\n区间 [0, 1["
     );
 }

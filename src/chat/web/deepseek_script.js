@@ -126,7 +126,9 @@ async function main() {
         push(kind, delta) {
           if (!kind || !delta) return;
           if (kind === 'text' && this.domTextStarted) return;
-          if (kind === 'thinking' && this.domThinkingStarted) return;
+          if (kind === 'thinking' && (this.domThinkingStarted || this.domTextStarted || this.sseText)) {
+            return;
+          }
           this.sseActive = true;
           if (kind === 'text') this.sseText = true;
           if (kind === 'thinking') this.sseThinking = true;
@@ -134,7 +136,9 @@ async function main() {
         },
         pushDom(kind, current) {
           if (kind === 'text' && this.sseText) return;
-          if (kind === 'thinking' && this.sseThinking) return;
+          if (kind === 'thinking' && (this.sseThinking || this.sseText || this.domTextStarted)) {
+            return;
+          }
           const key = kind === 'thinking' ? 'domThink' : 'domText';
           const previous = this[key] || '';
           if (!current || current === previous) return;
@@ -154,7 +158,7 @@ async function main() {
             if (previous.length < len) continue;
             const anchor = previous.slice(previous.length - len);
             const pos = current.lastIndexOf(anchor);
-            if (pos >= 0 && pos + len >= current.length - 240) {
+            if (pos >= 0 && pos + len >= current.length - 1024) {
               const delta = current.slice(pos + len);
               if (delta.length > 0 || current.length >= previous.length) {
                 this[key] = current;
@@ -171,7 +175,7 @@ async function main() {
           while (lcp < current.length && lcp < previous.length && current[lcp] === previous[lcp]) {
             lcp += 1;
           }
-          if (previous.length - lcp <= 40) {
+          if (previous.length - lcp <= 160) {
             const remPrev = previous.slice(lcp).replace(/^[*_~\s\x60]+/, '');
             if (remPrev.length === 0) {
               const delta = current.slice(lcp);
@@ -180,7 +184,7 @@ async function main() {
               return;
             }
             const idx = current.indexOf(remPrev, lcp);
-            if (idx >= lcp && idx - lcp <= 12) {
+            if (idx >= lcp && idx - lcp <= 24) {
               const delta = current.slice(idx + remPrev.length);
               this[key] = current;
               emitDelta(delta);
@@ -266,11 +270,11 @@ async function main() {
               }
               if (value.content !== undefined) this.applyScalar('text', op, value.content);
             }
-            if (value.status === 'FINISHED') this.done = true;
+            if (value.status === 'FINISHED') this.finishSse();
             return;
           }
           if (path === 'response/status' && value === 'FINISHED') {
-            this.done = true;
+            this.finishSse();
             return;
           }
           if (path === 'response/fragments') {
@@ -415,15 +419,30 @@ async function main() {
           }
           this.push(kind, delta);
         },
+        finishSse() {
+          for (let i = 0; i < this.fragments.length; i += 1) {
+            const frag = this.fragments[i];
+            if (!frag || this.fragmentKind(frag) !== 'text') continue;
+            const raw = typeof frag.content === 'string' ? frag.content : '';
+            if (!raw) continue;
+            const cleaned = this.cleanText(raw, false);
+            const prev = typeof frag.emitted === 'string' ? frag.emitted : '';
+            if (cleaned.length > prev.length && cleaned.startsWith(prev)) {
+              frag.emitted = cleaned;
+              this.push('text', cleaned.slice(prev.length));
+            }
+          }
+          this.done = true;
+        },
         flushSseFrame() {
           const data = this.sseDataLines.join('\n').trim();
           const name = this.sseEventName;
           this.sseDataLines = [];
           this.sseEventName = '';
-          if (name === 'finish' || name === 'close') this.done = true;
+          if (name === 'finish' || name === 'close') this.finishSse();
           if (!data) return;
           if (data === '[DONE]') {
-            this.done = true;
+            this.finishSse();
             return;
           }
           try {
@@ -472,7 +491,7 @@ async function main() {
               this.sseBuffer = '';
             }
             this.flushSseFrame();
-            if (this.sseActive) this.done = true;
+            if (this.sseActive) this.finishSse();
           }
         },
         attachXhr(xhr) {
@@ -548,7 +567,15 @@ async function main() {
             (k) => k.startsWith('__reactFiber$') || k.startsWith('__reactInternalInstance$'),
           );
           let fiber = key ? el[key] : null;
-          for (let depth = 0; fiber && depth < 20; depth += 1, fiber = fiber.return) {
+          for (let depth = 0; fiber && depth < 10; depth += 1, fiber = fiber.return) {
+            if (
+              depth > 0
+              && fiber.stateNode instanceof Element
+              && fiber.stateNode !== el
+              && !el.contains(fiber.stateNode)
+            ) {
+              break;
+            }
             const props = fiber.memoizedProps;
             if (!props || typeof props !== 'object') continue;
             if (
@@ -563,7 +590,22 @@ async function main() {
           return '';
         },
         tickDom() {
-          if (this.sseText && (this.sseThinking || THINKING === 'off')) return;
+          const idleButton = Boolean(
+            document.querySelector('.ds-button--primary.ds-button--disabled'),
+          );
+          const stopIcon = Boolean(document.querySelector('.ds-icon-stop'));
+          // Once Channel A (SSE) has emitted thinking or text, never let DOM pre-empt or mix.
+          if (this.sseThinking || this.sseText) {
+            if (idleButton && !stopIcon) {
+              this.sseIdleTicks = (this.sseIdleTicks || 0) + 1;
+              if (this.sseIdleTicks >= 15) {
+                this.finishSse();
+              }
+            } else {
+              this.sseIdleTicks = 0;
+            }
+            return;
+          }
           const items = Array.from(document.querySelectorAll('[data-virtual-list-item-key]'));
           let target = null;
           if (this.targetKey) {
@@ -583,24 +625,23 @@ async function main() {
             }
           }
           if (!target) return;
-          const idleButton = Boolean(
-            document.querySelector('.ds-button--primary.ds-button--disabled'),
-          );
-          const stopIcon = Boolean(document.querySelector('.ds-icon-stop'));
           const isStreaming = stopIcon || !idleButton;
-          const readMarkdownText = (el) => {
+          const readMarkdownText = (el, streamingFlag) => {
             if (!el) return '';
-            const fiberMd = this.readFiberMarkdown(el);
-            if (fiberMd) {
-              return this.cleanText(fiberMd, isStreaming);
+            if (!streamingFlag) {
+              const fiberMd = this.readFiberMarkdown(el);
+              if (fiberMd) {
+                return this.cleanText(fiberMd, false);
+              }
             }
             if (typeof window.__lxHtmlToMarkdown === 'function') {
               return this.cleanText(
-                window.__lxHtmlToMarkdown(el, { streaming: isStreaming }),
+                window.__lxHtmlToMarkdown(el, { streaming: Boolean(streamingFlag) }),
                 false,
               );
             }
-            return '';
+            const fiberMd = this.readFiberMarkdown(el);
+            return fiberMd ? this.cleanText(fiberMd, Boolean(streamingFlag)) : '';
           };
           const now = Date.now();
           if (!this.pollStartedAt) this.pollStartedAt = now;
@@ -617,12 +658,10 @@ async function main() {
                 (el) => !el.closest('.ds-think-content'),
               )
               || null;
-            if (!this.sseThinking) {
-              this.pushDom('thinking', readMarkdownText(thinkEl));
-            }
-            if (!this.sseText) {
-              this.pushDom('text', readMarkdownText(textEl));
-            }
+            const bodyText = readMarkdownText(textEl, isStreaming);
+            const thinkStreaming = isStreaming && !bodyText && !this.domTextStarted;
+            this.pushDom('thinking', readMarkdownText(thinkEl, thinkStreaming));
+            this.pushDom('text', bodyText);
           }
           const sample = (this.domThink || '') + ':::' + (this.domText || '');
           if (sample === this.domLastSample) {

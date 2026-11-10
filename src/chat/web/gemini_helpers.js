@@ -629,11 +629,16 @@ async function runNonChatAction(currentUrl) {
             });
           } else if (tag === 'model-response') {
             assistantTurn += 1;
-            const thoughtEl = node.querySelector('model-thoughts, thinking-overlay, .thoughts-content');
+            const thoughtEl =
+              node.querySelector('model-thoughts .thoughts-content, thinking-overlay .thoughts-content') ||
+              node.querySelector('model-thoughts, thinking-overlay');
             const thinking = thoughtEl && typeof window.__lxHtmlToMarkdown === 'function'
               ? window.__lxHtmlToMarkdown(thoughtEl, { streaming: false })
               : '';
-            const msgEl = node.querySelector('message-content .markdown, message-content') || node;
+            const msgEl =
+              node.querySelector('message-content .markdown') ||
+              node.querySelector('message-content') ||
+              node;
             const text = typeof window.__lxHtmlToMarkdown === 'function'
               ? window.__lxHtmlToMarkdown(msgEl, { streaming: false })
               : (msgEl.textContent || '').replace(/\\r\\n/g, '\\n').trim();

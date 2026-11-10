@@ -207,8 +207,8 @@ async function main() {
   await js(String.raw`
     (() => {
       // 页面上下文执行：不能引用 Node 侧函数。
-      const stripGrokDirectives = (text) =>
-        String(text || '')
+      const stripGrokDirectives = (text, streaming) => {
+        const cleaned = String(text || '')
           .replace(/<grok:render\b[^>]*>[\s\S]*?<\/grok:render>/gi, '')
           .replace(/<grok:render\b[^>]*\/>/gi, '')
           .replace(/<argument\b[^>]*>[\s\S]*?<\/argument>/gi, '')
@@ -219,7 +219,10 @@ async function main() {
           .replace(/<\/?grok:[^>]*>?/gi, '')
           .replace(/<grok:render\b[^>]*$/gi, '')
           .replace(/\u2060/g, ' ')
-          .trim();
+          .replace(/^\n+/, '')
+          .replace(/\n{3,}/g, '\n\n');
+        return streaming ? cleaned : cleaned.trim();
+      };
       const existingResponses = Array.from(document.querySelectorAll('[data-testid="assistant-message"]'));
       const baselineAssistants = existingResponses.length;
       window.__lxGrokStream = {
@@ -228,6 +231,7 @@ async function main() {
         done: false,
         error: null,
         started: false,
+        wsSeen: false,
         wsActive: false,
         domStarted: false,
         pollStartedAt: 0,
@@ -243,14 +247,15 @@ async function main() {
           // 正文尚未挂载时回退会误把标题当成回答输出。
           const body = el.querySelector('.response-content-markdown');
           if (!body) return '';
+          const isStreaming = Boolean(generating);
           if (typeof window.__lxHtmlToMarkdown === 'function') {
             const raw = window.__lxHtmlToMarkdown(body, {
-              streaming: Boolean(generating),
+              streaming: isStreaming,
             });
-            return stripGrokDirectives(raw);
+            return stripGrokDirectives(raw, isStreaming);
           }
           const raw = (body.textContent || '').replace(/\r\n/g, '\n');
-          return stripGrokDirectives(raw);
+          return stripGrokDirectives(raw, isStreaming);
         },
         pushText(current) {
           if (!current || this.wsActive) return;
@@ -278,7 +283,7 @@ async function main() {
             if (previous.length < len) continue;
             const anchor = previous.slice(previous.length - len);
             const pos = current.lastIndexOf(anchor);
-            if (pos >= 0 && pos + len >= current.length - 240) {
+            if (pos >= 0 && pos + len >= current.length - 1024) {
               const delta = current.slice(pos + len);
               if (delta.length > 0 || current.length >= previous.length) {
                 this.lastText = current;
@@ -291,7 +296,7 @@ async function main() {
           while (lcp < current.length && lcp < previous.length && current[lcp] === previous[lcp]) {
             lcp += 1;
           }
-          if (previous.length - lcp <= 40) {
+          if (previous.length - lcp <= 160) {
             const remPrev = previous.slice(lcp).replace(/^[*_~\s\x60]+/, '');
             if (remPrev.length === 0) {
               const delta = current.slice(lcp);
@@ -300,7 +305,7 @@ async function main() {
               return;
             }
             const idx = current.indexOf(remPrev, lcp);
-            if (idx >= lcp && idx - lcp <= 12) {
+            if (idx >= lcp && idx - lcp <= 24) {
               const delta = current.slice(idx + remPrev.length);
               this.lastText = current;
               emitDelta(delta);
@@ -339,7 +344,7 @@ async function main() {
           if (text) {
             this.emptySince = 0;
             const graceOver = now - this.pollStartedAt >= 1200 || !generating;
-            if (!this.wsActive && graceOver) {
+            if (!this.wsActive && (!this.wsSeen || !generating) && graceOver) {
               this.pushText(text);
             } else if (this.wsActive) {
               this.lastText = text;
@@ -440,9 +445,43 @@ async function main() {
   if (typeof drainEvents === 'function') {
     await drainEvents().catch(() => []);
   }
-  let wsEmittedText = false;
-  let wsAborted = false;
+  let wsRawBuffer = '';
+  let wsEmittedCleaned = '';
+  let wsSeen = false;
+  let wsDoneSeen = false;
+  let wsAfterToolCard = false;
   let wsLastToolStep = -1;
+  const cleanGrokWsBuffer = (raw, holdIncomplete) => {
+    let out = String(raw || '')
+      .replace(/<grok:render\b[^>]*>[\s\S]*?<\/grok:render>/gi, '')
+      .replace(/<grok:render\b[^>]*\/>/gi, '')
+      .replace(/<argument\b[^>]*>[\s\S]*?<\/argument>/gi, '')
+      .replace(/\u2060/g, ' ');
+    if (holdIncomplete) {
+      const lastOpen = out.lastIndexOf('<');
+      if (lastOpen >= 0) {
+        const tail = out.slice(lastOpen).toLowerCase();
+        if (
+          '<grok:'.startsWith(tail) ||
+          '</grok:'.startsWith(tail) ||
+          '<argument'.startsWith(tail) ||
+          '</argument'.startsWith(tail) ||
+          tail.startsWith('<grok:') ||
+          tail.startsWith('</grok:') ||
+          tail.startsWith('<argument') ||
+          tail.startsWith('</argument')
+        ) {
+          out = out.slice(0, lastOpen);
+        }
+      }
+    } else {
+      out = out
+        .replace(/<argument\b[^>]*>?/gi, '')
+        .replace(/<\/argument>/gi, '')
+        .replace(/<\/?grok:[^>]*>?/gi, '');
+    }
+    return out;
+  };
 
   const deadline = Date.now() + 300000;
   let lastHeartbeat = Date.now();
@@ -450,32 +489,41 @@ async function main() {
   while (Date.now() < deadline && !STREAM_ABORTED) {
     await ensureTaskSpaceControl();
     let wsDelta = '';
-    if (!wsAborted && typeof drainEvents === 'function') {
+    if (typeof drainEvents === 'function') {
       const cdpEvents = await drainEvents().catch(() => []);
       if (Array.isArray(cdpEvents)) {
         for (const ev of cdpEvents) {
           if (!ev || ev.method !== 'Network.webSocketFrameReceived') continue;
           const payload =
             ev.params && ev.params.response && ev.params.response.payloadData;
-          if (typeof payload !== 'string' || !payload.includes('"response.chunk"')) {
+          if (
+            typeof payload !== 'string' ||
+            (!payload.includes('"response.chunk"') &&
+              !payload.includes('"response.done"') &&
+              !payload.includes('"response.created"'))
+          ) {
             continue;
           }
           try {
             const parsed = JSON.parse(payload);
             const evObj = parsed && parsed.event;
-            if (!evObj || evObj.type !== 'response.chunk' || !evObj.chunk) continue;
+            if (!evObj) continue;
+            if (evObj.type === 'response.created' || evObj.type === 'response.chunk') {
+              wsSeen = true;
+            }
+            if (evObj.type === 'response.done') {
+              wsDoneSeen = true;
+              continue;
+            }
+            if (evObj.type !== 'response.chunk' || !evObj.chunk) continue;
             const chunk = evObj.chunk;
             const stepId =
               chunk.metadata && typeof chunk.metadata.step_id === 'number'
                 ? chunk.metadata.step_id
                 : 0;
             if (chunk.tool_usage_card) {
-              if (wsEmittedText) {
-                wsAborted = true;
-                wsDelta = '';
-                break;
-              }
               if (stepId > wsLastToolStep) wsLastToolStep = stepId;
+              if (wsRawBuffer.length > 0) wsAfterToolCard = true;
               continue;
             }
             if (stepId < wsLastToolStep) continue;
@@ -485,14 +533,13 @@ async function main() {
               typeof chunk.text.text === 'string' &&
               chunk.text.text
             ) {
-              const cleanedChunk = chunk.text.text
-                .replace(/<grok:render\b[^>]*>[\s\S]*?<\/grok:render>/gi, '')
-                .replace(/<grok:render\b[^>]*\/>/gi, '')
-                .replace(/<argument\b[^>]*>[\s\S]*?<\/argument>/gi, '')
-                .replace(/<\/?grok:[^>]*>?/gi, '')
-                .replace(/\u2060/g, ' ');
-              wsDelta += cleanedChunk;
-              if (cleanedChunk) wsEmittedText = true;
+              if (wsAfterToolCard) {
+                if (wsRawBuffer && !wsRawBuffer.endsWith('\n\n')) {
+                  wsRawBuffer += wsRawBuffer.endsWith('\n') ? '\n' : '\n\n';
+                }
+                wsAfterToolCard = false;
+              }
+              wsRawBuffer += chunk.text.text;
             } else if (
               chunk.render_citation &&
               typeof chunk.render_citation.url === 'string' &&
@@ -503,12 +550,29 @@ async function main() {
                 const label = citationSourceLabel(citeUrl);
                 const md = citationMarkdown(citeUrl, label);
                 if (md) {
-                  wsDelta += (wsDelta && !/\s$/.test(wsDelta) ? ' ' : '') + md;
-                  wsEmittedText = true;
+                  wsRawBuffer += (wsRawBuffer && !/\s$/.test(wsRawBuffer) ? ' ' : '') + md;
                 }
               }
             }
           } catch (_) {}
+        }
+      }
+      if (wsRawBuffer) {
+        const cleanedWs = cleanGrokWsBuffer(wsRawBuffer, !wsDoneSeen);
+        if (cleanedWs.startsWith(wsEmittedCleaned)) {
+          wsDelta = cleanedWs.slice(wsEmittedCleaned.length);
+          wsEmittedCleaned = cleanedWs;
+        } else {
+          let lcp = 0;
+          while (
+            lcp < cleanedWs.length &&
+            lcp < wsEmittedCleaned.length &&
+            cleanedWs[lcp] === wsEmittedCleaned[lcp]
+          ) {
+            lcp += 1;
+          }
+          wsDelta = cleanedWs.slice(lcp);
+          wsEmittedCleaned = cleanedWs;
         }
       }
     }
@@ -517,6 +581,9 @@ async function main() {
         const s = window.__lxGrokStream;
         if (!s || s.runId !== ${JSON.stringify(runId)}) {
           return { items: [], done: true, superseded: true };
+        }
+        if (${wsSeen ? 'true' : 'false'}) {
+          s.wsSeen = true;
         }
         const wsChunk = ${JSON.stringify(wsDelta)};
         if (wsChunk && !s.domStarted) {

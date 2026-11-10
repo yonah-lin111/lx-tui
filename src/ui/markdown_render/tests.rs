@@ -808,3 +808,61 @@ fn list_continuation_paragraph_keeps_list_indent_across_soft_wraps() {
         );
     }
 }
+
+#[test]
+fn nested_inline_code_links_and_emphasis_render_without_leaking_delimiters() {
+    let src = "- **修改 `config.toml` 文件**\n- **[官方文档](https://example.com)**\n- **bold *italic***\n- ``code ` inner``";
+    let lines = render(src);
+    assert_eq!(lines[0].text(), "• 修改 config.toml 文件");
+    assert!(
+        lines[0]
+            .spans
+            .iter()
+            .any(|(t, s)| t == "config.toml" && *s == style::md_read_inline_code()),
+        "inline code inside bold must use inline_code style: {:?}",
+        lines[0].spans
+    );
+    assert_eq!(lines[1].text(), "• 官方文档 (https://example.com)");
+    assert_eq!(lines[2].text(), "• bold italic");
+    assert!(
+        lines[2]
+            .spans
+            .iter()
+            .any(|(t, s)| t == "italic" && *s == style::md_read_strong_emphasis()),
+        "italic inside bold must combine into strong_emphasis: {:?}",
+        lines[2].spans
+    );
+    assert_eq!(lines[3].text(), "• code ` inner");
+}
+
+#[test]
+fn ordered_task_list_continuations_and_indented_fences_keep_exact_columns() {
+    let src = "1. **第一步**\n   有序续段\n- [x] **已完成**\n      任务续段\n- 外层项\n  - 内层项\n  外层续段\n  ```rust\nlet x = 1;\n  ```";
+    let lines = render_wrapped_code_blocks(src, 60);
+    let ordered_cont = lines
+        .iter()
+        .find(|l| l.text() == "有序续段")
+        .expect("ordered continuation");
+    assert_eq!(ordered_cont.indent, 3, "1. continuation aligns at col 3");
+
+    let task_cont = lines
+        .iter()
+        .find(|l| l.text() == "任务续段")
+        .expect("task continuation");
+    assert_eq!(task_cont.indent, 4, "[x] continuation aligns at col 4");
+
+    let outer_cont = lines
+        .iter()
+        .find(|l| l.text() == "外层续段")
+        .expect("outer continuation after nested list");
+    assert_eq!(
+        outer_cont.indent, 2,
+        "outer continuation after nested list pops back to col 2"
+    );
+
+    assert_eq!(
+        extract_code_block(src, 0).as_deref(),
+        Some("let x = 1;"),
+        "indented fenced code block inside list must strip fence indent"
+    );
+}

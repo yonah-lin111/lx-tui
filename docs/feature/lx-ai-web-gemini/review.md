@@ -171,3 +171,119 @@ rtk cargo test
 - `DeepSeek`：`deepthink/off` 对话、`/rewind` 有效索引成功、越界索引返回 `DeepSeek /rewind target turn not found`、rename/delete 成功。
 - `Gemini`：`3.8 Flash + medium`、`3.5 Flash-Lite + high` 切换成功；文件上传返回 `GM_FILE_9900`；`/rewind` 保留附件返回 `EDITED_GM_9900`；第 1 轮 `/rewind` 无超时；更早轮次新增附件被显式拒绝；rename/delete 成功。
 - 失败路径：不存在的 Gemini 会话 rename 返回 `Gemini session not found in sidebar`；不存在的 DeepSeek 会话 rename 返回 `DeepSeek rename failed`；CLI 参数组合错误在本地即被拦截。
+
+---
+
+## 6. Web Markdown 保真提取与流式渲染专项 Review（按 P0 → P3 排序）
+
+> **审查范围**：Gemini / DeepSeek 共享 DOM → Markdown 序列化器（`src/chat/web/dom_markdown.js`）、`src/chat/web/gemini_script.js`、`src/chat/web/gemini_helpers.js`、`src/chat/web/deepseek_script.js`、`src/chat/web/deepseek_helpers.js`，以及 TUI 面向阅读的 Markdown 渲染器（`src/ui/markdown_render.rs`、`src/ui/markdown_render/inline.rs`、`src/ui/markdown_render/code_block.rs`）。
+> **参考规范**：[`docs/web/web-gemini.md`](../../web/web-gemini.md) · [`docs/web/web-deepseek.md`](../../web/web-deepseek.md)
+
+### 6.1 P0（已修复）
+
+#### [P0-1] `src/chat/web/gemini_script.js:252-266`、`src/chat/web/deepseek_script.js:126-140, 661-664` — 正文流式输出期间思考块仍按 `streaming: true` 序列化，暂缓的闭合 `**` / ```` ``` ```` 晚于 `text` 吐出并分裂出第二个 `○ Thought` 块
+
+- **关键点**：
+  - `gemini_script.js` 的 `pollDom()` 原先对 `<model-thoughts>` 与 `<message-content>` 同时传入 `{ streaming: isGenerating }`；`deepseek_script.js` 的 `tickDom()` 对 `thinkEl` 同样传入 `isStreaming`。
+  - 当思考块以粗体（`**总结**`）、行内代码（`` `code` ``）或围栏代码块（```` ``` ````）结尾时，`lxHtmlToMarkdown` 的 `streaming && isTail(el)` 会暂缓输出最末尾的右闭合标记，直到 `streaming` 变为 `false`。
+- **错误原因**：
+  - 模型进入正文输出阶段后，网页仍在生成（`isGenerating === true`），但思考块早已完成。由于思考块继续传 `streaming: true`，其末尾闭合 `**` 一直被扣留到整轮回答彻底停止（`isGenerating === false`）才作为新的 `thinking` delta 发出。
+  - Rust 侧在已接收 `text` 增量后再收到迟到的 `thinking` 增量（`"**"`），会在正文下方追加第二个 `PartKind::Reasoning`，导致界面底部多出一个空白或只有标点的 `○ Thought · 0s`。
+- **影响/复现**：
+  - Gemini（如 `3.8 Flash + high`）或 DeepSeek（DOM 兜底）思考块末句含粗体或代码块时，回答完成后正文下方会多出一个孤立的 `○ Thought` 块。
+- **修复（已修复）**：
+  - 在 `gemini_script.js:258` 先提取 `bodyText`，将思考块的流式标志改为 `const thinkStreaming = isGenerating && !bodyText && !this.domText`（`deepseek_script.js:662` 为 `isStreaming && !bodyText && !this.domTextStarted`）：一旦正文非空，立即以 `streaming: false` 序列化思考块，在第一个 `text` delta 入队前刷出思考块末尾闭合标记；
+  - 在 `gemini_script.js:103`（`if (kind === 'thinking' && this.domText) return;`）与 `deepseek_script.js:129, 139` 增加硬门禁，拒绝在正文启动后追加任何 `thinking` 事件。
+
+#### [P0-3] `src/chat/web/deepseek_script.js:564-608, 648-650` — DeepThink 思考超过 1.2s 时 `tickDom()` 越权启动 DOM 通道 & `readFiberMarkdown` 无宿主边界爬树污染
+
+- **关键点**：
+  - `deepseek_script.js` 原先在 `tickDom()` 中仅当 `this.sseText` 为真时才跳过 DOM 采集，且 `graceOver` 从 `submittedAt` 起算 1.2s；`readFiberMarkdown(el)` 沿着 `fiber.return` 向上爬 20 层且不检查 `fiber.stateNode` 是否越出 `el`。
+- **错误原因**：
+  - DeepThink 思考通常持续数秒（`sseThinking = true, sseText = false`），1.2s 后 `tickDom` 误判 SSE 失效并置位 `domTextStarted = true`，反向锁死后续真正的 SSE 正文；Fiber 向上 20 层会爬到外层消息容器，拿到非当前块的 `content`。
+- **影响/复现**：
+  - DeepSeek 开启 `deepthink` 且思考超过 1.2s 时，DOM 通道抢跑；完成态读取 Fiber 时可能混入外层组件文本。
+- **修复（已修复）**：
+  - `tickDom()` 入口（`deepseek_script.js:598`）改为 `if (this.sseThinking || this.sseText)` 严格互斥，并记录 `sseSeenAt` 计算宽限期；
+  - `readFiberMarkdown(el)`（`deepseek_script.js:564-591`）收紧为 `depth < 10`，校验 `el.contains(fiber.stateNode)` 边界与 `citeProps`/`cacheKey`/`mergeConsecutiveCites` 特征属性；新增回归测试 `deepseek_stream_collector_survives_non_sse_xhr_and_preserves_markdown_fences`。
+
+---
+
+### 6.2 P1（已修复）
+
+#### [P1-1] `src/chat/web/dom_markdown.js:486-513, 563-570` — `<li>` 首块为代码块/块级结构时围栏倒置、列表内 `<h3>` 泄漏顶层标题、以及列表内代码正文被多加缩进
+
+- **关键点**：
+  - `serializeListItem` 原先将第 0 个块级分段的第一行直接拼在 `- ` 之后（产生 ```` - ```rust ````），并对围栏代码块的所有内部代码行都加上 `contIndent` 空格；`<li>` 内的 `<h3>` 直接输出 `### 标题`。
+- **错误原因**：
+  - 未识别必须独占一行的块级结构（围栏代码块、块级公式、表格、引用），未区分围栏开闭行与代码正文行的缩进语义，且在 `inListItem` 中未降级标题标签。
+- **影响/复现**：
+  - Gemini 回答常在 `<li>` 内嵌套 `<h3>` 或 `<code-block>`，导致列表断裂、代码块围栏倒置或代码每行多出 2 列缩进。
+- **修复（已修复）**：
+  - `serializeListItem`（`dom_markdown.js:488-509`）对 `requiresOwnLine` 首段先换行，对 `isFenceBlock` 仅在首尾围栏行加 `contIndent`；`serializeBlock`（`dom_markdown.js:563-566`）在 `ctx.inListItem` 下将 `h1`–`h6` 转为 `**...**` 粗体。
+
+#### [P1-2] `src/ui/markdown_render/inline.rs:10-231` — 强调块内部未递归解析行内代码/链接/内层强调、不支持双反引号 `` ``code`` ``、且尾随 `***` 闭合错位
+
+- **关键点**：
+  - `inline_spans` 原先对 `**...**` / `*...*` / `***...***` / `~~...~~` 内部不再递归解析，不支持 `` ``code ` inner`` ``，且 `delimited_emphasis` 未跳过反引号代码段、在 `**bold *italic***` 末尾前两个 `*` 处提前闭合。
+- **错误原因**：
+  - 单层线性扫描缺少递归样式合成（`push_nested_spans`）、多反引号配对（`code_span`）与尾随同字符链对齐（`end = i + run - delim_len`）。
+- **影响/复现**：
+  - `**修改 \`config.toml\`**`、`**[链接](url)**`、`**bold *italic***` 在 TUI 中泄漏原始反引号、方括号或 `*`。
+- **修复（已修复）**：
+  - 新增 `push_nested_spans` 与 `code_span`（`inline.rs:99-161`），更新 `delimited_emphasis`（`inline.rs:167-231`）跳过代码片段并对齐尾随闭合链；新增测试 `nested_inline_code_links_and_emphasis_render_without_leaking_delimiters`。
+
+#### [P1-3] `src/ui/markdown_render.rs:188-189, 338-345, 526-530, 605-629` & `src/ui/markdown_render/code_block.rs:124-131` — 有序/任务列表续段缩进错位、子列表回退清空整栈、以及列表内围栏代码复制残留缩进
+
+- **关键点**：
+  - 列表续段缩进原先写死为 `indent(depth) + 2`；`update_list_context` 在内层子列表结束后直接 `clear()` 整栈；`code_block.rs` 未剥离列表内围栏的前导空格。
+- **错误原因**：
+  - `ParserState` 缺少记录每层标记悬挂宽度的 `list_hangs` 栈；层级回退未逐层 `pop()`。
+- **影响/复现**：
+  - 有序列表 `1. `（3 列）与任务列表 `[x] `（4 列）下的多段续行无法与首行正文对齐；子列表后的外层续段掉回第 0 列。
+- **修复（已修复）**：
+  - 新增 `ListItem::hang_width` 与 `ParserState.list_hangs`，续段按 `indent(depth).saturating_add(hang)` 对齐；`update_list_context` 改为 `while indent < content` 逐层 `pop()`；`code_block.rs` 按 `fence_indent` 剥离前导空格；新增测试 `ordered_task_list_continuations_and_indented_fences_keep_exact_columns`。
+
+#### [P1-4] `src/chat/web/deepseek_script.js:93-125, 422-436` & `src/chat/web/deepseek_helpers.js:390-405` — SSE 结束漏刷末尾暂缓的 `[` & 历史会话清洗破坏代码块与换行
+
+- **关键点**：
+  - 流式期间被 `holdIncomplete = true` 暂缓的末尾 `[` 在 SSE 结束时未补刷；`deepseek_helpers.js` 的 `load_session` 用 `\s*\[(?:citation|reference):[^\]]*\]` 清洗全文，误删代码块内字面量并吞掉前导 `\n`。
+- **错误原因**：
+  - 缺少 `finishSse()` 尾刷步骤；历史清洗未按 ```` ``` ```` 围栏分段且使用了包含 `\n` 的 `\s*`。
+- **影响/复现**：
+  - 回答末尾 `[` 丢失；历史代码块中的 `[citation:1]` 被删且段落换行被吞。
+- **修复（已修复）**：
+  - 新增 `finishSse()`（`deepseek_script.js:422-436`）以 `cleanText(raw, false)` 补刷尾部；`deepseek_helpers.js:390-405` 改为围栏分段清洗且仅匹配 `[ \t]*`。
+
+---
+
+### 6.3 P2 & P3（已修复）
+
+#### [P2-1] `src/chat/web/dom_markdown.js:110-143, 233` & `src/chat/web/gemini_script.js:178-190, 259-264` — `hasMeaningfulContent` 图片/空公式判定、`markdown` 代码块四反引号围栏与 Gemini 子选择器顺序
+
+- **关键点**：
+  - `hasMeaningfulContent` 补齐 `<img src="https://...">`、非空 KaTeX 与非空 `<pre>` 判定；`serializeCodeBlock` 对 `markdown`/`md`/`mdx` 固定使用 4 反引号围栏；`gemini_script.js` 的 `extractCleanText` 按逗号拆分 `selectorList` 逐一查询，并将思考块选择器设为 `'model-thoughts .thoughts-content, thinking-overlay .thoughts-content, model-thoughts, thinking-overlay'`（优先命中子容器而非外层 `<model-thoughts>`）。
+- **错误原因**：
+  - 原生 `root.querySelector('a, b')` 按 DOM 前序返回外层祖先节点；`markdown` 代码块流中遇到内层 ```` ``` ```` 会中途跳变围栏长度。
+- **影响/复现**：
+  - Gemini 思考块可能选到外层 `<model-thoughts>` 包含头部冗余节点；生成 Markdown 代码示例时流式前缀断裂。
+- **修复（已修复）**：
+  - 已在 `dom_markdown.js:110-143, 233` 与 `gemini_script.js:178-190, 259-264` 修复，并由 `dom_markdown_serializer_converts_deepseek_gemini_grok_html_and_preserves_streaming_prefix` 覆盖验证。
+
+#### [P2-2] `src/chat/web/deepseek_script.js:598-608` & `src/chat/web/gemini_script.js:207, 229` — DeepSeek SSE 断流无 `finish` 帧兜底完结 & Gemini `/rewind` 重置检测统一 `isGenerating`
+
+- **关键点**：
+  - DeepSeek `tickDom()` 在 `sseThinking || sseText` 分支中检测 `idleButton && !stopIcon` 满 15 ticks 自动调用 `finishSse()`；Gemini `pollDom()` 的 `/rewind` 重置检测将 `announcerBusy` 替换为 `isGenerating = Boolean(stopBtn) || announcerBusy`。
+- **错误原因**：
+  - SSE 尾帧丢失时缺少按钮空闲兜底；Angular 可能先渲染停止按钮再置 `aria-busy="true"`。
+- **影响/复现**：
+  - DeepSeek 偶发尾帧丢失时卡满 300s；Gemini `/rewind` 偶发晚一帧识别重置。
+- **修复（已修复）**：
+  - 已在 `deepseek_script.js:598-608` 与 `gemini_script.js:207, 229` 修复。
+
+#### [P3-1] `src/chat/web/deepseek_script.js:161, 178` & `src/chat/web/gemini_script.js:128, 152` — `pushDom` 尾部锚点窗口（`240` → `1024`）与 LCP 窗口（`40` → `160`）扩充
+
+- **关键点 & 错误原因**：
+  - 单帧大表格挂载或长链接文本替换可能超过 240 / 40 字符窗口，导致单帧漏发增量。
+- **影响/复现 & 修复（已修复）**：
+  - 将 `pushDom` 尾部锚点窗口扩至 `1024`、LCP 闭合窗口扩至 `160`。

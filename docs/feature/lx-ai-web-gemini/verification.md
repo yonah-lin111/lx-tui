@@ -1,7 +1,7 @@
 # `Web`（`DeepSeek · Gemini`）双站点网页驱动、品牌渐变与 `/model` 切换 — CLI 端到端验证报告 (`verification.md`)
 
 - **特性目录**：`docs/feature/lx-ai-web-gemini/`
-- **关联文档**：[`design.md`](design.md) · [`task.md`](task.md) · [`docs/standards/web-deepseek.md`](../../standards/web-deepseek.md)
+- **关联文档**：[`design.md`](design.md) · [`task.md`](task.md) · [`docs/web/web-deepseek.md`](../../web/web-deepseek.md) · [`docs/web/web-gemini.md`](../../web/web-gemini.md)
 - **验证工作区**：`/Users/yonah/projects/agent/lx-tui/.worktrees/lx-ai-web-gemini`（分支 `feat/lx-ai-web-gemini`）
 - **验证 CLI 工具**：`./target/debug/lx-tui web`（底层驱动 `~/.local/bin/ego-browser nodejs` 隔离任务空间 `lx-tui-ai-web-deepseek` 与 `lx-tui-ai-web-gemini`）
 - **验证结论**：**全部 10 个验证项（涵盖 `DeepSeek` 与 `Gemini` 双站点全部功能及 TUI 回归）全部通过（PASS）**

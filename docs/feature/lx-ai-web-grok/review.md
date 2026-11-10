@@ -142,8 +142,8 @@
 | **D-2** | `src/chat/web/grok_helpers.js:470-480` | `/responses` 父链缺失 parent 时静默截断，默认取数组最后一项 | 需要分页/活跃分支字段；Grok API 文档不足，先记录 |
 | **D-3** | `src/chat/web/grok_script.js:221-259` | `EDIT_INDEX` 分支已降级为死代码，附件/越界未完整覆盖 | 本轮补显式越界与附件清理，不恢复 TUI/CLI 调用 |
 | **D-4** | `src/ui/main_content/lx/tests.rs` | 测试文件 2375 行，超过 1500 行上限 | 基线 2251 行已超限，整体迁移到 `tests/` 子模块需独立整理 |
-| **D-5** | `src/chat/web/grok_script.js:121-126` | 实时兜底会删除未闭合 `<grok:render` 到文本末尾，代码块中的字面量也可能被删 | 需要 DOM 节点级识别而非正则；先保留兜底，限制为 assistant 文本 |
-| **D-6** | `src/chat/web/deepseek_helpers.js:390` | 历史清洗 `[^\\]]*` 会删除任意 `[citation:任意内容]` / `[reference:任意内容]` | 与 `web-deepseek.md` 标准一致；收紧为数字需同步标准，单独立项 |
+| **D-5** | `src/chat/web/grok_script.js:210-225, 454-484` | 旧版实时兜底会删除未闭合 `<grok:render` 到文本末尾 | **已在 Markdown 保真专项 Review P0-2 中修复**：WS 通道通过 `cleanGrokWsBuffer` 仅暂缓末尾未闭合标签前缀，DOM 通道通过 `dom_markdown.js` 的 `shouldSkipElement` 在 DOM 节点级直接跳过 `<grok:render>` 与 `<argument>` |
+| **D-6** | `src/chat/web/deepseek_helpers.js:390-405` | 历史清洗 `[^\\]]*` 会删除代码块内的 `[citation:...]` 且 `\s*` 吞换行 | **已在 Markdown 保真专项 Review P1-4 中修复**：按 ```` ``` ```` 围栏分段跳过代码块，且仅剥离水平空白 `[ \t]*`（参见 [`docs/web/web-deepseek.md`](../../web/web-deepseek.md)） |
 
 ---
 
@@ -161,3 +161,113 @@
   - `web new` / `web list` / `web delete`：通过，测试会话已删除
   - 正式 `SPACE` 已恢复为 `lx-tui-ai-web-grok`，二进制待最终 `cargo build` 重建
 - 未执行：M3 冷启动、M4 未登录；M1/M2/M5 TUI 视觉与弹窗仍需用户 `cargo run` 目测。M6 `Build` 已执行并通过。
+
+---
+
+## 6. Web Markdown 保真提取与流式渲染专项 Review（按 P0 → P3 排序）
+
+> **审查范围**：Grok WebSocket + DOM 双通道流式采集（`src/chat/web/grok_script.js`）、跨站点共享 DOM → Markdown 序列化器（`src/chat/web/dom_markdown.js`）、DeepSeek / Gemini 协同修复（`deepseek_script.js`、`deepseek_helpers.js`、`gemini_script.js`），以及 TUI 面向阅读的 Markdown 渲染器（`src/ui/markdown_render.rs`、`src/ui/markdown_render/inline.rs`、`src/ui/markdown_render/code_block.rs`）。
+> **参考规范**：[`docs/web/web-grok.md`](../../web/web-grok.md) · [`docs/web/web-deepseek.md`](../../web/web-deepseek.md) · [`docs/web/web-gemini.md`](../../web/web-gemini.md)
+
+### 6.1 P0（已修复）
+
+#### [P0-2] `src/chat/web/grok_script.js:347-351, 454-589` — Grok 首段 WS 文本后出现 `tool_usage_card` 中断 Node WS 读取但未复位浏览器 `s.wsActive`，导致 WS 与 DOM 双通道死锁；且跨帧分割 `<grok:render>` / `<argument>` 泄漏引用编号
+
+- **关键点**：
+  1. `grok_script.js` 通过 CDP `Network.webSocketFrameReceived` 监听 `CHANNEL_ASSISTANT_RESPONSE` 获取原始 Markdown，并在收到首个 `wsChunk` 时将浏览器侧 `window.__lxGrokStream.wsActive` 置为 `true`（从而屏蔽 `pollDom` 的 `pushText`）。
+  2. 原实现在收到过首段引导文字后一旦遇到 `chunk.tool_usage_card`（联网搜索、工具调用卡片），就置 `wsAbortedToDom = true` 停止在 Node 侧解析后续 WS 帧，但**从未将浏览器内的 `s.wsActive` 重置回 `false`**；
+  3. 同时，原先对每个单帧 `chunk.text.text` 单独执行正则剥离 `<grok:render>`，而 Grok WebSocket 经常将 `<grok:render card_id="...">`、`<argument name="citation_id">1</argument>`、`</grok:render>` 拆在多个连续 WS 帧内发送。
+- **错误原因**：
+  1. Node 侧停止推送 `wsDelta` 后，浏览器侧 `s.wsActive` 仍为 `true`，`pollDom()` 走到 `else if (this.wsActive) { this.lastText = text; }` 只更新游标不入队，导致工具调用后的全部回答正文在 WS 与 DOM 两个通道同时被丢弃（双通道死锁）；
+  2. 逐帧无状态正则无法匹配跨帧拆分的 XML 标签，导致中间帧里的引用编号数字直接穿透到 TUI 正文。
+- **影响/复现**：
+  - Grok 先输出一句“正在搜索…”再触发联网搜索时，搜索完成后的回答正文完全不显示；句尾穿插孤立的引用编号数字。
+- **修复（已修复）**：
+  - 移除 `wsAbortedToDom` 逻辑，改为维护累积缓冲区 `wsRawBuffer`、`wsEmittedCleaned`、`wsLastToolStep` 与 `wsAfterToolCard`（`grok_script.js:448-578`）：遇到 `chunk.tool_usage_card` 时记录 `wsLastToolStep = stepId` 并在已有文本时标记 `wsAfterToolCard = true`，后续新的 `CHANNEL_ASSISTANT_RESPONSE` 块自动补齐 `\n\n` 分段后继续由 WS 通道输出；
+  - 新增 `cleanGrokWsBuffer(wsRawBuffer, !wsDoneSeen)`（`grok_script.js:454-484`）：在累积缓冲区上剥离完整 `<grok:render>...</grok:render>` 与 `<argument>...</argument>`，并在流未结束（`holdIncomplete = true`）时检测末尾未闭合的 `<grok:` / `</grok:` / `<argument` / `</argument` 前缀予以暂缓，流结束（`wsDoneSeen = true`）再一次性清理残余半标签。
+
+#### [P0-1] `src/chat/web/gemini_script.js:252-266`、`src/chat/web/deepseek_script.js:126-140, 661-664` — 跨站点：正文流式输出期间思考块仍按 `streaming: true` 序列化，暂缓的闭合 `**` / ```` ``` ```` 分裂出第二个 `○ Thought` 块
+
+- **关键点 & 错误原因**：
+  - 正文开始流式输出后，思考块已完结但仍传 `streaming: true`，导致思考块末尾被 `isTail` 暂缓的闭合 `**` 或 ```` ``` ```` 直到整轮回答停止后才作为新的 `thinking` delta 发出，在正文下方分裂出第二个 `○ Thought` 块。
+- **影响/复现 & 修复（已修复）**：
+  - 将思考块流式标志收敛为 `thinkStreaming = isGenerating && !bodyText && !this.domText`（DeepSeek 为 `isStreaming && !bodyText && !this.domTextStarted`），并在 `push`/`pushDom` 中增加正文启动后拒绝迟到 `thinking` 增量的硬门禁。
+
+#### [P0-3] `src/chat/web/deepseek_script.js:564-608, 648-650` — 跨站点：DeepSeek DeepThink 思考超 1.2s 时 `tickDom()` 抢跑 & `readFiberMarkdown` 无宿主边界爬树
+
+- **关键点 & 错误原因**：
+  - DeepThink 期间 `sseThinking = true, sseText = false`，1.2s 后 `tickDom()` 越权启动 DOM 通道并锁死后续 SSE 正文；`readFiberMarkdown` 向上 20 层无 DOM 宿主边界检查。
+- **影响/复现 & 修复（已修复）**：
+  - `tickDom()` 入口改为 `if (this.sseThinking || this.sseText)` 严格互斥，并记录 `sseSeenAt`；`readFiberMarkdown` 限制 `depth < 10` 且校验 `el.contains(fiber.stateNode)` 与 DeepSeek Markdown 组件特征属性。
+
+---
+
+### 6.2 P1（已修复）
+
+#### [P1-1] `src/chat/web/dom_markdown.js:486-513, 563-570` — `<li>` 首块为代码块/块级结构时围栏倒置、列表内 `<h3>` 泄漏顶层标题、以及列表内代码正文被多加缩进
+
+- **关键点**：
+  - `serializeListItem` 原先将第 0 个块级分段首行直接拼在 `- ` 后（产生 ```` - ```rust ````），并对列表内围栏代码块的所有代码正文行都加上 `contIndent` 空格；`<li>` 内的 `<h3>` 直接输出 `### 标题`。
+- **错误原因**：
+  - 未识别必须独占一行的块级结构（围栏代码块、块级公式、表格、引用），未区分围栏开闭行与代码正文行的缩进语义，且在 `inListItem` 中未降级标题标签。
+- **影响/复现**：
+  - 列表项开头直接贴代码块时围栏倒置；列表项内代码每行多出 2 列前导空格；列表内标题打断列表缩进。
+- **修复（已修复）**：
+  - `serializeListItem`（`dom_markdown.js:488-509`）对 `requiresOwnLine` 首段先换行，对 `isFenceBlock` 仅在首尾围栏行加 `contIndent`；`serializeBlock`（`dom_markdown.js:563-566`）在 `ctx.inListItem` 下将 `h1`–`h6` 转为 `**...**` 粗体。
+
+#### [P1-2] `src/ui/markdown_render/inline.rs:10-231` — 强调块内部未递归解析行内代码/链接/内层强调、不支持双反引号 `` ``code`` ``、且尾随 `***` 闭合错位
+
+- **关键点 & 错误原因**：
+  - `inline_spans` 原先对 `**...**` / `*...*` / `***...***` / `~~...~~` 内部不再递归解析，不支持 `` ``code ` inner`` ``，且 `delimited_emphasis` 未跳过反引号代码段、在 `**bold *italic***` 末尾前两个 `*` 处提前闭合。
+- **影响/复现 & 修复（已修复）**：
+  - 新增 `push_nested_spans` 与 `code_span`（`inline.rs:99-161`），更新 `delimited_emphasis`（`inline.rs:167-231`）跳过代码片段并对齐尾随闭合链；新增测试 `nested_inline_code_links_and_emphasis_render_without_leaking_delimiters`。
+
+#### [P1-3] `src/ui/markdown_render.rs:188-189, 338-345, 526-530, 605-629` & `src/ui/markdown_render/code_block.rs:124-131` — 有序/任务列表续段缩进错位、子列表回退清空整栈、以及列表内围栏代码复制残留缩进
+
+- **关键点 & 错误原因**：
+  - 列表续段缩进原先写死为 `indent(depth) + 2`（有序 `1. ` 为 3 列、任务 `[x] ` 为 4 列）；`update_list_context` 在内层子列表结束后直接 `clear()` 整栈而非逐层 `pop()`；`code_block.rs` 未剥离列表内围栏前导空格。
+- **影响/复现 & 修复（已修复）**：
+  - 新增 `ListItem::hang_width` 与 `ParserState.list_hangs`，续段按 `indent(depth).saturating_add(hang)` 对齐；`update_list_context` 改为 `while indent < content` 逐层 `pop()`；`code_block.rs` 按 `fence_indent` 剥离前导空格；新增测试 `ordered_task_list_continuations_and_indented_fences_keep_exact_columns`。
+
+#### [P1-4] `src/chat/web/deepseek_script.js:93-125, 422-436` & `src/chat/web/deepseek_helpers.js:390-405` — DeepSeek SSE 结束漏刷末尾暂缓的 `[` & 历史会话清洗破坏代码块与换行
+
+- **关键点 & 错误原因**：
+  - 流式期间被 `holdIncomplete = true` 暂缓的末尾 `[` 在 SSE 结束时未补刷；`load_session` 用 `\s*\[(?:citation|reference):[^\]]*\]` 清洗全文，误删代码块内字面量并吞掉前导 `\n`。
+- **影响/复现 & 修复（已修复）**：
+  - 新增 `finishSse()`（`deepseek_script.js:422-436`）以 `cleanText(raw, false)` 补刷尾部；`deepseek_helpers.js:390-405` 改为围栏分段清洗且仅匹配 `[ \t]*`。
+
+---
+
+### 6.3 P2 & P3（已修复）
+
+#### [P2-1] `src/chat/web/dom_markdown.js:110-143, 233` & `src/chat/web/gemini_script.js:178-190, 259-264` — `hasMeaningfulContent` 图片/空公式判定、`markdown` 代码块四反引号围栏与 Gemini 子选择器顺序
+
+- **关键点 & 错误原因**：
+  - `hasMeaningfulContent` 缺少对 `<img src="https://...">`、空 KaTeX 与空 `<pre>` 的判定；`markdown` 代码块流中遇到内层 ```` ``` ```` 时围栏从 3 跳变到 4；Gemini 逗号选择器按 DOM 前序命中外层父容器。
+- **影响/复现 & 修复（已修复）**：
+  - 已在 `dom_markdown.js:110-143, 233` 与 `gemini_script.js:178-190, 259-264` 修复，并由 `dom_markdown_serializer_converts_deepseek_gemini_grok_html_and_preserves_streaming_prefix` 覆盖验证。
+
+#### [P2-2] `src/chat/web/deepseek_script.js:598-608` & `src/chat/web/gemini_script.js:207, 229` — DeepSeek SSE 断流无 `finish` 帧兜底完结 & Gemini `/rewind` 重置检测统一 `isGenerating`
+
+- **关键点 & 修复（已修复）**：
+  - DeepSeek `tickDom()` 在 `sseThinking || sseText` 分支中检测 `idleButton && !stopIcon` 满 15 ticks 自动调用 `finishSse()`；Gemini `/rewind` 重置检测将 `announcerBusy` 替换为 `isGenerating`。
+
+#### [P2-3] `src/chat/web/grok_script.js:210-225, 250-258, 513-515` — `stripGrokDirectives` 流中调用 `.trim()` 吞掉代码缩进空格 & 早期 WS 帧未同步 `s.wsSeen`
+
+- **关键点**：
+  1. `grok_script.js` 的 `stripGrokDirectives(text)` 原先无条件在末尾调用 `.trim()`，当流式光标停在代码块新一行前导缩进空格（如 `fn main() {\n    `）时，`.trim()` 会把末尾空格全部裁掉；
+  2. Node 侧收到 `response.created` 早期帧时未同步给浏览器侧 `s.wsSeen`，导致 `pollDom` 在 1.2s 宽限期后可能先于首个文本帧抢跑。
+- **错误原因**：
+  - 流式中间态不得对末尾空白执行 `.trim()`；`wsSeen` 标志未在 `response.created` 时置位并跨上下文同步。
+- **影响/复现**：
+  - Grok 走 DOM 通道流式输出代码块时偶发丢失行首缩进；慢响应首包超过 1.2s 时 DOM 通道可能与 WS 通道竞争。
+- **修复（已修复）**：
+  - 将 `stripGrokDirectives(text, streaming)`（`grok_script.js:210-225`）改为 `return streaming ? cleaned : cleaned.trim();`；
+  - 在 `evObj.type === 'response.created' || evObj.type === 'response.chunk'` 时置 `wsSeen = true`（`grok_script.js:513-515`）并同步至 `s.wsSeen`（`grok_script.js:585-587`）。
+
+#### [P3-1] `src/chat/web/grok_script.js:286, 299`（及 `deepseek_script.js`、`gemini_script.js`） — `pushText` / `pushDom` 尾部锚点窗口（`240` → `1024`）与 LCP 窗口（`40` → `160`）扩充
+
+- **关键点 & 错误原因**：
+  - 单帧大表格挂载或长链接文本替换可能超过 240 / 40 字符窗口，导致单帧漏发增量。
+- **影响/复现 & 修复（已修复）**：
+  - 将 `grok_script.js`、`deepseek_script.js`、`gemini_script.js` 三处的尾部锚点窗口统一从 `240` 扩至 `1024`，LCP 闭合窗口从 `40` 扩至 `160`。

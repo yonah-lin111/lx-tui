@@ -2,8 +2,8 @@
 
 - **特性目录**：`docs/feature/lx-ai-web-gemini/`
 - **关联任务清单**：[`task.md`](task.md)
-- **参考驱动规范**：[`docs/standards/web-deepseek.md`](../../standards/web-deepseek.md) · [`docs/feature/lx-ai-web/design.md`](../lx-ai-web/design.md)
-- **当前状态**：已完成实现、CLI 端到端验证与 review 修复（位于 `.worktrees/lx-ai-web-gemini` 工作区 `feat/lx-ai-web-gemini` 分支）；验证见 [`verification.md`](verification.md)，问题清单与修复见 [`review.md`](review.md)
+- **参考驱动规范**：[`docs/web/web-deepseek.md`](../../web/web-deepseek.md) · [`docs/web/web-gemini.md`](../../web/web-gemini.md) · [`docs/feature/lx-ai-web/design.md`](../lx-ai-web/design.md)
+- **当前状态**：已完成实现、CLI 端到端验证、DOM Markdown 保真提取与 review 修复（见 [`verification.md`](verification.md)、[`review.md`](review.md)）
 - **目标范围**：
   - `src/app/state/lx/web.rs`（新增子模块：`AiWebSite::Gemini`、`GeminiWebModel`、`GeminiThinkingLevel`、`DeepseekThinkingMode`、`AiWebConfig` 及双站点会话前缀解析）
   - `src/app/state/lx.rs`（挂载 `ai_web_config: AiWebConfig`，重导出 `web::*`）
@@ -66,14 +66,21 @@ src/
         slash.rs                  open_model_picker / apply_slash_enter / finish_model_selection 支持 LxEntry::AiWeb
   chat/
     web/
-      mod.rs                      嵌入 GEMINI_HELPERS_SCRIPT 与 GEMINI_SCRIPT，提供 scripts_for_site(AiWebSite)
-      deepseek_helpers.js         读取 PARAMS.thinking（默认 'deepthink'）
-      deepseek_script.js          按 PARAMS.thinking 同步网页端「深度思考」按钮开启或关闭
+      mod.rs                      嵌入 DOM_MARKDOWN_JS、GEMINI_HELPERS_SCRIPT、GEMINI_IMAGES_JS 与 GEMINI_SCRIPT，提供 scripts_for_site(AiWebSite)
+      dom_markdown.js             [新增] 跨站点共享 DOM → Markdown 序列化器（`lxHtmlToMarkdown` + `window.__lxHtmlToMarkdown`，支持 `streaming` 尾部闭合标记暂缓）
+      deepseek_helpers.js         读取 PARAMS.thinking（默认 'deepthink'）；历史消息围栏感知引用清洗
+      deepseek_script.js          按 PARAMS.thinking 同步网页端「深度思考」按钮；SSE + React Fiber / `window.__lxHtmlToMarkdown` 保真采集
       gemini_helpers.js           [新增] Gemini 网页端辅助函数：输出发射、新对话重置、模式/思考等级切换、
-                                  CDP 文件上传与芯片清理、会话列表/加载/重命名/删除
+                                  CDP 文件上传与芯片清理、会话列表/加载（`window.__lxHtmlToMarkdown` 保真还原）/重命名/删除
+      gemini_images.js            [新增] Gemini 生图预览落盘与原图下载辅助函数
       gemini_script.js            [新增] Gemini 网页端对话主流程：登录态探测、权限弹窗拦截、模式同步、
-                                  StreamGenerate 流采集 + DOM 兜底、/rewind 原地修改与富文本提交
-      tests.rs                    补充 Gemini 脚本参数与协议解析单元测试
+                                  `<model-response>` 子节点优先 `window.__lxHtmlToMarkdown` 流式采集、/rewind 原地修改与富文本提交
+      tests.rs                    补充 Gemini 脚本参数、协议解析与 DOM→Markdown 保真序列化单元测试
+  ui/
+    markdown_render.rs            列表续段按 `list_hangs` 栈悬挂列对齐、逐层回退列表上下文栈
+    markdown_render/
+      inline.rs                   强调块（`**`/`*`/`***`/`~~`）内部递归解析行内代码、链接与内层强调，支持多反引号 `` ``code`` ``
+      code_block.rs               剥离列表内围栏代码块前导缩进
   event/
     chat/
       web.rs                   支持按 AiWebSite 或会话前缀（ai-web-ds- / ai-web-gm-）选择驱动脚本与封装前缀；
@@ -558,17 +565,19 @@ pub fn set_ai_web_site(state: &mut AppState, pane: PaneId, site: crate::app::sta
 4. **CSP TrustedHTML 安全文本写入与提交**：
    - 严禁设置 `.innerHTML`；统一对 `.ql-editor[contenteditable="true"]` 调用 `focus()` → `document.execCommand('selectAll', false, null)` → `document.execCommand('insertText', false, PROMPT)` 并派发 `input` 事件；
    - 点击发送按钮 `button.send-button, button[aria-label*="发送"], button[aria-label*="Send"]`（或派发 `Enter` 键）。
-5. **流式回答双通道采集（XHR/fetch `StreamGenerate` + DOM `<model-response>` 轮询）**：
-   - 监控最新一条 `<model-response>`：
-     - 思考增量：采集 `<model-thoughts>` / `<thinking-overlay>` / `.thoughts-content` 的文本增量推送 `thinking` 事件；
-     - 正文增量：采集 `<message-content>`（剔除 `.cdk-visually-hidden` 的 `"Gemini 说"` 标签与引用角标按钮文本）推送 `text` 事件；
-     - 完成判定：当停止按钮（`button[aria-label*="停止"], button[aria-label*="Stop"], .stop-icon`）消失、`model-response` 的 `.model-response-label-announcer` `aria-busy="false"` 且连续 6 个采样周期（360ms）文本稳定时，提取 URL `/app/([a-zA-Z0-9]+)` 的会话 ID 与侧栏 `a[href*="/app/<id>"]` 标题，回投 `session` 与 `done`。
+5. **流式回答与历史消息的 DOM → Markdown 保真采集（`dom_markdown.js` + `<model-response>` 轮询）**：
+   - 发送前调用 `await installDomMarkdown()` 将 `src/chat/web/dom_markdown.js` 中的 `lxHtmlToMarkdown` 注入页面 `window.__lxHtmlToMarkdown`（严禁使用会抹除 `#`、`**`、```` ``` ````、表格与列表层级缩进的 `el.innerText`）。
+   - `extractCleanText(root, selectorList, _stripSelectors, streaming)`（`gemini_script.js:178-197`）按逗号拆分 `selectorList` 并**按书写优先级逐个调用 `root.querySelector(sel)`**（避免原生逗号选择器按文档前序先命中外层父元素 `<model-thoughts>`），随后调用 `window.__lxHtmlToMarkdown(el, { streaming: Boolean(streaming) })`：
+     - **正文增量**：优先定位 `message-content .markdown`，其次 `message-content`，传入 `streaming = isGenerating`；
+     - **思考增量**：优先定位子节点 `model-thoughts .thoughts-content, thinking-overlay .thoughts-content`，其次 `model-thoughts, thinking-overlay`，传入 `thinkStreaming = isGenerating && !bodyText && !this.domText`（`gemini_script.js:258`）——一旦正文开始输出，立即以 `streaming: false` 序列化思考块，确保思考块末尾暂缓的闭合 `**` / ```` ``` ```` 在首个 `text` 增量前刷出，且 `pushDom` 在 `this.domText` 非空后拒绝任何迟到的 `thinking` 增量（防止在正文下方分裂出第二个 `○ Thought` 块）；
+     - **增量差分对齐（`pushDom`）**：支持快速前缀扩展、1024 字符窗口尾部锚点重对齐（覆盖单帧大表格渲染与句中引用角标插入）以及 160 字符窗口 LCP 行内闭合符剥离/补齐。
+     - **完成判定**：当停止按钮（`button[aria-label*="停止"], button[aria-label*="Stop"], button.stop-button, .blue-circle.stop-icon`）消失、`mr.querySelector('[aria-busy="true"]')` 为假、生图容器加载完毕且连续 10 个采样周期（600ms；若引用重排使 `bodyText` 短于 `domText` 则放宽至 14 ticks）文本稳定时，提取 URL `/app/([a-zA-Z0-9_-]{8,})` 的会话 ID 与侧栏 `a[href^="/app/<id>"]` 标题，回投 `image`、`session` 与 `done`。
 6. **CDP 文件/图片上传与 `/rewind` 原地修改**：
-   - 文件上传：若页面尚无 `input[type="file"]`，先点击 `button[aria-label*="上传和工具"], button[aria-label*="Upload"]` 触发挂载文件输入或通过 CDP `DOM.setFileInputFiles` 注入本地绝对路径列表 `FILES`，轮询等待预览容器 `.file-preview-container, .uploader-file-preview-container` 加载完成；
-   - `/rewind` 原地修改（`EDIT_INDEX >= 0`）：定位第 `EDIT_INDEX` 个 `<user-query>`，点击其 `button[aria-label="修改"], button[aria-label*="Edit"]`，在展开的编辑文本框中通过原生 setter / `execCommand` 填入新 `PROMPT` 并点击确认按钮（`"更新"` / `"Update"` / `"发送"` / `"Send"`）。
+   - 文件上传：若页面尚无 `input[type="file"]`，先点击 `button[aria-label*="上传和工具"], button[aria-label*="Upload"]` 触发挂载文件输入或通过 CDP `DOM.setFileInputFiles` 注入本地绝对路径列表 `FILES`，轮询等待预览容器 `uploader-file-preview` 加载完成；
+   - `/rewind` 原地修改（`EDIT_INDEX >= 0`）：定位第 `EDIT_INDEX` 个 `<user-query>`，校验附件集合一致后点击其 `button[aria-label="修改"], button[aria-label*="Edit"]`，在展开的编辑文本框中通过 `execCommand` / 原生 setter 填入新 `PROMPT` 并点击确认按钮（`"更新"` / `"Update"`）；`pollDom` 通过 `isGenerating || curBody !== this.initialTargetText || curThink !== this.initialThinkText` 检测旧回答重置并立即清空采集游标。
 7. **云端会话管理（`list_sessions` / `load_session` / `rename_session` / `delete_session`）**：
-   - `list_sessions`：从侧边栏 `a[href*="/app/"]` 提取全部历史会话 `{ id, title, updated_at_ms }`（若侧边栏收起则先展开或提取 DOM 中的导航项）；
-   - `load_session`：导航至 `https://gemini.google.com/app/<sessionId>`，等待 `<user-query>` 与 `<model-response>` 渲染完毕，按轮次提取用户文本、附件文件名、助手思考内容与正文 Markdown，回投 `session_loaded`；
+   - `list_sessions`：从侧边栏 `a[href^="/app/"]` 提取全部历史会话 `{ id, title, updated_at_ms }`（若侧边栏收起则先展开或提取 DOM 中的导航项）；
+   - `load_session`：导航至 `https://gemini.google.com/app/<sessionId>`，等待 `<user-query>` 与 `<model-response>` 渲染完毕后调用 `installDomMarkdown()`，对用户提问、助手思考块（`model-thoughts .thoughts-content, thinking-overlay .thoughts-content`）与正文（`message-content .markdown`）统一调用 `window.__lxHtmlToMarkdown(el, { streaming: false })` 保真还原完整 Markdown（含 `<code-block>` 语言头、表格、粗体列表与续段缩进），回投 `session_loaded`；
    - `rename_session`：定位侧边栏对应会话项右侧的「更多选项」按钮（`button[aria-label*="更多选项"], button[aria-label*="More options"]`）→ 点击「重命名 / Rename」→ 在弹窗输入框填入 `TITLE` 并点击确认；
    - `delete_session`：定位侧边栏对应会话项右侧的「更多选项」按钮 → 点击「删除 / Delete」→ 在确认弹窗点击「删除 / Delete」，若当前正停留在该会话 URL 则导航回 `https://gemini.google.com/app`。
 

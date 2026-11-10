@@ -1,7 +1,7 @@
 # Grok 接入 Web 入口 — 执行任务清单 (`task.md`)
 
-- **设计文档**：[`design.md`](design.md)
-- **当前状态**：已执行并完成端到端验证与 Review 修复（见 [`review.md`](review.md)、[`verification.md`](verification.md)），已合并至 `dev` 并移除临时 worktree 与 `feat/lx-ai-web-grok` 分支。
+- **设计文档**：[`design.md`](design.md) · **驱动规范**：[`docs/web/web-grok.md`](../../web/web-grok.md) · [`docs/web/web-deepseek.md`](../../web/web-deepseek.md) · [`docs/web/web-gemini.md`](../../web/web-gemini.md)
+- **当前状态**：已执行并完成端到端验证、DOM/WebSocket Markdown 保真提取与 Review 修复（见 [`review.md`](review.md)、[`verification.md`](verification.md)），已合并至 `dev` 并移除临时 worktree 与 `feat/lx-ai-web-grok` 分支。
 - **执行原则**：最小修改；不新增数据库迁移；生产文件 `< 1000` 行；每个阶段结束只跑受影响范围的校验，最终再跑全量。
 
 ---
@@ -250,6 +250,22 @@
 - [x] 汇总验证命令与结果。
 - [x] 说明未自动化验证的部分（TUI 鼠标点击、视觉下划线、Toast 位置），交由用户 `cargo run` 目测。
 - [x] 按用户补充要求提交代码；不 push，除非用户明确授权。
+
+---
+
+## 阶段 9：WebSocket + DOM Markdown 保真提取、TUI 渲染增强与专项 Review（P0–P3）修复
+
+- [x] **9.1 共享 DOM → Markdown 序列化器（`src/chat/web/dom_markdown.js`）与 Grok 双通道流式采集（`src/chat/web/grok_script.js`）**：
+  - 注入 `window.__lxHtmlToMarkdown`，支持 Grok `.not-prose` 代码卡片（`[data-testid="code-block"]`、`span.font-mono` 语言头、Shiki `:scope > span.line` 逐行拼接）并过滤非代码的 `.not-prose` 占位卡片；
+  - 启用 CDP `Network.webSocketFrameReceived` 监听 `CHANNEL_ASSISTANT_RESPONSE` 原始 Markdown 与 `render_citation`，DOM 通道改用 `window.__lxHtmlToMarkdown(body, { streaming })` + `stripGrokDirectives(raw, isStreaming)`（彻底移除 `body.innerText`）。
+- [x] **9.2 TUI 面向阅读的 Markdown 渲染增强（`src/ui/markdown_render.rs`、`inline.rs`、`code_block.rs`）**：
+  - `inline.rs`：递归解析 `**`/`*`/`***`/`~~` 内部的行内代码、链接与内层强调，支持多反引号 `` ``code`` ``，对齐尾随 `***` 与代码内 `**`；
+  - `markdown_render.rs` & `code_block.rs`：新增 `list_hangs` 栈对齐无序/有序/任务列表续段列，子列表回退改为逐层 `pop()`，并剥离列表内围栏代码块前导缩进。
+- [x] **9.3 专项 Review（P0 → P3）修复与回归测试（详见 [review.md](review.md) §6）**：
+  - **P0-2**：修复 `grok_script.js` 首段 WS 文本后出现 `tool_usage_card` 中断 Node WS 读取却未复位浏览器 `s.wsActive` 造成的双通道死锁（改用 `wsLastToolStep` + `wsAfterToolCard` 续接 WS 流），并新增 `cleanGrokWsBuffer` 暂缓跨帧拆分的 `<grok:render>` / `<argument>` 半闭合标签；
+  - **P0-1 & P0-3**：同步修复跨站点 `gemini_script.js` / `deepseek_script.js` 正文流式期间思考块 `streaming: true` 分裂第二个 `○ Thought` 块问题，以及 DeepSeek DeepThink `tickDom` 抢跑与 `readFiberMarkdown` 越界问题；
+  - **P1-1 ~ P1-4**：修复 `dom_markdown.js` 列表项首块围栏倒置/列表内 `###`/代码块正文多余缩进、`inline.rs` 嵌套行内解析、`markdown_render.rs` 列表续段缩进与层级回退、以及 DeepSeek `finishSse()` 尾刷 `[` 与历史代码块引用保护；
+  - **P2-1 ~ P2-3 & P3-1**：修复 `stripGrokDirectives(raw, isStreaming)` 流式期间 `.trim()` 吞代码缩进空格、早期 `response.created` 帧同步 `s.wsSeen`、`hasMeaningfulContent` 图片/空公式判定与 `markdown` 四反引号围栏，以及 `pushText` 尾部锚点窗口（`1024`）与 LCP 窗口（`160`）扩充。
 
 ---
 
