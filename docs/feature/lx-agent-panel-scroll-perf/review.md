@@ -2,8 +2,10 @@
 
 - **分支**：`feat/lx-agent-panel-scroll-perf`
 - **Worktree**：`.worktrees/lx-agent-panel-scroll-perf`
-- **基线**：`fac77938`（`dev`，审查时 `dev` 已前进到 `95cf9482`）
-- **首次实现提交**：`87bdb43e`
+- **基线**：`fac77938`（`dev`，合并前 `dev` 为 `95cf9482`）
+- **首次实现提交**：`87bdb43e`（`perf(lx): batch subagent card refresh and align agent list`）
+- **Review 修复提交**：`0ef4eab2`（`fix(lx): close agent panel review findings`）
+- **合并提交**：`061e8bba`（`Merge branch 'feat/lx-agent-panel-scroll-perf' into dev`）
 - **审查日期**：2026-11-10
 - **审查范围**：本次提交新增/修改的事件合并、隐藏历史、详情缓存、离屏合并、Agents 列表布局、测试与文档
 - **方法**：codegraph / codebase-memory 先定位调用链，再以磁盘当前代码逐行核验；3 个只读 subagent 分别审查事件层、缓存层、列表/文档，所有结论均回到代码与测试复核。
@@ -386,7 +388,7 @@ cargo test --release --lib -- --ignored perf_lx_history
 
 ## 4. 风险与未覆盖
 
-- **合并前需同步 dev**：本分支基于 `fac77938`，审查时 `dev` 已到 `95cf9482`（含 subagent mention 改动）。合并前应 rebase/merge dev，重点复核 `subagent.rs::set_subagent_list` 的 `sync_mention_subagent_runs` 与本次返回值改动。
+- **已合并到 `dev`（`061e8bba`）**：与 `dev@95cf9482`（subagent mention 特性）合并时处理了 `src/event/chat/subagent/runner.rs`（`sync_agent_ui_queue` 保留 `target.lx.sync_mention_subagent_runs()` 并返回 `changed: bool`）与 `src/event/chat/subagent/settle.rs`（`finish_subagent_with_billing` 保留 `target.lx.sync_mention_subagent_runs()` 并调用 `update::request_subagent_cards_refresh`）两处冲突；`src/app/update/chat/subagent.rs`、`src/event/chat/subagent/mod.rs`、`src/event/mod.rs` 自动合并无误；合并后全量 `cargo test` **5063 passed, 5 ignored, 0 failed**。
 - **TUI 交互未自动验证**：滚动是否丝滑、列对齐、窄窗降级仍需用户 `cargo run` 验收。
 - **上翻时总行数最多滞后 80ms**：这是设计的合并窗口，不是错误；`rows_dirty` 现在会保留，窗口结束后自动追平。
 - **列表列宽随时长位数/筛选集变化整体位移一次**：Q9 已接受；未做固定 age 列宽。

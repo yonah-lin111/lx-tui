@@ -9,7 +9,7 @@
 - **参考仓库**：`/Users/yonah/projects/agent/opencode-dev`
   - `packages/tui/src/util/scroll.ts`（`CustomSpeedScroll` / `MacOSScrollAccel` 配置）
   - `packages/tui/src/mini/footer.subagent.tsx`（`scrollbox` + `stickyScroll` + `scrollBy`）
-- **状态**：已实现，自动化验证通过；交互与视觉待用户验收
+- **状态**：已完成并合并到 `dev`（merge commit `061e8bba`；worktree 与分支已清理）
 
 ---
 

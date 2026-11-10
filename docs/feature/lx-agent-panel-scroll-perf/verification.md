@@ -2,14 +2,18 @@
 
 - **分支**：`feat/lx-agent-panel-scroll-perf`
 - **Worktree**：`.worktrees/lx-agent-panel-scroll-perf`
-- **基线**：`fac77938`（`dev`）
+- **基线**：`fac77938`（合并前 `dev` 为 `95cf9482`）
+- **实现提交**：`87bdb43e`（初版） / `0ef4eab2`（review 修复）
+- **合并提交**：`061e8bba`（`Merge branch 'feat/lx-agent-panel-scroll-perf' into dev`）
 - **验证日期**：2026-11-10
-- **状态**：review 后修复完成，自动化验证通过；交互与视觉待用户 `cargo run` 验收
+- **状态**：已完成并合并到 `dev`（worktree 与分支已清理）
 - **Review 记录**：[`review.md`](review.md)
 
 ---
 
 ## 1. 自动化验证
+
+### 1.1 Worktree 验证（合并前）
 
 | 命令 | 结果 |
 | --- | --- |
@@ -18,6 +22,19 @@
 | `cargo test` | 4976 passed，0 failed，5 ignored |
 | `cargo test --release --lib -- --ignored perf_agents_panel` | 通过；P95 **318µs**（6 × 200，120 帧） |
 | `cargo test --release --lib -- --ignored perf_lx_history` | 2 passed（主历史性能未回退） |
+
+### 1.2 合并到 `dev` 后验证（`061e8bba`）
+
+- 合并冲突处理：
+  - `src/event/chat/subagent/runner.rs`：`sync_agent_ui_queue` 保留 `target.lx.sync_mention_subagent_runs()` 并返回 `changed: bool`。
+  - `src/event/chat/subagent/settle.rs`：`finish_subagent_with_billing` 保留 `target.lx.sync_mention_subagent_runs()`，并将 `refresh_subagent_cards` 替换为 `request_subagent_cards_refresh`。
+  - `src/app/update/chat/subagent.rs`、`src/event/chat/subagent/mod.rs`、`src/event/mod.rs` 自动合并后逐项复核无误；所有修改生产文件均控制在 1000 行上限内。
+- 验证结果：
+  - `cargo fmt --check`：通过
+  - `cargo clippy --all-targets -- -D warnings`：通过，0 warnings
+  - `cargo test`：**5063 passed，0 failed，5 ignored**（16 个测试套件全部通过）
+  - `cargo test --release --lib -- --ignored perf_agents_panel`：通过（0.04s）
+  - `cargo test --release --lib -- --ignored perf_lx_history`：2 passed（0.90s）
 
 > `perf_agents_panel` 每帧执行 `request_subagent_cards_refresh + flush_subagent_cards +
 > resolve_task_agents_visible + draw_agents_detail`，120 帧快照重建严格等于 120 次，

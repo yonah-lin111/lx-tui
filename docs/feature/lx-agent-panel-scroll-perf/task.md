@@ -6,7 +6,7 @@
 - **Review 记录**：[`review.md`](review.md)
 - **分支**：`feat/lx-agent-panel-scroll-perf`
 - **Worktree**：`.worktrees/lx-agent-panel-scroll-perf`
-- **状态**：已实现，自动化验证通过；交互与视觉待用户验收
+- **状态**：已完成并合并到 `dev`（merge commit `061e8bba`；worktree 与分支已清理）
 
 > 下方复选框保留为分阶段实施清单；实际实现、review 修复与验证结果以
 > [`review.md`](review.md) / [`verification.md`](verification.md) 为准。
