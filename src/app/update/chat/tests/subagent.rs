@@ -122,13 +122,23 @@ fn set_subagent_list_is_idempotent_and_keeps_local_runs() {
         "sess-parent",
         std::slice::from_ref(&record),
     ));
-    // 第二次回投内容相同：不置脏。
+    // flush 清掉调度位后，第二次回投内容相同：不置脏、不重复请求卡片对账。
+    let _ = update::flush_subagent_cards(&mut state);
     assert!(!update::set_subagent_list(
         &mut state,
         pane,
         "sess-parent",
         &[record]
     ));
+    assert!(
+        !state
+            .pane_anywhere(pane)
+            .expect("pane")
+            .lx
+            .agents
+            .cards_dirty,
+        "无内容变化时不得重新置脏"
+    );
     let agents = &state.pane_anywhere(pane).expect("pane").lx.agents;
     assert_eq!(agents.runs.len(), 1);
     assert_eq!(agents.runs[0].status, "completed");
@@ -411,6 +421,7 @@ fn task_page_switches_between_process_and_agent_lists() {
     }
     let agents = AgentsState {
         runs: vec![run("sess-a", "sub-a", AgentRole::Explorer)],
+        cards_dirty: false,
     };
     let mut page = TaskPage::default();
     assert_eq!(page.len(&agents), 0, "进程 tab 没有条目");
@@ -1091,6 +1102,107 @@ fn subagent_loaded_and_finished_trigger_idle_eviction() {
 }
 
 #[test]
+fn parallel_deltas_are_coalesced_into_one_card_refresh() {
+    let mut state = AppState::demo();
+    let pane = state.active_tab().layout.focus();
+    state
+        .pane_mut_anywhere(pane)
+        .expect("pane")
+        .lx
+        .chat
+        .session_id = Some("sess-parent".into());
+
+    let mut started = run("sess-a", "sub-a", AgentRole::Executor);
+    started.agent_path = "/root/turing".into();
+    seed_chat(&mut started, key(pane, "sess-a"), "msg-a");
+    assert!(update::on_subagent_started(&mut state, pane, started));
+
+    let mut detail = SubagentDetailView::from_arguments(
+        "spawn_agent",
+        r#"{"role":"executor","task":"run tests","title":"run tests"}"#,
+    )
+    .expect("spawn detail");
+    detail.agent_id = Some("sub-a".into());
+    state
+        .pane_mut_anywhere(pane)
+        .expect("pane")
+        .lx
+        .chat
+        .messages
+        .push(parent_tool_message(
+            "spawn_agent",
+            detail,
+            ToolStatus::Completed,
+        ));
+
+    for text in ["one", "two", "three"] {
+        assert!(update::on_subagent_delta(
+            &mut state,
+            "sess-a",
+            &[text_delta(text)]
+        ));
+    }
+    assert!(
+        state
+            .pane_anywhere(pane)
+            .expect("pane")
+            .lx
+            .agents
+            .cards_dirty,
+        "delta 只置位，不立即全量回填"
+    );
+    assert_eq!(
+        first_subagent_view(&state, pane).agent_status,
+        None,
+        "flush 前父卡片保持旧值"
+    );
+
+    assert!(update::flush_subagent_cards(&mut state));
+    assert_eq!(
+        first_subagent_view(&state, pane).agent_status.as_deref(),
+        Some("running"),
+        "flush 后父卡片拿到 run 状态"
+    );
+    assert!(
+        !state
+            .pane_anywhere(pane)
+            .expect("pane")
+            .lx
+            .agents
+            .cards_dirty,
+        "flush 后复位"
+    );
+    assert!(
+        !update::flush_subagent_cards(&mut state),
+        "没有新 delta 时不再全量扫描"
+    );
+}
+
+#[test]
+fn request_subagent_cards_refresh_only_sets_the_flag() {
+    let mut state = AppState::demo();
+    let pane = state.active_tab().layout.focus();
+    update::request_subagent_cards_refresh(&mut state, pane);
+    assert!(
+        state
+            .pane_anywhere(pane)
+            .expect("pane")
+            .lx
+            .agents
+            .cards_dirty
+    );
+    let _ = update::flush_subagent_cards(&mut state);
+    assert!(
+        !state
+            .pane_anywhere(pane)
+            .expect("pane")
+            .lx
+            .agents
+            .cards_dirty
+    );
+}
+
+#[test]
 fn refresh_subagent_cards_updates_nested_spawn_cards() {
     let mut state = AppState::demo();
     let pane = state.active_tab().layout.focus();
@@ -1121,9 +1233,27 @@ fn refresh_subagent_cards_updates_nested_spawn_cards() {
     child.parent_session_id = "sess-a".into();
     child.title = "scan".into();
     assert!(update::on_subagent_started(&mut state, pane, child));
+    if let Some(parent) = state
+        .pane_mut_anywhere(pane)
+        .expect("pane")
+        .lx
+        .agents
+        .by_agent_mut("sub-a")
+    {
+        parent.rows_dirty = false;
+    }
 
     assert!(update::refresh_subagent_cards(&mut state, pane));
     let target = state.pane_anywhere(pane).expect("pane");
+    assert!(
+        target
+            .lx
+            .agents
+            .by_agent("sub-a")
+            .expect("parent")
+            .rows_dirty,
+        "嵌套卡片变化必须让详情总行数失效"
+    );
     let parent = target.lx.agents.by_agent("sub-a").expect("parent run");
     let view = parent
         .chat

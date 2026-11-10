@@ -156,6 +156,11 @@ pub(crate) struct PaneCache {
     /// 本帧帧号（由 [`RenderCache::pane`] 写入）。
     frame: u64,
     snapshot: Option<(u64, Arc<HistorySnapshot>)>,
+    /// 快照归属的数据源（主历史 / 某个子 agent 详情）。
+    ///
+    /// 主历史与 Agents 详情的内容宽度可能完全相同，不能只凭宽度复用快照；
+    /// owner 取 `HistorySource` 内 `LxChat` 的地址，切换页面或高亮 run 时自然失效。
+    snapshot_owner: Option<usize>,
     /// 当前快照的内容宽度（`snapshot` 为 None 时无意义）。
     snapshot_width: Option<u16>,
     /// 构建快照时「除流式末条消息外」的列表指纹（屏幕外节流判定用）。
@@ -182,6 +187,7 @@ impl Default for PaneCache {
         Self {
             frame: 0,
             snapshot: None,
+            snapshot_owner: None,
             snapshot_width: None,
             snapshot_non_stream: 0,
             snapshot_at: None,
@@ -214,16 +220,37 @@ impl PaneCache {
         width: u16,
         source: super::source::HistorySource<'_>,
     ) -> Arc<HistorySnapshot> {
+        self.snapshot_source_fresh(width, source).0
+    }
+
+    /// 与 [`Self::snapshot_source`] 相同，并返回快照是否反映了当前数据。
+    ///
+    /// 返回 `(snapshot, false)` 表示命中了屏幕外流式合并窗口：快照是旧的，
+    /// 调用方不得据此更新总行数或清除 `rows_dirty`。
+    pub(crate) fn snapshot_source_fresh(
+        &mut self,
+        width: u16,
+        source: super::source::HistorySource<'_>,
+    ) -> (Arc<HistorySnapshot>, bool) {
+        let owner = source.owner();
+        if self.snapshot_owner != Some(owner) {
+            // 页面 / 高亮 run 已切换：旧快照不能再用于任何 ready 命中或总量判定。
+            self.snapshot = None;
+            self.snapshot_owner = None;
+            self.snapshot_width = None;
+            self.snapshot_non_stream = 0;
+            self.snapshot_at = None;
+        }
         let signature = list_signature_source(source, width);
         if let Some((cached, snapshot)) = &self.snapshot
             && *cached == signature
         {
-            return Arc::clone(snapshot);
+            return (Arc::clone(snapshot), true);
         }
         if self.offscreen_stream_throttled(width, source)
             && let Some((_, snapshot)) = &self.snapshot
         {
-            return Arc::clone(snapshot);
+            return (Arc::clone(snapshot), false);
         }
         // 先释放上一帧快照持有的 `BlockPaint`（含增量 Markdown 前缀），
         // 让 `IncrementalMarkdownState::update` 的 `Arc::make_mut` 能原地追加。
@@ -231,11 +258,12 @@ impl PaneCache {
         let snapshot = Arc::new(snapshot::build(width, source, self));
         self.builds = self.builds.saturating_add(1);
         self.snapshot = Some((signature, Arc::clone(&snapshot)));
+        self.snapshot_owner = Some(owner);
         self.snapshot_width = Some(width);
         self.snapshot_non_stream = non_stream_signature_source(source, width);
         self.snapshot_at = Some(Instant::now());
         self.evict();
-        snapshot
+        (snapshot, true)
     }
 
     /// 读取当前宽度下**已就绪**的几何快照（供高频鼠标滚轮、拖拽、Hover 调用）。
@@ -247,7 +275,8 @@ impl PaneCache {
         width: u16,
         source: super::source::HistorySource<'_>,
     ) -> Arc<HistorySnapshot> {
-        if self.snapshot_width == Some(width)
+        if self.snapshot_owner == Some(source.owner())
+            && self.snapshot_width == Some(width)
             && let Some((_, snapshot)) = &self.snapshot
         {
             return Arc::clone(snapshot);
@@ -272,9 +301,12 @@ impl PaneCache {
         width: u16,
         source: super::source::HistorySource<'_>,
     ) -> bool {
+        let Some(viewport) = source.viewport else {
+            return false;
+        };
         if self.offscreen_coalesce.is_zero()
             || !source.coalesce_offscreen
-            || source.chat.follow_bottom
+            || viewport.follow_bottom
             || self.viewport_rows == 0
         {
             return false;
@@ -299,11 +331,7 @@ impl PaneCache {
             return false;
         };
         // 流式消息整块位于视口下方：重排不会改变可见像素。
-        last.start
-            >= source
-                .chat
-                .history_scroll
-                .saturating_add(self.viewport_rows)
+        last.start >= viewport.scroll.saturating_add(self.viewport_rows)
     }
 
     /// 取块级绘制数据：命中直接复用；未命中调用 `build` 并记账。

@@ -198,6 +198,8 @@ const FRAME_INTERVAL: Duration = Duration::from_millis(16);
 const IDLE_WAIT: Duration = Duration::from_secs(3600);
 /// lx loading 转轮每帧间隔（对齐 codex motion.rs 的 100ms）。
 const LOADING_FRAME_INTERVAL: Duration = Duration::from_millis(100);
+/// 后台任务面板列表轮询间隔：避免每轮事件循环都访问 SQLite。
+const TASK_PAGE_REFRESH_INTERVAL: Duration = Duration::from_millis(500);
 
 /// 同步入口：构造 tokio 运行时并阻塞到主循环结束；持久化服务由入口构造并移交。
 pub fn run(
@@ -279,6 +281,8 @@ async fn run_loop(
     let mut agent_check: Option<Instant> = None;
     // 对话框列表查询在途的仓库根；结果返回前不重复发起。
     let mut git_inflight: HashSet<PathBuf> = HashSet::new();
+    // 后台任务面板的列表轮询节拍：不能每个事件循环都拉一次 SQLite。
+    let mut task_page_refresh_at: Option<Instant> = None;
     // lx 聊天在途流的取消句柄 + 会话进程运行实例。
     let mut chat_streams = chat::ChatStreams::default();
     let connect_tasks = chat::connect::ConnectTasks::default();
@@ -427,9 +431,11 @@ async fn run_loop(
         if chat::sync_background_task_counts(state, &chat_streams) {
             dirty = true;
         }
-        // 面板打开期间每轮刷新进程列表（打开后才启动的进程也要能出现）。
-        // 这里不置脏：返回值表示「已压入请求」；真正重绘由 apply_process_effects / tick_task_pages 驱动。
-        chat::refresh_open_task_pages(state);
+        // 面板打开期间按 500ms 轮询列表（避免每轮循环访问 SQLite）。
+        if task_page_refresh_at.is_none_or(|at| Instant::now() >= at) {
+            chat::refresh_open_task_pages(state);
+            task_page_refresh_at = Some(Instant::now() + TASK_PAGE_REFRESH_INTERVAL);
+        }
         // 后台任务面板的运行时长节拍：`now_ms` 只在列表回投时更新会冻住时长。
         if chat::tick_task_pages(state) {
             dirty = true;
@@ -478,6 +484,7 @@ async fn run_loop(
         }
         if geometry.rects != last_rects || state.prompt_resize_pending {
             update::resize_panes(state, &geometry.rects);
+            update::invalidate_task_agent_rows(state);
             state.prompt_resize_pending = false;
             // 窗格集合变化：清掉已关闭窗格的历史缓存，避免泄漏。
             let alive: Vec<PaneId> = geometry.rects.iter().map(|(id, _)| *id).collect();
@@ -512,13 +519,15 @@ async fn run_loop(
         }
 
         if dirty && last_draw.elapsed() >= FRAME_INTERVAL {
+            // 同帧内的 delta 只做一次委派卡片对账；视觉延迟最多一帧。
+            update::flush_subagent_cards(state);
             // 双击 Esc 选中的最新用户消息：先按几何滚到视口居中，再算置顶/顶部行。
             update::resolve_lx_rewind_center(state, &geometry.rects, &mut ui_cache);
             // 视口顶部行与置顶抑制记忆：一次几何计算同时落两处状态（渲染层只读）。
             update::resolve_lx_history(state, &geometry.rects, &mut ui_cache);
             // 后台任务面板的输出/Agents 详情/ask/Todo 可见行数：供翻页与滚动条钳制。
             update::resolve_task_output_visible(state, &geometry.rects);
-            update::resolve_task_agents_visible(state, &geometry.rects);
+            update::resolve_task_agents_visible(state, &geometry.rects, &mut ui_cache);
             update::resolve_ask_list_window(state, &geometry.rects);
             update::resolve_todo_viewport(state, geometry.view.prompt);
             ui_cache.begin_frame();
@@ -947,9 +956,7 @@ fn handle_app_event(
     }
 }
 
-/// @ 提及面板需要缓存且无在途扫描时，发起后台扫描并把结果投递回主循环。
-///
-/// prompt 未聚焦时不扫描；扫描失败按空结果处理（面板保持隐藏）。
+/// `@` 提及面板需要缓存且无在途扫描时，发起后台扫描并投递回主循环（未聚焦不扫）。
 fn pump_mention_scan(state: &mut AppState, sender: &mpsc::UnboundedSender<AppEvent>) {
     if !state.prompt_focused() {
         return;
@@ -969,9 +976,7 @@ fn pump_mention_scan(state: &mut AppState, sender: &mpsc::UnboundedSender<AppEve
     });
 }
 
-/// lx `@` 面板需要扫描的窗格：取走请求并在后台按根扫描，结果携窗格、代号与根回投。
-///
-/// 只为当前处于 lx 视图、有有效 `@` 触发且无缓存/在途的窗格发起；同一根在 pane 内缓存。
+/// lx `@` 面板需要扫描的窗格：取走请求并在后台按根扫描（同一根在 pane 内缓存）。
 fn pump_lx_mention_scan(state: &mut AppState, sender: &mpsc::UnboundedSender<AppEvent>) {
     for (pane, generation, root) in update::take_lx_mention_scan_requests(state) {
         let sender = sender.clone();

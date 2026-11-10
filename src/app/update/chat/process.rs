@@ -68,7 +68,7 @@ pub fn settle_tool_detail(
     };
     if changed && is_subagent {
         // spawn 的结果只带来 agent_id；标题状态必须再从 run 回填。
-        super::subagent::refresh_subagent_cards(state, key.pane);
+        super::subagent::request_subagent_cards_refresh(state, key.pane);
     }
     changed
 }

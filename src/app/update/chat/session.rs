@@ -262,8 +262,8 @@ pub fn on_session_loaded_full(
     let restored_messages = target.lx.chat.messages.clone();
     refresh_lx_status(state, pane);
     super::restore_plan(state, pane, &restored_messages);
-    // 历史会话：spawn 卡片的状态可从已加载的汇报行回填。
-    super::subagent::refresh_subagent_cards(state, pane);
+    // 历史会话：spawn 卡片的状态可从已加载的汇报行回填；置位后由事件循环对账。
+    super::subagent::request_subagent_cards_refresh(state, pane);
     crate::app::update::clear_lx_selection_for(state, pane);
     true
 }

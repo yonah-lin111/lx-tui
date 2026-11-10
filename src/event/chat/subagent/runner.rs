@@ -914,17 +914,17 @@ pub(super) fn sync_agent_ui_queue(
     pane: PaneId,
     workspace: &Path,
     parent_session: &str,
-) {
+) -> bool {
     let Some(database) = persistence.database() else {
-        return;
+        return false;
     };
     let tree = load_subagent_tree(database, workspace, parent_session);
     if tree.records.is_empty() {
-        return;
+        return false;
     }
     let queue_states = tree_queue_states(database, workspace, &tree);
     let Some(target) = state.pane_mut_anywhere(pane) else {
-        return;
+        return false;
     };
     let selected_agent_id = target
         .lx
@@ -933,18 +933,27 @@ pub(super) fn sync_agent_ui_queue(
         .and_then(|page| page.selected_agent_index(&target.lx.agents))
         .and_then(|index| target.lx.agents.runs.get(index))
         .map(|run| run.agent_id.clone());
+    let mut changed = false;
     for record in &tree.records {
         let q = queue_states.get(&record.agent_id);
         let projected = super::projected_agent_status(streams, record, q);
         let queued_count = q.map_or(0, |s| s.queued_count);
-        if let Some(run) = target.lx.agents.by_agent_mut(&record.agent_id) {
+        if let Some(run) = target.lx.agents.by_agent_mut(&record.agent_id)
+            && (run.status != projected || run.queued_count != queued_count)
+        {
             run.status = projected;
             run.queued_count = queued_count;
+            changed = true;
         }
     }
-    target.lx.chat.status.blocked_subagents = target.lx.agents.blocked_count();
+    let blocked = target.lx.agents.blocked_count();
+    if target.lx.chat.status.blocked_subagents != blocked {
+        target.lx.chat.status.blocked_subagents = blocked;
+        changed = true;
+    }
     crate::app::update::restore_selected_task_agent(&mut target.lx, selected_agent_id.as_deref());
     target.lx.sync_mention_subagent_runs();
+    changed
 }
 
 /// 解析父会话的最新模型快照：

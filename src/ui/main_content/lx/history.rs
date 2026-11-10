@@ -257,7 +257,7 @@ pub struct HistoryLayout {
 
 pub use sticky::StickyRow;
 mod source;
-pub(crate) use source::HistorySource;
+pub(crate) use source::{HistorySource, HistoryViewport};
 use sticky::sticky_candidate;
 
 pub(crate) use sticky::{render_sticky_prompt, sticky_rect, truncate_with_ellipsis};
@@ -385,12 +385,20 @@ fn view_source_inner(
     };
     let total = snapshot.total_rows;
     let full_height = area.height;
+    // 主历史直接用 `LxChat` 的滚动状态；Agents 详情通过 `HistoryViewport` 传入
+    // `SubagentRun` 的 scroll/follow，两者口径一致，避免 view.scroll 恒为详情底部。
+    let follow_bottom = source
+        .viewport
+        .map_or(source.chat.follow_bottom, |viewport| viewport.follow_bottom);
+    let history_scroll = source
+        .viewport
+        .map_or(source.chat.history_scroll, |viewport| viewport.scroll);
     let scroll_for = |height: u16| -> usize {
         let max_top = total.saturating_sub(usize::from(height));
-        if source.chat.follow_bottom {
+        if follow_bottom {
             max_top
         } else {
-            source.chat.history_scroll.min(max_top)
+            history_scroll.min(max_top)
         }
     };
     let mut view = HistoryView {
@@ -446,16 +454,23 @@ fn view_source_inner(
     view
 }
 
-/// 历史区滚动条几何（贴右缘一列；内容未溢出时为 None）。
-/// 只量总行数（一次性缓存）：`Agents` 详情区的滚动上限用。
-pub(crate) fn measure(width: u16, source: HistorySource<'_>) -> usize {
+/// 只量总行数：复用调用方的跨帧缓存（`Agents` 详情区的滚动上限用）。
+///
+/// 第二个返回值表示快照是否反映了当前数据；`false` 表示命中了离屏流式合并
+/// 窗口，调用方必须保留 `rows_dirty`，不能拿旧总行数当最终值。
+pub(crate) fn measure_cached(
+    width: u16,
+    source: HistorySource<'_>,
+    cache: &mut PaneCache,
+) -> (usize, bool) {
     if width == 0 {
-        return 0;
+        return (0, true);
     }
-    let mut cache = PaneCache::default();
-    cache.snapshot_source(width, source).total_rows
+    let (snapshot, fresh) = cache.snapshot_source_fresh(width, source);
+    (snapshot.total_rows, fresh)
 }
 
+/// 历史区滚动条几何（贴右缘一列；内容未溢出时为 None）。
 pub(super) fn scrollbar(
     area: Rect,
     total: usize,
