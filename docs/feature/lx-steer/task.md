@@ -1,7 +1,9 @@
 # lx 流中 steer 任务拆解
 
-> 前置：`design.md` 已获用户确认后才开始编码。
-> 纪律：每个任务完成即跑该任务列出的精确测试；不做全量重复验证；不修改 Git 状态（除用户明确授权）。
+> 状态：已完成并合并到 `dev`（merge commit `5c4d86f2`；worktree `.worktrees/lx-steer` 与分支 `feat/lx-steer` 已清理）
+> 设计依据：[design.md](design.md) · Review 记录：[review.md](review.md) · 验证报告：[verification.md](verification.md)
+> 执行位置：原 `.worktrees/lx-steer`（分支 `feat/lx-steer`，已合并至 `dev` 并移除）
+> 完成标准：实现 + 测试 + `cargo fmt` + `cargo clippy --all-targets -- -D warnings` + `cargo test` + 提交 + 合并回 `dev`
 
 ---
 

@@ -1,5 +1,8 @@
 # `lx` 流中 Steer（Mid-Turn User Input）— 验证报告 (`verification.md`)
 
+- **验证工作区**：原 `.worktrees/lx-steer`（分支 `feat/lx-steer`）及合并后的主工作区 `dev`（merge commit `5c4d86f2`；worktree 与分支已清理）
+- **验证结论**：全部 9 个验证项（V01–V09）与合并后回归测试通过（`PASS`）
+
 ## 1. CLI 与测试套件执行概览
 
 | 校验维度 | 执行命令 | 结果 |

@@ -1,6 +1,10 @@
 # `lx` 流中 Steer（Mid-turn User Input）代码审查报告（`review.md`）
 
-- **审查范围**：`feat/lx-steer` 工作区（`/Users/yonah/projects/agent/lx-tui/.worktrees/lx-steer`）相对基线 `95cf9482` 的全部新增与修改代码、测试及特性文档。
+- **Review 基线**：`feat/lx-steer` @ `31f5338d`（worktree `.worktrees/lx-steer`；分支基点 `95cf9482`，合并前 `dev` 为 `20852dfc`）
+- **实现提交**：`bd7d5f31`（`feat(lx): add mid-turn steer`）、`3f4edac2`、`28231626`、`2dbaa9aa`、`31f5338d`
+- **Review 修复提交**：`4a6f9c40`（`fix(lx): address steer code review findings and sync feature docs`）
+- **合并提交**：`5c4d86f2`（`Merge branch 'feat/lx-steer' into dev`；worktree `.worktrees/lx-steer`、分支 `feat/lx-steer`、隔离库 `lx-steer-c45ec751` 与 codebase-memory 项目 `lx-tui-lx-steer` 已清理）
+- **关联文档**：[`design.md`](design.md) · [`task.md`](task.md) · [`verification.md`](verification.md)
 - **严重度分级**：`P0`（崩溃 / 数据损坏 / 安全越权）→ `P1`（核心功能缺陷 / 上下文或用户输入丢失 / 账单统计错乱）→ `P2`（边界条件漏洞 / 状态一致性风险 / 工程规范超限）→ `P3`（细节打磨 / 死代码清理 / 文档同步）。
 
 ---

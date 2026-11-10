@@ -1,8 +1,9 @@
 # lx 流中 steer（mid-turn user input）设计
 
-> 状态：已实现并完成验证（见 `verification.md` 与 `review.md`）。
+> 状态：已完成并合并到 `dev`（merge commit `5c4d86f2`；worktree `.worktrees/lx-steer` 与分支 `feat/lx-steer` 已清理）
+> 任务清单：[task.md](task.md) · Review 记录：[review.md](review.md) · 验证报告：[verification.md](verification.md)
 > 参考：codex `turn/steer`（`TurnSteerParams.input` / pending input queue）、opencode `SessionInbox`（`delivery: steer | queue`）。
-> 适用分支：`feat/lx-steer`（基于 `dev`）。
+> 执行位置：原 `.worktrees/lx-steer`（分支 `feat/lx-steer`，已合并至 `dev` 并移除）。
 > 需求位置：`src/ui/main_content/lx/`（pending 提示区），核心链路落在 app / event / chat / db。
 
 ---
