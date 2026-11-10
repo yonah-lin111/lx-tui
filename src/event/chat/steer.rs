@@ -25,6 +25,20 @@ pub(crate) fn deliver(
     key: crate::app::state::RequestKey,
     reply: oneshot::Sender<Result<Vec<SteerInput>, HostError>>,
 ) -> bool {
+    // 子 agent 的轮次复用 EventHost，但不消费窗格的 pending_steers（子轮通过 send_input 投递）。
+    // 若不在此分流，active_assistant_id 会因窗格绑定在父会话上而误判为 Cancelled，导致子 agent 在第 1 步工具后被中断。
+    if streams.subagents.contains_key(&key.session) {
+        if streams
+            .cancels
+            .get(&key)
+            .is_some_and(|cancel| *cancel.borrow())
+        {
+            let _ = reply.send(Err(HostError::Cancelled));
+        } else {
+            let _ = reply.send(Ok(Vec::new()));
+        }
+        return false;
+    }
     let Some(assistant_id) = active_assistant_id(state, &key) else {
         let _ = reply.send(Err(HostError::Cancelled));
         return false;
@@ -55,13 +69,13 @@ pub(crate) fn deliver(
         return false;
     }
     // 关闭当前片段并取最终 parts；安全边界保证工具已全部结算。
-    let (parts, old_turn_index, old_duration_ms) = {
+    let parts = {
         let Some(target) = state.pane_mut_anywhere(key.pane) else {
             let _ = reply.send(Err(HostError::Cancelled));
             return false;
         };
         target.lx.chat.close_stream(&StopReason::Complete);
-        let parts = target
+        target
             .lx
             .chat
             .messages
@@ -69,20 +83,7 @@ pub(crate) fn deliver(
             .rev()
             .find(|message| message.id == assistant_id)
             .map(chat_message_part_views)
-            .unwrap_or_default();
-        let old_turn_index = target
-            .lx
-            .chat
-            .messages
-            .iter()
-            .find(|message| message.id == assistant_id)
-            .map(|message| message.turn_index);
-        let old_duration_ms = target
-            .lx
-            .chat
-            .turn_started_at_ms
-            .map(|started| crate::db::now_ms().saturating_sub(started).max(0));
-        (parts, old_turn_index, old_duration_ms)
+            .unwrap_or_default()
     };
     let model = crate::db::chat::ModelSnapshot {
         provider: frozen.provider.clone(),
@@ -132,10 +133,15 @@ pub(crate) fn deliver(
     {
         message.status = "complete".into();
         message.error_code = None;
-        message.duration_ms = old_duration_ms;
+        // 被 steer 截断的前半段不是轮次终点：不写耗时，避免底部出现模型名与统计行。
+        message.duration_ms = None;
     }
     target.lx.chat.session_id = Some(committed.session_id.clone());
     target.lx.chat.revision = u64::try_from(committed.revision).unwrap_or(0);
+    target
+        .lx
+        .chat
+        .mark_steered_user_message(&committed.user_message_id);
     target.lx.chat.messages.push(ChatMessageView {
         sequence: committed.user_sequence,
         id: committed.user_message_id.clone(),
@@ -200,9 +206,6 @@ pub(crate) fn deliver(
         key: key.clone(),
         assistant_id: committed.assistant_message_id.clone(),
     };
-    if let Some(turn_index) = old_turn_index {
-        target.lx.recap.on_turn_completed(turn_index);
-    }
     if committed.attachments.is_empty() && state.prompt_history.record(&text) {
         state
             .effects

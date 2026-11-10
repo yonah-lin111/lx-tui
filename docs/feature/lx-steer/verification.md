@@ -5,7 +5,7 @@
 | 校验维度 | 执行命令 | 结果 |
 | :--- | :--- | :--- |
 | 格式与静态检查 | `cargo fmt --check && cargo clippy --all-targets -- -D warnings` | PASS（0 warnings / 0 errors） |
-| Steer 专项单测套件 | `cargo test --lib steer` | PASS（49 passed / 0 failed） |
+| Steer 专项单测套件 | `cargo test --lib steer` | PASS（52 passed / 0 failed） |
 | `lx-tui exec` & `session` CLI 实机校验 | `./target/debug/lx-tui exec / session show / fork / rewind` | PASS（Exit Code 0） |
 
 ---
@@ -42,15 +42,15 @@
 - **验证步骤**：执行 `cargo test --lib chat::agent_loop::tests::steer`。
 - **期望结果**：首次采样前不注入；工具批次结算后按 `maybe_auto_compact -> take_steer_inputs -> stream_one` 顺序执行，新 steer 不被当次压缩吞入摘要；`Final` 时仅通过 `has_pending_steers` 探测并回跳循环顶部；若等待期间 pending 被撤回（`awaited_steer && batch.is_empty()`）则直接 `Complete` 收轮不空跑模型；图片与 skill 块按序写入 `ModelContext`（PASS）。
 
-### V07 — Event `deliver` 换轮交付、共享 `mutation_users` 更新与 `/rewind` 隔离
-- **输入内容**：流中第 1 段工具修改 `before.txt` → 触发 `event::chat::steer::deliver` 注入 steer → 第 2 段工具通过同一 `HostRecorderFactory` 修改 `after.txt` → 对 steer 用户消息生成 `restore_plan`；以及模型不支持图片、DB 失败异常分支。
+### V07 — Event `deliver` 换轮交付、TUI 子 Agent 分流、共享 `mutation_users` 更新与 `/rewind` 隔离
+- **输入内容**：流中第 1 段工具修改 `before.txt` → 触发 `event::chat::steer::deliver` 注入 steer → 第 2 段工具通过同一 `HostRecorderFactory` 修改 `after.txt` → 对 steer 用户消息生成 `restore_plan`；TUI 子 Agent 通过 `EventHost` 请求 `SteerInputs`；以及模型不支持图片、DB 失败异常分支。
 - **验证步骤**：执行 `cargo test --lib event::chat::tests::steer`。
-- **期望结果**：`deliver` 成功后旧 assistant 标为 `complete`、`RequestState::Streaming` 切换至新 `assistant_id`、`HostRecorderFactory` 共享 `mutation_users` 原地更新为新 `user_message_id`；针对 steer 轮次的 `restore_plan` 仅回滚 `after.txt` 而不触碰 `before.txt`；图片不支持或 DB 失败时返回 `HostError::Failed` 且不消费 `pending_steers`（PASS）。
+- **期望结果**：`deliver` 成功后旧 assistant 标为 `complete`（`duration_ms = None`，不触发中间 recap）、`RequestState::Streaming` 切换至新 `assistant_id`、`HostRecorderFactory` 共享 `mutation_users` 原地更新为新 `user_message_id`；TUI 子 Agent（`streams.subagents.contains_key(&key.session)`）请求 `SteerInputs` 时直接返回 `Ok(Vec::new())` 而不被误判为 `Cancelled`；针对 steer 轮次的 `restore_plan` 仅回滚 `after.txt` 而不触碰 `before.txt`；图片不支持或 DB 失败时返回 `HostError::Failed` 且不消费 `pending_steers`（PASS）。
 
-### V08 — TUI `Steering` 提示区渲染、宽字符裁剪与鼠标 `×` 命中
-- **输入内容**：0/1/3/5 条 `pending_steers`（含换行/控制字符、中文宽字符 `"中文..."`、极窄 13 列宽度、多附件）、打开 `task`/`ask` 面板，以及鼠标点击最右列 `×` 与正文区域。
+### V08 — TUI `Steering` 提示区渲染、被截断 Assistant 统计行隐藏、Steer 用户消息底色与鼠标 `×` 命中
+- **输入内容**：0/1/3/5 条 `pending_steers`（含换行/控制字符、中文宽字符 `"中文..."`、极窄 13 列宽度、多附件）、打开 `task`/`ask` 面板、鼠标点击最右列 `×` 与正文区域，以及含被 steer 截断旧 assistant 与 steer 插入用户消息的时间线。
 - **验证步骤**：执行 `cargo test --lib ui::main_content::lx::steer_strip::tests`。
-- **期望结果**：高度封顶 3 行，超过 3 条末行渲染 `+N more pending`（不可点击）；单行渲染 `Steering  <折叠截断正文>  · N attachments  ×`，极窄宽度保留 `×` 且宽字符绝不半写；`task`/`ask` 打开时隐藏；历史区底边精确扣减 pending 高度；`recall_hit` 仅在 `Streaming` 且点击最右列 `×` 时命中对应索引（PASS）。
+- **期望结果**：高度封顶 3 行，超过 3 条末行渲染 `+N more pending`（不可点击）；单行渲染 `Steering  <折叠截断正文>  · N attachments  ×`，极窄宽度保留 `×` 且宽字符绝不半写；被 steer 截断的上一段 assistant 底部不出现模型名称与数据统计行（如 `deepseek-v4.1-flash · 3.9s`），仅最终完成段显示统计；steer 插入的用户消息气泡与置顶行（sticky）使用区分底色 `style::chat_user_steer_bg()`（`Color::Indexed(58)` 暗琥珀，区别于普通用户消息 `Indexed(236)`）；`recall_hit` 仅在 `Streaming` 且点击最右列 `×` 时命中对应索引（PASS）。
 
 ### V09 — `lx-tui` CLI 实机验证（`exec` / `subagent` / `session show` / `fork` / `rewind`）
 - **输入内容**：

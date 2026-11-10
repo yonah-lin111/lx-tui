@@ -541,6 +541,8 @@ pub struct LxChat {
     pub detail_expanded: Vec<(String, String, CardSection, bool)>,
     /// 用户消息正文展开状态（按 message ID 记录，默认折叠）。
     pub expanded_user_messages: std::collections::HashSet<String>,
+    /// 流中 steer 插入的用户消息 ID 集合（用于与普通用户消息区分底色；切会话/重载时同步）。
+    pub steered_user_messages: std::collections::HashSet<String>,
     /// 子 agent 汇报块已追加的展开批次：每批固定行数，点 `… N more lines` 递增。
     /// 键与汇报块展开状态同口径 `(message_id, "report:<agent_id>")`。
     pub report_expand_steps: Vec<(String, String, usize)>,
@@ -658,6 +660,7 @@ impl LxChat {
             suppressed_prompt_header: None,
             detail_expanded: Vec::new(),
             expanded_user_messages: std::collections::HashSet::new(),
+            steered_user_messages: std::collections::HashSet::new(),
             report_expand_steps: Vec::new(),
             selected_tool: None,
             selected_compact: None,
@@ -744,6 +747,7 @@ impl LxChat {
         self.pending_steers.clear();
         self.promoting_steers = 0;
         self.expanded_user_messages.clear();
+        self.steered_user_messages.clear();
         self.session_title = None;
         self.session_title_palette = 0;
         self.loading_session = false;
@@ -950,6 +954,34 @@ impl LxChat {
                 .messages
                 .last_mut()
                 .filter(|message| message.role == "assistant" && message.status == "streaming"),
+        }
+    }
+
+    /// 标记一条用户消息为流中 steer 插入。
+    pub fn mark_steered_user_message(&mut self, message_id: &str) {
+        self.steered_user_messages.insert(message_id.to_string());
+    }
+
+    /// 该消息是否为流中 steer 插入的用户消息。
+    pub fn is_steered_user_message(&self, message_id: &str) -> bool {
+        self.steered_user_messages.contains(message_id)
+    }
+
+    /// 根据 DB 消息列表重建 steer 用户消息集合（兼容旧库仅在被截断 assistant 上写 `stop_reason = 'steer'`）。
+    pub fn rebuild_steered_user_messages(&mut self, messages: &[crate::db::chat::ChatMessage]) {
+        self.steered_user_messages.clear();
+        for (index, message) in messages.iter().enumerate() {
+            if message.role != "user" {
+                continue;
+            }
+            let by_self = message.stop_reason.as_deref() == Some("steer");
+            let by_previous = index > 0
+                && messages[index - 1].role == "assistant"
+                && messages[index - 1].stop_reason.as_deref() == Some("steer");
+            if by_self || by_previous {
+                self.steered_user_messages
+                    .insert(message.external_id.clone());
+            }
         }
     }
 

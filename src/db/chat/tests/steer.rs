@@ -125,6 +125,7 @@ fn steer_turn_closes_previous_assistant_and_opens_next_turn() {
     assert_eq!(user.external_id, committed.user_message_id);
     assert_eq!(user.role, "user");
     assert_eq!(user.status, "complete");
+    assert_eq!(user.stop_reason.as_deref(), Some("steer"));
     assert_eq!(user.parts.len(), 1);
     assert_eq!(user.parts[0].position, 0);
     assert_eq!(user.parts[0].kind, "text");

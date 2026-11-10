@@ -94,6 +94,7 @@ fn list_signature(source: HistorySource<'_>, width: u16, skip_streaming_tail: bo
         hash.write_str(&message.role);
         hash.write_str(&message.status);
         hash.write_str(&message.kind);
+        hash.write_u8(u8::from(source.chat.is_steered_user_message(&message.id)));
         if skip_streaming_tail
             && index + 1 == source.messages.len()
             && message.status == "streaming"

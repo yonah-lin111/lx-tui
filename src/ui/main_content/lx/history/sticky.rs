@@ -97,16 +97,31 @@ pub(crate) fn sticky_rect(view: &HistoryView) -> Option<StickyRow> {
 }
 
 /// 绘制置顶行（**表现层**：直接写 `Buffer`、不进网格 → 不参与复制与选区）；
-/// 整宽 `style::chat_user_bg` 底 + `› ` 前缀（accent）+ 摘要（默认色，按列截断加 `…`）。
+/// 整宽 `style::chat_user_bg`（steer 插入消息为 `style::chat_user_steer_bg`）底 + `› ` 前缀（accent）+ 摘要（默认色，按列截断加 `…`）。
+#[cfg(test)]
 pub(crate) fn render_sticky_prompt(
     buf: &mut Buffer,
     row: StickyRow,
     message: &crate::app::state::ChatMessageView,
 ) {
+    render_sticky_prompt_with_steer(buf, row, message, false);
+}
+
+/// 绘制置顶行（按是否为 steer 插入的用户消息切换底色）。
+pub(crate) fn render_sticky_prompt_with_steer(
+    buf: &mut Buffer,
+    row: StickyRow,
+    message: &crate::app::state::ChatMessageView,
+    steered: bool,
+) {
     let Some(text) = sticky_text(message) else {
         return;
     };
-    let bg = style::chat_user_bg();
+    let bg = if steered {
+        style::chat_user_steer_bg()
+    } else {
+        style::chat_user_bg()
+    };
     let content = content_rect(row.rect);
     for x in content.x..content.right() {
         if let Some(cell) = buf.cell_mut((x, row.rect.y)) {

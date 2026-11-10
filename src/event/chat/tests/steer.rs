@@ -131,21 +131,25 @@ fn deliver_closes_previous_segment_and_switches_assistant() {
             .messages
             .iter()
             .find(|message| message.id == committed.assistant_message_id)
-            .map(|message| message.status.as_str()),
-        Some("complete")
+            .map(|message| (message.status.as_str(), message.duration_ms)),
+        Some(("complete", None)),
+        "被 steer 截断的旧 assistant 不写耗时、不渲染统计行"
     );
-    assert_eq!(
-        *mutation_user.read().expect("lock"),
-        target
-            .lx
-            .chat
-            .messages
-            .iter()
-            .rev()
-            .find(|message| message.role == "user")
-            .expect("new user")
-            .id
+    let steered_user_id = target
+        .lx
+        .chat
+        .messages
+        .iter()
+        .rev()
+        .find(|message| message.role == "user")
+        .expect("new user")
+        .id
+        .clone();
+    assert!(
+        target.lx.chat.is_steered_user_message(&steered_user_id),
+        "steer 插入的用户消息应记录在 steered_user_messages 集合中"
     );
+    assert_eq!(*mutation_user.read().expect("lock"), steered_user_id);
     let loaded = persistence
         .database()
         .expect("db")
@@ -469,5 +473,152 @@ fn mutation_after_steer_belongs_to_steered_user_and_rewind_reverts_only_steered_
         paths,
         vec![fixture.workspace().join("after.txt").as_path()],
         "steer 轮次 rewind 只回滚 steer 之后的文件修改"
+    );
+}
+
+#[test]
+fn subagent_steer_inputs_returns_empty_without_cancelling_child_turn() {
+    let fixture = Fixture::new("steer-subagent-host");
+    let database = fixture.database();
+    let persistence = Persistence::with_database_at(database, fixture.db_path());
+    let committed = persistence
+        .database()
+        .expect("db")
+        .begin_turn(fixture.workspace(), None, "parent", &snapshot())
+        .expect("begin turn");
+    let mut state = AppState::demo();
+    let pane = state.active_tab().layout.focus();
+    let parent_key = RequestKey {
+        pane,
+        session: committed.session_id.clone(),
+        generation: 1,
+    };
+    {
+        let target = state.pane_mut_anywhere(pane).expect("pane");
+        target.lx.chat.session_id = Some(committed.session_id.clone());
+        target.lx.chat.request = RequestState::Streaming {
+            key: parent_key.clone(),
+            assistant_id: committed.assistant_message_id.clone(),
+        };
+    }
+    let child_key = RequestKey {
+        pane,
+        session: "sess-child-1".into(),
+        generation: 1,
+    };
+    let (cancel_tx, _cancel_rx) = tokio::sync::watch::channel(false);
+    let (done_tx, _done_rx) = tokio::sync::watch::channel(false);
+    let mut streams = ChatStreams::default();
+    streams.cancels.insert(child_key.clone(), cancel_tx.clone());
+    streams.subagents.insert(
+        child_key.session.clone(),
+        super::super::subagent::SubagentHandle {
+            parent: parent_key,
+            agent_id: "sub-1".into(),
+            nickname: Some("Turing".into()),
+            agent_path: "/root/turing".into(),
+            root_session: committed.session_id,
+            depth: 1,
+            child_session_id: child_key.session.clone(),
+            child_assistant_id: "msg-child-a".into(),
+            child_user_message_id: "msg-child-u".into(),
+            role: crate::chat::agent::AgentRole::Explorer,
+            title: "check".into(),
+            task: "explore".into(),
+            cancel: cancel_tx.clone(),
+            done: done_tx,
+            status: super::super::subagent::STATUS_RUNNING,
+            started_at_ms: 0,
+            max_tokens: None,
+            closed_without_report: false,
+            chat: crate::app::state::LxChat::new(),
+            workspace: fixture.workspace().to_path_buf(),
+        },
+    );
+
+    // 运行中的子 agent 请求 SteerInputs：必须回 Ok(empty)，不能因父窗格 key 不匹配而误报 Cancelled。
+    let (reply, mut receiver) = tokio::sync::oneshot::channel();
+    assert!(!super::super::steer::deliver(
+        &mut state,
+        &mut streams,
+        &persistence,
+        child_key.clone(),
+        reply,
+    ));
+    let batch = receiver.try_recv().expect("reply").expect("child ok");
+    assert!(batch.is_empty());
+
+    // 子 agent 已置取消标志时返回 Cancelled。
+    let _ = cancel_tx.send(true);
+    let (reply2, mut receiver2) = tokio::sync::oneshot::channel();
+    assert!(!super::super::steer::deliver(
+        &mut state,
+        &mut streams,
+        &persistence,
+        child_key,
+        reply2,
+    ));
+    assert_eq!(
+        receiver2
+            .try_recv()
+            .expect("reply2")
+            .expect_err("cancelled"),
+        HostError::Cancelled
+    );
+}
+
+#[test]
+fn session_reload_rebuilds_steered_user_messages_and_hides_steered_assistant_duration() {
+    let fixture = Fixture::new("steer-reload-view");
+    let database = fixture.database();
+    let first = database
+        .begin_turn(fixture.workspace(), None, "u1", &snapshot())
+        .expect("begin turn");
+    let steered = database
+        .begin_steer_turn(
+            fixture.workspace(),
+            &first.session_id,
+            &first.assistant_message_id,
+            &[],
+            "u2 steered",
+            &[],
+            &snapshot(),
+        )
+        .expect("steer turn");
+    database
+        .finish(
+            fixture.workspace(),
+            &steered.assistant_message_id,
+            &[],
+            &crate::db::chat::TurnOutcome::Complete { stop_reason: None },
+            crate::db::chat::Usage::default(),
+        )
+        .expect("finish");
+
+    let messages = database
+        .load_chat_session(fixture.workspace(), &first.session_id)
+        .expect("load")
+        .expect("session");
+    let mut state = AppState::demo();
+    state.models = models_with();
+    let pane = state.active_tab().layout.focus();
+    crate::app::update::on_session_loaded(&mut state, pane, &first.session_id, &messages, None);
+
+    let target = state.pane_anywhere(pane).expect("pane");
+    assert!(
+        !target
+            .lx
+            .chat
+            .is_steered_user_message(&first.user_message_id)
+    );
+    assert!(
+        target
+            .lx
+            .chat
+            .is_steered_user_message(&steered.user_message_id)
+    );
+    assert_eq!(
+        target.lx.chat.messages[1].duration_ms, None,
+        "被 steer 截断的旧 assistant 重载后同样不带 duration_ms"
     );
 }

@@ -471,8 +471,11 @@ fn draw_user_text(
         return;
     };
     let selected = history.selected_user_message == Some(message.id.as_str());
+    let steered = history.chat.is_steered_user_message(&message.id);
     let bg = if selected {
         style::chat_user_target_bg()
+    } else if steered {
+        style::chat_user_steer_bg()
     } else {
         style::chat_user_bg()
     };

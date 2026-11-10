@@ -313,3 +313,151 @@ fn layout_hides_pending_when_task_or_ask_is_open() {
     ask.ask = Some(AskState::new(request_key(), "call".into(), Vec::new()));
     assert!(layout(area, &ask).pending.is_none());
 }
+
+#[test]
+fn steered_turn_hides_previous_assistant_stats_and_tints_steered_user_bg() {
+    use crate::app::state::{AssistantStepView, ChatPartView};
+    use crate::chat::events::PartKind;
+
+    let area = Rect::new(0, 0, 60, 18);
+    let mut lx = Lx::new();
+
+    let mut user1 = message();
+    user1.id = "u1".into();
+    user1.sequence = 0;
+    user1.role = "user".into();
+    user1.steps = vec![AssistantStepView::Part {
+        position: 0,
+        part: ChatPartView {
+            kind: PartKind::Text,
+            content: "first question".into(),
+            provider_metadata_json: None,
+            started_at_ms: None,
+            ended_at_ms: None,
+            completed_at_ms: None,
+        },
+    }];
+
+    // 被 steer 截断的旧 assistant：即便带有 model_label 与 duration_ms，也不得在底部显示统计行。
+    let mut assistant1 = message();
+    assistant1.id = "a1".into();
+    assistant1.sequence = 1;
+    assistant1.role = "assistant".into();
+    assistant1.status = "complete".into();
+    assistant1.model_label = Some("deepseek-v4.1-flash".into());
+    assistant1.duration_ms = Some(3_900);
+    assistant1.steps = vec![AssistantStepView::Part {
+        position: 0,
+        part: ChatPartView {
+            kind: PartKind::Text,
+            content: "partial answer".into(),
+            provider_metadata_json: None,
+            started_at_ms: None,
+            ended_at_ms: None,
+            completed_at_ms: None,
+        },
+    }];
+
+    let mut steered_user = message();
+    steered_user.id = "u2-steer".into();
+    steered_user.sequence = 2;
+    steered_user.turn_index = 1;
+    steered_user.role = "user".into();
+    steered_user.steps = vec![AssistantStepView::Part {
+        position: 0,
+        part: ChatPartView {
+            kind: PartKind::Text,
+            content: "steered question".into(),
+            provider_metadata_json: None,
+            started_at_ms: None,
+            ended_at_ms: None,
+            completed_at_ms: None,
+        },
+    }];
+
+    let mut assistant2 = message();
+    assistant2.id = "a2".into();
+    assistant2.sequence = 3;
+    assistant2.turn_index = 1;
+    assistant2.role = "assistant".into();
+    assistant2.status = "complete".into();
+    assistant2.model_label = Some("deepseek-v4.1-flash".into());
+    assistant2.duration_ms = Some(8_100);
+    assistant2.steps = vec![AssistantStepView::Part {
+        position: 0,
+        part: ChatPartView {
+            kind: PartKind::Text,
+            content: "final answer".into(),
+            provider_metadata_json: None,
+            started_at_ms: None,
+            ended_at_ms: None,
+            completed_at_ms: None,
+        },
+    }];
+
+    lx.chat.messages = vec![user1, assistant1, steered_user.clone(), assistant2];
+    lx.chat.mark_steered_user_message("u2-steer");
+
+    let mut buf = Buffer::empty(area);
+    let _ = super::super::render(area, &mut buf, &lx, false, None, &mut PaneCache::default());
+    let screen: String = (area.y..area.bottom())
+        .map(|y| {
+            (area.x..area.right())
+                .map(|x| buf[(x, y)].symbol())
+                .collect::<String>()
+        })
+        .collect::<Vec<_>>()
+        .join("\n");
+    assert!(
+        !screen.contains("3.9s"),
+        "被 steer 截断的旧 assistant 底部不得出现 3.9s 统计行:\n{screen}"
+    );
+    assert!(
+        screen.contains("8.1s"),
+        "最终完成段仍正常显示底部统计行:\n{screen}"
+    );
+
+    let first_user_y = (area.y..area.bottom())
+        .find(|&y| {
+            let line: String = (area.x..area.right())
+                .map(|x| buf[(x, y)].symbol())
+                .collect();
+            line.contains("first question")
+        })
+        .expect("first user row");
+    let steered_user_y = (area.y..area.bottom())
+        .find(|&y| {
+            let line: String = (area.x..area.right())
+                .map(|x| buf[(x, y)].symbol())
+                .collect();
+            line.contains("steered question")
+        })
+        .expect("steered user row");
+    assert_eq!(
+        buf[(area.x + 2, first_user_y)].bg,
+        style::chat_user_bg().bg.expect("normal bg"),
+        "普通用户消息使用 chat_user_bg"
+    );
+    assert_eq!(
+        buf[(area.x + 2, steered_user_y)].bg,
+        style::chat_user_steer_bg().bg.expect("steer bg"),
+        "steer 插入的用户消息使用区分底色 chat_user_steer_bg"
+    );
+
+    // 置顶行同样同步 steer 底色。
+    let sticky_row = super::super::history::StickyRow {
+        rect: Rect::new(0, 0, 40, 1),
+        message: 2,
+    };
+    let mut sticky_buf = Buffer::empty(sticky_row.rect);
+    super::super::history::render_sticky_prompt_with_steer(
+        &mut sticky_buf,
+        sticky_row,
+        &steered_user,
+        true,
+    );
+    assert_eq!(
+        sticky_buf[(2, 0)].bg,
+        style::chat_user_steer_bg().bg.expect("steer sticky bg")
+    );
+}

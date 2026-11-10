@@ -883,7 +883,12 @@ impl Builder<'_> {
                 !next.reports.is_empty()
                     && !is_legacy_report_row(source.messages, message_index.saturating_add(1))
             });
-        let stats_ready = !source.subagents_running && !followed_by_report;
+        // 下一条是流中 steer 插入的用户消息时，当前 assistant 只是被截断的前半段，不显示底部统计。
+        let followed_by_steer = source
+            .messages
+            .get(message_index.saturating_add(1))
+            .is_some_and(|next| source.chat.is_steered_user_message(&next.id));
+        let stats_ready = !source.subagents_running && !followed_by_report && !followed_by_steer;
         if stats_ready && let Some(line) = stats_line(message, self.width) {
             if has_previous {
                 self.spacer();

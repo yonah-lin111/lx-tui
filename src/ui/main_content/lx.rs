@@ -126,7 +126,8 @@ pub fn render(
     if let Some(row) = sticky
         && let Some(message) = lx.chat.messages.get(row.message)
     {
-        history::render_sticky_prompt(buf, row, message);
+        let steered = lx.chat.is_steered_user_message(&message.id);
+        history::render_sticky_prompt_with_steer(buf, row, message, steered);
     }
     // 窗格底边框：面板打开时整行归面板的键位提示（不显示模型名 / 用量 / 进程计数）；
     // 否则照旧画状态（模型 · 上下文占用 · 后台任务计数）。

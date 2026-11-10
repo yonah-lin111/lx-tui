@@ -751,6 +751,11 @@ pub fn chat_user_bg() -> Style {
     Style::default().bg(Color::Indexed(236))
 }
 
+/// 流中 steer 插入的用户消息整块底色（低饱和暗琥珀，与普通用户消息和 `/rewind` 选中区分）。
+pub fn chat_user_steer_bg() -> Style {
+    Style::default().bg(Color::Indexed(58))
+}
+
 /// 撤销选中的最新用户消息整块底色（深青蓝，与普通用户消息区分）。
 pub fn chat_user_target_bg() -> Style {
     Style::default().bg(Color::Indexed(24))

@@ -565,8 +565,8 @@ impl Database {
         let user_message_id = new_external_id("msg");
         transaction.execute(
             r#"INSERT INTO agent_message
-                   (external_id, session_id, sequence, turn_index, role, status, created_at_ms)
-               VALUES (?1, ?2, ?3, ?4, 'user', 'complete', ?5)"#,
+                   (external_id, session_id, sequence, turn_index, role, status, stop_reason, created_at_ms)
+               VALUES (?1, ?2, ?3, ?4, 'user', 'complete', 'steer', ?5)"#,
             params![user_message_id, session_id, next_sequence, turn_index, now],
         )?;
         transaction.execute(
