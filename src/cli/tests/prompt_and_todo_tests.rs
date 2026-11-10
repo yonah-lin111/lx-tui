@@ -372,3 +372,81 @@ fn todo_add_update_status_reorder_rollover_and_stats_end_to_end() {
     assert_exit_ok(env.exec_raw(&["todo", "delete", &past_id]));
     assert_eq!(db.list_todos().expect("after delete").len(), 2);
 }
+
+#[test]
+fn cli_todo_group_ungroup_and_status_sync_across_group() {
+    let env = CliTestEnv::new("todo-group-cli");
+    let date = "2026-11-10";
+
+    for (text, priority) in [
+        ("Write login API", "P1"),
+        ("Standalone task", "P2"),
+        ("Write login unit tests", "P1"),
+        ("Fix home page style", "P3"),
+    ] {
+        assert_exit_ok(env.exec_raw(&["todo", "add", text, "--date", date, "-p", priority]));
+    }
+
+    let db = env.open_db();
+    let initial = db.list_todos_by_date(date).expect("initial todos");
+    assert_eq!(initial.len(), 4);
+    let id_api = initial[0].id.clone();
+    let id_standalone = initial[1].id.clone();
+    let id_test = initial[2].id.clone();
+    let id_style = initial[3].id.clone();
+
+    // Group non-adjacent items [id_api, id_test, id_style]: makes them contiguous and shares group_id.
+    assert_exit_ok(env.exec_raw(&["todo", "group", &id_api, &id_test, &id_style]));
+    let grouped = db.list_todos_by_date(date).expect("grouped todos");
+    assert_eq!(
+        grouped.iter().map(|t| t.id.as_str()).collect::<Vec<_>>(),
+        vec![
+            id_api.as_str(),
+            id_test.as_str(),
+            id_style.as_str(),
+            id_standalone.as_str(),
+        ]
+    );
+    let gid = grouped[0].group_id.clone().expect("group_id assigned");
+    assert_eq!(grouped[1].group_id.as_deref(), Some(gid.as_str()));
+    assert_eq!(grouped[2].group_id.as_deref(), Some(gid.as_str()));
+    assert_eq!(grouped[3].group_id, None);
+
+    // Status changes (`start`, `done`, `reopen`, `update --status`) sync across the whole group.
+    assert_exit_ok(env.exec_raw(&["todo", "start", &id_test]));
+    for item in &db.list_todos_by_date(date).expect("after start")[..3] {
+        assert_eq!(item.status, TodoStatus::InProgress);
+    }
+    assert_exit_ok(env.exec_raw(&["todo", "done", &id_api]));
+    for item in &db.list_todos_by_date(date).expect("after done")[..3] {
+        assert_eq!(item.status, TodoStatus::Done);
+        assert!(item.completed_date.is_some());
+    }
+    assert_exit_ok(env.exec_raw(&["todo", "update", &id_style, "--status", "todo"]));
+    for item in &db.list_todos_by_date(date).expect("after update status")[..3] {
+        assert_eq!(item.status, TodoStatus::Todo);
+        assert_eq!(item.completed_date, None);
+    }
+
+    // Split one item (`ungroup <ID>`) detaches it to immediately after the remaining 2-item group.
+    assert_exit_ok(env.exec_raw(&["todo", "ungroup", &id_test]));
+    let after_split = db.list_todos_by_date(date).expect("after split");
+    assert_eq!(
+        after_split
+            .iter()
+            .map(|t| (t.id.as_str(), t.group_id.as_deref()))
+            .collect::<Vec<_>>(),
+        vec![
+            (id_api.as_str(), Some(gid.as_str())),
+            (id_style.as_str(), Some(gid.as_str())),
+            (id_test.as_str(), None),
+            (id_standalone.as_str(), None),
+        ]
+    );
+
+    // Dissolve the remaining group with `ungroup <ID> --all`.
+    assert_exit_ok(env.exec_raw(&["todo", "ungroup", &id_api, "--all"]));
+    for item in db.list_todos_by_date(date).expect("after ungroup all") {
+        assert_eq!(item.group_id, None);
+    }
+}

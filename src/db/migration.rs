@@ -270,6 +270,22 @@ impl Database {
         if version < 25 {
             self.migrate_v25_recap()?;
         }
+        if version < 26 {
+            self.migrate_v26_todo_group()?;
+        }
+        Ok(())
+    }
+
+    /// v26：`todo` 表新增可空列 `group_id`（同组待办共享稳定组 ID，独立待办为 NULL）。
+    fn migrate_v26_todo_group(&mut self) -> Result<()> {
+        let transaction = self.conn.unchecked_transaction()?;
+        if !column_exists(&transaction, "todo", "group_id")? {
+            transaction.execute_batch("ALTER TABLE todo ADD COLUMN group_id TEXT;")?;
+        }
+        transaction.execute_batch(SCHEMA_V26_TODO_GROUP)?;
+        ensure_no_foreign_key_violation(&transaction)?;
+        transaction.pragma_update(None, "user_version", 26)?;
+        transaction.commit()?;
         Ok(())
     }
 

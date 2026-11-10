@@ -1,19 +1,37 @@
-//! todo 面板的行为层：CRUD、三态循环、优先级切换、一键排序、跨日顺延、多图表切换、删除撤销、视口与编辑现场。
+//! todo 面板的行为层：CRUD、三态循环、聚合与拆分、优先级切换、一键排序、跨日顺延、多图表切换、删除撤销、视口与编辑现场。
 //!
 //! 全部函数返回「是否产生变化」（供事件层置脏），且不碰 IO：落库一律登记 [`Effect`]，
 //! 由持久化服务在同一帧内执行。内存列表是唯一真源，写库失败只 toast、不改内存。
 
+mod drag;
+mod group;
+mod key;
+
 use std::time::Instant;
+
+pub use drag::{begin_todo_row_press, drag_todo_to, finish_todo_drag};
+pub use group::{
+    click_todo_status, cycle_todo_status, group_todo_by_id_with_next, group_todo_with_next,
+    split_todo_by_id, split_todo_from_group, ungroup_todo_all, ungroup_todo_by_id,
+};
+pub use key::{apply_todo_key, apply_todo_paste};
 
 use crate::app::effects::Effect;
 use crate::app::state::{AppState, FocusedContainer, RightTab, TodoEdit, TodoEditTarget};
 use crate::app::toast::{Toast, ToastKind};
 use crate::app::tooltip::TodoButton;
 use crate::db::todo::{TodoPriority, TodoRecord, TodoStatus};
-use crate::input::TodoKey;
 
 use super::selection::WHEEL_LINES;
 use super::show_toast;
+
+/// 登记当前选中日期下全部条目的整日同步效应。
+pub(super) fn sync_current_date_todos(state: &mut AppState) {
+    state.effects.push(Effect::SyncDateTodos {
+        entry_date: state.todo.selected_date().to_string(),
+        records: state.todo.items().to_vec(),
+    });
+}
 
 /// 聚焦 todo 面板：收起 prompt 瞬时指针。
 ///
@@ -41,6 +59,9 @@ pub fn blur_todo(state: &mut AppState) -> bool {
     if state.todo_hover.take().is_some() {
         changed = true;
     }
+    if state.todo_drag.take().is_some() {
+        changed = true;
+    }
     changed
 }
 
@@ -48,7 +69,7 @@ pub fn blur_todo(state: &mut AppState) -> bool {
 ///
 /// 编辑是单槽：编辑既有条目时不存在幽灵行，显示下标就是列表下标；
 /// 新建时列表里还没有这条记录，显示下标即插入点 `at`，且它下方的行整体前移一位。
-fn editing_layout(state: &AppState) -> Option<(usize, bool)> {
+pub(super) fn editing_layout(state: &AppState) -> Option<(usize, bool)> {
     let edit = state.todo.editing()?;
     match edit.target.as_deref() {
         None => Some((edit.at, true)),
@@ -62,7 +83,7 @@ fn editing_layout(state: &AppState) -> Option<(usize, bool)> {
 }
 
 /// 编辑现场在显示序列里的位置。
-fn editing_display_index(state: &AppState) -> Option<usize> {
+pub(super) fn editing_display_index(state: &AppState) -> Option<usize> {
     editing_layout(state).map(|(index, _)| index)
 }
 
@@ -70,7 +91,7 @@ fn editing_display_index(state: &AppState) -> Option<usize> {
 ///
 /// **必须在提交之前算**：幽灵行占着一个显示槽位，它下方的行在列表里都前移一位，
 /// 提交后幽灵行消失，那时再换算就没有依据了。
-fn resolve_display_index(state: &AppState, display: usize) -> Option<usize> {
+pub(super) fn resolve_display_index(state: &AppState, display: usize) -> Option<usize> {
     let shifted = match editing_layout(state) {
         Some((ghost, true)) if display > ghost => display - 1,
         _ => display,
@@ -125,6 +146,7 @@ pub fn click_todo_row(state: &mut AppState, display: usize, now: Instant) -> boo
 pub fn click_todo_priority(state: &mut AppState, display: usize) -> bool {
     state.todo.set_pending_g(false);
     state.todo_row_click = None;
+    state.todo_drag = None;
     let Some(id) =
         resolve_display_index(state, display).map(|index| state.todo.items()[index].id.clone())
     else {
@@ -160,21 +182,6 @@ pub fn set_todo_hover(state: &mut AppState, hover: Option<usize>) -> bool {
     true
 }
 
-/// 循环当前选中项状态并登记写库。
-pub fn cycle_todo_status(state: &mut AppState) -> bool {
-    if state.todo.is_editing() {
-        return false;
-    }
-    let Some(index) = state.todo.selected() else {
-        return false;
-    };
-    let Some(record) = state.todo.cycle_status(index) else {
-        return false;
-    };
-    state.effects.push(Effect::SaveTodo { record });
-    true
-}
-
 /// 循环当前选中项的优先级并登记写库。
 pub fn cycle_todo_priority(state: &mut AppState) -> bool {
     if state.todo.is_editing() {
@@ -190,15 +197,17 @@ pub fn cycle_todo_priority(state: &mut AppState) -> bool {
     true
 }
 
-/// 一键排序当前选中日期下的条目（未完成优先 → P0..P3 → 原顺序 → id）。
+/// 一键排序当前选中日期下的条目（未完成优先 → 组内最高优先级 → 原顺序 → id）。
 pub fn sort_todos(state: &mut AppState) -> bool {
     let mut changed = commit_todo_edit(state);
     state.todo_row_click = None;
+    state.todo_drag = None;
     if let Some(ordered_ids) = state.todo.sort_by_priority() {
         state.effects.push(Effect::ReorderTodos {
             entry_date: state.todo.selected_date().to_string(),
             ordered_ids,
         });
+        sync_current_date_todos(state);
         changed = true;
     }
     changed
@@ -211,6 +220,7 @@ pub fn select_todo_date(state: &mut AppState, date: impl Into<String>) -> bool {
         state.todo_row_click = None;
         state.todo_hover = None;
         state.todo_scroll_drag = None;
+        state.todo_drag = None;
         changed = true;
     }
     changed |= focus_todo(state);
@@ -224,6 +234,7 @@ pub fn shift_todo_week(state: &mut AppState, delta_weeks: i32) -> bool {
         state.todo_row_click = None;
         state.todo_hover = None;
         state.todo_scroll_drag = None;
+        state.todo_drag = None;
         changed = true;
     }
     changed |= focus_todo(state);
@@ -245,6 +256,7 @@ pub fn execute_todo_rollover(state: &mut AppState) -> bool {
             ids: moved_ids,
             target_date,
         });
+        sync_current_date_todos(state);
         let message = crate::ui::text::toast_todo_rollover(count);
         let anchor = Some(state.prompt.id());
         show_toast(
@@ -252,6 +264,7 @@ pub fn execute_todo_rollover(state: &mut AppState) -> bool {
             Toast::new(ToastKind::Default, message, anchor, Instant::now()),
         );
         state.todo_row_click = None;
+        state.todo_drag = None;
         changed = true;
     }
     changed |= focus_todo(state);
@@ -282,35 +295,27 @@ pub fn prev_todo_chart(state: &mut AppState) -> bool {
     changed
 }
 
-/// 编辑态 `Tab`：切换被编辑条目的状态并登记写库。
-///
-/// 新建时列表里还没有记录可切（提交后才出现），吞掉。
-fn cycle_editing_status(state: &mut AppState) -> bool {
-    let Some(id) = state.todo.editing().and_then(|edit| edit.target.clone()) else {
-        return false;
-    };
-    let Some(index) = state.todo.items().iter().position(|item| item.id == id) else {
-        return false;
-    };
-    let Some(record) = state.todo.cycle_status(index) else {
-        return false;
-    };
-    state.effects.push(Effect::SaveTodo { record });
-    true
-}
-
 /// 进入编辑。
 ///
-/// - `New`：末尾追加；
-/// - `After(index)`：当前项之后插入（列表为空时等价 `New`）；
+/// - `New`：末尾追加（独立条目，`group_id == None`）；
+/// - `After(index)`：当前项之后插入；若当前项在聚合组内，则幽灵行继承该组的 `group_id` 与 `status`；
 /// - `Current(index)`：编辑该行原文。
 pub fn begin_todo_edit(state: &mut AppState, target: TodoEditTarget) -> bool {
     let changed = commit_todo_edit(state);
+    state.todo_drag = None;
     // 新建不移动选中：幽灵行自己带 `❯`，选中留在原条目上（提交后落到新行）。
     let edit = match target {
         TodoEditTarget::New => TodoEdit::new(None, String::new(), state.todo.len()),
         TodoEditTarget::After(index) => {
-            TodoEdit::new(None, String::new(), (index + 1).min(state.todo.len()))
+            let at = (index + 1).min(state.todo.len());
+            let edit = TodoEdit::new(None, String::new(), at);
+            if let Some(item) = state.todo.items().get(index)
+                && let Some(ref gid) = item.group_id
+            {
+                edit.with_group(Some(gid.clone()), item.status)
+            } else {
+                edit
+            }
         }
         TodoEditTarget::Current(index) => {
             let Some(item) = state.todo.items().get(index) else {
@@ -328,354 +333,12 @@ pub fn begin_todo_edit(state: &mut AppState, target: TodoEditTarget) -> bool {
     true
 }
 
-/// todo 按键总入口：按 `editing` 分派到单行编辑或列表动作。
-pub fn apply_todo_key(state: &mut AppState, key: TodoKey) -> bool {
-    if key == TodoKey::Esc && super::escape_clear_selection(state) {
-        return true;
-    }
-    if state.todo.is_editing() {
-        return apply_todo_edit_key(state, key);
-    }
-    apply_todo_list_key(state, key)
-}
-
-/// 编辑态按键。
-fn apply_todo_edit_key(state: &mut AppState, key: TodoKey) -> bool {
-    match key {
-        // 单行输入：`Enter` 与 `Shift+Enter` 都提交（Shift 只用于**列表态**的新建）。
-        TodoKey::Enter | TodoKey::ShiftEnter => commit_todo_edit(state),
-        TodoKey::Esc => cancel_todo_edit(state),
-        TodoKey::Clear => {
-            let Some(input) = state.todo.edit_input_mut() else {
-                return false;
-            };
-            if let Some(selected) = input.selected_text() {
-                state.effects.push(Effect::CopyToClipboard {
-                    text: selected,
-                    anchor: None,
-                });
-                return true;
-            }
-            if input.text().is_empty() {
-                return false;
-            }
-            input.clear();
-            true
-        }
-        TodoKey::Backspace => {
-            let Some(input) = state.todo.edit_input_mut() else {
-                return false;
-            };
-            let before_len = input.text().len();
-            let before_cursor = input.cursor();
-            let had_sel = input.selection().is_some();
-            input.backspace();
-            input.text().len() != before_len || input.cursor() != before_cursor || had_sel
-        }
-        TodoKey::Delete => {
-            let Some(input) = state.todo.edit_input_mut() else {
-                return false;
-            };
-            let before_len = input.text().len();
-            let had_sel = input.selection().is_some();
-            input.delete();
-            input.text().len() != before_len || had_sel
-        }
-        TodoKey::Left => {
-            let Some(input) = state.todo.edit_input_mut() else {
-                return false;
-            };
-            let before = input.cursor();
-            let had_sel = input.selection().is_some();
-            input.move_left();
-            input.cursor() != before || had_sel
-        }
-        TodoKey::Right => {
-            let Some(input) = state.todo.edit_input_mut() else {
-                return false;
-            };
-            let before = input.cursor();
-            let had_sel = input.selection().is_some();
-            input.move_right();
-            input.cursor() != before || had_sel
-        }
-        TodoKey::Home | TodoKey::LineStart => {
-            let Some(input) = state.todo.edit_input_mut() else {
-                return false;
-            };
-            let before = input.cursor();
-            let had_sel = input.selection().is_some();
-            input.move_home();
-            input.cursor() != before || had_sel
-        }
-        TodoKey::End | TodoKey::LineEnd => {
-            let Some(input) = state.todo.edit_input_mut() else {
-                return false;
-            };
-            let before = input.cursor();
-            let had_sel = input.selection().is_some();
-            input.move_end();
-            input.cursor() != before || had_sel
-        }
-        TodoKey::SelectAll => {
-            if state.todo.edit_input().is_none() {
-                return false;
-            }
-            super::clear_selection(state);
-            let Some(input) = state.todo.edit_input_mut() else {
-                return false;
-            };
-            input.select_all();
-            true
-        }
-        TodoKey::DeleteToLineStart => {
-            let Some(input) = state.todo.edit_input_mut() else {
-                return false;
-            };
-            let before_len = input.text().len();
-            let had_sel = input.selection().is_some();
-            input.delete_to_line_start();
-            input.text().len() != before_len || had_sel
-        }
-        TodoKey::DeleteToLineEnd => {
-            let Some(input) = state.todo.edit_input_mut() else {
-                return false;
-            };
-            let before_len = input.text().len();
-            let had_sel = input.selection().is_some();
-            input.delete_to_line_end();
-            input.text().len() != before_len || had_sel
-        }
-        TodoKey::Undo => {
-            let Some(input) = state.todo.edit_input_mut() else {
-                return false;
-            };
-            input.undo()
-        }
-        TodoKey::Redo => {
-            let Some(input) = state.todo.edit_input_mut() else {
-                return false;
-            };
-            input.redo()
-        }
-        TodoKey::Cut => {
-            let text = state
-                .todo
-                .edit_input_mut()
-                .and_then(|input| input.cut_selected());
-            let Some(text) = text else {
-                return false;
-            };
-            if !text.is_empty() {
-                let anchor = Some(state.prompt.id());
-                state.effects.push(Effect::CopyToClipboard { text, anchor });
-            }
-            true
-        }
-        TodoKey::WordLeft => {
-            let Some(input) = state.todo.edit_input_mut() else {
-                return false;
-            };
-            let before = input.cursor();
-            let had_sel = input.selection().is_some();
-            input.move_word_left();
-            input.cursor() != before || had_sel
-        }
-        TodoKey::WordRight => {
-            let Some(input) = state.todo.edit_input_mut() else {
-                return false;
-            };
-            let before = input.cursor();
-            let had_sel = input.selection().is_some();
-            input.move_word_right();
-            input.cursor() != before || had_sel
-        }
-        TodoKey::DeleteWordBackward => {
-            let Some(input) = state.todo.edit_input_mut() else {
-                return false;
-            };
-            let before_len = input.text().len();
-            let had_sel = input.selection().is_some();
-            input.delete_word_backward();
-            input.text().len() != before_len || had_sel
-        }
-        TodoKey::DeleteWordForward => {
-            let Some(input) = state.todo.edit_input_mut() else {
-                return false;
-            };
-            let before_len = input.text().len();
-            let had_sel = input.selection().is_some();
-            input.delete_word_forward();
-            input.text().len() != before_len || had_sel
-        }
-        TodoKey::Char(ch) => {
-            let Some(input) = state.todo.edit_input_mut() else {
-                return false;
-            };
-            insert_bounded(input, ch)
-        }
-        TodoKey::Space => {
-            let Some(input) = state.todo.edit_input_mut() else {
-                return false;
-            };
-            insert_bounded(input, ' ')
-        }
-        // 编辑态 `Tab`：循环切换该条目的状态（不退出编辑），对齐列表态 `Space`。
-        TodoKey::Tab => cycle_editing_status(state),
-        // 编辑态上下键：在软折行视觉行间移动光标，不退出编辑、不切行。
-        TodoKey::Up | TodoKey::Down => {
-            let first_width = state.todo.edit_text_width();
-            let cont_width = state.todo.edit_cont_width();
-            if first_width == 0 {
-                return false;
-            }
-            let Some(input) = state.todo.edit_input_mut() else {
-                return false;
-            };
-            let before = input.cursor();
-            let had_sel = input.selection().is_some();
-            match key {
-                TodoKey::Up => input.move_up_wrapped_indented(first_width, cont_width),
-                TodoKey::Down => input.move_down_wrapped_indented(first_width, cont_width),
-                _ => {}
-            }
-            input.cursor() != before || had_sel
-        }
-    }
-}
-
-/// 列表态按键。
-fn apply_todo_list_key(state: &mut AppState, key: TodoKey) -> bool {
-    if !matches!(key, TodoKey::Char('g')) {
-        state.todo.set_pending_g(false);
-    }
-    match key {
-        TodoKey::Up => move_todo_selection(state, -1),
-        TodoKey::Down => move_todo_selection(state, 1),
-        TodoKey::Space => cycle_todo_status(state),
-        // `Tab` 切状态（与编辑态同义）：进入编辑走双击 / `e` / 右键菜单 `Edit`。
-        TodoKey::Tab => cycle_todo_status(state),
-        // `Enter` 编辑当前项（对齐 lx-agent 点行即改）；`Shift+Enter` 新建一条。
-        TodoKey::Enter => match state.todo.selected() {
-            Some(index) => begin_todo_edit(state, TodoEditTarget::Current(index)),
-            None => begin_todo_edit(state, TodoEditTarget::New),
-        },
-        TodoKey::ShiftEnter => {
-            let index = state.todo.selected().unwrap_or(0);
-            begin_todo_edit(state, TodoEditTarget::After(index))
-        }
-        TodoKey::Esc => blur_todo(state),
-        // 列表态完全移除/吞掉撤销与重做，不恢复已删除待办项。
-        TodoKey::Undo | TodoKey::Redo => false,
-        TodoKey::Clear => false,
-        TodoKey::Backspace
-        | TodoKey::Delete
-        | TodoKey::Left
-        | TodoKey::Right
-        | TodoKey::WordLeft
-        | TodoKey::WordRight
-        | TodoKey::Home
-        | TodoKey::End
-        | TodoKey::LineStart
-        | TodoKey::LineEnd
-        | TodoKey::SelectAll
-        | TodoKey::DeleteToLineStart
-        | TodoKey::DeleteToLineEnd
-        | TodoKey::DeleteWordBackward
-        | TodoKey::DeleteWordForward
-        | TodoKey::Cut => false,
-        TodoKey::Char(ch) => apply_todo_command(state, ch),
-    }
-}
-
-/// 列表态字符命令。
-fn apply_todo_command(state: &mut AppState, ch: char) -> bool {
-    match ch {
-        'j' => move_todo_selection(state, 1),
-        'k' => move_todo_selection(state, -1),
-        'g' => {
-            // 两个 `g` 跳首；中间任何非 `g` 命令都会经由 `pending_g` 重置。
-            if state.todo.pending_g() {
-                state.todo.set_pending_g(false);
-                move_todo_selection(state, isize::MIN)
-            } else {
-                state.todo.set_pending_g(true);
-                false
-            }
-        }
-        'G' => {
-            state.todo.set_pending_g(false);
-            move_todo_selection(state, isize::MAX)
-        }
-        'a' => begin_todo_edit(state, TodoEditTarget::New),
-        'o' => {
-            let index = state.todo.selected().unwrap_or(0);
-            begin_todo_edit(state, TodoEditTarget::After(index))
-        }
-        'e' => match state.todo.selected() {
-            Some(index) => begin_todo_edit(state, TodoEditTarget::Current(index)),
-            None => false,
-        },
-        'd' => delete_todo_selected(state),
-        'p' | 'P' => {
-            state.todo.set_pending_g(false);
-            cycle_todo_priority(state)
-        }
-        's' | 'S' => {
-            state.todo.set_pending_g(false);
-            sort_todos(state)
-        }
-        'c' | 'C' => {
-            state.todo.set_pending_g(false);
-            state.todo.next_chart()
-        }
-        '[' => {
-            state.todo.set_pending_g(false);
-            shift_todo_week(state, -1)
-        }
-        ']' => {
-            state.todo.set_pending_g(false);
-            shift_todo_week(state, 1)
-        }
-        'q' => blur_todo(state),
-        _ => {
-            state.todo.set_pending_g(false);
-            false
-        }
-    }
-}
-
-/// 粘贴：编辑态写入输入框，列表态吞掉。
-pub fn apply_todo_paste(state: &mut AppState, text: &str) -> bool {
-    let Some(input) = state.todo.edit_input_mut() else {
-        return false;
-    };
-    let selected_len = input.selection().map_or(0, |(s, e)| e.saturating_sub(s));
-    let remaining_chars = input.text().chars().count().saturating_sub(selected_len);
-    let room = crate::db::todo::MAX_TODO_TEXT_CHARS.saturating_sub(remaining_chars);
-    if room == 0 {
-        return false;
-    }
-    let clipped: String = text.chars().take(room).collect();
-    input.insert_str(&clipped)
-}
-
-/// 在输入框里插入一个字符；已达上限时吞掉（返回 false，不产生变化）。
-fn insert_bounded(input: &mut crate::app::overlay::TextInput, ch: char) -> bool {
-    let selected_len = input.selection().map_or(0, |(s, e)| e.saturating_sub(s));
-    let remaining_chars = input.text().chars().count().saturating_sub(selected_len);
-    if remaining_chars >= crate::db::todo::MAX_TODO_TEXT_CHARS {
-        return false;
-    }
-    input.insert_char(ch);
-    true
-}
-
 /// 启动加载：整体替换列表并重置选中/视口/编辑/撤销槽。
 pub fn apply_todo_list(state: &mut AppState, items: Vec<TodoRecord>) {
     state.todo.replace(items);
     state.todo_scroll_drag = None;
     state.todo_hover = None;
+    state.todo_drag = None;
 }
 
 /// 提交编辑：`Esc` 之外的打断源统一调用。
@@ -686,6 +349,12 @@ pub fn commit_todo_edit(state: &mut AppState) -> bool {
     let text = edit.input.text().trim().to_string();
     let target = edit.target;
     let at = edit.at;
+    let group_id = edit.group_id;
+    let initial_status = if group_id.is_some() {
+        edit.initial_status
+    } else {
+        TodoStatus::Todo
+    };
     if text.is_empty() {
         let Some(id) = target else {
             return true;
@@ -697,21 +366,30 @@ pub fn commit_todo_edit(state: &mut AppState) -> bool {
     }
     match target {
         None => {
+            let has_group = group_id.is_some();
             let record = TodoRecord::new_on(
                 state.todo.selected_date(),
                 text,
-                TodoStatus::Todo,
+                initial_status,
                 TodoPriority::P1,
                 at as i64,
-            );
+            )
+            .with_group_id(group_id);
             let index = state.todo.insert(at, record.clone());
             state.todo.select(index);
-            state.effects.push(Effect::SaveTodo {
-                record: TodoRecord {
+            let saved = state
+                .todo
+                .items()
+                .get(index)
+                .cloned()
+                .unwrap_or(TodoRecord {
                     position: index as i64,
                     ..record
-                },
-            });
+                });
+            state.effects.push(Effect::SaveTodo { record: saved });
+            if has_group {
+                sync_current_date_todos(state);
+            }
             true
         }
         Some(id) => {
@@ -743,6 +421,14 @@ pub fn delete_todo_selected(state: &mut AppState) -> bool {
         return false;
     }
     let Some(index) = state.todo.selected() else {
+        return false;
+    };
+    remove_todo_at(state, index)
+}
+
+/// 按条目 ID 删除指定待办。
+pub fn delete_todo_by_id(state: &mut AppState, id: &str) -> bool {
+    let Some(index) = state.todo.items().iter().position(|item| item.id == id) else {
         return false;
     };
     remove_todo_at(state, index)
@@ -783,6 +469,7 @@ pub fn right_click_todo_list(state: &mut AppState, display: Option<usize>, ancho
     state.todo.set_pending_g(false);
     state.todo_row_click = None;
     state.todo_hover = None;
+    state.todo_drag = None;
     commit_todo_edit(state);
     focus_todo(state);
 
@@ -809,24 +496,31 @@ pub fn right_click_todo_list(state: &mut AppState, display: Option<usize>, ancho
     }
 }
 
-/// 打开 Todo 条目右键菜单：编辑、循环优先级与删除（需二次确认）。
+/// 打开 Todo 条目右键菜单：按所处位置与聚合状态动态暴露聚合/拆分命令。
 pub fn open_todo_item_menu(state: &mut AppState, id: impl Into<String>, anchor: (u16, u16)) {
     let id = id.into();
-    if state.todo.items().iter().all(|item| item.id != id) {
+    let Some(index) = state.todo.items().iter().position(|item| item.id == id) else {
         return;
-    }
+    };
     state.todo.set_pending_g(false);
     state.todo_row_click = None;
     state.todo_hover = None;
+    state.todo_drag = None;
+    let mut commands = vec![crate::app::overlay::MenuCommand::EditTodo];
+    if state.todo.has_next_to_group(index) {
+        commands.push(crate::app::overlay::MenuCommand::GroupTodoWithNext);
+    }
+    if state.todo.is_grouped(index) {
+        commands.push(crate::app::overlay::MenuCommand::SplitTodoFromGroup);
+        commands.push(crate::app::overlay::MenuCommand::UngroupTodoAll);
+    }
+    commands.push(crate::app::overlay::MenuCommand::CycleTodoPriority);
+    commands.push(crate::app::overlay::MenuCommand::DeleteTodo);
     state.overlay = Some(crate::app::overlay::Overlay::Menu(
         crate::app::overlay::Menu {
             anchor,
             target: crate::app::overlay::OverlayTarget::TodoItem { id },
-            commands: vec![
-                crate::app::overlay::MenuCommand::EditTodo,
-                crate::app::overlay::MenuCommand::CycleTodoPriority,
-                crate::app::overlay::MenuCommand::DeleteTodo,
-            ],
+            commands,
             selected: 0,
             confirming: false,
         },
@@ -838,6 +532,7 @@ pub fn open_todo_blank_menu(state: &mut AppState, anchor: (u16, u16)) {
     state.todo.set_pending_g(false);
     state.todo_row_click = None;
     state.todo_hover = None;
+    state.todo_drag = None;
     state.overlay = Some(crate::app::overlay::Overlay::Menu(
         crate::app::overlay::Menu {
             anchor,
@@ -860,6 +555,7 @@ pub fn undo_todo_delete(state: &mut AppState) -> bool {
     state.todo.restore(records.clone());
     state.todo.clamp_selection();
     state.effects.push(Effect::RestoreTodos { records });
+    sync_current_date_todos(state);
     true
 }
 
@@ -887,13 +583,14 @@ pub fn fail_todo_write(state: &mut AppState) {
     );
 }
 
-/// 删除指定下标的条目并登记效应。
+/// 删除指定下标的条目并登记效应（含孤儿聚合组自动退化的整日同步）。
 pub fn remove_todo_at(state: &mut AppState, index: usize) -> bool {
     let Some(removed) = state.todo.remove(index) else {
         return false;
     };
     state.todo.set_pending_g(false);
     state.todo_row_click = None;
+    state.todo_drag = None;
     if state
         .todo_hover
         .is_some_and(|hover| hover >= state.todo.len())
@@ -903,6 +600,9 @@ pub fn remove_todo_at(state: &mut AppState, index: usize) -> bool {
     state.todo.set_undo(vec![removed.clone()]);
     state.todo.clamp_selection();
     state.effects.push(Effect::DeleteTodo { id: removed.id });
+    if !state.todo.is_empty() {
+        sync_current_date_todos(state);
+    }
     true
 }
 

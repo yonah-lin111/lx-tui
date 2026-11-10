@@ -542,7 +542,6 @@ impl Persistence {
                 false
             }
             // todo 写路径：单事务完成，失败只 toast（内存列表已更新，是真源）。
-            // 无持久化（`db: None`）时静默跳过——内存模式可用，与 prompt_history 同口径。
             Effect::SaveTodo { record } => {
                 self.todo_write(state, |db| db.save_todo(&record));
                 false
@@ -564,6 +563,13 @@ impl Persistence {
             }
             Effect::RolloverTodos { ids, target_date } => {
                 self.todo_write(state, |db| db.rollover_todos_to_date(&ids, &target_date));
+                false
+            }
+            Effect::SyncDateTodos {
+                entry_date,
+                records,
+            } => {
+                self.todo_write(state, |db| db.sync_date_todos(&entry_date, &records));
                 false
             }
             Effect::RecordWorkspace { path, name } => {

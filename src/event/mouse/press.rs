@@ -49,6 +49,7 @@ pub(crate) fn handle_mouse_down_left(
     }
     // 新的一次按下意味着上一轮 Down→Up 已结束：拖出窗口丢失 Up 后残留的手势与滚动条状态在此清空。
     state.prompt_drag = None;
+    state.todo_drag = None;
     state.connect_scroll_drag = None;
     state.referenced_search_scroll_drag = None;
     state.referenced_menu_scroll_drag = None;
@@ -334,14 +335,18 @@ pub(crate) fn handle_mouse_down_left(
                 ui::right_panel::todo::ChartSwitchHit::Prev => update::prev_todo_chart(state),
                 ui::right_panel::todo::ChartSwitchHit::Next => update::next_todo_chart(state),
             };
+        } else if let Some(row) =
+            ui::right_panel::todo::status_at(view.prompt, state, mouse.column, mouse.row)
+        {
+            changed = update::click_todo_status(state, row);
         } else if let Some(display) =
             ui::right_panel::todo::priority_at(view.prompt, state, mouse.column, mouse.row)
         {
             changed = update::click_todo_priority(state, display);
-        } else if let Some(index) =
+        } else if let Some(row) =
             ui::right_panel::todo::row_at(view.prompt, state, mouse.column, mouse.row)
         {
-            changed = update::click_todo_row(state, index, Instant::now());
+            changed = update::begin_todo_row_press(state, row, Instant::now());
         }
         // 容器内其余位置（工具栏空白 / 分割线 / 统计块 / 列表外空白）同样让容器进入
         // 选中态，但不改数据、不打断编辑、不穿透到窗格。焦点高亮只由边框表达，

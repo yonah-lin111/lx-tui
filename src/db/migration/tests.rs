@@ -953,6 +953,7 @@ fn v14_database_upgrades_to_v15_with_todo_table() {
             "entry_date",
             "priority",
             "completed_date",
+            "group_id",
         ]
     );
     let index: i64 = database
@@ -1053,4 +1054,58 @@ fn v24_upgrades_to_v25_with_recap_table_and_cascade() {
         })
         .expect("recap count");
     assert_eq!(remaining, 0, "消息删除必须级联清理 recap");
+}
+
+/// v25 → v26：`todo` 表新增 `group_id` 列与 `idx_todo_date_group` 索引，并保留既有待办数据。
+#[test]
+fn migrate_v25_to_v26_adds_group_id_column_and_preserves_rows() {
+    let path = temp_db_path("v26-todo-group");
+    {
+        let database = Database::open(&path).expect("open v26");
+        database
+            .connection()
+            .execute_batch(
+                r#"DROP INDEX IF EXISTS idx_todo_date_group;
+                   DROP TABLE todo;
+                   CREATE TABLE todo (
+                       id TEXT PRIMARY KEY,
+                       text TEXT NOT NULL,
+                       status TEXT NOT NULL DEFAULT 'todo' CHECK (status IN ('todo', 'in_progress', 'done')),
+                       position INTEGER NOT NULL CHECK (position >= 0),
+                       created_at_ms INTEGER NOT NULL,
+                       updated_at_ms INTEGER NOT NULL,
+                       entry_date TEXT NOT NULL DEFAULT '',
+                       priority TEXT NOT NULL DEFAULT 'P1',
+                       completed_date TEXT
+                   );
+                   CREATE UNIQUE INDEX idx_todo_date_position ON todo(entry_date, position);
+                   INSERT INTO todo (id, entry_date, text, status, priority, completed_date, position, created_at_ms, updated_at_ms)
+                   VALUES ('todo-legacy-1', '2026-11-10', 'legacy item', 'todo', 'P0', NULL, 0, 100, 100);
+                   PRAGMA user_version = 25;"#,
+            )
+            .expect("downgrade todo to v25");
+    }
+
+    let database = Database::open(&path).expect("upgrade v25 -> v26");
+    let version: i64 = database
+        .connection()
+        .query_row("PRAGMA user_version", [], |row| row.get(0))
+        .expect("version");
+    assert_eq!(version, SCHEMA_VERSION);
+    assert!(columns(&database, "todo").contains(&"group_id".to_string()));
+    let index: i64 = database
+        .connection()
+        .query_row(
+            "SELECT COUNT(*) FROM sqlite_master WHERE type = 'index' AND name = 'idx_todo_date_group'",
+            [],
+            |row| row.get(0),
+        )
+        .expect("index");
+    assert_eq!(index, 1);
+
+    let items = database.list_todos().expect("list todos");
+    assert_eq!(items.len(), 1);
+    assert_eq!(items[0].id, "todo-legacy-1");
+    assert_eq!(items[0].text, "legacy item");
+    assert_eq!(items[0].group_id, None);
 }

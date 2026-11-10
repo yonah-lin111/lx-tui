@@ -21,7 +21,8 @@ use super::prompt::{
 };
 use super::selection::clear_selection;
 use super::todo::{
-    begin_todo_edit, commit_todo_edit, cycle_todo_priority, focus_todo, remove_todo_at, sort_todos,
+    begin_todo_edit, commit_todo_edit, cycle_todo_priority, focus_todo, group_todo_by_id_with_next,
+    remove_todo_at, sort_todos, split_todo_by_id, ungroup_todo_by_id,
 };
 use super::workspace::{
     close_pane, close_tab, close_workspace, create_tab, create_terminal_in_workspace,
@@ -537,6 +538,15 @@ pub fn activate_menu(state: &mut AppState) -> Option<(PaneId, Vec<u8>)> {
                 state.todo.select(index);
                 begin_todo_edit(state, TodoEditTarget::Current(index));
             }
+        }
+        (Some(MenuCommand::GroupTodoWithNext), OverlayTarget::TodoItem { id }) => {
+            group_todo_by_id_with_next(state, &id);
+        }
+        (Some(MenuCommand::SplitTodoFromGroup), OverlayTarget::TodoItem { id }) => {
+            split_todo_by_id(state, &id);
+        }
+        (Some(MenuCommand::UngroupTodoAll), OverlayTarget::TodoItem { id }) => {
+            ungroup_todo_by_id(state, &id);
         }
         (Some(MenuCommand::CycleTodoPriority), OverlayTarget::TodoItem { id }) => {
             commit_todo_edit(state);

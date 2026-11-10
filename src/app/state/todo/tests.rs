@@ -1,6 +1,8 @@
 //! `TodoPanel` 状态机单元测试：列表不变式（`position == 下标`）、选中钳制、
 //! 视口跟随与撤销槽；不涉及 `AppState` 与 IO。
 
+use crate::db::todo::TodoPriority;
+
 use super::*;
 
 /// 造一批条目，位置按给定顺序 0 基。
@@ -258,4 +260,243 @@ fn set_scroll_and_replace_and_today_rollover_invariants() {
         panel.has_rollover_banner(),
         "跨日推进后 rollover_dismissed 必须复位"
     );
+}
+
+#[test]
+fn merge_with_next_groups_two_singles_and_aligns_status() {
+    let mut panel = TodoPanel::new();
+    panel.replace(vec![
+        TodoRecord::new("a", TodoStatus::InProgress, 0),
+        TodoRecord::new("b", TodoStatus::Todo, 1),
+        TodoRecord::new("c", TodoStatus::Done, 2),
+    ]);
+
+    assert!(panel.has_next_to_group(0));
+    assert!(panel.merge_with_next(0));
+    assert_dense(&panel);
+
+    let gid = panel.items()[0].group_id.clone().expect("已分配 group_id");
+    assert_eq!(panel.items()[1].group_id.as_deref(), Some(gid.as_str()));
+    assert_eq!(panel.items()[2].group_id, None);
+    assert_eq!(panel.items()[0].status, TodoStatus::InProgress);
+    assert_eq!(panel.items()[1].status, TodoStatus::InProgress);
+
+    assert_eq!(
+        panel.group_role(0),
+        TodoGroupRole::Member {
+            group_id: gid.clone(),
+            offset: 0,
+            count: 2,
+        }
+    );
+    assert!(panel.group_role(0).is_status_anchor());
+    assert!(!panel.group_role(1).is_status_anchor());
+
+    // 再次向下合并将第 3 项并入同一组，锚点移至中项 offset == 1。
+    assert!(panel.merge_with_next(0));
+    assert_eq!(panel.group_range(0), 0..3);
+    assert!(!panel.has_next_to_group(0));
+    assert!(!panel.merge_with_next(0), "末尾组无法继续向下合并");
+    assert!(!panel.group_role(0).is_status_anchor());
+    assert!(panel.group_role(1).is_status_anchor());
+    assert!(!panel.group_role(2).is_status_anchor());
+    assert_eq!(panel.items()[2].status, TodoStatus::InProgress);
+    assert_eq!(panel.items()[2].completed_date, None);
+}
+
+#[test]
+fn merge_item_into_moves_non_adjacent_item_into_target_group() {
+    let mut panel = TodoPanel::new();
+    panel.replace(vec![
+        TodoRecord::new("a", TodoStatus::Done, 0),
+        TodoRecord::new("b", TodoStatus::Todo, 1),
+        TodoRecord::new("c", TodoStatus::InProgress, 2),
+    ]);
+
+    // 将末项 c 并入首项 a：c 移动到 a 紧邻下方，且状态对齐 a（Done）。
+    assert!(panel.merge_item_into(2, 0));
+    assert_dense(&panel);
+
+    let texts: Vec<&str> = panel.items().iter().map(|i| i.text.as_str()).collect();
+    assert_eq!(texts, vec!["a", "c", "b"]);
+    assert_eq!(panel.selected(), Some(1), "选中跟随至移动后的 c");
+    assert!(panel.is_grouped(0));
+    assert!(panel.is_grouped(1));
+    assert!(!panel.is_grouped(2));
+    assert_eq!(panel.items()[0].group_id, panel.items()[1].group_id);
+    assert_eq!(panel.items()[1].status, TodoStatus::Done);
+    assert!(panel.items()[1].completed_date.is_some());
+
+    // 同组内再次并入返回 false。
+    assert!(!panel.merge_item_into(0, 1));
+}
+
+#[test]
+fn split_from_group_detaches_item_and_degenerates_singleton_group() {
+    let mut panel = TodoPanel::new();
+    panel.replace(records(&["a", "b", "c"]));
+    assert!(panel.merge_with_next(0));
+    assert!(panel.merge_with_next(0));
+    assert_eq!(panel.group_range(0), 0..3);
+
+    // 拆出首项 a：a 挪到原组末尾（下标 2）并变为 Single，剩余 b、c 保持 2 人组。
+    assert!(panel.split_from_group(0));
+    assert_dense(&panel);
+    let texts: Vec<&str> = panel.items().iter().map(|i| i.text.as_str()).collect();
+    assert_eq!(texts, vec!["b", "c", "a"]);
+    assert_eq!(panel.selected(), Some(2));
+    assert!(panel.is_grouped(0));
+    assert!(panel.is_grouped(1));
+    assert!(!panel.is_grouped(2));
+
+    // 再从 2 人组拆出 b：两边各剩 1 条，双双自动退化为 Single。
+    assert!(panel.split_from_group(0));
+    assert!(!panel.is_grouped(0));
+    assert!(!panel.is_grouped(1));
+    assert!(panel.items().iter().all(|i| i.group_id.is_none()));
+}
+
+#[test]
+fn ungroup_at_dissolves_entire_group_in_place() {
+    let mut panel = TodoPanel::new();
+    panel.replace(records(&["a", "b", "c", "d"]));
+    assert!(panel.merge_with_next(0));
+    assert!(panel.merge_with_next(0));
+    assert_eq!(panel.group_range(1), 0..3);
+
+    assert!(panel.ungroup_at(1));
+    assert_dense(&panel);
+    let texts: Vec<&str> = panel.items().iter().map(|i| i.text.as_str()).collect();
+    assert_eq!(texts, vec!["a", "b", "c", "d"], "原地解散不改变顺序");
+    assert!(panel.items().iter().all(|i| i.group_id.is_none()));
+    assert!(!panel.ungroup_at(1), "独立项再次解散返回 false");
+}
+
+#[test]
+fn cycle_status_updates_all_members_of_group() {
+    let mut panel = TodoPanel::new();
+    panel.replace(records(&["a", "b", "c"]));
+    assert!(panel.merge_with_next(0));
+
+    let changed = panel.cycle_status(1);
+    assert_eq!(changed.len(), 2);
+    assert_eq!(panel.items()[0].status, TodoStatus::InProgress);
+    assert_eq!(panel.items()[1].status, TodoStatus::InProgress);
+    assert_eq!(panel.items()[2].status, TodoStatus::Todo);
+
+    let changed = panel.cycle_status(0);
+    assert_eq!(changed.len(), 2);
+    assert_eq!(panel.items()[0].status, TodoStatus::Done);
+    assert_eq!(panel.items()[1].status, TodoStatus::Done);
+    assert!(panel.items()[0].completed_date.is_some());
+    assert!(panel.items()[1].completed_date.is_some());
+}
+
+#[test]
+fn remove_in_two_item_group_degenerates_survivor_to_single() {
+    let mut panel = TodoPanel::new();
+    panel.replace(records(&["a", "b"]));
+    assert!(panel.merge_with_next(0));
+    assert!(panel.is_grouped(0));
+
+    panel.remove(0);
+    assert_eq!(panel.len(), 1);
+    assert_eq!(panel.items()[0].text, "b");
+    assert_eq!(
+        panel.items()[0].group_id,
+        None,
+        "孤儿组必须自动退化为 Single"
+    );
+    assert_eq!(panel.group_role(0), TodoGroupRole::Single);
+}
+
+#[test]
+fn sort_by_priority_keeps_group_contiguous_and_orders_by_highest_member_priority() {
+    let mut panel = TodoPanel::new();
+    let today = panel.today_date().to_string();
+    panel.replace(vec![
+        TodoRecord::new_on(&today, "single-p1", TodoStatus::Todo, TodoPriority::P1, 0),
+        TodoRecord::new_on(&today, "grp-p2", TodoStatus::Todo, TodoPriority::P2, 1)
+            .with_group_id(Some("tgrp-1".to_string())),
+        TodoRecord::new_on(&today, "grp-p0", TodoStatus::Todo, TodoPriority::P0, 2)
+            .with_group_id(Some("tgrp-1".to_string())),
+        TodoRecord::new_on(&today, "done-p0", TodoStatus::Done, TodoPriority::P0, 3),
+    ]);
+
+    // 聚合组内含 P2 与 P0，最高优先级为 P0，故整组排在 single-p1 之前，且组内重排为 [grp-p0, grp-p2]。
+    let ordered = panel.sort_by_priority().expect("应发生重排");
+    assert_eq!(ordered.len(), 4);
+    let texts: Vec<&str> = panel.items().iter().map(|i| i.text.as_str()).collect();
+    assert_eq!(texts, vec!["grp-p0", "grp-p2", "single-p1", "done-p0"]);
+    assert_eq!(panel.group_range(0), 0..2);
+    assert_dense(&panel);
+}
+
+#[test]
+fn normalize_compacts_scattered_group_and_rollover_degenerates_singleton() {
+    let mut panel = TodoPanel::new();
+    panel.set_today_date("2026-10-31");
+    panel.replace(vec![
+        // 历史日 2026-10-30 有一组 2 条：其中 1 条 Done、1 条 Todo。
+        TodoRecord::new_on(
+            "2026-10-30",
+            "past-todo",
+            TodoStatus::Todo,
+            TodoPriority::P1,
+            0,
+        )
+        .with_group_id(Some("tgrp-past".to_string())),
+        TodoRecord::new_on(
+            "2026-10-30",
+            "past-done",
+            TodoStatus::Done,
+            TodoPriority::P1,
+            1,
+        )
+        .with_group_id(Some("tgrp-past".to_string())),
+        // 今日被隔开的同组项：replace 必须自动归拢连续。
+        TodoRecord::new_on(
+            "2026-10-31",
+            "g1",
+            TodoStatus::InProgress,
+            TodoPriority::P1,
+            0,
+        )
+        .with_group_id(Some("tgrp-today".to_string())),
+        TodoRecord::new_on("2026-10-31", "mid", TodoStatus::Todo, TodoPriority::P2, 1),
+        TodoRecord::new_on("2026-10-31", "g2", TodoStatus::Todo, TodoPriority::P1, 2)
+            .with_group_id(Some("tgrp-today".to_string())),
+    ]);
+
+    let texts: Vec<&str> = panel.items().iter().map(|i| i.text.as_str()).collect();
+    assert_eq!(texts, vec!["g1", "g2", "mid"], "同组成员被自动归拢");
+    assert_eq!(
+        panel.items()[1].status,
+        TodoStatus::InProgress,
+        "同组状态自动对齐首项"
+    );
+
+    // 顺延前在 2026-10-30 由于同组状态对齐，past-done 已被对齐为首项的 Todo。
+    // 若单独构造 1 条孤儿组顺延，顺延到今日后孤儿 group_id 应自动退化为 None。
+    panel.select_date("2026-10-29");
+    panel.insert(
+        0,
+        TodoRecord::new_on(
+            "2026-10-29",
+            "orphan",
+            TodoStatus::Todo,
+            TodoPriority::P1,
+            0,
+        )
+        .with_group_id(Some("tgrp-orphan".to_string())),
+    );
+    panel.select_date("2026-10-31");
+    let moved = panel.rollover_past_incomplete_to_today();
+    assert!(!moved.is_empty());
+    let orphan = panel
+        .items()
+        .iter()
+        .find(|i| i.text == "orphan")
+        .expect("orphan moved");
+    assert_eq!(orphan.group_id, None);
 }

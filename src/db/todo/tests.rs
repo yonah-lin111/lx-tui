@@ -403,3 +403,88 @@ fn rollover_does_not_collide_when_target_date_had_sparse_position() {
     assert_eq!(texts(&today), vec!["today-sparse", "past-open"]);
     assert_eq!(positions(&today), vec![0, 1]);
 }
+
+#[test]
+fn save_and_sync_date_todos_persists_group_id_and_positions() {
+    let db = open_test_database();
+    let date = "2026-11-10";
+    let gid = new_todo_group_id();
+    let a = TodoRecord::new_on(date, "write api", TodoStatus::Todo, TodoPriority::P1, 0)
+        .with_group_id(Some(gid.clone()));
+    let b = TodoRecord::new_on(date, "write test", TodoStatus::Todo, TodoPriority::P1, 1)
+        .with_group_id(Some(gid.clone()));
+    let c = TodoRecord::new_on(date, "fix style", TodoStatus::Todo, TodoPriority::P2, 2);
+    for record in [&a, &b, &c] {
+        db.save_todo(record).expect("save");
+    }
+
+    let listed = db.list_todos_by_date(date).expect("list by date");
+    assert_eq!(
+        listed
+            .iter()
+            .map(|r| r.group_id.as_deref())
+            .collect::<Vec<_>>(),
+        vec![Some(gid.as_str()), Some(gid.as_str()), None]
+    );
+    assert_eq!(
+        db.todo_by_id(&a.id)
+            .expect("by id")
+            .expect("exists")
+            .group_id
+            .as_deref(),
+        Some(gid.as_str())
+    );
+
+    // 将 c 也并入聚合组、整体切为 Done 并重排为 [c, a, b]。
+    let mut c_grouped = c.clone().with_group_id(Some(gid.clone()));
+    c_grouped.status = TodoStatus::Done;
+    let mut a_done = a.clone();
+    a_done.status = TodoStatus::Done;
+    let mut b_done = b.clone();
+    b_done.status = TodoStatus::Done;
+    db.sync_date_todos(date, &[c_grouped, a_done, b_done])
+        .expect("sync date todos");
+
+    let synced = db.list_todos_by_date(date).expect("synced");
+    assert_eq!(texts(&synced), vec!["fix style", "write api", "write test"]);
+    assert_eq!(positions(&synced), vec![0, 1, 2]);
+    for item in &synced {
+        assert_eq!(item.group_id.as_deref(), Some(gid.as_str()));
+        assert_eq!(item.status, TodoStatus::Done);
+        assert_eq!(item.completed_date.as_deref(), Some(date));
+    }
+}
+
+#[test]
+fn delete_todo_clears_singleton_group_id() {
+    let db = open_test_database();
+    let date = "2026-11-10";
+    let gid = new_todo_group_id();
+    let a = TodoRecord::new_on(
+        date,
+        "member a",
+        TodoStatus::InProgress,
+        TodoPriority::P0,
+        0,
+    )
+    .with_group_id(Some(gid.clone()));
+    let b = TodoRecord::new_on(
+        date,
+        "member b",
+        TodoStatus::InProgress,
+        TodoPriority::P1,
+        1,
+    )
+    .with_group_id(Some(gid));
+    db.save_todo(&a).expect("save a");
+    db.save_todo(&b).expect("save b");
+
+    db.delete_todo(&a.id).expect("delete a");
+    let remaining = db.list_todos_by_date(date).expect("remaining");
+    assert_eq!(remaining.len(), 1);
+    assert_eq!(remaining[0].id, b.id);
+    assert_eq!(
+        remaining[0].group_id, None,
+        "2 条聚合组删掉 1 条后剩余单条必须自动清除 group_id"
+    );
+}

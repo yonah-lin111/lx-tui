@@ -48,7 +48,7 @@ pub use lx::{
 };
 pub use pane::{Direction, Pane, PaneKind, PaneView, SidebarAgentEntry, SidebarAgentKind, Tab};
 pub use prompt_history::{PROMPT_HISTORY_LIMIT, PROMPT_HISTORY_MAX_BYTES, PromptHistory};
-pub use todo::{TodoChartKind, TodoEdit, TodoEditTarget, TodoPanel, WeekDayView};
+pub use todo::{TodoChartKind, TodoEdit, TodoEditTarget, TodoGroupRole, TodoPanel, WeekDayView};
 pub use workspace::{
     PromptDraft, Workspace, WorkspaceGit, WorkspaceIdentity, WorkspaceRow,
     current_workspace_identity, home_dir, path_tail_two, tab_label, unique_workspace_name,
@@ -136,6 +136,21 @@ pub struct PromptDrag {
     pub drop_mark: PromptDropMark,
     /// 本次是否允许拖动（`Temp` 行、搜索过滤态为 false）。
     pub enabled: bool,
+}
+
+/// Todo 列表行拖拽合并现场。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct TodoDrag {
+    /// 按下时的源条目 ID。
+    pub source_id: String,
+    /// 按下时的显示下标。
+    pub from_display: usize,
+    /// 按下时刻。
+    pub pressed_at: Instant,
+    /// 是否已跨行进入拖拽态。
+    pub dragging: bool,
+    /// 当前悬停的可合并目标列表下标（与源同条或同组时为 None）。
+    pub target_index: Option<usize>,
 }
 
 /// 顶层层级：工作区包含标签与挂起的 prompt 草稿，标签包含 BSP 窗格树与窗格终端；
@@ -358,6 +373,8 @@ pub struct AppState {
     pub todo_hover: Option<usize>,
     /// todo 列表最近一次左键点击（显示行下标、时刻）；双击判定用。
     pub todo_row_click: Option<(usize, Instant)>,
+    /// todo 列表行拖拽合并现场。
+    pub todo_drag: Option<TodoDrag>,
 }
 
 impl AppState {
@@ -504,6 +521,7 @@ impl AppState {
             todo_scroll_drag: None,
             todo_hover: None,
             todo_row_click: None,
+            todo_drag: None,
         }
     }
 

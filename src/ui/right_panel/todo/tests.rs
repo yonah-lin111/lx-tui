@@ -4,14 +4,16 @@
 //! 选中样式那条走整屏 `crate::ui::render`，确保容器聚焦边框也参与画面。
 
 use super::*;
-use crate::app::state::RightTab;
+use crate::app::state::{RightTab, TodoEdit};
 use crate::config::Config;
+use crate::db::todo::{TodoPriority, TodoStatus};
 use ratatui::Terminal;
 use ratatui::backend::TestBackend;
 use ratatui::buffer::Buffer;
 use ratatui::style::{Color, Modifier};
 
 mod charts;
+mod grouping;
 mod schedule;
 
 /// 面板高度：足够容纳表头两行与列表区。

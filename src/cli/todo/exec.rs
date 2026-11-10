@@ -8,7 +8,7 @@ use crate::cli::EXIT_OK;
 use crate::cli::context::open_global_db;
 use crate::cli::output::Output;
 use crate::db::Database;
-use crate::db::todo::{TodoPriority, TodoRecord, TodoStatus, today_date};
+use crate::db::todo::{TodoPriority, TodoRecord, TodoStatus, new_todo_group_id, today_date};
 
 use super::*;
 
@@ -163,9 +163,13 @@ pub(super) fn update(ctx: &Context, command: &TodoCommand) -> Result<(), String>
             )?
             .len() as i64;
             record.entry_date = date;
+            record.group_id = None;
         }
     }
     db(ctx.db.save_todo(&record), "failed to update todo")?;
+    if let (Some(status), Some(gid)) = (command.status, record.group_id.as_ref()) {
+        sync_group_status(ctx, &record.entry_date, gid, status)?;
+    }
     action(
         &ctx.out,
         "update",
@@ -190,17 +194,212 @@ fn set_status(ctx: &Context, command: &TodoCommand, status: TodoStatus) -> Resul
     let query = one_id(command)?;
     let todos = db(ctx.db.list_todos(), "failed to list todos")?;
     let mut record = resolve(&todos, &query)?.clone();
-    if status == TodoStatus::Done {
-        if record.status != TodoStatus::Done || record.completed_date.is_none() {
-            record.completed_date = Some(today_date());
-        }
+    if let Some(ref gid) = record.group_id {
+        sync_group_status(ctx, &record.entry_date, gid, status)?;
     } else {
-        record.completed_date = None;
+        if status == TodoStatus::Done {
+            if record.status != TodoStatus::Done || record.completed_date.is_none() {
+                record.completed_date = Some(today_date());
+            }
+        } else {
+            record.completed_date = None;
+        }
+        record.status = status;
+        db(ctx.db.save_todo(&record), "failed to update todo")?;
     }
-    record.status = status;
-    db(ctx.db.save_todo(&record), "failed to update todo")?;
     let message = format!("Todo {} is now {}.", record.id, status.as_str());
     action(&ctx.out, "status", &record.id, message)
+}
+
+fn sync_group_status(
+    ctx: &Context,
+    entry_date: &str,
+    group_id: &str,
+    status: TodoStatus,
+) -> Result<(), String> {
+    let mut day_todos = db(
+        ctx.db.list_todos_by_date(entry_date),
+        "failed to list todos by date",
+    )?;
+    let today = today_date();
+    for item in &mut day_todos {
+        if item.group_id.as_deref() == Some(group_id) {
+            if status == TodoStatus::Done {
+                if item.status != TodoStatus::Done || item.completed_date.is_none() {
+                    item.completed_date = Some(today.clone());
+                }
+            } else {
+                item.completed_date = None;
+            }
+            item.status = status;
+        }
+    }
+    db(
+        ctx.db.sync_date_todos(entry_date, &day_todos),
+        "failed to update todo",
+    )
+}
+
+pub(super) fn group(ctx: &Context, command: &TodoCommand) -> Result<(), String> {
+    let queries: Vec<&str> = command
+        .ids
+        .iter()
+        .chain(command.words.iter())
+        .map(String::as_str)
+        .filter(|s| !s.trim().is_empty())
+        .collect();
+    if queries.len() < 2 {
+        return Err("todo group requires at least two todo IDs".to_string());
+    }
+    let todos = db(ctx.db.list_todos(), "failed to list todos")?;
+    let mut resolved_ids: Vec<String> = Vec::with_capacity(queries.len());
+    let mut entry_date: Option<String> = None;
+    for query in queries {
+        let item = resolve(&todos, query.trim())?;
+        if let Some(ref date) = entry_date {
+            if &item.entry_date != date {
+                return Err("cannot group todos from different dates".to_string());
+            }
+        } else {
+            entry_date = Some(item.entry_date.clone());
+        }
+        if !resolved_ids.contains(&item.id) {
+            resolved_ids.push(item.id.clone());
+        }
+    }
+    if resolved_ids.len() < 2 {
+        return Err("todo group requires at least two distinct todo IDs".to_string());
+    }
+    let entry_date = entry_date.unwrap_or_else(today_date);
+    let mut day_todos = db(
+        ctx.db.list_todos_by_date(&entry_date),
+        "failed to list todos by date",
+    )?;
+    let first = day_todos
+        .iter()
+        .find(|item| item.id == resolved_ids[0])
+        .ok_or_else(|| format!("todo '{}' not found", resolved_ids[0]))?
+        .clone();
+    let group_id = first.group_id.clone().unwrap_or_else(new_todo_group_id);
+    let base_status = first.status;
+    let base_completed = (base_status == TodoStatus::Done)
+        .then(|| first.completed_date.clone().unwrap_or_else(today_date));
+
+    let mut target_member_ids = resolved_ids.clone();
+    if let Some(ref existing_gid) = first.group_id {
+        for item in &day_todos {
+            if item.group_id.as_deref() == Some(existing_gid.as_str())
+                && !target_member_ids.contains(&item.id)
+            {
+                target_member_ids.push(item.id.clone());
+            }
+        }
+    }
+
+    let anchor_index = day_todos
+        .iter()
+        .position(|item| item.id == resolved_ids[0])
+        .unwrap_or(0);
+    let before_count = day_todos[..anchor_index]
+        .iter()
+        .filter(|item| !target_member_ids.contains(&item.id))
+        .count();
+
+    let mut grouped_members: Vec<TodoRecord> = Vec::with_capacity(target_member_ids.len());
+    for member_id in &target_member_ids {
+        if let Some(pos) = day_todos.iter().position(|item| &item.id == member_id) {
+            let mut item = day_todos.remove(pos);
+            item.group_id = Some(group_id.clone());
+            item.status = base_status;
+            item.completed_date = base_completed.clone();
+            grouped_members.push(item);
+        }
+    }
+    let insert_at = before_count.min(day_todos.len());
+    for (offset, member) in grouped_members.into_iter().enumerate() {
+        day_todos.insert(insert_at + offset, member);
+    }
+
+    db(
+        ctx.db.sync_date_todos(&entry_date, &day_todos),
+        "failed to group todos",
+    )?;
+    let payload = json!({
+        "action": "group",
+        "date": entry_date,
+        "group_id": group_id,
+        "ids": resolved_ids,
+    });
+    ctx.out.emit(&payload, |_, writer| {
+        writeln!(
+            writer,
+            "Grouped {} todos into {group_id}.",
+            resolved_ids.len()
+        )
+    })
+}
+
+pub(super) fn ungroup(ctx: &Context, command: &TodoCommand) -> Result<(), String> {
+    let query = if !command.words.is_empty() {
+        one_id(command)?
+    } else if command.ids.len() == 1 && !command.ids[0].trim().is_empty() {
+        command.ids[0].trim().to_string()
+    } else {
+        return Err("missing <TODO_ID>; run 'lx-tui todo --help' for usage".to_string());
+    };
+    let todos = db(ctx.db.list_todos(), "failed to list todos")?;
+    let target = resolve(&todos, &query)?.clone();
+    let Some(group_id) = target.group_id.clone() else {
+        return Err(format!("todo '{}' is not in a group", target.id));
+    };
+    let mut day_todos = db(
+        ctx.db.list_todos_by_date(&target.entry_date),
+        "failed to list todos by date",
+    )?;
+    if command.all {
+        for item in &mut day_todos {
+            if item.group_id.as_deref() == Some(group_id.as_str()) {
+                item.group_id = None;
+            }
+        }
+    } else if let Some(idx) = day_todos.iter().position(|item| item.id == target.id) {
+        let group_end = day_todos
+            .iter()
+            .rposition(|item| item.group_id.as_deref() == Some(group_id.as_str()))
+            .unwrap_or(idx);
+        let mut detached = day_todos.remove(idx);
+        detached.group_id = None;
+        let insert_at = group_end.min(day_todos.len());
+        day_todos.insert(insert_at, detached);
+        let remaining = day_todos
+            .iter()
+            .filter(|item| item.group_id.as_deref() == Some(group_id.as_str()))
+            .count();
+        if remaining < 2 {
+            for item in &mut day_todos {
+                if item.group_id.as_deref() == Some(group_id.as_str()) {
+                    item.group_id = None;
+                }
+            }
+        }
+    }
+    db(
+        ctx.db.sync_date_todos(&target.entry_date, &day_todos),
+        "failed to ungroup todo",
+    )?;
+    let payload = json!({
+        "action": "ungroup",
+        "id": target.id,
+        "group_id": group_id,
+        "all": command.all,
+    });
+    ctx.out.emit(&payload, |_, writer| {
+        if command.all {
+            writeln!(writer, "Ungrouped all todos in {group_id}.")
+        } else {
+            writeln!(writer, "Split todo {} from {group_id}.", target.id)
+        }
+    })
 }
 
 pub(super) fn delete(ctx: &Context, command: &TodoCommand) -> Result<(), String> {
