@@ -2,8 +2,8 @@
 
 - **特性目录**：`docs/feature/agent-logging/`
 - **关联文档**：[`design.md`](design.md) · [`task.md`](task.md) · [`review.md`](review.md)
-- **验证工作区**：`.worktrees/agent-logging`（分支 `feat/agent-logging`）
-- **验证结论**：全部 10 个验证项通过（`PASS`）
+- **验证工作区**：原 `.worktrees/agent-logging`（分支 `feat/agent-logging`）及合并后的主工作区 `dev`（merge commit `b9ea251c`；worktree 与分支已清理）
+- **验证结论**：全部 10 个验证项与合并后回归测试通过（`PASS`）
 
 ---
 

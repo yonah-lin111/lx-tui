@@ -1,10 +1,10 @@
 # lx Agent 日志 — 设计文档
 
-> 状态：已实现，测试通过，等待合并确认
-> 任务清单：[task.md](task.md)
+> 状态：已完成并合并到 `dev`（merge commit `b9ea251c`；worktree `.worktrees/agent-logging` 与分支 `feat/agent-logging` 已清理）
+> 任务清单：[task.md](task.md) · Review 记录：[review.md](review.md) · 验证报告：[verification.md](verification.md)
 > 参考实现：`opencode-dev/packages/util/src/observability/logging.ts`、`codex-main/codex-rs/state/src/log_db.rs`、`codex-main/codex-rs/tui/src/startup_orchestration.rs`
 > 日期：2026-11-10
-> 执行位置：`.worktrees/agent-logging`（分支 `feat/agent-logging`）
+> 执行位置：原 `.worktrees/agent-logging`（分支 `feat/agent-logging`，已合并至 `dev` 并移除）
 
 ## 0. 背景与目标
 

@@ -1,9 +1,9 @@
 # lx Agent 日志 — 执行任务清单
 
-> 状态：已实现，测试通过，等待合并确认
-> 设计依据：[design.md](design.md)
-> 执行位置：`.worktrees/agent-logging`（分支 `feat/agent-logging`）
-> 完成标准：实现 + 测试 + `cargo fmt` + `cargo clippy --all-targets -- -D warnings` + `cargo test` + 提交
+> 状态：已完成并合并到 `dev`（merge commit `b9ea251c`；worktree `.worktrees/agent-logging` 与分支 `feat/agent-logging` 已清理）
+> 设计依据：[design.md](design.md) · Review 记录：[review.md](review.md) · 验证报告：[verification.md](verification.md)
+> 执行位置：原 `.worktrees/agent-logging`（分支 `feat/agent-logging`，已合并至 `dev` 并移除）
+> 完成标准：实现 + 测试 + `cargo fmt` + `cargo clippy --all-targets -- -D warnings` + `cargo test` + 提交 + 合并回 `dev`
 
 ## P0. 开工门槛
 

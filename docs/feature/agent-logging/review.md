@@ -1,7 +1,10 @@
 # `lx` Agent 日志 — 代码评审与修复报告 (`review.md`)
 
 - **特性目录**：`docs/feature/agent-logging/`
-- **Review 基线**：`feat/agent-logging` @ `e2c41ad8`（worktree `.worktrees/agent-logging`）
+- **Review 基线**：`feat/agent-logging` @ `e2c41ad8`（worktree `.worktrees/agent-logging`；分支基点 `95cf9482`，合并前 `dev` 为 `9e2ef398`）
+- **首次实现提交**：`7d5a1b03`（`feat(logging): add rotating agent logs, live level control, and payload capture`）、`e2c41ad8`（`docs(logging): add verification report and complete exec turn logging`）
+- **Review 修复提交**：`ad75cb23`（`fix(logging): close P0-P3 review findings and add review report`）
+- **合并提交**：`b9ea251c`（`Merge branch 'feat/agent-logging' into dev`；worktree `.worktrees/agent-logging`、分支 `feat/agent-logging` 与 codebase-memory 项目 `lx-tui-agent-logging` 已清理）
 - **关联文档**：
   - [`design.md`](design.md)
   - [`task.md`](task.md)
