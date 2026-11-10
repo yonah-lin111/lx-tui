@@ -242,7 +242,7 @@ pub(crate) fn handle_mouse_wheel(
     let Geometry { rects, view, .. } = geometry;
     // 拖动中禁止改视口：落点与阈值都按绝对行号换算，滚动会让指针原地"跨行"
     // （design §1.3 明确不做边缘自动滚动）。
-    if state.prompt_drag.is_some() {
+    if state.prompt_drag.is_some() || state.todo_drag.is_some() {
         return;
     }
     if let Some(delta) = vertical_wheel_delta(mouse.kind)

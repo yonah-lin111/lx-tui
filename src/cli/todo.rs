@@ -44,6 +44,8 @@ const COMMANDS: &[(&str, usize, Handler)] = &[
     ("todo reopen", 1, reopen),
     ("todo delete", 1, delete),
     ("todo reorder", usize::MAX, reorder),
+    ("todo group", usize::MAX, group),
+    ("todo ungroup", 1, ungroup),
     ("todo rollover", 0, rollover),
     ("todo stats", 0, stats),
 ];
@@ -231,6 +233,7 @@ fn todo_json(todo: &TodoRecord) -> Value {
         "id": todo.id, "date": todo.entry_date, "text": todo.text,
         "status": todo.status.as_str(), "priority": todo.priority.as_str(),
         "completed_date": todo.completed_date, "position": todo.position,
+        "group_id": todo.group_id,
     })
 }
 

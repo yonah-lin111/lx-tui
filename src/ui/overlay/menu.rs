@@ -159,6 +159,9 @@ pub(crate) fn menu_labels(menu: &Menu) -> Vec<&'static str> {
                 MenuCommand::CopyPath => text::MENU_COPY_PATH,
                 MenuCommand::NewTodo => text::MENU_TODO_NEW,
                 MenuCommand::EditTodo => text::MENU_TODO_EDIT,
+                MenuCommand::GroupTodoWithNext => text::MENU_TODO_GROUP_NEXT,
+                MenuCommand::SplitTodoFromGroup => text::MENU_TODO_SPLIT_GROUP,
+                MenuCommand::UngroupTodoAll => text::MENU_TODO_UNGROUP_ALL,
                 MenuCommand::CycleTodoPriority => text::MENU_TODO_PRIORITY,
                 MenuCommand::DeleteTodo => {
                     if confirming {

@@ -763,3 +763,8 @@ WHERE m.role = 'assistant'
       OR m.status != 'complete'
   );
 "#;
+
+/// v27 增量 Schema：`todo` 表新增可空聚合组标识 `group_id` 与按日组索引。
+pub(super) const SCHEMA_V27_TODO_GROUP: &str = r#"
+CREATE INDEX IF NOT EXISTS idx_todo_date_group ON todo(entry_date, group_id);
+"#;

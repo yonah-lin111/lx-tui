@@ -426,6 +426,11 @@ pub enum Effect {
         ids: Vec<String>,
         target_date: String,
     },
+    /// 单事务同步指定日期下全部 todo 的顺序、聚合组归属、状态与优先级。
+    SyncDateTodos {
+        entry_date: String,
+        records: Vec<crate::db::todo::TodoRecord>,
+    },
     // ===== 工作区历史列表 =====
     /// 记录工作区显式创建/打开并刷新历史列表（若数据库已有自定义名称则同步回活跃工作区）。
     RecordWorkspace { path: PathBuf, name: String },

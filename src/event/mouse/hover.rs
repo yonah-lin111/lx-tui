@@ -290,6 +290,7 @@ pub(crate) fn handle_mouse_moved(
     }
     // Todo 行悬停：仅在 Todo 面板可见时计算；指针离开即清空。
     let todo_hover = if hovering_toast
+        || state.todo_drag.is_some()
         || state.prompt_collapsed
         || state.right_tab != crate::app::state::RightTab::Todo
     {
@@ -350,6 +351,7 @@ pub(crate) fn handle_mouse_moved(
         || state.workspace_drag.is_some()
         || state.workspace_history.drag.is_some()
         || state.prompt_drag.is_some()
+        || state.todo_drag.is_some()
     {
         None
     } else {

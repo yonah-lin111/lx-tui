@@ -54,8 +54,12 @@ lx-tui/
                                 `/connect` 预设供应商面板状态机（connect.rs）、
                                 输入模式判定（shell.rs：仅首个非空白 `!`/`！` 进入 shell）、
                                 本地命令卡片与队列视图（chat/shell.rs）
+      state/todo/               右侧 Todo 面板状态：列表/编辑/视口（todo.rs）、聚合组角色与不变量归一（group.rs）、
+                                跨日顺延与周带/图表统计投影（schedule.rs）
       update/                   行为到状态的转换（含 update/pane/popups.rs：lx 输入框浮层更新；
                                 update/pane/task_page.rs：后台任务页按键与关闭；
+                                update/todo/：右侧 Todo 焦点/点击/编辑/菜单（todo.rs）、聚合/拆分与状态联动（group.rs）、
+                                鼠标拖拽合并状态机（drag.rs）、列表与编辑态按键分派（key.rs）；
                                 update/chat：发送/流事件/终态；
                                 update/chat/session.rs：会话生命周期与 `/` 命令；
                                 update/chat/connect/：`/connect` 模态按键/鼠标导航与异步回投；
@@ -77,6 +81,8 @@ lx-tui/
       markdown_render/table.rs  markdown 表格渲染（列宽收缩、单元格行内渲染与 `<br>` 换行）
       main_content.rs           主内容渲染：按视图分派 lx 页与终端网格（含 lx 子模块）
       main_content/lx/          lx 页渲染：欢迎页（brand.rs 品牌区）、网格（grid.rs）、输入框关联几何与浮层面板（panels.rs）、命令面板（slash.rs）、历史（history.rs（置顶用户消息行在 history/sticky.rs；本轮统计行在 history/stats.rs；卡片命中类型 CardKind/CardHit 在 history/cards.rs）；history/tool.rs 是工具步骤分派与共用行能力：方块/动词/路径/行范围/增删计数与状态，样式 token 与文案均取自 style / text::agent；history/tool/file_summary.rs 是普通工具的第二行摘要组装；history/tool/file_diff.rs 是 edit/write 的文件差异卡片——每文件 3 行预览与完整展开、连续同种调用的合并卡、增删行底色与轻量语法高亮，rows/draw 共用同一布局）；history/user_shell.rs 是本地命令卡片：与工具步骤共用直角树体（`│`/`└─`），标题 `■ Running` / `■ You run command · exit 0 · 1.2s` 不带连接符；参数区与输出区各自独立折叠（参数恒为浅黄、不响应 hover（`… N more lines` 同色）；输出折叠 dim、悬停或展开为默认前景（只有真的能展开才响应 hover），不铺灰底；`└─` 只收口参数区），运行中只给 `open task panel · live output` 一行引导，rows/draw/regions 共用同一布局）、聊天历史命中与视口入口（history_hit.rs：置顶行/回到底部、工具卡片点击面与折叠内容 hover 区（`CardHit { card, fold }`）、滚动条与行数口径）、消息底部通知（notice.rs）、状态（status.rs，覆盖绘制在窗格底边框）、聊天栏（chat_bar.rs，动态任务/阶段文案 `修复输入框布局 (3s · ↓320 tok)`——会话计划当前的 `in_progress` 步骤，无 todo 时 `Thinking...` / `Running tools...` / `Working...`；统计优先布局、长 todo 截断不挤掉统计、极窄降级 + Esc 待命提示 + 回到底部；提示类反馈已改走 main content 的 toast；组件测试在 chat_bar/tests.rs 及 tests/{label,layout,animation,stop_and_lifecycle,task_panel}.rs）、提及面板
+      right_panel/todo/         右侧 Todo 面板渲染：面板布局与几何命中（todo.rs）、单条与聚合组树形连接符渲染（item.rs）、
+                                7 日周感知带与顺延横幅（schedule.rs）、底部三视图统计图表（charts.rs）
       widgets/                  无业务语义的可复用组件（菜单、模态容器等），按需创建
     input/                      键盘路由与编码
       mod.rs                    键盘路由（仅 Ctrl+Q 退出，其余进焦点窗格）
@@ -105,7 +111,8 @@ lx-tui/
                                 终态提交（revision 单调）、按会话批量加载与启动恢复
       usage/                    模型调用统计流水表（usage_log）：写入、供应商名称与历史成本同步（mod.rs）、
                                 按时间/模型/供应商/会话聚合与分页查询（queries.rs）
-      service.rs                同步持久化服务：执行 app 层效应出箱、按需载入提示词树
+      service.rs                同步持久化服务入口与连接管理（聊天会话落库见 service/chat.rs，
+                                工作区/提示词/引用文件夹/Todo 效应执行见 service/workspace.rs）
     tui/                        终端生命周期：原始模式、备用屏幕、恢复
     config/                     配置模型、默认值与校验
       ai/                       模型与预设供应商配置：ai.json（mod.rs）、单价与供应商名称解析（pricing.rs）、

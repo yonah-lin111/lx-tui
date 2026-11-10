@@ -70,6 +70,9 @@ pub const TODO_TOOLTIP_SORT: &str = "sort by priority";
 /// Todo 右键菜单项与回退标题。
 pub const MENU_TODO_NEW: &str = "New todo";
 pub const MENU_TODO_EDIT: &str = "Edit";
+pub const MENU_TODO_GROUP_NEXT: &str = "Group with next";
+pub const MENU_TODO_SPLIT_GROUP: &str = "Split from group";
+pub const MENU_TODO_UNGROUP_ALL: &str = "Ungroup all";
 pub const MENU_TODO_PRIORITY: &str = "Cycle priority";
 pub const MENU_TODO_DELETE: &str = "Delete";
 pub const MENU_TODO_SORT: &str = "Sort by priority";

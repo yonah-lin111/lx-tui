@@ -378,6 +378,21 @@ pub(crate) fn handle_mouse_drag(
         }
         return;
     }
+    if state.todo_drag.is_some() {
+        if state.overlay.is_some()
+            || state.prompt_collapsed
+            || state.right_tab != crate::app::state::RightTab::Todo
+        {
+            state.todo_drag = None;
+            *dirty = true;
+            return;
+        }
+        let hit = ui::right_panel::todo::row_at(view.prompt, state, mouse.column, mouse.row);
+        if update::drag_todo_to(state, hit) {
+            *dirty = true;
+        }
+        return;
+    }
     // 没有本地选区时，鼠标上报模式的应用自己处理拖拽（对齐 herdr）。
     if state.terminal_selection.is_none()
         && state.selection.is_none()
@@ -568,6 +583,20 @@ pub(crate) fn handle_mouse_up_left(
         );
         update::finish_prompt_drag(state, hit);
         *dirty = true;
+        return;
+    }
+    if state.todo_drag.is_some() {
+        if state.overlay.is_some()
+            || state.prompt_collapsed
+            || state.right_tab != crate::app::state::RightTab::Todo
+        {
+            state.todo_drag = None;
+            *dirty = true;
+            return;
+        }
+        if update::finish_todo_drag(state) {
+            *dirty = true;
+        }
         return;
     }
     if state.overlay_input_drag {

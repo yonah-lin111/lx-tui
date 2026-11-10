@@ -4,6 +4,8 @@
 
 use std::time::Duration;
 
+use crate::input::TodoKey;
+
 use super::*;
 
 /// 造一条列表并切到 Todo 面板、聚焦（键盘动作的前提）。
@@ -854,7 +856,7 @@ fn todo_item_and_blank_context_menu_commands_execute() {
     let id_0 = state.todo.items()[0].id.clone();
     let id_1 = state.todo.items()[1].id.clone();
 
-    // 1. 打开 Item 菜单，包含 Edit / CyclePriority / Delete
+    // 1. 打开首项菜单：下方还有 item-2，包含 Edit / GroupWithNext / CyclePriority / Delete
     open_todo_item_menu(&mut state, &id_0, (10, 10));
     let Some(Overlay::Menu(menu)) = state.overlay.as_ref() else {
         panic!("menu opened");
@@ -863,6 +865,7 @@ fn todo_item_and_blank_context_menu_commands_execute() {
         menu.commands,
         vec![
             MenuCommand::EditTodo,
+            MenuCommand::GroupTodoWithNext,
             MenuCommand::CycleTodoPriority,
             MenuCommand::DeleteTodo,
         ]
@@ -874,7 +877,7 @@ fn todo_item_and_blank_context_menu_commands_execute() {
     assert_eq!(state.todo.selected(), Some(0));
     commit_todo_edit(&mut state);
 
-    // 3. 执行 CycleTodoPriority 命令
+    // 3. 打开末项菜单：无下一项，包含 Edit / CyclePriority / Delete，执行 CycleTodoPriority
     open_todo_item_menu(&mut state, &id_1, (10, 10));
     assert!(crate::app::update::set_menu_selection(&mut state, 1));
     assert!(crate::app::update::activate_menu(&mut state).is_none());
@@ -882,7 +885,7 @@ fn todo_item_and_blank_context_menu_commands_execute() {
 
     // 4. DeleteTodo 需二次确认，确认后删除该项
     open_todo_item_menu(&mut state, &id_0, (10, 10));
-    assert!(crate::app::update::set_menu_selection(&mut state, 2));
+    assert!(crate::app::update::set_menu_selection(&mut state, 3));
     assert!(crate::app::update::activate_menu(&mut state).is_none());
     // 第一次点击进入确认中状态
     let Some(Overlay::Menu(menu)) = state.overlay.as_ref() else {
@@ -985,93 +988,4 @@ fn delete_resets_double_click_sequence_and_clamps_hover() {
     );
 }
 
-#[test]
-fn todo_edit_word_operations_and_cut() {
-    let mut state = todo_state(&["hello world"]);
-    assert!(begin_todo_edit(&mut state, TodoEditTarget::Current(0)));
-
-    assert!(apply_todo_key(&mut state, TodoKey::DeleteWordBackward));
-    assert_eq!(state.todo.editing().unwrap().input.text(), "hello ");
-    assert!(apply_todo_key(&mut state, TodoKey::WordLeft));
-    assert_eq!(state.todo.editing().unwrap().input.cursor(), 0);
-    assert!(apply_todo_key(&mut state, TodoKey::WordRight));
-    assert_eq!(state.todo.editing().unwrap().input.cursor(), 5);
-
-    state.todo.edit_input_mut().unwrap().clear();
-    state
-        .todo
-        .edit_input_mut()
-        .unwrap()
-        .insert_str("hello world");
-    state.todo.edit_input_mut().unwrap().set_selection(5, 5);
-    assert!(apply_todo_key(&mut state, TodoKey::DeleteWordForward));
-    assert_eq!(state.todo.editing().unwrap().input.text(), "hello");
-
-    state.todo.edit_input_mut().unwrap().clear();
-    state
-        .todo
-        .edit_input_mut()
-        .unwrap()
-        .insert_str("hello world");
-    state.todo.edit_input_mut().unwrap().set_selection(0, 5);
-    let anchor = Some(state.prompt.id());
-    assert!(apply_todo_key(&mut state, TodoKey::Cut));
-    assert_eq!(state.todo.editing().unwrap().input.text(), " world");
-    assert!(state.effects.iter().any(|effect| matches!(
-        effect,
-        Effect::CopyToClipboard { text, anchor: effect_anchor }
-            if text == "hello" && *effect_anchor == anchor
-    )));
-}
-
-#[test]
-fn todo_edit_up_down_moves_across_wrapped_rows() {
-    let mut state = todo_state(&["abcdefghij"]);
-    assert!(begin_todo_edit(&mut state, TodoEditTarget::Current(0)));
-    assert!(state.todo.sync_viewport(5, vec![1], Some(0), 5));
-    assert_eq!(state.todo.edit_text_width(), 5);
-
-    assert!(apply_todo_key(&mut state, TodoKey::Up));
-    assert_eq!(state.todo.editing().unwrap().input.cursor(), 5);
-    assert!(apply_todo_key(&mut state, TodoKey::Up));
-    assert_eq!(state.todo.editing().unwrap().input.cursor(), 0);
-    assert!(apply_todo_key(&mut state, TodoKey::Down));
-    assert_eq!(state.todo.editing().unwrap().input.cursor(), 5);
-    assert!(apply_todo_key(&mut state, TodoKey::Down));
-    assert_eq!(state.todo.editing().unwrap().input.cursor(), 10);
-    assert!(state.todo.is_editing(), "上下移动不得退出编辑态");
-}
-
-#[test]
-fn todo_edit_up_down_respects_wider_continuation_rows() {
-    // 首行宽 3 ("abc", 0..3)，续行宽 6 ("defghi", 3..9)，第 3 行 "jk" (9..11)。
-    let mut state = todo_state(&["abcdefghijk"]);
-    assert!(begin_todo_edit(&mut state, TodoEditTarget::Current(0)));
-    assert!(state.todo.sync_viewport_indented(5, vec![3], Some(0), 3, 6));
-    assert_eq!(state.todo.edit_text_width(), 3);
-    assert_eq!(state.todo.edit_cont_width(), 6);
-
-    assert!(apply_todo_key(&mut state, TodoKey::Up));
-    assert_eq!(state.todo.editing().unwrap().input.cursor(), 5);
-    assert!(apply_todo_key(&mut state, TodoKey::Up));
-    assert_eq!(state.todo.editing().unwrap().input.cursor(), 2);
-}
-
-#[test]
-fn todo_edit_select_all_and_replace() {
-    let mut state = todo_state(&["abc"]);
-    assert!(begin_todo_edit(&mut state, TodoEditTarget::Current(0)));
-    assert!(apply_todo_key(&mut state, TodoKey::SelectAll));
-    assert_eq!(
-        state
-            .todo
-            .editing()
-            .unwrap()
-            .input
-            .selected_text()
-            .as_deref(),
-        Some("abc")
-    );
-    assert!(apply_todo_key(&mut state, TodoKey::Char('x')));
-    assert_eq!(state.todo.editing().unwrap().input.text(), "x");
-}
+mod grouping;

@@ -61,6 +61,12 @@ pub fn apply(action: Action, state: &mut AppState) {
                 state.set_focus(FocusedContainer::Panes);
                 clear_selection(state);
                 state.prompt.clear_panel();
+                state.prompt_drag = None;
+                state.todo_drag = None;
+                state.todo_scroll_drag = None;
+                state.todo_row_click = None;
+                state.todo_input_drag = false;
+                state.todo_hover = None;
             }
         }
         Action::TogglePanes => state.panes_collapsed = !state.panes_collapsed,

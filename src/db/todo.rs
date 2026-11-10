@@ -8,7 +8,7 @@
 
 pub mod date;
 
-use std::collections::BTreeSet;
+use std::collections::{BTreeSet, HashMap};
 
 pub use date::*;
 use rusqlite::{OptionalExtension, params};
@@ -116,6 +116,11 @@ pub struct TodoDayStats {
     pub completed_count: usize,
 }
 
+/// 生成一个新的聚合组稳定 ID（`tgrp-<nanos>-<seq>`）。
+pub fn new_todo_group_id() -> String {
+    new_external_id("tgrp")
+}
+
 /// 一条 todo；内存视图与库记录同构。
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct TodoRecord {
@@ -130,6 +135,8 @@ pub struct TodoRecord {
     pub completed_date: Option<String>,
     /// 当日密集递增排序位（0 基）。
     pub position: i64,
+    /// 所属聚合组稳定 ID（`tgrp-<nanos>-<seq>`）；独立条目为 `None`。
+    pub group_id: Option<String>,
 }
 
 impl TodoRecord {
@@ -157,6 +164,7 @@ impl TodoRecord {
             priority,
             completed_date,
             position,
+            group_id: None,
         }
     }
 
@@ -175,6 +183,12 @@ impl TodoRecord {
         self.priority = priority;
         self
     }
+
+    /// 链式设定聚合组 ID。
+    pub fn with_group_id(mut self, group_id: Option<String>) -> Self {
+        self.group_id = group_id;
+        self
+    }
 }
 
 fn map_todo_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<TodoRecord> {
@@ -186,6 +200,7 @@ fn map_todo_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<TodoRecord> {
         priority: TodoPriority::from_db(&row.get::<_, String>(4)?),
         completed_date: row.get(5)?,
         position: row.get(6)?,
+        group_id: row.get(7)?,
     })
 }
 
@@ -193,7 +208,7 @@ impl Database {
     /// 读取全表，按 `(entry_date, position, id)` 升序。
     pub fn list_todos(&self) -> Result<Vec<TodoRecord>> {
         let mut statement = self.conn.prepare(
-            "SELECT id, entry_date, text, status, priority, completed_date, position
+            "SELECT id, entry_date, text, status, priority, completed_date, position, group_id
              FROM todo
              ORDER BY entry_date ASC, position ASC, id ASC",
         )?;
@@ -208,7 +223,7 @@ impl Database {
     /// 按日期读取该日全部条目，按 `position` 升序。
     pub fn list_todos_by_date(&self, entry_date: &str) -> Result<Vec<TodoRecord>> {
         let mut statement = self.conn.prepare(
-            "SELECT id, entry_date, text, status, priority, completed_date, position
+            "SELECT id, entry_date, text, status, priority, completed_date, position, group_id
              FROM todo
              WHERE entry_date = ?1
              ORDER BY position ASC, id ASC",
@@ -224,7 +239,7 @@ impl Database {
     /// 查询所有历史日期（`< today`）且未完成的待办条目。
     pub fn list_past_incomplete_todos(&self, today: &str) -> Result<Vec<TodoRecord>> {
         let mut statement = self.conn.prepare(
-            "SELECT id, entry_date, text, status, priority, completed_date, position
+            "SELECT id, entry_date, text, status, priority, completed_date, position, group_id
              FROM todo
              WHERE entry_date < ?1 AND status != 'done'
              ORDER BY entry_date ASC, position ASC, id ASC",
@@ -239,7 +254,7 @@ impl Database {
 
     /// 写入一条（UPSERT 语义）。
     ///
-    /// - 行已存在且归属日期未变：更新 `text`/`status`/`priority`/`completed_date`/`updated_at_ms`，**不动 `position`**；
+    /// - 行已存在且归属日期未变：更新 `text`/`status`/`priority`/`completed_date`/`group_id`/`updated_at_ms`，**不动 `position`**；
     /// - 行已存在但归属日期改变：移入目标日期的 `record.position`，并重排原日期剩余位置；
     /// - 行不存在：在目标日期 `record.position` 处插入，并把同日 `position >= at` 的行顺移 +1。
     pub fn save_todo(&self, record: &TodoRecord) -> Result<()> {
@@ -271,17 +286,20 @@ impl Database {
             Some(old_date) if old_date == entry_date => {
                 transaction.execute(
                     "UPDATE todo
-                     SET text = ?1, status = ?2, priority = ?3, completed_date = ?4, updated_at_ms = ?5
-                     WHERE id = ?6",
+                     SET text = ?1, status = ?2, priority = ?3, completed_date = ?4,
+                         group_id = ?5, updated_at_ms = ?6
+                     WHERE id = ?7",
                     params![
                         text,
                         record.status.as_str(),
                         record.priority.as_str(),
                         completed_date,
+                        record.group_id.as_deref(),
                         now_ms(),
                         record.id.as_str()
                     ],
                 )?;
+                cleanup_singleton_groups(&transaction, &entry_date)?;
             }
             Some(old_date) => {
                 let at = record.position.max(0);
@@ -289,8 +307,8 @@ impl Database {
                 transaction.execute(
                     "UPDATE todo
                      SET entry_date = ?1, text = ?2, status = ?3, priority = ?4,
-                         completed_date = ?5, position = ?6, updated_at_ms = ?7
-                     WHERE id = ?8",
+                         completed_date = ?5, position = ?6, group_id = ?7, updated_at_ms = ?8
+                     WHERE id = ?9",
                     params![
                         entry_date.as_str(),
                         text,
@@ -298,20 +316,23 @@ impl Database {
                         record.priority.as_str(),
                         completed_date,
                         at,
+                        record.group_id.as_deref(),
                         now_ms(),
                         record.id.as_str()
                     ],
                 )?;
                 renumber_date(&transaction, &old_date)?;
+                cleanup_singleton_groups(&transaction, &old_date)?;
                 renumber_date(&transaction, &entry_date)?;
+                cleanup_singleton_groups(&transaction, &entry_date)?;
             }
             None => {
                 let at = record.position.max(0);
                 shift_positions_from(&transaction, &entry_date, at)?;
                 transaction.execute(
                     "INSERT INTO todo
-                         (id, entry_date, text, status, priority, completed_date, position, created_at_ms, updated_at_ms)
-                     VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?8)",
+                         (id, entry_date, text, status, priority, completed_date, position, group_id, created_at_ms, updated_at_ms)
+                     VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?9)",
                     params![
                         record.id.as_str(),
                         entry_date.as_str(),
@@ -320,17 +341,20 @@ impl Database {
                         record.priority.as_str(),
                         completed_date,
                         at,
+                        record.group_id.as_deref(),
                         now_ms()
                     ],
                 )?;
                 renumber_date(&transaction, &entry_date)?;
+                cleanup_singleton_groups(&transaction, &entry_date)?;
             }
         }
         transaction.commit()?;
         Ok(())
     }
 
-    /// 删除单条；`affected == 0` 不算错误（幂等）。删除后把所属日期剩余位置重排为 `0..n`。
+    /// 删除单条；`affected == 0` 不算错误（幂等）。删除后把所属日期剩余位置重排为 `0..n`，
+    /// 并将该日因删除而只剩 1 条成员的聚合组自动退化为独立条目（`group_id = NULL`）。
     pub fn delete_todo(&self, id: &str) -> Result<()> {
         let transaction = self.conn.unchecked_transaction()?;
         let entry_date: Option<String> = transaction
@@ -343,7 +367,50 @@ impl Database {
         transaction.execute("DELETE FROM todo WHERE id = ?1", params![id])?;
         if let Some(date) = entry_date {
             renumber_date(&transaction, &date)?;
+            cleanup_singleton_groups(&transaction, &date)?;
         }
+        transaction.commit()?;
+        Ok(())
+    }
+
+    /// 单事务同步指定日期下全部条目的顺序、聚合组归属、状态与优先级。
+    pub fn sync_date_todos(&self, entry_date: &str, records: &[TodoRecord]) -> Result<()> {
+        let transaction = self.conn.unchecked_transaction()?;
+        transaction.execute(
+            "UPDATE todo SET position = position + ?1 WHERE entry_date = ?2",
+            params![RESTORE_OFFSET, entry_date],
+        )?;
+        let now = now_ms();
+        for (index, record) in records.iter().enumerate() {
+            let completed_date = if record.status == TodoStatus::Done {
+                Some(
+                    record
+                        .completed_date
+                        .clone()
+                        .unwrap_or_else(|| entry_date.to_string()),
+                )
+            } else {
+                None
+            };
+            transaction.execute(
+                "UPDATE todo
+                 SET status = ?1, priority = ?2, completed_date = ?3,
+                     group_id = ?4, position = ?5, updated_at_ms = ?6
+                 WHERE id = ?7 AND entry_date = ?8",
+                params![
+                    record.status.as_str(),
+                    record.priority.as_str(),
+                    completed_date,
+                    record.group_id.as_deref(),
+                    index as i64,
+                    now,
+                    record.id.as_str(),
+                    entry_date,
+                ],
+            )?;
+        }
+        renumber_date(&transaction, entry_date)?;
+        cleanup_singleton_groups(&transaction, entry_date)?;
         transaction.commit()?;
         Ok(())
     }
@@ -393,8 +460,8 @@ impl Database {
                 };
                 transaction.execute(
                     "INSERT OR REPLACE INTO todo
-                         (id, entry_date, text, status, priority, completed_date, position, created_at_ms, updated_at_ms)
-                     VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?8)",
+                         (id, entry_date, text, status, priority, completed_date, position, group_id, created_at_ms, updated_at_ms)
+                     VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?9)",
                     params![
                         record.id.as_str(),
                         date.as_str(),
@@ -403,6 +470,7 @@ impl Database {
                         record.priority.as_str(),
                         completed_date,
                         RESTORE_OFFSET + index as i64,
+                        record.group_id.as_deref(),
                         now_ms()
                     ],
                 )?;
@@ -428,7 +496,9 @@ impl Database {
                     .min(ordered.len());
                 ordered.insert(at, record.id.clone());
             }
+            let ordered = compact_grouped_ids(&transaction, &date, ordered)?;
             apply_positions(&transaction, &ordered)?;
+            cleanup_singleton_groups(&transaction, &date)?;
         }
         transaction.commit()?;
         Ok(())
@@ -457,6 +527,7 @@ impl Database {
                 final_order.push(id);
             }
         }
+        let final_order = compact_grouped_ids(&transaction, entry_date, final_order)?;
         apply_positions(&transaction, &final_order)?;
         transaction.commit()?;
         Ok(())
@@ -496,8 +567,10 @@ impl Database {
         }
         for old_date in source_dates {
             renumber_date(&transaction, &old_date)?;
+            cleanup_singleton_groups(&transaction, &old_date)?;
         }
         renumber_date(&transaction, target_date)?;
+        cleanup_singleton_groups(&transaction, target_date)?;
         transaction.commit()?;
         Ok(())
     }
@@ -540,7 +613,7 @@ impl Database {
     /// 读取某条 todo（测试与诊断用）。
     pub fn todo_by_id(&self, id: &str) -> Result<Option<TodoRecord>> {
         let mut statement = self.conn.prepare(
-            "SELECT id, entry_date, text, status, priority, completed_date, position
+            "SELECT id, entry_date, text, status, priority, completed_date, position, group_id
              FROM todo
              WHERE id = ?1",
         )?;
@@ -585,7 +658,7 @@ fn shift_positions_from(
     Ok(())
 }
 
-/// 把某日期下的位置重排为 `0..n`（保持现有相对顺序）。
+/// 把某日期下的位置重排为 `0..n`（保持现有相对顺序，并将同 `group_id` 成员归拢连续）。
 fn renumber_date(transaction: &rusqlite::Transaction<'_>, entry_date: &str) -> Result<()> {
     transaction.execute(
         "UPDATE todo SET position = position + ?1 WHERE entry_date = ?2 AND position < ?1",
@@ -596,7 +669,49 @@ fn renumber_date(transaction: &rusqlite::Transaction<'_>, entry_date: &str) -> R
     let rows = statement.query_map(params![entry_date], |row| row.get::<_, String>(0))?;
     let ordered: Vec<String> = rows.collect::<rusqlite::Result<_>>()?;
     drop(statement);
+    let ordered = compact_grouped_ids(transaction, entry_date, ordered)?;
     apply_positions(transaction, &ordered)
+}
+
+/// 将指定日期下的 ID 序列按首次出现顺序把同 `group_id` 成员归拢为连续区间。
+fn compact_grouped_ids(
+    transaction: &rusqlite::Transaction<'_>,
+    entry_date: &str,
+    ordered_ids: Vec<String>,
+) -> Result<Vec<String>> {
+    let mut statement =
+        transaction.prepare("SELECT id, group_id FROM todo WHERE entry_date = ?1")?;
+    let rows = statement.query_map(params![entry_date], |row| {
+        Ok((row.get::<_, String>(0)?, row.get::<_, Option<String>>(1)?))
+    })?;
+    let mut group_by_id: HashMap<String, Option<String>> = HashMap::new();
+    for row in rows {
+        let (id, group_id) = row?;
+        group_by_id.insert(id, group_id.filter(|gid| !gid.is_empty()));
+    }
+    drop(statement);
+
+    let mut compacted: Vec<String> = Vec::with_capacity(ordered_ids.len());
+    let mut visited = vec![false; ordered_ids.len()];
+    for i in 0..ordered_ids.len() {
+        if visited[i] {
+            continue;
+        }
+        visited[i] = true;
+        let gid = group_by_id.get(&ordered_ids[i]).and_then(Option::as_deref);
+        compacted.push(ordered_ids[i].clone());
+        if let Some(group_id) = gid {
+            for j in (i + 1)..ordered_ids.len() {
+                if !visited[j]
+                    && group_by_id.get(&ordered_ids[j]).and_then(Option::as_deref) == Some(group_id)
+                {
+                    visited[j] = true;
+                    compacted.push(ordered_ids[j].clone());
+                }
+            }
+        }
+    }
+    Ok(compacted)
 }
 
 /// 按给定顺序写入 0 基位置。
@@ -607,6 +722,27 @@ fn apply_positions(transaction: &rusqlite::Transaction<'_>, ordered: &[String]) 
             params![index as i64, id.as_str()],
         )?;
     }
+    Ok(())
+}
+
+/// 将指定日期下成员数不足 2 条的孤儿聚合组清空 `group_id = NULL`。
+fn cleanup_singleton_groups(
+    transaction: &rusqlite::Transaction<'_>,
+    entry_date: &str,
+) -> Result<()> {
+    transaction.execute(
+        "UPDATE todo
+         SET group_id = NULL
+         WHERE entry_date = ?1
+           AND group_id IS NOT NULL
+           AND group_id IN (
+               SELECT group_id FROM todo
+               WHERE entry_date = ?1 AND group_id IS NOT NULL
+               GROUP BY group_id
+               HAVING COUNT(*) < 2
+           )",
+        params![entry_date],
+    )?;
     Ok(())
 }
 

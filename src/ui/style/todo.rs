@@ -21,6 +21,15 @@ pub fn todo_status_done() -> Style {
     muted().add_modifier(Modifier::CROSSED_OUT)
 }
 
+/// 聚合组树形连接符样式（`┌─ / ├─ / └─ / │`）：跟随整组状态着色，但已完成时不加删除线以免糊掉框线。
+pub fn todo_group_connector(status: TodoStatus) -> Style {
+    match status {
+        TodoStatus::Todo => text(),
+        TodoStatus::InProgress => accent(),
+        TodoStatus::Done => muted(),
+    }
+}
+
 /// 统计柱图：未开始（次要信息，与行内 `[ ]` 同口径）。
 pub fn todo_bar_open() -> Style {
     muted()

@@ -273,6 +273,25 @@ impl Database {
         if version < 26 {
             self.migrate_v26_usage_log()?;
         }
+        if version < 27 {
+            self.migrate_v27_todo_group()?;
+        }
+        Ok(())
+    }
+
+    /// v27：`todo` 表新增可空列 `group_id`（同组待办共享稳定组 ID，独立待办为 NULL）及按日组索引。
+    ///
+    /// 兼容并行开发期曾将 v26 用于 `todo.group_id` 的旧工作区库：幂等确保 `usage_log` 表亦已补齐。
+    fn migrate_v27_todo_group(&mut self) -> Result<()> {
+        let transaction = self.conn.unchecked_transaction()?;
+        transaction.execute_batch(SCHEMA_V26)?;
+        if !column_exists(&transaction, "todo", "group_id")? {
+            transaction.execute_batch("ALTER TABLE todo ADD COLUMN group_id TEXT;")?;
+        }
+        transaction.execute_batch(SCHEMA_V27_TODO_GROUP)?;
+        ensure_no_foreign_key_violation(&transaction)?;
+        transaction.pragma_update(None, "user_version", 27)?;
+        transaction.commit()?;
         Ok(())
     }
 
