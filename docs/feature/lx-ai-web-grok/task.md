@@ -1,7 +1,7 @@
 # Grok 接入 Web 入口 — 执行任务清单 (`task.md`)
 
 - **设计文档**：[`design.md`](design.md) · **驱动规范**：[`docs/web/web-grok.md`](../../web/web-grok.md) · [`docs/web/web-deepseek.md`](../../web/web-deepseek.md) · [`docs/web/web-gemini.md`](../../web/web-gemini.md)
-- **当前状态**：已执行并完成端到端验证、DOM/WebSocket Markdown 保真提取与 Review 修复（见 [`review.md`](review.md)、[`verification.md`](verification.md)），已合并至 `dev` 并移除临时 worktree 与 `feat/lx-ai-web-grok` 分支。
+- **当前状态**：已执行并完成端到端验证、DOM/WebSocket Markdown 保真提取与 P0–P3 Review 修复（见 [`review.md`](review.md)、[`verification.md`](verification.md)），已合并至 `dev` 并移除临时 worktree 与 `feat/lx-ai-web-grok` / `fix/ai-web-markdown` 分支。
 - **执行原则**：最小修改；不新增数据库迁移；生产文件 `< 1000` 行；每个阶段结束只跑受影响范围的校验，最终再跑全量。
 
 ---

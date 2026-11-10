@@ -1,6 +1,6 @@
 # `Web` 接入 Google Gemini 网页端、双站点品牌渐变与 `/model` 模型/思考等级切换 — 执行任务清单 (`task.md`)
 
-- **状态**：已完成实现、CLI 端到端验证、DOM Markdown 保真提取与 review 修复（见 [`verification.md`](verification.md)、[`review.md`](review.md)）
+- **状态**：已完成实现、CLI 端到端验证、DOM Markdown 保真提取与 P0–P3 Review 修复（见 [`verification.md`](verification.md)、[`review.md`](review.md)），已合并至 `dev` 并移除 `.worktrees/ai-web-markdown` 工作区与 `fix/ai-web-markdown` 分支。
 - **设计依据**：[`docs/feature/lx-ai-web-gemini/design.md`](design.md)
 - **参考驱动规范**：[`docs/web/web-deepseek.md`](../../web/web-deepseek.md) · [`docs/web/web-gemini.md`](../../web/web-gemini.md)
 - **验证报告**：[`verification.md`](verification.md) · **Review 与修复**：[`review.md`](review.md)
