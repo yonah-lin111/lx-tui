@@ -1,6 +1,6 @@
 # lx 助手正文 Markdown 块间距与超链接/生图交互：代码审查报告（Review）
 
-> 状态：**已审查并完成全部修复（P0 ～ P3）**
+> 状态：**已审查并完成全部修复（P0 ～ P3，共 14 项）**
 > 日期：2026-11-10
 > 分支：`feat/lx-markdown-block-spacing`（对比基线：`dev`）
 > 工作区：`/Users/yonah/projects/agent/lx-tui/.worktrees/lx-markdown-block-spacing`
@@ -10,7 +10,7 @@
 
 ## 审查概览
 
-本次对工作区分支 `feat/lx-markdown-block-spacing` 新增的 **Phase 1（助手正文顶层块间距与列表间距状态机）** 与 **Phase 2（Markdown 超链接隐藏 `(url)` 及 `Ctrl + 点击` 打开网页/生图文件）** 共 23 个改动文件进行了全量审查，共识别出 **10 项问题（P0 × 1、P1 × 3、P2 × 4、P3 × 2）**，涵盖运行时崩溃隐患、项目单文件行数红线、边界解析漏项、渲染样式污染与命中穿透等。
+本次对工作区分支 `feat/lx-markdown-block-spacing` 新增的 **Phase 1（助手正文顶层块间距与列表间距状态机）** 与 **Phase 2（Markdown 超链接隐藏 `(url)` 及 `Ctrl + 点击` 打开网页/生图文件）** 共 24 个改动文件进行了两轮深度对抗式代码审查，共识别出 **14 项问题（P0 × 1、P1 × 5、P2 × 6、P3 × 2）**，涵盖运行时崩溃隐患、项目单文件行数红线、流式状态机与代码块序号失步、行内解析边界、渲染样式污染与浮层穿透等，并已全部完成修复与回归测试覆盖。
 
 | 优先级 | 编号 | 关键点 | 涉及文件 | 状态 |
 | :---: | :---: | :--- | :--- | :---: |
@@ -18,10 +18,14 @@
 | **P1** | **P1-1** | 生产文件 `src/event/mouse/press.rs` 行数达 1039 行，超出项目 1000 行上限红线 | `src/event/mouse/press.rs`、`src/event/mouse/press/lx.rs` | 已修复 |
 | **P1** | **P1-2** | 标题行（`#`..`######`）内的网页超链接既隐藏了 `(url)` 又丢弃了 `MdLinkSpan`，导致链接彻底丢失 | `src/ui/markdown_render.rs`、`src/ui/markdown_render/inline.rs` | 已修复 |
 | **P1** | **P1-3** | 列表上下文在缩进顶层块处未清空，且列表内松散续段后接同级列表项漏插空行 | `src/ui/markdown_render.rs` | 已修复 |
+| **P1** | **P1-4** | 流式增量渲染 `safe_line_count` 硬编码 `min_indent = 4`，列表后接缩进表格在流式分块时被提前固化拆裂 | `src/ui/markdown_render/incremental.rs` | 已修复 |
+| **P1** | **P1-5** | `extract_code_block` 未在顶层块处清空列表栈且 `>` 引用循环贪婪吞行，导致代码块 `[❐]` 复制序号偏移 | `src/ui/markdown_render/code_block.rs` | 已修复 |
 | **P2** | **P2-1** | 表格单元格以超链接开头时，单元格左右补齐空格继承 `UNDERLINED` 导致整格空白被画下划线 | `src/ui/markdown_render/table.rs` | 已修复 |
 | **P2** | **P2-2** | 裸 URL 紧接中文标点或中文正文（无空格）时将后续整句中文吞入 URL | `src/ui/markdown_render/inline.rs` | 已修复 |
 | **P2** | **P2-3** | 相邻同样式超链接分段被合并为单个 `(String, Style)`，导致 `tool.rs::md_line_segments` 串链 | `src/ui/markdown_render/inline.rs`、`src/ui/main_content/lx/history/tool.rs` | 已修复 |
 | **P2** | **P2-4** | `handle_mouse_down_right` 的 macOS `Ctrl + 右键` 快速路径未拦截 Toast、命令面板与 Ask 面板 | `src/event/mouse/press.rs`、`src/event/mouse/press/lx.rs` | 已修复 |
+| **P2** | **P2-5** | `inline::link` 未跳过 `[label]` 内反引号代码片段，且允许 `(url)` 内含空白字符从而吞掉括号内真实链接 | `src/ui/markdown_render/inline.rs` | 已修复 |
+| **P2** | **P2-6** | `draw_markdown` 与 `draw_thinking` 登记超链接热区时未按 `rect.right()` 裁剪，窄视口下热区越界入滚动条列 | `src/ui/main_content/lx/history/paint.rs` | 已修复 |
 | **P3** | **P3-1** | `selection::press_content_hit` 在 `Ctrl + 点击` 时重复计算 `content_geom` 并二次渲染 1 行 `Grid` | `src/ui/main_content/lx/selection.rs` | 已修复 |
 | **P3** | **P3-2** | 部分文档注释与 `design.md` / `task.md` 仍残留 `Ctrl/Cmd` 描述，与统一 `Ctrl + 点击` 实现不一致 | `src/app/state/lx/chat.rs`、`src/ui/main_content/lx/selection.rs`、`docs/feature/lx-markdown-block-spacing/*` | 已修复 |
 
@@ -57,7 +61,7 @@
 - **错误原因**：
   - `press.rs` 原本已接近 983 行，Phase 2 在 `handle_mouse_down_left` 与 `handle_mouse_down_right` 中直接内联追加了 `lx` 聊天区 `Ctrl + 点击` 立即打开与 macOS `Ctrl + 右键` 兼容逻辑，导致单文件膨胀至 1039 行。
 - **修复内容**：
-  - 按职责将 `PaneView::Lx` 窗格内部的鼠标左键按下分派与 `Ctrl + 右键` 超链接/生图打开分派拆分为子模块 `src/event/mouse/press/lx.rs`（约 380 行），使 `src/event/mouse/press.rs` 降至约 675 行；同时精简 `src/app/state/lx/chat.rs` 至 1000 行以下。
+  - 按职责将 `PaneView::Lx` 窗格内部的鼠标左键按下分派与 `Ctrl + 右键` 超链接/生图打开分派拆分为子模块 `src/event/mouse/press/lx.rs`（386 行），使 `src/event/mouse/press.rs` 降至 681 行；同时精简 `src/app/state/lx/chat.rs` 至 997 行。
 
 #### [P1-2] 标题行（`#`..`######`）内的网页超链接既隐藏了 `(url)` 又丢弃了 `MdLinkSpan`
 
@@ -87,6 +91,28 @@
   2. 抽取 `clear_list_context(state)` 并在 `heading`、`is_rule`、`table`、`blockquote` 分支统一调用；
   3. 先计算列表续行 `cont_indent` 与 `body`，再执行 `image(body)` 匹配并传入 `cont_indent`。
 
+#### [P1-4] 流式增量渲染 `safe_line_count` 硬编码 `min_indent = 4`，导致列表后接缩进表格在流式分块时被拆裂
+
+- **关键点**：
+  - 位置：`src/ui/markdown_render/incremental.rs:127-180`（`safe_line_count`）
+  - 现象：当流式输出列表项后紧跟 4 空格缩进的表格（如 `- item\n    | A | B |\n  | --- | --- |\n  | 1 | 2 |\n`）时，流式增量渲染将表头行提前固化成独立单行表，与全量渲染结果不一致。
+- **错误原因**：
+  - `render_blocks_stateful` 根据列表上下文动态计算 `min_indent = list_code_min_indent(state)`（在 `- item` 内为 `6`），因此 `    | A | B |` 被识别为表格起始行；
+  - 而 `safe_line_count` 未维护列表缩进栈，硬编码了 `is_indented_code(line, 4)` 与 `indented_block_end(lines, index, 4)`，把 `    | A | B |` 误判为已结束的 4 空格缩进代码块，并在下一行 `  | --- | --- |` 前提前提交固化。
+- **修复内容**：
+  - 在 `safe_line_count` 中克隆 `local_state = state.clone()`，按与 `render_blocks_stateful` 完全一致的规则推进 `update_list_context`、`list_depth`、`list_code_min_indent` 与 `clear_list_context`。
+
+#### [P1-5] `extract_code_block` 未在顶层块处清空列表栈且 `>` 引用循环贪婪吞行，导致代码块 `[❐]` 复制序号偏移
+
+- **关键点**：
+  - 位置：`src/ui/markdown_render/code_block.rs:339-391`（`extract_code_block`）
+  - 现象：当列表后出现带缩进的标题/分割线/表格/引用再接 4 空格缩进代码块，或 `> quote` 下紧跟 `    > redirect` 缩进代码块时，点击代码块头部 `[❐]` 复制按钮会复制错块或无法复制。
+- **错误原因**：
+  1. `extract_code_block` 未在 `heading`、`is_rule`、`|`、`>` 分支调用 `clear_list_context(&mut list_state)`，导致 `min_indent` 仍停留在列表内的 `6` 而漏计后续 4 空格缩进代码块；
+  2. `extract_code_block` 在 `>` 分支使用贪婪 `while` 循环跳过所有 `trim_start().starts_with('>')` 的行，把 4 空格缩进的 `    > redirect` 代码行误当成引用行吞掉。
+- **修复内容**：
+  - 在 `extract_code_block` 中同步调用 `list_depth` 与 `clear_list_context`，并将 `>` 分支改为与 `render_blocks_stateful` 一致的单行推进。
+
 ---
 
 ### P2：渲染与交互边界 Bug
@@ -99,7 +125,7 @@
 - **错误原因**：
   - `pad_line` 使用 `let pad_style = line.first().map(|span| span.style).unwrap_or_default();` 作为 `before` 与 `after` 填充空格的样式。当首段为超链接时，`pad_style` 携带 `Modifier::UNDERLINED` 与链接蓝色，污染了整格空白填充列。
 - **修复内容**：
-  - 将 `pad_line` 中的空白填充样式固定为 `style::text()`，且仅当相邻分段的样式一致且均无独立冲突链接时才合并文本。
+  - 将 `pad_line` 中的空白填充样式固定为 `style::text()`，且仅当相邻分段的样式与 `link` 同时一致时才合并文本。
 
 #### [P2-2] 裸 URL 紧接中文标点或中文正文（无空格）时将后续整句中文吞入 URL
 
@@ -124,12 +150,34 @@
 #### [P2-4] `handle_mouse_down_right` 的 macOS `Ctrl + 右键` 快速路径未拦截浮层面板与 Toast
 
 - **关键点**：
-  - 位置：`src/event/mouse/press.rs:978-1018`
+  - 位置：`src/event/mouse/press.rs`、`src/event/mouse/press/lx.rs`
   - 现象：在 macOS 下（`Ctrl + 左键` 映射为 `Right + CONTROL`），当全局 Toast、窗格内 `lx` Toast、命令面板（`/`、`@`、`@ref`、粘贴候选）或 `ask` 面板浮在聊天区某条超链接上方时，在浮层内 `Ctrl + 点击` 会穿透浮层直接触发底层超链接打开。
 - **错误原因**：
   - `handle_mouse_down_right` 的 `Ctrl + 右键` 分支只检查了 `state.overlay.is_none()`，未像 `handle_mouse_down_left` 一样排除 `ui::toast::rect`、`lx_toast_at`、`command_panel_contains` 与 `ask_rect` 覆盖区域。
 - **修复内容**：
-  - 在 `Ctrl + 右键` 分派前统一检查全局 Toast、`lx` 窗格 Toast、命令面板与 `ask` 面板矩形，落在上述浮层内时不穿透到底层聊天历史。
+  - 在 `press/lx.rs::handle_lx_ctrl_right_click` 分派前统一检查全局 Toast、`lx` 窗格 Toast、命令面板与 `ask` 面板矩形，落在上述浮层内时不穿透到底层聊天历史。
+
+#### [P2-5] `inline::link` 未跳过 `[label]` 内反引号代码片段，且允许 `(url)` 内含空白字符从而吞掉括号内真实链接
+
+- **关键点**：
+  - 位置：`src/ui/markdown_render/inline.rs:549-592`（`link`）
+  - 现象：
+    1. 当链接标题包含带单侧方括号的行内代码（如 `` [`]`](https://example.com) ``）时，方括号配对深度被代码内的 `]` 提前归零，导致链接解析失败；
+    2. 当正文中出现 `[注意](详见 [官方文档](https://example.com))` 时，外层 `[注意](...)` 被整体识别为非网页链接并输出为纯文本，导致括号内真正的 `[官方文档](https://example.com)` 丢失超链接样式与点击热区。
+- **错误原因**：
+  - `link(rest)` 扫描 `label_close` 时未像 `delimited_emphasis` 一样跳过反引号代码片段；扫描 `url_close` 后也未校验 `url` 是否含空白或控制字符。
+- **修复内容**：
+  - 在 `link(rest)` 扫描 `label_close` 时遇到 `` ` `` 先跳过 `code_span`；解析出 `url` 后若 `url.trim()` 含空白或控制字符则返回 `None`。
+
+#### [P2-6] `draw_markdown` 与 `draw_thinking` 登记超链接热区时未按 `rect.right()` 裁剪
+
+- **关键点**：
+  - 位置：`src/ui/main_content/lx/history/paint.rs:740-747, 871-878`
+  - 现象：当视口极窄或行尾字符被 `rect.right()` 截断时，超链接热区未按 `rect.right()` 裁剪，可能延伸到右侧滚动条列。
+- **错误原因**：
+  - 字符绘制循环以 `cx.saturating_add(cell) > rect.right()` 裁剪，而 `set_link_span` 直接传入了未与 `rect.right()` 取最小值的列宽。
+- **修复内容**：
+  - 在 `draw_markdown` 与 `draw_thinking` 中计算 `let end_x = base_x.saturating_add(link.end_col).min(rect.right());`，仅在 `start_x < end_x` 时登记裁剪后的热区宽度。
 
 ---
 
@@ -142,7 +190,7 @@
   - 现象：按住 `Ctrl` 点击非网页链接区域（如点击 AI Web 预览图文件名或普通正文）时，`press_content_hit` 先后调用 `content_geom` 3 次，并对同一目标行重复分配 `Grid`、执行 2 次 `render_chunk`。
 - **错误原因**：
   - `link_at_cell` 与 `is_table_cell_at` 各自独立计算 `content_geom` 并渲染单行 `Grid`，未复用 `press_content_hit` 已算好的几何信息与单行渲染结果。
-- **节奏/修复内容**：
+- **修复内容**：
   - 在 `selection.rs` 抽取 `probe_row_cell(geom, lx, cell, cache) -> (Option<String>, bool)`，复用已计算的 `ContentGeom`，在一次 1 行 `Grid` 渲染中同时提取超链接 URL 与表格命中状态。
 
 #### [P3-2] 部分文档注释与 `design.md` / `task.md` 仍残留 `Ctrl/Cmd` 描述

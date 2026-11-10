@@ -545,15 +545,27 @@ fn emphasis(rest: &str, prev: Option<char>) -> Option<(&str, usize)> {
     delimited_emphasis(rest, if ch == '*' { "*" } else { "_" }, prev)
 }
 
-/// 链接 `[文字](url)`；支持文字内含配对 `[]` 与 URL 内含配对 `()`，返回（文字、URL、消耗字节数）。
+/// 链接 `[文字](url)`；支持文字内含反引号代码与配对 `[]`、URL 内含配对 `()`，返回（文字、URL、消耗字节数）。
 fn link(rest: &str) -> Option<(&str, &str, usize)> {
     let after = rest.strip_prefix('[')?;
+    let bytes = after.as_bytes();
     let mut bracket_depth = 1usize;
     let mut label_close = None;
-    for (idx, ch) in after.char_indices() {
-        if ch == '\n' {
+    let mut idx = 0usize;
+    while idx < bytes.len() {
+        if bytes[idx] == b'\n' {
             return None;
         }
+        if bytes[idx] == b'`' {
+            if let Some((_, consumed)) = code_span(&after[idx..]) {
+                idx += consumed;
+            } else {
+                let ticks = after[idx..].bytes().take_while(|&b| b == b'`').count();
+                idx += ticks.max(1);
+            }
+            continue;
+        }
+        let ch = after[idx..].chars().next()?;
         match ch {
             '[' => bracket_depth += 1,
             ']' => {
@@ -565,6 +577,7 @@ fn link(rest: &str) -> Option<(&str, &str, usize)> {
             }
             _ => {}
         }
+        idx += ch.len_utf8();
     }
     let label_close = label_close?;
     let url_start = after.get(label_close + 1..)?.strip_prefix('(')?;
@@ -587,6 +600,14 @@ fn link(rest: &str) -> Option<(&str, &str, usize)> {
         }
     }
     let url_close = url_close?;
+    let url = &url_start[..url_close];
+    if url
+        .trim()
+        .chars()
+        .any(|ch| ch.is_whitespace() || ch.is_control())
+    {
+        return None;
+    }
     let consumed = 1 + label_close + 1 + 1 + url_close + 1;
-    Some((&after[..label_close], &url_start[..url_close], consumed))
+    Some((&after[..label_close], url, consumed))
 }

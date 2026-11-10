@@ -963,4 +963,24 @@ fn review_regressions_table_shrink_with_hidden_cjk_url_heading_links_and_bare_ur
         "相邻不同 URL 的链接分段不得合并：{:?}",
         inline_lines[0].spans
     );
+
+    // P1-5：列表后接带缩进标题/引用及 4 空格缩进代码时，extract_code_block 与渲染块序号严格一致。
+    let code_src = "- item\n  ## heading\n    let a = 1;\n> quote\n    > redirect";
+    assert_eq!(
+        extract_code_block(code_src, 0).as_deref(),
+        Some("let a = 1;")
+    );
+    assert_eq!(
+        extract_code_block(code_src, 1).as_deref(),
+        Some("> redirect")
+    );
+
+    // P2-5：链接标题内含反引号 `]` 以及外层括号含空格说明包裹内嵌链接。
+    let nested_lines = render_wrapped_code_blocks(
+        "参见 [`]`](https://example.com/bracket) 与 [注意](详见 [官方文档](https://example.com/docs))",
+        80,
+    );
+    assert_eq!(nested_lines[0].links.len(), 2);
+    assert_eq!(nested_lines[0].links[0].url, "https://example.com/bracket");
+    assert_eq!(nested_lines[0].links[1].url, "https://example.com/docs");
 }

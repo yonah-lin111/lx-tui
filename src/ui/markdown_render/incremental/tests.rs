@@ -206,4 +206,8 @@ fn block_and_list_spacing_transitions_match_full_render_at_every_char_boundary()
     for width in [80, 32, 16] {
         assert_equivalent(sample, width);
     }
+
+    // P1-4：列表后接 4 空格缩进表格时，safe_line_count 同步列表栈而不将表头误判为缩进代码块提前固化。
+    let list_indented_table = "- 列表项\n    | A | B |\n  | --- | --- |\n  | 1 | 2 |\n";
+    assert_equivalent(list_indented_table, 60);
 }

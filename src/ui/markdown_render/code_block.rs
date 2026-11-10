@@ -346,7 +346,8 @@ pub fn extract_code_block(source: &str, target_index: usize) -> Option<String> {
             index += 1;
             continue;
         }
-        if item.is_some() {
+        if let Some(item) = item {
+            let _ = super::list_depth(&mut list_state.list_indents, item.indent());
             index += 1;
             continue;
         }
@@ -375,16 +376,21 @@ pub fn extract_code_block(source: &str, target_index: usize) -> Option<String> {
             current_block += 1;
             continue;
         }
+        if super::heading(trimmed).is_some() || super::is_rule(trimmed) {
+            super::clear_list_context(&mut list_state);
+            index += 1;
+            continue;
+        }
         if trimmed.trim_start().starts_with('|') {
+            super::clear_list_context(&mut list_state);
             while index < source_lines.len() && source_lines[index].trim_start().starts_with('|') {
                 index += 1;
             }
             continue;
         }
         if trimmed.trim_start().starts_with('>') {
-            while index < source_lines.len() && source_lines[index].trim_start().starts_with('>') {
-                index += 1;
-            }
+            super::clear_list_context(&mut list_state);
+            index += 1;
             continue;
         }
         index += 1;

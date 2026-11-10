@@ -65,4 +65,4 @@
 - **具体改动**：
   - [x] 更新并新增 Markdown 链接渲染测试：验证 `[文字](https://...)` 仅渲染 `文字` 且携带链接元数据、软换行跨行保留链接热区、裸 URL 剥离句尾标点与中文后文、非网页相对路径保留 `(path)`、标题行超链接与表格短标签超链接收缩不崩溃。
   - [x] 新增 `Ctrl + 点击` 测试：验证普通左键或 `Cmd` 点击链接或 AI Web 预览图文件名不触发外部打开，按住 `Ctrl + 点击`（含 `Left` 与 macOS `Right`）链接触发 `CardTarget::OpenUrl` / `Effect::OpenBrowser`、按住 `Ctrl + 点击` AI Web 预览图或 `[✓ Downloaded]` 触发定位、普通左键点击 `[↓ Download original]` 仍正常触发下载。
-  - [x] 编写 `review.md` 并完成 P0～P3 全部 10 项修复。
+  - [x] 编写 `review.md` 并完成 P0～P3 全部 14 项修复。
