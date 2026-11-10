@@ -3131,48 +3131,136 @@ fn settings_button_width_threshold_is_unchanged() {
     );
 }
 
-/// 侧栏底边框 `[SET]` 右侧只剩边框线，不留 `[UI]` 残影或空洞。
+#[test]
+fn usage_button_renders_right_of_settings_and_hits() {
+    let mut state = AppState::demo();
+    state.sidebar_collapsed = false;
+    state.settings_available = true;
+    let view = view_for(&state);
+    let settings = settings_button(&view, &state).expect("settings fits in the sidebar");
+    let usage = usage_button(&view, &state).expect("usage fits in the sidebar");
+    assert_eq!(usage.y, view.sidebar.bottom() - 1);
+    assert_eq!(usage.x, view.sidebar.x + 7);
+    assert_eq!(usage.width, 5);
+    assert_eq!(usage.right(), view.sidebar.x + 12);
+    assert_eq!(usage.x, settings.right() + 1);
+    for x in usage.x..usage.right() {
+        assert!(usage_button_at(&view, &state, x, usage.y));
+    }
+    assert!(!usage_button_at(&view, &state, usage.x - 1, usage.y));
+    assert!(!usage_button_at(&view, &state, usage.right(), usage.y));
+    assert!(!usage_button_at(
+        &view,
+        &state,
+        usage.x,
+        usage.y.saturating_sub(1)
+    ));
+
+    let lines = render_lines(&state);
+    let bottom: Vec<char> = lines[usage.y as usize]
+        .chars()
+        .skip(usize::from(view.sidebar.x))
+        .take(usize::from(view.sidebar.width))
+        .collect();
+    assert_eq!(bottom[6], '─', "[SET] 与 [USE] 之间保留 1 列底边线");
+    let rendered_usage: String = bottom[7..12].iter().collect();
+    assert_eq!(rendered_usage, text::USAGE_LABEL);
+
+    // 折叠态、服务不可用或宽度 < 17 时隐藏。
+    state.sidebar_collapsed = true;
+    let collapsed_view = view_for(&state);
+    assert!(usage_button(&collapsed_view, &state).is_none());
+    assert!(!usage_button_at(&collapsed_view, &state, usage.x, usage.y));
+    state.sidebar_collapsed = false;
+    state.settings_available = false;
+    let unavailable = view_for(&state);
+    assert!(usage_button(&unavailable, &state).is_none());
+    assert!(!usage_button_at(&unavailable, &state, usage.x, usage.y));
+}
+
+#[test]
+fn usage_button_width_threshold_is_seventeen() {
+    let mut state = AppState::demo();
+    state.sidebar_collapsed = false;
+    state.settings_available = true;
+    let mut view = view_for(&state);
+
+    view.sidebar = Rect::new(0, 0, 16, 24);
+    assert!(
+        settings_button(&view, &state).is_some(),
+        "宽度 16 时 [SET] 仍显示"
+    );
+    assert!(
+        usage_button(&view, &state).is_none(),
+        "宽度 16 时 [USE] 必须隐藏"
+    );
+    assert!(!usage_button_at(&view, &state, 7, 23));
+
+    view.sidebar = Rect::new(0, 0, 17, 24);
+    assert!(
+        settings_button(&view, &state).is_some(),
+        "宽度 17 时 [SET] 显示"
+    );
+    assert!(
+        usage_button(&view, &state).is_some(),
+        "宽度 17 时 [USE] 恰好显示"
+    );
+    assert!(usage_button_at(&view, &state, 7, 23));
+}
+
+/// 侧栏底边框 `[SET]` 右侧隔 1 列渲染 `[USE]`，`[USE]` 右侧至折叠按钮之间只剩底边线。
 #[test]
 fn sidebar_bottom_border_has_no_button_after_settings() {
     let mut state = AppState::demo();
     state.sidebar_collapsed = false;
     state.settings_available = true;
     let view = view_for(&state);
-    let button = settings_button(&view, &state).expect("settings fits");
+    let settings = settings_button(&view, &state).expect("settings fits");
+    let usage = usage_button(&view, &state).expect("usage fits");
+    let collapse = crate::ui::collapse_buttons(&view, state.agents_collapsed)
+        .into_iter()
+        .find(|button| button.target == CollapseTarget::Sidebar)
+        .expect("sidebar collapse button visible");
     let lines = render_lines(&state);
-    let bottom: String = lines[button.y as usize]
+    let bottom: Vec<char> = lines[settings.y as usize]
         .chars()
         .skip(usize::from(view.sidebar.x))
         .take(usize::from(view.sidebar.width))
         .collect();
-    // `[SET]`（左边距 1 列）之后到右端折叠按钮之前必须全是底边线 `─`。
-    let after_settings: Vec<char> = bottom
-        .chars()
-        .skip(1 + text::SETTINGS_LABEL.chars().count())
-        .collect();
-    let tail: String = after_settings
-        .iter()
-        .rev()
-        .skip(text::SIDEBAR_COLLAPSE_LABEL.chars().count() + 1) // 右端 `[◀]` + 角 `╯`
-        .collect::<Vec<_>>()
-        .into_iter()
-        .rev()
-        .collect();
+    let bottom_str: String = bottom.iter().collect();
+
+    assert_eq!(
+        bottom[1..6].iter().collect::<String>(),
+        text::SETTINGS_LABEL,
+        "{bottom_str}"
+    );
+    assert_eq!(
+        bottom[6], '─',
+        "[SET] 与 [USE] 之间应为 1 列 `─`: {bottom_str}"
+    );
+    assert_eq!(
+        bottom[7..12].iter().collect::<String>(),
+        text::USAGE_LABEL,
+        "{bottom_str}"
+    );
+    let after_usage_start = usize::from(usage.right() - view.sidebar.x);
+    let collapse_start = usize::from(collapse.area.x - view.sidebar.x);
+    let tail: String = bottom[after_usage_start..collapse_start].iter().collect();
     assert!(
         !tail.is_empty(),
-        "`[SET]` 与折叠按钮之间应有底边线: {bottom}"
+        "`[USE]` 与折叠按钮之间应有底边线: {bottom_str}"
     );
     assert!(
-        tail.chars().all(|c| c == '─' || c == '━'),
-        "`[SET]` 右侧应只剩边框线（旧 [UI] 位置不得留残影）: {bottom}"
+        tail.chars().all(|c| c == '─'),
+        "`[USE]` 右侧至折叠按钮之间应全为 `─`: {bottom_str}"
     );
-    assert!(!bottom.contains("[UI]"), "不应再出现 [UI]: {bottom}");
+    assert!(
+        !bottom_str.contains("[UI]"),
+        "不应再出现 [UI]: {bottom_str}"
+    );
 }
 
-/// tooltip 目标表里不存在指向已删 `[UI]` 按钮的条目。
-///
-/// 编译期已保证枚举变体被删除，这条运行期断言防的是「有人把目标加回来但忘了接
-/// 真实几何」——`targets()` 里任何条目都必须落在屏幕内的真实控件上。
+/// 侧栏底边框 tooltip 命中 `[SET]` 与 `[USE]`，且 `[USE]` 右侧至折叠按钮之间无多余目标。
 #[test]
 fn no_tooltip_target_points_at_the_removed_ui_button() {
     let mut state = AppState::demo();
@@ -3186,19 +3274,44 @@ fn no_tooltip_target_points_at_the_removed_ui_button() {
         Config::default().min_pane_height,
     );
     let screen = Rect::new(0, 0, 100, 24);
-    // `[SET]` 右侧若还有按钮，它必然在底边框这一行上。右端折叠按钮是既有控件
-    // （在 `[SET]` 之后很远），因此只扫到折叠按钮左缘为止。
     let settings = settings_button(&view, &state).expect("settings fits");
+    let usage = usage_button(&view, &state).expect("usage fits");
     let collapse = crate::ui::collapse_buttons(&view, state.agents_collapsed)
         .into_iter()
         .find(|button| button.target == CollapseTarget::Sidebar)
         .expect("sidebar collapse button visible");
-    let mut column = settings.right();
+
+    assert_eq!(
+        text::tooltip_hint(TooltipTarget::SidebarSettings, &state),
+        "open settings"
+    );
+    assert_eq!(
+        text::tooltip_hint(TooltipTarget::SidebarUsage, &state),
+        "open usage"
+    );
+    for column in settings.x..settings.right() {
+        assert_eq!(
+            crate::ui::tooltip::target_at(&view, &state, &rects, screen, column, settings.y),
+            Some(TooltipTarget::SidebarSettings)
+        );
+    }
+    assert_eq!(
+        crate::ui::tooltip::target_at(&view, &state, &rects, screen, settings.right(), settings.y),
+        None,
+        "[SET] 与 [USE] 之间的间隔列不应有 tooltip 目标"
+    );
+    for column in usage.x..usage.right() {
+        assert_eq!(
+            crate::ui::tooltip::target_at(&view, &state, &rects, screen, column, usage.y),
+            Some(TooltipTarget::SidebarUsage)
+        );
+    }
+    let mut column = usage.right();
     while column < collapse.area.x {
         assert_eq!(
             crate::ui::tooltip::target_at(&view, &state, &rects, screen, column, settings.y),
             None,
-            "侧栏底边框第 {column} 列不应有 tooltip 目标（[UI] 已移除）"
+            "侧栏底边框第 {column} 列不应有 tooltip 目标（[USE] 右侧无按钮）"
         );
         column += 1;
     }

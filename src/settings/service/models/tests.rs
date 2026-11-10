@@ -1031,6 +1031,120 @@ async fn models_save_preserves_unknown_top_level_ai_fields() {
     service.shutdown();
 }
 
+#[tokio::test]
+async fn pricing_round_trips_and_explicit_null_clears() {
+    let (service, _events, _dir) = start_models("models-pricing").await;
+    let port = service.port();
+    let token = service.token().to_string();
+
+    // 首轮保存：模型带 4 项单价（USD / 1M tokens）。
+    let mut value: serde_json::Value = serde_json::from_str(&put_body()).expect("json");
+    value["providers"][0]["models"][0]["pricing"] = serde_json::json!({
+        "input": 3.0,
+        "output": 15.0,
+        "cacheRead": 0.3,
+        "cacheWrite": 3.75
+    });
+    let saved = request(
+        port,
+        &write(
+            "PUT",
+            &format!("/api/models/settings?token={token}"),
+            &serde_json::to_string(&value).expect("string"),
+            None,
+        ),
+    )
+    .await;
+    assert_eq!(status(&saved), 200, "保存成功：{}", body(&saved));
+
+    // GET 返回 pricing。
+    let current = request(port, &get(&format!("/api/models/settings?token={token}"))).await;
+    let parsed: serde_json::Value = serde_json::from_str(body(&current)).expect("json");
+    assert_eq!(
+        parsed["providers"][0]["models"][0]["pricing"],
+        serde_json::json!({
+            "input": 3.0,
+            "output": 15.0,
+            "cacheRead": 0.3,
+            "cacheWrite": 3.75
+        }),
+        "GET 返回单价"
+    );
+
+    // 字段缺失 = 保留旧单价。
+    let revision = revision_of(body(&current)).expect("revision");
+    let mut keep: serde_json::Value = parsed.clone();
+    keep.as_object_mut().expect("object").remove("quickConnect");
+    keep["revision"] = serde_json::json!(revision);
+    keep["providers"][0]["models"][0]
+        .as_object_mut()
+        .expect("model")
+        .remove("pricing");
+    let kept = request(
+        port,
+        &write(
+            "PUT",
+            &format!("/api/models/settings?token={token}"),
+            &serde_json::to_string(&keep).expect("string"),
+            None,
+        ),
+    )
+    .await;
+    assert_eq!(status(&kept), 200, "缺失保留：{}", body(&kept));
+    let after_keep = request(port, &get(&format!("/api/models/settings?token={token}"))).await;
+    let after_keep_json: serde_json::Value = serde_json::from_str(body(&after_keep)).expect("json");
+    assert_eq!(
+        after_keep_json["providers"][0]["models"][0]["pricing"]["input"],
+        serde_json::json!(3.0),
+        "缺失字段保留旧单价"
+    );
+
+    // 负数单价被 422 拒绝。
+    let revision_neg = revision_of(body(&after_keep)).expect("revision neg");
+    let mut bad: serde_json::Value = after_keep_json.clone();
+    bad.as_object_mut().expect("object").remove("quickConnect");
+    bad["revision"] = serde_json::json!(revision_neg);
+    bad["providers"][0]["models"][0]["pricing"] = serde_json::json!({"input": -1.0});
+    let rejected = request(
+        port,
+        &write(
+            "PUT",
+            &format!("/api/models/settings?token={token}"),
+            &serde_json::to_string(&bad).expect("string"),
+            None,
+        ),
+    )
+    .await;
+    assert_eq!(status(&rejected), 422, "负数单价拒绝：{}", body(&rejected));
+
+    // 显式 null = 清除单价。
+    let mut clear: serde_json::Value = after_keep_json.clone();
+    clear
+        .as_object_mut()
+        .expect("object")
+        .remove("quickConnect");
+    clear["revision"] = serde_json::json!(revision_neg);
+    clear["providers"][0]["models"][0]["pricing"] = serde_json::Value::Null;
+    let cleared = request(
+        port,
+        &write(
+            "PUT",
+            &format!("/api/models/settings?token={token}"),
+            &serde_json::to_string(&clear).expect("string"),
+            None,
+        ),
+    )
+    .await;
+    assert_eq!(status(&cleared), 200, "显式清除：{}", body(&cleared));
+    let after_clear = request(port, &get(&format!("/api/models/settings?token={token}"))).await;
+    let after_clear: serde_json::Value = serde_json::from_str(body(&after_clear)).expect("json");
+    assert!(
+        after_clear["providers"][0]["models"][0]["pricing"].is_null(),
+        "显式 null 清除单价"
+    );
+    service.shutdown();
+}
+
 #[cfg(test)]
 #[path = "tests/connect.rs"]
 mod connect;

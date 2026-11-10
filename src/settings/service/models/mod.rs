@@ -190,6 +190,7 @@ pub(super) fn model_value(model_key: &str, model: &crate::config::ai::ModelConfi
             "output": limit.output,
         })),
         "modalities": model.modalities,
+        "pricing": model.pricing,
         "variants": model.variants,
         "variant": model.variant,
     })
@@ -414,6 +415,12 @@ pub(super) fn parse_models(
             Some(value) => Some(value.clone()),
             None => previous_model.and_then(|model| model.modalities.clone()),
         };
+        // 单价三态：字段缺失 = 保留旧值，显式 null = 清除，对象 = 校验非负数值后覆盖。
+        let pricing = match model_item.get("pricing") {
+            Some(Value::Null) => None,
+            Some(value) => parse_model_pricing(&model_id, value)?,
+            None => previous_model.and_then(|model| model.pricing.clone()),
+        };
         // 未知字段（`extra`）同样往返保留：已知键之外的字段并入。
         const KNOWN_KEYS: [&str; 9] = [
             "id",
@@ -447,12 +454,39 @@ pub(super) fn parse_models(
                 modalities,
                 variants,
                 variant,
-                pricing: previous_model.and_then(|model| model.pricing.clone()),
+                pricing,
                 extra,
             },
         );
     }
     Ok(models)
+}
+
+fn parse_model_pricing(model_id: &str, value: &Value) -> Result<Option<Value>, String> {
+    let Some(obj) = value.as_object() else {
+        return Err(format!("model '{model_id}' pricing must be an object"));
+    };
+    for key in [
+        "input",
+        "output",
+        "cacheRead",
+        "cache_read",
+        "cacheWrite",
+        "cache_write",
+    ] {
+        if let Some(field) = obj.get(key)
+            && !field.is_null()
+            && field
+                .as_f64()
+                .filter(|number| number.is_finite() && *number >= 0.0)
+                .is_none()
+        {
+            return Err(format!(
+                "model '{model_id}' pricing must have non-negative numbers"
+            ));
+        }
+    }
+    Ok(crate::config::ai::ModelPricing::from_json_value(value).and_then(|p| p.to_json_value()))
 }
 
 fn parse_model_selection_field(

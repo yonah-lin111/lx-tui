@@ -89,6 +89,7 @@ pub(crate) fn render_cached(
         } else {
             let cursor = sidebar::render(frame, view.sidebar, state);
             controls::render_settings_button(frame, &view, state);
+            controls::render_usage_button(frame, &view, state);
             cursor
         }
     } else {

@@ -270,6 +270,19 @@ impl Database {
         if version < 25 {
             self.migrate_v25_recap()?;
         }
+        if version < 26 {
+            self.migrate_v26_usage_log()?;
+        }
+        Ok(())
+    }
+
+    /// v26：新增模型调用统计流水表 `usage_log` 及历史 `agent_message` 幂等回填。
+    fn migrate_v26_usage_log(&mut self) -> Result<()> {
+        let transaction = self.conn.unchecked_transaction()?;
+        transaction.execute_batch(SCHEMA_V26)?;
+        ensure_no_foreign_key_violation(&transaction)?;
+        transaction.pragma_update(None, "user_version", 26)?;
+        transaction.commit()?;
         Ok(())
     }
 

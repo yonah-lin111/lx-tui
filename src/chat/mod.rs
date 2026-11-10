@@ -20,6 +20,7 @@ pub mod thinking;
 pub mod title;
 pub mod tools;
 pub mod transport;
+pub mod usage_recorder;
 pub mod web;
 
 pub use context::{

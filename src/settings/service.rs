@@ -11,6 +11,7 @@ mod models;
 mod page;
 mod skills;
 mod subagents;
+mod usage;
 
 #[cfg(test)]
 mod tests;
@@ -124,6 +125,14 @@ impl ServiceState {
     /// 用户数据根：测试注入优先，否则按环境推导。
     pub fn user_root(&self) -> Option<PathBuf> {
         self.user_root.clone()
+    }
+
+    /// 数据库文件（`db/lx.db`）路径：测试注入的用户根优先，否则按环境推导。
+    pub fn db_path(&self) -> PathBuf {
+        match &self.user_root {
+            Some(root) => root.join("db").join("lx.db"),
+            None => crate::db::default_db_path().unwrap_or_else(|_| PathBuf::from("lx.db")),
+        }
     }
 
     /// 用最新 User 命令替换快照中的 User 部分（Project 部分由 TUI 提供，保留）。
@@ -308,6 +317,15 @@ impl SettingsService {
     /// 浏览器访问 URL：`http://127.0.0.1:<port>/?token=<token>`。
     pub fn url(&self) -> String {
         format!("http://127.0.0.1:{}/?token={}", self.port, self.token())
+    }
+
+    /// 浏览器访问用量统计页 URL：`http://127.0.0.1:<port>/usage?token=<token>`。
+    pub fn usage_url(&self) -> String {
+        format!(
+            "http://127.0.0.1:{}/usage?token={}",
+            self.port,
+            self.token()
+        )
     }
 
     /// 测试注入的用户数据根（生产为 None，走环境推导）。

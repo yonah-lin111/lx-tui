@@ -222,6 +222,11 @@ pub(crate) fn handle_mouse_down_left(
         *dirty = true;
         return;
     }
+    if ui::usage_button_at(view, state, mouse.column, mouse.row) {
+        state.usage_open_requested = true;
+        *dirty = true;
+        return;
+    }
     if ui::prompt_pin_at(view, state, mouse.column, mouse.row) {
         update::toggle_prompt_pin(state);
         *dirty = true;

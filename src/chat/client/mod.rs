@@ -288,6 +288,7 @@ pub async fn run_stream_with_log(
             reason: stop.clone(),
         });
     }
+    let elapsed_ms = started.elapsed().as_millis();
     tracing::info!(
         target: "lx::agent::request",
         request_id = %request_id,
@@ -301,8 +302,15 @@ pub async fn run_stream_with_log(
         attempts = attempt + 1,
         reason = stop.as_str(),
         deltas = deltas.len(),
-        elapsed_ms = started.elapsed().as_millis() as u64,
+        elapsed_ms = elapsed_ms as u64,
         "agent request finished"
+    );
+    crate::chat::usage_recorder::record_stream_finish(
+        log,
+        &request,
+        &deltas,
+        &stop,
+        elapsed_ms as i64,
     );
     StreamOutcome { deltas, stop }
 }

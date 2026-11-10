@@ -210,16 +210,79 @@ async fn page_requires_token_and_serves_self_contained_assets() {
         "capability toggles"
     );
 
-    // 八份资源均无外部引用。
+    let models_card_js = request(port, &get("/settings_models_card.js")).await;
+    assert_eq!(status(&models_card_js), 200);
+    assert!(
+        models_card_js.contains("javascript"),
+        "models card js content type"
+    );
+    let models_card_js_body = body(&models_card_js);
+    assert!(
+        models_card_js_body.contains("pricingSection")
+            && models_card_js_body.contains("serializePricing"),
+        "models card pricing editor wired"
+    );
+    assert!(
+        !models_card_js_body.contains(".innerHTML"),
+        "no innerHTML in models card js"
+    );
+
+    let usage_denied = request(port, &get("/usage")).await;
+    assert_eq!(status(&usage_denied), 403);
+    assert_eq!(
+        service.usage_url(),
+        format!("http://127.0.0.1:{port}/usage?token={token}")
+    );
+    let usage_ok = request(port, &get(&format!("/usage?token={token}"))).await;
+    assert_eq!(status(&usage_ok), 200);
+    let usage_html = body(&usage_ok);
+    assert!(usage_html.contains("/usage.css"), "usage styles linked");
+    assert!(
+        usage_html.contains("/usage_charts.js") && usage_html.contains("/usage.js"),
+        "usage scripts linked"
+    );
+
+    let usage_css = request(port, &get("/usage.css")).await;
+    assert_eq!(status(&usage_css), 200);
+    assert!(usage_css.contains("text/css"), "usage css content type");
+    let usage_css_body = body(&usage_css);
+
+    let usage_js = request(port, &get("/usage.js")).await;
+    assert_eq!(status(&usage_js), 200);
+    assert!(usage_js.contains("javascript"), "usage js content type");
+    let usage_js_body = body(&usage_js);
+    assert!(
+        !usage_js_body.contains(".innerHTML"),
+        "no innerHTML in usage js"
+    );
+
+    let usage_charts_js = request(port, &get("/usage_charts.js")).await;
+    assert_eq!(status(&usage_charts_js), 200);
+    assert!(
+        usage_charts_js.contains("javascript"),
+        "usage charts js content type"
+    );
+    let usage_charts_js_body = body(&usage_charts_js);
+    assert!(
+        !usage_charts_js_body.contains(".innerHTML"),
+        "no innerHTML in usage charts js"
+    );
+
+    // 全部资源均无外部引用。
     for (name, text) in [
         ("html", html),
         ("css", body(&css)),
         ("js", js_body),
         ("models_js", models_js_body),
+        ("models_card_js", models_card_js_body),
         ("connect_js", connect_js_body),
         ("mcp_js", mcp_js_body),
         ("skills_js", skills_js_body),
         ("subagents_js", subagents_js_body),
+        ("usage_html", usage_html),
+        ("usage_css", usage_css_body),
+        ("usage_js", usage_js_body),
+        ("usage_charts_js", usage_charts_js_body),
     ] {
         assert!(
             !text.contains("https://"),

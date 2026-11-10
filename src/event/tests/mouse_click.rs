@@ -879,3 +879,53 @@ fn copy_toast_anchors_to_right_panel_for_template_and_todo_and_global_for_overla
         "居中模态弹窗内复制走全局 toast（anchor = None）"
     );
 }
+
+#[test]
+fn mouse_down_on_settings_and_usage_buttons_requests_browser_open() {
+    let config = Config::default();
+    let mut state = demo_terminal();
+    state.settings_available = true;
+    state.sidebar_collapsed = false;
+    let geo = geometry(&state, &config, Rect::new(0, 0, 120, 30));
+    let mut sessions = HashMap::new();
+    let mut dirty = false;
+
+    let set_btn = ui::settings_button(&geo.view, &state).expect("[SET] visible");
+    let use_btn = ui::usage_button(&geo.view, &state).expect("[USE] visible");
+
+    handle_terminal_event(
+        mouse(
+            MouseEventKind::Down(MouseButton::Left),
+            set_btn.x,
+            set_btn.y,
+        ),
+        &mut state,
+        &mut sessions,
+        &geo,
+        &config,
+        &mut ui::RenderCache::default(),
+        &mut dirty,
+    );
+    assert!(state.settings_open_requested);
+    assert!(!state.usage_open_requested);
+    assert!(dirty);
+
+    state.settings_open_requested = false;
+    dirty = false;
+    handle_terminal_event(
+        mouse(
+            MouseEventKind::Down(MouseButton::Left),
+            use_btn.x,
+            use_btn.y,
+        ),
+        &mut state,
+        &mut sessions,
+        &geo,
+        &config,
+        &mut ui::RenderCache::default(),
+        &mut dirty,
+    );
+    assert!(!state.settings_open_requested);
+    assert!(state.usage_open_requested);
+    assert!(dirty);
+}

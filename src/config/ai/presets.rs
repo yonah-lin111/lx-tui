@@ -229,6 +229,31 @@ pub fn default_models_for_preset(id: &str) -> BTreeMap<String, ModelConfig> {
     models.get(id).cloned().unwrap_or_default()
 }
 
+/// 从进程内预设目录（含云端同步缓存）查询模型单价：优先匹配 `provider_id`，未命中时跨供应商按 `model_id` 兜底。
+pub fn catalog_model_pricing(provider_id: &str, model_id: &str) -> Option<super::ModelPricing> {
+    let models = catalog()
+        .models
+        .read()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    let find_in = |provider_models: &BTreeMap<String, ModelConfig>| -> Option<super::ModelPricing> {
+        provider_models
+            .get(model_id)
+            .and_then(ModelConfig::parsed_pricing)
+            .or_else(|| {
+                provider_models
+                    .values()
+                    .find(|m| m.id == model_id)
+                    .and_then(ModelConfig::parsed_pricing)
+            })
+    };
+    if let Some(provider_models) = models.get(provider_id)
+        && let Some(pricing) = find_in(provider_models)
+    {
+        return Some(pricing);
+    }
+    models.values().find_map(find_in)
+}
+
 /// 用云端目录更新进程内模型表；同名模型保留嵌入目录已声明的 `transport` 与默认 `variant`。
 pub fn update_catalog_models(updates: BTreeMap<String, BTreeMap<String, ModelConfig>>) {
     let mut models = catalog()
@@ -252,6 +277,11 @@ pub(super) fn merge_provider_models(
             .limit
             .is_some_and(|limit| limit.context > 0 && limit.output > 0);
         if !valid_limit {
+            if let Some(existing) = target.get_mut(&model_id)
+                && existing.pricing.is_none()
+            {
+                existing.pricing = model.pricing;
+            }
             continue;
         }
         if let Some(existing) = target.get(&model_id) {
@@ -268,6 +298,9 @@ pub(super) fn merge_provider_models(
                     .is_some_and(|variant| !model.variants.contains_key(variant))
             {
                 model.variant = existing.variant.clone();
+            }
+            if existing.pricing.is_some() {
+                model.pricing = existing.pricing.clone();
             }
         }
         if is_openai_provider && model.transport.is_none() {

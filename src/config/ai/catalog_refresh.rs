@@ -155,7 +155,7 @@ pub fn parse_models_dev_catalog(
                     modalities: parse_modalities(model.get("modalities")),
                     variants,
                     variant: default_variant,
-                    pricing: None,
+                    pricing: parse_pricing(model.get("cost").or_else(|| model.get("pricing"))),
                     extra: serde_json::Map::new(),
                 },
             );
@@ -163,6 +163,12 @@ pub fn parse_models_dev_catalog(
         out.insert(provider_id.to_string(), models);
     }
     Ok(out)
+}
+
+fn parse_pricing(value: Option<&Value>) -> Option<Value> {
+    value
+        .and_then(super::ModelPricing::from_json_value)
+        .and_then(super::ModelPricing::to_json_value)
 }
 
 fn parse_limit(value: Option<&Value>) -> Option<ModelLimit> {

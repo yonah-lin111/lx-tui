@@ -338,17 +338,29 @@ async fn run_loop(
         ) {
             dirty = true;
         }
-        // 设置图标点击：请求打开浏览器（后台执行，不阻塞事件循环）。
-        if state.settings_open_requested {
-            state.settings_open_requested = false;
-            if let Some(url) = settings_service.as_ref().map(SettingsService::url) {
-                tokio::task::spawn_blocking(move || {
-                    if let Err(error) = crate::platform::open_browser(&url) {
-                        tracing::warn!(%error, "opening the settings page failed");
-                    }
-                });
-            } else {
-                tracing::warn!("settings web service is unavailable");
+        // 侧栏底边框 `[SET]` / `[USE]` 点击：后台打开对应本地页面，不阻塞事件循环。
+        for (requested, resolve_url, page) in [
+            (
+                &mut state.settings_open_requested,
+                SettingsService::url as fn(&SettingsService) -> String,
+                "settings",
+            ),
+            (
+                &mut state.usage_open_requested,
+                SettingsService::usage_url,
+                "usage",
+            ),
+        ] {
+            if std::mem::take(requested) {
+                if let Some(url) = settings_service.as_ref().map(resolve_url) {
+                    tokio::task::spawn_blocking(move || {
+                        if let Err(error) = crate::platform::open_browser(&url) {
+                            tracing::warn!(%error, page, "opening web page failed");
+                        }
+                    });
+                } else {
+                    tracing::warn!(page, "settings web service is unavailable");
+                }
             }
         }
         // 显示工作区变化或设置页写入后重载自定义命令；git 元数据到达后同步仓库根。
@@ -397,40 +409,16 @@ async fn run_loop(
             inventory::refresh_mcp(state, persistence, &roots, &mcp_statuses);
             dirty = true;
         }
-        // 双 Esc 待命超时：3 秒窗口外自动失效（不产生历史记录）。
-        if update::clear_expired_arms(state) {
-            dirty = true;
-        }
-        // 聊天网络效应：取走并在 Tokio 任务执行（结果按 key 回投）。
-        if chat::pump_chat_streams(state, &mut chat_streams, &sender, persistence) {
-            dirty = true;
-        }
-        // 后台标题生成效应：轻量无工具流转入后台任务。
-        if chat::apply_title_effects(state, &sender) {
-            dirty = true;
-        }
-        if chat::apply_recap_effects(state, &sender) {
-            dirty = true;
-        }
-        if chat::prune_pending_guards(state, &mut chat_streams) {
-            dirty = true;
-        }
-        // 本地命令：DB 预登记成功后才 spawn；与模型轮次并行。
-        if chat::pump_user_shells(state, &mut chat_streams, &sender, persistence) {
-            dirty = true;
-        }
-        // 后台任务页的列表与停止：进程句柄只在运行实例里，由事件层执行。
-        if chat::apply_process_effects(state, &mut chat_streams) {
-            dirty = true;
-        }
-        // 子 agent 面板的列表、懒加载与停止。
-        if chat::apply_subagent_effects(state, &mut chat_streams, persistence) {
-            dirty = true;
-        }
-        // 底部状态行的后台任务计数：与页面是否打开无关，每轮同步。
-        if chat::sync_background_task_counts(state, &chat_streams) {
-            dirty = true;
-        }
+        // 双 Esc 待命超时、聊天网络流、标题/recap、pending guard、本地命令、后台任务与子 agent 效应。
+        dirty |= update::clear_expired_arms(state);
+        dirty |= chat::pump_chat_streams(state, &mut chat_streams, &sender, persistence);
+        dirty |= chat::apply_title_effects(state, &sender);
+        dirty |= chat::apply_recap_effects(state, &sender);
+        dirty |= chat::prune_pending_guards(state, &mut chat_streams);
+        dirty |= chat::pump_user_shells(state, &mut chat_streams, &sender, persistence);
+        dirty |= chat::apply_process_effects(state, &mut chat_streams);
+        dirty |= chat::apply_subagent_effects(state, &mut chat_streams, persistence);
+        dirty |= chat::sync_background_task_counts(state, &chat_streams);
         // 面板打开期间按 500ms 轮询列表（避免每轮循环访问 SQLite）。
         if task_page_refresh_at.is_none_or(|at| Instant::now() >= at) {
             chat::refresh_open_task_pages(state);
@@ -678,20 +666,12 @@ fn handle_terminal_event(
         TerminalEvent::Key(key) => {
             input::handle_key_event(key, state, sessions, geometry, cache, dirty);
         }
-        TerminalEvent::Paste(text) => {
-            input::handle_paste_event(text, state, sessions, dirty);
-        }
+        TerminalEvent::Paste(text) => input::handle_paste_event(text, state, sessions, dirty),
         TerminalEvent::Mouse(mouse) => {
             mouse::handle_mouse_event(mouse, state, sessions, geometry, config, cache, dirty);
         }
-        TerminalEvent::FocusLost => {
-            update::on_terminal_focus_lost(state, Instant::now());
-        }
-        TerminalEvent::FocusGained => {
-            if update::on_terminal_focus_gained(state) {
-                *dirty = true;
-            }
-        }
+        TerminalEvent::FocusLost => update::on_terminal_focus_lost(state, Instant::now()),
+        TerminalEvent::FocusGained => *dirty |= update::on_terminal_focus_gained(state),
         TerminalEvent::Resize(..) => {}
     }
 }

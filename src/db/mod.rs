@@ -15,8 +15,10 @@ mod image_migration;
 mod migration;
 pub mod service;
 pub mod todo;
+pub mod usage;
 pub mod workspace;
 
+pub use usage::*;
 pub use workspace::WorkspaceRecord;
 
 use std::fmt;
@@ -27,7 +29,7 @@ use std::time::{SystemTime, UNIX_EPOCH};
 use rusqlite::{Connection, OptionalExtension, params};
 
 /// 当前 Schema 版本；版本号保留自管理截图资产的开发期结构，避免旧库被判为过新。
-const SCHEMA_VERSION: i64 = 25;
+pub const SCHEMA_VERSION: i64 = 26;
 
 /// 当前 Schema 版本（测试断言用；不暴露可变入口）。
 #[cfg(test)]
@@ -322,6 +324,7 @@ impl Database {
             "agent_tool_call",
             "agent_subagent",
             "agent_message_recap",
+            "usage_log",
         ] {
             let count: i64 =
                 self.conn
@@ -865,6 +868,18 @@ pub fn database_path(is_dev: bool, linked_worktree: Option<&Path>) -> Result<Pat
         return Ok(dir.join("worktrees").join(scope).join("lx.db"));
     }
     Ok(dir.join("lx.db"))
+}
+
+/// 默认数据库路径（尊重测试覆盖、`LX_TUI_DB_PATH` 与当前环境）。
+pub fn default_db_path() -> Result<PathBuf> {
+    #[cfg(test)]
+    if let Some(overridden) = crate::platform::test_db_override() {
+        return Ok(overridden);
+    }
+    if let Some(overridden) = std::env::var_os("LX_TUI_DB_PATH").filter(|path| !path.is_empty()) {
+        return Ok(PathBuf::from(overridden));
+    }
+    database_path(is_dev_environment(), None)
 }
 
 /// 作用域目录名：与项目级 MCP / skill 目录共用同一实现。
