@@ -27,7 +27,10 @@ pub use code_block::{CodeLineKind, DEFAULT_CODE_LANG, extract_code_block};
 pub(crate) use highlight::highlight_line;
 /// 流式 Markdown 增量渲染状态（稳定前缀 + 活跃尾部）。
 pub(crate) use incremental::IncrementalMarkdownState;
+pub use inline::MdLinkSpan;
+#[cfg(test)]
 use inline::inline_spans;
+use inline::{heading_spans_and_links, marker_spans_and_links, spans_and_links};
 pub use table::{
     TableCellSlice, TableColumnSpan, TableLayoutMeta, TableLineKind, TableLineRef, TableLogicalRow,
 };
@@ -40,6 +43,8 @@ pub struct MdLine {
     /// 首行含 `• ` / `1. ` / `> ` 等标记，续行要跳过标记、对齐正文起始列。
     pub hang: u16,
     pub spans: Vec<(String, Style)>,
+    /// 行内 `http(s)://` 超链接在当前行内的列区间（相对 `indent` 之后的正文起点）。
+    pub links: Vec<MdLinkSpan>,
     /// 若该行属于 Markdown 表格，记录其表格结构与行内偏移。
     pub table: Option<TableLineRef>,
     /// 若该行属于启用了边框与复制按钮的代码块，记录其代码块行角色。
@@ -53,6 +58,7 @@ impl MdLine {
             indent,
             hang: 0,
             spans: vec![(value.into(), style)],
+            links: Vec::new(),
             table: None,
             code: None,
         }
@@ -60,36 +66,54 @@ impl MdLine {
 
     /// 多段行。
     pub(crate) fn spans(indent: u16, spans: Vec<(String, Style)>) -> Self {
+        Self::spans_with_links(indent, spans, Vec::new())
+    }
+
+    /// 携带超链接列区间的多段行。
+    pub(crate) fn spans_with_links(
+        indent: u16,
+        spans: Vec<(String, Style)>,
+        links: Vec<MdLinkSpan>,
+    ) -> Self {
         Self {
             indent,
             hang: 0,
             spans,
+            links,
             table: None,
             code: None,
         }
     }
 
-    /// 携带表格结构引用的多段行。
-    pub(crate) fn with_table(
+    /// 携带表格结构引用与超链接列区间的多段行。
+    pub(crate) fn with_table_and_links(
         indent: u16,
         spans: Vec<(String, Style)>,
+        links: Vec<MdLinkSpan>,
         table: TableLineRef,
     ) -> Self {
         Self {
             indent,
             hang: 0,
             spans,
+            links,
             table: Some(table),
             code: None,
         }
     }
 
-    /// 多段行 + 悬挂缩进（列表项/引用：续行对齐正文起始列）。
-    pub(crate) fn hanging(indent: u16, hang: u16, spans: Vec<(String, Style)>) -> Self {
+    /// 多段行 + 悬挂缩进 + 超链接列区间（列表项/引用：续行对齐正文起始列）。
+    pub(crate) fn hanging_with_links(
+        indent: u16,
+        hang: u16,
+        spans: Vec<(String, Style)>,
+        links: Vec<MdLinkSpan>,
+    ) -> Self {
         Self {
             indent,
             hang,
             spans,
+            links,
             table: None,
             code: None,
         }
@@ -173,7 +197,39 @@ fn render_blocks(
     )
 }
 
-/// 块级解析的跨行状态：列表缩进档位栈 + 未闭合围栏语言 + 代码块序号。
+/// 列表项种类：用于区分无序、有序与任务列表，同级切换列表类型时视作新列表。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ListKind {
+    Bullet,
+    Ordered,
+    Task,
+}
+
+/// 上一个已产出块的种类（供 `code_chrome == true` 的块间距状态机判定是否插入前导空行）。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum PrevBlock {
+    /// 普通段落或图片行；`in_list` 表示该行是否作为列表项内的缩进续段，`depth` 为其所属列表层级，
+    /// `loose` 表示该列表内续段是否由空行（`\n\n`）引导。
+    Paragraph {
+        in_list: bool,
+        depth: usize,
+        loose: bool,
+    },
+    /// 标题行（`#`..`######`）。
+    Heading,
+    /// 列表项（记录换算后的层级 `depth` 与列表种类 `kind`）。
+    ListItem { depth: usize, kind: ListKind },
+    /// 围栏代码块或 4 空格缩进代码块。
+    CodeBlock,
+    /// 表格块。
+    Table,
+    /// 引用块（`>`）。
+    Quote,
+    /// 水平分割线（`---` / `***` / `___`）。
+    Rule,
+}
+
+/// 块级解析的跨行状态：列表缩进档位栈 + 未闭合围栏语言 + 代码块序号 + 块间距前驱状态。
 ///
 /// 增量渲染的「稳定前缀 / 活跃尾部」两段共用它：尾部从中断处的状态继续解析，
 /// 保证与一次性全量渲染逐行一致。
@@ -193,8 +249,10 @@ struct ParserState {
     open_fence_ticks: usize,
     /// 下一个代码块的 0-based 序号（围栏与 4 空格缩进代码块统一递增）。
     next_code_block_index: usize,
-    /// 上一个块是代码块：下一个块前需补一行空白间隔（跨增量分块保留）。
-    after_code_block: bool,
+    /// 上一个已产出的块种类（跨增量分块保留；`None` 表示尚未产出任何块）。
+    prev_block: Option<PrevBlock>,
+    /// 自上一个块产出后，源码中是否至少出现过一条空行（跨增量分块保留）。
+    saw_blank_line: bool,
 }
 
 /// 按行切分源码：末尾 `\n` 是行终止符，不额外产生一条空行；真正的空行
@@ -208,6 +266,87 @@ fn split_source_lines(source: &str) -> Vec<&str> {
         lines.pop();
     }
     lines
+}
+
+/// 在产出下一个非空块 `curr` 之前，按块间距规则推入至多 1 行空行并推进 `state`。
+fn transition_block(
+    state: &mut ParserState,
+    curr: PrevBlock,
+    code_chrome: bool,
+    lines: &mut Vec<MdLine>,
+) {
+    if code_chrome && should_insert_blank_line(state.prev_block, state.saw_blank_line, curr) {
+        lines.push(MdLine::spans(0, Vec::new()));
+    }
+    state.prev_block = Some(curr);
+    state.saw_blank_line = false;
+}
+
+/// 判定前驱块 `prev` 与当前块 `curr` 之间是否需要插入 1 行空行。
+fn should_insert_blank_line(
+    prev: Option<PrevBlock>,
+    saw_blank_line: bool,
+    curr: PrevBlock,
+) -> bool {
+    let Some(prev) = prev else {
+        return false;
+    };
+    match curr {
+        // 代码块自带 `▂` 顶边（上半截 7/8 留白），仅在连续两个代码块之间补 1 行空行。
+        PrevBlock::CodeBlock => prev == PrevBlock::CodeBlock,
+        // 标题、表格、分割线作为独立顶层块，上方恒隔 1 行。
+        PrevBlock::Heading | PrevBlock::Table | PrevBlock::Rule => true,
+        // 引用块：连续 `>` 行（无空行分隔）同属一个引用块，其余情况上方隔 1 行。
+        PrevBlock::Quote => prev != PrevBlock::Quote || saw_blank_line,
+        // 列表项：区分进入列表、父进子、子退父、同级异类切换与松紧列表。
+        PrevBlock::ListItem { depth, kind } => match prev {
+            PrevBlock::ListItem {
+                depth: prev_depth,
+                kind: prev_kind,
+            } => {
+                if depth > prev_depth {
+                    false
+                } else if saw_blank_line || depth < prev_depth {
+                    true
+                } else {
+                    prev_kind != kind
+                }
+            }
+            PrevBlock::Paragraph {
+                in_list: true,
+                depth: prev_depth,
+                loose,
+            } => {
+                if depth > prev_depth {
+                    false
+                } else {
+                    saw_blank_line || loose || depth < prev_depth
+                }
+            }
+            _ => true,
+        },
+        // 段落或图片行：区分顶层段落、列表内紧凑续行、列表内松散续段与退出列表。
+        PrevBlock::Paragraph { in_list, depth, .. } => match prev {
+            PrevBlock::Heading
+            | PrevBlock::CodeBlock
+            | PrevBlock::Table
+            | PrevBlock::Quote
+            | PrevBlock::Rule => true,
+            PrevBlock::ListItem { .. } => saw_blank_line || !in_list,
+            PrevBlock::Paragraph {
+                in_list: prev_in_list,
+                depth: prev_depth,
+                ..
+            } => saw_blank_line || (prev_in_list && (!in_list || depth != prev_depth)),
+        },
+    }
+}
+
+/// 清空列表缩进栈（进入标题、分割线、表格、引用块等独立顶层块时调用）。
+fn clear_list_context(state: &mut ParserState) {
+    state.list_indents.clear();
+    state.list_content_indents.clear();
+    state.list_hangs.clear();
 }
 
 /// 从给定跨行状态继续块级解析，返回新产出的行。
@@ -226,9 +365,8 @@ fn render_blocks_stateful(
         // 未闭合围栏内部：每行都是独立代码行（闭合行只推进状态）。
         if let Some(lang) = state.open_fence_lang.take() {
             if fence_ticks(line).is_some_and(|ticks| ticks >= state.open_fence_ticks) {
-                if code_chrome {
-                    state.after_code_block = true;
-                }
+                state.prev_block = Some(PrevBlock::CodeBlock);
+                state.saw_blank_line = false;
                 state.open_fence_ticks = 0;
                 index += 1;
                 continue;
@@ -245,18 +383,17 @@ fn render_blocks_stateful(
         }
         let trimmed = line.trim_end();
         if trimmed.is_empty() {
+            if state.prev_block.is_some() {
+                state.saw_blank_line = true;
+            }
             index += 1;
             continue;
-        }
-        // 代码块之后与下一个块之间固定空一行（跨增量分块由 `after_code_block` 保留）。
-        if code_chrome && state.after_code_block {
-            lines.push(MdLine::spans(0, Vec::new()));
-            state.after_code_block = false;
         }
         let item = list_item(line);
         update_list_context(state, item.as_ref(), line);
         let min_indent = list_code_min_indent(state);
         if let Some(ticks) = fence_ticks(line) {
+            transition_block(state, PrevBlock::CodeBlock, code_chrome, &mut lines);
             let lang = line.trim().trim_start_matches('`').trim();
             let block_index = state.next_code_block_index;
             state.next_code_block_index += 1;
@@ -274,11 +411,21 @@ fn render_blocks_stateful(
         // 列表看起来就“没有缩进”。真代码块请用围栏（```）。
         if let Some(item) = item {
             let depth = list_depth(&mut state.list_indents, item.indent());
+            transition_block(
+                state,
+                PrevBlock::ListItem {
+                    depth,
+                    kind: item.kind(),
+                },
+                code_chrome,
+                &mut lines,
+            );
             lines.push(item.render(depth));
             index += 1;
             continue;
         }
         if is_indented_code(line, min_indent) {
+            transition_block(state, PrevBlock::CodeBlock, code_chrome, &mut lines);
             let block_index = state.next_code_block_index;
             state.next_code_block_index += 1;
             index = indented_code(
@@ -290,17 +437,18 @@ fn render_blocks_stateful(
                 min_indent,
                 &mut lines,
             );
-            if code_chrome {
-                state.after_code_block = true;
-            }
             continue;
         }
         if let Some((level, body)) = heading(trimmed) {
+            clear_list_context(state);
+            transition_block(state, PrevBlock::Heading, code_chrome, &mut lines);
             lines.push(heading_line(level, body));
             index += 1;
             continue;
         }
         if is_rule(trimmed) {
+            clear_list_context(state);
+            transition_block(state, PrevBlock::Rule, code_chrome, &mut lines);
             if expand_rules {
                 let rule_width = width.unwrap_or(40).max(1);
                 lines.push(MdLine::plain(
@@ -315,16 +463,55 @@ fn render_blocks_stateful(
             continue;
         }
         if trimmed.trim_start().starts_with('|') {
+            clear_list_context(state);
+            transition_block(state, PrevBlock::Table, code_chrome, &mut lines);
             index = table::table(&source_lines, index, &mut lines, width);
             continue;
         }
         if trimmed.trim_start().starts_with('>') {
-            index = blockquote(&source_lines, index, &mut lines);
+            clear_list_context(state);
+            transition_block(state, PrevBlock::Quote, code_chrome, &mut lines);
+            lines.push(blockquote_line(trimmed));
+            index += 1;
             continue;
         }
-        if let Some((alt, url)) = image(trimmed) {
+        let in_list = !state.list_indents.is_empty();
+        let depth = state.list_indents.len().saturating_sub(1);
+        let loose = in_list
+            && (state.saw_blank_line
+                || matches!(
+                    state.prev_block,
+                    Some(PrevBlock::Paragraph {
+                        in_list: true,
+                        loose: true,
+                        ..
+                    })
+                ));
+        transition_block(
+            state,
+            PrevBlock::Paragraph {
+                in_list,
+                depth,
+                loose,
+            },
+            code_chrome,
+            &mut lines,
+        );
+        // 普通段落或图片行：行内渲染（若仍处于列表上下文内，续段按当前列表层级的正文列缩进）。
+        let cont_indent = if !in_list {
+            0
+        } else {
+            let hang = state.list_hangs.get(depth).copied().unwrap_or(2);
+            indent(depth).saturating_add(hang)
+        };
+        let body = if cont_indent > 0 {
+            trimmed.trim_start()
+        } else {
+            trimmed
+        };
+        if let Some((alt, url)) = image(body) {
             lines.push(MdLine::spans(
-                0,
+                cont_indent,
                 vec![
                     (alt.to_string(), style::text()),
                     (" ".to_string(), style::text()),
@@ -334,20 +521,8 @@ fn render_blocks_stateful(
             index += 1;
             continue;
         }
-        // 普通段落行：行内渲染（若仍处于列表上下文内，续段按当前列表层级的正文列缩进）。
-        let cont_indent = if state.list_indents.is_empty() {
-            0
-        } else {
-            let depth = state.list_indents.len() - 1;
-            let hang = state.list_hangs.get(depth).copied().unwrap_or(2);
-            indent(depth).saturating_add(hang)
-        };
-        let body = if cont_indent > 0 {
-            trimmed.trim_start()
-        } else {
-            trimmed
-        };
-        lines.push(MdLine::spans(cont_indent, inline_spans(body)));
+        let (spans, links) = spans_and_links(body);
+        lines.push(MdLine::spans_with_links(cont_indent, spans, links));
         index += 1;
     }
     lines
@@ -373,15 +548,10 @@ fn heading(line: &str) -> Option<(u8, &str)> {
     (spaces > 0).then(|| (hashes as u8, rest[spaces..].trim_end()))
 }
 
-/// 渲染一行标题：隐藏 `#` 标记，正文用分级样式（若内含行内标记则先剥离标记文本）。
+/// 渲染一行标题：隐藏 `#` 标记，正文用分级样式（含网页超链接时保留链接热区与下划线）。
 fn heading_line(level: u8, body: &str) -> MdLine {
-    let clean: String = inline_spans(body).into_iter().map(|(s, _)| s).collect();
-    let display = if clean.is_empty() {
-        body
-    } else {
-        clean.as_str()
-    };
-    MdLine::plain(0, display, style::md_read_heading_level(level))
+    let (spans, links) = heading_spans_and_links(body, style::md_read_heading_level(level));
+    MdLine::spans_with_links(0, spans, links)
 }
 
 /// 水平线：仅由同一种 `-`/`*`/`_` 组成且至少 3 个。
@@ -460,25 +630,15 @@ fn indented_code(
     index
 }
 
-/// 引用块：收集连续 `>` 行，用 `>` 作前缀（不用左边框），正文支持行内 markdown 折叠与着色。
-fn blockquote(source: &[&str], start: usize, lines: &mut Vec<MdLine>) -> usize {
-    let mut index = start;
-    while index < source.len() {
-        let trimmed = source[index].trim_start();
-        let Some(rest) = trimmed.strip_prefix('>') else {
-            break;
-        };
-        let body = rest.strip_prefix(' ').unwrap_or(rest);
-        let marker = format!("{QUOTE_MARKER} ");
-        let quote_style = style::md_read_quote();
-        let mut spans = vec![(marker.clone(), quote_style)];
-        for (value, span_style) in inline_spans(body) {
-            spans.push((value, quote_style.patch(span_style)));
-        }
-        lines.push(MdLine::hanging(0, marker_width(&marker), spans));
-        index += 1;
-    }
-    index
+/// 引用行：用 `>` 作前缀（不用左边框），正文支持行内 markdown 折叠与着色。
+fn blockquote_line(line: &str) -> MdLine {
+    let trimmed = line.trim_start();
+    let rest = trimmed.strip_prefix('>').unwrap_or(trimmed);
+    let body = rest.strip_prefix(' ').unwrap_or(rest);
+    let marker = format!("{QUOTE_MARKER} ");
+    let quote_style = style::md_read_quote();
+    let (spans, links) = marker_spans_and_links(&marker, quote_style, body, Some(quote_style));
+    MdLine::hanging_with_links(0, marker_width(&marker), spans, links)
 }
 
 /// 列表项（无序 / 有序 / 任务）；`indent` 是源码里的**原始缩进列数**，
@@ -502,6 +662,15 @@ enum ListItem<'a> {
 }
 
 impl ListItem<'_> {
+    /// 列表项种类。
+    fn kind(&self) -> ListKind {
+        match *self {
+            Self::Bullet { .. } => ListKind::Bullet,
+            Self::Ordered { .. } => ListKind::Ordered,
+            Self::Task { .. } => ListKind::Task,
+        }
+    }
+
     /// 源码缩进列数。
     fn indent(&self) -> usize {
         match *self {
@@ -532,48 +701,26 @@ impl ListItem<'_> {
     /// 渲染一行列表项（lx：`•` 项目符号；任务用 claude 一组 `[x]`/`[ ]`）；
     /// `depth` 为换算后的层级（0 = 顶层）。
     fn render(&self, depth: usize) -> MdLine {
-        match *self {
-            Self::Bullet { text: body, .. } => {
-                let marker = "• ";
-                MdLine::hanging(
-                    indent(depth),
-                    marker_width(marker),
-                    marker_spans(marker, style::md_read_bullet(), body),
-                )
-            }
+        let (marker, marker_style, body) = match *self {
+            Self::Bullet { text: body, .. } => ("• ".to_string(), style::md_read_bullet(), body),
             Self::Ordered {
                 number, text: body, ..
-            } => {
-                let marker = format!("{number}. ");
-                MdLine::hanging(
-                    indent(depth),
-                    marker_width(&marker),
-                    marker_spans(&marker, style::md_read_ordered(), body),
-                )
-            }
+            } => (format!("{number}. "), style::md_read_ordered(), body),
             Self::Task {
                 done, text: body, ..
             } => {
                 // 复选框按状态分色，**正文保持正常样式**：已完成项不再整行加删除线
                 // 或压暗——任务状态只由复选框表达，文字仍要能正常阅读。
-                let marker = if done {
-                    (format!("{TASK_DONE} "), style::md_read_task_done())
+                if done {
+                    (format!("{TASK_DONE} "), style::md_read_task_done(), body)
                 } else {
-                    (format!("{TASK_OPEN} "), style::md_read_task_open())
-                };
-                let mut spans = vec![(marker.0.clone(), marker.1)];
-                spans.extend(inline_spans(body));
-                MdLine::hanging(indent(depth), marker_width(&marker.0), spans)
+                    (format!("{TASK_OPEN} "), style::md_read_task_open(), body)
+                }
             }
-        }
+        };
+        let (spans, links) = marker_spans_and_links(&marker, marker_style, body, None);
+        MdLine::hanging_with_links(indent(depth), marker_width(&marker), spans, links)
     }
-}
-
-/// 列表项内容：标记分段 + 行内渲染的正文（粗体/斜体/代码等在列表内同样折叠）。
-fn marker_spans(marker: &str, marker_style: Style, body: &str) -> Vec<(String, Style)> {
-    let mut spans = vec![(marker.to_string(), marker_style)];
-    spans.extend(inline_spans(body));
-    spans
 }
 
 /// 列表项缩进（每级 2 列）。
@@ -725,6 +872,7 @@ fn wrap_md_line(line: &MdLine, width: usize, out: &mut Vec<MdLine>) {
                 indent: 0,
                 hang: 0,
                 spans: code_block::prepend_body_bar(Vec::new(), width),
+                links: Vec::new(),
                 table: None,
                 code: Some(CodeLineKind::Body),
             });
@@ -748,11 +896,7 @@ fn wrap_md_line_inner(line: &MdLine, width: usize, out: &mut Vec<MdLine>) {
     let first_indent = usize::from(line.indent);
     let hang = usize::from(line.hang);
     let cont_indent = first_indent.saturating_add(hang);
-    let cells: Vec<(char, Style)> = line
-        .spans
-        .iter()
-        .flat_map(|(value, span_style)| value.chars().map(|ch| (ch, *span_style)))
-        .collect();
+    let cells = inline::cell_links_for_line(&line.spans, &line.links);
     if cells.is_empty() {
         // 代码块里的空行也是内容：软换行不能把它吞掉（否则代码上下文断开）。
         out.push(MdLine::spans(line.indent, Vec::new()));
@@ -793,50 +937,26 @@ fn wrap_md_line_inner(line: &MdLine, width: usize, out: &mut Vec<MdLine>) {
         if first && break_at <= index.saturating_add(hang) {
             break_at = end;
         }
-        let mut spans: Vec<(String, Style)> = Vec::new();
-        for (ch, span_style) in &cells[index..break_at] {
-            if let Some(last) = spans.last_mut()
-                && last.1 == *span_style
-            {
-                last.0.push(*ch);
-                continue;
-            }
-            spans.push((ch.to_string(), *span_style));
-        }
-        trim_trailing_whitespace(&mut spans);
+        let (spans, links) = inline::slice_spans_and_links(&cells[index..break_at]);
         let indent_u16 = u16::try_from(indent).unwrap_or(u16::MAX);
         if first
             && break_at == cells.len()
             && let Some(ref table) = line.table
         {
-            out.push(MdLine::with_table(indent_u16, spans, table.clone()));
+            out.push(MdLine::with_table_and_links(
+                indent_u16,
+                spans,
+                links,
+                table.clone(),
+            ));
         } else {
-            out.push(MdLine::spans(indent_u16, spans));
+            out.push(MdLine::spans_with_links(indent_u16, spans, links));
         }
         index = break_at;
         first = false;
         // 跳过下一物理行的行首空白。
         while index < cells.len() && cells[index].0 == ' ' {
             index += 1;
-        }
-    }
-}
-
-/// 去掉行尾空白分段（软换行产生的悬挂空格）。
-fn trim_trailing_whitespace(spans: &mut Vec<(String, Style)>) {
-    while let Some((value, _)) = spans.last() {
-        let trimmed = value.trim_end();
-        if trimmed.len() == value.len() {
-            break;
-        }
-        if trimmed.is_empty() {
-            spans.pop();
-        } else {
-            let trimmed = trimmed.to_string();
-            if let Some(last) = spans.last_mut() {
-                last.0 = trimmed;
-            }
-            break;
         }
     }
 }

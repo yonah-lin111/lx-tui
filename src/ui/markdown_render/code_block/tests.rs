@@ -524,3 +524,216 @@ fn extract_code_block_returns_raw_unwrapped_code_for_fenced_indented_and_unclose
     );
     assert_eq!(extract_code_block(&src, 4), None);
 }
+
+#[test]
+fn top_level_blocks_have_single_blank_line_between_paragraphs_headings_quotes_rules_and_tables() {
+    // 1. 段落单换行紧邻，双换行/多空行合并为 1 行空行，首尾空行不产生多余空行。
+    let para_src = "\n\n第一段第一行\n第一段第二行\n\n\n\n第二段正文\n\n";
+    let para_texts: Vec<String> = render_wrapped_code_blocks(para_src, 40)
+        .iter()
+        .map(MdLine::text)
+        .collect();
+    assert_eq!(
+        para_texts,
+        vec![
+            "第一段第一行".to_string(),
+            "第一段第二行".to_string(),
+            String::new(),
+            "第二段正文".to_string(),
+        ]
+    );
+
+    // 2. 标题、引用、分割线、表格即便源码未写空行，与前后顶层块之间也恒隔 1 行空行；
+    // 连续 `>` 行保持紧邻，隔空行的两个 `>` 块之间空 1 行。
+    let struct_src = [
+        "开场段落",
+        "## 小标题",
+        "标题下紧跟段落",
+        "> 引用第一行",
+        "> 引用第二行",
+        "",
+        "> 独立第二段引用",
+        "---",
+        "| 列一 | 列二 |",
+        "| --- | --- |",
+        "| 值一 | 值二 |",
+        "表后收尾段落",
+    ]
+    .join("\n");
+    let struct_lines = render_wrapped_code_blocks(&struct_src, 40);
+    let texts: Vec<String> = struct_lines.iter().map(MdLine::text).collect();
+
+    let heading_idx = texts
+        .iter()
+        .position(|t| t == "小标题")
+        .expect("heading line");
+    assert_eq!(texts[heading_idx - 1], "", "标题上方空 1 行");
+    assert_eq!(texts[heading_idx + 1], "", "标题下方空 1 行");
+
+    let q1_idx = texts
+        .iter()
+        .position(|t| t == "> 引用第一行")
+        .expect("quote 1");
+    assert_eq!(texts[q1_idx - 1], "", "引用块上方空 1 行");
+    assert_eq!(
+        texts[q1_idx + 1],
+        "> 引用第二行",
+        "连续引用行之间不得插空行"
+    );
+    assert_eq!(texts[q1_idx + 2], "", "两个独立引用块之间空 1 行");
+    assert_eq!(texts[q1_idx + 3], "> 独立第二段引用");
+    assert_eq!(texts[q1_idx + 4], "", "引用块与分割线之间空 1 行");
+    assert!(texts[q1_idx + 5].starts_with('─'), "分割线行");
+    assert_eq!(texts[q1_idx + 6], "", "分割线与表格之间空 1 行");
+    assert!(texts[q1_idx + 7].starts_with('┌'), "表格顶边框");
+
+    let end_para_idx = texts
+        .iter()
+        .position(|t| t == "表后收尾段落")
+        .expect("trailing paragraph");
+    assert_eq!(texts[end_para_idx - 1], "", "表格下方与段落之间空 1 行");
+}
+
+#[test]
+fn list_spacing_distinguishes_tight_loose_nested_exit_and_kind_switch() {
+    // 1. 紧凑列表（含窄屏软折行成多视觉行的项）：项间 0 空行。
+    let tight_src =
+        "- 第一条比较长的列表项在窄宽度下会自动软折行\n- 第二条紧凑列表项\n- 第三条紧凑列表项";
+    let tight_lines = render_wrapped_code_blocks(tight_src, 18);
+    assert!(
+        tight_lines.len() >= 4,
+        "第一条列表项应软折行成多行：{tight_lines:?}"
+    );
+    assert!(
+        tight_lines.iter().all(|line| !line.text().is_empty()),
+        "紧凑列表项（即使软折行）之间不得插入空行：{tight_lines:?}"
+    );
+
+    // 2. 松散列表（源码含 `\n\n`）：项间保留 1 行空行。
+    let loose_src = "- 松散项一\n\n- 松散项二\n\n- 松散项三";
+    let loose_texts: Vec<String> = render_wrapped_code_blocks(loose_src, 40)
+        .iter()
+        .map(MdLine::text)
+        .collect();
+    assert_eq!(
+        loose_texts,
+        vec![
+            "• 松散项一".to_string(),
+            String::new(),
+            "• 松散项二".to_string(),
+            String::new(),
+            "• 松散项三".to_string(),
+        ]
+    );
+
+    // 3. 父列表项 → 嵌套子列表保持 0 空行；子列表结束退回外层列表项自动补 1 行空行。
+    let nested_src = "1. 第一大点\n   - 子项 A\n   - 子项 B\n2. 第二大点";
+    let nested_texts: Vec<String> = render_wrapped_code_blocks(nested_src, 40)
+        .iter()
+        .map(MdLine::text)
+        .collect();
+    assert_eq!(
+        nested_texts,
+        vec![
+            "1. 第一大点".to_string(),
+            "• 子项 A".to_string(),
+            "• 子项 B".to_string(),
+            String::new(),
+            "2. 第二大点".to_string(),
+        ]
+    );
+
+    // 4. 同级不同类型列表切换（无序 ↔ 有序 ↔ 任务）即使源码无空行也自动补 1 行空行。
+    let switch_src = "- 无序项\n1. 有序项\n- [x] 任务项";
+    let switch_texts: Vec<String> = render_wrapped_code_blocks(switch_src, 40)
+        .iter()
+        .map(MdLine::text)
+        .collect();
+    assert_eq!(
+        switch_texts,
+        vec![
+            "• 无序项".to_string(),
+            String::new(),
+            "1. 有序项".to_string(),
+            String::new(),
+            "[x] 任务项".to_string(),
+        ]
+    );
+}
+
+#[test]
+fn assistant_report_layout_separates_sections_lists_and_paragraphs_while_non_assistant_stays_compact()
+ {
+    let src = [
+        "已通过 `codegraph` 与 `codebase-memory-mcp` 核查完毕。",
+        "",
+        "## 核查结论",
+        "",
+        "**1. AGENTS.md 的两条描述更准确，允许保留**",
+        "",
+        "两点保留：",
+        "- **`app/` 不是完全无 IO**：保留“主状态更新保持纯内存”的表述。",
+        "- **`src/db/mod.rs` 确实承载连接打开**：保留。",
+        "",
+        "**2. 规范红线与单文件体量核查**",
+        "",
+        "全仓目前共 **19 个生产文件 > 1000 行**。",
+        "",
+        "测试文件同样已与规范脱节：单文件超 1500 行的测试共 **10 个**。",
+    ]
+    .join("\n");
+
+    let assistant_texts: Vec<String> = render_wrapped_code_blocks(&src, 80)
+        .iter()
+        .map(MdLine::text)
+        .collect();
+    assert_eq!(
+        assistant_texts,
+        vec![
+            "已通过 codegraph 与 codebase-memory-mcp 核查完毕。".to_string(),
+            String::new(),
+            "核查结论".to_string(),
+            String::new(),
+            "1. AGENTS.md 的两条描述更准确，允许保留".to_string(),
+            String::new(),
+            "两点保留：".to_string(),
+            String::new(),
+            "• app/ 不是完全无 IO：保留“主状态更新保持纯内存”的表述。".to_string(),
+            "• src/db/mod.rs 确实承载连接打开：保留。".to_string(),
+            String::new(),
+            "2. 规范红线与单文件体量核查".to_string(),
+            String::new(),
+            "全仓目前共 19 个生产文件 > 1000 行。".to_string(),
+            String::new(),
+            "测试文件同样已与规范脱节：单文件超 1500 行的测试共 10 个。".to_string(),
+        ]
+    );
+
+    // 思考块与工具/汇报卡片（code_chrome == false）保持紧凑无空行。
+    for compact_lines in [
+        render_wrapped(&src, 80),
+        render_wrapped_literal_rules(&src, 80),
+    ] {
+        assert!(
+            compact_lines.iter().all(|line| !line.text().is_empty()),
+            "非助手正文不得插入块间空行：{compact_lines:?}"
+        );
+    }
+
+    // P1-3：列表项含松散续段（`\n\n` 引导）后进入下一条同级列表项，续段上下均空 1 行。
+    let loose_cont = "1. step\n\n    explanation\n2. next";
+    let loose_texts: Vec<String> = render_wrapped_code_blocks(loose_cont, 80)
+        .iter()
+        .map(MdLine::text)
+        .collect();
+    assert_eq!(
+        loose_texts,
+        vec![
+            "1. step".to_string(),
+            String::new(),
+            "explanation".to_string(),
+            String::new(),
+            "2. next".to_string(),
+        ]
+    );
+}

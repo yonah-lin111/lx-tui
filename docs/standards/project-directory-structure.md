@@ -76,9 +76,9 @@ lx-tui/
       style.rs                  语义化样式 Token（codex 风格 ANSI 配色）
       text.rs                   全部用户可见文案
       markdown.rs               编辑器 markdown 高亮（保留标记上色）
-      markdown_render.rs        面向阅读的 markdown 渲染器（折叠标记；UI 页 agent 回答与 lx 聊天共用）
-      markdown_render/inline.rs CommonMark 行内 markdown 渲染（递归嵌套强调、多反引号代码与词内下划线保护）
-      markdown_render/table.rs  markdown 表格渲染（列宽收缩、单元格行内渲染与 `<br>` 换行）
+      markdown_render.rs        面向阅读的 markdown 渲染器（折叠标记、助手正文顶层块/列表间距与超链接列区间；UI 页 agent 回答与 lx 聊天共用）
+      markdown_render/inline.rs CommonMark 行内 markdown 渲染（递归嵌套强调、多反引号代码、词内下划线保护与网页超链接 `[文字](url)` 隐藏 URL 尾巴）
+      markdown_render/table.rs  markdown 表格渲染（列宽收缩、单元格行内渲染、超链接热区映射与 `<br>` 换行）
       main_content.rs           主内容渲染：按视图分派 lx 页与终端网格（含 lx 子模块）
       main_content/lx/          lx 页渲染：欢迎页（brand.rs 品牌区）、网格（grid.rs）、输入框关联几何与浮层面板（panels.rs）、命令面板（slash.rs）、历史（history.rs（置顶用户消息行在 history/sticky.rs；本轮统计行在 history/stats.rs；卡片命中类型 CardKind/CardHit 在 history/cards.rs）；history/tool.rs 是工具步骤分派与共用行能力：方块/动词/路径/行范围/增删计数与状态，样式 token 与文案均取自 style / text::agent；history/tool/file_summary.rs 是普通工具的第二行摘要组装；history/tool/file_diff.rs 是 edit/write 的文件差异卡片——每文件 3 行预览与完整展开、连续同种调用的合并卡、增删行底色与轻量语法高亮，rows/draw 共用同一布局）；history/user_shell.rs 是本地命令卡片：与工具步骤共用直角树体（`│`/`└─`），标题 `■ Running` / `■ You run command · exit 0 · 1.2s` 不带连接符；参数区与输出区各自独立折叠（参数恒为浅黄、不响应 hover（`… N more lines` 同色）；输出折叠 dim、悬停或展开为默认前景（只有真的能展开才响应 hover），不铺灰底；`└─` 只收口参数区），运行中只给 `open task panel · live output` 一行引导，rows/draw/regions 共用同一布局）、聊天历史命中与视口入口（history_hit.rs：置顶行/回到底部、工具卡片点击面与折叠内容 hover 区（`CardHit { card, fold }`）、滚动条与行数口径）、消息底部通知（notice.rs）、状态（status.rs，覆盖绘制在窗格底边框）、聊天栏（chat_bar.rs，动态任务/阶段文案 `修复输入框布局 (3s · ↓320 tok)`——会话计划当前的 `in_progress` 步骤，无 todo 时 `Thinking...` / `Running tools...` / `Working...`；统计优先布局、长 todo 截断不挤掉统计、极窄降级 + Esc 待命提示 + 回到底部；提示类反馈已改走 main content 的 toast；组件测试在 chat_bar/tests.rs 及 tests/{label,layout,animation,stop_and_lifecycle,task_panel}.rs）、提及面板
       right_panel/todo/         右侧 Todo 面板渲染：面板布局与几何命中（todo.rs）、单条与聚合组树形连接符渲染（item.rs）、
@@ -99,6 +99,8 @@ lx-tui/
                                 队列分派、停止与下一次采样前的增量注入握手
       chat/process/rtk/         rtk 集成：外部二进制检测/命令包装（mod.rs）与
                                 内置输出过滤（builtin.rs）；agent 与本地命令共用
+      mouse/                    鼠标事件路由：按下分派（press.rs）、lx 窗格选区/卡片/超链接/生图分派（press/lx.rs）、
+                                拖拽与释放（drag.rs）、悬停与指针样式（hover.rs）、滚轮（wheel.rs）、几何命中辅助（hit.rs）
     terminal/                   终端仿真：alacritty_terminal 封装，纯内存、无 IO
     pty/                        PTY 会话：spawn / 读写 / 尺寸 / 终止
     git/                        git 查询：worktree 列表的执行与解析（唯一执行 git 命令的模块）

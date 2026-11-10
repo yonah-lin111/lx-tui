@@ -255,7 +255,34 @@ pub(super) fn paint_selection(
     }
 }
 
-/// 判定主内容区坐标 `cell`（内容行、正文列）是否落在已渲染的 Markdown 表格水平宽度内。
+/// 在已算好的 `geom` 下对单行 `cell.0` 执行一次 1 行 `Grid` 渲染，返回 `(超链接 URL, 是否落在表格内)`。
+fn probe_row_cell(
+    geom: &ContentGeom,
+    lx: &Lx,
+    cell: (i32, u16),
+    cache: &mut PaneCache,
+) -> (Option<String>, bool) {
+    if geom.rect.width == 0 || geom.total_rows == 0 || cell.0 < 0 {
+        return (None, false);
+    }
+    let Ok(row) = usize::try_from(cell.0) else {
+        return (None, false);
+    };
+    if row >= geom.total_rows {
+        return (None, false);
+    }
+    let chunk_rect = Rect::new(0, 0, geom.rect.width, 1);
+    let mut grid = Grid::new(chunk_rect);
+    render_chunk(&mut grid, chunk_rect, lx, row, cache);
+    let link = grid.link_at(cell.1, 0).map(str::to_string);
+    let in_table = grid.table_row_at(0).is_some_and(|tr| {
+        let right = tr.base_col.saturating_add(tr.line_ref.table.total_width);
+        cell.1 >= tr.base_col && cell.1 < right
+    });
+    (link, in_table)
+}
+
+#[cfg(test)]
 pub(crate) fn is_table_cell_at(
     area: Rect,
     lx: &Lx,
@@ -265,30 +292,25 @@ pub(crate) fn is_table_cell_at(
     let Some(geom) = content_geom(area, lx, cache) else {
         return false;
     };
-    if geom.rect.width == 0 || geom.total_rows == 0 || cell.0 < 0 {
-        return false;
-    }
-    let Ok(row) = usize::try_from(cell.0) else {
-        return false;
-    };
-    if row >= geom.total_rows {
-        return false;
-    }
-    let chunk_rect = Rect::new(0, 0, geom.rect.width, 1);
-    let mut grid = Grid::new(chunk_rect);
-    render_chunk(&mut grid, chunk_rect, lx, row, cache);
-    grid.table_row_at(0).is_some_and(|tr| {
-        let right = tr.base_col.saturating_add(tr.line_ref.table.total_width);
-        cell.1 >= tr.base_col && cell.1 < right
-    })
+    probe_row_cell(&geom, lx, cell, cache).1
 }
 
-/// 解析主内容区鼠标左键按下命中的内容行、列以及可折叠卡片目标（表格区域自动放行选区连击）。
+/// 是否按下用于“打开外部链接/文件”的 `Ctrl` 修饰键。
+pub(crate) fn is_open_modifier(modifiers: crossterm::event::KeyModifiers) -> bool {
+    modifiers.contains(crossterm::event::KeyModifiers::CONTROL)
+}
+
+/// 解析主内容区鼠标按下命中的内容行、列以及可折叠/可打开目标：
+/// - 按住 `Ctrl` 点击 Markdown 超链接时优先返回 [`CardTarget::OpenUrl`]；
+/// - AI Web 预览图文件名（[`CardTarget::Attachment`]）与已下载原图按钮（[`CardTarget::DownloadOriginalImage`] 的 `Downloaded` 态）
+///   仅在按住 `Ctrl` 时触发定位打开，普通左键点击退回文本选区；
+/// - 未下载态 `[↓ Download original]` 按钮保留普通左键单击即可触发下载。
 pub(crate) fn press_content_hit(
     area: Rect,
     lx: &Lx,
     column: u16,
     row: u16,
+    modifiers: crossterm::event::KeyModifiers,
     cache: &mut PaneCache,
 ) -> Option<(i32, u16, Option<crate::app::state::CardTarget>)> {
     let geom = content_geom(area, lx, cache)?;
@@ -296,13 +318,36 @@ pub(crate) fn press_content_hit(
         return None;
     }
     let (content_row, content_col) = geom.cell(column, row);
-    let card = if is_table_cell_at(area, lx, (content_row, content_col), cache) {
+    let open_mod = is_open_modifier(modifiers);
+    let (link_url, in_table) = probe_row_cell(&geom, lx, (content_row, content_col), cache);
+    if open_mod
+        && let Some(url) =
+            link_url.filter(|url| url.starts_with("https://") || url.starts_with("http://"))
+    {
+        return Some((
+            content_row,
+            content_col,
+            Some(crate::app::state::CardTarget::OpenUrl { url }),
+        ));
+    }
+    let raw_card = if in_table {
         None
     } else if lx.task.is_some() {
         super::task_agents_card_target_at(area, lx, column, row, cache)
     } else {
         super::card_target_at(area, lx, column, row, cache)
     };
+    let card = raw_card.filter(|target| match target {
+        crate::app::state::CardTarget::Attachment { .. } => open_mod,
+        crate::app::state::CardTarget::DownloadOriginalImage { attachment_id } => {
+            let downloaded = matches!(
+                lx.chat.image_originals.get(attachment_id).map(|o| &o.state),
+                Some(crate::app::state::OriginalImageDownloadState::Downloaded { .. })
+            );
+            !downloaded || open_mod
+        }
+        _ => true,
+    });
     Some((content_row, content_col, card))
 }
 

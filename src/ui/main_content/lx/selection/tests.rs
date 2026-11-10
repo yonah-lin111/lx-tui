@@ -303,7 +303,7 @@ fn adjacent_border_snapping_and_cross_block_selection_work_cleanly() {
     );
     assert_eq!(
         full_copy,
-        "● 前置说明段落\n模块\t描述\n核心\t负责调度与状态同步\n  后置总结段落"
+        "● 前置说明段落\n\n模块\t描述\n核心\t负责调度与状态同步\n\n  后置总结段落"
     );
 }
 

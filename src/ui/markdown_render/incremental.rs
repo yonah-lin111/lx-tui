@@ -13,8 +13,9 @@
 use std::sync::Arc;
 
 use super::{
-    MdLine, ParserState, fence_ticks, is_indented_code, list_item, md_bytes,
-    render_blocks_stateful, wrap_md_line,
+    MdLine, ParserState, clear_list_context, fence_ticks, heading, is_indented_code, is_rule,
+    list_code_min_indent, list_depth, list_item, md_bytes, render_blocks_stateful,
+    update_list_context, wrap_md_line,
 };
 
 /// 单个流式 Markdown 块的增量解析状态。
@@ -125,9 +126,10 @@ fn edges_hash(bytes: &[u8]) -> u64 {
 
 /// 可从当前状态安全固化的完整行数；遇到未闭合的表格/缩进代码块时停在其起始行。
 fn safe_line_count(lines: &[&str], state: &ParserState) -> usize {
-    // 围栏闭合只取决于行内容与 opener 的反引号数量，用局部标记即可。
-    let mut in_fence = state.open_fence_lang.is_some();
-    let mut open_ticks = state.open_fence_ticks;
+    // 复刻列表与围栏状态，保证 `min_indent` 与 `render_blocks_stateful` 完全同口径。
+    let mut local_state = state.clone();
+    let mut in_fence = local_state.open_fence_lang.is_some();
+    let mut open_ticks = local_state.open_fence_ticks;
     let mut index = 0;
     while index < lines.len() {
         let line = lines[index];
@@ -144,18 +146,22 @@ fn safe_line_count(lines: &[&str], state: &ParserState) -> usize {
             index += 1;
             continue;
         }
+        let item = list_item(line);
+        update_list_context(&mut local_state, item.as_ref(), line);
+        let min_indent = list_code_min_indent(&local_state);
         if let Some(ticks) = fence_ticks(line) {
             in_fence = true;
             open_ticks = ticks;
             index += 1;
             continue;
         }
-        if list_item(line).is_some() {
+        if let Some(item) = item {
+            let _ = list_depth(&mut local_state.list_indents, item.indent());
             index += 1;
             continue;
         }
-        if is_indented_code(line, 4) {
-            match indented_block_end(lines, index, 4) {
+        if is_indented_code(line, min_indent) {
+            match indented_block_end(lines, index, min_indent) {
                 Some(end) => {
                     index = end;
                     continue;
@@ -163,7 +169,13 @@ fn safe_line_count(lines: &[&str], state: &ParserState) -> usize {
                 None => return index,
             }
         }
+        if heading(trimmed).is_some() || is_rule(trimmed) {
+            clear_list_context(&mut local_state);
+            index += 1;
+            continue;
+        }
         if trimmed.trim_start().starts_with('|') {
+            clear_list_context(&mut local_state);
             let mut end = index;
             while end < lines.len() && lines[end].trim_start().starts_with('|') {
                 end += 1;
@@ -172,6 +184,11 @@ fn safe_line_count(lines: &[&str], state: &ParserState) -> usize {
                 return index;
             }
             index = end;
+            continue;
+        }
+        if trimmed.trim_start().starts_with('>') {
+            clear_list_context(&mut local_state);
+            index += 1;
             continue;
         }
         index += 1;

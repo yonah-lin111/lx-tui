@@ -524,6 +524,15 @@ pub fn toggle_agent_card(state: &mut AppState, pane: PaneId, target: CardTarget)
         let agent_id = agent_id.clone();
         return open_agent_page(state, pane, &agent_id);
     }
+    if let CardTarget::OpenUrl { url } = target {
+        if !url.is_empty() {
+            state
+                .effects
+                .push(crate::app::effects::Effect::OpenBrowser { url });
+        }
+        crate::app::update::clear_lx_selection_for(state, pane);
+        return true;
+    }
     let Some(active) = page.selected_agent_index(&target_pane.lx.agents) else {
         return false;
     };
@@ -588,7 +597,7 @@ pub fn toggle_agent_card(state: &mut AppState, pane: PaneId, target: CardTarget)
             }
         }
         // 已在函数入口处理；此处只为穷尽匹配。
-        CardTarget::OpenAgent { .. } => false,
+        CardTarget::OpenAgent { .. } | CardTarget::OpenUrl { .. } => false,
         CardTarget::UserMessage { message_id } => {
             run.chat.toggle_user_message_expanded(&message_id)
         }

@@ -81,9 +81,10 @@ fn sample_renders_full_document_without_leaking_markers() {
     assert!(joined.contains("hello"));
     // 表格内容在。
     assert!(joined.contains("Left") && joined.contains("Center") && joined.contains("Right"));
-    // 链接文字与 URL 都在。
+    // 网页链接隐藏 `(url)` 但保留标签与自动链接 URL。
     assert!(joined.contains("OpenAI"));
-    assert!(joined.contains("https://openai.com"));
+    assert!(!joined.contains("(https://openai.com)"));
+    assert!(joined.contains("https://example.com"));
     // 图片 alt 在。
     assert!(joined.contains("logo"));
 }
@@ -144,10 +145,15 @@ fn blockquote_uses_angle_prefix_not_left_bar() {
 
 #[test]
 fn inline_renders_link_with_url_and_collapses_markers() {
-    let spans = inline_spans("see [docs](https://x.io) and **bold** end");
+    let spans =
+        inline_spans("see [docs](https://x.io) and [local](docs/readme.md) and **bold** end");
     let joined: String = spans.iter().map(|(value, _)| value.as_str()).collect();
     assert!(joined.contains("docs"));
-    assert!(joined.contains("(https://x.io)"));
+    assert!(!joined.contains("(https://x.io)"), "web link hides (url)");
+    assert!(
+        joined.contains("local (docs/readme.md)"),
+        "relative path keeps (path): {joined}"
+    );
     assert!(joined.contains("bold"));
     assert!(!joined.contains('*'));
     assert!(!joined.contains('['));
@@ -397,7 +403,16 @@ fn table_cells_collapse_inline_markers() {
     assert!(!joined.contains('`'), "单元格不应泄漏反引号：{joined}");
     assert!(joined.contains("文本对话"));
     assert!(joined.contains("链接"));
-    assert!(joined.contains("(https://x.io)"), "链接显示 URL：{joined}");
+    assert!(
+        !joined.contains("(https://x.io)"),
+        "表格内网页链接隐藏 (url)：{joined}"
+    );
+    let link_row = lines
+        .iter()
+        .find(|line| line.text().contains("链接"))
+        .expect("link row");
+    assert_eq!(link_row.links.len(), 1);
+    assert_eq!(link_row.links[0].url, "https://x.io");
     // 加粗样式确实落在「文本对话」分段上。
     let bold_cell = lines
         .iter()
@@ -822,7 +837,9 @@ fn nested_inline_code_links_and_emphasis_render_without_leaking_delimiters() {
         "inline code inside bold must use inline_code style: {:?}",
         lines[0].spans
     );
-    assert_eq!(lines[1].text(), "• 官方文档 (https://example.com)");
+    assert_eq!(lines[1].text(), "• 官方文档");
+    assert_eq!(lines[1].links.len(), 1);
+    assert_eq!(lines[1].links[0].url, "https://example.com");
     assert_eq!(lines[2].text(), "• bold italic");
     assert!(
         lines[2]
@@ -865,4 +882,105 @@ fn ordered_task_list_continuations_and_indented_fences_keep_exact_columns() {
         Some("let x = 1;"),
         "indented fenced code block inside list must strip fence indent"
     );
+}
+
+#[test]
+fn web_links_preserve_link_spans_across_soft_wraps_and_strip_trailing_punctuation_on_bare_urls() {
+    let src = "• 受局势缓和影响，国际原油价格出现明显回落 [金十数据整理：昨日今晨重要新闻汇总（2026-11-10）](https://flash.jin10.com/detail/20261110063513378800)。\n• 详情见 https://example.com/path(1)。";
+    let lines = render_wrapped_code_blocks(src, 34);
+    let joined = lines_text(&lines);
+    assert!(
+        !joined.contains("flash.jin10.com"),
+        "网页命名链接必须隐藏 (url)：{joined}"
+    );
+    let jin10_lines: Vec<&MdLine> = lines
+        .iter()
+        .filter(|line| {
+            line.links
+                .iter()
+                .any(|l| l.url == "https://flash.jin10.com/detail/20261110063513378800")
+        })
+        .collect();
+    assert!(
+        jin10_lines.len() >= 2,
+        "长链接标题软换行后每一行都应保留超链接区间：{lines:?}"
+    );
+
+    let bare_line = lines
+        .iter()
+        .find(|line| line.text().contains("https://example.com/path(1)"))
+        .expect("bare url line");
+    assert_eq!(bare_line.links.len(), 1);
+    assert_eq!(
+        bare_line.links[0].url, "https://example.com/path(1)",
+        "裸 URL 应保留配对括号并剥离句末中文句号"
+    );
+}
+
+#[test]
+fn review_regressions_table_shrink_with_hidden_cjk_url_heading_links_and_bare_url_cjk_boundary() {
+    use ratatui::style::Modifier;
+
+    // P0-1 & P2-1：短标签隐藏含中文路径的 URL 在窄视口收缩列宽时不 panic，且右侧填充空白不带下划线。
+    let table_src = "| 序号 | 说明 |\n| --- | --- |\n| [1](https://example.com/中文路径) | 这是一段非常长的说明文字用于触发列宽收缩 |";
+    let table_lines = render_wrapped_code_blocks(table_src, 26);
+    assert!(!table_lines.is_empty());
+    let link_row = table_lines
+        .iter()
+        .find(|line| !line.links.is_empty())
+        .expect("table link row");
+    assert_eq!(link_row.links[0].url, "https://example.com/中文路径");
+    for (text, span_style) in &link_row.spans {
+        if text.trim().is_empty() && !text.is_empty() {
+            assert!(
+                !span_style.add_modifier.contains(Modifier::UNDERLINED),
+                "单元格空白填充列不得继承下划线：{:?}",
+                link_row.spans
+            );
+        }
+    }
+
+    // P1-2：标题内网页链接隐藏 (url) 并保留 MdLinkSpan。
+    let heading_lines =
+        render_wrapped_code_blocks("### 参考：[Rust Book](https://doc.rust-lang.org)", 80);
+    assert_eq!(heading_lines.len(), 1);
+    assert_eq!(heading_lines[0].text(), "参考：Rust Book");
+    assert_eq!(heading_lines[0].links.len(), 1);
+    assert_eq!(heading_lines[0].links[0].url, "https://doc.rust-lang.org");
+
+    // P2-2 & P2-3：裸 URL 紧接中文标点与正文时不吞入后文，相邻链接保持独立分段。
+    let inline_lines = render_wrapped_code_blocks(
+        "详见 https://example.com/a，后文不断开；以及 [A](https://a.com)[B](https://b.com)",
+        80,
+    );
+    assert_eq!(inline_lines[0].links.len(), 3);
+    assert_eq!(inline_lines[0].links[0].url, "https://example.com/a");
+    assert_eq!(inline_lines[0].links[1].url, "https://a.com");
+    assert_eq!(inline_lines[0].links[2].url, "https://b.com");
+    assert!(
+        inline_lines[0].spans.iter().any(|(text, _)| text == "A")
+            && inline_lines[0].spans.iter().any(|(text, _)| text == "B"),
+        "相邻不同 URL 的链接分段不得合并：{:?}",
+        inline_lines[0].spans
+    );
+
+    // P1-5：列表后接带缩进标题/引用及 4 空格缩进代码时，extract_code_block 与渲染块序号严格一致。
+    let code_src = "- item\n  ## heading\n    let a = 1;\n> quote\n    > redirect";
+    assert_eq!(
+        extract_code_block(code_src, 0).as_deref(),
+        Some("let a = 1;")
+    );
+    assert_eq!(
+        extract_code_block(code_src, 1).as_deref(),
+        Some("> redirect")
+    );
+
+    // P2-5：链接标题内含反引号 `]` 以及外层括号含空格说明包裹内嵌链接。
+    let nested_lines = render_wrapped_code_blocks(
+        "参见 [`]`](https://example.com/bracket) 与 [注意](详见 [官方文档](https://example.com/docs))",
+        80,
+    );
+    assert_eq!(nested_lines[0].links.len(), 2);
+    assert_eq!(nested_lines[0].links[0].url, "https://example.com/bracket");
+    assert_eq!(nested_lines[0].links[1].url, "https://example.com/docs");
 }

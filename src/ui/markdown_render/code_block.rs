@@ -42,6 +42,7 @@ pub(super) fn top_border_line(width: Option<usize>) -> MdLine {
             text::CODE_BLOCK_TOP_BORDER.repeat(cols),
             style::md_read_rule(),
         )],
+        links: Vec::new(),
         table: None,
         code: Some(CodeLineKind::TopBorder),
     }
@@ -77,6 +78,7 @@ pub(super) fn header_line(lang: &str, block_index: usize, width: Option<usize>) 
             indent: 0,
             hang: 0,
             spans,
+            links: Vec::new(),
             table: None,
             code: Some(CodeLineKind::Header {
                 block_index,
@@ -115,6 +117,7 @@ pub(super) fn header_line(lang: &str, block_index: usize, width: Option<usize>) 
         indent: 0,
         hang: 0,
         spans,
+        links: Vec::new(),
         table: None,
         code: Some(CodeLineKind::Header {
             block_index,
@@ -138,6 +141,7 @@ pub(super) fn render_code_line(
         indent: 0,
         hang: 0,
         spans,
+        links: Vec::new(),
         table: None,
         code: code_chrome.then_some(CodeLineKind::Body),
     });
@@ -342,7 +346,8 @@ pub fn extract_code_block(source: &str, target_index: usize) -> Option<String> {
             index += 1;
             continue;
         }
-        if item.is_some() {
+        if let Some(item) = item {
+            let _ = super::list_depth(&mut list_state.list_indents, item.indent());
             index += 1;
             continue;
         }
@@ -371,16 +376,21 @@ pub fn extract_code_block(source: &str, target_index: usize) -> Option<String> {
             current_block += 1;
             continue;
         }
+        if super::heading(trimmed).is_some() || super::is_rule(trimmed) {
+            super::clear_list_context(&mut list_state);
+            index += 1;
+            continue;
+        }
         if trimmed.trim_start().starts_with('|') {
+            super::clear_list_context(&mut list_state);
             while index < source_lines.len() && source_lines[index].trim_start().starts_with('|') {
                 index += 1;
             }
             continue;
         }
         if trimmed.trim_start().starts_with('>') {
-            while index < source_lines.len() && source_lines[index].trim_start().starts_with('>') {
-                index += 1;
-            }
+            super::clear_list_context(&mut list_state);
+            index += 1;
             continue;
         }
         index += 1;

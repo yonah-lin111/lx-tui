@@ -729,12 +729,20 @@ fn draw_markdown(
                 mark.style(StepKind::Body, false),
             );
         }
-        let mut cx = rect
+        let base_x = rect
             .x
             .saturating_add(STEP_GUTTER)
             .saturating_add(line.indent);
+        let mut cx = base_x;
         if let Some(ref line_ref) = line.table {
             grid.set_table_row(cx, y, line_ref.clone());
+        }
+        for link in &line.links {
+            let start_x = base_x.saturating_add(link.start_col);
+            let end_x = base_x.saturating_add(link.end_col).min(rect.right());
+            if start_x < end_x {
+                grid.set_link_span(start_x, y, end_x - start_x, &link.url);
+            }
         }
         if let Some(code_kind) = line.code {
             let code_row = match code_kind {
@@ -851,12 +859,20 @@ fn draw_thinking(
                 available,
             );
         }
-        let mut cx = rect
+        let base_x = rect
             .x
             .saturating_add(body_indent)
             .saturating_add(line.indent);
+        let mut cx = base_x;
         if let Some(ref line_ref) = line.table {
             grid.set_table_row(cx, y, line_ref.clone());
+        }
+        for link in &line.links {
+            let start_x = base_x.saturating_add(link.start_col);
+            let end_x = base_x.saturating_add(link.end_col).min(rect.right());
+            if start_x < end_x {
+                grid.set_link_span(start_x, y, end_x - start_x, &link.url);
+            }
         }
         for (value, span_style) in &line.spans {
             let cell_style = span_style.patch(style::muted());

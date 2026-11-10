@@ -169,3 +169,45 @@ fn randomized_block_sequences_match_full_render() {
         assert!(checked > 10, "必须覆盖足够多的流式前缀");
     }
 }
+
+/// 块间距与列表松紧/嵌套回退/引用块在任意字节流式边界下与全量渲染严格一致。
+#[test]
+fn block_and_list_spacing_transitions_match_full_render_at_every_char_boundary() {
+    let sample = "\
+开场结论段落第一行\n\
+开场结论段落第二行\n\
+\n\
+## 核查结论\n\
+\n\
+**1. 第一部分标题段落**\n\
+两点保留：\n\
+- 紧凑项一\n\
+  紧凑项一的缩进续行\n\
+- 紧凑项二\n\
+  - 子列表项 A\n\
+  - 子列表项 B\n\
+- 子列表退回外层项\n\
+1. 同级切换有序项\n\
+\n\
+2. 松散有序项二\n\
+\n\
+    有序项二的缩进续段\n\
+\n\
+> 引用块一第一行\n\
+> 引用块一第二行\n\
+\n\
+> 引用块二独立成块\n\
+\n\
+---\n\
+| 模块 | 行数 |\n\
+| --- | ---: |\n\
+| app | 512 |\n\
+收尾总结段落\n";
+    for width in [80, 32, 16] {
+        assert_equivalent(sample, width);
+    }
+
+    // P1-4：列表后接 4 空格缩进表格时，safe_line_count 同步列表栈而不将表头误判为缩进代码块提前固化。
+    let list_indented_table = "- 列表项\n    | A | B |\n  | --- | --- |\n  | 1 | 2 |\n";
+    assert_equivalent(list_indented_table, 60);
+}

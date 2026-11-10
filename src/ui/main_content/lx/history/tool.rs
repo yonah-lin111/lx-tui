@@ -193,14 +193,23 @@ pub(super) fn md_line_segments(line: crate::ui::markdown_render::MdLine) -> Vec<
         ));
     }
     let mut pending_table = line.table;
+    let mut col = 0u16;
     for (value, span_style) in line.spans {
+        let cols = u16::try_from(value.width()).unwrap_or(u16::MAX);
+        let next_col = col.saturating_add(cols);
         if !value.is_empty() {
             let mut seg = Segment::new(value, span_style.patch(style::muted()));
             if let Some(table_ref) = pending_table.take() {
                 seg.table = Some(table_ref);
             }
+            seg.link = line
+                .links
+                .iter()
+                .find(|l| col >= l.start_col && col < l.end_col)
+                .map(|l| l.url.clone());
             segments.push(seg);
         }
+        col = next_col;
     }
     segments
 }
@@ -594,6 +603,7 @@ pub(crate) struct Segment {
     pub(crate) text: String,
     pub(crate) style: Style,
     pub(crate) table: Option<crate::ui::markdown_render::TableLineRef>,
+    pub(crate) link: Option<String>,
 }
 
 impl Segment {
@@ -602,6 +612,7 @@ impl Segment {
             text: text.into(),
             style,
             table: None,
+            link: None,
         }
     }
 
@@ -791,8 +802,12 @@ pub(super) fn put_segments(grid: &mut Grid, x: u16, y: u16, width: u16, segments
         if let Some(ref line_ref) = segment.table {
             grid.set_table_row(cx, y, line_ref.clone());
         }
+        let cols = u16::try_from(segment.cols()).unwrap_or(u16::MAX);
+        if let Some(ref url) = segment.link {
+            grid.set_link_span(cx, y, cols.min(remaining), url);
+        }
         grid.put_clipped(cx, y, &segment.text, segment.style, remaining);
-        cx = cx.saturating_add(u16::try_from(segment.cols()).unwrap_or(u16::MAX));
+        cx = cx.saturating_add(cols);
     }
 }
 
@@ -814,6 +829,7 @@ pub(super) fn wrap_spans(spans: &[Segment], width: usize) -> Vec<Vec<Segment>> {
                 if !buf.is_empty() {
                     let mut seg = Segment::new(std::mem::take(&mut buf), source.style);
                     seg.table = pending_table.take();
+                    seg.link.clone_from(&source.link);
                     current.push(seg);
                 }
                 rows.push(std::mem::take(&mut current));
@@ -825,6 +841,7 @@ pub(super) fn wrap_spans(spans: &[Segment], width: usize) -> Vec<Vec<Segment>> {
         if !buf.is_empty() {
             let mut seg = Segment::new(buf, source.style);
             seg.table = pending_table.take();
+            seg.link.clone_from(&source.link);
             current.push(seg);
         }
     }

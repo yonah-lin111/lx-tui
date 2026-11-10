@@ -455,12 +455,11 @@ pub enum CardTarget {
         paste_id: u64,
         occurrence: usize,
     },
+    /// Markdown 超链接（`Ctrl + 点击` 在系统默认浏览器中打开该 URL）。
+    OpenUrl { url: String },
 }
 
-/// 卡片内可独立折叠的区域。
-///
-/// 命令卡片把「命令参数」与「命令输出」拆成两块：各自的点击面与折叠状态互不影响，
-/// 点其中一块不会连带另一块。其余卡片只有一个整体（[`Self::Body`]）。
+/// 卡片内可独立折叠的区域：命令卡片拆分为参数区与输出区，其余卡片只有 [`Self::Body`]。
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum CardSection {
     /// 卡片主体（文件差异 / 普通工具详情 / 命令参数）。
