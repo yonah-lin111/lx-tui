@@ -84,7 +84,7 @@ pub fn apply_trust_decision(state: &mut AppState, granted: bool) {
 }
 
 /// 取消操作的工作区告警 toast：弹窗已关闭，按打开弹窗的源容器锚定（侧栏来源维持全局 `None`）。
-fn toast_cancelled(state: &mut AppState, anchor: Option<crate::layout::PaneId>, message: &str) {
+fn toast_cancelled(state: &mut AppState, anchor: Option<crate::tiling::PaneId>, message: &str) {
     let toast = Toast::new(ToastKind::Danger, message, anchor, Instant::now())
         .with_title(text::TOAST_WORKSPACE_TITLE);
     super::show_toast_at(state, anchor, toast);

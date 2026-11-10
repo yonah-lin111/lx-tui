@@ -88,6 +88,7 @@ pub fn render(frame: &mut Frame<'_>, screen: Rect, state: &AppState) -> Option<(
             None
         }
         Overlay::Connect(panel) => render_connect(frame, screen, panel),
+        Overlay::ConfirmQuit => dialog::render_quit_confirm(frame, screen),
     }
 }
 

@@ -15,7 +15,7 @@ pub fn prompt_tree_visible_rows(state: &AppState) -> usize {
             .prompt
             .size()
             .1
-            .saturating_sub(crate::layout::PROMPT_TREE_HEADER_HEIGHT)
+            .saturating_sub(crate::ui::right_panel::prompt::geometry::PROMPT_TREE_HEADER_HEIGHT)
             .max(1),
     )
 }

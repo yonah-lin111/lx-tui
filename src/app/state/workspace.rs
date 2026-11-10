@@ -4,7 +4,7 @@ use std::collections::{BTreeMap, HashMap};
 use std::path::{Path, PathBuf};
 
 use crate::app::prompt::{Prompt, PromptPanel};
-use crate::layout::PaneId;
+use crate::tiling::PaneId;
 
 use super::AppState;
 use super::pane::Tab;

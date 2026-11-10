@@ -46,7 +46,7 @@ fn panel_row(
     view: &crate::ui::layout::ViewLayout,
     y: u16,
 ) -> String {
-    (view.prompt.x..view.prompt.right())
+    (view.right_panel.x..view.right_panel.right())
         .map(|x| buffer[(x, y)].symbol())
         .collect()
 }
@@ -56,7 +56,7 @@ fn tabs_render_on_top_border_with_accent_active() {
     let state = AppState::demo();
     let view = view_for(&state);
     let buffer = render_buffer(&state);
-    let rects = tab_rects(view.prompt);
+    let rects = tab_rects(view.right_panel);
     assert_eq!(rects.len(), 2, "宽度充足时两个 tab 都在: {rects:?}");
     let (prompt_tab, prompt_rect) = rects[0];
     let (todo_tab, todo_rect) = rects[1];
@@ -64,7 +64,7 @@ fn tabs_render_on_top_border_with_accent_active() {
     assert_eq!(todo_tab, RightTab::Todo);
 
     // 顶边框整行含两个 tab 文案。
-    let border = panel_row(&buffer, &view, view.prompt.y);
+    let border = panel_row(&buffer, &view, view.right_panel.y);
     assert!(border.contains(text::RIGHT_TAB_PROMPT_LABEL), "{border:?}");
     assert!(border.contains(text::RIGHT_TAB_TODO_LABEL), "{border:?}");
 
@@ -131,9 +131,9 @@ fn tabs_stay_on_border_and_follow_active_tab_on_todo() {
     state.right_tab = RightTab::Todo;
     let view = view_for(&state);
     let buffer = render_buffer(&state);
-    let rects = tab_rects(view.prompt);
+    let rects = tab_rects(view.right_panel);
     assert_eq!(rects.len(), 2, "Todo 下两个 tab 仍应绘制: {rects:?}");
-    let border = panel_row(&buffer, &view, view.prompt.y);
+    let border = panel_row(&buffer, &view, view.right_panel.y);
     assert!(border.contains(text::RIGHT_TAB_PROMPT_LABEL), "{border:?}");
     assert!(border.contains(text::RIGHT_TAB_TODO_LABEL), "{border:?}");
 
@@ -166,7 +166,7 @@ fn hovered_inactive_tab_uses_hover_style() {
     state.right_tab_hover = Some(RightTab::Todo);
     let view = view_for(&state);
     let buffer = render_buffer(&state);
-    let todo = tab_rects(view.prompt)
+    let todo = tab_rects(view.right_panel)
         .into_iter()
         .find(|(tab, _)| *tab == RightTab::Todo)
         .map(|(_, rect)| rect)
@@ -196,12 +196,12 @@ fn tabs_drop_trailing_when_narrow() {
     let mut state = AppState::demo();
     state.prompt_width = 12;
     let view = view_for(&state);
-    assert_eq!(view.prompt.width, 12, "布局至少保留最小窗格宽度");
-    let rects = tab_rects(view.prompt);
+    assert_eq!(view.right_panel.width, 12, "布局至少保留最小窗格宽度");
+    let rects = tab_rects(view.right_panel);
     assert_eq!(rects.len(), 1, "只保留 Prompt: {rects:?}");
     assert_eq!(rects[0].0, RightTab::Prompt);
     let buffer = render_buffer(&state);
-    let border = panel_row(&buffer, &view, view.prompt.y);
+    let border = panel_row(&buffer, &view, view.right_panel.y);
     assert!(border.contains(text::RIGHT_TAB_PROMPT_LABEL), "{border:?}");
     assert!(
         !border.contains(text::RIGHT_TAB_TODO_LABEL),
@@ -211,10 +211,10 @@ fn tabs_drop_trailing_when_narrow() {
     // 连 Prompt 都放不下：整排 tab 不画，顶边框两端圆角仍在。
     state.prompt_width = 10;
     let view = view_for(&state);
-    assert_eq!(view.prompt.width, 10);
-    assert!(tab_rects(view.prompt).is_empty(), "放不下任何 tab");
+    assert_eq!(view.right_panel.width, 10);
+    assert!(tab_rects(view.right_panel).is_empty(), "放不下任何 tab");
     let buffer = render_buffer(&state);
-    let border = panel_row(&buffer, &view, view.prompt.y);
+    let border = panel_row(&buffer, &view, view.right_panel.y);
     assert!(!border.contains(text::RIGHT_TAB_PROMPT_LABEL), "{border:?}");
     assert!(!border.contains(text::RIGHT_TAB_TODO_LABEL), "{border:?}");
     assert!(border.starts_with('┌'), "左直角仍在: {border:?}");
@@ -229,7 +229,7 @@ fn tabs_never_touch_the_right_corner() {
         let mut state = AppState::demo();
         state.prompt_width = width;
         let view = view_for(&state);
-        let panel = view.prompt;
+        let panel = view.right_panel;
         let buffer = render_buffer(&state);
         let row: Vec<String> = (panel.x..panel.right())
             .map(|x| buffer[(x, panel.y)].symbol().to_string())
@@ -260,7 +260,7 @@ fn tabs_never_touch_the_right_corner() {
 fn tab_hit_areas() {
     let state = AppState::demo();
     let view = view_for(&state);
-    let panel = view.prompt;
+    let panel = view.right_panel;
     let row = panel.y;
     let rects = tab_rects(panel);
     assert_eq!(rects.len(), 2);
@@ -302,10 +302,10 @@ fn todo_panel_renders_toolbar_and_placeholder() {
     state.right_tab = RightTab::Todo;
     let view = view_for(&state);
     let buffer = render_buffer(&state);
-    let inner = crate::layout::pane_inner_rect(view.prompt);
+    let inner = crate::tiling::pane_inner_rect(view.right_panel);
 
     // 工具栏行：左端是 `[new]`，不再整行空白。
-    let new_button = todo::button_rect(view.prompt, crate::app::tooltip::TodoButton::New)
+    let new_button = todo::button_rect(view.right_panel, crate::app::tooltip::TodoButton::New)
         .expect("[new] visible");
     let label: String = (new_button.x..new_button.right())
         .map(|x| buffer[(x, new_button.y)].symbol())
@@ -313,13 +313,13 @@ fn todo_panel_renders_toolbar_and_placeholder() {
     assert_eq!(label, text::TODO_NEW_LABEL);
 
     // 分割线行：两端 `├` / `┤`，左侧内嵌所选年月日，右侧内嵌当前周跨度。
-    let divider_y = inner.y + crate::layout::PROMPT_TOOLBAR_HEIGHT;
+    let divider_y = inner.y + crate::ui::right_panel::prompt::geometry::PROMPT_TOOLBAR_HEIGHT;
     assert_eq!(
-        buffer[(view.prompt.x, divider_y)].symbol(),
+        buffer[(view.right_panel.x, divider_y)].symbol(),
         text::DIVIDER_LEFT_JOIN
     );
     assert_eq!(
-        buffer[(view.prompt.right() - 1, divider_y)].symbol(),
+        buffer[(view.right_panel.right() - 1, divider_y)].symbol(),
         text::DIVIDER_RIGHT_JOIN
     );
     let divider_text: String = (inner.x..inner.right())
@@ -332,7 +332,7 @@ fn todo_panel_renders_toolbar_and_placeholder() {
     );
 
     // 空列表：内容区首行是占位文案，其余行空白。
-    let list = todo::list_rect(view.prompt);
+    let list = todo::list_rect(view.right_panel);
     let first_row: String = (list.x..list.right())
         .map(|x| buffer[(x, list.y)].symbol())
         .collect();
@@ -349,7 +349,7 @@ fn bottom_identity_survives_tab_switch() {
     let mut state = AppState::demo();
     state.prompt_width = 56;
     let view = view_for(&state);
-    let bottom_y = view.prompt.bottom() - 1;
+    let bottom_y = view.right_panel.bottom() - 1;
     let identity = state.workspaces[0].identity();
 
     let prompt_bottom = panel_row(&render_buffer(&state), &view, bottom_y);
@@ -378,9 +378,9 @@ fn edit_border_stays_grey_regardless_of_template_status() {
         .prompt
         .set_text("&&& addTemplate --start\n{title: T}\n&&& addTemplate --end in_progress");
     let view = view_for(&state);
-    let panel = view.prompt;
+    let panel = view.right_panel;
     let buffer = render_buffer(&state);
-    let divider_y = crate::layout::prompt_divider_rect(panel)
+    let divider_y = crate::ui::right_panel::prompt::geometry::prompt_divider_rect(panel)
         .expect("divider")
         .y;
     let bottom_y = panel.bottom() - 1;
@@ -418,14 +418,15 @@ fn title_row_colors_page_title_by_template_status_in_editor_view() {
         .prompt
         .set_text("&&& addTemplate --start\n{title: T}\n&&& addTemplate --end in_progress");
     let view = view_for(&state);
-    let panel = view.prompt;
-    let row_y = crate::layout::prompt_divider_rect(panel)
+    let panel = view.right_panel;
+    let row_y = crate::ui::right_panel::prompt::geometry::prompt_divider_rect(panel)
         .expect("divider")
         .y;
     let buffer = render_buffer(&state);
     let row = panel_row(&buffer, &view, row_y);
     assert!(!row.contains("[run]"), "不绘制 [run] 按钮: {row}");
-    let rect = crate::ui::prompt_frame::prompt_status_rect(panel, &state).expect("page title rect");
+    let rect = crate::ui::right_panel::prompt::frame::prompt_status_rect(panel, &state)
+        .expect("page title rect");
     assert_eq!(
         buffer[(rect.x, row_y)].fg,
         Color::Yellow,

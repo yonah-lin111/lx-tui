@@ -142,7 +142,7 @@ fn missing_pane_is_rejected_without_panicking() {
     let (mut state, _key) = streaming_state();
     let mut streams = ChatStreams::default();
     let ghost = RequestKey {
-        pane: crate::layout::PaneId::alloc(),
+        pane: crate::tiling::PaneId::alloc(),
         session: "sess-ask".into(),
         generation: 1,
     };

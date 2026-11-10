@@ -16,7 +16,7 @@ use crate::chat::agent::{
 };
 use crate::db::chat::{ModelSnapshot, PersistedInputItem, SubagentQueueState, SubagentRecord};
 use crate::db::{Database, new_external_id};
-use crate::layout::PaneId;
+use crate::tiling::PaneId;
 
 /// 根会话树快照：根会话、调用者深度/路径与整树子 agent 记录。
 pub(super) struct SubagentTree {

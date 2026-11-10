@@ -10,8 +10,11 @@ use crate::app::state::{AppState, PaneView, RightTab};
 use crate::config::Config;
 use crate::event::TerminalEvent;
 use crate::event::session::Geometry;
-use crate::layout::{self, PaneId};
+use crate::tiling::{self, PaneId};
 use crate::ui;
+use crate::ui::right_panel::prompt::geometry::{
+    PromptToolbarButton, prompt_text_rect, prompt_toolbar_button_rect,
+};
 
 pub(crate) fn geometry(state: &AppState, config: &Config, screen: Rect) -> Geometry {
     let view = ui::layout::compute(
@@ -27,15 +30,15 @@ pub(crate) fn geometry(state: &AppState, config: &Config, screen: Rect) -> Geome
     let mut rects = if state.prompt_left && state.panes_collapsed {
         Vec::new()
     } else {
-        layout::pane_rects(
+        tiling::pane_rects(
             &state.active_tab().layout,
-            view.panes,
+            view.main_content,
             config.min_pane_width,
             config.min_pane_height,
         )
     };
     if !state.prompt_collapsed {
-        rects.push((state.prompt.id(), view.prompt));
+        rects.push((state.prompt.id(), view.right_panel));
     }
     Geometry {
         screen,
@@ -88,9 +91,9 @@ pub(crate) fn pane_rects_of(
     geo: &Geometry,
     config: &Config,
 ) -> Vec<(PaneId, Rect)> {
-    layout::pane_rects(
+    tiling::pane_rects(
         &state.active_tab().layout,
-        geo.view.panes,
+        geo.view.main_content,
         config.min_pane_width,
         config.min_pane_height,
     )
@@ -144,7 +147,7 @@ pub(crate) fn create_agent_tabs(state: &mut AppState, count: usize) {
 
 /// 容器顶边框上指定 tab 的矩形（按几何取，避免硬编码列）。
 pub(crate) fn right_tab_rect(geo: &Geometry, tab: RightTab) -> Rect {
-    ui::right_panel::tab_rects(geo.view.prompt)
+    ui::right_panel::tab_rects(geo.view.right_panel)
         .into_iter()
         .find_map(|(candidate, rect)| (candidate == tab).then_some(rect))
         .expect("right tab visible")
@@ -157,7 +160,7 @@ pub(crate) fn pane_inner(geo: &Geometry, pane: PaneId) -> Rect {
         .iter()
         .find(|(id, _)| *id == pane)
         .expect("pane rect");
-    layout::pane_inner_rect(*rect)
+    tiling::pane_inner_rect(*rect)
 }
 
 /// 给窗格塞满回滚历史，并滚回顶部 5 行。
@@ -245,7 +248,7 @@ pub(crate) fn ask_option_point(state: &AppState, pane: PaneId, geo: &Geometry) -
         .find(|(id, _)| *id == pane)
         .map(|(_, rect)| *rect)
         .expect("pane rect");
-    let inner = layout::pane_inner_rect(rect);
+    let inner = tiling::pane_inner_rect(rect);
     let lx = &state.pane_anywhere(pane).expect("pane").lx;
     let area = ui::main_content::lx::ask_rect(inner, lx).expect("ask rect");
     for row in area.y..area.bottom() {
@@ -262,7 +265,7 @@ pub(crate) fn ask_option_point(state: &AppState, pane: PaneId, geo: &Geometry) -
 
 /// 让 prompt 文本溢出视口：按视口尺寸 resize 后写入两倍视口高度的行。
 pub(crate) fn overflow_prompt(state: &mut AppState, view: &ui::layout::ViewLayout) {
-    let text = crate::layout::prompt_text_rect(view.prompt);
+    let text = crate::ui::right_panel::prompt::geometry::prompt_text_rect(view.right_panel);
     state.prompt.resize(text.width, text.height);
     for _ in 0..=usize::from(text.height) {
         state.prompt.insert_str("line\n");
@@ -271,9 +274,14 @@ pub(crate) fn overflow_prompt(state: &mut AppState, view: &ui::layout::ViewLayou
 }
 
 /// prompt 工具栏按钮矩形（按几何取，避免硬编码列）。
-pub(crate) fn toolbar_button(geo: &Geometry, button: layout::PromptToolbarButton) -> Rect {
-    layout::prompt_toolbar_button_rect(geo.view.prompt, button, PromptMode::Editor, Some("1/2"))
-        .expect("toolbar button visible")
+pub(crate) fn toolbar_button(geo: &Geometry, button: PromptToolbarButton) -> Rect {
+    prompt_toolbar_button_rect(
+        geo.view.right_panel,
+        button,
+        PromptMode::Editor,
+        Some("1/2"),
+    )
+    .expect("toolbar button visible")
 }
 
 /// 构造已进入子目录的引用文件夹搜索弹窗（Ctrl/Cmd+Z 回退的前置）。
@@ -389,7 +397,7 @@ pub(crate) fn prompt_tree_click(
         .prompt_panel
         .tree
         .replace(folders, items);
-    let area = layout::prompt_text_rect(geo.view.prompt);
+    let area = prompt_text_rect(geo.view.right_panel);
     let index = state.workspaces[0]
         .prompt_panel
         .rows()
@@ -478,7 +486,7 @@ pub(crate) fn template_button_state() -> (AppState, Config, Geometry, Rect) {
         crate::app::actions::EditorCommand::InsertText(content.into()),
     );
     let geo = geometry(&state, &config, Rect::new(0, 0, 220, 30));
-    let area = crate::layout::prompt_text_rect(geo.view.prompt);
+    let area = crate::ui::right_panel::prompt::geometry::prompt_text_rect(geo.view.right_panel);
     (state, config, geo, area)
 }
 

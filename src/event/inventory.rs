@@ -15,9 +15,9 @@ use crate::app::toast::Toast;
 use crate::app::update;
 use crate::config::Config;
 use crate::db::service::Persistence;
-use crate::layout::PaneId;
 use crate::mcp::{McpEvent, ServerStatus};
 use crate::settings::service::{McpStatusView, SettingsEvent, SettingsService};
+use crate::tiling::PaneId;
 use crate::ui::text;
 
 use super::AppEvent;

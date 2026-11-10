@@ -34,10 +34,10 @@ use crate::app::update;
 use crate::chat::process::ProcessUiEvent;
 use crate::config::Config;
 use crate::db::service::Persistence;
-use crate::layout::PaneId;
 use crate::mcp::McpEvent;
 use crate::pty::PtySession;
 use crate::settings::service::{McpStatusView, SettingsEvent, SettingsService};
+use crate::tiling::PaneId;
 use crate::tui::Tui;
 use crate::ui;
 
@@ -527,7 +527,7 @@ async fn run_loop(
             update::resolve_task_output_visible(state, &geometry.rects);
             update::resolve_task_agents_visible(state, &geometry.rects, &mut ui_cache);
             update::resolve_ask_list_window(state, &geometry.rects);
-            update::resolve_todo_viewport(state, geometry.view.prompt);
+            update::resolve_todo_viewport(state, geometry.view.right_panel);
             ui_cache.begin_frame();
             tui.draw(|frame| ui::render_cached(frame, state, &config, &mut ui_cache))?;
             dirty = false;

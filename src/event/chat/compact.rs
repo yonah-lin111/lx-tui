@@ -16,7 +16,7 @@ use crate::app::state::AppState;
 use crate::chat::compact::{self, CompactInput};
 use crate::db::service::Persistence;
 use crate::event::AppEvent;
-use crate::layout::PaneId;
+use crate::tiling::PaneId;
 
 /// 一次压缩的最终结果（回投到唯一事件循环）。
 #[derive(Debug, Clone, PartialEq, Eq)]

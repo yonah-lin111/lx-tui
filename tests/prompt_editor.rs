@@ -5,8 +5,9 @@ use lx_tui::app::markdown::MentionEntry;
 use lx_tui::app::state::{AppState, PaneView};
 use lx_tui::app::update;
 use lx_tui::config::Config;
-use lx_tui::layout;
+use lx_tui::tiling;
 use lx_tui::ui;
+use lx_tui::ui::right_panel::prompt::geometry;
 use ratatui::Terminal;
 use ratatui::backend::TestBackend;
 use ratatui::layout::{Position, Rect};
@@ -28,13 +29,13 @@ fn ready_state() -> (AppState, Config, ui::layout::ViewLayout) {
         state.prompt_left,
         state.panes_collapsed,
     );
-    let mut rects = layout::pane_rects(
+    let mut rects = tiling::pane_rects(
         &state.active_tab().layout,
-        view.panes,
+        view.main_content,
         config.min_pane_width,
         config.min_pane_height,
     );
-    rects.push((state.prompt.id(), view.prompt));
+    rects.push((state.prompt.id(), view.right_panel));
     update::resize_panes(&mut state, &rects);
     (state, config, view)
 }
@@ -58,7 +59,7 @@ fn typed_markdown_renders_highlight_and_cursor() {
 
     let terminal = draw(&state, &config);
     let buffer = terminal.backend().buffer();
-    let inner = layout::prompt_text_rect(view.prompt);
+    let inner = geometry::prompt_text_rect(view.right_panel);
     let marker = &buffer[(inner.x, inner.y)];
     assert_eq!(marker.symbol(), "#");
     // 编辑器高亮（独立于阅读渲染）：标题的 `#` 走专用 `markdown_heading_marker`。
@@ -97,7 +98,7 @@ fn click_places_cursor_and_wheel_scrolls_viewport() {
     assert_eq!(state.prompt.scroll(), 0);
     let terminal = draw(&state, &config);
     let buffer = terminal.backend().buffer();
-    let inner = layout::prompt_text_rect(view.prompt);
+    let inner = geometry::prompt_text_rect(view.right_panel);
     assert_eq!(buffer[(inner.x, inner.y)].symbol(), "0");
     assert!(terminal.backend().cursor_visible());
     assert_eq!(
@@ -120,7 +121,7 @@ fn hardware_cursor_tracks_focused_prompt_for_ime_preedit() {
     update::apply_editor(&mut state, EditorCommand::InsertText("你好".into()));
 
     let terminal = draw(&state, &config);
-    let inner = layout::prompt_text_rect(view.prompt);
+    let inner = geometry::prompt_text_rect(view.right_panel);
     assert!(terminal.backend().cursor_visible());
     assert_eq!(
         terminal.backend().cursor_position(),
@@ -133,9 +134,9 @@ fn hardware_cursor_tracks_focused_prompt_for_ime_preedit() {
         target.view = PaneView::Terminal;
     }
     let terminal = draw(&state, &config);
-    let rects = layout::pane_rects(
+    let rects = tiling::pane_rects(
         &state.active_tab().layout,
-        view.panes,
+        view.main_content,
         config.min_pane_width,
         config.min_pane_height,
     );
@@ -144,7 +145,7 @@ fn hardware_cursor_tracks_focused_prompt_for_ime_preedit() {
         .find(|(id, _)| *id == pane)
         .map(|(_, rect)| *rect)
         .expect("focused pane is tiled");
-    let inner = layout::pane_inner_rect(rect);
+    let inner = tiling::pane_inner_rect(rect);
     let (row, col) = state
         .active_tab()
         .pane(pane)
@@ -170,7 +171,7 @@ fn backspace_deletes_sole_task_marker_without_blank_placeholder() {
     assert_eq!(state.prompt.text(), "");
 
     let terminal = draw(&state, &config);
-    let inner = layout::prompt_text_rect(view.prompt);
+    let inner = geometry::prompt_text_rect(view.right_panel);
     assert!(terminal.backend().cursor_visible());
     assert_eq!(
         terminal.backend().cursor_position(),
@@ -235,7 +236,7 @@ fn mention_panel_renders_and_confirms_insertion() {
 
     let terminal = draw(&state, &config);
     let buffer = terminal.backend().buffer();
-    let inner = layout::prompt_text_rect(view.prompt);
+    let inner = geometry::prompt_text_rect(view.right_panel);
     let name_row: String = (inner.x..inner.x + inner.width)
         .map(|x| buffer[(x, inner.y + 4)].symbol())
         .collect();
@@ -271,8 +272,9 @@ fn mention_panel_ref_dir_tab_keyboard_switching_and_insert() {
     );
 
     // Verify it is drawn and visible
-    let inner = layout::prompt_text_rect(view.prompt);
-    let panel = ui::prompt::mention_layout(&state.prompt, inner).expect("panel visible");
+    let inner = geometry::prompt_text_rect(view.right_panel);
+    let panel =
+        ui::right_panel::prompt::mention_layout(&state.prompt, inner).expect("panel visible");
     let terminal = draw(&state, &config);
     let buffer = terminal.backend().buffer();
     let top: String = (panel.rect.x..panel.rect.right())
@@ -320,10 +322,12 @@ fn mention_panel_wheel_scrolls_viewport_and_keeps_active() {
     let prompt = state.prompt.id();
     update::apply_mention_entries(&mut state, prompt, generation, entries);
 
-    let inner = layout::prompt_text_rect(view.prompt);
-    let before = ui::prompt::mention_layout(&state.prompt, inner).expect("panel visible");
+    let inner = geometry::prompt_text_rect(view.right_panel);
+    let before =
+        ui::right_panel::prompt::mention_layout(&state.prompt, inner).expect("panel visible");
     assert!(update::scroll_mention(&mut state, 1, before.start));
-    let after = ui::prompt::mention_layout(&state.prompt, inner).expect("panel visible");
+    let after =
+        ui::right_panel::prompt::mention_layout(&state.prompt, inner).expect("panel visible");
     assert_eq!(after.start, before.start + 1, "滚轮下移视口一项");
     assert_eq!(
         state.prompt.mention().map(|panel| panel.active()),
@@ -389,8 +393,9 @@ fn mention_panel_folder_navigation_flow() {
     );
 
     // 顶边左 title、右上目录名、底边快捷键完整渲染。
-    let inner = layout::prompt_text_rect(view.prompt);
-    let panel = ui::prompt::mention_layout(&state.prompt, inner).expect("panel visible");
+    let inner = geometry::prompt_text_rect(view.right_panel);
+    let panel =
+        ui::right_panel::prompt::mention_layout(&state.prompt, inner).expect("panel visible");
     let terminal = draw(&state, &config);
     let buffer = terminal.backend().buffer();
     let top: String = (panel.rect.x..panel.rect.right())

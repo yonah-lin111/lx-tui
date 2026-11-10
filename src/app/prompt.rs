@@ -41,7 +41,7 @@ use super::markdown::{
     self, BlockPanel, MentionEntry, MentionPanel, SlashItem, SlashPanel, WorktreeBinding,
     WorktreeCandidate,
 };
-use crate::layout::PaneId;
+use crate::tiling::PaneId;
 
 /// 粘贴文本中的制表符展开内容。
 const TAB_STOP: &str = "  ";

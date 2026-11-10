@@ -768,7 +768,7 @@ fn copy_text_excludes_scrollbar_and_extracts_offscreen_rows() {
 
 #[test]
 fn selection_highlight_tracks_content_scroll_and_skips_scrollbar() {
-    use crate::layout::PaneId;
+    use crate::tiling::PaneId;
     use ratatui::style::Modifier;
 
     let area = Rect::new(0, 0, 40, 10);
@@ -1521,7 +1521,7 @@ fn slash_panel_renders_ascii_only() {
 fn initial_page_shows_status_on_pane_bottom_border() {
     // 模拟窗格：内容区 `inner` + 底边框行（`inner.bottom()`，位于 inner 之外）。
     let rect = Rect::new(0, 0, 80, 24);
-    let inner = crate::layout::pane_inner_rect(rect);
+    let inner = crate::tiling::pane_inner_rect(rect);
     let mut lx = Lx::new();
     lx.chat.status = crate::app::state::lx::chat::ChatStatus {
         model_name: Some("deepseek-v4.1-flash".into()),
@@ -1753,7 +1753,7 @@ fn idle_following_hides_chat_bar() {
 fn idle_main_with_running_subagent_shows_loading_and_counts() {
     let lx = lx_with_running_subagent(false);
     let rect = Rect::new(0, 0, 60, 17);
-    let area = crate::layout::pane_inner_rect(rect);
+    let area = crate::tiling::pane_inner_rect(rect);
     assert!(
         layout(area, &lx).chat_bar.is_some(),
         "主轮自然结束后，子 agent 运行中仍显示 loading"
@@ -1774,7 +1774,7 @@ fn idle_main_with_running_subagent_shows_loading_and_counts() {
 fn stopped_main_with_running_subagent_shows_only_counts() {
     let lx = lx_with_running_subagent(true);
     let rect = Rect::new(0, 0, 60, 17);
-    let area = crate::layout::pane_inner_rect(rect);
+    let area = crate::tiling::pane_inner_rect(rect);
     assert!(
         layout(area, &lx).chat_bar.is_none(),
         "主轮被用户停止后，子 agent 运行中也不再显示 loading"
@@ -1890,7 +1890,7 @@ fn jump_bottom_hit_matches_button_rect() {
     }
     // 直接构造窗格矩形（内缩 1 边框），命中按钮内部一格。
     let rects = [(pane, Rect::new(0, 0, 62, 18))];
-    let inner = crate::layout::pane_inner_rect(rects[0].1);
+    let inner = crate::tiling::pane_inner_rect(rects[0].1);
     let button =
         chat_bar::jump_bottom_rect(inner, &state.pane_anywhere(pane).unwrap().lx).expect("button");
     assert_eq!(

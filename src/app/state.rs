@@ -6,7 +6,7 @@ use std::time::Instant;
 
 use ratatui::layout::Rect;
 
-use crate::layout::{BoundaryHit, PaneId};
+use crate::tiling::{BoundaryHit, PaneId};
 
 use super::effects::Effect;
 use super::overlay::Overlay;
@@ -318,6 +318,8 @@ pub struct AppState {
     pub workspace_drag_moved: bool,
     /// 同一时刻最多一个浮层：右键菜单、重命名、关闭确认或 worktree 对话框。
     pub overlay: Option<Overlay>,
+    /// 打开退出确认时暂存的原浮层；取消时原样恢复，确认时清空。
+    pub suspended_overlay: Option<Overlay>,
     /// 待执行的效应出箱（DB 读写与剪贴板）；由持久化服务取走执行。
     pub effects: Vec<Effect>,
     /// 待查询 git 元数据的工作区 cwd 队列；事件层取走并在后台执行。
@@ -497,6 +499,7 @@ impl AppState {
             workspace_dragging: false,
             workspace_drag_moved: false,
             overlay: None,
+            suspended_overlay: None,
             effects: Vec::new(),
             git_requests: Vec::new(),
             trust_resolutions: Vec::new(),

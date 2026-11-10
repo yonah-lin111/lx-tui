@@ -3,7 +3,7 @@
 use super::*;
 
 /// 构造一个已绑定会话、刚按下 Enter 的窗格（BeginChatTurn 效应尚未执行）。
-fn sending_state(fixture: &Fixture, session: &str) -> (AppState, crate::layout::PaneId, u64) {
+fn sending_state(fixture: &Fixture, session: &str) -> (AppState, crate::tiling::PaneId, u64) {
     let mut state = AppState::demo();
     state.active_workspace_mut().cwd = Some(fixture.workspace().to_path_buf());
     state.models = models_with();

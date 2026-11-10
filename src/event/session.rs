@@ -11,8 +11,8 @@ use crate::app::state::{AppState, PaneKind, home_dir, workspace_label};
 use crate::app::update;
 use crate::config::Config;
 use crate::detect::{STATE_TAIL_LINES, pane_agent_snapshot};
-use crate::layout::{self, PaneId};
 use crate::pty::{PtyEvent, PtySession};
+use crate::tiling::{self, PaneId};
 use crate::tui::Tui;
 use crate::ui;
 
@@ -69,15 +69,15 @@ pub(crate) fn current_geometry(
     let mut rects = if state.prompt_left && state.panes_collapsed {
         Vec::new()
     } else {
-        layout::pane_rects(
+        tiling::pane_rects(
             &state.active_tab().layout,
-            view.panes,
+            view.main_content,
             config.min_pane_width,
             config.min_pane_height,
         )
     };
     if !state.prompt_collapsed {
-        rects.push((state.prompt.id(), view.prompt));
+        rects.push((state.prompt.id(), view.right_panel));
     }
     Ok(Geometry {
         screen,
@@ -190,7 +190,7 @@ pub(crate) fn resize_sessions(
     rects: &[(PaneId, Rect)],
 ) {
     for (id, rect) in rects {
-        let (cols, rows) = layout::pane_inner_size(*rect);
+        let (cols, rows) = tiling::pane_inner_size(*rect);
         if let Some(session) = sessions.get_mut(id)
             && let Err(error) = session.resize(cols, rows)
         {

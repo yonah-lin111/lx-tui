@@ -3,7 +3,7 @@
 use std::path::PathBuf;
 
 use crate::app::state::{AppState, PaneView};
-use crate::layout::PaneId;
+use crate::tiling::PaneId;
 
 /// 单一窗格的有效 `@` 扫描根：`pane.cwd` 优先，回退所属工作区 cwd；两者皆无时 None。
 ///

@@ -10,7 +10,16 @@ use super::{
     PromptFolder, PromptPage, PromptPageId, PromptRow, PromptRowKind, PromptSection, PromptTree,
     TempPrompt,
 };
-pub use crate::layout::PromptMode;
+/// 提示词面板视图模式。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PromptMode {
+    /// 树状管理器：文件夹与条目列表。
+    Tree,
+    /// 编辑视图：编辑选中条目正文。
+    Editor,
+    /// 页列表：当前编辑目标的页目录（编辑绑定保留，编辑缓冲原样驻留不渲染）。
+    Pages,
+}
 
 /// 编辑视图绑定的目标：正式条目或临时提示词。
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

@@ -85,7 +85,7 @@ pub enum Effect {
         page_id: i64,
         content: String,
         /// 发起保存时的 prompt 编辑器标识与内容修订号。
-        prompt: crate::layout::PaneId,
+        prompt: crate::tiling::PaneId,
         revision: u64,
     },
     /// 追加一页到末尾并设为当前页（新页立即进入命名编辑）。
@@ -124,14 +124,14 @@ pub enum Effect {
     /// （main content）顶部居中——复制动作发生在哪儿，反馈就出现在哪儿。
     CopyToClipboard {
         text: String,
-        anchor: Option<crate::layout::PaneId>,
+        anchor: Option<crate::tiling::PaneId>,
     },
     // ===== lx 聊天 =====
     /// 开启一轮聊天：DB 写入 session(首轮)+user+streaming assistant。
     ///
     /// 成功回投 `ChatTurnCommitted`；失败回投 `ChatTurnFailed`（草稿保留可重试）。
     BeginChatTurn {
-        pane: crate::layout::PaneId,
+        pane: crate::tiling::PaneId,
         generation: u64,
         workspace: PathBuf,
         session_id: Option<String>,
@@ -168,7 +168,7 @@ pub enum Effect {
     RevealInFileManager { path: PathBuf },
     /// 下载 AI Web（Gemini / Grok）生成图片的原图到配置目录（默认 `~/Desktop`）。
     DownloadAiWebOriginalImage {
-        pane: crate::layout::PaneId,
+        pane: crate::tiling::PaneId,
         session_id: String,
         attachment_id: String,
         site: crate::app::state::lx::AiWebSite,
@@ -191,7 +191,7 @@ pub enum Effect {
     },
     /// Committing 阶段取消：等 DB ack 后直接落 interrupted、不发 HTTP。
     CancelChatCommit {
-        pane: crate::layout::PaneId,
+        pane: crate::tiling::PaneId,
         generation: u64,
     },
     /// 终态写入：最后 parts、outcome、消息 usage 与整轮 billing 同事务落库。
@@ -212,26 +212,26 @@ pub enum Effect {
         parts: Vec<crate::db::chat::ChatPart>,
     },
     /// 读取当前工作区会话列表（`/resume` 首页）。
-    ListChatSessions { pane: crate::layout::PaneId },
+    ListChatSessions { pane: crate::tiling::PaneId },
     /// 列出本会话仍在运行的后台进程（后台任务页的进程 tab）。
     ///
     /// 进程句柄不进 `AppState`（`app/` 不持有进程），因此与 `/resume` 同一模式：
     /// 这里只发请求，由事件层从运行实例取快照后回投。
-    ListSessionProcesses { pane: crate::layout::PaneId },
+    ListSessionProcesses { pane: crate::tiling::PaneId },
     /// 停止指定会话进程（后台任务页按 `^d`）。
     StopSessionProcess {
-        pane: crate::layout::PaneId,
+        pane: crate::tiling::PaneId,
         /// 模型见过的进程会话 ID。
         process_session_id: u64,
     },
     /// 列出父会话的 subagent 元数据（打开 Agents 页签 / 刷新）。
     ListSubagents {
-        pane: crate::layout::PaneId,
+        pane: crate::tiling::PaneId,
         parent_session: String,
     },
     /// 懒加载某个 subagent 的完整消息流。
     LoadSubagentSession {
-        pane: crate::layout::PaneId,
+        pane: crate::tiling::PaneId,
         agent_id: String,
         child_session: String,
     },
@@ -242,17 +242,17 @@ pub enum Effect {
         agent_id: Option<String>,
     },
     /// 父轮次结束后尝试把未投递报告合并成自动轮；用户输入优先。
-    DrainSubagentReports { pane: crate::layout::PaneId },
+    DrainSubagentReports { pane: crate::tiling::PaneId },
     /// 在 `Agents` 面板向指定子 agent 直接发送内联追问（若已结束则自动先 `resume` 再触发新轮次）。
     SendSubagentUserInput {
-        pane: crate::layout::PaneId,
+        pane: crate::tiling::PaneId,
         session_id: String,
         agent_id: String,
         text: String,
     },
     /// 加载单个会话及有序消息（恢复旧会话）。
     LoadChatSession {
-        pane: crate::layout::PaneId,
+        pane: crate::tiling::PaneId,
         session_id: String,
     },
     /// 从当前会话的指定用户消息之前分叉出新会话并切换过去。
@@ -260,7 +260,7 @@ pub enum Effect {
     /// `before = None` 表示 `Full session`（复制全部已结算消息、不回填输入框）；
     /// `Some` 为边界消息 id（该消息不复制，正文回填到输入框）。
     ForkChatSession {
-        pane: crate::layout::PaneId,
+        pane: crate::tiling::PaneId,
         workspace: PathBuf,
         session_id: String,
         before: Option<String>,
@@ -290,7 +290,7 @@ pub enum Effect {
     // ===== `/connect` 快捷连接 =====
     /// 保存预设供应商的 API Key 或 OAuth 凭证到 `connect.json`。
     SavePresetConnection {
-        pane: crate::layout::PaneId,
+        pane: crate::tiling::PaneId,
         provider_id: String,
         api_key: Option<String>,
         oauth: Option<crate::config::ai::connect::OAuthCredential>,
@@ -298,12 +298,12 @@ pub enum Effect {
     },
     /// 从 `connect.json` 移除预设供应商记录（断开连接）。
     DisconnectPreset {
-        pane: crate::layout::PaneId,
+        pane: crate::tiling::PaneId,
         provider_id: String,
     },
     /// 启动预设供应商的 OAuth 授权流。
     StartPresetOAuth {
-        pane: crate::layout::PaneId,
+        pane: crate::tiling::PaneId,
         provider_id: String,
         method_id: String,
         form_answers: std::collections::BTreeMap<String, String>,
@@ -316,17 +316,17 @@ pub enum Effect {
     ///
     /// `pane` 为 None 时是启动静默同步（不弹 Toast）；指定供应商时只刷新该供应商。
     RefreshModelsCatalog {
-        pane: Option<crate::layout::PaneId>,
+        pane: Option<crate::tiling::PaneId>,
         provider_id: Option<String>,
     },
     /// 打开浏览器（OAuth 授权链接）。
     OpenBrowser { url: String },
     // ===== `/mcp` 窗格级 MCP 管理 =====
     /// 刷新指定窗格所属工作区的 MCP 目录快照并同步已打开的 `/mcp` 面板。
-    RefreshMcpCatalog { pane: crate::layout::PaneId },
+    RefreshMcpCatalog { pane: crate::tiling::PaneId },
     /// 重启指定窗格所属工作区下的单个 MCP server 连接。
     RestartMcpServer {
-        pane: crate::layout::PaneId,
+        pane: crate::tiling::PaneId,
         server: String,
     },
     /// 持久化一条已发送 prompt 到全局历史表（去重置顶、裁剪到上限）。
@@ -336,7 +336,7 @@ pub enum Effect {
     RecordPromptHistory { text: String },
     /// 读取最新轮次的文件快照可用性（只读，事件层同步执行）。
     PrepareRewind {
-        pane: crate::layout::PaneId,
+        pane: crate::tiling::PaneId,
         session_id: String,
         user_message_id: String,
     },
@@ -364,7 +364,7 @@ pub enum Effect {
     },
     /// 后台生成会话回顾（自动失焦触发或手动 `/recap`）。
     GenerateRecap {
-        pane: crate::layout::PaneId,
+        pane: crate::tiling::PaneId,
         workspace: PathBuf,
         session_id: String,
         /// 挂接的最后一条 assistant 消息 id。
@@ -393,7 +393,7 @@ pub enum Effect {
     ///
     /// 不占用模型 `RequestState`；`workspace` 是会话 DB 键，`cwd` 是冻结的执行目录。
     BeginUserShell {
-        pane: crate::layout::PaneId,
+        pane: crate::tiling::PaneId,
         generation: u64,
         workspace: PathBuf,
         cwd: PathBuf,
@@ -406,7 +406,7 @@ pub enum Effect {
         draft_revision: u64,
     },
     /// 停止该窗格当前在途/运行中的本地命令（双 Esc）。
-    CancelUserShells { pane: crate::layout::PaneId },
+    CancelUserShells { pane: crate::tiling::PaneId },
     // ===== todo（全局列表）=====
     /// 写入一条（UPSERT：不存在则按 `position` 插入并顺移，存在则只改文本/状态）。
     SaveTodo { record: crate::db::todo::TodoRecord },
@@ -447,7 +447,7 @@ pub enum Effect {
 /// 撤销执行请求：目标身份、动作与回填所需的原文全部在发起时冻结。
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct RewindRequest {
-    pub pane: crate::layout::PaneId,
+    pub pane: crate::tiling::PaneId,
     pub session_id: String,
     pub target_user_message_id: String,
     pub expected_revision: u64,
@@ -464,7 +464,7 @@ pub struct RewindRequest {
 /// 摘要请求是**独立请求**（不带工具、不落普通消息）；事件层用它装配请求并执行。
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct CompactRequest {
-    pub pane: crate::layout::PaneId,
+    pub pane: crate::tiling::PaneId,
     /// 会话所属工作区键（DB 归属校验）。
     pub workspace: PathBuf,
     pub session_id: String,
@@ -488,7 +488,7 @@ pub struct CompactRequest {
 /// 一次 compact 撤销请求。
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct CompactRevertRequest {
-    pub pane: crate::layout::PaneId,
+    pub pane: crate::tiling::PaneId,
     pub workspace: PathBuf,
     pub session_id: String,
     pub checkpoint_id: String,
@@ -500,7 +500,7 @@ pub struct CompactRevertRequest {
 /// 一次模型切换撤销请求。
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ModelSwitchRevertRequest {
-    pub pane: crate::layout::PaneId,
+    pub pane: crate::tiling::PaneId,
     pub workspace: PathBuf,
     pub session_id: String,
     pub switch_id: String,
@@ -511,7 +511,7 @@ pub struct ModelSwitchRevertRequest {
 /// 一次 recap 删除请求。
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct RecapDeleteRequest {
-    pub pane: crate::layout::PaneId,
+    pub pane: crate::tiling::PaneId,
     pub workspace: PathBuf,
     pub session_id: String,
     /// 被删 recap 挂接的 assistant 消息 id（表内唯一）。

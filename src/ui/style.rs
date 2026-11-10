@@ -489,7 +489,7 @@ pub fn md_read_image() -> Style {
 // 标题 / 强调 / 行内代码 / 引用 / 链接，因此保留 ANSI 语义槽位（Yellow / LightRed /
 // LightMagenta / LightBlue / Cyan）。改动阅读侧的 GitHub Dark 不会、也不应影响这里。
 //
-// 消费方：`ui::prompt::token_style`（prompt 编辑器 + lx 多行输入框）。
+// 消费方：`ui::right_panel::prompt::token_style`（prompt 编辑器 + lx 多行输入框）。
 // `ui::markdown_render` 绝不使用本组函数。
 
 /// markdown 语法标记（`#`、`**`、`` ` `` 等）：次要信息（dim）。

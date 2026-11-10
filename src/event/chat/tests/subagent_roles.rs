@@ -8,7 +8,7 @@ use crate::chat::agent::{
     AgentRole, BaseRole, SUBAGENT_TURN_ABORTED_MARKER, SubagentOp, SubagentOutcome, ToolSurface,
 };
 use crate::config::subagents::{CustomRoleConfig, RoleCapabilities};
-use crate::layout::PaneId;
+use crate::tiling::PaneId;
 
 // ===== T3: 模型锁定 / monitor 默认档位 / 能力收紧 =====
 

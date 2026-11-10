@@ -12,7 +12,7 @@ use crate::app::state::{
 use crate::chat::events::PartKind;
 use crate::chat::recap::RecapExchange;
 use crate::db::chat::MessageRecap;
-use crate::layout::PaneId;
+use crate::tiling::PaneId;
 use crate::ui::text;
 
 use super::{refresh_lx_status, show_lx_hint};

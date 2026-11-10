@@ -52,6 +52,22 @@ impl Prompt {
         (from <= to && to <= self.text.len()).then_some(self.text[from..to].to_string())
     }
 
+    /// 当前 `+++` 所在外层 `&&&` 的直接正文；顶层 `+++` 返回 None。
+    ///
+    /// 结构定位在遮罩后的文本上进行（粘贴内容不参与块解析），正文从原始文本切片。
+    pub fn enclosing_template_body(&self, supple_start_line: usize) -> Option<String> {
+        let masked = mask_pasted_text(&self.text);
+        let span = markdown::block_scan(&masked)
+            .spans
+            .into_iter()
+            .find(|span| {
+                span.kind == markdown::BlockKind::Template
+                    && span.start < supple_start_line
+                    && supple_start_line <= span.end
+            })?;
+        self.template_block_body(span.start)
+    }
+
     /// 更新或恢复指定块起始行下一行的 `{title: ...}`，并自动平移光标。
     pub fn set_block_title(&mut self, start_line: usize, new_title: Option<&str>) -> bool {
         let masked = mask_pasted_text(&self.text);

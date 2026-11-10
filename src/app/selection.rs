@@ -5,7 +5,7 @@
 
 use std::time::{Duration, Instant};
 
-use crate::layout::PaneId;
+use crate::tiling::PaneId;
 
 /// 文本选区多击判定时间窗口（400ms，对齐 codex）。
 pub const SELECTION_CLICK_WINDOW: Duration = Duration::from_millis(400);

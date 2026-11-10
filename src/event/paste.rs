@@ -142,8 +142,8 @@ pub(super) fn paste_item_at(
     column: u16,
     row: u16,
 ) -> Option<usize> {
-    let area = ui::prompt_frame::prompt_main_rect(view.prompt, state);
-    ui::prompt::paste_item_at(&state.prompt, area, column, row)
+    let area = ui::right_panel::prompt::frame::prompt_main_rect(view.right_panel, state);
+    ui::right_panel::prompt::paste_item_at(&state.prompt, area, column, row)
 }
 
 /// 字母快捷面板命中。
@@ -153,12 +153,12 @@ pub(super) fn refer_item_at(
     column: u16,
     row: u16,
 ) -> Option<usize> {
-    let area = ui::prompt_frame::prompt_main_rect(view.prompt, state);
-    ui::prompt::refer_item_at(&state.prompt, area, column, row)
+    let area = ui::right_panel::prompt::frame::prompt_main_rect(view.right_panel, state);
+    ui::right_panel::prompt::refer_item_at(&state.prompt, area, column, row)
 }
 
 /// prompt 文本区（仅供事件层测试定位未展开抽屉时的基础编辑区）。
 #[cfg(test)]
 pub(super) fn prompt_text_area(view: &ui::layout::ViewLayout) -> ratatui::layout::Rect {
-    crate::layout::prompt_content_rect(view.prompt)
+    crate::ui::right_panel::prompt::geometry::prompt_content_rect(view.right_panel)
 }

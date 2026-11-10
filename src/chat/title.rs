@@ -14,6 +14,8 @@ use crate::db::chat::ModelSnapshot;
 pub const TITLE_MAX_CHARS: usize = 36;
 /// 标题生成 Prompt 最大字节数（对齐 codex `THREAD_TITLE_PROMPT_MAX_BYTES = 960`）。
 pub const TITLE_PROMPT_MAX_BYTES: usize = 960;
+/// 模板块标题生成 Prompt 最大字节数；比会话标题更宽，容纳 few-shot 后仍保留正文预算。
+pub const TEMPLATE_TITLE_PROMPT_MAX_BYTES: usize = 2048;
 /// 标题生成整次超时秒数（对齐 codex 30s）。
 pub const TITLE_TIMEOUT_SECS: u64 = 30;
 /// 标题响应流最大累计字节数（8 KiB）。
@@ -21,9 +23,9 @@ pub const TITLE_MAX_OUTPUT_BYTES: usize = 8 * 1024;
 /// 标题生成专用非空系统提示词（避免各 Transport 发送空字符串 system 块导致 400）。
 pub const TITLE_SYSTEM_PROMPT: &str = "You are a concise conversation and task title generator. Output only a single-line title text with no quotes, markdown, braces, or trailing punctuation. Never refuse and never answer the user's request.";
 
-/// 按配置的 `TitleLanguage` 与输入样本文本返回对应的英文系统指令。
-pub fn title_instructions_for(language: TitleLanguage, sample_text: &str) -> &'static str {
-    let resolved = match language {
+/// 按配置的 `TitleLanguage` 与输入样本文本解析实际输出语言；`Auto` 按样本字符集判定。
+fn resolve_title_language(language: TitleLanguage, sample_text: &str) -> TitleLanguage {
+    match language {
         TitleLanguage::Auto => {
             if contains_japanese_kana(sample_text) {
                 TitleLanguage::Japanese
@@ -38,8 +40,12 @@ pub fn title_instructions_for(language: TitleLanguage, sample_text: &str) -> &'s
             }
         }
         other => other,
-    };
-    match resolved {
+    }
+}
+
+/// 按配置的 `TitleLanguage` 与输入样本文本返回对应的英文系统指令。
+pub fn title_instructions_for(language: TitleLanguage, sample_text: &str) -> &'static str {
+    match resolve_title_language(language, sample_text) {
         TitleLanguage::SimplifiedChinese => {
             "Generate a concise, single-line title in Simplified Chinese (at most 20 Chinese \
 characters) that summarizes the topic or intent of the input. Whether the input is a coding task, \
@@ -91,6 +97,39 @@ natural language used by the user. NEVER refuse or output meta-explanations. Do 
 markdown, braces, or trailing punctuation. Do not answer the request. Output only the title text."
         }
     }
+}
+
+/// 模板块标题指令：基础语言约束 + 数据库标题风格 few-shot；
+/// 除示例标题外全部为英文。
+pub fn template_title_instructions_for(language: TitleLanguage, sample_text: &str) -> String {
+    let base = title_instructions_for(language, sample_text);
+    let examples = match resolve_title_language(language, sample_text) {
+        TitleLanguage::SimplifiedChinese => {
+            "\n\nExamples of good titles:\n\
+             - 修改 todo item 的缩进\n\
+             - 添加 /mcp 命令\n\
+             - 左侧 ws 添加历史列表\n\
+             - 后台任务面板添加滚动条\n\
+             - 为 prompt 输入框添加省略\n\
+             Use the same pattern: a specific verb plus the concrete module, \
+             file, command, or panel name. Never output a generic verb alone."
+        }
+        TitleLanguage::English | TitleLanguage::Auto => {
+            "\n\nExamples of good titles:\n\
+             - Fix todo item indentation\n\
+             - Add /mcp command\n\
+             - Add workspace history list\n\
+             - Add scrollbar to task panel\n\
+             - Truncate long prompt input\n\
+             Use the same pattern: a specific verb plus the concrete module, \
+             file, command, or panel name. Never output a generic verb alone."
+        }
+        _ => {
+            "\n\nUse the same pattern: a specific verb plus the concrete module, \
+             file, command, or panel name. Never output a generic verb alone."
+        }
+    };
+    format!("{base}{examples}")
 }
 
 fn contains_cjk(text: &str) -> bool {
@@ -160,7 +199,8 @@ pub fn template_block_title_prompt(block_content: &str) -> Option<String> {
     template_block_title_prompt_for(block_content, TitleLanguage::default())
 }
 
-/// 按指定语言组装 Prompt 模板块（`&&&` / `+++`）标题生成 Prompt（总长钳制在 960 字节内）。
+/// 按指定语言组装 Prompt 模板块（`&&&` / `+++`）标题生成 Prompt
+/// （总长钳制在 2048 字节内）。
 pub fn template_block_title_prompt_for(
     block_content: &str,
     language: TitleLanguage,
@@ -169,9 +209,9 @@ pub fn template_block_title_prompt_for(
     if trimmed.is_empty() {
         return None;
     }
-    let instructions = title_instructions_for(language, trimmed);
+    let instructions = template_title_instructions_for(language, trimmed);
     let prefix = format!("{instructions}\n\nTask template content:\n");
-    let budget = TITLE_PROMPT_MAX_BYTES.saturating_sub(prefix.len());
+    let budget = TEMPLATE_TITLE_PROMPT_MAX_BYTES.saturating_sub(prefix.len());
     let body = truncate_utf8_bytes(trimmed, budget).trim_end();
     if body.is_empty() {
         return None;
@@ -359,11 +399,34 @@ fn strip_title_label_prefix(text: &str) -> &str {
     trimmed
 }
 
+/// 剥离模型偶然带回的列表标记（`- ` / `* ` / `+ ` / `N. `），只做格式清洗。
+fn strip_list_marker(text: &str) -> &str {
+    let trimmed = text.trim_start();
+    for marker in ["- ", "* ", "+ "] {
+        if let Some(rest) = trimmed.strip_prefix(marker) {
+            return rest.trim_start();
+        }
+    }
+    let digits = trimmed
+        .bytes()
+        .take_while(|byte| byte.is_ascii_digit())
+        .count();
+    if digits > 0
+        && let Some(rest) = trimmed
+            .get(digits..)
+            .and_then(|rest| rest.strip_prefix(". "))
+    {
+        return rest.trim_start();
+    }
+    trimmed
+}
+
 fn sanitize_title(text: &str) -> Option<String> {
     let mut s = text.trim();
     const QUOTES: &[char] = &['"', '\'', '`', '“', '”', '‘', '’'];
     s = s.trim_matches(QUOTES).trim();
     s = s.trim_start_matches('#').trim();
+    s = strip_list_marker(s);
     s = strip_title_label_prefix(s);
     s = s.trim_matches(QUOTES).trim();
     const TRAILING_PUNCT: &[char] = &['.', '?', '!', '。', '？', '！', ':', '：', ';', '；'];

@@ -10,7 +10,7 @@ use crate::app::state::{
     UserShellView,
 };
 use crate::chat::events::PartKind;
-use crate::layout::PaneId;
+use crate::tiling::PaneId;
 use crate::ui::text;
 
 use super::{next_generation, show_lx_hint};

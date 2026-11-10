@@ -4,7 +4,7 @@ mod text_input;
 
 use std::path::PathBuf;
 
-use crate::layout::PaneId;
+use crate::tiling::PaneId;
 
 pub use text_input::TextInput;
 
@@ -40,6 +40,8 @@ pub enum OverlayKind {
     ResumeSessionEdit,
     /// `/connect` 预设供应商居中模态。
     Connect,
+    /// 退出二次确认。
+    ConfirmQuit,
 }
 
 /// 浮层：同一时刻最多一个，由 `Option` 保证。
@@ -61,6 +63,8 @@ pub enum Overlay {
     ResumeSessionEdit(ResumeSessionEdit),
     /// `/connect` 预设供应商居中模态。
     Connect(Box<crate::app::state::ConnectPanel>),
+    /// 退出二次确认。
+    ConfirmQuit,
 }
 
 impl Overlay {
@@ -81,6 +85,7 @@ impl Overlay {
             Self::ReferencedFolderDelete(_) => OverlayKind::ReferencedFolderDelete,
             Self::ResumeSessionEdit(_) => OverlayKind::ResumeSessionEdit,
             Self::Connect(_) => OverlayKind::Connect,
+            Self::ConfirmQuit => OverlayKind::ConfirmQuit,
         }
     }
 

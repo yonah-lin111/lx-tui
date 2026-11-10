@@ -9,7 +9,7 @@ use crate::app::state::lx::chat::PendingSteer;
 use crate::app::state::{AppState, FrozenModel, InputHintLevel, RequestState};
 use crate::chat::prepare::SkillNotice;
 use crate::db::chat::ModelSnapshot;
-use crate::layout::PaneId;
+use crate::tiling::PaneId;
 use crate::ui::text;
 
 use super::session::show_lx_hint;

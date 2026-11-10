@@ -9,9 +9,9 @@ fn mouse_click_folders_button_opens_referenced_menu() {
     let mut sessions = HashMap::new();
     let mut dirty = false;
 
-    let folders = layout::prompt_toolbar_button_rect(
-        geo.view.prompt,
-        layout::PromptToolbarButton::Folders,
+    let folders = geometry::prompt_toolbar_button_rect(
+        geo.view.right_panel,
+        geometry::PromptToolbarButton::Folders,
         PromptMode::Editor,
         Some("1/2"),
     )
@@ -44,9 +44,9 @@ fn folders_button_no_op_without_project_key() {
     let mut sessions = HashMap::new();
     let mut dirty = false;
 
-    let folders = layout::prompt_toolbar_button_rect(
-        geo.view.prompt,
-        layout::PromptToolbarButton::Folders,
+    let folders = geometry::prompt_toolbar_button_rect(
+        geo.view.right_panel,
+        geometry::PromptToolbarButton::Folders,
         PromptMode::Editor,
         Some("1/2"),
     )
@@ -402,9 +402,9 @@ fn mouse_hover_after_opening_referenced_menu_backgrounds_row_without_marker() {
     let mut sessions = HashMap::new();
     let mut dirty = false;
     // 通过工具栏 [dir] 按钮真实打开弹窗。
-    let folders = layout::prompt_toolbar_button_rect(
-        geo.view.prompt,
-        layout::PromptToolbarButton::Folders,
+    let folders = geometry::prompt_toolbar_button_rect(
+        geo.view.right_panel,
+        geometry::PromptToolbarButton::Folders,
         PromptMode::Editor,
         Some("1/2"),
     )

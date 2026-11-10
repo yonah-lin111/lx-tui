@@ -6,7 +6,7 @@ use std::time::Instant;
 
 use crate::app::state::{AppState, ForkEntry, ForkPanel, InputHintLevel, PaneView, SlashPanel};
 use crate::app::toast::{Toast, ToastKind};
-use crate::layout::PaneId;
+use crate::tiling::PaneId;
 use crate::ui::text;
 
 /// 打开 `/fork` 节点面板。

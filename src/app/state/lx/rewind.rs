@@ -5,7 +5,7 @@
 use std::time::Instant;
 
 use crate::db::chat::{FileAvailability, NoticeRecord};
-use crate::layout::PaneId;
+use crate::tiling::PaneId;
 
 use super::slash::PanelWindow;
 

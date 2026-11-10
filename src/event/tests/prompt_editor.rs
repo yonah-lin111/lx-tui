@@ -131,8 +131,9 @@ fn mouse_interacts_with_slash_panel() {
         crate::app::actions::EditorCommand::InsertChar('/'),
     );
     let geo = geometry(&state, &config, Rect::new(0, 0, 120, 30));
-    let area = crate::layout::prompt_text_rect(geo.view.prompt);
-    let panel = crate::ui::prompt::slash_layout(&state.prompt, area).expect("slash panel visible");
+    let area = crate::ui::right_panel::prompt::geometry::prompt_text_rect(geo.view.right_panel);
+    let panel = crate::ui::right_panel::prompt::slash_layout(&state.prompt, area)
+        .expect("slash panel visible");
     let rect = panel.rect;
     let mut sessions = HashMap::new();
     let mut dirty = false;
@@ -173,7 +174,7 @@ fn mouse_interacts_with_slash_panel() {
 #[test]
 fn mouse_template_status_label_and_block_buttons() {
     let (mut state, config, geo, area) = template_button_state();
-    let buttons = crate::ui::prompt::template_buttons(&state.prompt, area);
+    let buttons = crate::ui::right_panel::prompt::template_buttons(&state.prompt, area);
     assert_eq!(buttons.len(), 3, "块内只保留复制/清理/删除");
     let hit = |button| {
         buttons
@@ -187,7 +188,8 @@ fn mouse_template_status_label_and_block_buttons() {
 
     // 标题行状态标签：todo → in_progress（点击不移动正文光标）。
     let status =
-        crate::ui::prompt_frame::prompt_status_rect(geo.view.prompt, &state).expect("status label");
+        crate::ui::right_panel::prompt::frame::prompt_status_rect(geo.view.right_panel, &state)
+            .expect("status label");
     handle_terminal_event(
         mouse(
             MouseEventKind::Down(MouseButton::Left),
@@ -210,7 +212,8 @@ fn mouse_template_status_label_and_block_buttons() {
 
     // 再点一次：in_progress → done。
     let status =
-        crate::ui::prompt_frame::prompt_status_rect(geo.view.prompt, &state).expect("status label");
+        crate::ui::right_panel::prompt::frame::prompt_status_rect(geo.view.right_panel, &state)
+            .expect("status label");
     handle_terminal_event(
         mouse(
             MouseEventKind::Down(MouseButton::Left),
@@ -227,7 +230,7 @@ fn mouse_template_status_label_and_block_buttons() {
     assert!(state.prompt.text().contains("&&& addTemplate --end done"));
 
     // 清理按钮：移除未填写空项。
-    let clean = hit(crate::ui::prompt::TemplateBlockButton::Clean);
+    let clean = hit(crate::ui::right_panel::prompt::TemplateBlockButton::Clean);
     handle_terminal_event(
         mouse(
             MouseEventKind::Down(MouseButton::Left),
@@ -248,10 +251,10 @@ fn mouse_template_status_label_and_block_buttons() {
     );
 
     // 删除按钮：整块消失。
-    let buttons = crate::ui::prompt::template_buttons(&state.prompt, area);
+    let buttons = crate::ui::right_panel::prompt::template_buttons(&state.prompt, area);
     let delete = buttons
         .iter()
-        .find(|hit| hit.button == crate::ui::prompt::TemplateBlockButton::Delete)
+        .find(|hit| hit.button == crate::ui::right_panel::prompt::TemplateBlockButton::Delete)
         .copied()
         .expect("delete button");
     handle_terminal_event(
@@ -285,7 +288,8 @@ fn unclosed_template_block_hides_status_label_and_falls_back_to_outdent() {
     );
     let geo = geometry(&state, &config, Rect::new(0, 0, 220, 30));
     assert!(
-        crate::ui::prompt_frame::prompt_status_rect(geo.view.prompt, &state).is_none(),
+        crate::ui::right_panel::prompt::frame::prompt_status_rect(geo.view.right_panel, &state)
+            .is_none(),
         "未闭合 &&& 不显示标题行状态标签"
     );
 
@@ -327,7 +331,8 @@ fn mouse_status_label_and_clean_button_clear_selection() {
     state.select_all_prompt();
     assert!(state.selection.is_some());
     let status =
-        crate::ui::prompt_frame::prompt_status_rect(geo.view.prompt, &state).expect("status label");
+        crate::ui::right_panel::prompt::frame::prompt_status_rect(geo.view.right_panel, &state)
+            .expect("status label");
     click(
         &mut state,
         &mut sessions,
@@ -339,9 +344,9 @@ fn mouse_status_label_and_clean_button_clear_selection() {
 
     // 清理按钮：清除旧选区。
     state.select_all_prompt();
-    let clean = crate::ui::prompt::template_buttons(&state.prompt, area)
+    let clean = crate::ui::right_panel::prompt::template_buttons(&state.prompt, area)
         .into_iter()
-        .find(|hit| hit.button == crate::ui::prompt::TemplateBlockButton::Clean)
+        .find(|hit| hit.button == crate::ui::right_panel::prompt::TemplateBlockButton::Clean)
         .expect("clean button");
     click(
         &mut state,
@@ -358,15 +363,28 @@ fn page_control_hit_requires_prompt_tab() {
     let config = Config::default();
     let mut state = paged_prompt_state();
     let geo = geometry(&state, &config, Rect::new(0, 0, 140, 30));
-    let bar = crate::layout::prompt_toolbar_rect(geo.view.prompt).expect("toolbar");
+    let bar = crate::ui::right_panel::prompt::geometry::prompt_toolbar_rect(geo.view.right_panel)
+        .expect("toolbar");
     let hit = (bar.x..bar.right())
         .find(|x| {
-            ui::prompt_frame::prompt_page_control_at(geo.view.prompt, &state, *x, bar.y).is_some()
+            ui::right_panel::prompt::frame::prompt_page_control_at(
+                geo.view.right_panel,
+                &state,
+                *x,
+                bar.y,
+            )
+            .is_some()
         })
         .expect("page control visible in Prompt tab");
     state.right_tab = crate::app::state::RightTab::Todo;
     assert!(
-        ui::prompt_frame::prompt_page_control_at(geo.view.prompt, &state, hit, bar.y).is_none(),
+        ui::right_panel::prompt::frame::prompt_page_control_at(
+            geo.view.right_panel,
+            &state,
+            hit,
+            bar.y
+        )
+        .is_none(),
         "Todo 标签页下不得命中隐藏的页控件"
     );
 }
@@ -379,7 +397,8 @@ fn pages_header_shows_zero_when_filter_has_no_match() {
         &mut state,
         &crate::app::actions::EditorCommand::InsertText("zzz".into()),
     );
-    let header = crate::ui::prompt_frame::prompt_page_header(&state).expect("pages header");
+    let header =
+        crate::ui::right_panel::prompt::frame::prompt_page_header(&state).expect("pages header");
     assert_eq!(header.current, 0, "无匹配行时计数为 0/m");
     assert_eq!(header.total, 2);
 }
@@ -399,10 +418,10 @@ fn mouse_supple_copy_button_writes_clipboard_toast() {
         ),
     );
     let geo = geometry(&state, &config, Rect::new(0, 0, 220, 30));
-    let area = crate::layout::prompt_text_rect(geo.view.prompt);
-    let copy = crate::ui::prompt::block_buttons(&state.prompt, area)
+    let area = crate::ui::right_panel::prompt::geometry::prompt_text_rect(geo.view.right_panel);
+    let copy = crate::ui::right_panel::prompt::block_buttons(&state.prompt, area)
         .into_iter()
-        .find(|hit| hit.button == crate::ui::prompt::BlockButton::Copy)
+        .find(|hit| hit.button == crate::ui::right_panel::prompt::BlockButton::Copy)
         .expect("supple copy button visible");
     let mut sessions = HashMap::new();
     let mut dirty = false;
@@ -440,10 +459,10 @@ fn mouse_supple_copy_button_writes_clipboard_toast() {
     let toast_rect = ui::toast::rect(&state, &geo.view, &geo.rects, geo.screen, &config)
         .expect("toast rect in right panel");
     assert!(
-        toast_rect.left() >= geo.view.prompt.left()
-            && toast_rect.right() <= geo.view.prompt.right(),
+        toast_rect.left() >= geo.view.right_panel.left()
+            && toast_rect.right() <= geo.view.right_panel.right(),
         "右侧面板复制 toast 矩形 {toast_rect:?} 必须落在右侧面板容器 {:?} 内",
-        geo.view.prompt
+        geo.view.right_panel
     );
 }
 
@@ -454,15 +473,17 @@ fn mouse_click_prompt_page_arrows_switch_and_counter_opens_menu() {
     let geo = geometry(&state, &config, Rect::new(0, 0, 140, 30));
     let mut sessions = HashMap::new();
     let mut dirty = false;
-    let bar = crate::layout::prompt_toolbar_rect(geo.view.prompt).expect("toolbar");
+    let bar = crate::ui::right_panel::prompt::geometry::prompt_toolbar_rect(geo.view.right_panel)
+        .expect("toolbar");
     assert_eq!(
         bar.y,
-        crate::layout::pane_inner_rect(geo.view.prompt).y,
+        crate::tiling::pane_inner_rect(geo.view.right_panel).y,
         "页控件位于工具栏首行"
     );
     // 第一页左箭头置灰：点击不切页、不移动正文光标。
     state.prompt.set_cursor_offset_for_test(0);
-    let controls = ui::prompt::toolbar_page_controls(bar, "1/2", true).expect("controls");
+    let controls =
+        ui::right_panel::prompt::toolbar_page_controls(bar, "1/2", true).expect("controls");
     handle_terminal_event(
         mouse(
             MouseEventKind::Down(MouseButton::Left),
@@ -495,7 +516,8 @@ fn mouse_click_prompt_page_arrows_switch_and_counter_opens_menu() {
     assert_eq!(state.prompt.text(), "beta");
     assert!(state.prompt_focused());
     // 计数：切换到页列表视图；Esc 返回编辑视图。
-    let controls = ui::prompt::toolbar_page_controls(bar, "2/2", true).expect("controls");
+    let controls =
+        ui::right_panel::prompt::toolbar_page_controls(bar, "2/2", true).expect("controls");
     handle_terminal_event(
         mouse(
             MouseEventKind::Down(MouseButton::Left),
@@ -533,7 +555,8 @@ fn mouse_click_prompt_padding_only_focuses_without_moving_cursor() {
     let geo = geometry(&state, &config, Rect::new(0, 0, 140, 30));
     let mut sessions = HashMap::new();
     let mut dirty = false;
-    let text_area = crate::layout::prompt_text_rect(geo.view.prompt);
+    let text_area =
+        crate::ui::right_panel::prompt::geometry::prompt_text_rect(geo.view.right_panel);
     assert!(text_area.height >= 2, "测试视口需能容纳留白");
     handle_terminal_event(
         mouse(
@@ -776,13 +799,14 @@ fn prompt_refer_panel_wheel_scrolls_by_wheel_lines_without_scrolling_editor() {
     let config = Config::default();
     let mut state = AppState::demo();
     let geo = geometry(&state, &config, Rect::new(0, 0, 120, 30));
-    let area = crate::layout::prompt_text_rect(geo.view.prompt);
+    let area = crate::ui::right_panel::prompt::geometry::prompt_text_rect(geo.view.right_panel);
     state.prompt.resize(area.width, area.height);
     // 构造 6 个不同提及加上 2 个快捷输入字符 `re`，触发 prompt 的 ReferPanel。
     state
         .prompt
         .insert_str("@ref_a.rs @ref_b.rs @ref_c.rs @ref_d.rs @ref_e.rs @ref_f.rs\nre");
-    let panel = crate::ui::prompt::refer_layout(&state.prompt, area).expect("refer panel visible");
+    let panel = crate::ui::right_panel::prompt::refer_layout(&state.prompt, area)
+        .expect("refer panel visible");
     let scroll_before = state.prompt.scroll();
     let mut sessions = HashMap::new();
     let mut dirty = false;
@@ -834,7 +858,8 @@ fn clicking_prompt_command_panel_chrome_does_not_penetrate_to_editor_cursor() {
     state.prompt.insert_str("line 0\nline 1\nline 2\n@");
     let geo = geometry(&state, &config, Rect::new(0, 0, 120, 30));
     let text_area = crate::event::paste::prompt_text_area(&geo.view);
-    let panel = ui::prompt::mention_layout(&state.prompt, text_area).expect("mention panel open");
+    let panel = ui::right_panel::prompt::mention_layout(&state.prompt, text_area)
+        .expect("mention panel open");
     let cursor_before = state.prompt.cursor();
     let mut sessions = HashMap::new();
     let mut dirty = false;
@@ -926,7 +951,8 @@ fn right_click_prompt_editor_keeps_pending_paste_proposal() {
 
     let geo = geometry(&state, &config, Rect::new(0, 0, 120, 30));
     let area = crate::event::paste::prompt_text_area(&geo.view);
-    let panel = crate::ui::prompt::paste_panel_rect(&state.prompt, area).expect("paste panel");
+    let panel =
+        crate::ui::right_panel::prompt::paste_panel_rect(&state.prompt, area).expect("paste panel");
     let mut sessions = HashMap::new();
     let mut dirty = false;
 

@@ -13,7 +13,7 @@ use crate::app::state::{
 };
 use crate::config::ai::oauth::OAuthPromptMode;
 use crate::config::ai::presets::find_preset;
-use crate::layout::PaneId;
+use crate::tiling::PaneId;
 use crate::ui::text;
 
 mod events;

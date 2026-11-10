@@ -10,6 +10,7 @@ use super::*;
 use crate::app::prompt::PromptMode;
 use crate::app::tooltip::{BlockButtonKind, TOOLTIP_DELAY, TemplateButtonKind, Tooltip};
 use crate::config::Config;
+use crate::ui::right_panel::prompt::geometry;
 
 /// 测试屏幕矩形（与 `view_for` 一致）。
 const SCREEN: Rect = Rect::new(0, 0, 100, 24);
@@ -28,9 +29,9 @@ fn view_for(state: &AppState) -> ViewLayout {
 }
 
 fn pane_rects(state: &AppState, view: &ViewLayout) -> Vec<(PaneId, Rect)> {
-    crate::layout::pane_rects(
+    crate::tiling::pane_rects(
         &state.active_tab().layout,
-        view.panes,
+        view.main_content,
         Config::default().min_pane_width,
         Config::default().min_pane_height,
     )
@@ -65,7 +66,7 @@ fn hits_collapse_buttons_and_misses_content() {
         target_at(&view, &state, &rects, SCREEN, area.x + 1, area.y),
         Some(TooltipTarget::CollapseSidebar)
     );
-    let pane_point = (view.panes.x + 2, view.panes.y + 2);
+    let pane_point = (view.main_content.x + 2, view.main_content.y + 2);
     assert_eq!(
         target_at(&view, &state, &rects, SCREEN, pane_point.0, pane_point.1),
         None
@@ -103,7 +104,7 @@ fn hits_pane_toggle_add_workspace_tab_bar_and_exit() {
         Some(TooltipTarget::PaneToggle(pane))
     );
 
-    let add_workspace = sidebar::add_workspace_button(&view).expect("add workspace visible");
+    let add_workspace = left_panel::add_workspace_button(&view).expect("add workspace visible");
     assert_eq!(
         target_at(
             &view,
@@ -134,9 +135,9 @@ fn hits_prompt_toolbar_and_pin_but_not_when_collapsed() {
     let mut state = AppState::demo();
     let view = view_for(&state);
     let rects = pane_rects(&state, &view);
-    let undo = layout::prompt_toolbar_button_rect(
-        view.prompt,
-        layout::PromptToolbarButton::Undo,
+    let undo = geometry::prompt_toolbar_button_rect(
+        view.right_panel,
+        geometry::PromptToolbarButton::Undo,
         PromptMode::Editor,
         Some("1/2"),
     )
@@ -145,7 +146,7 @@ fn hits_prompt_toolbar_and_pin_but_not_when_collapsed() {
         target_at(&view, &state, &rects, SCREEN, undo.x, undo.y),
         Some(TooltipTarget::PromptUndo)
     );
-    let pin = ui::prompt_pin_button(view.prompt, state.prompt_pinned.is_some())
+    let pin = ui::prompt_pin_button(view.right_panel, state.prompt_pinned.is_some())
         .expect("pin button visible");
     assert_eq!(
         target_at(&view, &state, &rects, SCREEN, pin.x, pin.y),
@@ -367,12 +368,12 @@ fn hits_template_block_buttons_via_prompt_text_area() {
         .insert_str("&&& addTemplate --start\n# add\n&&& addTemplate --end");
     let view = view_for(&state);
     let rects = pane_rects(&state, &view);
-    let area = layout::prompt_text_rect(view.prompt);
-    let hits = ui::prompt::template_buttons(&state.prompt, area);
+    let area = geometry::prompt_text_rect(view.right_panel);
+    let hits = ui::right_panel::prompt::template_buttons(&state.prompt, area);
     assert_eq!(hits.len(), 3, "复制、清理、删除按钮可见");
     let copy = hits
         .iter()
-        .find(|hit| hit.button == ui::prompt::TemplateBlockButton::Copy)
+        .find(|hit| hit.button == ui::right_panel::prompt::TemplateBlockButton::Copy)
         .expect("copy button visible");
     assert_eq!(
         target_at(&view, &state, &rects, SCREEN, copy.rect.x, copy.rect.y),
@@ -397,14 +398,15 @@ fn hits_title_row_page_title_and_page_controls_for_tooltips() {
         .set_text("&&& addTemplate --start\n{title: MyPage}\n&&& addTemplate --end");
     let view = view_for(&state);
     let rects = pane_rects(&state, &view);
-    let rect = ui::prompt_frame::prompt_status_rect(view.prompt, &state).expect("page title rect");
+    let rect = ui::right_panel::prompt::frame::prompt_status_rect(view.right_panel, &state)
+        .expect("page title rect");
     assert_eq!(
         target_at(&view, &state, &rects, SCREEN, rect.x, rect.y),
         Some(TooltipTarget::PromptTemplateStatus)
     );
 
-    let bar = layout::prompt_toolbar_rect(view.prompt).expect("toolbar");
-    let controls = layout::toolbar_page_controls(bar, "1/1", true).expect("page controls");
+    let bar = geometry::prompt_toolbar_rect(view.right_panel).expect("toolbar");
+    let controls = geometry::toolbar_page_controls(bar, "1/1", true).expect("page controls");
     for (control_rect, expected, hint) in [
         (
             controls.prev,
@@ -461,12 +463,12 @@ fn hits_block_buttons_via_prompt_text_area() {
         .insert_str("+++ supplement --start\nbody\n+++ supplement --end");
     let view = view_for(&state);
     let rects = pane_rects(&state, &view);
-    let area = layout::prompt_text_rect(view.prompt);
-    let hits = ui::prompt::block_buttons(&state.prompt, area);
+    let area = geometry::prompt_text_rect(view.right_panel);
+    let hits = ui::right_panel::prompt::block_buttons(&state.prompt, area);
     assert_eq!(hits.len(), 3, "复制、清理、删除按钮可见");
     let clean = hits
         .iter()
-        .find(|hit| hit.button == ui::prompt::BlockButton::Clean)
+        .find(|hit| hit.button == ui::right_panel::prompt::BlockButton::Clean)
         .expect("clean button visible");
     assert_eq!(
         target_at(&view, &state, &rects, SCREEN, clean.rect.x, clean.rect.y),

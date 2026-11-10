@@ -96,16 +96,16 @@ fn compact_failure_stays_inside_the_pane() {
         state.prompt_left,
         state.panes_collapsed,
     );
-    let rects = crate::layout::pane_rects(
+    let rects = crate::tiling::pane_rects(
         &state.active_tab().layout,
-        view.panes,
+        view.main_content,
         config.min_pane_width,
         config.min_pane_height,
     );
     let Some((_, pane_rect)) = rects.iter().find(|(id, _)| *id == pane) else {
         panic!("焦点窗格有矩形");
     };
-    let inner = crate::layout::pane_inner_rect(*pane_rect);
+    let inner = crate::tiling::pane_inner_rect(*pane_rect);
     let target = state.pane_anywhere(pane).expect("pane");
     let toast = crate::ui::main_content::lx::toast_rect(inner, &target.lx).expect("toast 可见");
     assert!(
@@ -143,9 +143,9 @@ fn lx_toast_is_painted_inside_the_pane() {
         state.prompt_left,
         state.panes_collapsed,
     );
-    let rects = crate::layout::pane_rects(
+    let rects = crate::tiling::pane_rects(
         &state.active_tab().layout,
-        view.panes,
+        view.main_content,
         config.min_pane_width,
         config.min_pane_height,
     );
@@ -153,7 +153,7 @@ fn lx_toast_is_painted_inside_the_pane() {
     let inner = rects
         .iter()
         .find(|(id, _)| *id == pane)
-        .map(|(_, rect)| crate::layout::pane_inner_rect(*rect))
+        .map(|(_, rect)| crate::tiling::pane_inner_rect(*rect))
         .expect("pane rect");
     let target = state.pane_anywhere(pane).expect("pane");
     let toast = crate::ui::main_content::lx::toast_rect(inner, &target.lx).expect("toast 可见");
@@ -191,7 +191,7 @@ fn lx_toast_click_closes_it() {
         .rects
         .iter()
         .find(|(id, _)| *id == pane)
-        .map(|(_, rect)| crate::layout::pane_inner_rect(*rect))
+        .map(|(_, rect)| crate::tiling::pane_inner_rect(*rect))
         .expect("pane rect");
     let target = state.pane_anywhere(pane).expect("pane");
     let toast = crate::ui::main_content::lx::toast_rect(inner, &target.lx).expect("toast 可见");
@@ -262,7 +262,7 @@ fn hovering_the_lx_toast_freezes_its_expiry() {
         .rects
         .iter()
         .find(|(id, _)| *id == pane)
-        .map(|(_, rect)| crate::layout::pane_inner_rect(*rect))
+        .map(|(_, rect)| crate::tiling::pane_inner_rect(*rect))
         .expect("pane rect");
     let target = state.pane_anywhere(pane).expect("pane");
     let toast = crate::ui::main_content::lx::toast_rect(inner, &target.lx).expect("toast 可见");
@@ -422,7 +422,7 @@ fn lx_toast_hover_takes_priority_over_slash_panel_and_clears_on_overlay() {
         .rects
         .iter()
         .find(|(id, _)| *id == pane)
-        .map(|(_, rect)| crate::layout::pane_inner_rect(*rect))
+        .map(|(_, rect)| crate::tiling::pane_inner_rect(*rect))
         .expect("pane rect");
     let toast = {
         let target = state.pane_anywhere(pane).expect("pane");

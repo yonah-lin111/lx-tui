@@ -5,7 +5,7 @@ use std::path::PathBuf;
 
 use portable_pty::{Child, CommandBuilder, MasterPty, PtySize, native_pty_system};
 
-use crate::layout::PaneId;
+use crate::tiling::PaneId;
 
 /// PTY 侧事件：读线程经回调交给事件循环。
 #[derive(Debug)]

@@ -11,7 +11,7 @@ use crate::app::prompt::{PromptEditing, PromptPageId, PromptTitleAction};
 use crate::app::state::{AppState, PendingPromptTitle};
 use crate::app::toast::{Toast, ToastKind};
 use crate::db::chat::TurnCommitted;
-use crate::layout::PaneId;
+use crate::tiling::PaneId;
 use crate::ui::text;
 
 /// 在新会话首轮提交成功后调度异步标题生成（对齐 codex `maybe_start_thread_title_update`）。

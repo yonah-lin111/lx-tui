@@ -3,13 +3,13 @@ use crate::app::actions::*;
 use crate::app::effects::Effect;
 use crate::app::markdown::MentionEntry;
 use crate::app::overlay::*;
-use crate::app::prompt::PromptMode;
+use crate::app::prompt::{PromptEditing, PromptMode};
 use crate::app::state::*;
 use crate::app::toast::{TOAST_DURATION, Toast, ToastKind};
 use crate::app::tooltip::{TOOLTIP_DELAY, TooltipTarget};
 use crate::detect::PaneAgentSnapshot;
-use crate::layout::PaneId;
 use crate::terminal::GridSize;
+use crate::tiling::PaneId;
 use ratatui::layout::{Direction, Rect};
 use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
@@ -25,10 +25,71 @@ fn demo_terminal() -> AppState {
 }
 
 #[test]
-fn quit_sets_flag() {
+fn request_quit_does_not_set_should_quit_or_commit() {
     let mut state = AppState::demo();
-    apply(Action::Quit, &mut state);
+    assert!(open_temp_prompt(&mut state));
+    state.prompt.insert_str("draft");
+    apply(Action::RequestQuit, &mut state);
+    assert!(!state.should_quit, "第一次请求不退出");
+    assert!(matches!(state.overlay, Some(Overlay::ConfirmQuit)));
+    let Some(PromptEditing::Temp(id)) = state.workspaces[0].prompt_panel.editing else {
+        panic!("temp prompt editing expected");
+    };
+    assert_eq!(
+        state.workspaces[0]
+            .prompt_panel
+            .temp(id)
+            .expect("temp prompt")
+            .active_content(),
+        "",
+        "请求退出不提交编辑器"
+    );
+}
+
+#[test]
+fn confirm_quit_sets_should_quit_and_commits() {
+    let mut state = AppState::demo();
+    assert!(open_temp_prompt(&mut state));
+    state.prompt.insert_str("draft");
+    apply(Action::RequestQuit, &mut state);
+    apply(Action::ConfirmQuit, &mut state);
     assert!(state.should_quit);
+    assert!(state.overlay.is_none());
+    assert!(state.suspended_overlay.is_none());
+    let Some(PromptEditing::Temp(id)) = state.workspaces[0].prompt_panel.editing else {
+        panic!("temp prompt editing expected");
+    };
+    assert_eq!(
+        state.workspaces[0]
+            .prompt_panel
+            .temp(id)
+            .expect("temp prompt")
+            .active_content(),
+        "draft",
+        "确认退出才提交编辑器"
+    );
+}
+
+#[test]
+fn cancel_quit_restores_suspended_overlay() {
+    let mut state = AppState::demo();
+    open_workspace_menu(&mut state, 0, (0, 0));
+    apply(Action::RequestQuit, &mut state);
+    assert_eq!(
+        state.overlay.as_ref().map(Overlay::kind),
+        Some(OverlayKind::ConfirmQuit)
+    );
+    assert_eq!(
+        state.suspended_overlay.as_ref().map(Overlay::kind),
+        Some(OverlayKind::Menu)
+    );
+    apply(Action::CancelQuit, &mut state);
+    assert_eq!(
+        state.overlay.as_ref().map(Overlay::kind),
+        Some(OverlayKind::Menu)
+    );
+    assert!(state.suspended_overlay.is_none());
+    assert!(!state.should_quit);
 }
 
 #[test]
@@ -2133,7 +2194,7 @@ fn activate_menu_split_down_places_pane_below() {
     let tab = state.active_tab();
     assert_eq!(tab.layout.pane_ids().len(), 2);
     let new_id = tab.layout.focus();
-    let rects = crate::layout::pane_rects(&tab.layout, Rect::new(0, 0, 80, 20), 10, 3);
+    let rects = crate::tiling::pane_rects(&tab.layout, Rect::new(0, 0, 80, 20), 10, 3);
     let rect_of = |id: PaneId| rects.iter().find(|(pane, _)| *pane == id).map(|(_, r)| *r);
     assert_eq!(rect_of(source).map(|rect| rect.y), Some(0));
     assert_eq!(rect_of(new_id).map(|rect| rect.y), Some(10));

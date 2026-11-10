@@ -223,6 +223,53 @@ fn rename_buttons_hit_their_cells() {
 }
 
 #[test]
+fn quit_confirm_shell_clamps_to_narrow_screen_and_hides_when_too_small() {
+    let narrow = Rect::new(0, 0, 40, 10);
+    let shell = quit_confirm_shell(narrow).expect("narrow shell fits");
+    assert_eq!(shell.area.width, 40, "宽度夹取到屏幕");
+    assert_eq!(shell.area.height, 7, "单行问题 + 顶栏/按钮行");
+
+    let short = Rect::new(0, 0, 80, 5);
+    let shell = quit_confirm_shell(short).expect("short shell fits");
+    assert_eq!(shell.area.height, 5, "高度夹取到屏幕");
+
+    assert!(quit_confirm_shell(Rect::new(0, 0, 3, 3)).is_none());
+}
+
+#[test]
+fn quit_confirm_buttons_hit_their_cells() {
+    let shell = quit_confirm_shell(SCREEN).expect("quit confirm fits");
+    let rects = widgets::modal::button_row(
+        shell.inner,
+        &[text::BUTTON_CONFIRM, text::BUTTON_CANCEL],
+        BUTTON_GAP,
+        shell.inner.height.saturating_sub(1),
+    );
+    assert_eq!(
+        confirm_button_at(&shell, rects[0].x, rects[0].y),
+        Some(ConfirmButton::Confirm)
+    );
+    assert_eq!(
+        confirm_button_at(&shell, rects[1].x, rects[1].y),
+        Some(ConfirmButton::Cancel)
+    );
+    assert_eq!(confirm_button_at(&shell, rects[0].x, rects[0].y + 1), None);
+}
+
+#[test]
+fn quit_confirm_renders_title_question_and_buttons() {
+    let mut state = AppState::demo();
+    state.overlay = Some(Overlay::ConfirmQuit);
+    let (lines, cursor) = draw_overlay(&state);
+    let joined = lines.join("\n");
+    assert!(joined.contains(text::EXIT_CONFIRM_TITLE), "{joined}");
+    assert!(joined.contains(text::EXIT_CONFIRM_QUESTION), "{joined}");
+    assert!(joined.contains(text::BUTTON_CONFIRM), "{joined}");
+    assert!(joined.contains(text::BUTTON_CANCEL), "{joined}");
+    assert!(cursor.is_none(), "退出确认不占用硬件光标");
+}
+
+#[test]
 fn confirm_modal_renders_question_and_buttons() {
     let mut state = AppState::demo();
     let item = crate::app::prompt::PromptItem::single(1, None, "item", "body");

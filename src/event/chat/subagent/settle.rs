@@ -11,7 +11,7 @@ use crate::chat::compact::AutoCompactNotice;
 use crate::chat::events::StopReason;
 use crate::db::chat::{CompactCommit, ModelSnapshot, ReportPayload};
 use crate::db::new_external_id;
-use crate::layout::PaneId;
+use crate::tiling::PaneId;
 
 /// 子 turn 终态：落库、逐轮报告、按状态机决定继续消费队列或释放恢复标记。
 #[cfg(test)]

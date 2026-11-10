@@ -8,8 +8,9 @@ use lx_tui::app::prompt::{PromptItem, PromptPage};
 use lx_tui::app::state::AppState;
 use lx_tui::app::update;
 use lx_tui::config::Config;
-use lx_tui::layout;
+use lx_tui::tiling;
 use lx_tui::ui;
+use lx_tui::ui::right_panel::prompt::geometry;
 use lx_tui::ui::text;
 use ratatui::Terminal;
 use ratatui::backend::TestBackend;
@@ -34,13 +35,13 @@ fn ready_state() -> (AppState, Config, ui::layout::ViewLayout) {
         state.prompt_left,
         state.panes_collapsed,
     );
-    let mut rects = layout::pane_rects(
+    let mut rects = tiling::pane_rects(
         &state.active_tab().layout,
-        view.panes,
+        view.main_content,
         config.min_pane_width,
         config.min_pane_height,
     );
-    rects.push((state.prompt.id(), view.prompt));
+    rects.push((state.prompt.id(), view.right_panel));
     update::resize_panes(&mut state, &rects);
     (state, config, view)
 }
@@ -68,14 +69,14 @@ fn draw(state: &AppState, config: &Config) -> Terminal<TestBackend> {
 /// 面板内某一行（按面板列范围裁剪）。
 fn panel_row(terminal: &Terminal<TestBackend>, view: &ui::layout::ViewLayout, y: u16) -> String {
     let buffer = terminal.backend().buffer();
-    (view.prompt.x..view.prompt.right())
+    (view.right_panel.x..view.right_panel.right())
         .map(|x| buffer[(x, y)].symbol())
         .collect()
 }
 
 /// 容器顶边框整行（含左右圆角，承载 tab）。
 fn border_row(terminal: &Terminal<TestBackend>, view: &ui::layout::ViewLayout) -> String {
-    panel_row(terminal, view, view.prompt.y)
+    panel_row(terminal, view, view.right_panel.y)
 }
 
 /// 标题行（工具栏下一行，承载条目名/页名）。
@@ -83,13 +84,13 @@ fn title_row(terminal: &Terminal<TestBackend>, view: &ui::layout::ViewLayout) ->
     panel_row(
         terminal,
         view,
-        layout::pane_inner_rect(view.prompt).y + layout::PROMPT_TOOLBAR_HEIGHT,
+        tiling::pane_inner_rect(view.right_panel).y + geometry::PROMPT_TOOLBAR_HEIGHT,
     )
 }
 
 /// 工具栏行（承载模式、`[rec]`、页控件与保存点）。
 fn toolbar_row(terminal: &Terminal<TestBackend>, view: &ui::layout::ViewLayout) -> String {
-    panel_row(terminal, view, layout::pane_inner_rect(view.prompt).y)
+    panel_row(terminal, view, tiling::pane_inner_rect(view.right_panel).y)
 }
 
 /// 字符串首字符在屏幕上的列。
@@ -140,7 +141,7 @@ fn toolbar_row_carries_buttons_not_title() {
     paged_prompt(&mut state);
     update::focus_prompt(&mut state);
     let terminal = draw(&state, &config);
-    let inner = layout::pane_inner_rect(view.prompt);
+    let inner = tiling::pane_inner_rect(view.right_panel);
     let toolbar = panel_row(&terminal, &view, inner.y);
 
     assert!(toolbar.contains(text::PROMPT_MODE_LIST_LABEL), "{toolbar}");
@@ -160,43 +161,73 @@ fn border_pager_hit_matches_rendered_columns() {
     update::focus_prompt(&mut state);
     let terminal = draw(&state, &config);
     let toolbar = toolbar_row(&terminal, &view);
-    let row = layout::pane_inner_rect(view.prompt).y;
+    let row = tiling::pane_inner_rect(view.right_panel).y;
 
     // 由真实渲染结果反推控件列：`‹` 切上一页、`›` 切下一页、`n/m` 开页菜单。
-    let prev_col = column_of(&toolbar, text::PROMPT_PAGE_PREV, view.prompt.x);
-    let next_col = column_of(&toolbar, text::PROMPT_PAGE_NEXT, view.prompt.x);
-    let counter_col = column_of(&toolbar, "1/2", view.prompt.x);
+    let prev_col = column_of(&toolbar, text::PROMPT_PAGE_PREV, view.right_panel.x);
+    let next_col = column_of(&toolbar, text::PROMPT_PAGE_NEXT, view.right_panel.x);
+    let counter_col = column_of(&toolbar, "1/2", view.right_panel.x);
 
     assert_eq!(
-        ui::prompt_page_control_at(view.prompt, &state, prev_col, row),
-        Some(ui::prompt::PageControl::Prev),
+        ui::right_panel::prompt::frame::prompt_page_control_at(
+            view.right_panel,
+            &state,
+            prev_col,
+            row
+        ),
+        Some(ui::right_panel::prompt::PageControl::Prev),
         "左箭头命中: {toolbar}"
     );
     assert_eq!(
-        ui::prompt_page_control_at(view.prompt, &state, next_col, row),
-        Some(ui::prompt::PageControl::Next),
+        ui::right_panel::prompt::frame::prompt_page_control_at(
+            view.right_panel,
+            &state,
+            next_col,
+            row
+        ),
+        Some(ui::right_panel::prompt::PageControl::Next),
         "右箭头命中: {toolbar}"
     );
     assert_eq!(
-        ui::prompt_page_control_at(view.prompt, &state, counter_col, row),
-        Some(ui::prompt::PageControl::Counter),
+        ui::right_panel::prompt::frame::prompt_page_control_at(
+            view.right_panel,
+            &state,
+            counter_col,
+            row
+        ),
+        Some(ui::right_panel::prompt::PageControl::Counter),
         "页码命中（打开页菜单）: {toolbar}"
     );
 
     // 条目名与边框空白不产生控件。
     assert_eq!(
-        ui::prompt_page_control_at(view.prompt, &state, view.prompt.x + 3, row),
+        ui::right_panel::prompt::frame::prompt_page_control_at(
+            view.right_panel,
+            &state,
+            view.right_panel.x + 3,
+            row
+        ),
         None,
         "模式按钮不响应: {toolbar}"
     );
     assert_eq!(
-        ui::prompt_page_control_at(view.prompt, &state, view.prompt.x, row),
+        ui::right_panel::prompt::frame::prompt_page_control_at(
+            view.right_panel,
+            &state,
+            view.right_panel.x,
+            row
+        ),
         None,
         "左端 `│` 不响应: {toolbar}"
     );
-    let title_y = layout::pane_inner_rect(view.prompt).y + layout::PROMPT_TOOLBAR_HEIGHT;
+    let title_y = tiling::pane_inner_rect(view.right_panel).y + geometry::PROMPT_TOOLBAR_HEIGHT;
     assert_eq!(
-        ui::prompt_page_control_at(view.prompt, &state, prev_col, title_y),
+        ui::right_panel::prompt::frame::prompt_page_control_at(
+            view.right_panel,
+            &state,
+            prev_col,
+            title_y
+        ),
         None,
         "标题行无页控件命中: {toolbar}"
     );
@@ -218,9 +249,9 @@ fn border_switches_page_and_rename_roundtrip() {
 
     // 末页右箭头置灰（Reset 前景），左箭头可用（Cyan）。
     let buffer = terminal.backend().buffer();
-    let row = layout::pane_inner_rect(view.prompt).y;
-    let next_col = column_of(&toolbar, text::PROMPT_PAGE_NEXT, view.prompt.x);
-    let prev_col = column_of(&toolbar, text::PROMPT_PAGE_PREV, view.prompt.x);
+    let row = tiling::pane_inner_rect(view.right_panel).y;
+    let next_col = column_of(&toolbar, text::PROMPT_PAGE_NEXT, view.right_panel.x);
+    let prev_col = column_of(&toolbar, text::PROMPT_PAGE_PREV, view.right_panel.x);
     assert_eq!(
         buffer[(next_col, row)].fg,
         ratatui::style::Color::Reset,
@@ -247,15 +278,20 @@ fn tree_title_row_is_plain_without_pager() {
         title
             .chars()
             .skip(1)
-            .take(usize::from(view.prompt.width) - 2)
+            .take(usize::from(view.right_panel.width) - 2)
             .all(|ch| ch == text::DIVIDER_MID.chars().next().unwrap_or('─')),
         "树视图标题行为纯分割线: {title}"
     );
     assert!(!title.contains("1/2"), "列表页不分页: {title}");
     assert!(!title.contains('‹') && !title.contains('›'), "{title}");
-    let row = layout::pane_inner_rect(view.prompt).y + layout::PROMPT_TOOLBAR_HEIGHT;
+    let row = tiling::pane_inner_rect(view.right_panel).y + geometry::PROMPT_TOOLBAR_HEIGHT;
     assert_eq!(
-        ui::prompt_page_control_at(view.prompt, &state, view.prompt.x + 3, row),
+        ui::right_panel::prompt::frame::prompt_page_control_at(
+            view.right_panel,
+            &state,
+            view.right_panel.x + 3,
+            row
+        ),
         None,
         "树视图标题行无页控件命中"
     );
@@ -286,16 +322,16 @@ fn rec_and_page_counter_highlight_only_when_panel_opens() {
     let (mut state, config, view) = ready_state();
     paged_prompt(&mut state);
     update::focus_prompt(&mut state);
-    let row = layout::pane_inner_rect(view.prompt).y;
-    let rec = layout::prompt_toolbar_button_rect(
-        view.prompt,
-        layout::PromptToolbarButton::Recent,
+    let row = tiling::pane_inner_rect(view.right_panel).y;
+    let rec = geometry::prompt_toolbar_button_rect(
+        view.right_panel,
+        geometry::PromptToolbarButton::Recent,
         lx_tui::app::prompt::PromptMode::Editor,
         Some("1/2"),
     )
     .expect("recent button");
-    let bar = layout::prompt_toolbar_rect(view.prompt).expect("toolbar");
-    let controls = layout::toolbar_page_controls(bar, "1/2", true).expect("page controls");
+    let bar = geometry::prompt_toolbar_rect(view.right_panel).expect("toolbar");
+    let controls = geometry::toolbar_page_controls(bar, "1/2", true).expect("page controls");
 
     let closed = draw(&state, &config);
     let closed_cell = &closed.backend().buffer()[(rec.x, row)];
@@ -338,7 +374,7 @@ fn rec_and_page_counter_highlight_only_when_panel_opens() {
 
     assert!(update::close_prompt_recent(&mut state));
     assert!(update::toggle_prompt_pages(&mut state));
-    let pages_controls = layout::toolbar_page_controls(bar, "1/2", false).expect("pages counter");
+    let pages_controls = geometry::toolbar_page_controls(bar, "1/2", false).expect("pages counter");
     let pages_drawn = draw(&state, &config);
     let pages_counter_cell = &pages_drawn.backend().buffer()[(pages_controls.counter.x, row)];
     assert_eq!(

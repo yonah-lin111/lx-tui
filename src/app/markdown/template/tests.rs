@@ -291,6 +291,75 @@ fn copy_template_content_keeps_legacy_log_blocks() {
 }
 
 #[test]
+fn template_title_source_excludes_nested_supple_and_logs() {
+    let body = "{title: Old}\n# Execute Task\n\n- Description: build auth\n- Requirements:\n  - keep me\n\n+++ supplement --start {title: }\n- Notes: hidden supple\n+++ supplement --end\n\n%%% logTemplate --start\n- Time: 10:00\n%%% logTemplate --end\n\n+++ log --start\n- Output: hidden log\n+++ log --end\n\n// hidden comment\n{wt:main}\n- Location: src/auth.rs";
+    let source = template_title_source(body);
+    assert!(source.contains("- Description: build auth"), "{source}");
+    assert!(source.contains("- Requirements:\n  - keep me"), "{source}");
+    assert!(source.contains("- Location: src/auth.rs"), "{source}");
+    for hidden in [
+        "hidden",
+        "+++",
+        "%%%",
+        "// hidden",
+        "{wt:main}",
+        "# Execute Task",
+    ] {
+        assert!(!source.contains(hidden), "不应包含 {hidden:?}: {source}");
+    }
+}
+
+#[test]
+fn template_title_source_keeps_fenced_subblock_markers() {
+    let body = r#"- Description: fix render
+```text
++++ not-a-block --start
+%%% also-text --start
++++ not-a-block --end
+%%% also-text --end
+```
+- Location: src/lib.rs"#;
+    let source = template_title_source(body);
+    for kept in [
+        "```text",
+        "+++ not-a-block --start",
+        "%%% also-text --start",
+        "+++ not-a-block --end",
+        "%%% also-text --end",
+        "```",
+        "- Location: src/lib.rs",
+    ] {
+        assert!(source.contains(kept), "围栏内容应保留 {kept:?}: {source}");
+    }
+}
+
+#[test]
+fn supple_title_source_includes_outer_template_without_siblings() {
+    let outer = "{title: Main}\n# Execute Task\n\n- Description: Build auth\n\n+++ current --start\n- Notes: inner detail\n+++ current --end\n\n+++ sibling --start\n- Notes: sibling detail\n+++ sibling --end\n\n{wt:main}\n- Location: src/auth.rs";
+    let own = "{title: }\n- Notes: inner detail";
+    let source = supple_title_source(Some(outer), own);
+    assert_eq!(
+        source,
+        "- Description: Build auth\n\n- Location: src/auth.rs\n\n- Notes: inner detail"
+    );
+    assert!(!source.contains("sibling detail"), "{source}");
+}
+
+#[test]
+fn supple_title_source_top_level_uses_own_body_only() {
+    let own = "{title: }\n- Notes: top level\n// hidden\n{wt:main}";
+    assert_eq!(supple_title_source(None, own), "- Notes: top level");
+}
+
+#[test]
+fn template_title_source_empty_boilerplate_is_empty() {
+    let body = "{title: }\n\n# Execute Task\n\n- Reference: \n- Description: \n";
+    assert!(template_title_source(body).is_empty());
+    assert!(extract_block_title_source(body).is_empty());
+    assert!(supple_title_source(None, body).is_empty());
+}
+
+#[test]
 fn template_block_start_at_finds_enclosing_block() {
     let text = "a\n&&& addTemplate --start\n{title: }\nbody\n&&& addTemplate --end\nb";
     assert_eq!(template_block_start_at(text, 0), None, "块外行");

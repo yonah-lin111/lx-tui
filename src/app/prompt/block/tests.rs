@@ -1,7 +1,7 @@
 //! 补充块追加落点、撤销与视口滚动测试。
 
 use super::*;
-use crate::layout::PaneId;
+use crate::tiling::PaneId;
 
 fn prompt_with(width: u16, height: u16, text: &str) -> Prompt {
     let mut p = Prompt::new(PaneId::from_raw_for_test(1));
@@ -390,6 +390,42 @@ fn slash_title_in_supple_block_targets_supple_and_preserves_empty_line() {
             original_title: Some(String::new()),
             content: "- Notes: Extra detail".to_string(),
         }
+    );
+}
+
+#[test]
+fn slash_title_in_nested_template_excludes_supple_and_log_bodies() {
+    let text = "&&& addTemplate --start\n{title: Old}\n\n- Description: Build auth\n\n+++ supplement --start\n- Notes: hidden supple\n+++ supplement --end\n\n+++ log --start\n- Time: 10:00\n+++ log --end\n\n/title\n&&& addTemplate --end";
+    let mut p = prompt_with(80, 20, text);
+    let cursor = text.find("/title").expect("slash") + "/title".len();
+    p.set_cursor_offset(cursor);
+
+    assert!(p.slash_confirm(), "确认 /title");
+    assert_eq!(
+        p.take_title_action(),
+        Some(crate::app::prompt::PromptTitleAction::Generate {
+            block_start_line: 0,
+            original_title: Some("Old".to_string()),
+            content: "- Description: Build auth".to_string(),
+        })
+    );
+}
+
+#[test]
+fn slash_title_in_nested_supple_uses_outer_template_and_own_body() {
+    let text = "&&& addTemplate --start\n{title: Main}\n\n- Description: Outer task\n\n+++ supplement --start\n{title: }\n\n- Notes: Inner detail\n/title\n+++ supplement --end\n\n+++ sibling --start\n- Notes: Sibling detail\n+++ sibling --end\n\n&&& addTemplate --end";
+    let mut p = prompt_with(80, 24, text);
+    let cursor = text.find("/title").expect("slash") + "/title".len();
+    p.set_cursor_offset(cursor);
+
+    assert!(p.slash_confirm(), "在嵌套 +++ 内确认 /title");
+    assert_eq!(
+        p.take_title_action(),
+        Some(crate::app::prompt::PromptTitleAction::Generate {
+            block_start_line: 5,
+            original_title: Some(String::new()),
+            content: "- Description: Outer task\n\n- Notes: Inner detail".to_string(),
+        })
     );
 }
 

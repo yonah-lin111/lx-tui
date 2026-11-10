@@ -16,7 +16,7 @@ use super::Fixture;
 
 const TIMEOUT: Duration = Duration::from_secs(10);
 
-fn shell_ready(fixture: &Fixture, text: &str) -> (AppState, Persistence, crate::layout::PaneId) {
+fn shell_ready(fixture: &Fixture, text: &str) -> (AppState, Persistence, crate::tiling::PaneId) {
     let mut state = AppState::demo();
     state.active_workspace_mut().cwd = Some(fixture.workspace().to_path_buf());
     let pane = state.active_tab().layout.focus();
@@ -26,7 +26,7 @@ fn shell_ready(fixture: &Fixture, text: &str) -> (AppState, Persistence, crate::
     (state, Persistence::with_database(fixture.database()), pane)
 }
 
-fn terminal(state: &AppState, pane: crate::layout::PaneId) -> bool {
+fn terminal(state: &AppState, pane: crate::tiling::PaneId) -> bool {
     state
         .pane_anywhere(pane)
         .and_then(|target| target.lx.chat.messages.last())
@@ -41,7 +41,7 @@ async fn drive_until_terminal(
     sender: &mpsc::UnboundedSender<AppEvent>,
     receiver: &mut mpsc::UnboundedReceiver<AppEvent>,
     process_receiver: &mut mpsc::UnboundedReceiver<crate::chat::process::ProcessUiEvent>,
-    pane: crate::layout::PaneId,
+    pane: crate::tiling::PaneId,
 ) {
     let deadline = tokio::time::Instant::now() + TIMEOUT;
     while !terminal(state, pane) {

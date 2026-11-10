@@ -39,7 +39,7 @@ fn lx_with_status(status: ChatStatus) -> Lx {
 
 /// 真实窗格几何：窗格矩形 `rect` 的边框内缩 1 得内容区。
 fn pane(rect: Rect) -> Rect {
-    crate::layout::pane_inner_rect(rect)
+    crate::tiling::pane_inner_rect(rect)
 }
 
 /// 在内容区上模拟窗格边框：底边框行铺 `─` 与两角 `╰`/`╯`，再渲染状态，返回底边框整行文本。

@@ -29,7 +29,8 @@ fn prompt_clamps_within_byte_limit_on_utf8_boundary_and_stays_english() {
 
     let tpl_prompt =
         template_block_title_prompt_for(&long_cjk, TitleLanguage::English).expect("en prompt");
-    assert!(tpl_prompt.len() <= TITLE_PROMPT_MAX_BYTES);
+    assert!(tpl_prompt.len() <= TEMPLATE_TITLE_PROMPT_MAX_BYTES);
+    assert!(tpl_prompt.len() > TITLE_PROMPT_MAX_BYTES);
     assert!(tpl_prompt.contains("You MUST write the title in English"));
     assert!(tpl_prompt.contains("Task template content:"));
 }
@@ -105,4 +106,104 @@ fn parse_generated_title_strips_braces_and_truncates_to_36_chars() {
     let parsed = parse_generated_title(raw).expect("parsed");
     assert!(!parsed.contains('{') && !parsed.contains('}'));
     assert!(parsed.chars().count() <= TITLE_MAX_CHARS);
+}
+
+#[test]
+fn template_prompt_contains_db_style_examples_and_session_prompt_does_not() {
+    let zh = template_block_title_prompt_for(
+        "- Description: 修改 todo item 的缩进",
+        TitleLanguage::Auto,
+    )
+    .expect("zh prompt");
+    assert!(zh.contains("修改 todo item 的缩进"), "{zh}");
+    assert!(zh.contains("添加 /mcp 命令"), "{zh}");
+    assert!(zh.contains("为 prompt 输入框添加省略"), "{zh}");
+    assert!(zh.contains("Never output a generic verb alone"), "{zh}");
+
+    let en = template_block_title_prompt_for("- Description: Fix indentation", TitleLanguage::Auto)
+        .expect("en prompt");
+    assert!(en.contains("Fix todo item indentation"), "{en}");
+    assert!(en.contains("Truncate long prompt input"), "{en}");
+    assert!(en.contains("Never output a generic verb alone"), "{en}");
+
+    let session = session_title_prompt_for("Fix indentation", TitleLanguage::English)
+        .expect("session prompt");
+    assert!(!session.contains("Examples of good titles"), "{session}");
+    assert!(!session.contains("Fix todo item indentation"), "{session}");
+    assert!(
+        !session.contains("Never output a generic verb alone"),
+        "{session}"
+    );
+}
+
+#[test]
+fn template_prompt_clamps_to_2048_and_keeps_utf8_boundary() {
+    let long_cjk = "修复设置页模型与供应商拆分以及自动生成标题问题".repeat(200);
+    let prompt = template_block_title_prompt_for(&long_cjk, TitleLanguage::SimplifiedChinese)
+        .expect("template prompt");
+    assert!(
+        prompt.len() <= TEMPLATE_TITLE_PROMPT_MAX_BYTES,
+        "{}",
+        prompt.len()
+    );
+    assert!(prompt.contains("Task template content:"));
+    assert!(!prompt.contains('\u{FFFD}'));
+    assert_eq!(
+        prompt.len(),
+        prompt.trim_end().len(),
+        "截断后不得留下半截字符"
+    );
+
+    let session = session_title_prompt_for(&long_cjk, TitleLanguage::SimplifiedChinese)
+        .expect("session prompt");
+    assert!(session.len() <= TITLE_PROMPT_MAX_BYTES);
+    assert!(!session.contains("Examples of good titles"));
+}
+
+#[test]
+fn template_title_instructions_follow_language_branches() {
+    let zh = template_title_instructions_for(TitleLanguage::SimplifiedChinese, "修改缩进");
+    assert!(zh.contains("Simplified Chinese"), "{zh}");
+    assert!(zh.contains("修改 todo item 的缩进"), "{zh}");
+
+    let trad = template_title_instructions_for(TitleLanguage::TraditionalChinese, "修改縮排");
+    assert!(trad.contains("Traditional Chinese"), "{trad}");
+    assert!(!trad.contains("修改 todo item 的缩进"), "{trad}");
+
+    let ja = template_title_instructions_for(TitleLanguage::Japanese, "タイトル修正");
+    assert!(ja.contains("Japanese"), "{ja}");
+
+    let ko = template_title_instructions_for(TitleLanguage::Korean, "제목 수정");
+    assert!(ko.contains("Korean"), "{ko}");
+
+    let en = template_title_instructions_for(TitleLanguage::English, "Fix indentation");
+    assert!(en.contains("English"), "{en}");
+    assert!(en.contains("Fix todo item indentation"), "{en}");
+
+    let auto_en = template_title_instructions_for(TitleLanguage::Auto, "Fix indentation");
+    assert!(
+        auto_en.contains("Ignore English template field labels"),
+        "{auto_en}"
+    );
+    assert!(auto_en.contains("Fix todo item indentation"), "{auto_en}");
+
+    let auto_zh = template_title_instructions_for(TitleLanguage::Auto, "修改缩进");
+    assert!(auto_zh.contains("Simplified Chinese"), "{auto_zh}");
+    assert!(auto_zh.contains("修改 todo item 的缩进"), "{auto_zh}");
+}
+
+#[test]
+fn parse_generated_title_strips_leading_list_markers() {
+    for (raw, expected) in [
+        ("- Fix todo indentation", "Fix todo indentation"),
+        ("* Add /mcp command", "Add /mcp command"),
+        ("+ Add scrollbar", "Add scrollbar"),
+        (
+            "1. Truncate long prompt input",
+            "Truncate long prompt input",
+        ),
+        ("12. 修改 todo item 的缩进", "修改 todo item 的缩进"),
+    ] {
+        assert_eq!(parse_generated_title(raw).as_deref(), Some(expected));
+    }
 }

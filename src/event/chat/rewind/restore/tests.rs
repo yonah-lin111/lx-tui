@@ -169,7 +169,7 @@ fn request(
     action: RewindAction,
 ) -> RewindRequest {
     RewindRequest {
-        pane: crate::layout::PaneId::alloc(),
+        pane: crate::tiling::PaneId::alloc(),
         session_id: turn.session_id.clone(),
         target_user_message_id: turn.user_message_id.clone(),
         expected_revision: u64::try_from(turn.revision).expect("revision"),
@@ -620,7 +620,7 @@ fn restores_actual_linked_worktree_target_only() {
         &database,
         &repo,
         &crate::app::effects::RewindRequest {
-            pane: crate::layout::PaneId::alloc(),
+            pane: crate::tiling::PaneId::alloc(),
             session_id: turn.session_id.clone(),
             target_user_message_id: turn.user_message_id.clone(),
             expected_revision: u64::try_from(turn.revision).expect("rev"),

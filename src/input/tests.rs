@@ -34,11 +34,11 @@ fn bare_keys_go_to_pane() {
 }
 
 #[test]
-fn ctrl_q_quits() {
+fn ctrl_q_requests_quit() {
     let key = KeyEvent::new(KeyCode::Char('q'), KeyModifiers::CONTROL);
     assert_eq!(
         route(key, TermMode::empty(), false),
-        Some(Routed::Action(Action::Quit))
+        Some(Routed::Action(Action::RequestQuit))
     );
 }
 
@@ -472,8 +472,45 @@ fn ctrl_q_quits_even_when_prompt_focused() {
     let key = KeyEvent::new(KeyCode::Char('q'), KeyModifiers::CONTROL);
     assert_eq!(
         route(key, TermMode::empty(), true),
-        Some(Routed::Action(Action::Quit))
+        Some(Routed::Action(Action::RequestQuit))
     );
+}
+
+#[test]
+fn ctrl_q_confirms_when_confirm_quit_open() {
+    let key = KeyEvent::new(KeyCode::Char('q'), KeyModifiers::CONTROL);
+    assert_eq!(
+        super::route(
+            key,
+            TermMode::empty(),
+            crate::app::state::FocusedContainer::Panes,
+            Some(OverlayKind::ConfirmQuit),
+            false,
+        ),
+        Some(Routed::Action(Action::ConfirmQuit))
+    );
+}
+
+#[test]
+fn confirm_quit_routes_esc_and_enter() {
+    let route_confirm = |code| {
+        super::route(
+            key(code),
+            TermMode::empty(),
+            crate::app::state::FocusedContainer::Panes,
+            Some(OverlayKind::ConfirmQuit),
+            false,
+        )
+    };
+    assert_eq!(
+        route_confirm(KeyCode::Esc),
+        Some(Routed::Overlay(OverlayKey::Esc))
+    );
+    assert_eq!(
+        route_confirm(KeyCode::Enter),
+        Some(Routed::Overlay(OverlayKey::Enter))
+    );
+    assert_eq!(route_confirm(KeyCode::Char('a')), None);
 }
 
 #[test]
@@ -658,7 +695,7 @@ fn referenced_search_routes_enter_folder_and_back() {
             Some(OverlayKind::ReferencedFolderSearch),
             false,
         ),
-        Some(Routed::Action(crate::app::actions::Action::Quit))
+        Some(Routed::Action(crate::app::actions::Action::RequestQuit))
     );
 }
 
@@ -847,7 +884,7 @@ fn overlay_does_not_swallow_ctrl_q() {
             Some(OverlayKind::Menu),
             false
         ),
-        Some(Routed::Action(Action::Quit))
+        Some(Routed::Action(Action::RequestQuit))
     );
 }
 
@@ -1011,7 +1048,7 @@ fn lx_view_routes_editing_keys_and_swallows_others() {
             None,
             true
         ),
-        Some(Routed::Action(Action::Quit))
+        Some(Routed::Action(Action::RequestQuit))
     );
     // prompt 聚焦优先于 lx 输入：按键仍进入编辑器。
     assert_eq!(

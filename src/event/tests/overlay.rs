@@ -39,8 +39,8 @@ fn mouse_right_click_workspace_item_opens_workspace_menu() {
     let config = Config::default();
     let mut state = demo_terminal();
     let geo = geometry(&state, &config, Rect::new(0, 0, 120, 30));
-    let sections =
-        ui::layout::sidebar_sections(geo.view.sidebar, state.agents_collapsed).expect("sections");
+    let sections = ui::layout::sidebar_sections(geo.view.left_panel, state.agents_collapsed)
+        .expect("sections");
     let (column, row) = (sections.workspaces.x, sections.workspaces.y);
     let mut sessions = HashMap::new();
     let mut dirty = false;
@@ -71,8 +71,8 @@ fn mouse_right_click_workspace_list_blank_opens_new_workspace_menu() {
     let config = Config::default();
     let mut state = demo_terminal();
     let geo = geometry(&state, &config, Rect::new(0, 0, 120, 30));
-    let sections =
-        ui::layout::sidebar_sections(geo.view.sidebar, state.agents_collapsed).expect("sections");
+    let sections = ui::layout::sidebar_sections(geo.view.left_panel, state.agents_collapsed)
+        .expect("sections");
     let (column, row) = (sections.workspaces.x, sections.workspaces.y + 1);
     let mut sessions = HashMap::new();
     let mut dirty = false;
@@ -127,8 +127,8 @@ fn mouse_right_click_workspace_blank_retargets_open_menu() {
     );
     assert!(state.overlay.is_some(), "窗格菜单先打开");
 
-    let sections =
-        ui::layout::sidebar_sections(geo.view.sidebar, state.agents_collapsed).expect("sections");
+    let sections = ui::layout::sidebar_sections(geo.view.left_panel, state.agents_collapsed)
+        .expect("sections");
     let (column, row) = (sections.workspaces.x, sections.workspaces.y + 1);
     handle_terminal_event(
         mouse(MouseEventKind::Down(MouseButton::Right), column, row),
@@ -156,8 +156,8 @@ fn mouse_right_click_agents_blank_does_not_open_menu() {
     let config = Config::default();
     let mut state = demo_terminal();
     let geo = geometry(&state, &config, Rect::new(0, 0, 120, 30));
-    let sections =
-        ui::layout::sidebar_sections(geo.view.sidebar, state.agents_collapsed).expect("sections");
+    let sections = ui::layout::sidebar_sections(geo.view.left_panel, state.agents_collapsed)
+        .expect("sections");
     let (column, row) = (sections.agents.x, sections.agents.y + 1);
     let mut sessions = HashMap::new();
     let mut dirty = false;
@@ -217,7 +217,7 @@ fn mouse_right_click_prompt_does_not_open_menu() {
     let config = Config::default();
     let mut state = demo_terminal();
     let geo = geometry(&state, &config, Rect::new(0, 0, 120, 30));
-    let inner = layout::pane_inner_rect(geo.view.prompt);
+    let inner = tiling::pane_inner_rect(geo.view.right_panel);
     let mut sessions = HashMap::new();
     let mut dirty = false;
 
@@ -306,7 +306,7 @@ fn mouse_right_click_prompt_closes_open_pane_menu() {
     );
     assert!(state.overlay.is_some());
 
-    let prompt_inner = layout::pane_inner_rect(geo.view.prompt);
+    let prompt_inner = tiling::pane_inner_rect(geo.view.right_panel);
     handle_terminal_event(
         mouse(
             MouseEventKind::Down(MouseButton::Right),
@@ -705,6 +705,156 @@ fn trust_overlay_inside_click_keeps_open_and_outside_refuses() {
     handle_overlay_click(&mut state, screen, 0, 0);
     assert!(state.overlay.is_none(), "浮层之外点击关闭");
     assert!(state.effects.is_empty(), "拒绝不登记信任效应");
+}
+
+#[test]
+fn exit_button_requests_quit_confirmation() {
+    let config = Config::default();
+    let mut state = demo_terminal();
+    let geo = geometry(&state, &config, Rect::new(0, 0, 120, 30));
+    let exit = ui::exit_button(&geo.view).expect("exit button visible");
+    let mut sessions = HashMap::new();
+    let mut dirty = false;
+
+    handle_terminal_event(
+        mouse(MouseEventKind::Down(MouseButton::Left), exit.x, exit.y),
+        &mut state,
+        &mut sessions,
+        &geo,
+        &config,
+        &mut ui::RenderCache::default(),
+        &mut dirty,
+    );
+
+    assert!(!state.should_quit, "点击 [EXIT] 不直接退出");
+    assert!(matches!(state.overlay, Some(Overlay::ConfirmQuit)));
+    assert!(dirty);
+}
+
+#[test]
+fn confirm_quit_overlay_click_confirms_or_cancels() {
+    let screen = Rect::new(0, 0, 80, 24);
+    let shell = ui::overlay::quit_confirm_shell(screen).expect("shell");
+    let buttons = ui::widgets::modal::button_row(
+        shell.inner,
+        &[
+            crate::ui::text::BUTTON_CONFIRM,
+            crate::ui::text::BUTTON_CANCEL,
+        ],
+        crate::ui::overlay::BUTTON_GAP,
+        shell.inner.height.saturating_sub(1),
+    );
+
+    let mut state = AppState::demo();
+    state.overlay = Some(Overlay::ConfirmQuit);
+    handle_overlay_click(&mut state, screen, buttons[0].x, buttons[0].y);
+    assert!(state.should_quit, "点击 ↵ confirm 退出");
+    assert!(state.overlay.is_none());
+
+    let mut state = AppState::demo();
+    state.overlay = Some(Overlay::Rename(crate::app::overlay::Rename {
+        target: crate::app::overlay::RenameTarget::Workspace(0),
+        input: crate::app::overlay::TextInput::new("name"),
+    }));
+    update::request_quit(&mut state);
+    handle_overlay_click(&mut state, screen, buttons[1].x, buttons[1].y);
+    assert!(!state.should_quit, "点击 esc cancel 不退出");
+    assert!(
+        matches!(state.overlay, Some(Overlay::Rename(_))),
+        "取消后恢复原浮层"
+    );
+    assert!(state.suspended_overlay.is_none());
+}
+
+#[test]
+fn confirm_quit_overlay_outside_click_keeps_open() {
+    let screen = Rect::new(0, 0, 80, 24);
+    let mut state = AppState::demo();
+    state.overlay = Some(Overlay::ConfirmQuit);
+    handle_overlay_click(&mut state, screen, 0, 0);
+    assert!(
+        matches!(state.overlay, Some(Overlay::ConfirmQuit)),
+        "点击弹窗之外不关闭"
+    );
+    assert!(!state.should_quit);
+}
+
+#[test]
+fn confirm_quit_overlay_esc_cancels_and_enter_confirms() {
+    let config = Config::default();
+    let mut state = demo_terminal();
+    let geo = geometry(&state, &config, Rect::new(0, 0, 120, 30));
+    state.overlay = Some(Overlay::ConfirmQuit);
+    let mut sessions = HashMap::new();
+    let mut dirty = false;
+
+    handle_terminal_event(
+        TerminalEvent::Key(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE)),
+        &mut state,
+        &mut sessions,
+        &geo,
+        &config,
+        &mut ui::RenderCache::default(),
+        &mut dirty,
+    );
+    assert!(state.overlay.is_none(), "Esc 取消退出");
+    assert!(!state.should_quit);
+
+    state.overlay = Some(Overlay::ConfirmQuit);
+    handle_terminal_event(
+        TerminalEvent::Key(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE)),
+        &mut state,
+        &mut sessions,
+        &geo,
+        &config,
+        &mut ui::RenderCache::default(),
+        &mut dirty,
+    );
+    assert!(state.should_quit, "Enter 确认退出");
+}
+
+#[test]
+fn ctrl_q_over_existing_overlay_restores_it_on_cancel() {
+    let config = Config::default();
+    let mut state = demo_terminal();
+    let geo = geometry(&state, &config, Rect::new(0, 0, 120, 30));
+    state.overlay = Some(Overlay::Rename(crate::app::overlay::Rename {
+        target: crate::app::overlay::RenameTarget::Workspace(0),
+        input: crate::app::overlay::TextInput::new("name"),
+    }));
+    let mut sessions = HashMap::new();
+    let mut dirty = false;
+
+    handle_terminal_event(
+        TerminalEvent::Key(KeyEvent::new(KeyCode::Char('q'), KeyModifiers::CONTROL)),
+        &mut state,
+        &mut sessions,
+        &geo,
+        &config,
+        &mut ui::RenderCache::default(),
+        &mut dirty,
+    );
+    assert!(matches!(state.overlay, Some(Overlay::ConfirmQuit)));
+    assert!(
+        matches!(state.suspended_overlay, Some(Overlay::Rename(_))),
+        "暂存底层浮层"
+    );
+
+    handle_terminal_event(
+        TerminalEvent::Key(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE)),
+        &mut state,
+        &mut sessions,
+        &geo,
+        &config,
+        &mut ui::RenderCache::default(),
+        &mut dirty,
+    );
+    assert!(
+        matches!(state.overlay, Some(Overlay::Rename(_))),
+        "取消后恢复原浮层"
+    );
+    assert!(state.suspended_overlay.is_none());
+    assert!(!state.should_quit);
 }
 
 #[test]

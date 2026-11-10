@@ -5,7 +5,7 @@
 //! `Esc` 返回即回到离开时的 lx 页。
 
 use crate::app::state::AppState;
-use crate::layout::PaneId;
+use crate::tiling::PaneId;
 
 /// 打开**后台任务页**：在所在窗格内整页显示，并请求事件层回投进程列表。
 ///

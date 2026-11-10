@@ -12,7 +12,7 @@ use crate::app::state::{
 };
 use crate::chat::events::{ChatDelta, PartKind, StopReason};
 use crate::db::chat::{ModelSnapshot, TurnOutcome, Usage};
-use crate::layout::PaneId;
+use crate::tiling::PaneId;
 use crate::ui::text;
 
 pub mod ask;
@@ -873,7 +873,7 @@ pub(super) fn next_generation(state: &AppState, pane: PaneId) -> u64 {
 pub(crate) mod test_hooks {
     use crate::app::state::AppState;
     use crate::config::ai::ModelSelection;
-    use crate::layout::PaneId;
+    use crate::tiling::PaneId;
 
     pub(crate) fn finish_model_selection(
         state: &mut AppState,

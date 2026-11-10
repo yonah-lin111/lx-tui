@@ -25,7 +25,7 @@ use crate::app::effects::Effect;
 use crate::app::state::lx::{AskHit, AskWheelZone};
 use crate::app::state::{AppState, AskState};
 use crate::app::toast::{Toast, ToastKind};
-use crate::layout::PaneId;
+use crate::tiling::PaneId;
 use crate::ui::text::agent::ASK_TOAST_ANSWER_REQUIRED;
 
 use super::super::WHEEL_LINES;

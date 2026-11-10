@@ -339,13 +339,16 @@ impl Prompt {
         self.splice_text(trigger.line_start, trigger.line_end, "");
         self.cursor = trigger.line_start;
 
-        let raw_body = match kind {
-            markdown::BlockKind::Supple => self.supple_body_at_start(start_line),
-            markdown::BlockKind::Template => self.template_block_body(start_line),
-        };
-        let cleaned = raw_body
-            .map(|body| markdown::extract_block_title_source(&body))
-            .unwrap_or_default();
+        let cleaned = match kind {
+            markdown::BlockKind::Supple => self.supple_body_at_start(start_line).map(|own| {
+                let outer = self.enclosing_template_body(start_line);
+                markdown::supple_title_source(outer.as_deref(), &own)
+            }),
+            markdown::BlockKind::Template => self
+                .template_block_body(start_line)
+                .map(|body| markdown::template_title_source(&body)),
+        }
+        .unwrap_or_default();
 
         if cleaned.is_empty() {
             self.pending_title_action = Some(super::PromptTitleAction::EmptyBlock);

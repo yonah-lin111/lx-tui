@@ -457,7 +457,7 @@ fn copy_reference_uses_refer_file_and_refer_folder_syntax() {
     assert!(copy_referenced_entry_reference(&mut state));
     assert!(copy_referenced_root_path(&mut state));
     let prompt = state.prompt.id();
-    let copies: Vec<(&str, Option<crate::layout::PaneId>)> = state
+    let copies: Vec<(&str, Option<crate::tiling::PaneId>)> = state
         .effects
         .iter()
         .filter_map(|effect| match effect {

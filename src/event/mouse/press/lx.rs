@@ -8,7 +8,7 @@ use ratatui::layout::Rect;
 use crate::app::state::{AppState, CardTarget, PaneKind, PaneView, TaskTab};
 use crate::app::update;
 use crate::config::Config;
-use crate::layout::PaneId;
+use crate::tiling::PaneId;
 use crate::ui;
 
 use super::super::hit::{

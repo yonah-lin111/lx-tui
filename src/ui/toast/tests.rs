@@ -21,9 +21,9 @@ fn view_for(state: &AppState) -> ViewLayout {
 }
 
 fn pane_rects(state: &AppState, view: &ViewLayout) -> Vec<(PaneId, Rect)> {
-    crate::layout::pane_rects(
+    crate::tiling::pane_rects(
         &state.active_tab().layout,
-        view.panes,
+        view.main_content,
         Config::default().min_pane_width,
         Config::default().min_pane_height,
     )
@@ -56,8 +56,11 @@ fn anchored_toast_centers_below_container_top_border() {
         &Config::default(),
     )
     .expect("toast area is resolvable");
-    assert_eq!(rect.y, view.prompt.y + 1);
-    assert_eq!(rect.x, view.prompt.x + (view.prompt.width - rect.width) / 2);
+    assert_eq!(rect.y, view.right_panel.y + 1);
+    assert_eq!(
+        rect.x,
+        view.right_panel.x + (view.right_panel.width - rect.width) / 2
+    );
     assert_eq!(rect.height, 3);
     assert_eq!(
         usize::from(rect.width),

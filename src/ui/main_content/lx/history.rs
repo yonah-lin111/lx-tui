@@ -85,7 +85,7 @@ pub(super) fn thinking_body_indent(width: u16) -> u16 {
 /// 头部文案与思考耗时之间的分隔（`Thought · 6.3s`）。
 const THINKING_DURATION_SEP: &str = " · ";
 /// 历史区右侧滚动条预留列数。
-pub(super) const SCROLLBAR_COLUMNS: u16 = crate::layout::LX_HISTORY_SCROLLBAR;
+pub(super) const SCROLLBAR_COLUMNS: u16 = crate::tiling::LX_HISTORY_SCROLLBAR;
 
 /// assistant 步骤左侧状态标记的语义状态（思考 / 工具调用 / 正文块共用）。
 ///

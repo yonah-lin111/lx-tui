@@ -93,7 +93,8 @@ fn records(count: usize) -> Vec<TodoRecord> {
 #[test]
 fn toolbar_puts_new_on_left_and_actions_on_right() {
     let area = panel(38);
-    let bar = crate::layout::prompt_toolbar_rect(area).expect("toolbar visible");
+    let bar = crate::ui::right_panel::prompt::geometry::prompt_toolbar_rect(area)
+        .expect("toolbar visible");
     let new = button_rect(area, TodoButton::New).expect("[+] visible");
     assert_eq!(new.x, bar.x, "[+] 贴左边框");
     assert_eq!(new.width, NEW_WIDTH);
@@ -131,7 +132,8 @@ fn toolbar_drops_action_buttons_before_new() {
 #[test]
 fn button_hit_matches_button_rect_boundaries() {
     let area = panel(38);
-    let bar = crate::layout::prompt_toolbar_rect(area).expect("toolbar visible");
+    let bar = crate::ui::right_panel::prompt::geometry::prompt_toolbar_rect(area)
+        .expect("toolbar visible");
 
     for (button, _) in BUTTONS {
         let rect = button_rect(area, button).expect("wide panel fits all buttons");
@@ -215,7 +217,7 @@ fn selected_row_uses_selection_style_without_inheriting_border_accent() {
 
     let view = view_for(&state);
     let buffer = render_screen(&state);
-    let list = list_rect(view.prompt);
+    let list = list_rect(view.right_panel);
     let selection = style::selection().bg;
 
     // 选中标记格：selection 前景 + 底色，不得继承聚焦边框的 accent（Cyan + BOLD）。

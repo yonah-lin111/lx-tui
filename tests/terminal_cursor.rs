@@ -4,8 +4,9 @@ use lx_tui::app::actions::EditorCommand;
 use lx_tui::app::state::{AppState, PaneView};
 use lx_tui::app::update;
 use lx_tui::config::Config;
-use lx_tui::layout;
+use lx_tui::tiling;
 use lx_tui::ui;
+use lx_tui::ui::right_panel::prompt::geometry;
 use ratatui::Terminal;
 use ratatui::backend::TestBackend;
 use ratatui::layout::{Position, Rect};
@@ -25,13 +26,13 @@ fn ready_state() -> (AppState, Config, Rect, Rect) {
         state.prompt_left,
         state.panes_collapsed,
     );
-    let mut rects = layout::pane_rects(
+    let mut rects = tiling::pane_rects(
         &state.active_tab().layout,
-        view.panes,
+        view.main_content,
         config.min_pane_width,
         config.min_pane_height,
     );
-    rects.push((state.prompt.id(), view.prompt));
+    rects.push((state.prompt.id(), view.right_panel));
     update::resize_panes(&mut state, &rects);
     let pane = state.active_tab().layout.focus();
     if let Some(target) = state.active_tab_mut().pane_mut(pane) {
@@ -45,8 +46,8 @@ fn ready_state() -> (AppState, Config, Rect, Rect) {
     (
         state,
         config,
-        layout::pane_inner_rect(pane_rect),
-        layout::prompt_text_rect(view.prompt),
+        tiling::pane_inner_rect(pane_rect),
+        geometry::prompt_text_rect(view.right_panel),
     )
 }
 

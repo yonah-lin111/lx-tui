@@ -4,8 +4,9 @@ use lx_tui::app::actions::EditorCommand;
 use lx_tui::app::state::AppState;
 use lx_tui::app::update;
 use lx_tui::config::Config;
-use lx_tui::layout;
+use lx_tui::tiling;
 use lx_tui::ui;
+use lx_tui::ui::right_panel::prompt::geometry;
 use ratatui::Terminal;
 use ratatui::backend::TestBackend;
 use ratatui::layout::Rect;
@@ -26,13 +27,13 @@ fn ready_state() -> (AppState, Config, ui::layout::ViewLayout) {
         state.prompt_left,
         state.panes_collapsed,
     );
-    let mut rects = layout::pane_rects(
+    let mut rects = tiling::pane_rects(
         &state.active_tab().layout,
-        view.panes,
+        view.main_content,
         config.min_pane_width,
         config.min_pane_height,
     );
-    rects.push((state.prompt.id(), view.prompt));
+    rects.push((state.prompt.id(), view.right_panel));
     update::resize_panes(&mut state, &rects);
     (state, config, view)
 }
@@ -110,7 +111,7 @@ fn short_ref_is_highlighted_distinctly() {
         .expect("draw succeeds");
 
     let buffer = terminal.backend().buffer();
-    let text = layout::prompt_text_rect(view.prompt);
+    let text = geometry::prompt_text_rect(view.right_panel);
     let short = &buffer[(text.x, text.y)];
     assert_eq!(short.symbol(), "@");
     assert_eq!(short.fg, Color::Indexed(141), "短引用柔紫");
@@ -137,7 +138,7 @@ fn ref_content_is_highlighted_distinctly() {
         .expect("draw succeeds");
 
     let buffer = terminal.backend().buffer();
-    let text = layout::prompt_text_rect(view.prompt);
+    let text = geometry::prompt_text_rect(view.right_panel);
     let ref_content = &buffer[(text.x, text.y)];
     assert_eq!(ref_content.symbol(), "@");
     assert_eq!(ref_content.fg, Color::Indexed(141), "快捷引用柔紫");

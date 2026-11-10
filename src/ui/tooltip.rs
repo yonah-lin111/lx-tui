@@ -8,10 +8,13 @@ use ratatui::widgets::{Block, Paragraph};
 use crate::app::overlay::Overlay;
 use crate::app::state::{AppState, PaneKind, RightTab};
 use crate::app::tooltip::{BlockButtonKind, TemplateButtonKind, TooltipTarget};
-use crate::layout::{self, PaneId};
+use crate::tiling::PaneId;
 use crate::ui::layout::ViewLayout;
+use crate::ui::right_panel::prompt::geometry::{
+    PromptToolbarButton, prompt_toolbar_button_rect, prompt_toolbar_rect, toolbar_page_controls,
+};
 use crate::ui::widgets::clear;
-use crate::ui::{self, main_content, sidebar, style, tab_bar, text};
+use crate::ui::{self, left_panel, main_content, style, tab_bar, text};
 
 /// 命中全局按钮 tooltip 目标；目标互不重叠，按固定顺序取首个命中。
 pub fn target_at(
@@ -96,7 +99,7 @@ fn targets(
         targets.push((target, button.area));
     }
     if !state.prompt_collapsed
-        && let Some(area) = ui::prompt_pin_button(view.prompt, state.prompt_pinned.is_some())
+        && let Some(area) = ui::prompt_pin_button(view.right_panel, state.prompt_pinned.is_some())
     {
         targets.push((TooltipTarget::PromptPin, area));
     }
@@ -113,10 +116,10 @@ fn targets(
         }
     }
 
-    if let Some(area) = sidebar::workspace_mode_button(view) {
+    if let Some(area) = left_panel::workspace_mode_button(view) {
         targets.push((TooltipTarget::WorkspaceMode, area));
     }
-    if let Some(area) = sidebar::add_workspace_button(view) {
+    if let Some(area) = left_panel::add_workspace_button(view) {
         targets.push((TooltipTarget::AddWorkspace, area));
     }
     if let Some(area) = ui::settings_button(view, state) {
@@ -146,37 +149,31 @@ fn targets(
             crate::app::tooltip::TodoButton::New,
             crate::app::tooltip::TodoButton::Sort,
         ] {
-            if let Some(area) = ui::right_panel::todo::button_rect(view.prompt, button) {
+            if let Some(area) = ui::right_panel::todo::button_rect(view.right_panel, button) {
                 targets.push((TooltipTarget::TodoButton(button), area));
             }
         }
     }
     if !state.prompt_collapsed && state.right_tab == RightTab::Prompt {
         let mode = state.prompt_owner().prompt_panel.mode;
-        let page_header = ui::prompt_frame::prompt_page_header(state);
+        let page_header = ui::right_panel::prompt::frame::prompt_page_header(state);
         let counter = page_header
             .as_ref()
             .map(|page| text::page_counter(page.current, page.total));
         for (button, target) in [
-            (layout::PromptToolbarButton::Mode, TooltipTarget::PromptMode),
+            (PromptToolbarButton::Mode, TooltipTarget::PromptMode),
+            (PromptToolbarButton::Recent, TooltipTarget::PromptRecent),
+            (PromptToolbarButton::Folders, TooltipTarget::PromptFolders),
             (
-                layout::PromptToolbarButton::Recent,
-                TooltipTarget::PromptRecent,
-            ),
-            (
-                layout::PromptToolbarButton::Folders,
-                TooltipTarget::PromptFolders,
-            ),
-            (
-                layout::PromptToolbarButton::TempPrompt,
+                PromptToolbarButton::TempPrompt,
                 TooltipTarget::PromptTempPrompt,
             ),
-            (layout::PromptToolbarButton::Undo, TooltipTarget::PromptUndo),
-            (layout::PromptToolbarButton::Redo, TooltipTarget::PromptRedo),
-            (layout::PromptToolbarButton::Save, TooltipTarget::PromptSave),
+            (PromptToolbarButton::Undo, TooltipTarget::PromptUndo),
+            (PromptToolbarButton::Redo, TooltipTarget::PromptRedo),
+            (PromptToolbarButton::Save, TooltipTarget::PromptSave),
         ] {
             if let Some(area) =
-                layout::prompt_toolbar_button_rect(view.prompt, button, mode, counter.as_deref())
+                prompt_toolbar_button_rect(view.right_panel, button, mode, counter.as_deref())
             {
                 targets.push((target, area));
             }
@@ -184,8 +181,8 @@ fn targets(
         if let (Some(page), Some(counter), Some(bar)) = (
             page_header.as_ref(),
             counter.as_deref(),
-            layout::prompt_toolbar_rect(view.prompt),
-        ) && let Some(controls) = layout::toolbar_page_controls(bar, counter, page.arrows)
+            prompt_toolbar_rect(view.right_panel),
+        ) && let Some(controls) = toolbar_page_controls(bar, counter, page.arrows)
         {
             for (rect, target) in [
                 (controls.prev, TooltipTarget::PromptPagePrev),
@@ -197,15 +194,20 @@ fn targets(
                 }
             }
         }
-        if let Some(rect) = ui::prompt_frame::prompt_recent_close_rect(view.prompt, state) {
+        if let Some(rect) =
+            ui::right_panel::prompt::frame::prompt_recent_close_rect(view.right_panel, state)
+        {
             targets.push((TooltipTarget::PromptRecentClose, rect));
         }
         if mode == crate::app::prompt::PromptMode::Editor {
-            if let Some(rect) = ui::prompt_frame::prompt_status_rect(view.prompt, state) {
+            if let Some(rect) =
+                ui::right_panel::prompt::frame::prompt_status_rect(view.right_panel, state)
+            {
                 targets.push((TooltipTarget::PromptTemplateStatus, rect));
             }
-            let text_area = ui::prompt_frame::prompt_main_rect(view.prompt, state);
-            for hit in ui::prompt::template_buttons(&state.prompt, text_area) {
+            let text_area =
+                ui::right_panel::prompt::frame::prompt_main_rect(view.right_panel, state);
+            for hit in ui::right_panel::prompt::template_buttons(&state.prompt, text_area) {
                 targets.push((
                     TooltipTarget::TemplateButton {
                         line: hit.line,
@@ -214,7 +216,7 @@ fn targets(
                     hit.rect,
                 ));
             }
-            for hit in ui::prompt::block_buttons(&state.prompt, text_area) {
+            for hit in ui::right_panel::prompt::block_buttons(&state.prompt, text_area) {
                 targets.push((
                     TooltipTarget::BlockButton {
                         line: hit.line,
@@ -229,20 +231,22 @@ fn targets(
 }
 
 /// app 侧目标枚举与 ui 按钮种类的映射。
-fn template_button_kind(button: ui::prompt::TemplateBlockButton) -> TemplateButtonKind {
+fn template_button_kind(
+    button: ui::right_panel::prompt::TemplateBlockButton,
+) -> TemplateButtonKind {
     match button {
-        ui::prompt::TemplateBlockButton::Copy => TemplateButtonKind::Copy,
-        ui::prompt::TemplateBlockButton::Clean => TemplateButtonKind::Clean,
-        ui::prompt::TemplateBlockButton::Delete => TemplateButtonKind::Delete,
+        ui::right_panel::prompt::TemplateBlockButton::Copy => TemplateButtonKind::Copy,
+        ui::right_panel::prompt::TemplateBlockButton::Clean => TemplateButtonKind::Clean,
+        ui::right_panel::prompt::TemplateBlockButton::Delete => TemplateButtonKind::Delete,
     }
 }
 
 /// 补充块按钮 → app 侧种类。
-fn block_button_kind(button: ui::prompt::BlockButton) -> BlockButtonKind {
+fn block_button_kind(button: ui::right_panel::prompt::BlockButton) -> BlockButtonKind {
     match button {
-        ui::prompt::BlockButton::Copy => BlockButtonKind::Copy,
-        ui::prompt::BlockButton::Clean => BlockButtonKind::Clean,
-        ui::prompt::BlockButton::Delete => BlockButtonKind::Delete,
+        ui::right_panel::prompt::BlockButton::Copy => BlockButtonKind::Copy,
+        ui::right_panel::prompt::BlockButton::Clean => BlockButtonKind::Clean,
+        ui::right_panel::prompt::BlockButton::Delete => BlockButtonKind::Delete,
     }
 }
 

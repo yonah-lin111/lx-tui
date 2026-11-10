@@ -5,7 +5,7 @@ use unicode_width::UnicodeWidthStr;
 use crate::app::markdown::{TemplateCounts, TemplateStatus};
 use crate::app::state::{AiWebSite, LxEntry, SidebarAgentKind, WorkspaceIdentity};
 use crate::detect::{AgentKind, AgentState};
-use crate::layout::PaneId;
+use crate::tiling::PaneId;
 
 use super::ellipsize_middle;
 

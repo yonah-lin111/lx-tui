@@ -11,7 +11,7 @@ use crate::app::state::{
 };
 use crate::db::chat::ModelSnapshot;
 use crate::db::chat::attachment::{MessageAttachmentInput, MessageAttachmentKind};
-use crate::layout::PaneId;
+use crate::tiling::PaneId;
 use crate::ui::main_content::lx::grid::CONTINUATION;
 use crate::ui::main_content::lx::{PaneCache, history_rect, history_wheel_region, layout};
 

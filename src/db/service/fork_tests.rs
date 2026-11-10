@@ -4,7 +4,7 @@ use super::tests::trusted_service;
 use super::*;
 use crate::app::effects::Effect;
 use crate::db::chat::{ChatPart, ModelSnapshot, TurnCommitted, TurnOutcome, Usage};
-use crate::layout::PaneId;
+use crate::tiling::PaneId;
 
 fn model() -> ModelSnapshot {
     ModelSnapshot {
@@ -188,7 +188,7 @@ fn fork_pane_closed_before_load_does_not_panic() {
     let first = seed_turn(database, &cwd, None, "q1");
     let pane = focused_pane(&state);
     state.effects.push(Effect::ForkChatSession {
-        pane: crate::layout::PaneId::alloc(), // 不在 state 中的窗格
+        pane: crate::tiling::PaneId::alloc(), // 不在 state 中的窗格
         workspace: cwd,
         session_id: first.session_id,
         before: Some(first.user_message_id),

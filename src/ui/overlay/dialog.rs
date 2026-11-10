@@ -306,6 +306,11 @@ pub fn confirm_button_at(
     }
 }
 
+/// 退出确认浮层几何。
+pub fn quit_confirm_shell(screen: Rect) -> Option<widgets::modal::ModalShell> {
+    confirm_shell(screen, text::EXIT_CONFIRM_QUESTION)
+}
+
 /// 信任浮层几何。
 pub fn trust_shell(screen: Rect) -> Option<widgets::modal::ModalShell> {
     widgets::modal::layout(screen, TRUST_WIDTH, TRUST_HEIGHT)
@@ -624,6 +629,42 @@ pub(crate) fn render_confirm(
         confirm.input.selection(),
         Some(text::CONFIRM_DELETE_INPUT_PLACEHOLDER),
     )
+}
+
+/// 渲染退出确认：普通强调色模态（非危险色），问题行 + 底部按钮行。
+pub(crate) fn render_quit_confirm(frame: &mut Frame<'_>, screen: Rect) -> Option<(u16, u16)> {
+    let question = text::EXIT_CONFIRM_QUESTION;
+    let shell = quit_confirm_shell(screen)?;
+    widgets::modal::render(frame, &shell, text::EXIT_CONFIRM_TITLE);
+    if shell.inner.width == 0 || shell.inner.height == 0 {
+        return None;
+    }
+    let width = usize::from(shell.inner.width);
+    for (index, line) in text::wrap(question, width).iter().enumerate() {
+        frame.render_widget(
+            Paragraph::new(Span::styled(line.clone(), style::text())),
+            Rect::new(
+                shell.inner.x,
+                shell.inner.y.saturating_add(index as u16),
+                shell.inner.width,
+                1,
+            ),
+        );
+    }
+    render_buttons(
+        frame,
+        &widgets::modal::button_row(
+            shell.inner,
+            &CONFIRM_BUTTONS,
+            BUTTON_GAP,
+            shell.inner.height.saturating_sub(1),
+        ),
+        &[
+            (text::BUTTON_CONFIRM, style::button_primary()),
+            (text::BUTTON_CANCEL, style::button_secondary()),
+        ],
+    );
+    None
 }
 
 /// 引用文件夹删除确认浮层：展示待删目录名与底部按钮。

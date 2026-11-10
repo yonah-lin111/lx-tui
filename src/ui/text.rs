@@ -17,7 +17,7 @@ use crate::app::state::WorkspaceIdentity;
 use crate::app::state::{AiWebSite, AppState, LxEntry, PaneView};
 use crate::app::tooltip::{BlockButtonKind, TemplateButtonKind, TooltipTarget};
 #[cfg(test)]
-use crate::layout::PaneId;
+use crate::tiling::PaneId;
 
 pub use connect::*;
 pub use steer::*;
@@ -200,6 +200,10 @@ pub fn wrap(text: &str, width: usize) -> Vec<String> {
 
 /// 标签栏右端退出按钮；贴屏幕右缘，右缘与右栏折叠态按钮对齐。
 pub const EXIT_LABEL: &str = "[EXIT]";
+
+/// 退出二次确认模态：标题与问题行。
+pub const EXIT_CONFIRM_TITLE: &str = "Exit lx";
+pub const EXIT_CONFIRM_QUESTION: &str = "Exit lx?";
 
 /// 复制反馈 toast。
 pub const TOAST_COPIED: &str = "Copied to clipboard";

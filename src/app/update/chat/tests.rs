@@ -31,7 +31,7 @@ use crate::config::ai::{
     AiSettings, ModelConfig, ModelSelection, ProviderConfig, ProviderOptions, ProviderTransport,
 };
 use crate::db::chat::{TurnCommitted, Usage};
-use crate::layout::PaneId;
+use crate::tiling::PaneId;
 
 /// 构造带单个可用 provider/model 的模型快照。
 fn models_with(variant: Option<&str>) -> ModelsSnapshot {

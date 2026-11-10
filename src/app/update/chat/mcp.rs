@@ -6,7 +6,7 @@ use crate::app::effects::Effect;
 use crate::app::state::lx::mcp::{McpPanel, McpPanelEntry, McpRuntimeState, McpServerState};
 use crate::app::state::lx::slash::SlashPanel;
 use crate::app::state::{AppState, InputHintLevel};
-use crate::layout::PaneId;
+use crate::tiling::PaneId;
 use crate::ui::text;
 
 use super::session::show_lx_hint;

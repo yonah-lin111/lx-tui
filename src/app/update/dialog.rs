@@ -7,7 +7,7 @@ use crate::app::effects::Effect;
 use crate::app::overlay::{Overlay, OverlayKind, RenameTarget};
 use crate::app::state::AppState;
 use crate::app::toast::{Toast, ToastKind};
-use crate::layout::PaneId;
+use crate::tiling::PaneId;
 use crate::ui::text;
 
 use super::interaction::show_toast;
@@ -21,6 +21,15 @@ use super::worktree::apply_worktree_open_key;
 ///
 /// 确认切换工作区路径时返回写入目标窗格的 shell 命令；其余返回 None。
 pub fn apply_overlay_key(state: &mut AppState, key: OverlayKey) -> Option<(PaneId, Vec<u8>)> {
+    // 退出确认：必须早于 `escape_clear_selection`，否则有选区时 Esc 会被清选区逻辑吞掉。
+    if matches!(state.overlay, Some(Overlay::ConfirmQuit)) {
+        match key {
+            OverlayKey::Esc => super::quit::cancel_quit(state),
+            OverlayKey::Enter => super::quit::confirm_quit(state),
+            _ => {}
+        }
+        return None;
+    }
     if key == OverlayKey::Esc && super::escape_clear_selection(state) {
         return None;
     }
@@ -197,7 +206,8 @@ pub fn apply_overlay_key(state: &mut AppState, key: OverlayKey) -> Option<(PaneI
                 | OverlayKind::ReferencedFolderSearch
                 | OverlayKind::ReferencedFolderDelete
                 | OverlayKind::ResumeSessionEdit
-                | OverlayKind::Connect,
+                | OverlayKind::Connect
+                | OverlayKind::ConfirmQuit,
             )
             | None => None,
         },

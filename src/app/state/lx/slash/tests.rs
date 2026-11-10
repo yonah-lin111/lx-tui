@@ -88,7 +88,7 @@ fn mcp_command_and_mcps_alias_match_in_command_panel() {
 
 #[test]
 fn connect_panel_lists_presets_alphabetically() {
-    let pane = crate::layout::PaneId::alloc();
+    let pane = crate::tiling::PaneId::alloc();
     let panel =
         crate::app::state::ConnectPanel::new_with_env(pane, &ConnectSettings::default(), |_| None);
     assert!(panel.entries.len() > 10, "预设目录非空");
@@ -106,7 +106,7 @@ fn connect_panel_lists_presets_alphabetically() {
 
 #[test]
 fn connect_panel_refilters_by_name_and_id() {
-    let pane = crate::layout::PaneId::alloc();
+    let pane = crate::tiling::PaneId::alloc();
     let mut panel =
         crate::app::state::ConnectPanel::new_with_env(pane, &ConnectSettings::default(), |_| None);
     panel.refilter("github-copilot");
@@ -136,7 +136,7 @@ fn connect_panel_refilters_by_name_and_id() {
 
 #[test]
 fn connect_panel_reports_stage_windows() {
-    let pane = crate::layout::PaneId::alloc();
+    let pane = crate::tiling::PaneId::alloc();
     let mut panel =
         crate::app::state::ConnectPanel::new_with_env(pane, &ConnectSettings::default(), |_| None);
     panel.refilter("openai");
@@ -602,7 +602,7 @@ fn model_picker_refilter_resets_selected_item_to_first() {
 #[test]
 fn connect_panel_tracks_text_input_and_inline_errors() {
     use crate::app::state::{ConnectPromptStep, ConnectStage, PanelWindow};
-    let pane = crate::layout::PaneId::alloc();
+    let pane = crate::tiling::PaneId::alloc();
     let mut panel =
         crate::app::state::ConnectPanel::new_with_env(pane, &ConnectSettings::default(), |_| None);
     assert!(panel.has_text_input(), "供应商列表过滤使用模态输入框");
@@ -646,7 +646,7 @@ fn connect_panel_tracks_text_input_and_inline_errors() {
 #[test]
 fn connect_panel_refresh_entries_updates_tags_and_count() {
     use crate::config::ai::connect::{ConnectSettings, ConnectedPresetRecord};
-    let pane = crate::layout::PaneId::alloc();
+    let pane = crate::tiling::PaneId::alloc();
     let mut panel =
         crate::app::state::ConnectPanel::new_with_env(pane, &ConnectSettings::default(), |_| None);
     assert_eq!(panel.connected_count(), 0);

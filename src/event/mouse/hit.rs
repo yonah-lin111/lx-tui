@@ -7,8 +7,9 @@ use ratatui::layout::Rect;
 use crate::app::state::{AppState, PaneKind, PaneView};
 use crate::app::toast::{Toast, ToastKind};
 use crate::app::update;
-use crate::layout::{self, BoundaryHit, PaneId};
+use crate::tiling::{self, BoundaryHit, PaneId};
 use crate::ui;
+use crate::ui::right_panel::prompt::geometry::prompt_header_rect;
 
 use super::super::session::{ensure_workspace_visible, reveal_active_tab};
 
@@ -138,7 +139,7 @@ pub(crate) fn handle_sidebar_press(
         *dirty = true;
         return true;
     }
-    if !state.sidebar_collapsed && view.sidebar.contains((column, row).into()) {
+    if !state.sidebar_collapsed && view.left_panel.contains((column, row).into()) {
         if update::focus_sidebar(state) {
             *dirty = true;
         }
@@ -155,7 +156,7 @@ pub(crate) fn handle_prompt_scrollbar_press(
     column: u16,
     row: u16,
 ) -> bool {
-    let Some(bar) = ui::prompt_scrollbar(view, state) else {
+    let Some(bar) = ui::right_panel::prompt::frame::prompt_scrollbar(view, state) else {
         return false;
     };
     if !bar.track.contains((column, row).into()) {
@@ -186,7 +187,9 @@ pub(crate) fn handle_prompt_recent_scrollbar_press(
     column: u16,
     row: u16,
 ) -> bool {
-    let Some(bar) = ui::prompt_frame::prompt_recent_scrollbar(view.prompt, state) else {
+    let Some(bar) =
+        ui::right_panel::prompt::frame::prompt_recent_scrollbar(view.right_panel, state)
+    else {
         return false;
     };
     if !bar.track.contains((column, row).into()) {
@@ -371,8 +374,8 @@ pub(crate) fn mention_item_at(
     column: u16,
     row: u16,
 ) -> Option<usize> {
-    let area = ui::prompt_frame::prompt_main_rect(view.prompt, state);
-    ui::prompt::mention_item_at(&state.prompt, area, column, row)
+    let area = ui::right_panel::prompt::frame::prompt_main_rect(view.right_panel, state);
+    ui::right_panel::prompt::mention_item_at(&state.prompt, area, column, row)
 }
 
 /// 提及面板顶边框 Tab 命中：返回 Tab 索引；面板未打开或未命中返回 None。
@@ -382,8 +385,8 @@ pub(crate) fn mention_tab_at(
     column: u16,
     row: u16,
 ) -> Option<usize> {
-    let area = ui::prompt_frame::prompt_main_rect(view.prompt, state);
-    ui::prompt::mention_tab_at(&state.prompt, area, column, row)
+    let area = ui::right_panel::prompt::frame::prompt_main_rect(view.right_panel, state);
+    ui::right_panel::prompt::mention_tab_at(&state.prompt, area, column, row)
 }
 
 /// 提及面板布局；用于滚轮命中与视口滚动。
@@ -391,14 +394,14 @@ pub(crate) fn mention_panel_layout(
     state: &AppState,
     view: &ui::layout::ViewLayout,
 ) -> Option<ui::widgets::command_panel::PanelLayout> {
-    let area = ui::prompt_frame::prompt_main_rect(view.prompt, state);
-    ui::prompt::mention_layout(&state.prompt, area)
+    let area = ui::right_panel::prompt::frame::prompt_main_rect(view.right_panel, state);
+    ui::right_panel::prompt::mention_layout(&state.prompt, area)
 }
 
 /// 粘贴面板矩形；用于滚轮防穿透拦截。
 pub(crate) fn paste_panel_rect(state: &AppState, view: &ui::layout::ViewLayout) -> Option<Rect> {
-    let area = ui::prompt_frame::prompt_main_rect(view.prompt, state);
-    ui::prompt::paste_panel_rect(&state.prompt, area)
+    let area = ui::right_panel::prompt::frame::prompt_main_rect(view.right_panel, state);
+    ui::right_panel::prompt::paste_panel_rect(&state.prompt, area)
 }
 
 /// 字母快捷面板布局；用于滚轮命中与视口滚动。
@@ -406,8 +409,8 @@ pub(crate) fn refer_panel_layout(
     state: &AppState,
     view: &ui::layout::ViewLayout,
 ) -> Option<ui::widgets::command_panel::PanelLayout> {
-    let area = ui::prompt_frame::prompt_main_rect(view.prompt, state);
-    ui::prompt::refer_layout(&state.prompt, area)
+    let area = ui::right_panel::prompt::frame::prompt_main_rect(view.right_panel, state);
+    ui::right_panel::prompt::refer_layout(&state.prompt, area)
 }
 
 /// 定位鼠标下的 lx 窗格及其内容区（仅 lx 视图）；用于 `/` 面板命中/悬停/滚轮。
@@ -489,8 +492,8 @@ pub(crate) fn panel_item_at(
     column: u16,
     row: u16,
 ) -> Option<usize> {
-    let area = ui::prompt_frame::prompt_main_rect(view.prompt, state);
-    ui::prompt::panel_item_at(&state.prompt, area, column, row)
+    let area = ui::right_panel::prompt::frame::prompt_main_rect(view.right_panel, state);
+    ui::right_panel::prompt::panel_item_at(&state.prompt, area, column, row)
 }
 
 /// 块命令面板布局；用于滚轮命中与视口滚动。
@@ -498,8 +501,8 @@ pub(crate) fn block_panel_layout(
     state: &AppState,
     view: &ui::layout::ViewLayout,
 ) -> Option<ui::widgets::command_panel::PanelLayout> {
-    let area = ui::prompt_frame::prompt_main_rect(view.prompt, state);
-    ui::prompt::panel_layout(&state.prompt, area)
+    let area = ui::right_panel::prompt::frame::prompt_main_rect(view.right_panel, state);
+    ui::right_panel::prompt::panel_layout(&state.prompt, area)
 }
 
 /// 斜杠命令面板命中：返回条目索引；面板未打开或未命中返回 None。
@@ -509,8 +512,8 @@ pub(crate) fn slash_item_at(
     column: u16,
     row: u16,
 ) -> Option<usize> {
-    let area = ui::prompt_frame::prompt_main_rect(view.prompt, state);
-    ui::prompt::slash_item_at(&state.prompt, area, column, row)
+    let area = ui::right_panel::prompt::frame::prompt_main_rect(view.right_panel, state);
+    ui::right_panel::prompt::slash_item_at(&state.prompt, area, column, row)
 }
 
 /// 斜杠命令面板布局；用于滚轮命中与视口滚动。
@@ -518,8 +521,8 @@ pub(crate) fn slash_panel_layout(
     state: &AppState,
     view: &ui::layout::ViewLayout,
 ) -> Option<ui::widgets::command_panel::PanelLayout> {
-    let area = ui::prompt_frame::prompt_main_rect(view.prompt, state);
-    ui::prompt::slash_layout(&state.prompt, area)
+    let area = ui::right_panel::prompt::frame::prompt_main_rect(view.right_panel, state);
+    ui::right_panel::prompt::slash_layout(&state.prompt, area)
 }
 
 /// 坐标是否落在 Prompt 编辑区任意已打开的命令面板矩形内。
@@ -535,8 +538,8 @@ pub(crate) fn prompt_command_panel_contains(
     {
         return false;
     }
-    let area = ui::prompt_frame::prompt_main_rect(view.prompt, state);
-    ui::prompt::command_panel_contains(&state.prompt, area, column, row)
+    let area = ui::right_panel::prompt::frame::prompt_main_rect(view.right_panel, state);
+    ui::right_panel::prompt::command_panel_contains(&state.prompt, area, column, row)
 }
 
 /// 模板块操作按钮命中；未命中返回 None。
@@ -545,31 +548,34 @@ pub(crate) fn template_button_at(
     view: &ui::layout::ViewLayout,
     column: u16,
     row: u16,
-) -> Option<ui::prompt::TemplateButtonHit> {
+) -> Option<ui::right_panel::prompt::TemplateButtonHit> {
     if !update::prompt_panel_active(state)
         || update::prompt_tree_mode(state)
         || update::prompt_pages_mode(state)
     {
         return None;
     }
-    let area = ui::prompt_frame::prompt_main_rect(view.prompt, state);
-    ui::prompt::template_button_at(&state.prompt, area, column, row)
+    let area = ui::right_panel::prompt::frame::prompt_main_rect(view.right_panel, state);
+    ui::right_panel::prompt::template_button_at(&state.prompt, area, column, row)
 }
 
 /// 执行模板块按钮动作：复制写剪贴板并在右侧面板弹出 Toast，其余就地变更（均单步可撤销）。
-pub(crate) fn apply_template_button(state: &mut AppState, hit: ui::prompt::TemplateButtonHit) {
+pub(crate) fn apply_template_button(
+    state: &mut AppState,
+    hit: ui::right_panel::prompt::TemplateButtonHit,
+) {
     match hit.button {
-        ui::prompt::TemplateBlockButton::Copy => {
+        ui::right_panel::prompt::TemplateBlockButton::Copy => {
             if let Some(text) = update::copy_template_block(state, hit.line) {
                 let anchor = Some(state.prompt.id());
                 copy_with_toast(state, &text, anchor);
             }
         }
-        ui::prompt::TemplateBlockButton::Clean => {
+        ui::right_panel::prompt::TemplateBlockButton::Clean => {
             update::clear_selection(state);
             update::clean_template_block(state, hit.line);
         }
-        ui::prompt::TemplateBlockButton::Delete => {
+        ui::right_panel::prompt::TemplateBlockButton::Delete => {
             update::clear_selection(state);
             update::delete_template_block(state, hit.line);
         }
@@ -582,21 +588,24 @@ pub(crate) fn block_button_at(
     view: &ui::layout::ViewLayout,
     column: u16,
     row: u16,
-) -> Option<ui::prompt::BlockButtonHit> {
+) -> Option<ui::right_panel::prompt::BlockButtonHit> {
     if !update::prompt_panel_active(state)
         || update::prompt_tree_mode(state)
         || update::prompt_pages_mode(state)
     {
         return None;
     }
-    let area = ui::prompt_frame::prompt_main_rect(view.prompt, state);
-    ui::prompt::block_button_at(&state.prompt, area, column, row)
+    let area = ui::right_panel::prompt::frame::prompt_main_rect(view.right_panel, state);
+    ui::right_panel::prompt::block_button_at(&state.prompt, area, column, row)
 }
 
 /// 执行补充块按钮动作（单步可撤销）。
-pub(crate) fn apply_block_button(state: &mut AppState, hit: ui::prompt::BlockButtonHit) {
+pub(crate) fn apply_block_button(
+    state: &mut AppState,
+    hit: ui::right_panel::prompt::BlockButtonHit,
+) {
     use crate::app::markdown::BlockKind;
-    use ui::prompt::BlockButton;
+    use ui::right_panel::prompt::BlockButton;
     match (hit.kind, hit.button) {
         (BlockKind::Supple, BlockButton::Copy) => {
             if let Some(text) = update::copy_supple_block(state, hit.line) {
@@ -630,7 +639,7 @@ pub(crate) fn lx_toast_at(
         if target.view != PaneView::Lx || target.lx.toast.is_none() {
             return None;
         }
-        let area = layout::pane_inner_rect(*rect);
+        let area = tiling::pane_inner_rect(*rect);
         let toast = ui::main_content::lx::toast_rect(area, &target.lx)?;
         toast
             .contains((column, row).into())
@@ -714,7 +723,7 @@ pub(crate) fn apply_lx_chat_hit(
 
 /// 坐标是否落在 prompt 工具栏/分割线表头行（用于吞掉空白点击）。
 pub(crate) fn prompt_header_at(panel: Rect, column: u16, row: u16) -> bool {
-    layout::prompt_header_rect(panel).is_some_and(|header| header.contains((column, row).into()))
+    prompt_header_rect(panel).is_some_and(|header| header.contains((column, row).into()))
 }
 
 /// 窗格交互内容区：prompt 用文本区（顶部表头下移），其余窗格用整块内容区。
@@ -733,7 +742,12 @@ pub(crate) fn pane_content_inner(
         }
         let panel = &state.prompt_owner().prompt_panel;
         let recent_count = crate::app::prompt::recent_page_count(panel);
-        crate::layout::prompt_body_split(view.prompt, panel.recent_open, recent_count).main
+        crate::ui::right_panel::prompt::geometry::prompt_body_split(
+            view.right_panel,
+            panel.recent_open,
+            recent_count,
+        )
+        .main
     } else {
         inner
     }
@@ -742,7 +756,7 @@ pub(crate) fn pane_content_inner(
 /// 命中窗格内容区：返回窗格标识与其内容区矩形。
 pub(crate) fn pane_at(rects: &[(PaneId, Rect)], column: u16, row: u16) -> Option<(PaneId, Rect)> {
     rects.iter().find_map(|(id, rect)| {
-        let inner = layout::pane_inner_rect(*rect);
+        let inner = tiling::pane_inner_rect(*rect);
         if inner.width > 0 && inner.height > 0 && inner.contains((column, row).into()) {
             Some((*id, inner))
         } else {
@@ -786,7 +800,7 @@ pub(crate) fn handle_todo_scrollbar_press(
     column: u16,
     row: u16,
 ) -> bool {
-    let Some(bar) = ui::right_panel::todo::scrollbar(view.prompt, state) else {
+    let Some(bar) = ui::right_panel::todo::scrollbar(view.right_panel, state) else {
         return false;
     };
     if !bar.track.contains((column, row).into()) {

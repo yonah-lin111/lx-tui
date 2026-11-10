@@ -5,7 +5,7 @@ use crate::chat::tools::ask::AskOption;
 
 fn key() -> RequestKey {
     RequestKey {
-        pane: crate::layout::PaneId::alloc(),
+        pane: crate::tiling::PaneId::alloc(),
         session: "s".into(),
         generation: 1,
     }

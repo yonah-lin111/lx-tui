@@ -26,8 +26,9 @@ fn week_strip_and_rollover_banner_hit_and_render() {
     ]);
 
     let (buffer, _) = render_panel(&state, area);
-    let header = crate::layout::prompt_header_rect(area).expect("header");
-    let divider_y = header.y + crate::layout::PROMPT_TOOLBAR_HEIGHT;
+    let header =
+        crate::ui::right_panel::prompt::geometry::prompt_header_rect(area).expect("header");
+    let divider_y = header.y + crate::ui::right_panel::prompt::geometry::PROMPT_TOOLBAR_HEIGHT;
     let divider_text: String = (area.x..area.right())
         .map(|x| buffer[(x, divider_y)].symbol())
         .collect();

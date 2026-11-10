@@ -10,8 +10,8 @@ use crate::app::overlay::Overlay;
 use crate::app::state::{AppState, PaneView};
 use crate::app::update;
 use crate::input::{self, Routed, TodoKey};
-use crate::layout::{self, PaneId};
 use crate::pty::PtySession;
+use crate::tiling::{self, PaneId};
 use crate::ui;
 
 use super::mouse::hit::copy_with_toast;
@@ -34,7 +34,10 @@ pub(crate) fn handle_key_event(
 
     // 对齐 OpenCode (priority 101)：裸 Esc 最优先取消当前可见文字选区并消费按键，
     // 绝不穿透到终端 PTY、模态浮层关闭、自动补全面板关闭、退出编辑态或双 Esc 中断。
-    if key.code == KeyCode::Esc && key.modifiers.is_empty() && update::escape_clear_selection(state)
+    if key.code == KeyCode::Esc
+        && key.modifiers.is_empty()
+        && !matches!(state.overlay, Some(Overlay::ConfirmQuit))
+        && update::escape_clear_selection(state)
     {
         *dirty = true;
         return;
@@ -106,15 +109,15 @@ pub(crate) fn handle_key_event(
         return;
     };
     if update::prompt_recent_open(state)
-        && view.prompt.height > 0
-        && !ui::prompt_frame::prompt_recent_visible(view.prompt, state)
+        && view.right_panel.height > 0
+        && !ui::right_panel::prompt::frame::prompt_recent_visible(view.right_panel, state)
     {
         // 面板过矮无法展示 recent 抽屉时自动收起，避免不可见抽屉吞掉键盘输入。
         update::close_prompt_recent(state);
     }
     // recent 抽屉展开时，prompt 的保存/复制/剪切快捷键同样由抽屉吞掉，
     // 避免“键盘已归抽屉”却仍改到后方编辑器或写系统剪贴板。
-    if ui::prompt_frame::prompt_recent_visible(view.prompt, state)
+    if ui::right_panel::prompt::frame::prompt_recent_visible(view.right_panel, state)
         && matches!(
             &routed,
             Routed::SavePrompt | Routed::Copy | Routed::Cut | Routed::CopyTemplateBlock
@@ -129,18 +132,18 @@ pub(crate) fn handle_key_event(
             *dirty = true;
         }
         Routed::Editor(command) => {
-            if ui::prompt_frame::prompt_recent_visible(view.prompt, state) {
+            if ui::right_panel::prompt::frame::prompt_recent_visible(view.right_panel, state) {
                 // 抽屉展开时键盘归 recent：↑/↓ 选择、Enter 打开、Esc/Ctrl+R 收起，
                 // 其余键由 update 层的兜底吞掉，不改上方视图。
-                if update::apply_prompt_recent_key(state, &command, view.prompt) {
+                if update::apply_prompt_recent_key(state, &command, view.right_panel) {
                     *dirty = true;
                 }
                 return;
             }
             update::apply_editor(state, command);
             if update::prompt_recent_open(state)
-                && view.prompt.height > 0
-                && !ui::prompt_frame::prompt_recent_visible(view.prompt, state)
+                && view.right_panel.height > 0
+                && !ui::right_panel::prompt::frame::prompt_recent_visible(view.right_panel, state)
             {
                 update::close_prompt_recent(state);
             }
@@ -466,7 +469,7 @@ fn copy_lx_selection(
     let area = rects
         .iter()
         .find(|(id, _)| *id == pane)
-        .map(|(_, rect)| layout::pane_inner_rect(*rect));
+        .map(|(_, rect)| tiling::pane_inner_rect(*rect));
     let Some((area, target)) = area.zip(state.pane_anywhere(pane)) else {
         return false;
     };

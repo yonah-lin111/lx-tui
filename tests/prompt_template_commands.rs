@@ -8,8 +8,9 @@ use lx_tui::app::markdown::{SlashCommandId, slash_template_content};
 use lx_tui::app::state::AppState;
 use lx_tui::app::update;
 use lx_tui::config::Config;
-use lx_tui::layout;
+use lx_tui::tiling;
 use lx_tui::ui;
+use lx_tui::ui::right_panel::prompt::geometry;
 use ratatui::Terminal;
 use ratatui::backend::TestBackend;
 use ratatui::layout::Rect;
@@ -40,13 +41,13 @@ fn ready_state() -> (AppState, Config, ui::layout::ViewLayout) {
         state.prompt_left,
         state.panes_collapsed,
     );
-    let mut rects = layout::pane_rects(
+    let mut rects = tiling::pane_rects(
         &state.active_tab().layout,
-        view.panes,
+        view.main_content,
         config.min_pane_width,
         config.min_pane_height,
     );
-    rects.push((state.prompt.id(), view.prompt));
+    rects.push((state.prompt.id(), view.right_panel));
     update::resize_panes(&mut state, &rects);
     (state, config, view)
 }
@@ -76,12 +77,13 @@ fn cell_x(row: &str, needle: &str) -> u16 {
 fn slash_command_inserts_template_with_highlight_and_buttons() {
     let (mut state, config, view) = ready_state();
     update::focus_prompt(&mut state);
-    let area = layout::prompt_text_rect(view.prompt);
+    let area = geometry::prompt_text_rect(view.right_panel);
 
     for ch in "/add".chars() {
         update::apply_editor(&mut state, EditorCommand::InsertChar(ch));
     }
-    let panel = ui::prompt::slash_layout(&state.prompt, area).expect("slash panel opens");
+    let panel =
+        ui::right_panel::prompt::slash_layout(&state.prompt, area).expect("slash panel opens");
     assert_eq!(
         panel.rect.height, 7,
         "查询 add 命中 add（顶栏 3 + 内容 1 + 底栏 3）"
@@ -144,7 +146,7 @@ fn slash_command_inserts_template_with_highlight_and_buttons() {
     }
 
     // 块内动作按钮常显；状态标签只在标题行。
-    let buttons = ui::prompt::template_buttons(&state.prompt, area);
+    let buttons = ui::right_panel::prompt::template_buttons(&state.prompt, area);
     assert_eq!(buttons.len(), 3, "宽屏下复制/清理/删除按钮可见");
     let row = line_text(&terminal, start_row);
     assert!(!row.contains("[todo]"), "{row}");
@@ -188,19 +190,19 @@ fn narrow_prompt_keeps_buttons_and_ellipsizes_header() {
         state.prompt_left,
         state.panes_collapsed,
     );
-    let mut rects = layout::pane_rects(
+    let mut rects = tiling::pane_rects(
         &state.active_tab().layout,
-        view.panes,
+        view.main_content,
         config.min_pane_width,
         config.min_pane_height,
     );
-    rects.push((state.prompt.id(), view.prompt));
+    rects.push((state.prompt.id(), view.right_panel));
     update::resize_panes(&mut state, &rects);
     update::focus_prompt(&mut state);
     let (content, _) = slash_template_content(SlashCommandId::Add);
     update::apply_editor(&mut state, EditorCommand::InsertText(content.into()));
 
-    let area = layout::prompt_text_rect(view.prompt);
+    let area = geometry::prompt_text_rect(view.right_panel);
     let terminal = draw(&state, &config);
     let start_row = (area.y..area.bottom())
         .find(|y| line_text(&terminal, *y).contains(ui::text::TEMPLATE_BUTTON_COPY))
@@ -219,9 +221,10 @@ fn narrow_prompt_keeps_buttons_and_ellipsizes_header() {
 fn slash_panel_shows_all_candidates_for_bare_slash() {
     let (mut state, config, view) = ready_state();
     update::focus_prompt(&mut state);
-    let area = layout::prompt_text_rect(view.prompt);
+    let area = geometry::prompt_text_rect(view.right_panel);
     update::apply_editor(&mut state, EditorCommand::InsertChar('/'));
-    let panel = ui::prompt::slash_layout(&state.prompt, area).expect("slash panel opens");
+    let panel =
+        ui::right_panel::prompt::slash_layout(&state.prompt, area).expect("slash panel opens");
     assert_eq!(
         panel.rect.height, 12,
         "空查询展示全部 6 个候选（5 个内置模板 + supplement）+ 标题行、底栏与上下边框"
@@ -247,7 +250,7 @@ fn slash_panel_shows_all_candidates_for_bare_slash() {
 fn template_buttons_drive_clean_status_delete_with_single_undo() {
     let (mut state, config, view) = ready_state();
     update::focus_prompt(&mut state);
-    let area = layout::prompt_text_rect(view.prompt);
+    let area = geometry::prompt_text_rect(view.right_panel);
     let (content, _) = slash_template_content(SlashCommandId::Add);
     update::apply_editor(&mut state, EditorCommand::InsertText(content.into()));
 
@@ -257,16 +260,17 @@ fn template_buttons_drive_clean_status_delete_with_single_undo() {
     assert!(!body.contains("&&&"));
 
     // 标题行页名状态：循环 todo → in_progress，不绘制 [run] 按钮，页名文字变为黄色。
-    let buttons = ui::prompt::template_buttons(&state.prompt, area);
+    let buttons = ui::right_panel::prompt::template_buttons(&state.prompt, area);
     assert!(update::cycle_page_template_status(&mut state));
     assert!(state.prompt.text().contains("--end in_progress"));
     let terminal = draw(&state, &config);
-    let title_y = crate::ui::prompt_frame::title_row(view.prompt)
+    let title_y = crate::ui::right_panel::prompt::frame::title_row(view.right_panel)
         .expect("title row")
         .y;
     assert!(!line_text(&terminal, title_y).contains("[run]"));
     let status_rect =
-        crate::ui::prompt_frame::prompt_status_rect(view.prompt, &state).expect("page title rect");
+        crate::ui::right_panel::prompt::frame::prompt_status_rect(view.right_panel, &state)
+            .expect("page title rect");
     assert_eq!(
         terminal.backend().buffer()[(status_rect.x, title_y)].fg,
         ratatui::style::Color::Yellow,
@@ -276,7 +280,7 @@ fn template_buttons_drive_clean_status_delete_with_single_undo() {
     // 清理按钮：移除未填写的空项，保留正文标题与结束行。
     let clean = buttons
         .iter()
-        .find(|hit| hit.button == ui::prompt::TemplateBlockButton::Clean)
+        .find(|hit| hit.button == ui::right_panel::prompt::TemplateBlockButton::Clean)
         .copied()
         .expect("clean button");
     update::clean_template_block(&mut state, clean.line);
@@ -294,10 +298,10 @@ fn template_buttons_drive_clean_status_delete_with_single_undo() {
     assert!(state.prompt.text().contains("- Reference: "));
 
     // 删除按钮：整块移除。
-    let buttons = ui::prompt::template_buttons(&state.prompt, area);
+    let buttons = ui::right_panel::prompt::template_buttons(&state.prompt, area);
     let delete = buttons
         .iter()
-        .find(|hit| hit.button == ui::prompt::TemplateBlockButton::Delete)
+        .find(|hit| hit.button == ui::right_panel::prompt::TemplateBlockButton::Delete)
         .copied()
         .expect("delete button");
     update::delete_template_block(&mut state, delete.line);
@@ -311,7 +315,7 @@ fn file_mention_renders_as_underlined_accent() {
     update::apply_editor(&mut state, EditorCommand::InsertText("@src/app.rs".into()));
 
     let terminal = draw(&state, &config);
-    let area = layout::prompt_text_rect(view.prompt);
+    let area = geometry::prompt_text_rect(view.right_panel);
     let cell = &terminal.backend().buffer()[(area.x, area.y)];
     assert_eq!(cell.symbol(), "@");
     // 提及/引用统一一档灰绿（不再按种类分色），下划线仍是“这是一处引用”的信号。

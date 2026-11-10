@@ -10,9 +10,10 @@ use crate::app::overlay::Overlay;
 use crate::app::state::{AppState, PaneKind, PaneView};
 use crate::app::update;
 use crate::config::Config;
-use crate::layout::{self, PaneId};
 use crate::pty::PtySession;
+use crate::tiling::{self, PaneId};
 use crate::ui;
+use crate::ui::right_panel::prompt::geometry::{PromptToolbarButton, prompt_toolbar_button_at};
 
 use super::super::overlay::{
     confirm_close_scrollbar_press, handle_overlay_click, open_right_click_menu,
@@ -142,9 +143,15 @@ pub(crate) fn handle_mouse_down_left(
             state.overlay,
             Some(Overlay::NewWorkspace(_) | Overlay::TrustWorkspace(_))
         );
+        let was_confirm_quit = matches!(state.overlay, Some(Overlay::ConfirmQuit));
         if let Some((pane, bytes)) = handle_overlay_click(state, *screen, mouse.column, mouse.row) {
             write_to_pane(sessions, pane, &bytes);
             update::reset_pane_scroll(state, pane);
+        }
+        // 退出确认下的点击只作用于该浮层：取消后不得继续触发底层标签/工作区定位。
+        if was_confirm_quit {
+            *dirty = true;
+            return;
         }
         let menu_stays_open = matches!(state.overlay, Some(Overlay::Menu(_)));
         if (menu_item_clicked && !menu_stays_open) || was_worktree || was_new_ws {
@@ -166,7 +173,7 @@ pub(crate) fn handle_mouse_down_left(
         *dirty = true;
     }
     if ui::exit_button_at(view, mouse.column, mouse.row) {
-        update::apply(Action::Quit, state);
+        update::apply(Action::RequestQuit, state);
         *dirty = true;
         return;
     }
@@ -235,7 +242,7 @@ pub(crate) fn handle_mouse_down_left(
             reset_pointer_shape();
         }
         *dirty = true;
-    } else if ui::sidebar_boundary_at(view, mouse.column, mouse.row) {
+    } else if ui::left_panel_boundary_at(view, mouse.column, mouse.row) {
         update::begin_sidebar_resize(state);
         *dirty = true;
     } else if handle_workspace_scrollbar_press(state, view, mouse.column, mouse.row)
@@ -249,23 +256,26 @@ pub(crate) fn handle_mouse_down_left(
     } else if ui::swap_button_at(view, mouse.column, mouse.row) {
         // 交换按钮是控件：命中优先于分割线拖拽与面板点击；
         // 宽度按位置模型重置：右列取侧栏默认宽、左列占其余。
-        let available = view.panes.width.saturating_add(view.prompt.width);
+        let available = view
+            .main_content
+            .width
+            .saturating_add(view.right_panel.width);
         let side = ui::layout::side_width(available, config.min_pane_width);
         update::swap_prompt_side(state, available, side);
         *dirty = true;
-    } else if layout::resize_boundary_at(rects, mouse.column, mouse.row)
+    } else if tiling::resize_boundary_at(rects, mouse.column, mouse.row)
         .is_some_and(|hit| prompt_boundary_hit(state, hit))
     {
         update::begin_prompt_resize(state);
         *dirty = true;
     } else if !state.prompt_collapsed
-        && let Some(tab) = ui::right_panel::tab_at(view.prompt, mouse.column, mouse.row)
+        && let Some(tab) = ui::right_panel::tab_at(view.right_panel, mouse.column, mouse.row)
     {
         if update::select_right_tab(state, tab) {
             *dirty = true;
         }
     } else if !state.prompt_collapsed
-        && ui::right_panel::tab_row_at(view.prompt, mouse.column, mouse.row)
+        && ui::right_panel::tab_row_at(view.right_panel, mouse.column, mouse.row)
     {
         // 顶边框 tab 之外的空白属于容器控件区：吞掉，不聚焦编辑器。
         // Todo 面板例外：点容器任意位置都应让容器进入选中态（用户口径）。
@@ -276,14 +286,17 @@ pub(crate) fn handle_mouse_down_left(
         }
     } else if state.right_tab == crate::app::state::RightTab::Todo
         && !state.prompt_collapsed
-        && view.prompt.contains((mouse.column, mouse.row).into())
+        && view.right_panel.contains((mouse.column, mouse.row).into())
     {
         // Todo 面板：先按钮、再行、最后空白吞掉（顺序不可调换，
         // 否则会先被下面的整块吞掉分支吃掉）。
         let mut changed = false;
-        if let Some(char_idx) =
-            ui::right_panel::todo::edit_input_char_at(view.prompt, state, mouse.column, mouse.row)
-        {
+        if let Some(char_idx) = ui::right_panel::todo::edit_input_char_at(
+            view.right_panel,
+            state,
+            mouse.column,
+            mouse.row,
+        ) {
             let clicks = crate::app::selection::next_click_count(
                 &mut state.selection_click,
                 mouse.column,
@@ -297,12 +310,15 @@ pub(crate) fn handle_mouse_down_left(
                 changed = true;
             }
         } else if let Some(button) =
-            ui::right_panel::todo::button_at(view.prompt, mouse.column, mouse.row)
+            ui::right_panel::todo::button_at(view.right_panel, mouse.column, mouse.row)
         {
             changed = update::apply_todo_button(state, button);
-        } else if let Some(hit) =
-            ui::right_panel::todo::week_strip_hit_at(view.prompt, state, mouse.column, mouse.row)
-        {
+        } else if let Some(hit) = ui::right_panel::todo::week_strip_hit_at(
+            view.right_panel,
+            state,
+            mouse.column,
+            mouse.row,
+        ) {
             changed = match hit {
                 ui::right_panel::todo::WeekStripHit::PrevWeek => update::shift_todo_week(state, -1),
                 ui::right_panel::todo::WeekStripHit::NextWeek => update::shift_todo_week(state, 1),
@@ -311,7 +327,7 @@ pub(crate) fn handle_mouse_down_left(
                 }
             };
         } else if let Some(hit) =
-            ui::right_panel::todo::rollover_hit_at(view.prompt, state, mouse.column, mouse.row)
+            ui::right_panel::todo::rollover_hit_at(view.right_panel, state, mouse.column, mouse.row)
         {
             changed = match hit {
                 ui::right_panel::todo::RolloverHit::MoveToToday => {
@@ -319,23 +335,26 @@ pub(crate) fn handle_mouse_down_left(
                 }
                 ui::right_panel::todo::RolloverHit::Dismiss => update::dismiss_todo_rollover(state),
             };
-        } else if let Some(hit) =
-            ui::right_panel::todo::chart_switch_hit_at(view.prompt, state, mouse.column, mouse.row)
-        {
+        } else if let Some(hit) = ui::right_panel::todo::chart_switch_hit_at(
+            view.right_panel,
+            state,
+            mouse.column,
+            mouse.row,
+        ) {
             changed = match hit {
                 ui::right_panel::todo::ChartSwitchHit::Prev => update::prev_todo_chart(state),
                 ui::right_panel::todo::ChartSwitchHit::Next => update::next_todo_chart(state),
             };
         } else if let Some(row) =
-            ui::right_panel::todo::status_at(view.prompt, state, mouse.column, mouse.row)
+            ui::right_panel::todo::status_at(view.right_panel, state, mouse.column, mouse.row)
         {
             changed = update::click_todo_status(state, row);
         } else if let Some(display) =
-            ui::right_panel::todo::priority_at(view.prompt, state, mouse.column, mouse.row)
+            ui::right_panel::todo::priority_at(view.right_panel, state, mouse.column, mouse.row)
         {
             changed = update::click_todo_priority(state, display);
         } else if let Some(row) =
-            ui::right_panel::todo::row_at(view.prompt, state, mouse.column, mouse.row)
+            ui::right_panel::todo::row_at(view.right_panel, state, mouse.column, mouse.row)
         {
             changed = update::begin_todo_row_press(state, row, Instant::now());
         }
@@ -347,22 +366,33 @@ pub(crate) fn handle_mouse_down_left(
             *dirty = true;
         }
     } else if !update::prompt_panel_active(state)
-        && view.prompt.contains((mouse.column, mouse.row).into())
+        && view.right_panel.contains((mouse.column, mouse.row).into())
     {
         // 折叠态容器：一律吞掉，不聚焦、不穿透到窗格。
-    } else if ui::prompt_frame::prompt_recent_close_at(view.prompt, state, mouse.column, mouse.row)
-    {
+    } else if ui::right_panel::prompt::frame::prompt_recent_close_at(
+        view.right_panel,
+        state,
+        mouse.column,
+        mouse.row,
+    ) {
         // 抽屉右上角关闭按钮：优先于上方编辑器控件，收起抽屉并交还键盘焦点。
         update::close_prompt_recent(state);
         *dirty = true;
-    } else if let Some(index) =
-        ui::prompt_frame::prompt_recent_row_at(view.prompt, state, mouse.column, mouse.row)
-    {
+    } else if let Some(index) = ui::right_panel::prompt::frame::prompt_recent_row_at(
+        view.right_panel,
+        state,
+        mouse.column,
+        mouse.row,
+    ) {
         // 最近页面抽屉条目：单击打开对应条目 + 页，随后收起抽屉。
         update::open_recent_page(state, index);
         *dirty = true;
-    } else if ui::prompt_frame::prompt_recent_contains(view.prompt, state, mouse.column, mouse.row)
-    {
+    } else if ui::right_panel::prompt::frame::prompt_recent_contains(
+        view.right_panel,
+        state,
+        mouse.column,
+        mouse.row,
+    ) {
         // 抽屉分割线/空态/滚动条槽：吞掉点击，绝不穿透到被遮住的正文或块按钮。
     } else if let Some(index) = paste::paste_item_at(state, view, mouse.column, mouse.row) {
         update::select_paste(state, index);
@@ -395,8 +425,8 @@ pub(crate) fn handle_mouse_down_left(
         apply_block_button(state, hit);
         *dirty = true;
     } else if !state.prompt_collapsed
-        && let Some(button) = layout::prompt_toolbar_button_at(
-            view.prompt,
+        && let Some(button) = prompt_toolbar_button_at(
+            view.right_panel,
             mouse.column,
             mouse.row,
             state.prompt_owner().prompt_panel.mode,
@@ -407,33 +437,42 @@ pub(crate) fn handle_mouse_down_left(
         let editor_view =
             state.prompt_owner().prompt_panel.mode == crate::app::prompt::PromptMode::Editor;
         match button {
-            layout::PromptToolbarButton::Mode => {
+            PromptToolbarButton::Mode => {
                 update::toggle_prompt_panel_mode(state);
             }
-            layout::PromptToolbarButton::Recent => {
+            PromptToolbarButton::Recent => {
                 update::toggle_prompt_recent(state);
                 if update::prompt_recent_open(state)
-                    && !ui::prompt_frame::prompt_recent_visible(view.prompt, state)
+                    && !ui::right_panel::prompt::frame::prompt_recent_visible(
+                        view.right_panel,
+                        state,
+                    )
                 {
                     update::close_prompt_recent(state);
                 }
             }
-            layout::PromptToolbarButton::TempPrompt => {
+            PromptToolbarButton::TempPrompt => {
                 update::open_temp_prompt(state);
             }
-            layout::PromptToolbarButton::Folders => {
+            PromptToolbarButton::Folders => {
                 update::open_referenced_folder_menu(state, (mouse.column, mouse.row));
             }
-            layout::PromptToolbarButton::Undo if editor_view => state.prompt.undo(),
-            layout::PromptToolbarButton::Redo if editor_view => state.prompt.redo(),
-            layout::PromptToolbarButton::Save if editor_view => {
+            PromptToolbarButton::Undo if editor_view => state.prompt.undo(),
+            PromptToolbarButton::Redo if editor_view => state.prompt.redo(),
+            PromptToolbarButton::Save if editor_view => {
                 update::save_prompt_now(state);
             }
             _ => {}
         }
         *dirty = true;
     } else if !state.prompt_collapsed
-        && ui::prompt_frame::prompt_status_at(view.prompt, state, mouse.column, mouse.row).is_some()
+        && ui::right_panel::prompt::frame::prompt_status_at(
+            view.right_panel,
+            state,
+            mouse.column,
+            mouse.row,
+        )
+        .is_some()
     {
         // 标题行的状态标签是控件：循环本页模板块状态，不移动正文光标。
         update::focus_prompt(state);
@@ -441,34 +480,48 @@ pub(crate) fn handle_mouse_down_left(
         update::cycle_page_template_status(state);
         *dirty = true;
     } else if let Some(control) = (!state.prompt_collapsed)
-        .then(|| ui::prompt_page_control_at(view.prompt, state, mouse.column, mouse.row))
+        .then(|| {
+            ui::right_panel::prompt::frame::prompt_page_control_at(
+                view.right_panel,
+                state,
+                mouse.column,
+                mouse.row,
+            )
+        })
         .flatten()
     {
         // 工具栏页控件是控件：不移动正文光标；命中后仍把焦点交给编辑器。
         update::focus_prompt(state);
         match control {
-            ui::prompt::PageControl::Prev => {
+            ui::right_panel::prompt::PageControl::Prev => {
                 update::switch_prompt_page(state, -1);
             }
-            ui::prompt::PageControl::Next => {
+            ui::right_panel::prompt::PageControl::Next => {
                 update::switch_prompt_page(state, 1);
             }
-            ui::prompt::PageControl::Counter => {
+            ui::right_panel::prompt::PageControl::Counter => {
                 update::toggle_prompt_pages(state);
             }
         }
         *dirty = true;
-    } else if !state.prompt_collapsed && ui::prompt_title_at(view.prompt, mouse.column, mouse.row) {
+    } else if !state.prompt_collapsed
+        && ui::right_panel::prompt::frame::prompt_title_at(
+            view.right_panel,
+            mouse.column,
+            mouse.row,
+        )
+    {
         // 标题行是控件区：点条目名/空白只把焦点交给编辑器，不移动正文光标。
         update::focus_prompt(state);
         *dirty = true;
-    } else if !state.prompt_collapsed && prompt_header_at(view.prompt, mouse.column, mouse.row) {
+    } else if !state.prompt_collapsed && prompt_header_at(view.right_panel, mouse.column, mouse.row)
+    {
         // 工具栏与分割线的空白区域吞掉点击：不聚焦文本视口、不移动文本光标。
     } else if let Some(pane) = pane_toggle_button_at(state, rects, mouse.column, mouse.row) {
         // 按钮是控件：只切换视图，不改变焦点。
         update::toggle_pane_view(state, pane);
         *dirty = true;
-    } else if let Some(hit) = layout::resize_boundary_at(rects, mouse.column, mouse.row)
+    } else if let Some(hit) = tiling::resize_boundary_at(rects, mouse.column, mouse.row)
         .filter(|hit| pane_boundary_draggable(state, *hit))
     {
         update::begin_pane_resize(state, hit);
@@ -490,7 +543,7 @@ pub(crate) fn handle_mouse_down_left(
                 state.prompt.text_paste_cancel();
             } else if update::prompt_tree_mode(state) {
                 // 顶部搜索框：单击/双击/三击与拖拽选中文本。
-                let search_hit = ui::prompt::tree::search_char_at(
+                let search_hit = ui::right_panel::prompt::tree::search_char_at(
                     inner,
                     &state.prompt_owner().prompt_panel,
                     mouse.column,
@@ -513,7 +566,7 @@ pub(crate) fn handle_mouse_down_left(
                     state.prompt_search_drag = true;
                 } else {
                     // 树视图：按下只选中并登记拖拽起点；折叠/展开与双击判定推迟到松开。
-                    let hit = ui::prompt::tree::row_at(
+                    let hit = ui::right_panel::prompt::tree::row_at(
                         inner,
                         &state.prompt_owner().prompt_panel,
                         mouse.column,
@@ -525,7 +578,7 @@ pub(crate) fn handle_mouse_down_left(
                 }
             } else if update::prompt_pages_mode(state) {
                 // 顶部搜索框：单击/双击/三击与拖拽选中文本。
-                let search_hit = ui::prompt::pages::search_char_at(
+                let search_hit = ui::right_panel::prompt::pages::search_char_at(
                     inner,
                     &state.prompt_owner().prompt_panel,
                     mouse.column,
@@ -549,7 +602,7 @@ pub(crate) fn handle_mouse_down_left(
                     state.prompt_search_drag = true;
                 } else {
                     // 页列表视图：单击选中，400ms 内双击同一行打开该页（不支持拖拽）。
-                    let hit = ui::prompt::pages::page_row_at(
+                    let hit = ui::right_panel::prompt::pages::page_row_at(
                         inner,
                         &state.prompt_owner().prompt_panel,
                         mouse.column,
@@ -635,7 +688,7 @@ pub(crate) fn handle_mouse_down_left(
 
 /// 当前页计数字符串（`n/m`）；无页信息时为 None。
 fn prompt_counter(state: &AppState) -> Option<String> {
-    ui::prompt_frame::prompt_page_header(state)
+    ui::right_panel::prompt::frame::prompt_page_header(state)
         .map(|page| ui::text::page_counter(page.current, page.total))
 }
 

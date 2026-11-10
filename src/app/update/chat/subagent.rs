@@ -11,7 +11,7 @@ use crate::app::update::chat::view::view_message_of;
 use crate::chat::compact::AutoCompactNotice;
 use crate::chat::events::{ChatDelta, StopReason};
 use crate::db::chat::{ChatMessage, SubagentRecord, Usage};
-use crate::layout::PaneId;
+use crate::tiling::PaneId;
 
 pub use super::subagent_cards::{
     flush_subagent_cards, refresh_subagent_cards, request_subagent_cards_refresh,

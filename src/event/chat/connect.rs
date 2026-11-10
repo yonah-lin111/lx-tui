@@ -16,7 +16,7 @@ use crate::config::ai::connect::{
 use crate::config::ai::oauth::{OAuthStarted, OAuthTaskHandle, start_oauth_flow};
 use crate::config::ai::presets::{find_preset, resolve_preset_base_url};
 use crate::event::AppEvent;
-use crate::layout::PaneId;
+use crate::tiling::PaneId;
 
 /// `/connect` 后台任务回投事件。
 #[derive(Debug)]

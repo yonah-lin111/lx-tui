@@ -228,9 +228,9 @@ fn double_click_history_row_opens_workspace_and_right_click_missing_cascades_del
 
     update::show_workspace_history(&mut state);
     let geo = geometry(&state, &config, Rect::new(0, 0, 120, 30));
-    let sections =
-        ui::layout::sidebar_sections(geo.view.sidebar, state.agents_collapsed).expect("sections");
-    let row0_y = sections.workspaces.y + layout::PROMPT_TREE_HEADER_HEIGHT;
+    let sections = ui::layout::sidebar_sections(geo.view.left_panel, state.agents_collapsed)
+        .expect("sections");
+    let row0_y = sections.workspaces.y + geometry::PROMPT_TREE_HEADER_HEIGHT;
     let row_x = sections.workspaces.x + 5;
 
     // 右键点击失效路径行（MissingWS 定位其可见行）。
@@ -241,7 +241,7 @@ fn double_click_history_row_opens_workspace_and_right_click_missing_cascades_del
         .position(|&idx| state.workspace_history.entries[idx].path == missing)
         .expect("missing row");
     let missing_y =
-        sections.workspaces.y + layout::PROMPT_TREE_HEADER_HEIGHT + missing_vis_row as u16;
+        sections.workspaces.y + geometry::PROMPT_TREE_HEADER_HEIGHT + missing_vis_row as u16;
     let mut sessions = HashMap::new();
     let mut dirty = false;
     handle_terminal_event(
@@ -371,8 +371,8 @@ fn right_click_blank_delete_missing_removes_only_missing_entries() {
 
     update::show_workspace_history(&mut state);
     let geo = geometry(&state, &config, Rect::new(0, 0, 120, 30));
-    let sections =
-        ui::layout::sidebar_sections(geo.view.sidebar, state.agents_collapsed).expect("sections");
+    let sections = ui::layout::sidebar_sections(geo.view.left_panel, state.agents_collapsed)
+        .expect("sections");
 
     // 右键点击列表空白处（条目行之下）。
     let blank_y = sections.workspaces.bottom().saturating_sub(1);
@@ -462,11 +462,11 @@ fn confirm_close_list_scrolls_with_wheel_and_deletes_all_missing() {
 
     update::show_workspace_history(&mut state);
     let geo = geometry(&state, &config, Rect::new(0, 0, 120, 40));
-    let sections =
-        ui::layout::sidebar_sections(geo.view.sidebar, state.agents_collapsed).expect("sections");
+    let sections = ui::layout::sidebar_sections(geo.view.left_panel, state.agents_collapsed)
+        .expect("sections");
 
     // 右键任一条目（第 0 行）→ 2 次点击 `Delete missing` 打开确认模态。
-    let row_y = sections.workspaces.y + layout::PROMPT_TREE_HEADER_HEIGHT;
+    let row_y = sections.workspaces.y + geometry::PROMPT_TREE_HEADER_HEIGHT;
     right_click(
         &mut state,
         &geo,
@@ -761,9 +761,9 @@ fn deleted_missing_linked_worktree_stays_hidden_after_reload() {
     let config = Config::default();
     update::show_workspace_history(&mut state);
     let geo = geometry(&state, &config, Rect::new(0, 0, 120, 30));
-    let sections =
-        ui::layout::sidebar_sections(geo.view.sidebar, state.agents_collapsed).expect("sections");
-    let row_y = sections.workspaces.y + layout::PROMPT_TREE_HEADER_HEIGHT;
+    let sections = ui::layout::sidebar_sections(geo.view.left_panel, state.agents_collapsed)
+        .expect("sections");
+    let row_y = sections.workspaces.y + geometry::PROMPT_TREE_HEADER_HEIGHT;
     right_click(
         &mut state,
         &geo,

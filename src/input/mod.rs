@@ -149,7 +149,12 @@ pub fn route(
         return None;
     }
     if key.code == KeyCode::Char('q') && key.modifiers.contains(KeyModifiers::CONTROL) {
-        return Some(Routed::Action(Action::Quit));
+        let action = if overlay == Some(OverlayKind::ConfirmQuit) {
+            Action::ConfirmQuit
+        } else {
+            Action::RequestQuit
+        };
+        return Some(Routed::Action(action));
     }
     if let Some(kind) = overlay {
         return overlay_key(key, kind).map(Routed::Overlay);
@@ -421,6 +426,11 @@ fn overlay_key(key: KeyEvent, kind: OverlayKind) -> Option<OverlayKey> {
             _ => overlay_text_edit_key(key),
         },
         OverlayKind::TrustWorkspace => match key.code {
+            KeyCode::Esc => Some(OverlayKey::Esc),
+            KeyCode::Enter => Some(OverlayKey::Enter),
+            _ => None,
+        },
+        OverlayKind::ConfirmQuit => match key.code {
             KeyCode::Esc => Some(OverlayKey::Esc),
             KeyCode::Enter => Some(OverlayKey::Enter),
             _ => None,

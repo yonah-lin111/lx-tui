@@ -13,7 +13,7 @@ use crate::app::state::{AppState, RewindAction};
 use crate::db::chat::FileAvailability;
 use crate::db::service::Persistence;
 use crate::event::AppEvent;
-use crate::layout::PaneId;
+use crate::tiling::PaneId;
 
 /// 一次撤销的最终结果。
 #[derive(Debug, Clone, PartialEq, Eq)]

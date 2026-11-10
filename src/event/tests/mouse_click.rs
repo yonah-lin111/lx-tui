@@ -10,7 +10,7 @@ fn mouse_down_on_swap_button_swaps_sides_without_resize() {
     let mut dirty = false;
     let button = ui::swap_button(&geo.view).expect("swap button visible");
     // 屏幕 120、侧栏 24：可用 96，右列默认 38。
-    let available = geo.view.panes.width + geo.view.prompt.width;
+    let available = geo.view.main_content.width + geo.view.right_panel.width;
     let side = ui::layout::side_width(available, config.min_pane_width);
 
     handle_terminal_event(
@@ -197,7 +197,7 @@ fn mouse_motion_tracks_workspace_and_tab_hover() {
     crate::app::update::create_workspace(&mut state);
     let geo = geometry(&state, &config, Rect::new(0, 0, 120, 30));
     let sections =
-        crate::ui::layout::sidebar_sections(geo.view.sidebar, false).expect("sections visible");
+        crate::ui::layout::sidebar_sections(geo.view.left_panel, false).expect("sections visible");
     let mut sessions = HashMap::new();
     let mut dirty = false;
 
@@ -236,8 +236,8 @@ fn mouse_motion_tracks_workspace_and_tab_hover() {
     handle_terminal_event(
         mouse(
             MouseEventKind::Moved,
-            geo.view.panes.x + 2,
-            geo.view.panes.y + 2,
+            geo.view.main_content.x + 2,
+            geo.view.main_content.y + 2,
         ),
         &mut state,
         &mut sessions,
@@ -277,7 +277,7 @@ fn wheel_over_workspace_list_rescrolls_hover() {
     }
     let geo = geometry(&state, &config, Rect::new(0, 0, 120, 30));
     let sections =
-        crate::ui::layout::sidebar_sections(geo.view.sidebar, false).expect("sections visible");
+        crate::ui::layout::sidebar_sections(geo.view.left_panel, false).expect("sections visible");
     let mut sessions = HashMap::new();
     let mut dirty = false;
     state.workspace_hover = Some(0);
@@ -316,7 +316,7 @@ fn mouse_click_agent_item_switches_tab_and_terminal_view() {
     }
     let geo = geometry(&state, &config, screen);
     let sections =
-        ui::layout::sidebar_sections(geo.view.sidebar, false).expect("sections are visible");
+        ui::layout::sidebar_sections(geo.view.left_panel, false).expect("sections are visible");
     assert_eq!(state.active_workspace().active_tab, 1);
 
     let mut dirty = false;
@@ -364,7 +364,7 @@ fn clicking_dual_agent_rows_on_same_pane_switches_between_lx_and_terminal_views(
 
     let geo = geometry(&state, &config, screen);
     let sections =
-        ui::layout::sidebar_sections(geo.view.sidebar, false).expect("sections are visible");
+        ui::layout::sidebar_sections(geo.view.left_panel, false).expect("sections are visible");
     let mut dirty = false;
 
     // 点击第 0 行（lx-native）：切回 PaneView::Lx。
@@ -417,7 +417,7 @@ fn mouse_hover_agent_item_tracks_hover() {
     mount_agent(&mut state, AgentKind::Gemini, AgentState::Blocked);
     let geo = geometry(&state, &config, screen);
     let sections =
-        ui::layout::sidebar_sections(geo.view.sidebar, false).expect("sections are visible");
+        ui::layout::sidebar_sections(geo.view.left_panel, false).expect("sections are visible");
 
     let mut dirty = false;
     handle_terminal_event(
@@ -434,8 +434,8 @@ fn mouse_hover_agent_item_tracks_hover() {
     handle_terminal_event(
         mouse(
             MouseEventKind::Moved,
-            geo.view.panes.x + 1,
-            geo.view.panes.y + 1,
+            geo.view.main_content.x + 1,
+            geo.view.main_content.y + 1,
         ),
         &mut state,
         &mut sessions,
@@ -456,7 +456,7 @@ fn wheel_over_agents_section_scrolls_list() {
     create_agent_tabs(&mut state, 20);
     let geo = geometry(&state, &config, screen);
     let sections =
-        ui::layout::sidebar_sections(geo.view.sidebar, false).expect("sections are visible");
+        ui::layout::sidebar_sections(geo.view.left_panel, false).expect("sections are visible");
 
     let mut dirty = false;
     handle_terminal_event(
@@ -582,8 +582,8 @@ fn mouse_motion_over_button_arms_tooltip_and_leaving_clears() {
     handle_terminal_event(
         mouse(
             MouseEventKind::Moved,
-            geo.view.panes.x + 2,
-            geo.view.panes.y + 2,
+            geo.view.main_content.x + 2,
+            geo.view.main_content.y + 2,
         ),
         &mut state,
         &mut sessions,
@@ -619,8 +619,8 @@ fn mouse_down_clears_tooltip() {
     handle_terminal_event(
         mouse(
             MouseEventKind::Down(MouseButton::Left),
-            geo.view.panes.x + 2,
-            geo.view.panes.y + 2,
+            geo.view.main_content.x + 2,
+            geo.view.main_content.y + 2,
         ),
         &mut state,
         &mut sessions,
@@ -693,9 +693,9 @@ fn mouse_motion_over_template_button_arms_tooltip() {
     use crate::app::tooltip::{TemplateButtonKind, TooltipTarget};
 
     let (mut state, config, geo, area) = template_button_state();
-    let copy = crate::ui::prompt::template_buttons(&state.prompt, area)
+    let copy = crate::ui::right_panel::prompt::template_buttons(&state.prompt, area)
         .into_iter()
-        .find(|hit| hit.button == crate::ui::prompt::TemplateBlockButton::Copy)
+        .find(|hit| hit.button == crate::ui::right_panel::prompt::TemplateBlockButton::Copy)
         .expect("copy button visible");
     let mut sessions = HashMap::new();
     let mut dirty = false;
@@ -768,7 +768,7 @@ fn mouse_motion_tracks_right_tab_hover() {
     assert!(dirty, "悬停变化置脏重绘");
 
     dirty = false;
-    let text = layout::prompt_text_rect(geo.view.prompt);
+    let text = geometry::prompt_text_rect(geo.view.right_panel);
     handle_terminal_event(
         mouse(MouseEventKind::Moved, text.x + 1, text.y + 1),
         &mut state,
@@ -788,8 +788,8 @@ fn mouse_motion_tracks_right_tab_hover() {
     handle_terminal_event(
         mouse(
             MouseEventKind::Moved,
-            collapsed.view.prompt.x,
-            collapsed.view.prompt.y,
+            collapsed.view.right_panel.x,
+            collapsed.view.right_panel.y,
         ),
         &mut state,
         &mut sessions,
@@ -805,9 +805,9 @@ fn mouse_motion_tracks_right_tab_hover() {
 fn copy_toast_anchors_to_right_panel_for_template_and_todo_and_global_for_overlay() {
     // 1. 右侧面板模板块 [copy] 按钮：Toast 锚定到右侧面板容器。
     let (mut state, config, geo, area) = template_button_state();
-    let copy = crate::ui::prompt::template_buttons(&state.prompt, area)
+    let copy = crate::ui::right_panel::prompt::template_buttons(&state.prompt, area)
         .into_iter()
-        .find(|hit| hit.button == crate::ui::prompt::TemplateBlockButton::Copy)
+        .find(|hit| hit.button == crate::ui::right_panel::prompt::TemplateBlockButton::Copy)
         .expect("copy button visible");
     let mut sessions = HashMap::new();
     let mut dirty = false;
@@ -981,7 +981,7 @@ fn ctrl_click_opens_markdown_link_on_both_left_and_macos_ctrl_right_mouse_down()
         .find(|(id, _)| *id == pane)
         .map(|(_, r)| *r)
         .expect("pane rect");
-    let inner = crate::layout::pane_inner_rect(pane_rect);
+    let inner = crate::tiling::pane_inner_rect(pane_rect);
     let mut buf = ratatui::buffer::Buffer::empty(inner);
     if let Some(target) = state.pane_anywhere(pane) {
         ui::main_content::lx::render(inner, &mut buf, &target.lx, true, None, cache.pane(pane));

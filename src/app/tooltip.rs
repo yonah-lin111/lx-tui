@@ -4,7 +4,7 @@
 
 use std::time::{Duration, Instant};
 
-use crate::layout::PaneId;
+use crate::tiling::PaneId;
 
 /// 悬停停留多久后显示。
 pub const TOOLTIP_DELAY: Duration = Duration::from_millis(400);

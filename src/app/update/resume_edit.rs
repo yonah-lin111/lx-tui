@@ -6,7 +6,7 @@ use crate::app::effects::Effect;
 use crate::app::overlay::{Overlay, ResumeSessionEdit, TextInput};
 use crate::app::state::AppState;
 use crate::app::state::lx::slash::SlashPanel;
-use crate::layout::PaneId;
+use crate::tiling::PaneId;
 use crate::ui::text;
 
 use super::menu::close_overlay;

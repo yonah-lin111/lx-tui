@@ -11,7 +11,7 @@ use crate::app::state::{
 };
 use crate::chat::agent::AgentRole;
 use crate::chat::events::PartKind;
-use crate::layout::PaneId;
+use crate::tiling::PaneId;
 
 use super::super::{copy_text, render};
 use super::history::PaneCache;

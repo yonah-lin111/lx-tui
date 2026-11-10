@@ -391,17 +391,81 @@ const DEFAULT_TEMPLATE_HEADINGS: [&str; 6] = [
     "## Supplementary Requirements",
 ];
 
-/// 提取用于 `/title` 生成的模板块有效正文：
-/// 经过 `copy_template_content` 清洗后，进一步剔除仅存的内置模板默认大标题行。
+/// 提取用于 `/title` 生成的模板块有效正文：整块剔除全部嵌套 `+++` / `%%%`
+/// 子块（标记与正文），跳过首个标题行、`{wt:}` 绑定行与 `//` 注释，围栏内原样保留，
+/// 最后清理未填写空项与内置默认大标题。
 pub fn extract_block_title_source(body: &str) -> String {
-    let copied = copy_template_content(body);
-    copied
+    let lines: Vec<&str> = body.split('\n').collect();
+    let mut kept: Vec<&str> = Vec::new();
+    let mut fence: Option<(u8, usize)> = None;
+    let mut subblock_depth = 0usize;
+    let mut first_content = true;
+
+    for line in lines {
+        if subblock_depth > 0 {
+            if subblock_end(line) {
+                subblock_depth -= 1;
+            }
+            continue;
+        }
+        if let Some((marker, length)) = fence {
+            kept.push(line);
+            if super::fence_delimiter(line).is_some_and(|(m, l)| m == marker && l >= length) {
+                fence = None;
+            }
+            continue;
+        }
+        if let Some(delim) = super::fence_delimiter(line) {
+            fence = Some(delim);
+            kept.push(line);
+            continue;
+        }
+        if subblock_start(line) {
+            subblock_depth += 1;
+            continue;
+        }
+        if first_content && is_title_line(line) {
+            first_content = false;
+            continue;
+        }
+        if !line.trim().is_empty() {
+            first_content = false;
+        }
+        if parse_worktree_line(line).is_some() || is_comment_line(line) {
+            continue;
+        }
+        kept.push(line);
+    }
+
+    clean_template_content(&kept.join("\n"))
         .lines()
         .filter(|line| !DEFAULT_TEMPLATE_HEADINGS.contains(&line.trim()))
         .collect::<Vec<_>>()
         .join("\n")
         .trim()
         .to_string()
+}
+
+/// `&&&` 标题生成正文：与其直接正文等价，剔除全部嵌套子块与内置默认大标题。
+pub fn template_title_source(body: &str) -> String {
+    extract_block_title_source(body)
+}
+
+/// `+++` 标题生成正文：外层 `&&&` 直接正文 + 当前 `+++` 自身正文；
+/// 外层为 None 表示顶层 `+++`，只取自身。两段均剔除全部嵌套子块。
+pub fn supple_title_source(outer_body: Option<&str>, supple_body: &str) -> String {
+    let own = extract_block_title_source(supple_body);
+    let outer = outer_body
+        .map(extract_block_title_source)
+        .unwrap_or_default();
+    let mut parts: Vec<&str> = Vec::new();
+    if !outer.is_empty() {
+        parts.push(&outer);
+    }
+    if !own.is_empty() {
+        parts.push(&own);
+    }
+    parts.join("\n\n")
 }
 
 /// 读取目标块起始行下一行的 `{title: ...}` 标题值（或起始行内联标题）；若不存在标题返回 None。

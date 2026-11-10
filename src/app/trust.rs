@@ -3,7 +3,7 @@
 use std::path::PathBuf;
 
 use crate::app::overlay::WorktreeOpenEntry;
-use crate::layout::PaneId;
+use crate::tiling::PaneId;
 
 /// 信任检查触发场景；决定“信任”后的续作与“拒绝”后的回退。
 ///

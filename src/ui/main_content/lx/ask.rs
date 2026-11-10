@@ -35,7 +35,7 @@ use crate::ui::text::agent as a;
 use super::grid::Grid;
 
 /// 面板高度上限占内容区高度的百分比（用户要求：最多 70%，不够就滚动）。
-const HEIGHT_PERCENT: u16 = crate::layout::LX_ASK_HEIGHT_PERCENT;
+const HEIGHT_PERCENT: u16 = crate::tiling::LX_ASK_HEIGHT_PERCENT;
 /// 题干最多显示行数。
 const MAX_QUESTION_ROWS: u16 = 3;
 /// 选项行前缀列数（高亮箭头 2 + 标记 3 + 空格 1）。

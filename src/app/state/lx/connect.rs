@@ -9,7 +9,7 @@ use crate::app::overlay::TextInput;
 use crate::config::ai::connect::{ConnectSettings, ConnectionSource};
 use crate::config::ai::oauth::OAuthPromptMode;
 use crate::config::ai::presets::{PresetAuthMethod, PresetFormField, all_presets};
-use crate::layout::PaneId;
+use crate::tiling::PaneId;
 use crate::ui::text;
 
 use super::slash::{PanelWindow, best_score};

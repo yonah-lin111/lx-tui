@@ -4,7 +4,7 @@ use crate::app::state::lx::slash::{SlashCommand, SlashPanel};
 use crate::app::state::{AppState, InputHintLevel, ModelPicker, ModelPickerStage};
 use crate::config::ai::ModelSelection;
 use crate::db::chat::ModelSnapshot;
-use crate::layout::PaneId;
+use crate::tiling::PaneId;
 use crate::ui::text;
 
 use super::refresh_all_lx_status;
