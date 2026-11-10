@@ -642,41 +642,38 @@ impl Builder<'_> {
             _ => self.block(key, block_source, 0, || match step {
                 AssistantStepView::Part { part, .. } => match part.kind {
                     crate::chat::events::PartKind::Text if is_user => {
-                        let display_text = crate::chat::strip_references_for_display(
-                            &part.content,
-                            &message.attachments,
-                        );
-                        let display_text =
-                            if display_text.is_empty() && !message.attachments.is_empty() {
-                                let image_count = message
-                                    .attachments
-                                    .iter()
-                                    .filter(|att| {
-                                        att.kind == crate::db::chat::MessageAttachmentKind::Image
-                                    })
-                                    .count();
-                                let folder_count = message
-                                    .attachments
-                                    .iter()
-                                    .filter(|att| {
-                                        att.kind == crate::db::chat::MessageAttachmentKind::Folder
-                                    })
-                                    .count();
-                                if image_count > 0 {
-                                    crate::ui::text::chat::image_message_preview(image_count)
-                                        .to_string()
-                                } else if folder_count == message.attachments.len() {
-                                    crate::ui::text::chat::folder_message_preview(folder_count)
-                                        .to_string()
-                                } else {
-                                    crate::ui::text::chat::file_message_preview(
-                                        message.attachments.len(),
-                                    )
+                        let trimmed = part.content.trim();
+                        let display_text = if trimmed.is_empty() && !message.attachments.is_empty()
+                        {
+                            let image_count = message
+                                .attachments
+                                .iter()
+                                .filter(|att| {
+                                    att.kind == crate::db::chat::MessageAttachmentKind::Image
+                                })
+                                .count();
+                            let folder_count = message
+                                .attachments
+                                .iter()
+                                .filter(|att| {
+                                    att.kind == crate::db::chat::MessageAttachmentKind::Folder
+                                })
+                                .count();
+                            if image_count > 0 {
+                                crate::ui::text::chat::image_message_preview(image_count)
                                     .to_string()
-                                }
+                            } else if folder_count == message.attachments.len() {
+                                crate::ui::text::chat::folder_message_preview(folder_count)
+                                    .to_string()
                             } else {
-                                display_text
-                            };
+                                crate::ui::text::chat::file_message_preview(
+                                    message.attachments.len(),
+                                )
+                                .to_string()
+                            }
+                        } else {
+                            trimmed.to_string()
+                        };
                         let expanded_pastes = history.chat.user_expanded_pastes(&message.id);
                         let has_expanded_paste = !expanded_pastes.is_empty();
                         let (wrapped, paste_spans) = super::rows::wrap_user_projection(

@@ -351,3 +351,83 @@ fn user_message_inline_paste_chips_record_exact_column_ranges_for_multiple_chips
         }
     );
 }
+
+#[test]
+fn user_message_keeps_at_references_in_body_text_and_renders_attachment_tree_below() {
+    let raw = "Please check @src/ui/main_content/lx/ and @[refer-file](src/main.rs) now";
+    let mut msg = user_msg_with_text("u-at", raw);
+    let first_start = raw.find("@src/ui/main_content/lx/").expect("first @");
+    let first_end = first_start + "@src/ui/main_content/lx/ ".len();
+    let second_start = raw.find("@[refer-file](src/main.rs)").expect("second @");
+    let second_end = second_start + "@[refer-file](src/main.rs) ".len();
+    msg.attachments = vec![
+        MessageAttachmentMeta {
+            id: "att-1".into(),
+            position: 0,
+            kind: MessageAttachmentKind::Folder,
+            label: "src/ui/main_content/lx/".into(),
+            marker_start: Some(first_start),
+            marker_end: Some(first_end),
+            source_path: Some("src/ui/main_content/lx".into()),
+            mime: None,
+            width: None,
+            height: None,
+        },
+        MessageAttachmentMeta {
+            id: "att-2".into(),
+            position: 1,
+            kind: MessageAttachmentKind::File,
+            label: "src/main.rs".into(),
+            marker_start: Some(second_start),
+            marker_end: Some(second_end),
+            source_path: Some("src/main.rs".into()),
+            mime: None,
+            width: None,
+            height: None,
+        },
+    ];
+
+    let lx = lx_with(vec![msg]);
+    let mut cache = cache();
+    let area = Rect::new(0, 0, 80, 6);
+    let snap = cache.snapshot(80, &lx);
+
+    // 1 line of full user text + 2 attachment tree lines = 3 rows
+    assert_eq!(snap.entries[0].blocks[0].rows, 3);
+
+    let mut buf = Buffer::empty(area);
+    crate::ui::main_content::lx::render_history_for_test(area, &mut buf, &lx, 0);
+    let row0 = row_text(&buf, area, 0);
+    let row1 = row_text(&buf, area, 1);
+    let row2 = row_text(&buf, area, 2);
+
+    assert_eq!(row0, format!("> {raw}"));
+    assert_eq!(row1, "  ├─ Folder: src/ui/main_content/lx/");
+    assert_eq!(row2, "  └─ File: src/main.rs");
+}
+
+#[test]
+fn user_message_with_only_at_reference_keeps_raw_at_text_instead_of_generic_placeholder() {
+    let raw = "@src/main.rs ";
+    let mut msg = user_msg_with_text("u-only-at", raw);
+    msg.attachments = vec![MessageAttachmentMeta {
+        id: "att-1".into(),
+        position: 0,
+        kind: MessageAttachmentKind::File,
+        label: "src/main.rs".into(),
+        marker_start: Some(0),
+        marker_end: Some(raw.len()),
+        source_path: Some("src/main.rs".into()),
+        mime: None,
+        width: None,
+        height: None,
+    }];
+
+    let lx = lx_with(vec![msg]);
+    let area = Rect::new(0, 0, 60, 4);
+    let mut buf = Buffer::empty(area);
+    crate::ui::main_content::lx::render_history_for_test(area, &mut buf, &lx, 0);
+
+    assert_eq!(row_text(&buf, area, 0), "> @src/main.rs");
+    assert_eq!(row_text(&buf, area, 1), "  └─ File: src/main.rs");
+}
