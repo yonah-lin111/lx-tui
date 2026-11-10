@@ -158,11 +158,13 @@ async fn execute_recap_stream(
         session_id,
         ..client::StreamLog::default()
     };
+    let idle_timeout =
+        Duration::from_millis(model.idle_timeout_ms).min(Duration::from_secs(RECAP_TIMEOUT_SECS));
     let stream_fut = client::run_stream_with_log(
         &model.transport,
         &model.base_url,
         Some(model.api_key.as_str()),
-        Duration::from_millis(model.idle_timeout_ms),
+        idle_timeout,
         chat_request,
         &stream_log,
         cancel,

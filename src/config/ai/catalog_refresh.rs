@@ -155,7 +155,7 @@ pub fn parse_models_dev_catalog(
                     modalities: parse_modalities(model.get("modalities")),
                     variants,
                     variant: default_variant,
-                    pricing: None,
+                    pricing: parse_pricing(model.get("cost").or_else(|| model.get("pricing"))),
                     extra: serde_json::Map::new(),
                 },
             );
@@ -163,6 +163,12 @@ pub fn parse_models_dev_catalog(
         out.insert(provider_id.to_string(), models);
     }
     Ok(out)
+}
+
+fn parse_pricing(value: Option<&Value>) -> Option<Value> {
+    value
+        .and_then(super::ModelPricing::from_json_value)
+        .and_then(super::ModelPricing::to_json_value)
 }
 
 fn parse_limit(value: Option<&Value>) -> Option<ModelLimit> {
@@ -303,6 +309,11 @@ async fn fetch_catalog(
     let mut request = client.get(url).header("Accept", "application/json");
     if let Some(cache) = cache
         && cache.source.as_deref() == Some(url)
+        && cache
+            .models
+            .values()
+            .flat_map(BTreeMap::values)
+            .any(|model| model.pricing.is_some())
         && let Some(etag) = cache.etag.as_deref()
     {
         request = request.header("If-None-Match", etag);

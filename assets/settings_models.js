@@ -1,10 +1,10 @@
 // ===== Models view =====
 // 全局内存草稿：所有编辑（含删除/复制/启停）先落在 modelsDraft，
 // Save（视图操作条）一次 PUT 提交全部；Reload / Reset 丢弃草稿回到最近快照。
-// 记录键与模型 id 一致（与 lx-agent 语义相同）；模态与思考等级只在展开区编辑。
+// 记录键与模型 id 一致（与 lx-agent 语义相同）；
+// 模型卡片、单价（Pricing）、模态（INPUT_MODALITIES / OUTPUT_MODALITIES）与
+// 思考等级（Thinking variants / VARIANT_PRESETS / reasoningEffort）组件已拆分至 settings_models_card.js。
 
-const INPUT_MODALITIES = ['text', 'image', 'audio', 'video', 'pdf'];
-const OUTPUT_MODALITIES = ['text', 'image', 'audio', 'video'];
 const TITLE_LANGUAGE_OPTIONS = [
   {value: 'auto', label: 'Auto (follow input)'},
   {value: 'zh-CN', label: 'Simplified Chinese'},
@@ -13,12 +13,6 @@ const TITLE_LANGUAGE_OPTIONS = [
   {value: 'ja', label: 'Japanese'},
   {value: 'ko', label: 'Korean'}
 ];
-const VARIANT_PRESETS = {
-  openai: {low: {reasoningEffort: 'low'}, medium: {reasoningEffort: 'medium'}, high: {reasoningEffort: 'high'}},
-  openrouter: {low: {reasoning: {effort: 'low'}}, medium: {reasoning: {effort: 'medium'}}, high: {reasoning: {effort: 'high'}}},
-  anthropic: {low: {thinkingBudget: 4096}, high: {thinkingBudget: 16000}, max: {thinkingBudget: 32000}},
-  reasoning_effort: {low: {reasoning_effort: 'low'}, medium: {reasoning_effort: 'medium'}, high: {reasoning_effort: 'high'}}
-};
 
 let modelsDraft = null;      // 全局编辑草稿
 let modelsBaseline = null;   // 最近一次加载/保存的快照（Reset 回填基准）
@@ -26,7 +20,6 @@ let selectedProviderKey = null;
 let activeProviderTab = null; // 'quick' | 'custom'，由 settings_connect.js 初始化
 let selectedPresetId = null;
 const modelSelects = {};
-const expandedModels = new Set();
 
 function suffix() {
   return Date.now().toString(36).slice(-6);
@@ -36,6 +29,10 @@ function currentProvider() {
   if (!modelsDraft) { return null; }
   if (activeProviderTab === 'quick') { return currentPreset(); }
   return modelsDraft.providers.find((provider) => provider.key === selectedProviderKey) || null;
+}
+
+function modelsSnapshot() {
+  return modelsDraft ? JSON.stringify(modelsDraft) : '';
 }
 
 function isProviderDirty(provider) {
@@ -164,19 +161,6 @@ function refreshRevision() {
   });
 }
 
-function draftModels(models) {
-  return (models || []).map((model) => ({
-    id: model.id,
-    name: model.name,
-    transport: model.transport || null,
-    context: model.limit ? String(model.limit.context) : '',
-    output: model.limit ? String(model.limit.output) : '',
-    variant: model.variant || null,
-    variantRows: Object.entries(model.variants || {}).map(([key, value]) => ({key: key, text: JSON.stringify(value)})),
-    modalities: normalizedModalities(model.modalities)
-  }));
-}
-
 function snapshotToDraft(snapshot) {
   return {
     revision: snapshot.revision || '',
@@ -198,12 +182,6 @@ function snapshotToDraft(snapshot) {
     })),
     quickConnect: (snapshot.quickConnect || []).map(draftPresetSnapshot)
   };
-}
-
-function normalizedModalities(value) {
-  const input = value && Array.isArray(value.input) ? value.input.filter((item) => INPUT_MODALITIES.includes(item)) : ['text'];
-  const output = value && Array.isArray(value.output) ? value.output.filter((item) => OUTPUT_MODALITIES.includes(item)) : ['text'];
-  return {input: input, output: output};
 }
 
 function renderModelsView() {
@@ -346,287 +324,6 @@ function deleteProvider() {
   renderModelsView();
 }
 
-function addModel() {
-  const provider = currentProvider();
-  if (!provider) { return; }
-  const id = 'model-' + suffix();
-  provider.models.push({
-    id: id, name: 'New Model', transport: null, context: '', output: '',
-    variant: null, variantRows: [], modalities: {input: ['text'], output: ['text']}
-  });
-  markModelsDirty();
-  renderModelList();
-  renderDefaultModel();
-}
-
-function duplicateModel(provider, model) {
-  const copy = JSON.parse(JSON.stringify(model));
-  copy.id = (model.id || 'model') + '-copy-' + suffix();
-  copy.name = (model.name || model.id) + ' copy';
-  const index = provider.models.indexOf(model);
-  provider.models.splice(index + 1, 0, copy);
-  markModelsDirty();
-  renderModelList();
-  renderDefaultModel();
-}
-
-function removeModel(provider, model) {
-  const index = provider.models.indexOf(model);
-  if (index >= 0) { provider.models.splice(index, 1); }
-  if (modelsDraft.defaultModel && modelsDraft.defaultModel.provider === provider.id && modelsDraft.defaultModel.model === model.id) {
-    modelsDraft.defaultModel = null;
-    showToast('Default model cleared', 'info');
-  }
-  if (modelsDraft.titleSummary && modelsDraft.titleSummary.provider === provider.id && modelsDraft.titleSummary.model === model.id) {
-    modelsDraft.titleSummary = null;
-    showToast('Title model cleared', 'info');
-  }
-  if (modelsDraft.recapSummary && modelsDraft.recapSummary.provider === provider.id && modelsDraft.recapSummary.model === model.id) {
-    modelsDraft.recapSummary = null;
-    showToast('Recap model cleared', 'info');
-  }
-  markModelsDirty();
-  renderModelList();
-  renderDefaultModel();
-}
-
-function labeledInput(captionText, value, onInput) {
-  const wrap = element('div');
-  wrap.appendChild(element('label', null, captionText));
-  const input = document.createElement('input');
-  input.type = 'text';
-  input.value = value === null || value === undefined ? '' : value;
-  input.oninput = () => onInput(input.value);
-  wrap.appendChild(input);
-  return {wrap: wrap, input: input};
-}
-
-function renderModelList() {
-  const list = document.getElementById('model-list');
-  while (list.firstChild) { list.removeChild(list.firstChild); }
-  const provider = currentProvider();
-  if (!provider || provider.models.length === 0) {
-    list.appendChild(element('p', 'nav-empty', 'No models yet.'));
-    return;
-  }
-  for (const model of provider.models) {
-    list.appendChild(modelCard(provider, model));
-  }
-}
-
-function modelCard(provider, model) {
-  const key = provider.key + '\u0000' + model.id;
-  const card = element('div', 'model-card');
-  const head = element('div', 'model-head');
-  const idField = labeledInput('Model ID', model.id, (value) => { model.id = value; markModelsDirty(); });
-  idField.input.addEventListener('change', () => { renderDefaultModel(); });
-  const nameField = labeledInput('Display name', model.name, (value) => { model.name = value; markModelsDirty(); });
-  nameField.input.addEventListener('change', () => { renderProviders(); renderDefaultModel(); });
-  const tools = element('div', 'model-tools');
-  const expanded = expandedModels.has(key);
-  const advanced = element('button', 'ghost', expanded ? 'Hide' : 'Advanced');
-  advanced.type = 'button';
-  const more = element('div', 'model-more' + (expanded ? '' : ' hidden'));
-  advanced.onclick = () => {
-    if (expandedModels.has(key)) { expandedModels.delete(key); } else { expandedModels.add(key); }
-    const isOpen = expandedModels.has(key);
-    advanced.textContent = isOpen ? 'Hide' : 'Advanced';
-    more.classList.toggle('hidden', !isOpen);
-  };
-  const dup = element('button', 'ghost', 'Duplicate');
-  dup.type = 'button';
-  dup.onclick = () => duplicateModel(provider, model);
-  const remove = element('button', 'danger', 'Remove');
-  remove.type = 'button';
-  remove.onclick = () => removeModel(provider, model);
-  tools.appendChild(advanced);
-  tools.appendChild(dup);
-  tools.appendChild(remove);
-  head.appendChild(idField.wrap);
-  head.appendChild(nameField.wrap);
-  head.appendChild(tools);
-  card.appendChild(head);
-
-  const grid = element('div', 'model-grid-3');
-  const contextField = labeledInput('Context', model.context, (value) => { model.context = value; markModelsDirty(); });
-  const outputField = labeledInput('Output', model.output, (value) => { model.output = value; markModelsDirty(); });
-  const transportWrap = element('div');
-  transportWrap.appendChild(element('label', null, 'Transport'));
-  const transportHost = element('div', 'select-host');
-  transportWrap.appendChild(transportHost);
-  grid.appendChild(contextField.wrap);
-  grid.appendChild(outputField.wrap);
-  grid.appendChild(transportWrap);
-  more.appendChild(grid);
-  createSelect(transportHost, {
-    ariaLabel: 'Model transport',
-    value: model.transport || '',
-    options: [
-      {value: '', label: '(inherit)'},
-      {value: 'openai', label: 'openai'},
-      {value: 'openai-compatible', label: 'openai-compatible'},
-      {value: 'openai-responses', label: 'openai-responses'},
-      {value: 'anthropic', label: 'anthropic'},
-      {value: 'google', label: 'google'}
-    ],
-    onChange: (value) => { model.transport = value || null; markModelsDirty(); }
-  });
-  more.appendChild(modalitySection(model));
-  more.appendChild(thinkingSection(model));
-  card.appendChild(more);
-  return card;
-}
-
-function modalitySection(model) {
-  const section = element('div', 'model-sub');
-  section.appendChild(element('div', 'sub-title', 'Modalities'));
-  const grid = element('div', 'check-grid');
-  grid.appendChild(modalityGroup('Input', 'input', INPUT_MODALITIES, model));
-  grid.appendChild(modalityGroup('Output', 'output', OUTPUT_MODALITIES, model));
-  section.appendChild(grid);
-  return section;
-}
-
-function modalityGroup(title, key, values, model) {
-  const wrap = element('div');
-  wrap.appendChild(element('div', 'check-title', title));
-  const row = element('div', 'check-row');
-  for (const value of values) {
-    const item = element('label', 'check-item');
-    const box = document.createElement('input');
-    box.type = 'checkbox';
-    box.checked = model.modalities[key].includes(value);
-    box.onchange = () => {
-      const list = model.modalities[key];
-      const index = list.indexOf(value);
-      if (box.checked && index < 0) { list.push(value); }
-      if (!box.checked && index >= 0) { list.splice(index, 1); }
-      markModelsDirty();
-    };
-    item.appendChild(box);
-    item.appendChild(document.createTextNode(' ' + value));
-    row.appendChild(item);
-  }
-  wrap.appendChild(row);
-  return wrap;
-}
-
-function thinkingSection(model) {
-  const section = element('div', 'model-sub');
-  const head = element('div', 'sub-head');
-  head.appendChild(element('div', 'sub-title', 'Thinking variants'));
-  const presetHost = element('div', 'select-host preset-host');
-  head.appendChild(presetHost);
-  section.appendChild(head);
-  const body = element('div', 'variant-body');
-  section.appendChild(body);
-  const presetSelect = createSelect(presetHost, {
-    ariaLabel: 'Add thinking preset',
-    placeholder: 'Add preset…',
-    value: '',
-    options: [
-      {value: 'openai', label: 'OpenAI reasoning effort'},
-      {value: 'openrouter', label: 'OpenRouter reasoning'},
-      {value: 'anthropic', label: 'Anthropic thinking budget'},
-      {value: 'reasoning_effort', label: 'reasoning_effort'},
-      {value: 'custom', label: 'Custom variant'}
-    ],
-    onChange: (value) => {
-      applyVariantPreset(model, value);
-      presetSelect.setValue('');
-      markModelsDirty();
-      renderVariants(body, model);
-    }
-  });
-  renderVariants(body, model);
-  return section;
-}
-
-function renderVariants(body, model) {
-  while (body.firstChild) { body.removeChild(body.firstChild); }
-  if (model.variantRows.length === 0) {
-    body.appendChild(element('div', 'nav-empty', 'No thinking variants configured.'));
-    return;
-  }
-  const defaultRow = element('div', 'variant-default');
-  defaultRow.appendChild(element('div', 'check-title', 'Default variant'));
-  const defaultHost = element('div', 'select-host');
-  defaultRow.appendChild(defaultHost);
-  body.appendChild(defaultRow);
-  createSelect(defaultHost, {
-    ariaLabel: 'Default thinking variant',
-    value: model.variant || '',
-    options: [{value: '', label: '(none)'}].concat(model.variantRows.map((row) => ({value: row.key, label: row.key}))),
-    onChange: (value) => { model.variant = value || null; markModelsDirty(); }
-  });
-  for (const row of model.variantRows) {
-    body.appendChild(variantRow(model, row, body));
-  }
-}
-
-function variantRow(model, row, body) {
-  const wrap = element('div', 'variant-row');
-  const keyInput = document.createElement('input');
-  keyInput.type = 'text';
-  keyInput.value = row.key;
-  keyInput.setAttribute('aria-label', 'Variant name');
-  keyInput.oninput = () => { row.key = keyInput.value; markModelsDirty(); };
-  keyInput.onchange = () => {
-    const key = keyInput.value.trim();
-    const duplicate = model.variantRows.some((other) => other !== row && other.key === key);
-    if (!key || duplicate) {
-      showToast(duplicate ? ('Duplicate variant name ' + key) : 'Variant name is required', 'error');
-      keyInput.value = row.key;
-      return;
-    }
-    if (model.variant === row.key) { model.variant = key; }
-    row.key = key;
-    keyInput.value = key;
-    markModelsDirty();
-    renderVariants(body, model);
-  };
-  const jsonInput = document.createElement('input');
-  jsonInput.type = 'text';
-  jsonInput.className = 'variant-json';
-  jsonInput.value = row.text;
-  jsonInput.setAttribute('aria-label', 'Variant JSON');
-  jsonInput.oninput = () => { row.text = jsonInput.value; markModelsDirty(); };
-  const remove = element('button', 'danger', 'Remove');
-  remove.type = 'button';
-  remove.onclick = () => {
-    const index = model.variantRows.indexOf(row);
-    if (index >= 0) { model.variantRows.splice(index, 1); }
-    if (model.variant === row.key) {
-      model.variant = model.variantRows.length ? model.variantRows[0].key : null;
-    }
-    markModelsDirty();
-    renderVariants(body, model);
-  };
-  wrap.appendChild(keyInput);
-  wrap.appendChild(jsonInput);
-  wrap.appendChild(remove);
-  return wrap;
-}
-
-function applyVariantPreset(model, kind) {
-  const named = VARIANT_PRESETS[kind];
-  let defaultKey = 'high';
-  let preset = named;
-  if (!named) {
-    let index = model.variantRows.length + 1;
-    let key = 'variant-' + index;
-    while (model.variantRows.some((row) => row.key === key)) { index += 1; key = 'variant-' + index; }
-    preset = {};
-    preset[key] = {reasoningEffort: 'high'};
-    defaultKey = key;
-  }
-  for (const [key, config] of Object.entries(preset)) {
-    const existing = model.variantRows.find((row) => row.key === key);
-    if (existing) { existing.text = JSON.stringify(config); } else { model.variantRows.push({key: key, text: JSON.stringify(config)}); }
-  }
-  if (!model.variant) { model.variant = defaultKey; }
-}
-
 function renderDefaultModel() {
   if (!modelsDraft) { return; }
   // Custom 与快捷连接共用同一份选项；快捷连接附 `(Quick Connect)` 标识。
@@ -668,59 +365,6 @@ function renderDefaultModel() {
   }
 }
 
-function buildVariants(model) {
-  const variants = {};
-  for (const row of model.variantRows) {
-    const key = (row.key || '').trim();
-    if (!key) { throw new Error('Thinking variant name is required for model ' + (model.id || 'model')); }
-    if (Object.prototype.hasOwnProperty.call(variants, key)) {
-      throw new Error('Duplicate thinking variant ' + key + ' for model ' + (model.id || 'model'));
-    }
-    let parsed;
-    try {
-      parsed = JSON.parse((row.text || '').trim() || '{}');
-    } catch (error) {
-      throw new Error('Invalid variants JSON for ' + (model.id || 'model') + ' / ' + key + ': ' + error.message);
-    }
-    if (parsed === null || typeof parsed !== 'object' || Array.isArray(parsed)) {
-      throw new Error('Variant ' + key + ' must be a JSON object');
-    }
-    variants[key] = parsed;
-  }
-  return variants;
-}
-
-function limitOf(model, modelId) {
-  const context = (model.context || '').trim();
-  const output = (model.output || '').trim();
-  if (context === '' && output === '') { return null; }
-  if (context === '' || output === '') {
-    throw new Error('Context and Output must both be set for model ' + modelId);
-  }
-  const contextValue = Number(context);
-  const outputValue = Number(output);
-  if (!Number.isInteger(contextValue) || contextValue <= 0 || !Number.isInteger(outputValue) || outputValue <= 0) {
-    throw new Error('Context/Output must be positive integers for model ' + modelId);
-  }
-  return {context: contextValue, output: outputValue};
-}
-
-function modalitiesOf(model) {
-  const input = model.modalities.input.filter((value) => INPUT_MODALITIES.includes(value));
-  const output = model.modalities.output.filter((value) => OUTPUT_MODALITIES.includes(value));
-  if (input.length === 0 && output.length === 0) { return null; }
-  return {input: input, output: output};
-}
-
-function resolveSelectionVariant(selection, model) {
-  if (selection && selection.variant && Array.isArray(model.variantRows)) {
-    if (model.variantRows.some((row) => (row.key || '').trim() === selection.variant)) {
-      return selection.variant;
-    }
-  }
-  return model.variant || null;
-}
-
 function buildPayload() {
   const seenProviders = new Set();
   const providers = [];
@@ -749,6 +393,7 @@ function buildPayload() {
           name: (model.name || '').trim() || modelId,
           transport: model.transport || null,
           limit: limitOf(model, modelId),
+          pricing: serializePricing(model.pricing, modelId),
           variant: variant,
           variants: variants,
           modalities: modalitiesOf(model)
@@ -768,7 +413,11 @@ function buildPayload() {
     } catch (error) {
       error.tab = 'provider';
       selectedProviderKey = provider.key;
-      renderModelsView();
+      if (activeProviderTab !== 'custom') {
+        switchProviderTab('custom');
+      } else {
+        renderModelsView();
+      }
       throw error;
     }
   }
@@ -788,6 +437,10 @@ function buildPayload() {
     streamIdleTimeoutMs: modelsDraft.streamIdleTimeoutMs,
     revision: modelsDraft.revision
   };
+}
+
+function modelsPayload() {
+  return buildPayload();
 }
 
 // 自定义供应商/模型选择是否真的有改动；仅预设草稿变化时跳过 `ai.json` 提交。
@@ -846,45 +499,6 @@ function fetchModels() {
     showToast(error.message, 'error');
     hideFetchCandidates();
   });
-}
-
-function renderFetchCandidates(models) {
-  const box = document.getElementById('fetch-candidates');
-  while (box.firstChild) { box.removeChild(box.firstChild); }
-  box.classList.remove('hidden');
-  const provider = currentProvider();
-  if (!provider || models.length === 0) {
-    box.appendChild(element('p', 'nav-empty', 'No models returned.'));
-    return;
-  }
-  for (const candidate of models) {
-    const row = element('div', 'fetch-row');
-    const label = element('span', null, candidate.id + (candidate.ownedBy ? ' · ' + candidate.ownedBy : ''));
-    const add = element('button', 'ghost', 'Add');
-    add.type = 'button';
-    add.onclick = () => {
-      // 明确选择加入；不覆盖已编辑的同 id 模型。
-      if (!provider.models.some((model) => model.id === candidate.id)) {
-        provider.models.push({
-          id: candidate.id, name: candidate.id, transport: null, context: '', output: '',
-          variant: null, variantRows: [], modalities: {input: ['text'], output: ['text']}
-        });
-        markModelsDirty();
-        renderModelList();
-        renderDefaultModel();
-      }
-      add.textContent = 'Added';
-    };
-    row.appendChild(label);
-    row.appendChild(add);
-    box.appendChild(row);
-  }
-}
-
-function hideFetchCandidates() {
-  const box = document.getElementById('fetch-candidates');
-  while (box.firstChild) { box.removeChild(box.firstChild); }
-  box.classList.add('hidden');
 }
 
 function initModelsView() {
@@ -987,4 +601,3 @@ actionBars.provider = createActionBar('actions-provider', {
   reset: resetModels
 });
 initModelsView();
-

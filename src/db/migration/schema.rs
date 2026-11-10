@@ -668,3 +668,98 @@ CREATE INDEX IF NOT EXISTS idx_agent_message_recap_session
 -- 旧版本把撤销的 compact 检查点保留为 state='reverted'；新语义是物理删除，升级时清掉残留。
 DELETE FROM agent_compact_checkpoint WHERE state = 'reverted';
 "#;
+
+/// v26：新增模型调用统计流水表 `usage_log` 及历史 `agent_message` 回填。
+///
+/// - `session_id` / `workspace_id` 为写入时刻的快照文本，故意不建外键约束：
+///   删除会话或工作区后，历史账单与 Token 消耗统计仍须保留（与 `lx-agent` 一致）。
+/// - `input_tokens` 为完整输入 Token（含 `cache_read_tokens` + `cache_write_tokens`），
+///   前端计算 `fresh_input = max(0, input_tokens - cache_read_tokens - cache_write_tokens)`。
+pub(super) const SCHEMA_V26: &str = r#"
+CREATE TABLE IF NOT EXISTS usage_log (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    external_id TEXT NOT NULL UNIQUE,
+    session_id TEXT,
+    workspace_id TEXT,
+    purpose TEXT NOT NULL CHECK (purpose IN ('chat', 'subagent', 'compaction', 'title', 'recap')),
+    provider TEXT NOT NULL,
+    model TEXT NOT NULL,
+    input_tokens INTEGER NOT NULL DEFAULT 0 CHECK (input_tokens >= 0),
+    output_tokens INTEGER NOT NULL DEFAULT 0 CHECK (output_tokens >= 0),
+    cache_read_tokens INTEGER NOT NULL DEFAULT 0 CHECK (cache_read_tokens >= 0),
+    cache_write_tokens INTEGER NOT NULL DEFAULT 0 CHECK (cache_write_tokens >= 0),
+    input_cost_usd REAL,
+    output_cost_usd REAL,
+    cache_read_cost_usd REAL,
+    cache_write_cost_usd REAL,
+    total_cost_usd REAL,
+    duration_ms INTEGER CHECK (duration_ms IS NULL OR duration_ms >= 0),
+    status TEXT NOT NULL DEFAULT 'success' CHECK (status IN ('success', 'error', 'aborted')),
+    error_message TEXT,
+    created_at_ms INTEGER NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_usage_log_created_at
+    ON usage_log(created_at_ms DESC, id DESC);
+CREATE INDEX IF NOT EXISTS idx_usage_log_model
+    ON usage_log(model);
+CREATE INDEX IF NOT EXISTS idx_usage_log_provider
+    ON usage_log(provider);
+CREATE INDEX IF NOT EXISTS idx_usage_log_workspace
+    ON usage_log(workspace_id);
+CREATE INDEX IF NOT EXISTS idx_usage_log_session
+    ON usage_log(session_id);
+
+INSERT OR IGNORE INTO usage_log (
+    external_id,
+    session_id,
+    workspace_id,
+    purpose,
+    provider,
+    model,
+    input_tokens,
+    output_tokens,
+    cache_read_tokens,
+    cache_write_tokens,
+    duration_ms,
+    status,
+    error_message,
+    created_at_ms
+)
+SELECT
+    'ulog-backfill-' || m.external_id,
+    m.session_id,
+    s.workspace_id,
+    CASE WHEN s.source = 'subagent' THEN 'subagent' ELSE 'chat' END,
+    COALESCE(NULLIF(TRIM(m.model_provider), ''), COALESCE(NULLIF(TRIM(s.model_provider), ''), 'unknown')),
+    COALESCE(NULLIF(TRIM(m.model_id), ''), COALESCE(NULLIF(TRIM(s.model_id), ''), 'unknown')),
+    COALESCE(m.input_tokens, 0),
+    COALESCE(m.output_tokens, 0),
+    COALESCE(m.cache_read_tokens, 0),
+    COALESCE(m.cache_write_tokens, 0),
+    CASE
+        WHEN m.completed_at_ms IS NOT NULL AND m.completed_at_ms >= m.created_at_ms
+        THEN m.completed_at_ms - m.created_at_ms
+        ELSE NULL
+    END,
+    CASE m.status
+        WHEN 'complete' THEN 'success'
+        WHEN 'interrupted' THEN 'aborted'
+        WHEN 'failed' THEN 'error'
+        ELSE 'success'
+    END,
+    m.error_code,
+    COALESCE(m.completed_at_ms, m.created_at_ms)
+FROM agent_message m
+LEFT JOIN agent_session s ON s.external_id = m.session_id
+WHERE m.role = 'assistant'
+  AND m.kind = 'chat'
+  AND m.status IN ('complete', 'interrupted', 'failed')
+  AND (
+      m.input_tokens IS NOT NULL
+      OR m.output_tokens IS NOT NULL
+      OR m.cache_read_tokens IS NOT NULL
+      OR m.cache_write_tokens IS NOT NULL
+      OR m.status != 'complete'
+  );
+"#;

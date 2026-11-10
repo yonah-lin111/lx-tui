@@ -315,9 +315,11 @@ fn apply_connect_item(settings: &mut ConnectSettings, item: &Value) -> Result<()
         };
     }
     if let Some(models) = item.get("models").and_then(Value::as_array) {
-        let parsed = parse_models(models, record.models.as_ref())?;
+        let default_models = default_models_for_preset(spec.id);
+        let base_models = record.models.as_ref().unwrap_or(&default_models);
+        let parsed = parse_models(models, Some(base_models))?;
         // 与内置默认模型表一致时不落覆盖值，继续跟随云端目录更新。
-        record.models = if parsed == default_models_for_preset(spec.id) {
+        record.models = if parsed == default_models {
             None
         } else {
             Some(parsed)
@@ -411,6 +413,9 @@ fn commit_connect_change(
         custom.recap_summary = runtime.recap_summary.clone();
         crate::config::ai::save_ai(&ai_file, &custom)
             .map_err(|error| Response::error(500, &error.to_string()))?;
+    }
+    if let Ok(db) = crate::db::Database::open(&state.db_path()) {
+        let _ = db.backfill_usage_costs(&runtime);
     }
     let _ = state
         .sender()

@@ -321,6 +321,8 @@ pub struct AppState {
     pub settings_available: bool,
     /// 设置按钮点击请求：事件层取走后打开浏览器。
     pub settings_open_requested: bool,
+    /// 用户请求在外部浏览器打开模型用量统计页（鼠标点击 `[USE]` 置位，事件循环消费）。
+    pub usage_open_requested: bool,
     /// 模型配置快照：设置页保存后由事件层更新；发送时冻结成 `FrozenModel`。
     pub models: ModelsSnapshot,
     /// 快捷连接配置快照（`connect.json`）：由事件层加载，`/connect` 面板据此展示连接状态。
@@ -487,6 +489,7 @@ impl AppState {
             collapsed_groups: Vec::new(),
             settings_available: false,
             settings_open_requested: false,
+            usage_open_requested: false,
             models: ModelsSnapshot::default(),
             connect: crate::config::ai::connect::ConnectSettings::default(),
             connect_env: BTreeMap::new(),

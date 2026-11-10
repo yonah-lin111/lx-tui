@@ -8,7 +8,6 @@ use crossterm::event::MouseEvent;
 use crate::app::actions::Action;
 use crate::app::overlay::Overlay;
 use crate::app::state::{AppState, PaneKind, PaneView};
-use crate::app::toast::{Toast, ToastKind};
 use crate::app::update;
 use crate::config::Config;
 use crate::layout::{self, PaneId};
@@ -205,20 +204,12 @@ pub(crate) fn handle_mouse_down_left(
         return;
     }
     if ui::settings_button_at(view, state, mouse.column, mouse.row) {
-        if state.settings_available {
-            state.settings_open_requested = true;
-        } else {
-            let now = Instant::now();
-            update::show_toast(
-                state,
-                Toast::new(
-                    ToastKind::Danger,
-                    ui::text::TOAST_SETTINGS_UNAVAILABLE,
-                    None,
-                    now,
-                ),
-            );
-        }
+        state.settings_open_requested = true;
+        *dirty = true;
+        return;
+    }
+    if ui::usage_button_at(view, state, mouse.column, mouse.row) {
+        state.usage_open_requested = true;
         *dirty = true;
         return;
     }

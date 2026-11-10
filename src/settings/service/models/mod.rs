@@ -190,6 +190,7 @@ pub(super) fn model_value(model_key: &str, model: &crate::config::ai::ModelConfi
             "output": limit.output,
         })),
         "modalities": model.modalities,
+        "pricing": model.pricing,
         "variants": model.variants,
         "variant": model.variant,
     })
@@ -222,6 +223,7 @@ async fn put_settings(request: &Request, state: &ServiceState) -> Response {
     if !provided.is_empty() && provided != current_revision && provided != current_legacy_revision {
         return Response::error(409, "configuration changed elsewhere; reload and retry");
     }
+    let old_providers = current.providers.clone();
     let merged = match merge_settings(Some(current), &body, Some(&connect)) {
         Ok(settings) => settings,
         Err(message) => return Response::error(422, &message),
@@ -231,6 +233,35 @@ async fn put_settings(request: &Request, state: &ServiceState) -> Response {
     }
     // TUI 需要完整运行时快照：自定义供应商 + 已连接的快捷连接供应商。
     let runtime = crate::config::ai::connect::merge_runtime_ai_settings(&merged, &connect);
+    // 同步 `usage_log` 中的供应商名称（含 `provider-xxx -> name` 与无冲突重命名）及新增单价的存量成本。
+    if let Ok(db) = crate::db::Database::open(&state.db_path()) {
+        let mut name_map = merged.provider_name_map();
+        for (key, old_prov) in &old_providers {
+            if let Some(new_prov) = merged.providers.get(key) {
+                let old_name = old_prov.name.trim();
+                let new_name = new_prov.name.trim();
+                let is_unique_old_name = !old_name.is_empty()
+                    && old_name != "New Provider"
+                    && crate::config::ai::presets::all_presets()
+                        .iter()
+                        .all(|spec| spec.id != old_name && spec.name != old_name)
+                    && old_providers
+                        .iter()
+                        .filter(|(k, _)| *k != key)
+                        .all(|(_, p)| p.id != old_name && p.name.trim() != old_name)
+                    && merged
+                        .providers
+                        .iter()
+                        .filter(|(k, _)| *k != key)
+                        .all(|(_, p)| p.id != old_name && p.name.trim() != old_name);
+                if is_unique_old_name && !new_name.is_empty() && old_name != new_name {
+                    name_map.insert(old_name.to_string(), new_name.to_string());
+                }
+            }
+        }
+        let _ = db.sync_usage_provider_names(&name_map);
+        let _ = db.backfill_usage_costs(&runtime);
+    }
     let _ = state
         .sender()
         .send(SettingsEvent::ModelsChanged(Box::new(runtime)));
@@ -414,6 +445,12 @@ pub(super) fn parse_models(
             Some(value) => Some(value.clone()),
             None => previous_model.and_then(|model| model.modalities.clone()),
         };
+        // 单价三态：字段缺失 = 保留旧值，显式 null = 清除，对象 = 校验非负数值后覆盖。
+        let pricing = match model_item.get("pricing") {
+            Some(Value::Null) => None,
+            Some(value) => parse_model_pricing(&model_id, value)?,
+            None => previous_model.and_then(|model| model.pricing.clone()),
+        };
         // 未知字段（`extra`）同样往返保留：已知键之外的字段并入。
         const KNOWN_KEYS: [&str; 9] = [
             "id",
@@ -447,12 +484,39 @@ pub(super) fn parse_models(
                 modalities,
                 variants,
                 variant,
-                pricing: previous_model.and_then(|model| model.pricing.clone()),
+                pricing,
                 extra,
             },
         );
     }
     Ok(models)
+}
+
+fn parse_model_pricing(model_id: &str, value: &Value) -> Result<Option<Value>, String> {
+    let Some(obj) = value.as_object() else {
+        return Err(format!("model '{model_id}' pricing must be an object"));
+    };
+    for key in [
+        "input",
+        "output",
+        "cacheRead",
+        "cache_read",
+        "cacheWrite",
+        "cache_write",
+    ] {
+        if let Some(field) = obj.get(key)
+            && !field.is_null()
+            && field
+                .as_f64()
+                .filter(|number| number.is_finite() && *number >= 0.0)
+                .is_none()
+        {
+            return Err(format!(
+                "model '{model_id}' pricing must have non-negative numbers"
+            ));
+        }
+    }
+    Ok(crate::config::ai::ModelPricing::from_json_value(value).and_then(|p| p.to_json_value()))
 }
 
 fn parse_model_selection_field(

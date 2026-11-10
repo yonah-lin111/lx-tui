@@ -103,12 +103,15 @@ lx-tui/
       chat/tools.rs             工具调用 CRUD、时间线位置分配、按会话加载与启动恢复
       chat/process.rs           会话进程元数据（agent_process）：登记、输出快照合并、
                                 终态提交（revision 单调）、按会话批量加载与启动恢复
+      usage/                    模型调用统计流水表（usage_log）：写入、供应商名称与历史成本同步（mod.rs）、
+                                按时间/模型/供应商/会话聚合与分页查询（queries.rs）
       service.rs                同步持久化服务：执行 app 层效应出箱、按需载入提示词树
     tui/                        终端生命周期：原始模式、备用屏幕、恢复
     config/                     配置模型、默认值与校验
-      ai/                       模型与预设供应商配置：ai.json（mod.rs）、预设目录与云端缓存合并（presets.rs）、
-                                快捷连接 connect.json 与运行时合并（connect.rs）、models.dev 同步（catalog_refresh.rs）、
-                                远端 /models 发现（verify.rs）、OAuth Device Code 与 PKCE 授权及刷新（oauth/）
+      ai/                       模型与预设供应商配置：ai.json（mod.rs）、单价与供应商名称解析（pricing.rs）、
+                                预设目录与云端缓存合并（presets.rs）、快捷连接 connect.json 与运行时合并（connect.rs）、
+                                models.dev 同步（catalog_refresh.rs）、远端 /models 发现（verify.rs）、
+                                OAuth Device Code 与 PKCE 授权及刷新（oauth/）
     chat/                       流式聊天协议适配：统一事件、SSE 帧解析、thinking 标签、五种 transport、请求执行与上下文装配；
                                 lx agent 身份提示（prompt.rs：唯一稳定系统指令文本）；
                                 transport/tools/：七工具 wire 形状（Chat/Responses/Anthropic/Google）、
@@ -119,6 +122,7 @@ lx-tui/
                                 有界输出缓冲与安全文本化、stdin、等待窗口、停止与 reap）；
                                 计划契约（chat/plan.rs：全量替换、最多一个 in_progress、快照 JSON）
       events.rs                 统一纯数据事件（ChatDelta/PartKind/StopReason/ModelImage/ModelItem）
+      usage_recorder.rs         流式请求收尾处提取 Usage、计算模型单价成本并异步写入 usage_log
       prepare.rs                用户消息发送前准备：引用解析（@[refer-*]/@path/@ref/）、本地图片校验/去重与限额
       sse.rs                    可增量喂入的 SSE 帧解析器
       thinking.rs               <think>/<thinking> 跨 chunk 标签状态机
@@ -162,6 +166,7 @@ lx-tui/
       service.rs                回环 HTTP 服务：静态设置页、JSON API 与事件投递（路由 async，禁止在运行时内再建运行时）
       service/models/           模型设置与 Quick Connect API：GET/PUT `/api/models/settings`、POST `/api/models/fetch`（mod.rs）、
                                 `/api/models/connect/*` 预设保存/断开与 OAuth 授权流（connect.rs）
+      service/usage.rs          模型用量统计看板 API：GET `/api/usage/overview` 与 GET `/api/usage/logs`
     platform/                   OS 专属实现（剪贴板、会话图片归档与 30 天 GC、日志目录推导 log.rs、鼠标捕获与指针形状、默认 shell、进程 cwd、打开浏览器、文件/目录权限、随机数填充、原子文件替换）
   tests/                        集成测试
   scripts/                      开发与维护脚本，按需创建
@@ -169,8 +174,13 @@ lx-tui/
     settings.html               设置页结构
     settings.css                设置页样式
     settings.js                 设置页骨架与全局组件
+    settings_models_card.js     设置页模型卡片、单价、模态与思考等级编辑组件
     settings_models.js          设置页 Models 视图脚本
     settings_connect.js         设置页 Quick Connect 视图脚本
+    usage.html                  模型用量统计看板结构
+    usage.css                   模型用量统计看板样式
+    usage_charts.js             模型用量统计看板原生 SVG 图表渲染与格式化工具
+    usage.js                    模型用量统计看板状态、筛选、汇总卡、表格与分页脚本
     oauth_callback.html         OAuth 浏览器回调结果页模板
     oauth_implicit.html         OAuth 隐式授权流回调页模板
 ```

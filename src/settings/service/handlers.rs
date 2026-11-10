@@ -65,6 +65,15 @@ pub struct Response {
 }
 
 impl Response {
+    /// 200 响应。
+    pub fn ok(content_type: &'static str, body: impl Into<String>) -> Self {
+        Self {
+            status: 200,
+            content_type,
+            body: body.into(),
+        }
+    }
+
     /// JSON 响应。
     pub fn json(status: u16, body: impl Into<String>) -> Self {
         Self {
@@ -212,19 +221,13 @@ pub async fn route(request: &Request, state: &ServiceState) -> Response {
         let status = status.parse().unwrap_or(400);
         return Response::error(status, "request too large");
     }
-    // 静态资源（CSS/JS）不含敏感内容，且浏览器以无 token 的裸路径请求，
-    // 故在 token 校验之前放行；页面与 JSON API 仍逐请求校验。
+    // 静态资源（CSS/JS）不含敏感内容，以无 token 裸路径放行；页面与 JSON API 仍逐请求校验。
     if request.method == "GET"
         && let Some((content_type, body)) = page::asset(&request.path)
     {
-        return Response {
-            status: 200,
-            content_type,
-            body: body.to_string(),
-        };
+        return Response::ok(content_type, body.to_string());
     }
-    // OAuth 回调由浏览器从授权服务器跳回，无法携带 capability token；
-    // 一次性 state 本身就是防伪凭据（校验在回调处理内部完成）。
+    // OAuth 回调由浏览器从授权服务器跳回，一次性 state 本身即防伪凭据。
     if request.method == "GET" && request.path == "/mcp/oauth/callback" {
         return super::mcp::oauth_callback(request, state).await;
     }
@@ -236,11 +239,10 @@ pub async fn route(request: &Request, state: &ServiceState) -> Response {
         return Response::error(403, "cross-origin write rejected");
     }
     match (request.method.as_str(), request.path.as_str()) {
-        ("GET", "/") => Response {
-            status: 200,
-            content_type: "text/html; charset=utf-8",
-            body: page::html().to_string(),
-        },
+        ("GET", "/") => Response::ok("text/html; charset=utf-8", page::html().to_string()),
+        ("GET", "/usage") => {
+            Response::ok("text/html; charset=utf-8", page::usage_html().to_string())
+        }
         ("GET", "/api/state") => state_json(state),
         ("PUT", "/api/config") => put_config(request, state),
         ("POST", "/api/logs/open") => super::logs::open_logs().await,
@@ -254,6 +256,7 @@ pub async fn route(request: &Request, state: &ServiceState) -> Response {
         (_, path) if path.starts_with("/api/subagents") => {
             super::subagents::route(request, state).await
         }
+        (_, path) if path.starts_with("/api/usage") => super::usage::route(request, state),
         _ => Response::error(404, "not found"),
     }
 }

@@ -150,3 +150,82 @@ fn cache_path_lives_under_config() {
         );
     }
 }
+
+#[test]
+fn parses_cost_and_pricing_into_normalized_model_pricing() {
+    let json = r#"{
+      "anthropic": {
+        "id": "anthropic",
+        "name": "Anthropic",
+        "models": {
+          "claude-sonnet-4-5": {
+            "id": "claude-sonnet-4-5",
+            "type": "chat",
+            "name": "Claude Sonnet 4.5",
+            "cost": {
+              "input": 3.0,
+              "output": 15.0,
+              "cache_read": 0.3,
+              "cache_write": 3.75
+            }
+          },
+          "claude-haiku-4": {
+            "id": "claude-haiku-4",
+            "type": "chat",
+            "name": "Claude Haiku 4",
+            "pricing": {
+              "input": 0.8,
+              "output": 4.0,
+              "cacheRead": 0.08,
+              "cacheWrite": -1.0
+            }
+          },
+          "free-or-unpriced": {
+            "id": "free-or-unpriced",
+            "type": "chat",
+            "name": "Unpriced",
+            "cost": {
+              "input": -2.0
+            }
+          }
+        }
+      }
+    }"#;
+    let catalog = parse_models_dev_catalog(json).expect("catalog parses");
+    let anthropic = &catalog["anthropic"];
+
+    let sonnet = &anthropic["claude-sonnet-4-5"];
+    assert_eq!(
+        sonnet.parsed_pricing(),
+        Some(super::super::ModelPricing {
+            input: Some(3.0),
+            output: Some(15.0),
+            cache_read: Some(0.3),
+            cache_write: Some(3.75),
+        })
+    );
+    assert_eq!(
+        sonnet.pricing,
+        Some(serde_json::json!({
+            "input": 3.0,
+            "output": 15.0,
+            "cacheRead": 0.3,
+            "cacheWrite": 3.75
+        }))
+    );
+
+    let haiku = &anthropic["claude-haiku-4"];
+    assert_eq!(
+        haiku.parsed_pricing(),
+        Some(super::super::ModelPricing {
+            input: Some(0.8),
+            output: Some(4.0),
+            cache_read: Some(0.08),
+            cache_write: None,
+        })
+    );
+
+    let unpriced = &anthropic["free-or-unpriced"];
+    assert_eq!(unpriced.pricing, None);
+    assert_eq!(unpriced.parsed_pricing(), None);
+}

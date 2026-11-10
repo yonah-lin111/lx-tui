@@ -22,12 +22,14 @@ pub mod catalog_refresh;
 pub mod connect;
 pub mod oauth;
 pub mod presets;
+pub mod pricing;
 pub mod verify;
 
 pub use connect::{
     collect_preset_env_snapshot, disconnect_preset_on_disk, disconnect_preset_on_disk_with_env,
 };
 pub use oauth::ensure_connect_oauth_fresh;
+pub use pricing::ModelPricing;
 
 /// 默认流式空闲超时（毫秒），对齐 codex 的 5 分钟。
 ///

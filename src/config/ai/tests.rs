@@ -585,3 +585,104 @@ fn parse_ai_sanitizes_dangling_title_summary_and_unknown_language_on_load() {
 fn assert_path_exists(path: &Path) {
     assert!(Path::new(path).exists());
 }
+
+#[test]
+fn model_pricing_from_json_value_supports_camel_and_snake_case() {
+    let snake = serde_json::json!({
+        "input": 2.5,
+        "output": 10.0,
+        "cache_read": 0.25,
+        "cache_write": 3.125
+    });
+    let parsed = ModelPricing::from_json_value(&snake).expect("snake_case parses");
+    assert_eq!(
+        parsed,
+        ModelPricing {
+            input: Some(2.5),
+            output: Some(10.0),
+            cache_read: Some(0.25),
+            cache_write: Some(3.125),
+        }
+    );
+    assert!(parsed.has_any());
+    assert_eq!(
+        parsed.to_json_value(),
+        Some(serde_json::json!({
+            "input": 2.5,
+            "output": 10.0,
+            "cacheRead": 0.25,
+            "cacheWrite": 3.125
+        }))
+    );
+
+    // 负数或全无效对象返回 None。
+    let invalid = serde_json::json!({"input": -0.5, "output": "bad"});
+    assert_eq!(ModelPricing::from_json_value(&invalid), None);
+    assert_eq!(ModelPricing::default().to_json_value(), None);
+}
+
+#[test]
+fn resolve_model_pricing_prefers_exact_provider_then_other_provider_then_catalog() {
+    let mut settings = sample_settings();
+    if let Some(provider) = settings.providers.get_mut("example")
+        && let Some(model) = provider.models.get_mut("example-chat")
+    {
+        model.pricing = Some(serde_json::json!({
+            "input": 1.5,
+            "output": 6.0,
+            "cacheRead": 0.15
+        }));
+    }
+
+    // 1. 精确命中 (provider_id, model_id)
+    let exact = settings
+        .resolve_model_pricing("example", "example-chat")
+        .expect("exact match");
+    assert_eq!(exact.input, Some(1.5));
+    assert_eq!(exact.output, Some(6.0));
+    assert_eq!(exact.cache_read, Some(0.15));
+    assert_eq!(exact.cache_write, None);
+
+    // 2. 跨供应商同名模型兜底
+    let fallback = settings
+        .resolve_model_pricing("other-provider", "example-chat")
+        .expect("cross-provider fallback");
+    assert_eq!(fallback, exact);
+
+    // 3. 预设目录（update_catalog_models）兜底
+    let mut catalog_models = BTreeMap::new();
+    let mut prov_models = BTreeMap::new();
+    prov_models.insert(
+        "catalog-priced-model".to_string(),
+        ModelConfig {
+            id: "catalog-priced-model".to_string(),
+            name: "Catalog Priced".to_string(),
+            transport: None,
+            limit: Some(ModelLimit {
+                context: 128_000,
+                output: 8_192,
+            }),
+            modalities: None,
+            variants: BTreeMap::new(),
+            variant: None,
+            pricing: Some(serde_json::json!({
+                "input": 5.0,
+                "output": 15.0
+            })),
+            extra: serde_json::Map::new(),
+        },
+    );
+    catalog_models.insert("anthropic".to_string(), prov_models);
+    presets::update_catalog_models(catalog_models);
+
+    let from_catalog = settings
+        .resolve_model_pricing("anthropic", "catalog-priced-model")
+        .expect("catalog match");
+    assert_eq!(from_catalog.input, Some(5.0));
+    assert_eq!(from_catalog.output, Some(15.0));
+
+    assert_eq!(
+        settings.resolve_model_pricing("unknown", "nonexistent-model-xyz"),
+        None
+    );
+}

@@ -10,6 +10,11 @@ pub fn html() -> &'static str {
     include_str!("../../../assets/settings.html")
 }
 
+/// 用量统计页 HTML 主文档。
+pub fn usage_html() -> &'static str {
+    include_str!("../../../assets/usage.html")
+}
+
 /// 静态资源：返回 `(content_type, body)`；未知路径返回 None（交由路由回 404）。
 ///
 /// 资源不含敏感内容，故不要求 token；页面与 JSON API 仍逐请求校验。
@@ -27,6 +32,10 @@ pub fn asset(path: &str) -> Option<(&'static str, &'static str)> {
             "text/javascript; charset=utf-8",
             include_str!("../../../assets/settings_models.js"),
         )),
+        "/settings_models_card.js" => Some((
+            "text/javascript; charset=utf-8",
+            include_str!("../../../assets/settings_models_card.js"),
+        )),
         "/settings_connect.js" => Some((
             "text/javascript; charset=utf-8",
             include_str!("../../../assets/settings_connect.js"),
@@ -42,6 +51,18 @@ pub fn asset(path: &str) -> Option<(&'static str, &'static str)> {
         "/settings_subagents.js" => Some((
             "text/javascript; charset=utf-8",
             include_str!("../../../assets/settings_subagents.js"),
+        )),
+        "/usage.css" => Some((
+            "text/css; charset=utf-8",
+            include_str!("../../../assets/usage.css"),
+        )),
+        "/usage.js" => Some((
+            "text/javascript; charset=utf-8",
+            include_str!("../../../assets/usage.js"),
+        )),
+        "/usage_charts.js" => Some((
+            "text/javascript; charset=utf-8",
+            include_str!("../../../assets/usage_charts.js"),
         )),
         _ => None,
     }
