@@ -122,6 +122,8 @@ impl TodoPanel {
         }
         self.normalize_positions();
         self.item_rows.clear();
+        self.follow_selected = true;
+        self.scroll_into_view(self.rows);
         true
     }
 
@@ -215,6 +217,8 @@ impl TodoPanel {
         }
         self.normalize_positions();
         self.item_rows.clear();
+        self.follow_selected = true;
+        self.scroll_into_view(self.rows);
         true
     }
 

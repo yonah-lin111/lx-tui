@@ -449,4 +449,76 @@ fn cli_todo_group_ungroup_and_status_sync_across_group() {
     for item in db.list_todos_by_date(date).expect("after ungroup all") {
         assert_eq!(item.group_id, None);
     }
+
+    // Passing multiple IDs to `ungroup` must return a clear single-ID error.
+    let multi_err = env
+        .exec_raw(&["todo", "ungroup", "--id", &id_api, "--id", &id_style])
+        .expect_err("multiple IDs in ungroup must fail");
+    assert!(
+        multi_err.contains("expected a single <TODO_ID>"),
+        "unexpected error: {multi_err}"
+    );
+}
+
+#[test]
+fn cli_todo_group_preserves_existing_member_order_and_rollover_keeps_group() {
+    let env = CliTestEnv::new("todo-group-order-rollover");
+    let past_date = "2026-11-08";
+    let target_date = "2026-11-10";
+
+    for text in ["Step 1", "Step 2", "Step 3"] {
+        assert_exit_ok(env.exec_raw(&["todo", "add", text, "--date", past_date]));
+    }
+    let db = env.open_db();
+    let initial = db.list_todos_by_date(past_date).expect("initial todos");
+    let id_1 = initial[0].id.clone();
+    let id_2 = initial[1].id.clone();
+    let id_3 = initial[2].id.clone();
+
+    // Group [id_1, id_2], then merge id_3 into the existing group via `todo group id_1 id_3`.
+    assert_exit_ok(env.exec_raw(&["todo", "group", &id_1, &id_2]));
+    assert_exit_ok(env.exec_raw(&["todo", "group", &id_1, &id_3]));
+    let grouped = db.list_todos_by_date(past_date).expect("after 2nd group");
+    assert_eq!(
+        grouped.iter().map(|t| t.id.as_str()).collect::<Vec<_>>(),
+        vec![id_1.as_str(), id_2.as_str(), id_3.as_str()],
+        "merging into an existing group must preserve existing member order [id_1, id_2]"
+    );
+    let gid = grouped[0].group_id.clone().expect("group_id");
+    assert!(
+        grouped
+            .iter()
+            .all(|t| t.group_id.as_deref() == Some(gid.as_str()))
+    );
+
+    // Seed historical completed_date on id_1 and verify `update --status done` preserves and syncs it.
+    let mut seeded = grouped.clone();
+    for item in &mut seeded {
+        item.status = TodoStatus::Done;
+        item.completed_date = Some("2000-01-01".to_string());
+    }
+    db.sync_date_todos(past_date, &seeded).expect("seed done");
+    assert_exit_ok(env.exec_raw(&["todo", "update", &id_1, "--status", "done"]));
+    for item in db.list_todos_by_date(past_date).expect("after update done") {
+        assert_eq!(item.status, TodoStatus::Done);
+        assert_eq!(item.completed_date.as_deref(), Some("2000-01-01"));
+    }
+
+    // Reopen the group and roll over by specifying only one member `--id <id_2>`:
+    // all incomplete groupmates on the same date must roll over together and keep their group_id.
+    assert_exit_ok(env.exec_raw(&["todo", "reopen", &id_1]));
+    assert_exit_ok(env.exec_raw(&["todo", "rollover", "--to", target_date, "--id", &id_2]));
+    assert!(
+        db.list_todos_by_date(past_date)
+            .expect("past empty")
+            .is_empty()
+    );
+    let rolled = db.list_todos_by_date(target_date).expect("target todos");
+    assert_eq!(
+        rolled.iter().map(|t| t.id.as_str()).collect::<Vec<_>>(),
+        vec![id_1.as_str(), id_2.as_str(), id_3.as_str()]
+    );
+    for item in &rolled {
+        assert_eq!(item.group_id.as_deref(), Some(gid.as_str()));
+    }
 }

@@ -148,8 +148,14 @@ pub(super) fn update(ctx: &Context, command: &TodoCommand) -> Result<(), String>
         record.text = trimmed.to_string();
     }
     if let Some(status) = command.status {
+        if status == TodoStatus::Done {
+            if record.status != TodoStatus::Done || record.completed_date.is_none() {
+                record.completed_date = Some(today_date());
+            }
+        } else {
+            record.completed_date = None;
+        }
         record.status = status;
-        record.completed_date = (status == TodoStatus::Done).then(today_date);
     }
     if let Some(priority) = command.priority {
         record.priority = priority;
@@ -168,7 +174,13 @@ pub(super) fn update(ctx: &Context, command: &TodoCommand) -> Result<(), String>
     }
     db(ctx.db.save_todo(&record), "failed to update todo")?;
     if let (Some(status), Some(gid)) = (command.status, record.group_id.as_ref()) {
-        sync_group_status(ctx, &record.entry_date, gid, status)?;
+        sync_group_status(
+            ctx,
+            &record.entry_date,
+            gid,
+            status,
+            record.completed_date.as_deref(),
+        )?;
     }
     action(
         &ctx.out,
@@ -194,17 +206,23 @@ fn set_status(ctx: &Context, command: &TodoCommand, status: TodoStatus) -> Resul
     let query = one_id(command)?;
     let todos = db(ctx.db.list_todos(), "failed to list todos")?;
     let mut record = resolve(&todos, &query)?.clone();
-    if let Some(ref gid) = record.group_id {
-        sync_group_status(ctx, &record.entry_date, gid, status)?;
-    } else {
-        if status == TodoStatus::Done {
-            if record.status != TodoStatus::Done || record.completed_date.is_none() {
-                record.completed_date = Some(today_date());
-            }
-        } else {
-            record.completed_date = None;
+    if status == TodoStatus::Done {
+        if record.status != TodoStatus::Done || record.completed_date.is_none() {
+            record.completed_date = Some(today_date());
         }
-        record.status = status;
+    } else {
+        record.completed_date = None;
+    }
+    record.status = status;
+    if let Some(ref gid) = record.group_id {
+        sync_group_status(
+            ctx,
+            &record.entry_date,
+            gid,
+            status,
+            record.completed_date.as_deref(),
+        )?;
+    } else {
         db(ctx.db.save_todo(&record), "failed to update todo")?;
     }
     let message = format!("Todo {} is now {}.", record.id, status.as_str());
@@ -216,22 +234,25 @@ fn sync_group_status(
     entry_date: &str,
     group_id: &str,
     status: TodoStatus,
+    completed_date: Option<&str>,
 ) -> Result<(), String> {
     let mut day_todos = db(
         ctx.db.list_todos_by_date(entry_date),
         "failed to list todos by date",
     )?;
-    let today = today_date();
+    let target_completed = if status == TodoStatus::Done {
+        Some(
+            completed_date
+                .map(str::to_string)
+                .unwrap_or_else(today_date),
+        )
+    } else {
+        None
+    };
     for item in &mut day_todos {
         if item.group_id.as_deref() == Some(group_id) {
-            if status == TodoStatus::Done {
-                if item.status != TodoStatus::Done || item.completed_date.is_none() {
-                    item.completed_date = Some(today.clone());
-                }
-            } else {
-                item.completed_date = None;
-            }
             item.status = status;
+            item.completed_date = target_completed.clone();
         }
     }
     db(
@@ -285,20 +306,42 @@ pub(super) fn group(ctx: &Context, command: &TodoCommand) -> Result<(), String> 
     let base_completed = (base_status == TodoStatus::Done)
         .then(|| first.completed_date.clone().unwrap_or_else(today_date));
 
-    let mut target_member_ids = resolved_ids.clone();
+    let mut target_member_ids: Vec<String> = Vec::new();
     if let Some(ref existing_gid) = first.group_id {
         for item in &day_todos {
-            if item.group_id.as_deref() == Some(existing_gid.as_str())
-                && !target_member_ids.contains(&item.id)
-            {
+            if item.group_id.as_deref() == Some(existing_gid.as_str()) {
                 target_member_ids.push(item.id.clone());
             }
         }
+    } else {
+        target_member_ids.push(first.id.clone());
+    }
+    for id in &resolved_ids[1..] {
+        if !target_member_ids.contains(id) {
+            target_member_ids.push(id.clone());
+        }
+        if let Some(other_gid) = day_todos
+            .iter()
+            .find(|item| &item.id == id)
+            .and_then(|item| item.group_id.clone())
+        {
+            for item in &day_todos {
+                if item.group_id.as_deref() == Some(other_gid.as_str())
+                    && !target_member_ids.contains(&item.id)
+                {
+                    target_member_ids.push(item.id.clone());
+                }
+            }
+        }
+    }
+    if target_member_ids.len() < 2 {
+        return Err("todo group requires at least two distinct todo IDs".to_string());
     }
 
+    let anchor_id = &target_member_ids[0];
     let anchor_index = day_todos
         .iter()
-        .position(|item| item.id == resolved_ids[0])
+        .position(|item| &item.id == anchor_id)
         .unwrap_or(0);
     let before_count = day_todos[..anchor_index]
         .iter()
@@ -319,6 +362,17 @@ pub(super) fn group(ctx: &Context, command: &TodoCommand) -> Result<(), String> 
     for (offset, member) in grouped_members.into_iter().enumerate() {
         day_todos.insert(insert_at + offset, member);
     }
+    for index in 0..day_todos.len() {
+        if let Some(gid) = day_todos[index].group_id.clone() {
+            let count = day_todos
+                .iter()
+                .filter(|other| other.group_id.as_deref() == Some(gid.as_str()))
+                .count();
+            if count < 2 {
+                day_todos[index].group_id = None;
+            }
+        }
+    }
 
     db(
         ctx.db.sync_date_todos(&entry_date, &day_todos),
@@ -328,24 +382,30 @@ pub(super) fn group(ctx: &Context, command: &TodoCommand) -> Result<(), String> 
         "action": "group",
         "date": entry_date,
         "group_id": group_id,
-        "ids": resolved_ids,
+        "ids": target_member_ids,
     });
     ctx.out.emit(&payload, |_, writer| {
         writeln!(
             writer,
             "Grouped {} todos into {group_id}.",
-            resolved_ids.len()
+            target_member_ids.len()
         )
     })
 }
 
 pub(super) fn ungroup(ctx: &Context, command: &TodoCommand) -> Result<(), String> {
-    let query = if !command.words.is_empty() {
-        one_id(command)?
-    } else if command.ids.len() == 1 && !command.ids[0].trim().is_empty() {
-        command.ids[0].trim().to_string()
-    } else {
-        return Err("missing <TODO_ID>; run 'lx-tui todo --help' for usage".to_string());
+    let queries: Vec<String> = command
+        .words
+        .iter()
+        .chain(command.ids.iter())
+        .map(|s| s.trim())
+        .filter(|s| !s.is_empty())
+        .map(str::to_string)
+        .collect();
+    let query = match queries.as_slice() {
+        [id] => id.clone(),
+        [] => return Err("missing <TODO_ID>; run 'lx-tui todo --help' for usage".to_string()),
+        _ => return Err("expected a single <TODO_ID>".to_string()),
     };
     let todos = db(ctx.db.list_todos(), "failed to list todos")?;
     let target = resolve(&todos, &query)?.clone();
@@ -463,7 +523,19 @@ pub(super) fn rollover(ctx: &Context, command: &TodoCommand) -> Result<(), Strin
                     "cannot roll over completed todo {id}; reopen it first"
                 ));
             }
-            ids.push(item.id.clone());
+            if let Some(ref gid) = item.group_id {
+                for member in &todos {
+                    if member.entry_date == item.entry_date
+                        && member.group_id.as_deref() == Some(gid.as_str())
+                        && member.status != TodoStatus::Done
+                        && !ids.contains(&member.id)
+                    {
+                        ids.push(member.id.clone());
+                    }
+                }
+            } else if !ids.contains(&item.id) {
+                ids.push(item.id.clone());
+            }
         }
         ids
     };

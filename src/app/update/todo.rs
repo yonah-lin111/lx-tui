@@ -93,6 +93,7 @@ pub(super) fn editing_display_index(state: &AppState) -> Option<usize> {
 /// 提交后幽灵行消失，那时再换算就没有依据了。
 pub(super) fn resolve_display_index(state: &AppState, display: usize) -> Option<usize> {
     let shifted = match editing_layout(state) {
+        Some((ghost, true)) if display == ghost => return None,
         Some((ghost, true)) if display > ghost => display - 1,
         _ => display,
     };
@@ -498,6 +499,7 @@ pub fn right_click_todo_list(state: &mut AppState, display: Option<usize>, ancho
 
 /// 打开 Todo 条目右键菜单：按所处位置与聚合状态动态暴露聚合/拆分命令。
 pub fn open_todo_item_menu(state: &mut AppState, id: impl Into<String>, anchor: (u16, u16)) {
+    state.todo_drag = None;
     let id = id.into();
     let Some(index) = state.todo.items().iter().position(|item| item.id == id) else {
         return;
@@ -505,7 +507,6 @@ pub fn open_todo_item_menu(state: &mut AppState, id: impl Into<String>, anchor: 
     state.todo.set_pending_g(false);
     state.todo_row_click = None;
     state.todo_hover = None;
-    state.todo_drag = None;
     let mut commands = vec![crate::app::overlay::MenuCommand::EditTodo];
     if state.todo.has_next_to_group(index) {
         commands.push(crate::app::overlay::MenuCommand::GroupTodoWithNext);
@@ -585,6 +586,21 @@ pub fn fail_todo_write(state: &mut AppState) {
 
 /// 删除指定下标的条目并登记效应（含孤儿聚合组自动退化的整日同步）。
 pub fn remove_todo_at(state: &mut AppState, index: usize) -> bool {
+    let partner_snapshot = if state.todo.is_grouped(index) {
+        let range = state.todo.group_range(index);
+        if range.len() == 2 {
+            let partner_idx = if range.start == index {
+                range.start + 1
+            } else {
+                range.start
+            };
+            state.todo.items().get(partner_idx).cloned()
+        } else {
+            None
+        }
+    } else {
+        None
+    };
     let Some(removed) = state.todo.remove(index) else {
         return false;
     };
@@ -597,7 +613,11 @@ pub fn remove_todo_at(state: &mut AppState, index: usize) -> bool {
     {
         state.todo_hover = None;
     }
-    state.todo.set_undo(vec![removed.clone()]);
+    let mut undo_records = vec![removed.clone()];
+    if let Some(partner) = partner_snapshot {
+        undo_records.push(partner);
+    }
+    state.todo.set_undo(undo_records);
     state.todo.clamp_selection();
     state.effects.push(Effect::DeleteTodo { id: removed.id });
     if !state.todo.is_empty() {

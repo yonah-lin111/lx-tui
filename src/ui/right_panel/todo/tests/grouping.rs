@@ -163,3 +163,78 @@ fn mixed_single_and_grouped_items_align_status_and_hit_priority_badges_accuratel
         );
     }
 }
+
+#[test]
+fn dragging_source_row_suppresses_hover_selection_background() {
+    let mut state = AppState::demo();
+    let area = panel(44);
+    let today = state.todo.today_date().to_string();
+    let item0 = TodoRecord::new_on(&today, "source row", TodoStatus::Todo, TodoPriority::P1, 0);
+    let item0_id = item0.id.clone();
+    let item1 = TodoRecord::new_on(&today, "target row", TodoStatus::Todo, TodoPriority::P2, 1);
+    state.todo.replace(vec![item0, item1]);
+    state.right_tab = RightTab::Todo;
+    state.set_focus(crate::app::state::FocusedContainer::Todo);
+    state.todo_hover = Some(0);
+    state.todo_drag = Some(crate::app::state::TodoDrag {
+        source_id: item0_id,
+        from_display: 0,
+        pressed_at: std::time::Instant::now(),
+        dragging: true,
+        target_index: Some(1),
+    });
+
+    let (buffer, _) = render_panel(&state, area);
+    let list = list_rect(area);
+    let sel_bg = style::selection().bg;
+    let row0_cell = &buffer[(list.x + 9, list.y)];
+    let row1_cell = &buffer[(list.x + 9, list.y + 1)];
+    assert!(
+        row0_cell.modifier.contains(Modifier::DIM),
+        "被拖拽源行应置灰: {row0_cell:?}"
+    );
+    assert_ne!(
+        row0_cell.bg,
+        sel_bg.unwrap_or(Color::Reset),
+        "被拖拽源行即使残留 todo_hover 也不得铺选中底色: {row0_cell:?}"
+    );
+    assert_eq!(
+        Some(row1_cell.bg),
+        sel_bg,
+        "被悬停的目标合并行应铺选中高亮底色: {row1_cell:?}"
+    );
+
+    // 状态锚点处于行内编辑态或组内新建幽灵行时，status_at 依然准确命中该锚点行。
+    state.todo_drag = None;
+    state.todo_hover = None;
+    assert!(crate::app::update::begin_todo_edit(
+        &mut state,
+        crate::app::state::TodoEditTarget::Current(0)
+    ));
+    let sx = row_status_x(list);
+    assert_eq!(
+        status_at(area, &state, sx, list.y),
+        Some(0),
+        "正在编辑的状态锚点行应可命中状态框"
+    );
+    assert!(crate::app::update::cancel_todo_edit(&mut state));
+
+    // 2 条聚合组首项后打开组内新建幽灵行：显示序列为 [0, ghost(1), 2]，状态锚点在 display = 1（幽灵行）。
+    state.todo.replace(vec![
+        TodoRecord::new_on(&today, "grp-a", TodoStatus::Todo, TodoPriority::P1, 0)
+            .with_group_id(Some("g".into())),
+        TodoRecord::new_on(&today, "grp-b", TodoStatus::Todo, TodoPriority::P1, 1)
+            .with_group_id(Some("g".into())),
+    ]);
+    assert!(crate::app::update::begin_todo_edit(
+        &mut state,
+        crate::app::state::TodoEditTarget::After(0)
+    ));
+    assert_eq!(status_at(area, &state, sx, list.y), None);
+    assert_eq!(
+        status_at(area, &state, sx, list.y + 1),
+        Some(1),
+        "组内幽灵行作为 3 行聚合组的状态锚点时必须可命中状态框"
+    );
+    assert_eq!(status_at(area, &state, sx, list.y + 2), None);
+}

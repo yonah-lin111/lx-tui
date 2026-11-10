@@ -3,7 +3,9 @@
 use crate::app::effects::Effect;
 use crate::app::state::AppState;
 
-use super::{commit_todo_edit, focus_todo, resolve_display_index, sync_current_date_todos};
+use super::{
+    commit_todo_edit, editing_layout, focus_todo, resolve_display_index, sync_current_date_todos,
+};
 
 /// 循环当前选中项（或所在聚合组全员）的状态并登记写库。
 pub fn cycle_todo_status(state: &mut AppState) -> bool {
@@ -25,17 +27,33 @@ pub fn cycle_todo_status(state: &mut AppState) -> bool {
 
 /// 编辑态 `Tab`：切换被编辑条目（或所在聚合组全员）的状态并登记写库。
 ///
-/// 新建时列表里还没有记录可切（提交后才出现），吞掉。
+/// 独立新建时列表里还没有记录可切（提交后才出现），吞掉；组内新建幽灵行则同步切换所在聚合组全员状态。
 pub(super) fn cycle_editing_status(state: &mut AppState) -> bool {
-    let Some(id) = state.todo.editing().and_then(|edit| edit.target.clone()) else {
+    let Some(edit) = state.todo.editing() else {
         return false;
     };
-    let Some(index) = state.todo.items().iter().position(|item| item.id == id) else {
+    let index = if let Some(id) = edit.target.clone() {
+        state.todo.items().iter().position(|item| item.id == id)
+    } else if let Some(gid) = edit.group_id.clone() {
+        state
+            .todo
+            .items()
+            .iter()
+            .position(|item| item.group_id.as_deref() == Some(gid.as_str()))
+    } else {
+        None
+    };
+    let Some(index) = index else {
         return false;
     };
     let records = state.todo.cycle_status(index);
     if records.is_empty() {
         return false;
+    }
+    if let Some(next_status) = records.first().map(|record| record.status)
+        && let Some(edit_mut) = state.todo.editing_mut()
+    {
+        edit_mut.initial_status = next_status;
     }
     for record in records {
         state.effects.push(Effect::SaveTodo { record });
@@ -48,6 +66,38 @@ pub fn click_todo_status(state: &mut AppState, display: usize) -> bool {
     state.todo.set_pending_g(false);
     state.todo_row_click = None;
     state.todo_drag = None;
+    if editing_layout(state) == Some((display, true)) {
+        let ghost_gid = state.todo.editing().and_then(|edit| edit.group_id.clone());
+        let non_empty = state
+            .todo
+            .editing()
+            .is_some_and(|edit| !edit.input.text().trim().is_empty());
+        if ghost_gid.is_none() && !non_empty {
+            return false;
+        }
+        let mut changed = commit_todo_edit(state);
+        changed |= focus_todo(state);
+        let target_index = if let Some(gid) = ghost_gid {
+            state
+                .todo
+                .items()
+                .iter()
+                .position(|item| item.group_id.as_deref() == Some(gid.as_str()))
+        } else {
+            state.todo.selected()
+        };
+        if let Some(index) = target_index {
+            changed |= state.todo.select(index);
+            let records = state.todo.cycle_status(index);
+            if !records.is_empty() {
+                for record in records {
+                    state.effects.push(Effect::SaveTodo { record });
+                }
+                changed = true;
+            }
+        }
+        return changed;
+    }
     let Some(id) =
         resolve_display_index(state, display).map(|index| state.todo.items()[index].id.clone())
     else {

@@ -430,22 +430,20 @@ pub fn row_at(panel: Rect, state: &AppState, column: u16, row: u16) -> Option<us
     layout.item_at(row).map(|item| item.display)
 }
 
-/// 命中某行的状态框 `[ ]` 区域（返回显示下标；幽灵行、正在编辑的行或非状态锚点子项不命中）。
+/// 命中某行的状态框 `[ ]` 区域（返回显示下标；非状态锚点子项或续行不命中）。
 ///
 /// 只有状态锚点子项（独立单条或聚合组 `offset == (count - 1) / 2`）的首行承载状态框。
 pub fn status_at(panel: Rect, state: &AppState, column: u16, row: u16) -> Option<usize> {
-    let layout = layout_visible_items(panel, state);
-    if !layout.list.contains((column, row).into()) {
+    let visible = layout_visible_items(panel, state);
+    let sx = row_status_x(visible.list);
+    if column < sx || column >= sx.saturating_add(STATUS_WIDTH) {
         return None;
     }
-    let item = layout.item_at(row)?;
-    let record = display_record(state, item.display)?;
-    if item::editing_row(state, record).is_some() || !item.role.is_status_anchor() {
+    let item = visible.item_at(row)?;
+    if row != item.y || !item.role.is_status_anchor() {
         return None;
     }
-    let sx = row_status_x(layout.list);
-    (row == item.y && column >= sx && column < sx.saturating_add(STATUS_WIDTH))
-        .then_some(item.display)
+    Some(item.display)
 }
 
 /// 命中某行的优先级徽标区域（返回显示下标；幽灵行不命中）。

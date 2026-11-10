@@ -15,6 +15,7 @@ use super::{
 
 /// todo 按键总入口：按 `editing` 分派到单行编辑或列表动作。
 pub fn apply_todo_key(state: &mut AppState, key: TodoKey) -> bool {
+    state.todo_drag = None;
     if key == TodoKey::Esc && super::super::escape_clear_selection(state) {
         return true;
     }

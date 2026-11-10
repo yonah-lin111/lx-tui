@@ -272,7 +272,7 @@ fn row_view<'a>(
         .is_some_and(|target_idx| state.todo.group_range(target_idx).contains(&index));
     let row_selected =
         state.todo_focused() && state.todo.selected() == Some(index) && !drag_source_dimmed;
-    let hovered = state.todo_hover == Some(index);
+    let hovered = active_drag.is_none() && state.todo_hover == Some(index);
     Some(RowView {
         status: record.status,
         priority: record.priority,

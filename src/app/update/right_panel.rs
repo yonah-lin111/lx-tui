@@ -20,6 +20,10 @@ pub fn select_right_tab(state: &mut AppState, tab: RightTab) -> bool {
     state.right_tab_hover = None;
     state.prompt_drag = None; // 拖拽现场不跨面板存活
     state.todo_hover = None;
+    state.todo_drag = None;
+    state.todo_scroll_drag = None;
+    state.todo_row_click = None;
+    state.todo_input_drag = false;
     if tab != RightTab::Prompt {
         clear_selection(state); // prompt 选区
         state.prompt.clear_panel(); // 块/斜杠/提及/引用/粘贴面板

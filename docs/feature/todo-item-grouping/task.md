@@ -2,7 +2,8 @@
 
 - **任务目录**：`docs/feature/todo-item-grouping/`
 - **设计文档**：`docs/feature/todo-item-grouping/design.md`
-- **当前状态**：已完成（全部 5 个 Phase 已实现并通过测试验证）
+- **评审文档**：`docs/feature/todo-item-grouping/review.md`
+- **当前状态**：已完成（Phase 1~5 实现与 Phase 6 代码评审 P0~P3 共 10 项修复及回归测试全部通过）
 - **核心开发铁律**：
   - 生产代码禁止 `unwrap()` / `expect()`，错误统一用 `Result` + `?` 传播；
   - 所有 TUI 可见文案（菜单项、提示）必须使用英文并统一定义在 `src/ui/text/todo.rs`；
@@ -132,3 +133,21 @@
   - 执行 `cargo fmt --check`；
   - 执行 `cargo clippy --all-targets -- -D warnings`；
   - 执行定向与全量 `cargo test`。
+
+---
+
+### Phase 6：代码评审（`review.md`）与 P0~P3 缺陷收敛
+
+- [x] **6.1 P0 修复（数据错位、2 人组删后撤销丢组、DB 同组连续与孤儿清理不变量）**
+  - **P0-1**：`resolve_display_index` 补齐 `Some((ghost, true)) if display == ghost => return None`；`begin_todo_row_press` 在消费在途编辑提交时不登记陈旧 `todo_drag`；
+  - **P0-2**：`remove_todo_at` 删除 2 人组子项时连带保存幸存伙伴快照，`TodoPanel::restore` 原地恢复伙伴 `group_id`，`Database::restore_todos` 末尾执行 `cleanup_singleton_groups`；
+  - **P0-3**：`src/db/todo.rs` 新增 `compact_grouped_ids` 在 `reorder_todos`/`renumber_date`/`restore_todos` 中强制保持同组连续，`save_todo` 全分支补齐 `cleanup_singleton_groups`。
+- [x] **6.2 P1 修复（状态锚点编辑/幽灵行点击、拖拽源悬停串色、`todo_drag` 跨容器清理、CLI 保序与顺延）**
+  - **P1-1**：`status_at`、`click_todo_status` 与 `cycle_editing_status` 支持编辑态锚点行与组内新建幽灵行锚点点击/`Tab` 循环整组状态；
+  - **P1-2**：`item.rs` 拖拽期间抑制 `todo_hover` 选中底色，`hover.rs` 在 `todo_drag.is_some()` 时屏蔽悬停与 Tooltip；
+  - **P1-3**：`select_right_tab`、`TogglePrompt`、`focus_*`、`apply_todo_key`、右键菜单、`handle_mouse_drag`/`up` 与 `wheel.rs` 完整联动清理/拦截 `todo_drag`；
+  - **P1-4**：CLI `exec::group` 保留既有组内部顺序并返回完整成员 ID、`exec::update` 保留既有 `Done` 完成日并整组同步、`exec::rollover --id` 连带同组未完成成员。
+- [x] **6.3 P2 & P3 修复（视口跟随、CLI Help 与 `src/db/service.rs` 拆分）**
+  - **P2-1**：`merge_with_next` 与 `ungroup_at` 置 `follow_selected = true` 并滚入视口；
+  - **P2-2**：`src/cli/help.rs` 补齐 `group` / `ungroup` 用法，`exec::ungroup` 合并校验位置参数与 `--id`；
+  - **P3-1**：将 `src/db/service.rs`（原 995 行）拆分为 `src/db/service.rs`（609 行）+ `src/db/service/workspace.rs`（446 行）。

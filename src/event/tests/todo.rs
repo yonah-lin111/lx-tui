@@ -1148,3 +1148,186 @@ fn mouse_drag_todo_onto_another_row_merges_into_group_without_breaking_double_cl
         "原地双击第 0 行进入行内编辑"
     );
 }
+
+#[test]
+fn tab_switch_collapse_wheel_and_right_click_abort_todo_drag_cleanly() {
+    let mut state = demo_terminal();
+    let (config, geo) = toolbar_geometry(&mut state);
+    let visible = crate::ui::right_panel::todo::visible_rows(geo.view.prompt);
+    state.todo.replace(
+        (0..visible + 6)
+            .map(|index| {
+                crate::db::todo::TodoRecord::new(
+                    format!("item {index}"),
+                    crate::db::todo::TodoStatus::Todo,
+                    i64::try_from(index).unwrap_or(i64::MAX),
+                )
+            })
+            .collect(),
+    );
+    state.todo.set_viewport_rows(visible);
+    assert!(crate::app::update::select_right_tab(
+        &mut state,
+        RightTab::Todo
+    ));
+    let list = crate::ui::right_panel::todo::list_rect(geo.view.prompt);
+    let mut sessions = HashMap::new();
+    let mut cache = ui::RenderCache::default();
+    let mut dirty = false;
+
+    // 1. 按下第 0 行并拖到第 1 行，期间滚轮事件被拦截、不改变 scroll。
+    handle_terminal_event(
+        mouse(MouseEventKind::Down(MouseButton::Left), list.x + 1, list.y),
+        &mut state,
+        &mut sessions,
+        &geo,
+        &config,
+        &mut cache,
+        &mut dirty,
+    );
+    handle_terminal_event(
+        mouse(
+            MouseEventKind::Drag(MouseButton::Left),
+            list.x + 1,
+            list.y + 1,
+        ),
+        &mut state,
+        &mut sessions,
+        &geo,
+        &config,
+        &mut cache,
+        &mut dirty,
+    );
+    assert!(state.todo_drag.as_ref().is_some_and(|d| d.dragging));
+    handle_terminal_event(
+        mouse(MouseEventKind::ScrollDown, list.x + 1, list.y + 1),
+        &mut state,
+        &mut sessions,
+        &geo,
+        &config,
+        &mut cache,
+        &mut dirty,
+    );
+    assert_eq!(state.todo.scroll(), 0, "拖拽待办行期间禁止滚轮改写视口");
+
+    // 2. 拖动期间右键点击：立即取消 todo_drag，后续左键松开不会把两行合并。
+    handle_terminal_event(
+        mouse(
+            MouseEventKind::Down(MouseButton::Right),
+            list.x + 1,
+            list.y + 1,
+        ),
+        &mut state,
+        &mut sessions,
+        &geo,
+        &config,
+        &mut cache,
+        &mut dirty,
+    );
+    assert!(state.todo_drag.is_none(), "右键按下必须取消在途 todo_drag");
+    update::close_overlay(&mut state);
+    handle_terminal_event(
+        mouse(
+            MouseEventKind::Up(MouseButton::Left),
+            list.x + 1,
+            list.y + 1,
+        ),
+        &mut state,
+        &mut sessions,
+        &geo,
+        &config,
+        &mut cache,
+        &mut dirty,
+    );
+    assert!(
+        state
+            .todo
+            .items()
+            .iter()
+            .all(|item| item.group_id.is_none()),
+        "被右键中止的拖拽在左键释放时不得合并条目"
+    );
+
+    // 3. 拖动期间切到 Prompt tab 或折叠右栏：drag/up 分支防御性清空残留 todo_drag，不误合并。
+    state.todo_row_click = None;
+    handle_terminal_event(
+        mouse(MouseEventKind::Down(MouseButton::Left), list.x + 1, list.y),
+        &mut state,
+        &mut sessions,
+        &geo,
+        &config,
+        &mut cache,
+        &mut dirty,
+    );
+    assert!(state.todo_drag.is_some());
+    handle_terminal_event(
+        mouse(
+            MouseEventKind::Drag(MouseButton::Left),
+            list.x + 1,
+            list.y + 1,
+        ),
+        &mut state,
+        &mut sessions,
+        &geo,
+        &config,
+        &mut cache,
+        &mut dirty,
+    );
+    state.right_tab = RightTab::Prompt;
+    handle_terminal_event(
+        mouse(
+            MouseEventKind::Up(MouseButton::Left),
+            list.x + 1,
+            list.y + 1,
+        ),
+        &mut state,
+        &mut sessions,
+        &geo,
+        &config,
+        &mut cache,
+        &mut dirty,
+    );
+    assert!(
+        state.todo_drag.is_none(),
+        "非 Todo tab 下松开左键清空残留 todo_drag"
+    );
+    assert!(
+        state
+            .todo
+            .items()
+            .iter()
+            .all(|item| item.group_id.is_none()),
+        "非 Todo tab 下松开左键不得合并后台 Todo 条目"
+    );
+
+    state.right_tab = RightTab::Todo;
+    state.todo_row_click = None;
+    handle_terminal_event(
+        mouse(MouseEventKind::Down(MouseButton::Left), list.x + 1, list.y),
+        &mut state,
+        &mut sessions,
+        &geo,
+        &config,
+        &mut cache,
+        &mut dirty,
+    );
+    assert!(state.todo_drag.is_some());
+    state.prompt_collapsed = true;
+    handle_terminal_event(
+        mouse(
+            MouseEventKind::Drag(MouseButton::Left),
+            list.x + 1,
+            list.y + 1,
+        ),
+        &mut state,
+        &mut sessions,
+        &geo,
+        &config,
+        &mut cache,
+        &mut dirty,
+    );
+    assert!(
+        state.todo_drag.is_none(),
+        "右栏折叠后拖拽立即清空残留 todo_drag"
+    );
+}

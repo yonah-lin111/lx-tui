@@ -417,6 +417,8 @@ fn save_and_sync_date_todos_persists_group_id_and_positions() {
     for record in [&a, &b, &c] {
         db.save_todo(record).expect("save");
     }
+    db.sync_date_todos(date, &[a.clone(), b.clone(), c.clone()])
+        .expect("sync initial group");
 
     let listed = db.list_todos_by_date(date).expect("list by date");
     assert_eq!(
@@ -478,6 +480,8 @@ fn delete_todo_clears_singleton_group_id() {
     .with_group_id(Some(gid));
     db.save_todo(&a).expect("save a");
     db.save_todo(&b).expect("save b");
+    db.sync_date_todos(date, &[a.clone(), b.clone()])
+        .expect("sync group");
 
     db.delete_todo(&a.id).expect("delete a");
     let remaining = db.list_todos_by_date(date).expect("remaining");
@@ -486,5 +490,117 @@ fn delete_todo_clears_singleton_group_id() {
     assert_eq!(
         remaining[0].group_id, None,
         "2 条聚合组删掉 1 条后剩余单条必须自动清除 group_id"
+    );
+}
+
+#[test]
+fn restore_todos_cleans_up_singleton_group_when_partner_missing() {
+    let db = open_test_database();
+    let date = "2026-11-10";
+    let gid = new_todo_group_id();
+    let a = TodoRecord::new_on(date, "member a", TodoStatus::Todo, TodoPriority::P0, 0)
+        .with_group_id(Some(gid.clone()));
+    let b = TodoRecord::new_on(date, "member b", TodoStatus::Todo, TodoPriority::P1, 1)
+        .with_group_id(Some(gid.clone()));
+    db.save_todo(&a).expect("save a");
+    db.save_todo(&b).expect("save b");
+    db.sync_date_todos(date, &[a.clone(), b.clone()])
+        .expect("sync group");
+
+    // 删除 a 后，数据库里幸存的 b 已自动退化为 group_id = None。
+    db.delete_todo(&a.id).expect("delete a");
+    assert_eq!(
+        db.list_todos_by_date(date).expect("after delete")[0].group_id,
+        None
+    );
+
+    // 若仅恢复 a（未同时恢复伙伴 b 的 group_id），restore_todos 必须自动清理孤儿 group_id。
+    db.restore_todos(std::slice::from_ref(&a))
+        .expect("restore singleton a");
+    let after_single_restore = db.list_todos_by_date(date).expect("after single restore");
+    assert_eq!(texts(&after_single_restore), vec!["member a", "member b"]);
+    assert_eq!(
+        after_single_restore
+            .iter()
+            .map(|r| r.group_id.as_deref())
+            .collect::<Vec<_>>(),
+        vec![None, None],
+        "仅恢复单条带 group_id 的记录时不得在库内残留单人孤儿组"
+    );
+
+    // 成对恢复 [a, b] 时，2 人聚合组完整恢复。
+    db.restore_todos(&[a.clone(), b.clone()])
+        .expect("restore pair");
+    let after_pair_restore = db.list_todos_by_date(date).expect("after pair restore");
+    assert_eq!(texts(&after_pair_restore), vec!["member a", "member b"]);
+    assert_eq!(positions(&after_pair_restore), vec![0, 1]);
+    assert_eq!(
+        after_pair_restore
+            .iter()
+            .map(|r| r.group_id.as_deref())
+            .collect::<Vec<_>>(),
+        vec![Some(gid.as_str()), Some(gid.as_str())]
+    );
+}
+
+#[test]
+fn reorder_and_save_todo_enforce_contiguous_and_non_singleton_group_invariants() {
+    let db = open_test_database();
+    let date = "2026-11-10";
+    let gid = new_todo_group_id();
+    let a = TodoRecord::new_on(date, "a", TodoStatus::Todo, TodoPriority::P0, 0)
+        .with_group_id(Some(gid.clone()));
+    let b = TodoRecord::new_on(date, "b", TodoStatus::Todo, TodoPriority::P1, 1)
+        .with_group_id(Some(gid.clone()));
+    let c = TodoRecord::new_on(date, "c", TodoStatus::Todo, TodoPriority::P2, 2);
+    for record in [&a, &b, &c] {
+        db.save_todo(record).expect("save");
+    }
+    db.sync_date_todos(date, &[a.clone(), b.clone(), c.clone()])
+        .expect("sync initial group");
+
+    // 1. reorder_todos 传入把同组成员隔开的序列 [a, c, b] 时，必须按首次出现位置自动归拢为 [a, b, c]。
+    db.reorder_todos(date, &[a.id.clone(), c.id.clone(), b.id.clone()])
+        .expect("reorder");
+    let reordered = db.list_todos_by_date(date).expect("list after reorder");
+    assert_eq!(texts(&reordered), vec!["a", "b", "c"]);
+    assert_eq!(positions(&reordered), vec![0, 1, 2]);
+    assert_eq!(reordered[0].group_id.as_deref(), Some(gid.as_str()));
+    assert_eq!(reordered[1].group_id.as_deref(), Some(gid.as_str()));
+
+    // 2. save_todo 同日更新将 2 人组中一条改为 group_id = None 时，伙伴必须同步退化为 None。
+    let mut a_ungrouped = a.clone();
+    a_ungrouped.group_id = None;
+    db.save_todo(&a_ungrouped).expect("save ungrouped a");
+    let after_same_day_update = db.list_todos_by_date(date).expect("after same-day update");
+    assert_eq!(
+        after_same_day_update
+            .iter()
+            .map(|r| r.group_id.as_deref())
+            .collect::<Vec<_>>(),
+        vec![None, None, None]
+    );
+
+    // 3. save_todo 跨日移动 2 人组中一条时，源日期与目标日期均不得残留单条孤儿组。
+    db.sync_date_todos(date, &[a.clone(), b.clone(), c.clone()])
+        .expect("re-sync group");
+    let mut a_moved = a.clone();
+    a_moved.entry_date = "2026-11-11".to_string();
+    a_moved.position = 0;
+    db.save_todo(&a_moved).expect("move a across date");
+    let old_day = db.list_todos_by_date(date).expect("old day");
+    assert_eq!(texts(&old_day), vec!["b", "c"]);
+    assert_eq!(old_day[0].group_id, None);
+    let new_day = db.list_todos_by_date("2026-11-11").expect("new day");
+    assert_eq!(texts(&new_day), vec!["a"]);
+    assert_eq!(new_day[0].group_id, None);
+
+    // 4. save_todo 新增插入单条携带孤立 group_id 的记录时，自动清理为 None。
+    let lone = TodoRecord::new_on("2026-11-12", "lone", TodoStatus::Todo, TodoPriority::P1, 0)
+        .with_group_id(Some(new_todo_group_id()));
+    db.save_todo(&lone).expect("save lone");
+    assert_eq!(
+        db.list_todos_by_date("2026-11-12").expect("lone day")[0].group_id,
+        None
     );
 }

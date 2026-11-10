@@ -1,14 +1,14 @@
 # 右侧 Todo 面板条目聚合与拆分（Todo Item Grouping）设计文档
 
-- **状态**：已完成（Implemented & Verified）
+- **状态**：已完成（Implemented, Reviewed & Verified — 详见 `review.md`）
 - **任务目录**：`docs/feature/todo-item-grouping/`
 - **任务范围**：
-  - 数据库层：`src/db/mod.rs`、`src/db/migration.rs`、`src/db/migration/schema.rs`、`src/db/todo.rs`、`src/db/service.rs`、`src/app/effects.rs`
+  - 数据库与服务层：`src/db/mod.rs`、`src/db/migration.rs`、`src/db/migration/schema.rs`、`src/db/todo.rs`、`src/db/service.rs`、`src/db/service/workspace.rs`（新）、`src/app/effects.rs`
   - 状态层（含按职责拆分子模块）：`src/app/state.rs`、`src/app/state/todo.rs`、`src/app/state/todo/group.rs`（新）、`src/app/state/todo/schedule.rs`（新）
-  - 行为层（含按职责拆分子模块）：`src/app/update/todo.rs`、`src/app/update/todo/group.rs`（新）、`src/app/update/todo/drag.rs`（新）、`src/app/update/todo/key.rs`（新）、`src/app/overlay.rs`、`src/app/update/menu.rs`
-  - 渲染层（含按职责拆分子模块）：`src/ui/right_panel/todo.rs`、`src/ui/right_panel/todo/item.rs`（新）、`src/ui/right_panel/todo/schedule.rs`、`src/ui/right_panel/todo/charts.rs`、`src/ui/text/todo.rs`、`src/ui/style/todo.rs`
-  - 事件与输入层：`src/event/mouse/press.rs`、`src/event/mouse/drag.rs`、`src/event/mod.rs`
-  - CLI 层：`src/cli/todo.rs`、`src/cli/todo/exec.rs`
+  - 行为层（含按职责拆分子模块）：`src/app/update/todo.rs`、`src/app/update/todo/group.rs`（新）、`src/app/update/todo/drag.rs`（新）、`src/app/update/todo/key.rs`（新）、`src/app/update/right_panel.rs`、`src/app/update/focus.rs`、`src/app/update/editor.rs`、`src/app/update.rs`、`src/app/overlay.rs`、`src/app/update/menu.rs`
+  - 渲染层（含按职责拆分子模块）：`src/ui/right_panel/todo.rs`、`src/ui/right_panel/todo/item.rs`（新）、`src/ui/right_panel/todo/schedule.rs`、`src/ui/right_panel/todo/charts.rs`、`src/ui/overlay/menu.rs`、`src/ui/text/todo.rs`、`src/ui/style/todo.rs`
+  - 事件与输入层：`src/event/mouse/press.rs`、`src/event/mouse/drag.rs`、`src/event/mouse/hover.rs`、`src/event/mouse/wheel.rs`
+  - CLI 层：`src/cli/todo.rs`、`src/cli/todo/exec.rs`、`src/cli/help.rs`
 - **数据库变更**：`SCHEMA_VERSION` `25 -> 26`（`todo` 表新增可空列 `group_id TEXT` 与索引 `idx_todo_date_group(entry_date, group_id)`）
 - **非目标**：
   - 不引入多层嵌套（禁止“聚合组套聚合组”）；
@@ -576,6 +576,10 @@ pub(super) fn group_connector_glyph(
 | 拖拽未跨行即松开鼠标 | 不触发合并，按原单击/双击（400ms 窗口）逻辑选中或进入行内编辑 |
 | 历史未完成顺延到今天（Rollover） | 过去某天的未完成聚合组全员顺延到今日末尾，保留原 `group_id` 并在今日继续维持同一聚合块 |
 
+| 2 条聚合组中删除 1 条后按撤销（Undo） | `remove_todo_at` 连带保存因孤儿退化被抹掉 `group_id` 的幸存伙伴快照，`restore` 原地恢复伙伴 `group_id` 并完整还原 2 人聚合组 |
+| 聚合组状态锚点处于行内编辑或落在组内新建幽灵行上 | `status_at` 与 `click_todo_status` / `cycle_editing_status` 仍准确响应整组唯一 `[ ]` 状态框点击与 `Tab` 键循环 |
+| 拖拽中途切 Tab / 折叠右栏 / 按键 / 右键菜单 / 滚轮 | 立即中止并清理 `state.todo_drag` 与 `todo_hover`，禁止在隐藏或浮层状态下误合并待办 |
+
 ---
 
 ## 6. 测试计划
@@ -583,6 +587,8 @@ pub(super) fn group_connector_glyph(
 1. **数据库与迁移测试（`src/db/todo/tests.rs`、`src/db/migration/tests.rs`）**：
    - `migrate_v25_to_v26_adds_group_id_column_and_preserves_rows`
    - `save_and_sync_date_todos_persists_group_id_and_positions`
+   - `restore_todos_cleans_up_singleton_group_when_partner_missing`
+   - `reorder_and_save_todo_enforce_contiguous_and_non_singleton_group_invariants`
 2. **状态层与不变量测试（`src/app/state/todo/tests.rs`）**：
    - `merge_with_next_groups_two_singles_and_aligns_status`
    - `merge_item_into_moves_non_adjacent_item_into_target_group`
@@ -591,31 +597,40 @@ pub(super) fn group_connector_glyph(
    - `cycle_status_updates_all_members_of_group`
    - `remove_in_two_item_group_degenerates_survivor_to_single`
    - `sort_by_priority_keeps_group_contiguous_and_orders_by_highest_member_priority`
-3. **行为与事件测试（`src/app/update/todo/tests.rs`、`src/event/tests/todo.rs`）**：
+   - `merge_with_next_and_ungroup_re_enable_follow_selected`
+3. **行为与事件测试（`src/app/update/todo/tests/grouping.rs`、`src/event/tests/todo.rs`）**：
    - `key_m_u_upper_u_merge_split_and_ungroup_todos`
    - `key_o_inside_group_inserts_new_member_inheriting_group_and_status`
    - `mouse_drag_todo_onto_another_row_merges_into_group_without_breaking_double_click`
    - `right_click_grouped_todo_exposes_split_and_ungroup_commands`
-4. **UI 渲染与几何测试（`src/ui/right_panel/todo/tests.rs`）**：
+   - `resolve_display_index_rejects_ghost_slot_and_press_during_edit_does_not_arm_stale_drag`
+   - `undo_delete_in_two_item_group_restores_group_in_memory_and_db`
+   - `status_click_and_tab_work_on_editing_anchor_and_in_group_ghost_row`
+   - `tab_switch_collapse_wheel_and_right_click_abort_todo_drag_cleanly`
+4. **UI 渲染与几何测试（`src/ui/right_panel/todo/tests/grouping.rs`）**：
    - `two_and_three_item_groups_render_shared_status_and_tree_connectors`
    - `grouped_wrapped_item_draws_vertical_trunk_on_non_last_and_blank_on_last`
    - `mixed_single_and_grouped_items_align_status_and_hit_priority_badges_accurately`
+   - `dragging_source_row_suppresses_hover_selection_background`
 5. **CLI 测试（`src/cli/tests/prompt_and_todo_tests.rs`）**：
    - `cli_todo_group_ungroup_and_status_sync_across_group`
+   - `cli_todo_group_preserves_existing_member_order_and_rollover_keeps_group`
 
 ---
 
-## 7. 文件行数预算与拆分计划
+## 7. 文件行数水位与拆分结果
 
-| 文件路径 | 现状行数 | 改造后预计行数 | 说明 |
+| 文件路径 | 改造前行数 | 改造后行数 | 说明 |
 |---|---|---|---|
-| `src/app/state/todo.rs` | 967 | ~480 | 拆出 `group.rs` 与 `schedule.rs` |
-| `src/app/state/todo/group.rs`（新） | 0 | ~280 | 聚合角色、不变量归一、合并/拆分/保组排序 |
-| `src/app/state/todo/schedule.rs`（新） | 0 | ~220 | 跨日、顺延、周带与统计投影 |
-| `src/app/update/todo.rs` | 949 | ~360 | 拆出 `group.rs`、`drag.rs`、`key.rs` |
-| `src/app/update/todo/group.rs`（新） | 0 | ~180 | 合并/拆分/整组解散动作与写库登记 |
-| `src/app/update/todo/drag.rs`（新） | 0 | ~180 | 鼠标拖拽合并状态机 |
-| `src/app/update/todo/key.rs`（新） | 0 | ~260 | 列表态与编辑态按键分派 |
-| `src/ui/right_panel/todo.rs` | 947 | ~460 | 拆出 `item.rs` |
-| `src/ui/right_panel/todo/item.rs`（新） | 0 | ~360 | 单条与聚合组渲染、连接符、折行与行内编辑 |
-| `src/db/todo.rs` | 614 | ~690 | `group_id` 持久化与 `sync_date_todos` |
+| `src/app/state/todo.rs` | 967 | 652 | 拆出 `group.rs` 与 `schedule.rs` |
+| `src/app/state/todo/group.rs`（新） | 0 | 370 | 聚合角色、不变量归一、合并/拆分/保组排序 |
+| `src/app/state/todo/schedule.rs`（新） | 0 | 333 | 跨日、顺延、周带与统计投影 |
+| `src/app/update/todo.rs` | 949 | 666 | 拆出 `group.rs`、`drag.rs`、`key.rs` |
+| `src/app/update/todo/group.rs`（新） | 0 | 217 | 合并/拆分/整组解散与状态框点击 |
+| `src/app/update/todo/drag.rs`（新） | 0 | 102 | 鼠标拖拽合并状态机 |
+| `src/app/update/todo/key.rs`（新） | 0 | 361 | 列表态与编辑态按键分派 |
+| `src/ui/right_panel/todo.rs` | 947 | 668 | 拆出 `item.rs` |
+| `src/ui/right_panel/todo/item.rs`（新） | 0 | 498 | 单条与聚合组渲染、连接符、折行与行内编辑 |
+| `src/db/service.rs` | 989 | 609 | 拆出 `workspace.rs` |
+| `src/db/service/workspace.rs`（新） | 0 | 446 | 工作区、提示词树、引用文件夹与 Todo 写库分派 |
+| `src/db/todo.rs` | 614 | 753 | `group_id` 持久化、`sync_date_todos` 与同组连续归拢 |

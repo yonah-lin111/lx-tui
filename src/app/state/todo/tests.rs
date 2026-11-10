@@ -500,3 +500,25 @@ fn normalize_compacts_scattered_group_and_rollover_degenerates_singleton() {
         .expect("orphan moved");
     assert_eq!(orphan.group_id, None);
 }
+
+#[test]
+fn merge_with_next_and_ungroup_re_enable_follow_selected() {
+    let mut panel = TodoPanel::new();
+    panel.replace(records(&["0", "1", "2", "3", "4", "5"]));
+    panel.set_viewport_rows(2);
+    assert_eq!(panel.selected(), Some(0));
+
+    // 手动滚轮滚离选中项（follow_selected 置为 false）。
+    assert!(panel.scroll_by(3));
+    assert_eq!(panel.scroll(), 3);
+
+    // 向下合并时重新开启 follow_selected 并将选中项滚回视口。
+    assert!(panel.merge_with_next(0));
+    assert_eq!(panel.scroll(), 0);
+
+    // 再次滚离后解散整组，同样重新开启 follow_selected 并将选中项滚回视口。
+    assert!(panel.scroll_by(3));
+    assert_eq!(panel.scroll(), 3);
+    assert!(panel.ungroup_at(0));
+    assert_eq!(panel.scroll(), 0);
+}

@@ -256,3 +256,157 @@ fn right_click_grouped_todo_exposes_split_and_ungroup_commands() {
     assert!(!state.todo.is_grouped(0));
     assert!(!state.todo.is_grouped(1));
 }
+
+#[test]
+fn resolve_display_index_rejects_ghost_slot_and_press_during_edit_does_not_arm_stale_drag() {
+    let mut state = todo_state(&["a", "b", "c"]);
+    let now = Instant::now();
+
+    // 在第 0 项后打开空白幽灵行：显示序列为 a(0), 幽灵(1), b(2), c(3)。
+    assert!(begin_todo_edit(&mut state, TodoEditTarget::After(0)));
+    assert_eq!(resolve_display_index(&state, 0), Some(0));
+    assert_eq!(
+        resolve_display_index(&state, 1),
+        None,
+        "幽灵行槽位不得误映射为下方实体条目 b"
+    );
+    assert_eq!(resolve_display_index(&state, 2), Some(1));
+    assert_eq!(resolve_display_index(&state, 3), Some(2));
+
+    // 对空白独立幽灵行自身调用优先级/状态点击或拖拽目标解析，不得误改下方条目 b。
+    assert!(!click_todo_priority(&mut state, 1));
+    assert!(!click_todo_status(&mut state, 1));
+    assert_eq!(state.todo.items()[1].priority, TodoPriority::P1);
+    assert_eq!(state.todo.items()[1].status, TodoStatus::Todo);
+    assert!(state.todo.is_editing());
+
+    // 在幽灵行打开期间按下 display = 2（即条目 b）：
+    // 提交会销毁空白幽灵行并使 b 上移到 display = 1，此次按下仅完成提交与选中，不得登记陈旧的 from_display = 2。
+    assert!(begin_todo_row_press(&mut state, 2, now));
+    assert!(!state.todo.is_editing());
+    assert_eq!(state.todo.selected(), Some(1));
+    assert!(
+        state.todo_drag.is_none(),
+        "消费在途编辑提交的按下不得登记陈旧拖拽起点"
+    );
+    assert!(!drag_todo_to(&mut state, Some(1)));
+    assert!(!finish_todo_drag(&mut state));
+    assert!(!state.todo.is_grouped(0));
+    assert!(!state.todo.is_grouped(1));
+    assert!(!state.todo.is_grouped(2));
+}
+
+#[test]
+fn undo_delete_in_two_item_group_restores_group_in_memory_and_db() {
+    let mut state = todo_state(&["a", "b", "c"]);
+    assert!(apply_todo_key(&mut state, TodoKey::Char('m')));
+    assert!(apply_todo_key(&mut state, TodoKey::Space));
+    assert_eq!(state.todo.group_range(0), 0..2);
+    let gid = state.todo.items()[0].group_id.clone().expect("grouped");
+
+    let db = crate::db::Database::open_in_memory().expect("in-memory db");
+    for item in state.todo.items() {
+        db.save_todo(item).expect("seed todo in db");
+    }
+    db.sync_date_todos(state.todo.selected_date(), state.todo.items())
+        .expect("sync initial group");
+
+    // 删除 2 人组中的首项 a：幸存项 b 自动退化为 Single。
+    let removed_id = state.todo.items()[0].id.clone();
+    assert!(delete_todo_selected(&mut state));
+    assert_eq!(texts(&state), vec!["b", "c"]);
+    assert!(!state.todo.is_grouped(0));
+    assert_eq!(state.todo.items()[0].group_id, None);
+    db.delete_todo(&removed_id).expect("delete a in db");
+    db.sync_date_todos(state.todo.selected_date(), state.todo.items())
+        .expect("sync degenerated survivor");
+
+    // 撤销删除：内存与数据库中的 2 人组 [a, b] 必须完整恢复原 group_id 与状态。
+    state.effects.clear();
+    assert!(undo_todo_delete(&mut state));
+    assert_eq!(texts(&state), vec!["a", "b", "c"]);
+    assert_eq!(state.todo.group_range(0), 0..2);
+    assert!(state.todo.is_grouped(0));
+    assert!(state.todo.is_grouped(1));
+    assert_eq!(
+        state.todo.items()[0].group_id.as_deref(),
+        Some(gid.as_str())
+    );
+    assert_eq!(
+        state.todo.items()[1].group_id.as_deref(),
+        Some(gid.as_str())
+    );
+    assert_eq!(state.todo.items()[0].status, TodoStatus::InProgress);
+    assert_eq!(state.todo.items()[1].status, TodoStatus::InProgress);
+
+    for effect in &state.effects {
+        match effect {
+            Effect::RestoreTodos { records } => {
+                db.restore_todos(records).expect("restore todos in db");
+            }
+            Effect::SyncDateTodos {
+                entry_date,
+                records,
+            } => {
+                db.sync_date_todos(entry_date, records)
+                    .expect("sync restored group in db");
+            }
+            _ => {}
+        }
+    }
+    let db_items = db
+        .list_todos_by_date(state.todo.selected_date())
+        .expect("list todos");
+    assert_eq!(db_items.len(), 3);
+    assert_eq!(db_items[0].group_id.as_deref(), Some(gid.as_str()));
+    assert_eq!(db_items[1].group_id.as_deref(), Some(gid.as_str()));
+    assert_eq!(db_items[2].group_id, None);
+}
+
+#[test]
+fn status_click_and_tab_work_on_editing_anchor_and_in_group_ghost_row() {
+    let mut state = todo_state(&["a", "b"]);
+    assert!(apply_todo_key(&mut state, TodoKey::Char('m')));
+    assert_eq!(state.todo.group_range(0), 0..2);
+
+    // 1. 双击/进入锚点项 a 的行内编辑，直接点击 display = 0 的状态框：提交编辑并切换整组状态。
+    assert!(begin_todo_edit(&mut state, TodoEditTarget::Current(0)));
+    type_text(&mut state, "-edit");
+    state.effects.clear();
+    assert!(click_todo_status(&mut state, 0));
+    assert!(!state.todo.is_editing());
+    assert_eq!(texts(&state), vec!["a-edit", "b"]);
+    assert_eq!(state.todo.items()[0].status, TodoStatus::InProgress);
+    assert_eq!(state.todo.items()[1].status, TodoStatus::InProgress);
+
+    // 2. 在组内第 0 项后按 o 打开组内新建幽灵行（显示槽位 1，承载 3 槽位组的唯一状态框）：
+    // 按 Tab 循环切换整组状态（InProgress -> Done），且不退出幽灵行编辑。
+    assert_eq!(state.todo.selected(), Some(0));
+    assert!(apply_todo_key(&mut state, TodoKey::Char('o')));
+    state.effects.clear();
+    assert!(apply_todo_key(&mut state, TodoKey::Tab));
+    assert!(state.todo.is_editing());
+    assert_eq!(
+        state.todo.editing().expect("editing").initial_status,
+        TodoStatus::Done
+    );
+    assert_eq!(state.todo.items()[0].status, TodoStatus::Done);
+    assert_eq!(state.todo.items()[1].status, TodoStatus::Done);
+    assert_eq!(take_saved(&mut state).len(), 2);
+
+    // 3. 在组内幽灵行输入文本后点击幽灵行（display = 1）上的状态框：
+    // 先提交新成员入组，再将整组 3 条成员状态循环切换回 Todo。
+    type_text(&mut state, "mid");
+    state.effects.clear();
+    assert!(click_todo_status(&mut state, 1));
+    assert!(!state.todo.is_editing());
+    assert_eq!(texts(&state), vec!["a-edit", "mid", "b"]);
+    assert_eq!(state.todo.group_range(0), 0..3);
+    assert!(
+        state
+            .todo
+            .items()
+            .iter()
+            .all(|item| item.status == TodoStatus::Todo)
+    );
+}

@@ -297,6 +297,11 @@ impl TodoPanel {
         self.editing.as_ref()
     }
 
+    /// 编辑现场（可变）。
+    pub fn editing_mut(&mut self) -> Option<&mut TodoEdit> {
+        self.editing.as_mut()
+    }
+
     /// 最近一帧同步的编辑框首行可用列宽（软折行导航用）。
     pub fn edit_text_width(&self) -> usize {
         self.edit_text_width
@@ -579,7 +584,10 @@ impl TodoPanel {
         let today = self.today_date.clone();
         for mut record in records {
             if record.entry_date.is_empty() || record.entry_date == self.selected_date {
-                if self.items.iter().any(|item| item.id == record.id) {
+                if let Some(existing) = self.items.iter_mut().find(|item| item.id == record.id) {
+                    existing.group_id = record.group_id;
+                    existing.status = record.status;
+                    existing.completed_date = record.completed_date;
                     continue;
                 }
                 record.entry_date = self.selected_date.clone();
@@ -589,18 +597,23 @@ impl TodoPanel {
                 self.items.insert(at, record);
             } else {
                 let date = record.entry_date.clone();
-                let list = self.other_dates.entry(date.clone()).or_default();
-                if list.iter().any(|item| item.id == record.id) {
+                let list = self.other_dates.entry(date).or_default();
+                if let Some(existing) = list.iter_mut().find(|item| item.id == record.id) {
+                    existing.group_id = record.group_id;
+                    existing.status = record.status;
+                    existing.completed_date = record.completed_date;
                     continue;
                 }
                 let at = usize::try_from(record.position.max(0))
                     .unwrap_or(usize::MAX)
                     .min(list.len());
                 list.insert(at, record);
-                normalize_slice_groups_and_positions(list, &date, &today);
             }
         }
         self.normalize_positions();
+        for (date, list) in &mut self.other_dates {
+            normalize_slice_groups_and_positions(list, date, &today);
+        }
         self.item_rows.clear();
     }
 

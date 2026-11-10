@@ -955,6 +955,9 @@ pub(crate) fn handle_mouse_down_right(
     dirty: &mut bool,
 ) {
     let Geometry { rects, view, .. } = geometry;
+    if state.todo_drag.take().is_some() {
+        *dirty = true;
+    }
     // 菜单打开时右键不穿透：标签、工作区项或窗格上改挂菜单，其余位置关闭。
     if matches!(state.overlay, Some(Overlay::Menu(_))) {
         if open_right_click_menu(state, rects, view, mouse.column, mouse.row) {

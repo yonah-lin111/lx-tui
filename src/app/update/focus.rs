@@ -14,6 +14,7 @@ use super::todo::commit_todo_edit;
 /// 与 [`focus_pane`] 同一套收尾：提交 todo 编辑、清选区与 prompt 瞬态面板。
 pub fn focus_sidebar(state: &mut AppState) -> bool {
     commit_todo_edit(state);
+    state.todo_drag = None;
     clear_selection(state);
     state.prompt.clear_panel();
     state.set_focus(FocusedContainer::Sidebar)
@@ -26,6 +27,7 @@ pub fn focus_sidebar(state: &mut AppState) -> bool {
 /// 就会留下一个悬空的编辑现场（草稿既没提交也没取消，后续行为取决于中间做过什么）。
 pub fn focus_panes(state: &mut AppState) -> bool {
     commit_todo_edit(state);
+    state.todo_drag = None;
     state.set_focus(FocusedContainer::Panes)
 }
 

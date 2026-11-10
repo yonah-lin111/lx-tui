@@ -204,6 +204,8 @@ Subcommands:
   start <TODO_ID>
   reopen <TODO_ID>
   delete <TODO_ID>
+  group <ID1> <ID2> ... [--id <TODO_ID>...]
+  ungroup <TODO_ID> [--all]
   reorder --date <YYYY-MM-DD> <ID1> <ID2> ...
   rollover [--to <YYYY-MM-DD>] [--id <TODO_ID>...]
   stats [--days <N> | --from <YYYY-MM-DD> --to <YYYY-MM-DD>]

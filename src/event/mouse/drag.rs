@@ -379,6 +379,14 @@ pub(crate) fn handle_mouse_drag(
         return;
     }
     if state.todo_drag.is_some() {
+        if state.overlay.is_some()
+            || state.prompt_collapsed
+            || state.right_tab != crate::app::state::RightTab::Todo
+        {
+            state.todo_drag = None;
+            *dirty = true;
+            return;
+        }
         let hit = ui::right_panel::todo::row_at(view.prompt, state, mouse.column, mouse.row);
         if update::drag_todo_to(state, hit) {
             *dirty = true;
@@ -578,6 +586,14 @@ pub(crate) fn handle_mouse_up_left(
         return;
     }
     if state.todo_drag.is_some() {
+        if state.overlay.is_some()
+            || state.prompt_collapsed
+            || state.right_tab != crate::app::state::RightTab::Todo
+        {
+            state.todo_drag = None;
+            *dirty = true;
+            return;
+        }
         if update::finish_todo_drag(state) {
             *dirty = true;
         }

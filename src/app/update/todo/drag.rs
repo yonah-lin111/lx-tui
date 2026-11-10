@@ -10,13 +10,15 @@ use super::{
 
 /// 列表行左键按下：执行单击选中/双击编辑判定，并在未进入编辑态时登记拖拽起点。
 pub fn begin_todo_row_press(state: &mut AppState, display: usize, now: Instant) -> bool {
+    let had_edit = state.todo.is_editing();
     let in_bounds = resolve_display_index(state, display).is_some()
         || editing_display_index(state) == Some(display);
     let changed = click_todo_row(state, display, now);
-    if in_bounds && !state.todo.is_editing() {
+    if in_bounds && !had_edit && !state.todo.is_editing() {
+        let from_display = state.todo.selected().unwrap_or(display);
         state.todo_drag = state.todo.selected_item().map(|item| TodoDrag {
             source_id: item.id.clone(),
-            from_display: display,
+            from_display,
             pressed_at: now,
             dragging: false,
             target_index: None,
@@ -51,6 +53,7 @@ pub fn drag_todo_to(state: &mut AppState, display: Option<usize>) -> bool {
     let now_dragging = was_dragging || (display.is_some() && display != Some(from_display));
     if now_dragging && !was_dragging {
         state.todo_row_click = None;
+        state.todo_hover = None;
     }
 
     let next_target = if now_dragging {
@@ -82,6 +85,7 @@ pub fn finish_todo_drag(state: &mut AppState) -> bool {
     if !drag.dragging {
         return false;
     }
+    state.todo_hover = None;
     if let Some(target_idx) = drag.target_index
         && let Some(source_idx) = state
             .todo

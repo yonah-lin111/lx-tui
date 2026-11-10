@@ -8,7 +8,7 @@
 
 pub mod date;
 
-use std::collections::BTreeSet;
+use std::collections::{BTreeSet, HashMap};
 
 pub use date::*;
 use rusqlite::{OptionalExtension, params};
@@ -299,6 +299,7 @@ impl Database {
                         record.id.as_str()
                     ],
                 )?;
+                cleanup_singleton_groups(&transaction, &entry_date)?;
             }
             Some(old_date) => {
                 let at = record.position.max(0);
@@ -323,6 +324,7 @@ impl Database {
                 renumber_date(&transaction, &old_date)?;
                 cleanup_singleton_groups(&transaction, &old_date)?;
                 renumber_date(&transaction, &entry_date)?;
+                cleanup_singleton_groups(&transaction, &entry_date)?;
             }
             None => {
                 let at = record.position.max(0);
@@ -344,6 +346,7 @@ impl Database {
                     ],
                 )?;
                 renumber_date(&transaction, &entry_date)?;
+                cleanup_singleton_groups(&transaction, &entry_date)?;
             }
         }
         transaction.commit()?;
@@ -493,7 +496,9 @@ impl Database {
                     .min(ordered.len());
                 ordered.insert(at, record.id.clone());
             }
+            let ordered = compact_grouped_ids(&transaction, &date, ordered)?;
             apply_positions(&transaction, &ordered)?;
+            cleanup_singleton_groups(&transaction, &date)?;
         }
         transaction.commit()?;
         Ok(())
@@ -522,6 +527,7 @@ impl Database {
                 final_order.push(id);
             }
         }
+        let final_order = compact_grouped_ids(&transaction, entry_date, final_order)?;
         apply_positions(&transaction, &final_order)?;
         transaction.commit()?;
         Ok(())
@@ -652,7 +658,7 @@ fn shift_positions_from(
     Ok(())
 }
 
-/// 把某日期下的位置重排为 `0..n`（保持现有相对顺序）。
+/// 把某日期下的位置重排为 `0..n`（保持现有相对顺序，并将同 `group_id` 成员归拢连续）。
 fn renumber_date(transaction: &rusqlite::Transaction<'_>, entry_date: &str) -> Result<()> {
     transaction.execute(
         "UPDATE todo SET position = position + ?1 WHERE entry_date = ?2 AND position < ?1",
@@ -663,7 +669,49 @@ fn renumber_date(transaction: &rusqlite::Transaction<'_>, entry_date: &str) -> R
     let rows = statement.query_map(params![entry_date], |row| row.get::<_, String>(0))?;
     let ordered: Vec<String> = rows.collect::<rusqlite::Result<_>>()?;
     drop(statement);
+    let ordered = compact_grouped_ids(transaction, entry_date, ordered)?;
     apply_positions(transaction, &ordered)
+}
+
+/// 将指定日期下的 ID 序列按首次出现顺序把同 `group_id` 成员归拢为连续区间。
+fn compact_grouped_ids(
+    transaction: &rusqlite::Transaction<'_>,
+    entry_date: &str,
+    ordered_ids: Vec<String>,
+) -> Result<Vec<String>> {
+    let mut statement =
+        transaction.prepare("SELECT id, group_id FROM todo WHERE entry_date = ?1")?;
+    let rows = statement.query_map(params![entry_date], |row| {
+        Ok((row.get::<_, String>(0)?, row.get::<_, Option<String>>(1)?))
+    })?;
+    let mut group_by_id: HashMap<String, Option<String>> = HashMap::new();
+    for row in rows {
+        let (id, group_id) = row?;
+        group_by_id.insert(id, group_id.filter(|gid| !gid.is_empty()));
+    }
+    drop(statement);
+
+    let mut compacted: Vec<String> = Vec::with_capacity(ordered_ids.len());
+    let mut visited = vec![false; ordered_ids.len()];
+    for i in 0..ordered_ids.len() {
+        if visited[i] {
+            continue;
+        }
+        visited[i] = true;
+        let gid = group_by_id.get(&ordered_ids[i]).and_then(Option::as_deref);
+        compacted.push(ordered_ids[i].clone());
+        if let Some(group_id) = gid {
+            for j in (i + 1)..ordered_ids.len() {
+                if !visited[j]
+                    && group_by_id.get(&ordered_ids[j]).and_then(Option::as_deref) == Some(group_id)
+                {
+                    visited[j] = true;
+                    compacted.push(ordered_ids[j].clone());
+                }
+            }
+        }
+    }
+    Ok(compacted)
 }
 
 /// 按给定顺序写入 0 基位置。
