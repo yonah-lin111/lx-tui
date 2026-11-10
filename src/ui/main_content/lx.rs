@@ -5,6 +5,7 @@
 
 use ratatui::buffer::{Buffer, CellDiffOption};
 use ratatui::layout::Rect;
+use unicode_width::UnicodeWidthChar;
 use unicode_width::UnicodeWidthStr;
 
 use crate::app::selection::Selection;
@@ -110,9 +111,21 @@ pub fn render(
                     cell.set_diff_option(CellDiffOption::Skip);
                     continue;
                 }
-                cell.set_char(drawable_char(glyph.ch));
+                let ch = drawable_char(glyph.ch);
                 cell.set_style(glyph.style);
-                cell.set_diff_option(CellDiffOption::None);
+                if let Some(url) = grid
+                    .link_at(dx, dy)
+                    .filter(|url| !url.is_empty() && !url.chars().any(char::is_control))
+                {
+                    let symbol = format!("\x1b]8;;{url}\x07{ch}\x1b]8;;\x07");
+                    let w = u16::try_from(ch.width().unwrap_or(1).max(1)).unwrap_or(1);
+                    let width = std::num::NonZeroU16::new(w).unwrap_or(std::num::NonZeroU16::MIN);
+                    cell.set_symbol(&symbol)
+                        .set_diff_option(CellDiffOption::ForcedWidth(width));
+                } else {
+                    cell.set_char(ch);
+                    cell.set_diff_option(CellDiffOption::None);
+                }
             }
         }
     }

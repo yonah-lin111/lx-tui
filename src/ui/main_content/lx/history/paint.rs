@@ -644,6 +644,11 @@ fn draw_assistant_ref_lines(
             Style::default(),
             rect.width.saturating_sub(conn_cols),
         );
+        if let Some(ref path) = ref_line.preview_path
+            && let Some(file_url) = file_url_from_path(path)
+        {
+            grid.set_link_span(rect.x.saturating_add(prefix_cols), y, label_cols, &file_url);
+        }
         grid.put_clipped(
             rect.x.saturating_add(prefix_cols),
             y,
@@ -654,6 +659,14 @@ fn draw_assistant_ref_lines(
         if let Some(btn_text) = ref_line.button_text() {
             let btn_col = prefix_cols.saturating_add(label_cols).saturating_add(2);
             if btn_col < rect.width {
+                let btn_cols = u16::try_from(unicode_width::UnicodeWidthStr::width(btn_text))
+                    .unwrap_or(u16::MAX);
+                if let Some(crate::app::state::OriginalImageDownloadState::Downloaded { ref path }) =
+                    ref_line.download_state
+                    && let Some(file_url) = file_url_from_path(path)
+                {
+                    grid.set_link_span(rect.x.saturating_add(btn_col), y, btn_cols, &file_url);
+                }
                 let btn_style = match &ref_line.download_state {
                     Some(crate::app::state::OriginalImageDownloadState::Downloading) => {
                         style::assistant_image_downloading()
@@ -673,6 +686,27 @@ fn draw_assistant_ref_lines(
             }
         }
     }
+}
+
+/// 将本地文件绝对路径编码为 `file://` URL（供终端 OSC 8 超链接使用）。
+fn file_url_from_path(path: &str) -> Option<String> {
+    let trimmed = path.trim();
+    if trimmed.is_empty() || !trimmed.starts_with('/') {
+        return None;
+    }
+    let mut encoded = String::from("file://");
+    for byte in trimmed.bytes() {
+        match byte {
+            b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'/' | b'-' | b'_' | b'.' | b'~' => {
+                encoded.push(byte as char)
+            }
+            _ => {
+                use std::fmt::Write;
+                let _ = write!(encoded, "%{byte:02X}");
+            }
+        }
+    }
+    Some(encoded)
 }
 
 #[allow(clippy::too_many_arguments)]

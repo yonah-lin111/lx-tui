@@ -6,11 +6,21 @@ use crate::app::state::CardSection;
 use crate::app::state::lx::{MessageRecapView, RecapPending};
 use crate::db::chat::{MessageAttachmentKind, MessageAttachmentMeta};
 
+fn strip_osc8(symbol: &str) -> &str {
+    if let Some(rest) = symbol.strip_prefix("\x1b]8;;")
+        && let Some(bel) = rest.find('\x07')
+        && let Some(inner) = rest[bel + 1..].strip_suffix("\x1b]8;;\x07")
+    {
+        return inner;
+    }
+    symbol
+}
+
 fn rows_text(buf: &Buffer, area: Rect) -> Vec<String> {
     (0..area.height)
         .map(|y| {
             (0..area.width)
-                .filter_map(|x| buf.cell((x, y)).map(|cell| cell.symbol()))
+                .filter_map(|x| buf.cell((x, y)).map(|cell| strip_osc8(cell.symbol())))
                 .collect::<String>()
         })
         .collect()
@@ -348,6 +358,11 @@ fn markdown_links_and_ai_web_images_require_ctrl_or_cmd_click_to_open() {
         .windows("Daily".chars().count())
         .position(|w| w == ['D', 'a', 'i', 'l', 'y'])
         .expect("link col") as u16;
+    assert_eq!(
+        buf.cell((link_x, link_y)).expect("link cell").symbol(),
+        "\x1b]8;;https://english.news.cn/20261110/c.html\x07D\x1b]8;;\x07",
+        "Markdown 超链接单元格必须注入 OSC 8 转义序列以支持 macOS 终端原生 Cmd+Click"
+    );
     let plain_link_hit = crate::ui::main_content::lx::press_content_hit(
         area,
         &lx,
@@ -383,8 +398,16 @@ fn markdown_links_and_ai_web_images_require_ctrl_or_cmd_click_to_open() {
         .find(|&y| rows[usize::from(y)].contains("gemini-r1-1.webp"))
         .expect("img1 row");
     let img1_x = rows[usize::from(img1_y)]
-        .find("gemini-r1-1.webp")
+        .chars()
+        .collect::<Vec<_>>()
+        .windows("gemini".chars().count())
+        .position(|w| w == ['g', 'e', 'm', 'i', 'n', 'i'])
         .expect("img1 col") as u16;
+    assert_eq!(
+        buf.cell((img1_x, img1_y)).expect("img1 cell").symbol(),
+        "\x1b]8;;file:///tmp/gemini-r1-1.webp\x07g\x1b]8;;\x07",
+        "AI Web 预览图文件名单元格必须注入 file:// OSC 8 转义序列"
+    );
     let plain_img_hit = crate::ui::main_content::lx::press_content_hit(
         area,
         &lx,

@@ -331,7 +331,10 @@ pub(crate) fn press_content_hit(
     }
     let (content_row, content_col) = geom.cell(column, row);
     let open_mod = is_open_modifier(modifiers);
-    if open_mod && let Some(url) = link_at_cell(area, lx, (content_row, content_col), cache) {
+    if open_mod
+        && let Some(url) = link_at_cell(area, lx, (content_row, content_col), cache)
+            .filter(|url| url.starts_with("https://") || url.starts_with("http://"))
+    {
         return Some((
             content_row,
             content_col,
