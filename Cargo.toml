@@ -16,6 +16,7 @@ tokio = { version = "1.53.1", features = ["rt-multi-thread", "macros", "sync", "
 tokio-stream = "0.1.19"
 unicode-width = "0.2"
 tracing = "0.1"
+tracing-appender = "0.2.3"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 ignore = "0.4.33"
 # `search` 工具的正则匹配：已在依赖树中（globset/ignore 与 termwiz 间接引入），

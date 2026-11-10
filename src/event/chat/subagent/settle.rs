@@ -127,6 +127,33 @@ pub(crate) fn finish_subagent_with_billing(
         });
     }
 
+    if matches!(reason, StopReason::Failed { .. }) {
+        tracing::warn!(
+            target: "lx::agent",
+            pane = key.pane.raw(),
+            session = %key.session,
+            parent_session = %handle.parent.session,
+            agent_id = %handle.agent_id,
+            role = handle.role.as_str(),
+            reason = reason.as_str(),
+            usage_input = usage.input,
+            usage_output = usage.output,
+            "subagent turn failed"
+        );
+    } else {
+        tracing::info!(
+            target: "lx::agent",
+            pane = key.pane.raw(),
+            session = %key.session,
+            parent_session = %handle.parent.session,
+            agent_id = %handle.agent_id,
+            role = handle.role.as_str(),
+            reason = reason.as_str(),
+            usage_input = usage.input,
+            usage_output = usage.output,
+            "subagent turn finished"
+        );
+    }
     let _ = update::on_subagent_finished(state, &key.session, handle.status, report_view, usage);
     let cancel_key = RequestKey {
         pane: handle.parent.pane,

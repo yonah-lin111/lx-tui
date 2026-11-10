@@ -141,12 +141,21 @@ impl ExecSubagentPool {
                 agent_id.to_string(),
                 child_session_id.to_string(),
                 child_assistant_id.to_string(),
+                parent_session_id.to_string(),
             );
             move |request: ChatRequest, cancel: watch::Receiver<bool>| {
                 let factory = Arc::clone(&factory);
                 let model = model.clone();
                 let sender = sender.clone();
-                let (agent_id, child_session_id, child_assistant_id) = ids.clone();
+                let (agent_id, child_session_id, child_assistant_id, parent_session_id) =
+                    ids.clone();
+                let stream_log = crate::chat::client::StreamLog {
+                    kind: "subagent",
+                    session_id: Some(child_session_id.clone()),
+                    agent_id: Some(agent_id.clone()),
+                    parent_session: Some(parent_session_id),
+                    ..crate::chat::client::StreamLog::default()
+                };
                 async move {
                     let on_delta = Box::new(move |deltas: &[ChatDelta]| {
                         let _ = sender.send(ExecLoopEvent::Subagent(ExecSubagentEvent::Delta {
@@ -156,10 +165,20 @@ impl ExecSubagentPool {
                             deltas: deltas.to_vec(),
                         }));
                     });
-                    factory.stream(&model, request, cancel, on_delta).await
+                    factory
+                        .stream_with_log(&model, request, stream_log, cancel, on_delta)
+                        .await
                 }
             }
         };
+        tracing::info!(
+            target: "lx::agent",
+            session = %child_session_id,
+            parent_session = %parent_session_id,
+            agent_id = %agent_id,
+            role = role.as_str(),
+            "subagent turn started"
+        );
         let host = ChildHost {
             sender: self.sender.clone(),
             agent_id: agent_id.to_string(),
@@ -270,6 +289,9 @@ impl ExecSubagentPool {
                     return;
                 }
                 close_open_part(&mut handle.parts, &mut handle.open_part_index);
+                let call_id = call.call_id.clone();
+                let call_name = call.name.clone();
+                let arguments_bytes = call.arguments_json.len();
                 let result = db
                     .checkpoint(&self.workspace, &handle.child_assistant_id, &handle.parts)
                     .map_err(|error| tool_failed("tool call pending record failed", error.code()))
@@ -295,6 +317,17 @@ impl ExecSubagentPool {
                             })
                             .map(|()| ticket)
                     });
+                if result.is_ok() {
+                    tracing::debug!(
+                        target: "lx::agent::tool",
+                        session = %child_session_id,
+                        agent_id = %agent_id,
+                        call_id = %call_id,
+                        name = %call_name,
+                        arguments_bytes,
+                        "tool call started"
+                    );
+                }
                 let _ = reply.send(result);
             }
             AgentHostRequest::FinishTool {
@@ -304,8 +337,33 @@ impl ExecSubagentPool {
             } => {
                 let result = db_result_of(&outcome);
                 let sent = match db.finish_tool_call(&self.workspace, &ticket, &result) {
-                    Ok(()) => Ok(()),
-                    Err(error) => Err(tool_failed("tool result persistence failed", error.code())),
+                    Ok(()) => {
+                        let duration_ms = crate::db::now_ms()
+                            .saturating_sub(ticket.started_at_ms)
+                            .max(0);
+                        tracing::info!(
+                            target: "lx::agent::tool",
+                            session = %child_session_id,
+                            agent_id = %agent_id,
+                            call_id = %ticket.call_id,
+                            duration_ms,
+                            is_error = result.error_text.is_some(),
+                            result_bytes = result.result_json.as_ref().map_or(0, String::len),
+                            "tool call settled"
+                        );
+                        Ok(())
+                    }
+                    Err(error) => {
+                        tracing::warn!(
+                            target: "lx::agent::tool",
+                            session = %child_session_id,
+                            agent_id = %agent_id,
+                            call_id = %ticket.call_id,
+                            code = error.code(),
+                            "tool result persistence failed"
+                        );
+                        Err(tool_failed("tool result persistence failed", error.code()))
+                    }
                 };
                 let _ = reply.send(sent);
             }

@@ -70,6 +70,29 @@
         </div>
       </div>
     </fieldset>
+    <fieldset>
+      <legend>Logging</legend>
+      <div class="field-grid">
+        <div>
+          <label>Log level</label>
+          <div id="log-level-host" class="select-host"></div>
+        </div>
+        <div class="field-wide">
+          <label class="field-hint">
+            <input id="log_payload" type="checkbox">
+            Log request/response payloads (may contain prompts and code)
+          </label>
+        </div>
+        <div class="field-wide">
+          <label>Log files</label>
+          <code id="log_path">-</code>
+          <div class="actions">
+            <button type="button" class="ghost" onclick="copyLogPath()">Copy path</button>
+            <button type="button" class="ghost" onclick="openLogFolder()">Open folder</button>
+          </div>
+        </div>
+      </div>
+    </fieldset>
     <div class="actions">
       <button class="ghost" onclick="loadGeneral()">Reload</button>
     </div>

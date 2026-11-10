@@ -243,6 +243,7 @@ pub async fn route(request: &Request, state: &ServiceState) -> Response {
         },
         ("GET", "/api/state") => state_json(state),
         ("PUT", "/api/config") => put_config(request, state),
+        ("POST", "/api/logs/open") => super::logs::open_logs().await,
         ("PUT", path) | ("DELETE", path) | ("POST", path) if path.starts_with("/api/commands/") => {
             command_request(request, path, state)
         }
@@ -295,7 +296,17 @@ fn origin_ok(request: &Request, _state: &ServiceState) -> bool {
 
 /// `GET /api/state`：当前配置 + 命令快照。
 fn state_json(state: &ServiceState) -> Response {
-    let config = crate::config::load_or_default(state.config_path()).unwrap_or_default();
+    let config = match crate::config::load_or_default(state.config_path()) {
+        Ok(config) => config,
+        Err(error) => {
+            tracing::warn!(
+                target: "lx::settings",
+                %error,
+                "settings.json is invalid; falling back to defaults"
+            );
+            Config::default()
+        }
+    };
     let commands = state.commands();
     // 页面需要能展示当前 Key；读取失败时退回默认 Key，不让整个设置页失效。
     let web_search = load_ai_settings(state)
@@ -304,8 +315,9 @@ fn state_json(state: &ServiceState) -> Response {
     Response::json(
         200,
         format!(
-            "{{\"config\":{},\"web_search\":{},\"commands\":[{}],\"project_available\":false}}",
+            "{{\"config\":{},\"logging\":{},\"web_search\":{},\"commands\":[{}],\"project_available\":false}}",
             config_json(&config),
+            super::logs::logging_json(),
             web_search_json(&web_search),
             commands
                 .iter()
@@ -358,7 +370,8 @@ fn put_config(request: &Request, state: &ServiceState) -> Response {
         Ok(Some(entries)) => entries,
         _ => return Response::error(422, "body must contain a config object"),
     };
-    let config = match config_from_json(config_entries) {
+    let base = crate::config::load_or_default(state.config_path()).unwrap_or_default();
+    let config = match config_from_json(base, config_entries) {
         Ok(config) => config,
         Err(message) => return Response::error(422, &message),
     };
@@ -451,10 +464,32 @@ fn merge_web_search(
     Ok(config)
 }
 
-/// 解析已知配置键；未知键忽略，非法值报错。
-fn config_from_json(entries: Vec<(String, JsonValue)>) -> Result<Config, String> {
-    let mut config = Config::default();
+/// 解析已知配置键；未提供的键沿用 `base`，未知键忽略，非法值报错。
+fn config_from_json(
+    mut config: Config,
+    entries: Vec<(String, JsonValue)>,
+) -> Result<Config, String> {
     for (key, value) in entries {
+        if key == "log_level" {
+            match value {
+                JsonValue::String(level) => {
+                    config.log_level = level.trim().to_ascii_lowercase();
+                    continue;
+                }
+                JsonValue::Null => continue,
+                _ => return Err("log_level must be a string".into()),
+            }
+        }
+        if key == "log_payload" {
+            config.log_payload = match value {
+                JsonValue::Bool(value) => value,
+                JsonValue::Number(0) => false,
+                JsonValue::Number(1) => true,
+                JsonValue::Null => continue,
+                _ => return Err("log_payload must be a boolean".into()),
+            };
+            continue;
+        }
         if key == "image_download_dir" {
             match value {
                 JsonValue::String(text) => {
@@ -684,7 +719,7 @@ fn command_view_json(view: &CommandView) -> String {
 /// 配置 → JSON（键序固定）。
 fn config_json(config: &Config) -> String {
     format!(
-        "{{\"sidebar_width\":{},\"sidebar_min_width\":{},\"sidebar_max_width\":{},\"narrow_width\":{},\"min_width\":{},\"min_height\":{},\"min_pane_width\":{},\"min_pane_height\":{},\"image_download_dir\":{}}}",
+        "{{\"sidebar_width\":{},\"sidebar_min_width\":{},\"sidebar_max_width\":{},\"narrow_width\":{},\"min_width\":{},\"min_height\":{},\"min_pane_width\":{},\"min_pane_height\":{},\"image_download_dir\":{},\"log_level\":{},\"log_payload\":{}}}",
         config.sidebar_width,
         config.sidebar_min_width,
         config.sidebar_max_width,
@@ -694,6 +729,8 @@ fn config_json(config: &Config) -> String {
         config.min_pane_width,
         config.min_pane_height,
         json_string(&config.image_download_dir),
+        json_string(&config.log_level),
+        config.log_payload,
     )
 }
 
@@ -721,6 +758,7 @@ pub fn json_string(text: &str) -> String {
 pub enum JsonValue {
     Number(u64),
     String(String),
+    Bool(bool),
     Object(Vec<(String, JsonValue)>),
     Null,
     Other,
@@ -833,10 +871,11 @@ impl<'a> JsonParser<'a> {
                     self.index += 1;
                 }
                 let word = std::str::from_utf8(&self.bytes[start..self.index]).map_err(|_| ())?;
-                Ok(if word == "null" {
-                    JsonValue::Null
-                } else {
-                    JsonValue::Other
+                Ok(match word {
+                    "true" => JsonValue::Bool(true),
+                    "false" => JsonValue::Bool(false),
+                    "null" => JsonValue::Null,
+                    _ => JsonValue::Other,
                 })
             }
             _ => Err(()),

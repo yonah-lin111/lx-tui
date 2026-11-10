@@ -91,6 +91,7 @@ pub use paste_path::{
     normalize_pasted_path_input, parse_path_text, resolve_pasted_path, sniff_image_file,
 };
 
+pub mod log;
 pub mod path_text;
 pub use path_text::{decode_path, encode_path, path_anchor, verify_path_chain};
 

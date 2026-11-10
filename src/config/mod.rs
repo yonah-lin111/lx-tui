@@ -35,6 +35,10 @@ pub struct Config {
     pub min_pane_height: u16,
     /// AI Web 原图下载保存目录（空串代表默认桌面 `~/Desktop`）。
     pub image_download_dir: String,
+    /// 日志级别：trace/debug/info/warn/error/off。
+    pub log_level: String,
+    /// 是否记录原始请求/响应 payload（默认关闭）。
+    pub log_payload: bool,
 }
 
 impl Default for Config {
@@ -49,6 +53,8 @@ impl Default for Config {
             min_pane_width: 10,
             min_pane_height: 3,
             image_download_dir: String::new(),
+            log_level: "info".into(),
+            log_payload: false,
         }
     }
 }
@@ -88,6 +94,14 @@ impl Config {
                 "image_download_dir must not contain control characters".into(),
             ));
         }
+        if !matches!(
+            self.log_level.trim().to_ascii_lowercase().as_str(),
+            "trace" | "debug" | "info" | "warn" | "error" | "off"
+        ) {
+            return Err(ConfigError::Invalid(
+                "log_level must be one of trace|debug|info|warn|error|off".into(),
+            ));
+        }
         Ok(())
     }
 
@@ -119,7 +133,9 @@ impl Config {
                 "  \"min_height\": {},\n",
                 "  \"min_pane_width\": {},\n",
                 "  \"min_pane_height\": {},\n",
-                "  \"image_download_dir\": {}\n",
+                "  \"image_download_dir\": {},\n",
+                "  \"log_level\": {},\n",
+                "  \"log_payload\": {}\n",
                 "}}\n"
             ),
             self.sidebar_width,
@@ -131,6 +147,8 @@ impl Config {
             self.min_pane_width,
             self.min_pane_height,
             escape_json_string(&self.image_download_dir),
+            escape_json_string(&self.log_level),
+            self.log_payload,
         )
     }
 
@@ -156,6 +174,26 @@ impl Config {
                         ));
                     }
                 }
+            }
+            if key == "log_level" {
+                match value {
+                    JsonValue::String(level) => {
+                        config.log_level = level.trim().to_ascii_lowercase();
+                        continue;
+                    }
+                    JsonValue::Null => continue,
+                    _ => {
+                        return Err(ConfigError::Invalid("log_level must be a string".into()));
+                    }
+                }
+            }
+            if key == "log_payload" {
+                if matches!(value, JsonValue::Null) {
+                    continue;
+                }
+                config.log_payload = json_bool(value)
+                    .ok_or_else(|| ConfigError::Invalid("log_payload must be a boolean".into()))?;
+                continue;
             }
             let slot = match key.as_str() {
                 "sidebar_width" => &mut config.sidebar_width,
@@ -279,10 +317,11 @@ fn parse_json_object(text: &str) -> Result<Vec<(String, JsonValue)>, ConfigError
     Ok(entries)
 }
 
-/// 极简 JSON 值：数字（u64）、字符串、`null` 或其它（其它类型报错由调用方处理）。
+/// 极简 JSON 值：数字（u64）、字符串、布尔、`null` 或其它。
 enum JsonValue {
     Number(u64),
     String(String),
+    Bool(bool),
     Null,
     Other,
 }
@@ -291,7 +330,17 @@ enum JsonValue {
 fn json_u16(value: &JsonValue) -> Option<u16> {
     match value {
         JsonValue::Number(number) => u16::try_from(*number).ok(),
-        JsonValue::String(_) | JsonValue::Null | JsonValue::Other => None,
+        JsonValue::String(_) | JsonValue::Bool(_) | JsonValue::Null | JsonValue::Other => None,
+    }
+}
+
+/// 布尔解析：接受 JSON bool，也兼容手写的 0/1。
+fn json_bool(value: &JsonValue) -> Option<bool> {
+    match value {
+        JsonValue::Bool(value) => Some(*value),
+        JsonValue::Number(0) => Some(false),
+        JsonValue::Number(1) => Some(true),
+        _ => None,
     }
 }
 
@@ -367,17 +416,17 @@ impl<'a> JsonParser<'a> {
             Some(b'-') => Err(invalid("negative values are not supported")),
             Some(byte) if byte.is_ascii_digit() => Ok(JsonValue::Number(self.number()?)),
             Some(byte) if byte.is_ascii_alphabetic() => {
-                // `true` / `false` / `null` 等裸词：跳到分隔符；`null` 单独成值，
-                // 其余（布尔等）记为其它类型。
+                // `true` / `false` / `null` 等裸词：跳到分隔符；已知布尔与 null
+                // 单独成值，其余记为其它类型。
                 let start = self.index;
                 while self.peek().is_some_and(|byte| byte.is_ascii_alphanumeric()) {
                     self.index += 1;
                 }
-                let is_null = &self.bytes[start..self.index] == b"null";
-                Ok(if is_null {
-                    JsonValue::Null
-                } else {
-                    JsonValue::Other
+                Ok(match &self.bytes[start..self.index] {
+                    b"true" => JsonValue::Bool(true),
+                    b"false" => JsonValue::Bool(false),
+                    b"null" => JsonValue::Null,
+                    _ => JsonValue::Other,
                 })
             }
             _ => Err(invalid("expected a value")),

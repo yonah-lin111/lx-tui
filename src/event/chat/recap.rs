@@ -67,8 +67,9 @@ pub fn apply_recap_effects(state: &mut AppState, sender: &mpsc::UnboundedSender<
             continue;
         };
         let sender = sender.clone();
+        let recap_session = Some(session_id.clone());
         tokio::spawn(async move {
-            let result = execute_recap_stream(&prompt, &model).await;
+            let result = execute_recap_stream(&prompt, &model, recap_session).await;
             let _ = sender.send(AppEvent::RecapGenerated(RecapGeneratedEvent {
                 pane,
                 workspace,
@@ -140,7 +141,11 @@ pub fn handle_recap_generated(
     }
 }
 
-async fn execute_recap_stream(prompt: &str, model: &FrozenModel) -> Result<RecapResult, String> {
+async fn execute_recap_stream(
+    prompt: &str,
+    model: &FrozenModel,
+    session_id: Option<String>,
+) -> Result<RecapResult, String> {
     let snapshot = ModelSnapshot {
         provider: model.provider.clone(),
         model: model.model.clone(),
@@ -148,12 +153,18 @@ async fn execute_recap_stream(prompt: &str, model: &FrozenModel) -> Result<Recap
     };
     let chat_request = build_recap_request(prompt, &snapshot);
     let (_cancel_sender, cancel) = client::uncancellable();
-    let stream_fut = client::run_stream(
+    let stream_log = client::StreamLog {
+        kind: "recap",
+        session_id,
+        ..client::StreamLog::default()
+    };
+    let stream_fut = client::run_stream_with_log(
         &model.transport,
         &model.base_url,
         Some(model.api_key.as_str()),
         Duration::from_millis(model.idle_timeout_ms),
         chat_request,
+        &stream_log,
         cancel,
         |_| {},
     );

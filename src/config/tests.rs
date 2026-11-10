@@ -62,6 +62,36 @@ fn null_image_download_dir_is_treated_as_empty() {
 }
 
 #[test]
+fn logging_defaults_are_info_and_off() {
+    let config = Config::default();
+    assert_eq!(config.log_level, "info");
+    assert!(!config.log_payload);
+}
+
+#[test]
+fn logging_fields_round_trip_and_accept_legacy_bool_forms() {
+    let config = Config {
+        log_level: "debug".into(),
+        log_payload: true,
+        ..Config::default()
+    };
+    let loaded = Config::from_json(&config.to_json()).expect("round trip");
+    assert_eq!(loaded.log_level, "debug");
+    assert!(loaded.log_payload);
+
+    let numeric = Config::from_json(r#"{"log_payload": 1}"#).expect("numeric bool");
+    assert!(numeric.log_payload);
+    let null_fields =
+        Config::from_json(r#"{"log_level": null, "log_payload": null}"#).expect("nulls accepted");
+    assert_eq!(null_fields.log_level, "info");
+    assert!(!null_fields.log_payload);
+    let text = Config::from_json(r#"{"log_level":" WARN "}"#).expect("trim level");
+    assert_eq!(text.log_level, "warn");
+    assert!(Config::from_json(r#"{"log_level":"verbose"}"#).is_err());
+    assert!(Config::from_json(r#"{"log_payload":"yes"}"#).is_err());
+}
+
+#[test]
 fn validate_enforces_width_relationships() {
     assert!(
         Config {

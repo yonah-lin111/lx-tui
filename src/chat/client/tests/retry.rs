@@ -77,3 +77,40 @@ fn non_transient_error_is_not_retried() {
     ));
     assert!(!can_retry(&[], &StopReason::Cancelled));
 }
+
+#[tokio::test]
+async fn request_error_code_strips_url_and_query_key() {
+    let error = reqwest::Client::new()
+        .post("http://[::1]:0/v1beta/models/gemini:streamGenerateContent?alt=sse&key=secret-g-key")
+        .send()
+        .await
+        .expect_err("invalid port fails");
+    let code = request_error_code(error);
+    assert!(!code.contains("secret-g-key"), "{code}");
+    assert!(!code.contains("streamGenerateContent"), "{code}");
+}
+
+#[tokio::test]
+async fn pre_cancelled_receiver_aborts_before_network_call() {
+    let (_tx, rx) = watch::channel(true);
+    let outcome = run_stream_with_log(
+        "anthropic",
+        "http://127.0.0.1:9/v1",
+        Some("sk-test"),
+        Duration::from_secs(1),
+        request(),
+        &StreamLog::default(),
+        rx,
+        |_| {},
+    )
+    .await;
+    assert_eq!(outcome.stop, StopReason::Cancelled);
+    assert_eq!(
+        outcome
+            .deltas
+            .iter()
+            .filter(|delta| matches!(delta, ChatDelta::Finished { .. }))
+            .count(),
+        1
+    );
+}

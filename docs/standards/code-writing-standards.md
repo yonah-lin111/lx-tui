@@ -33,6 +33,10 @@
 - 禁止吞错误；有意忽略错误时必须显式写出并附注释说明原因。
 - 日志统一使用 `tracing`；禁止 `println!` / `eprintln!` 输出调试信息，禁止任何绕过 ratatui 直接写 stdout 的行为。
 - 高频路径（输入、渲染、PTY 读取）禁止日志刷屏。
+- 日志落盘：`~/.lx-t[-dev]/logs/lx-tui.log.YYYY-MM-DD`，按天轮转、保留 7 天；`LX_TUI_LOG_DIR` 可覆盖目录。所有入口（TUI / CLI 子命令）共用同一份日志，每行带 `role` 与 `pid`。
+- 设置页的日志等级只作用于 `lx` / `lx_tui` target，第三方依赖固定 `warn`；`LX_TUI_LOG` 可写完整 `EnvFilter` 临时覆盖。保存设置后热更新，无需重启。
+- 默认只记录请求元数据；prompt 正文、文件内容、工具参数与结果不得进入日志。原始请求/响应仅在设置页或 `LX_TUI_LOG_PAYLOAD=1` 显式开启时写入 `payload-YYYY-MM-DD.jsonl`，且必须脱敏 URL query、认证 header 与内联图片。
+- `panic` 必须先写日志（message + `file:line:column`）再恢复终端；恢复顺序不得改变。
 
 ## 并发与事件
 

@@ -50,9 +50,21 @@ pub trait ExecStreamFactory: Send + Sync {
         cancel: tokio::sync::watch::Receiver<bool>,
         on_delta: Box<dyn FnMut(&[crate::chat::events::ChatDelta]) + Send>,
     ) -> BoxStreamFuture;
+
+    fn stream_with_log(
+        &self,
+        model: &super::cli::ExecModelTarget,
+        request: crate::chat::events::ChatRequest,
+        stream_log: crate::chat::client::StreamLog,
+        cancel: tokio::sync::watch::Receiver<bool>,
+        on_delta: Box<dyn FnMut(&[crate::chat::events::ChatDelta]) + Send>,
+    ) -> BoxStreamFuture {
+        let _ = stream_log;
+        self.stream(model, request, cancel, on_delta)
+    }
 }
 
-/// 真实网络流：按冻结的模型目标调用 `run_stream`。
+/// 真实网络流：按冻结的模型目标调用 `run_stream_with_log`。
 #[derive(Debug, Default, Clone, Copy)]
 pub struct RealStreamFactory;
 
@@ -63,6 +75,21 @@ impl ExecStreamFactory for RealStreamFactory {
         model: &super::cli::ExecModelTarget,
         request: crate::chat::events::ChatRequest,
         cancel: tokio::sync::watch::Receiver<bool>,
+        on_delta: Box<dyn FnMut(&[crate::chat::events::ChatDelta]) + Send>,
+    ) -> BoxStreamFuture {
+        let stream_log = crate::chat::client::StreamLog {
+            kind: "exec",
+            ..crate::chat::client::StreamLog::default()
+        };
+        self.stream_with_log(model, request, stream_log, cancel, on_delta)
+    }
+
+    fn stream_with_log(
+        &self,
+        model: &super::cli::ExecModelTarget,
+        request: crate::chat::events::ChatRequest,
+        stream_log: crate::chat::client::StreamLog,
+        cancel: tokio::sync::watch::Receiver<bool>,
         mut on_delta: Box<dyn FnMut(&[crate::chat::events::ChatDelta]) + Send>,
     ) -> BoxStreamFuture {
         let transport = model.transport.clone();
@@ -70,12 +97,13 @@ impl ExecStreamFactory for RealStreamFactory {
         let api_key = model.api_key.clone();
         let idle_timeout = std::time::Duration::from_millis(model.idle_timeout_ms);
         Box::pin(async move {
-            crate::chat::client::run_stream(
+            crate::chat::client::run_stream_with_log(
                 &transport,
                 &base_url,
                 Some(&api_key),
                 idle_timeout,
                 request,
+                &stream_log,
                 cancel,
                 move |deltas| on_delta(deltas),
             )
@@ -286,6 +314,14 @@ impl ExecRunner<'_> {
             tracing::warn!(target: "lx::exec", call_id = %ticket.call_id, code = error.code(), "tool running record failed");
             return fail_reply(reply, RUNNING_TOOL_FAILED_CODE, error.code());
         }
+        tracing::debug!(
+            target: "lx::agent::tool",
+            session = %self.session_id,
+            call_id = %call.call_id,
+            name = %call.name,
+            arguments_bytes = call.arguments_json.len(),
+            "tool call started"
+        );
         processor.on_tool_started(&call);
         self.active_calls.insert(call.call_id.clone(), call);
         let _ = reply.send(Ok(ticket));
@@ -299,15 +335,25 @@ impl ExecRunner<'_> {
         reply: oneshot::Sender<Result<(), HostError>>,
         processor: &mut dyn ExecEventProcessor,
     ) {
-        match self
-            .db
-            .finish_tool_call(&self.workspace, &ticket, &db_result_of(&outcome))
-        {
+        let result = db_result_of(&outcome);
+        match self.db.finish_tool_call(&self.workspace, &ticket, &result) {
             Ok(()) => {
-                if let Some(call) = self.active_calls.remove(&ticket.call_id) {
-                    let duration_ms = crate::db::now_ms()
-                        .saturating_sub(ticket.started_at_ms)
-                        .max(0);
+                let duration_ms = crate::db::now_ms()
+                    .saturating_sub(ticket.started_at_ms)
+                    .max(0);
+                let call = self.active_calls.remove(&ticket.call_id);
+                let tool_name = call.as_ref().map_or("-", |item| item.name.as_str());
+                tracing::info!(
+                    target: "lx::agent::tool",
+                    session = %self.session_id,
+                    call_id = %ticket.call_id,
+                    name = %tool_name,
+                    duration_ms,
+                    is_error = result.error_text.is_some(),
+                    result_bytes = result.result_json.as_ref().map_or(0, String::len),
+                    "tool call settled"
+                );
+                if let Some(call) = call {
                     processor.on_tool_finished(&call, &outcome, duration_ms);
                 }
                 let _ = reply.send(Ok(()));
@@ -407,6 +453,13 @@ pub async fn run_exec_turn(
         session_id: &session_id,
         prompt: &prompt_display,
     });
+    tracing::info!(
+        target: "lx::agent",
+        session = %session_id,
+        provider = %model.provider,
+        model = %model.model,
+        "agent turn started"
+    );
 
     let (sender, mut receiver) = mpsc::unbounded_channel::<ExecLoopEvent>();
     let process_manager = Arc::new(ProcessManager::new(
@@ -451,15 +504,22 @@ pub async fn run_exec_turn(
     let stream_one = {
         let factory = Arc::clone(&stream_factory);
         let sender = sender.clone();
+        let stream_session_id = session_id.clone();
         move |request: ChatRequest, cancel: watch::Receiver<bool>| {
             let factory = Arc::clone(&factory);
             let sender = sender.clone();
             let model = model.clone();
+            let stream_log = crate::chat::client::StreamLog {
+                kind: "exec",
+                session_id: Some(stream_session_id.clone()),
+                ..crate::chat::client::StreamLog::default()
+            };
             async move {
                 factory
-                    .stream(
+                    .stream_with_log(
                         &model,
                         request,
+                        stream_log,
                         cancel,
                         Box::new(move |deltas| {
                             let _ = sender.send(ExecLoopEvent::MainDelta(deltas.to_vec()));
@@ -530,6 +590,26 @@ pub async fn run_exec_turn(
         summary.usage,
     ) {
         tracing::warn!(target: "lx::exec", code = error.code(), "turn completion failed");
+    }
+    let reason = summary.stop_reason();
+    if matches!(reason, crate::chat::events::StopReason::Failed { .. }) {
+        tracing::warn!(
+            target: "lx::agent",
+            session = %session_id,
+            reason = reason.as_str(),
+            usage_input = summary.usage.input,
+            usage_output = summary.usage.output,
+            "agent turn failed"
+        );
+    } else {
+        tracing::info!(
+            target: "lx::agent",
+            session = %session_id,
+            reason = reason.as_str(),
+            usage_input = summary.usage.input,
+            usage_output = summary.usage.output,
+            "agent turn finished"
+        );
     }
     let _ = processor.on_turn_finished(&summary, final_message.as_deref());
     summary

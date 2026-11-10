@@ -247,10 +247,21 @@ fn mcp_skill_command_subagent_and_settings_crud_work() {
     assert_exit_ok(env.exec(&["subagent", "role-rm", "sec_reviewer", "--scope", "project"]));
 
     // 5. General layout settings show / set / reset
-    assert_exit_ok(env.exec(&["settings", "set", "--sidebar-width", "32"]));
+    assert_exit_ok(env.exec(&[
+        "settings",
+        "set",
+        "--sidebar-width",
+        "32",
+        "--log-level",
+        "debug",
+        "--log-payload",
+        "true",
+    ]));
     assert_exit_ok(env.exec(&["settings", "show", "--json"]));
     let cfg = crate::config::load_settings().expect("load settings");
     assert_eq!(cfg.sidebar_width, 32);
+    assert_eq!(cfg.log_level, "debug");
+    assert!(cfg.log_payload);
     assert_exit_ok(env.exec(&["settings", "reset"]));
     let reset_cfg = crate::config::load_settings().expect("load reset settings");
     assert_eq!(reset_cfg, crate::config::Config::default());
@@ -317,6 +328,10 @@ fn untrusted_workspace_and_validation_guards_reject_invalid_writes() {
     );
 
     // Subagent & settings bounds guards
+    assert!(
+        env.exec(&["settings", "set", "--log-level", "verbose"])
+            .is_err()
+    );
     assert!(
         env.exec(&["subagent", "set", "--max-concurrent", "99"])
             .is_err()
