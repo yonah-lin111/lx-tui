@@ -7,7 +7,8 @@ use std::sync::Arc;
 
 use ratatui::style::Style;
 
-use super::{MdLine, char_width, display_width, inline_spans, style};
+use super::inline::{InlineSpan, inline_spans_with_links};
+use super::{MdLine, MdLinkSpan, char_width, display_width, style};
 
 /// 表格单列的水平区间（列偏移均相对表格左边框 `x = 0`）。
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -246,14 +247,30 @@ fn column_align(cell: &str) -> Align {
 /// 单个单元格折行后的单条物理行及真实文本几何。
 struct WrappedCellLine {
     spans: Vec<(String, Style)>,
+    links: Vec<MdLinkSpan>,
     pad_before: u16,
     text_width: u16,
     hard_break: bool,
 }
 
+/// 表格单条物理行的分段与超链接区间。
+struct RawTableLine {
+    spans: Vec<(String, Style)>,
+    links: Vec<MdLinkSpan>,
+}
+
+impl RawTableLine {
+    fn border(text: String) -> Self {
+        Self {
+            spans: vec![(text, style::md_read_rule())],
+            links: Vec::new(),
+        }
+    }
+}
+
 /// 方框网格表格：`┌─┬─┐` / `│ x │` / `├─┼─┤` / `└─┴─┘`。
 ///
-/// 单元格先做行内渲染（折叠 `**` 等标记，链接显示 `文字 (url)`），按列宽换行；
+/// 单元格先做行内渲染（折叠 `**` 等标记，网页链接显示带下划线的 `文字`），按列宽换行；
 /// 单个逻辑行拆成多条物理行（同一行内各列的对应物理行并排）。表头与数据行同色，
 /// 仅在单元格显式加粗处加粗（避免表头整行变黄）。
 fn grid_table(
@@ -286,105 +303,122 @@ fn grid_table(
         let segments: Vec<String> = widths.iter().map(|width| fill.repeat(width + 2)).collect();
         format!("{left}{}{right}", segments.join(mid))
     };
-    let row_lines = |row_idx: usize,
-                     cells: &[String],
-                     fallback: Style|
-     -> Vec<(Vec<(String, Style)>, TableLineKind)> {
-        let rule = style::md_read_rule();
-        // 每列：行内渲染 → 拆 `<br>` → 按列宽换行（保留分段样式、对齐与真实文本区间）。
-        let wrapped: Vec<Vec<WrappedCellLine>> = widths
-            .iter()
-            .enumerate()
-            .map(|(column, width)| {
-                let empty = String::new();
-                let cell = cells.get(column).unwrap_or(&empty);
-                let col_align = align.get(column).copied().unwrap_or(Align::Left);
-                let rendered = render_cell_spans(cell, fallback);
-                let logical = split_br(&rendered);
-                let mut cell_lines: Vec<WrappedCellLine> = Vec::new();
-                for (seg_idx, seg) in logical.iter().enumerate() {
-                    let mut seg_wrapped = wrap_cell_spans(seg, *width, col_align);
-                    if seg_idx + 1 < logical.len()
-                        && let Some(last) = seg_wrapped.last_mut()
-                    {
-                        last.hard_break = true;
+    let row_lines =
+        |row_idx: usize, cells: &[String], fallback: Style| -> Vec<(RawTableLine, TableLineKind)> {
+            let rule = style::md_read_rule();
+            // 每列：行内渲染 → 拆 `<br>` → 按列宽换行（保留分段样式、对齐与真实文本区间）。
+            let wrapped: Vec<Vec<WrappedCellLine>> = widths
+                .iter()
+                .enumerate()
+                .map(|(column, width)| {
+                    let empty = String::new();
+                    let cell = cells.get(column).unwrap_or(&empty);
+                    let col_align = align.get(column).copied().unwrap_or(Align::Left);
+                    let rendered = render_cell_spans(cell, fallback);
+                    let logical = split_br(&rendered);
+                    let mut cell_lines: Vec<WrappedCellLine> = Vec::new();
+                    for (seg_idx, seg) in logical.iter().enumerate() {
+                        let mut seg_wrapped = wrap_cell_spans(seg, *width, col_align);
+                        if seg_idx + 1 < logical.len()
+                            && let Some(last) = seg_wrapped.last_mut()
+                        {
+                            last.hard_break = true;
+                        }
+                        cell_lines.extend(seg_wrapped);
                     }
-                    cell_lines.extend(seg_wrapped);
-                }
-                if cell_lines.is_empty() {
-                    vec![WrappedCellLine {
-                        spans: vec![(" ".repeat(*width), fallback)],
-                        pad_before: 0,
-                        text_width: 0,
-                        hard_break: false,
-                    }]
-                } else {
-                    cell_lines
-                }
-            })
-            .collect();
-        let height = wrapped.iter().map(Vec::len).max().unwrap_or(1).max(1);
-        let mut out = Vec::with_capacity(height);
-        for line_in_row in 0..height {
-            let mut spans = vec![("│".to_string(), rule)];
-            let mut slices = Vec::with_capacity(columns.len());
-            for (column, cell_lines) in wrapped.iter().enumerate() {
-                let col_span = columns.get(column).copied().unwrap_or(TableColumnSpan {
-                    box_start: 0,
-                    box_end: 0,
-                    content_start: 0,
-                    content_end: 0,
-                });
-                if let Some(wline) = cell_lines.get(line_in_row) {
-                    spans.push((" ".to_string(), rule));
-                    spans.extend(wline.spans.iter().cloned());
-                    spans.push((" ".to_string(), rule));
-                    spans.push(("│".to_string(), rule));
-                    let text_start = col_span.content_start.saturating_add(wline.pad_before);
-                    let text_end = text_start
-                        .saturating_add(wline.text_width)
-                        .min(col_span.content_end);
-                    slices.push(TableCellSlice {
-                        text_start,
-                        text_end,
-                        hard_break: wline.hard_break,
-                        is_filler: false,
+                    if cell_lines.is_empty() {
+                        vec![WrappedCellLine {
+                            spans: vec![(" ".repeat(*width), fallback)],
+                            links: Vec::new(),
+                            pad_before: 0,
+                            text_width: 0,
+                            hard_break: false,
+                        }]
+                    } else {
+                        cell_lines
+                    }
+                })
+                .collect();
+            let height = wrapped.iter().map(Vec::len).max().unwrap_or(1).max(1);
+            let mut out = Vec::with_capacity(height);
+            for line_in_row in 0..height {
+                let mut spans = vec![("│".to_string(), rule)];
+                let mut links = Vec::new();
+                let mut slices = Vec::with_capacity(columns.len());
+                for (column, cell_lines) in wrapped.iter().enumerate() {
+                    let col_span = columns.get(column).copied().unwrap_or(TableColumnSpan {
+                        box_start: 0,
+                        box_end: 0,
+                        content_start: 0,
+                        content_end: 0,
                     });
-                } else {
-                    spans.push((" ".to_string(), rule));
-                    spans.push((" ".repeat(widths[column]), fallback));
-                    spans.push((" ".to_string(), rule));
-                    spans.push(("│".to_string(), rule));
-                    slices.push(TableCellSlice {
-                        text_start: col_span.content_start,
-                        text_end: col_span.content_start,
-                        hard_break: false,
-                        is_filler: true,
-                    });
+                    if let Some(wline) = cell_lines.get(line_in_row) {
+                        spans.push((" ".to_string(), rule));
+                        spans.extend(wline.spans.iter().cloned());
+                        spans.push((" ".to_string(), rule));
+                        spans.push(("│".to_string(), rule));
+                        for link in &wline.links {
+                            let start_col = col_span
+                                .content_start
+                                .saturating_add(link.start_col)
+                                .min(col_span.content_end);
+                            let end_col = col_span
+                                .content_start
+                                .saturating_add(link.end_col)
+                                .min(col_span.content_end);
+                            if start_col < end_col {
+                                links.push(MdLinkSpan {
+                                    start_col,
+                                    end_col,
+                                    url: link.url.clone(),
+                                });
+                            }
+                        }
+                        let text_start = col_span.content_start.saturating_add(wline.pad_before);
+                        let text_end = text_start
+                            .saturating_add(wline.text_width)
+                            .min(col_span.content_end);
+                        slices.push(TableCellSlice {
+                            text_start,
+                            text_end,
+                            hard_break: wline.hard_break,
+                            is_filler: false,
+                        });
+                    } else {
+                        spans.push((" ".to_string(), rule));
+                        spans.push((" ".repeat(widths[column]), fallback));
+                        spans.push((" ".to_string(), rule));
+                        spans.push(("│".to_string(), rule));
+                        slices.push(TableCellSlice {
+                            text_start: col_span.content_start,
+                            text_end: col_span.content_start,
+                            hard_break: false,
+                            is_filler: true,
+                        });
+                    }
                 }
+                out.push((
+                    RawTableLine { spans, links },
+                    TableLineKind::Cells {
+                        row_idx,
+                        line_in_row,
+                        cells: slices,
+                    },
+                ));
             }
-            out.push((
-                spans,
-                TableLineKind::Cells {
-                    row_idx,
-                    line_in_row,
-                    cells: slices,
-                },
-            ));
-        }
-        out
-    };
+            out
+        };
 
-    let mut raw_lines: Vec<Vec<(String, Style)>> = Vec::new();
+    let mut raw_lines: Vec<RawTableLine> = Vec::new();
     let mut line_kinds: Vec<TableLineKind> = Vec::new();
     let mut logical_rows: Vec<TableLogicalRow> = Vec::with_capacity(1 + body.len());
 
-    raw_lines.push(vec![(border("┌", "─", "┬", "┐"), style::md_read_rule())]);
+    raw_lines.push(RawTableLine::border(border("┌", "─", "┬", "┐")));
     line_kinds.push(TableLineKind::Border { nearest_row: 0 });
 
     let header_first = raw_lines.len();
-    for (spans, kind) in row_lines(0, header, style::text()) {
-        raw_lines.push(spans);
+    for (raw, kind) in row_lines(0, header, style::text()) {
+        raw_lines.push(raw);
         line_kinds.push(kind);
     }
     let header_last = raw_lines.len().saturating_sub(1);
@@ -396,14 +430,14 @@ fn grid_table(
     // 表头之后、以及每一条数据行之后都补一条水平分割线（末尾与下边框合并）。
     // 第一列为空的行视为上一条目的**续行**（对齐 markdown 里「同组多行、首列留空」的写法）：
     // 其上方不画分割线，使同组内容视觉合并为一块。
-    raw_lines.push(vec![(border("├", "─", "┼", "┤"), style::md_read_rule())]);
+    raw_lines.push(RawTableLine::border(border("├", "─", "┼", "┤")));
     line_kinds.push(TableLineKind::Border { nearest_row: 0 });
 
     for index in 0..body.len() {
         let row_idx = index + 1;
         let first_line = raw_lines.len();
-        for (spans, kind) in row_lines(row_idx, &body[index], style::text()) {
-            raw_lines.push(spans);
+        for (raw, kind) in row_lines(row_idx, &body[index], style::text()) {
+            raw_lines.push(raw);
             line_kinds.push(kind);
         }
         let last_line = raw_lines.len().saturating_sub(1);
@@ -415,13 +449,13 @@ fn grid_table(
             .get(index + 1)
             .is_none_or(|next| is_continuation_row(next));
         if index + 1 < body.len() && !next_is_continuation {
-            raw_lines.push(vec![(border("├", "─", "┼", "┤"), style::md_read_rule())]);
+            raw_lines.push(RawTableLine::border(border("├", "─", "┼", "┤")));
             line_kinds.push(TableLineKind::Border {
                 nearest_row: row_idx,
             });
         }
     }
-    raw_lines.push(vec![(border("└", "─", "┴", "┘"), style::md_read_rule())]);
+    raw_lines.push(RawTableLine::border(border("└", "─", "┴", "┘")));
     line_kinds.push(TableLineKind::Border {
         nearest_row: body.len(),
     });
@@ -432,10 +466,11 @@ fn grid_table(
         logical_rows,
         lines: line_kinds,
     });
-    for (line_offset, spans) in raw_lines.into_iter().enumerate() {
-        lines.push(MdLine::with_table(
+    for (line_offset, raw) in raw_lines.into_iter().enumerate() {
+        lines.push(MdLine::with_table_and_links(
             0,
-            spans,
+            raw.spans,
+            raw.links,
             TableLineRef {
                 table: Arc::clone(&table_meta),
                 line_offset,
@@ -451,7 +486,7 @@ fn is_continuation_row(row: &[String]) -> bool {
 
 /// 单元格自然宽度：折叠行内标记后取最宽行（`<br>` 分行）。
 fn cell_measure(cell: &str) -> usize {
-    let rendered = inline_spans(cell);
+    let rendered = render_cell_spans(cell, style::text());
     split_br(&rendered)
         .iter()
         .map(|line| display_width(&spans_text(line)))
@@ -461,34 +496,32 @@ fn cell_measure(cell: &str) -> usize {
 
 /// 单元格渲染为带样式分段：先折叠行内标记（`**`/`` ` ``/链接等），未显式指定样式处
 /// 用 `fallback`（表头与数据行同为正文色）。
-fn render_cell_spans(cell: &str, fallback: Style) -> Vec<(String, Style)> {
+fn render_cell_spans(cell: &str, fallback: Style) -> Vec<InlineSpan> {
     if cell.is_empty() {
         return Vec::new();
     }
-    inline_spans(cell)
+    inline_spans_with_links(cell)
         .into_iter()
-        .map(|(value, style)| {
-            let style = if style == style::text() {
-                fallback
-            } else {
-                style
-            };
-            (value, style)
+        .map(|mut span| {
+            if span.style == style::text() {
+                span.style = fallback;
+            }
+            span
         })
         .collect()
 }
 
-/// 把分段按 `<br>` / `<br/>` / `<br />` 拆成多行（保留各段样式）。
-fn split_br(spans: &[(String, Style)]) -> Vec<Vec<(String, Style)>> {
-    let mut lines: Vec<Vec<(String, Style)>> = vec![Vec::new()];
-    for (value, style) in spans {
-        let mut rest = value.as_str();
+/// 把分段按 `<br>` / `<br/>` / `<br />` 拆成多行（保留各段样式与超链接）。
+fn split_br(spans: &[InlineSpan]) -> Vec<Vec<InlineSpan>> {
+    let mut lines: Vec<Vec<InlineSpan>> = vec![Vec::new()];
+    for span in spans {
+        let mut rest = span.text.as_str();
         while let Some(index) = find_br(rest) {
             let head = &rest[..index];
             if !head.is_empty()
                 && let Some(last) = lines.last_mut()
             {
-                push_span(last, head, *style);
+                push_inline_span(last, head, span.style, span.link.as_deref());
             }
             lines.push(Vec::new());
             rest = &rest[index + br_len(&rest[index..])..];
@@ -496,7 +529,7 @@ fn split_br(spans: &[(String, Style)]) -> Vec<Vec<(String, Style)>> {
         if !rest.is_empty()
             && let Some(last) = lines.last_mut()
         {
-            push_span(last, rest, *style);
+            push_inline_span(last, rest, span.style, span.link.as_deref());
         }
     }
     lines
@@ -525,63 +558,72 @@ fn br_len(value: &str) -> usize {
     0
 }
 
-/// 追加分段（与末段同色则合并）。
-fn push_span(line: &mut Vec<(String, Style)>, value: &str, style: Style) {
+/// 追加分段（与末段同色且同链接则合并）。
+fn push_inline_span(line: &mut Vec<InlineSpan>, value: &str, style: Style, link: Option<&str>) {
     if value.is_empty() {
         return;
     }
     if let Some(last) = line.last_mut()
-        && last.1 == style
+        && last.style == style
+        && last.link.as_deref() == link
     {
-        last.0.push_str(value);
+        last.text.push_str(value);
         return;
     }
-    line.push((value.to_string(), style));
+    line.push(InlineSpan {
+        text: value.to_string(),
+        style,
+        link: link.map(str::to_string),
+    });
 }
 
 /// 分段纯文本。
-fn spans_text(spans: &[(String, Style)]) -> String {
-    spans.iter().map(|(value, _)| value.as_str()).collect()
+fn spans_text(spans: &[InlineSpan]) -> String {
+    spans.iter().map(|span| span.text.as_str()).collect()
 }
 
-/// 单元格按列宽换行（优先在空白处断行，超长不可断内容按显示列硬切），保留分段样式，
+/// 单元格按列宽换行（优先在空白处断行，超长不可断内容按显示列硬切），保留分段样式与超链接，
 /// 每物理行按对齐补空格到列宽，并记录每条物理行的前导填充与真实文本宽度。
-fn wrap_cell_spans(line: &[(String, Style)], width: usize, align: Align) -> Vec<WrappedCellLine> {
+fn wrap_cell_spans(line: &[InlineSpan], width: usize, align: Align) -> Vec<WrappedCellLine> {
     let width = width.max(1);
-    let cells: Vec<(char, Style)> = line
+    let cells: Vec<(char, Style, Option<&str>)> = line
         .iter()
-        .flat_map(|(value, style)| value.chars().map(|ch| (ch, *style)))
+        .flat_map(|span| {
+            let link = span.link.as_deref();
+            span.text.chars().map(move |ch| (ch, span.style, link))
+        })
         .collect();
     if cells.is_empty() {
         return vec![WrappedCellLine {
             spans: vec![(" ".repeat(width), style::text())],
+            links: Vec::new(),
             pad_before: 0,
             text_width: 0,
             hard_break: false,
         }];
     }
     let mut out: Vec<WrappedCellLine> = Vec::new();
-    let mut current: Vec<(String, Style)> = Vec::new();
+    let mut current: Vec<InlineSpan> = Vec::new();
     let mut col = 0usize;
     // 以「词 + 尾随空白」为切分单位，中英文混排时中文逐字成词。
-    let mut segment: Vec<(char, Style)> = Vec::new();
-    let flush_segment = |segment: &mut Vec<(char, Style)>,
-                         current: &mut Vec<(String, Style)>,
+    let mut segment: Vec<(char, Style, Option<&str>)> = Vec::new();
+    let flush_segment = |segment: &mut Vec<(char, Style, Option<&str>)>,
+                         current: &mut Vec<InlineSpan>,
                          col: &mut usize,
                          out: &mut Vec<WrappedCellLine>| {
-        for (ch, style) in segment.drain(..) {
+        for (ch, style, link) in segment.drain(..) {
             let cell_w = char_width(ch) as usize;
             if *col + cell_w > width {
                 out.push(pad_line(current, width, align));
                 current.clear();
                 *col = 0;
             }
-            push_span(current, &ch.to_string(), style);
+            push_inline_span(current, &ch.to_string(), style, link);
             *col += cell_w;
         }
     };
-    for (ch, style) in &cells {
-        segment.push((*ch, *style));
+    for (ch, style, link) in &cells {
+        segment.push((*ch, *style, *link));
         if ch.is_whitespace() {
             flush_segment(&mut segment, &mut current, &mut col, &mut out);
         }
@@ -593,6 +635,7 @@ fn wrap_cell_spans(line: &[(String, Style)], width: usize, align: Align) -> Vec<
     if out.is_empty() {
         out.push(WrappedCellLine {
             spans: vec![(" ".repeat(width), style::text())],
+            links: Vec::new(),
             pad_before: 0,
             text_width: 0,
             hard_break: false,
@@ -601,8 +644,8 @@ fn wrap_cell_spans(line: &[(String, Style)], width: usize, align: Align) -> Vec<
     out
 }
 
-/// 把一条物理行按对齐把剩余空列补成空格分段，并返回真实文本宽度与前导填充列数。
-fn pad_line(line: &[(String, Style)], width: usize, align: Align) -> WrappedCellLine {
+/// 把一条物理行按对齐把剩余空列补成空格分段，并返回真实文本宽度、前导填充列数与链接区间。
+fn pad_line(line: &[InlineSpan], width: usize, align: Align) -> WrappedCellLine {
     let len = display_width(&spans_text(line));
     let pad = width.saturating_sub(len);
     let (before, after) = match align {
@@ -611,11 +654,33 @@ fn pad_line(line: &[(String, Style)], width: usize, align: Align) -> WrappedCell
         Align::Center => (pad / 2, pad - pad / 2),
     };
     let mut out = Vec::new();
-    let pad_style = line.first().map(|(_, style)| *style).unwrap_or_default();
+    let mut links = Vec::new();
+    let pad_style = line.first().map(|span| span.style).unwrap_or_default();
     if before > 0 {
         out.push((" ".repeat(before), pad_style));
     }
-    out.extend(line.iter().cloned());
+    let mut cursor_col = u16::try_from(before).unwrap_or(u16::MAX);
+    for span in line {
+        let span_cols = u16::try_from(display_width(&span.text)).unwrap_or(u16::MAX);
+        let next_col = cursor_col.saturating_add(span_cols);
+        if let Some(ref url) = span.link
+            && cursor_col < next_col
+        {
+            links.push(MdLinkSpan {
+                start_col: cursor_col,
+                end_col: next_col,
+                url: url.clone(),
+            });
+        }
+        cursor_col = next_col;
+        if let Some(last) = out.last_mut()
+            && last.1 == span.style
+        {
+            last.0.push_str(&span.text);
+        } else {
+            out.push((span.text.clone(), span.style));
+        }
+    }
     if after > 0 {
         out.push((" ".repeat(after), pad_style));
     }
@@ -624,6 +689,7 @@ fn pad_line(line: &[(String, Style)], width: usize, align: Align) -> WrappedCell
     }
     WrappedCellLine {
         spans: out,
+        links,
         pad_before: u16::try_from(before).unwrap_or(u16::MAX),
         text_width: u16::try_from(len).unwrap_or(u16::MAX),
         hard_break: false,

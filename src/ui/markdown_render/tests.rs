@@ -81,9 +81,10 @@ fn sample_renders_full_document_without_leaking_markers() {
     assert!(joined.contains("hello"));
     // 表格内容在。
     assert!(joined.contains("Left") && joined.contains("Center") && joined.contains("Right"));
-    // 链接文字与 URL 都在。
+    // 网页链接隐藏 `(url)` 但保留标签与自动链接 URL。
     assert!(joined.contains("OpenAI"));
-    assert!(joined.contains("https://openai.com"));
+    assert!(!joined.contains("(https://openai.com)"));
+    assert!(joined.contains("https://example.com"));
     // 图片 alt 在。
     assert!(joined.contains("logo"));
 }
@@ -144,10 +145,15 @@ fn blockquote_uses_angle_prefix_not_left_bar() {
 
 #[test]
 fn inline_renders_link_with_url_and_collapses_markers() {
-    let spans = inline_spans("see [docs](https://x.io) and **bold** end");
+    let spans =
+        inline_spans("see [docs](https://x.io) and [local](docs/readme.md) and **bold** end");
     let joined: String = spans.iter().map(|(value, _)| value.as_str()).collect();
     assert!(joined.contains("docs"));
-    assert!(joined.contains("(https://x.io)"));
+    assert!(!joined.contains("(https://x.io)"), "web link hides (url)");
+    assert!(
+        joined.contains("local (docs/readme.md)"),
+        "relative path keeps (path): {joined}"
+    );
     assert!(joined.contains("bold"));
     assert!(!joined.contains('*'));
     assert!(!joined.contains('['));
@@ -397,7 +403,16 @@ fn table_cells_collapse_inline_markers() {
     assert!(!joined.contains('`'), "单元格不应泄漏反引号：{joined}");
     assert!(joined.contains("文本对话"));
     assert!(joined.contains("链接"));
-    assert!(joined.contains("(https://x.io)"), "链接显示 URL：{joined}");
+    assert!(
+        !joined.contains("(https://x.io)"),
+        "表格内网页链接隐藏 (url)：{joined}"
+    );
+    let link_row = lines
+        .iter()
+        .find(|line| line.text().contains("链接"))
+        .expect("link row");
+    assert_eq!(link_row.links.len(), 1);
+    assert_eq!(link_row.links[0].url, "https://x.io");
     // 加粗样式确实落在「文本对话」分段上。
     let bold_cell = lines
         .iter()
@@ -822,7 +837,9 @@ fn nested_inline_code_links_and_emphasis_render_without_leaking_delimiters() {
         "inline code inside bold must use inline_code style: {:?}",
         lines[0].spans
     );
-    assert_eq!(lines[1].text(), "• 官方文档 (https://example.com)");
+    assert_eq!(lines[1].text(), "• 官方文档");
+    assert_eq!(lines[1].links.len(), 1);
+    assert_eq!(lines[1].links[0].url, "https://example.com");
     assert_eq!(lines[2].text(), "• bold italic");
     assert!(
         lines[2]
@@ -864,5 +881,38 @@ fn ordered_task_list_continuations_and_indented_fences_keep_exact_columns() {
         extract_code_block(src, 0).as_deref(),
         Some("let x = 1;"),
         "indented fenced code block inside list must strip fence indent"
+    );
+}
+
+#[test]
+fn web_links_preserve_link_spans_across_soft_wraps_and_strip_trailing_punctuation_on_bare_urls() {
+    let src = "• 受局势缓和影响，国际原油价格出现明显回落 [金十数据整理：昨日今晨重要新闻汇总（2026-11-10）](https://flash.jin10.com/detail/20261110063513378800)。\n• 详情见 https://example.com/path(1)。";
+    let lines = render_wrapped_code_blocks(src, 34);
+    let joined = lines_text(&lines);
+    assert!(
+        !joined.contains("flash.jin10.com"),
+        "网页命名链接必须隐藏 (url)：{joined}"
+    );
+    let jin10_lines: Vec<&MdLine> = lines
+        .iter()
+        .filter(|line| {
+            line.links
+                .iter()
+                .any(|l| l.url == "https://flash.jin10.com/detail/20261110063513378800")
+        })
+        .collect();
+    assert!(
+        jin10_lines.len() >= 2,
+        "长链接标题软换行后每一行都应保留超链接区间：{lines:?}"
+    );
+
+    let bare_line = lines
+        .iter()
+        .find(|line| line.text().contains("https://example.com/path(1)"))
+        .expect("bare url line");
+    assert_eq!(bare_line.links.len(), 1);
+    assert_eq!(
+        bare_line.links[0].url, "https://example.com/path(1)",
+        "裸 URL 应保留配对括号并剥离句末中文句号"
     );
 }

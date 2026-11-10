@@ -1,63 +1,63 @@
-# lx 助手正文 Markdown 块间可读性间距：任务清单
+# lx 助手正文 Markdown 块间距与超链接/生图交互：任务清单
 
-> 状态：**已完成**
+> 状态：**已完成（Phase 1 + Phase 2）**
 > 日期：2026-11-10
 > 设计依据：[design.md](./design.md)
 
 ---
 
-## 1. 设计与边界确认（已完成）
+## 1. Phase 1：助手正文块间与列表间距（已完成）
 
-- [x] 阅读项目规范文档（`project-directory-structure.md`、`code-writing-standards.md`、`tui-design-requirements.md`）
-- [x] 使用 `codegraph` 与 `codebase-memory-mcp` 检索 `lx-tui` 的 Markdown 渲染与历史快照链路
-- [x] 并行使用 3 个 `explore` subagent 调研 `lx-tui`、`codex-main`（`codex-rs/tui/src/markdown_render.rs`）与 `opencode-dev`（`@opentui/core` `Markdown.ts`）的块间距实现
-- [x] 结合截图与数据库原始消息定位根因（`markdown_render.rs` 吞掉全部 `\n\n` 空行且缺少顶层块/列表切换间距状态机）
-- [x] 使用 `grill-me` 逐项向用户确认 4 个关键边界（顶层块间距规则、列表内部间距规则、作用范围、代码块 `▂` 顶边留白）
-- [x] 编写详细设计文档 [design.md](./design.md) 与本任务清单
+- [x] 阅读项目规范文档并使用 `codegraph` / `codebase-memory-mcp` 梳理渲染链路
+- [x] 并行使用 3 个 `explore` subagent 调研 `lx-tui`、`codex-main`、`opencode-dev`
+- [x] 使用 `grill-me` 确认 4 个块间距边界（Q1～Q4）
+- [x] T1：在 `src/ui/markdown_render.rs` 实现 `PrevBlock`、`should_insert_blank_line` 与 `transition_block`
+- [x] T2：在 `code_block/tests.rs` 与 `incremental/tests.rs` 补充单元测试与流式等价性测试
+- [x] T3：同步更新 `docs/standards/tui-design-requirements.md` 并在 `.worktrees/lx-markdown-block-spacing` 提交代码（`5947f68`）
 
 ---
 
-## 2. 已执行实现任务
+## 2. Phase 2：Markdown 超链接渲染优化与 `Ctrl/Cmd + 点击` 打开（已完成）
 
-### T1：实现助手正文块间与列表间距状态机
-
-- **目标文件**：`src/ui/markdown_render.rs`
-- **具体改动**：
-  - [x] 新增 `ListKind`（`Bullet` / `Ordered` / `Task`）与 `ListItem::kind(&self)`。
-  - [x] 新增 `PrevBlock` 枚举（`Paragraph { in_list, depth }`、`Heading`、`ListItem { depth, kind }`、`CodeBlock`、`Table`、`Quote`、`Rule`）。
-  - [x] 将 `ParserState::after_code_block: bool` 替换为 `prev_block: Option<PrevBlock>` 与 `saw_blank_line: bool`。
-  - [x] 实现 `should_insert_blank_line(prev, saw_blank_line, curr)` 与 `transition_block(state, curr, code_chrome, lines)`：
-    - 块首（`prev == None`）与块尾不补空行；
-    - 源码中一个或多个连续空行合并记录为 `saw_blank_line = true`；
-    - 仅当 `code_chrome == true`（即 `render_wrapped_code_blocks` 与 `IncrementalMarkdownState`）时插入块间空行；
-    - 覆盖顶层块（段落、标题、列表、代码块、表格、引用块、分割线）与列表内部（松紧列表、父子嵌套、子列表退回外层、同级异类列表切换、列表续段）全部转换分支。
-  - [x] 将 `blockquote` 简化为单行 `blockquote_line(line)`，由主循环统一驱动 `update_list_context` 与 `transition_block`。
-
-### T2：补充单元测试与流式增量回归测试
+### T4：Markdown 超链接隐藏 `(url)` 与行内链接列区间追踪
 
 - **目标文件**：
-  - `src/ui/markdown_render/code_block/tests.rs`
-  - `src/ui/markdown_render/incremental/tests.rs`
-  - `src/ui/main_content/lx/history/tests/tool_geometry.rs`
-  - `src/ui/main_content/lx/selection/tests.rs`
+  - `src/ui/markdown_render/inline.rs`
+  - `src/ui/markdown_render.rs`
+  - `src/ui/markdown_render/table.rs`
+  - `src/ui/markdown_render/code_block.rs`
 - **具体改动**：
-  - [x] 新增顶层块间距测试：验证段落单 `\n` 紧邻、`\n\n` 空 1 行、多空行合并为 1 行、首尾无多余空行，以及标题/表格/引用/分割线与相邻块之间恒隔 1 行。
-  - [x] 新增列表间距测试：验证紧凑列表（含软换行多行项）0 空行、松散列表 1 空行、父项→嵌套子列表 0 空行、子列表结束退回外层列表项 1 空行、同级无序/有序/任务列表切换 1 空行。
-  - [x] 新增截图真实案例回归测试：验证「段落 → `## 核查结论` → 粗体段 → 无序列表 → 粗体段 → 多段统计」的完整空行分布。
-  - [x] 新增非助手正文紧凑性测试：验证 `render_wrapped` / `render_wrapped_literal_rules` 保持紧凑无块间空行。
-  - [x] 在 `incremental/tests.rs` 中验证流式逐字节输入与伪随机块序列下 `prefix + tail == render_wrapped_code_blocks` 恒成立。
+  - [x] 在 `inline.rs` 实现 `is_web_url(url)` 与 `inline_spans_with_links(text) -> Vec<InlineSpan>`：
+    - `[文字](http(s)://...)` 且 `文字` 非空时仅显示带下划线的 `文字`（`style::md_read_link_text()`），隐藏 ` (url)` 并记录 `link: Some(url)`；
+    - `[](http(s)://...)`、`<http(s)://...>` 与裸 `http(s)://...`（自动剥离句尾标点）显示 URL 本身（`style::md_read_link_text()`）并记录 `link: Some(url)`；
+    - 非 `http(s)://` 链接（如 `[说明](docs/readme.md)`）保留显示 `说明 (docs/readme.md)`，`link: None`。
+  - [x] 在 `MdLine` 新增 `links: Vec<MdLinkSpan>`（记录行内 `start_col..end_col` 与 `url`），并在 `wrap_md_line_inner` 软换行与 `table::table` 单元格排版中保持每行 `links` 映射。
 
-### T3：同步项目设计规范文档
+### T5：网格链接热区、`Ctrl/Cmd + 点击` 打开浏览器与 AI Web 生图点击门控
 
-- **目标文件**：`docs/standards/tui-design-requirements.md`
+- **目标文件**：
+  - `src/ui/main_content/lx/grid.rs`
+  - `src/ui/main_content/lx/history/paint.rs`
+  - `src/ui/main_content/lx/history/tool.rs`
+  - `src/ui/main_content/lx/selection.rs`
+  - `src/app/state/lx/chat.rs`
+  - `src/app/update/chat/viewport.rs`
+  - `src/app/update/chat/subagent.rs`
+  - `src/event/mouse/press.rs`
 - **具体改动**：
-  - [x] 在 `docs/standards/tui-design-requirements.md` 的 Markdown 阅读渲染章节补充助手正文块间与列表间距规则说明，保持规范文档与代码实现一致。
+  - [x] 在 `Grid` 新增 `GridLinkSpan`、`set_link_span` 与 `link_at`；在 `draw_markdown`、`draw_thinking` 与 `tool::put_segments` 绘制时写入链接热区。
+  - [x] 在 `CardTarget` 新增 `OpenUrl { url: String }`，在 `toggle_lx_card` 与 `toggle_agent_card` 中触发 `Effect::OpenBrowser { url }`。
+  - [x] 在 `selection::press_content_hit` 中传入 `mouse.modifiers`：
+    - 按住 `Ctrl / Cmd` 点击链接热区时返回 `Some(CardTarget::OpenUrl { url })`；
+    - 将 AI Web 生图行的 `CardTarget::Attachment`（预览文件名）与已下载态 `CardTarget::DownloadOriginalImage`（`[✓ Downloaded]`）门控为仅在 `Ctrl / Cmd + 点击` 时触发，未下载态 `[↓ Download original]` 保持普通左键点击即可触发下载。
 
----
+### T6：测试与规范文档更新
 
-## 3. 验证计划
-
-- [x] `rtk cargo fmt --check`
-- [x] `rtk cargo clippy --all-targets -- -D warnings`
-- [x] `rtk cargo test markdown_render </dev/null`
-- [x] `rtk cargo test ui::main_content::lx </dev/null`
+- **目标文件**：
+  - `src/ui/markdown_render/tests.rs`
+  - `src/ui/main_content/lx/history/tests/turn_tail.rs`
+  - `docs/standards/tui-design-requirements.md`
+- **具体改动**：
+  - [x] 更新并新增 Markdown 链接渲染测试：验证 `[文字](https://...)` 仅渲染 `文字` 且携带链接元数据、软换行跨行保留链接热区、裸 URL 剥离句尾标点、非网页相对路径保留 `(path)`。
+  - [x] 新增 `Ctrl/Cmd + 点击` 测试：验证普通左键点击链接或 AI Web 预览图文件名不触发外部打开，按住 `Ctrl/Cmd + 点击` 链接触发 `CardTarget::OpenUrl`、按住 `Ctrl/Cmd + 点击` AI Web 预览图或 `[✓ Downloaded]` 触发定位、普通左键点击 `[↓ Download original]` 仍正常触发下载。
+  - [x] 同步更新 `docs/standards/tui-design-requirements.md` 并在工作区提交代码。

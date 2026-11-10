@@ -1,10 +1,10 @@
-# lx 助手正文 Markdown 块间可读性间距：设计方案
+# lx 助手正文 Markdown 块间距与超链接/生图交互：设计方案
 
-> 状态：**已完成**
+> 状态：**已完成（Phase 1 块间距 + Phase 2 超链接与生图交互）**
 > 日期：2026-11-10
-> 项目：`/Users/yonah/projects/agent/lx-tui`
-> 参考实现：`/Users/yonah/projects/agent/opencode-dev`（`@opentui/core` `Markdown.ts` `shouldAddTopLevelMargin` / `createListItem`）、`/Users/yonah/projects/agent/codex-main`（`codex-rs/tui/src/markdown_render.rs` `Writer::needs_newline`）
-> 作用域：`src/ui/markdown_render.rs`、`src/ui/markdown_render/code_block/tests.rs`、`src/ui/markdown_render/incremental/tests.rs`、`docs/standards/tui-design-requirements.md`
+> 项目：`/Users/yonah/projects/agent/lx-tui`（工作区：`.worktrees/lx-markdown-block-spacing`）
+> 参考实现：`/Users/yonah/projects/agent/opencode-dev`（`@opentui/core` `Markdown.ts`、`packages/tui/src/ui/link.tsx`）、`/Users/yonah/projects/agent/codex-main`（`codex-rs/tui/src/markdown_render.rs`、`markdown_render/web_links.rs`）
+> 作用域：`src/ui/markdown_render*`、`src/ui/main_content/lx/*`、`src/app/state/lx/chat.rs`、`src/app/update/chat/*`、`src/event/mouse/*`、`docs/standards/tui-design-requirements.md`
 > 配套文档：[task.md](./task.md)
 
 ---
@@ -437,3 +437,116 @@ fn render_blocks_stateful(
    - `incremental/tests.rs` 的逐字节流式等价性测试与伪随机块序列测试全部通过，并补充松散列表、子列表退回外层、连续引用等流式分块边界用例。
 5. **非助手正文紧凑性守卫测试**：
    - 验证 `render`、`render_wrapped`、`render_wrapped_literal_rules` 对含 `\n\n` 的多段/标题/列表输入仍不插入块间空行。
+
+---
+
+## 7. Phase 2：Markdown 超链接渲染优化与 `Ctrl/Cmd + 点击` 打开（含 AI Web 生图行）
+
+### 7.1 背景与已确认边界（Grill Me 结论）
+
+在新闻检索、文档汇总等场景中，模型输出的 `[标题](https://...)` 若强行展开为 `标题 (https://...)`，会导致超长 URL 独占整行且与标题同为高饱和亮蓝色，严重破坏阅读流。对比 `opencode-dev`（`Markdown.ts`）与 `codex-main`（`markdown_render/web_links.rs`）后，已与用户确认以下 3 项边界：
+
+| 编号 | 决策项 | 已确认方案 |
+| :--- | :--- | :--- |
+| **Q5** | **`[文字](url)` 渲染格式** | 当 `url` 为 `http://` 或 `https://` 网页链接且 `文字` 非空时，**仅渲染 `文字`**（样式 `style::md_read_link_text()`：链接蓝 `#4493f8` + 下划线），**彻底隐藏 `(url)`**；当 `文字` 为空（`[](https://...)`）、自动链接（`<https://...>`）或裸网址（`https://...`）时，直接渲染网址本身并带下划线；当 `url` 为非 `http(s)://` 本地相对路径（如 `[说明](docs/readme.md)`）时，保留显示 `说明 (docs/readme.md)` 且不作为网页链接打开。 |
+| **Q6** | **Markdown 超链接点击与选区复制** | 在 `lx` 聊天区所有 Markdown 文本（主对话与子 Agent 详情页的段落、列表、引用、表格单元格、思考块与汇报/工具卡片，含软换行折成多行的长链接标题）中，按住 **`Ctrl / Cmd` + 鼠标左键单击**链接文字任意位置，即调用系统默认浏览器打开目标 `http(s)://` 网址（`Effect::OpenBrowser`）；普通左键拖拽选区复制（`Ctrl/Cmd+C`）时仅复制界面可见文字。 |
+| **Q7** | **AI Web 生成图片行的点击打开方式** | 助手消息底部的 AI Web 生图行（`└─ [image](preview): xxx.png  [↓ Download original]`）：<br>1. 左侧带下划线的预览图文件名 `xxx.png`（`CardTarget::Attachment`）与右侧下载完成后的 `[✓ Downloaded]`，**改为必须按住 `Ctrl / Cmd` + 鼠标左键单击**才在系统文件管理器（Finder / Explorer）中定位打开（普通左键点击不再弹出外部窗口，避免拖选文本时误触）；<br>2. 未下载状态的 `[↓ Download original]`（`OriginalImageDownloadState::Idle`）保留普通左键单击（兼容 `Ctrl/Cmd + 点击`）立即触发后台下载。 |
+
+### 7.2 核心数据结构与链路设计
+
+#### 1. `InlineSpan` 与 `MdLine::links`（`src/ui/markdown_render/inline.rs` & `src/ui/markdown_render.rs`）
+
+在 `inline.rs` 中新增带可选链接目标的 `InlineSpan`：
+
+```rust
+/// 行内渲染分段：携带显示文本、样式与可选的 `http(s)://` 超链接目标。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(super) struct InlineSpan {
+    pub(super) text: String,
+    pub(super) style: Style,
+    pub(super) link: Option<String>,
+}
+
+/// 判定是否为安全的 `http://` 或 `https://` 网页链接。
+pub(crate) fn is_web_url(url: &str) -> bool {
+    let trimmed = url.trim();
+    let rest = trimmed
+        .strip_prefix("https://")
+        .or_else(|| trimmed.strip_prefix("http://"));
+    rest.is_some_and(|tail| {
+        !tail.is_empty() && !tail.chars().any(|ch| ch.is_whitespace() || ch.is_control())
+    })
+}
+```
+
+- 解析 `[label](url)` 时：
+  - 若 `is_web_url(url)` 为真：提取剥离内联标记后的 `display_label`（若为空则回退 `url.trim()`），推入单段 `InlineSpan { text: display_label, style: style::md_read_link_text(), link: Some(url.trim().to_string()) }`，**不再追加 ` ({url})`**；
+  - 若 `is_web_url(url)` 为假（本地路径等）：保留 `display_label`（`md_read_link_text`）+ ` ({url})`（`md_read_url`），`link: None`。
+- 解析 `<url>` 与裸 `http(s)://...` 时：
+  - 裸 URL 自动剥离句尾常见中英文标点（`。，、；！？）》】,.!?;:)` 等未配对尾随标点），使用 `style::md_read_link_text()`（链接蓝 + 下划线）并挂载 `link: Some(url)`。
+
+在 `MdLine` 上记录行内超链接的列范围（相对 `line.indent` 之后的起始列 `0`）：
+
+```rust
+/// 单行内的超链接列区间（列偏移相对 `MdLine::indent` 之后的正文起点，左闭右开 `start_col..end_col`）。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct MdLinkSpan {
+    pub start_col: u16,
+    pub end_col: u16,
+    pub url: String,
+}
+
+pub struct MdLine {
+    pub indent: u16,
+    pub hang: u16,
+    pub spans: Vec<(String, Style)>,
+    pub links: Vec<MdLinkSpan>,
+    pub table: Option<TableLineRef>,
+    pub code: Option<CodeLineKind>,
+}
+```
+
+- **软换行保持超链接映射（`wrap_md_line_inner`）**：
+  - 将 `cells` 扩展为 `Vec<(char, Style, Option<&str>)>`，按字符所在列从 `line.links` 查找其所属 URL；
+  - 折行切分出 `cells[index..break_at]` 后，不仅聚合 `spans`，同时按连续相同的 `Some(url)` 聚合计算该视觉行的 `links: Vec<MdLinkSpan>`。因此长链接标题被软折成 2～3 行时，每一行对应的字符列区间都精准携带原始 URL。
+- **表格单元格超链接映射（`src/ui/markdown_render/table.rs`）**：
+  - `CellSpan` 携带 `link: Option<String>`，经 `split_br` 与单元格内软换行保留；组装表格行 `│ cell │` 时，将单元格内带 `link` 的分段换算为整行相对列偏移写入该表格行的 `MdLine.links`。
+- **工具/汇报/Compact 压暗 Markdown（`src/ui/main_content/lx/history/tool.rs`）**：
+  - `tool::Segment` 新增 `pub(crate) link: Option<String>`，`md_line_segments` 与 `wrap_spans` 原样传递 `link`。
+
+#### 2. `Grid` 登记超链接与命中查询（`src/ui/main_content/lx/grid.rs` & `selection.rs`）
+
+在 `Grid` 中维护每行的超链接区间表 `link_rows: Vec<Vec<GridLinkSpan>>`：
+
+```rust
+/// 网格中单行的超链接热区（列偏移相对 `Grid.area.x`，左闭右开 `start_col..end_col`）。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct GridLinkSpan {
+    pub(crate) start_col: u16,
+    pub(crate) end_col: u16,
+    pub(crate) url: String,
+}
+```
+
+- `draw_markdown`、`draw_thinking` 与 `tool::put_segments` 在向 `Grid` 写入 `MdLine` / `Segment` 时，调用 `grid.set_link_span(x, y, cols, url)` 登记屏幕列区间；
+- `selection::link_at_cell(area, lx, (content_row, content_col), cache)` 复用 1 行 `Grid`（`render_chunk(&mut grid, chunk_rect, lx, row, cache)`），调用 `grid.link_at(content_col, 0)` 即可在 O(1) 行开销内精确返回命中的 `url`（天然支持主聊天流与 `TaskTab::Agents` 子 Agent 详情页）。
+
+#### 3. `Ctrl / Cmd + 鼠标左键点击` 交互分派（`src/event/mouse/press.rs`、`src/ui/main_content/lx/selection.rs`、`src/app/update/chat/viewport.rs`）
+
+```rust
+/// 是否按下用于“打开外部链接/文件”的修饰键（Ctrl 或 Cmd/Super；兼容 SGR 鼠标协议将 Cmd 编码为 Meta/Alt）。
+pub(crate) fn is_open_modifier(modifiers: crossterm::event::KeyModifiers) -> bool {
+    use crossterm::event::KeyModifiers;
+    modifiers.intersects(
+        KeyModifiers::CONTROL | KeyModifiers::SUPER | KeyModifiers::META | KeyModifiers::ALT,
+    )
+}
+```
+
+- 在 `CardTarget` 中新增 `OpenUrl { url: String }`；
+- 在 `press_content_hit(area, lx, column, row, modifiers, cache)` 中：
+  1. 若 `is_open_modifier(modifiers)` 为真，优先调用 `link_at_cell`：命中超链接时直接返回 `Some(CardTarget::OpenUrl { url })`（即使该链接位于表格单元格或已展开的思考块/汇报卡内，也优先打开链接而非折叠卡片）；
+  2. 对卡片命中结果做修饰键门控：
+     - `CardTarget::Attachment { .. }`（AI Web 预览图文件名）：仅当 `is_open_modifier(modifiers)` 为真时返回，普通左键点击返回 `None`（退回普通文本选区）；
+     - `CardTarget::DownloadOriginalImage { attachment_id }`：当状态为 `OriginalImageDownloadState::Idle`（`[↓ Download original]`）时普通左键与 `Ctrl/Cmd + 点击` 均放行；当状态为 `Downloaded`（`[✓ Downloaded]`）时仅在 `is_open_modifier(modifiers)` 为真时放行。
+- 在 `toggle_lx_card` 与 `toggle_agent_card` 中处理 `CardTarget::OpenUrl { url }`：推入 `Effect::OpenBrowser { url }`，由后台线程调用 `platform::open_browser(&url)` 在系统默认浏览器中打开。

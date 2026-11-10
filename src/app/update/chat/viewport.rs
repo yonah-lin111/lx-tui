@@ -509,6 +509,14 @@ pub fn toggle_lx_card(state: &mut AppState, pane: PaneId, target: CardTarget) ->
                 .toggle_user_paste(&message_id, paste_id, occurrence);
             true
         }
+        CardTarget::OpenUrl { url } => {
+            if !url.is_empty() {
+                state
+                    .effects
+                    .push(crate::app::effects::Effect::OpenBrowser { url });
+            }
+            true
+        }
     };
     if changed {
         crate::app::update::clear_lx_selection_for(state, pane);

@@ -27,7 +27,8 @@ pub use code_block::{CodeLineKind, DEFAULT_CODE_LANG, extract_code_block};
 pub(crate) use highlight::highlight_line;
 /// 流式 Markdown 增量渲染状态（稳定前缀 + 活跃尾部）。
 pub(crate) use incremental::IncrementalMarkdownState;
-use inline::inline_spans;
+pub use inline::MdLinkSpan;
+use inline::{inline_spans, marker_spans_and_links, spans_and_links};
 pub use table::{
     TableCellSlice, TableColumnSpan, TableLayoutMeta, TableLineKind, TableLineRef, TableLogicalRow,
 };
@@ -40,6 +41,8 @@ pub struct MdLine {
     /// 首行含 `• ` / `1. ` / `> ` 等标记，续行要跳过标记、对齐正文起始列。
     pub hang: u16,
     pub spans: Vec<(String, Style)>,
+    /// 行内 `http(s)://` 超链接在当前行内的列区间（相对 `indent` 之后的正文起点）。
+    pub links: Vec<MdLinkSpan>,
     /// 若该行属于 Markdown 表格，记录其表格结构与行内偏移。
     pub table: Option<TableLineRef>,
     /// 若该行属于启用了边框与复制按钮的代码块，记录其代码块行角色。
@@ -53,6 +56,7 @@ impl MdLine {
             indent,
             hang: 0,
             spans: vec![(value.into(), style)],
+            links: Vec::new(),
             table: None,
             code: None,
         }
@@ -60,36 +64,54 @@ impl MdLine {
 
     /// 多段行。
     pub(crate) fn spans(indent: u16, spans: Vec<(String, Style)>) -> Self {
+        Self::spans_with_links(indent, spans, Vec::new())
+    }
+
+    /// 携带超链接列区间的多段行。
+    pub(crate) fn spans_with_links(
+        indent: u16,
+        spans: Vec<(String, Style)>,
+        links: Vec<MdLinkSpan>,
+    ) -> Self {
         Self {
             indent,
             hang: 0,
             spans,
+            links,
             table: None,
             code: None,
         }
     }
 
-    /// 携带表格结构引用的多段行。
-    pub(crate) fn with_table(
+    /// 携带表格结构引用与超链接列区间的多段行。
+    pub(crate) fn with_table_and_links(
         indent: u16,
         spans: Vec<(String, Style)>,
+        links: Vec<MdLinkSpan>,
         table: TableLineRef,
     ) -> Self {
         Self {
             indent,
             hang: 0,
             spans,
+            links,
             table: Some(table),
             code: None,
         }
     }
 
-    /// 多段行 + 悬挂缩进（列表项/引用：续行对齐正文起始列）。
-    pub(crate) fn hanging(indent: u16, hang: u16, spans: Vec<(String, Style)>) -> Self {
+    /// 多段行 + 悬挂缩进 + 超链接列区间（列表项/引用：续行对齐正文起始列）。
+    pub(crate) fn hanging_with_links(
+        indent: u16,
+        hang: u16,
+        spans: Vec<(String, Style)>,
+        links: Vec<MdLinkSpan>,
+    ) -> Self {
         Self {
             indent,
             hang,
             spans,
+            links,
             table: None,
             code: None,
         }
@@ -465,7 +487,8 @@ fn render_blocks_stateful(
         } else {
             trimmed
         };
-        lines.push(MdLine::spans(cont_indent, inline_spans(body)));
+        let (spans, links) = spans_and_links(body);
+        lines.push(MdLine::spans_with_links(cont_indent, spans, links));
         index += 1;
     }
     lines
@@ -585,11 +608,8 @@ fn blockquote_line(line: &str) -> MdLine {
     let body = rest.strip_prefix(' ').unwrap_or(rest);
     let marker = format!("{QUOTE_MARKER} ");
     let quote_style = style::md_read_quote();
-    let mut spans = vec![(marker.clone(), quote_style)];
-    for (value, span_style) in inline_spans(body) {
-        spans.push((value, quote_style.patch(span_style)));
-    }
-    MdLine::hanging(0, marker_width(&marker), spans)
+    let (spans, links) = marker_spans_and_links(&marker, quote_style, body, Some(quote_style));
+    MdLine::hanging_with_links(0, marker_width(&marker), spans, links)
 }
 
 /// 列表项（无序 / 有序 / 任务）；`indent` 是源码里的**原始缩进列数**，
@@ -652,48 +672,26 @@ impl ListItem<'_> {
     /// 渲染一行列表项（lx：`•` 项目符号；任务用 claude 一组 `[x]`/`[ ]`）；
     /// `depth` 为换算后的层级（0 = 顶层）。
     fn render(&self, depth: usize) -> MdLine {
-        match *self {
-            Self::Bullet { text: body, .. } => {
-                let marker = "• ";
-                MdLine::hanging(
-                    indent(depth),
-                    marker_width(marker),
-                    marker_spans(marker, style::md_read_bullet(), body),
-                )
-            }
+        let (marker, marker_style, body) = match *self {
+            Self::Bullet { text: body, .. } => ("• ".to_string(), style::md_read_bullet(), body),
             Self::Ordered {
                 number, text: body, ..
-            } => {
-                let marker = format!("{number}. ");
-                MdLine::hanging(
-                    indent(depth),
-                    marker_width(&marker),
-                    marker_spans(&marker, style::md_read_ordered(), body),
-                )
-            }
+            } => (format!("{number}. "), style::md_read_ordered(), body),
             Self::Task {
                 done, text: body, ..
             } => {
                 // 复选框按状态分色，**正文保持正常样式**：已完成项不再整行加删除线
                 // 或压暗——任务状态只由复选框表达，文字仍要能正常阅读。
-                let marker = if done {
-                    (format!("{TASK_DONE} "), style::md_read_task_done())
+                if done {
+                    (format!("{TASK_DONE} "), style::md_read_task_done(), body)
                 } else {
-                    (format!("{TASK_OPEN} "), style::md_read_task_open())
-                };
-                let mut spans = vec![(marker.0.clone(), marker.1)];
-                spans.extend(inline_spans(body));
-                MdLine::hanging(indent(depth), marker_width(&marker.0), spans)
+                    (format!("{TASK_OPEN} "), style::md_read_task_open(), body)
+                }
             }
-        }
+        };
+        let (spans, links) = marker_spans_and_links(&marker, marker_style, body, None);
+        MdLine::hanging_with_links(indent(depth), marker_width(&marker), spans, links)
     }
-}
-
-/// 列表项内容：标记分段 + 行内渲染的正文（粗体/斜体/代码等在列表内同样折叠）。
-fn marker_spans(marker: &str, marker_style: Style, body: &str) -> Vec<(String, Style)> {
-    let mut spans = vec![(marker.to_string(), marker_style)];
-    spans.extend(inline_spans(body));
-    spans
 }
 
 /// 列表项缩进（每级 2 列）。
@@ -845,6 +843,7 @@ fn wrap_md_line(line: &MdLine, width: usize, out: &mut Vec<MdLine>) {
                 indent: 0,
                 hang: 0,
                 spans: code_block::prepend_body_bar(Vec::new(), width),
+                links: Vec::new(),
                 table: None,
                 code: Some(CodeLineKind::Body),
             });
@@ -868,11 +867,7 @@ fn wrap_md_line_inner(line: &MdLine, width: usize, out: &mut Vec<MdLine>) {
     let first_indent = usize::from(line.indent);
     let hang = usize::from(line.hang);
     let cont_indent = first_indent.saturating_add(hang);
-    let cells: Vec<(char, Style)> = line
-        .spans
-        .iter()
-        .flat_map(|(value, span_style)| value.chars().map(|ch| (ch, *span_style)))
-        .collect();
+    let cells = inline::cell_links_for_line(&line.spans, &line.links);
     if cells.is_empty() {
         // 代码块里的空行也是内容：软换行不能把它吞掉（否则代码上下文断开）。
         out.push(MdLine::spans(line.indent, Vec::new()));
@@ -913,50 +908,26 @@ fn wrap_md_line_inner(line: &MdLine, width: usize, out: &mut Vec<MdLine>) {
         if first && break_at <= index.saturating_add(hang) {
             break_at = end;
         }
-        let mut spans: Vec<(String, Style)> = Vec::new();
-        for (ch, span_style) in &cells[index..break_at] {
-            if let Some(last) = spans.last_mut()
-                && last.1 == *span_style
-            {
-                last.0.push(*ch);
-                continue;
-            }
-            spans.push((ch.to_string(), *span_style));
-        }
-        trim_trailing_whitespace(&mut spans);
+        let (spans, links) = inline::slice_spans_and_links(&cells[index..break_at]);
         let indent_u16 = u16::try_from(indent).unwrap_or(u16::MAX);
         if first
             && break_at == cells.len()
             && let Some(ref table) = line.table
         {
-            out.push(MdLine::with_table(indent_u16, spans, table.clone()));
+            out.push(MdLine::with_table_and_links(
+                indent_u16,
+                spans,
+                links,
+                table.clone(),
+            ));
         } else {
-            out.push(MdLine::spans(indent_u16, spans));
+            out.push(MdLine::spans_with_links(indent_u16, spans, links));
         }
         index = break_at;
         first = false;
         // 跳过下一物理行的行首空白。
         while index < cells.len() && cells[index].0 == ' ' {
             index += 1;
-        }
-    }
-}
-
-/// 去掉行尾空白分段（软换行产生的悬挂空格）。
-fn trim_trailing_whitespace(spans: &mut Vec<(String, Style)>) {
-    while let Some((value, _)) = spans.last() {
-        let trimmed = value.trim_end();
-        if trimmed.len() == value.len() {
-            break;
-        }
-        if trimmed.is_empty() {
-            spans.pop();
-        } else {
-            let trimmed = trimmed.to_string();
-            if let Some(last) = spans.last_mut() {
-                last.0 = trimmed;
-            }
-            break;
         }
     }
 }

@@ -868,6 +868,7 @@ pub(crate) fn handle_mouse_down_left(
                             &target.lx,
                             mouse.column,
                             mouse.row,
+                            mouse.modifiers,
                             cache.pane(pane),
                         )
                     })

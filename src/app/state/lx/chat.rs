@@ -455,6 +455,8 @@ pub enum CardTarget {
         paste_id: u64,
         occurrence: usize,
     },
+    /// Markdown 超链接（`Ctrl/Cmd + 点击` 在系统默认浏览器中打开该 URL）。
+    OpenUrl { url: String },
 }
 
 /// 卡片内可独立折叠的区域。

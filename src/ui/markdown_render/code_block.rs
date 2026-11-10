@@ -42,6 +42,7 @@ pub(super) fn top_border_line(width: Option<usize>) -> MdLine {
             text::CODE_BLOCK_TOP_BORDER.repeat(cols),
             style::md_read_rule(),
         )],
+        links: Vec::new(),
         table: None,
         code: Some(CodeLineKind::TopBorder),
     }
@@ -77,6 +78,7 @@ pub(super) fn header_line(lang: &str, block_index: usize, width: Option<usize>) 
             indent: 0,
             hang: 0,
             spans,
+            links: Vec::new(),
             table: None,
             code: Some(CodeLineKind::Header {
                 block_index,
@@ -115,6 +117,7 @@ pub(super) fn header_line(lang: &str, block_index: usize, width: Option<usize>) 
         indent: 0,
         hang: 0,
         spans,
+        links: Vec::new(),
         table: None,
         code: Some(CodeLineKind::Header {
             block_index,
@@ -138,6 +141,7 @@ pub(super) fn render_code_line(
         indent: 0,
         hang: 0,
         spans,
+        links: Vec::new(),
         table: None,
         code: code_chrome.then_some(CodeLineKind::Body),
     });

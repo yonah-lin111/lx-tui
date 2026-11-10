@@ -267,3 +267,210 @@ fn running_recap_shows_placeholder_under_pending_message() {
         "生成中必须是空心菱形：{text}"
     );
 }
+
+#[test]
+fn markdown_links_and_ai_web_images_require_ctrl_or_cmd_click_to_open() {
+    use crate::app::state::CardTarget;
+    use crossterm::event::KeyModifiers;
+
+    let area = Rect::new(0, 0, 80, 20);
+    let mut msg = message(
+        "assistant",
+        "complete",
+        vec![text_part(
+            "请查看 [Daily World Briefing](https://english.news.cn/20261110/c.html)。",
+        )],
+    );
+    msg.attachments = vec![
+        MessageAttachmentMeta {
+            id: "att-idle".into(),
+            position: 0,
+            kind: MessageAttachmentKind::Image,
+            label: "gemini-r1-1.webp".into(),
+            marker_start: None,
+            marker_end: None,
+            source_path: Some("/tmp/gemini-r1-1.webp".into()),
+            mime: None,
+            width: None,
+            height: None,
+        },
+        MessageAttachmentMeta {
+            id: "att-done".into(),
+            position: 1,
+            kind: MessageAttachmentKind::Image,
+            label: "gemini-r1-2.webp".into(),
+            marker_start: None,
+            marker_end: None,
+            source_path: Some("/tmp/gemini-r1-2.webp".into()),
+            mime: None,
+            width: None,
+            height: None,
+        },
+    ];
+    let mut lx = lx_with(vec![msg]);
+    lx.chat.image_originals.insert(
+        "att-idle".into(),
+        crate::app::state::GeneratedImageOriginal {
+            site: crate::app::state::AiWebSite::Gemini,
+            session_id: "ai-web-gm-123".into(),
+            original_url: "https://lh3.googleusercontent.com/gg/abc=s0-d-I?alr=yes".into(),
+            fallback_url: "https://lh3.googleusercontent.com/gg/abc=s1024-rw".into(),
+            file_stem: "gemini-123-r1-1-orig".into(),
+            state: crate::app::state::OriginalImageDownloadState::Idle,
+        },
+    );
+    lx.chat.image_originals.insert(
+        "att-done".into(),
+        crate::app::state::GeneratedImageOriginal {
+            site: crate::app::state::AiWebSite::Gemini,
+            session_id: "ai-web-gm-123".into(),
+            original_url: "https://lh3.googleusercontent.com/gg/def=s0-d-I?alr=yes".into(),
+            fallback_url: "https://lh3.googleusercontent.com/gg/def=s1024-rw".into(),
+            file_stem: "gemini-123-r1-2-orig".into(),
+            state: crate::app::state::OriginalImageDownloadState::Downloaded {
+                path: "/tmp/gemini-123-r1-2-orig.png".into(),
+            },
+        },
+    );
+
+    let mut pane_cache = cache();
+    let mut buf = Buffer::empty(area);
+    crate::ui::main_content::lx::render(area, &mut buf, &lx, true, None, &mut pane_cache);
+    let rows = rows_text(&buf, area);
+
+    // 1. Markdown 超链接：普通左键不触发 OpenUrl，Ctrl/Cmd + 点击触发 OpenUrl。
+    let link_y = (0..area.height)
+        .find(|&y| rows[usize::from(y)].contains("Daily World Briefing"))
+        .expect("link row");
+    let link_x = rows[usize::from(link_y)]
+        .chars()
+        .collect::<Vec<_>>()
+        .windows("Daily".chars().count())
+        .position(|w| w == ['D', 'a', 'i', 'l', 'y'])
+        .expect("link col") as u16;
+    let plain_link_hit = crate::ui::main_content::lx::press_content_hit(
+        area,
+        &lx,
+        link_x,
+        link_y,
+        KeyModifiers::NONE,
+        &mut pane_cache,
+    )
+    .expect("plain hit");
+    assert_eq!(plain_link_hit.2, None, "普通点击超链接不得触发外部打开");
+
+    for modifier in [KeyModifiers::CONTROL, KeyModifiers::SUPER] {
+        let mod_link_hit = crate::ui::main_content::lx::press_content_hit(
+            area,
+            &lx,
+            link_x,
+            link_y,
+            modifier,
+            &mut pane_cache,
+        )
+        .expect("mod hit");
+        assert_eq!(
+            mod_link_hit.2,
+            Some(CardTarget::OpenUrl {
+                url: "https://english.news.cn/20261110/c.html".into(),
+            }),
+            "{modifier:?} + 点击超链接应返回 OpenUrl"
+        );
+    }
+
+    // 2. AI Web 预览图文件名：普通左键不触发 Attachment，Ctrl/Cmd + 点击触发 Attachment。
+    let img1_y = (0..area.height)
+        .find(|&y| rows[usize::from(y)].contains("gemini-r1-1.webp"))
+        .expect("img1 row");
+    let img1_x = rows[usize::from(img1_y)]
+        .find("gemini-r1-1.webp")
+        .expect("img1 col") as u16;
+    let plain_img_hit = crate::ui::main_content::lx::press_content_hit(
+        area,
+        &lx,
+        img1_x,
+        img1_y,
+        KeyModifiers::NONE,
+        &mut pane_cache,
+    )
+    .expect("plain img hit");
+    assert_eq!(
+        plain_img_hit.2, None,
+        "普通点击 AI Web 预览图文件名不得弹出文件管理器"
+    );
+
+    let ctrl_img_hit = crate::ui::main_content::lx::press_content_hit(
+        area,
+        &lx,
+        img1_x,
+        img1_y,
+        KeyModifiers::CONTROL,
+        &mut pane_cache,
+    )
+    .expect("ctrl img hit");
+    assert_eq!(
+        ctrl_img_hit.2,
+        Some(CardTarget::Attachment {
+            path: "/tmp/gemini-r1-1.webp".into(),
+        })
+    );
+
+    // 3. 未下载态 `[Download original]` 按钮：普通左键即可触发下载；
+    // 已下载态 `[✓ Downloaded]`：必须 Ctrl/Cmd + 点击才触发定位原图。
+    let dl_idle_x = rows[usize::from(img1_y)]
+        .find("[Download original]")
+        .expect("idle btn col") as u16;
+    let plain_dl_idle = crate::ui::main_content::lx::press_content_hit(
+        area,
+        &lx,
+        dl_idle_x,
+        img1_y,
+        KeyModifiers::NONE,
+        &mut pane_cache,
+    )
+    .expect("plain dl idle");
+    assert_eq!(
+        plain_dl_idle.2,
+        Some(CardTarget::DownloadOriginalImage {
+            attachment_id: "att-idle".into(),
+        }),
+        "未下载原图按钮保持普通左键可点"
+    );
+
+    let img2_y = (0..area.height)
+        .find(|&y| rows[usize::from(y)].contains("gemini-r1-2.webp"))
+        .expect("img2 row");
+    let dl_done_x = rows[usize::from(img2_y)]
+        .find("Downloaded]")
+        .expect("done btn col") as u16;
+    let plain_dl_done = crate::ui::main_content::lx::press_content_hit(
+        area,
+        &lx,
+        dl_done_x,
+        img2_y,
+        KeyModifiers::NONE,
+        &mut pane_cache,
+    )
+    .expect("plain dl done");
+    assert_eq!(
+        plain_dl_done.2, None,
+        "已下载原图按钮在普通左键下不弹出文件管理器"
+    );
+
+    let cmd_dl_done = crate::ui::main_content::lx::press_content_hit(
+        area,
+        &lx,
+        dl_done_x,
+        img2_y,
+        KeyModifiers::SUPER,
+        &mut pane_cache,
+    )
+    .expect("cmd dl done");
+    assert_eq!(
+        cmd_dl_done.2,
+        Some(CardTarget::DownloadOriginalImage {
+            attachment_id: "att-done".into(),
+        }),
+        "Cmd/Ctrl + 点击已下载原图按钮触发定位原图"
+    );
+}

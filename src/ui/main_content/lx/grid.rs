@@ -29,6 +29,14 @@ pub(crate) enum GridCodeRow {
     Body { bar_col: u16 },
 }
 
+/// 网格中单行的超链接热区（列偏移相对 `Grid.area.x`，左闭右开 `start_col..end_col`）。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct GridLinkSpan {
+    pub(crate) start_col: u16,
+    pub(crate) end_col: u16,
+    pub(crate) url: String,
+}
+
 /// 一个待绘制单元格。
 #[derive(Clone, Copy)]
 pub(super) struct Glyph {
@@ -51,6 +59,7 @@ pub(crate) struct Grid {
     cells: Vec<Glyph>,
     table_rows: Vec<Option<GridTableRow>>,
     code_rows: Vec<Option<GridCodeRow>>,
+    link_rows: Vec<Vec<GridLinkSpan>>,
 }
 
 impl Grid {
@@ -60,6 +69,7 @@ impl Grid {
             cells: vec![Glyph::blank(); usize::from(area.width) * usize::from(area.height)],
             table_rows: vec![None; usize::from(area.height)],
             code_rows: vec![None; usize::from(area.height)],
+            link_rows: vec![Vec::new(); usize::from(area.height)],
         }
     }
 
@@ -103,6 +113,40 @@ impl Grid {
     /// 读取相对行 `dy`（`0..area.height`）的代码块行元数据。
     pub(super) fn code_row_at(&self, dy: u16) -> Option<GridCodeRow> {
         self.code_rows.get(usize::from(dy)).copied().flatten()
+    }
+
+    /// 登记第 `y` 行屏幕列 `[x, x + cols)` 的超链接热区（自动裁剪到 `area` 范围内）。
+    pub(super) fn set_link_span(&mut self, x: u16, y: u16, cols: u16, url: &str) {
+        if cols == 0 || y < self.area.y || x >= self.area.right() {
+            return;
+        }
+        let dy = y - self.area.y;
+        if dy >= self.area.height {
+            return;
+        }
+        let start_col = x.saturating_sub(self.area.x);
+        let end_col = x
+            .saturating_add(cols)
+            .min(self.area.right())
+            .saturating_sub(self.area.x);
+        if start_col < end_col
+            && let Some(links) = self.link_rows.get_mut(usize::from(dy))
+        {
+            links.push(GridLinkSpan {
+                start_col,
+                end_col,
+                url: url.to_string(),
+            });
+        }
+    }
+
+    /// 读取相对坐标 `(dx, dy)` 命中的超链接 URL。
+    pub(super) fn link_at(&self, dx: u16, dy: u16) -> Option<&str> {
+        self.link_rows
+            .get(usize::from(dy))?
+            .iter()
+            .find(|span| dx >= span.start_col && dx < span.end_col)
+            .map(|span| span.url.as_str())
     }
 
     fn index(&self, x: u16, y: u16) -> Option<usize> {
