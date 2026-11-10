@@ -575,6 +575,7 @@ async function runNonChatAction(currentUrl) {
       if (!pendingImg) break;
       await new Promise((r) => setTimeout(r, 200));
     }
+    await installDomMarkdown();
     const loaded = await js(`
       (() => {
         const sessionId = ${JSON.stringify(SESSION_ID)};
@@ -610,13 +611,10 @@ async function runNonChatAction(currentUrl) {
         nodes.forEach((node, idx) => {
           const tag = node.tagName.toLowerCase();
           if (tag === 'user-query') {
-            const hidden = [];
-            node.querySelectorAll('button, mat-icon, .cdk-visually-hidden').forEach((el) => {
-              hidden.push([el, el.style.display]);
-              el.style.display = 'none';
-            });
-            const text = (node.innerText || '').replace(/\\r\\n/g, '\\n').trim();
-            for (const [el, prev] of hidden) el.style.display = prev;
+            const textEl = node.querySelector('.query-text, .user-query-bubble-with-background') || node;
+            const text = typeof window.__lxHtmlToMarkdown === 'function'
+              ? window.__lxHtmlToMarkdown(textEl, { streaming: false })
+              : (textEl.textContent || '').replace(/\\r\\n/g, '\\n').trim();
             const files = Array.from(node.querySelectorAll('[aria-label], .file-preview, img[alt]'))
               .map((el) => (el.getAttribute('alt') || el.getAttribute('aria-label') || '').trim())
               .filter((n) => n && n !== '修改' && n !== '复制' && !n.includes('提示'));
@@ -632,38 +630,13 @@ async function runNonChatAction(currentUrl) {
           } else if (tag === 'model-response') {
             assistantTurn += 1;
             const thoughtEl = node.querySelector('model-thoughts, thinking-overlay, .thoughts-content');
-            let thinking = '';
-            if (thoughtEl) {
-              const hiddenT = [];
-              thoughtEl.querySelectorAll('button, mat-icon, .cdk-visually-hidden').forEach((el) => {
-                hiddenT.push([el, el.style.display]);
-                el.style.display = 'none';
-              });
-              thinking = (thoughtEl.innerText || '').replace(/\\r\\n/g, '\\n').trim();
-              for (const [el, prev] of hiddenT) el.style.display = prev;
-            }
+            const thinking = thoughtEl && typeof window.__lxHtmlToMarkdown === 'function'
+              ? window.__lxHtmlToMarkdown(thoughtEl, { streaming: false })
+              : '';
             const msgEl = node.querySelector('message-content .markdown, message-content') || node;
-            const hiddenM = [];
-            msgEl.querySelectorAll(
-              '.cdk-visually-hidden, source-footnote, sources-carousel-inline, sources-list, button, mat-icon'
-            ).forEach((el) => {
-              hiddenM.push([el, el.style.display]);
-              el.style.display = 'none';
-            });
-            const tempCodeNodes = [];
-            const bt = String.fromCharCode(96);
-            msgEl.querySelectorAll('code').forEach((c) => {
-              if (!c.closest('pre, code-block')) {
-                const open = document.createTextNode(bt);
-                const close = document.createTextNode(bt);
-                c.insertBefore(open, c.firstChild);
-                c.appendChild(close);
-                tempCodeNodes.push(open, close);
-              }
-            });
-            const text = (msgEl.innerText || '').replace(/\\r\\n/g, '\\n').trim();
-            for (const tn of tempCodeNodes) tn.remove();
-            for (const [el, prev] of hiddenM) el.style.display = prev;
+            const text = typeof window.__lxHtmlToMarkdown === 'function'
+              ? window.__lxHtmlToMarkdown(msgEl, { streaming: false })
+              : (msgEl.textContent || '').replace(/\\r\\n/g, '\\n').trim();
             const imageUrls = [];
             const seenImg = new Set();
             node

@@ -330,8 +330,18 @@ fn render_blocks_stateful(
             index += 1;
             continue;
         }
-        // 普通段落行：行内渲染。
-        lines.push(MdLine::spans(0, inline_spans(trimmed)));
+        // 普通段落行：行内渲染（若仍处于列表上下文内，续段按当前列表层级的正文列缩进）。
+        let cont_indent = if state.list_indents.is_empty() {
+            0
+        } else {
+            indent(state.list_indents.len() - 1).saturating_add(2)
+        };
+        let body = if cont_indent > 0 {
+            trimmed.trim_start()
+        } else {
+            trimmed
+        };
+        lines.push(MdLine::spans(cont_indent, inline_spans(body)));
         index += 1;
     }
     lines

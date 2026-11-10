@@ -3,6 +3,9 @@
 //! 脚本经 stdin 交给 `ego-browser nodejs`，用 `@@LX_AI_WEB@@` 前缀的 NDJSON 行回投
 //! 增量与终态；本模块只做纯数据解析，不触碰 `AppState` 或子进程。
 
+/// 嵌入式共享 DOM → Markdown 序列化脚本（供 DeepSeek / Gemini / Grok 注入页面上下文）。
+pub const DOM_MARKDOWN_JS: &str = include_str!("dom_markdown.js");
+
 /// 嵌入式 DeepSeek 网页驱动辅助脚本（输出、新对话、CDP 文件上传与会话管理）。
 pub const DEEPSEEK_HELPERS_SCRIPT: &str = include_str!("deepseek_helpers.js");
 
@@ -287,6 +290,8 @@ pub fn script_source(site: crate::app::state::AiWebSite, params: ScriptParams<'_
     source.push_str(",\n  downloadStem: ");
     source.push_str(&json_string(params.download_stem.unwrap_or("")));
     source.push_str(&format!(",\n  editIndex: {edit_index},\n}};\n"));
+    source.push_str(DOM_MARKDOWN_JS);
+    source.push('\n');
     source.push_str(helpers_script);
     source.push('\n');
     // Gemini 的生图辅助函数单独成文件（`gemini_helpers.js` 已接近千行上限），

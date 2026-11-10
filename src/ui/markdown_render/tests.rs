@@ -780,3 +780,31 @@ fn table_lines_carry_shared_layout_meta_with_soft_wrap_and_br_flags() {
         "极窄宽度下表格列宽应收缩至单字下限，不得保持自然总宽"
     );
 }
+
+#[test]
+fn list_continuation_paragraph_keeps_list_indent_across_soft_wraps() {
+    let src = "### 一、强制提高社保与生育意愿的直接冲突\n\n- **实际到手收入承压**\n  低收入群体与初入职场的青年人群体抗风险能力最弱。严格按实际工资基数缴纳社保后，个人扣缴部分直接减少了当期可支配现金。\n- **隔代抚养支持链条受阻**\n  中国绝大多数双职工家庭的育儿模式高度依赖祖辈照料。";
+    let lines = render_wrapped_code_blocks(src, 40);
+    assert_eq!(lines[0].text(), "一、强制提高社保与生育意愿的直接冲突");
+    assert_eq!(lines[0].spans[0].1, style::md_read_heading_level(3));
+
+    let first_bullet = lines
+        .iter()
+        .position(|line| line.text().starts_with("• "))
+        .expect("first bullet");
+    let second_bullet = lines[first_bullet + 1..]
+        .iter()
+        .position(|line| line.text().starts_with("• "))
+        .map(|idx| first_bullet + 1 + idx)
+        .expect("second bullet");
+    assert!(
+        second_bullet > first_bullet + 2,
+        "continuation paragraph should wrap into multiple lines: {lines:?}"
+    );
+    for cont_line in &lines[first_bullet + 1..second_bullet] {
+        assert_eq!(
+            cont_line.indent, 2,
+            "every wrapped line of list continuation paragraph must stay indented at column 2: {cont_line:?}"
+        );
+    }
+}
