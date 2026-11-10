@@ -5,6 +5,7 @@ pub mod chat;
 pub mod connect;
 pub mod mcp;
 pub mod skills;
+mod steer;
 pub mod todo;
 pub mod workspace;
 
@@ -19,15 +20,11 @@ use crate::app::tooltip::{BlockButtonKind, TemplateButtonKind, TooltipTarget};
 use crate::layout::PaneId;
 
 pub use connect::*;
+pub use steer::*;
 pub use todo::*;
 pub use workspace::*;
 
-/// 快捷键符号（全项目唯一来源，禁止在组件里另写字形）。
-///
-/// 统一规则：**修饰键与"需要按下的键"用符号，动作词保留全拼**——
-/// 修饰键（Shift `⇧`、Ctrl `^`、Cmd `⌘`）用符号省地方、窄面板里不易被截断；
-/// 动作词（`esc`/`cancel`/`close`）用文字一眼懂，全符号化（`⎋`/`⇥`）在部分
-/// 终端字体缺字形会显示成豆腐块。
+/// 快捷键符号（全项目唯一来源，禁止在组件里另写字形）：修饰键与动作键用符号，动作词保留全拼。
 pub mod key {
     /// Shift 修饰键。
     pub const SHIFT: &str = "⇧";
@@ -293,6 +290,7 @@ pub const LX_CHAT_STOP_PHRASES: [&str; 4] = [
     "esc again: stop",
     "esc stop",
 ];
+
 /// 数值 + 单位后缀（保留一位小数，整数值去掉 `.0`）：`1.2k` / `720k` / `1M`。
 fn scaled(value: f64, suffix: &str) -> String {
     let text = format!("{value:.1}");

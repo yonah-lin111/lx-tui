@@ -266,14 +266,6 @@ pub(super) fn start_stream(
         .insert(key.clone(), session_key.clone());
     // spawn 时冻结的模型：父会话登记一份，子 agent 从这里取。
     streams.frozen.insert(key.session.clone(), frozen.clone());
-    // 运行实例：同一聊天会话跨轮复用同一进程管理器；本轮执行上下文独立。
-    let turn_slot = key.session.clone();
-    let Some(runtime) = streams.runtime_for(prepared.cwd.clone(), &turn_slot) else {
-        // 没有进程事件通道（测试或非进程环境）：仍可执行文件工具，进程工具按失败返回。
-        fail_turn(sender, key, "process runtime unavailable");
-        return true;
-    };
-    let turn = runtime.turn(&key.generation.to_string());
     // 每轮绑定稳定 user message id：文件 mutation 的归属来自这里，不按 turn_index 猜。
     let Some(user_message_id) = state.pane_anywhere(key.pane).and_then(|pane| {
         pane.lx
@@ -288,11 +280,23 @@ pub(super) fn start_stream(
         fail_turn(sender, key, "user message unavailable");
         return true;
     };
+    let mutation_user = std::sync::Arc::new(std::sync::RwLock::new(user_message_id));
+    streams
+        .mutation_users
+        .insert(key.clone(), mutation_user.clone());
+    // 运行实例：同一聊天会话跨轮复用同一进程管理器；本轮执行上下文独立。
+    let turn_slot = key.session.clone();
+    let Some(runtime) = streams.runtime_for(prepared.cwd.clone(), &turn_slot) else {
+        // 没有进程事件通道（测试或非进程环境）：仍可执行文件工具，进程工具按失败返回。
+        fail_turn(sender, key, "process runtime unavailable");
+        return true;
+    };
+    let turn = runtime.turn(&key.generation.to_string());
     let recorder = file_snapshots::HostRecorderFactory::new(
         sender.clone(),
         session_key.clone(),
         key.session.clone(),
-        user_message_id,
+        mutation_user,
     );
     // 读后版本保护：登记表按会话隔离，跨轮保留（读过的文件在后续轮次仍可用同一 token）。
     let reads = crate::chat::tools::read_registry(&key.session);

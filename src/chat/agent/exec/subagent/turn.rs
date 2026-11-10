@@ -398,6 +398,13 @@ impl ExecSubagentPool {
             AgentHostRequest::UserShellUpdates { reply } => {
                 let _ = reply.send(Vec::new());
             }
+            // 子 agent 模式不支持用户 steer：始终返回空批次与无 pending。
+            AgentHostRequest::SteerInputs { reply } => {
+                let _ = reply.send(Ok(Vec::new()));
+            }
+            AgentHostRequest::HasPendingSteers { reply } => {
+                let _ = reply.send(false);
+            }
         }
     }
 

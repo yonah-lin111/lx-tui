@@ -10,6 +10,7 @@ mod model_switch;
 mod process;
 mod recap;
 pub mod rewind;
+mod steer;
 mod subagent;
 mod tools;
 mod usage;
@@ -167,7 +168,7 @@ pub enum TurnOutcome {
 pub const SESSION_PAGE_SIZE: usize = 50;
 
 /// 单条消息正文最大字节数（防止异常响应撑爆库）。
-const MAX_MESSAGE_BYTES: usize = 2 * 1024 * 1024;
+pub(crate) const MAX_MESSAGE_BYTES: usize = 2 * 1024 * 1024;
 
 /// 首条用户消息预览的最大字符数。
 const PREVIEW_CHARS: usize = 120;

@@ -48,12 +48,15 @@ pub fn view_message_of(message: &ChatMessage, models: &ModelsSnapshot) -> ChatMe
         input_tokens: message.input_tokens,
         output_tokens: message.output_tokens,
         cache_read_tokens: message.cache_read_tokens,
-        duration_ms: message.completed_at_ms.map(|completed| {
-            completed
-                .saturating_sub(message.created_at_ms)
-                .saturating_sub(ask_wait_ms)
-                .max(0)
-        }),
+        duration_ms: (message.stop_reason.as_deref() != Some("steer"))
+            .then_some(message.completed_at_ms)
+            .flatten()
+            .map(|completed| {
+                completed
+                    .saturating_sub(message.created_at_ms)
+                    .saturating_sub(ask_wait_ms)
+                    .max(0)
+            }),
         // 报告 JSON 损坏不应让整条消息渲染失败：按「没有报告」处理。
         reports: message
             .subagent_reports

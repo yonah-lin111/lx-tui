@@ -402,7 +402,22 @@ pub(crate) fn close_workspace(state: &mut AppState, target: usize) {
     if display_removed {
         commit_prompt_buffer(state, target);
     }
-    state.workspaces.remove(target);
+    let removed = state.workspaces.remove(target);
+    if state.toast.is_none()
+        && let Some(mut rescued) = removed
+            .tabs
+            .iter()
+            .flat_map(|tab| {
+                tab.layout
+                    .pane_ids()
+                    .into_iter()
+                    .filter_map(move |id| tab.pane(id))
+            })
+            .find_map(|pane| pane.lx.toast.clone())
+    {
+        rescued.anchor = None;
+        state.toast = Some(rescued);
+    }
     if removed_active {
         state.active_workspace = state.active_workspace.min(state.workspaces.len() - 1);
         state.agent_scroll = 0;

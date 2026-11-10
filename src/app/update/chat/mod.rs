@@ -26,6 +26,7 @@ pub mod recap;
 pub mod rewind;
 mod session;
 mod slash;
+mod steer;
 mod subagent;
 mod subagent_cards;
 mod task_page;
@@ -85,6 +86,7 @@ pub use slash::{
     accept_slash_command, apply_models_changed, apply_slash_command, apply_slash_enter,
     open_history, open_model_picker, persist_default_model,
 };
+pub use steer::on_finish_ack;
 pub use subagent::{
     apply_deltas as apply_subagent_deltas, flush_subagent_cards, on_report_batch_committed,
     on_subagent_auto_compact, on_subagent_delta, on_subagent_finished, on_subagent_loaded,
@@ -140,6 +142,10 @@ pub fn try_send(state: &mut AppState, pane: PaneId) -> bool {
     }
     // 仅本地命令在跑：普通聊天冻结入队，等结果落库后再发送。
     if user_shell::queue_chat_while_shell_runs(state, pane) {
+        return true;
+    }
+    // 模型正在生成：Enter 作为 steer 进入待注入队列，不打断当前请求。
+    if steer::try_submit(state, pane) {
         return true;
     }
     // 先收集纯数据（避免长持窗格可变借用）。
@@ -292,8 +298,9 @@ pub fn on_turn_committed(
     committed: &crate::db::chat::TurnCommitted,
 ) -> bool {
     let models = state.models.clone();
-    // 先只读取出冻结草稿：历史记录要在拿窗格可变借用之前完成，避免同时借用 `state` 两处。
-    let frozen_draft = {
+    // 先只读取出冻结草稿与提升条数：历史记录要在拿窗格可变借用之前完成，
+    // 避免同时借用 `state` 两处。
+    let (frozen_draft, promoting_steers) = {
         let Some(target) = state.pane_anywhere(pane) else {
             return false;
         };
@@ -301,7 +308,7 @@ pub fn on_turn_committed(
             RequestState::Committing {
                 generation: g,
                 draft,
-            } if *g == generation => draft.clone(),
+            } if *g == generation => (draft.clone(), target.lx.chat.promoting_steers),
             _ => return false,
         }
     };
@@ -323,8 +330,14 @@ pub fn on_turn_committed(
     };
     let is_first_turn = target.lx.chat.session_id.is_none() && committed.turn_index == 0;
     let draft_for_title = frozen_draft.clone();
-    // 只清仍与冻结草稿相同的输入（期间用户编辑则保留新草稿）。
-    if target.lx.input.trim() == frozen_draft.trim() {
+    if promoting_steers > 0 {
+        // pending steer 提升为普通下一轮：消费已提交的队首批次，但不清输入框
+        //（input 里可能是用户在收尾期间新写的草稿）。
+        let take = promoting_steers.min(target.lx.chat.pending_steers.len());
+        target.lx.chat.pending_steers.drain(..take);
+        target.lx.chat.promoting_steers = 0;
+    } else if target.lx.input.trim() == frozen_draft.trim() {
+        // 只清仍与冻结草稿相同的输入（期间用户编辑则保留新草稿）。
         target.lx.clear();
     }
     // 发送成功：退出历史浏览态，否则下一次 `↑` 会从旧游标继续而非最新一条。
@@ -430,13 +443,19 @@ pub fn on_turn_failed(state: &mut AppState, pane: PaneId, generation: u64) -> bo
     ) {
         return false;
     }
+    let promoting_steers = target.lx.chat.promoting_steers;
     target.lx.chat.request = RequestState::Idle;
+    target.lx.chat.promoting_steers = 0;
     show_lx_hint(
         state,
         pane,
         InputHintLevel::Error,
         text::LX_CHAT_COMMIT_FAILED,
     );
+    if promoting_steers > 0 {
+        // 提升失败不自动重试：pending 退回输入框，避免停在 Idle + pending 的悬空状态。
+        steer::restore_pending_to_input(state, pane);
+    }
     refresh_lx_status(state, pane);
     true
 }
@@ -630,39 +649,6 @@ pub fn on_stream_finished(
     true
 }
 
-/// 最终 DB 写入成功：回 Idle；失败保留内存 partial 并提示保存失败。
-pub fn on_finish_ack(state: &mut AppState, key: &RequestKey, success: bool) -> bool {
-    let Some(target) = state.pane_mut_anywhere(key.pane) else {
-        return false;
-    };
-    if !matches!(
-        &target.lx.chat.request,
-        RequestState::Finishing {
-            key: active,
-            ..
-        } if active == key
-    ) {
-        return false;
-    }
-    if success {
-        target.lx.chat.request = RequestState::Idle;
-        // 模型轮次结束后按 FIFO 分派排队项（忙时 Tab 排队的 shell 在这里开始）。
-        user_shell::on_user_shell_terminal(state, key.pane);
-        // 没有用户提交占位时，才允许后台报告自动起轮。用户输入优先。
-        request_report_drain_if_idle(state, key.pane);
-    } else {
-        // Finishing（保存失败）：保留内存 partial，不能伪装成可恢复历史。
-        show_lx_hint(
-            state,
-            key.pane,
-            InputHintLevel::Error,
-            text::LX_CHAT_SAVE_FAILED,
-        );
-    }
-    refresh_lx_status(state, key.pane);
-    true
-}
-
 /// 空闲且没有用户排队提交时，请求后台报告 drain。
 ///
 /// 同一窗格只挂一个 effect；用户输入优先的判定与事件层 `parent_idle` 保持一致。
@@ -690,9 +676,16 @@ pub(crate) fn request_report_drain_if_idle(state: &mut AppState, pane: PaneId) -
 /// Esc 停止的待命窗口：窗口内再按一次才真正停止（与撤销待命统一为 3 秒）。
 pub const STOP_ARM_WINDOW: Duration = Duration::from_secs(3);
 
-/// 流中按 `Esc`（对齐 opencode 的双击停止）：首次只**待命**并显示提示，
-/// 窗口内再按一次才停止；非流中吞掉（返回 false 不置脏）。
+/// 流中按 `Esc`：若存在待生效的 pending steer，单次 `Esc` 优先按 LIFO 弹出最近一条并回显输入框；
+/// 队列为空时（对齐 opencode 的双击停止）首次只**待命**并显示提示，窗口内再按一次才停止。
 pub fn escape_stop(state: &mut AppState, pane: PaneId) -> bool {
+    if state
+        .pane_anywhere(pane)
+        .is_some_and(|target| target.lx.ask.is_none())
+        && steer::recall_last(state, pane)
+    {
+        return true;
+    }
     let Some(target) = state.pane_mut_anywhere(pane) else {
         return false;
     };

@@ -745,6 +745,7 @@ pub fn on_session_reloaded(
         .iter()
         .map(|message| super::view::view_message_of(message, &models))
         .collect();
+    target.lx.chat.rebuild_steered_user_messages(messages);
     target.lx.set_project_root(project_root);
     target.lx.chat.notices = notices
         .iter()

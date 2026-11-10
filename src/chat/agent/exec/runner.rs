@@ -269,6 +269,13 @@ impl ExecRunner<'_> {
             AgentHostRequest::UserShellUpdates { reply } => {
                 let _ = reply.send(Vec::new());
             }
+            // exec / 无头模式没有交互式 steer：始终返回空批次与无 pending。
+            AgentHostRequest::SteerInputs { reply } => {
+                let _ = reply.send(Ok(Vec::new()));
+            }
+            AgentHostRequest::HasPendingSteers { reply } => {
+                let _ = reply.send(false);
+            }
             AgentHostRequest::Subagent { reply, .. } => {
                 let _ = reply.send(Err(HostError::Cancelled));
             }

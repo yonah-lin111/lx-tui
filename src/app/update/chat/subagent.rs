@@ -670,6 +670,7 @@ pub fn on_subagent_loaded(
         .iter()
         .map(|message| view_message_of(message, &models))
         .collect();
+    run.chat.rebuild_steered_user_messages(messages);
     run.chat.set_project_root(project_root);
     run.loaded = true;
     run.rows_dirty = true;

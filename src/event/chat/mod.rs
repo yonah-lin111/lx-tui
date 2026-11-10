@@ -15,6 +15,7 @@ pub mod recap;
 pub mod rewind;
 mod runtime;
 pub(crate) mod skills;
+pub(crate) mod steer;
 mod stream_start;
 pub(crate) mod subagent;
 mod timeline;
@@ -96,6 +97,8 @@ pub struct ChatStreams {
     /// 会话的 **DB 工作区键**（`/resume` 共享键，通常是仓库主 checkout），不是工具执行
     /// cwd：linked worktree 里执行时仍用共享键落库，用执行 cwd 会报 `workspace missing`。
     db_workspaces: HashMap<RequestKey, PathBuf>,
+    /// 本轮 mutation 归属的当前 user message id；steer 生效时原地更新。
+    mutation_users: HashMap<RequestKey, std::sync::Arc<std::sync::RwLock<String>>>,
     /// 本轮持有的跨进程 session guard；直到终态才释放。
     guards: HashMap<RequestKey, crate::platform::FileGuard>,
     /// `BeginChatTurn` 之前就取得的 guard：续轮必须在 DB 事务之前锁住会话。
@@ -251,6 +254,7 @@ impl ChatStreams {
         self.cancels.remove(key);
         self.checkpoints.remove(key);
         self.db_workspaces.remove(key);
+        self.mutation_users.remove(key);
         self.guards.remove(key);
         self.user_shell_injected.remove(key);
         self.pending_begins.retain(|pending| &pending.key != key);
@@ -655,6 +659,13 @@ pub fn handle_agent_host_event(
             // 只读握手：命令结果仍以数据库为事实来源。
             let updates = user_shell::poll_updates(state, streams, persistence, &key);
             let _ = reply.send(updates);
+            false
+        }
+        AgentHostEvent::SteerInputs { key, reply } => {
+            steer::deliver(state, streams, persistence, key, reply)
+        }
+        AgentHostEvent::HasPendingSteers { key, reply } => {
+            let _ = reply.send(steer::has_pending(state, &key));
             false
         }
         AgentHostEvent::Subagent {

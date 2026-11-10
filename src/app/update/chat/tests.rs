@@ -12,6 +12,7 @@ mod prompt_history;
 mod rewind;
 mod session;
 mod slash_panels;
+mod steer;
 mod stop;
 mod subagent;
 mod system_rewind;

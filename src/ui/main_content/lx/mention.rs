@@ -269,10 +269,7 @@ fn panel_data(lx: &Lx, width: u16) -> Option<PanelData> {
             Some(PanelData {
                 rows: filtered
                     .iter()
-                    .map(|item| {
-                        let (label, detail) = mention::subagent_item_text(item);
-                        PanelRow::File(mention::subagent_row(&label, &detail, detail_width))
-                    })
+                    .map(|item| PanelRow::File(mention::subagent_row(item, detail_width)))
                     .collect(),
                 active: lx.mention().ref_active(),
                 anchor: Some(lx.mention().ref_anchor()),

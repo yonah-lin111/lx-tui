@@ -260,7 +260,9 @@ mod source;
 pub(crate) use source::{HistorySource, HistoryViewport};
 use sticky::sticky_candidate;
 
-pub(crate) use sticky::{render_sticky_prompt, sticky_rect, truncate_with_ellipsis};
+#[cfg(test)]
+pub(crate) use sticky::render_sticky_prompt;
+pub(crate) use sticky::{render_sticky_prompt_with_steer, sticky_rect, truncate_with_ellipsis};
 
 pub use cards::{CardHit, CardKind};
 

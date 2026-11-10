@@ -125,6 +125,25 @@ pub fn chat_agents_md() -> Style {
     Style::default().fg(LX_SKY_BLUE)
 }
 
+/// `@` 面板 `Subagents` 存活实例（`Active`）样式：按运行状态分色（`running` 琥珀橙、`blocked` 警告黄、`idle` 翡翠绿）。
+pub fn mention_subagent_active(status: &str) -> Style {
+    match status {
+        "running" => Style::default().fg(Color::Indexed(CHAT_STEP_AMBER)),
+        "blocked" => Style::default().fg(Color::Yellow),
+        _ => Style::default().fg(Color::Indexed(CHAT_STEP_GREEN)),
+    }
+}
+
+/// `@` 面板 `Subagents` 内置角色（`explorer` / `executor` / `monitor`）样式：品牌冰蓝（`Indexed 117`）。
+pub fn mention_subagent_builtin() -> Style {
+    Style::default().fg(LX_SKY_BLUE)
+}
+
+/// `@` 面板 `Subagents` 自定义角色（User / Project）样式：品牌柔粉（`Indexed 218`）。
+pub fn mention_subagent_custom() -> Style {
+    Style::default().fg(LX_PINK)
+}
+
 /// 工具行的固定动词（`Read` / `Search` / `Edit` / `Write`）：已完成——翡翠绿、不加粗。
 pub fn chat_tool_verb() -> Style {
     Style::default().fg(Color::Indexed(CHAT_STEP_GREEN))
@@ -330,12 +349,15 @@ fn lerp_indexed(from: Color, to: Color, t: f32) -> Color {
 /// 会话标题胶囊配色槽位总数。
 pub const SESSION_TITLE_PALETTE_COUNT: u8 = 8;
 
+/// 流中 steer 用户消息整块底色与会话标题胶囊槽位 1 共用的低饱和暗海蓝（`#1b2a38`）。
+pub const LX_STEER_USER_BG: Color = Color::Rgb(0x1b, 0x2a, 0x38);
+
 /// 会话标题胶囊柔和暗色配色池（结合 Claude Code 暗色胶囊风格与 LX 品牌 Logo 色调）。
 pub const SESSION_TITLE_PALETTE: [(Color, Color); 8] = [
     // 0: LX 品牌柔樱粉：暗暮粉紫底 (#2e1e29) + 柔樱粉字 (#e8a6c4)
     (Color::Rgb(0x2e, 0x1e, 0x29), Color::Rgb(0xe8, 0xa6, 0xc4)),
     // 1: LX 品牌柔天蓝：暗海蓝底 (#1b2a38) + 柔天蓝字 (#8fc7e8)
-    (Color::Rgb(0x1b, 0x2a, 0x38), Color::Rgb(0x8f, 0xc7, 0xe8)),
+    (LX_STEER_USER_BG, Color::Rgb(0x8f, 0xc7, 0xe8)),
     // 2: LX 品牌柔冰青：暗松石青底 (#1a2e30) + 柔冰青字 (#88d4d6)
     (Color::Rgb(0x1a, 0x2e, 0x30), Color::Rgb(0x88, 0xd4, 0xd6)),
     // 3: LX 品牌柔薰衣草紫：暗夜紫底 (#272138) + 柔薰衣草紫字 (#baaee8)

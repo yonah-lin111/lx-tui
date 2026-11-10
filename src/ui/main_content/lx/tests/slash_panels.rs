@@ -421,6 +421,62 @@ fn mention_panel_tabs_render_and_hit_test_in_lx() {
 }
 
 #[test]
+fn mention_subagents_items_use_distinct_colors_by_kind_and_status() {
+    use crate::app::state::lx::mention::{SubagentMentionItem, SubagentRunMentionEntry};
+    use crate::config::subagents::{BaseRole, ResolvedRoleSpec, RoleCapabilities};
+    use crate::ui::mention::subagent_item_style;
+    use ratatui::style::Color;
+
+    let running = SubagentRunMentionEntry {
+        agent_id: "a1".into(),
+        nickname: Some("Turing".into()),
+        role: "explorer".into(),
+        status: "running".into(),
+        title: "scan".into(),
+    };
+    let idle = SubagentRunMentionEntry {
+        status: "idle".into(),
+        ..running.clone()
+    };
+    let blocked = SubagentRunMentionEntry {
+        status: "blocked".into(),
+        ..running.clone()
+    };
+    let builtin = ResolvedRoleSpec {
+        name: "explorer".into(),
+        base_role: BaseRole::Explorer,
+        is_builtin: true,
+        is_project_scoped: false,
+        description: "desc".into(),
+        system_prompt_override: None,
+        default_model: None,
+        lock_model: false,
+        capabilities: RoleCapabilities::default(),
+        nickname_candidates: Vec::new(),
+    };
+    let custom = ResolvedRoleSpec {
+        name: "auditor".into(),
+        is_builtin: false,
+        ..builtin.clone()
+    };
+
+    let s_running = subagent_item_style(&SubagentMentionItem::Active(&running));
+    let s_idle = subagent_item_style(&SubagentMentionItem::Active(&idle));
+    let s_blocked = subagent_item_style(&SubagentMentionItem::Active(&blocked));
+    let s_builtin = subagent_item_style(&SubagentMentionItem::Role(&builtin));
+    let s_custom = subagent_item_style(&SubagentMentionItem::Role(&custom));
+
+    assert_eq!(s_running.fg, Some(Color::Indexed(208)));
+    assert_eq!(s_idle.fg, Some(Color::Indexed(42)));
+    assert_eq!(s_blocked.fg, Some(Color::Yellow));
+    assert_eq!(s_builtin.fg, Some(Color::Indexed(117)));
+    assert_eq!(s_custom.fg, Some(Color::Indexed(218)));
+    assert_ne!(s_running, s_builtin);
+    assert_ne!(s_idle, s_builtin);
+    assert_ne!(s_builtin, s_custom);
+}
+
+#[test]
 fn mention_subagents_tab_stays_visible_in_narrow_pane() {
     // 42 列下五个 Tab 放不下：窗口右移保证当前 Subagents 可见，命中仍返回原始下标 4。
     let area = Rect::new(0, 0, 42, 24);

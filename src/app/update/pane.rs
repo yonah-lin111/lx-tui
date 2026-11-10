@@ -648,7 +648,16 @@ fn lx_history_route(state: &AppState, pane: PaneId, command: LxInput) -> LxHisto
             Some(next) => LxHistoryRoute::Move(next),
             None => LxHistoryRoute::None,
         },
-        LxInput::Escape if lx.history_browsing() => LxHistoryRoute::EndBrowse,
+        LxInput::Escape
+            if lx.history_browsing()
+                && (lx.chat.pending_steers.is_empty()
+                    || !matches!(
+                        lx.chat.request,
+                        crate::app::state::RequestState::Streaming { .. }
+                    )) =>
+        {
+            LxHistoryRoute::EndBrowse
+        }
         // 其余编辑类命令离开浏览态；导航类（Left/Right/Home/End/词移动）只移动光标，
         // 不改变文本，因此保留浏览态（继续 `↑`/`↓` 仍沿同一条历史前后翻）。
         command if edits_text(command) => LxHistoryRoute::ClearBrowse,
