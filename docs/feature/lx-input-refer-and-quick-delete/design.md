@@ -17,7 +17,7 @@
 | --- | --- | --- |
 | **D1** | **快捷输入候选来源** | 仅收集 **当前输入框文本中已有的引用** + **当前会话中用户历史消息发送过的提及（`@相对路径`）与附件路径**。不收集 AI 工具调用文件，不正则抓取 AI 回复的纯文本。 |
 | **D2** | **快捷引用插入格式** | 统一采用 **`@[ref-content]/<末两段路径> `**（默认保留最后两个 `/` 的内容，不足两段用全部段，例如 `@[ref-content]/src/main.rs `，目录带尾斜杠 `@[ref-content]/agent/lx-agent/ `）。**Prompt 编辑器同步统一切换为该格式**。 |
-| **D3** | **用户消息展示行为** | 发送后，用户消息正文**完整保留** `@[ref-content]/...` 文本（不被 `strip_references_for_display` 剥离）；**用户消息卡片底部的附件折叠树（`ref_lines`）绝不出现快捷引用的条目**。 |
+| **D3** | **用户消息展示行为** | 发送后，用户消息正文与置顶悬浮行**完整保留** `@[ref-content]/...` 及全部 `@` 引用原文（详见 `docs/feature/lx-keep-at-reference/design.md`）；**用户消息卡片底部的附件折叠树（`ref_lines`）绝不出现快捷引用的条目**。 |
 | **D4** | **模型上下文装配** | 发送消息前，`chat::prepare` 将 `@[ref-content]/<路径>` 识别为有效的文件/目录引用，读取文件内容装配进 Prompt 提示词上下文，保证 AI 能够感知该文件。 |
 | **D5** | **快捷删除触发口径** | **严格对齐 Prompt**：光标紧跟在引用标记后的**空格**处按 Backspace 时，一次性删除整块标记（含空格）；若光标在标记内部或末尾无空格，按普通字符退格（支持用户微调路径）。覆盖 `@相对路径 `、`@[refer-*](path) `、`@[ref-content]/<路径> ` 及向后兼容的 `@ref/... `。 |
 | **D6** | **面板交互与互斥优先级** | 优先级为：粘贴面板 > `@` 提及面板 > **字母快捷面板 (Refer)** > `/` 斜杠面板 > Markdown 块命令面板。`Up/Down` 循环移动高亮，`Enter/Tab` 确认插入，`Esc` 关闭并压制到下一次移动/编辑，支持鼠标悬停与点击。 |
@@ -89,7 +89,7 @@ src/ui/main_content/lx/history/snapshot.rs <-- 过滤 ref_lines，不在底部�
      - `marker_start` 与 `marker_end` 记录标记位置；
      - 标记此 attachment 为 `is_inline_refer: true`（或通过专用 AttachmentKind 区分）；
 2. 历史时间线渲染：
-   - 正文展示：`strip_references_for_display` 跳过 `is_inline_refer` 的引用，使其在正文文字中保持可见（如显示为 `请看 @[ref-content]/src/main.rs`）；
+   - 正文展示：消息列表气泡（`snapshot.rs`）与置顶悬浮行（`sticky.rs`）完整保留 `@[ref-content]/...` 及所有 `@` 引用原文（`strip_references_for_display` 仅用于会话标题/摘要提取，且同样跳过 `@[ref-content]/...`）；
    - 底部附件行：`BlockPaint::UserText` 的 `ref_lines` 过滤掉 `is_inline_refer`，因此底部不会出现树状附件卡片；
 3. 后台上下文装配：
    - 无论是否为 inline refer，只要是附件，系统均读取其物理文件内容，组装至发送给 LLM 的 context payload 中。

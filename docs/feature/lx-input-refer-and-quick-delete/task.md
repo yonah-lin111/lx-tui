@@ -67,7 +67,7 @@
 
 - [x] 5.1 升级 `src/chat/prepare.rs`
   - [x] 支持解析 `@[ref-content]/<相对路径>` 格式作为附件，加载物理文件供模型使用
-  - [x] 改造 `strip_references_for_display`：不剥离 `@[ref-content]/`，在用户消息正文中完整保留
+  - [x] 改造 `strip_references_for_display`：不剥离 `@[ref-content]/`（注：消息列表与置顶行后续已在 `lx-keep-at-reference` 中升级为保留全部 `@` 引用原文）
 - [x] 5.2 调整 `src/ui/main_content/lx/history/snapshot.rs`
   - [x] 在构建 `ref_lines` 附件树时，排除 `@[ref-content]/` 快捷引用，不在底部展示树状分支
   - [x] 编写时间线渲染快照测试

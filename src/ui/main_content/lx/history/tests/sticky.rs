@@ -192,3 +192,75 @@ fn sticky_text_is_truncated_with_ellipsis_to_width() {
     assert_eq!(truncate_with_ellipsis("中文中文", 5), "中文…");
     assert_eq!(truncate_with_ellipsis("abc", 3), "abc");
 }
+
+#[test]
+fn sticky_text_keeps_at_references_with_attachment_markers() {
+    let raw = "请重构 @src/ui/main_content/lx/ 和 @[refer-file](src/main.rs) 的渲染";
+    let mut message = message("user", "complete", vec![text_part(raw)]);
+    let first_start = raw.find("@src/ui/main_content/lx/").expect("first @");
+    let first_end = first_start + "@src/ui/main_content/lx/ ".len();
+    let second_start = raw.find("@[refer-file](src/main.rs)").expect("second @");
+    let second_end = second_start + "@[refer-file](src/main.rs) ".len();
+    message.attachments = vec![
+        crate::db::chat::MessageAttachmentMeta {
+            id: "att-1".into(),
+            position: 0,
+            kind: crate::db::chat::MessageAttachmentKind::Folder,
+            label: "src/ui/main_content/lx/".into(),
+            marker_start: Some(first_start),
+            marker_end: Some(first_end),
+            source_path: Some("src/ui/main_content/lx".into()),
+            mime: None,
+            width: None,
+            height: None,
+        },
+        crate::db::chat::MessageAttachmentMeta {
+            id: "att-2".into(),
+            position: 1,
+            kind: crate::db::chat::MessageAttachmentKind::File,
+            label: "src/main.rs".into(),
+            marker_start: Some(second_start),
+            marker_end: Some(second_end),
+            source_path: Some("src/main.rs".into()),
+            mime: None,
+            width: None,
+            height: None,
+        },
+    ];
+
+    assert_eq!(
+        super::super::sticky::sticky_text(&message).as_deref(),
+        Some(raw)
+    );
+}
+
+#[test]
+fn sticky_text_skips_empty_leading_text_part_and_falls_back_on_attachment_only_message() {
+    let multi = message(
+        "user",
+        "complete",
+        vec![text_part("   "), text_part("第二段含 @src/lib.rs 引用")],
+    );
+    assert_eq!(
+        super::super::sticky::sticky_text(&multi).as_deref(),
+        Some("第二段含 @src/lib.rs 引用")
+    );
+
+    let mut att_only = message("user", "complete", vec![text_part("")]);
+    att_only.attachments = vec![crate::db::chat::MessageAttachmentMeta {
+        id: "att-folder".into(),
+        position: 0,
+        kind: crate::db::chat::MessageAttachmentKind::Folder,
+        label: String::new(),
+        marker_start: None,
+        marker_end: None,
+        source_path: Some("src/ui".into()),
+        mime: None,
+        width: None,
+        height: None,
+    }];
+    assert_eq!(
+        super::super::sticky::sticky_text(&att_only).as_deref(),
+        Some("[Folder]")
+    );
+}

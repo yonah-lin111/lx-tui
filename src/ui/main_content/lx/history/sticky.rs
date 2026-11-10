@@ -50,34 +50,54 @@ pub(super) fn sticky_candidate(
         .find(|candidate| rows[*candidate].is_user && sticky_text(&messages[*candidate]).is_some())
 }
 
-/// 置顶行摘要：剥离有效引用标记后的用户消息首个正文块的前 512 字符 → 控制字符转空格 → 空白折叠为单行；
-/// 若剥离后无文本但包含图片/文件引用，回退为图片占位文案或首个引用名；全空白返回 None（该条不钉）。
+/// 置顶行摘要：保留用户消息首个非空正文块的 `@` 引用原文，取前 512 字符 → 控制字符转空格 → 空白折叠为单行；
+/// 若无正文文本但包含图片/文件引用，回退为图片占位文案、首个非空引用名或附件数量占位；全空白返回 None（该条不钉）。
 pub(super) fn sticky_text(message: &crate::app::state::ChatMessageView) -> Option<String> {
-    let part = message.text_parts().next()?;
-    let stripped = crate::chat::strip_references_for_display(&part.content, &message.attachments);
-    let stripped = crate::app::paste::Projection::new(
-        &stripped,
-        &crate::app::paste::ExpandedPastes::default(),
-    )
-    .text()
-    .to_string();
-    let display = if stripped.is_empty() && !message.attachments.is_empty() {
+    let mut has_text_part = false;
+    let mut projected = String::new();
+    for part in message.text_parts() {
+        has_text_part = true;
+        let candidate = crate::app::paste::Projection::new(
+            part.content.trim(),
+            &crate::app::paste::ExpandedPastes::default(),
+        )
+        .text()
+        .to_string();
+        if !candidate.trim().is_empty() {
+            projected = candidate;
+            break;
+        }
+    }
+    if !has_text_part {
+        return None;
+    }
+    let display = if projected.is_empty() && !message.attachments.is_empty() {
         let image_count = message
             .attachments
             .iter()
             .filter(|att| att.kind == crate::db::chat::MessageAttachmentKind::Image)
             .count();
+        let folder_count = message
+            .attachments
+            .iter()
+            .filter(|att| att.kind == crate::db::chat::MessageAttachmentKind::Folder)
+            .count();
         if image_count > 0 {
             crate::ui::text::chat::image_message_preview(image_count).to_string()
+        } else if let Some(label) = message
+            .attachments
+            .iter()
+            .map(|att| att.label.trim())
+            .find(|label| !label.is_empty())
+        {
+            label.to_string()
+        } else if folder_count == message.attachments.len() {
+            crate::ui::text::chat::folder_message_preview(folder_count).to_string()
         } else {
-            message
-                .attachments
-                .first()
-                .map(|att| att.label.clone())
-                .unwrap_or_default()
+            crate::ui::text::chat::file_message_preview(message.attachments.len()).to_string()
         }
     } else {
-        stripped
+        projected
     };
     let sample: String = display.chars().take(SAMPLE_CHARS).collect();
     let single: String = sample

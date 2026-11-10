@@ -642,7 +642,11 @@ pub fn on_ai_web_session_loaded(
             if idx > 0 {
                 turn_index = turn_index.saturating_add(1);
             }
-            let mut raw_content = item.text;
+            let mut raw_content = if item.text.trim().is_empty() {
+                String::new()
+            } else {
+                item.text.trim_end().to_string()
+            };
             let mut attachments = Vec::with_capacity(item.files.len());
             for (att_idx, name) in item.files.into_iter().enumerate() {
                 let is_img = crate::chat::is_image_filename(&name);
@@ -655,8 +659,10 @@ pub fn on_ai_web_session_loaded(
                 if !raw_content.is_empty() && !raw_content.ends_with(' ') {
                     raw_content.push(' ');
                 }
+                let sanitized_name = name.replace(['\n', '\r', '\0'], " ");
+                let encoded_name = crate::app::markdown::encode_path(&sanitized_name);
                 let marker_start = raw_content.len();
-                raw_content.push_str(&format!("@[{tag}]({name})"));
+                raw_content.push_str(&format!("@[{tag}]({encoded_name})"));
                 let marker_end = raw_content.len();
                 attachments.push(crate::db::chat::MessageAttachmentMeta {
                     id: format!("{msg_id}-att-{att_idx}"),
