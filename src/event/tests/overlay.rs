@@ -727,7 +727,8 @@ fn exit_button_requests_quit_confirmation() {
     );
 
     assert!(!state.should_quit, "点击 [EXIT] 不直接退出");
-    assert!(matches!(state.overlay, Some(Overlay::ConfirmQuit)));
+    assert!(state.quit_confirm.is_some());
+    assert!(state.overlay.is_none(), "[EXIT] 不创建浮层");
     assert!(dirty);
 }
 
@@ -746,10 +747,10 @@ fn confirm_quit_overlay_click_confirms_or_cancels() {
     );
 
     let mut state = AppState::demo();
-    state.overlay = Some(Overlay::ConfirmQuit);
+    update::request_quit(&mut state);
     handle_overlay_click(&mut state, screen, buttons[0].x, buttons[0].y);
     assert!(state.should_quit, "点击 ↵ confirm 退出");
-    assert!(state.overlay.is_none());
+    assert!(state.quit_confirm.is_none());
 
     let mut state = AppState::demo();
     state.overlay = Some(Overlay::Rename(crate::app::overlay::Rename {
@@ -761,21 +762,28 @@ fn confirm_quit_overlay_click_confirms_or_cancels() {
     assert!(!state.should_quit, "点击 esc cancel 不退出");
     assert!(
         matches!(state.overlay, Some(Overlay::Rename(_))),
-        "取消后恢复原浮层"
+        "取消后底层浮层原样保留"
     );
-    assert!(state.suspended_overlay.is_none());
+    assert!(state.quit_confirm.is_none());
 }
 
 #[test]
 fn confirm_quit_overlay_outside_click_keeps_open() {
     let screen = Rect::new(0, 0, 80, 24);
     let mut state = AppState::demo();
-    state.overlay = Some(Overlay::ConfirmQuit);
+    update::request_quit(&mut state);
     handle_overlay_click(&mut state, screen, 0, 0);
-    assert!(
-        matches!(state.overlay, Some(Overlay::ConfirmQuit)),
-        "点击弹窗之外不关闭"
-    );
+    assert!(state.quit_confirm.is_some(), "点击弹窗之外不关闭");
+    assert!(!state.should_quit);
+}
+
+#[test]
+fn tiny_screen_outside_click_keeps_confirm_quit() {
+    // 宽 < 4 或高 < 3 时确认框无法绘制：点击必须吞掉，绝不能当成取消。
+    let mut state = AppState::demo();
+    update::request_quit(&mut state);
+    handle_overlay_click(&mut state, Rect::new(0, 0, 3, 3), 0, 0);
+    assert!(state.quit_confirm.is_some(), "无法绘制时点击不得取消确认");
     assert!(!state.should_quit);
 }
 
@@ -784,7 +792,7 @@ fn confirm_quit_overlay_esc_cancels_and_enter_confirms() {
     let config = Config::default();
     let mut state = demo_terminal();
     let geo = geometry(&state, &config, Rect::new(0, 0, 120, 30));
-    state.overlay = Some(Overlay::ConfirmQuit);
+    update::request_quit(&mut state);
     let mut sessions = HashMap::new();
     let mut dirty = false;
 
@@ -797,10 +805,10 @@ fn confirm_quit_overlay_esc_cancels_and_enter_confirms() {
         &mut ui::RenderCache::default(),
         &mut dirty,
     );
-    assert!(state.overlay.is_none(), "Esc 取消退出");
+    assert!(state.quit_confirm.is_none(), "Esc 取消退出");
     assert!(!state.should_quit);
 
-    state.overlay = Some(Overlay::ConfirmQuit);
+    update::request_quit(&mut state);
     handle_terminal_event(
         TerminalEvent::Key(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE)),
         &mut state,
@@ -814,7 +822,7 @@ fn confirm_quit_overlay_esc_cancels_and_enter_confirms() {
 }
 
 #[test]
-fn ctrl_q_over_existing_overlay_restores_it_on_cancel() {
+fn ctrl_q_over_existing_overlay_keeps_it_after_cancel() {
     let config = Config::default();
     let mut state = demo_terminal();
     let geo = geometry(&state, &config, Rect::new(0, 0, 120, 30));
@@ -834,10 +842,10 @@ fn ctrl_q_over_existing_overlay_restores_it_on_cancel() {
         &mut ui::RenderCache::default(),
         &mut dirty,
     );
-    assert!(matches!(state.overlay, Some(Overlay::ConfirmQuit)));
+    assert!(state.quit_confirm.is_some());
     assert!(
-        matches!(state.suspended_overlay, Some(Overlay::Rename(_))),
-        "暂存底层浮层"
+        matches!(state.overlay, Some(Overlay::Rename(_))),
+        "打开确认层不改底层浮层"
     );
 
     handle_terminal_event(
@@ -851,10 +859,103 @@ fn ctrl_q_over_existing_overlay_restores_it_on_cancel() {
     );
     assert!(
         matches!(state.overlay, Some(Overlay::Rename(_))),
-        "取消后恢复原浮层"
+        "取消后底层浮层仍在"
     );
-    assert!(state.suspended_overlay.is_none());
+    assert!(state.quit_confirm.is_none());
     assert!(!state.should_quit);
+}
+
+#[test]
+fn ctrl_q_auto_repeat_does_not_exit() {
+    let config = Config::default();
+    let mut state = demo_terminal();
+    let geo = geometry(&state, &config, Rect::new(0, 0, 120, 30));
+    let mut sessions = HashMap::new();
+    let mut dirty = false;
+    let press = || KeyEvent::new(KeyCode::Char('q'), KeyModifiers::CONTROL);
+    let mut release = press();
+    release.kind = crossterm::event::KeyEventKind::Release;
+
+    for (index, _) in (0..2).enumerate() {
+        if index == 1 {
+            // 固定静默窗口起点，模拟按住产生的连续 Press。
+            if let Some(confirm) = state.quit_confirm.as_mut() {
+                confirm.last_shortcut_press = Instant::now();
+            }
+        }
+        handle_terminal_event(
+            TerminalEvent::Key(press()),
+            &mut state,
+            &mut sessions,
+            &geo,
+            &config,
+            &mut ui::RenderCache::default(),
+            &mut dirty,
+        );
+    }
+    assert!(!state.should_quit, "自动重复的第二次按下不得退出");
+    assert!(state.quit_confirm.is_some());
+
+    // kitty 事件类型：观察到 Release 后，下一次按下才允许确认。
+    handle_terminal_event(
+        TerminalEvent::Key(release),
+        &mut state,
+        &mut sessions,
+        &geo,
+        &config,
+        &mut ui::RenderCache::default(),
+        &mut dirty,
+    );
+    assert!(!state.should_quit, "Release 本身不退出");
+    // 真正松开并静默满窗口后的下一次按下才允许确认。
+    if let Some(confirm) = state.quit_confirm.as_mut() {
+        confirm.last_shortcut_press = Instant::now() - std::time::Duration::from_millis(301);
+    }
+    handle_terminal_event(
+        TerminalEvent::Key(press()),
+        &mut state,
+        &mut sessions,
+        &geo,
+        &config,
+        &mut ui::RenderCache::default(),
+        &mut dirty,
+    );
+    assert!(state.should_quit, "静默窗口后的下一次按下确认退出");
+}
+
+#[test]
+fn esc_auto_repeat_after_cancel_keeps_underlying_overlay() {
+    let config = Config::default();
+    let mut state = demo_terminal();
+    let geo = geometry(&state, &config, Rect::new(0, 0, 120, 30));
+    state.overlay = Some(Overlay::Rename(crate::app::overlay::Rename {
+        target: crate::app::overlay::RenameTarget::Workspace(0),
+        input: crate::app::overlay::TextInput::new("name"),
+    }));
+    update::request_quit(&mut state);
+    let mut sessions = HashMap::new();
+    let mut dirty = false;
+
+    for (index, _) in (0..2).enumerate() {
+        if index == 1 {
+            // 固定 latch 起点，避免机器卡顿让第二次 Esc 落到窗口之外。
+            state.quit_cancel_latch = Some(Instant::now());
+        }
+        handle_terminal_event(
+            TerminalEvent::Key(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE)),
+            &mut state,
+            &mut sessions,
+            &geo,
+            &config,
+            &mut ui::RenderCache::default(),
+            &mut dirty,
+        );
+    }
+    assert!(state.quit_confirm.is_none(), "第一次 Esc 取消退出");
+    assert!(
+        matches!(state.overlay, Some(Overlay::Rename(_))),
+        "自动重复的 Esc 不得关闭底层浮层"
+    );
 }
 
 #[test]

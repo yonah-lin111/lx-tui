@@ -25,6 +25,7 @@ pub use tree::{
 };
 
 mod folded;
+pub mod geometry;
 mod navigation;
 pub(crate) mod text;
 mod viewport;

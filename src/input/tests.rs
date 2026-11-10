@@ -477,43 +477,6 @@ fn ctrl_q_quits_even_when_prompt_focused() {
 }
 
 #[test]
-fn ctrl_q_confirms_when_confirm_quit_open() {
-    let key = KeyEvent::new(KeyCode::Char('q'), KeyModifiers::CONTROL);
-    assert_eq!(
-        super::route(
-            key,
-            TermMode::empty(),
-            crate::app::state::FocusedContainer::Panes,
-            Some(OverlayKind::ConfirmQuit),
-            false,
-        ),
-        Some(Routed::Action(Action::ConfirmQuit))
-    );
-}
-
-#[test]
-fn confirm_quit_routes_esc_and_enter() {
-    let route_confirm = |code| {
-        super::route(
-            key(code),
-            TermMode::empty(),
-            crate::app::state::FocusedContainer::Panes,
-            Some(OverlayKind::ConfirmQuit),
-            false,
-        )
-    };
-    assert_eq!(
-        route_confirm(KeyCode::Esc),
-        Some(Routed::Overlay(OverlayKey::Esc))
-    );
-    assert_eq!(
-        route_confirm(KeyCode::Enter),
-        Some(Routed::Overlay(OverlayKey::Enter))
-    );
-    assert_eq!(route_confirm(KeyCode::Char('a')), None);
-}
-
-#[test]
 fn prompt_focus_maps_escape_and_unfocused_passes_to_pane() {
     assert_eq!(
         route(key(KeyCode::Esc), TermMode::empty(), true),

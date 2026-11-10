@@ -220,10 +220,6 @@ pub fn open_pane_menu(state: &mut AppState, pane: PaneId, anchor: (u16, u16)) {
 
 /// 关闭当前浮层。
 pub fn close_overlay(state: &mut AppState) {
-    if matches!(state.overlay, Some(Overlay::ConfirmQuit)) {
-        super::quit::cancel_quit(state);
-        return;
-    }
     state.overlay = None;
 }
 

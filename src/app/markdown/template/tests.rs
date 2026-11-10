@@ -334,6 +334,50 @@ fn template_title_source_keeps_fenced_subblock_markers() {
 }
 
 #[test]
+fn template_title_source_only_nested_children_is_empty() {
+    let body = "{title: }\n\n+++ a --start\n- Notes: child\n%%% log --start\n- Time: 10:00\n%%% log --end\n+++ a --end";
+    assert!(
+        template_title_source(body).is_empty(),
+        "只有嵌套子块的模板不得把子块结束行当正文: {:?}",
+        template_title_source(body)
+    );
+}
+
+#[test]
+fn template_title_source_excludes_log_nested_inside_supple() {
+    let body = "- Description: keep\n+++ a --start\n- Notes: hidden supple\n%%% log --start\n- Time: hidden log\n%%% log --end\n- Notes: hidden tail\n+++ a --end\n- Location: keep";
+    let source = template_title_source(body);
+    assert_eq!(source, "- Description: keep\n- Location: keep");
+    assert!(!source.contains("hidden"), "{source}");
+}
+
+#[test]
+fn template_title_source_ignores_fenced_end_inside_supple() {
+    let body = "- Description: keep\n+++ a --start\n```text\n+++ a --end\n```\n- Notes: hidden\n+++ a --end\n- Location: keep";
+    let source = template_title_source(body);
+    assert_eq!(source, "- Description: keep\n- Location: keep");
+    assert!(!source.contains("hidden"), "{source}");
+}
+
+#[test]
+fn template_title_source_keeps_fenced_placeholder_items_and_headings() {
+    let body = "- Description: keep\n```text\n- name:\n- \n# Execute Task\n```\n- Reference: \n- Location: keep";
+    let source = template_title_source(body);
+    for kept in ["- name:", "- ", "# Execute Task", "```text", "```"] {
+        assert!(
+            source.contains(kept),
+            "围栏内容应逐字保留 {kept:?}: {source}"
+        );
+    }
+    assert!(
+        !source.contains("- Reference:"),
+        "围栏外占位项仍应清理: {source}"
+    );
+    assert!(source.contains("- Description: keep"), "{source}");
+    assert!(source.contains("- Location: keep"), "{source}");
+}
+
+#[test]
 fn supple_title_source_includes_outer_template_without_siblings() {
     let outer = "{title: Main}\n# Execute Task\n\n- Description: Build auth\n\n+++ current --start\n- Notes: inner detail\n+++ current --end\n\n+++ sibling --start\n- Notes: sibling detail\n+++ sibling --end\n\n{wt:main}\n- Location: src/auth.rs";
     let own = "{title: }\n- Notes: inner detail";

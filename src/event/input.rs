@@ -1,6 +1,7 @@
 //! 键盘与粘贴终端事件分派：单行重命名拦截、路由分派与剪贴板/终端透传。
 
 use std::collections::HashMap;
+use std::time::{Duration, Instant};
 
 use alacritty_terminal::term::TermMode;
 use crossterm::event::{KeyCode, KeyEvent, KeyEventKind, KeyModifiers};
@@ -18,6 +19,9 @@ use super::mouse::hit::copy_with_toast;
 use super::paste;
 use super::session::{Geometry, ensure_workspace_visible, reveal_active_tab, write_to_pane};
 
+/// 取消退出后吞掉 `Esc`/`Enter` 的短窗口：自动重复不得穿透到底层浮层。
+const QUIT_CANCEL_LATCH: Duration = Duration::from_millis(300);
+
 /// 处理终端按键事件。
 pub(crate) fn handle_key_event(
     key: KeyEvent,
@@ -31,13 +35,20 @@ pub(crate) fn handle_key_event(
     if key.kind == KeyEventKind::Release {
         return;
     }
+    // 独立退出确认层优先于一切底层交互：只放行确认/取消键，其余按键全部吞掉。
+    if state.quit_confirm.is_some() {
+        handle_quit_confirm_key(key, state, dirty);
+        return;
+    }
+    // 取消退出后的短窗口：每次自动重复都刷新 latch，松开后静默 300ms 才恢复底层按键。
+    if quit_cancel_latch_active(state) && matches!(key.code, KeyCode::Esc | KeyCode::Enter) {
+        state.quit_cancel_latch = Some(Instant::now());
+        return;
+    }
 
     // 对齐 OpenCode (priority 101)：裸 Esc 最优先取消当前可见文字选区并消费按键，
     // 绝不穿透到终端 PTY、模态浮层关闭、自动补全面板关闭、退出编辑态或双 Esc 中断。
-    if key.code == KeyCode::Esc
-        && key.modifiers.is_empty()
-        && !matches!(state.overlay, Some(Overlay::ConfirmQuit))
-        && update::escape_clear_selection(state)
+    if key.code == KeyCode::Esc && key.modifiers.is_empty() && update::escape_clear_selection(state)
     {
         *dirty = true;
         return;
@@ -308,6 +319,52 @@ pub(crate) fn handle_key_event(
     }
 }
 
+/// 退出确认层按键：`Ctrl+Q` 需通过去抖守卫，`Esc` 取消、`Enter` 确认，其余吞掉。
+fn handle_quit_confirm_key(key: KeyEvent, state: &mut AppState, dirty: &mut bool) {
+    if is_ctrl_q(key) {
+        // kitty 事件类型会显式标记 Repeat；直接吞掉，避免长按触发确认。
+        if key.kind == KeyEventKind::Repeat {
+            return;
+        }
+        let now = Instant::now();
+        let accepts = state
+            .quit_confirm
+            .as_ref()
+            .is_some_and(|confirm| confirm.accepts_shortcut(now));
+        if accepts {
+            update::confirm_quit(state);
+            *dirty = true;
+        } else if let Some(confirm) = state.quit_confirm.as_mut() {
+            // 连续 Press 的自动重复也刷新静默窗口，按住期间永远不满足确认条件。
+            confirm.note_shortcut_press(now);
+        }
+        return;
+    }
+    match key.code {
+        KeyCode::Esc => {
+            update::cancel_quit(state);
+            *dirty = true;
+        }
+        KeyCode::Enter => {
+            update::confirm_quit(state);
+            *dirty = true;
+        }
+        _ => {}
+    }
+}
+
+/// 取消退出后的短窗口是否仍在生效。
+fn quit_cancel_latch_active(state: &AppState) -> bool {
+    state
+        .quit_cancel_latch
+        .is_some_and(|at| at.elapsed() < QUIT_CANCEL_LATCH)
+}
+
+/// 是否为 `Ctrl+Q`。
+fn is_ctrl_q(key: KeyEvent) -> bool {
+    key.code == KeyCode::Char('q') && key.modifiers.contains(KeyModifiers::CONTROL)
+}
+
 /// 处理终端粘贴事件。
 pub(crate) fn handle_paste_event(
     text: String,
@@ -315,6 +372,10 @@ pub(crate) fn handle_paste_event(
     sessions: &mut HashMap<PaneId, PtySession>,
     dirty: &mut bool,
 ) {
+    // 退出确认层打开时粘贴一律吞掉，绝不改动底层编辑器。
+    if state.quit_confirm.is_some() {
+        return;
+    }
     // 浮层打开时粘贴只进入当前浮层的单行输入框，绝不穿透到底层终端。
     if state.overlay.is_some() {
         if update::apply_overlay_paste(state, &text) {

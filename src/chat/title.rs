@@ -102,8 +102,18 @@ markdown, braces, or trailing punctuation. Do not answer the request. Output onl
 /// 模板块标题指令：基础语言约束 + 数据库标题风格 few-shot；
 /// 除示例标题外全部为英文。
 pub fn template_title_instructions_for(language: TitleLanguage, sample_text: &str) -> String {
+    let resolved = resolve_title_language(language, sample_text);
     let base = title_instructions_for(language, sample_text);
-    let examples = match resolve_title_language(language, sample_text) {
+    let limits = match resolved {
+        TitleLanguage::SimplifiedChinese | TitleLanguage::TraditionalChinese => {
+            "\n\nTemplate title requirements: use 6 to 20 Chinese characters."
+        }
+        TitleLanguage::English | TitleLanguage::Auto => {
+            "\n\nTemplate title requirements: use at most 36 characters and at most 5 words."
+        }
+        _ => "",
+    };
+    let examples = match resolved {
         TitleLanguage::SimplifiedChinese => {
             "\n\nExamples of good titles:\n\
              - 修改 todo item 的缩进\n\
@@ -112,24 +122,27 @@ pub fn template_title_instructions_for(language: TitleLanguage, sample_text: &st
              - 后台任务面板添加滚动条\n\
              - 为 prompt 输入框添加省略\n\
              Use the same pattern: a specific verb plus the concrete module, \
-             file, command, or panel name. Never output a generic verb alone."
+             file, command, or panel name. Never output a generic verb alone.\n\
+             Return exactly one title, not a list."
         }
         TitleLanguage::English | TitleLanguage::Auto => {
             "\n\nExamples of good titles:\n\
              - Fix todo item indentation\n\
              - Add /mcp command\n\
              - Add workspace history list\n\
-             - Add scrollbar to task panel\n\
+             - Add task panel scrollbar\n\
              - Truncate long prompt input\n\
              Use the same pattern: a specific verb plus the concrete module, \
-             file, command, or panel name. Never output a generic verb alone."
+             file, command, or panel name. Never output a generic verb alone.\n\
+             Return exactly one title, not a list."
         }
         _ => {
             "\n\nUse the same pattern: a specific verb plus the concrete module, \
-             file, command, or panel name. Never output a generic verb alone."
+             file, command, or panel name. Never output a generic verb alone.\n\
+             Return exactly one title, not a list."
         }
     };
-    format!("{base}{examples}")
+    format!("{base}{limits}{examples}")
 }
 
 fn contains_cjk(text: &str) -> bool {
@@ -320,7 +333,24 @@ fn first_non_empty_line(text: &str) -> &str {
         .unwrap_or("")
 }
 
+/// 拒答判定探针：去掉行首空白与非字母数字标点（引号、列表符、冒号等）。
+fn refusal_probe(text: &str) -> &str {
+    text.trim_start_matches(|ch: char| !ch.is_alphanumeric())
+}
+
+/// 行内分句；拒答话术常出现在冒号或逗号后的补充分句。
+fn refusal_sentences(text: &str) -> impl Iterator<Item = &str> {
+    text.split(|ch: char| {
+        matches!(
+            ch,
+            ':' | '：' | ',' | '，' | '.' | '。' | ';' | '；' | '!' | '！' | '?' | '？' | '\n'
+        )
+    })
+}
+
 /// 检测模型是否输出了「无法生成任务标题：输入不是任务描述」之类的拒答或元解释话术。
+///
+/// 直接拒答短语按整句开头匹配，避免把「修复无法生成标题的 bug」这类合法标题误杀。
 fn is_refusal_title(title: &str) -> bool {
     const DIRECT_REFUSALS: &[&str] = &[
         "无法生成标题",
@@ -346,9 +376,18 @@ fn is_refusal_title(title: &str) -> bool {
         "제목을 만들 수 없습니다",
         "요약할 수 없습니다",
     ];
-    if DIRECT_REFUSALS.iter().any(|pat| title.contains(pat)) {
+    let probes: Vec<&str> = std::iter::once(title)
+        .chain(refusal_sentences(title))
+        .map(refusal_probe)
+        .filter(|probe| !probe.is_empty())
+        .collect();
+    if DIRECT_REFUSALS
+        .iter()
+        .any(|pat| probes.iter().any(|probe| probe.starts_with(pat)))
+    {
         return true;
     }
+    let cjk_probe = refusal_probe(title);
     let has_cjk_cannot = [
         "无法生成",
         "不能生成",
@@ -358,14 +397,13 @@ fn is_refusal_title(title: &str) -> bool {
         "無法生成",
     ]
     .iter()
-    .any(|pat| title.starts_with(pat));
+    .any(|pat| cjk_probe.starts_with(pat));
     let has_cjk_meta = ["标题", "標題", "任务", "任務", "输入", "輸入"]
         .iter()
-        .any(|pat| title.contains(pat));
+        .any(|pat| cjk_probe.contains(pat));
     if has_cjk_cannot && has_cjk_meta {
         return true;
     }
-    let lower = title.to_ascii_lowercase();
     const EN_REFUSALS: &[&str] = &[
         "cannot generate title",
         "cannot generate a title",
@@ -378,7 +416,15 @@ fn is_refusal_title(title: &str) -> bool {
         "no task description",
         "cannot summarize",
     ];
-    EN_REFUSALS.iter().any(|pat| lower.contains(pat))
+    let lower = title.to_ascii_lowercase();
+    let en_probes: Vec<&str> = std::iter::once(lower.as_str())
+        .chain(refusal_sentences(&lower))
+        .map(refusal_probe)
+        .filter(|probe| !probe.is_empty())
+        .collect();
+    EN_REFUSALS
+        .iter()
+        .any(|pat| en_probes.iter().any(|probe| probe.starts_with(pat)))
 }
 
 fn strip_title_label_prefix(text: &str) -> &str {
@@ -421,16 +467,48 @@ fn strip_list_marker(text: &str) -> &str {
     trimmed
 }
 
+/// 剥离整体包裹的强调标记（`**` / `__` / `~~` / 反引号）；只处理成对包裹。
+fn strip_emphasis(text: &str) -> &str {
+    let trimmed = text.trim();
+    for marker in ["***", "___", "**", "__", "~~", "*", "_", "`"] {
+        if let Some(inner) = trimmed
+            .strip_prefix(marker)
+            .and_then(|rest| rest.strip_suffix(marker))
+        {
+            let inner = inner.trim();
+            if !inner.is_empty() {
+                return inner;
+            }
+        }
+    }
+    trimmed
+}
+
 fn sanitize_title(text: &str) -> Option<String> {
+    const QUOTES: &[char] = &['"', '\'', '`', '“', '”', '‘', '’', '「', '」', '『', '』'];
+    const TRAILING_PUNCT: &[char] = &[
+        '.', ',', '?', '!', '。', '，', '、', '？', '！', ':', '：', ';', '；', '…', '）', '】',
+        '》', '」',
+    ];
+    // 反复清理直到稳定：前缀之间互为遮挡（如 `Title: -` / `- #` / `{title: …}`）。
     let mut s = text.trim();
-    const QUOTES: &[char] = &['"', '\'', '`', '“', '”', '‘', '’'];
-    s = s.trim_matches(QUOTES).trim();
-    s = s.trim_start_matches('#').trim();
-    s = strip_list_marker(s);
-    s = strip_title_label_prefix(s);
-    s = s.trim_matches(QUOTES).trim();
-    const TRAILING_PUNCT: &[char] = &['.', '?', '!', '。', '？', '！', ':', '：', ';', '；'];
-    s = s.trim_end_matches(TRAILING_PUNCT).trim();
+    loop {
+        let before = s;
+        s = s.trim();
+        if let Some(inner) = s.strip_prefix('{').and_then(|rest| rest.strip_suffix('}')) {
+            s = inner.trim();
+        }
+        s = s.trim_matches(QUOTES).trim();
+        s = s.trim_start_matches('#').trim();
+        s = strip_list_marker(s);
+        s = strip_title_label_prefix(s);
+        s = strip_emphasis(s);
+        s = s.trim_matches(QUOTES).trim();
+        s = s.trim_end_matches(TRAILING_PUNCT).trim();
+        if s == before {
+            break;
+        }
+    }
     if s.is_empty() {
         return None;
     }

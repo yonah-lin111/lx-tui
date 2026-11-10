@@ -65,6 +65,12 @@ pub(crate) fn handle_mouse_down_left(
     state.workspace_history.drag = None;
     state.workspace_history.dragging = false;
     state.workspace_history.drag_moved = false;
+    // 退出确认层优先于 toast 与底层浮层：点击只作用于确认按钮，其余一律吞掉。
+    if state.quit_confirm.is_some() {
+        let _ = handle_overlay_click(state, *screen, mouse.column, mouse.row);
+        *dirty = true;
+        return;
+    }
     // 全局 toast 绘制在模态浮层之上：盒内点击关闭并消费，盒外点击先关闭再继续处理。
     if let Some(toast) = ui::toast::rect(state, view, rects, *screen, config) {
         update::dismiss_toast(state);
@@ -143,15 +149,9 @@ pub(crate) fn handle_mouse_down_left(
             state.overlay,
             Some(Overlay::NewWorkspace(_) | Overlay::TrustWorkspace(_))
         );
-        let was_confirm_quit = matches!(state.overlay, Some(Overlay::ConfirmQuit));
         if let Some((pane, bytes)) = handle_overlay_click(state, *screen, mouse.column, mouse.row) {
             write_to_pane(sessions, pane, &bytes);
             update::reset_pane_scroll(state, pane);
-        }
-        // 退出确认下的点击只作用于该浮层：取消后不得继续触发底层标签/工作区定位。
-        if was_confirm_quit {
-            *dirty = true;
-            return;
         }
         let menu_stays_open = matches!(state.overlay, Some(Overlay::Menu(_)));
         if (menu_item_clicked && !menu_stays_open) || was_worktree || was_new_ws {
@@ -702,6 +702,10 @@ pub(crate) fn handle_mouse_down_right(
     dirty: &mut bool,
 ) {
     let Geometry { rects, view, .. } = geometry;
+    // 退出确认层打开时右键一律吞掉，不弹菜单也不穿透到底层。
+    if state.quit_confirm.is_some() {
+        return;
+    }
     if state.todo_drag.take().is_some() {
         *dirty = true;
     }

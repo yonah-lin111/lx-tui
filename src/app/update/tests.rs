@@ -3,7 +3,7 @@ use crate::app::actions::*;
 use crate::app::effects::Effect;
 use crate::app::markdown::MentionEntry;
 use crate::app::overlay::*;
-use crate::app::prompt::{PromptEditing, PromptMode};
+use crate::app::prompt::PromptMode;
 use crate::app::state::*;
 use crate::app::toast::{TOAST_DURATION, Toast, ToastKind};
 use crate::app::tooltip::{TOOLTIP_DELAY, TooltipTarget};
@@ -22,74 +22,6 @@ fn demo_terminal() -> AppState {
         pane.view = PaneView::Terminal;
     }
     state
-}
-
-#[test]
-fn request_quit_does_not_set_should_quit_or_commit() {
-    let mut state = AppState::demo();
-    assert!(open_temp_prompt(&mut state));
-    state.prompt.insert_str("draft");
-    apply(Action::RequestQuit, &mut state);
-    assert!(!state.should_quit, "第一次请求不退出");
-    assert!(matches!(state.overlay, Some(Overlay::ConfirmQuit)));
-    let Some(PromptEditing::Temp(id)) = state.workspaces[0].prompt_panel.editing else {
-        panic!("temp prompt editing expected");
-    };
-    assert_eq!(
-        state.workspaces[0]
-            .prompt_panel
-            .temp(id)
-            .expect("temp prompt")
-            .active_content(),
-        "",
-        "请求退出不提交编辑器"
-    );
-}
-
-#[test]
-fn confirm_quit_sets_should_quit_and_commits() {
-    let mut state = AppState::demo();
-    assert!(open_temp_prompt(&mut state));
-    state.prompt.insert_str("draft");
-    apply(Action::RequestQuit, &mut state);
-    apply(Action::ConfirmQuit, &mut state);
-    assert!(state.should_quit);
-    assert!(state.overlay.is_none());
-    assert!(state.suspended_overlay.is_none());
-    let Some(PromptEditing::Temp(id)) = state.workspaces[0].prompt_panel.editing else {
-        panic!("temp prompt editing expected");
-    };
-    assert_eq!(
-        state.workspaces[0]
-            .prompt_panel
-            .temp(id)
-            .expect("temp prompt")
-            .active_content(),
-        "draft",
-        "确认退出才提交编辑器"
-    );
-}
-
-#[test]
-fn cancel_quit_restores_suspended_overlay() {
-    let mut state = AppState::demo();
-    open_workspace_menu(&mut state, 0, (0, 0));
-    apply(Action::RequestQuit, &mut state);
-    assert_eq!(
-        state.overlay.as_ref().map(Overlay::kind),
-        Some(OverlayKind::ConfirmQuit)
-    );
-    assert_eq!(
-        state.suspended_overlay.as_ref().map(Overlay::kind),
-        Some(OverlayKind::Menu)
-    );
-    apply(Action::CancelQuit, &mut state);
-    assert_eq!(
-        state.overlay.as_ref().map(Overlay::kind),
-        Some(OverlayKind::Menu)
-    );
-    assert!(state.suspended_overlay.is_none());
-    assert!(!state.should_quit);
 }
 
 #[test]

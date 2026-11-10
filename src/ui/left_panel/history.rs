@@ -7,10 +7,12 @@ use ratatui::style::Style;
 use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
 
 use crate::app::state::{AppState, WorkspaceMode};
-use crate::ui::right_panel::prompt::geometry::PROMPT_TREE_HEADER_HEIGHT;
 use crate::ui::{layout, style, text, widgets};
 
 use super::WORKSPACE_ITEM_INDENT;
+
+/// 列表顶部固定行数（搜索框 + 分割线）。
+const LIST_HEADER_HEIGHT: u16 = 2;
 
 /// 渲染工作区历史列表；当侧栏聚焦时返回搜索框硬件光标位置。
 pub fn render(frame: &mut Frame<'_>, area: Rect, state: &AppState) -> Option<(u16, u16)> {
@@ -23,12 +25,12 @@ pub fn render(frame: &mut Frame<'_>, area: Rect, state: &AppState) -> Option<(u1
         return cursor.filter(|_| state.sidebar_focused());
     }
     paint_divider(buf, area, area.y + 1, state.sidebar_focused());
-    if area.height <= PROMPT_TREE_HEADER_HEIGHT {
+    if area.height <= LIST_HEADER_HEIGHT {
         return cursor.filter(|_| state.sidebar_focused());
     }
     let list_area = Rect {
-        y: area.y + PROMPT_TREE_HEADER_HEIGHT,
-        height: area.height - PROMPT_TREE_HEADER_HEIGHT,
+        y: area.y + LIST_HEADER_HEIGHT,
+        height: area.height - LIST_HEADER_HEIGHT,
         ..area
     };
     let scrollbar = scrollbar_for(list_area, state);
@@ -240,12 +242,12 @@ fn history_section_rect(view: &layout::ViewLayout, state: &AppState) -> Option<R
 /// 历史列表条目区矩形（扣除顶部搜索框与分割线 2 行）。
 fn history_list_rect(view: &layout::ViewLayout, state: &AppState) -> Option<Rect> {
     let section = history_section_rect(view, state)?;
-    if section.height <= PROMPT_TREE_HEADER_HEIGHT {
+    if section.height <= LIST_HEADER_HEIGHT {
         return None;
     }
     Some(Rect {
-        y: section.y + PROMPT_TREE_HEADER_HEIGHT,
-        height: section.height - PROMPT_TREE_HEADER_HEIGHT,
+        y: section.y + LIST_HEADER_HEIGHT,
+        height: section.height - LIST_HEADER_HEIGHT,
         ..section
     })
 }
@@ -552,7 +554,7 @@ mod tests {
         );
         let sections = ui::layout::sidebar_sections(view.left_panel, state.agents_collapsed)
             .expect("sections");
-        let row0_y = sections.workspaces.y + PROMPT_TREE_HEADER_HEIGHT;
+        let row0_y = sections.workspaces.y + LIST_HEADER_HEIGHT;
         let row1_y = row0_y + 1;
         let name_x = sections.workspaces.x + 8;
 
@@ -637,7 +639,7 @@ mod tests {
         );
         let sections = ui::layout::sidebar_sections(view.left_panel, state.agents_collapsed)
             .expect("sections");
-        let row0_y = sections.workspaces.y + PROMPT_TREE_HEADER_HEIGHT;
+        let row0_y = sections.workspaces.y + LIST_HEADER_HEIGHT;
         let row1_y = row0_y + 1;
         let buf = terminal.backend().buffer();
         assert_eq!(
@@ -761,7 +763,7 @@ mod drop_tests {
         );
         let sections = ui::layout::sidebar_sections(view.left_panel, state.agents_collapsed)
             .expect("sections");
-        let row = sections.workspaces.y + PROMPT_TREE_HEADER_HEIGHT;
+        let row = sections.workspaces.y + LIST_HEADER_HEIGHT;
         assert_eq!(
             workspace_history_group_toggle_at(&view, &state, sections.workspaces.x + 2, row),
             Some(0)

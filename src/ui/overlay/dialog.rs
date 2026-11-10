@@ -632,17 +632,31 @@ pub(crate) fn render_confirm(
 }
 
 /// 渲染退出确认：普通强调色模态（非危险色），问题行 + 底部按钮行。
-pub(crate) fn render_quit_confirm(frame: &mut Frame<'_>, screen: Rect) -> Option<(u16, u16)> {
+///
+/// 屏幕过矮（< 6 行）时跳过标题，问题行按内容高度裁剪，绝不压到底边框。
+pub(crate) fn render_quit_confirm(frame: &mut Frame<'_>, screen: Rect) {
     let question = text::EXIT_CONFIRM_QUESTION;
-    let shell = quit_confirm_shell(screen)?;
-    widgets::modal::render(frame, &shell, text::EXIT_CONFIRM_TITLE);
+    let Some(shell) = quit_confirm_shell(screen) else {
+        return;
+    };
     if shell.inner.width == 0 || shell.inner.height == 0 {
-        return None;
+        return;
     }
-    let width = usize::from(shell.inner.width);
-    for (index, line) in text::wrap(question, width).iter().enumerate() {
+    if shell.area.height >= 6 {
+        widgets::modal::render(frame, &shell, text::EXIT_CONFIRM_TITLE);
+    } else {
+        widgets::modal::render_plain(frame, &shell);
+    }
+    let width = usize::from(shell.inner.width).max(1);
+    // 最后一行留给按钮行，问题行不得越界。
+    let question_rows = usize::from(shell.inner.height.saturating_sub(1));
+    for (index, line) in text::wrap(question, width)
+        .into_iter()
+        .take(question_rows)
+        .enumerate()
+    {
         frame.render_widget(
-            Paragraph::new(Span::styled(line.clone(), style::text())),
+            Paragraph::new(Span::styled(line, style::text())),
             Rect::new(
                 shell.inner.x,
                 shell.inner.y.saturating_add(index as u16),
@@ -664,7 +678,6 @@ pub(crate) fn render_quit_confirm(frame: &mut Frame<'_>, screen: Rect) -> Option
             (text::BUTTON_CANCEL, style::button_secondary()),
         ],
     );
-    None
 }
 
 /// 引用文件夹删除确认浮层：展示待删目录名与底部按钮。

@@ -93,8 +93,7 @@ fn records(count: usize) -> Vec<TodoRecord> {
 #[test]
 fn toolbar_puts_new_on_left_and_actions_on_right() {
     let area = panel(38);
-    let bar = crate::ui::right_panel::prompt::geometry::prompt_toolbar_rect(area)
-        .expect("toolbar visible");
+    let bar = crate::ui::right_panel::geometry::toolbar_rect(area).expect("toolbar visible");
     let new = button_rect(area, TodoButton::New).expect("[+] visible");
     assert_eq!(new.x, bar.x, "[+] 贴左边框");
     assert_eq!(new.width, NEW_WIDTH);
@@ -132,8 +131,7 @@ fn toolbar_drops_action_buttons_before_new() {
 #[test]
 fn button_hit_matches_button_rect_boundaries() {
     let area = panel(38);
-    let bar = crate::ui::right_panel::prompt::geometry::prompt_toolbar_rect(area)
-        .expect("toolbar visible");
+    let bar = crate::ui::right_panel::geometry::toolbar_rect(area).expect("toolbar visible");
 
     for (button, _) in BUTTONS {
         let rect = button_rect(area, button).expect("wide panel fits all buttons");

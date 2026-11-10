@@ -66,6 +66,13 @@ pub fn render(frame: &mut Frame<'_>, shell: &ModalShell, title: &str) {
     render_with_style(frame, shell, title, style::accent(), style::strong());
 }
 
+/// 渲染无标题模态壳：短屏下跳过标题，避免与内容争同一行。
+pub fn render_plain(frame: &mut Frame<'_>, shell: &ModalShell) {
+    dim_background(frame, frame.area());
+    clear::render(frame, shell.area);
+    frame.render_widget(Block::bordered().border_style(style::accent()), shell.area);
+}
+
 /// 渲染危险确认模态壳：底层压暗、清底、红色边框与内框首行红色粗体标题（对齐 herdr 确认弹窗）。
 pub fn render_danger(frame: &mut Frame<'_>, shell: &ModalShell, title: &str) {
     let danger = style::error().add_modifier(Modifier::BOLD);

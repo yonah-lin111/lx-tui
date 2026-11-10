@@ -23,6 +23,19 @@ pub(crate) fn handle_overlay_click(
     column: u16,
     row: u16,
 ) -> Option<(PaneId, Vec<u8>)> {
+    // 退出确认层独立于 `overlay`：只响应确认/取消按钮；点击外部或无法绘制时一律吞掉。
+    if state.quit_confirm.is_some() {
+        let shell = ui::overlay::quit_confirm_shell(screen)?;
+        if !shell.area.contains((column, row).into()) {
+            return None;
+        }
+        match ui::overlay::confirm_button_at(&shell, column, row) {
+            Some(ui::overlay::ConfirmButton::Confirm) => update::confirm_quit(state),
+            Some(ui::overlay::ConfirmButton::Cancel) => update::cancel_quit(state),
+            None => {}
+        }
+        return None;
+    }
     let input_area = overlay_input_rect(state, screen);
     if let Some(area) = input_area
         && row == area.y
@@ -402,22 +415,6 @@ pub(crate) fn handle_overlay_click(
                 // 内部空白：保持打开。
                 None => None,
             }
-        }
-        // 退出确认：点击弹窗之外不关闭；只有确认/取消按钮生效。
-        Some(Overlay::ConfirmQuit) => {
-            let Some(shell) = ui::overlay::quit_confirm_shell(screen) else {
-                update::cancel_quit(state);
-                return None;
-            };
-            if !shell.area.contains((column, row).into()) {
-                return None;
-            }
-            match ui::overlay::confirm_button_at(&shell, column, row) {
-                Some(ui::overlay::ConfirmButton::Confirm) => update::confirm_quit(state),
-                Some(ui::overlay::ConfirmButton::Cancel) => update::cancel_quit(state),
-                None => {}
-            }
-            None
         }
         None => None,
     }

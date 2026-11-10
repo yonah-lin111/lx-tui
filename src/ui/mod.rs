@@ -122,12 +122,21 @@ pub(crate) fn render_cached(
     let menu_tooltip_area = border_tooltip_open
         .then(|| tooltip::render(frame, area, state, &view, &pane_rects))
         .flatten();
+    // 退出确认层独立于 `overlay`：最后绘制，任何浮层/toast/tooltip 都不得盖住它。
+    let quit_confirm_open = state.quit_confirm.is_some();
+    if quit_confirm_open {
+        overlay::dialog::render_quit_confirm(frame, area);
+    }
 
     // 浮层是模态：重命名等单行输入浮层接管硬件光标，其余浮层不显示光标。
     // 若光标位置被后绘制的 tooltip/toast 盒覆盖，一并隐藏，避免硬件光标穿透浮层。
-    let base_cursor = match state.overlay {
-        Some(_) => overlay_cursor,
-        None => prompt_cursor,
+    let base_cursor = if quit_confirm_open {
+        None
+    } else {
+        match state.overlay {
+            Some(_) => overlay_cursor,
+            None => prompt_cursor,
+        }
     };
     let cursor = base_cursor.filter(|position| {
         !tooltip_area

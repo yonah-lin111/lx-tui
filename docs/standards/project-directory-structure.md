@@ -56,6 +56,8 @@ lx-tui/
                                 本地命令卡片与队列视图（chat/shell.rs）
       state/todo/               右侧 Todo 面板状态：列表/编辑/视口（todo.rs）、聚合组角色与不变量归一（group.rs）、
                                 跨日顺延与周带/图表统计投影（schedule.rs）
+      prompt/                   Prompt 纯状态与纯几何：编辑器/页/树/视口、`geometry.rs`（app 使用的 gutter、
+                                列表头高度、`PromptBodySplit` 与 `prompt_body_split`；UI 从 app 重导出）
       update/                   行为到状态的转换（含 update/pane/popups.rs：lx 输入框浮层更新；
                                 update/pane/task_page.rs：后台任务页按键与关闭；
                                 update/todo/：右侧 Todo 焦点/点击/编辑/菜单（todo.rs）、聚合/拆分与状态联动（group.rs）、
@@ -71,7 +73,9 @@ lx-tui/
                                 update/chat/viewport.rs：滚动/视口记忆/卡片折叠
                                 （toggle_lx_card；无 hover 态）；
                                 update/prompt/：Prompt 树/编辑/页列表（mod.rs）、保存（save.rs）、
-                                条目/临时提示词生命周期（items.rs）、右键菜单/重命名（menu.rs））
+                                条目/临时提示词生命周期（items.rs）、右键菜单/重命名（menu.rs）；
+                                update/quit.rs：退出确认请求/确认/取消（独立于 overlay 的 quit_confirm 层；
+                                测试在 quit/tests.rs））
     ui/                         渲染层，只读状态
       mod.rs
       left_panel/               左侧栏渲染：Workspaces 列表与 Agents 分区（mod.rs）、历史列表（history.rs）
@@ -84,13 +88,14 @@ lx-tui/
       markdown_render/table.rs  markdown 表格渲染（列宽收缩、单元格行内渲染、超链接热区映射与 `<br>` 换行）
       main_content/             主内容渲染：按视图分派 lx 页与终端网格（mod.rs）、终端网格（panes.rs）、lx 子模块
       main_content/lx/          lx 页渲染：欢迎页（brand.rs 品牌区）、网格（grid.rs）、输入框关联几何与浮层面板（panels.rs）、命令面板（slash.rs）、历史（history.rs（置顶用户消息行在 history/sticky.rs；本轮统计行在 history/stats.rs；卡片命中类型 CardKind/CardHit 在 history/cards.rs）；history/tool.rs 是工具步骤分派与共用行能力：方块/动词/路径/行范围/增删计数与状态，样式 token 与文案均取自 style / text::agent；history/tool/file_summary.rs 是普通工具的第二行摘要组装；history/tool/file_diff.rs 是 edit/write 的文件差异卡片——每文件 3 行预览与完整展开、连续同种调用的合并卡、增删行底色与轻量语法高亮，rows/draw 共用同一布局）；history/user_shell.rs 是本地命令卡片：与工具步骤共用直角树体（`│`/`└─`），标题 `■ Running` / `■ You run command · exit 0 · 1.2s` 不带连接符；参数区与输出区各自独立折叠（参数恒为浅黄、不响应 hover（`… N more lines` 同色）；输出折叠 dim、悬停或展开为默认前景（只有真的能展开才响应 hover），不铺灰底；`└─` 只收口参数区），运行中只给 `open task panel · live output` 一行引导，rows/draw/regions 共用同一布局）、聊天历史命中与视口入口（history_hit.rs：置顶行/回到底部、工具卡片点击面与折叠内容 hover 区（`CardHit { card, fold }`）、滚动条与行数口径）、消息底部通知（notice.rs）、状态（status.rs，覆盖绘制在窗格底边框）、聊天栏（chat_bar.rs，动态任务/阶段文案 `修复输入框布局 (3s · ↓320 tok)`——会话计划当前的 `in_progress` 步骤，无 todo 时 `Thinking...` / `Running tools...` / `Working...`；统计优先布局、长 todo 截断不挤掉统计、极窄降级 + Esc 待命提示 + 回到底部；提示类反馈已改走 main content 的 toast；组件测试在 chat_bar/tests.rs 及 tests/{label,layout,animation,stop_and_lifecycle,task_panel}.rs）、提及面板
-      right_panel/              右侧统一容器：外框 + `Prompt`/`Todo` tab（mod.rs）
+      right_panel/              右侧统一容器：外框 + `Prompt`/`Todo` tab（mod.rs）、
+                                右栏通用几何（geometry.rs：border/header/toolbar/divider/body rect）
       right_panel/todo/         右侧 Todo 面板渲染：面板布局与几何命中（todo.rs）、单条与聚合组树形连接符渲染（item.rs）、
                                 7 日周感知带与顺延横幅（schedule.rs）、底部三视图统计图表（charts.rs）
-      right_panel/prompt/       Prompt 编辑器渲染：mod.rs、frame.rs（几何/命中 helper）、geometry.rs（纯几何）、
-                                header.rs / pages.rs / panels.rs / recent.rs / tree.rs
-      controls/                 界面控制按钮与装饰：mod.rs、panels.rs（折叠/Pin/窄条）、exit.rs、
-                                swap.rs、resize.rs、footer.rs（设置/用量）
+      right_panel/prompt/       Prompt 编辑器渲染：mod.rs、frame.rs（几何/命中 helper）、geometry.rs（prompt 专属几何，
+                                并重导出 app::prompt::geometry）、header.rs / pages.rs / panels.rs / recent.rs / tree.rs
+      controls/                 界面控制按钮与装饰：mod.rs（声明与重导出）、panels.rs（折叠/Pin/窄条与
+                                PANEL_BUTTON_* 常量）、exit.rs、swap.rs、resize.rs、footer.rs（设置/用量）
       widgets/                  无业务语义的可复用组件（菜单、模态容器等），按需创建
     input/                      键盘路由与编码
       mod.rs                    键盘路由（Ctrl+Q 请求退出二次确认，其余进焦点窗格）
@@ -136,7 +141,9 @@ lx-tui/
                                 文件工具执行层（chat/tools/：read/search/edit/write 与 Codex 风格补丁引擎；
                                 进程/计划工具的参数规范化与结果 JSON）；
                                 会话进程管理器（chat/process/：pipe 与 PTY spawn、双流 drain、
-                                有界输出缓冲与安全文本化、stdin、等待窗口、停止与 reap）；
+                                有界输出缓冲与安全文本化、stdin、等待窗口、停止与 reap；
+                                manager/：types/handle/lifecycle/spawn，ProcessManager、ProcessHandle、
+                                StopReason/stop_handle/resolve_cwd 与启动路径）；
                                 计划契约（chat/plan.rs：全量替换、最多一个 in_progress、快照 JSON）
       events.rs                 统一纯数据事件（ChatDelta/PartKind/StopReason/ModelImage/ModelItem）
       usage_recorder.rs         流式请求收尾处提取 Usage、计算模型单价成本并异步写入 usage_log
@@ -245,6 +252,8 @@ tiling -> 仅 ratatui 几何类型与标准库
 config -> 仅标准库（serde/serde_json）, platform（原子保存权限）
 platform -> 仅标准库与 OS 依赖
 ```
+
+> `app` 不得引用 `ui` 的渲染几何；app 实际使用的 prompt/列表纯几何放在 `app/prompt/geometry.rs`，UI 从 app 重导出。既有 `app -> ui::text` 等只读常量引用属于历史债，新增代码不得继续扩大。
 
 - `app/` 不得导入 `ui`、`input`、`event`、`pty`、`tui`、`git`。
 - `ui/` 不得修改状态、不得执行 IO、不得依赖 `pty`、`tui`、`event`。

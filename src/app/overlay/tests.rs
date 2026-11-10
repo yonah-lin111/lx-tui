@@ -232,7 +232,6 @@ fn overlay_kind_reports_variant() {
         },
     });
     assert_eq!(trust.kind(), OverlayKind::TrustWorkspace);
-    assert_eq!(Overlay::ConfirmQuit.kind(), OverlayKind::ConfirmQuit);
 }
 
 /// 构造测试对话框；条目按参数生成，源工作区为 0。

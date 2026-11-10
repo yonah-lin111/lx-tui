@@ -256,17 +256,64 @@ fn quit_confirm_buttons_hit_their_cells() {
     assert_eq!(confirm_button_at(&shell, rects[0].x, rects[0].y + 1), None);
 }
 
+/// 直接绘制退出确认层（它不再挂在 `state.overlay` 上）。
+fn draw_quit_confirm(width: u16, height: u16) -> Vec<String> {
+    let mut terminal =
+        Terminal::new(TestBackend::new(width, height)).expect("test backend is infallible");
+    if let Err(error) = terminal.draw(|frame| {
+        render_quit_confirm(frame, frame.area());
+    }) {
+        panic!("draw failed: {error}");
+    }
+    let buffer = terminal.backend().buffer().clone();
+    (0..buffer.area.height)
+        .map(|y| {
+            (0..buffer.area.width)
+                .map(|x| buffer[(x, y)].symbol())
+                .collect()
+        })
+        .collect()
+}
+
 #[test]
 fn quit_confirm_renders_title_question_and_buttons() {
-    let mut state = AppState::demo();
-    state.overlay = Some(Overlay::ConfirmQuit);
-    let (lines, cursor) = draw_overlay(&state);
+    let lines = draw_quit_confirm(SCREEN.width, SCREEN.height);
     let joined = lines.join("\n");
     assert!(joined.contains(text::EXIT_CONFIRM_TITLE), "{joined}");
     assert!(joined.contains(text::EXIT_CONFIRM_QUESTION), "{joined}");
     assert!(joined.contains(text::BUTTON_CONFIRM), "{joined}");
     assert!(joined.contains(text::BUTTON_CANCEL), "{joined}");
-    assert!(cursor.is_none(), "退出确认不占用硬件光标");
+}
+
+#[test]
+fn short_screen_does_not_overlap_title_and_question() {
+    // 4x5：问题按自身行数绘制会越过内框压到底边框；必须裁剪到按钮行之前。
+    let narrow = draw_quit_confirm(4, 5);
+    assert!(
+        narrow[4].contains('─'),
+        "底边框不得被问题行覆盖：{narrow:?}"
+    );
+    assert!(
+        narrow[4].contains('└') && narrow[4].contains('┘'),
+        "底边框两角必须完整：{narrow:?}"
+    );
+
+    // 40x5：短屏跳过标题，首行只能是问题，按钮在问题行之后。
+    let lines = draw_quit_confirm(40, 5);
+    let first_inner = lines[1].trim_matches(|ch| ch == '│' || ch == ' ').trim();
+    assert_eq!(
+        first_inner,
+        text::EXIT_CONFIRM_QUESTION,
+        "短屏首行只能是问题，不能同时画标题：{lines:?}"
+    );
+    assert!(
+        lines[3].contains(text::BUTTON_CONFIRM),
+        "按钮行在问题行之后：{lines:?}"
+    );
+    assert!(
+        !lines[3].contains(text::EXIT_CONFIRM_QUESTION),
+        "问题不得压到按钮行：{lines:?}"
+    );
 }
 
 #[test]

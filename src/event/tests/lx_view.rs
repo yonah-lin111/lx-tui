@@ -83,10 +83,12 @@ fn lx_view_edits_input_and_pastes_text() {
         &mut dirty,
     );
     assert!(!state.should_quit);
-    assert!(matches!(
-        state.overlay,
-        Some(crate::app::overlay::Overlay::ConfirmQuit)
-    ));
+    assert!(state.quit_confirm.is_some());
+    // 真正松开并静默满窗口后，第二次按下才确认退出。
+    if let Some(confirm) = state.quit_confirm.as_mut() {
+        confirm.last_shortcut_press =
+            std::time::Instant::now() - std::time::Duration::from_millis(301);
+    }
     handle_terminal_event(
         TerminalEvent::Key(KeyEvent::new(KeyCode::Char('q'), KeyModifiers::CONTROL)),
         &mut state,

@@ -131,7 +131,8 @@ fn todo_key(key: KeyEvent) -> Option<TodoKey> {
 
 /// 路由一次按键；Release 事件与无法编码的按键返回 None。
 ///
-/// `Ctrl+Q` 始终优先；浮层打开时只放行该浮层支持的键，其余吞掉；
+/// `Ctrl+Q` 始终优先（退出确认层的二次判定位在事件层，输入层只发请求）；
+/// 浮层打开时只放行该浮层支持的键，其余吞掉；
 /// 否则按**唯一焦点源** `focus` 决定去向，同一时刻只有一个容器收键：
 /// - `Prompt`：按键只进入编辑器（`Ctrl/Cmd+C` 复制选区全文、`Ctrl/Cmd+Shift+C`
 ///   复制光标所在模板块正文），未映射键吞掉，绝不写入 PTY；
@@ -149,12 +150,7 @@ pub fn route(
         return None;
     }
     if key.code == KeyCode::Char('q') && key.modifiers.contains(KeyModifiers::CONTROL) {
-        let action = if overlay == Some(OverlayKind::ConfirmQuit) {
-            Action::ConfirmQuit
-        } else {
-            Action::RequestQuit
-        };
-        return Some(Routed::Action(action));
+        return Some(Routed::Action(Action::RequestQuit));
     }
     if let Some(kind) = overlay {
         return overlay_key(key, kind).map(Routed::Overlay);
@@ -426,11 +422,6 @@ fn overlay_key(key: KeyEvent, kind: OverlayKind) -> Option<OverlayKey> {
             _ => overlay_text_edit_key(key),
         },
         OverlayKind::TrustWorkspace => match key.code {
-            KeyCode::Esc => Some(OverlayKey::Esc),
-            KeyCode::Enter => Some(OverlayKey::Enter),
-            _ => None,
-        },
-        OverlayKind::ConfirmQuit => match key.code {
             KeyCode::Esc => Some(OverlayKey::Esc),
             KeyCode::Enter => Some(OverlayKey::Enter),
             _ => None,

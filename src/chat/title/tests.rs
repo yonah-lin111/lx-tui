@@ -193,6 +193,62 @@ fn template_title_instructions_follow_language_branches() {
 }
 
 #[test]
+fn template_prompt_specifies_six_to_twenty_chinese_chars() {
+    let zh = template_title_instructions_for(TitleLanguage::SimplifiedChinese, "修改缩进");
+    assert!(
+        zh.contains("6 to 20 Chinese characters"),
+        "模板标题必须显式约束 6–20 个汉字: {zh}"
+    );
+    let session = session_title_prompt_for("修改缩进", TitleLanguage::SimplifiedChinese)
+        .expect("session prompt");
+    assert!(
+        !session.contains("6 to 20 Chinese characters"),
+        "会话标题预算/约束不得被模板指令改变: {session}"
+    );
+}
+
+#[test]
+fn template_prompt_auto_en_specifies_five_words() {
+    let en = template_title_instructions_for(TitleLanguage::Auto, "Fix indentation");
+    assert!(
+        en.contains("at most 36 characters and at most 5 words"),
+        "{en}"
+    );
+    assert!(!en.contains("Add scrollbar to task panel"), "{en}");
+    assert!(en.contains("Add task panel scrollbar"), "{en}");
+    assert!(en.contains("Return exactly one title, not a list."), "{en}");
+}
+
+#[test]
+fn sanitize_title_strips_mixed_prefixes_and_emphasis() {
+    for (raw, expected) in [
+        ("Title: - Fix bug", "Fix bug"),
+        ("- # Fix bug", "Fix bug"),
+        ("**Fix bug**", "Fix bug"),
+        ("_Fix bug_", "Fix bug"),
+        ("\"Fix bug\".", "Fix bug"),
+        ("{title: Fix bug}", "Fix bug"),
+        ("Fix bug…", "Fix bug"),
+        ("Fix bug，", "Fix bug"),
+        ("Fix bug）", "Fix bug"),
+    ] {
+        assert_eq!(
+            parse_generated_title(raw).as_deref(),
+            Some(expected),
+            "raw={raw:?}"
+        );
+    }
+}
+
+#[test]
+fn parse_generated_title_keeps_legitimate_title_generation_task() {
+    assert_eq!(
+        parse_generated_title("修复无法生成标题的 bug").as_deref(),
+        Some("修复无法生成标题的 bug")
+    );
+}
+
+#[test]
 fn parse_generated_title_strips_leading_list_markers() {
     for (raw, expected) in [
         ("- Fix todo indentation", "Fix todo indentation"),

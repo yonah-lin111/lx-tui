@@ -714,11 +714,8 @@ fn ctrl_q_wins_over_todo_focus() {
         &mut dirty,
     );
 
-    assert!(!state.should_quit, "第一次 Ctrl+Q 只打开确认浮层");
-    assert!(matches!(
-        state.overlay,
-        Some(crate::app::overlay::Overlay::ConfirmQuit)
-    ));
+    assert!(!state.should_quit, "第一次 Ctrl+Q 只打开确认层");
+    assert!(state.quit_confirm.is_some());
     assert!(dirty, "退出请求置脏");
     assert!(state.todo_focused(), "Ctrl+Q 不碰 todo 焦点");
     assert!(state.todo.items().is_empty(), "Ctrl+Q 不改 todo 列表");

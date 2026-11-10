@@ -40,7 +40,7 @@ impl PbcopyStub {
         let script = dir.join("pbcopy");
         fs::write(
             &script,
-            "#!/bin/sh\ncat > \"$(dirname \"$0\")/copied.txt\"\n",
+            "#!/bin/sh\ncat > \"$(dirname \"$0\")/copied.txt.tmp\" && mv \"$(dirname \"$0\")/copied.txt.tmp\" \"$(dirname \"$0\")/copied.txt\"\n",
         )
         .expect("write stub");
         fs::set_permissions(&script, fs::Permissions::from_mode(0o755)).expect("chmod stub");

@@ -20,7 +20,7 @@ pub fn exit_button_at(view: &layout::ViewLayout, column: u16, row: u16) -> bool 
     exit_button(view).is_some_and(|area| area.contains((column, row).into()))
 }
 
-/// 退出按钮：标签栏右端强调色标签，点击退出应用。
+/// 退出按钮：标签栏右端强调色标签，点击请求退出确认。
 pub(crate) fn render_exit_button(frame: &mut Frame<'_>, view: &layout::ViewLayout) {
     let Some(area) = exit_button(view) else {
         return;

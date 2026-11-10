@@ -5,10 +5,10 @@ use std::path::Path;
 use ratatui::layout::Rect;
 
 use crate::app::actions::LxInput;
+use crate::app::prompt::geometry::prompt_body_split;
 use crate::app::state::{AppState, Lx, PaneKind, PaneView};
 use crate::detect::PaneAgentSnapshot;
 use crate::tiling::{self, PaneId};
-use crate::ui::right_panel::prompt::geometry::prompt_body_split;
 
 use super::selection::{WHEEL_LINES, clear_selection};
 

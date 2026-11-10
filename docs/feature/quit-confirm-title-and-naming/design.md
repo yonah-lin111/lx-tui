@@ -1,10 +1,12 @@
 # 退出二次确认、模板块标题生成与 UI 命名整理 — 设计方案
 
-> 状态：**待用户审核**（审核通过后按 `task.md` 执行）
+> 状态：**已实现、已 review 修复、自动化验证通过；待用户 `cargo run` 人工验收；未合并**
 >
-> 关联文档：`docs/feature/quit-confirm-title-and-naming/task.md`
+> 关联文档：`docs/feature/quit-confirm-title-and-naming/task.md`、`review.md`
 >
 > 代码检索依据：codegraph + codebase-memory（当前工作区 `lx-tui`，branch `dev`）
+>
+> Review 修订：初版 `Overlay::ConfirmQuit` + `suspended_overlay` 在 review 中确认会让被挂起浮层丢失异步回执（`/connect` OAuth、引用文件夹校验/搜索、Worktree 列表），已改为独立 `quit_confirm` 层。第 4 节保留初版方案作为历史记录，**实际实现以第 10 节为准**。
 
 ---
 
@@ -125,6 +127,8 @@ template_block_title_prompt_for (src/chat/title.rs:164)
 ---
 
 ## 4. 退出二次确认详细设计
+
+> **本节为初版方案（已被 Review 修订）**：实际实现使用独立 `quit_confirm` 层，不再使用 `Overlay::ConfirmQuit` / `suspended_overlay`。保留本节用于对照 review 结论；当前架构、输入/渲染/鼠标边界见第 10 节。
 
 ### 4.1 状态模型
 
@@ -743,8 +747,8 @@ src/
 
 | 子模块 | 内容 |
 | --- | --- |
-| `mod.rs` | 公共常量（`PANEL_BUTTON_WIDTH` / `PANEL_BUTTON_MARGIN`）、类型、`pub use` |
-| `panels.rs` | 折叠按钮、Agents 按钮、Prompt pin、折叠窄条、`collapsed_content_x` |
+| `mod.rs` | 模块声明与 `pub use` / `pub(crate) use` 重导出（常量实际定义在 `panels.rs`） |
+| `panels.rs` | `PANEL_BUTTON_WIDTH` / `PANEL_BUTTON_MARGIN`、折叠按钮、Agents 按钮、Prompt pin、折叠窄条、`collapsed_content_x` |
 | `footer.rs` | 底边框设置按钮、用量按钮 |
 | `exit.rs` | `[EXIT]` 按钮几何、命中与绘制 |
 | `swap.rs` | 主区/右栏交换按钮 |
@@ -774,7 +778,7 @@ pub struct ViewLayout {
 | `crate::layout::*` | `crate::tiling::*`（`PaneId`、`pane_rects`、`pane_inner_rect` 等） |
 | `ui::sidebar::*` | `ui::left_panel::*` |
 | `ui::prompt_frame::*` | `ui::right_panel::prompt::frame::*` |
-| `crate::layout::prompt_*` | `ui::right_panel::prompt::geometry::*` |
+| `crate::layout::prompt_*` | `ui::right_panel::prompt::geometry::*`（app 实际使用的纯几何下沉到 `app::prompt::geometry`，UI 再重导出） |
 | `ui::panes::*` | `ui::main_content::panes::*` |
 | `view.sidebar` | `view.left_panel` |
 | `view.prompt` | `view.right_panel` |
@@ -795,7 +799,8 @@ pub struct ViewLayout {
 | --- | --- |
 | `manager/types.rs` | `ProcessLimits`、`ProcessUiEvent`、`ProcessError`、`ProcessSnapshot` |
 | `manager/handle.rs` | `ProcessHandle` 及其 `impl`（输出缓冲、游标、tail、UI pending） |
-| `manager/mod.rs` | `ProcessManager` 结构与公开方法、`stop_handle`、`resolve_cwd`、`next_process_id`、`global_running` |
+| `manager/mod.rs` | `ProcessManager` 结构与公开方法、`next_process_id`、`global_running`、`spawn_pipe_reader`、`exit_state`、`estimated_tokens`、`lock` |
+| `manager/lifecycle.rs` | `StopReason`、自由函数 `stop_handle`、`resolve_cwd`、`StopWaiter` |
 | `manager/spawn.rs` | 保持现状 |
 
 `mod.rs` 只保留 `pub use` 与 `ProcessManager` 的实现，目标 ≤700 行。
@@ -928,7 +933,7 @@ Agent 无法交互式验证 TUI，以下由用户运行 `cargo run` 确认：
 3. `Ctrl+Q` 两次或点击 `↵ confirm` 才退出；
 4. 点击 `[EXIT]` 同样先确认；
 5. 在嵌套 `+++` 的 `&&&` 块内执行 `/title`，生成的标题只概括外层任务，不被补充块/日志带偏；
-6. 在 `+++` 内执行 `/title`，标题同时包含外层任务与当前补充说明；
+6. 在 `/supplement` 生成的 `+++` 内执行 `/title`，标题同时包含关联的外层 `&&&` 任务与当前补充说明；
 7. 新目录结构下 `cargo run` 界面、鼠标命中、折叠/交换按钮、Prompt/Todo 切换均正常。
 
 ---
@@ -937,10 +942,11 @@ Agent 无法交互式验证 TUI，以下由用户运行 `cargo run` 确认：
 
 | 风险 | 影响 | 缓解 |
 | --- | --- | --- |
-| `suspended_overlay` 与 `Overlay` 生命周期不一致 | 取消后浮层丢失或重复 | 只在 `request_quit` / `cancel_quit` / `confirm_quit` 三处读写；`close_overlay` 对 `ConfirmQuit` 走 `cancel_quit` |
-| `Ctrl+Q` 在 `apply_overlay_key` 中被选区清除逻辑抢先 | 确认浮层无法取消 | `ConfirmQuit` 分支放在 `escape_clear_selection` 之前 |
+| ~~`suspended_overlay` 与 `Overlay` 生命周期不一致~~ | 已在 review 中确认会丢失异步回执 | 已改为独立 `quit_confirm` 层；底层 `overlay` 不再移走 |
+| ~~`Ctrl+Q` 在 `apply_overlay_key` 中被选区清除逻辑抢先~~ | 初版风险 | 独立确认层在 `event/input.rs` 最前面处理，早于清选区/浮层过滤 |
+| 按键自动重复绕过二次确认 | 长按 `Ctrl+Q`/`Esc` 可能直接退出或穿透 | 连续 Press 每次刷新 300ms 静默窗口 + `Repeat` 忽略；取消后 300ms latch 随重复刷新；仍建议人工长按验收 |
 | 标题清洗误删代码块 | 标题丢失关键信息 | 围栏优先于子块识别，新增围栏测试 |
-| `block_scan` 的“仅首个 `&&&`”约束 | 多模板页面只识别首个 | 与现有 `/title` 行为一致；本期不扩展多模板 |
+| `block_scan` 的“仅首个 `&&&`”约束 | 渲染/复制仍只识别首个模板 | `/title` 关联扫描已支持多 `&&&` 与第二个模板内的 `+++`；其他功能保持现状 |
 | `TEMPLATE_TITLE_PROMPT_MAX_BYTES` 增大 | 个别供应商上下文限制 | 2048 字节远低于常规上下文；不改变会话标题 960 预算 |
 | 结构改名路径遗漏 | 编译失败或运行时命中错误 | 阶段 3 全量 `cargo test` + `cargo clippy`；`ViewLayout` 字段改名后全局搜索旧名确认零命中 |
 | 文件移动导致 Git 误判 | review 噪音 | 使用普通 `mv`，不 `git add`/`git mv`，由 Git 自动识别 rename；不提交 |
@@ -949,3 +955,52 @@ Agent 无法交互式验证 TUI，以下由用户运行 `cargo run` 确认：
 
 - 阶段 1、2 是行为改动，若验收失败，按文件粒度回滚（`app/update/quit.rs`、`overlay`、`chat/title.rs`、`markdown/template.rs`）。
 - 阶段 3 是纯移动/改名，若出现大面积编译失败且短时间无法收口，直接按 `task.md` 的文件映射反向移动即可；不影响前两阶段已完成的逻辑。
+
+---
+
+## 10. Review 修复后修订（当前实现）
+
+> 本节覆盖第 4 节初版退出方案，并记录标题/结构 review 修复后的实际落点。详细问题与证据见 `review.md`。
+
+### 10.1 退出确认：独立层而非替换 `overlay`
+
+- `AppState`：
+  - `quit_confirm: Option<QuitConfirmState>`（`last_shortcut_press`）
+  - `quit_cancel_latch: Option<Instant>`
+  - `prompt_committed_for_quit: bool`
+  - 删除 `suspended_overlay`；删除 `Overlay::ConfirmQuit` / `OverlayKind::ConfirmQuit`。
+- `request_quit`：只打开 `quit_confirm`，不触碰 `state.overlay`、焦点、选区；清理正在进行的鼠标手势（分割线/滚动条/拖拽），避免确认期间继续改状态。
+- `confirm_quit`：关闭确认层，提交一次编辑器，置 `should_quit=true` 与 `prompt_committed_for_quit=true`。
+- `cancel_quit`：关闭确认层，记录 300ms latch；底层浮层与异步生命周期原样保留。
+- 输入：
+  - 确认层打开时，`event/input.rs` 最前面只处理 `Ctrl+Q` / `Esc` / `Enter`，其余键吞掉。
+  - `Ctrl+Q` 按住时每次自动重复都刷新 300ms 静默窗口，`Repeat` 直接忽略；松开后两次 Press 间隔满 300ms 才确认。
+  - `Esc` 取消后 300ms 内吞 `Esc`/`Enter`，每次自动重复刷新窗口，松开并静默后才恢复底层浮层按键。
+- 渲染：底层 `overlay` → tooltip/toast → 退出确认；确认层最后绘制，短屏跳过标题并裁剪问题行，任何 toast/浮层不能盖住它。
+- 鼠标：确认层打开时，按下/拖拽/松开/滚轮/右键/粘贴全部拦截；`quit_confirm_shell` 为空时只吞点击，不取消；点击弹窗外不关闭。
+- 异步：Connect/Referenced/Worktree/Trust 的 handler 继续看到原来的 `state.overlay`，OAuth/模型刷新/校验/搜索回执不会丢；Trust 只能更新底层浮层，不能顶掉确认层。
+- 收尾：确认路径已提交 prompt，`Persistence::shutdown` 通过 `prompt_committed_for_quit` 跳过第二次提交；普通退出仍提交。
+
+### 10.2 标题生成修订
+
+- `extract_block_title_source`：fence 优先；`+++`/`%%%` 子块用标记栈配对，嵌套结束/围栏内结束不再提前闭合外层。
+- 标题源专用清理：只对围栏外片段执行 `clean_template_content` 与默认大标题过滤，围栏内占位项/标题/空行逐字保留；`copy_template_content` 语义不变。
+- `enclosing_template_body`：支持“包含当前 `+++` 的 `&&&`”和“最近前置闭合 `&&&`”，正常 `/supplement` 的兄弟 `+++` 也能带出外层任务；支持多个 `&&&`。
+- `find_enclosing_supple_block` / `supple_body_at_start`：`+++` 栈式扫描，嵌套 `+++` 不在内层 `--end` 截断。
+- 提示词：模板专用 few-shot 明确中文 6–20 字、英文 ≤36 字符且 ≤5 词，示例不超过 5 词，示例后要求“Return exactly one title, not a list.”；会话标题 960 预算与指令不变。
+- `sanitize_title`：循环清理 braces/quotes/`#`/列表符/标题标签/强调/尾随标点；拒答改为整句或句首匹配，合法标题“修复无法生成标题的 bug”不再误杀。
+
+### 10.3 结构修订
+
+- app 实际使用的纯几何下沉到 `src/app/prompt/geometry.rs`（`PROMPT_BLOCK_GUTTER_LEFT`、`PROMPT_TREE_HEADER_HEIGHT`、`PromptBodySplit`、`prompt_body_split`、body rect 等）；`app` 不再引用 `ui::right_panel::prompt::geometry`。
+- 右栏通用几何移到 `src/ui/right_panel/geometry.rs`；Todo/右栏容器使用它，左栏历史使用本地 `LIST_HEADER_HEIGHT`，避免反向依赖 prompt 内部。
+- `manager/lifecycle.rs` 承载 `StopReason` / `stop_handle` / `resolve_cwd` / `StopWaiter`；`manager/mod.rs` 保留 `ProcessManager` 与主循环辅助。
+- `controls/panels.rs` 定义 `PANEL_BUTTON_WIDTH` / `PANEL_BUTTON_MARGIN`；`controls/mod.rs` 只做声明与重导出。
+- `app/update/prompt/pages.rs` 删除重复 `workspace_cwd`，统一走 `prompt/mod.rs`。
+- 退出确认文案移入 `ui/text/workspace.rs`，`ui/text.rs` 回到 1000 行内。
+
+### 10.4 验证与未完成项
+
+- `cargo fmt --check`、`cargo clippy --all-targets -- -D warnings`、`cargo test` 全通过；lib 测试 5192 个。
+- `tests/prompt_copy.rs` 的 pbcopy 桩改为原子写入，消除全量并发下的空文件竞态。
+- 未完成：既有超限测试文件 `app/update/prompt/tests.rs`（2516）、`app/update/tests.rs`（5653）、`ui/tests.rs`（3321）的拆分；以及真实 TUI 人工验收。两者记录在 `review.md`，不与本次行为修复混做。

@@ -14,6 +14,7 @@ use self::prompt::frame;
 use super::controls::{PANEL_BUTTON_MARGIN, PANEL_BUTTON_WIDTH, render_collapsed_strip};
 use super::{layout, style, text};
 
+pub mod geometry;
 pub mod prompt;
 pub(crate) mod todo;
 
@@ -36,7 +37,7 @@ fn tab_label(tab: RightTab) -> &'static str {
 /// 内框为空（高 ≤ 2）时返回空：`render` 此时在 `paint_tabs` 之前就返回了，
 /// 一个 tab 也没画；这里若仍给出矩形，就会出现"看不见却能点"的 tab。
 pub fn tab_rects(panel: Rect) -> Vec<(RightTab, Rect)> {
-    let Some(row) = crate::ui::right_panel::prompt::geometry::prompt_border_rect(panel) else {
+    let Some(row) = self::geometry::border_rect(panel) else {
         return Vec::new();
     };
     if panel.height <= 2 {
@@ -67,7 +68,7 @@ pub fn tab_at(panel: Rect, column: u16, row: u16) -> Option<RightTab> {
 
 /// 坐标是否落在容器顶边框行（tab 之外的空白同样属于容器控件区，点击须吞掉）。
 pub fn tab_row_at(panel: Rect, column: u16, row: u16) -> bool {
-    crate::ui::right_panel::prompt::geometry::prompt_border_rect(panel)
+    self::geometry::border_rect(panel)
         .is_some_and(|row_rect| row_rect.contains((column, row).into()))
 }
 

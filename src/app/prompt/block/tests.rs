@@ -388,8 +388,165 @@ fn slash_title_in_supple_block_targets_supple_and_preserves_empty_line() {
         crate::app::prompt::PromptTitleAction::Generate {
             block_start_line: 7,
             original_title: Some(String::new()),
-            content: "- Notes: Extra detail".to_string(),
+            content: "- Description: Main task\n\n- Notes: Extra detail".to_string(),
         }
+    );
+}
+
+#[test]
+fn enclosing_template_body_finds_preceding_template_for_sibling_supple() {
+    let text = concat!(
+        "&&& first --start\n",
+        "{title: First}\n",
+        "\n",
+        "- Description: First task\n",
+        "&&& first --end\n",
+        "\n",
+        "&&& second --start\n",
+        "{title: Second}\n",
+        "\n",
+        "- Description: Second task\n",
+        "&&& second --end\n",
+        "\n",
+        "+++ supplement --start\n",
+        "{title: }\n",
+        "\n",
+        "- Notes: Extra detail\n",
+        "+++ supplement --end",
+    );
+    let p = prompt_with(60, 30, text);
+    let supple_line = text[..text.find("+++ supplement --start").expect("supple")]
+        .matches('\n')
+        .count();
+    assert_eq!(
+        p.enclosing_template_body(supple_line).as_deref(),
+        Some("{title: Second}\n\n- Description: Second task"),
+        "兄弟 +++ 应关联最近的前置闭合 &&&"
+    );
+}
+
+#[test]
+fn slash_title_in_supplement_after_template_includes_outer_task() {
+    let initial = "&&& addTemplate --start\n{title: Main}\n\n- Description: Outer task\n&&& addTemplate --end";
+    let mut p = prompt_with(60, 24, initial);
+    p.set_cursor_offset(p.text().len());
+    p.insert_char('\n');
+    trigger_supplement(&mut p);
+
+    // 正常 /supplement 落点：+++ 是 &&& 的兄弟块；在块内补一行说明再触发 /title。
+    let end = p.text().find("+++ supplement --end").expect("supple end");
+    p.set_cursor_offset(end);
+    p.insert_char('\n');
+    p.set_cursor_offset(end);
+    p.insert_str("- Notes: Extra detail\n");
+    for ch in "/title".chars() {
+        p.insert_char(ch);
+    }
+
+    assert!(p.slash_confirm(), "在追加的 +++ 内确认 /title");
+    match p.take_title_action().expect("title action") {
+        crate::app::prompt::PromptTitleAction::Generate {
+            block_start_line,
+            original_title,
+            content,
+        } => {
+            assert_eq!(block_start_line, 6);
+            assert_eq!(original_title, Some(String::new()));
+            assert!(
+                content.contains("- Description: Outer task"),
+                "正常 /supplement 生成的兄弟 +++ 必须带回外层任务: {content}"
+            );
+            assert!(content.contains("- Notes: Extra detail"), "{content}");
+            assert!(!content.contains("+++"), "{content}");
+        }
+        other => panic!("unexpected title action: {other:?}"),
+    }
+}
+
+#[test]
+fn slash_title_in_supple_of_second_template_includes_second_task() {
+    let text = concat!(
+        "&&& first --start\n",
+        "{title: First}\n",
+        "\n",
+        "- Description: First task\n",
+        "&&& first --end\n",
+        "\n",
+        "&&& second --start\n",
+        "{title: Second}\n",
+        "\n",
+        "- Description: Second task\n",
+        "\n",
+        "+++ supplement --start\n",
+        "{title: }\n",
+        "\n",
+        "- Notes: Detail\n",
+        "/title\n",
+        "+++ supplement --end\n",
+        "\n",
+        "&&& second --end",
+    );
+    let mut p = prompt_with(60, 30, text);
+    let cursor = text.find("/title").expect("slash") + "/title".len();
+    p.set_cursor_offset(cursor);
+
+    assert!(p.slash_confirm(), "在第二个 &&& 的 +++ 内确认 /title");
+    assert_eq!(
+        p.take_title_action(),
+        Some(crate::app::prompt::PromptTitleAction::Generate {
+            block_start_line: 11,
+            original_title: Some(String::new()),
+            content: "- Description: Second task\n\n- Notes: Detail".to_string(),
+        })
+    );
+}
+
+#[test]
+fn nested_supple_block_title_keeps_content_after_inner_end() {
+    let text = concat!(
+        "&&& addTemplate --start\n",
+        "{title: Main}\n",
+        "\n",
+        "- Description: Outer task\n",
+        "\n",
+        "+++ supplement --start\n",
+        "{title: }\n",
+        "\n",
+        "- Notes: Inner detail\n",
+        "+++ inner --start\n",
+        "- Notes: Nested hidden\n",
+        "+++ inner --end\n",
+        "- Notes: After nested\n",
+        "/title\n",
+        "+++ supplement --end\n",
+        "\n",
+        "&&& addTemplate --end",
+    );
+    let inner_cursor = text.find("- Notes: Nested hidden").expect("inner body");
+    assert_eq!(
+        markdown::find_enclosing_supple_block(text, inner_cursor),
+        Some((9, 11, true)),
+        "光标在内层 +++ 时应返回最内层块"
+    );
+    let outer_cursor = text.find("- Notes: After nested").expect("outer body");
+    assert_eq!(
+        markdown::find_enclosing_supple_block(text, outer_cursor),
+        Some((5, 14, true))
+    );
+
+    let mut p = prompt_with(60, 30, text);
+    let cursor = text.find("/title").expect("slash") + "/title".len();
+    p.set_cursor_offset(cursor);
+
+    assert!(p.slash_confirm(), "在嵌套 +++ 的外层内确认 /title");
+    assert_eq!(
+        p.take_title_action(),
+        Some(crate::app::prompt::PromptTitleAction::Generate {
+            block_start_line: 5,
+            original_title: Some(String::new()),
+            content: "- Description: Outer task\n\n- Notes: Inner detail\n- Notes: After nested"
+                .to_string(),
+        })
     );
 }
 
