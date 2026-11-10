@@ -11,63 +11,65 @@
 <div id="chart-tooltip" class="chart-tooltip" role="tooltip" hidden></div>
 
 <div class="usage-shell">
-  <header class="usage-header">
-    <div class="header-titles">
-      <h1>USAGE</h1>
-      <span class="subtitle">Token, cost, and request analytics across model calls</span>
-    </div>
-    <div class="header-actions">
-      <span id="usage-status" class="action-status">
-        <span id="usage-status-dot" class="status-dot clean"></span>
-        <span id="last-updated">Loading…</span>
-      </span>
-      <div class="auto-refresh-wrap">
-        <span class="filter-inline-label">Auto</span>
-        <div id="auto-refresh-filter" class="select-host auto-refresh-select"></div>
+  <header class="usage-topbar">
+    <div class="topbar-inner">
+      <div class="usage-header">
+        <div class="header-titles">
+          <h1>USAGE</h1>
+          <span class="subtitle">Token, cost, and request analytics across model calls</span>
+        </div>
+        <div class="header-actions">
+          <span id="usage-status" class="action-status">
+            <span id="usage-status-dot" class="status-dot clean"></span>
+            <span id="last-updated">Loading…</span>
+          </span>
+          <div class="auto-refresh-wrap">
+            <span class="filter-inline-label">Auto</span>
+            <div id="auto-refresh-filter" class="select-host auto-refresh-select"></div>
+          </div>
+          <button id="refresh-btn" type="button" class="ghost">Refresh</button>
+        </div>
       </div>
-      <button id="refresh-btn" type="button" class="ghost">Refresh</button>
+
+      <section class="usage-filters" aria-label="Usage filters">
+        <div class="filter-range-row">
+          <div class="range-group" role="group" aria-label="Time range">
+            <button type="button" class="range-btn" data-range="today">Today</button>
+            <button type="button" class="range-btn active" data-range="7d">7d</button>
+            <button type="button" class="range-btn" data-range="30d">30d</button>
+            <button type="button" class="range-btn" data-range="all">All</button>
+            <button type="button" class="range-btn" data-range="custom">Custom</button>
+          </div>
+          <div id="custom-range-wrap" class="custom-range-wrap hidden">
+            <input type="date" id="custom-start" aria-label="Start date">
+            <span class="range-sep">to</span>
+            <input type="date" id="custom-end" aria-label="End date">
+          </div>
+        </div>
+
+        <div class="filter-selects">
+          <div class="filter-field">
+            <div id="filter-provider" class="select-host"></div>
+          </div>
+          <div class="filter-field">
+            <div id="filter-model" class="select-host"></div>
+          </div>
+          <div class="filter-field">
+            <div id="filter-workspace" class="select-host"></div>
+          </div>
+          <div class="filter-field">
+            <div id="filter-session" class="select-host"></div>
+          </div>
+        </div>
+      </section>
     </div>
   </header>
 
-  <section class="usage-filters" aria-label="Usage filters">
-    <div class="filter-range-row">
-      <div class="range-group" role="group" aria-label="Time range">
-        <button type="button" class="range-btn" data-range="today">Today</button>
-        <button type="button" class="range-btn active" data-range="7d">7d</button>
-        <button type="button" class="range-btn" data-range="30d">30d</button>
-        <button type="button" class="range-btn" data-range="all">All</button>
-        <button type="button" class="range-btn" data-range="custom">Custom</button>
-      </div>
-      <div id="custom-range-wrap" class="custom-range-wrap hidden">
-        <input type="date" id="custom-start" aria-label="Start date">
-        <span class="range-sep">to</span>
-        <input type="date" id="custom-end" aria-label="End date">
-      </div>
-    </div>
+  <main class="usage-main">
+    <div class="usage-content">
+      <div id="usage-error" class="usage-error hidden" role="alert"></div>
 
-    <div class="filter-selects">
-      <div class="filter-field">
-        <label>Provider</label>
-        <div id="filter-provider" class="select-host"></div>
-      </div>
-      <div class="filter-field">
-        <label>Model</label>
-        <div id="filter-model" class="select-host"></div>
-      </div>
-      <div class="filter-field">
-        <label>Workspace</label>
-        <div id="filter-workspace" class="select-host"></div>
-      </div>
-      <div class="filter-field">
-        <label>Session</label>
-        <div id="filter-session" class="select-host"></div>
-      </div>
-    </div>
-  </section>
-
-  <div id="usage-error" class="usage-error hidden" role="alert"></div>
-
-  <section id="summary-cards" class="summary-grid" aria-label="Usage summary"></section>
+      <section id="summary-cards" class="summary-grid" aria-label="Usage summary"></section>
 
   <section class="charts-grid" aria-label="Usage charts">
     <article class="chart-card chart-wide">
@@ -145,6 +147,8 @@
       </div>
     </div>
   </section>
+    </div>
+  </main>
 </div>
 
 <script src="/usage_charts.js"></script>
