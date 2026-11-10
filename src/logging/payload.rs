@@ -65,8 +65,8 @@ impl PayloadCapture {
         if !enabled || dir.is_none() {
             return Self::disabled();
         }
-        let truncated = request.body.len() > MAX_REQUEST_BODY_BYTES;
         let body = omit_inline_images(request.body, MAX_REQUEST_BODY_BYTES);
+        let truncated = body.ends_with("…[truncated]");
         let body_value = serde_json::from_str::<Value>(&body).unwrap_or(Value::String(body));
         let headers: serde_json::Map<String, Value> = redacted_headers(request.headers)
             .into_iter()
@@ -171,6 +171,7 @@ impl PayloadCapture {
         });
         let record = json!({
             "ts": super::utc_timestamp_now(),
+            "pid": std::process::id(),
             "request_id": self.request_id,
             "kind": self.meta.kind,
             "pane": self.meta.pane,
@@ -211,13 +212,17 @@ pub(crate) fn payload_path(dir: &Path) -> PathBuf {
 fn append_line(path: &Path, line: &str) -> std::io::Result<()> {
     if let Some(parent) = path.parent() {
         std::fs::create_dir_all(parent)?;
+        let _ = crate::platform::restrict_dir_permissions(parent);
     }
     let mut file = std::fs::OpenOptions::new()
         .create(true)
         .append(true)
         .open(path)?;
-    file.write_all(line.as_bytes())?;
-    file.write_all(b"\n")
+    let _ = crate::platform::restrict_file_permissions(path);
+    let mut buffer = Vec::with_capacity(line.len() + 1);
+    buffer.extend_from_slice(line.as_bytes());
+    buffer.push(b'\n');
+    file.write_all(&buffer)
 }
 
 #[cfg(test)]

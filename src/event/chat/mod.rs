@@ -223,6 +223,13 @@ impl ChatStreams {
             self.cancels.remove(key);
             return woke;
         }
+        tracing::debug!(
+            target: "lx::agent",
+            pane = key.pane.raw(),
+            session = %key.session,
+            generation = key.generation,
+            "agent turn cancel requested"
+        );
         true
     }
 

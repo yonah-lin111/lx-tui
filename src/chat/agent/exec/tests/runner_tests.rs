@@ -681,5 +681,5 @@ async fn tool_preamble_text_is_not_reused_as_the_final_message() {
 // 真实网络流只在生产路径用到：此处仅锁定它仍可被构造成 trait object。
 #[allow(dead_code)]
 fn real_factory_is_object_safe() -> Arc<dyn ExecStreamFactory> {
-    Arc::new(RealStreamFactory::default())
+    Arc::new(RealStreamFactory)
 }

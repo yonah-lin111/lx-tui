@@ -69,9 +69,18 @@ fn inline_images_are_replaced() {
 }
 
 #[test]
-fn plain_text_is_unchanged() {
-    let body = r#"{"model":"m","messages":[{"role":"user","content":"hello"}]}"#;
+fn google_inline_data_images_are_replaced() {
+    let body = r#"{"contents":[{"role":"user","parts":[{"inlineData":{"mimeType":"image/png","data":"QUJDREVG"}},{"inline_data":{"mime_type":"image/jpeg","data":"MTIzNA=="}}]}]}"#;
     let output = omit_inline_images(body, 1024 * 1024);
-    assert!(output.contains("hello"));
+    assert!(output.contains("[image omitted: 8 bytes]"), "{output}");
+    assert!(!output.contains("QUJDREVG"), "{output}");
+    assert!(!output.contains("MTIzNA=="), "{output}");
+}
+
+#[test]
+fn plain_text_preserves_multi_space_indentation() {
+    let body = r#"{"model":"m","messages":[{"role":"user","content":"fn main() {\n    println!(\"hi\");\n}"}]}"#;
+    let output = omit_inline_images(body, 1024 * 1024);
+    assert!(output.contains("    println!"), "{output}");
     assert!(!output.contains("image omitted"));
 }

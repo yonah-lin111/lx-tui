@@ -73,9 +73,16 @@ fn enabled_capture_writes_redacted_jsonl() {
     let text = std::fs::read_to_string(&path).expect("payload file");
     let value: Value = serde_json::from_str(text.trim()).expect("valid json");
     assert_eq!(value["request_id"], "req-00000002");
+    assert_eq!(value["pid"], std::process::id());
     assert_eq!(value["attempt"], 1);
     assert_eq!(value["response"]["status"], 200);
     assert_eq!(value["truncated"], false);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let mode = std::fs::metadata(&path).expect("meta").permissions().mode() & 0o777;
+        assert_eq!(mode, 0o600);
+    }
     assert_eq!(
         value["request"]["url"],
         "https://api.example.com/v1/messages"

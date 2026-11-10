@@ -215,6 +215,15 @@ pub(super) fn launch_child_turn(
         parent_session: Some(parent_key.session.clone()),
         ..crate::chat::client::StreamLog::default()
     };
+    tracing::info!(
+        target: "lx::agent",
+        pane = parent_key.pane.raw(),
+        session = %record.child_session_id,
+        parent_session = %parent_key.session,
+        agent_id = %record.agent_id,
+        role = record.role.as_str(),
+        "subagent turn started"
+    );
     let reads = crate::chat::tools::read_registry(&record.child_session_id);
     let recorder = super::super::file_snapshots::HostRecorderFactory::new(
         net_sender.clone(),

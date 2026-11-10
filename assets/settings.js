@@ -332,9 +332,7 @@ let logLevelSelect = null;
 const LOG_LEVELS = ['trace','debug','info','warn','error','off'];
 function generalValues() {
   const values = {};
-  for (const key of CONFIG_KEYS) {
-    values[key] = document.getElementById(key).value;
-  }
+  for (const key of CONFIG_KEYS) { values[key] = document.getElementById(key).value; }
   const dlEl = document.getElementById('image_download_dir');
   values.image_download_dir = dlEl ? dlEl.value : '';
   values.log_level = logLevelSelect ? logLevelSelect.value() : 'info';
@@ -354,9 +352,7 @@ function generalDirty() {
 function resetGeneral() {
   resetWebSearchReveals();
   if (generalBaseline === null) { return; }
-  for (const key of CONFIG_KEYS) {
-    document.getElementById(key).value = generalBaseline[key];
-  }
+  for (const key of CONFIG_KEYS) { document.getElementById(key).value = generalBaseline[key]; }
   const dlEl = document.getElementById('image_download_dir');
   if (dlEl) { dlEl.value = generalBaseline.image_download_dir || ''; }
   if (logLevelSelect) { logLevelSelect.setValue(generalBaseline.log_level || 'info'); }
@@ -370,13 +366,12 @@ function resetGeneral() {
 
 async function saveGeneral() {
   const config = {};
-  for (const key of CONFIG_KEYS) {
-    config[key] = Number(document.getElementById(key).value);
-  }
+  for (const key of CONFIG_KEYS) { config[key] = Number(document.getElementById(key).value); }
   const dlEl = document.getElementById('image_download_dir');
   config.image_download_dir = ((dlEl && dlEl.value) || '').trim();
   config.log_level = logLevelSelect ? logLevelSelect.value() : 'info';
-  config.log_payload = document.getElementById('log_payload').checked;
+  const payloadEl = document.getElementById('log_payload');
+  config.log_payload = payloadEl ? payloadEl.checked : false;
   const web_search = {
     exa_api_key: (document.getElementById('web_search_exa_api_key').value || '').trim(),
     tavily_api_key: (document.getElementById('web_search_tavily_api_key').value || '').trim()
@@ -390,23 +385,21 @@ async function saveGeneral() {
     throw error;
   }
 }
+
 function applyGeneralData(data) {
   resetWebSearchReveals();
-  for (const key of CONFIG_KEYS) {
-    document.getElementById(key).value = data.config[key];
-  }
+  const cfg = (data && data.config) || {};
+  for (const key of CONFIG_KEYS) { document.getElementById(key).value = cfg[key]; }
   const dlEl = document.getElementById('image_download_dir');
-  if (dlEl) { dlEl.value = (data.config && data.config.image_download_dir) || ''; }
-  if (logLevelSelect) {
-    logLevelSelect.setValue((data.config && data.config.log_level) || 'info');
-  }
+  if (dlEl) { dlEl.value = cfg.image_download_dir || ''; }
+  if (logLevelSelect) { logLevelSelect.setValue(cfg.log_level || 'info'); }
   const payloadEl = document.getElementById('log_payload');
-  if (payloadEl) { payloadEl.checked = !!(data.config && data.config.log_payload); }
-  const logging = data.logging || {};
-  currentLogPath = logging.dir || '';
+  if (payloadEl) { payloadEl.checked = !!cfg.log_payload; }
+  const logging = (data && data.logging) || {};
+  currentLogPath = logging.file || logging.dir || '';
   const pathEl = document.getElementById('log_path');
-  if (pathEl) { pathEl.textContent = logging.file || logging.dir || '-'; }
-  const webSearch = data.web_search || {};
+  if (pathEl) { pathEl.textContent = currentLogPath || '-'; }
+  const webSearch = (data && data.web_search) || {};
   document.getElementById('web_search_exa_api_key').value = webSearch.exa_api_key || '';
   document.getElementById('web_search_tavily_api_key').value = webSearch.tavily_api_key || '';
   generalBaseline = generalValues();
@@ -415,7 +408,7 @@ function applyGeneralData(data) {
 }
 
 async function copyLogPath() {
-  if (!currentLogPath) { return; }
+  if (!currentLogPath) { showToast('Log path unavailable', 'error'); return; }
   try {
     await navigator.clipboard.writeText(currentLogPath);
     showToast('Log path copied', 'ok');
@@ -985,23 +978,12 @@ let modelsListWidth = 220;
 setupResizer(
   document.getElementById('models-resizer'),
   () => modelsListWidth,
-  (width) => {
-    modelsListWidth = width;
-    document.querySelector('.models-grid').style.setProperty('--models-list-width', width + 'px');
-  },
+  (width) => { modelsListWidth = width; document.querySelector('.models-grid').style.setProperty('--models-list-width', width + 'px'); },
   LIST_MIN_WIDTH,
   LIST_MAX_WIDTH
 );
-actionBars.general = createActionBar('actions-general', {
-  isDirty: generalDirty,
-  save: saveGeneral,
-  reset: resetGeneral
-});
-actionBars.commands = createActionBar('actions-commands', {
-  isDirty: commandsDirty,
-  save: saveCommand,
-  reset: resetCommandEditor
-});
+actionBars.general = createActionBar('actions-general', { isDirty: generalDirty, save: saveGeneral, reset: resetGeneral });
+actionBars.commands = createActionBar('actions-commands', { isDirty: commandsDirty, save: saveCommand, reset: resetCommandEditor });
 initLoggingSelect();
 initCommandSelects();
 loadState();

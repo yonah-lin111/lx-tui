@@ -23,12 +23,16 @@ pub(crate) fn begin_child_tool(
         return false;
     };
     let assistant_id = handle.child_assistant_id.clone();
+    let agent_id = handle.agent_id.clone();
     // 时间线对齐：工具之前的 parts 先落库，DB 分配的 position 才与内存一致。
     if let Some(position) = tool_position(&handle.chat, &assistant_id, &call.call_id) {
         let parts = parts_before(&handle.chat, &assistant_id, position);
         if let Err(error) = persistence.checkpoint_parts(&workspace, &assistant_id, &parts) {
             tracing::warn!(
-                target: "lx::agent",
+                target: "lx::agent::tool",
+                pane = key.pane.raw(),
+                session = %key.session,
+                agent_id = %agent_id,
                 call_id = %call.call_id,
                 code = error.code(),
                 "child tool timeline sync failed"
@@ -49,6 +53,16 @@ pub(crate) fn begin_child_tool(
     ) {
         Ok(ticket) => ticket,
         Err(error) => {
+            tracing::warn!(
+                target: "lx::agent::tool",
+                pane = key.pane.raw(),
+                session = %key.session,
+                agent_id = %agent_id,
+                call_id = %call.call_id,
+                name = %call.name,
+                code = error.code(),
+                "child tool pending record failed"
+            );
             let _ = reply.send(Err(HostError::Failed {
                 code: format!("{BEGIN_TOOL_FAILED_CODE} · {}", error.code()),
             }));
@@ -61,11 +75,30 @@ pub(crate) fn begin_child_tool(
     }
     let mut changed = update::on_subagent_tool_pending(state, &key.session, &call.call_id);
     if let Err(error) = persistence.mark_tool_running(&workspace, &ticket) {
+        tracing::warn!(
+            target: "lx::agent::tool",
+            pane = key.pane.raw(),
+            session = %key.session,
+            agent_id = %agent_id,
+            call_id = %call.call_id,
+            code = error.code(),
+            "child tool running record failed"
+        );
         let _ = reply.send(Err(HostError::Failed {
             code: format!("{RUNNING_TOOL_FAILED_CODE} · {}", error.code()),
         }));
         return changed;
     }
+    tracing::debug!(
+        target: "lx::agent::tool",
+        pane = key.pane.raw(),
+        session = %key.session,
+        agent_id = %agent_id,
+        call_id = %call.call_id,
+        name = %call.name,
+        arguments_bytes = call.arguments_json.len(),
+        "tool call started"
+    );
     if let Some(handle) = streams.subagents.get_mut(&key.session) {
         handle.chat.mark_tool_running(&call.call_id);
     }
@@ -96,9 +129,26 @@ pub(crate) fn finish_child_tool(
         .and_then(|handle| tool_arguments(&handle.chat, &ticket.call_id));
     let detail =
         super::tool_calls::detail_of(&outcome, settled_json.as_deref(), arguments.as_deref());
+    let agent_id = streams
+        .subagents
+        .get(&key.session)
+        .map(|handle| handle.agent_id.clone())
+        .unwrap_or_else(|| "-".into());
     match persistence.finish_tool_call(&workspace, ticket, &result) {
         Ok(()) => {
             let (status, summary, error) = super::tool_calls::view_settlement(&outcome);
+            tracing::info!(
+                target: "lx::agent::tool",
+                pane = key.pane.raw(),
+                session = %key.session,
+                agent_id = %agent_id,
+                call_id = %ticket.call_id,
+                status = super::tool_calls::status_text(status),
+                duration_ms = crate::db::now_ms().saturating_sub(ticket.started_at_ms),
+                is_error = result.error_text.is_some(),
+                result_bytes = result.result_json.as_ref().map_or(0, String::len),
+                "tool call settled"
+            );
             let mut changed = update::on_subagent_tool_settled(
                 state,
                 &key.session,
@@ -138,7 +188,10 @@ pub(crate) fn finish_child_tool(
         }
         Err(error) => {
             tracing::warn!(
-                target: "lx::agent",
+                target: "lx::agent::tool",
+                pane = key.pane.raw(),
+                session = %key.session,
+                agent_id = %agent_id,
                 call_id = %ticket.call_id,
                 code = error.code(),
                 "child tool result persistence failed"

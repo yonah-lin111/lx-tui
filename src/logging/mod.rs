@@ -59,7 +59,11 @@ pub fn init(config: &Config, role: &'static str) -> LogGuard {
         .filename_prefix("lx-tui.log")
         .build(&dir);
     let (writer, worker) = match appender {
-        Ok(appender) => tracing_appender::non_blocking(appender),
+        Ok(appender) => {
+            let today_file = dir.join(format!("lx-tui.log.{}", format_date(utc_today())));
+            let _ = crate::platform::restrict_file_permissions(&today_file);
+            tracing_appender::non_blocking(appender)
+        }
         // 有意忽略：文件 appender 初始化失败时降级为丢弃日志，保证应用可用。
         Err(_) => tracing_appender::non_blocking(std::io::sink()),
     };
@@ -112,6 +116,19 @@ pub fn apply(config: &Config) {
 /// 当前请求是否记录原始 payload。
 pub fn payload_enabled() -> bool {
     PAYLOAD.load(Ordering::Relaxed)
+}
+
+/// 日志级别是否被环境变量 `LX_TUI_LOG` 锁定。
+pub fn env_filter_locked() -> bool {
+    ENV_FILTER_LOCKED.load(Ordering::Relaxed)
+}
+
+/// payload 开关是否被环境变量 `LX_TUI_LOG_PAYLOAD` 锁定。
+pub fn payload_env_locked() -> bool {
+    std::env::var("LX_TUI_LOG_PAYLOAD")
+        .ok()
+        .and_then(|value| parse_env_bool(&value))
+        .is_some()
 }
 
 /// 生成一次网络请求的短关联 ID。
@@ -171,13 +188,21 @@ pub(crate) fn parse_env_bool(value: &str) -> Option<bool> {
 }
 
 fn initial_filter(config: &Config) -> (EnvFilter, bool, bool) {
-    if std::env::var_os("LX_TUI_LOG").is_some() {
-        return match EnvFilter::try_from_env("LX_TUI_LOG") {
-            Ok(filter) => (filter, true, false),
-            Err(_) => (build_filter(&config.log_level), false, true),
-        };
+    let env_value = std::env::var("LX_TUI_LOG").ok();
+    resolve_filter_value(env_value.as_deref(), &config.log_level)
+}
+
+pub(crate) fn resolve_filter_value(
+    env_value: Option<&str>,
+    config_level: &str,
+) -> (EnvFilter, bool, bool) {
+    let Some(raw) = env_value.map(str::trim).filter(|value| !value.is_empty()) else {
+        return (build_filter(config_level), false, false);
+    };
+    match EnvFilter::try_new(raw) {
+        Ok(filter) if !filter.to_string().is_empty() => (filter, true, false),
+        Ok(_) | Err(_) => (build_filter(config_level), false, true),
     }
-    (build_filter(&config.log_level), false, false)
 }
 
 fn build_filter(level: &str) -> EnvFilter {

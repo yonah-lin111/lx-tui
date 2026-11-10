@@ -768,15 +768,15 @@ fn install_panic_hook() {
 - `generalValues()` 增加 `log_level`（`.value`）与 `log_payload`（`.checked`）。
 - `resetGeneral()` / `applyGeneralData()` 同步恢复。
 - `saveGeneral()` 发送 `config.log_level` 与 `config.log_payload`（真布尔）。
-- `applyGeneralData()` 用 `data.logging.dir` 更新 `#log_path`，并保存 `currentLogPath`。
-- `copyLogPath()`：`navigator.clipboard.writeText(currentLogPath)`，失败 toast。
+- `applyGeneralData()` 用 `data.logging.file || data.logging.dir` 更新 `#log_path`，并同步保存 `currentLogPath`。
+- `copyLogPath()`：`navigator.clipboard.writeText(currentLogPath)`，空路径或失败时弹出错误 toast。
 - `openLogFolder()`：`api('/api/logs/open', {method: 'POST', body: '{}'})`，成功/失败 toast。
 - 所有文案英文。
 
 服务端：
 
-- `GET /api/state` 追加 `"logging": {"dir": "...", "file": "..."}`。
-- `POST /api/logs/open`：token + 同源校验通过后，`tokio::task::spawn_blocking(move || platform::reveal::reveal_in_file_manager(&dir))`；成功 `{"ok":true}`，失败 500。
+- `GET /api/state` 追加 `"logging": {"dir": "...", "file": "...", "env_locked": false, "payload_env_locked": false}`。
+- `POST /api/logs/open`：token + 同源校验通过后，确保目录存在且收紧为 `0700`，再经 `tokio::task::spawn_blocking(move || platform::reveal::reveal_in_file_manager(&dir))` 打开；成功 `{"ok":true}`，失败 500。
 - 路径来自 `logging::active_log_dir()`；为空时回退 `platform::log::log_dir()`。
 
 ### 4.12 CLI 设置
@@ -785,7 +785,7 @@ fn install_panic_hook() {
 
 - `SetArgs` 增加 `log_level: Option<String>`、`log_payload: Option<bool>`。
 - `--log-level <trace|debug|info|warn|error|off>`；`--log-payload <true|false>`。
-- `SET_FLAGS` 扩为 10；`VALUE_OPTIONS`（`src/cli/args.rs`）同步加入两个参数，避免被当成子命令。
+- `VALUE_OPTIONS`（`src/cli/args.rs`）同步加入两个参数，避免被当成子命令。
 - `run_set` 写入并 `validate`；`run_show` 人类可读输出增加 `Log level:`、`Log payload:`。
 - `config_json` 增加顶层：
 

@@ -238,5 +238,6 @@ button.danger { background: none; border: 1px solid var(--err); color: var(--err
 .preset-oauth-inline input { flex: 1 1 auto; }
 #preset-form-fields .field-wide { grid-column: 1 / -1; }
 #prov-name[readonly] { opacity: 0.7; }
+#log_path { overflow-wrap: anywhere; word-break: break-all; }
 
 .hidden { display: none; }

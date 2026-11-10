@@ -81,6 +81,10 @@ fn logging_fields_round_trip_and_accept_legacy_bool_forms() {
 
     let numeric = Config::from_json(r#"{"log_payload": 1}"#).expect("numeric bool");
     assert!(numeric.log_payload);
+    let null_fields =
+        Config::from_json(r#"{"log_level": null, "log_payload": null}"#).expect("nulls accepted");
+    assert_eq!(null_fields.log_level, "info");
+    assert!(!null_fields.log_payload);
     let text = Config::from_json(r#"{"log_level":" WARN "}"#).expect("trim level");
     assert_eq!(text.log_level, "warn");
     assert!(Config::from_json(r#"{"log_level":"verbose"}"#).is_err());

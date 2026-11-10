@@ -74,8 +74,9 @@ pub fn redacted_headers(headers: &[(String, String)]) -> Vec<(String, String)> {
 
 /// 单行化、去控制字符并按 UTF-8 边界截断。
 pub fn sanitize_text(text: &str, max_bytes: usize) -> String {
-    let mut cleaned = String::with_capacity(text.len().min(max_bytes));
-    let mut last_space = false;
+    let mut cleaned = String::with_capacity(text.len().min(max_bytes.saturating_add(16)));
+    let mut last_space = true;
+    let mut truncated = false;
     for ch in text.chars() {
         if ch.is_control() && ch != '\n' && ch != '\t' {
             continue;
@@ -89,13 +90,16 @@ pub fn sanitize_text(text: &str, max_bytes: usize) -> String {
         } else {
             last_space = false;
         }
+        if cleaned.len() + ch.len_utf8() > max_bytes {
+            truncated = true;
+            break;
+        }
         cleaned.push(ch);
     }
-    let cleaned = cleaned.trim();
-    if cleaned.len() <= max_bytes {
-        return cleaned.to_string();
+    if truncated {
+        return format!("{}…[truncated]", cleaned.trim_end());
     }
-    format!("{}…[truncated]", truncate_utf8(cleaned, max_bytes))
+    cleaned.trim().to_string()
 }
 
 /// 截断到不超过 `max_bytes` 的 UTF-8 边界。
@@ -110,16 +114,36 @@ pub fn truncate_utf8(text: &str, max_bytes: usize) -> &str {
     &text[..end]
 }
 
-/// 把请求体 JSON 中的图片 base64 替换为体积占位。
+/// 把请求体 JSON 中的图片 base64 替换为体积占位，同时保留 JSON 原始缩进与多空格。
 ///
-/// 解析失败时回退为原文截断，不做猜测性替换。
+/// 解析失败时回退为按 UTF-8 边界截断，不做猜测性替换。
 pub fn omit_inline_images(body_json: &str, max_bytes: usize) -> String {
+    if !may_contain_inline_image(body_json) {
+        return truncate_json_text(body_json, max_bytes);
+    }
     let Ok(mut value) = serde_json::from_str::<serde_json::Value>(body_json) else {
         return sanitize_text(body_json, max_bytes);
     };
     omit_images_in_value(&mut value);
-    let text = serde_json::to_string(&value).unwrap_or_else(|_| body_json.to_string());
-    sanitize_text(&text, max_bytes)
+    let text = serde_json::to_string(&value).unwrap_or_else(|_| "[body omitted]".to_string());
+    truncate_json_text(&text, max_bytes)
+}
+
+fn may_contain_inline_image(body_json: &str) -> bool {
+    body_json.contains("data:image/")
+        || body_json.contains("\"base64\"")
+        || body_json.contains("\"inlineData\"")
+        || body_json.contains("\"inline_data\"")
+        || body_json.contains("\"image\"")
+        || body_json.contains("\"input_image\"")
+}
+
+fn truncate_json_text(text: &str, max_bytes: usize) -> String {
+    if text.len() <= max_bytes {
+        text.to_string()
+    } else {
+        format!("{}…[truncated]", truncate_utf8(text, max_bytes))
+    }
 }
 
 fn omit_images_in_value(value: &mut serde_json::Value) {
@@ -135,11 +159,18 @@ fn omit_images_in_value(value: &mut serde_json::Value) {
             }
         }
         serde_json::Value::Object(object) => {
-            let is_base64_image = object
+            let is_typed_image = object
                 .get("type")
                 .and_then(serde_json::Value::as_str)
-                .is_some_and(|kind| kind == "base64" || kind == "image");
-            if is_base64_image && let Some(serde_json::Value::String(data)) = object.get_mut("data")
+                .is_some_and(|kind| matches!(kind, "base64" | "image" | "input_image"));
+            let has_mime_type = ["mimeType", "mime_type", "media_type"].iter().any(|key| {
+                object
+                    .get(*key)
+                    .and_then(serde_json::Value::as_str)
+                    .is_some()
+            });
+            if (is_typed_image || has_mime_type)
+                && let Some(serde_json::Value::String(data)) = object.get_mut("data")
             {
                 *data = format!("[image omitted: {} bytes]", data.len());
             }

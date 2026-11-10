@@ -103,3 +103,26 @@ fn parse_log_date_handles_both_prefixes() {
     assert_eq!(parse_log_date("payload-2026-11-10.json"), None);
     assert_eq!(parse_log_date("notes.txt"), None);
 }
+
+#[test]
+fn empty_or_blank_env_filter_does_not_lock_or_silence_logs() {
+    let (filter, locked, invalid) = resolve_filter_value(Some(""), "debug");
+    assert!(!locked);
+    assert!(!invalid);
+    assert_eq!(filter.to_string(), build_filter("debug").to_string());
+
+    let (filter, locked, invalid) = resolve_filter_value(Some("   "), "info");
+    assert!(!locked);
+    assert!(!invalid);
+    assert_eq!(filter.to_string(), build_filter("info").to_string());
+
+    let (filter, locked, invalid) = resolve_filter_value(Some(","), "warn");
+    assert!(!locked);
+    assert!(invalid);
+    assert_eq!(filter.to_string(), build_filter("warn").to_string());
+
+    let (filter, locked, invalid) = resolve_filter_value(Some("lx=trace,warn"), "info");
+    assert!(locked);
+    assert!(!invalid);
+    assert_eq!(filter.to_string(), "lx=trace,warn");
+}

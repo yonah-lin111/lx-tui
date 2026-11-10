@@ -11,8 +11,10 @@ pub(super) fn logging_json() -> String {
     let file = crate::logging::active_log_file()
         .map(|path| path.to_string_lossy().into_owned())
         .unwrap_or_default();
+    let env_locked = crate::logging::env_filter_locked();
+    let payload_env_locked = crate::logging::payload_env_locked();
     format!(
-        "{{\"dir\":{},\"file\":{}}}",
+        "{{\"dir\":{},\"file\":{},\"env_locked\":{env_locked},\"payload_env_locked\":{payload_env_locked}}}",
         json_string(&dir),
         json_string(&file)
     )
@@ -25,9 +27,14 @@ pub(super) async fn open_logs() -> Response {
     else {
         return Response::error(500, "log directory unavailable");
     };
+    let _ = std::fs::create_dir_all(&dir);
+    let _ = crate::platform::restrict_dir_permissions(&dir);
     match tokio::task::spawn_blocking(move || crate::platform::reveal_in_file_manager(&dir)).await {
         Ok(Ok(())) => Response::json(200, "{\"ok\":true}"),
         Ok(Err(error)) => Response::error(500, &error.to_string()),
         Err(error) => Response::error(500, &error.to_string()),
     }
 }
+
+#[cfg(test)]
+mod tests;

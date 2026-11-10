@@ -39,7 +39,9 @@ pub(crate) fn begin_tool(
         let parts = parts_before(state, &key, &assistant_id, position);
         if let Err(error) = persistence.checkpoint_parts(&workspace, &assistant_id, &parts) {
             tracing::warn!(
-                target: "lx::agent",
+                target: "lx::agent::tool",
+                pane = key.pane.raw(),
+                session = %key.session,
                 call_id = %call.call_id,
                 code = error.code(),
                 "tool call timeline sync failed"
@@ -150,7 +152,9 @@ pub(crate) fn settle_begin(
         Err(error) => {
             // running 入库失败：不执行文件 IO，本轮失败。
             tracing::warn!(
-                target: "lx::agent",
+                target: "lx::agent::tool",
+                pane = pending.key.pane.raw(),
+                session = %pending.key.session,
                 call_id = %pending.ticket.call_id,
                 code = error.code(),
                 "tool call running record failed"
@@ -176,7 +180,7 @@ pub(crate) fn cancel_pending(
     };
     if let Err(error) = persistence.finish_tool_call(workspace, ticket, &cancelled) {
         tracing::warn!(
-            target: "lx::agent",
+            target: "lx::agent::tool",
             call_id = %ticket.call_id,
             code = error.code(),
             "tool call cancel record failed"
@@ -268,7 +272,7 @@ pub(crate) fn finish_tool(
             if let ToolOutcome::Executed(ToolExecutionResult::Plan(snapshot)) = &outcome {
                 changed |= update::commit_plan(state, key.pane, snapshot);
             }
-            tracing::debug!(
+            tracing::info!(
                 target: "lx::agent::tool",
                 pane = key.pane.raw(),
                 session = %key.session,
@@ -286,7 +290,9 @@ pub(crate) fn finish_tool(
         Err(db_error) => {
             // ③ 落库失败：不重试写入，本轮失败；UI 明示文件状态需核查。
             tracing::warn!(
-                target: "lx::agent",
+                target: "lx::agent::tool",
+                pane = key.pane.raw(),
+                session = %key.session,
                 call_id = %ticket.call_id,
                 code = db_error.code(),
                 "tool result persistence failed"
@@ -501,7 +507,7 @@ fn failure_text(execution: &crate::chat::tools::ToolExecutionResult) -> Option<S
 }
 
 /// 稳定状态字符串（只进 tracing，不当用户文案）。
-fn status_text(status: crate::app::state::ToolStatus) -> &'static str {
+pub(crate) fn status_text(status: crate::app::state::ToolStatus) -> &'static str {
     use crate::app::state::ToolStatus;
     match status {
         ToolStatus::InputStreaming => "input_streaming",

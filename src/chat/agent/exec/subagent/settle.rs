@@ -69,10 +69,34 @@ impl ExecSubagentPool {
         let was_paused_by_interrupt = self.paused_by_interrupt.remove(agent_id);
         let was_closed = self.closed.remove(agent_id) || handle.closed_without_report;
         close_open_part(&mut handle.parts, &mut handle.open_part_index);
-        tracing::debug!(
-            target: "lx::exec", agent_id, role = handle.role.as_str(),
-            child_user_message_id = %handle.child_user_message_id, "subagent turn finished",
-        );
+        let reason = summary.stop_reason();
+        if matches!(reason, crate::chat::events::StopReason::Failed { .. }) {
+            tracing::warn!(
+                target: "lx::agent",
+                session = %child_session_id,
+                parent_session = %handle.parent_session_id,
+                agent_id,
+                role = handle.role.as_str(),
+                child_user_message_id = %handle.child_user_message_id,
+                reason = reason.as_str(),
+                usage_input = summary.usage.input,
+                usage_output = summary.usage.output,
+                "subagent turn failed"
+            );
+        } else {
+            tracing::info!(
+                target: "lx::agent",
+                session = %child_session_id,
+                parent_session = %handle.parent_session_id,
+                agent_id,
+                role = handle.role.as_str(),
+                child_user_message_id = %handle.child_user_message_id,
+                reason = reason.as_str(),
+                usage_input = summary.usage.input,
+                usage_output = summary.usage.output,
+                "subagent turn finished"
+            );
+        }
         let outcome = db_outcome(&summary.outcome);
         let report = if was_closed {
             None

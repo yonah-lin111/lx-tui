@@ -95,7 +95,7 @@ impl Config {
             ));
         }
         if !matches!(
-            self.log_level.as_str(),
+            self.log_level.trim().to_ascii_lowercase().as_str(),
             "trace" | "debug" | "info" | "warn" | "error" | "off"
         ) {
             return Err(ConfigError::Invalid(
@@ -188,6 +188,9 @@ impl Config {
                 }
             }
             if key == "log_payload" {
+                if matches!(value, JsonValue::Null) {
+                    continue;
+                }
                 config.log_payload = json_bool(value)
                     .ok_or_else(|| ConfigError::Invalid("log_payload must be a boolean".into()))?;
                 continue;

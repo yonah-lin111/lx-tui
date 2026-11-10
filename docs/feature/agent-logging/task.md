@@ -56,7 +56,7 @@
   - [x] `state_json` 追加 `"logging":{"dir":...,"file":...}`（JSON 转义）。
   - [x] 新路由 `("POST", "/api/logs/open") => open_logs(state).await`。
   - [x] `open_logs` 用 `spawn_blocking` 调 `platform::reveal::reveal_in_file_manager`。
-- [x] `src/settings/service/tests.rs`：GET state、PUT config 两字段、打开目录错误路径（不实际启动 Finder 的测试可用不存在目录断言 500）。
+- [x] `src/settings/service/logs/tests.rs`：GET state、PUT config 两字段与增量合并、设置页自定义下拉钩子、`/api/logs/open` 鉴权与同源校验。
 - [x] `src/event/inventory.rs:64`：`ConfigChanged` 先 `logging::apply(&updated)` 再赋值。
 
 ## P3. 启动与 panic
@@ -121,7 +121,7 @@
   - [x] `SET_FLAGS`、`parse_set`、`run_set`、`run_show`、`config_json`（顶层 `logging`）。
 - [x] `src/cli/args.rs`：`VALUE_OPTIONS` 加入 `--log-level`、`--log-payload`。
 - [x] `src/cli/help.rs`：`SETTINGS_HELP` 补参数。
-- [x] `src/cli/tests/config_regressions_tests.rs`：show/set/help 覆盖新字段。
+- [x] `src/cli/tests/config_domains_tests.rs`：show/set/help 覆盖新字段。
 
 ## P7. 规范文档
 
@@ -150,10 +150,13 @@ feat(logging): add rotating agent logs, live level control, and payload capture
 
 - 工作区：`.worktrees/agent-logging`，分支 `feat/agent-logging`。
 - codegraph 已初始化；codebase-memory 项目 `lx-tui-agent-logging` 已索引（26,794 nodes / 180,120 edges）。
-- 新增：`src/logging/{mod,redact,payload}.rs` 及测试、`src/platform/log.rs` 及测试、`src/event/chat/stream_start.rs`、`src/settings/service/logs.rs`。
+- 新增：`src/logging/{mod,redact,payload}.rs` 及测试、`src/platform/log.rs` 及测试、`src/event/chat/stream_start.rs`、`src/settings/service/logs.rs` 及 `src/settings/service/logs/tests.rs`。
+- Review 修复（详见 [`review.md`](review.md)）：
+  - **P0**：补齐 Google Gemini `inlineData` / `inline_data` 内联图片 base64 脱敏；`request_error_code` 使用 `error.without_url()` 防止泄漏 Google `?key=`；`ExecStreamFactory` 增加 `stream_with_log` 为 Headless 子 Agent 传递独立 `StreamLog`；补齐 TUI 与 Headless 子 Agent 工具调用的 `lx::agent::tool` 日志。
+  - **P1**：修复 `LX_TUI_LOG=""` 空串关闭日志并锁死热更新问题；为日志文件与 `payload-*.jsonl` 补齐 `0600` 权限与单次 `write_all` 原子行追加；统一 `lx::agent::request` 的 `session` / `agent_id` / `parent_session` 为 `%` Display 格式并将 `tool call settled` 及子 Agent 轮次起止提升为 `INFO`；`Config::from_json` 容忍 `log_payload: null` 且 `PUT /api/config` 支持以磁盘配置为基底增量更新。
+  - **P2/P3**：修复 `omit_inline_images` 误调 `sanitize_text` 压缩多空格问题；流式重试前清理旧 `ChatDelta::Finished` 并支持预取消通道短路；`install_panic_hook` 改为 `Once` 幂等安装；统一设置页 `#log_path` 展示与复制路径；将 `assets/settings.js` 收紧至 992 行（< 1000）并将日志服务测试拆入 `src/settings/service/logs/tests.rs`（`service/tests.rs` 降至 1427 行 < 1500）；`payload-*.jsonl` 增加 `pid` 字段。
 - 验证：
   - `cargo fmt --check` 通过。
   - `cargo clippy --all-targets -- -D warnings` 通过。
-  - `cargo test` 通过：5007 个单元测试 + 全部集成测试（0 failed，4 ignored）。
-  - 手工验证：`LX_TUI_LOG_DIR` 下生成 `lx-tui.log.YYYY-MM-DD`，行为 `role=cli pid=... INFO ...`；`settings show --json` 含 `logging.level/payload`；`settings set --log-level debug --log-payload true` 正确落盘。
-- 生产文件行数：`event/chat/mod.rs` 659、`stream_start.rs` 397、`settings/service/handlers.rs` 980、`logging/mod.rs` 330，均低于 1000。
+  - `cargo test` 通过。
+  - 手工与 CLI 实机验证详见 [`verification.md`](verification.md)。

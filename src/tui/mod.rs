@@ -154,25 +154,29 @@ impl Drop for Tui {
     }
 }
 
-/// panic 时先恢复终端，再交回默认钩子。
+static PANIC_HOOK_ONCE: std::sync::Once = std::sync::Once::new();
+
+/// panic 时先恢复终端，再交回默认钩子（幂等安装，避免 inline + 主界面重复包装）。
 fn install_panic_hook() {
-    let default_hook = std::panic::take_hook();
-    std::panic::set_hook(Box::new(move |panic_info| {
-        // 先落日志再恢复终端：恢复失败时 panic 原因仍可回溯。
-        tracing::error!(
-            target: "lx::panic",
-            panic = %panic_info,
-            location = panic_info.location().map(|location| format!(
-                "{}:{}:{}",
-                location.file(),
-                location.line(),
-                location.column()
-            )).as_deref(),
-            "panic; restoring terminal"
-        );
-        let _ = restore_raw();
-        default_hook(panic_info);
-    }));
+    PANIC_HOOK_ONCE.call_once(|| {
+        let default_hook = std::panic::take_hook();
+        std::panic::set_hook(Box::new(move |panic_info| {
+            // 先落日志再恢复终端：恢复失败时 panic 原因仍可回溯。
+            tracing::error!(
+                target: "lx::panic",
+                panic = %panic_info,
+                location = panic_info.location().map(|location| format!(
+                    "{}:{}:{}",
+                    location.file(),
+                    location.line(),
+                    location.column()
+                )).as_deref(),
+                "panic; restoring terminal"
+            );
+            let _ = restore_raw();
+            default_hook(panic_info);
+        }));
+    });
 }
 
 fn restore_raw() -> io::Result<()> {

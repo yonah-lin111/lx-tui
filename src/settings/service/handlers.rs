@@ -296,7 +296,17 @@ fn origin_ok(request: &Request, _state: &ServiceState) -> bool {
 
 /// `GET /api/state`：当前配置 + 命令快照。
 fn state_json(state: &ServiceState) -> Response {
-    let config = crate::config::load_or_default(state.config_path()).unwrap_or_default();
+    let config = match crate::config::load_or_default(state.config_path()) {
+        Ok(config) => config,
+        Err(error) => {
+            tracing::warn!(
+                target: "lx::settings",
+                %error,
+                "settings.json is invalid; falling back to defaults"
+            );
+            Config::default()
+        }
+    };
     let commands = state.commands();
     // 页面需要能展示当前 Key；读取失败时退回默认 Key，不让整个设置页失效。
     let web_search = load_ai_settings(state)
@@ -360,7 +370,8 @@ fn put_config(request: &Request, state: &ServiceState) -> Response {
         Ok(Some(entries)) => entries,
         _ => return Response::error(422, "body must contain a config object"),
     };
-    let config = match config_from_json(config_entries) {
+    let base = crate::config::load_or_default(state.config_path()).unwrap_or_default();
+    let config = match config_from_json(base, config_entries) {
         Ok(config) => config,
         Err(message) => return Response::error(422, &message),
     };
@@ -453,9 +464,11 @@ fn merge_web_search(
     Ok(config)
 }
 
-/// 解析已知配置键；未知键忽略，非法值报错。
-fn config_from_json(entries: Vec<(String, JsonValue)>) -> Result<Config, String> {
-    let mut config = Config::default();
+/// 解析已知配置键；未提供的键沿用 `base`，未知键忽略，非法值报错。
+fn config_from_json(
+    mut config: Config,
+    entries: Vec<(String, JsonValue)>,
+) -> Result<Config, String> {
     for (key, value) in entries {
         if key == "log_level" {
             match value {

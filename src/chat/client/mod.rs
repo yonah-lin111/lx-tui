@@ -93,6 +93,18 @@ impl StreamLog {
             parent_session: self.parent_session.clone(),
         }
     }
+
+    fn session_str(&self) -> &str {
+        self.session_id.as_deref().unwrap_or("-")
+    }
+
+    fn agent_str(&self) -> &str {
+        self.agent_id.as_deref().unwrap_or("-")
+    }
+
+    fn parent_str(&self) -> &str {
+        self.parent_session.as_deref().unwrap_or("-")
+    }
 }
 
 /// 连接超时。
@@ -158,9 +170,12 @@ pub async fn run_stream_with_log(
                 target: "lx::agent::request",
                 request_id = %request_id,
                 kind = log.kind,
-                pane = ?log.pane,
-                session = ?log.session_id,
-                turn = ?log.turn_index,
+                pane = log.pane,
+                session = %log.session_str(),
+                turn = log.turn_index,
+                generation = log.generation,
+                agent_id = %log.agent_str(),
+                parent_session = %log.parent_str(),
                 transport = transport_kind,
                 provider = %request.model.provider,
                 model = %request.model.model,
@@ -180,12 +195,12 @@ pub async fn run_stream_with_log(
         target: "lx::agent::request",
         request_id = %request_id,
         kind = log.kind,
-        pane = ?log.pane,
-        session = ?log.session_id,
-        turn = ?log.turn_index,
-        generation = ?log.generation,
-        agent_id = ?log.agent_id,
-        parent_session = ?log.parent_session,
+        pane = log.pane,
+        session = %log.session_str(),
+        turn = log.turn_index,
+        generation = log.generation,
+        agent_id = %log.agent_str(),
+        parent_session = %log.parent_str(),
         transport = transport_kind,
         provider = %request.model.provider,
         model = %request.model.model,
@@ -202,6 +217,9 @@ pub async fn run_stream_with_log(
     let mut deltas = Vec::new();
     let mut attempt = 0u32;
     let stop = loop {
+        if *cancel.borrow() {
+            break StopReason::Cancelled;
+        }
         let attempt_started = Instant::now();
         let before = deltas.len();
         let reason = stream_once(
@@ -219,6 +237,7 @@ pub async fn run_stream_with_log(
         tracing::debug!(
             target: "lx::agent::request",
             request_id = %request_id,
+            session = %log.session_str(),
             attempt,
             reason = reason.as_str(),
             attempt_deltas = deltas.len().saturating_sub(before),
@@ -227,10 +246,11 @@ pub async fn run_stream_with_log(
         );
         // 只在“本响应零增量、零工具输入”时重试：已有 partial 说明请求已被接受，
         // 重试会导致重复内容；已出现工具输入说明可能有文件副作用，绝不重试。
-        let retryable = can_retry(&deltas, &reason) && attempt < MAX_RETRIES;
+        let retryable = !*cancel.borrow() && can_retry(&deltas, &reason) && attempt < MAX_RETRIES;
         if !retryable {
             break reason;
         }
+        deltas.retain(|delta| !matches!(delta, ChatDelta::Finished { .. }));
         attempt += 1;
         // 指数退避（2s、4s、8s，随后每次 10s），与 opencode 的节奏一致。
         let backoff = RETRY_BASE_DELAY
@@ -239,6 +259,7 @@ pub async fn run_stream_with_log(
         tracing::warn!(
             target: "lx::agent::request",
             request_id = %request_id,
+            session = %log.session_str(),
             attempt,
             reason = reason.as_str(),
             backoff_ms = backoff.as_millis() as u64,
@@ -250,6 +271,7 @@ pub async fn run_stream_with_log(
                 tracing::debug!(
                     target: "lx::agent::request",
                     request_id = %request_id,
+                    session = %log.session_str(),
                     stage = "backoff",
                     "agent request cancelled"
                 );
@@ -270,9 +292,12 @@ pub async fn run_stream_with_log(
         target: "lx::agent::request",
         request_id = %request_id,
         kind = log.kind,
-        pane = ?log.pane,
-        session = ?log.session_id,
-        turn = ?log.turn_index,
+        pane = log.pane,
+        session = %log.session_str(),
+        turn = log.turn_index,
+        generation = log.generation,
+        agent_id = %log.agent_str(),
+        parent_session = %log.parent_str(),
         attempts = attempt + 1,
         reason = stop.as_str(),
         deltas = deltas.len(),
@@ -450,7 +475,7 @@ async fn stream_once_inner(
         ) => match response {
             Ok(Ok(response)) => response,
             Ok(Err(error)) => {
-                let code = request_error_code(&error);
+                let code = request_error_code(error);
                 tracing::warn!(
                     target: "lx::agent::request",
                     request_id,
@@ -524,7 +549,7 @@ async fn stream_once_inner(
             chunk = tokio::time::timeout(idle_timeout, stream.next()) => match chunk {
                 Ok(Some(Ok(bytes))) => bytes,
                 Ok(Some(Err(error))) => {
-                    let code = request_error_code(&error);
+                    let code = request_error_code(error);
                     tracing::warn!(
                         target: "lx::agent::request",
                         request_id,
@@ -725,14 +750,14 @@ fn finalize_partial(
     stop
 }
 
-/// reqwest 错误转稳定错误码（不含 URL 与 Key）。
-fn request_error_code(error: &reqwest::Error) -> String {
+/// reqwest 错误转稳定错误码（剥离 URL 与 query，绝不泄漏 `?key=`）。
+fn request_error_code(error: reqwest::Error) -> String {
     if error.is_timeout() {
         "timeout".into()
     } else if error.is_connect() {
         "connection failed".into()
     } else {
-        format!("request failed: {error}")
+        format!("request failed: {}", error.without_url())
     }
 }
 
