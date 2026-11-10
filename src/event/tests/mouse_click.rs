@@ -879,3 +879,93 @@ fn copy_toast_anchors_to_right_panel_for_template_and_todo_and_global_for_overla
         "居中模态弹窗内复制走全局 toast（anchor = None）"
     );
 }
+
+#[test]
+fn ctrl_click_opens_markdown_link_on_both_left_and_macos_ctrl_right_mouse_down() {
+    use crate::app::effects::Effect;
+    use crate::app::state::{AssistantStepView, ChatMessageView, ChatPartView};
+    use crate::chat::events::PartKind;
+
+    let mut state = AppState::demo();
+    let config = Config::default();
+    let mut sessions = HashMap::new();
+    let mut cache = ui::RenderCache::default();
+    let mut dirty = false;
+    let pane = state.active_tab().layout.focus();
+
+    if let Some(target) = state.pane_mut_anywhere(pane) {
+        target.lx.chat.messages.push(ChatMessageView {
+            sequence: 0,
+            id: "a0".into(),
+            role: "assistant".into(),
+            status: "complete".into(),
+            turn_index: 0,
+            kind: "chat".into(),
+            shell: None,
+            steps: vec![AssistantStepView::Part {
+                position: 0,
+                part: ChatPartView {
+                    kind: PartKind::Text,
+                    content: "[OpenNews](https://example.com/news)".into(),
+                    provider_metadata_json: None,
+                    started_at_ms: None,
+                    ended_at_ms: None,
+                    completed_at_ms: None,
+                },
+            }],
+            model_label: None,
+            error_code: None,
+            input_tokens: None,
+            output_tokens: None,
+            cache_read_tokens: None,
+            duration_ms: None,
+            reports: Vec::new(),
+            attachments: Vec::new(),
+        });
+    }
+
+    let geo = geometry(&state, &config, Rect::new(0, 0, 120, 40));
+    let pane_rect = geo
+        .rects
+        .iter()
+        .find(|(id, _)| *id == pane)
+        .map(|(_, r)| *r)
+        .expect("pane rect");
+    let inner = crate::layout::pane_inner_rect(pane_rect);
+    let mut buf = ratatui::buffer::Buffer::empty(inner);
+    if let Some(target) = state.pane_anywhere(pane) {
+        ui::main_content::lx::render(inner, &mut buf, &target.lx, true, None, cache.pane(pane));
+    }
+    let click_col = inner.x + 3;
+    let click_row = inner.y;
+
+    for button in [MouseButton::Left, MouseButton::Right] {
+        state.effects.clear();
+        handle_terminal_event(
+            TerminalEvent::Mouse(crossterm::event::MouseEvent {
+                kind: MouseEventKind::Down(button),
+                column: click_col,
+                row: click_row,
+                modifiers: KeyModifiers::CONTROL,
+            }),
+            &mut state,
+            &mut sessions,
+            &geo,
+            &config,
+            &mut cache,
+            &mut dirty,
+        );
+        assert!(
+            state.overlay.is_none(),
+            "Ctrl+{button:?} 点击超链接不得弹出右键菜单"
+        );
+        assert!(
+            state.effects.iter().any(|eff| matches!(
+                eff,
+                Effect::OpenBrowser { url } if url == "https://example.com/news"
+            )),
+            "Ctrl+{button:?} 点击超链接应立即推入 OpenBrowser：{:?}",
+            state.effects
+        );
+    }
+}
