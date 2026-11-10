@@ -659,7 +659,8 @@ JSONL 记录形状：
 ```rust
 async fn stream_once(/* 现有参数 */, capture: &mut PayloadCapture) -> StopReason {
     let reason = stream_once_inner(/* 现有参数 */, capture).await;
-    capture.finish(Some(reason.as_str()));
+    let error = (!matches!(reason, StopReason::Complete)).then(|| reason.as_str());
+    capture.finish(error);
     reason
 }
 ```

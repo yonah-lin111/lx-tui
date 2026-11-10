@@ -53,8 +53,19 @@ pub trait ExecStreamFactory: Send + Sync {
 }
 
 /// 真实网络流：按冻结的模型目标调用 `run_stream`。
-#[derive(Debug, Default, Clone, Copy)]
-pub struct RealStreamFactory;
+#[derive(Debug, Default, Clone)]
+pub struct RealStreamFactory {
+    session_id: Option<String>,
+}
+
+impl RealStreamFactory {
+    /// 绑定当前会话 ID，供网络请求日志与 payload 关联。
+    pub fn with_session(session_id: impl Into<String>) -> Self {
+        Self {
+            session_id: Some(session_id.into()),
+        }
+    }
+}
 
 #[allow(clippy::type_complexity)]
 impl ExecStreamFactory for RealStreamFactory {
@@ -69,9 +80,11 @@ impl ExecStreamFactory for RealStreamFactory {
         let base_url = model.base_url.clone();
         let api_key = model.api_key.clone();
         let idle_timeout = std::time::Duration::from_millis(model.idle_timeout_ms);
+        let session_id = self.session_id.clone();
         Box::pin(async move {
             let stream_log = crate::chat::client::StreamLog {
                 kind: "exec",
+                session_id,
                 ..crate::chat::client::StreamLog::default()
             };
             crate::chat::client::run_stream_with_log(
@@ -291,6 +304,14 @@ impl ExecRunner<'_> {
             tracing::warn!(target: "lx::exec", call_id = %ticket.call_id, code = error.code(), "tool running record failed");
             return fail_reply(reply, RUNNING_TOOL_FAILED_CODE, error.code());
         }
+        tracing::debug!(
+            target: "lx::agent::tool",
+            session = %self.session_id,
+            call_id = %call.call_id,
+            name = %call.name,
+            arguments_bytes = call.arguments_json.len(),
+            "tool call started"
+        );
         processor.on_tool_started(&call);
         self.active_calls.insert(call.call_id.clone(), call);
         let _ = reply.send(Ok(ticket));
@@ -304,15 +325,22 @@ impl ExecRunner<'_> {
         reply: oneshot::Sender<Result<(), HostError>>,
         processor: &mut dyn ExecEventProcessor,
     ) {
-        match self
-            .db
-            .finish_tool_call(&self.workspace, &ticket, &db_result_of(&outcome))
-        {
+        let result = db_result_of(&outcome);
+        match self.db.finish_tool_call(&self.workspace, &ticket, &result) {
             Ok(()) => {
+                let duration_ms = crate::db::now_ms()
+                    .saturating_sub(ticket.started_at_ms)
+                    .max(0);
+                tracing::debug!(
+                    target: "lx::agent::tool",
+                    session = %self.session_id,
+                    call_id = %ticket.call_id,
+                    duration_ms,
+                    is_error = result.error_text.is_some(),
+                    result_bytes = result.result_json.as_ref().map_or(0, String::len),
+                    "tool call settled"
+                );
                 if let Some(call) = self.active_calls.remove(&ticket.call_id) {
-                    let duration_ms = crate::db::now_ms()
-                        .saturating_sub(ticket.started_at_ms)
-                        .max(0);
                     processor.on_tool_finished(&call, &outcome, duration_ms);
                 }
                 let _ = reply.send(Ok(()));
@@ -412,6 +440,13 @@ pub async fn run_exec_turn(
         session_id: &session_id,
         prompt: &prompt_display,
     });
+    tracing::info!(
+        target: "lx::agent",
+        session = %session_id,
+        provider = %model.provider,
+        model = %model.model,
+        "agent turn started"
+    );
 
     let (sender, mut receiver) = mpsc::unbounded_channel::<ExecLoopEvent>();
     let process_manager = Arc::new(ProcessManager::new(
@@ -535,6 +570,26 @@ pub async fn run_exec_turn(
         summary.usage,
     ) {
         tracing::warn!(target: "lx::exec", code = error.code(), "turn completion failed");
+    }
+    let reason = summary.stop_reason();
+    if matches!(reason, crate::chat::events::StopReason::Failed { .. }) {
+        tracing::warn!(
+            target: "lx::agent",
+            session = %session_id,
+            reason = reason.as_str(),
+            usage_input = summary.usage.input,
+            usage_output = summary.usage.output,
+            "agent turn failed"
+        );
+    } else {
+        tracing::info!(
+            target: "lx::agent",
+            session = %session_id,
+            reason = reason.as_str(),
+            usage_input = summary.usage.input,
+            usage_output = summary.usage.output,
+            "agent turn finished"
+        );
     }
     let _ = processor.on_turn_finished(&summary, final_message.as_deref());
     summary

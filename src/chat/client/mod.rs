@@ -396,7 +396,8 @@ async fn stream_once(
         &mut capture,
     )
     .await;
-    capture.finish(Some(reason.as_str()));
+    let error = (!matches!(reason, StopReason::Complete)).then(|| reason.as_str());
+    capture.finish(error);
     reason
 }
 

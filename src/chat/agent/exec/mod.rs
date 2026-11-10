@@ -404,11 +404,14 @@ pub fn run_main(
                 let _ = cancel_tx.send(true);
             }
         });
+        let stream_factory = Arc::new(RealStreamFactory::with_session(
+            turn_config.session_id.clone(),
+        ));
         run_exec_turn(
             &db,
             turn_config,
             processor.as_mut(),
-            Arc::new(RealStreamFactory),
+            stream_factory,
             cancel_rx,
         )
         .await
