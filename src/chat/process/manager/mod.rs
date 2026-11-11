@@ -48,8 +48,8 @@ pub const DEFAULT_STDIN_YIELD_MS: u64 = 250;
 pub const MAX_YIELD_MS: u64 = 30_000;
 /// 命令总寿命上限（毫秒）：24 小时。
 pub const MAX_TIMEOUT_MS: u64 = 24 * 60 * 60 * 1000;
-/// 返回模型的文本近似 token 上限。
-pub const MAX_OUTPUT_TOKENS: usize = 16_000;
+/// 返回模型的文本近似 token 上限（12,500 tokens ≈ 50 KiB，对齐 `MAX_MODEL_OUTPUT_BYTES`）。
+pub const MAX_OUTPUT_TOKENS: usize = 12_500;
 /// 每次 stdin 输入字节上限。
 pub const MAX_STDIN_BYTES: usize = 64 * 1024;
 /// 温和停止后等待强制终止的时间。
@@ -660,6 +660,7 @@ impl ProcessManager {
                 result.output_start = start;
                 result.output_end = end;
                 result.dropped_bytes = dropped;
+                result.enforce_output_bounds();
             }
             return Ok(result);
         }
@@ -889,7 +890,7 @@ impl ProcessManager {
             .min(MAX_MODEL_OUTPUT_BYTES);
         let read = handle.read_for_model(budget);
         let state = handle.state();
-        ProcessResult {
+        let mut result = ProcessResult {
             kind,
             session_id: handle.session_id,
             command: handle.command.clone(),
@@ -908,7 +909,9 @@ impl ProcessManager {
             chunk_id: crate::chat::process::generate_chunk_id(),
             // 与 codex 的 `wall_time_seconds` 同口径：本次调用在等待窗口内真正花掉的墙钟。
             wall_time_ms: u64::try_from(started.elapsed().as_millis()).unwrap_or(u64::MAX),
-        }
+        };
+        result.enforce_output_bounds();
+        result
     }
 
     /// 淘汰过期的终态记录（条数与时间双限）。

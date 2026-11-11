@@ -145,12 +145,13 @@ Behavior:
 | `tty` | boolean | no | Run in a dedicated pseudo terminal (fixed 120x40) so the command can be driven with `write_stdin`; default `false` (plain pipe). |
 | `yield_time_ms` | integer | no | Wait window before returning; `0`-`30000`, default `10000`. Expiry never kills the process. |
 | `timeout_ms` | integer | no | Total command lifetime; `1`-`86400000`. When it expires the process is stopped. Omitted means no lifetime limit. |
-| `max_output_tokens` | integer | no | Approximate token budget for returned output; `1`-`16000`, default `16000`. The rest remains readable with `write_stdin`. |
+| `max_output_tokens` | integer | no | Approximate token budget for returned output; `1`-`12500`, default `12500`. The rest remains readable with `write_stdin`. |
 
 Behavior:
 
 - The command runs directly without an approval prompt.
 - The call returns as soon as the yield window expires. A still-running command returns `process_state: running` and a `session_id`; reuse that id with `write_stdin` instead of starting a second copy.
+- Returned output is capped at 2000 lines or 50 KiB per call, and individual lines are clipped at 2000 characters; truncation sets `truncated: true`.
 - A non-zero exit code means the command ran and failed. The result carries the real output and `exit_code`; it is not treated as a tool malfunction, because commands such as `grep` or `diff` use non-zero exits for normal results. A timeout, interruption, or spawn failure is a real tool failure.
 - Process results include `chunk_id`, `wall_time_seconds`, the output byte range `[output_start, output_end)`, and `dropped_bytes` when earlier output was discarded before it could be read.
 
@@ -162,7 +163,7 @@ Behavior:
 | `chars` | string | no | Bytes written verbatim to stdin; default empty. No newline is appended, so include `\n` to submit a line. Maximum 64 KiB. |
 | `terminate` | boolean | no | Stop the process instead of writing; default `false`. Cannot be combined with non-empty `chars`. |
 | `yield_time_ms` | integer | no | Wait window for new output; `0`-`30000`, default `250`. |
-| `max_output_tokens` | integer | no | Approximate token budget for returned output; `1`-`16000`, default `16000`. |
+| `max_output_tokens` | integer | no | Approximate token budget for returned output; `1`-`12500`, default `12500`. |
 
 Behavior:
 
@@ -202,6 +203,7 @@ A user can run a local shell command by typing `!` as the first non-whitespace c
 Behavior:
 
 - Each query falls back in order: Exa with a key, then anonymous Exa, then Tavily REST. Queries run concurrently. At least one successful query makes the tool call successful; per-query failures are preserved in the result.
+- Each query output is capped at 12,000 characters, and the combined result across all queries is capped at 2000 lines or 50 KiB with individual lines clipped at 2000 characters; truncation sets `truncated: true`.
 - Use `web_search` only for information that is external, current, or not present in the workspace. Batch related lookups instead of making sequential calls.
 - When the final answer relies on web results, cite every supported claim inline as `[descriptive source title](https://...)` immediately after the sentence or clause it supports. Never use bare URLs, links to search pages, or a citation list at the end of the message. Keep quotations under 25 words per source and paraphrase the rest.
 

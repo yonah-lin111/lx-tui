@@ -154,7 +154,11 @@ fn format_process(result: &crate::chat::process::ProcessResult) -> String {
         result.output_start,
         result.output_end,
         if result.truncated {
-            " · more output pending"
+            if result.state.is_terminal() {
+                " · output truncated"
+            } else {
+                " · more output pending"
+            }
         } else {
             ""
         }

@@ -3,7 +3,7 @@
 > 状态：**已实施；验证通过，待合并**。
 > 实施记录：下方 `[ ]` 保留为实施前计划；实际完成情况以上方状态与 §6.2 验证结果为准。
 > 对应设计：`docs/feature/lx-read-output-truncation/design.md`。
-> 范围：`read` 返回给模型/落库的结果体；**不改消息列表展示**。
+> 范围：`read`、`web_search`、`exec_command` / `write_stdin` 返回给模型/落库的结果体；**不改消息列表展示**。
 > 日期：2026-11-11。
 
 ## 0. 执行前检查
@@ -310,7 +310,7 @@ cargo test
 - `src/app/update/chat/view.rs` 的投影逻辑。
 - `src/chat/context/mod.rs` 的 `MAX_TOOL_RESULT_REPLAY_BYTES`。
 - `src/db/**` 的 schema 与迁移。
-- `search` / `exec_command` / `write_stdin` / MCP / web_search 的截断逻辑。
+- `search` / MCP 的截断逻辑。
 - 不引入 Tailwind、构建步骤或新依赖。
 
 ## 8. 回滚

@@ -2,8 +2,8 @@
 
 > 状态：**已实施（2026-11-11）；`cargo fmt` / `cargo clippy --all-targets -- -D warnings` / `cargo test` 通过；待合并**。
 > 日期：2026-11-11。
-> 范围：`read` 工具返回给模型与落库的结果体（文件读取 + 目录列表）。
-> 明确不包含：lx 消息列表的工具卡片展示逻辑、DB 迁移、`search` / `exec_command` / MCP / 子 agent 汇报的截断策略。
+> 范围：`read`（文件读取 + 目录列表）、`web_search`、`exec_command` / `write_stdin` 返回给模型与落库的结果体。
+> 明确不包含：lx 消息列表的工具卡片展示逻辑、DB 迁移、`search` / MCP / 子 agent 汇报的截断策略。
 > 相关规范：`docs/standards/project-directory-structure.md`、`code-writing-standards.md`、`tui-design-requirements.md`、`docs/standards/lx-message-block-display.md`。
 > 参考实现：`/Users/yonah/projects/agent/opencode-dev`、`/Users/yonah/projects/agent/codex-main`。
 
@@ -476,7 +476,19 @@ Truncation is explicit and reports next_offset when more lines are available.
   continues the listing.
 ```
 
-### 5.7 明确不改的文件
+### 5.7 `web_search` 与 `exec_command` / `write_stdin` 的统一 50 KiB 截断补充
+
+- **`src/chat/tools/web_search/mod.rs`**：
+  - 保留单查询 `MAX_QUERY_OUTPUT_CHARS = 12_000` 字符上限；
+  - 新增整次调用聚合上限：`MAX_WEB_SEARCH_BYTES = 50 * 1024`（按落库 JSON 转义后字节计，扣除查询参数与 512 字节元数据）、`MAX_WEB_SEARCH_LINES = 2000`、`MAX_WEB_SEARCH_LINE_CHARS = 2000`；
+  - 头部保留（head），单行超 2000 字符追加 `…[truncated]`，聚合行数/字节超限追加 `\n[...truncated]`，任一触发均置 `truncated = true`。
+- **`src/chat/process/{output.rs,mod.rs,manager/mod.rs,rtk/{mod.rs,builtin.rs}}` & `src/chat/agent_loop/executor.rs`**：
+  - `MAX_MODEL_OUTPUT_BYTES`：`64 * 1024` → `50 * 1024`；`MAX_OUTPUT_TOKENS`：`16_000` → `12_500`；
+  - 新增 `MAX_MODEL_OUTPUT_LINES = 2000`、`MAX_MODEL_OUTPUT_LINE_CHARS = 2000`；
+  - `ProcessResult::enforce_output_bounds` 对 `output` 施加单行 2000 字符、总计 2000 行与 50 KiB JSON 转义后预算（终态保留首尾 head + tail 并写 `…[N lines omitted]`，运行中保留头部并写 `…[truncated]`），触发时置 `truncated = true`；
+  - `rtk::builtin::filter_output_flagged` 在内置过滤器触发行数/字节/条目省略时返回 `true`，由 `executor.rs` 汇总进 `result.truncated |= omitted`，保证 UI 命令卡片稳定显示 `output limited`。
+
+### 5.8 明确不改的文件
 
 - `src/ui/main_content/lx/**`：不改卡片、点击面、折叠、`output limited` 显示逻辑。
 - `src/app/state/lx/chat/steps.rs`：`ToolSummary` 不新增字段；`truncated` 聚合继续工作。

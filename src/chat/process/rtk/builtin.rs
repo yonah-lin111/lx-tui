@@ -25,9 +25,14 @@ const GENERIC_MAX_BYTES: usize = 16 * 1024;
 
 /// 按命令首段选择过滤器。
 pub fn filter_output(command: &str, output: &str) -> String {
+    filter_output_flagged(command, output).0
+}
+
+/// 按命令首段选择过滤器，并返回是否因达到行数/字节/条目上限而省略了内容。
+pub fn filter_output_flagged(command: &str, output: &str) -> (String, bool) {
     let cleaned = strip_ansi(output);
     if cleaned.trim().is_empty() {
-        return String::new();
+        return (String::new(), false);
     }
     match family(command) {
         Family::Test => filter_test(&cleaned),
@@ -75,7 +80,7 @@ fn family(command: &str) -> Family {
 }
 
 /// 失败/诊断行：保留该行及其后若干行上下文（代码片段/断言输出）。
-fn filter_test(output: &str) -> String {
+fn filter_test(output: &str) -> (String, bool) {
     let lines: Vec<&str> = output.lines().collect();
     let summary = lines
         .iter()
@@ -113,7 +118,7 @@ fn filter_test(output: &str) -> String {
         // 认不出标记不等于成功（cargo 不存在、wrapper 自带失败文案都可能如此）：
         // 未识别的非空输出按通用规则降级，绝不伪造 `ok` 结论。
         return match summary {
-            Some(line) => format!("{line}\n"),
+            Some(line) => (format!("{line}\n"), false),
             None => filter_generic(output),
         };
     }
@@ -121,7 +126,7 @@ fn filter_test(output: &str) -> String {
 }
 
 /// 构建输出：去掉编译进度样板，保留警告/错误与完成行。
-fn filter_build(output: &str) -> String {
+fn filter_build(output: &str) -> (String, bool) {
     let mut kept: Vec<String> = Vec::new();
     let mut block = 0usize;
     for line in output.lines() {
@@ -163,7 +168,7 @@ fn filter_build(output: &str) -> String {
 }
 
 /// git status：保留分支与状态分组，按上限列出文件并报告省略数。
-fn filter_status(output: &str) -> String {
+fn filter_status(output: &str) -> (String, bool) {
     let mut kept: Vec<String> = Vec::new();
     let mut changed = 0usize;
     let mut untracked = 0usize;
@@ -245,11 +250,11 @@ fn filter_status(output: &str) -> String {
     if omitted_untracked > 0 {
         kept.push(format!("…[{omitted_untracked} more untracked files]"));
     }
-    joined(kept)
+    (joined(kept), omitted_changed > 0 || omitted_untracked > 0)
 }
 
 /// diff/show：只保留文件头、hunk 头与增删行，丢弃上下文。
-fn filter_diff(output: &str) -> String {
+fn filter_diff(output: &str) -> (String, bool) {
     let mut kept: Vec<String> = Vec::new();
     for line in output.lines() {
         let keep = line.starts_with("diff --git")
@@ -276,23 +281,24 @@ fn filter_diff(output: &str) -> String {
     cap_lines(kept, MAX_DIFF_LINES, "lines")
 }
 
-fn filter_log(output: &str) -> String {
+fn filter_log(output: &str) -> (String, bool) {
     let mut lines: Vec<String> = output.lines().map(str::to_string).collect();
     if lines.len() <= MAX_LOG_LINES {
-        return joined(lines);
+        return (joined(lines), false);
     }
     let omitted = lines.len() - MAX_LOG_LINES;
     lines.truncate(MAX_LOG_LINES);
     lines.push(format!("…[{omitted} older commits omitted]"));
-    joined(lines)
+    (joined(lines), true)
 }
 
 /// grep/rg：按文件限制条数、总条数，行内超长截断。
-fn filter_grep(output: &str) -> String {
+fn filter_grep(output: &str) -> (String, bool) {
     let mut kept: Vec<String> = Vec::new();
     let mut per_file: std::collections::HashMap<String, usize> = std::collections::HashMap::new();
     let mut omitted = 0usize;
     let mut total = 0usize;
+    let mut line_clipped = false;
     for line in output.lines() {
         if line.trim().is_empty() {
             continue;
@@ -309,52 +315,56 @@ fn filter_grep(output: &str) -> String {
         }
         *count += 1;
         total += 1;
+        if line.chars().count() > 300 {
+            line_clipped = true;
+        }
         kept.push(truncate_chars(line, 300));
     }
     if omitted > 0 {
         kept.push(format!("…[{omitted} matches omitted]"));
     }
-    joined(kept)
+    (joined(kept), omitted > 0 || line_clipped)
 }
 
-fn filter_list(output: &str) -> String {
+fn filter_list(output: &str) -> (String, bool) {
     let lines: Vec<String> = output.lines().map(str::to_string).collect();
     cap_lines(lines, MAX_LIST_LINES, "entries")
 }
 
 /// 通用：短输出原样；长输出保留行首尾并显式标注省略，最后再按字符兜底。
-fn filter_generic(output: &str) -> String {
+fn filter_generic(output: &str) -> (String, bool) {
     let normalized = collapse_blank_lines(output);
     if normalized.chars().count() <= MAX_GENERIC_CHARS {
-        return normalized;
+        return (normalized, false);
     }
     let lines: Vec<String> = normalized.lines().map(str::to_string).collect();
-    let mut text = if lines.len() > GENERIC_HEAD_LINES + GENERIC_TAIL_LINES {
+    let (mut text, mut omitted_flag) = if lines.len() > GENERIC_HEAD_LINES + GENERIC_TAIL_LINES {
         let omitted = lines.len() - GENERIC_HEAD_LINES - GENERIC_TAIL_LINES;
         let mut kept: Vec<String> = lines[..GENERIC_HEAD_LINES].to_vec();
         kept.push(format!("…[{omitted} lines omitted]"));
         kept.extend_from_slice(&lines[lines.len() - GENERIC_TAIL_LINES..]);
-        joined(kept)
+        (joined(kept), true)
     } else {
-        normalized
+        (normalized, false)
     };
     if text.len() > GENERIC_MAX_BYTES {
         let head = truncate_bytes(&text, GENERIC_MAX_BYTES / 2);
         let tail = tail_chars(&text, GENERIC_MAX_BYTES / 2);
         text = format!("{head}\n…[output truncated]\n{tail}");
+        omitted_flag = true;
     }
-    text
+    (text, omitted_flag)
 }
 
 /// 行级上限：保留前 `max-1` 行并报告省略数。
-fn cap_lines(lines: Vec<String>, max: usize, unit: &str) -> String {
+fn cap_lines(lines: Vec<String>, max: usize, unit: &str) -> (String, bool) {
     if lines.len() <= max {
-        return joined(lines);
+        return (joined(lines), false);
     }
     let omitted = lines.len() - (max - 1);
     let mut kept: Vec<String> = lines.into_iter().take(max - 1).collect();
     kept.push(format!("…[{omitted} {unit} omitted]"));
-    joined(kept)
+    (joined(kept), true)
 }
 
 fn joined(lines: Vec<String>) -> String {
