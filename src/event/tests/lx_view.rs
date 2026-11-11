@@ -72,7 +72,7 @@ fn lx_view_edits_input_and_pastes_text() {
         "粘贴不得写入隐藏终端"
     );
 
-    // Ctrl+Q 第一次只打开退出确认，第二次才真正退出。
+    // Ctrl+Q 第一次只显示全局退出 toast，第二次才真正退出。
     handle_terminal_event(
         TerminalEvent::Key(KeyEvent::new(KeyCode::Char('q'), KeyModifiers::CONTROL)),
         &mut state,
@@ -83,12 +83,13 @@ fn lx_view_edits_input_and_pastes_text() {
         &mut dirty,
     );
     assert!(!state.should_quit);
-    assert!(state.quit_confirm.is_some());
+    assert!(state.quit_requested_at.is_some());
+    let toast = state.toast.as_ref().expect("quit toast");
+    assert_eq!(toast.message, crate::ui::text::EXIT_CONFIRM_TOAST);
+    assert_eq!(toast.anchor, None, "退出提示必须是全局 toast");
     // 真正松开并静默满窗口后，第二次按下才确认退出。
-    if let Some(confirm) = state.quit_confirm.as_mut() {
-        confirm.last_shortcut_press =
-            std::time::Instant::now() - std::time::Duration::from_millis(301);
-    }
+    state.quit_requested_at =
+        Some(std::time::Instant::now() - std::time::Duration::from_millis(301));
     handle_terminal_event(
         TerminalEvent::Key(KeyEvent::new(KeyCode::Char('q'), KeyModifiers::CONTROL)),
         &mut state,

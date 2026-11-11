@@ -3,6 +3,8 @@
 > 审查对象：`feat/quit-confirm-title-and-naming` / `d6d1a159`（修复提交 `2bb2622b`，已合并至 `dev`）
 > 审查方式：codegraph + codebase-memory 结构检索、源码逐行核对、针对性测试补跑、`cargo fmt --check` / `clippy --all-targets -- -D warnings` / 全量 `cargo test`。
 > 基线结论：自动化验证全绿，但正常路径之外存在 2 个 P0、6 个 P1 与若干 P2；其中“退出确认被按键自动重复绕过”和“子块内嵌套/围栏导致标题源泄漏”必须先修。
+>
+> **2026-11-11 后续变更**：按要求移除退出确认模态，改为全局 toast + 2s 确认窗口。下方 P0-1、P1-2、P2-2 中关于独立 `quit_confirm` 层与取消路径的描述是当时的修复记录；当前实现以 `design.md` 第 10.1 节为准。
 
 ## 优先级定义
 
@@ -178,31 +180,33 @@
 
 | 编号 | 状态 | 修复摘要 |
 | --- | --- | --- |
-| P0-1 | 已修复 | 退出确认改为独立 `quit_confirm` 层；`Ctrl+Q` 按住时每次自动重复刷新 300ms 静默窗口（`Repeat` 忽略），松开后再按满 300ms 才确认；取消后 300ms latch 随 `Esc`/`Enter` 重复刷新 |
+| P0-1 | 已修复（后续改为 toast） | 保留 300ms 去抖与 `Repeat` 忽略；最终移除独立 `quit_confirm` 层，改为全局 toast + 2s 确认窗口，无取消/latch 路径 |
 | P0-2 | 已修复 | `extract_block_title_source` 改为围栏优先的 `+++`/`%%%` 标记栈；嵌套结束/围栏内结束不再提前闭合 |
 | P1-1 | 已修复 | `enclosing_template_body` 支持“包含当前 `+++` 的 `&&&`”与“最近前置闭合 `&&&`”，正常 `/supplement` 可带出外层任务 |
 | P1-2 | 已修复 | 标题源专用 fence-aware 清理；围栏内占位项、默认大标题、空行逐字保留 |
 | P1-3 | 已修复 | 不再移走 `state.overlay`；Connect/Referenced/Worktree 异步回执继续命中 live 浮层 |
-| P1-4 | 已修复 | 独立确认层始终优先；信任弹窗只能更新底层浮层，不会顶掉确认框 |
+| P1-4 | 已修复（后续改为 toast） | 最终无模态层；信任弹窗与退出 toast 互不阻塞，异步回执正常更新底层浮层 |
 | P1-5 | 已修复 | app 使用的纯几何下沉到 `src/app/prompt/geometry.rs`；`rg "crate::ui::right_panel::prompt::geometry" src/app` 零命中 |
 | P1-6 | 已修复 | `+++` 扫描改栈式；支持嵌套 `+++`、多 `&&&` 与第二个模板内的 `+++` 关联 |
 | P2-1 | 已修复 | `prompt_committed_for_quit` 标记使确认退出只提交一次；普通退出仍由 shutdown 提交 |
-| P2-2 | 已修复 | 请求退出不再清文本选区；拖拽/滚轮/手势在确认层打开时拦截，并在请求时清理活动手势 |
-| P2-3 | 已修复 | shell 不可用只吞点击不取消；短屏跳过标题并裁剪问题行 |
+| P2-2 | 已修复（后续改为 toast） | 请求退出不再清文本选区；最终不拦截拖拽/滚轮（无模态层），只在请求时清理活动手势 |
+| P2-3 | 已修复（后续移除模态） | 退出模态与短屏几何问题随需求移除；全局 toast 由现有 toast 层负责窄屏折行 |
 | P2-4 | 已修复 | 模板指令补充 6–20 中文字符、≤36 字符且 ≤5 词、示例改 4 词、示例后要求单条标题 |
 | P2-5 | 已修复 | `sanitize_title` 循环清理；拒答改为整句/句首匹配，保留“修复无法生成标题的 bug” |
 | P2-6 | 部分修复 | 新增 quit 测试落在 `app/update/quit/tests.rs`；`input/tests.rs` 回到 1500 行；既有超限测试文件（`app/update/prompt/tests.rs`、`app/update/tests.rs`、`ui/tests.rs`）延后拆分 |
 | P2-7 | 已修复 | 本次同步更新 design/task/standards/review 与源码注释 |
 | P2-8 | 已修复 | 右栏通用几何下沉到 `ui/right_panel/geometry.rs`；左栏历史改用本地 `LIST_HEADER_HEIGHT` |
-| P2-9 | 已修复 | 删除 `pages.rs` 重复 `workspace_cwd`；退出确认文案移入 `ui/text/workspace.rs`，`text.rs` 回到 1000 行内 |
+| P2-9 | 已修复 | 删除 `pages.rs` 重复 `workspace_cwd`；退出 toast 文案移入 `ui/text/workspace.rs`，`text.rs` 回到 1000 行内 |
 | P2-10 | 记录，未加兼容层 | 仓库按内部重构处理公共路径变更；迁移说明写入 design 文档；未确认外部使用者前不加 deprecated alias |
 
 ### 最终验证
 
 - `cargo fmt --check`：通过
 - `cargo clippy --all-targets -- -D warnings`：通过
-- `cargo test`：5229 个 lib 测试通过，集成测试通过；`tests/prompt_copy.rs` 的 pbcopy 桩改为原子写入，消除全量并发下的空文件竞态
+- `cargo test`：移除退出模态后 5222 个 lib 测试通过，集成测试通过；`tests/prompt_copy.rs` 的 pbcopy 桩改为原子写入，消除全量并发下的空文件竞态
 - 旧架构检索：`suspended_overlay` / `Overlay::ConfirmQuit` / `OverlayKind::ConfirmQuit` 零命中
+- 退出模态检索：`quit_confirm` / `QuitConfirmState` / `quit_cancel_latch` / `cancel_quit` / `render_quit_confirm` 零命中
+- 退出提示为全局 toast（`anchor = None`）；`Ctrl+Q`/`[EXIT]` 首次请求只提示，2s 窗口内再次请求才退出
 - 依赖方向：`rg "crate::ui::right_panel::prompt::geometry" src/app` 零命中
 - 文件体量：`src/ui/text.rs` 已低于 1000 行；`src/input/tests.rs` 为 1500 行（上限内）
 - 合并 dev 后：`chat/process/manager` 保留 50 KiB 输出边界；`history/tool.rs` 抽出 `header.rs`，两者均低于 1000 行
@@ -218,5 +222,5 @@
 
 ### 未完成/需人工验收
 
-- `cargo run` 真实 TUI：长按 `Ctrl+Q`/`Esc`、`/connect` OAuth 中取消退出后回执恢复、引用文件夹校验/搜索、`/supplement` 后 `+++` `/title`、多模板/嵌套 `+++`、短屏布局。
+- `cargo run` 真实 TUI：长按 `Ctrl+Q`（只显示一次 toast，不退出）、2s 窗口内第二次 `Ctrl+Q`/`[EXIT]` 退出、窗口过期后重新提示；`/connect` OAuth/引用文件夹弹窗打开期间 toast 不阻塞底层交互；`/supplement` 后 `+++` `/title`、多模板/嵌套 `+++`、短屏布局。
 - 既有超限测试文件拆分（P2-6 的一部分）作为后续独立重构，不与本次行为修复混在一起。

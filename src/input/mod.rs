@@ -131,7 +131,7 @@ fn todo_key(key: KeyEvent) -> Option<TodoKey> {
 
 /// 路由一次按键；Release 事件与无法编码的按键返回 None。
 ///
-/// `Ctrl+Q` 始终优先（退出确认层的二次判定位在事件层，输入层只发请求）；
+/// `Ctrl+Q` 始终优先（二次判定位于 `app::update::quit`，输入层只发请求）；
 /// 浮层打开时只放行该浮层支持的键，其余吞掉；
 /// 否则按**唯一焦点源** `focus` 决定去向，同一时刻只有一个容器收键：
 /// - `Prompt`：按键只进入编辑器（`Ctrl/Cmd+C` 复制选区全文、`Ctrl/Cmd+Shift+C`

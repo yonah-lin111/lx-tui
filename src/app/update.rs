@@ -28,7 +28,7 @@ pub use interaction::*;
 pub use menu::*;
 pub use pane::*;
 pub use prompt::*;
-pub use quit::{cancel_quit, confirm_quit, request_quit};
+pub use quit::{confirm_quit, request_quit};
 pub use referenced::*;
 pub use resume_edit::*;
 pub use right_panel::*;
@@ -51,8 +51,6 @@ use super::state::{AppState, FocusedContainer};
 pub fn apply(action: Action, state: &mut AppState) {
     match action {
         Action::RequestQuit => quit::request_quit(state),
-        Action::ConfirmQuit => quit::confirm_quit(state),
-        Action::CancelQuit => quit::cancel_quit(state),
         Action::ToggleSidebar => state.sidebar_collapsed = !state.sidebar_collapsed,
         Action::TogglePrompt => {
             state.prompt_collapsed = !state.prompt_collapsed;

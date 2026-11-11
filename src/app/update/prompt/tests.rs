@@ -1528,8 +1528,8 @@ fn switching_to_temp_prompt_commits_pre_paste_edits_without_placeholder() {
 fn quit_commits_pre_paste_edits_without_placeholder() {
     let mut state = item_editing_with_paste();
     apply(Action::RequestQuit, &mut state);
-    assert!(!state.should_quit, "第一次请求只打开确认层");
-    apply(Action::ConfirmQuit, &mut state);
+    assert!(!state.should_quit, "第一次请求只显示退出 toast");
+    crate::app::update::confirm_quit(&mut state);
     assert!(state.should_quit);
     let content = saved_content(&state);
     assert_eq!(content, "nested contentX", "退出前提交粘贴前的正文");

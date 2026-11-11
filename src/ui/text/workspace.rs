@@ -410,9 +410,9 @@ pub const BUTTON_CREATE: &str = " ↵ create ";
 pub const BUTTON_CLEAR: &str = " ^c clear ";
 pub const BUTTON_CANCEL: &str = " esc cancel ";
 pub const BUTTON_CONFIRM: &str = " ↵ confirm ";
-/// 退出二次确认模态：标题与问题行。
+/// 退出二次确认：全局 toast 标题与提示。
 pub const EXIT_CONFIRM_TITLE: &str = "Exit lx";
-pub const EXIT_CONFIRM_QUESTION: &str = "Exit lx?";
+pub const EXIT_CONFIRM_TOAST: &str = "Press Ctrl+Q or EXIT again to exit";
 /// `/resume` 会话编辑模态的删除与二次确认按钮。
 pub const BUTTON_DELETE: &str = " ^d delete ";
 pub const BUTTON_CONFIRM_DELETE: &str = " ↵ confirm del ";

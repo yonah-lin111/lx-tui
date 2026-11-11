@@ -62,12 +62,17 @@ pub use workspace_history::{
 /// 生产启动时按主区可用宽度的一半覆盖，之后可拖拽。
 const DEFAULT_PROMPT_WIDTH: u16 = 30;
 
-/// 退出确认打开后，两次 `Ctrl+Q` 按下之间必须保持的静默时长。
+/// 退出二次确认窗口内，两次 `Ctrl+Q`/`[EXIT]` 请求之间必须保持的静默时长。
 ///
 /// 传统终端不开 kitty 事件类型时，长按 `Ctrl+Q` 表现为连续 `Press`；
-/// 每次自动重复都会刷新 `last_shortcut_press`，因此按住时永远不会达到该窗口，
+/// 每次自动重复都会刷新请求时刻，因此按住时永远不会达到该窗口，
 /// 只有真正松开后再按一次（间隔 >= 300ms）才会确认。
 pub const QUIT_CONFIRM_REPEAT_GUARD: Duration = Duration::from_millis(300);
+
+/// 首次退出请求后的二次确认窗口；与全局 toast 展示时长一致。
+///
+/// 超过窗口的再次请求视为重新开始，重新展示 toast，绝不直接退出。
+pub const QUIT_CONFIRM_WINDOW: Duration = super::toast::TOAST_DURATION;
 
 /// 侧栏展开宽度的兜底初值（列）；生产启动时由配置覆盖。
 const DEFAULT_SIDEBAR_WIDTH: u16 = 24;
@@ -188,27 +193,6 @@ pub struct PendingPromptTitle {
     pub page_id: super::prompt::PromptPageId,
     pub block_start_line: usize,
     pub original_title: Option<String>,
-}
-
-/// 独立退出确认层状态：与 `overlay` 分离，打开期间底层浮层、焦点与选区保持不变。
-#[derive(Debug, Clone, Copy)]
-pub struct QuitConfirmState {
-    /// 最近一次 `Ctrl+Q` 按下的时刻；用于把连续自动重复与真正的第二次按下区分开。
-    pub last_shortcut_press: Instant,
-}
-
-impl QuitConfirmState {
-    /// 当前时刻是否允许 `Ctrl+Q` 直接确认。
-    ///
-    /// 距离上一次按下不足 `QUIT_CONFIRM_REPEAT_GUARD` 时视为自动重复并吞掉。
-    pub fn accepts_shortcut(&self, now: Instant) -> bool {
-        now.duration_since(self.last_shortcut_press) >= QUIT_CONFIRM_REPEAT_GUARD
-    }
-
-    /// 记录一次被吞掉的 `Ctrl+Q` 按下，刷新静默窗口。
-    pub fn note_shortcut_press(&mut self, now: Instant) {
-        self.last_shortcut_press = now;
-    }
 }
 
 /// prompt 面板为全局右栏，显示激活（或钉住）工作区的草稿。
@@ -346,10 +330,8 @@ pub struct AppState {
     pub workspace_drag_moved: bool,
     /// 同一时刻最多一个浮层：右键菜单、重命名、关闭确认或 worktree 对话框。
     pub overlay: Option<Overlay>,
-    /// 独立退出确认层；`Some` 时优先于 `overlay` 接收按键与鼠标，底层状态保持不变。
-    pub quit_confirm: Option<QuitConfirmState>,
-    /// 取消退出后的短窗口 latch：期间 `Esc`/`Enter` 吞掉，防止自动重复穿透到底层浮层。
-    pub quit_cancel_latch: Option<Instant>,
+    /// 最近一次退出请求的时刻；窗口内再次请求才确认退出，不挂起底层交互。
+    pub quit_requested_at: Option<Instant>,
     /// 退出确认已提交过编辑中的提示词：收尾时不再重复提交。
     pub prompt_committed_for_quit: bool,
     /// 待执行的效应出箱（DB 读写与剪贴板）；由持久化服务取走执行。
@@ -531,8 +513,7 @@ impl AppState {
             workspace_dragging: false,
             workspace_drag_moved: false,
             overlay: None,
-            quit_confirm: None,
-            quit_cancel_latch: None,
+            quit_requested_at: None,
             prompt_committed_for_quit: false,
             effects: Vec::new(),
             git_requests: Vec::new(),

@@ -65,14 +65,14 @@ pub(crate) fn handle_mouse_down_left(
     state.workspace_history.drag = None;
     state.workspace_history.dragging = false;
     state.workspace_history.drag_moved = false;
-    // 退出确认层优先于 toast 与底层浮层：点击只作用于确认按钮，其余一律吞掉。
-    if state.quit_confirm.is_some() {
-        let _ = handle_overlay_click(state, *screen, mouse.column, mouse.row);
-        *dirty = true;
-        return;
-    }
     // 全局 toast 绘制在模态浮层之上：盒内点击关闭并消费，盒外点击先关闭再继续处理。
-    if let Some(toast) = ui::toast::rect(state, view, rects, *screen, config) {
+    // 例外：退出请求待确认时点击 [EXIT] 是第二次确认，不能被“点击外部关闭 toast”抢先解除。
+    let quit_exit_click = state.overlay.is_none()
+        && state.quit_requested_at.is_some()
+        && ui::exit_button_at(view, mouse.column, mouse.row);
+    if let Some(toast) = ui::toast::rect(state, view, rects, *screen, config)
+        && !quit_exit_click
+    {
         update::dismiss_toast(state);
         *dirty = true;
         if toast.contains((mouse.column, mouse.row).into()) {
@@ -702,10 +702,6 @@ pub(crate) fn handle_mouse_down_right(
     dirty: &mut bool,
 ) {
     let Geometry { rects, view, .. } = geometry;
-    // 退出确认层打开时右键一律吞掉，不弹菜单也不穿透到底层。
-    if state.quit_confirm.is_some() {
-        return;
-    }
     if state.todo_drag.take().is_some() {
         *dirty = true;
     }

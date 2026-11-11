@@ -30,10 +30,6 @@ pub(crate) fn handle_mouse_drag(
     dirty: &mut bool,
 ) {
     let Geometry { rects, view, .. } = geometry;
-    // 退出确认层打开时拖拽一律不改状态：活动手势已在 `request_quit` 清理。
-    if state.quit_confirm.is_some() {
-        return;
-    }
     if state.overlay_input_drag
         && let Some(area) = super::super::overlay::overlay_input_rect(state, geometry.screen)
         && let Some(input) = state.overlay.as_mut().and_then(Overlay::input_mut)
@@ -561,10 +557,6 @@ pub(crate) fn handle_mouse_up_left(
     dirty: &mut bool,
 ) {
     let Geometry { rects, view, .. } = geometry;
-    // 退出确认层打开时松开一律吞掉，避免把按下时的手势在这里收尾。
-    if state.quit_confirm.is_some() {
-        return;
-    }
     // 卡片正文的「按下可能是一次点击」标记只服务本次释放：任何提前返回的路径
     // （滚动条拖拽、浮层、其它窗格）都必须丢弃它，绝不能让它在下一次松开时误折叠。
     let card_press = state.lx_card_press.take();

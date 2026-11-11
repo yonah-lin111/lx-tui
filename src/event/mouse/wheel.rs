@@ -240,10 +240,6 @@ pub(crate) fn handle_mouse_wheel(
     dirty: &mut bool,
 ) {
     let Geometry { rects, view, .. } = geometry;
-    // 退出确认层打开时滚轮一律吞掉，不改底层视口。
-    if state.quit_confirm.is_some() {
-        return;
-    }
     // 拖动中禁止改视口：落点与阈值都按绝对行号换算，滚动会让指针原地"跨行"
     // （design §1.3 明确不做边缘自动滚动）。
     if state.prompt_drag.is_some() || state.todo_drag.is_some() {

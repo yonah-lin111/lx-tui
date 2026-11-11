@@ -1,12 +1,12 @@
 # 退出二次确认、模板块标题生成与 UI 命名整理 — 设计方案
 
-> 状态：**已实现、已 review 修复、已合并至 `dev`；原工作区已清理；待用户 `cargo run` 人工验收**
+> 状态：**已实现、已 review 修复、已合并至 `dev`；退出提示已改为全局 toast；原工作区已清理；待用户 `cargo run` 人工验收**
 >
 > 关联文档：`docs/feature/quit-confirm-title-and-naming/task.md`、`review.md`
 >
 > 代码检索依据：codegraph + codebase-memory（当前工作区 `lx-tui`，branch `dev`）
 >
-> Review 修订：初版 `Overlay::ConfirmQuit` + `suspended_overlay` 在 review 中确认会让被挂起浮层丢失异步回执（`/connect` OAuth、引用文件夹校验/搜索、Worktree 列表），已改为独立 `quit_confirm` 层。第 4 节保留初版方案作为历史记录，**实际实现以第 10 节为准**。
+> Review 修订：初版 `Overlay::ConfirmQuit` + `suspended_overlay` 在 review 中确认会让被挂起浮层丢失异步回执（`/connect` OAuth、引用文件夹校验/搜索、Worktree 列表），曾改为独立 `quit_confirm` 层。后续按要求**移除退出模态**，最终实现为全局 toast + 确认窗口；第 4 节保留历史方案，**实际实现以第 10.1 节为准**。
 >
 > 合并修订：合并 `dev` 的 `feat/lx-tool-grouping`、`feat/lx-read-output-truncation` 时，`chat/process/manager` 采用本分支的 `types/handle/lifecycle` 拆分并保留 dev 的输出边界逻辑；`ui/main_content/lx/history/tool.rs` 因合并后超过 1000 行，标题/分段原语抽到 `history/tool/header.rs`。
 
@@ -96,7 +96,7 @@ template_block_title_prompt_for (src/chat/title.rs:164)
 
 ### 2.1 目标
 
-1. **退出二次确认**：第一次 `Ctrl+Q` 或点击 `[EXIT]` 只打开确认弹窗；确认后或再次 `Ctrl+Q` 才真正退出；取消后原界面与编辑器内容原样保留。
+1. **退出二次确认**：第一次 `Ctrl+Q` 或点击 `[EXIT]` 只显示全局 toast；确认窗口内再次操作才真正退出；不创建模态层，底层界面、编辑器内容与选区全程保留。
 2. **模板块标题生成**：
    - `&&&` 标题只使用 `&&&` 自身的直接正文，剔除全部嵌套 `+++` / `%%%` / `+++ log` / 注释 / 标题行 / `{wt:}`；
    - `+++` 标题使用“外层 `&&&` 直接正文 + 当前 `+++` 自身正文”，剔除其他 `+++` 与日志子块；
@@ -122,7 +122,7 @@ template_block_title_prompt_for (src/chat/title.rs:164)
 | 3 | `+++` 内容选取 | 外层 `&&&` 直接正文 + 当前 `+++` 自身正文；剔除全部 `+++` 子块，其他兄弟 `+++` 不参与 |
 | 4 | 标题风格 | 中文 6–20 字、英文 ≤36 字符且尽量 ≤5 词；动词 + 具体对象/模块名；静态 few-shot，不运行时查库 |
 | 5 | 模糊标题处理 | 不做模糊词黑名单、不自动重试；只保留现有格式清洗、拒答拦截与 36 字符硬截断 |
-| 6 | 退出确认交互 | 第一次只开弹窗；`Esc` 取消并恢复底层弹窗；`Enter` / 点击确认 / 再次 `Ctrl+Q` 才退出；点击弹窗外不关闭；确认时才提交编辑器 |
+| 6 | 退出确认交互 | 第一次只显示全局 toast；确认窗口内再次 `Ctrl+Q` / 点击 `[EXIT]` 才退出；无模态层、无 Esc/Enter 确认，底层保持可交互；确认时才提交编辑器 |
 | 7 | 文档与顺序 | 一个 feature 文件夹、三阶段；“退出确认 → 标题生成 → 结构改名”，改名最后 |
 | 8 | 超限文件拆分 | 只拆 `chat/process/manager/mod.rs` 与 `app/update/prompt.rs`；950–999 行文件不动 |
 
@@ -130,7 +130,7 @@ template_block_title_prompt_for (src/chat/title.rs:164)
 
 ## 4. 退出二次确认详细设计
 
-> **本节为初版方案（已被 Review 修订）**：实际实现使用独立 `quit_confirm` 层，不再使用 `Overlay::ConfirmQuit` / `suspended_overlay`。保留本节用于对照 review 结论；当前架构、输入/渲染/鼠标边界见第 10 节。
+> **本节为初版方案（已被 Review 与后续需求修订）**：不再使用 `Overlay::ConfirmQuit` / `suspended_overlay`，最终实现也不使用独立确认层，而是全局 toast + 确认窗口。保留本节仅用于对照 review 结论；当前架构见第 10.1 节。
 
 ### 4.1 状态模型
 
@@ -845,20 +845,14 @@ pub struct ViewLayout {
 
 ### 7.1 退出确认
 
-- `src/app/actions.rs`
-- `src/app/overlay.rs`
-- `src/app/state.rs`
+- `src/app/actions.rs`（只保留 `RequestQuit`）
+- `src/app/state.rs`（`quit_requested_at`、`QUIT_CONFIRM_REPEAT_GUARD`、`QUIT_CONFIRM_WINDOW`）
 - `src/app/update.rs`
-- `src/app/update/quit.rs`（新增）
-- `src/app/update/menu.rs`
-- `src/app/update/dialog.rs`
-- `src/input/mod.rs`
-- `src/event/overlay.rs`
-- `src/event/mouse/press.rs`（仅 `[EXIT]` 命中语义不变，确认由 `Action` 分派）
-- `src/ui/overlay.rs`
-- `src/ui/overlay/dialog.rs`
-- `src/ui/text.rs`
-- 测试：`src/input/tests.rs`、`src/app/update/tests.rs`、`src/app/update/prompt/tests.rs`、`src/event/tests/*`、`src/ui/overlay/dialog/tests.rs`
+- `src/app/update/quit.rs`
+- `src/input/mod.rs`（`Ctrl+Q` 仍只发 `RequestQuit`）
+- `src/event/input.rs`（忽略 kitty `Repeat`，其余按键照常路由）
+- `src/ui/text/workspace.rs`（`EXIT_CONFIRM_TITLE` / `EXIT_CONFIRM_TOAST`）
+- 测试：`src/app/update/quit/tests.rs`、`src/event/tests/{lx_view,todo,overlay}.rs`、`src/app/update/prompt/tests.rs`
 
 ### 7.2 标题生成
 
@@ -899,10 +893,9 @@ pub struct ViewLayout {
 cargo fmt
 cargo clippy --all-targets -- -D warnings
 cargo test input::tests
-cargo test app::update::tests
+cargo test app::update::quit
 cargo test app::update::prompt::tests
 cargo test event::tests
-cargo test ui::overlay
 ```
 
 ### 阶段 2：标题生成
@@ -930,13 +923,12 @@ cargo test
 
 Agent 无法交互式验证 TUI，以下由用户运行 `cargo run` 确认：
 
-1. `Ctrl+Q` 第一次只出现 `Exit lx?`，编辑器内容不变；
-2. `Esc` 取消后回到原界面；若之前在重命名弹窗，取消后重命名弹窗仍在；
-3. `Ctrl+Q` 两次或点击 `↵ confirm` 才退出；
-4. 点击 `[EXIT]` 同样先确认；
-5. 在嵌套 `+++` 的 `&&&` 块内执行 `/title`，生成的标题只概括外层任务，不被补充块/日志带偏；
-6. 在 `/supplement` 生成的 `+++` 内执行 `/title`，标题同时包含关联的外层 `&&&` 任务与当前补充说明；
-7. 新目录结构下 `cargo run` 界面、鼠标命中、折叠/交换按钮、Prompt/Todo 切换均正常。
+1. `Ctrl+Q` / `[EXIT]` 第一次只出现全局 `Exit lx` toast，编辑器内容与底层浮层不变；
+2. 确认窗口内再次 `Ctrl+Q` / 点击 `[EXIT]` 才退出；
+3. 等待超过 2s 后再次请求，只重新显示 toast，不退出；
+4. 在嵌套 `+++` 的 `&&&` 块内执行 `/title`，生成的标题只概括外层任务，不被补充块/日志带偏；
+5. 在 `/supplement` 生成的 `+++` 内执行 `/title`，标题同时包含关联的外层 `&&&` 任务与当前补充说明；
+6. 新目录结构下 `cargo run` 界面、鼠标命中、折叠/交换按钮、Prompt/Todo 切换均正常。
 
 ---
 
@@ -944,9 +936,9 @@ Agent 无法交互式验证 TUI，以下由用户运行 `cargo run` 确认：
 
 | 风险 | 影响 | 缓解 |
 | --- | --- | --- |
-| ~~`suspended_overlay` 与 `Overlay` 生命周期不一致~~ | 已在 review 中确认会丢失异步回执 | 已改为独立 `quit_confirm` 层；底层 `overlay` 不再移走 |
-| ~~`Ctrl+Q` 在 `apply_overlay_key` 中被选区清除逻辑抢先~~ | 初版风险 | 独立确认层在 `event/input.rs` 最前面处理，早于清选区/浮层过滤 |
-| 按键自动重复绕过二次确认 | 长按 `Ctrl+Q`/`Esc` 可能直接退出或穿透 | 连续 Press 每次刷新 300ms 静默窗口 + `Repeat` 忽略；取消后 300ms latch 随重复刷新；仍建议人工长按验收 |
+| ~~`suspended_overlay` 与 `Overlay` 生命周期不一致~~ | 已在 review 中确认会丢失异步回执 | 最终改为全局 toast；底层 `overlay` 全程不动 |
+| ~~`Ctrl+Q` 在 `apply_overlay_key` 中被选区清除逻辑抢先~~ | 初版风险 | `Ctrl+Q` 在事件路由前直接进入 `request_quit`，早于清选区/浮层过滤 |
+| 按键自动重复绕过二次确认 | 长按 `Ctrl+Q` 可能连续请求 | `Repeat` 直接忽略；连续 `Press` 每次刷新 300ms 静默窗口；二次确认另有 2s 窗口，窗口内按满 300ms 才退出 |
 | 标题清洗误删代码块 | 标题丢失关键信息 | 围栏优先于子块识别，新增围栏测试 |
 | `block_scan` 的“仅首个 `&&&`”约束 | 渲染/复制仍只识别首个模板 | `/title` 关联扫描已支持多 `&&&` 与第二个模板内的 `+++`；其他功能保持现状 |
 | `TEMPLATE_TITLE_PROMPT_MAX_BYTES` 增大 | 个别供应商上下文限制 | 2048 字节远低于常规上下文；不改变会话标题 960 预算 |
@@ -964,23 +956,24 @@ Agent 无法交互式验证 TUI，以下由用户运行 `cargo run` 确认：
 
 > 本节覆盖第 4 节初版退出方案，并记录标题/结构 review 修复后的实际落点。详细问题与证据见 `review.md`。
 
-### 10.1 退出确认：独立层而非替换 `overlay`
+### 10.1 退出确认：全局 toast + 确认窗口
 
 - `AppState`：
-  - `quit_confirm: Option<QuitConfirmState>`（`last_shortcut_press`）
-  - `quit_cancel_latch: Option<Instant>`
-  - `prompt_committed_for_quit: bool`
-  - 删除 `suspended_overlay`；删除 `Overlay::ConfirmQuit` / `OverlayKind::ConfirmQuit`。
-- `request_quit`：只打开 `quit_confirm`，不触碰 `state.overlay`、焦点、选区；清理正在进行的鼠标手势（分割线/滚动条/拖拽），避免确认期间继续改状态。
-- `confirm_quit`：关闭确认层，提交一次编辑器，置 `should_quit=true` 与 `prompt_committed_for_quit=true`。
-- `cancel_quit`：关闭确认层，记录 300ms latch；底层浮层与异步生命周期原样保留。
-- 输入：
-  - 确认层打开时，`event/input.rs` 最前面只处理 `Ctrl+Q` / `Esc` / `Enter`，其余键吞掉。
-  - `Ctrl+Q` 按住时每次自动重复都刷新 300ms 静默窗口，`Repeat` 直接忽略；松开后两次 Press 间隔满 300ms 才确认。
-  - `Esc` 取消后 300ms 内吞 `Esc`/`Enter`，每次自动重复刷新窗口，松开并静默后才恢复底层浮层按键。
-- 渲染：底层 `overlay` → tooltip/toast → 退出确认；确认层最后绘制，短屏跳过标题并裁剪问题行，任何 toast/浮层不能盖住它。
-- 鼠标：确认层打开时，按下/拖拽/松开/滚轮/右键/粘贴全部拦截；`quit_confirm_shell` 为空时只吞点击，不取消；点击弹窗外不关闭。
-- 异步：Connect/Referenced/Worktree/Trust 的 handler 继续看到原来的 `state.overlay`，OAuth/模型刷新/校验/搜索回执不会丢；Trust 只能更新底层浮层，不能顶掉确认层。
+  - `quit_requested_at: Option<Instant>`：最近一次退出请求的时刻；不新增模态层或浮层。
+  - `prompt_committed_for_quit: bool`。
+  - 删除 `QuitConfirmState`、`quit_cancel_latch`、`cancel_quit` 与 `ConfirmQuit` / `CancelQuit` action。
+- 常量：
+  - `QUIT_CONFIRM_REPEAT_GUARD = 300ms`：过滤传统终端长按产生的连续 `Press`。
+  - `QUIT_CONFIRM_WINDOW = TOAST_DURATION`（2s）：首次请求后的二次确认窗口。
+- `request_quit`：
+  - 首次请求、窗口过期，或提示已被关闭/替换：记录时刻、清理正在进行的鼠标手势，并展示 Warning 色全局 `Exit lx` toast（`EXIT_CONFIRM_TOAST`，`anchor = None`）；没有提示可见时绝不凭旧请求退出。
+  - `Repeat` 或与上次请求间隔不足 300ms：只刷新请求时刻，不退出。
+  - 间隔 ≥300ms 且仍在确认窗口内：调用 `confirm_quit`。
+- `confirm_quit`：取走 `quit_requested_at`，提交一次编辑器，置 `should_quit=true` 与 `prompt_committed_for_quit=true`。
+- 输入：`event/input.rs` 忽略 kitty `Repeat` 的 `Ctrl+Q`；其余按键不再因退出请求被吞掉，`Esc` / `Enter` 保持原有语义。
+- 渲染：没有退出模态；全局 toast 走现有 `ui::toast` 层，绘制在浮层之上。
+- 鼠标：不拦截按下/拖拽/滚轮；点击 toast 按其通用规则关闭，点击 `[EXIT]` 再次进入 `request_quit`。
+- 异步：`state.overlay` 全程不变，Connect/Referenced/Worktree/Trust 的异步回执不受影响。
 - 收尾：确认路径已提交 prompt，`Persistence::shutdown` 通过 `prompt_committed_for_quit` 跳过第二次提交；普通退出仍提交。
 
 ### 10.2 标题生成修订
@@ -999,12 +992,12 @@ Agent 无法交互式验证 TUI，以下由用户运行 `cargo run` 确认：
 - `manager/lifecycle.rs` 承载 `StopReason` / `stop_handle` / `resolve_cwd` / `StopWaiter`；`manager/mod.rs` 保留 `ProcessManager` 与主循环辅助。
 - `controls/panels.rs` 定义 `PANEL_BUTTON_WIDTH` / `PANEL_BUTTON_MARGIN`；`controls/mod.rs` 只做声明与重导出。
 - `app/update/prompt/pages.rs` 删除重复 `workspace_cwd`，统一走 `prompt/mod.rs`。
-- 退出确认文案移入 `ui/text/workspace.rs`，`ui/text.rs` 回到 1000 行内。
+- 退出 toast 文案移入 `ui/text/workspace.rs`，`ui/text.rs` 回到 1000 行内。
 - 合并 `dev` 的 `feat/lx-tool-grouping` / `feat/lx-read-output-truncation` 后，`ui/main_content/lx/history/tool.rs` 超过 1000 行；标题、分段、网格写入与折行原语抽到 `history/tool/header.rs`，分组/树体行为不变。
 
 ### 10.4 验证与未完成项
 
-- `cargo fmt --check`、`cargo clippy --all-targets -- -D warnings`、`cargo test` 全通过；lib 测试 5229 个。
+- `cargo fmt --check`、`cargo clippy --all-targets -- -D warnings`、`cargo test` 全通过；移除退出模态后 lib 测试 5222 个。
 - `tests/prompt_copy.rs` 的 pbcopy 桩改为原子写入，消除全量并发下的空文件竞态。
 - 合并 `dev` 时已解决 `chat/process/manager/mod.rs`、`handle.rs`、`docs/standards/project-directory-structure.md` 冲突，并保留 `feat/lx-read-output-truncation` 的输出边界逻辑。
 - 未完成：既有超限测试文件 `app/update/prompt/tests.rs`（2516）、`app/update/tests.rs`（5653）、`ui/tests.rs`（3321）的拆分；以及真实 TUI 人工验收。两者记录在 `review.md`，不与本次行为修复混做。

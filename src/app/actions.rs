@@ -3,12 +3,8 @@
 /// 一次可应用的应用级行为。
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Action {
-    /// 请求退出：打开独立确认层，不提交编辑器、不置 `should_quit`，底层浮层保持不变。
+    /// 请求退出：首次展示全局 toast，确认窗口内再次请求才退出。
     RequestQuit,
-    /// 确认退出：提交编辑中的提示词并置 `should_quit`。
-    ConfirmQuit,
-    /// 取消退出：关闭确认层并登记短窗口 latch，底层浮层原样保留。
-    CancelQuit,
     ToggleSidebar,
     TogglePrompt,
     /// 折叠/展开右列主区（prompt 在左时）。

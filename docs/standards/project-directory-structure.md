@@ -74,8 +74,8 @@ lx-tui/
                                 （toggle_lx_card；无 hover 态）；
                                 update/prompt/：Prompt 树/编辑/页列表（mod.rs）、保存（save.rs）、
                                 条目/临时提示词生命周期（items.rs）、右键菜单/重命名（menu.rs）；
-                                update/quit.rs：退出确认请求/确认/取消（独立于 overlay 的 quit_confirm 层；
-                                测试在 quit/tests.rs））
+                                update/quit.rs：退出请求/二次确认（首次显示全局 toast，
+                                确认窗口内再次请求才退出；测试在 quit/tests.rs））
     ui/                         渲染层，只读状态
       mod.rs
       left_panel/               左侧栏渲染：Workspaces 列表与 Agents 分区（mod.rs）、历史列表（history.rs）

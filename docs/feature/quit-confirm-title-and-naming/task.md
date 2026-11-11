@@ -1,6 +1,6 @@
 # 退出二次确认、模板块标题生成与 UI 命名整理 — 执行任务清单
 
-> 状态：**已实现、已 review 修复、已合并至 `dev`；原工作区已清理；待用户 `cargo run` 人工验收**
+> 状态：**已实现、已 review 修复、已合并至 `dev`；退出提示已改为全局 toast；原工作区已清理；待用户 `cargo run` 人工验收**
 >
 > 设计文档：`docs/feature/quit-confirm-title-and-naming/design.md`
 >
@@ -23,7 +23,9 @@
 
 ## 阶段 1：退出二次确认
 
-> **Review 修订**：初版 `Overlay::ConfirmQuit` + `suspended_overlay` 在 review 中确认会让被挂起浮层丢失异步回执，已改为独立 `quit_confirm` 层。下列 1.1-1.3 保留为历史计划；实际完成状态见 `review.md` 与 `design.md` 第 10 节。
+> **历史计划（已两次修订）**：初版 `Overlay::ConfirmQuit` + `suspended_overlay` 会丢失异步回执；review 后曾改为独立 `quit_confirm` 层；最终按要求**移除退出模态**，改为全局 toast + 2s 确认窗口。下列 1.1-1.3 仅保留当时计划，当前实现见 `design.md` 第 10.1 节。
+>
+> **当前实现**：`quit_requested_at: Option<Instant>` + `QUIT_CONFIRM_WINDOW`；首次请求 `show_toast(anchor=None)`，窗口内第二次 `Ctrl+Q`/`[EXIT]` 退出；无 `cancel_quit`、无 Esc/Enter 确认、无模态拦截。
 
 ### 1.1 状态与 Action
 
@@ -279,12 +281,12 @@ cargo test
 
 - [x] `cargo fmt --check`
 - [x] `cargo clippy --all-targets -- -D warnings`
-- [x] `cargo test`（合并 dev 后 5229 个 lib 测试 + 全部集成测试）
+- [x] `cargo test`（移除退出模态后 5222 个 lib 测试 + 全部集成测试）
 - [ ] 用户 `cargo run` 人工验收（待执行）：
-  - [ ] `Ctrl+Q` 第一次弹确认，`Esc` 取消后编辑器内容不变；
-  - [ ] `Ctrl+Q` 两次 / 点击 `↵ confirm` 退出；
-  - [ ] `[EXIT]` 第一次弹确认；
-  - [ ] 有底层弹窗时 `Ctrl+Q` → 取消后底层弹窗恢复；
+  - [ ] `Ctrl+Q` / `[EXIT]` 第一次只显示全局 `Exit lx` toast，编辑器内容不变；
+  - [ ] 确认窗口内再次 `Ctrl+Q` / 点击 `[EXIT]` 退出；
+  - [ ] 等待超过 2s 后再次请求，重新显示 toast 而不是退出；
+  - [ ] 有底层弹窗时退出请求只显示 toast，底层弹窗仍可正常操作；
   - [ ] `&&&` `/title` 不被嵌套 `+++` / 日志带偏；
   - [ ] `+++` `/title` 包含外层任务 + 当前补充；
   - [ ] 左栏/右栏/主内容折叠、交换、拖拽、Prompt/Todo 切换正常；
@@ -299,7 +301,7 @@ cargo test
   - `manager/` 采用 `mod.rs` + `types.rs` + `handle.rs` + `lifecycle.rs` + `spawn.rs`；保留 dev 的 50 KiB 输出边界与 `enforce_output_bounds`。
   - `project-directory-structure.md` 合并 `history/tool/group.rs`、`header.rs`、`right_panel/geometry.rs` 等描述。
 - [x] 合并后 `ui/main_content/lx/history/tool.rs` 超过 1000 行，抽出 `history/tool/header.rs`（标题、分段、网格写入、折行原语），分组/树体行为不变。
-- [x] `cargo fmt --check`、`cargo clippy --all-targets -- -D warnings`、`cargo test` 全通过（5229 个 lib 测试）。
+- [x] `cargo fmt --check`、`cargo clippy --all-targets -- -D warnings`、`cargo test` 全通过（移除退出模态后 5222 个 lib 测试）。
 - [x] 更新 `design.md`、`review.md` 与相关 feature 文档的合并记录。
 - [x] 删除 `.worktrees/quit-confirm-title-and-naming`、分支 `feat/quit-confirm-title-and-naming` 与隔离数据库。
 

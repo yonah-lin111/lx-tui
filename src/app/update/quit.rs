@@ -1,28 +1,50 @@
-//! 退出二次确认：请求、确认与取消。
+//! 退出二次确认：首次请求展示全局 toast，确认窗口内再次请求才退出。
 //!
-//! 确认层独立于 `state.overlay`：打开期间底层浮层、异步回执、焦点与选区全部照常，
-//! 渲染与输入只在最上层优先处理确认层。
+//! 不使用模态层：底层浮层、异步回执、焦点与选区全程照常，toast 只是提示。
 
 use std::time::Instant;
 
 use crate::app::overlay::Overlay;
-use crate::app::state::{AppState, QuitConfirmState};
+use crate::app::state::{AppState, QUIT_CONFIRM_REPEAT_GUARD, QUIT_CONFIRM_WINDOW};
+use crate::app::toast::{Toast, ToastKind};
+use crate::ui::text;
 
-/// 第一次退出请求：只打开确认层，不动底层浮层、焦点与文本选区。
+/// 第一次退出请求：展示全局 toast，不动底层浮层、焦点与文本选区。
+///
+/// 后续请求落在 `QUIT_CONFIRM_REPEAT_GUARD` 内视为长按自动重复，仅刷新窗口；
+/// 落在确认窗口内才退出；超过确认窗口则重新开始，绝不直接退出。
 pub fn request_quit(state: &mut AppState) {
-    if state.quit_confirm.is_some() {
+    let now = Instant::now();
+    let Some(requested_at) = state.quit_requested_at else {
+        arm_quit(state, now);
+        return;
+    };
+    let elapsed = now.duration_since(requested_at);
+    let toast_visible = quit_toast_visible(state, now);
+    if toast_visible && elapsed >= QUIT_CONFIRM_REPEAT_GUARD && elapsed < QUIT_CONFIRM_WINDOW {
+        confirm_quit(state);
         return;
     }
+    state.quit_requested_at = Some(now);
+    if toast_visible && elapsed < QUIT_CONFIRM_REPEAT_GUARD {
+        return;
+    }
+    // 窗口过期或提示已被关闭/替换：重新开始，不能凭旧请求直接退出。
     clear_active_gestures(state);
-    state.quit_confirm = Some(QuitConfirmState {
-        last_shortcut_press: Instant::now(),
-    });
-    state.quit_cancel_latch = None;
+    show_quit_toast(state, now);
+}
+
+/// 当前全局 toast 是否仍是退出提示（未被关闭、替换或过期）。
+fn quit_toast_visible(state: &AppState, now: Instant) -> bool {
+    state
+        .toast
+        .as_ref()
+        .is_some_and(|toast| toast.message == text::EXIT_CONFIRM_TOAST && !toast.is_expired(now))
 }
 
 /// 确认退出：只有此时才提交编辑器并置 `should_quit`。
 pub fn confirm_quit(state: &mut AppState) {
-    if state.quit_confirm.take().is_none() {
+    if state.quit_requested_at.take().is_none() {
         return;
     }
     super::commit_editing_prompt(state);
@@ -30,18 +52,26 @@ pub fn confirm_quit(state: &mut AppState) {
     state.should_quit = true;
 }
 
-/// 取消退出：关闭确认层并登记短窗口 latch，底层浮层原样保留。
-pub fn cancel_quit(state: &mut AppState) {
-    if state.quit_confirm.take().is_none() {
-        return;
-    }
-    state.quit_cancel_latch = Some(Instant::now());
+/// 首次请求或窗口过期后的重新请求：记录时刻并展示全局 toast。
+fn arm_quit(state: &mut AppState, now: Instant) {
+    state.quit_requested_at = Some(now);
+    clear_active_gestures(state);
+    show_quit_toast(state, now);
+}
+
+/// 全局 toast（无窗格锚点），避免落在 lx 窗格内或遮挡确认语义。
+fn show_quit_toast(state: &mut AppState, now: Instant) {
+    super::show_toast(
+        state,
+        Toast::new(ToastKind::Warning, text::EXIT_CONFIRM_TOAST, None, now)
+            .with_title(text::EXIT_CONFIRM_TITLE),
+    );
 }
 
 /// 清理按下中/拖拽中的手势状态；不触碰任何文本选区。
 ///
-/// 确认层打开后拖拽与松开都会被拦截，残留的手势标记必须在请求时丢弃，
-/// 否则取消退出后继续移动鼠标仍会改掉分割线尺寸、滚动条或排序。
+/// 请求退出时不打断底层交互，但按下中的拖拽不应跨过这次请求继续生效，
+/// 否则松手时仍会改掉分割线尺寸、滚动条或排序。
 fn clear_active_gestures(state: &mut AppState) {
     state.resizing_sidebar = false;
     state.resizing_pane = None;

@@ -714,8 +714,11 @@ fn ctrl_q_wins_over_todo_focus() {
         &mut dirty,
     );
 
-    assert!(!state.should_quit, "第一次 Ctrl+Q 只打开确认层");
-    assert!(state.quit_confirm.is_some());
+    assert!(!state.should_quit, "第一次 Ctrl+Q 只显示退出 toast");
+    assert!(state.quit_requested_at.is_some());
+    let toast = state.toast.as_ref().expect("quit toast");
+    assert_eq!(toast.message, crate::ui::text::EXIT_CONFIRM_TOAST);
+    assert_eq!(toast.anchor, None, "退出提示必须是全局 toast");
     assert!(dirty, "退出请求置脏");
     assert!(state.todo_focused(), "Ctrl+Q 不碰 todo 焦点");
     assert!(state.todo.items().is_empty(), "Ctrl+Q 不改 todo 列表");
