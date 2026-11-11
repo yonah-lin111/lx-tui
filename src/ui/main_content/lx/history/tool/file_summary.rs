@@ -293,19 +293,7 @@ fn fact_nodes(call: &ToolCallView) -> Vec<Node> {
     let summary = call.summary.as_deref();
     match kind {
         Kind::Read => {}
-        Kind::Search => {
-            // 无 SearchDetailView（或无命中行）时，结果级截断落到 `└─` 树体显示 `…[truncated]`。
-            let has_matches = matches!(
-                call.detail.as_deref(),
-                Some(crate::app::state::ToolDetailView::Search(view)) if !view.matches.is_empty()
-            );
-            if !has_matches && summary.is_some_and(|summary| summary.truncated) {
-                nodes.push(Node::text(
-                    text::agent::INLINE_TRUNCATED,
-                    style::agent_step_detail(),
-                ));
-            }
-        }
+        Kind::Search => {}
         Kind::Edit | Kind::Write => {
             if let Some(summary) = summary {
                 if summary.partial {
@@ -322,8 +310,8 @@ fn fact_nodes(call: &ToolCallView) -> Vec<Node> {
                 }
                 if summary.truncated {
                     nodes.push(Node::text(
-                        text::agent::INLINE_TRUNCATED,
-                        style::agent_step_detail(),
+                        text::agent::FILE_DIFF_TRUNCATED,
+                        style::agent_warn(),
                     ));
                 }
                 if summary.omitted_files > 0 {

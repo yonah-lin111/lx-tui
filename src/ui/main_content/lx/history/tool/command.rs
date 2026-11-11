@@ -686,13 +686,21 @@ mod tests {
 
     #[test]
     fn truncation_facts_are_separate_nodes() {
-        let mut call = command_call(ProcessStateView::Exited { code: Some(0) }, "tail\n", None);
+        let output: String = (0..8)
+            .map(|index| format!("line {index}…[truncated]\n"))
+            .collect();
+        let mut call = command_call(ProcessStateView::Exited { code: Some(0) }, &output, None);
         if let Some(ToolDetailView::Command(view)) = call.detail.as_deref_mut() {
             view.truncated = true;
             view.dropped_bytes = 512;
         }
         let text = flat(&call, 60, Folds::default());
-        assert!(text.contains(text::agent::INLINE_TRUNCATED), "{text}");
+        assert!(text.contains("more lines [truncated]"), "{text}");
+        assert_eq!(
+            text.matches(text::agent::INLINE_TRUNCATED).count(),
+            1,
+            "只允许在 more lines 行出现一次 [truncated]：{text}"
+        );
         assert!(!text.contains(text::agent::OUTPUT_LIMITED), "{text}");
         assert!(text.contains("earlier bytes dropped"), "{text}");
     }

@@ -53,7 +53,13 @@ fn arguments_section(view: &McpDetailView, expanded: bool) -> Option<Section> {
 }
 
 fn sanitize_result_line(line: &str, max_chars: usize) -> String {
-    line.chars()
+    let cleaned = line
+        .strip_suffix("…[truncated]")
+        .or_else(|| line.strip_suffix("[...truncated]"))
+        .or_else(|| line.strip_suffix(text::agent::INLINE_TRUNCATED))
+        .unwrap_or(line);
+    cleaned
+        .chars()
         .take(max_chars)
         .map(|ch| if ch.is_control() { ' ' } else { ch })
         .collect::<String>()
@@ -108,7 +114,7 @@ fn result_section(
     } else {
         view.result_more
     };
-    if more > 0 {
+    if more > 0 && (expanded || lines.len() <= BLOCK_PREVIEW_ROWS) {
         let mut hint = text::mcp::more_lines(more);
         if truncated {
             hint.push(' ');

@@ -252,26 +252,6 @@ pub(crate) fn layout(sections: &[Section], width: u16) -> Layout {
                     first: false,
                 });
             }
-        } else if section.truncated {
-            let already_marked = visible.iter().any(|&index| {
-                lines[index].segments.iter().any(|seg| {
-                    seg.text.contains(text::agent::INLINE_TRUNCATED)
-                        || seg.text.contains("omitted]")
-                })
-            });
-            if !already_marked
-                && unicode_width::UnicodeWidthStr::width(text::agent::INLINE_TRUNCATED) <= body
-            {
-                rows.push(Row {
-                    prefix: "",
-                    segments: vec![Segment::new(
-                        text::agent::INLINE_TRUNCATED,
-                        style::fold_hint(),
-                    )],
-                    node: last_visible,
-                    first: false,
-                });
-            }
         }
     }
 

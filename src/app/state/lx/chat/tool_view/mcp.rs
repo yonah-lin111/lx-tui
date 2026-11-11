@@ -192,10 +192,23 @@ fn argument_more(arguments_json: &str) -> usize {
     text.lines().count().saturating_sub(20)
 }
 
+fn is_truncation_marker_line(line: &str) -> bool {
+    let trimmed = line.trim();
+    matches!(trimmed, "…[truncated]" | "[...truncated]" | "[truncated]")
+        || (trimmed.starts_with("[truncated at ") && trimmed.ends_with(" bytes]"))
+}
+
 fn text_lines(text: &str) -> Vec<String> {
-    text.lines().take(20).map(str::to_string).collect()
+    text.lines()
+        .filter(|line| !is_truncation_marker_line(line))
+        .take(20)
+        .map(str::to_string)
+        .collect()
 }
 
 fn text_more(text: &str) -> usize {
-    text.lines().count().saturating_sub(20)
+    text.lines()
+        .filter(|line| !is_truncation_marker_line(line))
+        .count()
+        .saturating_sub(20)
 }

@@ -75,13 +75,21 @@ fn single_query_completed_card_omits_the_query_count() {
 fn truncated_card_places_marker_in_result_body_not_title() {
     let mut view = view();
     view.truncated = true;
-    view.result = (0..10).map(|index| format!("line {index}")).collect();
+    view.result = (0..10)
+        .map(|index| format!("line {index}…[truncated]"))
+        .chain(std::iter::once("[...truncated]".to_string()))
+        .collect();
     view.result_more = 5;
     let folded = render_with(&call(), &view, 100, Folds::default());
     let header = folded.lines().next().unwrap_or("");
     assert!(!header.contains(text::agent::SEARCH_TRUNCATED), "{header}");
     assert!(!header.contains("truncated"), "{header}");
     assert!(folded.contains("more lines [truncated]"), "{folded}");
+    assert_eq!(
+        folded.matches(text::agent::INLINE_TRUNCATED).count(),
+        1,
+        "折叠态只允许在 more lines 行出现一次 [truncated]：{folded}"
+    );
     let expanded = render_with(
         &call(),
         &view,
@@ -94,6 +102,11 @@ fn truncated_card_places_marker_in_result_body_not_title() {
     assert!(
         expanded.contains("… 5 more lines [truncated]"),
         "{expanded}"
+    );
+    assert_eq!(
+        expanded.matches(text::agent::INLINE_TRUNCATED).count(),
+        1,
+        "展开态也只允许在 more lines 行出现一次 [truncated]：{expanded}"
     );
 }
 

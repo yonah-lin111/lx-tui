@@ -41,21 +41,15 @@ fn hit_line(hit: &crate::app::state::SearchMatchView, expanded: bool) -> Vec<Seg
     let raw = single_line(&hit.text, TEXT_SAMPLE_CHARS);
     let body = raw
         .strip_suffix("…[truncated]")
+        .or_else(|| raw.strip_suffix("[...truncated]"))
         .or_else(|| raw.strip_suffix(text::agent::INLINE_TRUNCATED))
         .map(str::trim_end)
         .unwrap_or(raw.as_str())
         .to_string();
-    let mut spans = vec![
+    vec![
         Segment::new(format!("{path}:{}: ", hit.line), style::agent_step_detail()),
         Segment::new(body, output_style(expanded)),
-    ];
-    if hit.line_truncated {
-        spans.push(Segment::new(
-            text::agent::INLINE_TRUNCATED,
-            style::agent_step_detail(),
-        ));
-    }
-    spans
+    ]
 }
 
 fn layout(
@@ -263,19 +257,16 @@ mod tests {
     }
 
     #[test]
-    fn expanded_search_shows_all_matches_and_truncation_note() {
+    fn expanded_search_shows_all_matches_without_inline_truncated_noise() {
         let call = call();
         let view = view();
         let expanded = text_of(&call, &view, 100, true);
         let header = expanded.lines().next().unwrap_or("");
         assert!(!header.contains(text::agent::SEARCH_TRUNCATED), "{header}");
+        assert!(expanded.contains("src/baz.rs:3: render"), "{expanded}");
         assert!(
-            expanded.contains("src/baz.rs:3: render[truncated]"),
-            "{expanded}"
-        );
-        assert!(
-            expanded.contains(text::agent::INLINE_TRUNCATED),
-            "{expanded}"
+            !expanded.contains(text::agent::INLINE_TRUNCATED),
+            "展开态无 more lines 行时不显示 [truncated]：{expanded}"
         );
         assert!(
             !expanded.contains("more line"),

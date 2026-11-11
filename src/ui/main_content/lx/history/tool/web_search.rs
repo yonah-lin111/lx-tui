@@ -73,10 +73,15 @@ fn queries_section(view: &WebSearchDetailView, expanded: bool) -> Option<Section
 }
 
 /// 结果单行净化：控制字符转空格（`markdown_render` 不接受裸控制字符），超长截断补 `…`，
-/// 并将 `…[truncated]` / `[...truncated]` 归一为 `[truncated]`。
+/// 并剥离正文中的 `…[truncated]` / `[...truncated]` / `[truncated]`（截断只显示在 `more lines` 行）。
 fn sanitize_result_line(line: &str) -> String {
-    let mut text = String::with_capacity(line.len().min(MAX_RESULT_LINE_CHARS + 4));
-    for (count, ch) in line.chars().enumerate() {
+    let cleaned = line
+        .strip_suffix("…[truncated]")
+        .or_else(|| line.strip_suffix("[...truncated]"))
+        .or_else(|| line.strip_suffix(text::agent::INLINE_TRUNCATED))
+        .unwrap_or(line);
+    let mut text = String::with_capacity(cleaned.len().min(MAX_RESULT_LINE_CHARS + 4));
+    for (count, ch) in cleaned.chars().enumerate() {
         if count == MAX_RESULT_LINE_CHARS {
             text.push('…');
             break;
@@ -84,8 +89,9 @@ fn sanitize_result_line(line: &str) -> String {
         text.push(if ch.is_control() { ' ' } else { ch });
     }
     text.trim_end()
-        .replace("…[truncated]", text::agent::INLINE_TRUNCATED)
-        .replace("[...truncated]", text::agent::INLINE_TRUNCATED)
+        .replace("…[truncated]", "")
+        .replace("[...truncated]", "")
+        .replace(text::agent::INLINE_TRUNCATED, "")
 }
 
 fn result_section(
@@ -119,6 +125,12 @@ fn result_section(
         (
             view.result
                 .iter()
+                .filter(|line| {
+                    !matches!(
+                        line.trim(),
+                        "…[truncated]" | "[...truncated]" | "[truncated]"
+                    )
+                })
                 .map(|line| sanitize_result_line(line))
                 .collect::<Vec<_>>()
                 .join("\n"),
@@ -127,7 +139,7 @@ fn result_section(
     };
     let mut lines = muted_markdown_lines(&raw_source, body_width);
     let truncated = error_fallback.is_none() && view.truncated;
-    if more > 0 {
+    if more > 0 && (expanded || lines.len() <= BLOCK_PREVIEW_ROWS) {
         let mut hint = text::mcp::more_lines(more);
         if truncated {
             hint.push(' ');

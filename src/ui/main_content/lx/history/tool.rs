@@ -137,20 +137,27 @@ pub(super) const MAX_OUTPUT_LINE_CHARS: usize = 8 * 1024;
 
 /// 输出单行取样与控制字符净化（超过上限按字符截断并补 `…`；`\t` 及控制字符转单空格，
 /// 避免 `Grid::put_clipped` 将 0 宽控制字符跳过导致词粘连或与折行列宽失配）。
+///
+/// 行尾内联的 `…[truncated]` / `[...truncated]` / `[truncated]` 一律剥离，
+/// 截断状态统一由折叠提示行 `… N more lines [truncated]` 承载，不在输出正文重复出现。
 pub(super) fn sample_output_line(line: &str) -> String {
-    let mut text = String::with_capacity(line.len().min(MAX_OUTPUT_LINE_CHARS + 4));
-    for (count, ch) in line.chars().enumerate() {
+    let cleaned = line
+        .strip_suffix("…[truncated]")
+        .or_else(|| line.strip_suffix("[...truncated]"))
+        .or_else(|| line.strip_suffix(text::agent::INLINE_TRUNCATED))
+        .unwrap_or(line);
+    let mut text = String::with_capacity(cleaned.len().min(MAX_OUTPUT_LINE_CHARS + 4));
+    for (count, ch) in cleaned.chars().enumerate() {
         if count == MAX_OUTPUT_LINE_CHARS {
             text.push('…');
             break;
         }
         text.push(if ch.is_control() { ' ' } else { ch });
     }
-    text.replace("…[truncated]", text::agent::INLINE_TRUNCATED)
-        .replace("[...truncated]", text::agent::INLINE_TRUNCATED)
+    text
 }
 
-/// 将多行原始输出按行做单行长度采样（上限 [`MAX_OUTPUT_LINE_CHARS`]）并剥离末尾空行，
+/// 将多行原始输出按行做单行长度采样（上限 [`MAX_OUTPUT_LINE_CHARS`]）并剥离末尾空行與独立截断标记行，
 /// 供 [`muted_markdown_lines`] 进行有界 Markdown 渲染。
 pub(super) fn sample_markdown_source(raw: &str) -> String {
     if raw.is_empty() {
@@ -159,6 +166,12 @@ pub(super) fn sample_markdown_source(raw: &str) -> String {
     let mut out = Vec::new();
     for line in raw.split('\n') {
         let line = line.trim_end_matches('\r');
+        if matches!(
+            line.trim(),
+            "…[truncated]" | "[...truncated]" | "[truncated]" | "…[output truncated]"
+        ) {
+            continue;
+        }
         out.push(sample_output_line(line));
     }
     while out.last().is_some_and(String::is_empty) {

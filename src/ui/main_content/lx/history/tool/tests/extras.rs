@@ -135,7 +135,7 @@ fn truncated_read_reports_output_limited() {
 }
 
 #[test]
-fn search_shows_matches_in_title_and_truncation_in_body() {
+fn search_shows_matches_in_title_and_omits_truncation_outside_more_lines() {
     let call = tool_call(
         "search",
         ToolStatus::Completed,
@@ -161,8 +161,8 @@ fn search_shows_matches_in_title_and_truncation_in_body() {
     );
     assert!(detail.contains("in tool_test.txt"), "{detail}");
     assert!(
-        detail.contains(text::agent::INLINE_TRUNCATED),
-        "截断标记落到树体：{detail}"
+        !detail.contains(text::agent::INLINE_TRUNCATED),
+        "无 more lines 时树体不单独显示 [truncated]：{detail}"
     );
     assert!(!detail.contains('·'), "独立字段不拼 `·`：{detail}");
 }
