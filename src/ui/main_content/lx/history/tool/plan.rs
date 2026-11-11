@@ -80,6 +80,15 @@ pub(super) fn rows(call: &ToolCallView, width: u16, _expanded: bool) -> usize {
             .len()
 }
 
+/// 标题状态：`1/3 completed`；空计划不写。
+pub(super) fn status_of(call: &ToolCallView) -> Option<String> {
+    let view = match call.detail.as_deref() {
+        Some(crate::app::state::ToolDetailView::Plan(view)) => view,
+        _ => return None,
+    };
+    (!view.is_empty()).then(|| text::agent::plan_progress(view.completed(), view.steps.len()))
+}
+
 /// 绘制计划卡片；推进行数必须与 [`rows`] 严格相等。
 pub(super) fn draw(
     grid: &mut Grid,
@@ -99,16 +108,13 @@ pub(super) fn draw(
         _ => None,
     };
     if let Some(y) = visible_row(rect, scroll, *row_index) {
-        let status = view
-            .map(|view| text::agent::plan_progress(view.completed(), view.steps.len()))
-            .filter(|_| view.is_some_and(|view| !view.is_empty()));
         let segments = header_with_verb(
             call,
             width,
             loading_frame,
             animating,
             text::agent::VERB_UPDATE_PLAN,
-            status,
+            status_of(call),
         );
         put_segments(grid, rect.x, y, width, &segments);
     }
@@ -123,6 +129,28 @@ pub(super) fn draw(
         row_index,
         &tree::layout(&[Section::fixed(nodes(view))], width).rows,
     );
+}
+
+/// 快照合并调用体：跳过标题，直接平铺最新计划步骤（完成计数已在组头展示）。
+pub(super) fn draw_body(
+    grid: &mut Grid,
+    rect: Rect,
+    scroll: usize,
+    row_index: &mut usize,
+    call: &ToolCallView,
+    _loading_frame: usize,
+    _animating: bool,
+    _last: bool,
+) {
+    if rect.width == 0 {
+        return;
+    }
+    let Some(crate::app::state::ToolDetailView::Plan(view)) = call.detail.as_deref() else {
+        return;
+    };
+    let mut layout = tree::layout(&[Section::fixed(nodes(view))], rect.width);
+    tree::decorate_group_call(&mut layout.rows, call, None, rect.width);
+    tree::draw(grid, rect, scroll, row_index, &layout.rows);
 }
 
 #[cfg(test)]

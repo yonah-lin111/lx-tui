@@ -9,6 +9,7 @@ use crate::app::state::{AssistantStepView, CardSection, ChatMessageView};
 
 use super::super::source::HistorySource;
 use super::tool_signature::tool_signature;
+use crate::ui::main_content::lx::history::paint::GroupSlot;
 
 /// FNV-1a 64 位哈希（不引第三方依赖）。
 pub(super) struct Fnv(u64);
@@ -343,6 +344,39 @@ pub(crate) fn part_block_signature(
 ) -> u64 {
     let mut hash = Fnv::new();
     step_signature(&mut hash, source, message, message_index, step_index, step);
+    hash.finish()
+}
+
+/// 合并组头的指纹：组内每个调用的身份/状态/错误/摘要都参与，追加或改状态必须失效。
+pub(crate) fn tool_group_header_signature(
+    source: HistorySource<'_>,
+    message: &ChatMessageView,
+    first_step: usize,
+    count: usize,
+) -> u64 {
+    let mut hash = Fnv::new();
+    hash.write_usize(count);
+    for step in message.steps.iter().skip(first_step).take(count) {
+        if let AssistantStepView::Tool { call, .. } = step {
+            tool_signature(&mut hash, source, message, call);
+        }
+    }
+    hash.finish()
+}
+
+/// 合并组内调用体的指纹：步骤内容 + 组内位置（首/末连接符与组大小）。
+pub(crate) fn tool_body_block_signature(
+    source: HistorySource<'_>,
+    message: &ChatMessageView,
+    message_index: usize,
+    step_index: usize,
+    step: &AssistantStepView,
+    group: GroupSlot,
+) -> u64 {
+    let mut hash = Fnv::new();
+    step_signature(&mut hash, source, message, message_index, step_index, step);
+    hash.write_usize(group.index);
+    hash.write_usize(group.count);
     hash.finish()
 }
 

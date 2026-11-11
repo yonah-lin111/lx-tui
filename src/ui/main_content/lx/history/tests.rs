@@ -17,6 +17,8 @@ use crate::ui::main_content::lx::{history_center_target, history_rect};
 
 /// 工具步骤的几何一致性测试（布局/渲染行数、滚动条、置顶行、thinking 命中）。
 mod tool_geometry;
+/// 连续同种工具调用合并与二级子树测试。
+mod tool_grouping;
 
 // 按主题拆出的子模块（单文件行数上限）；构造器都在本模块，子模块用 `use super::*`。
 mod cards;

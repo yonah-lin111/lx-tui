@@ -11,7 +11,8 @@
 //!   `search` 的命中数、`plan` 的完成计数、委派卡片的调用条件；失败/中断只保留错误详情。
 //! - **树体**回答「对什么做了什么」：一个节点是一段内容（命令、路径、命中、步骤块、
 //!   问答对、diff 正文），首行画 `├─`/`└─`，同一节点的续行左对齐或画 `│`。
-//! - 每个工具调用是独立卡片，块之间空一行；连续文件工具**不再合并**标题。
+//! - 连续同名工具调用合并为“组头 + 逐调用树体”；组内不空行，组与前后块空一行。
+//! - 每个调用保留自己的可折叠树体；组头只占一行、不可点击。
 //! - 参数/输出各自可独立折叠（[`Folds`]），折叠提示只是续行，不单独收口。
 //! - 参数一律取自 [`ToolCallView::summary`]（参数派生 + 结果体补全，见
 //!   `ToolSummary::from_arguments` / `absorb_result_json`）；只有摘要缺字段时才回退解析
@@ -33,6 +34,7 @@ mod ask;
 mod command;
 mod file_diff;
 mod file_summary;
+mod group;
 mod mcp;
 mod plan;
 mod search;
@@ -40,11 +42,18 @@ mod subagent;
 pub(crate) mod tree;
 mod web_search;
 
+pub(crate) use group::{
+    GroupMode, body_agent_links, body_card_regions, body_rows, draw_body_animated,
+    draw_group_header, group_key, group_mode, is_groupable,
+};
+
 #[cfg(test)]
 use file_summary::{fallback_parse_count, reset_fallback_parse_count};
 
 /// 树形前缀列数（`  │  ` 与 `  └─ ` 等宽，都是 5 列）；命令/交互/计划卡片共用。
 pub(super) const TREE_COLS: usize = 5;
+/// 合并组二级子树前缀列数（外层 5 列 + 内层 3 列 = 8 列）。
+pub(super) const TREE_NESTED_COLS: usize = 8;
 
 /// 卡片折叠状态：主体（文件差异 / 命令参数）与命令输出**各自独立**。
 ///
@@ -67,14 +76,14 @@ impl Folds {
 
 /// 一个可交互区域的几何（相对步骤块首：标题行是偏移 0）。
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(super) struct RowSpan {
+pub(crate) struct RowSpan {
     pub offset: usize,
     pub rows: usize,
 }
 
 /// 卡片内的一个交互区域：点击面与它折叠的是哪一块。
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(super) struct CardRegion {
+pub(crate) struct CardRegion {
     pub section: CardSection,
     pub card: RowSpan,
     /// 点击是否真的会改变内容（false 时不登记点击面）。
@@ -93,31 +102,42 @@ pub(super) struct CardRegion {
 /// `history::layout` 与 `history::render` 必须共用本函数：工具行一旦换行，滚动条、
 /// 置顶行与 thinking 命中矩形都会漂移。
 pub(super) fn rows(call: &ToolCallView, width: u16, folds: Folds) -> usize {
+    rows_with_group(call, width, folds, false)
+}
+
+pub(super) fn rows_with_group(
+    call: &ToolCallView,
+    width: u16,
+    folds: Folds,
+    in_group: bool,
+) -> usize {
     if width == 0 {
         return 0;
     }
     match call.detail.as_deref() {
         Some(crate::app::state::ToolDetailView::Command(_))
         | Some(crate::app::state::ToolDetailView::Interaction(_)) => {
-            command::rows(call, width, folds)
+            command::rows_with_group(call, width, folds, in_group)
         }
         Some(crate::app::state::ToolDetailView::Plan(_)) => plan::rows(call, width, folds.body),
         Some(crate::app::state::ToolDetailView::Ask(_)) => ask::rows(call, width, folds.body),
         Some(crate::app::state::ToolDetailView::Subagent(_)) => {
-            subagent::rows(call, width, folds.body)
+            subagent::rows_with_group(call, width, folds.body, in_group)
         }
         Some(crate::app::state::ToolDetailView::Search(view)) => {
-            search::rows(call, view, width, folds.body)
+            search::rows_with_group(call, view, width, folds.body, in_group)
         }
-        Some(crate::app::state::ToolDetailView::Mcp(view)) => mcp::rows(call, view, width, folds),
+        Some(crate::app::state::ToolDetailView::Mcp(view)) => {
+            mcp::rows_with_group(call, view, width, folds, in_group)
+        }
         Some(crate::app::state::ToolDetailView::WebSearch(view)) => {
-            web_search::rows(call, view, width, folds)
+            web_search::rows_with_group(call, view, width, folds, in_group)
         }
         Some(crate::app::state::ToolDetailView::File(_)) if file_diff::is_card(call) => {
-            file_diff::rows(call, width, folds.body)
+            file_diff::rows_with_group(call, width, folds.body, in_group)
         }
         Some(crate::app::state::ToolDetailView::File(_)) | None => {
-            HEADER_ROWS + file_summary::detail_rows(call, width, folds.body)
+            HEADER_ROWS + file_summary::detail_rows_with_group(call, width, folds.body, in_group)
         }
     }
 }
@@ -400,39 +420,66 @@ pub(super) fn output_style(_expanded: bool) -> Style {
 /// 判据必须是**内容行**的比较，而不是 `rows()`：折叠态末尾有一行「剩余行数」提示，
 /// 直接比 `rows()` 会让「展开」反而比「折叠」少一行（真实 bug：卡片因此不可点）。
 /// 各卡片按自己的语义提供内容行数：文件差异比 hunks、普通工具比详情、命令比折行命令。
+#[cfg(test)]
 pub(super) fn has_expandable_content(call: &ToolCallView, width: u16) -> bool {
+    has_expandable_content_with_group(call, width, false)
+}
+
+pub(super) fn has_expandable_content_with_group(
+    call: &ToolCallView,
+    width: u16,
+    in_group: bool,
+) -> bool {
     if width == 0 {
         return false;
     }
     match call.detail.as_deref() {
         Some(crate::app::state::ToolDetailView::Command(_))
         | Some(crate::app::state::ToolDetailView::Interaction(_)) => {
-            command::params_expandable(call, width) || command::output_expandable(call, width)
+            command::params_expandable(call, width)
+                || command::output_expandable_with_group(call, width, in_group)
         }
         Some(crate::app::state::ToolDetailView::Plan(_))
         | Some(crate::app::state::ToolDetailView::Ask(_)) => false,
-        Some(crate::app::state::ToolDetailView::Subagent(_)) => subagent::has_more(call, width),
-        Some(crate::app::state::ToolDetailView::Search(view)) => {
-            search::has_more(call, view, width)
+        Some(crate::app::state::ToolDetailView::Subagent(_)) => {
+            subagent::has_more_with_group(call, width, in_group)
         }
-        Some(crate::app::state::ToolDetailView::Mcp(view)) => mcp::has_more(call, view, width),
+        Some(crate::app::state::ToolDetailView::Search(view)) => {
+            search::has_more_with_group(call, view, width, in_group)
+        }
+        Some(crate::app::state::ToolDetailView::Mcp(view)) => {
+            let layout = mcp::layout_with_group(call, view, width, Folds::default(), in_group);
+            layout.arguments_expandable || layout.result_expandable
+        }
         Some(crate::app::state::ToolDetailView::WebSearch(view)) => {
-            web_search::has_more(call, view, width)
+            let layout =
+                web_search::layout_with_group(call, view, width, Folds::default(), in_group);
+            layout.queries_expandable || layout.result_expandable
         }
         Some(crate::app::state::ToolDetailView::File(_)) if file_diff::is_card(call) => {
-            file_diff::has_more_content(call, width)
+            file_diff::has_more_content_with_group(call, width, in_group)
         }
         Some(crate::app::state::ToolDetailView::File(_)) | None => {
-            file_summary::detail_content_rows(call, width, true)
-                > file_summary::detail_content_rows(call, width, false)
+            file_summary::detail_content_rows_with_group(call, width, true, in_group)
+                > file_summary::detail_content_rows_with_group(call, width, false, in_group)
         }
     }
 }
 
 /// 子 agent 卡片里的 agent 链接（相对步骤块首的行偏移）。
 pub(super) fn agent_links(call: &ToolCallView, width: u16) -> Vec<(usize, String)> {
+    agent_links_with_group(call, width, false)
+}
+
+pub(super) fn agent_links_with_group(
+    call: &ToolCallView,
+    width: u16,
+    in_group: bool,
+) -> Vec<(usize, String)> {
     match call.detail.as_deref() {
-        Some(crate::app::state::ToolDetailView::Subagent(_)) => subagent::agent_links(call, width),
+        Some(crate::app::state::ToolDetailView::Subagent(_)) => {
+            subagent::agent_links_with_group(call, width, in_group)
+        }
         _ => Vec::new(),
     }
 }
@@ -445,8 +492,9 @@ fn mcp_regions(
     view: &crate::app::state::McpDetailView,
     width: u16,
     folds: Folds,
+    in_group: bool,
 ) -> Vec<CardRegion> {
-    let layout = mcp::layout(call, view, width, folds);
+    let layout = mcp::layout_with_group(call, view, width, folds, in_group);
     split_regions(
         layout.arguments_rows,
         layout.result_rows,
@@ -461,8 +509,9 @@ fn web_search_regions(
     view: &crate::app::state::WebSearchDetailView,
     width: u16,
     folds: Folds,
+    in_group: bool,
 ) -> Vec<CardRegion> {
-    let layout = web_search::layout(call, view, width, folds);
+    let layout = web_search::layout_with_group(call, view, width, folds, in_group);
     split_regions(
         layout.queries_rows,
         layout.result_rows,
@@ -505,7 +554,12 @@ fn split_regions(
 }
 
 /// 命令/交互卡片的点击面：参数区与输入/输出区各自独立折叠。
-fn command_regions(call: &ToolCallView, width: u16, blocks: command::Blocks) -> Vec<CardRegion> {
+fn command_regions(
+    call: &ToolCallView,
+    width: u16,
+    blocks: command::Blocks,
+    in_group: bool,
+) -> Vec<CardRegion> {
     let mut regions = vec![CardRegion {
         section: CardSection::Body,
         card: RowSpan {
@@ -521,7 +575,7 @@ fn command_regions(call: &ToolCallView, width: u16, blocks: command::Blocks) -> 
                 offset: HEADER_ROWS + blocks.params,
                 rows: blocks.output,
             },
-            clickable: command::output_expandable(call, width),
+            clickable: command::output_expandable_with_group(call, width, in_group),
         });
     }
     regions
@@ -538,12 +592,22 @@ pub(super) fn card_regions(
     folds: Folds,
     step_rows: usize,
 ) -> Vec<CardRegion> {
+    card_regions_with_group(call, width, folds, step_rows, false)
+}
+
+pub(super) fn card_regions_with_group(
+    call: &ToolCallView,
+    width: u16,
+    folds: Folds,
+    step_rows: usize,
+    in_group: bool,
+) -> Vec<CardRegion> {
     if width == 0 {
         return Vec::new();
     }
     match call.detail.as_deref() {
         Some(crate::app::state::ToolDetailView::Command(view)) => {
-            let blocks = command::blocks(call, width, folds);
+            let blocks = command::blocks_with_group(call, width, folds, in_group);
             if view.state.is_running() {
                 // 长任务：整卡都是「打开后台任务面板」的点击面。
                 return vec![CardRegion {
@@ -555,16 +619,19 @@ pub(super) fn card_regions(
                     clickable: true,
                 }];
             }
-            command_regions(call, width, blocks)
+            command_regions(call, width, blocks, in_group)
         }
-        Some(crate::app::state::ToolDetailView::Interaction(_)) => {
-            command_regions(call, width, command::blocks(call, width, folds))
-        }
+        Some(crate::app::state::ToolDetailView::Interaction(_)) => command_regions(
+            call,
+            width,
+            command::blocks_with_group(call, width, folds, in_group),
+            in_group,
+        ),
         Some(crate::app::state::ToolDetailView::Plan(_))
         | Some(crate::app::state::ToolDetailView::Ask(_)) => Vec::new(),
         Some(crate::app::state::ToolDetailView::Subagent(_))
         | Some(crate::app::state::ToolDetailView::Search(_)) => {
-            if !has_expandable_content(call, width) {
+            if !has_expandable_content_with_group(call, width, in_group) {
                 return Vec::new();
             }
             vec![CardRegion {
@@ -576,13 +643,15 @@ pub(super) fn card_regions(
                 clickable: true,
             }]
         }
-        Some(crate::app::state::ToolDetailView::Mcp(view)) => mcp_regions(call, view, width, folds),
+        Some(crate::app::state::ToolDetailView::Mcp(view)) => {
+            mcp_regions(call, view, width, folds, in_group)
+        }
         Some(crate::app::state::ToolDetailView::WebSearch(view)) => {
-            web_search_regions(call, view, width, folds)
+            web_search_regions(call, view, width, folds, in_group)
         }
         Some(crate::app::state::ToolDetailView::File(_)) | None => {
             // 展开前后行数不变就不登记：留下一个点了没反应的点击面只会误导。
-            if !has_expandable_content(call, width) {
+            if !has_expandable_content_with_group(call, width, in_group) {
                 return Vec::new();
             }
             vec![CardRegion {
@@ -663,9 +732,55 @@ fn verb_label(call: &ToolCallView) -> String {
         Kind::Search => a::VERB_TOOL_SEARCH.to_string(),
         Kind::Edit => a::VERB_TOOL_EDIT.to_string(),
         Kind::Write => a::VERB_TOOL_WRITE.to_string(),
-        Kind::Other if call.name == "curr_time" => a::VERB_TOOL_CURR_TIME.to_string(),
-        Kind::Other => single_line(&call.name, TEXT_SAMPLE_CHARS),
+        Kind::Other => match call.name.as_str() {
+            "curr_time" => a::VERB_TOOL_CURR_TIME.to_string(),
+            "exec_command" => a::VERB_EXEC_COMMAND.to_string(),
+            "write_stdin" => write_stdin_fallback_verb(&call.arguments_json).to_string(),
+            "update_plan" => a::VERB_UPDATE_PLAN.to_string(),
+            "ask" => a::VERB_TOOL_ASK.to_string(),
+            "web_search" => a::VERB_TOOL_WEB_SEARCH.to_string(),
+            "spawn_agent" | "send_input" | "interrupt_agent" | "resume_agent" | "wait_agent"
+            | "close_agent" | "list_agents" | "cancel_agent_input" => {
+                subagent::verb(&call.name).to_string()
+            }
+            name if name.starts_with(crate::mcp::MCP_PREFIX) => {
+                if let Some((server, tool)) = name
+                    .strip_prefix(crate::mcp::MCP_PREFIX)
+                    .and_then(|rest| rest.split_once("__"))
+                {
+                    format!("{server} · {tool}")
+                } else {
+                    single_line(name, TEXT_SAMPLE_CHARS)
+                }
+            }
+            _ => single_line(&call.name, TEXT_SAMPLE_CHARS),
+        },
     }
+}
+
+/// `write_stdin` 在尚未生成 `ToolDetailView::Interaction` 时，按参数 JSON 推导显示动词。
+fn write_stdin_fallback_verb(arguments_json: &str) -> &'static str {
+    if arguments_json.len() <= MAX_FALLBACK_PARSE_BYTES
+        && let Ok(value) = serde_json::from_str::<serde_json::Value>(arguments_json)
+    {
+        if value
+            .get("terminate")
+            .or_else(|| value.get("kill"))
+            .and_then(serde_json::Value::as_bool)
+            .unwrap_or(false)
+        {
+            return text::agent::VERB_STOP_COMMAND;
+        }
+        if value
+            .get("chars")
+            .or_else(|| value.get("input"))
+            .and_then(serde_json::Value::as_str)
+            .is_some_and(|text| !text.is_empty())
+        {
+            return text::agent::VERB_SEND_INPUT;
+        }
+    }
+    text::agent::VERB_READ_OUTPUT
 }
 
 /// 组装第 1 行（`■ 动词 · 状态`）：状态紧跟动词，与进程/委派卡片同一读法。
@@ -729,7 +844,6 @@ pub(super) fn header_with_mark(
     status: Option<String>,
     mark: StepMark,
 ) -> Vec<Segment> {
-    let limit = usize::from(width);
     // 终态整行同色（方块 + 动词）：失败红、中断黄。取消不是错误态，保持工具色
     // （方块与 title 统一；详情行的 `cancelled` 已经说明它没有产出结果）。
     let tint = match call.status {
@@ -737,6 +851,20 @@ pub(super) fn header_with_mark(
         ToolStatus::Interrupted => Some(style::agent_warn()),
         _ => None,
     };
+    header_with_tint(tint, width, loading_frame, animating, verb, status, mark)
+}
+
+/// 同上，但整行语义色由调用方指定（合并组头取组内最差状态）。
+pub(super) fn header_with_tint(
+    tint: Option<Style>,
+    width: u16,
+    loading_frame: usize,
+    animating: bool,
+    verb: &str,
+    status: Option<String>,
+    mark: StepMark,
+) -> Vec<Segment> {
+    let limit = usize::from(width);
     let paint = |segment: Segment| match tint {
         Some(tint) => Segment::new(segment.text, tint),
         None => segment,

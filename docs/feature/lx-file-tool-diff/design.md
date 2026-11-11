@@ -1,6 +1,7 @@
 # lx 文件工具 Diff：设计
 
 > 状态：待用户审核；尚未开始实现。
+> 说明：本文“连续文件工具合并成一张卡”的描述已被 `docs/feature/lx-tool-call-grouping/design.md` 取代；当前实现为组头 + 逐调用树体。
 > 日期：2026-10-21。
 > 目标页面：lx / Native Agent 对话时间线。
 > 参考仓库：`/Users/yonah/projects/agent/codex-main`。

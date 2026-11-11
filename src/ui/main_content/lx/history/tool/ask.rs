@@ -78,6 +78,21 @@ pub(super) fn rows(call: &ToolCallView, width: u16, _expanded: bool) -> usize {
             .len()
 }
 
+/// 标题状态：运行中 `waiting for you`，完成态 `2 questions`。
+fn status_of(call: &ToolCallView) -> Option<String> {
+    let running = matches!(
+        call.status,
+        ToolStatus::InputStreaming | ToolStatus::Pending | ToolStatus::Running
+    );
+    if running {
+        return Some(a::ASK_WAITING.to_string());
+    }
+    match call.detail.as_deref() {
+        Some(ToolDetailView::Ask(view)) => Some(a::ask_question_count(view.questions.len())),
+        _ => None,
+    }
+}
+
 /// 绘制卡片；推进行数必须与 [`rows`] 严格相等。
 #[allow(clippy::too_many_arguments)]
 pub(super) fn draw(
@@ -98,15 +113,6 @@ pub(super) fn draw(
         Some(ToolDetailView::Ask(view)) => Some(view),
         _ => None,
     };
-    let running = matches!(
-        call.status,
-        ToolStatus::InputStreaming | ToolStatus::Pending | ToolStatus::Running
-    );
-    let status = if running {
-        Some(a::ASK_WAITING.to_string())
-    } else {
-        view.map(|view| a::ask_question_count(view.questions.len()))
-    };
     if let Some(y) = visible_row(rect, scroll, *row_index) {
         let segments = header_with_verb(
             call,
@@ -114,7 +120,7 @@ pub(super) fn draw(
             loading_frame,
             animating,
             a::VERB_TOOL_ASK,
-            status,
+            status_of(call),
         );
         put_segments(grid, rect.x, y, width, &segments);
     }
@@ -129,6 +135,29 @@ pub(super) fn draw(
         row_index,
         &tree::layout(&[Section::fixed(nodes(view))], width).rows,
     );
+}
+
+/// `ask` 不合并；保留入口以穷尽分派，实际不会被组内调用。
+pub(super) fn draw_body(
+    grid: &mut Grid,
+    rect: Rect,
+    scroll: usize,
+    row_index: &mut usize,
+    call: &ToolCallView,
+    _loading_frame: usize,
+    _animating: bool,
+    last: bool,
+) {
+    if rect.width == 0 {
+        return;
+    }
+    let Some(ToolDetailView::Ask(view)) = call.detail.as_deref() else {
+        return;
+    };
+    let mut layout = tree::layout(&[Section::fixed(nodes(view))], rect.width);
+    tree::decorate_group_call(&mut layout.rows, call, status_of(call), rect.width);
+    tree::apply_group_connector(&mut layout.rows, last);
+    tree::draw(grid, rect, scroll, row_index, &layout.rows);
 }
 
 #[cfg(test)]

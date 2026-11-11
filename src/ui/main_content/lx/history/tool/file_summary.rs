@@ -9,7 +9,7 @@
 //! ```
 //!
 //! `read` 的种类与目录条目数在标题右侧（`Read · file` / `Read · image` / `Read · folder · 12 files`），
-//! 树体只放路径与执行事实；`search` 的命中数也在标题右侧。
+//! 标题下方只放一条路径；`search` 的命中数也在标题右侧。
 //!
 //! - 独立字段之间不再用 ` · ` 拼接：每个字段是一个 [`tree::Node`]；
 //! - `read` 的 file/folder 只来自**结果体**（[`ToolSummary::read_kind`]），不靠路径猜；
@@ -17,10 +17,13 @@
 //!   `output limited` / `results truncated`，两种事实不混算；
 //! - 渲染热路径不做常规 JSON 解析：只有摘要缺字段时才懒回退解析 `arguments_json`。
 
+use ratatui::layout::Rect;
+
 use crate::app::state::{ToolCallView, ToolStatus, ToolSummary};
 use crate::chat::tools::ReadKind;
 use crate::ui::{style, text};
 
+use super::super::Grid;
 use super::tree::{self, Node, Preview, Section};
 use super::{Kind, MAX_FALLBACK_PARSE_BYTES, Segment, TEXT_SAMPLE_CHARS, single_line};
 
@@ -74,6 +77,24 @@ fn path_node(call: &ToolCallView, cache: &mut Option<ToolSummary>) -> Option<Nod
         .map(|path| single_line(&path, TEXT_SAMPLE_CHARS))
         .filter(|path| !path.is_empty())?;
     Some(Node::text(path, style::chat_tool_param()))
+}
+
+/// `read` 的详情只有一条路径：按内容列单行尾部省略，不产生第二物理行。
+fn read_path_node(call: &ToolCallView, width: u16) -> Option<Node> {
+    let mut cache: Option<ToolSummary> = None;
+    let path = field(
+        call,
+        needs_argument_fallback(call, Kind::Read),
+        &mut cache,
+        |summary| summary.path.clone(),
+    )
+    .map(|path| single_line(&path, TEXT_SAMPLE_CHARS))
+    .filter(|path| !path.is_empty())?;
+    let path = crate::ui::main_content::lx::history::truncate_with_ellipsis(
+        &path,
+        tree::content_width(width),
+    );
+    (!path.is_empty()).then(|| Node::text(path, style::chat_tool_param()))
 }
 
 /// `search` 的模式 + 范围：一个节点（`"pattern" in path`）。
@@ -355,8 +376,58 @@ pub(super) fn nodes(call: &ToolCallView) -> Vec<Node> {
 
 /// 详情排版：长参数折叠 2 行，事实节点始终可见（展开显示全部已保存摘要）。
 fn detail_layout(call: &ToolCallView, width: u16, expanded: bool) -> tree::Layout {
+    detail_layout_with_group(call, width, expanded, false)
+}
+
+fn detail_layout_with_group(
+    call: &ToolCallView,
+    width: u16,
+    expanded: bool,
+    in_group: bool,
+) -> tree::Layout {
     if width == 0 {
         return tree::layout(&[], 0);
+    }
+    let build = |sections: &[Section]| {
+        if in_group {
+            tree::layout_in_group(sections, width, 1)
+        } else {
+            tree::layout(sections, width)
+        }
+    };
+    // `read` 标题保留种类状态，详情只留一条路径；结果正文与执行事实不占第二行。
+    if Kind::of(&call.name) == Kind::Read && Detail::of(call) == Detail::Params {
+        let mut nodes: Vec<Node> = if call.status == ToolStatus::Cancelled {
+            cancelled_node(call).into_iter().collect()
+        } else {
+            read_path_node(call, width).into_iter().collect()
+        };
+        if nodes.is_empty()
+            && let Some(node) = fallback_node(call)
+        {
+            nodes.push(node);
+        }
+        if nodes.is_empty() {
+            nodes.push(Node::new(Vec::new()));
+        }
+        return build(&[Section::fixed(nodes)]);
+    }
+    // 失败/中断只保留一条错误原因，按内容列尾部省略，不折成多行。
+    if Kind::of(&call.name) == Kind::Read && Detail::of(call) == Detail::Error {
+        let mut nodes = Vec::new();
+        if let Some(reason) = call.error.as_deref().map(|error| {
+            crate::ui::main_content::lx::history::truncate_with_ellipsis(
+                &single_line(error, TEXT_SAMPLE_CHARS),
+                tree::content_width(width),
+            )
+        }) && !reason.is_empty()
+        {
+            nodes.push(Node::text(reason, style::text()));
+        }
+        if nodes.is_empty() {
+            nodes.push(Node::new(Vec::new()));
+        }
+        return build(&[Section::fixed(nodes)]);
     }
     let mut cache: Option<ToolSummary> = None;
     let mut sections = Vec::new();
@@ -378,14 +449,10 @@ fn detail_layout(call: &ToolCallView, width: u16, expanded: bool) -> tree::Layou
         }
     }
     if sections.is_empty() {
-        // `read` 没有路径也没有事实时整张卡片只有标题，不留空 `└─`。
-        if Kind::of(&call.name) == Kind::Read && Detail::of(call) == Detail::Params {
-            return tree::layout(&[], width);
-        }
-        // 其它完成态没有摘要：仍保留一行收口连接符（行数恒 ≥ 1）。
+        // 完成态没有摘要：仍保留一行收口连接符（行数恒 ≥ 1）。
         sections.push(Section::fixed(vec![Node::new(Vec::new())]));
     }
-    tree::layout(&sections, width)
+    build(&sections)
 }
 
 /// 详情行的物理行（含连接符与省略提示行）；`rows` 与 `draw` 共用。
@@ -394,16 +461,55 @@ pub(super) fn detail(call: &ToolCallView, width: u16, expanded: bool) -> Vec<Vec
 }
 
 /// 详情行的物理行数（含省略提示行）。
-pub(super) fn detail_rows(call: &ToolCallView, width: u16, expanded: bool) -> usize {
-    detail_layout(call, width, expanded).rows.len()
+pub(super) fn detail_rows_with_group(
+    call: &ToolCallView,
+    width: u16,
+    expanded: bool,
+    in_group: bool,
+) -> usize {
+    detail_layout_with_group(call, width, expanded, in_group)
+        .rows
+        .len()
 }
 
 /// 详情**内容**行数（不含省略提示行）；供「能否展开」判定。
-pub(super) fn detail_content_rows(call: &ToolCallView, width: u16, expanded: bool) -> usize {
-    let layout = detail_layout(call, width, expanded);
+pub(super) fn detail_content_rows_with_group(
+    call: &ToolCallView,
+    width: u16,
+    expanded: bool,
+    in_group: bool,
+) -> usize {
+    let layout = detail_layout_with_group(call, width, expanded, in_group);
     if expanded {
         layout.total
     } else {
         layout.total.saturating_sub(layout.hidden)
     }
+}
+
+/// 合并组内调用体：只画详情树，不画标题行。
+pub(super) fn draw_body(
+    grid: &mut Grid,
+    rect: Rect,
+    scroll: usize,
+    row_index: &mut usize,
+    call: &ToolCallView,
+    expanded: bool,
+    last: bool,
+) {
+    if rect.width == 0 {
+        return;
+    }
+    let mut layout = detail_layout_with_group(call, rect.width, expanded, true);
+    let is_read = Kind::of(&call.name) == Kind::Read;
+    if is_read {
+        let conn = tree::connector_style_of(call);
+        if let Some(first) = layout.rows.first_mut() {
+            first.prefix_style = Some(conn);
+        }
+    } else {
+        tree::decorate_group_call(&mut layout.rows, call, title_status(call), rect.width);
+    }
+    tree::apply_group_connector(&mut layout.rows, last);
+    tree::draw(grid, rect, scroll, row_index, &layout.rows);
 }

@@ -27,7 +27,7 @@ use super::{
 };
 
 /// 标题动词（按工具名）。
-fn verb(name: &str) -> &'static str {
+pub(super) fn verb(name: &str) -> &'static str {
     match name {
         "spawn_agent" => text::agent::VERB_TOOL_SPAWN_AGENT,
         "send_input" => text::agent::VERB_TOOL_SEND_INPUT,
@@ -131,10 +131,11 @@ fn all_color(view: &SubagentDetailView, call_status: ToolStatus) -> WaitColor {
     }
 }
 
-/// 构建结果：节点 + 立即可见的链接（节点下标 → agent_id）。
+/// 构建结果：节点 + 立即可见的链接（节点下标 → agent_id）+ 一级节点数。
 struct Built {
     nodes: Vec<Node>,
     links: Vec<(usize, String)>,
+    root_nodes: usize,
 }
 
 impl Built {
@@ -142,6 +143,7 @@ impl Built {
         Self {
             nodes: Vec::new(),
             links: Vec::new(),
+            root_nodes: 1,
         }
     }
 }
@@ -235,8 +237,13 @@ fn target_node(view: &SubagentDetailView, agent_id: &str) -> Node {
 }
 
 /// 展开态报告：`Report:` + 压暗 markdown 正文，整块一个多行节点。
-fn report_node(body: &str, changed_paths: &[String], width: u16) -> Node {
-    let body_width = u16::try_from(tree::content_width(width)).unwrap_or(1);
+fn report_node(body: &str, changed_paths: &[String], width: u16, nested: bool) -> Node {
+    let cols = if nested {
+        tree::nested_content_width(width)
+    } else {
+        tree::content_width(width)
+    };
+    let body_width = u16::try_from(cols).unwrap_or(1);
     let mut lines: Vec<Vec<Segment>> = vec![vec![Segment::new(
         text::agent::REPORT_LABEL,
         style::muted(),
@@ -255,9 +262,9 @@ fn report_node(body: &str, changed_paths: &[String], width: u16) -> Node {
     Node::block(lines)
 }
 
-/// 失败原因节点：工具结算失败且带错误摘要时补一行红字，避免只剩一个红方块。
+/// 失败/中断原因节点：工具结算异常且带错误摘要时补一行原因，避免只剩一个色块。
 fn error_node(call: &ToolCallView) -> Option<Node> {
-    if call.status != ToolStatus::Failed {
+    if !matches!(call.status, ToolStatus::Failed | ToolStatus::Interrupted) {
         return None;
     }
     let error = call
@@ -265,14 +272,15 @@ fn error_node(call: &ToolCallView) -> Option<Node> {
         .as_deref()
         .map(str::trim)
         .filter(|error| !error.is_empty())?;
-    Some(Node::text(
-        single_line(error, TEXT_SAMPLE_CHARS),
-        style::agent_fail(),
-    ))
+    let style = match call.status {
+        ToolStatus::Interrupted => style::agent_warn(),
+        _ => style::agent_fail(),
+    };
+    Some(Node::text(single_line(error, TEXT_SAMPLE_CHARS), style))
 }
 
 /// 卡片节点与链接。
-fn built(call: &ToolCallView, width: u16, expanded: bool) -> Built {
+fn built(call: &ToolCallView, width: u16, expanded: bool, in_group: bool) -> Built {
     let Some(view) = view(call) else {
         let mut built = Built::new();
         if let Some(node) = error_node(call) {
@@ -292,9 +300,12 @@ fn built(call: &ToolCallView, width: u16, expanded: bool) -> Built {
                     .push((0, view.agent_id.clone().unwrap_or_default()));
             }
             if expanded && let Some(report) = &view.report {
-                built
-                    .nodes
-                    .push(report_node(&report.body, &report.changed_paths, width));
+                built.nodes.push(report_node(
+                    &report.body,
+                    &report.changed_paths,
+                    width,
+                    in_group,
+                ));
             }
         }
         "wait_agent" => {
@@ -319,6 +330,7 @@ fn built(call: &ToolCallView, width: u16, expanded: bool) -> Built {
                     built.links.push((index, target.clone()));
                 }
             }
+            built.root_nodes = built.nodes.len().max(1);
             if expanded {
                 for agent in view.agents.iter().filter(|agent| {
                     agent
@@ -327,7 +339,7 @@ fn built(call: &ToolCallView, width: u16, expanded: bool) -> Built {
                         .is_some_and(|b| !b.trim().is_empty())
                 }) {
                     if let Some(body) = agent.report.as_deref() {
-                        built.nodes.push(report_node(body, &[], width));
+                        built.nodes.push(report_node(body, &[], width, in_group));
                     }
                 }
             }
@@ -345,6 +357,7 @@ fn built(call: &ToolCallView, width: u16, expanded: bool) -> Built {
                     built.links.push((index, agent.agent_id.clone()));
                 }
             }
+            built.root_nodes = built.nodes.len().max(1);
         }
         _ => {
             // close / interrupt_agent / send_input / resume_agent / cancel_agent_input：目标行 + 状态。
@@ -386,8 +399,24 @@ fn built(call: &ToolCallView, width: u16, expanded: bool) -> Built {
 
 /// 排版（无折叠）：`rows`、`draw`、链接几何共用。
 fn layout(call: &ToolCallView, width: u16, expanded: bool) -> (tree::Layout, Vec<(usize, String)>) {
-    let built = built(call, width, expanded);
-    let layout = tree::layout(&[Section::fixed(built.nodes)], width);
+    let (layout, links, _) = layout_with_group(call, width, expanded, false);
+    (layout, links)
+}
+
+fn layout_with_group(
+    call: &ToolCallView,
+    width: u16,
+    expanded: bool,
+    in_group: bool,
+) -> (tree::Layout, Vec<(usize, String)>, usize) {
+    let in_nested_group = in_group && call.name != "list_agents";
+    let built = built(call, width, expanded, in_nested_group);
+    let root_nodes = built.root_nodes;
+    let layout = if in_nested_group {
+        tree::layout_in_group(&[Section::fixed(built.nodes)], width, root_nodes)
+    } else {
+        tree::layout(&[Section::fixed(built.nodes)], width)
+    };
     let links = built
         .links
         .into_iter()
@@ -398,28 +427,53 @@ fn layout(call: &ToolCallView, width: u16, expanded: bool) -> (tree::Layout, Vec
                 .map(|row| (row.saturating_add(super::HEADER_ROWS), agent_id))
         })
         .collect();
-    (layout, links)
+    (layout, links, root_nodes)
 }
 
 /// 行数（宽度 0 时为 0）。
+#[cfg(test)]
 pub(super) fn rows(call: &ToolCallView, width: u16, expanded: bool) -> usize {
+    rows_with_group(call, width, expanded, false)
+}
+
+pub(super) fn rows_with_group(
+    call: &ToolCallView,
+    width: u16,
+    expanded: bool,
+    in_group: bool,
+) -> usize {
     if width == 0 {
         return 0;
     }
-    super::HEADER_ROWS + layout(call, width, expanded).0.rows.len()
+    super::HEADER_ROWS
+        + layout_with_group(call, width, expanded, in_group)
+            .0
+            .rows
+            .len()
 }
 
 /// 展开后行数增加即可展开（报告正文 / close 详情）。
-pub(super) fn has_more(call: &ToolCallView, width: u16) -> bool {
-    width > 0 && rows(call, width, true) > rows(call, width, false)
+pub(super) fn has_more_with_group(call: &ToolCallView, width: u16, in_group: bool) -> bool {
+    width > 0
+        && rows_with_group(call, width, true, in_group)
+            > rows_with_group(call, width, false, in_group)
 }
 
 /// 卡片内 agent 链接的（相对卡片首行偏移, agent_id）。
+#[cfg(test)]
 pub(super) fn agent_links(call: &ToolCallView, width: u16) -> Vec<(usize, String)> {
+    agent_links_with_group(call, width, false)
+}
+
+pub(super) fn agent_links_with_group(
+    call: &ToolCallView,
+    width: u16,
+    in_group: bool,
+) -> Vec<(usize, String)> {
     if width == 0 {
         return Vec::new();
     }
-    layout(call, width, false).1
+    layout_with_group(call, width, false, in_group).1
 }
 
 /// spawn 标题方块跟子 agent 状态走，而不是“spawn 工具已返回”的调用状态。
@@ -434,7 +488,7 @@ fn agent_mark(view: &SubagentDetailView, call: &ToolCallView, loading_frame: usi
 }
 
 /// 标题状态：spawn/send_input/resume/cancel_agent_input 显示状态；wait 显示调用条件；close 无。
-fn header_status(call: &ToolCallView, view: &SubagentDetailView) -> Option<String> {
+pub(super) fn header_status(call: &ToolCallView, view: &SubagentDetailView) -> Option<String> {
     match call.name.as_str() {
         "spawn_agent" | "send_input" | "resume_agent" | "cancel_agent_input" => Some(
             view.agent_status
@@ -495,6 +549,33 @@ pub(super) fn draw(
         row_index,
         &layout(call, rect.width, expanded).0.rows,
     );
+}
+
+/// 合并组内调用体：跳过标题，状态追加到首个树节点尾部。
+#[allow(clippy::too_many_arguments)]
+pub(super) fn draw_body(
+    grid: &mut Grid,
+    rect: Rect,
+    scroll: usize,
+    row_index: &mut usize,
+    call: &ToolCallView,
+    _loading_frame: usize,
+    expanded: bool,
+    _animating: bool,
+    last: bool,
+) {
+    if rect.width == 0 {
+        return;
+    }
+    let in_nested_group = call.name != "list_agents";
+    let (mut layout, _, root_nodes) =
+        layout_with_group(call, rect.width, expanded, in_nested_group);
+    let status = view(call).and_then(|view| header_status(call, view));
+    tree::decorate_group_call(&mut layout.rows, call, status, rect.width);
+    if in_nested_group {
+        tree::apply_group_connector_with_roots(&mut layout.rows, last, root_nodes);
+    }
+    tree::draw(grid, rect, scroll, row_index, &layout.rows);
 }
 
 #[cfg(test)]

@@ -379,13 +379,21 @@ fn expanded_body_is_grey_except_the_file_header_and_diff_lines() {
     }
     let mut greys = 0;
     let mut diffs = 0;
+    let untinted_cols = u16::try_from(TREE_COLS.saturating_sub(1)).expect("树连接符列数");
     for y in 2..rect.height {
-        let bg = grid.cell(0, y).style.bg;
-        for x in 0..width {
+        for x in 0..untinted_cols {
+            assert_eq!(
+                grid.cell(x, y).style.bg,
+                None,
+                "({x},{y}) 左侧树连接符区域不铺底色"
+            );
+        }
+        let bg = grid.cell(untinted_cols, y).style.bg;
+        for x in untinted_cols..width {
             assert_eq!(
                 grid.cell(x, y).style.bg,
                 bg,
-                "({x},{y}) 整行必须同一底色（满宽）"
+                "({x},{y}) └─ 右侧空列起至行尾必须同一底色"
             );
         }
         match bg {

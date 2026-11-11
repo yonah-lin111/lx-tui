@@ -104,9 +104,9 @@ fn long_path_wraps_and_expands_with_full_content() {
     }
 }
 
-/// 错误文案按列宽折行，完整保留；不显示路径与计数。
+/// `read` 失败原因只占一行：按列宽尾部省略，不折行；不显示路径与计数。
 #[test]
-fn failed_reason_wraps_without_losing_text() {
+fn failed_reason_truncates_to_one_line() {
     let long = format!(
         "read /a/very/long/path failed: {}",
         "permission denied ".repeat(8)
@@ -115,20 +115,31 @@ fn failed_reason_wraps_without_losing_text() {
     for width in [20u16, 40, 80] {
         let (painted, _) = render_row(&call, width);
         let detail = painted.split_once('\n').map(|(_, rest)| rest).unwrap_or("");
-        for line in detail.split('\n') {
-            assert!(line.width() <= usize::from(width), "宽 {width}: {line:?}");
-        }
+        assert_eq!(
+            detail.lines().count(),
+            1,
+            "宽 {width} 只保留一行：{detail:?}"
+        );
+        assert!(
+            detail.starts_with(text::agent::TREE_LEAF),
+            "宽 {width}: {detail:?}"
+        );
+        assert!(detail.contains('…'), "宽 {width} 尾部省略：{detail:?}");
+        assert!(
+            detail.width() <= usize::from(width),
+            "宽 {width}: {detail:?}"
+        );
         assert!(
             !detail.contains("src/ui/style.rs"),
             "失败不显示路径：{detail:?}"
         );
     }
     let expanded = detail_expanded_flat(&call, 40);
-    let expected: String = long.chars().filter(|ch| !ch.is_control()).collect();
     assert!(
-        expanded.contains(expected.trim_end()),
-        "错误文案完整：{expanded:?}"
+        expanded.contains("read /a/very/long/path failed"),
+        "至少保留错误开头：{expanded:?}"
     );
+    assert_eq!(expanded.lines().count(), 1, "展开也不折行：{expanded:?}");
 }
 
 // ===== 4. 行数与几何不变量 =====

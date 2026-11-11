@@ -100,22 +100,21 @@ fn completed_and_failed_never_show_status_words_on_any_line() {
     );
 }
 
-/// 树体首节点以 `├─` 起头、最后节点以 `└─` 收口，连接符同通知组件同色。
+/// `read` 详情只有一条路径，使用收口连接符；连接符同通知组件同色。
 #[test]
-fn detail_nodes_use_branch_and_leaf_prefixes() {
+fn read_detail_uses_the_leaf_connector() {
     let mut summary = read_summary();
     summary.truncated = true;
     let call = tool_call("read", ToolStatus::Completed, Some(summary), None);
     let painted = detail_text(&call, 80);
     let rows: Vec<&str> = painted.split('\n').collect();
-    assert_eq!(rows.len(), 2, "路径 + 输出受限：{painted:?}");
-    assert!(rows[0].starts_with(text::agent::TREE_BRANCH), "{painted:?}");
-    assert!(rows[1].starts_with(text::agent::TREE_LEAF), "{painted:?}");
+    assert_eq!(rows.len(), 1, "只保留路径：{painted:?}");
+    assert!(rows[0].starts_with(text::agent::TREE_LEAF), "{painted:?}");
     let segments = detail_segments(&call, 80);
     assert_eq!(
         segments[0].0,
-        text::agent::TREE_BRANCH,
-        "首段必须是完整节点前缀"
+        text::agent::TREE_LEAF,
+        "首段必须是收口连接符"
     );
     assert_eq!(
         segments[0].1,
@@ -305,9 +304,13 @@ fn open_states_without_params_fall_back_to_a_status_word() {
             "{status:?} 兜底同样带连接符：{detail:?}"
         );
     }
-    // 完成态没有兜底：`done` 已删除，`read` 的路径/范围又在标题里，树体为空。
+    // 完成态没有兜底：`read` 无路径时保留一行空收口，不再产生 0 行块。
     let done = tool_call("read", ToolStatus::Completed, None, None);
-    assert_eq!(detail_text(&done, 80), "", "完成态无摘要时没有树体行");
+    assert_eq!(
+        detail_text(&done, 80),
+        text::agent::TREE_LEAF,
+        "完成态无摘要时仍占一行"
+    );
 }
 
 /// 方块呼吸：运行中两帧交替，终态静态。

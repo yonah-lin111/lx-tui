@@ -79,6 +79,8 @@ pub(crate) const RUNNING_COMPACT_SLOT_MESSAGE: usize = usize::MAX;
 pub(crate) const RUNNING_COMPACT_SLOT_BLOCK: usize = usize::MAX - 7;
 /// 助手消息末尾附件引用树（独立基数，避开报告块的 `MAX - 5 - index` 区间）。
 pub(crate) const ATTACHMENTS_SLOT_BLOCK: usize = usize::MAX / 2;
+/// 连续工具组的组头块：按 `base - first_step` 取槽，避开普通步骤下标。
+pub(crate) const GROUP_HEADER_SLOT_BASE: usize = usize::MAX / 4;
 /// 消息尾部 recap 卡。
 pub(crate) const RECAP_SLOT_BLOCK: usize = usize::MAX / 2 + 1;
 /// 消息尾部 recap 生成中占位。

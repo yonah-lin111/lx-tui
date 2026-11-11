@@ -7,7 +7,8 @@
 //!      2 + 下一行
 //! ```
 //!
-//! - 标题只写裸动词（`Edit` / `Write`），不再有 `2 files` 合并标题；
+//! - 标题只写裸动词（`Edit` / `Write`），不再有旧的 `2 files` 合并标题；连续同名
+//!   调用由上层合并为组头，本模块只负责单个调用体的文件树；
 //! - 每个文件：路径+计数是首节点，差异正文是一个多行节点（首行 `└─`，其余行
 //!   左对齐）；多个文件依次用 `├─` 连接，最后一个文件收口；
 //! - **没有动作按钮**：整块卡片本身就是点击面——点折叠内容展开、点展开内容收起；
@@ -50,11 +51,21 @@ pub(super) fn is_card(call: &ToolCallView) -> bool {
 }
 
 /// 卡片占用的渲染行数（标题行 + 文件块）。
+#[cfg(test)]
 pub(super) fn rows(call: &ToolCallView, width: u16, expanded: bool) -> usize {
+    rows_with_group(call, width, expanded, false)
+}
+
+pub(super) fn rows_with_group(
+    call: &ToolCallView,
+    width: u16,
+    expanded: bool,
+    in_group: bool,
+) -> usize {
     if width == 0 {
         return 0;
     }
-    title_rows() + layout(call, width, expanded).len()
+    title_rows() + layout_with_group(call, width, expanded, in_group.then_some(false)).len()
 }
 
 /// 绘制文件差异卡片；推进行数必须与 [`rows`] 严格相等。
@@ -85,33 +96,76 @@ pub(super) fn draw(
     *row_index += 1;
     for row in layout(call, rect.width, expanded) {
         if let Some(y) = visible_row(rect, scroll, *row_index) {
-            // 先铺**整行**底色（100% 宽，含左侧缩进与行尾空白）再写字：
-            // `put_segments` 只写字符，不负责行背景，行尾留白会掉色。
-            match row.fill {
-                Some(fill) => {
-                    grid.background_row(rect.x, y, rect.width, fill);
-                    let tinted: Vec<Segment> = row
-                        .segments
-                        .iter()
-                        .map(|segment| {
-                            Segment::new(segment.text.clone(), segment.style.patch(fill))
-                        })
-                        .collect();
-                    put_segments(grid, rect.x, y, rect.width, &tinted);
-                }
-                None => put_segments(grid, rect.x, y, rect.width, &row.segments),
-            }
+            draw_row(grid, rect, y, &row);
         }
         *row_index += 1;
     }
 }
 
-/// 一个物理行：分段 + 可选整行底色。
+/// 合并组内调用体：跳过标题，文件头作为一级分支，diff 正文缩进为二级子树。
+pub(super) fn draw_body(
+    grid: &mut Grid,
+    rect: Rect,
+    scroll: usize,
+    row_index: &mut usize,
+    call: &ToolCallView,
+    expanded: bool,
+    last: bool,
+) {
+    if rect.width == 0 {
+        return;
+    }
+    for row in layout_with_group(call, rect.width, expanded, Some(last)) {
+        if let Some(y) = visible_row(rect, scroll, *row_index) {
+            draw_row(grid, rect, y, &row);
+        }
+        *row_index += 1;
+    }
+}
+
+/// 绘制单行：底色从 `└─` 右侧的 1 列空白起铺满至行尾，不覆盖 `└─` 及左侧树连接符。
+fn draw_row(grid: &mut Grid, rect: Rect, y: u16, row: &Row) {
+    match row.fill {
+        Some(fill) => {
+            let untinted_cols = row.prefix_cols.saturating_sub(1);
+            let fill_x = rect.x.saturating_add(untinted_cols).min(rect.right());
+            let fill_width = rect.right().saturating_sub(fill_x);
+            if fill_width > 0 {
+                grid.background_row(fill_x, y, fill_width, fill);
+            }
+            let has_prefix = row.prefix_cols > 0;
+            let mut tinted: Vec<Segment> = Vec::with_capacity(row.segments.len() + 1);
+            for (index, segment) in row.segments.iter().enumerate() {
+                if has_prefix && index == 0 {
+                    if let Some(head) = segment.text.strip_suffix(' ') {
+                        if !head.is_empty() {
+                            tinted.push(Segment::new(head.to_string(), segment.style));
+                        }
+                        tinted.push(Segment::new(" ", segment.style.patch(fill)));
+                    } else {
+                        tinted.push(Segment::new(segment.text.clone(), segment.style));
+                    }
+                } else {
+                    tinted.push(Segment::new(
+                        segment.text.clone(),
+                        segment.style.patch(fill),
+                    ));
+                }
+            }
+            put_segments(grid, rect.x, y, rect.width, &tinted);
+        }
+        None => put_segments(grid, rect.x, y, rect.width, &row.segments),
+    }
+}
+
+/// 一个物理行：分段 + 树前缀列宽 + 可选正文区底色。
 ///
-/// 底色必须与分段分开携带：`put_segments` 逐字符写入网格，不会替空格铺背景。
+/// 底色必须与分段分开携带：`put_segments` 逐字符写入网格，不会替行尾空格铺背景；
+/// `prefix_cols` 记录左侧树连接符宽度，铺底色时跳过该区域。
 #[derive(Debug)]
 struct Row {
     segments: Vec<Segment>,
+    prefix_cols: u16,
     fill: Option<Style>,
 }
 
@@ -120,6 +174,16 @@ impl Row {
     fn plain(segments: Vec<Segment>) -> Self {
         Self {
             segments,
+            prefix_cols: 0,
+            fill: None,
+        }
+    }
+
+    /// 带树形前缀的单段提示行（展开态铺底色时同样跳过左侧树前缀）。
+    fn prefixed(prefix: &str, content: impl Into<String>, content_style: Style) -> Self {
+        Self {
+            segments: prefixed(prefix, content, content_style),
+            prefix_cols: u16::try_from(prefix.width()).unwrap_or(0),
             fill: None,
         }
     }
@@ -127,19 +191,28 @@ impl Row {
 
 /// 一次调用的全部物理行（标题行除外）；[`rows`]、[`draw`] 与命中共用。
 fn layout(call: &ToolCallView, width: u16, expanded: bool) -> Vec<Row> {
-    let mut rows = content_rows(call, width, expanded);
+    layout_with_group(call, width, expanded, None)
+}
+
+fn layout_with_group(
+    call: &ToolCallView,
+    width: u16,
+    expanded: bool,
+    group_last: Option<bool>,
+) -> Vec<Row> {
+    let mut rows = content_rows_with_group(call, width, expanded, group_last);
     if !expanded {
-        let remaining = remaining_lines(call, width);
+        let remaining = remaining_lines(call, width, group_last);
         if remaining > 0 {
-            rows.push(Row::plain(prefixed(
-                &continuation_prefix(),
+            rows.push(Row::prefixed(
+                &continuation_prefix(group_last, width),
                 text::agent::file_diff_more_lines(remaining),
                 style::fold_hint(),
-            )));
+            ));
         }
     }
     if expanded {
-        let header_rows: Vec<usize> = file_header_row_indexes(call, width);
+        let header_rows: Vec<usize> = file_header_row_indexes(call, width, group_last.is_some());
         for (index, row) in rows.iter_mut().enumerate() {
             if header_rows.contains(&index) || row.fill.is_some() {
                 continue;
@@ -151,45 +224,73 @@ fn layout(call: &ToolCallView, width: u16, expanded: bool) -> Vec<Row> {
 }
 
 /// 展开态里「文件头」所在的行号（每文件一行，不铺展开底色）。
-fn file_header_row_indexes(call: &ToolCallView, width: u16) -> Vec<usize> {
+fn file_header_row_indexes(call: &ToolCallView, width: u16, in_group: bool) -> Vec<usize> {
     let mut indexes = Vec::new();
     let mut row = 0usize;
     for file in files_of(call) {
         indexes.push(row);
-        row += 1 + file_body(file, width, true).len();
+        row += 1 + file_body(file, width, true, in_group).len();
     }
     indexes
 }
 
-/// 差异内容行（文件头 + 正文 + 省略文件提示），**不含**剩余行数提示。
-fn content_rows(call: &ToolCallView, width: u16, expanded: bool) -> Vec<Row> {
+fn content_rows_with_group(
+    call: &ToolCallView,
+    width: u16,
+    expanded: bool,
+    group_last: Option<bool>,
+) -> Vec<Row> {
     let files = files_of(call);
     let last_index = files.len().saturating_sub(1);
-    let tree_body = draws_body_tree(width);
+    let in_group = group_last.is_some();
+    let tree_body = draws_body_tree(width, in_group);
     let mut rows = Vec::new();
     for (index, file) in files.iter().enumerate() {
         let last = index == last_index;
-        let mut body = file_body(file, width, expanded);
+        let mut body = file_body(file, width, expanded, in_group);
         let has_body = !body.is_empty();
-        let connector = if !last || (has_body && tree_body) {
-            text::agent::TREE_BRANCH
-        } else {
-            text::agent::TREE_LEAF
+        let connector = match group_last {
+            Some(group_last) => {
+                if group_last && last {
+                    text::agent::TREE_LEAF
+                } else {
+                    text::agent::TREE_BRANCH
+                }
+            }
+            None => {
+                if !last || (has_body && tree_body) {
+                    text::agent::TREE_BRANCH
+                } else {
+                    text::agent::TREE_LEAF
+                }
+            }
         };
-        rows.push(Row::plain(file_header(file, connector, width)));
-        apply_body_prefixes(&mut body, last, width);
+        let connector_style = if in_group && index == 0 {
+            super::tree::connector_style_of(call)
+        } else {
+            style::chat_notice_connector()
+        };
+        rows.push(Row::plain(file_header(
+            file,
+            connector,
+            connector_style,
+            width,
+        )));
+        let nested_last = group_last.map(|group_last| group_last && last);
+        apply_body_prefixes(&mut body, last, nested_last, width);
         rows.extend(body);
     }
+    let tail_prefix = continuation_prefix(group_last, width);
     let omitted: usize = call
         .file_view()
         .map(|view| view.omitted_files)
         .unwrap_or_default();
     if omitted > 0 {
-        rows.push(Row::plain(prefixed(
-            &continuation_prefix(),
+        rows.push(Row::prefixed(
+            &tail_prefix,
             text::agent::file_diff_omitted_files(omitted),
             style::agent_warn(),
-        )));
+        ));
     }
     // `partial`：本次补丁里有 hunk 应用后内容没变。它只存在于摘要里，
     // 差异正文本身看不出来，必须单独成行，否则模型看到的 `partial: true`
@@ -199,25 +300,32 @@ fn content_rows(call: &ToolCallView, width: u16, expanded: bool) -> Vec<Row> {
         .as_deref()
         .is_some_and(|summary| summary.partial)
     {
-        rows.push(Row::plain(prefixed(
-            &continuation_prefix(),
+        rows.push(Row::prefixed(
+            &tail_prefix,
             text::agent::TOOL_PARTIAL,
             style::agent_step_detail(),
-        )));
+        ));
     }
     rows
 }
 
 /// 展开是否真的能看到更多内容（判据只看内容行，不看「剩余行数」提示行）。
+#[cfg(test)]
 pub(super) fn has_more_content(call: &ToolCallView, width: u16) -> bool {
-    content_rows(call, width, true).len() > content_rows(call, width, false).len()
+    has_more_content_with_group(call, width, false)
+}
+
+pub(super) fn has_more_content_with_group(call: &ToolCallView, width: u16, in_group: bool) -> bool {
+    let group_last = in_group.then_some(false);
+    content_rows_with_group(call, width, true, group_last).len()
+        > content_rows_with_group(call, width, false, group_last).len()
 }
 
 /// 折叠态被省略的物理行数：展开内容行数减预览内容行数。
-fn remaining_lines(call: &ToolCallView, width: u16) -> usize {
-    content_rows(call, width, true)
+fn remaining_lines(call: &ToolCallView, width: u16, group_last: Option<bool>) -> usize {
+    content_rows_with_group(call, width, true, group_last)
         .len()
-        .saturating_sub(content_rows(call, width, false).len())
+        .saturating_sub(content_rows_with_group(call, width, false, group_last).len())
 }
 
 /// 按调用顺序、文件提交顺序扁平展开的文件列表。
@@ -228,7 +336,7 @@ fn files_of(call: &ToolCallView) -> Vec<&FileChangeView> {
 }
 
 /// 工具名 → 卡片动词（非文件工具回退 `Edit`）。
-fn verb_of(call: &ToolCallView) -> &'static str {
+pub(super) fn verb_of(call: &ToolCallView) -> &'static str {
     match call.name.as_str() {
         "write" => text::agent::VERB_TOOL_WRITE,
         _ => text::agent::VERB_TOOL_EDIT,
@@ -239,10 +347,15 @@ fn verb_of(call: &ToolCallView) -> &'static str {
 ///
 /// 路径按剩余列宽做中间省略（保留首尾层级）；放不下时先丢计数、再丢路径，
 /// 连接符始终保留。**路径恒为 `chat_tool_param()`（浅黄），不随 hover/展开变色**。
-fn file_header(file: &FileChangeView, connector: &str, width: u16) -> Vec<Segment> {
+fn file_header(
+    file: &FileChangeView,
+    connector: &str,
+    connector_style: Style,
+    width: u16,
+) -> Vec<Segment> {
     let limit = usize::from(width);
     let used = connector.width();
-    let mut segments = vec![Segment::new(connector, style::chat_notice_connector())];
+    let mut segments = vec![Segment::new(connector, connector_style)];
     let raw_path = match file.kind {
         FileChangeKind::Moved { .. } => {
             let to = file.to.as_deref().unwrap_or("");
@@ -292,37 +405,61 @@ fn file_header(file: &FileChangeView, connector: &str, width: u16) -> Vec<Segmen
     segments
 }
 
-/// 正文是否仍画树体连接符（极窄时让位，保证变更符号还看得见）。
-fn draws_body_tree(width: u16) -> bool {
-    usize::from(width) > TREE_COLS + 3
+/// 正文树前缀列数：单卡 5 列，合并组二级子树 8 列。
+fn body_tree_cols(in_group: bool) -> usize {
+    if in_group {
+        super::TREE_NESTED_COLS
+    } else {
+        TREE_COLS
+    }
 }
 
-/// 把正文行包上树体前缀：首行 `├─`/`└─`，续行 `│`/空白。
-fn apply_body_prefixes(rows: &mut [Row], last: bool, width: u16) {
-    if !draws_body_tree(width) {
+/// 正文是否仍画树体连接符（极窄时让位，保证变更符号还看得见）。
+fn draws_body_tree(width: u16, in_group: bool) -> bool {
+    usize::from(width) > body_tree_cols(in_group) + 3
+}
+
+/// 把正文行包上树体前缀：单卡走顶层 `├─`/`└─`，合并组内缩进为二级子树。
+fn apply_body_prefixes(rows: &mut [Row], last: bool, nested_last: Option<bool>, width: u16) {
+    if !draws_body_tree(width, nested_last.is_some()) {
         return;
     }
     for (index, row) in rows.iter_mut().enumerate() {
-        let prefix = if index == 0 {
-            if last {
-                text::agent::TREE_LEAF
-            } else {
-                text::agent::TREE_BRANCH
+        let prefix = match nested_last {
+            Some(file_last_in_group) => match (file_last_in_group, index == 0) {
+                (false, true) => text::agent::TREE_NESTED_BRANCH_LEAF,
+                (false, false) => text::agent::TREE_NESTED_BRANCH_PAD,
+                (true, true) => text::agent::TREE_NESTED_LEAF_LEAF,
+                (true, false) => text::agent::TREE_NESTED_LEAF_PAD,
+            },
+            None => {
+                if index == 0 {
+                    if last {
+                        text::agent::TREE_LEAF
+                    } else {
+                        text::agent::TREE_BRANCH
+                    }
+                } else if last {
+                    text::agent::TREE_PAD
+                } else {
+                    text::agent::TREE_BAR
+                }
             }
-        } else if last {
-            text::agent::TREE_PAD
-        } else {
-            text::agent::TREE_BAR
         };
-        let style = tint(style::chat_notice_connector(), row.fill);
-        row.segments.insert(0, Segment::new(prefix, style));
+        row.prefix_cols = u16::try_from(prefix.width()).unwrap_or(0);
+        row.segments
+            .insert(0, Segment::new(prefix, style::chat_notice_connector()));
     }
 }
 
 /// 文件正文行（预览或完整展开），不含树体前缀。
-fn file_body(file: &FileChangeView, width: u16, expanded: bool) -> Vec<Row> {
-    let available =
-        usize::from(width).saturating_sub(if draws_body_tree(width) { TREE_COLS } else { 0 });
+fn file_body(file: &FileChangeView, width: u16, expanded: bool, in_group: bool) -> Vec<Row> {
+    let tree_cols = body_tree_cols(in_group);
+    let available = usize::from(width).saturating_sub(if draws_body_tree(width, in_group) {
+        tree_cols
+    } else {
+        0
+    });
     let Some(diff) = file.diff.as_ref() else {
         return Vec::new();
     };
@@ -418,9 +555,18 @@ fn expanded_body(
     rows
 }
 
-/// 正文续行前缀（末节点无竖线）：与 [`TREE_COLS`] 等宽。
-fn continuation_prefix() -> String {
-    " ".repeat(TREE_COLS)
+/// 正文续行前缀（单卡末节点无竖线，合并组内按是否末调用保留外层竖线或留白）。
+fn continuation_prefix(group_last: Option<bool>, width: u16) -> String {
+    match group_last {
+        Some(group_last) if draws_body_tree(width, true) => {
+            if group_last {
+                text::agent::TREE_NESTED_LEAF_PAD.to_string()
+            } else {
+                text::agent::TREE_NESTED_BRANCH_PAD.to_string()
+            }
+        }
+        _ => " ".repeat(TREE_COLS),
+    }
 }
 
 /// 行号槽宽度：按全部已保存行号的十进制位数；没有行号时 1 列。
@@ -488,7 +634,11 @@ fn render_line(
                 segments.push(Segment::new(" ".repeat(head_cols), head_style));
             }
             segments.extend(chunk);
-            Row { segments, fill }
+            Row {
+                segments,
+                prefix_cols: 0,
+                fill,
+            }
         })
         .collect()
 }
@@ -576,7 +726,7 @@ fn markdown_spans(text: &str, plain: Style) -> Vec<(String, Style)> {
 /// 带树形前缀的单段提示行。
 fn prefixed(prefix: &str, content: impl Into<String>, content_style: Style) -> Vec<Segment> {
     vec![
-        Segment::new(prefix.to_string(), style::agent_step_detail()),
+        Segment::new(prefix.to_string(), style::chat_notice_connector()),
         Segment::new(content.into(), content_style),
     ]
 }

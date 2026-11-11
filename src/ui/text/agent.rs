@@ -42,6 +42,19 @@ pub const TREE_LEAF: &str = "  └─ ";
 ///
 /// 命令卡片用它让「输出正文」继续缩进在参数之下的内容列，而不被 `│` / `└─` 包裹。
 pub const TREE_PAD: &str = "     ";
+/// 工具合并组内二级子树前缀（外层 5 列 + 内层 3 列 = 等宽 8 列）：
+///
+/// - `BRANCH_*`：组内非末调用（外层保留 `  │  `）；
+/// - `LEAF_*`：组内末调用（外层留白 `     `）；
+/// - `*_BRANCH` / `*_LEAF` / `*_BAR` / `*_PAD`：调用内部子节点的首行与续行。
+pub const TREE_NESTED_BRANCH_BAR: &str = "  │  │  ";
+pub const TREE_NESTED_BRANCH_BRANCH: &str = "  │  ├─ ";
+pub const TREE_NESTED_BRANCH_LEAF: &str = "  │  └─ ";
+pub const TREE_NESTED_BRANCH_PAD: &str = "  │     ";
+pub const TREE_NESTED_LEAF_BAR: &str = "     │  ";
+pub const TREE_NESTED_LEAF_BRANCH: &str = "     ├─ ";
+pub const TREE_NESTED_LEAF_LEAF: &str = "     └─ ";
+pub const TREE_NESTED_LEAF_PAD: &str = "        ";
 
 /// 步骤动词的固定形式（`Read`）。工具行叙述**这次调用本身**，用现在式。
 pub const VERB_READ: &str = "Read";
@@ -169,6 +182,36 @@ pub fn matches_label(count: usize) -> String {
     };
     format!("{count} {suffix}")
 }
+
+/// 合并工具组头：`3 calls` / `1 call`。
+pub fn group_calls_label(count: usize) -> String {
+    let suffix = if count == 1 { "call" } else { "calls" };
+    format!("{count} {suffix}")
+}
+
+/// 快照工具组头：`3 updates` / `1 update`。
+pub fn group_updates_label(count: usize) -> String {
+    let suffix = if count == 1 { "update" } else { "updates" };
+    format!("{count} {suffix}")
+}
+
+/// 合并组头失败调用计数：`2 failed`。
+pub fn group_failed_label(count: usize) -> String {
+    format!("{count} {}", crate::ui::text::LX_CHAT_TOOL_FAILED)
+}
+
+/// 合并组头中断调用计数：`1 interrupted`。
+pub fn group_interrupted_label(count: usize) -> String {
+    format!("{count} {}", crate::ui::text::LX_CHAT_TOOL_INTERRUPTED)
+}
+
+/// 合并组头运行中调用计数：`1 running`。
+pub fn group_running_label(count: usize) -> String {
+    format!("{count} {}", crate::ui::text::LX_CHAT_TOOL_RUNNING)
+}
+
+/// 合并组内无参数 MCP 调用的一级占位标签。
+pub const MCP_NO_ARGUMENTS: &str = "(no arguments)";
 /// 新增行数：`+12`。
 pub fn added_label(count: usize) -> String {
     format!("{TOOL_DIFF_ADD_PREFIX}{count}")

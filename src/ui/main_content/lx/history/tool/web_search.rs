@@ -90,6 +90,7 @@ fn result_section(
     view: &WebSearchDetailView,
     width: u16,
     expanded: bool,
+    nested: bool,
 ) -> Option<Section> {
     let error_fallback = if view.result.is_empty()
         && matches!(call.status, ToolStatus::Failed | ToolStatus::Interrupted)
@@ -101,28 +102,31 @@ fn result_section(
     if view.result.is_empty() && error_fallback.is_none() {
         return None;
     }
-    let body_width = u16::try_from(tree::content_width(width)).unwrap_or(u16::MAX);
-    let (raw_source, more) = if let Some(error) = error_fallback {
-        (
-            error
-                .lines()
-                .take(MAX_ERROR_LINES)
-                .map(sanitize_result_line)
-                .collect::<Vec<_>>()
-                .join("\n"),
-            error.lines().count().saturating_sub(MAX_ERROR_LINES),
-        )
+    let cols = if nested {
+        tree::nested_content_width(width)
     } else {
+        tree::content_width(width)
+    };
+    let body_width = u16::try_from(cols).unwrap_or(u16::MAX);
+    let (mut lines, more) = if let Some(error) = error_fallback {
+        let lines: Vec<Vec<Segment>> = error
+            .lines()
+            .take(MAX_ERROR_LINES)
+            .map(|line| vec![Segment::new(sanitize_result_line(line), style::text())])
+            .collect();
+        (lines, error.lines().count().saturating_sub(MAX_ERROR_LINES))
+    } else {
+        let raw_source = view
+            .result
+            .iter()
+            .map(|line| sanitize_result_line(line))
+            .collect::<Vec<_>>()
+            .join("\n");
         (
-            view.result
-                .iter()
-                .map(|line| sanitize_result_line(line))
-                .collect::<Vec<_>>()
-                .join("\n"),
+            muted_markdown_lines(&raw_source, body_width),
             view.result_more,
         )
     };
-    let mut lines = muted_markdown_lines(&raw_source, body_width);
     if more > 0 {
         lines.push(vec![Segment::new(
             text::mcp::more_lines(more),
@@ -144,29 +148,72 @@ pub(super) fn layout(
     width: u16,
     folds: Folds,
 ) -> WebSearchLayout {
+    layout_with_group(call, view, width, folds, false)
+}
+
+pub(super) fn layout_with_group(
+    call: &ToolCallView,
+    view: &WebSearchDetailView,
+    width: u16,
+    folds: Folds,
+    in_group: bool,
+) -> WebSearchLayout {
     let folded_queries = queries_section(view, false);
-    let folded_result = result_section(call, view, width, false);
-    let queries_expandable = folded_queries
-        .as_ref()
-        .is_some_and(|section| tree::layout(std::slice::from_ref(section), width).hidden > 0);
-    let result_expandable = folded_result
-        .as_ref()
-        .is_some_and(|section| tree::layout(std::slice::from_ref(section), width).hidden > 0);
-    let queries = queries_section(view, folds.body);
-    let result = result_section(call, view, width, folds.output);
+    let nested_result = in_group && folded_queries.is_some();
+    let folded_result = result_section(call, view, width, false, nested_result);
+    let queries_expandable = folded_queries.as_ref().is_some_and(|section| {
+        let l = if nested_result && folded_result.is_some() {
+            tree::layout_in_group(std::slice::from_ref(section), width, 1)
+        } else {
+            tree::layout(std::slice::from_ref(section), width)
+        };
+        l.hidden > 0
+    });
+    let result_expandable = folded_result.as_ref().is_some_and(|section| {
+        let l = if nested_result {
+            tree::layout_in_group(std::slice::from_ref(section), width, 0)
+        } else {
+            tree::layout(std::slice::from_ref(section), width)
+        };
+        l.hidden > 0
+    });
+    let mut queries = queries_section(view, folds.body);
+    let result = result_section(call, view, width, folds.output, nested_result);
+    if in_group && queries.is_none() && result.is_none() {
+        queries = Some(Section::fixed(vec![Node::text(
+            text::tool_status_label(call.status),
+            style::agent_step_detail(),
+        )]));
+    }
     let queries_rows = queries.as_ref().map_or(0, |section| {
-        tree::layout(std::slice::from_ref(section), width)
-            .rows
-            .len()
+        if nested_result && result.is_some() {
+            tree::layout_in_group(std::slice::from_ref(section), width, 1)
+                .rows
+                .len()
+        } else {
+            tree::layout(std::slice::from_ref(section), width)
+                .rows
+                .len()
+        }
     });
     let result_rows = result.as_ref().map_or(0, |section| {
-        tree::layout(std::slice::from_ref(section), width)
-            .rows
-            .len()
+        if nested_result {
+            tree::layout_in_group(std::slice::from_ref(section), width, 0)
+                .rows
+                .len()
+        } else {
+            tree::layout(std::slice::from_ref(section), width)
+                .rows
+                .len()
+        }
     });
     let sections: Vec<Section> = queries.into_iter().chain(result).collect();
     WebSearchLayout {
-        layout: tree::layout(&sections, width),
+        layout: if in_group {
+            tree::layout_in_group(&sections, width, 1)
+        } else {
+            tree::layout(&sections, width)
+        },
         queries_rows,
         result_rows,
         queries_expandable,
@@ -175,19 +222,34 @@ pub(super) fn layout(
 }
 
 /// 卡片行数（含标题行）。
+#[cfg(test)]
 pub(super) fn rows(
     call: &ToolCallView,
     view: &WebSearchDetailView,
     width: u16,
     folds: Folds,
 ) -> usize {
+    rows_with_group(call, view, width, folds, false)
+}
+
+pub(super) fn rows_with_group(
+    call: &ToolCallView,
+    view: &WebSearchDetailView,
+    width: u16,
+    folds: Folds,
+    in_group: bool,
+) -> usize {
     if width == 0 {
         return 0;
     }
-    1 + layout(call, view, width, folds).layout.rows.len()
+    1 + layout_with_group(call, view, width, folds, in_group)
+        .layout
+        .rows
+        .len()
 }
 
 /// 展开后是否真的多出内容（查询块或结果块任一即可）。
+#[cfg(test)]
 pub(super) fn has_more(call: &ToolCallView, view: &WebSearchDetailView, width: u16) -> bool {
     if width == 0 {
         return false;
@@ -267,6 +329,29 @@ pub(super) fn draw(
         row_index,
         &layout(call, view, rect.width, folds).layout.rows,
     );
+}
+
+/// 合并组内调用体：跳过标题，状态追加到首个查询行尾部。
+#[allow(clippy::too_many_arguments)]
+pub(super) fn draw_body(
+    grid: &mut Grid,
+    rect: Rect,
+    scroll: usize,
+    row_index: &mut usize,
+    call: &ToolCallView,
+    view: &WebSearchDetailView,
+    _loading_frame: usize,
+    folds: Folds,
+    _animating: bool,
+    last: bool,
+) {
+    if rect.width == 0 {
+        return;
+    }
+    let mut layout = layout_with_group(call, view, rect.width, folds, true).layout;
+    tree::decorate_group_call(&mut layout.rows, call, title_status(call, view), rect.width);
+    tree::apply_group_connector(&mut layout.rows, last);
+    tree::draw(grid, rect, scroll, row_index, &layout.rows);
 }
 
 #[cfg(test)]
