@@ -91,7 +91,7 @@ pub(crate) fn content_geom(area: Rect, lx: &Lx, cache: &mut PaneCache) -> Option
                 });
             }
             let source = history::HistorySource::from_chat(&run.chat, &run.compact);
-            let view = history::view_source_plain(output_rect, source, cache);
+            let view = history::view_source_plain_ready(output_rect, source, cache);
             let rect = history::content_rect(view.body);
             if rect.width == 0 || rect.height == 0 || view.total_rows == 0 {
                 return None;

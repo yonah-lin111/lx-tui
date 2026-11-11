@@ -73,6 +73,80 @@ fn lx_with(messages: Vec<ChatMessageView>) -> Lx {
     lx
 }
 
+/// 同一输入代内：解析/绘制多次取快照只算一次指纹、只重建一次。
+#[test]
+fn signature_memo_reuses_within_epoch() {
+    let mut lx = lx_with(vec![message(
+        "a1",
+        "assistant",
+        "complete",
+        vec![text_part("回答")],
+    )]);
+    let mut cache = PaneCache::default();
+    cache.set_signature_epoch(1);
+    let _ = cache.snapshot(40, &lx);
+    assert_eq!(cache.builds(), 1);
+    assert_eq!(cache.signature_evaluations(), 1);
+
+    // 事件循环保证同一代内不修改状态；这里模拟「多一次 view」。
+    let _ = cache.snapshot(40, &lx);
+    assert_eq!(cache.builds(), 1, "同一输入代内不得重复重建");
+    assert_eq!(cache.signature_evaluations(), 1, "同一代内指纹只算一次");
+
+    // 下一轮输入代：状态没变也要重新校验指纹，但不应重建。
+    cache.set_signature_epoch(2);
+    let _ = cache.snapshot(40, &lx);
+    assert_eq!(cache.builds(), 1, "状态没变不重建");
+    assert_eq!(cache.signature_evaluations(), 2, "每个输入代各算一次指纹");
+
+    // 状态变化 + 新代：必须重建一次。
+    lx.chat.messages[0].status = "streaming".into();
+    cache.set_signature_epoch(3);
+    let _ = cache.snapshot(40, &lx);
+    assert_eq!(cache.builds(), 2, "新输入代必须反映新状态");
+}
+
+/// draw 之后必须关闭指纹记忆：鼠标事件路径不能复用上一帧几何。
+#[test]
+fn finish_frame_disables_signature_memo() {
+    let mut lx = lx_with(vec![message(
+        "a1",
+        "assistant",
+        "complete",
+        vec![text_part("回答")],
+    )]);
+    let mut render_cache = RenderCache::default();
+    let pane = PaneId::alloc();
+    render_cache.prepare_frame();
+    let _ = render_cache.pane(pane).snapshot(40, &lx);
+    assert_eq!(render_cache.pane(pane).builds(), 1);
+
+    render_cache.finish_frame();
+    lx.chat.messages[0].status = "streaming".into();
+    let _ = render_cache.pane(pane).snapshot(40, &lx);
+    assert_eq!(
+        render_cache.pane(pane).builds(),
+        2,
+        "draw 之后的事件路径必须现算指纹"
+    );
+}
+
+/// 测试默认不开启 epoch：保持「改内容就重建」的既有语义。
+#[test]
+fn signature_memo_disabled_by_default() {
+    let mut lx = lx_with(vec![message(
+        "a1",
+        "assistant",
+        "complete",
+        vec![text_part("回答")],
+    )]);
+    let mut cache = PaneCache::default();
+    let _ = cache.snapshot(40, &lx);
+    lx.chat.messages[0].status = "streaming".into();
+    let _ = cache.snapshot(40, &lx);
+    assert_eq!(cache.builds(), 2, "未开启 epoch 时每次状态变化都重建");
+}
+
 #[test]
 fn same_state_reuses_snapshot() {
     let lx = lx_with(vec![
@@ -725,6 +799,45 @@ fn offscreen_stream_coalesces_within_window() {
     lx.chat.messages[0].sequence += 1;
     let _ = view(area, &lx, &mut cache);
     assert!(cache.builds() > builds, "非流式尾部变化必须立即重建");
+}
+
+/// 贴底构建时没有 non-stream 基线：滚离后首次增量必须先重建一次，再进入合并。
+#[test]
+fn offscreen_coalescing_builds_baseline_after_scrolling_away() {
+    let body = (0..30)
+        .map(|index| format!("历史行 {index}"))
+        .collect::<Vec<_>>()
+        .join("\n");
+    let mut lx = lx_with(vec![
+        message("m1", "assistant", "complete", vec![text_part(&body)]),
+        message("a1", "assistant", "streaming", vec![text_part("回答")]),
+    ]);
+    let area = Rect::new(0, 0, 40, 10);
+    let mut cache = PaneCache::default();
+    let _ = view(area, &lx, &mut cache);
+    let builds = cache.builds();
+    assert_eq!(cache.snapshot_non_stream, None, "贴底构建不建立基线");
+
+    // 滚离底部：下一次尾部增量必须重建并补基线。
+    lx.chat.follow_bottom = false;
+    lx.chat.history_scroll = 0;
+    cache.set_offscreen_coalesce(Duration::from_secs(3_600));
+    let AssistantStepView::Part { part, .. } = &mut lx.chat.messages[1].steps[0] else {
+        panic!("末条消息应是正文块");
+    };
+    part.content.push_str("\n屏幕外的第一段增量");
+    let _ = view(area, &lx, &mut cache);
+    assert_eq!(cache.builds(), builds + 1, "基线缺失时先正常重建一次");
+    assert!(cache.snapshot_non_stream.is_some(), "重建后补上基线");
+
+    // 基线建立后：窗口内继续合并。
+    let builds = cache.builds();
+    let AssistantStepView::Part { part, .. } = &mut lx.chat.messages[1].steps[0] else {
+        panic!("末条消息应是正文块");
+    };
+    part.content.push_str("\n屏幕外的第二段增量");
+    let _ = view(area, &lx, &mut cache);
+    assert_eq!(cache.builds(), builds, "基线建立后按窗口合并");
 }
 
 /// 选区几何（滚轮/拖拽选区每帧调用）必须读取就绪快照。

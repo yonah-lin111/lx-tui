@@ -29,7 +29,11 @@ const TOOLS_PER_MESSAGE: usize = 2;
 
 /// 一段带中英文与标点的正文（逼真的折行与 markdown 解析成本）。
 fn body(tag: usize) -> String {
-    (0..BODY_LINES)
+    body_lines(tag, BODY_LINES)
+}
+
+fn body_lines(tag: usize, lines: usize) -> String {
+    (0..lines)
         .map(|line| {
             format!("第 {tag} 条消息第 {line} 行：mixed 中英文 content，含标点与数字 123。")
         })
@@ -121,6 +125,181 @@ fn history(messages: usize) -> Lx {
         out.push(card);
     }
     lx_with(out)
+}
+
+/// 验收夹具：300 条消息 / 4 工具每助手（600 次调用）/ ≥3 万渲染行，
+/// 其中一条命令结果约 500KB。用于验证「真实会话规模」而非 1400 条压力上限。
+fn realistic_history() -> Lx {
+    let mut out = Vec::with_capacity(300);
+    for index in 0..300 {
+        let role = if index % 2 == 0 { "user" } else { "assistant" };
+        let lines = if role == "assistant" { 180 } else { 20 };
+        let mut card = message(role, "complete", vec![text_part(&body_lines(index, lines))]);
+        if role == "assistant" {
+            for offset in 0..4 {
+                let position = card.next_position();
+                let mut step = if offset % 2 == 0 {
+                    read_step(position)
+                } else {
+                    command_step(position)
+                };
+                // 第一条助手消息里的命令带 500KB 输出：逼真的大结果指纹/卡片成本。
+                if index == 1
+                    && offset == 1
+                    && let AssistantStepView::Tool { call, .. } = &mut step
+                    && let Some(ToolDetailView::Command(view)) = call.detail.as_deref_mut()
+                {
+                    view.output_tail = (0..10_000)
+                        .map(|line| {
+                            format!("bulk line {line:05}: payload payload payload payload payload")
+                        })
+                        .collect::<Vec<_>>()
+                        .join("\n");
+                }
+                card.steps.push(step);
+            }
+        }
+        out.push(card);
+    }
+    lx_with(out)
+}
+
+/// 300 条 / 600 工具 / 3 万行的验收夹具：模拟事件循环一帧内
+/// `resolve(view) + build_chat(view) + render` 三次取快照，验证
+/// 单帧 P95 ≤16ms 且同一输入代只重建一次。
+#[test]
+#[ignore = "性能回归：cargo test -- --ignored perf_lx_history_realistic"]
+fn perf_lx_history_realistic() {
+    let mut lx = realistic_history();
+    let area = Rect::new(0, 0, 200, 50);
+    let mut render_cache = crate::ui::RenderCache::default();
+    let pane = crate::tiling::PaneId::alloc();
+    let mut grid = Grid::new(area);
+
+    let cold = Instant::now();
+    let total = {
+        render_cache.prepare_frame();
+        let cache = render_cache.pane(pane);
+        view(area, &lx, cache).total_rows
+    };
+    let cold_elapsed = cold.elapsed();
+    assert!(total >= 30_000, "验收夹具应 ≥3 万渲染行，实际 {total}");
+    let big = lx
+        .chat
+        .messages
+        .iter()
+        .flat_map(|message| &message.steps)
+        .find_map(|step| {
+            let AssistantStepView::Tool { call, .. } = step else {
+                return None;
+            };
+            let Some(ToolDetailView::Command(view)) = call.detail.as_deref() else {
+                return None;
+            };
+            (view.output_tail.len() >= 500_000).then_some(view.output_tail.len())
+        })
+        .expect("夹具必须包含一条 ≥500KB 的工具结果");
+    render_cache.begin_frame();
+    let _ = render(&mut grid, area, &lx, 0, render_cache.pane(pane));
+    render_cache.finish_frame();
+    let builds_after_cold = render_cache.pane(pane).builds();
+    let evals_after_cold = render_cache.pane(pane).signature_evaluations();
+
+    let max_top = total.saturating_sub(usize::from(area.height)).max(1);
+    let mut scroll_samples = Vec::with_capacity(FRAMES);
+    for frame in 0..FRAMES {
+        lx.chat.follow_bottom = false;
+        lx.chat.history_scroll = (frame * 20) % max_top;
+        // 生产顺序：prepare → resolve(view) → build_chat(view) → begin → draw(render) → finish。
+        render_cache.prepare_frame();
+        let started = Instant::now();
+        let first = {
+            let cache = render_cache.pane(pane);
+            view(area, &lx, cache)
+        };
+        let _ = {
+            let cache = render_cache.pane(pane);
+            view(area, &lx, cache)
+        };
+        render_cache.begin_frame();
+        let _ = render(&mut grid, area, &lx, first.scroll, render_cache.pane(pane));
+        render_cache.finish_frame();
+        scroll_samples.push(started.elapsed());
+    }
+    assert_eq!(
+        render_cache.pane(pane).builds(),
+        builds_after_cold,
+        "滚动帧不得重建快照（滚动不进入指纹）"
+    );
+    assert!(
+        render_cache.pane(pane).signature_evaluations() - evals_after_cold <= FRAMES as u64,
+        "同一输入代内多次 view 只能算一次指纹"
+    );
+    let evals_after_scroll = render_cache.pane(pane).signature_evaluations();
+
+    // 流式：每帧追加一行；贴底跟随时必须立即重建，但仍只重建一次。
+    lx.chat.follow_bottom = true;
+    let last = lx.chat.messages.len().saturating_sub(1);
+    let mut stream_samples = Vec::with_capacity(FRAMES);
+    for _ in 0..FRAMES {
+        if let Some(AssistantStepView::Part { part, .. }) =
+            lx.chat.messages.get_mut(last).and_then(|message| {
+                message
+                    .steps
+                    .iter_mut()
+                    .find(|step| matches!(step, AssistantStepView::Part { .. }))
+            })
+        {
+            part.content.push_str("\n流式追加的一行");
+        }
+        render_cache.prepare_frame();
+        let started = Instant::now();
+        let first = {
+            let cache = render_cache.pane(pane);
+            view(area, &lx, cache)
+        };
+        let _ = {
+            let cache = render_cache.pane(pane);
+            view(area, &lx, cache)
+        };
+        render_cache.begin_frame();
+        let _ = render(&mut grid, area, &lx, first.scroll, render_cache.pane(pane));
+        render_cache.finish_frame();
+        stream_samples.push(started.elapsed());
+    }
+    assert!(
+        render_cache.pane(pane).builds() <= builds_after_cold + FRAMES as u64,
+        "流式每帧最多重建一次：{} > {}",
+        render_cache.pane(pane).builds(),
+        builds_after_cold + FRAMES as u64
+    );
+    assert!(
+        render_cache.pane(pane).signature_evaluations() - evals_after_scroll <= FRAMES as u64,
+        "贴底流式每帧也只算一次全量指纹"
+    );
+
+    let scroll_p95 = percentile(&mut scroll_samples, 95);
+    let stream_p95 = percentile(&mut stream_samples, 95);
+    let bytes = render_cache.pane(pane).bytes();
+    eprintln!(
+        "perf_lx_history_realistic: total_rows={total} cold={cold_elapsed:?} \
+         big_result={big}B scroll_p95={scroll_p95:?} stream_p95={stream_p95:?} \
+         builds={} evals={} cache_bytes={bytes}",
+        render_cache.pane(pane).builds(),
+        render_cache.pane(pane).signature_evaluations()
+    );
+    assert!(
+        scroll_p95 <= FRAME_BUDGET,
+        "300 条验收夹具滚动 P95 超预算：{scroll_p95:?} > {FRAME_BUDGET:?}"
+    );
+    assert!(
+        stream_p95 <= FRAME_BUDGET,
+        "300 条验收夹具流式 P95 超预算：{stream_p95:?} > {FRAME_BUDGET:?}"
+    );
+    assert!(
+        bytes <= crate::ui::main_content::lx::history::cache::MAX_CACHED_BYTES,
+        "二级缓存超上限：{bytes} 字节"
+    );
 }
 
 /// 第 `percent` 百分位（采样先排序）。

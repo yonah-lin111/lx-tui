@@ -50,6 +50,32 @@ pub(super) fn history_view_ready(
     Some(history::view_ready(history_rect, lx, cache))
 }
 
+/// 变化前的阅读锚点：只读上一帧同宽度快照，**不触发重排**。
+pub(crate) fn history_anchor_before(
+    rect: Rect,
+    lx: &Lx,
+    cache: &mut PaneCache,
+    scroll: usize,
+) -> Option<history::HistoryAnchor> {
+    let width = history::content_rect(rect).width;
+    let source = history::HistorySource::from(lx);
+    let snapshot = cache.snapshot_cached(width, source)?;
+    history::anchor_at(&snapshot, scroll, width)
+}
+
+/// 变化后的锚点行：视图刚重建，快照与当前状态同代。
+pub(crate) fn history_anchor_row(
+    rect: Rect,
+    lx: &Lx,
+    cache: &mut PaneCache,
+    anchor: &history::HistoryAnchor,
+) -> Option<usize> {
+    let width = history::content_rect(rect).width;
+    let source = history::HistorySource::from(lx);
+    let snapshot = cache.snapshot_ready_source(width, source);
+    history::anchor_row(&snapshot, source, anchor, width)
+}
+
 /// 把指定消息滚到视口居中所需的顶部行与可滚动上限；内容不足一屏时返回 None。
 ///
 /// 消息块高于视口时按起始行对齐（至少能看到开头）；其余情况上下留白尽量相等，
@@ -169,13 +195,14 @@ pub fn sticky_prompt_jump(area: Rect, lx: &Lx, cache: &mut PaneCache) -> Option<
     if !chat_geometry_is_live(lx) {
         return None;
     }
-    let view = history_view(area, lx, cache)?;
+    // 命中/跳转只认屏幕上已画出的几何，避免在事件回调里用新内容重建。
+    let view = history_view_ready(area, lx, cache)?;
     let message = view.sticky?;
     let start = view.messages.get(message)?.start;
-    // 跳过去后置顶行会让位，按整块 body 钳制。
+    // 跳过去后置顶行会让位，按 body 高度钳制（与滚动上限同口径）。
     let max_top = view
         .total_rows
-        .saturating_sub(usize::from(view.area.height));
+        .saturating_sub(usize::from(view.body.height));
     Some(start.min(max_top))
 }
 
@@ -213,7 +240,8 @@ pub fn chat_hit(
     if !chat_geometry_is_live(lx) {
         return None;
     }
-    let view = history_view(area, lx, cache)?;
+    // 命中只认屏幕上已画出的几何：内容已变但尚未重绘时，不能用新行号解释旧坐标。
+    let view = history_view_ready(area, lx, cache)?;
     // 置顶行（表现层，整区第 0 行整宽）：点击跳回该 prompt。
     if let Some(sticky) = history::sticky_rect(&view)
         && sticky.rect.contains((column, row).into())

@@ -110,6 +110,54 @@ pub(crate) fn detail_rows(
     history::measure_cached(content_width, source, cache)
 }
 
+/// 详情区变化前的阅读锚点：只读上一帧同宽度快照，不触发重排。
+pub(crate) fn anchor_before(
+    area: Rect,
+    lx: &crate::app::state::Lx,
+    cache: &mut crate::ui::PaneCache,
+    scroll: usize,
+) -> Option<history::HistoryAnchor> {
+    let rect = super::super::layout(area, lx).task_output?;
+    let page = lx.task.as_ref()?;
+    let run = page
+        .selected_agent_index(&lx.agents)
+        .and_then(|index| lx.agents.runs.get(index))?;
+    let width = history::content_rect(rect).width;
+    if width == 0 {
+        return None;
+    }
+    let source = HistorySource::from_chat(&run.chat, &run.compact).with_viewport(HistoryViewport {
+        scroll: run.scroll,
+        follow_bottom: run.follow,
+    });
+    let snapshot = cache.snapshot_cached(width, source)?;
+    history::anchor_at(&snapshot, scroll, width)
+}
+
+/// 详情区变化后的锚点行；快照刚由 `detail_rows` 重建。
+pub(crate) fn anchor_row(
+    area: Rect,
+    lx: &crate::app::state::Lx,
+    cache: &mut crate::ui::PaneCache,
+    anchor: &history::HistoryAnchor,
+) -> Option<usize> {
+    let rect = super::super::layout(area, lx).task_output?;
+    let page = lx.task.as_ref()?;
+    let run = page
+        .selected_agent_index(&lx.agents)
+        .and_then(|index| lx.agents.runs.get(index))?;
+    let width = history::content_rect(rect).width;
+    if width == 0 {
+        return None;
+    }
+    let source = HistorySource::from_chat(&run.chat, &run.compact).with_viewport(HistoryViewport {
+        scroll: run.scroll,
+        follow_bottom: run.follow,
+    });
+    let snapshot = cache.snapshot_ready_source(width, source);
+    history::anchor_row(&snapshot, source, anchor, width)
+}
+
 /// 步骤标记文本（`■ `）占用的列数。
 const STEP_MARK_COLS: u16 = 2;
 

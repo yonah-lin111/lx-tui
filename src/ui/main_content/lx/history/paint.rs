@@ -65,8 +65,12 @@ pub(crate) enum BlockSource {
     Recap { message_index: usize },
     /// 消息内的汇报块（第 `index` 份）。
     Report { message_index: usize, index: usize },
-    /// 与 `Lx` 无关的静态块（统计行）：样式已随绘制数据存好，绘制不需要回查状态。
-    Plain,
+    /// 助手消息末尾的附件引用树。
+    Attachments { message_index: usize },
+    /// 本轮统计行。
+    Stats { message_index: usize },
+    /// recap 生成中的占位行。
+    RecapRunning { message_index: usize },
 }
 
 /// 块内一个可点击区域（行偏移相对块首行）。

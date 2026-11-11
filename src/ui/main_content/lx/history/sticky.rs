@@ -27,11 +27,16 @@ pub struct StickyRow {
 }
 
 /// 顶行所属消息与消息内行偏移；空历史返回 None。
+///
+/// `rows` 按 `start` 单调递增（含零行占位），二分找最后一条起始行不超过
+/// `scroll` 的消息；若 `scroll` 已越过它的 `end`，说明落在条目间空行或末尾
+/// 呼吸行，返回 None。零行占位不会被误判（`start == end`）。
 pub(super) fn message_at(rows: &[MessageRows], scroll: usize) -> Option<(usize, usize)> {
-    rows.iter()
-        .enumerate()
-        .find(|(_, range)| scroll >= range.start && scroll < range.end)
-        .map(|(index, range)| (index, scroll - range.start))
+    let index = rows
+        .partition_point(|range| range.start <= scroll)
+        .checked_sub(1)?;
+    let range = rows.get(index)?;
+    (scroll < range.end).then_some((index, scroll - range.start))
 }
 
 /// 置顶候选：顶行落在用户消息自己的行上 → None（自带上下文）；

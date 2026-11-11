@@ -84,6 +84,8 @@ pub(crate) struct SnapEntry {
     pub(crate) start: usize,
     pub(crate) end: usize,
     pub(crate) kind: SnapEntryKind,
+    /// 条目稳定 ID（与构建时的数据源对齐）；锚点捕获不能用新数据源按旧下标取 ID。
+    pub(crate) id: Option<String>,
     /// 条目内的块（顺序即绘制顺序）。
     pub(crate) blocks: Vec<SnapBlock>,
 }
@@ -105,7 +107,10 @@ pub(crate) struct HistorySnapshot {
     /// 每条时间线条目的起止行。
     pub(crate) entries: Vec<SnapEntry>,
     /// 每条消息的行区间（置顶行归属判定用；下标即消息下标）。
-    pub(crate) messages: Vec<MessageRows>,
+    ///
+    /// 用 `Arc` 是为了让每帧多次 `history_view` 共享同一份行区间，避免每次
+    /// 克隆整表（1400 条消息时每帧 2~3 次分配）。
+    pub(crate) messages: Arc<Vec<MessageRows>>,
     /// （消息索引, 步骤下标, (起始行, 行数)）：thinking 头部。
     pub(crate) thinking: Vec<(usize, usize, (usize, usize))>,
     /// 可折叠块的内容行区间。
@@ -130,14 +135,14 @@ pub(crate) fn build(
         snapshot: HistorySnapshot {
             // 消息索引必须与 `source.messages` 对齐（sticky/居中/命中都按原下标）；
             // 旧 wait 残留被 timeline 跳过，这里先补零行占位。
-            messages: vec![
+            messages: Arc::new(vec![
                 MessageRows {
                     start: 0,
                     end: 0,
                     is_user: false,
                 };
                 source.messages.len()
-            ],
+            ]),
             ..HistorySnapshot::default()
         },
         rows: 0,
@@ -162,9 +167,21 @@ pub(crate) fn build(
     if !timeline.is_empty() {
         builder.rows += 1;
         if let Some(TimelineEntry::Message(index)) = timeline.last()
-            && let Some(last) = builder.snapshot.messages.get_mut(*index)
+            && let Some(last) = Arc::make_mut(&mut builder.snapshot.messages).get_mut(*index)
         {
             last.end = builder.rows;
+        }
+    }
+    // 时间线跳过的旧 wait 残留行仍是 `(0,0)` 占位；规范化为前一条消息的 end，
+    // 保证 `messages.start` 单调，置顶行的二分不会把占位当成「最后一条起始行 <= scroll」。
+    let messages = Arc::make_mut(&mut builder.snapshot.messages);
+    let mut last_end = 0;
+    for rows in messages {
+        if rows.start == 0 && rows.end == 0 {
+            rows.start = last_end;
+            rows.end = last_end;
+        } else {
+            last_end = rows.end;
         }
     }
     builder.snapshot.total_rows = builder.rows;
@@ -249,6 +266,7 @@ impl Builder<'_> {
             start,
             end: self.rows,
             kind: SnapEntryKind::Notices { last, count },
+            id: source.notices.get(last).map(|notice| notice.id.clone()),
             blocks: vec![block],
         });
     }
@@ -289,6 +307,7 @@ impl Builder<'_> {
             start,
             end: self.rows,
             kind: SnapEntryKind::Compact(index),
+            id: source.checkpoints.get(index).map(|item| item.id.clone()),
             blocks: vec![block],
         });
     }
@@ -314,6 +333,7 @@ impl Builder<'_> {
             start,
             end: self.rows,
             kind: SnapEntryKind::RunningCompact,
+            id: None,
             blocks: vec![block],
         });
     }
@@ -362,6 +382,7 @@ impl Builder<'_> {
             start,
             end: self.rows,
             kind: SnapEntryKind::ModelSwitch { first, last, count },
+            id: source.switches.get(last).map(|item| item.id.clone()),
             blocks: vec![block],
         });
     }
@@ -383,7 +404,7 @@ impl Builder<'_> {
         // 汇报行不是用户气泡：置顶行与用户底色据此跳过它。
         let is_user =
             message.role == "user" && message.shell.is_none() && message.reports.is_empty();
-        self.snapshot.messages[message_index] = MessageRows {
+        Arc::make_mut(&mut self.snapshot.messages)[message_index] = MessageRows {
             start,
             end: self.rows,
             is_user,
@@ -392,6 +413,10 @@ impl Builder<'_> {
             start,
             end: self.rows,
             kind: SnapEntryKind::Message(message_index),
+            id: source
+                .messages
+                .get(message_index)
+                .map(|message| message.id.clone()),
             blocks,
         });
     }
@@ -768,9 +793,14 @@ impl Builder<'_> {
                 width: self.width,
                 sig: attachments_block_signature(source, message),
             };
-            let block = self.block(key, BlockSource::Plain, start, || BlockPaint::RefLines {
-                ref_lines: AssistantRefLine::from_message(message, source.chat),
-            });
+            let block = self.block(
+                key,
+                BlockSource::Attachments { message_index },
+                start,
+                || BlockPaint::RefLines {
+                    ref_lines: AssistantRefLine::from_message(message, source.chat),
+                },
+            );
             self.rows += block.rows;
             if let BlockPaint::RefLines { ref_lines } = &*block.paint {
                 for (idx, ref_line) in ref_lines.iter().enumerate() {
@@ -836,9 +866,11 @@ impl Builder<'_> {
                 sig: stats_block_signature(&line),
             };
             let lines = vec![line];
-            let block = self.block(key, BlockSource::Plain, start, || BlockPaint::Static {
-                lines,
-                style: crate::ui::style::muted(),
+            let block = self.block(key, BlockSource::Stats { message_index }, start, || {
+                BlockPaint::Static {
+                    lines,
+                    style: crate::ui::style::muted(),
+                }
             });
             self.rows += block.rows;
             blocks.push(block);
@@ -903,10 +935,15 @@ impl Builder<'_> {
                 .unwrap_or(0),
             };
             let line = recap::running_line(pending);
-            let block = self.block(key, BlockSource::Plain, start, || BlockPaint::Static {
-                lines: vec![line],
-                style: crate::ui::style::accent(),
-            });
+            let block = self.block(
+                key,
+                BlockSource::RecapRunning { message_index },
+                start,
+                || BlockPaint::Static {
+                    lines: vec![line],
+                    style: crate::ui::style::accent(),
+                },
+            );
             self.rows += block.rows;
             blocks.push(block);
         }

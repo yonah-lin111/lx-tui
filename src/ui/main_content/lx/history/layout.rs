@@ -53,7 +53,7 @@ pub(super) fn to_layout(area: Rect, width: u16, snapshot: &HistorySnapshot) -> H
                 clickable: region.clickable,
             })
             .collect(),
-        messages: snapshot.messages.clone(),
+        messages: snapshot.messages.to_vec(),
         total_rows: snapshot.total_rows,
     }
 }

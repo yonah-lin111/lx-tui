@@ -105,6 +105,89 @@ fn remember_viewport(state: &mut AppState, pane: PaneId, area: Rect) {
     target.lx.chat.viewport_top = Some(scroll);
 }
 
+/// 上滚阅读后，上方内容变高：顶部行按锚点行差补偿，阅读位置不动。
+#[test]
+fn reading_compensates_when_content_above_grows() {
+    let (mut state, pane) = state_with_history(long_history());
+    let rect = Rect::new(0, 0, 40, 20);
+    let rects = [(pane, rect)];
+    let mut cache = crate::ui::RenderCache::default();
+    {
+        let target = state.pane_mut_anywhere(pane).expect("pane");
+        target.lx.chat.follow_bottom = false;
+        target.lx.chat.history_scroll = 0;
+    }
+    // 先建立上一帧快照（锚点从它捕获）。
+    resolve_lx_history(&mut state, &rects, &mut cache);
+    let mid = {
+        let target = state.pane_anywhere(pane).expect("pane");
+        let view = crate::ui::main_content::lx::history_view(
+            crate::tiling::pane_inner_rect(rect),
+            &target.lx,
+            cache.pane(pane),
+        )
+        .expect("view");
+        view.messages[2].start + 1
+    };
+    state
+        .pane_mut_anywhere(pane)
+        .expect("pane")
+        .lx
+        .chat
+        .history_scroll = mid;
+
+    // 第一条用户消息从 1 行变 6 行：视口上方净增 5 行。
+    let target = state.pane_mut_anywhere(pane).expect("pane");
+    let Some(AssistantStepView::Part { part, .. }) = target.lx.chat.messages[0].steps.first_mut()
+    else {
+        panic!("首条消息必须是正文步骤");
+    };
+    part.content = "0\n1\n2\n3\n4\n5".into();
+
+    resolve_lx_history(&mut state, &rects, &mut cache);
+    let chat = &state.pane_anywhere(pane).expect("pane").lx.chat;
+    assert_eq!(
+        chat.history_scroll,
+        mid + 5,
+        "顶部行必须跟着锚点块下移 5 行"
+    );
+    assert_eq!(chat.viewport_top, Some(mid + 5), "绘制顶部行同口径");
+    assert!(!chat.follow_bottom, "补偿不得把阅读态改回跟随");
+}
+
+/// 贴底跟随时上方变高：继续贴底，不补偿、不跳走。
+#[test]
+fn following_ignores_above_growth() {
+    let (mut state, pane) = state_with_history(long_history());
+    let rect = Rect::new(0, 0, 40, 20);
+    let rects = [(pane, rect)];
+    let mut cache = crate::ui::RenderCache::default();
+    resolve_lx_history(&mut state, &rects, &mut cache);
+    let before = state
+        .pane_anywhere(pane)
+        .expect("pane")
+        .lx
+        .chat
+        .viewport_top
+        .expect("跟随时记录顶部行");
+
+    let target = state.pane_mut_anywhere(pane).expect("pane");
+    let Some(AssistantStepView::Part { part, .. }) = target.lx.chat.messages[0].steps.first_mut()
+    else {
+        panic!("首条消息必须是正文步骤");
+    };
+    part.content = "0\n1\n2\n3\n4\n5".into();
+    resolve_lx_history(&mut state, &rects, &mut cache);
+
+    let chat = &state.pane_anywhere(pane).expect("pane").lx.chat;
+    assert!(chat.follow_bottom, "跟随时必须继续贴底");
+    assert!(
+        chat.viewport_top.expect("顶部行") > before,
+        "新内容变高后顶部行应跟着下移：{before} → {:?}",
+        chat.viewport_top
+    );
+}
+
 #[test]
 fn pin_viewport_keeps_the_row_the_user_is_looking_at() {
     let (mut state, pane) = state_with_history(long_history());

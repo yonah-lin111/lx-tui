@@ -21,6 +21,7 @@ mod tool_geometry;
 mod tool_grouping;
 
 // 按主题拆出的子模块（单文件行数上限）；构造器都在本模块，子模块用 `use super::*`。
+mod anchor;
 mod cards;
 mod compact;
 mod model_switch;
@@ -625,7 +626,9 @@ fn legacy_wait_report_rows_without_assistant_are_hidden() {
     // 隐藏 legacy 行不能压缩消息索引：sticky/居中/命中仍按原始下标查。
     let snapshot = cache().snapshot(80, &lx);
     assert_eq!(snapshot.messages.len(), 2);
-    assert_eq!(snapshot.messages[1].start, 0);
+    // 占位行规范化为前一条消息的 end，保证 start 单调（置顶行二分的前提）。
+    assert_eq!(snapshot.messages[1].start, snapshot.messages[0].end);
+    assert_eq!(snapshot.messages[1].start, snapshot.messages[1].end);
     let mut buf = Buffer::empty(area);
     crate::ui::main_content::lx::render_history_for_test(area, &mut buf, &lx, 0);
     let rendered: String = (0..4).map(|row| row_text(&buf, area, row)).collect();

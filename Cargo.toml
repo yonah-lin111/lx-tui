@@ -43,6 +43,11 @@ rmcp = { version = "3.8.0", default-features = false, features = [
 [target.'cfg(unix)'.dependencies]
 libc = "0.2"
 
+# 开发态保持完整调试符号，但对本 crate 开启基础优化：debug 下历史滚动/流式
+# 排版与 release 差 2~4 倍，P95 会直接超过 16ms。冷编译代价约 3 分钟。
+[profile.dev]
+opt-level = 1
+
 # 图像编解码库在 dev 模式下开启最高优化，避免开发态大图缩放/编码阻塞 UI 主线程。
 [profile.dev.package.image]
 opt-level = 3
