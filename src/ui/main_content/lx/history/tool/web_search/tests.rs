@@ -81,7 +81,20 @@ fn truncated_card_places_marker_in_result_body_not_title() {
     let header = folded.lines().next().unwrap_or("");
     assert!(!header.contains(text::agent::SEARCH_TRUNCATED), "{header}");
     assert!(!header.contains("truncated"), "{header}");
-    assert!(folded.contains(text::agent::INLINE_TRUNCATED), "{folded}");
+    assert!(folded.contains("more lines [truncated]"), "{folded}");
+    let expanded = render_with(
+        &call(),
+        &view,
+        100,
+        Folds {
+            body: false,
+            output: true,
+        },
+    );
+    assert!(
+        expanded.contains("… 5 more lines [truncated]"),
+        "{expanded}"
+    );
 }
 
 #[test]

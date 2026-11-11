@@ -153,16 +153,6 @@ fn output_section(
     let body_width = u16::try_from(tree::content_width(width)).unwrap_or(u16::MAX);
     let sampled = sample_markdown_source(output);
     let mut lines: Vec<Vec<Segment>> = muted_markdown_lines(&sampled, body_width);
-    if truncated
-        && !sampled.contains(text::agent::INLINE_TRUNCATED)
-        && !sampled.contains("omitted]")
-        && !sampled.contains("truncated]")
-    {
-        lines.push(vec![Segment::new(
-            text::agent::INLINE_TRUNCATED,
-            output_style(!folded),
-        )]);
-    }
     if dropped > 0 {
         lines.push(vec![Segment::new(
             text::agent::dropped_bytes_label(dropped),
@@ -172,10 +162,13 @@ fn output_section(
     if lines.is_empty() {
         return None;
     }
-    Some(Section::new(
-        vec![Node::block(lines)],
-        folded.then(|| Preview::head_tail(OUTPUT_PREVIEW_HEAD, OUTPUT_PREVIEW_TAIL)),
-    ))
+    Some(
+        Section::new(
+            vec![Node::block(lines)],
+            folded.then(|| Preview::head_tail(OUTPUT_PREVIEW_HEAD, OUTPUT_PREVIEW_TAIL)),
+        )
+        .with_truncated(truncated),
+    )
 }
 
 /// 输入预览的转义还原（`preview_input` 转义 `\\`/`\n`/`\r`/`\t`/`\u{hex}` 并在超长时追加 `…`）。

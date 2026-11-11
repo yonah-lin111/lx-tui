@@ -146,7 +146,8 @@ pub(super) fn sample_output_line(line: &str) -> String {
         }
         text.push(if ch.is_control() { ' ' } else { ch });
     }
-    text
+    text.replace("…[truncated]", text::agent::INLINE_TRUNCATED)
+        .replace("[...truncated]", text::agent::INLINE_TRUNCATED)
 }
 
 /// 将多行原始输出按行做单行长度采样（上限 [`MAX_OUTPUT_LINE_CHARS`]）并剥离末尾空行，

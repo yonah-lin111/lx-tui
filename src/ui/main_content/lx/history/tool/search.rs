@@ -40,7 +40,8 @@ fn hit_line(hit: &crate::app::state::SearchMatchView, expanded: bool) -> Vec<Seg
     let path = single_line(&hit.path, TEXT_SAMPLE_CHARS);
     let raw = single_line(&hit.text, TEXT_SAMPLE_CHARS);
     let body = raw
-        .strip_suffix(text::agent::INLINE_TRUNCATED)
+        .strip_suffix("…[truncated]")
+        .or_else(|| raw.strip_suffix(text::agent::INLINE_TRUNCATED))
         .map(str::trim_end)
         .unwrap_or(raw.as_str())
         .to_string();
@@ -73,26 +74,19 @@ fn layout(
             .summary
             .as_deref()
             .is_some_and(|summary| summary.truncated);
-    let mut hits: Vec<Vec<Segment>> = view
+    let hits: Vec<Vec<Segment>> = view
         .matches
         .iter()
         .map(|hit| hit_line(hit, expanded))
         .collect();
     if !hits.is_empty() {
-        if truncated {
-            hits.push(vec![Segment::new(
-                text::agent::INLINE_TRUNCATED,
-                style::agent_step_detail(),
-            )]);
-        }
-        let preview = (!expanded).then(|| {
-            if truncated {
-                Preview::head_tail(MATCH_PREVIEW_ROWS, 1)
-            } else {
-                Preview::head(MATCH_PREVIEW_ROWS)
-            }
-        });
-        sections.push(Section::new(vec![Node::block(hits)], preview));
+        sections.push(
+            Section::new(
+                vec![Node::block(hits)],
+                (!expanded).then(|| Preview::head(MATCH_PREVIEW_ROWS)),
+            )
+            .with_truncated(truncated),
+        );
     }
     SearchLayout {
         layout: tree::layout(&sections, width),
@@ -264,8 +258,7 @@ mod tests {
             folded.contains("src/bar.rs:7: fn render_search() {"),
             "{folded}"
         );
-        assert!(folded.contains(text::agent::INLINE_TRUNCATED), "{folded}");
-        assert!(folded.contains("more line"), "{folded}");
+        assert!(folded.contains("… 1 more line [truncated]"), "{folded}");
         assert!(has_more(&call, &view, 80));
     }
 
@@ -277,7 +270,7 @@ mod tests {
         let header = expanded.lines().next().unwrap_or("");
         assert!(!header.contains(text::agent::SEARCH_TRUNCATED), "{header}");
         assert!(
-            expanded.contains("src/baz.rs:3: render…[truncated]"),
+            expanded.contains("src/baz.rs:3: render[truncated]"),
             "{expanded}"
         );
         assert!(

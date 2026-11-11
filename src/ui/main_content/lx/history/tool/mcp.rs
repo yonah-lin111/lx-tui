@@ -103,28 +103,18 @@ fn result_section(
             .summary
             .as_deref()
             .is_some_and(|summary| summary.truncated);
-    if truncated {
-        let ends_with_marker = lines.last().is_some_and(|line| {
-            line.iter()
-                .any(|seg| seg.text.contains(text::agent::INLINE_TRUNCATED))
-        });
-        if !ends_with_marker {
-            lines.push(vec![Segment::new(
-                text::agent::INLINE_TRUNCATED,
-                body_style,
-            )]);
-        }
-    }
     let more = if let Some(error) = error_fallback {
         error.lines().count().saturating_sub(20)
     } else {
         view.result_more
     };
-    if more > 0 && (expanded || !truncated) {
-        lines.push(vec![Segment::new(
-            text::mcp::more_lines(more),
-            style::fold_hint(),
-        )]);
+    if more > 0 {
+        let mut hint = text::mcp::more_lines(more);
+        if truncated {
+            hint.push(' ');
+            hint.push_str(text::agent::INLINE_TRUNCATED);
+        }
+        lines.push(vec![Segment::new(hint, style::fold_hint())]);
     }
     for image in &view.images {
         lines.push(vec![Segment::new(
@@ -141,15 +131,13 @@ fn result_section(
     if lines.is_empty() {
         return None;
     }
-    let preview = (!expanded).then(|| {
-        if truncated {
-            let tail = 1 + view.images.len() + usize::from(view.images_omitted > 0);
-            Preview::head_tail(BLOCK_PREVIEW_ROWS, tail)
-        } else {
-            Preview::head(BLOCK_PREVIEW_ROWS)
-        }
-    });
-    Some(Section::new(vec![Node::block(lines)], preview))
+    Some(
+        Section::new(
+            vec![Node::block(lines)],
+            (!expanded).then(|| Preview::head(BLOCK_PREVIEW_ROWS)),
+        )
+        .with_truncated(truncated),
+    )
 }
 
 pub(super) fn layout(

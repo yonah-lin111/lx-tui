@@ -73,7 +73,7 @@ fn queries_section(view: &WebSearchDetailView, expanded: bool) -> Option<Section
 }
 
 /// 结果单行净化：控制字符转空格（`markdown_render` 不接受裸控制字符），超长截断补 `…`，
-/// 并将旧记录中的 `[...truncated]` 归一为 `…[truncated]`。
+/// 并将 `…[truncated]` / `[...truncated]` 归一为 `[truncated]`。
 fn sanitize_result_line(line: &str) -> String {
     let mut text = String::with_capacity(line.len().min(MAX_RESULT_LINE_CHARS + 4));
     for (count, ch) in line.chars().enumerate() {
@@ -84,6 +84,7 @@ fn sanitize_result_line(line: &str) -> String {
         text.push(if ch.is_control() { ' ' } else { ch });
     }
     text.trim_end()
+        .replace("…[truncated]", text::agent::INLINE_TRUNCATED)
         .replace("[...truncated]", text::agent::INLINE_TRUNCATED)
 }
 
@@ -126,35 +127,24 @@ fn result_section(
     };
     let mut lines = muted_markdown_lines(&raw_source, body_width);
     let truncated = error_fallback.is_none() && view.truncated;
-    if truncated {
-        let ends_with_marker = lines.last().is_some_and(|line| {
-            line.iter()
-                .any(|seg| seg.text.contains(text::agent::INLINE_TRUNCATED))
-        });
-        if !ends_with_marker {
-            lines.push(vec![Segment::new(
-                text::agent::INLINE_TRUNCATED,
-                style::muted(),
-            )]);
+    if more > 0 {
+        let mut hint = text::mcp::more_lines(more);
+        if truncated {
+            hint.push(' ');
+            hint.push_str(text::agent::INLINE_TRUNCATED);
         }
-    }
-    if more > 0 && (expanded || !truncated) {
-        lines.push(vec![Segment::new(
-            text::mcp::more_lines(more),
-            style::fold_hint(),
-        )]);
+        lines.push(vec![Segment::new(hint, style::fold_hint())]);
     }
     if lines.is_empty() {
         return None;
     }
-    let preview = (!expanded).then(|| {
-        if truncated {
-            Preview::head_tail(BLOCK_PREVIEW_ROWS, 1)
-        } else {
-            Preview::head(BLOCK_PREVIEW_ROWS)
-        }
-    });
-    Some(Section::new(vec![Node::block(lines)], preview))
+    Some(
+        Section::new(
+            vec![Node::block(lines)],
+            (!expanded).then(|| Preview::head(BLOCK_PREVIEW_ROWS)),
+        )
+        .with_truncated(truncated),
+    )
 }
 
 pub(super) fn layout(

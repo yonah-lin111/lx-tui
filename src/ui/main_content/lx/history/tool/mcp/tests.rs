@@ -268,8 +268,22 @@ fn truncated_mcp_card_places_marker_in_result_body_not_title() {
     }));
     let mut view = view();
     view.result = (0..10).map(|index| format!("line {index}")).collect();
+    view.result_more = 12;
     let folded = render_with(&call, &view, 100, Folds::default());
     let header = folded.lines().next().unwrap_or("");
     assert!(!header.contains("truncated"), "{header}");
-    assert!(folded.contains(text::agent::INLINE_TRUNCATED), "{folded}");
+    assert!(folded.contains("more lines [truncated]"), "{folded}");
+    let expanded = render_with(
+        &call,
+        &view,
+        100,
+        Folds {
+            body: false,
+            output: true,
+        },
+    );
+    assert!(
+        expanded.contains("… 12 more lines [truncated]"),
+        "{expanded}"
+    );
 }

@@ -81,11 +81,17 @@ pub(crate) struct Section {
     pub(crate) nodes: Vec<Node>,
     /// 折叠预算；`None` 表示该块始终展开。
     pub(crate) preview: Option<Preview>,
+    /// 该块内容在执行阶段是否已被截断（用于在 `… N more lines` 后追加 `[truncated]`）。
+    pub(crate) truncated: bool,
 }
 
 impl Section {
     pub(crate) fn new(nodes: Vec<Node>, preview: Option<Preview>) -> Self {
-        Self { nodes, preview }
+        Self {
+            nodes,
+            preview,
+            truncated: false,
+        }
     }
 
     /// 常显块（状态、参数外的元信息）。
@@ -93,7 +99,14 @@ impl Section {
         Self {
             nodes,
             preview: None,
+            truncated: false,
         }
+    }
+
+    /// 标记该块在执行阶段被截断。
+    pub(crate) fn with_truncated(mut self, truncated: bool) -> Self {
+        self.truncated = truncated;
+        self
     }
 }
 
@@ -224,13 +237,37 @@ pub(crate) fn layout(sections: &[Section], width: u16) -> Layout {
             });
         }
         if section_hidden > 0 {
-            let hint = text::agent::file_diff_more_lines(section_hidden);
+            let mut hint = text::agent::file_diff_more_lines(section_hidden);
+            if section.truncated {
+                hint.push(' ');
+                hint.push_str(text::agent::INLINE_TRUNCATED);
+            }
             if unicode_width::UnicodeWidthStr::width(hint.as_str()) <= body {
                 // 提示行是本块最后可见节点的续行：仍用空白列，不再单独画一个
                 // `└─`，否则长输出里每个折叠块都多一个收口符。
                 rows.push(Row {
                     prefix: "",
                     segments: vec![Segment::new(hint, style::fold_hint())],
+                    node: last_visible,
+                    first: false,
+                });
+            }
+        } else if section.truncated {
+            let already_marked = visible.iter().any(|&index| {
+                lines[index].segments.iter().any(|seg| {
+                    seg.text.contains(text::agent::INLINE_TRUNCATED)
+                        || seg.text.contains("omitted]")
+                })
+            });
+            if !already_marked
+                && unicode_width::UnicodeWidthStr::width(text::agent::INLINE_TRUNCATED) <= body
+            {
+                rows.push(Row {
+                    prefix: "",
+                    segments: vec![Segment::new(
+                        text::agent::INLINE_TRUNCATED,
+                        style::fold_hint(),
+                    )],
                     node: last_visible,
                     first: false,
                 });
