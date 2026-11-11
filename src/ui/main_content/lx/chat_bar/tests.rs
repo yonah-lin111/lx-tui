@@ -11,7 +11,7 @@ use crate::app::state::{
     RequestKey, RequestState, ToolCallView, ToolStatus,
 };
 use crate::chat::events::PartKind;
-use crate::layout::PaneId;
+use crate::tiling::PaneId;
 use crate::ui::text;
 
 /// 测试统计文案：耗时 2.7s 取整 3s + 1280 个 ASCII 字符 ≈ 320 输出 token。

@@ -129,7 +129,7 @@ fn compact_request(
     base_url: String,
 ) -> CompactRequest {
     CompactRequest {
-        pane: crate::layout::PaneId::alloc(),
+        pane: crate::tiling::PaneId::alloc(),
         workspace: fixture.workspace().to_path_buf(),
         session_id: session_id.to_string(),
         expected_revision: revision,

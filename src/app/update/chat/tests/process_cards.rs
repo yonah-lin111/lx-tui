@@ -10,7 +10,7 @@ use crate::chat::plan::{PlanSnapshot, PlanStep, PlanStepStatus};
 use crate::chat::process::{
     ProcessOwner, ProcessResult, ProcessResultKind, ProcessSnapshot, ProcessState,
 };
-use crate::layout::PaneId;
+use crate::tiling::PaneId;
 
 /// 一个助手消息（带一个工具步骤）。
 fn message_with(call: ToolCallView) -> ChatMessageView {

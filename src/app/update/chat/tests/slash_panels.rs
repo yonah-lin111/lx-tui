@@ -177,7 +177,7 @@ fn clear_key_copies_highlighted_session_id_without_clearing_input() {
 
     crate::app::update::apply_lx_input(&mut state, LxInput::Clear);
 
-    let copied: Vec<(String, Option<crate::layout::PaneId>)> = state
+    let copied: Vec<(String, Option<crate::tiling::PaneId>)> = state
         .effects
         .iter()
         .filter_map(|effect| match effect {

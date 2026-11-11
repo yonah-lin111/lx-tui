@@ -221,7 +221,7 @@ fn focusing_right_panel_releases_pane_highlight() {
         &mut state,
         RightTab::Todo
     ));
-    let list = crate::ui::right_panel::todo::list_rect(geo.view.prompt);
+    let list = crate::ui::right_panel::todo::list_rect(geo.view.right_panel);
     let mut sessions = HashMap::new();
     let mut dirty = false;
 
@@ -250,7 +250,7 @@ fn focusing_pane_releases_right_panel_highlight() {
         &mut state,
         RightTab::Todo
     ));
-    let list = crate::ui::right_panel::todo::list_rect(geo.view.prompt);
+    let list = crate::ui::right_panel::todo::list_rect(geo.view.right_panel);
     let mut sessions = HashMap::new();
     let mut dirty = false;
     handle_terminal_event(
@@ -264,7 +264,7 @@ fn focusing_pane_releases_right_panel_highlight() {
     );
     assert!(state.todo_focused());
 
-    let inner = layout::pane_inner_rect(geo.rects[0].1);
+    let inner = tiling::pane_inner_rect(geo.rects[0].1);
     handle_terminal_event(
         mouse(
             MouseEventKind::Down(MouseButton::Left),
@@ -298,7 +298,7 @@ fn focusing_sidebar_releases_other_containers() {
     let mut dirty = false;
 
     // 点 Agents 分区空白（侧栏内、非条目）。
-    let sections = ui::layout::sidebar_sections(geo.view.sidebar, state.agents_collapsed)
+    let sections = ui::layout::sidebar_sections(geo.view.left_panel, state.agents_collapsed)
         .expect("sidebar sections visible");
     handle_terminal_event(
         mouse(
@@ -338,13 +338,14 @@ fn clicking_other_containers_keeps_selected_agent_marker() {
         }),
     ));
     let (config, geo) = toolbar_geometry(&mut state);
-    let sections = ui::layout::sidebar_sections(geo.view.sidebar, state.agents_collapsed)
+    let sections = ui::layout::sidebar_sections(geo.view.left_panel, state.agents_collapsed)
         .expect("sidebar sections visible");
     let mut sessions = HashMap::new();
     let mut dirty = false;
 
     // 1. 点击右侧 Prompt 文本框。
-    let prompt_area = crate::layout::prompt_text_rect(geo.view.prompt);
+    let prompt_area =
+        crate::ui::right_panel::prompt::geometry::prompt_text_rect(geo.view.right_panel);
     handle_terminal_event(
         mouse(
             MouseEventKind::Down(MouseButton::Left),
@@ -468,14 +469,15 @@ fn paste_panel_swallows_mouse_wheel_without_scrolling_underlying_views() {
     let config = Config::default();
     let mut state = AppState::demo();
     let geo = geometry(&state, &config, Rect::new(0, 0, 120, 20));
-    let area = crate::layout::prompt_text_rect(geo.view.prompt);
+    let area = crate::ui::right_panel::prompt::geometry::prompt_text_rect(geo.view.right_panel);
     state.prompt.resize(area.width, area.height);
     state.set_focus(crate::app::state::FocusedContainer::Prompt);
     for i in 0..30 {
         state.prompt.insert_str(&format!("line {i}\n"));
     }
     paste::handle_terminal_paste(&mut state, path_str);
-    let rect = crate::ui::prompt::paste_panel_rect(&state.prompt, area).expect("paste panel");
+    let rect =
+        crate::ui::right_panel::prompt::paste_panel_rect(&state.prompt, area).expect("paste panel");
     let prompt_scroll_before = state.prompt.scroll();
 
     let mut sessions = HashMap::new();
@@ -540,7 +542,7 @@ fn long_text_paste_opens_panel_in_prompt_and_lx_and_up_key_does_not_trigger_hist
     let config = Config::default();
     let mut state = AppState::demo();
     let geo = geometry(&state, &config, Rect::new(0, 0, 120, 24));
-    let area = crate::layout::prompt_text_rect(geo.view.prompt);
+    let area = crate::ui::right_panel::prompt::geometry::prompt_text_rect(geo.view.right_panel);
     state.prompt.resize(area.width, area.height);
 
     // Seed prompt_history so we verify pressing Up in Lx paste panel never recalls history!

@@ -246,7 +246,7 @@ impl ModelsSnapshot {
 /// 一轮请求的归属键：窗格 + 会话 + 代次。
 #[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub struct RequestKey {
-    pub pane: crate::layout::PaneId,
+    pub pane: crate::tiling::PaneId,
     pub session: String,
     pub generation: u64,
 }

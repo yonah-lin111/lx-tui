@@ -64,14 +64,14 @@ pub(crate) use brand::{LOGO_ROWS, LOGO_WIDTH, draw_art};
 
 /// 输入框水平外边距、最小宽度与最小高度（1 内容行 + 上下分割线）；
 /// 边距、高度比例、前缀与滚动条槽与状态层折行宽度共用同一组 `layout` 常量。
-const MARGIN: u16 = crate::layout::LX_INPUT_MARGIN;
+const MARGIN: u16 = crate::tiling::LX_INPUT_MARGIN;
 const MIN_INPUT_WIDTH: u16 = 8;
-const INPUT_MIN_BOX: u16 = crate::layout::LX_INPUT_MIN_BOX;
+const INPUT_MIN_BOX: u16 = crate::tiling::LX_INPUT_MIN_BOX;
 /// 输入框最大高度占内容区高度的百分比。
-const INPUT_MAX_PERCENT: u16 = crate::layout::LX_INPUT_HEIGHT_PERCENT;
+const INPUT_MAX_PERCENT: u16 = crate::tiling::LX_INPUT_HEIGHT_PERCENT;
 /// 输入框 `> ` 前缀列数与右侧滚动条预留列数。
-const INPUT_PREFIX: u16 = crate::layout::LX_INPUT_PREFIX;
-const INPUT_SCROLLBAR: u16 = crate::layout::LX_INPUT_SCROLLBAR;
+const INPUT_PREFIX: u16 = crate::tiling::LX_INPUT_PREFIX;
+const INPUT_SCROLLBAR: u16 = crate::tiling::LX_INPUT_SCROLLBAR;
 /// 入口区：单行高度、横排标签间距（含分隔符）、竖排行距与区块间距。
 const ENTRY_HEIGHT: u16 = 1;
 const ENTRY_GAP: u16 = 3;

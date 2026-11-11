@@ -16,7 +16,7 @@
 
 use crate::app::state::{AppState, ChatMessageView, RequestKey, ToolStatus};
 use crate::chat::process::ProcessUiEvent;
-use crate::layout::PaneId;
+use crate::tiling::PaneId;
 use crate::ui::text;
 
 use super::refresh_lx_status;

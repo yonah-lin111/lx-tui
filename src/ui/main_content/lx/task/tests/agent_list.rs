@@ -369,7 +369,7 @@ fn wide_detail_run() -> SubagentRun {
     run
 }
 
-fn state_with_detail(run: SubagentRun) -> (AppState, crate::layout::PaneId) {
+fn state_with_detail(run: SubagentRun) -> (AppState, crate::tiling::PaneId) {
     let mut state = AppState::demo();
     let pane = state.active_tab().layout.focus();
     let target = state.pane_mut_anywhere(pane).expect("pane");

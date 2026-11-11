@@ -126,8 +126,10 @@ fn parse_trailing_title(rest: &str) -> Option<Option<&str>> {
     None
 }
 
-/// 查找光标字节偏移所在的 `+++` 补充块（支持独立块或嵌套在 `&&&` 内）；
+/// 查找光标字节偏移所在的 `+++` 补充块（支持独立块、嵌套在 `&&&` 内或 `+++` 互相嵌套）；
 /// 返回 `(start_line, end_line, closed)`。不在 `+++` 内返回 None。
+///
+/// 起止行用栈跟踪并按围栏状态跳过代码块内容；嵌套时返回包含光标的最内层块。
 pub fn find_enclosing_supple_block(text: &str, cursor: usize) -> Option<(usize, usize, bool)> {
     if cursor > text.len() || !text.is_char_boundary(cursor) {
         return None;
@@ -135,7 +137,7 @@ pub fn find_enclosing_supple_block(text: &str, cursor: usize) -> Option<(usize, 
     let cursor_line = text[..cursor].matches('\n').count();
     let lines: Vec<&str> = text.split('\n').collect();
     let mut fence: Option<(u8, usize)> = None;
-    let mut current_start: Option<usize> = None;
+    let mut stack: Vec<usize> = Vec::new();
     let mut supple_spans = Vec::new();
 
     for (index, line) in lines.iter().enumerate() {
@@ -149,19 +151,20 @@ pub fn find_enclosing_supple_block(text: &str, cursor: usize) -> Option<(usize, 
             fence = Some(delim);
             continue;
         }
-        if let Some(start) = current_start {
-            if parse_supple_end_line(line).is_some() {
-                supple_spans.push((start, index, true));
-                current_start = None;
-            }
-        } else if parse_supple_start_line(line).is_some() {
-            current_start = Some(index);
+        if parse_supple_start_line(line).is_some() {
+            stack.push(index);
+        } else if parse_supple_end_line(line).is_some()
+            && let Some(start) = stack.pop()
+        {
+            supple_spans.push((start, index, true));
         }
     }
-    if let Some(start) = current_start {
-        supple_spans.push((start, lines.len().saturating_sub(1), false));
-    }
+    let last = lines.len().saturating_sub(1);
+    supple_spans.extend(stack.into_iter().map(|start| (start, last, false)));
+    // 闭合顺序是内层先于外层；按起始行升序后反向查找，命中的就是包含光标的最内层块。
+    supple_spans.sort_by_key(|&(start, _, _)| start);
     supple_spans
         .into_iter()
+        .rev()
         .find(|&(start, end, _)| cursor_line >= start && cursor_line <= end)
 }

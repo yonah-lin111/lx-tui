@@ -24,6 +24,7 @@ impl Prompt {
         let mut end_line = lines.len().saturating_sub(1);
         let mut closed = false;
         let mut fence: Option<(u8, usize)> = None;
+        let mut depth = 0usize;
         for (idx, line) in lines.iter().enumerate().skip(start_line + 1) {
             if let Some((marker, length)) = fence {
                 if markdown::fence_delimiter(line).is_some_and(|(m, l)| m == marker && l >= length)
@@ -36,10 +37,17 @@ impl Prompt {
                 fence = Some(delim);
                 continue;
             }
+            if markdown::parse_supple_start_line(line).is_some() {
+                depth += 1;
+                continue;
+            }
             if markdown::parse_supple_end_line(line).is_some() {
-                end_line = idx;
-                closed = true;
-                break;
+                if depth == 0 {
+                    end_line = idx;
+                    closed = true;
+                    break;
+                }
+                depth -= 1;
             }
         }
         let (end_start, _) = self.line_bounds(end_line)?;
@@ -50,6 +58,58 @@ impl Prompt {
         };
         let from = start_end + 1;
         (from <= to && to <= self.text.len()).then_some(self.text[from..to].to_string())
+    }
+
+    /// 当前 `+++` 关联的外层 `&&&` 直接正文；无关联模板返回 None。
+    ///
+    /// 正常 `/supplement` 把 `+++` 追加到 `&&&` 结束行之后，是兄弟块；因此优先取
+    /// 包含当前 `+++` 的模板，否则取最近的前置闭合模板。支持页面内多个 `&&&`。
+    /// 结构定位在遮罩后的文本上进行（粘贴内容不参与块解析），正文从原始文本切片。
+    pub fn enclosing_template_body(&self, supple_start_line: usize) -> Option<String> {
+        let masked = mask_pasted_text(&self.text);
+        let lines: Vec<&str> = masked.split('\n').collect();
+        lines.get(supple_start_line)?;
+        let mut fence: Option<(u8, usize)> = None;
+        let mut open: Option<usize> = None;
+        let mut spans: Vec<(usize, usize, bool)> = Vec::new();
+        for (index, line) in lines.iter().enumerate() {
+            if let Some((marker, length)) = fence {
+                if markdown::fence_delimiter(line).is_some_and(|(m, l)| m == marker && l >= length)
+                {
+                    fence = None;
+                }
+                continue;
+            }
+            if let Some(delim) = markdown::fence_delimiter(line) {
+                fence = Some(delim);
+                continue;
+            }
+            if let Some(start) = open {
+                if markdown::parse_template_end_line(line).is_some() {
+                    spans.push((start, index, true));
+                    open = None;
+                }
+            } else if markdown::parse_template_start_line(line).is_some() {
+                open = Some(index);
+            }
+        }
+        if let Some(start) = open {
+            spans.push((start, lines.len().saturating_sub(1), false));
+        }
+
+        let (start, end, _) = spans
+            .iter()
+            .copied()
+            .find(|(start, end, _)| *start < supple_start_line && supple_start_line <= *end)
+            .or_else(|| {
+                spans
+                    .iter()
+                    .copied()
+                    .rev()
+                    .find(|(_, end, closed)| *closed && *end < supple_start_line)
+            })?;
+        let (from, to, _) = self.inner_span(TemplateBlockRange { start, end })?;
+        Some(self.text[from..to].to_string())
     }
 
     /// 更新或恢复指定块起始行下一行的 `{title: ...}`，并自动平移光标。

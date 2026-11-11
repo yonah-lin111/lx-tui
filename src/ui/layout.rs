@@ -3,19 +3,18 @@
 use ratatui::layout::Rect;
 
 use crate::config::Config;
-use crate::layout::COLLAPSED_STRIP;
+use crate::tiling::COLLAPSED_STRIP;
 
 /// 主界面四个区域的矩形。
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct ViewLayout {
-    pub sidebar: Rect,
+    pub left_panel: Rect,
     pub tab_bar: Rect,
-    pub panes: Rect,
-    /// 右侧统一容器（外框 + `Prompt`/`Todo` tab + 底边框身份标签）；字段名沿用历史，
-    /// 语义是"prompt 这一列"，即容器。
-    pub prompt: Rect,
-    /// prompt 是否位于主区左侧（与 panes 互换）。
-    pub prompt_left: bool,
+    pub main_content: Rect,
+    /// 右侧统一容器（外框 + `Prompt`/`Todo` tab + 底边框身份标签）。
+    pub right_panel: Rect,
+    /// 右栏是否位于主内容左侧（与 main_content 互换）。
+    pub right_panel_left: bool,
 }
 
 /// 划分主界面；标签栏横跨主区与 prompt 栏，prompt 与窗格同顶同底；
@@ -32,7 +31,7 @@ pub fn compute(
     panes_collapsed: bool,
 ) -> ViewLayout {
     let sidebar_width = resolved_sidebar_width(area, config, sidebar_collapsed, sidebar_width);
-    let sidebar = Rect {
+    let left_panel = Rect {
         width: sidebar_width,
         ..area
     };
@@ -65,13 +64,13 @@ pub fn compute(
     } else {
         (main_x, area.x + area.width - prompt_width)
     };
-    let prompt = Rect {
+    let right_panel = Rect {
         x: prompt_x,
         y: body_y,
         width: prompt_width,
         height: body_height,
     };
-    let panes = Rect {
+    let main_content = Rect {
         x: panes_x,
         y: body_y,
         width: main_width,
@@ -79,11 +78,11 @@ pub fn compute(
     };
 
     ViewLayout {
-        sidebar,
+        left_panel,
         tab_bar,
-        panes,
-        prompt,
-        prompt_left,
+        main_content,
+        right_panel,
+        right_panel_left: prompt_left,
     }
 }
 
@@ -157,26 +156,33 @@ pub fn default_side_width(area: Rect, config: &Config, sidebar_collapsed: bool) 
 /// 上限同时受配置与"主区至少 `min_pane_width`"约束；空间不足时回退最小宽度。
 pub fn sidebar_width_at(view: &ViewLayout, config: &Config, boundary_x: u16) -> u16 {
     let total = view
-        .panes
+        .main_content
         .right()
-        .saturating_sub(view.sidebar.x)
-        .max(view.sidebar.width);
+        .saturating_sub(view.left_panel.x)
+        .max(view.left_panel.width);
     let max = config
         .sidebar_max_width
         .min(total.saturating_sub(config.min_pane_width))
         .max(config.sidebar_min_width);
-    let desired = boundary_x.saturating_sub(view.sidebar.x).saturating_add(1);
+    let desired = boundary_x
+        .saturating_sub(view.left_panel.x)
+        .saturating_add(1);
     desired.clamp(config.sidebar_min_width, max)
 }
 
 /// 拖拽分割线到屏幕列 `boundary_x` 时 prompt 应有的宽度（屏幕坐标）；
 /// 按 prompt 所在侧换算：prompt 临靠哪条分割线，哪列就映射为当前宽度。
 pub fn prompt_width_at(view: &ViewLayout, boundary_x: u16, min_width: u16) -> u16 {
-    let available = view.panes.width.saturating_add(view.prompt.width);
-    let width = if view.prompt_left {
-        boundary_x.saturating_sub(view.prompt.x).saturating_add(1)
+    let available = view
+        .main_content
+        .width
+        .saturating_add(view.right_panel.width);
+    let width = if view.right_panel_left {
+        boundary_x
+            .saturating_sub(view.right_panel.x)
+            .saturating_add(1)
     } else {
-        view.prompt.right().saturating_sub(boundary_x)
+        view.right_panel.right().saturating_sub(boundary_x)
     };
     clamp_prompt_width(available, width, min_width)
 }

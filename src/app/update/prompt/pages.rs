@@ -11,7 +11,7 @@ use crate::app::state::AppState;
 use crate::ui::text;
 
 use super::pages_view::{clamp_page_view, hide_prompt_pages, prompt_pages_mode};
-use super::{commit_editing_prompt, prompt_tree_visible_rows};
+use super::{commit_editing_prompt, prompt_tree_visible_rows, workspace_cwd};
 
 /// 相对切页（标题行箭头与 `Ctrl/Cmd+←/→`）；越界或无法切页返回 false。
 pub fn switch_prompt_page(state: &mut AppState, delta: isize) -> bool {
@@ -738,12 +738,4 @@ pub(super) fn next_default_page_name(pages: &[PromptPage]) -> String {
         }
         index += 1;
     }
-}
-
-/// 工作区 cwd；工作区已关闭时为 None。
-pub(super) fn workspace_cwd(state: &AppState, workspace: usize) -> Option<std::path::PathBuf> {
-    state
-        .workspaces
-        .get(workspace)
-        .and_then(|workspace| workspace.cwd.clone())
 }

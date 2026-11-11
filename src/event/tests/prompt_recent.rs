@@ -36,8 +36,12 @@ fn click(state: &mut AppState, geo: &Geometry, column: u16, row: u16) {
 }
 
 fn drawer_rects(state: &AppState, geo: &Geometry) -> (Rect, Rect) {
-    let rows = ui::prompt_frame::recent_rows(state);
-    let split = crate::layout::prompt_body_split(geo.view.prompt, true, rows.len());
+    let rows = ui::right_panel::prompt::frame::recent_rows(state);
+    let split = crate::ui::right_panel::prompt::geometry::prompt_body_split(
+        geo.view.right_panel,
+        true,
+        rows.len(),
+    );
     (
         split.recent_text.expect("drawer content"),
         split.recent_scrollbar.expect("drawer scrollbar gutter"),
@@ -76,9 +80,9 @@ fn clicking_rec_button_toggles_drawer() {
     let mut state = paged_prompt_state();
     update::focus_prompt(&mut state);
     let geo = geometry(&state, &config, Rect::new(0, 0, 140, 30));
-    let rec = crate::layout::prompt_toolbar_button_rect(
-        geo.view.prompt,
-        crate::layout::PromptToolbarButton::Recent,
+    let rec = crate::ui::right_panel::prompt::geometry::prompt_toolbar_button_rect(
+        geo.view.right_panel,
+        crate::ui::right_panel::prompt::geometry::PromptToolbarButton::Recent,
         PromptMode::Editor,
         Some("1/2"),
     )
@@ -97,7 +101,7 @@ fn clicking_recent_entry_opens_page_and_closes_drawer() {
     let geo = geometry(&state, &config, Rect::new(0, 0, 140, 30));
     key(&mut state, &geo, KeyCode::Char('r'), KeyModifiers::CONTROL);
     let (area, _) = drawer_rects(&state, &geo);
-    let rows = ui::prompt_frame::recent_rows(&state);
+    let rows = ui::right_panel::prompt::frame::recent_rows(&state);
     let beta = rows
         .iter()
         .position(|row| row.page_id == crate::app::prompt::PromptPageId::Saved(70))
@@ -133,7 +137,7 @@ fn clicking_recent_entry_opens_from_tree_and_pages() {
         let geo = geometry(&state, &config, Rect::new(0, 0, 140, 30));
         key(&mut state, &geo, KeyCode::Char('r'), KeyModifiers::CONTROL);
         let (area, _) = drawer_rects(&state, &geo);
-        let rows = ui::prompt_frame::recent_rows(&state);
+        let rows = ui::right_panel::prompt::frame::recent_rows(&state);
         let beta = rows
             .iter()
             .position(|row| row.page_id == crate::app::prompt::PromptPageId::Saved(70))
@@ -176,7 +180,7 @@ fn recent_scrollbar_supports_track_click_and_thumb_drag() {
     // 本用例只验证滚动条：把键盘选中与滚动归零，确保轨道点击从顶部开始。
     state.workspaces[0].prompt_panel.recent_active = None;
     state.workspaces[0].prompt_panel.recent_scroll = 0;
-    let bar = ui::prompt_frame::prompt_recent_scrollbar(geo.view.prompt, &state)
+    let bar = ui::right_panel::prompt::frame::prompt_recent_scrollbar(geo.view.right_panel, &state)
         .expect("recent scrollbar");
     // 轨道点击：跳转到非零偏移。
     click(&mut state, &geo, bar.thumb.x, bar.track.bottom() - 1);
@@ -187,7 +191,7 @@ fn recent_scrollbar_supports_track_click_and_thumb_drag() {
     );
 
     // thumb 拖拽：按下进入拖拽，移动更新偏移，松开清空。
-    let bar = ui::prompt_frame::prompt_recent_scrollbar(geo.view.prompt, &state)
+    let bar = ui::right_panel::prompt::frame::prompt_recent_scrollbar(geo.view.right_panel, &state)
         .expect("recent scrollbar");
     click(&mut state, &geo, bar.thumb.x, bar.thumb.y);
     assert_eq!(state.prompt_recent_scroll_drag, Some(0));
@@ -287,8 +291,9 @@ fn close_button_and_escape_restore_previous_view() {
     update::show_prompt_tree(&mut state);
     let geo = geometry(&state, &config, Rect::new(0, 0, 140, 30));
     key(&mut state, &geo, KeyCode::Char('r'), KeyModifiers::CONTROL);
-    let close = ui::prompt_frame::prompt_recent_close_rect(geo.view.prompt, &state)
-        .expect("drawer close button");
+    let close =
+        ui::right_panel::prompt::frame::prompt_recent_close_rect(geo.view.right_panel, &state)
+            .expect("drawer close button");
     click(&mut state, &geo, close.x + 1, close.y);
     assert!(!state.workspaces[0].prompt_panel.recent_open);
     assert_eq!(
@@ -336,9 +341,13 @@ fn keyboard_navigation_keeps_selection_visible() {
     update::focus_prompt(&mut state);
     let geo = geometry(&state, &config, Rect::new(0, 0, 140, 20));
     key(&mut state, &geo, KeyCode::Char('r'), KeyModifiers::CONTROL);
-    let rows = ui::prompt_frame::recent_rows(&state);
-    let visible =
-        crate::layout::prompt_body_split(geo.view.prompt, true, rows.len()).visible_entries;
+    let rows = ui::right_panel::prompt::frame::recent_rows(&state);
+    let visible = crate::ui::right_panel::prompt::geometry::prompt_body_split(
+        geo.view.right_panel,
+        true,
+        rows.len(),
+    )
+    .visible_entries;
     for _ in 0..3 {
         key(&mut state, &geo, KeyCode::Up, KeyModifiers::NONE);
         let panel = &state.workspaces[0].prompt_panel;
@@ -374,8 +383,8 @@ fn hovering_recent_entry_sets_and_clears_highlight() {
     handle_terminal_event(
         mouse(
             MouseEventKind::Moved,
-            geo.view.prompt.x + 2,
-            geo.view.prompt.y + 2,
+            geo.view.right_panel.x + 2,
+            geo.view.right_panel.y + 2,
         ),
         &mut state,
         &mut sessions,

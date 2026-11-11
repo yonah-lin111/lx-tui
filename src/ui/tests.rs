@@ -12,6 +12,7 @@ use crate::app::trust::TrustWorkspace;
 
 use crate::app::tooltip::{TOOLTIP_DELAY, Tooltip, TooltipTarget};
 use crate::app::update;
+use crate::ui::right_panel::prompt::frame::prompt_scrollbar;
 use ratatui::Terminal as RatatuiTerminal;
 use ratatui::backend::TestBackend;
 use std::path::{Path, PathBuf};
@@ -49,8 +50,8 @@ fn render_buffer(state: &AppState) -> ratatui::buffer::Buffer {
 fn prompt_line(lines: &[String], view: &layout::ViewLayout, y: u16) -> String {
     lines[y as usize]
         .chars()
-        .skip(view.prompt.x as usize)
-        .take(view.prompt.width as usize)
+        .skip(view.right_panel.x as usize)
+        .take(view.right_panel.width as usize)
         .collect()
 }
 
@@ -264,7 +265,7 @@ fn agents_header_is_left_aligned_without_junctions() {
     let state = AppState::demo();
     let view = view_for(&state);
     let lines = render_lines(&state);
-    let sections = layout::sidebar_sections(view.sidebar, false).expect("sections are visible");
+    let sections = layout::sidebar_sections(view.left_panel, false).expect("sections are visible");
     let row: Vec<char> = lines[sections.divider.y as usize].chars().collect();
     let divider: String = (sections.divider.x..sections.divider.right())
         .map(|x| row[x as usize])
@@ -283,7 +284,7 @@ fn agents_header_is_left_aligned_without_junctions() {
     assert_eq!(cell.fg, ratatui::style::Color::Cyan);
     assert!(cell.modifier.contains(ratatui::style::Modifier::DIM));
 
-    let top: Vec<char> = lines[view.sidebar.y as usize].chars().collect();
+    let top: Vec<char> = lines[view.left_panel.y as usize].chars().collect();
     let workspaces_start = top
         .iter()
         .position(|symbol| *symbol == 'W')
@@ -299,7 +300,7 @@ fn agents_header_is_left_aligned_without_junctions() {
 fn agents_section_below_header_shows_empty_hint_only() {
     let state = AppState::demo();
     let view = view_for(&state);
-    let sections = layout::sidebar_sections(view.sidebar, false).expect("sections are visible");
+    let sections = layout::sidebar_sections(view.left_panel, false).expect("sections are visible");
     let lines = render_lines(&state);
     for (index, line) in lines[sections.agents.y as usize..sections.agents.bottom() as usize]
         .iter()
@@ -307,8 +308,8 @@ fn agents_section_below_header_shows_empty_hint_only() {
     {
         let row: String = line
             .chars()
-            .skip(view.sidebar.x as usize)
-            .take(view.sidebar.width as usize)
+            .skip(view.left_panel.x as usize)
+            .take(view.left_panel.width as usize)
             .collect();
         let content = row.trim_matches(|symbol| symbol == '│' || symbol == ' ');
         if index == 0 {
@@ -341,7 +342,7 @@ fn agents_button_aligns_with_panel_button_and_toggles_header() {
     let agents_button = button_for_state(&view, true, CollapseTarget::Agents);
     assert!(agents_button.collapsed);
     assert_eq!(agents_button.area.x, sidebar_button.area.x);
-    assert_eq!(agents_button.area.y, view.sidebar.bottom() - 2);
+    assert_eq!(agents_button.area.y, view.left_panel.bottom() - 2);
     let lines = render_lines(&state);
     assert!(lines[agents_button.area.y as usize].contains(text::AGENTS_EXPAND_LABEL));
     assert!(
@@ -362,9 +363,9 @@ fn collapsed_agents_header_docks_above_bottom_border() {
     let mut state = AppState::demo();
     update::apply(Action::ToggleAgents, &mut state);
     let view = view_for(&state);
-    let sections = layout::sidebar_sections(view.sidebar, true).expect("sections are visible");
+    let sections = layout::sidebar_sections(view.left_panel, true).expect("sections are visible");
     assert_eq!(sections.agents.height, 0);
-    assert_eq!(sections.divider.y, view.sidebar.bottom() - 2);
+    assert_eq!(sections.divider.y, view.left_panel.bottom() - 2);
     let lines = render_lines(&state);
     assert!(lines[sections.divider.y as usize].contains(text::SIDEBAR_AGENTS_TITLE));
 }
@@ -377,27 +378,31 @@ fn collapsed_labels_fill_content_area_with_continuous_separator() {
     let view = view_for(&state);
     let lines = render_lines(&state);
 
-    let sidebar_row: Vec<char> = lines[view.sidebar.bottom() as usize - 1].chars().collect();
-    let sidebar_start = collapsed_content_x(view.sidebar, true);
-    assert_eq!(sidebar_start, view.sidebar.x);
-    let sidebar_label: String = (sidebar_start..view.sidebar.right() - 1)
+    let sidebar_row: Vec<char> = lines[view.left_panel.bottom() as usize - 1]
+        .chars()
+        .collect();
+    let sidebar_start = collapsed_content_x(view.left_panel, true);
+    assert_eq!(sidebar_start, view.left_panel.x);
+    let sidebar_label: String = (sidebar_start..view.left_panel.right() - 1)
         .map(|x| sidebar_row[x as usize])
         .collect();
     assert_eq!(sidebar_label, text::SIDEBAR_EXPAND_LABEL);
     assert_eq!(
-        sidebar_row[(view.sidebar.right() - 1) as usize].to_string(),
+        sidebar_row[(view.left_panel.right() - 1) as usize].to_string(),
         text::STRIP_LINE
     );
 
-    let prompt_row: Vec<char> = lines[view.prompt.bottom() as usize - 1].chars().collect();
-    let prompt_start = collapsed_content_x(view.prompt, false);
-    assert_eq!(prompt_start, view.prompt.x + 1);
-    let prompt_label: String = (prompt_start..view.prompt.right())
+    let prompt_row: Vec<char> = lines[view.right_panel.bottom() as usize - 1]
+        .chars()
+        .collect();
+    let prompt_start = collapsed_content_x(view.right_panel, false);
+    assert_eq!(prompt_start, view.right_panel.x + 1);
+    let prompt_label: String = (prompt_start..view.right_panel.right())
         .map(|x| prompt_row[x as usize])
         .collect();
     assert_eq!(prompt_label, text::RIGHT_EXPAND_LABEL);
     assert_eq!(
-        prompt_row[view.prompt.x as usize].to_string(),
+        prompt_row[view.right_panel.x as usize].to_string(),
         text::STRIP_LINE
     );
 }
@@ -413,8 +418,8 @@ fn collapsed_strips_hide_panel_content() {
     let strip = |y: usize| -> String {
         lines[y]
             .chars()
-            .skip(view.sidebar.x as usize)
-            .take(view.sidebar.width as usize)
+            .skip(view.left_panel.x as usize)
+            .take(view.left_panel.width as usize)
             .collect()
     };
     assert_eq!(strip(1), "   │");
@@ -423,12 +428,12 @@ fn collapsed_strips_hide_panel_content() {
     let prompt = |y: usize| -> String {
         lines[y]
             .chars()
-            .skip(view.prompt.x as usize)
-            .take(view.prompt.width as usize)
+            .skip(view.right_panel.x as usize)
+            .take(view.right_panel.width as usize)
             .collect()
     };
     // 折叠按钮贴窄条底行，其余行是纯窄条。
-    assert_eq!(prompt(view.prompt.y as usize), "│   ");
+    assert_eq!(prompt(view.right_panel.y as usize), "│   ");
     assert_eq!(prompt(10), "│   ");
 }
 
@@ -496,7 +501,7 @@ fn resize_hint_highlights_divider_on_hover() {
         panic!("draw failed: {error}");
     }
     let plain = terminal.backend().buffer().clone();
-    let left = &plain[(view.prompt.x, 10)];
+    let left = &plain[(view.right_panel.x, 10)];
     assert_ne!(left.fg, ratatui::style::Color::Cyan);
 
     state.prompt_hover = true;
@@ -504,7 +509,7 @@ fn resize_hint_highlights_divider_on_hover() {
         panic!("draw failed: {error}");
     }
     let hovered = terminal.backend().buffer().clone();
-    for column in [view.prompt.x - 1, view.prompt.x] {
+    for column in [view.right_panel.x - 1, view.right_panel.x] {
         let cell = &hovered[(column, 10)];
         assert_eq!(cell.symbol(), text::STRIP_LINE);
         assert_eq!(cell.fg, ratatui::style::Color::Cyan);
@@ -618,7 +623,7 @@ fn tooltip_over_prompt_search_hides_hardware_cursor() {
 fn toast_over_prompt_search_hides_hardware_cursor() {
     let mut state = focused_tree_state();
     let view = view_for(&state);
-    let message = "x".repeat(usize::from(view.prompt.width.saturating_sub(8)));
+    let message = "x".repeat(usize::from(view.right_panel.width.saturating_sub(8)));
     let anchor = state.prompt.id();
     update::show_toast(
         &mut state,
@@ -679,9 +684,9 @@ fn error_toast_uses_danger_red_border() {
     );
     let config = Config::default();
     let view = view_for(&state);
-    let pane_rects = crate::layout::pane_rects(
+    let pane_rects = crate::tiling::pane_rects(
         &state.active_tab().layout,
-        view.panes,
+        view.main_content,
         config.min_pane_width,
         config.min_pane_height,
     );
@@ -709,14 +714,14 @@ fn add_workspace_button_sits_at_sidebar_top_border_right() {
     let button = add_workspace_button(&view).expect("button is visible");
     let mode_button = workspace_mode_button(&view).expect("mode button is visible");
     // 顶边框右端：`[+] [≡]`，列表按钮居右端，新建按钮紧邻其左侧 1 列。
-    assert_eq!(button.y, view.sidebar.y);
-    assert_eq!(mode_button.right(), view.sidebar.right() - 1);
+    assert_eq!(button.y, view.left_panel.y);
+    assert_eq!(mode_button.right(), view.left_panel.right() - 1);
     assert_eq!(button.right() + 1, mode_button.x);
     assert_eq!(
         button.width,
         text::ADD_WORKSPACE_LABEL.chars().count() as u16
     );
-    assert!(button.x > view.sidebar.x);
+    assert!(button.x > view.left_panel.x);
 
     let lines = render_lines(&state);
     let row: Vec<char> = lines[button.y as usize].chars().collect();
@@ -731,7 +736,7 @@ fn workspace_items_hit_full_list_rows() {
     let mut state = AppState::demo();
     update::create_workspace(&mut state);
     let view = view_for(&state);
-    let sections = layout::sidebar_sections(view.sidebar, false).expect("sections are visible");
+    let sections = layout::sidebar_sections(view.left_panel, false).expect("sections are visible");
     let first_row = sections.workspaces.y;
     assert_eq!(
         workspace_item_at(&view, &state, sections.workspaces.x, first_row),
@@ -760,7 +765,7 @@ fn workspace_list_blank_hits_rows_below_items_only() {
     let mut state = AppState::demo();
     update::create_workspace(&mut state);
     let view = view_for(&state);
-    let sections = layout::sidebar_sections(view.sidebar, false).expect("sections are visible");
+    let sections = layout::sidebar_sections(view.left_panel, false).expect("sections are visible");
     let list = sections.workspaces;
     assert!(
         !workspace_list_blank_at(&view, &state, list.x, list.y),
@@ -804,7 +809,7 @@ fn workspace_list_last_row_is_hittable_without_footer() {
         update::create_workspace(&mut state);
     }
     let view = view_for(&state);
-    let sections = layout::sidebar_sections(view.sidebar, false).expect("sections are visible");
+    let sections = layout::sidebar_sections(view.left_panel, false).expect("sections are visible");
     let last = sections.workspaces.bottom() - 1;
     let index = usize::from(last - sections.workspaces.y);
     assert_eq!(
@@ -833,7 +838,7 @@ fn workspace_scrollbar_appears_only_on_overflow() {
     }
     let view = view_for(&state);
     let bar = workspace_scrollbar(&view, &state).expect("scrollbar is visible");
-    let sections = layout::sidebar_sections(view.sidebar, false).expect("sections are visible");
+    let sections = layout::sidebar_sections(view.left_panel, false).expect("sections are visible");
     let list = sections.workspaces;
     assert_eq!(bar.track.x, list.right() - 1);
     assert_eq!(bar.track.y, list.y);
@@ -853,7 +858,7 @@ fn workspace_list_renders_scrolled_window_and_scrollbar() {
         workspace.name = format!("w{index}");
     }
     let view = view_for(&state);
-    let sections = layout::sidebar_sections(view.sidebar, false).expect("sections are visible");
+    let sections = layout::sidebar_sections(view.left_panel, false).expect("sections are visible");
     let list = sections.workspaces;
     let rows = usize::from(list.height);
     state.workspace_scroll = update::workspace_scroll_max(&state, rows);
@@ -882,7 +887,7 @@ fn workspace_item_at_follows_scroll_offset_and_excludes_scrollbar() {
         update::create_workspace(&mut state);
     }
     let view = view_for(&state);
-    let sections = layout::sidebar_sections(view.sidebar, false).expect("sections are visible");
+    let sections = layout::sidebar_sections(view.left_panel, false).expect("sections are visible");
     let list = sections.workspaces;
     state.workspace_scroll = 5;
     assert_eq!(workspace_item_at(&view, &state, list.x, list.y), Some(5));
@@ -952,20 +957,32 @@ fn long_initial_workspace_name_keeps_marker_visible() {
 fn sidebar_boundary_hits_adjacent_columns_in_pane_rows() {
     let state = AppState::demo();
     let view = view_for(&state);
-    let left = view.sidebar.right() - 1;
-    let right = view.sidebar.right();
-    assert!(sidebar_boundary_at(&view, left, view.panes.y));
-    assert!(sidebar_boundary_at(&view, right, view.panes.bottom() - 1));
-    assert!(!sidebar_boundary_at(&view, left, view.panes.y - 1));
-    assert!(!sidebar_boundary_at(&view, left - 1, view.panes.y));
+    let left = view.left_panel.right() - 1;
+    let right = view.left_panel.right();
+    assert!(left_panel_boundary_at(&view, left, view.main_content.y));
+    assert!(left_panel_boundary_at(
+        &view,
+        right,
+        view.main_content.bottom() - 1
+    ));
+    assert!(!left_panel_boundary_at(
+        &view,
+        left,
+        view.main_content.y - 1
+    ));
+    assert!(!left_panel_boundary_at(
+        &view,
+        left - 1,
+        view.main_content.y
+    ));
 
     let mut collapsed = AppState::demo();
     collapsed.sidebar_collapsed = true;
     let view = view_for(&collapsed);
-    assert!(!sidebar_boundary_at(
+    assert!(!left_panel_boundary_at(
         &view,
-        view.sidebar.right() - 1,
-        view.panes.y
+        view.left_panel.right() - 1,
+        view.main_content.y
     ));
 }
 
@@ -974,10 +991,10 @@ fn sidebar_boundary_hit_uses_runtime_width() {
     let mut state = AppState::demo();
     state.sidebar_width = 32;
     let view = view_for(&state);
-    assert_eq!(view.sidebar.width, 32);
-    assert!(sidebar_boundary_at(&view, 31, view.panes.y));
-    assert!(sidebar_boundary_at(&view, 32, view.panes.y));
-    assert!(!sidebar_boundary_at(&view, 23, view.panes.y));
+    assert_eq!(view.left_panel.width, 32);
+    assert!(left_panel_boundary_at(&view, 31, view.main_content.y));
+    assert!(left_panel_boundary_at(&view, 32, view.main_content.y));
+    assert!(!left_panel_boundary_at(&view, 23, view.main_content.y));
 }
 
 #[test]
@@ -986,7 +1003,7 @@ fn workspace_drop_index_maps_rows_with_scroll_and_clamps() {
     update::create_workspace(&mut state);
     update::create_workspace(&mut state);
     let view = view_for(&state);
-    let sections = layout::sidebar_sections(view.sidebar, false).expect("sections are visible");
+    let sections = layout::sidebar_sections(view.left_panel, false).expect("sections are visible");
     let list_y = sections.workspaces.y;
     assert_eq!(workspace_drop_index(&view, &state, list_y), Some(0));
     assert_eq!(workspace_drop_index(&view, &state, list_y + 2), Some(2));
@@ -1018,7 +1035,7 @@ fn workspace_rows_mark_selected_and_fill_hover_backgrounds() {
     }
     let buffer = terminal.backend().buffer().clone();
     let view = view_for(&state);
-    let sections = layout::sidebar_sections(view.sidebar, false).expect("sections are visible");
+    let sections = layout::sidebar_sections(view.left_panel, false).expect("sections are visible");
     let x = sections.workspaces.x;
     let y = sections.workspaces.y;
     let right = sections.workspaces.right() - 1;
@@ -1069,7 +1086,7 @@ fn hovered_parent_workspace_item_uses_selection_background() {
     }
     let buffer = terminal.backend().buffer().clone();
     let view = view_for(&state);
-    let sections = layout::sidebar_sections(view.sidebar, false).expect("sections are visible");
+    let sections = layout::sidebar_sections(view.left_panel, false).expect("sections are visible");
     let x = sections.workspaces.x;
     let y = sections.workspaces.y;
     let arrow_x = x + 2;
@@ -1147,7 +1164,7 @@ fn dragged_workspace_item_renders_selection() {
     }
     let buffer = terminal.backend().buffer().clone();
     let view = view_for(&state);
-    let sections = layout::sidebar_sections(view.sidebar, false).expect("sections are visible");
+    let sections = layout::sidebar_sections(view.left_panel, false).expect("sections are visible");
     let y = sections.workspaces.y;
     assert!(
         !buffer[(sections.workspaces.x, y)]
@@ -1187,7 +1204,7 @@ fn drag_highlight_marks_group_only_after_pointer_move() {
     let mut terminal =
         RatatuiTerminal::new(TestBackend::new(100, 24)).expect("test backend is infallible");
     let view = view_for(&state);
-    let sections = layout::sidebar_sections(view.sidebar, false).expect("sections are visible");
+    let sections = layout::sidebar_sections(view.left_panel, false).expect("sections are visible");
     let mut observe = |state: &AppState| {
         if let Err(error) = terminal.draw(|frame| render(frame, state, &config)) {
             panic!("draw failed: {error}");
@@ -1225,8 +1242,8 @@ fn panel_collapse_buttons_sit_on_bottom_border() {
     let sidebar = button_for(&view, CollapseTarget::Sidebar);
     let prompt = button_for(&view, CollapseTarget::Prompt);
     assert!(!sidebar.collapsed && !prompt.collapsed);
-    assert_eq!(sidebar.area.y, view.sidebar.bottom() - 1);
-    assert_eq!(prompt.area.y, view.prompt.bottom() - 1);
+    assert_eq!(sidebar.area.y, view.left_panel.bottom() - 1);
+    assert_eq!(prompt.area.y, view.right_panel.bottom() - 1);
     assert_eq!(
         collapse_button_at(&view, false, sidebar.area.x, sidebar.area.y),
         Some(CollapseTarget::Sidebar)
@@ -1249,8 +1266,8 @@ fn collapsed_panel_buttons_sit_on_bottom_strip_row() {
     let sidebar = button_for(&view, CollapseTarget::Sidebar);
     let prompt = button_for(&view, CollapseTarget::Prompt);
     assert!(sidebar.collapsed && prompt.collapsed);
-    assert_eq!(sidebar.area.y, view.sidebar.bottom() - 1);
-    assert_eq!(prompt.area.y, view.prompt.bottom() - 1);
+    assert_eq!(sidebar.area.y, view.left_panel.bottom() - 1);
+    assert_eq!(prompt.area.y, view.right_panel.bottom() - 1);
     assert_eq!(
         rendered_collapsed_label(&render_lines(&state), &view, CollapseTarget::Sidebar),
         text::SIDEBAR_EXPAND_LABEL
@@ -1266,7 +1283,7 @@ fn swap_button_renders_between_panels_and_moves_prompt() {
     let mut state = AppState::demo();
     let view = view_for(&state);
     let button = swap_button(&view).expect("swap button visible");
-    assert!(view.panes.x < view.prompt.x);
+    assert!(view.main_content.x < view.right_panel.x);
     assert_eq!(
         rendered_area(&render_lines(&state), button),
         text::SWAP_PROMPT_LABEL
@@ -1278,10 +1295,10 @@ fn swap_button_renders_between_panels_and_moves_prompt() {
 
     update::swap_prompt_side(&mut state, 76, 30);
     let view = view_for(&state);
-    assert!(view.prompt_left);
-    assert!(view.prompt.right() <= view.panes.x);
+    assert!(view.right_panel_left);
+    assert!(view.right_panel.right() <= view.main_content.x);
     let button = swap_button(&view).expect("swap button visible after swap");
-    assert_eq!(button.x, view.prompt.right() - 1);
+    assert_eq!(button.x, view.right_panel.right() - 1);
     assert_eq!(
         rendered_area(&render_lines(&state), button),
         text::SWAP_PROMPT_LABEL
@@ -1311,7 +1328,7 @@ fn swap_button_stays_visible_when_prompt_collapsed() {
     let view = view_for(&state);
     assert!(state.prompt_collapsed);
     let button = swap_button(&view).expect("swap button visible on collapsed strip");
-    assert_eq!(button.right(), view.prompt.x + 1);
+    assert_eq!(button.right(), view.right_panel.x + 1);
 }
 
 #[test]
@@ -1331,7 +1348,7 @@ fn swapped_layout_moves_collapse_button_to_panes() {
         .find(|button| button.target == CollapseTarget::Panes)
         .expect("panes collapse button");
     assert!(!panes.collapsed);
-    assert_eq!(panes.area.y, view.panes.bottom() - 1);
+    assert_eq!(panes.area.y, view.main_content.bottom() - 1);
     assert_eq!(
         rendered_label(&render_lines(&state), &panes),
         text::RIGHT_COLLAPSE_LABEL
@@ -1340,11 +1357,11 @@ fn swapped_layout_moves_collapse_button_to_panes() {
     // 折叠：主区收为贴右缘窄条（分隔线在左缘），prompt 占满其余宽度。
     update::apply(Action::TogglePanes, &mut state);
     let view = view_for(&state);
-    assert_eq!(view.panes, Rect::new(96, 1, 4, 23));
-    assert_eq!(view.prompt, Rect::new(24, 1, 72, 23));
+    assert_eq!(view.main_content, Rect::new(96, 1, 4, 23));
+    assert_eq!(view.right_panel, Rect::new(24, 1, 72, 23));
     let lines = render_lines(&state);
-    let row: Vec<char> = lines[view.panes.y as usize].chars().collect();
-    assert_eq!(row[usize::from(view.panes.x)], '│');
+    let row: Vec<char> = lines[view.main_content.y as usize].chars().collect();
+    assert_eq!(row[usize::from(view.main_content.x)], '│');
     assert_eq!(
         rendered_collapsed_label(&lines, &view, CollapseTarget::Panes),
         text::RIGHT_EXPAND_LABEL
@@ -1353,7 +1370,7 @@ fn swapped_layout_moves_collapse_button_to_panes() {
 
 /// 让 prompt 文本溢出视口：按视口尺寸 resize 后写入两倍视口高度的行。
 fn overflow_prompt(state: &mut AppState, view: &layout::ViewLayout) {
-    let text = crate::layout::prompt_text_rect(view.prompt);
+    let text = crate::ui::right_panel::prompt::geometry::prompt_text_rect(view.right_panel);
     state.prompt.resize(text.width, text.height);
     for _ in 0..=usize::from(text.height) {
         state.prompt.insert_str("line\n");
@@ -1374,7 +1391,7 @@ fn prompt_tree_renders_divider_and_scrollbar_below_search() {
     );
     let view = view_for(&state);
     let lines = render_lines(&state);
-    let text = crate::layout::prompt_text_rect(view.prompt);
+    let text = crate::ui::right_panel::prompt::geometry::prompt_text_rect(view.right_panel);
     let search = prompt_line(&lines, &view, text.y);
     assert!(
         search.contains(text::PROMPT_TREE_SEARCH_PLACEHOLDER),
@@ -1385,7 +1402,9 @@ fn prompt_tree_renders_divider_and_scrollbar_below_search() {
     assert!(divider.contains(text::DIVIDER_LEFT_JOIN), "{divider}");
     assert!(divider.contains(text::DIVIDER_RIGHT_JOIN), "{divider}");
     // 滚动条槽从分割线之下开始：搜索行与分割线行无滚动条，列表首行起有。
-    let gutter = crate::layout::prompt_tree_scrollbar_rect(view.prompt).expect("gutter");
+    let gutter =
+        crate::ui::right_panel::prompt::geometry::prompt_tree_scrollbar_rect(view.right_panel)
+            .expect("gutter");
     assert_eq!(gutter.y, text.y + 2);
     let search_row: Vec<char> = lines[text.y as usize].chars().collect();
     assert_ne!(search_row[usize::from(gutter.x)].to_string(), "▐");
@@ -1407,14 +1426,14 @@ fn prompt_editor_divider_shows_editing_title() {
     let view = view_for(&state);
     let lines = render_lines(&state);
     // 顶边框只承载 tab；条目名落在工具栏下方的标题行。
-    let border = prompt_line(&lines, &view, view.prompt.y);
+    let border = prompt_line(&lines, &view, view.right_panel.y);
     assert!(border.contains(text::RIGHT_TAB_PROMPT_LABEL), "{border}");
     assert!(!border.contains(" named prompt "), "{border}");
-    let inner = crate::layout::pane_inner_rect(view.prompt);
+    let inner = crate::tiling::pane_inner_rect(view.right_panel);
     let title = prompt_line(
         &lines,
         &view,
-        inner.y + crate::layout::PROMPT_TOOLBAR_HEIGHT,
+        inner.y + crate::ui::right_panel::prompt::geometry::PROMPT_TOOLBAR_HEIGHT,
     );
     assert!(title.contains(" named prompt "), "{title}");
     assert!(!title.contains("[tmp]"), "条目不带 tmp 标识: {title}");
@@ -1427,7 +1446,8 @@ fn prompt_editor_divider_shows_editing_title() {
     update::show_prompt_tree(&mut state);
     assert!(update::open_temp_prompt(&mut state));
     let lines = render_lines(&state);
-    let y = crate::layout::pane_inner_rect(view.prompt).y + crate::layout::PROMPT_TOOLBAR_HEIGHT;
+    let y = crate::tiling::pane_inner_rect(view.right_panel).y
+        + crate::ui::right_panel::prompt::geometry::PROMPT_TOOLBAR_HEIGHT;
     let border = prompt_line(&lines, &view, y);
     assert!(border.contains(text::PROMPT_DRAFT_TITLE), "{border}");
     assert!(!border.contains("[tmp]"), "标题不带 tmp 标识: {border}");
@@ -1435,15 +1455,19 @@ fn prompt_editor_divider_shows_editing_title() {
         border.contains("Page 1"),
         "编辑区域左上角展示当前页名: {border}"
     );
-    let toolbar = prompt_line(&lines, &view, crate::layout::pane_inner_rect(view.prompt).y);
+    let toolbar = prompt_line(
+        &lines,
+        &view,
+        crate::tiling::pane_inner_rect(view.right_panel).y,
+    );
     assert!(toolbar.contains('‹') && toolbar.contains('›'), "{toolbar}");
     assert!(toolbar.contains("1/1"), "{toolbar}");
     // 标题为未聚焦灰（muted）：前景默认、DIM，即使 prompt 持有焦点。
     let buffer = render_buffer(&state);
     let title_byte = border.find(text::PROMPT_DRAFT_TITLE).expect("title col");
     let title_col = u16::try_from(border[..title_byte].chars().count()).expect("col fits");
-    let cell = &buffer[(view.prompt.x + title_col, y)];
-    let debug_row: String = (view.prompt.x..view.prompt.right())
+    let cell = &buffer[(view.right_panel.x + title_col, y)];
+    let debug_row: String = (view.right_panel.x..view.right_panel.right())
         .map(|x| buffer[(x, y)].symbol())
         .collect();
     assert_eq!(cell.symbol(), "T", "标题起点单元格: {debug_row:?}");
@@ -1460,7 +1484,8 @@ fn prompt_scrollbar_appears_only_on_overflow() {
     overflow_prompt(&mut state, &view);
     let view = view_for(&state);
     let bar = prompt_scrollbar(&view, &state).expect("scrollbar is visible");
-    let gutter = crate::layout::prompt_scrollbar_rect(view.prompt).expect("gutter is reserved");
+    let gutter = crate::ui::right_panel::prompt::geometry::prompt_scrollbar_rect(view.right_panel)
+        .expect("gutter is reserved");
     assert_eq!(bar.track, gutter);
     assert_eq!(bar.visible, usize::from(gutter.height));
     assert_eq!(
@@ -1498,7 +1523,7 @@ fn prompt_scrollable_iff_scrollbar_visible() {
     for lines in [1_usize, 2, 5, 8, 12, 20, 40] {
         let mut state = AppState::demo();
         let view = view_for(&state);
-        let text = crate::layout::prompt_text_rect(view.prompt);
+        let text = crate::ui::right_panel::prompt::geometry::prompt_text_rect(view.right_panel);
         state.prompt.resize(text.width, text.height);
         let body = (1..=lines)
             .map(|line| line.to_string())
@@ -1530,7 +1555,7 @@ fn prompt_scrollable_iff_scrollbar_visible() {
 fn prompt_text_wraps_before_scrollbar_gutter() {
     let mut state = AppState::demo();
     let view = view_for(&state);
-    let text = crate::layout::prompt_text_rect(view.prompt);
+    let text = crate::ui::right_panel::prompt::geometry::prompt_text_rect(view.right_panel);
     state.prompt.resize(text.width, text.height);
     assert!(text.width > 1);
     state
@@ -1545,7 +1570,8 @@ fn prompt_scrollbar_renders_thumb_without_track_border_in_gutter() {
     let view = view_for(&state);
     overflow_prompt(&mut state, &view);
     let view = view_for(&state);
-    let gutter = crate::layout::prompt_scrollbar_rect(view.prompt).expect("gutter is reserved");
+    let gutter = crate::ui::right_panel::prompt::geometry::prompt_scrollbar_rect(view.right_panel)
+        .expect("gutter is reserved");
     update::set_prompt_scroll(&mut state, 0);
     let lines = render_lines(&state);
     let row: Vec<char> = lines[gutter.y as usize].chars().collect();
@@ -1568,7 +1594,7 @@ fn prompt_renders_toolbar_and_divider_rows() {
     state.prompt.insert_str("hello");
     let view = view_for(&state);
     let lines = render_lines(&state);
-    let inner = crate::layout::pane_inner_rect(view.prompt);
+    let inner = crate::tiling::pane_inner_rect(view.right_panel);
 
     // 按钮行：功能按钮齐全，分割线不穿过按钮行。
     let toolbar = prompt_line(&lines, &view, inner.y);
@@ -1588,7 +1614,7 @@ fn prompt_renders_toolbar_and_divider_rows() {
     let divider = prompt_line(
         &lines,
         &view,
-        inner.y + crate::layout::PROMPT_TOOLBAR_HEIGHT,
+        inner.y + crate::ui::right_panel::prompt::geometry::PROMPT_TOOLBAR_HEIGHT,
     );
     assert!(divider.contains(text::DIVIDER_LEFT_JOIN), "{divider}");
     assert!(divider.contains(text::DIVIDER_RIGHT_JOIN), "{divider}");
@@ -1597,7 +1623,7 @@ fn prompt_renders_toolbar_and_divider_rows() {
     assert!(divider.contains("Page 1"), "{divider}");
     assert!(!divider.contains("1/1"), "页码已移到工具栏: {divider}");
     // 顶边框只承载容器 tab。
-    let border = prompt_line(&lines, &view, view.prompt.y);
+    let border = prompt_line(&lines, &view, view.right_panel.y);
     assert!(border.contains(text::RIGHT_TAB_PROMPT_LABEL), "{border}");
     assert!(border.contains(text::RIGHT_TAB_TODO_LABEL), "{border}");
     assert!(!border.contains(text::PROMPT_DRAFT_TITLE), "{border}");
@@ -1616,7 +1642,7 @@ fn prompt_bottom_shows_identity_label_at_left() {
     ));
     state.prompt_width = 60;
     let view = view_for(&state);
-    let bottom = prompt_line(&render_lines(&state), &view, view.prompt.bottom() - 1);
+    let bottom = prompt_line(&render_lines(&state), &view, view.right_panel.bottom() - 1);
     assert!(bottom.contains("─lx-tui · b:main"), "左对齐: {bottom}");
     assert!(!bottom.contains("wt:"), "主 checkout 无 wt 段: {bottom}");
     assert!(!bottom.contains("ws:"), "旧 ws 标签已移除: {bottom}");
@@ -1630,7 +1656,7 @@ fn prompt_bottom_shows_identity_label_at_left() {
         branch: Some("feat/prompt-controls".to_string()),
         main_branch: Some("dev".to_string()),
     });
-    let bottom = prompt_line(&render_lines(&state), &view, view.prompt.bottom() - 1);
+    let bottom = prompt_line(&render_lines(&state), &view, view.right_panel.bottom() - 1);
     assert!(bottom.contains("lx-tui · b:dev · wt:work"), "{bottom}");
     assert!(
         !bottom.contains("feat/"),
@@ -1640,7 +1666,7 @@ fn prompt_bottom_shows_identity_label_at_left() {
     // 非 git：只有项目名。
     state.workspaces[0].git = None;
     state.workspaces[0].cwd = Some(PathBuf::from("/repo/plain"));
-    let bottom = prompt_line(&render_lines(&state), &view, view.prompt.bottom() - 1);
+    let bottom = prompt_line(&render_lines(&state), &view, view.right_panel.bottom() - 1);
     assert!(bottom.contains("plain"), "{bottom}");
     assert!(!bottom.contains("b:"), "{bottom}");
     assert!(!bottom.contains("wt:"), "{bottom}");
@@ -1658,12 +1684,12 @@ fn prompt_bottom_identity_sits_left_of_collapse_button() {
     state.prompt_width = 60;
     let view = view_for(&state);
     let lines = render_lines(&state);
-    let top = prompt_line(&lines, &view, view.prompt.y);
+    let top = prompt_line(&lines, &view, view.right_panel.y);
     assert!(top.contains(text::RIGHT_TAB_PROMPT_LABEL), "{top}");
     assert!(!top.contains("ws:"), "顶边框不显示 ws 路径名: {top}");
 
     // 标签在底边框左端（面板左边框后 2 列），右侧留给折叠按钮。
-    let bottom = prompt_line(&lines, &view, view.prompt.bottom() - 1);
+    let bottom = prompt_line(&lines, &view, view.right_panel.bottom() - 1);
     let label = "lx-tui · b:main";
     let start = bottom.find(label).expect("identity 标签已渲染");
     let start_col = bottom[..start].chars().count();
@@ -1671,21 +1697,21 @@ fn prompt_bottom_identity_sits_left_of_collapse_button() {
     let start_col_u16 = u16::try_from(start_col).expect("col fits");
     let collapse = button_for(&view, CollapseTarget::Prompt);
     assert!(
-        start_col + label.chars().count() < usize::from(collapse.area.x - view.prompt.x),
+        start_col + label.chars().count() < usize::from(collapse.area.x - view.right_panel.x),
         "标签不侵入折叠按钮: {bottom}"
     );
 
     // 项目名与 `b:` 前缀淡青、值恒为默认灰（不随面板焦点变色或变粗）。
     let buffer = render_buffer(&state);
-    let row = view.prompt.bottom() - 1;
-    let project = &buffer[(view.prompt.x + start_col_u16, row)];
+    let row = view.right_panel.bottom() - 1;
+    let project = &buffer[(view.right_panel.x + start_col_u16, row)];
     assert_eq!(
         (project.fg, project.modifier),
         (ratatui::style::Color::Cyan, ratatui::style::Modifier::DIM),
         "项目名淡青、不带 BOLD"
     );
     let separator_cols = u16::try_from("lx-tui · ".chars().count()).expect("col fits");
-    let branch_prefix = &buffer[(view.prompt.x + start_col_u16 + separator_cols, row)];
+    let branch_prefix = &buffer[(view.right_panel.x + start_col_u16 + separator_cols, row)];
     assert_eq!(branch_prefix.symbol(), "b");
     assert_eq!(
         (branch_prefix.fg, branch_prefix.modifier),
@@ -1693,7 +1719,7 @@ fn prompt_bottom_identity_sits_left_of_collapse_button() {
         "b: 前缀淡青"
     );
     let prefix_cols = u16::try_from("lx-tui · b:".chars().count()).expect("col fits");
-    let branch_value = &buffer[(view.prompt.x + start_col_u16 + prefix_cols, row)];
+    let branch_value = &buffer[(view.right_panel.x + start_col_u16 + prefix_cols, row)];
     assert_eq!(
         (branch_value.fg, branch_value.modifier),
         (ratatui::style::Color::Reset, ratatui::style::Modifier::DIM),
@@ -1715,12 +1741,12 @@ fn prompt_bottom_identity_ignores_bound_prompt_root() {
 
     // 绑定到子目录不改变身份标签。
     state.prompt_root = Some(PathBuf::from("/elsewhere/bound-root"));
-    let bottom = prompt_line(&render_lines(&state), &view, view.prompt.bottom() - 1);
+    let bottom = prompt_line(&render_lines(&state), &view, view.right_panel.bottom() - 1);
     assert!(bottom.contains("lx-tui · b:main"), "{bottom}");
     assert!(!bottom.contains("bound-root"), "{bottom}");
 
     state.prompt_root = None;
-    let bottom = prompt_line(&render_lines(&state), &view, view.prompt.bottom() - 1);
+    let bottom = prompt_line(&render_lines(&state), &view, view.right_panel.bottom() - 1);
     assert!(bottom.contains("lx-tui · b:main"), "{bottom}");
 }
 
@@ -1732,14 +1758,14 @@ fn prompt_bottom_identity_degrades_before_hiding() {
     state.workspaces[0].git = Some(git_info(&checkout, &checkout, false, Some("main")));
     state.prompt_width = 40;
     let view = view_for(&state);
-    let bottom = prompt_line(&render_lines(&state), &view, view.prompt.bottom() - 1);
+    let bottom = prompt_line(&render_lines(&state), &view, view.right_panel.bottom() - 1);
     assert!(bottom.contains('…'), "超长项目名中间省略: {bottom}");
     assert!(bottom.contains("b:main"), "分支段保留: {bottom}");
 
     // 过窄：连项目名都放不下时整体隐藏，折叠按钮仍在。
     state.prompt_width = 14;
     let view = view_for(&state);
-    let bottom = prompt_line(&render_lines(&state), &view, view.prompt.bottom() - 1);
+    let bottom = prompt_line(&render_lines(&state), &view, view.right_panel.bottom() - 1);
     assert!(!bottom.contains("b:"), "过窄时不绘制标签: {bottom}");
     assert!(bottom.contains(text::RIGHT_COLLAPSE_LABEL), "{bottom}");
 }
@@ -1749,7 +1775,7 @@ fn prompt_pin_button_sits_left_of_collapse_and_tracks_state() {
     let mut state = AppState::demo();
     let view = view_for(&state);
     let collapse = button_for(&view, CollapseTarget::Prompt);
-    let pin = prompt_pin_button(view.prompt, false).expect("pin visible");
+    let pin = prompt_pin_button(view.right_panel, false).expect("pin visible");
     assert_eq!(
         pin.width,
         text::PROMPT_UNPINNED_LABEL.chars().count() as u16
@@ -1767,7 +1793,7 @@ fn prompt_pin_button_sits_left_of_collapse_and_tracks_state() {
     );
 
     state.prompt_pinned = Some(0);
-    let pinned = prompt_pin_button(view.prompt, true).expect("pin visible");
+    let pinned = prompt_pin_button(view.right_panel, true).expect("pin visible");
     assert_eq!(
         pinned.width,
         text::PROMPT_PINNED_LABEL.chars().count() as u16
@@ -1777,7 +1803,7 @@ fn prompt_pin_button_sits_left_of_collapse_and_tracks_state() {
     update::apply(Action::TogglePrompt, &mut state);
     let collapsed = view_for(&state);
     assert_eq!(
-        prompt_pin_button(collapsed.prompt, false),
+        prompt_pin_button(collapsed.right_panel, false),
         None,
         "折叠态不显示"
     );
@@ -1787,7 +1813,7 @@ fn prompt_pin_button_sits_left_of_collapse_and_tracks_state() {
 fn prompt_pin_button_renders_english_label_in_accent() {
     let mut state = AppState::demo();
     let view = view_for(&state);
-    let pin = prompt_pin_button(view.prompt, false).expect("pin visible");
+    let pin = prompt_pin_button(view.right_panel, false).expect("pin visible");
     let buffer = render_buffer(&state);
     let rendered: String = (pin.x..pin.right())
         .map(|x| buffer[(x, pin.y)].symbol())
@@ -1798,7 +1824,7 @@ fn prompt_pin_button_renders_english_label_in_accent() {
     }
 
     state.prompt_pinned = Some(0);
-    let pinned = prompt_pin_button(view.prompt, true).expect("unpin visible");
+    let pinned = prompt_pin_button(view.right_panel, true).expect("unpin visible");
     let buffer = render_buffer(&state);
     let rendered: String = (pinned.x..pinned.right())
         .map(|x| buffer[(x, pinned.y)].symbol())
@@ -1824,7 +1850,7 @@ fn prompt_status_follows_pinned_workspace() {
     assert_eq!(state.active_workspace, 1);
     let view = view_for(&state);
     let lines = render_lines(&state);
-    let bottom = prompt_line(&lines, &view, view.prompt.bottom() - 1);
+    let bottom = prompt_line(&lines, &view, view.right_panel.bottom() - 1);
     assert!(
         bottom.contains("one · b:main"),
         "钉住时底栏取显示中工作区: {bottom}"
@@ -1832,7 +1858,7 @@ fn prompt_status_follows_pinned_workspace() {
 
     update::release_prompt_pin(&mut state);
     let lines = render_lines(&state);
-    let bottom = prompt_line(&lines, &view, view.prompt.bottom() - 1);
+    let bottom = prompt_line(&lines, &view, view.right_panel.bottom() - 1);
     assert!(
         bottom.contains("two · b:dev"),
         "释放后底栏回到激活工作区: {bottom}"
@@ -1843,16 +1869,16 @@ fn prompt_status_follows_pinned_workspace() {
 fn prompt_toolbar_styles_reflect_undo_and_save_state() {
     let mut state = AppState::demo();
     let view = view_for(&state);
-    let undo = crate::layout::prompt_toolbar_button_rect(
-        view.prompt,
-        crate::layout::PromptToolbarButton::Undo,
+    let undo = crate::ui::right_panel::prompt::geometry::prompt_toolbar_button_rect(
+        view.right_panel,
+        crate::ui::right_panel::prompt::geometry::PromptToolbarButton::Undo,
         PromptMode::Editor,
         Some("1/2"),
     )
     .expect("undo button visible");
     let undo_x = undo.x;
     let bar_y = undo.y;
-    let dot_x = crate::layout::pane_inner_rect(view.prompt).right() - 1;
+    let dot_x = crate::tiling::pane_inner_rect(view.right_panel).right() - 1;
 
     let buffer = render_buffer(&state);
     assert_eq!(buffer[(undo_x, bar_y)].symbol(), "[");
@@ -2013,9 +2039,9 @@ fn lx_pane_top_border_shows_workspace_identity() {
     });
     let config = Config::default();
     let view = view_for(&state);
-    let rects = crate::layout::pane_rects(
+    let rects = crate::tiling::pane_rects(
         &state.active_tab().layout,
-        view.panes,
+        view.main_content,
         config.min_pane_width,
         config.min_pane_height,
     );
@@ -2095,9 +2121,9 @@ fn lx_pane_identity_value_ignores_focus() {
     state.workspaces[0].git = Some(git_info("/work/demo", "/work/demo", false, Some("main")));
     let config = Config::default();
     let view = view_for(&state);
-    let rects = crate::layout::pane_rects(
+    let rects = crate::tiling::pane_rects(
         &state.active_tab().layout,
-        view.panes,
+        view.main_content,
         config.min_pane_width,
         config.min_pane_height,
     );
@@ -2154,9 +2180,9 @@ fn lx_pane_identity_hidden_for_agent_pane() {
     );
     let config = Config::default();
     let view = view_for(&state);
-    let rects = crate::layout::pane_rects(
+    let rects = crate::tiling::pane_rects(
         &state.active_tab().layout,
-        view.panes,
+        view.main_content,
         config.min_pane_width,
         config.min_pane_height,
     );
@@ -2186,9 +2212,9 @@ fn pane_agent_value_ignores_focus() {
     );
     let config = Config::default();
     let view = view_for(&state);
-    let rects = crate::layout::pane_rects(
+    let rects = crate::tiling::pane_rects(
         &state.active_tab().layout,
-        view.panes,
+        view.main_content,
         config.min_pane_width,
         config.min_pane_height,
     );
@@ -2250,7 +2276,7 @@ fn prompt_bottom_values_stay_default_while_focused() {
     state.set_focus(crate::app::state::FocusedContainer::Prompt);
     state.prompt_width = 60;
     let view = view_for(&state);
-    let row = view.prompt.bottom() - 1;
+    let row = view.right_panel.bottom() - 1;
     let lines = render_lines(&state);
     let bottom = prompt_line(&lines, &view, row);
     assert!(bottom.contains("b:dev"), "{bottom}");
@@ -2285,7 +2311,7 @@ fn prompt_bottom_prefix_ignores_focus() {
     state.workspaces[0].git = Some(git_info("/repo", "/repo/lx-tui", false, Some("main")));
     state.prompt_width = 56;
     let view = view_for(&state);
-    let row = view.prompt.bottom() - 1;
+    let row = view.right_panel.bottom() - 1;
     let mut styles = Vec::new();
     for focused in [false, true] {
         state.set_focus(if focused {
@@ -2322,13 +2348,13 @@ fn prompt_page_name_ignores_focus() {
         });
         let lines = render_lines(&state);
         let buffer = render_buffer(&state);
-        let row =
-            crate::layout::pane_inner_rect(view.prompt).y + crate::layout::PROMPT_TOOLBAR_HEIGHT;
+        let row = crate::tiling::pane_inner_rect(view.right_panel).y
+            + crate::ui::right_panel::prompt::geometry::PROMPT_TOOLBAR_HEIGHT;
         let top = prompt_line(&lines, &view, row);
         let byte = top.find("· ").expect("页名前缀已渲染");
         let col = u16::try_from(top[..byte].chars().count()).expect("col fits");
         // `· ` 之后的第一个字符是页名首字符。
-        let cell = &buffer[(view.prompt.x + col + 2, row)];
+        let cell = &buffer[(view.right_panel.x + col + 2, row)];
         assert_eq!(
             (cell.fg, cell.modifier),
             (ratatui::style::Color::Reset, ratatui::style::Modifier::DIM),
@@ -2345,9 +2371,9 @@ fn lx_pane_top_border_keeps_corners_with_long_path() {
     let pane = state.active_tab().layout.focus();
     let config = Config::default();
     let view = view_for(&state);
-    let rects = crate::layout::pane_rects(
+    let rects = crate::tiling::pane_rects(
         &state.active_tab().layout,
-        view.panes,
+        view.main_content,
         config.min_pane_width,
         config.min_pane_height,
     );
@@ -2366,9 +2392,9 @@ fn pane_title_and_toggle_label_follow_view() {
     let mut state = AppState::demo();
     let config = Config::default();
     let view = view_for(&state);
-    let rects = crate::layout::pane_rects(
+    let rects = crate::tiling::pane_rects(
         &state.active_tab().layout,
-        view.panes,
+        view.main_content,
         config.min_pane_width,
         config.min_pane_height,
     );
@@ -2420,9 +2446,9 @@ fn pane_border_shows_agent_label_separated_from_toggle_button() {
     );
     let config = Config::default();
     let view = view_for(&state);
-    let rects = crate::layout::pane_rects(
+    let rects = crate::tiling::pane_rects(
         &state.active_tab().layout,
-        view.panes,
+        view.main_content,
         config.min_pane_width,
         config.min_pane_height,
     );
@@ -2494,9 +2520,9 @@ fn focused_pane_title_uses_soft_blue_style() {
     let state = AppState::demo();
     let config = Config::default();
     let view = view_for(&state);
-    let rects = crate::layout::pane_rects(
+    let rects = crate::tiling::pane_rects(
         &state.active_tab().layout,
-        view.panes,
+        view.main_content,
         config.min_pane_width,
         config.min_pane_height,
     );
@@ -2633,7 +2659,7 @@ fn sidebar_renders_duplicate_child_index_before_initial_marker() {
         .unwrap_or_else(|| panic!("second duplicate gets index before marker: {lines:?}"));
 
     // `*` 与去重序号用强调色标识，hover 时前景不被覆盖（只加 hover 背景）。
-    let sidebar_width = usize::from(view_for(&state).sidebar.width);
+    let sidebar_width = usize::from(view_for(&state).left_panel.width);
     let sidebar_line: String = lines[row_index].chars().take(sidebar_width).collect();
     let anchor = sidebar_line.find(" 2 *").expect("index + initial marker");
     let index_x = sidebar_line[..anchor].chars().count() + 1;
@@ -2711,7 +2737,7 @@ fn sidebar_renders_tree_connectors_for_grouped_linked_worktrees() {
     assert_eq!(parent_col, connector_col, "父项名字与子项直角符号对齐");
     assert_eq!(
         child_col,
-        parent_col.map(|column| column + sidebar::WORKSPACE_ITEM_INDENT + 1),
+        parent_col.map(|column| column + left_panel::WORKSPACE_ITEM_INDENT + 1),
         "子项名字在连接符之后"
     );
     assert_eq!(
@@ -2745,8 +2771,8 @@ fn sidebar_keeps_linked_only_worktrees_flat() {
         .iter()
         .map(|line| {
             line.chars()
-                .skip(view.sidebar.x as usize)
-                .take(view.sidebar.width as usize)
+                .skip(view.left_panel.x as usize)
+                .take(view.left_panel.width as usize)
                 .collect::<String>()
         })
         .collect::<Vec<_>>()
@@ -2770,8 +2796,8 @@ fn sidebar_keeps_single_git_workspace_flat() {
         .iter()
         .map(|line| {
             line.chars()
-                .skip(view.sidebar.x as usize)
-                .take(view.sidebar.width as usize)
+                .skip(view.left_panel.x as usize)
+                .take(view.left_panel.width as usize)
                 .collect::<String>()
         })
         .collect::<Vec<_>>()
@@ -2977,7 +3003,7 @@ fn workspace_group_toggle_hit_targets_parent_chevron_cell_only() {
     );
 
     let view = view_for(&state);
-    let list = layout::sidebar_sections(view.sidebar, state.agents_collapsed)
+    let list = layout::sidebar_sections(view.left_panel, state.agents_collapsed)
         .expect("sidebar sections")
         .workspaces;
     assert_eq!(
@@ -3022,7 +3048,7 @@ fn workspace_item_at_maps_visible_rows_when_collapsed() {
     state.collapsed_groups.push(PathBuf::from("/repo"));
 
     let view = view_for(&state);
-    let list = layout::sidebar_sections(view.sidebar, state.agents_collapsed)
+    let list = layout::sidebar_sections(view.left_panel, state.agents_collapsed)
         .expect("sidebar sections")
         .workspaces;
     assert_eq!(
@@ -3049,8 +3075,8 @@ fn settings_button_renders_on_sidebar_bottom_and_hits() {
     state.settings_available = true;
     let view = view_for(&state);
     let button = settings_button(&view, &state).expect("button fits in the sidebar");
-    assert_eq!(button.y, view.sidebar.bottom() - 1);
-    assert_eq!(button.x, view.sidebar.x + 1);
+    assert_eq!(button.y, view.left_panel.bottom() - 1);
+    assert_eq!(button.x, view.left_panel.x + 1);
     assert!(settings_button_at(&view, &state, button.x, button.y));
     assert!(!settings_button_at(
         &view,
@@ -3063,8 +3089,8 @@ fn settings_button_renders_on_sidebar_bottom_and_hits() {
     let lines = render_lines(&state);
     let bottom: String = lines[button.y as usize]
         .chars()
-        .skip(usize::from(view.sidebar.x))
-        .take(usize::from(view.sidebar.width))
+        .skip(usize::from(view.left_panel.x))
+        .take(usize::from(view.left_panel.width))
         .collect();
     assert!(bottom.contains(text::SETTINGS_LABEL), "{bottom}");
     assert_eq!(
@@ -3107,7 +3133,7 @@ fn settings_button_width_threshold_is_unchanged() {
     // 常量 `SETTINGS_BUTTON_MIN_WIDTH = 宽度 + 3 + 1 + 2`；逐列试出真实门槛。
     let mut threshold = None;
     for width in label_cols..=40 {
-        view.sidebar = Rect::new(0, 0, width, 24);
+        view.left_panel = Rect::new(0, 0, width, 24);
         if settings_button(&view, &state).is_some() {
             threshold = Some(width);
             break;
@@ -3119,12 +3145,12 @@ fn settings_button_width_threshold_is_unchanged() {
         label_cols + 3 + 1 + 2,
         "门槛 = 文案宽度 + 右边距 3 + 折叠按钮 1 + 安全余量 2"
     );
-    view.sidebar = Rect::new(0, 0, threshold, 24);
+    view.left_panel = Rect::new(0, 0, threshold, 24);
     assert!(
         settings_button(&view, &state).is_some(),
         "恰好达标时必须显示"
     );
-    view.sidebar = Rect::new(0, 0, threshold - 1, 24);
+    view.left_panel = Rect::new(0, 0, threshold - 1, 24);
     assert!(
         settings_button(&view, &state).is_none(),
         "差 1 列必须隐藏（防止门槛被放宽）"
@@ -3165,8 +3191,8 @@ fn prompt_view_data(state: &AppState) -> Vec<String> {
         .iter()
         .map(|line| {
             line.chars()
-                .skip(usize::from(view.prompt.x))
-                .take(usize::from(view.prompt.width))
+                .skip(usize::from(view.right_panel.x))
+                .take(usize::from(view.right_panel.width))
                 .collect()
         })
         .collect()
@@ -3239,9 +3265,9 @@ fn containers_use_muted_borders_regardless_of_focus() {
         let buffer = render_buffer(&state);
         // 取每个容器左上角的颜色：边框恒为 muted（非 Cyan、带 DIM 修饰）。
         let corners = [
-            ("sidebar", view.sidebar.x, view.sidebar.y),
-            ("panes", view.panes.x, view.panes.y),
-            ("right", view.prompt.x, view.prompt.y),
+            ("sidebar", view.left_panel.x, view.left_panel.y),
+            ("panes", view.main_content.x, view.main_content.y),
+            ("right", view.right_panel.x, view.right_panel.y),
         ];
         for (name, x, y) in corners {
             let cell = &buffer[(x, y)];
@@ -3276,12 +3302,12 @@ fn switching_right_tab_keeps_focus_in_right_panel() {
     let view = view_for(&state);
     let buffer = render_buffer(&state);
     assert_ne!(
-        buffer[(view.prompt.x, view.prompt.y)].fg,
+        buffer[(view.right_panel.x, view.right_panel.y)].fg,
         ratatui::style::Color::Cyan,
         "右栏边框保持 muted"
     );
     assert_ne!(
-        buffer[(view.panes.x, view.panes.y)].fg,
+        buffer[(view.main_content.x, view.main_content.y)].fg,
         ratatui::style::Color::Cyan,
         "主区边框保持 muted"
     );

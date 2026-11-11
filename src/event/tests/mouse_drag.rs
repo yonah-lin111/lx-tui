@@ -9,7 +9,7 @@ fn mouse_drag_resizes_sidebar() {
     let mut sessions = HashMap::new();
     let mut dirty = false;
 
-    let boundary = geo.view.sidebar.right() - 1;
+    let boundary = geo.view.left_panel.right() - 1;
     handle_terminal_event(
         mouse(MouseEventKind::Down(MouseButton::Left), boundary, 5),
         &mut state,
@@ -52,7 +52,7 @@ fn mouse_drag_resizes_prompt() {
     let mut sessions = HashMap::new();
     let mut dirty = false;
 
-    let boundary = geo.view.prompt.x;
+    let boundary = geo.view.right_panel.x;
     handle_terminal_event(
         mouse(MouseEventKind::Down(MouseButton::Left), boundary, 5),
         &mut state,
@@ -73,7 +73,7 @@ fn mouse_drag_resizes_prompt() {
         &mut ui::RenderCache::default(),
         &mut dirty,
     );
-    assert_eq!(state.prompt_width, geo.view.prompt.width + 5);
+    assert_eq!(state.prompt_width, geo.view.right_panel.width + 5);
 }
 
 #[test]
@@ -82,11 +82,11 @@ fn swapped_divider_drag_resizes_prompt_from_left() {
     let mut state = demo_terminal();
     update::swap_prompt_side(&mut state, 96, 38);
     let geo = geometry(&state, &config, Rect::new(0, 0, 120, 30));
-    assert!(geo.view.prompt_left);
+    assert!(geo.view.right_panel_left);
     let mut sessions = HashMap::new();
     let mut dirty = false;
     // 交换后分隔线两列为 prompt 右边框与窗格左边框；取 prompt 侧一列。
-    let boundary = geo.view.prompt.right() - 1;
+    let boundary = geo.view.right_panel.right() - 1;
 
     handle_terminal_event(
         mouse(MouseEventKind::Down(MouseButton::Left), boundary, 5),
@@ -108,7 +108,7 @@ fn swapped_divider_drag_resizes_prompt_from_left() {
         &mut ui::RenderCache::default(),
         &mut dirty,
     );
-    assert_eq!(state.prompt_width, geo.view.prompt.width + 5);
+    assert_eq!(state.prompt_width, geo.view.right_panel.width + 5);
 }
 
 #[test]
@@ -135,7 +135,7 @@ fn mouse_move_over_swap_button_is_not_divider_hover() {
     );
 
     handle_terminal_event(
-        mouse(MouseEventKind::Moved, geo.view.prompt.x, button.y + 1),
+        mouse(MouseEventKind::Moved, geo.view.right_panel.x, button.y + 1),
         &mut state,
         &mut sessions,
         &geo,
@@ -158,7 +158,7 @@ fn mouse_drag_reorders_workspaces() {
         .map(|workspace| workspace.name.clone())
         .collect();
     let geo = geometry(&state, &config, Rect::new(0, 0, 120, 30));
-    let sections = crate::ui::layout::sidebar_sections(geo.view.sidebar, false)
+    let sections = crate::ui::layout::sidebar_sections(geo.view.left_panel, false)
         .expect("sidebar sections are visible");
     let list_y = sections.workspaces.y;
     let mut sessions = HashMap::new();
@@ -237,7 +237,7 @@ fn mouse_drag_resizes_pane_boundary() {
     );
     assert_eq!(
         state.resizing_pane,
-        Some(layout::BoundaryHit {
+        Some(tiling::BoundaryHit {
             first: left,
             second: right,
             direction: ratatui::layout::Direction::Horizontal,
@@ -297,7 +297,7 @@ fn mouse_drag_resizes_vertical_pane_boundary() {
     );
     assert_eq!(
         state.resizing_pane,
-        Some(layout::BoundaryHit {
+        Some(tiling::BoundaryHit {
             first: top,
             second: bottom,
             direction: ratatui::layout::Direction::Vertical,

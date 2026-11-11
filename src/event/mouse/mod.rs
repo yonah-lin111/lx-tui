@@ -12,8 +12,8 @@ use crossterm::event::{MouseButton, MouseEvent, MouseEventKind};
 
 use crate::app::state::AppState;
 use crate::config::Config;
-use crate::layout::PaneId;
 use crate::pty::PtySession;
+use crate::tiling::PaneId;
 
 use super::session::Geometry;
 

@@ -15,7 +15,7 @@ use crate::app::toast::{Toast, ToastKind};
 use crate::config::ai::oauth::{OAuthPromptMode, OAuthStarted};
 use crate::config::ai::presets::{PresetAuthMethod, PresetFormField, find_preset};
 use crate::config::ai::{AiSettings, connect::ConnectSettings};
-use crate::layout::PaneId;
+use crate::tiling::PaneId;
 use crate::ui::text;
 
 use super::current_panel;

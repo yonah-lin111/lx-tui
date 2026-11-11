@@ -391,17 +391,132 @@ const DEFAULT_TEMPLATE_HEADINGS: [&str; 6] = [
     "## Supplementary Requirements",
 ];
 
-/// 提取用于 `/title` 生成的模板块有效正文：
-/// 经过 `copy_template_content` 清洗后，进一步剔除仅存的内置模板默认大标题行。
+/// 提取用于 `/title` 生成的模板块有效正文：整块剔除全部嵌套 `+++` / `%%%`
+/// 子块（标记与正文），跳过首个标题行、`{wt:}` 绑定行与 `//` 注释，围栏内原样保留，
+/// 最后清理未填写空项与内置默认大标题。
+///
+/// 子块按 `+++` / `%%%` 标记配对使用栈跟踪，围栏状态优先于子块识别：
+/// 围栏内的标记行不改变子块栈，嵌套子块的结束行也不会提前闭合外层。
 pub fn extract_block_title_source(body: &str) -> String {
-    let copied = copy_template_content(body);
-    copied
-        .lines()
-        .filter(|line| !DEFAULT_TEMPLATE_HEADINGS.contains(&line.trim()))
-        .collect::<Vec<_>>()
-        .join("\n")
-        .trim()
-        .to_string()
+    let lines: Vec<&str> = body.split('\n').collect();
+    let mut kept: Vec<&str> = Vec::new();
+    let mut fence: Option<(u8, usize)> = None;
+    let mut subblocks: Vec<&str> = Vec::new();
+    let mut first_content = true;
+
+    for line in lines {
+        // 围栏优先：围栏内的 `+++` / `%%%` 标记行只是文本，不得改变子块栈。
+        if let Some((marker, length)) = fence {
+            if subblocks.is_empty() {
+                kept.push(line);
+            }
+            if super::fence_delimiter(line).is_some_and(|(m, l)| m == marker && l >= length) {
+                fence = None;
+            }
+            continue;
+        }
+        if let Some(delim) = super::fence_delimiter(line) {
+            fence = Some(delim);
+            if subblocks.is_empty() {
+                kept.push(line);
+            }
+            continue;
+        }
+        if let Some(marker) = subblock_start_info(line) {
+            subblocks.push(marker);
+            continue;
+        }
+        if let Some(marker) = subblock_end_info(line) {
+            if subblocks.last() == Some(&marker) {
+                subblocks.pop();
+            }
+            continue;
+        }
+        if !subblocks.is_empty() {
+            continue;
+        }
+        if first_content && is_title_line(line) {
+            first_content = false;
+            continue;
+        }
+        if !line.trim().is_empty() {
+            first_content = false;
+        }
+        if parse_worktree_line(line).is_some() || is_comment_line(line) {
+            continue;
+        }
+        kept.push(line);
+    }
+
+    clean_template_title_source(&kept.join("\n"))
+}
+
+/// 标题源专用清理：只对围栏外片段执行空项清理与内置默认标题过滤，
+/// 围栏片段（含定界行与内容）逐字保留；`copy_template_content` 语义不受影响。
+fn clean_template_title_source(text: &str) -> String {
+    let lines: Vec<&str> = text.split('\n').collect();
+    let mut out: Vec<String> = Vec::new();
+    let mut plain: Vec<&str> = Vec::new();
+    let mut fenced: Vec<&str> = Vec::new();
+    let mut fence: Option<(u8, usize)> = None;
+
+    for line in lines {
+        if let Some((marker, length)) = fence {
+            fenced.push(line);
+            if super::fence_delimiter(line).is_some_and(|(m, l)| m == marker && l >= length) {
+                out.extend(fenced.drain(..).map(str::to_string));
+                fence = None;
+            }
+            continue;
+        }
+        if let Some(delim) = super::fence_delimiter(line) {
+            push_cleaned_title_segment(&mut plain, &mut out);
+            fence = Some(delim);
+            fenced.push(line);
+            continue;
+        }
+        plain.push(line);
+    }
+    push_cleaned_title_segment(&mut plain, &mut out);
+    out.extend(fenced.into_iter().map(str::to_string));
+    out.join("\n").trim().to_string()
+}
+
+/// 清理并追加一个围栏外片段：折叠空行、剔除未填写空项与内置默认大标题。
+fn push_cleaned_title_segment(segment: &mut Vec<&str>, out: &mut Vec<String>) {
+    if segment.is_empty() {
+        return;
+    }
+    let cleaned = clean_template_content(&segment.join("\n"));
+    out.extend(
+        cleaned
+            .lines()
+            .filter(|line| !DEFAULT_TEMPLATE_HEADINGS.contains(&line.trim()))
+            .map(str::to_string),
+    );
+    segment.clear();
+}
+
+/// `&&&` 标题生成正文：与其直接正文等价，剔除全部嵌套子块与内置默认大标题。
+pub fn template_title_source(body: &str) -> String {
+    extract_block_title_source(body)
+}
+
+/// `+++` 标题生成正文：外层 `&&&` 直接正文 + 当前 `+++` 自身正文；
+/// 外层为 None 表示顶层 `+++`，只取自身。两段均剔除全部嵌套子块。
+pub fn supple_title_source(outer_body: Option<&str>, supple_body: &str) -> String {
+    let own = extract_block_title_source(supple_body);
+    let outer = outer_body
+        .map(extract_block_title_source)
+        .unwrap_or_default();
+    let mut parts: Vec<&str> = Vec::new();
+    if !outer.is_empty() {
+        parts.push(&outer);
+    }
+    if !own.is_empty() {
+        parts.push(&own);
+    }
+    parts.join("\n\n")
 }
 
 /// 读取目标块起始行下一行的 `{title: ...}` 标题值（或起始行内联标题）；若不存在标题返回 None。
@@ -744,16 +859,28 @@ fn is_placeholder_label(body: &str) -> bool {
         .all(|ch| ch != ':' && ch != '：')
 }
 
+/// `+++ <name> --start` / `%%% <name> --start` 子块起始行标记。
+fn subblock_start_info(line: &str) -> Option<&str> {
+    let mut tokens = line.split_whitespace();
+    let marker = tokens.next()?;
+    (matches!(marker, "+++" | "%%%") && tokens.any(|token| token == "--start")).then_some(marker)
+}
+
+/// `+++ <name> --end` / `%%% <name> --end` 子块结束行标记。
+fn subblock_end_info(line: &str) -> Option<&str> {
+    let mut tokens = line.split_whitespace();
+    let marker = tokens.next()?;
+    (matches!(marker, "+++" | "%%%") && tokens.any(|token| token == "--end")).then_some(marker)
+}
+
 /// `+++ <name> --start` / `%%% <name> --start` 子块起始行。
 fn subblock_start(line: &str) -> bool {
-    let mut tokens = line.split_whitespace();
-    matches!(tokens.next(), Some("+++") | Some("%%%")) && tokens.any(|token| token == "--start")
+    subblock_start_info(line).is_some()
 }
 
 /// `+++ <name> --end` / `%%% <name> --end` 子块结束行。
 fn subblock_end(line: &str) -> bool {
-    let mut tokens = line.split_whitespace();
-    matches!(tokens.next(), Some("+++") | Some("%%%")) && tokens.any(|token| token == "--end")
+    subblock_end_info(line).is_some()
 }
 
 /// 折叠 3 个及以上连续换行为 2 个（对齐 lx-agent 的 `\n{3,}` 折叠）。

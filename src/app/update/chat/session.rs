@@ -10,7 +10,7 @@ use crate::app::state::{AppState, InputHintLevel};
 use crate::app::toast::{Toast, ToastKind};
 use crate::config::ai::ModelSelection;
 use crate::db::chat::ChatMessage;
-use crate::layout::PaneId;
+use crate::tiling::PaneId;
 use crate::ui::text;
 
 use super::{refresh_lx_status, stop_stream, view_message_of};

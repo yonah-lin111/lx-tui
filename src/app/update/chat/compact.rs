@@ -8,7 +8,7 @@
 use crate::app::effects::{CompactRequest, Effect};
 use crate::app::state::{AppState, CompactNoticeView, InputHintLevel, RequestState};
 use crate::db::chat::CompactCheckpoint;
-use crate::layout::PaneId;
+use crate::tiling::PaneId;
 use crate::ui::text;
 
 use super::{refresh_lx_status, show_lx_hint};

@@ -7,7 +7,7 @@ use crate::app::state::{
     AppState, AssistantStepView, ChatMessageView, SubagentReportView, ToolDetailView, ToolStatus,
 };
 use crate::chat::agent::{AgentRole, AgentStatusView};
-use crate::layout::PaneId;
+use crate::tiling::PaneId;
 
 /// 刷新时使用的 run 元数据快照（借用期内不再读 `AgentsState`）。
 struct RunCardSnapshot {

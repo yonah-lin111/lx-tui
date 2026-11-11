@@ -62,11 +62,11 @@ pub(crate) fn request(
     let editor_width = pane
         .lx
         .input_width()
-        .saturating_add(crate::layout::LX_INPUT_PREFIX)
-        .saturating_add(crate::layout::LX_INPUT_SCROLLBAR)
-        .saturating_sub(crate::layout::LX_ASK_EDITOR_INSET)
+        .saturating_add(crate::tiling::LX_INPUT_PREFIX)
+        .saturating_add(crate::tiling::LX_INPUT_SCROLLBAR)
+        .saturating_sub(crate::tiling::LX_ASK_EDITOR_INSET)
         .max(1);
-    ask.resize_editor(editor_width, crate::layout::LX_ASK_EDITOR_ROWS);
+    ask.resize_editor(editor_width, crate::tiling::LX_ASK_EDITOR_ROWS);
     pane.lx.ask = Some(ask);
     streams.asks.insert(key, PendingAsk { call_id, reply });
     true

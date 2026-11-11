@@ -8,7 +8,8 @@ use crate::app::prompt::{PasteCandidateKind, PromptMode, PromptRowKind};
 use crate::app::state::{PaneView, RightTab};
 use crate::app::toast::{Toast, ToastKind};
 use crate::config::Config;
-use crate::layout;
+use crate::tiling;
+use crate::ui::right_panel::prompt::geometry;
 
 use super::*;
 

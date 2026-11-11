@@ -405,7 +405,7 @@ fn task_page_skips_hidden_history_layout() {
 fn resolve_writes_sticky_suppression_memory_from_pure_view() {
     let (mut state, pane, rect) = state_with_lx_history();
     let rects = [(pane, rect)];
-    let inner = crate::layout::pane_inner_rect(rect);
+    let inner = crate::tiling::pane_inner_rect(rect);
 
     // 场景 1：顶行落在第一轮回复里 → 让位后仍需要 → 不写记忆。
     let target = state.pane_anywhere(pane).expect("pane");
@@ -440,7 +440,7 @@ fn resolve_writes_sticky_suppression_memory_from_pure_view() {
     let mut scenario = None;
     for height in 4..24u16 {
         let probe_rect = ratatui::layout::Rect::new(0, 0, 24, height);
-        let probe_inner = crate::layout::pane_inner_rect(probe_rect);
+        let probe_inner = crate::tiling::pane_inner_rect(probe_rect);
         {
             let target = state.pane_mut_anywhere(pane).expect("pane");
             target.lx.chat.follow_bottom = true;

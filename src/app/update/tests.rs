@@ -8,8 +8,8 @@ use crate::app::state::*;
 use crate::app::toast::{TOAST_DURATION, Toast, ToastKind};
 use crate::app::tooltip::{TOOLTIP_DELAY, TooltipTarget};
 use crate::detect::PaneAgentSnapshot;
-use crate::layout::PaneId;
 use crate::terminal::GridSize;
+use crate::tiling::PaneId;
 use ratatui::layout::{Direction, Rect};
 use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
@@ -22,13 +22,6 @@ fn demo_terminal() -> AppState {
         pane.view = PaneView::Terminal;
     }
     state
-}
-
-#[test]
-fn quit_sets_flag() {
-    let mut state = AppState::demo();
-    apply(Action::Quit, &mut state);
-    assert!(state.should_quit);
 }
 
 #[test]
@@ -2133,7 +2126,7 @@ fn activate_menu_split_down_places_pane_below() {
     let tab = state.active_tab();
     assert_eq!(tab.layout.pane_ids().len(), 2);
     let new_id = tab.layout.focus();
-    let rects = crate::layout::pane_rects(&tab.layout, Rect::new(0, 0, 80, 20), 10, 3);
+    let rects = crate::tiling::pane_rects(&tab.layout, Rect::new(0, 0, 80, 20), 10, 3);
     let rect_of = |id: PaneId| rects.iter().find(|(pane, _)| *pane == id).map(|(_, r)| *r);
     assert_eq!(rect_of(source).map(|rect| rect.y), Some(0));
     assert_eq!(rect_of(new_id).map(|rect| rect.y), Some(10));

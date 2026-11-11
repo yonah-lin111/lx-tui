@@ -710,7 +710,10 @@ fn markdown_spans(text: &str, plain: Style) -> Vec<(String, Style)> {
             spans.push((gap.to_string(), plain));
         }
         if let Some(part) = text.get(start..end) {
-            spans.push((part.to_string(), crate::ui::prompt::token_style(token.kind)));
+            spans.push((
+                part.to_string(),
+                crate::ui::right_panel::prompt::token_style(token.kind),
+            ));
         }
         cursor = cursor.max(end);
     }

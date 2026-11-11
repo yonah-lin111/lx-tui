@@ -12,7 +12,7 @@ impl Prompt {
     /// 按内容宽度软换行得到的可见视觉行；块行扣除左侧色条槽、展开芯片行扣除 2 列缩进后再换行。
     pub fn visual_rows(&self) -> Vec<VisualRow> {
         let width = usize::from(self.width.max(1));
-        let margins = usize::from(crate::layout::PROMPT_BLOCK_GUTTER_LEFT);
+        let margins = usize::from(super::geometry::PROMPT_BLOCK_GUTTER_LEFT);
         let masked = mask_pasted_text(&self.text);
         let scan = markdown::block_scan(&masked);
         let proj = self.projection();
@@ -462,7 +462,7 @@ impl Prompt {
     pub(super) fn line_gutter(&self, line: usize) -> u16 {
         let masked = mask_pasted_text(&self.text);
         if markdown::block_span_at_line(&masked, line).is_some() {
-            crate::layout::PROMPT_BLOCK_GUTTER_LEFT
+            super::geometry::PROMPT_BLOCK_GUTTER_LEFT
         } else {
             0
         }

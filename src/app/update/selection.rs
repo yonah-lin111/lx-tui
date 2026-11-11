@@ -7,7 +7,7 @@ use ratatui::layout::Rect;
 use crate::app::overlay::Overlay;
 use crate::app::selection::{Selection, SelectionUnit};
 use crate::app::state::{AppState, AutoscrollDirection, PaneKind, SelectionAutoscroll};
-use crate::layout::PaneId;
+use crate::tiling::PaneId;
 
 use super::editor::place_prompt_cursor;
 use super::pane::scroll_pane_lines;

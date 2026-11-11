@@ -2,7 +2,7 @@
 
 use crate::app::state::{AppState, ModelSwitchNoticeView};
 use crate::db::chat::ModelSwitchRecord;
-use crate::layout::PaneId;
+use crate::tiling::PaneId;
 
 /// 替换窗格的模型切换记录列表（会话加载、切模型落库或撤销重载时调用）。
 pub fn set_switches(state: &mut AppState, pane: PaneId, records: &[ModelSwitchRecord]) -> bool {

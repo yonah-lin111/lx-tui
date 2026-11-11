@@ -481,16 +481,16 @@ fn stop_shortest_width() -> u16 {
 
 /// 命中「回到底部」控件的窗格；无控件或未命中返回 None。
 pub fn jump_bottom_hit(
-    rects: &[(crate::layout::PaneId, Rect)],
+    rects: &[(crate::tiling::PaneId, Rect)],
     state: &crate::app::state::AppState,
     column: u16,
     row: u16,
-) -> Option<crate::layout::PaneId> {
+) -> Option<crate::tiling::PaneId> {
     rects.iter().find_map(|(id, rect)| {
         let target = state
             .pane_anywhere(*id)
             .filter(|pane| pane.view == crate::app::state::PaneView::Lx)?;
-        let inner = crate::layout::pane_inner_rect(*rect);
+        let inner = crate::tiling::pane_inner_rect(*rect);
         jump_bottom_rect(inner, &target.lx)
             .filter(|area| area.contains((column, row).into()))
             .map(|_| *id)
@@ -504,7 +504,7 @@ mod web_search_tests {
         ChatPartView, RequestKey, ToolCallView, ToolSummary, WebSearchDetailView,
     };
     use crate::chat::events::PartKind;
-    use crate::layout::PaneId;
+    use crate::tiling::PaneId;
 
     /// 只带一个工具步骤的流中 lx。
     fn streaming_lx(call: ToolCallView) -> Lx {

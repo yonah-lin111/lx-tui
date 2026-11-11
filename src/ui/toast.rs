@@ -15,7 +15,7 @@ use unicode_width::UnicodeWidthStr;
 use crate::app::state::AppState;
 use crate::app::toast::{Toast, ToastKind};
 use crate::config::Config;
-use crate::layout::PaneId;
+use crate::tiling::PaneId;
 use crate::ui::layout::ViewLayout;
 use crate::ui::widgets::clear;
 use crate::ui::{style, text};
@@ -40,7 +40,7 @@ pub fn rect(
     let (width, height) = box_size(toast);
     let width = width.min(screen.width);
     let container = match toast.anchor {
-        Some(id) if id == state.prompt.id() => Some(view.prompt),
+        Some(id) if id == state.prompt.id() => Some(view.right_panel),
         Some(id) => {
             // 锚定到具体窗格的 toast 仅在该窗格属于当前活动标签页时显示；
             // 切换到其它标签页或工作区后直接隐藏，不跨标签页窜位到屏幕顶部居中。

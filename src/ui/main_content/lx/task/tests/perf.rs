@@ -82,7 +82,7 @@ fn perf_agents_panel() {
         update::resolve_task_agents_visible(&mut state, &[(pane, area)], &mut cache);
         let Some(rect) = state.pane_anywhere(pane).and_then(|target| {
             crate::ui::main_content::lx::task_output_inner(
-                crate::layout::pane_inner_rect(area),
+                crate::tiling::pane_inner_rect(area),
                 &target.lx,
             )
         }) else {

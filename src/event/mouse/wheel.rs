@@ -8,9 +8,9 @@ use ratatui::layout::Rect;
 use crate::app::state::{AppState, PaneKind, PaneView};
 use crate::app::update::{self, WHEEL_LINES};
 use crate::input;
-use crate::layout::{self, PaneId};
 use crate::pty::PtySession;
 use crate::terminal::WheelRouting;
+use crate::tiling::{self, PaneId};
 use crate::ui;
 use alacritty_terminal::term::TermMode;
 
@@ -49,7 +49,7 @@ pub(crate) fn scroll_selection_wheel(
     let Some((_, rect)) = rects.iter().find(|(id, _)| *id == pane) else {
         return true;
     };
-    let inner = layout::pane_inner_rect(*rect);
+    let inner = tiling::pane_inner_rect(*rect);
     if inner.width == 0 || inner.height == 0 {
         return true;
     }
@@ -72,7 +72,7 @@ fn wheel_lx_selection(
     let Some((_, rect)) = rects.iter().find(|(id, _)| *id == pane) else {
         return false;
     };
-    let inner = layout::pane_inner_rect(*rect);
+    let inner = tiling::pane_inner_rect(*rect);
     if inner.width == 0 || inner.height == 0 {
         return false;
     }
@@ -240,6 +240,10 @@ pub(crate) fn handle_mouse_wheel(
     dirty: &mut bool,
 ) {
     let Geometry { rects, view, .. } = geometry;
+    // 退出确认层打开时滚轮一律吞掉，不改底层视口。
+    if state.quit_confirm.is_some() {
+        return;
+    }
     // 拖动中禁止改视口：落点与阈值都按绝对行号换算，滚动会让指针原地"跨行"
     // （design §1.3 明确不做边缘自动滚动）。
     if state.prompt_drag.is_some() || state.todo_drag.is_some() {
@@ -356,7 +360,7 @@ pub(crate) fn handle_mouse_wheel(
                 state,
                 view,
                 selection.pane(),
-                layout::pane_inner_rect(*rect),
+                tiling::pane_inner_rect(*rect),
             );
             if inner.width > 0 && inner.height > 0 {
                 let row = mouse.row.clamp(inner.y, inner.bottom() - 1) - inner.y;
@@ -404,9 +408,9 @@ pub(crate) fn handle_mouse_wheel(
             }
             // 最近页面抽屉：指针在抽屉区域时滚轮只滚抽屉，不穿透到上方视图。
             if let Some(direction) = vertical_wheel_direction(mouse.kind) {
-                let recent_rows = ui::prompt_frame::recent_rows(state);
-                let split = crate::layout::prompt_body_split(
-                    view.prompt,
+                let recent_rows = ui::right_panel::prompt::frame::recent_rows(state);
+                let split = crate::ui::right_panel::prompt::geometry::prompt_body_split(
+                    view.right_panel,
                     state.prompt_owner().prompt_panel.recent_open,
                     recent_rows.len(),
                 );

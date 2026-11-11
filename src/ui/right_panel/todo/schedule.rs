@@ -8,6 +8,7 @@ use ratatui::style::Style;
 use unicode_width::UnicodeWidthStr;
 
 use crate::app::state::{AppState, WeekDayView};
+use crate::ui::right_panel::geometry;
 use crate::ui::{style, text};
 
 use super::{write_cell, write_inline};
@@ -158,11 +159,11 @@ pub fn rollover_hit_at(
 /// 绘制周感知带上方分割线内嵌的日期标签：
 /// 左侧当前选中年月日（`yyyy/mm/dd`），右侧当前周跨度（`DD-DD`，例如 `26-01`）。
 pub(super) fn render_divider_labels(panel: Rect, buf: &mut Buffer, state: &AppState) {
-    let Some(header) = crate::layout::prompt_header_rect(panel) else {
+    let Some(header) = geometry::header_rect(panel) else {
         return;
     };
-    let divider_y = header.y + crate::layout::PROMPT_TOOLBAR_HEIGHT;
-    let inner = crate::layout::pane_inner_rect(panel);
+    let divider_y = header.y + geometry::PROMPT_TOOLBAR_HEIGHT;
+    let inner = crate::tiling::pane_inner_rect(panel);
     if inner.width < 14 {
         return;
     }

@@ -8,7 +8,7 @@ use super::tests::{state_with_cwd, temp_db_path, trusted_service, workspace_path
 use super::*;
 use crate::app::effects::Effect;
 use crate::app::state::lx::slash::{SlashCommand, SlashPanel};
-use crate::layout::PaneId;
+use crate::tiling::PaneId;
 
 /// 在 `cwd` 落一轮完整会话，返回 session id。
 fn seed_session(database: &Database, cwd: &std::path::Path, text: &str) -> String {

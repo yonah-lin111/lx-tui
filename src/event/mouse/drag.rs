@@ -10,9 +10,10 @@ use crate::app::overlay::Overlay;
 use crate::app::state::AppState;
 use crate::app::update;
 use crate::config::Config;
-use crate::layout::{self, PaneId};
 use crate::pty::PtySession;
+use crate::tiling::{self, PaneId};
 use crate::ui;
+use crate::ui::right_panel::prompt::geometry::prompt_content_rect;
 
 use super::super::session::Geometry;
 use super::hit::{pane_at, pane_content_inner};
@@ -29,6 +30,10 @@ pub(crate) fn handle_mouse_drag(
     dirty: &mut bool,
 ) {
     let Geometry { rects, view, .. } = geometry;
+    // 退出确认层打开时拖拽一律不改状态：活动手势已在 `request_quit` 清理。
+    if state.quit_confirm.is_some() {
+        return;
+    }
     if state.overlay_input_drag
         && let Some(area) = super::super::overlay::overlay_input_rect(state, geometry.screen)
         && let Some(input) = state.overlay.as_mut().and_then(Overlay::input_mut)
@@ -53,7 +58,7 @@ pub(crate) fn handle_mouse_drag(
             state.prompt_search_drag = false;
             return;
         }
-        let area = layout::prompt_content_rect(view.prompt);
+        let area = prompt_content_rect(view.right_panel);
         let workspace = state.prompt_workspace();
         if let Some(ws) = state.workspaces.get_mut(workspace) {
             let input = if tree_mode {
@@ -61,9 +66,13 @@ pub(crate) fn handle_mouse_drag(
             } else {
                 &mut ws.prompt_panel.pages_view.search
             };
-            let char_idx =
-                ui::prompt::tree::input_char_at(area, input.text(), input.cursor(), mouse.column)
-                    .unwrap_or(0);
+            let char_idx = ui::right_panel::prompt::tree::input_char_at(
+                area,
+                input.text(),
+                input.cursor(),
+                mouse.column,
+            )
+            .unwrap_or(0);
             input.drag_selection(char_idx);
             *dirty = true;
         }
@@ -74,9 +83,11 @@ pub(crate) fn handle_mouse_drag(
             state.workspace_history.search_drag = false;
             return;
         }
-        if let Some(sections) = ui::layout::sidebar_sections(view.sidebar, state.agents_collapsed) {
+        if let Some(sections) =
+            ui::layout::sidebar_sections(view.left_panel, state.agents_collapsed)
+        {
             let input = &mut state.workspace_history.search;
-            let char_idx = ui::prompt::tree::input_char_at(
+            let char_idx = ui::right_panel::prompt::tree::input_char_at(
                 sections.workspaces,
                 input.text(),
                 input.cursor(),
@@ -151,7 +162,7 @@ pub(crate) fn handle_mouse_drag(
     if let Some(grab) = state.task_scroll_drag {
         // 后台任务输出容器：按拖拽行换算目标偏移（与轨道点击同一套几何）。
         for (pane, rect) in rects {
-            let inner = layout::pane_inner_rect(*rect);
+            let inner = tiling::pane_inner_rect(*rect);
             let Some(target) = state.pane_anywhere(*pane) else {
                 continue;
             };
@@ -178,7 +189,7 @@ pub(crate) fn handle_mouse_drag(
             .iter()
             .find(|(id, _)| *id == pane)
             .and_then(|(_, rect)| {
-                let inner = layout::pane_inner_rect(*rect);
+                let inner = tiling::pane_inner_rect(*rect);
                 state.pane_anywhere(pane).and_then(|target| {
                     ui::main_content::lx::task_agents_scrollbar(inner, &target.lx, cache.pane(pane))
                 })
@@ -198,7 +209,7 @@ pub(crate) fn handle_mouse_drag(
             .iter()
             .find(|(id, _)| *id == pane)
             .and_then(|(_, rect)| {
-                let inner = layout::pane_inner_rect(*rect);
+                let inner = tiling::pane_inner_rect(*rect);
                 state
                     .pane_anywhere(pane)
                     .and_then(|target| ui::main_content::lx::task_list_scrollbar(inner, &target.lx))
@@ -213,7 +224,9 @@ pub(crate) fn handle_mouse_drag(
         return;
     }
     if let Some(grab) = state.prompt_recent_scroll_drag {
-        let Some(bar) = ui::prompt_frame::prompt_recent_scrollbar(view.prompt, state) else {
+        let Some(bar) =
+            ui::right_panel::prompt::frame::prompt_recent_scrollbar(view.right_panel, state)
+        else {
             return;
         };
         let offset = ui::widgets::scrollbar::offset_from_drag_row(&bar, mouse.row, grab);
@@ -223,7 +236,7 @@ pub(crate) fn handle_mouse_drag(
         return;
     }
     if let Some(grab) = state.prompt_scroll_drag {
-        let Some(bar) = ui::prompt_scrollbar(view, state) else {
+        let Some(bar) = ui::right_panel::prompt::frame::prompt_scrollbar(view, state) else {
             return;
         };
         let offset = ui::widgets::scrollbar::offset_from_drag_row(&bar, mouse.row, grab);
@@ -243,7 +256,7 @@ pub(crate) fn handle_mouse_drag(
         return;
     }
     if let Some(grab) = state.todo_scroll_drag {
-        let Some(bar) = ui::right_panel::todo::scrollbar(view.prompt, state) else {
+        let Some(bar) = ui::right_panel::todo::scrollbar(view.right_panel, state) else {
             return;
         };
         let offset = ui::widgets::scrollbar::offset_from_drag_row(&bar, mouse.row, grab);
@@ -268,7 +281,7 @@ pub(crate) fn handle_mouse_drag(
             .iter()
             .find(|(id, _)| *id == pane)
             .and_then(|(_, rect)| {
-                let inner = layout::pane_inner_rect(*rect);
+                let inner = tiling::pane_inner_rect(*rect);
                 state
                     .pane_anywhere(pane)
                     .and_then(|target| ui::main_content::scrollbar(inner, target))
@@ -287,7 +300,7 @@ pub(crate) fn handle_mouse_drag(
             .iter()
             .find(|(id, _)| *id == pane)
             .and_then(|(_, rect)| {
-                let inner = layout::pane_inner_rect(*rect);
+                let inner = tiling::pane_inner_rect(*rect);
                 state
                     .pane_anywhere(pane)
                     .and_then(|target| ui::main_content::lx::input_scrollbar(inner, &target.lx))
@@ -306,7 +319,7 @@ pub(crate) fn handle_mouse_drag(
             .iter()
             .find(|(id, _)| *id == pane)
             .and_then(|(_, rect)| {
-                let inner = layout::pane_inner_rect(*rect);
+                let inner = tiling::pane_inner_rect(*rect);
                 state.pane_anywhere(pane).and_then(|target| {
                     ui::main_content::lx::history_scrollbar(inner, &target.lx, cache.pane(pane))
                 })
@@ -328,7 +341,7 @@ pub(crate) fn handle_mouse_drag(
         if update::drag_pane_boundary(
             state,
             hit,
-            view.panes,
+            view.main_content,
             pos,
             config.min_pane_width,
             config.min_pane_height,
@@ -367,8 +380,8 @@ pub(crate) fn handle_mouse_drag(
     }
     // prompt 列表拖拽：必须在窗格转发之前 return，否则拖动会被当成终端选区/输入。
     if state.prompt_drag.is_some() {
-        let hit = ui::prompt::tree::drop_hit_at(
-            ui::prompt_frame::prompt_main_rect(view.prompt, state),
+        let hit = ui::right_panel::prompt::tree::drop_hit_at(
+            ui::right_panel::prompt::frame::prompt_main_rect(view.right_panel, state),
             &state.prompt_owner().prompt_panel,
             mouse.column,
             mouse.row,
@@ -387,7 +400,7 @@ pub(crate) fn handle_mouse_drag(
             *dirty = true;
             return;
         }
-        let hit = ui::right_panel::todo::row_at(view.prompt, state, mouse.column, mouse.row);
+        let hit = ui::right_panel::todo::row_at(view.right_panel, state, mouse.column, mouse.row);
         if update::drag_todo_to(state, hit) {
             *dirty = true;
         }
@@ -410,7 +423,7 @@ pub(crate) fn handle_mouse_drag(
     }
     if state.todo_input_drag {
         if let Some(char_idx) = ui::right_panel::todo::edit_input_drag_char_at(
-            view.prompt,
+            view.right_panel,
             state,
             mouse.column,
             mouse.row,
@@ -425,7 +438,7 @@ pub(crate) fn handle_mouse_drag(
         let Some((_, rect)) = rects.iter().find(|(id, _)| *id == pane) else {
             return;
         };
-        let inner = layout::pane_inner_rect(*rect);
+        let inner = tiling::pane_inner_rect(*rect);
         if let Some(target) = state.pane_anywhere(pane)
             && let Some((visual_row, col)) = ui::main_content::lx::ask_editor_drag_cell_at(
                 inner,
@@ -447,7 +460,7 @@ pub(crate) fn handle_mouse_drag(
         let Some((_, rect)) = rects.iter().find(|(id, _)| *id == pane) else {
             return;
         };
-        let inner = layout::pane_inner_rect(*rect);
+        let inner = tiling::pane_inner_rect(*rect);
         if let Some(geom) = state
             .pane_anywhere(pane)
             .and_then(|target| ui::main_content::lx::input_geom(inner, &target.lx))
@@ -467,7 +480,7 @@ pub(crate) fn handle_mouse_drag(
         let Some((_, rect)) = rects.iter().find(|(id, _)| *id == pane) else {
             return;
         };
-        let inner = layout::pane_inner_rect(*rect);
+        let inner = tiling::pane_inner_rect(*rect);
         if let Some((start, end)) = state.pane_anywhere(pane).and_then(|target| {
             let geom = ui::main_content::lx::content_geom(inner, &target.lx, cache.pane(pane))?;
             let cell = geom.cell(mouse.column, mouse.row);
@@ -487,7 +500,7 @@ pub(crate) fn handle_mouse_drag(
     if state.prompt.is_preview_dragging() {
         let pane = state.prompt.id();
         if let Some((_, rect)) = rects.iter().find(|(id, _)| *id == pane) {
-            let inner = pane_content_inner(state, view, pane, layout::pane_inner_rect(*rect));
+            let inner = pane_content_inner(state, view, pane, tiling::pane_inner_rect(*rect));
             if inner.width > 0 && inner.height > 0 {
                 let row = mouse.row.clamp(inner.y, inner.bottom() - 1) - inner.y;
                 let col = mouse.column.clamp(inner.x, inner.right() - 1) - inner.x;
@@ -508,7 +521,7 @@ pub(crate) fn handle_mouse_drag(
     let Some((_, rect)) = rects.iter().find(|(id, _)| *id == pane) else {
         return;
     };
-    let inner = pane_content_inner(state, view, pane, layout::pane_inner_rect(*rect));
+    let inner = pane_content_inner(state, view, pane, tiling::pane_inner_rect(*rect));
     if inner.width == 0 || inner.height == 0 {
         return;
     }
@@ -548,6 +561,10 @@ pub(crate) fn handle_mouse_up_left(
     dirty: &mut bool,
 ) {
     let Geometry { rects, view, .. } = geometry;
+    // 退出确认层打开时松开一律吞掉，避免把按下时的手势在这里收尾。
+    if state.quit_confirm.is_some() {
+        return;
+    }
     // 卡片正文的「按下可能是一次点击」标记只服务本次释放：任何提前返回的路径
     // （滚动条拖拽、浮层、其它窗格）都必须丢弃它，绝不能让它在下一次松开时误折叠。
     let card_press = state.lx_card_press.take();
@@ -575,8 +592,8 @@ pub(crate) fn handle_mouse_up_left(
     // prompt 列表拖拽：必须在任何更早的早退之前收尾，保证一次 Down 必被一次 Up 清理；
     // 未跨行时这里走点击/双击语义（折叠与打开编辑器都发生在松开）。
     if state.prompt_drag.is_some() {
-        let hit = ui::prompt::tree::drop_hit_at(
-            ui::prompt_frame::prompt_main_rect(view.prompt, state),
+        let hit = ui::right_panel::prompt::tree::drop_hit_at(
+            ui::right_panel::prompt::frame::prompt_main_rect(view.right_panel, state),
             &state.prompt_owner().prompt_panel,
             mouse.column,
             mouse.row,

@@ -119,7 +119,7 @@ fn mouse_click_todo_blank_still_focuses_container() {
         RightTab::Todo
     ));
     // 点分割线（既不是按钮也不是行）：容器进入选中态，但不动数据、不穿透。
-    let divider = layout::prompt_divider_rect(geo.view.prompt).expect("divider visible");
+    let divider = geometry::prompt_divider_rect(geo.view.right_panel).expect("divider visible");
     let cursor = state.prompt.cursor();
     let focused_pane = state.active_tab().layout.focus();
     let mut sessions = HashMap::new();
@@ -165,16 +165,22 @@ fn mouse_click_prompt_toolbar_ignored_on_todo_tab() {
     let mut dirty = false;
 
     // 编辑视图 `[≡]` 按钮：Todo 下必须整行吞掉，绝不执行动作。
-    let mode = layout::prompt_toolbar_button_rect(
-        geo.view.prompt,
-        layout::PromptToolbarButton::Mode,
+    let mode = geometry::prompt_toolbar_button_rect(
+        geo.view.right_panel,
+        geometry::PromptToolbarButton::Mode,
         PromptMode::Editor,
         None,
     )
     .expect("mode button visible");
     assert_eq!(
-        layout::prompt_toolbar_button_at(geo.view.prompt, mode.x, mode.y, PromptMode::Editor, None),
-        Some(layout::PromptToolbarButton::Mode),
+        geometry::prompt_toolbar_button_at(
+            geo.view.right_panel,
+            mode.x,
+            mode.y,
+            PromptMode::Editor,
+            None
+        ),
+        Some(geometry::PromptToolbarButton::Mode),
         "前提：该坐标确实命中工具栏按钮"
     );
     handle_terminal_event(
@@ -208,7 +214,7 @@ fn mouse_click_prompt_toolbar_ignored_on_todo_tab() {
 fn mouse_wheel_over_todo_scrolls_list_without_moving_selection() {
     let mut state = demo_terminal();
     let (config, geo) = toolbar_geometry(&mut state);
-    let text = layout::prompt_text_rect(geo.view.prompt);
+    let text = geometry::prompt_text_rect(geo.view.right_panel);
     state.prompt.resize(text.width, text.height);
     for _ in 0..=usize::from(text.height) {
         state.prompt.insert_str("line\n");
@@ -219,7 +225,7 @@ fn mouse_wheel_over_todo_scrolls_list_without_moving_selection() {
     let tree_scroll = state.prompt_owner().prompt_panel.scroll;
 
     // 塞满超过一屏的 todo，保证视口可以滚动。
-    let visible = crate::ui::right_panel::todo::visible_rows(geo.view.prompt);
+    let visible = crate::ui::right_panel::todo::visible_rows(geo.view.right_panel);
     assert!(visible > 0, "前提：列表区可见");
     state.todo.replace(
         (0..visible + 5)
@@ -283,12 +289,14 @@ fn mouse_click_todo_row_selects_and_focuses() {
     );
     state
         .todo
-        .set_viewport_rows(crate::ui::right_panel::todo::visible_rows(geo.view.prompt));
+        .set_viewport_rows(crate::ui::right_panel::todo::visible_rows(
+            geo.view.right_panel,
+        ));
     assert!(crate::app::update::select_right_tab(
         &mut state,
         RightTab::Todo
     ));
-    let list = crate::ui::right_panel::todo::list_rect(geo.view.prompt);
+    let list = crate::ui::right_panel::todo::list_rect(geo.view.right_panel);
     let mut sessions = HashMap::new();
     let mut dirty = false;
 
@@ -322,7 +330,7 @@ fn mouse_click_todo_toolbar_button_runs_action() {
         RightTab::Todo
     ));
     let new = crate::ui::right_panel::todo::button_rect(
-        geo.view.prompt,
+        geo.view.right_panel,
         crate::app::tooltip::TodoButton::New,
     )
     .expect("[new] visible");
@@ -369,7 +377,7 @@ fn mouse_double_click_todo_row_enters_edit() {
         &mut state,
         RightTab::Todo
     ));
-    let list = crate::ui::right_panel::todo::list_rect(geo.view.prompt);
+    let list = crate::ui::right_panel::todo::list_rect(geo.view.right_panel);
     let mut sessions = HashMap::new();
     let mut cache = ui::RenderCache::default();
     let mut dirty = false;
@@ -425,7 +433,8 @@ fn mouse_click_todo_border_blank_focuses_container() {
     ));
     assert!(state.todo_focused(), "前提：切 tab 后右栏持焦点");
     // 顶边框最右端（tab 之外、折叠按钮之外的空白）。
-    let border = crate::layout::prompt_border_rect(geo.view.prompt).expect("border visible");
+    let border = crate::ui::right_panel::prompt::geometry::prompt_border_rect(geo.view.right_panel)
+        .expect("border visible");
     let mut sessions = HashMap::new();
     let mut dirty = false;
 
@@ -457,7 +466,7 @@ fn mouse_click_todo_stats_row_focuses_without_data_change() {
     let (config, geo) = toolbar_geometry(&mut state);
     // 条目必须多到「统计行所在行」在列表下标范围内：若列表区误吞了统计块，
     // 这一击就会选中一行——用单条列表测不出这个问题。
-    let rows = usize::from(crate::layout::pane_inner_rect(geo.view.prompt).height);
+    let rows = usize::from(crate::tiling::pane_inner_rect(geo.view.right_panel).height);
     state.todo.replace(
         (0..rows.saturating_add(8))
             .map(|index| {
@@ -473,7 +482,7 @@ fn mouse_click_todo_stats_row_focuses_without_data_change() {
         &mut state,
         RightTab::Todo
     ));
-    let stats = crate::ui::right_panel::todo::stats_rect(geo.view.prompt).expect("统计行可见");
+    let stats = crate::ui::right_panel::todo::stats_rect(geo.view.right_panel).expect("统计行可见");
     let cursor = state.prompt.cursor();
     let focused_pane = state.active_tab().layout.focus();
     let mut sessions = HashMap::new();
@@ -589,7 +598,7 @@ fn focus_pane_releases_todo_focus() {
     let mut sessions = HashMap::new();
     let mut dirty = false;
 
-    let inner = layout::pane_inner_rect(geo.view.panes);
+    let inner = tiling::pane_inner_rect(geo.view.main_content);
     handle_terminal_event(
         mouse(
             MouseEventKind::Down(MouseButton::Left),
@@ -705,8 +714,9 @@ fn ctrl_q_wins_over_todo_focus() {
         &mut dirty,
     );
 
-    assert!(state.should_quit, "Ctrl+Q 始终优先");
-    assert!(dirty, "退出动作置脏");
+    assert!(!state.should_quit, "第一次 Ctrl+Q 只打开确认层");
+    assert!(state.quit_confirm.is_some());
+    assert!(dirty, "退出请求置脏");
     assert!(state.todo_focused(), "Ctrl+Q 不碰 todo 焦点");
     assert!(state.todo.items().is_empty(), "Ctrl+Q 不改 todo 列表");
     assert!(!state.todo.is_editing(), "Ctrl+Q 不开编辑");
@@ -720,7 +730,7 @@ fn pane_content_inner_is_zero_on_todo_tab() {
     let mut state = demo_terminal();
     let geo = geometry(&state, &config, Rect::new(0, 0, 120, 30));
     let prompt = state.prompt.id();
-    let inner = layout::pane_inner_rect(geo.view.prompt);
+    let inner = tiling::pane_inner_rect(geo.view.right_panel);
     let active = super::mouse::hit::pane_content_inner(&state, &geo.view, prompt, inner);
     assert!(
         active.width > 0 && active.height > 0,
@@ -750,7 +760,7 @@ fn mouse_right_click_prompt_tree_on_todo_opens_todo_menu() {
         .replace(vec![], vec![PromptItem::single(7, None, "item", "body")]);
     let geo = geometry(&state, &config, Rect::new(0, 0, 120, 30));
     let area = paste::prompt_text_area(&geo.view);
-    let target = ui::prompt::tree::row_at(
+    let target = ui::right_panel::prompt::tree::row_at(
         area,
         &state.prompt_owner().prompt_panel,
         area.x + 2,
@@ -814,7 +824,7 @@ fn mouse_drag_on_todo_does_not_move_hidden_cursor() {
     state.prompt.set_text("alpha beta gamma\nsecond line");
     state.prompt.resize(40, 8);
     let geo = geometry(&state, &config, Rect::new(0, 0, 120, 30));
-    let text = layout::prompt_text_rect(geo.view.prompt);
+    let text = geometry::prompt_text_rect(geo.view.right_panel);
     let prompt = state.prompt.id();
     let mut sessions = HashMap::new();
     let mut dirty = false;
@@ -877,16 +887,22 @@ fn mouse_click_title_row_focuses_without_moving_cursor() {
     state.set_focus(crate::app::state::FocusedContainer::Panes);
     state.prompt.set_cursor_offset_for_test(0);
     let geo = geometry(&state, &config, Rect::new(0, 0, 140, 30));
-    let title = ui::prompt_frame::title_row(geo.view.prompt).expect("title row");
+    let title = ui::right_panel::prompt::frame::title_row(geo.view.right_panel).expect("title row");
     assert_eq!(
         title.y,
-        crate::layout::pane_inner_rect(geo.view.prompt).y + 1,
+        crate::tiling::pane_inner_rect(geo.view.right_panel).y + 1,
         "标题行 = 工具栏下一行的分割线"
     );
     // 标题行内找一个既非页控件、也非页名的空白列（避开两侧边框列的分割线拖拽区）。
     let blank_x = (title.x + 2..title.right().saturating_sub(2))
         .find(|x| {
-            ui::prompt_frame::prompt_page_control_at(geo.view.prompt, &state, *x, title.y).is_none()
+            ui::right_panel::prompt::frame::prompt_page_control_at(
+                geo.view.right_panel,
+                &state,
+                *x,
+                title.y,
+            )
+            .is_none()
         })
         .expect("title row has blank column");
     let mut sessions = HashMap::new();
@@ -916,7 +932,7 @@ fn todo_scrollbar_drag_releases_on_mouse_up() {
         &mut state,
         RightTab::Todo
     ));
-    let visible = crate::ui::right_panel::todo::visible_rows(geo.view.prompt);
+    let visible = crate::ui::right_panel::todo::visible_rows(geo.view.right_panel);
     state.todo.replace(
         (0..visible + 8)
             .map(|index| {
@@ -929,8 +945,8 @@ fn todo_scrollbar_drag_releases_on_mouse_up() {
             .collect(),
     );
     state.todo.set_viewport_rows(visible);
-    let bar =
-        crate::ui::right_panel::todo::scrollbar(geo.view.prompt, &state).expect("前提：列表溢出");
+    let bar = crate::ui::right_panel::todo::scrollbar(geo.view.right_panel, &state)
+        .expect("前提：列表溢出");
     let mut sessions = HashMap::new();
     let mut dirty = false;
 
@@ -975,7 +991,7 @@ fn prompt_gutter_click_does_not_scroll_hidden_todo() {
     let mut state = demo_terminal();
     let (config, geo) = toolbar_geometry(&mut state);
     assert_eq!(state.right_tab, RightTab::Prompt, "前提：Prompt tab");
-    let visible = crate::ui::right_panel::todo::visible_rows(geo.view.prompt);
+    let visible = crate::ui::right_panel::todo::visible_rows(geo.view.right_panel);
     state.todo.replace(
         (0..visible + 8)
             .map(|index| {
@@ -990,7 +1006,7 @@ fn prompt_gutter_click_does_not_scroll_hidden_todo() {
     state.todo.set_viewport_rows(visible);
     // 点 Todo 列表区最右列的最后一行：两面板的最右列重合（都是 inner.right()-1），
     // 这一行只在 Todo 列表轨道内，能真正触发「隐藏滚动条被点中」的路径。
-    let list = crate::ui::right_panel::todo::list_rect(geo.view.prompt);
+    let list = crate::ui::right_panel::todo::list_rect(geo.view.right_panel);
     let bar = Rect {
         x: list.right(),
         y: list.y,
@@ -1031,7 +1047,7 @@ fn mouse_drag_todo_onto_another_row_merges_into_group_without_breaking_double_cl
         &mut state,
         RightTab::Todo
     ));
-    let list = crate::ui::right_panel::todo::list_rect(geo.view.prompt);
+    let list = crate::ui::right_panel::todo::list_rect(geo.view.right_panel);
     let mut sessions = HashMap::new();
     let mut cache = ui::RenderCache::default();
     let mut dirty = false;
@@ -1153,7 +1169,7 @@ fn mouse_drag_todo_onto_another_row_merges_into_group_without_breaking_double_cl
 fn tab_switch_collapse_wheel_and_right_click_abort_todo_drag_cleanly() {
     let mut state = demo_terminal();
     let (config, geo) = toolbar_geometry(&mut state);
-    let visible = crate::ui::right_panel::todo::visible_rows(geo.view.prompt);
+    let visible = crate::ui::right_panel::todo::visible_rows(geo.view.right_panel);
     state.todo.replace(
         (0..visible + 6)
             .map(|index| {
@@ -1170,7 +1186,7 @@ fn tab_switch_collapse_wheel_and_right_click_abort_todo_drag_cleanly() {
         &mut state,
         RightTab::Todo
     ));
-    let list = crate::ui::right_panel::todo::list_rect(geo.view.prompt);
+    let list = crate::ui::right_panel::todo::list_rect(geo.view.right_panel);
     let mut sessions = HashMap::new();
     let mut cache = ui::RenderCache::default();
     let mut dirty = false;

@@ -46,7 +46,7 @@ fn selected_latest_user_message_uses_distinct_background() {
         session_id: "s".into(),
         user_message_id: "user-1".into(),
         expected_revision: 1,
-        pane: crate::layout::PaneId::alloc(),
+        pane: crate::tiling::PaneId::alloc(),
         input_at_open: String::new(),
         user_text: "hello".into(),
         kind: crate::app::state::RewindTargetKind::Turn,

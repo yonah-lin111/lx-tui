@@ -185,7 +185,7 @@ fn move_prompt_recent(state: &mut AppState, direction: isize, panel: Rect) -> bo
     if rows.is_empty() {
         return false;
     }
-    let visible = crate::layout::prompt_body_split(panel, true, rows.len())
+    let visible = crate::app::prompt::geometry::prompt_body_split(panel, true, rows.len())
         .visible_entries
         .max(1);
     let hovered = state.prompt_recent_hover;

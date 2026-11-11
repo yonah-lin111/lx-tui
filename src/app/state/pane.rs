@@ -6,8 +6,8 @@ use std::path::PathBuf;
 pub use ratatui::layout::Direction;
 
 use crate::detect::{AgentKind, AgentState, PaneAgentSnapshot};
-use crate::layout::{PaneId, TileLayout};
 use crate::terminal::Terminal;
+use crate::tiling::{PaneId, TileLayout};
 
 use super::lx::{AiWebSite, Lx, LxEntry};
 

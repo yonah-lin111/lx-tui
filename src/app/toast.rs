@@ -3,7 +3,7 @@
 
 use std::time::{Duration, Instant};
 
-use crate::layout::PaneId;
+use crate::tiling::PaneId;
 
 /// 默认展示时长。
 pub const TOAST_DURATION: Duration = Duration::from_millis(2000);

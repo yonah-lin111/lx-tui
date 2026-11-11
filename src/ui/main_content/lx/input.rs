@@ -2,7 +2,7 @@
 //!
 //! 高亮只做**编辑器色板**（`style::markdown_*`，与阅读渲染的 GitHub Dark 色板
 //! 完全独立，见 `docs/standards/tui-design-requirements.md`）：token 来自
-//! `ui::markdown::scan`，样式统一经 `ui::prompt::token_style` 取用，保证输入框与
+//! `ui::markdown::scan`，样式统一经 `ui::right_panel::prompt::token_style` 取用，保证输入框与
 //! 全局 prompt 容器两处读法一致。
 //!
 //! 纯渲染：只读 `Lx`，只写 lx 页网格；返回光标绝对坐标供上层换算。
@@ -241,7 +241,7 @@ fn paint_line(
                             .find(|token| token.range.contains(&rel_raw))
                     })
                     .map_or_else(style::text, |token| {
-                        crate::ui::prompt::token_style(token.kind)
+                        crate::ui::right_panel::prompt::token_style(token.kind)
                     })
             }
         };

@@ -4,7 +4,7 @@
 //! 几何由事件循环或 UI 纯函数传入，不做 IO。
 
 use crate::app::state::{AppState, CardSection, CardTarget};
-use crate::layout::PaneId;
+use crate::tiling::PaneId;
 
 /// 滚动历史视图（正数向下）；`total`/`visible` 为渲染行数与视口行数；返回是否移动。
 ///
@@ -75,7 +75,7 @@ pub(crate) fn resolve_lx_rewind_center(
 ) -> bool {
     let mut changed = false;
     for (pane, rect) in rects {
-        let inner = crate::layout::pane_inner_rect(*rect);
+        let inner = crate::tiling::pane_inner_rect(*rect);
         let Some(message_id) = state
             .pane_anywhere(*pane)
             .filter(|target| target.view == crate::app::state::PaneView::Lx)
@@ -117,7 +117,7 @@ pub(crate) fn resolve_lx_history(
 ) -> bool {
     let mut changed = false;
     for (pane, rect) in rects {
-        let inner = crate::layout::pane_inner_rect(*rect);
+        let inner = crate::tiling::pane_inner_rect(*rect);
         let resolved = state
             .pane_anywhere(*pane)
             .filter(|target| {
@@ -162,7 +162,7 @@ pub fn resolve_task_output_visible(
 ) -> bool {
     let mut changed = false;
     for (pane, rect) in rects {
-        let inner = crate::layout::pane_inner_rect(*rect);
+        let inner = crate::tiling::pane_inner_rect(*rect);
         let Some(output_visible) = state
             .pane_anywhere(*pane)
             .filter(|target| target.view == crate::app::state::PaneView::Lx)
@@ -215,7 +215,7 @@ pub(crate) fn resolve_task_agents_visible(
 ) -> bool {
     let mut changed = false;
     for (pane, rect) in rects {
-        let inner = crate::layout::pane_inner_rect(*rect);
+        let inner = crate::tiling::pane_inner_rect(*rect);
         let Some((needs_measure, visible)) = state
             .pane_anywhere(*pane)
             .filter(|target| target.view == crate::app::state::PaneView::Lx)
@@ -306,7 +306,7 @@ pub fn resolve_ask_list_window(
 ) -> bool {
     let mut changed = false;
     for (pane, rect) in rects {
-        let inner = crate::layout::pane_inner_rect(*rect);
+        let inner = crate::tiling::pane_inner_rect(*rect);
         let Some((scroll, total, visible)) = state
             .pane_anywhere(*pane)
             .filter(|target| target.view == crate::app::state::PaneView::Lx)

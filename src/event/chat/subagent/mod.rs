@@ -50,7 +50,7 @@ use crate::chat::agent::{
 };
 use crate::db::chat::{SubagentQueueState, SubagentRecord};
 use crate::event::AppEvent;
-use crate::layout::PaneId;
+use crate::tiling::PaneId;
 
 /// 运行中状态值。
 pub const STATUS_RUNNING: &str = "running";

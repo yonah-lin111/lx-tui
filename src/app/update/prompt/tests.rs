@@ -2,7 +2,9 @@
 
 use super::*;
 use crate::app::actions::{Action, EditorCommand};
-use crate::app::overlay::{MenuCommand, NewNodeKind, Overlay, OverlayTarget, SaveDraftEntry};
+use crate::app::overlay::{
+    MenuCommand, NewNodeKind, Overlay, OverlayTarget, RenameTarget, SaveDraftEntry,
+};
 use crate::app::prompt::{
     PromptDropHit, PromptFolder, PromptItem, PromptPage, PromptPageId, PromptRowKind, PromptSection,
 };
@@ -1525,7 +1527,9 @@ fn switching_to_temp_prompt_commits_pre_paste_edits_without_placeholder() {
 #[test]
 fn quit_commits_pre_paste_edits_without_placeholder() {
     let mut state = item_editing_with_paste();
-    apply(Action::Quit, &mut state);
+    apply(Action::RequestQuit, &mut state);
+    assert!(!state.should_quit, "第一次请求只打开确认层");
+    apply(Action::ConfirmQuit, &mut state);
     assert!(state.should_quit);
     let content = saved_content(&state);
     assert_eq!(content, "nested contentX", "退出前提交粘贴前的正文");

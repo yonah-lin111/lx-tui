@@ -28,7 +28,7 @@ fn committed(session: &str, message: &str) -> UserShellCommitted {
     }
 }
 
-fn begin_shell(state: &mut AppState, pane: crate::layout::PaneId, message: &str, command: &str) {
+fn begin_shell(state: &mut AppState, pane: crate::tiling::PaneId, message: &str, command: &str) {
     let committed = committed("sess", message);
     user_shell::on_user_shell_begun(
         state,

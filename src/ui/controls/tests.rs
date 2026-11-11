@@ -48,10 +48,10 @@ fn usage_button_renders_right_of_settings_and_hits() {
     let view = view_for(&state);
     let settings = settings_button(&view, &state).expect("settings fits in the sidebar");
     let usage = usage_button(&view, &state).expect("usage fits in the sidebar");
-    assert_eq!(usage.y, view.sidebar.bottom() - 1);
-    assert_eq!(usage.x, view.sidebar.x + 7);
+    assert_eq!(usage.y, view.left_panel.bottom() - 1);
+    assert_eq!(usage.x, view.left_panel.x + 7);
     assert_eq!(usage.width, 5);
-    assert_eq!(usage.right(), view.sidebar.x + 12);
+    assert_eq!(usage.right(), view.left_panel.x + 12);
     assert_eq!(usage.x, settings.right() + 1);
     for x in usage.x..usage.right() {
         assert!(usage_button_at(&view, &state, x, usage.y));
@@ -68,8 +68,8 @@ fn usage_button_renders_right_of_settings_and_hits() {
     let lines = render_lines(&state);
     let bottom: Vec<char> = lines[usage.y as usize]
         .chars()
-        .skip(usize::from(view.sidebar.x))
-        .take(usize::from(view.sidebar.width))
+        .skip(usize::from(view.left_panel.x))
+        .take(usize::from(view.left_panel.width))
         .collect();
     assert_eq!(bottom[6], '─', "[SET] 与 [USE] 之间保留 1 列底边线");
     let rendered_usage: String = bottom[7..12].iter().collect();
@@ -94,7 +94,7 @@ fn usage_button_width_threshold_is_seventeen() {
     state.settings_available = true;
     let mut view = view_for(&state);
 
-    view.sidebar = Rect::new(0, 0, 16, 24);
+    view.left_panel = Rect::new(0, 0, 16, 24);
     assert!(
         settings_button(&view, &state).is_some(),
         "宽度 16 时 [SET] 仍显示"
@@ -105,7 +105,7 @@ fn usage_button_width_threshold_is_seventeen() {
     );
     assert!(!usage_button_at(&view, &state, 7, 23));
 
-    view.sidebar = Rect::new(0, 0, 17, 24);
+    view.left_panel = Rect::new(0, 0, 17, 24);
     assert!(
         settings_button(&view, &state).is_some(),
         "宽度 17 时 [SET] 显示"
@@ -133,8 +133,8 @@ fn sidebar_bottom_border_has_no_button_after_settings() {
     let lines = render_lines(&state);
     let bottom: Vec<char> = lines[settings.y as usize]
         .chars()
-        .skip(usize::from(view.sidebar.x))
-        .take(usize::from(view.sidebar.width))
+        .skip(usize::from(view.left_panel.x))
+        .take(usize::from(view.left_panel.width))
         .collect();
     let bottom_str: String = bottom.iter().collect();
 
@@ -152,8 +152,8 @@ fn sidebar_bottom_border_has_no_button_after_settings() {
         text::USAGE_LABEL,
         "{bottom_str}"
     );
-    let after_usage_start = usize::from(usage.right() - view.sidebar.x);
-    let collapse_start = usize::from(collapse.area.x - view.sidebar.x);
+    let after_usage_start = usize::from(usage.right() - view.left_panel.x);
+    let collapse_start = usize::from(collapse.area.x - view.left_panel.x);
     let tail: String = bottom[after_usage_start..collapse_start].iter().collect();
     assert!(
         !tail.is_empty(),
@@ -176,9 +176,9 @@ fn no_tooltip_target_points_at_the_removed_ui_button() {
     state.sidebar_collapsed = false;
     state.settings_available = true;
     let view = view_for(&state);
-    let rects = crate::layout::pane_rects(
+    let rects = crate::tiling::pane_rects(
         &state.active_tab().layout,
-        view.panes,
+        view.main_content,
         Config::default().min_pane_width,
         Config::default().min_pane_height,
     );

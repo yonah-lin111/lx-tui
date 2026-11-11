@@ -7,7 +7,7 @@ use crate::app::effects::Effect;
 use crate::app::overlay::{Overlay, OverlayKind, RenameTarget};
 use crate::app::state::AppState;
 use crate::app::toast::{Toast, ToastKind};
-use crate::layout::PaneId;
+use crate::tiling::PaneId;
 use crate::ui::text;
 
 use super::interaction::show_toast;

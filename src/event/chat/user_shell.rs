@@ -18,7 +18,7 @@ use crate::chat::process::{
 use crate::db::chat::UserShellRecord;
 use crate::db::service::Persistence;
 use crate::event::AppEvent;
-use crate::layout::PaneId;
+use crate::tiling::PaneId;
 
 use super::ChatStreams;
 

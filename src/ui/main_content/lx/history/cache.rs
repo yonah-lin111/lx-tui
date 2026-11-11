@@ -8,7 +8,7 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use crate::app::state::Lx;
-use crate::layout::PaneId;
+use crate::tiling::PaneId;
 use crate::ui::markdown_render::IncrementalMarkdownState;
 
 use super::paint::BlockPaint;

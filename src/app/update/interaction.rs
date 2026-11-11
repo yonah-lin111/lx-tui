@@ -7,7 +7,7 @@ use ratatui::layout::Rect;
 use crate::app::state::AppState;
 use crate::app::toast::Toast;
 use crate::app::tooltip::{Tooltip, TooltipTarget};
-use crate::layout::{BoundaryHit, PaneId};
+use crate::tiling::{BoundaryHit, PaneId};
 
 use super::editor::prompt_item_editing;
 use super::prompt::commit_editing_prompt;

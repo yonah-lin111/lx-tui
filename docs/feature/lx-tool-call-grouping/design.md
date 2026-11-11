@@ -1,6 +1,7 @@
 # lx 连续同种工具调用合并：设计
 
 > 状态：**已完成并合并入 `dev`**（2026-11-11）。自动化验证与代码审查记录见同目录 `task.md` 与 `review.md`。
+> 合并修订：与 `feat/quit-confirm-title-and-naming` 合并后，`src/ui/main_content/lx/history/tool.rs` 的标题/分段/网格写入/折行原语抽到 `history/tool/header.rs`，以保持生产文件低于 1000 行；分组键、组头、树体与折叠行为不变。
 > 日期：2026-11-10。
 > 目标页面：lx / Native Agent 对话时间线。
 > 相关规范：`docs/standards/project-directory-structure.md`、`code-writing-standards.md`、`tui-design-requirements.md`、`lx-message-block-display.md`。

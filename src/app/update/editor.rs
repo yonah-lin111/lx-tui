@@ -4,7 +4,7 @@ use crate::app::actions::EditorCommand;
 use crate::app::markdown::MentionEntry;
 use crate::app::prompt::{PromptEditing, PromptMode, page_rows};
 use crate::app::state::{AppState, FocusedContainer};
-use crate::layout::PaneId;
+use crate::tiling::PaneId;
 
 use super::prompt::{
     activate_prompt_row, apply_page_search, apply_prompt_search, clamp_page_view,

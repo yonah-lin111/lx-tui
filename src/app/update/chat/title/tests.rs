@@ -189,6 +189,31 @@ fn first_turn_schedules_session_title_and_manual_rename_cancels_it() {
 }
 
 #[test]
+fn prompt_block_title_effect_uses_outer_template_and_own_supple_content() {
+    let mut state = AppState::demo();
+    state.models = sample_models(false);
+    let text = "&&& addTemplate --start\n{title: Main}\n\n- Description: Outer task\n\n+++ supplement --start\n{title: }\n\n- Notes: Inner detail\n/title\n+++ supplement --end\n\n+++ sibling --start\n- Notes: Sibling detail\n+++ sibling --end\n&&& addTemplate --end";
+    state.prompt.set_text(text);
+    let cursor = text.find("/title").expect("slash") + "/title".len();
+    state.prompt.set_cursor_offset(cursor);
+
+    assert!(state.prompt.slash_confirm());
+    assert!(flush_prompt_title_action(&mut state));
+    let prompt = state
+        .effects
+        .iter()
+        .find_map(|effect| match effect {
+            Effect::GeneratePromptBlockTitle { prompt, .. } => Some(prompt.clone()),
+            _ => None,
+        })
+        .expect("prompt effect");
+    assert!(prompt.contains("- Description: Outer task"), "{prompt}");
+    assert!(prompt.contains("- Notes: Inner detail"), "{prompt}");
+    assert!(!prompt.contains("Sibling detail"), "{prompt}");
+    assert!(!prompt.contains("+++"), "{prompt}");
+}
+
+#[test]
 fn prompt_block_title_handles_rollback_supersede_pages_mode_and_inline_title() {
     let mut state = AppState::demo();
     let initial = "&&& addTemplate --start {title: Old}\n\n- Description: Build feature\n/title\n&&& addTemplate --end";

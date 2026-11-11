@@ -14,6 +14,7 @@
 
 - lx-tui 是 Rust 单二进制 TUI，渲染基线为 ratatui + crossterm（与 herdr 同栈），布局参照 herdr 并保持简化。
 - 保持 `app/`（纯状态与更新）与 `ui/`（纯渲染）边界清晰；渲染只读状态，禁止在渲染中修改状态或执行 IO。
+- UI 容器目录固定为 `ui/left_panel/`、`ui/right_panel/`、`ui/main_content/`；窗格平铺模型在根级 `src/tiling.rs`，屏幕分区在 `ui/layout.rs`，不要再新增 `sidebar` / `prompt_frame` / `panes` 顶层模块。
 - 优先最小修改，不为未来假设创建空目录、空文件或抽象层。
 - 新增、移动或拆分代码前，确认模块归属、依赖方向及已有可复用能力。
 - **生产代码**单文件行数上限 1000，超限必须按职责拆分，拆分后子文件控制在 500 行左右。**测试文件组织遵循主流 Rust 规范**：严格跟随被测模块的职责与目录层级拆分，生产代码拆出子模块时测试必须同步迁入对应的子模块（如 `<module>/<submodule>/tests.rs`），严禁在模块根部堆积数千行的单体测试；单测试文件建议控制在 1000 行以内，上限不超过 1500 行；跨场景超限按场景聚类拆分子测试文件，共用测试夹具抽取到 `test_support` 或 `fixtures` 模块（详见 `docs/standards/code-writing-standards.md`）。

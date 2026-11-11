@@ -183,7 +183,7 @@ pub(crate) struct CapturedChildPromptInputs {
 pub(crate) fn capture_child_prompt_inputs(
     state: &crate::app::state::AppState,
     persistence: &crate::db::service::Persistence,
-    parent_pane: crate::layout::PaneId,
+    parent_pane: crate::tiling::PaneId,
     workspace: &Path,
     cwd: &Path,
     frozen: &crate::app::state::FrozenModel,

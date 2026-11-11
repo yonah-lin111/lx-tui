@@ -9,7 +9,8 @@ use unicode_width::UnicodeWidthStr;
 
 use crate::app::state::{AppState, TodoChartKind};
 use crate::db::todo::{TodoPriority, day_of_month};
-use crate::ui::{prompt, style, text};
+use crate::ui::right_panel::prompt;
+use crate::ui::{style, text};
 
 use super::{BAR_WIDTH, MIN_STATS_ROWS, stats_divider_rect, stats_rect, write_cell, write_inline};
 

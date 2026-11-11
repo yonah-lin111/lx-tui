@@ -1,6 +1,7 @@
 //! 键盘与粘贴终端事件分派：单行重命名拦截、路由分派与剪贴板/终端透传。
 
 use std::collections::HashMap;
+use std::time::{Duration, Instant};
 
 use alacritty_terminal::term::TermMode;
 use crossterm::event::{KeyCode, KeyEvent, KeyEventKind, KeyModifiers};
@@ -10,13 +11,16 @@ use crate::app::overlay::Overlay;
 use crate::app::state::{AppState, PaneView};
 use crate::app::update;
 use crate::input::{self, Routed, TodoKey};
-use crate::layout::{self, PaneId};
 use crate::pty::PtySession;
+use crate::tiling::{self, PaneId};
 use crate::ui;
 
 use super::mouse::hit::copy_with_toast;
 use super::paste;
 use super::session::{Geometry, ensure_workspace_visible, reveal_active_tab, write_to_pane};
+
+/// 取消退出后吞掉 `Esc`/`Enter` 的短窗口：自动重复不得穿透到底层浮层。
+const QUIT_CANCEL_LATCH: Duration = Duration::from_millis(300);
 
 /// 处理终端按键事件。
 pub(crate) fn handle_key_event(
@@ -29,6 +33,16 @@ pub(crate) fn handle_key_event(
 ) {
     let view = &geometry.view;
     if key.kind == KeyEventKind::Release {
+        return;
+    }
+    // 独立退出确认层优先于一切底层交互：只放行确认/取消键，其余按键全部吞掉。
+    if state.quit_confirm.is_some() {
+        handle_quit_confirm_key(key, state, dirty);
+        return;
+    }
+    // 取消退出后的短窗口：每次自动重复都刷新 latch，松开后静默 300ms 才恢复底层按键。
+    if quit_cancel_latch_active(state) && matches!(key.code, KeyCode::Esc | KeyCode::Enter) {
+        state.quit_cancel_latch = Some(Instant::now());
         return;
     }
 
@@ -106,15 +120,15 @@ pub(crate) fn handle_key_event(
         return;
     };
     if update::prompt_recent_open(state)
-        && view.prompt.height > 0
-        && !ui::prompt_frame::prompt_recent_visible(view.prompt, state)
+        && view.right_panel.height > 0
+        && !ui::right_panel::prompt::frame::prompt_recent_visible(view.right_panel, state)
     {
         // 面板过矮无法展示 recent 抽屉时自动收起，避免不可见抽屉吞掉键盘输入。
         update::close_prompt_recent(state);
     }
     // recent 抽屉展开时，prompt 的保存/复制/剪切快捷键同样由抽屉吞掉，
     // 避免“键盘已归抽屉”却仍改到后方编辑器或写系统剪贴板。
-    if ui::prompt_frame::prompt_recent_visible(view.prompt, state)
+    if ui::right_panel::prompt::frame::prompt_recent_visible(view.right_panel, state)
         && matches!(
             &routed,
             Routed::SavePrompt | Routed::Copy | Routed::Cut | Routed::CopyTemplateBlock
@@ -129,18 +143,18 @@ pub(crate) fn handle_key_event(
             *dirty = true;
         }
         Routed::Editor(command) => {
-            if ui::prompt_frame::prompt_recent_visible(view.prompt, state) {
+            if ui::right_panel::prompt::frame::prompt_recent_visible(view.right_panel, state) {
                 // 抽屉展开时键盘归 recent：↑/↓ 选择、Enter 打开、Esc/Ctrl+R 收起，
                 // 其余键由 update 层的兜底吞掉，不改上方视图。
-                if update::apply_prompt_recent_key(state, &command, view.prompt) {
+                if update::apply_prompt_recent_key(state, &command, view.right_panel) {
                     *dirty = true;
                 }
                 return;
             }
             update::apply_editor(state, command);
             if update::prompt_recent_open(state)
-                && view.prompt.height > 0
-                && !ui::prompt_frame::prompt_recent_visible(view.prompt, state)
+                && view.right_panel.height > 0
+                && !ui::right_panel::prompt::frame::prompt_recent_visible(view.right_panel, state)
             {
                 update::close_prompt_recent(state);
             }
@@ -305,6 +319,52 @@ pub(crate) fn handle_key_event(
     }
 }
 
+/// 退出确认层按键：`Ctrl+Q` 需通过去抖守卫，`Esc` 取消、`Enter` 确认，其余吞掉。
+fn handle_quit_confirm_key(key: KeyEvent, state: &mut AppState, dirty: &mut bool) {
+    if is_ctrl_q(key) {
+        // kitty 事件类型会显式标记 Repeat；直接吞掉，避免长按触发确认。
+        if key.kind == KeyEventKind::Repeat {
+            return;
+        }
+        let now = Instant::now();
+        let accepts = state
+            .quit_confirm
+            .as_ref()
+            .is_some_and(|confirm| confirm.accepts_shortcut(now));
+        if accepts {
+            update::confirm_quit(state);
+            *dirty = true;
+        } else if let Some(confirm) = state.quit_confirm.as_mut() {
+            // 连续 Press 的自动重复也刷新静默窗口，按住期间永远不满足确认条件。
+            confirm.note_shortcut_press(now);
+        }
+        return;
+    }
+    match key.code {
+        KeyCode::Esc => {
+            update::cancel_quit(state);
+            *dirty = true;
+        }
+        KeyCode::Enter => {
+            update::confirm_quit(state);
+            *dirty = true;
+        }
+        _ => {}
+    }
+}
+
+/// 取消退出后的短窗口是否仍在生效。
+fn quit_cancel_latch_active(state: &AppState) -> bool {
+    state
+        .quit_cancel_latch
+        .is_some_and(|at| at.elapsed() < QUIT_CANCEL_LATCH)
+}
+
+/// 是否为 `Ctrl+Q`。
+fn is_ctrl_q(key: KeyEvent) -> bool {
+    key.code == KeyCode::Char('q') && key.modifiers.contains(KeyModifiers::CONTROL)
+}
+
 /// 处理终端粘贴事件。
 pub(crate) fn handle_paste_event(
     text: String,
@@ -312,6 +372,10 @@ pub(crate) fn handle_paste_event(
     sessions: &mut HashMap<PaneId, PtySession>,
     dirty: &mut bool,
 ) {
+    // 退出确认层打开时粘贴一律吞掉，绝不改动底层编辑器。
+    if state.quit_confirm.is_some() {
+        return;
+    }
     // 浮层打开时粘贴只进入当前浮层的单行输入框，绝不穿透到底层终端。
     if state.overlay.is_some() {
         if update::apply_overlay_paste(state, &text) {
@@ -466,7 +530,7 @@ fn copy_lx_selection(
     let area = rects
         .iter()
         .find(|(id, _)| *id == pane)
-        .map(|(_, rect)| layout::pane_inner_rect(*rect));
+        .map(|(_, rect)| tiling::pane_inner_rect(*rect));
     let Some((area, target)) = area.zip(state.pane_anywhere(pane)) else {
         return false;
     };

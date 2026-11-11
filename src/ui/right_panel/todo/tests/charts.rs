@@ -11,7 +11,7 @@ fn list_and_stats_split_body_evenly() {
     let list = list_rect(area);
     let divider = stats_divider_rect(area).expect("统计块可见");
     let stats = stats_rect(area).expect("统计块可见");
-    let body = crate::layout::prompt_body_rect(crate::layout::pane_inner_rect(area));
+    let body = crate::ui::right_panel::geometry::body_rect(crate::tiling::pane_inner_rect(area));
 
     assert_eq!(strip.y, body.y, "周感知带贴主体区顶边");
     assert_eq!(list.y, strip.bottom(), "列表紧贴周感知带下方");
@@ -38,7 +38,8 @@ fn stats_hidden_when_body_too_short() {
         let area = Rect::new(0, 0, 40, height);
         assert!(stats_divider_rect(area).is_none(), "高度 {height} 无分割线");
         assert!(stats_rect(area).is_none(), "高度 {height} 无统计块");
-        let body = crate::layout::prompt_body_rect(crate::layout::pane_inner_rect(area));
+        let body =
+            crate::ui::right_panel::geometry::body_rect(crate::tiling::pane_inner_rect(area));
         assert_eq!(
             list_rect(area).height,
             body.height,

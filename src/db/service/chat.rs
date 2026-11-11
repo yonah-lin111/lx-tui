@@ -450,7 +450,7 @@ impl Persistence {
     fn load_chat_session_into_pane(
         &self,
         state: &mut AppState,
-        pane: crate::layout::PaneId,
+        pane: crate::tiling::PaneId,
         workspace: &Path,
         session_id: &str,
     ) -> bool {
@@ -714,7 +714,7 @@ impl Persistence {
                     self.with_db(|db| db.rename_chat_session(&workspace, &session_id, &title));
                 if renamed.is_some() {
                     // 就地更新 `/resume` 列表该行标题；面板保持打开、高亮不动。
-                    let panes: Vec<crate::layout::PaneId> = state.all_pane_ids();
+                    let panes: Vec<crate::tiling::PaneId> = state.all_pane_ids();
                     let mut changed = false;
                     for pane in panes {
                         changed |= update::on_session_renamed(state, pane, &session_id, &title);
@@ -756,7 +756,7 @@ impl Persistence {
                         session_id: session_id.clone(),
                         agent_id: None,
                     });
-                    let panes: Vec<crate::layout::PaneId> = state.all_pane_ids();
+                    let panes: Vec<crate::tiling::PaneId> = state.all_pane_ids();
                     for pane in panes {
                         changed |= update::on_session_deleted(state, pane, &session_id);
                         changed |= update::on_session_removed(state, pane, &session_id);

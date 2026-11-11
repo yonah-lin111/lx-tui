@@ -7,7 +7,7 @@ use crate::app::state::{
     AppState, Pane, PaneKind, PaneView, Tab, Workspace, current_workspace_identity, home_dir,
     unique_workspace_name, workspace_label,
 };
-use crate::layout::PaneId;
+use crate::tiling::PaneId;
 
 use super::todo::commit_todo_edit;
 use crate::ui::text;

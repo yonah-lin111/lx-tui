@@ -79,7 +79,7 @@ use crate::chat::tools::ToolExecutionResult;
 use crate::db::chat::{ToolCallResult, ToolCallTicket, ToolTerminalStatus, Usage};
 use crate::db::service::Persistence;
 use crate::event::AppEvent;
-use crate::layout::PaneId;
+use crate::tiling::PaneId;
 use crate::ui::text;
 use context_summary::{background_tasks, runtime_context_summary};
 

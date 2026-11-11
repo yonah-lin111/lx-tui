@@ -8,7 +8,7 @@ use crate::app::overlay::{
 };
 use crate::app::state::{AppState, PaneView, TodoEditTarget, tab_label};
 use crate::app::trust::TrustTrigger;
-use crate::layout::PaneId;
+use crate::tiling::PaneId;
 
 use super::focus_prompt;
 use super::pane::toggle_pane_view;

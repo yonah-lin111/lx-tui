@@ -17,7 +17,7 @@ use crate::app::state::WorkspaceIdentity;
 use crate::app::state::{AiWebSite, AppState, LxEntry, PaneView};
 use crate::app::tooltip::{BlockButtonKind, TemplateButtonKind, TooltipTarget};
 #[cfg(test)]
-use crate::layout::PaneId;
+use crate::tiling::PaneId;
 
 pub use connect::*;
 pub use steer::*;

@@ -23,7 +23,8 @@ use crate::app::tooltip::TodoButton;
 use crate::db::todo::TodoRecord;
 use crate::ui::text;
 
-use super::super::{prompt, style, widgets};
+use super::prompt;
+use crate::ui::{style, widgets};
 
 /// 工具栏按钮宽度（列）；与 `text::TODO_*_LABEL` 的显示宽度一一对应。
 const NEW_WIDTH: u16 = 3;
@@ -57,7 +58,7 @@ const BUTTONS: [(TodoButton, u16); 2] =
 
 /// 主体区：表头两行之下的整块（含最右 1 列滚动条槽）。
 fn body_rect(panel: Rect) -> Rect {
-    crate::layout::prompt_body_rect(crate::layout::pane_inner_rect(panel))
+    super::geometry::body_rect(crate::tiling::pane_inner_rect(panel))
 }
 
 /// 统计块高度：扣掉顶部 1 行周感知带后，与列表**平分**剩余主体区（分割线占 1 行，取整余数留给列表）。
@@ -153,7 +154,7 @@ fn left_width() -> u16 {
 
 /// 右侧组放得下的按钮数（宽度阶梯：从右缘往左丢弃）。
 fn right_button_count(panel: Rect) -> usize {
-    let width = crate::layout::pane_inner_rect(panel).width;
+    let width = crate::tiling::pane_inner_rect(panel).width;
     let mut total = left_width().saturating_add(BUTTON_GAP);
     let mut count = 0;
     for (index, (_, button_width)) in RIGHT_BUTTONS.iter().enumerate() {
@@ -171,7 +172,7 @@ fn right_button_count(panel: Rect) -> usize {
 
 /// 工具栏按钮矩形；放不下时返回 None。
 pub fn button_rect(panel: Rect, button: TodoButton) -> Option<Rect> {
-    let bar = crate::layout::prompt_toolbar_rect(panel)?;
+    let bar = super::geometry::toolbar_rect(panel)?;
     if LEFT_BUTTONS.iter().any(|(kind, _)| *kind == button) {
         let width = LEFT_BUTTONS[0].1;
         let rect = Rect::new(bar.x, bar.y, width, 1);
@@ -577,7 +578,7 @@ pub fn scrollbar(panel: Rect, state: &AppState) -> Option<widgets::scrollbar::Sc
 
 /// 绘制 Todo 面板体；有编辑现场时返回输入光标坐标（走与 prompt 相同的硬件光标链路）。
 pub(crate) fn render(frame: &mut Frame<'_>, area: Rect, state: &AppState) -> Option<(u16, u16)> {
-    let header = crate::layout::prompt_header_rect(area)?;
+    let header = super::geometry::header_rect(area)?;
     let focused = state.todo_focused();
     prompt::render_divider(area, header, frame.buffer_mut(), focused);
     let buf = frame.buffer_mut();

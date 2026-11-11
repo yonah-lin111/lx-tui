@@ -10,9 +10,9 @@ use crate::app::overlay::Overlay;
 use crate::app::state::{AppState, PaneView};
 use crate::app::update;
 use crate::config::Config;
-use crate::layout::{self, PaneId};
 use crate::platform::PointerShape;
 use crate::pty::PtySession;
+use crate::tiling::{self, PaneId};
 use crate::ui;
 
 use super::super::paste;
@@ -283,7 +283,7 @@ pub(crate) fn handle_mouse_moved(
     let right_tab_hover = if hovering_toast || state.prompt_collapsed {
         None
     } else {
-        ui::right_panel::tab_at(view.prompt, mouse.column, mouse.row)
+        ui::right_panel::tab_at(view.right_panel, mouse.column, mouse.row)
     };
     if update::set_right_tab_hover(state, right_tab_hover) {
         *dirty = true;
@@ -298,7 +298,7 @@ pub(crate) fn handle_mouse_moved(
     } else {
         // `row_at` 给的是**显示**下标；悬停状态与渲染层都用列表下标比较，
         // 必须在这里换算一次，否则幽灵行打开时悬停会高亮到下一行。
-        ui::right_panel::todo::row_at(view.prompt, state, mouse.column, mouse.row)
+        ui::right_panel::todo::row_at(view.right_panel, state, mouse.column, mouse.row)
             .and_then(|display| ui::right_panel::todo::list_index(state, display))
     };
     if update::set_todo_hover(state, todo_hover) {
@@ -307,8 +307,8 @@ pub(crate) fn handle_mouse_moved(
     // 提示词树/页列表悬停：仅树视图或页视图且在文本区内；指针离开即清空。
     let prompt_main = {
         let panel = &state.prompt_owner().prompt_panel;
-        crate::layout::prompt_body_split(
-            view.prompt,
+        crate::ui::right_panel::prompt::geometry::prompt_body_split(
+            view.right_panel,
             panel.recent_open,
             crate::app::prompt::recent_page_count(panel),
         )
@@ -318,14 +318,14 @@ pub(crate) fn handle_mouse_moved(
         if hovering_toast || state.prompt_drag.is_some() || !update::prompt_panel_active(state) {
             None
         } else if update::prompt_tree_mode(state) {
-            ui::prompt::tree::row_at(
+            ui::right_panel::prompt::tree::row_at(
                 prompt_main,
                 &state.prompt_owner().prompt_panel,
                 mouse.column,
                 mouse.row,
             )
         } else if update::prompt_pages_mode(state) {
-            ui::prompt::pages::page_row_at(
+            ui::right_panel::prompt::pages::page_row_at(
                 prompt_main,
                 &state.prompt_owner().prompt_panel,
                 mouse.column,
@@ -341,7 +341,12 @@ pub(crate) fn handle_mouse_moved(
     let recent_hover = if hovering_toast || state.prompt_drag.is_some() {
         None
     } else {
-        ui::prompt_frame::prompt_recent_row_at(view.prompt, state, mouse.column, mouse.row)
+        ui::right_panel::prompt::frame::prompt_recent_row_at(
+            view.right_panel,
+            state,
+            mouse.column,
+            mouse.row,
+        )
     };
     if update::set_prompt_recent_hover(state, recent_hover) {
         *dirty = true;
@@ -360,24 +365,25 @@ pub(crate) fn handle_mouse_moved(
     if update::set_tooltip_target(state, tooltip_target, Instant::now()) {
         *dirty = true;
     }
-    let boundary = layout::resize_boundary_at(rects, mouse.column, mouse.row);
-    let sidebar_hover = !hovering_toast && ui::sidebar_boundary_at(view, mouse.column, mouse.row);
+    let boundary = tiling::resize_boundary_at(rects, mouse.column, mouse.row);
+    let left_panel_hover =
+        !hovering_toast && ui::left_panel_boundary_at(view, mouse.column, mouse.row);
     // 交换按钮是控件：悬停它不视为分割线悬停（不高亮、不显示拖拽指针）。
     let swap_hover = !hovering_toast && ui::swap_button_at(view, mouse.column, mouse.row);
     let prompt_hover = !hovering_toast
-        && !sidebar_hover
+        && !left_panel_hover
         && !swap_hover
         && boundary.is_some_and(|hit| prompt_boundary_hit(state, hit));
-    let pane_hover = if hovering_toast || sidebar_hover || prompt_hover || swap_hover {
+    let pane_hover = if hovering_toast || left_panel_hover || prompt_hover || swap_hover {
         None
     } else {
         boundary.filter(|hit| pane_boundary_draggable(state, *hit))
     };
-    let mut hover_changed = update::set_sidebar_hover(state, sidebar_hover);
+    let mut hover_changed = update::set_sidebar_hover(state, left_panel_hover);
     hover_changed |= update::set_prompt_hover(state, prompt_hover);
     hover_changed |= update::set_pane_hover(state, pane_hover);
     if hover_changed {
-        let shape = if sidebar_hover || prompt_hover {
+        let shape = if left_panel_hover || prompt_hover {
             PointerShape::EwResize
         } else {
             match pane_hover.map(|hit| hit.direction) {

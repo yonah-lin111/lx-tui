@@ -819,7 +819,7 @@ fn save_prompt_content_syncs_all_sharing_panels() {
         id,
         page_id,
         content: "typed".into(),
-        prompt: crate::layout::PaneId::alloc(),
+        prompt: crate::tiling::PaneId::alloc(),
         revision: 1,
     });
     service.pump(&mut state);

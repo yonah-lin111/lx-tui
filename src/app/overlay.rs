@@ -4,7 +4,7 @@ mod text_input;
 
 use std::path::PathBuf;
 
-use crate::layout::PaneId;
+use crate::tiling::PaneId;
 
 pub use text_input::TextInput;
 

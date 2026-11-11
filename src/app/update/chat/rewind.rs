@@ -13,7 +13,7 @@ use crate::app::state::{
     lx::slash::PanelWindow,
 };
 use crate::db::chat::FileAvailability;
-use crate::layout::PaneId;
+use crate::tiling::PaneId;
 use crate::ui::text;
 
 use super::{refresh_lx_status, show_lx_hint};

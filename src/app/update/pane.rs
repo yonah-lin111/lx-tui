@@ -5,9 +5,10 @@ use std::path::Path;
 use ratatui::layout::Rect;
 
 use crate::app::actions::LxInput;
+use crate::app::prompt::geometry::prompt_body_split;
 use crate::app::state::{AppState, Lx, PaneKind, PaneView};
 use crate::detect::PaneAgentSnapshot;
-use crate::layout::{self, PaneId};
+use crate::tiling::{self, PaneId};
 
 use super::selection::{WHEEL_LINES, clear_selection};
 
@@ -842,7 +843,7 @@ pub fn resize_panes(state: &mut AppState, pane_rects: &[(PaneId, Rect)]) {
                     crate::app::prompt::recent_page_count(panel),
                 )
             };
-            let split = layout::prompt_body_split(*rect, recent_open, recent_count);
+            let split = prompt_body_split(*rect, recent_open, recent_count);
             if recent_open && split.recent_divider.is_none() {
                 super::close_prompt_recent(state);
             }
@@ -857,13 +858,13 @@ pub fn resize_panes(state: &mut AppState, pane_rects: &[(PaneId, Rect)]) {
             }
             state.prompt_resize_pending = false;
         } else if let Some(pane) = state.pane_mut_anywhere(*id) {
-            let (cols, rows) = layout::pane_inner_size(*rect);
+            let (cols, rows) = tiling::pane_inner_size(*rect);
             let old_size = pane.terminal.size();
             pane.terminal.resize(cols, rows);
-            let (lx_cols, lx_rows) = layout::lx_input_size(*rect);
+            let (lx_cols, lx_rows) = tiling::lx_input_size(*rect);
             pane.lx.resize(lx_cols, lx_rows);
             if let Some(ask) = pane.lx.ask.as_mut() {
-                let (width, rows) = layout::lx_ask_editor_size(*rect);
+                let (width, rows) = tiling::lx_ask_editor_size(*rect);
                 ask.resize_editor(width, rows);
             }
             if (old_size.cols, old_size.rows) != (cols, rows) {

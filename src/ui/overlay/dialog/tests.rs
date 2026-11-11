@@ -223,6 +223,100 @@ fn rename_buttons_hit_their_cells() {
 }
 
 #[test]
+fn quit_confirm_shell_clamps_to_narrow_screen_and_hides_when_too_small() {
+    let narrow = Rect::new(0, 0, 40, 10);
+    let shell = quit_confirm_shell(narrow).expect("narrow shell fits");
+    assert_eq!(shell.area.width, 40, "宽度夹取到屏幕");
+    assert_eq!(shell.area.height, 7, "单行问题 + 顶栏/按钮行");
+
+    let short = Rect::new(0, 0, 80, 5);
+    let shell = quit_confirm_shell(short).expect("short shell fits");
+    assert_eq!(shell.area.height, 5, "高度夹取到屏幕");
+
+    assert!(quit_confirm_shell(Rect::new(0, 0, 3, 3)).is_none());
+}
+
+#[test]
+fn quit_confirm_buttons_hit_their_cells() {
+    let shell = quit_confirm_shell(SCREEN).expect("quit confirm fits");
+    let rects = widgets::modal::button_row(
+        shell.inner,
+        &[text::BUTTON_CONFIRM, text::BUTTON_CANCEL],
+        BUTTON_GAP,
+        shell.inner.height.saturating_sub(1),
+    );
+    assert_eq!(
+        confirm_button_at(&shell, rects[0].x, rects[0].y),
+        Some(ConfirmButton::Confirm)
+    );
+    assert_eq!(
+        confirm_button_at(&shell, rects[1].x, rects[1].y),
+        Some(ConfirmButton::Cancel)
+    );
+    assert_eq!(confirm_button_at(&shell, rects[0].x, rects[0].y + 1), None);
+}
+
+/// 直接绘制退出确认层（它不再挂在 `state.overlay` 上）。
+fn draw_quit_confirm(width: u16, height: u16) -> Vec<String> {
+    let mut terminal =
+        Terminal::new(TestBackend::new(width, height)).expect("test backend is infallible");
+    if let Err(error) = terminal.draw(|frame| {
+        render_quit_confirm(frame, frame.area());
+    }) {
+        panic!("draw failed: {error}");
+    }
+    let buffer = terminal.backend().buffer().clone();
+    (0..buffer.area.height)
+        .map(|y| {
+            (0..buffer.area.width)
+                .map(|x| buffer[(x, y)].symbol())
+                .collect()
+        })
+        .collect()
+}
+
+#[test]
+fn quit_confirm_renders_title_question_and_buttons() {
+    let lines = draw_quit_confirm(SCREEN.width, SCREEN.height);
+    let joined = lines.join("\n");
+    assert!(joined.contains(text::EXIT_CONFIRM_TITLE), "{joined}");
+    assert!(joined.contains(text::EXIT_CONFIRM_QUESTION), "{joined}");
+    assert!(joined.contains(text::BUTTON_CONFIRM), "{joined}");
+    assert!(joined.contains(text::BUTTON_CANCEL), "{joined}");
+}
+
+#[test]
+fn short_screen_does_not_overlap_title_and_question() {
+    // 4x5：问题按自身行数绘制会越过内框压到底边框；必须裁剪到按钮行之前。
+    let narrow = draw_quit_confirm(4, 5);
+    assert!(
+        narrow[4].contains('─'),
+        "底边框不得被问题行覆盖：{narrow:?}"
+    );
+    assert!(
+        narrow[4].contains('└') && narrow[4].contains('┘'),
+        "底边框两角必须完整：{narrow:?}"
+    );
+
+    // 40x5：短屏跳过标题，首行只能是问题，按钮在问题行之后。
+    let lines = draw_quit_confirm(40, 5);
+    let first_inner = lines[1].trim_matches(|ch| ch == '│' || ch == ' ').trim();
+    assert_eq!(
+        first_inner,
+        text::EXIT_CONFIRM_QUESTION,
+        "短屏首行只能是问题，不能同时画标题：{lines:?}"
+    );
+    assert!(
+        lines[3].contains(text::BUTTON_CONFIRM),
+        "按钮行在问题行之后：{lines:?}"
+    );
+    assert!(
+        !lines[3].contains(text::EXIT_CONFIRM_QUESTION),
+        "问题不得压到按钮行：{lines:?}"
+    );
+}
+
+#[test]
 fn confirm_modal_renders_question_and_buttons() {
     let mut state = AppState::demo();
     let item = crate::app::prompt::PromptItem::single(1, None, "item", "body");

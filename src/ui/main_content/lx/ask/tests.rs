@@ -7,7 +7,7 @@ use crate::chat::tools::ask::{AskOption, AskQuestion};
 
 fn key() -> RequestKey {
     RequestKey {
-        pane: crate::layout::PaneId::alloc(),
+        pane: crate::tiling::PaneId::alloc(),
         session: "s".into(),
         generation: 1,
     }
@@ -652,8 +652,8 @@ fn preview_scrolls_together_with_the_options_through_the_same_viewport() {
 fn ask_editor_width_matches_draw_other_content_width_without_clipping_line_ends() {
     let mut lx = lx_with(sample());
     let pane_rect = Rect::new(0, 0, 42, 30);
-    let area = crate::layout::pane_inner_rect(pane_rect);
-    let (editor_w, editor_rows) = crate::layout::lx_ask_editor_size(pane_rect);
+    let area = crate::tiling::pane_inner_rect(pane_rect);
+    let (editor_w, editor_rows) = crate::tiling::lx_ask_editor_size(pane_rect);
     assert_eq!(editor_rows, AskState::MAX_OTHER_EDIT_ROWS as u16);
 
     let exact_w = editor_content_width(area, &lx).expect("editor content width");

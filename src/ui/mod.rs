@@ -2,16 +2,13 @@
 
 pub mod controls;
 pub mod layout;
+pub mod left_panel;
 pub mod main_content;
 pub mod markdown;
 pub mod markdown_render;
 pub mod mention;
 pub mod overlay;
-mod panes;
-pub mod prompt;
-pub mod prompt_frame;
 pub mod right_panel;
-pub mod sidebar;
 pub mod style;
 pub mod tab_bar;
 pub mod text;
@@ -21,14 +18,13 @@ pub mod trust;
 pub mod widgets;
 
 pub use controls::*;
-pub use prompt_frame::*;
 
 #[cfg(test)]
 pub(crate) use controls::collapsed_content_x;
 
-pub use sidebar::{
+pub use left_panel::{
     add_workspace_button, agent_item_index_at, agent_list_rows, agent_scrollbar, agent_target_at,
-    agents_section_at, sidebar_boundary_at, workspace_drop_index, workspace_group_toggle_at,
+    agents_section_at, left_panel_boundary_at, workspace_drop_index, workspace_group_toggle_at,
     workspace_history_blank_at, workspace_history_drop_index, workspace_history_group_toggle_at,
     workspace_history_row_at, workspace_history_scrollbar, workspace_history_search_char_at,
     workspace_history_visible_rows, workspace_item_at, workspace_list_blank_at,
@@ -36,7 +32,7 @@ pub use sidebar::{
 };
 
 #[cfg(test)]
-pub use sidebar::agent_item_at;
+pub use left_panel::agent_item_at;
 
 use ratatui::Frame;
 use ratatui::layout::{Alignment, Rect};
@@ -75,19 +71,19 @@ pub(crate) fn render_cached(
         state.prompt_left,
         state.panes_collapsed,
     );
-    let pane_rects = crate::layout::pane_rects(
+    let pane_rects = crate::tiling::pane_rects(
         &state.active_tab().layout,
-        view.panes,
+        view.main_content,
         config.min_pane_width,
         config.min_pane_height,
     );
 
-    let sidebar_cursor = if view.sidebar.width > 0 {
+    let sidebar_cursor = if view.left_panel.width > 0 {
         if state.sidebar_collapsed {
-            controls::render_collapsed_strip(frame, view.sidebar, true);
+            controls::render_collapsed_strip(frame, view.left_panel, true);
             None
         } else {
-            let cursor = sidebar::render(frame, view.sidebar, state);
+            let cursor = left_panel::render(frame, view.left_panel, state);
             controls::render_settings_button(frame, &view, state);
             controls::render_usage_button(frame, &view, state);
             cursor
@@ -99,10 +95,10 @@ pub(crate) fn render_cached(
     controls::render_exit_button(frame, &view);
     // 主区折叠：只画右缘窄条，不渲染窗格内容（PTY 尺寸保持折叠前）。
     let pane_cursor = if state.prompt_left && state.panes_collapsed {
-        controls::render_collapsed_strip(frame, view.panes, false);
+        controls::render_collapsed_strip(frame, view.main_content, false);
         None
     } else {
-        panes::render_panes(frame, &pane_rects, state, cache)
+        main_content::panes::render_panes(frame, &pane_rects, state, cache)
     };
     let prompt_cursor = right_panel::render(frame, &view, state)
         .or(pane_cursor)
@@ -126,12 +122,21 @@ pub(crate) fn render_cached(
     let menu_tooltip_area = border_tooltip_open
         .then(|| tooltip::render(frame, area, state, &view, &pane_rects))
         .flatten();
+    // 退出确认层独立于 `overlay`：最后绘制，任何浮层/toast/tooltip 都不得盖住它。
+    let quit_confirm_open = state.quit_confirm.is_some();
+    if quit_confirm_open {
+        overlay::dialog::render_quit_confirm(frame, area);
+    }
 
     // 浮层是模态：重命名等单行输入浮层接管硬件光标，其余浮层不显示光标。
     // 若光标位置被后绘制的 tooltip/toast 盒覆盖，一并隐藏，避免硬件光标穿透浮层。
-    let base_cursor = match state.overlay {
-        Some(_) => overlay_cursor,
-        None => prompt_cursor,
+    let base_cursor = if quit_confirm_open {
+        None
+    } else {
+        match state.overlay {
+            Some(_) => overlay_cursor,
+            None => prompt_cursor,
+        }
     };
     let cursor = base_cursor.filter(|position| {
         !tooltip_area

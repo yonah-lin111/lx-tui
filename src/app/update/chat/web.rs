@@ -9,7 +9,7 @@ use crate::app::state::{
     RequestState, SlashPanel,
 };
 use crate::chat::events::PartKind;
-use crate::layout::PaneId;
+use crate::tiling::PaneId;
 use crate::ui::text;
 
 pub use crate::app::state::{

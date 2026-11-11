@@ -17,8 +17,18 @@
 //! 4. 停止幂等：重复停止已退出进程只返回已知终态，不再发信号；
 //! 5. 创建成功但登记失败时清理资源，不留下无人管理的后台进程。
 
+mod handle;
+mod lifecycle;
+mod spawn;
+mod types;
+
+pub use types::*;
+
+use handle::*;
+use lifecycle::*;
+
 use std::collections::HashMap;
-use std::path::{Path, PathBuf};
+use std::path::Path;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::Duration;
@@ -26,62 +36,14 @@ use std::time::Duration;
 use tokio::io::AsyncReadExt;
 use tokio::sync::{mpsc, oneshot};
 
-mod handle;
-mod spawn;
-
 use super::output::{MAX_MODEL_OUTPUT_BYTES, MAX_PROCESS_OUTPUT_BYTES, OutputSource};
 use super::{
     ExecArgs, MAX_INPUT_PREVIEW_CHARS, ProcessOwner, ProcessResult, ProcessResultKind,
     ProcessState, StdinArgs, preview_input,
 };
-use handle::{ProcessHandle, StdinRequest, StopReason, estimated_tokens, stop_handle};
-
-/// 默认等待窗口（毫秒）。
-///
-/// 对齐 codex：`exec_command` 默认等 10s（`write_stdin` 另有默认，见
-/// [`DEFAULT_STDIN_YIELD_MS`]）。窗口只决定**本次工具调用等多久**，到期不杀进程。
-pub const DEFAULT_YIELD_MS: u64 = 10_000;
-/// `write_stdin` 的默认等待窗口（毫秒）：交互写要快速返回，对齐 codex 的 250ms。
-///
-/// 与 `exec_command` 分开：交互是「打字 → 看反应」，等 10s 完全没有意义；
-/// 而首轮命令往往要几秒才吐第一行输出，等 250ms 只会立刻返回空。
-pub const DEFAULT_STDIN_YIELD_MS: u64 = 250;
-/// 等待窗口上限（毫秒）。
-pub const MAX_YIELD_MS: u64 = 30_000;
-/// 命令总寿命上限（毫秒）：24 小时。
-pub const MAX_TIMEOUT_MS: u64 = 24 * 60 * 60 * 1000;
-/// 返回模型的文本近似 token 上限（12,500 tokens ≈ 50 KiB，对齐 `MAX_MODEL_OUTPUT_BYTES`）。
-pub const MAX_OUTPUT_TOKENS: usize = 12_500;
-/// 每次 stdin 输入字节上限。
-pub const MAX_STDIN_BYTES: usize = 64 * 1024;
-/// 温和停止后等待强制终止的时间。
-pub const STOP_GRACE: Duration = Duration::from_millis(1000);
-/// 终态记录保留时长。
-pub const FINISHED_TTL: Duration = Duration::from_secs(600);
-
-/// 资源限额。
-#[derive(Debug, Clone, Copy)]
-pub struct ProcessLimits {
-    /// 单会话同时运行的进程上限。
-    pub max_running: usize,
-    /// 进程内全局运行进程上限（多窗格会话累加）。
-    pub global_max_running: usize,
-    /// 终态记录保留条数上限。
-    pub max_finished: usize,
-}
-
-impl Default for ProcessLimits {
-    fn default() -> Self {
-        Self {
-            max_running: 8,
-            global_max_running: 32,
-            max_finished: 32,
-        }
-    }
-}
 
 /// 进程内全局运行进程计数（跨会话共享）。
-static GLOBAL_RUNNING: AtomicU64 = AtomicU64::new(0);
+pub(super) static GLOBAL_RUNNING: AtomicU64 = AtomicU64::new(0);
 
 /// 进程内全局进程 ID 计数器（**跨会话共享**）。
 ///
@@ -101,72 +63,6 @@ fn next_process_id() -> u64 {
 #[cfg(test)]
 pub(crate) fn global_running() -> u64 {
     GLOBAL_RUNNING.load(Ordering::Relaxed)
-}
-
-/// UI 侧进程事件（纯数据；由事件层映射成 `AppEvent`）。
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub enum ProcessUiEvent {
-    /// 有新输出可读（限流后每进程最多一个在途通知）。
-    Output {
-        session_id: u64,
-        origin_call_id: String,
-    },
-    /// 进程进入终态。
-    Exited {
-        session_id: u64,
-        origin_call_id: String,
-        state: ProcessState,
-        exit_code: Option<i32>,
-    },
-}
-
-/// 进程操作失败原因（稳定错误码，可回给模型）。
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct ProcessError {
-    /// 稳定错误码（`process_not_found` / `process_expired` / `resource_limit` / …）。
-    pub code: &'static str,
-    /// 单行说明（不含命令输出）。
-    pub message: String,
-}
-
-impl ProcessError {
-    fn new(code: &'static str, message: impl Into<String>) -> Self {
-        Self {
-            code,
-            message: message.into(),
-        }
-    }
-}
-
-/// 一次进程的 UI 快照（只读，不推进模型游标）。
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct ProcessSnapshot {
-    pub session_id: u64,
-    pub command: String,
-    pub cwd: String,
-    pub tty: bool,
-    pub state: ProcessState,
-    pub exit_code: Option<i32>,
-    /// 保留输出的尾部文本（已剥离控制序列）。
-    pub tail: String,
-    /// `tail` 在**原始字节流**中的区间 `[output_start, output_end)`。
-    ///
-    /// 落库时写这两列。它们不是 `tail.len()`——`tail` 是剥掉控制序列、lossy 转码
-    /// 之后的文本，长度与原始偏移无关。留在库里的是真实偏移，恢复侧才能据此判断
-    /// 「模型读到哪」。
-    pub output_start: u64,
-    pub output_end: u64,
-    pub dropped_bytes: u64,
-    pub started_at_ms: i64,
-    pub ended_at_ms: Option<i64>,
-    /// 发起该进程的 `exec_command` 工具调用 ID（卡片归属）。
-    pub origin_call_id: String,
-    /// shell 已退出，但它拉起的后台作业仍在进程组里存活。
-    ///
-    /// 真实场景：`nohup bash task.sh &` 之后 shell 立刻退出。此时 lx 的直接子进程
-    /// 已是 `exited`，可用户的服务还在跑——只看 `state` 会把它从后台任务面板里
-    /// 过滤掉，面板显示「no running processes」而任务其实活着。
-    pub background_alive: bool,
 }
 
 /// 会话进程管理器（一个聊天运行实例持有唯一一份）。
@@ -680,7 +576,7 @@ impl ProcessManager {
 }
 
 /// 读端 → 缓冲的异步任务（管道）。
-fn spawn_pipe_reader<R>(handle: Arc<ProcessHandle>, mut reader: R, source: OutputSource)
+pub(super) fn spawn_pipe_reader<R>(handle: Arc<ProcessHandle>, mut reader: R, source: OutputSource)
 where
     R: tokio::io::AsyncRead + Unpin + Send + 'static,
 {
@@ -698,55 +594,23 @@ where
 }
 
 /// 退出码 → 状态（未知退出码保持 `Exited { code: None }`，绝不伪造 0）。
-fn exit_state(code: Option<i32>) -> ProcessState {
+pub(super) fn exit_state(code: Option<i32>) -> ProcessState {
     ProcessState::Exited { code }
 }
 
-/// 解析工作目录：相对路径基于冻结工作区，不修改进程全局 cwd。
-fn resolve_cwd(workspace: &Path, workdir: Option<&str>) -> Result<PathBuf, ProcessError> {
-    let Some(workdir) = workdir else {
-        return Ok(workspace.to_path_buf());
-    };
-    let path = Path::new(workdir);
-    let resolved = if path.is_absolute() {
-        path.to_path_buf()
-    } else {
-        workspace.join(path)
-    };
-    if !resolved.is_dir() {
-        return Err(ProcessError::new(
-            "invalid_arguments",
-            format!("workdir is not a directory: {}", resolved.display()),
-        ));
-    }
-    Ok(resolved)
+/// 当前输出量（近似 token：4 字节 ≈ 1 token）。
+pub(super) fn estimated_tokens(handle: &Arc<ProcessHandle>) -> usize {
+    let output = lock(&handle.output);
+    let cursor = handle.cursor.load(Ordering::Relaxed);
+    (output.end().saturating_sub(cursor) as usize).div_ceil(4)
 }
 
 /// PTY 固定尺寸（聊天卡片不做全屏终端仿真，窗格缩放不改变后台程序尺寸）。
-const PTY_COLS: u16 = 120;
-const PTY_ROWS: u16 = 40;
-
-/// 短时停止请求轮询器（PTY 等待线程无法 select）。
-struct StopWaiter<'a> {
-    receiver: &'a mut oneshot::Receiver<StopReason>,
-}
-
-impl<'a> StopWaiter<'a> {
-    fn new(receiver: &'a mut oneshot::Receiver<StopReason>) -> Self {
-        Self { receiver }
-    }
-
-    fn poll(&mut self) -> Option<StopReason> {
-        match self.receiver.try_recv() {
-            Ok(reason) => Some(reason),
-            Err(oneshot::error::TryRecvError::Empty) => None,
-            Err(oneshot::error::TryRecvError::Closed) => None,
-        }
-    }
-}
+pub(super) const PTY_COLS: u16 = 120;
+pub(super) const PTY_ROWS: u16 = 40;
 
 /// 短锁包装：中毒锁按内部数据继续使用（本模块不 panic 持有锁）。
-fn lock<T>(mutex: &std::sync::Mutex<T>) -> std::sync::MutexGuard<'_, T> {
+pub(super) fn lock<T>(mutex: &std::sync::Mutex<T>) -> std::sync::MutexGuard<'_, T> {
     mutex.lock().unwrap_or_else(|poison| poison.into_inner())
 }
 

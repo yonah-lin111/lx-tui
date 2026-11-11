@@ -14,7 +14,7 @@ use crate::cli::output::Output;
 use crate::db::Database;
 use crate::db::chat::{CompactCommit, CompactRevert, FileAvailability, RestorePath};
 use crate::event::chat::rewind::{RewindOutcome, execute_rewind};
-use crate::layout::PaneId;
+use crate::tiling::PaneId;
 
 /// `session rewind --mode` 的四种取值。
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]

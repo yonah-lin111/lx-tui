@@ -1,6 +1,7 @@
 # lx 工具长内容截断与消息列表截断展示统一：设计
 
 > 状态：**已实施并完成代码审查修复（2026-11-11），已合并至 `dev`**。
+> 合并修订：与 `feat/quit-confirm-title-and-naming` 合并后，`src/chat/process/manager/` 最终为 `mod.rs` + `types.rs` + `handle.rs` + `lifecycle.rs` + `spawn.rs`；`handle.rs` 只保留 `ProcessHandle`/`StdinRequest`，`stop_handle`/`resolve_cwd`/`StopWaiter` 在 `lifecycle.rs`，50 KiB 输出边界与 `enforce_output_bounds` 保持不变。
 > 日期：2026-11-11。
 > 范围：`read`（文件读取 + 目录列表）、`web_search`、`exec_command` / `write_stdin` 返回给模型与落库的 50 KiB / 2000 行 / 单行 2000 字符截断；以及 TUI 消息列表工具卡片 `[truncated]` 展示位置统一与单体 `read` 单行路径显示。
 > 明确不包含：DB 迁移、临时文件落盘（opencode `tool-output`）、`search` / MCP / 子 agent 汇报的执行层截断策略变更。

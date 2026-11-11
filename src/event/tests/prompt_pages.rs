@@ -28,7 +28,8 @@ fn single_click_selects_page_row_without_switching_page() {
     assert_eq!(state.workspaces[0].prompt_panel.pages_view.selected, 0);
 
     let geo = geometry(&state, &config, Rect::new(0, 0, 140, 30));
-    let text_area = crate::layout::prompt_text_rect(geo.view.prompt);
+    let text_area =
+        crate::ui::right_panel::prompt::geometry::prompt_text_rect(geo.view.right_panel);
     let mut sessions = HashMap::new();
     let mut dirty = false;
 
@@ -58,7 +59,8 @@ fn double_click_within_window_opens_selected_page() {
     assert!(crate::app::update::show_prompt_pages(&mut state));
 
     let geo = geometry(&state, &config, Rect::new(0, 0, 140, 30));
-    let text_area = crate::layout::prompt_text_rect(geo.view.prompt);
+    let text_area =
+        crate::ui::right_panel::prompt::geometry::prompt_text_rect(geo.view.right_panel);
     let mut sessions = HashMap::new();
     let mut dirty = false;
 
@@ -94,7 +96,8 @@ fn tree_click_history_does_not_bleed_into_pages_single_click() {
     assert!(crate::app::update::show_prompt_pages(&mut state));
 
     let geo = geometry(&state, &config, Rect::new(0, 0, 140, 30));
-    let text_area = crate::layout::prompt_text_rect(geo.view.prompt);
+    let text_area =
+        crate::ui::right_panel::prompt::geometry::prompt_text_rect(geo.view.right_panel);
     let mut sessions = HashMap::new();
     let mut dirty = false;
 
@@ -128,7 +131,8 @@ fn wheel_scrolls_page_list_without_moving_selection() {
     assert!(crate::app::update::show_prompt_pages(&mut state));
 
     let geo = geometry(&state, &config, Rect::new(0, 0, 140, 10));
-    let text_area = crate::layout::prompt_text_rect(geo.view.prompt);
+    let text_area =
+        crate::ui::right_panel::prompt::geometry::prompt_text_rect(geo.view.right_panel);
     let mut sessions = HashMap::new();
     let mut dirty = false;
 
@@ -153,12 +157,14 @@ fn clicking_title_counter_toggles_between_editor_and_pages() {
     let config = Config::default();
     let mut state = paged_prompt_state();
     let geo = geometry(&state, &config, Rect::new(0, 0, 140, 30));
-    let bar = crate::layout::prompt_toolbar_rect(geo.view.prompt).expect("toolbar");
+    let bar = crate::ui::right_panel::prompt::geometry::prompt_toolbar_rect(geo.view.right_panel)
+        .expect("toolbar");
     let mut sessions = HashMap::new();
     let mut dirty = false;
 
     // Editor 视图下点击计数：进入 Pages 视图。
-    let editor_controls = ui::prompt::toolbar_page_controls(bar, "1/2", true).expect("controls");
+    let editor_controls =
+        ui::right_panel::prompt::toolbar_page_controls(bar, "1/2", true).expect("controls");
     handle_terminal_event(
         mouse(
             MouseEventKind::Down(MouseButton::Left),
@@ -175,7 +181,8 @@ fn clicking_title_counter_toggles_between_editor_and_pages() {
     assert_eq!(state.workspaces[0].prompt_panel.mode, PromptMode::Pages);
 
     // Pages 视图下点击计数（无箭头几何）：返回 Editor 视图。
-    let pages_controls = ui::prompt::toolbar_page_controls(bar, "1/2", false).expect("controls");
+    let pages_controls =
+        ui::right_panel::prompt::toolbar_page_controls(bar, "1/2", false).expect("controls");
     handle_terminal_event(
         mouse(
             MouseEventKind::Down(MouseButton::Left),

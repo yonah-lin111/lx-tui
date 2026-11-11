@@ -92,7 +92,7 @@ fn purge_workspace_history_paths(state: &mut AppState, paths_to_delete: Vec<Path
         .collect();
 
     for &ws_idx in matching_ws.iter().rev() {
-        let pane_ids: Vec<crate::layout::PaneId> = state
+        let pane_ids: Vec<crate::tiling::PaneId> = state
             .workspaces
             .get(ws_idx)
             .map(|ws| {

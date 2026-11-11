@@ -4,7 +4,7 @@
 //! 谁该高亮、谁该拿硬件光标全部由 `state.focus()` 派生，不在这里另存状态。
 
 use crate::app::state::{AppState, FocusedContainer};
-use crate::layout::PaneId;
+use crate::tiling::PaneId;
 
 use super::selection::clear_selection;
 use super::todo::commit_todo_edit;

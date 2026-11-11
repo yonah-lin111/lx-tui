@@ -9,7 +9,7 @@ use crate::app::overlay::Overlay;
 use crate::app::prompt::PromptRowKind;
 use crate::app::state::{AppState, RightTab};
 use crate::app::update;
-use crate::layout::{self, PaneId};
+use crate::tiling::{self, PaneId};
 use crate::ui;
 
 use super::mouse::hit::pane_at;
@@ -23,6 +23,19 @@ pub(crate) fn handle_overlay_click(
     column: u16,
     row: u16,
 ) -> Option<(PaneId, Vec<u8>)> {
+    // 退出确认层独立于 `overlay`：只响应确认/取消按钮；点击外部或无法绘制时一律吞掉。
+    if state.quit_confirm.is_some() {
+        let shell = ui::overlay::quit_confirm_shell(screen)?;
+        if !shell.area.contains((column, row).into()) {
+            return None;
+        }
+        match ui::overlay::confirm_button_at(&shell, column, row) {
+            Some(ui::overlay::ConfirmButton::Confirm) => update::confirm_quit(state),
+            Some(ui::overlay::ConfirmButton::Cancel) => update::cancel_quit(state),
+            None => {}
+        }
+        return None;
+    }
     let input_area = overlay_input_rect(state, screen);
     if let Some(area) = input_area
         && row == area.y
@@ -579,16 +592,17 @@ pub(crate) fn open_right_click_menu(
         return true;
     }
     // 底部 recent 抽屉区域：右键一律吞掉，不穿透打开上方树/页列表/编辑器菜单。
-    if ui::prompt_frame::prompt_recent_contains(view.prompt, state, column, row) {
+    if ui::right_panel::prompt::frame::prompt_recent_contains(view.right_panel, state, column, row)
+    {
         return false;
     }
     // 提示词树：行上打开节点菜单，空白区域打开新建菜单；分区标签行不响应。
     if update::prompt_panel_active(state) && update::prompt_tree_mode(state) {
-        let area = ui::prompt_frame::prompt_main_rect(view.prompt, state);
+        let area = ui::right_panel::prompt::frame::prompt_main_rect(view.right_panel, state);
         if area.contains((column, row).into()) {
             let hit = {
                 let panel = &state.prompt_owner().prompt_panel;
-                ui::prompt::tree::row_at(area, panel, column, row).and_then(|index| {
+                ui::right_panel::prompt::tree::row_at(area, panel, column, row).and_then(|index| {
                     let row_data = panel.rows().get(index).copied()?;
                     match row_data.kind {
                         PromptRowKind::Folder => panel
@@ -624,18 +638,18 @@ pub(crate) fn open_right_click_menu(
     }
     // Todo 列表：行上打开条目菜单，空白区域打开空白菜单。
     if !state.prompt_collapsed && state.right_tab == RightTab::Todo {
-        let list_rect = ui::right_panel::todo::effective_list_rect(view.prompt, state);
+        let list_rect = ui::right_panel::todo::effective_list_rect(view.right_panel, state);
         if list_rect.contains((column, row).into()) {
-            let display = ui::right_panel::todo::row_at(view.prompt, state, column, row);
+            let display = ui::right_panel::todo::row_at(view.right_panel, state, column, row);
             update::right_click_todo_list(state, display, (column, row));
             return true;
         }
     }
     // 页列表视图：行上打开页菜单，空白区域打开新建页菜单。
     if update::prompt_panel_active(state) && update::prompt_pages_mode(state) {
-        let area = ui::prompt_frame::prompt_main_rect(view.prompt, state);
+        let area = ui::right_panel::prompt::frame::prompt_main_rect(view.right_panel, state);
         if area.contains((column, row).into()) {
-            match ui::prompt::pages::page_row_at(
+            match ui::right_panel::prompt::pages::page_row_at(
                 area,
                 &state.prompt_owner().prompt_panel,
                 column,
@@ -659,8 +673,8 @@ pub(crate) fn open_right_click_menu(
             return false;
         }
         // 命中区域含主滚动条列（不含底部 recent 抽屉）；候选面板只关面板，待确认的粘贴提案必须保留。
-        let main = ui::prompt_frame::prompt_main_rect(view.prompt, state);
-        let inner = layout::pane_inner_rect(view.prompt);
+        let main = ui::right_panel::prompt::frame::prompt_main_rect(view.right_panel, state);
+        let inner = tiling::pane_inner_rect(view.right_panel);
         let area = ratatui::layout::Rect::new(inner.x, main.y, inner.width, main.height);
         if area.contains((column, row).into()) {
             update::focus_prompt(state);

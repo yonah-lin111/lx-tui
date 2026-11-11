@@ -7,11 +7,11 @@ fn mouse_wheel_over_short_prompt_does_not_scroll_without_scrollbar() {
     let config = Config::default();
     let mut state = demo_terminal();
     let geo = geometry(&state, &config, Rect::new(0, 0, 120, 30));
-    let inner = crate::layout::prompt_text_rect(geo.view.prompt);
+    let inner = crate::ui::right_panel::prompt::geometry::prompt_text_rect(geo.view.right_panel);
     state.prompt.resize(inner.width, inner.height);
     state.prompt.insert_str("1\n2");
     assert!(
-        ui::prompt_scrollbar(&geo.view, &state).is_none(),
+        ui::right_panel::prompt::frame::prompt_scrollbar(&geo.view, &state).is_none(),
         "前提：短正文没有滚动条"
     );
     let mut sessions = HashMap::new();
@@ -36,7 +36,8 @@ fn mouse_track_click_prompt_scrollbar_scrolls_without_focus() {
     let mut state = demo_terminal();
     let geo = geometry(&state, &config, Rect::new(0, 0, 120, 30));
     overflow_prompt(&mut state, &geo.view);
-    let bar = ui::prompt_scrollbar(&geo.view, &state).expect("scrollbar is visible");
+    let bar = ui::right_panel::prompt::frame::prompt_scrollbar(&geo.view, &state)
+        .expect("scrollbar is visible");
     let mut sessions = HashMap::new();
     let mut dirty = false;
 
@@ -76,8 +77,11 @@ fn mouse_track_click_prompt_tree_scrollbar_scrolls_list() {
             .map(|index| PromptItem::single(index, None, format!("item-{index:02}"), String::new()))
             .collect(),
     );
-    let bar = ui::prompt_scrollbar(&geo.view, &state).expect("scrollbar is visible");
-    let gutter = crate::layout::prompt_tree_scrollbar_rect(geo.view.prompt).expect("gutter");
+    let bar = ui::right_panel::prompt::frame::prompt_scrollbar(&geo.view, &state)
+        .expect("scrollbar is visible");
+    let gutter =
+        crate::ui::right_panel::prompt::geometry::prompt_tree_scrollbar_rect(geo.view.right_panel)
+            .expect("gutter");
     assert_eq!(bar.track, gutter, "树视图滚动条槽在搜索框与分割线之下");
     let mut sessions = HashMap::new();
     let mut dirty = false;
@@ -107,7 +111,8 @@ fn mouse_drag_prompt_scrollbar_thumb() {
     let mut state = demo_terminal();
     let geo = geometry(&state, &config, Rect::new(0, 0, 120, 30));
     overflow_prompt(&mut state, &geo.view);
-    let bar = ui::prompt_scrollbar(&geo.view, &state).expect("scrollbar is visible");
+    let bar = ui::right_panel::prompt::frame::prompt_scrollbar(&geo.view, &state)
+        .expect("scrollbar is visible");
     let max = ui::widgets::scrollbar::offset_from_drag_row(&bar, bar.track.bottom() - 1, 0);
     assert!(max > 0);
     let mut sessions = HashMap::new();
@@ -165,7 +170,7 @@ fn mouse_wheel_during_prompt_selection_scrolls_viewport() {
     let mut state = demo_terminal();
     let geo = geometry(&state, &config, Rect::new(0, 0, 120, 30));
     overflow_prompt(&mut state, &geo.view);
-    let inner = crate::layout::prompt_text_rect(geo.view.prompt);
+    let inner = crate::ui::right_panel::prompt::geometry::prompt_text_rect(geo.view.right_panel);
     let mut sessions = HashMap::new();
     let mut dirty = false;
 
@@ -229,7 +234,7 @@ fn mouse_motion_tracks_prompt_tree_hover() {
     let mut state = demo_terminal();
     crate::app::update::show_prompt_tree(&mut state);
     let geo = geometry(&state, &config, Rect::new(0, 0, 120, 30));
-    let area = crate::layout::prompt_text_rect(geo.view.prompt);
+    let area = crate::ui::right_panel::prompt::geometry::prompt_text_rect(geo.view.right_panel);
     let scroll = state.prompt_owner().prompt_panel.scroll;
     let hovered = state.prompt_owner().prompt_panel.selected;
     let rows_area_y = area.y + 2;
@@ -271,8 +276,8 @@ fn mouse_motion_tracks_prompt_tree_hover() {
     handle_terminal_event(
         mouse(
             MouseEventKind::Moved,
-            geo.view.panes.x + 2,
-            geo.view.panes.y + 2,
+            geo.view.main_content.x + 2,
+            geo.view.main_content.y + 2,
         ),
         &mut state,
         &mut sessions,
@@ -312,8 +317,9 @@ fn mouse_interacts_with_block_command_panel() {
         crate::app::actions::EditorCommand::InsertChar('#'),
     );
     let geo = geometry(&state, &config, Rect::new(0, 0, 120, 30));
-    let area = crate::layout::prompt_text_rect(geo.view.prompt);
-    let panel = crate::ui::prompt::panel_layout(&state.prompt, area).expect("block panel visible");
+    let area = crate::ui::right_panel::prompt::geometry::prompt_text_rect(geo.view.right_panel);
+    let panel = crate::ui::right_panel::prompt::panel_layout(&state.prompt, area)
+        .expect("block panel visible");
     let rect = panel.rect;
     let mut sessions = HashMap::new();
     let mut dirty = false;
@@ -392,8 +398,9 @@ fn mouse_wheel_over_mention_panel_scrolls_viewport_only() {
     crate::app::update::apply_mention_entries(&mut state, prompt, generation, entries);
 
     let geo = geometry(&state, &config, Rect::new(0, 0, 120, 30));
-    let area = crate::layout::prompt_text_rect(geo.view.prompt);
-    let before = crate::ui::prompt::mention_layout(&state.prompt, area).expect("mention panel");
+    let area = crate::ui::right_panel::prompt::geometry::prompt_text_rect(geo.view.right_panel);
+    let before =
+        crate::ui::right_panel::prompt::mention_layout(&state.prompt, area).expect("mention panel");
     let mut sessions = HashMap::new();
     let mut dirty = false;
 
@@ -411,7 +418,8 @@ fn mouse_wheel_over_mention_panel_scrolls_viewport_only() {
         &mut dirty,
     );
 
-    let after = crate::ui::prompt::mention_layout(&state.prompt, area).expect("mention panel");
+    let after =
+        crate::ui::right_panel::prompt::mention_layout(&state.prompt, area).expect("mention panel");
     assert_eq!(after.start, before.start + 3, "滚轮下移视口 3 项");
     assert_eq!(
         state.prompt.mention().map(|panel| panel.active()),
@@ -428,7 +436,7 @@ fn mouse_click_prompt_pin_toggles_pin() {
     let mut sessions = HashMap::new();
     let mut dirty = false;
 
-    let pin = ui::prompt_pin_button(geo.view.prompt, false).expect("pin visible");
+    let pin = ui::prompt_pin_button(geo.view.right_panel, false).expect("pin visible");
     handle_terminal_event(
         mouse(MouseEventKind::Down(MouseButton::Left), pin.x, pin.y),
         &mut state,
@@ -441,7 +449,7 @@ fn mouse_click_prompt_pin_toggles_pin() {
     assert_eq!(state.prompt_pinned, Some(state.active_workspace));
     assert!(dirty);
 
-    let unpin = ui::prompt_pin_button(geo.view.prompt, true).expect("unpin visible");
+    let unpin = ui::prompt_pin_button(geo.view.right_panel, true).expect("unpin visible");
     dirty = false;
     handle_terminal_event(
         mouse(MouseEventKind::Down(MouseButton::Left), unpin.x, unpin.y),
@@ -467,7 +475,7 @@ fn mouse_click_prompt_toolbar_undo_redo_and_save() {
     assert!(!state.prompt.is_saved());
     assert!(state.prompt.can_undo());
 
-    let undo = toolbar_button(&geo, layout::PromptToolbarButton::Undo);
+    let undo = toolbar_button(&geo, geometry::PromptToolbarButton::Undo);
     handle_terminal_event(
         mouse(MouseEventKind::Down(MouseButton::Left), undo.x, undo.y),
         &mut state,
@@ -482,7 +490,7 @@ fn mouse_click_prompt_toolbar_undo_redo_and_save() {
     assert!(!state.prompt_focused(), "工具栏按钮不抢焦点");
     assert!(dirty);
 
-    let redo = toolbar_button(&geo, layout::PromptToolbarButton::Redo);
+    let redo = toolbar_button(&geo, geometry::PromptToolbarButton::Redo);
     handle_terminal_event(
         mouse(MouseEventKind::Down(MouseButton::Left), redo.x, redo.y),
         &mut state,
@@ -495,7 +503,7 @@ fn mouse_click_prompt_toolbar_undo_redo_and_save() {
     assert_eq!(state.prompt.text(), "hello");
 
     // 默认绑定临时提示词：点击保存点提交缓冲并打开保存选择器。
-    let save = toolbar_button(&geo, layout::PromptToolbarButton::Save);
+    let save = toolbar_button(&geo, geometry::PromptToolbarButton::Save);
     handle_terminal_event(
         mouse(MouseEventKind::Down(MouseButton::Left), save.x, save.y),
         &mut state,
@@ -535,8 +543,8 @@ fn mouse_click_prompt_header_swallows_without_focus_or_cursor() {
     let mut sessions = HashMap::new();
     let mut dirty = false;
 
-    let bar = layout::prompt_toolbar_rect(geo.view.prompt).expect("toolbar visible");
-    let redo = toolbar_button(&geo, layout::PromptToolbarButton::Redo);
+    let bar = geometry::prompt_toolbar_rect(geo.view.right_panel).expect("toolbar visible");
+    let redo = toolbar_button(&geo, geometry::PromptToolbarButton::Redo);
     let blank_x = redo.x - 1;
     handle_terminal_event(
         mouse(MouseEventKind::Down(MouseButton::Left), blank_x, bar.y),
@@ -575,7 +583,7 @@ fn mouse_click_prompt_text_row_places_cursor_below_header() {
     let mut sessions = HashMap::new();
     let mut dirty = false;
 
-    let text = layout::prompt_text_rect(geo.view.prompt);
+    let text = geometry::prompt_text_rect(geo.view.right_panel);
     handle_terminal_event(
         mouse(
             MouseEventKind::Down(MouseButton::Left),
@@ -611,7 +619,7 @@ fn mouse_drag_prompt_item_into_folder_queues_move_effect() {
         vec![PromptItem::single(7, None, "item", "item body")],
         PromptRowKind::Item,
     );
-    let area = layout::prompt_text_rect(geo.view.prompt);
+    let area = geometry::prompt_text_rect(geo.view.right_panel);
     let folder_index = state.workspaces[0]
         .prompt_panel
         .rows()
@@ -718,7 +726,7 @@ fn mouse_drag_prompt_row_does_not_open_editor() {
         ],
         PromptRowKind::Item,
     );
-    let area = layout::prompt_text_rect(geo.view.prompt);
+    let area = geometry::prompt_text_rect(geo.view.right_panel);
     let rows = state.workspaces[0].prompt_panel.rows().len();
     let blank = (area.x + 1, area.y + 2 + rows as u16);
     prompt_tree_drag(&mut state, &geo, &config, item_point, blank);
@@ -942,7 +950,7 @@ fn hover_below_ghost_row_stores_list_index() {
     crate::app::update::begin_todo_edit(&mut state, crate::app::state::TodoEditTarget::After(0));
     assert!(state.todo.is_editing(), "前提：幽灵行打开");
 
-    let list = crate::ui::right_panel::todo::list_rect(geo.view.prompt);
+    let list = crate::ui::right_panel::todo::list_rect(geo.view.right_panel);
     let mut sessions = HashMap::new();
     let mut dirty = false;
     handle_terminal_event(

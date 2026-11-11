@@ -184,9 +184,16 @@ impl Persistence {
         changed
     }
 
+    /// 退出收尾是否仍需提交编辑器：确认退出路径已经提交过时不重复。
+    pub(crate) fn shutdown_commits_prompt(state: &AppState) -> bool {
+        !state.prompt_committed_for_quit
+    }
+
     /// 退出前收尾：提交编辑中的提示词并落库。
     pub fn shutdown(&mut self, state: &mut AppState) {
-        update::commit_editing_prompt(state);
+        if Self::shutdown_commits_prompt(state) {
+            update::commit_editing_prompt(state);
+        }
         update::commit_todo_edit(state);
         self.pump(state);
     }

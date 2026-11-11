@@ -72,7 +72,23 @@ fn lx_view_edits_input_and_pastes_text() {
         "粘贴不得写入隐藏终端"
     );
 
-    // Ctrl+Q 仍优先退出。
+    // Ctrl+Q 第一次只打开退出确认，第二次才真正退出。
+    handle_terminal_event(
+        TerminalEvent::Key(KeyEvent::new(KeyCode::Char('q'), KeyModifiers::CONTROL)),
+        &mut state,
+        &mut sessions,
+        &geo,
+        &config,
+        &mut ui::RenderCache::default(),
+        &mut dirty,
+    );
+    assert!(!state.should_quit);
+    assert!(state.quit_confirm.is_some());
+    // 真正松开并静默满窗口后，第二次按下才确认退出。
+    if let Some(confirm) = state.quit_confirm.as_mut() {
+        confirm.last_shortcut_press =
+            std::time::Instant::now() - std::time::Duration::from_millis(301);
+    }
     handle_terminal_event(
         TerminalEvent::Key(KeyEvent::new(KeyCode::Char('q'), KeyModifiers::CONTROL)),
         &mut state,
@@ -333,7 +349,7 @@ fn lx_mention_panel_click_accepts_candidate_before_page_selection() {
         .find(|(id, _)| *id == pane)
         .copied()
         .expect("pane rect");
-    let inner = crate::layout::pane_inner_rect(rect);
+    let inner = crate::tiling::pane_inner_rect(rect);
     let lx = &state.pane_anywhere(pane).expect("pane").lx;
     let panel = ui::main_content::lx::mention_layout(inner, lx).expect("mention panel");
     let (x, y) = (panel.content.x, panel.content.y);
@@ -375,7 +391,7 @@ fn lx_mention_wheel_scrolls_panel_not_input() {
         .find(|(id, _)| *id == pane)
         .copied()
         .expect("pane rect");
-    let inner = crate::layout::pane_inner_rect(rect);
+    let inner = crate::tiling::pane_inner_rect(rect);
     let input_scroll_before = state.pane_anywhere(pane).expect("pane").lx.scroll();
     let lx = &state.pane_anywhere(pane).expect("pane").lx;
     let panel = ui::main_content::lx::mention_layout(inner, lx).expect("mention panel");
@@ -733,7 +749,7 @@ fn lx_mention_left_right_keys_and_mouse_switch_tabs_and_insert_ref_folder() {
         .find(|(id, _)| *id == pane)
         .copied()
         .expect("pane rect");
-    let inner = crate::layout::pane_inner_rect(rect);
+    let inner = crate::tiling::pane_inner_rect(rect);
     let panel =
         ui::main_content::lx::mention_layout(inner, &state.pane_anywhere(pane).expect("pane").lx)
             .expect("mention panel");
@@ -807,7 +823,7 @@ fn lx_command_panel_non_item_clicks_do_not_penetrate_to_underlying_entries() {
         .find(|(id, _)| *id == pane)
         .copied()
         .expect("pane rect");
-    let inner = crate::layout::pane_inner_rect(rect);
+    let inner = crate::tiling::pane_inner_rect(rect);
     let panel =
         ui::main_content::lx::mention_layout(inner, &state.pane_anywhere(pane).expect("pane").lx)
             .expect("empty mention panel");

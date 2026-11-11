@@ -8,6 +8,7 @@ mod interaction;
 mod menu;
 mod pane;
 mod prompt;
+mod quit;
 mod referenced;
 mod resume_edit;
 mod right_panel;
@@ -27,6 +28,7 @@ pub use interaction::*;
 pub use menu::*;
 pub use pane::*;
 pub use prompt::*;
+pub use quit::{cancel_quit, confirm_quit, request_quit};
 pub use referenced::*;
 pub use resume_edit::*;
 pub use right_panel::*;
@@ -48,11 +50,9 @@ use super::state::{AppState, FocusedContainer};
 /// 应用行为。
 pub fn apply(action: Action, state: &mut AppState) {
     match action {
-        Action::Quit => {
-            // 退出前提交编辑中的提示词内容；效应由事件层在收尾时落库。
-            commit_editing_prompt(state);
-            state.should_quit = true;
-        }
+        Action::RequestQuit => quit::request_quit(state),
+        Action::ConfirmQuit => quit::confirm_quit(state),
+        Action::CancelQuit => quit::cancel_quit(state),
         Action::ToggleSidebar => state.sidebar_collapsed = !state.sidebar_collapsed,
         Action::TogglePrompt => {
             state.prompt_collapsed = !state.prompt_collapsed;

@@ -8,7 +8,7 @@ use lx_tui::app::overlay::{Overlay, ReferencedFolderMenu, ReferencedFolderMenuRo
 use lx_tui::app::state::{AppState, PaneView};
 use lx_tui::app::update;
 use lx_tui::config::Config;
-use lx_tui::layout;
+use lx_tui::tiling;
 use lx_tui::ui;
 use ratatui::Terminal;
 use ratatui::backend::{Backend, ClearType, TestBackend, WindowSize};
@@ -37,13 +37,13 @@ fn ready_state() -> (AppState, Config, Rect) {
         state.prompt_left,
         state.panes_collapsed,
     );
-    let mut rects = layout::pane_rects(
+    let mut rects = tiling::pane_rects(
         &state.active_tab().layout,
-        view.panes,
+        view.main_content,
         config.min_pane_width,
         config.min_pane_height,
     );
-    rects.push((state.prompt.id(), view.prompt));
+    rects.push((state.prompt.id(), view.right_panel));
     update::resize_panes(&mut state, &rects);
     let pane = state.active_tab().layout.focus();
     if let Some(target) = state.active_tab_mut().pane_mut(pane) {
@@ -67,7 +67,7 @@ fn feed_wide_char_straddling(
     pane_rect: Rect,
     lead_col: u16,
 ) -> u16 {
-    let inner = layout::pane_inner_rect(pane_rect);
+    let inner = tiling::pane_inner_rect(pane_rect);
     let _ = config;
     // 目标宽字符行：落在弹窗内部（避开上下边框）的一行。
     let popup_y = (HEIGHT - 18) / 2;

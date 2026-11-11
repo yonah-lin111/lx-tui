@@ -20,7 +20,7 @@ const SCREEN: Rect = Rect {
 };
 
 fn panel(stage: ConnectStage) -> ConnectPanel {
-    let pane = crate::layout::PaneId::alloc();
+    let pane = crate::tiling::PaneId::alloc();
     let mut panel = ConnectPanel::new_with_env(pane, &ConnectSettings::default(), |_| None);
     panel.stage = stage;
     panel

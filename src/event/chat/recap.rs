@@ -21,7 +21,7 @@ use crate::event::AppEvent;
 /// recap 生成完成事件载荷。
 #[derive(Debug, Clone)]
 pub struct RecapGeneratedEvent {
-    pub pane: crate::layout::PaneId,
+    pub pane: crate::tiling::PaneId,
     pub workspace: PathBuf,
     pub session_id: String,
     pub message_id: String,

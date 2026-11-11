@@ -390,7 +390,7 @@ fn resolving_the_ask_list_window_feeds_page_scrolling() {
     let (mut state, pane) = busy_ask_state();
     let geo = geometry(&state, &config, Rect::new(0, 0, 120, 30));
     assert!(update::resolve_ask_list_window(&mut state, &geo.rects));
-    let inner = layout::pane_inner_rect(
+    let inner = tiling::pane_inner_rect(
         geo.rects
             .iter()
             .find(|(id, _)| *id == pane)
@@ -415,7 +415,7 @@ fn task_page_swallows_ask_hits_so_the_list_stays_clickable() {
     let (mut state, pane) = busy_ask_state();
     let geo = geometry(&state, &config, Rect::new(0, 0, 120, 30));
     let (column, row) = ask_option_point(&state, pane, &geo);
-    let inner = layout::pane_inner_rect(
+    let inner = tiling::pane_inner_rect(
         geo.rects
             .iter()
             .find(|(id, _)| *id == pane)
