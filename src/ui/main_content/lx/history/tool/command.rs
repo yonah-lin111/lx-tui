@@ -12,8 +12,8 @@
 //!   其余行左对齐）；两个折叠块共用同一套连接符，不重复 `├─`/`└─`；
 //! - **长任务（进程仍存活）只给一行引导**：命令 + `open task panel · live output`，
 //!   消息列表不铺实时输出；整卡点击打开面板并定位该进程；
-//! - 执行阶段已截断（`truncated` / `dropped_bytes`）另列事实行，不混进
-//!   `… N more lines` 的 UI 省略数；
+//! - 执行阶段已截断（`truncated`）在折叠提示行末尾追加 `[truncated]`（`… N more lines [truncated]`），
+//!   `dropped_bytes` 另列事实行；
 //! - 卡片只读快照：不解析 JSON、不读进程、不读数据库。
 
 use std::borrow::Cow;
@@ -208,12 +208,6 @@ fn output_section(
     let body_width = u16::try_from(cols).unwrap_or(u16::MAX);
     let sampled = sample_markdown_source(output);
     let mut lines: Vec<Vec<Segment>> = muted_markdown_lines(&sampled, body_width);
-    if truncated {
-        lines.push(vec![Segment::new(
-            text::agent::OUTPUT_LIMITED,
-            style::agent_warn(),
-        )]);
-    }
     if dropped > 0 {
         lines.push(vec![Segment::new(
             text::agent::dropped_bytes_label(dropped),
@@ -223,10 +217,13 @@ fn output_section(
     if lines.is_empty() {
         return None;
     }
-    Some(Section::new(
-        vec![Node::block(lines)],
-        folded.then(|| Preview::head_tail(OUTPUT_PREVIEW_HEAD, OUTPUT_PREVIEW_TAIL)),
-    ))
+    Some(
+        Section::new(
+            vec![Node::block(lines)],
+            folded.then(|| Preview::head_tail(OUTPUT_PREVIEW_HEAD, OUTPUT_PREVIEW_TAIL)),
+        )
+        .with_truncated(truncated),
+    )
 }
 
 /// 输入预览的转义还原（`preview_input` 转义 `\\`/`\n`/`\r`/`\t`/`\u{hex}` 并在超长时追加 `…`）。
@@ -780,13 +777,22 @@ mod tests {
 
     #[test]
     fn truncation_facts_are_separate_nodes() {
-        let mut call = command_call(ProcessStateView::Exited { code: Some(0) }, "tail\n", None);
+        let output: String = (0..8)
+            .map(|index| format!("line {index}…[truncated]\n"))
+            .collect();
+        let mut call = command_call(ProcessStateView::Exited { code: Some(0) }, &output, None);
         if let Some(ToolDetailView::Command(view)) = call.detail.as_deref_mut() {
             view.truncated = true;
             view.dropped_bytes = 512;
         }
         let text = flat(&call, 60, Folds::default());
-        assert!(text.contains(text::agent::OUTPUT_LIMITED), "{text}");
+        assert!(text.contains("more lines [truncated]"), "{text}");
+        assert_eq!(
+            text.matches(text::agent::INLINE_TRUNCATED).count(),
+            1,
+            "只允许在 more lines 行出现一次 [truncated]：{text}"
+        );
+        assert!(!text.contains(text::agent::OUTPUT_LIMITED), "{text}");
         assert!(text.contains("earlier bytes dropped"), "{text}");
     }
 

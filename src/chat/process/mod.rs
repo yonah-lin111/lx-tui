@@ -16,7 +16,10 @@ pub use manager::{
     DEFAULT_STDIN_YIELD_MS, DEFAULT_YIELD_MS, MAX_OUTPUT_TOKENS, MAX_STDIN_BYTES, MAX_TIMEOUT_MS,
     MAX_YIELD_MS, ProcessError, ProcessLimits, ProcessManager, ProcessSnapshot, ProcessUiEvent,
 };
-pub use output::{MAX_MODEL_OUTPUT_BYTES, MAX_PROCESS_OUTPUT_BYTES, OutputBuffer, OutputSource};
+pub use output::{
+    MAX_MODEL_OUTPUT_BYTES, MAX_MODEL_OUTPUT_LINE_CHARS, MAX_MODEL_OUTPUT_LINES,
+    MAX_PROCESS_OUTPUT_BYTES, OutputBuffer, OutputSource,
+};
 pub use rtk::{PreparedCommand, Rtk};
 
 use std::path::PathBuf;
@@ -307,6 +310,26 @@ impl ProcessResult {
             "wall_time_seconds": self.wall_time_ms as f64 / 1_000.0,
             "warning": self.background_job_warning(),
         })
+    }
+
+    /// 对 `output` 施加单行 2000 字符、总计 2000 行与 50 KiB JSON 转义后预算上限；
+    /// 任一裁剪触发时置 `truncated = true`。同时限制持久化 `command` 长度，防止超长命令文本撑破 64 KiB 回放上限。
+    pub fn enforce_output_bounds(&mut self) {
+        if self.command.chars().count() > output::MAX_MODEL_OUTPUT_LINE_CHARS {
+            let head: String = self
+                .command
+                .chars()
+                .take(output::MAX_MODEL_OUTPUT_LINE_CHARS)
+                .collect();
+            self.command = format!("{head}…");
+        }
+        let meta_bytes = output::json_escaped_len(&self.command)
+            .saturating_add(output::json_escaped_len(&self.cwd))
+            .saturating_add(self.input.as_deref().map_or(0, output::json_escaped_len));
+        let (bounded, clipped) =
+            output::bound_model_output(&self.output, meta_bytes, self.state.is_terminal());
+        self.output = bounded;
+        self.truncated |= clipped;
     }
 }
 

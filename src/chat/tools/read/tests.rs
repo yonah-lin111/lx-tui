@@ -3,6 +3,14 @@
 use super::super::test_support::*;
 use super::super::{ToolContext, ToolErrorCode, ToolExecutionResult, execute};
 
+/// 常量值锁定产品决策：50 KiB / 单行 2000 字符 / 2000 行。
+#[test]
+fn read_limits_match_opencode() {
+    assert_eq!(super::MAX_READ_BYTES, 50 * 1024);
+    assert_eq!(super::MAX_READ_LINE_CHARS, 2000);
+    assert_eq!(super::MAX_READ_LINES, 2000);
+}
+
 /// 读取普通文本文件：行号为 1-based，正文原样。
 #[test]
 fn reads_file_with_numbered_lines() {
@@ -123,10 +131,37 @@ fn overlong_line_is_truncated_and_flagged() {
     let long = "a".repeat(super::MAX_READ_LINE_CHARS + 50);
     fixture.write("a.txt", &format!("{long}\n"));
     let result = execute(&fixture.ctx(), "read", r#"{"path":"a.txt"}"#);
-    let (content, _, _, _, truncated, _) = expect_read(&result);
+    let (content, _, _, next, truncated, _) = expect_read(&result);
+    let (line_truncated, entries_truncated) = expect_read_flags(&result);
     assert!(truncated, "超长行必须置 truncated");
-    assert!(content.contains("[truncated]"));
+    assert!(line_truncated, "单行截断必须单独标记");
+    assert!(!entries_truncated);
+    assert_eq!(next, None, "单行文件没有后续行可翻页");
+    assert!(content.contains("…[truncated]"));
     assert!(content.chars().count() < long.len());
+}
+
+/// 2000 字符是允许的，2001 字符才截断（锁死 `<=` 边界）。
+#[test]
+fn line_clamp_boundary_is_inclusive() {
+    let fixture = Fixture::new("read-clamp-boundary");
+    let at_limit = "a".repeat(super::MAX_READ_LINE_CHARS);
+    fixture.write("at.txt", &format!("{at_limit}\n"));
+    let result = execute(&fixture.ctx(), "read", r#"{"path":"at.txt"}"#);
+    let (content, _, _, _, truncated, _) = expect_read(&result);
+    let (line_truncated, _) = expect_read_flags(&result);
+    assert!(!truncated);
+    assert!(!line_truncated);
+    assert!(!content.contains("…[truncated]"));
+
+    let over = "a".repeat(super::MAX_READ_LINE_CHARS + 1);
+    fixture.write("over.txt", &format!("{over}\n"));
+    let result = execute(&fixture.ctx(), "read", r#"{"path":"over.txt"}"#);
+    let (content, _, _, _, truncated, _) = expect_read(&result);
+    let (line_truncated, _) = expect_read_flags(&result);
+    assert!(truncated);
+    assert!(line_truncated);
+    assert!(content.contains("…[truncated]"));
 }
 
 /// 行数超上限：按 `limit` 截断并给出 `next_offset`。
@@ -145,6 +180,9 @@ fn line_limit_truncates_with_next_offset() {
     assert_eq!(next, Some(4));
     assert!(truncated);
     assert_eq!(total, 10);
+    let (line_truncated, entries_truncated) = expect_read_flags(&result);
+    assert!(!line_truncated, "分页不等于单行截断");
+    assert!(!entries_truncated);
 }
 
 /// 字节上限：超小时按字节截断且仍给 `next_offset`。
@@ -160,10 +198,91 @@ fn byte_limit_truncates_with_next_offset() {
     fixture.write("a.txt", &text);
     let result = execute(&fixture.ctx(), "read", r#"{"path":"a.txt"}"#);
     let (content, _, end, next, truncated, total) = expect_read(&result);
+    let (line_truncated, entries_truncated) = expect_read_flags(&result);
     assert!(content.len() <= super::MAX_READ_BYTES);
     assert!(truncated);
+    assert!(line_truncated, "3000 字符行会被 2000 字符上限截断");
+    assert!(!entries_truncated);
     assert_eq!(next, Some(end + 1));
     assert!(end < total);
+}
+
+/// 单行截断与字节截断可以同时发生，两个精确标记都要为真。
+#[test]
+fn line_and_byte_truncation_can_coexist() {
+    let fixture = Fixture::new("read-line-and-bytes");
+    let line = "x".repeat(3000);
+    let text = format!("{line}\n").repeat(100);
+    fixture.write("a.txt", &text);
+    let result = execute(&fixture.ctx(), "read", r#"{"path":"a.txt"}"#);
+    let (content, _, end, next, truncated, total) = expect_read(&result);
+    let (line_truncated, entries_truncated) = expect_read_flags(&result);
+    assert!(content.len() <= super::MAX_READ_BYTES);
+    assert!(truncated);
+    assert!(line_truncated);
+    assert!(!entries_truncated);
+    assert_eq!(next, Some(end + 1));
+    assert!(end < total);
+}
+
+/// 50 KiB 预算按落库 JSON 转义后的字节计（普通文本近似 UTF-8 字节）：中文行未达到 2000 字符行上限，但仍会被字节上限提前截断。
+#[test]
+fn byte_limit_counts_utf8_bytes() {
+    let fixture = Fixture::new("read-utf8-bytes");
+    let line = "中".repeat(1000);
+    let text = format!("{line}\n").repeat(40);
+    fixture.write("cjk.txt", &text);
+    let result = execute(&fixture.ctx(), "read", r#"{"path":"cjk.txt"}"#);
+    let (content, _, end, next, truncated, total) = expect_read(&result);
+    let (line_truncated, entries_truncated) = expect_read_flags(&result);
+    assert!(content.len() <= super::MAX_READ_BYTES);
+    assert!(truncated);
+    assert!(!line_truncated, "1000 字符未达到 2000 字符行上限");
+    assert!(!entries_truncated);
+    assert_eq!(next, Some(end + 1));
+    assert!(end < total);
+    assert!(content.ends_with('\n'));
+}
+
+/// read 自身截断后的模型文本必须低于回放层的 64 KiB 上限，避免二次截断。
+#[test]
+fn read_output_stays_below_replay_budget() {
+    let fixture = Fixture::new("read-replay-budget");
+    let line = "x".repeat(59);
+    let big = format!("{line}\n").repeat(4_000);
+    fixture.write("big.txt", &big);
+    let result = execute(&fixture.ctx(), "read", r#"{"path":"big.txt"}"#);
+    let (content, _, _, _, _, _) = expect_read(&result);
+    assert!(content.len() <= super::MAX_READ_BYTES);
+    let model_text = crate::chat::tools::format_for_model(&result);
+    assert!(
+        model_text.len() < crate::chat::context::MAX_TOOL_RESULT_REPLAY_BYTES,
+        "read text {} must stay below replay budget",
+        model_text.len()
+    );
+}
+
+/// 落库 JSON 会转义引号/反斜杠；50 KiB 预算必须按转义后大小计，避免回放层二次截断。
+#[test]
+fn escaped_content_stays_below_replay_budget() {
+    let fixture = Fixture::new("read-escaped-budget");
+    let line = "\"".repeat(1500);
+    let text = format!("{line}\n").repeat(40);
+    fixture.write("quotes.txt", &text);
+    let result = execute(&fixture.ctx(), "read", r#"{"path":"quotes.txt"}"#);
+    let (content, _, _, next, truncated, _) = expect_read(&result);
+    let (line_truncated, entries_truncated) = expect_read_flags(&result);
+    assert!(truncated);
+    assert!(!line_truncated);
+    assert!(!entries_truncated);
+    assert!(next.is_some());
+    assert!(content.len() <= super::MAX_READ_BYTES);
+    let json = crate::chat::tools::to_result_json(&result).expect("json");
+    assert!(
+        json.len() < crate::chat::context::MAX_TOOL_RESULT_REPLAY_BYTES,
+        "persisted read JSON {} must stay below replay budget",
+        json.len()
+    );
 }
 
 /// 目录：列出条目并带 `[dir]` / `[file]` 前缀。
@@ -216,9 +335,34 @@ fn directory_listing_supports_window() {
     assert_eq!(next, Some(4));
     assert!(truncated);
     assert_eq!(total, 4);
+    let (line_truncated, entries_truncated) = expect_read_flags(&result);
+    assert!(!line_truncated);
+    assert!(!entries_truncated, "分页不等于收集触顶");
 
     let result = execute(&fixture.ctx(), "read", r#"{"path":"dir","offset":9}"#);
     assert_eq!(expect_failure(&result), ToolErrorCode::OffsetOutOfRange);
+}
+
+/// 目录输出同样受 50 KiB 字节上限约束，并给 `next_offset`（不是收集触顶）。
+#[test]
+fn directory_byte_limit_paginates() {
+    let fixture = Fixture::new("read-dir-bytelimit");
+    for index in 0..300 {
+        let name = format!("{index:03}_{}", "x".repeat(230));
+        fixture.write(&format!("dir/{name}"), "");
+    }
+    let result = execute(&fixture.ctx(), "read", r#"{"path":"dir"}"#);
+    let (content, _, end, next, truncated, total) = expect_read(&result);
+    let (line_truncated, entries_truncated) = expect_read_flags(&result);
+    assert!(content.len() <= super::MAX_READ_BYTES);
+    assert!(truncated);
+    assert!(!line_truncated);
+    assert!(
+        !entries_truncated,
+        "未触达收集上限，不应标记 entries_truncated"
+    );
+    assert_eq!(next, Some(end + 1));
+    assert!(end < total);
 }
 
 /// 不存在的路径报 `NotFound`。
@@ -338,17 +482,52 @@ fn directory_read_caps_entries() {
         ..super::InputCaps::default()
     };
     let result = super::read_directory(&fixture.join("dir"), 1, 2000, &caps).expect("list");
-    let (content, _, end, _, truncated, total) = expect_read(&result);
+    let (content, _, end, next, truncated, total) = expect_read(&result);
+    let (line_truncated, entries_truncated) = expect_read_flags(&result);
     assert!(truncated, "条目达上限必须置 truncated");
+    assert!(!line_truncated);
+    assert!(entries_truncated, "收集触顶必须单独标记");
+    assert_eq!(next, None, "所有已收集条目都已列出，没有下一页");
     assert_eq!(total, 3, "total_lines 是已列出条目数，不是目录真实条目数");
     assert_eq!(end, 3);
     assert_eq!(content.lines().count(), 3);
+    let text = crate::chat::tools::format_for_model(&result);
+    assert!(
+        text.contains("3-entry collection cap; more entries may exist"),
+        "text: {text}"
+    );
     // 默认上限下同一目录不被截断。
     let full = super::read_directory(&fixture.join("dir"), 1, 2000, &super::InputCaps::default())
         .expect("list");
     let (_, _, _, _, truncated, total) = expect_read(&full);
+    let (line_truncated, entries_truncated) = expect_read_flags(&full);
     assert!(!truncated);
+    assert!(!line_truncated);
+    assert!(!entries_truncated);
     assert_eq!(total, 6);
+}
+
+/// 条目数恰好等于收集上限时 listing 完整，不能置 `entries_truncated`。
+#[test]
+fn directory_exactly_at_cap_is_not_truncated() {
+    let fixture = Fixture::new("read-dir-exact-cap");
+    for index in 0..3 {
+        fixture.write(&format!("dir/f{index}.txt"), "");
+    }
+    let caps = super::InputCaps {
+        dir_entries: 3,
+        ..super::InputCaps::default()
+    };
+    let result = super::read_directory(&fixture.join("dir"), 1, 2000, &caps).expect("list");
+    let (content, _, end, next, truncated, total) = expect_read(&result);
+    let (line_truncated, entries_truncated) = expect_read_flags(&result);
+    assert!(!truncated);
+    assert!(!line_truncated);
+    assert!(!entries_truncated);
+    assert_eq!(next, None);
+    assert_eq!(end, 3);
+    assert_eq!(total, 3);
+    assert_eq!(content.lines().count(), 3);
 }
 
 /// 字节数的人类可读格式：MB / KB 一位小数，小值保留字节。

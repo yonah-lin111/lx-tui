@@ -277,8 +277,12 @@ pub enum ToolExecutionResult {
         end_line: usize,
         /// 还有后续内容时的下一个 1-based 起始行。
         next_offset: Option<usize>,
-        /// 是否因上限/超时而截断（显式告知模型）。
+        /// 是否因输出上限 / 行数上限 / 单行截断 / 目录收集上限而截断（聚合标志；UI 摘要与旧消费者只读它）。
         truncated: bool,
+        /// 是否有单行超过 [`MAX_READ_LINE_CHARS`](crate::chat::tools::MAX_READ_LINE_CHARS) 被截断（仅文件；offset 无法恢复该行尾部）。
+        line_truncated: bool,
+        /// 目录是否因触达 [`MAX_READ_DIR_ENTRIES`](crate::chat::tools::MAX_READ_DIR_ENTRIES) 而存在未收集条目（仅目录；此时 `total_lines` 是已收集数，不是真实总数）。
+        entries_truncated: bool,
         /// 文件总行数（目录列表为条目数）。
         total_lines: usize,
         /// 读后版本 token（仅普通文件；目录为 None）。写工具要求携带它。

@@ -32,8 +32,11 @@ static TOOLS: [ToolSpec; 18] = [
          read in this session, or that changed since the read, are rejected. \
          For image files, attaches the decoded image directly to the conversation so you can inspect it visually. \
          `offset` is a 1-based first line (omitted = start at line 1) and `limit` caps \
-         the number of returned lines. Long output is truncated explicitly and reports \
-         `next_offset` so you can continue reading. A single text file larger than 16 MiB (or image larger than 20 MiB) is \
+         the number of returned lines. Output is capped at 2000 lines or 50 KiB per call, \
+         whichever comes first; individual lines are clipped at 2000 characters, and \
+         directory listings share the same 50 KiB cap. Truncation \
+         is explicit and reports `next_offset` when more lines are available. A single text \
+         file larger than 16 MiB (or image larger than 20 MiB) is \
          rejected with a `too_large` error; use `search` to locate text content first.",
         read_parameters,
     ),

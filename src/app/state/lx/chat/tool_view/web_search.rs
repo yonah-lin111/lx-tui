@@ -100,8 +100,17 @@ impl WebSearchDetailView {
             .filter(|provider| !provider.is_empty())
             .map(str::to_string);
         let text = value.get("text").and_then(Value::as_str).unwrap_or("");
-        view.result = text.lines().take(RESULT_LINES).map(result_line).collect();
-        view.result_more = text.lines().count().saturating_sub(RESULT_LINES);
+        let content_lines: Vec<&str> = text
+            .lines()
+            .filter(|line| !is_truncation_marker_line(line))
+            .collect();
+        view.result = content_lines
+            .iter()
+            .copied()
+            .take(RESULT_LINES)
+            .map(result_line)
+            .collect();
+        view.result_more = content_lines.len().saturating_sub(RESULT_LINES);
         view.duration_ms = value.get("duration_ms").and_then(Value::as_u64);
         view.truncated = value
             .get("truncated")
@@ -150,12 +159,31 @@ fn push_query(queries: &mut Vec<String>, raw: &str) {
     queries.push(query.to_string());
 }
 
-/// 结果单行取样：剥离行尾 `\r`，超过 [`MAX_RESULT_LINE_CHARS`] 字符时截断并补 `…`。
+/// 判断是否为工具合成的独立截断标记行（UI 正文不再重复渲染）。
+fn is_truncation_marker_line(line: &str) -> bool {
+    matches!(
+        line.trim(),
+        "…[truncated]" | "[...truncated]" | "[truncated]"
+    )
+}
+
+/// 结果单行取样：剥离行尾 `\r` 与内联截断标记（保留行尾截断省略号 `…`），
+/// 超过 [`MAX_RESULT_LINE_CHARS`] 字符时截断并补 `…`。
 fn result_line(line: &str) -> String {
     let line = line.trim_end_matches('\r');
+    let (line, had_ellipsis) = if let Some(prefix) = line
+        .strip_suffix("…[truncated]")
+        .or_else(|| line.strip_suffix("[...truncated]"))
+    {
+        (prefix, !prefix.is_empty())
+    } else if let Some(prefix) = line.strip_suffix("[truncated]") {
+        (prefix, prefix.ends_with('…'))
+    } else {
+        (line, false)
+    };
     let mut chars = line.chars();
     let mut text: String = chars.by_ref().take(MAX_RESULT_LINE_CHARS).collect();
-    if chars.next().is_some() {
+    if chars.next().is_some() || (had_ellipsis && !text.is_empty() && !text.ends_with('…')) {
         text.push('…');
     }
     text

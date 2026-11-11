@@ -221,9 +221,13 @@ index 111..222 100644
 
 #[test]
 fn generic_filter_passes_short_and_trims_long() {
-    assert_eq!(filter_output("echo", "hello\n"), "hello\n");
+    assert_eq!(
+        super::builtin::filter_output_flagged("echo", "hello\n"),
+        ("hello\n".to_string(), false)
+    );
     let long: String = (0..400).map(|n| format!("line {n}\n")).collect();
-    let filtered = filter_output("custom-script", &long);
+    let (filtered, omitted) = super::builtin::filter_output_flagged("custom-script", &long);
+    assert!(omitted, "内置通用裁剪省略行时必须返回 true");
     assert!(filtered.contains("line 0"));
     assert!(filtered.contains("line 399"));
     assert!(filtered.contains("lines omitted"));

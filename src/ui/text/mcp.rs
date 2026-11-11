@@ -16,8 +16,6 @@ pub const DETAIL_ARGUMENTS: &str = "Arguments";
 pub const DETAIL_RESULT: &str = "Result";
 /// 图片占位行前缀。
 pub const IMAGE_LINE_PREFIX: &str = "[image";
-/// 结果被截断的标题状态。
-pub const RESULT_TRUNCATED: &str = "truncated";
 /// 卡片标题里的图片张数。
 pub fn images_label(count: usize) -> String {
     format!("{count} image(s)")

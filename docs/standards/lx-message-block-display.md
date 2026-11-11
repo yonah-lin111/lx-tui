@@ -61,6 +61,7 @@
 - 工具合并组头不可点击，不提供“整组折叠”。
 - `read` 标题下方只显示一条路径；路径不换行，结果正文与参数事实不占第二行。
 - 折叠提示行属于折叠区，计入点击面；`… N more lines` 不单独收口。
+- 执行阶段发生输出截断（`truncated == true`）时，不在工具标题栏、组头或输出正文中显示截断标签或 `output limited`，统一在 `… N more lines` 提示行末尾追加 `[truncated]`（`… N more lines [truncated]`）；无 `more lines` 提示行时不单独渲染 `[truncated]` 行。
 
 ## 3. 工具合并总则
 
@@ -182,8 +183,8 @@
 规则：
 
 - 摘要节点为 `"pattern" in path`；没有 pattern 时退回路径。
-- 命中行按 `path:line: text`，折叠态最多 2 行 + `… N more lines`；展开铺开全部。
-- 结果级截断在标题状态里写 `results truncated`；合并后写组头。
+- 命中行按 `path:line: text`，折叠态最多 2 行 + `… N more lines`（截断时为 `… N more lines [truncated]`）；展开铺开全部。
+- 结果级截断不放标题或组头，统一在折叠提示行末尾追加 `[truncated]`。
 - 组头命中合计取各调用 `summary.matches` 之和；未知时不写。
 
 ### 5.3 `web_search`
@@ -450,7 +451,7 @@
 
 规则：
 
-- 标题为 `server · tool`；状态为耗时、`result truncated`、图片数。
+- 标题为 `server · tool`；状态为耗时与图片数，结果截断统一在 `… N more lines [truncated]` 提示行末尾展示。
 - 参数块与结果块各自独立折叠；图片只显示一行元数据（路径可复制），不读字节。
 - 合并组内若调用无参数（`arguments` 为空），以 `(no arguments)` 作为一级首节点并承载耗时等状态，结果块统一缩进为二级子节点。
 - 合并键是完整工具名（含 server 前缀）；同名 MCP 工具才合并。

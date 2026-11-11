@@ -35,7 +35,7 @@ fn arguments_section(view: &McpDetailView, expanded: bool, in_group: bool) -> Op
             )])
         });
     }
-    let mut lines: Vec<Vec<Segment>> = view
+    let lines: Vec<Vec<Segment>> = view
         .arguments
         .iter()
         .map(|line| {
@@ -45,25 +45,42 @@ fn arguments_section(view: &McpDetailView, expanded: bool, in_group: bool) -> Op
             )]
         })
         .collect();
-    if view.arguments_more > 0 {
-        lines.push(vec![Segment::new(
-            text::mcp::more_lines(view.arguments_more),
-            style::fold_hint(),
-        )]);
-    }
-    Some(Section::new(
-        vec![Node::block(lines)],
-        (!expanded).then(|| Preview::head(BLOCK_PREVIEW_ROWS)),
-    ))
+    Some(
+        Section::new(
+            vec![Node::block(lines)],
+            (!expanded).then(|| Preview::head(BLOCK_PREVIEW_ROWS)),
+        )
+        .with_omitted(view.arguments_more),
+    )
 }
 
 fn sanitize_result_line(line: &str, max_chars: usize) -> String {
-    line.chars()
-        .take(max_chars)
-        .map(|ch| if ch.is_control() { ' ' } else { ch })
-        .collect::<String>()
-        .trim_end()
-        .to_string()
+    let (cleaned, had_ellipsis) = if let Some(prefix) = line
+        .strip_suffix("…[truncated]")
+        .or_else(|| line.strip_suffix("[...truncated]"))
+    {
+        (prefix, !prefix.is_empty())
+    } else if let Some(prefix) = line.strip_suffix(text::agent::INLINE_TRUNCATED) {
+        (prefix, prefix.ends_with('…'))
+    } else {
+        (line, false)
+    };
+    let mut text = String::with_capacity(cleaned.len().min(max_chars + 4));
+    let mut clipped = false;
+    for (count, ch) in cleaned.chars().enumerate() {
+        if count == max_chars {
+            text.push('…');
+            clipped = true;
+            break;
+        }
+        text.push(if ch.is_control() { ' ' } else { ch });
+    }
+    let trimmed = text.trim_end();
+    if had_ellipsis && !clipped && !trimmed.is_empty() && !trimmed.ends_with('…') {
+        format!("{trimmed}…")
+    } else {
+        trimmed.to_string()
+    }
 }
 
 fn result_section(
@@ -94,17 +111,15 @@ fn result_section(
         tree::content_width(width)
     };
     let body_width = u16::try_from(cols).unwrap_or(u16::MAX);
-    let mut lines: Vec<Vec<Segment>> = if let Some(error) = error_fallback {
-        error
+    let (mut lines, more) = if let Some(error) = error_fallback {
+        let error_lines: Vec<Vec<Segment>> = error
             .lines()
             .take(20)
-            .map(|line| {
-                vec![Segment::new(
-                    sanitize_result_line(line, 8000),
-                    style::text(),
-                )]
-            })
-            .collect()
+            .map(|line| sanitize_result_line(line, 8000))
+            .filter(|line| !line.is_empty())
+            .map(|line| vec![Segment::new(line, style::text())])
+            .collect();
+        (error_lines, error.lines().count().saturating_sub(20))
     } else {
         let raw_source = view
             .result
@@ -112,19 +127,16 @@ fn result_section(
             .map(|line| sanitize_result_line(line, 8000))
             .collect::<Vec<_>>()
             .join("\n");
-        muted_markdown_lines(&raw_source, body_width)
+        (
+            muted_markdown_lines(&raw_source, body_width),
+            view.result_more,
+        )
     };
-    let more = if let Some(error) = error_fallback {
-        error.lines().count().saturating_sub(20)
-    } else {
-        view.result_more
-    };
-    if more > 0 {
-        lines.push(vec![Segment::new(
-            text::mcp::more_lines(more),
-            style::fold_hint(),
-        )]);
-    }
+    let truncated = error_fallback.is_none()
+        && call
+            .summary
+            .as_deref()
+            .is_some_and(|summary| summary.truncated);
     for image in &view.images {
         lines.push(vec![Segment::new(
             text::mcp::image_line(&image.mime, image.width, image.height, &image.path),
@@ -140,10 +152,14 @@ fn result_section(
     if lines.is_empty() {
         return None;
     }
-    Some(Section::new(
-        vec![Node::block(lines)],
-        (!expanded).then(|| Preview::head(BLOCK_PREVIEW_ROWS)),
-    ))
+    Some(
+        Section::new(
+            vec![Node::block(lines)],
+            (!expanded).then(|| Preview::head(BLOCK_PREVIEW_ROWS)),
+        )
+        .with_omitted(more)
+        .with_truncated(truncated),
+    )
 }
 
 pub(super) fn layout(
@@ -250,7 +266,7 @@ pub(super) fn has_more(call: &ToolCallView, view: &McpDetailView, width: u16) ->
     layout.arguments_expandable || layout.result_expandable
 }
 
-/// 标题状态：耗时、结果截断与图片数；失败/中断交给标题染色。
+/// 标题状态：耗时与图片数；失败/中断交给标题染色。
 fn status_of(call: &ToolCallView, view: &McpDetailView) -> Option<String> {
     if matches!(call.status, ToolStatus::Failed | ToolStatus::Interrupted) {
         return None;
@@ -258,13 +274,6 @@ fn status_of(call: &ToolCallView, view: &McpDetailView) -> Option<String> {
     let mut parts = Vec::new();
     if let Some(duration) = view.duration_ms {
         parts.push(text::agent::duration_label(duration));
-    }
-    if call
-        .summary
-        .as_deref()
-        .is_some_and(|summary| summary.truncated)
-    {
-        parts.push(text::mcp::RESULT_TRUNCATED.to_string());
     }
     if !view.images.is_empty() {
         parts.push(text::mcp::images_label(view.images.len()));

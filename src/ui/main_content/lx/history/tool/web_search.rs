@@ -72,17 +72,36 @@ fn queries_section(view: &WebSearchDetailView, expanded: bool) -> Option<Section
     ))
 }
 
-/// 结果单行净化：控制字符转空格（`markdown_render` 不接受裸控制字符），超长截断补 `…`。
+/// 结果单行净化：控制字符转空格（`markdown_render` 不接受裸控制字符），超长截断补 `…`，
+/// 并剥离行尾合成的 `…[truncated]` / `[...truncated]` / `[truncated]`（保留行尾截断省略号 `…`，
+/// `[truncated]` 标签只显示在 `more lines` 行）。
 fn sanitize_result_line(line: &str) -> String {
-    let mut text = String::with_capacity(line.len().min(MAX_RESULT_LINE_CHARS + 4));
-    for (count, ch) in line.chars().enumerate() {
+    let (cleaned, had_ellipsis) = if let Some(prefix) = line
+        .strip_suffix("…[truncated]")
+        .or_else(|| line.strip_suffix("[...truncated]"))
+    {
+        (prefix, !prefix.is_empty())
+    } else if let Some(prefix) = line.strip_suffix(text::agent::INLINE_TRUNCATED) {
+        (prefix, prefix.ends_with('…'))
+    } else {
+        (line, false)
+    };
+    let mut text = String::with_capacity(cleaned.len().min(MAX_RESULT_LINE_CHARS + 4));
+    let mut clipped = false;
+    for (count, ch) in cleaned.chars().enumerate() {
         if count == MAX_RESULT_LINE_CHARS {
             text.push('…');
+            clipped = true;
             break;
         }
         text.push(if ch.is_control() { ' ' } else { ch });
     }
-    text.trim_end().to_string()
+    let trimmed = text.trim_end();
+    if had_ellipsis && !clipped && !trimmed.is_empty() && !trimmed.ends_with('…') {
+        format!("{trimmed}…")
+    } else {
+        trimmed.to_string()
+    }
 }
 
 fn result_section(
@@ -108,17 +127,28 @@ fn result_section(
         tree::content_width(width)
     };
     let body_width = u16::try_from(cols).unwrap_or(u16::MAX);
-    let (mut lines, more) = if let Some(error) = error_fallback {
-        let lines: Vec<Vec<Segment>> = error
+    let (lines, more) = if let Some(error) = error_fallback {
+        let error_lines: Vec<Vec<Segment>> = error
             .lines()
             .take(MAX_ERROR_LINES)
-            .map(|line| vec![Segment::new(sanitize_result_line(line), style::text())])
+            .map(sanitize_result_line)
+            .filter(|line| !line.is_empty())
+            .map(|line| vec![Segment::new(line, style::text())])
             .collect();
-        (lines, error.lines().count().saturating_sub(MAX_ERROR_LINES))
+        (
+            error_lines,
+            error.lines().count().saturating_sub(MAX_ERROR_LINES),
+        )
     } else {
         let raw_source = view
             .result
             .iter()
+            .filter(|line| {
+                !matches!(
+                    line.trim(),
+                    "…[truncated]" | "[...truncated]" | "[truncated]"
+                )
+            })
             .map(|line| sanitize_result_line(line))
             .collect::<Vec<_>>()
             .join("\n");
@@ -127,19 +157,18 @@ fn result_section(
             view.result_more,
         )
     };
-    if more > 0 {
-        lines.push(vec![Segment::new(
-            text::mcp::more_lines(more),
-            style::fold_hint(),
-        )]);
-    }
+    let truncated = error_fallback.is_none() && view.truncated;
     if lines.is_empty() {
         return None;
     }
-    Some(Section::new(
-        vec![Node::block(lines)],
-        (!expanded).then(|| Preview::head(BLOCK_PREVIEW_ROWS)),
-    ))
+    Some(
+        Section::new(
+            vec![Node::block(lines)],
+            (!expanded).then(|| Preview::head(BLOCK_PREVIEW_ROWS)),
+        )
+        .with_omitted(more)
+        .with_truncated(truncated),
+    )
 }
 
 pub(super) fn layout(
@@ -285,9 +314,6 @@ fn title_status(call: &ToolCallView, view: &WebSearchDetailView) -> Option<Strin
             }
             if let Some(duration_ms) = view.duration_ms {
                 parts.push(text::agent::duration_label(duration_ms));
-            }
-            if view.truncated {
-                parts.push(text::agent::SEARCH_TRUNCATED.to_string());
             }
             (!parts.is_empty()).then(|| parts.join(text::LX_CHAT_TOOL_STATUS_SEP))
         }

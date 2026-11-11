@@ -20,7 +20,7 @@ mod tests;
 
 use std::path::{Path, PathBuf};
 
-pub use builtin::{MAX_GENERIC_CHARS, filter_output};
+pub use builtin::{MAX_GENERIC_CHARS, filter_output, filter_output_flagged};
 
 /// 可执行文件名（Windows 带 `.exe`）。
 const BINARY_NAME: &str = "rtk";
@@ -129,10 +129,15 @@ impl Rtk {
 
     /// 对**未被外部 rtk 包装**的输出执行内置过滤；`off` 时原样返回。
     pub fn filter_output(&self, command: &str, output: &str) -> String {
+        self.filter_output_flagged(command, output).0
+    }
+
+    /// 对**未被外部 rtk 包装**的输出执行内置过滤，并返回是否触发了省略/截断。
+    pub fn filter_output_flagged(&self, command: &str, output: &str) -> (String, bool) {
         if self.mode == Mode::Off {
-            return output.to_string();
+            return (output.to_string(), false);
         }
-        builtin::filter_output(command, output)
+        builtin::filter_output_flagged(command, output)
     }
 
     /// 根据准备结果决定是否需要内置过滤。

@@ -254,7 +254,7 @@ fn per_query_output_is_capped_and_flagged() {
     };
     let (text, truncated) = format_outcomes(&[huge, small]);
     assert!(truncated, "超预算必须置 truncated = true");
-    assert!(text.contains("[...truncated]"), "{text}");
+    assert!(text.contains("…[truncated]"), "{text}");
     assert!(text.contains("small body"), "其它查询不得被一起裁掉");
     assert!(
         text.chars().count() < MAX_QUERY_OUTPUT_CHARS + 200,
@@ -740,7 +740,7 @@ async fn oversized_query_output_sets_truncated() {
     };
     assert!(result.truncated);
     assert!(
-        result.text.contains("[...truncated]"),
+        result.text.contains("…[truncated]"),
         "{}",
         result.text.len()
     );
@@ -861,4 +861,98 @@ fn provider_roundtrips_through_serde() {
     for depth in [SearchDepth::Auto, SearchDepth::Fast, SearchDepth::Deep] {
         assert_eq!(SearchDepth::parse(depth.as_str()), Some(depth));
     }
+}
+
+#[test]
+fn single_line_over_2000_chars_is_clipped_and_flagged() {
+    let outcome = QuerySearchOutcome {
+        query: "minified".into(),
+        provider: Some(WebSearchProvider::Exa),
+        output: "a".repeat(MAX_WEB_SEARCH_LINE_CHARS + 500),
+        error: None,
+        timed_out: false,
+    };
+    let (text, truncated) = format_outcomes(&[outcome]);
+    assert!(truncated, "单行超 2000 字符必须置 truncated = true");
+    assert!(text.ends_with("…[truncated]"), "text: {text}");
+    assert_eq!(
+        text.chars().count(),
+        MAX_WEB_SEARCH_LINE_CHARS + "…[truncated]".chars().count()
+    );
+}
+
+#[test]
+fn combined_batch_respects_50_kib_json_escaped_budget_and_2000_line_cap() {
+    // 4 条查询各自不超过 12,000 字符，但含引号或中文多字节时总落库 JSON 会突破 50 KiB。
+    let outcomes: Vec<QuerySearchOutcome> = (0..4)
+        .map(|index| QuerySearchOutcome {
+            query: format!("query-{index}"),
+            provider: Some(WebSearchProvider::Exa),
+            output: (0..220)
+                .map(|line| format!("{line:04}: {}", "\"中".repeat(25)))
+                .collect::<Vec<_>>()
+                .join("\n"),
+            error: None,
+            timed_out: false,
+        })
+        .collect();
+    let (text, truncated) = format_outcomes(&outcomes);
+    assert!(truncated, "多查询聚合超 50 KiB 必须置 truncated = true");
+    assert!(
+        text.ends_with("…[truncated]"),
+        "tail: {}",
+        &text[text.len().saturating_sub(80)..]
+    );
+
+    let result = ToolExecutionResult::WebSearch(Box::new(WebSearchToolResult {
+        queries: outcomes.iter().map(|o| o.query.clone()).collect(),
+        num_results: DEFAULT_NUM_RESULTS,
+        search_type: SearchDepth::Auto,
+        provider: WebSearchProvider::Exa,
+        outcomes,
+        text,
+        truncated,
+        duration_ms: 42,
+    }));
+    let json = crate::chat::tools::to_result_json(&result).expect("json");
+    assert!(
+        json.len() <= crate::chat::context::MAX_TOOL_RESULT_REPLAY_BYTES,
+        "result_json ({}) must stay within 64 KiB replay cap",
+        json.len()
+    );
+
+    // 超过 2000 行的短行组合同样被截到 2000 行以内。
+    let many_lines = QuerySearchOutcome {
+        query: "lines".into(),
+        provider: Some(WebSearchProvider::Exa),
+        output: (0..2500)
+            .map(|i| format!("L{i}"))
+            .collect::<Vec<_>>()
+            .join("\n"),
+        error: None,
+        timed_out: false,
+    };
+    let (lines_text, lines_truncated) = format_outcomes(&[many_lines]);
+    assert!(lines_truncated);
+    assert!(lines_text.ends_with("\n…[truncated]"));
+    assert!(lines_text.lines().count() <= MAX_WEB_SEARCH_LINES);
+
+    // 最后一条保留行恰好触发单行 2000 字符裁剪且后续仍有被省略行时，末尾仍保留独立 `\n…[truncated]` 行。
+    let clipped_plus_more = QuerySearchOutcome {
+        query: "clipped".into(),
+        provider: Some(WebSearchProvider::Exa),
+        output: (0..2100)
+            .map(|i| "x".repeat(MAX_WEB_SEARCH_LINE_CHARS + 50 + (i % 3)))
+            .collect::<Vec<_>>()
+            .join("\n"),
+        error: None,
+        timed_out: false,
+    };
+    let (clipped_text, clipped_truncated) = format_outcomes(&[clipped_plus_more]);
+    assert!(clipped_truncated);
+    assert!(
+        clipped_text.ends_with("\n…[truncated]"),
+        "tail: {:?}",
+        &clipped_text[clipped_text.len().saturating_sub(40)..]
+    );
 }

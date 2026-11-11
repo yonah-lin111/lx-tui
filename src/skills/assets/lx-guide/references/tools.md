@@ -50,8 +50,8 @@ Behavior:
 - Text files return a header with the requested range and total line count, a `file_version` token, then numbered lines as `{line}: {text}` with 1-based line numbers. The line-number prefix does not alter the file content.
 - `file_version` is the optimistic-concurrency token for this session. Pass it as `read_version` to `write`, or in `read_versions` to `edit`. Writes to a file that was not read in this session, or that changed after the read, are rejected with `stale_read`.
 - `offset` beyond the last line fails with `offset_out_of_range`. An empty file reports zero lines and still returns a `file_version`.
-- A single text file larger than 16 MiB is rejected with `too_large`. Output is capped at 2000 lines, 256 KiB, and 4000 characters per line; truncation is reported explicitly and the remaining lines can be read with a later `offset`.
-- Directory paths return a sorted listing with `[dir]` and `[file]` prefixes. At most 50,000 entries are collected; a truncated listing says so.
+- A single text file larger than 16 MiB is rejected with `too_large`. Output is capped at 2000 lines or 50 KiB (whichever comes first), and each line is clipped at 2000 characters; truncation is reported explicitly and the remaining lines can be read with a later `offset`.
+- Directory paths return a sorted listing with `[dir]` and `[file]` prefixes. At most 50,000 entries are collected; the same 50 KiB output cap applies. When the collection cap is hit the result says the listing may be incomplete; `next_offset` continues the listing when more collected entries are available.
 - Image files are detected by header: PNG, JPEG, GIF, WebP, BMP, and TIFF are supported. A single image larger than 20 MiB is rejected with `too_large`. When the active model supports image input, the image is decoded, scaled so its longest side is at most 2048 px, and re-encoded as PNG or JPEG; a PNG/JPEG already within 2048 px is passed through unchanged. The image is attached directly to the conversation for visual inspection. When the model does not support image input, reading an image fails with `binary`.
 - Image and directory reads do not return a `file_version`.
 
@@ -145,12 +145,13 @@ Behavior:
 | `tty` | boolean | no | Run in a dedicated pseudo terminal (fixed 120x40) so the command can be driven with `write_stdin`; default `false` (plain pipe). |
 | `yield_time_ms` | integer | no | Wait window before returning; `0`-`30000`, default `10000`. Expiry never kills the process. |
 | `timeout_ms` | integer | no | Total command lifetime; `1`-`86400000`. When it expires the process is stopped. Omitted means no lifetime limit. |
-| `max_output_tokens` | integer | no | Approximate token budget for returned output; `1`-`16000`, default `16000`. The rest remains readable with `write_stdin`. |
+| `max_output_tokens` | integer | no | Approximate token budget for returned output; `1`-`12500`, default `12500`. The rest remains readable with `write_stdin`. |
 
 Behavior:
 
 - The command runs directly without an approval prompt.
 - The call returns as soon as the yield window expires. A still-running command returns `process_state: running` and a `session_id`; reuse that id with `write_stdin` instead of starting a second copy.
+- Returned output is capped at 2000 lines or 50 KiB per call, and individual lines are clipped at 2000 characters; truncation sets `truncated: true`.
 - A non-zero exit code means the command ran and failed. The result carries the real output and `exit_code`; it is not treated as a tool malfunction, because commands such as `grep` or `diff` use non-zero exits for normal results. A timeout, interruption, or spawn failure is a real tool failure.
 - Process results include `chunk_id`, `wall_time_seconds`, the output byte range `[output_start, output_end)`, and `dropped_bytes` when earlier output was discarded before it could be read.
 
@@ -162,7 +163,7 @@ Behavior:
 | `chars` | string | no | Bytes written verbatim to stdin; default empty. No newline is appended, so include `\n` to submit a line. Maximum 64 KiB. |
 | `terminate` | boolean | no | Stop the process instead of writing; default `false`. Cannot be combined with non-empty `chars`. |
 | `yield_time_ms` | integer | no | Wait window for new output; `0`-`30000`, default `250`. |
-| `max_output_tokens` | integer | no | Approximate token budget for returned output; `1`-`16000`, default `16000`. |
+| `max_output_tokens` | integer | no | Approximate token budget for returned output; `1`-`12500`, default `12500`. |
 
 Behavior:
 
@@ -202,6 +203,7 @@ A user can run a local shell command by typing `!` as the first non-whitespace c
 Behavior:
 
 - Each query falls back in order: Exa with a key, then anonymous Exa, then Tavily REST. Queries run concurrently. At least one successful query makes the tool call successful; per-query failures are preserved in the result.
+- Each query output is capped at 12,000 characters, and the combined result across all queries is capped at 2000 lines or 50 KiB with individual lines clipped at 2000 characters; truncation sets `truncated: true`.
 - Use `web_search` only for information that is external, current, or not present in the workspace. Batch related lookups instead of making sequential calls.
 - When the final answer relies on web results, cite every supported claim inline as `[descriptive source title](https://...)` immediately after the sentence or clause it supports. Never use bare URLs, links to search pages, or a citation list at the end of the message. Keep quotations under 25 words per source and paraphrase the rest.
 

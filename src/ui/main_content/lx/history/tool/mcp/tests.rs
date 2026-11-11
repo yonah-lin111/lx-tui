@@ -257,3 +257,71 @@ fn expanding_branch_keeps_bar_and_expanding_leaf_uses_padding() {
         .expect("result continuation");
     assert_eq!(result_row.prefix, text::agent::TREE_PAD);
 }
+
+#[test]
+fn truncated_mcp_card_places_marker_in_result_body_not_title() {
+    let mut call = call();
+    call.summary = Some(Box::new(ToolSummary {
+        path: Some("github · create_issue".into()),
+        truncated: true,
+        ..ToolSummary::default()
+    }));
+    let mut view = view();
+    view.result = (0..10).map(|index| format!("line {index}")).collect();
+    view.result_more = 12;
+    let folded = render_with(&call, &view, 100, Folds::default());
+    let header = folded.lines().next().unwrap_or("");
+    assert!(!header.contains("truncated"), "{header}");
+    assert!(folded.contains("more lines [truncated]"), "{folded}");
+    let expanded = render_with(
+        &call,
+        &view,
+        100,
+        Folds {
+            body: false,
+            output: true,
+        },
+    );
+    assert!(
+        expanded.contains("… 12 more lines [truncated]"),
+        "{expanded}"
+    );
+}
+
+#[test]
+fn short_mcp_result_with_images_and_more_lines_never_renders_duplicate_more_hints() {
+    let mut call = call();
+    call.summary = Some(Box::new(ToolSummary {
+        path: Some("github · create_issue".into()),
+        truncated: true,
+        ..ToolSummary::default()
+    }));
+    let mut view = view();
+    view.result = vec!["line 0".into(), "line 1".into()];
+    view.result_more = 10;
+    view.images = vec![
+        crate::app::state::McpImageView {
+            path: "/tmp/a.png".into(),
+            mime: "image/png".into(),
+            width: 10,
+            height: 20,
+        },
+        crate::app::state::McpImageView {
+            path: "/tmp/b.png".into(),
+            mime: "image/png".into(),
+            width: 10,
+            height: 20,
+        },
+    ];
+    let folded = render_with(&call, &view, 100, Folds::default());
+    assert_eq!(
+        folded.matches("more lines").count(),
+        1,
+        "折叠态含图片时只允许出现一行 more lines 提示：{folded}"
+    );
+    assert_eq!(
+        folded.matches(text::agent::INLINE_TRUNCATED).count(),
+        1,
+        "折叠态只允许出现一次 [truncated]：{folded}"
+    );
+}

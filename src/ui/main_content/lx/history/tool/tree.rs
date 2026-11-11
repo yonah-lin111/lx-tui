@@ -83,11 +83,20 @@ pub(crate) struct Section {
     pub(crate) nodes: Vec<Node>,
     /// 折叠预算；`None` 表示该块始终展开。
     pub(crate) preview: Option<Preview>,
+    /// 视图保留窗口之外已省略的逻辑行数（如 `web_search` / `mcp` 的 `result_more`）。
+    pub(crate) omitted_lines: usize,
+    /// 该块内容在执行阶段是否已被截断（用于在 `… N more lines` 后追加 `[truncated]`）。
+    pub(crate) truncated: bool,
 }
 
 impl Section {
     pub(crate) fn new(nodes: Vec<Node>, preview: Option<Preview>) -> Self {
-        Self { nodes, preview }
+        Self {
+            nodes,
+            preview,
+            omitted_lines: 0,
+            truncated: false,
+        }
     }
 
     /// 常显块（状态、参数外的元信息）。
@@ -95,7 +104,21 @@ impl Section {
         Self {
             nodes,
             preview: None,
+            omitted_lines: 0,
+            truncated: false,
         }
+    }
+
+    /// 标记视图窗口之外额外省略的行数（折叠态与 `section_hidden` 累加，展开态单独展示）。
+    pub(crate) fn with_omitted(mut self, omitted_lines: usize) -> Self {
+        self.omitted_lines = omitted_lines;
+        self
+    }
+
+    /// 标记该块在执行阶段被截断。
+    pub(crate) fn with_truncated(mut self, truncated: bool) -> Self {
+        self.truncated = truncated;
+        self
     }
 }
 
@@ -279,10 +302,25 @@ fn layout_with_roots(sections: &[Section], width: u16, root_nodes: Option<usize>
                 first,
             });
         }
-        if section_hidden > 0 {
-            let hint = text::agent::file_diff_more_lines(section_hidden);
+        let total_omitted = section_hidden.saturating_add(section.omitted_lines);
+        if total_omitted > 0 {
             let hint_body = last_visible.map_or(root_body, node_width);
-            if unicode_width::UnicodeWidthStr::width(hint.as_str()) <= hint_body {
+            let base_hint = text::agent::file_diff_more_lines(total_omitted);
+            let hint = if section.truncated {
+                let with_trunc = format!("{base_hint} {}", text::agent::INLINE_TRUNCATED);
+                if unicode_width::UnicodeWidthStr::width(with_trunc.as_str()) <= hint_body {
+                    Some(with_trunc)
+                } else if unicode_width::UnicodeWidthStr::width(base_hint.as_str()) <= hint_body {
+                    Some(base_hint)
+                } else {
+                    None
+                }
+            } else if unicode_width::UnicodeWidthStr::width(base_hint.as_str()) <= hint_body {
+                Some(base_hint)
+            } else {
+                None
+            };
+            if let Some(hint) = hint {
                 // 提示行是本块最后可见节点的续行：仍用空白列，不再单独画一个
                 // `└─`，否则长输出里每个折叠块都多一个收口符。
                 rows.push(Row {

@@ -256,15 +256,22 @@ fn result_json_is_normalized_and_flags_truncation() {
     assert_eq!(value["created"], true);
     assert_eq!(value["added"], 2);
 
-    // 超限：一次读取超大文件，结果 JSON 必须被截断且带显式标志。
-    let big = "x".repeat(4000);
-    let mut content = String::new();
-    for _ in 0..MAX_READ_LINES {
-        content.push_str(&big);
-        content.push('\n');
-    }
-    fixture.write("big.txt", &content);
-    let result = execute(&fixture.ctx(), "read", r#"{"path":"big.txt"}"#);
+    // 超限：生产 read 已被 50 KiB 输出上限保护，不能再靠真实读取触发 1 MiB
+    // 存储上限；直接构造超大结果，继续覆盖落库截断路径。
+    let result = ToolExecutionResult::Read {
+        path: std::path::PathBuf::from("/tmp/big.txt"),
+        kind: ReadKind::File,
+        content: "x".repeat(MAX_TOOL_RESULT_BYTES + 1024),
+        start_line: 1,
+        end_line: 1,
+        next_offset: Some(2),
+        truncated: true,
+        line_truncated: true,
+        entries_truncated: false,
+        total_lines: 10,
+        version: None,
+        image: None,
+    };
     let json = to_result_json(&result).expect("json");
     assert!(
         json.len() <= MAX_TOOL_RESULT_BYTES,
@@ -273,6 +280,8 @@ fn result_json_is_normalized_and_flags_truncation() {
     );
     let value: serde_json::Value = serde_json::from_str(&json).expect("valid json");
     assert_eq!(value["truncated"], true);
+    assert_eq!(value["line_truncated"], true);
+    assert_eq!(value["entries_truncated"], false);
 }
 
 /// 参数体超限直接失败（不解析、无副作用）。

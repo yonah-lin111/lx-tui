@@ -4,8 +4,8 @@
 //! 空文件、末行无换行、CRLF、Unicode 宽字符都按原样保留（行号只加前缀，不改内容）。
 //!
 //! 输入侧有硬上限：单文件超过 [`MAX_READ_FILE_INPUT_BYTES`]（16 MiB）直接返回 `TooLarge`
-//! 而不读入内存；目录最多收集 [`MAX_READ_DIR_ENTRIES`]（50 000）条，超出即停止并置
-//! `truncated`。输出侧上限（行数/字节/单行宽度）与它们相互独立。
+//! 而不读入内存；目录最多收集 [`MAX_READ_DIR_ENTRIES`]（50 000）条，还有后续条目时置
+//! `entries_truncated`。输出侧上限（行数/字节/单行宽度）与它们相互独立。
 
 use std::path::Path;
 
@@ -147,6 +147,8 @@ fn read_image(ctx: &ToolContext, target: &Path, len: u64) -> ToolResult<ToolExec
         end_line: 0,
         next_offset: None,
         truncated: false,
+        line_truncated: false,
+        entries_truncated: false,
         total_lines: 0,
         version: None,
         image,
@@ -207,6 +209,8 @@ fn read_file(
             end_line: 0,
             next_offset: None,
             truncated: false,
+            line_truncated: false,
+            entries_truncated: false,
             total_lines: 0,
             version,
             image: None,
@@ -221,14 +225,15 @@ fn read_file(
     let mut used_bytes = 0usize;
     let mut emitted = 0usize;
     let mut line_truncated = false;
+    let budget = content_budget(target);
     for index in start_index..total_lines {
         if emitted >= limit {
             break;
         }
         let (rendered, truncated) = render_line(index + 1, &source.lines[index]);
-        let cost = rendered.len() + 1;
+        let cost = json_escaped_len(&rendered) + 2;
         // 至少输出一行，避免单行超限时死循环或空结果。
-        if emitted > 0 && used_bytes + cost > MAX_READ_BYTES {
+        if emitted > 0 && used_bytes + cost > budget {
             break;
         }
         line_truncated |= truncated;
@@ -247,6 +252,8 @@ fn read_file(
         end_line,
         next_offset,
         truncated: next_offset.is_some() || line_truncated,
+        line_truncated,
+        entries_truncated: false,
         total_lines,
         version,
         image: None,
@@ -261,6 +268,34 @@ fn render_line(number: usize, line: &str) -> (String, bool) {
     }
     let head: String = line.chars().take(MAX_READ_LINE_CHARS).collect();
     (format!("{number}: {head}…[truncated]"), true)
+}
+
+/// 内容在落库 JSON 中的字节数（不含外层引号）。
+///
+/// `read` 的 50 KiB 输出预算按 JSON 转义后的字节计：否则一段全是引号/反斜杠的
+/// 50 KiB 文本落库后会翻倍，重进会话时又会被 64 KiB 回放上限截断。
+fn json_escaped_len(text: &str) -> usize {
+    let mut len = text.len();
+    for byte in text.bytes() {
+        match byte {
+            b'"' | b'\\' | b'\n' | b'\r' | b'\t' | 0x08 | 0x0c => len += 1,
+            0x00..=0x1f => len += 5,
+            _ => {}
+        }
+    }
+    len
+}
+
+/// 落库 JSON 中除 `content` 外的固定元数据余量（字段名、区间、版本 token 等）。
+const READ_RESULT_METADATA_BYTES: usize = 512;
+
+/// 当前结果的 `content` 预算：总预算扣除 JSON 转义后的路径与固定元数据。
+///
+/// 路径也进落库 JSON；控制字符路径会按 6 字节/字符转义。把路径计入预算，
+/// 才能保证整份 JSON 稳定低于 64 KiB 回放上限。
+fn content_budget(target: &Path) -> usize {
+    let path_bytes = json_escaped_len(&path::display(target));
+    MAX_READ_BYTES.saturating_sub(path_bytes.saturating_add(READ_RESULT_METADATA_BYTES))
 }
 
 /// 字节数的人类可读格式（MB / KB 保留一位小数，字节原样）。
@@ -290,7 +325,7 @@ fn offset_error(offset: usize, total_lines: usize) -> ToolFailure {
 /// 列目录条目：按名称排序，`[dir]` / `[file]` 前缀，每行一个。
 ///
 /// `offset` / `limit` 与文件读取同口径（1-based 条目序号），便于继续列出大型目录。
-/// 收集阶段最多取 [`InputCaps::dir_entries`] 条，达到即停止并置 `truncated`；此时
+/// 收集阶段最多取 [`InputCaps::dir_entries`] 条，还有后续条目时停止并置 `entries_truncated`；此时
 /// `total_lines` 是**已列出的条目数**而非目录的真实条目数（真实数需要全量遍历才能知道，
 /// 而这正是要避免的开销），`format_for_model` 的 `truncated` 行会说明这一点。
 fn read_directory(
@@ -331,6 +366,8 @@ fn read_directory(
             end_line: 0,
             next_offset: None,
             truncated: entries_truncated,
+            line_truncated: false,
+            entries_truncated,
             total_lines: 0,
             version: None,
             image: None,
@@ -343,13 +380,14 @@ fn read_directory(
     let mut content = String::new();
     let mut used_bytes = 0usize;
     let mut emitted = 0usize;
+    let budget = content_budget(target);
     for (name, is_dir) in names.iter().skip(start_index) {
         if emitted >= limit {
             break;
         }
         let rendered = format!("{} {name}", if *is_dir { "[dir]" } else { "[file]" });
-        let cost = rendered.len() + 1;
-        if emitted > 0 && used_bytes + cost > MAX_READ_BYTES {
+        let cost = json_escaped_len(&rendered) + 2;
+        if emitted > 0 && used_bytes + cost > budget {
             break;
         }
         content.push_str(&rendered);
@@ -366,8 +404,10 @@ fn read_directory(
         start_line: start_index + 1,
         end_line,
         next_offset,
-        // 条目上限与分页截断都走同一个 `truncated` 标志，不新造字段。
+        // 条目上限（收集阶段）与分页截断（输出阶段）是两件事，分别落字段。
         truncated: next_offset.is_some() || entries_truncated,
+        line_truncated: false,
+        entries_truncated,
         total_lines,
         // 目录不是写入目标，不产生版本 token。
         version: None,

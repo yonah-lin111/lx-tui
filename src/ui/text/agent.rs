@@ -103,7 +103,10 @@ pub const VERB_TOOL_WEB_SEARCH: &str = "Web search";
 pub const TOOL_DIFF_ADD_PREFIX: &str = "+";
 pub const TOOL_DIFF_REMOVE_PREFIX: &str = "-";
 
-/// `search` 截断提示：不内联到摘要行，展开后单独显示在下方。
+/// 工具输出/搜索结果行内与块尾统一的截断标记（不带省略号）。
+pub const INLINE_TRUNCATED: &str = "[truncated]";
+
+/// `search` 截断提示（旧常量保留给非工具卡片或测试引用）。
 pub const SEARCH_TRUNCATED: &str = "results truncated";
 
 /// `web_search` 运行中的标题状态（多条查询时前面再拼 `N queries`）。

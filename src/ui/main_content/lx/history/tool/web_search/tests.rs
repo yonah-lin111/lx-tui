@@ -72,6 +72,45 @@ fn single_query_completed_card_omits_the_query_count() {
 }
 
 #[test]
+fn truncated_card_places_marker_in_result_body_not_title() {
+    let mut view = view();
+    view.truncated = true;
+    view.result = (0..10)
+        .map(|index| format!("line {index}…[truncated]"))
+        .chain(std::iter::once("[...truncated]".to_string()))
+        .collect();
+    view.result_more = 5;
+    let folded = render_with(&call(), &view, 100, Folds::default());
+    let header = folded.lines().next().unwrap_or("");
+    assert!(!header.contains(text::agent::SEARCH_TRUNCATED), "{header}");
+    assert!(!header.contains("truncated"), "{header}");
+    assert!(folded.contains("more lines [truncated]"), "{folded}");
+    assert_eq!(
+        folded.matches(text::agent::INLINE_TRUNCATED).count(),
+        1,
+        "折叠态只允许在 more lines 行出现一次 [truncated]：{folded}"
+    );
+    let expanded = render_with(
+        &call(),
+        &view,
+        100,
+        Folds {
+            body: false,
+            output: true,
+        },
+    );
+    assert!(
+        expanded.contains("… 5 more lines [truncated]"),
+        "{expanded}"
+    );
+    assert_eq!(
+        expanded.matches(text::agent::INLINE_TRUNCATED).count(),
+        1,
+        "展开态也只允许在 more lines 行出现一次 [truncated]：{expanded}"
+    );
+}
+
+#[test]
 fn running_card_reports_query_count_and_searching() {
     let mut call = call();
     call.status = ToolStatus::Running;
@@ -317,4 +356,34 @@ fn failed_card_surfaces_the_error_in_the_result_block() {
         "{text}"
     );
     assert!(!text.contains("exa"), "{text}");
+}
+
+#[test]
+fn three_line_result_with_omitted_lines_reports_exact_more_count_without_phantom_fold() {
+    let mut view = view();
+    view.truncated = true;
+    view.result = vec![
+        "line 0 with literal [truncated] token".into(),
+        "line 1…[truncated]".into(),
+        "line 2".into(),
+    ];
+    view.result_more = 10;
+    let folded_layout = layout(&call(), &view, 100, Folds::default());
+    assert!(
+        !folded_layout.result_expandable,
+        "窗口内仅 3 行时展开不会多出内容，不应标记为可展开"
+    );
+    let folded = render_with(&call(), &view, 100, Folds::default());
+    assert!(
+        folded.contains("… 10 more lines [truncated]"),
+        "应直接显示窗口外省略的 10 行而非 1 more line：{folded}"
+    );
+    assert!(
+        folded.contains("line 0 with literal [truncated] token"),
+        "正文中间的字面量不应被误删：{folded}"
+    );
+    assert!(
+        folded.contains("line 1…"),
+        "行尾截断剥离 [truncated] 后应保留省略号：{folded}"
+    );
 }

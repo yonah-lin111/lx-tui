@@ -4,17 +4,16 @@
 //! ■ Read · folder · 12 files
 //!   └─ /project/src
 //!
-//! ■ Search · 3 matches · results truncated
+//! ■ Search · 3 matches
 //!   └─ "package.json|Cargo.toml" in /project
 //! ```
 //!
 //! `read` 的种类与目录条目数在标题右侧（`Read · file` / `Read · image` / `Read · folder · 12 files`），
-//! 标题下方只放一条路径；`search` 的命中数也在标题右侧。
+//! 树体只放单行路径（或失败/中断原因）；`search` 的命中数也在标题右侧。
 //!
 //! - 独立字段之间不再用 ` · ` 拼接：每个字段是一个 [`tree::Node`]；
 //! - `read` 的 file/folder 只来自**结果体**（[`ToolSummary::read_kind`]），不靠路径猜；
-//! - 预览省略只报 UI 隐藏的物理行（`… N more lines`），执行阶段的 `truncated` 另列
-//!   `output limited` / `results truncated`，两种事实不混算；
+//! - `read` 标题下方只显示一条路径（超宽单行尾部省略），不显示 `output limited` 或 `more lines`；
 //! - 渲染热路径不做常规 JSON 解析：只有摘要缺字段时才懒回退解析 `arguments_json`。
 
 use ratatui::layout::Rect;
@@ -214,15 +213,7 @@ pub(super) fn title_status(call: &ToolCallView) -> Option<String> {
         Kind::Read => read_kind_status(call.summary.as_deref()?),
         Kind::Search => {
             let summary = call.summary.as_deref()?;
-            let mut parts = Vec::new();
-            if let Some(matches) = summary.matches {
-                parts.push(text::agent::matches_label(matches));
-            }
-            // 结果级截断是**标题状态**，不占树体节点。
-            if summary.truncated {
-                parts.push(text::agent::SEARCH_TRUNCATED.to_string());
-            }
-            (!parts.is_empty()).then(|| parts.join(text::LX_CHAT_TOOL_STATUS_SEP))
+            summary.matches.map(text::agent::matches_label)
         }
         Kind::Edit | Kind::Write | Kind::Other => None,
     }
@@ -321,11 +312,7 @@ fn fact_nodes(call: &ToolCallView) -> Vec<Node> {
     let kind = Kind::of(&call.name);
     let summary = call.summary.as_deref();
     match kind {
-        Kind::Read => {
-            if summary.is_some_and(|summary| summary.truncated) {
-                nodes.push(Node::text(text::agent::OUTPUT_LIMITED, style::agent_warn()));
-            }
-        }
+        Kind::Read => {}
         Kind::Search => {}
         Kind::Edit | Kind::Write => {
             if let Some(summary) = summary {
@@ -375,6 +362,9 @@ pub(super) fn nodes(call: &ToolCallView) -> Vec<Node> {
 }
 
 /// 详情排版：长参数折叠 2 行，事实节点始终可见（展开显示全部已保存摘要）。
+///
+/// `read` 单体卡片遵循 `lx-message-block-display.md` §5.1：标题下方只显示一条路径（或一条错误/状态词），
+/// 超宽时单行尾部省略，不软换行成第二行，不显示 `output limited`，也不登记可展开点击面。
 fn detail_layout(call: &ToolCallView, width: u16, expanded: bool) -> tree::Layout {
     detail_layout_with_group(call, width, expanded, false)
 }
@@ -395,41 +385,43 @@ fn detail_layout_with_group(
             tree::layout(sections, width)
         }
     };
-    // `read` 标题保留种类状态，详情只留一条路径；结果正文与执行事实不占第二行。
-    if Kind::of(&call.name) == Kind::Read && Detail::of(call) == Detail::Params {
-        let mut nodes: Vec<Node> = if call.status == ToolStatus::Cancelled {
-            cancelled_node(call).into_iter().collect()
-        } else {
-            read_path_node(call, width).into_iter().collect()
-        };
-        if nodes.is_empty()
-            && let Some(node) = fallback_node(call)
-        {
-            nodes.push(node);
-        }
-        if nodes.is_empty() {
-            nodes.push(Node::new(Vec::new()));
-        }
-        return build(&[Section::fixed(nodes)]);
-    }
-    // 失败/中断只保留一条错误原因，按内容列尾部省略，不折成多行。
-    if Kind::of(&call.name) == Kind::Read && Detail::of(call) == Detail::Error {
-        let mut nodes = Vec::new();
-        if let Some(reason) = call.error.as_deref().map(|error| {
-            crate::ui::main_content::lx::history::truncate_with_ellipsis(
-                &single_line(error, TEXT_SAMPLE_CHARS),
-                tree::content_width(width),
-            )
-        }) && !reason.is_empty()
-        {
-            nodes.push(Node::text(reason, style::text()));
-        }
-        if nodes.is_empty() {
-            nodes.push(Node::new(Vec::new()));
-        }
-        return build(&[Section::fixed(nodes)]);
-    }
     let mut cache: Option<ToolSummary> = None;
+    if Kind::of(&call.name) == Kind::Read {
+        let body_width = tree::content_width(width);
+        let node = if Detail::of(call) == Detail::Error {
+            call.error
+                .as_deref()
+                .map(|reason| single_line(reason, TEXT_SAMPLE_CHARS))
+                .filter(|reason| !reason.is_empty())
+                .map(|reason| {
+                    Node::text(
+                        super::super::truncate_with_ellipsis(&reason, body_width),
+                        style::text(),
+                    )
+                })
+                .unwrap_or_else(|| Node::new(Vec::new()))
+        } else if call.status == ToolStatus::Cancelled {
+            let label = text::tool_status_label(ToolStatus::Cancelled);
+            Node::text(
+                super::super::truncate_with_ellipsis(label, body_width),
+                style::agent_step_detail(),
+            )
+        } else if let Some(node) = read_path_node(call, width) {
+            node
+        } else if matches!(
+            call.status,
+            ToolStatus::InputStreaming | ToolStatus::Pending | ToolStatus::Running
+        ) {
+            let label = text::tool_status_label(call.status);
+            Node::text(
+                super::super::truncate_with_ellipsis(label, body_width),
+                style::agent_step_detail(),
+            )
+        } else {
+            Node::new(Vec::new())
+        };
+        return build(&[Section::fixed(vec![node])]);
+    }
     let mut sections = Vec::new();
     if Detail::of(call) == Detail::Error {
         let mut nodes: Vec<Node> = error_node(call).into_iter().collect();

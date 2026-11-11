@@ -436,8 +436,6 @@ fn edit_write_metric(calls: &[&ToolCallView]) -> Option<String> {
 
 fn search_metric(calls: &[&ToolCallView]) -> Option<String> {
     let mut total = 0usize;
-    let mut all_have_matches = true;
-    let mut any_truncated = false;
     for call in calls {
         let summary = call.summary.as_deref();
         let detail_search = match call.detail.as_deref() {
@@ -446,24 +444,10 @@ fn search_metric(calls: &[&ToolCallView]) -> Option<String> {
         };
         let matches = summary.and_then(|s| s.matches).or_else(|| {
             detail_search.and_then(|v| (!v.matches.is_empty()).then_some(v.matches.len()))
-        });
-        if let Some(count) = matches {
-            total = total.saturating_add(count);
-        } else {
-            all_have_matches = false;
-        }
-        if summary.is_some_and(|s| s.truncated) || detail_search.is_some_and(|v| v.truncated) {
-            any_truncated = true;
-        }
+        })?;
+        total = total.saturating_add(matches);
     }
-    let mut parts = Vec::new();
-    if all_have_matches {
-        parts.push(text::agent::matches_label(total));
-    }
-    if any_truncated {
-        parts.push(text::agent::SEARCH_TRUNCATED.to_string());
-    }
-    (!parts.is_empty()).then(|| parts.join(text::LX_CHAT_TOOL_STATUS_SEP))
+    Some(text::agent::matches_label(total))
 }
 
 #[cfg(test)]

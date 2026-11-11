@@ -123,6 +123,18 @@ fn read_detail_uses_the_leaf_connector() {
     );
 }
 
+#[test]
+fn detail_nodes_use_branch_and_leaf_prefixes() {
+    let mut summary = edit_summary();
+    summary.partial = true;
+    let call = tool_call("edit", ToolStatus::Completed, Some(summary), None);
+    let painted = detail_text(&call, 80);
+    let rows: Vec<&str> = painted.split('\n').collect();
+    assert_eq!(rows.len(), 2, "路径计数 + partial：{painted:?}");
+    assert!(rows[0].starts_with(text::agent::TREE_BRANCH), "{painted:?}");
+    assert!(rows[1].starts_with(text::agent::TREE_LEAF), "{painted:?}");
+}
+
 /// 第 2 行的参数：路径金黄下划线、行范围 dim、增删绿/红。
 #[test]
 fn detail_line_carries_params_with_their_own_colors() {

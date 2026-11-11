@@ -199,3 +199,81 @@ fn unflushed_split_utf8_and_split_escape_behave_the_same_way() {
     let osc = escape.read_from(0, 1024, false);
     assert_eq!(osc.end, 0, "未闭合 OSC 同样不消费");
 }
+
+#[test]
+fn bound_model_output_clips_long_lines_and_caps_lines_and_escaped_bytes() {
+    // 1. 单行超过 2000 字符：裁剪并标记 truncated。
+    let long_line = format!("{}\n", "x".repeat(MAX_MODEL_OUTPUT_LINE_CHARS + 300));
+    let (bounded, clipped) = bound_model_output(&long_line, 0, true);
+    assert!(clipped);
+    assert!(bounded.ends_with("…[truncated]\n"));
+    assert_eq!(
+        bounded.trim_end_matches('\n').chars().count(),
+        MAX_MODEL_OUTPUT_LINE_CHARS + "…[truncated]".chars().count()
+    );
+
+    // 2. 终态超过 2000 行：保留首尾（head + tail）并在中间插入省略行数。
+    let many_lines: String = (0..2500).map(|i| format!("line-{i}\n")).collect();
+    let (bounded_lines, lines_clipped) = bound_model_output(&many_lines, 0, true);
+    assert!(lines_clipped);
+    assert!(bounded_lines.contains("line-0\n"));
+    assert!(bounded_lines.contains("line-2499\n"));
+    assert!(bounded_lines.contains("lines omitted]"), "{bounded_lines}");
+    assert!(bounded_lines.lines().count() <= MAX_MODEL_OUTPUT_LINES);
+
+    // 3. 引号密集文本：按 JSON 转义后 50 KiB 预算裁剪，保证落库 JSON < 64 KiB。
+    let quotes: String = (0..600)
+        .map(|i| format!("{i:04}: {}\n", "\"".repeat(80)))
+        .collect();
+    let mut result = crate::chat::process::ProcessResult {
+        kind: crate::chat::process::ProcessResultKind::ExecCommand,
+        session_id: 1,
+        command: "cat quotes.txt".into(),
+        cwd: "/workspace".into(),
+        tty: false,
+        state: crate::chat::process::ProcessState::Exited { code: Some(0) },
+        exit_code: Some(0),
+        output: quotes,
+        output_start: 0,
+        output_end: 50_000,
+        dropped_bytes: 0,
+        truncated: false,
+        input: None,
+        wrote_input: false,
+        terminate: false,
+        chunk_id: "123456".into(),
+        wall_time_ms: 10,
+    };
+    result.enforce_output_bounds();
+    assert!(result.truncated);
+    assert!(result.output.contains("lines omitted]"));
+    let json = serde_json::to_string(&result.to_json()).expect("json");
+    assert!(
+        json.len() <= crate::chat::context::MAX_TOOL_RESULT_REPLAY_BYTES,
+        "process result_json ({}) must stay within 64 KiB replay cap",
+        json.len()
+    );
+
+    // 4. 超长 command（如 60 KiB 内联脚本）在 enforce_output_bounds 后不会撑破 64 KiB 回放上限。
+    result.command = "python3 -c ".to_string() + &"x".repeat(60_000);
+    result.enforce_output_bounds();
+    let json_with_long_cmd = serde_json::to_string(&result.to_json()).expect("json");
+    assert!(
+        json_with_long_cmd.len() <= crate::chat::context::MAX_TOOL_RESULT_REPLAY_BYTES,
+        "process result_json with huge command ({}) must stay within 64 KiB replay cap",
+        json_with_long_cmd.len()
+    );
+
+    // 5. 运行中进程（flush=false）超过 2000 行时，read_from 游标停在第 2000 行末尾，后续读取不丢行。
+    let mut running_buf = OutputBuffer::default();
+    let stream: String = (0..2500).map(|i| format!("row-{i}\n")).collect();
+    running_buf.push(OutputSource::Stdout, stream.as_bytes());
+    let first_read = running_buf.read_from(0, MAX_MODEL_OUTPUT_BYTES, false);
+    assert!(first_read.truncated);
+    assert_eq!(first_read.text.lines().count(), MAX_MODEL_OUTPUT_LINES);
+    assert!(first_read.text.ends_with("row-1999\n"));
+    let second_read = running_buf.read_from(first_read.end, MAX_MODEL_OUTPUT_BYTES, false);
+    assert!(!second_read.truncated);
+    assert!(second_read.text.starts_with("row-2000\n"));
+    assert!(second_read.text.ends_with("row-2499\n"));
+}

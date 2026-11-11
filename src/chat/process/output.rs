@@ -15,8 +15,17 @@ use std::collections::VecDeque;
 /// 每进程内存保留的输出上限（原始字节，尾部）。
 pub const MAX_PROCESS_OUTPUT_BYTES: usize = 256 * 1024;
 
-/// 单次回给模型的文本字节硬上限。
-pub const MAX_MODEL_OUTPUT_BYTES: usize = 64 * 1024;
+/// 单次回给模型的文本字节硬上限（对齐 `read` 与 opencode 的 50 KiB）。
+pub const MAX_MODEL_OUTPUT_BYTES: usize = 50 * 1024;
+
+/// 单次回给模型的文本行数上限（对齐 `read` 与 opencode 的 2000 行）。
+pub const MAX_MODEL_OUTPUT_LINES: usize = 2000;
+
+/// 单次回给模型的单行字符上限（对齐 `read` 与 opencode 的 2000 字符）。
+pub const MAX_MODEL_OUTPUT_LINE_CHARS: usize = 2000;
+
+/// 落库进程结果 JSON 中除 `output` 与可变命令/路径字段外的固定元数据余量。
+const PROCESS_RESULT_METADATA_BYTES: usize = 1024;
 
 /// 单条控制序列的最大长度：超限即丢弃该序列（不无限等待终止符）。
 const MAX_CONTROL_SEQUENCE_BYTES: usize = 256;
@@ -210,8 +219,15 @@ impl OutputBuffer {
 /// - 其它控制字符转空格，`\n` / `\t` 原样保留；
 /// - 非法 UTF-8 用 `�` 显式可见化；`flush` 为假时尾部不完整字符不计入消费量。
 fn sanitize_text(bytes: &[u8], flush: bool) -> (String, u64) {
+    const RUNNING_ESCAPED_BUDGET: usize =
+        MAX_MODEL_OUTPUT_BYTES.saturating_sub(PROCESS_RESULT_METADATA_BYTES + 4096);
     let mut out = String::new();
     let mut index = 0usize;
+    let mut lines_emitted = 0usize;
+    let mut escaped_used = 0usize;
+    let mut line_start_out = 0usize;
+    let mut line_start_index = 0usize;
+
     while index < bytes.len() {
         let byte = bytes[index];
         if byte == 0x1b {
@@ -234,8 +250,37 @@ fn sanitize_text(bytes: &[u8], flush: bool) -> (String, u64) {
                         index += 1;
                     }
                     out.push('\n');
+                    if !flush
+                        && finish_running_line(
+                            &mut out,
+                            &mut index,
+                            &mut lines_emitted,
+                            &mut escaped_used,
+                            &mut line_start_out,
+                            &mut line_start_index,
+                            RUNNING_ESCAPED_BUDGET,
+                        )
+                    {
+                        break;
+                    }
                 }
-                b'\n' | b'\t' => out.push(byte as char),
+                b'\n' => {
+                    out.push('\n');
+                    if !flush
+                        && finish_running_line(
+                            &mut out,
+                            &mut index,
+                            &mut lines_emitted,
+                            &mut escaped_used,
+                            &mut line_start_out,
+                            &mut line_start_index,
+                            RUNNING_ESCAPED_BUDGET,
+                        )
+                    {
+                        break;
+                    }
+                }
+                b'\t' => out.push('\t'),
                 _ => out.push(' '),
             }
             continue;
@@ -283,7 +328,43 @@ fn sanitize_text(bytes: &[u8], flush: bool) -> (String, u64) {
             }
         }
     }
+    if !flush && out.len() > line_start_out && lines_emitted > 0 {
+        let tail_line = &out[line_start_out..];
+        let (clipped, _) = clip_model_line(tail_line);
+        let cost = json_escaped_len(&clipped).saturating_add(2);
+        if lines_emitted >= MAX_MODEL_OUTPUT_LINES
+            || escaped_used.saturating_add(cost) > RUNNING_ESCAPED_BUDGET
+        {
+            out.truncate(line_start_out);
+            index = line_start_index;
+        }
+    }
     (out, index as u64)
+}
+
+/// 运行中进程完成一行时的预算检查：若已超出单次读取的行数或转义字节上限，回退到上一行边界并返回 `true`。
+fn finish_running_line(
+    out: &mut String,
+    index: &mut usize,
+    lines_emitted: &mut usize,
+    escaped_used: &mut usize,
+    line_start_out: &mut usize,
+    line_start_index: &mut usize,
+    budget: usize,
+) -> bool {
+    let line_without_newline = out[*line_start_out..out.len().saturating_sub(1)].to_string();
+    let (clipped, _) = clip_model_line(&line_without_newline);
+    let cost = json_escaped_len(&clipped).saturating_add(2);
+    if *lines_emitted > 0 && escaped_used.saturating_add(cost) > budget {
+        out.truncate(*line_start_out);
+        *index = *line_start_index;
+        return true;
+    }
+    *escaped_used = escaped_used.saturating_add(cost);
+    *lines_emitted += 1;
+    *line_start_out = out.len();
+    *line_start_index = *index;
+    *lines_emitted >= MAX_MODEL_OUTPUT_LINES
 }
 
 /// [`skip_escape`] 的结论。
@@ -353,6 +434,210 @@ fn skip_escape(bytes: &[u8], start: usize) -> Escape {
 /// 把安全文本切成显示行（保留空行）。
 pub fn display_lines(text: &str) -> Vec<&str> {
     text.split('\n').collect()
+}
+
+/// 文本在落库 JSON 中的转义后字节数（不含外层引号）。
+pub fn json_escaped_len(text: &str) -> usize {
+    let mut len = text.len();
+    for byte in text.bytes() {
+        match byte {
+            b'"' | b'\\' | b'\n' | b'\r' | b'\t' | 0x08 | 0x0c => len += 1,
+            0x00..=0x1f => len += 5,
+            _ => {}
+        }
+    }
+    len
+}
+
+/// 对模型可见的进程输出施加单行 2000 字符、总计 2000 行与 50 KiB JSON 转义字节预算。
+///
+/// - 终态进程（`is_terminal = true`）超限时对齐 codex 保留首尾（head + tail），中间写明
+///   `…[N lines omitted]`，既保留开头的命令上下文又保留末尾的退出/报错摘要；
+/// - 运行中进程（`is_terminal = false`）超限时保留前段并追加 `…[truncated]`。
+pub fn bound_model_output(
+    output: &str,
+    metadata_escaped_bytes: usize,
+    is_terminal: bool,
+) -> (String, bool) {
+    if output.is_empty() {
+        return (String::new(), false);
+    }
+    let budget = MAX_MODEL_OUTPUT_BYTES
+        .saturating_sub(metadata_escaped_bytes.saturating_add(PROCESS_RESULT_METADATA_BYTES));
+    let trailing_newline = output.ends_with('\n');
+    let raw_lines: Vec<&str> = output.lines().collect();
+    let total_raw_lines = raw_lines.len();
+    const MARKER_RESERVE_BYTES: usize = 64;
+
+    if total_raw_lines > MAX_MODEL_OUTPUT_LINES {
+        let usable = budget.saturating_sub(MARKER_RESERVE_BYTES);
+        if is_terminal {
+            let head_budget = usable / 2;
+            let max_head_lines = MAX_MODEL_OUTPUT_LINES / 2;
+            let mut head_lines: Vec<String> = Vec::new();
+            let mut head_bytes = 0usize;
+            for (index, line) in raw_lines.iter().take(max_head_lines).enumerate() {
+                let (rendered, _) = clip_model_line(line);
+                let cost = json_escaped_len(&rendered).saturating_add(2);
+                if index > 0 && head_bytes.saturating_add(cost) > head_budget {
+                    break;
+                }
+                head_bytes = head_bytes.saturating_add(cost);
+                head_lines.push(rendered);
+            }
+            let head_end = head_lines.len();
+            let remaining_budget = usable.saturating_sub(head_bytes);
+            let max_tail_lines = MAX_MODEL_OUTPUT_LINES.saturating_sub(head_end + 1);
+            let mut tail_lines_rev: Vec<String> = Vec::new();
+            let mut tail_bytes = 0usize;
+            for line in raw_lines[head_end..].iter().rev().take(max_tail_lines) {
+                let (rendered, _) = clip_model_line(line);
+                let cost = json_escaped_len(&rendered).saturating_add(2);
+                if tail_bytes.saturating_add(cost) > remaining_budget {
+                    break;
+                }
+                tail_bytes = tail_bytes.saturating_add(cost);
+                tail_lines_rev.push(rendered);
+            }
+            tail_lines_rev.reverse();
+            let omitted = total_raw_lines.saturating_sub(head_end + tail_lines_rev.len());
+            let marker = format!("…[{omitted} lines omitted]");
+            let out = head_lines
+                .iter()
+                .map(String::as_str)
+                .chain(std::iter::once(marker.as_str()))
+                .chain(tail_lines_rev.iter().map(String::as_str));
+            return (join_lines(out, trailing_newline), true);
+        }
+        let max_kept = MAX_MODEL_OUTPUT_LINES.saturating_sub(1);
+        let mut kept: Vec<String> = Vec::new();
+        let mut used = 0usize;
+        for line in raw_lines.iter().take(max_kept) {
+            let (rendered, _) = clip_model_line(line);
+            let cost = json_escaped_len(&rendered).saturating_add(2);
+            if !kept.is_empty() && used.saturating_add(cost) > usable {
+                break;
+            }
+            used = used.saturating_add(cost);
+            kept.push(rendered);
+        }
+        kept.push("…[truncated]".to_string());
+        return (
+            join_lines(kept.iter().map(String::as_str), trailing_newline),
+            true,
+        );
+    }
+
+    let mut line_costs: Vec<(String, usize)> = Vec::with_capacity(total_raw_lines);
+    let mut line_clipped = false;
+    let mut total_escaped = 0usize;
+    for (index, line) in raw_lines.iter().enumerate() {
+        let (rendered, clipped) = clip_model_line(line);
+        line_clipped |= clipped;
+        let escaped = json_escaped_len(&rendered);
+        total_escaped =
+            total_escaped.saturating_add(escaped.saturating_add(if index == 0 { 0 } else { 2 }));
+        line_costs.push((rendered, escaped.saturating_add(2)));
+    }
+
+    if total_escaped <= budget {
+        if !line_clipped {
+            return (output.to_string(), false);
+        }
+        return (
+            join_lines(line_costs.iter().map(|(l, _)| l.as_str()), trailing_newline),
+            is_terminal,
+        );
+    }
+
+    if is_terminal && line_costs.len() > 1 {
+        let usable = budget.saturating_sub(MARKER_RESERVE_BYTES);
+        let head_budget = usable / 2;
+        let max_head_lines = MAX_MODEL_OUTPUT_LINES / 2;
+        let mut head_end = 0usize;
+        let mut head_bytes = 0usize;
+        while head_end < line_costs.len().min(max_head_lines) {
+            let cost = line_costs[head_end].1;
+            if head_end > 0 && head_bytes.saturating_add(cost) > head_budget {
+                break;
+            }
+            head_bytes = head_bytes.saturating_add(cost);
+            head_end += 1;
+        }
+
+        let remaining_budget = usable.saturating_sub(head_bytes);
+        let max_tail_lines = MAX_MODEL_OUTPUT_LINES.saturating_sub(head_end + 1);
+        let mut tail_start = line_costs.len();
+        let mut tail_bytes = 0usize;
+        let mut tail_count = 0usize;
+        while tail_start > head_end && tail_count < max_tail_lines {
+            let cost = line_costs[tail_start - 1].1;
+            if tail_bytes.saturating_add(cost) > remaining_budget {
+                break;
+            }
+            tail_bytes = tail_bytes.saturating_add(cost);
+            tail_start -= 1;
+            tail_count += 1;
+        }
+
+        let omitted = tail_start.saturating_sub(head_end);
+        if omitted > 0 {
+            let marker = format!("…[{omitted} lines omitted]");
+            let mut out: Vec<&str> = line_costs[..head_end]
+                .iter()
+                .map(|(line, _)| line.as_str())
+                .collect();
+            out.push(&marker);
+            out.extend(
+                line_costs[tail_start..]
+                    .iter()
+                    .map(|(line, _)| line.as_str()),
+            );
+            return (join_lines(out.into_iter(), trailing_newline), true);
+        }
+    }
+
+    // 运行中进程或单行超预算：保留头部；仅当实际省略了行时才追加 `…[truncated]`。
+    let usable = budget.saturating_sub(MARKER_RESERVE_BYTES);
+    let max_kept = MAX_MODEL_OUTPUT_LINES.saturating_sub(1);
+    let mut kept: Vec<&str> = Vec::new();
+    let mut used = 0usize;
+    for (line, cost) in &line_costs {
+        if kept.len() >= max_kept {
+            break;
+        }
+        if !kept.is_empty() && used.saturating_add(*cost) > usable {
+            break;
+        }
+        kept.push(line.as_str());
+        used = used.saturating_add(*cost);
+    }
+    let omitted_lines = kept.len() < line_costs.len();
+    if omitted_lines {
+        kept.push("…[truncated]");
+    }
+    let flagged = omitted_lines || (is_terminal && line_clipped);
+    (join_lines(kept.into_iter(), trailing_newline), flagged)
+}
+
+fn clip_model_line(line: &str) -> (String, bool) {
+    if line.chars().count() <= MAX_MODEL_OUTPUT_LINE_CHARS {
+        return (line.to_string(), false);
+    }
+    let head: String = line.chars().take(MAX_MODEL_OUTPUT_LINE_CHARS).collect();
+    (format!("{head}…[truncated]"), true)
+}
+
+fn join_lines<'a>(lines: impl Iterator<Item = &'a str>, trailing_newline: bool) -> String {
+    let collected: Vec<&str> = lines.collect();
+    if collected.is_empty() {
+        return String::new();
+    }
+    let mut out = collected.join("\n");
+    if trailing_newline {
+        out.push('\n');
+    }
+    out
 }
 
 #[cfg(test)]

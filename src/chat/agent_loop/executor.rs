@@ -388,8 +388,13 @@ impl AgentTools {
                     // 只有真实终态才过滤：等待窗口到期仍 Running 时返回的是半截输出，
                     // 不能把“还在编译”压缩成“ok”；后续 write_stdin 继续读原始增量。
                     if result.state.is_terminal() && self.rtk.should_filter_builtin(&prepared) {
-                        result.output = self.rtk.filter_output(&prepared.original, &result.output);
+                        let (filtered, omitted) = self
+                            .rtk
+                            .filter_output_flagged(&prepared.original, &result.output);
+                        result.output = filtered;
+                        result.truncated |= omitted;
                     }
+                    result.enforce_output_bounds();
                     ToolExecutionResult::Process(Box::new(result))
                 }
                 Err(error) => process_failure(error),

@@ -31,6 +31,18 @@ pub const MAX_QUERY_CHARS: usize = 500;
 /// 单条查询输出的字符预算（超出截断并显式标记）。
 pub const MAX_QUERY_OUTPUT_CHARS: usize = 12_000;
 
+/// 整次 `web_search` 输出字节上限（对齐 `read` 与 opencode 的 50 KiB，按落库 JSON 转义后字节计）。
+pub const MAX_WEB_SEARCH_BYTES: usize = super::MAX_READ_BYTES;
+
+/// 整次 `web_search` 输出行数上限（对齐 `read` 与 opencode 的 2000 行）。
+pub const MAX_WEB_SEARCH_LINES: usize = super::MAX_READ_LINES;
+
+/// `web_search` 单行字符上限（对齐 `read` 与 opencode 的 2000 字符）。
+pub const MAX_WEB_SEARCH_LINE_CHARS: usize = super::MAX_READ_LINE_CHARS;
+
+/// 落库 JSON 中除 `text` 与 `queries` 外的固定元数据余量。
+const WEB_SEARCH_RESULT_METADATA_BYTES: usize = 512;
+
 /// 无结果时的统一文案（与 lx-agent 一致）。
 pub const NO_RESULTS: &str = "No search results found. Please try a different query.";
 
@@ -305,11 +317,12 @@ fn read_num_results(value: Option<&Value>) -> ToolResult<Option<usize>> {
 
 /// 组合多条查询的模型可见文本：单条直接返回正文，多条按查询编号分段。
 ///
-/// 每条查询的正文按 [`MAX_QUERY_OUTPUT_CHARS`] 单独裁剪，返回
-/// `(text, truncated)`；任一条被裁剪即 `truncated = true`。
+/// 每条查询的正文先按 [`MAX_QUERY_OUTPUT_CHARS`] 单独裁剪，再对组合后的整份结果施加
+/// [`MAX_WEB_SEARCH_BYTES`]（50 KiB JSON 转义后预算）、[`MAX_WEB_SEARCH_LINES`]（2000 行）与
+/// [`MAX_WEB_SEARCH_LINE_CHARS`]（单行 2000 字符）头部截断；任一层触发即 `truncated = true`。
 pub fn format_outcomes(outcomes: &[QuerySearchOutcome]) -> (String, bool) {
     let mut truncated = false;
-    let text = match outcomes {
+    let combined = match outcomes {
         [single] => {
             let (body, cut) = bounded_body(single);
             truncated |= cut;
@@ -326,7 +339,8 @@ pub fn format_outcomes(outcomes: &[QuerySearchOutcome]) -> (String, bool) {
             .collect::<Vec<_>>()
             .join("\n\n"),
     };
-    (text, truncated)
+    let (text, aggregate_cut) = bound_combined_text(&combined, outcomes);
+    (text, truncated || aggregate_cut)
 }
 
 /// 单条结局的正文：失败项显式写出原因，不静默丢弃。
@@ -347,6 +361,79 @@ fn bounded_body(outcome: &QuerySearchOutcome) -> (String, bool) {
         return (body, false);
     }
     let mut capped: String = body.chars().take(MAX_QUERY_OUTPUT_CHARS).collect();
-    capped.push_str("\n[...truncated]");
+    capped.push_str("\n…[truncated]");
     (capped, true)
+}
+
+/// 对组合后的搜索文本施加单行 2000 字符、总计 2000 行与 50 KiB JSON 转义字节预算（头部保留）。
+fn bound_combined_text(raw: &str, outcomes: &[QuerySearchOutcome]) -> (String, bool) {
+    if raw.is_empty() {
+        return (String::new(), false);
+    }
+    let queries_bytes: usize = outcomes
+        .iter()
+        .map(|outcome| json_escaped_len(&outcome.query).saturating_add(4))
+        .sum();
+    let budget = MAX_WEB_SEARCH_BYTES
+        .saturating_sub(queries_bytes.saturating_add(WEB_SEARCH_RESULT_METADATA_BYTES));
+    const TRUNCATED_SUFFIX: &str = "\n…[truncated]";
+    let suffix_cost = json_escaped_len(TRUNCATED_SUFFIX);
+
+    let lines: Vec<&str> = raw.split('\n').collect();
+    let max_content_lines = if lines.len() > MAX_WEB_SEARCH_LINES {
+        MAX_WEB_SEARCH_LINES.saturating_sub(1)
+    } else {
+        MAX_WEB_SEARCH_LINES
+    };
+    let mut out = String::new();
+    let mut used_bytes = 0usize;
+    let mut line_clipped = false;
+    let mut omitted_lines = false;
+
+    for (emitted, line) in lines.iter().enumerate() {
+        if emitted >= max_content_lines {
+            omitted_lines = true;
+            break;
+        }
+        let (rendered, clipped) = clip_line(line);
+        let sep_cost: usize = if emitted == 0 { 0 } else { 2 };
+        let cost = sep_cost.saturating_add(json_escaped_len(&rendered));
+        if emitted > 0 && used_bytes.saturating_add(cost).saturating_add(suffix_cost) > budget {
+            omitted_lines = true;
+            break;
+        }
+        line_clipped |= clipped;
+        if emitted > 0 {
+            out.push('\n');
+        }
+        out.push_str(&rendered);
+        used_bytes = used_bytes.saturating_add(cost);
+    }
+
+    if omitted_lines && !out.ends_with(TRUNCATED_SUFFIX) && out != "…[truncated]" {
+        out.push_str(TRUNCATED_SUFFIX);
+    }
+    (out, omitted_lines || line_clipped)
+}
+
+/// 单行超过 [`MAX_WEB_SEARCH_LINE_CHARS`] 时截断并追加显式标记。
+fn clip_line(line: &str) -> (String, bool) {
+    if line.chars().count() <= MAX_WEB_SEARCH_LINE_CHARS {
+        return (line.to_string(), false);
+    }
+    let head: String = line.chars().take(MAX_WEB_SEARCH_LINE_CHARS).collect();
+    (format!("{head}…[truncated]"), true)
+}
+
+/// 文本在落库 JSON 中的转义后字节数（不含外层引号）。
+fn json_escaped_len(text: &str) -> usize {
+    let mut len = text.len();
+    for byte in text.bytes() {
+        match byte {
+            b'"' | b'\\' | b'\n' | b'\r' | b'\t' | 0x08 | 0x0c => len += 1,
+            0x00..=0x1f => len += 5,
+            _ => {}
+        }
+    }
+    len
 }

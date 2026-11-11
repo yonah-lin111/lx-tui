@@ -8,8 +8,9 @@
 //! - 参数按白名单字段解析，不接受未定义字段，也绝不把参数拼成 shell 命令；
 //! - 结果只有一种模型可见文本来源 [`format_for_model`]，UI 摘要走 [`to_summary`]，
 //!   DB 落库走 [`to_result_json`]；三者在同一处生成，避免多口径漂移；
-//! - 输入与输出都有硬上限：`read` 的单文件输入 16 MiB、目录条目 50 000 条，`search` 的
-//!   遍历深度/文件数/命中数/时长亦然；任一触顶都显式标记 `truncated`，不静默省略；
+//! - 输入与输出都有硬上限：`read` 的单文件输入 16 MiB、目录条目 50 000 条、单次输出
+//!   50 KiB（2000 行 / 单行 2000 字符），`search` 的遍历深度/文件数/命中数/时长亦然；
+//!   任一触顶都显式标记 `truncated`，不静默省略；
 //! - 写路径使用同目录临时文件 + rename 原子替换，并按规范化路径加短时锁避免并发写互相踩踏；
 //! - `exec_command` / `write_stdin` 需要长期存活的进程句柄，**不在**本模块执行：
 //!   这里只有它们的参数规范化（[`parse_exec_args`] / [`parse_stdin_args`]）；
@@ -85,14 +86,16 @@ pub use crate::chat::process::{
     MAX_YIELD_MS,
 };
 
-/// `read` 单次返回内容字节上限（256 KiB）：超出按行截断并给出 `next_offset`。
-pub const MAX_READ_BYTES: usize = 256 * 1024;
+/// `read` 单次结果体的内容预算（50 KiB，对齐 opencode）：按落库 JSON 转义后的
+/// 字节计（普通文本近似 UTF-8 字节），并为路径/元数据预留空间；超出按行截断并给出
+/// `next_offset`。
+pub const MAX_READ_BYTES: usize = 50 * 1024;
 
 /// `read` 单次返回行数上限（也是 `limit` 的默认值）。
 pub const MAX_READ_LINES: usize = 2000;
 
-/// `read` 单行输出字符上限：超长行截断并显式标记（避免单行撑爆上下文）。
-pub const MAX_READ_LINE_CHARS: usize = 4000;
+/// `read` 单行输出字符上限（2000，对齐 opencode）：超长行截断并显式标记。
+pub const MAX_READ_LINE_CHARS: usize = 2000;
 
 /// `read` **输入**单文件字节上限（16 MiB）：超过直接返回 `TooLarge`，不做部分读取。
 ///
@@ -103,7 +106,7 @@ pub const MAX_READ_LINE_CHARS: usize = 4000;
 pub const MAX_READ_FILE_INPUT_BYTES: u64 = 16 * 1024 * 1024;
 
 /// `read` 单次列目录的条目上限（对齐 codex 的 50 000）：
-/// 到达上限即停止收集并置 `truncated`，`total_lines` 退化为「已列出条目数」。
+/// 当还存在未收集条目时停止并置 `entries_truncated`，`total_lines` 退化为「已列出条目数」。
 pub const MAX_READ_DIR_ENTRIES: usize = 50_000;
 
 /// `search` 单次返回命中条数上限（也是 `limit` 参数的默认值）。

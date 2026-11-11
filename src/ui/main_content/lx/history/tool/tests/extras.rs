@@ -115,7 +115,7 @@ fn empty_file_has_no_range_noise() {
     assert!(detail_text(&call, 80).contains("empty.txt"));
 }
 
-/// 执行阶段被截断也不再占第二行：`read` 只保留路径。
+/// 执行阶段被截断：`read` 标题下方仍只显示一条路径，不显示 `output limited`。
 #[test]
 fn truncated_read_keeps_only_the_path() {
     let call = read_call(
@@ -133,10 +133,11 @@ fn truncated_read_keeps_only_the_path() {
     assert!(!detail.contains(text::agent::OUTPUT_LIMITED), "{detail}");
     assert!(!detail.contains("lines"), "{detail}");
     assert_eq!(detail.lines().count(), 1, "只有一条路径：{detail:?}");
+    assert_eq!(rows(&call, 80, Folds::default()), 2);
 }
 
 #[test]
-fn search_shows_matches_and_truncation_in_the_title() {
+fn search_shows_matches_in_title_and_omits_truncation_outside_more_lines() {
     let call = tool_call(
         "search",
         ToolStatus::Completed,
@@ -151,7 +152,10 @@ fn search_shows_matches_and_truncation_in_the_title() {
     );
     let header = header_text(&call, 90);
     assert!(header.contains("3 matches"), "{header}");
-    assert!(header.contains(text::agent::SEARCH_TRUNCATED), "{header}");
+    assert!(
+        !header.contains(text::agent::SEARCH_TRUNCATED),
+        "标题不再显示 results truncated：{header}"
+    );
     let detail = expanded_detail(&call, 90);
     assert!(
         detail.contains(&text::agent::pattern_label("测试")),
@@ -159,11 +163,10 @@ fn search_shows_matches_and_truncation_in_the_title() {
     );
     assert!(detail.contains("in tool_test.txt"), "{detail}");
     assert!(
-        !detail.contains(text::agent::SEARCH_TRUNCATED),
-        "截断事实不占树体：{detail}"
+        !detail.contains(text::agent::INLINE_TRUNCATED),
+        "无 more lines 时树体不单独显示 [truncated]：{detail}"
     );
     assert!(!detail.contains('·'), "独立字段不拼 `·`：{detail}");
-    assert!(!detail.contains("…[truncated]"), "{detail}");
 }
 
 #[test]
@@ -275,7 +278,7 @@ fn unknown_tool_shows_name_and_summary_only() {
     );
 }
 
-/// 长路径：标题右侧优先保留路径；面板放不下时只丢状态尾巴，标题仍完整。
+/// `read` 超长路径：单行尾部省略，不软换行成第二行，也不登记可展开点击面（§5.1）。
 #[test]
 fn long_path_lives_in_the_title_and_never_overflows() {
     let long = "a/very/long/nested/directory/structure/with/many/segments/file.rs".repeat(3);
@@ -291,7 +294,13 @@ fn long_path_lives_in_the_title_and_never_overflows() {
     assert!(wide.contains(&long), "宽卡片显示完整路径");
     for width in 8u16..120 {
         let painted = full_text(&call, width);
-        for line in painted.split('\n') {
+        let lines: Vec<&str> = painted.split('\n').collect();
+        assert_eq!(
+            lines.len(),
+            2,
+            "宽 {width} read 恒为标题 + 单行路径：{painted:?}"
+        );
+        for line in lines {
             assert!(
                 line.width() <= usize::from(width),
                 "宽 {width} 越界：{line:?}"
@@ -299,8 +308,12 @@ fn long_path_lives_in_the_title_and_never_overflows() {
         }
     }
     assert!(
+        detail_text(&call, 80).ends_with('…'),
+        "超宽路径单行尾部省略"
+    );
+    assert!(
         !has_expandable_content(&call, 80),
-        "长路径单行省略，不再提供展开"
+        "read 没有可展开内容，不登记点击面"
     );
     assert_eq!(
         file_summary::detail(&call, 80, true).len(),
