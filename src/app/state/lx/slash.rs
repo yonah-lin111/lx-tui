@@ -97,11 +97,13 @@ pub enum SlashCommand {
     Connect,
     /// `/mcp`（别名 `/mcps`）：管理当前窗格的 MCP servers。
     Mcp,
+    /// `/btw [prompt]`：针对当前主 QA 的只读旁路问答。
+    Btw,
 }
 
 impl SlashCommand {
     /// 全部命令（固定顺序）。
-    pub const ALL: [SlashCommand; 11] = [
+    pub const ALL: [SlashCommand; 12] = [
         SlashCommand::Model,
         SlashCommand::Resume,
         SlashCommand::Fork,
@@ -113,6 +115,7 @@ impl SlashCommand {
         SlashCommand::Rename,
         SlashCommand::Connect,
         SlashCommand::Mcp,
+        SlashCommand::Btw,
     ];
 
     /// 命令名（不含 `/`）。
@@ -129,6 +132,7 @@ impl SlashCommand {
             Self::Rename => "rename",
             Self::Connect => "connect",
             Self::Mcp => "mcp",
+            Self::Btw => "btw",
         }
     }
 
@@ -146,6 +150,7 @@ impl SlashCommand {
             Self::Rename => &["title"],
             Self::Connect => &[],
             Self::Mcp => &["mcps"],
+            Self::Btw => &[],
         }
     }
 
@@ -163,6 +168,7 @@ impl SlashCommand {
             Self::Rename => "/rename",
             Self::Connect => "/connect",
             Self::Mcp => "/mcp",
+            Self::Btw => "/btw",
         }
     }
 
@@ -180,6 +186,7 @@ impl SlashCommand {
             Self::Rename => crate::ui::text::LX_RENAME_COMMAND_DESC,
             Self::Connect => crate::ui::text::LX_CONNECT_COMMAND_DESC,
             Self::Mcp => crate::ui::text::LX_MCP_COMMAND_DESC,
+            Self::Btw => crate::ui::text::LX_BTW_COMMAND_DESC,
         }
     }
 
@@ -192,6 +199,7 @@ impl SlashCommand {
     pub fn echo_prefix(self) -> Option<&'static str> {
         match self {
             Self::Rename => Some("/rename "),
+            Self::Btw => Some("/btw "),
             _ => None,
         }
     }
@@ -200,6 +208,7 @@ impl SlashCommand {
     pub fn argument_hint(self) -> Option<&'static str> {
         match self {
             Self::Rename => Some(crate::ui::text::LX_RENAME_ARG_HINT),
+            Self::Btw => Some(crate::ui::text::LX_BTW_ARG_HINT),
             _ => None,
         }
     }
@@ -920,13 +929,32 @@ pub fn active_argument_hint(input: &str) -> Option<&'static str> {
     }
     let trimmed = input.trim_start_matches([' ', '\t']);
     let line = trimmed.strip_prefix('/')?;
-    let is_rename = std::iter::once(SlashCommand::Rename.name())
-        .chain(SlashCommand::Rename.aliases().iter().copied())
-        .any(|keyword| {
-            line.strip_prefix(keyword)
-                .is_some_and(|rest| rest.starts_with(' ') && rest.trim().is_empty())
-        });
-    is_rename.then(|| SlashCommand::Rename.argument_hint())?
+    for command in [SlashCommand::Rename, SlashCommand::Btw] {
+        let matched = std::iter::once(command.name())
+            .chain(command.aliases().iter().copied())
+            .any(|keyword| {
+                line.strip_prefix(keyword)
+                    .is_some_and(|rest| rest.starts_with(' ') && rest.trim().is_empty())
+            });
+        if matched {
+            return command.argument_hint();
+        }
+    }
+    None
+}
+
+/// 解析 `/btw [prompt]`：返回 `(prompt, 是否为裸命令)`。
+///
+/// 与 `/rename` 不同，问题允许换行：命令词必须是首个非空白词，其余全文都是问题。
+pub fn parse_btw_command(input: &str) -> Option<(&str, bool)> {
+    let trimmed = input.trim_start_matches([' ', '\t']);
+    let line = trimmed.strip_prefix('/')?;
+    let rest = line.strip_prefix(SlashCommand::Btw.name())?;
+    if !rest.is_empty() && !rest.starts_with(char::is_whitespace) {
+        return None;
+    }
+    let prompt = rest.trim();
+    Some((prompt, prompt.is_empty()))
 }
 
 /// 解析单行 `/rename`（或别名 `/title`）命令输入；

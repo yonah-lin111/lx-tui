@@ -16,6 +16,7 @@ use crate::tiling::PaneId;
 use crate::ui::text;
 
 pub mod ask;
+pub mod btw;
 pub mod compact;
 mod connect;
 mod fork;
@@ -38,6 +39,14 @@ pub mod web;
 
 pub use ask::{
     apply_ask_click, apply_ask_paste, apply_ask_wheel, apply_input as apply_ask_input, submit_all,
+};
+pub use btw::{
+    AcceptedBtw, BtwToolSettlement, BtwToolUpdate, apply_input as apply_btw_input,
+    btw_message_parts as btw_parts, on_accepted as on_btw_accepted, on_delta as on_btw_delta,
+    on_failed as on_btw_failed, on_finished as on_btw_finished, on_qa_list_loaded,
+    on_recipient_started as on_btw_recipient_started, on_thread_loaded as on_btw_thread_loaded,
+    on_tool_state as on_btw_tool_state, open_btw_tab, submit_current as submit_btw,
+    target_label as btw_target_label, try_submit_btw_command,
 };
 pub use compact::{
     compact_command, on_compact_empty, on_compact_failed, on_compact_finished,
@@ -118,7 +127,7 @@ pub use viewport::{
 };
 pub(crate) use viewport::{
     invalidate_task_agent_rows, resolve_lx_history, resolve_lx_rewind_center,
-    resolve_task_agents_visible,
+    resolve_task_agents_visible, resolve_task_btw_visible,
 };
 pub use web::{
     AI_WEB_DEEPSEEK_SESSION_PREFIX, AI_WEB_GEMINI_SESSION_PREFIX, AI_WEB_GROK_SESSION_PREFIX,
@@ -138,6 +147,10 @@ pub fn try_send(state: &mut AppState, pane: PaneId) -> bool {
     }
     // `/rename` 是纯元数据更新，同样早于入口/模型/busy 检查。
     if slash::try_submit_rename_command(state, pane) {
+        return true;
+    }
+    // `/btw` 在排队/steer 之前拦截：生成期间也必须进入旁路，不注入主任务。
+    if btw::try_submit_btw_command(state, pane) {
         return true;
     }
     // 仅本地命令在跑：普通聊天冻结入队，等结果落库后再发送。

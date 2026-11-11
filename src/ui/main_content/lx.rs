@@ -605,12 +605,15 @@ fn build(
         if let Some(rect) = lay.task_output {
             if page.tab == crate::app::state::TaskTab::Agents {
                 task::draw_agents_detail(&mut grid, rect, lx, cache);
+            } else if page.tab == crate::app::state::TaskTab::Btw {
+                task::btw::draw_conversation(&mut grid, rect, lx, cache);
             } else {
                 task::draw_output_container(&mut grid, rect, page);
             }
         }
         if let Some(rect) = lay.task_list {
-            task::draw_list(&mut grid, rect, page, &lx.agents);
+            cursor = task::draw_list(&mut grid, rect, page, lx)
+                .map(|(row, col)| (row.saturating_sub(area.y), col.saturating_sub(area.x)));
         }
     } else if let Some(rect) = lay.ask {
         cursor = ask::draw(&mut grid, rect, area.height, lx, focused)
@@ -697,12 +700,15 @@ fn build_chat(
         if let Some(rect) = lay.task_output {
             if page.tab == crate::app::state::TaskTab::Agents {
                 task::draw_agents_detail(&mut grid, rect, lx, cache);
+            } else if page.tab == crate::app::state::TaskTab::Btw {
+                task::btw::draw_conversation(&mut grid, rect, lx, cache);
             } else {
                 task::draw_output_container(&mut grid, rect, page);
             }
         }
         if let Some(rect) = lay.task_list {
-            task::draw_list(&mut grid, rect, page, &lx.agents);
+            cursor = task::draw_list(&mut grid, rect, page, lx)
+                .map(|(row, col)| (row.saturating_sub(area.y), col.saturating_sub(area.x)));
         }
     } else if let Some(rect) = lay.ask {
         cursor = ask::draw(&mut grid, rect, area.height, lx, focused)
@@ -789,6 +795,22 @@ pub fn task_agents_rows(
     cache: &mut PaneCache,
 ) -> Option<(usize, usize, bool)> {
     task::agents_rows(area, lx, cache)
+}
+
+/// BTW 页签的 composer 矩形（输入浮层锚点）；不在 BTW 页返回 None。
+pub fn task_btw_composer_rect(area: Rect, lx: &Lx) -> Option<Rect> {
+    if !lx.is_btw_tab() {
+        return None;
+    }
+    layout(area, lx)
+        .task_list
+        .map(task::btw::composer_rect)
+        .filter(|rect| rect.height > 0)
+}
+
+/// BTW 对话区的 `(可见行数, 总行数, 快照是否最新)`；不在 BTW 页或无活动线程返回 None。
+pub fn task_btw_rows(area: Rect, lx: &Lx, cache: &mut PaneCache) -> Option<(usize, usize, bool)> {
+    task::btw_rows(area, lx, cache)
 }
 
 /// 后台任务面板 item 列表的滚动条几何；未打开或内容装得下时返回 None。

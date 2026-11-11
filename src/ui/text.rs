@@ -1,6 +1,7 @@
 //! 全部用户可见文案；组件与逻辑禁止散落硬编码字符串。
 
 pub mod agent;
+pub mod btw;
 pub mod chat;
 pub mod connect;
 pub mod mcp;
@@ -19,6 +20,7 @@ use crate::app::tooltip::{BlockButtonKind, TemplateButtonKind, TooltipTarget};
 #[cfg(test)]
 use crate::tiling::PaneId;
 
+pub use btw::*;
 pub use connect::*;
 pub use steer::*;
 pub use todo::*;

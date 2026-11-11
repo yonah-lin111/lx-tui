@@ -871,6 +871,7 @@ pub fn resize_panes(state: &mut AppState, pane_rects: &[(PaneId, Rect)]) {
                 for run in &mut pane.lx.agents.runs {
                     run.rows_dirty = true;
                 }
+                pane.lx.btw.mark_rows_dirty();
                 super::selection::clear_lx_selection_for(state, *id);
                 if state.terminal_selection == Some(*id) {
                     state.terminal_selection = None;

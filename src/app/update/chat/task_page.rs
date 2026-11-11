@@ -86,19 +86,25 @@ pub fn select_task_tab(state: &mut AppState, pane: PaneId, position: usize) -> b
     let Some(tab) = crate::app::state::TaskTab::ALL.get(position).copied() else {
         return false;
     };
-    let Some(target) = state.pane_mut_anywhere(pane) else {
-        return false;
+    let changed = {
+        let Some(target) = state.pane_mut_anywhere(pane) else {
+            return false;
+        };
+        let Some(page) = target.lx.task.as_mut() else {
+            return false;
+        };
+        let changed = page.select_tab(tab);
+        if changed {
+            page.clamp(&target.lx.agents);
+        }
+        changed
     };
-    let Some(page) = target.lx.task.as_mut() else {
-        return false;
-    };
-    let changed = page.select_tab(tab);
     if changed {
-        page.clamp(&target.lx.agents);
         state.task_scroll_drag = None;
         state.task_list_scroll_drag = None;
         state.task_agents_scroll_drag = None;
         crate::app::update::clear_lx_selection_for(state, pane);
+        super::btw::ensure_loaded(state, pane);
     }
     changed
 }
@@ -162,6 +168,9 @@ pub fn scroll_task_list(state: &mut AppState, pane: PaneId, delta: isize) -> boo
             crate::ui::main_content::lx::task::LIST_MAX,
             agents_len,
         ),
+        crate::app::state::TaskTab::Btw => {
+            page.scroll_btw_window(delta, crate::ui::main_content::lx::task::LIST_MAX)
+        }
     }
 }
 
@@ -183,6 +192,7 @@ pub fn set_task_list_scroll(state: &mut AppState, pane: PaneId, offset: usize) -
         crate::app::state::TaskTab::Agents => {
             page.set_agents_window_scroll(offset, visible, agents_len)
         }
+        crate::app::state::TaskTab::Btw => page.set_btw_window_scroll(offset, visible),
     }
 }
 

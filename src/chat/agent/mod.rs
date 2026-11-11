@@ -61,6 +61,8 @@ pub enum ToolSurface {
     Monitor,
     /// CLI exec 无头主 agent：剔除交互式 ask 后的全部主工具（17 项）。
     ExecMain,
+    /// 旁路问答（`/btw`）：只读文件检索与时间，不暴露进程、写入或控制工具。
+    Btw,
 }
 
 /// 主 agent 工具名（顺序即呈现顺序）。
@@ -142,6 +144,9 @@ const EXECUTOR_COORDINATOR_TOOLS: [&str; 15] = [
 /// monitor 工具名白名单（4 项：只读文件检索 + 命令执行/轮询，严禁 edit/write 与控制工具）。
 pub const MONITOR_TOOLS: [&str; 4] = ["read", "search", "exec_command", "write_stdin"];
 
+/// 旁路问答工具名（3 项：只读检索 + 时间；不含进程、写入、提问与控制工具）。
+pub const BTW_TOOLS: [&str; 3] = ["read", "search", "curr_time"];
+
 impl ToolSurface {
     /// 该工具面的工具名（逐字稳定，测试锁死）。
     pub const fn names(self) -> &'static [&'static str] {
@@ -152,6 +157,7 @@ impl ToolSurface {
             Self::ExecutorCoordinator => &EXECUTOR_COORDINATOR_TOOLS,
             Self::Monitor => &MONITOR_TOOLS,
             Self::ExecMain => &EXEC_MAIN_TOOLS,
+            Self::Btw => &BTW_TOOLS,
         }
     }
 

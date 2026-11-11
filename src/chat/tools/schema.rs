@@ -277,6 +277,27 @@ pub fn turn_tools_for_subagent(
     decls
 }
 
+/// 旁路问答（`/btw`）的完整工具声明：只读内置工具 + 标记为只读的 MCP 工具。
+///
+/// 未标记 `read_only_hint` 的 MCP 工具一律不声明；resources 三个工具本身只读。
+pub fn turn_tools_for_btw(mcp: &crate::mcp::McpToolSnapshot) -> Vec<super::types::ToolDecl> {
+    let mut decls = builtin_tools(crate::chat::agent::ToolSurface::Btw);
+    decls.extend(
+        mcp.tools()
+            .iter()
+            .filter(|tool| tool.read_only_hint)
+            .map(|tool| super::types::ToolDecl {
+                name: tool.qualified.clone(),
+                description: tool.description.clone(),
+                parameters: tool.parameters.clone(),
+            }),
+    );
+    if mcp.has_resources() {
+        decls.extend(resource_tools());
+    }
+    decls
+}
+
 /// `read` 参数 schema。
 fn read_parameters() -> Value {
     json!({

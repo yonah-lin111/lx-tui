@@ -186,6 +186,69 @@ pub fn resolve_task_output_visible(
     changed
 }
 
+/// 每轮把 BTW 对话可见行数与 composer 尺寸落状态（绘制前写）。
+pub(crate) fn resolve_task_btw_visible(
+    state: &mut AppState,
+    rects: &[(PaneId, ratatui::layout::Rect)],
+    cache: &mut crate::ui::RenderCache,
+) -> bool {
+    let mut changed = false;
+    for (pane, rect) in rects {
+        let inner = crate::tiling::pane_inner_rect(*rect);
+        let Some(composer) = state
+            .pane_anywhere(*pane)
+            .filter(|target| target.view == crate::app::state::PaneView::Lx)
+            .filter(|target| target.lx.is_btw_tab())
+            .and_then(|target| {
+                crate::ui::main_content::lx::task_btw_composer_rect(inner, &target.lx)
+            })
+        else {
+            continue;
+        };
+        let measured = state.pane_anywhere(*pane).and_then(|target| {
+            let thread = target.lx.btw.active_thread()?;
+            if !(thread.rows_dirty || thread.total_rows == 0) {
+                return None;
+            }
+            crate::ui::main_content::lx::task_btw_rows(inner, &target.lx, cache.pane(*pane))
+        });
+        let Some(target) = state.pane_mut_anywhere(*pane) else {
+            continue;
+        };
+        let width = composer.width.saturating_sub(3).max(1);
+        let rows = composer.height.saturating_sub(2).max(1);
+        let Some(thread) = target.lx.btw.active_thread_mut() else {
+            continue;
+        };
+        thread.composer.editor_mut().resize(width, rows);
+        let (visible, total, fresh) =
+            measured.unwrap_or((usize::from(rows), thread.total_rows, true));
+        let total = if fresh { total } else { thread.total_rows };
+        let max = total.saturating_sub(visible);
+        let should_follow =
+            thread.follow || total <= visible.saturating_add(1) || thread.scroll >= max;
+        let next_scroll = if should_follow {
+            max
+        } else {
+            thread.scroll.min(max)
+        };
+        if thread.visible != visible
+            || thread.total_rows != total
+            || thread.rows_dirty
+            || thread.follow != should_follow
+            || thread.scroll != next_scroll
+        {
+            thread.visible = visible;
+            thread.total_rows = total;
+            thread.rows_dirty = false;
+            thread.follow = should_follow;
+            thread.scroll = next_scroll;
+            changed = true;
+        }
+    }
+    changed
+}
+
 /// 窗格几何变化后让所有 Agents 详情重新量行。
 ///
 /// `total_rows` 只在 `rows_dirty` 时重算；resize 不产生 delta，必须显式失效，
@@ -371,6 +434,16 @@ pub fn jump_lx_history_bottom(state: &mut AppState, pane: PaneId) -> bool {
                     }
                     changed
                 }),
+            crate::app::state::TaskTab::Btw => {
+                target.lx.btw.active_thread_mut().is_some_and(|thread| {
+                    let changed = !thread.follow;
+                    thread.follow = true;
+                    if thread.visible > 0 {
+                        thread.scroll = thread.total_rows.saturating_sub(thread.visible);
+                    }
+                    changed
+                })
+            }
         };
     }
     if target.lx.chat.messages.is_empty() {

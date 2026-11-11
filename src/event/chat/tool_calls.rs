@@ -137,6 +137,36 @@ pub(crate) fn settle_begin(
         let _ = reply.send(Err(HostError::Cancelled));
         return false;
     };
+    // 旁路问答：没有主窗格 assistant，按独立 run 与显式 assistant ID 推进。
+    if let Some(run) = streams.btw.runs.get(&pending.key) {
+        let assistant_id = run.assistant_message_id.clone();
+        let child_session = run.child_session_id.clone();
+        let provider_call_id = pending
+            .ticket
+            .call_id
+            .splitn(3, ':')
+            .nth(2)
+            .unwrap_or(&pending.ticket.call_id)
+            .to_string();
+        return match persistence.mark_tool_running(&workspace, &pending.ticket) {
+            Ok(()) => {
+                let changed = update::on_btw_tool_state(
+                    state,
+                    &child_session,
+                    &assistant_id,
+                    update::BtwToolUpdate::Running(&provider_call_id),
+                );
+                let _ = reply.send(Ok(pending.ticket));
+                changed
+            }
+            Err(error) => {
+                let _ = reply.send(Err(HostError::Failed {
+                    code: format!("{RUNNING_TOOL_FAILED_CODE} · {}", error.code()),
+                }));
+                false
+            }
+        };
+    }
     // 帧间归属可能变化（会话切换/`/new`）：已提交的 pending 记为 cancelled，不执行。
     if active_assistant_id(state, &pending.key).is_none() {
         cancel_pending(persistence, &workspace, &pending.ticket);

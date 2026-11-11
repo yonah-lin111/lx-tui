@@ -192,6 +192,8 @@ pub enum RequestPurpose {
     Subagent(crate::chat::agent::AgentRole),
     /// CLI exec 无头对话轮次（16 工具，不含交互式 ask）。
     ExecTurn,
+    /// 旁路问答：只读检索工具；不产生子任务、不写文件、不改主会话。
+    Btw,
 }
 
 impl RequestPurpose {
@@ -201,6 +203,7 @@ impl RequestPurpose {
             Self::Chat => Some(crate::chat::agent::ToolSurface::Main),
             Self::Subagent(role) => Some(crate::chat::agent::ToolSurface::from_role(role)),
             Self::ExecTurn => Some(crate::chat::agent::ToolSurface::ExecMain),
+            Self::Btw => Some(crate::chat::agent::ToolSurface::Btw),
             Self::CompactSummary => None,
         }
     }
@@ -256,6 +259,7 @@ impl ChatRequest {
             RequestPurpose::Chat => Some(crate::chat::agent::ToolSurface::Main),
             RequestPurpose::ExecTurn => Some(crate::chat::agent::ToolSurface::ExecMain),
             RequestPurpose::Subagent(role) => Some(role.tool_surface_at_depth(depth, max_depth)),
+            RequestPurpose::Btw => Some(crate::chat::agent::ToolSurface::Btw),
             RequestPurpose::CompactSummary => None,
         }
     }

@@ -3,6 +3,7 @@
 //! 统一负责“DB 落库 → 状态 → 回执”顺序；delta 与终态按 `(pane, session, generation)` 过滤。
 
 pub mod ask;
+pub mod btw;
 pub mod compact;
 pub mod connect;
 mod context_summary;
@@ -124,6 +125,8 @@ pub struct ChatStreams {
     pub(crate) asks: HashMap<RequestKey, PendingAsk>,
     /// 子 agent 句柄：`child_session_id -> handle`。
     pub(crate) subagents: HashMap<String, subagent::SubagentHandle>,
+    /// 旁路问答（`/btw`）的独立运行状态与队列。
+    pub(crate) btw: btw::BtwStreams,
     /// 已显式恢复（或刚 spawn 处于活动生命周期）的子 agent ID 集合（`agent_id`）。
     pub(crate) resumed_subagents: std::collections::HashSet<String>,
     /// 因 `send_input(interrupt=true)` 正在中断当前轮、封口后需立即消费新输入的 `agent_id` 集合。
@@ -147,7 +150,7 @@ pub(crate) struct PendingAsk {
 }
 
 /// 一次待回执的 BeginTool：DB pending 已提交，UI 已转 Pending。
-struct PendingBegin {
+pub(crate) struct PendingBegin {
     key: RequestKey,
     ticket: ToolCallTicket,
     /// 回执通道；`None` 表示已被丢弃（窗格关闭，不得再执行）。
@@ -313,6 +316,8 @@ pub fn pump_chat_streams(
 ) -> bool {
     // 会话切换、`/new`、窗格关闭：在途轮次不再归属于任何可见请求 → 取消。
     let mut changed = reap_stale_streams(state, streams, persistence);
+    // 旁路问答：补启动释放出的并发槽（批内并行、批间串行）。
+    changed |= btw::pump(state, streams, persistence, sender);
     // 已不再被任何窗格绑定的会话运行实例：停止其全部进程、释放句柄，并把终态回投落库。
     changed |= process_page::reap_orphan_runtimes(state, streams, sender);
     let effects: Vec<Effect> = state
@@ -325,6 +330,7 @@ pub fn pump_chat_streams(
                     Effect::StartChatStream { .. }
                         | Effect::CancelChatStream { .. }
                         | Effect::AnswerAsk { .. }
+                        | Effect::Btw(_)
                 )
         })
         .cloned()
@@ -343,6 +349,7 @@ pub fn pump_chat_streams(
                     Effect::StartChatStream { .. }
                         | Effect::CancelChatStream { .. }
                         | Effect::AnswerAsk { .. }
+                        | Effect::Btw(_)
                 )
         })
         .collect();
@@ -365,6 +372,9 @@ pub fn pump_chat_streams(
                 answers,
             } => {
                 changed |= ask::answer(state, streams, &key, &call_id, answers);
+            }
+            Effect::Btw(effect) => {
+                changed |= btw::apply_effect(state, streams, persistence, sender, effect);
             }
             other => {
                 changed |= web::apply_effect(state, streams, sender, other);
@@ -479,6 +489,7 @@ fn reap_stale_streams(
         // 子 agent 的 key 没有对应的主窗格请求，但它有自己的句柄与生命周期；
         // 不能被「窗格里没有这个在途 assistant」这条规则误杀。
         .filter(|key| !streams.subagents.contains_key(&key.session))
+        .filter(|key| !streams.btw.runs.contains_key(*key))
         .filter(|key| active_assistant_id(state, key).is_none())
         .cloned()
         .collect();
@@ -580,9 +591,15 @@ fn report_turn(
 pub fn handle_net_event(
     state: &mut AppState,
     streams: &mut ChatStreams,
-    _persistence: &Persistence,
+    persistence: &Persistence,
     event: ChatNetEvent,
 ) -> bool {
+    // 旁路问答：独立 child session；未知/已结束的 BTW 事件直接丢弃，绝不进入主对话。
+    if let ChatNetEvent::Delta { key, .. } | ChatNetEvent::Finished { key, .. } = &event
+        && (streams.btw.runs.contains_key(key) || streams.btw.sessions.contains(&key.session))
+    {
+        return btw::handle_net_event(state, streams, persistence, event);
+    }
     // 子 agent 增量走独立分流：绝不进入主对话。
     if let ChatNetEvent::Delta { key, .. } | ChatNetEvent::Finished { key, .. } = &event
         && streams.subagents.contains_key(&key.session)
@@ -638,6 +655,33 @@ pub fn handle_agent_host_event(
     persistence: &Persistence,
     event: AgentHostEvent,
 ) -> bool {
+    // 旁路问答：只读握手，结算与状态更新都走独立路径。
+    let btw_key = match &event {
+        AgentHostEvent::BeginTool { key, .. }
+        | AgentHostEvent::FinishTool { key, .. }
+        | AgentHostEvent::AskUser { key, .. }
+        | AgentHostEvent::UserShellUpdates { key, .. }
+        | AgentHostEvent::SteerInputs { key, .. }
+        | AgentHostEvent::HasPendingSteers { key, .. }
+        | AgentHostEvent::Subagent { key, .. } => Some(key.clone()),
+        AgentHostEvent::Mutation(_) => None,
+    };
+    if let Some(key) = btw_key
+        && (streams.btw.runs.contains_key(&key) || streams.btw.sessions.contains(&key.session))
+    {
+        return match event {
+            AgentHostEvent::BeginTool { key, call, reply } => {
+                btw::begin_tool(state, streams, persistence, key, call, reply)
+            }
+            AgentHostEvent::FinishTool {
+                key,
+                ticket,
+                outcome,
+                reply,
+            } => btw::finish_tool(state, streams, persistence, key, &ticket, outcome, reply),
+            other => btw::reject_host_request(other),
+        };
+    }
     match event {
         AgentHostEvent::BeginTool { key, call, reply } => {
             begin_tool(state, streams, persistence, key, call, reply)

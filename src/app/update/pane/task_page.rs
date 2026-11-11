@@ -396,6 +396,15 @@ pub fn select_task_agent_filter(
 }
 
 pub(super) fn apply_task_page_input(state: &mut AppState, pane: PaneId, command: LxInput) {
+    // BTW 页签：独立焦点与 composer，整块路由到自己的编辑器。
+    if state
+        .pane_anywhere(pane)
+        .and_then(|target| target.lx.task.as_ref())
+        .is_some_and(|page| page.tab == crate::app::state::TaskTab::Btw)
+    {
+        crate::app::update::chat::btw::apply_input(state, pane, command);
+        return;
+    }
     if apply_agent_reply_input(state, pane, command) {
         return;
     }
@@ -465,6 +474,7 @@ pub(super) fn apply_task_page_input(state: &mut AppState, pane: PaneId, command:
                 clamp_agents_window(state, pane);
                 ensure_selected_agent_loaded(state, pane);
                 crate::app::update::clear_lx_selection_for(state, pane);
+                crate::app::update::chat::btw::ensure_loaded(state, pane);
             }
         }
         LxInput::Right => {
@@ -479,6 +489,7 @@ pub(super) fn apply_task_page_input(state: &mut AppState, pane: PaneId, command:
                 clamp_agents_window(state, pane);
                 ensure_selected_agent_loaded(state, pane);
                 crate::app::update::clear_lx_selection_for(state, pane);
+                crate::app::update::chat::btw::ensure_loaded(state, pane);
             }
         }
         // `Tab`：Agents 页签轮转状态筛选（all -> active -> done）。

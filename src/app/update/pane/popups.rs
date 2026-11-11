@@ -42,11 +42,13 @@ pub fn sync_all_lx_mention_roots(state: &mut AppState) -> bool {
     changed
 }
 
-/// 取走当前可见窗格待发起的提及扫描请求（窗格、代号、根）；仅事件层调用。
+/// 取走当前可见窗格待发起的提及扫描请求（窗格、BTW QA 归属、代号、根）；仅事件层调用。
 ///
-/// 只对当前标签（可见）中处于 lx 视图、有有效 `@` 触发器且无在途/缓存的窗格发起；
-/// 不可见窗格的根仍会被同步，恢复可见时再发起扫描。
-pub fn take_lx_mention_scan_requests(state: &mut AppState) -> Vec<(PaneId, u64, PathBuf)> {
+/// `qa` 为 `Some` 表示来自 BTW 独立 composer：回投时只有仍是该 QA 的活动线程才接收，
+/// 切换 QA 后旧结果会被丢弃。主输入框为 `None`。
+pub fn take_lx_mention_scan_requests(
+    state: &mut AppState,
+) -> Vec<(PaneId, Option<String>, u64, PathBuf)> {
     let visible = state.active_tab().layout.pane_ids();
     let mut requests = Vec::new();
     for id in visible {
@@ -56,23 +58,46 @@ pub fn take_lx_mention_scan_requests(state: &mut AppState) -> Vec<(PaneId, u64, 
         if pane.view != PaneView::Lx {
             continue;
         }
+        let active_qa = pane.lx.btw.active.clone();
         if let Some((generation, root)) = pane.lx.take_mention_scan_request() {
-            requests.push((id, generation, root));
+            requests.push((id, None, generation, root));
+        }
+        if pane.lx.is_btw_tab()
+            && let Some(composer) = pane.lx.btw.active_composer_mut()
+            && let Some((generation, root)) = composer.take_mention_scan_request()
+        {
+            requests.push((id, active_qa, generation, root));
         }
     }
     requests
 }
 
 /// 写入指定窗格的提及扫描结果；窗格已删除或结果过期时丢弃。
+///
+/// BTW 结果只落到仍显示同一 QA 的 composer；主输入框结果按原语义落到主编辑器。
 pub fn apply_lx_mention_entries(
     state: &mut AppState,
     id: PaneId,
+    qa: Option<String>,
     generation: u64,
     root: &std::path::Path,
     entries: Vec<crate::app::markdown::MentionEntry>,
 ) {
-    if let Some(pane) = state.pane_mut_anywhere(id) {
-        pane.lx.apply_mention_entries(generation, root, entries);
+    let Some(pane) = state.pane_mut_anywhere(id) else {
+        return;
+    };
+    match qa {
+        Some(qa_id) => {
+            if pane.lx.btw.active.as_deref() != Some(qa_id.as_str()) {
+                return;
+            }
+            if let Some(composer) = pane.lx.btw.active_composer_mut() {
+                composer.apply_mention_entries(generation, root, entries);
+            }
+        }
+        None => {
+            pane.lx.apply_mention_entries(generation, root, entries);
+        }
     }
 }
 

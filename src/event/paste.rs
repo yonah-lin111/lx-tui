@@ -66,31 +66,31 @@ pub(super) fn handle_lx_paste(state: &mut AppState, text: String) -> bool {
     if pane.lx.rewind.is_executing() {
         return false;
     }
-    let canceled_text = pane.lx.text_paste_cancel();
-    let canceled_path = pane.lx.paste_cancel();
+    let canceled_text = pane.lx.with_active_editor(|lx| lx.text_paste_cancel());
+    let canceled_path = pane.lx.with_active_editor(|lx| lx.paste_cancel());
     if text.is_empty() {
         return canceled_text || canceled_path;
     }
     // 粘贴也是编辑：让双 Esc 的待命/选中失效（设计 4.2 / D8）。
     pane.lx.clear_rewind();
     // Shell 模式：路径与长文本都是命令字面量，不弹参照/折叠面板。
-    if pane.lx.shell_mode() {
-        pane.lx.insert_str(&text);
+    if pane.lx.active_editor().shell_mode() {
+        pane.lx.with_active_editor(|lx| lx.insert_str(&text));
         return true;
     }
     if let Some(paths) = crate::platform::parse_path_text(&text)
         && let Some(candidates) = candidates_from_paths(&paths)
     {
-        return pane.lx.paste_open(candidates);
+        return pane.lx.with_active_editor(|lx| lx.paste_open(candidates));
     }
     if let Some(candidate) = crate::app::paste::text_paste_candidate(&text)
         && pane
             .lx
-            .begin_text_paste(candidate.content, candidate.full_text)
+            .with_active_editor(|lx| lx.begin_text_paste(candidate.content, candidate.full_text))
     {
         return true;
     }
-    pane.lx.insert_str(&text);
+    pane.lx.with_active_editor(|lx| lx.insert_str(&text));
     true
 }
 

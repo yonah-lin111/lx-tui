@@ -229,6 +229,14 @@ fn show(
         .load_chat_session(&ctx.workspace, session_id)
         .map_err(|e| format!("failed to load session: {}", e.code()))?
         .ok_or_else(|| format!("session '{session_id}' not found"))?;
+    if db
+        .is_btw_session(&ctx.workspace, session_id)
+        .map_err(|e| format!("failed to read session source: {}", e.code()))?
+    {
+        return Err(format!(
+            "session '{session_id}' is a side conversation; open it from the BTW panel"
+        ));
+    }
     let checkpoint = db
         .active_checkpoint(&ctx.workspace, session_id)
         .map_err(|e| format!("failed to query compact checkpoint: {}", e.code()))?;

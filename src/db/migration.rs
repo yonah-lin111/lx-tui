@@ -276,7 +276,44 @@ impl Database {
         if version < 27 {
             self.migrate_v27_todo_group()?;
         }
+        if version < 28 {
+            self.migrate_v28_btw()?;
+        }
         Ok(())
+    }
+
+    /// v28：会话 `source` 增加 `btw`，并建立旁路问答的主 QA/批次/回答者关联表。
+    ///
+    /// `agent_session` 的 CHECK 只能靠整表重建修改，因此关闭外键后在独立事务内完成
+    /// 复制、行数校验与索引恢复；任一步失败整体回滚，版本停在 27，下次打开重试。
+    fn migrate_v28_btw(&mut self) -> Result<()> {
+        self.conn.execute_batch("PRAGMA foreign_keys = OFF;")?;
+        let result = (|| -> Result<()> {
+            let transaction = self.conn.unchecked_transaction()?;
+            // 合成/回退的旧库可能停在 v14 但缺少 revision 列（v12 未执行）；先补齐再复制。
+            if !column_exists(&transaction, "agent_session", "revision")? {
+                transaction.execute_batch(
+                    "ALTER TABLE agent_session ADD COLUMN revision INTEGER NOT NULL DEFAULT 0
+                     CHECK (revision >= 0);",
+                )?;
+            }
+            let before: i64 =
+                transaction
+                    .query_row("SELECT COUNT(*) FROM agent_session", [], |row| row.get(0))?;
+            transaction.execute_batch(SCHEMA_V28_BTW)?;
+            let after: i64 =
+                transaction
+                    .query_row("SELECT COUNT(*) FROM agent_session", [], |row| row.get(0))?;
+            if before != after {
+                return Err(DbError::ForeignKeyViolation);
+            }
+            ensure_no_foreign_key_violation(&transaction)?;
+            transaction.pragma_update(None, "user_version", 28)?;
+            transaction.commit()?;
+            Ok(())
+        })();
+        self.conn.execute_batch("PRAGMA foreign_keys = ON;")?;
+        result
     }
 
     /// v27：`todo` 表新增可空列 `group_id`（同组待办共享稳定组 ID，独立待办为 NULL）及按日组索引。
@@ -439,6 +476,9 @@ impl Database {
                      CHECK (revision >= 0);",
                 )?;
             }
+            // 已升级到 v28 的库被测试/回退到低版本时，BTW 触发器仍指向 agent_session；
+            // 重建前必须先移除，否则 `DROP TABLE agent_session` 会因触发器校验失败。
+            transaction.execute_batch("DROP TRIGGER IF EXISTS trg_btw_thread_delete_child;")?;
             if session_model_not_null(&transaction)? {
                 transaction.execute_batch(SCHEMA_V13_SESSION)?;
             }

@@ -561,6 +561,11 @@ pub struct LxChat {
     pub promoting_steers: usize,
     /// 当前所属项目根目录（用于剥离工具卡片里的当前项目绝对路径前缀）。
     pub project_root: Option<std::path::PathBuf>,
+    /// 绑定展示历史里的哪条 assistant 作为流目标（`None` = 当前唯一在途消息）。
+    ///
+    /// 仅旁路问答的多目标并行流使用：两个 recipient 可能同时 streaming，
+    /// 不能靠 `request` 里的单一 assistant ID 定位。
+    pub stream_assistant: Option<String>,
     /// 当前会话在输入框顶边框右上角展示的标题胶囊文本（自动生成完成、手动 `/rename` 或 `/resume` 恢复时写入）。
     pub session_title: Option<String>,
     /// 当前会话标题胶囊锁定的配色槽位（`0..SESSION_TITLE_PALETTE_COUNT`），同一会话跨帧重绘保持稳定。
@@ -669,6 +674,7 @@ impl LxChat {
             pending_steers: Vec::new(),
             promoting_steers: 0,
             project_root: None,
+            stream_assistant: None,
             session_title: None,
             session_title_palette: 0,
             loading_session: false,
@@ -940,6 +946,14 @@ impl LxChat {
 
     /// 当前仍在流转的 assistant 消息的可变引用（按 `assistant_id` 定位）。
     pub(crate) fn streaming_message_mut(&mut self) -> Option<&mut ChatMessageView> {
+        // 多目标旁路流：同一展示历史里可能同时有多条 streaming 助手消息，
+        // 事件层按 assistant ID 显式指定目标，避免取到兄弟目标的半截消息。
+        if let Some(assistant_id) = self.stream_assistant.clone() {
+            return self
+                .messages
+                .iter_mut()
+                .find(|message| message.id == assistant_id && message.role == "assistant");
+        }
         let assistant_id = match &self.request {
             RequestState::Streaming { assistant_id, .. } => Some(assistant_id.clone()),
             _ => None,

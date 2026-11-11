@@ -22,17 +22,20 @@ pub enum TaskTab {
     Processes,
     /// 子代理列表（运行时记录 + 历史记录）。
     Agents,
+    /// 旁路问答：对话、QA 列表与独立输入框。
+    Btw,
 }
 
 impl TaskTab {
     /// 全部 tab（固定顺序）。
-    pub const ALL: [TaskTab; 2] = [TaskTab::Processes, TaskTab::Agents];
+    pub const ALL: [TaskTab; 3] = [TaskTab::Processes, TaskTab::Agents, TaskTab::Btw];
 
     /// tab 标签。
     pub fn label(self) -> &'static str {
         match self {
             Self::Processes => text::LX_TASK_TAB_PROCESSES,
             Self::Agents => text::LX_TASK_TAB_AGENTS,
+            Self::Btw => text::LX_TASK_TAB_BTW,
         }
     }
 }
@@ -172,6 +175,10 @@ pub struct TaskPage {
     pub agent_reply: Option<crate::app::overlay::TextInput>,
     /// 打开内联追问时锁定的目标 `(agent_id, display_nickname)`，防止列表重排/状态变更串发。
     pub agent_reply_target: Option<(String, String)>,
+    /// BTW 页签 QA 列表的窗口状态。
+    pub btw_window: PanelWindow,
+    /// BTW 页签可选的 QA 数量（事件层/应用层在打开页签时写入）。
+    pub btw_len: usize,
 }
 
 impl TaskPage {
@@ -180,6 +187,7 @@ impl TaskPage {
         match self.tab {
             TaskTab::Processes => self.processes.len(),
             TaskTab::Agents => agents.filtered_indices(self.agent_filter).len(),
+            TaskTab::Btw => self.btw_len,
         }
     }
 
@@ -206,6 +214,8 @@ impl TaskPage {
                         || (run.visible > 0
                             && run.scroll >= run.total_rows.saturating_sub(run.visible))
                 }),
+            // BTW 的对话滚动由自己的线程状态维护；页签不共用「回到底部」按钮。
+            TaskTab::Btw => true,
         }
     }
 
@@ -237,6 +247,7 @@ impl TaskPage {
         match self.tab {
             TaskTab::Processes => &self.window,
             TaskTab::Agents => &self.agents_window,
+            TaskTab::Btw => &self.btw_window,
         }
     }
 
@@ -245,6 +256,7 @@ impl TaskPage {
         match self.tab {
             TaskTab::Processes => &mut self.window,
             TaskTab::Agents => &mut self.agents_window,
+            TaskTab::Btw => &mut self.btw_window,
         }
     }
 
@@ -255,6 +267,7 @@ impl TaskPage {
             &mut self.agents_window,
             agents.filtered_indices(self.agent_filter).len(),
         );
+        clamp_task_window(&mut self.btw_window, self.btw_len);
     }
 
     /// 切换 tab（←/→ 轮转），并钳制高亮。
@@ -407,6 +420,16 @@ impl TaskPage {
     /// Agents 列表滚轮：与进程列表同一套窗口语义（高亮可滚出视口）。
     pub fn scroll_agents_window(&mut self, delta: isize, visible: usize, len: usize) -> bool {
         scroll_window(&mut self.agents_window, len, delta, visible)
+    }
+
+    /// BTW QA 列表滚轮。
+    pub fn scroll_btw_window(&mut self, delta: isize, visible: usize) -> bool {
+        scroll_window(&mut self.btw_window, self.btw_len, delta, visible)
+    }
+
+    /// 直接设置 BTW QA 列表显式视口起点。
+    pub fn set_btw_window_scroll(&mut self, offset: usize, visible: usize) -> bool {
+        set_window_scroll(&mut self.btw_window, self.btw_len, offset, visible)
     }
 
     /// 直接设置进程列表显式视口起点（滚动条轨道点击/thumb 拖拽）；返回是否变化。

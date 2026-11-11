@@ -563,6 +563,7 @@ fn is_network_effect(state: &AppState, effect: &Effect) -> bool {
             | Effect::DownloadAiWebOriginalImage { .. }
             | Effect::CancelChatStream { .. }
             | Effect::AnswerAsk { .. }
+            | Effect::Btw(_)
             // 进程效应与网络效应同一处置：持久化泵不碰，交给事件层。
             | Effect::ListSessionProcesses { .. }
             | Effect::StopSessionProcess { .. }

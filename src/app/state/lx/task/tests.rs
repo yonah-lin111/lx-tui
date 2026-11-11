@@ -34,11 +34,13 @@ fn cycle_tab_wraps_both_directions() {
     let mut page = page_with(2);
     assert!(page.cycle_tab(1));
     assert_eq!(page.tab, TaskTab::Agents);
-    // 再向右回到第一个：两个 tab 之间循环。
+    assert!(page.cycle_tab(1));
+    assert_eq!(page.tab, TaskTab::Btw);
+    // 再向右回到第一个：三个 tab 之间循环。
     assert!(page.cycle_tab(1));
     assert_eq!(page.tab, TaskTab::Processes);
     assert!(page.cycle_tab(-1));
-    assert_eq!(page.tab, TaskTab::Agents);
+    assert_eq!(page.tab, TaskTab::Btw);
 }
 
 #[test]
@@ -147,7 +149,7 @@ fn age_label_uses_seconds_minutes_and_hours() {
 
 #[test]
 fn tab_labels_cover_every_tab() {
-    assert_eq!(TaskTab::ALL.len(), 2);
+    assert_eq!(TaskTab::ALL.len(), 3);
     for tab in TaskTab::ALL {
         assert!(!tab.label().is_empty(), "{tab:?} 缺少标签");
     }
