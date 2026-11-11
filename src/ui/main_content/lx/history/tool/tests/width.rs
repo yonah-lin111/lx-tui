@@ -104,14 +104,14 @@ fn long_path_wraps_and_expands_with_full_content() {
     }
 }
 
-/// 错误文案按列宽折行，完整保留；不显示路径与计数。
+/// 错误文案：非 `read` 工具按列宽折行完整保留；`read` 单行尾部省略（§5.1）。
 #[test]
 fn failed_reason_wraps_without_losing_text() {
     let long = format!(
-        "read /a/very/long/path failed: {}",
+        "write /a/very/long/path failed: {}",
         "permission denied ".repeat(8)
     );
-    let call = tool_call("read", ToolStatus::Failed, None, Some(&long));
+    let call = tool_call("write", ToolStatus::Failed, None, Some(&long));
     for width in [20u16, 40, 80] {
         let (painted, _) = render_row(&call, width);
         let detail = painted.split_once('\n').map(|(_, rest)| rest).unwrap_or("");
@@ -129,6 +129,19 @@ fn failed_reason_wraps_without_losing_text() {
         expanded.contains(expected.trim_end()),
         "错误文案完整：{expanded:?}"
     );
+
+    let read_failed = tool_call("read", ToolStatus::Failed, None, Some(&long));
+    let (read_painted, _) = render_row(&read_failed, 40);
+    let read_detail = read_painted
+        .split_once('\n')
+        .map(|(_, rest)| rest)
+        .unwrap_or("");
+    assert_eq!(
+        read_detail.split('\n').count(),
+        1,
+        "read 失败原因单行尾部省略，不折成多行：{read_detail:?}"
+    );
+    assert!(read_detail.ends_with('…'), "{read_detail:?}");
 }
 
 // ===== 4. 行数与几何不变量 =====

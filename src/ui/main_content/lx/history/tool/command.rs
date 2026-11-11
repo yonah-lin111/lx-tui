@@ -153,10 +153,14 @@ fn output_section(
     let body_width = u16::try_from(tree::content_width(width)).unwrap_or(u16::MAX);
     let sampled = sample_markdown_source(output);
     let mut lines: Vec<Vec<Segment>> = muted_markdown_lines(&sampled, body_width);
-    if truncated {
+    if truncated
+        && !sampled.contains(text::agent::INLINE_TRUNCATED)
+        && !sampled.contains("omitted]")
+        && !sampled.contains("truncated]")
+    {
         lines.push(vec![Segment::new(
-            text::agent::OUTPUT_LIMITED,
-            style::agent_warn(),
+            text::agent::INLINE_TRUNCATED,
+            output_style(!folded),
         )]);
     }
     if dropped > 0 {
@@ -695,7 +699,8 @@ mod tests {
             view.dropped_bytes = 512;
         }
         let text = flat(&call, 60, Folds::default());
-        assert!(text.contains(text::agent::OUTPUT_LIMITED), "{text}");
+        assert!(text.contains(text::agent::INLINE_TRUNCATED), "{text}");
+        assert!(!text.contains(text::agent::OUTPUT_LIMITED), "{text}");
         assert!(text.contains("earlier bytes dropped"), "{text}");
     }
 

@@ -361,7 +361,7 @@ fn bounded_body(outcome: &QuerySearchOutcome) -> (String, bool) {
         return (body, false);
     }
     let mut capped: String = body.chars().take(MAX_QUERY_OUTPUT_CHARS).collect();
-    capped.push_str("\n[...truncated]");
+    capped.push_str("\n…[truncated]");
     (capped, true)
 }
 
@@ -376,7 +376,7 @@ fn bound_combined_text(raw: &str, outcomes: &[QuerySearchOutcome]) -> (String, b
         .sum();
     let budget = MAX_WEB_SEARCH_BYTES
         .saturating_sub(queries_bytes.saturating_add(WEB_SEARCH_RESULT_METADATA_BYTES));
-    const TRUNCATED_SUFFIX: &str = "\n[...truncated]";
+    const TRUNCATED_SUFFIX: &str = "\n…[truncated]";
     let suffix_cost = json_escaped_len(TRUNCATED_SUFFIX);
 
     let lines: Vec<&str> = raw.split('\n').collect();
@@ -405,7 +405,7 @@ fn bound_combined_text(raw: &str, outcomes: &[QuerySearchOutcome]) -> (String, b
         used_bytes = used_bytes.saturating_add(cost);
     }
 
-    if omitted_lines && !out.ends_with("[...truncated]") {
+    if omitted_lines && !out.ends_with("…[truncated]") {
         out.push_str(TRUNCATED_SUFFIX);
     }
     (out, omitted_lines || line_clipped)

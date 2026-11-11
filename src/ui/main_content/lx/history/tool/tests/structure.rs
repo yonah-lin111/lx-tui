@@ -103,12 +103,12 @@ fn completed_and_failed_never_show_status_words_on_any_line() {
 /// 树体首节点以 `├─` 起头、最后节点以 `└─` 收口，连接符同通知组件同色。
 #[test]
 fn detail_nodes_use_branch_and_leaf_prefixes() {
-    let mut summary = read_summary();
-    summary.truncated = true;
-    let call = tool_call("read", ToolStatus::Completed, Some(summary), None);
+    let mut summary = edit_summary();
+    summary.partial = true;
+    let call = tool_call("edit", ToolStatus::Completed, Some(summary), None);
     let painted = detail_text(&call, 80);
     let rows: Vec<&str> = painted.split('\n').collect();
-    assert_eq!(rows.len(), 2, "路径 + 输出受限：{painted:?}");
+    assert_eq!(rows.len(), 2, "路径计数 + partial：{painted:?}");
     assert!(rows[0].starts_with(text::agent::TREE_BRANCH), "{painted:?}");
     assert!(rows[1].starts_with(text::agent::TREE_LEAF), "{painted:?}");
     let segments = detail_segments(&call, 80);

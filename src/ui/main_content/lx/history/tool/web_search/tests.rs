@@ -72,6 +72,19 @@ fn single_query_completed_card_omits_the_query_count() {
 }
 
 #[test]
+fn truncated_card_places_marker_in_result_body_not_title() {
+    let mut view = view();
+    view.truncated = true;
+    view.result = (0..10).map(|index| format!("line {index}")).collect();
+    view.result_more = 5;
+    let folded = render_with(&call(), &view, 100, Folds::default());
+    let header = folded.lines().next().unwrap_or("");
+    assert!(!header.contains(text::agent::SEARCH_TRUNCATED), "{header}");
+    assert!(!header.contains("truncated"), "{header}");
+    assert!(folded.contains(text::agent::INLINE_TRUNCATED), "{folded}");
+}
+
+#[test]
 fn running_card_reports_query_count_and_searching() {
     let mut call = call();
     call.status = ToolStatus::Running;

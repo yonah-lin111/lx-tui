@@ -40,7 +40,7 @@ fn hit_line(hit: &crate::app::state::SearchMatchView, expanded: bool) -> Vec<Seg
     let path = single_line(&hit.path, TEXT_SAMPLE_CHARS);
     let raw = single_line(&hit.text, TEXT_SAMPLE_CHARS);
     let body = raw
-        .strip_suffix("…[truncated]")
+        .strip_suffix(text::agent::INLINE_TRUNCATED)
         .map(str::trim_end)
         .unwrap_or(raw.as_str())
         .to_string();
@@ -49,7 +49,10 @@ fn hit_line(hit: &crate::app::state::SearchMatchView, expanded: bool) -> Vec<Seg
         Segment::new(body, output_style(expanded)),
     ];
     if hit.line_truncated {
-        spans.push(Segment::new(" …", style::agent_step_detail()));
+        spans.push(Segment::new(
+            text::agent::INLINE_TRUNCATED,
+            style::agent_step_detail(),
+        ));
     }
     spans
 }
@@ -65,16 +68,31 @@ fn layout(
     if !summary.is_empty() {
         sections.push(Section::fixed(summary));
     }
-    let hits: Vec<Vec<Segment>> = view
+    let truncated = view.truncated
+        || call
+            .summary
+            .as_deref()
+            .is_some_and(|summary| summary.truncated);
+    let mut hits: Vec<Vec<Segment>> = view
         .matches
         .iter()
         .map(|hit| hit_line(hit, expanded))
         .collect();
     if !hits.is_empty() {
-        sections.push(Section::new(
-            vec![Node::block(hits)],
-            (!expanded).then(|| Preview::head(MATCH_PREVIEW_ROWS)),
-        ));
+        if truncated {
+            hits.push(vec![Segment::new(
+                text::agent::INLINE_TRUNCATED,
+                style::agent_step_detail(),
+            )]);
+        }
+        let preview = (!expanded).then(|| {
+            if truncated {
+                Preview::head_tail(MATCH_PREVIEW_ROWS, 1)
+            } else {
+                Preview::head(MATCH_PREVIEW_ROWS)
+            }
+        });
+        sections.push(Section::new(vec![Node::block(hits)], preview));
     }
     SearchLayout {
         layout: tree::layout(&sections, width),
@@ -129,14 +147,7 @@ pub(super) fn draw(
             let matches = summary
                 .and_then(|summary| summary.matches)
                 .or_else(|| (!view.matches.is_empty()).then_some(view.matches.len()));
-            let mut parts = Vec::new();
-            if let Some(matches) = matches {
-                parts.push(text::agent::matches_label(matches));
-            }
-            if view.truncated || summary.is_some_and(|summary| summary.truncated) {
-                parts.push(text::agent::SEARCH_TRUNCATED.to_string());
-            }
-            (!parts.is_empty()).then(|| parts.join(text::LX_CHAT_TOOL_STATUS_SEP))
+            matches.map(text::agent::matches_label)
         };
         let segments = header_with_verb(
             call,
@@ -243,6 +254,8 @@ mod tests {
         let call = call();
         let view = view();
         let folded = text_of(&call, &view, 80, false);
+        let header = folded.lines().next().unwrap_or("");
+        assert!(!header.contains(text::agent::SEARCH_TRUNCATED), "{header}");
         assert!(
             folded.contains("src/foo.rs:12: pub fn render() {"),
             "{folded}"
@@ -251,12 +264,8 @@ mod tests {
             folded.contains("src/bar.rs:7: fn render_search() {"),
             "{folded}"
         );
+        assert!(folded.contains(text::agent::INLINE_TRUNCATED), "{folded}");
         assert!(folded.contains("more line"), "{folded}");
-        assert!(!folded.contains("…[truncated]"), "不内联截断标记：{folded}");
-        assert!(
-            folded.contains("results truncated"),
-            "结果级截断事实：{folded}"
-        );
         assert!(has_more(&call, &view, 80));
     }
 
@@ -265,12 +274,16 @@ mod tests {
         let call = call();
         let view = view();
         let expanded = text_of(&call, &view, 100, true);
-        assert!(expanded.contains("src/baz.rs:3: render"), "{expanded}");
+        let header = expanded.lines().next().unwrap_or("");
+        assert!(!header.contains(text::agent::SEARCH_TRUNCATED), "{header}");
         assert!(
-            !expanded.contains("…[truncated]"),
-            "命中行内不显示截断标记：{expanded}"
+            expanded.contains("src/baz.rs:3: render…[truncated]"),
+            "{expanded}"
         );
-        assert!(expanded.contains("results truncated"), "{expanded}");
+        assert!(
+            expanded.contains(text::agent::INLINE_TRUNCATED),
+            "{expanded}"
+        );
         assert!(
             !expanded.contains("more line"),
             "全部展开后没有提示：{expanded}"

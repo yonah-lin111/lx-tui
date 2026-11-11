@@ -254,7 +254,7 @@ fn per_query_output_is_capped_and_flagged() {
     };
     let (text, truncated) = format_outcomes(&[huge, small]);
     assert!(truncated, "超预算必须置 truncated = true");
-    assert!(text.contains("[...truncated]"), "{text}");
+    assert!(text.contains("…[truncated]"), "{text}");
     assert!(text.contains("small body"), "其它查询不得被一起裁掉");
     assert!(
         text.chars().count() < MAX_QUERY_OUTPUT_CHARS + 200,
@@ -740,7 +740,7 @@ async fn oversized_query_output_sets_truncated() {
     };
     assert!(result.truncated);
     assert!(
-        result.text.contains("[...truncated]"),
+        result.text.contains("…[truncated]"),
         "{}",
         result.text.len()
     );
@@ -899,7 +899,7 @@ fn combined_batch_respects_50_kib_json_escaped_budget_and_2000_line_cap() {
     let (text, truncated) = format_outcomes(&outcomes);
     assert!(truncated, "多查询聚合超 50 KiB 必须置 truncated = true");
     assert!(
-        text.ends_with("[...truncated]"),
+        text.ends_with("…[truncated]"),
         "tail: {}",
         &text[text.len().saturating_sub(80)..]
     );
@@ -934,6 +934,6 @@ fn combined_batch_respects_50_kib_json_escaped_budget_and_2000_line_cap() {
     };
     let (lines_text, lines_truncated) = format_outcomes(&[many_lines]);
     assert!(lines_truncated);
-    assert!(lines_text.ends_with("[...truncated]"));
+    assert!(lines_text.ends_with("…[truncated]"));
     assert!(lines_text.lines().count() <= MAX_WEB_SEARCH_LINES + 1);
 }

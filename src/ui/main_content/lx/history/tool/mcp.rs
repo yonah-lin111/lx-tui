@@ -98,12 +98,29 @@ fn result_section(
             .join("\n")
     };
     let mut lines: Vec<Vec<Segment>> = muted_markdown_lines(&raw_source, body_width);
+    let truncated = error_fallback.is_none()
+        && call
+            .summary
+            .as_deref()
+            .is_some_and(|summary| summary.truncated);
+    if truncated {
+        let ends_with_marker = lines.last().is_some_and(|line| {
+            line.iter()
+                .any(|seg| seg.text.contains(text::agent::INLINE_TRUNCATED))
+        });
+        if !ends_with_marker {
+            lines.push(vec![Segment::new(
+                text::agent::INLINE_TRUNCATED,
+                body_style,
+            )]);
+        }
+    }
     let more = if let Some(error) = error_fallback {
         error.lines().count().saturating_sub(20)
     } else {
         view.result_more
     };
-    if more > 0 {
+    if more > 0 && (expanded || !truncated) {
         lines.push(vec![Segment::new(
             text::mcp::more_lines(more),
             style::fold_hint(),
@@ -124,10 +141,15 @@ fn result_section(
     if lines.is_empty() {
         return None;
     }
-    Some(Section::new(
-        vec![Node::block(lines)],
-        (!expanded).then(|| Preview::head(BLOCK_PREVIEW_ROWS)),
-    ))
+    let preview = (!expanded).then(|| {
+        if truncated {
+            let tail = 1 + view.images.len() + usize::from(view.images_omitted > 0);
+            Preview::head_tail(BLOCK_PREVIEW_ROWS, tail)
+        } else {
+            Preview::head(BLOCK_PREVIEW_ROWS)
+        }
+    });
+    Some(Section::new(vec![Node::block(lines)], preview))
 }
 
 pub(super) fn layout(
@@ -206,13 +228,6 @@ pub(super) fn draw(
             let mut parts = Vec::new();
             if let Some(duration) = view.duration_ms {
                 parts.push(text::agent::duration_label(duration));
-            }
-            if call
-                .summary
-                .as_deref()
-                .is_some_and(|summary| summary.truncated)
-            {
-                parts.push(text::mcp::RESULT_TRUNCATED.to_string());
             }
             if !view.images.is_empty() {
                 parts.push(text::mcp::images_label(view.images.len()));

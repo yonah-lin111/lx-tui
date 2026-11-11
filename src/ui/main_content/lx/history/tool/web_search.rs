@@ -72,7 +72,8 @@ fn queries_section(view: &WebSearchDetailView, expanded: bool) -> Option<Section
     ))
 }
 
-/// 结果单行净化：控制字符转空格（`markdown_render` 不接受裸控制字符），超长截断补 `…`。
+/// 结果单行净化：控制字符转空格（`markdown_render` 不接受裸控制字符），超长截断补 `…`，
+/// 并将旧记录中的 `[...truncated]` 归一为 `…[truncated]`。
 fn sanitize_result_line(line: &str) -> String {
     let mut text = String::with_capacity(line.len().min(MAX_RESULT_LINE_CHARS + 4));
     for (count, ch) in line.chars().enumerate() {
@@ -82,7 +83,8 @@ fn sanitize_result_line(line: &str) -> String {
         }
         text.push(if ch.is_control() { ' ' } else { ch });
     }
-    text.trim_end().to_string()
+    text.trim_end()
+        .replace("[...truncated]", text::agent::INLINE_TRUNCATED)
 }
 
 fn result_section(
@@ -123,7 +125,20 @@ fn result_section(
         )
     };
     let mut lines = muted_markdown_lines(&raw_source, body_width);
-    if more > 0 {
+    let truncated = error_fallback.is_none() && view.truncated;
+    if truncated {
+        let ends_with_marker = lines.last().is_some_and(|line| {
+            line.iter()
+                .any(|seg| seg.text.contains(text::agent::INLINE_TRUNCATED))
+        });
+        if !ends_with_marker {
+            lines.push(vec![Segment::new(
+                text::agent::INLINE_TRUNCATED,
+                style::muted(),
+            )]);
+        }
+    }
+    if more > 0 && (expanded || !truncated) {
         lines.push(vec![Segment::new(
             text::mcp::more_lines(more),
             style::fold_hint(),
@@ -132,10 +147,14 @@ fn result_section(
     if lines.is_empty() {
         return None;
     }
-    Some(Section::new(
-        vec![Node::block(lines)],
-        (!expanded).then(|| Preview::head(BLOCK_PREVIEW_ROWS)),
-    ))
+    let preview = (!expanded).then(|| {
+        if truncated {
+            Preview::head_tail(BLOCK_PREVIEW_ROWS, 1)
+        } else {
+            Preview::head(BLOCK_PREVIEW_ROWS)
+        }
+    });
+    Some(Section::new(vec![Node::block(lines)], preview))
 }
 
 pub(super) fn layout(
@@ -223,9 +242,6 @@ fn title_status(call: &ToolCallView, view: &WebSearchDetailView) -> Option<Strin
             }
             if let Some(duration_ms) = view.duration_ms {
                 parts.push(text::agent::duration_label(duration_ms));
-            }
-            if view.truncated {
-                parts.push(text::agent::SEARCH_TRUNCATED.to_string());
             }
             (!parts.is_empty()).then(|| parts.join(text::LX_CHAT_TOOL_STATUS_SEP))
         }

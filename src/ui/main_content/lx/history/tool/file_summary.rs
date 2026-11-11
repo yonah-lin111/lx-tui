@@ -193,15 +193,7 @@ pub(super) fn title_status(call: &ToolCallView) -> Option<String> {
         Kind::Read => read_kind_status(call.summary.as_deref()?),
         Kind::Search => {
             let summary = call.summary.as_deref()?;
-            let mut parts = Vec::new();
-            if let Some(matches) = summary.matches {
-                parts.push(text::agent::matches_label(matches));
-            }
-            // 结果级截断是**标题状态**，不占树体节点。
-            if summary.truncated {
-                parts.push(text::agent::SEARCH_TRUNCATED.to_string());
-            }
-            (!parts.is_empty()).then(|| parts.join(text::LX_CHAT_TOOL_STATUS_SEP))
+            summary.matches.map(text::agent::matches_label)
         }
         Kind::Edit | Kind::Write | Kind::Other => None,
     }
@@ -300,12 +292,20 @@ fn fact_nodes(call: &ToolCallView) -> Vec<Node> {
     let kind = Kind::of(&call.name);
     let summary = call.summary.as_deref();
     match kind {
-        Kind::Read => {
-            if summary.is_some_and(|summary| summary.truncated) {
-                nodes.push(Node::text(text::agent::OUTPUT_LIMITED, style::agent_warn()));
+        Kind::Read => {}
+        Kind::Search => {
+            // 无 SearchDetailView（或无命中行）时，结果级截断落到 `└─` 树体显示 `…[truncated]`。
+            let has_matches = matches!(
+                call.detail.as_deref(),
+                Some(crate::app::state::ToolDetailView::Search(view)) if !view.matches.is_empty()
+            );
+            if !has_matches && summary.is_some_and(|summary| summary.truncated) {
+                nodes.push(Node::text(
+                    text::agent::INLINE_TRUNCATED,
+                    style::agent_step_detail(),
+                ));
             }
         }
-        Kind::Search => {}
         Kind::Edit | Kind::Write => {
             if let Some(summary) = summary {
                 if summary.partial {
@@ -322,8 +322,8 @@ fn fact_nodes(call: &ToolCallView) -> Vec<Node> {
                 }
                 if summary.truncated {
                     nodes.push(Node::text(
-                        text::agent::FILE_DIFF_TRUNCATED,
-                        style::agent_warn(),
+                        text::agent::INLINE_TRUNCATED,
+                        style::agent_step_detail(),
                     ));
                 }
                 if summary.omitted_files > 0 {
@@ -354,11 +354,53 @@ pub(super) fn nodes(call: &ToolCallView) -> Vec<Node> {
 }
 
 /// 详情排版：长参数折叠 2 行，事实节点始终可见（展开显示全部已保存摘要）。
+///
+/// `read` 单体卡片遵循 `lx-message-block-display.md` §5.1：标题下方只显示一条路径（或一条错误/状态词），
+/// 超宽时单行尾部省略，不软换行成第二行，不显示 `output limited`，也不登记可展开点击面。
 fn detail_layout(call: &ToolCallView, width: u16, expanded: bool) -> tree::Layout {
     if width == 0 {
         return tree::layout(&[], 0);
     }
     let mut cache: Option<ToolSummary> = None;
+    if Kind::of(&call.name) == Kind::Read {
+        let body_width = tree::content_width(width);
+        let mut sections = Vec::new();
+        if Detail::of(call) == Detail::Error {
+            let node = call
+                .error
+                .as_deref()
+                .map(|reason| single_line(reason, TEXT_SAMPLE_CHARS))
+                .filter(|reason| !reason.is_empty())
+                .map(|reason| {
+                    Node::text(
+                        super::super::truncate_with_ellipsis(&reason, body_width),
+                        style::text(),
+                    )
+                })
+                .unwrap_or_else(|| Node::new(Vec::new()));
+            sections.push(Section::fixed(vec![node]));
+        } else if let Some(node) = cancelled_node(call) {
+            sections.push(Section::fixed(vec![node]));
+        } else if let Some(path) = field(
+            call,
+            needs_argument_fallback(call, Kind::Read),
+            &mut cache,
+            |summary| summary.path.clone(),
+        )
+        .map(|path| single_line(&path, TEXT_SAMPLE_CHARS))
+        .filter(|path| !path.is_empty())
+        {
+            sections.push(Section::fixed(vec![Node::text(
+                super::super::truncate_with_ellipsis(&path, body_width),
+                style::chat_tool_param(),
+            )]));
+        } else if let Some(node) = fallback_node(call) {
+            sections.push(Section::fixed(vec![node]));
+        } else {
+            return tree::layout(&[], width);
+        }
+        return tree::layout(&sections, width);
+    }
     let mut sections = Vec::new();
     if Detail::of(call) == Detail::Error {
         let mut nodes: Vec<Node> = error_node(call).into_iter().collect();
@@ -378,10 +420,6 @@ fn detail_layout(call: &ToolCallView, width: u16, expanded: bool) -> tree::Layou
         }
     }
     if sections.is_empty() {
-        // `read` 没有路径也没有事实时整张卡片只有标题，不留空 `└─`。
-        if Kind::of(&call.name) == Kind::Read && Detail::of(call) == Detail::Params {
-            return tree::layout(&[], width);
-        }
         // 其它完成态没有摘要：仍保留一行收口连接符（行数恒 ≥ 1）。
         sections.push(Section::fixed(vec![Node::new(Vec::new())]));
     }
