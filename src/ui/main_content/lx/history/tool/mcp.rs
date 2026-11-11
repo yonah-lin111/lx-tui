@@ -26,9 +26,14 @@ pub(super) struct McpLayout {
     pub(super) result_expandable: bool,
 }
 
-fn arguments_section(view: &McpDetailView, expanded: bool) -> Option<Section> {
+fn arguments_section(view: &McpDetailView, expanded: bool, in_group: bool) -> Option<Section> {
     if view.arguments.is_empty() {
-        return None;
+        return in_group.then(|| {
+            Section::fixed(vec![Node::text(
+                text::agent::MCP_NO_ARGUMENTS,
+                style::agent_step_detail(),
+            )])
+        });
     }
     let mut lines: Vec<Vec<Segment>> = view
         .arguments
@@ -66,6 +71,7 @@ fn result_section(
     view: &McpDetailView,
     width: u16,
     expanded: bool,
+    in_group: bool,
 ) -> Option<Section> {
     let error_fallback = if view.result.is_empty()
         && matches!(call.status, ToolStatus::Failed | ToolStatus::Interrupted)
@@ -82,22 +88,32 @@ fn result_section(
         return None;
     }
     let body_style = output_style(expanded);
-    let body_width = u16::try_from(tree::content_width(width)).unwrap_or(u16::MAX);
-    let raw_source = if let Some(error) = error_fallback {
+    let cols = if in_group {
+        tree::nested_content_width(width)
+    } else {
+        tree::content_width(width)
+    };
+    let body_width = u16::try_from(cols).unwrap_or(u16::MAX);
+    let mut lines: Vec<Vec<Segment>> = if let Some(error) = error_fallback {
         error
             .lines()
             .take(20)
-            .map(|line| sanitize_result_line(line, 8000))
-            .collect::<Vec<_>>()
-            .join("\n")
+            .map(|line| {
+                vec![Segment::new(
+                    sanitize_result_line(line, 8000),
+                    style::text(),
+                )]
+            })
+            .collect()
     } else {
-        view.result
+        let raw_source = view
+            .result
             .iter()
             .map(|line| sanitize_result_line(line, 8000))
             .collect::<Vec<_>>()
-            .join("\n")
+            .join("\n");
+        muted_markdown_lines(&raw_source, body_width)
     };
-    let mut lines: Vec<Vec<Segment>> = muted_markdown_lines(&raw_source, body_width);
     let more = if let Some(error) = error_fallback {
         error.lines().count().saturating_sub(20)
     } else {
@@ -136,29 +152,65 @@ pub(super) fn layout(
     width: u16,
     folds: Folds,
 ) -> McpLayout {
-    let folded_arguments = arguments_section(view, false);
-    let folded_result = result_section(call, view, width, false);
-    let arguments_expandable = folded_arguments
-        .as_ref()
-        .is_some_and(|section| tree::layout(std::slice::from_ref(section), width).hidden > 0);
-    let result_expandable = folded_result
-        .as_ref()
-        .is_some_and(|section| tree::layout(std::slice::from_ref(section), width).hidden > 0);
-    let arguments = arguments_section(view, folds.body);
-    let result = result_section(call, view, width, folds.output);
+    layout_with_group(call, view, width, folds, false)
+}
+
+pub(super) fn layout_with_group(
+    call: &ToolCallView,
+    view: &McpDetailView,
+    width: u16,
+    folds: Folds,
+    in_group: bool,
+) -> McpLayout {
+    let folded_arguments = arguments_section(view, false, in_group);
+    let folded_result = result_section(call, view, width, false, in_group);
+    let arguments_expandable = folded_arguments.as_ref().is_some_and(|section| {
+        let l = if in_group && folded_result.is_some() {
+            tree::layout_in_group(std::slice::from_ref(section), width, 1)
+        } else {
+            tree::layout(std::slice::from_ref(section), width)
+        };
+        l.hidden > 0
+    });
+    let result_expandable = folded_result.as_ref().is_some_and(|section| {
+        let l = if in_group {
+            tree::layout_in_group(std::slice::from_ref(section), width, 0)
+        } else {
+            tree::layout(std::slice::from_ref(section), width)
+        };
+        l.hidden > 0
+    });
+    let arguments = arguments_section(view, folds.body, in_group);
+    let result = result_section(call, view, width, folds.output, in_group);
     let arguments_rows = arguments.as_ref().map_or(0, |section| {
-        tree::layout(std::slice::from_ref(section), width)
-            .rows
-            .len()
+        if in_group && result.is_some() {
+            tree::layout_in_group(std::slice::from_ref(section), width, 1)
+                .rows
+                .len()
+        } else {
+            tree::layout(std::slice::from_ref(section), width)
+                .rows
+                .len()
+        }
     });
     let result_rows = result.as_ref().map_or(0, |section| {
-        tree::layout(std::slice::from_ref(section), width)
-            .rows
-            .len()
+        if in_group {
+            tree::layout_in_group(std::slice::from_ref(section), width, 0)
+                .rows
+                .len()
+        } else {
+            tree::layout(std::slice::from_ref(section), width)
+                .rows
+                .len()
+        }
     });
     let sections: Vec<Section> = arguments.into_iter().chain(result).collect();
     McpLayout {
-        layout: tree::layout(&sections, width),
+        layout: if in_group {
+            tree::layout_in_group(&sections, width, 1)
+        } else {
+            tree::layout(&sections, width)
+        },
         arguments_rows,
         result_rows,
         arguments_expandable,
@@ -167,14 +219,29 @@ pub(super) fn layout(
 }
 
 /// 卡片行数（含标题行）。
+#[cfg(test)]
 pub(super) fn rows(call: &ToolCallView, view: &McpDetailView, width: u16, folds: Folds) -> usize {
+    rows_with_group(call, view, width, folds, false)
+}
+
+pub(super) fn rows_with_group(
+    call: &ToolCallView,
+    view: &McpDetailView,
+    width: u16,
+    folds: Folds,
+    in_group: bool,
+) -> usize {
     if width == 0 {
         return 0;
     }
-    1 + layout(call, view, width, folds).layout.rows.len()
+    1 + layout_with_group(call, view, width, folds, in_group)
+        .layout
+        .rows
+        .len()
 }
 
 /// 展开后是否真的多出内容。
+#[cfg(test)]
 pub(super) fn has_more(call: &ToolCallView, view: &McpDetailView, width: u16) -> bool {
     if width == 0 {
         return false;
@@ -260,8 +327,8 @@ pub(super) fn draw_body(
     if rect.width == 0 {
         return;
     }
-    let mut layout = layout(call, view, rect.width, folds).layout;
-    tree::append_status(&mut layout.rows, status_of(call, view), rect.width);
+    let mut layout = layout_with_group(call, view, rect.width, folds, true).layout;
+    tree::decorate_group_call(&mut layout.rows, call, status_of(call, view), rect.width);
     tree::apply_group_connector(&mut layout.rows, last);
     tree::draw(grid, rect, scroll, row_index, &layout.rows);
 }

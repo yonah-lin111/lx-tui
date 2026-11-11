@@ -47,23 +47,46 @@ pub(super) struct Blocks {
 }
 
 /// 命令卡片占用的渲染行数：标题 + 树体物理行。
+#[cfg(test)]
 pub(super) fn rows(call: &ToolCallView, width: u16, folds: Folds) -> usize {
+    rows_with_group(call, width, folds, false)
+}
+
+pub(super) fn rows_with_group(
+    call: &ToolCallView,
+    width: u16,
+    folds: Folds,
+    in_group: bool,
+) -> usize {
     if width == 0 {
         return 0;
     }
-    let blocks = blocks(call, width, folds);
+    let blocks = blocks_with_group(call, width, folds, in_group);
     title_rows() + blocks.params + blocks.output
 }
 
 /// 树体两块各自的高度（与 [`draw`] 共用同一份构造）。
-pub(super) fn blocks(call: &ToolCallView, width: u16, folds: Folds) -> Blocks {
+pub(super) fn blocks_with_group(
+    call: &ToolCallView,
+    width: u16,
+    folds: Folds,
+    in_group: bool,
+) -> Blocks {
     if width == 0 {
         return Blocks::default();
     }
-    let (params, output) = sections(call, width, folds);
+    let (params, output) = sections_with_group(call, width, folds, in_group);
     Blocks {
-        params: tree::layout(&params, width).rows.len(),
-        output: tree::layout(&output, width).rows.len(),
+        params: if in_group && !output.is_empty() {
+            tree::layout_in_group(&params, width, 1).rows.len()
+        } else {
+            tree::layout(&params, width).rows.len()
+        },
+        output: if in_group {
+            tree::layout_in_group(&output, width, 0).rows.len()
+        } else {
+            tree::layout(&output, width).rows.len()
+        },
     }
 }
 
@@ -77,17 +100,34 @@ pub(super) fn params_expandable(call: &ToolCallView, width: u16) -> bool {
 }
 
 /// 输出区展开后是否**真的多出内容**。
+#[cfg(test)]
 pub(super) fn output_expandable(call: &ToolCallView, width: u16) -> bool {
+    output_expandable_with_group(call, width, false)
+}
+
+pub(super) fn output_expandable_with_group(
+    call: &ToolCallView,
+    width: u16,
+    in_group: bool,
+) -> bool {
     if width == 0 {
         return false;
     }
-    let (_, output) = sections(call, width, Folds::default());
-    output_section_hidden(&output, width)
+    let (_, output) = sections_with_group(call, width, Folds::default(), in_group);
+    output_section_hidden(&output, width, in_group)
 }
 
-fn output_section_hidden(sections: &[Section], width: u16) -> bool {
+fn output_section_hidden(sections: &[Section], width: u16, in_group: bool) -> bool {
     sections.iter().any(|section| {
-        !section.nodes.is_empty() && tree::layout(std::slice::from_ref(section), width).hidden > 0
+        if section.nodes.is_empty() {
+            return false;
+        }
+        let layout = if in_group {
+            tree::layout_in_group(std::slice::from_ref(section), width, 0)
+        } else {
+            tree::layout(std::slice::from_ref(section), width)
+        };
+        layout.hidden > 0
     })
 }
 
@@ -158,8 +198,14 @@ fn output_section(
     folded: bool,
     truncated: bool,
     dropped: u64,
+    in_group: bool,
 ) -> Option<Section> {
-    let body_width = u16::try_from(tree::content_width(width)).unwrap_or(u16::MAX);
+    let cols = if in_group {
+        tree::nested_content_width(width)
+    } else {
+        tree::content_width(width)
+    };
+    let body_width = u16::try_from(cols).unwrap_or(u16::MAX);
     let sampled = sample_markdown_source(output);
     let mut lines: Vec<Vec<Segment>> = muted_markdown_lines(&sampled, body_width);
     if truncated {
@@ -264,6 +310,15 @@ fn without_echoed_input(input_preview: &str, output: &str) -> String {
 
 /// 卡片的两块（参数 / 输入+输出），与 [`draw`] 共用。
 fn sections(call: &ToolCallView, width: u16, folds: Folds) -> (Vec<Section>, Vec<Section>) {
+    sections_with_group(call, width, folds, false)
+}
+
+fn sections_with_group(
+    call: &ToolCallView,
+    width: u16,
+    folds: Folds,
+    in_group: bool,
+) -> (Vec<Section>, Vec<Section>) {
     let params = vec![param_section(call, !folds.body)];
     let mut output = Vec::new();
     match call.detail.as_deref() {
@@ -275,6 +330,7 @@ fn sections(call: &ToolCallView, width: u16, folds: Folds) -> (Vec<Section>, Vec
                     !folds.output,
                     view.truncated,
                     view.dropped_bytes,
+                    in_group,
                 )
             {
                 output.push(section);
@@ -308,6 +364,7 @@ fn sections(call: &ToolCallView, width: u16, folds: Folds) -> (Vec<Section>, Vec
                 !folds.output,
                 view.truncated,
                 view.dropped_bytes,
+                in_group,
             ) {
                 output.push(section);
             }
@@ -405,11 +462,11 @@ pub(super) fn draw_body(
     if rect.width == 0 {
         return;
     }
-    let (params, output) = sections(call, rect.width, folds);
+    let (params, output) = sections_with_group(call, rect.width, folds, true);
     let mut all = params;
     all.extend(output);
-    let mut layout = tree::layout(&all, rect.width);
-    tree::append_status(&mut layout.rows, status_of(call), rect.width);
+    let mut layout = tree::layout_in_group(&all, rect.width, 1);
+    tree::decorate_group_call(&mut layout.rows, call, status_of(call), rect.width);
     tree::apply_group_connector(&mut layout.rows, last);
     tree::draw(grid, rect, scroll, row_index, &layout.rows);
 }

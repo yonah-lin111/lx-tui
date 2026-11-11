@@ -81,7 +81,7 @@ pub(super) fn rows(call: &ToolCallView, width: u16, _expanded: bool) -> usize {
 }
 
 /// 标题状态：`1/3 completed`；空计划不写。
-fn status_of(call: &ToolCallView) -> Option<String> {
+pub(super) fn status_of(call: &ToolCallView) -> Option<String> {
     let view = match call.detail.as_deref() {
         Some(crate::app::state::ToolDetailView::Plan(view)) => view,
         _ => return None,
@@ -131,7 +131,7 @@ pub(super) fn draw(
     );
 }
 
-/// 合并组内调用体：跳过标题，进度追加到首个步骤尾部。
+/// 快照合并调用体：跳过标题，直接平铺最新计划步骤（完成计数已在组头展示）。
 pub(super) fn draw_body(
     grid: &mut Grid,
     rect: Rect,
@@ -140,7 +140,7 @@ pub(super) fn draw_body(
     call: &ToolCallView,
     _loading_frame: usize,
     _animating: bool,
-    last: bool,
+    _last: bool,
 ) {
     if rect.width == 0 {
         return;
@@ -149,8 +149,7 @@ pub(super) fn draw_body(
         return;
     };
     let mut layout = tree::layout(&[Section::fixed(nodes(view))], rect.width);
-    tree::append_status(&mut layout.rows, status_of(call), rect.width);
-    tree::apply_group_connector(&mut layout.rows, last);
+    tree::decorate_group_call(&mut layout.rows, call, None, rect.width);
     tree::draw(grid, rect, scroll, row_index, &layout.rows);
 }
 

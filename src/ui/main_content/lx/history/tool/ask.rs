@@ -155,7 +155,7 @@ pub(super) fn draw_body(
         return;
     };
     let mut layout = tree::layout(&[Section::fixed(nodes(view))], rect.width);
-    tree::append_status(&mut layout.rows, status_of(call), rect.width);
+    tree::decorate_group_call(&mut layout.rows, call, status_of(call), rect.width);
     tree::apply_group_connector(&mut layout.rows, last);
     tree::draw(grid, rect, scroll, row_index, &layout.rows);
 }

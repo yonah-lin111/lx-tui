@@ -1,15 +1,8 @@
 # lx 消息列表工具与非正文块显示规范
 
-> 状态：**目标规范；合并形态尚未实现**。
+> 状态：**已实现**（2026-11-11）。
 > 本文件是 `tui-design-requirements.md` 的 lx 消息块分册，专门记录消息列表里每个工具、每个非正文块的单体显示与合并显示。
-> 图例：✅ 当前已实现；⏳ 目标形态，实施见 `docs/feature/lx-tool-call-grouping/`。
-> 未标 ⏳ 的条目以当前代码为准；标 ⏳ 的条目在实施完成前，主规范中的旧描述可能仍与本文冲突，实施时必须同步修正。
-
-当前代码与本文的已知差异：
-
-- `read` 当前标题带 `file` / `folder · N files` / `image`，详情为路径与参数；本文要求保留标题状态，标题下方**只显示一条路径**。
-- 连续同名工具当前各自成卡；本文的组头与组内树体尚未实现。
-- `update_plan` / `list_agents` 当前各自成卡；本文的快照合并尚未实现。
+> 合并与 `read` 单条路径的详细设计与实施记录见 `docs/feature/lx-tool-call-grouping/`。
 
 ## 1. 适用范围
 
@@ -51,9 +44,9 @@
 ### 2.3 树体
 
 - 标题行是唯一不带连接符的行。
-- 树体使用 `├─` / `└─` / `│`，前缀固定 5 列；末节点续行用等宽空白，不补 `│`。
-- 工具合并组内：第一个调用节点用 `├─`，最后一个调用用 `└─`；调用体内部仍按自己的树规则。
-- 极窄宽度放不下树体前缀时整段让位，内容按整宽折行，不画半个宽字符。
+- 单卡树体使用 `├─` / `└─` / `│`，一级前缀固定 5 列（`TREE_COLS = 5`）；末节点续行用等宽空白，不补 `│`。
+- 工具列表合并组内：每个调用的一级首节点（或多目标 `wait_agent` 的各目标行）在非末调用时用 `  ├─ `、末调用最后一个一级节点用 `  └─ `（5 列前缀）；该调用内部的后续子节点（结果、命令输出、搜索命中、diff、子 agent 报告等）缩进为二级子树，前缀固定 8 列（`TREE_NESTED_COLS = 8`：非末调用 `  │  └─ ` + 续行 `  │     `，末调用 `     └─ ` + 续行 `        `），并按 `width - 8` 折行，防止右侧 3 列被裁切。
+- 极窄宽度放不下树体前缀（单卡 `width <= 5`、二级子树 `width <= 8`）时整段让位，内容按整宽折行，不画半个宽字符。
 
 ### 2.4 空行
 
@@ -128,7 +121,7 @@
 | `resume_agent` | `■ Resume agent · status` | 列表合并 | `resume_agent` | `tool/subagent.rs` |
 | `wait_agent` | `■ Wait agents · 条件` | 列表合并 | `wait_agent` | `tool/subagent.rs` |
 | `close_agent` | `■ Close agent` | 列表合并 | `close_agent` | `tool/subagent.rs` |
-| `list_agents` | `■ List agents` | **快照合并** ⏳：只显示最新列表，组头 `· N updates` | `list_agents` | `tool/subagent.rs` |
+| `list_agents` | `■ List agents` | **快照合并**：只显示最新列表，组头 `· N updates` | `list_agents` | `tool/subagent.rs` |
 | `cancel_agent_input` | `■ Cancel agent input · status` | 列表合并 | `cancel_agent_input` | `tool/subagent.rs` |
 | MCP 工具 | `■ server · tool · 840ms` | 列表合并 | 完整 MCP 工具名 | `tool/mcp.rs` |
 | MCP resources | `■ server · tool` | 列表合并 | 完整工具名 | `tool/mcp.rs` |
@@ -171,18 +164,18 @@
 ```text
 ■ Search · 3 matches
   ├─ "fixme" in src
-  ├─ src/ui/main_content/lx/history.rs:42: // FIXME...
-  └─ … 2 more lines
+  └─ src/ui/main_content/lx/history.rs:42: // FIXME...
+     … 2 more lines
 ```
 
 合并：
 
 ```text
 ■ Search · 2 calls · 5 matches
-  ├─ "fixme" in src
-  │  ├─ src/ui/main_content/lx/history.rs:42: // FIXME...
-  │  └─ … 1 more line
-  └─ "todo" in docs
+  ├─ "fixme" in src · 3 matches
+  │  └─ src/ui/main_content/lx/history.rs:42: // FIXME...
+  │     … 1 more line
+  └─ "todo" in docs · 2 matches
      └─ docs/standards/tui-design-requirements.md:120: TODO...
 ```
 
@@ -227,10 +220,8 @@
 ```text
 ■ Edit
   ├─ src/a.rs (+5 -2)
-  │  ├─ 1 - old
-  │  └─ 1 + new
-  └─ src/b.rs (+3 -2)
-     └─ …
+  └─ 1 - old
+     1 + new
 ```
 
 合并：
@@ -238,8 +229,8 @@
 ```text
 ■ Edit · 2 calls · +8 -4
   ├─ src/a.rs (+5 -2)
-  │  ├─ 1 - old
-  │  └─ 1 + new
+  │  └─ 1 - old
+  │     1 + new
   └─ src/b.rs (+3 -2)
      └─ …
 ```
@@ -255,7 +246,7 @@
 
 - 标题只写裸动词；文件头 `path (+A -R)`；计数未知时 `(?)`。
 - 折叠态每文件最多 3 个新增/删除物理行；展开铺开全部 hunks、1 行上下文、`⋮` 分隔。
-- 新增绿、删除红，整行底色；文件头路径恒 dim，展开不亮。
+- 新增绿、删除红，底色从 `└─` 右侧 1 列空白起铺至行尾（单卡前 4 列、合并组前 7 列树连接符不铺底色）；文件头路径恒浅黄，展开不改色。
 - 合并组头汇总全部调用的增删；同一文件被两次 `edit` 会出现两行。
 - `edit` 与 `write` 不合并。
 
@@ -319,7 +310,7 @@
 - 合并键包含显示动词；不同动词不合并，避免组头只能写一个动词。
 - 输入预览与输出区各自折叠；`Read command output` 只显示命令快照，不跟随后台输出。
 
-### 5.7 `update_plan` ⏳
+### 5.7 `update_plan`
 
 单体：
 
@@ -461,6 +452,7 @@
 
 - 标题为 `server · tool`；状态为耗时、`result truncated`、图片数。
 - 参数块与结果块各自独立折叠；图片只显示一行元数据（路径可复制），不读字节。
+- 合并组内若调用无参数（`arguments` 为空），以 `(no arguments)` 作为一级首节点并承载耗时等状态，结果块统一缩进为二级子节点。
 - 合并键是完整工具名（含 server 前缀）；同名 MCP 工具才合并。
 - MCP resources 桥接工具 `list_resources` / `list_resource_templates` / `read_resource` 同规则。
 

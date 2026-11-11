@@ -747,3 +747,87 @@ fn selection_geometry_reads_ready_snapshot() {
     let _ = crate::ui::main_content::lx::content_geom(area, &lx, &mut cache).expect("选区几何");
     assert_eq!(cache.builds(), builds, "选区几何必须读取就绪快照");
 }
+
+/// 合并组头块槽位（`GROUP_HEADER_SLOT_BASE - first_step`）与调用体槽位（`step_index`）严格隔离，
+/// 且组内追加同种调用时仅使组头与受影响块重建，Snapshot 行数保持一致。
+#[test]
+fn tool_group_header_slot_and_append_invalidation_keep_blocks_consistent() {
+    use crate::app::state::ToolSummary;
+    use crate::ui::main_content::lx::history::paint::BlockSource;
+
+    fn read_tool(pos: i64, path: &str) -> AssistantStepView {
+        AssistantStepView::Tool {
+            position: pos,
+            call: ToolCallView {
+                call_id: format!("call-r-{pos}"),
+                name: "read".into(),
+                position: pos,
+                arguments_json: String::new(),
+                status: ToolStatus::Completed,
+                summary: Some(Box::new(ToolSummary {
+                    path: Some(path.into()),
+                    ..ToolSummary::default()
+                })),
+                error: None,
+                result_json: None,
+                detail: None,
+            },
+        }
+    }
+
+    let mut msg = message("m1", "assistant", "streaming", Vec::new());
+    msg.steps.push(read_tool(1, "src/a.rs"));
+    msg.steps.push(read_tool(2, "src/b.rs"));
+    let mut lx = lx_with(vec![msg]);
+    let mut cache = PaneCache::default();
+
+    let snap2 = cache.snapshot(60, &lx);
+    let blocks2 = &snap2.entries[0].blocks;
+    assert_eq!(blocks2.len(), 3, "1 个组头块 + 2 个调用体块");
+    assert!(matches!(
+        blocks2[0].source,
+        BlockSource::ToolGroupHeader {
+            first_step: 0,
+            count: 2,
+            ..
+        }
+    ));
+    assert!(matches!(
+        blocks2[2].source,
+        BlockSource::ToolBody {
+            step_index: 1,
+            group,
+            ..
+        } if group.is_last()
+    ));
+
+    // 追加第 3 个同名 read：组头 count 变为 3，原 step_index=1 的 group.is_last() 变为 false。
+    lx.chat.messages[0].steps.push(read_tool(3, "src/c.rs"));
+    let snap3 = cache.snapshot(60, &lx);
+    let blocks3 = &snap3.entries[0].blocks;
+    assert_eq!(blocks3.len(), 4, "1 个组头块 + 3 个调用体块");
+    assert!(matches!(
+        blocks3[0].source,
+        BlockSource::ToolGroupHeader {
+            first_step: 0,
+            count: 3,
+            ..
+        }
+    ));
+    assert!(matches!(
+        blocks3[2].source,
+        BlockSource::ToolBody {
+            step_index: 1,
+            group,
+            ..
+        } if !group.is_last()
+    ));
+    assert!(matches!(
+        blocks3[3].source,
+        BlockSource::ToolBody {
+            step_index: 2,
+            group,
+            ..
+        } if group.is_last()
+    ));
+}

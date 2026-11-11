@@ -60,6 +60,16 @@ fn layout(
     width: u16,
     expanded: bool,
 ) -> SearchLayout {
+    layout_with_group(call, view, width, expanded, false)
+}
+
+fn layout_with_group(
+    call: &ToolCallView,
+    view: &SearchDetailView,
+    width: u16,
+    expanded: bool,
+    in_group: bool,
+) -> SearchLayout {
     let summary = file_summary::nodes(call);
     let mut sections = Vec::new();
     if !summary.is_empty() {
@@ -77,29 +87,60 @@ fn layout(
         ));
     }
     SearchLayout {
-        layout: tree::layout(&sections, width),
+        layout: if in_group {
+            tree::layout_in_group(&sections, width, 1)
+        } else {
+            tree::layout(&sections, width)
+        },
     }
 }
 
 /// 卡片行数（含标题行）。
+#[cfg(test)]
 pub(super) fn rows(
     call: &ToolCallView,
     view: &SearchDetailView,
     width: u16,
     expanded: bool,
 ) -> usize {
+    rows_with_group(call, view, width, expanded, false)
+}
+
+pub(super) fn rows_with_group(
+    call: &ToolCallView,
+    view: &SearchDetailView,
+    width: u16,
+    expanded: bool,
+    in_group: bool,
+) -> usize {
     if width == 0 {
         return 0;
     }
-    1 + layout(call, view, width, expanded).layout.rows.len()
+    1 + layout_with_group(call, view, width, expanded, in_group)
+        .layout
+        .rows
+        .len()
 }
 
 /// 展开后是否真的多出内容（决定是否登记点击面）。
+#[cfg(test)]
 pub(super) fn has_more(call: &ToolCallView, view: &SearchDetailView, width: u16) -> bool {
+    has_more_with_group(call, view, width, false)
+}
+
+pub(super) fn has_more_with_group(
+    call: &ToolCallView,
+    view: &SearchDetailView,
+    width: u16,
+    in_group: bool,
+) -> bool {
     if width == 0 {
         return false;
     }
-    layout(call, view, width, false).layout.hidden > 0
+    layout_with_group(call, view, width, false, in_group)
+        .layout
+        .hidden
+        > 0
 }
 
 /// 标题状态：命中数与结果级截断；失败/中断交给标题染色。
@@ -178,8 +219,8 @@ pub(super) fn draw_body(
     if rect.width == 0 {
         return;
     }
-    let mut layout = layout(call, view, rect.width, expanded).layout;
-    tree::append_status(&mut layout.rows, status_of(call, view), rect.width);
+    let mut layout = layout_with_group(call, view, rect.width, expanded, true).layout;
+    tree::decorate_group_call(&mut layout.rows, call, status_of(call, view), rect.width);
     tree::apply_group_connector(&mut layout.rows, last);
     tree::draw(grid, rect, scroll, row_index, &layout.rows);
 }

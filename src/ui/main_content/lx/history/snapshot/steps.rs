@@ -7,7 +7,7 @@ use super::super::cache::{
 };
 use super::super::paint::{BlockPaint, BlockSource, GroupSlot};
 use super::super::source::HistorySource;
-use super::super::{CardKind, folds_of, tool, tool_rows};
+use super::super::{CardKind, folds_of, tool};
 use super::{CardRegion, SnapBlock, legacy};
 
 impl super::Builder<'_> {
@@ -60,7 +60,9 @@ impl super::Builder<'_> {
 
                     let display: Vec<usize> = match mode {
                         tool::GroupMode::List => (first_step..end).collect(),
-                        tool::GroupMode::Snapshot => vec![end.saturating_sub(1)],
+                        tool::GroupMode::Snapshot => {
+                            vec![latest_snapshot_step(message, first_step, end)]
+                        }
                     };
                     let display_count = display.len();
                     for (group_index, call_index) in display.into_iter().enumerate() {
@@ -69,8 +71,6 @@ impl super::Builder<'_> {
                             continue;
                         };
                         let folds = folds_of(source, &message.id, call);
-                        let total_rows = tool_rows(call, self.width, folds);
-                        let rows = tool::body_rows(call, self.width, folds);
                         let group = GroupSlot {
                             index: group_index,
                             count: display_count,
@@ -89,7 +89,7 @@ impl super::Builder<'_> {
                             ),
                         };
                         let block_start = self.rows;
-                        let regions = tool::body_card_regions(call, self.width, folds, total_rows);
+                        let width = self.width;
                         let block = self.block(
                             key,
                             BlockSource::ToolBody {
@@ -98,9 +98,15 @@ impl super::Builder<'_> {
                                 group,
                             },
                             block_start,
-                            || legacy(rows, regions, folds),
+                            || {
+                                let rows = tool::body_rows(call, width, folds);
+                                let total_rows = rows.saturating_add(1);
+                                let regions =
+                                    tool::body_card_regions(call, width, folds, total_rows);
+                                legacy(rows, regions, folds)
+                            },
                         );
-                        for (offset, agent_id) in tool::agent_links(call, self.width) {
+                        for (offset, agent_id) in tool::body_agent_links(call, self.width) {
                             self.snapshot.cards.push(CardRegion {
                                 kind: CardKind::AgentLink { agent_id },
                                 card_start: block_start.saturating_add(offset.saturating_sub(1)),
@@ -204,4 +210,29 @@ fn tool_group_range(
         end += 1;
     }
     (end, mode)
+}
+
+/// 快照合并组（`update_plan` / `list_agents`）优先选取最后一个已具备有效快照详情的步骤；
+/// 若组尾调用尚在流式/待执行且无详情，则保持展示前一次已生效快照。
+fn latest_snapshot_step(
+    message: &crate::app::state::ChatMessageView,
+    first: usize,
+    end: usize,
+) -> usize {
+    for index in (first..end).rev() {
+        let Some(AssistantStepView::Tool { call, .. }) = message.steps.get(index) else {
+            continue;
+        };
+        let has_snapshot = match call.detail.as_deref() {
+            Some(crate::app::state::ToolDetailView::Plan(_)) => true,
+            Some(crate::app::state::ToolDetailView::Subagent(view)) => {
+                call.status == crate::app::state::ToolStatus::Completed || !view.agents.is_empty()
+            }
+            _ => false,
+        };
+        if has_snapshot {
+            return index;
+        }
+    }
+    end.saturating_sub(1)
 }

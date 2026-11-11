@@ -376,9 +376,25 @@ pub(super) fn nodes(call: &ToolCallView) -> Vec<Node> {
 
 /// 详情排版：长参数折叠 2 行，事实节点始终可见（展开显示全部已保存摘要）。
 fn detail_layout(call: &ToolCallView, width: u16, expanded: bool) -> tree::Layout {
+    detail_layout_with_group(call, width, expanded, false)
+}
+
+fn detail_layout_with_group(
+    call: &ToolCallView,
+    width: u16,
+    expanded: bool,
+    in_group: bool,
+) -> tree::Layout {
     if width == 0 {
         return tree::layout(&[], 0);
     }
+    let build = |sections: &[Section]| {
+        if in_group {
+            tree::layout_in_group(sections, width, 1)
+        } else {
+            tree::layout(sections, width)
+        }
+    };
     // `read` 标题保留种类状态，详情只留一条路径；结果正文与执行事实不占第二行。
     if Kind::of(&call.name) == Kind::Read && Detail::of(call) == Detail::Params {
         let mut nodes: Vec<Node> = if call.status == ToolStatus::Cancelled {
@@ -394,7 +410,7 @@ fn detail_layout(call: &ToolCallView, width: u16, expanded: bool) -> tree::Layou
         if nodes.is_empty() {
             nodes.push(Node::new(Vec::new()));
         }
-        return tree::layout(&[Section::fixed(nodes)], width);
+        return build(&[Section::fixed(nodes)]);
     }
     // 失败/中断只保留一条错误原因，按内容列尾部省略，不折成多行。
     if Kind::of(&call.name) == Kind::Read && Detail::of(call) == Detail::Error {
@@ -411,7 +427,7 @@ fn detail_layout(call: &ToolCallView, width: u16, expanded: bool) -> tree::Layou
         if nodes.is_empty() {
             nodes.push(Node::new(Vec::new()));
         }
-        return tree::layout(&[Section::fixed(nodes)], width);
+        return build(&[Section::fixed(nodes)]);
     }
     let mut cache: Option<ToolSummary> = None;
     let mut sections = Vec::new();
@@ -436,7 +452,7 @@ fn detail_layout(call: &ToolCallView, width: u16, expanded: bool) -> tree::Layou
         // 完成态没有摘要：仍保留一行收口连接符（行数恒 ≥ 1）。
         sections.push(Section::fixed(vec![Node::new(Vec::new())]));
     }
-    tree::layout(&sections, width)
+    build(&sections)
 }
 
 /// 详情行的物理行（含连接符与省略提示行）；`rows` 与 `draw` 共用。
@@ -445,13 +461,25 @@ pub(super) fn detail(call: &ToolCallView, width: u16, expanded: bool) -> Vec<Vec
 }
 
 /// 详情行的物理行数（含省略提示行）。
-pub(super) fn detail_rows(call: &ToolCallView, width: u16, expanded: bool) -> usize {
-    detail_layout(call, width, expanded).rows.len()
+pub(super) fn detail_rows_with_group(
+    call: &ToolCallView,
+    width: u16,
+    expanded: bool,
+    in_group: bool,
+) -> usize {
+    detail_layout_with_group(call, width, expanded, in_group)
+        .rows
+        .len()
 }
 
 /// 详情**内容**行数（不含省略提示行）；供「能否展开」判定。
-pub(super) fn detail_content_rows(call: &ToolCallView, width: u16, expanded: bool) -> usize {
-    let layout = detail_layout(call, width, expanded);
+pub(super) fn detail_content_rows_with_group(
+    call: &ToolCallView,
+    width: u16,
+    expanded: bool,
+    in_group: bool,
+) -> usize {
+    let layout = detail_layout_with_group(call, width, expanded, in_group);
     if expanded {
         layout.total
     } else {
@@ -472,7 +500,16 @@ pub(super) fn draw_body(
     if rect.width == 0 {
         return;
     }
-    let mut layout = detail_layout(call, rect.width, expanded);
+    let mut layout = detail_layout_with_group(call, rect.width, expanded, true);
+    let is_read = Kind::of(&call.name) == Kind::Read;
+    if is_read {
+        let conn = tree::connector_style_of(call);
+        if let Some(first) = layout.rows.first_mut() {
+            first.prefix_style = Some(conn);
+        }
+    } else {
+        tree::decorate_group_call(&mut layout.rows, call, title_status(call), rect.width);
+    }
     tree::apply_group_connector(&mut layout.rows, last);
     tree::draw(grid, rect, scroll, row_index, &layout.rows);
 }

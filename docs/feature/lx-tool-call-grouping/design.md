@@ -1,6 +1,6 @@
 # lx 连续同种工具调用合并：设计
 
-> 状态：**已实施**（2026-11-11）。自动化验证见 `task.md` 文末；TUI 外观仍由用户运行 `cargo run` 验收。
+> 状态：**已完成并合并入 `dev`**（2026-11-11）。自动化验证与代码审查记录见同目录 `task.md` 与 `review.md`。
 > 日期：2026-11-10。
 > 目标页面：lx / Native Agent 对话时间线。
 > 相关规范：`docs/standards/project-directory-structure.md`、`code-writing-standards.md`、`tui-design-requirements.md`、`lx-message-block-display.md`。
@@ -41,9 +41,9 @@
 
 | 位置 | 当前行为 | 本次影响 |
 | --- | --- | --- |
-| `src/ui/main_content/lx/history/snapshot.rs` `steps()` / `build_step()` | 每个 `Tool` 步骤独立建块，块间由 `spacer()` 空一行 | 需要识别连续同名 Tool 组，并拆出组头块与调用体块 |
+| `src/ui/main_content/lx/history/snapshot/steps.rs` `steps()` | 每个 `Tool` 步骤独立建块，块间由 `spacer()` 空一行 | 识别连续同名 Tool 组，并拆出组头块与调用体块 |
 | `snapshot.rs` `tool_cards()` | 按单个 `call` 的 `CardSpan` 登记点击面 | 合并后每个调用体仍需独立点击面 |
-| `paint.rs` `BlockSource` / `BlockPaint` | `Step` 定位单个步骤；`Legacy` 缓存行数与点击面 | 增加组头/调用体定位，保持绘制只读 |
+| `paint.rs` / `paint/legacy.rs` `BlockSource` / `BlockPaint` | `Step` 定位单个步骤；`Legacy` 缓存行数与点击面 | 增加组头/调用体定位，保持绘制只读 |
 | `tool.rs` `rows()` / `draw_animated()` / `card_regions()` | 行数含 1 行标题；绘制按工具类型分派 | 增加“只画树体、不画标题”的入口与仅树体点击面 |
 | `tool/file_summary.rs` `title_status()` / `detail_layout()` | `read` 标题显示 `file`/`folder`，详情为路径 + 事实 | 保留标题状态；详情只留一条路径，隐藏范围/计数/事实 |
 | `history/cache/signature.rs` `step_signature()` | 单步骤指纹，不含“组内位置” | 组头与调用体必须把组位置/邻居纳入指纹 |
@@ -81,8 +81,8 @@
 ```text
 ■ Edit · 2 calls · +8 -4
   ├─ src/a.rs (+5 -2)
-  │  ├─ 1 - old
-  │  └─ 1 + new
+  │  └─ 1 - old
+  │     1 + new
   └─ src/b.rs (+3 -2)
      └─ …
 ```
@@ -99,9 +99,10 @@
 规则：
 
 - 组内**不插空行**；组与前后块之间仍空一行，空行只由 `history::snapshot` 累加。
-- 非最后一个调用的首节点连接符用 `├─`，最后一个调用用 `└─`；调用体内部节点继续沿用 `tree` 的 `├─`/`└─`/`│` 规则。
+- 非最后一个调用的一级首节点连接符用 `  ├─ `，最后一个调用用 `  └─ `（多目标 `wait_agent` 的各目标行同属一级分支）；调用体内部的后续子节点（结果、命令输出、搜索命中、diff、汇报等）统一缩进为 8 列二级子树（非末调用 `  │  └─ ` + 续行 `  │     `，末调用 `     └─ ` + 续行 `        `），并按 `width - 8` 折行。
+- `edit` / `write` 的 diff 行底色从 `└─` 右侧的 1 列空白起铺至行尾，不覆盖左侧树连接符与竖线。
 - 调用体自己的可折叠内容（diff 预览、命令输出、搜索命中、MCP 结果等）保持在调用体内部，展开状态按 `(message_id, call_id)` 独立保存，互不影响。
-- 原来的单调用标题状态（`Exited 0 · 241ms`、`3 matches`、`1/3 completed`、`2 questions` 等）不丢失：移动为该调用首节点尾部的 ` · <status>`；`read` 的标题状态留在组头/单体标题，不追加到路径行。
+- 原来的单调用标题状态（`Exited 0 · 241ms`、`3 matches` 等）不丢失：移动为该调用首节点尾部的 ` · <status>`；`update_plan` 快照合并的 `X/Y completed` 显示在组头；无参数 MCP 调用在合并组内以 `(no arguments)` 作为一级首节点承载耗时等状态；`read` 的标题状态留在组头/单体标题，不追加到路径行。
 - 失败/中断调用的首节点连接符与状态文字用对应语义色；错误正文仍用正常前景色。组头方块取组内最差状态：失败 > 中断 > 运行中 > 取消 > 完成。
 - 组头状态文字只在组内存在非完成态时追加聚合提示：`· 1 running`、`· 1 failed`、`· 1 interrupted`；全部完成时不写。
 - 极窄宽度：组头只保留方块与动词（放不下 `· N calls` 时整段省略）；调用体沿用现有极窄降级，不画树体前缀时也不越界。
@@ -179,28 +180,29 @@ SnapBlock[call 2 body]    rows = body_rows(2) source = ToolBody { group: Some(..
 
 ### 6.2 快照
 
-- `snapshot::steps()` 负责分组扫描；`build_step()` 继续处理单个 Part/单调用。
-- 新增 `build_tool_group_header()` 与 `build_tool_body()`：
+- `snapshot/steps.rs` 的 `steps()` 负责分组扫描；`build_step()` 继续处理单个 Part/单调用。
+- 在 `steps()` 中直接构造组头块与调用体块：
   - 组头块：`rows = 1`，`BlockPaint::Legacy { rows: 1, spans: [] }`，绘制时现算方块/状态。
-  - 调用体块：`rows = max(1, tool::rows(call, width, folds) - 1)`，`BlockPaint::Legacy { rows, spans: tool::body_card_regions(...) }`。
+  - 调用体块：在缓存闭包内按组内二级宽度计算 `rows = tool::body_rows(call, width, folds)`（宽度 > 0 时至少 1 行，宽度 0 时为 0）与 `spans: tool::body_card_regions(...)`。
+  - 快照合并组（`GroupMode::Snapshot`）优先选取组内最后一个已具详情的有效快照步骤（避免流式未结算尾项冲掉上一份有效快照）。
 - 组内调用体块与组头块连续放置，不调用 `spacer()`；组结束后由下一个块正常加空行。
 - 空调用体（没有任何树体）必须补一行兜底，保证每个调用在组内可见。
 
 ### 6.3 绘制
 
 - `BlockSource` 增加：
-  - `ToolGroupHeader { message_index, first_step, count }`
-  - `ToolBody { message_index, step_index, group: Option<GroupSlot> }`
-- `GroupSlot` 至少包含 `last: bool`（连接符）与 `count`（缓存指纹）；首/尾位置变化必须使块键失效。
-- `tool.rs` 新增：
-  - `group_header(call, count, width, ...) -> Vec<Segment>`：`■ 动词 · N calls` + 聚合状态。
-  - `draw_body_animated(...)`：按工具类型分派到各模块的“只画树体”入口。
-  - `body_card_regions(...)`：仅树体的点击面几何。
-- 各工具子模块新增 `draw_body`/`body_layout` 或给现有 `draw` 增加 `headerless` 参数：
+  - `ToolGroupHeader { message_index, first_step, count, snapshot }`
+  - `ToolBody { message_index, step_index, group: GroupSlot }`
+- `GroupSlot` 包含 `index: usize`、`count: usize` 与 `is_last(&self) -> bool`；首/尾位置变化必须使块键失效。
+- `tool/group.rs` 新增：
+  - `group_header(calls, total_count, mode, width, ...)` / `draw_group_header(...)`：`■ 动词 · N calls`（或 `N updates`）+ 聚合状态/指标。
+  - `body_rows(...)`、`body_card_regions(...)`、`body_agent_links(...)`：按组内二级子树宽度计算行数、点击面与 agent 链接偏移。
+  - `draw_body_animated(...)`：按工具类型分派到各模块的 `draw_body` 入口。
+- 各工具子模块新增 `draw_body`：
   - 跳过标题行；
-  - 保留原有树体、折叠提示、行底色与链接；
-  - 将原标题状态追加到首节点（`read` 除外：其标题状态保留在组头/单体标题）；
-  - 非末调用把首行 `└─` 改为 `├─`；`file_diff` 的首段连接符同样处理。
+  - 保留原有树体、折叠提示、行底色（diff 底色从 `└─` 右侧 1 列空白起铺至行尾）与链接；
+  - 将原标题状态通过 `tree::decorate_group_call` 追加到首节点末行，并为失败/中断的首节点连接符与状态文字赋予语义色（`read` 仅在失败/中断时染色连接符，标题状态保留在组头/单体标题）；
+  - 通过 `tree::apply_group_connector_with_roots` 将一级节点设为 `├─`/`└─`，后续子节点设为 8 列 `TREE_NESTED_*` 二级子树（`file_diff` 同样按二级子树缩进 diff 正文）。
 - `read` 的 `file_summary`：
   - `title_status(Kind::Read)` 保留 `file` / `folder · N files` / `image`；
   - `detail_layout(Kind::Read)` 只构造一个路径节点，路径按 `tree::content_width(width)` 单行尾部省略；
@@ -280,8 +282,8 @@ SnapBlock[call 2 body]    rows = body_rows(2) source = ToolBody { group: Some(..
 
 ## 11. 实施记录
 
-- 新增 `history/tool/group.rs`：分组键、组头、headerless 绘制分派与组内连接符。
-- `snapshot::steps` 产出组头块 + 逐调用体块；组内不调用 `spacer()`。
-- 每个工具模块新增 `draw_body`；原单卡绘制路径保持不变。
-- `read` 只保留标题状态与一条路径；失败/中断单行尾部省略。
-- 组头与调用体分别使用独立缓存槽位/指纹；组内位置变化会使相邻块失效。
+- 新增 `history/tool/group.rs`、`history/snapshot/steps.rs`、`history/paint/legacy.rs`：分组键、组头聚合、二级子树排版分派与 Legacy 绘制拆分。
+- `snapshot/steps.rs` 产出组头块 + 逐调用体块；组内不调用 `spacer()`，快照合并优先展示最新有效快照。
+- 每个工具模块新增 `draw_body` 与 `in_group` 排版宽度支持（二级子节点按 8 列 `TREE_NESTED_COLS` 折行，防止右侧 3 列裁切）；`file_diff` 底色从 `└─` 右侧 1 列空白起铺至行尾，不覆盖左侧树连接符。
+- `read` 只保留标题状态与一条路径；失败/中断单行尾部省略且连接符按语义色渲染。
+- 组头与调用体分别使用独立缓存槽位/指纹；组内位置变化会使相邻块失效。审查详情见同目录 `review.md`。

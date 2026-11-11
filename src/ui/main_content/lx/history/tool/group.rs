@@ -134,11 +134,16 @@ pub(crate) fn draw_group_header(
 
 /// 调用体行数（总行数减标题行；空详情补 1 行兜底）。
 pub(crate) fn body_rows(call: &ToolCallView, width: u16, folds: Folds) -> usize {
-    let total = super::rows(call, width, folds);
+    let total = super::rows_with_group(call, width, folds, true);
     if total == 0 {
         return 0;
     }
     total.saturating_sub(1).max(1)
+}
+
+/// 调用体内的 agent 链接（按组内排版计算偏移）。
+pub(crate) fn body_agent_links(call: &ToolCallView, width: u16) -> Vec<(usize, String)> {
+    super::agent_links_with_group(call, width, true)
 }
 
 /// 调用体的点击面：把整卡区域整体上移一行，并去掉标题行覆盖。
@@ -148,7 +153,7 @@ pub(crate) fn body_card_regions(
     folds: Folds,
     total_rows: usize,
 ) -> Vec<super::CardRegion> {
-    super::card_regions(call, width, folds, total_rows)
+    super::card_regions_with_group(call, width, folds, total_rows, true)
         .into_iter()
         .filter_map(|region| {
             let offset = region.card.offset;
@@ -303,17 +308,32 @@ pub(crate) fn draw_body_animated(
     } else {
         text::agent::TREE_BRANCH
     };
+    let connector_style = super::tree::connector_style_of(call);
     for _ in drawn..expected {
         if let Some(y) = visible_row(rect, scroll, *row_index) {
-            grid.put_clipped(
-                rect.x,
-                y,
-                connector,
-                style::chat_notice_connector(),
-                rect.width,
-            );
+            grid.put_clipped(rect.x, y, connector, connector_style, rect.width);
         }
         *row_index += 1;
+    }
+}
+
+/// 综合工具调用状态与后台进程/子 agent 实时状态，得到用于组头聚合的有效状态。
+pub(crate) fn effective_status(call: &ToolCallView) -> ToolStatus {
+    if matches!(call.status, ToolStatus::Failed | ToolStatus::Interrupted) {
+        return call.status;
+    }
+    match call.detail.as_deref() {
+        Some(ToolDetailView::Command(view)) if view.state.is_running() => ToolStatus::Running,
+        Some(ToolDetailView::Interaction(view)) if view.state.is_running() => ToolStatus::Running,
+        Some(ToolDetailView::Subagent(view)) if call.name == "spawn_agent" => {
+            match view.agent_status.as_deref() {
+                Some("failed") => ToolStatus::Failed,
+                Some("blocked" | "interrupted") => ToolStatus::Interrupted,
+                Some("cancelled") => ToolStatus::Cancelled,
+                _ => call.status,
+            }
+        }
+        _ => call.status,
     }
 }
 
@@ -321,7 +341,7 @@ pub(crate) fn draw_body_animated(
 fn worst_status(calls: &[&ToolCallView]) -> ToolStatus {
     calls
         .iter()
-        .map(|call| call.status)
+        .map(|call| effective_status(call))
         .max_by_key(|status| status_rank(*status))
         .unwrap_or(ToolStatus::Completed)
 }
@@ -337,32 +357,26 @@ fn status_rank(status: ToolStatus) -> u8 {
 }
 
 fn aggregate_status(calls: &[&ToolCallView]) -> Option<String> {
-    let failed = calls
-        .iter()
-        .filter(|call| call.status == ToolStatus::Failed)
-        .count();
-    let interrupted = calls
-        .iter()
-        .filter(|call| call.status == ToolStatus::Interrupted)
-        .count();
-    let running = calls
-        .iter()
-        .filter(|call| {
-            matches!(
-                call.status,
-                ToolStatus::Running | ToolStatus::InputStreaming | ToolStatus::Pending
-            )
-        })
-        .count();
+    let mut failed = 0usize;
+    let mut interrupted = 0usize;
+    let mut running = 0usize;
+    for call in calls {
+        match effective_status(call) {
+            ToolStatus::Failed => failed += 1,
+            ToolStatus::Interrupted => interrupted += 1,
+            ToolStatus::Running | ToolStatus::InputStreaming | ToolStatus::Pending => running += 1,
+            _ => {}
+        }
+    }
     let mut parts = Vec::new();
     if failed > 0 {
-        parts.push(format!("{failed} failed"));
+        parts.push(text::agent::group_failed_label(failed));
     }
     if interrupted > 0 {
-        parts.push(format!("{interrupted} interrupted"));
+        parts.push(text::agent::group_interrupted_label(interrupted));
     }
     if running > 0 {
-        parts.push(format!("{running} running"));
+        parts.push(text::agent::group_running_label(running));
     }
     (!parts.is_empty()).then(|| parts.join(text::LX_CHAT_TOOL_STATUS_SEP))
 }
@@ -377,12 +391,19 @@ fn aggregate_metric(calls: &[&ToolCallView]) -> Option<String> {
     if calls.iter().all(|call| call.name == "search") {
         return search_metric(calls);
     }
+    if calls.iter().all(|call| call.name == "update_plan") {
+        return calls
+            .iter()
+            .rev()
+            .find_map(|call| super::plan::status_of(call));
+    }
     None
 }
 
 fn edit_write_metric(calls: &[&ToolCallView]) -> Option<String> {
     let mut added = 0usize;
     let mut removed = 0usize;
+    let mut has_known_counts = false;
     let mut unknown = false;
     for call in calls {
         let Some(summary) = call.summary.as_deref() else {
@@ -392,8 +413,14 @@ fn edit_write_metric(calls: &[&ToolCallView]) -> Option<String> {
         if !summary.counts_known {
             unknown = true;
         }
+        if summary.added.is_some() || summary.removed.is_some() {
+            has_known_counts = true;
+        }
         added = added.saturating_add(summary.added.unwrap_or(0));
         removed = removed.saturating_add(summary.removed.unwrap_or(0));
+    }
+    if !has_known_counts {
+        return unknown.then(|| text::agent::FILE_DIFF_COUNTS_UNKNOWN.to_string());
     }
     let mut metric = format!(
         "{} {}",
@@ -401,18 +428,42 @@ fn edit_write_metric(calls: &[&ToolCallView]) -> Option<String> {
         text::agent::removed_label(removed)
     );
     if unknown {
-        metric.push_str(" (?)");
+        metric.push(' ');
+        metric.push_str(text::agent::FILE_DIFF_COUNTS_UNKNOWN);
     }
     Some(metric)
 }
 
 fn search_metric(calls: &[&ToolCallView]) -> Option<String> {
     let mut total = 0usize;
+    let mut all_have_matches = true;
+    let mut any_truncated = false;
     for call in calls {
-        let matches = call.summary.as_deref().and_then(|summary| summary.matches);
-        total = total.saturating_add(matches?);
+        let summary = call.summary.as_deref();
+        let detail_search = match call.detail.as_deref() {
+            Some(ToolDetailView::Search(view)) => Some(view),
+            _ => None,
+        };
+        let matches = summary.and_then(|s| s.matches).or_else(|| {
+            detail_search.and_then(|v| (!v.matches.is_empty()).then_some(v.matches.len()))
+        });
+        if let Some(count) = matches {
+            total = total.saturating_add(count);
+        } else {
+            all_have_matches = false;
+        }
+        if summary.is_some_and(|s| s.truncated) || detail_search.is_some_and(|v| v.truncated) {
+            any_truncated = true;
+        }
     }
-    Some(text::agent::matches_label(total))
+    let mut parts = Vec::new();
+    if all_have_matches {
+        parts.push(text::agent::matches_label(total));
+    }
+    if any_truncated {
+        parts.push(text::agent::SEARCH_TRUNCATED.to_string());
+    }
+    (!parts.is_empty()).then(|| parts.join(text::LX_CHAT_TOOL_STATUS_SEP))
 }
 
 #[cfg(test)]
