@@ -34,7 +34,7 @@ const BUTTON_GAP: u16 = 1;
 pub(super) const MARKER_WIDTH: u16 = 1;
 /// 状态框宽度（列）：`[ ]` / `[~]` / `[x]` 均为 3。
 pub(super) const STATUS_WIDTH: u16 = 3;
-/// 聚合组树形连接符槽宽（列）：`"-┌─ "` / `" ┌─ "` / `"-├─ "` / `" ├─ "` / `" └─ "` / `" │  "` 均为 4。
+/// 聚合组树形连接符槽宽（列）：`"─┌─ "` / `" ┌─ "` / `"─├─ "` / `" ├─ "` / `" └─ "` / `" │  "` 均为 4。
 pub(super) const GROUP_BRANCH_WIDTH: u16 = 4;
 /// 优先级徽标宽度（列）：`P0` / `P1` / `P2` / `P3` 均为 2。
 pub(super) const PRIORITY_WIDTH: u16 = 2;

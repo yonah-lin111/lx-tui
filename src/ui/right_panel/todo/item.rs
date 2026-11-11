@@ -99,9 +99,9 @@ pub(super) fn group_connector_glyph(
         return if offset + 1 < count { " │  " } else { "    " };
     }
     if offset == 0 {
-        if is_anchor { "-┌─ " } else { " ┌─ " }
+        if is_anchor { "─┌─ " } else { " ┌─ " }
     } else if offset + 1 < count {
-        if is_anchor { "-├─ " } else { " ├─ " }
+        if is_anchor { "─├─ " } else { " ├─ " }
     } else {
         " └─ "
     }

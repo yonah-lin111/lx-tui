@@ -33,19 +33,19 @@ fn two_and_three_item_groups_render_shared_status_and_tree_connectors() {
     let (buffer, _) = render_panel(&state, area);
     let list = list_rect(area);
 
-    // 2 条聚合组（g2）：anchor = (2 - 1) / 2 = 0，首行画 `[ ]-┌─ P1 `，次行画 `    └─ P2 `
+    // 2 条聚合组（g2）：anchor = (2 - 1) / 2 = 0，首行画 `[ ]─┌─ P1 `，次行画 `    └─ P2 `
     let row0 = row_text(&buffer, list, list.y);
     let row1 = row_text(&buffer, list, list.y + 1);
     assert!(
-        row0.starts_with("❯ [ ]-┌─ P1 login api"),
-        "2 条组首行应带共享状态框与 -┌─: {row0:?}"
+        row0.starts_with("❯ [ ]─┌─ P1 login api"),
+        "2 条组首行应带共享状态框与 ─┌─: {row0:?}"
     );
     assert!(
         row1.starts_with("      └─ P2 login test"),
         "2 条组末行状态槽应留空并画 └─: {row1:?}"
     );
 
-    // 3 条聚合组（g3）：anchor = (3 - 1) / 2 = 1，中行画 `[~]-├─ P1 `
+    // 3 条聚合组（g3）：anchor = (3 - 1) / 2 = 1，中行画 `[~]─├─ P1 `
     let row2 = row_text(&buffer, list, list.y + 2);
     let row3 = row_text(&buffer, list, list.y + 3);
     let row4 = row_text(&buffer, list, list.y + 4);
@@ -54,8 +54,8 @@ fn two_and_three_item_groups_render_shared_status_and_tree_connectors() {
         "3 条组首行应画 ┌─: {row2:?}"
     );
     assert!(
-        row3.starts_with("  [~]-├─ P1 migrate"),
-        "3 条组中行应带共享状态框与 -├─: {row3:?}"
+        row3.starts_with("  [~]─├─ P1 migrate"),
+        "3 条组中行应带共享状态框与 ─├─: {row3:?}"
     );
     assert!(
         row4.starts_with("      └─ P2 docs"),
