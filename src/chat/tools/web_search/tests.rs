@@ -934,6 +934,25 @@ fn combined_batch_respects_50_kib_json_escaped_budget_and_2000_line_cap() {
     };
     let (lines_text, lines_truncated) = format_outcomes(&[many_lines]);
     assert!(lines_truncated);
-    assert!(lines_text.ends_with("…[truncated]"));
-    assert!(lines_text.lines().count() <= MAX_WEB_SEARCH_LINES + 1);
+    assert!(lines_text.ends_with("\n…[truncated]"));
+    assert!(lines_text.lines().count() <= MAX_WEB_SEARCH_LINES);
+
+    // 最后一条保留行恰好触发单行 2000 字符裁剪且后续仍有被省略行时，末尾仍保留独立 `\n…[truncated]` 行。
+    let clipped_plus_more = QuerySearchOutcome {
+        query: "clipped".into(),
+        provider: Some(WebSearchProvider::Exa),
+        output: (0..2100)
+            .map(|i| "x".repeat(MAX_WEB_SEARCH_LINE_CHARS + 50 + (i % 3)))
+            .collect::<Vec<_>>()
+            .join("\n"),
+        error: None,
+        timed_out: false,
+    };
+    let (clipped_text, clipped_truncated) = format_outcomes(&[clipped_plus_more]);
+    assert!(clipped_truncated);
+    assert!(
+        clipped_text.ends_with("\n…[truncated]"),
+        "tail: {:?}",
+        &clipped_text[clipped_text.len().saturating_sub(40)..]
+    );
 }

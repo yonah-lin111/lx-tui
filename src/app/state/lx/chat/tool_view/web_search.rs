@@ -167,17 +167,23 @@ fn is_truncation_marker_line(line: &str) -> bool {
     )
 }
 
-/// 结果单行取样：剥离行尾 `\r` 与内联截断标记，超过 [`MAX_RESULT_LINE_CHARS`] 字符时截断并补 `…`。
+/// 结果单行取样：剥离行尾 `\r` 与内联截断标记（保留行尾截断省略号 `…`），
+/// 超过 [`MAX_RESULT_LINE_CHARS`] 字符时截断并补 `…`。
 fn result_line(line: &str) -> String {
     let line = line.trim_end_matches('\r');
-    let line = line
+    let (line, had_ellipsis) = if let Some(prefix) = line
         .strip_suffix("…[truncated]")
         .or_else(|| line.strip_suffix("[...truncated]"))
-        .or_else(|| line.strip_suffix("[truncated]"))
-        .unwrap_or(line);
+    {
+        (prefix, !prefix.is_empty())
+    } else if let Some(prefix) = line.strip_suffix("[truncated]") {
+        (prefix, prefix.ends_with('…'))
+    } else {
+        (line, false)
+    };
     let mut chars = line.chars();
     let mut text: String = chars.by_ref().take(MAX_RESULT_LINE_CHARS).collect();
-    if chars.next().is_some() {
+    if chars.next().is_some() || (had_ellipsis && !text.is_empty() && !text.ends_with('…')) {
         text.push('…');
     }
     text

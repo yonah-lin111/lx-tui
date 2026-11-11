@@ -12,8 +12,8 @@
 //!   其余行左对齐）；两个折叠块共用同一套连接符，不重复 `├─`/`└─`；
 //! - **长任务（进程仍存活）只给一行引导**：命令 + `open task panel · live output`，
 //!   消息列表不铺实时输出；整卡点击打开面板并定位该进程；
-//! - 执行阶段已截断（`truncated` / `dropped_bytes`）另列事实行，不混进
-//!   `… N more lines` 的 UI 省略数；
+//! - 执行阶段已截断（`truncated`）在折叠提示行末尾追加 `[truncated]`（`… N more lines [truncated]`），
+//!   `dropped_bytes` 另列事实行；
 //! - 卡片只读快照：不解析 JSON、不读进程、不读数据库。
 
 use std::borrow::Cow;

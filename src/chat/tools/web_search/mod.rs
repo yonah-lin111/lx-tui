@@ -380,13 +380,18 @@ fn bound_combined_text(raw: &str, outcomes: &[QuerySearchOutcome]) -> (String, b
     let suffix_cost = json_escaped_len(TRUNCATED_SUFFIX);
 
     let lines: Vec<&str> = raw.split('\n').collect();
+    let max_content_lines = if lines.len() > MAX_WEB_SEARCH_LINES {
+        MAX_WEB_SEARCH_LINES.saturating_sub(1)
+    } else {
+        MAX_WEB_SEARCH_LINES
+    };
     let mut out = String::new();
     let mut used_bytes = 0usize;
     let mut line_clipped = false;
     let mut omitted_lines = false;
 
     for (emitted, line) in lines.iter().enumerate() {
-        if emitted >= MAX_WEB_SEARCH_LINES {
+        if emitted >= max_content_lines {
             omitted_lines = true;
             break;
         }
@@ -405,7 +410,7 @@ fn bound_combined_text(raw: &str, outcomes: &[QuerySearchOutcome]) -> (String, b
         used_bytes = used_bytes.saturating_add(cost);
     }
 
-    if omitted_lines && !out.ends_with("…[truncated]") {
+    if omitted_lines && !out.ends_with(TRUNCATED_SUFFIX) && out != "…[truncated]" {
         out.push_str(TRUNCATED_SUFFIX);
     }
     (out, omitted_lines || line_clipped)
@@ -422,7 +427,13 @@ fn clip_line(line: &str) -> (String, bool) {
 
 /// 文本在落库 JSON 中的转义后字节数（不含外层引号）。
 fn json_escaped_len(text: &str) -> usize {
-    serde_json::to_string(text)
-        .map(|encoded| encoded.len().saturating_sub(2))
-        .unwrap_or(text.len())
+    let mut len = text.len();
+    for byte in text.bytes() {
+        match byte {
+            b'"' | b'\\' | b'\n' | b'\r' | b'\t' | 0x08 | 0x0c => len += 1,
+            0x00..=0x1f => len += 5,
+            _ => {}
+        }
+    }
+    len
 }

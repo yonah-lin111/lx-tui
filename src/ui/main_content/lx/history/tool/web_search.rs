@@ -73,25 +73,35 @@ fn queries_section(view: &WebSearchDetailView, expanded: bool) -> Option<Section
 }
 
 /// 结果单行净化：控制字符转空格（`markdown_render` 不接受裸控制字符），超长截断补 `…`，
-/// 并剥离正文中的 `…[truncated]` / `[...truncated]` / `[truncated]`（截断只显示在 `more lines` 行）。
+/// 并剥离行尾合成的 `…[truncated]` / `[...truncated]` / `[truncated]`（保留行尾截断省略号 `…`，
+/// `[truncated]` 标签只显示在 `more lines` 行）。
 fn sanitize_result_line(line: &str) -> String {
-    let cleaned = line
+    let (cleaned, had_ellipsis) = if let Some(prefix) = line
         .strip_suffix("…[truncated]")
         .or_else(|| line.strip_suffix("[...truncated]"))
-        .or_else(|| line.strip_suffix(text::agent::INLINE_TRUNCATED))
-        .unwrap_or(line);
+    {
+        (prefix, !prefix.is_empty())
+    } else if let Some(prefix) = line.strip_suffix(text::agent::INLINE_TRUNCATED) {
+        (prefix, prefix.ends_with('…'))
+    } else {
+        (line, false)
+    };
     let mut text = String::with_capacity(cleaned.len().min(MAX_RESULT_LINE_CHARS + 4));
+    let mut clipped = false;
     for (count, ch) in cleaned.chars().enumerate() {
         if count == MAX_RESULT_LINE_CHARS {
             text.push('…');
+            clipped = true;
             break;
         }
         text.push(if ch.is_control() { ' ' } else { ch });
     }
-    text.trim_end()
-        .replace("…[truncated]", "")
-        .replace("[...truncated]", "")
-        .replace(text::agent::INLINE_TRUNCATED, "")
+    let trimmed = text.trim_end();
+    if had_ellipsis && !clipped && !trimmed.is_empty() && !trimmed.ends_with('…') {
+        format!("{trimmed}…")
+    } else {
+        trimmed.to_string()
+    }
 }
 
 fn result_section(
@@ -111,42 +121,37 @@ fn result_section(
         return None;
     }
     let body_width = u16::try_from(tree::content_width(width)).unwrap_or(u16::MAX);
-    let (raw_source, more) = if let Some(error) = error_fallback {
+    let (lines, more) = if let Some(error) = error_fallback {
+        let error_lines: Vec<Vec<Segment>> = error
+            .lines()
+            .take(MAX_ERROR_LINES)
+            .map(sanitize_result_line)
+            .filter(|line| !line.is_empty())
+            .map(|line| vec![Segment::new(line, style::text())])
+            .collect();
         (
-            error
-                .lines()
-                .take(MAX_ERROR_LINES)
-                .map(sanitize_result_line)
-                .collect::<Vec<_>>()
-                .join("\n"),
+            error_lines,
             error.lines().count().saturating_sub(MAX_ERROR_LINES),
         )
     } else {
+        let raw_source = view
+            .result
+            .iter()
+            .filter(|line| {
+                !matches!(
+                    line.trim(),
+                    "…[truncated]" | "[...truncated]" | "[truncated]"
+                )
+            })
+            .map(|line| sanitize_result_line(line))
+            .collect::<Vec<_>>()
+            .join("\n");
         (
-            view.result
-                .iter()
-                .filter(|line| {
-                    !matches!(
-                        line.trim(),
-                        "…[truncated]" | "[...truncated]" | "[truncated]"
-                    )
-                })
-                .map(|line| sanitize_result_line(line))
-                .collect::<Vec<_>>()
-                .join("\n"),
+            muted_markdown_lines(&raw_source, body_width),
             view.result_more,
         )
     };
-    let mut lines = muted_markdown_lines(&raw_source, body_width);
     let truncated = error_fallback.is_none() && view.truncated;
-    if more > 0 && (expanded || lines.len() <= BLOCK_PREVIEW_ROWS) {
-        let mut hint = text::mcp::more_lines(more);
-        if truncated {
-            hint.push(' ');
-            hint.push_str(text::agent::INLINE_TRUNCATED);
-        }
-        lines.push(vec![Segment::new(hint, style::fold_hint())]);
-    }
     if lines.is_empty() {
         return None;
     }
@@ -155,6 +160,7 @@ fn result_section(
             vec![Node::block(lines)],
             (!expanded).then(|| Preview::head(BLOCK_PREVIEW_ROWS)),
         )
+        .with_omitted(more)
         .with_truncated(truncated),
     )
 }

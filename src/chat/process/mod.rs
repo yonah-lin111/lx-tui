@@ -313,8 +313,16 @@ impl ProcessResult {
     }
 
     /// 对 `output` 施加单行 2000 字符、总计 2000 行与 50 KiB JSON 转义后预算上限；
-    /// 任一裁剪触发时置 `truncated = true`。
+    /// 任一裁剪触发时置 `truncated = true`。同时限制持久化 `command` 长度，防止超长命令文本撑破 64 KiB 回放上限。
     pub fn enforce_output_bounds(&mut self) {
+        if self.command.chars().count() > output::MAX_MODEL_OUTPUT_LINE_CHARS {
+            let head: String = self
+                .command
+                .chars()
+                .take(output::MAX_MODEL_OUTPUT_LINE_CHARS)
+                .collect();
+            self.command = format!("{head}…");
+        }
         let meta_bytes = output::json_escaped_len(&self.command)
             .saturating_add(output::json_escaped_len(&self.cwd))
             .saturating_add(self.input.as_deref().map_or(0, output::json_escaped_len));

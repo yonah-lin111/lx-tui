@@ -275,9 +275,15 @@ fn render_line(number: usize, line: &str) -> (String, bool) {
 /// `read` 的 50 KiB 输出预算按 JSON 转义后的字节计：否则一段全是引号/反斜杠的
 /// 50 KiB 文本落库后会翻倍，重进会话时又会被 64 KiB 回放上限截断。
 fn json_escaped_len(text: &str) -> usize {
-    serde_json::to_string(text)
-        .map(|encoded| encoded.len().saturating_sub(2))
-        .unwrap_or(text.len())
+    let mut len = text.len();
+    for byte in text.bytes() {
+        match byte {
+            b'"' | b'\\' | b'\n' | b'\r' | b'\t' | 0x08 | 0x0c => len += 1,
+            0x00..=0x1f => len += 5,
+            _ => {}
+        }
+    }
+    len
 }
 
 /// 落库 JSON 中除 `content` 外的固定元数据余量（字段名、区间、版本 token 等）。

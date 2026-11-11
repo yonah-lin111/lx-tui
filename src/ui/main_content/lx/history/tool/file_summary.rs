@@ -4,17 +4,16 @@
 //! ■ Read · folder · 12 files
 //!   └─ /project/src
 //!
-//! ■ Search · 3 matches · results truncated
+//! ■ Search · 3 matches
 //!   └─ "package.json|Cargo.toml" in /project
 //! ```
 //!
 //! `read` 的种类与目录条目数在标题右侧（`Read · file` / `Read · image` / `Read · folder · 12 files`），
-//! 树体只放路径与执行事实；`search` 的命中数也在标题右侧。
+//! 树体只放单行路径（或失败/中断原因）；`search` 的命中数也在标题右侧。
 //!
 //! - 独立字段之间不再用 ` · ` 拼接：每个字段是一个 [`tree::Node`]；
 //! - `read` 的 file/folder 只来自**结果体**（[`ToolSummary::read_kind`]），不靠路径猜；
-//! - 预览省略只报 UI 隐藏的物理行（`… N more lines`），执行阶段的 `truncated` 另列
-//!   `output limited` / `results truncated`，两种事实不混算；
+//! - `read` 标题下方只显示一条路径（超宽单行尾部省略），不显示 `output limited` 或 `more lines`；
 //! - 渲染热路径不做常规 JSON 解析：只有摘要缺字段时才懒回退解析 `arguments_json`。
 
 use crate::app::state::{ToolCallView, ToolStatus, ToolSummary};
@@ -367,8 +366,12 @@ fn detail_layout(call: &ToolCallView, width: u16, expanded: bool) -> tree::Layou
                 })
                 .unwrap_or_else(|| Node::new(Vec::new()));
             sections.push(Section::fixed(vec![node]));
-        } else if let Some(node) = cancelled_node(call) {
-            sections.push(Section::fixed(vec![node]));
+        } else if call.status == ToolStatus::Cancelled {
+            let label = text::tool_status_label(ToolStatus::Cancelled);
+            sections.push(Section::fixed(vec![Node::text(
+                super::super::truncate_with_ellipsis(label, body_width),
+                style::agent_step_detail(),
+            )]));
         } else if let Some(path) = field(
             call,
             needs_argument_fallback(call, Kind::Read),
@@ -382,8 +385,15 @@ fn detail_layout(call: &ToolCallView, width: u16, expanded: bool) -> tree::Layou
                 super::super::truncate_with_ellipsis(&path, body_width),
                 style::chat_tool_param(),
             )]));
-        } else if let Some(node) = fallback_node(call) {
-            sections.push(Section::fixed(vec![node]));
+        } else if matches!(
+            call.status,
+            ToolStatus::InputStreaming | ToolStatus::Pending | ToolStatus::Running
+        ) {
+            let label = text::tool_status_label(call.status);
+            sections.push(Section::fixed(vec![Node::text(
+                super::super::truncate_with_ellipsis(label, body_width),
+                style::agent_step_detail(),
+            )]));
         } else {
             return tree::layout(&[], width);
         }

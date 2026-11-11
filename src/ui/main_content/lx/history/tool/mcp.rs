@@ -30,7 +30,7 @@ fn arguments_section(view: &McpDetailView, expanded: bool) -> Option<Section> {
     if view.arguments.is_empty() {
         return None;
     }
-    let mut lines: Vec<Vec<Segment>> = view
+    let lines: Vec<Vec<Segment>> = view
         .arguments
         .iter()
         .map(|line| {
@@ -40,31 +40,42 @@ fn arguments_section(view: &McpDetailView, expanded: bool) -> Option<Section> {
             )]
         })
         .collect();
-    if view.arguments_more > 0 {
-        lines.push(vec![Segment::new(
-            text::mcp::more_lines(view.arguments_more),
-            style::fold_hint(),
-        )]);
-    }
-    Some(Section::new(
-        vec![Node::block(lines)],
-        (!expanded).then(|| Preview::head(BLOCK_PREVIEW_ROWS)),
-    ))
+    Some(
+        Section::new(
+            vec![Node::block(lines)],
+            (!expanded).then(|| Preview::head(BLOCK_PREVIEW_ROWS)),
+        )
+        .with_omitted(view.arguments_more),
+    )
 }
 
 fn sanitize_result_line(line: &str, max_chars: usize) -> String {
-    let cleaned = line
+    let (cleaned, had_ellipsis) = if let Some(prefix) = line
         .strip_suffix("…[truncated]")
         .or_else(|| line.strip_suffix("[...truncated]"))
-        .or_else(|| line.strip_suffix(text::agent::INLINE_TRUNCATED))
-        .unwrap_or(line);
-    cleaned
-        .chars()
-        .take(max_chars)
-        .map(|ch| if ch.is_control() { ' ' } else { ch })
-        .collect::<String>()
-        .trim_end()
-        .to_string()
+    {
+        (prefix, !prefix.is_empty())
+    } else if let Some(prefix) = line.strip_suffix(text::agent::INLINE_TRUNCATED) {
+        (prefix, prefix.ends_with('…'))
+    } else {
+        (line, false)
+    };
+    let mut text = String::with_capacity(cleaned.len().min(max_chars + 4));
+    let mut clipped = false;
+    for (count, ch) in cleaned.chars().enumerate() {
+        if count == max_chars {
+            text.push('…');
+            clipped = true;
+            break;
+        }
+        text.push(if ch.is_control() { ' ' } else { ch });
+    }
+    let trimmed = text.trim_end();
+    if had_ellipsis && !clipped && !trimmed.is_empty() && !trimmed.ends_with('…') {
+        format!("{trimmed}…")
+    } else {
+        trimmed.to_string()
+    }
 }
 
 fn result_section(
@@ -89,39 +100,32 @@ fn result_section(
     }
     let body_style = output_style(expanded);
     let body_width = u16::try_from(tree::content_width(width)).unwrap_or(u16::MAX);
-    let raw_source = if let Some(error) = error_fallback {
-        error
+    let (mut lines, more) = if let Some(error) = error_fallback {
+        let error_lines: Vec<Vec<Segment>> = error
             .lines()
             .take(20)
             .map(|line| sanitize_result_line(line, 8000))
-            .collect::<Vec<_>>()
-            .join("\n")
+            .filter(|line| !line.is_empty())
+            .map(|line| vec![Segment::new(line, style::text())])
+            .collect();
+        (error_lines, error.lines().count().saturating_sub(20))
     } else {
-        view.result
+        let raw_source = view
+            .result
             .iter()
             .map(|line| sanitize_result_line(line, 8000))
             .collect::<Vec<_>>()
-            .join("\n")
+            .join("\n");
+        (
+            muted_markdown_lines(&raw_source, body_width),
+            view.result_more,
+        )
     };
-    let mut lines: Vec<Vec<Segment>> = muted_markdown_lines(&raw_source, body_width);
     let truncated = error_fallback.is_none()
         && call
             .summary
             .as_deref()
             .is_some_and(|summary| summary.truncated);
-    let more = if let Some(error) = error_fallback {
-        error.lines().count().saturating_sub(20)
-    } else {
-        view.result_more
-    };
-    if more > 0 && (expanded || lines.len() <= BLOCK_PREVIEW_ROWS) {
-        let mut hint = text::mcp::more_lines(more);
-        if truncated {
-            hint.push(' ');
-            hint.push_str(text::agent::INLINE_TRUNCATED);
-        }
-        lines.push(vec![Segment::new(hint, style::fold_hint())]);
-    }
     for image in &view.images {
         lines.push(vec![Segment::new(
             text::mcp::image_line(&image.mime, image.width, image.height, &image.path),
@@ -142,6 +146,7 @@ fn result_section(
             vec![Node::block(lines)],
             (!expanded).then(|| Preview::head(BLOCK_PREVIEW_ROWS)),
         )
+        .with_omitted(more)
         .with_truncated(truncated),
     )
 }

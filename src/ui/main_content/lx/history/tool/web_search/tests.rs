@@ -357,3 +357,33 @@ fn failed_card_surfaces_the_error_in_the_result_block() {
     );
     assert!(!text.contains("exa"), "{text}");
 }
+
+#[test]
+fn three_line_result_with_omitted_lines_reports_exact_more_count_without_phantom_fold() {
+    let mut view = view();
+    view.truncated = true;
+    view.result = vec![
+        "line 0 with literal [truncated] token".into(),
+        "line 1…[truncated]".into(),
+        "line 2".into(),
+    ];
+    view.result_more = 10;
+    let folded_layout = layout(&call(), &view, 100, Folds::default());
+    assert!(
+        !folded_layout.result_expandable,
+        "窗口内仅 3 行时展开不会多出内容，不应标记为可展开"
+    );
+    let folded = render_with(&call(), &view, 100, Folds::default());
+    assert!(
+        folded.contains("… 10 more lines [truncated]"),
+        "应直接显示窗口外省略的 10 行而非 1 more line：{folded}"
+    );
+    assert!(
+        folded.contains("line 0 with literal [truncated] token"),
+        "正文中间的字面量不应被误删：{folded}"
+    );
+    assert!(
+        folded.contains("line 1…"),
+        "行尾截断剥离 [truncated] 后应保留省略号：{folded}"
+    );
+}

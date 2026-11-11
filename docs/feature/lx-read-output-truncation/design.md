@@ -1,9 +1,10 @@
-# lx `read` 工具长内容截断：设计
+# lx 工具长内容截断与消息列表截断展示统一：设计
 
-> 状态：**已实施（2026-11-11）；`cargo fmt` / `cargo clippy --all-targets -- -D warnings` / `cargo test` 通过；待合并**。
+> 状态：**已实施并完成代码审查修复（2026-11-11）；`cargo fmt` / `cargo clippy --all-targets -- -D warnings` / `cargo test` 全部通过；待合并**。
 > 日期：2026-11-11。
-> 范围：`read`（文件读取 + 目录列表）、`web_search`、`exec_command` / `write_stdin` 返回给模型与落库的结果体。
-> 明确不包含：lx 消息列表的工具卡片展示逻辑、DB 迁移、`search` / MCP / 子 agent 汇报的截断策略。
+> 范围：`read`（文件读取 + 目录列表）、`web_search`、`exec_command` / `write_stdin` 返回给模型与落库的 50 KiB / 2000 行 / 单行 2000 字符截断；以及 TUI 消息列表工具卡片 `[truncated]` 展示位置统一与单体 `read` 单行路径显示。
+> 明确不包含：DB 迁移、临时文件落盘（opencode `tool-output`）、`search` / MCP / 子 agent 汇报的执行层截断策略变更。
+> 配套文档：[task.md](./task.md) · [review.md](./review.md)。
 > 相关规范：`docs/standards/project-directory-structure.md`、`code-writing-standards.md`、`tui-design-requirements.md`、`docs/standards/lx-message-block-display.md`。
 > 参考实现：`/Users/yonah/projects/agent/opencode-dev`、`/Users/yonah/projects/agent/codex-main`。
 
@@ -11,16 +12,16 @@
 
 | 决策 | 已确认行为 |
 | --- | --- |
-| 截断层 | 只截 `read` 工具返回给模型/落库的结果体；消息列表卡片外观与交互完全不动。 |
-| 单次体积 | 对齐 opencode：**50 KiB**（`50 * 1024` 字节）；按落库 JSON 转义后的 content 字节计（普通文本近似 UTF-8 字节），路径/元数据另占预算。 |
-| 单行宽度 | 对齐 opencode：**2000 字符**，超出截断并显式标记。 |
-| 行数 | 保持 **2000 行**（`limit` 的默认值与硬上限不变）。 |
-| 分页 | 保留 `offset` / `limit` / `next_offset` 的页式截断，不做 codex 式“中间截断”。 |
-| 目录 | 目录列表与文件读取共用 **50 KiB** 输出上限；条目收集上限仍为 **50,000**（输入侧上限不变）。 |
-| 精确标记 | 新增 `line_truncated: bool`（文件单行被截）与 `entries_truncated: bool`（目录收集触顶）；落库 JSON 同步写入。 |
-| 模型提示 | 区分“可以继续翻页”和“offset 也救不回来”：前者写 `N more lines/entries available with offset=X`，后者写 `clipped; cannot be recovered with offset`。 |
+| 覆盖工具 | `read`（文件 + 目录）、`web_search`、`exec_command` / `write_stdin` 统一实施单次 **50 KiB**（JSON 转义后字节预算）+ **2000 行** + **单行 2000 字符**上限，确保 `to_result_json` 稳定低于 64 KiB 回放上限（`MAX_TOOL_RESULT_REPLAY_BYTES`）。 |
+| 单次体积 | 对齐 opencode：**50 KiB**（`50 * 1024` 字节）；按落库 JSON 转义后的字节计（零分配字节扫描），路径/查询/命令及元数据另占预算。 |
+| 单行宽度 | 对齐 opencode：**2000 字符**，超出截断并在模型文本中显式标记 `…[truncated]`；UI 采样时剥离 `[truncated]` 标签并保留末尾省略号 `…`。 |
+| 行数 | 保持 **2000 行**（`read` 的 `limit` 默认值与硬上限、`web_search` 与进程输出总行数上限均为 2000）。 |
+| `read` 分页 | 保留 `offset` / `limit` / `next_offset` 的页式截断，不做中间截断；新增 `line_truncated: bool` 与 `entries_truncated: bool` 落库字段。 |
+| `web_search` 策略 | 保留单查询 `MAX_QUERY_OUTPUT_CHARS = 12_000`；整次调用按头部保留施加 50 KiB / 2000 行 / 单行 2000 字符上限。 |
+| 进程输出策略 | 终态进程超限对齐 codex 保留首尾（head + tail，中间写 `…[N lines omitted]`），运行中进程按 2000 行与转义预算停止推进游标；内置 `rtk` 省略时同步置 `result.truncated = true`。 |
+| UI `[truncated]` 唯一位置 | 移除标题栏截断状态（`results truncated` / `truncated`）与独立 `output limited` 节点；`[truncated]`（不带省略号，`text::agent::INLINE_TRUNCATED`）**只允许**出现在 `… N more lines [truncated]` 提示行上。 |
+| UI `read` 单行卡片 | 单体 `read` 卡片标题保留 `file` / `folder · N files` / `image`，树体仅显示单行路径或单行错误/状态词（超宽尾部 `…` 省略，不软换行、不显示 `output limited`、不登记可展开点击面）。 |
 | 旧数据 | 不迁移 DB；旧结果 JSON 缺少新字段时按 `false` 处理。 |
-| UI | **不改** `src/ui/main_content/lx/` 下任何文件。 |
 
 ## 2. 当前实现事实
 
@@ -480,22 +481,34 @@ Truncation is explicit and reports next_offset when more lines are available.
 
 - **`src/chat/tools/web_search/mod.rs`**：
   - 保留单查询 `MAX_QUERY_OUTPUT_CHARS = 12_000` 字符上限；
-  - 新增整次调用聚合上限：`MAX_WEB_SEARCH_BYTES = 50 * 1024`（按落库 JSON 转义后字节计，扣除查询参数与 512 字节元数据）、`MAX_WEB_SEARCH_LINES = 2000`、`MAX_WEB_SEARCH_LINE_CHARS = 2000`；
-  - 头部保留（head），单行超 2000 字符追加 `…[truncated]`，聚合行数/字节超限追加 `\n[...truncated]`，任一触发均置 `truncated = true`。
-- **`src/chat/process/{output.rs,mod.rs,manager/mod.rs,rtk/{mod.rs,builtin.rs}}` & `src/chat/agent_loop/executor.rs`**：
+  - 新增整次调用聚合上限：`MAX_WEB_SEARCH_BYTES = super::MAX_READ_BYTES`（50 KiB，按落库 JSON 转义后字节计，扣除查询参数与 512 字节元数据）、`MAX_WEB_SEARCH_LINES = 2000`、`MAX_WEB_SEARCH_LINE_CHARS = 2000`；
+  - 头部保留（head），单行超 2000 字符追加 `…[truncated]`，聚合行数/字节超限保留最多 1999 行正文并追加独立行 `\n…[truncated]`（总行数 `<= 2000`），任一触发均置 `truncated = true`。
+- **`src/chat/process/{output.rs,mod.rs,manager/{mod.rs,handle.rs},rtk/{mod.rs,builtin.rs}}` & `src/chat/agent_loop/executor.rs`**：
   - `MAX_MODEL_OUTPUT_BYTES`：`64 * 1024` → `50 * 1024`；`MAX_OUTPUT_TOKENS`：`16_000` → `12_500`；
   - 新增 `MAX_MODEL_OUTPUT_LINES = 2000`、`MAX_MODEL_OUTPUT_LINE_CHARS = 2000`；
-  - `ProcessResult::enforce_output_bounds` 对 `output` 施加单行 2000 字符、总计 2000 行与 50 KiB JSON 转义后预算（终态保留首尾 head + tail 并写 `…[N lines omitted]`，运行中保留头部并写 `…[truncated]`），触发时置 `truncated = true`；
-  - `rtk::builtin::filter_output_flagged` 在内置过滤器触发行数/字节/条目省略时返回 `true`，由 `executor.rs` 汇总进 `result.truncated |= omitted`，保证 UI 命令卡片稳定显示 `output limited`。
+  - `OutputBuffer::sanitize_text` 在 `flush == false`（运行中进程）时按 2000 行与安全转义预算在行边界停止消费字节，保证 `handle.cursor` 不越过未返回的行；
+  - `ProcessResult::enforce_output_bounds` 在 `rtk::filter_output_flagged` 之后统一执行唯一一次，限制持久化 `command` 长度并对 `output` 施加单行 2000 字符、总计 2000 行与 50 KiB JSON 转义后预算（终态保留首尾 head + tail 并写 `…[N lines omitted]`，运行中保留头部并写 `…[truncated]`）；
+  - `rtk::builtin::filter_output_flagged` 在内置过滤器触发行数/字节/条目省略时返回 `true`，由 `executor.rs` 汇总进 `result.truncated |= omitted`。
+  - 将 `ProcessHandle` 拆分为 `src/chat/process/manager/handle.rs`，保持生产单文件行数 `< 1000`。
 
-### 5.8 明确不改的文件
+### 5.8 TUI 消息列表截断展示统一与单体 `read` 单行化
 
-- `src/ui/main_content/lx/**`：不改卡片、点击面、折叠、`output limited` 显示逻辑。
+- **`src/ui/text/agent.rs` & `src/ui/text/mcp.rs`**：
+  - 定义 `pub const INLINE_TRUNCATED: &str = "[truncated]"`（不带省略号）；移除无引用的 `text::mcp::RESULT_TRUNCATED`。
+- **`src/ui/main_content/lx/history/tool/tree.rs`**：
+  - `Section` 新增 `omitted_lines: usize`（`.with_omitted(usize)`）与 `truncated: bool`（`.with_truncated(bool)`）；
+  - `layout.hidden` 仅统计被 `Preview` 折叠隐藏的物理行数，而底部提示行按 `total_omitted = section_hidden + section.omitted_lines` 统一生成唯一一行 `… N more lines [truncated]`；当 `total_omitted == 0` 时不生成独立 `[truncated]` 行。
+- **`src/ui/main_content/lx/history/tool/{command.rs,web_search.rs,mcp.rs,search.rs,file_summary.rs}` & `src/ui/main_content/lx/history/tool.rs`**：
+  - 移除 `web_search`、`search`、`mcp` 标题右侧的截断状态词，以及 `command` / `read` 的 `output limited` 事实行；
+  - 剥离工具输出正文与命中行末尾内联的 `…[truncated]` / `[...truncated]` / `[truncated]` 文字标签（保留被截断单行末尾的 `'…'`），确保 `[truncated]` 只出现在 `… N more lines [truncated]` 提示行上；
+  - `file_summary.rs` 中 `Kind::Read` 遵循 `lx-message-block-display.md` §5.1：标题下方只显示单行路径或单行错误/状态词（超宽尾部 `…` 省略，不软换行、不登记可展开点击面）。
+
+### 5.9 明确不改的文件
+
 - `src/app/state/lx/chat/steps.rs`：`ToolSummary` 不新增字段；`truncated` 聚合继续工作。
 - `src/app/update/chat/view.rs`：投影不改。
 - `src/chat/context/mod.rs`：回放上限 64 KiB 不改。
 - `src/db/**`：无迁移、无 schema 变更。
-- `docs/feature/lx-agent-file-tools/design.md`：历史设计文档保留旧数值，不追改；本设计是新的权威来源。
 
 ## 6. 兼容性与边界
 
@@ -586,21 +599,16 @@ cargo test
 
 ### 8.1 风险
 
-1. **`output limited` 出现更频繁**：`read` 卡片在 `truncated` 为真时显示 `output limited`（`file_summary.rs:303-307`）。降低上限后更多读取会被标记。本任务不改展示逻辑；如果目标规范要求隐藏它，应作为独立的 UI 任务处理。
-2. **压缩/单行文件读不全**：2000 字符的行截断无法通过 `offset` 恢复尾部，这是 opencode 同样的取舍；提示已明确说明“不可恢复”。
+1. **无 `more lines` 行时不单独显示 `[truncated]`**：当工具输出很短（未触发折叠且无窗口外省略行）或已完全展开且无窗口外省略行时，卡片内不再显示独立的 `[truncated]` 行（单行被截断处仍保留末尾 `'…'`）。
+2. **压缩/单行文件读不全**：2000 字符的行截断无法通过 `offset` 恢复尾部，这是 opencode 同样的取舍；模型提示已明确说明“不可恢复”。
 3. **大文件翻页次数增加**：模型可能更多次调用 `read`；这是控制单次上下文占用换来的成本。
-4. **旧会话不一致**：旧 read 结果仍是 256 KiB 上限产生的数据；UI 与回放行为不变，只有新调用使用新上限。
-5. **目录仍收集 50,000 条**：输出虽被 50 KiB 截断，收集阶段的内存成本不变；这是输入侧保护，不在本任务优化。
-6. **测试构造点较多**：约 22 处 `ToolExecutionResult::Read {` 构造需要补字段，另有 2 处没有 `..` 的显式解构需要同步；机械但容易漏，任务清单按文件逐项列出。
-7. **目录头部与分页措辞**：`Listed N entries` 是已收集总数，后面的 `N more entries` 是本页剩余（例如“Listed 5000 … 3000 more”）。本任务按设计保留既有头部，未改成 `entries 1-50 of N`；模型需要结合两行理解。
-8. **目录 `offset` 越界文案**：复用 `offset_error` 会显示 `file has N lines`（既有问题），与目录的 `entries` 口径不一致。本任务不扩大范围修改它；`entries_truncated` 已提醒模型“more entries may exist”。
+4. **旧会话兼容性**：旧结果 JSON 缺少新字段时按 `false` 处理；历史结果正文中的内联 `…[truncated]` / `[...truncated]` 在视图/渲染层同样会被剥离并统一至 `… N more lines [truncated]`。
+5. **与 `dev` 分支（`feat/lx-tool-call-grouping`）合并对齐**：`dev` 已合入连续工具合并特性，合入 `dev` 时需在 `tree.rs`、`file_summary.rs`、`search.rs`、`web_search.rs`、`mcp.rs`、`group.rs` 中保持分组树连接符与 `… N more lines [truncated]` 口径一致。
 
 ### 8.2 非目标
 
-- 不修改消息列表的工具卡片、折叠、点击面、`output limited` 显示。
-- 不修改 `search` / `exec_command` / `write_stdin` / MCP / web_search / 子 agent 汇报的截断策略。
+- 不修改 `search` / MCP / 子 agent 汇报的执行层截断阈值。
 - 不引入临时文件落盘（opencode 的 `tool-output` 方案）。
-- 不引入 codex 的中间截断。
 - 不增加 DB 迁移或新表。
 - 不增加用户可见配置项；上限是常量。
 - 不修改 `MAX_TOOL_RESULT_REPLAY_BYTES`（64 KiB）或 `MAX_TOOL_RESULT_BYTES`（1 MiB）。
@@ -612,14 +620,7 @@ cargo test
 3. 同时触发字节上限与单行截断：两个提示同时出现，`truncated == true`。
 4. 目录 1800 条、平均路径 40 字符：单次输出 ≤ 50 KiB；`next_offset` 可用；无 `entries_truncated`。
 5. 注入小 `dir_entries` 的目录测试：`entries_truncated == true`，模型文本含 `collection cap; more entries may exist`。
-6. 旧结果 JSON 缺少新字段：`absorb_result_json` / UI 不报错，按 `false` 处理。
-7. 实时与 `/resume` 的 UI 卡片外观完全一致；`cargo test` 全绿；`cargo clippy --all-targets -- -D warnings` 无告警。
-8. 用户运行 `cargo run` 人工确认：read 卡片仍只显示原有内容（路径/状态），没有新增行或新控件。
-9. 全引号/反斜杠文件：50 KiB 预算按 JSON 转义后大小计，落库 JSON <64 KiB，回放层不再截断。
-
-## 10. 已确认的审核点（用户已授权执行）
-
-1. 截断提示的英文措辞是否照 §4.4 执行（这是模型可见文本，不影响 UI）。
-2. `line_truncated` / `entries_truncated` 字段名是否接受；落库 JSON 为纯加法。
-3. 目录收集上限保持 50,000、只把输出降到 50 KiB 是否接受（不在本任务优化收集阶段）。
-4. 是否接受“read 卡片可能更频繁显示 `output limited`”这一数据驱动的副作用；本任务不改展示逻辑。
+6. `web_search` 与 `exec_command` / `write_stdin` 输出受 50 KiB JSON 转义预算 + 2000 行 + 单行 2000 字符约束，`to_result_json` 恒 ≤ 64 KiB。
+7. TUI 工具卡片标题栏与正文不出现 `[truncated]` 或 `output limited`；仅在 `… N more lines` 提示行末尾显示 `… N more lines [truncated]`。
+8. 单体 `read` 卡片标题下方只显示单行路径或单行错误/状态词（超宽尾部 `…` 省略，不软换行、不登记点击面）。
+9. 全量 `cargo fmt --check`、`cargo clippy --all-targets -- -D warnings`、`cargo test` 通过。

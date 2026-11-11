@@ -138,26 +138,43 @@ pub(super) const MAX_OUTPUT_LINE_CHARS: usize = 8 * 1024;
 /// 输出单行取样与控制字符净化（超过上限按字符截断并补 `…`；`\t` 及控制字符转单空格，
 /// 避免 `Grid::put_clipped` 将 0 宽控制字符跳过导致词粘连或与折行列宽失配）。
 ///
-/// 行尾内联的 `…[truncated]` / `[...truncated]` / `[truncated]` 一律剥离，
-/// 截断状态统一由折叠提示行 `… N more lines [truncated]` 承载，不在输出正文重复出现。
+/// 行尾内联的 `…[truncated]` / `[...truncated]` / `[truncated]` 一律剥离 `[truncated]` 标签（保留
+/// 被截断行的末尾 `…`），截断状态统一由折叠提示行 `… N more lines [truncated]` 承载。
 pub(super) fn sample_output_line(line: &str) -> String {
-    let cleaned = line
+    let (cleaned, had_ellipsis) = if let Some(prefix) = line
         .strip_suffix("…[truncated]")
         .or_else(|| line.strip_suffix("[...truncated]"))
-        .or_else(|| line.strip_suffix(text::agent::INLINE_TRUNCATED))
-        .unwrap_or(line);
+    {
+        (prefix, !prefix.is_empty())
+    } else if let Some(prefix) = line.strip_suffix(text::agent::INLINE_TRUNCATED) {
+        (prefix, prefix.ends_with('…'))
+    } else {
+        (line, false)
+    };
     let mut text = String::with_capacity(cleaned.len().min(MAX_OUTPUT_LINE_CHARS + 4));
+    let mut clipped = false;
     for (count, ch) in cleaned.chars().enumerate() {
         if count == MAX_OUTPUT_LINE_CHARS {
             text.push('…');
+            clipped = true;
             break;
         }
         text.push(if ch.is_control() { ' ' } else { ch });
     }
+    if had_ellipsis && !clipped && !text.is_empty() && !text.ends_with('…') {
+        text.push('…');
+    }
     text
 }
 
-/// 将多行原始输出按行做单行长度采样（上限 [`MAX_OUTPUT_LINE_CHARS`]）并剥离末尾空行與独立截断标记行，
+/// 判断是否为输出末尾合成的独立截断/省略标记行（避免与折叠提示行重复）。
+fn is_trailing_omission_marker(line: &str) -> bool {
+    let trimmed = line.trim();
+    matches!(trimmed, "…[truncated]" | "[...truncated]" | "[truncated]")
+        || (trimmed.starts_with("…[") && trimmed.ends_with(" omitted]"))
+}
+
+/// 将多行原始输出按行做单行长度采样（上限 [`MAX_OUTPUT_LINE_CHARS`]）并剥离末尾空行与尾部独立截断标记行，
 /// 供 [`muted_markdown_lines`] 进行有界 Markdown 渲染。
 pub(super) fn sample_markdown_source(raw: &str) -> String {
     if raw.is_empty() {
@@ -166,15 +183,21 @@ pub(super) fn sample_markdown_source(raw: &str) -> String {
     let mut out = Vec::new();
     for line in raw.split('\n') {
         let line = line.trim_end_matches('\r');
-        if matches!(
-            line.trim(),
-            "…[truncated]" | "[...truncated]" | "[truncated]" | "…[output truncated]"
-        ) {
+        let trimmed = line.trim();
+        if matches!(trimmed, "…[truncated]" | "[...truncated]" | "[truncated]") {
+            continue;
+        }
+        if trimmed == "…[output truncated]" {
+            // `rtk::filter_generic` 在前 8 KiB 与后 8 KiB 之间插入的分隔行保留为 `…`，防止首尾残行无分隔粘连。
+            out.push("…".to_string());
             continue;
         }
         out.push(sample_output_line(line));
     }
-    while out.last().is_some_and(String::is_empty) {
+    while out
+        .last()
+        .is_some_and(|line| line.is_empty() || is_trailing_omission_marker(line))
+    {
         out.pop();
     }
     out.join("\n")

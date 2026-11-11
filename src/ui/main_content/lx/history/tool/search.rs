@@ -8,11 +8,11 @@
 //!      … 8 more lines
 //! ```
 //!
-//! - 摘要字段（pattern/scope、命中数、结果级截断）与命中行都走同一套树体；
+//! - 摘要字段（pattern/scope、命中数）与命中行都走同一套树体；
 //! - 命中行就是普通网格文本，历史区的拖拽选区/Ctrl+C 与命令输出同源；
 //! - 合成的行尾 `…[truncated]` 不进入可见行：超长行只由 `line_truncated`
 //!   元数据追加一个 `…`，不伪造成正文；
-//! - 结果级 `truncated` 是**执行事实**，单列节点，不混入预览省略行数。
+//! - 结果级 `truncated` 在折叠提示行末尾追加 `[truncated]`（`… N more lines [truncated]`）。
 
 use ratatui::layout::Rect;
 #[cfg(test)]
@@ -46,10 +46,14 @@ fn hit_line(hit: &crate::app::state::SearchMatchView, expanded: bool) -> Vec<Seg
         .map(str::trim_end)
         .unwrap_or(raw.as_str())
         .to_string();
-    vec![
+    let mut spans = vec![
         Segment::new(format!("{path}:{}: ", hit.line), style::agent_step_detail()),
         Segment::new(body, output_style(expanded)),
-    ]
+    ];
+    if hit.line_truncated {
+        spans.push(Segment::new("…", style::agent_step_detail()));
+    }
+    spans
 }
 
 fn layout(
@@ -263,7 +267,7 @@ mod tests {
         let expanded = text_of(&call, &view, 100, true);
         let header = expanded.lines().next().unwrap_or("");
         assert!(!header.contains(text::agent::SEARCH_TRUNCATED), "{header}");
-        assert!(expanded.contains("src/baz.rs:3: render"), "{expanded}");
+        assert!(expanded.contains("src/baz.rs:3: render…"), "{expanded}");
         assert!(
             !expanded.contains(text::agent::INLINE_TRUNCATED),
             "展开态无 more lines 行时不显示 [truncated]：{expanded}"

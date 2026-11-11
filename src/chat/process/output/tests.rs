@@ -253,4 +253,27 @@ fn bound_model_output_clips_long_lines_and_caps_lines_and_escaped_bytes() {
         "process result_json ({}) must stay within 64 KiB replay cap",
         json.len()
     );
+
+    // 4. 超长 command（如 60 KiB 内联脚本）在 enforce_output_bounds 后不会撑破 64 KiB 回放上限。
+    result.command = "python3 -c ".to_string() + &"x".repeat(60_000);
+    result.enforce_output_bounds();
+    let json_with_long_cmd = serde_json::to_string(&result.to_json()).expect("json");
+    assert!(
+        json_with_long_cmd.len() <= crate::chat::context::MAX_TOOL_RESULT_REPLAY_BYTES,
+        "process result_json with huge command ({}) must stay within 64 KiB replay cap",
+        json_with_long_cmd.len()
+    );
+
+    // 5. 运行中进程（flush=false）超过 2000 行时，read_from 游标停在第 2000 行末尾，后续读取不丢行。
+    let mut running_buf = OutputBuffer::default();
+    let stream: String = (0..2500).map(|i| format!("row-{i}\n")).collect();
+    running_buf.push(OutputSource::Stdout, stream.as_bytes());
+    let first_read = running_buf.read_from(0, MAX_MODEL_OUTPUT_BYTES, false);
+    assert!(first_read.truncated);
+    assert_eq!(first_read.text.lines().count(), MAX_MODEL_OUTPUT_LINES);
+    assert!(first_read.text.ends_with("row-1999\n"));
+    let second_read = running_buf.read_from(first_read.end, MAX_MODEL_OUTPUT_BYTES, false);
+    assert!(!second_read.truncated);
+    assert!(second_read.text.starts_with("row-2000\n"));
+    assert!(second_read.text.ends_with("row-2499\n"));
 }
