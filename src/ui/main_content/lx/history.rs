@@ -28,6 +28,7 @@ use crate::ui::{style, text};
 use super::Grid;
 use super::notice;
 
+mod anchor;
 mod cache;
 mod cards;
 mod compact;
@@ -48,11 +49,12 @@ mod timeline;
 pub(crate) mod tool;
 pub(crate) mod user_shell;
 
+pub(crate) use anchor::{HistoryAnchor, anchor_at, anchor_row};
 pub(crate) use cache::{PaneCache, RenderCache};
 #[cfg(test)]
 pub(crate) use layout::layout;
 pub(super) use paint::{BlockPaint, BlockSource};
-pub(crate) use render::{render, render_source};
+pub(crate) use render::{render, render_source, render_source_ready};
 pub(super) use snapshot::{HistorySnapshot, SnapEntryKind};
 
 pub use timeline::has_history;
@@ -277,8 +279,8 @@ pub struct HistoryView {
     pub scroll: usize,
     /// 渲染出的内容总行数（滚动上限用）。
     pub total_rows: usize,
-    /// 每条消息的行区间。
-    pub messages: Vec<MessageRows>,
+    /// 每条消息的行区间；与快照共享同一份 `Arc`，每次 view 不克隆整表。
+    pub messages: std::sync::Arc<Vec<MessageRows>>,
     /// 要钉的用户消息索引（None = 不画置顶行）。
     pub sticky: Option<usize>,
     /// 本帧要写回状态的新记忆（[`crate::app::state::lx::chat::StickySuppression`]）。
@@ -413,6 +415,11 @@ fn view_source_inner(
         suppressed: None,
     };
     if !allow_sticky {
+        return view;
+    }
+    // ready 快照可能停留在旧会话/旧 rewind 版本，行区间长度与当前消息列表不一致；
+    // 此时不能把两套下标混用，直接不画置顶行（下一次绘制会重建快照）。
+    if view.messages.len() != source.messages.len() {
         return view;
     }
     if total == 0 || full_height < sticky::MIN_HEIGHT || area.width < sticky::MIN_WIDTH {

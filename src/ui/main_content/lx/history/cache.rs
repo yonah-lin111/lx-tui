@@ -107,10 +107,35 @@ struct BlockEntry {
 #[derive(Debug, Default)]
 pub(crate) struct RenderCache {
     frame: u64,
+    /// 本轮输入代：事件循环在 resolve 前 +1，同一轮内列表指纹只算一次。
+    sig_epoch: u64,
+    /// 只有事件循环显式开启；测试默认关闭，保持「改内容就重建」的语义。
+    sig_memo_enabled: bool,
     panes: HashMap<PaneId, PaneCache>,
 }
 
 impl RenderCache {
+    /// 绘制块开始时调用（早于 `resolve_lx_history`）：声明本轮输入已固定。
+    ///
+    /// 不变量：**本轮第一次读取指纹之后**，不得再修改任何进入指纹的状态字段；
+    /// 当前实现里唯一的前置修改是 `flush_subagent_cards`（在 resolve 之前）。
+    /// `tui.draw` 结束后必须调用 [`Self::finish_frame`]，否则 draw 之后到达的
+    /// 鼠标事件会复用上一帧指纹、命中旧几何。
+    pub(crate) fn prepare_frame(&mut self) {
+        self.sig_epoch = self.sig_epoch.wrapping_add(1);
+        self.sig_memo_enabled = true;
+    }
+
+    /// 绘制结束后关闭输入代：之后到达的鼠标/键盘事件必须现算指纹，
+    /// 不能复用上一帧的几何（否则点击会落到旧行）。
+    pub(crate) fn finish_frame(&mut self) {
+        self.sig_memo_enabled = false;
+        for pane in self.panes.values_mut() {
+            pane.sig_memo_enabled = false;
+            pane.sig_memo = None;
+        }
+    }
+
     /// 每帧开始时推进帧号，并按当前窗格数重算各自的字节份额。
     pub(crate) fn begin_frame(&mut self) {
         self.frame = self.frame.wrapping_add(1);
@@ -120,6 +145,8 @@ impl RenderCache {
     /// 取（或创建）指定窗格的缓存；同时把当前帧号写进窗格。
     pub(crate) fn pane(&mut self, id: PaneId) -> &mut PaneCache {
         let frame = self.frame;
+        let sig_epoch = self.sig_epoch;
+        let sig_memo_enabled = self.sig_memo_enabled;
         let created = !self.panes.contains_key(&id);
         if created {
             self.panes.entry(id).or_default();
@@ -128,6 +155,8 @@ impl RenderCache {
         }
         let pane = self.panes.entry(id).or_default();
         pane.frame = frame;
+        pane.sig_epoch = sig_epoch;
+        pane.sig_memo_enabled = sig_memo_enabled;
         pane
     }
 
@@ -145,11 +174,32 @@ impl RenderCache {
         if self.panes.is_empty() {
             return;
         }
-        let per = MAX_CACHED_BYTES / self.panes.len();
+        // `render_panes` 会为终端窗格也取一次 `pane()`；这些窗格没有历史缓存，
+        // 不能稀释真正使用 32MB 的 lx 窗格。每个窗格首次建立快照后，下一次
+        // `begin_frame` 会重新平摊。
+        let active = self
+            .panes
+            .values()
+            .filter(|pane| {
+                pane.snapshot.is_some() || !pane.blocks.is_empty() || !pane.md_streams.is_empty()
+            })
+            .count()
+            .max(1);
+        let per = MAX_CACHED_BYTES / active;
         for pane in self.panes.values_mut() {
             pane.set_limit(per);
         }
     }
+}
+
+/// 同一输入代内的列表指纹记忆（全量与「除流式末条外」各一个槽）。
+#[derive(Debug, Clone, Copy)]
+struct SignatureMemo {
+    epoch: u64,
+    width: u16,
+    owner: usize,
+    full: Option<u64>,
+    non_stream: Option<u64>,
 }
 
 /// 单窗格缓存：一级几何快照 + 二级绘制数据。
@@ -157,6 +207,12 @@ impl RenderCache {
 pub(crate) struct PaneCache {
     /// 本帧帧号（由 [`RenderCache::pane`] 写入）。
     frame: u64,
+    /// 本轮输入代（由 [`RenderCache::pane`] 写入）。
+    sig_epoch: u64,
+    /// 是否允许在输入代内复用指纹；测试默认关闭。
+    sig_memo_enabled: bool,
+    /// 当前输入代的指纹记忆；宽度/数据源变化时重建。
+    sig_memo: Option<SignatureMemo>,
     snapshot: Option<(u64, Arc<HistorySnapshot>)>,
     /// 快照归属的数据源（主历史 / 某个子 agent 详情）。
     ///
@@ -166,7 +222,8 @@ pub(crate) struct PaneCache {
     /// 当前快照的内容宽度（`snapshot` 为 None 时无意义）。
     snapshot_width: Option<u16>,
     /// 构建快照时「除流式末条消息外」的列表指纹（屏幕外节流判定用）。
-    snapshot_non_stream: u64,
+    /// `None` = 构建时贴底/无视口，尚未计算；首次滚离底部后由重建补上。
+    snapshot_non_stream: Option<u64>,
     /// 最近一次快照构建时刻。
     snapshot_at: Option<Instant>,
     /// 历史视口行数（`history::view` 每帧写入；0 = 未知，不做屏幕外节流）。
@@ -175,6 +232,9 @@ pub(crate) struct PaneCache {
     offscreen_coalesce: Duration,
     /// 快照重建次数；仅供测试断言「同一份状态只重建一次」。
     builds: u64,
+    /// 列表指纹实际计算次数；仅供测试断言输入代内只算一次。
+    #[cfg(test)]
+    signature_evaluations: u64,
     blocks: HashMap<BlockSlot, BlockEntry>,
     /// 流式 Markdown 的增量解析状态（按物理槽位，含已固化前缀）。
     md_streams: HashMap<BlockSlot, IncrementalMarkdownState>,
@@ -188,14 +248,19 @@ impl Default for PaneCache {
     fn default() -> Self {
         Self {
             frame: 0,
+            sig_epoch: 0,
+            sig_memo_enabled: false,
+            sig_memo: None,
             snapshot: None,
             snapshot_owner: None,
             snapshot_width: None,
-            snapshot_non_stream: 0,
+            snapshot_non_stream: None,
             snapshot_at: None,
             viewport_rows: 0,
             offscreen_coalesce: OFFSCREEN_STREAM_COALESCE,
             builds: 0,
+            #[cfg(test)]
+            signature_evaluations: 0,
             blocks: HashMap::new(),
             md_streams: HashMap::new(),
             bytes: 0,
@@ -240,10 +305,10 @@ impl PaneCache {
             self.snapshot = None;
             self.snapshot_owner = None;
             self.snapshot_width = None;
-            self.snapshot_non_stream = 0;
+            self.snapshot_non_stream = None;
             self.snapshot_at = None;
         }
-        let signature = list_signature_source(source, width);
+        let signature = self.signature_for(width, source);
         if let Some((cached, snapshot)) = &self.snapshot
             && *cached == signature
         {
@@ -262,7 +327,12 @@ impl PaneCache {
         self.snapshot = Some((signature, Arc::clone(&snapshot)));
         self.snapshot_owner = Some(owner);
         self.snapshot_width = Some(width);
-        self.snapshot_non_stream = non_stream_signature_source(source, width);
+        // 只有「流式末条已整块滚出视口」才需要「除末条外」基线。末条仍可见时
+        // 下一帧必然重建，提前算基线只会白烧一次全量指纹；基线缺失时
+        // `offscreen_stream_throttled` 会先正常重建一次再补上。
+        self.snapshot_non_stream = self
+            .streaming_tail_offscreen(width, source)
+            .then(|| self.non_stream_signature_for(width, source));
         self.snapshot_at = Some(Instant::now());
         self.evict();
         (snapshot, true)
@@ -286,6 +356,23 @@ impl PaneCache {
         self.snapshot_source(width, source)
     }
 
+    /// 只读当前已缓存的同宽度快照，**绝不构建**。
+    ///
+    /// 锚点补偿需要「变化前」的几何：本帧内容已变，但缓存里仍是上一帧的快照。
+    /// 宽度/数据源不匹配时返回 None（resize、切页），调用方跳过补偿。
+    pub(crate) fn snapshot_cached(
+        &self,
+        width: u16,
+        source: super::source::HistorySource<'_>,
+    ) -> Option<Arc<HistorySnapshot>> {
+        if self.snapshot_owner != Some(source.owner()) || self.snapshot_width != Some(width) {
+            return None;
+        }
+        self.snapshot
+            .as_ref()
+            .map(|(_, snapshot)| Arc::clone(snapshot))
+    }
+
     /// 记录历史视口行数（屏幕外流式节流用）。
     pub(crate) fn set_viewport_rows(&mut self, rows: usize) {
         self.viewport_rows = rows;
@@ -297,9 +384,111 @@ impl PaneCache {
         self.offscreen_coalesce = interval;
     }
 
+    /// 同一输入代内复用全量列表指纹；未开启时每次现算。
+    fn signature_for(&mut self, width: u16, source: super::source::HistorySource<'_>) -> u64 {
+        if !self.sig_memo_enabled {
+            #[cfg(test)]
+            {
+                self.signature_evaluations = self.signature_evaluations.saturating_add(1);
+            }
+            return list_signature_source(source, width);
+        }
+        self.ensure_signature_memo(width, source.owner());
+        if let Some(sig) = self.sig_memo.as_ref().and_then(|memo| memo.full) {
+            return sig;
+        }
+        #[cfg(test)]
+        {
+            self.signature_evaluations = self.signature_evaluations.saturating_add(1);
+        }
+        let sig = list_signature_source(source, width);
+        if let Some(memo) = self.sig_memo.as_mut() {
+            memo.full = Some(sig);
+        }
+        sig
+    }
+
+    /// 同一输入代内复用「除流式末条外」指纹（离屏合并判定用）。
+    fn non_stream_signature_for(
+        &mut self,
+        width: u16,
+        source: super::source::HistorySource<'_>,
+    ) -> u64 {
+        if !self.sig_memo_enabled {
+            #[cfg(test)]
+            {
+                self.signature_evaluations = self.signature_evaluations.saturating_add(1);
+            }
+            return non_stream_signature_source(source, width);
+        }
+        self.ensure_signature_memo(width, source.owner());
+        if let Some(sig) = self.sig_memo.as_ref().and_then(|memo| memo.non_stream) {
+            return sig;
+        }
+        #[cfg(test)]
+        {
+            self.signature_evaluations = self.signature_evaluations.saturating_add(1);
+        }
+        let sig = non_stream_signature_source(source, width);
+        if let Some(memo) = self.sig_memo.as_mut() {
+            memo.non_stream = Some(sig);
+        }
+        sig
+    }
+
+    /// 输入代 / 宽度 / 数据源任一变化就换一条空记忆。
+    fn ensure_signature_memo(&mut self, width: u16, owner: usize) {
+        let stale = self.sig_memo.as_ref().is_none_or(|memo| {
+            memo.epoch != self.sig_epoch || memo.width != width || memo.owner != owner
+        });
+        if stale {
+            self.sig_memo = Some(SignatureMemo {
+                epoch: self.sig_epoch,
+                width,
+                owner,
+                full: None,
+                non_stream: None,
+            });
+        }
+    }
+
+    /// 流式末条是否整块位于视口下方：只有这种增量才允许屏幕外合并。
+    fn streaming_tail_offscreen(
+        &self,
+        width: u16,
+        source: super::source::HistorySource<'_>,
+    ) -> bool {
+        if !source.coalesce_offscreen
+            || self.snapshot.is_none()
+            || self.snapshot_width != Some(width)
+        {
+            return false;
+        }
+        let Some(viewport) = source.viewport else {
+            return false;
+        };
+        if viewport.follow_bottom || self.viewport_rows == 0 {
+            return false;
+        }
+        let Some(last) = source.messages.last() else {
+            return false;
+        };
+        if last.status != "streaming" {
+            return false;
+        }
+        let Some((_, snapshot)) = &self.snapshot else {
+            return false;
+        };
+        let Some(rows) = snapshot.messages.last() else {
+            return false;
+        };
+        // 流式消息整块位于视口下方：重排不会改变可见像素。
+        rows.start >= viewport.scroll.saturating_add(self.viewport_rows)
+    }
+
     /// 仅当变化局限在**视口下方**的流式末条消息时才允许合并更新。
     fn offscreen_stream_throttled(
-        &self,
+        &mut self,
         width: u16,
         source: super::source::HistorySource<'_>,
     ) -> bool {
@@ -313,10 +502,7 @@ impl PaneCache {
         {
             return false;
         }
-        let Some((_, snapshot)) = &self.snapshot else {
-            return false;
-        };
-        if self.snapshot_width != Some(width) {
+        if self.snapshot.is_none() || self.snapshot_width != Some(width) {
             return false;
         }
         let Some(built_at) = self.snapshot_at else {
@@ -325,15 +511,15 @@ impl PaneCache {
         if built_at.elapsed() >= self.offscreen_coalesce {
             return false;
         }
-        // 只有流式末条消息变了（未读界面的其他状态一律不合并）。
-        if non_stream_signature_source(source, width) != self.snapshot_non_stream {
+        // 先做最便宜的可见性判断：末条仍在视口内时下一帧必然重建，不计算基线。
+        if !self.streaming_tail_offscreen(width, source) {
             return false;
         }
-        let Some(last) = snapshot.messages.last() else {
+        // 基线未建立（构建时还贴底/末条仍可见）：先正常重建一次，别拿旧几何硬合并。
+        let Some(expected) = self.snapshot_non_stream else {
             return false;
         };
-        // 流式消息整块位于视口下方：重排不会改变可见像素。
-        last.start >= viewport.scroll.saturating_add(self.viewport_rows)
+        self.non_stream_signature_for(width, source) == expected
     }
 
     /// 取块级绘制数据：命中直接复用；未命中调用 `build` 并记账。
@@ -392,6 +578,13 @@ impl PaneCache {
         self.frame = self.frame.wrapping_add(1);
     }
 
+    /// 开启指纹记忆并指定输入代（测试用：模拟事件循环的 `prepare_frame`）。
+    #[cfg(test)]
+    pub(crate) fn set_signature_epoch(&mut self, epoch: u64) {
+        self.sig_epoch = epoch;
+        self.sig_memo_enabled = true;
+    }
+
     /// 标记该块本帧被绘制过（刷新 LRU 时间戳）。
     pub(crate) fn mark_used(&mut self, key: BlockKey) {
         let frame = self.frame;
@@ -431,23 +624,29 @@ impl PaneCache {
     }
 
     /// 超出字节上限时按 `last_frame` 升序淘汰；**本帧画过的块不淘汰**。
+    ///
+    /// 一次收集候选并排序，避免 `while + min_by_key` 每淘汰一块就全表扫一遍。
     fn evict(&mut self) {
-        while self.bytes > self.limit {
-            let frame = self.frame;
-            let victim = self
-                .blocks
-                .iter()
-                .filter(|(_, entry)| entry.last_frame < frame)
-                .min_by_key(|(_, entry)| entry.last_frame)
-                .map(|(key, _)| *key);
-            let Some(victim) = victim else {
+        if self.bytes <= self.limit {
+            return;
+        }
+        let frame = self.frame;
+        let mut victims: Vec<(BlockSlot, u64)> = self
+            .blocks
+            .iter()
+            .filter(|(_, entry)| entry.last_frame < frame)
+            .map(|(slot, entry)| (*slot, entry.last_frame))
+            .collect();
+        victims.sort_unstable_by_key(|(_, last_frame)| *last_frame);
+        for (slot, _) in victims {
+            if self.bytes <= self.limit {
                 break;
-            };
-            if let Some(entry) = self.blocks.remove(&victim) {
+            }
+            if let Some(entry) = self.blocks.remove(&slot) {
                 self.bytes = self.bytes.saturating_sub(entry.bytes);
                 // 增量状态与块同生命周期：块被回收后前缀不再与任何绘制数据共享，
                 // 留着只会白占内存。
-                self.md_streams.remove(&victim);
+                self.md_streams.remove(&slot);
             }
         }
     }
@@ -468,5 +667,11 @@ impl PaneCache {
     #[cfg(test)]
     pub(crate) fn builds(&self) -> u64 {
         self.builds
+    }
+
+    /// 列表指纹实际计算次数（测试断言输入代内只算一次）。
+    #[cfg(test)]
+    pub(crate) fn signature_evaluations(&self) -> u64 {
+        self.signature_evaluations
     }
 }

@@ -3,8 +3,8 @@
 use super::*;
 use crate::app::state::lx::agent::{AgentsState, SubagentRun, seed_chat};
 use crate::app::state::{
-    AssistantStepView, ChatMessageView, SubagentDetailView, ToolCallView, ToolDetailView,
-    ToolStatus,
+    AssistantStepView, ChatMessageView, CommandView, ProcessStateView, SubagentDetailView,
+    ToolCallView, ToolDetailView, ToolStatus,
 };
 use crate::app::update;
 use crate::chat::agent::{AgentRole, SubagentReportView};
@@ -1270,4 +1270,70 @@ fn refresh_subagent_cards_updates_nested_spawn_cards() {
         .expect("nested spawn detail");
     assert_eq!(view.agent_status.as_deref(), Some("running"));
     assert_eq!(view.agent_path.as_deref(), Some("/root/a/c"));
+}
+
+/// 同一终态 call 的迟到 detail 只改 detail，也必须重新量行数。
+#[test]
+fn detail_only_settle_marks_rows_dirty() {
+    let mut state = AppState::demo();
+    let pane = state.active_tab().layout.focus();
+    let mut started = run("sess-a", "sub-a", AgentRole::Explorer);
+    seed_chat(&mut started, key(pane, "sess-a"), "msg-a");
+    {
+        let assistant = started.chat.messages.last_mut().expect("assistant");
+        assistant.steps.push(AssistantStepView::Tool {
+            position: 0,
+            call: ToolCallView::new("call-1", "exec_command", 0),
+        });
+    }
+    assert!(update::on_subagent_started(&mut state, pane, started));
+
+    assert!(update::on_subagent_tool_settled(
+        &mut state,
+        "sess-a",
+        "call-1",
+        ToolStatus::Interrupted,
+        None,
+        None,
+        None,
+        None,
+    ));
+    {
+        let run = &state.pane_anywhere(pane).expect("pane").lx.agents.runs[0];
+        assert!(run.rows_dirty);
+        assert!(matches!(
+            run.chat.messages.last().and_then(|message| message.tool("call-1")),
+            Some(call) if call.status == ToolStatus::Interrupted
+        ));
+    }
+    state.pane_mut_anywhere(pane).expect("pane").lx.agents.runs[0].rows_dirty = false;
+
+    let detail = ToolDetailView::Command(CommandView {
+        process_session_id: None,
+        command: "cargo test".into(),
+        cwd: "/workspace".into(),
+        tty: false,
+        duration_ms: Some(10),
+        state: ProcessStateView::Exited { code: Some(1) },
+        output_preview: Vec::new(),
+        truncated: false,
+        dropped_bytes: 0,
+        output_tail: "line1\nline2\nline3".into(),
+        started_at_ms: Some(0),
+        ended_at_ms: Some(10),
+    });
+    assert!(update::on_subagent_tool_settled(
+        &mut state,
+        "sess-a",
+        "call-1",
+        ToolStatus::Interrupted,
+        None,
+        None,
+        None,
+        Some(detail),
+    ));
+    assert!(
+        state.pane_anywhere(pane).expect("pane").lx.agents.runs[0].rows_dirty,
+        "detail-only 变化也必须置 rows_dirty"
+    );
 }

@@ -679,6 +679,28 @@ fn copy_text_on_code_block_skips_chrome_rows_and_strips_left_bar() {
 }
 
 #[test]
+fn copy_text_uses_ready_snapshot_after_live_content_change() {
+    let area = Rect::new(0, 0, 40, 10);
+    let mut lx = assistant_markdown_lx("old line");
+    let mut cache = PaneCache::default();
+    let mut buf = Buffer::empty(area);
+    render(area, &mut buf, &lx, true, None, &mut cache);
+    let geom = content_geom(area, &lx, &mut cache).expect("geom");
+    let builds = cache.builds();
+    let range = ((0, 0), (0, geom.rect.width.saturating_sub(1)));
+    let before = copy_text(area, &lx, range, &mut cache);
+    assert!(before.contains("old line"), "初始复制：{before:?}");
+
+    let Some(AssistantStepView::Part { part, .. }) = lx.chat.messages[0].steps.first_mut() else {
+        panic!("消息必须含正文步骤");
+    };
+    part.content = "new line".into();
+    let after = copy_text(area, &lx, range, &mut cache);
+    assert_eq!(cache.builds(), builds, "选区复制不得在事件路径重建快照");
+    assert_eq!(after, before, "必须复制屏幕上已画出的旧内容");
+}
+
+#[test]
 fn copy_text_keeps_code_body_when_selection_endpoints_are_left_of_bar() {
     let area = Rect::new(0, 0, 50, 20);
     let lx = assistant_markdown_lx("Intro line\n\n```rust\nfn main() {}\n```\n\nOutro line");

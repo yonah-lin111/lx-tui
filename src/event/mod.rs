@@ -517,6 +517,8 @@ async fn run_loop(
         }
 
         if dirty && last_draw.elapsed() >= FRAME_INTERVAL {
+            // 本轮输入已固定：resolve 与 draw 共用同一份列表指纹（每轮只算一次）。
+            ui_cache.prepare_frame();
             // 同帧内的 delta 只做一次委派卡片对账；视觉延迟最多一帧。
             update::flush_subagent_cards(state);
             // 双击 Esc 选中的最新用户消息：先按几何滚到视口居中，再算置顶/顶部行。
@@ -529,7 +531,10 @@ async fn run_loop(
             update::resolve_ask_list_window(state, &geometry.rects);
             update::resolve_todo_viewport(state, geometry.view.right_panel);
             ui_cache.begin_frame();
-            tui.draw(|frame| ui::render_cached(frame, state, &config, &mut ui_cache))?;
+            let drawn = tui.draw(|frame| ui::render_cached(frame, state, &config, &mut ui_cache));
+            // 绘制结束即关闭指纹记忆：draw 之后到达的鼠标事件必须按最新状态取几何。
+            ui_cache.finish_frame();
+            drawn?;
             dirty = false;
             last_draw = Instant::now();
             // 工具调用 loading 已绘制：推进 pending → running 并回执 ticket，loop 才执行文件 IO。

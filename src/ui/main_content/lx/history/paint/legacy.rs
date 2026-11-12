@@ -161,6 +161,8 @@ pub(super) fn draw_legacy(
             );
         }
         // 静态块的绘制数据自带样式，没有需要回查的动态状态。
-        BlockSource::Plain => {}
+        BlockSource::Attachments { .. }
+        | BlockSource::Stats { .. }
+        | BlockSource::RecapRunning { .. } => {}
     }
 }

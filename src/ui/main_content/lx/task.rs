@@ -841,3 +841,23 @@ pub(super) fn agents_rows(
     let (total, fresh) = agents::detail_rows(rect, run, cache);
     Some((usize::from(rect.height), total, fresh))
 }
+
+/// 详情区变化前的阅读锚点（事件循环在重建快照前调用）。
+pub(super) fn agents_anchor_before(
+    area: Rect,
+    lx: &crate::app::state::Lx,
+    cache: &mut crate::ui::PaneCache,
+    scroll: usize,
+) -> Option<super::history::HistoryAnchor> {
+    agents::anchor_before(area, lx, cache, scroll)
+}
+
+/// 详情区变化后的锚点行（事件循环在重建快照后调用）。
+pub(super) fn agents_anchor_row(
+    area: Rect,
+    lx: &crate::app::state::Lx,
+    cache: &mut crate::ui::PaneCache,
+    anchor: &super::history::HistoryAnchor,
+) -> Option<usize> {
+    agents::anchor_row(area, lx, cache, anchor)
+}

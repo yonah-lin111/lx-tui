@@ -382,6 +382,140 @@ fn state_with_detail(run: SubagentRun) -> (AppState, crate::tiling::PaneId) {
     (state, pane)
 }
 
+/// 详情区上滚阅读后，上方内容变高：滚动偏移按锚点补偿，阅读位置不动。
+#[test]
+fn history_source_owner_is_stable_across_run_reordering() {
+    let first = agent("a", "/root/a", Some("A"), "completed", "first");
+    let owner_before = HistorySource::from_run(&first).owner();
+    let mut agents = AgentsState::default();
+    agents.runs.push(first);
+    agents
+        .runs
+        .push(agent("b", "/root/b", Some("B"), "completed", "second"));
+    agents.sort_runs_tree_order();
+    let first = agents
+        .runs
+        .iter()
+        .find(|run| run.agent_id == "a")
+        .expect("run a");
+    assert_eq!(
+        HistorySource::from_run(first).owner(),
+        owner_before,
+        "run 排序不能改变详情缓存 owner"
+    );
+}
+
+#[test]
+fn agents_detail_anchor_compensates_when_above_grows() {
+    let mut run = detail_run();
+    run.follow = false;
+    run.scroll = 0;
+    let (mut state, pane) = state_with_detail(run);
+    let rect = Rect::new(0, 0, 80, 24);
+    let mut cache = crate::ui::RenderCache::default();
+    update::resolve_task_agents_visible(&mut state, &[(pane, rect)], &mut cache);
+    {
+        let run = &mut state.pane_mut_anywhere(pane).expect("pane").lx.agents.runs[0];
+        run.scroll = 20;
+        run.rows_dirty = true;
+        // 助手正文不折叠：3 行 → 8 行，视口上方净增 5 行。
+        let Some(AssistantStepView::Part { part, .. }) = run.chat.messages[1].steps.first_mut()
+        else {
+            panic!("第二条消息必须是正文步骤");
+        };
+        part.content = "0\n1\n2\n3\n4\n5\n6\n7".into();
+    }
+    update::resolve_task_agents_visible(&mut state, &[(pane, rect)], &mut cache);
+
+    let run = &state.pane_anywhere(pane).expect("pane").lx.agents.runs[0];
+    assert_eq!(run.scroll, 25, "顶部行跟着锚点块下移 5 行");
+    assert!(!run.follow, "补偿不得把阅读态改回跟随");
+}
+
+/// 贴底展开详情卡片：先钉住上一帧顶部行，不把底部内容顶出视野。
+#[test]
+fn resizing_while_reading_does_not_restore_follow() {
+    let mut run = detail_run();
+    run.follow = false;
+    run.scroll = 0;
+    let (mut state, pane) = state_with_detail(run);
+    let narrow = Rect::new(0, 0, 80, 24);
+    let mut cache = crate::ui::RenderCache::default();
+    update::resolve_task_agents_visible(&mut state, &[(pane, narrow)], &mut cache);
+    let max = {
+        let run = &state.pane_anywhere(pane).expect("pane").lx.agents.runs[0];
+        run.total_rows.saturating_sub(run.visible)
+    };
+    {
+        let run = &mut state.pane_mut_anywhere(pane).expect("pane").lx.agents.runs[0];
+        run.scroll = max;
+        run.follow = false;
+        run.rows_dirty = true;
+    }
+
+    // 变宽后总行数/旧 max 变小；不得因 run.scroll 曾等于旧 max 而恢复跟随。
+    let wide = Rect::new(0, 0, 120, 24);
+    update::resolve_task_agents_visible(&mut state, &[(pane, wide)], &mut cache);
+    let run = &state.pane_anywhere(pane).expect("pane").lx.agents.runs[0];
+    assert!(!run.follow, "宽度变化不得把阅读态改回跟随");
+    assert!(
+        run.scroll <= run.total_rows.saturating_sub(run.visible),
+        "scroll 必须钳在新上限内"
+    );
+}
+
+#[test]
+fn toggling_detail_card_while_following_pins_viewport() {
+    let mut run = detail_run();
+    // 让视口下方的用户消息真正可折叠（>5 行）；否则 toggle 是行数不变的 no-op，
+    // 测试即使 pin/补偿坏掉也会通过。
+    let Some(AssistantStepView::Part { part, .. }) = run.chat.messages[58].steps.first_mut() else {
+        panic!("用户消息必须含正文步骤");
+    };
+    part.content = (0..10)
+        .map(|line| format!("line {line}"))
+        .collect::<Vec<_>>()
+        .join("\n");
+    run.follow = true;
+    run.scroll = 0;
+    let (mut state, pane) = state_with_detail(run);
+    let rect = Rect::new(0, 0, 80, 24);
+    let mut cache = crate::ui::RenderCache::default();
+    update::resolve_task_agents_visible(&mut state, &[(pane, rect)], &mut cache);
+    let (total, visible) = {
+        let run = &state.pane_anywhere(pane).expect("pane").lx.agents.runs[0];
+        assert!(run.follow, "初始应贴底");
+        (run.total_rows, run.visible)
+    };
+    assert!(total > visible, "夹具应可滚动");
+
+    assert!(update::toggle_agent_card(
+        &mut state,
+        pane,
+        crate::app::state::CardTarget::UserMessage {
+            message_id: "m58".into(),
+        }
+    ));
+    let pinned = total.saturating_sub(visible);
+    {
+        let run = &state.pane_anywhere(pane).expect("pane").lx.agents.runs[0];
+        assert!(!run.follow, "展开即进入阅读态");
+        assert_eq!(run.scroll, pinned, "钉在展开前的顶部行");
+        assert!(run.rows_dirty);
+    }
+
+    update::resolve_task_agents_visible(&mut state, &[(pane, rect)], &mut cache);
+    let run = &state.pane_anywhere(pane).expect("pane").lx.agents.runs[0];
+    assert!(!run.follow, "补偿不得恢复跟随");
+    assert_eq!(run.scroll, pinned, "展开内容在视口下方，顶部行不动");
+    assert!(
+        run.total_rows > total,
+        "卡片展开必须真的增加行数（{} → {}）",
+        total,
+        run.total_rows
+    );
+}
+
 #[test]
 fn coalesced_measure_keeps_rows_dirty_until_fresh() {
     let mut run = detail_run();

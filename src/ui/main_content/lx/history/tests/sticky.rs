@@ -264,3 +264,109 @@ fn sticky_text_skips_empty_leading_text_part_and_falls_back_on_attachment_only_m
         Some("[Folder]")
     );
 }
+
+#[test]
+fn snapshot_normalizes_legacy_placeholders_for_binary_search() {
+    use crate::chat::agent::{AgentRole, SubagentReportView};
+
+    let mut legacy = message("user", "complete", vec![text_part("legacy")]);
+    legacy.id = "legacy".into();
+    legacy.sequence = 1;
+    legacy.turn_index = 1;
+    legacy.reports = vec![SubagentReportView {
+        agent_id: "agent".into(),
+        nickname: None,
+        title: "task".into(),
+        role: AgentRole::Explorer,
+        status: "completed".into(),
+        files_changed: 0,
+        changed_paths: Vec::new(),
+        duration_ms: None,
+        body: String::new(),
+        delivered_at_ms: 0,
+    }];
+    let mut first = message("user", "complete", vec![text_part("first")]);
+    first.sequence = 0;
+    first.turn_index = 0;
+    let mut last = message("assistant", "complete", vec![text_part("answer")]);
+    last.sequence = 2;
+    last.turn_index = 2;
+    // 连续/末尾占位：真实构建里都是 (0,0)，不是手工排序过的 (2,2)。
+    let mut trailing = message("user", "complete", Vec::new());
+    trailing.id = "legacy-trailing".into();
+    trailing.sequence = 3;
+    trailing.turn_index = 3;
+    trailing.reports = legacy.reports.clone();
+    let lx = lx_with(vec![first, legacy, last, trailing]);
+
+    let mut cache = PaneCache::default();
+    let snapshot = super::super::snapshot::build(30, HistorySource::from(&lx), &mut cache);
+    assert_eq!(
+        snapshot.messages[1].start, snapshot.messages[1].end,
+        "被跳过的旧 wait 行必须保持零行"
+    );
+    assert_eq!(
+        snapshot.messages[1].start, snapshot.messages[0].end,
+        "占位起始行规范化为前一条消息的 end"
+    );
+    assert_eq!(
+        super::super::sticky::message_at(&snapshot.messages, snapshot.messages[0].start),
+        Some((0, 0)),
+        "二分不能把零行占位当成顶行所属消息"
+    );
+    assert_eq!(
+        snapshot.messages[3].start, snapshot.messages[3].end,
+        "末尾占位同样保持零行"
+    );
+    assert_eq!(
+        snapshot.messages[3].start, snapshot.messages[2].end,
+        "末尾占位规范化为最后一条真实消息的 end"
+    );
+    assert_eq!(
+        super::super::sticky::message_at(&snapshot.messages, snapshot.messages[2].start),
+        Some((2, 0)),
+        "末尾占位不得遮住最后一条真实消息"
+    );
+}
+
+#[test]
+fn message_at_skips_zero_row_placeholders() {
+    let rows = vec![
+        MessageRows {
+            start: 0,
+            end: 2,
+            is_user: true,
+        },
+        // 旧 wait 残留：占位零行，不得被当成顶行所属消息。
+        MessageRows {
+            start: 2,
+            end: 2,
+            is_user: false,
+        },
+        MessageRows {
+            start: 2,
+            end: 5,
+            is_user: false,
+        },
+    ];
+    assert_eq!(
+        super::super::sticky::message_at(&rows, 1),
+        Some((0, 1)),
+        "普通消息内偏移"
+    );
+    assert_eq!(
+        super::super::sticky::message_at(&rows, 2),
+        Some((2, 0)),
+        "零行占位跳过，落到下一条消息"
+    );
+    assert_eq!(
+        super::super::sticky::message_at(&rows, 4),
+        Some((2, 2)),
+        "消息末尾行仍属该消息"
+    );
+    assert_eq!(
+        super::super::sticky::message_at(&rows, 5),
+        None,
+        "越过消息区间（空行/呼吸行）不钉"
+    );
+}

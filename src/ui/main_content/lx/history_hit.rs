@@ -50,6 +50,32 @@ pub(super) fn history_view_ready(
     Some(history::view_ready(history_rect, lx, cache))
 }
 
+/// 变化前的阅读锚点：只读上一帧同宽度快照，**不触发重排**。
+pub(crate) fn history_anchor_before(
+    rect: Rect,
+    lx: &Lx,
+    cache: &mut PaneCache,
+    scroll: usize,
+) -> Option<history::HistoryAnchor> {
+    let width = history::content_rect(rect).width;
+    let source = history::HistorySource::from(lx);
+    let snapshot = cache.snapshot_cached(width, source)?;
+    history::anchor_at(&snapshot, scroll, width)
+}
+
+/// 变化后的锚点行：视图刚重建，快照与当前状态同代。
+pub(crate) fn history_anchor_row(
+    rect: Rect,
+    lx: &Lx,
+    cache: &mut PaneCache,
+    anchor: &history::HistoryAnchor,
+) -> Option<usize> {
+    let width = history::content_rect(rect).width;
+    let source = history::HistorySource::from(lx);
+    let snapshot = cache.snapshot_ready_source(width, source);
+    history::anchor_row(&snapshot, source, anchor, width)
+}
+
 /// 把指定消息滚到视口居中所需的顶部行与可滚动上限；内容不足一屏时返回 None。
 ///
 /// 消息块高于视口时按起始行对齐（至少能看到开头）；其余情况上下留白尽量相等，
@@ -169,13 +195,14 @@ pub fn sticky_prompt_jump(area: Rect, lx: &Lx, cache: &mut PaneCache) -> Option<
     if !chat_geometry_is_live(lx) {
         return None;
     }
-    let view = history_view(area, lx, cache)?;
+    // 命中/跳转只认屏幕上已画出的几何，避免在事件回调里用新内容重建。
+    let view = history_view_ready(area, lx, cache)?;
     let message = view.sticky?;
     let start = view.messages.get(message)?.start;
-    // 跳过去后置顶行会让位，按整块 body 钳制。
+    // 跳过去后置顶行会让位，按 body 高度钳制（与滚动上限同口径）。
     let max_top = view
         .total_rows
-        .saturating_sub(usize::from(view.area.height));
+        .saturating_sub(usize::from(view.body.height));
     Some(start.min(max_top))
 }
 
@@ -213,7 +240,8 @@ pub fn chat_hit(
     if !chat_geometry_is_live(lx) {
         return None;
     }
-    let view = history_view(area, lx, cache)?;
+    // 命中只认屏幕上已画出的几何：内容已变但尚未重绘时，不能用新行号解释旧坐标。
+    let view = history_view_ready(area, lx, cache)?;
     // 置顶行（表现层，整区第 0 行整宽）：点击跳回该 prompt。
     if let Some(sticky) = history::sticky_rect(&view)
         && sticky.rect.contains((column, row).into())
@@ -292,7 +320,18 @@ pub(crate) fn code_copy_at_source(
             if rel_col < start_col || rel_col >= end_col {
                 return None;
             }
-            let message = source.messages.get(message_index)?;
+            // ready 快照可能是上一帧/上一会话的几何：message_index 不是稳定身份。
+            // 先用条目 ID 校验/定位当前消息，找不到就拒绝命中，绝不复制另一条消息。
+            let message = source
+                .messages
+                .get(message_index)
+                .filter(|message| entry.id.as_deref().is_none_or(|id| message.id == id))
+                .or_else(|| {
+                    entry
+                        .id
+                        .as_deref()
+                        .and_then(|id| source.messages.iter().find(|message| message.id == id))
+                })?;
             let Some(crate::app::state::AssistantStepView::Part { part, .. }) =
                 message.steps.get(step_index)
             else {
@@ -320,7 +359,7 @@ fn task_agents_code_copy_at(
     let run = page
         .selected_agent_index(&lx.agents)
         .and_then(|index| lx.agents.runs.get(index))?;
-    let source = history::HistorySource::from_chat(&run.chat, &run.compact);
+    let source = history::HistorySource::from_run(run);
     let view = history::view_source_plain_ready(rect, source, cache);
     let visible = usize::from(view.body.height);
     let max = view.total_rows.saturating_sub(visible);
@@ -398,8 +437,25 @@ pub(crate) fn card_at_source(
         })
     };
     let card = clip(region.card_start, region.card_rows, region.card_cols)?;
+    let mut kind = region.kind.clone();
+    // Thinking 是唯一按 message_index 携带目标的卡片；ready 快照的旧下标可能
+    // 已指向另一条消息。用条目 ID 解析当前下标，解析失败就当作未命中。
+    if let history::CardKind::Thinking { message_index, .. } = &mut kind {
+        let entry = snapshot
+            .entries
+            .iter()
+            .find(|entry| content_row >= entry.start && content_row < entry.end)?;
+        let resolved = match entry.id.as_deref() {
+            Some(id) => source
+                .messages
+                .iter()
+                .position(|message| message.id == id)?,
+            None => *message_index,
+        };
+        *message_index = resolved;
+    }
     let hit = history::CardHit {
-        kind: region.kind.clone(),
+        kind,
         card,
         clickable: region.clickable,
     };
@@ -449,7 +505,7 @@ pub(crate) fn task_agents_card_target_at(
     let run = page
         .selected_agent_index(&lx.agents)
         .and_then(|index| lx.agents.runs.get(index))?;
-    let source = history::HistorySource::from_chat(&run.chat, &run.compact);
+    let source = history::HistorySource::from_run(run);
     let view = history::view_source_plain_ready(rect, source, cache);
     let visible = usize::from(view.body.height);
     let max = view.total_rows.saturating_sub(visible);
@@ -471,7 +527,7 @@ pub(crate) fn task_agents_scrollbar(
     let run = page
         .selected_agent_index(&lx.agents)
         .and_then(|index| lx.agents.runs.get(index))?;
-    let source = history::HistorySource::from_chat(&run.chat, &run.compact);
+    let source = history::HistorySource::from_run(run);
     let view = history::view_source_plain_ready(rect, source, cache);
     let visible = usize::from(view.body.height);
     let max = view.total_rows.saturating_sub(visible);

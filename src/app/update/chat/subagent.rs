@@ -230,9 +230,6 @@ pub fn on_subagent_tool_settled(
     let mut changed = run
         .chat
         .settle_tool_result(call_id, status, summary, result_json, error);
-    if changed {
-        run.rows_dirty = true;
-    }
     if let Some(call) = run
         .chat
         .messages
@@ -254,6 +251,9 @@ pub fn on_subagent_tool_settled(
         changed = true;
     }
     if changed {
+        // 终态已结算后迟到的 detail 也会改变卡片行数；任何 changed 都必须重新量行，
+        // 否则 run.total_rows/滚动条/选区仍停在旧几何。
+        run.rows_dirty = true;
         request_subagent_cards_refresh(state, pane);
     }
     changed
@@ -508,8 +508,9 @@ fn ensure_agent_loaded(state: &mut AppState, pane: PaneId, index: usize) {
 
 /// 切换 Agents 详情区某个可折叠块（工具 / 思考 / compact / 汇报）。
 ///
-/// 详情区不参与主历史的视口锚定（它自己的 `run.scroll`/`follow` 由滚动逻辑维护），
-/// 因此这里只改块状态并置 `rows_dirty`，下一帧重新量行数。
+/// 展开/折叠会改变行数：贴底跟随时先按上一帧的 `total_rows - visible` 钉住视口
+/// 并退出跟随，下一轮 `resolve_task_agents_visible` 再按块级锚点补偿；否则展开
+/// 视口内的卡片会把底部内容顶出视野。
 pub fn toggle_agent_card(state: &mut AppState, pane: PaneId, target: CardTarget) -> bool {
     let Some(target_pane) = state.pane_mut_anywhere(pane) else {
         return false;
@@ -612,6 +613,11 @@ pub fn toggle_agent_card(state: &mut AppState, pane: PaneId, target: CardTarget)
         }
     };
     if changed {
+        // 贴底展开：先钉住上一帧的顶部行，下一轮按锚点补偿；否则底部会被顶走。
+        if run.follow && run.visible > 0 {
+            run.scroll = run.total_rows.saturating_sub(run.visible);
+            run.follow = false;
+        }
         run.rows_dirty = true;
         crate::app::update::clear_lx_selection_for(state, pane);
     }

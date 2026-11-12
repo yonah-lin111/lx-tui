@@ -33,11 +33,11 @@ pub(crate) fn draw_detail(
     if rect.width == 0 || rect.height == 0 {
         return 0;
     }
-    let source = HistorySource::from_chat(&run.chat, &run.compact).with_viewport(HistoryViewport {
+    let source = HistorySource::from_run(run).with_viewport(HistoryViewport {
         scroll,
         follow_bottom: run.follow,
     });
-    if run.chat.messages.is_empty() {
+    if !source.has_history() {
         draw_empty_detail(grid, rect, run, loading_frame);
         return 1;
     }
@@ -101,13 +101,65 @@ pub(crate) fn detail_rows(
     if content_width == 0 {
         return (usize::from(rect.height), true);
     }
-    let source = HistorySource::from_chat(&run.chat, &run.compact).with_viewport(HistoryViewport {
+    let source = HistorySource::from_run(run).with_viewport(HistoryViewport {
         scroll: run.scroll,
         follow_bottom: run.follow,
     });
+    // 空/未加载详情只画一行占位；行数口径与 `draw_detail` 的返回值保持一致。
+    if !source.has_history() {
+        return (1, true);
+    }
     // `resolve` 先于绘制，首帧也要有视口行数，离屏合并才能判定。
     cache.set_viewport_rows(usize::from(rect.height));
     history::measure_cached(content_width, source, cache)
+}
+
+/// 详情区变化前的阅读锚点：只读上一帧同宽度快照，不触发重排。
+pub(crate) fn anchor_before(
+    area: Rect,
+    lx: &crate::app::state::Lx,
+    cache: &mut crate::ui::PaneCache,
+    scroll: usize,
+) -> Option<history::HistoryAnchor> {
+    let rect = super::super::layout(area, lx).task_output?;
+    let page = lx.task.as_ref()?;
+    let run = page
+        .selected_agent_index(&lx.agents)
+        .and_then(|index| lx.agents.runs.get(index))?;
+    let width = history::content_rect(rect).width;
+    if width == 0 {
+        return None;
+    }
+    let source = HistorySource::from_run(run).with_viewport(HistoryViewport {
+        scroll: run.scroll,
+        follow_bottom: run.follow,
+    });
+    let snapshot = cache.snapshot_cached(width, source)?;
+    history::anchor_at(&snapshot, scroll, width)
+}
+
+/// 详情区变化后的锚点行；快照刚由 `detail_rows` 重建。
+pub(crate) fn anchor_row(
+    area: Rect,
+    lx: &crate::app::state::Lx,
+    cache: &mut crate::ui::PaneCache,
+    anchor: &history::HistoryAnchor,
+) -> Option<usize> {
+    let rect = super::super::layout(area, lx).task_output?;
+    let page = lx.task.as_ref()?;
+    let run = page
+        .selected_agent_index(&lx.agents)
+        .and_then(|index| lx.agents.runs.get(index))?;
+    let width = history::content_rect(rect).width;
+    if width == 0 {
+        return None;
+    }
+    let source = HistorySource::from_run(run).with_viewport(HistoryViewport {
+        scroll: run.scroll,
+        follow_bottom: run.follow,
+    });
+    let snapshot = cache.snapshot_ready_source(width, source);
+    history::anchor_row(&snapshot, source, anchor, width)
 }
 
 /// 步骤标记文本（`■ `）占用的列数。

@@ -118,29 +118,96 @@ pub(crate) fn resolve_lx_history(
     let mut changed = false;
     for (pane, rect) in rects {
         let inner = crate::tiling::pane_inner_rect(*rect);
-        let resolved = state
+        let Some(history_rect) = state
             .pane_anywhere(*pane)
             .filter(|target| {
                 // 面板打开时历史区被任务输出替换，没人消费 viewport_top / 置顶记忆；
                 // 这里若继续排版，会与 Agents 详情抢同一个 PaneCache 单快照槽。
                 target.view == crate::app::state::PaneView::Lx && target.lx.task.is_none()
             })
-            .and_then(|target| {
-                crate::ui::main_content::lx::history_view(inner, &target.lx, cache.pane(*pane))
-            })
-            .map(|view| (view.scroll, view.suppressed));
-        let Some((scroll, suppressed)) = resolved else {
+            .and_then(|target| crate::ui::main_content::lx::history_rect(inner, &target.lx))
+        else {
             continue;
         };
+        // 变化前锚点：必须在 `history_view` 重建快照之前读上一帧的几何。
+        let base_scroll = state
+            .pane_anywhere(*pane)
+            .map_or(0, |target| target.lx.chat.history_scroll);
+        let anchor = state
+            .pane_anywhere(*pane)
+            .filter(|target| !target.lx.chat.follow_bottom)
+            .and_then(|target| {
+                crate::ui::main_content::lx::history_anchor_before(
+                    history_rect,
+                    &target.lx,
+                    cache.pane(*pane),
+                    base_scroll,
+                )
+            });
+        let Some(mut view) = state.pane_anywhere(*pane).and_then(|target| {
+            crate::ui::main_content::lx::history_view(inner, &target.lx, cache.pane(*pane))
+        }) else {
+            continue;
+        };
+        // 内容变化后补偿：把锚点块的新旧行差加回顶部行，阅读位置不动。
+        // 补偿永不改 `follow_bottom`；只有用户自己滚到底才恢复跟随。
+        if let Some(anchor) = &anchor {
+            let new_row = state.pane_anywhere(*pane).and_then(|target| {
+                crate::ui::main_content::lx::history_anchor_row(
+                    history_rect,
+                    &target.lx,
+                    cache.pane(*pane),
+                    anchor,
+                )
+            });
+            if let Some(new_row) = new_row {
+                let delta = new_row as isize - anchor.row as isize;
+                let max_top = view
+                    .total_rows
+                    .saturating_sub(usize::from(view.body.height));
+                // 基准必须是捕获锚点用的 `history_scroll`，不是可能已被新几何
+                // 钳制过的 `view.scroll`；否则收缩时会把同一个钳制算两次。
+                let next = (base_scroll as isize + delta).clamp(0, max_top as isize) as usize;
+                if next != base_scroll {
+                    if let Some(target) = state.pane_mut_anywhere(*pane) {
+                        target.lx.chat.history_scroll = next;
+                        changed = true;
+                    }
+                    // 置顶行让位可能随新顶部行变化：用同一快照重算一次。
+                    if let Some(updated) = state.pane_anywhere(*pane).and_then(|target| {
+                        crate::ui::main_content::lx::history_view(
+                            inner,
+                            &target.lx,
+                            cache.pane(*pane),
+                        )
+                    }) {
+                        view = updated;
+                    }
+                }
+            }
+        }
         let Some(target) = state.pane_mut_anywhere(*pane) else {
             continue;
         };
-        if target.lx.chat.viewport_top != Some(scroll) {
-            target.lx.chat.viewport_top = Some(scroll);
+        // 几何收缩（resize/锚点条目被删除/置顶行让位）时，视图顶部会被钳到
+        // `total - body.height`；状态必须同步回写，否则后续锚点和滚轮都会以
+        // 越界旧行号为基准，表现为静默贴底或延迟一帧停住。
+        if !target.lx.chat.follow_bottom {
+            let max_top = view
+                .total_rows
+                .saturating_sub(usize::from(view.body.height));
+            let clamped = target.lx.chat.history_scroll.min(max_top);
+            if target.lx.chat.history_scroll != clamped {
+                target.lx.chat.history_scroll = clamped;
+                changed = true;
+            }
+        }
+        if target.lx.chat.viewport_top != Some(view.scroll) {
+            target.lx.chat.viewport_top = Some(view.scroll);
             changed = true;
         }
-        if target.lx.chat.suppressed_prompt_header != suppressed {
-            target.lx.chat.suppressed_prompt_header = suppressed;
+        if target.lx.chat.suppressed_prompt_header != view.suppressed {
+            target.lx.chat.suppressed_prompt_header = view.suppressed;
             changed = true;
         }
     }
@@ -216,7 +283,7 @@ pub(crate) fn resolve_task_agents_visible(
     let mut changed = false;
     for (pane, rect) in rects {
         let inner = crate::tiling::pane_inner_rect(*rect);
-        let Some((needs_measure, visible)) = state
+        let Some((needs_measure, visible, anchor)) = state
             .pane_anywhere(*pane)
             .filter(|target| target.view == crate::app::state::PaneView::Lx)
             .and_then(|target| {
@@ -227,12 +294,20 @@ pub(crate) fn resolve_task_agents_visible(
                 let run = page
                     .selected_agent_index(&target.lx.agents)
                     .and_then(|index| target.lx.agents.runs.get(index))?;
-                Some((
-                    run.rows_dirty || run.total_rows == 0,
-                    usize::from(
-                        crate::ui::main_content::lx::task_output_inner(inner, &target.lx)?.height,
-                    ),
-                ))
+                let needs_measure = run.rows_dirty || run.total_rows == 0;
+                let output = crate::ui::main_content::lx::task_output_inner(inner, &target.lx)?;
+                // 变化前锚点：必须在 `task_agents_rows` 重建快照之前读旧几何。
+                let anchor = if !run.follow && needs_measure {
+                    crate::ui::main_content::lx::task_agents_anchor_before(
+                        inner,
+                        &target.lx,
+                        cache.pane(*pane),
+                        run.scroll,
+                    )
+                } else {
+                    None
+                };
+                Some((needs_measure, usize::from(output.height), anchor))
             })
         else {
             continue;
@@ -251,6 +326,17 @@ pub(crate) fn resolve_task_agents_visible(
         } else {
             None
         };
+        // 新快照里的锚点行：与旧锚点行相减即为阅读位置需要补偿的位移。
+        let anchor_row = anchor.as_ref().and_then(|anchor| {
+            state.pane_anywhere(*pane).and_then(|target| {
+                crate::ui::main_content::lx::task_agents_anchor_row(
+                    inner,
+                    &target.lx,
+                    cache.pane(*pane),
+                    anchor,
+                )
+            })
+        });
         let Some(target) = state.pane_mut_anywhere(*pane) else {
             continue;
         };
@@ -271,12 +357,23 @@ pub(crate) fn resolve_task_agents_visible(
             run.total_rows
         };
         let max = total.saturating_sub(visible);
-        let should_follow = run.follow || total <= visible.saturating_add(1) || run.scroll >= max;
-        let next_scroll = if should_follow {
-            max
-        } else {
-            run.scroll.min(max)
-        };
+        // 只由显式状态决定是否跟随：用户滚到底/点击回到底部会写 `run.follow = true`。
+        // 不能用「scroll 已到旧 max」短路——宽度变化或内容收缩后旧 max 变小，会把
+        // 正在阅读的用户重新吸附到底部；补偿也不应主动恢复跟随。
+        let should_follow = run.follow || total <= visible.saturating_add(1);
+        let mut next_scroll = if should_follow { max } else { run.scroll };
+        // 阅读态且内容在上方变高/变矮：按锚点行差补偿，不把用户顶走。
+        if !should_follow {
+            if let Some(anchor) = anchor.as_ref()
+                && let Some(new_row) = anchor_row
+            {
+                let delta = new_row as isize - anchor.row as isize;
+                next_scroll = (next_scroll as isize + delta).clamp(0, max as isize) as usize;
+            } else {
+                // 锚点缺失（首帧/宽度变化）也要把越界状态钳回，避免留一帧不一致。
+                next_scroll = next_scroll.min(max);
+            }
+        }
         if run.visible != visible
             || run.total_rows != total
             || run.rows_dirty
@@ -417,6 +514,20 @@ fn toggle_report_card(
     agent_id: &str,
     more: bool,
 ) -> bool {
+    let exists = state.pane_anywhere(pane).is_some_and(|target| {
+        target.lx.chat.messages.iter().any(|message| {
+            message.id == message_id
+                && message
+                    .reports
+                    .iter()
+                    .any(|report| report.agent_id == agent_id)
+        })
+    });
+    if !exists {
+        return false;
+    }
+    // 展开/追加批次会改变行数：跟随底部时先钉住用户正在看的顶行。
+    super::pin_lx_viewport(state, pane);
     let Some(target) = state.pane_mut_anywhere(pane) else {
         return false;
     };
@@ -489,6 +600,19 @@ pub fn toggle_lx_card(state: &mut AppState, pane: PaneId, target: CardTarget) ->
         } => toggle_report_card(state, pane, &message_id, &agent_id, more),
         CardTarget::OpenAgent { agent_id } => super::open_agent_page(state, pane, &agent_id),
         CardTarget::UserMessage { message_id } => {
+            let exists = state.pane_anywhere(pane).is_some_and(|target| {
+                target
+                    .lx
+                    .chat
+                    .messages
+                    .iter()
+                    .any(|message| message.id == message_id)
+            });
+            if !exists {
+                return false;
+            }
+            // 长用户消息折叠/展开会改变行数，和工具卡一样先锚定。
+            super::pin_lx_viewport(state, pane);
             let Some(target) = state.pane_mut_anywhere(pane) else {
                 return false;
             };

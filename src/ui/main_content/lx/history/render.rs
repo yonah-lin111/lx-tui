@@ -36,11 +36,37 @@ pub(crate) fn render_source(
     scroll: usize,
     cache: &mut PaneCache,
 ) -> usize {
+    render_source_inner(grid, rect, source, scroll, cache, false)
+}
+
+/// 事件路径（选区复制/探测）使用的就绪渲染：只读已画出的快照，不重建。
+pub(crate) fn render_source_ready(
+    grid: &mut super::Grid,
+    rect: Rect,
+    source: HistorySource<'_>,
+    scroll: usize,
+    cache: &mut PaneCache,
+) -> usize {
+    render_source_inner(grid, rect, source, scroll, cache, true)
+}
+
+fn render_source_inner(
+    grid: &mut super::Grid,
+    rect: Rect,
+    source: HistorySource<'_>,
+    scroll: usize,
+    cache: &mut PaneCache,
+    ready: bool,
+) -> usize {
     if rect.width == 0 || rect.height == 0 {
         return 0;
     }
     let content = content_rect(rect);
-    let snapshot = cache.snapshot_source(content.width, source);
+    let snapshot = if ready {
+        cache.snapshot_ready_source(content.width, source)
+    } else {
+        cache.snapshot_source(content.width, source)
+    };
     let viewport_end = scroll.saturating_add(usize::from(rect.height));
     let mut used: Vec<BlockKey> = Vec::new();
     for entry in &snapshot.entries {

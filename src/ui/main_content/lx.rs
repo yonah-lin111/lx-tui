@@ -50,9 +50,9 @@ pub(crate) mod toast;
 pub(crate) use history::{PaneCache, RenderCache};
 use history_hit::chat_geometry_is_live;
 pub(crate) use history_hit::{
-    LxChatHit, card_target_at, chat_hit, fold_target_at, history_center_target, history_rows,
-    history_scrollbar, history_view, sticky_prompt_jump, task_agents_card_target_at,
-    task_agents_scrollbar,
+    LxChatHit, card_target_at, chat_hit, fold_target_at, history_anchor_before, history_anchor_row,
+    history_center_target, history_rows, history_scrollbar, history_view, sticky_prompt_jump,
+    task_agents_card_target_at, task_agents_scrollbar,
 };
 pub(crate) use slash::{item_at as slash_item_at, layout as slash_layout};
 
@@ -789,6 +789,26 @@ pub fn task_agents_rows(
     cache: &mut PaneCache,
 ) -> Option<(usize, usize, bool)> {
     task::agents_rows(area, lx, cache)
+}
+
+/// Agents 详情区变化前的阅读锚点（只读上一帧快照）。
+pub(crate) fn task_agents_anchor_before(
+    area: Rect,
+    lx: &Lx,
+    cache: &mut PaneCache,
+    scroll: usize,
+) -> Option<history::HistoryAnchor> {
+    task::agents_anchor_before(area, lx, cache, scroll)
+}
+
+/// Agents 详情区变化后的锚点行。
+pub(crate) fn task_agents_anchor_row(
+    area: Rect,
+    lx: &Lx,
+    cache: &mut PaneCache,
+    anchor: &history::HistoryAnchor,
+) -> Option<usize> {
+    task::agents_anchor_row(area, lx, cache, anchor)
 }
 
 /// 后台任务面板 item 列表的滚动条几何；未打开或内容装得下时返回 None。

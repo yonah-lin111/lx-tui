@@ -5,6 +5,15 @@ use crate::app::state::{CardSection, ChatMessageView, ToolCallView, ToolDetailVi
 use super::super::source::HistorySource;
 use super::signature::Fnv;
 
+/// 逐行写入指纹；`write_str` 自带长度前缀，语义与 `join("\n")` 等价，
+/// 但不为每次指纹分配临时 String。
+fn hash_lines(hash: &mut Fnv, lines: &[String]) {
+    hash.write_usize(lines.len());
+    for line in lines {
+        hash.write_str(line);
+    }
+}
+
 pub(super) fn tool_signature(
     hash: &mut Fnv,
     source: HistorySource<'_>,
@@ -61,8 +70,8 @@ pub(super) fn tool_signature(
             hash.write_u8(8);
             hash.write_str(&view.server);
             hash.write_str(&view.tool);
-            hash.write_str(&view.arguments.join("\n"));
-            hash.write_str(&view.result.join("\n"));
+            hash_lines(hash, &view.arguments);
+            hash_lines(hash, &view.result);
             hash.write_usize(view.result_more);
             hash.write_usize(view.arguments_more);
             hash.write_usize(
@@ -240,6 +249,11 @@ pub(super) fn tool_signature(
                             hash.write_usize(hunk.lines.len());
                             for line in &hunk.lines {
                                 hash.write_usize(line.text.len());
+                                // 行数按显示列折行；同字节长度但 ASCII/CJK 宽度不同
+                                // 会改变物理行数，必须进入指纹，不能只哈希字节长度。
+                                hash.write_usize(unicode_width::UnicodeWidthStr::width(
+                                    line.text.as_str(),
+                                ));
                                 hash.write_u8(match line.kind {
                                     crate::chat::tools::DiffLineKind::Context => 0,
                                     crate::chat::tools::DiffLineKind::Added => 1,
