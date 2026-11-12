@@ -876,30 +876,14 @@ pub(super) fn agents_rows(
     Some((usize::from(rect.height), total, fresh))
 }
 
-/// `/btwList` 选择器的点击命中：返回主 QA 下标。
+/// `/btwList` 二级面板的点击命中：返回主 QA 下标。
 pub(super) fn btw_picker_hit(
     area: Rect,
     lx: &crate::app::state::Lx,
     column: u16,
     row: u16,
 ) -> Option<usize> {
-    lx.btw.picking?;
-    let rect = super::layout(area, lx).task_output?;
-    if rect.width == 0 || rect.height < 2 {
-        return None;
-    }
-    let list = Rect::new(
-        rect.x,
-        rect.y.saturating_add(1),
-        rect.width,
-        rect.height.saturating_sub(1),
-    );
-    if !list.contains((column, row).into()) {
-        return None;
-    }
-    let visible = usize::from(list.height);
-    let index = lx.btw.picker_window(visible) + usize::from(row.saturating_sub(list.y));
-    (index < lx.btw.qa.len()).then_some(index)
+    btw::picker_item_at(area, lx, column, row)
 }
 
 /// BTW 对话区的 `(可见行数, 总行数, 快照是否最新)`。

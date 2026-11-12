@@ -7,10 +7,14 @@
 //! - 输入框默认一行（上下边框 + 一行正文），随软换行增长到 3 行；
 //!   `QA n · <主问题>` + `To: <回答者>` 画在输入框顶边框右上角。
 
+use ratatui::buffer::Buffer;
 use ratatui::layout::Rect;
 
 use crate::app::state::{Lx, TaskPage};
 use crate::ui::main_content::lx::history::{self, HistorySource, HistoryViewport};
+use crate::ui::widgets::command_panel::{
+    self, CommandItem, CommandPanelView, PanelLayout, PanelPlacement,
+};
 use crate::ui::{style, text};
 
 use super::super::Grid;
@@ -174,90 +178,158 @@ fn draw_qa_badge(grid: &mut Grid, rect: Rect, lx: &Lx) {
     grid.put(x, rect.y, &badge, style::btw_qa_badge());
 }
 
-/// `/btwList`：主 QA 选择器（标题行 + 列表行）。
+/// `/btwList` 二级面板的锚定区域：整个任务面板上方的对话区。
 ///
-/// 列表项右侧 `● side thread` 表示该主问题已经有旁路对话；当前高亮行用选中样式，
-/// 仅影响文字背景，不改变列表整体宽度。
-fn draw_picker(grid: &mut Grid, rect: Rect, lx: &Lx) -> usize {
-    if rect.width == 0 || rect.height == 0 {
-        return 0;
+/// 与主会话 `/resume` 一样画在输入区域之上：底边贴着任务面板上沿，不盖住 tab 行、
+/// loading 空行和 composer。
+fn picker_region(area: Rect, lx: &Lx) -> Option<(Rect, u16)> {
+    if !lx.is_btw_tab() || !lx.btw.picker_open() {
+        return None;
     }
-    grid.put_clipped(
-        rect.x,
-        rect.y,
-        text::LX_BTW_LIST_TITLE,
-        style::muted(),
-        rect.width,
-    );
-    let list_y = rect.y.saturating_add(1);
-    let visible = usize::from(rect.height.saturating_sub(1));
-    if visible == 0 {
-        return 1;
+    let task = super::super::layout(area, lx).task_list?;
+    let height = task.y.saturating_sub(area.y);
+    if height == 0 || task.width == 0 {
+        return None;
     }
-    if lx.btw.qa.is_empty() {
-        super::draw_placeholder(
-            grid,
-            Rect::new(rect.x, list_y, rect.width, rect.height.saturating_sub(1)),
-            text::LX_BTW_LIST_EMPTY,
-        );
-        return 1;
-    }
-    let selected = lx.btw.picking.unwrap_or(0);
-    let start = lx.btw.picker_window(visible);
-    let mark_w = u16::try_from(unicode_width::UnicodeWidthStr::width(
-        text::LX_BTW_LIST_THREAD_MARK,
-    ))
-    .unwrap_or(14);
-    for (offset, summary) in lx.btw.qa.iter().skip(start).take(visible).enumerate() {
-        let index = start + offset;
-        let y = list_y.saturating_add(u16::try_from(offset).unwrap_or(0));
-        let is_selected = index == selected;
-        let row_style = if is_selected {
-            style::selected_item()
-        } else {
-            style::muted()
-        };
-        // 未选中行不画选择标记，但保持同宽占位。
-        let prefix = if is_selected {
-            format!("{}Q{} ", text::AGENT_SELECTED_MARKER, index + 1)
-        } else {
-            format!("  Q{} ", index + 1)
-        };
-        let prefix_w = u16::try_from(unicode_width::UnicodeWidthStr::width(prefix.as_str()))
-            .unwrap_or(u16::MAX);
-        let has_thread = lx.btw.has_side_thread(summary);
-        let reserve = if has_thread {
-            mark_w.saturating_add(2)
-        } else {
-            0
-        };
-        if prefix_w.saturating_add(reserve) >= rect.width {
-            continue;
-        }
-        let title_room = usize::from(rect.width.saturating_sub(prefix_w).saturating_sub(reserve));
-        grid.put_clipped(rect.x, y, &prefix, row_style, prefix_w);
-        let title = if summary.title.trim().is_empty() {
-            text::LX_BTW_QA_UNTITLED
-        } else {
-            summary.title.as_str()
-        };
-        let title = text::truncate_to_width(title, title_room);
-        grid.put_clipped(
-            rect.x.saturating_add(prefix_w),
-            y,
-            &title,
-            row_style,
-            u16::try_from(title_room).unwrap_or(0),
-        );
-        if has_thread {
-            let x = rect.right().saturating_sub(mark_w);
-            grid.put_clipped(x, y, text::LX_BTW_LIST_THREAD_MARK, style::accent(), mark_w);
-        }
-    }
-    visible.min(lx.btw.qa.len())
+    Some((Rect::new(task.x, area.y, task.width, height), height))
 }
 
-/// 对话区行数：与绘制同源；消息为空时至少 1 行占位。
+/// 二级面板候选文案：空列表时是 loading/空态占位。
+fn picker_labels(lx: &Lx) -> Vec<String> {
+    if lx.btw.qa.is_empty() {
+        let label = if lx.btw.picker_loading {
+            text::LX_BTW_LIST_LOADING
+        } else {
+            text::LX_BTW_LIST_EMPTY
+        };
+        return vec![label.to_string()];
+    }
+    lx.btw
+        .qa
+        .iter()
+        .enumerate()
+        .map(|(index, summary)| {
+            let title = if summary.title.trim().is_empty() {
+                text::LX_BTW_QA_UNTITLED
+            } else {
+                summary.title.as_str()
+            };
+            format!(
+                "QA {} · {}",
+                index + 1,
+                text::chat::single_line_label(title)
+            )
+        })
+        .collect()
+}
+
+/// 二级面板条目：QA 标题 + 右侧旁路线程标记。
+fn picker_items<'a>(lx: &Lx, labels: &'a [String]) -> Vec<CommandItem<'a>> {
+    if lx.btw.qa.is_empty() {
+        return vec![CommandItem::Inline {
+            label: labels.first().map_or("", String::as_str),
+            preview: "",
+            tag: "",
+        }];
+    }
+    lx.btw
+        .qa
+        .iter()
+        .zip(labels.iter())
+        .map(|(summary, label)| CommandItem::Inline {
+            label: label.as_str(),
+            preview: "",
+            tag: if lx.btw.has_side_thread(summary) {
+                text::LX_BTW_LIST_THREAD_MARK
+            } else {
+                ""
+            },
+        })
+        .collect()
+}
+
+/// 当前旁路线程挂载的 QA 在列表中的下标（蓝色 `❯` 标记）。
+fn picker_current(lx: &Lx) -> Option<usize> {
+    let active = lx.btw.active.as_deref()?;
+    lx.btw.qa.iter().position(|summary| summary.qa_id == active)
+}
+
+/// 复用 `/` 命令面板的边框/标题/底栏与窗口滚动，观感对齐主会话 `/resume`。
+fn picker_view<'a>(
+    lx: &Lx,
+    items: &'a [CommandItem<'a>],
+    width: u16,
+    anchor_row: u16,
+) -> CommandPanelView<'a> {
+    let placeholder = lx.btw.qa.is_empty();
+    let active = lx.btw.picking.unwrap_or(0);
+    let cap = anchor_row.min(
+        super::super::mention::MAX_POPUP_ROWS
+            .saturating_add(super::super::mention::PANEL_BORDER_ROWS)
+            .saturating_add(super::super::mention::PANEL_FOOTER_ROWS),
+    );
+    CommandPanelView {
+        items,
+        active,
+        current: if placeholder {
+            None
+        } else {
+            picker_current(lx)
+        },
+        window_anchor: Some(active),
+        window_start: None,
+        anchor_row,
+        max_height: Some(cap),
+        fixed_height: false,
+        title: Some(text::LX_BTW_LIST_PANEL_TITLE),
+        tabs: None,
+        right_title: None,
+        footer: Some(text::LX_BTW_LIST_PANEL_FOOTER),
+        width: Some(width),
+        placement: PanelPlacement::Above,
+        borderless: true,
+        hide_active_marker: placeholder,
+        disabled: None,
+    }
+}
+
+/// `/btwList` 二级面板几何；供绘制与鼠标命中复用。
+pub(crate) fn picker_layout(area: Rect, lx: &Lx) -> Option<PanelLayout> {
+    let (panel_area, anchor_row) = picker_region(area, lx)?;
+    let labels = picker_labels(lx);
+    let items = picker_items(lx, &labels);
+    command_panel::layout(
+        panel_area,
+        &picker_view(lx, &items, panel_area.width, anchor_row),
+    )
+}
+
+/// `/btwList` 二级面板命中：返回主 QA 下标；占位行不可选。
+pub(crate) fn picker_item_at(area: Rect, lx: &Lx, column: u16, row: u16) -> Option<usize> {
+    if lx.btw.qa.is_empty() {
+        return None;
+    }
+    let layout = picker_layout(area, lx)?;
+    let labels = picker_labels(lx);
+    let items = picker_items(lx, &labels);
+    command_panel::item_at(&layout, &items, column, row)
+}
+
+/// 绘制 `/btwList` 二级面板（画在任务面板上方，晚于对话区）。
+pub(crate) fn render_picker(area: Rect, buf: &mut Buffer, lx: &Lx) {
+    let Some((panel_area, anchor_row)) = picker_region(area, lx) else {
+        return;
+    };
+    let labels = picker_labels(lx);
+    let items = picker_items(lx, &labels);
+    command_panel::render(
+        panel_area,
+        buf,
+        &picker_view(lx, &items, panel_area.width, anchor_row),
+    );
+}
+
+/// 对话区行数：与绘制同源；消息为空时至少 1 行占位。/// 对话区行数：与绘制同源；消息为空时至少 1 行占位。
 pub(crate) fn detail_rows(
     rect: Rect,
     thread: &crate::app::state::lx::BtwThreadState,
@@ -288,9 +360,6 @@ pub(crate) fn draw_conversation(
 ) -> usize {
     if rect.width == 0 || rect.height == 0 {
         return 0;
-    }
-    if lx.btw.picking.is_some() {
-        return draw_picker(grid, rect, lx);
     }
     let Some(thread) = lx.btw.active_thread() else {
         super::draw_placeholder(grid, rect, text::LX_BTW_EMPTY_THREAD);

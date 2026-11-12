@@ -1137,3 +1137,57 @@ fn btw_composer_slash_panel_is_anchored_to_the_composer() {
     assert_eq!(panel.rect.bottom(), input.y, "面板紧贴 composer 上沿");
     assert!(panel.rect.height >= 1);
 }
+
+#[test]
+fn btw_picker_is_a_second_level_panel_above_the_task_panel() {
+    use crate::app::state::lx::btw::BtwQaSummary;
+
+    let mut lx = Lx::new();
+    lx.task = Some(TaskPage {
+        tab: TaskTab::Btw,
+        ..Default::default()
+    });
+    lx.btw.qa = vec![
+        BtwQaSummary {
+            qa_id: "qa-1".into(),
+            title: "first".into(),
+            has_thread: true,
+            status: "idle".into(),
+        },
+        BtwQaSummary {
+            qa_id: "qa-2".into(),
+            title: "second".into(),
+            has_thread: false,
+            status: "idle".into(),
+        },
+    ];
+    lx.btw.active = Some("qa-1".into());
+    lx.btw.picking = Some(1);
+
+    let area = Rect::new(0, 0, 80, 30);
+    let task = super::super::layout(area, &lx)
+        .task_list
+        .expect("task panel");
+    let panel = super::btw::picker_layout(area, &lx).expect("picker panel");
+    assert_eq!(panel.rect.bottom(), task.y, "二级面板贴在任务面板上沿");
+    assert_eq!(panel.rect.width, task.width);
+    assert_eq!(
+        super::btw::picker_item_at(area, &lx, panel.content.x + 1, panel.content.y),
+        Some(0)
+    );
+    assert_eq!(
+        super::btw::picker_item_at(area, &lx, panel.content.x + 1, panel.content.y + 1),
+        Some(1)
+    );
+
+    // loading 占位：面板存在，但占位行不可点选。
+    lx.btw.qa.clear();
+    lx.btw.picking = None;
+    lx.btw.pending_pick = true;
+    lx.btw.picker_loading = true;
+    let loading = super::btw::picker_layout(area, &lx).expect("loading panel");
+    assert_eq!(loading.rect.bottom(), task.y);
+    assert!(
+        super::btw::picker_item_at(area, &lx, loading.content.x + 1, loading.content.y).is_none()
+    );
+}

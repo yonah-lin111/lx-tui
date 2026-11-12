@@ -24,6 +24,9 @@ pub fn on_qa_list_loaded(
         return false;
     }
     target.lx.btw.qa = qa;
+    target.lx.btw.picker_loading = false;
+    // 列表到达前可能已经显示 loading 占位面板；空列表也应保留面板让用户看到空态。
+    let picker_open = target.lx.btw.picker_open();
     if target.lx.btw.active.is_none()
         && let Some(last) = target.lx.btw.qa.last()
     {
@@ -32,13 +35,16 @@ pub fn on_qa_list_loaded(
     }
     if target.lx.btw.qa.is_empty() {
         target.lx.btw.pending_prompt = false;
-        target.lx.btw.pending_pick = false;
+        target.lx.btw.picking = None;
+        target.lx.btw.pending_pick = picker_open;
         show_lx_hint(state, pane, InputHintLevel::Warning, text::LX_BTW_NO_QA);
         return true;
     }
     if target.lx.btw.pending_pick {
-        target.lx.btw.pending_pick = false;
         target.lx.btw.open_picker();
+    } else if let Some(index) = target.lx.btw.picking {
+        // 列表刷新后可能变短：把高亮钳回有效范围。
+        target.lx.btw.picking = Some(index.min(target.lx.btw.qa.len() - 1));
     }
     let qa_id = target
         .lx

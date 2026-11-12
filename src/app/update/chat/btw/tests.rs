@@ -143,6 +143,73 @@ fn non_empty_btw_composer_arrows_move_the_cursor() {
 }
 
 #[test]
+fn empty_btw_composer_up_returns_to_main_session() {
+    let (mut state, pane) = btw_pane();
+    assert!(state.pane_anywhere(pane).expect("pane").lx.task.is_some());
+    assert!(apply_input(&mut state, pane, LxInput::Up));
+    assert!(
+        state.pane_anywhere(pane).expect("pane").lx.task.is_none(),
+        "空输入框 ↑ 应关闭后台面板，回到主会话"
+    );
+}
+
+#[test]
+fn non_empty_btw_composer_up_keeps_the_panel() {
+    let (mut state, pane) = btw_pane();
+    state
+        .pane_mut_anywhere(pane)
+        .expect("pane")
+        .lx
+        .btw
+        .active_composer_mut()
+        .expect("composer")
+        .insert_char('x');
+    let _ = apply_input(&mut state, pane, LxInput::Up);
+    assert!(
+        state.pane_anywhere(pane).expect("pane").lx.task.is_some(),
+        "有草稿时 ↑ 仍属于编辑器，不应关闭面板"
+    );
+}
+
+#[test]
+fn btw_list_panel_stays_open_while_loading_and_for_an_empty_list() {
+    let (mut state, pane) = btw_pane();
+    {
+        let btw = &mut state.pane_mut_anywhere(pane).expect("pane").lx.btw;
+        btw.qa.clear();
+        btw.picking = None;
+        btw.pending_pick = false;
+    }
+
+    // 列表未到达：面板先以 loading 占位打开，并独占键盘。
+    assert!(open_btw_list(&mut state, pane));
+    let btw = &state.pane_anywhere(pane).expect("pane").lx.btw;
+    assert!(btw.pending_pick);
+    assert!(btw.picker_loading);
+    assert!(btw.picker_open());
+    assert!(btw.picking.is_none());
+
+    assert!(apply_input(&mut state, pane, LxInput::Escape));
+    assert!(
+        !state
+            .pane_anywhere(pane)
+            .expect("pane")
+            .lx
+            .btw
+            .picker_open()
+    );
+
+    // 空列表到达：保留空态面板，而不是关掉面板或退回草稿。
+    assert!(open_btw_list(&mut state, pane));
+    assert!(on_qa_list_loaded(&mut state, pane, "sess-test", Vec::new(),));
+    let btw = &state.pane_anywhere(pane).expect("pane").lx.btw;
+    assert!(btw.picker_open());
+    assert!(btw.pending_pick);
+    assert!(!btw.picker_loading, "空列表到达后应显示空态而不是 loading");
+    assert!(btw.picking.is_none());
+}
+
+#[test]
 fn btw_loading_frames_advance_while_running() {
     let (mut state, pane) = btw_pane();
     let before = {

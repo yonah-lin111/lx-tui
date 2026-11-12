@@ -36,8 +36,12 @@ pub const LX_BTW_TARGETS_RESET: &str = "BTW targets reset to lx";
 pub const LX_BTW_TARGETS_PREFIX: &str = "To: ";
 /// 主问题标题为空时的占位。
 pub const LX_BTW_QA_UNTITLED: &str = "(untitled question)";
-/// `/btwList` 选择器的标题行。
-pub const LX_BTW_LIST_TITLE: &str = "Side questions · ↑↓ select · ↵ switch · esc close";
+/// `/btwList` 二级面板标题（对齐 `/resume` 的 Resume 面板）。
+pub const LX_BTW_LIST_PANEL_TITLE: &str = "Side questions";
+/// `/btwList` 二级面板底边键位提示。
+pub const LX_BTW_LIST_PANEL_FOOTER: &str = "↑↓ select · ↵ switch · esc close";
+/// `/btwList` 二级面板等待 QA 列表时的占位。
+pub const LX_BTW_LIST_LOADING: &str = "Loading main questions...";
 /// `/btwList` 选择器没有 QA 时的占位。
 pub const LX_BTW_LIST_EMPTY: &str = "No main questions yet";
 /// `/btwList` 选择器里标记"该主问题已有旁路对话"。

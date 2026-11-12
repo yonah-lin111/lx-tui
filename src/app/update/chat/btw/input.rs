@@ -19,7 +19,7 @@ pub fn apply_input(
         return false;
     };
     // QA 选择器优先：打开期间独占键盘（↑↓/Enter/Esc），不许落进草稿。
-    if target.lx.btw.picking.is_some() {
+    if target.lx.btw.picker_open() {
         return apply_picker_input(state, pane, command);
     }
     let focus = target.lx.btw.focus;
@@ -87,6 +87,18 @@ pub fn apply_input(
     });
     if panel_open {
         return apply_composer_panel_input(state, pane, command);
+    }
+    // 空草稿 ↑：退出后台面板，回到主会话输入框（对齐 Processes/Agents 列表到顶的行为）。
+    if focus == BtwFocus::Composer
+        && command == crate::app::actions::LxInput::Up
+        && target
+            .lx
+            .btw
+            .active_composer()
+            .is_some_and(|composer| composer.input.trim().is_empty())
+    {
+        super::super::task_page::close_task_page(state, pane);
+        return true;
     }
     match command {
         LxInput::Escape => {

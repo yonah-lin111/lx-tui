@@ -69,6 +69,9 @@ pub fn close_task_page(state: &mut AppState, pane: PaneId) -> bool {
     };
     let closed = target.lx.task.take().is_some();
     if closed {
+        // 面板整体关闭时，挂在 BTW composer 上的 `/btwList` 二级面板也一并收起，
+        // 避免下次打开任务页时弹出一个过期的选择器。
+        target.lx.btw.close_picker();
         target.lx.chat.viewport_top = None;
         target.lx.chat.suppressed_prompt_header = None;
         // 清掉拖拽抓取标记：面板没了还留着 grab，会让后续**所有**拖拽事件

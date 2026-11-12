@@ -142,6 +142,8 @@ pub fn render(
     render_paste_panel(area, buf, lx);
     refer::render(area, buf, lx);
     render_slash_panel(area, buf, lx);
+    // `/btwList` 的二级面板画在任务面板上方，与主会话 `/resume` 同一套命令面板观感。
+    task::btw::render_picker(area, buf, lx);
     // 本页 toast 最后画：盖住历史、输入框与上述所有浮层，但**只在窗格内容区内**。
     // 全局 toast 覆盖层不再承载 lx 反馈（见 `app::state::Lx::toast`）。
     let toast_box = lx

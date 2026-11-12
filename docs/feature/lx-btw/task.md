@@ -380,7 +380,7 @@ cargo clippy --all-targets -- -D warnings
 
 - `/btwList` 只属于 BTW 页签，**不进入主会话**的 `/` 命令面板：在 BTW 输入框输入 `/` 会打开 BTW 自己的命令面板（当前只有 `/btwList`）。
 - 键盘 `↑↓` 选择、`Enter`/`Tab` 采纳、`Esc` 关闭；鼠标点条目直接执行。
-- 选择器画在上方对话区：标题行 + `Q<n> 标题`，右侧 `● side thread` 表示该主问题已有旁路对话；`↑↓` 环绕移动，`Enter`/`Tab` 切换，`Esc` 关闭，鼠标点行直接切换。
+- 选择器最初画在对话区（标题行 + `Q<n> 标题`）；第四轮升级为输入区域上方的二级命令面板，行文案 `QA n · 标题`，右侧 `● side thread` 表示已有旁路对话（见 §15.1）。`↑↓` 环绕移动，`Enter`/`Tab` 切换，`Esc` 关闭，鼠标点行直接切换。
 - 切换后按新 QA 加载线程历史，各自保留独立草稿；未加载过的 QA 首次进入仍是空线程。
 
 ### 13.3 `@` 面板打开后无法退格
@@ -420,5 +420,30 @@ cargo clippy --all-targets -- -D warnings
 
 ```text
 cargo test --lib                                                  # 5251 passed
+cargo clippy --all-targets -- -D warnings
+```
+
+## 15. `/btwList` 二级命令面板与空输入框 ↑ 返回（2026-11-12 第四轮）
+
+### 15.1 二级命令面板
+
+- 删除对话区内的临时标题 + 列表；`/btwList` 现在复用 `ui::widgets::command_panel`，像主会话 `/resume`（别名 `/session`）一样画在输入区域上方。
+- 锚点取 BTW 任务面板上沿（`layout.task_list.y`）：底边贴住任务面板，不覆盖 tab 行、loading 空行、composer 与 QA 胶囊；宽度与任务面板一致。
+- 标题 `Side questions`、底栏 `↑↓ select · ↵ switch · esc close`、无边框 + 顶部蓝线，与 `/resume` 同源。
+- 行文案 `QA n · 标题`；右侧 `[● side thread]` 标记已有旁路；当前线程挂载的 QA 用蓝色 `❯`，选择项用普通 `❯`。
+- loading/空态：`picker_loading` 为真时显示 `Loading main questions...`；空列表到达后保留面板显示 `No main questions yet`；占位行不可点选，Esc 关闭。
+- 鼠标命中改走 `command_panel::item_at`，仍由 `select_btw_qa` 切换；在 BTW 页签内优先于卡片折叠命中。
+- 状态语义：`pending_pick` = 面板已打开但 QA 列表尚未应用；`picker_loading` = 列表请求在途；`close_picker` 同时清理两者。
+- 关闭整个任务页时同步关闭选择器，避免再次打开任务页时弹出过期面板。
+
+### 15.2 空输入框 ↑ 返回主会话
+
+- composer 为空（trim 后）且没有浮层时，`↑` 调用 `close_task_page` 关闭后台面板，回到主会话输入框；与 Processes/Agents 列表到顶的行为一致。
+- picker 与 `/` 面板先接管 `↑`；有草稿时仍走编辑器光标，不受影响。
+
+### 15.3 验证
+
+```text
+cargo test --lib                                                  # 5255 passed
 cargo clippy --all-targets -- -D warnings
 ```

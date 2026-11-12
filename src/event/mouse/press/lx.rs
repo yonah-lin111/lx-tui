@@ -256,7 +256,7 @@ pub(super) fn handle_lx_pane_mouse_down_left(
         // `/btwList` 选择器优先：点行直接切换 QA，其余区域吞掉。
         if state
             .pane_anywhere(pane)
-            .is_some_and(|target| target.lx.btw.picking.is_some())
+            .is_some_and(|target| target.lx.btw.picker_open())
         {
             let picked = state.pane_anywhere(pane).and_then(|target| {
                 ui::main_content::lx::task_btw_picker_hit(

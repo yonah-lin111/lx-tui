@@ -209,14 +209,15 @@ pub struct LxBtw {
     /// 当前显示的 QA 锚点 ID。
     pub active: Option<String>,
     pub focus: BtwFocus,
-    /// QA 列表的窗口起点（超过可见行时滚动）。
-    pub qa_window: usize,
     /// `/btw prompt` 暂存：QA 列表到达后立即提交一次（避免普通草稿被误发）。
     pub pending_prompt: bool,
     /// `/btwList` 选择器：当前高亮的 QA 下标（`None` 表示未打开）。
     pub picking: Option<usize>,
-    /// `/btwList` 在 QA 列表尚未到达时暂存，到达后自动打开选择器。
+    /// `/btwList` 面板已打开但 QA 列表尚未应用（列表到达前兼作 loading 占位；
+    /// 空列表时保留空态面板）。
     pub pending_pick: bool,
+    /// `/btwList` 的 QA 列表请求在途（面板显示 loading 占位）。
+    pub picker_loading: bool,
 }
 
 impl LxBtw {
@@ -275,12 +276,21 @@ impl LxBtw {
             .and_then(|qa_id| self.qa.iter().position(|summary| summary.qa_id == qa_id))
             .unwrap_or(self.qa.len() - 1);
         self.picking = Some(index.min(self.qa.len() - 1));
+        self.pending_pick = false;
         true
+    }
+
+    /// 选择器是否打开（已有列表，或列表仍在加载/为空时保留占位面板）。
+    pub fn picker_open(&self) -> bool {
+        self.picking.is_some() || self.pending_pick
     }
 
     /// 关闭选择器。
     pub fn close_picker(&mut self) -> bool {
-        self.picking.take().is_some()
+        let was_open = self.picking.take().is_some() || self.pending_pick;
+        self.pending_pick = false;
+        self.picker_loading = false;
+        was_open
     }
 
     /// 选择器上下移动（自动环绕）。
@@ -307,14 +317,6 @@ impl LxBtw {
         self.picking.and_then(|index| self.qa.get(index))
     }
 
-    /// 选择器列表的窗口起点：保证高亮行在 `visible` 行内。
-    pub fn picker_window(&self, visible: usize) -> usize {
-        let selected = self.picking.unwrap_or(0);
-        let visible = visible.max(1);
-        let start = selected.saturating_sub(visible - 1);
-        start.min(self.qa.len().saturating_sub(visible))
-    }
-
     /// 该 QA 是否已有旁路对话：DB 标记，或本进程已加载到消息/线程。
     pub fn has_side_thread(&self, summary: &BtwQaSummary) -> bool {
         summary.has_thread
@@ -338,10 +340,10 @@ impl LxBtw {
         self.qa.clear();
         self.active = None;
         self.focus = BtwFocus::Composer;
-        self.qa_window = 0;
         self.pending_prompt = false;
         self.picking = None;
         self.pending_pick = false;
+        self.picker_loading = false;
     }
 
     /// 按 child session 找到线程（事件回投用）。

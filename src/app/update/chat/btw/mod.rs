@@ -93,7 +93,9 @@ pub fn open_btw_list(state: &mut AppState, pane: PaneId) -> bool {
     let Some(target) = state.pane_mut_anywhere(pane) else {
         return false;
     };
+    target.lx.btw.picker_loading = true;
     if target.lx.btw.qa.is_empty() {
+        // 列表还没到：先立起二级面板的 loading 占位，拿到列表后再换成候选。
         target.lx.btw.pending_pick = true;
     } else {
         target.lx.btw.open_picker();
@@ -125,7 +127,6 @@ pub(super) fn switch_qa(state: &mut AppState, pane: PaneId, qa_id: &str) -> bool
     };
     target.lx.btw.select_qa(qa_id);
     target.lx.btw.close_picker();
-    target.lx.btw.pending_pick = false;
     target.lx.btw.focus = BtwFocus::Composer;
     state.effects.push(Effect::Btw(BtwEffect::LoadThread {
         pane,

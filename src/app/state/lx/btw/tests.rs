@@ -154,20 +154,3 @@ fn picker_moves_wraps_and_marks_threads() {
     assert!(lx.btw.close_picker());
     assert!(!lx.btw.close_picker());
 }
-
-#[test]
-fn picker_window_keeps_the_selection_visible() {
-    let mut lx = Lx::new();
-    lx.btw.qa = (0..10)
-        .map(|index| BtwQaSummary {
-            qa_id: format!("qa-{index}"),
-            title: format!("q{index}"),
-            has_thread: false,
-            status: "idle".into(),
-        })
-        .collect();
-    lx.btw.picking = Some(9);
-    assert_eq!(lx.btw.picker_window(3), 7);
-    lx.btw.picking = Some(1);
-    assert_eq!(lx.btw.picker_window(3), 0);
-}
