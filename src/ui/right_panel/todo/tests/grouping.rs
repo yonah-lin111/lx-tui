@@ -227,6 +227,112 @@ fn group_priority_picks_highest_and_breaks_ties_by_first_member() {
 }
 
 #[test]
+fn clicking_group_badge_cycles_and_selects_badge_owner() {
+    let mut state = AppState::demo();
+    let area = panel(44);
+    let today = state.todo.today_date().to_string();
+    state.todo.replace(vec![
+        TodoRecord::new_on(&today, "owner", TodoStatus::Todo, TodoPriority::P0, 0)
+            .with_group_id(Some("g".into())),
+        TodoRecord::new_on(&today, "anchor", TodoStatus::Todo, TodoPriority::P1, 1)
+            .with_group_id(Some("g".into())),
+        TodoRecord::new_on(&today, "tail", TodoStatus::Todo, TodoPriority::P2, 2)
+            .with_group_id(Some("g".into())),
+    ]);
+    let list = list_rect(area);
+    let px = row_priority_x(list);
+    // 3 条组锚点在中间行；徽标归属组内最高 P0 的 display 0。
+    let owner = priority_at(area, &state, px, list.y + 1).expect("badge hit");
+    assert_eq!(owner, 0, "组徽标归属最高优先级条目");
+    assert!(crate::app::update::click_todo_priority(&mut state, owner));
+    assert_eq!(
+        state.todo.items()[0].priority,
+        TodoPriority::P1,
+        "点击徽标必须循环徽标归属条目，而不是锚点自身"
+    );
+    assert_eq!(
+        state.todo.items()[1].priority,
+        TodoPriority::P1,
+        "锚点条目不得被误改"
+    );
+    assert_eq!(state.todo.selected(), Some(0), "点击后选中徽标归属条目");
+}
+
+#[test]
+fn clicking_group_badge_with_ghost_commits_then_updates_owner() {
+    let mut state = AppState::demo();
+    let area = panel(44);
+    let today = state.todo.today_date().to_string();
+    state.todo.replace(vec![
+        TodoRecord::new_on(&today, "first", TodoStatus::Todo, TodoPriority::P0, 0)
+            .with_group_id(Some("g".into())),
+        TodoRecord::new_on(&today, "second", TodoStatus::Todo, TodoPriority::P1, 1)
+            .with_group_id(Some("g".into())),
+    ]);
+    assert!(crate::app::update::begin_todo_edit(
+        &mut state,
+        crate::app::state::TodoEditTarget::After(0)
+    ));
+    let list = list_rect(area);
+    let px = row_priority_x(list);
+    // 显示序列 [first, ghost, second]：锚点落在 ghost（row 1），但徽标归属 first。
+    let owner = priority_at(area, &state, px, list.y + 1).expect("ghost anchor badge hit");
+    assert_eq!(owner, 0);
+    assert!(crate::app::update::click_todo_priority(&mut state, owner));
+    assert!(state.todo.editing().is_none(), "点击徽标必须先提交幽灵行");
+    assert_eq!(state.todo.items()[0].priority, TodoPriority::P1);
+    assert_eq!(state.todo.selected(), Some(0));
+}
+
+#[test]
+fn group_priority_handles_n_gt_3_with_highest_at_last() {
+    let mut state = AppState::demo();
+    let today = state.todo.today_date().to_string();
+    state.todo.replace(vec![
+        TodoRecord::new_on(&today, "a", TodoStatus::Todo, TodoPriority::P2, 0)
+            .with_group_id(Some("g".into())),
+        TodoRecord::new_on(&today, "b", TodoStatus::Todo, TodoPriority::P3, 1)
+            .with_group_id(Some("g".into())),
+        TodoRecord::new_on(&today, "c", TodoStatus::Todo, TodoPriority::P1, 2)
+            .with_group_id(Some("g".into())),
+        TodoRecord::new_on(&today, "d", TodoStatus::Todo, TodoPriority::P0, 3)
+            .with_group_id(Some("g".into())),
+    ]);
+    let badge = item::group_priority(&state, 1, None, 4).expect("group badge");
+    assert_eq!(
+        (badge.display, badge.priority),
+        (3, TodoPriority::P0),
+        "4 条组的最高优先级在末位时也必须归属末位成员"
+    );
+
+    // 组尾幽灵行（After(last)）只占槽位，不参与比较。
+    assert!(crate::app::update::begin_todo_edit(
+        &mut state,
+        crate::app::state::TodoEditTarget::After(3)
+    ));
+    let badge = item::group_priority(&state, 2, Some(4), 5).expect("group badge");
+    assert_eq!(
+        (badge.display, badge.priority),
+        (3, TodoPriority::P0),
+        "组尾幽灵行不得改变徽标归属"
+    );
+}
+
+#[test]
+fn grouped_narrow_panel_renders_without_panic() {
+    let mut state = AppState::demo();
+    let area = Rect::new(0, 0, 12, 10);
+    let today = state.todo.today_date().to_string();
+    state.todo.replace(vec![
+        TodoRecord::new_on(&today, "alpha", TodoStatus::Todo, TodoPriority::P1, 0)
+            .with_group_id(Some("g".into())),
+        TodoRecord::new_on(&today, "beta", TodoStatus::Todo, TodoPriority::P2, 1)
+            .with_group_id(Some("g".into())),
+    ]);
+    let _ = render_panel(&state, area);
+}
+
+#[test]
 fn dragging_source_row_suppresses_hover_selection_background() {
     let mut state = AppState::demo();
     let area = panel(44);

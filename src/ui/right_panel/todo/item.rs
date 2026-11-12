@@ -409,7 +409,10 @@ fn render_item(
         }
     }
     let grouped = row.role.is_grouped();
-    if row.role.is_status_anchor() {
+    // 独立新建幽灵行没有可归属的真实条目，P1 徽标是不可点击的死控件；组内幽灵行
+    // 仍作为组锚点显示组级徽标（点击可循环组内最高优先级条目）。
+    let standalone_ghost = !grouped && row.edit.is_some_and(|edit| edit.target.is_none());
+    if row.role.is_status_anchor() && !standalone_ghost {
         render_priority_badge(
             buf,
             list,

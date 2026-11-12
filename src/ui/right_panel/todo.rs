@@ -437,6 +437,10 @@ pub fn row_at(panel: Rect, state: &AppState, column: u16, row: u16) -> Option<us
 /// 只有状态锚点子项（独立单条或聚合组 `offset == (count - 1) / 2`）的首行承载状态框。
 pub fn status_at(panel: Rect, state: &AppState, column: u16, row: u16) -> Option<usize> {
     let visible = layout_visible_items(panel, state);
+    // 窄面板下状态框列可能落到列表右缘之外；必须先钳在列表内，避免滚条/边框列误命中。
+    if !visible.list.contains((column, row).into()) {
+        return None;
+    }
     let sx = row_status_x(visible.list);
     if column < sx || column >= sx.saturating_add(STATUS_WIDTH) {
         return None;
