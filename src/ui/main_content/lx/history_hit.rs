@@ -200,6 +200,10 @@ pub fn chat_hit(
     row: u16,
     cache: &mut PaneCache,
 ) -> Option<LxChatHit> {
+    // BTW 页签的对话区不是主历史：不允许命中主历史的置顶/回到底部/复制按钮。
+    if lx.is_btw_tab() {
+        return None;
+    }
     // 输入框上方聊天栏右端的「回到底部」控件：**必须先于**历史几何判定——后台任务
     // 面板打开时历史没画（`chat_geometry_is_live` 为 false），但这一行上的按钮是活的。
     if let Some(rect) = chat_bar::jump_bottom_rect(area, lx)

@@ -99,3 +99,23 @@ fn composer_gets_scan_root_and_finished_subagent_candidates() {
     let root = composer.mention().root().map(|path| path.to_path_buf());
     assert_eq!(root, Some("/ws".into()));
 }
+
+#[test]
+fn typing_at_in_the_composer_opens_the_mention_panel() {
+    let mut lx = Lx::new();
+    lx.btw.ensure_thread("qa-1");
+    lx.task = Some(crate::app::state::TaskPage {
+        tab: crate::app::state::TaskTab::Btw,
+        ..Default::default()
+    });
+    let root = std::env::temp_dir();
+    lx.sync_btw_composer_context(Some(root.clone()), None);
+
+    let opened = lx.with_active_editor(|composer| {
+        composer.insert_char('@');
+        composer.mention_open() || composer.mention_visible()
+    });
+    assert!(opened, "composer 输入 `@` 必须打开提及面板");
+    let request = lx.with_active_editor(|composer| composer.take_mention_scan_request());
+    assert_eq!(request.map(|(_, scan_root)| scan_root), Some(root));
+}
