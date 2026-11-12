@@ -208,19 +208,21 @@ pub fn chat_hit(
     row: u16,
     cache: &mut PaneCache,
 ) -> Option<LxChatHit> {
-    // BTW 页签的对话区不是主历史：不允许命中主历史的置顶/回到底部/复制按钮。
-    if lx.is_btw_tab() {
-        return None;
-    }
     // 输入框上方聊天栏右端的「回到底部」控件：**必须先于**历史几何判定——后台任务
     // 面板打开时历史没画（`chat_geometry_is_live` 为 false），但这一行上的按钮是活的。
+    // BTW 的对话区虽然不能命中主历史，但同样要允许点这个按钮。
     if let Some(rect) = chat_bar::jump_bottom_rect(area, lx)
         && rect.contains((column, row).into())
     {
         return Some(LxChatHit::JumpBottom);
     }
-    if let Some(code) = task_agents_code_copy_at(area, lx, column, row, cache) {
+    // 后台详情区（Agents / BTW）的代码块复制按钮：两者各自使用自己的历史源。
+    if let Some(code) = task_detail_code_copy_at(area, lx, column, row, cache) {
         return Some(LxChatHit::CopyCode(code));
+    }
+    // BTW 页签的对话区不是主历史：不允许再命中主历史的置顶/复制按钮。
+    if lx.is_btw_tab() {
+        return None;
     }
     if !chat_geometry_is_live(lx) {
         return None;
@@ -317,7 +319,7 @@ pub(crate) fn code_copy_at_source(
 }
 
 /// Agents 详情区指针下的代码块 `[❐]` 复制按钮。
-fn task_agents_code_copy_at(
+fn task_detail_code_copy_at(
     area: Rect,
     lx: &Lx,
     column: u16,
@@ -325,18 +327,32 @@ fn task_agents_code_copy_at(
     cache: &mut PaneCache,
 ) -> Option<String> {
     let page = lx.task.as_ref()?;
-    if page.tab != crate::app::state::TaskTab::Agents {
-        return None;
-    }
     let rect = task::task_output_rect(area, lx)?;
-    let run = page
-        .selected_agent_index(&lx.agents)
-        .and_then(|index| lx.agents.runs.get(index))?;
-    let source = history::HistorySource::from_chat(&run.chat, &run.compact);
+    let (source, scroll, follow) = match page.tab {
+        crate::app::state::TaskTab::Agents => {
+            let run = page
+                .selected_agent_index(&lx.agents)
+                .and_then(|index| lx.agents.runs.get(index))?;
+            (
+                history::HistorySource::from_chat(&run.chat, &run.compact),
+                run.scroll,
+                run.follow,
+            )
+        }
+        crate::app::state::TaskTab::Btw => {
+            let thread = lx.btw.active_thread()?;
+            (
+                history::HistorySource::from_chat(&thread.chat, &thread.compact),
+                thread.scroll,
+                thread.follow,
+            )
+        }
+        _ => return None,
+    };
     let view = history::view_source_plain_ready(rect, source, cache);
     let visible = usize::from(view.body.height);
     let max = view.total_rows.saturating_sub(visible);
-    let top = if run.follow { max } else { run.scroll.min(max) };
+    let top = if follow { max } else { scroll.min(max) };
     code_copy_at_source(view.body, top, source, column, row, cache)
 }
 
@@ -513,6 +529,29 @@ pub(crate) fn task_agents_scrollbar(
     let visible = usize::from(view.body.height);
     let max = view.total_rows.saturating_sub(visible);
     let top = if run.follow { max } else { run.scroll.min(max) };
+    history::scrollbar(view.body, view.total_rows, visible, top)
+}
+
+/// BTW 对话区的滚动条几何（与 Agents 详情同款：贴右缘、拖拽/轨道点击共用）。
+pub(crate) fn task_btw_scrollbar(
+    area: Rect,
+    lx: &Lx,
+    cache: &mut PaneCache,
+) -> Option<scrollbar::ScrollbarLayout> {
+    if !lx.is_btw_tab() {
+        return None;
+    }
+    let rect = task::task_output_rect(area, lx)?;
+    let thread = lx.btw.active_thread()?;
+    let source = history::HistorySource::from_chat(&thread.chat, &thread.compact);
+    let view = history::view_source_plain_ready(rect, source, cache);
+    let visible = usize::from(view.body.height);
+    let max = view.total_rows.saturating_sub(visible);
+    let top = if thread.follow {
+        max
+    } else {
+        thread.scroll.min(max)
+    };
     history::scrollbar(view.body, view.total_rows, visible, top)
 }
 

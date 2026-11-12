@@ -97,6 +97,7 @@ fn clear_active_gestures(state: &mut AppState) {
     state.task_scroll_drag = None;
     state.task_list_scroll_drag = None;
     state.task_agents_scroll_drag = None;
+    state.task_btw_scroll_drag = None;
     state.referenced_search_scroll_drag = None;
     state.referenced_menu_scroll_drag = None;
     state.connect_scroll_drag = None;

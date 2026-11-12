@@ -1047,7 +1047,9 @@ fn btw_loading_sits_on_the_gap_row_not_the_composer_border() {
         ..Default::default()
     });
     lx.btw.ensure_thread("qa-1");
-    lx.btw.active_thread_mut().expect("thread").pending_submit = Some(("prompt".into(), 1));
+    let thread = lx.btw.active_thread_mut().expect("thread");
+    thread.loaded = true;
+    thread.pending_submit = Some(("prompt".into(), 1));
 
     let panel = Rect::new(0, 0, 80, task_panel_height(&lx));
     let list = list_rect(panel);
@@ -1189,5 +1191,87 @@ fn btw_picker_is_a_second_level_panel_above_the_task_panel() {
     assert_eq!(loading.rect.bottom(), task.y);
     assert!(
         super::btw::picker_item_at(area, &lx, loading.content.x + 1, loading.content.y).is_none()
+    );
+}
+
+#[test]
+fn btw_history_loading_uses_the_bottom_gap_row_only() {
+    let mut lx = Lx::new();
+    lx.task = Some(TaskPage {
+        tab: TaskTab::Btw,
+        ..Default::default()
+    });
+    lx.btw.ensure_thread("qa-1");
+    // ensure_thread 默认未加载，正是切换 QA 后等待历史的窗口。
+    assert!(!lx.btw.active_thread().expect("thread").loaded);
+
+    let area = Rect::new(0, 0, 80, 24);
+    let panel = super::super::layout(area, &lx)
+        .task_list
+        .expect("task panel");
+    let list = list_rect(panel);
+    let mut grid = super::super::grid::Grid::new(area);
+    let _ = super::btw::draw_bottom(&mut grid, list, &lx, lx.task.as_ref().expect("task"));
+    let gap_row: String = (list.x..list.right())
+        .map(|x| grid.cell(x, list.y).ch)
+        .collect();
+    assert!(
+        gap_row.contains(crate::ui::text::LX_BTW_THREAD_LOADING),
+        "线程历史 loading 应画在 tab 与输入框之间的空行: {gap_row:?}"
+    );
+
+    // 对话区不再出现居中的同一个 loading。
+    let output = super::super::layout(area, &lx).task_output.expect("output");
+    let mut grid = super::super::grid::Grid::new(output);
+    let mut cache = crate::ui::main_content::lx::PaneCache::default();
+    super::btw::draw_conversation(&mut grid, output, &lx, &mut cache);
+    let text: String = (output.y..output.bottom())
+        .map(|y| {
+            (output.x..output.right())
+                .map(|x| grid.cell(x, y).ch)
+                .collect::<String>()
+        })
+        .collect::<Vec<_>>()
+        .join("\n");
+    assert!(
+        !text.contains(crate::ui::text::LX_BTW_THREAD_LOADING),
+        "对话区不应再画居中 loading: {text:?}"
+    );
+}
+
+#[test]
+fn btw_scrollbar_and_jump_button_follow_the_active_thread() {
+    let mut lx = Lx::new();
+    lx.task = Some(TaskPage {
+        tab: TaskTab::Btw,
+        ..Default::default()
+    });
+    lx.btw.ensure_thread("qa-1");
+    let thread = lx.btw.active_thread_mut().expect("thread");
+    thread.loaded = true;
+    thread.chat.messages.push(text_message(
+        "m-1",
+        "assistant",
+        &"overflow line\n".repeat(40),
+    ));
+    thread.rows_dirty = true;
+    thread.follow = false;
+    thread.scroll = 0;
+
+    let area = Rect::new(0, 0, 80, 24);
+    let mut cache = crate::ui::main_content::lx::PaneCache::default();
+    let bar = crate::ui::main_content::lx::task_btw_scrollbar(area, &lx, &mut cache)
+        .expect("overflowing BTW thread should expose a scrollbar");
+    assert!(bar.total > bar.visible);
+
+    let page = lx.task.as_ref().expect("task");
+    assert!(!page.is_at_bottom(&lx), "上翻后不应视为触底");
+    assert!(super::super::chat_bar::visible(&lx), "应显示回到底部按钮");
+
+    lx.btw.active_thread_mut().expect("thread").follow = true;
+    assert!(page.is_at_bottom(&lx), "follow 时应视为触底");
+    assert!(
+        !super::super::chat_bar::visible(&lx),
+        "触底后回到底部按钮应消失"
     );
 }

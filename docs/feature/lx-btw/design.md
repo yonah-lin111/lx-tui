@@ -658,3 +658,11 @@ BTW 系统规则放 `chat/prompt/` 的专用常量/构造函数，由 `chat::pro
 6. input、焦点、selection、候选、speaker 的渲染行数和命中同源。
 
 本次仅完成设计与任务文档。下列动作必须在用户明确批准整份文档后执行：生产实现、库结构迁移、真实开发库升级。数据迁移先在副本上验证，再按项目规范关闭 lx 进程并保留备份；不进行任何未经授权的 Git 提交、暂存或分支操作。
+
+## 15. 第五轮交互落地（2026-11-12）
+
+- **视图模型**：BTW 页签只显示当前选中的单个 QA 线程；`/btwList` 是唯一的 QA 切换入口。取消“全部 BTW / QA 分割线 / 全量线程加载”方案。
+- **loading**：线程历史加载与生成 loading 统一落在 tab 行与 composer 之间的底部空行；对话区不再画居中 loading。`/btwList` 面板自己的列表 loading 留在二级面板内部。
+- **回到底部**：BTW 复用主会话 chat bar 的 `↓ jump to bottom`，由活动线程的 `follow`/滚动偏移判定显示；点击恢复贴尾。
+- **交互**：BTW 对话与 Agents 详情对齐——滚轮 3 行/格、滚动条 thumb 拖拽/轨道点击、`↑↓` 1 行、`PgUp/PgDn` 10 行、正文选区与复制、代码块复制按钮、卡片折叠。
+- **实现归属**：滚动状态仍在 `BtwThreadState`；几何/命中在 `task_btw_scrollbar`、`scroll_btw_detail`、`set_task_btw_scroll` 与 `render_chunk` 的 Btw 分支；不引入跨 QA 的合成历史源。

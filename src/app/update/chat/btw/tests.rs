@@ -1,6 +1,6 @@
 use super::*;
 use crate::app::actions::LxInput;
-use crate::app::state::lx::btw::BtwQaSummary;
+use crate::app::state::lx::btw::{BtwFocus, BtwQaSummary};
 use crate::app::state::{AppState, PaneView, TaskPage, TaskTab};
 
 fn btw_pane() -> (AppState, PaneId) {
@@ -270,4 +270,101 @@ fn backspace_removes_the_at_trigger_while_the_mention_panel_is_open() {
         .expect("composer");
     assert_eq!(composer.input, "", "退格必须能删掉触发用 `@`");
     assert!(!composer.mention_visible(), "删除后提及面板应关闭");
+}
+
+#[test]
+fn btw_wheel_scroll_and_scrollbar_clamp_to_the_thread() {
+    let (mut state, pane) = btw_pane();
+    {
+        let thread = state
+            .pane_mut_anywhere(pane)
+            .expect("pane")
+            .lx
+            .btw
+            .active_thread_mut()
+            .expect("thread");
+        thread.visible = 5;
+        thread.total_rows = 20;
+        thread.follow = true;
+        thread.scroll = 15;
+    }
+
+    assert!(scroll_btw_detail(&mut state, pane, -3));
+    let thread = state
+        .pane_anywhere(pane)
+        .expect("pane")
+        .lx
+        .btw
+        .active_thread()
+        .expect("thread");
+    assert_eq!(thread.scroll, 12);
+    assert!(!thread.follow, "上翻后必须离开贴尾状态");
+
+    assert!(scroll_btw_detail(&mut state, pane, 3));
+    let thread = state
+        .pane_anywhere(pane)
+        .expect("pane")
+        .lx
+        .btw
+        .active_thread()
+        .expect("thread");
+    assert_eq!(thread.scroll, 15);
+    assert!(thread.follow);
+    assert!(!scroll_btw_detail(&mut state, pane, 3), "已在底部无变化");
+
+    assert!(set_task_btw_scroll(&mut state, pane, 7));
+    let thread = state
+        .pane_anywhere(pane)
+        .expect("pane")
+        .lx
+        .btw
+        .active_thread()
+        .expect("thread");
+    assert_eq!(thread.scroll, 7);
+    assert!(!thread.follow);
+
+    assert!(set_task_btw_scroll(&mut state, pane, usize::MAX));
+    let thread = state
+        .pane_anywhere(pane)
+        .expect("pane")
+        .lx
+        .btw
+        .active_thread()
+        .expect("thread");
+    assert_eq!(thread.scroll, 15, "滚动条拖到底应钳到最大偏移");
+    assert!(thread.follow);
+    assert!(!set_task_btw_scroll(&mut state, pane, usize::MAX));
+
+    // 对话区聚焦时 PgUp/PgDn 与 Agents 详情同口径翻 10 行。
+    {
+        let target = state.pane_mut_anywhere(pane).expect("pane");
+        target.lx.btw.focus = BtwFocus::Conversation;
+        let thread = target.lx.btw.active_thread_mut().expect("thread");
+        thread.scroll = 10;
+        thread.follow = false;
+    }
+    assert!(apply_input(&mut state, pane, LxInput::PageDown));
+    assert_eq!(
+        state
+            .pane_anywhere(pane)
+            .expect("pane")
+            .lx
+            .btw
+            .active_thread()
+            .expect("thread")
+            .scroll,
+        15
+    );
+    assert!(apply_input(&mut state, pane, LxInput::PageUp));
+    assert_eq!(
+        state
+            .pane_anywhere(pane)
+            .expect("pane")
+            .lx
+            .btw
+            .active_thread()
+            .expect("thread")
+            .scroll,
+        5
+    );
 }

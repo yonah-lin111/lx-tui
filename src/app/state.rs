@@ -298,6 +298,8 @@ pub struct AppState {
     pub task_list_scroll_drag: Option<(PaneId, u16)>,
     /// 拖拽 Agents 详情滚动条 thumb：窗格与相对顶部的抓取偏移。
     pub task_agents_scroll_drag: Option<(PaneId, u16)>,
+    /// 拖拽 BTW 对话区滚动条 thumb：窗格与相对顶部的抓取偏移。
+    pub task_btw_scroll_drag: Option<(PaneId, u16)>,
     /// prompt 树行最近一次左键点击（可见行索引、时刻）；双击判定用。
     pub prompt_row_click: Option<(usize, Instant)>,
     /// prompt 页列表行最近一次左键点击（可见行索引、时刻）；双击判定用。
@@ -497,6 +499,7 @@ impl AppState {
             task_scroll_drag: None,
             task_list_scroll_drag: None,
             task_agents_scroll_drag: None,
+            task_btw_scroll_drag: None,
             prompt_row_click: None,
             page_row_click: None,
             referenced_menu_click: None,

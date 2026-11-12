@@ -115,6 +115,61 @@ pub fn select_btw_qa(state: &mut AppState, pane: PaneId, index: usize) -> bool {
     switch_qa(state, pane, &qa_id)
 }
 
+/// 滚轮滚动当前 BTW 线程的对话区（与 Agents 详情同一套贴尾/脱离跟随语义）。
+pub fn scroll_btw_detail(state: &mut AppState, pane: PaneId, delta: isize) -> bool {
+    let Some(target) = state.pane_mut_anywhere(pane) else {
+        return false;
+    };
+    if !target.lx.is_btw_tab() {
+        return false;
+    }
+    let Some(thread) = target.lx.btw.active_thread_mut() else {
+        return false;
+    };
+    let visible = thread.visible.max(1);
+    let max = thread.total_rows.saturating_sub(visible);
+    let current = if thread.follow {
+        max
+    } else {
+        thread.scroll.min(max)
+    };
+    let mut next = (current as isize)
+        .saturating_add(delta)
+        .clamp(0, max as isize) as usize;
+    // 向下滚到最后一屏附近直接贴尾，避免差一行永远回不到 follow。
+    if delta > 0 && next.saturating_add(1) >= max {
+        next = max;
+    }
+    let next_follow = next >= max;
+    let moved = next != current || thread.follow != next_follow;
+    if !moved {
+        return false;
+    }
+    thread.scroll = next;
+    thread.follow = next_follow;
+    true
+}
+
+/// 直接设置 BTW 对话区顶部行（滚动条点击/拖拽）；语义与 Agents 详情一致。
+pub fn set_task_btw_scroll(state: &mut AppState, pane: PaneId, offset: usize) -> bool {
+    let Some(target) = state.pane_mut_anywhere(pane) else {
+        return false;
+    };
+    if !target.lx.is_btw_tab() {
+        return false;
+    }
+    let Some(thread) = target.lx.btw.active_thread_mut() else {
+        return false;
+    };
+    let max = thread.total_rows.saturating_sub(thread.visible.max(1));
+    let clamped = offset.min(max);
+    let before = thread.scroll;
+    let was_following = thread.follow;
+    thread.scroll = clamped;
+    thread.follow = clamped >= max;
+    before != clamped || was_following != thread.follow
+}
+
 pub(super) fn switch_qa(state: &mut AppState, pane: PaneId, qa_id: &str) -> bool {
     let Some(parent_session_id) = state
         .pane_anywhere(pane)

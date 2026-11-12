@@ -405,6 +405,7 @@ pub fn cycle_task_tab(state: &mut AppState, pane: PaneId, delta: isize) -> bool 
         state.task_scroll_drag = None;
         state.task_list_scroll_drag = None;
         state.task_agents_scroll_drag = None;
+        state.task_btw_scroll_drag = None;
         clamp_agents_window(state, pane);
         ensure_selected_agent_loaded(state, pane);
         crate::app::update::clear_lx_selection_for(state, pane);

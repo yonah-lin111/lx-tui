@@ -383,7 +383,8 @@ impl LxBtw {
     pub fn advance_loading_frames(&mut self) -> bool {
         let mut running = false;
         for thread in self.threads.values_mut() {
-            if thread.is_loading() {
+            // `!loaded` 也是等待状态：线程历史还在读库，底部 loading 同样要动。
+            if thread.is_loading() || !thread.loaded {
                 thread.chat.loading_frame = thread.chat.loading_frame.wrapping_add(1);
                 running = true;
             }

@@ -379,6 +379,8 @@ pub(crate) fn press_content_hit(
     }
     let raw_card = if in_table {
         None
+    } else if lx.is_btw_tab() {
+        super::history_hit::task_btw_card_target_at(area, lx, column, row, cache)
     } else if lx.task.is_some() {
         super::task_agents_card_target_at(area, lx, column, row, cache)
     } else {
@@ -396,23 +398,6 @@ pub(crate) fn press_content_hit(
         _ => true,
     });
     Some((content_row, content_col, card))
-}
-
-/// BTW 对话区的按下命中：只解析折叠目标，不建立正文选区（旁路区不支持拖拽选词）。
-pub(crate) fn press_btw_content_hit(
-    area: Rect,
-    lx: &Lx,
-    column: u16,
-    row: u16,
-    cache: &mut PaneCache,
-) -> Option<Option<crate::app::state::CardTarget>> {
-    let geom = content_geom(area, lx, cache)?;
-    if !geom.contains(column, row) {
-        return None;
-    }
-    Some(super::history_hit::task_btw_card_target_at(
-        area, lx, column, row, cache,
-    ))
 }
 
 /// 按选区粒度（单字 / 词 / 行）在主内容区计算 `cell` 所在词或行的列闭区间。
@@ -727,6 +712,21 @@ fn render_chunk(
                 );
                 history::render_source(grid, body_rect, source, chunk_start, cache);
             }
+        } else if page.tab == TaskTab::Btw {
+            let Some(thread) = lx.btw.active_thread() else {
+                return;
+            };
+            if thread.chat.messages.is_empty() {
+                return;
+            }
+            let source = history::HistorySource::from_chat(&thread.chat, &thread.compact);
+            let body_rect = Rect::new(
+                0,
+                0,
+                chunk_rect.width.saturating_add(history::SCROLLBAR_COLUMNS),
+                chunk_rect.height,
+            );
+            history::render_source(grid, body_rect, source, chunk_start, cache);
         } else {
             task::draw_output_rows(grid, chunk_rect, page, chunk_start);
         }

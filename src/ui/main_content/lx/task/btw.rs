@@ -43,14 +43,24 @@ pub(crate) fn draw_bottom(
         return None;
     };
     let thread = lx.btw.active_thread()?;
-    // 输入框与 tab 之间固定留一行：loading 落在**底部容器**左上角，而不是输入框上沿。
-    if composer.y > inner.y && thread.is_loading() {
-        super::super::chat_bar::draw_inline_loading(
-            grid,
-            Rect::new(inner.x, inner.y, inner.width, 1),
-            thread.chat.loading_frame,
-            loading_label(thread),
-        );
+    // 输入框与 tab 之间固定留一行：所有 BTW loading（线程历史加载、生成回答）
+    // 都落在**底部容器**左上角，不在对话区中央另起占位。
+    if composer.y > inner.y {
+        let label = if !thread.loaded {
+            Some(text::LX_BTW_THREAD_LOADING)
+        } else if thread.is_loading() {
+            Some(loading_label(thread))
+        } else {
+            None
+        };
+        if let Some(label) = label {
+            super::super::chat_bar::draw_inline_loading(
+                grid,
+                Rect::new(inner.x, inner.y, inner.width, 1),
+                thread.chat.loading_frame,
+                label,
+            );
+        }
     }
     let editor = thread.composer.editor();
     let visible = usize::from(composer.height.saturating_sub(2)).max(1);
@@ -366,10 +376,9 @@ pub(crate) fn draw_conversation(
         return 1;
     };
     if thread.chat.messages.is_empty() {
+        // 历史加载中不在对话区中央画占位：底部空行已统一显示 loading。
         if thread.loaded {
             super::draw_placeholder(grid, rect, text::LX_BTW_EMPTY_THREAD);
-        } else {
-            super::draw_placeholder(grid, rect, text::LX_BTW_THREAD_LOADING);
         }
         return 1;
     }

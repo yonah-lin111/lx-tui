@@ -340,6 +340,7 @@ pub fn stop_active_selection_drags(state: &mut AppState) {
     state.task_scroll_drag = None;
     state.task_list_scroll_drag = None;
     state.task_agents_scroll_drag = None;
+    state.task_btw_scroll_drag = None;
     state.lx_input_drag = None;
     state.overlay_input_drag = false;
     if let Some(Overlay::ConfirmClose(confirm)) = state.overlay.as_mut() {

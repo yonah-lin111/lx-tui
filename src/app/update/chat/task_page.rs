@@ -79,6 +79,7 @@ pub fn close_task_page(state: &mut AppState, pane: PaneId) -> bool {
         state.task_scroll_drag = None;
         state.task_list_scroll_drag = None;
         state.task_agents_scroll_drag = None;
+        state.task_btw_scroll_drag = None;
         crate::app::update::clear_lx_selection_for(state, pane);
     }
     closed
@@ -106,6 +107,7 @@ pub fn select_task_tab(state: &mut AppState, pane: PaneId, position: usize) -> b
         state.task_scroll_drag = None;
         state.task_list_scroll_drag = None;
         state.task_agents_scroll_drag = None;
+        state.task_btw_scroll_drag = None;
         crate::app::update::clear_lx_selection_for(state, pane);
         super::btw::ensure_loaded(state, pane);
     }

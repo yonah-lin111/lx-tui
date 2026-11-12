@@ -89,7 +89,7 @@ fn has_running_agents(lx: &Lx) -> bool {
 /// `Agents` 详情 `follow`）；否则要求有历史且上滚未跟随底部。
 fn jump_visible(lx: &Lx) -> bool {
     if let Some(page) = lx.task.as_ref() {
-        return !page.is_at_bottom(&lx.agents);
+        return !page.is_at_bottom(lx);
     }
     super::history::has_history(lx) && !lx.chat.follow_bottom
 }

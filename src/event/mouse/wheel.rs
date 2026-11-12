@@ -87,14 +87,17 @@ fn wheel_lx_selection(
     let moved = if has_task {
         update::resolve_task_output_visible(state, rects);
         update::resolve_task_agents_visible(state, rects, cache);
-        let agents_tab = state
+        update::resolve_task_btw_visible(state, rects, cache);
+        let tab = state
             .pane_anywhere(pane)
             .and_then(|target| target.lx.task.as_ref())
-            .is_some_and(|page| page.tab == crate::app::state::TaskTab::Agents);
-        if agents_tab {
-            update::scroll_agents_detail(state, pane, step)
-        } else {
-            update::scroll_task_output(state, pane, step)
+            .map(|page| page.tab);
+        match tab {
+            Some(crate::app::state::TaskTab::Agents) => {
+                update::scroll_agents_detail(state, pane, step)
+            }
+            Some(crate::app::state::TaskTab::Btw) => update::scroll_btw_detail(state, pane, step),
+            _ => update::scroll_task_output(state, pane, step),
         }
     } else if let Some((total, visible)) = state
         .pane_anywhere(pane)
@@ -509,15 +512,20 @@ pub(crate) fn handle_mouse_wheel(
             {
                 update::resolve_task_output_visible(state, rects);
                 update::resolve_task_agents_visible(state, rects, cache);
-                let agents_tab = state
+                update::resolve_task_btw_visible(state, rects, cache);
+                let tab = state
                     .pane_anywhere(pane)
                     .and_then(|target| target.lx.task.as_ref())
-                    .is_some_and(|page| page.tab == crate::app::state::TaskTab::Agents);
-                // Agents 详情与进程输出统一按 WHEEL_LINES（3 行/格）滚动。
-                let changed = if agents_tab {
-                    update::scroll_agents_detail(state, pane, delta)
-                } else {
-                    update::scroll_task_output(state, pane, delta)
+                    .map(|page| page.tab);
+                // Agents 详情、BTW 对话与进程输出统一按 WHEEL_LINES（3 行/格）滚动。
+                let changed = match tab {
+                    Some(crate::app::state::TaskTab::Agents) => {
+                        update::scroll_agents_detail(state, pane, delta)
+                    }
+                    Some(crate::app::state::TaskTab::Btw) => {
+                        update::scroll_btw_detail(state, pane, delta)
+                    }
+                    _ => update::scroll_task_output(state, pane, delta),
                 };
                 if changed {
                     *dirty = true;

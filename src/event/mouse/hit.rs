@@ -337,6 +337,33 @@ pub(crate) fn handle_task_agents_scrollbar_press(
     true
 }
 
+/// BTW 对话区滚动条按下：thumb 拖拽或轨道跳转；返回是否命中。
+pub(crate) fn handle_task_btw_scrollbar_press(
+    state: &mut AppState,
+    pane: PaneId,
+    inner: Rect,
+    column: u16,
+    row: u16,
+    cache: &mut ui::RenderCache,
+) -> bool {
+    let Some(bar) = state.pane_anywhere(pane).and_then(|target| {
+        ui::main_content::lx::task_btw_scrollbar(inner, &target.lx, cache.pane(pane))
+    }) else {
+        return false;
+    };
+    if !bar.track.contains((column, row).into()) {
+        return false;
+    }
+    match ui::widgets::scrollbar::thumb_grab_offset(&bar, row) {
+        Some(grab) => state.task_btw_scroll_drag = Some((pane, grab)),
+        None => {
+            let offset = ui::widgets::scrollbar::offset_from_track_row(&bar, row);
+            update::set_task_btw_scroll(state, pane, offset);
+        }
+    }
+    true
+}
+
 /// 后台任务面板 item 列表滚动条按下：thumb 拖拽或轨道跳转（含右侧 1 列边距容差）；返回是否命中。
 pub(crate) fn handle_task_list_scrollbar_press(
     state: &mut AppState,

@@ -33,9 +33,7 @@ pub(crate) use refer::{item_at as refer_item_at, layout as refer_layout};
 pub use selection::copy_text;
 #[cfg(test)]
 pub(crate) use selection::is_table_cell_at;
-pub(crate) use selection::{
-    content_geom, press_btw_content_hit, press_content_hit, unit_cell_range, unit_cell_range_opt,
-};
+pub(crate) use selection::{content_geom, press_content_hit, unit_cell_range, unit_cell_range_opt};
 
 pub(crate) mod brand;
 pub(crate) mod chat_bar;
@@ -54,7 +52,7 @@ use history_hit::chat_geometry_is_live;
 pub(crate) use history_hit::{
     LxChatHit, card_target_at, chat_hit, fold_target_at, history_center_target, history_rows,
     history_scrollbar, history_view, sticky_prompt_jump, task_agents_card_target_at,
-    task_agents_scrollbar,
+    task_agents_scrollbar, task_btw_scrollbar,
 };
 pub(crate) use slash::{item_at as slash_item_at, layout as slash_layout};
 

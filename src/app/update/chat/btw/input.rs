@@ -144,6 +144,11 @@ pub fn apply_input(
                 scroll_conversation(state, pane, delta)
             }
         },
+        // 与 Processes/Agents 的 PgUp/PgDn 翻页口径一致（10 行/次）。
+        LxInput::PageUp | LxInput::PageDown if focus == BtwFocus::Conversation => {
+            let delta = if command == LxInput::PageUp { -10 } else { 10 };
+            scroll_conversation(state, pane, delta)
+        }
         LxInput::StopProcess => stop_current(state, pane),
         // 空草稿 + Ctrl+A：回退默认回答者，避免无法退出旧目标集合。
         LxInput::LineStart => {
@@ -486,10 +491,11 @@ fn scroll_conversation(state: &mut AppState, pane: PaneId, delta: isize) -> bool
         return false;
     };
     let max = thread.total_rows.saturating_sub(thread.visible);
+    let step = delta.unsigned_abs().max(1);
     let next = if delta < 0 {
-        thread.scroll.saturating_sub(1)
+        thread.scroll.saturating_sub(step)
     } else {
-        thread.scroll.saturating_add(1).min(max)
+        thread.scroll.saturating_add(step).min(max)
     };
     if next == thread.scroll {
         return false;

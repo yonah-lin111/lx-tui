@@ -199,6 +199,26 @@ pub(crate) fn handle_mouse_drag(
         }
         return;
     }
+    if let Some((pane, grab)) = state.task_btw_scroll_drag {
+        // BTW 对话区滚动条：与主历史滚动条同一套 thumb 几何。
+        let bar = rects
+            .iter()
+            .find(|(id, _)| *id == pane)
+            .and_then(|(_, rect)| {
+                let inner = tiling::pane_inner_rect(*rect);
+                state.pane_anywhere(pane).and_then(|target| {
+                    ui::main_content::lx::task_btw_scrollbar(inner, &target.lx, cache.pane(pane))
+                })
+            });
+        let Some(bar) = bar else {
+            return;
+        };
+        let offset = ui::widgets::scrollbar::offset_from_drag_row(&bar, mouse.row, grab);
+        if update::set_task_btw_scroll(state, pane, offset) {
+            *dirty = true;
+        }
+        return;
+    }
     if let Some((pane, grab)) = state.task_list_scroll_drag {
         // 后台任务 item 列表滚动条：按拖拽行换算目标偏移（与轨道点击同一套几何）。
         let bar = rects
@@ -648,6 +668,9 @@ pub(crate) fn handle_mouse_up_left(
         return;
     }
     if state.task_agents_scroll_drag.take().is_some() {
+        return;
+    }
+    if state.task_btw_scroll_drag.take().is_some() {
         return;
     }
     if state.task_list_scroll_drag.take().is_some() {

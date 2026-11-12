@@ -11,6 +11,7 @@
 use crate::chat::agent::AgentStatus;
 use crate::ui::text;
 
+use super::Lx;
 use super::agent::{AgentsState, SubagentRun};
 use super::slash::PanelWindow;
 
@@ -196,23 +197,28 @@ impl TaskPage {
     /// 当前激活页签的上方内容区是否处于最底部。
     ///
     /// 只读派生，供 `chat_bar` 决定是否显示「回到底部」按钮：`Processes` 看输出偏移，
-    /// `Agents` 看选中子 agent 的 `follow`（消息为空时没有可滚动的历史，视为触底）。
-    pub fn is_at_bottom(&self, agents: &AgentsState) -> bool {
+    /// `Agents` 看选中子 agent 的 `follow`，`Btw` 看当前线程的滚动是否贴尾。
+    /// 消息为空时没有可滚动的历史，一律视为触底。
+    pub fn is_at_bottom(&self, lx: &Lx) -> bool {
         match self.tab {
             TaskTab::Processes => {
                 self.output_visible == 0 || self.output_scroll >= self.output_max_scroll()
             }
             TaskTab::Agents => self
-                .selected_agent_index(agents)
-                .and_then(|index| agents.runs.get(index))
+                .selected_agent_index(&lx.agents)
+                .and_then(|index| lx.agents.runs.get(index))
                 .is_none_or(|run| {
                     run.chat.messages.is_empty()
                         || run.follow
                         || (run.visible > 0
                             && run.scroll >= run.total_rows.saturating_sub(run.visible))
                 }),
-            // BTW 的对话滚动由自己的线程状态维护；页签不共用「回到底部」按钮。
-            TaskTab::Btw => true,
+            TaskTab::Btw => lx.btw.active_thread().is_none_or(|thread| {
+                thread.chat.messages.is_empty()
+                    || thread.follow
+                    || (thread.visible > 0
+                        && thread.scroll >= thread.total_rows.saturating_sub(thread.visible))
+            }),
         }
     }
 

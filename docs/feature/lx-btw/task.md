@@ -447,3 +447,43 @@ cargo clippy --all-targets -- -D warnings
 cargo test --lib                                                  # 5255 passed
 cargo clippy --all-targets -- -D warnings
 ```
+
+## 16. BTW 单 QA 视图、loading 归位与交互对齐（2026-11-12 第五轮）
+
+### 16.1 单 QA 视图（撤销 All side chats）
+
+- 用户最终确认：**不显示全部 BTW**。BTW 页签始终只显示当前选中的单个 QA 线程；`/btwList` 只负责切换 QA。
+- 不实现 `All side chats` 行、QA 分割线、`QA n` 分段标识与全量线程加载；此前的“全部/分割线”提案全部作废。
+- 消息列表内容不变：显示该 QA 的完整 BTW 线程（用户、助手、工具、思考），不混入主会话上下文；QA 归属继续由 composer 顶边框胶囊标识。
+
+### 16.2 loading 位置
+
+- 线程历史 loading（`Loading side conversation…`）从对话区中央移到 **tab 行与 composer 之间的底部空行**；对话区在 `!thread.loaded` 时不再画居中占位。
+- 生成 loading（`Thinking... / Running tools...`）仍画在同一行；两者由 `draw_bottom` 统一选择标签。
+- `advance_loading_frames` 同时推进 `!thread.loaded` 的线程，历史等待期间底部扫描高亮继续动画。
+- `/btwList` 二级面板内部的 `Loading main questions...` 位置不变。
+
+### 16.3 回到底部
+
+- `TaskPage::is_at_bottom` 的参数从 `&AgentsState` 改为 `&Lx`，新增 Btw 分支：按活动线程的 `follow` / `scroll` / `total_rows` / `visible` 判定是否触底。
+- 复用主会话 chat bar 的 `↓ jump to bottom`：BTW 对话上翻时按钮出现在任务面板上沿；点击走 `jump_lx_history_bottom` 已有的 Btw 分支。
+- `chat_hit` 对 BTW 先允许回到底部按钮命中，再拒绝主历史的置顶/代码复制按钮，避免主历史命中串页。
+
+### 16.4 交互对齐 Agents 详情
+
+- **滚轮**：`event/mouse/wheel.rs` 的任务区域按 `TaskTab` 分派；Btw 调 `scroll_btw_detail`（3 行/格），并同步 `resolve_task_btw_visible`。
+- **滚动条**：新增 `task_btw_scrollbar` 几何、`handle_task_btw_scrollbar_press`、`task_btw_scroll_drag` 与拖拽释放；轨道点击/thumb 拖拽口径与 Agents 详情一致。
+- **键盘**：Conversation 焦点下 `↑↓` 滚 1 行，`PgUp/PgDn` 翻 10 行；与 Processes/Agents 的翻页量一致。
+- **选区/复制**：移除 `press_btw_content_hit` 的“只折叠、不选词”分支，BTW 改走通用 `press_content_hit`；`render_chunk` 增加 Btw 分支，复制读取 BTW 线程而不是 Processes 输出。
+- **代码块复制**：`task_detail_code_copy_at` 同时支持 Agents 与 Btw 的历史源。
+- **折叠卡片**：仍由 `lx_card_press` → `toggle_btw_card` 处理。
+
+### 16.5 验证
+
+```text
+cargo test --lib                                                  # 5261 passed
+cargo clippy --all-targets -- -D warnings
+cargo fmt
+```
+
+新增回归：线程历史 loading 只落在底部空行、BTW 滚动/滚动条钳制与 PgUp/PgDn、BTW 滚动条几何与回到底部按钮、BTW 选区复制读取线程历史、BTW 代码块复制、BTW 回到底部点击命中。

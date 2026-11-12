@@ -56,6 +56,7 @@ pub(crate) fn handle_mouse_down_left(
     state.task_scroll_drag = None;
     state.task_list_scroll_drag = None;
     state.task_agents_scroll_drag = None;
+    state.task_btw_scroll_drag = None;
     state.overlay_input_drag = false;
     if let Some(Overlay::ConfirmClose(confirm)) = state.overlay.as_mut() {
         confirm.scroll_drag = None;
