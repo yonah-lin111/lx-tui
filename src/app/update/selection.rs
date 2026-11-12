@@ -114,16 +114,22 @@ pub fn begin_lx_input_selection_with_clicks(
 ) {
     clear_selection(state);
     if let Some(pane) = state.pane_mut_anywhere(id) {
-        if let Some(hit) = pane.lx.paste_hit_at(row, col) {
+        // BTW composer 是独立编辑器；命中几何已按 active_editor() 计算，状态也必须
+        // 写回同一个编辑器，不能落到隐藏的主输入框。
+        let hit = pane.lx.active_editor().paste_hit_at(row, col);
+        if let Some(hit) = hit {
             if !hit.expanded {
-                pane.lx.toggle_paste(hit.id, hit.occurrence);
+                pane.lx
+                    .with_active_editor(|editor| editor.toggle_paste(hit.id, hit.occurrence));
             } else {
-                pane.lx.begin_preview_selection(row, col, clicks);
+                pane.lx
+                    .with_active_editor(|editor| editor.begin_preview_selection(row, col, clicks));
                 state.lx_input_drag = Some(id);
             }
             return;
         }
-        pane.lx.begin_text_selection_with_clicks(row, col, clicks);
+        pane.lx
+            .with_active_editor(|editor| editor.begin_text_selection_with_clicks(row, col, clicks));
         state.lx_input_drag = Some(id);
     }
 }
@@ -134,11 +140,13 @@ pub fn drag_lx_input_selection(state: &mut AppState, id: PaneId, row: usize, col
         return;
     }
     if let Some(pane) = state.pane_mut_anywhere(id) {
-        if pane.lx.is_preview_dragging() {
-            pane.lx.drag_preview_selection(row, col);
-        } else {
-            pane.lx.drag_text_selection(row, col);
-        }
+        pane.lx.with_active_editor(|editor| {
+            if editor.is_preview_dragging() {
+                editor.drag_preview_selection(row, col);
+            } else {
+                editor.drag_text_selection(row, col);
+            }
+        });
     }
 }
 
@@ -149,12 +157,14 @@ pub fn end_lx_input_selection_drag(state: &mut AppState) -> bool {
         return false;
     };
     if let Some(pane) = state.pane_mut_anywhere(id) {
-        if pane.lx.is_preview_dragging() {
-            pane.lx.finish_preview_selection();
+        if pane.lx.active_editor().is_preview_dragging() {
+            pane.lx
+                .with_active_editor(|editor| editor.finish_preview_selection());
             return true;
         }
-        if pane.lx.text_selection_range().is_none() {
-            pane.lx.clear_text_selection();
+        if pane.lx.active_editor().text_selection_range().is_none() {
+            pane.lx
+                .with_active_editor(|editor| editor.clear_text_selection());
         }
     }
     true
@@ -164,9 +174,11 @@ pub fn end_lx_input_selection_drag(state: &mut AppState) -> bool {
 pub fn take_lx_input_selection(state: &mut AppState) -> Option<(PaneId, String)> {
     let id = state.lx_input_drag.take()?;
     let pane = state.pane_mut_anywhere(id)?;
-    let text = pane.lx.selected_text();
-    pane.lx.clear_text_selection();
-    text.map(|text| (id, text))
+    pane.lx.with_active_editor(|editor| {
+        let text = editor.selected_text();
+        editor.clear_text_selection();
+        text.map(|text| (id, text))
+    })
 }
 
 /// 在 prompt 开始一次文本选择；与右栏拖拽、终端选区互斥。
@@ -340,6 +352,7 @@ pub fn stop_active_selection_drags(state: &mut AppState) {
     state.task_scroll_drag = None;
     state.task_list_scroll_drag = None;
     state.task_agents_scroll_drag = None;
+    state.task_btw_scroll_drag = None;
     state.lx_input_drag = None;
     state.overlay_input_drag = false;
     if let Some(Overlay::ConfirmClose(confirm)) = state.overlay.as_mut() {
@@ -380,12 +393,14 @@ pub fn stop_active_selection_drags(state: &mut AppState) {
         for tab in &mut workspace.tabs {
             for id in tab.layout.pane_ids() {
                 if let Some(target) = tab.pane_mut(id) {
-                    if target.lx.is_preview_dragging() {
-                        target.lx.finish_preview_selection();
-                    }
-                    if target.lx.text_selection_range().is_none() {
-                        target.lx.clear_text_selection();
-                    }
+                    target.lx.with_active_editor(|editor| {
+                        if editor.is_preview_dragging() {
+                            editor.finish_preview_selection();
+                        }
+                        if editor.text_selection_range().is_none() {
+                            editor.clear_text_selection();
+                        }
+                    });
                     if let Some(ask) = target.lx.ask.as_mut()
                         && let Some(editor) = ask.editor_mut()
                         && editor.text_selection_range().is_none()
@@ -421,8 +436,10 @@ pub fn clear_selection(state: &mut AppState) {
         for tab in &mut workspace.tabs {
             for id in tab.layout.pane_ids() {
                 if let Some(target) = tab.pane_mut(id) {
-                    target.lx.clear_text_selection();
-                    target.lx.clear_preview_selection();
+                    target.lx.with_active_editor(|editor| {
+                        editor.clear_text_selection();
+                        editor.clear_preview_selection();
+                    });
                     if let Some(ask) = target.lx.ask.as_mut() {
                         ask.clear_all_text_selections();
                     }
@@ -510,7 +527,13 @@ pub fn has_visible_selection(state: &AppState) -> bool {
                     {
                         return true;
                     }
-                    if let Some(task) = pane.lx.task.as_ref() {
+                    if pane.lx.is_btw_tab() {
+                        if pane.lx.active_editor().text_selection_range().is_some()
+                            || pane.lx.active_editor().preview_selection().is_some()
+                        {
+                            return true;
+                        }
+                    } else if let Some(task) = pane.lx.task.as_ref() {
                         if task
                             .agent_reply
                             .as_ref()

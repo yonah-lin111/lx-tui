@@ -372,6 +372,15 @@ pub const SESSION_TITLE_PALETTE: [(Color, Color); 8] = [
     (Color::Rgb(0x20, 0x25, 0x38), Color::Rgb(0x9e, 0xb4, 0xe8)),
 ];
 
+/// BTW 主问题归属胶囊：固定暗海蓝底 + 柔天蓝字，不随会话配色/壁纸变化。
+pub fn btw_qa_badge() -> Style {
+    let (bg, fg) = SESSION_TITLE_PALETTE[1];
+    Style::default()
+        .fg(fg)
+        .bg(bg)
+        .remove_modifier(Modifier::BOLD | Modifier::DIM | Modifier::REVERSED | Modifier::HIDDEN)
+}
+
 /// 按会话配色槽位生成标题胶囊样式：使用柔和暗底 + 柔和亮字。
 pub fn session_title_badge(palette_index: u8) -> Style {
     let (bg, fg) = SESSION_TITLE_PALETTE[usize::from(palette_index) % SESSION_TITLE_PALETTE.len()];

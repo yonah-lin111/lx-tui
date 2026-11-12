@@ -44,16 +44,18 @@ impl ReferData {
 
 /// 快捷面板纯几何。
 pub(crate) fn layout(area: Rect, lx: &Lx) -> Option<PanelLayout> {
+    let editor = lx.active_editor();
     let input = super::input_rect(area, lx)?;
-    let data = panel_data(lx)?;
+    let data = panel_data(editor)?;
     let items = data.items();
     command_panel::layout(panel_area(area, input), &view(&items, &data, input, area))
 }
 
 /// 快捷面板条目命中：返回候选索引；面板未打开或未命中返回 None。
 pub(crate) fn item_at(area: Rect, lx: &Lx, column: u16, row: u16) -> Option<usize> {
+    let editor = lx.active_editor();
     let input = super::input_rect(area, lx)?;
-    let data = panel_data(lx)?;
+    let data = panel_data(editor)?;
     let items = data.items();
     let layout = command_panel::layout(panel_area(area, input), &view(&items, &data, input, area))?;
     command_panel::item_at(&layout, &items, column, row)
@@ -61,10 +63,11 @@ pub(crate) fn item_at(area: Rect, lx: &Lx, column: u16, row: u16) -> Option<usiz
 
 /// 绘制快捷输入面板；面板未打开或空间不足时不绘制。
 pub(crate) fn render(area: Rect, buf: &mut Buffer, lx: &Lx) {
+    let editor = lx.active_editor();
     let Some(input) = super::input_rect(area, lx) else {
         return;
     };
-    let Some(data) = panel_data(lx) else {
+    let Some(data) = panel_data(editor) else {
         return;
     };
     let items = data.items();

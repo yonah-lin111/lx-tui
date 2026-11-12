@@ -52,9 +52,11 @@ pub enum AppEvent {
         generation: u64,
         entries: Vec<MentionEntry>,
     },
-    /// lx 输入框 `@` 面板的目录扫描结果；按窗格、代号与根路由。
+    /// lx 输入框 `@` 面板的目录扫描结果；按窗格、QA 归属、代号与根路由。
     LxMentionScanned {
         pane: PaneId,
+        /// `Some` 表示 BTW composer；只有仍是该 QA 的活动线程才接收。
+        qa: Option<String>,
         generation: u64,
         root: PathBuf,
         entries: Vec<MentionEntry>,
@@ -101,6 +103,8 @@ pub enum AppEvent {
     },
     /// lx 聊天网络流事件（delta / finished）；按 request key 过滤。
     ChatNet(chat::ChatNetEvent),
+    /// 旁路问答（`/btw`）的加载、提交与回答状态回投。
+    Btw(chat::btw::BtwEvent),
     /// lx agent loop 的工具调用握手（pending/running/结果落库 ack）。
     /// 事件层在 DB 与状态都就绪后才回执，因此 loop 拿到 ticket 才执行文件 IO。
     AgentHost(chat::AgentHostEvent),
@@ -223,6 +227,7 @@ async fn run_loop(
     // 启动恢复：进入事件循环前按 session guard 结算遗留 journal 与旧流/工具/进程。
     if let Some(database) = persistence.database() {
         chat::rewind::recover_startup(database);
+        chat::btw::recover_startup(database);
     }
     // 运行时配置副本：设置页保存后经事件更新，渲染每帧读取。
     let mut config = config.clone();
@@ -528,6 +533,7 @@ async fn run_loop(
             // 后台任务面板的输出/Agents 详情/ask/Todo 可见行数：供翻页与滚动条钳制。
             update::resolve_task_output_visible(state, &geometry.rects);
             update::resolve_task_agents_visible(state, &geometry.rects, &mut ui_cache);
+            update::resolve_task_btw_visible(state, &geometry.rects, &mut ui_cache);
             update::resolve_ask_list_window(state, &geometry.rects);
             update::resolve_todo_viewport(state, geometry.view.right_panel);
             ui_cache.begin_frame();
@@ -714,10 +720,11 @@ fn handle_app_event(
         } => update::apply_mention_entries(state, prompt, generation, entries),
         AppEvent::LxMentionScanned {
             pane,
+            qa,
             generation,
             root,
             entries,
-        } => update::apply_lx_mention_entries(state, pane, generation, &root, entries),
+        } => update::apply_lx_mention_entries(state, pane, qa, generation, &root, entries),
         AppEvent::SkillsLoaded {
             root,
             total,
@@ -763,6 +770,9 @@ fn handle_app_event(
         AppEvent::ChatNet(event) => {
             // 网络事件按 key 过滤后转 update；调用方随后统一置脏。
             chat::handle_net_event(state, chat_streams, persistence, event);
+        }
+        AppEvent::Btw(event) => {
+            chat::btw::apply_event_to_state(state, event);
         }
         AppEvent::AgentHost(event) => {
             // 工具调用握手：DB 落库门槛 → 状态 → 回执 ticket（顺序不可交换）。
@@ -973,13 +983,14 @@ fn pump_mention_scan(state: &mut AppState, sender: &mpsc::UnboundedSender<AppEve
 
 /// lx `@` 面板需要扫描的窗格：取走请求并在后台按根扫描（同一根在 pane 内缓存）。
 fn pump_lx_mention_scan(state: &mut AppState, sender: &mpsc::UnboundedSender<AppEvent>) {
-    for (pane, generation, root) in update::take_lx_mention_scan_requests(state) {
+    for (pane, qa, generation, root) in update::take_lx_mention_scan_requests(state) {
         let sender = sender.clone();
         let scan_root = root.clone();
         tokio::task::spawn_blocking(move || {
             let entries = crate::files::scan(&scan_root);
             let _ = sender.send(AppEvent::LxMentionScanned {
                 pane,
+                qa,
                 generation,
                 root,
                 entries,

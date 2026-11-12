@@ -25,23 +25,27 @@ pub(crate) fn begin_child_tool(
     let assistant_id = handle.child_assistant_id.clone();
     let agent_id = handle.agent_id.clone();
     // 时间线对齐：工具之前的 parts 先落库，DB 分配的 position 才与内存一致。
-    if let Some(position) = tool_position(&handle.chat, &assistant_id, &call.call_id) {
-        let parts = parts_before(&handle.chat, &assistant_id, position);
-        if let Err(error) = persistence.checkpoint_parts(&workspace, &assistant_id, &parts) {
-            tracing::warn!(
-                target: "lx::agent::tool",
-                pane = key.pane.raw(),
-                session = %key.session,
-                agent_id = %agent_id,
-                call_id = %call.call_id,
-                code = error.code(),
-                "child tool timeline sync failed"
-            );
-            let _ = reply.send(Err(HostError::Failed {
-                code: format!("{BEGIN_TOOL_FAILED_CODE} · {}", error.code()),
-            }));
-            return true;
-        }
+    if let Err(error) = super::super::timeline::checkpoint_before_tool(
+        &handle.chat,
+        &workspace,
+        &assistant_id,
+        &call.call_id,
+        persistence,
+    ) {
+        tracing::warn!(
+            target: "lx::agent::tool",
+            pane = key.pane.raw(),
+            session = %key.session,
+            agent_id = %agent_id,
+            call_id = %call.call_id,
+            code = error.code(),
+            error = %error,
+            "child tool timeline sync failed"
+        );
+        let _ = reply.send(Err(HostError::Failed {
+            code: format!("{BEGIN_TOOL_FAILED_CODE} · {}", error.code()),
+        }));
+        return true;
     }
     let ticket = match persistence.begin_tool_call(
         &workspace,
@@ -202,41 +206,6 @@ pub(crate) fn finish_child_tool(
             false
         }
     }
-}
-
-/// 工具在子消息时间线里的位置（未找到返回 None）。
-fn tool_position(
-    chat: &crate::app::state::LxChat,
-    assistant_id: &str,
-    call_id: &str,
-) -> Option<i64> {
-    chat.messages
-        .iter()
-        .find(|message| message.id == assistant_id)
-        .and_then(|message| message.tool(call_id))
-        .map(|call| call.position)
-}
-
-/// 工具之前的 parts 快照（position 小于工具位置）。
-fn parts_before(
-    chat: &crate::app::state::LxChat,
-    assistant_id: &str,
-    position: i64,
-) -> Vec<crate::db::chat::ChatPart> {
-    chat.messages
-        .iter()
-        .find(|message| message.id == assistant_id)
-        .map(|message| {
-            crate::db::chat::chat_part_views(message.steps.iter().filter_map(|step| match step {
-                crate::app::state::AssistantStepView::Part { position: p, part }
-                    if *p < position =>
-                {
-                    Some((*p, part))
-                }
-                _ => None,
-            }))
-        })
-        .unwrap_or_default()
 }
 
 /// 子消息里某次调用的参数 JSON。

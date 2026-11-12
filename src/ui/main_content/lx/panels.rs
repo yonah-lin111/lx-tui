@@ -20,7 +20,7 @@ use super::{
 
 /// 绘制 `/` 命令面板（几何/条目见 `slash` 子模块）。
 pub(super) fn render_slash_panel(area: Rect, buf: &mut Buffer, lx: &Lx) {
-    if lx.slash.is_none() {
+    if lx.active_editor().slash.is_none() {
         return;
     }
     slash::render(area, buf, lx);
@@ -28,7 +28,7 @@ pub(super) fn render_slash_panel(area: Rect, buf: &mut Buffer, lx: &Lx) {
 
 /// 绘制输入框滚动条：软换行后的视觉行溢出可视高度时，覆盖在最右预留列。
 pub(super) fn render_input_scrollbar(area: Rect, buf: &mut Buffer, lx: &Lx) {
-    if lx.input.is_empty() {
+    if lx.active_editor().input.is_empty() {
         return;
     }
     if let Some(bar) = input_scrollbar(area, lx) {
@@ -82,12 +82,39 @@ impl InputGeom {
 }
 
 /// lx 输入框几何（含边框）；（绝对屏幕坐标）；供提及面板贴附计算。
+///
+/// BTW 页签显示 composer 时返回 composer 矩形：`@`/`/`/refer/paste 浮层因此
+/// 自动贴在 BTW 输入框上方，而不是主输入框。
 pub(crate) fn input_rect(area: Rect, lx: &Lx) -> Option<Rect> {
-    layout(area, lx).input
+    let lay = layout(area, lx);
+    if lx.is_btw_tab() {
+        return lay
+            .task_list
+            .and_then(|rect| super::task::btw::composer_rect(rect, lx))
+            .filter(|rect| rect.height > 0);
+    }
+    lay.input
 }
 
 /// lx 输入框文本区几何；`area` 为窗格内容区。
 pub(crate) fn input_geom(area: Rect, lx: &Lx) -> Option<InputGeom> {
+    if lx.is_btw_tab() {
+        let input = input_rect(area, lx)?;
+        let editor = lx.active_editor();
+        let rows = editor.visual_rows().len().max(1);
+        let visible = usize::from(input.height.saturating_sub(2)).max(1).min(rows);
+        let scroll = editor.scroll().min(rows.saturating_sub(visible));
+        return Some(InputGeom {
+            text_top: input.y + 1,
+            content_x: input.x + INPUT_PREFIX,
+            content_w: input
+                .width
+                .saturating_sub(INPUT_PREFIX)
+                .saturating_sub(INPUT_SCROLLBAR),
+            visible,
+            scroll,
+        });
+    }
     let lay = layout(area, lx);
     let input = lay.input?;
     if lay.input_visible == 0 {
@@ -107,6 +134,20 @@ pub(crate) fn input_geom(area: Rect, lx: &Lx) -> Option<InputGeom> {
 
 /// lx 输入框滚动条几何；内容未溢出时为 None。
 pub(crate) fn input_scrollbar(area: Rect, lx: &Lx) -> Option<scrollbar::ScrollbarLayout> {
+    if lx.is_btw_tab() {
+        let input = input_rect(area, lx)?;
+        let editor = lx.active_editor();
+        let rows = editor.visual_rows().len().max(1);
+        let visible = usize::from(input.height.saturating_sub(2)).max(1).min(rows);
+        let scroll = editor.scroll().min(rows.saturating_sub(visible));
+        let track = Rect::new(
+            input.x,
+            input.y + 1,
+            input.width,
+            u16::try_from(visible).unwrap_or(u16::MAX),
+        );
+        return scrollbar::layout(track, rows, visible, scroll);
+    }
     let lay = layout(area, lx);
     let input = lay.input?;
     if lay.input_visible == 0 {
@@ -136,8 +177,9 @@ struct PastePanelData {
 
 /// 构造文本粘贴面板的条目列表与可用区域；面板未打开或空间不足返回 None。
 fn text_paste_panel_rows(area: Rect, lx: &Lx) -> Option<PastePanelData> {
-    let panel = lx.text_paste_panel()?;
-    let input = layout(area, lx).input?;
+    let editor = lx.active_editor();
+    let panel = editor.text_paste_panel()?;
+    let input = super::input_rect(area, lx)?;
     let margin: u16 = if area.width >= 24 { MARGIN } else { 0 };
     let content_x = area.x + margin;
     let content_w = area.width.saturating_sub(margin.saturating_mul(2));
@@ -182,8 +224,9 @@ fn paste_panel_rows(area: Rect, lx: &Lx) -> Option<PastePanelData> {
     if let Some(data) = text_paste_panel_rows(area, lx) {
         return Some(data);
     }
-    let panel = lx.paste_panel()?;
-    let input = layout(area, lx).input?;
+    let editor = lx.active_editor();
+    let panel = editor.paste_panel()?;
+    let input = super::input_rect(area, lx)?;
     let margin: u16 = if area.width >= 24 { MARGIN } else { 0 };
     let content_x = area.x + margin;
     let content_w = area.width.saturating_sub(margin.saturating_mul(2));

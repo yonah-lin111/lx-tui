@@ -4758,7 +4758,7 @@ fn seed_lx_mention(state: &mut AppState, id: PaneId, query: &str, entries: Vec<M
         .pane_mut_anywhere(id)
         .and_then(|pane| pane.lx.take_mention_scan_request())
         .expect("scan request");
-    apply_lx_mention_entries(state, id, generation, &root, entries);
+    apply_lx_mention_entries(state, id, None, generation, &root, entries);
 }
 
 #[test]
@@ -4792,7 +4792,7 @@ fn lx_mention_scan_request_only_when_visible_and_triggered() {
     let requests = take_lx_mention_scan_requests(&mut state);
     assert_eq!(requests.len(), 1);
     assert_eq!(requests[0].0, pane);
-    assert_eq!(requests[0].2, PathBuf::from("/root"));
+    assert_eq!(requests[0].3, PathBuf::from("/root"));
     // 在途（未回执）时不再重复发起。
     assert!(take_lx_mention_scan_requests(&mut state).is_empty());
     // 切到终端视图不发起。
@@ -4807,7 +4807,7 @@ fn lx_mention_root_change_invalidates_inflight_result() {
     set_pane_cwd(&mut state, pane, "/a");
     sync_lx_mention_root(&mut state, pane);
     apply_lx_input(&mut state, LxInput::Char('@'));
-    let (_, stale_generation, old_root) = take_lx_mention_scan_requests(&mut state).remove(0);
+    let (_, _, stale_generation, old_root) = take_lx_mention_scan_requests(&mut state).remove(0);
     // 根在结果到达前变化：新根产生新代号。
     set_pane_cwd(&mut state, pane, "/b");
     assert!(sync_lx_mention_root(&mut state, pane));
@@ -4820,6 +4820,7 @@ fn lx_mention_root_change_invalidates_inflight_result() {
     apply_lx_mention_entries(
         &mut state,
         pane,
+        None,
         stale_generation,
         &old_root,
         vec![MentionEntry {
@@ -4832,6 +4833,7 @@ fn lx_mention_root_change_invalidates_inflight_result() {
     apply_lx_mention_entries(
         &mut state,
         pane,
+        None,
         new_generation,
         &new_root,
         vec![MentionEntry {
@@ -4851,11 +4853,12 @@ fn lx_mention_results_are_isolated_per_pane() {
     sync_lx_mention_root(&mut state, second);
     // 第二个窗格（焦点）键入 @。
     apply_lx_input(&mut state, LxInput::Char('@'));
-    let (_, generation, root) = take_lx_mention_scan_requests(&mut state).remove(0);
+    let (_, _, generation, root) = take_lx_mention_scan_requests(&mut state).remove(0);
     assert_eq!(root, PathBuf::from("/two"));
     apply_lx_mention_entries(
         &mut state,
         second,
+        None,
         generation,
         &root,
         vec![MentionEntry {
@@ -4876,12 +4879,13 @@ fn lx_mention_scan_ignored_after_pane_removed() {
     set_pane_cwd(&mut state, second, "/two");
     sync_lx_mention_root(&mut state, second);
     apply_lx_input(&mut state, LxInput::Char('@'));
-    let (_, generation, root) = take_lx_mention_scan_requests(&mut state).remove(0);
+    let (_, _, generation, root) = take_lx_mention_scan_requests(&mut state).remove(0);
     state.active_tab_mut().remove_pane(second);
     // 删除窗格后回执应被静默丢弃（无 panic 即通过）。
     apply_lx_mention_entries(
         &mut state,
         second,
+        None,
         generation,
         &root,
         vec![MentionEntry {

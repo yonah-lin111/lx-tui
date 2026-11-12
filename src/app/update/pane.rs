@@ -23,7 +23,7 @@ pub use popups::{
     select_lx_mention, select_lx_paste, select_lx_refer, select_lx_slash, switch_lx_mention_tab,
     sync_all_lx_mention_roots, sync_lx_mention_root, take_lx_mention_scan_requests,
 };
-pub use task_page::{apply_task_paste, select_task_agent_filter};
+pub use task_page::{apply_task_paste, cycle_task_tab, select_task_agent_filter};
 
 /// 按方向滚动终端窗格回滚视口（负数向上、正数向下）；返回视口是否移动。
 pub fn scroll_pane(state: &mut AppState, id: PaneId, direction: isize) -> bool {
@@ -63,7 +63,8 @@ pub fn scroll_lx_input(state: &mut AppState, id: PaneId, direction: isize) -> bo
     if pane.view != PaneView::Lx {
         return false;
     }
-    pane.lx.scroll_by(direction.saturating_mul(WHEEL_LINES))
+    pane.lx
+        .with_active_editor(|editor| editor.scroll_by(direction.saturating_mul(WHEEL_LINES)))
 }
 
 /// 设置 lx 输入框滚动条视口偏移（滚动条点击/拖拽）；返回视口是否移动。
@@ -71,9 +72,11 @@ pub fn set_lx_scroll(state: &mut AppState, id: PaneId, offset: usize) -> bool {
     let Some(pane) = state.pane_mut_anywhere(id) else {
         return false;
     };
-    let before = pane.lx.scroll();
-    pane.lx.scroll_to(offset);
-    pane.lx.scroll() != before
+    pane.lx.with_active_editor(|editor| {
+        let before = editor.scroll();
+        editor.scroll_to(offset);
+        editor.scroll() != before
+    })
 }
 
 /// 应用 lx 页输入命令到焦点窗格；非 lx 视图忽略。
@@ -871,6 +874,7 @@ pub fn resize_panes(state: &mut AppState, pane_rects: &[(PaneId, Rect)]) {
                 for run in &mut pane.lx.agents.runs {
                     run.rows_dirty = true;
                 }
+                pane.lx.btw.mark_rows_dirty();
                 super::selection::clear_lx_selection_for(state, *id);
                 if state.terminal_selection == Some(*id) {
                     state.terminal_selection = None;

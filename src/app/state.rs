@@ -298,6 +298,8 @@ pub struct AppState {
     pub task_list_scroll_drag: Option<(PaneId, u16)>,
     /// 拖拽 Agents 详情滚动条 thumb：窗格与相对顶部的抓取偏移。
     pub task_agents_scroll_drag: Option<(PaneId, u16)>,
+    /// 拖拽 BTW 对话区滚动条 thumb：窗格与相对顶部的抓取偏移。
+    pub task_btw_scroll_drag: Option<(PaneId, u16)>,
     /// prompt 树行最近一次左键点击（可见行索引、时刻）；双击判定用。
     pub prompt_row_click: Option<(usize, Instant)>,
     /// prompt 页列表行最近一次左键点击（可见行索引、时刻）；双击判定用。
@@ -497,6 +499,7 @@ impl AppState {
             task_scroll_drag: None,
             task_list_scroll_drag: None,
             task_agents_scroll_drag: None,
+            task_btw_scroll_drag: None,
             prompt_row_click: None,
             page_row_click: None,
             referenced_menu_click: None,
@@ -786,6 +789,15 @@ impl AppState {
                     || target.lx.recap.pending.is_some()
                     // 子 agent 在后台跑时主 loading 也要扫描，即使 Agents 面板没开。
                     || target.lx.agents.runs.iter().any(|run| run.is_running())
+                    // BTW 的 loading 帧由 `advance_lx_loading` 独立推进；没有这个
+                    // 门控，底部加载动画和工具卡片扫描在 BTW 独占时会静止。
+                    || (target.lx.is_btw_tab()
+                        && (target.lx.btw.is_loading()
+                            || target
+                                .lx
+                                .btw
+                                .active_thread()
+                                .is_some_and(|thread| !thread.loaded)))
             })
         })
     }

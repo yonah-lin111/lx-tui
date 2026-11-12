@@ -37,6 +37,8 @@ use crate::ui::{style, text};
 pub(super) const TOP_BORDER: u16 = 1;
 /// tab 行占用的行数（顶边框之下）。
 pub(super) const TAB_ROW: u16 = 1;
+/// BTW 页签：tab 行与输入框之间的空行（loading 指示器落在这一行的左上角）。
+pub(super) const COMPOSER_GAP: u16 = 1;
 /// 相邻键位提示之间的空档（列）。
 const HINT_GAP: usize = 2;
 /// item 列表最多显示的行数。
@@ -62,6 +64,24 @@ pub(super) fn list_height() -> u16 {
         .unwrap_or(LIST_MAX as u16)
         .saturating_add(TAB_ROW)
         .saturating_add(TOP_BORDER)
+}
+
+/// 后台面板高度：进程/Agents 保持固定 8 行；BTW 随 composer 行数在 6..=8 行之间生长。
+pub(super) fn task_panel_height(lx: &crate::app::state::Lx) -> u16 {
+    if !lx.is_btw_tab() {
+        return list_height();
+    }
+    let rows = lx
+        .btw
+        .active_thread()
+        .map(|thread| thread.composer.editor().visual_rows().len())
+        .unwrap_or(1)
+        .clamp(1, usize::from(btw::COMPOSER_MAX_ROWS));
+    TOP_BORDER
+        .saturating_add(TAB_ROW)
+        .saturating_add(COMPOSER_GAP)
+        .saturating_add(u16::try_from(rows).unwrap_or(1))
+        .saturating_add(2)
 }
 
 /// 输出容器**正文宽度**：常驻预留最右 1 列作滚动条槽。
@@ -175,10 +195,12 @@ pub(super) fn draw_list(
     grid: &mut super::grid::Grid,
     rect: Rect,
     page: &TaskPage,
-    agents: &crate::app::state::AgentsState,
-) {
+    lx: &crate::app::state::Lx,
+    focused: bool,
+) -> Option<(u16, u16)> {
+    let agents = &lx.agents;
     if rect.width == 0 || rect.height < TOP_BORDER + TAB_ROW {
-        return;
+        return None;
     }
     // 顶边框：一条横线把列表与上方内容分开。
     //
@@ -239,10 +261,15 @@ pub(super) fn draw_list(
         }
     }
 
-    let list = list_rect(rect);
-    if list.height == 0 {
-        return;
+    let list_i = list_rect(rect);
+    if list_i.height == 0 {
+        return None;
     }
+    if page.tab == TaskTab::Btw {
+        // BTW 页签底部：QA 列表 + 独立输入框（对话在上方输出容器）。
+        return btw::draw_bottom(grid, list_i, lx, page, focused);
+    }
+    let list = list_i;
     let bar = list_scrollbar(rect, page, agents);
     let content = match bar.as_ref() {
         Some(_) => Rect::new(list.x, list.y, list.width.saturating_sub(1), list.height),
@@ -251,12 +278,14 @@ pub(super) fn draw_list(
     match page.tab {
         TaskTab::Processes => draw_processes(grid, content, page),
         TaskTab::Agents => agents::draw_list(grid, content, page, agents),
+        TaskTab::Btw => {}
     }
     if let Some(bar) = bar {
         for y in bar.thumb.y..bar.thumb.bottom() {
             grid.put_char(bar.thumb.x, y, THUMB_CHAR, style::text());
         }
     }
+    None
 }
 
 /// item 列表正文区域（顶边框 + tab 行之下）。
@@ -295,6 +324,8 @@ pub(crate) fn list_metrics(
             let start = agents::window_start(page, agents, visible);
             (total, visible, start)
         }
+        // BTW 页签没有列表：滚动条始终隐藏。
+        TaskTab::Btw => (0, 0, 0),
     }
 }
 
@@ -363,6 +394,7 @@ pub(super) fn draw_footer(buf: &mut Buffer, area: Rect, page: &TaskPage) {
     let hints: &[text::Hint] = match page.tab {
         TaskTab::Processes => &text::LX_TASK_HINTS_PROCESSES,
         TaskTab::Agents => &text::LX_TASK_HINTS_AGENTS,
+        TaskTab::Btw => &text::LX_BTW_HINTS,
     };
     let room = usize::from(right.saturating_sub(left));
     let mut rendered = String::new();
@@ -811,14 +843,17 @@ fn clip(value: &str, max: u16) -> String {
 }
 
 pub(super) mod agents;
+pub(crate) mod btw;
 
 #[cfg(test)]
 mod tests;
 
-/// 详情区（原历史矩形）的实际绘制区域；不在该页返回 None。
+/// 详情区（原历史矩形）的实际绘制区域；不在带详情页的 tab 返回 None。
+///
+/// BTW 与 Agents 共用上方输出区：折叠命中、量行与绘制必须拿同一份几何。
 pub(super) fn task_output_rect(area: Rect, lx: &crate::app::state::Lx) -> Option<Rect> {
     let page = lx.task.as_ref()?;
-    if page.tab != TaskTab::Agents {
+    if !matches!(page.tab, TaskTab::Agents | TaskTab::Btw) {
         return None;
     }
     super::layout(area, lx).task_output
@@ -860,4 +895,29 @@ pub(super) fn agents_anchor_row(
     anchor: &super::history::HistoryAnchor,
 ) -> Option<usize> {
     agents::anchor_row(area, lx, cache, anchor)
+}
+
+/// `/btwList` 二级面板的点击命中：返回主 QA 下标。
+pub(super) fn btw_picker_hit(
+    area: Rect,
+    lx: &crate::app::state::Lx,
+    column: u16,
+    row: u16,
+) -> Option<usize> {
+    btw::picker_item_at(area, lx, column, row)
+}
+
+/// BTW 对话区的 `(可见行数, 总行数, 快照是否最新)`。
+pub(super) fn btw_rows(
+    area: Rect,
+    lx: &crate::app::state::Lx,
+    cache: &mut crate::ui::PaneCache,
+) -> Option<(usize, usize, bool)> {
+    if !lx.is_btw_tab() {
+        return None;
+    }
+    let rect = super::layout(area, lx).task_output?;
+    let thread = lx.btw.active_thread()?;
+    let (total, fresh) = btw::detail_rows(rect, thread, cache);
+    Some((usize::from(rect.height), total, fresh))
 }

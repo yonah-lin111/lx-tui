@@ -60,6 +60,53 @@ pub(crate) fn content_geom(area: Rect, lx: &Lx, cache: &mut PaneCache) -> Option
         if output_rect.width == 0 || output_rect.height == 0 {
             return None;
         }
+        if page.tab == TaskTab::Btw {
+            let thread = lx.btw.active_thread()?;
+            let rect = history::content_rect(output_rect);
+            if rect.width == 0 || rect.height == 0 {
+                return None;
+            }
+            if thread.chat.messages.is_empty() {
+                return Some(ContentGeom {
+                    rect,
+                    scroll: 0,
+                    total_rows: 1,
+                });
+            }
+            if !thread.rows_dirty && thread.total_rows > 0 {
+                let total = thread.total_rows;
+                let visible = usize::from(rect.height);
+                let max = total.saturating_sub(visible);
+                let scroll = if thread.follow {
+                    max
+                } else {
+                    thread.scroll.min(max)
+                };
+                return Some(ContentGeom {
+                    rect,
+                    scroll,
+                    total_rows: total,
+                });
+            }
+            let source = history::HistorySource::from_chat(&thread.chat, &thread.compact);
+            let view = history::view_source_plain(output_rect, source, cache);
+            let rect = history::content_rect(view.body);
+            if rect.width == 0 || rect.height == 0 || view.total_rows == 0 {
+                return None;
+            }
+            let visible = usize::from(view.body.height);
+            let max = view.total_rows.saturating_sub(visible);
+            let scroll = if thread.follow {
+                max
+            } else {
+                thread.scroll.min(max)
+            };
+            return Some(ContentGeom {
+                rect,
+                scroll,
+                total_rows: view.total_rows,
+            });
+        }
         if page.tab == TaskTab::Agents {
             let run = page
                 .selected_agent_index(&lx.agents)
@@ -332,6 +379,8 @@ pub(crate) fn press_content_hit(
     }
     let raw_card = if in_table {
         None
+    } else if lx.is_btw_tab() {
+        super::history_hit::task_btw_card_target_at(area, lx, column, row, cache)
     } else if lx.task.is_some() {
         super::task_agents_card_target_at(area, lx, column, row, cache)
     } else {
@@ -663,6 +712,21 @@ fn render_chunk(
                 );
                 history::render_source_ready(grid, body_rect, source, chunk_start, cache);
             }
+        } else if page.tab == TaskTab::Btw {
+            let Some(thread) = lx.btw.active_thread() else {
+                return;
+            };
+            if thread.chat.messages.is_empty() {
+                return;
+            }
+            let source = history::HistorySource::from_chat(&thread.chat, &thread.compact);
+            let body_rect = Rect::new(
+                0,
+                0,
+                chunk_rect.width.saturating_add(history::SCROLLBAR_COLUMNS),
+                chunk_rect.height,
+            );
+            history::render_source(grid, body_rect, source, chunk_start, cache);
         } else {
             task::draw_output_rows(grid, chunk_rect, page, chunk_start);
         }

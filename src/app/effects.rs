@@ -442,6 +442,68 @@ pub enum Effect {
     SaveWorkspaceOrder { entries: Vec<(PathBuf, String)> },
     /// 从数据库重新加载工作区历史列表。
     LoadWorkspaceHistory,
+    /// 旁路问答（`/btw`）：加载 QA 列表/线程、提交问题与停止在途回答。
+    Btw(BtwEffect),
+}
+
+/// 旁路问答的一次受控操作（IO 只由事件层执行）。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum BtwEffect {
+    /// 读取当前主会话的正式 QA 列表。
+    LoadQaList {
+        pane: crate::tiling::PaneId,
+        parent_session_id: String,
+    },
+    /// 读取某个主 QA 的 BTW 线程（不存在时只返回 QA 信息）。
+    LoadThread {
+        pane: crate::tiling::PaneId,
+        parent_session_id: String,
+        qa_id: String,
+    },
+    /// 提交一条旁路问题。
+    Submit(Box<BtwSubmission>),
+    /// 停止某线程的活动与排队回答；不影响原 agent 任务。
+    Stop {
+        pane: crate::tiling::PaneId,
+        parent_session_id: String,
+        qa_id: String,
+        thread_id: Option<String>,
+    },
+    /// 主会话被删除：停止其全部旁路线程（数据库级联随后清理记录）。
+    CancelOwner { parent_session_id: String },
+}
+
+/// 提交时冻结的旁路问答请求。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct BtwSubmission {
+    pub pane: crate::tiling::PaneId,
+    pub parent_session_id: String,
+    pub qa_id: String,
+    /// 数据库工作区键（与聊天会话一致）。
+    pub workspace: PathBuf,
+    /// 工具执行的冻结工作目录。
+    pub cwd: PathBuf,
+    pub thread_id: Option<String>,
+    pub submit_id: String,
+    /// 草稿修订号：ACK 时只有相同修订号才清空输入。
+    pub draft_revision: u64,
+    pub text: String,
+    /// 本次显式选择回答者；空表示沿用线程回答者集合。
+    pub targets: Vec<BtwTargetChoice>,
+    /// 默认助手冻结模型。
+    pub default_model: crate::db::chat::ModelSnapshot,
+    /// 默认助手的思考参数（来自模型 variants）。
+    pub default_variant_params: Option<serde_json::Value>,
+    pub idle_timeout_ms: u64,
+}
+
+/// 用户显式选择的回答者实例（稳定 ID；不因昵称改名而漂移）。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct BtwTargetChoice {
+    pub agent_id: String,
+    pub display_nickname: String,
+    pub role_name: String,
+    pub source_child_session_id: String,
 }
 
 /// 撤销执行请求：目标身份、动作与回填所需的原文全部在发起时冻结。

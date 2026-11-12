@@ -341,3 +341,59 @@ fn chat_hit_supports_code_copy_button_in_task_agents_detail_view() {
         Some(LxChatHit::CopyCode("print('from subagent')".into()))
     );
 }
+
+#[test]
+fn chat_hit_supports_code_copy_button_in_btw_view() {
+    let area = Rect::new(0, 0, 60, 22);
+    let mut lx = Lx::new();
+    lx.task = Some(TaskPage {
+        tab: TaskTab::Btw,
+        ..Default::default()
+    });
+    lx.btw.ensure_thread("qa-1");
+    let thread = lx.btw.active_thread_mut().expect("thread");
+    thread.loaded = true;
+    thread.chat.messages.push(assistant_msg(
+        "btw-a-1",
+        "```python\nprint('from btw')\n```",
+    ));
+
+    let mut cache = PaneCache::default();
+    let mut buf = Buffer::empty(area);
+    render(area, &mut buf, &lx, true, None, &mut cache);
+
+    let (btn_x, btn_y) = find_copy_button_pos(&buf, area).expect("btw copy button in buffer");
+    assert_eq!(
+        chat_hit(area, &lx, btn_x, btn_y, &mut cache),
+        Some(LxChatHit::CopyCode("print('from btw')".into()))
+    );
+}
+
+#[test]
+fn chat_hit_allows_jump_bottom_in_btw_view() {
+    let area = Rect::new(0, 0, 60, 24);
+    let mut lx = Lx::new();
+    lx.task = Some(TaskPage {
+        tab: TaskTab::Btw,
+        ..Default::default()
+    });
+    lx.btw.ensure_thread("qa-1");
+    let thread = lx.btw.active_thread_mut().expect("thread");
+    thread.loaded = true;
+    thread
+        .chat
+        .messages
+        .push(assistant_msg("btw-a-1", "answer"));
+    thread.total_rows = 20;
+    thread.visible = 5;
+    thread.follow = false;
+    thread.scroll = 0;
+
+    let button = crate::ui::main_content::lx::chat_bar::jump_bottom_rect(area, &lx)
+        .expect("jump button rect");
+    let mut cache = PaneCache::default();
+    assert_eq!(
+        chat_hit(area, &lx, button.x + 1, button.y, &mut cache),
+        Some(LxChatHit::JumpBottom)
+    );
+}

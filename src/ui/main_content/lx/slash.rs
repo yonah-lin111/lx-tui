@@ -322,7 +322,8 @@ fn area_of(input: Rect, area: Rect) -> Rect {
 
 /// `/` 命令面板纯几何（与 `render_slash_panel` 同源）；供滚轮与命中复用。
 pub(crate) fn layout(area: Rect, lx: &Lx) -> Option<PanelLayout> {
-    let panel = lx.slash.as_ref()?;
+    let editor = lx.active_editor();
+    let panel = editor.slash.as_ref()?;
     let input = super::input_rect(area, lx)?;
     let time_labels = history_time_labels(panel);
     let items = items(panel, &time_labels);
@@ -335,7 +336,8 @@ pub(crate) fn layout(area: Rect, lx: &Lx) -> Option<PanelLayout> {
 
 /// `/` 命令面板命中：返回被点/悬停的条目索引；未命中返回 None。
 pub(crate) fn item_at(area: Rect, lx: &Lx, column: u16, row: u16) -> Option<usize> {
-    let panel = lx.slash.as_ref()?;
+    let editor = lx.active_editor();
+    let panel = editor.slash.as_ref()?;
     // 空态占位行不可选（真无数据，或过滤后无命中）。
     if is_placeholder(panel) {
         return None;
@@ -353,7 +355,8 @@ pub(crate) fn item_at(area: Rect, lx: &Lx, column: u16, row: u16) -> Option<usiz
 
 /// 绘制 `/` 命令面板（复用 `layout` 的矩形口径）。
 pub(super) fn render(area: Rect, buf: &mut ratatui::buffer::Buffer, lx: &Lx) {
-    let Some(panel) = lx.slash.as_ref() else {
+    let editor = lx.active_editor();
+    let Some(panel) = editor.slash.as_ref() else {
         return;
     };
     let Some(input) = super::input_rect(area, lx) else {

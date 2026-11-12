@@ -13,8 +13,8 @@ use crate::ui;
 
 use super::super::hit::{
     apply_lx_chat_hit, handle_lx_history_scrollbar_press, handle_lx_input_scrollbar_press,
-    handle_task_agents_scrollbar_press, handle_task_list_scrollbar_press, lx_toast_at, pane_at,
-    pane_content_inner,
+    handle_task_agents_scrollbar_press, handle_task_btw_scrollbar_press,
+    handle_task_list_scrollbar_press, lx_toast_at, pane_at, pane_content_inner,
 };
 use crate::event::session::Geometry;
 
@@ -100,8 +100,10 @@ pub(super) fn handle_lx_pane_mouse_down_left(
         *dirty = true;
         return;
     }
-    // Agents 详情滚动条：与主历史同一套拖拽/轨道点击。
-    if handle_task_agents_scrollbar_press(state, pane, inner, mouse.column, mouse.row, cache) {
+    // Agents 详情和 BTW 对话滚动条：与主历史同一套拖拽/轨道点击。
+    if handle_task_agents_scrollbar_press(state, pane, inner, mouse.column, mouse.row, cache)
+        || handle_task_btw_scrollbar_press(state, pane, inner, mouse.column, mouse.row, cache)
+    {
         update::focus_pane(state, pane);
         *dirty = true;
         return;
@@ -179,7 +181,15 @@ pub(super) fn handle_lx_pane_mouse_down_left(
         ui::main_content::lx::slash_item_at(inner, &target.lx, mouse.column, mouse.row)
     });
     if let Some(index) = slash_hit {
-        update::select_lx_slash(state, pane, index);
+        // BTW 页签的 `/` 面板挂在独立 composer 上，不能走主输入的采纳路径。
+        if state
+            .pane_anywhere(pane)
+            .is_some_and(|target| target.lx.is_btw_tab())
+        {
+            update::select_btw_slash(state, pane, index);
+        } else {
+            update::select_lx_slash(state, pane, index);
+        }
         *dirty = true;
         return;
     }
@@ -241,6 +251,20 @@ pub(super) fn handle_lx_pane_mouse_down_left(
             Instant::now(),
         );
         update::begin_lx_input_selection_with_clicks(state, pane, visual_row, col, clicks);
+    } else if state
+        .pane_anywhere(pane)
+        .is_some_and(|target| target.lx.is_btw_tab() && target.lx.btw.picker_open())
+    {
+        // `/btwList` 选择器优先：点行直接切换 QA，其余区域吞掉。
+        let picked = state.pane_anywhere(pane).and_then(|target| {
+            ui::main_content::lx::task_btw_picker_hit(inner, &target.lx, mouse.column, mouse.row)
+        });
+        if let Some(index) = picked {
+            update::select_btw_qa(state, pane, index);
+        }
+        update::clear_selection(state);
+        *dirty = true;
+        return;
     } else if let Some((content_row, content_col, target)) =
         state.pane_anywhere(pane).and_then(|target| {
             ui::main_content::lx::press_content_hit(

@@ -69,6 +69,9 @@ pub fn close_task_page(state: &mut AppState, pane: PaneId) -> bool {
     };
     let closed = target.lx.task.take().is_some();
     if closed {
+        // 面板整体关闭时，挂在 BTW composer 上的 `/btwList` 二级面板也一并收起，
+        // 避免下次打开任务页时弹出一个过期的选择器。
+        target.lx.btw.close_picker();
         target.lx.chat.viewport_top = None;
         target.lx.chat.suppressed_prompt_header = None;
         // 清掉拖拽抓取标记：面板没了还留着 grab，会让后续**所有**拖拽事件
@@ -76,6 +79,7 @@ pub fn close_task_page(state: &mut AppState, pane: PaneId) -> bool {
         state.task_scroll_drag = None;
         state.task_list_scroll_drag = None;
         state.task_agents_scroll_drag = None;
+        state.task_btw_scroll_drag = None;
         crate::app::update::clear_lx_selection_for(state, pane);
     }
     closed
@@ -86,19 +90,26 @@ pub fn select_task_tab(state: &mut AppState, pane: PaneId, position: usize) -> b
     let Some(tab) = crate::app::state::TaskTab::ALL.get(position).copied() else {
         return false;
     };
-    let Some(target) = state.pane_mut_anywhere(pane) else {
-        return false;
+    let changed = {
+        let Some(target) = state.pane_mut_anywhere(pane) else {
+            return false;
+        };
+        let Some(page) = target.lx.task.as_mut() else {
+            return false;
+        };
+        let changed = page.select_tab(tab);
+        if changed {
+            page.clamp(&target.lx.agents);
+        }
+        changed
     };
-    let Some(page) = target.lx.task.as_mut() else {
-        return false;
-    };
-    let changed = page.select_tab(tab);
     if changed {
-        page.clamp(&target.lx.agents);
         state.task_scroll_drag = None;
         state.task_list_scroll_drag = None;
         state.task_agents_scroll_drag = None;
+        state.task_btw_scroll_drag = None;
         crate::app::update::clear_lx_selection_for(state, pane);
+        super::btw::ensure_loaded(state, pane);
     }
     changed
 }
@@ -162,6 +173,7 @@ pub fn scroll_task_list(state: &mut AppState, pane: PaneId, delta: isize) -> boo
             crate::ui::main_content::lx::task::LIST_MAX,
             agents_len,
         ),
+        crate::app::state::TaskTab::Btw => false,
     }
 }
 
@@ -183,6 +195,7 @@ pub fn set_task_list_scroll(state: &mut AppState, pane: PaneId, offset: usize) -
         crate::app::state::TaskTab::Agents => {
             page.set_agents_window_scroll(offset, visible, agents_len)
         }
+        crate::app::state::TaskTab::Btw => false,
     }
 }
 

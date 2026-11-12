@@ -52,7 +52,7 @@ use history_hit::chat_geometry_is_live;
 pub(crate) use history_hit::{
     LxChatHit, card_target_at, chat_hit, fold_target_at, history_anchor_before, history_anchor_row,
     history_center_target, history_rows, history_scrollbar, history_view, sticky_prompt_jump,
-    task_agents_card_target_at, task_agents_scrollbar,
+    task_agents_card_target_at, task_agents_scrollbar, task_btw_scrollbar,
 };
 pub(crate) use slash::{item_at as slash_item_at, layout as slash_layout};
 
@@ -140,6 +140,8 @@ pub fn render(
     render_paste_panel(area, buf, lx);
     refer::render(area, buf, lx);
     render_slash_panel(area, buf, lx);
+    // `/btwList` 的二级面板画在任务面板上方，与主会话 `/resume` 同一套命令面板观感。
+    task::btw::render_picker(area, buf, lx);
     // 本页 toast 最后画：盖住历史、输入框与上述所有浮层，但**只在窗格内容区内**。
     // 全局 toast 覆盖层不再承载 lx 反馈（见 `app::state::Lx::toast`）。
     let toast_box = lx
@@ -320,7 +322,7 @@ fn layout(area: Rect, lx: &Lx) -> Layout {
     // `ask` 面板占用输入框的位置并替换它（design §8.1）；后台任务页优先级更高。
     let ask_active = lx.ask.is_some();
     let (box_h, visible, scroll) = if lx.task.is_some() {
-        (task::list_height(), 0, 0)
+        (task::task_panel_height(lx), 0, 0)
     } else if ask_active {
         (ask::height(area.height, content_w, lx), 0, 0)
     } else {
@@ -605,12 +607,15 @@ fn build(
         if let Some(rect) = lay.task_output {
             if page.tab == crate::app::state::TaskTab::Agents {
                 task::draw_agents_detail(&mut grid, rect, lx, cache);
+            } else if page.tab == crate::app::state::TaskTab::Btw {
+                task::btw::draw_conversation(&mut grid, rect, lx, cache);
             } else {
                 task::draw_output_container(&mut grid, rect, page);
             }
         }
         if let Some(rect) = lay.task_list {
-            task::draw_list(&mut grid, rect, page, &lx.agents);
+            cursor = task::draw_list(&mut grid, rect, page, lx, focused)
+                .map(|(row, col)| (row.saturating_sub(area.y), col.saturating_sub(area.x)));
         }
     } else if let Some(rect) = lay.ask {
         cursor = ask::draw(&mut grid, rect, area.height, lx, focused)
@@ -697,12 +702,15 @@ fn build_chat(
         if let Some(rect) = lay.task_output {
             if page.tab == crate::app::state::TaskTab::Agents {
                 task::draw_agents_detail(&mut grid, rect, lx, cache);
+            } else if page.tab == crate::app::state::TaskTab::Btw {
+                task::btw::draw_conversation(&mut grid, rect, lx, cache);
             } else {
                 task::draw_output_container(&mut grid, rect, page);
             }
         }
         if let Some(rect) = lay.task_list {
-            task::draw_list(&mut grid, rect, page, &lx.agents);
+            cursor = task::draw_list(&mut grid, rect, page, lx, focused)
+                .map(|(row, col)| (row.saturating_sub(area.y), col.saturating_sub(area.x)));
         }
     } else if let Some(rect) = lay.ask {
         cursor = ask::draw(&mut grid, rect, area.height, lx, focused)
@@ -809,6 +817,27 @@ pub(crate) fn task_agents_anchor_row(
     anchor: &history::HistoryAnchor,
 ) -> Option<usize> {
     task::agents_anchor_row(area, lx, cache, anchor)
+}
+
+/// BTW 页签的 composer 矩形（输入浮层锚点）；不在 BTW 页返回 None。
+pub fn task_btw_composer_rect(area: Rect, lx: &Lx) -> Option<Rect> {
+    if !lx.is_btw_tab() {
+        return None;
+    }
+    layout(area, lx)
+        .task_list
+        .and_then(|rect| task::btw::composer_rect(rect, lx))
+        .filter(|rect| rect.height > 0)
+}
+
+/// `/btwList` 选择器点击命中：返回主 QA 下标。
+pub fn task_btw_picker_hit(area: Rect, lx: &Lx, column: u16, row: u16) -> Option<usize> {
+    task::btw_picker_hit(area, lx, column, row)
+}
+
+/// BTW 对话区的 `(可见行数, 总行数, 快照是否最新)`；不在 BTW 页或无活动线程返回 None。
+pub fn task_btw_rows(area: Rect, lx: &Lx, cache: &mut PaneCache) -> Option<(usize, usize, bool)> {
+    task::btw_rows(area, lx, cache)
 }
 
 /// 后台任务面板 item 列表的滚动条几何；未打开或内容装得下时返回 None。

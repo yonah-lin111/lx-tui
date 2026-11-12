@@ -94,6 +94,7 @@ impl ModelContext {
                 role.base() == crate::chat::agent::BaseRole::Executor
                     && self.subagent_depth < self.max_subagent_depth
             }
+            crate::chat::events::RequestPurpose::Btw => false,
             crate::chat::events::RequestPurpose::CompactSummary => false,
         }
     }
@@ -160,11 +161,12 @@ impl ModelContext {
         }
     }
 
-    /// 本轮是否为子 agent（禁止递归控制工具）。
+    /// 本轮是否为受限 agent 轮次（子 agent 或旁路问答）：禁止递归控制工具。
     pub fn is_subagent(&self) -> bool {
         matches!(
             self.request.purpose,
             crate::chat::events::RequestPurpose::Subagent(_)
+                | crate::chat::events::RequestPurpose::Btw
         )
     }
 

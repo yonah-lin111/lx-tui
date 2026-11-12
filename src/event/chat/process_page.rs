@@ -359,6 +359,8 @@ pub(crate) fn reap_orphan_runtimes(
             .filter(|(_, handle)| handle.status == subagent::STATUS_RUNNING)
             .map(|(session, _)| session.clone()),
     );
+    // 在途旁路问答同样「有主」：只读工具也可能读取运行实例状态。
+    bound.extend(streams.btw.runs.keys().map(|key| key.session.clone()));
     let orphans: Vec<String> = streams
         .runtimes
         .sessions()

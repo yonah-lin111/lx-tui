@@ -4,6 +4,7 @@
 //! `checkpoint`/`finish` 以 `status='streaming'` 更新，迟到事件不能覆盖终态。
 
 pub mod attachment;
+pub mod btw;
 mod compact;
 mod fork;
 mod model_switch;
@@ -18,6 +19,10 @@ mod user_shell;
 mod view_map;
 
 pub use attachment::{MessageAttachmentInput, MessageAttachmentKind, MessageAttachmentMeta};
+pub use btw::{
+    BtwAccepted, BtwBatchRecord, BtwRecipientCompletion, BtwRecipientRecord, BtwRecipientStart,
+    BtwTargetSpec, BtwThreadRecord, BtwThreadSummary, BtwThreadView, QaAnchor,
+};
 
 pub use compact::{
     COMPACT_ACTIVE, COMPACT_REVERTED, CompactCheckpoint, CompactCommit, CompactCommitted,
@@ -210,6 +215,38 @@ impl Database {
         })?;
         rows.collect::<std::result::Result<Vec<_>, _>>()
             .map_err(DbError::from)
+    }
+
+    /// 该会话是否为普通 native 会话（BTW/子会话不能当主会话打开）。
+    pub fn is_native_session(&self, workspace: &Path, session_id: &str) -> Result<bool> {
+        let Some(workspace_external) = self.workspace_external_id(workspace)? else {
+            return Ok(false);
+        };
+        let source: Option<String> = self
+            .conn
+            .query_row(
+                "SELECT source FROM agent_session WHERE external_id = ?1 AND workspace_id = ?2",
+                params![session_id, workspace_external],
+                |row| row.get(0),
+            )
+            .optional()?;
+        Ok(source.as_deref() == Some("native"))
+    }
+
+    /// 该会话是否为旁路问答（`source='btw'`）：不能当主会话展示/恢复。
+    pub fn is_btw_session(&self, workspace: &Path, session_id: &str) -> Result<bool> {
+        let Some(workspace_external) = self.workspace_external_id(workspace)? else {
+            return Ok(false);
+        };
+        let source: Option<String> = self
+            .conn
+            .query_row(
+                "SELECT source FROM agent_session WHERE external_id = ?1 AND workspace_id = ?2",
+                params![session_id, workspace_external],
+                |row| row.get(0),
+            )
+            .optional()?;
+        Ok(source.as_deref() == Some("btw"))
     }
 
     /// 加载单个会话及全部有序消息（含 parts 与工具调用）；跨工作区或不存在返回 None。
@@ -571,11 +608,58 @@ impl Database {
         usage: Usage,
         billing: Usage,
     ) -> Result<()> {
+        self.finish_with_optional_parts(
+            workspace,
+            assistant_message_id,
+            Some(parts),
+            outcome,
+            usage,
+            billing,
+        )
+    }
+
+    /// 终态提交；`parts: None` 表示不覆盖已落库的 parts。
+    ///
+    /// 旁路问答在面板关闭后仍可能完成：内存里没有该消息的投影时，绝不能拿空数组
+    /// 覆盖最后一次 checkpoint 写下的正文。
+    pub fn finish_with_optional_parts(
+        &self,
+        workspace: &Path,
+        assistant_message_id: &str,
+        parts: Option<&[ChatPart]>,
+        outcome: &TurnOutcome,
+        usage: Usage,
+        billing: Usage,
+    ) -> Result<()> {
         let workspace_external = self
             .workspace_external_id(workspace)?
             .ok_or(DbError::WorkspaceMissing)?;
-        let now = now_ms();
         let transaction = self.conn.unchecked_transaction()?;
+        self.finish_with_optional_parts_in_tx(
+            &transaction,
+            &workspace_external,
+            assistant_message_id,
+            parts,
+            outcome,
+            usage,
+            billing,
+        )?;
+        transaction.commit()?;
+        Ok(())
+    }
+
+    /// 终态提交的事务内版本；调用方负责把回答者/批次更新放进同一事务。
+    pub(crate) fn finish_with_optional_parts_in_tx(
+        &self,
+        transaction: &rusqlite::Transaction<'_>,
+        workspace_external: &str,
+        assistant_message_id: &str,
+        parts: Option<&[ChatPart]>,
+        outcome: &TurnOutcome,
+        usage: Usage,
+        billing: Usage,
+    ) -> Result<()> {
+        let now = now_ms();
         // 已终态：同结果幂等返回，不重复累计 usage。
         let existing: Option<String> = transaction
             .query_row(
@@ -596,7 +680,9 @@ impl Database {
             params![assistant_message_id],
             |row| row.get(0),
         )?;
-        replace_parts(&transaction, assistant_message_id, parts, now)?;
+        if let Some(parts) = parts {
+            replace_parts(transaction, assistant_message_id, parts, now)?;
+        }
         let (status, stop_reason, error_code) = match outcome {
             TurnOutcome::Complete { stop_reason } => ("complete", stop_reason.clone(), None),
             TurnOutcome::Interrupted => ("interrupted", None, None),
@@ -637,8 +723,7 @@ impl Database {
         )?;
         // 终态即封口本轮文件 scope：全部 mutation ACK 已在 finish_tool 前结算；
         // 仍有 prepared 记录时保持 capturing，恢复时按“证据不足”拒绝文件动作。
-        rewind::seal_turn_scope(&transaction, &session_id, assistant_message_id)?;
-        transaction.commit()?;
+        rewind::seal_turn_scope(transaction, &session_id, assistant_message_id)?;
         Ok(())
     }
 

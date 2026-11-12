@@ -734,3 +734,26 @@ fn copy_text_keeps_code_body_when_selection_endpoints_are_left_of_bar() {
         "代码正文应从 `bar_col + 1` 起反显"
     );
 }
+
+#[test]
+fn btw_thread_copy_reads_the_side_thread_not_process_output() {
+    let area = Rect::new(0, 0, 60, 24);
+    let messages = assistant_markdown_lx("btw_copy_token").chat.messages;
+    let mut lx = Lx::new();
+    lx.task = Some(TaskPage {
+        tab: TaskTab::Btw,
+        ..Default::default()
+    });
+    lx.btw.ensure_thread("qa-1");
+    let thread = lx.btw.active_thread_mut().expect("thread");
+    thread.loaded = true;
+    thread.rows_dirty = true;
+    thread.chat.messages = messages;
+
+    let mut cache = PaneCache::default();
+    let copied = copy_text(area, &lx, ((0, 0), (30, 59)), &mut cache);
+    assert!(
+        copied.contains("btw_copy_token"),
+        "BTW 选区必须读取自己的线程历史，不能回退到 Processes 输出: {copied:?}"
+    );
+}

@@ -6,6 +6,7 @@
 
 pub mod agent;
 pub mod agent_loop;
+pub mod btw;
 pub mod client;
 pub mod compact;
 pub mod context;

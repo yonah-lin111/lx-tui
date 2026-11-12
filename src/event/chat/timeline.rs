@@ -1,45 +1,60 @@
 //! 时间线与上下文装配的辅助：步骤 position、parts 快照、checkpoint 与草稿提取。
 
+use std::path::Path;
+
 use super::*;
 
-/// 该 call 步骤在 app 时间线内的 position（找不到返回 None）。
-pub(super) fn tool_step_position(state: &AppState, key: &RequestKey, call_id: &str) -> Option<i64> {
-    let assistant_id = active_assistant_id(state, key)?;
-    let pane = state.pane_anywhere(key.pane)?;
-    let message = pane
-        .lx
-        .chat
-        .messages
+/// 任意聊天视图（主聊天 / 子 agent / BTW 线程）内某工具调用的 position。
+pub(super) fn tool_position_in_chat(
+    chat: &crate::app::state::LxChat,
+    assistant_id: &str,
+    call_id: &str,
+) -> Option<i64> {
+    chat.messages
         .iter()
-        .find(|message| message.id == assistant_id)?;
-    message.tool(call_id).map(|call| call.position)
+        .find(|message| message.id == assistant_id)
+        .and_then(|message| message.tool(call_id))
+        .map(|call| call.position)
 }
 
-/// 该工具步骤**之前**的 parts 快照（保持真实 position，不重新编号）。
-pub(super) fn parts_before(
-    state: &AppState,
-    key: &RequestKey,
+/// 任意聊天视图内该工具位置之前的 parts 快照（保持真实 position）。
+pub(super) fn parts_before_in_chat(
+    chat: &crate::app::state::LxChat,
     assistant_id: &str,
     position: i64,
 ) -> Vec<crate::db::chat::ChatPart> {
-    let Some(pane) = state.pane_anywhere(key.pane) else {
-        return Vec::new();
-    };
-    let Some(message) = pane
-        .lx
-        .chat
-        .messages
+    chat.messages
         .iter()
         .find(|message| message.id == assistant_id)
-    else {
-        return Vec::new();
-    };
-    crate::db::chat::chat_part_views(message.steps.iter().filter_map(|step| match step {
-        crate::app::state::AssistantStepView::Part { position: at, part } if *at < position => {
-            Some((*at, part))
-        }
-        _ => None,
-    }))
+        .map(|message| {
+            crate::db::chat::chat_part_views(message.steps.iter().filter_map(|step| match step {
+                crate::app::state::AssistantStepView::Part { position: at, part }
+                    if *at < position =>
+                {
+                    Some((*at, part))
+                }
+                _ => None,
+            }))
+        })
+        .unwrap_or_default()
+}
+
+/// 工具 pending 落库之前同步当前聊天视图的 parts。
+///
+/// app 的时间线 position 与 DB 的 `MAX(position)+1` 必须使用同一前缀；否则长工具循环
+/// 中后续 checkpoint / finish 会撞位置约束。主轮、子 agent 与 BTW 共用此入口。
+pub(super) fn checkpoint_before_tool(
+    chat: &crate::app::state::LxChat,
+    workspace: &Path,
+    assistant_id: &str,
+    call_id: &str,
+    persistence: &Persistence,
+) -> std::result::Result<(), crate::db::DbError> {
+    if let Some(position) = tool_position_in_chat(chat, assistant_id, call_id) {
+        let parts = parts_before_in_chat(chat, assistant_id, position);
+        persistence.checkpoint_parts(workspace, assistant_id, &parts)?;
+    }
+    Ok(())
 }
 
 /// 入队一次 checkpoint：把窗格当前内存 parts 快照交给持久化层。

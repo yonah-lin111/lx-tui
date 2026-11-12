@@ -11,6 +11,7 @@ use crate::app::selection::SelectionUnit;
 
 pub mod agent;
 pub mod ask;
+pub mod btw;
 pub mod chat;
 pub mod compact;
 pub mod connect;
@@ -36,6 +37,7 @@ pub use shell::LxInputMode;
 
 pub use agent::{AgentsState, MAX_RESIDENT_SUBAGENT_CHATS, SubagentReportView, SubagentRun};
 pub use ask::{AskEditor, AskHit, AskState, AskWheelZone};
+pub use btw::{BtwComposer, BtwFocus, BtwTargetView, BtwThreadState, LxBtw};
 pub use chat::SHELL_SLOT;
 pub use chat::{
     AskAnsweredView, AskDetailView, AssistantStepView, CardSection, CardTarget, ChatMessageView,
@@ -177,8 +179,14 @@ pub struct Lx {
     pub task: Option<TaskPage>,
     /// 当前挂起的 ask 面板；`None` 表示输入框正常显示。
     pub ask: Option<AskState>,
+    /// 旁路问答（`/btw`）视图缓存：按主 QA 隔离的线程与独立草稿。
+    pub btw: LxBtw,
     /// 纯文本缓冲：不识别 shell 前缀、不弹 markdown/提及/斜杠面板。
     plain: bool,
+    /// 旁路输入缓冲：不识别 shell 前缀（其余编辑/提及/markdown 面板保持）。
+    no_shell: bool,
+    /// 旁路 composer 的 `@` 实例列表由主编辑器注入（本身没有 `agents`）。
+    mention_runs_external: bool,
     /// 本会话正在运行的后台任务数（底部状态行指标）。
     pub background_tasks: usize,
     /// 首页资源计数：MCP server 与 skill 的加载/失败状态。
@@ -241,6 +249,16 @@ impl Lx {
         Self::build(true)
     }
 
+    /// 旁路问答输入缓冲：保留 markdown/提及/粘贴面板，只禁用 shell 前缀。
+    ///
+    /// 该编辑器由 [`LxBtw`] 的线程惰性持有，不参与主输入框草稿。
+    pub fn composer() -> Self {
+        let mut lx = Self::build(false);
+        lx.no_shell = true;
+        lx.mention_runs_external = true;
+        lx
+    }
+
     fn build(plain: bool) -> Self {
         Self {
             entry: LxEntry::Native,
@@ -275,7 +293,10 @@ impl Lx {
             toast: None,
             task: None,
             ask: None,
+            btw: LxBtw::default(),
             plain,
+            no_shell: false,
+            mention_runs_external: false,
             background_tasks: 0,
             startup: StartupCounts::default(),
             disabled_mcp_servers: std::collections::BTreeSet::new(),
@@ -405,6 +426,39 @@ impl Lx {
         self.revision
     }
 
+    /// 当前生效的编辑器：BTW 标签页显示时是其独立 composer，否则是主输入框。
+    ///
+    /// 渲染/命中/提及面板都通过它读取文本与面板状态；几何仍由外层 `layout` 决定，
+    /// 因此 composer 不会重新计算整页布局。
+    pub fn active_editor(&self) -> &Lx {
+        if self.is_btw_tab()
+            && let Some(composer) = self.btw.active_composer()
+        {
+            return composer;
+        }
+        self
+    }
+
+    /// 后台面板当前是否停在 BTW 标签页。
+    pub fn is_btw_tab(&self) -> bool {
+        self.task
+            .as_ref()
+            .is_some_and(|page| page.tab == task::TaskTab::Btw)
+    }
+
+    /// 在「当前生效的编辑器」上执行一次闭包：BTW 页签落到独立 composer，否则落到主输入框。
+    ///
+    /// 用闭包而不是返回 `&mut Lx`：两条分支的借用都只持续到闭包结束，调用方无需
+    /// 关心 `self` 的字段别名。
+    pub fn with_active_editor<R>(&mut self, f: impl FnOnce(&mut Lx) -> R) -> R {
+        if self.is_btw_tab()
+            && let Some(composer) = self.btw.active_composer_mut()
+        {
+            return f(composer);
+        }
+        f(self)
+    }
+
     /// 完整输入文本：普通模式为正文，shell 模式为 `!` + 正文。
     pub fn serialized_input(&self) -> String {
         shell::serialize(self.input_mode, &self.input)
@@ -455,7 +509,11 @@ impl Lx {
     ///
     /// `AI Web` 模式下不支持本地 shell，保持普通对话输入。
     pub(super) fn adopt_shell_prefix(&mut self) {
-        if self.plain || self.entry == LxEntry::AiWeb || self.input_mode == LxInputMode::Shell {
+        if self.plain
+            || self.no_shell
+            || self.entry == LxEntry::AiWeb
+            || self.input_mode == LxInputMode::Shell
+        {
             return;
         }
         let Some(offset) = shell::marker_offset(&self.input) else {

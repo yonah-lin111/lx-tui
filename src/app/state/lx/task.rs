@@ -11,6 +11,7 @@
 use crate::chat::agent::AgentStatus;
 use crate::ui::text;
 
+use super::Lx;
 use super::agent::{AgentsState, SubagentRun};
 use super::slash::PanelWindow;
 
@@ -22,17 +23,20 @@ pub enum TaskTab {
     Processes,
     /// 子代理列表（运行时记录 + 历史记录）。
     Agents,
+    /// 旁路问答：对话、QA 列表与独立输入框。
+    Btw,
 }
 
 impl TaskTab {
     /// 全部 tab（固定顺序）。
-    pub const ALL: [TaskTab; 2] = [TaskTab::Processes, TaskTab::Agents];
+    pub const ALL: [TaskTab; 3] = [TaskTab::Processes, TaskTab::Agents, TaskTab::Btw];
 
     /// tab 标签。
     pub fn label(self) -> &'static str {
         match self {
             Self::Processes => text::LX_TASK_TAB_PROCESSES,
             Self::Agents => text::LX_TASK_TAB_AGENTS,
+            Self::Btw => text::LX_TASK_TAB_BTW,
         }
     }
 }
@@ -180,6 +184,8 @@ impl TaskPage {
         match self.tab {
             TaskTab::Processes => self.processes.len(),
             TaskTab::Agents => agents.filtered_indices(self.agent_filter).len(),
+            // BTW 页签不再展示可选的 QA 列表：底部只有归属提示与输入框。
+            TaskTab::Btw => 0,
         }
     }
 
@@ -191,21 +197,28 @@ impl TaskPage {
     /// 当前激活页签的上方内容区是否处于最底部。
     ///
     /// 只读派生，供 `chat_bar` 决定是否显示「回到底部」按钮：`Processes` 看输出偏移，
-    /// `Agents` 看选中子 agent 的 `follow`（消息为空时没有可滚动的历史，视为触底）。
-    pub fn is_at_bottom(&self, agents: &AgentsState) -> bool {
+    /// `Agents` 看选中子 agent 的 `follow`，`Btw` 看当前线程的滚动是否贴尾。
+    /// 消息为空时没有可滚动的历史，一律视为触底。
+    pub fn is_at_bottom(&self, lx: &Lx) -> bool {
         match self.tab {
             TaskTab::Processes => {
                 self.output_visible == 0 || self.output_scroll >= self.output_max_scroll()
             }
             TaskTab::Agents => self
-                .selected_agent_index(agents)
-                .and_then(|index| agents.runs.get(index))
+                .selected_agent_index(&lx.agents)
+                .and_then(|index| lx.agents.runs.get(index))
                 .is_none_or(|run| {
                     run.chat.messages.is_empty()
                         || run.follow
                         || (run.visible > 0
                             && run.scroll >= run.total_rows.saturating_sub(run.visible))
                 }),
+            TaskTab::Btw => lx.btw.active_thread().is_none_or(|thread| {
+                thread.chat.messages.is_empty()
+                    || thread.follow
+                    || (thread.visible > 0
+                        && thread.scroll >= thread.total_rows.saturating_sub(thread.visible))
+            }),
         }
     }
 
@@ -237,6 +250,8 @@ impl TaskPage {
         match self.tab {
             TaskTab::Processes => &self.window,
             TaskTab::Agents => &self.agents_window,
+            // BTW 没有列表窗口；保留主列表引用只为满足穷尽匹配。
+            TaskTab::Btw => &self.window,
         }
     }
 
@@ -245,6 +260,7 @@ impl TaskPage {
         match self.tab {
             TaskTab::Processes => &mut self.window,
             TaskTab::Agents => &mut self.agents_window,
+            TaskTab::Btw => &mut self.window,
         }
     }
 

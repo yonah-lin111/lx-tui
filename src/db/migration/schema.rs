@@ -768,3 +768,130 @@ WHERE m.role = 'assistant'
 pub(super) const SCHEMA_V27_TODO_GROUP: &str = r#"
 CREATE INDEX IF NOT EXISTS idx_todo_date_group ON todo(entry_date, group_id);
 "#;
+
+/// v28：会话 `source` 增加 `btw`；旁路问答的主 QA/批次/回答者关联表与级联触发器。
+///
+/// 会话表只能整表重建（SQLite 不能改 CHECK）。重建必须在关闭外键的独立事务内完成，
+/// 否则 `DROP TABLE agent_session` 会级联删除全部消息。
+pub(super) const SCHEMA_V28_BTW: &str = r#"
+DROP TRIGGER IF EXISTS trg_btw_thread_delete_child;
+DROP TABLE IF EXISTS agent_session_v28;
+
+CREATE TABLE agent_session_v28 (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    external_id TEXT NOT NULL UNIQUE,
+    workspace_id TEXT NOT NULL REFERENCES workspace(external_id) ON DELETE CASCADE,
+    source TEXT NOT NULL DEFAULT 'native'
+        CHECK (source IN ('native', 'subagent', 'btw')),
+    title TEXT NOT NULL,
+    first_user_message TEXT NOT NULL DEFAULT '',
+    model_provider TEXT,
+    model_id TEXT,
+    variant TEXT,
+    status TEXT NOT NULL DEFAULT 'active' CHECK (status IN ('active', 'closed')),
+    archived INTEGER NOT NULL DEFAULT 0 CHECK (archived IN (0, 1)),
+    agent_nickname TEXT,
+    agent_role TEXT,
+    agent_path TEXT,
+    created_at_ms INTEGER NOT NULL,
+    updated_at_ms INTEGER NOT NULL,
+    last_message_at_ms INTEGER NOT NULL,
+    total_input_tokens INTEGER NOT NULL DEFAULT 0 CHECK (total_input_tokens >= 0),
+    total_output_tokens INTEGER NOT NULL DEFAULT 0 CHECK (total_output_tokens >= 0),
+    revision INTEGER NOT NULL DEFAULT 0 CHECK (revision >= 0)
+);
+
+INSERT INTO agent_session_v28
+    (id, external_id, workspace_id, source, title, first_user_message,
+     model_provider, model_id, variant, status, archived, agent_nickname, agent_role,
+     agent_path, created_at_ms, updated_at_ms, last_message_at_ms,
+     total_input_tokens, total_output_tokens, revision)
+SELECT id, external_id, workspace_id, source, title, first_user_message,
+       model_provider, model_id, variant, status, archived, agent_nickname, agent_role,
+       agent_path, created_at_ms, updated_at_ms, last_message_at_ms,
+       total_input_tokens, total_output_tokens, revision
+FROM agent_session;
+
+DROP TABLE agent_session;
+
+ALTER TABLE agent_session_v28 RENAME TO agent_session;
+
+CREATE INDEX IF NOT EXISTS idx_agent_session_workspace_recent
+    ON agent_session(workspace_id, archived, updated_at_ms DESC, id DESC);
+
+CREATE TABLE IF NOT EXISTS agent_btw_thread (
+    external_id TEXT PRIMARY KEY,
+    parent_session_id TEXT NOT NULL
+        REFERENCES agent_session(external_id) ON DELETE CASCADE,
+    parent_user_message_id TEXT NOT NULL
+        REFERENCES agent_message(external_id) ON DELETE CASCADE,
+    child_session_id TEXT NOT NULL UNIQUE
+        REFERENCES agent_session(external_id) ON DELETE CASCADE,
+    title TEXT NOT NULL DEFAULT '',
+    answerer_set_json TEXT NOT NULL DEFAULT '[]',
+    created_at_ms INTEGER NOT NULL,
+    updated_at_ms INTEGER NOT NULL,
+    UNIQUE(parent_session_id, parent_user_message_id)
+);
+
+CREATE INDEX IF NOT EXISTS idx_btw_thread_parent
+    ON agent_btw_thread(parent_session_id);
+
+CREATE TABLE IF NOT EXISTS agent_btw_batch (
+    external_id TEXT PRIMARY KEY,
+    thread_id TEXT NOT NULL REFERENCES agent_btw_thread(external_id) ON DELETE CASCADE,
+    user_message_id TEXT NOT NULL UNIQUE
+        REFERENCES agent_message(external_id) ON DELETE CASCADE,
+    target_set_json TEXT NOT NULL,
+    status TEXT NOT NULL CHECK (status IN (
+        'queued', 'running', 'completed', 'partial', 'failed', 'cancelled', 'interrupted'
+    )),
+    created_at_ms INTEGER NOT NULL,
+    completed_at_ms INTEGER
+);
+
+CREATE INDEX IF NOT EXISTS idx_btw_batch_thread
+    ON agent_btw_batch(thread_id, created_at_ms);
+
+CREATE TABLE IF NOT EXISTS agent_btw_recipient (
+    external_id TEXT PRIMARY KEY,
+    batch_id TEXT NOT NULL REFERENCES agent_btw_batch(external_id) ON DELETE CASCADE,
+    ordinal INTEGER NOT NULL CHECK (ordinal >= 0),
+    target_kind TEXT NOT NULL CHECK (target_kind IN ('default', 'subagent')),
+    target_key TEXT NOT NULL,
+    agent_id TEXT,
+    source_child_session_id TEXT,
+    display_nickname TEXT NOT NULL,
+    role_name TEXT,
+    model_provider TEXT NOT NULL,
+    model_id TEXT NOT NULL,
+    variant TEXT,
+    assistant_message_id TEXT UNIQUE
+        REFERENCES agent_message(external_id) ON DELETE CASCADE,
+    status TEXT NOT NULL CHECK (status IN (
+        'queued', 'running', 'completed', 'failed', 'cancelled', 'interrupted'
+    )),
+    error_code TEXT,
+    created_at_ms INTEGER NOT NULL,
+    completed_at_ms INTEGER,
+    UNIQUE(batch_id, target_kind, target_key),
+    UNIQUE(batch_id, ordinal),
+    CHECK (
+        (target_kind = 'default' AND target_key = 'default' AND agent_id IS NULL)
+        OR (target_kind = 'subagent' AND agent_id IS NOT NULL AND target_key = agent_id)
+    )
+);
+
+CREATE INDEX IF NOT EXISTS idx_btw_recipient_batch
+    ON agent_btw_recipient(batch_id, ordinal);
+
+CREATE INDEX IF NOT EXISTS idx_btw_recipient_assistant
+    ON agent_btw_recipient(assistant_message_id);
+
+CREATE TRIGGER IF NOT EXISTS trg_btw_thread_delete_child
+AFTER DELETE ON agent_btw_thread
+BEGIN
+    DELETE FROM agent_session
+    WHERE external_id = OLD.child_session_id AND source = 'btw';
+END;
+"#;

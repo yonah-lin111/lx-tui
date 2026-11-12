@@ -1014,3 +1014,264 @@ fn agents_list_indents_subtree_with_fixed_columns() {
         assert!(line.chars().count() <= 80);
     }
 }
+
+#[test]
+fn btw_bottom_keeps_the_composer_visible_for_a_one_line_draft() {
+    let mut lx = Lx::new();
+    lx.task = Some(TaskPage {
+        tab: TaskTab::Btw,
+        ..Default::default()
+    });
+    lx.btw.ensure_thread("qa-1");
+
+    // 一行草稿：面板 6 行（顶边框 + tab + 空行 + 3 行输入框），归属胶囊画在输入框顶边框。
+    let height = task_panel_height(&lx);
+    assert_eq!(height, 6);
+    let panel = Rect::new(0, 0, 80, height);
+    let list = list_rect(panel);
+    let composer = super::btw::composer_rect(panel, &lx).expect("composer rect");
+    assert_eq!(composer.height, 3, "默认一行正文 + 上下边框");
+    assert_eq!(composer.y, list.y + 1, "tab 与输入框之间留一行空行");
+
+    // 回归：`draw_bottom` 收到的已是 list 矩形，不能再扣一次顶边框/tab 行。
+    let mut grid = super::super::grid::Grid::new(panel);
+    let dims = super::btw::draw_bottom(&mut grid, list, &lx, lx.task.as_ref().expect("task"), true);
+    assert!(dims.is_some(), "输入框必须真的画出来");
+}
+
+#[test]
+fn btw_loading_sits_on_the_gap_row_not_the_composer_border() {
+    let mut lx = Lx::new();
+    lx.task = Some(TaskPage {
+        tab: TaskTab::Btw,
+        ..Default::default()
+    });
+    lx.btw.ensure_thread("qa-1");
+    let thread = lx.btw.active_thread_mut().expect("thread");
+    thread.loaded = true;
+    thread.pending_submit = Some(("prompt".into(), 1));
+
+    let panel = Rect::new(0, 0, 80, task_panel_height(&lx));
+    let list = list_rect(panel);
+    let composer = super::btw::composer_rect(panel, &lx).expect("composer rect");
+    let mut grid = super::super::grid::Grid::new(panel);
+    let _ = super::btw::draw_bottom(&mut grid, list, &lx, lx.task.as_ref().expect("task"), true);
+
+    let row: String = (list.x..list.right())
+        .map(|x| grid.cell(x, list.y).ch)
+        .collect();
+    assert!(row.contains("Working..."), "loading 应在空行左侧: {row:?}");
+    let border: String = (composer.x..composer.right())
+        .map(|x| grid.cell(x, composer.y).ch)
+        .collect();
+    assert!(
+        !border.contains("Working..."),
+        "loading 不能落在输入框顶边框"
+    );
+}
+
+#[test]
+fn btw_conversation_exposes_card_hits_for_folding() {
+    let mut lx = Lx::new();
+    lx.task = Some(TaskPage {
+        tab: TaskTab::Btw,
+        ..Default::default()
+    });
+    lx.btw.ensure_thread("qa-1");
+    let mut message = text_message("m-1", "assistant", "answer");
+    message.steps.push(AssistantStepView::Part {
+        position: 1,
+        part: ChatPartView {
+            kind: crate::chat::events::PartKind::Reasoning,
+            content: "thinking about it".into(),
+            provider_metadata_json: None,
+            started_at_ms: None,
+            ended_at_ms: None,
+            completed_at_ms: None,
+        },
+    });
+    let thread = lx.btw.active_thread_mut().expect("thread");
+    thread.loaded = true;
+    thread.chat.messages.push(message);
+    thread.rows_dirty = true;
+
+    let area = Rect::new(0, 0, 80, 24);
+    let output = task_output_rect(area, &lx).expect("BTW output rect");
+    let mut cache = crate::ui::PaneCache::default();
+    // 先量一次行，保证命中用的快照就绪。
+    let _ = btw_rows(area, &lx, &mut cache);
+
+    let mut hit = None;
+    for row in output.y..output.bottom() {
+        if let Some(target) = super::super::history_hit::task_btw_card_target_at(
+            area,
+            &lx,
+            output.x + 4,
+            row,
+            &mut cache,
+        ) {
+            hit = Some(target);
+            break;
+        }
+    }
+    assert!(hit.is_some(), "BTW 对话区必须能命中思考/工具折叠卡片");
+}
+
+#[test]
+fn btw_composer_slash_panel_is_anchored_to_the_composer() {
+    use crate::app::state::lx::slash::PanelWindow;
+    use crate::app::state::{SlashCommand, SlashEntry, SlashPanel};
+
+    let mut lx = Lx::new();
+    lx.task = Some(TaskPage {
+        tab: TaskTab::Btw,
+        ..Default::default()
+    });
+    lx.btw.ensure_thread("qa");
+    lx.btw.active_composer_mut().expect("composer").slash = Some(SlashPanel::Commands {
+        items: vec![SlashEntry::Command(SlashCommand::BtwList)],
+        window: PanelWindow::new(0),
+        query: "/b".into(),
+    });
+    let area = Rect::new(0, 0, 100, 30);
+    let input = crate::ui::main_content::lx::input_rect(area, &lx).expect("BTW composer rect");
+    let panel = crate::ui::main_content::lx::slash_layout(area, &lx).expect("BTW slash panel");
+    assert_eq!(panel.rect.bottom(), input.y, "面板紧贴 composer 上沿");
+    assert!(panel.rect.height >= 1);
+}
+
+#[test]
+fn btw_picker_is_a_second_level_panel_above_the_task_panel() {
+    use crate::app::state::lx::btw::BtwQaSummary;
+
+    let mut lx = Lx::new();
+    lx.task = Some(TaskPage {
+        tab: TaskTab::Btw,
+        ..Default::default()
+    });
+    lx.btw.qa = vec![
+        BtwQaSummary {
+            qa_id: "qa-1".into(),
+            title: "first".into(),
+            has_thread: true,
+            status: "idle".into(),
+        },
+        BtwQaSummary {
+            qa_id: "qa-2".into(),
+            title: "second".into(),
+            has_thread: false,
+            status: "idle".into(),
+        },
+    ];
+    lx.btw.active = Some("qa-1".into());
+    lx.btw.picking = Some(1);
+
+    let area = Rect::new(0, 0, 80, 30);
+    let task = super::super::layout(area, &lx)
+        .task_list
+        .expect("task panel");
+    let panel = super::btw::picker_layout(area, &lx).expect("picker panel");
+    assert_eq!(panel.rect.bottom(), task.y, "二级面板贴在任务面板上沿");
+    assert_eq!(panel.rect.width, task.width);
+    assert_eq!(
+        super::btw::picker_item_at(area, &lx, panel.content.x + 1, panel.content.y),
+        Some(0)
+    );
+    assert_eq!(
+        super::btw::picker_item_at(area, &lx, panel.content.x + 1, panel.content.y + 1),
+        Some(1)
+    );
+
+    // loading 占位：面板存在，但占位行不可点选。
+    lx.btw.qa.clear();
+    lx.btw.picking = None;
+    lx.btw.pending_pick = true;
+    lx.btw.picker_loading = true;
+    let loading = super::btw::picker_layout(area, &lx).expect("loading panel");
+    assert_eq!(loading.rect.bottom(), task.y);
+    assert!(
+        super::btw::picker_item_at(area, &lx, loading.content.x + 1, loading.content.y).is_none()
+    );
+}
+
+#[test]
+fn btw_history_loading_uses_the_bottom_gap_row_only() {
+    let mut lx = Lx::new();
+    lx.task = Some(TaskPage {
+        tab: TaskTab::Btw,
+        ..Default::default()
+    });
+    lx.btw.ensure_thread("qa-1");
+    // ensure_thread 默认未加载，正是切换 QA 后等待历史的窗口。
+    assert!(!lx.btw.active_thread().expect("thread").loaded);
+
+    let area = Rect::new(0, 0, 80, 24);
+    let panel = super::super::layout(area, &lx)
+        .task_list
+        .expect("task panel");
+    let list = list_rect(panel);
+    let mut grid = super::super::grid::Grid::new(area);
+    let _ = super::btw::draw_bottom(&mut grid, list, &lx, lx.task.as_ref().expect("task"), true);
+    let gap_row: String = (list.x..list.right())
+        .map(|x| grid.cell(x, list.y).ch)
+        .collect();
+    assert!(
+        gap_row.contains(crate::ui::text::LX_BTW_THREAD_LOADING),
+        "线程历史 loading 应画在 tab 与输入框之间的空行: {gap_row:?}"
+    );
+
+    // 对话区不再出现居中的同一个 loading。
+    let output = super::super::layout(area, &lx).task_output.expect("output");
+    let mut grid = super::super::grid::Grid::new(output);
+    let mut cache = crate::ui::main_content::lx::PaneCache::default();
+    super::btw::draw_conversation(&mut grid, output, &lx, &mut cache);
+    let text: String = (output.y..output.bottom())
+        .map(|y| {
+            (output.x..output.right())
+                .map(|x| grid.cell(x, y).ch)
+                .collect::<String>()
+        })
+        .collect::<Vec<_>>()
+        .join("\n");
+    assert!(
+        !text.contains(crate::ui::text::LX_BTW_THREAD_LOADING),
+        "对话区不应再画居中 loading: {text:?}"
+    );
+}
+
+#[test]
+fn btw_scrollbar_and_jump_button_follow_the_active_thread() {
+    let mut lx = Lx::new();
+    lx.task = Some(TaskPage {
+        tab: TaskTab::Btw,
+        ..Default::default()
+    });
+    lx.btw.ensure_thread("qa-1");
+    let thread = lx.btw.active_thread_mut().expect("thread");
+    thread.loaded = true;
+    thread.chat.messages.push(text_message(
+        "m-1",
+        "assistant",
+        &"overflow line\n".repeat(40),
+    ));
+    thread.rows_dirty = true;
+    thread.follow = false;
+    thread.scroll = 0;
+
+    let area = Rect::new(0, 0, 80, 24);
+    let mut cache = crate::ui::main_content::lx::PaneCache::default();
+    let bar = crate::ui::main_content::lx::task_btw_scrollbar(area, &lx, &mut cache)
+        .expect("overflowing BTW thread should expose a scrollbar");
+    assert!(bar.total > bar.visible);
+
+    let page = lx.task.as_ref().expect("task");
+    assert!(!page.is_at_bottom(&lx), "上翻后不应视为触底");
+    assert!(super::super::chat_bar::visible(&lx), "应显示回到底部按钮");
+
+    lx.btw.active_thread_mut().expect("thread").follow = true;
+    assert!(page.is_at_bottom(&lx), "follow 时应视为触底");
+    assert!(
+        !super::super::chat_bar::visible(&lx),
+        "触底后回到底部按钮应消失"
+    );
+}

@@ -441,3 +441,36 @@ fn turn_tools_falls_back_to_builtin_and_resources_are_named() {
         ["list_resources", "list_resource_templates", "read_resource"]
     );
 }
+
+#[test]
+fn btw_tool_surface_is_read_only() {
+    use crate::chat::agent::ToolSurface;
+
+    let snapshot = crate::mcp::McpToolSnapshot::default();
+    let decls = super::turn_tools_for_btw(&snapshot);
+    let names: Vec<&str> = decls.iter().map(|decl| decl.name.as_str()).collect();
+    assert_eq!(names, vec!["read", "search", "curr_time"]);
+    for forbidden in [
+        "edit",
+        "write",
+        "exec_command",
+        "write_stdin",
+        "update_plan",
+        "ask",
+        "spawn_agent",
+        "send_input",
+        "resume_agent",
+        "interrupt_agent",
+        "wait_agent",
+        "close_agent",
+        "list_agents",
+        "cancel_agent_input",
+        "web_search",
+    ] {
+        assert!(
+            !names.contains(&forbidden),
+            "BTW must not declare {forbidden}"
+        );
+    }
+    assert_eq!(ToolSurface::Btw.names(), &["read", "search", "curr_time"]);
+}

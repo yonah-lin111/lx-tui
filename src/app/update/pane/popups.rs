@@ -22,9 +22,10 @@ pub fn sync_lx_mention_root(state: &mut AppState, id: PaneId) -> bool {
     let referenced = state.referenced.folders.clone();
     state.pane_mut_anywhere(id).is_some_and(|pane| {
         let ref_changed = pane.lx.sync_referenced_folders(&referenced);
-        let mention = pane.lx.set_mention_root(root);
-        let project = pane.lx.set_project_root(project);
-        ref_changed || mention || project
+        let mention = pane.lx.set_mention_root(root.clone());
+        let project_changed = pane.lx.set_project_root(project.clone());
+        let composer = pane.lx.sync_btw_composer_context(root, project);
+        ref_changed || mention || project_changed || composer
     })
 }
 
@@ -42,11 +43,13 @@ pub fn sync_all_lx_mention_roots(state: &mut AppState) -> bool {
     changed
 }
 
-/// 取走当前可见窗格待发起的提及扫描请求（窗格、代号、根）；仅事件层调用。
+/// 取走当前可见窗格待发起的提及扫描请求（窗格、BTW QA 归属、代号、根）；仅事件层调用。
 ///
-/// 只对当前标签（可见）中处于 lx 视图、有有效 `@` 触发器且无在途/缓存的窗格发起；
-/// 不可见窗格的根仍会被同步，恢复可见时再发起扫描。
-pub fn take_lx_mention_scan_requests(state: &mut AppState) -> Vec<(PaneId, u64, PathBuf)> {
+/// `qa` 为 `Some` 表示来自 BTW 独立 composer：回投时只有仍是该 QA 的活动线程才接收，
+/// 切换 QA 后旧结果会被丢弃。主输入框为 `None`。
+pub fn take_lx_mention_scan_requests(
+    state: &mut AppState,
+) -> Vec<(PaneId, Option<String>, u64, PathBuf)> {
     let visible = state.active_tab().layout.pane_ids();
     let mut requests = Vec::new();
     for id in visible {
@@ -56,23 +59,46 @@ pub fn take_lx_mention_scan_requests(state: &mut AppState) -> Vec<(PaneId, u64, 
         if pane.view != PaneView::Lx {
             continue;
         }
+        let active_qa = pane.lx.btw.active.clone();
         if let Some((generation, root)) = pane.lx.take_mention_scan_request() {
-            requests.push((id, generation, root));
+            requests.push((id, None, generation, root));
+        }
+        if pane.lx.is_btw_tab()
+            && let Some(composer) = pane.lx.btw.active_composer_mut()
+            && let Some((generation, root)) = composer.take_mention_scan_request()
+        {
+            requests.push((id, active_qa, generation, root));
         }
     }
     requests
 }
 
 /// 写入指定窗格的提及扫描结果；窗格已删除或结果过期时丢弃。
+///
+/// BTW 结果只落到仍显示同一 QA 的 composer；主输入框结果按原语义落到主编辑器。
 pub fn apply_lx_mention_entries(
     state: &mut AppState,
     id: PaneId,
+    qa: Option<String>,
     generation: u64,
     root: &std::path::Path,
     entries: Vec<crate::app::markdown::MentionEntry>,
 ) {
-    if let Some(pane) = state.pane_mut_anywhere(id) {
-        pane.lx.apply_mention_entries(generation, root, entries);
+    let Some(pane) = state.pane_mut_anywhere(id) else {
+        return;
+    };
+    match qa {
+        Some(qa_id) => {
+            if pane.lx.btw.active.as_deref() != Some(qa_id.as_str()) {
+                return;
+            }
+            if let Some(composer) = pane.lx.btw.active_composer_mut() {
+                composer.apply_mention_entries(generation, root, entries);
+            }
+        }
+        None => {
+            pane.lx.apply_mention_entries(generation, root, entries);
+        }
     }
 }
 
@@ -81,17 +107,20 @@ pub fn hover_lx_mention(state: &mut AppState, id: PaneId, index: usize) -> bool 
     let referenced = state.referenced.folders.clone();
     state.pane_mut_anywhere(id).is_some_and(|pane| {
         pane.lx.sync_referenced_folders(&referenced);
-        pane.lx.mention_set_active(index)
+        pane.lx
+            .with_active_editor(|lx| lx.mention_set_active(index))
     })
 }
 
 /// 鼠标悬停 `lx` 粘贴面板操作项：仅接受可用项；返回是否变化。
 pub fn hover_lx_paste(state: &mut AppState, id: PaneId, index: usize) -> bool {
     state.pane_mut_anywhere(id).is_some_and(|pane| {
-        if pane.lx.text_paste_panel().is_some() {
-            return pane.lx.text_paste_set_active(index);
-        }
-        pane.lx.paste_set_active(index)
+        pane.lx.with_active_editor(|lx| {
+            if lx.text_paste_panel().is_some() {
+                return lx.text_paste_set_active(index);
+            }
+            lx.paste_set_active(index)
+        })
     })
 }
 
@@ -100,16 +129,18 @@ pub fn select_lx_paste(state: &mut AppState, id: PaneId, index: usize) -> bool {
     let Some(pane) = state.pane_mut_anywhere(id) else {
         return false;
     };
-    if pane.lx.text_paste_panel().is_some() {
-        let Some(action) = crate::app::paste::TextPasteAction::ALL.get(index).copied() else {
+    pane.lx.with_active_editor(|lx| {
+        if lx.text_paste_panel().is_some() {
+            let Some(action) = crate::app::paste::TextPasteAction::ALL.get(index).copied() else {
+                return false;
+            };
+            return lx.text_paste_confirm(action);
+        }
+        let Some(action) = crate::app::paste::PasteAction::ALL.get(index).copied() else {
             return false;
         };
-        return pane.lx.text_paste_confirm(action);
-    }
-    let Some(action) = crate::app::paste::PasteAction::ALL.get(index).copied() else {
-        return false;
-    };
-    pane.lx.paste_confirm(action)
+        lx.paste_confirm(action)
+    })
 }
 
 /// 鼠标点击 `@` 提及面板顶部 Tab：切换当前 Tab；返回是否变化。
@@ -120,7 +151,7 @@ pub fn switch_lx_mention_tab(state: &mut AppState, id: PaneId, tab: usize) -> bo
     let referenced = state.referenced.folders.clone();
     state.pane_mut_anywhere(id).is_some_and(|pane| {
         pane.lx.sync_referenced_folders(&referenced);
-        pane.lx.mention_set_tab(tab)
+        pane.lx.with_active_editor(|lx| lx.mention_set_tab(tab))
     })
 }
 
@@ -131,24 +162,27 @@ pub fn select_lx_mention(state: &mut AppState, id: PaneId, index: usize) -> bool
         return false;
     };
     pane.lx.sync_referenced_folders(&referenced);
-    if !pane.lx.mention_set_active(index) && !pane.lx.mention_open() {
-        return false;
-    }
-    pane.lx.mention_confirm()
+    pane.lx.with_active_editor(|lx| {
+        if !lx.mention_set_active(index) && !lx.mention_open() {
+            return false;
+        }
+        lx.mention_confirm()
+    })
 }
 
 /// 滚轮在 `@` 提及面板上滚动候选视口；`base` 为当前窗口起点，高亮不动。
 pub fn scroll_lx_mention(state: &mut AppState, id: PaneId, delta: isize, base: usize) -> bool {
-    state
-        .pane_mut_anywhere(id)
-        .is_some_and(|pane| pane.lx.mention_scroll(delta, base))
+    state.pane_mut_anywhere(id).is_some_and(|pane| {
+        pane.lx
+            .with_active_editor(|lx| lx.mention_scroll(delta, base))
+    })
 }
 
 /// 鼠标悬停快捷引用面板条目：更新高亮（窗口不滚动）；返回是否变化。
 pub fn hover_lx_refer(state: &mut AppState, id: PaneId, index: usize) -> bool {
     state
         .pane_mut_anywhere(id)
-        .is_some_and(|pane| pane.lx.refer_set_active(index))
+        .is_some_and(|pane| pane.lx.with_active_editor(|lx| lx.refer_set_active(index)))
 }
 
 /// 鼠标点选快捷引用候选：设置高亮并采纳；返回是否消费。
@@ -156,17 +190,20 @@ pub fn select_lx_refer(state: &mut AppState, id: PaneId, index: usize) -> bool {
     let Some(pane) = state.pane_mut_anywhere(id) else {
         return false;
     };
-    if !pane.lx.refer_set_active(index) && !pane.lx.refer_active() {
-        return false;
-    }
-    pane.lx.refer_confirm()
+    pane.lx.with_active_editor(|lx| {
+        if !lx.refer_set_active(index) && !lx.refer_active() {
+            return false;
+        }
+        lx.refer_confirm()
+    })
 }
 
 /// 滚轮在快捷引用面板上滚动候选视口；`base` 为当前窗口起点，高亮不动。
 pub fn scroll_lx_refer(state: &mut AppState, id: PaneId, delta: isize, base: usize) -> bool {
-    state
-        .pane_mut_anywhere(id)
-        .is_some_and(|pane| pane.lx.refer_scroll(delta, base))
+    state.pane_mut_anywhere(id).is_some_and(|pane| {
+        pane.lx
+            .with_active_editor(|lx| lx.refer_scroll(delta, base))
+    })
 }
 
 /// 鼠标悬停 `/` 命令面板条目：更新高亮（窗口不滚动）；返回是否变化。

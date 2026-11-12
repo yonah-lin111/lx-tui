@@ -455,6 +455,14 @@ impl Persistence {
         session_id: &str,
     ) -> bool {
         let _ = self.with_db(|db| db.ensure_workspace(workspace));
+        // 旁路会话（`source='btw'`）与子会话只能由各自的面板打开，不能当主会话恢复。
+        if !self
+            .with_db(|db| db.is_native_session(workspace, session_id))
+            .unwrap_or(false)
+        {
+            tracing::warn!(session = %session_id, "refusing to resume a non-native session");
+            return false;
+        }
         let loaded: Option<LoadedSession> = self.with_db(|db| {
             let messages = db.load_chat_session(workspace, session_id)?;
             let model = db.chat_session_model(workspace, session_id)?;

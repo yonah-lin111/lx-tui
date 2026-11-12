@@ -579,6 +579,19 @@ pub fn apply_slash_command(state: &mut AppState, pane: PaneId, command: SlashCom
             }
             false
         }
+        // `/btw` 采纳后回显为带参命令，参数由用户继续输入。
+        SlashCommand::Btw => {
+            if let Some(target) = state.pane_mut_anywhere(pane)
+                && let Some(prefix) = command.echo_prefix()
+            {
+                target.lx.replace_input(prefix);
+                target.lx.slash = None;
+                return true;
+            }
+            false
+        }
+        // `/btwList` 只在 BTW 输入框的 `/` 面板里提供，主会话不暴露。
+        SlashCommand::BtwList => false,
     }
 }
 
