@@ -1114,3 +1114,26 @@ fn btw_conversation_exposes_card_hits_for_folding() {
     }
     assert!(hit.is_some(), "BTW 对话区必须能命中思考/工具折叠卡片");
 }
+
+#[test]
+fn btw_composer_slash_panel_is_anchored_to_the_composer() {
+    use crate::app::state::lx::slash::PanelWindow;
+    use crate::app::state::{SlashCommand, SlashEntry, SlashPanel};
+
+    let mut lx = Lx::new();
+    lx.task = Some(TaskPage {
+        tab: TaskTab::Btw,
+        ..Default::default()
+    });
+    lx.btw.ensure_thread("qa");
+    lx.btw.active_composer_mut().expect("composer").slash = Some(SlashPanel::Commands {
+        items: vec![SlashEntry::Command(SlashCommand::BtwList)],
+        window: PanelWindow::new(0),
+        query: "/b".into(),
+    });
+    let area = Rect::new(0, 0, 100, 30);
+    let input = crate::ui::main_content::lx::input_rect(area, &lx).expect("BTW composer rect");
+    let panel = crate::ui::main_content::lx::slash_layout(area, &lx).expect("BTW slash panel");
+    assert_eq!(panel.rect.bottom(), input.y, "面板紧贴 composer 上沿");
+    assert!(panel.rect.height >= 1);
+}
