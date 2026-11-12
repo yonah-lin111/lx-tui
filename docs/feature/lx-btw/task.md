@@ -361,3 +361,9 @@ sqlite3 <worktree-db> "select ... from agent_btw_batch/recipient" # 修复前卡
 cargo test --lib                                                  # 5240 passed
 cargo clippy --all-targets -- -D warnings
 ```
+
+### 12.6 输入框整体不可见（2026-11-12 补充）
+
+- **根因**：`task::draw_list` 已把 `list_rect`（顶边框 + tab 行之下）传给 `btw::draw_bottom`，后者又减了一次 `TOP_BORDER + TAB_ROW`，内容区只剩 2 行，`avail < 3` 恒成立 → composer 永远返回 `None`。表现就是只剩归属行，键入内容落在不可见输入框里。
+- **修复**：`draw_bottom` 直接使用传入的 list 矩形；`composer_rect`（外层入口）仍负责扣一次。
+- **回归测试**：`btw_bottom_keeps_the_composer_visible_for_a_one_line_draft` 断言一行草稿时面板 6 行、composer 3 行、`draw_bottom` 返回 `Some`。

@@ -1014,3 +1014,27 @@ fn agents_list_indents_subtree_with_fixed_columns() {
         assert!(line.chars().count() <= 80);
     }
 }
+
+#[test]
+fn btw_bottom_keeps_the_composer_visible_for_a_one_line_draft() {
+    let mut lx = Lx::new();
+    lx.task = Some(TaskPage {
+        tab: TaskTab::Btw,
+        ..Default::default()
+    });
+    lx.btw.ensure_thread("qa-1");
+
+    // 一行草稿：面板 6 行（顶边框 + tab + 归属行 + 3 行输入框）。
+    let height = task_panel_height(&lx);
+    assert_eq!(height, 6);
+    let panel = Rect::new(0, 0, 80, height);
+    let list = list_rect(panel);
+    let composer = super::btw::composer_rect(panel, &lx).expect("composer rect");
+    assert_eq!(composer.height, 3, "默认一行正文 + 上下边框");
+    assert_eq!(composer.y, list.y + 1, "归属行紧贴输入框上沿");
+
+    // 回归：`draw_bottom` 收到的已是 list 矩形，不能再扣一次顶边框/tab 行。
+    let mut grid = super::super::grid::Grid::new(panel);
+    let dims = super::btw::draw_bottom(&mut grid, list, &lx, lx.task.as_ref().expect("task"));
+    assert!(dims.is_some(), "输入框必须真的画出来");
+}

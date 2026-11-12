@@ -30,10 +30,9 @@ pub(crate) fn draw_bottom(
     if rect.width == 0 || rect.height == 0 {
         return None;
     }
-    let inner = list_rect(rect);
-    if inner.height == 0 {
-        return None;
-    }
+    // 调用方传进来的已经是 `list_rect`（顶边框 + tab 行之下）；这里直接使用，
+    // 再减一次会把内容区压到 2 行、composer 永远放不下。
+    let inner = rect;
     let composer = composer_rect_in(inner, lx);
     // 归属行贴在输入框上方，中间不留空行（底部只有「归属 + 输入」两段）。
     let header_y = composer.map_or(inner.y, |composer| composer.y.saturating_sub(HEADER_ROWS));
