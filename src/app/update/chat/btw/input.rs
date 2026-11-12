@@ -30,7 +30,6 @@ pub fn apply_input(
         .active_composer()
         .is_some_and(|composer| composer.slash.is_some());
     if slash_open {
-        use crate::app::actions::LxInput;
         match command {
             LxInput::Up | LxInput::Down => {
                 let delta = if command == LxInput::Up { -1 } else { 1 };
