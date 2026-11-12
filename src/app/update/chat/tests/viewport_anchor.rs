@@ -8,8 +8,10 @@ use ratatui::layout::Rect;
 
 use super::*;
 use crate::app::state::{
-    AppState, ChatPartView, CommandView, PaneView, ProcessStateView, ToolCallView, ToolDetailView,
+    AppState, CardTarget, ChatPartView, CommandView, ModelSwitchNoticeView, PaneView,
+    ProcessStateView, ToolCallView, ToolDetailView,
 };
+use crate::chat::agent::{AgentRole, SubagentReportView};
 
 fn reasoning_part(content: &str) -> ChatPartView {
     ChatPartView {
@@ -189,6 +191,34 @@ fn following_ignores_above_growth() {
 }
 
 #[test]
+fn reading_scroll_is_clamped_when_view_shrinks() {
+    let (mut state, pane) = state_with_history(long_history());
+    let rect = Rect::new(0, 0, 40, 20);
+    let rects = [(pane, rect)];
+    let inner = crate::tiling::pane_inner_rect(rect);
+    let mut cache = crate::ui::RenderCache::default();
+    resolve_lx_history(&mut state, &rects, &mut cache);
+    let max_top = {
+        let target = state.pane_anywhere(pane).expect("pane");
+        let view = crate::ui::main_content::lx::history_view(inner, &target.lx, cache.pane(pane))
+            .expect("view");
+        view.total_rows
+            .saturating_sub(usize::from(view.body.height))
+    };
+
+    {
+        let chat = &mut state.pane_mut_anywhere(pane).expect("pane").lx.chat;
+        chat.follow_bottom = false;
+        chat.history_scroll = max_top.saturating_add(50);
+    }
+    resolve_lx_history(&mut state, &rects, &mut cache);
+    let chat = &state.pane_anywhere(pane).expect("pane").lx.chat;
+    assert_eq!(chat.history_scroll, max_top, "越界行号必须写回钳制值");
+    assert_eq!(chat.viewport_top, Some(max_top), "绘制顶部行同口径");
+    assert!(!chat.follow_bottom, "钳制不得把阅读态改回跟随");
+}
+
+#[test]
 fn pin_viewport_keeps_the_row_the_user_is_looking_at() {
     let (mut state, pane) = state_with_history(long_history());
     let area = Rect::new(0, 0, 40, 8);
@@ -209,6 +239,118 @@ fn pin_viewport_keeps_the_row_the_user_is_looking_at() {
     assert!(!chat.follow_bottom, "锚定即进入阅读态");
     // 已在阅读态：不重复锚定（否则会把用户后续滚动的位置覆盖掉）。
     assert!(!pin_lx_viewport(&mut state, pane));
+}
+
+#[test]
+fn toggling_long_user_message_while_following_pins_viewport() {
+    let (mut state, pane) = state_with_history(long_history());
+    let area = Rect::new(0, 0, 40, 8);
+    let message_id = {
+        let target = state.pane_mut_anywhere(pane).expect("pane");
+        let Some(AssistantStepView::Part { part, .. }) =
+            target.lx.chat.messages[0].steps.first_mut()
+        else {
+            panic!("首条消息必须是正文步骤");
+        };
+        part.content = (0..8)
+            .map(|line| format!("line {line}"))
+            .collect::<Vec<_>>()
+            .join("\n");
+        target.lx.chat.messages[0].id.clone()
+    };
+    remember_viewport(&mut state, pane, area);
+    let before = state
+        .pane_anywhere(pane)
+        .expect("pane")
+        .lx
+        .chat
+        .viewport_top
+        .expect("viewport top");
+
+    assert!(toggle_lx_card(
+        &mut state,
+        pane,
+        CardTarget::UserMessage { message_id }
+    ));
+    let chat = &state.pane_anywhere(pane).expect("pane").lx.chat;
+    assert!(!chat.follow_bottom, "展开即进入阅读态");
+    assert_eq!(chat.history_scroll, before, "先钉住展开前的顶部行");
+}
+
+#[test]
+fn toggling_report_and_model_switch_while_following_pins_viewport() {
+    let (mut state, pane) = state_with_history(long_history());
+    let area = Rect::new(0, 0, 40, 8);
+    {
+        let target = state.pane_mut_anywhere(pane).expect("pane");
+        let mut row = message("user", Vec::new(), 100);
+        row.id = "report-row".into();
+        row.reports.push(SubagentReportView {
+            agent_id: "r1".into(),
+            nickname: None,
+            title: "report".into(),
+            role: AgentRole::Explorer,
+            status: "completed".into(),
+            files_changed: 0,
+            changed_paths: Vec::new(),
+            duration_ms: Some(1_000),
+            body: (0..20)
+                .map(|line| format!("report line {line}"))
+                .collect::<Vec<_>>()
+                .join("\n"),
+            delivered_at_ms: 1,
+        });
+        target.lx.chat.messages.push(row);
+        target.lx.model_switch.switches.push(ModelSwitchNoticeView {
+            id: "switch-1".into(),
+            sequence: 101,
+            from_provider: None,
+            from_model: None,
+            from_variant: None,
+            to_provider: "provider".into(),
+            to_model: "model".into(),
+            to_variant: None,
+            from_label: None,
+            to_label: "model".into(),
+            updated_sources: Vec::new(),
+            injected_prompt: "prompt".into(),
+            created_at_ms: 1,
+        });
+    }
+    remember_viewport(&mut state, pane, area);
+    let before = state
+        .pane_anywhere(pane)
+        .expect("pane")
+        .lx
+        .chat
+        .viewport_top
+        .expect("viewport top");
+
+    assert!(toggle_lx_card(
+        &mut state,
+        pane,
+        CardTarget::Report {
+            message_id: "report-row".into(),
+            agent_id: "r1".into(),
+            more: false,
+        }
+    ));
+    {
+        let chat = &state.pane_anywhere(pane).expect("pane").lx.chat;
+        assert!(!chat.follow_bottom);
+        assert_eq!(chat.history_scroll, before);
+    }
+
+    assert!(toggle_lx_card(
+        &mut state,
+        pane,
+        CardTarget::ModelSwitch {
+            switch_id: "switch-1".into(),
+        }
+    ));
+    let chat = &state.pane_anywhere(pane).expect("pane").lx.chat;
+    assert!(!chat.follow_bottom);
+    assert_eq!(chat.history_scroll, before);
 }
 
 #[test]

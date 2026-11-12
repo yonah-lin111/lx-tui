@@ -64,7 +64,7 @@ pub(crate) fn content_geom(area: Rect, lx: &Lx, cache: &mut PaneCache) -> Option
             let run = page
                 .selected_agent_index(&lx.agents)
                 .and_then(|index| lx.agents.runs.get(index))?;
-            if run.chat.messages.is_empty() {
+            if !history::HistorySource::from_run(run).has_history() {
                 let rect = history::content_rect(output_rect);
                 return (rect.width > 0 && rect.height > 0).then_some(ContentGeom {
                     rect,
@@ -90,7 +90,7 @@ pub(crate) fn content_geom(area: Rect, lx: &Lx, cache: &mut PaneCache) -> Option
                     total_rows: total,
                 });
             }
-            let source = history::HistorySource::from_chat(&run.chat, &run.compact);
+            let source = history::HistorySource::from_run(run);
             let view = history::view_source_plain_ready(output_rect, source, cache);
             let rect = history::content_rect(view.body);
             if rect.width == 0 || rect.height == 0 || view.total_rows == 0 {
@@ -654,14 +654,14 @@ fn render_chunk(
                     task::agents::draw_empty_detail(grid, chunk_rect, run, lx.chat.loading_frame);
                 }
             } else {
-                let source = history::HistorySource::from_chat(&run.chat, &run.compact);
+                let source = history::HistorySource::from_run(run);
                 let body_rect = Rect::new(
                     0,
                     0,
                     chunk_rect.width.saturating_add(history::SCROLLBAR_COLUMNS),
                     chunk_rect.height,
                 );
-                history::render_source(grid, body_rect, source, chunk_start, cache);
+                history::render_source_ready(grid, body_rect, source, chunk_start, cache);
             }
         } else {
             task::draw_output_rows(grid, chunk_rect, page, chunk_start);
@@ -675,7 +675,7 @@ fn render_chunk(
         chunk_rect.width.saturating_add(history::SCROLLBAR_COLUMNS),
         chunk_rect.height,
     );
-    history::render_source(grid, body_rect, source, chunk_start, cache);
+    history::render_source_ready(grid, body_rect, source, chunk_start, cache);
 }
 
 /// 单行在选区 `(start, end)` 内的包含列范围 `(col0, col1)`（钳到 `0..width`）。

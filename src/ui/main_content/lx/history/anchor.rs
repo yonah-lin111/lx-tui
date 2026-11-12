@@ -86,9 +86,19 @@ pub(crate) fn anchor_row(
         .find(|block| block.source == anchor.source)
         .or_else(|| entry.blocks.get(anchor.block));
     let Some(block) = block else {
-        // 块被折叠/撤销/压缩删除：消息还在就回退到消息起始行；其余条目放弃。
+        // 块被折叠/撤销/压缩删除：消息还在就回退。正文块回退消息起始行；
+        // Stats/Recap/Attachments/Notice 这类尾部块回退消息末尾附近——否则一条
+        // 统计行消失会把视口向上甩出整条消息。
+        let fallback = match anchor.source {
+            BlockSource::Stats { .. }
+            | BlockSource::Recap { .. }
+            | BlockSource::RecapRunning { .. }
+            | BlockSource::Attachments { .. }
+            | BlockSource::Notice { .. } => entry.end.saturating_sub(1).max(entry.start),
+            _ => entry.start,
+        };
         return match anchor.entry {
-            AnchorEntry::Message { .. } => Some(entry.start),
+            AnchorEntry::Message { .. } => Some(fallback),
             _ => None,
         };
     };

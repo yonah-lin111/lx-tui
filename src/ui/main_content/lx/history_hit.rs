@@ -320,7 +320,18 @@ pub(crate) fn code_copy_at_source(
             if rel_col < start_col || rel_col >= end_col {
                 return None;
             }
-            let message = source.messages.get(message_index)?;
+            // ready 快照可能是上一帧/上一会话的几何：message_index 不是稳定身份。
+            // 先用条目 ID 校验/定位当前消息，找不到就拒绝命中，绝不复制另一条消息。
+            let message = source
+                .messages
+                .get(message_index)
+                .filter(|message| entry.id.as_deref().is_none_or(|id| message.id == id))
+                .or_else(|| {
+                    entry
+                        .id
+                        .as_deref()
+                        .and_then(|id| source.messages.iter().find(|message| message.id == id))
+                })?;
             let Some(crate::app::state::AssistantStepView::Part { part, .. }) =
                 message.steps.get(step_index)
             else {
@@ -348,7 +359,7 @@ fn task_agents_code_copy_at(
     let run = page
         .selected_agent_index(&lx.agents)
         .and_then(|index| lx.agents.runs.get(index))?;
-    let source = history::HistorySource::from_chat(&run.chat, &run.compact);
+    let source = history::HistorySource::from_run(run);
     let view = history::view_source_plain_ready(rect, source, cache);
     let visible = usize::from(view.body.height);
     let max = view.total_rows.saturating_sub(visible);
@@ -426,8 +437,25 @@ pub(crate) fn card_at_source(
         })
     };
     let card = clip(region.card_start, region.card_rows, region.card_cols)?;
+    let mut kind = region.kind.clone();
+    // Thinking 是唯一按 message_index 携带目标的卡片；ready 快照的旧下标可能
+    // 已指向另一条消息。用条目 ID 解析当前下标，解析失败就当作未命中。
+    if let history::CardKind::Thinking { message_index, .. } = &mut kind {
+        let entry = snapshot
+            .entries
+            .iter()
+            .find(|entry| content_row >= entry.start && content_row < entry.end)?;
+        let resolved = match entry.id.as_deref() {
+            Some(id) => source
+                .messages
+                .iter()
+                .position(|message| message.id == id)?,
+            None => *message_index,
+        };
+        *message_index = resolved;
+    }
     let hit = history::CardHit {
-        kind: region.kind.clone(),
+        kind,
         card,
         clickable: region.clickable,
     };
@@ -477,7 +505,7 @@ pub(crate) fn task_agents_card_target_at(
     let run = page
         .selected_agent_index(&lx.agents)
         .and_then(|index| lx.agents.runs.get(index))?;
-    let source = history::HistorySource::from_chat(&run.chat, &run.compact);
+    let source = history::HistorySource::from_run(run);
     let view = history::view_source_plain_ready(rect, source, cache);
     let visible = usize::from(view.body.height);
     let max = view.total_rows.saturating_sub(visible);
@@ -499,7 +527,7 @@ pub(crate) fn task_agents_scrollbar(
     let run = page
         .selected_agent_index(&lx.agents)
         .and_then(|index| lx.agents.runs.get(index))?;
-    let source = history::HistorySource::from_chat(&run.chat, &run.compact);
+    let source = history::HistorySource::from_run(run);
     let view = history::view_source_plain_ready(rect, source, cache);
     let visible = usize::from(view.body.height);
     let max = view.total_rows.saturating_sub(visible);

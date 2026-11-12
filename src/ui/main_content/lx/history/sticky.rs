@@ -50,9 +50,14 @@ pub(super) fn sticky_candidate(
     if rows.get(index)?.is_user {
         return None;
     }
-    (0..index)
+    // ready 快照可能比当前消息列表长（/resume、rewind、切会话后尚未重绘）：
+    // 两个数组必须同时用 get 访问，不能按下标交叉索引。
+    (0..index.min(rows.len()).min(messages.len()))
         .rev()
-        .find(|candidate| rows[*candidate].is_user && sticky_text(&messages[*candidate]).is_some())
+        .find(|candidate| {
+            rows.get(*candidate).is_some_and(|row| row.is_user)
+                && messages.get(*candidate).and_then(sticky_text).is_some()
+        })
 }
 
 /// 置顶行摘要：保留用户消息首个非空正文块的 `@` 引用原文，取前 512 字符 → 控制字符转空格 → 空白折叠为单行；
@@ -62,8 +67,11 @@ pub(super) fn sticky_text(message: &crate::app::state::ChatMessageView) -> Optio
     let mut projected = String::new();
     for part in message.text_parts() {
         has_text_part = true;
+        // 先截取样例再做 `Projection`：1 MiB 的 prompt 不该在每个滚轮帧被
+        // 全量扫描/复制；`SAMPLE_CHARS` 是摘要上限，不是投影后的二次裁剪。
+        let head: String = part.content.trim().chars().take(SAMPLE_CHARS).collect();
         let candidate = crate::app::paste::Projection::new(
-            part.content.trim(),
+            &head,
             &crate::app::paste::ExpandedPastes::default(),
         )
         .text()

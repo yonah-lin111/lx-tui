@@ -189,6 +189,19 @@ pub(crate) fn resolve_lx_history(
         let Some(target) = state.pane_mut_anywhere(*pane) else {
             continue;
         };
+        // 几何收缩（resize/锚点条目被删除/置顶行让位）时，视图顶部会被钳到
+        // `total - body.height`；状态必须同步回写，否则后续锚点和滚轮都会以
+        // 越界旧行号为基准，表现为静默贴底或延迟一帧停住。
+        if !target.lx.chat.follow_bottom {
+            let max_top = view
+                .total_rows
+                .saturating_sub(usize::from(view.body.height));
+            let clamped = target.lx.chat.history_scroll.min(max_top);
+            if target.lx.chat.history_scroll != clamped {
+                target.lx.chat.history_scroll = clamped;
+                changed = true;
+            }
+        }
         if target.lx.chat.viewport_top != Some(view.scroll) {
             target.lx.chat.viewport_top = Some(view.scroll);
             changed = true;
@@ -344,11 +357,10 @@ pub(crate) fn resolve_task_agents_visible(
             run.total_rows
         };
         let max = total.saturating_sub(visible);
-        // 有锚点时不能用「旧 scroll 已到旧 max」短路：上方内容收缩后旧 max 变小，
-        // 否则会把阅读态直接吸附到底部、跳过补偿。锚点存在说明用户本就在阅读。
-        let anchored = anchor.is_some();
-        let should_follow =
-            run.follow || total <= visible.saturating_add(1) || (!anchored && run.scroll >= max);
+        // 只由显式状态决定是否跟随：用户滚到底/点击回到底部会写 `run.follow = true`。
+        // 不能用「scroll 已到旧 max」短路——宽度变化或内容收缩后旧 max 变小，会把
+        // 正在阅读的用户重新吸附到底部；补偿也不应主动恢复跟随。
+        let should_follow = run.follow || total <= visible.saturating_add(1);
         let mut next_scroll = if should_follow { max } else { run.scroll };
         // 阅读态且内容在上方变高/变矮：按锚点行差补偿，不把用户顶走。
         if !should_follow {
@@ -502,6 +514,20 @@ fn toggle_report_card(
     agent_id: &str,
     more: bool,
 ) -> bool {
+    let exists = state.pane_anywhere(pane).is_some_and(|target| {
+        target.lx.chat.messages.iter().any(|message| {
+            message.id == message_id
+                && message
+                    .reports
+                    .iter()
+                    .any(|report| report.agent_id == agent_id)
+        })
+    });
+    if !exists {
+        return false;
+    }
+    // 展开/追加批次会改变行数：跟随底部时先钉住用户正在看的顶行。
+    super::pin_lx_viewport(state, pane);
     let Some(target) = state.pane_mut_anywhere(pane) else {
         return false;
     };
@@ -574,6 +600,19 @@ pub fn toggle_lx_card(state: &mut AppState, pane: PaneId, target: CardTarget) ->
         } => toggle_report_card(state, pane, &message_id, &agent_id, more),
         CardTarget::OpenAgent { agent_id } => super::open_agent_page(state, pane, &agent_id),
         CardTarget::UserMessage { message_id } => {
+            let exists = state.pane_anywhere(pane).is_some_and(|target| {
+                target
+                    .lx
+                    .chat
+                    .messages
+                    .iter()
+                    .any(|message| message.id == message_id)
+            });
+            if !exists {
+                return false;
+            }
+            // 长用户消息折叠/展开会改变行数，和工具卡一样先锚定。
+            super::pin_lx_viewport(state, pane);
             let Some(target) = state.pane_mut_anywhere(pane) else {
                 return false;
             };

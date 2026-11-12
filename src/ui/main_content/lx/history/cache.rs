@@ -174,7 +174,18 @@ impl RenderCache {
         if self.panes.is_empty() {
             return;
         }
-        let per = MAX_CACHED_BYTES / self.panes.len();
+        // `render_panes` 会为终端窗格也取一次 `pane()`；这些窗格没有历史缓存，
+        // 不能稀释真正使用 32MB 的 lx 窗格。每个窗格首次建立快照后，下一次
+        // `begin_frame` 会重新平摊。
+        let active = self
+            .panes
+            .values()
+            .filter(|pane| {
+                pane.snapshot.is_some() || !pane.blocks.is_empty() || !pane.md_streams.is_empty()
+            })
+            .count()
+            .max(1);
+        let per = MAX_CACHED_BYTES / active;
         for pane in self.panes.values_mut() {
             pane.set_limit(per);
         }
@@ -316,14 +327,12 @@ impl PaneCache {
         self.snapshot = Some((signature, Arc::clone(&snapshot)));
         self.snapshot_owner = Some(owner);
         self.snapshot_width = Some(width);
-        // 贴底/无视口时不需要「除流式末条外」指纹：避免每个流式帧多算一次全量。
-        // 用户滚离底部后若内容再变，`offscreen_stream_throttled` 见 None 会先正常
-        // 重建一次，并在这次重建里补上基线。
-        let non_stream = source
-            .viewport
-            .filter(|viewport| !viewport.follow_bottom && source.coalesce_offscreen)
-            .map(|_| self.non_stream_signature_for(width, source));
-        self.snapshot_non_stream = non_stream;
+        // 只有「流式末条已整块滚出视口」才需要「除末条外」基线。末条仍可见时
+        // 下一帧必然重建，提前算基线只会白烧一次全量指纹；基线缺失时
+        // `offscreen_stream_throttled` 会先正常重建一次再补上。
+        self.snapshot_non_stream = self
+            .streaming_tail_offscreen(width, source)
+            .then(|| self.non_stream_signature_for(width, source));
         self.snapshot_at = Some(Instant::now());
         self.evict();
         (snapshot, true)
@@ -443,6 +452,40 @@ impl PaneCache {
         }
     }
 
+    /// 流式末条是否整块位于视口下方：只有这种增量才允许屏幕外合并。
+    fn streaming_tail_offscreen(
+        &self,
+        width: u16,
+        source: super::source::HistorySource<'_>,
+    ) -> bool {
+        if !source.coalesce_offscreen
+            || self.snapshot.is_none()
+            || self.snapshot_width != Some(width)
+        {
+            return false;
+        }
+        let Some(viewport) = source.viewport else {
+            return false;
+        };
+        if viewport.follow_bottom || self.viewport_rows == 0 {
+            return false;
+        }
+        let Some(last) = source.messages.last() else {
+            return false;
+        };
+        if last.status != "streaming" {
+            return false;
+        }
+        let Some((_, snapshot)) = &self.snapshot else {
+            return false;
+        };
+        let Some(rows) = snapshot.messages.last() else {
+            return false;
+        };
+        // 流式消息整块位于视口下方：重排不会改变可见像素。
+        rows.start >= viewport.scroll.saturating_add(self.viewport_rows)
+    }
+
     /// 仅当变化局限在**视口下方**的流式末条消息时才允许合并更新。
     fn offscreen_stream_throttled(
         &mut self,
@@ -468,22 +511,15 @@ impl PaneCache {
         if built_at.elapsed() >= self.offscreen_coalesce {
             return false;
         }
-        // 只有流式末条消息变了（未读界面的其他状态一律不合并）。
-        // 基线未建立（构建时还贴底）：先正常重建一次，别拿旧几何硬合并。
+        // 先做最便宜的可见性判断：末条仍在视口内时下一帧必然重建，不计算基线。
+        if !self.streaming_tail_offscreen(width, source) {
+            return false;
+        }
+        // 基线未建立（构建时还贴底/末条仍可见）：先正常重建一次，别拿旧几何硬合并。
         let Some(expected) = self.snapshot_non_stream else {
             return false;
         };
-        if self.non_stream_signature_for(width, source) != expected {
-            return false;
-        }
-        let Some((_, snapshot)) = &self.snapshot else {
-            return false;
-        };
-        let Some(last) = snapshot.messages.last() else {
-            return false;
-        };
-        // 流式消息整块位于视口下方：重排不会改变可见像素。
-        last.start >= viewport.scroll.saturating_add(self.viewport_rows)
+        self.non_stream_signature_for(width, source) == expected
     }
 
     /// 取块级绘制数据：命中直接复用；未命中调用 `build` 并记账。

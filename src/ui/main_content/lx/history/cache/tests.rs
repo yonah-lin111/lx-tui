@@ -7,10 +7,12 @@ use ratatui::layout::Rect;
 
 use super::*;
 use crate::app::state::{
-    AssistantStepView, CardTarget, ChatMessageView, ChatPartView, Lx, LxChat, ToolCallView,
+    AssistantStepView, CardTarget, ChatMessageView, ChatPartView, DiffHunkView, DiffLineView,
+    FileChangeView, FileDiffDetailView, FileDiffView, Lx, LxChat, ToolCallView, ToolDetailView,
     ToolStatus, ToolSummary,
 };
 use crate::chat::events::PartKind;
+use crate::chat::tools::{DiffLineKind, FileChangeKind};
 use crate::ui::main_content::lx::history::paint::BlockPaint;
 use crate::ui::main_content::lx::history::snapshot::HistorySnapshot;
 use crate::ui::main_content::lx::history::{Grid, HistorySource, layout, render, view};
@@ -588,16 +590,25 @@ fn visible_blocks_survive_eviction() {
 
 /// 字节预算是**所有窗格共享**的 32MB，不是每窗格 32MB。
 #[test]
-fn budget_is_shared_across_panes() {
+fn budget_is_shared_across_history_panes() {
+    let lx = lx_with(vec![message(
+        "m1",
+        "assistant",
+        "complete",
+        vec![text_part("回答")],
+    )]);
     let mut render_cache = RenderCache::default();
     let a = PaneId::alloc();
     render_cache.begin_frame();
+    let _ = render_cache.pane(a).snapshot(40, &lx);
     let single = render_cache.pane(a).limit;
     assert_eq!(single, MAX_CACHED_BYTES, "单窗格独占整个预算");
 
     let b = PaneId::alloc();
     render_cache.begin_frame();
-    let _ = render_cache.pane(b);
+    let _ = render_cache.pane(b).snapshot(40, &lx);
+    // 快照建立后下一次 begin_frame 才重新平摊。
+    render_cache.begin_frame();
     assert_eq!(
         render_cache.pane(a).limit + render_cache.pane(b).limit,
         MAX_CACHED_BYTES,
@@ -610,6 +621,31 @@ fn budget_is_shared_across_panes() {
         render_cache.pane(a).limit,
         MAX_CACHED_BYTES,
         "窗格关闭后份额收回"
+    );
+}
+
+/// 终端窗格也会被 `render_panes` 取一次 `pane()`，但没有历史缓存，不能稀释 lx。
+#[test]
+fn terminal_panes_do_not_dilute_history_budget() {
+    let lx = lx_with(vec![message(
+        "m1",
+        "assistant",
+        "complete",
+        vec![text_part("回答")],
+    )]);
+    let mut render_cache = RenderCache::default();
+    let terminal_a = PaneId::alloc();
+    let terminal_b = PaneId::alloc();
+    let lx_pane = PaneId::alloc();
+    render_cache.begin_frame();
+    let _ = render_cache.pane(terminal_a);
+    let _ = render_cache.pane(terminal_b);
+    let _ = render_cache.pane(lx_pane).snapshot(40, &lx);
+    render_cache.begin_frame();
+    assert_eq!(
+        render_cache.pane(lx_pane).limit,
+        MAX_CACHED_BYTES,
+        "无历史缓存的终端窗格不占预算份额"
     );
 }
 
@@ -655,7 +691,7 @@ fn tool_card_geometry_is_cached_with_the_block() {
         position: 1,
         call: command,
     });
-    let lx = lx_with(vec![card]);
+    let mut lx = lx_with(vec![card]);
     let mut cache = PaneCache::default();
     let first = cache.snapshot(40, &lx);
     let spans: Vec<_> = first
@@ -671,6 +707,87 @@ fn tool_card_geometry_is_cached_with_the_block() {
     let second = cache.snapshot(40, &lx);
     assert_eq!(cache.builds(), builds, "状态未变，不允许重建");
     assert_eq!(first.cards, second.cards, "点击面必须完全一致");
+
+    // 展开输出区：块指纹必须失效，rows 与 CardSpan 同步更新。
+    assert!(lx.chat.toggle_section(
+        "assistant-1",
+        "call-1",
+        crate::app::state::CardSection::Output
+    ));
+    let expanded = cache.snapshot(40, &lx);
+    assert!(cache.builds() > builds, "折叠状态必须进入块指纹");
+    assert!(
+        expanded.total_rows > first.total_rows,
+        "展开输出后总行数必须增加"
+    );
+    let expanded_spans: Vec<_> = expanded
+        .entries
+        .iter()
+        .flat_map(|entry| entry.blocks.iter())
+        .flat_map(|block| block.paint.card_spans().to_vec())
+        .collect();
+    assert_ne!(expanded_spans, spans, "展开后点击面几何必须随行数一起更新");
+}
+
+/// 文件差异行：同字节长度但显示宽度不同会改变折行行数，必须使签名失效。
+#[test]
+fn file_diff_signature_tracks_display_width() {
+    let diff = |text: &str| FileDiffDetailView {
+        files: vec![FileChangeView {
+            path: "src/a.rs".into(),
+            to: None,
+            kind: FileChangeKind::Updated,
+            added: Some(1),
+            removed: Some(0),
+            counts_known: true,
+            simplified: false,
+            diff: Some(FileDiffView::Complete {
+                hunks: vec![DiffHunkView {
+                    lines: vec![DiffLineView {
+                        kind: DiffLineKind::Added,
+                        old_line: None,
+                        new_line: Some(1),
+                        text: text.into(),
+                        no_final_newline: false,
+                    }],
+                }],
+                simplified: false,
+            }),
+        }],
+        files_total: 1,
+        added: Some(1),
+        removed: Some(0),
+        simplified: false,
+        omitted_files: 0,
+        single: false,
+    };
+    let mut call = ToolCallView::new("call-1", "edit", 0);
+    call.status = ToolStatus::Completed;
+    call.summary = Some(Box::new(ToolSummary::default()));
+    call.detail = Some(Box::new(ToolDetailView::File(diff("aaaa"))));
+    let mut card = message("a1", "assistant", "complete", vec![text_part("改")]);
+    card.steps
+        .push(AssistantStepView::Tool { position: 1, call });
+    let mut lx = lx_with(vec![card]);
+    let mut cache = PaneCache::default();
+    let _ = cache.snapshot(40, &lx);
+    let builds = cache.builds();
+
+    let Some(AssistantStepView::Tool { call, .. }) = lx.chat.messages[0].steps.get_mut(1) else {
+        panic!("第二个步骤应是工具");
+    };
+    let Some(ToolDetailView::File(view)) = call.detail.as_deref_mut() else {
+        panic!("文件差异详情");
+    };
+    let Some(FileDiffView::Complete { hunks, .. }) = &mut view.files[0].diff else {
+        panic!("完整差异");
+    };
+    hunks[0].lines[0].text = "éé".into();
+    let _ = cache.snapshot(40, &lx);
+    assert!(
+        cache.builds() > builds,
+        "同字节长度的显示宽度变化必须重建快照"
+    );
 }
 
 /// 思考块流式生成期间：正文与时间戳变化不进指纹，展开也只画单行头部。
@@ -799,6 +916,39 @@ fn offscreen_stream_coalesces_within_window() {
     lx.chat.messages[0].sequence += 1;
     let _ = view(area, &lx, &mut cache);
     assert!(cache.builds() > builds, "非流式尾部变化必须立即重建");
+}
+
+/// 末条流式消息仍在视口内：不建立屏幕外合并基线，也不多算一次 non-stream 指纹。
+#[test]
+fn visible_streaming_tail_skips_non_stream_signature() {
+    let mut lx = lx_with(vec![
+        message("m1", "assistant", "complete", vec![text_part("visible")]),
+        message("a1", "assistant", "streaming", vec![text_part("tail")]),
+    ]);
+    lx.chat.follow_bottom = false;
+    lx.chat.history_scroll = 0;
+    let area = Rect::new(0, 0, 40, 20);
+    let mut cache = PaneCache::default();
+    cache.set_offscreen_coalesce(Duration::from_secs(3_600));
+    let _ = view(area, &lx, &mut cache);
+    assert_eq!(
+        cache.snapshot_non_stream, None,
+        "末条仍在视口内时不应建立 non-stream 基线"
+    );
+    let builds = cache.builds();
+    let evals = cache.signature_evaluations();
+
+    let AssistantStepView::Part { part, .. } = &mut lx.chat.messages[1].steps[0] else {
+        panic!("末条消息应是正文块");
+    };
+    part.content.push_str("\n可见增量");
+    let _ = view(area, &lx, &mut cache);
+    assert_eq!(cache.builds(), builds + 1, "可见增量必须重建");
+    assert_eq!(
+        cache.signature_evaluations(),
+        evals + 1,
+        "可见增量只需全量指纹，不能先白算 non-stream"
+    );
 }
 
 /// 贴底构建时没有 non-stream 基线：滚离后首次增量必须先重建一次，再进入合并。

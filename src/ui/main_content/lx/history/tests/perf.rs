@@ -161,6 +161,10 @@ fn realistic_history() -> Lx {
         }
         out.push(card);
     }
+    // 验收要求末条处于流式中：否则 `skip_streaming_tail`/流式重建路径没有被覆盖。
+    if let Some(last) = out.last_mut() {
+        last.status = "streaming".into();
+    }
     lx_with(out)
 }
 
@@ -231,9 +235,10 @@ fn perf_lx_history_realistic() {
         builds_after_cold,
         "滚动帧不得重建快照（滚动不进入指纹）"
     );
-    assert!(
-        render_cache.pane(pane).signature_evaluations() - evals_after_cold <= FRAMES as u64,
-        "同一输入代内多次 view 只能算一次指纹"
+    assert_eq!(
+        render_cache.pane(pane).signature_evaluations() - evals_after_cold,
+        FRAMES as u64,
+        "滚动帧每帧只能算一次全量指纹"
     );
     let evals_after_scroll = render_cache.pane(pane).signature_evaluations();
 
@@ -267,19 +272,21 @@ fn perf_lx_history_realistic() {
         render_cache.finish_frame();
         stream_samples.push(started.elapsed());
     }
-    assert!(
-        render_cache.pane(pane).builds() <= builds_after_cold + FRAMES as u64,
-        "流式每帧最多重建一次：{} > {}",
+    assert_eq!(
         render_cache.pane(pane).builds(),
-        builds_after_cold + FRAMES as u64
+        builds_after_cold + FRAMES as u64,
+        "贴底流式每帧必须且只能重建一次"
     );
-    assert!(
-        render_cache.pane(pane).signature_evaluations() - evals_after_scroll <= FRAMES as u64,
+    assert_eq!(
+        render_cache.pane(pane).signature_evaluations() - evals_after_scroll,
+        FRAMES as u64,
         "贴底流式每帧也只算一次全量指纹"
     );
 
     let scroll_p95 = percentile(&mut scroll_samples, 95);
     let stream_p95 = percentile(&mut stream_samples, 95);
+    assert_no_long_tasks(&scroll_samples, "realistic scroll");
+    assert_no_long_tasks(&stream_samples, "realistic stream");
     let bytes = render_cache.pane(pane).bytes();
     eprintln!(
         "perf_lx_history_realistic: total_rows={total} cold={cold_elapsed:?} \
@@ -307,6 +314,15 @@ fn percentile(samples: &mut [Duration], percent: usize) -> Duration {
     samples.sort_unstable();
     let index = samples.len().saturating_sub(1) * percent / 100;
     samples[index]
+}
+
+/// 验收决策要求滚动/流式帧没有 >50ms 长任务；P95 会掩盖单帧尖峰。
+fn assert_no_long_tasks(samples: &[Duration], label: &str) {
+    let max = samples.iter().copied().max().unwrap_or_default();
+    assert!(
+        max <= Duration::from_millis(50),
+        "{label} 出现 >50ms 长任务：{max:?}"
+    );
 }
 
 /// 热缓存下的连续滚动：帧内只应做「按视口挑块 + 画视口内的行」。
@@ -360,6 +376,8 @@ fn perf_lx_history() {
 
     let scroll_p95 = percentile(&mut scroll_samples, 95);
     let stream_p95 = percentile(&mut stream_samples, 95);
+    assert_no_long_tasks(&scroll_samples, "perf_lx_history scroll");
+    assert_no_long_tasks(&stream_samples, "perf_lx_history stream");
     let bytes = cache.bytes();
 
     eprintln!(
@@ -458,6 +476,7 @@ fn perf_lx_history_expanded_diff() {
         samples.push(started.elapsed());
     }
     let p95 = percentile(&mut samples, 95);
+    assert_no_long_tasks(&samples, "expanded diff");
     eprintln!("perf_lx_history_expanded_diff: total_rows={total} p95={p95:?}");
     assert!(
         p95 <= FRAME_BUDGET,
@@ -556,6 +575,8 @@ fn perf_lx_long_thinking_and_streaming() {
 
     let thinking_p95 = percentile(&mut thinking_samples, 95);
     let text_p95 = percentile(&mut text_samples, 95);
+    assert_no_long_tasks(&thinking_samples, "thinking stream");
+    assert_no_long_tasks(&text_samples, "text stream");
     let bytes = cache.bytes();
     assert!(
         cache.block_count() <= before_text_blocks,

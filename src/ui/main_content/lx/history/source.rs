@@ -6,7 +6,8 @@
 use crate::app::state::RewindNoticeView;
 use crate::app::state::lx::LxRecap;
 use crate::app::state::{
-    ChatMessageView, CompactNoticeView, Lx, LxChat, LxCompact, LxModelSwitch, ModelSwitchNoticeView,
+    ChatMessageView, CompactNoticeView, Lx, LxChat, LxCompact, LxModelSwitch,
+    ModelSwitchNoticeView, SubagentRun,
 };
 
 /// 离屏流式合并判定用的视口锚点。
@@ -50,6 +51,12 @@ pub(crate) struct HistorySource<'a> {
     pub coalesce_offscreen: bool,
     /// 离屏合并的视口锚点；`None` = 不参与合并。
     pub viewport: Option<HistoryViewport>,
+    /// 稳定缓存身份：同一数据源跨帧不变；切会话/切 run 时改变。
+    ///
+    /// 主历史用 session id（无 id 的草稿退回 `LxChat` 地址）；子 agent 详情用
+    /// `agent_id + child_session_id`。不能用 `LxChat` 地址做详情身份：run 列表
+    /// 排序会重建 `Vec`，所有 run 的内存地址都会改变。
+    owner: usize,
 }
 
 impl<'a> From<&'a Lx> for HistorySource<'a> {
@@ -80,6 +87,13 @@ impl<'a> From<&'a Lx> for HistorySource<'a> {
                 scroll: lx.chat.history_scroll,
                 follow_bottom: lx.chat.follow_bottom,
             }),
+            owner: lx
+                .chat
+                .session_id
+                .as_deref()
+                .map(|id| stable_owner("session", id, ""))
+                // 未绑定会话的草稿：同一窗格内地址稳定；切到已绑定会话时 owner 改变。
+                .unwrap_or(&lx.chat as *const LxChat as usize),
         }
     }
 }
@@ -89,7 +103,14 @@ impl<'a> HistorySource<'a> {
     ///
     /// `PaneCache` 用它阻止同宽度下的跨页快照复用。
     pub(crate) fn owner(&self) -> usize {
-        self.chat as *const LxChat as usize
+        self.owner
+    }
+
+    /// 子 agent 详情的数据源：owner 用稳定 ID，run 列表排序不失效。
+    pub(crate) fn from_run(run: &'a SubagentRun) -> Self {
+        let mut source = Self::from_chat(&run.chat, &run.compact);
+        source.owner = stable_owner("subagent", &run.agent_id, &run.child_session_id);
+        source
     }
 
     /// 只有一份 `LxChat` 的数据源（`Agents` 详情区）。
@@ -110,6 +131,8 @@ impl<'a> HistorySource<'a> {
             // 详情区默认不参与离屏合并；滚动路径用 `with_viewport` 显式传入。
             coalesce_offscreen: false,
             viewport: None,
+            // 无 run 身份的调用方（测试/只读几何）退回地址；生产详情走 `from_run`。
+            owner: chat as *const LxChat as usize,
         }
     }
 
@@ -148,4 +171,21 @@ pub(crate) fn is_legacy_report_row(messages: &[ChatMessageView], index: usize) -
     !messages
         .iter()
         .any(|other| other.turn_index == message.turn_index && other.role == "assistant")
+}
+
+/// 稳定 owner 指纹：同一逻辑数据源跨帧一致，不依赖对象地址。
+fn stable_owner(kind: &str, first: &str, second: &str) -> usize {
+    const OFFSET_BASIS: u64 = 0xcbf2_9ce4_8422_2325;
+    const PRIME: u64 = 0x0000_0100_0000_01b3;
+    let mut hash = OFFSET_BASIS;
+    for bytes in [kind.as_bytes(), first.as_bytes(), second.as_bytes()] {
+        for &byte in bytes {
+            hash ^= u64::from(byte);
+            hash = hash.wrapping_mul(PRIME);
+        }
+        // 分隔字段，避免 ("ab","c") 与 ("a","bc") 碰撞。
+        hash ^= 0xff;
+        hash = hash.wrapping_mul(PRIME);
+    }
+    hash as usize
 }

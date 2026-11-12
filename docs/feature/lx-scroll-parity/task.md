@@ -1,8 +1,10 @@
 # lx 消息列表滚动对齐 opencode：任务清单
 
-> 状态：**待评审**。评审通过后按 P0 → P5 顺序执行；每个提交独立可验证。
+> 状态：**已实现（`ed76d856`）**；P0~P4 完成，P5 未触发；待用户实机验收 / 待合并。
+> 审查记录与修复状态见同目录 [`review.md`](review.md)。
 >
-> 设计依据见同目录 `design.md`。所有"现状"行号以 2026-11-11 的 `dev` 工作区为准。
+> 设计依据见同目录 `design.md`。所有"现状"行号以 2026-11-11 的 `dev` 工作区为基线；
+> 实现细节已按 HEAD 同步。
 
 ## 执行约束
 
@@ -47,18 +49,21 @@ cargo test --lib -- --ignored perf_lx_history --nocapture
 
 | 项 | 目标 |
 |---|---|
-| `perf_lx_history` cold | ≤ 500ms（实测 392ms） |
-| 滚动 P95 | ≤ 4ms（实测 2.0ms） |
-| 流式 P95 | ≤ 8ms（实测 3.9ms） |
-| `perf_lx_history_expanded_diff` P95 | ≤ 12ms（实测 8.7ms） |
+| `perf_lx_history` cold | ≤ 500ms（实测 355ms） |
+| 滚动 P95 | ≤ 4ms（实测 1.83ms） |
+| 流式 P95 | ≤ 8ms（实测 2.89ms） |
+| `perf_lx_history_expanded_diff` P95 | ≤ 12ms（实测 8.23ms） |
 
 > 冷编译约 3 分钟属预期；如果团队无法接受，回滚只需删除这 3 行并记录原因。
+> 表中数字是**观测目标**；自动回归硬门禁仍是 16ms（见 `design.md` §7.1）。
+> `[profile.dev] opt-level=1` 作用于整个 dev 依赖图，不只本 crate。
 
 ## P1：单帧单指纹 + 去掉整表克隆
 
 ### 目标
 
-把每帧 3 次全量列表指纹降为 1 次；去掉每次 view 的 `Vec<MessageRows>` 克隆；
+把每帧 3 次全量列表指纹降为 1 次（屏幕外合并判定帧为 full + non-stream
+各一次，属不同指纹）；去掉每次 view 的 `Vec<MessageRows>` 克隆；
 去掉 MCP 指纹的 `join` 分配；置顶行查找改二分。
 
 ### 文件
@@ -236,15 +241,17 @@ cargo test --lib app::update::chat
 
 ### 文件
 
-- `src/app/state/lx/chat.rs`（`HistoryAnchor` / `AnchorEntry` / `LxChat.history_anchor`）
-- `src/app/state/lx/chat.rs` 的 `LxChat::new`
-- `src/ui/main_content/lx/history.rs`（`anchor_at` / `anchor_row`）
-- `src/ui/main_content/lx/history/snapshot.rs`（若 `anchor_at` 放在快照模块）
-- `src/ui/main_content/lx/history_hit.rs`（`history_anchor_at` / 详情入口）
-- `src/app/update/chat/viewport.rs`（捕获 + 补偿）
-- `src/app/update/chat/tests/history.rs`
-- `src/ui/main_content/lx/history/tests/anchor.rs`（新增，注册到 `history/tests.rs`）
-- `src/ui/main_content/lx/task/tests/`（详情锚点）
+- `src/ui/main_content/lx/history/anchor.rs`（新增：`HistoryAnchor` / `AnchorEntry` / `anchor_at` / `anchor_row`）
+- `src/ui/main_content/lx/history/cache.rs`（`snapshot_cached` / owner / epoch）
+- `src/ui/main_content/lx/history/snapshot.rs`（`SnapEntry.id`、占位规范化、`BlockSource`）
+- `src/ui/main_content/lx/history_hit.rs`（主历史锚点入口、ready 命中）
+- `src/ui/main_content/lx/history.rs`（`HistoryView.messages: Arc`、置顶二分）
+- `src/app/update/chat/viewport.rs`（主历史/详情捕获 + 补偿）
+- `src/app/update/chat/subagent.rs`（详情卡片 toggle pin）
+- `src/ui/main_content/lx/task/agents.rs`（详情锚点/测量）
+- `src/app/update/chat/tests/viewport_anchor.rs`
+- `src/ui/main_content/lx/history/tests/anchor.rs`（注册到 `history/tests.rs`）
+- `src/ui/main_content/lx/task/tests/agent_list.rs`（详情锚点/pin）
 
 ### 步骤 1：锚点模块（不落状态）
 
@@ -261,11 +268,11 @@ pub(crate) struct HistoryAnchor {
 }
 ```
 
-- `anchor_at(snapshot, source, scroll, width)`：在旧快照上二分条目/块，映射稳定 ID；
+- `anchor_at(snapshot, scroll, width)`：在旧快照上二分条目/块，映射稳定 ID；
   空行取下一块，末尾呼吸行取最后一块。
 - `anchor_row(snapshot, source, anchor, width)`：宽度不符 → None；按 ID 找条目；
-  先按 `BlockSource` 找块，再退回序号；块消失且是消息条目 → `entry.start`，
-  否则 None。
+  先按 `BlockSource` 找块，再退回序号；正文块消失且是消息条目 → `entry.start`，
+  Stats/Recap/Attachments/Notice 等尾部块 → `entry.end - 1`，否则 None。
 - `SnapEntry` 新增 `id: Option<String>`：在 `snapshot::build` 时从**同一份数据源**
   取 ID。锚点捕获在旧快照上做，若用新数据源按旧下标取 ID，子 agent 恢复整体替换
   消息列表时会锚到另一条消息。
@@ -309,9 +316,10 @@ pub(crate) fn history_anchor_row(
 
 ```rust
 let rect = history_rect(inner, lx)?;
+let base_scroll = lx.chat.history_scroll;
 // 1) 重建前：从上一帧快照捕获当前顶部行所在块
 let anchor = if !lx.chat.follow_bottom {
-    history_anchor_before(rect, lx, cache.pane(pane), lx.chat.history_scroll)
+    history_anchor_before(rect, lx, cache.pane(pane), base_scroll)
 } else {
     None
 };
@@ -322,8 +330,9 @@ if let Some(new_row) = anchor.as_ref().and_then(|a| history_anchor_row(rect, lx,
     let delta = new_row as isize - anchor.row as isize;
     if delta != 0 {
         let max_top = view.total_rows.saturating_sub(usize::from(view.body.height));
-        let next = (view.scroll as isize + delta).clamp(0, max_top as isize) as usize;
-        if next != view.scroll {
+        // 用捕获锚点时的 base_scroll；view.scroll 可能已被新几何钳制。
+        let next = (base_scroll as isize + delta).clamp(0, max_top as isize) as usize;
+        if next != base_scroll {
             lx.chat.history_scroll = next;
             view = history_view(inner, lx, cache.pane(pane))?; // 置顶行让位可能变
         }
@@ -335,7 +344,8 @@ if let Some(new_row) = anchor.as_ref().and_then(|a| history_anchor_row(rect, lx,
 
 - 补偿写入 `history_scroll`，**不要**改 `follow_bottom`；
 - 重算 view 只允许一次（避免抖动）；
-- `viewport_top` 在最后写入，且以最终 `view.scroll` 为准；
+- `viewport_top` 在最后写入，且以最终 `view.scroll` 为准；非跟随态还要把
+  `history_scroll` 同步钳到 `view.scroll`（锚点缺失/条目删除时不能留越界旧值）；
 - 宽度变化由 `snapshot_cached` 失配自然跳过，不用额外复位；
 - 点击展开/折叠前若走了 `pin_lx_viewport`，它已把 `follow_bottom=false` 且
   `history_scroll=viewport_top`，下一轮 resolve 从旧快照捕获的正是展开前的块。
@@ -347,34 +357,37 @@ if let Some(new_row) = anchor.as_ref().and_then(|a| history_anchor_row(rect, lx,
 
 `resolve_task_agents_visible`（`viewport.rs:211` 起）：
 
-1. 先算 `needs_measure`；为 true 且 `!run.follow` 时，用
-   `task_agents_anchor_before(inner, &lx, cache, run.scroll)` 从旧快照捕获锚点；
+1. `needs_measure = run.rows_dirty || run.total_rows == 0`；为 true 且
+   `!run.follow` 时，用 `task_agents_anchor_before(inner, &lx, cache, run.scroll)`
+   从旧快照捕获锚点；
 2. `task_agents_rows` 重建后，用 `task_agents_anchor_row(...)` 求新行；
 3. 在 `should_follow == false` 时把 `delta` 加回 `next_scroll`（同样的 clamp）；
-4. 有锚点时 `should_follow` 不再用 `run.scroll >= max` 短路（收缩时旧 max 变小，
-   否则会跳过补偿直接吸附底部）；`next_scroll` 从捕获时的 `run.scroll` 起算，
-   delta 应用后统一 clamp。
-5. 切换卡片前若 `run.follow == true`：按上一帧 `total_rows - visible` 钉住
+4. `should_follow` 只由 `run.follow || total <= visible+1` 决定，不再用
+   `run.scroll >= max` 短路；用户滚轮/滚动条到底时才把 `run.follow` 置 true。
+5. 卡片 toggle 后若 `run.follow == true`：按上一帧 `total_rows - visible` 钉住
    `run.scroll` 并置 `follow=false`（对齐 `pin_lx_viewport`），下一轮再补偿。
 6. 不改 `run.follow` 的补偿结论；快照没重建时不做锚点工作。
 
 ### 步骤 5：边界与复位
 
 - 宽度变化：`snapshot_cached` 失配 → 不补偿，沿用现有 resize 钳制。
-- 消息/块被撤销/压缩删除：`anchor_row` 返回 None 或消息起始行，保持行号并钳制。
-- 切换会话：状态整体替换，局部锚点天然不存在。
+- 消息/块被撤销/压缩删除：正文块回退消息起始行；Stats/Recap/Attachments/Notice
+  等尾部块回退消息末尾；`anchor_row` 返回 None 时保持行号并钳到 `max_top`。
+- 切换会话：状态整体替换，局部锚点天然不存在；owner 用 session id/agent id
+  稳定身份，不依赖 `LxChat` 地址。
 - 回到 `max_top`：`scroll_lx_history` / `set_lx_history_scroll` 置
   `follow_bottom = true`，下一轮不捕获锚点。
 
 ### 测试
 
-`history/tests/anchor.rs`（新增，5 个）：
+`history/tests/anchor.rs`（新增，6 个）：
 
-1. `anchor_block_stays_after_above_growth`：上方用户消息 1 行→6 行，锚点行 +5。
-2. `anchor_falls_back_to_message_start_when_block_gone`：块序号越界 → `entry.start`。
-3. `anchor_returns_none_when_message_gone`：删除锚点消息 → `None`，行号钳制。
-4. `anchor_dropped_on_width_change`：宽度变化 → `None`。
-5. `anchor_at_clamps_beyond_last_block`：末尾呼吸行锚到最后一块。
+1. `anchor_block_stays_after_above_growth`：块内非零 offset，上方用户消息变高后锚点行同步下移。
+2. `anchor_falls_back_to_message_start_when_block_gone`：正文块序号越界 → `entry.start`。
+3. `tail_block_disappearance_falls_back_near_message_end`：Stats 消失 → 消息末尾附近。
+4. `anchor_returns_none_when_message_gone`：删除锚点消息 → `None`，行号钳制。
+5. `anchor_dropped_on_width_change`：宽度变化 → `None`。
+6. `anchor_at_clamps_beyond_last_block`：末尾呼吸行锚到最后一块。
 
 `history/tests/sticky.rs`：
 
@@ -437,7 +450,7 @@ cargo test --lib ui::main_content::lx::task
 
 ```bash
 cargo test --lib ui::main_content::lx::history::cache
-cargo test --release --lib -- --ignored perf_lx_history --nocapture
+cargo test --release --lib -- --ignored perf_lx_ --test-threads=1
 ```
 
 ## P4：验收夹具与性能断言
@@ -455,30 +468,35 @@ cargo test --release --lib -- --ignored perf_lx_history --nocapture
    - 其中第一条助手命令的输出 10,000 行（实测 569,999 字节）；
    - 实测渲染行数 31,800（断言 ≥ 30,000）。
 2. 新增 `#[ignore]` 用例 `perf_lx_history_realistic`：
-   - 每帧模拟事件循环的 3 次取快照（resolve view + build_chat view + render）；
-   - 120 帧滚动 + 120 帧流式追加；
+   - 缓存层每帧 `view×2 + render`（与事件循环的 resolve/build/draw 取数同源）；
+     不含 `resolve_lx_history` 的锚点扫描，锚点开销由滚动单测/人工验收覆盖；
+   - 120 帧滚动 + 120 帧流式追加；夹具末条 `status="streaming"`；
    - 用真实 `RenderCache::{prepare_frame, pane, begin_frame, finish_frame}` 驱动；
-   - 滚动帧断言 `builds` 不增长（同一输入代只重建一次）且每帧 ≤1 次指纹计算；
-   - 流式帧断言每帧最多重建一次、≤1 次全量指纹（120 帧 → `builds` = 1 + 120，
-     `evals` = 1 + 120 + 120）；
+   - 滚动帧断言 `builds` 不增长，`evals` 精确 +120；
+   - 流式帧断言 `builds` 精确 +120、`evals` 精确 +120（贴底场景）；
+   - 滚动/流式采样额外断言 max ≤50ms；
    - P95 ≤ 16ms（release 与 debug 各跑）；
    - 末尾断言 `cache.bytes() <= MAX_CACHED_BYTES`。
 3. 保留现有 `perf_lx_history` / `perf_lx_history_expanded_diff` /
-   `perf_lx_long_thinking_and_streaming`：不改预算，不删断言。
-4. 慢帧观测未实施：人工验收为准，避免生产日志噪音。
+   `perf_lx_long_thinking_and_streaming`：不改预算，不删断言；三者同样加 max 断言。
+4. 慢帧观测未实施：人工验收为准，避免生产日志噪音；输入到画面 <50ms 未自动化。
 
 ### 验收
 
 ```bash
-cargo test --release --lib -- --ignored perf_lx_history --nocapture
-cargo test --lib -- --ignored perf_lx_history --nocapture
+cargo test --release --lib -- --ignored perf_lx_ --test-threads=1
+cargo test --lib -- --ignored perf_lx_ --test-threads=1
 ```
 
-记录输出到本文末尾"性能记录"。
+记录输出到本文末尾"性能记录"。`perf_lx_` 同时覆盖
+`perf_lx_history` / `perf_lx_history_realistic` / `perf_lx_history_expanded_diff` /
+`perf_lx_long_thinking_and_streaming`；`--test-threads=1` 避免重型 perf 互相争 CPU。
 
 ## P5：工具卡绘制缓存（条件项）
 
-> **默认不实施**。只有 P0~P4 完成后满足以下任一条件才启动：
+> **未触发，不实施**（2026-11-11 实测 debug `perf_lx_history_expanded_diff`
+> P95 = 8.65ms < 10ms；真实会话未出现可见工具卡滚动单帧 >16ms）。
+> 只有满足以下任一条件才启动：
 > - debug `perf_lx_history_expanded_diff` P95 > 10ms；
 > - 真实会话出现可见工具卡滚动单帧 > 16ms。
 
@@ -512,9 +530,9 @@ cargo fmt
 cargo clippy --all-targets -- -D warnings
 cargo test
 
-# 性能（必须先做完 P0）
-cargo test --release --lib -- --ignored perf_lx_history --nocapture
-cargo test --lib -- --ignored perf_lx_history --nocapture
+# 性能（必须先做完 P0；单线程）
+cargo test --release --lib -- --ignored perf_lx_ --test-threads=1
+cargo test --lib -- --ignored perf_lx_ --test-threads=1
 ```
 
 ## 人工验收（用户执行）
@@ -540,14 +558,16 @@ cargo run
 | 2026-11-11 | dev (opt1) | 300 / 31.8k | 240ms | 0.38ms | 0.73ms | — | P4 验收夹具，evals=241 |
 | 2026-11-11 | release | 300 / 31.8k | 164ms | 0.34ms | 0.68ms | — | P4 验收夹具，evals=241 |
 | 2026-11-11 | release | 1400 / 102.9k | 258ms | 1.96ms | 2.93ms | 8.07ms | 最终回归 |
+| 2026-11-12 | dev (opt1) | 300 / 31.8k | 222ms | 0.37ms | 0.72ms | — | review 修复后，builds=121/evals=241 |
+| 2026-11-12 | release | 1400 / 102.9k | 230ms | 1.92ms | 2.83ms | 6.82ms | review 修复后，单线程 |
 
 ## 完成定义（DoD）
 
-- [x] P0 合入，两类性能命令达到表中目标；
-- [x] 每帧指纹只算 1 次（有 `signature_evaluations` 断言）；
+- [x] P0 合入（本分支），两类性能命令达到表中目标；
+- [x] 指纹：贴底/末条可见流式帧 1 次全量；屏幕外合并判定帧 full + non-stream；
 - [x] `HistoryView` 不再克隆消息行区间（`Arc`）；
-- [x] 主历史与子 agent 详情具备块级锚点，边界测试通过；
-- [x] 贴底/离底/回底语义有测试钉住；
+- [x] 主历史与子 agent 详情具备块级锚点，边界/尾部块/owner 测试通过；
+- [x] 贴底/离底/回底语义有测试钉住；详情与主历史一致，不因 clamp 自动跟随；
 - [x] 现有几何、滚动条、置顶行、thinking 命中、选区测试全部通过；
 - [x] `cargo fmt` / `clippy -D warnings` / `cargo test` 全绿；
 - [ ] 人工验收 6 步由用户确认（需 `cargo run`）；

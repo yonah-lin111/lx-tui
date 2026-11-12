@@ -43,8 +43,8 @@ rmcp = { version = "3.8.0", default-features = false, features = [
 [target.'cfg(unix)'.dependencies]
 libc = "0.2"
 
-# 开发态保持完整调试符号，但对本 crate 开启基础优化：debug 下历史滚动/流式
-# 排版与 release 差 2~4 倍，P95 会直接超过 16ms。冷编译代价约 3 分钟。
+# 开发态保持完整调试符号，但对整个 dev 依赖图开启基础优化：debug 下历史滚动/
+# 流式排版与 release 差 2~4 倍，P95 会直接超过 16ms。冷编译代价约 3 分钟。
 [profile.dev]
 opt-level = 1
 

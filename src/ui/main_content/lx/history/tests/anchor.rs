@@ -18,15 +18,29 @@ fn build(lx: &Lx, cache: &mut PaneCache) -> HistorySnapshot {
 fn anchor_block_stays_after_above_growth() {
     let mut lx = lx_with(vec![
         with_id("u0", "user", vec![text_part("0")]),
-        with_id("a1", "assistant", vec![text_part("middle")]),
+        with_id(
+            "a1",
+            "assistant",
+            vec![text_part("middle0\nmiddle1\nmiddle2")],
+        ),
         with_id("a2", "assistant", vec![text_part("bottom")]),
     ]);
     let mut cache = PaneCache::default();
     let first = build(&lx, &mut cache);
+    // 落在 a1 块内第 2 行，而不是消息间空行/下一条消息。
     let scroll = first.messages[1].start + 1;
     let anchor = anchor_at(&first, scroll, 30).expect("锚点");
     let old_row = anchor.row;
+    assert_eq!(
+        anchor.entry,
+        AnchorEntry::Message {
+            index: 1,
+            id: "a1".into()
+        },
+        "锚点必须落在 a1 的消息条目"
+    );
     assert_eq!(anchor.block, 0, "单步消息的锚点落在第一个块");
+    assert_eq!(anchor.offset, 1, "块内 offset 不得退化为块首");
 
     // 上方用户消息从 1 行变 6 行：锚点块整体下移 5 行。
     lx.chat.messages[0] = with_id("u0", "user", vec![text_part("0\n1\n2\n3\n4\n5")]);
@@ -37,6 +51,65 @@ fn anchor_block_stays_after_above_growth() {
         second.messages[1].start,
         first.messages[1].start + 5,
         "消息起始行同步下移"
+    );
+}
+
+#[test]
+fn tail_block_disappearance_falls_back_near_message_end() {
+    use crate::chat::agent::AgentRole;
+    use crate::db::chat::SubagentRecord;
+
+    let mut assistant = with_id("a1", "assistant", vec![text_part("body\nsecond\nthird")]);
+    assistant.model_label = Some("model".into());
+    assistant.input_tokens = Some(10);
+    assistant.output_tokens = Some(2);
+    let mut lx = lx_with(vec![
+        with_id("u0", "user", vec![text_part("question")]),
+        assistant,
+    ]);
+    let mut cache = PaneCache::default();
+    let first = build(&lx, &mut cache);
+    let stats = first
+        .entries
+        .iter()
+        .flat_map(|entry| entry.blocks.iter())
+        .find(|block| matches!(block.source, super::BlockSource::Stats { .. }))
+        .expect("assistant stats block");
+    let anchor = anchor_at(&first, stats.start, 30).expect("stats anchor");
+    let message_start = first.messages[1].start;
+
+    lx.agents
+        .runs
+        .push(crate::app::state::SubagentRun::from_record(
+            &SubagentRecord {
+                agent_id: "sub-a".into(),
+                nickname: None,
+                agent_path: "/root/a".into(),
+                child_session_id: "sess-a".into(),
+                parent_session_id: "sess-parent".into(),
+                spawn_message_id: None,
+                role: AgentRole::Explorer,
+                model_provider: String::new(),
+                model_id: String::new(),
+                model_variant: None,
+                status: "running".into(),
+                title: "task".into(),
+                created_at_ms: 1,
+                completed_at_ms: None,
+                report_json: None,
+                report_delivered: false,
+            },
+        ));
+    let second = build(&lx, &mut cache);
+    let row = anchor_row(&second, HistorySource::from(&lx), &anchor, 30).expect("fallback row");
+    assert!(
+        row > message_start,
+        "尾部块消失不能回退到消息开头：{row} <= {message_start}"
+    );
+    assert!(
+        row >= second.entries[1].end.saturating_sub(1),
+        "应回退到消息末尾附近：{row} < {}",
+        second.entries[1].end
     );
 }
 

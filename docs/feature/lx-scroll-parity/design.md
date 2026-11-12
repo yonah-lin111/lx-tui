@@ -1,11 +1,12 @@
 # lx 消息列表滚动对齐 opencode：设计
 
-> 状态：**待评审**。评审通过前不修改任何生产代码。
+> 状态：**已实现（`ed76d856`）**；P0~P4 完成，P5 未触发；待用户实机验收 / 待合并。
+> 审查记录与修复状态见同目录 [`review.md`](review.md)。
 >
 > 参考实现：`/Users/yonah/projects/agent/opencode-dev/packages/tui`（以及依赖
 > `@opentui/core@0.8.1` 的 `ScrollBoxRenderable`）。
 >
-> 本文代码位置以当前 `dev` 工作区（2026-11-11）为准。
+> 本文“现状”行号以 2026-11-11 的 `dev` 工作区为基线；实现细节已按 HEAD 同步。
 
 ## 0. 已确认的决策
 
@@ -14,7 +15,7 @@
 | 1 | "卡"的表现 | 长会话滚动 + 流式输出时滚动（A+B） |
 | 2 | 验收夹具 | 300 条消息 / 600 次工具调用 / ≥3 万渲染行，末条处于流式中；连续滚轮 20 格，单帧 P95 < 16ms、无 > 50ms 长任务、输入到画面 < 50ms |
 | 3 | 对齐边界 | 行为语义 + 成本模型对齐；**保留精确绝对行号**，不引入估算总行数 |
-| 4 | 锚点粒度 | **块级**：`(message_id, 块序号, 块内行偏移)`；块消失回退消息起始行，消息消失保持行号并钳制 |
+| 4 | 锚点粒度 | **块级**：`(message_id, 块序号, 块内行偏移)`；正文块消失回退消息起始行、尾部块回退消息末尾，消息消失保持行号并钳制 |
 | 5 | 构建口径 | 验收包含 `cargo run`（debug）：`[profile.dev] opt-level = 1`，debug P95 也须 ≤16ms |
 | 6 | 增量重建 | **不做**消息级脏后缀增量；用 `opt-level=1` + 单帧单指纹 + 去 clone + 滚轮路径 O(1) 达成 |
 | 7 | 作用域 | 主聊天历史 + 子 agent 详情（共用 `HistorySource`/`PaneCache`）；任务输出、ask、todo、侧栏列表不动 |
@@ -26,10 +27,10 @@
 
 | 场景 | release | debug（现状） | debug + `opt-level=1` |
 |---|---|---|---|
-| 冷启动全量构建 | 250ms | 1.94s | **392ms** |
-| 热缓存滚动 P95 | 3.1ms | 8.3ms | **2.0ms** |
-| 流式追加 P95 | 4.0ms | 17.6ms（超预算） | **3.9ms** |
-| 展开 2000 行 diff 滚动 P95 | 8.6ms | 37.5ms（超预算） | **8.7ms** |
+| 冷启动全量构建 | 250ms | 1.94s | **355ms** |
+| 热缓存滚动 P95 | 3.1ms | 8.3ms | **1.83ms** |
+| 流式追加 P95 | 4.0ms | 17.6ms（超预算） | **2.89ms** |
+| 展开 2000 行 diff 滚动 P95 | 8.6ms | 37.5ms（超预算） | **8.23ms** |
 
 命令：
 
@@ -170,6 +171,8 @@ opt-level = 1
 
 新增"输入代"概念：事件循环在每轮绘制前把"本轮输入已固定"告诉缓存；同一代内
 `(宽度, 数据源 owner)` 相同的指纹只算一次，解析阶段、绘制阶段共用。
+全量指纹与「除流式末条外」指纹是两个槽：屏幕外合并判定帧各算一次，
+其余帧（贴底/末条可见）只算全量那一次。
 
 `src/ui/main_content/lx/history/cache.rs`：
 
@@ -356,10 +359,13 @@ let new_row = history_anchor_row(rect, lx, cache, &anchor); // 新快照
 let delta = new_row as isize - anchor.row as isize;
 if delta != 0 {
     let max_top = view.total_rows - view.body.height;
-    let next = (view.scroll as isize + delta).clamp(0, max_top as isize);
+    // 基准必须是捕获锚点时的 base_scroll；view.scroll 可能已被新几何钳制，
+    // 再叠加 delta 会把同一个收缩算两次。
+    let next = (base_scroll as isize + delta).clamp(0, max_top as isize);
     lx.chat.history_scroll = next;
     view = history_view(...); // 置顶行让位可能变，同一快照重算一次
 }
+// 锚点缺失/条目被删除时也不留越界状态：最终非跟随态同步为 view.scroll。
 ```
 
 `anchor_row` 的解析规则：
@@ -368,7 +374,8 @@ if delta != 0 {
 2. 按 `AnchorEntry` 在新 `source` 里找条目（先验捕获下标 + ID，再全表按 ID）；
 3. 先按 `BlockSource` 找块（防止汇报/分组前插导致序号漂移），找不到再退回
    `block` 序号；块身份与序号都失效时：
-   - 消息条目 → 回退 `entry.start`；
+   - 消息正文块 → 回退 `entry.start`；
+   - Stats/Recap/Attachments/Notice 等尾部块 → 回退 `entry.end - 1`；
    - 其他条目 → None；
 4. `row = block.start + offset.min(block.rows-1)`。
 
@@ -378,25 +385,26 @@ if delta != 0 {
   （`next >= max_top`）才恢复跟随。
 - `follow_bottom == true` 时不捕获锚点，保持贴底。
 - 宽度变化（resize / 折叠栏变化）`snapshot_cached` 直接失配，不补偿。
-- 消息/块被撤销或压缩删除：消息还在就回退消息起始行，否则保持行号并钳制。
+- 消息/块被撤销或压缩删除：正文块回退消息起始行，Stats/Recap/Attachments/Notice
+  等尾部块回退消息末尾；消息消失保持行号并钳制到 `max_top`。
 - 锚点只影响主历史和子 agent 详情；任务输出/ask/todo 不变。
 
 #### 4.4.4 子 agent 详情
 
-`resolve_task_agents_visible` 只在 `needs_measure`（`rows_dirty`）时重建快照：
+`resolve_task_agents_visible` 在 `needs_measure = run.rows_dirty || run.total_rows == 0`
+时重建快照：
 
 - 重建前用同样的 `snapshot_cached` + `anchor_at` 捕获 `run.scroll` 所在块；
 - `task_agents_rows` 重建后，用 `anchor_row` 求新行并按同样公式补偿 `run.scroll`；
 - 快照没重建时不做任何锚点工作（几何不可能变）。
 
-详情区切换卡片前，若 `run.follow == true`，先按上一帧的
-`total_rows - visible` 钉住 `run.scroll` 并置 `follow = false`（对齐主历史的
-`pin_lx_viewport`），下一轮再按锚点补偿；否则展开视口内的卡片会把底部内容顶走。
+详情区卡片 toggle 后若 `run.follow == true`，按上一帧的 `total_rows - visible`
+钉住 `run.scroll` 并置 `follow = false`（对齐主历史的 `pin_lx_viewport`），
+下一轮再按锚点补偿；否则展开视口内的卡片会把底部内容顶走。
 
-详情区的 `should_follow` 保留「`run.follow || total <= visible+1`」，但**有锚点时**
-不再用 `run.scroll >= max` 短路（内容收缩时旧 max 变小，短路会直接吸附底部）。
-补偿把 `run.scroll` 推到 `max` 时，允许下一帧按现有规则恢复跟随。这是详情区与
-主历史唯一的语义差异，已有测试钉住。
+详情区的 `should_follow` 只由「`run.follow || total <= visible+1`」决定；不再用
+`run.scroll >= max` 短路。用户在滚轮/滚动条真正到底时会把 `run.follow` 置 true，
+宽度变化或内容收缩造成的 clamp 不会自动恢复跟随。该语义与主历史一致，已有测试钉住。
 
 ### 4.5 滚轮路径 O(1)
 
@@ -450,6 +458,9 @@ Q6 选定 B 时把"工具卡布局缓存"列为手段之一，但实测 `opt-lev
 > - debug `perf_lx_history_expanded_diff` P95 > 10ms，或
 > - 真实会话中出现单帧 > 16ms 的可见工具卡滚动，
 > 才实施本项；否则记录实测数据并关闭该项。
+>
+> **实测未触发**：debug `perf_lx_history_expanded_diff` P95 = 8.65ms（<10ms），
+> 故 P5 关闭，不实施工具卡绘制缓存。
 
 若触发，实施范围限定为：在 `BlockPaint::Legacy` 上增加"已完成卡片的绘制行缓存"
 （按 `BlockSlot + sig + width + folds`，动画中的卡片仍走实时绘制），不改工具卡
@@ -474,7 +485,7 @@ Q6 选定 B 时把"工具卡布局缓存"列为手段之一，但实测 `opt-lev
 | 流式但已上滚 | false | 捕获；尾部在视口下方则 delta=0 | 不变 |
 | 上方工具卡变高 | false | 捕获并补偿 | `scroll + (new_row - old_row)` |
 | 点击展开/折叠**上方**卡片 | false | 捕获并补偿 | 同上 |
-| 锚点块被折叠移除 | false | 回退消息起始行/放弃 | 保持并钳制 |
+| 锚点块被折叠移除 | false | 正文块回退消息起始行；尾部块回退消息末尾 | 保持并钳制 |
 | 撤销/压缩删除锚点消息 | false | 条目找不到 → 放弃 | 保持行号并钳制到 `max_top` |
 | 窗口宽度变化 | 不变 | 旧快照宽度失配 → 放弃 | 现有 resize 钳制 |
 | 切换会话 | true | 不捕获 | 重置 |
@@ -521,11 +532,11 @@ cargo fmt
 cargo clippy --all-targets -- -D warnings
 cargo test
 
-# 性能：release 必须全绿
-cargo test --release --lib -- --ignored perf_lx_history --nocapture
+# 性能：release 必须全绿（单线程，避免重型 perf 互相争 CPU）
+cargo test --release --lib -- --ignored perf_lx_ --test-threads=1
 
 # 性能：debug + opt-level=1 必须全绿（本任务新增验收）
-cargo test --lib -- --ignored perf_lx_history --nocapture
+cargo test --lib -- --ignored perf_lx_ --test-threads=1
 ```
 
 新增/保留的断言：
@@ -533,12 +544,16 @@ cargo test --lib -- --ignored perf_lx_history --nocapture
 - 1400 条 / 10.3 万行：滚动、流式、展开 diff 的 P95 ≤ 16ms（release 与 dev 各跑一遍）；
 - 300 条 / 3 万行 / 含一条 500KB 工具结果：同上；
 - "无 >50ms 长任务"只约束滚动/流式帧，**不包含**会话首次加载、窗口 resize
-  这类一次性全量构建（冷构建 392ms 是已知且可接受的一次性成本）；
+  这类一次性全量构建（冷构建 392ms 是已知且可接受的一次性成本）；性能夹具
+  已加入 max(≤50ms) 断言；
 - 锚点：上方块变高后，锚点块在屏幕上的相对位置不变（±0 行）；
-- 锚点：块消失回退消息起始行；消息消失保持行号并钳制；
+- 锚点：正文块消失回退消息起始行；Stats/Recap/Attachments/Notice 等尾部块
+  消失回退消息末尾附近；消息消失保持行号并钳制到 `max_top`；
 - 锚点：贴底流式不产生锚点；上滚后不因补偿自动恢复跟随；
 - 指纹：同一 epoch 内两次 view 只重建一次；epoch 变化后按新状态重建；
-- 现有几何/滚动条/置顶行/thinking 命中断言全部保持通过。
+  贴底/末条可见的流式帧只算 1 次全量指纹；屏幕外合并判定帧允许 full + non-stream；
+- 现有几何/滚动条/置顶行/thinking 命中断言全部保持通过；
+- 「输入到画面 <50ms」依赖真实终端与鼠标事件，保留为人工验收项。
 
 ### 7.2 人工验证
 
@@ -558,7 +573,7 @@ cargo test --lib -- --ignored perf_lx_history --nocapture
 | 指纹 epoch 复用掩盖状态变化 | 画面滞后一帧 | 只允许事件循环在 resolve/draw 之间开启；测试默认关闭；新增"同 epoch 只重建一次"测试 |
 | 锚点与用户滚动打架 | 滚动被拉回 | 惰性捕获（仅用户滚动后的新位置）；补偿永不改 follow；宽度变化丢锚点 |
 | `Arc<Vec<MessageRows>>` 改动面 | 编译错误集中暴露 | 纯类型替换，Deref 兼容；几何测试全量验证 |
-| 详情区 `should_follow` 差异 | 详情滚到底自动跟随 | 保留现状，测试钉住；主历史不受影响 |
+| 详情区去掉 `scroll >= max` 短路 | 内容收缩后不自动恢复跟随 | 用户主动滚到底/点回到底部会置 `follow=true`；测试钉住，主历史同语义 |
 | 淘汰单次扫描 | 极端内存压力下排序开销 | 仅超预算触发；预算内直接返回 |
 
 ## 9. 被否决的方案
@@ -579,4 +594,6 @@ cargo test --lib -- --ignored perf_lx_history --nocapture
 | P2 | 块级锚点（主历史 + 详情） | 锚点单测 + 手工验证 |
 | P3 | 淘汰单次扫描 | 缓存上限测试 |
 | P4 | 300 条验收夹具 + 性能断言 | dev/release 两套命令 |
-| P5 | 工具卡绘制缓存（仅当 4.7 触发条件成立） | expanded diff 性能对比 |
+| P5 | 工具卡绘制缓存（仅当 4.7 触发条件成立） | **未触发，未实施**（expanded diff P95 8.65ms < 10ms） |
+
+实际实现落在单个提交 `ed76d856`（P0~P4 合在一起）；审查/修复见 `review.md`。

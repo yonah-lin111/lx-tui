@@ -108,6 +108,32 @@ fn chat_hit_returns_copy_code_on_assistant_code_block_button_and_misses_outside(
 }
 
 #[test]
+fn stale_code_copy_hit_resolves_message_by_id() {
+    let area = Rect::new(0, 0, 50, 18);
+    let old_code = "fn old() -> usize {\n    1\n}";
+    let mut lx = Lx::new();
+    let mut chat = LxChat::new();
+    chat.messages
+        .push(assistant_msg("a-1", &format!("```rust\n{old_code}\n```")));
+    lx.chat = chat;
+    let mut cache = PaneCache::default();
+    let mut buf = Buffer::empty(area);
+    render(area, &mut buf, &lx, true, None, &mut cache);
+    let (btn_x, btn_y) = find_copy_button_pos(&buf, area).expect("copy button");
+
+    // 绘制后插入一条消息：旧快照的 message_index=0 已指向另一条消息。
+    lx.chat.messages.insert(
+        0,
+        assistant_msg("a-0", "```rust\nfn inserted() -> usize {\n    0\n}\n```"),
+    );
+    assert_eq!(
+        chat_hit(area, &lx, btn_x, btn_y, &mut cache),
+        Some(LxChatHit::CopyCode(old_code.into())),
+        "必须按稳定消息 ID 复制旧屏幕上的代码"
+    );
+}
+
+#[test]
 fn chat_hit_returns_raw_unwrapped_code_for_soft_wrapped_block() {
     let area = Rect::new(0, 0, 40, 20);
     let raw = "fn long() {\n    let value = aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa;\n\n    done();\n}";
@@ -246,6 +272,30 @@ fn chat_hit_on_sticky_prompt_header_does_not_fall_through_to_history() {
         chat_hit(area, &lx, area.right() - 3, area.y, &mut cache),
         Some(LxChatHit::PromptHeader)
     );
+}
+
+#[test]
+fn ready_hit_does_not_panic_when_live_messages_shrink() {
+    let area = Rect::new(0, 0, 50, 18);
+    let mut lx = Lx::new();
+    let mut chat = LxChat::new();
+    for index in 0..6 {
+        let role = if index % 2 == 0 { "user" } else { "assistant" };
+        let mut message = assistant_msg(&format!("m{index}"), "正文内容\n第二行\n第三行");
+        message.role = role.into();
+        chat.messages.push(message);
+    }
+    lx.chat = chat;
+    lx.chat.follow_bottom = false;
+    lx.chat.history_scroll = 4;
+    let mut cache = PaneCache::default();
+    let mut buf = Buffer::empty(area);
+    render(area, &mut buf, &lx, true, None, &mut cache);
+
+    // 模拟 /resume 到更短会话：快照仍是 6 条，实时消息只剩 1 条；不重绘直接命中。
+    lx.chat.messages.truncate(1);
+    let _ = chat_hit(area, &lx, 1, 1, &mut cache);
+    let _ = crate::ui::main_content::lx::history_rows(area, &lx, &mut cache);
 }
 
 #[test]

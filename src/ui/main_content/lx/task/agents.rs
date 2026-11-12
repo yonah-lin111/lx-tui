@@ -33,11 +33,11 @@ pub(crate) fn draw_detail(
     if rect.width == 0 || rect.height == 0 {
         return 0;
     }
-    let source = HistorySource::from_chat(&run.chat, &run.compact).with_viewport(HistoryViewport {
+    let source = HistorySource::from_run(run).with_viewport(HistoryViewport {
         scroll,
         follow_bottom: run.follow,
     });
-    if run.chat.messages.is_empty() {
+    if !source.has_history() {
         draw_empty_detail(grid, rect, run, loading_frame);
         return 1;
     }
@@ -101,10 +101,14 @@ pub(crate) fn detail_rows(
     if content_width == 0 {
         return (usize::from(rect.height), true);
     }
-    let source = HistorySource::from_chat(&run.chat, &run.compact).with_viewport(HistoryViewport {
+    let source = HistorySource::from_run(run).with_viewport(HistoryViewport {
         scroll: run.scroll,
         follow_bottom: run.follow,
     });
+    // 空/未加载详情只画一行占位；行数口径与 `draw_detail` 的返回值保持一致。
+    if !source.has_history() {
+        return (1, true);
+    }
     // `resolve` 先于绘制，首帧也要有视口行数，离屏合并才能判定。
     cache.set_viewport_rows(usize::from(rect.height));
     history::measure_cached(content_width, source, cache)
@@ -126,7 +130,7 @@ pub(crate) fn anchor_before(
     if width == 0 {
         return None;
     }
-    let source = HistorySource::from_chat(&run.chat, &run.compact).with_viewport(HistoryViewport {
+    let source = HistorySource::from_run(run).with_viewport(HistoryViewport {
         scroll: run.scroll,
         follow_bottom: run.follow,
     });
@@ -150,7 +154,7 @@ pub(crate) fn anchor_row(
     if width == 0 {
         return None;
     }
-    let source = HistorySource::from_chat(&run.chat, &run.compact).with_viewport(HistoryViewport {
+    let source = HistorySource::from_run(run).with_viewport(HistoryViewport {
         scroll: run.scroll,
         follow_bottom: run.follow,
     });

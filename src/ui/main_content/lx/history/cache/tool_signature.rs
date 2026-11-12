@@ -249,6 +249,11 @@ pub(super) fn tool_signature(
                             hash.write_usize(hunk.lines.len());
                             for line in &hunk.lines {
                                 hash.write_usize(line.text.len());
+                                // 行数按显示列折行；同字节长度但 ASCII/CJK 宽度不同
+                                // 会改变物理行数，必须进入指纹，不能只哈希字节长度。
+                                hash.write_usize(unicode_width::UnicodeWidthStr::width(
+                                    line.text.as_str(),
+                                ));
                                 hash.write_u8(match line.kind {
                                     crate::chat::tools::DiffLineKind::Context => 0,
                                     crate::chat::tools::DiffLineKind::Added => 1,

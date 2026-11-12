@@ -54,7 +54,7 @@ pub(crate) use cache::{PaneCache, RenderCache};
 #[cfg(test)]
 pub(crate) use layout::layout;
 pub(super) use paint::{BlockPaint, BlockSource};
-pub(crate) use render::{render, render_source};
+pub(crate) use render::{render, render_source, render_source_ready};
 pub(super) use snapshot::{HistorySnapshot, SnapEntryKind};
 
 pub use timeline::has_history;
@@ -415,6 +415,11 @@ fn view_source_inner(
         suppressed: None,
     };
     if !allow_sticky {
+        return view;
+    }
+    // ready 快照可能停留在旧会话/旧 rewind 版本，行区间长度与当前消息列表不一致；
+    // 此时不能把两套下标混用，直接不画置顶行（下一次绘制会重建快照）。
+    if view.messages.len() != source.messages.len() {
         return view;
     }
     if total == 0 || full_height < sticky::MIN_HEIGHT || area.width < sticky::MIN_WIDTH {

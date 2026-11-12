@@ -230,9 +230,6 @@ pub fn on_subagent_tool_settled(
     let mut changed = run
         .chat
         .settle_tool_result(call_id, status, summary, result_json, error);
-    if changed {
-        run.rows_dirty = true;
-    }
     if let Some(call) = run
         .chat
         .messages
@@ -254,6 +251,9 @@ pub fn on_subagent_tool_settled(
         changed = true;
     }
     if changed {
+        // 终态已结算后迟到的 detail 也会改变卡片行数；任何 changed 都必须重新量行，
+        // 否则 run.total_rows/滚动条/选区仍停在旧几何。
+        run.rows_dirty = true;
         request_subagent_cards_refresh(state, pane);
     }
     changed
