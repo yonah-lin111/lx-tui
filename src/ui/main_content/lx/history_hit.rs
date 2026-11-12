@@ -457,6 +457,31 @@ pub(crate) fn task_agents_card_target_at(
     card_target_at_source(view.body, top, source, column, row, cache)
 }
 
+/// BTW 对话区指针下的可折叠目标（thinking / 工具卡片 / 用户消息折叠）。
+pub(crate) fn task_btw_card_target_at(
+    area: Rect,
+    lx: &Lx,
+    column: u16,
+    row: u16,
+    cache: &mut PaneCache,
+) -> Option<CardTarget> {
+    if !lx.is_btw_tab() {
+        return None;
+    }
+    let thread = lx.btw.active_thread()?;
+    let rect = task::task_output_rect(area, lx)?;
+    let source = history::HistorySource::from_chat(&thread.chat, &thread.compact);
+    let view = history::view_source_plain_ready(rect, source, cache);
+    let visible = usize::from(view.body.height);
+    let max = view.total_rows.saturating_sub(visible);
+    let top = if thread.follow {
+        max
+    } else {
+        thread.scroll.min(max)
+    };
+    card_target_at_source(view.body, top, source, column, row, cache)
+}
+
 /// Agents 详情区的滚动条几何（与主历史同款：贴右缘、拖拽/轨道点击共用）。
 pub(crate) fn task_agents_scrollbar(
     area: Rect,

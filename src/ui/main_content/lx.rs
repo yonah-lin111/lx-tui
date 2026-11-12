@@ -33,7 +33,9 @@ pub(crate) use refer::{item_at as refer_item_at, layout as refer_layout};
 pub use selection::copy_text;
 #[cfg(test)]
 pub(crate) use selection::is_table_cell_at;
-pub(crate) use selection::{content_geom, press_content_hit, unit_cell_range, unit_cell_range_opt};
+pub(crate) use selection::{
+    content_geom, press_btw_content_hit, press_content_hit, unit_cell_range, unit_cell_range_opt,
+};
 
 pub(crate) mod brand;
 pub(crate) mod chat_bar;
@@ -320,7 +322,7 @@ fn layout(area: Rect, lx: &Lx) -> Layout {
     // `ask` 面板占用输入框的位置并替换它（design §8.1）；后台任务页优先级更高。
     let ask_active = lx.ask.is_some();
     let (box_h, visible, scroll) = if lx.task.is_some() {
-        (task::list_height(), 0, 0)
+        (task::task_panel_height(lx), 0, 0)
     } else if ask_active {
         (ask::height(area.height, content_w, lx), 0, 0)
     } else {
@@ -804,7 +806,7 @@ pub fn task_btw_composer_rect(area: Rect, lx: &Lx) -> Option<Rect> {
     }
     layout(area, lx)
         .task_list
-        .map(task::btw::composer_rect)
+        .and_then(|rect| task::btw::composer_rect(rect, lx))
         .filter(|rect| rect.height > 0)
 }
 

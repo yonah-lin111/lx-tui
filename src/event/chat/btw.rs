@@ -63,14 +63,6 @@ pub enum BtwEvent {
         assistant_message_id: String,
         label: String,
     },
-    /// 回答者结束（消息与回答者状态已落库）。
-    RecipientFinished {
-        child_session_id: String,
-        assistant_message_id: String,
-        reason: StopReason,
-        usage: crate::db::chat::Usage,
-        duration_ms: i64,
-    },
 }
 
 /// 线程加载结果。
@@ -509,6 +501,8 @@ fn start_recipient(
         .ok()
         .flatten()
     else {
+        // 已被恢复流程/其它路径结算：收敛批次状态，避免永久停在 queued/running。
+        let _ = database.sync_btw_batch_status(&pending.batch_id);
         return false;
     };
     let pane = pending.pane;
@@ -652,53 +646,74 @@ fn start_recipient(
         assistant_message_id: start.assistant_message_id.clone(),
         label,
     }));
+    let finish_sender = sender.clone();
     tokio::spawn(async move {
-        let live_sender = sender.clone();
-        let live_key = stream_key.clone();
-        let stream_one = move |request: ChatRequest, cancel: watch::Receiver<bool>| {
-            let sender = live_sender.clone();
-            let key = live_key.clone();
-            let transport = transport.clone();
-            let base_url = base_url.clone();
-            let api_key = api_key.clone();
-            let stream_log = stream_log.clone();
-            let emit = request.purpose != RequestPurpose::CompactSummary;
-            async move {
-                crate::chat::client::run_stream_with_log(
-                    &transport,
-                    &base_url,
-                    Some(api_key.as_str()),
-                    idle_timeout,
-                    request,
-                    &stream_log,
-                    cancel,
-                    move |deltas| {
-                        if emit {
-                            let _ = sender.send(AppEvent::ChatNet(ChatNetEvent::Delta {
-                                key: key.clone(),
-                                deltas: deltas.to_vec(),
-                            }));
-                        }
+        let task_sender = sender;
+        let task_key = stream_key.clone();
+        // 内层任务捕获 panic：否则 panic 后既不会回投 Finished，也不会结算回答者，
+        // 批次会永久停在 running、后续追问永久排队（表现为「AI 无法输出」）。
+        let handle = tokio::spawn(async move {
+            let live_sender = task_sender.clone();
+            let live_key = task_key.clone();
+            let stream_one = move |request: ChatRequest, cancel: watch::Receiver<bool>| {
+                let sender = live_sender.clone();
+                let key = live_key.clone();
+                let transport = transport.clone();
+                let base_url = base_url.clone();
+                let api_key = api_key.clone();
+                let stream_log = stream_log.clone();
+                let emit = request.purpose != RequestPurpose::CompactSummary;
+                async move {
+                    crate::chat::client::run_stream_with_log(
+                        &transport,
+                        &base_url,
+                        Some(api_key.as_str()),
+                        idle_timeout,
+                        request,
+                        &stream_log,
+                        cancel,
+                        move |deltas| {
+                            if emit {
+                                let _ = sender.send(AppEvent::ChatNet(ChatNetEvent::Delta {
+                                    key: key.clone(),
+                                    deltas: deltas.to_vec(),
+                                }));
+                            }
+                        },
+                    )
+                    .await
+                }
+            };
+            super::host::drive_agent_turn(
+                task_key,
+                context,
+                task_sender,
+                executor,
+                stream_one,
+                cancel,
+            )
+            .await
+        });
+        let summary = match handle.await {
+            Ok(summary) => summary,
+            Err(error) => {
+                tracing::error!(%error, "btw turn task failed");
+                crate::chat::agent_loop::TurnSummary {
+                    outcome: crate::chat::agent_loop::TurnOutcome::Failed {
+                        code: "btw task aborted".to_string(),
                     },
-                )
-                .await
+                    usage: Default::default(),
+                    billing: Default::default(),
+                    budget_exceeded: false,
+                }
             }
         };
-        let summary = super::host::drive_agent_turn(
-            stream_key.clone(),
-            context,
-            sender.clone(),
-            executor,
-            stream_one,
-            cancel,
-        )
-        .await;
-        let _ = sender.send(AppEvent::Btw(BtwEvent::RecipientFinished {
-            child_session_id: stream_key.session,
-            assistant_message_id: start.assistant_message_id,
+        let _ = finish_sender.send(AppEvent::ChatNet(ChatNetEvent::Finished {
+            key: stream_key,
             reason: summary.stop_reason(),
+            budget_exceeded: summary.budget_exceeded,
             usage: summary.usage,
-            duration_ms: 0,
+            billing: summary.billing,
         }));
     });
     true
@@ -1127,22 +1142,6 @@ pub(crate) fn apply_event_to_state(state: &mut AppState, event: BtwEvent) {
                 &child_session_id,
                 &assistant_message_id,
                 &label,
-            );
-        }
-        BtwEvent::RecipientFinished {
-            child_session_id,
-            assistant_message_id,
-            reason,
-            usage,
-            duration_ms,
-        } => {
-            crate::app::update::on_btw_finished(
-                state,
-                &child_session_id,
-                &assistant_message_id,
-                &reason,
-                usage,
-                duration_ms,
             );
         }
     }

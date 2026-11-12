@@ -1,6 +1,10 @@
-//! `BTW` 页签：上方对话（复用历史渲染）+ 下方 QA 列表与独立输入框。
+//! `BTW` 页签：上方对话（复用历史渲染）+ 下方一行归属提示与独立输入框。
 //!
 //! 只读状态、只写 Buffer；尺寸/可见行由事件循环在绘制前写入状态。
+//!
+//! 底部固定两段：
+//! - 一行 `QA n · <所属主问题>` + 右侧 `To: <回答者>`，说明这条侧线程挂在哪个主问答上；
+//! - 输入框默认一行（上下边框 + 一行正文），随软换行增长到 3 行，和主输入框同一观感。
 
 use ratatui::layout::Rect;
 
@@ -11,120 +15,123 @@ use crate::ui::{style, text};
 use super::super::Grid;
 use super::list_rect;
 
-/// 底边框 + 顶部 tab 行已由 `draw_list` 绘制；这里只排 QA 列表与输入框。
+/// 输入框最多展示的正文行数（超出后在框内滚动）。
+pub(super) const COMPOSER_MAX_ROWS: u16 = 3;
+/// 归属提示行高度。
+const HEADER_ROWS: u16 = 1;
+
+/// 底边框 + 顶部 tab 行已由 `draw_list` 绘制；这里只排归属提示与输入框。
 pub(crate) fn draw_bottom(
     grid: &mut Grid,
     rect: Rect,
     lx: &Lx,
-    page: &TaskPage,
+    _page: &TaskPage,
 ) -> Option<(u16, u16)> {
     if rect.width == 0 || rect.height == 0 {
         return None;
     }
-    let thread = lx.btw.active_thread();
-    let qa_total = lx.btw.qa.len();
-    let show_qa = qa_total > 1 && rect.height >= 5;
-    let composer_h = composer_height(rect.height, show_qa);
-    let composer = Rect::new(
-        rect.x,
-        rect.bottom().saturating_sub(composer_h),
-        rect.width,
-        composer_h,
-    );
-    let qa_rect = Rect::new(
-        rect.x,
-        rect.y,
-        rect.width,
-        composer.y.saturating_sub(rect.y),
-    );
-    if show_qa && qa_rect.height > 0 {
-        draw_qa_list(grid, qa_rect, lx, page);
+    let inner = list_rect(rect);
+    if inner.height == 0 {
+        return None;
     }
-    let Some(thread) = thread else {
-        super::draw_placeholder(grid, composer, text::LX_BTW_EMPTY_THREAD);
+    let composer = composer_rect_in(inner, lx);
+    // 归属行贴在输入框上方，中间不留空行（底部只有「归属 + 输入」两段）。
+    let header_y = composer.map_or(inner.y, |composer| composer.y.saturating_sub(HEADER_ROWS));
+    let header = Rect::new(
+        inner.x,
+        header_y.max(inner.y),
+        inner.width,
+        HEADER_ROWS.min(inner.height),
+    );
+    if header.height > 0 {
+        draw_header(grid, header, lx);
+    }
+    let Some(composer) = composer else {
+        if header.height == 0 {
+            super::draw_placeholder(grid, inner, text::LX_BTW_QA_EMPTY);
+        }
         return None;
     };
+    let thread = lx.btw.active_thread()?;
     let editor = thread.composer.editor();
-    let visible = usize::from(composer_h.saturating_sub(2)).max(1);
+    let visible = usize::from(composer.height.saturating_sub(2)).max(1);
     let total = editor.visual_rows().len().max(1);
     let max_scroll = total.saturating_sub(visible);
     let scroll = editor.scroll().min(max_scroll);
     super::super::input::draw(grid, composer, editor, true, scroll, visible)
 }
 
-/// 输入框占用的行数：至少 3 行（上下边框 + 一行正文），最多 4 行。
-fn composer_height(inner_h: u16, show_qa: bool) -> u16 {
-    if show_qa {
-        inner_h.saturating_sub(2).max(3)
-    } else {
-        inner_h.clamp(3, 4)
-    }
+/// 输入框矩形（`task_list` 内部、归属提示之下）；未打开线程时 None。
+pub(crate) fn composer_rect(rect: Rect, lx: &Lx) -> Option<Rect> {
+    composer_rect_in(list_rect(rect), lx)
 }
 
-/// 输入框矩形（`task_list` 内部、QA 列表之下）；供 `input_rect` 与命中复用。
-pub(crate) fn composer_rect(rect: Rect) -> Rect {
-    let inner = list_rect(rect);
-    let show_qa = inner.height >= 5;
-    let height = composer_height(inner.height, show_qa);
-    Rect::new(
+fn composer_rect_in(inner: Rect, lx: &Lx) -> Option<Rect> {
+    let thread = lx.btw.active_thread()?;
+    let avail = inner.height.saturating_sub(HEADER_ROWS);
+    if avail < 3 {
+        return None;
+    }
+    let rows = usize::from(COMPOSER_MAX_ROWS)
+        .min(thread.composer.editor().visual_rows().len().max(1))
+        .max(1);
+    let height = u16::try_from(rows)
+        .unwrap_or(COMPOSER_MAX_ROWS)
+        .saturating_add(2);
+    let height = height.min(avail);
+    Some(Rect::new(
         inner.x,
         inner.bottom().saturating_sub(height),
         inner.width,
         height,
-    )
+    ))
 }
 
-/// QA 列表可视区起始索引。
-pub(super) fn window_start(page: &TaskPage, visible: usize) -> usize {
-    if visible == 0 || page.btw_len <= visible {
-        return 0;
-    }
-    let max = page.btw_len.saturating_sub(visible);
-    page.btw_window
-        .viewport
-        .map(|start| start.min(max))
-        .unwrap_or_else(|| {
-            page.btw_window
-                .active
-                .min(page.btw_len.saturating_sub(1))
-                .saturating_sub(visible.saturating_sub(1))
-                .min(max)
-        })
-}
-
-fn draw_qa_list(grid: &mut Grid, rect: Rect, lx: &Lx, page: &TaskPage) {
-    if rect.height == 0 || rect.width == 0 {
-        return;
-    }
-    let visible = usize::from(rect.height);
-    let start = window_start(page, visible);
-    for (offset, summary) in lx.btw.qa.iter().skip(start).take(visible).enumerate() {
-        let index = start + offset;
-        let y = rect.y.saturating_add(u16::try_from(offset).unwrap_or(0));
-        let active = index == page.btw_window.active;
-        let marker = if active { "❯ " } else { "  " };
-        let status = text::btw_status_label(&summary.status);
-        let line = format!(
-            "{marker}Q{}  {}  {status}",
-            index.saturating_add(1),
-            summary.title
-        );
+/// 归属提示：`QA 2 · 你有什么功能`，右侧当前回答者集合。
+fn draw_header(grid: &mut Grid, rect: Rect, lx: &Lx) {
+    let Some(thread) = lx.btw.active_thread() else {
         grid.put_clipped(
             rect.x,
-            y,
-            &line,
-            if active {
-                style::selected_item()
-            } else {
-                style::muted()
-            },
+            rect.y,
+            text::LX_BTW_THREAD_LOADING,
+            style::muted(),
             rect.width,
         );
+        return;
+    };
+    let index = lx
+        .btw
+        .qa
+        .iter()
+        .position(|summary| summary.qa_id == thread.qa_id)
+        .map(|index| index.saturating_add(1));
+    let title = lx
+        .btw
+        .qa
+        .iter()
+        .find(|summary| summary.qa_id == thread.qa_id)
+        .map(|summary| summary.title.as_str())
+        .filter(|title| !title.trim().is_empty())
+        .unwrap_or(text::LX_BTW_QA_UNTITLED);
+    let label = match index {
+        Some(index) => format!("QA {index} · {title}"),
+        None => format!("QA · {title}"),
+    };
+    let targets = thread.target_label();
+    // 右侧目标优先保证完整；左侧归属按剩余宽度截断。
+    let targets_w =
+        u16::try_from(unicode_width::UnicodeWidthStr::width(targets.as_str())).unwrap_or(u16::MAX);
+    let gap = u16::from(rect.width > targets_w.saturating_add(4));
+    let left_w = rect.width.saturating_sub(targets_w.saturating_add(gap));
+    grid.put_clipped(rect.x, rect.y, &label, style::muted(), left_w);
+    if gap > 0 {
+        let x = rect.x.saturating_add(left_w);
+        grid.put_clipped(x, rect.y, &targets, style::muted(), targets_w);
     }
 }
 
 /// 对话区行数：与绘制同源；消息为空时至少 1 行占位。
-pub(super) fn detail_rows(
+pub(crate) fn detail_rows(
     rect: Rect,
     thread: &crate::app::state::lx::BtwThreadState,
     cache: &mut crate::ui::PaneCache,

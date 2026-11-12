@@ -185,6 +185,8 @@ pub struct Lx {
     plain: bool,
     /// 旁路输入缓冲：不识别 shell 前缀（其余编辑/提及/markdown 面板保持）。
     no_shell: bool,
+    /// 旁路 composer 的 `@` 实例列表由主编辑器注入（本身没有 `agents`）。
+    mention_runs_external: bool,
     /// 本会话正在运行的后台任务数（底部状态行指标）。
     pub background_tasks: usize,
     /// 首页资源计数：MCP server 与 skill 的加载/失败状态。
@@ -253,6 +255,7 @@ impl Lx {
     pub fn composer() -> Self {
         let mut lx = Self::build(false);
         lx.no_shell = true;
+        lx.mention_runs_external = true;
         lx
     }
 
@@ -293,6 +296,7 @@ impl Lx {
             btw: LxBtw::default(),
             plain,
             no_shell: false,
+            mention_runs_external: false,
             background_tasks: 0,
             startup: StartupCounts::default(),
             disabled_mcp_servers: std::collections::BTreeSet::new(),

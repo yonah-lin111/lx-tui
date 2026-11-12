@@ -64,6 +64,24 @@ pub(super) fn list_height() -> u16 {
         .saturating_add(TOP_BORDER)
 }
 
+/// 后台面板高度：进程/Agents 保持固定 8 行；BTW 随 composer 行数在 6..=8 行之间生长。
+pub(super) fn task_panel_height(lx: &crate::app::state::Lx) -> u16 {
+    if !lx.is_btw_tab() {
+        return list_height();
+    }
+    let rows = lx
+        .btw
+        .active_thread()
+        .map(|thread| thread.composer.editor().visual_rows().len())
+        .unwrap_or(1)
+        .clamp(1, usize::from(btw::COMPOSER_MAX_ROWS));
+    TOP_BORDER
+        .saturating_add(TAB_ROW)
+        .saturating_add(1)
+        .saturating_add(u16::try_from(rows).unwrap_or(1))
+        .saturating_add(2)
+}
+
 /// 输出容器**正文宽度**：常驻预留最右 1 列作滚动条槽。
 ///
 /// 与 prompt 编辑器同一规则（"文本区固定预留最右 1 列作滚动条槽，滚动条出现/消失
@@ -303,11 +321,8 @@ pub(crate) fn list_metrics(
             let start = agents::window_start(page, agents, visible);
             (total, visible, start)
         }
-        TaskTab::Btw => {
-            let total = page.btw_len;
-            let start = btw::window_start(page, visible);
-            (total, visible, start)
-        }
+        // BTW 页签没有列表：滚动条始终隐藏。
+        TaskTab::Btw => (0, 0, 0),
     }
 }
 

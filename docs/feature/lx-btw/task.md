@@ -322,3 +322,42 @@ cargo fmt
 cargo clippy --all-targets -- -D warnings
 cargo test --lib
 ```
+
+## 12. 修复记录（2026-11-12）
+
+### 12.1 `/btw` 永久排队、回答无输出
+
+- **根因**：旁路任务结束后只回投了 `BtwEvent::RecipientFinished`，没有回投 `ChatNetEvent::Finished`；`btw::finish_run` 永远不执行，assistant 停在 `streaming`，回答者/批次停在 `running`，同线程后续提交全部卡在 `queued`。
+- **修复**：
+  - 任务结束按主子 agent 同一协议回投 `ChatNetEvent::Finished`（`budget_exceeded`/`usage`/`billing` 全部透传），由 `handle_net_event → finish_run` 统一结算。
+  - 内层 `tokio::spawn` 捕获 panic 并合成 `Failed` 终态，避免线程悄悄死掉。
+  - `start_btw_recipient` 拿不到运行实例时立即结算失败；认领失败时收敛批次状态。
+  - 结算改为 `finish_with_optional_parts`：面板关闭后 `parts=None`，绝不用空数组覆盖 checkpoint 正文。
+- **数据库证据**（修复前）：`agent_btw_batch` 一条 `running` + 一条 `queued`，`agent_btw_recipient` 停在 `running`，assistant `status=streaming` 且无 parts；日志显示请求 `reason="complete" deltas=177` 已完成。恢复后两条均为 `interrupted`。
+
+### 12.2 旁路消息不能折叠/展开
+
+- `content_geom` 增加 BTW 分支（与 Agents 详情同源量行），新增 `task_btw_card_target_at` 与 `press_btw_content_hit`。
+- 鼠标按下记录 `lx_card_press`，松开时 `TaskTab::Btw` 走 `update::toggle_btw_card`：思考块、工具卡片、用户消息折叠、粘贴芯片全部复用 `LxChat` 的展开状态；展开前先锚定视口，避免跳回顶部。
+
+### 12.3 输入框不能 `@` 文件、默认不是一行
+
+- composer 的 `@` 扫描根/项目根与 subagent 实例集合改由主编辑器注入（`sync_btw_composer_context` / `sync_btw_composer_agents`）；`mention_runs_external` 阻止 composer 用空 `agents` 覆盖注入项。
+- 旁路 `@` 候选不过滤 `Active`，已结束 subagent 也能作为目标。
+- 鼠标 hover/点选/滚轮/切 Tab 全部经 `with_active_editor` 路由到 composer。
+- 输入框默认 1 行（3 行含边框），随软换行增长到 3 行；面板高度随之在 6..=8 行之间变化，不再固定留白。
+
+### 12.4 顶部 QA 列表
+
+- 删除多行 QA 列表与切换焦点：它只显示主问答，却看起来像可切换的会话列表，且会与当前线程归属不一致。
+- 底部改为一行归属提示：`QA <序号> · <主问题标题>`，右侧 `To: <回答者集合>`；`/btw` 始终挂到最新主 QA，旧线程仍持久化。
+
+### 12.5 验证
+
+```text
+LX_TUI_DB_PATH=<worktree-db> lx-tui session show <main-session>   # 主会话 6 条消息可读
+LX_TUI_DB_PATH=<worktree-db> lx-tui session show <btw-child>      # 不在列表/被拒绝，确证隔离
+sqlite3 <worktree-db> "select ... from agent_btw_batch/recipient" # 修复前卡死状态
+cargo test --lib                                                  # 5240 passed
+cargo clippy --all-targets -- -D warnings
+```

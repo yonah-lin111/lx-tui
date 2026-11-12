@@ -134,6 +134,11 @@ impl Lx {
     /// 从 `self.agents.runs` 提取当前会话存活（`running` / `idle` / `blocked`）的 subagent，
     /// 同步至 `@` 提及面板；内容变化时自动重算面板。
     pub fn sync_mention_subagent_runs(&mut self) -> bool {
+        // 旁路 composer 没有自己的 `agents`，实例列表由主编辑器经
+        // `sync_btw_composer_context` 注入；这里若按空列表重算会把注入项清掉。
+        if self.mention_runs_external {
+            return false;
+        }
         let active_runs: Vec<SubagentRunMentionEntry> = self
             .agents
             .filtered_indices(super::task::AgentFilter::Active)
@@ -157,6 +162,48 @@ impl Lx {
     /// 同步 `@` 提及扫描根；根变化时作废旧候选并重算面板；返回根是否变化。
     pub fn set_mention_root(&mut self, root: Option<std::path::PathBuf>) -> bool {
         self.mention.set_root(root, &self.input, self.cursor)
+    }
+
+    /// 把主编辑器的扫描根、项目根与**全部** subagent 实例（含已结束）同步给 BTW composer。
+    ///
+    /// 旁路问卷允许 `@` 已结束实例，因此这里不做 `Active` 过滤；没有活动线程时返回 false。
+    pub fn sync_btw_composer_context(
+        &mut self,
+        root: Option<std::path::PathBuf>,
+        project: Option<std::path::PathBuf>,
+    ) -> bool {
+        let Some(composer) = self.btw.active_composer_mut() else {
+            return false;
+        };
+        let root_changed = composer.set_mention_root(root);
+        let project_changed = composer.set_project_root(project);
+        let runs_changed = self.sync_btw_composer_agents();
+        root_changed || project_changed || runs_changed
+    }
+
+    /// 只把主编辑器的 subagent 实例集合抄给 BTW composer（`ListSubagents` 回投后调用）。
+    pub fn sync_btw_composer_agents(&mut self) -> bool {
+        let entries: Vec<super::mention::SubagentRunMentionEntry> = self
+            .agents
+            .runs
+            .iter()
+            .map(|run| super::mention::SubagentRunMentionEntry {
+                agent_id: run.agent_id.clone(),
+                nickname: run.nickname.clone(),
+                role: run.role.as_str().to_string(),
+                status: crate::chat::agent::AgentStatus::parse(&run.status)
+                    .map(|status| status.as_str().to_string())
+                    .unwrap_or_else(|| run.status.clone()),
+                title: run.display_title().to_string(),
+            })
+            .collect();
+        let Some(composer) = self.btw.active_composer_mut() else {
+            return false;
+        };
+        let masked = crate::app::paste::mask_pasted_text(&composer.input).into_owned();
+        composer
+            .mention
+            .sync_subagent_runs(entries, &masked, composer.cursor)
     }
 
     /// 同步当前项目根目录（主会话与子 agent 详情区共用），将工具卡片内的当前项目路径收短为相对路径。

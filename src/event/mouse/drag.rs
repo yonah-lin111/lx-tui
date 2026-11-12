@@ -777,14 +777,20 @@ pub(crate) fn handle_mouse_up_left(
         return;
     }
     if let Some((pane, card)) = card_press {
-        let agents_tab = state
+        let tab = state
             .pane_anywhere(pane)
             .and_then(|target| target.lx.task.as_ref())
-            .is_some_and(|page| page.tab == crate::app::state::TaskTab::Agents);
-        if agents_tab {
-            update::toggle_agent_card(state, pane, card);
-        } else {
-            update::toggle_lx_card(state, pane, card);
+            .map(|page| page.tab);
+        match tab {
+            Some(crate::app::state::TaskTab::Agents) => {
+                update::toggle_agent_card(state, pane, card);
+            }
+            Some(crate::app::state::TaskTab::Btw) => {
+                update::toggle_btw_card(state, pane, card);
+            }
+            _ => {
+                update::toggle_lx_card(state, pane, card);
+            }
         }
     }
     update::clear_selection(state);

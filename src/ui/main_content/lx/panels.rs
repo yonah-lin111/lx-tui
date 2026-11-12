@@ -90,7 +90,7 @@ pub(crate) fn input_rect(area: Rect, lx: &Lx) -> Option<Rect> {
     if lx.is_btw_tab() {
         return lay
             .task_list
-            .map(super::task::btw::composer_rect)
+            .and_then(|rect| super::task::btw::composer_rect(rect, lx))
             .filter(|rect| rect.height > 0);
     }
     lay.input

@@ -46,7 +46,7 @@ pub use btw::{
     on_failed as on_btw_failed, on_finished as on_btw_finished, on_qa_list_loaded,
     on_recipient_started as on_btw_recipient_started, on_thread_loaded as on_btw_thread_loaded,
     on_tool_state as on_btw_tool_state, open_btw_tab, submit_current as submit_btw,
-    target_label as btw_target_label, try_submit_btw_command,
+    toggle_btw_card, try_submit_btw_command,
 };
 pub use compact::{
     compact_command, on_compact_empty, on_compact_failed, on_compact_finished,

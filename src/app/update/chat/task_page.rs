@@ -168,9 +168,7 @@ pub fn scroll_task_list(state: &mut AppState, pane: PaneId, delta: isize) -> boo
             crate::ui::main_content::lx::task::LIST_MAX,
             agents_len,
         ),
-        crate::app::state::TaskTab::Btw => {
-            page.scroll_btw_window(delta, crate::ui::main_content::lx::task::LIST_MAX)
-        }
+        crate::app::state::TaskTab::Btw => false,
     }
 }
 
@@ -192,7 +190,7 @@ pub fn set_task_list_scroll(state: &mut AppState, pane: PaneId, offset: usize) -
         crate::app::state::TaskTab::Agents => {
             page.set_agents_window_scroll(offset, visible, agents_len)
         }
-        crate::app::state::TaskTab::Btw => page.set_btw_window_scroll(offset, visible),
+        crate::app::state::TaskTab::Btw => false,
     }
 }
 

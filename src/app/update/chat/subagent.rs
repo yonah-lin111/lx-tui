@@ -55,6 +55,7 @@ pub fn on_subagent_started(state: &mut AppState, pane: PaneId, mut run: Subagent
     target.lx.agents.runs.push(run);
     restore_selected_task_agent(&mut target.lx, selected.as_deref());
     target.lx.sync_mention_subagent_runs();
+    target.lx.sync_btw_composer_agents();
     refresh_status(state, pane);
     true
 }
@@ -317,6 +318,7 @@ pub fn set_subagent_list(
         restore_selected_task_agent(&mut target.lx, selected.as_deref());
     }
     target.lx.sync_mention_subagent_runs();
+    target.lx.sync_btw_composer_agents();
     let focused = consume_agent_focus(&mut target.lx);
     // 历史主消息里的 spawn 卡片也要拿 run 状态；仅在列表元数据真的变化时置调度位。
     if changed {
@@ -762,6 +764,7 @@ pub fn on_subagent_finished(
             .evict_excess_idle_chats(protected.as_deref());
         restore_selected_task_agent(&mut target.lx, protected.as_deref());
         target.lx.sync_mention_subagent_runs();
+        target.lx.sync_btw_composer_agents();
     }
     refresh_status(state, pane);
     true

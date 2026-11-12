@@ -361,3 +361,65 @@ fn startup_recovery_interrupts_pending_batches_without_deleting_text() {
                 && message.status == "interrupted")
     );
 }
+
+#[test]
+fn finishing_without_in_memory_parts_keeps_checkpoint_text() {
+    // 面板关闭后回答才结束：事件层拿不到内存投影，必须用 `None` 结算，
+    // 不能拿空数组覆盖最后一次 checkpoint 的正文。
+    let workspace = workspace("keep-parts");
+    let database = Database::open_in_memory().expect("db");
+    database.ensure_workspace(&workspace).expect("ws");
+    let (session, qa) = seeded_session(&database, &workspace);
+    let accepted = database
+        .accept_btw_batch(
+            &workspace,
+            &session,
+            &qa,
+            "side",
+            "submit-keep",
+            "why?",
+            &[default_target()],
+        )
+        .expect("accept");
+    let recipient = accepted.recipients[0].id.clone();
+    let start = database
+        .start_btw_recipient(&workspace, &recipient)
+        .expect("start")
+        .expect("claimed");
+    let parts = vec![crate::db::chat::ChatPart {
+        position: 0,
+        kind: "text".to_string(),
+        content: "streamed answer".to_string(),
+        provider_metadata_json: None,
+        started_at_ms: Some(1),
+        ended_at_ms: Some(2),
+        completed_at_ms: Some(2),
+    }];
+    database
+        .checkpoint(&workspace, &start.assistant_message_id, &parts)
+        .expect("checkpoint");
+    database
+        .finish_btw_recipient(
+            &workspace,
+            &recipient,
+            &start.assistant_message_id,
+            None,
+            &TurnOutcome::Complete {
+                stop_reason: Some("complete".into()),
+            },
+            Usage::default(),
+            Usage::default(),
+        )
+        .expect("finish");
+    let messages = database
+        .load_chat_session(&workspace, &start.child_session_id)
+        .expect("load")
+        .expect("session");
+    let assistant = messages
+        .iter()
+        .find(|message| message.external_id == start.assistant_message_id)
+        .expect("assistant");
+    assert_eq!(assistant.status, "complete");
+    assert_eq!(assistant.parts.len(), 1);
+    assert_eq!(assistant.parts[0].content, "streamed answer");
+}

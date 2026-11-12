@@ -322,12 +322,10 @@ pub fn apply_input(
         }
         LxInput::Enter => match focus {
             BtwFocus::Composer => submit_current(state, pane),
-            BtwFocus::QaList => select_active_qa(state, pane),
             BtwFocus::Conversation => false,
         },
         LxInput::Up | LxInput::Down => match focus {
             BtwFocus::Composer => edit_composer(state, pane, command),
-            BtwFocus::QaList => move_qa(state, pane, command == LxInput::Down),
             BtwFocus::Conversation => {
                 let delta = if command == LxInput::Up { -1 } else { 1 };
                 scroll_conversation(state, pane, delta)
@@ -530,64 +528,6 @@ fn apply_composer_panel_input(
     false
 }
 
-fn move_qa(state: &mut AppState, pane: PaneId, down: bool) -> bool {
-    let Some(target) = state.pane_mut_anywhere(pane) else {
-        return false;
-    };
-    let len = target.lx.btw.qa.len();
-    if len == 0 {
-        return false;
-    }
-    let Some(page) = target.lx.task.as_mut() else {
-        return false;
-    };
-    let active = page.btw_window.active.min(len - 1);
-    let next = if down {
-        (active + 1).min(len - 1)
-    } else {
-        active.saturating_sub(1)
-    };
-    if next == page.btw_window.active {
-        return false;
-    }
-    page.btw_window = crate::app::state::PanelWindow::new(next);
-    let qa_id = target.lx.btw.qa[next].qa_id.clone();
-    target.lx.btw.select_qa(&qa_id);
-    let parent = target.lx.chat.session_id.clone();
-    if let Some(parent_session_id) = parent {
-        state.effects.push(Effect::Btw(BtwEffect::LoadThread {
-            pane,
-            parent_session_id,
-            qa_id,
-        }));
-    }
-    true
-}
-
-fn select_active_qa(state: &mut AppState, pane: PaneId) -> bool {
-    let Some(target) = state.pane_mut_anywhere(pane) else {
-        return false;
-    };
-    let Some(page) = target.lx.task.as_ref() else {
-        return false;
-    };
-    let Some(summary) = target.lx.btw.qa.get(page.btw_window.active) else {
-        return false;
-    };
-    let qa_id = summary.qa_id.clone();
-    target.lx.btw.select_qa(&qa_id);
-    target.lx.btw.focus = BtwFocus::Composer;
-    let parent = target.lx.chat.session_id.clone();
-    if let Some(parent_session_id) = parent {
-        state.effects.push(Effect::Btw(BtwEffect::LoadThread {
-            pane,
-            parent_session_id,
-            qa_id,
-        }));
-    }
-    true
-}
-
 fn scroll_conversation(state: &mut AppState, pane: PaneId, delta: isize) -> bool {
     let Some(thread) = state
         .pane_mut_anywhere(pane)
@@ -679,12 +619,6 @@ pub fn on_qa_list_loaded(
         return false;
     }
     target.lx.btw.qa = qa;
-    let len = target.lx.btw.qa.len();
-    if let Some(page) = target.lx.task.as_mut() {
-        page.btw_len = len;
-        page.btw_window =
-            crate::app::state::PanelWindow::new(page.btw_window.active.min(len.saturating_sub(1)));
-    }
     if target.lx.btw.active.is_none()
         && let Some(last) = target.lx.btw.qa.last()
     {
@@ -701,10 +635,12 @@ pub fn on_qa_list_loaded(
         .btw
         .active
         .clone()
-        .filter(|_| len > 0)
+        .filter(|_| !target.lx.btw.qa.is_empty())
         .unwrap_or_default();
     let has_qa = !qa_id.is_empty();
     let pending_prompt = target.lx.btw.pending_prompt;
+    // composer 是懒创建的：拿到 QA、建立线程之后才存在，此时再同步 `@` 根与实例。
+    crate::app::update::sync_lx_mention_root(state, pane);
     if has_qa {
         state.effects.push(Effect::Btw(BtwEffect::LoadThread {
             pane,
@@ -757,6 +693,8 @@ pub fn on_thread_loaded(
     thread.loaded = loaded;
     thread.rows_dirty = true;
     thread.follow = true;
+    // 线程建立后 composer 才存在：补一次 `@` 扫描根与实例同步。
+    crate::app::update::sync_lx_mention_root(state, pane);
     true
 }
 
@@ -1022,18 +960,86 @@ pub fn btw_message_parts(
     Vec::new()
 }
 
-/// 当前线程的目标标签（输入框上沿展示）。
-pub fn target_label(state: &AppState, pane: PaneId) -> String {
-    let Some(thread) = state
-        .pane_anywhere(pane)
-        .and_then(|target| target.lx.btw.active_thread())
-    else {
-        return text::LX_BTW_TARGETS_PREFIX.to_string() + crate::chat::prompt::AGENT_NAME;
+/// 切换旁路对话里的折叠目标（思考块 / 工具卡片 / 用户消息 / 粘贴芯片）。
+///
+/// 与主历史一致：展开前先把贴底视口锚定到当前位置，避免展开后整段跳回顶部。
+pub fn toggle_btw_card(
+    state: &mut AppState,
+    pane: PaneId,
+    target: crate::app::state::CardTarget,
+) -> bool {
+    let Some(target_pane) = state.pane_anywhere(pane) else {
+        return false;
     };
-    let labels: Vec<String> = thread
-        .effective_targets()
-        .iter()
-        .map(|target| target.label.clone())
-        .collect();
-    format!("{}{}", text::LX_BTW_TARGETS_PREFIX, labels.join(", "))
+    let Some(thread) = target_pane.lx.btw.active_thread() else {
+        return false;
+    };
+    let tool_present = match &target {
+        crate::app::state::CardTarget::Tool {
+            message_id,
+            call_id,
+            ..
+        } => thread
+            .chat
+            .messages
+            .iter()
+            .any(|message| message.id == *message_id && message.tool(call_id).is_some()),
+        _ => true,
+    };
+    let Some(thread) = state
+        .pane_mut_anywhere(pane)
+        .and_then(|target| target.lx.btw.active_thread_mut())
+    else {
+        return false;
+    };
+    if thread.follow {
+        thread.scroll = thread.total_rows.saturating_sub(thread.visible);
+        thread.follow = false;
+    }
+    let changed = match target {
+        crate::app::state::CardTarget::Tool {
+            message_id,
+            call_id,
+            section,
+        } => tool_present && thread.chat.toggle_section(&message_id, &call_id, section),
+        crate::app::state::CardTarget::Thinking {
+            message_index,
+            step_index,
+        } => {
+            let is_reasoning = thread
+                .chat
+                .messages
+                .get(message_index)
+                .and_then(|message| message.step_at(step_index))
+                .is_some_and(|step| {
+                    matches!(
+                        step,
+                        crate::app::state::AssistantStepView::Part { part, .. }
+                            if part.kind == PartKind::Reasoning
+                    )
+                });
+            if is_reasoning {
+                thread.chat.toggle_reasoning(message_index, step_index);
+            }
+            is_reasoning
+        }
+        crate::app::state::CardTarget::UserMessage { message_id } => {
+            thread.chat.toggle_user_message_expanded(&message_id)
+        }
+        crate::app::state::CardTarget::UserPaste {
+            message_id,
+            paste_id,
+            occurrence,
+        } => {
+            thread
+                .chat
+                .toggle_user_paste(&message_id, paste_id, occurrence);
+            true
+        }
+        _ => false,
+    };
+    if changed {
+        thread.rows_dirty = true;
+    }
+    changed
 }

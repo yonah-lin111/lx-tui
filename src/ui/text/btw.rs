@@ -32,6 +32,8 @@ pub const LX_BTW_STOPPED: &str = "BTW answer stopped";
 pub const LX_BTW_TARGETS_RESET: &str = "BTW targets reset to lx";
 /// 输入框左侧目标标签。
 pub const LX_BTW_TARGETS_PREFIX: &str = "To: ";
+/// 主问题标题为空时的占位。
+pub const LX_BTW_QA_UNTITLED: &str = "(untitled question)";
 /// 空对话提示。
 pub const LX_BTW_EMPTY_THREAD: &str = "Ask a side question about this exchange";
 /// QA 列表标题。

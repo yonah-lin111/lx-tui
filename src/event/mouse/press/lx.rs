@@ -241,6 +241,25 @@ pub(super) fn handle_lx_pane_mouse_down_left(
             Instant::now(),
         );
         update::begin_lx_input_selection_with_clicks(state, pane, visual_row, col, clicks);
+    } else if state
+        .pane_anywhere(pane)
+        .is_some_and(|target| target.lx.is_btw_tab())
+    {
+        // 旁路区只支持折叠卡片点击；正文不建立拖拽选区（历史快照按 thread 自己维护）。
+        let hit = state.pane_anywhere(pane).and_then(|target| {
+            ui::main_content::lx::press_btw_content_hit(
+                inner,
+                &target.lx,
+                mouse.column,
+                mouse.row,
+                cache.pane(pane),
+            )
+        });
+        update::clear_selection(state);
+        if let Some(Some(card)) = hit {
+            state.selection_click = None;
+            state.lx_card_press = Some((pane, card));
+        }
     } else if let Some((content_row, content_col, target)) =
         state.pane_anywhere(pane).and_then(|target| {
             ui::main_content::lx::press_content_hit(

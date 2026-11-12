@@ -16,8 +16,6 @@ pub enum BtwFocus {
     /// 底部输入框。
     #[default]
     Composer,
-    /// QA 列表。
-    QaList,
     /// 对话阅读区。
     Conversation,
 }
@@ -26,8 +24,7 @@ impl BtwFocus {
     /// `Tab` 正序轮转。
     pub const fn next(self) -> Self {
         match self {
-            Self::Composer => Self::QaList,
-            Self::QaList => Self::Conversation,
+            Self::Composer => Self::Conversation,
             Self::Conversation => Self::Composer,
         }
     }
@@ -36,8 +33,7 @@ impl BtwFocus {
     pub const fn previous(self) -> Self {
         match self {
             Self::Composer => Self::Conversation,
-            Self::Conversation => Self::QaList,
-            Self::QaList => Self::Composer,
+            Self::Conversation => Self::Composer,
         }
     }
 }
@@ -149,6 +145,20 @@ impl BtwThreadState {
             submit_seq: 0,
             pending_submit: None,
         }
+    }
+
+    /// 输入框上沿的目标标签：`To: lx, Turing [explorer]`。
+    pub fn target_label(&self) -> String {
+        let labels: Vec<String> = self
+            .effective_targets()
+            .iter()
+            .map(|target| target.label.clone())
+            .collect();
+        format!(
+            "{}{}",
+            crate::ui::text::LX_BTW_TARGETS_PREFIX,
+            labels.join(", ")
+        )
     }
 
     /// 当前有效回答者集合；为空时回退默认助手。

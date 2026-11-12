@@ -22,9 +22,10 @@ pub fn sync_lx_mention_root(state: &mut AppState, id: PaneId) -> bool {
     let referenced = state.referenced.folders.clone();
     state.pane_mut_anywhere(id).is_some_and(|pane| {
         let ref_changed = pane.lx.sync_referenced_folders(&referenced);
-        let mention = pane.lx.set_mention_root(root);
-        let project = pane.lx.set_project_root(project);
-        ref_changed || mention || project
+        let mention = pane.lx.set_mention_root(root.clone());
+        let project_changed = pane.lx.set_project_root(project.clone());
+        let composer = pane.lx.sync_btw_composer_context(root, project);
+        ref_changed || mention || project_changed || composer
     })
 }
 
@@ -106,17 +107,20 @@ pub fn hover_lx_mention(state: &mut AppState, id: PaneId, index: usize) -> bool 
     let referenced = state.referenced.folders.clone();
     state.pane_mut_anywhere(id).is_some_and(|pane| {
         pane.lx.sync_referenced_folders(&referenced);
-        pane.lx.mention_set_active(index)
+        pane.lx
+            .with_active_editor(|lx| lx.mention_set_active(index))
     })
 }
 
 /// 鼠标悬停 `lx` 粘贴面板操作项：仅接受可用项；返回是否变化。
 pub fn hover_lx_paste(state: &mut AppState, id: PaneId, index: usize) -> bool {
     state.pane_mut_anywhere(id).is_some_and(|pane| {
-        if pane.lx.text_paste_panel().is_some() {
-            return pane.lx.text_paste_set_active(index);
-        }
-        pane.lx.paste_set_active(index)
+        pane.lx.with_active_editor(|lx| {
+            if lx.text_paste_panel().is_some() {
+                return lx.text_paste_set_active(index);
+            }
+            lx.paste_set_active(index)
+        })
     })
 }
 
@@ -125,16 +129,18 @@ pub fn select_lx_paste(state: &mut AppState, id: PaneId, index: usize) -> bool {
     let Some(pane) = state.pane_mut_anywhere(id) else {
         return false;
     };
-    if pane.lx.text_paste_panel().is_some() {
-        let Some(action) = crate::app::paste::TextPasteAction::ALL.get(index).copied() else {
+    pane.lx.with_active_editor(|lx| {
+        if lx.text_paste_panel().is_some() {
+            let Some(action) = crate::app::paste::TextPasteAction::ALL.get(index).copied() else {
+                return false;
+            };
+            return lx.text_paste_confirm(action);
+        }
+        let Some(action) = crate::app::paste::PasteAction::ALL.get(index).copied() else {
             return false;
         };
-        return pane.lx.text_paste_confirm(action);
-    }
-    let Some(action) = crate::app::paste::PasteAction::ALL.get(index).copied() else {
-        return false;
-    };
-    pane.lx.paste_confirm(action)
+        lx.paste_confirm(action)
+    })
 }
 
 /// 鼠标点击 `@` 提及面板顶部 Tab：切换当前 Tab；返回是否变化。
@@ -145,7 +151,7 @@ pub fn switch_lx_mention_tab(state: &mut AppState, id: PaneId, tab: usize) -> bo
     let referenced = state.referenced.folders.clone();
     state.pane_mut_anywhere(id).is_some_and(|pane| {
         pane.lx.sync_referenced_folders(&referenced);
-        pane.lx.mention_set_tab(tab)
+        pane.lx.with_active_editor(|lx| lx.mention_set_tab(tab))
     })
 }
 
@@ -156,24 +162,27 @@ pub fn select_lx_mention(state: &mut AppState, id: PaneId, index: usize) -> bool
         return false;
     };
     pane.lx.sync_referenced_folders(&referenced);
-    if !pane.lx.mention_set_active(index) && !pane.lx.mention_open() {
-        return false;
-    }
-    pane.lx.mention_confirm()
+    pane.lx.with_active_editor(|lx| {
+        if !lx.mention_set_active(index) && !lx.mention_open() {
+            return false;
+        }
+        lx.mention_confirm()
+    })
 }
 
 /// 滚轮在 `@` 提及面板上滚动候选视口；`base` 为当前窗口起点，高亮不动。
 pub fn scroll_lx_mention(state: &mut AppState, id: PaneId, delta: isize, base: usize) -> bool {
-    state
-        .pane_mut_anywhere(id)
-        .is_some_and(|pane| pane.lx.mention_scroll(delta, base))
+    state.pane_mut_anywhere(id).is_some_and(|pane| {
+        pane.lx
+            .with_active_editor(|lx| lx.mention_scroll(delta, base))
+    })
 }
 
 /// 鼠标悬停快捷引用面板条目：更新高亮（窗口不滚动）；返回是否变化。
 pub fn hover_lx_refer(state: &mut AppState, id: PaneId, index: usize) -> bool {
     state
         .pane_mut_anywhere(id)
-        .is_some_and(|pane| pane.lx.refer_set_active(index))
+        .is_some_and(|pane| pane.lx.with_active_editor(|lx| lx.refer_set_active(index)))
 }
 
 /// 鼠标点选快捷引用候选：设置高亮并采纳；返回是否消费。
@@ -181,17 +190,20 @@ pub fn select_lx_refer(state: &mut AppState, id: PaneId, index: usize) -> bool {
     let Some(pane) = state.pane_mut_anywhere(id) else {
         return false;
     };
-    if !pane.lx.refer_set_active(index) && !pane.lx.refer_active() {
-        return false;
-    }
-    pane.lx.refer_confirm()
+    pane.lx.with_active_editor(|lx| {
+        if !lx.refer_set_active(index) && !lx.refer_active() {
+            return false;
+        }
+        lx.refer_confirm()
+    })
 }
 
 /// 滚轮在快捷引用面板上滚动候选视口；`base` 为当前窗口起点，高亮不动。
 pub fn scroll_lx_refer(state: &mut AppState, id: PaneId, delta: isize, base: usize) -> bool {
-    state
-        .pane_mut_anywhere(id)
-        .is_some_and(|pane| pane.lx.refer_scroll(delta, base))
+    state.pane_mut_anywhere(id).is_some_and(|pane| {
+        pane.lx
+            .with_active_editor(|lx| lx.refer_scroll(delta, base))
+    })
 }
 
 /// 鼠标悬停 `/` 命令面板条目：更新高亮（窗口不滚动）；返回是否变化。

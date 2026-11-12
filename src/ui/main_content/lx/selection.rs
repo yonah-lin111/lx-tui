@@ -60,6 +60,53 @@ pub(crate) fn content_geom(area: Rect, lx: &Lx, cache: &mut PaneCache) -> Option
         if output_rect.width == 0 || output_rect.height == 0 {
             return None;
         }
+        if page.tab == TaskTab::Btw {
+            let thread = lx.btw.active_thread()?;
+            let rect = history::content_rect(output_rect);
+            if rect.width == 0 || rect.height == 0 {
+                return None;
+            }
+            if thread.chat.messages.is_empty() {
+                return Some(ContentGeom {
+                    rect,
+                    scroll: 0,
+                    total_rows: 1,
+                });
+            }
+            if !thread.rows_dirty && thread.total_rows > 0 {
+                let total = thread.total_rows;
+                let visible = usize::from(rect.height);
+                let max = total.saturating_sub(visible);
+                let scroll = if thread.follow {
+                    max
+                } else {
+                    thread.scroll.min(max)
+                };
+                return Some(ContentGeom {
+                    rect,
+                    scroll,
+                    total_rows: total,
+                });
+            }
+            let source = history::HistorySource::from_chat(&thread.chat, &thread.compact);
+            let view = history::view_source_plain(output_rect, source, cache);
+            let rect = history::content_rect(view.body);
+            if rect.width == 0 || rect.height == 0 || view.total_rows == 0 {
+                return None;
+            }
+            let visible = usize::from(view.body.height);
+            let max = view.total_rows.saturating_sub(visible);
+            let scroll = if thread.follow {
+                max
+            } else {
+                thread.scroll.min(max)
+            };
+            return Some(ContentGeom {
+                rect,
+                scroll,
+                total_rows: view.total_rows,
+            });
+        }
         if page.tab == TaskTab::Agents {
             let run = page
                 .selected_agent_index(&lx.agents)
@@ -349,6 +396,23 @@ pub(crate) fn press_content_hit(
         _ => true,
     });
     Some((content_row, content_col, card))
+}
+
+/// BTW 对话区的按下命中：只解析折叠目标，不建立正文选区（旁路区不支持拖拽选词）。
+pub(crate) fn press_btw_content_hit(
+    area: Rect,
+    lx: &Lx,
+    column: u16,
+    row: u16,
+    cache: &mut PaneCache,
+) -> Option<Option<crate::app::state::CardTarget>> {
+    let geom = content_geom(area, lx, cache)?;
+    if !geom.contains(column, row) {
+        return None;
+    }
+    Some(super::history_hit::task_btw_card_target_at(
+        area, lx, column, row, cache,
+    ))
 }
 
 /// 按选区粒度（单字 / 词 / 行）在主内容区计算 `cell` 所在词或行的列闭区间。
