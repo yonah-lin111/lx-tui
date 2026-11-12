@@ -515,3 +515,48 @@ fn btw_follow_up_without_mention_keeps_previous_agent_target() {
     assert_eq!(submit.targets.len(), 1);
     assert_eq!(submit.targets[0].agent_id, "sub-1");
 }
+
+#[test]
+fn btw_follow_up_missing_previous_target_falls_back_to_default() {
+    let (mut state, pane) = btw_pane();
+    state.models = models_with_default();
+    {
+        let target = state.pane_mut_anywhere(pane).expect("pane");
+        target.lx.agents.runs.clear();
+        let thread = target.lx.btw.active_thread_mut().expect("thread");
+        thread.targets = vec![crate::app::state::lx::BtwTargetView {
+            key: "missing-agent".into(),
+            label: "Missing [explorer]".into(),
+            agent_id: Some("missing-agent".into()),
+        }];
+        thread.composer.editor_mut().replace_input("continue");
+    }
+
+    assert!(submit_current(&mut state, pane));
+    let submit = state
+        .effects
+        .iter()
+        .find_map(|effect| match effect {
+            crate::app::effects::Effect::Btw(crate::app::effects::BtwEffect::Submit(sub)) => {
+                Some(sub.as_ref())
+            }
+            _ => None,
+        })
+        .expect("BTW submit effect");
+    assert!(
+        submit.targets.is_empty(),
+        "missing previous target must fall back to default lx"
+    );
+    assert!(
+        state
+            .pane_anywhere(pane)
+            .expect("pane")
+            .lx
+            .btw
+            .active_thread()
+            .expect("thread")
+            .targets
+            .is_empty(),
+        "stale target badge must be cleared"
+    );
+}

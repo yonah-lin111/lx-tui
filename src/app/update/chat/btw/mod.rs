@@ -332,13 +332,24 @@ pub fn submit_current(state: &mut AppState, pane: PaneId) -> bool {
     // 当前草稿没有新的 `@` 时沿用上一次回答者集合（UI 胶囊已经显示该集合；
     // 只更新 badge 而不把集合带进提交会让实际回答者悄悄退回 lx）。
     let targets = if targets.is_empty() {
-        match previous_targets(&target.lx) {
-            Ok(previous) => previous,
-            Err(message) => {
-                show_lx_hint(state, pane, InputHintLevel::Warning, message);
-                return false;
+        let (previous, missing) = previous_targets(&target.lx);
+        if missing && previous.is_empty() {
+            // 上次目标实例已不在当前列表（常见于重启后实例列表尚未回填）：
+            // 不再用“No matching subagent”卡住追问，明确回退默认助手并继续。
+            if let Some(thread) = state
+                .pane_mut_anywhere(pane)
+                .and_then(|target| target.lx.btw.active_thread_mut())
+            {
+                thread.targets.clear();
             }
+            show_lx_hint(
+                state,
+                pane,
+                InputHintLevel::Warning,
+                text::LX_BTW_TARGETS_RESET,
+            );
         }
+        previous
     } else {
         targets
     };
@@ -438,13 +449,14 @@ pub fn stop_current(state: &mut AppState, pane: PaneId) -> bool {
 /// 当前线程上一次的回答者集合（无 `@` 追问时沿用）。
 ///
 /// `BtwTargetView` 只保留稳定 ID 与展示标签，提交需要完整 choice；因此按 ID
-/// 回查已加载的 subagent 实例。实例已不在列表中时拒绝提交并保留草稿，绝不
-/// 静默退回默认助手。
-fn previous_targets(target: &Lx) -> std::result::Result<Vec<BtwTargetChoice>, &'static str> {
+/// 回查已加载的 subagent 实例。实例不在列表中时标记 `missing` 并跳过；调用方
+/// 清空过期目标、提示后按默认助手继续（显式 `@` 缺失仍由 `resolve_targets` 拒绝）。
+fn previous_targets(target: &Lx) -> (Vec<BtwTargetChoice>, bool) {
     let Some(thread) = target.btw.active_thread() else {
-        return Ok(Vec::new());
+        return (Vec::new(), false);
     };
     let mut chosen: Vec<BtwTargetChoice> = Vec::new();
+    let mut missing = false;
     for view in &thread.targets {
         let Some(agent_id) = view.agent_id.as_deref() else {
             continue;
@@ -458,7 +470,8 @@ fn previous_targets(target: &Lx) -> std::result::Result<Vec<BtwTargetChoice>, &'
             .iter()
             .find(|run| run.agent_id == agent_id)
         else {
-            return Err(text::LX_BTW_NO_MATCHING_AGENT);
+            missing = true;
+            continue;
         };
         chosen.push(BtwTargetChoice {
             agent_id: run.agent_id.clone(),
@@ -467,7 +480,7 @@ fn previous_targets(target: &Lx) -> std::result::Result<Vec<BtwTargetChoice>, &'
             source_child_session_id: run.child_session_id.clone(),
         });
     }
-    Ok(chosen)
+    (chosen, missing)
 }
 
 pub(super) fn resolve_targets(

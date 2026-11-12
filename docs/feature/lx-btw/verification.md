@@ -51,13 +51,13 @@ BTW_VERIFY_WS="$WS" BTW_VERIFY_DB="$DB" \
 | V16 | QA 上下文截止 | steer、报告、shell、后续 QA、其他 BTW | 运行 `cargo test --lib latest_qa_anchor`、`btw_context_stops` | 主参考只到所属 QA；排除 steer/报告/shell/后续 QA；不混入其他 BTW | 通过 |
 | V17 | 只读工具面 | 伪造写工具/命令 | 运行 `cargo test --lib readonly` 与 `btw_tool_surface_is_read_only` | 仅 `read` / `search` / `curr_time`；写/编辑/命令不在声明面 | 通过 |
 | V18 | 启动恢复 | 遗留 running/queued 批次 | 运行 `cargo test --lib startup_recovery` | 标记 interrupted，保留已生成正文，不自动重发 | 通过 |
-| V19 | 全量回归 | `cargo test` | 执行 `cargo test`、`clippy`、`fmt` | 全部通过 | 通过；lib 5263 passed，5 ignored；所有集成测试通过 |
+| V19 | 全量回归 | `cargo test` | 执行 `cargo test`、`clippy`、`fmt` | 全部通过 | 通过；lib 5264 passed，5 ignored；所有集成测试通过 |
 
 ## 3. 结果摘要
 
-- `cargo test --lib`：**5263 passed / 0 failed / 5 ignored**。
+- `cargo test --lib`：**5264 passed / 0 failed / 5 ignored**。
 - `cargo test`：lib 与全部集成测试通过；`tests/btw_verify.rs` 为 ignored 的真实模型 E2E。
-- BTW 相关过滤：**41 passed**；迁移过滤：**24 passed**；选区过滤：**180 passed**；只读过滤：**1 passed**。
+- BTW 相关过滤：**42 passed**；迁移过滤：**24 passed**；选区过滤：**180 passed**；只读过滤：**1 passed**。
 - `cargo clippy --all-targets -- -D warnings`、`cargo fmt`：通过。
 - E2E 数据库证据（本轮持久化环境）：
   - 主会话 `sess-18e74140de5035d8-1`（`BTW verify`）：2 条消息；包含 CLI prompt、`read`、`spawn_agent`、`wait_agent` 与 `CLI_VERIFY_OK`。
@@ -111,6 +111,14 @@ LX_TUI_DB_PATH="$DB" lx-tui session agents -C "$WS" --last
 - 已完成的 7 个工具（2 read / 4 search / 1 read）均有 `agent_tool_call` 行；失败工具没有行，说明 pending INSERT 失败。旧代码的 BTW `begin_tool` 不记录 DB 错误，旧库无法反推具体 SQLite 子错误。
 - 代码缺陷：BTW 的 `begin_tool` 缺少主轮/子 agent 都有的 `checkpoint_before_tool` 时间线同步；长工具循环可能让 app 与 DB position 漂移。
 - 修复：抽共享 `checkpoint_before_tool`，BTW pending 前同步 parts；BTW 的 checkpoint/pending 错误记录完整 `error`，主轮/子 agent 同步补全。
-- 验证：`cargo test --lib` 5263 passed；clippy 通过；用该 session 的数据库副本重放同类 search/read 长链，120s 内未再出现 pending 失败（仍在长任务中，不能证明所有 SQLite 锁场景已消除）。若复现，新日志会显示具体 SQLite 子错误。
+- 验证：`cargo test --lib` 5264 passed；clippy 通过；用该 session 的数据库副本重放同类 search/read 长链，120s 内未再出现 pending 失败（仍在长任务中，不能证明所有 SQLite 锁场景已消除）。若复现，新日志会显示具体 SQLite 子错误。
 
 > 说明：本报告此前的 `sess-18e74140de5035d8-1` 位于独立工作区 `lx-btw-cli-20261112`，不在当前 `lx-tui` 工作区的 `/resume` 列表中；当前问题使用你指定的 `sess-18e73a11a5a0d138-0`。
+
+## 8. “No matching subagent” 阻止 BTW 追问
+
+- 现象：BTW composer 输入 `继续执行` 后 toast `No matching subagent; start a task from the main agent`，消息未发送。
+- 根因：线程上一轮的目标实例（如 `Turing`）仍在 `BtwTargetView`，但重启/会话加载后 `lx.agents.runs` 尚未回填；旧的 `previous_targets` 找不到实例就直接返回错误，导致无 `@` 的追问被卡住。
+- 修复：无新 `@` 且上次目标实例缺失时，清空过期目标、提示 `BTW targets reset to lx`，并继续提交给默认助手；显式 `@` 找不到实例仍保留错误，避免误投。
+- 数据库处理（仅 worktree 库）：把 `btw-18e741745e9682f0-1` 的 `answerer_set_json` 重置为 `["default"]`，备份为 `lx.db.bak-targetfix-20261112175420`；主库只清理了此前误加的测试 workspace 记录，未改任何主工作区 session/message。
+- 回归：`btw_follow_up_missing_previous_target_falls_back_to_default`；`cargo test --lib` 5264 passed，BTW 过滤 42 passed。

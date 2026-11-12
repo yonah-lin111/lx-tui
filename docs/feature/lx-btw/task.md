@@ -511,8 +511,8 @@ cargo fmt
 ### 17.4 验证结果
 
 ```text
-cargo test                 # lib 5263 passed, 5 ignored; 集成测试全部通过
-cargo test --lib btw       # 41 passed
+cargo test                 # lib 5264 passed, 5 ignored; 集成测试全部通过
+cargo test --lib btw       # 42 passed
 cargo test --lib migration # 24 passed
 cargo clippy --all-targets -- -D warnings
 cargo fmt
@@ -548,9 +548,17 @@ cargo fmt
 ### 18.3 验证
 
 ```text
-cargo test --lib                 # 5263 passed, 5 ignored
+cargo test --lib                 # 5264 passed, 5 ignored
 cargo clippy --all-targets -- -D warnings
 ```
 
 - 用 `sess-18e73a11...` 的数据库副本重放同类长工具链（连续 search/read），120s 内未再出现 pending 失败；该重放仍在长任务中，不能证明所有 SQLite 锁场景都已消除。
 - 若再次出现，日志会区分 `database is locked`、位置/唯一约束等具体子错误，可直接定位。
+
+## 19. “No matching subagent” 追问阻断（2026-11-12 第八轮）
+
+- **现象**：BTW 发送“继续执行”时 toast `No matching subagent; start a task from the main agent`，无法发送。
+- **根因**：线程上次目标仍在 `BtwTargetView`，但重启/会话加载后 `lx.agents.runs` 尚未回填；`previous_targets` 找不到实例直接返回错误。
+- **修复**：无新 `@` 且上次目标全部缺失时，清空过期目标、提示 `BTW targets reset to lx`，继续按默认助手提交；显式 `@` 缺失仍报错，避免误投。
+- **DB**：仅 worktree 库把 `btw-18e741745e9682f0-1` 的 answerer set 重置为 default，备份 `lx.db.bak-targetfix-20261112175420`；主库仅移除误加的测试 workspace 行，未动主工作区会话。
+- **验证**：新增 `btw_follow_up_missing_previous_target_falls_back_to_default`；lib 5264 passed，BTW 42 passed；clippy/fmt 通过。
