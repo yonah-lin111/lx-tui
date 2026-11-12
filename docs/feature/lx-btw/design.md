@@ -666,3 +666,9 @@ BTW 系统规则放 `chat/prompt/` 的专用常量/构造函数，由 `chat::pro
 - **回到底部**：BTW 复用主会话 chat bar 的 `↓ jump to bottom`，由活动线程的 `follow`/滚动偏移判定显示；点击恢复贴尾。
 - **交互**：BTW 对话与 Agents 详情对齐——滚轮 3 行/格、滚动条 thumb 拖拽/轨道点击、`↑↓` 1 行、`PgUp/PgDn` 10 行、正文选区与复制、代码块复制按钮、卡片折叠。
 - **实现归属**：滚动状态仍在 `BtwThreadState`；几何/命中在 `task_btw_scrollbar`、`scroll_btw_detail`、`set_task_btw_scroll` 与 `render_chunk` 的 Btw 分支；不引入跨 QA 的合成历史源。
+
+## 16. 第六轮 E2E 收口（2026-11-12）
+
+- `/btw prompt` 首次打开时线程尚未建立：正文以 `Option<String>` 暂存，QA 列表回投后写入新线程 composer 再提交，绝不提交空草稿。
+- 无新 `@` 的追问沿用当前线程上一次回答者集合；从 `BtwTargetView` 回查实例生成提交 choice，实例缺失时拒绝并保留草稿，不静默退回默认助手。
+- 验证由 `tests/btw_verify.rs`（ignored）覆盖：CLI 建工作区/会话、`/resume`、BTW 首问、连续追问、`@` 已完成 subagent、只读拒写、回到底部、`/btwList`；报告见 `verification.md`。

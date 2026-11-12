@@ -209,8 +209,9 @@ pub struct LxBtw {
     /// 当前显示的 QA 锚点 ID。
     pub active: Option<String>,
     pub focus: BtwFocus,
-    /// `/btw prompt` 暂存：QA 列表到达后立即提交一次（避免普通草稿被误发）。
-    pub pending_prompt: bool,
+    /// `/btw prompt` 暂存正文：QA 列表到达、线程建立后立即提交一次
+    /// （只认命令暂存，避免普通草稿被误发）。
+    pub pending_prompt: Option<String>,
     /// `/btwList` 选择器：当前高亮的 QA 下标（`None` 表示未打开）。
     pub picking: Option<usize>,
     /// `/btwList` 面板已打开但 QA 列表尚未应用（列表到达前兼作 loading 占位；
@@ -340,7 +341,7 @@ impl LxBtw {
         self.qa.clear();
         self.active = None;
         self.focus = BtwFocus::Composer;
-        self.pending_prompt = false;
+        self.pending_prompt = None;
         self.picking = None;
         self.pending_pick = false;
         self.picker_loading = false;

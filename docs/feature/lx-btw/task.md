@@ -487,3 +487,36 @@ cargo fmt
 ```
 
 新增回归：线程历史 loading 只落在底部空行、BTW 滚动/滚动条钳制与 PgUp/PgDn、BTW 滚动条几何与回到底部按钮、BTW 选区复制读取线程历史、BTW 代码块复制、BTW 回到底部点击命中。
+
+## 17. CLI + PTY E2E 与两处修复（2026-11-12 第六轮）
+
+### 17.1 真实 CLI/PTY 验证
+
+- 使用 `lx-tui workspace add --trust` 建独立工作区，`lx-tui exec` 创建持久化主会话并让 explorer 子 agent 完成 `note.txt` 读取（报告 `42`）。
+- 新增 `tests/btw_verify.rs`（`#[ignore]`）：真实 PTY 启动 TUI，`/resume` 打开 CLI 创建的会话，覆盖 `/btw` 首问、连续追问、`@Turing`、只读拒写、回到底部、`/btwList` 与 Esc 关闭。
+- 手工运行：`BTW_VERIFY_WS=... BTW_VERIFY_DB=... cargo test --test btw_verify -- --ignored --nocapture`。
+
+### 17.2 首次 `/btw prompt` 丢失
+
+- **根因**：首次打开时活动线程尚未建立，`try_submit_btw_command` 写入 `active_thread_mut()` 得到 `None`；列表到达后只看到 `pending_prompt=true`，提交的是空 composer。
+- **修复**：`pending_prompt` 改为 `Option<String>` 暂存正文；QA 列表回投、活动线程建好后写入 composer 再走 `submit_current`。
+- **回归**：`btw_command_stashes_prompt_until_the_first_thread_is_created`。
+
+### 17.3 无新 `@` 的追问退回 lx
+
+- **根因**：胶囊记录的上次目标只用于展示；`resolve_targets` 在无 `@` 时返回空集合，提交时未回填，事件层按默认助手执行。
+- **修复**：空集合时用 `previous_targets` 从 `BtwTargetView` 回查已加载实例生成完整 choice；目标实例缺失则拒绝提交并保留草稿。
+- **回归**：`btw_follow_up_without_mention_keeps_previous_agent_target`；E2E 第 3 批 recipient 仍为 `Turing/explorer`。
+
+### 17.4 验证结果
+
+```text
+cargo test                 # lib 5263 passed, 5 ignored; 集成测试全部通过
+cargo test --lib btw       # 41 passed
+cargo test --lib migration # 24 passed
+cargo clippy --all-targets -- -D warnings
+cargo fmt
+```
+
+- 真实 v26 库副本升级到 v28：`integrity_check=ok`，63 会话/211 消息保留，BTW 表与触发器存在。
+- 详细输入/步骤/期望见 [verification.md](verification.md)。

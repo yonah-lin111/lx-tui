@@ -1,7 +1,10 @@
 use super::*;
 use crate::app::actions::LxInput;
 use crate::app::state::lx::btw::{BtwFocus, BtwQaSummary};
-use crate::app::state::{AppState, PaneView, TaskPage, TaskTab};
+use crate::app::state::{AppState, ModelsSnapshot, PaneView, TaskPage, TaskTab};
+use crate::config::ai::{
+    AiSettings, ModelConfig, ModelSelection, ProviderConfig, ProviderOptions, ProviderTransport,
+};
 
 fn btw_pane() -> (AppState, PaneId) {
     let mut state = AppState::demo();
@@ -19,6 +22,49 @@ fn btw_pane() -> (AppState, PaneId) {
         .lx
         .sync_btw_composer_context(Some(std::env::temp_dir()), None);
     (state, pane)
+}
+
+/// 最小可用模型快照：提交路径需要 provider、model、api key 同时有效。
+fn models_with_default() -> ModelsSnapshot {
+    let mut settings = AiSettings::empty();
+    settings.enabled_providers = vec!["p".into()];
+    settings.providers.insert(
+        "p".into(),
+        ProviderConfig {
+            id: "p".into(),
+            kind: ProviderTransport::OpenaiCompatible,
+            name: "P".into(),
+            options: ProviderOptions {
+                api_key: Some("test-key".into()),
+                base_url: "https://api.example.invalid/v1".into(),
+            },
+            models: std::iter::once((
+                "m".into(),
+                ModelConfig {
+                    id: "m".into(),
+                    name: "M".into(),
+                    transport: None,
+                    limit: Some(crate::config::ai::ModelLimit {
+                        context: 100_000,
+                        output: 4_096,
+                    }),
+                    modalities: None,
+                    variants: std::collections::BTreeMap::new(),
+                    variant: None,
+                    pricing: None,
+                    extra: serde_json::Map::new(),
+                },
+            ))
+            .collect(),
+            extra: serde_json::Map::new(),
+        },
+    );
+    settings.default_model = Some(ModelSelection {
+        provider: "p".into(),
+        model: "m".into(),
+        variant: None,
+    });
+    ModelsSnapshot { settings }
 }
 
 fn qa(id: &str, has_thread: bool) -> BtwQaSummary {
@@ -367,4 +413,105 @@ fn btw_wheel_scroll_and_scrollbar_clamp_to_the_thread() {
             .scroll,
         5
     );
+}
+
+#[test]
+fn btw_command_stashes_prompt_until_the_first_thread_is_created() {
+    let (mut state, pane) = btw_pane();
+    state.models = models_with_default();
+    {
+        let target = state.pane_mut_anywhere(pane).expect("pane");
+        target.lx.task = None;
+        target.lx.btw = Default::default();
+        target.lx.replace_input("/btw regression prompt");
+    }
+    assert!(try_submit_btw_command(&mut state, pane));
+    assert_eq!(
+        state
+            .pane_anywhere(pane)
+            .expect("pane")
+            .lx
+            .btw
+            .pending_prompt
+            .as_deref(),
+        Some("regression prompt")
+    );
+    assert!(
+        state
+            .pane_anywhere(pane)
+            .expect("pane")
+            .lx
+            .btw
+            .active_thread()
+            .is_none(),
+        "首次打开时线程尚未建立，正文只能先暂存"
+    );
+
+    assert!(on_qa_list_loaded(
+        &mut state,
+        pane,
+        "sess-test",
+        vec![qa("qa-1", false)]
+    ));
+    let thread = state
+        .pane_anywhere(pane)
+        .expect("pane")
+        .lx
+        .btw
+        .active_thread()
+        .expect("thread");
+    assert_eq!(thread.composer.text(), "regression prompt");
+    assert!(
+        thread.pending_submit.is_some(),
+        "QA 列表到达、线程建立后必须立即提交 /btw prompt"
+    );
+}
+
+#[test]
+fn btw_follow_up_without_mention_keeps_previous_agent_target() {
+    let (mut state, pane) = btw_pane();
+    state.models = models_with_default();
+    let run = crate::app::state::SubagentRun::from_record(&crate::db::chat::SubagentRecord {
+        agent_id: "sub-1".into(),
+        nickname: Some("Turing".into()),
+        agent_path: "/root/turing".into(),
+        child_session_id: "child-1".into(),
+        parent_session_id: "sess-test".into(),
+        spawn_message_id: None,
+        role: crate::chat::agent::AgentRole::Explorer,
+        model_provider: String::new(),
+        model_id: String::new(),
+        model_variant: None,
+        status: "completed".into(),
+        title: "read token".into(),
+        created_at_ms: 0,
+        completed_at_ms: Some(100),
+        report_json: None,
+        report_delivered: false,
+    });
+    {
+        let target = state.pane_mut_anywhere(pane).expect("pane");
+        target.lx.agents.runs.push(run);
+        let thread = target.lx.btw.active_thread_mut().expect("thread");
+        thread.targets = vec![crate::app::state::lx::BtwTargetView {
+            key: "sub-1".into(),
+            label: "Turing [explorer]".into(),
+            agent_id: Some("sub-1".into()),
+        }];
+        thread.composer.editor_mut().replace_input("follow up");
+    }
+
+    assert!(submit_current(&mut state, pane));
+    let submit = state
+        .effects
+        .iter()
+        .find_map(|effect| match effect {
+            crate::app::effects::Effect::Btw(crate::app::effects::BtwEffect::Submit(sub)) => {
+                Some(sub.as_ref())
+            }
+            _ => None,
+        })
+        .expect("BTW submit effect");
+    assert_eq!(submit.targets.len(), 1);
+    assert_eq!(submit.targets[0].agent_id, "sub-1");
 }

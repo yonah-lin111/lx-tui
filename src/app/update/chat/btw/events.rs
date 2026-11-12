@@ -34,7 +34,7 @@ pub fn on_qa_list_loaded(
         target.lx.btw.select_qa(&qa_id);
     }
     if target.lx.btw.qa.is_empty() {
-        target.lx.btw.pending_prompt = false;
+        target.lx.btw.pending_prompt = None;
         target.lx.btw.picking = None;
         target.lx.btw.pending_pick = picker_open;
         show_lx_hint(state, pane, InputHintLevel::Warning, text::LX_BTW_NO_QA);
@@ -54,7 +54,7 @@ pub fn on_qa_list_loaded(
         .filter(|_| !target.lx.btw.qa.is_empty())
         .unwrap_or_default();
     let has_qa = !qa_id.is_empty();
-    let pending_prompt = target.lx.btw.pending_prompt;
+    let pending_prompt = target.lx.btw.pending_prompt.take();
     // composer 是懒创建的：拿到 QA、建立线程之后才存在，此时再同步 `@` 根与实例。
     crate::app::update::sync_lx_mention_root(state, pane);
     if has_qa {
@@ -64,9 +64,14 @@ pub fn on_qa_list_loaded(
             qa_id,
         }));
         // `/btw prompt` 在 QA 列表到达后才真正提交（只认命令暂存，不误发普通草稿）。
-        if pending_prompt {
-            if let Some(target) = state.pane_mut_anywhere(pane) {
-                target.lx.btw.pending_prompt = false;
+        // 首次打开时 `try_submit_btw_command` 还没有活动线程可写，必须在这里把
+        // 暂存正文填进刚建立的 composer，再走正常提交路径。
+        if let Some(prompt) = pending_prompt {
+            if let Some(thread) = state
+                .pane_mut_anywhere(pane)
+                .and_then(|target| target.lx.btw.active_thread_mut())
+            {
+                thread.composer.editor_mut().replace_input(&prompt);
             }
             submit_current(state, pane);
         }

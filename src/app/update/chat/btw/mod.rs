@@ -235,18 +235,14 @@ pub fn try_submit_btw_command(state: &mut AppState, pane: PaneId) -> bool {
         return true;
     }
     let prompt = prompt.to_string();
-    // 命令本身就是一次提交：主输入框内容不保留。
+    // 命令本身就是一次提交：主输入框内容不保留。线程可能尚未建立（首次打开），
+    // 因此正文一律先暂存，等 QA 列表回投、活动线程建好后再写入 composer。
     if let Some(target) = state.pane_mut_anywhere(pane) {
         target.lx.clear();
-    }
-    if let Some(thread) = state
-        .pane_mut_anywhere(pane)
-        .and_then(|target| target.lx.btw.active_thread_mut())
-    {
-        thread.composer.editor_mut().replace_input(&prompt);
-    }
-    if let Some(target) = state.pane_mut_anywhere(pane) {
-        target.lx.btw.pending_prompt = true;
+        target.lx.btw.pending_prompt = Some(prompt.clone());
+        if let Some(thread) = target.lx.btw.active_thread_mut() {
+            thread.composer.editor_mut().replace_input(&prompt);
+        }
     }
     // QA 列表由事件回投后才有；先登记一次延迟提交，列表到达时立即发出。
     state.effects.push(Effect::Btw(BtwEffect::LoadQaList {
@@ -332,6 +328,19 @@ pub fn submit_current(state: &mut AppState, pane: PaneId) -> bool {
             show_lx_hint(state, pane, InputHintLevel::Warning, message);
             return false;
         }
+    };
+    // 当前草稿没有新的 `@` 时沿用上一次回答者集合（UI 胶囊已经显示该集合；
+    // 只更新 badge 而不把集合带进提交会让实际回答者悄悄退回 lx）。
+    let targets = if targets.is_empty() {
+        match previous_targets(&target.lx) {
+            Ok(previous) => previous,
+            Err(message) => {
+                show_lx_hint(state, pane, InputHintLevel::Warning, message);
+                return false;
+            }
+        }
+    } else {
+        targets
     };
     let Some(thread) = state
         .pane_mut_anywhere(pane)
@@ -424,6 +433,41 @@ pub fn stop_current(state: &mut AppState, pane: PaneId) -> bool {
         ),
     );
     true
+}
+
+/// 当前线程上一次的回答者集合（无 `@` 追问时沿用）。
+///
+/// `BtwTargetView` 只保留稳定 ID 与展示标签，提交需要完整 choice；因此按 ID
+/// 回查已加载的 subagent 实例。实例已不在列表中时拒绝提交并保留草稿，绝不
+/// 静默退回默认助手。
+fn previous_targets(target: &Lx) -> std::result::Result<Vec<BtwTargetChoice>, &'static str> {
+    let Some(thread) = target.btw.active_thread() else {
+        return Ok(Vec::new());
+    };
+    let mut chosen: Vec<BtwTargetChoice> = Vec::new();
+    for view in &thread.targets {
+        let Some(agent_id) = view.agent_id.as_deref() else {
+            continue;
+        };
+        if chosen.iter().any(|item| item.agent_id == agent_id) {
+            continue;
+        }
+        let Some(run) = target
+            .agents
+            .runs
+            .iter()
+            .find(|run| run.agent_id == agent_id)
+        else {
+            return Err(text::LX_BTW_NO_MATCHING_AGENT);
+        };
+        chosen.push(BtwTargetChoice {
+            agent_id: run.agent_id.clone(),
+            display_nickname: run.nickname.clone().unwrap_or_else(|| run.agent_id.clone()),
+            role_name: run.role.as_str().to_string(),
+            source_child_session_id: run.child_session_id.clone(),
+        });
+    }
+    Ok(chosen)
 }
 
 pub(super) fn resolve_targets(

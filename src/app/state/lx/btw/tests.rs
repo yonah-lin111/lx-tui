@@ -39,11 +39,11 @@ fn each_qa_keeps_its_own_draft() {
 fn clearing_removes_threads_and_pending_flags() {
     let mut btw = LxBtw::default();
     btw.ensure_thread("qa-1");
-    btw.pending_prompt = true;
+    btw.pending_prompt = Some("stashed".into());
     btw.clear();
     assert!(btw.is_empty());
     assert!(btw.active.is_none());
-    assert!(!btw.pending_prompt);
+    assert!(btw.pending_prompt.is_none());
 }
 
 #[test]
