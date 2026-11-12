@@ -138,3 +138,45 @@ fn effective_selection_applies_model_default_variant() {
     let selection = chat.effective_selection(&models).expect("pane selection");
     assert_eq!(selection.variant.as_deref(), Some("high"));
 }
+
+/// `/resume` 绑定会话模型后记入最近使用，但不改 `defaultModel`。
+#[test]
+fn session_loaded_records_recent_model_without_touching_default() {
+    let mut state = ready_state("x");
+    state.models.settings.recent_models.clear();
+    state.effects.clear();
+    let pane = focus_pane(&state);
+    let selection = ModelSelection {
+        provider: "p".into(),
+        model: "m".into(),
+        variant: Some("high".into()),
+    };
+    assert!(on_session_loaded(
+        &mut state,
+        pane,
+        "sess-recent",
+        &[],
+        Some(selection.clone())
+    ));
+    assert_eq!(
+        state.models.settings.recent_models.first(),
+        Some(&selection),
+        "恢复会话模型进入最近使用队首"
+    );
+    assert_eq!(
+        state.models.settings.default_model,
+        Some(selection.clone()),
+        "defaultModel 不被 /resume 改写"
+    );
+    assert!(
+        state.effects.iter().any(|effect| matches!(
+            effect,
+            crate::app::effects::Effect::SaveModelChoice {
+                default_model: None,
+                recent: Some(recent),
+            } if recent.first() == Some(&selection)
+        )),
+        "只落盘 recentModels：{:?}",
+        state.effects
+    );
+}

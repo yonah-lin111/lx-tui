@@ -343,6 +343,13 @@ pub struct AiSettings {
         skip_serializing_if = "Option::is_none"
     )]
     pub default_model: Option<ModelSelection>,
+    /// 最近使用的模型（最多 10 条，最近在前；仅用于无窗格选择时的兜底）。
+    #[serde(
+        default,
+        rename = "recentModels",
+        skip_serializing_if = "Vec::is_empty"
+    )]
+    pub recent_models: Vec<ModelSelection>,
     /// 标题生成模型选择（兼容 lx-agent 的 camelCase `titleSummary`）。
     #[serde(
         default,
@@ -389,6 +396,7 @@ impl AiSettings {
             enabled_providers: Vec::new(),
             providers: BTreeMap::new(),
             default_model: None,
+            recent_models: Vec::new(),
             title_summary: None,
             recap_enabled: true,
             recap_summary: None,

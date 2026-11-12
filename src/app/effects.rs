@@ -283,9 +283,11 @@ pub enum Effect {
         model: crate::db::chat::ModelSnapshot,
         commit: Option<crate::db::chat::ModelSwitchCommit>,
     },
-    /// 把当前选择的模型写回 `config/ai.json` 的 `defaultModel`（下次启动沿用）。
-    SaveDefaultModel {
-        selection: crate::config::ai::ModelSelection,
+    /// 写回 `config/ai.json` 的模型偏好（`defaultModel` / `recentModels`；
+    /// `None` 表示保持磁盘现值）。
+    SaveModelChoice {
+        default_model: Option<crate::config::ai::ModelSelection>,
+        recent: Option<Vec<crate::config::ai::ModelSelection>>,
     },
     // ===== `/connect` 快捷连接 =====
     /// 保存预设供应商的 API Key 或 OAuth 凭证到 `connect.json`。

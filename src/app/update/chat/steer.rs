@@ -261,6 +261,11 @@ pub fn promote_after_finish(state: &mut AppState, pane: PaneId) -> bool {
         model: current.model,
         variant: current.variant,
     };
+    let used_selection = crate::config::ai::ModelSelection {
+        provider: model.provider.clone(),
+        model: model.model.clone(),
+        variant: model.variant.clone(),
+    };
     let generation = next_generation(state, pane);
     let Some(target) = state.pane_mut_anywhere(pane) else {
         return false;
@@ -287,6 +292,8 @@ pub fn promote_after_finish(state: &mut AppState, pane: PaneId) -> bool {
             attachments: batch.attachments,
             model,
         });
+    // 提升后的轮次实际使用该模型：记入 recentModels（不改 defaultModel）。
+    super::remember_model_used(state, &used_selection);
     refresh_lx_status(state, pane);
     true
 }

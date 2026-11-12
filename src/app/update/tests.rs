@@ -24,6 +24,48 @@ fn demo_terminal() -> AppState {
     state
 }
 
+/// demo 状态 + 单个有效默认模型（状态行应显示 `Model M`）。
+fn demo_with_default_model() -> AppState {
+    let mut state = AppState::demo();
+    let mut settings = crate::config::ai::AiSettings::empty();
+    settings.enabled_providers = vec!["p".into()];
+    settings.providers.insert(
+        "p".into(),
+        crate::config::ai::ProviderConfig {
+            id: "p".into(),
+            kind: crate::config::ai::ProviderTransport::OpenaiCompatible,
+            name: "P".into(),
+            options: crate::config::ai::ProviderOptions {
+                api_key: Some("test-key".into()),
+                base_url: "https://api.example.invalid/v1".into(),
+            },
+            models: std::iter::once((
+                "m".into(),
+                crate::config::ai::ModelConfig {
+                    id: "m".into(),
+                    name: "Model M".into(),
+                    transport: None,
+                    limit: None,
+                    modalities: None,
+                    variants: std::collections::BTreeMap::new(),
+                    variant: None,
+                    pricing: None,
+                    extra: serde_json::Map::new(),
+                },
+            ))
+            .collect(),
+            extra: serde_json::Map::new(),
+        },
+    );
+    settings.default_model = Some(crate::config::ai::ModelSelection {
+        provider: "p".into(),
+        model: "m".into(),
+        variant: None,
+    });
+    state.models = ModelsSnapshot { settings };
+    state
+}
+
 #[test]
 fn toggle_sidebar_flips_flag() {
     let mut state = AppState::demo();
@@ -894,6 +936,65 @@ fn switch_workspace_clears_selection_and_prompt_focus() {
     assert!(state.selection.is_none());
     switch_workspace(&mut state, 5);
     assert_eq!(state.active_workspace, 0);
+}
+
+/// 切/建工作区只刷新目标工作区的 lx 状态行；其它窗格的一次性省略提示不被消耗。
+#[test]
+fn switch_and_create_workspace_refresh_active_lx_status_model() {
+    let mut state = demo_with_default_model();
+    create_workspace(&mut state);
+    let created = state.active_tab().layout.focus();
+    assert_eq!(
+        state
+            .pane_anywhere(created)
+            .expect("created pane")
+            .lx
+            .chat
+            .status
+            .model_name
+            .as_deref(),
+        Some("Model M"),
+        "新建工作区后状态行立即显示可用模型"
+    );
+
+    let first = state.workspaces[0].tabs[0].layout.focus();
+    state
+        .pane_mut_anywhere(first)
+        .expect("first pane")
+        .lx
+        .chat
+        .status
+        .model_name = None;
+    state
+        .pane_mut_anywhere(created)
+        .expect("created pane")
+        .lx
+        .chat
+        .omitted_turns_notice = Some(3);
+
+    switch_workspace(&mut state, 0);
+    assert_eq!(
+        state
+            .pane_anywhere(first)
+            .expect("first pane")
+            .lx
+            .chat
+            .status
+            .model_name
+            .as_deref(),
+        Some("Model M"),
+        "切回工作区后刷新目标窗格状态行"
+    );
+    assert_eq!(
+        state
+            .pane_anywhere(created)
+            .expect("created pane")
+            .lx
+            .chat
+            .omitted_turns_notice,
+        Some(3),
+        "不刷新其它工作区，一次性省略提示保留"
+    );
 }
 
 /// 在当前菜单浮层中高亮指定命令项。

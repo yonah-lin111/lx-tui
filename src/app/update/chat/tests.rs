@@ -1147,19 +1147,63 @@ fn finish_model_selection_persists_default_model() {
         state.pane_anywhere(pane).expect("pane").lx.chat.selection,
         Some(selection.clone())
     );
-    // 入队写回 ai.json defaultModel。
+    // 入队写回 ai.json defaultModel + recentModels。
     assert!(
         state.effects.iter().any(|effect| matches!(
             effect,
-            crate::app::effects::Effect::SaveDefaultModel { selection: saved } if *saved == selection
+            crate::app::effects::Effect::SaveModelChoice {
+                default_model: Some(saved),
+                recent: Some(recent),
+            } if *saved == selection && recent.first() == Some(&selection)
         )),
-        "入队持久化默认模型：{:?}",
+        "入队持久化默认模型与最近使用：{:?}",
         state.effects
+    );
+    assert_eq!(
+        state.models.settings.recent_models.first(),
+        Some(&selection),
+        "采纳后记入最近使用"
     );
     // 快照同步更新，重复选择不再入队。
     let before = state.effects.len();
     crate::app::update::chat::test_hooks::finish_model_selection(&mut state, pane, selection);
     assert_eq!(state.effects.len(), before, "同选择不重复入队");
+}
+
+/// 发送时窗格没有选择：钉住回退解析结果（工作区记忆）并记入最近使用。
+#[test]
+fn try_send_pins_fallback_selection_and_records_recent_model() {
+    let mut state = AppState::demo();
+    state.models = models_with(None);
+    let pane = focus_pane(&state);
+    let expected = ModelSelection {
+        provider: "p".into(),
+        model: "m".into(),
+        variant: None,
+    };
+    state.pane_mut_anywhere(pane).expect("pane").lx.input = "你好".into();
+    assert!(try_send(&mut state, pane));
+    assert_eq!(
+        state.pane_anywhere(pane).expect("pane").lx.chat.selection,
+        Some(expected.clone()),
+        "首次发送钉住解析结果"
+    );
+    assert_eq!(
+        state.models.settings.recent_models.first(),
+        Some(&expected),
+        "发送后模型进入最近使用队首"
+    );
+    assert!(
+        state.effects.iter().any(|effect| matches!(
+            effect,
+            crate::app::effects::Effect::SaveModelChoice {
+                default_model: None,
+                recent: Some(recent),
+            } if recent.first() == Some(&expected)
+        )),
+        "只记 recentModels，不改 defaultModel：{:?}",
+        state.effects
+    );
 }
 
 /// 建立「流中」状态：草稿 → Committing → ack → Streaming；返回 (状态, 窗格, 请求键)。

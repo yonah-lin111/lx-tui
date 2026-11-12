@@ -95,7 +95,7 @@ pub(crate) use slash::refresh_slash_panel;
 use slash::unknown_slash_command;
 pub use slash::{
     accept_slash_command, apply_models_changed, apply_slash_command, apply_slash_enter,
-    open_history, open_model_picker, persist_default_model,
+    open_history, open_model_picker, persist_default_model, remember_model_used,
 };
 pub use steer::on_finish_ack;
 pub use subagent::{
@@ -277,6 +277,11 @@ pub fn try_send(state: &mut AppState, pane: PaneId) -> bool {
         return false;
     };
     target.lx.clear_rewind();
+    // 工作区记忆：窗格首次发送时钉住本次解析结果（default/recent/首个可用兜底），
+    // 后续切走再切回沿用同一模型。
+    if target.lx.chat.selection.is_none() {
+        target.lx.chat.selection = Some(selection.clone());
+    }
     target.lx.chat.generation_counter = generation;
     target.lx.chat.main_stopped = false;
     target.lx.chat.request = RequestState::Committing {
@@ -298,6 +303,8 @@ pub fn try_send(state: &mut AppState, pane: PaneId) -> bool {
                 variant: frozen.variant.clone(),
             },
         });
+    // 实际发送过的模型记入全局最近使用（只改 recentModels，不改 defaultModel）。
+    remember_model_used(state, &selection);
     // 立即进入流中态：loading 行（转轮 + Esc 待命提示）从按下 Enter 起就可见，
     // 不必等首个 delta。
     refresh_lx_status(state, pane);
@@ -869,6 +876,15 @@ pub fn refresh_lx_status(state: &mut AppState, pane: PaneId) {
 /// 启动/配置加载后刷新所有窗格状态行。
 pub fn refresh_all_lx_status(state: &mut AppState) {
     for pane in state.all_pane_ids() {
+        refresh_lx_status(state, pane);
+    }
+}
+
+/// 刷新当前工作区所有 lx 窗格的状态行（切/建工作区后调用）。
+///
+/// 只刷激活工作区，避免消耗其它窗格的一次性 `omitted_turns_notice`。
+pub fn refresh_active_workspace_lx_status(state: &mut AppState) {
+    for pane in state.active_pane_ids() {
         refresh_lx_status(state, pane);
     }
 }

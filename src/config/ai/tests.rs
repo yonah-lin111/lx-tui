@@ -356,7 +356,57 @@ fn parse_accepts_missing_optional_nodes() {
     let settings = parse_ai(minimal).expect("minimal parses");
     assert!(settings.providers.is_empty());
     assert!(settings.default_model.is_none());
+    assert!(settings.recent_models.is_empty(), "缺字段默认为空");
     assert_eq!(settings.idle_timeout_ms(), DEFAULT_STREAM_IDLE_TIMEOUT_MS);
+}
+
+#[test]
+fn recent_models_round_trip_and_empty_list_is_omitted() {
+    let mut settings = sample_settings();
+    settings.recent_models = vec![
+        ModelSelection {
+            provider: "example".into(),
+            model: "example-chat".into(),
+            variant: Some("high".into()),
+        },
+        ModelSelection {
+            provider: "deleted".into(),
+            model: "gone".into(),
+            variant: None,
+        },
+    ];
+    let value = serde_json::to_value(&settings).expect("serialize");
+    let recent = value["recentModels"]
+        .as_array()
+        .expect("recentModels array");
+    assert_eq!(recent.len(), 2);
+    let reparsed: AiSettings = serde_json::from_value(value).expect("deserialize");
+    assert_eq!(reparsed, settings, "recentModels 序列化往返一致");
+
+    let empty = serde_json::to_value(AiSettings::empty()).expect("serialize empty");
+    assert!(empty.get("recentModels").is_none(), "空列表不写入 ai.json");
+}
+
+#[test]
+fn stale_recent_models_are_preserved_and_do_not_participate_in_validation() {
+    // 最近使用是提示性历史：过期条目不裁剪、不阻塞保存/加载，也不参与 validate。
+    let json = sample_ai_json().replacen(
+        "\"ai\": {",
+        "\"ai\": {\n    \"recentModels\": [{\"provider\": \"deleted\", \"model\": \"gone\"}],",
+        1,
+    );
+    let settings = parse_ai(&json).expect("stale recentModels must not break ai.json load");
+    assert_eq!(settings.recent_models.len(), 1);
+    assert!(settings.validate().is_ok(), "recentModels 不参与整体校验");
+
+    let dir = temp_dir("recent-models");
+    let path = dir.join("config").join("ai.json");
+    save_ai(&path, &settings).expect("stale recentModels must not block save");
+    let loaded = load_ai(&path).expect("load").expect("exists");
+    assert_eq!(
+        loaded.recent_models, settings.recent_models,
+        "过期条目读写均保留"
+    );
 }
 
 #[test]

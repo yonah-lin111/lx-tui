@@ -516,21 +516,39 @@ pub fn apply_models_changed(
     changed || cleaned
 }
 
-/// 把窗格当前选择的模型写回 `ai.json` 的 `defaultModel`（下次启动沿用）。
+/// 把窗格当前选择的模型写回 `ai.json`：`defaultModel` + `recentModels` 一次落盘。
 ///
-/// 只在选择变化或首次采用默认时入队，避免重复落盘。
+/// 只在默认模型或最近使用列表变化时入队，避免重复落盘。
 pub fn persist_default_model(state: &mut AppState, selection: &ModelSelection) -> bool {
-    if state.models.settings.default_model.as_ref() == Some(selection) {
+    let mut changed = false;
+    if state.models.settings.default_model.as_ref() != Some(selection) {
+        state.models.settings.default_model = Some(selection.clone());
+        changed = true;
+    }
+    changed |= state.models.remember_model(selection);
+    if !changed {
         return false;
     }
     state
         .effects
-        .push(crate::app::effects::Effect::SaveDefaultModel {
-            selection: selection.clone(),
+        .push(crate::app::effects::Effect::SaveModelChoice {
+            default_model: Some(selection.clone()),
+            recent: Some(state.models.settings.recent_models.clone()),
         });
-    // 快照同步更新：内存立即生效，避免同一会话内再次入队。
-    state.models.settings.default_model = Some(selection.clone());
     true
+}
+
+/// 记录一次实际使用的模型（发送/恢复会话）；不改 `defaultModel`。
+pub fn remember_model_used(state: &mut AppState, selection: &ModelSelection) {
+    if !state.models.remember_model(selection) {
+        return;
+    }
+    state
+        .effects
+        .push(crate::app::effects::Effect::SaveModelChoice {
+            default_model: None,
+            recent: Some(state.models.settings.recent_models.clone()),
+        });
 }
 
 /// 命令采纳：`/model`、`/resume`、`/new` 的命令文本不被发送。

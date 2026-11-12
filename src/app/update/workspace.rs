@@ -166,6 +166,7 @@ pub fn create_workspace_with_cwd(state: &mut AppState, target_cwd: Option<PathBu
     super::workspace_history::exit_workspace_history(state);
     clear_selection(state);
     super::focus::focus_panes(state);
+    super::chat::refresh_active_workspace_lx_status(state);
 }
 
 /// 新建工作区（无指定路径，继承当前终端/工作区路径）。
@@ -340,6 +341,7 @@ pub fn switch_workspace(state: &mut AppState, index: usize) {
     // Agents 列表随工作区切换：滚动与悬停复位，避免旧槽位错位。
     state.agent_scroll = 0;
     state.agent_hover = None;
+    super::chat::refresh_active_workspace_lx_status(state);
 }
 
 /// 新建标签并激活：追加自动命名标签；PTY 由事件循环按状态对齐启动。

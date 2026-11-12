@@ -109,10 +109,10 @@ fn model_picker_falls_back_to_default_when_pane_selection_is_stale() {
 }
 
 #[test]
-fn model_picker_without_any_selection_has_no_current_marker() {
+fn model_picker_without_explicit_selection_marks_first_available_model() {
     let mut state = ready_state("x");
     let pane = focus_pane(&state);
-    // 窗格没有选择、配置也没有 defaultModel：确实没有"当前模型"可标。
+    // 窗格没有选择、配置也没有 defaultModel：回退到第一个可用模型，并标出它。
     state
         .pane_mut_anywhere(pane)
         .expect("pane")
@@ -126,7 +126,7 @@ fn model_picker_without_any_selection_has_no_current_marker() {
     else {
         panic!("model panel");
     };
-    assert_eq!(picker.current, None, "没有任何生效模型时不标");
+    assert_eq!(picker.current, Some(0), "回退到第一个可用模型并标出");
 }
 
 #[test]

@@ -188,7 +188,7 @@ fn gemini_two_stage_model_and_thinking_picker_updates_status_and_stream_without_
     assert!(
         !state.effects.iter().any(|e| matches!(
             e,
-            Effect::SaveDefaultModel { .. } | Effect::SetChatSessionModel { .. }
+            Effect::SaveModelChoice { .. } | Effect::SetChatSessionModel { .. }
         )),
         "AI Web 下切换模型不得写回 ai.json 或 SQLite"
     );
@@ -249,7 +249,7 @@ fn grok_single_stage_model_picker_applies_fast_and_build_without_variants() {
     assert!(
         !state.effects.iter().any(|e| matches!(
             e,
-            Effect::SaveDefaultModel { .. } | Effect::SetChatSessionModel { .. }
+            Effect::SaveModelChoice { .. } | Effect::SetChatSessionModel { .. }
         )),
         "AI Web 下切换模型不得写回 ai.json 或 SQLite"
     );
