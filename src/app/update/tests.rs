@@ -1948,6 +1948,25 @@ fn create_tab_appends_and_activates_auto_named_tab() {
 }
 
 #[test]
+fn create_tab_initializes_lx_status_model() {
+    let mut state = demo_with_default_model();
+    create_tab(&mut state);
+    let pane = state.active_tab().root_pane().expect("new tab root pane");
+    assert_eq!(
+        state
+            .pane_anywhere(pane)
+            .expect("new pane")
+            .lx
+            .chat
+            .status
+            .model_name
+            .as_deref(),
+        Some("Model M"),
+        "新建标签默认是 lx 欢迎页，必须立即解析模型而不是停在 no model"
+    );
+}
+
+#[test]
 fn create_tab_inherits_mention_inventory_from_source_pane() {
     let mut state = AppState::demo();
     let source_id = state.active_tab().root_pane().expect("root pane");
@@ -2133,6 +2152,39 @@ fn demo_two_panes() -> (AppState, PaneId, PaneId) {
         .split_pane(first, Direction::Horizontal)
         .expect("split succeeds");
     (state, first, second)
+}
+
+/// 右键菜单分割：新 lx 窗格立即解析模型。
+#[test]
+fn split_pane_from_menu_initializes_lx_status_model() {
+    let mut state = demo_with_default_model();
+    let source = state.active_tab().layout.focus();
+    assert!(super::menu::split_pane(
+        &mut state,
+        0,
+        0,
+        source,
+        Direction::Horizontal
+    ));
+    let created = state
+        .active_tab()
+        .layout
+        .pane_ids()
+        .into_iter()
+        .find(|pane| *pane != source)
+        .expect("new pane");
+    assert_eq!(
+        state
+            .pane_anywhere(created)
+            .expect("new pane")
+            .lx
+            .chat
+            .status
+            .model_name
+            .as_deref(),
+        Some("Model M"),
+        "分割出的 lx 窗格必须立即解析模型"
+    );
 }
 
 #[test]
@@ -3197,6 +3249,31 @@ fn toggle_pane_view_flips_target_and_hides_terminal_state() {
         "切回 lx 清理滚动条拖拽"
     );
     assert!(!toggle_pane_view(&mut state, PaneId::alloc()));
+}
+
+#[test]
+fn toggling_terminal_pane_to_lx_initializes_status_model() {
+    let mut state = demo_with_default_model();
+    let pane = state.active_tab().layout.focus();
+    {
+        let target = state.pane_mut_anywhere(pane).expect("pane");
+        target.view = PaneView::Terminal;
+        target.lx.chat.status = Default::default();
+    }
+    assert!(toggle_pane_view(&mut state, pane));
+    assert_eq!(view(&state, pane), PaneView::Lx);
+    assert_eq!(
+        state
+            .pane_anywhere(pane)
+            .expect("pane")
+            .lx
+            .chat
+            .status
+            .model_name
+            .as_deref(),
+        Some("Model M"),
+        "首次进入 lx 视图时必须立即解析模型"
+    );
 }
 
 /// 窗格视图（测试断言用）。

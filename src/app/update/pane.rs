@@ -829,6 +829,9 @@ pub fn toggle_pane_view(state: &mut AppState, id: PaneId) -> bool {
         if let Some(pane) = state.pane_mut_anywhere(id) {
             pane.lx.refresh_panel();
         }
+        // 首次进入 lx 视图（新建窗格默认 Terminal 再切回）时状态行尚未解析模型，
+        // 与 opencode 的实时选择不同，这里必须立即补一次。
+        super::chat::refresh_lx_status(state, id);
     }
     true
 }

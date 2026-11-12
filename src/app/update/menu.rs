@@ -651,11 +651,14 @@ pub(crate) fn split_pane(
     else {
         return false;
     };
-    if tab_state.split_pane(pane, direction).is_none() {
+    let Some(created) = tab_state.split_pane(pane, direction) else {
         return false;
-    }
+    };
     super::focus::focus_panes(state);
     state.prompt.clear_panel();
     clear_selection(state);
+    // 新窗格继承源窗格视图（源为 lx 时即 lx 欢迎页），立即解析模型，
+    // 否则底边框停在 `no model` 直到下一次显式刷新。
+    super::chat::refresh_lx_status(state, created);
     true
 }

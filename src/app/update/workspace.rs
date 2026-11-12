@@ -348,6 +348,7 @@ pub fn switch_workspace(state: &mut AppState, index: usize) {
 pub fn create_tab(state: &mut AppState) {
     let workspace = state.active_workspace_mut();
     let mut tab = Tab::single_terminal();
+    let created = tab.root_pane();
     if let Some(source) = mention_inventory_source(workspace)
         && let Some(id) = tab.root_pane()
         && let Some(pane) = tab.pane_mut(id)
@@ -358,6 +359,11 @@ pub fn create_tab(state: &mut AppState) {
     workspace.active_tab = workspace.tabs.len().saturating_sub(1);
     clear_selection(state);
     super::focus::focus_panes(state);
+    // 新标签默认落在 lx 欢迎页；必须立刻解析模型，否则底边框会停在 `no model`
+    // 直到下一次显式刷新（opencode 的 new session 选择是实时 memo，不存在这个空窗）。
+    if let Some(pane) = created {
+        super::chat::refresh_lx_status(state, pane);
+    }
 }
 
 /// 取工作区活跃标签根窗格作为 `@` 候选快照来源。

@@ -53,3 +53,10 @@
 - 显式选择缺失时，回退链最后一级会让第一个可用模型成为 `/model` 的“当前项”。
 - 无模型可用（未连接/无 Key/全部失效）时仍显示 `no model`，这是正确结果。
 - 切换工作区只刷新目标工作区的 lx 状态行，避免消耗其它窗格的一次性上下文省略提示。
+
+## 4. 追补：新建窗格/标签显示 `no model`（2026-11-12）
+
+- **根因**：`Pane::new()` 默认 `PaneView::Lx`，而 `LxChat::new()` 的 `status` 是空的；`create_tab`、右键菜单 `split_pane`、`toggle_pane_view`（终端切回 lx）以及 worktree 直接激活新工作区都没有调用 `refresh_lx_status`，于是新 lx 窗格一直停在 `no model`。opencode 的当前选择是实时 memo，不存在这段缓存空窗。
+- **修复**：上述创建/切回路径立即刷新目标窗格的 lx 状态；只刷新窗格，不消耗其它窗格的一次性上下文省略提示。
+- **新增测试**：`create_tab_initializes_lx_status_model`、`split_pane_from_menu_initializes_lx_status_model`、`toggling_terminal_pane_to_lx_initializes_status_model`。
+- **复测**：`cargo fmt --check`、`cargo clippy --all-targets -- -D warnings` 通过；lib **5316 passed / 6 ignored**；全量集成测试通过（首轮曾出现一次不可复现的既有 lib 失败，随后连续两轮全绿）。
