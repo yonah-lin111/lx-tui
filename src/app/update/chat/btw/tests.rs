@@ -32,6 +32,11 @@ fn qa(id: &str, has_thread: bool) -> BtwQaSummary {
 
 #[test]
 fn btw_composer_slash_panel_lists_btwlist_and_opens_the_picker() {
+    // `/btwList` 不属于主会话命令表。
+    assert!(
+        !crate::app::state::lx::slash::SlashCommand::ALL
+            .contains(&crate::app::state::lx::slash::SlashCommand::BtwList)
+    );
     let (mut state, pane) = btw_pane();
     // 在 BTW 输入框输入 `/`：打开 BTW 专属命令面板，而不是主会话的命令面板。
     assert!(apply_input(&mut state, pane, LxInput::Char('/')));
