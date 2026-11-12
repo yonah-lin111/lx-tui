@@ -28,7 +28,7 @@ pub mod rewind;
 mod session;
 mod slash;
 mod steer;
-mod subagent;
+pub(crate) mod subagent;
 mod subagent_cards;
 mod task_page;
 pub mod title;
@@ -41,13 +41,14 @@ pub use ask::{
     apply_ask_click, apply_ask_paste, apply_ask_wheel, apply_input as apply_ask_input, submit_all,
 };
 pub use btw::{
-    AcceptedBtw, BtwToolSettlement, BtwToolUpdate, apply_input as apply_btw_input,
-    btw_message_parts as btw_parts, on_accepted as on_btw_accepted, on_delta as on_btw_delta,
-    on_failed as on_btw_failed, on_finished as on_btw_finished, on_qa_list_loaded,
-    on_recipient_started as on_btw_recipient_started, on_thread_loaded as on_btw_thread_loaded,
-    on_tool_state as on_btw_tool_state, open_btw_list, open_btw_tab, scroll_btw_detail,
-    select_btw_qa, select_btw_slash, set_task_btw_scroll, submit_current as submit_btw,
-    toggle_btw_card, try_submit_btw_command,
+    AcceptedBtw, BtwToolSettlement, BtwToolUpdate, apply_btw_buffer_deltas,
+    apply_input as apply_btw_input, btw_message_parts as btw_parts,
+    new_assistant_message as new_btw_assistant_message, on_accepted as on_btw_accepted,
+    on_delta as on_btw_delta, on_failed as on_btw_failed, on_finished as on_btw_finished,
+    on_qa_list_loaded, on_recipient_started as on_btw_recipient_started,
+    on_thread_loaded as on_btw_thread_loaded, on_tool_state as on_btw_tool_state, open_btw_list,
+    open_btw_tab, scroll_btw_detail, select_btw_qa, select_btw_slash, set_task_btw_scroll,
+    submit_current as submit_btw, toggle_btw_card, try_submit_btw_command,
 };
 pub use compact::{
     compact_command, on_compact_empty, on_compact_failed, on_compact_finished,
@@ -940,8 +941,13 @@ pub fn advance_lx_loading(state: &mut AppState) -> bool {
         let recapping = target.lx.recap.pending.is_some();
         // 仍有子 agent 在跑：推进同一套 loading 帧（Agents 详情动画与等待行）。
         let agents_running = target.lx.agents.runs.iter().any(|run| run.is_running());
-        // BTW 在后台生成：只有面板可见时才需要动画帧，关掉面板不空转重绘。
-        let btw_running = target.lx.is_btw_tab() && target.lx.btw.is_loading();
+        // BTW 面板可见时，生成中或线程历史加载中都需要推进帧；关掉面板不空转重绘。
+        let btw_running = target.lx.is_btw_tab()
+            && target
+                .lx
+                .btw
+                .active_thread()
+                .is_some_and(|thread| thread.is_loading() || !thread.loaded);
         if !streaming && !compacting && !recapping && !agents_running && !btw_running {
             continue;
         }

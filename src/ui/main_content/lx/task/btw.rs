@@ -31,6 +31,7 @@ pub(crate) fn draw_bottom(
     rect: Rect,
     lx: &Lx,
     _page: &TaskPage,
+    focused: bool,
 ) -> Option<(u16, u16)> {
     if rect.width == 0 || rect.height == 0 {
         return None;
@@ -67,7 +68,14 @@ pub(crate) fn draw_bottom(
     let total = editor.visual_rows().len().max(1);
     let max_scroll = total.saturating_sub(visible);
     let scroll = editor.scroll().min(max_scroll);
-    let dims = super::super::input::draw(grid, composer, editor, true, scroll, visible);
+    let dims = super::super::input::draw(
+        grid,
+        composer,
+        editor,
+        focused && lx.btw.focus == crate::app::state::lx::BtwFocus::Composer,
+        scroll,
+        visible,
+    );
     // 主问题归属放到输入框顶边框右上角（与主会话标题胶囊同一位置）。
     draw_qa_badge(grid, composer, lx);
     dims
@@ -75,27 +83,29 @@ pub(crate) fn draw_bottom(
 
 /// 底部 loading 文案：沿用主会话的阶段口径（工具/思考/兜底），但不展示统计。
 fn loading_label(thread: &crate::app::state::lx::BtwThreadState) -> &'static str {
-    if let crate::app::state::RequestState::Streaming { assistant_id, .. } = &thread.chat.request
-        && let Some(message) = thread
-            .chat
-            .messages
-            .iter()
-            .find(|message| message.id == *assistant_id && message.role == "assistant")
-    {
-        if message.tools().any(|call| {
-            matches!(
-                call.status,
-                crate::app::state::ToolStatus::Pending | crate::app::state::ToolStatus::Running
-            )
-        }) {
-            return text::chat::RUNNING_TOOLS_LABEL;
-        }
-        if matches!(
-            message.steps.last(),
-            Some(crate::app::state::AssistantStepView::Part { part, .. }) if part.reasoning_open()
-        ) {
-            return text::chat::THINKING_LABEL;
-        }
+    // BTW 多路回答不写共享的 `chat.request`；按 assistant 消息自身的 streaming
+    // 状态判断，否则工具/思考阶段永远落回 Working...
+    let Some(message) = thread
+        .chat
+        .messages
+        .iter()
+        .find(|message| message.role == "assistant" && message.status == "streaming")
+    else {
+        return text::chat::LOADING_LABEL;
+    };
+    if message.tools().any(|call| {
+        matches!(
+            call.status,
+            crate::app::state::ToolStatus::Pending | crate::app::state::ToolStatus::Running
+        )
+    }) {
+        return text::chat::RUNNING_TOOLS_LABEL;
+    }
+    if matches!(
+        message.steps.last(),
+        Some(crate::app::state::AssistantStepView::Part { part, .. }) if part.reasoning_open()
+    ) {
+        return text::chat::THINKING_LABEL;
     }
     text::chat::LOADING_LABEL
 }

@@ -4,7 +4,7 @@
 >
 > 创建：2026-11-11；本次整理：2026-11-12。
 >
-> §2 是用户逐项确认的产品决策；§5 起是据此收敛的实现方案和建议默认值，随整份文档审核，不冒充已经逐项批准。生产代码尚未修改。执行清单见 [task.md](task.md)。
+> §2 是用户逐项确认的产品决策；§5 起是据此收敛的实现方案和建议默认值。`feat/lx-btw` 已完成首版实现与评审修复；执行清单见 [task.md](task.md)，问题与修复状态见 [review.md](review.md)。
 
 ## 1. 目标与范围
 
@@ -140,6 +140,8 @@ match self {
 
 ### 6.1 正常布局
 
+> **历史方案**：下面的“多行 QA 列表 + QA 列表焦点”已被 §15 的单 QA 视图取代；当前 `/btwList` 是唯一 QA 切换入口。本节保留用于追溯，不得按旧契约验收。
+
 ```text
 ┌─ lx-[Native Agent] ────────────────────────────────────────┐
 │ BTW · Fix login · QA 3: Support Safari                    │
@@ -165,6 +167,8 @@ match self {
 QA 列表默认最多 3 行，超过可滚动；只有一个 QA 时可收成单行来源。composer 使用主输入框相同软换行/滚动规则，不因 hover、加载动画改变尺寸。对话按批次及目标选择顺序固定位置；后完成的回答不重新排序。
 
 ### 6.2 焦点和键位
+
+> **历史方案**：QA 列表焦点行已移除；实际焦点只有 composer / conversation，`/btwList` 用二级面板。Shift+Tab 的完整支持仍列在 review.md P3。
 
 | 焦点 | 方向键 | Enter | Tab / Shift+Tab | Esc |
 | --- | --- | --- | --- | --- |
@@ -491,6 +495,8 @@ steer、自动报告、本地 shell 不生成新的 anchor。已有报告属于�
 
 本地服务执行白名单必须同时作用于声明、实际分派和 host 控制请求。MCP 只读标记是配置服务的能力声明，不是对远端代码的沙箱；未标记的工具不能凭名字或模型解释获得权限。只读业务边界允许保存聊天、图片归档和用量等应用自身持久化，不允许修改用户工程或控制原任务。
 
+> **实现现状**：首版实际只读工具面为 `read/search/curr_time` 与 MCP 只读快照；`list_agents`、条件式 `web_search` 未接入，见 task.md §11.2。上表的这两项不是已完成事实。
+
 ### 10.2 关键过滤示意
 
 ```rust
@@ -644,7 +650,7 @@ BTW 系统规则放 `chat/prompt/` 的专用常量/构造函数，由 `chat::pro
 | `src/app/state/lx/mention.rs`、`src/event/chat/subagent/snapshot.rs`、`src/app/update/pane/task_page.rs` | 终态实例候选、稳定引用、cancelled 直接恢复一致性 |
 | `src/ui/text/btw.rs`（新增）、相关规范文档 | 英文文案、目录与后台页行为更新 |
 
-生产文件上限 1000 行；新增职责文件目标约 500 行。测试跟随生产模块下沉，禁止往现有超大父 tests.rs 追加大量场景。
+生产文件上限 1000 行；新增职责文件目标约 500 行。测试跟随生产模块下沉，禁止往现有超大父 tests.rs 追加大量场景。实际 `src/db/chat/btw.rs` 已拆出 `btw/recovery.rs`；`src/event/chat/btw.rs` 仍超限，见 review.md P2-10。
 
 ## 14. 验证与实施门禁
 
@@ -657,7 +663,7 @@ BTW 系统规则放 `chat/prompt/` 的专用常量/构造函数，由 `chat::pro
 5. source 隔离、真实 child 清理、数据库迁移回滚、旧 QA compact 边界正确。
 6. input、焦点、selection、候选、speaker 的渲染行数和命中同源。
 
-本次仅完成设计与任务文档。下列动作必须在用户明确批准整份文档后执行：生产实现、库结构迁移、真实开发库升级。数据迁移先在副本上验证，再按项目规范关闭 lx 进程并保留备份；不进行任何未经授权的 Git 提交、暂存或分支操作。
+> 上述门禁是实施前方案；`feat/lx-btw` 已按后续用户批准落地并完成 v28 迁移。真实开发库升级仍需按项目规范备份、关闭 lx 进程；不要把 worktree 隔离库复制回主库。
 
 ## 15. 第五轮交互落地（2026-11-12）
 
@@ -678,3 +684,10 @@ BTW 系统规则放 `chat/prompt/` 的专用常量/构造函数，由 `chat::pro
 - 主轮、子 agent 与 BTW 的工具 pending 前统一调用 `checkpoint_before_tool`：先提交工具之前的 parts，再让 DB 分配 position；避免长工具循环中 app 时间线与 DB 位置漂移。
 - BTW 的 checkpoint/pending 失败现在记录完整 `error`（包含 SQLite 子错误），不再只保留 `sqlite` code。
 - 用户报告 `sess-18e73a11...` 的 QA 3 BTW 失败已按此修复；旧库无法反推具体 SQLite 子错误，重放副本未在 120s 内复现。
+
+
+## 18. 评审修复（2026-11-12）
+
+- **P1 已修**：切主会话/关 pane 的输出缓冲、跨实例启动恢复 guard、结算单事务、认领失败收敛、`/btw prompt` 最新 QA、BTW composer 输入路由、`default` 目标哨兵、迟到 ThreadLoaded 校验。实现与复测见 [review.md](review.md)。
+- **P2 未修**：单 `pending_submit` 生命周期、部分目标缺失静默缩小、多 pane 回投只更新首个、picker 指针优先级、恢复 `partial` 聚合、MCP disabled 冻结、已完成 subagent 报告注入、工具回放预算/参数、事件层单文件超限。
+- **文档**：§6.1/6.2 标为历史方案；§10.1 标注 `list_agents`/`web_search` 未接入；§14 的实施门禁已从“未实施”改为历史说明。

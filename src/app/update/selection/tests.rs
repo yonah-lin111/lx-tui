@@ -13,10 +13,11 @@ use crate::app::state::{AppState, ConnectPanel, PaneView, RightTab};
 use crate::app::tooltip::TodoButton;
 use crate::app::update::{
     apply_editor, apply_lx_input, apply_overlay_key, apply_page_search, apply_prompt_search,
-    apply_todo_button, apply_todo_key, apply_workspace_history_key, begin_lx_selection_range,
-    begin_terminal_selection_with_clicks, drag_terminal_selection, escape_clear_selection,
-    has_visible_selection, prompt_pages_mode, prompt_selection_bounds, prompt_tree_mode,
-    show_prompt_pages, show_prompt_tree, show_workspace_history, terminal_selection_text,
+    apply_todo_button, apply_todo_key, apply_workspace_history_key, begin_lx_input_selection,
+    begin_lx_selection_range, begin_terminal_selection_with_clicks, drag_lx_input_selection,
+    drag_terminal_selection, escape_clear_selection, has_visible_selection, prompt_pages_mode,
+    prompt_selection_bounds, prompt_tree_mode, scroll_lx_input, set_lx_scroll, show_prompt_pages,
+    show_prompt_tree, show_workspace_history, take_lx_input_selection, terminal_selection_text,
     workspace_history_mode,
 };
 use crate::chat::tools::AskQuestion;
@@ -726,4 +727,65 @@ fn review_fixes_whitespace_selection_menu_exclusivity_and_background_tab_preserv
         assert!(target.lx.slash.is_none(), "第二下 Esc 关闭 /mcp 面板");
         assert!(target.lx.input.is_empty());
     }
+}
+
+#[test]
+fn btw_composer_selection_and_scroll_stay_in_the_active_editor() {
+    let mut state = AppState::demo();
+    let pane = state.active_tab().layout.focus();
+    {
+        let target = state.pane_mut_anywhere(pane).expect("pane");
+        target.view = PaneView::Lx;
+        target.lx.chat.session_id = Some("sess-test".into());
+        target.lx.task = Some(TaskPage {
+            tab: TaskTab::Btw,
+            ..Default::default()
+        });
+        target.lx.btw.ensure_thread("qa-1");
+        let composer = target.lx.btw.active_composer_mut().expect("composer");
+        composer.resize(10, 5);
+        composer.insert_str("hello");
+        target.lx.insert_str("main draft");
+    }
+
+    begin_lx_input_selection(&mut state, pane, 0, 1);
+    drag_lx_input_selection(&mut state, pane, 0, 4);
+    {
+        let target = state.pane_anywhere(pane).expect("pane");
+        assert_eq!(
+            target
+                .lx
+                .btw
+                .active_composer()
+                .expect("composer")
+                .selected_text()
+                .as_deref(),
+            Some("ell")
+        );
+        assert!(target.lx.selected_text().is_none(), "主输入框不能被选中");
+    }
+    assert_eq!(
+        take_lx_input_selection(&mut state).map(|(_, text)| text),
+        Some("ell".to_string())
+    );
+
+    {
+        let composer = state
+            .pane_mut_anywhere(pane)
+            .expect("pane")
+            .lx
+            .btw
+            .active_composer_mut()
+            .expect("composer");
+        composer.resize(2, 1);
+        composer.replace_input("abcdef");
+    }
+    assert!(set_lx_scroll(&mut state, pane, 1));
+    assert!(scroll_lx_input(&mut state, pane, -1));
+    let target = state.pane_anywhere(pane).expect("pane");
+    assert_eq!(
+        target.lx.btw.active_composer().expect("composer").scroll(),
+        0
+    );
+    assert_eq!(target.lx.scroll(), 0, "主输入框滚动不能被 BTW 滚轮改变");
 }

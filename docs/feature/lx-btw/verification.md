@@ -55,9 +55,9 @@ BTW_VERIFY_WS="$WS" BTW_VERIFY_DB="$DB" \
 
 ## 3. 结果摘要
 
-- `cargo test --lib`：**5264 passed / 0 failed / 5 ignored**。
-- `cargo test`：lib 与全部集成测试通过；`tests/btw_verify.rs` 为 ignored 的真实模型 E2E。
-- BTW 相关过滤：**42 passed**；迁移过滤：**24 passed**；选区过滤：**180 passed**；只读过滤：**1 passed**。
+- 最新复测：`cargo test --lib` **5272 passed / 0 failed / 5 ignored**；BTW 相关过滤 **50 passed**。
+- 历史基线：5264 passed / BTW 42 passed（评审修复前）。`tests/btw_verify.rs` 为 ignored 的真实模型 E2E。
+- 迁移过滤：24 passed；选区过滤：180 passed；只读过滤：1 passed。
 - `cargo clippy --all-targets -- -D warnings`、`cargo fmt`：通过。
 - E2E 数据库证据（本轮持久化环境）：
   - 主会话 `sess-18e74140de5035d8-1`（`BTW verify`）：2 条消息；包含 CLI prompt、`read`、`spawn_agent`、`wait_agent` 与 `CLI_VERIFY_OK`。
@@ -122,3 +122,43 @@ LX_TUI_DB_PATH="$DB" lx-tui session agents -C "$WS" --last
 - 修复：无新 `@` 且上次目标实例缺失时，清空过期目标、提示 `BTW targets reset to lx`，并继续提交给默认助手；显式 `@` 找不到实例仍保留错误，避免误投。
 - 数据库处理（仅 worktree 库）：把 `btw-18e741745e9682f0-1` 的 `answerer_set_json` 重置为 `["default"]`，备份为 `lx.db.bak-targetfix-20261112175420`；主库只清理了此前误加的测试 workspace 记录，未改任何主工作区 session/message。
 - 回归：`btw_follow_up_missing_previous_target_falls_back_to_default`；`cargo test --lib` 5264 passed，BTW 过滤 42 passed。
+
+## 9. 2026-11-12 CLI 复测（`BTW verify 2`，历史记录）
+
+> 本节是第九轮结果；该 session 已不是 fresh BTW 历史。当前 fresh 全链路复测以 §10 为准。
+
+- 环境：workspace `lx-btw-cli-20261112`；worktree 库 `/Users/yonah/.lx-t-dev/db/worktrees/lx-btw-df3a5393/lx.db`。
+- CLI seed：`sess-18e74800241594d0-0`（`BTW verify 2`），subagent `sub-18e74800a9368b60-e`（`Turing` / explorer / completed），BTW 线程 `btw-18e7480653045320-1`。
+- 全链路 E2E（fresh session，非旧 session 复用）：
+  - `cargo test --test btw_verify btw_chat_and_agent_mention_e2e -- --ignored --nocapture --test-threads=1`
+  - 通过；新建 3 个批次：默认 `lx` → `@Turing` → 不再 `@` 的只读追问仍为 `subagent`，3 个批次均 completed。
+  - BTW 内实际执行 `read`；`note.txt` 保持 `BTW_VERIFY_TOKEN=42`，未被写入 99；jump-to-bottom 与 `/btwList` 面板通过。
+- 缺失目标回退 E2E：
+  - 先把线程 `answerer_set_json` 置为不存在的 `sub-deadbeef`，启动 TUI 后在 BTW 发 `继续执行`。
+  - 新批次 `btw-1794482298853-2-1` 的 `target_set_json=["default"]`，completed；线程目标落库为 `["default"]`；最终 composer 徽标为 `To: lx`；未出现 `No matching subagent`。
+  - 修复了加载/提交竞态：`on_thread_loaded` 在 `submit_seq > 0` 时不再用提交前快照覆盖本地已清除的目标，否则数据库已回退、徽标仍显示旧目标。
+- 复测命令（完整链路必须用**没有 BTW 历史**的新 seed session；当前会话只能复跑回退用例）：
+
+```bash
+WS=/Users/yonah/.lx-t-dev/verify/lx-btw-cli-20261112
+DB=/Users/yonah/.lx-t-dev/db/worktrees/lx-btw-df3a5393/lx.db
+
+# fresh session 的全链路 E2E
+BTW_VERIFY_WS="$WS" BTW_VERIFY_DB="$DB" BTW_VERIFY_TITLE='BTW verify 3' \
+  cargo test --test btw_verify btw_chat_and_agent_mention_e2e -- --ignored --nocapture --test-threads=1
+
+# 当前 BTW verify 2：缺失目标回退 E2E
+BTW_VERIFY_WS="$WS" BTW_VERIFY_DB="$DB" BTW_VERIFY_TITLE='BTW verify 2' \
+  cargo test --test btw_verify btw_missing_previous_target_falls_back_e2e -- --ignored --nocapture --test-threads=1
+```
+
+- 复测后的会话可直接在 TUI 打开：`BTW verify 2`；线程目标为默认 `lx`，发送 `继续执行` 会走 `lx`，历史里的 `Turing` 批次与只读证据保留。
+- 旧会话 `sess-18e74140de5035d8-1`（`BTW verify`）仍保留，目标同样为默认；两套 session 都只存在于 worktree 库，不影响主库会话。
+
+
+## 10. 评审后的 CLI+PTY 复测（`BTW verify 3`）
+
+- fresh seed：`sess-18e74a2bb0702e18-0`（`BTW verify 3`），subagent `sub-18e74a2c3df86b38-e`（`Turing` / explorer / completed），BTW 线程 `btw-18e74a342652ee60-1`。
+- 全链路 `btw_chat_and_agent_mention_e2e`：8.56s 通过；默认 `lx`、`@Turing`、无新 `@` 的只读追问均完成；`read` 只读、`note.txt` 未改、jump-to-bottom、`/btwList` 通过。
+- 缺失目标 `btw_missing_previous_target_falls_back_e2e`：7.34s 通过；最终批次 `btw-1794484584713-2-1` 目标 `["default"]` completed，线程目标 `["default"]`，徽标 `To: lx`，无 `No matching subagent`。
+- 本轮修复与未完成项详见 [review.md](review.md)；历史会话 `BTW verify`/`BTW verify 2` 仍保留在 worktree 库。

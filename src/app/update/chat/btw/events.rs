@@ -34,7 +34,10 @@ pub fn on_qa_list_loaded(
         target.lx.btw.select_qa(&qa_id);
     }
     if target.lx.btw.qa.is_empty() {
-        target.lx.btw.pending_prompt = None;
+        // 没有正式 QA 时不能把 `/btw prompt` 的正文丢掉：还回主输入，用户可先提问。
+        if let Some(prompt) = target.lx.btw.pending_prompt.take() {
+            target.lx.replace_input(&format!("/btw {prompt}"));
+        }
         target.lx.btw.picking = None;
         target.lx.btw.pending_pick = picker_open;
         show_lx_hint(state, pane, InputHintLevel::Warning, text::LX_BTW_NO_QA);
@@ -84,6 +87,7 @@ pub fn on_qa_list_loaded(
 pub fn on_thread_loaded(
     state: &mut AppState,
     pane: PaneId,
+    parent_session_id: &str,
     qa_id: &str,
     thread_id: Option<String>,
     child_session_id: Option<String>,
@@ -96,6 +100,13 @@ pub fn on_thread_loaded(
     let Some(target) = state.pane_mut_anywhere(pane) else {
         return false;
     };
+    // 迟到回投必须校验父会话与当前 QA：否则切会话/切 QA 后旧加载结果会
+    // 覆盖新视图，甚至把 active 改回旧 QA。
+    if target.lx.chat.session_id.as_deref() != Some(parent_session_id)
+        || target.lx.btw.active.as_deref() != Some(qa_id)
+    {
+        return false;
+    }
     let thread = target.lx.btw.ensure_thread(qa_id);
     if thread.loaded {
         return false;
@@ -108,7 +119,9 @@ pub fn on_thread_loaded(
     thread.thread_id = thread_id;
     thread.child_session_id = child_session_id;
     thread.title = title;
-    if !targets.is_empty() {
+    // 线程加载与首次提交可能竞态：加载结果是提交前的快照，不能把刚清除的
+    // 过期目标再覆盖回来；以本地已提交的目标集合（submit_seq > 0）为准。
+    if !targets.is_empty() && thread.submit_seq == 0 {
         thread.targets = targets;
     }
     thread.loaded = loaded;
@@ -180,6 +193,28 @@ pub fn on_accepted(state: &mut AppState, pane: PaneId, event: AcceptedBtw) -> bo
     true
 }
 
+/// 新建一个 streaming assistant 投影；BTW 的事件层缓冲与 UI 共用同一形状。
+pub fn new_assistant_message(id: &str, label: &str) -> ChatMessageView {
+    ChatMessageView {
+        id: id.to_string(),
+        sequence: 0,
+        kind: "chat".to_string(),
+        role: "assistant".to_string(),
+        status: "streaming".to_string(),
+        turn_index: 0,
+        shell: None,
+        steps: Vec::new(),
+        model_label: Some(label.to_string()),
+        error_code: None,
+        input_tokens: None,
+        output_tokens: None,
+        cache_read_tokens: None,
+        duration_ms: None,
+        reports: Vec::new(),
+        attachments: Vec::new(),
+    }
+}
+
 /// 事件层回投：某个回答者开始运行。
 pub fn on_recipient_started(
     state: &mut AppState,
@@ -203,24 +238,10 @@ pub fn on_recipient_started(
             return false;
         }
         thread.pending_recipients = thread.pending_recipients.saturating_sub(1);
-        thread.chat.messages.push(ChatMessageView {
-            id: assistant_message_id.to_string(),
-            sequence: 0,
-            kind: "chat".to_string(),
-            role: "assistant".to_string(),
-            status: "streaming".to_string(),
-            turn_index: 0,
-            shell: None,
-            steps: Vec::new(),
-            model_label: Some(label.to_string()),
-            error_code: None,
-            input_tokens: None,
-            output_tokens: None,
-            cache_read_tokens: None,
-            duration_ms: None,
-            reports: Vec::new(),
-            attachments: Vec::new(),
-        });
+        thread
+            .chat
+            .messages
+            .push(new_assistant_message(assistant_message_id, label));
         thread.rows_dirty = true;
         return true;
     }
@@ -351,15 +372,17 @@ pub fn on_finished(
     false
 }
 
-/// 事件层回投：提交失败（保留草稿）。
-pub fn on_failed(state: &mut AppState, pane: PaneId, message: &str) -> bool {
-    // 提交失败不会再有回答者开始：清掉等待标记，loading 必须立即消失、草稿保留可重试。
-    if let Some(thread) = state
-        .pane_mut_anywhere(pane)
-        .and_then(|target| target.lx.btw.active_thread_mut())
-    {
-        thread.pending_submit = None;
-        thread.pending_recipients = 0;
+/// 事件层回投：提交/回答者启动失败（保留草稿）。
+pub fn on_failed(state: &mut AppState, pane: PaneId, qa_id: Option<&str>, message: &str) -> bool {
+    // 失败不会再有回答者开始：清掉等待标记，loading 必须立即消失、草稿保留可重试。
+    if let Some(target) = state.pane_mut_anywhere(pane) {
+        let qa = qa_id
+            .map(str::to_owned)
+            .or_else(|| target.lx.btw.active.clone());
+        if let Some(thread) = qa.as_deref().and_then(|qa| target.lx.btw.thread_mut(qa)) {
+            thread.pending_submit = None;
+            thread.pending_recipients = 0;
+        }
     }
     show_lx_hint(state, pane, InputHintLevel::Error, message);
     true

@@ -1035,7 +1035,7 @@ fn btw_bottom_keeps_the_composer_visible_for_a_one_line_draft() {
 
     // 回归：`draw_bottom` 收到的已是 list 矩形，不能再扣一次顶边框/tab 行。
     let mut grid = super::super::grid::Grid::new(panel);
-    let dims = super::btw::draw_bottom(&mut grid, list, &lx, lx.task.as_ref().expect("task"));
+    let dims = super::btw::draw_bottom(&mut grid, list, &lx, lx.task.as_ref().expect("task"), true);
     assert!(dims.is_some(), "输入框必须真的画出来");
 }
 
@@ -1055,7 +1055,7 @@ fn btw_loading_sits_on_the_gap_row_not_the_composer_border() {
     let list = list_rect(panel);
     let composer = super::btw::composer_rect(panel, &lx).expect("composer rect");
     let mut grid = super::super::grid::Grid::new(panel);
-    let _ = super::btw::draw_bottom(&mut grid, list, &lx, lx.task.as_ref().expect("task"));
+    let _ = super::btw::draw_bottom(&mut grid, list, &lx, lx.task.as_ref().expect("task"), true);
 
     let row: String = (list.x..list.right())
         .map(|x| grid.cell(x, list.y).ch)
@@ -1211,7 +1211,7 @@ fn btw_history_loading_uses_the_bottom_gap_row_only() {
         .expect("task panel");
     let list = list_rect(panel);
     let mut grid = super::super::grid::Grid::new(area);
-    let _ = super::btw::draw_bottom(&mut grid, list, &lx, lx.task.as_ref().expect("task"));
+    let _ = super::btw::draw_bottom(&mut grid, list, &lx, lx.task.as_ref().expect("task"), true);
     let gap_row: String = (list.x..list.right())
         .map(|x| grid.cell(x, list.y).ch)
         .collect();

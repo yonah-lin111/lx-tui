@@ -162,3 +162,41 @@ pub(super) fn refer_item_at(
 pub(super) fn prompt_text_area(view: &ui::layout::ViewLayout) -> ratatui::layout::Rect {
     crate::ui::right_panel::prompt::geometry::prompt_content_rect(view.right_panel)
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::app::state::{TaskPage, TaskTab};
+
+    #[test]
+    fn lx_paste_targets_the_btw_composer_not_the_hidden_main_input() {
+        let mut state = AppState::demo();
+        let pane = state.active_tab().layout.focus();
+        {
+            let target = state.pane_mut_anywhere(pane).expect("pane");
+            target.view = PaneView::Lx;
+            target.lx.task = Some(TaskPage {
+                tab: TaskTab::Btw,
+                ..Default::default()
+            });
+            target.lx.btw.ensure_thread("qa-1");
+        }
+
+        assert!(handle_lx_paste(&mut state, "hello".to_string()));
+        let target = state.pane_anywhere(pane).expect("pane");
+        assert!(
+            target
+                .lx
+                .btw
+                .active_composer()
+                .expect("composer")
+                .text_paste_panel()
+                .is_some(),
+            "粘贴提案必须打开在 BTW composer 上"
+        );
+        assert!(
+            target.lx.text_paste_panel().is_none(),
+            "主输入框不能收到 BTW 的粘贴提案"
+        );
+    }
+}

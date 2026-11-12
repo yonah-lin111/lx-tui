@@ -244,6 +244,11 @@ impl LxBtw {
         self.threads.get_mut(&qa_id)
     }
 
+    /// 按 QA 取线程，不修改 active（异步失败回投用）。
+    pub fn thread_mut(&mut self, qa_id: &str) -> Option<&mut BtwThreadState> {
+        self.threads.get_mut(qa_id)
+    }
+
     /// 当前显示的 composer（供输入浮层读取编辑器状态）。
     pub fn active_composer(&self) -> Option<&Lx> {
         self.active_thread().map(|thread| thread.composer.editor())

@@ -196,6 +196,7 @@ pub(super) fn draw_list(
     rect: Rect,
     page: &TaskPage,
     lx: &crate::app::state::Lx,
+    focused: bool,
 ) -> Option<(u16, u16)> {
     let agents = &lx.agents;
     if rect.width == 0 || rect.height < TOP_BORDER + TAB_ROW {
@@ -266,7 +267,7 @@ pub(super) fn draw_list(
     }
     if page.tab == TaskTab::Btw {
         // BTW 页签底部：QA 列表 + 独立输入框（对话在上方输出容器）。
-        return btw::draw_bottom(grid, list_i, lx, page);
+        return btw::draw_bottom(grid, list_i, lx, page, focused);
     }
     let list = list_i;
     let bar = list_scrollbar(rect, page, agents);

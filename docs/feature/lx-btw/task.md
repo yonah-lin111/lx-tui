@@ -1,6 +1,6 @@
 # `/btw` 开发任务与验收计划
 
-> 状态：**详细设计审核阶段；生产代码任务全部未开始，等待用户批准。**
+> 状态：**`feat/lx-btw` 首版已实现，评审修复见 [review.md](review.md)；等待用户验收/合并。**
 >
 > 设计依据：[design.md](design.md)。用户对 Q1～Q17 的确认仅确认对应产品边界，不代表批准实施。
 
@@ -29,7 +29,8 @@
 - [x] 创建本任务专属设计与任务文档。
 - [x] 确认 Q1～Q17 的关键产品边界。
 - [x] 补齐拟议接口、三张关联表及删除触发器、状态机与 UI 示意图。
-- [ ] 用户审核 `design.md` 与 `task.md` 并明确批准实施。
+- [x] 用户审核设计并批准实施（后续迭代已落地）。
+- [x] 生产代码、v28 迁移、CLI/PTY E2E 与评审修复完成（未合并）。
 
 ## 2. 阶段 A：完成设计，不修改生产代码
 
@@ -302,14 +303,14 @@ btw_transfer_preserves_main_draft_and_is_one_undo
 - **独立上下文**：`chat::btw::assemble_btw_context` 生成 `<btw-context>`（main-reference / agent-reference / btw-history），当前问题作为最后一条 user 消息；后续主 QA 不进入上下文。
 - **事件编排**：`BtwStreams`（runs/pending/active_batches/sessions），同一线程批次串行、批内目标并行、全局 2 个回答槽；BTW 网络事件、工具握手、stale sweep、orphan runtime sweep 全部分流。回答完成走 `finish_with_optional_parts`，面板关闭时不会用空 parts 覆盖 checkpoint 正文；不写 `agent_subagent`、不产生父报告。
 - **命令与状态**：`/btw` 加入 `/` 面板（别名解析拒绝 `/btwfoo`，支持多行 prompt），`/btw` 在队列/steer 之前拦截；`LxBtw` 按 QA 惰性创建独立 composer（`Lx::composer()`，禁用 shell 前缀），切 QA/切会话/`/new`/删除会话清理或保留的边界按设计实现。
-- **UI**：后台任务页新增第三个 tab `BTW`；对话区复用 `HistorySource`，底部为 QA 列表 + composer；`input_rect`/`input_geom`/`input_scrollbar` 在 BTW 页回退到 composer，`@`/paste/refer/md 面板读取 composer 状态并锚定 composer 几何；文本框粘贴已路由到 composer。
+- **UI**：后台任务页新增第三个 tab `BTW`；对话区复用 `HistorySource`，底部为 QA 胶囊 + composer（第五轮改为单 QA 视图）；`input_rect`/`input_geom`/`input_scrollbar` 在 BTW 页回退到 composer，`@`/paste/refer/md 面板读取 composer 状态并锚定 composer 几何；文本框粘贴已路由到 composer。
 - **隔离**：`load_chat_session_into_pane` 与 CLI `session show` 拒绝 `source='btw'`；普通列表/fork 原有 `source='native'` 过滤保持。
 - **测试**：新增 10 个 DB/上下文测试、1 个只读工具面测试、4 个状态测试；`cargo test --lib` 全量 5238 通过；`cargo clippy --all-targets -- -D warnings` 与 `cargo fmt` 通过。
 
 ### 11.2 本轮未实现（明确遗留）
 
 - `Send to main` 转交按钮/键位（设计 §12）未实现。
-- BTW 页签的鼠标拖拽选区、滚轮分区、QA 行点击尚未接入（键位与文本编辑可用）。
+- 鼠标拖拽选区、滚轮分区已在第五轮接入；`/btwList` 面板的指针优先级仍待修（review.md P2-4）。
 - 对已结束 subagent 的 `@` 依赖 `ListSubagents` 已加载实例；未加载时提示无匹配。`list_agents` 控制工具未暴露（状态以只读参考注入）。
 - 异步图片/剪贴板图片与引用预览的 owner 校验未覆盖（文本路径已路由）。
 - `@MCP` 只读工具已声明；资源与工具调用依赖现有 MCP 快照，未新增独立只读资源桥。
@@ -562,3 +563,20 @@ cargo clippy --all-targets -- -D warnings
 - **修复**：无新 `@` 且上次目标全部缺失时，清空过期目标、提示 `BTW targets reset to lx`，继续按默认助手提交；显式 `@` 缺失仍报错，避免误投。
 - **DB**：仅 worktree 库把 `btw-18e741745e9682f0-1` 的 answerer set 重置为 default，备份 `lx.db.bak-targetfix-20261112175420`；主库仅移除误加的测试 workspace 行，未动主工作区会话。
 - **验证**：新增 `btw_follow_up_missing_previous_target_falls_back_to_default`；lib 5264 passed，BTW 42 passed；clippy/fmt 通过。
+
+## 20. CLI 复测与目标徽标竞态（2026-11-12 第九轮）
+
+- **CLI seed**：在 `lx-btw-cli-20261112` 新建 `sess-18e74800241594d0-0`（`BTW verify 2`），子 agent `sub-18e74800a9368b60-e`（`Turing` / explorer / completed）。
+- **全链路 E2E**：fresh session 下 `btw_chat_and_agent_mention_e2e` 通过；批次依次为默认 `lx`、`@Turing`、无新 `@` 的只读追问仍为 `subagent`；`read` 只读、`note.txt` 未改、jump-to-bottom 与 `/btwList` 通过。
+- **缺失目标回退 E2E**：把线程目标改为不存在的 `sub-deadbeef` 后发送 `继续执行`；新批次落为 `["default"]` 且 completed，线程目标落库为 `["default"]`，徽标回到 `To: lx`，不再出现 `No matching subagent`。
+- **竞态修复**：`on_thread_loaded` 在 `submit_seq > 0` 时保留本地目标，不用提交前快照覆盖刚清除的过期目标；否则会出现数据库已回退但徽标仍是旧 subagent。
+- **测试改造**：E2E 批次断言限定到目标 session 的 BTW 线程；支持 `BTW_VERIFY_TITLE`；新增 `btw_missing_previous_target_falls_back_e2e`。
+- **验证**：`cargo test --lib` 5264 passed，BTW 42 passed；clippy/fmt 通过；两个真实模型 E2E 均通过（ignored，手动运行）。
+
+
+## 21. 评审与修复（2026-11-12 第十轮）
+
+- 完整评审、P0～P3 排序、错误原因与复测证据见 [review.md](review.md)。
+- **P1 修复**：后台输出缓冲、启动恢复 session guard、结算单事务、认领失败收敛、`/btw prompt` 最新 QA、BTW composer 选区/滚动/复制/粘贴、`default` 哨兵、迟到 ThreadLoaded。
+- **P2 遗留**：单 `pending_submit` 代次、部分目标缺失静默缩小、多 pane 回投、picker 指针优先级、恢复 partial 聚合、MCP disabled/配置根冻结、subagent report 注入、工具回放 64 KiB/参数、`src/event/chat/btw.rs` 拆分、E2E nonce。
+- **验证**：`cargo test --lib` 5272 passed；BTW 过滤 50 passed；clippy/fmt 通过；`BTW verify 3` 全链路 E2E 8.56s、缺失目标回退 7.34s 通过；线程 `btw-18e74a342652ee60-1` 最终目标 default，最后批次 `btw-1794484584713-2-1` completed。

@@ -363,6 +363,15 @@ pub(crate) fn handle_paste_event(
         let id = state.active_tab().layout.focus();
         if state
             .pane_anywhere(id)
+            .is_some_and(|pane| pane.lx.is_btw_tab())
+        {
+            if paste::handle_lx_paste(state, text) {
+                *dirty = true;
+            }
+            return;
+        }
+        if state
+            .pane_anywhere(id)
             .is_some_and(|pane| pane.lx.task.is_some())
         {
             if update::apply_task_paste(state, id, &text) {
@@ -447,7 +456,9 @@ fn copy_lx_selection(
     }
     // 任务页打开时优先复制内联追问框选区；未打开时按 Ask 手写框 / 展开芯片预览 / 底部输入框顺序复制。
     if let Some(text) = request.and_then(|target| {
-        if let Some(task) = target.lx.task.as_ref() {
+        if target.lx.is_btw_tab() {
+            target.lx.active_editor().selected_text()
+        } else if let Some(task) = target.lx.task.as_ref() {
             task.agent_reply
                 .as_ref()
                 .and_then(|reply| reply.selected_text())
@@ -516,7 +527,12 @@ fn cut_lx_selection(state: &mut AppState) -> bool {
         let Some(target) = state.pane_mut_anywhere(pane) else {
             return false;
         };
-        if let Some(task) = target.lx.task.as_mut() {
+        if target.lx.is_btw_tab() {
+            (
+                target.lx.with_active_editor(|editor| editor.cut_selected()),
+                true,
+            )
+        } else if let Some(task) = target.lx.task.as_mut() {
             (
                 task.agent_reply
                     .as_mut()

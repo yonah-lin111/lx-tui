@@ -560,3 +560,178 @@ fn btw_follow_up_missing_previous_target_falls_back_to_default() {
         "stale target badge must be cleared"
     );
 }
+
+#[test]
+fn btw_command_with_prompt_switches_to_the_latest_qa() {
+    let (mut state, pane) = btw_pane();
+    state.models = models_with_default();
+    {
+        let target = state.pane_mut_anywhere(pane).expect("pane");
+        target.lx.btw.qa = vec![qa("qa-1", true), qa("qa-2", false)];
+        target.lx.btw.active = Some("qa-1".into());
+        target.lx.replace_input("/btw newest question");
+    }
+
+    assert!(try_submit_btw_command(&mut state, pane));
+    assert!(
+        state
+            .pane_anywhere(pane)
+            .expect("pane")
+            .lx
+            .btw
+            .active
+            .is_none(),
+        "命令式 /btw prompt 必须先清掉旧 active，列表回投后选择最新 QA"
+    );
+
+    assert!(on_qa_list_loaded(
+        &mut state,
+        pane,
+        "sess-test",
+        vec![qa("qa-1", true), qa("qa-2", false)],
+    ));
+    let target = state.pane_anywhere(pane).expect("pane");
+    assert_eq!(target.lx.btw.active.as_deref(), Some("qa-2"));
+    let submit = state
+        .effects
+        .iter()
+        .find_map(|effect| match effect {
+            crate::app::effects::Effect::Btw(crate::app::effects::BtwEffect::Submit(sub)) => {
+                Some(sub.as_ref())
+            }
+            _ => None,
+        })
+        .expect("BTW submit effect");
+    assert_eq!(submit.qa_id, "qa-2");
+    assert_eq!(submit.text, "newest question");
+}
+
+#[test]
+fn stale_thread_loaded_does_not_overwrite_another_session_or_qa() {
+    let (mut state, pane) = btw_pane();
+    assert!(!on_thread_loaded(
+        &mut state,
+        pane,
+        "other-session",
+        "qa-1",
+        None,
+        None,
+        String::new(),
+        Vec::new(),
+        Vec::new(),
+        true,
+    ));
+    assert!(
+        !state
+            .pane_anywhere(pane)
+            .expect("pane")
+            .lx
+            .btw
+            .active_thread()
+            .expect("thread")
+            .loaded
+    );
+
+    assert!(!on_thread_loaded(
+        &mut state,
+        pane,
+        "sess-test",
+        "qa-2",
+        None,
+        None,
+        String::new(),
+        Vec::new(),
+        Vec::new(),
+        true,
+    ));
+    assert_eq!(
+        state
+            .pane_anywhere(pane)
+            .expect("pane")
+            .lx
+            .btw
+            .active
+            .as_deref(),
+        Some("qa-1")
+    );
+    assert!(
+        !state
+            .pane_anywhere(pane)
+            .expect("pane")
+            .lx
+            .btw
+            .active_thread()
+            .expect("thread")
+            .loaded
+    );
+
+    assert!(on_thread_loaded(
+        &mut state,
+        pane,
+        "sess-test",
+        "qa-1",
+        None,
+        None,
+        String::new(),
+        Vec::new(),
+        Vec::new(),
+        true,
+    ));
+    assert!(
+        state
+            .pane_anywhere(pane)
+            .expect("pane")
+            .lx
+            .btw
+            .active_thread()
+            .expect("thread")
+            .loaded
+    );
+}
+
+#[test]
+fn default_target_sentinel_renders_as_lx_not_an_agent_id() {
+    let (mut state, pane) = btw_pane();
+    let thread = state
+        .pane_mut_anywhere(pane)
+        .expect("pane")
+        .lx
+        .btw
+        .active_thread_mut()
+        .expect("thread");
+    thread.targets = vec![crate::app::state::lx::BtwTargetView::default_assistant()];
+    assert_eq!(thread.target_label(), "To: lx");
+    assert!(thread.targets[0].agent_id.is_none());
+}
+
+#[test]
+fn empty_qa_restores_the_stashed_btw_command_draft() {
+    let (mut state, pane) = btw_pane();
+    state.models = models_with_default();
+    {
+        let target = state.pane_mut_anywhere(pane).expect("pane");
+        target.lx.btw.qa.clear();
+        target.lx.btw.pending_prompt = Some("keep me".into());
+        target.lx.clear();
+    }
+
+    assert!(on_qa_list_loaded(&mut state, pane, "sess-test", Vec::new()));
+    assert_eq!(
+        state.pane_anywhere(pane).expect("pane").lx.input,
+        "/btw keep me"
+    );
+}
+
+#[test]
+fn btw_loading_participates_in_the_global_spinner_gate() {
+    let (mut state, pane) = btw_pane();
+    state
+        .pane_mut_anywhere(pane)
+        .expect("pane")
+        .lx
+        .btw
+        .active_thread_mut()
+        .expect("thread")
+        .pending_submit = Some(("submit".into(), 1));
+    assert!(state.has_streaming_lx());
+}

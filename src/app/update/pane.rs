@@ -63,7 +63,8 @@ pub fn scroll_lx_input(state: &mut AppState, id: PaneId, direction: isize) -> bo
     if pane.view != PaneView::Lx {
         return false;
     }
-    pane.lx.scroll_by(direction.saturating_mul(WHEEL_LINES))
+    pane.lx
+        .with_active_editor(|editor| editor.scroll_by(direction.saturating_mul(WHEEL_LINES)))
 }
 
 /// 设置 lx 输入框滚动条视口偏移（滚动条点击/拖拽）；返回视口是否移动。
@@ -71,9 +72,11 @@ pub fn set_lx_scroll(state: &mut AppState, id: PaneId, offset: usize) -> bool {
     let Some(pane) = state.pane_mut_anywhere(id) else {
         return false;
     };
-    let before = pane.lx.scroll();
-    pane.lx.scroll_to(offset);
-    pane.lx.scroll() != before
+    pane.lx.with_active_editor(|editor| {
+        let before = editor.scroll();
+        editor.scroll_to(offset);
+        editor.scroll() != before
+    })
 }
 
 /// 应用 lx 页输入命令到焦点窗格；非 lx 视图忽略。

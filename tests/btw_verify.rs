@@ -6,13 +6,19 @@
 //!   LX_TUI_DB_PATH="$DB" lx-tui workspace add --trust -C "$WS"
 //!   LX_TUI_DB_PATH="$DB" lx-tui exec -C "$WS" \
 //!     "Call spawn_agent with role explorer and task: 'Read note.txt in the workspace root and report the exact value after BTW_VERIFY_TOKEN=.' Then call wait_agent ... reply with exactly CLI_VERIFY_OK."
-//!   LX_TUI_DB_PATH="$DB" lx-tui session rename -C "$WS" --last "BTW verify"
+//!   LX_TUI_DB_PATH="$DB" lx-tui session rename -C "$WS" --last "BTW verify 2"
 //!
 //! Run with:
-//!   BTW_VERIFY_WS="$WS" BTW_VERIFY_DB="$DB" cargo test --test btw_verify -- --ignored --nocapture
+//!   BTW_VERIFY_WS="$WS" BTW_VERIFY_DB="$DB" BTW_VERIFY_TITLE="BTW verify 2" \
+//!     cargo test --test btw_verify -- --ignored --nocapture --test-threads=1
 //!
-//! The test is intentionally ignored: it uses the real configured model and a
-//! session seeded by `lx-tui exec`, so it is not part of the normal test suite.
+//! `btw_chat_and_agent_mention_e2e` needs a fresh session/QA with no BTW history:
+//! stale screen text can satisfy its assertions. `btw_missing_previous_target...`
+//! must run after the initial BTW thread exists; it injects a fake target and
+//! verifies the fallback to lx, so it resets the thread target to default.
+//!
+//! The tests are intentionally ignored: they use the real configured model and a
+//! session seeded by `lx-tui exec`, so they are not part of the normal test suite.
 
 use std::io::{Read, Write};
 use std::sync::{Arc, Mutex};
@@ -155,15 +161,41 @@ fn sqlite(db_path: &str, sql: &str) -> String {
     String::from_utf8_lossy(&output.stdout).trim().to_string()
 }
 
+/// 目标 workspace 下最新的 native session（E2E 夹具按 CLI seed 创建）。
+fn btw_session_id(db_path: &str, workspace: &str) -> String {
+    let workspace = workspace.replace('\'', "''");
+    sqlite(
+        db_path,
+        &format!(
+            "select s.external_id from agent_session s join workspace w on w.external_id=s.workspace_id where w.path='{workspace}' and s.source='native' order by s.created_at_ms desc limit 1;"
+        ),
+    )
+}
+
+/// session 下最新的 BTW 线程；所有批次断言都限定到该线程，避免读到其他 session 的数据。
+fn btw_thread_id(db_path: &str, session_id: &str) -> String {
+    sqlite(
+        db_path,
+        &format!(
+            "select external_id from agent_btw_thread where parent_session_id='{session_id}' order by created_at_ms desc limit 1;"
+        ),
+    )
+}
+
 #[test]
 #[ignore = "real model E2E; requires BTW_VERIFY_WS and BTW_VERIFY_DB"]
 fn btw_chat_and_agent_mention_e2e() {
+    let db_path = std::env::var("BTW_VERIFY_DB").expect("BTW_VERIFY_DB");
+    let workspace = std::env::var("BTW_VERIFY_WS").expect("BTW_VERIFY_WS");
+    let title = std::env::var("BTW_VERIFY_TITLE").unwrap_or_else(|_| "BTW verify".into());
+    let session_id = btw_session_id(&db_path, &workspace);
+    assert!(!session_id.is_empty(), "missing seeded session");
     let app = App::spawn();
 
     // /resume opens the history panel; the seeded session is the newest entry.
     app.type_text("/resume");
     app.send(b"\r");
-    app.assert_wait("BTW verify");
+    app.assert_wait(&title);
     app.send(b"\r");
     app.assert_wait("CLI_VERIFY_OK");
 
@@ -176,6 +208,12 @@ fn btw_chat_and_agent_mention_e2e() {
     app.send(b"\r");
     app.assert_wait("QA 1");
     app.assert_wait("SIDE_OK");
+    // A fresh seed has no BTW thread until the first side question is accepted.
+    let thread_id = btw_thread_id(&db_path, &session_id);
+    assert!(
+        !thread_id.is_empty(),
+        "first BTW question did not create a thread"
+    );
 
     // @Turing: type the question first, then append the target at the end.
     // Typing after confirming a mention can re-trigger the refer shortcut panel.
@@ -197,12 +235,13 @@ fn btw_chat_and_agent_mention_e2e() {
     // The previous @ target (Turing) must persist for this follow-up. Compare
     // the *last* assistant label: if the follow-up fell back to lx, the final
     // label before the composer would be `lx [lx]` instead of Turing.
-    let db_path = std::env::var("BTW_VERIFY_DB").expect("BTW_VERIFY_DB");
     let deadline = Instant::now() + WAIT;
     while Instant::now() < deadline
         && sqlite(
             &db_path,
-            "select status from agent_btw_batch order by created_at_ms desc limit 1;",
+            &format!(
+                "select status from agent_btw_batch where thread_id='{thread_id}' order by created_at_ms desc limit 1;"
+            ),
         ) != "completed"
     {
         std::thread::sleep(Duration::from_millis(100));
@@ -210,7 +249,9 @@ fn btw_chat_and_agent_mention_e2e() {
     assert_eq!(
         sqlite(
             &db_path,
-            "select status from agent_btw_batch order by created_at_ms desc limit 1;"
+            &format!(
+                "select status from agent_btw_batch where thread_id='{thread_id}' order by created_at_ms desc limit 1;"
+            )
         ),
         "completed",
         "read-only follow-up did not finish"
@@ -218,12 +259,13 @@ fn btw_chat_and_agent_mention_e2e() {
     assert_eq!(
         sqlite(
             &db_path,
-            "select target_kind from agent_btw_recipient order by rowid desc limit 1;"
+            &format!(
+                "select target_kind from agent_btw_recipient where batch_id in (select external_id from agent_btw_batch where thread_id='{thread_id}') order by rowid desc limit 1;"
+            )
         ),
         "subagent",
         "follow-up lost the previous @ target"
     );
-    let workspace = std::env::var("BTW_VERIFY_WS").expect("BTW_VERIFY_WS");
     let note = std::fs::read_to_string(std::path::Path::new(&workspace).join("note.txt"))
         .expect("note.txt");
     assert!(
@@ -273,5 +315,114 @@ fn btw_chat_and_agent_mention_e2e() {
     );
 
     // Keep the screen in the panic message for manual inspection.
+    println!("FINAL SCREEN:\n{}", app.screen());
+}
+
+#[test]
+#[ignore = "real model E2E; requires BTW_VERIFY_WS and BTW_VERIFY_DB"]
+fn btw_missing_previous_target_falls_back_e2e() {
+    let db_path = std::env::var("BTW_VERIFY_DB").expect("BTW_VERIFY_DB");
+    let workspace = std::env::var("BTW_VERIFY_WS").expect("BTW_VERIFY_WS");
+    let title = std::env::var("BTW_VERIFY_TITLE").unwrap_or_else(|_| "BTW verify 2".into());
+    let thread_id = sqlite(
+        &db_path,
+        &format!(
+            "select external_id from agent_btw_thread where parent_session_id=(select external_id from agent_session where title='{title}' order by created_at_ms desc limit 1) order by updated_at_ms desc limit 1;"
+        ),
+    );
+    assert!(!thread_id.is_empty(), "missing BTW thread for {title}");
+    sqlite(
+        &db_path,
+        &format!(
+            "update agent_btw_thread set answerer_set_json='[\"sub-deadbeef\"]' where external_id='{thread_id}';"
+        ),
+    );
+    let before = sqlite(
+        &db_path,
+        &format!("select count(*) from agent_btw_batch where thread_id='{thread_id}';"),
+    );
+
+    let app = App::spawn();
+    app.type_text("/resume");
+    app.send(b"\r");
+    app.assert_wait(&title);
+    app.send(b"\r");
+    app.assert_wait("CLI_VERIFY_OK");
+
+    app.type_text("/btw");
+    app.send(b"\t");
+    app.assert_wait("[prompt]");
+    app.type_text("继续执行");
+    app.send(b"\r");
+
+    let deadline = Instant::now() + WAIT;
+    let mut count = before.clone();
+    while Instant::now() < deadline {
+        count = sqlite(
+            &db_path,
+            &format!("select count(*) from agent_btw_batch where thread_id='{thread_id}';"),
+        );
+        if count != before {
+            break;
+        }
+        std::thread::sleep(Duration::from_millis(100));
+    }
+    assert_ne!(count, before, "follow-up did not create a BTW batch");
+    let latest_batch = sqlite(
+        &db_path,
+        &format!(
+            "select external_id from agent_btw_batch where thread_id='{thread_id}' order by created_at_ms desc limit 1;"
+        ),
+    );
+    let latest_target = sqlite(
+        &db_path,
+        &format!(
+            "select target_set_json from agent_btw_batch where thread_id='{thread_id}' order by created_at_ms desc limit 1;"
+        ),
+    );
+    assert_eq!(
+        latest_target, "[\"default\"]",
+        "missing previous target must fall back to lx"
+    );
+    let deadline = Instant::now() + WAIT;
+    while Instant::now() < deadline
+        && sqlite(
+            &db_path,
+            &format!("select status from agent_btw_batch where external_id='{latest_batch}';"),
+        ) != "completed"
+    {
+        std::thread::sleep(Duration::from_millis(100));
+    }
+    assert_eq!(
+        sqlite(
+            &db_path,
+            &format!("select status from agent_btw_batch where external_id='{latest_batch}';"),
+        ),
+        "completed",
+        "fallback batch did not complete"
+    );
+    assert_eq!(
+        sqlite(
+            &db_path,
+            &format!(
+                "select answerer_set_json from agent_btw_thread where external_id='{thread_id}';"
+            ),
+        ),
+        "[\"default\"]",
+        "thread target must be reset after fallback"
+    );
+    assert!(
+        !app.screen().contains("No matching subagent"),
+        "fallback still shows the blocking toast:\n{}",
+        app.screen()
+    );
+    assert!(
+        !app.screen().contains("To: sub-deadbeef"),
+        "fallback left the stale target badge:\n{}",
+        app.screen()
+    );
+    let note = std::fs::read_to_string(std::path::Path::new(&workspace).join("note.txt"))
+        .expect("note.txt");
+    assert!(note.contains("42") && !note.contains("99"));
     println!("FINAL SCREEN:\n{}", app.screen());
 }

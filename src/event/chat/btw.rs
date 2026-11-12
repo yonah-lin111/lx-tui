@@ -38,6 +38,7 @@ pub enum BtwEvent {
     /// 某主 QA 的线程历史已加载。
     ThreadLoaded {
         pane: PaneId,
+        parent_session_id: String,
         qa_id: String,
         view: Box<BtwLoadedView>,
     },
@@ -84,6 +85,10 @@ pub(crate) struct BtwRun {
     pub assistant_message_id: String,
     pub child_session_id: String,
     pub parent_session_id: String,
+    /// 独立于 pane 投影的流缓冲：切主会话/关 pane 后仍能结算完整正文。
+    pub buffer: crate::app::state::LxChat,
+    /// 本 recipient 的跨进程 session guard；保持到 finish，避免启动恢复误伤。
+    _guard: crate::platform::FileGuard,
     pub started_at_ms: i64,
     /// 上一次流中 checkpoint 的时刻（面板关闭后仍能在库里留下已生成正文）。
     last_checkpoint_ms: i64,
@@ -95,6 +100,8 @@ struct BtwPending {
     thread_id: String,
     batch_id: String,
     recipient_id: String,
+    qa_id: String,
+    child_session_id: String,
     /// 提交时冻结的 DB 工作区与执行 cwd：关闭源窗格/切换工作区后仍按原归属运行。
     workspace: PathBuf,
     cwd: PathBuf,
@@ -269,6 +276,7 @@ fn load_thread(
     let Some(thread) = thread else {
         let _ = sender.send(AppEvent::Btw(BtwEvent::ThreadLoaded {
             pane,
+            parent_session_id: parent_session_id.to_string(),
             qa_id: qa_id.to_string(),
             view: Box::new(BtwLoadedView {
                 thread_id: None,
@@ -289,6 +297,7 @@ fn load_thread(
     let targets = resolve_target_views(persistence, &workspace, parent_session_id, &thread);
     let _ = sender.send(AppEvent::Btw(BtwEvent::ThreadLoaded {
         pane,
+        parent_session_id: parent_session_id.to_string(),
         qa_id: qa_id.to_string(),
         view: Box::new(BtwLoadedView {
             thread_id: Some(thread.id),
@@ -319,20 +328,29 @@ fn resolve_target_views(
     thread
         .answerers
         .iter()
-        .map(|id| {
-            let record = records.iter().find(|record| &record.agent_id == id);
-            crate::app::state::lx::BtwTargetView {
-                key: id.clone(),
-                label: record
-                    .map(|record| {
-                        let name = record.nickname.clone().unwrap_or_else(|| id.clone());
-                        format!("{name} [{}]", record.role.as_str())
-                    })
-                    .unwrap_or_else(|| id.clone()),
-                agent_id: Some(id.clone()),
-            }
-        })
+        .map(|id| target_view_for(id, &records))
         .collect()
+}
+
+/// 把持久化目标键换成展示项；`default` 是默认助手哨兵，不是 agent ID。
+fn target_view_for(
+    id: &str,
+    records: &[crate::db::chat::SubagentRecord],
+) -> crate::app::state::lx::BtwTargetView {
+    if id == "default" {
+        return crate::app::state::lx::BtwTargetView::default_assistant();
+    }
+    let record = records.iter().find(|record| record.agent_id == id);
+    crate::app::state::lx::BtwTargetView {
+        key: id.to_string(),
+        label: record
+            .map(|record| {
+                let name = record.nickname.clone().unwrap_or_else(|| id.to_string());
+                format!("{name} [{}]", record.role.as_str())
+            })
+            .unwrap_or_else(|| id.to_string()),
+        agent_id: Some(id.to_string()),
+    }
 }
 
 /// 提交一次旁路问题：落库、回投 Accepted、入队回答者。
@@ -399,6 +417,8 @@ fn submit(
             thread_id: accepted.thread.id.clone(),
             batch_id: accepted.batch_id.clone(),
             recipient_id: recipient.id.clone(),
+            qa_id: submission.qa_id.clone(),
+            child_session_id: accepted.thread.child_session_id.clone(),
             workspace: submission.workspace.clone(),
             cwd: submission.cwd.clone(),
             pane: submission.pane,
@@ -498,14 +518,54 @@ fn start_recipient(
     };
     // 工作区/cwd 取提交时冻结值：源窗格关闭或工作区切换后仍按原归属运行。
     let workspace = pending.workspace.clone();
-    let Some(start) = database
-        .start_btw_recipient(&workspace, &pending.recipient_id)
-        .ok()
-        .flatten()
-    else {
-        // 已被恢复流程/其它路径结算：收敛批次状态，避免永久停在 queued/running。
-        let _ = database.sync_btw_batch_status(&pending.batch_id);
-        return false;
+    // BTW child session 与主轮共用跨进程 guard：启动恢复只处理拿得到 guard 的
+    // session，不能把另一个 lx 实例仍在流式输出的回答标成 interrupted。
+    let guard = match crate::platform::try_lock_session(&pending.child_session_id) {
+        Ok(Some(guard)) => guard,
+        Ok(None) => {
+            tracing::warn!(
+                session = %pending.child_session_id,
+                "btw recipient skipped: session is owned by another instance"
+            );
+            let _ = sender.send(AppEvent::Btw(BtwEvent::Failed {
+                pane: pending.pane,
+                qa_id: Some(pending.qa_id.clone()),
+                message: crate::ui::text::LX_BTW_SUBMIT_FAILED.to_string(),
+            }));
+            return false;
+        }
+        Err(error) => {
+            tracing::warn!(%error, session = %pending.child_session_id, "btw session guard unavailable");
+            let _ = sender.send(AppEvent::Btw(BtwEvent::Failed {
+                pane: pending.pane,
+                qa_id: Some(pending.qa_id.clone()),
+                message: crate::ui::text::LX_BTW_SUBMIT_FAILED.to_string(),
+            }));
+            return false;
+        }
+    };
+    let start = match database.start_btw_recipient(&workspace, &pending.recipient_id) {
+        Ok(Some(start)) => start,
+        Ok(None) => {
+            // 已被恢复流程/其它路径结算：收敛批次状态，避免永久停在 queued/running。
+            let _ = database.sync_btw_batch_status(&pending.batch_id);
+            let _ = sender.send(AppEvent::Btw(BtwEvent::Failed {
+                pane: pending.pane,
+                qa_id: Some(pending.qa_id.clone()),
+                message: crate::ui::text::LX_BTW_SUBMIT_FAILED.to_string(),
+            }));
+            return false;
+        }
+        Err(error) => {
+            tracing::warn!(code = error.code(), "btw recipient claim failed");
+            let _ = database.fail_btw_recipient(&pending.recipient_id, "recipient claim failed");
+            let _ = sender.send(AppEvent::Btw(BtwEvent::Failed {
+                pane: pending.pane,
+                qa_id: Some(pending.qa_id.clone()),
+                message: crate::ui::text::LX_BTW_SUBMIT_FAILED.to_string(),
+            }));
+            return false;
+        }
     };
     let pane = pending.pane;
     let cwd = pending.cwd.clone();
@@ -528,6 +588,11 @@ fn start_recipient(
             Default::default(),
             Default::default(),
         );
+        let _ = sender.send(AppEvent::Btw(BtwEvent::Failed {
+            pane: pending.pane,
+            qa_id: Some(pending.qa_id.clone()),
+            message: crate::ui::text::LX_BTW_SUBMIT_FAILED.to_string(),
+        }));
         return false;
     };
     let mcp_snapshot = super::mcp::snapshot_for_turn_with_disabled(
@@ -569,6 +634,11 @@ fn start_recipient(
                 Default::default(),
                 Default::default(),
             );
+            let _ = sender.send(AppEvent::Btw(BtwEvent::Failed {
+                pane: pending.pane,
+                qa_id: Some(pending.qa_id.clone()),
+                message: crate::ui::text::LX_BTW_SUBMIT_FAILED.to_string(),
+            }));
             return false;
         }
     };
@@ -592,6 +662,21 @@ fn start_recipient(
     let (cancel_sender, cancel) = watch::channel(false);
     streams.cancels.insert(key.clone(), cancel_sender.clone());
     streams.db_workspaces.insert(key.clone(), workspace.clone());
+    let mut buffer = crate::app::state::LxChat::new();
+    buffer
+        .messages
+        .push(crate::app::update::new_btw_assistant_message(
+            &start.assistant_message_id,
+            &format!(
+                "{} [{}]",
+                start.display_nickname,
+                if start.target_kind == "default" {
+                    "lx".to_string()
+                } else {
+                    start.target_kind.clone()
+                }
+            ),
+        ));
     let run = BtwRun {
         thread_id: pending.thread_id.clone(),
         batch_id: pending.batch_id.clone(),
@@ -599,6 +684,8 @@ fn start_recipient(
         assistant_message_id: start.assistant_message_id.clone(),
         child_session_id: start.child_session_id.clone(),
         parent_session_id: start.parent_session_id.clone(),
+        buffer,
+        _guard: guard,
         started_at_ms: crate::db::now_ms(),
         last_checkpoint_ms: crate::db::now_ms(),
         label: format!(
@@ -835,6 +922,13 @@ pub(crate) fn handle_net_event(
     let child_session = run.child_session_id.clone();
     match event {
         ChatNetEvent::Delta { deltas, .. } => {
+            // UI 可能在切主会话/关闭 pane 后找不到 thread；无论可见与否，都把
+            // 同一批增量应用到 run 自己的缓冲，结算时不会只剩最后一次 checkpoint。
+            if let Some(run) = streams.btw.runs.get_mut(&key) {
+                run.buffer.stream_assistant = Some(assistant_id.clone());
+                let _ = crate::app::update::apply_btw_buffer_deltas(&mut run.buffer, &deltas);
+                run.buffer.stream_assistant = None;
+            }
             let changed =
                 crate::app::update::on_btw_delta(state, &child_session, &assistant_id, &deltas);
             // 流中 checkpoint：面板关闭后仍可在库里留下已生成正文；节流 500ms。
@@ -843,7 +937,10 @@ pub(crate) fn handle_net_event(
                 && now.saturating_sub(run.last_checkpoint_ms) >= 500
             {
                 run.last_checkpoint_ms = now;
-                let parts = crate::app::update::btw_parts(state, &child_session, &assistant_id);
+                let mut parts = crate::app::update::btw_parts(state, &child_session, &assistant_id);
+                if parts.is_empty() {
+                    parts = buffer_parts(&run.buffer, &assistant_id);
+                }
                 if !parts.is_empty()
                     && let Some(workspace) = streams.db_workspaces.get(&key).cloned()
                 {
@@ -877,6 +974,18 @@ pub(crate) fn handle_net_event(
     }
 }
 
+/// 从无头流缓冲提取 assistant 正文/思考 parts。
+fn buffer_parts(
+    chat: &crate::app::state::LxChat,
+    assistant_id: &str,
+) -> Vec<crate::db::chat::ChatPart> {
+    chat.messages
+        .iter()
+        .find(|message| message.id == assistant_id)
+        .map(crate::db::chat::chat_message_part_views)
+        .unwrap_or_default()
+}
+
 /// 结算一个旁路回答并推进同线程下一批次。
 #[allow(clippy::too_many_arguments)]
 fn finish_run(
@@ -904,7 +1013,10 @@ fn finish_run(
         usage,
         duration_ms,
     );
-    let parts = crate::app::update::btw_parts(state, child_session, assistant_id);
+    let mut parts = crate::app::update::btw_parts(state, child_session, assistant_id);
+    if parts.is_empty() {
+        parts = buffer_parts(&run.buffer, assistant_id);
+    }
     let outcome = match &reason {
         StopReason::Complete => TurnOutcome::Complete {
             stop_reason: Some("complete".to_string()),
@@ -1153,11 +1265,17 @@ pub(crate) fn apply_event_to_state(state: &mut AppState, event: BtwEvent) {
         } => {
             crate::app::update::on_qa_list_loaded(state, pane, &parent_session_id, qa);
         }
-        BtwEvent::ThreadLoaded { pane, qa_id, view } => {
+        BtwEvent::ThreadLoaded {
+            pane,
+            parent_session_id,
+            qa_id,
+            view,
+        } => {
             let view = *view;
             crate::app::update::on_btw_thread_loaded(
                 state,
                 pane,
+                &parent_session_id,
                 &qa_id,
                 view.thread_id,
                 view.child_session_id,
@@ -1191,10 +1309,10 @@ pub(crate) fn apply_event_to_state(state: &mut AppState, event: BtwEvent) {
         }
         BtwEvent::Failed {
             pane,
-            qa_id: _,
+            qa_id,
             message,
         } => {
-            crate::app::update::on_btw_failed(state, pane, &message);
+            crate::app::update::on_btw_failed(state, pane, qa_id.as_deref(), &message);
         }
         BtwEvent::RecipientStarted {
             child_session_id,
@@ -1211,9 +1329,42 @@ pub(crate) fn apply_event_to_state(state: &mut AppState, event: BtwEvent) {
     }
 }
 
-/// 启动恢复：把未完成的 BTW 批次标为中断（不自动重发）。
+/// 启动恢复：只处理能取得 child session guard 的 BTW 批次（不自动重发）。
 pub(crate) fn recover_startup(database: &crate::db::Database) {
-    if let Err(error) = database.recover_btw_startup() {
+    let sessions = match database.btw_sessions_needing_recovery() {
+        Ok(sessions) => sessions,
+        Err(error) => {
+            tracing::warn!(
+                code = error.code(),
+                "scanning btw sessions for recovery failed"
+            );
+            return;
+        }
+    };
+    let mut guards = Vec::new();
+    let mut guarded = Vec::new();
+    for session in sessions {
+        match crate::platform::try_lock_session(&session) {
+            Ok(Some(guard)) => {
+                guards.push(guard);
+                guarded.push(session);
+            }
+            Ok(None) => {
+                tracing::info!(
+                    %session,
+                    "skipping btw recovery: session is owned by another instance"
+                );
+            }
+            Err(error) => {
+                tracing::warn!(%error, %session, "btw session guard unavailable during recovery");
+            }
+        }
+    }
+    if let Err(error) = database.recover_btw_startup_for(&guarded) {
         tracing::warn!(code = error.code(), "btw startup recovery failed");
     }
+    drop(guards);
 }
+
+#[cfg(test)]
+mod tests;

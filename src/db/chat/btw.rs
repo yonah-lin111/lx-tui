@@ -14,6 +14,8 @@ use super::{ChatMessage, ModelSnapshot, TurnOutcome, Usage};
 use crate::db::chat::next_session_sequence;
 use crate::db::{Database, DbError, Result, new_external_id, now_ms};
 
+mod recovery;
+
 /// 主 QA 的稳定锚点。
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct QaAnchor {
@@ -731,16 +733,20 @@ impl Database {
         usage: Usage,
         billing: Usage,
     ) -> Result<BtwRecipientCompletion> {
-        self.finish_with_optional_parts(
-            workspace,
+        let workspace_external = self
+            .workspace_external_id(workspace)?
+            .ok_or(DbError::WorkspaceMissing)?;
+        let now = now_ms();
+        let transaction = self.conn.unchecked_transaction()?;
+        self.finish_with_optional_parts_in_tx(
+            &transaction,
+            &workspace_external,
             assistant_message_id,
             parts,
             outcome,
             usage,
             billing,
         )?;
-        let now = now_ms();
-        let transaction = self.conn.unchecked_transaction()?;
         let (status, error_code) = match outcome {
             TurnOutcome::Complete { .. } => ("completed", None),
             TurnOutcome::Interrupted => ("interrupted", None),
@@ -835,30 +841,6 @@ impl Database {
         transaction.execute(
             "DELETE FROM agent_btw_thread WHERE external_id = ?1",
             params![thread_id],
-        )?;
-        transaction.commit()?;
-        Ok(())
-    }
-
-    /// 启动恢复：未完成的 BTW 回答标记 interrupted，保留已生成正文；不自动重发。
-    pub fn recover_btw_startup(&self) -> Result<()> {
-        let now = now_ms();
-        let transaction = self.conn.unchecked_transaction()?;
-        transaction.execute(
-            r#"UPDATE agent_message
-               SET status = 'interrupted', completed_at_ms = ?1
-               WHERE status = 'streaming' AND session_id IN (
-                   SELECT external_id FROM agent_session WHERE source = 'btw'
-               )"#,
-            params![now],
-        )?;
-        transaction.execute(
-            "UPDATE agent_btw_recipient SET status = 'interrupted', completed_at_ms = ?1 WHERE status IN ('queued', 'running')",
-            params![now],
-        )?;
-        transaction.execute(
-            "UPDATE agent_btw_batch SET status = 'interrupted', completed_at_ms = ?1 WHERE status IN ('queued', 'running')",
-            params![now],
         )?;
         transaction.commit()?;
         Ok(())

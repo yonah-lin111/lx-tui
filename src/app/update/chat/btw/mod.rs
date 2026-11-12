@@ -18,11 +18,19 @@ mod events;
 mod input;
 
 pub use events::{
-    AcceptedBtw, BtwToolSettlement, BtwToolUpdate, btw_message_parts, on_accepted, on_delta,
-    on_failed, on_finished, on_qa_list_loaded, on_recipient_started, on_thread_loaded,
-    on_tool_state,
+    AcceptedBtw, BtwToolSettlement, BtwToolUpdate, btw_message_parts, new_assistant_message,
+    on_accepted, on_delta, on_failed, on_finished, on_qa_list_loaded, on_recipient_started,
+    on_thread_loaded, on_tool_state,
 };
 pub use input::{apply_input, select_btw_slash};
+
+/// 把流增量应用到 BTW 的无头缓冲（事件层在 UI 不可见时仍能结算正文）。
+pub fn apply_btw_buffer_deltas(
+    chat: &mut crate::app::state::LxChat,
+    deltas: &[crate::chat::events::ChatDelta],
+) -> bool {
+    super::subagent::apply_deltas(chat, deltas)
+}
 
 /// 打开 BTW 页签并请求 QA 列表。
 pub fn open_btw_tab(state: &mut AppState, pane: PaneId) -> bool {
@@ -237,7 +245,11 @@ pub fn try_submit_btw_command(state: &mut AppState, pane: PaneId) -> bool {
     let prompt = prompt.to_string();
     // 命令本身就是一次提交：主输入框内容不保留。线程可能尚未建立（首次打开），
     // 因此正文一律先暂存，等 QA 列表回投、活动线程建好后再写入 composer。
+    // `/btw prompt` 始终挂到最新主 QA；只有裸 `/btw` 保留当前浏览的 QA。
     if let Some(target) = state.pane_mut_anywhere(pane) {
+        target.lx.btw.active = None;
+        target.lx.btw.picking = None;
+        target.lx.btw.pending_pick = false;
         target.lx.clear();
         target.lx.btw.pending_prompt = Some(prompt.clone());
         if let Some(thread) = target.lx.btw.active_thread_mut() {

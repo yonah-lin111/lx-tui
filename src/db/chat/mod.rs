@@ -634,8 +634,32 @@ impl Database {
         let workspace_external = self
             .workspace_external_id(workspace)?
             .ok_or(DbError::WorkspaceMissing)?;
-        let now = now_ms();
         let transaction = self.conn.unchecked_transaction()?;
+        self.finish_with_optional_parts_in_tx(
+            &transaction,
+            &workspace_external,
+            assistant_message_id,
+            parts,
+            outcome,
+            usage,
+            billing,
+        )?;
+        transaction.commit()?;
+        Ok(())
+    }
+
+    /// 终态提交的事务内版本；调用方负责把回答者/批次更新放进同一事务。
+    pub(crate) fn finish_with_optional_parts_in_tx(
+        &self,
+        transaction: &rusqlite::Transaction<'_>,
+        workspace_external: &str,
+        assistant_message_id: &str,
+        parts: Option<&[ChatPart]>,
+        outcome: &TurnOutcome,
+        usage: Usage,
+        billing: Usage,
+    ) -> Result<()> {
+        let now = now_ms();
         // 已终态：同结果幂等返回，不重复累计 usage。
         let existing: Option<String> = transaction
             .query_row(
@@ -657,7 +681,7 @@ impl Database {
             |row| row.get(0),
         )?;
         if let Some(parts) = parts {
-            replace_parts(&transaction, assistant_message_id, parts, now)?;
+            replace_parts(transaction, assistant_message_id, parts, now)?;
         }
         let (status, stop_reason, error_code) = match outcome {
             TurnOutcome::Complete { stop_reason } => ("complete", stop_reason.clone(), None),
@@ -699,8 +723,7 @@ impl Database {
         )?;
         // 终态即封口本轮文件 scope：全部 mutation ACK 已在 finish_tool 前结算；
         // 仍有 prepared 记录时保持 capturing，恢复时按“证据不足”拒绝文件动作。
-        rewind::seal_turn_scope(&transaction, &session_id, assistant_message_id)?;
-        transaction.commit()?;
+        rewind::seal_turn_scope(transaction, &session_id, assistant_message_id)?;
         Ok(())
     }
 
