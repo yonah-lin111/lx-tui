@@ -520,3 +520,10 @@ cargo fmt
 
 - 真实 v26 库副本升级到 v28：`integrity_check=ok`，63 会话/211 消息保留，BTW 表与触发器存在。
 - 详细输入/步骤/期望见 [verification.md](verification.md)。
+
+### 17.5 持久化检查环境
+
+- 工作区：`/Users/yonah/.lx-t-dev/verify/lx-btw-cli-20261112`；数据库：`/Users/yonah/.lx-t-dev/db/worktrees/lx-btw-df3a5393/lx.db`。
+- 主会话 `sess-18e74140de5035d8-1`（`BTW verify`）保留 CLI prompt、`read` / `spawn_agent` / `wait_agent` 与 `CLI_VERIFY_OK`；BTW child `sess-18e741745e967f08-0` 保留 6 条旁路消息。
+- 检查：`LX_TUI_DB_PATH=<worktree DB> lx-tui session show -C <WS> --last --tools`；TUI 从本 worktree 启动后切到该工作区，`/resume` 选 `BTW verify`，主历史查看 CLI 记录，裸 `/btw` 查看旁路线程。
+- **注意**：worktree 内 `workspace add --trust` 必须带 `LX_TUI_DB_PATH=<worktree DB>`，否则 trust 写入主库，worktree 库中工作区仍 untrusted，表现为工作区下看不到 session/CLI 信息；本轮已用 `workspace trust` 修正。

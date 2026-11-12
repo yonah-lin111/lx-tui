@@ -17,7 +17,7 @@ WS=$(mktemp -d /tmp/lx-btw-verify.XXXXXX)
 DB=$(mktemp -d /tmp/lx-btw-verify-db.XXXXXX)/lx.db
 printf 'BTW_VERIFY_TOKEN=42\n' > "$WS/note.txt"
 LX_TUI_DB_PATH="$DB" lx-tui workspace add --trust -C "$WS"
-LX_TUI_DB_PATH="$DB" lx-tui exec -C "$WS" "Call spawn_agent with role explorer ... wait_agent ... reply SUBAGENT_VERIFIED"
+LX_TUI_DB_PATH="$DB" lx-tui exec -C "$WS" "Call spawn_agent with role explorer ... wait_agent ... reply CLI_VERIFY_OK"
 LX_TUI_DB_PATH="$DB" lx-tui session rename -C "$WS" --last "BTW verify"
 ```
 
@@ -33,7 +33,7 @@ BTW_VERIFY_WS="$WS" BTW_VERIFY_DB="$DB" \
 
 | ID | 验证项 | 输入内容 | 验证步骤 | 期望结果 | 结果 |
 | --- | --- | --- | --- | --- | --- |
-| V01 | CLI 新建工作区/会话 | `workspace add --trust` + `exec` 创建子 agent | 执行两条命令；`session list` / `session agents --last` 检查 | 工作区已登记且可信；1 条主会话；`Turing [explorer]` 为 completed | 通过；主会话 `BTW verify`，子 agent 已完成 |
+| V01 | CLI 新建工作区/会话 | `workspace add --trust` + `exec` 创建子 agent | 执行两条命令；`session list` / `session agents --last` / `session show` 检查 | 工作区已登记且可信；1 条主会话；`Turing [explorer]` 为 completed；会话含 CLI prompt 与工具记录 | 通过；`BTW verify` / `CLI_VERIFY_OK`，会话可见 `read`、`spawn_agent`、`wait_agent` |
 | V02 | `/btw` 直接提问 | `/btw Reply with exactly SIDE_OK.` | TUI `/resume` 打开主会话；输入 `/btw`，Tab 采纳，补问题后回车 | 打开 BTW tab，归属 QA 1；返回 `SIDE_OK`；主会话不新增消息 | 通过 |
 | V03 | BTW 连续追问 | 首问后发送 `Write 99 ...` | 不重新 `@`，直接在 BTW composer 发送 | 仍在 QA 1 同一线程；沿用上次目标；回答追加 | 通过；DB 第 3 批目标仍为 `subagent` |
 | V04 | `@` 已结束 subagent | `What token did you find? ... @Turing` | BTW composer 输入 `@`，右切到 Subagents，输入 `Turing`，回车确认，再回车发送 | 目标胶囊为 `To: Turing [explorer]`；回答包含 `42`；不新建子任务 | 通过；回答 `42`，recipient 为 `Turing/explorer` |
@@ -59,11 +59,11 @@ BTW_VERIFY_WS="$WS" BTW_VERIFY_DB="$DB" \
 - `cargo test`：lib 与全部集成测试通过；`tests/btw_verify.rs` 为 ignored 的真实模型 E2E。
 - BTW 相关过滤：**41 passed**；迁移过滤：**24 passed**；选区过滤：**180 passed**；只读过滤：**1 passed**。
 - `cargo clippy --all-targets -- -D warnings`、`cargo fmt`：通过。
-- E2E 数据库证据：
+- E2E 数据库证据（本轮持久化环境）：
+  - 主会话 `sess-18e74140de5035d8-1`（`BTW verify`）：2 条消息；包含 CLI prompt、`read`、`spawn_agent`、`wait_agent` 与 `CLI_VERIFY_OK`。
+  - BTW child `sess-18e741745e967f08-0`：6 条消息；普通 `session list` 不显示，`session show` 拒绝。
   - `agent_btw_batch`：`["default"]`、`["sub-…"]`、`["sub-…"]` 三批均 completed。
   - `agent_btw_recipient`：`lx`、`Turing/explorer`、`Turing/explorer`。
-  - 主会话仍为 2 条消息；BTW child session 为 6 条消息，互不串写。
-  - `agent_session.source='btw'` 存在，但普通 `session list` 不显示。
   - `note.txt` 最终仍为 `BTW_VERIFY_TOKEN=42`。
 
 ## 4. E2E 发现并修复的问题
@@ -75,7 +75,28 @@ BTW_VERIFY_WS="$WS" BTW_VERIFY_DB="$DB" \
    - 修复：空集合时从 `BtwTargetView` 回查实例生成 `previous_targets`；实例缺失则拒绝提交并保留草稿，绝不静默换目标。
    - 回归：`btw_follow_up_without_mention_keeps_previous_agent_target`；E2E 第三批 recipient 仍为 `Turing`。
 
-## 5. 未覆盖 / 已知限制
+## 5. 本轮持久化复测（可检查）
+
+- 工作区：`/Users/yonah/.lx-t-dev/verify/lx-btw-cli-20261112`（`lx-btw-cli-20261112`，worktree DB 内已 trust）。
+- 数据库：`/Users/yonah/.lx-t-dev/db/worktrees/lx-btw-df3a5393/lx.db`。
+- 主会话：`sess-18e74140de5035d8-1`，标题 `BTW verify`；子 agent：`sub-18e74141bc725c38-16`（`Turing`，explorer，completed）。
+- BTW child：`sess-18e741745e967f08-0`；主会话 2 条消息、BTW child 6 条消息。
+- 内容检查（只读）：
+
+```text
+DB=/Users/yonah/.lx-t-dev/db/worktrees/lx-btw-df3a5393/lx.db
+WS=/Users/yonah/.lx-t-dev/verify/lx-btw-cli-20261112
+LX_TUI_DB_PATH="$DB" lx-tui session list -C "$WS"
+LX_TUI_DB_PATH="$DB" lx-tui session show -C "$WS" --last --tools
+LX_TUI_DB_PATH="$DB" lx-tui session agents -C "$WS" --last
+```
+
+`session show` 会显示 CLI prompt、`read` / `spawn_agent` / `wait_agent` 工具记录、`Turing` 报告 `42` 与最终 `CLI_VERIFY_OK`。
+
+- TUI 检查：从本 worktree 启动 `cargo run`，在工作区列表切到 `lx-btw-cli-20261112`，`/resume` 选 `BTW verify`；主会话先显示 CLI prompt 与工具卡片，按 `Esc` 或切到 BTW 可看旁路消息。
+- 注意：本 worktree 的 `workspace add --trust` 必须与 `exec`/TUI 使用同一个 `LX_TUI_DB_PATH`；否则 trust 落到主库，worktree 库里的工作区仍是 untrusted，表现为“工作区下没有 session/CLI 信息”。本轮已用 worktree DB 的 `workspace trust` 修正并验证。
+
+## 6. 未覆盖 / 已知限制
 
 - 关闭 BTW 面板后继续后台生成、切主会话再返回的完整手工链路未单独跑 E2E；相关代码路径存在，但本轮没有专门的 PTY 用例。
 - BTW 滚动条 thumb 拖拽/轨道点击未单独 PTY 覆盖；几何与滚动 setter 有测试，press/drag 走 Agents 共享路径。

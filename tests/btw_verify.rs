@@ -5,7 +5,7 @@
 //!   printf 'BTW_VERIFY_TOKEN=42\n' > "$WS/note.txt"
 //!   LX_TUI_DB_PATH="$DB" lx-tui workspace add --trust -C "$WS"
 //!   LX_TUI_DB_PATH="$DB" lx-tui exec -C "$WS" \
-//!     "Call spawn_agent with role explorer and task: 'Read note.txt in the workspace root and report the exact value after BTW_VERIFY_TOKEN=.' Then call wait_agent ... reply with exactly SUBAGENT_VERIFIED."
+//!     "Call spawn_agent with role explorer and task: 'Read note.txt in the workspace root and report the exact value after BTW_VERIFY_TOKEN=.' Then call wait_agent ... reply with exactly CLI_VERIFY_OK."
 //!   LX_TUI_DB_PATH="$DB" lx-tui session rename -C "$WS" --last "BTW verify"
 //!
 //! Run with:
@@ -165,7 +165,7 @@ fn btw_chat_and_agent_mention_e2e() {
     app.send(b"\r");
     app.assert_wait("BTW verify");
     app.send(b"\r");
-    app.assert_wait("SUBAGENT_VERIFIED");
+    app.assert_wait("CLI_VERIFY_OK");
 
     // Open BTW. Tab accepts `/btw` and leaves `[prompt]` in the main composer;
     // wait for that state, then type the argument and submit.
