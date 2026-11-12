@@ -1,10 +1,11 @@
-//! `BTW` 页签：上方对话（复用历史渲染）+ 下方一行归属提示与独立输入框。
+//! `BTW` 页签：上方对话（复用历史渲染）+ 下方独立输入框。
 //!
 //! 只读状态、只写 Buffer；尺寸/可见行由事件循环在绘制前写入状态。
 //!
 //! 底部固定两段：
-//! - 一行 `QA n · <所属主问题>` + 右侧 `To: <回答者>`，说明这条侧线程挂在哪个主问答上；
-//! - 输入框默认一行（上下边框 + 一行正文），随软换行增长到 3 行，和主输入框同一观感。
+//! - tab 行与输入框之间留一行：生成中画 loading，空闲时为空行；
+//! - 输入框默认一行（上下边框 + 一行正文），随软换行增长到 3 行；
+//!   `QA n · <主问题>` + `To: <回答者>` 画在输入框顶边框右上角。
 
 use ratatui::layout::Rect;
 
@@ -20,7 +21,7 @@ pub(super) const COMPOSER_MAX_ROWS: u16 = 3;
 /// 归属胶囊最大宽度（含左右空格与右侧留白）；超出按标题截断。
 const QA_BADGE_MAX_COLS: u16 = 48;
 
-/// 底边框 + 顶部 tab 行已由 `draw_list` 绘制；这里只排归属提示与输入框。
+/// 顶边框 + tab 行已由 `draw_list` 绘制；这里排空行（loading）与输入框。
 pub(crate) fn draw_bottom(
     grid: &mut Grid,
     rect: Rect,
@@ -85,7 +86,7 @@ fn loading_label(thread: &crate::app::state::lx::BtwThreadState) -> &'static str
     text::chat::LOADING_LABEL
 }
 
-/// 输入框矩形（`task_list` 内部、归属提示之下）；未打开线程时 None。
+/// 输入框矩形（`task_list` 内部、tab 行与空行之下）；未打开线程时 None。
 pub(crate) fn composer_rect(rect: Rect, lx: &Lx) -> Option<Rect> {
     composer_rect_in(list_rect(rect), lx)
 }
