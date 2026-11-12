@@ -1,8 +1,8 @@
 # Todo 聚合组优先级展示 + 工作区模型记忆：任务清单
 
-> 状态：**已实现并完成自动化验证**（分支 `feat/todo-group-priority-and-ws-model`）；交互外观与多工作区实测待用户 `cargo run` 验收后决定合并。
+> 状态：**已实现；P0/P1/P2 review 修复完成，P3 持久化/性能项留后续**（分支 `feat/todo-group-priority-and-ws-model`）；交互外观与多工作区实测待用户 `cargo run` 验收后决定合并。
 > 日期：2026-11-12。
-> 设计依据：[design.md](./design.md)。
+> 设计依据：[design.md](./design.md)；审查记录：[review.md](./review.md)。
 > 检索工具：`codegraph`（lx-tui）、`codebase-memory-mcp`（project `lx-tui`）均已索引本仓库。
 
 ## 1. 已完成（设计阶段）
@@ -106,15 +106,23 @@
 - [x] `persist_default_model`：同时更新内存 recent 并发出单个 `SaveModelChoice`（default + recent）。
 - [x] 新增 `remember_model_used(state, selection)`（只记 recent，不改 default）。
 - [x] `finish_model_selection`：走 `persist_default_model`（已有行为扩展）。
-- [x] `try_send`：解析出可用模型后，`chat.selection` 为空则钉住解析结果；调用 `remember_model_used`。
-- [x] `resume_session` 绑定模型后：`remember_model_used`。
-- [x] steer 提升轮次的 `used_fallback` 分支钉住后：`remember_model_used`。
-- [x] `switch_workspace` / `create_workspace` 末尾：调用 `refresh_workspace_lx_status(state, index)`（只刷目标工作区的窗格，避免消耗其它窗格的一次性省略提示）。
+- [x] `try_send`：解析出可用模型后，钉住本轮实际使用的模型（含失效选择回退结果）；调用 `remember_model_used`。
+- [x] `resume_session` 绑定模型后：校验有效后记录 recent/工作区记忆并同步同 session 窗格。
+- [x] steer 提升轮次：钉住 `used_selection` 后调用 `remember_model_used`。
+- [x] `switch_workspace` / `create_workspace_with_cwd` 末尾：调用 `refresh_active_tab_lx_status(state)`（只刷当前标签，避免消耗后台标签的一次性省略提示）。
+- [x] 新建标签/右键分割/toggle 回 lx/worktree 直开/历史列表新建：创建或切回时刷新目标窗格。
+- [x] `recentModels`/`defaultModel` 变化后：`refresh_fallback_lx_status` 刷新无消息、无窗格选择的空白窗格，保证状态行与实际发送一致。
+- [x] 工作区级 `lx_model`：`/model`、发送、`/resume`、steer 更新；新窗格/标签先继承再刷新。
+- [x] 同一 session 多窗格：发送 ack 与 `/resume` 后用 `sync_session_selection` 同步模型。
 - [x] 单测：
   - 发送后 `chat.selection` 被钉住、recent 队首为该模型、`Effect::SaveModelChoice` 入队；
   - `/resume` 绑定模型后 recent 更新；
   - 切工作区后目标 lx 窗格 `status.model_name` 非空（用默认模型构造 `state.models`）；
   - 新建工作区同样刷新。
+  - 新建标签/分割窗格继承 `Workspace.lx_model`，优先于全局 `defaultModel`；
+  - 工作区历史新建并激活后状态行立即非空；
+  - 停用供应商/清 Key 后窗格选择回退到可用模型；失效 variant 规范化而不是丢弃模型；
+  - `/resume` 的失效模型不进入 recent；同一 session 多窗格同步。
 
 ---
 
@@ -156,6 +164,10 @@ cargo test
    - A 工作区 `/model` 选 Claude，切到从没选过模型的 B 工作区：状态行不再 `no model`，显示 `defaultModel`；
    - 只 `/resume` 一个 GPT 会话后切到 C（`defaultModel` 为空）：显示 GPT；
    - 在 B `/model` 换模型后切回 A：A 仍显示 Claude；
+   - 在 A 的新标签/分割窗格：继承 A 的 Claude，不落到全局 default；
+   - `ws list` 打开一个尚未打开的历史工作区：立即显示模型，不再 `no model`；
+   - 清空当前模型供应商的 Key/停用供应商：状态行回退到其它可用模型，发送不再误报 `no model`；
+   - 同一 session 在两个窗格打开：A 发送新模型后 B 跟随；
    - 重启应用：`ai.json` 的 `recentModels` 保留，新工作区按 recent 兜底；
    - 设置页保存模型配置后 `recentModels` 未被清空。
 
@@ -171,11 +183,29 @@ cargo test
 
 - [x] Todo 几何、连接符、组内最高优先级、仅锚点行徽标、点击归属全部落地；单条条目列位保持不变。
 - [x] `recentModels` 配置字段、四级回退链、`SaveModelChoice` 原子落盘、发送/恢复/steer 记录、切/建工作区状态刷新全部落地。
-- [x] 自动化验证：`cargo fmt --check`、`cargo clippy --all-targets -- -D warnings`、`cargo test` 全绿（lib 5313 passed / 6 ignored；集成测试 63 passed / 2 ignored）。
+- [x] Review P1/P2 修复：历史新建刷新、工作区级模型记忆、窗格选择统一校验、失效 `/resume` 过滤、空白窗格状态同步、当前标签刷新、文档同步。
+- [x] 自动化验证：`cargo fmt --check`、`cargo clippy --all-targets -- -D warnings`、`cargo test` 全绿（lib 5331 passed / 6 ignored；集成测试 63 passed / 2 ignored）。
 - [ ] 用户 `cargo run` 手工验收（design §8 与本文 §9.2），确认 Todo 外观/点击与多工作区模型行为后决定合并。
 
 实现说明：
 
-- `/model` 采纳仍写回 `defaultModel`，并同时记入 `recentModels`；`/resume`、实际发送、steer 提升只记 `recentModels`。
+- `/model` 采纳仍写回 `defaultModel`，并同时记入 `recentModels`；`/resume`、实际发送、steer 提升只记 `recentModels`，且入口统一用 `validated_selection` 过滤失效模型。
 - 无任何显式选择时，`/model` 面板会把“第一个可用模型”标为当前项（回退链最后一级的必然结果）。
+- 工作区记忆是 `Workspace.lx_model`（进程内），新窗格/标签优先继承；窗格级 selection 仍可覆盖。
 - 仓库内 `codebase-memory` 索引项目名为 `lx-tui-todo-group-priority-and-ws-model`；`codegraph` 索引位于本 worktree 的 `.codegraph/`。
+
+## 11. Review 修复清单
+
+详见 [review.md](./review.md)。摘要：
+
+- [x] P1-1 工作区历史新建并激活不刷新状态 → `open_new_history_workspace` 补刷。
+- [x] P1-2 新标签/分割窗格不继承工作区模型 → `Workspace.lx_model` + 创建时继承。
+- [x] P1-3 窗格选择与 fallback 校验口径不一致 → `effective_selection` 复用 `validated_selection`，variant 规范化。
+- [x] P1-4 Todo 徽标点击缺端到端测试 → 两条点击链路测试。
+- [x] P2-1 `/resume` 失效模型污染 recent → 统一过滤。
+- [x] P2-2 失效 variant 丢模型 → 回落默认等级。
+- [x] P2-3 recent/default 变化后空白窗格状态不同步 → `refresh_fallback_lx_status`。
+- [x] P2-4 工作区刷新波及后台标签提示 → 只刷当前标签 + 切标签补刷。
+- [x] P2-5 文档/验证报告偏差 → 三份文档同步。
+- [x] P3-2/3/9/10/11/12：幽灵行死徽标、命中边界、空断言、同 session 同步、同索引刷新、行号漂移。
+- [ ] P3-1/6/7/8：Todo 大组性能、配置无锁读改写、ack 前记 recent、悬空 default 阻塞 recent 落盘；留作后续持久化/性能加固。

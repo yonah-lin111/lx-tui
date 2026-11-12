@@ -1,9 +1,9 @@
 # Todo 聚合组优先级展示 + 工作区模型记忆：设计方案
 
-> 状态：**已实现并完成自动化验证**（分支 `feat/todo-group-priority-and-ws-model`，worktree `.worktrees/todo-group-priority-and-ws-model`）；交互外观与多工作区实测待用户 `cargo run` 验收后决定合并。
-> 日期：2026-11-12（设计）；2026-11-12（实现）。
+> 状态：**已实现；P0/P1/P2 review 修复完成，P3 持久化并发与大组性能项留后续**（分支 `feat/todo-group-priority-and-ws-model`，worktree `.worktrees/todo-group-priority-and-ws-model`）；交互外观与多工作区实测待用户 `cargo run` 验收后决定合并。
+> 日期：2026-11-12（设计）；2026-11-12（实现与 review 修复）。
 > 项目：`/Users/yonah/projects/agent/lx-tui`（分支 `dev`）。
-> 配套执行清单：[task.md](./task.md)。
+> 配套执行清单：[task.md](./task.md)；审查记录：[review.md](./review.md)。
 > 代码检索：`codegraph`（lx-tui，indexed）+ `codebase-memory-mcp`（project `lx-tui`，indexed）。
 > 参考实现：`/Users/yonah/projects/agent/opencode-dev/packages/tui/src/context/local.tsx`（`createModel` / `fallbackModel` / `newSessionModel`）与 `packages/tui/src/model-preference.ts`。
 
@@ -59,7 +59,7 @@
    models.default_selection().map(normalize)   // 唯一兜底
    ```
    只有 `defaultModel` 一级；`defaultModel` 为 `None`（例如只 `/resume` 过会话、从未显式 `/model`）时直接得到 `None`，状态行渲染 `no model`（`ui/main_content/lx/status.rs:233/323` 的 `LX_CHAT_NO_MODEL_SHORT`）。
-3. `switch_workspace`（`app/update/workspace.rs:321-343`）与 `create_workspace`（`app/update/workspace.rs:127-164`）**都没有刷新 lx 状态行**。`refresh_lx_status` 只在聊天事件、`/model`、设置页变更、窗格视图切换（`app/update/pane.rs:749/780`）时触发。新工作区/历史打开的工作区因此可能一直停在初始化时的 `model_name: None`，即便 `effective_selection` 已经能解析出模型。
+3. `switch_workspace`（`app/update/workspace.rs`）与 `create_workspace_with_cwd`（`app/update/workspace.rs`）**都没有刷新 lx 状态行**。`refresh_lx_status` 只在聊天事件、`/model`、设置页变更、窗格视图切换（`app/update/pane.rs`）时触发。新工作区/历史打开的工作区因此可能一直停在初始化时的 `model_name: None`，即便 `effective_selection` 已经能解析出模型。后续 `3567f598` 补了 `create_tab`、右键 `split_pane`、`toggle_pane_view`、worktree 直开；review 又补了工作区历史新建路径（见 §5.7）。
 4. `/model` 只把选择写回 `ai.json` 的 `defaultModel`（`app/update/chat/slash.rs:432-433`、`522-532`），没有“最近使用”列表；`/resume` 绑定会话模型（`app/update/chat/session.rs:224`）不写 `defaultModel`。
 
 opencode 的规则（`local.tsx:184-219`、`model-preference.ts:49-60,103-183`）：
@@ -76,7 +76,7 @@ opencode 的规则（`local.tsx:184-219`、`model-preference.ts:49-60,103-183`�
 | 编号 | 决策 |
 | --- | --- |
 | D1 | 两级记忆：**每个工作区各自记住自己上次用的模型**；从未用过模型的工作区回退到**全局“最近使用”**，不再直接 `no model`。 |
-| D2 | 工作区记忆只在本进程内（各 lx 窗格的 `chat.selection`）；跨重启只持久化**全局最近使用列表**（≤10 条，最近在前）。 |
+| D2 | 工作区记忆只在本进程内：`Workspace.lx_model` 记录本工作区最近实际使用/选择的模型，新建 lx 窗格/标签继承；窗格级 `chat.selection` 仍可覆盖（会话/手动选择优先）。跨重启只持久化**全局最近使用列表**（≤10 条，最近在前）。 |
 | D3 | 最近使用列表存进现有 `~/.lx-t[-dev]/config/ai.json` 的 `ai.recentModels`，复用原子写 `save_ai`；不新增文件、不迁移 DB。 |
 | D4 | 回退链固定：**工作区窗格选择 → `defaultModel` → `recentModels`（逐条校验）→ 第一个可用模型**。同时修掉“切/建工作区不刷新 lx 状态行”的独立 bug。 |
 | D5 | 聚合组只在锚点行画一次 `P(n)`，取**组内最高优先级**（`P0` 最高，枚举 `Ord` 最小者；并列取组内最靠前一条）；点击徽标循环切换**当前决定该徽标的条目**并选中它；忽略组内新建幽灵行。 |
@@ -223,9 +223,10 @@ pub(super) fn group_priority(
   },
   ```
   幽灵行锚点同理：`priority` 取 `group_priority` 的结果，取不到时保持 `P1`。
-- `render_item`：徽标只在 `row.role.is_status_anchor()` 时绘制：
+- `render_item`：徽标只在锚点行绘制；独立新建幽灵行没有可归属条目，不绘制（避免死控件）；组内幽灵行仍可作为锚点显示组级徽标：
   ```rust
-  if row.role.is_status_anchor() {
+  let standalone_ghost = !row.role.is_grouped() && row.edit.is_some_and(|edit| edit.target.is_none());
+  if row.role.is_status_anchor() && !standalone_ghost {
       render_priority_badge(buf, list, row_priority_x(list), item.y, row.priority, row.status);
   }
   ```
@@ -257,8 +258,8 @@ pub fn priority_at(panel: Rect, state: &AppState, column: u16, row: u16) -> Opti
 }
 ```
 
-- 返回值语义从“被点行”变成“徽标来源条目”，`click_todo_priority`（`app/update/todo.rs:147`）无需改动：它本来就把 display 解析成条目、选中并 `cycle_priority`，因此显示什么就改什么。
-- 非锚点行、续行一律不命中；幽灵行不可能是徽标来源（见 4.4）。
+- 返回值语义从“被点行”变成“徽标来源条目”，`click_todo_priority`（`app/update/todo.rs`）无需改动：它本来就把 display 解析成条目、选中并 `cycle_priority`，因此显示什么就改什么。`select` 会把归属条目滚入视口，让用户看到被修改的对象；这是有意行为。
+- 非锚点行、续行一律不命中；幽灵行不可能是徽标来源（见 4.4）。独立新建幽灵行不绘制徽标。
 
 ### 4.7 测试与文档同步
 
@@ -344,21 +345,24 @@ impl ModelsSnapshot {
 }
 ```
 
-改动 `effective_selection`（`chat.rs:908-924`）：
+改动 `effective_selection`（`chat.rs`）：
 
 ```rust
 pub fn effective_selection(&self, models: &ModelsSnapshot) -> Option<ModelSelection> {
+    // 窗格选择必须与 fallback 使用同一套可发送校验：供应商启用、模型存在、有 Key；
+    // variant 失效只回落默认等级，不丢弃模型。失效窗格选择不得压住回退链。
     if let Some(selection) = &self.selection
-        && models.settings.providers.get(&selection.provider)
-            .is_some_and(|provider| provider.models.contains_key(&selection.model))
+        && let Some(selection) = models.validated_selection(Some(selection))
     {
-        return Some(models.normalize_selection(selection.clone()));
+        return Some(selection);
     }
     models
         .fallback_selection()
         .map(|selection| models.normalize_selection(selection))
 }
 ```
+
+`validated_selection` 只校验供应商启用、模型存在、API Key；variant 交给 `normalize_selection` 回落模型默认等级，避免“variant 被删就丢掉整个模型”。
 
 `default_selection/title_selection/recap_selection` 保持原语义（只认配置项），避免标题/recap 因为“最近使用”而悄悄换模型。
 
@@ -417,48 +421,67 @@ pub fn remember_model_used(state: &mut AppState, selection: &ModelSelection) {
 | 时机 | 位置 | 动作 |
 | --- | --- | --- |
 | `/model` 采纳 | `update/chat/slash.rs` `finish_model_selection` 末尾（现有 `persist_default_model`） | 写 `defaultModel` + recent（一次 effect） |
-| 发送一轮 | `update/chat/mod.rs` `try_send`：`FrozenModel::resolve` 成功后 | 若窗格 `chat.selection` 为 `None`，钉住本次解析结果（工作区记忆）；随后 `remember_model_used` |
-| `/resume` 绑定会话模型 | `update/chat/session.rs:224` 绑定 `selection` 后 | `remember_model_used` |
-| steer 提升为下一轮 | `update/chat/steer.rs:268`（已有 `used_fallback` 钉住逻辑） | 钉住后 `remember_model_used` |
+| 发送一轮 | `update/chat/mod.rs` `try_send`：`FrozenModel::resolve` 成功后 | 钉住本轮实际使用的模型（含失效选择回退结果）；随后 `remember_model_used` |
+| `/resume` 绑定会话模型 | `update/chat/session.rs` 绑定 `selection` 后 | 校验有效后 `remember_model_used` + 工作区记忆 + 同 session 同步 |
+| steer 提升为下一轮 | `update/chat/steer.rs` | 钉住本轮实际使用的模型（`used_selection`）后 `remember_model_used` |
 | AI Web 入口 | `try_send_ai_web` | 不参与（`ModelSelection` 是本地模型语义） |
 
-`remember_model_used` 只做内存更新 + 异步落盘，不阻塞发送；写盘失败只 `tracing::warn!`（与现有 `SaveDefaultModel` 一致）。
+`remember_model_used` 只做内存更新 + 异步落盘，不阻塞发送；写盘失败只 `tracing::warn!`（与现有 `SaveDefaultModel` 一致）。入口统一先用 `validated_selection` 过滤：供应商停用、无 Key、模型不存在或 variant 失效的旧会话模型不得写进 recent；variant 失效会规范化为模型默认等级。
 
-### 5.5 切/建工作区刷新状态行（独立 bug）
+与 opencode 的差异：opencode 的 `recent` 主要记录显式选模型（模型面板/CLI/Go upsell），本实现额外在发送、`/resume`、steer 时记录实际使用。这是 D1/D4“工作区沿用上次使用模型”的产品要求，不是实现错误；`/model` 仍写 `defaultModel`。
 
-- `update/chat/mod.rs` 新增按工作区刷新的薄封装（只刷目标工作区，绝不动别的窗格，避免顺手 `take()` 掉其它窗格的一次性 `omitted_turns_notice`）：
+### 5.5 新建/切/建工作区与标签的状态刷新
 
-  ```rust
-  /// 刷新某个工作区所有 lx 窗格的状态行（切/建工作区后调用）。
-  pub fn refresh_workspace_lx_status(state: &mut AppState, workspace: usize) {
-      let Some(ws) = state.workspaces.get(workspace) else {
-          return;
-      };
-      let panes: Vec<PaneId> = ws
-          .tabs
-          .iter()
-          .flat_map(|tab| tab.layout.pane_ids())
-          .collect();
-      for pane in panes {
-          refresh_lx_status(state, pane);
-      }
-  }
-  ```
+`update/chat/mod.rs` 提供三个粒度：
 
-- `update/workspace.rs::switch_workspace` 末尾调用 `super::chat::refresh_workspace_lx_status(state, index);`
-- `update/workspace.rs::create_workspace`（`state.workspaces.push(...)` 并激活后）对新建索引调用同一 helper。
-- `refresh_status` 只读 `ModelsSnapshot`（无 IO）；成本与现有“每个流式 delta 都刷新当前窗格”同阶。`switch_workspace` 的既有测试在 models 为空的 `AppState::demo()` 下同样安全（`fallback_selection` 返回 `None`，状态行仍为 `no model`，不改变断言）。
+```rust
+/// 启动/配置加载后刷新所有窗格。
+pub fn refresh_all_lx_status(state: &mut AppState);
+
+/// 刷新当前工作区当前标签的 lx 窗格（切/建工作区、切标签后调用）。
+/// 不遍历后台标签，避免把尚未展示的一次性 omitted_turns_notice 刷新掉。
+pub fn refresh_active_tab_lx_status(state: &mut AppState);
+
+/// default/recent 变化后，只刷新“无消息且无窗格选择”的空白 lx 窗格。
+pub fn refresh_fallback_lx_status(state: &mut AppState);
+```
+
+调用点：
+
+- `switch_workspace`：目标索引变化时刷新当前标签；同索引不刷新。
+- `create_workspace_with_cwd`：激活后刷新当前标签。
+- `open_worktree_checkout`：激活后刷新当前标签（在 `ensure_main_workspace` 插入前，索引仍正确）。
+- `open_new_history_workspace`：`focus_panes` 后刷新当前标签（review 补的遗漏路径）。
+- `create_tab` / 右键 `split_pane`：创建后先继承工作区模型，再按新 PaneId 刷新。
+- `toggle_pane_view`：终端切回 lx 时刷新目标窗格。
+- `switch_tab`：切换标签后刷新新标签，后台标签不再被工作区级刷新波及。
+- `create_terminal_in_workspace`：新标签是 Terminal，无需 lx 状态；会继承工作区模型，切回 lx 时由 `toggle_pane_view` 刷新。
+
+`refresh_status` 只读 `ModelsSnapshot`（无 IO）。`switch_workspace` 的既有测试在 models 为空的 `AppState::demo()` 下同样安全（`fallback_selection` 返回 `None`，状态行仍为 `no model`）。
 
 ### 5.6 回退链行为总表
 
 | 场景 | 结果 |
 | --- | --- |
-| 工作区 A 里选过 Claude | A 的窗格 `chat.selection = Claude`，切走再切回仍是 Claude |
-| B 从未选过模型，`defaultModel = GPT` | B 显示 GPT（`defaultModel` 第二级） |
-| B 从未选过模型，`defaultModel` 为空，最近使用 = `[Claude, GPT]` | B 显示 Claude |
+| 工作区 A 里选过 Claude | A 的 `Workspace.lx_model = Claude`；已有窗格 `chat.selection = Claude`，切走再切回仍是 Claude |
+| 在 A 新建标签/分割窗格 | 新窗格继承 `Workspace.lx_model = Claude`，不落到全局 default |
+| B 从未用过模型，`defaultModel = GPT` | B 的新窗格显示 GPT（`defaultModel` 第二级） |
+| B 从未用过模型，`defaultModel` 为空，最近使用 = `[Claude, GPT]` | B 显示 Claude |
 | 最近使用全部失效（供应商被删/未启用/无 Key） | 取第一个可用模型；没有任何可用模型才 `no model` |
-| 重启后打开 C（从未用过） | 显示 `ai.json` 里 `recentModels[0]`，无则 `defaultModel`，再无则第一个可用 |
+| 重启后打开 C（从未用过） | 先 `defaultModel`，无则 `recentModels[0]`，再无则第一个可用 |
 | 设置页保存模型配置 | `recentModels` 原样保留（`merge_settings` 基于 current） |
+
+### 5.7 工作区级记忆与新建窗格（review 修复）
+
+- `Workspace` 新增进程内字段 `lx_model: Option<ModelSelection>`；不落库、不跨重启。
+- 更新时机：
+  - `/model` 采纳：`finish_model_selection` 在写入窗格 selection 后调用 `remember_workspace_model`。
+  - 实际发送 / steer 提升：解析出的有效选择写入工作区记忆。
+  - `/resume`：会话模型通过 `validated_selection` 后写入工作区记忆。
+  - 失效会话模型不写 recent、不写工作区记忆（窗格仍保留原始 selection，供应商恢复后可再次生效）。
+- 新窗格继承：`create_tab`、`split_pane`、`create_terminal_in_workspace` 先复制 `Workspace.lx_model` 到新窗格的 `chat.selection`，再刷新状态；新窗格不会停在 `no model`，也不会错误落到全局 default。
+- 窗格级 `chat.selection` 仍是更高优先级的覆盖：已有会话、`/model` 手动选择不会被工作区记忆反向覆盖。
+- 同一 session 开在多个窗格时，发送 ack 与 `/resume` 通过 `sync_session_selection` 把模型同步到其它窗格，避免 A 已换模型、B 仍显示旧模型。
 
 ---
 
@@ -466,15 +489,17 @@ pub fn remember_model_used(state: &mut AppState, selection: &ModelSelection) {
 
 | 文件 | 改动 |
 | --- | --- |
-| `src/ui/right_panel/todo.rs` | 几何常量与 helper、`priority_at`、可见性文档注释 |
-| `src/ui/right_panel/todo/item.rs` | `group_priority`、连接符字形、`row_view` / `render_item` |
-| `src/ui/right_panel/todo/tests.rs`、`tests/grouping.rs` | 断言同步 |
+| `src/ui/right_panel/todo.rs` | 几何常量与 helper、`priority_at`、`status_at` 边界、可见性文档注释 |
+| `src/ui/right_panel/todo/item.rs` | `group_priority`、连接符字形、`row_view` / `render_item`、独立幽灵行不画徽标 |
+| `src/ui/right_panel/todo/tests.rs`、`tests/grouping.rs` | 断言同步、点击端到端、N>3/组尾幽灵/窄面板/边界测试 |
 | `docs/standards/tui-design-requirements.md` | Todo 聚合组列位与续行规则、`/model` recent 说明 |
 | `src/config/ai/mod.rs`、`src/config/ai/tests.rs` | `recent_models` 字段与往返测试 |
-| `src/app/state/lx/chat.rs`、`chat/tests.rs`、`chat/usage.rs`（如需） | 回退链、`remember_model` 与单测 |
+| `src/app/state/lx/chat.rs`、`chat/tests.rs`、`chat/usage.rs`（如需） | 回退链、`validated_selection` variant 规范化、`effective_selection`、`remember_model` 与单测 |
+| `src/app/state/workspace.rs`、`src/app/state.rs` | `Workspace.lx_model` 工作区记忆字段 |
 | `src/app/effects.rs`、`src/db/service.rs` | `SaveModelChoice` |
-| `src/app/update/chat/slash.rs`、`mod.rs`、`session.rs`、`steer.rs` | 记录时机 |
-| `src/app/update/workspace.rs` | 切/建工作区刷新 lx 状态行 |
+| `src/app/update/chat/slash.rs`、`mod.rs`、`session.rs`、`steer.rs` | 记录时机、有效选择过滤、工作区记忆、同 session 同步 |
+| `src/app/update/workspace.rs`、`menu.rs`、`pane.rs`、`worktree.rs`、`workspace_history/mod.rs` | 新建/切/建工作区与标签的状态刷新、新窗格继承工作区模型 |
+| `docs/feature/todo-group-priority-and-ws-model/review.md` | 本轮审查记录与修复状态 |
 
 不改：数据库 schema（`SCHEMA_VERSION` 保持 28）、TUI 文案（无新增用户可见字符串）、补偿/重试链路。
 
@@ -486,6 +511,10 @@ pub fn remember_model_used(state: &mut AppState, selection: &ModelSelection) {
 | --- | --- |
 | `ai.json` 新增字段被旧版本二进制覆盖丢失 | 旧版本 `extra` flatten 会原样保留未知字段（`AiSettings.extra`），不会写坏 |
 | 最近使用列表让用户“莫名换了模型” | 只在 `defaultModel` 缺失时生效；`defaultModel` 仍由 `/model` 显式写入；`title/recap` 不受影响 |
+| 工作区记忆让已有会话被意外覆盖 | 窗格级 `chat.selection` 优先级更高；工作区记忆只用于新建空白窗格 |
+| 供应商停用/清 Key 后窗格选择仍显示旧模型 | `effective_selection` 与 fallback 共用 `validated_selection`，失效即回退 |
+| 后台标签的一次性省略提示被切工作区清掉 | 只刷当前标签；后台标签在切标签时刷新 |
+| 配置持久化并发丢更新 | 已知 P3 风险（`review.md` P3-6/P3-8）；当前单实例顺序 effect 正常，后续用文件锁/宽松解析加固 |
 | 切工作区刷新状态行拖慢切换 | 纯内存遍历，无 IO；单测覆盖 |
 | Todo 列位调整导致鼠标命中错位 | 渲染与命中共用同一组 helper（`row_priority_x` / `row_branch_x` / `row_line_x_for`），`priority_at` 走新几何 |
 | 组内最高优先级来自别的行，点击改到别的条目 | 决策 D5 已确认；徽标配色沿用锚点状态，视觉归属清晰 |
@@ -497,7 +526,10 @@ pub fn remember_model_used(state: &mut AppState, selection: &ModelSelection) {
 
 ## 8. 验证计划
 
-1. `cargo fmt`
+1. `cargo fmt --check`
 2. `cargo clippy --all-targets -- -D warnings`
-3. `cargo test`（重点：`ui::right_panel::todo`、`app::state::lx::chat`、`app::update::chat`、`config::ai`、`db::service`）
+3. `cargo test`（重点：`ui::right_panel::todo`、`app::state::lx::chat`、`app::update::chat`、`app::update::workspace_history`、`config::ai`、`db::service`）
 4. 手工（用户执行）：`cargo run` 检查聚合组三种形态（2/3 条、折行、编辑态、点击徽标）与多工作区模型切换/重启。
+5. Review 修复重点回归：新标签/分割窗格继承工作区模型、历史列表新建工作区立即显示模型、停用供应商/清 Key 后回退到可用模型、同一 session 多窗格同步、组徽标点击端到端。
+
+自动化结果与已知边界以 [review.md](./review.md) §6 与 [verification.md](./verification.md) 为准。
