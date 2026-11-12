@@ -117,14 +117,7 @@ pub(super) fn handle_lx_pane_mouse_down_left(
     let task_hit = state.pane_anywhere(pane).and_then(|target| {
         target.lx.task.as_ref()?;
         let rects = ui::main_content::lx::task_rects(inner, &target.lx)?;
-        let page = target.lx.task.as_ref()?;
-        ui::main_content::lx::task::hit(
-            rects.list,
-            page,
-            &target.lx.agents,
-            mouse.column,
-            mouse.row,
-        )
+        ui::main_content::lx::task::hit(rects.list, &target.lx, mouse.column, mouse.row)
     });
     if let Some(hit) = task_hit {
         match hit {
@@ -135,10 +128,16 @@ pub(super) fn handle_lx_pane_mouse_down_left(
                 update::close_task_page(state, pane);
             }
             ui::main_content::lx::task::TaskHit::Agent(index) => {
-                update::select_task_agent(state, pane, index);
+                handle_task_row_click(state, pane, index, false);
+            }
+            ui::main_content::lx::task::TaskHit::Qa(index) => {
+                handle_task_row_click(state, pane, index, true);
             }
             ui::main_content::lx::task::TaskHit::AgentFilter(filter) => {
                 update::select_task_agent_filter(state, pane, filter);
+            }
+            ui::main_content::lx::task::TaskHit::Search => {
+                handle_task_search_click(state, pane, inner, mouse.column, mouse.row);
             }
         }
         *dirty = true;
@@ -181,15 +180,7 @@ pub(super) fn handle_lx_pane_mouse_down_left(
         ui::main_content::lx::slash_item_at(inner, &target.lx, mouse.column, mouse.row)
     });
     if let Some(index) = slash_hit {
-        // BTW 页签的 `/` 面板挂在独立 composer 上，不能走主输入的采纳路径。
-        if state
-            .pane_anywhere(pane)
-            .is_some_and(|target| target.lx.is_btw_tab())
-        {
-            update::select_btw_slash(state, pane, index);
-        } else {
-            update::select_lx_slash(state, pane, index);
-        }
+        update::select_lx_slash(state, pane, index);
         *dirty = true;
         return;
     }
@@ -251,20 +242,6 @@ pub(super) fn handle_lx_pane_mouse_down_left(
             Instant::now(),
         );
         update::begin_lx_input_selection_with_clicks(state, pane, visual_row, col, clicks);
-    } else if state
-        .pane_anywhere(pane)
-        .is_some_and(|target| target.lx.is_btw_tab() && target.lx.btw.picker_open())
-    {
-        // `/btwList` 选择器优先：点行直接切换 QA，其余区域吞掉。
-        let picked = state.pane_anywhere(pane).and_then(|target| {
-            ui::main_content::lx::task_btw_picker_hit(inner, &target.lx, mouse.column, mouse.row)
-        });
-        if let Some(index) = picked {
-            update::select_btw_qa(state, pane, index);
-        }
-        update::clear_selection(state);
-        *dirty = true;
-        return;
     } else if let Some((content_row, content_col, target)) =
         state.pane_anywhere(pane).and_then(|target| {
             ui::main_content::lx::press_content_hit(
@@ -408,4 +385,73 @@ fn apply_immediate_lx_open_card(state: &mut AppState, pane: PaneId, card: CardTa
     } else {
         update::toggle_lx_card(state, pane, card);
     }
+}
+
+/// 后台任务列表行单击：选中并预览；同一行 400ms 内再次单击进入编辑态。
+fn handle_task_row_click(state: &mut AppState, pane: PaneId, index: usize, btw: bool) {
+    let now = Instant::now();
+    let double = state
+        .task_list_click
+        .is_some_and(|(last_pane, last_index, at)| {
+            last_pane == pane
+                && last_index == index
+                && now.duration_since(at) <= std::time::Duration::from_millis(400)
+        });
+    state.task_list_click = Some((pane, index, now));
+    if btw {
+        if double {
+            update::enter_btw_edit(state, pane);
+        } else {
+            update::select_btw_qa(state, pane, index);
+        }
+    } else if double {
+        update::enter_task_agent_edit(state, pane);
+    } else {
+        update::select_task_agent(state, pane, index);
+    }
+}
+
+/// 点击搜索行：按列定位文本光标。
+fn handle_task_search_click(state: &mut AppState, pane: PaneId, area: Rect, column: u16, row: u16) {
+    let Some((rects, btw)) = state.pane_anywhere(pane).and_then(|target| {
+        let rects = ui::main_content::lx::task_rects(area, &target.lx)?;
+        Some((rects, target.lx.is_btw_tab()))
+    }) else {
+        return;
+    };
+    let search = ui::main_content::lx::task::search_rect(rects.list);
+    if !search.contains((column, row).into()) {
+        return;
+    }
+    let text_x = search.x.saturating_add(2);
+    if column < text_x {
+        return;
+    }
+    let width = usize::from(search.right().saturating_sub(text_x));
+    let (text, cursor) = state
+        .pane_anywhere(pane)
+        .and_then(|target| {
+            if btw {
+                let input = &target.lx.btw.search;
+                Some((input.text().to_string(), input.cursor()))
+            } else {
+                let input = &target.lx.task.as_ref()?.agents_search;
+                Some((input.text().to_string(), input.cursor()))
+            }
+        })
+        .unwrap_or_default();
+    let index = crate::ui::widgets::input::char_index_at_col(
+        &text,
+        cursor,
+        width,
+        column.saturating_sub(text_x),
+    );
+    if let Some(target) = state.pane_mut_anywhere(pane) {
+        if btw {
+            target.lx.btw.search.set_cursor(index);
+        } else if let Some(page) = target.lx.task.as_mut() {
+            page.agents_search.set_cursor(index);
+        }
+    }
+    update::clear_selection(state);
 }

@@ -76,7 +76,11 @@ pub fn open_subagents_page(state: &mut AppState, pane: PaneId) -> bool {
         };
         if let Some(page) = target.lx.task.as_mut() {
             page.select_tab(crate::app::state::TaskTab::Agents);
+            page.agents_loading = target.lx.agents.runs.is_empty();
+            page.sync_agent_window(&target.lx.agents);
         }
+        target.lx.btw.editing = false;
+        target.lx.btw.search.clear();
         target.lx.chat.session_id.clone()
     };
     if let Some(parent_session) = session {

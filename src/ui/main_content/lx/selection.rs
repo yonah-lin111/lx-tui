@@ -109,7 +109,7 @@ pub(crate) fn content_geom(area: Rect, lx: &Lx, cache: &mut PaneCache) -> Option
         }
         if page.tab == TaskTab::Agents {
             let run = page
-                .selected_agent_index(&lx.agents)
+                .detail_agent_index(&lx.agents)
                 .and_then(|index| lx.agents.runs.get(index))?;
             if !history::HistorySource::from_run(run).has_history() {
                 let rect = history::content_rect(output_rect);
@@ -693,7 +693,7 @@ fn render_chunk(
     if let Some(page) = lx.task.as_ref() {
         if page.tab == TaskTab::Agents {
             let Some(run) = page
-                .selected_agent_index(&lx.agents)
+                .detail_agent_index(&lx.agents)
                 .and_then(|index| lx.agents.runs.get(index))
             else {
                 return;

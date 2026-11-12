@@ -132,7 +132,7 @@ pub fn render(
     // 窗格底边框：面板打开时整行归面板的键位提示（不显示模型名 / 用量 / 进程计数）；
     // 否则照旧画状态（模型 · 上下文占用 · 后台任务计数）。
     match lx.task.as_ref() {
-        Some(page) => task::draw_footer(buf, area, page),
+        Some(page) => task::draw_footer(buf, area, page, lx),
         None => status::render(buf, area, lx),
     }
     // 提及面板浮于基础内容之上、贴输入框上沿；与粘贴面板互斥。
@@ -140,8 +140,6 @@ pub fn render(
     render_paste_panel(area, buf, lx);
     refer::render(area, buf, lx);
     render_slash_panel(area, buf, lx);
-    // `/btwList` 的二级面板画在任务面板上方，与主会话 `/resume` 同一套命令面板观感。
-    task::btw::render_picker(area, buf, lx);
     // 本页 toast 最后画：盖住历史、输入框与上述所有浮层，但**只在窗格内容区内**。
     // 全局 toast 覆盖层不再承载 lx 反馈（见 `app::state::Lx::toast`）。
     let toast_box = lx
@@ -830,14 +828,29 @@ pub fn task_btw_composer_rect(area: Rect, lx: &Lx) -> Option<Rect> {
         .filter(|rect| rect.height > 0)
 }
 
-/// `/btwList` 选择器点击命中：返回主 QA 下标。
-pub fn task_btw_picker_hit(area: Rect, lx: &Lx, column: u16, row: u16) -> Option<usize> {
-    task::btw_picker_hit(area, lx, column, row)
-}
-
 /// BTW 对话区的 `(可见行数, 总行数, 快照是否最新)`；不在 BTW 页或无活动线程返回 None。
 pub fn task_btw_rows(area: Rect, lx: &Lx, cache: &mut PaneCache) -> Option<(usize, usize, bool)> {
     task::btw_rows(area, lx, cache)
+}
+
+/// BTW 详情区变化前的阅读锚点。
+pub(crate) fn task_btw_anchor_before(
+    area: Rect,
+    lx: &Lx,
+    cache: &mut PaneCache,
+    scroll: usize,
+) -> Option<history::HistoryAnchor> {
+    task::btw_anchor_before(area, lx, cache, scroll)
+}
+
+/// BTW 详情区变化后的锚点行。
+pub(crate) fn task_btw_anchor_row(
+    area: Rect,
+    lx: &Lx,
+    cache: &mut PaneCache,
+    anchor: &history::HistoryAnchor,
+) -> Option<usize> {
+    task::btw_anchor_row(area, lx, cache, anchor)
 }
 
 /// 后台任务面板 item 列表的滚动条几何；未打开或内容装得下时返回 None。
@@ -846,8 +859,7 @@ pub fn task_list_scrollbar(
     lx: &Lx,
 ) -> Option<crate::ui::widgets::scrollbar::ScrollbarLayout> {
     let rects = task_rects(area, lx)?;
-    let page = lx.task.as_ref()?;
-    task::list_scrollbar(rects.list, page, &lx.agents)
+    task::list_scrollbar(rects.list, lx)
 }
 
 /// `ask` 统一列表的 `(窗口起点, 总行数, 可视行数)`；滚轮基准与绘制同源。

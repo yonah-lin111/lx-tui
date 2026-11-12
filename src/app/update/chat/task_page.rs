@@ -69,9 +69,9 @@ pub fn close_task_page(state: &mut AppState, pane: PaneId) -> bool {
     };
     let closed = target.lx.task.take().is_some();
     if closed {
-        // 面板整体关闭时，挂在 BTW composer 上的 `/btwList` 二级面板也一并收起，
-        // 避免下次打开任务页时弹出一个过期的选择器。
-        target.lx.btw.close_picker();
+        target.lx.btw.editing = false;
+        target.lx.btw.search.clear();
+        target.lx.btw.sync_selection_after_filter();
         target.lx.chat.viewport_top = None;
         target.lx.chat.suppressed_prompt_header = None;
         // 清掉拖拽抓取标记：面板没了还留着 grab，会让后续**所有**拖拽事件
@@ -80,6 +80,7 @@ pub fn close_task_page(state: &mut AppState, pane: PaneId) -> bool {
         state.task_list_scroll_drag = None;
         state.task_agents_scroll_drag = None;
         state.task_btw_scroll_drag = None;
+        state.task_list_click = None;
         crate::app::update::clear_lx_selection_for(state, pane);
     }
     closed
@@ -108,8 +109,75 @@ pub fn select_task_tab(state: &mut AppState, pane: PaneId, position: usize) -> b
         state.task_list_scroll_drag = None;
         state.task_agents_scroll_drag = None;
         state.task_btw_scroll_drag = None;
+        state.task_list_click = None;
+        if let Some(target) = state.pane_mut_anywhere(pane) {
+            target.lx.btw.editing = false;
+            target.lx.btw.search.clear();
+            target.lx.btw.sync_selection_after_filter();
+        }
         crate::app::update::clear_lx_selection_for(state, pane);
         super::btw::ensure_loaded(state, pane);
+        if tab == crate::app::state::TaskTab::Agents {
+            let session = state
+                .pane_anywhere(pane)
+                .and_then(|target| target.lx.chat.session_id.clone());
+            let empty = state
+                .pane_anywhere(pane)
+                .is_some_and(|target| target.lx.agents.runs.is_empty());
+            if empty && let Some(session) = session {
+                if let Some(page) = state
+                    .pane_mut_anywhere(pane)
+                    .and_then(|target| target.lx.task.as_mut())
+                {
+                    page.agents_loading = true;
+                }
+                state
+                    .effects
+                    .push(crate::app::effects::Effect::ListSubagents {
+                        pane,
+                        parent_session: session,
+                    });
+            }
+            if let Some(target) = state.pane_mut_anywhere(pane)
+                && target.lx.agents.selected_id.is_none()
+                && let Some(first) = target.lx.agents.runs.first()
+            {
+                target.lx.agents.selected_id = Some(first.agent_id.clone());
+            }
+            if let Some(target) = state.pane_mut_anywhere(pane) {
+                let Some(page) = target.lx.task.as_mut() else {
+                    return changed;
+                };
+                let visible = target
+                    .lx
+                    .agents
+                    .visible_indices(page.agent_filter, page.agents_search.text());
+                let position = target
+                    .lx
+                    .agents
+                    .selected_id
+                    .as_deref()
+                    .and_then(|selected| {
+                        visible.iter().position(|index| {
+                            target
+                                .lx
+                                .agents
+                                .runs
+                                .get(*index)
+                                .is_some_and(|run| run.agent_id == selected)
+                        })
+                    })
+                    .unwrap_or(0);
+                page.agents_window.active = position;
+                page.agents_window.anchor = position;
+                page.agents_window.viewport = None;
+                crate::app::state::lx::task::clamp_task_window_visible(
+                    &mut page.agents_window,
+                    visible.len(),
+                    crate::ui::main_content::lx::task::LIST_MAX_SEARCH,
+                );
+            }
+        }
     }
     changed
 }
@@ -156,24 +224,38 @@ pub fn scroll_task_list(state: &mut AppState, pane: PaneId, delta: isize) -> boo
     let Some(target) = state.pane_mut_anywhere(pane) else {
         return false;
     };
-    let Some(filter) = target.lx.task.as_ref().map(|page| page.agent_filter) else {
-        return false;
-    };
-    let agents_len = target.lx.agents.filtered_indices(filter).len();
     let Some(page) = target.lx.task.as_mut() else {
         return false;
     };
-    // 可见行数与渲染的 `list` 矩形一致：`LIST_MAX` 是固定高度。
     match page.tab {
         crate::app::state::TaskTab::Processes => {
-            page.scroll_window(delta, crate::ui::main_content::lx::task::LIST_MAX)
+            let len = page.processes.len();
+            crate::app::state::lx::task::scroll_window(
+                &mut page.window,
+                len,
+                delta,
+                crate::ui::main_content::lx::task::LIST_MAX,
+            )
         }
-        crate::app::state::TaskTab::Agents => page.scroll_agents_window(
-            delta,
-            crate::ui::main_content::lx::task::LIST_MAX,
-            agents_len,
-        ),
-        crate::app::state::TaskTab::Btw => false,
+        crate::app::state::TaskTab::Agents => {
+            let visible = crate::ui::main_content::lx::task::LIST_MAX_SEARCH;
+            let len = target
+                .lx
+                .agents
+                .visible_indices(page.agent_filter, page.agents_search.text())
+                .len();
+            crate::app::state::lx::task::scroll_window(&mut page.agents_window, len, delta, visible)
+        }
+        crate::app::state::TaskTab::Btw => {
+            let visible = crate::ui::main_content::lx::task::LIST_MAX_SEARCH;
+            let len = target.lx.btw.filtered_qa_indices().len();
+            crate::app::state::lx::task::scroll_window(
+                &mut target.lx.btw.qa_window,
+                len,
+                delta,
+                visible,
+            )
+        }
     }
 }
 
@@ -182,20 +264,35 @@ pub fn set_task_list_scroll(state: &mut AppState, pane: PaneId, offset: usize) -
     let Some(target) = state.pane_mut_anywhere(pane) else {
         return false;
     };
-    let Some(filter) = target.lx.task.as_ref().map(|page| page.agent_filter) else {
-        return false;
-    };
-    let agents_len = target.lx.agents.filtered_indices(filter).len();
     let Some(page) = target.lx.task.as_mut() else {
         return false;
     };
-    let visible = crate::ui::main_content::lx::task::LIST_MAX;
     match page.tab {
-        crate::app::state::TaskTab::Processes => page.set_window_scroll(offset, visible),
-        crate::app::state::TaskTab::Agents => {
-            page.set_agents_window_scroll(offset, visible, agents_len)
+        crate::app::state::TaskTab::Processes => {
+            page.set_window_scroll(offset, crate::ui::main_content::lx::task::LIST_MAX)
         }
-        crate::app::state::TaskTab::Btw => false,
+        crate::app::state::TaskTab::Agents => {
+            let visible = crate::ui::main_content::lx::task::LIST_MAX_SEARCH;
+            let len = target
+                .lx
+                .agents
+                .visible_indices(page.agent_filter, page.agents_search.text())
+                .len();
+            page.set_agents_window_scroll(offset, visible, len)
+        }
+        crate::app::state::TaskTab::Btw => {
+            let visible = crate::ui::main_content::lx::task::LIST_MAX_SEARCH;
+            let max = target
+                .lx
+                .btw
+                .filtered_qa_indices()
+                .len()
+                .saturating_sub(visible);
+            let next = offset.min(max);
+            let before = target.lx.btw.qa_window.viewport;
+            target.lx.btw.qa_window.viewport = Some(next);
+            before != Some(next)
+        }
     }
 }
 

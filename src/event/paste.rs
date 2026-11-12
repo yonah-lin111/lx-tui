@@ -180,6 +180,7 @@ mod tests {
                 ..Default::default()
             });
             target.lx.btw.ensure_thread("qa-1");
+            target.lx.btw.editing = true;
         }
 
         assert!(handle_lx_paste(&mut state, "hello".to_string()));

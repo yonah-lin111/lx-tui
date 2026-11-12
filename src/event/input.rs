@@ -363,7 +363,7 @@ pub(crate) fn handle_paste_event(
         let id = state.active_tab().layout.focus();
         if state
             .pane_anywhere(id)
-            .is_some_and(|pane| pane.lx.is_btw_tab())
+            .is_some_and(|pane| pane.lx.btw_editing())
         {
             if paste::handle_lx_paste(state, text) {
                 *dirty = true;
@@ -456,12 +456,14 @@ fn copy_lx_selection(
     }
     // 任务页打开时优先复制内联追问框选区；未打开时按 Ask 手写框 / 展开芯片预览 / 底部输入框顺序复制。
     if let Some(text) = request.and_then(|target| {
-        if target.lx.is_btw_tab() {
+        if target.lx.btw_editing() || target.lx.agents_editing() {
             target.lx.active_editor().selected_text()
         } else if let Some(task) = target.lx.task.as_ref() {
-            task.agent_reply
-                .as_ref()
-                .and_then(|reply| reply.selected_text())
+            match task.tab {
+                crate::app::state::TaskTab::Btw => target.lx.btw.search.selected_text(),
+                crate::app::state::TaskTab::Agents => task.agents_search.selected_text(),
+                crate::app::state::TaskTab::Processes => None,
+            }
         } else if let Some(ask) = target.lx.ask.as_ref()
             && ask.editing
         {
@@ -527,18 +529,18 @@ fn cut_lx_selection(state: &mut AppState) -> bool {
         let Some(target) = state.pane_mut_anywhere(pane) else {
             return false;
         };
-        if target.lx.is_btw_tab() {
+        if target.lx.btw_editing() || target.lx.agents_editing() {
             (
                 target.lx.with_active_editor(|editor| editor.cut_selected()),
                 true,
             )
         } else if let Some(task) = target.lx.task.as_mut() {
-            (
-                task.agent_reply
-                    .as_mut()
-                    .and_then(|reply| reply.cut_selected()),
-                true,
-            )
+            let text = match task.tab {
+                crate::app::state::TaskTab::Btw => target.lx.btw.search.cut_selected(),
+                crate::app::state::TaskTab::Agents => task.agents_search.cut_selected(),
+                crate::app::state::TaskTab::Processes => None,
+            };
+            (text, true)
         } else if target.lx.ask.as_ref().is_some_and(|ask| ask.editing) {
             (
                 target

@@ -678,7 +678,7 @@ fn task_list_scrollbar_appears_only_when_items_overflow() {
     let agent_bar = crate::ui::main_content::lx::task_list_scrollbar(area, &lx)
         .expect("Agents 超限时必须出现滚动条");
     assert_eq!(agent_bar.total, 10);
-    assert_eq!(agent_bar.visible, LIST_MAX);
+    assert_eq!(agent_bar.visible, LIST_MAX_SEARCH);
 }
 
 #[test]

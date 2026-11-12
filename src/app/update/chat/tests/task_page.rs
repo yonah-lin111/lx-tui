@@ -280,33 +280,31 @@ fn panel_navigation_moves_the_highlight_and_cycles_tabs() {
 }
 
 #[test]
-fn up_at_the_top_returns_to_the_input_box() {
-    // 用户要求：列表顶部（或空列表）按 ↑ 回到输入框 = 关闭面板。
+fn up_at_the_top_keeps_the_panel_open() {
     let (mut state, pane) = state_with_session("");
     open_with_processes(&mut state, pane);
     assert_eq!(page(&state, pane).window.active, 0, "初始在首项");
     crate::app::update::pane::apply_lx_input(&mut state, crate::app::actions::LxInput::Up);
     assert!(
-        state.pane_anywhere(pane).unwrap().lx.task.is_none(),
-        "已在顶部时 ↑ 关闭面板、回到输入框"
+        state.pane_anywhere(pane).unwrap().lx.task.is_some(),
+        "列表边界 ↑ 不关闭面板"
     );
 }
 
 #[test]
-fn up_on_an_empty_list_returns_to_the_input_box() {
+fn up_on_an_empty_list_keeps_the_panel_open() {
     let (mut state, pane) = state_with_session("");
     assert!(open_task_page(&mut state, pane));
     on_process_listed(&mut state, pane, Vec::new());
     crate::app::update::pane::apply_lx_input(&mut state, crate::app::actions::LxInput::Up);
     assert!(
-        state.pane_anywhere(pane).unwrap().lx.task.is_none(),
-        "空列表时 ↑ 关闭面板"
+        state.pane_anywhere(pane).unwrap().lx.task.is_some(),
+        "空列表 ↑ 不关闭面板"
     );
 }
 
 #[test]
-fn closing_via_up_keeps_the_draft_and_cursor() {
-    // 「回到原来的输入框」：草稿与光标必须原样。
+fn up_at_the_top_keeps_the_draft_and_cursor() {
     let (mut state, pane) = state_with_session("hello draft");
     let before = {
         let lx = &state.pane_anywhere(pane).unwrap().lx;
@@ -315,7 +313,7 @@ fn closing_via_up_keeps_the_draft_and_cursor() {
     open_with_processes(&mut state, pane);
     crate::app::update::pane::apply_lx_input(&mut state, crate::app::actions::LxInput::Up);
     let lx = &state.pane_anywhere(pane).unwrap().lx;
-    assert!(lx.task.is_none(), "面板已关闭");
+    assert!(lx.task.is_some());
     assert_eq!(lx.input, before.0, "草稿原样");
     assert_eq!(lx.cursor, before.1, "光标原样");
 }
@@ -745,48 +743,6 @@ fn running_agent(agent_id: &str, child_session: &str) -> crate::app::state::Suba
     })
 }
 
-#[test]
-fn ctrl_a_on_agents_tab_stops_all_subagents() {
-    let (mut state, pane) = state_with_session("");
-    assert!(open_task_page(&mut state, pane));
-    if let Some(page) = state.pane_mut_anywhere(pane).unwrap().lx.task.as_mut() {
-        page.tab = TaskTab::Agents;
-    }
-    assert!(crate::app::update::on_subagent_started(
-        &mut state,
-        pane,
-        running_agent("sub-a", "sess-a")
-    ));
-    assert!(crate::app::update::on_subagent_started(
-        &mut state,
-        pane,
-        running_agent("sub-b", "sess-b")
-    ));
-    state.effects.clear();
-    crate::app::update::pane::apply_lx_input(&mut state, crate::app::actions::LxInput::LineStart);
-    assert!(
-        state.effects.iter().any(|effect| matches!(
-            effect,
-            crate::app::effects::Effect::CancelSubagents { session_id, agent_id }
-                if session_id == "sess-1" && agent_id.is_none()
-        )),
-        "^a 停止整棵会话树：{:?}",
-        state.effects
-    );
-    let toast = state
-        .pane_anywhere(pane)
-        .unwrap()
-        .lx
-        .toast
-        .as_ref()
-        .expect("toast");
-    assert!(
-        toast.message.contains('2'),
-        "提示全部 2 个：{}",
-        toast.message
-    );
-}
-
 /// 指定状态的 agent 记录（列表筛选测试用）。
 fn agent_with_status(
     agent_id: &str,
@@ -835,7 +791,7 @@ fn tab_cycles_agent_filter_and_clamps_selection() {
         filtered.len(&state.pane_anywhere(pane).unwrap().lx.agents),
         2
     );
-    assert_eq!(filtered.agents_window.active, 1, "高亮被钳到筛选后的末项");
+    assert_eq!(filtered.agents_window.active, 0, "稳定选中保持在首个可见项");
 
     input(&mut state, crate::app::actions::LxInput::Tab);
     let filtered = page(&state, pane);
@@ -869,29 +825,36 @@ fn selected_agent_index_maps_filtered_position_to_real_run() {
 }
 
 #[test]
-fn enter_opens_inline_reply_and_submit_emits_effect() {
+fn enter_is_noop_in_the_agent_list() {
     let (mut state, pane) = state_with_session("");
     open_agents_with_statuses(&mut state, pane);
-    {
-        let target = state.pane_mut_anywhere(pane).expect("pane");
-        let page = target.lx.task.as_mut().expect("task");
-        page.agent_filter = crate::app::state::AgentFilter::Done;
-        page.agents_window.active = 0;
-    }
-    state.effects.clear();
+    crate::app::update::pane::apply_lx_input(&mut state, crate::app::actions::LxInput::Enter);
+    assert!(page(&state, pane).agent_edit.is_none());
+    assert_eq!(page(&state, pane).tab, TaskTab::Agents);
+}
 
+#[test]
+fn shift_enter_opens_agent_composer_and_submit_keeps_editing() {
+    let (mut state, pane) = state_with_session("");
+    open_agents_with_statuses(&mut state, pane);
+    state.effects.clear();
     let input = crate::app::update::pane::apply_lx_input;
-    input(&mut state, crate::app::actions::LxInput::Enter);
-    assert!(
-        page(&state, pane).agent_reply.is_some(),
-        "Enter 打开内联追问输入框"
-    );
+    input(&mut state, crate::app::actions::LxInput::EnterFolder);
+    assert_eq!(page(&state, pane).agent_edit.as_deref(), Some("sub-done"));
     input(&mut state, crate::app::actions::LxInput::Char('h'));
     input(&mut state, crate::app::actions::LxInput::Char('i'));
     input(&mut state, crate::app::actions::LxInput::Enter);
-
-    let page = page(&state, pane);
-    assert!(page.agent_reply.is_none(), "提交后退出输入态");
+    assert!(page(&state, pane).agent_edit.is_some(), "发送后留在编辑态");
+    assert!(
+        state
+            .pane_anywhere(pane)
+            .unwrap()
+            .lx
+            .agents
+            .composer("sub-done")
+            .is_some_and(|composer| composer.text().is_empty()),
+        "发送成功后清空草稿"
+    );
     assert!(
         state.effects.iter().any(|effect| matches!(
             effect,
@@ -900,36 +863,38 @@ fn enter_opens_inline_reply_and_submit_emits_effect() {
                 session_id,
                 agent_id,
                 text,
-            } if *p == pane
-                && session_id == "sess-1"
-                && agent_id == "sub-done"
-                && text == "hi"
+            } if *p == pane && session_id == "sess-1" && agent_id == "sub-done" && text == "hi"
         )),
-        "Enter 提交内联追问：{:?}",
+        "Enter 提交追问：{:?}",
         state.effects
     );
 }
 
 #[test]
-fn escape_cancels_reply_without_closing_task_page() {
+fn escape_returns_to_list_and_keeps_the_agent_draft() {
     let (mut state, pane) = state_with_session("");
     open_agents_with_statuses(&mut state, pane);
     let input = crate::app::update::pane::apply_lx_input;
-    input(&mut state, crate::app::actions::LxInput::Enter);
-    assert!(page(&state, pane).agent_reply.is_some());
-
+    input(&mut state, crate::app::actions::LxInput::EnterFolder);
+    input(&mut state, crate::app::actions::LxInput::Char('h'));
+    input(&mut state, crate::app::actions::LxInput::Char('i'));
     input(&mut state, crate::app::actions::LxInput::Escape);
-    let page = page(&state, pane);
-    assert!(page.agent_reply.is_none(), "Esc 只退出输入态");
-    assert_eq!(page.tab, TaskTab::Agents, "面板仍停留在 Agents 页");
-    assert!(
-        state.pane_anywhere(pane).unwrap().lx.task.is_some(),
-        "Esc 不关闭后台任务页"
+    assert!(page(&state, pane).agent_edit.is_none());
+    input(&mut state, crate::app::actions::LxInput::EnterFolder);
+    assert_eq!(
+        state
+            .pane_anywhere(pane)
+            .unwrap()
+            .lx
+            .agents
+            .composer("sub-done")
+            .map(|composer| composer.text()),
+        Some("hi")
     );
 }
 
 #[test]
-fn reply_to_cancelled_subagent_shows_warning() {
+fn cancelled_agent_cannot_enter_composer() {
     let (mut state, pane) = state_with_session("");
     assert!(open_task_page(&mut state, pane));
     let target = state.pane_mut_anywhere(pane).expect("pane");
@@ -937,10 +902,9 @@ fn reply_to_cancelled_subagent_shows_warning() {
     let task_page = target.lx.task.as_mut().expect("task");
     task_page.tab = TaskTab::Agents;
     task_page.agents_window.active = 0;
-
-    crate::app::update::pane::apply_lx_input(&mut state, crate::app::actions::LxInput::Enter);
-    let page = page(&state, pane);
-    assert!(page.agent_reply.is_none(), "已关闭子 agent 不进入输入态");
+    task_page.agents_loading = false;
+    crate::app::update::pane::apply_lx_input(&mut state, crate::app::actions::LxInput::EnterFolder);
+    assert!(page(&state, pane).agent_edit.is_none());
     let toast = state
         .pane_anywhere(pane)
         .expect("pane")
@@ -948,77 +912,49 @@ fn reply_to_cancelled_subagent_shows_warning() {
         .toast
         .as_ref()
         .expect("warning toast");
-    assert_eq!(
-        toast.message,
-        crate::ui::text::LX_TASK_AGENT_REPLY_CLOSED,
-        "提示不可向已关闭子 agent 发送输入"
-    );
+    assert_eq!(toast.message, crate::ui::text::LX_TASK_AGENT_REPLY_CLOSED);
 }
 
 #[test]
-fn inline_reply_locks_target_across_active_filter_changes_and_handles_paste() {
-    let (mut state, pane) = state_with_session("draft-keep");
-    assert!(open_task_page(&mut state, pane));
+fn agent_search_filters_and_restores_stable_selection() {
+    let (mut state, pane) = state_with_session("");
+    open_agents_with_statuses(&mut state, pane);
+    let target = state.pane_mut_anywhere(pane).expect("pane");
+    target.lx.agents.selected_id = Some("sub-idle".into());
     {
-        let target = state.pane_mut_anywhere(pane).expect("pane");
-        let mut r1 = agent_with_status("sub-1", "sess-c1", "running");
-        r1.nickname = Some("Turing".into());
-        r1.agent_path = "/root/turing".into();
-        let mut r2 = agent_with_status("sub-2", "sess-c2", "running");
-        r2.nickname = Some("Curie".into());
-        r2.agent_path = "/root/curie".into();
-        target.lx.agents.runs = vec![r1, r2];
-        let task_page = target.lx.task.as_mut().expect("task");
-        task_page.tab = TaskTab::Agents;
-        task_page.agent_filter = crate::app::state::AgentFilter::Active;
-        task_page.agents_window.active = 1; // 选中第 2 个 running agent (Curie)
+        let task = target.lx.task.as_mut().expect("task");
+        task.agents_window.active = 1;
     }
-
-    let input = crate::app::update::pane::apply_lx_input;
-    input(&mut state, crate::app::actions::LxInput::Enter);
-    assert!(page(&state, pane).agent_reply.is_some());
-
-    // 空回车保持输入态不误退
-    input(&mut state, crate::app::actions::LxInput::Enter);
-    assert!(page(&state, pane).agent_reply.is_some());
-
-    // 粘贴进入内联追问框，不污染隐藏的主草稿框
-    assert!(crate::app::update::apply_task_paste(
-        &mut state,
-        pane,
-        "hello\nworld"
-    ));
+    for ch in "done".chars() {
+        crate::app::update::pane::apply_lx_input(
+            &mut state,
+            crate::app::actions::LxInput::Char(ch),
+        );
+    }
+    let task = page(&state, pane);
+    assert_eq!(task.agents_search.text(), "done");
     assert_eq!(
-        state.pane_anywhere(pane).unwrap().lx.input.as_str(),
-        "draft-keep"
+        task.agent_visible_indices(&state.pane_anywhere(pane).unwrap().lx.agents),
+        vec![2]
     );
-
-    // 第 1 个子 agent 结束并从 Active 筛选视图消失：高亮身份保持在 sub-2，且提交仍发给 sub-2
-    crate::app::update::on_subagent_finished(
-        &mut state,
-        "sess-c1",
-        "completed",
-        None,
-        crate::db::chat::Usage::default(),
-    );
+    assert_eq!(task.agents_window.active, 0, "高亮落到过滤后的首项");
     assert_eq!(
-        page(&state, pane).selected_agent_index(&state.pane_anywhere(pane).unwrap().lx.agents),
-        Some(1),
-        "Active 筛选下前序项完成时当前选中项保持指向 sub-2"
+        state
+            .pane_anywhere(pane)
+            .unwrap()
+            .lx
+            .agents
+            .selected_id
+            .as_deref(),
+        Some("sub-idle"),
+        "稳定选中不因过滤丢失"
     );
-
-    input(&mut state, crate::app::actions::LxInput::Enter);
-    assert!(
-        state.effects.iter().any(|effect| matches!(
-            effect,
-            crate::app::effects::Effect::SendSubagentUserInput {
-                agent_id,
-                text,
-                ..
-            } if agent_id == "sub-2" && text == "hello world"
-        )),
-        "内联追问必须发给锁定的 sub-2：{:?}",
-        state.effects
+    crate::app::update::pane::apply_lx_input(&mut state, crate::app::actions::LxInput::Escape);
+    assert!(page(&state, pane).agents_search.text().is_empty());
+    assert_eq!(
+        page(&state, pane).agents_window.active,
+        1,
+        "清空搜索恢复原高亮"
     );
 }
 
@@ -1045,6 +981,28 @@ fn subagents_slash_command_opens_the_agents_tab() {
                 if *p == pane && parent_session == "sess-1"
         )),
         "打开面板即请求子 agent 列表：{:?}",
+        state.effects
+    );
+}
+
+#[test]
+fn ctrl_a_in_agent_search_moves_cursor_without_stopping_agents() {
+    let (mut state, pane) = state_with_session("");
+    open_agents_with_statuses(&mut state, pane);
+    let input = crate::app::update::pane::apply_lx_input;
+    for ch in "done".chars() {
+        input(&mut state, crate::app::actions::LxInput::Char(ch));
+    }
+    state.effects.clear();
+    input(&mut state, crate::app::actions::LxInput::LineStart);
+    let page = page(&state, pane);
+    assert_eq!(page.agents_search.cursor(), 0, "Ctrl+A 回到行首");
+    assert!(
+        !state
+            .effects
+            .iter()
+            .any(|effect| matches!(effect, crate::app::effects::Effect::CancelSubagents { .. })),
+        "Ctrl+A 不再停止全部 agent：{:?}",
         state.effects
     );
 }

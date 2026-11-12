@@ -140,7 +140,7 @@ fn lx_selections_take_priority_over_shell_exit_panels_and_expanded_pastes() {
 }
 
 #[test]
-fn ask_editor_and_task_agent_reply_clear_selection_before_exiting_edit_mode() {
+fn ask_editor_clears_selection_before_exiting_edit_mode() {
     let mut state = AppState::demo();
     let pane = state.active_tab().layout.focus();
 
@@ -195,45 +195,6 @@ fn ask_editor_and_task_agent_reply_clear_selection_before_exiting_edit_mode() {
         assert!(!ask.editing, "第二下 Esc 退出 Ask 编辑态");
     }
     state.pane_mut_anywhere(pane).expect("pane").lx.ask = None;
-
-    // 2. TaskPage 内联追问框：选中文字后第一下 Esc 清选区，第二下关追问框，第三下关任务页。
-    {
-        let target = state.pane_mut_anywhere(pane).expect("pane");
-        let mut page = TaskPage {
-            tab: TaskTab::Agents,
-            ..TaskPage::default()
-        };
-        let mut reply = TextInput::new("follow up");
-        reply.select_all();
-        page.agent_reply = Some(reply);
-        target.lx.task = Some(page);
-    }
-    assert!(has_visible_selection(&state));
-    apply_lx_input(&mut state, LxInput::Escape);
-    {
-        let page = state
-            .pane_anywhere(pane)
-            .and_then(|p| p.lx.task.as_ref())
-            .expect("task page");
-        let reply = page.agent_reply.as_ref().expect("reply still open");
-        assert!(!reply.has_selection(), "第一下 Esc 清除追问框选区");
-        assert_eq!(reply.text(), "follow up");
-    }
-    apply_lx_input(&mut state, LxInput::Escape);
-    assert!(
-        state
-            .pane_anywhere(pane)
-            .and_then(|p| p.lx.task.as_ref())
-            .expect("task page")
-            .agent_reply
-            .is_none(),
-        "第二下 Esc 关闭内联追问框"
-    );
-    apply_lx_input(&mut state, LxInput::Escape);
-    assert!(
-        state.pane_anywhere(pane).expect("pane").lx.task.is_none(),
-        "第三下 Esc 关闭后台任务页"
-    );
 }
 
 #[test]
@@ -742,6 +703,7 @@ fn btw_composer_selection_and_scroll_stay_in_the_active_editor() {
             ..Default::default()
         });
         target.lx.btw.ensure_thread("qa-1");
+        target.lx.btw.editing = true;
         let composer = target.lx.btw.active_composer_mut().expect("composer");
         composer.resize(10, 5);
         composer.insert_str("hello");

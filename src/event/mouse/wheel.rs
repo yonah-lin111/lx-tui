@@ -543,10 +543,20 @@ pub(crate) fn handle_mouse_wheel(
                 && (rects.list.y..rects.list.bottom()).contains(&mouse.row)
                 && (inner.x..inner.right()).contains(&mouse.column)
             {
-                let is_btw = state
+                if mouse.row == ui::main_content::lx::task::search_rect(rects.list).y {
+                    return;
+                }
+                let (btw, btw_editing, agents_editing) = state
                     .pane_anywhere(pane)
-                    .is_some_and(|target| target.lx.is_btw_tab());
-                if is_btw {
+                    .map(|target| {
+                        (
+                            target.lx.is_btw_tab(),
+                            target.lx.btw_editing(),
+                            target.lx.agents_editing(),
+                        )
+                    })
+                    .unwrap_or((false, false, false));
+                if (btw && btw_editing) || agents_editing {
                     if update::scroll_lx_input(state, pane, delta) {
                         *dirty = true;
                     }

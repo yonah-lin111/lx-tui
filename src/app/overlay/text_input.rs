@@ -19,7 +19,7 @@ pub struct TextInput {
 }
 
 impl TextInput {
-    /// 构造输入并预填文本，光标落在末尾。
+    /// 空输入框；供 `Default` 与状态结构体派生默认值使用。
     pub fn new(text: impl Into<String>) -> Self {
         let text = text.into();
         let cursor = text.chars().count();
@@ -86,6 +86,12 @@ impl TextInput {
     /// 光标字符索引。
     pub fn cursor(&self) -> usize {
         self.cursor
+    }
+
+    /// 鼠标点击定位光标；清除选区。
+    pub fn set_cursor(&mut self, cursor: usize) {
+        self.cursor = cursor.min(self.text.chars().count());
+        self.selection_anchor = None;
     }
 
     /// 当前选区字符范围 `[start, end)`；无选区或空选区返回 None。
@@ -584,4 +590,10 @@ struct WrappedRange {
 /// 字符显示列数；控制字符按 0 列。
 fn char_cells(ch: char) -> usize {
     ch.width().unwrap_or(0)
+}
+
+impl Default for TextInput {
+    fn default() -> Self {
+        Self::new("")
+    }
 }

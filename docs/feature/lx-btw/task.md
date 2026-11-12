@@ -1,6 +1,6 @@
 # `/btw` 开发任务与验收计划
 
-> 状态：**已合并到 `dev`（merge `4c925888`）；`feat/lx-btw` 工作区与分支已清理，评审修复见 [review.md](review.md)。**
+> 状态：**已合并到 `dev`（merge `4c925888`）；`feat/lx-btw` 工作区与分支已清理，评审修复见 [review.md](review.md)。`/btwList` 已被 `feat/lx-btw-list-and-agent-composer` 的常驻 QA 列表取代。**
 >
 > 设计依据：[design.md](design.md)。用户对 Q1～Q17 的确认仅确认对应产品边界，不代表批准实施。
 

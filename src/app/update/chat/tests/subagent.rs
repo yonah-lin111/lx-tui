@@ -422,6 +422,7 @@ fn task_page_switches_between_process_and_agent_lists() {
     let agents = AgentsState {
         runs: vec![run("sess-a", "sub-a", AgentRole::Explorer)],
         cards_dirty: false,
+        ..Default::default()
     };
     let mut page = TaskPage::default();
     assert_eq!(page.len(&agents), 0, "进程 tab 没有条目");

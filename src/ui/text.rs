@@ -636,6 +636,14 @@ pub const LX_TASK_TAB_AGENTS: &str = "Agents";
 pub const LX_TASK_PROCESSES_EMPTY: &str = "no running processes";
 /// 子代理 tab 空态（当前会话没有派发过 subagent）。
 pub const LX_TASK_AGENTS_EMPTY: &str = "no subagents yet";
+/// Agents 列表请求在途。
+pub const LX_TASK_AGENTS_LIST_LOADING: &str = "Loading agents...";
+/// Agents 列表搜索无命中。
+pub const LX_TASK_AGENTS_SEARCH_EMPTY: &str = "no matching agents";
+/// Agents 列表搜索框占位。
+pub const LX_TASK_AGENTS_SEARCH_PLACEHOLDER: &str = "search agents…";
+/// Agents 追问 composer 左侧标记。
+pub const LX_TASK_AGENT_INPUT_MARK: &str = "Agent";
 /// Agents 详情区：历史 run 的消息流还没从库里读回来。
 pub const LX_TASK_AGENTS_LOADING: &str = "loading agent transcript…";
 /// 输出区空态：高亮任务还没有产出（或刚起步）。
@@ -678,17 +686,21 @@ pub const LX_TASK_HINTS_PROCESSES: [Hint; 4] = [
     hint("back", "esc"),
 ];
 /// 子代理 tab 的键位提示（`tab` 切换筛选、`↵` 内联追问、`^d`/`^a` 停止）。
-pub const LX_TASK_HINTS_AGENTS: [Hint; 7] = [
+pub const LX_TASK_HINTS_AGENTS: [Hint; 6] = [
     hint("select", "↑↓"),
     hint("filter", "tab"),
-    hint("reply", "↵"),
+    hint("enter", "⇧↵"),
     hint("stop", "^d"),
-    hint("stop all", "^a"),
     hint("tabs", "←→"),
+    hint("close", "esc"),
+];
+/// Agents 编辑态的底边框键位提示。
+pub const LX_TASK_HINTS_AGENTS_EDIT: [Hint; 4] = [
+    hint("send", "↵"),
+    hint("newline", "⇧↵"),
+    hint("stop", "^d"),
     hint("back", "esc"),
 ];
-/// Agents 内联追问输入态的底边框键位提示。
-pub const LX_TASK_HINTS_AGENT_REPLY: &str = "[send ↵]  [cancel esc]";
 /// 顶边右端的 tab 指示分隔符（`·`）。
 pub const LX_TASK_TAB_SEP: &str = " · ";
 /// 行尾的运行时长前缀（`running 1m 30s`）。

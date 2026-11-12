@@ -24,40 +24,43 @@ pub fn on_qa_list_loaded(
         return false;
     }
     target.lx.btw.qa = qa;
-    target.lx.btw.picker_loading = false;
-    // 列表到达前可能已经显示 loading 占位面板；空列表也应保留面板让用户看到空态。
-    let picker_open = target.lx.btw.picker_open();
+    target.lx.btw.qa_loaded = true;
     if target.lx.btw.active.is_none()
         && let Some(last) = target.lx.btw.qa.last()
     {
         let qa_id = last.qa_id.clone();
         target.lx.btw.select_qa(&qa_id);
     }
+    // 当前 active 已不在新列表（会话变化/删除）时回退到最新一条。
+    if target.lx.btw.active.as_deref().is_some_and(|active| {
+        !target
+            .lx
+            .btw
+            .qa
+            .iter()
+            .any(|summary| summary.qa_id == active)
+    }) {
+        target.lx.btw.active = None;
+        if let Some(last) = target.lx.btw.qa.last() {
+            let qa_id = last.qa_id.clone();
+            target.lx.btw.select_qa(&qa_id);
+        }
+    }
+    target.lx.btw.sync_selection_after_filter();
     if target.lx.btw.qa.is_empty() {
+        target.lx.btw.editing = false;
         // 没有正式 QA 时不能把 `/btw prompt` 的正文丢掉：还回主输入，用户可先提问。
         if let Some(prompt) = target.lx.btw.pending_prompt.take() {
             target.lx.replace_input(&format!("/btw {prompt}"));
         }
-        target.lx.btw.picking = None;
-        target.lx.btw.pending_pick = picker_open;
         show_lx_hint(state, pane, InputHintLevel::Warning, text::LX_BTW_NO_QA);
         return true;
     }
-    if target.lx.btw.pending_pick {
-        target.lx.btw.open_picker();
-    } else if let Some(index) = target.lx.btw.picking {
-        // 列表刷新后可能变短：把高亮钳回有效范围。
-        target.lx.btw.picking = Some(index.min(target.lx.btw.qa.len() - 1));
-    }
-    let qa_id = target
-        .lx
-        .btw
-        .active
-        .clone()
-        .filter(|_| !target.lx.btw.qa.is_empty())
-        .unwrap_or_default();
+    let (qa_id, pending_prompt) = {
+        let qa_id = target.lx.btw.active.clone().unwrap_or_default();
+        (qa_id, target.lx.btw.pending_prompt.take())
+    };
     let has_qa = !qa_id.is_empty();
-    let pending_prompt = target.lx.btw.pending_prompt.take();
     // composer 是懒创建的：拿到 QA、建立线程之后才存在，此时再同步 `@` 根与实例。
     crate::app::update::sync_lx_mention_root(state, pane);
     if has_qa {
@@ -66,15 +69,13 @@ pub fn on_qa_list_loaded(
             parent_session_id: parent_session_id.to_string(),
             qa_id,
         }));
-        // `/btw prompt` 在 QA 列表到达后才真正提交（只认命令暂存，不误发普通草稿）。
-        // 首次打开时 `try_submit_btw_command` 还没有活动线程可写，必须在这里把
-        // 暂存正文填进刚建立的 composer，再走正常提交路径。
+        // `/btw prompt` 在 QA 列表到达后才真正提交。
         if let Some(prompt) = pending_prompt {
-            if let Some(thread) = state
-                .pane_mut_anywhere(pane)
-                .and_then(|target| target.lx.btw.active_thread_mut())
-            {
-                thread.composer.editor_mut().replace_input(&prompt);
+            if let Some(target) = state.pane_mut_anywhere(pane) {
+                target.lx.btw.editing = true;
+                if let Some(thread) = target.lx.btw.active_thread_mut() {
+                    thread.composer.editor_mut().replace_input(&prompt);
+                }
             }
             submit_current(state, pane);
         }

@@ -237,6 +237,8 @@ pub struct AppState {
     pub lx_card_press: Option<(PaneId, crate::app::state::CardTarget)>,
     /// 文本选区多击计数现场 `(最近按下时刻, 屏幕列, 屏幕行, 点击次数 1..=3)`。
     pub selection_click: Option<(Instant, u16, u16, u8)>,
+    /// 后台任务列表最近一次单击 `(窗格, 真实条目下标, 时刻)`；用于双击进入详情编辑。
+    pub task_list_click: Option<(crate::tiling::PaneId, usize, Instant)>,
     /// 选区拖拽边缘自动滚动计划；None 表示未激活。
     pub selection_autoscroll: Option<SelectionAutoscroll>,
     /// 终端失焦后自动 recap 的到期时刻；None 表示未计时/已取消。
@@ -457,6 +459,7 @@ impl AppState {
             ask_input_drag: None,
             lx_card_press: None,
             selection_click: None,
+            task_list_click: None,
             selection_autoscroll: None,
             recap_due_at: None,
             resizing_prompt: false,

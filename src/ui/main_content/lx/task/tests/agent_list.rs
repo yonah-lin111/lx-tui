@@ -100,6 +100,7 @@ fn columns_align_across_identity_widths_and_depths() {
             ),
         ],
         cards_dirty: false,
+        ..Default::default()
     };
     let page = TaskPage {
         tab: TaskTab::Agents,
@@ -238,6 +239,7 @@ fn deep_tree_prefix_does_not_leak_into_scrollbar() {
             agent("child", "/root/p/c", None, "running", "child"),
         ],
         cards_dirty: false,
+        ..Default::default()
     };
     let page = TaskPage {
         tab: TaskTab::Agents,
@@ -621,6 +623,7 @@ fn zwj_emoji_identity_keeps_columns_aligned() {
             ),
         ],
         cards_dirty: false,
+        ..Default::default()
     };
     let page = TaskPage {
         tab: TaskTab::Agents,
@@ -662,6 +665,7 @@ fn tree_sibling_parent_comparison_is_case_insensitive() {
             agent("c2", "/root/p/c2", None, "completed", "c2"),
         ],
         cards_dirty: false,
+        ..Default::default()
     };
     let page = TaskPage {
         tab: TaskTab::Agents,

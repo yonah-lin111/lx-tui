@@ -930,7 +930,7 @@ pub(super) fn sync_agent_ui_queue(
         .lx
         .task
         .as_ref()
-        .and_then(|page| page.selected_agent_index(&target.lx.agents))
+        .and_then(|page| page.detail_agent_index(&target.lx.agents))
         .and_then(|index| target.lx.agents.runs.get(index))
         .map(|run| run.agent_id.clone());
     let mut changed = false;

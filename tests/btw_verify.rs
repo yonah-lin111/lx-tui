@@ -298,19 +298,13 @@ fn btw_chat_and_agent_mention_e2e() {
         app.screen()
     );
 
-    // `/btwList` in the BTW composer opens the second-level QA panel.
-    app.type_text("/btwList");
-    app.send(b"\t");
-    app.assert_wait("Side questions");
-    app.assert_wait("QA 1");
+    // The QA list is now a permanent first-level list; Esc returns to it and
+    // `/btwList` is no longer a command.
     app.send(b"\x1b");
-    let deadline = Instant::now() + Duration::from_secs(3);
-    while Instant::now() < deadline && app.screen().contains("Side questions") {
-        std::thread::sleep(Duration::from_millis(100));
-    }
+    app.assert_wait("QA 1");
     assert!(
         !app.screen().contains("Side questions"),
-        "esc did not close the /btwList panel:\n{}",
+        "/btwList must not exist as a second-level panel:\n{}",
         app.screen()
     );
 
