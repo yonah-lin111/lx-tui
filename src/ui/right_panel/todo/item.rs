@@ -10,7 +10,7 @@ use crate::ui::{style, text, widgets};
 
 use super::{
     MAX_TODO_ITEM_ROWS, VisibleItem, cont_width_for, display_record, layout_visible_items,
-    list_index, row_branch_x, row_line_x_for, row_priority_x_for, row_status_x, row_text_x_for,
+    list_index, row_branch_x, row_line_x_for, row_priority_x, row_status_x, row_text_x_for,
     text_width_for, write_cell, write_string_in,
 };
 
@@ -88,22 +88,67 @@ pub(super) fn display_group_role(
     }
 }
 
-/// 聚合组子项首行与折行续行的 4 列连接符（位于 `list.x + 5..list.x + 9`）。
+/// 聚合组徽标的归属：组内最高优先级的显示槽位与优先级（并列取最靠前；忽略幽灵行）。
+pub(super) struct GroupPriority {
+    pub display: usize,
+    pub priority: TodoPriority,
+}
+
+/// 计算显示槽位 `display` 所在聚合组的徽标归属；单条返回自身。
+pub(super) fn group_priority(
+    state: &AppState,
+    display: usize,
+    ghost: Option<usize>,
+    total: usize,
+) -> Option<GroupPriority> {
+    let role = display_group_role(state, display, ghost, total);
+    let DisplayGroupRole::Member { offset, count } = role else {
+        let record = display_record(state, display)?;
+        return Some(GroupPriority {
+            display,
+            priority: record.priority,
+        });
+    };
+    let start = display.saturating_sub(offset);
+    let end = start.saturating_add(count).min(total);
+    let mut best: Option<GroupPriority> = None;
+    for candidate in start..end {
+        if ghost == Some(candidate) {
+            continue;
+        }
+        let Some(record) = display_record(state, candidate) else {
+            continue;
+        };
+        if best
+            .as_ref()
+            .is_none_or(|current| record.priority < current.priority)
+        {
+            best = Some(GroupPriority {
+                display: candidate,
+                priority: record.priority,
+            });
+        }
+    }
+    best
+}
+
+/// 聚合组子项首行与折行续行的 3 列连接符（位于 `list.x + 9..list.x + 12`）。
+///
+/// 锚点行的状态框与 `P(n)` 已移到连接符左侧，`─` 前导不再需要，锚点与非锚点同形。
 pub(super) fn group_connector_glyph(
     offset: usize,
     count: usize,
-    is_anchor: bool,
     line_offset: usize,
 ) -> &'static str {
     if line_offset > 0 {
-        return if offset + 1 < count { " │  " } else { "    " };
+        return if offset + 1 < count { "│  " } else { "   " };
     }
     if offset == 0 {
-        if is_anchor { "─┌─ " } else { " ┌─ " }
+        "┌─ "
     } else if offset + 1 < count {
-        if is_anchor { "─├─ " } else { " ├─ " }
+        "├─ "
     } else {
-        " └─ "
+        "└─ "
     }
 }
 
@@ -249,12 +294,19 @@ fn row_view<'a>(
     text_width: usize,
     cont_width: usize,
 ) -> Option<RowView<'a>> {
+    let total = state.todo.len() + usize::from(pending_new.is_some());
     if pending_new == Some(item.display) {
         let edit = state.todo.editing();
         let status = edit.map_or(TodoStatus::Todo, |e| e.initial_status);
+        let priority = if item.role.is_status_anchor() {
+            group_priority(state, item.display, pending_new, total)
+                .map_or(TodoPriority::P1, |badge| badge.priority)
+        } else {
+            TodoPriority::P1
+        };
         return Some(RowView {
             status,
-            priority: TodoPriority::P1,
+            priority,
             lines: vec![String::new()],
             selected: false,
             marker: state.todo_focused(),
@@ -273,9 +325,16 @@ fn row_view<'a>(
     let row_selected =
         state.todo_focused() && state.todo.selected() == Some(index) && !drag_source_dimmed;
     let hovered = active_drag.is_none() && state.todo_hover == Some(index);
+    // 聚合组只在状态锚点行绘制一次徽标，取组内最高优先级；非锚点行的值仅占位。
+    let priority = if item.role.is_status_anchor() {
+        group_priority(state, item.display, pending_new, total)
+            .map_or(record.priority, |badge| badge.priority)
+    } else {
+        record.priority
+    };
     Some(RowView {
         status: record.status,
-        priority: record.priority,
+        priority,
         lines: widgets::input::wrap_clamped_lines_indented(
             &record.text,
             text_width,
@@ -290,7 +349,7 @@ fn row_view<'a>(
     })
 }
 
-/// 绘制一个条目：整块选中底色 + 首行前缀（状态锚点 + 聚合树连接符 + 优先级徽标）+ 折行正文（或行内编辑）。
+/// 绘制一个条目：整块选中底色 + 首行前缀（状态锚点 + 优先级徽标 + 聚合树连接符）+ 折行正文（或行内编辑）。
 fn render_item(
     buf: &mut Buffer,
     list: Rect,
@@ -335,7 +394,6 @@ fn render_item(
         );
     }
     if let DisplayGroupRole::Member { offset, count } = row.role {
-        let is_anchor = row.role.is_status_anchor();
         let conn_style = if row.drag_source_dimmed {
             style::muted()
         } else {
@@ -346,19 +404,21 @@ fn render_item(
             let y = item
                 .y
                 .saturating_add(u16::try_from(line_offset).unwrap_or(u16::MAX));
-            let glyph = group_connector_glyph(offset, count, is_anchor, line_offset);
+            let glyph = group_connector_glyph(offset, count, line_offset);
             write_string_in(buf, list, branch_x, y, glyph, conn_style);
         }
     }
     let grouped = row.role.is_grouped();
-    render_priority_badge(
-        buf,
-        list,
-        row_priority_x_for(list, grouped),
-        item.y,
-        row.priority,
-        row.status,
-    );
+    if row.role.is_status_anchor() {
+        render_priority_badge(
+            buf,
+            list,
+            row_priority_x(list),
+            item.y,
+            row.priority,
+            row.status,
+        );
+    }
     match row.edit {
         Some(edit) => render_edit_item(buf, list, item, edit, grouped),
         None => {
@@ -373,7 +433,7 @@ fn render_item(
     }
 }
 
-/// 逐行绘制折行正文：单条首行缩进 9 列/续行 6 列，聚合组子项首行缩进 12 列/续行 9 列。
+/// 逐行绘制折行正文：单条首行缩进 9 列/续行 6 列，聚合组子项首行与续行统一缩进 12 列。
 fn render_wrapped_text(
     buf: &mut Buffer,
     list: Rect,
@@ -434,7 +494,7 @@ fn render_empty(list: Rect, buf: &mut Buffer) -> Option<(u16, u16)> {
     None
 }
 
-/// 绘制行内编辑：1~3 行软折行、续行与本条 `P(n)` 左对齐，并返回硬件光标坐标。
+/// 绘制行内编辑：1~3 行软折行（单条续行与 `P(n)` 左对齐、聚合组续行与正文对齐），并返回硬件光标坐标。
 ///
 /// 与行内多行输入共用 `widgets::input::multiline_view_scrolled_indented` 的视口与光标算法。
 fn render_edit_item(
