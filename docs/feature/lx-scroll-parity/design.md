@@ -1,6 +1,6 @@
 # lx 消息列表滚动对齐 opencode：设计
 
-> 状态：**已实现（`ed76d856`）**；P0~P4 完成，P5 未触发；待用户实机验收 / 待合并。
+> 状态：**已合并到 `dev`（`fc166ad7`）**；P0~P4 完成，P5 未触发；人工实机验收待用户确认。
 > 审查记录与修复状态见同目录 [`review.md`](review.md)。
 >
 > 参考实现：`/Users/yonah/projects/agent/opencode-dev/packages/tui`（以及依赖
@@ -596,4 +596,5 @@ cargo test --lib -- --ignored perf_lx_ --test-threads=1
 | P4 | 300 条验收夹具 + 性能断言 | dev/release 两套命令 |
 | P5 | 工具卡绘制缓存（仅当 4.7 触发条件成立） | **未触发，未实施**（expanded diff P95 8.65ms < 10ms） |
 
-实际实现落在单个提交 `ed76d856`（P0~P4 合在一起）；审查/修复见 `review.md`。
+实际实现落在 `ed76d856`（P0~P4 合在一起），review 修复在 `c942b28e`，
+合并提交为 `fc166ad7`；审查详情见 `review.md`。

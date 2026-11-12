@@ -4,10 +4,12 @@
 - **Worktree**：`.worktrees/lx-scroll-parity`
 - **基线**：`ab357047`（`dev`）
 - **首次实现提交**：`ed76d856`（`fix(lx): align history scrolling with opencode`）
+- **Review 修复提交**：`c942b28e`（`fix(lx): close scroll parity review findings`）
+- **合并提交**：`fc166ad7`（`Merge branch 'lx-scroll-parity' into dev`）
 - **Review 日期**：2026-11-12
-- **审查范围**：`ab357047..ed76d856` 的全部生产代码、测试与 feature 文档；重点覆盖缓存/快照、主历史与子 agent 详情锚点、滚轮/命中/选区、性能夹具。
+- **审查范围**：`ab357047..c942b28e` 的全部生产代码、测试与 feature 文档；重点覆盖缓存/快照、主历史与子 agent 详情锚点、滚轮/命中/选区、性能夹具。
 - **方法**：3 个只读 subagent 并行审查（缓存与快照、锚点与滚动、详情 UI 与文档），所有结论回到 HEAD 代码与定向测试复核。
-- **修复状态**：P0/P1/P2 与可修 P3 已全部落到工作区；未提交 Git。
+- **修复状态**：P0/P1/P2 与可修 P3 已全部落地并提交（`c942b28e`），随 `fc166ad7` 合并到 `dev`；人工实机验收待确认。
 
 ---
 
@@ -546,7 +548,7 @@ ready 迁移只覆盖几何入口，没有覆盖同一路径的渲染辅助函�
 
 ## 3. 修复与验证
 
-修复完成后的工作区验证（未提交）：
+修复完成后、合并前的验证（`c942b28e`）：
 
 ```bash
 cargo fmt --all
