@@ -4,7 +4,7 @@
 > 评审范围：`app/` 状态与更新、`event/` 数据流、`db/` 持久化、`chat/` 只读上下文、`ui/` 交互与 E2E。
 > 结论：**无 P0；P1 已按下方顺序修复并复测，P2/P3 保留为后续项。**
 >
-> 验证基线：`cargo test --lib` **5272 passed / 5 ignored**；BTW 相关过滤 **50 passed**；clippy/fmt 通过；真实 CLI+PTY E2E 全链路与缺失目标回退均通过（session `sess-18e74a2bb0702e18-0` / `BTW verify 3`）。
+> 验证基线：分支内 `cargo test --lib` **5272 passed / 5 ignored**、BTW 相关过滤 **50 passed**；合并后 `dev` 上 `cargo test --lib` **5300 passed / 6 ignored**；clippy/fmt 通过。真实 CLI+PTY E2E 在分支 session `sess-18e74a2bb0702e18-0`（`BTW verify 3`）与合并后 session `sess-18e74b8a3d756da0-0`（`BTW verify 4`）均通过；合并后线程 `btw-18e74b8d87e7df00-1` 最终目标 default。
 
 ## P0
 

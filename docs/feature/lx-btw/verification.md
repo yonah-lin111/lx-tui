@@ -162,3 +162,13 @@ BTW_VERIFY_WS="$WS" BTW_VERIFY_DB="$DB" BTW_VERIFY_TITLE='BTW verify 2' \
 - 全链路 `btw_chat_and_agent_mention_e2e`：8.56s 通过；默认 `lx`、`@Turing`、无新 `@` 的只读追问均完成；`read` 只读、`note.txt` 未改、jump-to-bottom、`/btwList` 通过。
 - 缺失目标 `btw_missing_previous_target_falls_back_e2e`：7.34s 通过；最终批次 `btw-1794484584713-2-1` 目标 `["default"]` completed，线程目标 `["default"]`，徽标 `To: lx`，无 `No matching subagent`。
 - 本轮修复与未完成项详见 [review.md](review.md)；历史会话 `BTW verify`/`BTW verify 2` 仍保留在 worktree 库。
+
+
+## 11. 合并到 dev 后的复测（`BTW verify 4`）
+
+- 合并提交：`4c925888`；合并冲突集中在 `src/ui/main_content/lx.rs`、`history_hit.rs`、`task.rs`。
+- fresh seed：`sess-18e74b8a3d756da0-0`（`BTW verify 4`），subagent `sub-18e74b8ad8cf8240-e`（`Turing` / explorer / completed），BTW 线程 `btw-18e74b8d87e7df00-1`。
+- `btw_chat_and_agent_mention_e2e`：**11.06s** 通过；默认 `lx`、`@Turing`、只读追问、jump-to-bottom、`/btwList` 均通过。
+- `btw_missing_previous_target_falls_back_e2e`：**6.25s** 通过；最后批次 `btw-1794486063653-2-1` 目标 `["default"]` completed，线程目标 `["default"]`，徽标 `To: lx`。
+- 合并前基线：`cargo test --lib` **5300 passed / 6 ignored**；`cargo clippy --all-targets -- -D warnings` 通过；`cargo fmt --check` 通过。
+- 清理：worktree 分支已删除；隔离库归档到 `~/.lx-t-dev/db/archive/lx-btw-df3a5393-20261112.tar.gz`，active 路径已移除；主工作区 DB 未替换。

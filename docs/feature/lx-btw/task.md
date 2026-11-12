@@ -1,6 +1,6 @@
 # `/btw` 开发任务与验收计划
 
-> 状态：**`feat/lx-btw` 首版已实现，评审修复见 [review.md](review.md)；等待用户验收/合并。**
+> 状态：**已合并到 `dev`（merge `4c925888`）；`feat/lx-btw` 工作区与分支已清理，评审修复见 [review.md](review.md)。**
 >
 > 设计依据：[design.md](design.md)。用户对 Q1～Q17 的确认仅确认对应产品边界，不代表批准实施。
 
@@ -580,3 +580,11 @@ cargo clippy --all-targets -- -D warnings
 - **P1 修复**：后台输出缓冲、启动恢复 session guard、结算单事务、认领失败收敛、`/btw prompt` 最新 QA、BTW composer 选区/滚动/复制/粘贴、`default` 哨兵、迟到 ThreadLoaded。
 - **P2 遗留**：单 `pending_submit` 代次、部分目标缺失静默缩小、多 pane 回投、picker 指针优先级、恢复 partial 聚合、MCP disabled/配置根冻结、subagent report 注入、工具回放 64 KiB/参数、`src/event/chat/btw.rs` 拆分、E2E nonce。
 - **验证**：`cargo test --lib` 5272 passed；BTW 过滤 50 passed；clippy/fmt 通过；`BTW verify 3` 全链路 E2E 8.56s、缺失目标回退 7.34s 通过；线程 `btw-18e74a342652ee60-1` 最终目标 default，最后批次 `btw-1794484584713-2-1` completed。
+
+### 21.1 合并验证（2026-11-12）
+
+- 合并提交：`4c925888`（`Merge branch 'feat/lx-btw' into dev`），父提交 `01b4d537`。
+- 合并冲突：`src/ui/main_content/lx.rs`、`history_hit.rs`、`task.rs`；保留 dev 的 Agents 阅读锚点与 stable owner，同时接入 BTW composer/picker/rows 和统一详情复制路径。
+- 合并后在 `BTW verify 4`（`sess-18e74b8a3d756da0-0`，同测试工作区）重跑真实 E2E：全链路 **11.06s**、缺失目标回退 **6.25s**，最终线程 `btw-18e74b8d87e7df00-1` 目标 `["default"]`，最后批次 `btw-1794486063653-2-1` completed。
+- 数据库：主工作区仍用 `~/.lx-t-dev/db/lx.db`；worktree 隔离库已归档到 `~/.lx-t-dev/db/archive/lx-btw-df3a5393-20261112.tar.gz` 后从 active worktrees 路径移除。
+- 清理：已停掉 worktree 下的 lx 进程，`git worktree remove .worktrees/lx-btw`，`git branch -d feat/lx-btw`。
