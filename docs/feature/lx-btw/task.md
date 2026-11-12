@@ -378,8 +378,8 @@ cargo clippy --all-targets -- -D warnings
 
 ### 13.2 `/btwList`：切换主 QA 节点
 
-- `/btwList`（别名 `/btw-list`，大小写不敏感）出现在 `/` 命令面板，也可直接在输入框输入。
-- 在 BTW 页签底部输入 `/btwList` + `Enter` 同样打开选择器。
+- `/btwList` 只属于 BTW 页签，**不进入主会话**的 `/` 命令面板：在 BTW 输入框输入 `/` 会打开 BTW 自己的命令面板（当前只有 `/btwList`）。
+- 键盘 `↑↓` 选择、`Enter`/`Tab` 采纳、`Esc` 关闭；鼠标点条目直接执行。
 - 选择器画在上方对话区：标题行 + `Q<n> 标题`，右侧 `● side thread` 表示该主问题已有旁路对话；`↑↓` 环绕移动，`Enter`/`Tab` 切换，`Esc` 关闭，鼠标点行直接切换。
 - 切换后按新 QA 加载线程历史，各自保留独立草稿；未加载过的 QA 首次进入仍是空线程。
 
@@ -394,3 +394,31 @@ cargo clippy --all-targets -- -D warnings
 - 删除输入框上方的独立归属行；`QA n · 标题 · To: <回答者>` 改为输入框**顶边框右上角**的胶囊，位置对齐主会话标题。
 - 胶囊使用固定暗海蓝底 + 柔天蓝字（`style::btw_qa_badge()`），不随会话配色或透明终端壁纸变化。
 - 底部面板高度从固定 6..8 行降为 5..7 行（顶边框 + tab + 1..3 行正文 + 上下边框），输入框默认仍是一行正文。
+
+## 14. BTW 命令面板、空输入框切 tab 与生成中 loading（2026-11-12 第三轮）
+
+### 14.1 BTW 专属 `/` 命令面板
+
+- `/btwList` 从主会话命令表移除（`SlashCommand::ALL` 不再包含它），主输入框输入 `/btwList` 不会打开 BTW 页签。
+- BTW composer 复用 `Lx.slash`：输入行首 `/` 时由 `refresh_composer_slash` 生成 `SlashPanel::Commands`，候选只包含 `BtwList`。
+- 键盘：`↑↓` 移动、`Enter`/`Tab` 执行、`Esc` 关闭；其余按键继续编辑并通过 `edit_composer` 重算过滤（删除 `/` 自动关闭）。
+- 鼠标：`press/lx.rs` 在 BTW 页签走 `select_btw_slash`，与主输入采纳路径隔离。
+- 面板几何复用 `input_rect` 的 BTW 分支（composer 上沿），因此不需要单独维护一套浮层坐标。
+
+### 14.2 空输入框 ←/→ 切换 tab
+
+- 焦点在 composer 且草稿为空时，`←`/`→` 调用共享的 `pane::cycle_task_tab` 轮转 Processes/Agents/BTW，并清理上一页的拖拽/高亮状态。
+- 草稿非空时按键仍落到编辑器移动光标，不会误切 tab。
+
+### 14.3 生成中 loading
+
+- 输入框与 tab 行之间固定留 1 行空行（面板高度回到 6..=8 行）；loading 画在**底部容器左上角**（该空行左侧），不是输入框上沿。
+- 文案沿用主会话阶段口径：运行中的工具 → `Running tools...`，开放思考 → `Thinking...`，其余 → `Working...`；带主会话同款扫描高亮。
+- `BtwThreadState::is_loading` 覆盖 `pending_submit`、未开始回答者计数与流式 assistant 消息；`advance_lx_loading` 只在 BTW 页签可见时推进 `thread.chat.loading_frame`，面板关闭不空转。
+
+### 14.4 验证
+
+```text
+cargo test --lib                                                  # 5251 passed
+cargo clippy --all-targets -- -D warnings
+```

@@ -38,6 +38,15 @@ pub(crate) fn draw_bottom(
         return None;
     };
     let thread = lx.btw.active_thread()?;
+    // 输入框与 tab 之间固定留一行：loading 落在**底部容器**左上角，而不是输入框上沿。
+    if composer.y > inner.y && thread.is_loading() {
+        super::super::chat_bar::draw_inline_loading(
+            grid,
+            Rect::new(inner.x, inner.y, inner.width, 1),
+            thread.chat.loading_frame,
+            loading_label(thread),
+        );
+    }
     let editor = thread.composer.editor();
     let visible = usize::from(composer.height.saturating_sub(2)).max(1);
     let total = editor.visual_rows().len().max(1);
@@ -47,6 +56,33 @@ pub(crate) fn draw_bottom(
     // 主问题归属放到输入框顶边框右上角（与主会话标题胶囊同一位置）。
     draw_qa_badge(grid, composer, lx);
     dims
+}
+
+/// 底部 loading 文案：沿用主会话的阶段口径（工具/思考/兜底），但不展示统计。
+fn loading_label(thread: &crate::app::state::lx::BtwThreadState) -> &'static str {
+    if let crate::app::state::RequestState::Streaming { assistant_id, .. } = &thread.chat.request
+        && let Some(message) = thread
+            .chat
+            .messages
+            .iter()
+            .find(|message| message.id == *assistant_id && message.role == "assistant")
+    {
+        if message.tools().any(|call| {
+            matches!(
+                call.status,
+                crate::app::state::ToolStatus::Pending | crate::app::state::ToolStatus::Running
+            )
+        }) {
+            return text::chat::RUNNING_TOOLS_LABEL;
+        }
+        if matches!(
+            message.steps.last(),
+            Some(crate::app::state::AssistantStepView::Part { part, .. }) if part.reasoning_open()
+        ) {
+            return text::chat::THINKING_LABEL;
+        }
+    }
+    text::chat::LOADING_LABEL
 }
 
 /// 输入框矩形（`task_list` 内部、归属提示之下）；未打开线程时 None。

@@ -46,8 +46,7 @@ pub use btw::{
     on_failed as on_btw_failed, on_finished as on_btw_finished, on_qa_list_loaded,
     on_recipient_started as on_btw_recipient_started, on_thread_loaded as on_btw_thread_loaded,
     on_tool_state as on_btw_tool_state, open_btw_list, open_btw_tab, select_btw_qa,
-    submit_current as submit_btw, toggle_btw_card, try_submit_btw_command,
-    try_submit_btw_list_command,
+    select_btw_slash, submit_current as submit_btw, toggle_btw_card, try_submit_btw_command,
 };
 pub use compact::{
     compact_command, on_compact_empty, on_compact_failed, on_compact_finished,
@@ -148,10 +147,6 @@ pub fn try_send(state: &mut AppState, pane: PaneId) -> bool {
     }
     // `/rename` 是纯元数据更新，同样早于入口/模型/busy 检查。
     if slash::try_submit_rename_command(state, pane) {
-        return true;
-    }
-    // `/btwList` 与 `/btw` 同样在排队/steer 之前拦截。
-    if btw::try_submit_btw_list_command(state, pane) {
         return true;
     }
     // `/btw` 在排队/steer 之前拦截：生成期间也必须进入旁路，不注入主任务。
@@ -944,7 +939,9 @@ pub fn advance_lx_loading(state: &mut AppState) -> bool {
         let recapping = target.lx.recap.pending.is_some();
         // 仍有子 agent 在跑：推进同一套 loading 帧（Agents 详情动画与等待行）。
         let agents_running = target.lx.agents.runs.iter().any(|run| run.is_running());
-        if !streaming && !compacting && !recapping && !agents_running {
+        // BTW 在后台生成：只有面板可见时才需要动画帧，关掉面板不空转重绘。
+        let btw_running = target.lx.is_btw_tab() && target.lx.btw.is_loading();
+        if !streaming && !compacting && !recapping && !agents_running && !btw_running {
             continue;
         }
         // ask 等待用户作答：主会话本轮耗时与扫描帧冻结，子 agent 动画不受影响。
@@ -991,6 +988,11 @@ pub fn advance_lx_loading(state: &mut AppState) -> bool {
                     }
                 }
             }
+            advanced = true;
+        }
+        // BTW 的帧独立推进：主轮次空闲时工具卡片/loading 扫描仍要动。
+        if btw_running {
+            target.lx.btw.advance_loading_frames();
             advanced = true;
         }
         changed |= advanced;

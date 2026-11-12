@@ -37,6 +37,8 @@ use crate::ui::{style, text};
 pub(super) const TOP_BORDER: u16 = 1;
 /// tab 行占用的行数（顶边框之下）。
 pub(super) const TAB_ROW: u16 = 1;
+/// BTW 页签：tab 行与输入框之间的空行（loading 指示器落在这一行的左上角）。
+pub(super) const COMPOSER_GAP: u16 = 1;
 /// 相邻键位提示之间的空档（列）。
 const HINT_GAP: usize = 2;
 /// item 列表最多显示的行数。
@@ -77,6 +79,7 @@ pub(super) fn task_panel_height(lx: &crate::app::state::Lx) -> u16 {
         .clamp(1, usize::from(btw::COMPOSER_MAX_ROWS));
     TOP_BORDER
         .saturating_add(TAB_ROW)
+        .saturating_add(COMPOSER_GAP)
         .saturating_add(u16::try_from(rows).unwrap_or(1))
         .saturating_add(2)
 }

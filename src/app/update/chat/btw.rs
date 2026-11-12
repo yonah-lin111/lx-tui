@@ -53,26 +53,6 @@ pub fn open_btw_tab(state: &mut AppState, pane: PaneId) -> bool {
     true
 }
 
-/// `/btwList`（兼容 `/btw-list`）命令入口：打开 QA 归属选择器。
-pub fn try_submit_btw_list_command(state: &mut AppState, pane: PaneId) -> bool {
-    let Some(input) = state.pane_anywhere(pane).and_then(|target| {
-        if target.view != crate::app::state::PaneView::Lx || target.lx.shell_mode() {
-            return None;
-        }
-        Some(target.lx.input.clone())
-    }) else {
-        return false;
-    };
-    if !is_btw_list_command(&input) {
-        return false;
-    }
-    if let Some(target) = state.pane_mut_anywhere(pane) {
-        target.lx.replace_input("");
-        target.lx.slash = None;
-    }
-    open_btw_list(state, pane)
-}
-
 fn is_btw_list_command(text: &str) -> bool {
     let line = text.trim();
     line.eq_ignore_ascii_case("/btwlist") || line.eq_ignore_ascii_case("/btw-list")
@@ -309,6 +289,7 @@ pub fn submit_current(state: &mut AppState, pane: PaneId) -> bool {
     );
     let revision = thread.composer.revision();
     thread.pending_submit = Some((submit_id.clone(), revision));
+    thread.pending_recipients = targets.len().max(1);
     let thread_id = thread.thread_id.clone();
     state
         .effects
@@ -350,6 +331,13 @@ pub fn stop_current(state: &mut AppState, pane: PaneId) -> bool {
         .btw
         .active_thread()
         .and_then(|thread| thread.thread_id.clone());
+    if let Some(thread) = state
+        .pane_mut_anywhere(pane)
+        .and_then(|target| target.lx.btw.active_thread_mut())
+    {
+        thread.pending_submit = None;
+        thread.pending_recipients = 0;
+    }
     state.effects.push(Effect::Btw(BtwEffect::Stop {
         pane,
         parent_session_id: session_id,
@@ -384,6 +372,59 @@ pub fn apply_input(
         return apply_picker_input(state, pane, command);
     }
     let focus = target.lx.btw.focus;
+    // BTW 输入框的 `/` 命令面板：导航/采纳/关闭由这里独占，其它按键继续编辑并重算。
+    let slash_open = target
+        .lx
+        .btw
+        .active_composer()
+        .is_some_and(|composer| composer.slash.is_some());
+    if slash_open {
+        use crate::app::actions::LxInput;
+        match command {
+            LxInput::Up | LxInput::Down => {
+                let delta = if command == LxInput::Up { -1 } else { 1 };
+                if let Some(panel) = state
+                    .pane_mut_anywhere(pane)
+                    .and_then(|target| target.lx.btw.active_composer_mut())
+                    .and_then(|composer| composer.slash.as_mut())
+                {
+                    panel.move_active(delta);
+                }
+                return true;
+            }
+            LxInput::Enter | LxInput::Tab => return accept_btw_composer_command(state, pane),
+            LxInput::Escape => {
+                if let Some(composer) = state
+                    .pane_mut_anywhere(pane)
+                    .and_then(|target| target.lx.btw.active_composer_mut())
+                {
+                    composer.slash = None;
+                }
+                return true;
+            }
+            _ => return edit_composer(state, pane, command),
+        }
+    }
+    // 空输入框：←/→ 轮转底部 tab（输入框里有内容时仍按光标移动处理）。
+    if focus == BtwFocus::Composer
+        && matches!(
+            command,
+            crate::app::actions::LxInput::Left | crate::app::actions::LxInput::Right
+        )
+        && target
+            .lx
+            .btw
+            .active_composer()
+            .is_some_and(|composer| composer.input.is_empty())
+    {
+        let delta = if command == crate::app::actions::LxInput::Left {
+            -1
+        } else {
+            1
+        };
+        crate::app::update::pane::cycle_task_tab(state, pane, delta);
+        return true;
+    }
     // 浮层优先：提及 / 粘贴 / 快捷引用 / md 块。
     let composer = target.lx.btw.active_composer();
     let panel_open = composer.is_some_and(|editor| {
@@ -472,6 +513,99 @@ pub fn apply_input(
 }
 
 /// 编辑 composer 的纯文本/选区命令。
+/// BTW 输入框的 `/` 面板候选：只列 BTW 自己的命令。
+fn btw_command_entries(query: &str) -> Vec<crate::app::state::SlashEntry> {
+    let query = query.trim_start_matches('/').to_ascii_lowercase();
+    let matched = ["btwlist", "btw-list"]
+        .iter()
+        .any(|keyword| keyword.starts_with(&query) || keyword.contains(&query));
+    if !matched {
+        return Vec::new();
+    }
+    vec![crate::app::state::SlashEntry::Command(
+        crate::app::state::lx::slash::SlashCommand::BtwList,
+    )]
+}
+
+/// 重算 BTW 输入框的 `/` 命令面板；只接管 `Commands`，不覆盖二级面板。
+fn refresh_composer_slash(composer: &mut Lx) {
+    if composer
+        .slash
+        .as_ref()
+        .is_some_and(|panel| !matches!(panel, crate::app::state::SlashPanel::Commands { .. }))
+    {
+        return;
+    }
+    let closed = |composer: &mut Lx| {
+        if matches!(
+            composer.slash,
+            Some(crate::app::state::SlashPanel::Commands { .. })
+        ) {
+            composer.slash = None;
+        }
+    };
+    let masked = crate::app::paste::mask_pasted_text(&composer.input);
+    let Some(query) = crate::app::state::lx::slash::slash_trigger(&masked, composer.cursor) else {
+        closed(composer);
+        return;
+    };
+    let items = btw_command_entries(&query);
+    if items.is_empty() {
+        closed(composer);
+        return;
+    }
+    composer.slash = Some(crate::app::state::SlashPanel::Commands {
+        items,
+        window: crate::app::state::lx::slash::PanelWindow::new(0),
+        query,
+    });
+}
+
+/// 采纳 BTW 输入框里高亮的 `/` 命令。
+fn accept_btw_composer_command(state: &mut AppState, pane: PaneId) -> bool {
+    let Some(command) = state
+        .pane_anywhere(pane)
+        .and_then(|target| target.lx.btw.active_composer())
+        .and_then(|composer| composer.slash.as_ref())
+        .and_then(|panel| panel.active_command_entry())
+        .map(|entry| match entry {
+            crate::app::state::SlashEntry::Command(command) => *command,
+        })
+    else {
+        return false;
+    };
+    if let Some(composer) = state
+        .pane_mut_anywhere(pane)
+        .and_then(|target| target.lx.btw.active_composer_mut())
+    {
+        composer.clear();
+        composer.slash = None;
+    }
+    match command {
+        crate::app::state::lx::slash::SlashCommand::BtwList => open_btw_list(state, pane),
+        _ => false,
+    }
+}
+
+/// 鼠标点选 BTW 输入框的 `/` 面板条目：按该条目的 Enter 语义采纳。
+pub fn select_btw_slash(state: &mut AppState, pane: PaneId, index: usize) -> bool {
+    let valid = state
+        .pane_mut_anywhere(pane)
+        .and_then(|target| target.lx.btw.active_composer_mut())
+        .and_then(|composer| composer.slash.as_mut())
+        .is_some_and(|panel| {
+            if index >= panel.item_count() {
+                return false;
+            }
+            let _ = panel.set_active(index);
+            true
+        });
+    if !valid {
+        return false;
+    }
+    accept_btw_composer_command(state, pane)
+}
+
 fn edit_composer(
     state: &mut AppState,
     pane: PaneId,
@@ -485,7 +619,9 @@ fn edit_composer(
     };
     let before = composer.revision();
     super::super::pane::apply_editor_edit(composer, command);
-    composer.revision() != before
+    let changed = composer.revision() != before;
+    refresh_composer_slash(composer);
+    changed
 }
 
 fn apply_picker_input(
@@ -938,6 +1074,7 @@ pub fn on_recipient_started(
         {
             return false;
         }
+        thread.pending_recipients = thread.pending_recipients.saturating_sub(1);
         thread.chat.messages.push(ChatMessageView {
             id: assistant_message_id.to_string(),
             sequence: 0,
@@ -1088,6 +1225,14 @@ pub fn on_finished(
 
 /// 事件层回投：提交失败（保留草稿）。
 pub fn on_failed(state: &mut AppState, pane: PaneId, message: &str) -> bool {
+    // 提交失败不会再有回答者开始：清掉等待标记，loading 必须立即消失、草稿保留可重试。
+    if let Some(thread) = state
+        .pane_mut_anywhere(pane)
+        .and_then(|target| target.lx.btw.active_thread_mut())
+    {
+        thread.pending_submit = None;
+        thread.pending_recipients = 0;
+    }
     show_lx_hint(state, pane, InputHintLevel::Error, message);
     true
 }
@@ -1235,22 +1380,57 @@ mod tests {
     }
 
     #[test]
-    fn btw_list_command_opens_the_picker_and_enter_switches_qa() {
+    fn btw_composer_slash_panel_lists_btwlist_and_opens_the_picker() {
         let (mut state, pane) = btw_pane();
-        // 用干净的 BTW 状态验证"首次打开"路径（默认停最新 QA）。
-        state.pane_mut_anywhere(pane).expect("pane").lx.btw.clear();
-        state.pane_mut_anywhere(pane).expect("pane").lx.input = "/btwList".to_string();
-        assert!(try_submit_btw_list_command(&mut state, pane));
+        // 在 BTW 输入框输入 `/`：打开 BTW 专属命令面板，而不是主会话的命令面板。
+        assert!(apply_input(&mut state, pane, LxInput::Char('/')));
+        let composer = state
+            .pane_anywhere(pane)
+            .expect("pane")
+            .lx
+            .btw
+            .active_composer()
+            .expect("composer");
+        let Some(crate::app::state::SlashPanel::Commands { items, .. }) = &composer.slash else {
+            panic!("/ 面板应打开");
+        };
+        assert_eq!(items.len(), 1, "BTW 面板只列 BTW 自己的命令");
+        assert!(matches!(
+            items[0],
+            crate::app::state::SlashEntry::Command(
+                crate::app::state::lx::slash::SlashCommand::BtwList
+            )
+        ));
         assert!(
-            state.pane_anywhere(pane).expect("pane").lx.input.is_empty(),
-            "命令文本必须被消费"
-        );
-        assert!(
-            state.pane_anywhere(pane).expect("pane").lx.btw.pending_pick,
-            "QA 列表未到达时先挂起选择器"
+            state.pane_anywhere(pane).expect("pane").lx.slash.is_none(),
+            "主输入框的 / 面板不能被 BTW 命令污染"
         );
 
-        // QA 列表回投：默认停最新 QA，并保留 DB 的 side-thread 标记。
+        // 继续输入过滤：完整命令仍保留唯一候选。
+        for ch in "btwlist".chars() {
+            assert!(apply_input(&mut state, pane, LxInput::Char(ch)));
+        }
+        assert!(matches!(
+            state
+                .pane_anywhere(pane)
+                .expect("pane")
+                .lx
+                .btw
+                .active_composer()
+                .expect("composer")
+                .slash,
+            Some(crate::app::state::SlashPanel::Commands { .. })
+        ));
+
+        // Enter 采纳：草稿被消费，QA 列表未到达时先挂起选择器。
+        assert!(apply_input(&mut state, pane, LxInput::Enter));
+        let btw = &state.pane_anywhere(pane).expect("pane").lx.btw;
+        assert!(btw.pending_pick);
+        let composer = btw.active_composer().expect("composer");
+        assert_eq!(composer.input, "");
+        assert!(composer.slash.is_none());
+
+        // QA 列表回投：默认停当前 QA，并保留 DB 的 side-thread 标记。
         assert!(on_qa_list_loaded(
             &mut state,
             pane,
@@ -1258,30 +1438,82 @@ mod tests {
             vec![qa("qa-1", true), qa("qa-2", false)],
         ));
         let btw = &state.pane_anywhere(pane).expect("pane").lx.btw;
-        assert_eq!(btw.picking, Some(1));
+        assert_eq!(btw.picking, Some(0));
         assert!(btw.has_side_thread(&btw.qa[0]));
         assert!(!btw.has_side_thread(&btw.qa[1]));
 
-        // ↑ 选到有旁路对话的 QA，Enter 切换并触发历史加载。
-        assert!(apply_input(&mut state, pane, LxInput::Up));
+        // ↓ 选到另一条 QA，Enter 切换并触发历史加载。
+        assert!(apply_input(&mut state, pane, LxInput::Down));
+        assert!(apply_input(&mut state, pane, LxInput::Enter));
+        let btw = &state.pane_anywhere(pane).expect("pane").lx.btw;
+        assert_eq!(btw.active.as_deref(), Some("qa-2"));
+        assert!(btw.picking.is_none());
+        assert!(state.effects.iter().any(|effect| matches!(
+            effect,
+            Effect::Btw(BtwEffect::LoadThread { qa_id, .. }) if qa_id == "qa-2"
+        )));
+    }
+
+    #[test]
+    fn empty_btw_composer_arrows_switch_tabs() {
+        let (mut state, pane) = btw_pane();
+        assert!(apply_input(&mut state, pane, LxInput::Left));
         assert_eq!(
             state
                 .pane_anywhere(pane)
                 .expect("pane")
                 .lx
-                .btw
-                .picked_qa()
-                .map(|summary| summary.qa_id.as_str()),
-            Some("qa-1")
+                .task
+                .as_ref()
+                .expect("task")
+                .tab,
+            TaskTab::Agents
         );
-        assert!(apply_input(&mut state, pane, LxInput::Enter));
-        let btw = &state.pane_anywhere(pane).expect("pane").lx.btw;
-        assert_eq!(btw.active.as_deref(), Some("qa-1"));
-        assert!(btw.picking.is_none());
-        assert!(state.effects.iter().any(|effect| matches!(
-            effect,
-            Effect::Btw(BtwEffect::LoadThread { qa_id, .. }) if qa_id == "qa-1"
-        )));
+    }
+
+    #[test]
+    fn non_empty_btw_composer_arrows_move_the_cursor() {
+        let (mut state, pane) = btw_pane();
+        state
+            .pane_mut_anywhere(pane)
+            .expect("pane")
+            .lx
+            .btw
+            .active_composer_mut()
+            .expect("composer")
+            .insert_char('x');
+        let _ = apply_input(&mut state, pane, LxInput::Left);
+        let target = state.pane_anywhere(pane).expect("pane");
+        assert_eq!(target.lx.task.as_ref().expect("task").tab, TaskTab::Btw);
+        assert_eq!(target.lx.btw.active_composer().expect("composer").cursor, 0);
+    }
+
+    #[test]
+    fn btw_loading_frames_advance_while_running() {
+        let (mut state, pane) = btw_pane();
+        let before = {
+            let thread = state
+                .pane_mut_anywhere(pane)
+                .expect("pane")
+                .lx
+                .btw
+                .active_thread_mut()
+                .expect("thread");
+            thread.pending_submit = Some(("prompt".into(), 1));
+            assert!(thread.is_loading());
+            thread.chat.loading_frame
+        };
+        assert!(super::super::advance_lx_loading(&mut state));
+        let frame = state
+            .pane_anywhere(pane)
+            .expect("pane")
+            .lx
+            .btw
+            .active_thread()
+            .expect("thread")
+            .chat
+            .loading_frame;
+        assert_eq!(frame, before + 1);
     }
 
     #[test]

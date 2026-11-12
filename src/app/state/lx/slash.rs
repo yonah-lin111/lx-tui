@@ -105,7 +105,7 @@ pub enum SlashCommand {
 
 impl SlashCommand {
     /// 全部命令（固定顺序）。
-    pub const ALL: [SlashCommand; 13] = [
+    pub const ALL: [SlashCommand; 12] = [
         SlashCommand::Model,
         SlashCommand::Resume,
         SlashCommand::Fork,
@@ -118,7 +118,6 @@ impl SlashCommand {
         SlashCommand::Connect,
         SlashCommand::Mcp,
         SlashCommand::Btw,
-        SlashCommand::BtwList,
     ];
 
     /// 命令名（不含 `/`）。

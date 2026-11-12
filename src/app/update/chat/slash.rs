@@ -590,7 +590,8 @@ pub fn apply_slash_command(state: &mut AppState, pane: PaneId, command: SlashCom
             }
             false
         }
-        SlashCommand::BtwList => super::btw::open_btw_list(state, pane),
+        // `/btwList` 只在 BTW 输入框的 `/` 面板里提供，主会话不暴露。
+        SlashCommand::BtwList => false,
     }
 }
 

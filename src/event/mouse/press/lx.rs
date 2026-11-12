@@ -179,7 +179,15 @@ pub(super) fn handle_lx_pane_mouse_down_left(
         ui::main_content::lx::slash_item_at(inner, &target.lx, mouse.column, mouse.row)
     });
     if let Some(index) = slash_hit {
-        update::select_lx_slash(state, pane, index);
+        // BTW 页签的 `/` 面板挂在独立 composer 上，不能走主输入的采纳路径。
+        if state
+            .pane_anywhere(pane)
+            .is_some_and(|target| target.lx.is_btw_tab())
+        {
+            update::select_btw_slash(state, pane, index);
+        } else {
+            update::select_lx_slash(state, pane, index);
+        }
         *dirty = true;
         return;
     }

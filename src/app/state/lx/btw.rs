@@ -123,6 +123,11 @@ pub struct BtwThreadState {
     pub submit_seq: u64,
     /// 正在等待本地 ACK 的提交。
     pub pending_submit: Option<(String, u64)>,
+    /// 已提交但尚未开始运行的回答者数（含排队等全局槽位的）。
+    ///
+    /// `RecipientStarted` 到达时减一，此后该回答者由流式 assistant 消息覆盖；
+    /// 这样 ACK 后到第一个回答者开始、以及回答者之间排队时 loading 都不会闪断。
+    pub pending_recipients: usize,
 }
 
 impl BtwThreadState {
@@ -144,6 +149,7 @@ impl BtwThreadState {
             loaded: false,
             submit_seq: 0,
             pending_submit: None,
+            pending_recipients: 0,
         }
     }
 
@@ -159,6 +165,19 @@ impl BtwThreadState {
             crate::ui::text::LX_BTW_TARGETS_PREFIX,
             labels.join(", ")
         )
+    }
+
+    /// 该线程是否仍在生成/等待本地 ACK（决定底部 loading 行与动画帧）。
+    pub fn is_loading(&self) -> bool {
+        self.pending_submit.is_some()
+            || self.pending_recipients > 0
+            || self.chat.status.streaming
+            || self.chat.request.is_busy()
+            || self
+                .chat
+                .messages
+                .iter()
+                .any(|message| message.role == "assistant" && message.status == "streaming")
     }
 
     /// 当前有效回答者集合；为空时回退默认助手。
@@ -351,6 +370,23 @@ impl LxBtw {
     /// 全部线程（QA 列表按主 QA 顺序由外部提供，这里只读视图）。
     pub fn threads(&self) -> impl Iterator<Item = &BtwThreadState> {
         self.threads.values()
+    }
+
+    /// 是否有线程仍在生成/等待（BTW 页签的 loading 行与动画帧）。
+    pub fn is_loading(&self) -> bool {
+        self.threads.values().any(|thread| thread.is_loading())
+    }
+
+    /// 推进所有在跑线程的 loading 帧；返回是否有线程在跑。
+    pub fn advance_loading_frames(&mut self) -> bool {
+        let mut running = false;
+        for thread in self.threads.values_mut() {
+            if thread.is_loading() {
+                thread.chat.loading_frame = thread.chat.loading_frame.wrapping_add(1);
+                running = true;
+            }
+        }
+        running
     }
 
     /// 窗格尺寸变化后让所有线程重新量行。

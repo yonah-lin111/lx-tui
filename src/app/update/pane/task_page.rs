@@ -395,6 +395,24 @@ pub fn select_task_agent_filter(
     changed
 }
 
+/// 轮转底部 tab 并清理上一页的拖拽/高亮状态；返回是否切换。
+pub fn cycle_task_tab(state: &mut AppState, pane: PaneId, delta: isize) -> bool {
+    let cycled = state
+        .pane_mut_anywhere(pane)
+        .and_then(|target| target.lx.task.as_mut())
+        .is_some_and(|page| page.cycle_tab(delta));
+    if cycled {
+        state.task_scroll_drag = None;
+        state.task_list_scroll_drag = None;
+        state.task_agents_scroll_drag = None;
+        clamp_agents_window(state, pane);
+        ensure_selected_agent_loaded(state, pane);
+        crate::app::update::clear_lx_selection_for(state, pane);
+        crate::app::update::chat::btw::ensure_loaded(state, pane);
+    }
+    cycled
+}
+
 pub(super) fn apply_task_page_input(state: &mut AppState, pane: PaneId, command: LxInput) {
     // BTW 页签：独立焦点与 composer，整块路由到自己的编辑器。
     if state
@@ -463,34 +481,10 @@ pub(super) fn apply_task_page_input(state: &mut AppState, pane: PaneId, command:
         }
         // ←/→ 换 tab（对齐 opencode composer 的左右切 tab）。
         LxInput::Left => {
-            let cycled = state
-                .pane_mut_anywhere(pane)
-                .and_then(|target| target.lx.task.as_mut())
-                .is_some_and(|page| page.cycle_tab(-1));
-            if cycled {
-                state.task_scroll_drag = None;
-                state.task_list_scroll_drag = None;
-                state.task_agents_scroll_drag = None;
-                clamp_agents_window(state, pane);
-                ensure_selected_agent_loaded(state, pane);
-                crate::app::update::clear_lx_selection_for(state, pane);
-                crate::app::update::chat::btw::ensure_loaded(state, pane);
-            }
+            cycle_task_tab(state, pane, -1);
         }
         LxInput::Right => {
-            let cycled = state
-                .pane_mut_anywhere(pane)
-                .and_then(|target| target.lx.task.as_mut())
-                .is_some_and(|page| page.cycle_tab(1));
-            if cycled {
-                state.task_scroll_drag = None;
-                state.task_list_scroll_drag = None;
-                state.task_agents_scroll_drag = None;
-                clamp_agents_window(state, pane);
-                ensure_selected_agent_loaded(state, pane);
-                crate::app::update::clear_lx_selection_for(state, pane);
-                crate::app::update::chat::btw::ensure_loaded(state, pane);
-            }
+            cycle_task_tab(state, pane, 1);
         }
         // `Tab`：Agents 页签轮转状态筛选（all -> active -> done）。
         LxInput::Tab => {
