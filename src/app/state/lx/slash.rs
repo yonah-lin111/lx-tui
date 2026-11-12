@@ -99,11 +99,13 @@ pub enum SlashCommand {
     Mcp,
     /// `/btw [prompt]`：针对当前主 QA 的只读旁路问答。
     Btw,
+    /// `/btwList`：在已有主 QA 之间切换旁路对话。
+    BtwList,
 }
 
 impl SlashCommand {
     /// 全部命令（固定顺序）。
-    pub const ALL: [SlashCommand; 12] = [
+    pub const ALL: [SlashCommand; 13] = [
         SlashCommand::Model,
         SlashCommand::Resume,
         SlashCommand::Fork,
@@ -116,6 +118,7 @@ impl SlashCommand {
         SlashCommand::Connect,
         SlashCommand::Mcp,
         SlashCommand::Btw,
+        SlashCommand::BtwList,
     ];
 
     /// 命令名（不含 `/`）。
@@ -133,6 +136,7 @@ impl SlashCommand {
             Self::Connect => "connect",
             Self::Mcp => "mcp",
             Self::Btw => "btw",
+            Self::BtwList => "btwlist",
         }
     }
 
@@ -151,6 +155,7 @@ impl SlashCommand {
             Self::Connect => &[],
             Self::Mcp => &["mcps"],
             Self::Btw => &[],
+            Self::BtwList => &["btw-list"],
         }
     }
 
@@ -169,6 +174,7 @@ impl SlashCommand {
             Self::Connect => "/connect",
             Self::Mcp => "/mcp",
             Self::Btw => "/btw",
+            Self::BtwList => "/btwList",
         }
     }
 
@@ -187,6 +193,7 @@ impl SlashCommand {
             Self::Connect => crate::ui::text::LX_CONNECT_COMMAND_DESC,
             Self::Mcp => crate::ui::text::LX_MCP_COMMAND_DESC,
             Self::Btw => crate::ui::text::LX_BTW_COMMAND_DESC,
+            Self::BtwList => crate::ui::text::LX_BTW_LIST_COMMAND_DESC,
         }
     }
 

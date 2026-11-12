@@ -194,6 +194,10 @@ pub struct LxBtw {
     pub qa_window: usize,
     /// `/btw prompt` 暂存：QA 列表到达后立即提交一次（避免普通草稿被误发）。
     pub pending_prompt: bool,
+    /// `/btwList` 选择器：当前高亮的 QA 下标（`None` 表示未打开）。
+    pub picking: Option<usize>,
+    /// `/btwList` 在 QA 列表尚未到达时暂存，到达后自动打开选择器。
+    pub pending_pick: bool,
 }
 
 impl LxBtw {
@@ -241,6 +245,65 @@ impl LxBtw {
         state
     }
 
+    /// 打开 `/btwList` 选择器：默认停在当前 QA，没有则停在最后一条。
+    pub fn open_picker(&mut self) -> bool {
+        if self.qa.is_empty() {
+            return false;
+        }
+        let index = self
+            .active
+            .as_deref()
+            .and_then(|qa_id| self.qa.iter().position(|summary| summary.qa_id == qa_id))
+            .unwrap_or(self.qa.len() - 1);
+        self.picking = Some(index.min(self.qa.len() - 1));
+        true
+    }
+
+    /// 关闭选择器。
+    pub fn close_picker(&mut self) -> bool {
+        self.picking.take().is_some()
+    }
+
+    /// 选择器上下移动（自动环绕）。
+    pub fn move_picker(&mut self, delta: isize) -> bool {
+        let Some(selected) = self.picking else {
+            return false;
+        };
+        if self.qa.is_empty() {
+            self.picking = None;
+            return true;
+        }
+        let len = self.qa.len();
+        let next = if delta < 0 {
+            selected.checked_sub(1).unwrap_or(len - 1)
+        } else {
+            (selected + 1) % len
+        };
+        self.picking = Some(next);
+        true
+    }
+
+    /// 当前高亮的 QA（供选择器渲染与确认）。
+    pub fn picked_qa(&self) -> Option<&BtwQaSummary> {
+        self.picking.and_then(|index| self.qa.get(index))
+    }
+
+    /// 选择器列表的窗口起点：保证高亮行在 `visible` 行内。
+    pub fn picker_window(&self, visible: usize) -> usize {
+        let selected = self.picking.unwrap_or(0);
+        let visible = visible.max(1);
+        let start = selected.saturating_sub(visible - 1);
+        start.min(self.qa.len().saturating_sub(visible))
+    }
+
+    /// 该 QA 是否已有旁路对话：DB 标记，或本进程已加载到消息/线程。
+    pub fn has_side_thread(&self, summary: &BtwQaSummary) -> bool {
+        summary.has_thread
+            || self.threads.get(&summary.qa_id).is_some_and(|thread| {
+                thread.thread_id.is_some() || !thread.chat.messages.is_empty()
+            })
+    }
+
     /// 显式切换当前 QA。
     pub fn select_qa(&mut self, qa_id: &str) -> bool {
         if self.active.as_deref() == Some(qa_id) {
@@ -258,6 +321,8 @@ impl LxBtw {
         self.focus = BtwFocus::Composer;
         self.qa_window = 0;
         self.pending_prompt = false;
+        self.picking = None;
+        self.pending_pick = false;
     }
 
     /// 按 child session 找到线程（事件回投用）。

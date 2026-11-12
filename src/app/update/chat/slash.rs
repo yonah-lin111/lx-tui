@@ -590,6 +590,7 @@ pub fn apply_slash_command(state: &mut AppState, pane: PaneId, command: SlashCom
             }
             false
         }
+        SlashCommand::BtwList => super::btw::open_btw_list(state, pane),
     }
 }
 

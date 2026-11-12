@@ -367,3 +367,30 @@ cargo clippy --all-targets -- -D warnings
 - **根因**：`task::draw_list` 已把 `list_rect`（顶边框 + tab 行之下）传给 `btw::draw_bottom`，后者又减了一次 `TOP_BORDER + TAB_ROW`，内容区只剩 2 行，`avail < 3` 恒成立 → composer 永远返回 `None`。表现就是只剩归属行，键入内容落在不可见输入框里。
 - **修复**：`draw_bottom` 直接使用传入的 list 矩形；`composer_rect`（外层入口）仍负责扣一次。
 - **回归测试**：`btw_bottom_keeps_the_composer_visible_for_a_one_line_draft` 断言一行草稿时面板 6 行、composer 3 行、`draw_bottom` 返回 `Some`。
+
+## 13. 交互修复与 `/btwList`（2026-11-12 第二轮）
+
+### 13.1 消息折叠仍不可用
+
+- **根因**：卡片命中走 `task::task_output_rect`，但它只允许 `TaskTab::Agents`，BTW 永远拿不到输出区矩形 → `task_btw_card_target_at` 恒为 `None`。同时主历史的 `history_view` 在任务页打开时仍返回主聊天几何，右端滚动条会抢点击。
+- **修复**：`task_output_rect` 允许 `Agents | Btw`；`history_view` / `history_view_ready` 在 `lx.task.is_some()` 时返回 `None`。
+- **回归**：`btw_conversation_exposes_card_hits_for_folding` 扫描 BTW 输出区并断言能命中思考卡片。
+
+### 13.2 `/btwList`：切换主 QA 节点
+
+- `/btwList`（别名 `/btw-list`，大小写不敏感）出现在 `/` 命令面板，也可直接在输入框输入。
+- 在 BTW 页签底部输入 `/btwList` + `Enter` 同样打开选择器。
+- 选择器画在上方对话区：标题行 + `Q<n> 标题`，右侧 `● side thread` 表示该主问题已有旁路对话；`↑↓` 环绕移动，`Enter`/`Tab` 切换，`Esc` 关闭，鼠标点行直接切换。
+- 切换后按新 QA 加载线程历史，各自保留独立草稿；未加载过的 QA 首次进入仍是空线程。
+
+### 13.3 `@` 面板打开后无法退格
+
+- **根因**：BTW composer 的浮层处理只接管导航键，其余按键直接返回 `false`，`@` 面板打开后退格/字符输入被吞掉。
+- **修复**：提及面板可见时把剩余按键交给 `apply_editor_edit`，退格可以删掉 `@`，继续输入会重新过滤候选；与主输入行为一致。
+- **回归**：`backspace_removes_the_at_trigger_while_the_mention_panel_is_open`。
+
+### 13.4 QA 归属移到输入框右上角
+
+- 删除输入框上方的独立归属行；`QA n · 标题 · To: <回答者>` 改为输入框**顶边框右上角**的胶囊，位置对齐主会话标题。
+- 胶囊使用固定暗海蓝底 + 柔天蓝字（`style::btw_qa_badge()`），不随会话配色或透明终端壁纸变化。
+- 底部面板高度从固定 6..8 行降为 5..7 行（顶边框 + tab + 1..3 行正文 + 上下边框），输入框默认仍是一行正文。

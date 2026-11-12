@@ -1024,17 +1024,64 @@ fn btw_bottom_keeps_the_composer_visible_for_a_one_line_draft() {
     });
     lx.btw.ensure_thread("qa-1");
 
-    // 一行草稿：面板 6 行（顶边框 + tab + 归属行 + 3 行输入框）。
+    // 一行草稿：面板 5 行（顶边框 + tab + 3 行输入框），归属胶囊画在输入框顶边框。
     let height = task_panel_height(&lx);
-    assert_eq!(height, 6);
+    assert_eq!(height, 5);
     let panel = Rect::new(0, 0, 80, height);
     let list = list_rect(panel);
     let composer = super::btw::composer_rect(panel, &lx).expect("composer rect");
     assert_eq!(composer.height, 3, "默认一行正文 + 上下边框");
-    assert_eq!(composer.y, list.y + 1, "归属行紧贴输入框上沿");
+    assert_eq!(composer.y, list.y, "输入框顶边框承载归属胶囊");
 
     // 回归：`draw_bottom` 收到的已是 list 矩形，不能再扣一次顶边框/tab 行。
     let mut grid = super::super::grid::Grid::new(panel);
     let dims = super::btw::draw_bottom(&mut grid, list, &lx, lx.task.as_ref().expect("task"));
     assert!(dims.is_some(), "输入框必须真的画出来");
+}
+
+#[test]
+fn btw_conversation_exposes_card_hits_for_folding() {
+    let mut lx = Lx::new();
+    lx.task = Some(TaskPage {
+        tab: TaskTab::Btw,
+        ..Default::default()
+    });
+    lx.btw.ensure_thread("qa-1");
+    let mut message = text_message("m-1", "assistant", "answer");
+    message.steps.push(AssistantStepView::Part {
+        position: 1,
+        part: ChatPartView {
+            kind: crate::chat::events::PartKind::Reasoning,
+            content: "thinking about it".into(),
+            provider_metadata_json: None,
+            started_at_ms: None,
+            ended_at_ms: None,
+            completed_at_ms: None,
+        },
+    });
+    let thread = lx.btw.active_thread_mut().expect("thread");
+    thread.loaded = true;
+    thread.chat.messages.push(message);
+    thread.rows_dirty = true;
+
+    let area = Rect::new(0, 0, 80, 24);
+    let output = task_output_rect(area, &lx).expect("BTW output rect");
+    let mut cache = crate::ui::PaneCache::default();
+    // 先量一次行，保证命中用的快照就绪。
+    let _ = btw_rows(area, &lx, &mut cache);
+
+    let mut hit = None;
+    for row in output.y..output.bottom() {
+        if let Some(target) = super::super::history_hit::task_btw_card_target_at(
+            area,
+            &lx,
+            output.x + 4,
+            row,
+            &mut cache,
+        ) {
+            hit = Some(target);
+            break;
+        }
+    }
+    assert!(hit.is_some(), "BTW 对话区必须能命中思考/工具折叠卡片");
 }

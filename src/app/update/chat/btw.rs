@@ -53,6 +53,96 @@ pub fn open_btw_tab(state: &mut AppState, pane: PaneId) -> bool {
     true
 }
 
+/// `/btwList`（兼容 `/btw-list`）命令入口：打开 QA 归属选择器。
+pub fn try_submit_btw_list_command(state: &mut AppState, pane: PaneId) -> bool {
+    let Some(input) = state.pane_anywhere(pane).and_then(|target| {
+        if target.view != crate::app::state::PaneView::Lx || target.lx.shell_mode() {
+            return None;
+        }
+        Some(target.lx.input.clone())
+    }) else {
+        return false;
+    };
+    if !is_btw_list_command(&input) {
+        return false;
+    }
+    if let Some(target) = state.pane_mut_anywhere(pane) {
+        target.lx.replace_input("");
+        target.lx.slash = None;
+    }
+    open_btw_list(state, pane)
+}
+
+fn is_btw_list_command(text: &str) -> bool {
+    let line = text.trim();
+    line.eq_ignore_ascii_case("/btwlist") || line.eq_ignore_ascii_case("/btw-list")
+}
+
+/// 打开 QA 选择器：页签已开时直接就地打开（必要时补拉列表），否则先打开页签。
+pub fn open_btw_list(state: &mut AppState, pane: PaneId) -> bool {
+    let already = state
+        .pane_anywhere(pane)
+        .is_some_and(|target| target.lx.is_btw_tab());
+    if already {
+        let Some(parent_session_id) = state
+            .pane_anywhere(pane)
+            .and_then(|target| target.lx.chat.session_id.clone())
+        else {
+            return false;
+        };
+        state.effects.push(Effect::Btw(BtwEffect::LoadQaList {
+            pane,
+            parent_session_id,
+        }));
+    } else if !open_btw_tab(state, pane) {
+        return false;
+    }
+    let Some(target) = state.pane_mut_anywhere(pane) else {
+        return false;
+    };
+    if target.lx.btw.qa.is_empty() {
+        target.lx.btw.pending_pick = true;
+    } else {
+        target.lx.btw.open_picker();
+    }
+    true
+}
+
+/// 选择器确认/点击：切到目标 QA 并加载它的线程历史。
+pub fn select_btw_qa(state: &mut AppState, pane: PaneId, index: usize) -> bool {
+    let Some(qa_id) = state
+        .pane_anywhere(pane)
+        .and_then(|target| target.lx.btw.qa.get(index))
+        .map(|summary| summary.qa_id.clone())
+    else {
+        return false;
+    };
+    switch_qa(state, pane, &qa_id)
+}
+
+fn switch_qa(state: &mut AppState, pane: PaneId, qa_id: &str) -> bool {
+    let Some(parent_session_id) = state
+        .pane_anywhere(pane)
+        .and_then(|target| target.lx.chat.session_id.clone())
+    else {
+        return false;
+    };
+    let Some(target) = state.pane_mut_anywhere(pane) else {
+        return false;
+    };
+    target.lx.btw.select_qa(qa_id);
+    target.lx.btw.close_picker();
+    target.lx.btw.pending_pick = false;
+    target.lx.btw.focus = BtwFocus::Composer;
+    state.effects.push(Effect::Btw(BtwEffect::LoadThread {
+        pane,
+        parent_session_id,
+        qa_id: qa_id.to_string(),
+    }));
+    crate::app::update::sync_lx_mention_root(state, pane);
+    true
+}
+
 /// `/btw [prompt]` 命令入口：打开页签，把 prompt 放入当前 QA 的 composer 并提交。
 ///
 /// 裸 `/btw` 只回显 `"/btw "` 与灰色参数提示，不发送。
@@ -289,6 +379,10 @@ pub fn apply_input(
     let Some(target) = state.pane_anywhere(pane) else {
         return false;
     };
+    // QA 选择器优先：打开期间独占键盘（↑↓/Enter/Esc），不许落进草稿。
+    if target.lx.btw.picking.is_some() {
+        return apply_picker_input(state, pane, command);
+    }
     let focus = target.lx.btw.focus;
     // 浮层优先：提及 / 粘贴 / 快捷引用 / md 块。
     let composer = target.lx.btw.active_composer();
@@ -321,7 +415,23 @@ pub fn apply_input(
             true
         }
         LxInput::Enter => match focus {
-            BtwFocus::Composer => submit_current(state, pane),
+            BtwFocus::Composer => {
+                let is_list = state
+                    .pane_anywhere(pane)
+                    .and_then(|target| target.lx.btw.active_composer())
+                    .is_some_and(|composer| is_btw_list_command(&composer.input));
+                if is_list {
+                    if let Some(composer) = state
+                        .pane_mut_anywhere(pane)
+                        .and_then(|target| target.lx.btw.active_composer_mut())
+                    {
+                        composer.clear();
+                    }
+                    open_btw_list(state, pane)
+                } else {
+                    submit_current(state, pane)
+                }
+            }
             BtwFocus::Conversation => false,
         },
         LxInput::Up | LxInput::Down => match focus {
@@ -376,6 +486,41 @@ fn edit_composer(
     let before = composer.revision();
     super::super::pane::apply_editor_edit(composer, command);
     composer.revision() != before
+}
+
+fn apply_picker_input(
+    state: &mut AppState,
+    pane: PaneId,
+    command: crate::app::actions::LxInput,
+) -> bool {
+    use crate::app::actions::LxInput;
+    match command {
+        LxInput::Up | LxInput::Down => {
+            let delta = if command == LxInput::Up { -1 } else { 1 };
+            state
+                .pane_mut_anywhere(pane)
+                .and_then(|target| {
+                    let btw = &mut target.lx.btw;
+                    btw.picking.map(|_| btw.move_picker(delta))
+                })
+                .unwrap_or(false)
+        }
+        LxInput::Enter | LxInput::Tab => {
+            let Some(qa_id) = state
+                .pane_anywhere(pane)
+                .and_then(|target| target.lx.btw.picked_qa())
+                .map(|summary| summary.qa_id.clone())
+            else {
+                return false;
+            };
+            switch_qa(state, pane, &qa_id)
+        }
+        LxInput::Escape => state
+            .pane_mut_anywhere(pane)
+            .is_some_and(|target| target.lx.btw.close_picker()),
+        // 选择器打开时吞掉其它按键，避免误改草稿。
+        _ => true,
+    }
 }
 
 /// 浮层优先的按键处理（与主输入同一套面板语义）。
@@ -484,6 +629,13 @@ fn apply_composer_panel_input(
             }
             _ => {}
         }
+    }
+    // `@` 面板只接管导航/采纳；其余按键继续落回草稿。
+    //
+    // 之前这里直接返回 false，导致面板打开后退格删不掉 `@`、继续输入也进不了过滤器
+    // （按键被面板吞掉）。与主输入一致：编辑后退格/字符会重新触发面板。
+    if composer.mention_visible() {
+        return super::super::pane::apply_editor_edit(composer, command);
     }
     if composer.refer_active() {
         match command {
@@ -627,8 +779,13 @@ pub fn on_qa_list_loaded(
     }
     if target.lx.btw.qa.is_empty() {
         target.lx.btw.pending_prompt = false;
+        target.lx.btw.pending_pick = false;
         show_lx_hint(state, pane, InputHintLevel::Warning, text::LX_BTW_NO_QA);
         return true;
+    }
+    if target.lx.btw.pending_pick {
+        target.lx.btw.pending_pick = false;
+        target.lx.btw.open_picker();
     }
     let qa_id = target
         .lx
@@ -1042,4 +1199,123 @@ pub fn toggle_btw_card(
         thread.rows_dirty = true;
     }
     changed
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::app::actions::LxInput;
+    use crate::app::state::{AppState, PaneView, TaskPage, TaskTab};
+
+    fn btw_pane() -> (AppState, PaneId) {
+        let mut state = AppState::demo();
+        let pane = state.active_tab().layout.focus();
+        let target = state.pane_mut_anywhere(pane).expect("pane");
+        target.view = PaneView::Lx;
+        target.lx.entry = crate::app::state::LxEntry::Native;
+        target.lx.chat.session_id = Some("sess-test".into());
+        target.lx.task = Some(TaskPage {
+            tab: TaskTab::Btw,
+            ..Default::default()
+        });
+        target.lx.btw.ensure_thread("qa-1");
+        target
+            .lx
+            .sync_btw_composer_context(Some(std::env::temp_dir()), None);
+        (state, pane)
+    }
+
+    fn qa(id: &str, has_thread: bool) -> BtwQaSummary {
+        BtwQaSummary {
+            qa_id: id.to_string(),
+            title: format!("question {id}"),
+            has_thread,
+            status: "idle".to_string(),
+        }
+    }
+
+    #[test]
+    fn btw_list_command_opens_the_picker_and_enter_switches_qa() {
+        let (mut state, pane) = btw_pane();
+        // 用干净的 BTW 状态验证"首次打开"路径（默认停最新 QA）。
+        state.pane_mut_anywhere(pane).expect("pane").lx.btw.clear();
+        state.pane_mut_anywhere(pane).expect("pane").lx.input = "/btwList".to_string();
+        assert!(try_submit_btw_list_command(&mut state, pane));
+        assert!(
+            state.pane_anywhere(pane).expect("pane").lx.input.is_empty(),
+            "命令文本必须被消费"
+        );
+        assert!(
+            state.pane_anywhere(pane).expect("pane").lx.btw.pending_pick,
+            "QA 列表未到达时先挂起选择器"
+        );
+
+        // QA 列表回投：默认停最新 QA，并保留 DB 的 side-thread 标记。
+        assert!(on_qa_list_loaded(
+            &mut state,
+            pane,
+            "sess-test",
+            vec![qa("qa-1", true), qa("qa-2", false)],
+        ));
+        let btw = &state.pane_anywhere(pane).expect("pane").lx.btw;
+        assert_eq!(btw.picking, Some(1));
+        assert!(btw.has_side_thread(&btw.qa[0]));
+        assert!(!btw.has_side_thread(&btw.qa[1]));
+
+        // ↑ 选到有旁路对话的 QA，Enter 切换并触发历史加载。
+        assert!(apply_input(&mut state, pane, LxInput::Up));
+        assert_eq!(
+            state
+                .pane_anywhere(pane)
+                .expect("pane")
+                .lx
+                .btw
+                .picked_qa()
+                .map(|summary| summary.qa_id.as_str()),
+            Some("qa-1")
+        );
+        assert!(apply_input(&mut state, pane, LxInput::Enter));
+        let btw = &state.pane_anywhere(pane).expect("pane").lx.btw;
+        assert_eq!(btw.active.as_deref(), Some("qa-1"));
+        assert!(btw.picking.is_none());
+        assert!(state.effects.iter().any(|effect| matches!(
+            effect,
+            Effect::Btw(BtwEffect::LoadThread { qa_id, .. }) if qa_id == "qa-1"
+        )));
+    }
+
+    #[test]
+    fn backspace_removes_the_at_trigger_while_the_mention_panel_is_open() {
+        let (mut state, pane) = btw_pane();
+        state
+            .pane_mut_anywhere(pane)
+            .expect("pane")
+            .lx
+            .btw
+            .active_composer_mut()
+            .expect("composer")
+            .insert_char('@');
+        assert!(
+            state
+                .pane_anywhere(pane)
+                .expect("pane")
+                .lx
+                .btw
+                .active_composer()
+                .expect("composer")
+                .mention_visible(),
+            "输入 `@` 后面板应可见"
+        );
+
+        assert!(apply_input(&mut state, pane, LxInput::Backspace));
+        let composer = state
+            .pane_anywhere(pane)
+            .expect("pane")
+            .lx
+            .btw
+            .active_composer()
+            .expect("composer");
+        assert_eq!(composer.input, "", "退格必须能删掉触发用 `@`");
+        assert!(!composer.mention_visible(), "删除后提及面板应关闭");
+    }
 }

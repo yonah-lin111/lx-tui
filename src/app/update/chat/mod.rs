@@ -45,8 +45,9 @@ pub use btw::{
     btw_message_parts as btw_parts, on_accepted as on_btw_accepted, on_delta as on_btw_delta,
     on_failed as on_btw_failed, on_finished as on_btw_finished, on_qa_list_loaded,
     on_recipient_started as on_btw_recipient_started, on_thread_loaded as on_btw_thread_loaded,
-    on_tool_state as on_btw_tool_state, open_btw_tab, submit_current as submit_btw,
-    toggle_btw_card, try_submit_btw_command,
+    on_tool_state as on_btw_tool_state, open_btw_list, open_btw_tab, select_btw_qa,
+    submit_current as submit_btw, toggle_btw_card, try_submit_btw_command,
+    try_submit_btw_list_command,
 };
 pub use compact::{
     compact_command, on_compact_empty, on_compact_failed, on_compact_finished,
@@ -147,6 +148,10 @@ pub fn try_send(state: &mut AppState, pane: PaneId) -> bool {
     }
     // `/rename` 是纯元数据更新，同样早于入口/模型/busy 检查。
     if slash::try_submit_rename_command(state, pane) {
+        return true;
+    }
+    // `/btwList` 与 `/btw` 同样在排队/steer 之前拦截。
+    if btw::try_submit_btw_list_command(state, pane) {
         return true;
     }
     // `/btw` 在排队/steer 之前拦截：生成期间也必须进入旁路，不注入主任务。

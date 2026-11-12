@@ -2,6 +2,8 @@
 
 /// `/btw` 在 `/` 命令面板里的一句话描述。
 pub const LX_BTW_COMMAND_DESC: &str = "Ask a read-only side question about the current exchange";
+/// `/btwList` 命令描述。
+pub const LX_BTW_LIST_COMMAND_DESC: &str = "Switch the side conversation to another main question";
 /// 等待参数时的灰色提示。
 pub const LX_BTW_ARG_HINT: &str = "[prompt]";
 /// 后台面板 tab 标签。
@@ -34,6 +36,12 @@ pub const LX_BTW_TARGETS_RESET: &str = "BTW targets reset to lx";
 pub const LX_BTW_TARGETS_PREFIX: &str = "To: ";
 /// 主问题标题为空时的占位。
 pub const LX_BTW_QA_UNTITLED: &str = "(untitled question)";
+/// `/btwList` 选择器的标题行。
+pub const LX_BTW_LIST_TITLE: &str = "Side questions · ↑↓ select · ↵ switch · esc close";
+/// `/btwList` 选择器没有 QA 时的占位。
+pub const LX_BTW_LIST_EMPTY: &str = "No main questions yet";
+/// `/btwList` 选择器里标记"该主问题已有旁路对话"。
+pub const LX_BTW_LIST_THREAD_MARK: &str = "● side thread";
 /// 空对话提示。
 pub const LX_BTW_EMPTY_THREAD: &str = "Ask a side question about this exchange";
 /// QA 列表标题。

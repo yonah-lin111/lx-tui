@@ -119,3 +119,55 @@ fn typing_at_in_the_composer_opens_the_mention_panel() {
     let request = lx.with_active_editor(|composer| composer.take_mention_scan_request());
     assert_eq!(request.map(|(_, scan_root)| scan_root), Some(root));
 }
+
+#[test]
+fn picker_moves_wraps_and_marks_threads() {
+    let mut lx = Lx::new();
+    lx.btw.qa = vec![
+        BtwQaSummary {
+            qa_id: "qa-1".into(),
+            title: "first".into(),
+            has_thread: true,
+            status: "idle".into(),
+        },
+        BtwQaSummary {
+            qa_id: "qa-2".into(),
+            title: "second".into(),
+            has_thread: false,
+            status: "idle".into(),
+        },
+    ];
+    lx.btw.active = Some("qa-1".into());
+    assert!(lx.btw.open_picker());
+    assert_eq!(lx.btw.picking, Some(0), "默认停在当前 QA");
+    assert!(lx.btw.has_side_thread(&lx.btw.qa[0]));
+    assert!(!lx.btw.has_side_thread(&lx.btw.qa[1]));
+
+    assert!(lx.btw.move_picker(1));
+    assert_eq!(lx.btw.picked_qa().map(|qa| qa.qa_id.as_str()), Some("qa-2"));
+    // 末尾继续向下环绕到首项。
+    assert!(lx.btw.move_picker(1));
+    assert_eq!(lx.btw.picked_qa().map(|qa| qa.qa_id.as_str()), Some("qa-1"));
+    assert!(lx.btw.move_picker(-1));
+    assert_eq!(lx.btw.picked_qa().map(|qa| qa.qa_id.as_str()), Some("qa-2"));
+
+    assert!(lx.btw.close_picker());
+    assert!(!lx.btw.close_picker());
+}
+
+#[test]
+fn picker_window_keeps_the_selection_visible() {
+    let mut lx = Lx::new();
+    lx.btw.qa = (0..10)
+        .map(|index| BtwQaSummary {
+            qa_id: format!("qa-{index}"),
+            title: format!("q{index}"),
+            has_thread: false,
+            status: "idle".into(),
+        })
+        .collect();
+    lx.btw.picking = Some(9);
+    assert_eq!(lx.btw.picker_window(3), 7);
+    lx.btw.picking = Some(1);
+    assert_eq!(lx.btw.picker_window(3), 0);
+}

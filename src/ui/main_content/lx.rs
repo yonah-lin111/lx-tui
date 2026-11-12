@@ -810,6 +810,11 @@ pub fn task_btw_composer_rect(area: Rect, lx: &Lx) -> Option<Rect> {
         .filter(|rect| rect.height > 0)
 }
 
+/// `/btwList` 选择器点击命中：返回主 QA 下标。
+pub fn task_btw_picker_hit(area: Rect, lx: &Lx, column: u16, row: u16) -> Option<usize> {
+    task::btw_picker_hit(area, lx, column, row)
+}
+
 /// BTW 对话区的 `(可见行数, 总行数, 快照是否最新)`；不在 BTW 页或无活动线程返回 None。
 pub fn task_btw_rows(area: Rect, lx: &Lx, cache: &mut PaneCache) -> Option<(usize, usize, bool)> {
     task::btw_rows(area, lx, cache)

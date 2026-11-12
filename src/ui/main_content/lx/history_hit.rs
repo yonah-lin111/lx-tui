@@ -36,6 +36,11 @@ pub(crate) fn history_view(
     lx: &Lx,
     cache: &mut PaneCache,
 ) -> Option<history::HistoryView> {
+    // 后台任务页打开时主历史没有绘制（输出区被 Agents/BTW 详情替换），
+    // 不能让主历史的滚动条/滚动几何抢走点击。
+    if lx.task.is_some() {
+        return None;
+    }
     let history_rect = history_rect(area, lx)?;
     Some(history::view(history_rect, lx, cache))
 }
@@ -46,6 +51,9 @@ pub(super) fn history_view_ready(
     lx: &Lx,
     cache: &mut PaneCache,
 ) -> Option<history::HistoryView> {
+    if lx.task.is_some() {
+        return None;
+    }
     let history_rect = history_rect(area, lx)?;
     Some(history::view_ready(history_rect, lx, cache))
 }

@@ -245,6 +245,26 @@ pub(super) fn handle_lx_pane_mouse_down_left(
         .pane_anywhere(pane)
         .is_some_and(|target| target.lx.is_btw_tab())
     {
+        // `/btwList` 选择器优先：点行直接切换 QA，其余区域吞掉。
+        if state
+            .pane_anywhere(pane)
+            .is_some_and(|target| target.lx.btw.picking.is_some())
+        {
+            let picked = state.pane_anywhere(pane).and_then(|target| {
+                ui::main_content::lx::task_btw_picker_hit(
+                    inner,
+                    &target.lx,
+                    mouse.column,
+                    mouse.row,
+                )
+            });
+            if let Some(index) = picked {
+                update::select_btw_qa(state, pane, index);
+            }
+            update::clear_selection(state);
+            *dirty = true;
+            return;
+        }
         // 旁路区只支持折叠卡片点击；正文不建立拖拽选区（历史快照按 thread 自己维护）。
         let hit = state.pane_anywhere(pane).and_then(|target| {
             ui::main_content::lx::press_btw_content_hit(

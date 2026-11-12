@@ -77,7 +77,6 @@ pub(super) fn task_panel_height(lx: &crate::app::state::Lx) -> u16 {
         .clamp(1, usize::from(btw::COMPOSER_MAX_ROWS));
     TOP_BORDER
         .saturating_add(TAB_ROW)
-        .saturating_add(1)
         .saturating_add(u16::try_from(rows).unwrap_or(1))
         .saturating_add(2)
 }
@@ -845,10 +844,12 @@ pub(crate) mod btw;
 #[cfg(test)]
 mod tests;
 
-/// 详情区（原历史矩形）的实际绘制区域；不在该页返回 None。
+/// 详情区（原历史矩形）的实际绘制区域；不在带详情页的 tab 返回 None。
+///
+/// BTW 与 Agents 共用上方输出区：折叠命中、量行与绘制必须拿同一份几何。
 pub(super) fn task_output_rect(area: Rect, lx: &crate::app::state::Lx) -> Option<Rect> {
     let page = lx.task.as_ref()?;
-    if page.tab != TaskTab::Agents {
+    if !matches!(page.tab, TaskTab::Agents | TaskTab::Btw) {
         return None;
     }
     super::layout(area, lx).task_output
@@ -870,6 +871,32 @@ pub(super) fn agents_rows(
         .and_then(|index| lx.agents.runs.get(index))?;
     let (total, fresh) = agents::detail_rows(rect, run, cache);
     Some((usize::from(rect.height), total, fresh))
+}
+
+/// `/btwList` 选择器的点击命中：返回主 QA 下标。
+pub(super) fn btw_picker_hit(
+    area: Rect,
+    lx: &crate::app::state::Lx,
+    column: u16,
+    row: u16,
+) -> Option<usize> {
+    lx.btw.picking?;
+    let rect = super::layout(area, lx).task_output?;
+    if rect.width == 0 || rect.height < 2 {
+        return None;
+    }
+    let list = Rect::new(
+        rect.x,
+        rect.y.saturating_add(1),
+        rect.width,
+        rect.height.saturating_sub(1),
+    );
+    if !list.contains((column, row).into()) {
+        return None;
+    }
+    let visible = usize::from(list.height);
+    let index = lx.btw.picker_window(visible) + usize::from(row.saturating_sub(list.y));
+    (index < lx.btw.qa.len()).then_some(index)
 }
 
 /// BTW 对话区的 `(可见行数, 总行数, 快照是否最新)`。
