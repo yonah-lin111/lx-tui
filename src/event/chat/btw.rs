@@ -85,6 +85,8 @@ pub(crate) struct BtwRun {
     pub child_session_id: String,
     pub parent_session_id: String,
     pub started_at_ms: i64,
+    /// 上一次流中 checkpoint 的时刻（面板关闭后仍能在库里留下已生成正文）。
+    last_checkpoint_ms: i64,
     pub label: String,
 }
 
@@ -598,6 +600,7 @@ fn start_recipient(
         child_session_id: start.child_session_id.clone(),
         parent_session_id: start.parent_session_id.clone(),
         started_at_ms: crate::db::now_ms(),
+        last_checkpoint_ms: crate::db::now_ms(),
         label: format!(
             "{} [{}]",
             start.display_nickname,
@@ -832,7 +835,28 @@ pub(crate) fn handle_net_event(
     let child_session = run.child_session_id.clone();
     match event {
         ChatNetEvent::Delta { deltas, .. } => {
-            crate::app::update::on_btw_delta(state, &child_session, &assistant_id, &deltas)
+            let changed =
+                crate::app::update::on_btw_delta(state, &child_session, &assistant_id, &deltas);
+            // 流中 checkpoint：面板关闭后仍可在库里留下已生成正文；节流 500ms。
+            let now = crate::db::now_ms();
+            if let Some(run) = streams.btw.runs.get_mut(&key)
+                && now.saturating_sub(run.last_checkpoint_ms) >= 500
+            {
+                run.last_checkpoint_ms = now;
+                let parts = crate::app::update::btw_parts(state, &child_session, &assistant_id);
+                if !parts.is_empty()
+                    && let Some(workspace) = streams.db_workspaces.get(&key).cloned()
+                {
+                    state
+                        .effects
+                        .push(crate::app::effects::Effect::CheckpointChatTurn {
+                            workspace,
+                            assistant_id: assistant_id.clone(),
+                            parts,
+                        });
+                }
+            }
+            changed
         }
         ChatNetEvent::Finished {
             reason,
