@@ -101,17 +101,26 @@ fn draw_qa_badge(grid: &mut Grid, rect: Rect, lx: &Lx) {
         Some(index) => format!("QA {index} · "),
         None => "QA · ".to_string(),
     };
+    let width = |value: &str| {
+        u16::try_from(unicode_width::UnicodeWidthStr::width(value)).unwrap_or(u16::MAX)
+    };
+    let max = rect.width.saturating_sub(6).min(QA_BADGE_MAX_COLS);
+    let prefix_w = width(prefix.as_str());
     let targets = format!(" · {}", thread.target_label());
-    let room = rect
-        .width
-        .saturating_sub(6)
-        .min(QA_BADGE_MAX_COLS)
-        .saturating_sub(
-            u16::try_from(unicode_width::UnicodeWidthStr::width(prefix.as_str())).unwrap_or(0),
+    // 目标太长时先丢目标，保证主问题归属永远可见。
+    let (room, targets) = if max
+        .saturating_sub(prefix_w)
+        .saturating_sub(width(targets.as_str()))
+        >= 4
+    {
+        (
+            max.saturating_sub(prefix_w)
+                .saturating_sub(width(targets.as_str())),
+            targets.as_str(),
         )
-        .saturating_sub(
-            u16::try_from(unicode_width::UnicodeWidthStr::width(targets.as_str())).unwrap_or(0),
-        );
+    } else {
+        (max.saturating_sub(prefix_w), "")
+    };
     if room < 4 {
         return;
     }
@@ -120,8 +129,7 @@ fn draw_qa_badge(grid: &mut Grid, rect: Rect, lx: &Lx) {
         return;
     }
     let badge = format!(" {prefix}{title}{targets} ");
-    let badge_w =
-        u16::try_from(unicode_width::UnicodeWidthStr::width(badge.as_str())).unwrap_or(u16::MAX);
+    let badge_w = width(badge.as_str());
     if rect.width <= badge_w.saturating_add(2) {
         return;
     }
