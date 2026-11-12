@@ -366,6 +366,63 @@ fn remember_model_prepends_dedupes_overrides_variant_and_caps() {
 }
 
 #[test]
+fn effective_selection_falls_back_when_pane_provider_disabled_or_key_missing() {
+    let mut settings = settings_with(&[("p1", &["m1"]), ("p2", &["m2"])]);
+    settings.default_model = Some(selection("p2", "m2"));
+    let mut models = ModelsSnapshot { settings };
+    let mut chat = LxChat::new();
+    chat.selection = Some(selection("p1", "m1"));
+
+    models.settings.enabled_providers.retain(|id| id != "p1");
+    assert_eq!(
+        chat.effective_selection(&models),
+        Some(selection("p2", "m2")),
+        "窗格选择的供应商被停用时必须回落 fallback"
+    );
+
+    models.settings.enabled_providers.push("p1".into());
+    models
+        .settings
+        .providers
+        .get_mut("p1")
+        .expect("provider")
+        .options
+        .api_key = None;
+    assert_eq!(
+        chat.effective_selection(&models),
+        Some(selection("p2", "m2")),
+        "窗格选择无 Key 时不得压住可用模型"
+    );
+}
+
+#[test]
+fn fallback_selection_normalizes_stale_recent_variant() {
+    let mut settings = settings_with(&[("p", &["m"])]);
+    let model = settings
+        .providers
+        .get_mut("p")
+        .expect("provider")
+        .models
+        .get_mut("m")
+        .expect("model");
+    model
+        .variants
+        .insert("high".into(), serde_json::json!({"reasoning": "high"}));
+    model.variant = Some("high".into());
+    let mut stale = selection("p", "m");
+    stale.variant = Some("gone".into());
+    settings.recent_models = vec![stale];
+    let models = ModelsSnapshot { settings };
+    let mut expected = selection("p", "m");
+    expected.variant = Some("high".into());
+    assert_eq!(
+        models.fallback_selection(),
+        Some(expected),
+        "recent 的 variant 失效时回落到模型默认等级，而不是丢弃整个模型"
+    );
+}
+
+#[test]
 fn effective_selection_prefers_valid_pane_selection() {
     let mut settings = settings_with(&[("p1", &["m1"]), ("p2", &["m2"])]);
     settings.default_model = Some(selection("p1", "m1"));

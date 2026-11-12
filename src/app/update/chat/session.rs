@@ -273,8 +273,11 @@ pub fn on_session_loaded_full(
     let restored_messages = target.lx.chat.messages.clone();
     refresh_lx_status(state, pane);
     // `/resume` 绑定会话模型即视为一次实际使用：只记 recentModels，不改 defaultModel。
-    if let Some(selection) = selection.as_ref() {
-        super::remember_model_used(state, selection);
+    // 先按可发送口径过滤：供应商停用/无 Key/variant 失效的旧会话不得污染 recent。
+    if let Some(selection) = state.models.validated_selection(selection.as_ref()) {
+        super::remember_workspace_model(state, pane, &selection);
+        super::remember_model_used(state, &selection);
+        super::sync_session_selection(state, pane, session_id, &selection);
     }
     super::restore_plan(state, pane, &restored_messages);
     // 历史会话：spawn 卡片的状态可从已加载的汇报行回填；置位后由事件循环对账。

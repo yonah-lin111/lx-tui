@@ -1193,6 +1193,11 @@ fn try_send_pins_fallback_selection_and_records_recent_model() {
         Some(&expected),
         "发送后模型进入最近使用队首"
     );
+    assert_eq!(
+        state.workspaces[0].lx_model,
+        Some(expected.clone()),
+        "发送后更新本工作区记忆"
+    );
     assert!(
         state.effects.iter().any(|effect| matches!(
             effect,

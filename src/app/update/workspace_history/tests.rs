@@ -565,6 +565,71 @@ fn opening_already_open_history_entry_returns_focus_to_panes() {
 }
 
 #[test]
+fn opening_new_history_entry_initializes_lx_status() {
+    let mut state = AppState::demo();
+    let mut settings = crate::config::ai::AiSettings::empty();
+    settings.enabled_providers = vec!["p".into()];
+    settings.providers.insert(
+        "p".into(),
+        crate::config::ai::ProviderConfig {
+            id: "p".into(),
+            kind: crate::config::ai::ProviderTransport::OpenaiCompatible,
+            name: "P".into(),
+            options: crate::config::ai::ProviderOptions {
+                api_key: Some("test-key".into()),
+                base_url: "https://api.example.invalid/v1".into(),
+            },
+            models: std::iter::once((
+                "m".into(),
+                crate::config::ai::ModelConfig {
+                    id: "m".into(),
+                    name: "Model M".into(),
+                    transport: None,
+                    limit: None,
+                    modalities: None,
+                    variants: std::collections::BTreeMap::new(),
+                    variant: None,
+                    pricing: None,
+                    extra: serde_json::Map::new(),
+                },
+            ))
+            .collect(),
+            extra: serde_json::Map::new(),
+        },
+    );
+    settings.default_model = Some(crate::config::ai::ModelSelection {
+        provider: "p".into(),
+        model: "m".into(),
+        variant: None,
+    });
+    state.models = crate::app::state::ModelsSnapshot { settings };
+
+    let dir = std::env::temp_dir().join(format!("lx-history-model-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).expect("create temp dir");
+    apply_workspace_history(
+        &mut state,
+        vec![plain_entry("history-model", dir.clone(), true)],
+    );
+    show_workspace_history(&mut state);
+    assert!(open_workspace_history_entry(&mut state, 0));
+
+    let pane = state.active_tab().layout.focus();
+    assert_eq!(
+        state
+            .pane_anywhere(pane)
+            .expect("pane")
+            .lx
+            .chat
+            .status
+            .model_name
+            .as_deref(),
+        Some("Model M"),
+        "历史列表新建并激活工作区后必须立即解析模型"
+    );
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
 fn delete_worktree_count_reports_only_group_parent_children() {
     let (mut state, repo, child, standalone, entries) = git_tree_fixture();
     apply_workspace_history(&mut state, entries);

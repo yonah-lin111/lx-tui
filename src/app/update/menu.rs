@@ -644,6 +644,10 @@ pub(crate) fn split_pane(
     pane: PaneId,
     direction: Direction,
 ) -> bool {
+    let inherited = state
+        .workspaces
+        .get(workspace)
+        .and_then(|workspace| workspace.lx_model.clone());
     let Some(tab_state) = state
         .workspaces
         .get_mut(workspace)
@@ -657,8 +661,13 @@ pub(crate) fn split_pane(
     super::focus::focus_panes(state);
     state.prompt.clear_panel();
     clear_selection(state);
-    // 新窗格继承源窗格视图（源为 lx 时即 lx 欢迎页），立即解析模型，
-    // 否则底边框停在 `no model` 直到下一次显式刷新。
+    // 新窗格继承源窗格视图（源为 lx 时即 lx 欢迎页），并继承本工作区最近使用的模型，
+    // 然后立即解析状态；否则会停在 `no model` 或错误落到全局 default/recent。
+    if let Some(selection) = inherited
+        && let Some(target) = state.pane_mut_anywhere(created)
+    {
+        target.lx.chat.selection = Some(selection);
+    }
     super::chat::refresh_lx_status(state, created);
     true
 }

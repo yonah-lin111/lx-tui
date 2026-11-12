@@ -481,6 +481,7 @@ impl AppState {
                 git: None,
                 prompt: None,
                 prompt_panel: PromptPanel::new(),
+                lx_model: None,
             }],
             active_workspace: 0,
             workspace_history: WorkspaceHistoryPanel::new(),

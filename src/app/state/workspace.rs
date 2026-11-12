@@ -31,6 +31,8 @@ pub struct Workspace {
     pub prompt: Option<PromptDraft>,
     /// 提示词树状管理器状态（树、视图模式、选中与滚动）。
     pub prompt_panel: PromptPanel,
+    /// 本工作区最近一次实际使用/选择的模型（进程内）；新建 lx 窗格继承。
+    pub lx_model: Option<crate::config::ai::ModelSelection>,
 }
 
 /// 工作区挂起的 prompt 草稿：编辑器完整状态与显式上下文根绑定。
@@ -118,6 +120,7 @@ impl Workspace {
             git: None,
             prompt: Some(PromptDraft::new()),
             prompt_panel: PromptPanel::new(),
+            lx_model: None,
         }
     }
 

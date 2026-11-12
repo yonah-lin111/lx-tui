@@ -1947,6 +1947,125 @@ fn create_tab_appends_and_activates_auto_named_tab() {
     assert!(state.selection.is_none());
 }
 
+/// 在同一供应商下追加 `m2`，用于验证“工作区记忆优先于全局 default”。
+fn add_second_model(state: &mut AppState) -> crate::config::ai::ModelSelection {
+    let provider = state
+        .models
+        .settings
+        .providers
+        .get_mut("p")
+        .expect("provider");
+    let mut model = provider.models.get("m").expect("model").clone();
+    model.id = "m2".into();
+    model.name = "Model M2".into();
+    provider.models.insert("m2".into(), model);
+    crate::config::ai::ModelSelection {
+        provider: "p".into(),
+        model: "m2".into(),
+        variant: None,
+    }
+}
+
+#[test]
+fn create_tab_inherits_workspace_model_over_default() {
+    let mut state = demo_with_default_model();
+    let second = add_second_model(&mut state);
+    state.workspaces[0].lx_model = Some(second.clone());
+    create_tab(&mut state);
+    let pane = state.active_tab().root_pane().expect("new tab root pane");
+    let chat = &state.pane_anywhere(pane).expect("new pane").lx.chat;
+    assert_eq!(
+        chat.selection,
+        Some(second),
+        "新标签必须继承本工作区最近使用的模型，而不是全局 default"
+    );
+    assert_eq!(chat.status.model_name.as_deref(), Some("Model M2"));
+}
+
+#[test]
+fn split_pane_inherits_workspace_model_over_default() {
+    let mut state = demo_with_default_model();
+    let second = add_second_model(&mut state);
+    state.workspaces[0].lx_model = Some(second.clone());
+    let source = state.active_tab().layout.focus();
+    assert!(super::menu::split_pane(
+        &mut state,
+        0,
+        0,
+        source,
+        Direction::Horizontal
+    ));
+    let created = state
+        .active_tab()
+        .layout
+        .pane_ids()
+        .into_iter()
+        .find(|pane| *pane != source)
+        .expect("new pane");
+    let chat = &state.pane_anywhere(created).expect("new pane").lx.chat;
+    assert_eq!(
+        chat.selection,
+        Some(second),
+        "分割窗格必须继承本工作区最近使用的模型"
+    );
+    assert_eq!(chat.status.model_name.as_deref(), Some("Model M2"));
+}
+
+#[test]
+fn recent_change_refreshes_blank_fallback_panes() {
+    let mut state = demo_with_default_model();
+    let second = add_second_model(&mut state);
+    state.models.settings.default_model = None;
+    state.models.settings.recent_models.clear();
+    let first = state.active_tab().layout.focus();
+    crate::app::update::refresh_lx_status(&mut state, first);
+    let second_pane = state
+        .active_tab_mut()
+        .split_pane(first, Direction::Horizontal)
+        .expect("split");
+    crate::app::update::refresh_lx_status(&mut state, second_pane);
+    assert_eq!(
+        state
+            .pane_anywhere(first)
+            .expect("first")
+            .lx
+            .chat
+            .status
+            .model_name
+            .as_deref(),
+        Some("Model M"),
+        "初始按首个可用模型显示"
+    );
+    crate::app::update::remember_model_used(&mut state, &second);
+    for pane in [first, second_pane] {
+        assert_eq!(
+            state
+                .pane_anywhere(pane)
+                .expect("pane")
+                .lx
+                .chat
+                .status
+                .model_name
+                .as_deref(),
+            Some("Model M2"),
+            "recent 变化后空白窗格状态行必须同步，避免显示与发送不一致"
+        );
+    }
+}
+
+#[test]
+fn model_selection_updates_workspace_model_memory() {
+    let mut state = demo_with_default_model();
+    let second = add_second_model(&mut state);
+    let pane = state.active_tab().layout.focus();
+    crate::app::update::chat::test_hooks::finish_model_selection(&mut state, pane, second.clone());
+    assert_eq!(
+        state.workspaces[0].lx_model,
+        Some(second),
+        "/model 采纳必须更新本工作区记忆"
+    );
+}
+
 #[test]
 fn create_tab_initializes_lx_status_model() {
     let mut state = demo_with_default_model();

@@ -166,7 +166,7 @@ pub fn create_workspace_with_cwd(state: &mut AppState, target_cwd: Option<PathBu
     super::workspace_history::exit_workspace_history(state);
     clear_selection(state);
     super::focus::focus_panes(state);
-    super::chat::refresh_active_workspace_lx_status(state);
+    super::chat::refresh_active_tab_lx_status(state);
 }
 
 /// 新建工作区（无指定路径，继承当前终端/工作区路径）。
@@ -177,6 +177,10 @@ pub fn create_workspace(state: &mut AppState) {
 /// 在目标工作区追加终端标签并激活：初始 cwd 为工作区固定根路径，直接进入终端视图；
 /// PTY 由事件循环按状态对齐启动。
 pub fn create_terminal_in_workspace(state: &mut AppState, target: usize) {
+    let inherited = state
+        .workspaces
+        .get(target)
+        .and_then(|workspace| workspace.lx_model.clone());
     let Some(workspace) = state.workspaces.get_mut(target) else {
         return;
     };
@@ -185,6 +189,12 @@ pub fn create_terminal_in_workspace(state: &mut AppState, target: usize) {
         && let Some(pane) = tab.pane_mut(id)
     {
         pane.view = PaneView::Terminal;
+    }
+    if let Some(selection) = inherited
+        && let Some(id) = tab.root_pane()
+        && let Some(pane) = tab.pane_mut(id)
+    {
+        pane.lx.chat.selection = Some(selection);
     }
     if let Some(source) = mention_inventory_source(workspace)
         && let Some(id) = tab.root_pane()
@@ -341,11 +351,14 @@ pub fn switch_workspace(state: &mut AppState, index: usize) {
     // Agents 列表随工作区切换：滚动与悬停复位，避免旧槽位错位。
     state.agent_scroll = 0;
     state.agent_hover = None;
-    super::chat::refresh_active_workspace_lx_status(state);
+    if from != index {
+        super::chat::refresh_active_tab_lx_status(state);
+    }
 }
 
 /// 新建标签并激活：追加自动命名标签；PTY 由事件循环按状态对齐启动。
 pub fn create_tab(state: &mut AppState) {
+    let inherited = state.active_workspace().lx_model.clone();
     let workspace = state.active_workspace_mut();
     let mut tab = Tab::single_terminal();
     let created = tab.root_pane();
@@ -359,8 +372,14 @@ pub fn create_tab(state: &mut AppState) {
     workspace.active_tab = workspace.tabs.len().saturating_sub(1);
     clear_selection(state);
     super::focus::focus_panes(state);
-    // 新标签默认落在 lx 欢迎页；必须立刻解析模型，否则底边框会停在 `no model`
-    // 直到下一次显式刷新（opencode 的 new session 选择是实时 memo，不存在这个空窗）。
+    // 新标签默认落在 lx 欢迎页；先继承本工作区最近使用的模型，再解析状态。
+    // 否则底边框会停在 `no model`，或错误落到全局 default/recent。
+    if let Some(selection) = inherited
+        && let Some(pane) = created
+        && let Some(target) = state.pane_mut_anywhere(pane)
+    {
+        target.lx.chat.selection = Some(selection);
+    }
     if let Some(pane) = created {
         super::chat::refresh_lx_status(state, pane);
     }
@@ -381,6 +400,7 @@ pub fn switch_tab(state: &mut AppState, index: usize) {
     workspace.active_tab = index;
     clear_selection(state);
     super::focus::focus_panes(state);
+    super::chat::refresh_active_tab_lx_status(state);
 }
 
 /// 标签栏滚动最大偏移；由调用方按当前几何计算并钳制。

@@ -303,7 +303,7 @@ pub(super) fn open_worktree_checkout(
     clear_selection(state);
     super::focus::focus_panes(state);
     // 新工作区直接激活（不经 switch_workspace），新 lx 窗格同样需要立即解析模型。
-    super::chat::refresh_active_workspace_lx_status(state);
+    super::chat::refresh_active_tab_lx_status(state);
     ensure_main_workspace(state, child);
 }
 
