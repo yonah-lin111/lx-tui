@@ -7,7 +7,7 @@
 //! - `FinishTool`：① `finish_tool_call`（真实结果原子落库）→ ② 状态转终态 + 摘要 + 类型化详情
 //!   → ③ 回执 `Ok`。落库失败时回执 `Err`，本轮失败且**不重试**写入。
 
-use super::timeline::{parts_before, tool_step_position};
+use super::timeline::checkpoint_before_tool;
 use super::*;
 
 /// BeginTool：DB pending → UI pending → （帧后）DB running + UI running → ticket。
@@ -35,22 +35,28 @@ pub(crate) fn begin_tool(
     // 时间线对齐：`begin_tool_call` 按该消息内 parts/tools 的 `MAX(position)+1` 分配工具
     // 位置。先把「该工具之前」的 parts 快照提交，使 DB 分配值与 app 时间线一致，
     // 后续 checkpoint/finish 才不会撞 `PositionConflict`。
-    if let Some(position) = tool_step_position(state, &key, &call.call_id) {
-        let parts = parts_before(state, &key, &assistant_id, position);
-        if let Err(error) = persistence.checkpoint_parts(&workspace, &assistant_id, &parts) {
-            tracing::warn!(
-                target: "lx::agent::tool",
-                pane = key.pane.raw(),
-                session = %key.session,
-                call_id = %call.call_id,
-                code = error.code(),
-                "tool call timeline sync failed"
-            );
-            let _ = reply.send(Err(HostError::Failed {
-                code: format!("{BEGIN_TOOL_FAILED_CODE} · {}", error.code()),
-            }));
-            return true;
-        }
+    if let Some(pane) = state.pane_anywhere(key.pane)
+        && let Err(error) = checkpoint_before_tool(
+            &pane.lx.chat,
+            &workspace,
+            &assistant_id,
+            &call.call_id,
+            persistence,
+        )
+    {
+        tracing::warn!(
+            target: "lx::agent::tool",
+            pane = key.pane.raw(),
+            session = %key.session,
+            call_id = %call.call_id,
+            code = error.code(),
+            error = %error,
+            "tool call timeline sync failed"
+        );
+        let _ = reply.send(Err(HostError::Failed {
+            code: format!("{BEGIN_TOOL_FAILED_CODE} · {}", error.code()),
+        }));
+        return true;
     }
     // ① pending 事务提交：失败即不执行文件 IO，本轮失败。
     let ticket = match persistence.begin_tool_call(

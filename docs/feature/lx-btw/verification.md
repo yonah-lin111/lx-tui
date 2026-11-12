@@ -104,3 +104,13 @@ LX_TUI_DB_PATH="$DB" lx-tui session agents -C "$WS" --last
 - `Send to main` 转交、异步图片/剪贴板 owner 校验、完整 MCP 资源桥未实现，不在本次验证范围。
 - 真实模型 E2E 依赖本机 provider 与 `sqlite3`，已标记 `#[ignore]`，不进入 CI。
 - 视觉样式（配色、窄窗格像素级布局）未做截图比对；交互几何由单元测试覆盖。
+
+## 7. 用户报告：BTW 工具 pending 落库失败
+
+- 现场：`sess-18e73a11a5a0d138-0` 的 QA 3；BTW 线程 `btw-18e73d802af62678-f`，child `sess-18e73d802af60f08-e`；失败批次 `btw-1794470597214-2-1`；assistant `msg-18e73d802b1fa390-13` 状态 failed，错误 `tool call pending record failed · sqlite`。
+- 已完成的 7 个工具（2 read / 4 search / 1 read）均有 `agent_tool_call` 行；失败工具没有行，说明 pending INSERT 失败。旧代码的 BTW `begin_tool` 不记录 DB 错误，旧库无法反推具体 SQLite 子错误。
+- 代码缺陷：BTW 的 `begin_tool` 缺少主轮/子 agent 都有的 `checkpoint_before_tool` 时间线同步；长工具循环可能让 app 与 DB position 漂移。
+- 修复：抽共享 `checkpoint_before_tool`，BTW pending 前同步 parts；BTW 的 checkpoint/pending 错误记录完整 `error`，主轮/子 agent 同步补全。
+- 验证：`cargo test --lib` 5263 passed；clippy 通过；用该 session 的数据库副本重放同类 search/read 长链，120s 内未再出现 pending 失败（仍在长任务中，不能证明所有 SQLite 锁场景已消除）。若复现，新日志会显示具体 SQLite 子错误。
+
+> 说明：本报告此前的 `sess-18e74140de5035d8-1` 位于独立工作区 `lx-btw-cli-20261112`，不在当前 `lx-tui` 工作区的 `/resume` 列表中；当前问题使用你指定的 `sess-18e73a11a5a0d138-0`。

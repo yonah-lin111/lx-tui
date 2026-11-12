@@ -978,6 +978,35 @@ pub(crate) fn begin_tool(
     // 同一 child session 内多目标可能拿到相同 provider call ID：入库 id 加目标命名空间，
     // 模型上下文仍使用供应商原始 id（结果回传按 loop 的原始 id 配对）。
     let storage_call_id = format!("btw:{recipient_id}:{}", call.call_id);
+    // 与主轮/子 agent 同一条时间线门槛：先提交工具之前的 parts，DB 分配的
+    // position 才与 app 时间线一致，长工具循环不会在后续 checkpoint/finish 撞位置。
+    if let Some(chat) = state
+        .pane_anywhere(key.pane)
+        .and_then(|target| target.lx.btw.thread_by_child_session(&child_session))
+        .map(|thread| &thread.chat)
+        && let Err(error) = super::timeline::checkpoint_before_tool(
+            chat,
+            &workspace,
+            &assistant_id,
+            &call.call_id,
+            persistence,
+        )
+    {
+        tracing::warn!(
+            target: "lx::agent::tool",
+            pane = key.pane.raw(),
+            session = %child_session,
+            assistant = %assistant_id,
+            call_id = %call.call_id,
+            code = error.code(),
+            error = %error,
+            "btw tool timeline sync failed"
+        );
+        let _ = reply.send(Err(HostError::Failed {
+            code: format!("{BEGIN_TOOL_FAILED_CODE} · {}", error.code()),
+        }));
+        return true;
+    }
     let ticket = match persistence.begin_tool_call(
         &workspace,
         &child_session,
@@ -988,6 +1017,17 @@ pub(crate) fn begin_tool(
     ) {
         Ok(ticket) => ticket,
         Err(error) => {
+            tracing::warn!(
+                target: "lx::agent::tool",
+                pane = key.pane.raw(),
+                session = %child_session,
+                assistant = %assistant_id,
+                call_id = %call.call_id,
+                name = %call.name,
+                code = error.code(),
+                error = %error,
+                "btw tool call pending record failed"
+            );
             let _ = reply.send(Err(HostError::Failed {
                 code: format!("{BEGIN_TOOL_FAILED_CODE} · {}", error.code()),
             }));

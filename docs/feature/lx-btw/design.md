@@ -672,3 +672,9 @@ BTW 系统规则放 `chat/prompt/` 的专用常量/构造函数，由 `chat::pro
 - `/btw prompt` 首次打开时线程尚未建立：正文以 `Option<String>` 暂存，QA 列表回投后写入新线程 composer 再提交，绝不提交空草稿。
 - 无新 `@` 的追问沿用当前线程上一次回答者集合；从 `BtwTargetView` 回查实例生成提交 choice，实例缺失时拒绝并保留草稿，不静默退回默认助手。
 - 验证由 `tests/btw_verify.rs`（ignored）覆盖：CLI 建工作区/会话、`/resume`、BTW 首问、连续追问、`@` 已完成 subagent、只读拒写、回到底部、`/btwList`；报告见 `verification.md`。
+
+## 17. 工具 pending 时间线统一（2026-11-12）
+
+- 主轮、子 agent 与 BTW 的工具 pending 前统一调用 `checkpoint_before_tool`：先提交工具之前的 parts，再让 DB 分配 position；避免长工具循环中 app 时间线与 DB 位置漂移。
+- BTW 的 checkpoint/pending 失败现在记录完整 `error`（包含 SQLite 子错误），不再只保留 `sqlite` code。
+- 用户报告 `sess-18e73a11...` 的 QA 3 BTW 失败已按此修复；旧库无法反推具体 SQLite 子错误，重放副本未在 120s 内复现。

@@ -527,3 +527,30 @@ cargo fmt
 - 主会话 `sess-18e74140de5035d8-1`（`BTW verify`）保留 CLI prompt、`read` / `spawn_agent` / `wait_agent` 与 `CLI_VERIFY_OK`；BTW child `sess-18e741745e967f08-0` 保留 6 条旁路消息。
 - 检查：`LX_TUI_DB_PATH=<worktree DB> lx-tui session show -C <WS> --last --tools`；TUI 从本 worktree 启动后切到该工作区，`/resume` 选 `BTW verify`，主历史查看 CLI 记录，裸 `/btw` 查看旁路线程。
 - **注意**：worktree 内 `workspace add --trust` 必须带 `LX_TUI_DB_PATH=<worktree DB>`，否则 trust 写入主库，worktree 库中工作区仍 untrusted，表现为工作区下看不到 session/CLI 信息；本轮已用 `workspace trust` 修正。
+
+## 18. 用户报告：BTW 工具 pending 落库失败（2026-11-12 第七轮）
+
+### 18.1 现场证据
+
+- 会话：`sess-18e73a11a5a0d138-0`（workspace `/Users/yonah/projects/agent/lx-tui`），主 QA 3「这个项目是说什么的？」。
+- BTW 线程：`btw-18e73d802af62678-f`（问题「结合这个 @AGENTS.md 再分析一下」），child `sess-18e73d802af60f08-e`。
+- 失败批次：`btw-1794470597214-2-1`；recipient `btwr-18e73d802b0df438-12`；assistant `msg-18e73d802b1fa390-13` 状态 `failed`，错误 `tool call pending record failed · sqlite`。
+- 该消息已有 7 个 completed 工具（2 read / 4 search / 1 read，position 1/2/4/5/7/8/10）；失败工具没有 `agent_tool_call` 行，说明 pending INSERT 本身失败。
+- 旧代码在 BTW `begin_tool` 的错误分支不记录日志，数据库只保存未分类的 `sqlite` code，因此无法从旧库反推出具体 SQLite 子错误。
+
+### 18.2 代码缺陷与修复
+
+- **时间线门槛缺失**：主轮与子 agent 在 `begin_tool_call` 前都会 checkpoint 当前 parts；BTW 的 `begin_tool` 直接插入工具行，长工具循环中 app 时间线与 DB `MAX(position)+1` 可能漂移，后续 checkpoint/finish 会撞位置约束。
+- **修复**：把 `checkpoint_before_tool` 抽到 `event/chat/timeline.rs`，主轮、子 agent 与 BTW 共用；BTW 在 pending 落库前同步 parts。
+- **可诊断性**：BTW 的 checkpoint/pending 错误分支现在记录 `error = %error`（含 SQLite 详细信息）；主轮/子 agent 同样补全。
+- 该修复不改变模型上下文、只读工具面或目标路由。
+
+### 18.3 验证
+
+```text
+cargo test --lib                 # 5263 passed, 5 ignored
+cargo clippy --all-targets -- -D warnings
+```
+
+- 用 `sess-18e73a11...` 的数据库副本重放同类长工具链（连续 search/read），120s 内未再出现 pending 失败；该重放仍在长任务中，不能证明所有 SQLite 锁场景都已消除。
+- 若再次出现，日志会区分 `database is locked`、位置/唯一约束等具体子错误，可直接定位。
