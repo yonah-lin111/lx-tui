@@ -22,9 +22,9 @@ fn read_call(kind: Option<ReadKind>, summary: ToolSummary) -> ToolCallView {
     tool_call("read", ToolStatus::Completed, Some(summary), None)
 }
 
-/// 文件 `read`：标题 `Read · file`，路径在树体；不再显示行范围。
+/// 文件 `read`：标题 `Read · file`，路径后追加结果体确认的区间与实际行数。
 #[test]
-fn read_file_shows_kind_in_title_and_path_in_body() {
+fn read_file_shows_kind_in_title_and_range_in_body() {
     let call = read_call(
         Some(ReadKind::File),
         ToolSummary {
@@ -40,9 +40,111 @@ fn read_file_shows_kind_in_title_and_path_in_body() {
     assert!(header.contains(text::agent::READ_KIND_FILE), "{header}");
     assert!(!header.contains("src/ui/style.rs"), "路径在树体：{header}");
     let detail = detail_text(&call, 80);
-    assert!(detail.contains("src/ui/style.rs"), "{detail}");
-    assert!(!detail.contains("lines 12-40"), "不再显示范围：{detail}");
+    assert!(
+        detail.contains("src/ui/style.rs:12-40 · 29 lines"),
+        "路径后显示区间与行数：{detail}"
+    );
     assert!(!detail.contains("1000"), "不显示文件总行数：{detail}");
+    let suffix = detail_segments(&call, 80)
+        .into_iter()
+        .find(|(text, _)| text.starts_with(":12-40"))
+        .expect("区间后缀段");
+    assert_eq!(suffix.1, style::agent_step_detail(), "后缀压暗");
+}
+
+/// 单行区间只写一个行号，单行用 `line`。
+#[test]
+fn single_line_read_uses_one_line_number_and_singular_label() {
+    let call = read_call(
+        Some(ReadKind::File),
+        ToolSummary {
+            path: Some("src/a.rs".into()),
+            range: Some((12, 12)),
+            read_lines: Some(1),
+            total_lines: Some(40),
+            ..ToolSummary::default()
+        },
+    );
+    let detail = detail_text(&call, 80);
+    assert!(detail.contains("src/a.rs:12 · 1 line"), "{detail}");
+}
+
+/// 运行中没有结果体行数：只显示路径，不拿参数区间预估。
+#[test]
+fn running_read_shows_path_only() {
+    let call = tool_call(
+        "read",
+        ToolStatus::Running,
+        Some(ToolSummary {
+            path: Some("src/a.rs".into()),
+            range: Some((12, 40)),
+            ..ToolSummary::default()
+        }),
+        None,
+    );
+    let detail = detail_text(&call, 80);
+    assert!(detail.contains("src/a.rs"), "{detail}");
+    assert!(!detail.contains(":12-40"), "无结果体不得显示区间：{detail}");
+    assert!(!detail.contains("line"), "无结果体不得显示行数：{detail}");
+}
+
+/// 旧记录只有参数派生摘要（有 range、无 read_lines）：同样只显示路径。
+#[test]
+fn read_without_result_line_count_shows_path_only() {
+    let call = tool_call(
+        "read",
+        ToolStatus::Completed,
+        Some(ToolSummary {
+            path: Some("src/a.rs".into()),
+            range: Some((12, 40)),
+            ..ToolSummary::default()
+        }),
+        None,
+    );
+    let detail = detail_text(&call, 80);
+    assert!(detail.contains("src/a.rs"), "{detail}");
+    assert!(!detail.contains(":12-40"), "{detail}");
+    assert!(!detail.contains("line"), "{detail}");
+}
+
+/// 长路径优先保留区间/行数后缀，路径自身尾部省略。
+#[test]
+fn long_read_path_keeps_suffix_and_truncates_path() {
+    let path = "a".repeat(120);
+    let call = read_call(
+        Some(ReadKind::File),
+        ToolSummary {
+            path: Some(path),
+            range: Some((12, 40)),
+            read_lines: Some(29),
+            total_lines: Some(1000),
+            ..ToolSummary::default()
+        },
+    );
+    let detail = detail_text(&call, 40);
+    assert!(detail.contains("…"), "长路径必须省略：{detail}");
+    assert!(
+        detail.contains(":12-40 · 29 lines"),
+        "后缀必须完整保留：{detail}"
+    );
+}
+
+/// 后缀放不下时整段丢弃，只显示路径。
+#[test]
+fn narrow_read_drops_suffix_before_path() {
+    let call = read_call(
+        Some(ReadKind::File),
+        ToolSummary {
+            path: Some("src/a.rs".into()),
+            range: Some((12, 40)),
+            read_lines: Some(29),
+            total_lines: Some(1000),
+            ..ToolSummary::default()
+        },
+    );
+    let detail = detail_text(&call, 12);
+    assert!(detail.contains("sr"), "路径仍需可见：{detail}");
+    assert!(!detail.contains("lines"), "放不下时丢弃后缀：{detail}");
 }
 
 /// 目录 `read`：标题 `Read · folder · 18 files`，树体只有路径。
@@ -63,6 +165,7 @@ fn read_directory_shows_count_in_title_and_path_in_body() {
     let detail = detail_text(&call, 80);
     assert!(detail.contains("/project/src"), "{detail}");
     assert!(!detail.contains("18"), "{detail}");
+    assert!(!detail.contains("line"), "目录读取不显示行数：{detail}");
 }
 
 /// 图片 `read`：标题 `Read · image`，树体显示路径。
@@ -78,7 +181,9 @@ fn read_image_shows_image_kind_in_title_and_path_in_body() {
     let header = header_text(&call, 80);
     assert!(header.contains(text::agent::VERB_TOOL_READ), "{header}");
     assert!(header.contains(text::agent::READ_KIND_IMAGE), "{header}");
-    assert!(detail_text(&call, 80).contains("assets/diagram.png"));
+    let detail = detail_text(&call, 80);
+    assert!(detail.contains("assets/diagram.png"), "{detail}");
+    assert!(!detail.contains("line"), "图片读取不显示行数：{detail}");
 }
 
 /// 旧历史没有 `kind`：标题保持 `Read`，路径仍在树体。

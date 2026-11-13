@@ -1,23 +1,6 @@
 use super::*;
-use crate::app::state::{ToolCallView, ToolStatus, ToolSummary};
+use crate::app::state::{McpDetailView, McpImageView, ToolCallView, ToolDetailView, ToolStatus};
 use crate::ui::text;
-
-fn call() -> ToolCallView {
-    ToolCallView {
-        call_id: "call-mcp".into(),
-        name: "mcp__github__create_issue".into(),
-        position: 0,
-        arguments_json: r#"{"title":"Fix login crash on iOS","body":"details"}"#.into(),
-        status: ToolStatus::Completed,
-        summary: Some(Box::new(ToolSummary {
-            path: Some("github · create_issue".into()),
-            ..ToolSummary::default()
-        })),
-        error: None,
-        result_json: None,
-        detail: None,
-    }
-}
 
 fn view() -> McpDetailView {
     McpDetailView {
@@ -28,7 +11,7 @@ fn view() -> McpDetailView {
         arguments_more: 0,
         result: vec!["created #42".into()],
         result_more: 0,
-        images: vec![crate::app::state::McpImageView {
+        images: vec![McpImageView {
             path: "/tmp/tool.png".into(),
             mime: "image/png".into(),
             width: 10,
@@ -39,6 +22,20 @@ fn view() -> McpDetailView {
     }
 }
 
+fn call(status: ToolStatus, error: Option<&str>) -> ToolCallView {
+    ToolCallView {
+        call_id: "call-mcp".into(),
+        name: "mcp__github__create_issue".into(),
+        position: 0,
+        arguments_json: r#"{"title":"Fix login crash on iOS","body":"details"}"#.into(),
+        status,
+        summary: None,
+        error: error.map(str::to_string),
+        result_json: None,
+        detail: None,
+    }
+}
+
 fn render_with(call: &ToolCallView, view: &McpDetailView, width: u16, folds: Folds) -> String {
     let total = rows(call, view, width, folds);
     let rect = Rect::new(0, 0, width, u16::try_from(total.max(1)).unwrap_or(u16::MAX));
@@ -46,8 +43,36 @@ fn render_with(call: &ToolCallView, view: &McpDetailView, width: u16, folds: Fol
     let mut row = 0;
     draw(&mut grid, rect, 0, &mut row, call, view, 0, folds, false);
     assert_eq!(row, total, "绘制行数必须与 rows 一致");
+    text_of(&grid, width, total)
+}
+
+fn render_body(call: &ToolCallView, view: &McpDetailView, width: u16, last: bool) -> String {
+    let total = layout_with_group(call, view, width, Folds::default(), true)
+        .layout
+        .rows
+        .len();
+    let rect = Rect::new(0, 0, width, u16::try_from(total.max(1)).unwrap_or(u16::MAX));
+    let mut grid = Grid::new(rect);
+    let mut row = 0;
+    draw_body(
+        &mut grid,
+        rect,
+        0,
+        &mut row,
+        call,
+        view,
+        0,
+        Folds::default(),
+        false,
+        last,
+    );
+    assert_eq!(row, total, "调用体绘制行数必须与排版一致");
+    text_of(&grid, width, total)
+}
+
+fn text_of(grid: &Grid, width: u16, rows: usize) -> String {
     let mut text = String::new();
-    for y in 0..total {
+    for y in 0..rows {
         for x in 0..width {
             text.push(grid.cell(x, y as u16).ch);
         }
@@ -56,272 +81,215 @@ fn render_with(call: &ToolCallView, view: &McpDetailView, width: u16, folds: Fol
     text
 }
 
-fn render(view: &McpDetailView, width: u16, folds: Folds) -> String {
-    render_with(&call(), view, width, folds)
+#[test]
+fn single_card_shows_only_identity_duration_and_image_count() {
+    let call = call(ToolStatus::Completed, None);
+    let view = view();
+    let text = render_with(&call, &view, 100, Folds::default());
+    let lines: Vec<&str> = text.lines().collect();
+    assert_eq!(rows(&call, &view, 100, Folds::default()), 2);
+    assert!(
+        lines[0].starts_with(text::agent::STEP_MARK_FILLED)
+            && lines[0].contains(text::agent::VERB_MCP)
+            && lines[0].contains("1.2s")
+            && lines[0].contains("1 image(s)"),
+        "标题只有 MCP + 耗时 + 图片数：{lines:?}"
+    );
+    assert!(
+        lines[1].starts_with(text::agent::TREE_LEAF) && lines[1].contains("github · create_issue"),
+        "正文只有 server · tool 身份行：{lines:?}"
+    );
+    assert!(
+        !text.contains("Fix login crash on iOS") && !text.contains("created #42"),
+        "MCP 身份卡不得显示参数或结果：{text}"
+    );
+    assert!(!text.contains("[image"), "不得渲染图片元数据行：{text}");
 }
 
 #[test]
-fn folded_card_shows_server_tool_status_and_summary() {
-    let text = render(&view(), 100, Folds::default());
+fn identity_line_uses_param_normal_and_muted_styles() {
+    let layout = layout_with_group(
+        &call(ToolStatus::Completed, None),
+        &view(),
+        100,
+        Folds::default(),
+        false,
+    );
+    let row = &layout.layout.rows[0];
+    let server = row
+        .segments
+        .iter()
+        .find(|segment| segment.text == "github")
+        .expect("server 段");
+    assert_eq!(server.style, style::chat_tool_param());
+    let tool = row
+        .segments
+        .iter()
+        .find(|segment| segment.text == "create_issue")
+        .expect("tool 段");
+    assert_eq!(tool.style, style::text());
+    let sep = row
+        .segments
+        .iter()
+        .find(|segment| segment.text == text::LX_CHAT_TOOL_STATUS_SEP)
+        .expect("分隔段");
+    assert_eq!(sep.style, style::agent_step_detail());
+}
+
+#[test]
+fn failed_card_appends_one_reason_line_without_duration() {
+    let call = call(ToolStatus::Failed, Some("mcp tool timed out after 30s"));
+    let text = render_with(&call, &view(), 100, Folds::default());
     assert!(text.contains("github · create_issue"), "{text}");
-    assert!(text.contains("1.2s"), "{text}");
-    assert!(text.contains("Fix login crash on iOS"), "{text}");
-    assert!(text.contains("[image image/png 10×20]"), "{text}");
+    assert!(
+        text.contains("failed: mcp tool timed out after 30s"),
+        "{text}"
+    );
+    assert!(!text.contains("1.2s"), "失败卡片不显示耗时状态：{text}");
 }
 
 #[test]
-fn running_and_failed_mcp_cards_keep_formatted_header_and_arguments() {
-    let mut running = ToolCallView::new("call-1", "mcp__codegraph__codegraph_explore", 0);
-    assert!(running.accept_arguments(r#"{"query":"McpManager"}"#.to_string()));
-    running.status = ToolStatus::Running;
-    let Some(crate::app::state::ToolDetailView::Mcp(running_view)) = running.detail.as_deref()
-    else {
-        panic!("running MCP tool must have McpDetailView");
-    };
-    let rendered = render_with(&running, running_view, 100, Folds::default());
-    assert!(
-        rendered.contains("codegraph · codegraph_explore"),
-        "{rendered}"
-    );
-    assert!(rendered.contains("McpManager"), "{rendered}");
-
-    let mut failed = running.clone();
-    failed.settle(
-        ToolStatus::Failed,
-        Some("mcp tool timed out after 30s".into()),
-    );
-    let Some(crate::app::state::ToolDetailView::Mcp(failed_view)) = failed.detail.as_deref() else {
-        panic!("failed MCP tool must preserve McpDetailView");
-    };
-    let rendered_failed = render_with(&failed, failed_view, 100, Folds::default());
-    assert!(
-        rendered_failed.contains("codegraph · codegraph_explore"),
-        "{rendered_failed}"
-    );
-    assert!(
-        rendered_failed.contains("mcp tool timed out after 30s"),
-        "{rendered_failed}"
-    );
+fn interrupted_card_appends_one_reason_line() {
+    let call = call(ToolStatus::Interrupted, Some("cancelled by user"));
+    let text = render_with(&call, &view(), 100, Folds::default());
+    assert!(text.contains("interrupted: cancelled by user"), "{text}");
 }
 
 #[test]
-fn long_result_is_expandable() {
-    let mut view = view();
-    view.result = (0..30).map(|index| format!("line {index}")).collect();
-    view.result_more = 10;
-    assert!(has_more(&call(), &view, 80));
-    let expanded = render(
+fn failed_card_without_reason_has_no_reason_line() {
+    for error in [None, Some("")] {
+        let call = call(ToolStatus::Failed, error);
+        let view = view();
+        assert_eq!(rows(&call, &view, 100, Folds::default()), 2);
+        let text = render_with(&call, &view, 100, Folds::default());
+        assert!(!text.contains("failed:"), "{text}");
+    }
+}
+
+#[test]
+fn failed_single_card_uses_semantic_connector_color() {
+    let call = call(ToolStatus::Failed, Some("server not connected"));
+    let view = view();
+    let total = rows(&call, &view, 80, Folds::default());
+    let rect = Rect::new(0, 0, 80, u16::try_from(total).unwrap_or(u16::MAX));
+    let mut grid = Grid::new(rect);
+    let mut row = 0;
+    draw(
+        &mut grid,
+        rect,
+        0,
+        &mut row,
+        &call,
         &view,
-        80,
-        Folds {
-            body: false,
-            output: true,
-        },
+        0,
+        Folds::default(),
+        false,
     );
-    assert!(expanded.contains("line 19"), "{expanded}");
-    assert!(expanded.contains("10 more lines"), "{expanded}");
+    assert_eq!(
+        Some(grid.cell(2, 1).style.fg),
+        Some(style::agent_fail().fg),
+        "失败单体身份行的连接符应染红"
+    );
 }
 
 #[test]
-fn mcp_card_registers_a_click_region_and_connector_colors() {
-    use crate::app::state::ToolDetailView;
-    let mut call = call();
-    let mut view = view();
-    view.result = (0..10).map(|index| format!("line {index}")).collect();
-    view.result_more = 7;
+fn multiline_reason_is_collapsed_to_one_truncated_line() {
+    let call = call(
+        ToolStatus::Failed,
+        Some("first line\nsecond line that is far too long for the card"),
+    );
+    let text = render_with(&call, &view(), 30, Folds::default());
+    let lines: Vec<&str> = text.lines().collect();
+    assert_eq!(lines.len(), 3, "标题 + 身份行 + 原因行：{lines:?}");
+    assert!(
+        lines[2].contains("failed:") && lines[2].contains('…'),
+        "多行原因折叠为单行并尾部省略：{lines:?}"
+    );
+}
+
+#[test]
+fn mcp_card_has_no_expandable_content_or_click_region() {
+    let mut call = call(ToolStatus::Completed, None);
+    let view = view();
     call.detail = Some(Box::new(ToolDetailView::Mcp(view.clone())));
     let folds = Folds::default();
-    let total = rows(&call, &view, 100, folds);
+    assert!(!super::super::has_expandable_content(&call, 100));
+    let total = super::super::rows(&call, 100, folds);
     let regions = super::super::card_regions(&call, 100, folds, total);
-    assert!(regions.iter().any(|region| region.clickable));
-    assert_eq!(regions.len(), 2, "args and result have separate regions");
-    assert_eq!(regions[0].section, crate::app::state::CardSection::Body);
-    assert_eq!(regions[1].section, crate::app::state::CardSection::Output);
-    for region in &regions {
-        assert!(region.card.offset + region.card.rows <= total);
+    assert!(regions.is_empty(), "MCP 身份卡不得登记点击面");
+}
+
+#[test]
+fn long_server_and_tool_wrap_without_losing_content() {
+    let mut view = view();
+    view.server = "a-very-long-mcp-server-name-that-needs-wrapping".into();
+    view.tool = "a_very_long_tool_name_that_also_needs_wrapping".into();
+    let text = render_with(
+        &call(ToolStatus::Completed, None),
+        &view,
+        24,
+        Folds::default(),
+    );
+    assert!(text.contains("a-very-long"), "{text}");
+    assert!(
+        text.contains("a_very_") && text.contains("long_tool_name"),
+        "折行不得吞掉长 tool 名的后半段：{text}"
+    );
+}
+
+#[test]
+fn narrow_widths_keep_rows_and_draw_in_step() {
+    for width in [1u16, 4, 8, 12, 20] {
+        let text = render_with(
+            &call(ToolStatus::Completed, None),
+            &view(),
+            width,
+            Folds::default(),
+        );
+        assert!(!text.is_empty(), "width {width} must render something");
     }
-    let expanded = layout(
-        &call,
-        &view,
-        100,
-        Folds {
-            body: true,
-            output: true,
-        },
-    );
-    let arg_row = expanded
-        .layout
-        .rows
-        .iter()
-        .find(|row| {
-            row.segments
-                .iter()
-                .any(|segment| segment.text.contains("title"))
-        })
-        .expect("argument row");
-    assert_eq!(
-        arg_row.segments[0].style,
-        style::chat_tool_param(),
-        "args use the param color"
-    );
-    let result_row = expanded
-        .layout
-        .rows
-        .iter()
-        .find(|row| {
-            row.segments
-                .iter()
-                .any(|segment| segment.text.contains("line 0"))
-        })
-        .expect("result row");
-    assert_eq!(result_row.segments[0].style, style::muted());
 }
 
 #[test]
-fn collapsed_and_expanded_result_use_muted_markdown_styles() {
-    let mut view = view();
-    view.result = (0..10)
-        .map(|index| format!("line {index} with `code_{index}`"))
-        .collect();
-    view.result_more = 7;
-    let folded = layout(&call(), &view, 100, Folds::default());
-    let result_row = folded
-        .layout
-        .rows
-        .iter()
-        .find(|row| row.segments.iter().any(|seg| seg.text.contains("line 0")))
-        .expect("folded result");
-    assert_eq!(result_row.segments[0].style, style::muted());
-    assert_eq!(
-        result_row
-            .segments
-            .iter()
-            .find(|seg| seg.text == "code_0")
-            .expect("folded inline code")
-            .style,
-        style::md_read_inline_code().patch(style::muted())
-    );
-    let expanded = layout(
-        &call(),
-        &view,
-        100,
-        Folds {
-            body: true,
-            output: true,
-        },
-    );
-    let result_row = expanded
-        .layout
-        .rows
-        .iter()
-        .find(|row| row.segments.iter().any(|seg| seg.text.contains("line 0")))
-        .expect("expanded result");
-    assert_eq!(result_row.segments[0].style, style::muted());
-    assert_eq!(
-        result_row
-            .segments
-            .iter()
-            .find(|seg| seg.text == "code_0")
-            .expect("expanded inline code")
-            .style,
-        style::md_read_inline_code().patch(style::muted())
-    );
-}
-
-#[test]
-fn expanding_branch_keeps_bar_and_expanding_leaf_uses_padding() {
-    let mut view = view();
-    view.arguments = (0..10).map(|index| format!("arg {index}")).collect();
-    view.result = (0..10).map(|index| format!("line {index}")).collect();
-    let expanded = layout(
-        &call(),
-        &view,
-        100,
-        Folds {
-            body: true,
-            output: true,
-        },
-    );
-    let arg_row = expanded
-        .layout
-        .rows
-        .iter()
-        .find(|row| row.segments.iter().any(|seg| seg.text.contains("arg 1")))
-        .expect("argument continuation");
-    assert_eq!(arg_row.prefix, text::agent::TREE_BAR);
-    let result_row = expanded
-        .layout
-        .rows
-        .iter()
-        .find(|row| row.segments.iter().any(|seg| seg.text.contains("line 1")))
-        .expect("result continuation");
-    assert_eq!(result_row.prefix, text::agent::TREE_PAD);
-}
-
-#[test]
-fn truncated_mcp_card_places_marker_in_result_body_not_title() {
-    let mut call = call();
-    call.summary = Some(Box::new(ToolSummary {
-        path: Some("github · create_issue".into()),
-        truncated: true,
-        ..ToolSummary::default()
-    }));
-    let mut view = view();
-    view.result = (0..10).map(|index| format!("line {index}")).collect();
-    view.result_more = 12;
-    let folded = render_with(&call, &view, 100, Folds::default());
-    let header = folded.lines().next().unwrap_or("");
-    assert!(!header.contains("truncated"), "{header}");
-    assert!(folded.contains("more lines [truncated]"), "{folded}");
-    let expanded = render_with(
-        &call,
-        &view,
-        100,
-        Folds {
-            body: false,
-            output: true,
-        },
+fn group_body_puts_server_at_root_and_tool_below_it() {
+    let call = call(ToolStatus::Completed, None);
+    let text = render_body(&call, &view(), 80, false);
+    let lines: Vec<&str> = text.lines().collect();
+    assert!(
+        lines[0].starts_with(text::agent::TREE_BRANCH)
+            && lines[0].contains("github")
+            && lines[0].contains("1.2s")
+            && lines[0].contains("1 image(s)"),
+        "server 是一级分支并承载耗时与图片数：{lines:?}"
     );
     assert!(
-        expanded.contains("… 12 more lines [truncated]"),
-        "{expanded}"
+        lines[1].starts_with(text::agent::TREE_NESTED_BRANCH_LEAF)
+            && lines[1].contains("create_issue"),
+        "tool 是 server 下的二级叶子：{lines:?}"
     );
 }
 
 #[test]
-fn short_mcp_result_with_images_and_more_lines_never_renders_duplicate_more_hints() {
-    let mut call = call();
-    call.summary = Some(Box::new(ToolSummary {
-        path: Some("github · create_issue".into()),
-        truncated: true,
-        ..ToolSummary::default()
-    }));
-    let mut view = view();
-    view.result = vec!["line 0".into(), "line 1".into()];
-    view.result_more = 10;
-    view.images = vec![
-        crate::app::state::McpImageView {
-            path: "/tmp/a.png".into(),
-            mime: "image/png".into(),
-            width: 10,
-            height: 20,
-        },
-        crate::app::state::McpImageView {
-            path: "/tmp/b.png".into(),
-            mime: "image/png".into(),
-            width: 10,
-            height: 20,
-        },
-    ];
-    let folded = render_with(&call, &view, 100, Folds::default());
-    assert_eq!(
-        folded.matches("more lines").count(),
-        1,
-        "折叠态含图片时只允许出现一行 more lines 提示：{folded}"
+fn group_body_puts_error_reason_below_tool() {
+    let call = call(ToolStatus::Failed, Some("server not connected"));
+    let text = render_body(&call, &view(), 80, true);
+    let lines: Vec<&str> = text.lines().collect();
+    assert!(
+        lines[0].starts_with(text::agent::TREE_LEAF) && lines[0].contains("github"),
+        "末调用 server 用 └─ 收口：{lines:?}"
     );
-    assert_eq!(
-        folded.matches(text::agent::INLINE_TRUNCATED).count(),
-        1,
-        "折叠态只允许出现一次 [truncated]：{folded}"
+    assert!(
+        !lines[0].contains("1.2s"),
+        "失败调用的 server 行不写耗时：{lines:?}"
+    );
+    assert!(
+        lines[1].starts_with(text::agent::TREE_NESTED_LEAF_BRANCH)
+            && lines[1].contains("create_issue"),
+        "tool 是 server 下的二级分支：{lines:?}"
+    );
+    assert!(
+        lines[2].starts_with(text::agent::TREE_NESTED_LEAF_LEAF)
+            && lines[2].contains("failed: server not connected"),
+        "错误原因是 tool 的兄弟二级叶子：{lines:?}"
     );
 }

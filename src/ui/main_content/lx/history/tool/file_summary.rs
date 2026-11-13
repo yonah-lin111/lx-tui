@@ -13,10 +13,12 @@
 //!
 //! - 独立字段之间不再用 ` · ` 拼接：每个字段是一个 [`tree::Node`]；
 //! - `read` 的 file/folder 只来自**结果体**（[`ToolSummary::read_kind`]），不靠路径猜；
-//! - `read` 标题下方只显示一条路径（超宽单行尾部省略），不显示 `output limited` 或 `more lines`；
+//! - `read` 标题下方只显示一条路径（超宽单行尾部省略）；结果体确认后追加
+//!   `:12-40 · 29 lines`，不显示 `output limited` 或 `more lines`；
 //! - 渲染热路径不做常规 JSON 解析：只有摘要缺字段时才懒回退解析 `arguments_json`。
 
 use ratatui::layout::Rect;
+use unicode_width::UnicodeWidthStr;
 
 use crate::app::state::{ToolCallView, ToolStatus, ToolSummary};
 use crate::chat::tools::ReadKind;
@@ -79,6 +81,9 @@ fn path_node(call: &ToolCallView, cache: &mut Option<ToolSummary>) -> Option<Nod
 }
 
 /// `read` 的详情只有一条路径：按内容列单行尾部省略，不产生第二物理行。
+///
+/// 结果体确认过区间与实际行数时追加 `:12-40 · 29 lines`；运行中/旧记录只显示路径，
+/// 参数侧的 `offset` / `limit` 不参与展示。
 fn read_path_node(call: &ToolCallView, width: u16) -> Option<Node> {
     let mut cache: Option<ToolSummary> = None;
     let path = field(
@@ -89,11 +94,48 @@ fn read_path_node(call: &ToolCallView, width: u16) -> Option<Node> {
     )
     .map(|path| single_line(&path, TEXT_SAMPLE_CHARS))
     .filter(|path| !path.is_empty())?;
-    let path = crate::ui::main_content::lx::history::truncate_with_ellipsis(
-        &path,
-        tree::content_width(width),
-    );
-    (!path.is_empty()).then(|| Node::text(path, style::chat_tool_param()))
+
+    let available = tree::content_width(width);
+    let suffix = read_line_suffix(call.summary.as_deref());
+    let suffix_width = suffix.as_deref().map_or(0, UnicodeWidthStr::width);
+    // 后缀放得下才保留；路径至少保留 1 列 + 省略符。
+    let keep_suffix = suffix_width > 0 && available > suffix_width.saturating_add(1);
+    let path_budget = if keep_suffix {
+        available.saturating_sub(suffix_width)
+    } else {
+        available
+    };
+    let path = crate::ui::main_content::lx::history::truncate_with_ellipsis(&path, path_budget);
+    if path.is_empty() {
+        return None;
+    }
+    let mut spans = vec![Segment::new(path, style::chat_tool_param())];
+    if keep_suffix && let Some(suffix) = suffix {
+        spans.push(Segment::new(suffix, style::agent_step_detail()));
+    }
+    Some(Node::new(spans))
+}
+
+/// 结果体确认过的行区间与行数：`:12-40 · 29 lines`。
+///
+/// `read_lines` 只在结果体写入（参数侧不会产生），因此它缺失时连区间一起隐藏。
+fn read_line_suffix(summary: Option<&ToolSummary>) -> Option<String> {
+    let summary = summary?;
+    let (start, end) = summary.range?;
+    let lines = summary.read_lines?;
+    if end < start {
+        return None;
+    }
+    let range = if start == end {
+        format!(":{start}")
+    } else {
+        format!(":{start}-{end}")
+    };
+    Some(format!(
+        "{range}{}{lines} line{}",
+        text::LX_CHAT_TOOL_STATUS_SEP,
+        if lines == 1 { "" } else { "s" }
+    ))
 }
 
 /// `search` 的模式 + 范围：一个节点（`"pattern" in path`）。
@@ -364,7 +406,8 @@ pub(super) fn nodes(call: &ToolCallView) -> Vec<Node> {
 /// 详情排版：长参数折叠 2 行，事实节点始终可见（展开显示全部已保存摘要）。
 ///
 /// `read` 单体卡片遵循 `lx-message-block-display.md` §5.1：标题下方只显示一条路径（或一条错误/状态词），
-/// 超宽时单行尾部省略，不软换行成第二行，不显示 `output limited`，也不登记可展开点击面。
+/// 结果体确认后追加区间与行数；超宽时单行尾部省略，不软换行成第二行，不显示 `output limited`，
+/// 也不登记可展开点击面。
 fn detail_layout(call: &ToolCallView, width: u16, expanded: bool) -> tree::Layout {
     detail_layout_with_group(call, width, expanded, false)
 }

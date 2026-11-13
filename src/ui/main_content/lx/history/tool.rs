@@ -11,7 +11,8 @@
 //!   `search` 的命中数、`plan` 的完成计数、委派卡片的调用条件；失败/中断只保留错误详情。
 //! - **树体**回答「对什么做了什么」：一个节点是一段内容（命令、路径、命中、步骤块、
 //!   问答对、diff 正文），首行画 `├─`/`└─`，同一节点的续行左对齐或画 `│`。
-//! - 连续同名工具调用合并为“组头 + 逐调用树体”；组内不空行，组与前后块空一行。
+//! - 连续同名工具调用合并为“组头 + 逐调用树体”；非末尾调用体尾部有一行 `  │` 分隔，
+//!   组内不插入 `snapshot::spacer()`，组与前后块空一行。
 //! - 每个调用保留自己的可折叠树体；组头只占一行、不可点击。
 //! - 参数/输出各自可独立折叠（[`Folds`]），折叠提示只是续行，不单独收口。
 //! - 参数一律取自 [`ToolCallView::summary`]（参数派生 + 结果体补全，见
@@ -490,10 +491,7 @@ pub(super) fn has_expandable_content_with_group(
         Some(crate::app::state::ToolDetailView::Search(view)) => {
             search::has_more_with_group(call, view, width, in_group)
         }
-        Some(crate::app::state::ToolDetailView::Mcp(view)) => {
-            let layout = mcp::layout_with_group(call, view, width, Folds::default(), in_group);
-            layout.arguments_expandable || layout.result_expandable
-        }
+        Some(crate::app::state::ToolDetailView::Mcp(_)) => false,
         Some(crate::app::state::ToolDetailView::WebSearch(view)) => {
             let layout =
                 web_search::layout_with_group(call, view, width, Folds::default(), in_group);
@@ -525,25 +523,6 @@ pub(super) fn agent_links_with_group(
         }
         _ => Vec::new(),
     }
-}
-
-/// MCP 卡片的点击面：参数块（Body）与结果块（Output）各自独立折叠。
-///
-/// 标题行跟随第一块，点击标题只切换参数块；结果块从参数块之后开始。
-fn mcp_regions(
-    call: &ToolCallView,
-    view: &crate::app::state::McpDetailView,
-    width: u16,
-    folds: Folds,
-    in_group: bool,
-) -> Vec<CardRegion> {
-    let layout = mcp::layout_with_group(call, view, width, folds, in_group);
-    split_regions(
-        layout.arguments_rows,
-        layout.result_rows,
-        layout.arguments_expandable,
-        layout.result_expandable,
-    )
 }
 
 /// 联网搜索卡片的点击面：查询块（Body）与结果块（Output）各自独立折叠。
@@ -686,9 +665,7 @@ pub(super) fn card_regions_with_group(
                 clickable: true,
             }]
         }
-        Some(crate::app::state::ToolDetailView::Mcp(view)) => {
-            mcp_regions(call, view, width, folds, in_group)
-        }
+        Some(crate::app::state::ToolDetailView::Mcp(_)) => Vec::new(),
         Some(crate::app::state::ToolDetailView::WebSearch(view)) => {
             web_search_regions(call, view, width, folds, in_group)
         }

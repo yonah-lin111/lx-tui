@@ -10,25 +10,7 @@ pub fn needs_login(name: &str) -> String {
     format!("MCP server \"{name}\" needs login; open Settings → MCP")
 }
 
-/// 卡片展开区的参数标题。
-pub const DETAIL_ARGUMENTS: &str = "Arguments";
-/// 卡片展开区的结果标题。
-pub const DETAIL_RESULT: &str = "Result";
-/// 图片占位行前缀。
-pub const IMAGE_LINE_PREFIX: &str = "[image";
 /// 卡片标题里的图片张数。
 pub fn images_label(count: usize) -> String {
     format!("{count} image(s)")
-}
-/// 展开区的图片占位行。
-pub fn image_line(mime: &str, width: u32, height: u32, path: &str) -> String {
-    format!("[image {mime} {width}×{height}] {path}")
-}
-/// 超出 20 行时的提示（单复数与 `… N more lines` 一致）。
-pub fn more_lines(count: usize) -> String {
-    if count == 1 {
-        "… 1 more line".to_string()
-    } else {
-        format!("… {count} more lines")
-    }
 }
