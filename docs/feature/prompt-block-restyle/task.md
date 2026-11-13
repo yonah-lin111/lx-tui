@@ -49,6 +49,8 @@
 - [x] `slash.rs` 顶部的 doc（107–112 行）同步修改。
 - [x] 测试：页面已有 `&&&` 时，Normal 上下文中不出现内置模板命令和自定义 AgentBlock；`/supplement` 在 Normal、Template、Supple 三种上下文中都可见。
 
+> 落点规则已由 `docs/feature/prompt-supplement-insert-before-next/` 调整：有下一个块时插到其起始行之前，无下一个块时才使用本节固定追加落点。
+
 ### P1.4 `+++` 追加落点（design §3.5）
 
 - [x] `prompt/block.rs` 新增 `append_supple_block`，`viewport.rs` 新增 `scroll_lines_into_view`。

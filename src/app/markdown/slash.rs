@@ -139,7 +139,7 @@ pub fn slash_filter(custom: &[SlashItem], context: SlashContext, query: &str) ->
                 SlashInsertion::AgentBlock { .. } => {
                     context.context == BlockContext::Normal && !context.template_present
                 }
-                // 完整 `+++` 补充块：任意位置可见（确认时追加到固定落点）；
+                // 完整 `+++` 补充块：任意位置可见（确认时插到下一个块之前；无下一个块时追加到固定落点）；
                 // 页内存在未闭合块时隐藏，避免新块被吞进未闭合块内部。
                 SlashInsertion::SuppleBlock { .. } => !context.unclosed_block,
                 // template 作用域的 Markdown：仅在 `&&&`/`+++` 内。

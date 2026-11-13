@@ -230,7 +230,7 @@ impl Prompt {
                 self.break_group();
                 self.record(EditKind::Other);
                 if matches!(item.insertion, markdown::SlashInsertion::SuppleBlock { .. }) {
-                    self.append_supple_block(&trigger, &content, cursor);
+                    self.insert_supple_block(&trigger, &content, cursor);
                 } else {
                     self.splice_text(trigger.line_start, trigger.line_end, &content);
                     self.cursor = trigger.line_start + cursor;

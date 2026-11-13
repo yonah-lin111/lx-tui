@@ -1,4 +1,4 @@
-//! 补充块操作：清理与删除；纯状态、无 IO。
+//! 补充块操作：清理、删除与插入；纯状态、无 IO。
 
 use crate::app::paste::mask_pasted_text;
 
@@ -72,11 +72,14 @@ impl Prompt {
         true
     }
 
-    /// 清空斜杠命令行内容（保留该空行）后，把补充块追加到固定落点；调用方已记录撤销快照。
+    /// 清空斜杠命令行内容（保留该空行）后，把补充块插到下一个块之前；
+    /// 没有下一个块时按旧落点追加；调用方已记录撤销快照。
     ///
-    /// 落点：最后一个 `+++` 结束行之后 → `&&&` 结束行之后 → 文末；
-    /// 与前文之间恰好隔一个空行，光标落在新块标题值（`{title: }` 的 `}` 前）。
-    pub(super) fn append_supple_block(
+    /// 下一个块按文档顺序取起始行在命令行之后的第一个已闭合块（`&&&` 与 `+++`
+    /// 同等参与）；有下一个块时插在其起始行之前，无下一个块时追加到最后一个
+    /// `+++` 结束行之后 → `&&&` 结束行之后 → 文末。新块与前后内容各隔一个空行，
+    /// 光标落在新块标题值（`{title: }` 的 `}` 前）。
+    pub(super) fn insert_supple_block(
         &mut self,
         trigger: &markdown::SlashTrigger,
         content: &str,
@@ -90,6 +93,12 @@ impl Prompt {
         if scan.spans.iter().any(|span| !span.closed) {
             return;
         }
+        let command_line = self.text[..trigger.line_start].matches('\n').count();
+        let next_start = scan
+            .spans
+            .iter()
+            .find(|span| span.start > command_line)
+            .map(|span| span.start);
         let anchor_line = scan
             .spans
             .iter()
@@ -102,7 +111,39 @@ impl Prompt {
             })
             .map(|span| span.end);
 
-        let block_start = match anchor_line.and_then(|line| self.line_bounds(line)) {
+        let block_start = match next_start {
+            Some(line) => self.insert_before_line(line, content),
+            None => self.append_after_anchor(anchor_line, content),
+        };
+
+        self.cursor = block_start + cursor;
+        let start_line = self.text[..block_start].matches('\n').count();
+        let end_line = start_line + content.matches('\n').count();
+        self.scroll_lines_into_view(start_line, end_line);
+    }
+
+    /// 在逻辑行 `line` 起始位置插入块正文，前后各保留一个空行；返回正文起始字节偏移。
+    ///
+    /// 文首只有空行时清掉前导空行，避免文档以空行开头。
+    fn insert_before_line(&mut self, line: usize, content: &str) -> usize {
+        let Some((line_start, _)) = self.line_bounds(line) else {
+            return self.text.len();
+        };
+        let prefix = &self.text[..line_start];
+        if prefix.trim().is_empty() {
+            self.splice_text(0, line_start, &format!("{content}\n\n"));
+            0
+        } else {
+            let base = prefix.trim_end_matches('\n').len();
+            self.splice_text(base, line_start, &format!("\n\n{content}\n\n"));
+            base + 2
+        }
+    }
+
+    /// 无下一个块时的旧落点：最后一个已闭合 `+++` 结束行之后 → 首个已闭合 `&&&`
+    /// 结束行之后 → 文末；返回正文起始字节偏移。
+    fn append_after_anchor(&mut self, anchor_line: Option<usize>, content: &str) -> usize {
+        match anchor_line.and_then(|line| self.line_bounds(line)) {
             Some((_, anchor_end)) => {
                 let after = &self.text[anchor_end..];
                 let newlines = after.bytes().take_while(|byte| *byte == b'\n').count();
@@ -131,12 +172,7 @@ impl Prompt {
                     base + 2
                 }
             }
-        };
-
-        self.cursor = block_start + cursor;
-        let start_line = self.text[..block_start].matches('\n').count();
-        let end_line = start_line + content.matches('\n').count();
-        self.scroll_lines_into_view(start_line, end_line);
+        }
     }
 }
 

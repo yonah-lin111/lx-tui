@@ -1,4 +1,4 @@
-//! 补充块追加落点、撤销与视口滚动测试。
+//! 补充块插入落点、撤销与视口滚动测试。
 
 use super::*;
 use crate::tiling::PaneId;
@@ -38,28 +38,28 @@ fn supplement_in_empty_document_replaces_entire_text_and_positions_cursor_in_tit
 }
 
 #[test]
-fn supplement_typed_before_template_keeps_command_blank_line_and_appends_after_template() {
-    let initial = "\n&&& addTemplate --start\n{title: T}\n\n- body\n&&& addTemplate --end";
+fn supplement_before_template_inserts_before_template_at_document_start() {
+    let initial = "\n\n&&& addTemplate --start\n{title: T}\n\n- body\n&&& addTemplate --end";
     let mut p = prompt_with(60, 20, initial);
     p.set_cursor_offset(0);
     trigger_supplement(&mut p);
 
     assert!(
-        p.text().starts_with("\n&&& addTemplate --start\n"),
-        "原命令行只清空命令文字、保留空行: {:?}",
+        p.text().starts_with("+++ supplement --start\n{title: }\n"),
+        "新块插在 &&& 之前且文首无前导空行: {:?}",
         p.text()
     );
     assert!(
         p.text()
-            .contains("&&& addTemplate --end\n\n+++ supplement --start\n{title: }"),
-        "块追加在 &&& 之后且恰好空一行: {:?}",
+            .contains("+++ supplement --end\n\n&&& addTemplate --start"),
+        "新块与 &&& 之间恰好空一行: {:?}",
         p.text()
     );
     assert_eq!(&p.text()[p.cursor()..p.cursor() + 1], "}");
 }
 
 #[test]
-fn supplement_typed_inside_template_appends_after_last_existing_supplement() {
+fn supplement_inside_template_inserts_before_first_supple() {
     let initial = concat!(
         "&&& addTemplate --start\n",
         "{title: T}\n",
@@ -84,9 +84,7 @@ fn supplement_typed_inside_template_appends_after_last_existing_supplement() {
     let spans = markdown::block_spans(p.text());
     assert_eq!(spans.len(), 4, "1 个 &&& + 3 个 +++: {spans:?}");
     assert_eq!(spans[0].kind, BlockKind::Template);
-    assert_eq!(spans[1].kind, BlockKind::Supple);
-    assert_eq!(spans[2].kind, BlockKind::Supple);
-    assert_eq!(spans[3].kind, BlockKind::Supple);
+    assert!(spans[1..].iter().all(|span| span.kind == BlockKind::Supple));
     assert!(
         !p.text()[..p.text().find("&&& addTemplate --end").unwrap()].contains("+++"),
         "&&& 内不应残留 +++"
@@ -97,12 +95,300 @@ fn supplement_typed_inside_template_appends_after_last_existing_supplement() {
         "&&& 内部触发行的空行保留: {:?}",
         p.text()
     );
+
+    let template_end = p.text().find("&&& addTemplate --end").unwrap();
+    let new_start = p.text().find("+++ supplement --start\n{title: }").unwrap();
+    let s1_start = p
+        .text()
+        .find("+++ supplement --start\n{title: S1}")
+        .unwrap();
     assert!(
-        p.text()
-            .contains("{title: S2}\n\n+++ supplement --end\n\n+++ supplement --start\n{title: }"),
-        "追加在第 2 个 +++ 之后且空一行: {:?}",
+        template_end < new_start && new_start < s1_start,
+        "新块应插在 &&& 与第一个 +++ 之间: {:?}",
         p.text()
     );
+    assert!(
+        p.text()
+            .contains("+++ supplement --end\n\n+++ supplement --start\n{title: S1}"),
+        "新块与 S1 之间恰好空一行: {:?}",
+        p.text()
+    );
+}
+
+#[test]
+fn supplement_inside_supple_inserts_before_next_supple() {
+    let initial = concat!(
+        "+++ supplement --start\n",
+        "{title: S1}\n",
+        "\n",
+        "+++ supplement --end\n",
+        "\n",
+        "+++ supplement --start\n",
+        "{title: S2}\n",
+        "\n",
+        "+++ supplement --end",
+    );
+    let mut p = prompt_with(60, 30, initial);
+    let inside = p.text().find("{title: S1}\n").unwrap() + "{title: S1}\n".len();
+    p.set_cursor_offset(inside);
+    for ch in "/supplement".chars() {
+        p.insert_char(ch);
+    }
+    let before_confirm = p.text().to_string();
+    let cursor_before = p.cursor();
+    assert!(p.slash_confirm());
+
+    let spans = markdown::block_spans(p.text());
+    assert_eq!(spans.len(), 3, "{spans:?}");
+    assert!(spans.iter().all(|span| span.kind == BlockKind::Supple));
+    assert!(
+        spans[0].start < spans[0].end
+            && spans[0].end < spans[1].start
+            && spans[1].end < spans[2].start,
+        "新块应位于两个既有补充块之间: {spans:?}"
+    );
+
+    let s1_end = p.text().find("+++ supplement --end").unwrap();
+    let new_start = p.text().find("+++ supplement --start\n{title: }").unwrap();
+    let s2_start = p
+        .text()
+        .find("+++ supplement --start\n{title: S2}")
+        .unwrap();
+    assert!(
+        s1_end < new_start && new_start < s2_start,
+        "新块应插在 S2 之前: {:?}",
+        p.text()
+    );
+    assert!(
+        p.text()
+            .contains("{title: S1}\n\n+++ supplement --end\n\n+++ supplement --start\n{title: }"),
+        "S1 内命令空行保留，新块与 S1 空一行: {:?}",
+        p.text()
+    );
+    assert!(
+        p.text()
+            .contains("+++ supplement --end\n\n+++ supplement --start\n{title: S2}"),
+        "新块与 S2 空一行: {:?}",
+        p.text()
+    );
+    assert_eq!(&p.text()[p.cursor()..p.cursor() + 1], "}");
+    assert!(p.text()[..p.cursor()].ends_with("{title: "));
+
+    assert!(p.can_undo());
+    p.undo();
+    assert_eq!(p.text(), before_confirm);
+    assert_eq!(p.cursor(), cursor_before);
+}
+
+#[test]
+fn supplement_before_second_template_inserts_before_it() {
+    let initial = concat!(
+        "+++ supplement --start\n",
+        "{title: S1}\n",
+        "\n",
+        "+++ supplement --end\n",
+        "\n",
+        "&&& addTemplate --start\n",
+        "{title: T}\n",
+        "\n",
+        "&&& addTemplate --end",
+    );
+    let mut p = prompt_with(60, 30, initial);
+    let inside = p.text().find("{title: S1}\n").unwrap() + "{title: S1}\n".len();
+    p.set_cursor_offset(inside);
+    trigger_supplement(&mut p);
+
+    let spans = markdown::block_spans(p.text());
+    assert_eq!(spans.len(), 3, "{spans:?}");
+    assert_eq!(spans[0].kind, BlockKind::Supple);
+    assert_eq!(spans[1].kind, BlockKind::Supple);
+    assert_eq!(spans[2].kind, BlockKind::Template);
+
+    let s1_end = p.text().find("+++ supplement --end").unwrap();
+    let new_start = p.text().find("+++ supplement --start\n{title: }").unwrap();
+    let template_start = p.text().find("&&& addTemplate --start").unwrap();
+    assert!(
+        s1_end < new_start && new_start < template_start,
+        "下一个 &&& 也参与边界判断: {:?}",
+        p.text()
+    );
+    assert!(
+        p.text()
+            .contains("+++ supplement --end\n\n&&& addTemplate --start"),
+        "新块与 &&& 之间恰好空一行: {:?}",
+        p.text()
+    );
+}
+
+#[test]
+fn supplement_between_blocks_keeps_plain_text_above_new_block() {
+    let initial = concat!(
+        "+++ supplement --start\n",
+        "{title: S1}\n",
+        "+++ supplement --end\n",
+        "\n",
+        "plain note\n",
+        "\n",
+        "+++ supplement --start\n",
+        "{title: S2}\n",
+        "+++ supplement --end",
+    );
+    let mut p = prompt_with(60, 30, initial);
+    let inside = p.text().find("plain note\n").unwrap() + "plain note\n".len();
+    p.set_cursor_offset(inside);
+    trigger_supplement(&mut p);
+
+    let plain = p.text().find("plain note").unwrap();
+    let new_start = p.text().find("+++ supplement --start\n{title: }").unwrap();
+    let s2_start = p
+        .text()
+        .find("+++ supplement --start\n{title: S2}")
+        .unwrap();
+    assert!(
+        plain < new_start && new_start < s2_start,
+        "普通文字留在新块上方: {:?}",
+        p.text()
+    );
+    assert!(
+        p.text()
+            .contains("plain note\n\n+++ supplement --start\n{title: }"),
+        "普通文字与新块之间空一行: {:?}",
+        p.text()
+    );
+    assert!(
+        p.text()
+            .contains("+++ supplement --end\n\n+++ supplement --start\n{title: S2}"),
+        "新块与 S2 之间空一行: {:?}",
+        p.text()
+    );
+}
+
+#[test]
+fn supplement_after_last_block_appends_after_last_supple() {
+    let initial = concat!(
+        "+++ supplement --start\n",
+        "{title: S1}\n",
+        "\n",
+        "+++ supplement --end\n",
+        "\n",
+        "+++ supplement --start\n",
+        "{title: S2}\n",
+        "\n",
+        "+++ supplement --end",
+    );
+    let mut p = prompt_with(60, 30, initial);
+    let inside = p.text().find("{title: S2}\n").unwrap() + "{title: S2}\n".len();
+    p.set_cursor_offset(inside);
+    trigger_supplement(&mut p);
+
+    let spans = markdown::block_spans(p.text());
+    assert_eq!(spans.len(), 3, "{spans:?}");
+    assert!(spans.iter().all(|span| span.kind == BlockKind::Supple));
+
+    let s2_end = p
+        .text()
+        .find("+++ supplement --end\n\n+++ supplement --start\n{title: }")
+        .unwrap();
+    let new_start = p.text().find("+++ supplement --start\n{title: }").unwrap();
+    assert!(
+        s2_end < new_start,
+        "无下一个块时应追加到最后一个 +++ 之后: {:?}",
+        p.text()
+    );
+    assert!(
+        p.text().ends_with("+++ supplement --end"),
+        "新块应位于文末: {:?}",
+        p.text()
+    );
+}
+
+#[test]
+fn supplement_spacing_collapses_extra_blank_lines() {
+    let initial = concat!(
+        "+++ supplement --start\n",
+        "{title: S1}\n",
+        "\n",
+        "+++ supplement --end\n",
+        "\n",
+        "\n",
+        "\n",
+        "+++ supplement --start\n",
+        "{title: S2}\n",
+        "\n",
+        "+++ supplement --end",
+    );
+    let mut p = prompt_with(60, 30, initial);
+    let inside = p.text().find("{title: S1}\n").unwrap() + "{title: S1}\n".len();
+    p.set_cursor_offset(inside);
+    trigger_supplement(&mut p);
+
+    assert!(
+        !p.text().contains("\n\n\n"),
+        "插入点附近不得保留连续多空行: {:?}",
+        p.text()
+    );
+    assert!(
+        p.text()
+            .contains("+++ supplement --end\n\n+++ supplement --start\n{title: }"),
+        "新块前恰好一个空行: {:?}",
+        p.text()
+    );
+    assert!(
+        p.text()
+            .contains("+++ supplement --end\n\n+++ supplement --start\n{title: S2}"),
+        "新块后恰好一个空行: {:?}",
+        p.text()
+    );
+}
+
+#[test]
+fn custom_supple_block_uses_same_insert_position() {
+    let initial = concat!(
+        "+++ supplement --start\n",
+        "{title: S1}\n",
+        "\n",
+        "+++ supplement --end\n",
+        "\n",
+        "+++ supplement --start\n",
+        "{title: S2}\n",
+        "\n",
+        "+++ supplement --end",
+    );
+    let mut p = prompt_with(60, 30, initial);
+    p.set_custom_commands(vec![markdown::SlashItem::custom_supple(
+        "extra",
+        markdown::CommandSource::User,
+        Some("Extra"),
+        "supple body",
+        "extra supplement",
+    )]);
+    let inside = p.text().find("{title: S1}\n").unwrap() + "{title: S1}\n".len();
+    p.set_cursor_offset(inside);
+    for ch in "/extra".chars() {
+        p.insert_char(ch);
+    }
+    assert!(p.slash_confirm());
+
+    let new_start = p
+        .text()
+        .find("+++ extra --start\n{title: Extra}")
+        .expect("custom supple block");
+    let s2_start = p
+        .text()
+        .find("+++ supplement --start\n{title: S2}")
+        .unwrap();
+    assert!(
+        new_start < s2_start,
+        "自定义补充块应使用同一落点: {:?}",
+        p.text()
+    );
+    assert!(
+        p.text()
+            .contains("+++ extra --end\n\n+++ supplement --start\n{title: S2}"),
+        "自定义块与 S2 之间空一行: {:?}",
+        p.text()
+    );
+    assert_eq!(&p.text()[p.cursor()..p.cursor() + 1], "}");
 }
 
 #[test]
@@ -193,7 +479,7 @@ fn unclosed_block_hides_supplement_command_and_skips_append() {
         query: "supplement".to_string(),
     };
     let (content, cursor_in_block) = markdown::supple_block_content("supplement", None, "");
-    p.append_supple_block(&trigger, &content, cursor_in_block);
+    p.insert_supple_block(&trigger, &content, cursor_in_block);
     assert_eq!(p.text(), "&&& addTemplate --start\n{title: T}\nbody\n");
     assert!(!p.text().contains("+++"), "未闭合块下不得追加补充块");
 }

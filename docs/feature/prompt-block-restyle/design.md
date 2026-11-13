@@ -228,6 +228,8 @@ pub struct SlashContext {
 
 > `/supplement` 在 Normal 上下文中也可见，这是新增的。代码围栏内本来就不会触发斜杠面板（`slash_trigger`），不需要改。页面存在未闭合的 `&&&` 或 `+++` 时，插入新的 `+++` 只会被吞进未闭合块或破坏其闭合，因此斜杠面板直接隐藏全部 `SuppleBlock` 候选。
 
+> 落点规则已由 `docs/feature/prompt-supplement-insert-before-next/` 调整：有下一个块时插到其起始行之前，无下一个块时才使用本文的固定追加落点。
+
 ### 3.5 `+++` 插入落点（`src/app/prompt/panel.rs::slash_confirm`）
 
 现状：`self.splice_text(trigger.line_start, trigger.line_end, &content)` 原地替换命令行。改为：
