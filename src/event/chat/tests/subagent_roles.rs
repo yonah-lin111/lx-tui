@@ -468,7 +468,7 @@ async fn interrupted_turn_is_replayed_with_turn_aborted_and_followup_envelope() 
 
 #[tokio::test]
 async fn send_subagent_user_input_effect_resumes_completed_agent_and_starts_a_turn() {
-    let (fixture, mut state, key, persistence, mut streams, _parent) = fixture_with_parent();
+    let (fixture, mut state, key, mut persistence, mut streams, _parent) = fixture_with_parent();
     let agent_id = spawn_explorer(&mut state, &mut streams, &persistence, &key, "first task").await;
     let child_session = streams
         .subagents
@@ -497,6 +497,16 @@ async fn send_subagent_user_input_effect_resumes_completed_agent_and_starts_a_tu
         agent_id: agent_id.clone(),
         text: "  ask again  ".into(),
     });
+    // 事件循环顺序：持久化泵先执行；该效应必须被认作聊天效应留到下一层，不能被吞掉。
+    persistence.pump(&mut state);
+    assert!(
+        matches!(
+            state.effects.as_slice(),
+            [Effect::SendSubagentUserInput { .. }]
+        ),
+        "面板追问被持久化泵吞掉：{:?}",
+        state.effects
+    );
     let changed =
         crate::event::chat::apply_subagent_effects(&mut state, &mut streams, &persistence);
     assert!(changed);
@@ -1114,4 +1124,102 @@ fn subagent_reference_blocks_prefer_bare_role_name_over_same_named_instance() {
     assert!(blocks[0].contains("kind: role"), "{}", blocks[0]);
     assert!(blocks[0].contains("role: explorer"), "{}", blocks[0]);
     assert!(!blocks[0].contains("agent_id:"), "{}", blocks[0]);
+}
+
+/// 面板追问完成后：新子轮的 user 消息与流式 delta 必须都落到 Agents 详情。
+#[tokio::test]
+async fn resumed_completed_agent_deltas_land_in_the_detail_chat() {
+    let (fixture, mut state, key, persistence, mut streams, _parent) = fixture_with_parent();
+    let agent_id = spawn_explorer(&mut state, &mut streams, &persistence, &key, "first task").await;
+    let child_session = streams
+        .subagents
+        .values()
+        .find(|handle| handle.agent_id == agent_id)
+        .expect("handle")
+        .child_session_id
+        .clone();
+    crate::event::chat::finish_subagent(
+        &mut state,
+        &mut streams,
+        &persistence,
+        RequestKey {
+            pane: key.pane,
+            session: child_session.clone(),
+            generation: key.generation,
+        },
+        StopReason::Complete,
+        Usage::default(),
+    );
+    assert!(!streams.subagents.contains_key(&child_session));
+
+    state.effects.push(Effect::SendSubagentUserInput {
+        pane: key.pane,
+        session_id: key.session.clone(),
+        agent_id: agent_id.clone(),
+        text: "ask again".into(),
+    });
+    assert!(crate::event::chat::apply_subagent_effects(
+        &mut state,
+        &mut streams,
+        &persistence
+    ));
+
+    let run = state
+        .pane_anywhere(key.pane)
+        .expect("pane")
+        .lx
+        .agents
+        .by_agent(&agent_id)
+        .expect("run");
+    assert_eq!(run.status, "running", "resume 后应重新进入 running");
+    assert!(
+        run.chat
+            .messages
+            .iter()
+            .any(|message| message.role == "user" && message.text().contains("ask again")),
+        "详情缺少新追问的用户消息：{:?}",
+        run.chat
+            .messages
+            .iter()
+            .map(|message| (message.role.clone(), message.text()))
+            .collect::<Vec<_>>()
+    );
+
+    let changed = crate::event::chat::handle_subagent_net_event(
+        &mut state,
+        &mut streams,
+        super::ChatNetEvent::Delta {
+            key: RequestKey {
+                pane: key.pane,
+                session: child_session,
+                generation: key.generation,
+            },
+            deltas: vec![ChatDelta::Part(crate::chat::events::PartDelta {
+                kind: PartKind::Text,
+                text: "second reply".into(),
+                metadata: None,
+            })],
+        },
+    );
+    assert!(changed);
+    let run = state
+        .pane_anywhere(key.pane)
+        .expect("pane")
+        .lx
+        .agents
+        .by_agent(&agent_id)
+        .expect("run");
+    assert!(
+        run.chat
+            .messages
+            .iter()
+            .any(|message| message.role == "assistant" && message.text().contains("second reply")),
+        "详情缺少新子轮输出：{:?}",
+        run.chat
+            .messages
+            .iter()
+            .map(|message| (message.role.clone(), message.text()))
+            .collect::<Vec<_>>()
+    );
+    let _ = fixture;
 }
