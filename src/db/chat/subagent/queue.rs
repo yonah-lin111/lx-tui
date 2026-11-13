@@ -129,6 +129,8 @@ pub struct ClaimedSubagentTurn {
     pub started_at_ms: i64,
     pub items: Vec<PersistedInputItem>,
     pub queued_remaining: usize,
+    /// 本轮完成后是否向主 agent 投递报告；人类私聊输入为 false。
+    pub notify_parent: bool,
 }
 
 /// 单个子 agent 的队列投影摘要（供 `list_agents` 与 UI 面板读取）。
@@ -154,6 +156,7 @@ impl Database {
         parent_message_id: Option<&str>,
         items: &[PersistedInputItem],
         interrupt: bool,
+        notify_parent: bool,
     ) -> Result<EnqueuedInput> {
         let dedupe_key = dedupe_key.trim();
         if dedupe_key.is_empty() || items.is_empty() {
@@ -206,8 +209,8 @@ impl Database {
         transaction.execute(
             r#"INSERT INTO agent_subagent_input
                    (external_id, agent_id, dedupe_key, parent_call_id, parent_message_id,
-                    position, priority, status, created_at_ms)
-               VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, 'queued', ?8)"#,
+                    position, priority, status, notify_parent, created_at_ms)
+               VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, 'queued', ?8, ?9)"#,
             params![
                 submission_id,
                 agent_id,
@@ -216,6 +219,7 @@ impl Database {
                 parent_message_id,
                 position,
                 priority,
+                i64::from(notify_parent),
                 now,
             ],
         )?;
@@ -327,15 +331,15 @@ impl Database {
             return Err(DbError::MutationConflict);
         }
 
-        let input_row: Option<(String, Option<String>)> = transaction
+        let input_row: Option<(String, Option<String>, i64)> = transaction
             .query_row(
-                r#"SELECT status, error_code FROM agent_subagent_input
+                r#"SELECT status, error_code, notify_parent FROM agent_subagent_input
                    WHERE external_id = ?1 AND agent_id = ?2"#,
                 params![submission_id, agent_id],
-                |row| Ok((row.get(0)?, row.get(1)?)),
+                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
             )
             .optional()?;
-        let Some((status, error_code)) = input_row else {
+        let Some((status, error_code, notify_parent)) = input_row else {
             return Err(DbError::SessionMissing);
         };
         if status != "queued" || error_code.is_some() {
@@ -433,6 +437,7 @@ impl Database {
             started_at_ms: now,
             items,
             queued_remaining,
+            notify_parent: notify_parent != 0,
         })
     }
 

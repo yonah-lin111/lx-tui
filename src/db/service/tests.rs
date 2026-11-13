@@ -1435,15 +1435,39 @@ fn pump_defers_panel_subagent_input_to_the_chat_layer() {
         session_id: "sess".into(),
         agent_id: "sub".into(),
         text: "hi".into(),
+        notify_parent: false,
     });
     service.pump(&mut state);
     assert!(
         matches!(
             state.effects.as_slice(),
-            [Effect::SendSubagentUserInput { pane: queued, session_id, agent_id, text }]
+            [Effect::SendSubagentUserInput { pane: queued, session_id, agent_id, text, .. }]
                 if *queued == pane && session_id == "sess" && agent_id == "sub" && text == "hi"
         ),
         "面板追问必须留给事件层执行：{:?}",
+        state.effects
+    );
+}
+
+/// 面板 steer 同样属于聊天效应，持久化泵不得吞掉。
+#[test]
+fn pump_defers_subagent_steer_to_the_chat_layer() {
+    let (mut service, mut state, _, _) = trusted_service("pump-subagent-steer");
+    let pane = state.active_tab().layout.focus();
+    state.effects.push(Effect::SteerSubagent {
+        pane,
+        agent_id: "sub".into(),
+        text: "steer".into(),
+        notify_parent: false,
+    });
+    service.pump(&mut state);
+    assert!(
+        matches!(
+            state.effects.as_slice(),
+            [Effect::SteerSubagent { pane: queued, agent_id, text, .. }]
+                if *queued == pane && agent_id == "sub" && text == "steer"
+        ),
+        "steer 必须留给事件层执行：{:?}",
         state.effects
     );
 }

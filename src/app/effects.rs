@@ -249,6 +249,16 @@ pub enum Effect {
         session_id: String,
         agent_id: String,
         text: String,
+        /// true 时本轮完成后向主 agent 投递报告；false 为人类私聊。
+        notify_parent: bool,
+    },
+    /// 向正在运行的子 agent 注入轮内 steer（下一步采样前生效，不新起一轮）。
+    SteerSubagent {
+        pane: crate::tiling::PaneId,
+        agent_id: String,
+        text: String,
+        /// 目标轮次已结束时回退为普通追问；沿用当前面板模式。
+        notify_parent: bool,
     },
     /// 加载单个会话及有序消息（恢复旧会话）。
     LoadChatSession {

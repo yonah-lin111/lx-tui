@@ -557,6 +557,114 @@ impl Database {
         }))
     }
 
+    /// 最近一次人类私聊的紧凑 transcript（user/assistant 文本，含轮内 steer）。
+    ///
+    /// 只有 `list_agents(include_private=true)` 会调用；默认路径不读取、不注入主 agent 上下文。
+    /// 从该私聊输入对应的 user 消息起，截到下一条正式提交的 user 消息之前；上限 4 KiB。
+    pub fn private_turn_tail(
+        &self,
+        workspace: &Path,
+        parent_session: &str,
+        agent_id: &str,
+    ) -> Result<Option<String>> {
+        const MAX_TAIL_BYTES: usize = 4096;
+        let Some(workspace_external) = self.workspace_external_id(workspace)? else {
+            return Ok(None);
+        };
+        let latest: Option<(String, i64)> = self
+            .conn
+            .query_row(
+                r#"SELECT i.child_user_message_id, i.created_at_ms
+                   FROM agent_subagent_input i
+                   JOIN agent_subagent a ON a.external_id = i.agent_id
+                   JOIN agent_session p ON p.external_id = a.parent_session_id
+                   WHERE i.agent_id = ?1 AND a.parent_session_id = ?2
+                     AND p.workspace_id = ?3
+                     AND i.notify_parent = 0 AND i.child_user_message_id IS NOT NULL
+                   ORDER BY i.created_at_ms DESC, i.id DESC LIMIT 1"#,
+                params![agent_id, parent_session, workspace_external],
+                |row| Ok((row.get(0)?, row.get(1)?)),
+            )
+            .optional()?;
+        let Some((start_message_id, submitted_at_ms)) = latest else {
+            return Ok(None);
+        };
+        let next_message_id: Option<String> = self
+            .conn
+            .query_row(
+                r#"SELECT child_user_message_id FROM agent_subagent_input
+                   WHERE agent_id = ?1 AND child_user_message_id IS NOT NULL
+                     AND created_at_ms > ?2
+                   ORDER BY created_at_ms ASC, id ASC LIMIT 1"#,
+                params![agent_id, submitted_at_ms],
+                |row| row.get(0),
+            )
+            .optional()?;
+        let child_session: Option<String> = self
+            .conn
+            .query_row(
+                "SELECT child_session_id FROM agent_subagent WHERE external_id = ?1",
+                params![agent_id],
+                |row| row.get(0),
+            )
+            .optional()?;
+        let Some(child_session) = child_session else {
+            return Ok(None);
+        };
+        let Some(messages) = self.load_chat_session(workspace, &child_session)? else {
+            return Ok(None);
+        };
+        let Some(start_sequence) = messages
+            .iter()
+            .find(|message| message.external_id == start_message_id)
+            .map(|message| message.sequence)
+        else {
+            return Ok(None);
+        };
+        let end_sequence = next_message_id.and_then(|id| {
+            messages
+                .iter()
+                .find(|message| message.external_id == id)
+                .map(|message| message.sequence)
+        });
+        let mut out = String::new();
+        for message in &messages {
+            if message.sequence < start_sequence {
+                continue;
+            }
+            if end_sequence.is_some_and(|end| message.sequence >= end) {
+                break;
+            }
+            if message.role != "user" && message.role != "assistant" {
+                continue;
+            }
+            let text: String = message
+                .parts
+                .iter()
+                .filter(|part| part.kind == "text")
+                .map(|part| part.content.as_str())
+                .collect();
+            let text = text.trim();
+            if text.is_empty() {
+                continue;
+            }
+            out.push_str(if message.role == "user" {
+                "user: "
+            } else {
+                "assistant: "
+            });
+            out.push_str(text);
+            out.push('\n');
+            if out.len() >= MAX_TAIL_BYTES {
+                out.truncate(MAX_TAIL_BYTES);
+                out.push_str("… [truncated]");
+                break;
+            }
+        }
+        let out = out.trim_end().to_string();
+        Ok((!out.is_empty()).then_some(out))
+    }
+
     /// 列表：一条 SQL 联查元数据（不含消息流）。
     pub fn list_subagents(
         &self,

@@ -113,8 +113,10 @@ pub(crate) const fn list_agents_spec() -> ToolSpec {
         "List subagents belonging to the current conversation with their `agent_id`, \
          `nickname`, `agent_path`, `role`, `title`, `status`, and `queued_count`. Pass \
          `path_prefix` (absolute like `/root/turing` or relative like `turing`) to restrict the \
-         result to one subtree. Use this to inspect active or resumable agents before calling \
-         `resume_agent`, `send_input`, `interrupt_agent`, or `wait_agent`.",
+         result to one subtree. Human private follow-ups are hidden by default; pass \
+         `include_private: true` to attach the latest private transcript for each agent, only \
+         when the user asks you to inspect it. Use this to inspect active or resumable agents \
+         before calling `resume_agent`, `send_input`, `interrupt_agent`, or `wait_agent`.",
         list_parameters,
     )
 }
@@ -443,6 +445,10 @@ fn list_parameters() -> Value {
                 "type": "string",
                 "minLength": 1,
                 "description": "Optional `agent_path` prefix (absolute like `/root/turing` or relative like `turing`) restricting the listing to one subtree.",
+            },
+            "include_private": {
+                "type": "boolean",
+                "description": "Include the latest human private follow-up transcript for each agent. Private follow-ups are not reported to the main agent; request them only when the user asks to inspect them.",
             },
         },
     })

@@ -392,6 +392,7 @@ pub(super) fn send_user_input_from_panel(
     session_id: &str,
     agent_id: &str,
     text: &str,
+    notify_parent: bool,
 ) -> bool {
     let text = text.trim();
     if text.is_empty() {
@@ -479,6 +480,7 @@ pub(super) fn send_user_input_from_panel(
         }],
         false,
         true,
+        notify_parent,
     );
     match outcome {
         Ok(_) => {

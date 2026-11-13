@@ -29,6 +29,7 @@ pub(super) fn launch_child_turn(
     task_text: &str,
     items: &[PersistedInputItem],
     is_new_agent: bool,
+    notify_parent: bool,
     reused_done: Option<watch::Sender<bool>>,
     limits: ChildTurnLimits,
     root_session: &str,
@@ -167,6 +168,9 @@ pub(super) fn launch_child_turn(
 
     let (cancel_sender, cancel) = watch::channel(false);
     let done_sender = reused_done.unwrap_or_else(|| watch::channel(false).0);
+    // steer 会切换当前轮的 mutation 归属；句柄与 recorder 共享同一份 id。
+    let mutation_user_id =
+        std::sync::Arc::new(std::sync::RwLock::new(child_user_message_id.to_string()));
     let (manager, turn) = match streams.runtime_for(cwd.to_path_buf(), &record.child_session_id) {
         Some(runtime) => (
             runtime.manager.clone(),
@@ -194,6 +198,8 @@ pub(super) fn launch_child_turn(
         started_at_ms,
         max_tokens: limits.max_tokens,
         closed_without_report: false,
+        notify_parent,
+        mutation_user_id: mutation_user_id.clone(),
         chat: child_chat,
         workspace: workspace.to_path_buf(),
     };
@@ -230,7 +236,7 @@ pub(super) fn launch_child_turn(
         net_sender.clone(),
         workspace.to_path_buf(),
         record.child_session_id.clone(),
-        std::sync::Arc::new(std::sync::RwLock::new(child_user_message_id.to_string())),
+        mutation_user_id,
     );
     let executor = AgentTools::new(manager, turn)
         .with_recorder(std::sync::Arc::new(recorder))

@@ -25,7 +25,7 @@ use crate::platform::EnvironmentFacts;
 pub const AGENT_NAME: &str = "lx";
 
 /// 系统提示词版本：提示词语义变化时必须递增（测试与日志据此判定版本）。
-pub const PROMPT_VERSION: &str = "lx-13";
+pub const PROMPT_VERSION: &str = "lx-14";
 
 /// 环境快照单字段最大字符数（转义前）。
 const MAX_FIELD_CHARS: usize = 240;
@@ -133,6 +133,7 @@ Rules:
 - Use `send_input` for follow-ups (`interrupt: false` queues; `interrupt: true` cancels the current turn and runs next; `trigger_turn: false` queues without waking an `idle` subagent).
 - Use `interrupt_agent` to stop a running turn while keeping the agent `idle` and producing a partial report; `close_agent` cascades to descendants and stops without a report.
 - Call `resume_agent` before `send_input` on a finished/failed/closed agent; use `list_agents` (optional `path_prefix`) to inspect status and `cancel_agent_input` (`submission_id`) if a queued image is `blocked`.
+- The user can send private follow-ups directly to a subagent; those turns are not reported to you. Do not call `list_agents(include_private: true)` unless the user explicitly asks you to inspect that private conversation.
 
 # Tools
 
@@ -556,7 +557,7 @@ mod tests {
                 "提示缺少 ask 规则 `{needle}`"
             );
         }
-        assert_eq!(PROMPT_VERSION, "lx-13");
+        assert_eq!(PROMPT_VERSION, "lx-14");
         assert!(
             LX_SYSTEM_PROMPT.contains("You can call these tools:")
                 && LX_SYSTEM_PROMPT.contains("`ask`"),

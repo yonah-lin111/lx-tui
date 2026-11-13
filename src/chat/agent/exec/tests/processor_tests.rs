@@ -109,6 +109,7 @@ pub(super) fn agent_list_item(agent_id: &str, role: AgentRole, title: &str) -> A
         title: title.to_string(),
         status: "completed".to_string(),
         queued_count: 0,
+        private_tail: None,
     }
 }
 

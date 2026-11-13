@@ -138,7 +138,10 @@ impl SubagentDetailView {
                     self.agent_id = Some(target);
                 }
             }
-            crate::chat::agent::SubagentOp::List { path_prefix: _ } => {}
+            crate::chat::agent::SubagentOp::List {
+                path_prefix: _,
+                include_private: _,
+            } => {}
             crate::chat::agent::SubagentOp::CancelInput { submission_id } => {
                 self.agent_id = Some(submission_id);
             }

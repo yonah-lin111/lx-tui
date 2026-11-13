@@ -863,7 +863,8 @@ fn shift_enter_opens_agent_composer_and_submit_keeps_editing() {
                 session_id,
                 agent_id,
                 text,
-            } if *p == pane && session_id == "sess-1" && agent_id == "sub-done" && text == "hi"
+                notify_parent,
+            } if *p == pane && session_id == "sess-1" && agent_id == "sub-done" && text == "hi" && !*notify_parent
         )),
         "Enter 提交追问：{:?}",
         state.effects
@@ -1147,5 +1148,88 @@ fn late_mention_result_is_dropped_after_switching_agent() {
             .composer("sub-done")
             .is_some_and(|composer| composer.editor().mention_open()),
         "迟到结果不写入已切换的 agent"
+    );
+}
+
+#[test]
+fn shift_tab_switches_agent_reply_mode_and_report_submit_carries_the_flag() {
+    let (mut state, pane) = state_with_session("");
+    open_agents_with_statuses(&mut state, pane);
+    let input = crate::app::update::pane::apply_lx_input;
+    input(&mut state, crate::app::actions::LxInput::EnterFolder);
+    let mode = |state: &AppState| {
+        state
+            .pane_anywhere(pane)
+            .expect("pane")
+            .lx
+            .agents
+            .reply_mode("sub-done")
+    };
+    assert_eq!(
+        mode(&state),
+        crate::app::state::lx::agent::AgentReplyMode::Private,
+        "默认私聊"
+    );
+    input(&mut state, crate::app::actions::LxInput::PrevStep);
+    assert_eq!(
+        mode(&state),
+        crate::app::state::lx::agent::AgentReplyMode::Report,
+        "Shift+Tab 切到汇报"
+    );
+    state.effects.clear();
+    for ch in "hi".chars() {
+        input(&mut state, crate::app::actions::LxInput::Char(ch));
+    }
+    input(&mut state, crate::app::actions::LxInput::Enter);
+    assert!(
+        state.effects.iter().any(|effect| matches!(
+            effect,
+            crate::app::effects::Effect::SendSubagentUserInput {
+                agent_id,
+                text,
+                notify_parent: true,
+                ..
+            } if agent_id == "sub-done" && text == "hi"
+        )),
+        "汇报模式发送 notify_parent=true：{:?}",
+        state.effects
+    );
+}
+
+#[test]
+fn enter_while_agent_running_emits_a_steer_instead_of_a_new_turn() {
+    let (mut state, pane) = state_with_session("");
+    open_agents_with_statuses(&mut state, pane);
+    let target = state.pane_mut_anywhere(pane).expect("pane");
+    target.lx.task.as_mut().expect("task").agents_window.active = 0;
+    target.lx.agents.selected_id = Some("sub-run".into());
+    let input = crate::app::update::pane::apply_lx_input;
+    input(&mut state, crate::app::actions::LxInput::EnterFolder);
+    assert_eq!(page(&state, pane).agent_edit.as_deref(), Some("sub-run"));
+    state.effects.clear();
+    for ch in "hi".chars() {
+        input(&mut state, crate::app::actions::LxInput::Char(ch));
+    }
+    input(&mut state, crate::app::actions::LxInput::Enter);
+    assert!(
+        state.effects.iter().any(|effect| matches!(
+            effect,
+            crate::app::effects::Effect::SteerSubagent {
+                agent_id,
+                text,
+                notify_parent: false,
+                ..
+            } if agent_id == "sub-run" && text == "hi"
+        )),
+        "运行中的 agent 发送 steer：{:?}",
+        state.effects
+    );
+    assert!(
+        !state.effects.iter().any(|effect| matches!(
+            effect,
+            crate::app::effects::Effect::SendSubagentUserInput { .. }
+        )),
+        "steer 不应落成新的排队输入：{:?}",
+        state.effects
     );
 }

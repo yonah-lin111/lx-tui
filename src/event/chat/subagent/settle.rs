@@ -74,7 +74,7 @@ pub(crate) fn finish_subagent_with_billing(
     let budget_hit = budget_exceeded || max_tokens_hit(&reason, handle.max_tokens, usage);
     let mut report_view = None;
     if let Some(database) = persistence.database() {
-        let report = (!was_closed).then(|| {
+        let report = (!was_closed && handle.notify_parent).then(|| {
             let (files_changed, changed_paths) = database
                 .list_changed_paths(
                     &handle.workspace,
@@ -155,6 +155,29 @@ pub(crate) fn finish_subagent_with_billing(
         );
     }
     let _ = update::on_subagent_finished(state, &key.session, handle.status, report_view, usage);
+    // 竞态：steer 尚未被 loop 取走、轮次就结束时，落成一次新的追问，避免用户文本丢失。
+    let undelivered: Vec<String> = state
+        .pane_mut_anywhere(handle.parent.pane)
+        .and_then(|target| target.lx.agents.by_agent_mut(&handle.agent_id))
+        .map(|run| {
+            run.chat
+                .pending_steers
+                .drain(..)
+                .map(|steer| steer.text)
+                .collect()
+        })
+        .unwrap_or_default();
+    for text in undelivered {
+        state
+            .effects
+            .push(crate::app::effects::Effect::SendSubagentUserInput {
+                pane: handle.parent.pane,
+                session_id: handle.parent.session.clone(),
+                agent_id: handle.agent_id.clone(),
+                text,
+                notify_parent: handle.notify_parent,
+            });
+    }
     let cancel_key = RequestKey {
         pane: handle.parent.pane,
         session: handle.child_session_id.clone(),

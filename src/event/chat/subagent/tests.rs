@@ -561,7 +561,10 @@ async fn failed_turn_pauses_queue_until_explicit_resume() {
         &persistence,
         &key,
         Some("c-list"),
-        SubagentOp::List { path_prefix: None },
+        SubagentOp::List {
+            path_prefix: None,
+            include_private: false,
+        },
     )
     .await
     .expect("list");
@@ -770,7 +773,10 @@ async fn image_items_archive_preserve_interleaved_order_and_block_when_archive_m
         &persistence,
         &key,
         Some("c-list-blocked"),
-        SubagentOp::List { path_prefix: None },
+        SubagentOp::List {
+            path_prefix: None,
+            include_private: false,
+        },
     )
     .await
     .expect("list");

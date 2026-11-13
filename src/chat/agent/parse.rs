@@ -295,9 +295,18 @@ fn parse_list(arguments_json: &str) -> Result<SubagentOp, ToolFailure> {
         arguments_json
     };
     let object = object_of(raw)?;
-    reject_unknown(&object, &["path_prefix"])?;
+    reject_unknown(&object, &["path_prefix", "include_private"])?;
     let path_prefix = parse_optional_string_field(object.get("path_prefix"), "path_prefix", 128)?;
-    Ok(SubagentOp::List { path_prefix })
+    let include_private = match object.get("include_private") {
+        None | Some(Value::Null) => false,
+        Some(value) => value
+            .as_bool()
+            .ok_or_else(|| ToolFailure::invalid("`include_private` must be a boolean"))?,
+    };
+    Ok(SubagentOp::List {
+        path_prefix,
+        include_private,
+    })
 }
 
 /// `cancel_agent_input` 的参数解析。

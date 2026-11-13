@@ -675,6 +675,7 @@ fn enqueue_claim_cancel_and_interrupt_priority_ordering() {
             None,
             &items_a,
             false,
+            true,
         )
         .expect("enqueue 1");
     assert!(first.created);
@@ -691,6 +692,7 @@ fn enqueue_claim_cancel_and_interrupt_priority_ordering() {
             None,
             &items_a,
             false,
+            true,
         )
         .expect("enqueue dup");
     assert!(!duplicate.created);
@@ -711,6 +713,7 @@ fn enqueue_claim_cancel_and_interrupt_priority_ordering() {
                 text: "normal 2".into(),
             }],
             false,
+            true,
         )
         .expect("enqueue 2");
     assert_eq!(second.queued_count, 2);
@@ -729,6 +732,7 @@ fn enqueue_claim_cancel_and_interrupt_priority_ordering() {
                 text: "interrupt 1".into(),
             }],
             true,
+            true,
         )
         .expect("enqueue int 1");
     let int_2 = fixture
@@ -743,6 +747,7 @@ fn enqueue_claim_cancel_and_interrupt_priority_ordering() {
             &[PersistedInputItem::Text {
                 text: "interrupt 2".into(),
             }],
+            true,
             true,
         )
         .expect("enqueue int 2");
@@ -852,6 +857,7 @@ fn queued_input_images_are_included_in_referenced_attachment_paths() {
                 },
             ],
             false,
+            true,
         )
         .expect("enqueue image");
     let referenced = fixture

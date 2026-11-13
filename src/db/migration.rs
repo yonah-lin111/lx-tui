@@ -279,6 +279,26 @@ impl Database {
         if version < 28 {
             self.migrate_v28_btw()?;
         }
+        if version < 29 {
+            self.migrate_v29_private_followup()?;
+        }
+        Ok(())
+    }
+
+    /// v29：子 agent 输入行新增 `notify_parent`，区分人类私聊与需要汇报主 agent 的追问。
+    ///
+    /// 旧库默认 1（沿用原来的自动汇报语义）；面板私聊写入 0，结算时不生成逐轮报告。
+    fn migrate_v29_private_followup(&mut self) -> Result<()> {
+        let transaction = self.conn.unchecked_transaction()?;
+        if !column_exists(&transaction, "agent_subagent_input", "notify_parent")? {
+            transaction.execute_batch(
+                "ALTER TABLE agent_subagent_input ADD COLUMN notify_parent INTEGER NOT NULL DEFAULT 1
+                 CHECK (notify_parent IN (0, 1));",
+            )?;
+        }
+        ensure_no_foreign_key_violation(&transaction)?;
+        transaction.pragma_update(None, "user_version", 29)?;
+        transaction.commit()?;
         Ok(())
     }
 

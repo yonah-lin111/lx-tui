@@ -346,6 +346,7 @@ pub(super) fn spawn(
         &task_text,
         &persisted_items,
         true,
+        true,
         None,
         limits,
         &tree.root_session,
@@ -378,6 +379,7 @@ pub(super) fn send_input(
     items: &[SubagentInputItem],
     interrupt: bool,
     trigger_turn: bool,
+    notify_parent: bool,
 ) -> Result<SubagentOutcome, String> {
     let parent_session = key.session.clone();
     let workspace = streams
@@ -477,6 +479,7 @@ pub(super) fn send_input(
             parent_message_id.as_deref(),
             &persisted_items,
             interrupt,
+            notify_parent,
         )
         .map_err(|err| err.code().to_string())?;
 
@@ -898,6 +901,7 @@ pub(crate) fn schedule_next_queued_input_with_done(
         &task_text,
         &claimed.items,
         false,
+        claimed.notify_parent,
         reused_done,
         limits,
         &root_session,

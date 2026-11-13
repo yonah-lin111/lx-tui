@@ -251,9 +251,22 @@ fn apply_agent_edit_input(state: &mut AppState, pane: PaneId, command: LxInput) 
             chat::scroll_agents_detail(state, pane, delta);
             true
         }
-        LxInput::Tab | LxInput::PrevStep => true,
+        LxInput::PrevStep => toggle_agent_reply_mode(state, pane),
+        LxInput::Tab => true,
         _ => edit_agent_composer(state, pane, command),
     }
+}
+
+/// Shift+Tab：切换当前 agent 的追问模式（私聊 / 汇报）。
+fn toggle_agent_reply_mode(state: &mut AppState, pane: PaneId) -> bool {
+    let Some(target) = state.pane_mut_anywhere(pane) else {
+        return false;
+    };
+    let Some(agent_id) = target.lx.agent_edit_id().map(str::to_string) else {
+        return false;
+    };
+    target.lx.agents.toggle_reply_mode(&agent_id);
+    true
 }
 
 /// `@` 面板按键：镜像 BTW composer（`chat/btw/input.rs`），面板打开时优先于发送与退出。
@@ -654,7 +667,7 @@ fn leave_agent_edit(state: &mut AppState, pane: PaneId) -> bool {
 
 /// 提交追问：成功后清空草稿但留在编辑态。
 fn submit_agent_edit(state: &mut AppState, pane: PaneId) -> bool {
-    let (agent_id, text, closed, session_id) = {
+    let (agent_id, text, closed, running, mode, session_id) = {
         let Some(target) = state.pane_anywhere(pane) else {
             return false;
         };
@@ -670,12 +683,18 @@ fn submit_agent_edit(state: &mut AppState, pane: PaneId) -> bool {
             .composer(&agent_id)
             .map(|composer| composer.text().trim().to_string())
             .unwrap_or_default();
-        let closed = target
-            .lx
-            .agents
-            .by_agent(&agent_id)
-            .is_some_and(|run| run.status == "cancelled");
-        (agent_id, text, closed, target.lx.chat.session_id.clone())
+        let run = target.lx.agents.by_agent(&agent_id);
+        let closed = run.is_some_and(|run| run.status == "cancelled");
+        let running = run.is_some_and(|run| run.status == "running");
+        let mode = target.lx.agents.reply_mode(&agent_id);
+        (
+            agent_id,
+            text,
+            closed,
+            running,
+            mode,
+            target.lx.chat.session_id.clone(),
+        )
     };
     if text.is_empty() {
         return true;
@@ -693,17 +712,30 @@ fn submit_agent_edit(state: &mut AppState, pane: PaneId) -> bool {
         );
         return true;
     }
-    let Some(session_id) = session_id else {
-        return false;
-    };
-    state
-        .effects
-        .push(crate::app::effects::Effect::SendSubagentUserInput {
-            pane,
-            session_id,
-            agent_id: agent_id.clone(),
-            text,
-        });
+    if running {
+        // 子轮仍在输出：作为轮内 steer 注入；不新起私聊/汇报轮。
+        state
+            .effects
+            .push(crate::app::effects::Effect::SteerSubagent {
+                pane,
+                agent_id: agent_id.clone(),
+                text,
+                notify_parent: mode.notify_parent(),
+            });
+    } else {
+        let Some(session_id) = session_id else {
+            return false;
+        };
+        state
+            .effects
+            .push(crate::app::effects::Effect::SendSubagentUserInput {
+                pane,
+                session_id,
+                agent_id: agent_id.clone(),
+                text,
+                notify_parent: mode.notify_parent(),
+            });
+    }
     if let Some(composer) = state
         .pane_mut_anywhere(pane)
         .and_then(|target| target.lx.agents.composer_mut(&agent_id))

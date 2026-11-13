@@ -531,6 +531,8 @@ fn subagent_steer_inputs_returns_empty_without_cancelling_child_turn() {
             started_at_ms: 0,
             max_tokens: None,
             closed_without_report: false,
+            notify_parent: true,
+            mutation_user_id: std::sync::Arc::new(std::sync::RwLock::new(String::new())),
             chat: crate::app::state::LxChat::new(),
             workspace: fixture.workspace().to_path_buf(),
         },

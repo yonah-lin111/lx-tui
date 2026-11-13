@@ -864,10 +864,49 @@ fn agent_composer_renders_target_badge_and_draft() {
         "composer 右侧目标：{lines:?}"
     );
     assert!(
+        lines
+            .iter()
+            .any(|line| line.contains("Turing [executor] · private")),
+        "默认私聊模式：{lines:?}"
+    );
+    assert!(
         !lines.iter().any(|line| line.contains("To:")),
         "composer 右侧目标不再带 To: 前缀：{lines:?}"
     );
     assert!(lines.iter().any(|line| line.contains("hello")));
+
+    // Shift+Tab 切到汇报模式。
+    lx.agents.toggle_reply_mode("a");
+    let lines = render_lines(&lx, 80, 20);
+    assert!(
+        lines
+            .iter()
+            .any(|line| line.contains("Turing [executor] · report")),
+        "切换后显示汇报模式：{lines:?}"
+    );
+
+    // 运行中的 agent 显示 steer，而不是 private/report。
+    lx.agents.runs[0].status = "running".into();
+    lx.agents.runs[0]
+        .chat
+        .pending_steers
+        .push(crate::app::state::lx::chat::steer::PendingSteer {
+            text: "steer me".into(),
+            attachments: Vec::new(),
+            model_images: Vec::new(),
+            model: crate::db::chat::ModelSnapshot {
+                provider: "p".into(),
+                model: "m".into(),
+                variant: None,
+            },
+        });
+    let lines = render_lines(&lx, 80, 20);
+    assert!(
+        lines
+            .iter()
+            .any(|line| line.contains("Turing [executor] · steer 1")),
+        "运行中显示待注入 steer：{lines:?}"
+    );
 }
 
 #[test]
