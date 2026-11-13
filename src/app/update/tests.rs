@@ -3810,14 +3810,36 @@ fn apply_git_refresh_updates_workspaces_with_matching_cwd_only() {
     apply_git_refresh(
         &mut state,
         Path::new("/repo"),
-        Some(git_info("/repo", "/repo", false, Some("main"))),
+        GitRefresh::Resolved(Some(git_info("/repo", "/repo", false, Some("main")))),
     );
     assert!(state.workspaces[0].git.is_some());
     assert!(state.workspaces[other].git.is_some());
 
-    apply_git_refresh(&mut state, Path::new("/repo"), None);
+    apply_git_refresh(&mut state, Path::new("/repo"), GitRefresh::Resolved(None));
     assert!(state.workspaces[0].git.is_none());
     assert!(state.workspaces[other].git.is_some());
+}
+
+#[test]
+fn apply_git_refresh_failure_keeps_old_metadata_and_unknown_state() {
+    let mut state = AppState::demo();
+    let cwd = PathBuf::from("/repo");
+    state.workspaces[0].cwd = Some(cwd.clone());
+    let old = git_info("/repo", "/repo", false, Some("main"));
+    state.workspaces[0].git = Some(old.clone());
+    state.git_pending.insert(cwd.clone());
+
+    apply_git_refresh(&mut state, &cwd, GitRefresh::Failed);
+
+    assert_eq!(
+        state.workspaces[0].git.as_ref(),
+        Some(&old),
+        "查询失败必须保留旧元数据"
+    );
+    assert!(
+        state.git_pending.contains(&cwd),
+        "查询失败保持未知态，避免被当成无分支"
+    );
 }
 
 #[test]
@@ -3886,12 +3908,12 @@ fn apply_git_refresh_auto_opens_parent_for_first_linked_workspace() {
     apply_git_refresh(
         &mut state,
         Path::new("/repo/.worktrees/feat"),
-        Some(git_info(
+        GitRefresh::Resolved(Some(git_info(
             "/repo",
             "/repo/.worktrees/feat",
             true,
             Some("feature/x"),
-        )),
+        ))),
     );
 
     assert_eq!(state.workspaces.len(), 2);
@@ -3908,12 +3930,12 @@ fn apply_git_refresh_auto_opens_parent_for_first_linked_workspace() {
     apply_git_refresh(
         &mut state,
         Path::new("/repo/.worktrees/feat"),
-        Some(git_info(
+        GitRefresh::Resolved(Some(git_info(
             "/repo",
             "/repo/.worktrees/feat",
             true,
             Some("feature/x"),
-        )),
+        ))),
     );
     assert_eq!(state.workspaces.len(), 2, "已有元数据刷新不重复补开");
 }

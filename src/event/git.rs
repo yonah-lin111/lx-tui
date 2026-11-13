@@ -23,16 +23,25 @@ pub fn pump_git_queries(
     for cwd in update::take_git_requests(state) {
         let sender = sender.clone();
         tokio::task::spawn_blocking(move || {
-            let checkout = git::list_worktrees(&cwd)
-                .and_then(|list| git::checkout(&list, &cwd))
-                .map(|checkout| WorkspaceGit {
-                    repo_root: checkout.repo_root,
-                    checkout_path: checkout.checkout_path,
-                    is_linked: checkout.is_linked,
-                    branch: checkout.branch,
-                    main_branch: checkout.main_branch,
-                });
-            let _ = sender.send(AppEvent::GitRefreshed { cwd, checkout });
+            let result = match git::query_worktrees(&cwd) {
+                git::WorktreeQuery::Repository(list) => match git::checkout(&list, &cwd) {
+                    Some(checkout) => update::GitRefresh::Resolved(Some(WorkspaceGit {
+                        repo_root: checkout.repo_root,
+                        checkout_path: checkout.checkout_path,
+                        is_linked: checkout.is_linked,
+                        branch: checkout.branch,
+                        main_branch: checkout.main_branch,
+                    })),
+                    // 列表成功但 cwd 不落在任何 checkout（符号链接/挂载差异等）：状态未知。
+                    None => update::GitRefresh::Failed,
+                },
+                git::WorktreeQuery::NotRepository => update::GitRefresh::Resolved(None),
+                git::WorktreeQuery::Failed => {
+                    tracing::warn!(cwd = %cwd.display(), "git workspace metadata query failed");
+                    update::GitRefresh::Failed
+                }
+            };
+            let _ = sender.send(AppEvent::GitRefreshed { cwd, result });
         });
     }
 

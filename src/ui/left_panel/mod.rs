@@ -126,7 +126,7 @@ fn workspace_items(state: &AppState, width: usize) -> Vec<ListItem<'_>> {
         };
         let item_style = style::text().patch(highlight);
         // 普通顶层项拿不到可展示分支时，用标记占住分组箭头列；有分支项保持空白对齐。
-        // git 查询在途时元数据尚未落地，不能据此判定“无分支”，否则首帧会误标。
+        // git 元数据未确定（在途或查询失败）时不能据此判定“无分支”，否则会误标。
         let git_pending = workspace
             .cwd
             .as_ref()

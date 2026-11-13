@@ -340,7 +340,7 @@ pub struct AppState {
     pub effects: Vec<Effect>,
     /// 待查询 git 元数据的工作区 cwd 队列；事件层取走并在后台执行。
     pub git_requests: Vec<PathBuf>,
-    /// 已发起但尚未回投的 git 查询 cwd：渲染层据此区分“未知”与“确认为非 git”。
+    /// 尚未得到确定结果的 git 查询 cwd（在途或查询失败）：渲染层据此区分“未知”与“确认为非 git”。
     pub git_pending: HashSet<PathBuf>,
     /// 待解析仓库根的信任检查请求；事件层取走并在后台解析后回投。
     pub trust_resolutions: Vec<TrustResolution>,

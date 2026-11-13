@@ -51,9 +51,23 @@ pub fn worktree_candidates(
         .collect()
 }
 
+/// 工作区 git 元数据刷新结果。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum GitRefresh {
+    /// 查询成功：`Some` 为 checkout 元数据，`None` 为确认不是 git 仓库。
+    Resolved(Option<WorkspaceGit>),
+    /// 查询失败（git 缺失、IO/解析错误或无法定位 checkout）；状态未知。
+    Failed,
+}
+
 /// 查询结果落地：cwd 与工作区当前 cwd 精确匹配时更新元数据（可能命中多个）；
 /// 工作区首次识别为 linked worktree 时自动补开主 checkout，保持树形结构。
-pub fn apply_git_refresh(state: &mut AppState, cwd: &Path, git: Option<WorkspaceGit>) {
+/// 查询失败时保留旧元数据并维持 `git_pending`，避免把“未知”误判成“无分支”。
+pub fn apply_git_refresh(state: &mut AppState, cwd: &Path, result: GitRefresh) {
+    let GitRefresh::Resolved(git) = result else {
+        state.git_pending.insert(cwd.to_path_buf());
+        return;
+    };
     state.git_pending.remove(cwd);
     let mut first_linked = Vec::new();
     for (index, workspace) in state.workspaces.iter_mut().enumerate() {
