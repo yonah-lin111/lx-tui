@@ -246,7 +246,7 @@ impl ToolExecutor for ProbeExecutor {
 
 ### 测试清单
 
-按 design §5.1 至少实现 5 个用例；实际落地 10 个（新增乱序完成、finish 失败、工具面外调用、可取消入口优先、图片降级）。断言必须精确到 Trace 顺序与 `Finish(call_id, cancelled)` 布尔值：
+按 design §5.1 至少实现 5 个用例；实际落地 12 个（新增乱序完成、begin 后取消、finish 失败、工具面外调用、可取消入口优先、取消结果、图片降级）。断言必须精确到 Trace 顺序与 `Finish(call_id, cancelled)` 布尔值：
 
 1. `parallel_reads_overlap_and_keep_ordinal_order`
 2. `parallel_batch_is_capped_at_four`
@@ -258,6 +258,8 @@ impl ToolExecutor for ProbeExecutor {
 8. `call_outside_frozen_tool_surface_is_not_executed`
 9. `cancellable_entry_wins_and_others_fall_back`
 10. `image_results_are_downgraded_for_text_only_models`
+11. `cancel_after_begins_settles_whole_batch_without_execution`
+12. `cancelled_execution_result_interrupts_the_batch`
 
 ### 完成标准
 
@@ -323,7 +325,7 @@ cargo test event::chat
 
 ---
 
-## 10. 执行结果（branch `feat/agent-tool-parallel-readonly`，commits `a1f56ed2` / `f6be8b61` / `9bbc175c` / `81a3cf07`）
+## 10. 执行结果（branch `feat/agent-tool-parallel-readonly`，commits `a1f56ed2` / `f6be8b61` / `9bbc175c` / `81a3cf07` / `e0cd17c2`）
 
 ### 代码
 
@@ -334,7 +336,7 @@ cargo test event::chat
 
 ### 测试
 
-- `src/chat/agent_loop/tests/parallel.rs`：10 个编排测试（重叠、上限 4、写屏障、批次取消、begin 失败、乱序完成、finish 失败、工具面外调用、可取消入口优先、图片降级）。
+- `src/chat/agent_loop/tests/parallel.rs`：12 个编排测试（重叠、上限 4、写屏障、批次取消、begin 失败、乱序完成、finish 失败、工具面外调用、可取消入口优先、图片降级、begin 后取消、取消结果）。
 - `src/chat/tools/tests.rs`：3 个分类测试（子集、精确集合、MCP/subagent 不命中）。
 - 测试夹具 `RecordingHost` 扩展 `with_begin_failure_after(n, error)`，可注入“第 n+1 次 begin 失败”。
 
@@ -342,7 +344,7 @@ cargo test event::chat
 
 - `cargo fmt`：无 diff。
 - `cargo clippy --all-targets -- -D warnings`：通过。
-- `cargo test --lib chat::agent_loop`：69 passed。
+- `cargo test --lib chat::agent_loop`：71 passed。
 - `cargo test --lib chat::tools`：335 passed（含新增分类测试）。
 - `cargo test --lib event::chat`：154 passed。
 - CLI 实机：在 worktree 内用 `lx-tui exec` 创建会话并触发 5 个相邻 `read`，观测 `batch=4` + `batch=1`；详见 [`verification.md`](verification.md)。
