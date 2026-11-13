@@ -1,8 +1,10 @@
 # 工具执行：只读调用并行化 — 任务清单
 
-> 状态：**已完成并通过定向验证（branch `feat/agent-tool-parallel-readonly`，commit `a1f56ed2`，待用户确认合并；结果见第 10 节）**
+> 状态：**已完成并通过评审修复（branch `feat/agent-tool-parallel-readonly`，评审见 [`review.md`](review.md)；结果见第 10 节）**
 >
 > 对应设计：`docs/feature/agent-tool-parallel-readonly/design.md`
+>
+> 验证报告：`docs/feature/agent-tool-parallel-readonly/verification.md`
 >
 > 总原则：一次只做一件事，每步都能独立编译/测试；不新增工具、不改 DB schema、不改 UI、不加配置项。
 
@@ -107,7 +109,8 @@ futures = "0.3"
    - begin 后检查 `cancel`；
    - 用 `BoxFuture` + `join_all` 并发执行；`allowed == false` 的调用用 `std::future::ready(unavailable_result())`，绝不进 executor；
    - 按原始顺序 `zip(results)`，逐个 `commit_result`；
-   - `commit_result` 失败时把剩余票据按 `Cancelled` 收尾；
+   - 结果为 `Cancelled` 时只结算该票据，后续已执行结果继续提交；
+   - `commit_result` 失败时失败票据不重试，其余结果由 `settle_remaining` best-effort 按真实结果落库；
 6. `commit_result(...)`：`format_for_model` → 图片降级 → `finish_tool(Executed)` → `push_tool_result`；
 7. 把 `mod.rs:487` 的 `tool_result_images` 原样移入本文件（`pub(super)` 或私有均可，只有本文件用）。
 
@@ -325,20 +328,23 @@ cargo test event::chat
 
 ---
 
-## 10. 执行结果（branch `feat/agent-tool-parallel-readonly`，commits `a1f56ed2` / `f6be8b61` / `9bbc175c` / `81a3cf07` / `e0cd17c2`）
+## 10. 执行结果（branch `feat/agent-tool-parallel-readonly`，commits `a1f56ed2` / `f6be8b61` / `9bbc175c` / `81a3cf07` / `e0cd17c2` / `65913e2a` / `c08c9148`）
 
 ### 代码
 
 - `src/chat/tools/types.rs` / `mod.rs`：新增 `PARALLEL_SAFE_TOOL_NAMES` 与 `is_parallel_safe` 并重导出。
-- `src/chat/agent_loop/tool_batch.rs`：新增 193 行，负责批次 begin、并发执行、ordinal 结算与票据收尾。
+- `src/chat/agent_loop/tool_batch.rs`：负责批次 begin、并发执行、ordinal 结算与票据收尾；评审后新增 `settle_remaining`，保证 Cancelled / finish 失败不丢弃同批真实结果。
 - `src/chat/agent_loop/mod.rs`：接入批次分支与 `call_allowed`，串行尾部复用 `commit_result`；964 行（< 1000）。
+- `src/chat/tools/read.rs`：新增 `IMAGE_READ_GATE`，串行化并行批次中的图片解码阶段。
+- `src/event/chat/tool_calls.rs`：`mark_tool_running` 失败时退单，避免同进程永久 pending 行。
 - `Cargo.toml` / `Cargo.lock`：显式声明 `futures = "0.3"`；锁文件只在 `lx-tui` 依赖列表新增一项，无新 `[[package]]`。
 
 ### 测试
 
-- `src/chat/agent_loop/tests/parallel.rs`：12 个编排测试（重叠、上限 4、写屏障、批次取消、begin 失败、乱序完成、finish 失败、工具面外调用、可取消入口优先、图片降级、begin 后取消、取消结果）。
+- `src/chat/agent_loop/tests/parallel.rs`：12 个编排测试（重叠、上限 4、写屏障、批次取消、begin 失败、乱序完成、finish 失败、工具面外调用、可取消入口优先、图片降级、begin 后取消、Cancelled 结果保留兄弟结果）。
 - `src/chat/tools/tests.rs`：3 个分类测试（子集、精确集合、MCP/subagent 不命中）。
-- 测试夹具 `RecordingHost` 扩展 `with_begin_failure_after(n, error)`，可注入“第 n+1 次 begin 失败”。
+- `src/event/chat/tests/flow.rs`：新增 4 个相邻 `read` 的端到端用例，覆盖真实事件层 + DB 的多 running 握手与稠密位置。
+- 测试夹具 `RecordingHost` 扩展 `with_begin_failure_after(n, error)` 与 `with_begin_cancel(sender, after)`。
 
 ### 验证
 
@@ -346,8 +352,17 @@ cargo test event::chat
 - `cargo clippy --all-targets -- -D warnings`：通过。
 - `cargo test --lib chat::agent_loop`：71 passed。
 - `cargo test --lib chat::tools`：335 passed（含新增分类测试）。
-- `cargo test --lib event::chat`：154 passed。
+- `cargo test --lib event::chat`：155 passed（含 4-read 集成测试）。
+- `cargo test --lib chat::agent_loop::tests::parallel`：12 passed。
 - CLI 实机：在 worktree 内用 `lx-tui exec` 创建会话并触发 5 个相邻 `read`，观测 `batch=4` + `batch=1`；详见 [`verification.md`](verification.md)。
+
+### 评审修复（`c08c9148`，详见 [`review.md`](review.md)）
+
+- P1：批次内某个结果 `Cancelled` 时只结算该票据，后续已执行结果仍按真实结果落库。
+- P2：单个 `finish_tool` 失败不再把剩余已执行结果误记为 `cancelled`；新增 `settle_remaining`。
+- P2：补事件层 + DB 的 4-read 集成测试，锁定位置与多 running 卡片。
+- P2：图片 `read` 解码阶段串行化，避免 4 路大图放大峰值内存。
+- P3：`mark_tool_running` 失败时调用 `cancel_pending`，避免永久 pending 行。
 
 ### 与设计的差异（已同步回 design §4.4）
 

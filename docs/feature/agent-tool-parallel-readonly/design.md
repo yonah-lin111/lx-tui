@@ -1,9 +1,11 @@
 # 工具执行：只读调用并行化 + codex 工具面对齐审计（设计方案）
 
-> 状态：**已实现并通过定向验证（branch `feat/agent-tool-parallel-readonly`，commit `a1f56ed2`，待用户确认合并）**
+> 状态：**已实现并通过评审修复（branch `feat/agent-tool-parallel-readonly`，评审见 [`review.md`](review.md)；待用户确认合并）**
 >
 > 关联文档：
 > - 任务清单：`docs/feature/agent-tool-parallel-readonly/task.md`
+> - 验证报告：`docs/feature/agent-tool-parallel-readonly/verification.md`
+> - 代码评审：`docs/feature/agent-tool-parallel-readonly/review.md`
 > - 代码规范：`docs/standards/code-writing-standards.md`
 > - 参考实现：`/Users/yonah/projects/agent/codex-main/codex-rs/core/src/tools/`
 >
@@ -182,7 +184,8 @@ read(c0) read(c1) write(c2) search(c3) search(c4) read(c5)
   │
   ├─ 按 ordinal 逐个 Commit：
   │    format_for_model → finish_tool(Executed) → push_tool_result
-  │    └─ 任一 finish 失败 → 剩余 ticket 按 Cancelled 结算 → 返回
+  │    ├─ 结果为 Cancelled → 该 ticket 记 Cancelled，继续结算后续已执行结果
+  │    └─ 任一 finish 失败 → 该 ticket 不重试；其余已执行结果尽力落库 → 返回
   │
   └─ 批次完成 → 检查 cancel → 未取消则继续下一个批次/串行调用
 ```
@@ -192,10 +195,12 @@ read(c0) read(c1) write(c2) search(c3) search(c4) read(c5)
 - **执行顺序与结算顺序分离**：future 谁先完成都无所谓，结果按 `begun` 的原始顺序 zip 回来，再逐个 `finish_tool`，因此 DB 与 UI 看到的顺序仍是 ordinal。
 - **begin 全部先做**：让所有调用都先进入 `running` 可见态，用户能看到“4 个读同时跑”，而不是等前一个结束才出现下一个卡片。
 - **不允许的调用也走 Commit**：仍然 `begin → finish(Executed{failure})`，保持现有“失败结果也成对落库”的契约。
+- **Cancelled 只属于单次调用**：`join_all` 返回时所有 future 都已结束；某个调用报告 Cancelled（目前只有 `web_search` 在 Esc 时会这样）不代表同批其它调用没执行。只结算该 ticket，同批其它真实结果照常落库，最后整批返回 `Interrupted`。
+- **finish 失败不伪造状态**：失败票据按契约不重试；同批其余结果已经产生，必须尽力按 `Executed` 落库，不能统一改成 `Cancelled`。
 
 ### 4.4 关键代码骨架
 
-新增 `src/chat/agent_loop/tool_batch.rs`（预估 150~180 行，含注释）：
+新增 `src/chat/agent_loop/tool_batch.rs`（约 240 行，含评审后的 `settle_remaining`）：
 
 ```rust
 use futures::future::{BoxFuture, join_all};
@@ -265,23 +270,53 @@ where
         .collect();
     let results = join_all(futures).await;
 
-    // 3) 按 ordinal 顺序结算；finish 失败时把剩余票据按 Cancelled 收尾。
+    // 3) 按 ordinal 顺序结算。Cancelled 只结算该票据；其余已执行结果仍按真实结果
+    //    落库，全部结算后返回 Interrupted。finish 失败时同样尽力结算剩余真实结果。
+    let mut interrupted = false;
     let mut iter = begun.into_iter().zip(results);
     while let Some(((call, ticket, _), result)) = iter.next() {
         if result.error_code() == Some(ToolErrorCode::Cancelled) {
             let _ = host.finish_tool(ticket, ToolOutcome::Cancelled).await;
-            cancel_tickets(host, iter.map(|((_, ticket, _), _)| ticket)).await;
-            return BatchOutcome::Interrupted;
+            interrupted = true;
+            continue;
         }
         if let Err(error) =
             commit_result(host, context, &call, ticket, result, executor.supports_image_input())
                 .await
         {
-            cancel_tickets(host, iter.map(|((_, ticket, _), _)| ticket)).await;
+            settle_remaining(host, context, iter, executor.supports_image_input()).await;
             return outcome_of(error);
         }
     }
+    if interrupted {
+        return BatchOutcome::Interrupted;
+    }
     BatchOutcome::Completed
+}
+
+/// 提交失败后尽力结算剩余结果：失败票据不重试，但其余真实结果必须落库。
+async fn settle_remaining<H: AgentHost>(
+    host: &mut H,
+    context: &mut ModelContext,
+    iter: impl Iterator<Item = ((ReadyToolCall, ToolCallTicket, bool), ToolExecutionResult)>,
+    supports_image_input: bool,
+) {
+    for ((call, ticket, _), result) in iter {
+        if result.error_code() == Some(ToolErrorCode::Cancelled) {
+            let _ = host.finish_tool(ticket, ToolOutcome::Cancelled).await;
+            continue;
+        }
+        if let Err(error) =
+            commit_result(host, context, &call, ticket, result, supports_image_input).await
+        {
+            tracing::warn!(
+                target: "lx::agent",
+                call_id = %call.call_id,
+                error = ?error,
+                "failed to settle remaining tool result"
+            );
+        }
+    }
 }
 
 /// 可取消入口优先（`web_search` / MCP），其余工具回落到带票据的通用执行入口。
@@ -416,9 +451,10 @@ while let Some(call) = remaining.next() {
 | :--- | :--- |
 | 正常完成 | 执行完成顺序任意；Begin 顺序、Finish 顺序、DB 顺序、上下文顺序全部按 ordinal |
 | 批次执行中 Esc | 已 begin 的调用全部跑完并按真实结果 `Executed` 落库；批次结束后停止采样；未开始的调用记 `cancelled` |
+| 批次内某结果 Cancelled（`web_search` Esc） | 只把该 ticket 记 `cancelled`；同批其它已执行结果照常按 ordinal `Executed` 落库；整批返回 Interrupted |
 | begin 失败（第 k 个） | 前 k-1 个已 begin 但未执行 → 全部按 `Cancelled` 结算；不执行任何 IO；按原逻辑返回 Interrupted/Failed |
 | begin 后、执行前 Esc | 本批全部按 `Cancelled` 结算（零 IO）；后续调用按 `cancelled`；返回 Interrupted |
-| finish 失败（第 k 个） | 前 k-1 个已提交；第 k 个失败即停止；剩余已执行但无法落库的票据按 `Cancelled` 收尾（与现有“落库失败不重试”一致） |
+| finish 失败（第 k 个） | 前 k-1 个已提交；第 k 个失败即停止该票据的写入（不重试）；其余已执行结果 best-effort 按 `Executed` 落库，失败只记 warn；本轮失败 |
 | 工具级失败 | 与串行一致：`failed` 结果照样 Commit、进入上下文，轮次继续 |
 
 ### 4.6 为什么用 `futures::future::join_all`
@@ -441,7 +477,7 @@ futures = "0.3"
 `src/chat/agent_loop/mod.rs` 当前 948 行。把批次执行、提交函数、图片提取移入 `tool_batch.rs` 后：
 
 - `mod.rs`：减少约 30 行（`tool_result_images` + 串行尾部），增加约 40 行（批次分支 + `call_allowed`），净增约 10 行，仍低于 1000；
-- `tool_batch.rs`：约 170 行，单一职责（“一批只读调用的执行与结算”）；
+- `tool_batch.rs`：约 240 行，单一职责（“一批只读调用的执行与结算”）；
 - 测试放 `src/chat/agent_loop/tests/parallel.rs`，在 `tests.rs` 的 `mod` 列表追加 `mod parallel;`。
 
 ### 4.8 可观测性
@@ -504,13 +540,15 @@ tracing::debug!(
 | :--- | :--- | :--- |
 | 4 路 `search` 同时扫盘 | 磁盘抖动、单次结果变慢 | 批次上限 4；`search` 本身 10s 超时、8 MiB 单文件上限、20k 文件上限 |
 | Begin 逐个等待帧回执 | 每批最多 4 帧（约 64ms）启动延迟 | begin 必须串行：`begin_tool_call` 按 `MAX(position)+1` 分配工具位置，并发 begin 会竞争 timeline position；4 帧可接受 |
-| 4 路 `read` 大文件 | 额外内存约 4 × 16 MiB | 输入上限 16 MiB；超限直接 `too_large` |
+| 4 路 `read` 大文件 | 文本额外内存约 4 × 16 MiB | 输入上限 16 MiB；超限直接 `too_large` |
+| 4 路 `read` 图片 | 单张解码峰值可达 32M 像素（约 128 MiB），4 路可放大到数百 MiB | `chat/tools/read.rs` 的 `IMAGE_READ_GATE` 串行化解码阶段；图片单文件 20 MiB 上限 |
 | 4 路 `web_search` × 内部 4 query | 最多 16 个并发 HTTP | `web_search` 自带超时；实测若过多再单独把 `web_search` 移出并行表 |
 | 多子 agent 同时并行 | 最坏 4 子 agent × 4 并发 | 单批上限固定；不做全局池，避免引入跨会话调度器 |
 | 同一文件被并发 read | 版本 token 竞争 | `ReadRegistry` 为 `Mutex`，记录同一 token；读后版本保护不受影响 |
-| finish 失败留下 pending 行 | DB 状态悬挂 | 批次结算失败时把剩余票据按 `Cancelled` 收尾 |
+| finish 失败留下 pending 行 | DB 状态悬挂 | 失败票据按契约不重试（交给启动恢复）；其余已执行结果 best-effort 落库，不伪造 cancelled |
+| running 推进失败留下 pending 行 | 同进程内卡片永久 pending | `event/chat/tool_calls.rs` 在 `mark_tool_running` 失败时调用 `cancel_pending` 退单 |
 | Esc 响应变慢 | 最多等到最慢的 `search` 返回 | 与现有串行语义一致（当前也 await 单次工具返回）；不做“丢弃在途结果”的假取消 |
-| 事件层测试依赖单 running 卡片 | CI 偶发失败 | 先跑 `cargo test event::chat`；按 `call_id` 更新是既有实现，若测试断言过强则修测试 |
+| 事件层多 running 卡片 | 位置冲突或只认单运行卡片 | 已用 `event::chat::tests::flow` 的 4 个相邻 `read` 用例覆盖：位置稠密、逐帧 ack、全部终态 |
 
 ---
 
@@ -535,3 +573,21 @@ tracing::debug!(
 - 不做 codex 的 hooks、approvals、sandbox、telemetry、Code Mode。
 - 不引入全局并发池、不做用户可调并发数。
 - 不重构 `ready_calls`、不改 `ToolExecutor` trait、不改事件层 UI 状态机。
+
+---
+
+## 9. 评审修复（review.md）
+
+评审发现并修复：
+
+1. **P1 批次内 Cancelled 结果丢弃同批真实结果**：改为逐条结算，Cancelled 只结算自身，后续已执行结果照常落库，整批最后返回 `Interrupted`。
+2. **P2 finish 失败把剩余已执行结果误记为 cancelled**：新增 `settle_remaining`，失败票据不重试，其余结果 best-effort 按真实结果落库。
+3. **P2 缺少事件层 + DB 的多 running 集成测试**：新增 4 个相邻 `read` 的端到端用例，锁定位置稠密、批量 begin、按 ordinal finish。
+4. **P2 4 路图片解码内存放大**：`chat/tools/read.rs` 增加 `IMAGE_READ_GATE`，只串行化图片解码阶段。
+5. **P3 running 推进失败留下永久 pending 行**：`event/chat/tool_calls.rs` 在失败分支调用 `cancel_pending` 退单。
+
+保持不修（接受的风险/非本特性）：
+
+- `web_search` 4 路 × 每调用 4 query 的外部限流风险：无实测证据，保留现表。
+- `read` 文本路径的多次读盘与版本 token 快照问题：既有实现，本次不改。
+- begin 阶段按 Esc 仍会完成剩余 begin：每个已声明调用都留下终态 `cancelled` 行，避免丢行；不执行 IO。

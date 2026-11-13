@@ -3,9 +3,9 @@
 - **特性目录**：`docs/feature/agent-tool-parallel-readonly/`
 - **关联文档**：[`design.md`](design.md) · [`task.md`](task.md)
 - **验证工作区**：`.worktrees/agent-tool-parallel-readonly`（分支 `feat/agent-tool-parallel-readonly`）
-- **代码提交**：`a1f56ed2`（实现）· `f6be8b61`（首轮文档）· `9bbc175c` / `81a3cf07` / `e0cd17c2`（补充测试）
+- **代码提交**：`a1f56ed2`（实现）· `f6be8b61`（首轮文档）· `9bbc175c` / `81a3cf07` / `e0cd17c2` / `65913e2a`（测试与验证）· `c08c9148`（评审修复）
 - **测试二进制**：`./target/debug/lx-tui`
-- **验证结论**：15 / 15 项通过（PASS）
+- **验证结论**：16 / 16 项通过（PASS）
 
 ---
 
@@ -17,7 +17,7 @@
 | 静态检查 | `cargo clippy --all-targets -- -D warnings` | 通过 |
 | Agent loop | `cargo test --lib chat::agent_loop` | 71 passed |
 | 工具层 | `cargo test --lib chat::tools` | 335 passed |
-| 事件层回归 | `cargo test --lib event::chat` | 154 passed |
+| 事件层回归 | `cargo test --lib event::chat` | 155 passed |
 | CLI 实机 | 隔离 `HOME` + `LX_TUI_DB_PATH` + 本地 Anthropic SSE Mock | Exit Code 0 |
 
 CLI 实机使用本地 Mock 模型，目的是消除外部网络与真实模型随机性；会话、工具行与结果均真实写入 worktree 隔离库 `~/.lx-t-dev/db/worktrees/agent-tool-parallel-readonly-e50690f2/lx.db`。
@@ -70,9 +70,9 @@ CLI 实机使用本地 Mock 模型，目的是消除外部网络与真实模型�
 
 ### V08 — 批次内某个执行结果报告 cancelled
 - **输入内容**：3 个相邻 `read`，`c1` 的执行器返回 `ToolErrorCode::Cancelled`。
-- **验证步骤**：执行 `cargo test --lib chat::agent_loop::tests::parallel::cancelled_execution_result_interrupts_the_batch`。
-- **期望结果**：`c0` 提交真实结果；`c1` 票据按 `Cancelled` 结算；`c2` 退单；轮次为 `Interrupted` 且不再采样。
-- **结果**：PASS。
+- **验证步骤**：执行 `cargo test --lib chat::agent_loop::tests::parallel::cancelled_execution_result_keeps_sibling_results`。
+- **期望结果**：`c0` / `c2` 提交真实结果；只有 `c1` 票据按 `Cancelled` 结算；轮次为 `Interrupted` 且不再采样。
+- **结果**：PASS（评审 P1 修复后）。
 
 ### V09 — 批次 begin 中途失败
 - **输入内容**：3 个相邻 `read`，第 3 次 `begin_tool` 注入失败。
@@ -82,9 +82,9 @@ CLI 实机使用本地 Mock 模型，目的是消除外部网络与真实模型�
 
 ### V10 — 批次 finish 中途失败
 - **输入内容**：3 个相邻 `read`，第 1 次 `finish_tool` 注入失败。
-- **验证步骤**：执行 `cargo test --lib chat::agent_loop::tests::parallel::finish_failure_cancels_remaining_batch_tickets`。
-- **期望结果**：轮次失败且不再采样；`c0` 提交失败后，`c1` / `c2` 票据按 `Cancelled` 收尾。
-- **结果**：PASS。
+- **验证步骤**：执行 `cargo test --lib chat::agent_loop::tests::parallel::finish_failure_keeps_remaining_batch_results`。
+- **期望结果**：轮次失败且不再采样；`c0` 落库失败不重试；`c1` / `c2` 已执行结果仍按真实结果结算。
+- **结果**：PASS（评审 P2 修复后）。
 
 ### V11 — 冻结工具面之外的调用不执行
 - **输入内容**：同一响应内 `read` + `search`；本轮冻结工具面只声明 `read`。
@@ -122,6 +122,12 @@ CLI 实机使用本地 Mock 模型，目的是消除外部网络与真实模型�
 - **验证步骤**：解析 `item.started` / `item.completed` 序列，并检索 `lx::agent` 的批次结算日志。
 - **期望结果**：4 个 `item.started` 全部先于任何 `item.completed`，随后第 5 个 `item.started` / `item.completed`；日志出现 `parallel read-only tool batch settled batch=4` 与 `batch=1`。
 - **结果**：PASS。
+
+### V16 — 事件层 + DB 的四路 read 多 running 握手
+- **输入内容**：同一响应内 4 个相邻 `read`（`r0`–`r3`），真实 `Persistence` 与临时工作区。
+- **验证步骤**：执行 `cargo test --lib event::chat::tests::flow::four_reads_in_one_response_create_dense_tool_positions`。
+- **期望结果**：4 个 `Begin` 全部先于 `Finish`；Finish 按 ordinal；工具位置稠密连续；4 行 `completed` 且结果体齐备；4 张卡片进入终态。
+- **结果**：PASS（新增于评审 P2-2）。
 
 ---
 
