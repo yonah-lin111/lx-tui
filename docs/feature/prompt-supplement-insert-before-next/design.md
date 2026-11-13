@@ -1,7 +1,8 @@
 # Prompt `+++` 补充块插入落点调整
 
-- 状态：已实施并完成 review 修复（2026-11-13），自动化校验通过，待用户人工验收
+- 状态：已合并到 `dev`（2026-11-13，合并提交 `88c16880`）；自动化校验通过，待用户人工验收
 - 审查记录：`docs/feature/prompt-supplement-insert-before-next/review.md`
+- 合并记录：fast-forward 合并；工作区 `.worktrees/prompt-supplement-insert-before-next` 与分支已清理。
 - 任务目录：`docs/feature/prompt-supplement-insert-before-next/`
 - 影响层：`app`（纯状态编辑），不改 UI 渲染、DB、网络
 - 关联旧文档：`docs/feature/prompt-block-restyle/design.md` §3.5 的“固定追加落点”由本任务调整
@@ -373,3 +374,4 @@ self.scroll_lines_into_view(start_line, end_line);
 - 新增辅助函数：`trim_leading_blank_lines`、`last_content_end`、`first_content_line_start`；`insert_before_line` 改为返回 `Option<usize>`。
 - 未改动 `src/ui/**`、`src/app/markdown/blocks.rs`、`src/app/markdown/supple.rs`、DB 迁移与配置。
 - 验证：`cargo fmt` 无差异；`cargo clippy --all-targets -- -D warnings` 通过；`cargo test` 全量 5429 passed、8 ignored；精确测试 `block::tests` 31 passed、`prompt::tests` 156 passed、`prompt_template_commands` 6 passed。首次全量运行出现过一次与本改动无关的 `lx_paste::wheel_scrolls_lx_input_viewport` 偶发失败，单测与全量复跑均通过。
+- 合并：2026-11-13 fast-forward 到 `dev`，合并提交 `88c16880`；linked worktree 与分支已删除。

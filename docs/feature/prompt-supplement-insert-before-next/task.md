@@ -1,8 +1,9 @@
 # 任务：`+++` 补充块插入落点调整
 
 - 设计文档：`docs/feature/prompt-supplement-insert-before-next/design.md`
-- 状态：已实施并完成 review 修复（2026-11-13），自动化校验通过，待用户人工验收
+- 状态：已合并到 `dev`（2026-11-13，合并提交 `88c16880`）；自动化校验通过，P4 待用户人工验收
 - 审查记录：`docs/feature/prompt-supplement-insert-before-next/review.md`
+- 合并记录：fast-forward 合并；工作区与分支已清理。
 - 执行原则：只改 `app` 纯状态路径；不碰 UI 渲染、DB、配置；每步完成后做精确校验
 - 实施结果：P0–P3 与 P5 已完成；`cargo fmt`、`cargo clippy --all-targets -- -D warnings`、`cargo test` 全部通过（block 31、prompt 156、integration 6、全量 5429 passed / 8 ignored）。P4 待用户 `cargo run` 人工验收。
 

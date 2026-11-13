@@ -1,5 +1,6 @@
 # Review：`+++` 补充块插入落点
 
+- 状态：P1–P3 已修复，并已合并到 `dev`（2026-11-13，合并提交 `88c16880`）。
 - 审查对象：`feat/prompt-supplement-insert-before-next`，初始提交 `d8cf1448`
 - 审查范围：`src/app/prompt/block.rs`、`src/app/prompt/block/tests.rs`、`src/app/prompt/panel.rs`、`src/app/markdown/slash.rs`、`src/app/markdown/blocks.rs` 及本目录 `design.md` / `task.md`
 - 结论：主路径（下一个块定位、`&&&`/`+++` 边界、无 next 回退、撤销、滚动、空文档）成立；未发现 P0。修复 3 个 P1、4 个 P2，并同步 P3 文档问题。
