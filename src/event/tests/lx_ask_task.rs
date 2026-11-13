@@ -579,6 +579,60 @@ fn task_page_hides_input_popups_and_routes_chat_bar_wheel_to_output() {
     );
 }
 
+#[test]
+fn processes_first_row_wheel_scrolls_the_list() {
+    let config = Config::default();
+    let mut state = AppState::demo();
+    let geo = geometry(&state, &config, Rect::new(0, 0, 120, 24));
+    let pane = state.active_tab().layout.focus();
+    let inner = pane_inner(&geo, pane);
+    {
+        let target = state.pane_mut_anywhere(pane).expect("pane");
+        target.view = PaneView::Lx;
+        target.lx.task = Some(crate::app::state::TaskPage {
+            processes: (0..12)
+                .map(|index| crate::app::state::ProcessEntry {
+                    session_id: index,
+                    command: format!("cmd-{index}"),
+                    cwd: "/w".into(),
+                    tty: false,
+                    started_at_ms: 0,
+                })
+                .collect(),
+            ..Default::default()
+        });
+    }
+    let list = ui::main_content::lx::task_rects(inner, &state.pane_anywhere(pane).unwrap().lx)
+        .expect("task rects")
+        .list;
+    // 顶边框 + tab 行之下就是 Processes 的第一条；不能再用 search_rect。
+    let first_row = list.y.saturating_add(2);
+    let mut sessions = HashMap::new();
+    let mut dirty = false;
+    handle_terminal_event(
+        mouse(MouseEventKind::ScrollDown, list.x + 2, first_row),
+        &mut state,
+        &mut sessions,
+        &geo,
+        &config,
+        &mut ui::RenderCache::default(),
+        &mut dirty,
+    );
+    assert!(
+        state
+            .pane_anywhere(pane)
+            .unwrap()
+            .lx
+            .task
+            .as_ref()
+            .unwrap()
+            .window
+            .viewport
+            .is_some_and(|offset| offset > 0),
+        "Processes 首行滚轮不能被搜索行守卫吞掉"
+    );
+}
+
 /// 粘贴也是编辑：必须让双 Esc 的待命失效，避免带草稿选中后回填覆盖。
 #[test]
 fn lx_paste_cancels_rewind_arming() {
@@ -674,11 +728,8 @@ fn task_page_does_not_cut_or_copy_hidden_composer_selection() {
 }
 
 #[test]
-fn task_page_agent_reply_renders_selection_and_supports_copy_cut_and_esc() {
-    use crate::app::overlay::TextInput;
+fn agents_composer_supports_copy_cut_and_esc() {
     use crate::app::state::{PaneView, TaskPage, TaskTab};
-    use ratatui::buffer::Buffer;
-    use ratatui::style::Modifier;
 
     let config = Config::default();
     let mut state = AppState::demo();
@@ -687,49 +738,26 @@ fn task_page_agent_reply_renders_selection_and_supports_copy_cut_and_esc() {
     {
         let target = state.pane_mut_anywhere(pane).expect("pane");
         target.view = PaneView::Lx;
-        let mut page = TaskPage {
+        target.lx.task = Some(TaskPage {
             tab: TaskTab::Agents,
-            agent_reply_target: Some(("ag-1".into(), "Bot".into())),
-            agent_reply: Some(TextInput::new("hello")),
+            agent_edit: Some("ag-1".into()),
             ..TaskPage::default()
-        };
-        page.agent_reply.as_mut().expect("reply").select_all();
-        target.lx.task = Some(page);
+        });
+        target
+            .lx
+            .agents
+            .ensure_composer("ag-1")
+            .editor_mut()
+            .replace_input("hello");
+        target
+            .lx
+            .agents
+            .composer_mut("ag-1")
+            .expect("composer")
+            .editor_mut()
+            .select_all();
     }
 
-    // 1. 验证 UI 渲染层对 agent_reply 的选中文本渲染 REVERSED 反显。
-    let inner = pane_inner(&geo, pane);
-    let mut buf = Buffer::empty(Rect::new(0, 0, 120, 30));
-    {
-        let target = state.pane_anywhere(pane).expect("pane");
-        ui::main_content::lx::render(
-            inner,
-            &mut buf,
-            &target.lx,
-            true,
-            None,
-            &mut ui::main_content::lx::PaneCache::default(),
-        );
-    }
-    let task_rects = {
-        let target = state.pane_anywhere(pane).expect("pane");
-        ui::main_content::lx::task_rects(inner, &target.lx).expect("task rects")
-    };
-    let header_y = task_rects.list.y + 1;
-    let reversed_chars: String = (task_rects.list.x..task_rects.list.right())
-        .filter_map(|x| {
-            let cell = buf.cell((x, header_y))?;
-            cell.modifier
-                .contains(Modifier::REVERSED)
-                .then(|| cell.symbol().chars().next().unwrap_or(' '))
-        })
-        .collect();
-    assert!(
-        reversed_chars.contains("hello"),
-        "agent_reply 全选后必须在顶栏渲染 REVERSED 反显: got {reversed_chars:?}"
-    );
-
-    // 2. Ctrl+C 复制追问框选区并保留选区，随后第一下 Esc 清除选区，第二下 Esc 关闭追问框。
     let mut sessions = HashMap::new();
     let mut cache = ui::RenderCache::default();
     let mut dirty = false;
@@ -745,13 +773,11 @@ fn task_page_agent_reply_renders_selection_and_supports_copy_cut_and_esc() {
     assert!(
         state
             .pane_anywhere(pane)
-            .and_then(|p| p.lx.task.as_ref())
-            .and_then(|t| t.agent_reply.as_ref())
-            .is_some_and(TextInput::has_selection),
-        "Ctrl+C 复制后保留追问框选区"
+            .and_then(|p| p.lx.agents.composer("ag-1"))
+            .is_some_and(|composer| composer.editor().selected_text().as_deref() == Some("hello")),
+        "Ctrl+C 复制 Agents composer 选区"
     );
 
-    // Ctrl+X 剪切追问框选区：文本清空，选区消除。
     handle_terminal_event(
         TerminalEvent::Key(KeyEvent::new(KeyCode::Char('x'), KeyModifiers::CONTROL)),
         &mut state,
@@ -761,15 +787,28 @@ fn task_page_agent_reply_renders_selection_and_supports_copy_cut_and_esc() {
         &mut cache,
         &mut dirty,
     );
-    assert_eq!(
+    assert!(
         state
             .pane_anywhere(pane)
-            .and_then(|p| p.lx.task.as_ref())
-            .and_then(|t| t.agent_reply.as_ref())
-            .map(TextInput::text),
-        Some(""),
-        "Ctrl+X 剪切后追问框文本清空"
+            .and_then(|p| p.lx.agents.composer("ag-1"))
+            .is_some_and(|composer| composer.text().is_empty()),
+        "Ctrl+X 剪切后 Agents composer 为空"
     );
+
+    handle_terminal_event(
+        TerminalEvent::Key(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE)),
+        &mut state,
+        &mut sessions,
+        &geo,
+        &config,
+        &mut cache,
+        &mut dirty,
+    );
+    let page = state
+        .pane_anywhere(pane)
+        .and_then(|p| p.lx.task.as_ref())
+        .expect("task page");
+    assert!(page.agent_edit.is_none(), "Esc 返回列表态");
 }
 
 #[test]
@@ -976,7 +1015,7 @@ fn task_agents_list_scrollbar_preserves_viewport_across_refresh_and_selection() 
             .agents_window
             .viewport
     };
-    assert_eq!(agents_viewport(&state), Some(2), "拖拽到底部后视口为 2");
+    assert_eq!(agents_viewport(&state), Some(3), "拖拽到底部后视口为 3");
 
     // 后台列表同步与点击当前视口内条目均不得把视口重置回 None/0
     update::restore_selected_task_agent(
@@ -986,7 +1025,7 @@ fn task_agents_list_scrollbar_preserves_viewport_across_refresh_and_selection() 
     assert!(update::select_task_agent(&mut state, pane, 2));
     assert_eq!(
         agents_viewport(&state),
-        Some(2),
+        Some(3),
         "后台刷新与点选条目保持当前滚动视口"
     );
 }

@@ -1,6 +1,6 @@
 use super::*;
 use crate::app::actions::LxInput;
-use crate::app::state::lx::btw::{BtwFocus, BtwQaSummary};
+use crate::app::state::lx::btw::BtwQaSummary;
 use crate::app::state::{AppState, ModelsSnapshot, PaneView, TaskPage, TaskTab};
 use crate::config::ai::{
     AiSettings, ModelConfig, ModelSelection, ProviderConfig, ProviderOptions, ProviderTransport,
@@ -18,6 +18,8 @@ fn btw_pane() -> (AppState, PaneId) {
         ..Default::default()
     });
     target.lx.btw.ensure_thread("qa-1");
+    target.lx.btw.editing = true;
+    target.lx.btw.qa_loaded = true;
     target
         .lx
         .sync_btw_composer_context(Some(std::env::temp_dir()), None);
@@ -77,60 +79,81 @@ fn qa(id: &str, has_thread: bool) -> BtwQaSummary {
 }
 
 #[test]
-fn btw_composer_slash_panel_lists_btwlist_and_opens_the_picker() {
-    // `/btwList` 不属于主会话命令表。
-    assert!(
-        !crate::app::state::lx::slash::SlashCommand::ALL
-            .contains(&crate::app::state::lx::slash::SlashCommand::BtwList)
-    );
+fn btw_list_shift_enter_enters_edit_and_escape_returns() {
     let (mut state, pane) = btw_pane();
-    // 在 BTW 输入框输入 `/`：打开 BTW 专属命令面板，而不是主会话的命令面板。
-    assert!(apply_input(&mut state, pane, LxInput::Char('/')));
-    let composer = state
-        .pane_anywhere(pane)
-        .expect("pane")
-        .lx
-        .btw
-        .active_composer()
-        .expect("composer");
-    let Some(crate::app::state::SlashPanel::Commands { items, .. }) = &composer.slash else {
-        panic!("/ 面板应打开");
-    };
-    assert_eq!(items.len(), 1, "BTW 面板只列 BTW 自己的命令");
-    assert!(matches!(
-        items[0],
-        crate::app::state::SlashEntry::Command(crate::app::state::lx::slash::SlashCommand::BtwList)
-    ));
-    assert!(
-        state.pane_anywhere(pane).expect("pane").lx.slash.is_none(),
-        "主输入框的 / 面板不能被 BTW 命令污染"
-    );
+    {
+        let target = state.pane_mut_anywhere(pane).expect("pane");
+        target.lx.btw.editing = false;
+        target.lx.btw.qa = vec![qa("qa-1", true), qa("qa-2", false)];
+        target.lx.btw.active = Some("qa-2".into());
+        target.lx.btw.sync_selection_after_filter();
+    }
+    assert!(apply_input(&mut state, pane, LxInput::EnterFolder));
+    assert!(state.pane_anywhere(pane).expect("pane").lx.btw.editing);
+    assert!(apply_input(&mut state, pane, LxInput::Escape));
+    assert!(!state.pane_anywhere(pane).expect("pane").lx.btw.editing);
+}
 
-    // 继续输入过滤：完整命令仍保留唯一候选。
-    for ch in "btwlist".chars() {
+#[test]
+fn btw_list_search_moves_highlight_and_shift_enter_enters() {
+    let (mut state, pane) = btw_pane();
+    {
+        let target = state.pane_mut_anywhere(pane).expect("pane");
+        target.lx.btw.editing = false;
+        target.lx.btw.qa = vec![qa("qa-1", true), qa("qa-2", false)];
+        target.lx.btw.active = Some("qa-1".into());
+        target.lx.btw.sync_selection_after_filter();
+    }
+    for ch in "qa-2".chars() {
         assert!(apply_input(&mut state, pane, LxInput::Char(ch)));
     }
-    assert!(matches!(
+    let btw = &state.pane_anywhere(pane).expect("pane").lx.btw;
+    assert_eq!(btw.filtered_qa_indices(), vec![1]);
+    assert_eq!(btw.active.as_deref(), Some("qa-2"));
+    assert_eq!(btw.selected_index(), Some(0), "搜索后高亮第一项");
+    assert!(!btw.editing, "普通 Enter 不进入编辑态");
+    assert!(apply_input(&mut state, pane, LxInput::Enter));
+    assert!(!state.pane_anywhere(pane).expect("pane").lx.btw.editing);
+    assert!(
+        apply_input(&mut state, pane, LxInput::EnterFolder),
+        "Shift+Enter 必须进入过滤后的第一项"
+    );
+    assert!(state.pane_anywhere(pane).expect("pane").lx.btw.editing);
+    assert!(apply_input(&mut state, pane, LxInput::Escape));
+    assert!(!state.pane_anywhere(pane).expect("pane").lx.btw.editing);
+    assert_eq!(
         state
             .pane_anywhere(pane)
             .expect("pane")
             .lx
             .btw
-            .active_composer()
-            .expect("composer")
-            .slash,
-        Some(crate::app::state::SlashPanel::Commands { .. })
-    ));
+            .search
+            .text(),
+        "qa-2",
+        "Esc 只退回列表，搜索词保留"
+    );
+    assert!(apply_input(&mut state, pane, LxInput::Escape));
+    assert!(
+        state
+            .pane_anywhere(pane)
+            .expect("pane")
+            .lx
+            .btw
+            .search
+            .text()
+            .is_empty()
+    );
+}
 
-    // Enter 采纳：草稿被消费，QA 列表未到达时先挂起选择器。
-    assert!(apply_input(&mut state, pane, LxInput::Enter));
-    let btw = &state.pane_anywhere(pane).expect("pane").lx.btw;
-    assert!(btw.pending_pick);
-    let composer = btw.active_composer().expect("composer");
-    assert_eq!(composer.input, "");
-    assert!(composer.slash.is_none());
-
-    // QA 列表回投：默认停当前 QA，并保留 DB 的 side-thread 标记。
+#[test]
+fn btw_qa_list_sets_latest_and_marks_side_threads() {
+    let (mut state, pane) = btw_pane();
+    {
+        let target = state.pane_mut_anywhere(pane).expect("pane");
+        target.lx.btw.editing = false;
+        target.lx.btw.active = None;
+        target.lx.btw.qa.clear();
+    }
     assert!(on_qa_list_loaded(
         &mut state,
         pane,
@@ -138,121 +161,27 @@ fn btw_composer_slash_panel_lists_btwlist_and_opens_the_picker() {
         vec![qa("qa-1", true), qa("qa-2", false)],
     ));
     let btw = &state.pane_anywhere(pane).expect("pane").lx.btw;
-    assert_eq!(btw.picking, Some(0));
+    assert_eq!(btw.active.as_deref(), Some("qa-2"));
+    assert_eq!(btw.qa_window.active, 1);
     assert!(btw.has_side_thread(&btw.qa[0]));
     assert!(!btw.has_side_thread(&btw.qa[1]));
-
-    // ↓ 选到另一条 QA，Enter 切换并触发历史加载。
-    assert!(apply_input(&mut state, pane, LxInput::Down));
-    assert!(apply_input(&mut state, pane, LxInput::Enter));
-    let btw = &state.pane_anywhere(pane).expect("pane").lx.btw;
-    assert_eq!(btw.active.as_deref(), Some("qa-2"));
-    assert!(btw.picking.is_none());
-    assert!(state.effects.iter().any(|effect| matches!(
-        effect,
-        Effect::Btw(BtwEffect::LoadThread { qa_id, .. }) if qa_id == "qa-2"
-    )));
 }
 
 #[test]
-fn empty_btw_composer_arrows_switch_tabs() {
-    let (mut state, pane) = btw_pane();
-    assert!(apply_input(&mut state, pane, LxInput::Left));
-    assert_eq!(
-        state
-            .pane_anywhere(pane)
-            .expect("pane")
-            .lx
-            .task
-            .as_ref()
-            .expect("task")
-            .tab,
-        TaskTab::Agents
-    );
-}
-
-#[test]
-fn non_empty_btw_composer_arrows_move_the_cursor() {
-    let (mut state, pane) = btw_pane();
-    state
-        .pane_mut_anywhere(pane)
-        .expect("pane")
-        .lx
-        .btw
-        .active_composer_mut()
-        .expect("composer")
-        .insert_char('x');
-    let _ = apply_input(&mut state, pane, LxInput::Left);
-    let target = state.pane_anywhere(pane).expect("pane");
-    assert_eq!(target.lx.task.as_ref().expect("task").tab, TaskTab::Btw);
-    assert_eq!(target.lx.btw.active_composer().expect("composer").cursor, 0);
-}
-
-#[test]
-fn empty_btw_composer_up_returns_to_main_session() {
-    let (mut state, pane) = btw_pane();
-    assert!(state.pane_anywhere(pane).expect("pane").lx.task.is_some());
-    assert!(apply_input(&mut state, pane, LxInput::Up));
-    assert!(
-        state.pane_anywhere(pane).expect("pane").lx.task.is_none(),
-        "空输入框 ↑ 应关闭后台面板，回到主会话"
-    );
-}
-
-#[test]
-fn non_empty_btw_composer_up_keeps_the_panel() {
-    let (mut state, pane) = btw_pane();
-    state
-        .pane_mut_anywhere(pane)
-        .expect("pane")
-        .lx
-        .btw
-        .active_composer_mut()
-        .expect("composer")
-        .insert_char('x');
-    let _ = apply_input(&mut state, pane, LxInput::Up);
-    assert!(
-        state.pane_anywhere(pane).expect("pane").lx.task.is_some(),
-        "有草稿时 ↑ 仍属于编辑器，不应关闭面板"
-    );
-}
-
-#[test]
-fn btw_list_panel_stays_open_while_loading_and_for_an_empty_list() {
+fn btw_empty_list_stays_in_list_mode() {
     let (mut state, pane) = btw_pane();
     {
-        let btw = &mut state.pane_mut_anywhere(pane).expect("pane").lx.btw;
-        btw.qa.clear();
-        btw.picking = None;
-        btw.pending_pick = false;
+        let target = state.pane_mut_anywhere(pane).expect("pane");
+        target.lx.btw.editing = false;
+        target.lx.btw.qa.clear();
+        target.lx.btw.active = None;
+        target.lx.btw.qa_loaded = false;
     }
-
-    // 列表未到达：面板先以 loading 占位打开，并独占键盘。
-    assert!(open_btw_list(&mut state, pane));
+    assert!(on_qa_list_loaded(&mut state, pane, "sess-test", Vec::new()));
     let btw = &state.pane_anywhere(pane).expect("pane").lx.btw;
-    assert!(btw.pending_pick);
-    assert!(btw.picker_loading);
-    assert!(btw.picker_open());
-    assert!(btw.picking.is_none());
-
-    assert!(apply_input(&mut state, pane, LxInput::Escape));
-    assert!(
-        !state
-            .pane_anywhere(pane)
-            .expect("pane")
-            .lx
-            .btw
-            .picker_open()
-    );
-
-    // 空列表到达：保留空态面板，而不是关掉面板或退回草稿。
-    assert!(open_btw_list(&mut state, pane));
-    assert!(on_qa_list_loaded(&mut state, pane, "sess-test", Vec::new(),));
-    let btw = &state.pane_anywhere(pane).expect("pane").lx.btw;
-    assert!(btw.picker_open());
-    assert!(btw.pending_pick);
-    assert!(!btw.picker_loading, "空列表到达后应显示空态而不是 loading");
-    assert!(btw.picking.is_none());
+    assert!(btw.qa_loaded);
+    assert!(btw.qa.is_empty());
+    assert!(!btw.editing);
 }
 
 #[test]
@@ -384,7 +313,6 @@ fn btw_wheel_scroll_and_scrollbar_clamp_to_the_thread() {
     // 对话区聚焦时 PgUp/PgDn 与 Agents 详情同口径翻 10 行。
     {
         let target = state.pane_mut_anywhere(pane).expect("pane");
-        target.lx.btw.focus = BtwFocus::Conversation;
         let thread = target.lx.btw.active_thread_mut().expect("thread");
         thread.scroll = 10;
         thread.follow = false;
@@ -734,4 +662,110 @@ fn btw_loading_participates_in_the_global_spinner_gate() {
         .expect("thread")
         .pending_submit = Some(("submit".into(), 1));
     assert!(state.has_streaming_lx());
+}
+
+#[test]
+fn btwlist_is_not_a_slash_command() {
+    assert!(
+        crate::app::state::lx::slash::SlashCommand::ALL
+            .iter()
+            .all(|command| !command.text().eq_ignore_ascii_case("/btwList")),
+        "/btwList must be removed from the slash enum"
+    );
+    assert!(
+        crate::app::state::lx::slash::parse_btw_command("/btwList").is_none(),
+        "输入路由不得把 /btwList 识别成 /btw"
+    );
+    assert_eq!(
+        crate::app::state::lx::slash::parse_btw_command("/btw List"),
+        Some(("List", false)),
+        "只有空白分隔才是 /btw prompt"
+    );
+}
+
+#[test]
+fn bare_btw_reopen_keeps_the_current_qa() {
+    let (mut state, pane) = btw_pane();
+    {
+        let target = state.pane_mut_anywhere(pane).expect("pane");
+        target.lx.btw.qa = vec![qa("qa-1", true), qa("qa-2", true)];
+        target.lx.btw.active = Some("qa-2".into());
+        target.lx.btw.sync_selection_after_filter();
+        target.lx.replace_input("/btw");
+    }
+    assert!(try_submit_btw_command(&mut state, pane));
+    assert_eq!(
+        state
+            .pane_anywhere(pane)
+            .expect("pane")
+            .lx
+            .btw
+            .active
+            .as_deref(),
+        Some("qa-2"),
+        "裸 /btw 重开应保留当前 QA，而不是抢到最新"
+    );
+}
+
+#[test]
+fn accepted_ack_updates_original_qa_after_the_user_switches() {
+    let (mut state, pane) = btw_pane();
+    {
+        let target = state.pane_mut_anywhere(pane).expect("pane");
+        target.lx.btw.qa = vec![qa("qa-1", true), qa("qa-2", false)];
+        target.lx.btw.active = Some("qa-1".into());
+        target.lx.btw.sync_selection_after_filter();
+        target
+            .lx
+            .btw
+            .thread_mut("qa-1")
+            .expect("thread")
+            .pending_submit = Some(("submit-1".into(), 0));
+    }
+    assert!(super::switch_qa(&mut state, pane, "qa-2"));
+    assert!(on_accepted(
+        &mut state,
+        pane,
+        AcceptedBtw {
+            qa_id: "qa-1".into(),
+            submit_id: "submit-1".into(),
+            thread_id: "thread-1".into(),
+            child_session_id: "child-1".into(),
+            user_message_id: "msg-1".into(),
+            text: "side question".into(),
+        }
+    ));
+    let btw = &state.pane_anywhere(pane).expect("pane").lx.btw;
+    assert_eq!(btw.active.as_deref(), Some("qa-2"), "ACK 不得抢回 active");
+    let thread = btw
+        .threads()
+        .find(|thread| thread.qa_id == "qa-1")
+        .expect("thread");
+    assert!(thread.pending_submit.is_none());
+    assert_eq!(thread.chat.messages.last().expect("message").role, "user");
+}
+
+#[test]
+fn open_btw_tab_clears_stale_history_and_input_selection() {
+    use crate::app::selection::{Selection, SelectionUnit};
+
+    let (mut state, pane) = btw_pane();
+    {
+        let target = state.pane_mut_anywhere(pane).expect("pane");
+        target.lx.insert_str("main draft");
+        target.lx.select_all();
+    }
+    state.lx_selection = Some(Selection::begin_range(
+        pane,
+        (0, 0),
+        (0, 1),
+        SelectionUnit::Character,
+    ));
+    assert!(open_btw_tab(&mut state, pane));
+    assert!(state.lx_selection.is_none(), "历史区残留选区必须清掉");
+    let lx = &state.pane_anywhere(pane).expect("pane").lx;
+    assert!(
+        lx.text_selection_range().is_none(),
+        "主输入框残留选区也必须清掉"
+    );
 }

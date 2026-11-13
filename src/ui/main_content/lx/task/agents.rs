@@ -12,6 +12,7 @@ use crate::ui::main_content::lx::history::{self, HistorySource, HistoryViewport}
 use crate::ui::{style, text};
 
 use super::super::Grid;
+use super::detail::{self, DetailView, EmptyState};
 use crate::ui::main_content::lx::history::StepKind;
 
 /// 列表行里角色段与状态段之间的分隔。
@@ -30,29 +31,23 @@ pub(crate) fn draw_detail(
     loading_frame: usize,
     cache: &mut crate::ui::PaneCache,
 ) -> usize {
-    if rect.width == 0 || rect.height == 0 {
-        return 0;
-    }
-    let source = HistorySource::from_run(run).with_viewport(HistoryViewport {
+    let view = DetailView {
+        source: HistorySource::from_run(run).with_viewport(HistoryViewport {
+            scroll,
+            follow_bottom: run.follow,
+        }),
         scroll,
-        follow_bottom: run.follow,
-    });
-    if !source.has_history() {
-        draw_empty_detail(grid, rect, run, loading_frame);
-        return 1;
-    }
-    let view = history::view_source_plain(rect, source, cache);
-    let visible = usize::from(view.body.height);
-    let max = view.total_rows.saturating_sub(visible);
-    // 跟随底部时贴尾；用户上翻过（`follow == false`）就停在他看的位置。
-    let top = if run.follow { max } else { scroll.min(max) };
-    let total = history::render_source(grid, view.body, source, top, cache);
-    if let Some(bar) = history::scrollbar(view.body, view.total_rows, visible, top) {
-        for y in bar.thumb.y..bar.thumb.bottom() {
-            grid.set(bar.thumb.x, y, '▐', style::text());
+        follow: run.follow,
+    };
+    let empty = if run.loaded {
+        EmptyState::Placeholder(text::LX_TASK_AGENTS_EMPTY)
+    } else {
+        EmptyState::Loading {
+            label: text::LX_TASK_AGENTS_LOADING,
+            frame: loading_frame,
         }
-    }
-    total
+    };
+    detail::draw(grid, rect, view, empty, cache)
 }
 
 /// 空消息流（已加载为空或尚在懒加载）时的单行提示绘制（绘制与取词共用）。
@@ -62,31 +57,15 @@ pub(crate) fn draw_empty_detail(
     run: &SubagentRun,
     loading_frame: usize,
 ) {
-    if run.loaded {
-        super::draw_placeholder(grid, rect, text::LX_TASK_AGENTS_EMPTY);
+    let empty = if run.loaded {
+        EmptyState::Placeholder(text::LX_TASK_AGENTS_EMPTY)
     } else {
-        // 历史 run 的消息流还在读库：用与主历史相同的呼吸圆点表达 loading，水平居中。
-        let mark = crate::ui::main_content::lx::history::StepMark::Running;
-        let mark_text = format!("{} ", mark.glyph(StepKind::Body, loading_frame, true));
-        let total_w = u16::try_from(mark_text.width() + text::LX_TASK_AGENTS_LOADING.width())
-            .unwrap_or(u16::MAX);
-        let x = rect.x + rect.width.saturating_sub(total_w) / 2;
-        grid.put_clipped(
-            x,
-            rect.y,
-            &mark_text,
-            style::chat_step_mark_running_body(),
-            rect.right().saturating_sub(x),
-        );
-        let text_x = x.saturating_add(2);
-        grid.put_clipped(
-            text_x,
-            rect.y,
-            text::LX_TASK_AGENTS_LOADING,
-            style::muted(),
-            rect.right().saturating_sub(text_x),
-        );
-    }
+        EmptyState::Loading {
+            label: text::LX_TASK_AGENTS_LOADING,
+            frame: loading_frame,
+        }
+    };
+    detail::draw_empty(grid, rect, empty);
 }
 
 /// 详情区行数（`resolve_task_agents_visible` 用）。
@@ -97,21 +76,15 @@ pub(crate) fn detail_rows(
     run: &SubagentRun,
     cache: &mut crate::ui::PaneCache,
 ) -> (usize, bool) {
-    let content_width = history::content_rect(rect).width;
-    if content_width == 0 {
-        return (usize::from(rect.height), true);
-    }
-    let source = HistorySource::from_run(run).with_viewport(HistoryViewport {
+    let view = DetailView {
+        source: HistorySource::from_run(run).with_viewport(HistoryViewport {
+            scroll: run.scroll,
+            follow_bottom: run.follow,
+        }),
         scroll: run.scroll,
-        follow_bottom: run.follow,
-    });
-    // 空/未加载详情只画一行占位；行数口径与 `draw_detail` 的返回值保持一致。
-    if !source.has_history() {
-        return (1, true);
-    }
-    // `resolve` 先于绘制，首帧也要有视口行数，离屏合并才能判定。
-    cache.set_viewport_rows(usize::from(rect.height));
-    history::measure_cached(content_width, source, cache)
+        follow: run.follow,
+    };
+    detail::measure(rect, view, cache)
 }
 
 /// 详情区变化前的阅读锚点：只读上一帧同宽度快照，不触发重排。
@@ -124,18 +97,17 @@ pub(crate) fn anchor_before(
     let rect = super::super::layout(area, lx).task_output?;
     let page = lx.task.as_ref()?;
     let run = page
-        .selected_agent_index(&lx.agents)
+        .detail_agent_index(&lx.agents)
         .and_then(|index| lx.agents.runs.get(index))?;
-    let width = history::content_rect(rect).width;
-    if width == 0 {
-        return None;
-    }
-    let source = HistorySource::from_run(run).with_viewport(HistoryViewport {
+    let view = DetailView {
+        source: HistorySource::from_run(run).with_viewport(HistoryViewport {
+            scroll: run.scroll,
+            follow_bottom: run.follow,
+        }),
         scroll: run.scroll,
-        follow_bottom: run.follow,
-    });
-    let snapshot = cache.snapshot_cached(width, source)?;
-    history::anchor_at(&snapshot, scroll, width)
+        follow: run.follow,
+    };
+    detail::anchor_before(rect, view, scroll, cache)
 }
 
 /// 详情区变化后的锚点行；快照刚由 `detail_rows` 重建。
@@ -148,18 +120,17 @@ pub(crate) fn anchor_row(
     let rect = super::super::layout(area, lx).task_output?;
     let page = lx.task.as_ref()?;
     let run = page
-        .selected_agent_index(&lx.agents)
+        .detail_agent_index(&lx.agents)
         .and_then(|index| lx.agents.runs.get(index))?;
-    let width = history::content_rect(rect).width;
-    if width == 0 {
-        return None;
-    }
-    let source = HistorySource::from_run(run).with_viewport(HistoryViewport {
+    let view = DetailView {
+        source: HistorySource::from_run(run).with_viewport(HistoryViewport {
+            scroll: run.scroll,
+            follow_bottom: run.follow,
+        }),
         scroll: run.scroll,
-        follow_bottom: run.follow,
-    });
-    let snapshot = cache.snapshot_ready_source(width, source);
-    history::anchor_row(&snapshot, source, anchor, width)
+        follow: run.follow,
+    };
+    detail::anchor_row(rect, view, anchor, cache)
 }
 
 /// 步骤标记文本（`■ `）占用的列数。
@@ -254,18 +225,93 @@ fn list_columns(runs: &[&SubagentRun], prefixes: &[Option<String>], now_ms: i64)
     }
 }
 
+/// 编辑态：只画追问 composer（高度由 `task_panel_height` 决定）。
+pub(super) fn draw_edit(
+    grid: &mut Grid,
+    rect: Rect,
+    lx: &crate::app::state::Lx,
+    focused: bool,
+) -> Option<(u16, u16)> {
+    if rect.width == 0 || rect.height < 3 {
+        return None;
+    }
+    let page = lx.task.as_ref()?;
+    let agent_id = page.agent_edit.as_deref()?;
+    let composer = lx.agents.composer(agent_id)?;
+    let run = lx.agents.by_agent(agent_id)?;
+    let editor = composer.editor();
+    let visible = usize::from(rect.height.saturating_sub(2)).max(1);
+    let total = editor.visual_rows().len().max(1);
+    let scroll = editor.scroll().min(total.saturating_sub(visible));
+    let dims = super::super::input::draw(grid, rect, editor, focused, scroll, visible);
+    let marker = format!(" {} ", text::LX_TASK_AGENT_INPUT_MARK);
+    let marker_w = u16::try_from(marker.width()).unwrap_or(u16::MAX);
+    // 标记要么完整显示，要么整块不画；绝不把 "Subagent" 截成半截。
+    if rect.width >= marker_w.saturating_add(2) {
+        grid.put_clipped(
+            rect.x.saturating_add(1),
+            rect.y,
+            &marker,
+            style::accent(),
+            rect.width.saturating_sub(2),
+        );
+    }
+    draw_agent_badge(grid, rect, run, marker_w);
+    dims
+}
+
+/// composer 矩形：仅 Agents 编辑态且目标 composer 已创建时返回。
+pub(crate) fn composer_rect(rect: Rect, lx: &crate::app::state::Lx) -> Option<Rect> {
+    if !lx.agents_editing() || rect.height < 3 {
+        return None;
+    }
+    lx.agent_edit_id()
+        .and_then(|agent_id| lx.agents.composer(agent_id))?;
+    Some(rect)
+}
+
+/// 右侧目标胶囊：` To: <nickname> [role] `；左侧必须给 `Subagent` 标记留位。
+fn draw_agent_badge(grid: &mut Grid, rect: Rect, run: &SubagentRun, marker_w: u16) {
+    let label = format!(
+        " To: {} [{}] ",
+        run.nickname
+            .as_deref()
+            .filter(|nickname| !nickname.is_empty())
+            .unwrap_or_else(|| run.role.as_str()),
+        run.role.as_str()
+    );
+    let width = u16::try_from(label.width()).unwrap_or(u16::MAX);
+    if rect.width <= width.saturating_add(marker_w).saturating_add(2) {
+        return;
+    }
+    let x = rect.right().saturating_sub(width).saturating_sub(1);
+    if x <= rect.x.saturating_add(marker_w) {
+        return;
+    }
+    grid.put(x, rect.y, &label, style::btw_qa_badge());
+}
+
 /// 列表绘制：`❯ ■ Turing [explorer]  running  2m 59s  <task 首行>`。
 ///
 /// 固定列：状态图标、身份、状态、时长、标题在所有行同一起点；窄窗格从右往左
 /// 整列丢弃（标题 → 时长 → 状态），身份与状态图标永远保留。
 pub(super) fn draw_list(grid: &mut Grid, list: Rect, page: &TaskPage, agents: &AgentsState) {
-    let indices = agents.filtered_indices(page.agent_filter);
+    let indices = agents.visible_indices(page.agent_filter, page.agents_search.text());
     let visible_runs: Vec<&SubagentRun> = indices
         .iter()
         .filter_map(|index| agents.runs.get(*index))
         .collect();
     if visible_runs.is_empty() {
-        super::draw_placeholder(grid, list, text::LX_TASK_AGENTS_EMPTY);
+        let label = if page.agents_loading {
+            text::LX_TASK_AGENTS_LIST_LOADING
+        } else if !page.agents_search.text().is_empty() {
+            text::LX_TASK_AGENTS_SEARCH_EMPTY
+        } else if page.agent_filter != crate::app::state::AgentFilter::All {
+            text::LX_TASK_AGENTS_FILTER_EMPTY
+        } else {
+            text::LX_TASK_AGENTS_EMPTY
+        };
+        super::draw_placeholder(grid, list, label);
         return;
     }
     let visible = usize::from(list.height);
@@ -451,7 +497,9 @@ fn parent_path(agent_path: &str) -> Option<&str> {
 
 /// 列表窗口起点（与进程列表同口径）。
 pub(super) fn window_start(page: &TaskPage, agents: &AgentsState, visible: usize) -> usize {
-    let len = agents.filtered_indices(page.agent_filter).len();
+    let len = agents
+        .visible_indices(page.agent_filter, page.agents_search.text())
+        .len();
     if visible == 0 || len <= visible {
         return 0;
     }

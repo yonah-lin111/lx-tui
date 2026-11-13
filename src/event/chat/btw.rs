@@ -1294,11 +1294,11 @@ pub(crate) fn apply_event_to_state(state: &mut AppState, event: BtwEvent) {
             user_message_id,
             text,
         } => {
-            let _ = qa_id;
             crate::app::update::on_btw_accepted(
                 state,
                 pane,
                 crate::app::update::AcceptedBtw {
+                    qa_id,
                     submit_id,
                     thread_id,
                     child_session_id,

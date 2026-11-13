@@ -802,5 +802,15 @@ pub fn chat_loading_scan(phase: usize) -> Style {
         .add_modifier(Modifier::BOLD)
 }
 
+/// 后台任务 composer 上方 loading 的静态底色：默认前景 + dim。
+pub fn task_loading_base() -> Style {
+    Style::default().add_modifier(Modifier::DIM)
+}
+
+/// 后台任务 composer 上方 loading 的扫描窗口：默认前景 + bold，不改变色相。
+pub fn task_loading_scan() -> Style {
+    Style::default().add_modifier(Modifier::BOLD)
+}
+
 #[cfg(test)]
 mod tests;

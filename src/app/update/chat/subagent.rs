@@ -54,6 +54,7 @@ pub fn on_subagent_started(state: &mut AppState, pane: PaneId, mut run: Subagent
     run.chat.set_project_root(project_root);
     target.lx.agents.runs.push(run);
     restore_selected_task_agent(&mut target.lx, selected.as_deref());
+    adopt_agent_selection(&mut target.lx);
     target.lx.sync_mention_subagent_runs();
     target.lx.sync_btw_composer_agents();
     refresh_status(state, pane);
@@ -61,11 +62,39 @@ pub fn on_subagent_started(state: &mut AppState, pane: PaneId, mut run: Subagent
 }
 
 fn current_selected_agent_id(lx: &crate::app::state::Lx) -> Option<String> {
-    lx.task
+    lx.agents.selected_id.clone().or_else(|| {
+        lx.task
+            .as_ref()
+            .and_then(|page| page.selected_agent_index(&lx.agents))
+            .and_then(|index| lx.agents.runs.get(index))
+            .map(|run| run.agent_id.clone())
+    })
+}
+
+/// 保证 Agents 页的稳定选中有效：优先沿用当前可见高亮，其次末项/首项回退。
+fn adopt_agent_selection(lx: &mut crate::app::state::Lx) {
+    if !lx.is_agents_tab() {
+        return;
+    }
+    let stale = lx
+        .agents
+        .selected_id
+        .as_deref()
+        .is_some_and(|selected| lx.agents.by_agent(selected).is_none());
+    if lx.agents.selected_id.is_some() && !stale {
+        return;
+    }
+    let visible = lx
+        .task
         .as_ref()
         .and_then(|page| page.selected_agent_index(&lx.agents))
         .and_then(|index| lx.agents.runs.get(index))
-        .map(|run| run.agent_id.clone())
+        .map(|run| run.agent_id.clone());
+    lx.agents.selected_id =
+        visible.or_else(|| lx.agents.runs.first().map(|run| run.agent_id.clone()));
+    if let Some(page) = lx.task.as_mut() {
+        page.sync_agent_window(&lx.agents);
+    }
 }
 
 /// 按树形前序重排 run，并让筛选后的列表高亮继续指向修改前捕获的 `selected_agent_id`；
@@ -78,7 +107,9 @@ pub fn restore_selected_task_agent(
     let Some(page) = lx.task.as_mut() else {
         return;
     };
-    let filtered = lx.agents.filtered_indices(page.agent_filter);
+    let filtered = lx
+        .agents
+        .visible_indices(page.agent_filter, page.agents_search.text());
     if let Some(selected) = selected_agent_id
         && let Some(index) = lx
             .agents
@@ -90,7 +121,11 @@ pub fn restore_selected_task_agent(
         page.agents_window.active = position;
         page.agents_window.anchor = position;
     }
-    crate::app::state::lx::task::clamp_task_window(&mut page.agents_window, filtered.len());
+    crate::app::state::lx::task::clamp_task_window_visible(
+        &mut page.agents_window,
+        filtered.len(),
+        crate::ui::main_content::lx::task::LIST_MAX_SEARCH,
+    );
 }
 
 /// 同步底边框的 blocked 计数（子 agent 状态变化后调用）。
@@ -280,6 +315,9 @@ pub fn set_subagent_list(
     {
         return false;
     }
+    if let Some(page) = target.lx.task.as_mut() {
+        page.agents_loading = false;
+    }
     let selected = current_selected_agent_id(&target.lx);
     let mut changed = false;
     for record in records {
@@ -317,6 +355,7 @@ pub fn set_subagent_list(
     if changed {
         restore_selected_task_agent(&mut target.lx, selected.as_deref());
     }
+    adopt_agent_selection(&mut target.lx);
     target.lx.sync_mention_subagent_runs();
     target.lx.sync_btw_composer_agents();
     let focused = consume_agent_focus(&mut target.lx);
@@ -347,7 +386,15 @@ pub fn open_agent_page(state: &mut AppState, pane: PaneId, agent_id: &str) -> bo
             lx.chat.suppressed_prompt_header = None;
         }
         page.select_tab(crate::app::state::TaskTab::Agents);
+        // 同 tab 打开链接时 `select_tab` 会提前返回：必须显式退出旧 composer
+        // 并清空搜索，否则详情已切到子 agent，发送/停止仍落在旧 agent 上。
+        page.agent_edit = None;
+        page.agents_search.clear();
+        page.agents_loading = lx.agents.runs.is_empty();
+        page.sync_agent_window(&lx.agents);
         page.agents_focus = Some(agent_id.to_string());
+        lx.btw.editing = false;
+        lx.btw.search.clear();
         let focused = consume_agent_focus(lx);
         (focused || lx.task.is_some(), session)
     };
@@ -358,8 +405,10 @@ pub fn open_agent_page(state: &mut AppState, pane: PaneId, agent_id: &str) -> bo
             pane,
             parent_session: session,
         });
-    if opened {
-        crate::app::update::clear_lx_selection_for(state, pane);
+    crate::app::update::clear_lx_selection_for(state, pane);
+    if let Some(target) = state.pane_mut_anywhere(pane) {
+        target.lx.clear_text_selection();
+        target.lx.clear_preview_selection();
     }
     opened
 }
@@ -387,14 +436,14 @@ fn consume_agent_focus(lx: &mut crate::app::state::Lx) -> bool {
     let mut filter = page.agent_filter;
     let mut position = lx
         .agents
-        .filtered_indices(filter)
+        .visible_indices(filter, page.agents_search.text())
         .iter()
         .position(|real| *real == index);
     if position.is_none() && filter != crate::app::state::AgentFilter::All {
         filter = crate::app::state::AgentFilter::All;
         position = lx
             .agents
-            .filtered_indices(filter)
+            .visible_indices(filter, page.agents_search.text())
             .iter()
             .position(|real| *real == index);
     }
@@ -407,14 +456,7 @@ fn consume_agent_focus(lx: &mut crate::app::state::Lx) -> bool {
     };
     page.agents_focus = None;
     page.agent_filter = filter;
-    if page
-        .agent_reply_target
-        .as_ref()
-        .is_some_and(|(target_id, _)| target_id != &agent_id)
-    {
-        page.agent_reply = None;
-        page.agent_reply_target = None;
-    }
+    lx.agents.selected_id = Some(agent_id.clone());
     page.agents_window.active = position;
     page.agents_window.anchor = position;
     page.agents_window.viewport = None;
@@ -444,7 +486,7 @@ pub fn select_task_agent(state: &mut AppState, pane: PaneId, index: usize) -> bo
         let Some(position) = target
             .lx
             .agents
-            .filtered_indices(page.agent_filter)
+            .visible_indices(page.agent_filter, page.agents_search.text())
             .iter()
             .position(|real| *real == index)
         else {
@@ -459,13 +501,8 @@ pub fn select_task_agent(state: &mut AppState, pane: PaneId, index: usize) -> bo
     let Some(page) = target.lx.task.as_mut() else {
         return false;
     };
-    if page
-        .agent_reply_target
-        .as_ref()
-        .is_some_and(|(target_id, _)| Some(target_id) != clicked_agent_id.as_ref())
-    {
-        page.agent_reply = None;
-        page.agent_reply_target = None;
+    if let Some(agent_id) = clicked_agent_id {
+        target.lx.agents.selected_id = Some(agent_id);
     }
     page.agents_window.active = position;
     page.agents_window.anchor = position;
@@ -536,7 +573,7 @@ pub fn toggle_agent_card(state: &mut AppState, pane: PaneId, target: CardTarget)
         crate::app::update::clear_lx_selection_for(state, pane);
         return true;
     }
-    let Some(active) = page.selected_agent_index(&target_pane.lx.agents) else {
+    let Some(active) = page.detail_agent_index(&target_pane.lx.agents) else {
         return false;
     };
     let Some(run) = target_pane.lx.agents.runs.get_mut(active) else {
@@ -711,7 +748,7 @@ pub fn on_subagent_finished(
         .pane_anywhere(pane)
         .and_then(|target| {
             target.lx.task.as_ref().and_then(|page| {
-                page.selected_agent_index(&target.lx.agents)
+                page.detail_agent_index(&target.lx.agents)
                     .and_then(|index| target.lx.agents.runs.get(index))
             })
         })
@@ -890,7 +927,7 @@ pub fn scroll_agents_detail(state: &mut AppState, pane: PaneId, delta: isize) ->
     if page.tab != crate::app::state::TaskTab::Agents {
         return false;
     }
-    let Some(active) = page.selected_agent_index(&target.lx.agents) else {
+    let Some(active) = page.detail_agent_index(&target.lx.agents) else {
         return false;
     };
     let Some(run) = target.lx.agents.runs.get_mut(active) else {
@@ -927,7 +964,7 @@ pub fn set_task_agents_scroll(state: &mut AppState, pane: PaneId, offset: usize)
     if page.tab != crate::app::state::TaskTab::Agents {
         return false;
     }
-    let Some(active) = page.selected_agent_index(&target.lx.agents) else {
+    let Some(active) = page.detail_agent_index(&target.lx.agents) else {
         return false;
     };
     let Some(run) = target.lx.agents.runs.get_mut(active) else {

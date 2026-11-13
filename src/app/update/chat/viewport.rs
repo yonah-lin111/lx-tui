@@ -262,43 +262,85 @@ pub(crate) fn resolve_task_btw_visible(
     let mut changed = false;
     for (pane, rect) in rects {
         let inner = crate::tiling::pane_inner_rect(*rect);
-        let Some(composer) = state
+        let Some((needs_measure, visible, anchor)) = state
             .pane_anywhere(*pane)
             .filter(|target| target.view == crate::app::state::PaneView::Lx)
             .filter(|target| target.lx.is_btw_tab())
             .and_then(|target| {
-                crate::ui::main_content::lx::task_btw_composer_rect(inner, &target.lx)
+                let thread = target.lx.btw.active_thread()?;
+                let needs_measure = thread.rows_dirty || thread.total_rows == 0;
+                let output = crate::ui::main_content::lx::task_output_inner(inner, &target.lx)?;
+                let anchor = if !thread.follow && needs_measure {
+                    crate::ui::main_content::lx::task_btw_anchor_before(
+                        inner,
+                        &target.lx,
+                        cache.pane(*pane),
+                        thread.scroll,
+                    )
+                } else {
+                    None
+                };
+                Some((needs_measure, usize::from(output.height), anchor))
             })
         else {
             continue;
         };
-        let measured = state.pane_anywhere(*pane).and_then(|target| {
-            let thread = target.lx.btw.active_thread()?;
-            if !(thread.rows_dirty || thread.total_rows == 0) {
-                return None;
-            }
-            crate::ui::main_content::lx::task_btw_rows(inner, &target.lx, cache.pane(*pane))
+        let measured = if needs_measure {
+            state
+                .pane_anywhere(*pane)
+                .and_then(|target| {
+                    crate::ui::main_content::lx::task_btw_rows(inner, &target.lx, cache.pane(*pane))
+                })
+                .map(|(_, total, fresh)| (total, fresh))
+        } else {
+            None
+        };
+        let anchor_row = anchor.as_ref().and_then(|anchor| {
+            state.pane_anywhere(*pane).and_then(|target| {
+                crate::ui::main_content::lx::task_btw_anchor_row(
+                    inner,
+                    &target.lx,
+                    cache.pane(*pane),
+                    anchor,
+                )
+            })
+        });
+        // 只有编辑态才需要同步 composer 的软换行宽度/可见行。
+        let composer = state.pane_anywhere(*pane).and_then(|target| {
+            crate::ui::main_content::lx::task_btw_composer_rect(inner, &target.lx)
         });
         let Some(target) = state.pane_mut_anywhere(*pane) else {
             continue;
         };
-        let width = composer.width.saturating_sub(3).max(1);
-        let rows = composer.height.saturating_sub(2).max(1);
+        if let Some(composer) = composer {
+            let width = composer.width.saturating_sub(3).max(1);
+            let rows = composer.height.saturating_sub(2).max(1);
+            if let Some(thread) = target.lx.btw.active_thread_mut() {
+                thread.composer.editor_mut().resize(width, rows);
+            }
+        }
         let Some(thread) = target.lx.btw.active_thread_mut() else {
             continue;
         };
-        thread.composer.editor_mut().resize(width, rows);
-        let (visible, total, fresh) =
-            measured.unwrap_or((usize::from(rows), thread.total_rows, true));
-        let total = if fresh { total } else { thread.total_rows };
-        let max = total.saturating_sub(visible);
-        let should_follow =
-            thread.follow || total <= visible.saturating_add(1) || thread.scroll >= max;
-        let next_scroll = if should_follow {
-            max
+        let (measured_total, fresh) = measured.unwrap_or((thread.total_rows, true));
+        let total = if fresh {
+            measured_total
         } else {
-            thread.scroll.min(max)
+            thread.total_rows
         };
+        let max = total.saturating_sub(visible);
+        let should_follow = thread.follow || total <= visible.saturating_add(1);
+        let mut next_scroll = if should_follow { max } else { thread.scroll };
+        if !should_follow {
+            if let Some(anchor) = anchor.as_ref()
+                && let Some(new_row) = anchor_row
+            {
+                let delta = new_row as isize - anchor.row as isize;
+                next_scroll = (next_scroll as isize + delta).clamp(0, max as isize) as usize;
+            } else {
+                next_scroll = next_scroll.min(max);
+            }
+        }
         if thread.visible != visible
             || thread.total_rows != total
             || thread.rows_dirty
@@ -306,8 +348,10 @@ pub(crate) fn resolve_task_btw_visible(
             || thread.scroll != next_scroll
         {
             thread.visible = visible;
-            thread.total_rows = total;
-            thread.rows_dirty = false;
+            if fresh {
+                thread.total_rows = total;
+                thread.rows_dirty = false;
+            }
             thread.follow = should_follow;
             thread.scroll = next_scroll;
             changed = true;
@@ -331,6 +375,7 @@ pub(crate) fn invalidate_task_agent_rows(state: &mut AppState) {
         for run in &mut target.lx.agents.runs {
             run.rows_dirty = true;
         }
+        target.lx.btw.mark_rows_dirty();
     }
 }
 
@@ -355,7 +400,7 @@ pub(crate) fn resolve_task_agents_visible(
                     return None;
                 }
                 let run = page
-                    .selected_agent_index(&target.lx.agents)
+                    .detail_agent_index(&target.lx.agents)
                     .and_then(|index| target.lx.agents.runs.get(index))?;
                 let needs_measure = run.rows_dirty || run.total_rows == 0;
                 let output = crate::ui::main_content::lx::task_output_inner(inner, &target.lx)?;
@@ -400,13 +445,27 @@ pub(crate) fn resolve_task_agents_visible(
                 )
             })
         });
+        // Agents composer 与 BTW 同源：编辑态必须用实际 composer 宽度/正文行数
+        // 驱动软换行与光标可见性，否则 `Lx` 会一直停在构造时的 `u16::MAX`。
+        let composer = state.pane_anywhere(*pane).and_then(|target| {
+            crate::ui::main_content::lx::task_agent_composer_rect(inner, &target.lx)
+        });
         let Some(target) = state.pane_mut_anywhere(*pane) else {
             continue;
         };
+        if let Some(composer) = composer {
+            let width = composer.width.saturating_sub(3).max(1);
+            let rows = composer.height.saturating_sub(2).max(1);
+            if let Some(agent_id) = target.lx.agent_edit_id().map(str::to_string)
+                && let Some(composer) = target.lx.agents.composer_mut(&agent_id)
+            {
+                composer.editor_mut().resize(width, rows);
+            }
+        }
         let Some(page) = target.lx.task.as_mut() else {
             continue;
         };
-        let Some(active) = page.selected_agent_index(&target.lx.agents) else {
+        let Some(active) = page.detail_agent_index(&target.lx.agents) else {
             continue;
         };
         let Some(run) = target.lx.agents.runs.get_mut(active) else {
@@ -521,7 +580,7 @@ pub fn jump_lx_history_bottom(state: &mut AppState, pane: PaneId) -> bool {
                 page.output_scroll != before
             }
             crate::app::state::TaskTab::Agents => page
-                .selected_agent_index(&target.lx.agents)
+                .detail_agent_index(&target.lx.agents)
                 .and_then(|index| target.lx.agents.runs.get_mut(index))
                 .is_some_and(|run| {
                     let changed = !run.follow;

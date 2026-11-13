@@ -76,7 +76,15 @@ pub fn open_subagents_page(state: &mut AppState, pane: PaneId) -> bool {
         };
         if let Some(page) = target.lx.task.as_mut() {
             page.select_tab(crate::app::state::TaskTab::Agents);
+            // 同 tab 调用 `/subagents` 时也要回到列表态，不能让旧 composer/搜索
+            // 继续截获输入。
+            page.agent_edit = None;
+            page.agents_search.clear();
+            page.agents_loading = target.lx.agents.runs.is_empty();
+            page.sync_agent_window(&target.lx.agents);
         }
+        target.lx.btw.editing = false;
+        target.lx.btw.search.clear();
         target.lx.chat.session_id.clone()
     };
     if let Some(parent_session) = session {
@@ -86,6 +94,11 @@ pub fn open_subagents_page(state: &mut AppState, pane: PaneId) -> bool {
                 pane,
                 parent_session,
             });
+    }
+    crate::app::update::clear_lx_selection_for(state, pane);
+    if let Some(target) = state.pane_mut_anywhere(pane) {
+        target.lx.clear_text_selection();
+        target.lx.clear_preview_selection();
     }
     true
 }

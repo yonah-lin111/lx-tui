@@ -63,7 +63,7 @@ pub fn take_lx_mention_scan_requests(
         if let Some((generation, root)) = pane.lx.take_mention_scan_request() {
             requests.push((id, None, generation, root));
         }
-        if pane.lx.is_btw_tab()
+        if pane.lx.btw_editing()
             && let Some(composer) = pane.lx.btw.active_composer_mut()
             && let Some((generation, root)) = composer.take_mention_scan_request()
         {

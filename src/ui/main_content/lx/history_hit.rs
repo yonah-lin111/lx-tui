@@ -370,7 +370,7 @@ fn task_detail_code_copy_at(
     let (source, scroll, follow) = match page.tab {
         crate::app::state::TaskTab::Agents => {
             let run = page
-                .selected_agent_index(&lx.agents)
+                .detail_agent_index(&lx.agents)
                 .and_then(|index| lx.agents.runs.get(index))?;
             // 保留 from_run 的稳定 owner；直接 from_chat 会让快照缓存与主聊天冲突。
             (
@@ -532,7 +532,7 @@ pub(crate) fn task_agents_card_target_at(
     }
     let rect = task::task_output_rect(area, lx)?;
     let run = page
-        .selected_agent_index(&lx.agents)
+        .detail_agent_index(&lx.agents)
         .and_then(|index| lx.agents.runs.get(index))?;
     let source = history::HistorySource::from_run(run);
     let view = history::view_source_plain_ready(rect, source, cache);
@@ -579,7 +579,7 @@ pub(crate) fn task_agents_scrollbar(
     }
     let rect = task::task_output_rect(area, lx)?;
     let run = page
-        .selected_agent_index(&lx.agents)
+        .detail_agent_index(&lx.agents)
         .and_then(|index| lx.agents.runs.get(index))?;
     let source = history::HistorySource::from_run(run);
     let view = history::view_source_plain_ready(rect, source, cache);

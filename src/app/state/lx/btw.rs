@@ -8,35 +8,10 @@
 
 use std::collections::BTreeMap;
 
+use crate::app::overlay::TextInput;
 use crate::app::state::Lx;
-
-/// BTW 面板内的焦点区域。
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
-pub enum BtwFocus {
-    /// 底部输入框。
-    #[default]
-    Composer,
-    /// 对话阅读区。
-    Conversation,
-}
-
-impl BtwFocus {
-    /// `Tab` 正序轮转。
-    pub const fn next(self) -> Self {
-        match self {
-            Self::Composer => Self::Conversation,
-            Self::Conversation => Self::Composer,
-        }
-    }
-
-    /// `Shift+Tab` 逆序轮转。
-    pub const fn previous(self) -> Self {
-        match self {
-            Self::Composer => Self::Conversation,
-            Self::Conversation => Self::Composer,
-        }
-    }
-}
+use crate::app::state::lx::composer::DetailComposer;
+use crate::app::state::lx::slash::PanelWindow;
 
 /// 当前线程的回答者展示项。
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -60,44 +35,6 @@ impl BtwTargetView {
     }
 }
 
-/// 独立编辑缓冲：包一层空 `Lx`，只暴露文本编辑与面板能力。
-///
-/// **不实现 `DerefMut`**：禁止外部误写 `chat`/`task`/`rewind` 等字段；
-/// 换行、撤销、提及与粘贴仍走同一套 `Lx` 方法。
-#[derive(Debug)]
-pub struct BtwComposer(Box<Lx>);
-
-impl BtwComposer {
-    fn new() -> Self {
-        Self(Box::new(Lx::composer()))
-    }
-
-    pub fn editor(&self) -> &Lx {
-        &self.0
-    }
-
-    pub fn editor_mut(&mut self) -> &mut Lx {
-        &mut self.0
-    }
-
-    pub fn text(&self) -> &str {
-        &self.0.input
-    }
-
-    pub fn is_empty(&self) -> bool {
-        self.0.input.trim().is_empty()
-    }
-
-    pub fn clear(&mut self) {
-        self.0.clear();
-    }
-
-    /// 当前文本修订号（`Lx` 每次编辑递增）；用于确认 ACK 时草稿未被改写。
-    pub fn revision(&self) -> u64 {
-        self.0.revision()
-    }
-}
-
 /// 一个主 QA 对应的 BTW 线程视图。
 #[derive(Debug)]
 pub struct BtwThreadState {
@@ -109,7 +46,7 @@ pub struct BtwThreadState {
     pub title: String,
     pub chat: crate::app::state::LxChat,
     pub compact: crate::app::state::LxCompact,
-    pub composer: BtwComposer,
+    pub composer: DetailComposer,
     pub targets: Vec<BtwTargetView>,
     /// 对话区滚动偏移与可见行（事件循环在绘制前写入）。
     pub scroll: usize,
@@ -139,7 +76,7 @@ impl BtwThreadState {
             title: String::new(),
             chat: crate::app::state::LxChat::new(),
             compact: crate::app::state::LxCompact::default(),
-            composer: BtwComposer::new(),
+            composer: DetailComposer::new_btw(),
             targets: Vec::new(),
             scroll: 0,
             visible: 0,
@@ -208,17 +145,16 @@ pub struct LxBtw {
     pub qa: Vec<BtwQaSummary>,
     /// 当前显示的 QA 锚点 ID。
     pub active: Option<String>,
-    pub focus: BtwFocus,
-    /// `/btw prompt` 暂存正文：QA 列表到达、线程建立后立即提交一次
-    /// （只认命令暂存，避免普通草稿被误发）。
+    /// 是否处于编辑态；false 为列表态。
+    pub editing: bool,
+    /// 列表搜索框；列表态常驻焦点。
+    pub search: TextInput,
+    /// Q 列表窗口（高亮/锚点/显式视口）。
+    pub qa_window: PanelWindow,
+    /// QA 列表是否已从数据库回投过。
+    pub qa_loaded: bool,
+    /// `/btw prompt` 暂存正文：QA 列表到达、线程建立后立即提交一次。
     pub pending_prompt: Option<String>,
-    /// `/btwList` 选择器：当前高亮的 QA 下标（`None` 表示未打开）。
-    pub picking: Option<usize>,
-    /// `/btwList` 面板已打开但 QA 列表尚未应用（列表到达前兼作 loading 占位；
-    /// 空列表时保留空态面板）。
-    pub pending_pick: bool,
-    /// `/btwList` 的 QA 列表请求在途（面板显示 loading 占位）。
-    pub picker_loading: bool,
 }
 
 impl LxBtw {
@@ -271,56 +207,137 @@ impl LxBtw {
         state
     }
 
-    /// 打开 `/btwList` 选择器：默认停在当前 QA，没有则停在最后一条。
-    pub fn open_picker(&mut self) -> bool {
-        if self.qa.is_empty() {
+    /// 搜索过滤后的 QA 真实下标（保持列表时间正序）。
+    pub fn filtered_qa_indices(&self) -> Vec<usize> {
+        let query = self.search.text().trim().to_lowercase();
+        self.qa
+            .iter()
+            .enumerate()
+            .filter(|(_, summary)| {
+                query.is_empty()
+                    || (!summary.title.is_empty() && summary.title.to_lowercase().contains(&query))
+            })
+            .map(|(index, _)| index)
+            .collect()
+    }
+
+    /// `active` 在当前过滤结果中的位置；被过滤掉时为 None。
+    pub fn selected_index(&self) -> Option<usize> {
+        let active = self.active.as_deref()?;
+        self.filtered_qa_indices()
+            .iter()
+            .position(|index| self.qa.get(*index).is_some_and(|qa| qa.qa_id == active))
+    }
+
+    /// 搜索变化后把窗口高亮同步到稳定 `active`。
+    ///
+    /// `active` 被当前过滤结果排除但仍有匹配项时，高亮与详情一起落到第一项：
+    /// 否则列表画出的高亮与 `active` 分叉，`Shift+Enter` 会静默失败。
+    /// 返回是否切换了 `active`（调用方需要补一次线程加载）。
+    pub fn sync_selection_after_filter(&mut self) -> bool {
+        let filtered = self.filtered_qa_indices();
+        if filtered.is_empty() {
+            self.qa_window.active = 0;
+            self.qa_window.anchor = 0;
+            self.qa_window.viewport = None;
+            self.qa_window.clamp(0);
             return false;
         }
-        let index = self
-            .active
-            .as_deref()
-            .and_then(|qa_id| self.qa.iter().position(|summary| summary.qa_id == qa_id))
-            .unwrap_or(self.qa.len() - 1);
-        self.picking = Some(index.min(self.qa.len() - 1));
-        self.pending_pick = false;
-        true
-    }
-
-    /// 选择器是否打开（已有列表，或列表仍在加载/为空时保留占位面板）。
-    pub fn picker_open(&self) -> bool {
-        self.picking.is_some() || self.pending_pick
-    }
-
-    /// 关闭选择器。
-    pub fn close_picker(&mut self) -> bool {
-        let was_open = self.picking.take().is_some() || self.pending_pick;
-        self.pending_pick = false;
-        self.picker_loading = false;
-        was_open
-    }
-
-    /// 选择器上下移动（自动环绕）。
-    pub fn move_picker(&mut self, delta: isize) -> bool {
-        let Some(selected) = self.picking else {
-            return false;
+        let active_index = self.active.as_deref().and_then(|active| {
+            filtered
+                .iter()
+                .position(|index| self.qa.get(*index).is_some_and(|qa| qa.qa_id == active))
+        });
+        let switched = active_index.is_none();
+        let active_index = match active_index {
+            Some(index) => index,
+            None => {
+                if let Some(qa_id) = filtered
+                    .first()
+                    .and_then(|index| self.qa.get(*index))
+                    .map(|qa| qa.qa_id.clone())
+                {
+                    self.select_qa(&qa_id);
+                }
+                0
+            }
         };
-        if self.qa.is_empty() {
-            self.picking = None;
+        self.qa_window.active = active_index;
+        self.qa_window.anchor = active_index;
+        self.qa_window.viewport = None;
+        self.qa_window.clamp(filtered.len());
+        switched
+    }
+
+    /// 列表上下移动：高亮变化时把稳定 `active` 指向新 QA；到两端即停。
+    pub fn move_selection(&mut self, delta: isize) -> bool {
+        let filtered = self.filtered_qa_indices();
+        if filtered.is_empty() {
+            return false;
+        }
+        let last = filtered.len() - 1;
+        let Some(current) = self.selected_index() else {
+            let next = if delta >= 0 { 0 } else { last };
+            let Some(qa_id) = filtered
+                .get(next)
+                .and_then(|index| self.qa.get(*index))
+                .map(|qa| qa.qa_id.clone())
+            else {
+                return false;
+            };
+            self.qa_window.active = next;
+            self.qa_window.anchor = next;
+            self.qa_window.viewport = None;
+            self.select_qa(&qa_id);
             return true;
-        }
-        let len = self.qa.len();
-        let next = if delta < 0 {
-            selected.checked_sub(1).unwrap_or(len - 1)
-        } else {
-            (selected + 1) % len
         };
-        self.picking = Some(next);
+        let next = (current as isize + delta).clamp(0, last as isize) as usize;
+        if next == current {
+            return false;
+        }
+        let Some(index) = filtered.get(next).copied() else {
+            return false;
+        };
+        let Some(qa_id) = self.qa.get(index).map(|qa| qa.qa_id.clone()) else {
+            return false;
+        };
+        self.qa_window.active = next;
+        self.qa_window.anchor = next;
+        self.qa_window.viewport = None;
+        self.select_qa(&qa_id);
         true
     }
 
-    /// 当前高亮的 QA（供选择器渲染与确认）。
-    pub fn picked_qa(&self) -> Option<&BtwQaSummary> {
-        self.picking.and_then(|index| self.qa.get(index))
+    /// 进入当前 QA 的编辑态；没有可编辑 QA 时返回 false。
+    pub fn enter_edit(&mut self) -> bool {
+        if self.selected_index().is_none() {
+            return false;
+        }
+        let Some(qa_id) = self.active.clone() else {
+            return false;
+        };
+        self.ensure_thread(&qa_id);
+        self.editing = true;
+        true
+    }
+
+    /// 退回列表态并保留草稿。
+    pub fn leave_edit(&mut self) -> bool {
+        if !self.editing {
+            return false;
+        }
+        self.editing = false;
+        true
+    }
+
+    /// 清空搜索并恢复稳定选中项的高亮；返回是否清空。
+    pub fn clear_search(&mut self) -> bool {
+        if self.search.text().is_empty() {
+            return false;
+        }
+        self.search.clear();
+        self.sync_selection_after_filter();
+        true
     }
 
     /// 该 QA 是否已有旁路对话：DB 标记，或本进程已加载到消息/线程。
@@ -345,11 +362,11 @@ impl LxBtw {
         self.threads.clear();
         self.qa.clear();
         self.active = None;
-        self.focus = BtwFocus::Composer;
+        self.editing = false;
+        self.search.clear();
+        self.qa_window = PanelWindow::new(0);
+        self.qa_loaded = false;
         self.pending_prompt = None;
-        self.picking = None;
-        self.pending_pick = false;
-        self.picker_loading = false;
     }
 
     /// 按 child session 找到线程（事件回投用）。

@@ -47,13 +47,6 @@ fn clearing_removes_threads_and_pending_flags() {
 }
 
 #[test]
-fn focus_cycles_in_both_directions() {
-    assert_eq!(BtwFocus::Composer.next(), BtwFocus::Conversation);
-    assert_eq!(BtwFocus::Conversation.next(), BtwFocus::Composer);
-    assert_eq!(BtwFocus::Composer.previous(), BtwFocus::Conversation);
-}
-
-#[test]
 fn composer_gets_scan_root_and_finished_subagent_candidates() {
     use crate::app::state::SubagentRun;
     use crate::chat::agent::AgentRole;
@@ -108,6 +101,7 @@ fn typing_at_in_the_composer_opens_the_mention_panel() {
         tab: crate::app::state::TaskTab::Btw,
         ..Default::default()
     });
+    lx.btw.editing = true;
     let root = std::env::temp_dir();
     lx.sync_btw_composer_context(Some(root.clone()), None);
 
@@ -121,7 +115,7 @@ fn typing_at_in_the_composer_opens_the_mention_panel() {
 }
 
 #[test]
-fn picker_moves_wraps_and_marks_threads() {
+fn search_filters_titles_and_moves_selection_to_the_first_match() {
     let mut lx = Lx::new();
     lx.btw.qa = vec![
         BtwQaSummary {
@@ -134,23 +128,70 @@ fn picker_moves_wraps_and_marks_threads() {
             qa_id: "qa-2".into(),
             title: "second".into(),
             has_thread: false,
-            status: "idle".into(),
+            status: "running".into(),
         },
     ];
     lx.btw.active = Some("qa-1".into());
-    assert!(lx.btw.open_picker());
-    assert_eq!(lx.btw.picking, Some(0), "默认停在当前 QA");
+    lx.btw.sync_selection_after_filter();
+    assert_eq!(lx.btw.qa_window.active, 0);
     assert!(lx.btw.has_side_thread(&lx.btw.qa[0]));
     assert!(!lx.btw.has_side_thread(&lx.btw.qa[1]));
 
-    assert!(lx.btw.move_picker(1));
-    assert_eq!(lx.btw.picked_qa().map(|qa| qa.qa_id.as_str()), Some("qa-2"));
-    // 末尾继续向下环绕到首项。
-    assert!(lx.btw.move_picker(1));
-    assert_eq!(lx.btw.picked_qa().map(|qa| qa.qa_id.as_str()), Some("qa-1"));
-    assert!(lx.btw.move_picker(-1));
-    assert_eq!(lx.btw.picked_qa().map(|qa| qa.qa_id.as_str()), Some("qa-2"));
+    lx.btw.search.insert_str("sec");
+    lx.btw.sync_selection_after_filter();
+    assert_eq!(lx.btw.filtered_qa_indices(), vec![1]);
+    assert_eq!(
+        lx.btw.selected_index(),
+        Some(0),
+        "过滤后高亮第一项，不能与 active 分叉"
+    );
+    assert_eq!(
+        lx.btw.active.as_deref(),
+        Some("qa-2"),
+        "详情跟随过滤后的第一项"
+    );
 
-    assert!(lx.btw.close_picker());
-    assert!(!lx.btw.close_picker());
+    lx.btw.search.clear();
+    lx.btw.sync_selection_after_filter();
+    assert_eq!(lx.btw.selected_index(), Some(1));
+    assert!(!lx.btw.move_selection(1), "列表末尾不环绕");
+    assert!(lx.btw.move_selection(-1));
+    assert_eq!(lx.btw.active.as_deref(), Some("qa-1"));
+}
+
+#[test]
+fn enter_and_leave_edit_preserve_the_draft() {
+    let mut lx = Lx::new();
+    lx.btw.qa = vec![
+        BtwQaSummary {
+            qa_id: "qa-1".into(),
+            title: "first".into(),
+            has_thread: true,
+            status: "idle".into(),
+        },
+        BtwQaSummary {
+            qa_id: "qa-2".into(),
+            title: "second".into(),
+            has_thread: true,
+            status: "idle".into(),
+        },
+    ];
+    lx.btw.ensure_thread("qa-1");
+    lx.btw.ensure_thread("qa-2");
+    lx.btw.active = Some("qa-1".into());
+    lx.btw.sync_selection_after_filter();
+    lx.btw
+        .active_thread_mut()
+        .expect("thread")
+        .composer
+        .editor_mut()
+        .replace_input("draft");
+    assert!(lx.btw.enter_edit());
+    assert!(lx.btw.editing);
+    assert!(lx.btw.leave_edit());
+    assert!(!lx.btw.editing);
+    assert_eq!(
+        lx.btw.active_composer().map(|editor| editor.input.as_str()),
+        Some("draft")
+    );
 }

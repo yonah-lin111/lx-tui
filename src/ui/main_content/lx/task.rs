@@ -37,8 +37,8 @@ use crate::ui::{style, text};
 pub(super) const TOP_BORDER: u16 = 1;
 /// tab 行占用的行数（顶边框之下）。
 pub(super) const TAB_ROW: u16 = 1;
-/// BTW 页签：tab 行与输入框之间的空行（loading 指示器落在这一行的左上角）。
-pub(super) const COMPOSER_GAP: u16 = 1;
+/// BTW / Agents 列表的搜索行占一行。
+pub(super) const SEARCH_ROW: u16 = 1;
 /// 相邻键位提示之间的空档（列）。
 const HINT_GAP: usize = 2;
 /// item 列表最多显示的行数。
@@ -46,6 +46,8 @@ const HINT_GAP: usize = 2;
 /// 比 opencode 的 `maxHeight={5}` 再高一档：5 行在 24 行窗格里信息量偏少，
 /// 而列表区高度固定，多一点列表不会让布局跳动。
 pub(crate) const LIST_MAX: usize = 6;
+/// 带搜索行的列表（BTW / Agents）可见 5 行。
+pub(crate) const LIST_MAX_SEARCH: usize = LIST_MAX - 1;
 /// 行首高亮标记占位列数（`❯ ` 或两个空格）。
 const MARKER_COLS: u16 = 2;
 /// 行内各段之间的最小空档（列）。
@@ -66,22 +68,118 @@ pub(super) fn list_height() -> u16 {
         .saturating_add(TOP_BORDER)
 }
 
-/// 后台面板高度：进程/Agents 保持固定 8 行；BTW 随 composer 行数在 6..=8 行之间生长。
+/// 后台面板高度：列表态固定 8 行；编辑态只剩 composer（3..=5 行）。
 pub(super) fn task_panel_height(lx: &crate::app::state::Lx) -> u16 {
-    if !lx.is_btw_tab() {
-        return list_height();
+    if lx.btw_editing() {
+        return composer_height(lx.btw.active_composer());
     }
-    let rows = lx
-        .btw
-        .active_thread()
-        .map(|thread| thread.composer.editor().visual_rows().len())
+    if lx.agents_editing() {
+        return composer_height(
+            lx.agent_edit_id()
+                .and_then(|agent_id| lx.agents.composer(agent_id))
+                .map(|composer| composer.editor()),
+        );
+    }
+    list_height()
+}
+
+/// composer 高度：正文可见行 1..=3 + 上下两条边框。
+fn composer_height(editor: Option<&crate::app::state::Lx>) -> u16 {
+    let rows = editor
+        .map(|editor| editor.visual_rows().len())
         .unwrap_or(1)
         .clamp(1, usize::from(btw::COMPOSER_MAX_ROWS));
-    TOP_BORDER
-        .saturating_add(TAB_ROW)
-        .saturating_add(COMPOSER_GAP)
-        .saturating_add(u16::try_from(rows).unwrap_or(1))
-        .saturating_add(2)
+    u16::try_from(rows).unwrap_or(1).saturating_add(2)
+}
+
+/// 搜索行矩形（tab 行下方一行）；仅 BTW / Agents 使用。
+pub(crate) fn search_rect(rect: Rect) -> Rect {
+    Rect::new(
+        rect.x,
+        rect.y.saturating_add(TOP_BORDER + TAB_ROW),
+        rect.width,
+        SEARCH_ROW.min(rect.height.saturating_sub(TOP_BORDER + TAB_ROW)),
+    )
+}
+
+/// 列表正文矩形：Processes 为 6 行；BTW / Agents 扣掉搜索行后为 5 行。
+pub(super) fn list_rows_rect(rect: Rect, tab: TaskTab) -> Rect {
+    let search = if tab == TaskTab::Processes {
+        0
+    } else {
+        SEARCH_ROW
+    };
+    let rows = if tab == TaskTab::Processes {
+        LIST_MAX
+    } else {
+        LIST_MAX_SEARCH
+    };
+    let y = rect
+        .y
+        .saturating_add(TOP_BORDER + TAB_ROW + search)
+        .min(rect.bottom());
+    let height = u16::try_from(rows)
+        .unwrap_or(u16::MAX)
+        .min(rect.bottom().saturating_sub(y));
+    Rect::new(rect.x, y, rect.width, height)
+}
+
+/// 绘制搜索行：`> ` 前缀 + 单行输入视口；返回硬件光标位置。
+pub(super) fn draw_search_row(
+    grid: &mut super::grid::Grid,
+    rect: Rect,
+    input: &crate::app::overlay::TextInput,
+    placeholder: &str,
+    focused: bool,
+) -> Option<(u16, u16)> {
+    if rect.width == 0 || rect.height == 0 {
+        return None;
+    }
+    let mut x = rect.x;
+    grid.put(x, rect.y, text::INPUT_PREFIX_ICON, style::accent());
+    x = x.saturating_add(u16::try_from(text::INPUT_PREFIX_ICON.width()).unwrap_or(0));
+    grid.put(x, rect.y, " ", style::text());
+    x = x.saturating_add(1);
+    // 文本起点与循环末尾的 `x` 分开保存：`cursor_col` 是相对文本起点的偏移，
+    // 不是相对写完后末尾的偏移。
+    let text_x = x;
+    let width = usize::from(rect.right().saturating_sub(x));
+    let view = crate::ui::widgets::input::view(input.text(), input.cursor(), width);
+    if input.text().is_empty() {
+        grid.put_clipped(
+            x,
+            rect.y,
+            placeholder,
+            style::muted(),
+            rect.right().saturating_sub(x),
+        );
+    } else {
+        for span in crate::ui::widgets::input::build_styled_spans(
+            view.visible,
+            view.start_char,
+            input.selection(),
+        ) {
+            grid.put_clipped(
+                x,
+                rect.y,
+                span.content.as_ref(),
+                span.style,
+                rect.right().saturating_sub(x),
+            );
+            x = x
+                .saturating_add(u16::try_from(span.content.width()).unwrap_or(0))
+                .min(rect.right());
+        }
+    }
+    // 与 `input::draw` 一致返回 `(row, col)`；列以文本起点为基准，不能叠到末尾。
+    focused.then(|| {
+        (
+            rect.y,
+            text_x
+                .saturating_add(view.cursor_col)
+                .min(rect.right().saturating_sub(1)),
+        )
+    })
 }
 
 /// 输出容器**正文宽度**：常驻预留最右 1 列作滚动条槽。
@@ -202,10 +300,14 @@ pub(super) fn draw_list(
     if rect.width == 0 || rect.height < TOP_BORDER + TAB_ROW {
         return None;
     }
+    // 编辑态：面板矩形已经收缩成 composer 高度，只画输入框本身。
+    if page.tab == TaskTab::Btw && lx.btw.editing {
+        return btw::draw_edit(grid, rect, lx, focused);
+    }
+    if page.tab == TaskTab::Agents && page.agent_edit.is_some() {
+        return agents::draw_edit(grid, rect, lx, focused);
+    }
     // 顶边框：一条横线把列表与上方内容分开。
-    //
-    // 用 `border_title()`（淡青 + dim，与窗格边框标题同色系），不抢焦点；
-    // 它画在列表矩形**内部**，不与窗格边框重叠，所以不是双重边框。
     grid.put_clipped(
         rect.x,
         rect.y,
@@ -214,8 +316,7 @@ pub(super) fn draw_list(
         rect.width,
     );
 
-    // tab 行：当前 tab 用与顶部 tab 栏**同一套**激活样式（青底黑字），其余次要色。
-    // 几何与 [`hit`] 共用 [`tab_row_rects`]，保证"画在这、点在那"。
+    // tab 行：当前 tab 用与顶部 tab 栏同一套激活样式。
     let tab_y = rect.y.saturating_add(TOP_BORDER);
     let (tabs, close) = tab_row_rects(rect);
     for (index, tab) in TaskTab::ALL.iter().enumerate() {
@@ -254,64 +355,56 @@ pub(super) fn draw_list(
         );
     }
     if page.tab == TaskTab::Agents {
-        if page.agent_reply.is_some() {
-            draw_agent_reply(grid, rect, page, agents);
-        } else {
-            draw_filter_pills(grid, rect, page);
-        }
+        draw_filter_pills(grid, rect, page);
     }
 
-    let list_i = list_rect(rect);
-    if list_i.height == 0 {
-        return None;
+    let mut cursor = None;
+    if page.tab != TaskTab::Processes {
+        let search = search_rect(rect);
+        let (input, placeholder) = match page.tab {
+            TaskTab::Agents => (&page.agents_search, text::LX_TASK_AGENTS_SEARCH_PLACEHOLDER),
+            TaskTab::Btw => (&lx.btw.search, text::LX_BTW_SEARCH_PLACEHOLDER),
+            TaskTab::Processes => unreachable!(),
+        };
+        cursor = draw_search_row(grid, search, input, placeholder, focused);
     }
-    if page.tab == TaskTab::Btw {
-        // BTW 页签底部：QA 列表 + 独立输入框（对话在上方输出容器）。
-        return btw::draw_bottom(grid, list_i, lx, page, focused);
+
+    let rows = list_rows_rect(rect, page.tab);
+    if rows.height == 0 {
+        return cursor;
     }
-    let list = list_i;
-    let bar = list_scrollbar(rect, page, agents);
+    let bar = list_scrollbar(rect, lx);
     let content = match bar.as_ref() {
-        Some(_) => Rect::new(list.x, list.y, list.width.saturating_sub(1), list.height),
-        None => list,
+        Some(_) => Rect::new(rows.x, rows.y, rows.width.saturating_sub(1), rows.height),
+        None => rows,
     };
     match page.tab {
         TaskTab::Processes => draw_processes(grid, content, page),
         TaskTab::Agents => agents::draw_list(grid, content, page, agents),
-        TaskTab::Btw => {}
+        TaskTab::Btw => btw::draw_qa_list(grid, content, lx),
     }
     if let Some(bar) = bar {
         for y in bar.thumb.y..bar.thumb.bottom() {
             grid.put_char(bar.thumb.x, y, THUMB_CHAR, style::text());
         }
     }
-    None
+    cursor
 }
 
 /// item 列表正文区域（顶边框 + tab 行之下）。
-pub(super) fn list_rect(rect: Rect) -> Rect {
-    Rect::new(
-        rect.x,
-        rect.y.saturating_add(TOP_BORDER + TAB_ROW),
-        rect.width,
-        rect.height.saturating_sub(TOP_BORDER + TAB_ROW),
-    )
-}
-
 /// item 列表的滚动条槽矩形（最右一列）；宽度不足时 None。
-pub(super) fn list_scrollbar_rect(rect: Rect) -> Option<Rect> {
-    let list = list_rect(rect);
+pub(super) fn list_scrollbar_rect(rect: Rect, tab: TaskTab) -> Option<Rect> {
+    let list = list_rows_rect(rect, tab);
     (list.width >= 2 && list.height > 0)
         .then(|| Rect::new(list.right() - 1, list.y, 1, list.height))
 }
 
 /// item 列表的条目总数、可见行数与视口起始偏移。
-pub(crate) fn list_metrics(
-    rect: Rect,
-    page: &TaskPage,
-    agents: &crate::app::state::AgentsState,
-) -> (usize, usize, usize) {
-    let list = list_rect(rect);
+pub(crate) fn list_metrics(rect: Rect, lx: &crate::app::state::Lx) -> (usize, usize, usize) {
+    let Some(page) = lx.task.as_ref() else {
+        return (0, 0, 0);
+    };
+    let list = list_rows_rect(rect, page.tab);
     let visible = usize::from(list.height);
     match page.tab {
         TaskTab::Processes => {
@@ -320,23 +413,33 @@ pub(crate) fn list_metrics(
             (total, visible, start)
         }
         TaskTab::Agents => {
-            let total = agents.filtered_indices(page.agent_filter).len();
-            let start = agents::window_start(page, agents, visible);
+            let total = lx
+                .agents
+                .visible_indices(page.agent_filter, page.agents_search.text())
+                .len();
+            let start = agents::window_start(page, &lx.agents, visible);
             (total, visible, start)
         }
-        // BTW 页签没有列表：滚动条始终隐藏。
-        TaskTab::Btw => (0, 0, 0),
+        TaskTab::Btw => {
+            let total = lx.btw.filtered_qa_indices().len();
+            let start = window_start_at(&lx.btw.qa_window, total, visible);
+            (total, visible, start)
+        }
     }
 }
 
 /// item 列表的滚动条几何（命中与绘制用）：内容溢出时才有。
 pub(crate) fn list_scrollbar(
     rect: Rect,
-    page: &TaskPage,
-    agents: &crate::app::state::AgentsState,
+    lx: &crate::app::state::Lx,
 ) -> Option<crate::ui::widgets::scrollbar::ScrollbarLayout> {
-    let slot = list_scrollbar_rect(rect)?;
-    let (total, visible, start) = list_metrics(rect, page, agents);
+    // 编辑态只画 composer，列表滚动条既不可见也不应参与命中/拖拽。
+    if lx.btw_editing() || lx.agents_editing() {
+        return None;
+    }
+    let page = lx.task.as_ref()?;
+    let slot = list_scrollbar_rect(rect, page.tab)?;
+    let (total, visible, start) = list_metrics(rect, lx);
     crate::ui::widgets::scrollbar::layout(slot, total, visible, start)
 }
 
@@ -351,7 +454,7 @@ pub(super) fn draw_agents_detail(
         return;
     };
     match page
-        .selected_agent_index(&lx.agents)
+        .detail_agent_index(&lx.agents)
         .and_then(|index| lx.agents.runs.get(index))
     {
         Some(run) => {
@@ -369,7 +472,12 @@ pub(super) fn draw_agents_detail(
 ///
 /// 与 `status.rs` 同一套做法：**只改写文字实际落到的单元格**，其余底边线保留 `─`，
 /// 两端角字符不动，因此边框始终连续。放不下时从尾部截断，不显示半截键位。
-pub(super) fn draw_footer(buf: &mut Buffer, area: Rect, page: &TaskPage) {
+pub(super) fn draw_footer(
+    buf: &mut Buffer,
+    area: Rect,
+    page: &TaskPage,
+    lx: &crate::app::state::Lx,
+) {
     // 底边框行：内容区下沿之外那一行（`status.rs` 用的是同一个 y）。
     let y = area.bottom();
     let left = area.x.saturating_add(2);
@@ -377,24 +485,13 @@ pub(super) fn draw_footer(buf: &mut Buffer, area: Rect, page: &TaskPage) {
     if right <= left {
         return;
     }
-    // 内联追问有独立的键位提示（避免面板快捷键与输入编辑混淆）。
-    if page.tab == TaskTab::Agents && page.agent_reply.is_some() {
-        let room = usize::from(right.saturating_sub(left));
-        put_buf(
-            buf,
-            left,
-            y,
-            text::LX_TASK_HINTS_AGENT_REPLY,
-            style::muted(),
-            left.saturating_add(u16::try_from(room).unwrap_or(0)),
-        );
-        return;
-    }
     // 按项拼接：窄窗格里**整项丢弃**（从右往左），绝不把 `[back esc]` 截成半截。
     let hints: &[text::Hint] = match page.tab {
         TaskTab::Processes => &text::LX_TASK_HINTS_PROCESSES,
+        TaskTab::Agents if page.agent_edit.is_some() => &text::LX_TASK_HINTS_AGENTS_EDIT,
         TaskTab::Agents => &text::LX_TASK_HINTS_AGENTS,
-        TaskTab::Btw => &text::LX_BTW_HINTS,
+        TaskTab::Btw if lx.btw.editing => &text::LX_BTW_HINTS_EDIT,
+        TaskTab::Btw => &text::LX_BTW_HINTS_LIST,
     };
     let room = usize::from(right.saturating_sub(left));
     let mut rendered = String::new();
@@ -438,10 +535,14 @@ pub(crate) enum TaskHit {
     Tab(usize),
     /// 右上角的 `[esc]`：关闭面板。
     Close,
+    /// BTW 页签的某个主 QA（`lx.btw.qa` 的真实下标）。
+    Qa(usize),
     /// Agents 页签的某个子 agent 条目（`agents.runs` 的真实下标）。
     Agent(usize),
     /// Agents 页签的状态筛选胶囊。
     AgentFilter(AgentFilter),
+    /// 搜索行：按下后按列定位文本光标。
+    Search,
 }
 
 /// tab 行各段几何：`(tab 索引/标签的起始列, 宽度)` + `[esc]` 矩形。
@@ -538,90 +639,24 @@ fn draw_filter_pills(grid: &mut super::grid::Grid, rect: Rect, page: &TaskPage) 
     }
 }
 
-/// 顶栏内联追问：`To <nickname>: <text>`，光标处反显。
-fn draw_agent_reply(
-    grid: &mut super::grid::Grid,
-    rect: Rect,
-    page: &TaskPage,
-    agents: &crate::app::state::AgentsState,
-) {
-    let Some(reply) = page.agent_reply.as_ref() else {
-        return;
-    };
-    let fallback_name = page
-        .selected_agent_index(agents)
-        .and_then(|index| agents.runs.get(index))
-        .map(|run| {
-            run.nickname
-                .as_deref()
-                .filter(|nickname| !nickname.is_empty())
-                .or_else(|| (!run.title.is_empty()).then_some(run.title.as_str()))
-                .unwrap_or_else(|| run.role.as_str())
-        });
-    let Some(name) = page
-        .agent_reply_target
-        .as_ref()
-        .map(|(_, label)| label.as_str())
-        .or(fallback_name)
-    else {
-        return;
-    };
-    let prefix = format!("To {name}: ");
-    let (tabs, close) = tab_row_rects(rect);
-    let start = tabs.last().map_or(rect.x, |(_, x, width)| {
-        x.saturating_add(*width).saturating_add(GAP)
-    });
-    let limit = close.map_or(rect.right(), |close| close.x);
-    if start >= limit {
-        return;
-    }
-    let y = rect.y.saturating_add(TOP_BORDER);
-    let mut x = put_grid(grid, start, y, &prefix, style::accent(), limit);
-    let cursor = reply.cursor();
-    let selection = reply.selection();
-    for (index, ch) in reply.text().chars().enumerate() {
-        let width = ch.width().unwrap_or(0) as u16;
-        if width == 0 {
-            continue;
-        }
-        if x.saturating_add(width) > limit {
-            return;
-        }
-        let selected =
-            selection.is_some_and(|(sel_start, sel_end)| index >= sel_start && index < sel_end);
-        let cell_style = if selected || (selection.is_none() && index == cursor) {
-            style::text().add_modifier(Modifier::REVERSED)
-        } else {
-            style::text()
-        };
-        let cell = ch.to_string();
-        put_grid(grid, x, y, &cell, cell_style, x.saturating_add(width));
-        x = x.saturating_add(width);
-    }
-    if selection.is_none() && cursor >= reply.text().chars().count() && x < limit {
-        put_grid(
-            grid,
-            x,
-            y,
-            " ",
-            style::text().add_modifier(Modifier::REVERSED),
-            x.saturating_add(1),
-        );
-    }
-}
-
 /// 面板点击命中：**item 列表**的 tab 行与右端 `[close esc]`；点在别处返回 None。
 ///
 /// 输出容器不再有边框与自己的 `[close esc]`（用户要求移除多余横线），因此那一侧
 /// 没有可点区域；`esc` 键仍可关闭面板。
 pub(crate) fn hit(
     rect: Rect,
-    page: &TaskPage,
-    agents: &crate::app::state::AgentsState,
+    lx: &crate::app::state::Lx,
     column: u16,
     row: u16,
 ) -> Option<TaskHit> {
+    let page = lx.task.as_ref()?;
     if rect.width == 0 || rect.height < TOP_BORDER + TAB_ROW {
+        return None;
+    }
+    // 编辑态隐藏 tab / 搜索 / 列表，只允许输入框自身的命中。
+    if (page.tab == TaskTab::Btw && lx.btw.editing)
+        || (page.tab == TaskTab::Agents && page.agent_edit.is_some())
+    {
         return None;
     }
     let (tabs, close) = tab_row_rects(rect);
@@ -637,34 +672,54 @@ pub(crate) fn hit(
     }) {
         return Some(TaskHit::Tab(*index));
     }
-    // 筛选胶囊：只在 Agents 页签且未进入内联输入态时可点。
     if page.tab == TaskTab::Agents
-        && page.agent_reply.is_none()
         && let Some((filter, _, _)) = filter_row_rects(rect, page)
             .into_iter()
             .find(|(_, x, width)| row == tab_y && column >= *x && column < x.saturating_add(*width))
     {
         return Some(TaskHit::AgentFilter(filter));
     }
-    // item 行：进程列表走原逻辑，Agents 列表按同一套窗口起点命中。
-    let list_y = rect.y.saturating_add(TOP_BORDER + TAB_ROW);
-    if page.tab != TaskTab::Agents || row < list_y || column < rect.x || column >= rect.right() {
+    if page.tab != TaskTab::Processes {
+        let search = search_rect(rect);
+        if search.contains((column, row).into()) {
+            return Some(TaskHit::Search);
+        }
+    }
+    let rows = list_rows_rect(rect, page.tab);
+    if !rows.contains((column, row).into()) || column < rect.x || column >= rect.right() {
         return None;
     }
-    // 排除右侧滚动条所在列：点击滚动条不能误触 Agent 条目选中。
-    if let Some(bar) = list_scrollbar(rect, page, agents)
+    // 排除右侧滚动条所在列：点击滚动条不能误触条目选中。
+    if let Some(bar) = list_scrollbar(rect, lx)
         && column >= bar.track.x
     {
         return None;
     }
-    let visible = usize::from(rect.height.saturating_sub(TOP_BORDER + TAB_ROW));
-    let start = agents::window_start(page, agents, visible);
-    let position = start.saturating_add(usize::from(row.saturating_sub(list_y)));
-    agents
-        .filtered_indices(page.agent_filter)
-        .get(position)
-        .copied()
-        .map(TaskHit::Agent)
+    let visible = usize::from(rows.height);
+    let offset = usize::from(row.saturating_sub(rows.y));
+    match page.tab {
+        TaskTab::Agents => {
+            let start = agents::window_start(page, &lx.agents, visible);
+            lx.agents
+                .visible_indices(page.agent_filter, page.agents_search.text())
+                .get(start.saturating_add(offset))
+                .copied()
+                .map(TaskHit::Agent)
+        }
+        TaskTab::Btw => {
+            let start = window_start_at(
+                &lx.btw.qa_window,
+                lx.btw.filtered_qa_indices().len(),
+                visible,
+            );
+            lx.btw
+                .filtered_qa_indices()
+                .get(start.saturating_add(offset))
+                .copied()
+                .map(TaskHit::Qa)
+        }
+        TaskTab::Processes => None,
+    }
 }
 
 /// 进程列表：每行 `❯ 命令 · cwd · running 12s`，行尾右对齐时长。
@@ -765,14 +820,22 @@ pub(super) fn draw_placeholder(grid: &mut super::grid::Grid, list: Rect, label: 
 ///
 /// 显式视口（滚轮）优先；否则以高亮为准做最小滚动。
 fn window_start(page: &TaskPage, visible: usize) -> usize {
-    let len = page.processes.len();
+    window_start_at(&page.window, page.processes.len(), visible)
+}
+
+/// 给定窗口状态与条目数求视口起点；BTW 的 `qa_window` 与进程/Agents 共用。
+pub(super) fn window_start_at(
+    window: &crate::app::state::PanelWindow,
+    len: usize,
+    visible: usize,
+) -> usize {
     if visible == 0 || len <= visible {
         return 0;
     }
-    if let Some(start) = page.window.viewport {
+    if let Some(start) = window.viewport {
         return start.min(len.saturating_sub(visible));
     }
-    let active = page.window.active.min(len - 1);
+    let active = window.active.min(len - 1);
     active.saturating_sub(visible - 1).min(len - visible)
 }
 
@@ -844,6 +907,7 @@ fn clip(value: &str, max: u16) -> String {
 
 pub(super) mod agents;
 pub(crate) mod btw;
+pub(super) mod detail;
 
 #[cfg(test)]
 mod tests;
@@ -871,7 +935,7 @@ pub(super) fn agents_rows(
     }
     let rect = super::layout(area, lx).task_output?;
     let run = page
-        .selected_agent_index(&lx.agents)
+        .detail_agent_index(&lx.agents)
         .and_then(|index| lx.agents.runs.get(index))?;
     let (total, fresh) = agents::detail_rows(rect, run, cache);
     Some((usize::from(rect.height), total, fresh))
@@ -897,14 +961,24 @@ pub(super) fn agents_anchor_row(
     agents::anchor_row(area, lx, cache, anchor)
 }
 
-/// `/btwList` 二级面板的点击命中：返回主 QA 下标。
-pub(super) fn btw_picker_hit(
+/// BTW 详情区变化前的阅读锚点。
+pub(super) fn btw_anchor_before(
     area: Rect,
     lx: &crate::app::state::Lx,
-    column: u16,
-    row: u16,
+    cache: &mut crate::ui::PaneCache,
+    scroll: usize,
+) -> Option<super::history::HistoryAnchor> {
+    btw::anchor_before(area, lx, cache, scroll)
+}
+
+/// BTW 详情区变化后的锚点行。
+pub(super) fn btw_anchor_row(
+    area: Rect,
+    lx: &crate::app::state::Lx,
+    cache: &mut crate::ui::PaneCache,
+    anchor: &super::history::HistoryAnchor,
 ) -> Option<usize> {
-    btw::picker_item_at(area, lx, column, row)
+    btw::anchor_row(area, lx, cache, anchor)
 }
 
 /// BTW 对话区的 `(可见行数, 总行数, 快照是否最新)`。

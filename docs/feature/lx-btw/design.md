@@ -1,6 +1,6 @@
 # `/btw`：按主 QA 隔离的持久化旁路对话
 
-> 状态：**已在 `feat/lx-btw` 实施最小可用版本；未合并，遗留项见 [task.md](task.md) §11.2。**
+> 状态：**已在 `feat/lx-btw` 实施最小可用版本；`/btwList` 已被 `feat/lx-btw-list-and-agent-composer` 的常驻列表取代。**
 >
 > 创建：2026-11-11；本次整理：2026-11-12。
 >

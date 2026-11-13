@@ -100,6 +100,7 @@ fn columns_align_across_identity_widths_and_depths() {
             ),
         ],
         cards_dirty: false,
+        ..Default::default()
     };
     let page = TaskPage {
         tab: TaskTab::Agents,
@@ -238,6 +239,7 @@ fn deep_tree_prefix_does_not_leak_into_scrollbar() {
             agent("child", "/root/p/c", None, "running", "child"),
         ],
         cards_dirty: false,
+        ..Default::default()
     };
     let page = TaskPage {
         tab: TaskTab::Agents,
@@ -402,6 +404,108 @@ fn history_source_owner_is_stable_across_run_reordering() {
         HistorySource::from_run(first).owner(),
         owner_before,
         "run 排序不能改变详情缓存 owner"
+    );
+}
+
+#[test]
+fn agent_composer_marker_and_badge_stay_inside_narrow_rect() {
+    let mut lx = Lx::new();
+    lx.agents.runs.push(agent(
+        "a",
+        "/root/turing",
+        Some("Turing"),
+        "running",
+        "task",
+    ));
+    lx.task = Some(TaskPage {
+        tab: TaskTab::Agents,
+        agent_edit: Some("a".into()),
+        ..TaskPage::default()
+    });
+    lx.agents.ensure_composer("a");
+    for width in [9, 10, 11, 12, 20, 32] {
+        let rect = Rect::new(0, 0, width, 3);
+        let area = Rect::new(0, 0, width + 8, 3);
+        let mut grid = Grid::new(area);
+        assert!(super::super::agents::draw_edit(&mut grid, rect, &lx, true).is_some());
+        let top: String = (rect.x..rect.right())
+            .map(|x| grid.cell(x, rect.y).ch)
+            .collect();
+        let overflow: String = (rect.right()..area.right())
+            .map(|x| grid.cell(x, rect.y).ch)
+            .collect();
+        assert!(
+            overflow.trim().is_empty(),
+            "width={width}: marker/badge overflowed composer: {overflow:?}"
+        );
+        if width >= 12 {
+            assert!(top.contains("Subagent"), "width={width}: {top:?}");
+        } else {
+            assert!(
+                !top.contains("Subagent"),
+                "width={width}: marker must be hidden instead of clipped: {top:?}"
+            );
+        }
+    }
+}
+
+#[test]
+fn agents_filter_without_matches_does_not_claim_there_are_no_agents() {
+    let agents = AgentsState {
+        runs: vec![agent(
+            "done",
+            "/root/done",
+            Some("Ada"),
+            "completed",
+            "done",
+        )],
+        ..Default::default()
+    };
+    let page = TaskPage {
+        tab: TaskTab::Agents,
+        agent_filter: crate::app::state::AgentFilter::Active,
+        ..TaskPage::default()
+    };
+    let lines = draw_list_lines(80, 5, &agents, &page);
+    let text = lines.join("\n");
+    assert!(
+        text.contains(crate::ui::text::LX_TASK_AGENTS_FILTER_EMPTY),
+        "{text:?}"
+    );
+    assert!(
+        !text.contains(crate::ui::text::LX_TASK_AGENTS_EMPTY),
+        "{text:?}"
+    );
+}
+
+#[test]
+fn agents_composer_receives_pane_width_and_wraps() {
+    let mut run = detail_run();
+    run.loaded = true;
+    let (mut state, pane) = state_with_detail(run);
+    {
+        let target = state.pane_mut_anywhere(pane).expect("pane");
+        target.lx.agents.selected_id = Some("a".into());
+        target.lx.task.as_mut().expect("task").agent_edit = Some("a".into());
+        target
+            .lx
+            .agents
+            .ensure_composer("a")
+            .editor_mut()
+            .replace_input(&"word ".repeat(80));
+    }
+    let rect = Rect::new(0, 0, 48, 24);
+    let mut cache = crate::ui::RenderCache::default();
+    // 第一帧拿到 composer 实际宽度；第二帧据此重新量软换行行数。
+    update::resolve_task_agents_visible(&mut state, &[(pane, rect)], &mut cache);
+    update::resolve_task_agents_visible(&mut state, &[(pane, rect)], &mut cache);
+    let target = state.pane_anywhere(pane).expect("pane");
+    let editor = target.lx.agents.composer("a").expect("composer").editor();
+    assert!(editor.input_width() < 100, "composer 必须按窗格宽度软换行");
+    assert!(editor.visual_rows().len() > 1, "长草稿应产生多行");
+    assert!(
+        super::task_panel_height(&target.lx) > 3,
+        "多行草稿应撑高 composer"
     );
 }
 
@@ -621,6 +725,7 @@ fn zwj_emoji_identity_keeps_columns_aligned() {
             ),
         ],
         cards_dirty: false,
+        ..Default::default()
     };
     let page = TaskPage {
         tab: TaskTab::Agents,
@@ -662,6 +767,7 @@ fn tree_sibling_parent_comparison_is_case_insensitive() {
             agent("c2", "/root/p/c2", None, "completed", "c2"),
         ],
         cards_dirty: false,
+        ..Default::default()
     };
     let page = TaskPage {
         tab: TaskTab::Agents,
@@ -675,4 +781,132 @@ fn tree_sibling_parent_comparison_is_case_insensitive() {
         "大小写不同的同级兄弟仍应使用分支符：{c1:?}"
     );
     assert!(c2.contains("└─"), "最后一个兄弟收口：{c2:?}");
+}
+
+#[test]
+fn agents_tab_shows_its_placeholder_and_reserves_the_slot() {
+    // 需求：这一页要预留出显示 subagent 的位置，本阶段先给占位提示。
+    let mut lx = lx_with_messages();
+    let mut page = page_with(vec![entry(1, "npm run dev", "/w")], 0);
+    page.tab = TaskTab::Agents;
+    lx.task = Some(page);
+    let text = render_lines(&lx, 60, 16).join("\n");
+    assert!(
+        text.contains(text::LX_TASK_AGENTS_EMPTY),
+        "子代理占位：{text}"
+    );
+    assert!(
+        !text.contains("npm run dev"),
+        "Agents tab 不显示进程：{text}"
+    );
+    // 键位提示随 tab 变化。
+    assert!(
+        text.contains(&text::LX_TASK_HINTS_AGENTS[0].label()),
+        "Agents tab 的键位：{text}"
+    );
+}
+
+#[test]
+fn agents_filter_pills_render_and_hit() {
+    let mut lx = lx_with_messages();
+    lx.agents
+        .runs
+        .push(tree_agent("a", "/root/a", "running", None));
+    lx.task = Some(TaskPage {
+        tab: TaskTab::Agents,
+        agent_filter: crate::app::state::AgentFilter::Active,
+        ..TaskPage::default()
+    });
+    let lines = render_lines(&lx, 80, 20);
+    assert!(
+        lines
+            .iter()
+            .any(|line| line.contains("all · active · done")),
+        "Agents 页签右侧渲染筛选胶囊：{lines:?}"
+    );
+
+    let rect = Rect::new(0, 0, 80, 20);
+    let page = lx.task.as_ref().expect("task");
+    let pills = filter_row_rects(rect, page);
+    assert_eq!(pills.len(), 3, "三个筛选胶囊");
+    let (filter, x, _) = pills[1];
+    assert_eq!(filter, crate::app::state::AgentFilter::Active);
+    assert_eq!(
+        hit(rect, &lx, x, rect.y + TOP_BORDER),
+        Some(TaskHit::AgentFilter(filter)),
+        "点击活动筛选胶囊命中"
+    );
+}
+
+#[test]
+fn agent_composer_renders_target_badge_and_draft() {
+    let mut lx = lx_with_messages();
+    let mut run = tree_agent("a", "/root/turing", "completed", None);
+    run.nickname = Some("Turing".into());
+    lx.agents.runs.push(run);
+    lx.agents.selected_id = Some("a".into());
+    lx.task = Some(TaskPage {
+        tab: TaskTab::Agents,
+        agent_edit: Some("a".into()),
+        ..TaskPage::default()
+    });
+    lx.agents
+        .ensure_composer("a")
+        .editor_mut()
+        .replace_input("hello");
+    let lines = render_lines(&lx, 80, 20);
+    assert!(
+        lines.iter().any(|line| line.contains("Subagent")),
+        "composer 左侧标记：{lines:?}"
+    );
+    assert!(
+        lines
+            .iter()
+            .any(|line| line.contains("To: Turing [executor]")),
+        "composer 右侧目标：{lines:?}"
+    );
+    assert!(lines.iter().any(|line| line.contains("hello")));
+}
+
+#[test]
+fn agents_filter_hit_maps_to_real_run_index() {
+    let rect = Rect::new(0, 0, 70, 10);
+    let mut agents = crate::app::state::AgentsState::default();
+    agents
+        .runs
+        .push(tree_agent("done", "/root/done", "completed", None));
+    agents
+        .runs
+        .push(tree_agent("live", "/root/live", "running", None));
+    let page = TaskPage {
+        tab: TaskTab::Agents,
+        agent_filter: crate::app::state::AgentFilter::Active,
+        ..TaskPage::default()
+    };
+    let mut lx = Lx::new();
+    lx.task = Some(page);
+    lx.agents = agents;
+    let list_y = rect.y + TOP_BORDER + TAB_ROW + SEARCH_ROW;
+    assert_eq!(
+        hit(rect, &lx, rect.x, list_y),
+        Some(TaskHit::Agent(1)),
+        "筛选后的第一行映射回 runs[1]"
+    );
+}
+
+#[test]
+fn agents_list_mode_has_search_and_five_rows() {
+    let mut lx = Lx::new();
+    lx.task = Some(TaskPage {
+        tab: TaskTab::Agents,
+        ..Default::default()
+    });
+    let height = task_panel_height(&lx);
+    assert_eq!(height, 8, "Agents 列表态固定 8 行");
+    let panel = Rect::new(0, 0, 80, height);
+    let search = search_rect(panel);
+    let rows = list_rows_rect(panel, TaskTab::Agents);
+    assert_eq!(search.height, 1);
+    assert_eq!(rows.height, 5);
+    assert_eq!(search.y + 1, rows.y);
 }

@@ -51,6 +51,18 @@ fn completed_or_cleared_plan_falls_back_to_stage() {
     assert!(!row.contains("做完的"), "{row:?}");
 }
 
+/// BTW 线程没有 `RequestState::Streaming`，仍要按 streaming assistant 报告工具阶段。
+#[test]
+fn btw_stream_without_request_reports_running_tools() {
+    let mut lx = streaming_lx("a1", vec![tool_step(0, ToolStatus::Running)]);
+    lx.chat.request = RequestState::Idle;
+    lx.chat.stream_assistant = Some("a1".into());
+    assert_eq!(
+        activity_label_for_chat(&lx.chat).text(),
+        text::chat::RUNNING_TOOLS_LABEL
+    );
+}
+
 /// wait_agent 运行中必须显示等待子 agent 的 loading，而不是 Running tools。
 #[test]
 fn running_wait_agent_shows_waiting_agents() {

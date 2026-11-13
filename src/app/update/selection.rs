@@ -408,10 +408,12 @@ pub fn stop_active_selection_drags(state: &mut AppState) {
                         editor.clear_text_selection();
                     }
                     if let Some(task) = target.lx.task.as_mut()
-                        && let Some(reply) = task.agent_reply.as_mut()
-                        && !reply.has_selection()
+                        && !task.agents_search.has_selection()
                     {
-                        reply.clear_selection();
+                        task.agents_search.clear_selection();
+                    }
+                    if !target.lx.btw.search.has_selection() {
+                        target.lx.btw.search.clear_selection();
                     }
                 }
             }
@@ -443,11 +445,10 @@ pub fn clear_selection(state: &mut AppState) {
                     if let Some(ask) = target.lx.ask.as_mut() {
                         ask.clear_all_text_selections();
                     }
-                    if let Some(task) = target.lx.task.as_mut()
-                        && let Some(reply) = task.agent_reply.as_mut()
-                    {
-                        reply.clear_selection();
+                    if let Some(task) = target.lx.task.as_mut() {
+                        task.agents_search.clear_selection();
                     }
+                    target.lx.btw.search.clear_selection();
                 }
             }
         }
@@ -464,7 +465,7 @@ pub fn clear_selection(state: &mut AppState) {
 ///    - 右栏：未折叠时，按 `right_tab`（`Prompt` 树/页/正文与展开芯片，或 `Todo` 编辑框）检查；
 ///    - 主窗格区：未折叠时，遍历当前活动标签页中的所有可见窗格：
 ///      - `PaneView::Lx`：检查主内容区 `state.lx_selection`（含后台任务页输出区选区）；
-///        若后台任务页打开则检查 `agent_reply`；若 `ask` 处于编辑态则检查 `ask.editor()`；
+///        若后台任务页打开则检查列表搜索框或详情 composer；若 `ask` 处于编辑态则检查 `ask.editor()`；
 ///        若 `task` 与 `ask` 均未遮挡输入框，则检查 `lx.preview_selection()` 与 `lx.text_selection_range()`；
 ///      - `PaneView::Terminal`：检查 `terminal_has_selection(state, id)`（与渲染高亮同源）。
 pub fn has_visible_selection(state: &AppState) -> bool {
@@ -527,17 +528,14 @@ pub fn has_visible_selection(state: &AppState) -> bool {
                     {
                         return true;
                     }
-                    if pane.lx.is_btw_tab() {
+                    if pane.lx.btw_editing() || pane.lx.agents_editing() {
                         if pane.lx.active_editor().text_selection_range().is_some()
                             || pane.lx.active_editor().preview_selection().is_some()
                         {
                             return true;
                         }
                     } else if let Some(task) = pane.lx.task.as_ref() {
-                        if task
-                            .agent_reply
-                            .as_ref()
-                            .is_some_and(|reply| reply.has_selection())
+                        if task.agents_search.has_selection() || pane.lx.btw.search.has_selection()
                         {
                             return true;
                         }

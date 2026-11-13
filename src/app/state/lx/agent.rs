@@ -5,6 +5,7 @@
 
 pub use crate::chat::agent::SubagentReportView;
 
+use std::collections::BTreeMap;
 use std::sync::atomic::{AtomicI64, Ordering};
 
 use crate::chat::agent::AgentRole;
@@ -12,6 +13,8 @@ use crate::db::chat::{SubagentRecord, Usage};
 
 use super::chat::{AssistantStepView, ChatMessageView, ChatPartView, LxChat};
 use super::compact::LxCompact;
+use super::composer::DetailComposer;
+use super::task::AgentFilter;
 use crate::app::state::{RequestKey, RequestState};
 use crate::chat::events::PartKind;
 
@@ -374,6 +377,10 @@ pub struct AgentsState {
     /// delta 只置位，事件循环每帧绘制前最多全量对账一次；避免并行 subagent 时
     /// 每条 delta 都扫描“主聊天 + 所有 run 聊天”。
     pub cards_dirty: bool,
+    /// 稳定选中的 agent_id：面板关闭/搜索过滤后仍保留。
+    pub selected_id: Option<String>,
+    /// agent_id -> 未发送草稿；只在实际进入编辑时惰性创建。
+    pub composers: BTreeMap<String, DetailComposer>,
 }
 
 impl AgentsState {
@@ -473,6 +480,40 @@ impl AgentsState {
             .filter(|(_, run)| filter.matches(run))
             .map(|(index, _)| index)
             .collect()
+    }
+
+    /// 筛选 + 搜索后的真实下标；先应用状态筛选，再匹配昵称/角色/标题/ID。
+    pub fn visible_indices(&self, filter: AgentFilter, query: &str) -> Vec<usize> {
+        let query = query.trim().to_lowercase();
+        self.runs
+            .iter()
+            .enumerate()
+            .filter(|(_, run)| {
+                filter.matches(run)
+                    && (query.is_empty()
+                        || run.display_identity().to_lowercase().contains(&query)
+                        || run.role.as_str().to_lowercase().contains(&query)
+                        || run.title.to_lowercase().contains(&query)
+                        || run.agent_id.to_lowercase().contains(&query))
+            })
+            .map(|(index, _)| index)
+            .collect()
+    }
+
+    /// 按 agent_id 取独立追问编辑器。
+    pub fn composer(&self, agent_id: &str) -> Option<&DetailComposer> {
+        self.composers.get(agent_id)
+    }
+
+    pub fn composer_mut(&mut self, agent_id: &str) -> Option<&mut DetailComposer> {
+        self.composers.get_mut(agent_id)
+    }
+
+    /// 取或惰性创建某 agent 的追问编辑器。
+    pub fn ensure_composer(&mut self, agent_id: &str) -> &mut DetailComposer {
+        self.composers
+            .entry(agent_id.to_string())
+            .or_insert_with(DetailComposer::new_agent)
     }
 
     /// 空闲子会话 LRU 回收：已加载的非运行态 run 超过上限时卸载最久未访问的。

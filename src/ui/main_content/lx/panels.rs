@@ -87,18 +87,27 @@ impl InputGeom {
 /// 自动贴在 BTW 输入框上方，而不是主输入框。
 pub(crate) fn input_rect(area: Rect, lx: &Lx) -> Option<Rect> {
     let lay = layout(area, lx);
-    if lx.is_btw_tab() {
+    if lx.btw_editing() {
         return lay
             .task_list
             .and_then(|rect| super::task::btw::composer_rect(rect, lx))
             .filter(|rect| rect.height > 0);
+    }
+    if lx.agents_editing() {
+        return lay.task_list.filter(|rect| {
+            rect.height > 0
+                && lx
+                    .agent_edit_id()
+                    .and_then(|agent_id| lx.agents.composer(agent_id))
+                    .is_some()
+        });
     }
     lay.input
 }
 
 /// lx 输入框文本区几何；`area` 为窗格内容区。
 pub(crate) fn input_geom(area: Rect, lx: &Lx) -> Option<InputGeom> {
-    if lx.is_btw_tab() {
+    if lx.btw_editing() || lx.agents_editing() {
         let input = input_rect(area, lx)?;
         let editor = lx.active_editor();
         let rows = editor.visual_rows().len().max(1);
@@ -134,7 +143,7 @@ pub(crate) fn input_geom(area: Rect, lx: &Lx) -> Option<InputGeom> {
 
 /// lx 输入框滚动条几何；内容未溢出时为 None。
 pub(crate) fn input_scrollbar(area: Rect, lx: &Lx) -> Option<scrollbar::ScrollbarLayout> {
-    if lx.is_btw_tab() {
+    if lx.btw_editing() || lx.agents_editing() {
         let input = input_rect(area, lx)?;
         let editor = lx.active_editor();
         let rows = editor.visual_rows().len().max(1);

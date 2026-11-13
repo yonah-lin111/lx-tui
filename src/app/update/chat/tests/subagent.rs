@@ -372,6 +372,52 @@ fn new_session_clears_agents() {
 }
 
 #[test]
+fn opening_an_agent_link_exits_the_previous_composer_and_clears_search() {
+    use crate::app::state::{TaskPage, TaskTab};
+
+    let mut state = AppState::demo();
+    let pane = state.active_tab().layout.focus();
+    {
+        let target = state.pane_mut_anywhere(pane).expect("pane");
+        target.view = crate::app::state::PaneView::Lx;
+        target.lx.chat.session_id = Some("sess-parent".into());
+        target
+            .lx
+            .agents
+            .runs
+            .push(run("sess-a", "sub-a", AgentRole::Explorer));
+        target
+            .lx
+            .agents
+            .runs
+            .push(run("sess-b", "sub-b", AgentRole::Executor));
+        target.lx.agents.selected_id = Some("sub-a".into());
+        target.lx.task = Some(TaskPage {
+            tab: TaskTab::Agents,
+            agent_edit: Some("sub-a".into()),
+            ..TaskPage::default()
+        });
+        target
+            .lx
+            .task
+            .as_mut()
+            .expect("task")
+            .agents_search
+            .insert_str("zzz");
+    }
+    assert!(update::open_agent_page(&mut state, pane, "sub-b"));
+    let target = state.pane_anywhere(pane).expect("pane");
+    let page = target.lx.task.as_ref().expect("agents page");
+    assert!(page.agent_edit.is_none(), "打开链接必须退出旧 composer");
+    assert!(page.agents_search.text().is_empty(), "旧搜索必须清空");
+    assert_eq!(
+        target.lx.agents.selected_id.as_deref(),
+        Some("sub-b"),
+        "定位到被点击的链接目标"
+    );
+}
+
+#[test]
 fn opening_an_agent_link_opens_the_agents_page_and_selects_it() {
     let mut state = AppState::demo();
     let pane = state.active_tab().layout.focus();
@@ -422,6 +468,7 @@ fn task_page_switches_between_process_and_agent_lists() {
     let agents = AgentsState {
         runs: vec![run("sess-a", "sub-a", AgentRole::Explorer)],
         cards_dirty: false,
+        ..Default::default()
     };
     let mut page = TaskPage::default();
     assert_eq!(page.len(&agents), 0, "进程 tab 没有条目");

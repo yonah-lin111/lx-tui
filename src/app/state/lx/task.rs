@@ -4,8 +4,8 @@
 //! 也不销毁 lx 页状态——`pane.lx` 的会话、消息、草稿、滚动位置全部原样保留，
 //! 退出页面即可回到离开时的样子。因此「打开后台任务」不需要保存/恢复任何东西。
 //!
-//! 页面结构对齐 opencode 的 composer 多 tab：顶部一条 tab（`Processes` / `Agents`），
-//! 主体是当前 tab 的列表，底部一行键位提示。`Agents` 上半区是选中子 agent 的完整
+//! 页面结构对齐 opencode 的 composer 多 tab：顶部一条 tab（`Processes` / `Agents` / `BTW`），
+//! 主体是当前 tab 的列表，底部一行键位提示。`Agents` / `BTW` 上半区是选中目标的完整
 //! 消息流（复用主历史渲染与折叠），下半区是列表（滚动/点击切换）。
 
 use crate::chat::agent::AgentStatus;
@@ -172,19 +172,28 @@ pub struct TaskPage {
     pub agents_focus: Option<String>,
     /// Agents 列表的状态筛选器。
     pub agent_filter: AgentFilter,
-    /// Agents 面板顶栏的内联追问输入框（`None` 为普通浏览态）。
-    pub agent_reply: Option<crate::app::overlay::TextInput>,
-    /// 打开内联追问时锁定的目标 `(agent_id, display_nickname)`，防止列表重排/状态变更串发。
-    pub agent_reply_target: Option<(String, String)>,
+    /// Agents 列表搜索框；列表态常驻焦点。
+    pub agents_search: crate::app::overlay::TextInput,
+    /// 正在编辑的 agent_id；None 为列表态。
+    pub agent_edit: Option<String>,
+    /// Agents 列表请求在途（打开/切到该页时置位，列表回投后清除）。
+    pub agents_loading: bool,
 }
 
 impl TaskPage {
+    /// 当前 Agents 页签筛选 + 搜索后的真实下标。
+    pub fn agent_visible_indices(&self, agents: &AgentsState) -> Vec<usize> {
+        agents.visible_indices(self.agent_filter, self.agents_search.text())
+    }
+
     /// 当前 tab 的条目数。
     pub fn len(&self, agents: &AgentsState) -> usize {
         match self.tab {
             TaskTab::Processes => self.processes.len(),
-            TaskTab::Agents => agents.filtered_indices(self.agent_filter).len(),
-            // BTW 页签不再展示可选的 QA 列表：底部只有归属提示与输入框。
+            TaskTab::Agents => agents
+                .visible_indices(self.agent_filter, self.agents_search.text())
+                .len(),
+            // BTW 的列表窗口独立维护，不参与 `TaskPage` 的进程/agent 窗口。
             TaskTab::Btw => 0,
         }
     }
@@ -205,7 +214,7 @@ impl TaskPage {
                 self.output_visible == 0 || self.output_scroll >= self.output_max_scroll()
             }
             TaskTab::Agents => self
-                .selected_agent_index(&lx.agents)
+                .detail_agent_index(&lx.agents)
                 .and_then(|index| lx.agents.runs.get(index))
                 .is_none_or(|run| {
                     run.chat.messages.is_empty()
@@ -237,12 +246,53 @@ impl TaskPage {
             .and_then(|index| agents.runs.get(index))
     }
 
-    /// 把筛选后列表里的高亮位置映射回 `agents.runs` 的真实下标。
+    /// 详情区当前展示的子 agent（搜索无命中时仍保留最后选中项）。
+    pub fn detail_agent<'a>(&self, agents: &'a AgentsState) -> Option<&'a SubagentRun> {
+        matches!(self.tab, TaskTab::Agents)
+            .then(|| self.detail_agent_index(agents))
+            .flatten()
+            .and_then(|index| agents.runs.get(index))
+    }
+
+    /// 把筛选 + 搜索后列表里的高亮位置映射回 `agents.runs` 的真实下标。
     pub fn selected_agent_index(&self, agents: &AgentsState) -> Option<usize> {
         agents
-            .filtered_indices(self.agent_filter)
+            .visible_indices(self.agent_filter, self.agents_search.text())
             .get(self.agents_window.active)
             .copied()
+    }
+
+    /// 详情区使用的 agent：可见选中项优先，搜索无命中时回退稳定 `selected_id`。
+    pub fn detail_agent_index(&self, agents: &AgentsState) -> Option<usize> {
+        self.selected_agent_index(agents).or_else(|| {
+            let selected = agents.selected_id.as_deref()?;
+            agents.runs.iter().position(|run| run.agent_id == selected)
+        })
+    }
+
+    /// 按稳定 `selected_id` 恢复 Agents 列表高亮；无稳定项时落在首个可见项。
+    pub fn sync_agent_window(&mut self, agents: &AgentsState) {
+        let visible = agents.visible_indices(self.agent_filter, self.agents_search.text());
+        let position = agents
+            .selected_id
+            .as_deref()
+            .and_then(|selected| {
+                visible.iter().position(|index| {
+                    agents
+                        .runs
+                        .get(*index)
+                        .is_some_and(|run| run.agent_id == selected)
+                })
+            })
+            .unwrap_or(0);
+        self.agents_window.active = position;
+        self.agents_window.anchor = position;
+        self.agents_window.viewport = None;
+        clamp_task_window_visible(
+            &mut self.agents_window,
+            visible.len(),
+            crate::ui::main_content::lx::task::LIST_MAX_SEARCH,
+        );
     }
 
     /// 当前 tab 的高亮窗口（进程 / 子 agent 各一份）。
@@ -267,9 +317,12 @@ impl TaskPage {
     /// 按当前 tab 集合钳制高亮窗口。
     pub fn clamp(&mut self, agents: &AgentsState) {
         clamp_task_window(&mut self.window, self.processes.len());
-        clamp_task_window(
+        clamp_task_window_visible(
             &mut self.agents_window,
-            agents.filtered_indices(self.agent_filter).len(),
+            agents
+                .visible_indices(self.agent_filter, self.agents_search.text())
+                .len(),
+            crate::ui::main_content::lx::task::LIST_MAX_SEARCH,
         );
     }
 
@@ -286,8 +339,9 @@ impl TaskPage {
             return false;
         }
         self.tab = tab;
-        self.agent_reply = None;
-        self.agent_reply_target = None;
+        self.agent_edit = None;
+        self.agents_search.clear();
+        self.agents_loading = false;
         // 窗口状态属于**进程列表**，与当前 tab 的条目数无关：`Agents` 恒为 0，
         // 若按 `self.len()` 钳制会把 `active/anchor/viewport` 全部抹成 0，
         // 切回 Processes 时用户原来选的那项已经丢了（`^d` 会停错进程）。
@@ -301,8 +355,9 @@ impl TaskPage {
             return false;
         }
         self.tab = tab;
-        self.agent_reply = None;
-        self.agent_reply_target = None;
+        self.agent_edit = None;
+        self.agents_search.clear();
+        self.agents_loading = false;
         clamp_task_window(&mut self.window, self.processes.len());
         true
     }
@@ -322,7 +377,11 @@ impl TaskPage {
         if len == 0 {
             return false;
         }
-        let visible = crate::ui::main_content::lx::task::LIST_MAX;
+        let visible = if self.tab == TaskTab::Agents {
+            crate::ui::main_content::lx::task::LIST_MAX - 1
+        } else {
+            crate::ui::main_content::lx::task::LIST_MAX
+        };
         let max_scroll = len.saturating_sub(visible);
         let last = len - 1;
         let active = self.active_window().active.min(last);
@@ -507,8 +566,12 @@ impl TaskPage {
 
 /// 按后台任务列表可见高度钳制高亮与显式视口起点（`len <= LIST_MAX` 时归 `None`）。
 pub(crate) fn clamp_task_window(window: &mut PanelWindow, len: usize) {
+    clamp_task_window_visible(window, len, crate::ui::main_content::lx::task::LIST_MAX);
+}
+
+/// 按指定可见行数钳制高亮与显式视口（Agents 用 5 行，Processes 用 6 行）。
+pub(crate) fn clamp_task_window_visible(window: &mut PanelWindow, len: usize, visible: usize) {
     window.clamp(len);
-    let visible = crate::ui::main_content::lx::task::LIST_MAX;
     if len <= visible {
         window.viewport = None;
     } else if let Some(viewport) = window.viewport.as_mut() {
@@ -517,7 +580,12 @@ pub(crate) fn clamp_task_window(window: &mut PanelWindow, len: usize) {
 }
 
 /// 滚轮移动任意列表的显式视口（进程与 Agents 共用）。
-fn scroll_window(window: &mut PanelWindow, len: usize, delta: isize, visible: usize) -> bool {
+pub(crate) fn scroll_window(
+    window: &mut PanelWindow,
+    len: usize,
+    delta: isize,
+    visible: usize,
+) -> bool {
     if len == 0 || visible == 0 || len <= visible {
         window.viewport = None;
         return false;

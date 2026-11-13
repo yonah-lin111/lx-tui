@@ -16,6 +16,17 @@ impl Lx {
         self.text_selection = None;
         self.preview_selection = None;
         self.preview_drag = None;
+        // Agents 追问是纯文本：不打开任何编辑浮层，避免 @/斜杠/路径面板抢占按键。
+        if !self.allow_panels {
+            self.panel = None;
+            self.slash = None;
+            self.paste = None;
+            self.text_paste = None;
+            self.refer = None;
+            self.mention.suppress();
+            self.scroll_cursor_into_view();
+            return;
+        }
         // Shell 正文按原始脚本编辑：不弹 Markdown / 提及 / 斜杠 / 路径参照 / 快捷引用面板。
         if self.input_mode == LxInputMode::Shell {
             self.panel = None;

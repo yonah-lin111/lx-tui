@@ -6,7 +6,7 @@
 //! 与 composer 浮层，`events` 管事件回投；测试在 `tests.rs`。
 
 use crate::app::effects::{BtwEffect, BtwSubmission, BtwTargetChoice, Effect};
-use crate::app::state::lx::btw::{BtwFocus, BtwTargetView};
+use crate::app::state::lx::btw::BtwTargetView;
 use crate::app::state::{AppState, InputHintLevel, Lx, TaskTab};
 use crate::app::toast::{Toast, ToastKind};
 use crate::app::update::{show_lx_hint, show_lx_toast};
@@ -22,7 +22,7 @@ pub use events::{
     on_accepted, on_delta, on_failed, on_finished, on_qa_list_loaded, on_recipient_started,
     on_thread_loaded, on_tool_state,
 };
-pub use input::{apply_input, select_btw_slash};
+pub use input::apply_input;
 
 /// 把流增量应用到 BTW 的无头缓冲（事件层在 UI 不可见时仍能结算正文）。
 pub fn apply_btw_buffer_deltas(
@@ -60,8 +60,12 @@ pub fn open_btw_tab(state: &mut AppState, pane: PaneId) -> bool {
     };
     let page = target.lx.task.get_or_insert_with(Default::default);
     page.tab = TaskTab::Btw;
-    page.agent_reply = None;
-    page.agent_reply_target = None;
+    page.agent_edit = None;
+    page.agents_search.clear();
+    page.agents_loading = false;
+    target.lx.btw.editing = false;
+    target.lx.btw.search.clear();
+    target.lx.slash = None;
     state.effects.push(Effect::Btw(BtwEffect::LoadQaList {
         pane,
         parent_session_id: session_id.clone(),
@@ -71,47 +75,41 @@ pub fn open_btw_tab(state: &mut AppState, pane: PaneId) -> bool {
         pane,
         parent_session: session_id,
     });
+    // 进入面板时清掉历史/主输入框遗留的选区，避免旧光标或单格反显留在对话区。
+    crate::app::update::clear_lx_selection_for(state, pane);
+    if let Some(target) = state.pane_mut_anywhere(pane) {
+        target.lx.clear_text_selection();
+        target.lx.clear_preview_selection();
+    }
     true
 }
 
-pub(super) fn is_btw_list_command(text: &str) -> bool {
-    let line = text.trim();
-    line.eq_ignore_ascii_case("/btwlist") || line.eq_ignore_ascii_case("/btw-list")
-}
-
-/// 打开 QA 选择器：页签已开时直接就地打开（必要时补拉列表），否则先打开页签。
-pub fn open_btw_list(state: &mut AppState, pane: PaneId) -> bool {
-    let already = state
-        .pane_anywhere(pane)
-        .is_some_and(|target| target.lx.is_btw_tab());
-    if already {
-        let Some(parent_session_id) = state
-            .pane_anywhere(pane)
-            .and_then(|target| target.lx.chat.session_id.clone())
-        else {
+/// 列表点击/确认：切到目标 QA 并加载它的线程历史。
+/// 搜索文本被非编辑路径（剪切/粘贴）改写后，补齐高亮与预览线程。
+pub fn sync_search_selection(state: &mut AppState, pane: PaneId) -> bool {
+    let (switched, index) = {
+        let Some(target) = state.pane_mut_anywhere(pane) else {
             return false;
         };
-        state.effects.push(Effect::Btw(BtwEffect::LoadQaList {
-            pane,
-            parent_session_id,
-        }));
-    } else if !open_btw_tab(state, pane) {
-        return false;
-    }
-    let Some(target) = state.pane_mut_anywhere(pane) else {
-        return false;
+        if !target.lx.is_btw_tab() {
+            return false;
+        }
+        let switched = target.lx.btw.sync_selection_after_filter();
+        let index = target
+            .lx
+            .btw
+            .filtered_qa_indices()
+            .get(target.lx.btw.qa_window.active)
+            .copied();
+        (switched, index)
     };
-    target.lx.btw.picker_loading = true;
-    if target.lx.btw.qa.is_empty() {
-        // 列表还没到：先立起二级面板的 loading 占位，拿到列表后再换成候选。
-        target.lx.btw.pending_pick = true;
-    } else {
-        target.lx.btw.open_picker();
+    if switched && let Some(index) = index {
+        return select_btw_qa(state, pane, index);
     }
-    true
+    crate::app::update::clear_lx_selection_for(state, pane);
+    false
 }
 
-/// 选择器确认/点击：切到目标 QA 并加载它的线程历史。
 pub fn select_btw_qa(state: &mut AppState, pane: PaneId, index: usize) -> bool {
     let Some(qa_id) = state
         .pane_anywhere(pane)
@@ -188,16 +186,42 @@ pub(super) fn switch_qa(state: &mut AppState, pane: PaneId, qa_id: &str) -> bool
     let Some(target) = state.pane_mut_anywhere(pane) else {
         return false;
     };
-    target.lx.btw.select_qa(qa_id);
-    target.lx.btw.close_picker();
-    target.lx.btw.focus = BtwFocus::Composer;
+    let changed = target.lx.btw.select_qa(qa_id);
+    target.lx.btw.sync_selection_after_filter();
+    if changed && let Some(thread) = target.lx.btw.active_thread_mut() {
+        thread.follow = true;
+        thread.scroll = usize::MAX;
+        thread.rows_dirty = true;
+    }
     state.effects.push(Effect::Btw(BtwEffect::LoadThread {
         pane,
         parent_session_id,
         qa_id: qa_id.to_string(),
     }));
+    // 选区几何按当前线程内容计算；切换 Q 后旧锚点不能落到新线程上。
+    crate::app::update::clear_lx_selection_for(state, pane);
     crate::app::update::sync_lx_mention_root(state, pane);
     true
+}
+
+/// 进入当前 BTW QA 的编辑态（列表 `Shift+Enter`）。
+pub fn enter_btw_edit(state: &mut AppState, pane: PaneId) -> bool {
+    let Some(target) = state.pane_mut_anywhere(pane) else {
+        return false;
+    };
+    if !target.lx.btw.enter_edit() {
+        return false;
+    }
+    crate::app::update::clear_lx_selection_for(state, pane);
+    crate::app::update::sync_lx_mention_root(state, pane);
+    true
+}
+
+/// 退出编辑态并保留草稿。
+pub fn leave_btw_edit(state: &mut AppState, pane: PaneId) -> bool {
+    state
+        .pane_mut_anywhere(pane)
+        .is_some_and(|target| target.lx.btw.leave_edit())
 }
 
 /// `/btw [prompt]` 命令入口：打开页签，把 prompt 放入当前 QA 的 composer 并提交。
@@ -226,6 +250,8 @@ pub fn try_submit_btw_command(state: &mut AppState, pane: PaneId) -> bool {
                 target.lx.clear_text_selection();
             }
             target.lx.slash = None;
+            target.lx.btw.editing = false;
+            target.lx.btw.search.clear();
         }
         open_btw_tab(state, pane);
         return true;
@@ -245,16 +271,13 @@ pub fn try_submit_btw_command(state: &mut AppState, pane: PaneId) -> bool {
     let prompt = prompt.to_string();
     // 命令本身就是一次提交：主输入框内容不保留。线程可能尚未建立（首次打开），
     // 因此正文一律先暂存，等 QA 列表回投、活动线程建好后再写入 composer。
-    // `/btw prompt` 始终挂到最新主 QA；只有裸 `/btw` 保留当前浏览的 QA。
+    // `/btw prompt` 始终挂到最新主 QA；正文先暂存，列表回投后再写入。
     if let Some(target) = state.pane_mut_anywhere(pane) {
         target.lx.btw.active = None;
-        target.lx.btw.picking = None;
-        target.lx.btw.pending_pick = false;
+        target.lx.btw.editing = false;
+        target.lx.btw.search.clear();
         target.lx.clear();
         target.lx.btw.pending_prompt = Some(prompt.clone());
-        if let Some(thread) = target.lx.btw.active_thread_mut() {
-            thread.composer.editor_mut().replace_input(&prompt);
-        }
     }
     // QA 列表由事件回投后才有；先登记一次延迟提交，列表到达时立即发出。
     state.effects.push(Effect::Btw(BtwEffect::LoadQaList {

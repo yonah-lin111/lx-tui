@@ -14,6 +14,7 @@ pub mod ask;
 pub mod btw;
 pub mod chat;
 pub mod compact;
+pub mod composer;
 pub mod connect;
 mod edit;
 mod folded;
@@ -37,7 +38,7 @@ pub use shell::LxInputMode;
 
 pub use agent::{AgentsState, MAX_RESIDENT_SUBAGENT_CHATS, SubagentReportView, SubagentRun};
 pub use ask::{AskEditor, AskHit, AskState, AskWheelZone};
-pub use btw::{BtwComposer, BtwFocus, BtwTargetView, BtwThreadState, LxBtw};
+pub use btw::{BtwTargetView, BtwThreadState, LxBtw};
 pub use chat::SHELL_SLOT;
 pub use chat::{
     AskAnsweredView, AskDetailView, AssistantStepView, CardSection, CardTarget, ChatMessageView,
@@ -49,6 +50,7 @@ pub use chat::{
     ToolDetailView, ToolStatus, ToolSummary, UserShellView, WebSearchDetailView,
 };
 pub use compact::{CompactNoticeView, LxCompact};
+pub use composer::DetailComposer;
 pub use connect::{
     ConnectManageAction, ConnectPanel, ConnectPromptStep, ConnectProviderEntry, ConnectStage,
 };
@@ -187,6 +189,8 @@ pub struct Lx {
     no_shell: bool,
     /// 旁路 composer 的 `@` 实例列表由主编辑器注入（本身没有 `agents`）。
     mention_runs_external: bool,
+    /// 是否允许打开 `@` / `/` / 粘贴 / 引用等编辑面板。
+    allow_panels: bool,
     /// 本会话正在运行的后台任务数（底部状态行指标）。
     pub background_tasks: usize,
     /// 首页资源计数：MCP server 与 skill 的加载/失败状态。
@@ -259,6 +263,14 @@ impl Lx {
         lx
     }
 
+    /// Agents 追问输入缓冲：纯文本编辑，不打开提及/斜杠/粘贴等面板。
+    pub fn agent_composer() -> Self {
+        let mut lx = Self::build(false);
+        lx.no_shell = true;
+        lx.allow_panels = false;
+        lx
+    }
+
     fn build(plain: bool) -> Self {
         Self {
             entry: LxEntry::Native,
@@ -297,6 +309,7 @@ impl Lx {
             plain,
             no_shell: false,
             mention_runs_external: false,
+            allow_panels: true,
             background_tasks: 0,
             startup: StartupCounts::default(),
             disabled_mcp_servers: std::collections::BTreeSet::new(),
@@ -431,10 +444,16 @@ impl Lx {
     /// 渲染/命中/提及面板都通过它读取文本与面板状态；几何仍由外层 `layout` 决定，
     /// 因此 composer 不会重新计算整页布局。
     pub fn active_editor(&self) -> &Lx {
-        if self.is_btw_tab()
+        if self.btw_editing()
             && let Some(composer) = self.btw.active_composer()
         {
             return composer;
+        }
+        if self.agents_editing()
+            && let Some(agent_id) = self.agent_edit_id()
+            && let Some(composer) = self.agents.composer(agent_id)
+        {
+            return composer.editor();
         }
         self
     }
@@ -446,15 +465,47 @@ impl Lx {
             .is_some_and(|page| page.tab == task::TaskTab::Btw)
     }
 
-    /// 在「当前生效的编辑器」上执行一次闭包：BTW 页签落到独立 composer，否则落到主输入框。
-    ///
-    /// 用闭包而不是返回 `&mut Lx`：两条分支的借用都只持续到闭包结束，调用方无需
-    /// 关心 `self` 的字段别名。
+    /// 后台面板当前是否停在 Agents 标签页。
+    pub fn is_agents_tab(&self) -> bool {
+        self.task
+            .as_ref()
+            .is_some_and(|page| page.tab == task::TaskTab::Agents)
+    }
+
+    /// BTW 页签是否处于编辑态。
+    pub fn btw_editing(&self) -> bool {
+        self.is_btw_tab() && self.btw.editing
+    }
+
+    /// Agents 页签是否处于编辑态。
+    pub fn agents_editing(&self) -> bool {
+        self.is_agents_tab()
+            && self
+                .task
+                .as_ref()
+                .is_some_and(|page| page.agent_edit.is_some())
+    }
+
+    /// 当前正在编辑的 agent_id。
+    pub fn agent_edit_id(&self) -> Option<&str> {
+        self.task
+            .as_ref()
+            .filter(|page| page.tab == task::TaskTab::Agents)
+            .and_then(|page| page.agent_edit.as_deref())
+    }
+
+    /// 在「当前生效的编辑器」上执行一次闭包：编辑态落到独立 composer，否则落到主输入框。
     pub fn with_active_editor<R>(&mut self, f: impl FnOnce(&mut Lx) -> R) -> R {
-        if self.is_btw_tab()
+        if self.btw_editing()
             && let Some(composer) = self.btw.active_composer_mut()
         {
             return f(composer);
+        }
+        if self.agents_editing()
+            && let Some(agent_id) = self.agent_edit_id().map(str::to_string)
+            && let Some(composer) = self.agents.composer_mut(&agent_id)
+        {
+            return f(composer.editor_mut());
         }
         f(self)
     }
