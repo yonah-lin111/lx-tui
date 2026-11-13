@@ -246,13 +246,17 @@ impl ToolExecutor for ProbeExecutor {
 
 ### 测试清单
 
-按 design §5.1 实现 5 个用例；断言必须精确到 Trace 顺序与 `Finish(call_id, cancelled)` 布尔值：
+按 design §5.1 至少实现 5 个用例；实际落地 9 个（新增乱序完成、finish 失败、工具面外调用、可取消入口优先）。断言必须精确到 Trace 顺序与 `Finish(call_id, cancelled)` 布尔值：
 
 1. `parallel_reads_overlap_and_keep_ordinal_order`
 2. `parallel_batch_is_capped_at_four`
 3. `mutating_call_splits_batches`
 4. `cancel_during_batch_settles_started_and_cancels_unstarted`
 5. `begin_failure_cancels_already_begun_batch`
+6. `reversed_completion_still_commits_in_ordinal_order`
+7. `finish_failure_cancels_remaining_batch_tickets`
+8. `call_outside_frozen_tool_surface_is_not_executed`
+9. `cancellable_entry_wins_and_others_fall_back`
 
 ### 完成标准
 
@@ -329,7 +333,7 @@ cargo test event::chat
 
 ### 测试
 
-- `src/chat/agent_loop/tests/parallel.rs`：5 个编排测试（重叠、上限 4、写屏障、批次取消、begin 失败清理）。
+- `src/chat/agent_loop/tests/parallel.rs`：9 个编排测试（重叠、上限 4、写屏障、批次取消、begin 失败、乱序完成、finish 失败、工具面外调用、可取消入口优先）。
 - `src/chat/tools/tests.rs`：3 个分类测试（子集、精确集合、MCP/subagent 不命中）。
 - 测试夹具 `RecordingHost` 扩展 `with_begin_failure_after(n, error)`，可注入“第 n+1 次 begin 失败”。
 
@@ -337,9 +341,10 @@ cargo test event::chat
 
 - `cargo fmt`：无 diff。
 - `cargo clippy --all-targets -- -D warnings`：通过。
-- `cargo test --lib chat::agent_loop`：64 passed。
+- `cargo test --lib chat::agent_loop`：68 passed。
 - `cargo test --lib chat::tools`：335 passed（含新增分类测试）。
 - `cargo test --lib event::chat`：154 passed。
+- CLI 实机：在 worktree 内用 `lx-tui exec` 创建会话并触发 5 个相邻 `read`，观测 `batch=4` + `batch=1`；详见 [`verification.md`](verification.md)。
 
 ### 与设计的差异（已同步回 design §4.4）
 

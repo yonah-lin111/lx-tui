@@ -331,3 +331,296 @@ async fn begin_failure_cancels_already_begun_batch() {
         "已 begin 的票据全部按 cancelled 收尾，失败的调用没有 ticket"
     );
 }
+
+/// 完成顺序反转（c1 先返回、c0 后返回）时，结算与模型上下文仍按 ordinal。
+struct ReverseExecutor {
+    finished: Arc<Mutex<Vec<String>>>,
+    release: Arc<std::sync::atomic::AtomicBool>,
+}
+
+impl ReverseExecutor {
+    fn new() -> Self {
+        Self {
+            finished: Arc::new(Mutex::new(Vec::new())),
+            release: Arc::new(std::sync::atomic::AtomicBool::new(false)),
+        }
+    }
+}
+
+impl ToolExecutor for ReverseExecutor {
+    async fn execute(&self, _cwd: &Path, call: &ReadyToolCall) -> ToolExecutionResult {
+        if call.call_id == "c0" {
+            while !self.release.load(Ordering::SeqCst) {
+                tokio::task::yield_now().await;
+            }
+        } else {
+            self.release.store(true, Ordering::SeqCst);
+        }
+        self.finished
+            .lock()
+            .expect("lock")
+            .push(call.call_id.clone());
+        ToolExecutionResult::Search {
+            matches: Vec::new(),
+            truncated: false,
+            files_scanned: 0,
+        }
+    }
+}
+
+#[tokio::test]
+async fn reversed_completion_still_commits_in_ordinal_order() {
+    let fixture = Fixture::new("parallel-reverse");
+    let script = Script::new(
+        vec![
+            tool_calls(
+                &[("c0", "read", READ_ARGS, 0), ("c1", "read", READ_ARGS, 1)],
+                None,
+            ),
+            final_response("done", None),
+        ],
+        StopReason::Complete,
+    );
+    let host = RecordingHost::new();
+    let executor = ReverseExecutor::new();
+    let finished = executor.finished.clone();
+    let summary = run_agent_turn(
+        context(fixture.path()),
+        host.clone(),
+        executor,
+        script.stream_one(),
+        no_cancel(),
+    )
+    .await;
+
+    assert_eq!(summary.outcome, TurnOutcome::Complete);
+    assert_eq!(
+        finished.lock().expect("lock").as_slice(),
+        &["c1".to_string(), "c0".to_string()],
+        "执行完成顺序必须反转"
+    );
+    assert_eq!(
+        host.trace(),
+        vec![
+            HostTrace::Begin("c0".into()),
+            HostTrace::Begin("c1".into()),
+            HostTrace::Finish("c0".into(), false),
+            HostTrace::Finish("c1".into(), false),
+        ],
+        "Finish 仍按 ordinal，而非完成顺序"
+    );
+    let results: Vec<String> = script
+        .items_of(1)
+        .into_iter()
+        .filter_map(|item| match item {
+            ModelItem::ToolResult { call_id, .. } => Some(call_id),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(results, vec!["c0".to_string(), "c1".to_string()]);
+}
+
+/// 可取消入口优先（`web_search` / MCP），其余工具回落到带票据的通用执行入口。
+struct CancellableFirstExecutor {
+    cancellable: Arc<Mutex<Vec<String>>>,
+    executed: Arc<Mutex<Vec<String>>>,
+}
+
+impl CancellableFirstExecutor {
+    fn new() -> Self {
+        Self {
+            cancellable: Arc::new(Mutex::new(Vec::new())),
+            executed: Arc::new(Mutex::new(Vec::new())),
+        }
+    }
+}
+
+impl ToolExecutor for CancellableFirstExecutor {
+    async fn execute(&self, _cwd: &Path, call: &ReadyToolCall) -> ToolExecutionResult {
+        self.executed
+            .lock()
+            .expect("lock")
+            .push(call.call_id.clone());
+        ToolExecutionResult::Search {
+            matches: Vec::new(),
+            truncated: false,
+            files_scanned: 0,
+        }
+    }
+
+    async fn execute_mcp_cancellable(
+        &self,
+        _cwd: &Path,
+        call: &ReadyToolCall,
+        _cancel: watch::Receiver<bool>,
+    ) -> Option<ToolExecutionResult> {
+        if call.call_id != "c0" {
+            return None;
+        }
+        self.cancellable
+            .lock()
+            .expect("lock")
+            .push(call.call_id.clone());
+        Some(ToolExecutionResult::Search {
+            matches: Vec::new(),
+            truncated: false,
+            files_scanned: 0,
+        })
+    }
+}
+
+#[tokio::test]
+async fn cancellable_entry_wins_and_others_fall_back() {
+    let fixture = Fixture::new("parallel-cancellable");
+    let script = Script::new(
+        vec![
+            tool_calls(
+                &[
+                    ("c0", "web_search", r#"{"queries":["x"]}"#, 0),
+                    ("c1", "read", READ_ARGS, 1),
+                ],
+                None,
+            ),
+            final_response("done", None),
+        ],
+        StopReason::Complete,
+    );
+    let host = RecordingHost::new();
+    let executor = CancellableFirstExecutor::new();
+    let cancellable = executor.cancellable.clone();
+    let executed = executor.executed.clone();
+    let summary = run_agent_turn(
+        context(fixture.path()),
+        host.clone(),
+        executor,
+        script.stream_one(),
+        no_cancel(),
+    )
+    .await;
+
+    assert_eq!(summary.outcome, TurnOutcome::Complete);
+    assert_eq!(
+        cancellable.lock().expect("lock").as_slice(),
+        &["c0".to_string()],
+        "web_search 必须走可取消入口"
+    );
+    assert_eq!(
+        executed.lock().expect("lock").as_slice(),
+        &["c1".to_string()],
+        "返回 None 的调用才回落到通用入口"
+    );
+    assert_eq!(
+        host.trace(),
+        vec![
+            HostTrace::Begin("c0".into()),
+            HostTrace::Begin("c1".into()),
+            HostTrace::Finish("c0".into(), false),
+            HostTrace::Finish("c1".into(), false),
+        ]
+    );
+}
+
+/// 批次结算中途 finish 失败：停止提交并把剩余票据按 cancelled 收尾。
+#[tokio::test]
+async fn finish_failure_cancels_remaining_batch_tickets() {
+    let fixture = Fixture::new("parallel-finish-fail");
+    let script = Script::new(
+        vec![tool_calls(
+            &[
+                ("c0", "read", READ_ARGS, 0),
+                ("c1", "read", READ_ARGS, 1),
+                ("c2", "read", READ_ARGS, 2),
+            ],
+            None,
+        )],
+        StopReason::Complete,
+    );
+    let host = RecordingHost::with_finish_failure(HostError::Failed {
+        code: "finish failed".into(),
+    });
+    let summary = run_agent_turn(
+        context(fixture.path()),
+        host.clone(),
+        ProbeExecutor::new(),
+        script.stream_one(),
+        no_cancel(),
+    )
+    .await;
+
+    assert_eq!(
+        summary.outcome,
+        TurnOutcome::Failed {
+            code: "finish failed".into()
+        }
+    );
+    assert_eq!(script.request_count(), 1, "finish 失败后不再采样");
+    assert_eq!(
+        host.trace(),
+        vec![
+            HostTrace::Begin("c0".into()),
+            HostTrace::Begin("c1".into()),
+            HostTrace::Begin("c2".into()),
+            HostTrace::Finish("c0".into(), false),
+            HostTrace::Finish("c1".into(), true),
+            HostTrace::Finish("c2".into(), true),
+        ]
+    );
+}
+
+/// 冻结工具面之外的并行安全调用：仍走 begin/finish，但绝不进 executor。
+#[tokio::test]
+async fn call_outside_frozen_tool_surface_is_not_executed() {
+    let fixture = Fixture::new("parallel-unavailable");
+    let script = Script::new(
+        vec![
+            tool_calls(
+                &[
+                    ("c0", "read", READ_ARGS, 0),
+                    ("c1", "search", r#"{"query":"needle"}"#, 1),
+                ],
+                None,
+            ),
+            final_response("done", None),
+        ],
+        StopReason::Complete,
+    );
+    let host = RecordingHost::new();
+    let executor = ProbeExecutor::new();
+    let executed = executor.executed.clone();
+    let mut context = context(fixture.path());
+    context.request.tools = std::sync::Arc::new(vec![crate::chat::tools::ToolDecl {
+        name: "read".into(),
+        description: "read".into(),
+        parameters: serde_json::json!({"type": "object"}),
+    }]);
+    let summary = run_agent_turn(
+        context,
+        host.clone(),
+        executor,
+        script.stream_one(),
+        no_cancel(),
+    )
+    .await;
+
+    assert_eq!(summary.outcome, TurnOutcome::Complete);
+    assert_eq!(
+        executed.lock().expect("lock").as_slice(),
+        &["c0".to_string()],
+        "工具面外的调用不得执行"
+    );
+    assert_eq!(
+        host.trace(),
+        vec![
+            HostTrace::Begin("c0".into()),
+            HostTrace::Begin("c1".into()),
+            HostTrace::Finish("c0".into(), false),
+            HostTrace::Finish("c1".into(), false),
+        ],
+        "不可用调用按真实失败结果结算，不是 cancelled"
+    );
+    let text = format!("{:?}", script.items_of(1));
+    assert!(
+        text.contains(crate::chat::agent::UNAVAILABLE_CODE),
+        "{text}"
+    );
+}
