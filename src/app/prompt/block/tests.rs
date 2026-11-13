@@ -888,3 +888,134 @@ fn slash_title_on_empty_boilerplate_block_keeps_empty_line_and_reports_empty() {
         Some(crate::app::prompt::PromptTitleAction::EmptyBlock)
     );
 }
+
+#[test]
+fn supplement_at_document_start_with_plain_text_has_no_leading_blank() {
+    let initial = "\nplain note\n\n+++ supplement --start\n{title: S1}\n+++ supplement --end";
+    let mut p = prompt_with(60, 20, initial);
+    p.set_cursor_offset(0);
+    trigger_supplement(&mut p);
+
+    assert!(
+        p.text()
+            .starts_with("plain note\n\n+++ supplement --start\n{title: }"),
+        "文首命令空行应折叠，普通文字仍在块上方: {:?}",
+        p.text()
+    );
+}
+
+#[test]
+fn supplement_before_next_block_collapses_whitespace_only_lines() {
+    let initial = concat!(
+        "+++ supplement --start\n",
+        "{title: S1}\n",
+        "\n",
+        "+++ supplement --end\n",
+        "   \n",
+        "+++ supplement --start\n",
+        "{title: S2}\n",
+        "+++ supplement --end",
+    );
+    let mut p = prompt_with(60, 30, initial);
+    let inside = p.text().find("{title: S1}\n").unwrap() + "{title: S1}\n".len();
+    p.set_cursor_offset(inside);
+    trigger_supplement(&mut p);
+
+    assert!(
+        !p.text().contains("\n   \n"),
+        "只含空白的行应按空行折叠: {:?}",
+        p.text()
+    );
+    assert!(
+        p.text()
+            .contains("+++ supplement --end\n\n+++ supplement --start\n{title: }"),
+        "新块前恰好一个空行: {:?}",
+        p.text()
+    );
+}
+
+#[test]
+fn unclosed_block_guard_keeps_cursor_in_bounds() {
+    let mut p = prompt_with(60, 20, "&&& addTemplate --start\n{title: T}\nbody");
+    p.set_cursor_offset(p.text().len());
+    p.insert_char('\n');
+    for ch in "/supplement".chars() {
+        p.insert_char(ch);
+    }
+    let cursor = p.cursor();
+    let trigger = markdown::SlashTrigger {
+        line_start: cursor - "/supplement".len(),
+        line_end: cursor,
+        cursor,
+        query: "supplement".to_string(),
+    };
+    let (content, cursor_in_block) = markdown::supple_block_content("supplement", None, "");
+    p.insert_supple_block(&trigger, &content, cursor_in_block);
+
+    assert!(
+        p.cursor() <= p.text().len(),
+        "守卫提前返回后光标不得越界: cursor={} len={}",
+        p.cursor(),
+        p.text().len()
+    );
+    assert_eq!(
+        p.cursor(),
+        trigger.line_start,
+        "光标应停在清空后的命令行行首"
+    );
+}
+
+#[test]
+fn supplement_after_pasted_chip_preserves_chip() {
+    let chip = crate::app::paste::encode_pasted_text("line 1\nline 2");
+    let initial = format!("{chip}\n\n+++ supplement --start\n{{title: S1}}\n+++ supplement --end");
+    let mut p = prompt_with(60, 20, &initial);
+    p.set_cursor_offset(chip.len());
+    trigger_supplement(&mut p);
+
+    assert!(
+        p.text().contains(&chip),
+        "粘贴 chip 不得被命令行清理误删: {:?}",
+        p.text()
+    );
+    let new_start = p.text().find("+++ supplement --start\n{title: }").unwrap();
+    let s1_start = p
+        .text()
+        .find("+++ supplement --start\n{title: S1}")
+        .unwrap();
+    assert!(new_start < s1_start, "新块仍应插在 S1 之前: {:?}", p.text());
+}
+
+#[test]
+fn supplement_after_last_block_collapses_whitespace_only_tail() {
+    let initial = "+++ supplement --start\n{title: S1}\n+++ supplement --end\n   \n";
+    let mut p = prompt_with(60, 20, initial);
+    p.set_cursor_offset(p.text().len());
+    trigger_supplement(&mut p);
+
+    assert!(
+        !p.text().contains("\n   \n"),
+        "末尾只含空白的行应被折叠: {:?}",
+        p.text()
+    );
+    assert!(
+        p.text()
+            .contains("+++ supplement --end\n\n+++ supplement --start\n{title: }"),
+        "新块前恰好一个空行: {:?}",
+        p.text()
+    );
+}
+
+#[test]
+fn supplement_without_anchor_skips_unclosed_fence() {
+    let mut p = prompt_with(60, 20, "\n```\ncode\n");
+    p.set_cursor_offset(0);
+    trigger_supplement(&mut p);
+
+    assert!(
+        !p.text().contains("+++ supplement --start"),
+        "无块锚点时不得把新块追加进未闭合围栏: {:?}",
+        p.text()
+    );
+    assert!(p.cursor() <= p.text().len());
+}

@@ -193,8 +193,8 @@ impl Prompt {
         self.slash_confirm()
     }
 
-    /// 斜杠命令面板确认：内置/自定义命令整行替换，`/gitWorkTree` 打开二级选择器，
-    /// 选择器确认把分支写回块结束行上方的 `{wt:}` 行；返回是否消费。
+    /// 斜杠命令面板确认：普通命令整行替换；`+++` 补充块按落点插入；`/gitWorkTree`
+    /// 打开二级选择器，选择器确认把分支写回块结束行上方的 `{wt:}` 行；返回是否消费。
     pub fn slash_confirm(&mut self) -> bool {
         let Some(panel) = self.slash.as_ref() else {
             return false;

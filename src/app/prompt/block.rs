@@ -85,7 +85,16 @@ impl Prompt {
         content: &str,
         cursor: usize,
     ) {
-        self.splice_text(trigger.line_start, trigger.line_end, "");
+        // 命令行在文首（前面只有空白）时，清空后要把这段前导空行一并折叠。
+        let at_document_start = self.text[..trigger.line_start].trim().is_empty();
+        // 只删命令本身（`/` + query），保留行首缩进或同一行已有的粘贴 chip。
+        let command_start = trigger
+            .line_end
+            .saturating_sub(trigger.query.len() + 1)
+            .max(trigger.line_start);
+        self.splice_text(command_start, trigger.line_end, "");
+        // 先落到清空后的命令行末尾；未闭合守卫提前返回时也不会留下越界光标。
+        self.cursor = command_start;
 
         let masked = mask_pasted_text(&self.text);
         let scan = markdown::block_scan(&masked);
@@ -111,10 +120,22 @@ impl Prompt {
             })
             .map(|span| span.end);
 
-        let block_start = match next_start {
-            Some(line) => self.insert_before_line(line, content),
+        // 没有任何块锚点时只能追加到文末；文末若在未闭合代码围栏内，新块会被围栏吞掉。
+        if next_start.is_none() && anchor_line.is_none() && markdown::open_fence(&masked).is_some()
+        {
+            return;
+        }
+        let mut block_start = match next_start {
+            Some(line) => match self.insert_before_line(line, content) {
+                Some(start) => start,
+                None => return,
+            },
             None => self.append_after_anchor(anchor_line, content),
         };
+        if at_document_start {
+            let removed = self.trim_leading_blank_lines();
+            block_start = block_start.saturating_sub(removed);
+        }
 
         self.cursor = block_start + cursor;
         let start_line = self.text[..block_start].matches('\n').count();
@@ -123,50 +144,62 @@ impl Prompt {
     }
 
     /// 在逻辑行 `line` 起始位置插入块正文，前后各保留一个空行；返回正文起始字节偏移。
+    /// 行号越界返回 None（不插入）。
     ///
-    /// 文首只有空行时清掉前导空行，避免文档以空行开头。
-    fn insert_before_line(&mut self, line: usize, content: &str) -> usize {
-        let Some((line_start, _)) = self.line_bounds(line) else {
-            return self.text.len();
-        };
+    /// 文首只有空行时清掉前导空行，避免文档以空行开头；否则从最后一个非空白行
+    /// 的末端开始替换，连同中间只含空白的行一起折叠成一个空行。
+    fn insert_before_line(&mut self, line: usize, content: &str) -> Option<usize> {
+        let (line_start, _) = self.line_bounds(line)?;
         let prefix = &self.text[..line_start];
         if prefix.trim().is_empty() {
             self.splice_text(0, line_start, &format!("{content}\n\n"));
-            0
+            Some(0)
         } else {
-            let base = prefix.trim_end_matches('\n').len();
+            let base = last_content_end(prefix);
             self.splice_text(base, line_start, &format!("\n\n{content}\n\n"));
-            base + 2
+            Some(base + 2)
         }
+    }
+
+    /// 删除文首连续空白行（含只含空白的行）；返回删除的字节数。
+    fn trim_leading_blank_lines(&mut self) -> usize {
+        let mut removed = 0;
+        for line in self.text.split_inclusive('\n') {
+            let content = line.strip_suffix('\n').unwrap_or(line);
+            if !content.trim().is_empty() {
+                break;
+            }
+            removed += line.len();
+        }
+        if removed > 0 {
+            self.splice_text(0, removed, "");
+        }
+        removed
     }
 
     /// 无下一个块时的旧落点：最后一个已闭合 `+++` 结束行之后 → 首个已闭合 `&&&`
     /// 结束行之后 → 文末；返回正文起始字节偏移。
     fn append_after_anchor(&mut self, anchor_line: Option<usize>, content: &str) -> usize {
         match anchor_line.and_then(|line| self.line_bounds(line)) {
-            Some((_, anchor_end)) => {
-                let after = &self.text[anchor_end..];
-                let newlines = after.bytes().take_while(|byte| *byte == b'\n').count();
-                let tail = &after[newlines..];
-                if tail.is_empty() {
-                    let base = self.text[..anchor_end + newlines]
-                        .trim_end_matches('\n')
-                        .len();
+            Some((_, anchor_end)) => match first_content_line_start(&self.text, anchor_end) {
+                Some(tail_start) => {
+                    let insert = format!("\n\n{content}\n\n");
+                    self.splice_text(anchor_end, tail_start, &insert);
+                    anchor_end + 2
+                }
+                None => {
+                    let base = last_content_end(&self.text);
                     let insert = format!("\n\n{content}");
                     self.splice_text(base, self.text.len(), &insert);
                     base + 2
-                } else {
-                    let insert = format!("\n\n{content}\n\n");
-                    self.splice_text(anchor_end, anchor_end + newlines, &insert);
-                    anchor_end + 2
                 }
-            }
+            },
             None => {
                 if self.text.trim_matches('\n').is_empty() {
                     self.splice_text(0, self.text.len(), content);
                     0
                 } else {
-                    let base = self.text.trim_end_matches('\n').len();
+                    let base = last_content_end(&self.text);
                     let insert = format!("\n\n{content}");
                     self.splice_text(base, self.text.len(), &insert);
                     base + 2
@@ -174,6 +207,33 @@ impl Prompt {
             }
         }
     }
+}
+
+/// 最后一个非空白行内容末端的字节偏移；保留该行自身的尾随空格。
+fn last_content_end(text: &str) -> usize {
+    let mut offset = 0;
+    let mut end = 0;
+    for line in text.split_inclusive('\n') {
+        let content = line.strip_suffix('\n').unwrap_or(line);
+        if !content.trim().is_empty() {
+            end = offset + content.len();
+        }
+        offset += line.len();
+    }
+    end
+}
+
+/// 从 `from` 起第一个非空白行的行首字节偏移；没有内容行时返回 None。
+fn first_content_line_start(text: &str, from: usize) -> Option<usize> {
+    let mut offset = from;
+    for line in text.get(from..)?.split_inclusive('\n') {
+        let content = line.strip_suffix('\n').unwrap_or(line);
+        if !content.trim().is_empty() {
+            return Some(offset);
+        }
+        offset += line.len();
+    }
+    None
 }
 
 #[cfg(test)]

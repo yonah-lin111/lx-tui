@@ -54,7 +54,8 @@ impl SlashCommandId {
     }
 }
 
-/// 斜杠命令触发：`line_start..line_end` 为整行替换范围，`query` 为 `/` 与光标之间的输入。
+/// 斜杠命令触发：`line_start..line_end` 为命令行范围，`query` 为 `/` 与光标之间的输入。
+/// 普通命令整行替换；补充块只清 `/` + query，保留行内其他内容（如粘贴 chip）。
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SlashTrigger {
     pub line_start: usize,
@@ -248,7 +249,8 @@ pub fn supple_block_content(command: &str, title: Option<&str>, body: &str) -> (
     (content, cursor)
 }
 
-/// 候选命令的插入结果：整行替换文本与光标偏移；选择器条目与占位行返回 None。
+/// 候选命令的插入内容与光标偏移；补充块由 `Prompt::insert_supple_block` 决定落点。
+/// 选择器条目与占位行返回 None。
 pub fn slash_insertion(item: &SlashItem) -> Option<(String, usize)> {
     match &item.insertion {
         SlashInsertion::BuiltinTemplate(id) => {
@@ -380,7 +382,8 @@ pub enum SlashInsertion {
         title: Option<String>,
         body: String,
     },
-    /// 补充块：整行替换为 `+++ <name> --start/--end` 块，光标落在标题内。
+    /// 补充块：清理命令文字后插到下一个块之前；无下一个块时追加到固定落点，
+    /// 光标落在新块标题内。
     SuppleBlock {
         command: String,
         title: Option<String>,
