@@ -597,6 +597,110 @@ async fn cancellable_entry_wins_and_others_fall_back() {
     );
 }
 
+/// begin 全部完成后、执行前发现取消：整批票据退单，零执行。
+#[tokio::test]
+async fn cancel_after_begins_settles_whole_batch_without_execution() {
+    let fixture = Fixture::new("parallel-cancel-begin");
+    let script = Script::new(
+        vec![tool_calls(
+            &[
+                ("c0", "read", READ_ARGS, 0),
+                ("c1", "read", READ_ARGS, 1),
+                ("c2", "read", READ_ARGS, 2),
+            ],
+            None,
+        )],
+        StopReason::Complete,
+    );
+    let (cancel_sender, cancel) = watch::channel(false);
+    let host = RecordingHost::with_begin_cancel(cancel_sender, 2);
+    let executor = ProbeExecutor::new();
+    let executed = executor.executed.clone();
+    let summary = run_agent_turn(
+        context(fixture.path()),
+        host.clone(),
+        executor,
+        script.stream_one(),
+        cancel,
+    )
+    .await;
+
+    assert_eq!(summary.outcome, TurnOutcome::Interrupted);
+    assert_eq!(script.request_count(), 1, "取消后不再采样");
+    assert!(
+        executed.lock().expect("lock").is_empty(),
+        "begin 后取消不得执行任何调用"
+    );
+    assert_eq!(
+        host.trace(),
+        vec![
+            HostTrace::Begin("c0".into()),
+            HostTrace::Begin("c1".into()),
+            HostTrace::Begin("c2".into()),
+            HostTrace::Finish("c0".into(), true),
+            HostTrace::Finish("c1".into(), true),
+            HostTrace::Finish("c2".into(), true),
+        ]
+    );
+}
+
+/// 批次内某个执行结果报告 cancelled：该票据按 cancelled 结算，剩余票据退单并中断本轮。
+struct CancelledResultExecutor;
+
+impl ToolExecutor for CancelledResultExecutor {
+    async fn execute(&self, _cwd: &Path, call: &ReadyToolCall) -> ToolExecutionResult {
+        if call.call_id == "c1" {
+            return crate::chat::tools::ToolFailure::new(ToolErrorCode::Cancelled, "cancelled")
+                .into_result(Vec::new());
+        }
+        ToolExecutionResult::Search {
+            matches: Vec::new(),
+            truncated: false,
+            files_scanned: 0,
+        }
+    }
+}
+
+#[tokio::test]
+async fn cancelled_execution_result_interrupts_the_batch() {
+    let fixture = Fixture::new("parallel-cancel-result");
+    let script = Script::new(
+        vec![tool_calls(
+            &[
+                ("c0", "read", READ_ARGS, 0),
+                ("c1", "read", READ_ARGS, 1),
+                ("c2", "read", READ_ARGS, 2),
+            ],
+            None,
+        )],
+        StopReason::Complete,
+    );
+    let host = RecordingHost::new();
+    let summary = run_agent_turn(
+        context(fixture.path()),
+        host.clone(),
+        CancelledResultExecutor,
+        script.stream_one(),
+        no_cancel(),
+    )
+    .await;
+
+    assert_eq!(summary.outcome, TurnOutcome::Interrupted);
+    assert_eq!(script.request_count(), 1, "取消结果后不再采样");
+    assert_eq!(
+        host.trace(),
+        vec![
+            HostTrace::Begin("c0".into()),
+            HostTrace::Begin("c1".into()),
+            HostTrace::Begin("c2".into()),
+            HostTrace::Finish("c0".into(), false),
+            HostTrace::Finish("c1".into(), true),
+            HostTrace::Finish("c2".into(), true),
+        ],
+        "c0 已提交真实结果；c1 按 cancelled 结算；c2 退单"
+    );
+}
+
 /// 批次结算中途 finish 失败：停止提交并把剩余票据按 cancelled 收尾。
 #[tokio::test]
 async fn finish_failure_cancels_remaining_batch_tickets() {

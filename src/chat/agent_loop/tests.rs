@@ -39,6 +39,9 @@ enum SteerTrace {
     AutoCompact,
 }
 
+/// 第 N 次 begin 成功后触发取消的脚本。
+type BeginCancel = Option<(watch::Sender<bool>, usize)>;
+
 /// 可控 host：记录每次请求，并按脚本注入失败。
 #[derive(Clone)]
 struct RecordingHost {
@@ -61,6 +64,8 @@ struct RecordingHost {
     pending_steers: Arc<Mutex<VecDeque<bool>>>,
     /// steer / 压缩的调用顺序。
     steer_trace: Arc<Mutex<Vec<SteerTrace>>>,
+    /// 第 N 次 begin 成功后触发取消（模拟批次 begin 期间按 Esc）。
+    cancel_on_begin: Arc<Mutex<BeginCancel>>,
 }
 
 impl Default for RecordingHost {
@@ -76,6 +81,7 @@ impl Default for RecordingHost {
             steer_batches: Arc::new(Mutex::new(VecDeque::new())),
             pending_steers: Arc::new(Mutex::new(VecDeque::new())),
             steer_trace: Arc::new(Mutex::new(Vec::new())),
+            cancel_on_begin: Arc::new(Mutex::new(None)),
         }
     }
 }
@@ -123,6 +129,13 @@ impl RecordingHost {
     fn with_finish_failure(error: HostError) -> Self {
         let host = Self::new();
         host.finish_failures.lock().expect("lock").push(error);
+        host
+    }
+
+    /// 第 `after` 次 begin 成功后触发取消（批次 begin 期间按 Esc）。
+    fn with_begin_cancel(sender: watch::Sender<bool>, after: usize) -> Self {
+        let host = Self::new();
+        *host.cancel_on_begin.lock().expect("lock") = Some((sender, after));
         host
     }
 
@@ -242,6 +255,24 @@ impl AgentHost for RecordingHost {
                 self.issued.lock().expect("lock").push(ticket.clone());
                 // 真实事件层在回执前完成 DB pending + running + 状态推进；此处同步模拟。
                 let _ = reply.send(Ok(ticket));
+                let issued_count = self.issued.lock().expect("lock").len();
+                let should_cancel = {
+                    let trigger = self.cancel_on_begin.lock().expect("lock");
+                    trigger
+                        .as_ref()
+                        .is_some_and(|(_, after)| *after == issued_count)
+                };
+                if should_cancel {
+                    let sender = self
+                        .cancel_on_begin
+                        .lock()
+                        .expect("lock")
+                        .take()
+                        .map(|(sender, _)| sender);
+                    if let Some(sender) = sender {
+                        let _ = sender.send(true);
+                    }
+                }
             }
             AgentHostRequest::FinishTool {
                 ticket,
