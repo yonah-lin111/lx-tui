@@ -457,6 +457,8 @@ pub fn cycle_task_tab(state: &mut AppState, pane: PaneId, delta: isize) -> bool 
             target.lx.btw.editing = false;
             target.lx.btw.search.clear();
             target.lx.btw.sync_selection_after_filter();
+            target.lx.clear_text_selection();
+            target.lx.clear_preview_selection();
         }
         clamp_agents_window(state, pane);
         ensure_selected_agent_loaded(state, pane);

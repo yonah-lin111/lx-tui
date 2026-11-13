@@ -872,7 +872,7 @@ fn agent_composer_renders_target_badge_and_draft() {
         .replace_input("hello");
     let lines = render_lines(&lx, 80, 20);
     assert!(
-        lines.iter().any(|line| line.contains("Agent")),
+        lines.iter().any(|line| line.contains("Subagent")),
         "composer 左侧标记：{lines:?}"
     );
     assert!(
@@ -1252,4 +1252,60 @@ fn btw_search_no_match_keeps_the_active_thread_detail() {
         None,
         "列表无匹配，但详情仍保留稳定 active"
     );
+}
+
+#[test]
+fn btw_list_hardware_cursor_stays_on_the_search_row() {
+    let mut lx = Lx::new();
+    lx.task = Some(TaskPage {
+        tab: TaskTab::Btw,
+        ..Default::default()
+    });
+    lx.btw.ensure_thread("qa-1");
+    let area = Rect::new(0, 0, 80, 24);
+    let rects = super::super::task_rects(area, &lx).expect("task rects");
+    let search = search_rect(rects.list);
+    let mut buf = ratatui::buffer::Buffer::empty(area);
+    let cursor = super::super::render(
+        area,
+        &mut buf,
+        &lx,
+        true,
+        None,
+        &mut crate::ui::main_content::lx::PaneCache::default(),
+    )
+    .expect("focused search row must own the hardware cursor");
+    assert_eq!(
+        cursor,
+        (search.y.saturating_sub(area.y), search.x.saturating_add(2)),
+        "列表态光标只能落在搜索行，不得出现在详情区"
+    );
+}
+
+#[test]
+fn btw_edit_hardware_cursor_stays_inside_the_composer() {
+    let mut lx = Lx::new();
+    lx.task = Some(TaskPage {
+        tab: TaskTab::Btw,
+        ..Default::default()
+    });
+    lx.btw.ensure_thread("qa-1");
+    lx.btw.editing = true;
+    let area = Rect::new(0, 0, 80, 24);
+    let rects = super::super::task_rects(area, &lx).expect("task rects");
+    let mut buf = ratatui::buffer::Buffer::empty(area);
+    let cursor = super::super::render(
+        area,
+        &mut buf,
+        &lx,
+        true,
+        None,
+        &mut crate::ui::main_content::lx::PaneCache::default(),
+    )
+    .expect("composer must own the hardware cursor");
+    assert_eq!(
+        cursor.0,
+        rects.list.y.saturating_add(1).saturating_sub(area.y)
+    );
+    assert!(cursor.1 >= rects.list.x.saturating_add(2));
 }

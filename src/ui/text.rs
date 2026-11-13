@@ -643,7 +643,7 @@ pub const LX_TASK_AGENTS_SEARCH_EMPTY: &str = "no matching agents";
 /// Agents 列表搜索框占位。
 pub const LX_TASK_AGENTS_SEARCH_PLACEHOLDER: &str = "search agents…";
 /// Agents 追问 composer 左侧标记。
-pub const LX_TASK_AGENT_INPUT_MARK: &str = "Agent";
+pub const LX_TASK_AGENT_INPUT_MARK: &str = "Subagent";
 /// Agents 详情区：历史 run 的消息流还没从库里读回来。
 pub const LX_TASK_AGENTS_LOADING: &str = "loading agent transcript…";
 /// 输出区空态：高亮任务还没有产出（或刚起步）。

@@ -34,6 +34,8 @@ pub fn open_task_page(state: &mut AppState, pane: PaneId) -> bool {
         // 避免关闭后、下一帧 resolve 前用过期 viewport_top 把视口拉回去。
         target.lx.chat.viewport_top = None;
         target.lx.chat.suppressed_prompt_header = None;
+        target.lx.clear_text_selection();
+        target.lx.clear_preview_selection();
         crate::app::update::clear_lx_selection_for(state, pane);
     }
     state
@@ -114,6 +116,8 @@ pub fn select_task_tab(state: &mut AppState, pane: PaneId, position: usize) -> b
             target.lx.btw.editing = false;
             target.lx.btw.search.clear();
             target.lx.btw.sync_selection_after_filter();
+            target.lx.clear_text_selection();
+            target.lx.clear_preview_selection();
         }
         crate::app::update::clear_lx_selection_for(state, pane);
         super::btw::ensure_loaded(state, pane);

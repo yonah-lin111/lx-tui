@@ -23,7 +23,8 @@ use ratatui::layout::Rect;
 use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
 
 use crate::app::state::{
-    AssistantStepView, ChatMessageView, Lx, PlanStepView, RequestState, ToolDetailView, ToolStatus,
+    AssistantStepView, ChatMessageView, Lx, LxChat, PlanStepView, RequestState, ToolDetailView,
+    ToolStatus,
 };
 use crate::ui::{style, text};
 
@@ -47,12 +48,39 @@ const STATS_GAP: u16 = 1;
 /// `Agents` 详情），loading 与消息列表无关，因此面板打开时不再显示 loading。
 pub(super) fn visible(lx: &Lx) -> bool {
     if lx.task.is_some() {
-        return jump_visible(lx);
+        return task_loading(lx).is_some() || jump_visible(lx);
     }
     if !super::history::has_history(lx) {
         return false;
     }
     loading_visible(lx) || !lx.chat.follow_bottom
+}
+
+/// 后台面板编辑态的目标 loading：BTW 当前线程 / Agents 当前子 agent。
+///
+/// 返回 `(文案, loading_frame)`；列表态不返回，避免没有 composer 时出现无指代的 loading。
+pub(super) fn task_loading(lx: &Lx) -> Option<(String, usize)> {
+    if lx.btw_editing()
+        && let Some(thread) = lx.btw.active_thread()
+        && thread.is_loading()
+    {
+        return Some((
+            activity_label_for_chat(&thread.chat).text(),
+            thread.chat.loading_frame,
+        ));
+    }
+    if lx.agents_editing()
+        && let Some(run) = lx
+            .agent_edit_id()
+            .and_then(|agent_id| lx.agents.by_agent(agent_id))
+        && run.is_running()
+    {
+        return Some((
+            activity_label_for_chat(&run.chat).text(),
+            run.chat.loading_frame,
+        ));
+    }
+    None
 }
 
 /// 是否需要画 loading 段：主轮次在途（提交/流式/收尾）或 `/compact` 正在执行。
@@ -181,11 +209,20 @@ fn activity_label<'a>(lx: &'a Lx, plan_text: Option<&'a str>) -> ActivityLabel<'
     if lx.compact.is_running() {
         return ActivityLabel::Compacting;
     }
+    activity_label_from_chat(&lx.chat, plan_text, has_running_agents(lx))
+}
+
+/// 从任意 `LxChat` 派生阶段文案；主聊天与详情目标共用同一套判定。
+fn activity_label_from_chat<'a>(
+    chat: &'a LxChat,
+    plan_text: Option<&'a str>,
+    running_agents: bool,
+) -> ActivityLabel<'a> {
     if let Some(todo) = plan_text {
         return ActivityLabel::Todo(todo);
     }
-    let Some(message) = current_streaming_message(&lx.chat) else {
-        return if has_running_agents(lx) {
+    let Some(message) = current_streaming_message(chat) else {
+        return if running_agents {
             ActivityLabel::WaitingAgents
         } else {
             ActivityLabel::Working
@@ -211,7 +248,7 @@ fn activity_label<'a>(lx: &'a Lx, plan_text: Option<&'a str>) -> ActivityLabel<'
     {
         return ActivityLabel::RunningTools;
     }
-    if has_running_agents(lx) {
+    if running_agents {
         return ActivityLabel::WaitingAgents;
     }
     match message.steps.last() {
@@ -220,6 +257,11 @@ fn activity_label<'a>(lx: &'a Lx, plan_text: Option<&'a str>) -> ActivityLabel<'
         }
         _ => ActivityLabel::Working,
     }
+}
+
+/// 目标详情 loading 的文案：不读主聊天的计划/子 agent，只看目标自身的消息流。
+fn activity_label_for_chat(chat: &LxChat) -> ActivityLabel<'_> {
+    activity_label_from_chat(chat, None, false)
 }
 
 /// 联网搜索阶段的文案：取第一条查询词（净化后），其余条数折算成 `(+N more)`。
@@ -310,6 +352,11 @@ pub(super) fn draw(grid: &mut Grid, bar: Option<Rect>, lx: &Lx) {
                 button.right() - hint_x,
             );
         }
+    }
+    // 后台面板编辑态：同一位置显示当前 BTW / 子 agent 的 loading。
+    if let Some((label, frame)) = task_loading(lx) {
+        draw_task_loading(grid, bar, &label, frame);
+        return;
     }
     if !loading_visible(lx) {
         return;
@@ -424,6 +471,48 @@ fn draw_scanned_label(
     label: &str,
     loading_frame: usize,
 ) -> u16 {
+    draw_scanned_label_styled(
+        grid,
+        x,
+        y,
+        limit,
+        label,
+        loading_frame,
+        style::chat_loading_label(),
+        style::chat_loading_scan(loading_frame),
+    )
+}
+
+/// 后台面板目标 loading：与主聊天同一扫描窗口，但只用默认前景色（base dim / 窗口 bold）。
+fn draw_task_loading(grid: &mut Grid, bar: Rect, label: &str, loading_frame: usize) {
+    let x = bar.x.saturating_add(1);
+    let limit = bar.right().saturating_sub(1);
+    if x >= limit {
+        return;
+    }
+    draw_scanned_label_styled(
+        grid,
+        x,
+        bar.y,
+        limit,
+        label,
+        loading_frame,
+        style::task_loading_base(),
+        style::task_loading_scan(),
+    );
+}
+
+/// 扫描文案的通用绘制：调用方给定窗口外/窗口内样式。
+fn draw_scanned_label_styled(
+    grid: &mut Grid,
+    x: u16,
+    y: u16,
+    limit: u16,
+    label: &str,
+    loading_frame: usize,
+    base: ratatui::style::Style,
+    scan: ratatui::style::Style,
+) -> u16 {
     let budget = limit.saturating_sub(x);
     if budget == 0 {
         return x;
@@ -449,11 +538,7 @@ fn draw_scanned_label(
         }
         // 窗口内：`head - SCAN_WINDOW < index <= head`（head 为窗口右端）。
         let in_window = index + SCAN_WINDOW >= head && index < head;
-        let cell_style = if in_window {
-            style::chat_loading_scan(loading_frame)
-        } else {
-            style::chat_loading_label()
-        };
+        let cell_style = if in_window { scan } else { base };
         grid.put_char(cell_x, y, *ch, cell_style);
         cell_x = cell_x.saturating_add(cell_width);
     }

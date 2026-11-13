@@ -654,3 +654,28 @@ fn btwlist_is_not_a_slash_command() {
         "/btwList must be removed"
     );
 }
+
+#[test]
+fn open_btw_tab_clears_stale_history_and_input_selection() {
+    use crate::app::selection::{Selection, SelectionUnit};
+
+    let (mut state, pane) = btw_pane();
+    {
+        let target = state.pane_mut_anywhere(pane).expect("pane");
+        target.lx.insert_str("main draft");
+        target.lx.select_all();
+    }
+    state.lx_selection = Some(Selection::begin_range(
+        pane,
+        (0, 0),
+        (0, 1),
+        SelectionUnit::Character,
+    ));
+    assert!(open_btw_tab(&mut state, pane));
+    assert!(state.lx_selection.is_none(), "历史区残留选区必须清掉");
+    let lx = &state.pane_anywhere(pane).expect("pane").lx;
+    assert!(
+        lx.text_selection_range().is_none(),
+        "主输入框残留选区也必须清掉"
+    );
+}

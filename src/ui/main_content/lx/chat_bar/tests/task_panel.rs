@@ -280,3 +280,67 @@ fn reloaded_message_subtracts_ask_tool_waiting_duration() {
         "重载会话的回合总耗时应扣除 ask 等待时长"
     );
 }
+
+#[test]
+fn btw_edit_shows_target_loading_above_composer_without_color_shift() {
+    let mut lx = Lx::new();
+    lx.task = Some(crate::app::state::TaskPage {
+        tab: crate::app::state::TaskTab::Btw,
+        ..Default::default()
+    });
+    lx.btw.ensure_thread("qa-1");
+    lx.btw.editing = true;
+    lx.btw
+        .active_thread_mut()
+        .expect("thread")
+        .chat
+        .status
+        .streaming = true;
+    assert!(super::super::task_loading(&lx).is_some());
+    assert!(visible(&lx), "目标运行中必须为聊天栏分配一行");
+    let (grid, bar) = draw_bar(&lx, 60);
+    let row = row_text(&grid, bar);
+    assert!(
+        row.contains(crate::ui::text::chat::LOADING_LABEL),
+        "{row:?}"
+    );
+    assert!(
+        row_styles(&grid, bar)
+            .iter()
+            .all(|style| style.fg.is_none()),
+        "BTW loading 不允许改变前景色"
+    );
+
+    lx.btw.editing = false;
+    assert!(!visible(&lx), "列表态不显示目标 loading");
+}
+
+#[test]
+fn agents_edit_shows_target_loading_above_composer() {
+    let mut lx = Lx::new();
+    let mut run = agent_run(false);
+    run.status = "running".into();
+    run.chat.status.streaming = true;
+    run.chat.loading_frame = 3;
+    lx.agents.runs.push(run);
+    lx.agents.selected_id = Some("a1".into());
+    lx.task = Some(crate::app::state::TaskPage {
+        tab: crate::app::state::TaskTab::Agents,
+        agent_edit: Some("a1".into()),
+        ..Default::default()
+    });
+    assert!(super::super::task_loading(&lx).is_some());
+    assert!(visible(&lx));
+    let (grid, bar) = draw_bar(&lx, 60);
+    let row = row_text(&grid, bar);
+    assert!(
+        row.contains(crate::ui::text::chat::LOADING_LABEL),
+        "{row:?}"
+    );
+    assert!(
+        row_styles(&grid, bar)
+            .iter()
+            .all(|style| style.fg.is_none()),
+        "Subagent loading 不允许改变前景色"
+    );
+}

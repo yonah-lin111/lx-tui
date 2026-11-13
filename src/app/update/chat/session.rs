@@ -91,6 +91,11 @@ pub fn open_subagents_page(state: &mut AppState, pane: PaneId) -> bool {
                 parent_session,
             });
     }
+    crate::app::update::clear_lx_selection_for(state, pane);
+    if let Some(target) = state.pane_mut_anywhere(pane) {
+        target.lx.clear_text_selection();
+        target.lx.clear_preview_selection();
+    }
     true
 }
 

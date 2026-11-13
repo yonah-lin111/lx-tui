@@ -886,3 +886,12 @@ wc -l src/ui/main_content/lx/task.rs \
   - `cargo test`
 - 结果：完整测试通过，0 failed；`tests/btw_verify.rs` 的 `/btwList` 步骤已改为检查常驻列表。
 - 待用户执行 `cargo run` 确认：`Shift+Enter` 的终端识别、列表/编辑态观感、鼠标双击与滚轮。
+
+## 13. 2026-11-13 修复记录
+
+- 修复 BTW / Agents 列表态搜索行硬件光标坐标写反：`draw_search_row` 返回 `(row, col)`，此前误返回 `(col, row)`，导致光标跑到详情区且无法移除。
+- 进入 BTW / Agents 面板或编辑态时清除主输入框与历史区残留选区，避免旧反显/光标残影。
+- Agents composer 左上角标记由 `Agent` 改为 `Subagent`。
+- BTW / Agents 编辑态在 composer 上方的 chat bar 行显示当前目标 loading：BTW 看线程 `is_loading()`，Agents 看当前 run `is_running()`；列表态不显示。
+- loading 沿用主 agent 的扫描窗口，但只用默认前景色（dim / bold 区分），不跑四色渐变。
+- 新增回归测试：搜索行光标坐标、主输入/历史选区清理、BTW/Agents 目标 loading 与单色约束。

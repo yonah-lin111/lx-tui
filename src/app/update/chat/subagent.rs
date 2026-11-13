@@ -401,8 +401,10 @@ pub fn open_agent_page(state: &mut AppState, pane: PaneId, agent_id: &str) -> bo
             pane,
             parent_session: session,
         });
-    if opened {
-        crate::app::update::clear_lx_selection_for(state, pane);
+    crate::app::update::clear_lx_selection_for(state, pane);
+    if let Some(target) = state.pane_mut_anywhere(pane) {
+        target.lx.clear_text_selection();
+        target.lx.clear_preview_selection();
     }
     opened
 }

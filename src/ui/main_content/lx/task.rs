@@ -168,7 +168,8 @@ pub(super) fn draw_search_row(
                 .min(rect.right());
         }
     }
-    focused.then(|| (x.saturating_add(view.cursor_col), rect.y))
+    // 与 `input::draw` 一致返回 `(row, col)`；此前误把列写在首位，硬件光标被放到详情区。
+    focused.then(|| (rect.y, x.saturating_add(view.cursor_col)))
 }
 
 /// 输出容器**正文宽度**：常驻预留最右 1 列作滚动条槽。

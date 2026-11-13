@@ -75,6 +75,12 @@ pub fn open_btw_tab(state: &mut AppState, pane: PaneId) -> bool {
         pane,
         parent_session: session_id,
     });
+    // 进入面板时清掉历史/主输入框遗留的选区，避免旧光标或单格反显留在对话区。
+    crate::app::update::clear_lx_selection_for(state, pane);
+    if let Some(target) = state.pane_mut_anywhere(pane) {
+        target.lx.clear_text_selection();
+        target.lx.clear_preview_selection();
+    }
     true
 }
 
@@ -179,6 +185,7 @@ pub fn enter_btw_edit(state: &mut AppState, pane: PaneId) -> bool {
     if !target.lx.btw.enter_edit() {
         return false;
     }
+    crate::app::update::clear_lx_selection_for(state, pane);
     crate::app::update::sync_lx_mention_root(state, pane);
     true
 }
