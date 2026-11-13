@@ -95,7 +95,7 @@ pub(crate) use slash::refresh_slash_panel;
 use slash::unknown_slash_command;
 pub use slash::{
     accept_slash_command, apply_models_changed, apply_slash_command, apply_slash_enter,
-    open_history, open_model_picker, persist_default_model,
+    open_history, open_model_picker, persist_default_model, remember_model_used,
 };
 pub use steer::on_finish_ack;
 pub use subagent::{
@@ -277,6 +277,10 @@ pub fn try_send(state: &mut AppState, pane: PaneId) -> bool {
         return false;
     };
     target.lx.clear_rewind();
+    // 钉住本轮实际使用的模型（包括窗格选择失效后的回退结果）：流启动会按
+    // `effective_selection` 重新解析，若这里不覆盖失效选择，实际发送模型可能与
+    // DB 中冻结的模型不一致。
+    target.lx.chat.selection = Some(selection.clone());
     target.lx.chat.generation_counter = generation;
     target.lx.chat.main_stopped = false;
     target.lx.chat.request = RequestState::Committing {
@@ -298,6 +302,9 @@ pub fn try_send(state: &mut AppState, pane: PaneId) -> bool {
                 variant: frozen.variant.clone(),
             },
         });
+    // 实际发送过的模型记入全局最近使用（只改 recentModels，不改 defaultModel）。
+    remember_workspace_model(state, pane, &selection);
+    remember_model_used(state, &selection);
     // 立即进入流中态：loading 行（转轮 + Esc 待命提示）从按下 Enter 起就可见，
     // 不必等首个 delta。
     refresh_lx_status(state, pane);
@@ -443,6 +450,15 @@ pub fn on_turn_committed(
         });
     if is_first_turn {
         title::maybe_schedule_session_title(state, pane, committed, &draft_for_title);
+    }
+    // 同一会话可能同时开在多个窗格：发送成功后把实际使用的模型同步给其它窗格，
+    // 避免 A 已换模型、B 仍显示旧模型。
+    if let Some(selection) = state
+        .pane_anywhere(pane)
+        .and_then(|target| target.lx.chat.selection.clone())
+        && let Some(selection) = state.models.validated_selection(Some(&selection))
+    {
+        sync_session_selection(state, pane, &committed.session_id, &selection);
     }
     true
 }
@@ -870,6 +886,81 @@ pub fn refresh_lx_status(state: &mut AppState, pane: PaneId) {
 pub fn refresh_all_lx_status(state: &mut AppState) {
     for pane in state.all_pane_ids() {
         refresh_lx_status(state, pane);
+    }
+}
+
+/// 记录某窗格所属工作区最近使用的模型；新建 lx 窗格/标签继承。
+pub fn remember_workspace_model(
+    state: &mut AppState,
+    pane: PaneId,
+    selection: &crate::config::ai::ModelSelection,
+) {
+    let Some(index) = state
+        .workspaces
+        .iter()
+        .position(|workspace| workspace.tabs.iter().any(|tab| tab.pane(pane).is_some()))
+    else {
+        return;
+    };
+    let workspace = &mut state.workspaces[index];
+    if workspace.lx_model.as_ref() != Some(selection) {
+        workspace.lx_model = Some(selection.clone());
+    }
+}
+
+/// 同一会话被多个窗格打开时，把模型选择同步到其它窗格并刷新状态行。
+///
+/// 只改绑定同一 `session_id` 的窗格；源窗格已由调用方更新。
+pub fn sync_session_selection(
+    state: &mut AppState,
+    source: PaneId,
+    session_id: &str,
+    selection: &crate::config::ai::ModelSelection,
+) {
+    let panes = state.all_pane_ids();
+    for pane in panes {
+        if pane == source {
+            continue;
+        }
+        let needs = state.pane_anywhere(pane).is_some_and(|target| {
+            target.lx.chat.session_id.as_deref() == Some(session_id)
+                && target.lx.chat.selection.as_ref() != Some(selection)
+        });
+        if !needs {
+            continue;
+        }
+        if let Some(target) = state.pane_mut_anywhere(pane) {
+            target.lx.chat.selection = Some(selection.clone());
+        }
+        remember_workspace_model(state, pane, selection);
+        refresh_lx_status(state, pane);
+    }
+}
+
+/// 刷新当前工作区**当前标签**的 lx 状态行（切/建工作区、切标签后调用）。
+///
+/// 不遍历后台标签，避免把尚未展示的一次性 `omitted_turns_notice` 刷新掉。
+pub fn refresh_active_tab_lx_status(state: &mut AppState) {
+    let panes = state.active_tab().layout.pane_ids();
+    for pane in panes {
+        refresh_lx_status(state, pane);
+    }
+}
+
+/// 模型偏好（default/recent）变化后，刷新依赖全局兜底的空白 lx 窗格。
+///
+/// 只刷无消息窗格：它们不可能持有一次性省略提示；有历史的窗格等下一次自身事件刷新。
+pub fn refresh_fallback_lx_status(state: &mut AppState) {
+    let panes = state.all_pane_ids();
+    for pane in panes {
+        let needs = state.pane_anywhere(pane).is_some_and(|target| {
+            target.view == crate::app::state::PaneView::Lx
+                && target.lx.chat.selection.is_none()
+                && target.lx.chat.messages.is_empty()
+        });
+        if needs {
+            refresh_lx_status(state, pane);
+        }
     }
 }
 

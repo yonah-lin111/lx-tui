@@ -35,8 +35,8 @@ const BUTTON_GAP: u16 = 1;
 pub(super) const MARKER_WIDTH: u16 = 1;
 /// 状态框宽度（列）：`[ ]` / `[~]` / `[x]` 均为 3。
 pub(super) const STATUS_WIDTH: u16 = 3;
-/// 聚合组树形连接符槽宽（列）：`"─┌─ "` / `" ┌─ "` / `"─├─ "` / `" ├─ "` / `" └─ "` / `" │  "` 均为 4。
-pub(super) const GROUP_BRANCH_WIDTH: u16 = 4;
+/// 聚合组树形连接符槽宽（列）：`"┌─ "` / `"├─ "` / `"└─ "` / `"│  "` / `"   "` 均为 3。
+pub(super) const GROUP_BRANCH_WIDTH: u16 = 3;
 /// 优先级徽标宽度（列）：`P0` / `P1` / `P2` / `P3` 均为 2。
 pub(super) const PRIORITY_WIDTH: u16 = 2;
 /// 单个待办条目最多占用的视觉行数；超出时在末行用 `…` 截断。
@@ -217,31 +217,38 @@ pub(super) fn row_status_x(list: Rect) -> u16 {
     list.x.saturating_add(MARKER_WIDTH).saturating_add(1)
 }
 
-/// 聚合组树形连接符起始 X 坐标（`list.x + 5`，宽 4 列）。
+/// 优先级徽标起始 X 坐标（`list.x + 6`，单条与聚合组统一）。
+pub(super) fn row_priority_x(list: Rect) -> u16 {
+    row_status_x(list)
+        .saturating_add(STATUS_WIDTH)
+        .saturating_add(1)
+}
+
+/// 聚合组树形连接符起始 X 坐标（`list.x + 9`，宽 3 列）。
 pub(super) fn row_branch_x(list: Rect) -> u16 {
-    row_status_x(list).saturating_add(STATUS_WIDTH)
-}
-
-/// 条目优先级徽标起始 X 坐标：普通单条为 `list.x + 6`，聚合组子项为 `list.x + 9`。
-pub(super) fn row_priority_x_for(list: Rect, grouped: bool) -> u16 {
-    let base = row_branch_x(list);
-    if grouped {
-        base.saturating_add(GROUP_BRANCH_WIDTH)
-    } else {
-        base.saturating_add(1)
-    }
-}
-
-/// 条目首行正文起始 X 坐标：普通单条为 `list.x + 9`，聚合组子项为 `list.x + 12`。
-pub(super) fn row_text_x_for(list: Rect, grouped: bool) -> u16 {
-    row_priority_x_for(list, grouped)
+    row_priority_x(list)
         .saturating_add(PRIORITY_WIDTH)
         .saturating_add(1)
 }
 
-/// 条目折行续行正文起始 X 坐标（对齐本条 `P0..P3` 徽标）：普通单条为 `list.x + 6`，聚合组子项为 `list.x + 9`。
+/// 条目首行正文起始 X 坐标：普通单条为 `list.x + 9`（无连接符），聚合组子项为 `list.x + 12`。
+pub(super) fn row_text_x_for(list: Rect, grouped: bool) -> u16 {
+    let base = row_branch_x(list);
+    if grouped {
+        base.saturating_add(GROUP_BRANCH_WIDTH)
+    } else {
+        base
+    }
+}
+
+/// 条目折行续行正文起始 X 坐标：普通单条保持 `list.x + 6`（与 `P(n)` 左对齐），
+/// 聚合组子项为 `list.x + 12`（与首行正文对齐）。
 pub(super) fn row_cont_x_for(list: Rect, grouped: bool) -> u16 {
-    row_priority_x_for(list, grouped)
+    if grouped {
+        row_text_x_for(list, true)
+    } else {
+        row_priority_x(list)
+    }
 }
 
 /// 条目第 `offset` 个可见行的正文起始 X 坐标。
@@ -261,12 +268,6 @@ pub(super) fn text_width_for(list: Rect, grouped: bool) -> usize {
 /// 条目折行续行正文可用显示列数（至少 1）。
 pub(super) fn cont_width_for(list: Rect, grouped: bool) -> usize {
     usize::from(list.right().saturating_sub(row_cont_x_for(list, grouped))).max(1)
-}
-
-/// 普通单条优先级徽标起始 X 坐标（`list.x + 6`）。
-#[cfg(test)]
-fn row_priority_x(list: Rect) -> u16 {
-    row_priority_x_for(list, false)
 }
 
 /// 普通单条首行正文起始 X 坐标（`list.x + 9`）。
@@ -436,6 +437,10 @@ pub fn row_at(panel: Rect, state: &AppState, column: u16, row: u16) -> Option<us
 /// 只有状态锚点子项（独立单条或聚合组 `offset == (count - 1) / 2`）的首行承载状态框。
 pub fn status_at(panel: Rect, state: &AppState, column: u16, row: u16) -> Option<usize> {
     let visible = layout_visible_items(panel, state);
+    // 窄面板下状态框列可能落到列表右缘之外；必须先钳在列表内，避免滚条/边框列误命中。
+    if !visible.list.contains((column, row).into()) {
+        return None;
+    }
     let sx = row_status_x(visible.list);
     if column < sx || column >= sx.saturating_add(STATUS_WIDTH) {
         return None;
@@ -447,19 +452,29 @@ pub fn status_at(panel: Rect, state: &AppState, column: u16, row: u16) -> Option
     Some(item.display)
 }
 
-/// 命中某行的优先级徽标区域（返回显示下标；幽灵行不命中）。
+/// 命中某行的优先级徽标区域（返回**徽标归属条目的显示下标**；只有锚点行首行命中）。
 ///
-/// 只有条目的**首行**承载徽标：单条命中 `list.x + 6..8`，聚合组子项命中 `list.x + 9..11`。
+/// 徽标统一位于 `list.x + 6..8`，聚合组只在状态锚点行绘制一次并取组内最高优先级。
 pub fn priority_at(panel: Rect, state: &AppState, column: u16, row: u16) -> Option<usize> {
     let layout = layout_visible_items(panel, state);
     if !layout.list.contains((column, row).into()) {
         return None;
     }
     let item = layout.item_at(row)?;
-    list_index(state, item.display)?;
-    let px = row_priority_x_for(layout.list, item.role.is_grouped());
-    (row == item.y && column >= px && column < px.saturating_add(PRIORITY_WIDTH))
-        .then_some(item.display)
+    if row != item.y || !item.role.is_status_anchor() {
+        return None;
+    }
+    let px = row_priority_x(layout.list);
+    if column < px || column >= px.saturating_add(PRIORITY_WIDTH) {
+        return None;
+    }
+    let ghost = state
+        .todo
+        .editing()
+        .filter(|edit| edit.target.is_none())
+        .map(|edit| edit.at);
+    let total = state.todo.len() + usize::from(ghost.is_some());
+    item::group_priority(state, item.display, ghost, total).map(|badge| badge.display)
 }
 
 /// 显示下标 → 列表下标；落在幽灵行上返回 None（它不是任何条目）。
@@ -511,7 +526,7 @@ pub fn edit_input_char_at(panel: Rect, state: &AppState, column: u16, row: u16) 
 /// 拖拽选区时将鼠标坐标钳制到正在编辑的 Todo 文本区边界并换算为全文字符索引。
 ///
 /// 行号钳制到该编辑项的可见行范围 `[item.y, item.y + item.rendered_rows - 1]`，
-/// 列号落入该行左侧缩进区（单条 9/6 列、聚合组子项 12/9 列）时钳为 `0`（行首），越过列表右缘时钳为 `u16::MAX`（行尾）。
+/// 列号落入该行左侧缩进区（单条 9/6 列、聚合组子项 12/12 列）时钳为 `0`（行首），越过列表右缘时钳为 `u16::MAX`（行尾）。
 pub fn edit_input_drag_char_at(
     panel: Rect,
     state: &AppState,

@@ -443,8 +443,11 @@ impl Persistence {
                 );
                 true
             }
-            // 把当前选择的模型写回 `ai.json` 的 `defaultModel`（下次启动沿用）。
-            Effect::SaveDefaultModel { selection } => {
+            // 把模型偏好写回 `ai.json`：`Some` 覆盖对应字段后一次原子写盘。
+            Effect::SaveModelChoice {
+                default_model,
+                recent,
+            } => {
                 let path = match crate::config::ai::ai_config_path() {
                     Ok(path) => path,
                     Err(error) => {
@@ -456,9 +459,18 @@ impl Persistence {
                     Ok(current) => {
                         let mut settings =
                             current.unwrap_or_else(crate::config::ai::AiSettings::empty);
-                        settings.default_model = Some(selection);
-                        if let Err(error) = crate::config::ai::save_ai(&path, &settings) {
-                            tracing::warn!(%error, "saving default model failed");
+                        let mut changed = false;
+                        if let Some(default_model) = default_model {
+                            settings.default_model = Some(default_model);
+                            changed = true;
+                        }
+                        if let Some(recent) = recent {
+                            settings.recent_models = recent;
+                            changed = true;
+                        }
+                        if changed && let Err(error) = crate::config::ai::save_ai(&path, &settings)
+                        {
+                            tracing::warn!(%error, "saving model choice failed");
                         }
                     }
                     Err(error) => tracing::warn!(%error, "ai config load failed"),

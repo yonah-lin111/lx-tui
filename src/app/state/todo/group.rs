@@ -29,6 +29,9 @@ impl TodoGroupRole {
     }
 
     /// 是否承载整组唯一的状态框 `[ ]`（单条恒为真；聚合组固定在 `(count - 1) / 2`）。
+    ///
+    /// 注意：app 层只按真实 items 计算；展示层存在组内新建幽灵槽，锚点必须以
+    /// `ui::right_panel::todo::item::DisplayGroupRole::is_status_anchor` 为准。
     pub fn is_status_anchor(&self) -> bool {
         match self {
             Self::Single => true,

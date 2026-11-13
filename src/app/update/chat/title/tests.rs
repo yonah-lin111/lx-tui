@@ -61,6 +61,7 @@ fn sample_models(with_title_model: bool) -> ModelsSnapshot {
                 model: "chat-main".to_string(),
                 variant: None,
             }),
+            recent_models: Vec::new(),
             title_summary: with_title_model.then(|| ModelSelection {
                 provider: "p".to_string(),
                 model: "title-fast".to_string(),

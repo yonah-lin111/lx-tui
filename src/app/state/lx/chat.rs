@@ -32,6 +32,9 @@ pub use tool_view::{
     SearchMatchView, SubagentDetailView, ToolDetailView, WebSearchDetailView,
 };
 
+/// 最近使用模型的保留条数（对齐 opencode `recentModels` 的 10 条上限）。
+pub const MODEL_RECENT_LIMIT: usize = 10;
+
 /// 模型配置快照：设置页保存后由事件层更新；发送时冻结成 `FrozenModel`。
 #[derive(Debug, Clone, Default, PartialEq)]
 pub struct ModelsSnapshot {
@@ -55,7 +58,56 @@ impl ModelsSnapshot {
         self.validated_selection(self.settings.recap_summary.as_ref())
     }
 
-    fn validated_selection(&self, selection: Option<&ModelSelection>) -> Option<ModelSelection> {
+    /// 无窗格选择时的兜底：`defaultModel` → `recentModels`（最近优先、逐条校验）
+    /// → 第一个可用模型。
+    pub fn fallback_selection(&self) -> Option<ModelSelection> {
+        if let Some(selection) = self.default_selection() {
+            return Some(selection);
+        }
+        if let Some(selection) = self
+            .settings
+            .recent_models
+            .iter()
+            .find_map(|selection| self.validated_selection(Some(selection)))
+        {
+            return Some(selection);
+        }
+        self.first_available_selection()
+    }
+
+    /// 第一个可用模型：已启用 + 有 Key 的供应商下按配置顺序取第一个模型。
+    fn first_available_selection(&self) -> Option<ModelSelection> {
+        crate::app::state::lx::slash::ModelPicker::candidates(&self.settings)
+            .into_iter()
+            .next()
+            .map(|candidate| candidate.selection)
+    }
+
+    /// 记录一次实际使用的模型：同 `provider/model` 去重后移到队首（覆盖最新 variant），
+    /// 截断到 [`MODEL_RECENT_LIMIT`] 条。返回是否有变化（无变化不触发落盘）。
+    pub fn remember_model(&mut self, selection: &ModelSelection) -> bool {
+        let mut next = Vec::with_capacity(MODEL_RECENT_LIMIT);
+        next.push(selection.clone());
+        for existing in &self.settings.recent_models {
+            if existing.provider == selection.provider && existing.model == selection.model {
+                continue;
+            }
+            if next.len() >= MODEL_RECENT_LIMIT {
+                break;
+            }
+            next.push(existing.clone());
+        }
+        if self.settings.recent_models == next {
+            return false;
+        }
+        self.settings.recent_models = next;
+        true
+    }
+
+    pub(crate) fn validated_selection(
+        &self,
+        selection: Option<&ModelSelection>,
+    ) -> Option<ModelSelection> {
         let selection = selection?;
         let provider = self.settings.providers.get(&selection.provider)?;
         if !self
@@ -65,7 +117,7 @@ impl ModelsSnapshot {
         {
             return None;
         }
-        let model = provider.models.get(&selection.model)?;
+        provider.models.get(&selection.model)?;
         let has_key = provider
             .options
             .api_key
@@ -74,12 +126,8 @@ impl ModelsSnapshot {
         if !has_key {
             return None;
         }
-        // 选择的 variant 必须存在（或无 variants 直接用默认）。
-        let variant_ok = selection
-            .variant
-            .as_ref()
-            .is_none_or(|variant| model.variants.contains_key(variant));
-        variant_ok.then(|| selection.clone())
+        // 失效 variant 不拖垮整个模型：交给 normalize 回落到模型默认等级。
+        Some(self.normalize_selection(selection.clone()))
     }
 
     /// 为 Prompt 模板块 `/title` 解析有效模型：优先 `titleSummary`，回退 `defaultModel`。
@@ -911,21 +959,19 @@ impl LxChat {
             .push((message_index, step_index, next));
     }
 
-    /// 当前选择；无窗格级选择时回落配置默认。统一规范化：显式 variant 失效或缺失时
-    /// 回落模型默认思考等级，否则「只配了模型默认等级」的模型永远不会带上思考参数。
+    /// 当前选择；无有效窗格级选择时回落 `defaultModel` → `recentModels` → 第一个可用
+    /// 模型。统一规范化：显式 variant 失效或缺失时回落模型默认思考等级，否则「只配了
+    /// 模型默认等级」的模型永远不会带上思考参数。
     pub fn effective_selection(&self, models: &ModelsSnapshot) -> Option<ModelSelection> {
-        // 窗格选择若已失效（provider/model 被删）回落默认。
+        // 窗格选择必须与 fallback 使用同一套可发送校验：供应商启用、模型存在、有 Key；
+        // variant 失效只回落默认等级，不丢弃模型。失效窗格选择不得压住回退链。
         if let Some(selection) = &self.selection
-            && models
-                .settings
-                .providers
-                .get(&selection.provider)
-                .is_some_and(|provider| provider.models.contains_key(&selection.model))
+            && let Some(selection) = models.validated_selection(Some(selection))
         {
-            return Some(models.normalize_selection(selection.clone()));
+            return Some(selection);
         }
         models
-            .default_selection()
+            .fallback_selection()
             .map(|selection| models.normalize_selection(selection))
     }
 

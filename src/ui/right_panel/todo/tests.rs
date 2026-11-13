@@ -745,6 +745,54 @@ fn priority_badges_have_distinct_backgrounds_and_high_contrast_foregrounds() {
 }
 
 #[test]
+fn standalone_new_ghost_row_does_not_draw_dead_priority_badge() {
+    let mut state = AppState::demo();
+    let area = panel(44);
+    let today = state.todo.today_date().to_string();
+    state.todo.replace(vec![TodoRecord::new_on(
+        &today,
+        "existing",
+        TodoStatus::Todo,
+        TodoPriority::P1,
+        0,
+    )]);
+    assert!(crate::app::update::begin_todo_edit(
+        &mut state,
+        crate::app::state::TodoEditTarget::New
+    ));
+    let (buffer, _) = render_panel(&state, area);
+    let list = list_rect(area);
+    let px = row_priority_x(list);
+    let ghost_y = list.y + 1;
+    for x in px..px.saturating_add(PRIORITY_WIDTH) {
+        assert!(
+            buffer[(x, ghost_y)].symbol().trim().is_empty(),
+            "独立新建幽灵行没有可点击的归属条目，不得绘制死 P1 徽标"
+        );
+    }
+}
+
+#[test]
+fn status_hit_does_not_escape_list_bounds() {
+    let mut state = AppState::demo();
+    let area = Rect::new(0, 0, 12, 10);
+    let today = state.todo.today_date().to_string();
+    state.todo.replace(vec![TodoRecord::new_on(
+        &today,
+        "row",
+        TodoStatus::Todo,
+        TodoPriority::P1,
+        0,
+    )]);
+    let list = list_rect(area);
+    assert_eq!(
+        status_at(area, &state, list.right(), list.y),
+        None,
+        "列表右缘之外的状态框列不得命中"
+    );
+}
+
+#[test]
 fn ghost_row_before_selected_keeps_selection_highlight_aligned_and_scrollbar_counts_ghost() {
     let mut state = AppState::demo();
     let area = panel(44);

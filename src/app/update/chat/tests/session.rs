@@ -138,3 +138,120 @@ fn effective_selection_applies_model_default_variant() {
     let selection = chat.effective_selection(&models).expect("pane selection");
     assert_eq!(selection.variant.as_deref(), Some("high"));
 }
+
+/// `/resume` 绑定会话模型后记入最近使用，但不改 `defaultModel`。
+#[test]
+fn session_loaded_records_recent_model_without_touching_default() {
+    let mut state = ready_state("x");
+    state.models.settings.recent_models.clear();
+    state.models.settings.default_model = None;
+    state.effects.clear();
+    let pane = focus_pane(&state);
+    let selection = ModelSelection {
+        provider: "p".into(),
+        model: "m".into(),
+        variant: Some("high".into()),
+    };
+    assert!(on_session_loaded(
+        &mut state,
+        pane,
+        "sess-recent",
+        &[],
+        Some(selection.clone())
+    ));
+    assert_eq!(
+        state.models.settings.recent_models.first(),
+        Some(&selection),
+        "恢复会话模型进入最近使用队首"
+    );
+    assert_eq!(
+        state.workspaces[0].lx_model,
+        Some(selection.clone()),
+        "恢复会话模型更新本工作区记忆"
+    );
+    assert_eq!(
+        state.models.settings.default_model, None,
+        "defaultModel 不被 /resume 改写（测试前也不是同一值）"
+    );
+    assert!(
+        state.effects.iter().any(|effect| matches!(
+            effect,
+            crate::app::effects::Effect::SaveModelChoice {
+                default_model: None,
+                recent: Some(recent),
+            } if recent.first() == Some(&selection)
+        )),
+        "只落盘 recentModels：{:?}",
+        state.effects
+    );
+}
+
+/// 同一 session 被两个窗格打开时，模型选择同步到另一窗格。
+#[test]
+fn session_model_syncs_to_other_panes_viewing_same_session() {
+    let mut state = ready_state("x");
+    let first = focus_pane(&state);
+    let second = state
+        .active_tab_mut()
+        .split_pane(first, ratatui::layout::Direction::Horizontal)
+        .expect("split");
+    let old = ModelSelection {
+        provider: "p".into(),
+        model: "m".into(),
+        variant: None,
+    };
+    let next = ModelSelection {
+        provider: "p".into(),
+        model: "m2".into(),
+        variant: None,
+    };
+    for pane in [first, second] {
+        let target = state.pane_mut_anywhere(pane).expect("pane");
+        target.lx.chat.session_id = Some("sess-sync".into());
+        target.lx.chat.selection = Some(old.clone());
+    }
+    crate::app::update::sync_session_selection(&mut state, first, "sess-sync", &next);
+    assert_eq!(
+        state
+            .pane_anywhere(second)
+            .expect("second")
+            .lx
+            .chat
+            .selection,
+        Some(next),
+        "同会话其它窗格必须跟随发送/恢复后的模型"
+    );
+}
+
+/// `/resume` 的会话模型已失效时不得污染 recent / 工作区记忆。
+#[test]
+fn session_loaded_skips_invalid_model_in_recent() {
+    let mut state = ready_state("x");
+    state.models.settings.recent_models.clear();
+    state.models.settings.default_model = None;
+    state.effects.clear();
+    let pane = focus_pane(&state);
+    let invalid = ModelSelection {
+        provider: "deleted".into(),
+        model: "gone".into(),
+        variant: None,
+    };
+    assert!(on_session_loaded(
+        &mut state,
+        pane,
+        "sess-invalid",
+        &[],
+        Some(invalid)
+    ));
+    assert!(
+        state.models.settings.recent_models.is_empty(),
+        "失效会话模型不得进入 recent"
+    );
+    assert!(
+        state
+            .effects
+            .iter()
+            .all(|effect| !matches!(effect, crate::app::effects::Effect::SaveModelChoice { .. })),
+        "失效模型不触发落盘"
+    );
+}

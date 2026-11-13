@@ -222,8 +222,8 @@ pub fn on_session_loaded_full(
     // 切换会话：未执行的命令与排队项不得漂移到新会话。
     target.lx.chat.pending_shells.clear();
     target.lx.chat.queue.clear();
-    if let Some(selection) = selection {
-        target.lx.chat.selection = Some(selection);
+    if let Some(selection) = selection.as_ref() {
+        target.lx.chat.selection = Some(selection.clone());
     } else if session_changed {
         // `/resume` 到一个没有模型列的会话（如纯本地命令会话）：必须清掉上一会话残留的
         // 选择，否则状态行显示的模型与历史实际对应的模型脱节。同会话重载保留现有选择。
@@ -272,6 +272,13 @@ pub fn on_session_loaded_full(
     // 先克隆视图，避免在可变借用期间再借 `state`。
     let restored_messages = target.lx.chat.messages.clone();
     refresh_lx_status(state, pane);
+    // `/resume` 绑定会话模型即视为一次实际使用：只记 recentModels，不改 defaultModel。
+    // 先按可发送口径过滤：供应商停用/无 Key/variant 失效的旧会话不得污染 recent。
+    if let Some(selection) = state.models.validated_selection(selection.as_ref()) {
+        super::remember_workspace_model(state, pane, &selection);
+        super::remember_model_used(state, &selection);
+        super::sync_session_selection(state, pane, session_id, &selection);
+    }
     super::restore_plan(state, pane, &restored_messages);
     // 历史会话：spawn 卡片的状态可从已加载的汇报行回填；置位后由事件循环对账。
     super::subagent::request_subagent_cards_refresh(state, pane);

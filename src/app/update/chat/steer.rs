@@ -241,9 +241,9 @@ pub fn promote_after_finish(state: &mut AppState, pane: PaneId) -> bool {
         .lx
         .chat
         .effective_selection(&state.models)
-        .and_then(|selection| FrozenModel::resolve(&state.models, &selection).map(|m| (m, false)))
-        .or_else(|| FrozenModel::resolve(&state.models, &fallback_selection).map(|m| (m, true)));
-    let Some((current, used_fallback)) = resolved else {
+        .and_then(|selection| FrozenModel::resolve(&state.models, &selection))
+        .or_else(|| FrozenModel::resolve(&state.models, &fallback_selection));
+    let Some(current) = resolved else {
         restore_pending_to_input(state, pane);
         show_lx_hint(state, pane, InputHintLevel::Error, text::LX_CHAT_NO_MODEL);
         return false;
@@ -261,13 +261,17 @@ pub fn promote_after_finish(state: &mut AppState, pane: PaneId) -> bool {
         model: current.model,
         variant: current.variant,
     };
+    let used_selection = crate::config::ai::ModelSelection {
+        provider: model.provider.clone(),
+        model: model.model.clone(),
+        variant: model.variant.clone(),
+    };
     let generation = next_generation(state, pane);
     let Some(target) = state.pane_mut_anywhere(pane) else {
         return false;
     };
-    if used_fallback && target.lx.chat.selection.is_none() {
-        target.lx.chat.selection = Some(fallback_selection);
-    }
+    // 钉住本轮实际使用的模型（含回退结果），与 `BeginChatTurn` 的冻结模型一致。
+    target.lx.chat.selection = Some(used_selection.clone());
     target.lx.chat.generation_counter = generation;
     target.lx.chat.promoting_steers = batch.consumed;
     target.lx.chat.main_stopped = false;
@@ -287,6 +291,9 @@ pub fn promote_after_finish(state: &mut AppState, pane: PaneId) -> bool {
             attachments: batch.attachments,
             model,
         });
+    // 提升后的轮次实际使用该模型：记入 recentModels（不改 defaultModel）。
+    super::remember_workspace_model(state, pane, &used_selection);
+    super::remember_model_used(state, &used_selection);
     refresh_lx_status(state, pane);
     true
 }

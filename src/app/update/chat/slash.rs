@@ -337,7 +337,7 @@ pub(crate) fn finish_model_selection(
                 .map(|sel| models.normalize_selection(sel.clone()))
         });
         target.lx.slash = None;
-        target.lx.chat.selection = Some(selection.clone());
+        target.lx.chat.selection = Some(normalized.clone());
         // 切模型时旧分子清空。
         target.lx.chat.input_tokens_reset();
 
@@ -430,7 +430,8 @@ pub(crate) fn finish_model_selection(
         }
     }
     // 持久化：写回 `ai.json` defaultModel（关闭重开仍是这个模型）。
-    persist_default_model(state, &selection);
+    persist_default_model(state, &normalized);
+    super::remember_workspace_model(state, pane, &normalized);
     super::refresh_lx_status(state, pane);
 }
 
@@ -516,21 +517,49 @@ pub fn apply_models_changed(
     changed || cleaned
 }
 
-/// 把窗格当前选择的模型写回 `ai.json` 的 `defaultModel`（下次启动沿用）。
+/// 把窗格当前选择的模型写回 `ai.json`：`defaultModel` + `recentModels` 一次落盘。
 ///
-/// 只在选择变化或首次采用默认时入队，避免重复落盘。
+/// 只在默认模型或最近使用列表变化时入队，避免重复落盘。
 pub fn persist_default_model(state: &mut AppState, selection: &ModelSelection) -> bool {
-    if state.models.settings.default_model.as_ref() == Some(selection) {
+    // 只写可发送的选择：供应商启用、模型存在、有 Key；variant 失效回落默认等级。
+    let Some(selection) = state.models.validated_selection(Some(selection)) else {
+        return false;
+    };
+    let mut changed = false;
+    if state.models.settings.default_model.as_ref() != Some(&selection) {
+        state.models.settings.default_model = Some(selection.clone());
+        changed = true;
+    }
+    changed |= state.models.remember_model(&selection);
+    if !changed {
         return false;
     }
     state
         .effects
-        .push(crate::app::effects::Effect::SaveDefaultModel {
-            selection: selection.clone(),
+        .push(crate::app::effects::Effect::SaveModelChoice {
+            default_model: Some(selection),
+            recent: Some(state.models.settings.recent_models.clone()),
         });
-    // 快照同步更新：内存立即生效，避免同一会话内再次入队。
-    state.models.settings.default_model = Some(selection.clone());
+    // 其它依赖全局兜底的空白窗格必须同步状态行，否则会显示旧模型、发送却走新 recent。
+    super::refresh_fallback_lx_status(state);
     true
+}
+
+/// 记录一次实际使用的模型（发送/恢复会话）；不改 `defaultModel`。
+pub fn remember_model_used(state: &mut AppState, selection: &ModelSelection) {
+    let Some(selection) = state.models.validated_selection(Some(selection)) else {
+        return;
+    };
+    if !state.models.remember_model(&selection) {
+        return;
+    }
+    state
+        .effects
+        .push(crate::app::effects::Effect::SaveModelChoice {
+            default_model: None,
+            recent: Some(state.models.settings.recent_models.clone()),
+        });
+    super::refresh_fallback_lx_status(state);
 }
 
 /// 命令采纳：`/model`、`/resume`、`/new` 的命令文本不被发送。

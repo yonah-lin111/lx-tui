@@ -33,33 +33,33 @@ fn two_and_three_item_groups_render_shared_status_and_tree_connectors() {
     let (buffer, _) = render_panel(&state, area);
     let list = list_rect(area);
 
-    // 2 条聚合组（g2）：anchor = (2 - 1) / 2 = 0，首行画 `[ ]─┌─ P1 `，次行画 `    └─ P2 `
+    // 2 条聚合组（g2）：anchor = (2 - 1) / 2 = 0，首行画 `[ ] P1 ┌─ `，次行只画 `└─ `
     let row0 = row_text(&buffer, list, list.y);
     let row1 = row_text(&buffer, list, list.y + 1);
     assert!(
-        row0.starts_with("❯ [ ]─┌─ P1 login api"),
-        "2 条组首行应带共享状态框与 ─┌─: {row0:?}"
+        row0.starts_with("❯ [ ] P1 ┌─ login api"),
+        "2 条组首行应带共享状态框、组徽标与 ┌─: {row0:?}"
     );
     assert!(
-        row1.starts_with("      └─ P2 login test"),
-        "2 条组末行状态槽应留空并画 └─: {row1:?}"
+        row1.starts_with("         └─ login test"),
+        "2 条组末行状态槽与徽标槽应留空并画 └─: {row1:?}"
     );
 
-    // 3 条聚合组（g3）：anchor = (3 - 1) / 2 = 1，中行画 `[~]─├─ P1 `
+    // 3 条聚合组（g3）：anchor = (3 - 1) / 2 = 1，中行画 `[~] P0 ├─ `（组内最高 P0）
     let row2 = row_text(&buffer, list, list.y + 2);
     let row3 = row_text(&buffer, list, list.y + 3);
     let row4 = row_text(&buffer, list, list.y + 4);
     assert!(
-        row2.starts_with("      ┌─ P0 schema"),
-        "3 条组首行应画 ┌─: {row2:?}"
+        row2.starts_with("         ┌─ schema"),
+        "3 条组首行只画 ┌─: {row2:?}"
     );
     assert!(
-        row3.starts_with("  [~]─├─ P1 migrate"),
-        "3 条组中行应带共享状态框与 ─├─: {row3:?}"
+        row3.starts_with("  [~] P0 ├─ migrate"),
+        "3 条组中行应带共享状态框、组内最高 P0 与 ├─: {row3:?}"
     );
     assert!(
-        row4.starts_with("      └─ P2 docs"),
-        "3 条组末行应画 └─: {row4:?}"
+        row4.starts_with("         └─ docs"),
+        "3 条组末行只画 └─: {row4:?}"
     );
 
     // 已完成聚合组的连接符使用 muted 但不叠加 CROSSED_OUT 删除线，保证框线清晰。
@@ -70,7 +70,7 @@ fn two_and_three_item_groups_render_shared_status_and_tree_connectors() {
             .with_group_id(Some("gd".into())),
     ]);
     let (done_buf, _) = render_panel(&state, area);
-    let conn_cell = &done_buf[(row_branch_x(list) + 1, list.y)];
+    let conn_cell = &done_buf[(row_branch_x(list), list.y)];
     assert_eq!(conn_cell.symbol(), "┌");
     assert!(conn_cell.modifier.contains(Modifier::DIM));
     assert!(
@@ -101,18 +101,18 @@ fn grouped_wrapped_item_draws_vertical_trunk_on_non_last_and_blank_on_last() {
     assert_eq!(layout.items[1].rendered_rows, 2, "末项折为 2 行");
 
     let (buffer, _) = render_panel(&state, area);
-    // 非末项（y = list.y）续行（y = list.y + 1）：连接符槽画 " │  "，正文从 list.x + 9 起
+    // 非末项（y = list.y）续行（y = list.y + 1）：连接符槽画 "│  "，正文从 list.x + 12 起
     let row0_cont = row_text(&buffer, list, list.y + 1);
     assert!(
-        row0_cont.starts_with("      │  tail1"),
-        "非末项折行续行必须延续竖线 │ 并对齐本条 P1 列: {row0_cont:?}"
+        row0_cont.starts_with("         │  tail1"),
+        "非末项折行续行必须延续竖线 │ 并与首行正文对齐: {row0_cont:?}"
     );
 
-    // 末项（y = list.y + 2）续行（y = list.y + 3）：连接符槽画 4 列空格，正文从 list.x + 9 起
+    // 末项（y = list.y + 2）续行（y = list.y + 3）：连接符槽画 3 列空格，正文从 list.x + 12 起
     let row1_cont = row_text(&buffer, list, list.y + 3);
     assert!(
-        row1_cont.starts_with("         tail2"),
-        "末项折行续行连接符槽必须留空并对齐本条 P2 列: {row1_cont:?}"
+        row1_cont.starts_with("            tail2"),
+        "末项折行续行连接符槽必须留空并与首行正文对齐: {row1_cont:?}"
     );
 }
 
@@ -133,11 +133,10 @@ fn mixed_single_and_grouped_items_align_status_and_hit_priority_badges_accuratel
 
     let list = list_rect(area);
     let sx = row_status_x(list);
-    let single_px = row_priority_x_for(list, false);
-    let group_px = row_priority_x_for(list, true);
+    let px = row_priority_x(list);
     assert_eq!(sx, list.x + 2);
-    assert_eq!(single_px, list.x + 6);
-    assert_eq!(group_px, list.x + 9);
+    assert_eq!(px, list.x + 6);
+    assert_eq!(row_branch_x(list), list.x + 9);
 
     // 状态框命中：单条（row 0）与 3 条组的锚点（row 2，offset = 1）命中，非锚点（row 1, row 3）不命中。
     assert_eq!(status_at(area, &state, sx, list.y), Some(0));
@@ -147,21 +146,190 @@ fn mixed_single_and_grouped_items_align_status_and_hit_priority_badges_accuratel
     assert_eq!(status_at(area, &state, sx, list.y + 2), Some(2));
     assert_eq!(status_at(area, &state, sx, list.y + 3), None);
 
-    // 优先级徽标命中：单条命中 list.x + 6..8，组内子项命中 list.x + 9..11。
-    assert_eq!(priority_at(area, &state, single_px, list.y), Some(0));
-    assert_eq!(priority_at(area, &state, group_px, list.y), None);
-    for (display, y_off) in [(1usize, 1u16), (2, 2), (3, 3)] {
+    // 优先级徽标命中：单条与组锚点共用 list.x + 6..8。
+    // 组徽标取组内最高优先级 grp-0（display 1），点击锚点行返回徽标来源而非被点行。
+    assert_eq!(priority_at(area, &state, px, list.y), Some(0));
+    assert_eq!(priority_at(area, &state, px + 1, list.y), Some(0));
+    assert_eq!(
+        priority_at(area, &state, px + PRIORITY_WIDTH, list.y),
+        None,
+        "徽标右缘之外不得命中"
+    );
+    assert_eq!(
+        priority_at(area, &state, px, list.y + 1),
+        None,
+        "组内非锚点行不绘制徽标，不得命中"
+    );
+    assert_eq!(
+        priority_at(area, &state, px, list.y + 2),
+        Some(1),
+        "锚点行必须返回组内最高优先级条目的 display"
+    );
+    assert_eq!(
+        priority_at(area, &state, row_branch_x(list), list.y + 2),
+        None,
+        "连接符列不得误命中优先级"
+    );
+    assert_eq!(
+        priority_at(area, &state, px, list.y + 3),
+        None,
+        "组内非锚点行不绘制徽标，不得命中"
+    );
+
+    let (buffer, _) = render_panel(&state, area);
+    assert!(
+        row_text(&buffer, list, list.y + 2).starts_with("  [ ] P1 ├─ grp-1"),
+        "锚点行必须显示组内最高 P1 而非自身 P2: {:?}",
+        row_text(&buffer, list, list.y + 2)
+    );
+    assert!(
+        row_text(&buffer, list, list.y + 1).starts_with("         ┌─ grp-0"),
+        "非锚点行不得重复绘制徽标: {:?}",
+        row_text(&buffer, list, list.y + 1)
+    );
+}
+
+#[test]
+fn group_priority_picks_highest_and_breaks_ties_by_first_member() {
+    let mut state = AppState::demo();
+    let today = state.todo.today_date().to_string();
+    state.todo.replace(vec![
+        TodoRecord::new_on(&today, "grp-0", TodoStatus::Todo, TodoPriority::P2, 0)
+            .with_group_id(Some("g".into())),
+        TodoRecord::new_on(&today, "grp-1", TodoStatus::Todo, TodoPriority::P1, 1)
+            .with_group_id(Some("g".into())),
+        TodoRecord::new_on(&today, "grp-2", TodoStatus::Todo, TodoPriority::P1, 2)
+            .with_group_id(Some("g".into())),
+    ]);
+
+    let total = state.todo.len();
+    for display in 0..total {
+        let badge = item::group_priority(&state, display, None, total).expect("group badge");
         assert_eq!(
-            priority_at(area, &state, single_px, list.y + y_off),
-            None,
-            "组内子项在单条优先级列（+6..+8）是连接符，不应误命中优先级"
-        );
-        assert_eq!(
-            priority_at(area, &state, group_px, list.y + y_off),
-            Some(display),
-            "组内子项在 +9..+11 列必须准确命中优先级"
+            (badge.display, badge.priority),
+            (1, TodoPriority::P1),
+            "组内最高优先级并列时必须归属最靠前的一条（display {display}）"
         );
     }
+
+    // 组首后插入幽灵行：显示序列 [grp-0, ghost, grp-1, grp-2]，幽灵行无落库优先级、不参与比较。
+    assert!(crate::app::update::begin_todo_edit(
+        &mut state,
+        crate::app::state::TodoEditTarget::After(0)
+    ));
+    let total = state.todo.len() + 1;
+    let badge = item::group_priority(&state, 1, Some(1), total).expect("group badge");
+    assert_eq!(
+        (badge.display, badge.priority),
+        (2, TodoPriority::P1),
+        "幽灵行必须跳过，徽标仍归属最靠前的 P1 实体条目"
+    );
+}
+
+#[test]
+fn clicking_group_badge_cycles_and_selects_badge_owner() {
+    let mut state = AppState::demo();
+    let area = panel(44);
+    let today = state.todo.today_date().to_string();
+    state.todo.replace(vec![
+        TodoRecord::new_on(&today, "owner", TodoStatus::Todo, TodoPriority::P0, 0)
+            .with_group_id(Some("g".into())),
+        TodoRecord::new_on(&today, "anchor", TodoStatus::Todo, TodoPriority::P1, 1)
+            .with_group_id(Some("g".into())),
+        TodoRecord::new_on(&today, "tail", TodoStatus::Todo, TodoPriority::P2, 2)
+            .with_group_id(Some("g".into())),
+    ]);
+    let list = list_rect(area);
+    let px = row_priority_x(list);
+    // 3 条组锚点在中间行；徽标归属组内最高 P0 的 display 0。
+    let owner = priority_at(area, &state, px, list.y + 1).expect("badge hit");
+    assert_eq!(owner, 0, "组徽标归属最高优先级条目");
+    assert!(crate::app::update::click_todo_priority(&mut state, owner));
+    assert_eq!(
+        state.todo.items()[0].priority,
+        TodoPriority::P1,
+        "点击徽标必须循环徽标归属条目，而不是锚点自身"
+    );
+    assert_eq!(
+        state.todo.items()[1].priority,
+        TodoPriority::P1,
+        "锚点条目不得被误改"
+    );
+    assert_eq!(state.todo.selected(), Some(0), "点击后选中徽标归属条目");
+}
+
+#[test]
+fn clicking_group_badge_with_ghost_commits_then_updates_owner() {
+    let mut state = AppState::demo();
+    let area = panel(44);
+    let today = state.todo.today_date().to_string();
+    state.todo.replace(vec![
+        TodoRecord::new_on(&today, "first", TodoStatus::Todo, TodoPriority::P0, 0)
+            .with_group_id(Some("g".into())),
+        TodoRecord::new_on(&today, "second", TodoStatus::Todo, TodoPriority::P1, 1)
+            .with_group_id(Some("g".into())),
+    ]);
+    assert!(crate::app::update::begin_todo_edit(
+        &mut state,
+        crate::app::state::TodoEditTarget::After(0)
+    ));
+    let list = list_rect(area);
+    let px = row_priority_x(list);
+    // 显示序列 [first, ghost, second]：锚点落在 ghost（row 1），但徽标归属 first。
+    let owner = priority_at(area, &state, px, list.y + 1).expect("ghost anchor badge hit");
+    assert_eq!(owner, 0);
+    assert!(crate::app::update::click_todo_priority(&mut state, owner));
+    assert!(state.todo.editing().is_none(), "点击徽标必须先提交幽灵行");
+    assert_eq!(state.todo.items()[0].priority, TodoPriority::P1);
+    assert_eq!(state.todo.selected(), Some(0));
+}
+
+#[test]
+fn group_priority_handles_n_gt_3_with_highest_at_last() {
+    let mut state = AppState::demo();
+    let today = state.todo.today_date().to_string();
+    state.todo.replace(vec![
+        TodoRecord::new_on(&today, "a", TodoStatus::Todo, TodoPriority::P2, 0)
+            .with_group_id(Some("g".into())),
+        TodoRecord::new_on(&today, "b", TodoStatus::Todo, TodoPriority::P3, 1)
+            .with_group_id(Some("g".into())),
+        TodoRecord::new_on(&today, "c", TodoStatus::Todo, TodoPriority::P1, 2)
+            .with_group_id(Some("g".into())),
+        TodoRecord::new_on(&today, "d", TodoStatus::Todo, TodoPriority::P0, 3)
+            .with_group_id(Some("g".into())),
+    ]);
+    let badge = item::group_priority(&state, 1, None, 4).expect("group badge");
+    assert_eq!(
+        (badge.display, badge.priority),
+        (3, TodoPriority::P0),
+        "4 条组的最高优先级在末位时也必须归属末位成员"
+    );
+
+    // 组尾幽灵行（After(last)）只占槽位，不参与比较。
+    assert!(crate::app::update::begin_todo_edit(
+        &mut state,
+        crate::app::state::TodoEditTarget::After(3)
+    ));
+    let badge = item::group_priority(&state, 2, Some(4), 5).expect("group badge");
+    assert_eq!(
+        (badge.display, badge.priority),
+        (3, TodoPriority::P0),
+        "组尾幽灵行不得改变徽标归属"
+    );
+}
+
+#[test]
+fn grouped_narrow_panel_renders_without_panic() {
+    let mut state = AppState::demo();
+    let area = Rect::new(0, 0, 12, 10);
+    let today = state.todo.today_date().to_string();
+    state.todo.replace(vec![
+        TodoRecord::new_on(&today, "alpha", TodoStatus::Todo, TodoPriority::P1, 0)
+            .with_group_id(Some("g".into())),
+        TodoRecord::new_on(&today, "beta", TodoStatus::Todo, TodoPriority::P2, 1)
+            .with_group_id(Some("g".into())),
+    ]);
+    let _ = render_panel(&state, area);
 }
 
 #[test]

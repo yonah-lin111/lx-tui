@@ -559,6 +559,7 @@ fn ai_settings(
             model: model.to_string(),
             variant: variant.map(str::to_string),
         }),
+        recent_models: Vec::new(),
         title_summary: None,
         recap_enabled: true,
         recap_summary: None,

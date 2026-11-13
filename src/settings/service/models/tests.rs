@@ -289,6 +289,67 @@ async fn put_broadcasts_models_changed_event() {
 }
 
 #[tokio::test]
+async fn put_without_recent_models_preserves_existing_list() {
+    let (service, _events, _dir) = start_models("models-recent").await;
+    let port = service.port();
+    let token = service.token().to_string();
+    let path = state_user_root(&service).join("config").join("ai.json");
+
+    // 先保存一份有效配置，再手动写入 recentModels（模拟 /model 的落盘结果）。
+    let saved = request(
+        port,
+        &write(
+            "PUT",
+            &format!("/api/models/settings?token={token}"),
+            &put_body(),
+            None,
+        ),
+    )
+    .await;
+    assert_eq!(status(&saved), 200, "saved: {}", body(&saved));
+    let mut root: serde_json::Value =
+        serde_json::from_str(&std::fs::read_to_string(&path).expect("read ai.json")).expect("json");
+    root["ai"]["recentModels"] = serde_json::json!([
+        {"provider": "p", "model": "m", "variant": "high"},
+        {"provider": "deleted", "model": "gone"}
+    ]);
+    std::fs::write(&path, serde_json::to_string_pretty(&root).expect("string")).expect("write");
+
+    // 设置页 PUT 不携带 recentModels：以磁盘现值为基底合并，列表不得被清空。
+    let again = request(
+        port,
+        &write(
+            "PUT",
+            &format!("/api/models/settings?token={token}"),
+            &put_body(),
+            None,
+        ),
+    )
+    .await;
+    assert_eq!(status(&again), 200, "saved again: {}", body(&again));
+    let loaded = crate::config::ai::load_ai(&path)
+        .expect("load")
+        .expect("exists");
+    assert_eq!(
+        loaded.recent_models,
+        vec![
+            crate::config::ai::ModelSelection {
+                provider: "p".into(),
+                model: "m".into(),
+                variant: Some("high".into()),
+            },
+            crate::config::ai::ModelSelection {
+                provider: "deleted".into(),
+                model: "gone".into(),
+                variant: None,
+            },
+        ],
+        "设置页保存不清空 recentModels"
+    );
+    service.shutdown();
+}
+
+#[tokio::test]
 async fn api_key_semantics_keep_clear_replace() {
     let (service, _events, _dir) = start_models("models-key").await;
     let port = service.port();

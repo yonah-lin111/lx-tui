@@ -717,6 +717,7 @@ fn open_new_history_workspace(state: &mut AppState, entry: WorkspaceHistoryEntry
     clear_selection(state);
     exit_workspace_history(state);
     super::focus::focus_panes(state);
+    super::chat::refresh_active_tab_lx_status(state);
 }
 
 /// 在历史列表（`ws list`）视图下新建工作区：仅登记入库、清空搜索过滤并选中该新建项，
