@@ -2,6 +2,7 @@
 
 use std::collections::{BTreeMap, HashMap};
 use std::path::{Path, PathBuf};
+use std::time::Instant;
 
 use crate::app::prompt::{Prompt, PromptPanel};
 use crate::tiling::PaneId;
@@ -90,6 +91,15 @@ impl WorkspaceGit {
         }
         self.short_branch()
     }
+}
+
+/// git 查询失败后的重试计划：指数退避，避免失败后永久停留在未知态。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct GitRetry {
+    /// 已安排的重试次数（从 1 开始）。
+    pub attempts: u32,
+    /// 下一次重试时刻。
+    pub next_at: Instant,
 }
 
 /// 侧栏工作区列表的可见行；折叠的组只保留父项与当前激活子项。

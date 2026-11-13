@@ -48,6 +48,8 @@ pub enum WorktreeQuery {
 /// 查询 cwd 所属仓库；保留“非仓库”与“查询失败”的区别。
 pub fn query_worktrees(cwd: &Path) -> WorktreeQuery {
     let output = match Command::new("git")
+        // 固定英文输出：下面用 stderr 区分“非仓库”与“查询失败”，不能受用户 locale 影响。
+        .env("LC_ALL", "C")
         .arg("-C")
         .arg(cwd)
         .args(["worktree", "list", "--porcelain"])

@@ -3840,6 +3840,43 @@ fn apply_git_refresh_failure_keeps_old_metadata_and_unknown_state() {
         state.git_pending.contains(&cwd),
         "查询失败保持未知态，避免被当成无分支"
     );
+    let retry = state.git_retry.get(&cwd).expect("失败必须安排重试");
+    assert_eq!(retry.attempts, 1);
+    assert!(retry.next_at > Instant::now());
+}
+
+#[test]
+fn failed_git_refresh_retries_with_backoff_and_clears_on_success() {
+    let mut state = AppState::demo();
+    let cwd = PathBuf::from("/repo");
+    state.workspaces[0].cwd = Some(cwd.clone());
+    apply_git_refresh(&mut state, &cwd, GitRefresh::Failed);
+
+    let first_at = state.git_retry[&cwd].next_at;
+    assert!(
+        !retry_git_queries(&mut state, Instant::now()),
+        "未到期不重试"
+    );
+    assert!(state.git_requests.is_empty());
+
+    assert!(
+        retry_git_queries(&mut state, first_at),
+        "到期后重新发起查询"
+    );
+    assert_eq!(state.git_requests, vec![cwd.clone()]);
+    assert_eq!(state.git_retry[&cwd].attempts, 2, "重试次数递增");
+    assert!(
+        state.git_retry[&cwd].next_at > first_at,
+        "退避间隔随失败次数增大"
+    );
+
+    apply_git_refresh(
+        &mut state,
+        &cwd,
+        GitRefresh::Resolved(Some(git_info("/repo", "/repo", false, Some("main")))),
+    );
+    assert!(!state.git_retry.contains_key(&cwd), "成功后清除重试计划");
+    assert!(!state.git_pending.contains(&cwd));
 }
 
 #[test]
