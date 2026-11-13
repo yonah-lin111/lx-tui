@@ -644,7 +644,7 @@ async fn cancel_after_begins_settles_whole_batch_without_execution() {
     );
 }
 
-/// 批次内某个执行结果报告 cancelled：该票据按 cancelled 结算，剩余票据退单并中断本轮。
+/// 批次内某个执行结果报告 cancelled：该票据按 cancelled 结算，其余已执行结果照常落库。
 struct CancelledResultExecutor;
 
 impl ToolExecutor for CancelledResultExecutor {
@@ -662,7 +662,7 @@ impl ToolExecutor for CancelledResultExecutor {
 }
 
 #[tokio::test]
-async fn cancelled_execution_result_interrupts_the_batch() {
+async fn cancelled_execution_result_keeps_sibling_results() {
     let fixture = Fixture::new("parallel-cancel-result");
     let script = Script::new(
         vec![tool_calls(
@@ -695,15 +695,15 @@ async fn cancelled_execution_result_interrupts_the_batch() {
             HostTrace::Begin("c2".into()),
             HostTrace::Finish("c0".into(), false),
             HostTrace::Finish("c1".into(), true),
-            HostTrace::Finish("c2".into(), true),
+            HostTrace::Finish("c2".into(), false),
         ],
-        "c0 已提交真实结果；c1 按 cancelled 结算；c2 退单"
+        "c0/c2 已执行，必须按真实结果结算；只有 c1 是 cancelled"
     );
 }
 
-/// 批次结算中途 finish 失败：停止提交并把剩余票据按 cancelled 收尾。
+/// 批次结算中途 finish 失败：失败票据不重试，其余已执行结果仍按真实结果落库。
 #[tokio::test]
-async fn finish_failure_cancels_remaining_batch_tickets() {
+async fn finish_failure_keeps_remaining_batch_results() {
     let fixture = Fixture::new("parallel-finish-fail");
     let script = Script::new(
         vec![tool_calls(
@@ -742,9 +742,10 @@ async fn finish_failure_cancels_remaining_batch_tickets() {
             HostTrace::Begin("c1".into()),
             HostTrace::Begin("c2".into()),
             HostTrace::Finish("c0".into(), false),
-            HostTrace::Finish("c1".into(), true),
-            HostTrace::Finish("c2".into(), true),
-        ]
+            HostTrace::Finish("c1".into(), false),
+            HostTrace::Finish("c2".into(), false),
+        ],
+        "c0 落库失败按契约不重试；c1/c2 已执行，必须按真实结果结算"
     );
 }
 

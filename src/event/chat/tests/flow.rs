@@ -175,7 +175,93 @@ async fn two_calls_in_one_response_run_serially_in_ordinal_order() {
     );
 }
 
-// ===== 3. Gemini 多步工具链：跨采样的合成 call ID 不得撞库（G8 回归） =====
+// ===== 3. 同一响应 4 个只读调用：事件层/DB 的多 running 握手 =====
+
+/// 同一响应内 4 个 `read` 必须全部先 begin（位置稠密 0..3），再按 ordinal finish。
+///
+/// 这是并行批次在真实事件层 + DB 上的最小集成回归：编排层测试用的 `RecordingHost`
+/// 不分配 timeline position，无法发现“多张 running 卡片”与位置分配的回归。
+#[tokio::test]
+async fn four_reads_in_one_response_create_dense_tool_positions() {
+    let fixture = Fixture::new("four-reads");
+    for name in ["a.txt", "b.txt", "c.txt", "d.txt"] {
+        std::fs::write(fixture.workspace().join(name), format!("{name}\n")).expect("seed file");
+    }
+    let (mut state, key, persistence, session) = streaming_state(&fixture);
+    let a = r#"{"path":"a.txt"}"#.to_string();
+    let b = r#"{"path":"b.txt"}"#.to_string();
+    let c = r#"{"path":"c.txt"}"#.to_string();
+    let d = r#"{"path":"d.txt"}"#.to_string();
+    let transport = FakeTransport::new(
+        vec![
+            tool_calls(
+                &[
+                    ("r0", "read", &a, 0),
+                    ("r1", "read", &b, 1),
+                    ("r2", "read", &c, 2),
+                    ("r3", "read", &d, 3),
+                ],
+                None,
+            ),
+            final_response("done", None),
+        ],
+        StopReason::Complete,
+    );
+    let mut streams = ChatStreams::default();
+    let driven = drive(
+        &fixture,
+        &mut state,
+        &key,
+        &transport,
+        &persistence,
+        &mut streams,
+        no_cancel(),
+    )
+    .await;
+
+    assert_eq!(driven.summary.outcome, TurnOutcome::Complete);
+    assert_eq!(driven.unflushed, 0, "四个 begin 都必须回执");
+    let mut executed = driven.executed.clone();
+    executed.sort();
+    assert_eq!(executed, vec!["r0", "r1", "r2", "r3"], "四个调用都执行");
+    assert_eq!(
+        driven.trace,
+        vec![
+            Trace::Begin("r0".into()),
+            Trace::Begin("r1".into()),
+            Trace::Begin("r2".into()),
+            Trace::Begin("r3".into()),
+            Trace::Finish("r0".into(), ToolTerminalStatus::Completed),
+            Trace::Finish("r1".into(), ToolTerminalStatus::Completed),
+            Trace::Finish("r2".into(), ToolTerminalStatus::Completed),
+            Trace::Finish("r3".into(), ToolTerminalStatus::Completed),
+        ],
+        "批次必须先批量 begin，再按 ordinal finish"
+    );
+    let rows = tool_rows(&fixture, &session);
+    assert_eq!(rows.len(), 4, "每个调用各一行");
+    let positions: Vec<i64> = rows.iter().map(|row| row.position).collect();
+    assert!(
+        positions.windows(2).all(|pair| pair[1] == pair[0] + 1),
+        "四个工具位置必须稠密连续: {positions:?}"
+    );
+    assert!(
+        rows.iter()
+            .all(|row| row.status == "completed" && row.result_json.is_some()),
+        "四个结果都必须落库: {rows:?}"
+    );
+    let message = assistant_message(&state, &key);
+    let tools: Vec<&crate::app::state::ToolCallView> = message.tools().collect();
+    assert_eq!(tools.len(), 4);
+    assert!(
+        tools
+            .iter()
+            .all(|tool| tool.status == ToolStatus::Completed),
+        "四张卡片都必须进入终态"
+    );
+}
+
+// ===== 4. Gemini 多步工具链：跨采样的合成 call ID 不得撞库（G8 回归） =====
 
 /// 把一段 Google SSE 帧喂给**真实 Google 解码器**，收集它产出的增量。
 ///

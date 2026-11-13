@@ -8,6 +8,7 @@
 //! `entries_truncated`。输出侧上限（行数/字节/单行宽度）与它们相互独立。
 
 use std::path::Path;
+use std::sync::Mutex;
 
 use super::args::{Args, clamp_limit};
 use super::path;
@@ -22,6 +23,12 @@ use super::{
 
 /// `read` 允许的参数集合。
 const ALLOWED: [&str; 3] = ["path", "offset", "limit"];
+
+/// 图片解码闸门：并行批次最多 4 个 `read`，单张大图解码峰值可达上百 MiB。
+///
+/// `read_image` 只从文件工具执行路径调用（生产在 `spawn_blocking` 中），这里串行化
+/// 解码阶段，避免 4 路图片同时展开把峰值内存放大 4 倍；缓存命中的路径仍会短暂持锁。
+static IMAGE_READ_GATE: Mutex<()> = Mutex::new(());
 
 /// `read` 的输入上限快照；生产值即模块常量，测试可注入更小的上限。
 #[derive(Debug, Clone, Copy)]
@@ -106,6 +113,10 @@ fn read_image(ctx: &ToolContext, target: &Path, len: u64) -> ToolResult<ToolExec
             ),
         ));
     }
+    // 并行批次可能同时读取多张大图：解码阶段串行化，避免峰值内存随并发数放大。
+    let _gate = IMAGE_READ_GATE
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
     let processed =
         crate::platform::load_and_process_image_file(target).map_err(|err| match err {
             crate::platform::ImagePrepareError::SingleTooLarge => ToolFailure::new(

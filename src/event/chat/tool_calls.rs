@@ -166,6 +166,9 @@ pub(crate) fn settle_begin(
                 changed
             }
             Err(error) => {
+                // pending 已入库：running 推进失败时同步退单，避免同进程内留下永久
+                // pending 行（启动恢复只能兜底跨进程崩溃）。
+                cancel_pending(persistence, &workspace, &pending.ticket);
                 let _ = reply.send(Err(HostError::Failed {
                     code: format!("{RUNNING_TOOL_FAILED_CODE} · {}", error.code()),
                 }));
@@ -195,6 +198,8 @@ pub(crate) fn settle_begin(
                 code = error.code(),
                 "tool call running record failed"
             );
+            // pending 已入库：同步退单，避免同进程内留下永久 pending 行。
+            cancel_pending(persistence, &workspace, &pending.ticket);
             let _ = reply.send(Err(HostError::Failed {
                 code: format!("{RUNNING_TOOL_FAILED_CODE} · {}", error.code()),
             }));

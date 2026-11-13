@@ -79,21 +79,31 @@ where
         .collect();
     let results = join_all(futures).await;
 
-    // 3) 按 ordinal 顺序结算；失败/取消时把剩余票据收尾，保证 DB 不悬挂。
+    // 3) 按 ordinal 顺序结算。
+    //
+    // `join_all` 返回时所有 future 都已结束：某个调用报告 cancelled（目前只有
+    // `web_search` 会在 Esc 时这样做）不代表同批其它调用没执行。这里只把该票据记为
+    // cancelled，其余结果仍按真实结果落库；全部结算后返回 Interrupted，让调用方停止
+    // 本轮采样并退掉批次之外的调用。绝不能把已经完成的读盘结果谎报成 cancelled。
+    let mut interrupted = false;
     let mut iter = begun.into_iter().zip(results);
     while let Some(((call, ticket, _), result)) = iter.next() {
-        // 与串行路径一致：执行层报告“取消”不是工具结果，按 cancelled 结算整轮。
         if result.error_code() == Some(ToolErrorCode::Cancelled) {
             let _ = host.finish_tool(ticket, ToolOutcome::Cancelled).await;
-            cancel_tickets(host, iter.map(|((_, ticket, _), _)| ticket)).await;
-            return BatchOutcome::Interrupted;
+            interrupted = true;
+            continue;
         }
         if let Err(error) =
             commit_result(host, context, &call, ticket, result, supports_image_input).await
         {
-            cancel_tickets(host, iter.map(|((_, ticket, _), _)| ticket)).await;
+            // 失败票据按契约不重试；其余结果已经产生，尽力按真实结果落库，
+            // 避免把同批“已执行”的调用误记成 cancelled。
+            settle_remaining(host, context, iter, supports_image_input).await;
             return outcome_of(error);
         }
+    }
+    if interrupted {
+        return BatchOutcome::Interrupted;
     }
     tracing::debug!(
         target: "lx::agent",
@@ -101,6 +111,40 @@ where
         "parallel read-only tool batch settled"
     );
     BatchOutcome::Completed
+}
+
+/// 提交失败后尽力结算剩余结果：失败的票据不重试，但其余真实结果必须落库。
+///
+/// 某个结果落库失败通常是该行自身的问题（例如终态冲突）；把它之后的已执行结果
+/// 全部记成 cancelled 会制造假状态。逐条提交，失败只记 warn，最终仍由调用方按
+/// 原始错误结束本轮。
+async fn settle_remaining<H: AgentHost>(
+    host: &mut H,
+    context: &mut ModelContext,
+    iter: impl Iterator<
+        Item = (
+            (ReadyToolCall, crate::db::chat::ToolCallTicket, bool),
+            ToolExecutionResult,
+        ),
+    >,
+    supports_image_input: bool,
+) {
+    for ((call, ticket, _), result) in iter {
+        if result.error_code() == Some(ToolErrorCode::Cancelled) {
+            let _ = host.finish_tool(ticket, ToolOutcome::Cancelled).await;
+            continue;
+        }
+        if let Err(error) =
+            commit_result(host, context, &call, ticket, result, supports_image_input).await
+        {
+            tracing::warn!(
+                target: "lx::agent",
+                call_id = %call.call_id,
+                error = ?error,
+                "failed to settle remaining tool result"
+            );
+        }
+    }
 }
 
 /// 可取消入口优先（`web_search` / MCP），其余工具回落到带票据的通用执行入口。
