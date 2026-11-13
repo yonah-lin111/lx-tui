@@ -1,6 +1,6 @@
 # 工具执行：只读调用并行化 — 任务清单
 
-> 状态：**已完成并通过评审修复（branch `feat/agent-tool-parallel-readonly`，评审见 [`review.md`](review.md)；结果见第 10 节）**
+> 状态：**已完成、通过评审修复并合入 `dev`（fast-forward 至 `d652e177`，功能分支与工作区已删除；评审见 [`review.md`](review.md)；结果见第 10 节）**
 >
 > 对应设计：`docs/feature/agent-tool-parallel-readonly/design.md`
 >
@@ -328,7 +328,7 @@ cargo test event::chat
 
 ---
 
-## 10. 执行结果（branch `feat/agent-tool-parallel-readonly`，commits `a1f56ed2` / `f6be8b61` / `9bbc175c` / `81a3cf07` / `e0cd17c2` / `65913e2a` / `c08c9148` / `14ec2776`）
+## 10. 执行结果（branch `feat/agent-tool-parallel-readonly`，commits `a1f56ed2` / `f6be8b61` / `9bbc175c` / `81a3cf07` / `e0cd17c2` / `65913e2a` / `c08c9148` / `14ec2776` / `d652e177`）
 
 ### 代码
 
@@ -368,7 +368,11 @@ cargo test event::chat
 
 批次内的单次执行不是直接 `execute_tracked`，而是 `run_one`：先调用 `execute_mcp_cancellable`，返回 `Some` 时采用（`web_search` 的 Esc 取消必须直达 HTTP 请求），否则回落到 `execute_tracked`。串行路径原本就是这个顺序，批次不能降级。
 
+### 合并
+
+- 已 fast-forward 合入 `dev`（`d652e177`）；`feat/agent-tool-parallel-readonly` 分支与 `.worktrees/agent-tool-parallel-readonly` 工作区已删除。
+- 合并后主 checkout 定向复核通过：`chat::agent_loop` 71、`chat::tools` 335、`event::chat` 155、`tests::parallel` 12。
+
 ### 未完成
 
-- 手工验收（第 7 节）由用户运行 `cargo run` 确认。
-- 合并到 `dev` 前需用户确认。
+- 手工验收（第 7 节）由用户运行 `cargo run` 确认（合并不替代该验收）。

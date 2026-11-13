@@ -1,6 +1,6 @@
 # 工具执行：只读调用并行化 + codex 工具面对齐审计（设计方案）
 
-> 状态：**已实现并通过评审修复（branch `feat/agent-tool-parallel-readonly`，评审见 [`review.md`](review.md)；待用户确认合并）**
+> 状态：**已实现、通过评审修复并合入 `dev`（fast-forward 至 `d652e177`，功能分支与工作区已删除；评审见 [`review.md`](review.md)）**
 >
 > 关联文档：
 > - 任务清单：`docs/feature/agent-tool-parallel-readonly/task.md`

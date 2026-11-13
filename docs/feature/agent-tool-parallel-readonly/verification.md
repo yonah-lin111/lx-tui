@@ -2,10 +2,12 @@
 
 - **特性目录**：`docs/feature/agent-tool-parallel-readonly/`
 - **关联文档**：[`design.md`](design.md) · [`task.md`](task.md)
-- **验证工作区**：`.worktrees/agent-tool-parallel-readonly`（分支 `feat/agent-tool-parallel-readonly`）
-- **代码提交**：`a1f56ed2`（实现）· `f6be8b61`（首轮文档）· `9bbc175c` / `81a3cf07` / `e0cd17c2` / `65913e2a`（测试与验证）· `c08c9148`（评审修复）· `14ec2776`（评审文档）
+- **验证工作区**：`.worktrees/agent-tool-parallel-readonly`（分支 `feat/agent-tool-parallel-readonly`；合并后已删除）
+- **代码提交**：`a1f56ed2`（实现）· `f6be8b61`（首轮文档）· `9bbc175c` / `81a3cf07` / `e0cd17c2` / `65913e2a`（测试与验证）· `c08c9148`（评审修复）· `14ec2776` / `d652e177`（评审文档）
+- **合并**：fast-forward 至 `dev`（`d652e177`）
 - **测试二进制**：`./target/debug/lx-tui`
 - **验证结论**：16 / 16 项通过（PASS）
+- **合并后复核**：主 checkout（`dev` = `d652e177`）重跑 `chat::agent_loop` 71、`chat::tools` 335、`event::chat` 155、`tests::parallel` 12，全部通过
 
 ---
 
