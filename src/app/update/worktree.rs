@@ -15,6 +15,7 @@ use super::{clear_selection, swap_display_prompt, switch_workspace};
 
 /// 登记一次工作区 git 元数据查询；同一路径去重。
 pub fn request_git_refresh(state: &mut AppState, cwd: &Path) {
+    state.git_pending.insert(cwd.to_path_buf());
     if state.git_requests.iter().any(|pending| pending == cwd) {
         return;
     }
@@ -53,6 +54,7 @@ pub fn worktree_candidates(
 /// 查询结果落地：cwd 与工作区当前 cwd 精确匹配时更新元数据（可能命中多个）；
 /// 工作区首次识别为 linked worktree 时自动补开主 checkout，保持树形结构。
 pub fn apply_git_refresh(state: &mut AppState, cwd: &Path, git: Option<WorkspaceGit>) {
+    state.git_pending.remove(cwd);
     let mut first_linked = Vec::new();
     for (index, workspace) in state.workspaces.iter_mut().enumerate() {
         if workspace.cwd.as_deref() != Some(cwd) {

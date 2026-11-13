@@ -126,7 +126,13 @@ fn workspace_items(state: &AppState, width: usize) -> Vec<ListItem<'_>> {
         };
         let item_style = style::text().patch(highlight);
         // 普通顶层项拿不到可展示分支时，用标记占住分组箭头列；有分支项保持空白对齐。
-        let no_branch = !row.parent
+        // git 查询在途时元数据尚未落地，不能据此判定“无分支”，否则首帧会误标。
+        let git_pending = workspace
+            .cwd
+            .as_ref()
+            .is_some_and(|cwd| state.git_pending.contains(cwd));
+        let no_branch = !git_pending
+            && !row.parent
             && !row.child
             && workspace
                 .git
@@ -138,7 +144,7 @@ fn workspace_items(state: &AppState, width: usize) -> Vec<ListItem<'_>> {
         let prefix_style = if row.parent {
             highlight.patch(style::accent())
         } else if no_branch && !active {
-            style::muted().patch(highlight)
+            highlight.patch(style::muted_on_border())
         } else {
             item_style
         };
