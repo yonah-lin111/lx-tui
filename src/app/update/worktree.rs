@@ -1,20 +1,35 @@
 //! worktree 相关行为：git 元数据查询登记、打开已有 worktree 对话框与工作区创建/切换。
 
 use std::path::{Path, PathBuf};
+use std::time::{Duration, Instant};
 
 use crate::app::actions::OverlayKey;
 use crate::app::effects::Effect;
 use crate::app::overlay::{Overlay, TextInput, WorktreeOpen, WorktreeOpenEntry};
 use crate::app::state::{
-    AppState, Workspace, WorkspaceGit, home_dir, unique_workspace_name, workspace_label,
+    AppState, GitRetry, Workspace, WorkspaceGit, home_dir, unique_workspace_name, workspace_label,
 };
 use crate::app::trust::TrustTrigger;
 use crate::git;
 
 use super::{clear_selection, swap_display_prompt, switch_workspace};
 
+/// 查询失败后的首次重试间隔。
+const GIT_RETRY_BASE: Duration = Duration::from_secs(2);
+/// 重试间隔上限，避免坏路径长期高频拉起 git 进程。
+const GIT_RETRY_MAX: Duration = Duration::from_secs(60);
+
+/// 失败重试间隔：2s、4s、8s… 封顶 60s。
+fn git_retry_delay(attempts: u32) -> Duration {
+    let shift = attempts.saturating_sub(1).min(5);
+    GIT_RETRY_BASE
+        .saturating_mul(1u32 << shift)
+        .min(GIT_RETRY_MAX)
+}
+
 /// 登记一次工作区 git 元数据查询；同一路径去重。
 pub fn request_git_refresh(state: &mut AppState, cwd: &Path) {
+    state.git_pending.insert(cwd.to_path_buf());
     if state.git_requests.iter().any(|pending| pending == cwd) {
         return;
     }
@@ -50,9 +65,66 @@ pub fn worktree_candidates(
         .collect()
 }
 
+/// 工作区 git 元数据刷新结果。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum GitRefresh {
+    /// 查询成功：`Some` 为 checkout 元数据，`None` 为确认不是 git 仓库。
+    Resolved(Option<WorkspaceGit>),
+    /// 查询失败（git 缺失、IO/解析错误或无法定位 checkout）；状态未知。
+    Failed,
+}
+
+/// 安排到期的失败查询重试；返回是否发起了新请求。
+pub fn retry_git_queries(state: &mut AppState, now: Instant) -> bool {
+    if state.git_retry.is_empty() {
+        return false;
+    }
+    let due: Vec<PathBuf> = state
+        .git_retry
+        .iter()
+        .filter(|(_, retry)| retry.next_at <= now)
+        .map(|(cwd, _)| cwd.clone())
+        .collect();
+    if due.is_empty() {
+        return false;
+    }
+    for cwd in due {
+        // 工作区已关闭/改到别处后不再重试，避免为失效路径长期拉起 git 进程。
+        if !state
+            .workspaces
+            .iter()
+            .any(|workspace| workspace.cwd.as_deref() == Some(cwd.as_path()))
+        {
+            state.git_retry.remove(&cwd);
+            state.git_pending.remove(&cwd);
+            continue;
+        }
+        if let Some(retry) = state.git_retry.get_mut(&cwd) {
+            retry.attempts = retry.attempts.saturating_add(1);
+            retry.next_at = now + git_retry_delay(retry.attempts);
+        }
+        request_git_refresh(state, &cwd);
+    }
+    true
+}
+
 /// 查询结果落地：cwd 与工作区当前 cwd 精确匹配时更新元数据（可能命中多个）；
 /// 工作区首次识别为 linked worktree 时自动补开主 checkout，保持树形结构。
-pub fn apply_git_refresh(state: &mut AppState, cwd: &Path, git: Option<WorkspaceGit>) {
+/// 查询失败时保留旧元数据、维持 `git_pending` 并安排退避重试，避免把“未知”误判成“无分支”。
+pub fn apply_git_refresh(state: &mut AppState, cwd: &Path, result: GitRefresh) {
+    let GitRefresh::Resolved(git) = result else {
+        state.git_pending.insert(cwd.to_path_buf());
+        state
+            .git_retry
+            .entry(cwd.to_path_buf())
+            .or_insert_with(|| GitRetry {
+                attempts: 1,
+                next_at: Instant::now() + git_retry_delay(1),
+            });
+        return;
+    };
+    state.git_pending.remove(cwd);
+    state.git_retry.remove(cwd);
     let mut first_linked = Vec::new();
     for (index, workspace) in state.workspaces.iter_mut().enumerate() {
         if workspace.cwd.as_deref() != Some(cwd) {

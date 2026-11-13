@@ -180,8 +180,20 @@ fn paint_rows(buf: &mut Buffer, rows_area: Rect, state: &AppState) {
         } else {
             highlight.patch(style::error())
         };
+        // 普通顶层项无分支时用标记占住分组箭头列；历史列表没有激活工作区概念，标记恒压暗。
+        // 路径不存在时无法确认分支状态，不标记；“不存在”本身已由红色行表达。
+        let no_branch = entry.exists
+            && !row.parent
+            && !row.child
+            && entry
+                .git
+                .as_ref()
+                .and_then(|git| git.short_branch())
+                .is_none();
         let prefix_style = if row.parent && entry.exists {
             highlight.patch(style::accent())
+        } else if no_branch {
+            highlight.patch(style::muted_on_border())
         } else {
             item_style
         };
@@ -209,6 +221,8 @@ fn paint_rows(buf: &mut Buffer, rows_area: Rect, state: &AppState) {
                 text::WORKSPACE_TREE_MIDDLE
             };
             format!("{:width$}{tree} ", "", width = WORKSPACE_ITEM_INDENT)
+        } else if no_branch {
+            format!("{} ", text::WORKSPACE_NO_BRANCH_ICON)
         } else {
             " ".repeat(WORKSPACE_ITEM_INDENT)
         };
@@ -666,6 +680,184 @@ mod tests {
             .expect("draw");
         let buf = terminal.backend().buffer();
         assert_ne!(buf[(sections.workspaces.x, row0_y)].bg, Color::Indexed(240));
+    }
+
+    /// 历史列表只给无分支的普通顶层项加 `•`；父项、树连接符子项、有分支项与失效路径不追加。
+    #[test]
+    fn history_marks_unbranched_flat_entries_only() {
+        let mut state = AppState::demo();
+        let config = Config::default();
+        let repo = PathBuf::from("/tmp/lx-unbranched");
+        let child_path = repo.join(".worktrees/detached");
+        let flat_repo = PathBuf::from("/tmp/lx-git-flat");
+        state.workspace_history.entries = vec![
+            WorkspaceHistoryEntry {
+                name: "plain".into(),
+                path: PathBuf::from("/tmp/lx-plain"),
+                exists: true,
+                name_is_manual: false,
+                position: 0,
+                trusted: true,
+                git: None,
+            },
+            WorkspaceHistoryEntry {
+                name: "repo".into(),
+                path: repo.clone(),
+                exists: true,
+                name_is_manual: false,
+                position: 1,
+                trusted: true,
+                git: Some(WorkspaceGit {
+                    repo_root: repo.clone(),
+                    checkout_path: repo.clone(),
+                    is_linked: false,
+                    branch: None,
+                    main_branch: None,
+                }),
+            },
+            WorkspaceHistoryEntry {
+                name: "detached".into(),
+                path: child_path.clone(),
+                exists: true,
+                name_is_manual: false,
+                position: 2,
+                trusted: true,
+                git: Some(WorkspaceGit {
+                    repo_root: repo,
+                    checkout_path: child_path,
+                    is_linked: true,
+                    branch: None,
+                    main_branch: None,
+                }),
+            },
+            WorkspaceHistoryEntry {
+                name: "git-flat".into(),
+                path: flat_repo.clone(),
+                exists: true,
+                name_is_manual: false,
+                position: 3,
+                trusted: true,
+                git: Some(WorkspaceGit {
+                    repo_root: flat_repo.clone(),
+                    checkout_path: flat_repo,
+                    is_linked: false,
+                    branch: Some("topic".into()),
+                    main_branch: Some("topic".into()),
+                }),
+            },
+            WorkspaceHistoryEntry {
+                name: "gone".into(),
+                path: PathBuf::from("/tmp/lx-gone"),
+                exists: false,
+                name_is_manual: false,
+                position: 4,
+                trusted: true,
+                git: None,
+            },
+        ];
+        state.workspace_history.mode = WorkspaceMode::History;
+
+        let mut terminal = Terminal::new(TestBackend::new(100, 30)).expect("terminal");
+        terminal
+            .draw(|frame| ui::render(frame, &state, &config))
+            .expect("draw");
+        let view = ui::layout::compute(
+            Rect::new(0, 0, 100, 30),
+            &config,
+            state.sidebar_collapsed,
+            state.sidebar_width,
+            state.prompt_collapsed,
+            state.prompt_width,
+            state.prompt_left,
+            state.panes_collapsed,
+        );
+        let sections = ui::layout::sidebar_sections(view.left_panel, state.agents_collapsed)
+            .expect("sections");
+        let buf = terminal.backend().buffer();
+        let rows: Vec<String> = (0..5)
+            .map(|offset| {
+                let y = sections.workspaces.y + LIST_HEADER_HEIGHT + offset;
+                (sections.workspaces.x..sections.workspaces.right())
+                    .map(|x| buf[(x, y)].symbol())
+                    .collect()
+            })
+            .collect();
+        let row = |needle: &str| {
+            rows.iter()
+                .find(|row| row.contains(needle))
+                .unwrap_or_else(|| panic!("{needle} row missing: {rows:?}"))
+        };
+        let char_col =
+            |line: &str, needle: &str| line.find(needle).map(|byte| line[..byte].chars().count());
+        let icon = text::WORKSPACE_NO_BRANCH_ICON;
+        let plain = row("plain");
+        let parent = row("repo");
+        let detached = row("detached");
+        let git_flat = row("git-flat");
+        let gone = row("gone");
+        assert!(
+            plain.contains(&format!("{icon} plain")),
+            "无分支普通项必须在名字左侧显示标记: {plain:?}"
+        );
+        assert!(!parent.contains(icon), "父项不得显示无分支标记: {parent:?}");
+        assert!(
+            detached.contains("└─ detached"),
+            "子项应保留树连接符: {detached:?}"
+        );
+        assert!(
+            !detached.contains(icon),
+            "树连接符子项不得显示无分支标记: {detached:?}"
+        );
+        assert!(
+            !git_flat.contains(icon),
+            "有分支的普通项不得显示无分支标记: {git_flat:?}"
+        );
+        assert!(
+            !gone.contains(icon),
+            "路径失效时无法确认分支状态，不得显示标记: {gone:?}"
+        );
+        assert_eq!(
+            char_col(plain, icon),
+            char_col(parent, "▾"),
+            "无分支标记必须与分组箭头同列"
+        );
+        let name_col = char_col(plain, "plain");
+        assert_eq!(char_col(parent, "repo"), name_col, "父项名字列不位移");
+        assert_eq!(
+            char_col(git_flat, "git-flat"),
+            name_col,
+            "有分支项名字列不位移"
+        );
+
+        let plain_index = rows
+            .iter()
+            .position(|row| row.contains("plain"))
+            .expect("plain row index");
+        let y = sections.workspaces.y + LIST_HEADER_HEIGHT + plain_index as u16;
+        let x = sections.workspaces.x + char_col(plain, icon).expect("unbranched icon") as u16;
+        let cell = &buf[(x, y)];
+        assert_eq!(cell.fg, Color::Reset);
+        assert!(cell.modifier.contains(ratatui::style::Modifier::DIM));
+        assert!(!cell.modifier.contains(ratatui::style::Modifier::BOLD));
+
+        let gone_index = rows
+            .iter()
+            .position(|row| row.contains("gone"))
+            .expect("gone row index");
+        let gone_y = sections.workspaces.y + LIST_HEADER_HEIGHT + gone_index as u16;
+        let gone_x = sections.workspaces.x + char_col(gone, "gone").expect("gone name") as u16;
+        assert_eq!(buf[(gone_x, gone_y)].fg, Color::Red, "失效路径保持红色");
+
+        // hover 只叠背景：selection 的白色前景不得覆盖显式 Reset + dim。
+        state.workspace_history.hover = Some(plain_index);
+        terminal
+            .draw(|frame| ui::render(frame, &state, &config))
+            .expect("draw hovered");
+        let hovered = terminal.backend().buffer();
+        let cell = &hovered[(x, y)];
+        assert_eq!(cell.fg, Color::Reset);
+        assert!(cell.modifier.contains(ratatui::style::Modifier::DIM));
+        assert_eq!(cell.bg, Color::Indexed(240));
     }
 }
 

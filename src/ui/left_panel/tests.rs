@@ -1,12 +1,13 @@
 //! 单元测试；仅测试构建编译。
 
 use super::*;
-use crate::app::state::AppState;
+use crate::app::state::{AppState, Workspace};
 use crate::app::update;
 use crate::config::Config;
 use crate::detect::{AgentKind, AgentState, PaneAgentSnapshot};
 use crate::tiling::PaneId;
 use crate::ui::render;
+use crate::ui::test_support::{git_info, push_git_workspace};
 use ratatui::Terminal as RatatuiTerminal;
 use ratatui::backend::TestBackend;
 
@@ -640,5 +641,203 @@ fn slash_new_and_site_switch_while_streaming_immediately_remove_lx_agent_row() {
     assert!(
         agent_items(&state).is_empty(),
         "switching ai web site resets session and removes lx agent item"
+    );
+}
+
+/// 无分支的普通顶层项在分组箭头列显示 `•`；有分支项保持空白，名字列不位移。
+#[test]
+fn sidebar_marks_unbranched_flat_items_at_group_arrow_column() {
+    let mut state = AppState::demo();
+    state.workspaces[0].name = "plain".to_string();
+    state.workspaces[0].git = None;
+    push_git_workspace(
+        &mut state,
+        "repo",
+        "/repo",
+        git_info("/repo", "/repo", false, Some("main")),
+    );
+    push_git_workspace(
+        &mut state,
+        "feat",
+        "/repo/.worktrees/feat",
+        git_info("/repo", "/repo/.worktrees/feat", true, Some("feature/x")),
+    );
+    push_git_workspace(
+        &mut state,
+        "headless",
+        "/repo/headless",
+        git_info("/repo", "/repo/headless", false, None),
+    );
+    state
+        .workspaces
+        .push(Workspace::single_terminal("scratch".to_string(), None));
+
+    let lines = render_lines(&state);
+    let row = |needle: &str| {
+        lines
+            .iter()
+            .find(|line| line.contains(needle))
+            .unwrap_or_else(|| panic!("{needle} row missing: {lines:?}"))
+    };
+    let icon = text::WORKSPACE_NO_BRANCH_ICON;
+    let plain = row("plain");
+    let parent = row("▾ repo");
+    let headless = row("headless");
+    let scratch = row("scratch");
+
+    for (line, label) in [
+        (plain, "plain"),
+        (headless, "headless"),
+        (scratch, "scratch"),
+    ] {
+        assert!(
+            line.contains(&format!("{icon} {label}")),
+            "无分支普通项必须在名字左侧显示标记: {line:?}"
+        );
+    }
+    assert!(
+        !parent.contains(icon),
+        "有分支父项不得显示无分支标记: {parent:?}"
+    );
+
+    let char_col =
+        |line: &str, needle: &str| line.find(needle).map(|byte| line[..byte].chars().count());
+    let name_col = char_col(plain, "plain");
+    assert_eq!(
+        char_col(parent, "repo"),
+        name_col,
+        "父项名字仍与无分支项同列"
+    );
+    assert_eq!(char_col(headless, "headless"), name_col);
+    assert_eq!(char_col(scratch, "scratch"), name_col);
+    assert_eq!(
+        char_col(plain, icon),
+        char_col(parent, "▾"),
+        "无分支标记必须与分组箭头同列"
+    );
+}
+
+/// 父项折叠箭头与子项树连接符已经占据左侧标识位，即使没有分支也不追加 `•`。
+#[test]
+fn sidebar_tree_rows_never_show_unbranched_icon() {
+    let mut state = AppState::demo();
+    state.workspaces[0].name = "main".to_string();
+    state.workspaces[0].git = Some(git_info("/repo", "/repo", false, None));
+    push_git_workspace(
+        &mut state,
+        "feat",
+        "/repo/.worktrees/feat",
+        git_info("/repo", "/repo/.worktrees/feat", true, Some("feature/x")),
+    );
+    push_git_workspace(
+        &mut state,
+        "detached",
+        "/repo/.worktrees/detached",
+        git_info("/repo", "/repo/.worktrees/detached", true, None),
+    );
+
+    let lines = render_lines(&state);
+    let row = |needle: &str| {
+        lines
+            .iter()
+            .find(|line| line.contains(needle))
+            .unwrap_or_else(|| panic!("{needle} row missing: {lines:?}"))
+    };
+    let parent = row("▾ main");
+    let child = row("detached");
+    assert!(
+        child.contains("└─ detached"),
+        "子项应保留树连接符: {child:?}"
+    );
+    assert!(
+        !parent.contains(text::WORKSPACE_NO_BRANCH_ICON),
+        "父项不得显示无分支标记: {parent:?}"
+    );
+    assert!(
+        !child.contains(text::WORKSPACE_NO_BRANCH_ICON),
+        "子项不得显示无分支标记: {child:?}"
+    );
+}
+
+/// 无分支标记只在激活工作区用正文色，其余压暗；hover 只叠背景、不覆盖前景。
+#[test]
+fn unbranched_icon_is_muted_until_workspace_is_active() {
+    let mut state = AppState::demo();
+    state.workspaces[0].name = "alpha-ws".to_string();
+    state.workspaces[0].git = None;
+    state.active_workspace = 0;
+    state
+        .workspaces
+        .push(Workspace::single_terminal("beta-ws".to_string(), None));
+
+    let lines = render_lines(&state);
+    let buffer = render_buffer(&state);
+    let view = view_for(&state);
+    let icon_position = |needle: &str| {
+        let y = lines
+            .iter()
+            .position(|line| line.contains(needle))
+            .unwrap_or_else(|| panic!("{needle} row missing: {lines:?}"));
+        let sidebar: String = lines[y]
+            .chars()
+            .take(usize::from(view.left_panel.right()))
+            .collect();
+        let byte = sidebar
+            .find(text::WORKSPACE_NO_BRANCH_ICON)
+            .expect("unbranched icon");
+        (sidebar[..byte].chars().count() as u16, y as u16)
+    };
+
+    let (active_x, active_y) = icon_position("alpha-ws");
+    let (inactive_x, inactive_y) = icon_position("beta-ws");
+    let active = &buffer[(active_x, active_y)];
+    assert_eq!(active.fg, ratatui::style::Color::Reset);
+    assert!(!active.modifier.contains(ratatui::style::Modifier::DIM));
+    assert!(!active.modifier.contains(ratatui::style::Modifier::BOLD));
+    let inactive = &buffer[(inactive_x, inactive_y)];
+    assert_eq!(inactive.fg, ratatui::style::Color::Reset);
+    assert!(inactive.modifier.contains(ratatui::style::Modifier::DIM));
+    assert!(!inactive.modifier.contains(ratatui::style::Modifier::BOLD));
+
+    // hover 只叠背景：selection 的白色前景不得覆盖显式 Reset + dim。
+    state.workspace_hover = Some(1);
+    let hovered = render_buffer(&state);
+    let cell = &hovered[(inactive_x, inactive_y)];
+    assert_eq!(cell.fg, ratatui::style::Color::Reset);
+    assert!(cell.modifier.contains(ratatui::style::Modifier::DIM));
+    assert_eq!(cell.bg, ratatui::style::Color::Indexed(240));
+}
+
+/// git 查询在途时元数据为 None，不能把“未知”误判成“无分支”而闪现标记。
+#[test]
+fn unbranched_icon_waits_for_git_metadata() {
+    let mut state = AppState::demo();
+    state.workspaces[0].name = "pending-ws".to_string();
+    state.workspaces[0].git = None;
+    let cwd = state.workspaces[0]
+        .cwd
+        .clone()
+        .expect("demo workspace has cwd");
+    state.git_pending.insert(cwd.clone());
+
+    let lines = render_lines(&state);
+    let row = lines
+        .iter()
+        .find(|line| line.contains("pending-ws"))
+        .expect("pending row");
+    assert!(
+        !row.contains(text::WORKSPACE_NO_BRANCH_ICON),
+        "git 查询在途时不得显示无分支标记: {row:?}"
+    );
+
+    state.git_pending.remove(&cwd);
+    let lines = render_lines(&state);
+    let row = lines
+        .iter()
+        .find(|line| line.contains("pending-ws"))
+        .expect("resolved row");
+    assert!(
+        row.contains(&format!("{} pending-ws", text::WORKSPACE_NO_BRANCH_ICON)),
+        "查询完成确认无分支后才显示标记: {row:?}"
     );
 }

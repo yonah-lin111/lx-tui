@@ -13,6 +13,7 @@ use crate::app::trust::TrustWorkspace;
 use crate::app::tooltip::{TOOLTIP_DELAY, Tooltip, TooltipTarget};
 use crate::app::update;
 use crate::ui::right_panel::prompt::frame::prompt_scrollbar;
+use crate::ui::test_support::{git_info, push_git_workspace};
 use ratatui::Terminal as RatatuiTerminal;
 use ratatui::backend::TestBackend;
 use std::path::{Path, PathBuf};
@@ -2572,24 +2573,6 @@ fn overlay_menu_has_no_title_and_modal_uses_bold_header() {
     assert_modal_header_title(&buffer, shell.area);
 }
 
-/// 工作区 git 元数据（侧栏分组渲染测试用）。
-fn git_info(repo_root: &str, checkout: &str, linked: bool, branch: Option<&str>) -> WorkspaceGit {
-    WorkspaceGit {
-        repo_root: PathBuf::from(repo_root),
-        checkout_path: PathBuf::from(checkout),
-        is_linked: linked,
-        branch: branch.map(str::to_string),
-        main_branch: branch.map(str::to_string),
-    }
-}
-
-/// 追加带 git 元数据的工作区。
-fn push_git_workspace(state: &mut AppState, name: &str, cwd: &str, git: WorkspaceGit) {
-    let mut workspace = Workspace::single_terminal(name.to_string(), Some(PathBuf::from(cwd)));
-    workspace.git = Some(git);
-    state.workspaces.push(workspace);
-}
-
 #[test]
 fn sidebar_renders_duplicate_main_checkout_top_level() {
     let mut state = AppState::demo();
@@ -2727,7 +2710,7 @@ fn sidebar_renders_tree_connectors_for_grouped_linked_worktrees() {
         .expect("child row");
     let plain_line = lines
         .iter()
-        .find(|line| line.contains("    tmp"))
+        .find(|line| line.contains(&format!("{} tmp", text::WORKSPACE_NO_BRANCH_ICON)))
         .expect("plain row");
     let char_col =
         |line: &str, needle: &str| line.find(needle).map(|byte| line[..byte].chars().count());

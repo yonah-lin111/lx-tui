@@ -29,7 +29,7 @@ use tokio::sync::mpsc;
 use tokio_stream::StreamExt;
 
 use crate::app::markdown::MentionEntry;
-use crate::app::state::{AppState, WorkspaceGit};
+use crate::app::state::AppState;
 use crate::app::update;
 use crate::chat::process::ProcessUiEvent;
 use crate::config::Config;
@@ -71,7 +71,7 @@ pub enum AppEvent {
     /// 工作区 git 元数据查询结果。
     GitRefreshed {
         cwd: PathBuf,
-        checkout: Option<WorkspaceGit>,
+        result: crate::app::update::GitRefresh,
     },
     /// 信任检查的仓库根解析结果；主循环以其重新入队信任检查。
     TrustRootResolved {
@@ -504,9 +504,11 @@ async fn run_loop(
             update::set_tab_scroll(state, state.tab_scroll, tab_bar.max_scroll);
             dirty = true;
         }
-        if update::tick(state, Instant::now()) {
+        let now = Instant::now();
+        if update::tick(state, now) {
             dirty = true;
         }
+        update::retry_git_queries(state, now);
         // lx loading 转轮：流中/压缩中每 `LX_LOADING_FRAME_MS` 推进一帧（空闲不计时）。
         let streaming = state.has_streaming_lx();
         if streaming {
@@ -731,9 +733,7 @@ fn handle_app_event(
             errors,
             entries,
         } => inventory::apply_skills_loaded(state, root, total, errors, &entries),
-        AppEvent::GitRefreshed { cwd, checkout } => {
-            update::apply_git_refresh(state, &cwd, checkout)
-        }
+        AppEvent::GitRefreshed { cwd, result } => update::apply_git_refresh(state, &cwd, result),
         AppEvent::TrustRootResolved {
             path,
             root,

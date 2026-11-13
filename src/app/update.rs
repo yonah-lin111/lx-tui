@@ -39,9 +39,9 @@ pub use workspace::*;
 pub use workspace_history::*;
 pub use workspace_list::*;
 pub use worktree::{
-    apply_git_refresh, apply_worktree_list, apply_worktree_open_key, commit_worktree_open,
-    open_worktree_dialog, request_git_refresh, set_worktree_open_selection, take_git_requests,
-    toggle_workspace_group, worktree_candidates,
+    GitRefresh, apply_git_refresh, apply_worktree_list, apply_worktree_open_key,
+    commit_worktree_open, open_worktree_dialog, request_git_refresh, retry_git_queries,
+    set_worktree_open_selection, take_git_requests, toggle_workspace_group, worktree_candidates,
 };
 
 use super::actions::Action;

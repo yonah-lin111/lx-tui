@@ -35,24 +35,57 @@ pub struct Checkout {
     pub main_branch: Option<String>,
 }
 
-/// 查询 cwd 所属仓库的全部 worktree；非仓库、git 缺失或命令失败返回 None。
-pub fn list_worktrees(cwd: &Path) -> Option<WorktreeList> {
-    let output = Command::new("git")
+/// worktree 查询结果：区分“确认不是仓库”和“查询失败”。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum WorktreeQuery {
+    Repository(WorktreeList),
+    /// git 明确报告当前路径不是仓库（正常结果，按无分支处理）。
+    NotRepository,
+    /// git 缺失、IO/解析错误或状态未知；调用方不应据此判定无分支。
+    Failed,
+}
+
+/// 查询 cwd 所属仓库；保留“非仓库”与“查询失败”的区别。
+pub fn query_worktrees(cwd: &Path) -> WorktreeQuery {
+    let output = match Command::new("git")
+        // 固定英文输出：下面用 stderr 区分“非仓库”与“查询失败”，不能受用户 locale 影响。
+        .env("LC_ALL", "C")
         .arg("-C")
         .arg(cwd)
         .args(["worktree", "list", "--porcelain"])
         .output()
-        .ok()?;
+    {
+        Ok(output) => output,
+        Err(_) => return WorktreeQuery::Failed,
+    };
     if !output.status.success() {
-        return None;
+        // git 对非仓库固定报 "not a git repository"；其它非零退出按失败处理。
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        return if stderr.contains("not a git repository") {
+            WorktreeQuery::NotRepository
+        } else {
+            WorktreeQuery::Failed
+        };
     }
-    let text = String::from_utf8(output.stdout).ok()?;
+    let Ok(text) = String::from_utf8(output.stdout) else {
+        return WorktreeQuery::Failed;
+    };
     let mut entries = parse_worktree_list(&text);
     for entry in &mut entries {
         entry.path = canonical_or_original(&entry.path);
     }
-    let repo_root = entries.first()?.path.clone();
-    Some(WorktreeList { repo_root, entries })
+    let Some(repo_root) = entries.first().map(|entry| entry.path.clone()) else {
+        return WorktreeQuery::Failed;
+    };
+    WorktreeQuery::Repository(WorktreeList { repo_root, entries })
+}
+
+/// 查询 cwd 所属仓库的全部 worktree；非仓库、git 缺失或命令失败返回 None。
+pub fn list_worktrees(cwd: &Path) -> Option<WorktreeList> {
+    match query_worktrees(cwd) {
+        WorktreeQuery::Repository(list) => Some(list),
+        WorktreeQuery::NotRepository | WorktreeQuery::Failed => None,
+    }
 }
 
 /// cwd 落在列表中的哪个 checkout；取路径前缀最长者（防御嵌套）。

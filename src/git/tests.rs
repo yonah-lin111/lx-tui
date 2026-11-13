@@ -165,6 +165,10 @@ fn list_worktrees_reads_real_repo_with_linked_worktree() {
 
     let repo = std::fs::canonicalize(&repo).expect("canonical repo");
     let linked = std::fs::canonicalize(&linked).expect("canonical linked");
+    assert!(
+        matches!(query_worktrees(&repo), WorktreeQuery::Repository(_)),
+        "真实仓库必须返回 Repository"
+    );
     let list = list_worktrees(&repo).expect("repo lists worktrees");
     assert_eq!(list.entries.len(), 2);
     assert_eq!(list.repo_root, repo);
@@ -206,5 +210,24 @@ fn list_worktrees_returns_none_outside_repo() {
     }
     let base = temp_dir("not-a-repo");
     assert!(list_worktrees(&base).is_none());
+    std::fs::remove_dir_all(&base).expect("cleanup");
+}
+
+#[test]
+fn query_worktrees_distinguishes_non_repo_from_failure() {
+    if !git_available() {
+        return;
+    }
+    let base = temp_dir("query-worktrees");
+    assert_eq!(
+        query_worktrees(&base),
+        WorktreeQuery::NotRepository,
+        "普通目录是确认的非仓库"
+    );
+    assert_eq!(
+        query_worktrees(&base.join("missing")),
+        WorktreeQuery::Failed,
+        "无法进入目录属于查询失败，不能当成非仓库"
+    );
     std::fs::remove_dir_all(&base).expect("cleanup");
 }

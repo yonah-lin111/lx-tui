@@ -163,4 +163,7 @@ fn render_min_size_notice(frame: &mut Frame<'_>, area: Rect, config: &Config) {
 }
 
 #[cfg(test)]
+pub(crate) mod test_support;
+
+#[cfg(test)]
 mod tests;

@@ -3810,14 +3810,73 @@ fn apply_git_refresh_updates_workspaces_with_matching_cwd_only() {
     apply_git_refresh(
         &mut state,
         Path::new("/repo"),
-        Some(git_info("/repo", "/repo", false, Some("main"))),
+        GitRefresh::Resolved(Some(git_info("/repo", "/repo", false, Some("main")))),
     );
     assert!(state.workspaces[0].git.is_some());
     assert!(state.workspaces[other].git.is_some());
 
-    apply_git_refresh(&mut state, Path::new("/repo"), None);
+    apply_git_refresh(&mut state, Path::new("/repo"), GitRefresh::Resolved(None));
     assert!(state.workspaces[0].git.is_none());
     assert!(state.workspaces[other].git.is_some());
+}
+
+#[test]
+fn apply_git_refresh_failure_keeps_old_metadata_and_unknown_state() {
+    let mut state = AppState::demo();
+    let cwd = PathBuf::from("/repo");
+    state.workspaces[0].cwd = Some(cwd.clone());
+    let old = git_info("/repo", "/repo", false, Some("main"));
+    state.workspaces[0].git = Some(old.clone());
+    state.git_pending.insert(cwd.clone());
+
+    apply_git_refresh(&mut state, &cwd, GitRefresh::Failed);
+
+    assert_eq!(
+        state.workspaces[0].git.as_ref(),
+        Some(&old),
+        "查询失败必须保留旧元数据"
+    );
+    assert!(
+        state.git_pending.contains(&cwd),
+        "查询失败保持未知态，避免被当成无分支"
+    );
+    let retry = state.git_retry.get(&cwd).expect("失败必须安排重试");
+    assert_eq!(retry.attempts, 1);
+    assert!(retry.next_at > Instant::now());
+}
+
+#[test]
+fn failed_git_refresh_retries_with_backoff_and_clears_on_success() {
+    let mut state = AppState::demo();
+    let cwd = PathBuf::from("/repo");
+    state.workspaces[0].cwd = Some(cwd.clone());
+    apply_git_refresh(&mut state, &cwd, GitRefresh::Failed);
+
+    let first_at = state.git_retry[&cwd].next_at;
+    assert!(
+        !retry_git_queries(&mut state, Instant::now()),
+        "未到期不重试"
+    );
+    assert!(state.git_requests.is_empty());
+
+    assert!(
+        retry_git_queries(&mut state, first_at),
+        "到期后重新发起查询"
+    );
+    assert_eq!(state.git_requests, vec![cwd.clone()]);
+    assert_eq!(state.git_retry[&cwd].attempts, 2, "重试次数递增");
+    assert!(
+        state.git_retry[&cwd].next_at > first_at,
+        "退避间隔随失败次数增大"
+    );
+
+    apply_git_refresh(
+        &mut state,
+        &cwd,
+        GitRefresh::Resolved(Some(git_info("/repo", "/repo", false, Some("main")))),
+    );
+    assert!(!state.git_retry.contains_key(&cwd), "成功后清除重试计划");
+    assert!(!state.git_pending.contains(&cwd));
 }
 
 #[test]
@@ -3886,12 +3945,12 @@ fn apply_git_refresh_auto_opens_parent_for_first_linked_workspace() {
     apply_git_refresh(
         &mut state,
         Path::new("/repo/.worktrees/feat"),
-        Some(git_info(
+        GitRefresh::Resolved(Some(git_info(
             "/repo",
             "/repo/.worktrees/feat",
             true,
             Some("feature/x"),
-        )),
+        ))),
     );
 
     assert_eq!(state.workspaces.len(), 2);
@@ -3908,12 +3967,12 @@ fn apply_git_refresh_auto_opens_parent_for_first_linked_workspace() {
     apply_git_refresh(
         &mut state,
         Path::new("/repo/.worktrees/feat"),
-        Some(git_info(
+        GitRefresh::Resolved(Some(git_info(
             "/repo",
             "/repo/.worktrees/feat",
             true,
             Some("feature/x"),
-        )),
+        ))),
     );
     assert_eq!(state.workspaces.len(), 2, "已有元数据刷新不重复补开");
 }
