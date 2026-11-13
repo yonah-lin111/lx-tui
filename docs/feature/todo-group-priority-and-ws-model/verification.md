@@ -84,3 +84,10 @@
 - **P3** 独立幽灵行死徽标、`status_at` 边界、同 session 多窗格同步、Todo 边界测试。
 
 未修（记录在 review.md）：P3-1 Todo 大组性能、P3-6 配置无锁读改写、P3-7 ack 前记 recent、P3-8 悬空 default 阻塞 recent 落盘。
+
+## 6. 合并记录（2026-11-13）
+
+- 合并目标：主工作区 `dev`，合并提交 `e8b09999`（`--no-ff`，无冲突）。
+- 合并后主工作区验证：`cargo fmt --check`、`cargo clippy --all-targets -- -D warnings`、`cargo test` 全绿（lib **5331 passed / 6 ignored**；集成 **63 passed / 2 ignored**，0 failed）。
+- 清理：worktree `.worktrees/todo-group-priority-and-ws-model` 已移除，分支 `feat/todo-group-priority-and-ws-model` 已删除，隔离库 `~/.lx-t-dev/db/worktrees/todo-group-priority-and-ws-model-0c545887/` 已清理。
+- 手工 TUI 交互验收（design §8 / task §9.2）仍待用户运行 `cargo run`。

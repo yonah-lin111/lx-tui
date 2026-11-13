@@ -1,7 +1,7 @@
 # Todo 聚合组优先级展示 + 工作区模型记忆：任务清单
 
-> 状态：**已实现；P0/P1/P2 review 修复完成，P3 持久化/性能项留后续**（分支 `feat/todo-group-priority-and-ws-model`）；交互外观与多工作区实测待用户 `cargo run` 验收后决定合并。
-> 日期：2026-11-12。
+> 状态：**已合并到 `dev`（merge `e8b09999`，2026-11-13）**；P0/P1/P2 review 修复完成，P3 持久化/性能项留后续。交互外观与多工作区实测仍待用户 `cargo run` 验收。
+> 日期：2026-11-12；合并 2026-11-13。
 > 设计依据：[design.md](./design.md)；审查记录：[review.md](./review.md)。
 > 检索工具：`codegraph`（lx-tui）、`codebase-memory-mcp`（project `lx-tui`）均已索引本仓库。
 
@@ -179,20 +179,21 @@ cargo test
 
 ---
 
-## 10. 实施结果（2026-11-12）
+## 10. 实施结果（2026-11-12；合并 2026-11-13）
 
 - [x] Todo 几何、连接符、组内最高优先级、仅锚点行徽标、点击归属全部落地；单条条目列位保持不变。
 - [x] `recentModels` 配置字段、四级回退链、`SaveModelChoice` 原子落盘、发送/恢复/steer 记录、切/建工作区状态刷新全部落地。
 - [x] Review P1/P2 修复：历史新建刷新、工作区级模型记忆、窗格选择统一校验、失效 `/resume` 过滤、空白窗格状态同步、当前标签刷新、文档同步。
 - [x] 自动化验证：`cargo fmt --check`、`cargo clippy --all-targets -- -D warnings`、`cargo test` 全绿（lib 5331 passed / 6 ignored；集成测试 63 passed / 2 ignored）。
-- [ ] 用户 `cargo run` 手工验收（design §8 与本文 §9.2），确认 Todo 外观/点击与多工作区模型行为后决定合并。
+- [x] 2026-11-13 合并到 `dev`（merge `e8b09999`），合并后主工作区全量验证通过；worktree 与分支已删除。
+- [ ] 用户 `cargo run` 手工验收（design §8 与本文 §9.2），确认 Todo 外观/点击与多工作区模型行为。
 
 实现说明：
 
 - `/model` 采纳仍写回 `defaultModel`，并同时记入 `recentModels`；`/resume`、实际发送、steer 提升只记 `recentModels`，且入口统一用 `validated_selection` 过滤失效模型。
 - 无任何显式选择时，`/model` 面板会把“第一个可用模型”标为当前项（回退链最后一级的必然结果）。
 - 工作区记忆是 `Workspace.lx_model`（进程内），新窗格/标签优先继承；窗格级 selection 仍可覆盖。
-- 仓库内 `codebase-memory` 索引项目名为 `lx-tui-todo-group-priority-and-ws-model`；`codegraph` 索引位于本 worktree 的 `.codegraph/`。
+- 仓库内 `codebase-memory` 索引项目名为 `lx-tui-todo-group-priority-and-ws-model`（worktree 已删除）；`codegraph` 索引位于主工作区 `.codegraph/`。
 
 ## 11. Review 修复清单
 

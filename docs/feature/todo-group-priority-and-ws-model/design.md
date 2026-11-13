@@ -1,7 +1,7 @@
 # Todo 聚合组优先级展示 + 工作区模型记忆：设计方案
 
-> 状态：**已实现；P0/P1/P2 review 修复完成，P3 持久化并发与大组性能项留后续**（分支 `feat/todo-group-priority-and-ws-model`，worktree `.worktrees/todo-group-priority-and-ws-model`）；交互外观与多工作区实测待用户 `cargo run` 验收后决定合并。
-> 日期：2026-11-12（设计）；2026-11-12（实现与 review 修复）。
+> 状态：**已合并到 `dev`（merge `e8b09999`，2026-11-13）**；P0/P1/P2 review 修复完成，P3 持久化并发与大组性能项留后续。交互外观与多工作区实测仍待用户 `cargo run` 验收。
+> 日期：2026-11-12（设计）；2026-11-12（实现与 review 修复）；2026-11-13（合并）。
 > 项目：`/Users/yonah/projects/agent/lx-tui`（分支 `dev`）。
 > 配套执行清单：[task.md](./task.md)；审查记录：[review.md](./review.md)。
 > 代码检索：`codegraph`（lx-tui，indexed）+ `codebase-memory-mcp`（project `lx-tui`，indexed）。
