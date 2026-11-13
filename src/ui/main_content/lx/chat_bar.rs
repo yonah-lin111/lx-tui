@@ -276,14 +276,34 @@ fn web_search_label(call: &crate::app::state::ToolCallView) -> Option<String> {
     ))
 }
 
-/// 当前仍在流转的 assistant 消息；仅在 `Streaming` 时按 `assistant_id` 定位。
+/// 当前仍在流转的 assistant 消息。
+///
+/// 主聊天用 `request` 定位；BTW 线程与部分子 agent 只维护 `stream_assistant` /
+/// 消息状态，没有 `RequestState::Streaming`，因此必须回退到这两处。
 fn current_streaming_message(chat: &crate::app::state::LxChat) -> Option<&ChatMessageView> {
-    let RequestState::Streaming { assistant_id, .. } = &chat.request else {
-        return None;
+    let assistant_id = match &chat.request {
+        RequestState::Streaming { assistant_id, .. } => Some(assistant_id.as_str()),
+        // BTW 线程没有 request；Idle 时按 stream_assistant / 消息状态回退。
+        RequestState::Idle => chat.stream_assistant.as_deref(),
+        // Committing / Finishing 是本地收尾，不得回放上一轮 assistant 的阶段。
+        RequestState::Committing { .. } | RequestState::Finishing { .. } => return None,
     };
-    chat.messages
-        .iter()
-        .find(|message| message.id == *assistant_id && message.role == "assistant")
+    if let Some(assistant_id) = assistant_id
+        && let Some(message) = chat
+            .messages
+            .iter()
+            .find(|message| message.id == assistant_id && message.role == "assistant")
+    {
+        return Some(message);
+    }
+    if matches!(chat.request, RequestState::Idle) {
+        return chat
+            .messages
+            .iter()
+            .rev()
+            .find(|message| message.role == "assistant" && message.status == "streaming");
+    }
+    None
 }
 
 /// 计划里第一个 `in_progress` 步骤的原文（会话级快照，跨轮保留）。

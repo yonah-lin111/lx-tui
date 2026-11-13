@@ -1,8 +1,8 @@
 # 实施清单：BTW / Agents 列表-详情导航与统一 composer
 
-> 状态：**已实现于 `feat/lx-btw-list-and-agent-composer`，待用户审核合并**。
+> 状态：**已实现并于 2026-11-13 完成 review 修复，待用户运行 `cargo run` 确认后合并**。
 >
-> 设计依据：[design.md](design.md)。
+> 设计依据：[design.md](design.md)；审查记录：[review.md](review.md)。
 >
 > 本文件中的步骤按依赖顺序排列；生产代码与测试已完成，验证结果见文末“实施结果”。
 
@@ -66,7 +66,7 @@ pub const LX_TASK_AGENTS_SEARCH_PLACEHOLDER: &str = "search agents…";
 pub const LX_TASK_AGENTS_SEARCH_EMPTY: &str = "no matching agents";
 pub const LX_TASK_AGENTS_LIST_LOADING: &str = "Loading agents...";
 pub const LX_TASK_AGENTS_LOADING: &str = "loading agent transcript…";
-pub const LX_TASK_AGENT_INPUT_MARK: &str = "Agent";
+pub const LX_TASK_AGENT_INPUT_MARK: &str = "Subagent";
 pub const LX_TASK_HINTS_AGENTS_LIST: [Hint; 6] = [
     hint("select", "↑↓"),
     hint("filter", "tab"),
@@ -282,10 +282,9 @@ pub fn visible_indices(&self, filter: AgentFilter, query: &str) -> Vec<usize> {
 pub fn composer(&self, agent_id: &str) -> Option<&DetailComposer>;
 pub fn composer_mut(&mut self, agent_id: &str) -> Option<&mut DetailComposer>;
 pub fn ensure_composer(&mut self, agent_id: &str) -> &mut DetailComposer;
-pub fn remove_composer(&mut self, agent_id: &str);
 ```
 
-- [ ] 在 run 列表更新/清理处调用 `remove_composer`，避免 agent 消失后草稿残留。
+- [x] 不保留未调用的 `remove_composer`；当前 run 列表只增不减，会话切换/`clear_agents` 时整体清空草稿。
 
 ### 2.6 `Lx` 的活动编辑器
 
@@ -853,18 +852,18 @@ wc -l src/ui/main_content/lx/task.rs \
       src/app/update/chat/task_page.rs
 ```
 
-- [ ] 生产文件 ≤1000 行。
-- [ ] 新增职责文件目标约 500 行。
-- [ ] 测试跟随生产模块拆分；`task/tests/btw_list.rs`、`task/tests/agent_list.rs`、`app/update/pane/tests/*` 按场景拆分。
-- [ ] 不在 `task/tests.rs` 继续堆积 BTW/Agents 新场景。
+- [x] 生产文件 ≤1000 行（`task.rs` 997 行）。
+- [x] 新增职责文件保持约 500 行（`task/agents.rs` 511 行、`task/btw.rs` 306 行）。
+- [x] 测试跟随生产模块拆分；BTW 场景在 `task/tests/btw_list.rs`，Agents 场景在 `task/tests/agent_list.rs`。
+- [x] `task/tests.rs` 不再堆积 BTW/Agents 新场景（959 行）。
 
 ## 10. 完成标准
 
 - [ ] `design.md` §16 的 10 条验收标准全部满足。
-- [ ] `rg -n -i "btwlist|btw-list" src tests` 无生产/测试引用（历史 docs 注记除外）。
-- [ ] `rg -n "agent_reply|agent_reply_target|BtwFocus|picker_open|pending_pick|picker_loading" src tests` 无引用。
-- [ ] `rg -n "stop_all_subagents|stop all" src/ui/text.rs src/app/update` 无引用。
-- [ ] `cargo fmt --check`、`cargo clippy --all-targets -- -D warnings`、完整 `cargo test` 通过。
+- [x] `rg -n -i "btwlist|btw-list" src` 无生产引用；测试保留 `/btwList` 回归断言（`parse_btw_command` 必须返回 `None`）。
+- [x] `rg -n "agent_reply|agent_reply_target|BtwFocus|picker_open|pending_pick|picker_loading" src tests` 无引用。
+- [x] `rg -n "stop_all_subagents|stop all" src/ui/text.rs src/app/update` 无引用（会话删除路径仍保留内部批量取消函数）。
+- [x] `cargo fmt --check`、`cargo clippy --all-targets -- -D warnings`、完整 `cargo test` 通过（5316 passed / 0 failed / 6 ignored）。
 - [ ] 用户完成 `cargo run` 手工确认后，才标记本任务完成。
 
 ## 11. 风险与回滚
@@ -877,9 +876,10 @@ wc -l src/ui/main_content/lx/task.rs \
 ## 12. 实施结果
 
 - 已按 §1–§7 完成生产代码与测试改造；未新增数据库迁移。
-- `/btwList`、`agent_reply`、`BtwFocus`、picker 状态与 `Ctrl+A` stop-all 已从 `src` / `tests` 清除。
+- `/btwList`、`agent_reply`、`BtwFocus`、picker 状态与 `Ctrl+A` stop-all 已从生产代码清除；测试保留 `/btwList` 不再被识别的回归断言。
 - 新增 `src/app/state/lx/composer.rs`、`src/ui/main_content/lx/task/detail.rs`。
-- 文件行数：`src/ui/main_content/lx/task.rs` 982 行；`task/agents.rs` 490 行；`task/btw.rs` 298 行；`task/detail.rs` 131 行；`app/update/pane/task_page.rs` 709 行。
+- 文件行数：`src/ui/main_content/lx/task.rs` 997 行；`task/agents.rs` 511 行；`task/btw.rs` 306 行；`task/detail.rs` 131 行；`app/update/pane/task_page.rs` 718 行。
+- 测试拆分：`task/tests.rs` 959 行，BTW 场景在 `task/tests/btw_list.rs`（306 行），Agents 场景在 `task/tests/agent_list.rs`（912 行）。
 - 验证命令已执行：
   - `cargo fmt --all`
   - `cargo clippy --all-targets -- -D warnings`
@@ -895,3 +895,21 @@ wc -l src/ui/main_content/lx/task.rs \
 - BTW / Agents 编辑态在 composer 上方的 chat bar 行显示当前目标 loading：BTW 看线程 `is_loading()`，Agents 看当前 run `is_running()`；列表态不显示。
 - loading 沿用主 agent 的扫描窗口，但只用默认前景色（dim / bold 区分），不跑四色渐变。
 - 新增回归测试：搜索行光标坐标、主输入/历史选区清理、BTW/Agents 目标 loading 与单色约束。
+
+## 14. 2026-11-13 Review 修复
+
+按 `review.md` 的 P1–P3 修复：
+
+- BTW 搜索后 `active` 与列表高亮分叉：过滤仍有匹配时，`active`/高亮/详情一起落到第一项，并补发 `LoadThread`；`Shift+Enter` 不再静默失败。
+- 搜索行硬件光标列改为以文本起点为基准，补非空文本与横向滚动测试。
+- Agents composer 接入实际窗格宽高，恢复软换行、3..=5 行高度与光标可见性。
+- BTW 切换 Q、BTW/Agents 搜索、`Ctrl+X` 剪切后统一清空旧对话选区。
+- 搜索行滚轮守卫只在列表态且搜索行可见时生效，修复 Processes 首行与 composer 行滚轮被吞。
+- 编辑态 `list_scrollbar` 返回 None，隐藏列表不再截获 composer 边缘点击/拖拽。
+- BTW `Accepted` 回投携带 `qa_id`，按提交所属线程结算，避免切 Q 后 `pending_submit` 卡死。
+- 同 tab 打开 agent 链接/`/subagents` 时显式退出旧 composer、清搜索。
+- BTW/Agents 目标 loading 文案从 `stream_assistant` / streaming assistant 回退派生，不再恒为 `Working...`。
+- Agents 状态筛选无匹配显示 `no agents in this filter`。
+- 双击时先按点击行重新选中；裸 `/btw` 重开保留当前 Q；`Subagent` 标记窄窗不再溢出/被胶囊覆盖。
+- 删除未调用的 `remove_composer`，修正陈旧注释。
+- 新增/更新回归测试；完整 `cargo fmt`、`cargo clippy --all-targets -- -D warnings`、`cargo test` 通过。

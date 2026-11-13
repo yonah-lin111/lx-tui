@@ -25,6 +25,7 @@ pub use popups::{
 };
 pub use task_page::{
     apply_task_paste, cycle_task_tab, enter_task_agent_edit, select_task_agent_filter,
+    sync_agents_search_selection,
 };
 
 /// 按方向滚动终端窗格回滚视口（负数向上、正数向下）；返回视口是否移动。

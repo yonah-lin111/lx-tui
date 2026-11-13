@@ -95,7 +95,7 @@ fn btw_list_shift_enter_enters_edit_and_escape_returns() {
 }
 
 #[test]
-fn btw_list_search_filters_and_enter_is_noop() {
+fn btw_list_search_moves_highlight_and_shift_enter_enters() {
     let (mut state, pane) = btw_pane();
     {
         let target = state.pane_mut_anywhere(pane).expect("pane");
@@ -109,10 +109,29 @@ fn btw_list_search_filters_and_enter_is_noop() {
     }
     let btw = &state.pane_anywhere(pane).expect("pane").lx.btw;
     assert_eq!(btw.filtered_qa_indices(), vec![1]);
-    assert_eq!(btw.active.as_deref(), Some("qa-1"));
+    assert_eq!(btw.active.as_deref(), Some("qa-2"));
+    assert_eq!(btw.selected_index(), Some(0), "搜索后高亮第一项");
     assert!(!btw.editing, "普通 Enter 不进入编辑态");
     assert!(apply_input(&mut state, pane, LxInput::Enter));
     assert!(!state.pane_anywhere(pane).expect("pane").lx.btw.editing);
+    assert!(
+        apply_input(&mut state, pane, LxInput::EnterFolder),
+        "Shift+Enter 必须进入过滤后的第一项"
+    );
+    assert!(state.pane_anywhere(pane).expect("pane").lx.btw.editing);
+    assert!(apply_input(&mut state, pane, LxInput::Escape));
+    assert!(!state.pane_anywhere(pane).expect("pane").lx.btw.editing);
+    assert_eq!(
+        state
+            .pane_anywhere(pane)
+            .expect("pane")
+            .lx
+            .btw
+            .search
+            .text(),
+        "qa-2",
+        "Esc 只退回列表，搜索词保留"
+    );
     assert!(apply_input(&mut state, pane, LxInput::Escape));
     assert!(
         state
@@ -651,8 +670,79 @@ fn btwlist_is_not_a_slash_command() {
         crate::app::state::lx::slash::SlashCommand::ALL
             .iter()
             .all(|command| !command.text().eq_ignore_ascii_case("/btwList")),
-        "/btwList must be removed"
+        "/btwList must be removed from the slash enum"
     );
+    assert!(
+        crate::app::state::lx::slash::parse_btw_command("/btwList").is_none(),
+        "输入路由不得把 /btwList 识别成 /btw"
+    );
+    assert_eq!(
+        crate::app::state::lx::slash::parse_btw_command("/btw List"),
+        Some(("List", false)),
+        "只有空白分隔才是 /btw prompt"
+    );
+}
+
+#[test]
+fn bare_btw_reopen_keeps_the_current_qa() {
+    let (mut state, pane) = btw_pane();
+    {
+        let target = state.pane_mut_anywhere(pane).expect("pane");
+        target.lx.btw.qa = vec![qa("qa-1", true), qa("qa-2", true)];
+        target.lx.btw.active = Some("qa-2".into());
+        target.lx.btw.sync_selection_after_filter();
+        target.lx.replace_input("/btw");
+    }
+    assert!(try_submit_btw_command(&mut state, pane));
+    assert_eq!(
+        state
+            .pane_anywhere(pane)
+            .expect("pane")
+            .lx
+            .btw
+            .active
+            .as_deref(),
+        Some("qa-2"),
+        "裸 /btw 重开应保留当前 QA，而不是抢到最新"
+    );
+}
+
+#[test]
+fn accepted_ack_updates_original_qa_after_the_user_switches() {
+    let (mut state, pane) = btw_pane();
+    {
+        let target = state.pane_mut_anywhere(pane).expect("pane");
+        target.lx.btw.qa = vec![qa("qa-1", true), qa("qa-2", false)];
+        target.lx.btw.active = Some("qa-1".into());
+        target.lx.btw.sync_selection_after_filter();
+        target
+            .lx
+            .btw
+            .thread_mut("qa-1")
+            .expect("thread")
+            .pending_submit = Some(("submit-1".into(), 0));
+    }
+    assert!(super::switch_qa(&mut state, pane, "qa-2"));
+    assert!(on_accepted(
+        &mut state,
+        pane,
+        AcceptedBtw {
+            qa_id: "qa-1".into(),
+            submit_id: "submit-1".into(),
+            thread_id: "thread-1".into(),
+            child_session_id: "child-1".into(),
+            user_message_id: "msg-1".into(),
+            text: "side question".into(),
+        }
+    ));
+    let btw = &state.pane_anywhere(pane).expect("pane").lx.btw;
+    assert_eq!(btw.active.as_deref(), Some("qa-2"), "ACK 不得抢回 active");
+    let thread = btw
+        .threads()
+        .find(|thread| thread.qa_id == "qa-1")
+        .expect("thread");
+    assert!(thread.pending_submit.is_none());
+    assert_eq!(thread.chat.messages.last().expect("message").role, "user");
 }
 
 #[test]

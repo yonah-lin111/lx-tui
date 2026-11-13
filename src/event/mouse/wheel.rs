@@ -543,19 +543,28 @@ pub(crate) fn handle_mouse_wheel(
                 && (rects.list.y..rects.list.bottom()).contains(&mouse.row)
                 && (inner.x..inner.right()).contains(&mouse.column)
             {
-                if mouse.row == ui::main_content::lx::task::search_rect(rects.list).y {
-                    return;
-                }
-                let (btw, btw_editing, agents_editing) = state
+                let (btw, btw_editing, agents_editing, has_search_row) = state
                     .pane_anywhere(pane)
                     .map(|target| {
                         (
                             target.lx.is_btw_tab(),
                             target.lx.btw_editing(),
                             target.lx.agents_editing(),
+                            target.lx.task.as_ref().is_some_and(|page| {
+                                page.tab != crate::app::state::TaskTab::Processes
+                            }),
                         )
                     })
-                    .unwrap_or((false, false, false));
+                    .unwrap_or((false, false, false, false));
+                // 只有列表态且该 tab 真的画搜索行时才吞这一行；Processes 的首行和
+                // 编辑态 composer 的正文行都必须继续落到列表/composer 滚轮分支。
+                if has_search_row
+                    && !btw_editing
+                    && !agents_editing
+                    && mouse.row == ui::main_content::lx::task::search_rect(rects.list).y
+                {
+                    return;
+                }
                 if (btw && btw_editing) || agents_editing {
                     if update::scroll_lx_input(state, pane, delta) {
                         *dirty = true;

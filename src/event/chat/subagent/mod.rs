@@ -469,7 +469,7 @@ fn close(
     })
 }
 
-/// 停止窗格所属整棵会话树里全部正在运行的子 agent（`Agents` 面板 `^a`）。
+/// 停止窗格所属整棵会话树里全部正在运行的子 agent（会话删除/退出路径使用）。
 pub(crate) fn stop_all_subagents_for_pane(
     state: &mut AppState,
     streams: &mut ChatStreams,

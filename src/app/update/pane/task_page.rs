@@ -88,6 +88,12 @@ fn sync_agent_window(state: &mut AppState, pane: PaneId) {
     page.agents_window.clamp(visible.len());
 }
 
+/// 搜索文本被非编辑路径改写后，同步 Agents 高亮并清掉旧详情选区。
+pub fn sync_agents_search_selection(state: &mut AppState, pane: PaneId) {
+    sync_agent_window(state, pane);
+    crate::app::update::clear_lx_selection_for(state, pane);
+}
+
 /// Agents 列表搜索框编辑；文本变化后按稳定 ID 恢复高亮。
 fn edit_agents_search(state: &mut AppState, pane: PaneId, command: LxInput) -> bool {
     let Some(target) = state.pane_mut_anywhere(pane) else {
@@ -133,6 +139,7 @@ fn edit_agents_search(state: &mut AppState, pane: PaneId, command: LxInput) -> b
         );
     if changed {
         sync_agent_window(state, pane);
+        crate::app::update::clear_lx_selection_for(state, pane);
     }
     changed
 }

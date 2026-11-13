@@ -516,11 +516,6 @@ impl AgentsState {
             .or_insert_with(DetailComposer::new_agent)
     }
 
-    /// 丢弃已消失 agent 的草稿。
-    pub fn remove_composer(&mut self, agent_id: &str) {
-        self.composers.remove(agent_id);
-    }
-
     /// 空闲子会话 LRU 回收：已加载的非运行态 run 超过上限时卸载最久未访问的。
     ///
     /// `protected_agent_id` 是当前选中的 run，永不卸载；返回被卸载的 agent id。

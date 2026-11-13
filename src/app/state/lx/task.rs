@@ -4,8 +4,8 @@
 //! 也不销毁 lx 页状态——`pane.lx` 的会话、消息、草稿、滚动位置全部原样保留，
 //! 退出页面即可回到离开时的样子。因此「打开后台任务」不需要保存/恢复任何东西。
 //!
-//! 页面结构对齐 opencode 的 composer 多 tab：顶部一条 tab（`Processes` / `Agents`），
-//! 主体是当前 tab 的列表，底部一行键位提示。`Agents` 上半区是选中子 agent 的完整
+//! 页面结构对齐 opencode 的 composer 多 tab：顶部一条 tab（`Processes` / `Agents` / `BTW`），
+//! 主体是当前 tab 的列表，底部一行键位提示。`Agents` / `BTW` 上半区是选中目标的完整
 //! 消息流（复用主历史渲染与折叠），下半区是列表（滚动/点击切换）。
 
 use crate::chat::agent::AgentStatus;
@@ -193,7 +193,7 @@ impl TaskPage {
             TaskTab::Agents => agents
                 .visible_indices(self.agent_filter, self.agents_search.text())
                 .len(),
-            // BTW 页签不再展示可选的 QA 列表：底部只有归属提示与输入框。
+            // BTW 的列表窗口独立维护，不参与 `TaskPage` 的进程/agent 窗口。
             TaskTab::Btw => 0,
         }
     }

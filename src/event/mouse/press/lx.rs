@@ -400,11 +400,14 @@ fn handle_task_row_click(state: &mut AppState, pane: PaneId, index: usize, btw: 
     state.task_list_click = Some((pane, index, now));
     if btw {
         if double {
+            // 双击窗口内可能用 ↑/↓ 改过高亮；编辑必须落在点击的同一行。
+            update::select_btw_qa(state, pane, index);
             update::enter_btw_edit(state, pane);
         } else {
             update::select_btw_qa(state, pane, index);
         }
     } else if double {
+        update::select_task_agent(state, pane, index);
         update::enter_task_agent_edit(state, pane);
     } else {
         update::select_task_agent(state, pane, index);
@@ -454,4 +457,5 @@ fn handle_task_search_click(state: &mut AppState, pane: PaneId, area: Rect, colu
         }
     }
     update::clear_selection(state);
+    state.task_list_click = None;
 }

@@ -48,7 +48,7 @@ pub use btw::{
     on_qa_list_loaded, on_recipient_started as on_btw_recipient_started,
     on_thread_loaded as on_btw_thread_loaded, on_tool_state as on_btw_tool_state, open_btw_tab,
     scroll_btw_detail, select_btw_qa, set_task_btw_scroll, submit_current as submit_btw,
-    toggle_btw_card, try_submit_btw_command,
+    sync_search_selection as sync_btw_search_selection, toggle_btw_card, try_submit_btw_command,
 };
 pub use compact::{
     compact_command, on_compact_empty, on_compact_failed, on_compact_finished,

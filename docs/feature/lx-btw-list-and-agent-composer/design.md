@@ -25,7 +25,7 @@
 2. **编辑态**：
    - 隐藏顶边框、tab 行、搜索行与列表，底部只剩 composer。
    - composer 高度按草稿软换行在 3..=5 行之间，上方对话区自动吃满剩余高度。
-   - composer 顶边框左侧标记 `BTW` 或 `Agent`；右侧显示 QA 归属 / 目标。
+   - composer 顶边框左侧标记 `BTW` 或 `Subagent`；右侧显示 QA 归属 / 目标。
    - 发送后留在编辑态并清空草稿；`Esc` 退回列表态。
 3. **BTW 与 Agents 详情渲染完全同源**：
    - 同一套 `HistorySource` 绘制、量行、锚点重排、滚动条、空态/加载态、卡片折叠、选区与复制。
@@ -49,20 +49,20 @@
 | Q3 | 列表态固定 8 行：顶边框 1 + tab 行 1 + 搜索行 1 + 列表 5；BTW 与 Agents 相同，`Processes` 保持 6 行列表。 |
 | Q4 | 编辑态底部只有 composer（3..=5 行）；tab 行、顶部分隔线、搜索行与列表全部隐藏；上方对话区占满剩余高度。 |
 | Q5 | 编辑态 `Esc` 始终退回列表态并保留草稿；列表态再按 `Esc` 才关闭面板。搜索词非空时先清空搜索词。 |
-| Q6 | `/btw prompt` 直接进入最新主 Q 的编辑态并提交；裸 `/btw` 进入列表态，高亮最新主 Q。 |
+| Q6 | `/btw prompt` 直接进入最新主 Q 的编辑态并提交；裸 `/btw` 进入列表态。首次打开高亮最新主 Q，再次打开保留当前浏览的 Q（与 Q12 一致）。 |
 | Q7 | Agents 也改用“列表 + `Shift+Enter` 进入详情 + 独立 composer”；移除 `agent_reply` 单行内联输入。 |
 | Q8 | Agents composer 复用纯文本编辑核心（软换行、选区、撤销重做、多行粘贴、硬件光标），但不提供 `@` 文件/子 agent 提及与 `/` 命令面板；BTW 保留 `@` 提及与粘贴，删除 `/btwList` 后不再有 BTW 专属 `/` 命令。 |
 | Q9 | 搜索范围：BTW 匹配主 Q 标题；Agents 匹配昵称、角色、任务标题与 `agent_id`；先应用 `all/active/done` 筛选，再套搜索。无结果文案 `no matching questions` / `no matching agents`。 |
 | Q10 | 切换 tab 时强制退出编辑态并清空搜索词；列表高亮保留；未发送草稿按 Q / agent 保留。关闭整个面板后重新打开回到列表态，搜索词清空，高亮保留。 |
 | Q11 | 取消 `BtwFocus` 与 `Tab` 切焦点；composer 恒聚焦；`PgUp/PgDn` 每页 10 行、滚轮每格 3 行滚动上方对话，与 Agents 详情一致。 |
 | Q12 | 主会话新增 Q 不自动抢走高亮；仅当首次打开、高亮为空或原 Q 被删除时回退到最新 Q。 |
-| Q13 | composer 标记：BTW 左侧 `BTW`、右侧保留 `QA n · 标题 · To: <回答者>`；Agents 左侧 `Agent`、右侧 `To: <nickname> [<role>]`。只在编辑态出现。 |
+| Q13 | composer 标记：BTW 左侧 `BTW`、右侧保留 `QA n · 标题 · To: <回答者>`；Agents 左侧 `Subagent`、右侧 `To: <nickname> [<role>]`。只在编辑态出现；窄窗格时标记整体隐藏，不截半截。 |
 | Q14 | 列表 `↑/↓` 到两端即停，不关闭面板；退出统一用 `Esc`。 |
 | Q15 | 列表行单击选中并预览，双击进入编辑态；点击搜索框只定位文本光标；编辑态点击上方对话不切焦点。 |
 | Q16 | 高亮到尚无 BTW 线程的 Q 时显示 `No side conversation yet`，不提前写库；历史加载中显示与 Agents 相同的呼吸 loading。 |
 | Q17 | BTW 行左侧 `QA n · 标题`；右侧有线程时 `● side thread`，最近批次为 `queued/running/failed/interrupted` 时改显示状态词并着色；Agents 行维持现有树形列，只增加搜索行。 |
-| Q18 | 列表加载中显示 `Loading main questions...` / `Loading agents...`；空列表显示 `No main questions yet` / `no subagents yet`；此时 `Shift+Enter` 无动作，对话区显示 `No side conversation yet` 或 `no subagents yet`。 |
-| Q19 | Agents 草稿按 `agent_id` 各存一份；切换高亮、回列表、切 tab 都不丢；发送成功清空；agent 消失时丢弃；不跨重启恢复。 |
+| Q18 | 列表加载中显示 `Loading main questions...` / `Loading agents...`；空列表显示 `No main questions yet` / `no subagents yet`；状态筛选无匹配但存在 agent 时显示 `no agents in this filter`。此时 `Shift+Enter` 无动作，对话区显示 `No side conversation yet` 或 `no subagents yet`。 |
+| Q19 | Agents 草稿按 `agent_id` 各存一份；切换高亮、回列表、切 tab 都不丢；发送成功清空；会话切换/`clear_agents` 时整体丢弃；不跨重启恢复。 |
 | Q20 | 搜索词为空时 `←/→` 轮转 tab；搜索词非空时 `←/→` 移动搜索框光标。 |
 | Q21 | 列表态 `Tab`：Agents 轮转状态筛选；BTW 不动作；`Shift+Tab` 两页都不动作。 |
 | Q22 | 列表态普通 `Enter` 不进入、不关闭、不换行；只有 `Shift+Enter` 进入选中项。 |
@@ -73,7 +73,7 @@
 | Q27 | Agents 发送成功后留在编辑态并清空输入；不退回列表。 |
 | Q28 | 移除 `Ctrl+A` 停止全部子 agent；不再保留该快捷键。列表搜索框按既有编辑器语义：`Ctrl+A` 移到行首，`Ctrl+Shift+A` / `Cmd+Shift+A` 全选；编辑态与主编辑器一致。 |
 | Q29 | 高亮切换到不同 Q 时，该 Q 对话重置到最底部并恢复 `follow`；切回也不恢复旧阅读位置。 |
-| Q30 | 搜索过滤到 0 条时，上方对话区保留最后选中的内容；只有列表显示无匹配。清空搜索后原选中项恢复高亮。 |
+| Q30 | 搜索过滤到 0 条时，上方对话区保留最后选中的内容；只有列表显示无匹配。仍有匹配但当前 active 被过滤掉时，active、高亮与详情统一落到第一项（确保 `Shift+Enter` 可用）；清空搜索后保持该第一项。 |
 
 ## 3. 当前实现事实（含关键代码）
 
@@ -232,7 +232,7 @@ pub fn active_editor(&self) -> &Lx {
 
 - 不画顶边框、tab 行、搜索行、列表。
 - composer 自身保留上下两条 `─` 边框。
-- 左侧标记 `BTW` / `Agent`；右侧胶囊显示归属。
+- 左侧标记 `BTW` / `Subagent`；右侧胶囊显示归属。
 - 高度 = 内容行数（1..=3）+ 2 条边框 = 3..=5。
 
 ### 4.3 列表行格式
@@ -567,6 +567,7 @@ pub(crate) enum EmptyState<'a> {
 - 未加载且无消息：与 Agents 相同的呼吸圆点 + `loading side conversation…`（BTW）/ `loading agent transcript…`（Agents）。
 - 已加载且空：`No side conversation yet` / `no subagents yet`。
 - 搜索无结果但详情保留：不进入空态，继续画最后选中内容（Q30）。
+- 编辑态目标的 composer 上方复用 chat bar：BTW 看 `thread.is_loading()`，Agents 看 `run.is_running()`；列表态不显示。文案从目标自身消息流派生，BTW/Agents 没有 `RequestState::Streaming` 时回退到 `stream_assistant` / 最后一条 streaming assistant；扫描动画只用默认前景色（base dim / 窗口 bold），不跑主聊天四色渐变。
 
 ### 6.3 锚点与视口
 
@@ -735,7 +736,7 @@ pub(crate) fn draw_edit(grid: &mut Grid, rect: Rect, lx: &Lx, focused: bool) -> 
 }
 ```
 
-`draw_composer_mark` 在顶边框左侧覆盖 `─` 写入 ` BTW ` / ` Agent `，使用 accent + bold；右侧胶囊沿用现有 `style::btw_qa_badge()` 或 `style::session_title_badge`。
+`draw_composer_mark` 在顶边框左侧覆盖 `─` 写入 ` BTW ` / ` Subagent `，使用 accent + bold；窄窗格时标记整体隐藏；右侧胶囊沿用现有 `style::btw_qa_badge()` 或 `style::session_title_badge`。
 
 ### 7.7 几何入口
 
@@ -795,10 +796,10 @@ if tab == Agents {
 每次文本变化后：
 
 1. 重算可见列表。
-2. 用稳定选中 ID 恢复高亮位置；找不到则高亮第一项（列表非空）。
+2. 稳定选中 ID 仍在可见列表时恢复其位置；被过滤掉且列表非空时，高亮与详情落到第一项（BTW 同步更新 `active` 并发 `LoadThread`）。
 3. `viewport = None`。
 4. 若高亮变化，触发预览切换（BTW `switch_qa` / Agents `select_task_agent`）。
-5. 清空 `lx_selection`，避免搜索文本与对话选区串用。
+5. 清空 `lx_selection`，避免搜索文本与对话选区串用；剪切搜索文本走同一同步路径。
 
 ### 8.3 编辑态
 
@@ -906,7 +907,7 @@ Agents：
 
 ### 9.4 `/btw` 语义
 
-- 裸 `/btw`：打开 BTW tab，列表态，`active=None` 并清搜索；QA 列表回投后高亮最新 Q。
+- 裸 `/btw`：打开 BTW tab，列表态并清搜索；首次打开（`active=None`）由 QA 列表回投高亮最新 Q，已有 `active` 时保留当前浏览的 Q（Q12）。
 - `/btw prompt`：打开 BTW tab，`active=None`、进入编辑态等待列表回投，随后选最新 Q 并提交 prompt。
 - 无 QA：列表显示空态；`/btw prompt` 的正文回填主输入并 warning，不再保留隐藏 composer。
 
@@ -939,6 +940,7 @@ Agents：
 - 迟到回投不覆盖新选中项。
 - `loaded=true` 后不再重复加载。
 - 若当前在编辑态且线程刚建立，保持 composer 可见。
+- `Accepted` 回投必须携带 `qa_id` 并按该线程定位；ACK 可能晚于用户切换 QA，不能只匹配当前 `active`，否则 `pending_submit` 永久残留。
 
 ### 10.3 Agents 列表更新
 
@@ -983,6 +985,7 @@ pub(crate) enum TaskHit {
 双击判定：
 
 - 新增 `AppState.task_list_click: Option<(PaneId, u16, u16, Instant, usize)>` 或复用现有 `selection_click` 但加 pane 标识；建议新增专用字段，避免与对话选区双击串用。
+- 双击命中时先按点击行重新选中，再进入编辑态；避免两次点击之间用 `↑/↓` 改过高亮后打开错误项。
 - 与 Todo / 工作区列表使用同一套单击/双击窗口。
 
 ### 11.2 滚轮
@@ -999,7 +1002,8 @@ pub(crate) enum TaskHit {
   - Agents 编辑态 -> `scroll_lx_input`（composer）
   - Btw 列表态 -> `scroll_btw_list`（5 行）
   - Btw 编辑态 -> `scroll_lx_input`（composer）
-- 搜索行上的滚轮吞掉，不穿透。
+- 仅 **列表态且该 tab 真的绘制搜索行** 时吞掉搜索行滚轮；Processes 首行与编辑态 composer 行继续走列表/composer 滚轮。
+- 编辑态不生成列表滚动条几何，也不接受列表滚动条命中/拖拽。
 
 ### 11.3 滚动条
 
@@ -1008,7 +1012,7 @@ pub(crate) enum TaskHit {
   - Agents：`visible_indices(filter, query).len()` + 5 行可见。
   - Btw：`filtered_qa_indices().len()` + 5 行可见。
 - 拖拽/轨道点击与键盘选择共用同一份可见列表。
-- `handle_task_list_scrollbar_press` / `drag.rs` 不需要新入口，只更新分派。
+- 编辑态 `list_scrollbar` / `task_list_scrollbar` 返回 None，避免隐藏列表吞掉 composer 边缘点击。
 
 ## 12. 文件修改清单
 
@@ -1061,7 +1065,7 @@ pub(crate) enum TaskHit {
 | 编辑态对话区 | 输出矩形比列表态多 3 行（顶边框 + tab + 搜索）。 |
 | 搜索行 | 空显占位；有词显示光标、选区与水平滚动。 |
 | 列表滚动条 | 超过 5 条才出现；只覆盖列表 5 行。 |
-| 标记 | 编辑态顶边框左侧 `BTW` / `Agent`；右侧归属/目标。 |
+| 标记 | 编辑态顶边框左侧 `BTW` / `Subagent`；右侧归属/目标。 |
 
 ### 13.2 BTW 列表
 
@@ -1150,7 +1154,7 @@ pub(crate) enum TaskHit {
 3. `Shift+Enter` 与双击都能进入编辑态；编辑态无 tab/顶分隔线/搜索/列表。
 4. 编辑态 composer 标记、归属胶囊、3..=5 行高度正确；发送后留在编辑态；`Esc` 回列表。
 5. BTW `@` 提及与粘贴仍可用；Agents composer 无 `@`/`/` 面板。
-6. `/btwList` 在代码、文案、测试、E2E 中完全消失；`/btw` 与 `/btw prompt` 行为符合 Q6。
+6. `/btwList` 在生产代码与文案中完全消失；测试保留“不再识别”的回归断言；`/btw` 与 `/btw prompt` 行为符合 Q6/Q12。
 7. BTW 与 Agents 详情在空态、加载、流式、折叠、选区、复制、滚轮、翻页上表现一致。
 8. `Ctrl+A` 不再停止全部 agent；`Ctrl+D` 仍停止当前目标。
 9. `cargo fmt`、`cargo clippy --all-targets -- -D warnings`、受影响测试全部通过。
@@ -1170,4 +1174,16 @@ pub(crate) enum TaskHit {
 - `Esc` 优先级：浮层（仅 BTW）→ 编辑态退回列表 → 列表清搜索 → 关闭面板。
 - 鼠标单击行只选中/预览，同一行 400ms 内第二次单击进入编辑；搜索行点击按列定位光标。
 - 新增测试覆盖：BTW 搜索/稳定选中/Shift+Enter/回车不变/空列表；Agents 搜索/Shift+Enter/草稿/取消态；Agents composer 复制剪切；8 行列表与 5 行正文；BTW/Agents 详情 loading 与布局。
-- 验证：`cargo fmt --all`、`cargo clippy --all-targets -- -D warnings`、完整 `cargo test` 均通过（5296+ 单测，0 失败；6 ignored）。
+- 验证：`cargo fmt --all`、`cargo clippy --all-targets -- -D warnings`、完整 `cargo test` 均通过（5316 单测，0 失败；6 ignored）。
+
+## 18. Review 修复记录（2026-11-13）
+
+只读审查发现的问题与修复见 [review.md](review.md)，设计层面的收敛：
+
+- BTW 搜索仍有匹配时，`active`、列表高亮与详情统一落到第一项；0 匹配时继续保留最后详情（Q30）。
+- 搜索行硬件光标以文本起点为基准；Agents composer 与 BTW 一样按窗格宽高 resize。
+- 搜索行滚轮只在列表态吞掉；编辑态不暴露隐藏列表滚动条。
+- BTW `Accepted` 回投按 `qa_id` 结算，不依赖 ACK 到达时的 `active`。
+- 目标 loading 文案允许从 `stream_assistant` / streaming assistant 回退，但仍只在编辑态显示。
+- Agents 筛选无匹配使用独立空态文案；`Subagent` 标记窄窗整体隐藏。
+- 裸 `/btw` 重开保留当前 Q；双击先重选点击行。

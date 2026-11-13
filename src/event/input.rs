@@ -565,7 +565,23 @@ fn cut_lx_selection(state: &mut AppState) -> bool {
     let Some(text) = text else {
         return false;
     };
-    if !from_sub_editor {
+    if from_sub_editor {
+        // 剪切直接改 TextInput，绕过列表搜索的 `edit_search`；这里补同步过滤窗口。
+        let search_tab = state.pane_anywhere(pane).and_then(|target| {
+            (!target.lx.btw_editing() && !target.lx.agents_editing())
+                .then(|| target.lx.task.as_ref().map(|page| page.tab))
+                .flatten()
+        });
+        match search_tab {
+            Some(crate::app::state::TaskTab::Btw) => {
+                update::sync_btw_search_selection(state, pane);
+            }
+            Some(crate::app::state::TaskTab::Agents) => {
+                update::sync_agents_search_selection(state, pane);
+            }
+            _ => {}
+        }
+    } else {
         update::refresh_slash_panel(state, pane);
     }
     if !text.is_empty() {

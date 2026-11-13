@@ -229,22 +229,44 @@ impl LxBtw {
             .position(|index| self.qa.get(*index).is_some_and(|qa| qa.qa_id == active))
     }
 
-    /// 搜索变化后把窗口高亮同步到稳定 `active`；过滤掉时保留 active 供详情回退。
-    pub fn sync_selection_after_filter(&mut self) {
+    /// 搜索变化后把窗口高亮同步到稳定 `active`。
+    ///
+    /// `active` 被当前过滤结果排除但仍有匹配项时，高亮与详情一起落到第一项：
+    /// 否则列表画出的高亮与 `active` 分叉，`Shift+Enter` 会静默失败。
+    /// 返回是否切换了 `active`（调用方需要补一次线程加载）。
+    pub fn sync_selection_after_filter(&mut self) -> bool {
         let filtered = self.filtered_qa_indices();
-        let active_index = self
-            .active
-            .as_deref()
-            .and_then(|active| {
-                filtered
-                    .iter()
-                    .position(|index| self.qa.get(*index).is_some_and(|qa| qa.qa_id == active))
-            })
-            .unwrap_or(0);
+        if filtered.is_empty() {
+            self.qa_window.active = 0;
+            self.qa_window.anchor = 0;
+            self.qa_window.viewport = None;
+            self.qa_window.clamp(0);
+            return false;
+        }
+        let active_index = self.active.as_deref().and_then(|active| {
+            filtered
+                .iter()
+                .position(|index| self.qa.get(*index).is_some_and(|qa| qa.qa_id == active))
+        });
+        let switched = active_index.is_none();
+        let active_index = match active_index {
+            Some(index) => index,
+            None => {
+                if let Some(qa_id) = filtered
+                    .first()
+                    .and_then(|index| self.qa.get(*index))
+                    .map(|qa| qa.qa_id.clone())
+                {
+                    self.select_qa(&qa_id);
+                }
+                0
+            }
+        };
         self.qa_window.active = active_index;
         self.qa_window.anchor = active_index;
         self.qa_window.viewport = None;
         self.qa_window.clamp(filtered.len());
+        switched
     }
 
     /// 列表上下移动：高亮变化时把稳定 `active` 指向新 QA；到两端即停。

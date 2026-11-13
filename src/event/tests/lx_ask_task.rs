@@ -579,6 +579,60 @@ fn task_page_hides_input_popups_and_routes_chat_bar_wheel_to_output() {
     );
 }
 
+#[test]
+fn processes_first_row_wheel_scrolls_the_list() {
+    let config = Config::default();
+    let mut state = AppState::demo();
+    let geo = geometry(&state, &config, Rect::new(0, 0, 120, 24));
+    let pane = state.active_tab().layout.focus();
+    let inner = pane_inner(&geo, pane);
+    {
+        let target = state.pane_mut_anywhere(pane).expect("pane");
+        target.view = PaneView::Lx;
+        target.lx.task = Some(crate::app::state::TaskPage {
+            processes: (0..12)
+                .map(|index| crate::app::state::ProcessEntry {
+                    session_id: index,
+                    command: format!("cmd-{index}"),
+                    cwd: "/w".into(),
+                    tty: false,
+                    started_at_ms: 0,
+                })
+                .collect(),
+            ..Default::default()
+        });
+    }
+    let list = ui::main_content::lx::task_rects(inner, &state.pane_anywhere(pane).unwrap().lx)
+        .expect("task rects")
+        .list;
+    // 顶边框 + tab 行之下就是 Processes 的第一条；不能再用 search_rect。
+    let first_row = list.y.saturating_add(2);
+    let mut sessions = HashMap::new();
+    let mut dirty = false;
+    handle_terminal_event(
+        mouse(MouseEventKind::ScrollDown, list.x + 2, first_row),
+        &mut state,
+        &mut sessions,
+        &geo,
+        &config,
+        &mut ui::RenderCache::default(),
+        &mut dirty,
+    );
+    assert!(
+        state
+            .pane_anywhere(pane)
+            .unwrap()
+            .lx
+            .task
+            .as_ref()
+            .unwrap()
+            .window
+            .viewport
+            .is_some_and(|offset| offset > 0),
+        "Processes 首行滚轮不能被搜索行守卫吞掉"
+    );
+}
+
 /// 粘贴也是编辑：必须让双 Esc 的待命失效，避免带草稿选中后回填覆盖。
 #[test]
 fn lx_paste_cancels_rewind_arming() {

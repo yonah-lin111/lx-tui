@@ -134,13 +134,18 @@ pub(crate) fn draw_edit(grid: &mut Grid, rect: Rect, lx: &Lx, focused: bool) -> 
     let max_scroll = total.saturating_sub(visible);
     let scroll = editor.scroll().min(max_scroll);
     let dims = super::super::input::draw(grid, rect, editor, focused, scroll, visible);
-    grid.put(
-        rect.x.saturating_add(1),
-        rect.y,
-        &format!(" {} ", text::LX_BTW_INPUT_MARK),
-        style::accent(),
-    );
-    draw_qa_badge(grid, rect, lx);
+    let marker = format!(" {} ", text::LX_BTW_INPUT_MARK);
+    let marker_w = u16::try_from(marker.width()).unwrap_or(u16::MAX);
+    if rect.width >= marker_w.saturating_add(2) {
+        grid.put_clipped(
+            rect.x.saturating_add(1),
+            rect.y,
+            &marker,
+            style::accent(),
+            rect.width.saturating_sub(2),
+        );
+    }
+    draw_qa_badge(grid, rect, lx, marker_w);
     dims
 }
 
@@ -153,7 +158,7 @@ pub(crate) fn composer_rect(rect: Rect, lx: &Lx) -> Option<Rect> {
 }
 
 /// 主问题归属胶囊：` QA 2 · 标题 · To: lx `，画在 composer 顶边框右侧。
-fn draw_qa_badge(grid: &mut Grid, rect: Rect, lx: &Lx) {
+fn draw_qa_badge(grid: &mut Grid, rect: Rect, lx: &Lx, marker_w: u16) {
     let Some(thread) = lx.btw.active_thread() else {
         return;
     };
@@ -203,10 +208,13 @@ fn draw_qa_badge(grid: &mut Grid, rect: Rect, lx: &Lx) {
     }
     let badge = format!(" {prefix}{title}{targets} ");
     let badge_w = width(badge.as_str());
-    if rect.width <= badge_w.saturating_add(8) {
+    if rect.width <= badge_w.saturating_add(marker_w).saturating_add(2) {
         return;
     }
     let x = rect.right().saturating_sub(badge_w).saturating_sub(1);
+    if x <= rect.x.saturating_add(marker_w) {
+        return;
+    }
     grid.put(x, rect.y, &badge, style::btw_qa_badge());
 }
 

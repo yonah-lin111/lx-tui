@@ -140,6 +140,9 @@ pub(super) fn draw_search_row(
     x = x.saturating_add(u16::try_from(text::INPUT_PREFIX_ICON.width()).unwrap_or(0));
     grid.put(x, rect.y, " ", style::text());
     x = x.saturating_add(1);
+    // 文本起点与循环末尾的 `x` 分开保存：`cursor_col` 是相对文本起点的偏移，
+    // 不是相对写完后末尾的偏移。
+    let text_x = x;
     let width = usize::from(rect.right().saturating_sub(x));
     let view = crate::ui::widgets::input::view(input.text(), input.cursor(), width);
     if input.text().is_empty() {
@@ -168,8 +171,15 @@ pub(super) fn draw_search_row(
                 .min(rect.right());
         }
     }
-    // 与 `input::draw` 一致返回 `(row, col)`；此前误把列写在首位，硬件光标被放到详情区。
-    focused.then(|| (rect.y, x.saturating_add(view.cursor_col)))
+    // 与 `input::draw` 一致返回 `(row, col)`；列以文本起点为基准，不能叠到末尾。
+    focused.then(|| {
+        (
+            rect.y,
+            text_x
+                .saturating_add(view.cursor_col)
+                .min(rect.right().saturating_sub(1)),
+        )
+    })
 }
 
 /// 输出容器**正文宽度**：常驻预留最右 1 列作滚动条槽。
@@ -423,6 +433,10 @@ pub(crate) fn list_scrollbar(
     rect: Rect,
     lx: &crate::app::state::Lx,
 ) -> Option<crate::ui::widgets::scrollbar::ScrollbarLayout> {
+    // 编辑态只画 composer，列表滚动条既不可见也不应参与命中/拖拽。
+    if lx.btw_editing() || lx.agents_editing() {
+        return None;
+    }
     let page = lx.task.as_ref()?;
     let slot = list_scrollbar_rect(rect, page.tab)?;
     let (total, visible, start) = list_metrics(rect, lx);

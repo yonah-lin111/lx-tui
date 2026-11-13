@@ -640,6 +640,7 @@ pub const LX_TASK_AGENTS_EMPTY: &str = "no subagents yet";
 pub const LX_TASK_AGENTS_LIST_LOADING: &str = "Loading agents...";
 /// Agents 列表搜索无命中。
 pub const LX_TASK_AGENTS_SEARCH_EMPTY: &str = "no matching agents";
+pub const LX_TASK_AGENTS_FILTER_EMPTY: &str = "no agents in this filter";
 /// Agents 列表搜索框占位。
 pub const LX_TASK_AGENTS_SEARCH_PLACEHOLDER: &str = "search agents…";
 /// Agents 追问 composer 左侧标记。
@@ -685,7 +686,7 @@ pub const LX_TASK_HINTS_PROCESSES: [Hint; 4] = [
     hint("tabs", "←→"),
     hint("back", "esc"),
 ];
-/// 子代理 tab 的键位提示（`tab` 切换筛选、`↵` 内联追问、`^d`/`^a` 停止）。
+/// 子代理 tab 的键位提示（`tab` 切换筛选、`⇧↵` 进入 composer、`^d` 停止当前）。
 pub const LX_TASK_HINTS_AGENTS: [Hint; 6] = [
     hint("select", "↑↓"),
     hint("filter", "tab"),

@@ -298,10 +298,10 @@ fn btw_chat_and_agent_mention_e2e() {
         app.screen()
     );
 
-    // The QA list is now a permanent first-level list; Esc returns to it and
-    // `/btwList` is no longer a command.
+    // The QA list is now a permanent first-level list; Esc returns to it.
+    // The search placeholder is only drawn by the list, not by the composer badge.
     app.send(b"\x1b");
-    app.assert_wait("QA 1");
+    app.assert_wait("search questions");
     assert!(
         !app.screen().contains("Side questions"),
         "/btwList must not exist as a second-level panel:\n{}",

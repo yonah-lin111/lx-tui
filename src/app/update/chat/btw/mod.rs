@@ -85,6 +85,31 @@ pub fn open_btw_tab(state: &mut AppState, pane: PaneId) -> bool {
 }
 
 /// 列表点击/确认：切到目标 QA 并加载它的线程历史。
+/// 搜索文本被非编辑路径（剪切/粘贴）改写后，补齐高亮与预览线程。
+pub fn sync_search_selection(state: &mut AppState, pane: PaneId) -> bool {
+    let (switched, index) = {
+        let Some(target) = state.pane_mut_anywhere(pane) else {
+            return false;
+        };
+        if !target.lx.is_btw_tab() {
+            return false;
+        }
+        let switched = target.lx.btw.sync_selection_after_filter();
+        let index = target
+            .lx
+            .btw
+            .filtered_qa_indices()
+            .get(target.lx.btw.qa_window.active)
+            .copied();
+        (switched, index)
+    };
+    if switched && let Some(index) = index {
+        return select_btw_qa(state, pane, index);
+    }
+    crate::app::update::clear_lx_selection_for(state, pane);
+    false
+}
+
 pub fn select_btw_qa(state: &mut AppState, pane: PaneId, index: usize) -> bool {
     let Some(qa_id) = state
         .pane_anywhere(pane)
@@ -173,6 +198,8 @@ pub(super) fn switch_qa(state: &mut AppState, pane: PaneId, qa_id: &str) -> bool
         parent_session_id,
         qa_id: qa_id.to_string(),
     }));
+    // 选区几何按当前线程内容计算；切换 Q 后旧锚点不能落到新线程上。
+    crate::app::update::clear_lx_selection_for(state, pane);
     crate::app::update::sync_lx_mention_root(state, pane);
     true
 }
@@ -223,7 +250,6 @@ pub fn try_submit_btw_command(state: &mut AppState, pane: PaneId) -> bool {
                 target.lx.clear_text_selection();
             }
             target.lx.slash = None;
-            target.lx.btw.active = None;
             target.lx.btw.editing = false;
             target.lx.btw.search.clear();
         }
@@ -245,16 +271,13 @@ pub fn try_submit_btw_command(state: &mut AppState, pane: PaneId) -> bool {
     let prompt = prompt.to_string();
     // 命令本身就是一次提交：主输入框内容不保留。线程可能尚未建立（首次打开），
     // 因此正文一律先暂存，等 QA 列表回投、活动线程建好后再写入 composer。
-    // `/btw prompt` 始终挂到最新主 QA；只有裸 `/btw` 保留当前浏览的 QA。
+    // `/btw prompt` 始终挂到最新主 QA；正文先暂存，列表回投后再写入。
     if let Some(target) = state.pane_mut_anywhere(pane) {
         target.lx.btw.active = None;
         target.lx.btw.editing = false;
         target.lx.btw.search.clear();
         target.lx.clear();
         target.lx.btw.pending_prompt = Some(prompt.clone());
-        if let Some(thread) = target.lx.btw.active_thread_mut() {
-            thread.composer.editor_mut().replace_input(&prompt);
-        }
     }
     // QA 列表由事件回投后才有；先登记一次延迟提交，列表到达时立即发出。
     state.effects.push(Effect::Btw(BtwEffect::LoadQaList {

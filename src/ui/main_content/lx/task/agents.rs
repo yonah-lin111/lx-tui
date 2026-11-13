@@ -244,18 +244,34 @@ pub(super) fn draw_edit(
     let total = editor.visual_rows().len().max(1);
     let scroll = editor.scroll().min(total.saturating_sub(visible));
     let dims = super::super::input::draw(grid, rect, editor, focused, scroll, visible);
-    grid.put(
-        rect.x.saturating_add(1),
-        rect.y,
-        &format!(" {} ", text::LX_TASK_AGENT_INPUT_MARK),
-        style::accent(),
-    );
-    draw_agent_badge(grid, rect, run);
+    let marker = format!(" {} ", text::LX_TASK_AGENT_INPUT_MARK);
+    let marker_w = u16::try_from(marker.width()).unwrap_or(u16::MAX);
+    // 标记要么完整显示，要么整块不画；绝不把 "Subagent" 截成半截。
+    if rect.width >= marker_w.saturating_add(2) {
+        grid.put_clipped(
+            rect.x.saturating_add(1),
+            rect.y,
+            &marker,
+            style::accent(),
+            rect.width.saturating_sub(2),
+        );
+    }
+    draw_agent_badge(grid, rect, run, marker_w);
     dims
 }
 
-/// 右侧目标胶囊：` To: <nickname> [role] `。
-fn draw_agent_badge(grid: &mut Grid, rect: Rect, run: &SubagentRun) {
+/// composer 矩形：仅 Agents 编辑态且目标 composer 已创建时返回。
+pub(crate) fn composer_rect(rect: Rect, lx: &crate::app::state::Lx) -> Option<Rect> {
+    if !lx.agents_editing() || rect.height < 3 {
+        return None;
+    }
+    lx.agent_edit_id()
+        .and_then(|agent_id| lx.agents.composer(agent_id))?;
+    Some(rect)
+}
+
+/// 右侧目标胶囊：` To: <nickname> [role] `；左侧必须给 `Subagent` 标记留位。
+fn draw_agent_badge(grid: &mut Grid, rect: Rect, run: &SubagentRun, marker_w: u16) {
     let label = format!(
         " To: {} [{}] ",
         run.nickname
@@ -265,10 +281,13 @@ fn draw_agent_badge(grid: &mut Grid, rect: Rect, run: &SubagentRun) {
         run.role.as_str()
     );
     let width = u16::try_from(label.width()).unwrap_or(u16::MAX);
-    if rect.width <= width.saturating_add(8) {
+    if rect.width <= width.saturating_add(marker_w).saturating_add(2) {
         return;
     }
     let x = rect.right().saturating_sub(width).saturating_sub(1);
+    if x <= rect.x.saturating_add(marker_w) {
+        return;
+    }
     grid.put(x, rect.y, &label, style::btw_qa_badge());
 }
 
@@ -285,10 +304,12 @@ pub(super) fn draw_list(grid: &mut Grid, list: Rect, page: &TaskPage, agents: &A
     if visible_runs.is_empty() {
         let label = if page.agents_loading {
             text::LX_TASK_AGENTS_LIST_LOADING
-        } else if page.agents_search.text().is_empty() {
-            text::LX_TASK_AGENTS_EMPTY
-        } else {
+        } else if !page.agents_search.text().is_empty() {
             text::LX_TASK_AGENTS_SEARCH_EMPTY
+        } else if page.agent_filter != crate::app::state::AgentFilter::All {
+            text::LX_TASK_AGENTS_FILTER_EMPTY
+        } else {
+            text::LX_TASK_AGENTS_EMPTY
         };
         super::draw_placeholder(grid, list, label);
         return;

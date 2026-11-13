@@ -386,6 +386,10 @@ pub fn open_agent_page(state: &mut AppState, pane: PaneId, agent_id: &str) -> bo
             lx.chat.suppressed_prompt_header = None;
         }
         page.select_tab(crate::app::state::TaskTab::Agents);
+        // 同 tab 打开链接时 `select_tab` 会提前返回：必须显式退出旧 composer
+        // 并清空搜索，否则详情已切到子 agent，发送/停止仍落在旧 agent 上。
+        page.agent_edit = None;
+        page.agents_search.clear();
         page.agents_loading = lx.agents.runs.is_empty();
         page.sync_agent_window(&lx.agents);
         page.agents_focus = Some(agent_id.to_string());

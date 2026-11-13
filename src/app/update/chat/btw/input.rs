@@ -3,7 +3,9 @@
 use crate::app::state::AppState;
 use crate::tiling::PaneId;
 
-use super::{enter_btw_edit, leave_btw_edit, scroll_btw_detail, stop_current, submit_current};
+use super::{
+    enter_btw_edit, leave_btw_edit, scroll_btw_detail, stop_current, submit_current, switch_qa,
+};
 
 /// BTW 页签内的键盘路由。
 pub fn apply_input(
@@ -154,8 +156,21 @@ fn edit_search(state: &mut AppState, pane: PaneId, command: crate::app::actions:
         _ => {}
     }
     let changed = before != (input.text().to_string(), input.cursor(), input.selection());
+    let switched = if changed {
+        let switched = target.lx.btw.sync_selection_after_filter();
+        if switched {
+            target.lx.btw.active.clone()
+        } else {
+            None
+        }
+    } else {
+        None
+    };
     if changed {
-        target.lx.btw.sync_selection_after_filter();
+        crate::app::update::clear_lx_selection_for(state, pane);
+    }
+    if let Some(qa_id) = switched {
+        switch_qa(state, pane, &qa_id);
     }
     changed
 }

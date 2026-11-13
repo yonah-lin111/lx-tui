@@ -445,9 +445,23 @@ pub(crate) fn resolve_task_agents_visible(
                 )
             })
         });
+        // Agents composer 与 BTW 同源：编辑态必须用实际 composer 宽度/正文行数
+        // 驱动软换行与光标可见性，否则 `Lx` 会一直停在构造时的 `u16::MAX`。
+        let composer = state.pane_anywhere(*pane).and_then(|target| {
+            crate::ui::main_content::lx::task_agent_composer_rect(inner, &target.lx)
+        });
         let Some(target) = state.pane_mut_anywhere(*pane) else {
             continue;
         };
+        if let Some(composer) = composer {
+            let width = composer.width.saturating_sub(3).max(1);
+            let rows = composer.height.saturating_sub(2).max(1);
+            if let Some(agent_id) = target.lx.agent_edit_id().map(str::to_string)
+                && let Some(composer) = target.lx.agents.composer_mut(&agent_id)
+            {
+                composer.editor_mut().resize(width, rows);
+            }
+        }
         let Some(page) = target.lx.task.as_mut() else {
             continue;
         };

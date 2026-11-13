@@ -115,7 +115,7 @@ fn typing_at_in_the_composer_opens_the_mention_panel() {
 }
 
 #[test]
-fn search_filters_titles_and_restores_stable_selection() {
+fn search_filters_titles_and_moves_selection_to_the_first_match() {
     let mut lx = Lx::new();
     lx.btw.qa = vec![
         BtwQaSummary {
@@ -140,15 +140,23 @@ fn search_filters_titles_and_restores_stable_selection() {
     lx.btw.search.insert_str("sec");
     lx.btw.sync_selection_after_filter();
     assert_eq!(lx.btw.filtered_qa_indices(), vec![1]);
-    assert_eq!(lx.btw.selected_index(), None);
-    assert_eq!(lx.btw.active.as_deref(), Some("qa-1"), "过滤不覆盖稳定锚点");
+    assert_eq!(
+        lx.btw.selected_index(),
+        Some(0),
+        "过滤后高亮第一项，不能与 active 分叉"
+    );
+    assert_eq!(
+        lx.btw.active.as_deref(),
+        Some("qa-2"),
+        "详情跟随过滤后的第一项"
+    );
 
     lx.btw.search.clear();
     lx.btw.sync_selection_after_filter();
-    assert_eq!(lx.btw.selected_index(), Some(0));
-    assert!(lx.btw.move_selection(1));
-    assert_eq!(lx.btw.active.as_deref(), Some("qa-2"));
+    assert_eq!(lx.btw.selected_index(), Some(1));
     assert!(!lx.btw.move_selection(1), "列表末尾不环绕");
+    assert!(lx.btw.move_selection(-1));
+    assert_eq!(lx.btw.active.as_deref(), Some("qa-1"));
 }
 
 #[test]

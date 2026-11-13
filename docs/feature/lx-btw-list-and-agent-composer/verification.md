@@ -41,7 +41,7 @@ cargo run
 
 | # | 输入内容 | 验证步骤 | 期望结果 | 结果 |
 | --- | --- | --- | --- | --- |
-| B1 | `验证问题 C` | 在 BTW 搜索行直接输入 | 只保留匹配 Q；高亮与详情切到该 Q；清空后恢复原高亮 | [ ] |
+| B1 | `验证问题 C` | 在 BTW 搜索行直接输入 | 只保留匹配 Q；高亮与详情切到第一项；`Shift+Enter` 可进入该 Q；清空后保持当前项 | [ ] |
 | B2 | `Turing` / `explorer` / `验证子代理` / `sub-18e77c301e508d70-a` | 在 Agents 搜索行逐个输入 | 分别按昵称、角色、标题、agent_id 命中；大小写不敏感 | [ ] |
 | B3 | `zzz` | 在 BTW 和 Agents 搜索行输入 | 列表显示 `no matching questions` / `no matching agents`；详情保留最后选中内容 | [ ] |
 | B4 | 无 | 列表态按 `↑/↓` | 高亮立即移动并切换详情；到两端停住，不关闭面板 | [ ] |
@@ -118,3 +118,12 @@ cargo run
 - CLI 种子会话已写入当前 worktree 的隔离开发库；主 checkout 的 `~/.lx-t-dev/db/lx.db` 不受影响。
 - CLI 没有创建 BTW 侧线程的子命令；BTW 线程需在 TUI 内用 `/btw` 创建，属于手工验证前置步骤。
 - 手工项全部通过后，才能将本分支合并到 `dev`。
+
+## 10. Review 修复后的补充检查
+
+- 搜索非空时硬件光标仍落在文本真实光标列，不因可见文本宽度偏移；已补单测。
+- Agents composer 长草稿按窗格宽度软换行并撑高到 5 行；已补单测。
+- BTW 搜索后 `Shift+Enter` 直接进入第一项；切换 Q/搜索/剪切后旧选区清除。
+- Processes 首行滚轮、编辑态 composer 滚轮、编辑态列表滚动条命中均已补回归断言。
+- 目标 loading 在 BTW 工具/思考阶段显示对应文案，而不是恒为 `Working...`。
+- 详见 [review.md](review.md)。

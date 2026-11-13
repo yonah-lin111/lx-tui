@@ -136,6 +136,8 @@ pub fn on_thread_loaded(
 /// 提交被接受后的回投字段（事件层 → 应用层）。
 #[derive(Debug, Clone)]
 pub struct AcceptedBtw {
+    /// 提交所属主 QA：ACK 可能晚于用户切换 QA，不能只看当前 active。
+    pub qa_id: String,
     pub submit_id: String,
     pub thread_id: String,
     pub child_session_id: String,
@@ -148,7 +150,7 @@ pub fn on_accepted(state: &mut AppState, pane: PaneId, event: AcceptedBtw) -> bo
     let Some(target) = state.pane_mut_anywhere(pane) else {
         return false;
     };
-    let Some(thread) = target.lx.btw.active_thread_mut() else {
+    let Some(thread) = target.lx.btw.thread_mut(&event.qa_id) else {
         return false;
     };
     if thread.pending_submit.as_ref().map(|(id, _)| id.as_str()) != Some(event.submit_id.as_str()) {

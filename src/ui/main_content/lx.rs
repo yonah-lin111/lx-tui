@@ -828,6 +828,14 @@ pub fn task_btw_composer_rect(area: Rect, lx: &Lx) -> Option<Rect> {
         .filter(|rect| rect.height > 0)
 }
 
+/// Agents 页签的 composer 矩形（输入浮层锚点/宽度同步）；不在编辑态返回 None。
+pub fn task_agent_composer_rect(area: Rect, lx: &Lx) -> Option<Rect> {
+    layout(area, lx)
+        .task_list
+        .and_then(|rect| task::agents::composer_rect(rect, lx))
+        .filter(|rect| rect.height > 0)
+}
+
 /// BTW 对话区的 `(可见行数, 总行数, 快照是否最新)`；不在 BTW 页或无活动线程返回 None。
 pub fn task_btw_rows(area: Rect, lx: &Lx, cache: &mut PaneCache) -> Option<(usize, usize, bool)> {
     task::btw_rows(area, lx, cache)
