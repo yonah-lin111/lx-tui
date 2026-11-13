@@ -1006,3 +1006,146 @@ fn ctrl_a_in_agent_search_moves_cursor_without_stopping_agents() {
         state.effects
     );
 }
+
+/// 进入 Agents 追问编辑态，并把 `@` 面板驱动到有候选。
+fn open_agent_mention(state: &mut AppState, pane: PaneId) {
+    // 主编辑器先拿到扫描根；进入编辑态时 composer 会继承它。
+    state
+        .pane_mut_anywhere(pane)
+        .expect("pane")
+        .lx
+        .set_mention_root(Some(std::path::PathBuf::from("/work/demo")));
+    let input = crate::app::update::pane::apply_lx_input;
+    input(state, crate::app::actions::LxInput::EnterFolder);
+    assert!(page(state, pane).agent_edit.is_some(), "进入编辑态");
+    input(state, crate::app::actions::LxInput::Char('@'));
+    let (_, owner, generation, root) = crate::app::update::take_lx_mention_scan_requests(state)
+        .into_iter()
+        .find(|(_, owner, ..)| matches!(owner, crate::app::update::MentionScanOwner::Agent(_)))
+        .expect("Agents composer 发起扫描");
+    assert_eq!(
+        owner,
+        crate::app::update::MentionScanOwner::Agent("sub-done".into())
+    );
+    crate::app::update::apply_lx_mention_entries(
+        state,
+        pane,
+        owner,
+        generation,
+        &root,
+        vec![crate::app::markdown::MentionEntry {
+            path: "src/main.rs".into(),
+            is_directory: false,
+        }],
+    );
+}
+
+#[test]
+fn mention_enter_confirms_candidate_instead_of_sending() {
+    let (mut state, pane) = state_with_session("");
+    open_agents_with_statuses(&mut state, pane);
+    open_agent_mention(&mut state, pane);
+    state.effects.clear();
+
+    let input = crate::app::update::pane::apply_lx_input;
+    input(&mut state, crate::app::actions::LxInput::Enter);
+    let text = state
+        .pane_anywhere(pane)
+        .expect("pane")
+        .lx
+        .agents
+        .composer("sub-done")
+        .map(|composer| composer.text().to_string());
+    assert_eq!(text.as_deref(), Some("@src/main.rs "), "Enter 采纳候选");
+    assert!(
+        !state.effects.iter().any(|effect| matches!(
+            effect,
+            crate::app::effects::Effect::SendSubagentUserInput { .. }
+        )),
+        "面板打开时 Enter 不发送：{:?}",
+        state.effects
+    );
+
+    input(&mut state, crate::app::actions::LxInput::Enter);
+    assert!(
+        state.effects.iter().any(|effect| matches!(
+            effect,
+            crate::app::effects::Effect::SendSubagentUserInput { text, .. }
+                if text == "@src/main.rs"
+        )),
+        "面板关闭后发送同一段朴素文本（提交时裁剪尾随空格）：{:?}",
+        state.effects
+    );
+}
+
+#[test]
+fn escape_closes_mention_panel_before_leaving_the_composer() {
+    let (mut state, pane) = state_with_session("");
+    open_agents_with_statuses(&mut state, pane);
+    open_agent_mention(&mut state, pane);
+
+    let input = crate::app::update::pane::apply_lx_input;
+    input(&mut state, crate::app::actions::LxInput::Escape);
+    assert!(page(&state, pane).agent_edit.is_some(), "第一下只关面板");
+    assert!(
+        state
+            .pane_anywhere(pane)
+            .expect("pane")
+            .lx
+            .agents
+            .composer("sub-done")
+            .is_some_and(|composer| !composer.editor().mention_open()),
+        "面板已关闭"
+    );
+    input(&mut state, crate::app::actions::LxInput::Escape);
+    assert!(page(&state, pane).agent_edit.is_none(), "第二下退出编辑态");
+}
+
+#[test]
+fn late_mention_result_is_dropped_after_switching_agent() {
+    let (mut state, pane) = state_with_session("");
+    open_agents_with_statuses(&mut state, pane);
+    state
+        .pane_mut_anywhere(pane)
+        .expect("pane")
+        .lx
+        .set_mention_root(Some(std::path::PathBuf::from("/work/demo")));
+    let input = crate::app::update::pane::apply_lx_input;
+    input(&mut state, crate::app::actions::LxInput::EnterFolder);
+    input(&mut state, crate::app::actions::LxInput::Char('@'));
+    let (_, owner, generation, root) =
+        crate::app::update::take_lx_mention_scan_requests(&mut state)
+            .into_iter()
+            .find(|(_, owner, ..)| matches!(owner, crate::app::update::MentionScanOwner::Agent(_)))
+            .expect("Agents composer 发起扫描");
+    // 结果到达前切到另一个 agent：旧归属的迟到回执必须被丢弃。
+    state
+        .pane_mut_anywhere(pane)
+        .expect("pane")
+        .lx
+        .task
+        .as_mut()
+        .expect("task")
+        .agent_edit = Some("sub-idle".into());
+    crate::app::update::apply_lx_mention_entries(
+        &mut state,
+        pane,
+        owner,
+        generation,
+        &root,
+        vec![crate::app::markdown::MentionEntry {
+            path: "stale.rs".into(),
+            is_directory: false,
+        }],
+    );
+    assert!(
+        !state
+            .pane_anywhere(pane)
+            .expect("pane")
+            .lx
+            .agents
+            .composer("sub-done")
+            .is_some_and(|composer| composer.editor().mention_open()),
+        "迟到结果不写入已切换的 agent"
+    );
+}

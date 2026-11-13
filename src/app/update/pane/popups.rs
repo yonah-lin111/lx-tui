@@ -15,6 +15,19 @@ pub fn lx_mention_root_for_pane(state: &AppState, id: PaneId) -> Option<PathBuf>
         .or_else(|| state.workspace_cwd_for_pane(id))
 }
 
+/// `@` 面板扫描请求的归属编辑器。
+///
+/// 回投时按归属校验当前仍打开的编辑器，切换 QA / agent 后的迟到结果直接丢弃。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum MentionScanOwner {
+    /// 主输入框。
+    Main,
+    /// BTW 线程 composer；只有仍显示该 QA 的活动线程才接收。
+    Btw(String),
+    /// Agents 追问 composer；只有仍编辑该 agent 时才接收。
+    Agent(String),
+}
+
 /// 为指定窗格同步 `@` 提及扫描根与引用文件夹快照；任一变化返回 true（供置脏）。
 pub fn sync_lx_mention_root(state: &mut AppState, id: PaneId) -> bool {
     let root = lx_mention_root_for_pane(state, id);
@@ -25,7 +38,8 @@ pub fn sync_lx_mention_root(state: &mut AppState, id: PaneId) -> bool {
         let mention = pane.lx.set_mention_root(root.clone());
         let project_changed = pane.lx.set_project_root(project.clone());
         let composer = pane.lx.sync_btw_composer_context(root, project);
-        ref_changed || mention || project_changed || composer
+        let agent_composer = pane.lx.sync_agent_composer_context();
+        ref_changed || mention || project_changed || composer || agent_composer
     })
 }
 
@@ -43,13 +57,13 @@ pub fn sync_all_lx_mention_roots(state: &mut AppState) -> bool {
     changed
 }
 
-/// 取走当前可见窗格待发起的提及扫描请求（窗格、BTW QA 归属、代号、根）；仅事件层调用。
+/// 取走当前可见窗格待发起的提及扫描请求（窗格、编辑器归属、代号、根）；仅事件层调用。
 ///
-/// `qa` 为 `Some` 表示来自 BTW 独立 composer：回投时只有仍是该 QA 的活动线程才接收，
-/// 切换 QA 后旧结果会被丢弃。主输入框为 `None`。
+/// 回投时按归属校验编辑器仍然打开：主输入框无条件接收，BTW 只在仍是该 QA 的活动线程时
+/// 接收，Agents 追问只在仍编辑该 agent 时接收；其余归属的迟到结果直接丢弃。
 pub fn take_lx_mention_scan_requests(
     state: &mut AppState,
-) -> Vec<(PaneId, Option<String>, u64, PathBuf)> {
+) -> Vec<(PaneId, MentionScanOwner, u64, PathBuf)> {
     let visible = state.active_tab().layout.pane_ids();
     let mut requests = Vec::new();
     for id in visible {
@@ -61,25 +75,34 @@ pub fn take_lx_mention_scan_requests(
         }
         let active_qa = pane.lx.btw.active.clone();
         if let Some((generation, root)) = pane.lx.take_mention_scan_request() {
-            requests.push((id, None, generation, root));
+            requests.push((id, MentionScanOwner::Main, generation, root));
         }
         if pane.lx.btw_editing()
             && let Some(composer) = pane.lx.btw.active_composer_mut()
             && let Some((generation, root)) = composer.take_mention_scan_request()
+            && let Some(qa_id) = active_qa
         {
-            requests.push((id, active_qa, generation, root));
+            requests.push((id, MentionScanOwner::Btw(qa_id), generation, root));
+        }
+        if pane.lx.agents_editing()
+            && let Some(agent_id) = pane.lx.agent_edit_id().map(str::to_string)
+            && let Some(composer) = pane.lx.agents.composer_mut(&agent_id)
+            && let Some((generation, root)) = composer.editor_mut().take_mention_scan_request()
+        {
+            requests.push((id, MentionScanOwner::Agent(agent_id), generation, root));
         }
     }
     requests
 }
 
-/// 写入指定窗格的提及扫描结果；窗格已删除或结果过期时丢弃。
+/// 写入指定窗格的提及扫描结果；窗格已删除、编辑器已切换或结果过期时丢弃。
 ///
-/// BTW 结果只落到仍显示同一 QA 的 composer；主输入框结果按原语义落到主编辑器。
+/// BTW 结果只落到仍显示同一 QA 的 composer，Agents 结果只落到仍编辑该 agent 的 composer；
+/// 主输入框结果按原语义落到主编辑器。
 pub fn apply_lx_mention_entries(
     state: &mut AppState,
     id: PaneId,
-    qa: Option<String>,
+    owner: MentionScanOwner,
     generation: u64,
     root: &std::path::Path,
     entries: Vec<crate::app::markdown::MentionEntry>,
@@ -87,8 +110,11 @@ pub fn apply_lx_mention_entries(
     let Some(pane) = state.pane_mut_anywhere(id) else {
         return;
     };
-    match qa {
-        Some(qa_id) => {
+    match owner {
+        MentionScanOwner::Main => {
+            pane.lx.apply_mention_entries(generation, root, entries);
+        }
+        MentionScanOwner::Btw(qa_id) => {
             if pane.lx.btw.active.as_deref() != Some(qa_id.as_str()) {
                 return;
             }
@@ -96,8 +122,15 @@ pub fn apply_lx_mention_entries(
                 composer.apply_mention_entries(generation, root, entries);
             }
         }
-        None => {
-            pane.lx.apply_mention_entries(generation, root, entries);
+        MentionScanOwner::Agent(agent_id) => {
+            if pane.lx.agent_edit_id() != Some(agent_id.as_str()) {
+                return;
+            }
+            if let Some(composer) = pane.lx.agents.composer_mut(&agent_id) {
+                composer
+                    .editor_mut()
+                    .apply_mention_entries(generation, root, entries);
+            }
         }
     }
 }

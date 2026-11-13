@@ -157,7 +157,7 @@ pub(crate) fn composer_rect(rect: Rect, lx: &Lx) -> Option<Rect> {
     Some(rect)
 }
 
-/// 主问题归属胶囊：` QA 2 · 标题 · To: lx `，画在 composer 顶边框右侧。
+/// 主问题归属胶囊：` QA 2 · 标题 `，画在 composer 顶边框右侧。
 fn draw_qa_badge(grid: &mut Grid, rect: Rect, lx: &Lx, marker_w: u16) {
     let Some(thread) = lx.btw.active_thread() else {
         return;
@@ -184,21 +184,7 @@ fn draw_qa_badge(grid: &mut Grid, rect: Rect, lx: &Lx, marker_w: u16) {
         u16::try_from(unicode_width::UnicodeWidthStr::width(value)).unwrap_or(u16::MAX)
     };
     let max = rect.width.saturating_sub(12).min(QA_BADGE_MAX_COLS);
-    let prefix_w = width(prefix.as_str());
-    let targets = format!(" · {}", thread.target_label());
-    let (room, targets) = if max
-        .saturating_sub(prefix_w)
-        .saturating_sub(width(targets.as_str()))
-        >= 4
-    {
-        (
-            max.saturating_sub(prefix_w)
-                .saturating_sub(width(targets.as_str())),
-            targets.as_str(),
-        )
-    } else {
-        (max.saturating_sub(prefix_w), "")
-    };
+    let room = max.saturating_sub(width(prefix.as_str()));
     if room < 4 {
         return;
     }
@@ -206,7 +192,7 @@ fn draw_qa_badge(grid: &mut Grid, rect: Rect, lx: &Lx, marker_w: u16) {
     if title.is_empty() {
         return;
     }
-    let badge = format!(" {prefix}{title}{targets} ");
+    let badge = format!(" {prefix}{title} ");
     let badge_w = width(badge.as_str());
     if rect.width <= badge_w.saturating_add(marker_w).saturating_add(2) {
         return;

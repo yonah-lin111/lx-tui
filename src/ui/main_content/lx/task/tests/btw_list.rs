@@ -43,6 +43,34 @@ fn btw_edit_mode_uses_only_the_composer() {
 }
 
 #[test]
+fn btw_edit_badge_shows_only_the_question() {
+    use crate::app::state::lx::btw::BtwQaSummary;
+
+    let mut lx = Lx::new();
+    lx.task = Some(TaskPage {
+        tab: TaskTab::Btw,
+        ..Default::default()
+    });
+    lx.btw.qa = vec![BtwQaSummary {
+        qa_id: "qa-1".into(),
+        title: "你好呀".into(),
+        has_thread: false,
+        status: "idle".into(),
+    }];
+    lx.btw.ensure_thread("qa-1");
+    lx.btw.editing = true;
+
+    let text = render_lines(&lx, 80, 24).join("\n");
+    // 宽字符在缓冲区里占两列，首行后的续列是空格；比较前先去掉空白。
+    let compact: String = text.chars().filter(|ch| !ch.is_whitespace()).collect();
+    assert!(
+        compact.contains("QA1·你好呀"),
+        "composer 胶囊只显示主问题：{text:?}"
+    );
+    assert!(!text.contains("To:"), "胶囊不再展示目标段：{text:?}");
+}
+
+#[test]
 fn btw_detail_loading_is_centered_in_the_conversation() {
     let mut lx = Lx::new();
     lx.task = Some(TaskPage {

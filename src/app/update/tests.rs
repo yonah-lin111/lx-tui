@@ -5108,7 +5108,14 @@ fn seed_lx_mention(state: &mut AppState, id: PaneId, query: &str, entries: Vec<M
         .pane_mut_anywhere(id)
         .and_then(|pane| pane.lx.take_mention_scan_request())
         .expect("scan request");
-    apply_lx_mention_entries(state, id, None, generation, &root, entries);
+    apply_lx_mention_entries(
+        state,
+        id,
+        MentionScanOwner::Main,
+        generation,
+        &root,
+        entries,
+    );
 }
 
 #[test]
@@ -5170,7 +5177,7 @@ fn lx_mention_root_change_invalidates_inflight_result() {
     apply_lx_mention_entries(
         &mut state,
         pane,
-        None,
+        MentionScanOwner::Main,
         stale_generation,
         &old_root,
         vec![MentionEntry {
@@ -5183,7 +5190,7 @@ fn lx_mention_root_change_invalidates_inflight_result() {
     apply_lx_mention_entries(
         &mut state,
         pane,
-        None,
+        MentionScanOwner::Main,
         new_generation,
         &new_root,
         vec![MentionEntry {
@@ -5208,7 +5215,7 @@ fn lx_mention_results_are_isolated_per_pane() {
     apply_lx_mention_entries(
         &mut state,
         second,
-        None,
+        MentionScanOwner::Main,
         generation,
         &root,
         vec![MentionEntry {
@@ -5235,7 +5242,7 @@ fn lx_mention_scan_ignored_after_pane_removed() {
     apply_lx_mention_entries(
         &mut state,
         second,
-        None,
+        MentionScanOwner::Main,
         generation,
         &root,
         vec![MentionEntry {

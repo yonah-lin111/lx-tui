@@ -52,11 +52,10 @@ pub enum AppEvent {
         generation: u64,
         entries: Vec<MentionEntry>,
     },
-    /// lx 输入框 `@` 面板的目录扫描结果；按窗格、QA 归属、代号与根路由。
+    /// lx 输入框 `@` 面板的目录扫描结果；按窗格、编辑器归属、代号与根路由。
     LxMentionScanned {
         pane: PaneId,
-        /// `Some` 表示 BTW composer；只有仍是该 QA 的活动线程才接收。
-        qa: Option<String>,
+        owner: update::MentionScanOwner,
         generation: u64,
         root: PathBuf,
         entries: Vec<MentionEntry>,
@@ -722,11 +721,11 @@ fn handle_app_event(
         } => update::apply_mention_entries(state, prompt, generation, entries),
         AppEvent::LxMentionScanned {
             pane,
-            qa,
+            owner,
             generation,
             root,
             entries,
-        } => update::apply_lx_mention_entries(state, pane, qa, generation, &root, entries),
+        } => update::apply_lx_mention_entries(state, pane, owner, generation, &root, entries),
         AppEvent::SkillsLoaded {
             root,
             total,
@@ -983,14 +982,14 @@ fn pump_mention_scan(state: &mut AppState, sender: &mpsc::UnboundedSender<AppEve
 
 /// lx `@` 面板需要扫描的窗格：取走请求并在后台按根扫描（同一根在 pane 内缓存）。
 fn pump_lx_mention_scan(state: &mut AppState, sender: &mpsc::UnboundedSender<AppEvent>) {
-    for (pane, qa, generation, root) in update::take_lx_mention_scan_requests(state) {
+    for (pane, owner, generation, root) in update::take_lx_mention_scan_requests(state) {
         let sender = sender.clone();
         let scan_root = root.clone();
         tokio::task::spawn_blocking(move || {
             let entries = crate::files::scan(&scan_root);
             let _ = sender.send(AppEvent::LxMentionScanned {
                 pane,
-                qa,
+                owner,
                 generation,
                 root,
                 entries,

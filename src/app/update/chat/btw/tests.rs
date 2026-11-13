@@ -618,21 +618,6 @@ fn stale_thread_loaded_does_not_overwrite_another_session_or_qa() {
 }
 
 #[test]
-fn default_target_sentinel_renders_as_lx_not_an_agent_id() {
-    let (mut state, pane) = btw_pane();
-    let thread = state
-        .pane_mut_anywhere(pane)
-        .expect("pane")
-        .lx
-        .btw
-        .active_thread_mut()
-        .expect("thread");
-    thread.targets = vec![crate::app::state::lx::BtwTargetView::default_assistant()];
-    assert_eq!(thread.target_label(), "To: lx");
-    assert!(thread.targets[0].agent_id.is_none());
-}
-
-#[test]
 fn empty_qa_restores_the_stashed_btw_command_draft() {
     let (mut state, pane) = btw_pane();
     state.models = models_with_default();

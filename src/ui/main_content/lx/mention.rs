@@ -124,38 +124,28 @@ fn panel_area(area: Rect, input: Rect) -> Rect {
     }
 }
 
+/// 提及面板顶栏 Tab 文案。
+fn tab_label(tab: MentionTab) -> &'static str {
+    match tab {
+        MentionTab::Files => text::MENTION_TAB_FILES,
+        MentionTab::RefDir => text::MENTION_TAB_REF_DIR,
+        MentionTab::Skills => text::MENTION_TAB_SKILLS,
+        MentionTab::Mcp => text::MENTION_TAB_MCP,
+        MentionTab::Subagents => text::MENTION_TAB_SUBAGENTS,
+    }
+}
+
 /// 提及面板渲染数据；面板不显示时返回 None。
 fn panel_data(lx: &Lx, width: u16) -> Option<PanelData> {
     let tab = lx.mention().tab();
-    let tabs = if lx.entry == crate::app::state::LxEntry::AiWeb {
-        vec![PanelTab {
-            label: text::MENTION_TAB_FILES,
-            active: tab == MentionTab::Files,
-        }]
-    } else {
-        vec![
-            PanelTab {
-                label: text::MENTION_TAB_FILES,
-                active: tab == MentionTab::Files,
-            },
-            PanelTab {
-                label: text::MENTION_TAB_REF_DIR,
-                active: tab == MentionTab::RefDir,
-            },
-            PanelTab {
-                label: text::MENTION_TAB_SKILLS,
-                active: tab == MentionTab::Skills,
-            },
-            PanelTab {
-                label: text::MENTION_TAB_MCP,
-                active: tab == MentionTab::Mcp,
-            },
-            PanelTab {
-                label: text::MENTION_TAB_SUBAGENTS,
-                active: tab == MentionTab::Subagents,
-            },
-        ]
-    };
+    let tabs: Vec<PanelTab<'static>> = lx
+        .mention_tabs()
+        .iter()
+        .map(|tab| PanelTab {
+            label: tab_label(*tab),
+            active: lx.mention().tab() == *tab,
+        })
+        .collect();
     let status = |label: &'static str| PanelData {
         rows: vec![PanelRow::Status(label)],
         active: 0,

@@ -90,20 +90,6 @@ impl BtwThreadState {
         }
     }
 
-    /// 输入框上沿的目标标签：`To: lx, Turing [explorer]`。
-    pub fn target_label(&self) -> String {
-        let labels: Vec<String> = self
-            .effective_targets()
-            .iter()
-            .map(|target| target.label.clone())
-            .collect();
-        format!(
-            "{}{}",
-            crate::ui::text::LX_BTW_TARGETS_PREFIX,
-            labels.join(", ")
-        )
-    }
-
     /// 该线程是否仍在生成/等待本地 ACK（决定底部 loading 行与动画帧）。
     pub fn is_loading(&self) -> bool {
         self.pending_submit.is_some()
@@ -115,15 +101,6 @@ impl BtwThreadState {
                 .messages
                 .iter()
                 .any(|message| message.role == "assistant" && message.status == "streaming")
-    }
-
-    /// 当前有效回答者集合；为空时回退默认助手。
-    pub fn effective_targets(&self) -> Vec<BtwTargetView> {
-        if self.targets.is_empty() {
-            vec![BtwTargetView::default_assistant()]
-        } else {
-            self.targets.clone()
-        }
     }
 }
 

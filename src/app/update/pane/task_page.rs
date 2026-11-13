@@ -234,8 +234,11 @@ fn apply_agents_list_input(state: &mut AppState, pane: PaneId, command: LxInput)
     }
 }
 
-/// 编辑态：Enter 发送、Esc 返回列表、PgUp/PgDn 翻详情。
+/// 编辑态：`@` 面板优先，其次 Enter 发送、Esc 返回列表、PgUp/PgDn 翻详情。
 fn apply_agent_edit_input(state: &mut AppState, pane: PaneId, command: LxInput) -> bool {
+    if apply_agent_mention_input(state, pane, command) {
+        return true;
+    }
     match command {
         LxInput::Escape => leave_agent_edit(state, pane),
         LxInput::Enter => submit_agent_edit(state, pane),
@@ -251,6 +254,64 @@ fn apply_agent_edit_input(state: &mut AppState, pane: PaneId, command: LxInput) 
         LxInput::Tab | LxInput::PrevStep => true,
         _ => edit_agent_composer(state, pane, command),
     }
+}
+
+/// `@` 面板按键：镜像 BTW composer（`chat/btw/input.rs`），面板打开时优先于发送与退出。
+fn apply_agent_mention_input(state: &mut AppState, pane: PaneId, command: LxInput) -> bool {
+    let Some(target) = state.pane_mut_anywhere(pane) else {
+        return false;
+    };
+    let Some(agent_id) = target.lx.agent_edit_id().map(str::to_string) else {
+        return false;
+    };
+    let Some(composer) = target.lx.agents.composer_mut(&agent_id) else {
+        return false;
+    };
+    let editor = composer.editor_mut();
+    if editor.mention_visible() {
+        match command {
+            LxInput::Left => {
+                editor.mention_switch_tab(-1);
+                return true;
+            }
+            LxInput::Right => {
+                editor.mention_switch_tab(1);
+                return true;
+            }
+            LxInput::Escape => {
+                editor.mention_escape();
+                return true;
+            }
+            LxInput::EnterFolder => {
+                editor.mention_enter_folder();
+                return true;
+            }
+            _ => {}
+        }
+    }
+    if editor.mention_open() {
+        match command {
+            LxInput::Up => {
+                editor.mention_move(-1);
+                return true;
+            }
+            LxInput::Down => {
+                editor.mention_move(1);
+                return true;
+            }
+            LxInput::Tab | LxInput::Enter => {
+                editor.mention_confirm();
+                return true;
+            }
+            _ => {}
+        }
+    }
+    if editor.mention_visible() {
+        // 面板只有状态行（扫描中 / 无匹配）：按键继续编辑过滤词，Enter 不发送半截文本。
+        super::apply_editor_edit(editor, command);
+        return true;
+    }
+    false
 }
 
 fn edit_agent_composer(state: &mut AppState, pane: PaneId, command: LxInput) -> bool {
@@ -568,8 +629,13 @@ pub fn enter_task_agent_edit(state: &mut AppState, pane: PaneId) -> bool {
     target.lx.agents.ensure_composer(&agent_id);
     target.lx.agents.selected_id = Some(agent_id.clone());
     if let Some(page) = target.lx.task.as_mut() {
-        page.agent_edit = Some(agent_id);
+        page.agent_edit = Some(agent_id.clone());
     }
+    if let Some(composer) = target.lx.agents.composer_mut(&agent_id) {
+        // 每次进入编辑态都重置 `@` 面板，避免上一次会话的候选残留。
+        composer.editor_mut().mention_escape();
+    }
+    target.lx.sync_agent_composer_context();
     true
 }
 

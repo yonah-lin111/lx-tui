@@ -318,27 +318,20 @@ impl LxMention {
         }
     }
 
-    /// 切换 Tab：循环左右切换；未处于可见状态返回 false。
-    pub fn switch_tab(&mut self, delta: isize, text: &str, cursor: usize) -> bool {
-        self.switch_tab_for_entry(delta, text, cursor, false)
-    }
-
-    /// 按当前入口切换 Tab：`ai_web` 为真时仅保留 `Files`，禁止切换。
-    pub fn switch_tab_for_entry(
+    /// 切换 Tab：在给定 Tab 集合内循环；未处于可见状态返回 false。
+    pub fn switch_tab(
         &mut self,
         delta: isize,
         text: &str,
         cursor: usize,
-        ai_web: bool,
+        tabs: &[MentionTab],
     ) -> bool {
-        if ai_web || self.view(text, cursor) == LxMentionView::Hidden {
+        if tabs.len() < 2 || self.view(text, cursor) == LxMentionView::Hidden {
             return false;
         }
-        let next = if delta > 0 {
-            self.tab.next()
-        } else {
-            self.tab.prev()
-        };
+        let index = tabs.iter().position(|tab| *tab == self.tab).unwrap_or(0) as isize;
+        let len = tabs.len() as isize;
+        let next = tabs[(index + delta).rem_euclid(len) as usize];
         if next == self.tab {
             return false;
         }
@@ -349,23 +342,18 @@ impl LxMention {
         true
     }
 
-    /// 直接设置活跃 Tab。
-    pub fn set_tab(&mut self, tab: MentionTab, text: &str, cursor: usize) -> bool {
-        self.set_tab_for_entry(tab, text, cursor, false)
-    }
-
-    /// 按当前入口直接设置活跃 Tab：`ai_web` 为真时仅允许 `Files`。
-    pub fn set_tab_for_entry(
+    /// 在给定 Tab 集合内直接设置活跃 Tab；不在集合内返回 false。
+    pub fn set_tab(
         &mut self,
         tab: MentionTab,
         text: &str,
         cursor: usize,
-        ai_web: bool,
+        tabs: &[MentionTab],
     ) -> bool {
-        if ai_web && tab != MentionTab::Files {
-            return false;
-        }
-        if self.view(text, cursor) == LxMentionView::Hidden || self.tab == tab {
+        if !tabs.contains(&tab)
+            || self.view(text, cursor) == LxMentionView::Hidden
+            || self.tab == tab
+        {
             return false;
         }
         self.tab = tab;
@@ -627,7 +615,10 @@ impl LxMention {
     }
 
     /// 确认高亮条目：关闭面板、进入压制，返回替换区间与插入文本；无面板或越界返回 None。
-    pub fn confirm(&mut self, text_len: usize) -> Option<(Range<usize>, String)> {
+    ///
+    /// `plain = true` 时只写入朴素文本（Agents 追问），不生成 `@[refer-*]` 标记；
+    /// 标记语法在子 agent 侧没有消费方，写 marker 只会把丑文本转嫁给模型。
+    pub fn confirm(&mut self, text_len: usize, plain: bool) -> Option<(Range<usize>, String)> {
         if self.tab != MentionTab::Files {
             let trigger = self.trigger.as_ref()?;
             if trigger.from > trigger.to || trigger.to > text_len {
@@ -637,36 +628,52 @@ impl LxMention {
             let ref_text = match self.tab {
                 MentionTab::RefDir => {
                     let folder = *self.filtered_ref_folders().get(self.ref_active)?;
-                    crate::app::markdown::format_reference(
-                        crate::app::markdown::ReferKind::Folder,
-                        &folder.path,
-                    )
-                    .unwrap_or_else(|| format!("@[refer-folder]({})", folder.path.display()))
+                    if plain {
+                        format!("@{}", folder.path.display())
+                    } else {
+                        crate::app::markdown::format_reference(
+                            crate::app::markdown::ReferKind::Folder,
+                            &folder.path,
+                        )
+                        .unwrap_or_else(|| format!("@[refer-folder]({})", folder.path.display()))
+                    }
                 }
                 MentionTab::Skills => {
                     let skill = *self.filtered_skills().get(self.ref_active)?;
-                    crate::app::markdown::format_reference(
-                        crate::app::markdown::ReferKind::Skill,
-                        &skill.path,
-                    )
-                    .unwrap_or_else(|| format!("@[refer-skill]({})", skill.path.display()))
+                    if plain {
+                        format!("@{}", skill.name)
+                    } else {
+                        crate::app::markdown::format_reference(
+                            crate::app::markdown::ReferKind::Skill,
+                            &skill.path,
+                        )
+                        .unwrap_or_else(|| format!("@[refer-skill]({})", skill.path.display()))
+                    }
                 }
                 MentionTab::Mcp => {
                     let server = *self.filtered_mcp_servers().get(self.ref_active)?;
-                    crate::app::markdown::format_reference(
-                        crate::app::markdown::ReferKind::Mcp,
-                        Path::new(&server.name),
-                    )
-                    .unwrap_or_else(|| format!("@[refer-mcp]({})", server.name))
+                    if plain {
+                        format!("@{}", server.name)
+                    } else {
+                        crate::app::markdown::format_reference(
+                            crate::app::markdown::ReferKind::Mcp,
+                            Path::new(&server.name),
+                        )
+                        .unwrap_or_else(|| format!("@[refer-mcp]({})", server.name))
+                    }
                 }
                 MentionTab::Subagents => {
                     let item = *self.filtered_subagents().get(self.ref_active)?;
                     let target = item.reference_target();
-                    crate::app::markdown::format_reference(
-                        crate::app::markdown::ReferKind::Subagent,
-                        Path::new(&target),
-                    )
-                    .unwrap_or_else(|| format!("@[refer-subagent]({target})"))
+                    if plain {
+                        format!("@{target}")
+                    } else {
+                        crate::app::markdown::format_reference(
+                            crate::app::markdown::ReferKind::Subagent,
+                            Path::new(&target),
+                        )
+                        .unwrap_or_else(|| format!("@[refer-subagent]({target})"))
+                    }
                 }
                 MentionTab::Files => unreachable!(),
             };

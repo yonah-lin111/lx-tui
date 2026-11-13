@@ -270,16 +270,14 @@ pub(crate) fn composer_rect(rect: Rect, lx: &crate::app::state::Lx) -> Option<Re
     Some(rect)
 }
 
-/// 右侧目标胶囊：` To: <nickname> [role] `；左侧必须给 `Subagent` 标记留位。
+/// 右侧目标胶囊：` <nickname> [role] `；左侧必须给 `Subagent` 标记留位。
 fn draw_agent_badge(grid: &mut Grid, rect: Rect, run: &SubagentRun, marker_w: u16) {
-    let label = format!(
-        " To: {} [{}] ",
-        run.nickname
-            .as_deref()
-            .filter(|nickname| !nickname.is_empty())
-            .unwrap_or_else(|| run.role.as_str()),
-        run.role.as_str()
-    );
+    let name = run
+        .nickname
+        .as_deref()
+        .filter(|nickname| !nickname.is_empty())
+        .unwrap_or_else(|| run.role.as_str());
+    let label = format!(" {name} [{}] ", run.role.as_str());
     let width = u16::try_from(label.width()).unwrap_or(u16::MAX);
     if rect.width <= width.saturating_add(marker_w).saturating_add(2) {
         return;

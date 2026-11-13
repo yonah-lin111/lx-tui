@@ -662,20 +662,17 @@ fn start_recipient(
     let (cancel_sender, cancel) = watch::channel(false);
     streams.cancels.insert(key.clone(), cancel_sender.clone());
     streams.db_workspaces.insert(key.clone(), workspace.clone());
+    // 统计行展示回答者模型，而不是回答者身份；与 DB reload 的 view_message_of 同源，
+    // 同一条线程不会因加载路径不同而变样。
+    let model_label = state
+        .models
+        .model_display_name(&start.model.provider, &start.model.model);
     let mut buffer = crate::app::state::LxChat::new();
     buffer
         .messages
         .push(crate::app::update::new_btw_assistant_message(
             &start.assistant_message_id,
-            &format!(
-                "{} [{}]",
-                start.display_nickname,
-                if start.target_kind == "default" {
-                    "lx".to_string()
-                } else {
-                    start.target_kind.clone()
-                }
-            ),
+            &model_label,
         ));
     let run = BtwRun {
         thread_id: pending.thread_id.clone(),
@@ -688,15 +685,7 @@ fn start_recipient(
         _guard: guard,
         started_at_ms: crate::db::now_ms(),
         last_checkpoint_ms: crate::db::now_ms(),
-        label: format!(
-            "{} [{}]",
-            start.display_nickname,
-            if start.target_kind == "default" {
-                "lx".to_string()
-            } else {
-                start.target_kind.clone()
-            }
-        ),
+        label: model_label,
     };
     let label = run.label.clone();
     streams.btw.runs.insert(key.clone(), run);

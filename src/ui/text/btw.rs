@@ -28,8 +28,6 @@ pub const LX_BTW_QUEUED: &str = "BTW request queued";
 pub const LX_BTW_STOPPED: &str = "BTW answer stopped";
 /// 目标集合重置提示。
 pub const LX_BTW_TARGETS_RESET: &str = "BTW targets reset to lx";
-/// 输入框左侧目标标签。
-pub const LX_BTW_TARGETS_PREFIX: &str = "To: ";
 /// 主问题标题为空时的占位。
 pub const LX_BTW_QA_UNTITLED: &str = "(untitled question)";
 /// BTW composer 左侧标记。
