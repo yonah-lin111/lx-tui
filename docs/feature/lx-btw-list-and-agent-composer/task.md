@@ -1,6 +1,6 @@
 # 实施清单：BTW / Agents 列表-详情导航与统一 composer
 
-> 状态：**已实现并于 2026-11-13 完成 review 修复，待用户运行 `cargo run` 确认后合并**。
+> 状态：**已实现、完成 review 修复并合并到 `dev`（合并提交 `b54a0031`）**；终端交互观感仍建议用户运行 `cargo run` 复核。
 >
 > 设计依据：[design.md](design.md)；审查记录：[review.md](review.md)。
 >
@@ -10,7 +10,7 @@
 
 - [ ] 用户已逐项确认 `design.md` §2 的 Q1–Q30。
 - [ ] 用户已审核本文件的文件拆分与测试矩阵，明确允许开始实现。
-- [ ] 当前分支为 `dev`；工作区无未确认的其他改动（本次不修改 Git 状态，不提交、不合并）。
+- [x] 功能分支已合并到 `dev`（合并提交 `b54a0031`），合并后工作区干净。
 - [ ] 已确认本次**不需要数据库迁移**；`SCHEMA_VERSION` 不动。
 - [ ] 实现前记录受影响文件行数，确认拆分后生产文件 ≤1000 行、测试文件 ≤1500 行。
 
@@ -863,7 +863,7 @@ wc -l src/ui/main_content/lx/task.rs \
 - [x] `rg -n -i "btwlist|btw-list" src` 无生产引用；测试保留 `/btwList` 回归断言（`parse_btw_command` 必须返回 `None`）。
 - [x] `rg -n "agent_reply|agent_reply_target|BtwFocus|picker_open|pending_pick|picker_loading" src tests` 无引用。
 - [x] `rg -n "stop_all_subagents|stop all" src/ui/text.rs src/app/update` 无引用（会话删除路径仍保留内部批量取消函数）。
-- [x] `cargo fmt --check`、`cargo clippy --all-targets -- -D warnings`、完整 `cargo test` 通过（5316 passed / 0 failed / 6 ignored）。
+- [x] `cargo fmt --check`、`cargo clippy --all-targets -- -D warnings`、完整 `cargo test` 通过（功能分支 5316 passed；合并后 `dev` 5347 passed / 0 failed / 6 ignored）。
 - [ ] 用户完成 `cargo run` 手工确认后，才标记本任务完成。
 
 ## 11. 风险与回滚

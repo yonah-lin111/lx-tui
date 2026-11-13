@@ -1,6 +1,6 @@
 # BTW / Agents 列表-详情导航与统一 composer
 
-> 状态：**已实现于 `feat/lx-btw-list-and-agent-composer`，待用户运行 `cargo run` 确认后合并**。
+> 状态：**已实现并合并到 `dev`（合并提交 `b54a0031`）**；终端交互观感仍建议用户运行 `cargo run` 复核。
 >
 > 创建：2026-11-12；实施：2026-11-12。
 >
@@ -1174,7 +1174,7 @@ pub(crate) enum TaskHit {
 - `Esc` 优先级：浮层（仅 BTW）→ 编辑态退回列表 → 列表清搜索 → 关闭面板。
 - 鼠标单击行只选中/预览，同一行 400ms 内第二次单击进入编辑；搜索行点击按列定位光标。
 - 新增测试覆盖：BTW 搜索/稳定选中/Shift+Enter/回车不变/空列表；Agents 搜索/Shift+Enter/草稿/取消态；Agents composer 复制剪切；8 行列表与 5 行正文；BTW/Agents 详情 loading 与布局。
-- 验证：`cargo fmt --all`、`cargo clippy --all-targets -- -D warnings`、完整 `cargo test` 均通过（5316 单测，0 失败；6 ignored）。
+- 验证：`cargo fmt --all`、`cargo clippy --all-targets -- -D warnings`、完整 `cargo test` 均通过（功能分支 5316 单测；合并后 `dev` 5347 单测，0 失败，6 ignored）。
 
 ## 18. Review 修复记录（2026-11-13）
 

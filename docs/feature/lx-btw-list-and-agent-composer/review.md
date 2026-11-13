@@ -3,6 +3,7 @@
 > 审查基线：`961112f1`（含 feature + 首次光标/loading 修复）
 > 审查方式：状态/输入路由、UI/几何/光标、测试/文档三路并行只读审查，逐项回到代码验证。
 > 结论：**无 P0；P1 3 项、P2 9 项、P3 5 项，已按优先级修复。**
+> 修复提交：`d39604ca`；合并到 `dev`：`b54a0031`。
 
 ## P0
 
@@ -44,7 +45,7 @@
 
 - `cargo fmt --all`：通过
 - `cargo clippy --all-targets -- -D warnings`：通过
-- `cargo test --lib`：5316 passed / 0 failed / 6 ignored
+- `cargo test --lib`：分支 5316 passed；合并后 `dev` 5347 passed / 0 failed / 6 ignored
 - 新增核心回归：BTW 搜索 Shift+Enter、搜索光标非空/滚动、Agents composer 软换行、Agents ACK 切 Q、agent 链接退出 composer、Processes 首行滚轮、编辑态无列表滚动条、窄窗标记、筛选空态、BTW 目标工具阶段。
 
 ## 遗留

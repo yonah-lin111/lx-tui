@@ -117,7 +117,7 @@ cargo run
 
 - CLI 种子会话已写入当前 worktree 的隔离开发库；主 checkout 的 `~/.lx-t-dev/db/lx.db` 不受影响。
 - CLI 没有创建 BTW 侧线程的子命令；BTW 线程需在 TUI 内用 `/btw` 创建，属于手工验证前置步骤。
-- 手工项全部通过后，才能将本分支合并到 `dev`。
+- 本分支已合并到 `dev`（合并提交 `b54a0031`）；合并前自动检查通过，终端交互项仍建议用户运行 `cargo run` 复核。
 
 ## 10. Review 修复后的补充检查
 
@@ -127,3 +127,11 @@ cargo run
 - Processes 首行滚轮、编辑态 composer 滚轮、编辑态列表滚动条命中均已补回归断言。
 - 目标 loading 在 BTW 工具/思考阶段显示对应文案，而不是恒为 `Working...`。
 - 详见 [review.md](review.md)。
+
+## 11. 合并记录（2026-11-13）
+
+- 功能分支 `feat/lx-btw-list-and-agent-composer` 已合并到 `dev`，合并提交 `b54a0031`。
+- 合并时主工作区只有旧版未跟踪的 feature 文档，已备份到临时目录后由分支版本取代；代码与文档均无冲突，`ort` 自动合并成功。
+- 合并后执行：`cargo fmt --all -- --check`、`cargo clippy --all-targets -- -D warnings`、`cargo test`。
+- 结果：`dev` 5347 passed / 0 failed / 6 ignored；clippy 与 fmt 通过。
+- 合并后的 `dev` 仍建议用户运行 `cargo run` 复核终端 `Shift+Enter`、鼠标双击与 loading 观感。
