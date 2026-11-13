@@ -469,3 +469,46 @@ fn schema_declarations_match_execution_layer_validation() {
         }
     }
 }
+
+/// 并行白名单必须是内置工具名的子集。
+#[test]
+fn parallel_safe_tools_are_a_subset_of_tool_names() {
+    for name in PARALLEL_SAFE_TOOL_NAMES {
+        assert!(TOOL_NAMES.contains(&name), "{name} is not a builtin tool");
+    }
+}
+
+/// 并行白名单精确等于四个只读内置工具，写工具与交互工具必须保持串行。
+#[test]
+fn parallel_safe_tools_are_exactly_the_read_only_builtins() {
+    assert_eq!(
+        PARALLEL_SAFE_TOOL_NAMES,
+        ["read", "search", "web_search", "curr_time"]
+    );
+    for name in [
+        "edit",
+        "write",
+        "exec_command",
+        "write_stdin",
+        "update_plan",
+        "ask",
+    ] {
+        assert!(!is_parallel_safe(name), "{name} must stay serial");
+    }
+}
+
+/// MCP 限定名与 subagent 控制工具不能命中并行白名单。
+#[test]
+fn mcp_qualified_names_are_not_parallel_safe() {
+    for name in [
+        "server__read",
+        "mcp__search",
+        "spawn_agent",
+        "cancel_agent_input",
+    ] {
+        assert!(
+            !is_parallel_safe(name),
+            "{name} must not run in a parallel batch"
+        );
+    }
+}

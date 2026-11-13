@@ -68,9 +68,9 @@ pub use schema::{
 };
 pub use subagent::{build_spawn_role_guidance, enrich_spawn_tool_decl};
 pub use types::{
-    ArchivedImage, FileChange, FileChangeKind, McpToolResult, ReadKind, SUBAGENT_TOOL_NAMES,
-    SearchMatch, TOOL_NAMES, ToolContext, ToolDecl, ToolErrorCode, ToolExecutionResult,
-    ToolFailure, ToolResultPublic, ToolSpec, ToolSummary,
+    ArchivedImage, FileChange, FileChangeKind, McpToolResult, PARALLEL_SAFE_TOOL_NAMES, ReadKind,
+    SUBAGENT_TOOL_NAMES, SearchMatch, TOOL_NAMES, ToolContext, ToolDecl, ToolErrorCode,
+    ToolExecutionResult, ToolFailure, ToolResultPublic, ToolSpec, ToolSummary, is_parallel_safe,
 };
 pub use web_search::{
     SearchDepth, WEB_SEARCH_TOOL, WebSearchArgs, WebSearchProvider, WebSearchToolResult,

@@ -20,6 +20,19 @@ pub const TOOL_NAMES: [&str; 10] = [
     "curr_time",
 ];
 
+/// 同一响应内允许并行执行的内置只读工具（顺序仅用于可读性）。
+///
+/// 约束：
+/// - 必须是 [`TOOL_NAMES`] 的子集（测试锁定）；
+/// - 不得包含任何会产生文件/进程/会话副作用的工具；
+/// - MCP 工具名带 `server__tool` 前缀，不会命中本表。
+pub const PARALLEL_SAFE_TOOL_NAMES: [&str; 4] = ["read", "search", "web_search", "curr_time"];
+
+/// 工具名是否允许进入并行只读批次。
+pub fn is_parallel_safe(name: &str) -> bool {
+    PARALLEL_SAFE_TOOL_NAMES.contains(&name)
+}
+
 /// 八个 subagent 控制工具（顺序即 `TOOLS` 中的顺序）。
 pub const SUBAGENT_TOOL_NAMES: [&str; 8] = [
     "spawn_agent",

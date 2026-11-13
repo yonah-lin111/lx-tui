@@ -1,4 +1,4 @@
-//! Agent loop：多步模型采样与**串行**工具调度的纯编排层。
+//! Agent loop：多步模型采样与工具调度的纯编排层（只读调用并行，其余串行）。
 //!
 //! 边界（对应 design §4 / §7 / §15.3）：
 //!
@@ -14,9 +14,9 @@
 //!
 //! ```text
 //! 采样(step) -> ResponseFinished{ToolCalls} -> 校验调用均闭合
-//!   -> 按 ordinal 逐个：host.begin_tool(ack=DB pending + 可见 pending + running)
-//!      -> executor.execute（后台阻塞 IO）-> host.finish_tool(ack=结果落库 + 状态终态)
-//!   -> 结果加入本轮上下文 -> 下一次采样
+//!   -> 相邻只读调用（最多 4 个）：逐个 begin_tool -> 并发 execute -> 按 ordinal 逐个 finish_tool
+//!   -> 其余调用按 ordinal 逐个：begin_tool -> execute -> finish_tool
+//!   -> 结果按 ordinal 加入本轮上下文 -> 下一次采样
 //! 无工具的 Final -> Complete；其他 -> Failed。步数/调用数不设上限（对齐 codex）；
 //! 子 agent 在上下文达到阈值时自动压缩，避免无限执行把上下文撑爆。
 //! ```
@@ -39,6 +39,7 @@ use crate::db::chat::{ToolCallTicket, Usage};
 mod auto_compact;
 mod context;
 mod executor;
+mod tool_batch;
 
 #[cfg(test)]
 use crate::chat::events::ModelItem;
@@ -75,7 +76,7 @@ pub struct ReadyToolCall {
     pub name: String,
     /// 完整参数 JSON 字符串（已校验为 JSON 对象）。
     pub arguments_json: String,
-    /// 供应商响应内顺序（同一响应内串行执行顺序即此顺序）。
+    /// 供应商响应内顺序（同一响应内的结算顺序即此顺序；执行可乱序完成）。
     pub ordinal: usize,
 }
 
@@ -483,28 +484,7 @@ impl TurnSummary {
     }
 }
 
-/// 取工具结果的图片字节（归档路径缺失或读失败时跳过，不阻断工具结果）。
-fn tool_result_images(result: &ToolExecutionResult) -> Vec<crate::chat::events::ModelImage> {
-    let archived: Vec<&crate::chat::tools::ArchivedImage> = match result {
-        ToolExecutionResult::Mcp(mcp) => mcp.images.iter().collect(),
-        ToolExecutionResult::Read {
-            image: Some(image), ..
-        } => vec![image],
-        _ => Vec::new(),
-    };
-    archived
-        .into_iter()
-        .filter_map(|image| {
-            let bytes = std::fs::read(&image.path).ok()?;
-            Some(crate::chat::events::ModelImage {
-                mime: image.mime.clone(),
-                bytes: std::sync::Arc::new(bytes),
-            })
-        })
-        .collect()
-}
-
-/// 执行一轮 agent 任务：多步采样 + 串行工具调度。
+/// 执行一轮 agent 任务：多步采样 + 工具调度（相邻只读调用并行，其余串行）。
 ///
 /// `stream_one` 只执行**一次**模型流并返回其全部增量与结束原因（生产实现为
 /// [`crate::chat::client::run_stream`]，测试可注入脚本化假 transport）。
@@ -629,14 +609,53 @@ where
         if stop != Some(ModelStepStop::ToolCalls) {
             return TurnSummary::failed(UNEXPECTED_STOP_CODE, usage).with_billing(billing);
         }
-        // 同一响应内**串行**执行，顺序即供应商 ordinal；前一结果对后一调用可见。
-        let mut remaining = calls.into_iter();
+        // 同一响应内的调用按供应商 ordinal 处理：
+        // - 相邻只读内置调用（最多 4 个）并发执行，但 Begin/Finish/上下文按 ordinal；
+        // - 其余调用仍是串行屏障，保证“前一结果对后一调用可见”。
+        let mut remaining = calls.into_iter().peekable();
         while let Some(call) = remaining.next() {
             if *cancel.borrow() {
                 // 未开始的调用：只在库里留下 `cancelled` 记录（pending → cancelled），
                 // **绝不执行**文件 IO，然后停止本轮。
                 cancel_unstarted(&mut host, std::iter::once(call).chain(remaining)).await;
                 return TurnSummary::interrupted(usage).with_billing(billing);
+            }
+            if tools::is_parallel_safe(&call.name) {
+                let mut batch = vec![call];
+                while batch.len() < tool_batch::MAX_PARALLEL_TOOL_CALLS
+                    && remaining
+                        .peek()
+                        .is_some_and(|next| tools::is_parallel_safe(&next.name))
+                {
+                    if let Some(next) = remaining.next() {
+                        batch.push(next);
+                    }
+                }
+                let batch = batch
+                    .into_iter()
+                    .map(|call| {
+                        let allowed = call_allowed(&context, &call.name);
+                        (call, allowed)
+                    })
+                    .collect();
+                match tool_batch::execute_batch(&mut host, &mut context, &executor, batch, &cancel)
+                    .await
+                {
+                    tool_batch::BatchOutcome::Completed => {}
+                    tool_batch::BatchOutcome::Interrupted => {
+                        cancel_unstarted(&mut host, remaining).await;
+                        return TurnSummary::interrupted(usage).with_billing(billing);
+                    }
+                    tool_batch::BatchOutcome::Failed(code) => {
+                        return TurnSummary::failed(code, usage).with_billing(billing);
+                    }
+                }
+                // 批次执行期间按了 Esc：已启动的已如实落库，未启动的全部退单。
+                if *cancel.borrow() {
+                    cancel_unstarted(&mut host, remaining).await;
+                    return TurnSummary::interrupted(usage).with_billing(billing);
+                }
+                continue;
             }
             // 门槛一：pending 已提交且可见 loading。ack 前不会有任何文件副作用。
             let ticket = match host.begin_tool(call.clone()).await {
@@ -659,19 +678,7 @@ where
             // 执行层不信任模型：即使供应商/模型幻觉出未声明工具，也不能越过本角色的
             // 工具面执行文件、进程或递归控制工具。失败结果仍走 begin/finish 落库。
             // 唯一权威是本轮冻结的工具声明：内置白名单 + MCP + resources 都已在里面。
-            let allowed = if context.request.tools.is_empty() {
-                // 测试与旧调用路径未注入冻结快照时，回退到角色白名单（按深度收紧）。
-                context
-                    .request
-                    .tools_surface_at_depth(context.subagent_depth, context.max_subagent_depth)
-                    .is_some_and(|surface| surface.names().contains(&call.name.as_str()))
-            } else {
-                context
-                    .request
-                    .tools
-                    .iter()
-                    .any(|decl| decl.name == call.name)
-            };
+            let allowed = call_allowed(&context, &call.name);
             let control = crate::chat::agent::parse_control(&call.name, &call.arguments_json);
             // 深度守卫优先于工具面校验：子 agent 伪造/残留控制工具调用时，
             // 派发工具给出稳定深度错误，其余控制工具按“不可用”拒绝。
@@ -754,27 +761,23 @@ where
                 cancel_unstarted(&mut host, remaining).await;
                 return TurnSummary::interrupted(usage).with_billing(billing);
             }
-            let mut content = tools::format_for_model(&result);
-            let is_error = result.is_failure();
-            let mut tool_images = tool_result_images(&result);
-            if !executor.supports_image_input() && !tool_images.is_empty() {
-                tool_images.clear();
-                content.push_str("\n[image omitted: this model does not support image input]");
-            }
-            // 结果必须先落库再进入上下文；落库失败即停止本轮，**不重试写入**。
-            match host
-                .finish_tool(ticket, ToolOutcome::Executed(result))
-                .await
+            if let Err(error) = tool_batch::commit_result(
+                &mut host,
+                &mut context,
+                &call,
+                ticket,
+                result,
+                executor.supports_image_input(),
+            )
+            .await
             {
-                Ok(()) => {}
-                Err(HostError::Cancelled) => {
-                    return TurnSummary::interrupted(usage).with_billing(billing);
-                }
-                Err(HostError::Failed { code }) => {
-                    return TurnSummary::failed(code, usage).with_billing(billing);
-                }
+                return match error {
+                    HostError::Cancelled => TurnSummary::interrupted(usage).with_billing(billing),
+                    HostError::Failed { code } => {
+                        TurnSummary::failed(code, usage).with_billing(billing)
+                    }
+                };
             }
-            context.push_tool_result(&call.call_id, content, is_error, tool_images);
         }
         // 当前步的全部工具已结算：预算耗尽时在此熔断，保证 call/result 成对落库。
         if budget_exhausted {
@@ -784,6 +787,19 @@ where
         if let Some(reminder) = budget_reminder {
             context.push_user_context(reminder);
         }
+    }
+}
+
+/// 本轮冻结工具面是否允许该调用（与串行路径同一判定）。
+fn call_allowed(context: &ModelContext, name: &str) -> bool {
+    if context.request.tools.is_empty() {
+        // 测试与旧调用路径未注入冻结快照时，回退到角色白名单（按深度收紧）。
+        context
+            .request
+            .tools_surface_at_depth(context.subagent_depth, context.max_subagent_depth)
+            .is_some_and(|surface| surface.names().contains(&name))
+    } else {
+        context.request.tools.iter().any(|decl| decl.name == name)
     }
 }
 

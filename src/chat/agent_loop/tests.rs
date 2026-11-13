@@ -43,8 +43,8 @@ enum SteerTrace {
 #[derive(Clone)]
 struct RecordingHost {
     trace: Arc<Mutex<Vec<HostTrace>>>,
-    /// 依次消费的 begin 注入结果；用尽后一律成功。
-    begin_failures: Arc<Mutex<Vec<HostError>>>,
+    /// 依次消费的 begin 注入结果；`None` 表示该次 begin 成功。
+    begin_failures: Arc<Mutex<VecDeque<Option<HostError>>>>,
     /// 依次消费的 finish 注入结果；用尽后一律成功。
     finish_failures: Arc<Mutex<Vec<HostError>>>,
     /// 已发放的 ticket（验证 begin 的 ticket 被原样交给 finish）。
@@ -67,7 +67,7 @@ impl Default for RecordingHost {
     fn default() -> Self {
         Self {
             trace: Arc::new(Mutex::new(Vec::new())),
-            begin_failures: Arc::new(Mutex::new(Vec::new())),
+            begin_failures: Arc::new(Mutex::new(VecDeque::new())),
             finish_failures: Arc::new(Mutex::new(Vec::new())),
             issued: Arc::new(Mutex::new(Vec::new())),
             ask_result: Arc::new(Mutex::new(Ok(AskAnswers::new()))),
@@ -101,7 +101,22 @@ impl RecordingHost {
 
     fn with_begin_failure(error: HostError) -> Self {
         let host = Self::new();
-        host.begin_failures.lock().expect("lock").push(error);
+        host.begin_failures
+            .lock()
+            .expect("lock")
+            .push_back(Some(error));
+        host
+    }
+
+    /// 前 `successful` 次 begin 成功，随后一次注入失败（并行批次中途失败）。
+    fn with_begin_failure_after(successful: usize, error: HostError) -> Self {
+        let host = Self::new();
+        let mut failures = host.begin_failures.lock().expect("lock");
+        for _ in 0..successful {
+            failures.push_back(None);
+        }
+        failures.push_back(Some(error));
+        drop(failures);
         host
     }
 
@@ -211,11 +226,7 @@ impl AgentHost for RecordingHost {
                     .push(HostTrace::Begin(call.call_id.clone()));
                 let injected = {
                     let mut failures = self.begin_failures.lock().expect("lock");
-                    if failures.is_empty() {
-                        None
-                    } else {
-                        Some(failures.remove(0))
-                    }
+                    failures.pop_front().flatten()
                 };
                 if let Some(error) = injected {
                     let _ = reply.send(Err(error));
@@ -754,6 +765,7 @@ async fn unclosed_tool_input_fails_without_execution() {
 mod ask_turn;
 mod context;
 mod limits;
+mod parallel;
 mod steer;
 
 /// 子 agent 上下文里伪造控制工具：必须按工具级失败回给模型，且不触发 host。

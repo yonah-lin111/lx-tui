@@ -14,6 +14,8 @@ serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
 tokio = { version = "1.53.1", features = ["rt-multi-thread", "macros", "sync", "time", "net", "io-util", "process", "fs", "signal"] }
 tokio-stream = "0.1.19"
+# 只读工具并行聚合：已在依赖树（Cargo.lock 0.3.34），不新增编译单元。
+futures = "0.3"
 unicode-width = "0.2"
 tracing = "0.1"
 tracing-appender = "0.2.3"
