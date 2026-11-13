@@ -180,8 +180,18 @@ fn paint_rows(buf: &mut Buffer, rows_area: Rect, state: &AppState) {
         } else {
             highlight.patch(style::error())
         };
+        // 普通顶层项无分支时用标记占住分组箭头列；历史列表没有激活工作区概念，标记恒压暗。
+        let no_branch = !row.parent
+            && !row.child
+            && entry
+                .git
+                .as_ref()
+                .and_then(|git| git.short_branch())
+                .is_none();
         let prefix_style = if row.parent && entry.exists {
             highlight.patch(style::accent())
+        } else if no_branch && entry.exists {
+            style::muted().patch(highlight)
         } else {
             item_style
         };
@@ -209,6 +219,8 @@ fn paint_rows(buf: &mut Buffer, rows_area: Rect, state: &AppState) {
                 text::WORKSPACE_TREE_MIDDLE
             };
             format!("{:width$}{tree} ", "", width = WORKSPACE_ITEM_INDENT)
+        } else if no_branch {
+            format!("{} ", text::WORKSPACE_NO_BRANCH_ICON)
         } else {
             " ".repeat(WORKSPACE_ITEM_INDENT)
         };
@@ -666,6 +678,116 @@ mod tests {
             .expect("draw");
         let buf = terminal.backend().buffer();
         assert_ne!(buf[(sections.workspaces.x, row0_y)].bg, Color::Indexed(240));
+    }
+
+    /// 历史列表只给无分支的普通顶层项加 `•`；父项与树连接符子项不追加，标记恒压暗。
+    #[test]
+    fn history_marks_unbranched_flat_entries_only() {
+        let mut state = AppState::demo();
+        let config = Config::default();
+        let repo = PathBuf::from("/tmp/lx-unbranched");
+        let child_path = repo.join(".worktrees/detached");
+        state.workspace_history.entries = vec![
+            WorkspaceHistoryEntry {
+                name: "plain".into(),
+                path: PathBuf::from("/tmp/lx-plain"),
+                exists: true,
+                name_is_manual: false,
+                position: 0,
+                trusted: true,
+                git: None,
+            },
+            WorkspaceHistoryEntry {
+                name: "repo".into(),
+                path: repo.clone(),
+                exists: true,
+                name_is_manual: false,
+                position: 1,
+                trusted: true,
+                git: Some(WorkspaceGit {
+                    repo_root: repo.clone(),
+                    checkout_path: repo.clone(),
+                    is_linked: false,
+                    branch: Some("main".into()),
+                    main_branch: Some("main".into()),
+                }),
+            },
+            WorkspaceHistoryEntry {
+                name: "detached".into(),
+                path: child_path.clone(),
+                exists: true,
+                name_is_manual: false,
+                position: 2,
+                trusted: true,
+                git: Some(WorkspaceGit {
+                    repo_root: repo,
+                    checkout_path: child_path,
+                    is_linked: true,
+                    branch: None,
+                    main_branch: Some("main".into()),
+                }),
+            },
+        ];
+        state.workspace_history.mode = WorkspaceMode::History;
+
+        let mut terminal = Terminal::new(TestBackend::new(100, 30)).expect("terminal");
+        terminal
+            .draw(|frame| ui::render(frame, &state, &config))
+            .expect("draw");
+        let view = ui::layout::compute(
+            Rect::new(0, 0, 100, 30),
+            &config,
+            state.sidebar_collapsed,
+            state.sidebar_width,
+            state.prompt_collapsed,
+            state.prompt_width,
+            state.prompt_left,
+            state.panes_collapsed,
+        );
+        let sections = ui::layout::sidebar_sections(view.left_panel, state.agents_collapsed)
+            .expect("sections");
+        let buf = terminal.backend().buffer();
+        let rows: Vec<String> = (0..3)
+            .map(|offset| {
+                let y = sections.workspaces.y + LIST_HEADER_HEIGHT + offset;
+                (sections.workspaces.x..sections.workspaces.right())
+                    .map(|x| buf[(x, y)].symbol())
+                    .collect()
+            })
+            .collect();
+        let row = |needle: &str| {
+            rows.iter()
+                .find(|row| row.contains(needle))
+                .unwrap_or_else(|| panic!("{needle} row missing: {rows:?}"))
+        };
+        let icon = text::WORKSPACE_NO_BRANCH_ICON;
+        let plain = row("plain");
+        assert!(
+            plain.contains(&format!("{icon} plain")),
+            "无分支普通项必须在名字左侧显示标记: {plain:?}"
+        );
+        assert!(!row("repo").contains(icon), "有分支父项不得显示无分支标记");
+        let detached = row("detached");
+        assert!(
+            detached.contains("└─ detached"),
+            "子项应保留树连接符: {detached:?}"
+        );
+        assert!(
+            !detached.contains(icon),
+            "树连接符子项不得显示无分支标记: {detached:?}"
+        );
+
+        let plain_index = rows
+            .iter()
+            .position(|row| row.contains("plain"))
+            .expect("plain row index");
+        let y = sections.workspaces.y + LIST_HEADER_HEIGHT + plain_index as u16;
+        let byte = plain.find(icon).expect("unbranched icon");
+        let x = sections.workspaces.x + plain[..byte].chars().count() as u16;
+        assert!(
+            buf[(x, y)].modifier.contains(ratatui::style::Modifier::DIM),
+            "历史列表的无分支标记恒压暗"
+        );
     }
 }
 

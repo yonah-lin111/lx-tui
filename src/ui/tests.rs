@@ -2727,7 +2727,7 @@ fn sidebar_renders_tree_connectors_for_grouped_linked_worktrees() {
         .expect("child row");
     let plain_line = lines
         .iter()
-        .find(|line| line.contains("    tmp"))
+        .find(|line| line.contains(&format!("{} tmp", text::WORKSPACE_NO_BRANCH_ICON)))
         .expect("plain row");
     let char_col =
         |line: &str, needle: &str| line.find(needle).map(|byte| line[..byte].chars().count());

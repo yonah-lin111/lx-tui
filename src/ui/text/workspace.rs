@@ -256,6 +256,9 @@ pub const TAB_ASK_MARKER: &str = "?";
 /// 初始工作区标记：不可移除，跟随启动工作区。
 pub const INITIAL_WORKSPACE_MARKER: &str = " *";
 
+/// 无分支工作区（非 git / detached HEAD）的普通顶层项标识：占据分组箭头列。
+pub const WORKSPACE_NO_BRANCH_ICON: &str = "•";
+
 /// 工作区分组折叠箭头：展开 / 折叠。
 pub const WORKSPACE_GROUP_EXPANDED: &str = "▾";
 pub const WORKSPACE_GROUP_COLLAPSED: &str = "▸";
