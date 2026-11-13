@@ -1,6 +1,6 @@
 # 工具执行：只读调用并行化 — 任务清单
 
-> 状态：**已完成并通过定向验证（branch `feat/agent-tool-parallel-readonly`，待用户确认合并；结果见第 10 节）**
+> 状态：**已完成并通过定向验证（branch `feat/agent-tool-parallel-readonly`，commit `a1f56ed2`，待用户确认合并；结果见第 10 节）**
 >
 > 对应设计：`docs/feature/agent-tool-parallel-readonly/design.md`
 >
@@ -318,7 +318,7 @@ cargo test event::chat
 
 ---
 
-## 10. 执行结果（branch `feat/agent-tool-parallel-readonly`）
+## 10. 执行结果（branch `feat/agent-tool-parallel-readonly`，commit `a1f56ed2`）
 
 ### 代码
 

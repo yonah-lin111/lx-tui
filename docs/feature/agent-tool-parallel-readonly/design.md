@@ -1,6 +1,6 @@
 # 工具执行：只读调用并行化 + codex 工具面对齐审计（设计方案）
 
-> 状态：**已实现并通过定向验证（branch `feat/agent-tool-parallel-readonly`，待用户确认合并）**
+> 状态：**已实现并通过定向验证（branch `feat/agent-tool-parallel-readonly`，commit `a1f56ed2`，待用户确认合并）**
 >
 > 关联文档：
 > - 任务清单：`docs/feature/agent-tool-parallel-readonly/task.md`
