@@ -328,7 +328,7 @@ cargo test event::chat
 
 ---
 
-## 10. 执行结果（branch `feat/agent-tool-parallel-readonly`，commits `a1f56ed2` / `f6be8b61` / `9bbc175c` / `81a3cf07` / `e0cd17c2` / `65913e2a` / `c08c9148`）
+## 10. 执行结果（branch `feat/agent-tool-parallel-readonly`，commits `a1f56ed2` / `f6be8b61` / `9bbc175c` / `81a3cf07` / `e0cd17c2` / `65913e2a` / `c08c9148` / `14ec2776`）
 
 ### 代码
 

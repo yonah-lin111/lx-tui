@@ -2,7 +2,7 @@
 
 - **特性目录**：`docs/feature/agent-tool-parallel-readonly/`
 - **评审对象**：branch `feat/agent-tool-parallel-readonly`（`dev..HEAD`）
-- **修复提交**：`c08c9148`（代码与测试）；文档随本文件所在提交更新
+- **修复提交**：`c08c9148`（代码与测试）· `14ec2776`（评审文档）
 - **关联文档**：[`design.md`](design.md) · [`task.md`](task.md) · [`verification.md`](verification.md)
 - **评审方式**：codegraph / codebase-memory 结构检索 + 逐行核对 + 定向测试
 - **结论**：无 P0；P1 1 项、P2 3 项、P3 2 项。P1 / P2 已修复，P3 一项修复、一项保留。
