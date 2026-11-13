@@ -2594,15 +2594,17 @@ fn sidebar_renders_duplicate_main_checkout_top_level() {
     let lines = render_lines(&state);
     assert!(lines.iter().any(|line| line.contains("▾ main")));
     assert!(
-        lines.iter().any(|line| line.contains("  main 2")),
-        "重复主 checkout 与根同列、独立顶层: {lines:?}"
+        lines
+            .iter()
+            .any(|line| line.contains(&format!("{} main 2", text::WORKSPACE_ITEM_ICON))),
+        "重复主 checkout 是独立顶层项并显示标记: {lines:?}"
     );
     assert!(
         !lines.iter().any(|line| line.contains("─ main 2")),
         "重复主 checkout 不显示连接符: {lines:?}"
     );
     assert!(
-        lines.iter().any(|line| line.contains("  └─ feature/x")),
+        lines.iter().any(|line| line.contains("  └─ • feature/x")),
         "linked worktree 仍是子项: {lines:?}"
     );
 }
@@ -2633,12 +2635,12 @@ fn sidebar_renders_duplicate_child_index_before_initial_marker() {
 
     let lines = render_lines(&state);
     assert!(
-        lines.iter().any(|line| line.contains("  ├─ feature/x")),
+        lines.iter().any(|line| line.contains("  ├─ • feature/x")),
         "first duplicate keeps clean label: {lines:?}"
     );
     let row_index = lines
         .iter()
-        .position(|line| line.contains("  └─ feature/x 2 *"))
+        .position(|line| line.contains("  └─ • feature/x 2 *"))
         .unwrap_or_else(|| panic!("second duplicate gets index before marker: {lines:?}"));
 
     // `*` 与去重序号用强调色标识，hover 时前景不被覆盖（只加 hover 背景）。
@@ -2693,11 +2695,11 @@ fn sidebar_renders_tree_connectors_for_grouped_linked_worktrees() {
     let lines = render_lines(&state);
     assert!(lines.iter().any(|line| line.contains("▾ main")));
     assert!(
-        lines.iter().any(|line| line.contains("  ├─ feature/x")),
+        lines.iter().any(|line| line.contains("  ├─ • feature/x")),
         "non-last child indents and uses middle connector: {lines:?}"
     );
     assert!(
-        lines.iter().any(|line| line.contains("  └─ notes")),
+        lines.iter().any(|line| line.contains("  └─ • notes")),
         "last child uses last connector and manual name wins: {lines:?}"
     );
     let parent_line = lines
@@ -2710,7 +2712,7 @@ fn sidebar_renders_tree_connectors_for_grouped_linked_worktrees() {
         .expect("child row");
     let plain_line = lines
         .iter()
-        .find(|line| line.contains(&format!("{} tmp", text::WORKSPACE_NO_BRANCH_ICON)))
+        .find(|line| line.contains(&format!("{} tmp", text::WORKSPACE_ITEM_ICON)))
         .expect("plain row");
     let char_col =
         |line: &str, needle: &str| line.find(needle).map(|byte| line[..byte].chars().count());
@@ -2720,8 +2722,8 @@ fn sidebar_renders_tree_connectors_for_grouped_linked_worktrees() {
     assert_eq!(parent_col, connector_col, "父项名字与子项直角符号对齐");
     assert_eq!(
         child_col,
-        parent_col.map(|column| column + left_panel::WORKSPACE_ITEM_INDENT + 1),
-        "子项名字在连接符之后"
+        parent_col.map(|column| column + left_panel::WORKSPACE_ITEM_INDENT + 3),
+        "子项名字在连接符与标记之后"
     );
     assert_eq!(
         char_col(plain_line, "tmp"),
@@ -2957,8 +2959,8 @@ fn sidebar_renders_group_chevron_and_hides_collapsed_children() {
 
     let joined = render_lines(&state).join("\n");
     assert!(joined.contains(text::WORKSPACE_GROUP_EXPANDED));
-    assert!(joined.contains("  ├─ feature/x"), "非末位子项用中连接符");
-    assert!(joined.contains("  └─ notes"));
+    assert!(joined.contains("  ├─ • feature/x"), "非末位子项用中连接符");
+    assert!(joined.contains("  └─ • notes"));
 
     state.collapsed_groups.push(PathBuf::from("/repo"));
     let joined = render_lines(&state).join("\n");
@@ -2969,7 +2971,10 @@ fn sidebar_renders_group_chevron_and_hides_collapsed_children() {
     state.active_workspace = 1;
     let joined = render_lines(&state).join("\n");
     assert!(joined.contains(text::WORKSPACE_GROUP_COLLAPSED));
-    assert!(joined.contains("  └─ feature/x"), "唯一可见子项用末连接符");
+    assert!(
+        joined.contains("  └─ • feature/x"),
+        "唯一可见子项用末连接符"
+    );
     assert!(!joined.contains("notes"));
 }
 

@@ -29,7 +29,6 @@ fn git_retry_delay(attempts: u32) -> Duration {
 
 /// 登记一次工作区 git 元数据查询；同一路径去重。
 pub fn request_git_refresh(state: &mut AppState, cwd: &Path) {
-    state.git_pending.insert(cwd.to_path_buf());
     if state.git_requests.iter().any(|pending| pending == cwd) {
         return;
     }
@@ -96,7 +95,6 @@ pub fn retry_git_queries(state: &mut AppState, now: Instant) -> bool {
             .any(|workspace| workspace.cwd.as_deref() == Some(cwd.as_path()))
         {
             state.git_retry.remove(&cwd);
-            state.git_pending.remove(&cwd);
             continue;
         }
         if let Some(retry) = state.git_retry.get_mut(&cwd) {
@@ -110,10 +108,9 @@ pub fn retry_git_queries(state: &mut AppState, now: Instant) -> bool {
 
 /// 查询结果落地：cwd 与工作区当前 cwd 精确匹配时更新元数据（可能命中多个）；
 /// 工作区首次识别为 linked worktree 时自动补开主 checkout，保持树形结构。
-/// 查询失败时保留旧元数据、维持 `git_pending` 并安排退避重试，避免把“未知”误判成“无分支”。
+/// 查询失败时保留旧元数据并安排退避重试，避免把“未知”误判成“无分支”。
 pub fn apply_git_refresh(state: &mut AppState, cwd: &Path, result: GitRefresh) {
     let GitRefresh::Resolved(git) = result else {
-        state.git_pending.insert(cwd.to_path_buf());
         state
             .git_retry
             .entry(cwd.to_path_buf())
@@ -123,7 +120,6 @@ pub fn apply_git_refresh(state: &mut AppState, cwd: &Path, result: GitRefresh) {
             });
         return;
     };
-    state.git_pending.remove(cwd);
     state.git_retry.remove(cwd);
     let mut first_linked = Vec::new();
     for (index, workspace) in state.workspaces.iter_mut().enumerate() {

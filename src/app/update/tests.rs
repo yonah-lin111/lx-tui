@@ -3821,13 +3821,12 @@ fn apply_git_refresh_updates_workspaces_with_matching_cwd_only() {
 }
 
 #[test]
-fn apply_git_refresh_failure_keeps_old_metadata_and_unknown_state() {
+fn apply_git_refresh_failure_keeps_old_metadata_and_schedules_retry() {
     let mut state = AppState::demo();
     let cwd = PathBuf::from("/repo");
     state.workspaces[0].cwd = Some(cwd.clone());
     let old = git_info("/repo", "/repo", false, Some("main"));
     state.workspaces[0].git = Some(old.clone());
-    state.git_pending.insert(cwd.clone());
 
     apply_git_refresh(&mut state, &cwd, GitRefresh::Failed);
 
@@ -3835,10 +3834,6 @@ fn apply_git_refresh_failure_keeps_old_metadata_and_unknown_state() {
         state.workspaces[0].git.as_ref(),
         Some(&old),
         "查询失败必须保留旧元数据"
-    );
-    assert!(
-        state.git_pending.contains(&cwd),
-        "查询失败保持未知态，避免被当成无分支"
     );
     let retry = state.git_retry.get(&cwd).expect("失败必须安排重试");
     assert_eq!(retry.attempts, 1);
@@ -3876,7 +3871,6 @@ fn failed_git_refresh_retries_with_backoff_and_clears_on_success() {
         GitRefresh::Resolved(Some(git_info("/repo", "/repo", false, Some("main")))),
     );
     assert!(!state.git_retry.contains_key(&cwd), "成功后清除重试计划");
-    assert!(!state.git_pending.contains(&cwd));
 }
 
 #[test]
