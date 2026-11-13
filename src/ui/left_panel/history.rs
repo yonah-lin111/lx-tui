@@ -180,19 +180,12 @@ fn paint_rows(buf: &mut Buffer, rows_area: Rect, state: &AppState) {
         } else {
             highlight.patch(style::error())
         };
-        // 普通顶层项无分支时用标记占住分组箭头列；历史列表没有激活工作区概念，标记恒压暗。
-        // 路径不存在时无法确认分支状态，不标记；“不存在”本身已由红色行表达。
-        let no_branch = entry.exists
-            && !row.parent
-            && !row.child
-            && entry
-                .git
-                .as_ref()
-                .and_then(|git| git.short_branch())
-                .is_none();
+        // 组父项之外的工作区条目一律用 `•`：普通顶层项占分组箭头列，linked 子项跟在连接符后。
+        // 历史列表没有激活工作区概念，标记恒压暗；路径失效时跟随整行使用错误色。
+        let flat_item = !row.parent && !row.child;
         let prefix_style = if row.parent && entry.exists {
             highlight.patch(style::accent())
-        } else if no_branch {
+        } else if flat_item && entry.exists {
             highlight.patch(style::muted_on_border())
         } else {
             item_style
@@ -220,11 +213,14 @@ fn paint_rows(buf: &mut Buffer, rows_area: Rect, state: &AppState) {
             } else {
                 text::WORKSPACE_TREE_MIDDLE
             };
-            format!("{:width$}{tree} ", "", width = WORKSPACE_ITEM_INDENT)
-        } else if no_branch {
-            format!("{} ", text::WORKSPACE_NO_BRANCH_ICON)
+            format!(
+                "{:width$}{tree} {} ",
+                "",
+                text::WORKSPACE_ITEM_ICON,
+                width = WORKSPACE_ITEM_INDENT
+            )
         } else {
-            " ".repeat(WORKSPACE_ITEM_INDENT)
+            format!("{} ", text::WORKSPACE_ITEM_ICON)
         };
         let label = entry.display_label(row.child);
         let index_text = row
@@ -570,7 +566,7 @@ mod tests {
             .expect("sections");
         let row0_y = sections.workspaces.y + LIST_HEADER_HEIGHT;
         let row1_y = row0_y + 1;
-        let name_x = sections.workspaces.x + 8;
+        let name_x = sections.workspaces.x + 9;
 
         let buf = terminal.backend().buffer();
         let row0_text: String = (sections.workspaces.x..sections.workspaces.right())
@@ -584,7 +580,7 @@ mod tests {
             "父行应显示主工作区名: {row0_text}"
         );
         assert!(
-            row1_text.contains("└─ feature/work"),
+            row1_text.contains(&format!("└─ {} feature/work", text::WORKSPACE_ITEM_ICON)),
             "子行应缩进显示树连接符与分支名: {row1_text}"
         );
         assert_ne!(buf[(name_x, row0_y)].fg, Color::Red);
@@ -682,12 +678,12 @@ mod tests {
         assert_ne!(buf[(sections.workspaces.x, row0_y)].bg, Color::Indexed(240));
     }
 
-    /// 历史列表只给无分支的普通顶层项加 `•`；父项、树连接符子项、有分支项与失效路径不追加。
+    /// 历史列表给 Git 组父项之外的所有条目加 `•`：普通顶层项占箭头列，子项跟在连接符后。
     #[test]
-    fn history_marks_unbranched_flat_entries_only() {
+    fn history_marks_entries_after_group_parent() {
         let mut state = AppState::demo();
         let config = Config::default();
-        let repo = PathBuf::from("/tmp/lx-unbranched");
+        let repo = PathBuf::from("/tmp/lx-flat-group");
         let child_path = repo.join(".worktrees/detached");
         let flat_repo = PathBuf::from("/tmp/lx-git-flat");
         state.workspace_history.entries = vec![
@@ -789,7 +785,7 @@ mod tests {
         };
         let char_col =
             |line: &str, needle: &str| line.find(needle).map(|byte| line[..byte].chars().count());
-        let icon = text::WORKSPACE_NO_BRANCH_ICON;
+        let icon = text::WORKSPACE_ITEM_ICON;
         let plain = row("plain");
         let parent = row("repo");
         let detached = row("detached");
@@ -797,29 +793,28 @@ mod tests {
         let gone = row("gone");
         assert!(
             plain.contains(&format!("{icon} plain")),
-            "无分支普通项必须在名字左侧显示标记: {plain:?}"
-        );
-        assert!(!parent.contains(icon), "父项不得显示无分支标记: {parent:?}");
-        assert!(
-            detached.contains("└─ detached"),
-            "子项应保留树连接符: {detached:?}"
+            "普通顶层项必须在名字左侧显示标记: {plain:?}"
         );
         assert!(
-            !detached.contains(icon),
-            "树连接符子项不得显示无分支标记: {detached:?}"
+            !parent.contains(icon),
+            "父项不得显示普通顶层标记: {parent:?}"
         );
         assert!(
-            !git_flat.contains(icon),
-            "有分支的普通项不得显示无分支标记: {git_flat:?}"
+            detached.contains(&format!("└─ {icon} detached")),
+            "子项应保留树连接符并在其后显示标记: {detached:?}"
         );
         assert!(
-            !gone.contains(icon),
-            "路径失效时无法确认分支状态，不得显示标记: {gone:?}"
+            git_flat.contains(&format!("{icon} git-flat")),
+            "有分支的普通项也必须显示标记: {git_flat:?}"
+        );
+        assert!(
+            gone.contains(&format!("{icon} gone")),
+            "路径失效的普通项也必须显示标记: {gone:?}"
         );
         assert_eq!(
             char_col(plain, icon),
             char_col(parent, "▾"),
-            "无分支标记必须与分组箭头同列"
+            "普通顶层标记必须与分组箭头同列"
         );
         let name_col = char_col(plain, "plain");
         assert_eq!(char_col(parent, "repo"), name_col, "父项名字列不位移");
@@ -834,7 +829,7 @@ mod tests {
             .position(|row| row.contains("plain"))
             .expect("plain row index");
         let y = sections.workspaces.y + LIST_HEADER_HEIGHT + plain_index as u16;
-        let x = sections.workspaces.x + char_col(plain, icon).expect("unbranched icon") as u16;
+        let x = sections.workspaces.x + char_col(plain, icon).expect("flat item icon") as u16;
         let cell = &buf[(x, y)];
         assert_eq!(cell.fg, Color::Reset);
         assert!(cell.modifier.contains(ratatui::style::Modifier::DIM));
@@ -847,6 +842,12 @@ mod tests {
         let gone_y = sections.workspaces.y + LIST_HEADER_HEIGHT + gone_index as u16;
         let gone_x = sections.workspaces.x + char_col(gone, "gone").expect("gone name") as u16;
         assert_eq!(buf[(gone_x, gone_y)].fg, Color::Red, "失效路径保持红色");
+        let gone_icon_x = sections.workspaces.x + char_col(gone, icon).expect("gone icon") as u16;
+        assert_eq!(
+            buf[(gone_icon_x, gone_y)].fg,
+            Color::Red,
+            "失效路径标记保持红色"
+        );
 
         // hover 只叠背景：selection 的白色前景不得覆盖显式 Reset + dim。
         state.workspace_history.hover = Some(plain_index);

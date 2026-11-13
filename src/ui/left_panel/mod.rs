@@ -91,8 +91,8 @@ pub fn render(frame: &mut Frame<'_>, area: Rect, state: &AppState) -> Option<(u1
 ///
 /// 顶层项统一缩进 2 列：行首为标记列（`❯ ` 或空），组父项行随后显示折叠箭头
 /// （accent 色，占 2 列），其名字与分组子项的连接符同列；子项连接符（`├─ `/`└─ `，
-/// 末位按可见子项判定）之后是名字。无分支的普通顶层项在箭头列显示 `•`，
-/// 有分支项与父项名字同列。
+/// 末位按可见子项判定）之后是名字。普通顶层项在箭头列显示 `•`；组父项不叠加，
+/// linked 子项在连接符后显示 `•`。
 /// 折叠组只渲染父项与当前激活子项。
 /// 行由 `AppState::workspace_rows` 给出，渲染与命中一一对应。
 /// 标记项为标记预留 2 列，名字超宽先截断，保证 `*` 不被裁剪。
@@ -125,25 +125,14 @@ fn workspace_items(state: &AppState, width: usize) -> Vec<ListItem<'_>> {
             "  ".to_string()
         };
         let item_style = style::text().patch(highlight);
-        // 普通顶层项拿不到可展示分支时，用标记占住分组箭头列；有分支项保持空白对齐。
-        // git 元数据未确定（在途或查询失败）时不能据此判定“无分支”，否则会误标。
-        let git_pending = workspace
-            .cwd
-            .as_ref()
-            .is_some_and(|cwd| state.git_pending.contains(cwd));
-        let no_branch = !git_pending
-            && !row.parent
-            && !row.child
-            && workspace
-                .git
-                .as_ref()
-                .and_then(|git| git.short_branch())
-                .is_none();
-        // 特殊文字（分组箭头强调色、无分支标记压暗）叠在行底之上：前景/修饰符取自身样式，
+        // 组父项之外的工作区条目一律用 `•`：普通顶层项占箭头列，子项跟在连接符后；
+        // 不再按 git 分支判定。
+        let flat_item = !row.parent && !row.child;
+        // 特殊文字（分组箭头强调色、普通顶层标记压暗）叠在行底之上：前景/修饰符取自身样式，
         // 只借用 hover 的背景，避免被 hover 的白字覆盖。
         let prefix_style = if row.parent {
             highlight.patch(style::accent())
-        } else if no_branch && !active {
+        } else if flat_item && !active {
             highlight.patch(style::muted_on_border())
         } else {
             item_style
@@ -165,11 +154,14 @@ fn workspace_items(state: &AppState, width: usize) -> Vec<ListItem<'_>> {
             } else {
                 text::WORKSPACE_TREE_MIDDLE
             };
-            format!("{:width$}{tree} ", "", width = WORKSPACE_ITEM_INDENT)
-        } else if no_branch {
-            format!("{} ", text::WORKSPACE_NO_BRANCH_ICON)
+            format!(
+                "{:width$}{tree} {} ",
+                "",
+                text::WORKSPACE_ITEM_ICON,
+                width = WORKSPACE_ITEM_INDENT
+            )
         } else {
-            " ".repeat(WORKSPACE_ITEM_INDENT)
+            format!("{} ", text::WORKSPACE_ITEM_ICON)
         };
         // 特殊标记（`*` 表示最初路径、去重序号）用强调色标识，hover 只提供背景。
         let mark_style = highlight.patch(style::accent());

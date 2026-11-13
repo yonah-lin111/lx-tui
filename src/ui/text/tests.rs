@@ -209,16 +209,16 @@ fn ui_icons_are_single_width_and_non_pua() {
         "输入框前缀图标必须严格占用 1 列宽"
     );
     assert_eq!(
-        WORKSPACE_NO_BRANCH_ICON.width(),
+        WORKSPACE_ITEM_ICON.width(),
         1,
-        "无分支工作区图标必须严格占用 1 列宽"
+        "工作区条目标识必须严格占用 1 列宽"
     );
 
     for (name, icon) in [
         ("MENTION_DIR_ICON", MENTION_DIR_ICON),
         ("MENTION_FILE_ICON", MENTION_FILE_ICON),
         ("TAB_ITEM_ICON", TAB_ITEM_ICON),
-        ("WORKSPACE_NO_BRANCH_ICON", WORKSPACE_NO_BRANCH_ICON),
+        ("WORKSPACE_ITEM_ICON", WORKSPACE_ITEM_ICON),
     ] {
         for ch in icon.chars() {
             let cp = ch as u32;

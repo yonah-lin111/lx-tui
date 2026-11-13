@@ -1,6 +1,6 @@
 //! 应用状态：唯一状态来源，纯数据，可在无终端环境下构造与测试。
 
-use std::collections::{BTreeMap, HashMap, HashSet};
+use std::collections::{BTreeMap, HashMap};
 use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
 
@@ -342,8 +342,6 @@ pub struct AppState {
     pub effects: Vec<Effect>,
     /// 待查询 git 元数据的工作区 cwd 队列；事件层取走并在后台执行。
     pub git_requests: Vec<PathBuf>,
-    /// 尚未得到确定结果的 git 查询 cwd（在途或查询失败）：渲染层据此区分“未知”与“确认为非 git”。
-    pub git_pending: HashSet<PathBuf>,
     /// 查询失败后的重试计划（cwd → 下次重试）；成功或确认非仓库时清除。
     pub git_retry: HashMap<PathBuf, GitRetry>,
     /// 待解析仓库根的信任检查请求；事件层取走并在后台解析后回投。
@@ -528,7 +526,6 @@ impl AppState {
             prompt_committed_for_quit: false,
             effects: Vec::new(),
             git_requests: Vec::new(),
-            git_pending: HashSet::new(),
             git_retry: HashMap::new(),
             trust_resolutions: Vec::new(),
             referenced: ReferencedFolders::default(),
