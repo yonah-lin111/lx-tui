@@ -420,6 +420,83 @@ async fn reversed_completion_still_commits_in_ordinal_order() {
     assert_eq!(results, vec!["c0".to_string(), "c1".to_string()]);
 }
 
+/// 文本模型收到图片结果：图片字节不进上下文，正文追加固定降级提示。
+struct ImageExecutor {
+    image_path: PathBuf,
+}
+
+impl ToolExecutor for ImageExecutor {
+    async fn execute(&self, _cwd: &Path, _call: &ReadyToolCall) -> ToolExecutionResult {
+        ToolExecutionResult::Read {
+            path: self.image_path.clone(),
+            kind: crate::chat::tools::ReadKind::Image,
+            content: "image".into(),
+            start_line: 0,
+            end_line: 0,
+            next_offset: None,
+            truncated: false,
+            line_truncated: false,
+            entries_truncated: false,
+            total_lines: 0,
+            version: None,
+            image: Some(crate::chat::tools::ArchivedImage {
+                path: self.image_path.clone(),
+                mime: "image/png".into(),
+                width: 1,
+                height: 1,
+            }),
+        }
+    }
+
+    fn supports_image_input(&self) -> bool {
+        false
+    }
+}
+
+#[tokio::test]
+async fn image_results_are_downgraded_for_text_only_models() {
+    let fixture = Fixture::new("parallel-image");
+    let image_path = fixture.path().join("pic.png");
+    std::fs::write(&image_path, b"png-bytes").expect("write image fixture");
+    let script = Script::new(
+        vec![
+            tool_calls(&[("c0", "read", READ_ARGS, 0)], None),
+            final_response("done", None),
+        ],
+        StopReason::Complete,
+    );
+    let summary = run_agent_turn(
+        context(fixture.path()),
+        RecordingHost::new(),
+        ImageExecutor {
+            image_path: image_path.clone(),
+        },
+        script.stream_one(),
+        no_cancel(),
+    )
+    .await;
+
+    assert_eq!(summary.outcome, TurnOutcome::Complete);
+    let result = script
+        .items_of(1)
+        .into_iter()
+        .find_map(|item| match item {
+            ModelItem::ToolResult {
+                content, images, ..
+            } => Some((content, images)),
+            _ => None,
+        })
+        .expect("tool result in context");
+    assert!(result.1.is_empty(), "文本模型不得收到图片字节");
+    assert!(
+        result
+            .0
+            .contains("[image omitted: this model does not support image input]"),
+        "{}",
+        result.0
+    );
+}
+
 /// 可取消入口优先（`web_search` / MCP），其余工具回落到带票据的通用执行入口。
 struct CancellableFirstExecutor {
     cancellable: Arc<Mutex<Vec<String>>>,
