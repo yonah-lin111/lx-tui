@@ -130,7 +130,7 @@ pub struct MentionState {
     worktree_pending: bool,
     /// 最近一次发起 worktree 查询的时刻；用于未解析绑定的重试节流。
     worktree_queried_at: Option<Instant>,
-    /// 面板压制：Esc/确认后保持关闭，直到绑定切换或编辑重置。
+    /// 面板压制：Esc/确认后保持关闭，只有下一次文本编辑才解除。
     suppressed: bool,
     /// @ 面板取根选择（绑定 linked worktree 时先选 main / wt）。
     choice: Option<MentionRootChoice>,
@@ -376,7 +376,7 @@ impl MentionState {
         self.worktree_repo = repo;
         self.worktree_candidates = None;
         self.worktree_pending = false;
-        self.refresh(text, cursor);
+        self.refresh_if_active(text, cursor);
     }
 
     /// 选择器打开时清空旧候选并允许新一轮加载（不直接发起，由事件层调度）。
@@ -407,14 +407,14 @@ impl MentionState {
 
     /// 需要新扫描时返回（代号，扫描根列表）并标记处理中；仅事件循环调用。
     pub fn take_scan_request(&mut self, text: &str, cursor: usize) -> Option<(u64, PathBuf)> {
-        if self.pending {
+        if self.pending || self.suppressed || self.trigger.is_none() {
             return None;
         }
-        let root = self.effective_root(text, cursor)?;
+        let masked = crate::app::paste::mask_pasted_text(text);
+        let root = self.effective_root(masked.as_ref(), cursor)?;
         if self.cache.is_some() {
             return None;
         }
-        markdown::mention_trigger(text, cursor)?;
         self.pending = true;
         Some((self.generation, root))
     }
@@ -475,14 +475,14 @@ impl MentionState {
             self.pending = false;
             self.generation = self.generation.wrapping_add(1);
         }
-        self.refresh(text, cursor);
+        self.refresh_if_active(text, cursor);
     }
 
     /// worktree 查询失败：清空候选并允许后续重试（节流由查询时刻控制）。
     pub fn worktree_failed(&mut self, text: &str, cursor: usize) {
         self.worktree_pending = false;
         self.worktree_candidates = None;
-        self.refresh(text, cursor);
+        self.refresh_if_active(text, cursor);
     }
 
     /// 取根选择器确认：记录选择、作废旧候选并转为文件面板；返回是否消费。
@@ -677,9 +677,13 @@ impl MentionState {
         self.generation = self.generation.wrapping_add(1);
     }
 
-    /// 同步扫描根；根或 worktree 绑定变化时清除缓存、关闭面板并作废在途结果；
-    /// 根未变化也重算面板（绑定可能随光标移动切换）。
+    /// 同步扫描根；根或 worktree 绑定变化时清除缓存并作废在途结果；
+    /// 仅已有 `@` 会话（含压制态）时重算，纯根同步不得新开面板，也不解除压制。
     pub fn set_root(&mut self, root: Option<PathBuf>, text: &str, cursor: usize) {
+        let had_session = self.trigger.is_some() || self.suppressed;
+        // 折叠粘贴块正文不得参与块绑定/围栏判断；所有入口统一在状态层遮蔽。
+        let masked = crate::app::paste::mask_pasted_text(text);
+        let text = masked.as_ref();
         let previous = self.effective_root(text, cursor);
         self.root = root;
         let current = self.effective_root(text, cursor);
@@ -687,18 +691,18 @@ impl MentionState {
             self.cache = None;
             self.pending = false;
             self.generation = self.generation.wrapping_add(1);
-            // 绑定切换是新上下文：解除 Esc/确认后的压制。
-            self.suppressed = false;
         }
-        self.refresh(text, cursor);
+        if had_session {
+            self.refresh(text, cursor);
+        }
     }
 
-    /// 面板压制标记：Esc 关闭或确认插入后不再重新弹出，直到绑定切换或显式清除。
+    /// 面板压制标记：Esc 关闭或确认插入后不再重新弹出，只有文本编辑才解除。
     pub fn suppress(&mut self) {
         self.suppressed = true;
     }
 
-    /// 显式解除压制（编辑/移动后由调用方清除）。
+    /// 显式解除压制（文本编辑后由调用方清除；移动不解除）。
     pub fn unsuppress(&mut self) {
         self.suppressed = false;
     }
@@ -716,7 +720,7 @@ impl MentionState {
         }
         self.pending = false;
         self.cache = Some(entries);
-        self.refresh(text, cursor);
+        self.refresh_if_active(text, cursor);
         true
     }
 
@@ -739,10 +743,20 @@ impl MentionState {
         }
     }
 
+    /// 仅当当前已有 `@` 会话（含压制态）时重算；纯移动/后台同步不得新开面板。
+    pub(super) fn refresh_if_active(&mut self, text: &str, cursor: usize) {
+        if self.trigger.is_some() || self.suppressed {
+            self.refresh(text, cursor);
+        }
+    }
+
     /// 重算面板：触发或缓存缺失时隐藏，同起点且同目录范围保留高亮。
     ///
     /// 进入/回退目录会改变 query 的目录范围，此时高亮回到首项；同一层内继续过滤保持高亮。
     pub(super) fn refresh(&mut self, text: &str, cursor: usize) {
+        // 调用方可能传原始文本（根同步/后台快照/操作根选择）；统一遮蔽折叠粘贴块。
+        let masked = crate::app::paste::mask_pasted_text(text);
+        let text = masked.as_ref();
         if self.suppressed {
             self.panel = None;
             self.chooser = None;

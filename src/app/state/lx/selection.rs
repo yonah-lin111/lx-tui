@@ -153,14 +153,14 @@ impl Lx {
     pub fn doc_start(&mut self) {
         self.refer_suppressed = false;
         self.cursor = 0;
-        self.refresh_panel();
+        self.refresh_panel_moved();
     }
 
     /// Ctrl+End / Cmd+↓：移到输入框末尾。
     pub fn doc_end(&mut self) {
         self.refer_suppressed = false;
         self.cursor = self.input.len();
-        self.refresh_panel();
+        self.refresh_panel_moved();
     }
 
     /// Ctrl+Shift+Home / Cmd+Shift+↑：扩展到输入框开头。

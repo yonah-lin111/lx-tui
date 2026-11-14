@@ -55,6 +55,9 @@ pub struct PreparedUserMessage {
 /// 4. 尝试解析 `@ref/` 唯一短引用；
 /// 5. 校验图片存在性、格式与 20 MiB/张、4 张/条、40 MiB/条总量预算；
 /// 6. 对规范化路径或二进制相同的图片去重（模型只发一份，显示行仍保留位置）。
+///
+/// 文本引用不在准备阶段丢弃：每个出现位置都保留 marker，供标题剥离、`/rewind`
+/// 回填与 Web prompt 清洗使用；重复展示由 UI 按目标收敛。
 pub fn prepare_user_message(
     workspace_root: &Path,
     raw_text: &str,
@@ -277,71 +280,6 @@ pub fn prepare_user_message(
         }
     }
 
-    // 3.5. 解析 `@[ref-content]/` 快捷引用
-    for range in crate::app::markdown::ref_content_ranges(&masked) {
-        if claimed_ranges
-            .iter()
-            .any(|(s, e)| range.start < *e && range.end > *s)
-        {
-            continue;
-        }
-
-        let token_text =
-            &raw_text[range.start + crate::app::markdown::REF_CONTENT_PREFIX.len()..range.end];
-        let trimmed_token = token_text.trim_end_matches('/');
-
-        if let Some((resolved, relative_path)) =
-            resolve_ref_content_target(workspace_root, trimmed_token, &attachments)
-        {
-            let Ok(metadata) = std::fs::metadata(&resolved) else {
-                continue;
-            };
-            let mut end = range.end;
-            if raw_text[end..].starts_with(' ') {
-                end += 1;
-            }
-            claimed_ranges.push((range.start, end));
-
-            let full_label = format!("{}{token_text}", crate::app::markdown::REF_CONTENT_PREFIX);
-            if metadata.is_dir() {
-                attachments.push(MessageAttachmentInput {
-                    kind: MessageAttachmentKind::Folder,
-                    label: full_label,
-                    marker_start: Some(range.start),
-                    marker_end: Some(end),
-                    source_path: Some(relative_path),
-                    mime: None,
-                    width: None,
-                    height: None,
-                });
-            } else if sniff_image_file(&resolved) {
-                let processed = load_and_process_image_file(&resolved)?;
-                add_unique_image(processed.clone())?;
-                attachments.push(MessageAttachmentInput {
-                    kind: MessageAttachmentKind::Image,
-                    label: full_label,
-                    marker_start: Some(range.start),
-                    marker_end: Some(end),
-                    source_path: Some(resolved.to_string_lossy().into_owned()),
-                    mime: Some(processed.mime),
-                    width: Some(processed.width),
-                    height: Some(processed.height),
-                });
-            } else {
-                attachments.push(MessageAttachmentInput {
-                    kind: MessageAttachmentKind::File,
-                    label: full_label,
-                    marker_start: Some(range.start),
-                    marker_end: Some(end),
-                    source_path: Some(relative_path),
-                    mime: None,
-                    width: None,
-                    height: None,
-                });
-            }
-        }
-    }
-
     // 4. 解析 `@ref/` 短引用
     for (start, end, short_name) in parse_short_ref_tokens(&masked) {
         if claimed_ranges.iter().any(|(s, e)| start < *e && end > *s) {
@@ -366,21 +304,30 @@ pub fn prepare_user_message(
             .collect();
 
         if matches.len() == 1 {
-            let matched = matches[0];
+            let (kind, source_path, mime, width, height) = {
+                let matched = matches[0];
+                (
+                    matched.kind,
+                    matched.source_path.clone(),
+                    matched.mime.clone(),
+                    matched.width,
+                    matched.height,
+                )
+            };
             let mut marker_end = end;
             if raw_text[marker_end..].starts_with(' ') {
                 marker_end += 1;
             }
             claimed_ranges.push((start, marker_end));
             attachments.push(MessageAttachmentInput {
-                kind: matched.kind,
+                kind,
                 label: short_name.to_string(),
                 marker_start: Some(start),
                 marker_end: Some(marker_end),
-                source_path: matched.source_path.clone(),
-                mime: matched.mime.clone(),
-                width: matched.width,
-                height: matched.height,
+                source_path,
+                mime,
+                width,
+                height,
             });
         }
     }
@@ -491,54 +438,8 @@ fn resolve_reference_path(workspace_root: &Path, path_str: &str) -> PathBuf {
     }
 }
 
-/// 解析快捷引用对应的物理路径：
-/// 1. 若 workspace_root.join(token) 直接存在，返回该路径与 token；
-/// 2. 若当前消息中已有其它附件的 source_path 以后缀匹配 token，使用该完整路径；
-/// 3. 若工作区中存在后缀匹配 `/{token}` 或 `== token` 的条目，使用工作区扫描找到的完整相对路径。
-fn resolve_ref_content_target(
-    workspace_root: &Path,
-    trimmed_token: &str,
-    existing_attachments: &[MessageAttachmentInput],
-) -> Option<(PathBuf, String)> {
-    let direct = resolve_reference_path(workspace_root, trimmed_token);
-    if std::fs::metadata(&direct).is_ok() {
-        return Some((direct, trimmed_token.to_string()));
-    }
-
-    // 尝试在已有的附件中匹配
-    for att in existing_attachments {
-        if let Some(src) = &att.source_path {
-            let normalized = src.trim_end_matches('/');
-            let normalized_rel = normalized.trim_start_matches('/');
-            if normalized_rel == trimmed_token || normalized.ends_with(&format!("/{trimmed_token}"))
-            {
-                let resolved = resolve_reference_path(workspace_root, normalized);
-                if std::fs::metadata(&resolved).is_ok() {
-                    return Some((resolved, normalized.to_string()));
-                }
-            }
-        }
-    }
-
-    // 扫描工作区匹配后缀
-    let entries = crate::files::scan(workspace_root);
-    let token_suffix = format!("/{trimmed_token}");
-    if let Some(entry) = entries
-        .iter()
-        .find(|e| e.path == trimmed_token || e.path.ends_with(&token_suffix))
-    {
-        let resolved = workspace_root.join(&entry.path);
-        if std::fs::metadata(&resolved).is_ok() {
-            return Some((resolved, entry.path.clone()));
-        }
-    }
-
-    None
-}
-
 /// 移除用户消息正文中的有效引用标记并清理多余空白，供会话标题生成与纯文本摘要提取使用
 /// （消息列表气泡与置顶悬浮行保留 `@` 引用原文，不再调用本函数剥离）。
-/// 快捷引用（`@[ref-content]/`）同样保留在结果中，不被剥离。
 pub fn strip_references_for_display(
     raw_text: &str,
     attachments: &[crate::db::chat::MessageAttachmentMeta],
@@ -547,16 +448,12 @@ pub fn strip_references_for_display(
         raw_text,
         attachments
             .iter()
-            .filter(|att| {
-                !att.label
-                    .starts_with(crate::app::markdown::REF_CONTENT_PREFIX)
-            })
             .filter_map(|att| att.marker_start.zip(att.marker_end)),
     )
 }
 
 /// 移除尚未落库的附件输入对应的引用标记，并将折叠粘贴 token 投影为紧凑标签，
-/// 供生成会话标题/预览与空正文回退使用。快捷引用（`@[ref-content]/`）同样保留在正文中。
+/// 供生成会话标题/预览与空正文回退使用。
 pub fn strip_references_from_inputs(
     raw_text: &str,
     attachments: &[crate::db::chat::MessageAttachmentInput],
@@ -565,10 +462,6 @@ pub fn strip_references_from_inputs(
         raw_text,
         attachments
             .iter()
-            .filter(|att| {
-                !att.label
-                    .starts_with(crate::app::markdown::REF_CONTENT_PREFIX)
-            })
             .filter_map(|att| att.marker_start.zip(att.marker_end)),
     );
     crate::app::paste::Projection::new(&stripped, &crate::app::paste::ExpandedPastes::default())

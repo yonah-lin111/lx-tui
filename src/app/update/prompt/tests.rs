@@ -1,5 +1,7 @@
 //! 提示词树行为单元测试：视图切换、导航、菜单命令分发与编辑提交。
 
+mod mention_timing;
+
 use super::*;
 use crate::app::actions::{Action, EditorCommand};
 use crate::app::overlay::{
@@ -1447,6 +1449,80 @@ fn autosave_defers_while_paste_proposal_open() {
             .iter()
             .any(|effect| matches!(effect, Effect::SavePromptContent { .. })),
         "面板关闭后落库"
+    );
+}
+
+#[test]
+fn autosave_does_not_close_path_paste_panel_with_pending_watch() {
+    let mut state = item_editing_state();
+    state.prompt.insert_str(" edited");
+    let now = Instant::now();
+    assert!(!tick(&mut state, now), "首个观察点只记录计时");
+    stage_paste(&mut state);
+    // `paste_stage` 推进 revision；重新记录静置起点，旧实现会因此返回一个已到期的保存期限。
+    assert!(!state.prompt.autosave_due(now, Duration::from_millis(800)));
+    state.effects.clear();
+    assert!(!tick(&mut state, now + Duration::from_millis(900)));
+    assert!(
+        state.prompt.paste_panel().is_some(),
+        "路径提案面板保持打开，等待用户选择"
+    );
+    assert!(state.effects.is_empty(), "占位文本不落库");
+    assert!(
+        crate::app::update::next_deadline(&state).is_none(),
+        "路径提案期间不安排唤醒"
+    );
+}
+
+/// 在光标处打开长文本粘贴提案（普通多行文本，非围栏内）。
+fn stage_text_paste(state: &mut AppState) {
+    let anchor = crate::app::prompt::PasteAnchor::at_cursor(state.prompt.cursor());
+    assert!(state.prompt.begin_text_paste(
+        "line 1\nline 2\nline 3".into(),
+        "line 1\nline 2\nline 3".into(),
+        anchor,
+    ));
+    assert!(state.prompt.text_paste_panel().is_some());
+}
+
+#[test]
+fn autosave_defers_while_text_paste_proposal_open() {
+    let mut state = item_editing_state();
+    state.prompt.insert_str(" edited");
+    let now = Instant::now();
+    assert!(!tick(&mut state, now), "首个观察点只记录计时");
+    stage_text_paste(&mut state);
+    state.effects.clear();
+    assert!(
+        !tick(&mut state, now + Duration::from_millis(900)),
+        "文本提案未收束不触发自动保存"
+    );
+    assert!(state.effects.is_empty(), "未确认的粘贴内容不落库");
+    assert!(!state.prompt.is_saved(), "仍为脏状态");
+    assert!(
+        state.prompt.text_paste_panel().is_some(),
+        "约 0.8s 后文本粘贴面板仍然打开"
+    );
+    assert!(
+        crate::app::update::next_deadline(&state).is_none(),
+        "文本提案期间不安排唤醒"
+    );
+
+    // 面板收束（原文插入）后恢复自动保存。
+    assert!(
+        state
+            .prompt
+            .text_paste_confirm(crate::app::paste::TextPasteAction::Raw)
+    );
+    assert!(state.prompt.text_paste_panel().is_none());
+    assert!(!tick(&mut state, now + Duration::from_millis(1800)));
+    assert!(tick(&mut state, now + Duration::from_millis(3000)));
+    assert!(
+        state
+            .effects
+            .iter()
+            .any(|effect| matches!(effect, Effect::SavePromptContent { .. })),
+        "面板关闭后按静置规则落库"
     );
 }
 

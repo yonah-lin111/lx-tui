@@ -108,7 +108,7 @@ pub struct Prompt {
     refer: Option<crate::app::markdown::ReferPanel>,
     /// `/title` 确认后暂存的待办动作。
     pending_title_action: Option<PromptTitleAction>,
-    /// 面板压制标记：Esc 关闭或确认插入后，等待下一次编辑/移动再重算。
+    /// 面板压制标记：Esc 关闭或确认插入后，等待下一次文本编辑再重算（移动不解除）。
     panel_suppressed: bool,
     /// 当前是否处于已保存状态；任何文本写操作置 false。
     is_saved: bool,
@@ -273,10 +273,15 @@ impl Prompt {
         self.autosave = None;
     }
 
+    /// 路径或文本粘贴提案是否仍在等待用户选择；提案期间不得落库、不得安排自动保存。
+    pub fn paste_proposal_open(&self) -> bool {
+        self.paste_panel().is_some() || self.text_paste_panel().is_some()
+    }
+
     /// 自动保存待触发时刻：未保存且静置观察与当前修订一致时返回 `起点 + delay`；
     /// 事件循环据此安排唤醒（空档期不轮询）。
     pub fn autosave_deadline(&self, delay: Duration) -> Option<Instant> {
-        if self.is_saved {
+        if self.is_saved || self.paste_proposal_open() {
             return None;
         }
         let (revision, since) = self.autosave?;
@@ -445,8 +450,7 @@ impl Prompt {
             return;
         }
         if self.mention.panel().is_none()
-            && let Some(range) = markdown::ref_content_deletion_range(&self.text, self.cursor)
-                .or_else(|| markdown::mention_deletion_range(&self.text, self.cursor))
+            && let Some(range) = markdown::mention_deletion_range(&self.text, self.cursor)
                 .or_else(|| markdown::reference_deletion_range(&self.text, self.cursor))
                 .or_else(|| markdown::short_ref_deletion_range(&self.text, self.cursor))
         {
@@ -504,7 +508,7 @@ impl Prompt {
     /// 粘贴提案未收束时忽略（与键盘一致：面板打开时编辑器按键被吞掉），
     /// 否则会绕过面板改写缓冲、破坏提案登记的占位区间。
     pub fn undo(&mut self) {
-        if self.paste_panel().is_some() || self.text_paste_panel().is_some() {
+        if self.paste_proposal_open() {
             return;
         }
         let Some(snapshot) = self.undo.pop() else {
@@ -519,7 +523,7 @@ impl Prompt {
 
     /// 重做；无可重做内容时 no-op。
     pub fn redo(&mut self) {
-        if self.paste_panel().is_some() || self.text_paste_panel().is_some() {
+        if self.paste_proposal_open() {
             return;
         }
         let Some(snapshot) = self.redo.pop() else {
@@ -532,7 +536,7 @@ impl Prompt {
         self.restore(snapshot);
     }
 
-    /// 压制补全面板直到下一次编辑或移动（粘贴不是“正在输入”）。
+    /// 压制补全面板直到下一次文本编辑（粘贴不是“正在输入”，移动也不解除）。
     ///
     /// 粘贴普通文本后调用：清掉当次插入触发的候选面板并作废在途扫描，
     /// 否则紧跟的 Enter 会把粘贴文本尾部当触发词替换成候选原文。
@@ -614,13 +618,13 @@ impl Prompt {
     /// 同步 `@` 面板的 skill 列表快照。
     pub fn set_mention_skills(&mut self, skills: Vec<crate::skills::SkillEntry>) {
         self.mention.set_skills(skills);
-        self.mention.refresh(&self.text, self.cursor);
+        self.mention.refresh_if_active(&self.text, self.cursor);
     }
 
     /// 同步 `@` 面板的 MCP server 列表快照。
     pub fn set_mention_mcp_servers(&mut self, servers: Vec<McpMentionEntry>) {
         self.mention.set_mcp_servers(servers);
-        self.mention.refresh(&self.text, self.cursor);
+        self.mention.refresh_if_active(&self.text, self.cursor);
     }
 
     /// 获取过滤后的已启用 skill 列表。
@@ -736,8 +740,8 @@ impl Prompt {
 
     /// 同步提及扫描根；根变化时清除缓存并作废在途结果。
     ///
-    /// `panel_suppressed` 为真（Esc/确认后尚未编辑或移动）时保持面板压制，
-    /// 避免每次按键重算把面板重新弹出。
+    /// `panel_suppressed` 为真（Esc/确认后尚未再次编辑）时保持面板压制，
+    /// 移动与根同步都不解除；只有文本编辑才重新武装。
     pub fn set_mention_root(&mut self, root: Option<PathBuf>) {
         if self.panel_suppressed {
             self.mention.suppress();
@@ -925,17 +929,29 @@ impl Prompt {
     /// 面板互斥收敛优先级：文件提及 > 字母快捷 > 斜杠命令 > 块命令；
     /// 高优先级面板打开时清空其余（粘贴二级面板不由编辑重算，单独由 `clear_panel` 取消）。
     fn settle(&mut self) {
-        self.settle_panels();
+        self.settle_panels(true);
     }
 
-    /// 面板互斥收敛与滚动跟随。
-    fn settle_panels(&mut self) {
+    /// 纯光标移动/点击后的收尾：只收敛已打开的提及会话，不解除压制、不新开面板。
+    fn settle_moved(&mut self) {
+        self.settle_panels(false);
+    }
+
+    /// 面板互斥收敛与滚动跟随；`edited` 区分文本编辑与纯移动。
+    fn settle_panels(&mut self, edited: bool) {
         self.preview_selection = None;
         self.preview_drag = None;
-        self.panel_suppressed = false;
+        if edited {
+            self.panel_suppressed = false;
+        }
         self.scroll_cursor_into_view();
         let masked = crate::app::paste::mask_pasted_text(&self.text).into_owned();
-        self.mention.refresh(&masked, self.cursor);
+        if edited {
+            self.mention.unsuppress();
+            self.mention.refresh(&masked, self.cursor);
+        } else {
+            self.mention.refresh_if_active(&masked, self.cursor);
+        }
         if self.mention.panel().is_some() {
             self.slash = None;
             self.panel = None;

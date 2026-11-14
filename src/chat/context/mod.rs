@@ -522,13 +522,16 @@ fn plan_turns(messages: &[ChatMessage]) -> Vec<PlannedTurn> {
 /// 展开单轮：user 正文 + assistant 有序步骤 + token 估算。
 fn plan_turn(user: &ChatMessage, assistant: &ChatMessage) -> PlannedTurn {
     let mut user_text = message_text_of(user);
-    // skill 只在当轮注入全文；历史回放给一行来源摘要，不重新读文件。
+    // skill 只在当轮注入全文；历史回放给一行来源摘要，不重新读文件。同一目标只回放一次。
+    let mut replayed_skills = std::collections::HashSet::new();
     for attachment in user
         .attachments
         .iter()
         .filter(|att| att.kind == crate::db::chat::MessageAttachmentKind::Skill)
     {
-        if let Some(path) = attachment.source_path.as_deref() {
+        if let Some(path) = attachment.source_path.as_deref()
+            && replayed_skills.insert(path)
+        {
             user_text.push('\n');
             user_text.push_str(&crate::skills::render_replay_line(
                 &attachment.label,

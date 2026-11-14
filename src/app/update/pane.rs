@@ -827,10 +827,10 @@ pub fn toggle_pane_view(state: &mut AppState, id: PaneId) -> bool {
         {
             state.terminal_scroll_drag = None;
         }
-        // 恢复 lx 视图：按当前根与输入重新评估提及面板（在途结果已写入缓存）。
+        // 恢复 lx 视图只是非编辑动作：只收敛已打开的提及会话，不解除压制、不新开面板。
         sync_lx_mention_root(state, id);
         if let Some(pane) = state.pane_mut_anywhere(id) {
-            pane.lx.refresh_panel();
+            pane.lx.refresh_panel_moved();
         }
         // 首次进入 lx 视图（新建窗格默认 Terminal 再切回）时状态行尚未解析模型，
         // 与 opencode 的实时选择不同，这里必须立即补一次。

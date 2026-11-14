@@ -149,10 +149,7 @@ impl Lx {
         if !self.mention.is_open()
             && self.refer.is_none()
             && let Some(range) =
-                crate::app::markdown::ref_content_deletion_range(&self.input, self.cursor)
-                    .or_else(|| {
-                        crate::app::markdown::mention_deletion_range(&self.input, self.cursor)
-                    })
+                crate::app::markdown::mention_deletion_range(&self.input, self.cursor)
                     .or_else(|| {
                         crate::app::markdown::reference_deletion_range(&self.input, self.cursor)
                     })
@@ -200,13 +197,13 @@ impl Lx {
         self.refer_suppressed = false;
         if let Some((start, _)) = self.text_selection_range() {
             self.cursor = clamp_cursor(&self.input, start);
-            self.refresh_panel();
+            self.refresh_panel_moved();
             return;
         }
         let next = prev_pasted_boundary(&self.input, self.cursor);
         if next != self.cursor {
             self.cursor = next;
-            self.refresh_panel();
+            self.refresh_panel_moved();
         }
     }
 
@@ -215,13 +212,13 @@ impl Lx {
         self.refer_suppressed = false;
         if let Some((_, end)) = self.text_selection_range() {
             self.cursor = clamp_cursor(&self.input, end);
-            self.refresh_panel();
+            self.refresh_panel_moved();
             return;
         }
         let next = next_pasted_boundary(&self.input, self.cursor);
         if next != self.cursor {
             self.cursor = next;
-            self.refresh_panel();
+            self.refresh_panel_moved();
         }
     }
 
@@ -232,7 +229,7 @@ impl Lx {
         let proj = self.projection();
         let (index, _) = self.cursor_visual_in(&rows);
         self.cursor = proj.display_to_raw_directed(rows[index].start, false);
-        self.refresh_panel();
+        self.refresh_panel_moved();
     }
 
     /// 光标移到当前视觉行行尾。
@@ -242,7 +239,7 @@ impl Lx {
         let proj = self.projection();
         let (index, _) = self.cursor_visual_in(&rows);
         self.cursor = proj.display_to_raw_directed(rows[index].end, true);
-        self.refresh_panel();
+        self.refresh_panel_moved();
     }
 
     /// 光标上移一个视觉行（保持显示列，越界钳到行尾；展开芯片内部行跳到芯片起点）。
@@ -259,7 +256,7 @@ impl Lx {
                 target.start + text::offset_at_col(&proj.text()[target.start..target.end], col);
             self.cursor = proj.display_to_raw_directed(disp, false);
         }
-        self.refresh_panel();
+        self.refresh_panel_moved();
     }
 
     /// 光标下移一个视觉行（保持显示列，越界钳到行尾；展开芯片内部行跳到芯片终点）。
@@ -276,7 +273,7 @@ impl Lx {
                 target.start + text::offset_at_col(&proj.text()[target.start..target.end], col);
             self.cursor = proj.display_to_raw_directed(disp, true);
         }
-        self.refresh_panel();
+        self.refresh_panel_moved();
     }
 
     /// 光标左移一个词；有选区时折叠到选区开头。
@@ -284,12 +281,12 @@ impl Lx {
         self.refer_suppressed = false;
         if let Some((start, _)) = self.text_selection_range() {
             self.cursor = clamp_cursor(&self.input, start);
-            self.refresh_panel();
+            self.refresh_panel_moved();
             return;
         }
         let target = text::word_start_before(&self.input, self.cursor);
         self.cursor = clamp_cursor(&self.input, target);
-        self.refresh_panel();
+        self.refresh_panel_moved();
     }
 
     /// 光标右移一个词；有选区时折叠到选区结尾。
@@ -297,7 +294,7 @@ impl Lx {
         self.refer_suppressed = false;
         if let Some((_, end)) = self.text_selection_range() {
             self.cursor = clamp_cursor(&self.input, end);
-            self.refresh_panel();
+            self.refresh_panel_moved();
             return;
         }
         let mut target = text::word_end_after(&self.input, self.cursor);
@@ -308,7 +305,7 @@ impl Lx {
             }
         }
         self.cursor = target;
-        self.refresh_panel();
+        self.refresh_panel_moved();
     }
 
     /// 删除光标到逻辑行首；光标已在行首时删除前一个换行（与上一行合并）。

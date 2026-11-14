@@ -2,6 +2,7 @@
 
 use super::*;
 use crate::db::chat::{MessageAttachmentKind, MessageAttachmentMeta};
+use crate::ui::main_content::lx::history::paint::UserRefLine;
 
 fn user_msg_with_text(id: &str, content: &str) -> ChatMessageView {
     ChatMessageView {
@@ -196,19 +197,18 @@ fn user_message_renders_reference_tree_without_user_background() {
 }
 
 #[test]
-fn user_message_filters_ref_content_from_reference_tree_at_bottom() {
-    let raw = "Check this: @[ref-content]/src/ui/";
+fn user_message_dedupes_repeated_reference_tree_rows() {
+    let raw = "@Cargo.toml 这个说什么\n\n@Cargo.toml 有什么功能";
     let mut msg = user_msg_with_text("u1", raw);
-    let ref_start = raw.find("@[ref-content]/src/ui/").expect("ref-content");
     msg.attachments = vec![
         MessageAttachmentMeta {
             id: "att-1".into(),
             position: 0,
             kind: MessageAttachmentKind::File,
-            label: "src/main.rs".into(),
-            marker_start: None,
-            marker_end: None,
-            source_path: Some("src/main.rs".into()),
+            label: "Cargo.toml".into(),
+            marker_start: Some(0),
+            marker_end: Some(12),
+            source_path: Some("Cargo.toml".into()),
             mime: None,
             width: None,
             height: None,
@@ -216,11 +216,11 @@ fn user_message_filters_ref_content_from_reference_tree_at_bottom() {
         MessageAttachmentMeta {
             id: "att-2".into(),
             position: 1,
-            kind: MessageAttachmentKind::Folder,
-            label: "@[ref-content]/src/ui/".into(),
-            marker_start: Some(ref_start),
-            marker_end: Some(raw.len()),
-            source_path: Some("src/ui".into()),
+            kind: MessageAttachmentKind::File,
+            label: "Cargo.toml".into(),
+            marker_start: Some(29),
+            marker_end: Some(41),
+            source_path: Some("Cargo.toml".into()),
             mime: None,
             width: None,
             height: None,
@@ -231,8 +231,103 @@ fn user_message_filters_ref_content_from_reference_tree_at_bottom() {
     let mut cache = cache();
     let snap = cache.snapshot(60, &lx);
 
-    // 正文 1 行（保留 @[ref-content]/src/ui/）+ 仅 1 行常规附件（src/main.rs），过滤掉 ref-content = 总共 2 行
-    assert_eq!(snap.entries[0].blocks[0].rows, 2);
+    // 历史消息里已存的重复行在展示时收敛：正文 3 行（含空行）+ 附件 1 行。
+    assert_eq!(snap.entries[0].blocks[0].rows, 4);
+}
+
+#[test]
+fn user_ref_line_dedupes_text_refs_but_keeps_draft_and_distinct_images() {
+    let atts = vec![
+        MessageAttachmentMeta {
+            id: "a1".into(),
+            position: 0,
+            kind: MessageAttachmentKind::File,
+            label: "src.rs".into(),
+            marker_start: Some(0),
+            marker_end: Some(7),
+            source_path: Some("src.rs".into()),
+            mime: None,
+            width: None,
+            height: None,
+        },
+        // 同一目标的另一种写法：展示层收敛。
+        MessageAttachmentMeta {
+            id: "a2".into(),
+            position: 1,
+            kind: MessageAttachmentKind::File,
+            label: "src.rs".into(),
+            marker_start: Some(20),
+            marker_end: Some(36),
+            source_path: Some("src.rs".into()),
+            mime: None,
+            width: None,
+            height: None,
+        },
+        // 草稿图片：即使归档路径与文本引用相同，也必须独立成行。
+        MessageAttachmentMeta {
+            id: "a3".into(),
+            position: 2,
+            kind: MessageAttachmentKind::Image,
+            label: "shot.png".into(),
+            marker_start: None,
+            marker_end: None,
+            source_path: Some("managed/hash-shot.png".into()),
+            mime: Some("image/png".into()),
+            width: Some(1),
+            height: Some(1),
+        },
+        MessageAttachmentMeta {
+            id: "a4".into(),
+            position: 3,
+            kind: MessageAttachmentKind::Image,
+            label: "shot.png".into(),
+            marker_start: Some(40),
+            marker_end: Some(49),
+            source_path: Some("managed/hash-shot.png".into()),
+            mime: Some("image/png".into()),
+            width: Some(1),
+            height: Some(1),
+        },
+        // 不同原图但内容与文件名相同：归档路径会被折叠，展示仍按 label 区分。
+        MessageAttachmentMeta {
+            id: "a5".into(),
+            position: 4,
+            kind: MessageAttachmentKind::Image,
+            label: "other/shot.png".into(),
+            marker_start: Some(60),
+            marker_end: Some(76),
+            source_path: Some("managed/hash-shot.png".into()),
+            mime: Some("image/png".into()),
+            width: Some(1),
+            height: Some(1),
+        },
+    ];
+
+    let lines = UserRefLine::from_attachments(&atts);
+    let labels: Vec<&str> = lines.iter().map(|line| line.label.as_str()).collect();
+    assert_eq!(
+        labels,
+        vec!["src.rs", "shot.png", "shot.png", "other/shot.png"]
+    );
+}
+
+#[test]
+fn user_ref_line_renders_legacy_token_label_as_path() {
+    let atts = vec![MessageAttachmentMeta {
+        id: "a1".into(),
+        position: 0,
+        kind: MessageAttachmentKind::File,
+        label: "@[ref-content]/lx/refer.rs".into(),
+        marker_start: Some(0),
+        marker_end: Some(30),
+        source_path: Some("lx/refer.rs".into()),
+        mime: None,
+        width: None,
+        height: None,
+    }];
+    let lines = UserRefLine::from_attachments(&atts);
+    assert_eq!(lines.len(), 1);
+    assert_eq!(lines[0].label, "lx/refer.rs", "不向用户暴露旧内部标记");
 }
 
 #[test]

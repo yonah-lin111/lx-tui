@@ -113,14 +113,22 @@ pub(crate) struct UserRefLine {
 
 impl UserRefLine {
     /// 从消息附件元数据组装可见引用树行。
+    ///
+    /// 同一目标只保留首行：正文重复出现同一 `@引用` 时不重复展示。
+    /// 去重只作用于文本引用（`marker_start` 有值）；草稿附件与文本引用仍是两行。
     pub(crate) fn from_attachments(
         attachments: &[crate::db::chat::MessageAttachmentMeta],
     ) -> Vec<Self> {
+        let mut seen = std::collections::HashSet::new();
         let display: Vec<_> = attachments
             .iter()
             .filter(|att| {
-                !att.label
-                    .starts_with(crate::app::markdown::REF_CONTENT_PREFIX)
+                let key = (
+                    att.kind.as_str(),
+                    att.marker_start.is_some(),
+                    display_target(att).trim_end_matches('/').to_string(),
+                );
+                seen.insert(key)
             })
             .collect();
         let len = display.len();
@@ -130,10 +138,29 @@ impl UserRefLine {
             .map(|(i, att)| Self {
                 is_last: i + 1 == len,
                 kind: att.kind,
-                label: att.label.clone(),
+                label: display_label(att).to_string(),
             })
             .collect()
     }
+}
+
+/// 展示用目标：图片用原始 label（存储后的 source_path 是归档名，可能把不同原图折叠成同一路径），
+/// 其余用 source_path（引用原文/规范化路径）。
+fn display_target(att: &crate::db::chat::MessageAttachmentMeta) -> &str {
+    match att.kind {
+        crate::db::chat::MessageAttachmentKind::Image => &att.label,
+        _ => att.source_path.as_deref().unwrap_or(&att.label),
+    }
+}
+
+/// 展示用标签：旧版快捷引用 token 的 label 是内部标记，用 source_path 还原成可读路径。
+fn display_label(att: &crate::db::chat::MessageAttachmentMeta) -> &str {
+    if att.label.starts_with("@[")
+        && let Some(path) = att.source_path.as_deref()
+    {
+        return path;
+    }
+    &att.label
 }
 
 /// 助手消息下方单条生成图片引用行（含预览标记、下划线文件名与原图下载按钮状态）。

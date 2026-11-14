@@ -1,10 +1,10 @@
 //! lx 输入框的字母快捷输入面板：候选重算与键鼠交互。
 //!
 //! 候选融合：
-//! 1. 当前输入框正文中已出现的 `@` 提及、`@[refer-*]` 与 `@[ref-content]/` 引用；
+//! 1. 当前输入框正文中已出现的 `@` 提及、`@[refer-*]` 与 `@ref/` 引用；
 //! 2. 当前会话中用户历史消息发送过的提及路径与附件路径（按最近使用逆序去重）。
 //!
-//! 确认时统一插入 `@[ref-content]/<相对路径> `。
+//! 确认时插入候选原文（完整 `@路径` 或原 `@[refer-*]` 标记）并补一个尾随空格。
 
 use crate::app::markdown::{
     ReferCandidate, ReferPanel, ReferTag, filter_refer_candidates, is_refer_duplicate,

@@ -1,5 +1,6 @@
 //! 单元测试；仅测试构建编译。
 
+mod mention_timing;
 mod paste_folded;
 
 use std::path::PathBuf;
@@ -2755,8 +2756,8 @@ fn refer_shortcut_triggers_on_existing_mention_and_undoes_as_one_step() {
     assert_eq!(panel.items()[0].tag.label(), "file");
     assert!(prompt.refer_confirm());
     assert!(
-        prompt.text().ends_with("@[ref-content]/abc "),
-        "插入 @[ref-content]/ 格式: {}",
+        prompt.text().ends_with("@abc "),
+        "插入候选原文: {}",
         prompt.text()
     );
     prompt.undo();
@@ -2791,7 +2792,7 @@ fn refer_shortcut_escape_closes_until_next_edit() {
 }
 
 #[test]
-fn refer_shortcut_reference_candidates_insert_short_ref() {
+fn refer_shortcut_reference_candidates_insert_original_text() {
     let mut prompt = prompt(80, 8);
     prompt.set_text("@[refer-image](/tmp/shot.png) 日志\nsh");
     // set_text 不触发面板重算：模拟一次光标移动。
@@ -2802,13 +2803,13 @@ fn refer_shortcut_reference_candidates_insert_short_ref() {
     assert!(prompt.refer_confirm());
     assert_eq!(
         prompt.text(),
-        "@[refer-image](/tmp/shot.png) 日志\n@[ref-content]/tmp/shot.png ",
-        "确认后插入完整相对路径快捷引用"
+        "@[refer-image](/tmp/shot.png) 日志\n@[refer-image](/tmp/shot.png) ",
+        "确认后插入候选原文"
     );
 }
 
 #[test]
-fn refer_shortcut_directory_candidate_keeps_trailing_slash() {
+fn refer_shortcut_directory_candidate_inserts_original_marker() {
     let mut prompt = prompt(80, 8);
     prompt.set_text("@[refer-folder](/Users/yonah/projects/agent/lx-agent) 仓库\nagent");
     prompt.move_right();
@@ -2816,15 +2817,18 @@ fn refer_shortcut_directory_candidate_keeps_trailing_slash() {
     assert!(prompt.refer_confirm());
     assert_eq!(
         prompt.text(),
-        "@[refer-folder](/Users/yonah/projects/agent/lx-agent) 仓库\n@[ref-content]/agent/lx-agent/ ",
-        "文件夹快捷引用带尾斜杠且保留末两段"
+        "@[refer-folder](/Users/yonah/projects/agent/lx-agent) 仓库\n@[refer-folder](/Users/yonah/projects/agent/lx-agent) ",
+        "文件夹快捷引用插入原标记，目录尾斜杠保留"
     );
 }
 
 #[test]
 fn refer_shortcut_finds_existing_short_ref_again() {
     let mut prompt = prompt(80, 8);
-    prompt.set_text("@ref/lx-at-mention/design.md 需求\ndesign");
+    // 短引用 + 同目标的完整引用：快捷面板保留先出现的原文，发送时短引用仍可解析。
+    prompt.set_text(
+        "@ref/lx-at-mention/design.md 需求\n@docs/feature/lx-at-mention/design.md\n设计\ndesign",
+    );
     prompt.move_right();
     let panel = prompt.refer_panel().expect("panel");
     let texts: Vec<&str> = panel
@@ -2841,16 +2845,8 @@ fn refer_shortcut_finds_existing_short_ref_again() {
     assert!(prompt.refer_confirm());
     assert_eq!(
         prompt.text(),
-        "@ref/lx-at-mention/design.md 需求\n@[ref-content]/lx-at-mention/design.md "
+        "@ref/lx-at-mention/design.md 需求\n@docs/feature/lx-at-mention/design.md\n设计\n@ref/lx-at-mention/design.md "
     );
-}
-
-#[test]
-fn prompt_backspace_deletes_ref_content_as_one_block() {
-    let mut prompt = prompt(80, 8);
-    prompt.insert_str("见 @[ref-content]/src/main.rs ");
-    prompt.backspace();
-    assert_eq!(prompt.text(), "见 ", "空格后退格整块删除 ref-content");
 }
 
 #[test]

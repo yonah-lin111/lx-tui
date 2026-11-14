@@ -228,12 +228,18 @@ fn spawn_refresh(job: ScanJob) {
 /// 从用户草稿里提取 `@[refer-skill]` 正文块（当轮注入，不走 DB）。
 pub(crate) fn reference_blocks(text: &str) -> Vec<String> {
     let mut blocks = Vec::new();
+    // 同一条消息重复点名同一 skill 时只注入一次全文。
+    let mut seen = std::collections::HashSet::new();
     let masked = crate::app::paste::mask_pasted_text(text);
     for reference in crate::app::markdown::parse_references(&masked) {
         if reference.kind != crate::app::markdown::ReferKind::Skill {
             continue;
         }
         let path = std::path::Path::new(&reference.path);
+        let key = std::fs::canonicalize(path).unwrap_or_else(|_| path.to_path_buf());
+        if !seen.insert(key) {
+            continue;
+        }
         let name = path
             .parent()
             .and_then(std::path::Path::file_name)

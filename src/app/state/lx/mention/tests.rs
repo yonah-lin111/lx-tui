@@ -890,3 +890,102 @@ fn agent_composer_inserts_plain_reference_text_for_every_tab() {
     assert_eq!(lx.input, "@main.rs @/work/docs @pdf @codegraph ");
     assert!(!lx.input.contains("@[refer-"), "子 agent 侧不写引用标记");
 }
+
+// ===== 打开时机：只有文本编辑能新开会话，移动/后台同步只收敛已存在的会话 =====
+
+/// 确认一条 `@main.rs ` 后敲空格解除压制，光标回到正文（不在触发词内）。
+fn confirmed_mention_with_cache() -> Lx {
+    let mut lx = ready("@main", entries());
+    assert!(lx.mention_confirm());
+    assert_eq!(lx.input, "@main.rs ");
+    lx.insert_char(' ');
+    assert!(!lx.mention_visible());
+    lx
+}
+
+#[test]
+fn cursor_move_into_existing_mention_does_not_open_panel() {
+    let mut lx = confirmed_mention_with_cache();
+    let revision = lx.revision();
+    for _ in 0..4 {
+        lx.move_left();
+    }
+    assert!(
+        lx.mention().panel().is_none(),
+        "纯光标移动不得重新打开提及面板"
+    );
+    assert!(!lx.mention_visible(), "不画面板状态行");
+    assert_eq!(lx.revision(), revision, "移动不改变修订号");
+}
+
+#[test]
+fn escape_then_move_stays_closed_until_edit() {
+    let mut lx = ready("@ma", entries());
+    assert!(lx.mention_escape());
+    assert!(!lx.mention_open());
+    lx.move_left();
+    assert!(!lx.mention_open(), "Esc 后移动不解除压制");
+    assert!(!lx.mention_visible());
+    // 光标落在 `@ma` 内，文本再次变化才重新武装并按新 query 重算。
+    lx.backspace();
+    assert_eq!(lx.input, "@a");
+    assert!(lx.mention_open(), "编辑后按新 query 重算候选");
+}
+
+#[test]
+fn background_skill_sync_does_not_open_closed_panel() {
+    let mut lx = confirmed_mention_with_cache();
+    // 光标放进已有 `@main.rs` 内部：旧的无条件 refresh 会在这里新开面板。
+    lx.cursor = 3;
+    assert!(!lx.mention_visible());
+    lx.set_mention_skills(vec![skill("pdf", "/skills/pdf/SKILL.md")]);
+    assert!(!lx.mention_visible(), "后台 skill 快照同步不得新开面板");
+    lx.set_mention_mcp_servers(vec![McpMentionEntry::new("codegraph", "stdio")]);
+    assert!(!lx.mention_visible(), "后台 MCP 快照同步不得新开面板");
+}
+
+#[test]
+fn escape_then_root_change_stays_closed() {
+    let mut lx = ready("@ma", entries());
+    assert!(lx.mention_escape());
+    assert!(lx.set_mention_root(Some(std::path::PathBuf::from("/other"))));
+    assert!(!lx.mention_visible(), "根变化不得解除 Esc 压制重新打开面板");
+}
+
+#[test]
+fn root_change_with_folded_fence_token_keeps_open_panel() {
+    let mut lx = Lx::new();
+    lx.set_mention_root(Some(std::path::PathBuf::from(ROOT)));
+    let tok = crate::app::paste::encode_pasted_text("alpha\n```\nbeta\n```\n");
+    lx.insert_str(&tok);
+    for ch in "@src".chars() {
+        lx.insert_char(ch);
+    }
+    assert!(lx.mention_visible(), "编辑后在 token 后打开面板");
+
+    // 模拟事件层根同步：原始 token 正文含围栏，旧实现会误判触发词在围栏内。
+    assert!(lx.set_mention_root(Some(std::path::PathBuf::from("/other"))));
+    assert!(
+        lx.mention_visible(),
+        "根同步必须遮蔽折叠 token 后再判定触发词"
+    );
+    lx.move_left();
+    assert!(
+        lx.mention_visible(),
+        "纯移动只收敛已打开会话，不得被 token 正文的围栏关掉"
+    );
+}
+
+#[test]
+fn scan_result_after_move_stays_closed() {
+    let mut lx = Lx::new();
+    lx.set_mention_root(Some(std::path::PathBuf::from(ROOT)));
+    lx.insert_char('@');
+    let (generation, _) = lx.take_mention_scan_request().expect("request");
+    lx.move_left();
+    lx.move_right();
+    assert!(lx.apply_mention_entries(generation, Path::new(ROOT), entries()));
+    assert!(!lx.mention_visible(), "迟到的扫描结果不得重开已关闭的会话");
+    lx.insert_char('m');
+    assert!(lx.mention_open(), "下一次文本编辑才按缓存重开");
+}

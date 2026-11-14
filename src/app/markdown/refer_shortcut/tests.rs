@@ -223,7 +223,7 @@ fn panel_wraps_highlight() {
 }
 
 #[test]
-fn insertion_uses_ref_content_with_trailing_space() {
+fn insertion_uses_original_text_with_trailing_space() {
     let candidate = ReferCandidate {
         text: "@abc".to_string(),
         name: "abc".to_string(),
@@ -231,7 +231,7 @@ fn insertion_uses_ref_content_with_trailing_space() {
         tag: ReferTag::File,
         order: 0,
     };
-    assert_eq!(refer_insertion(&candidate), "@[ref-content]/b/abc.md ");
+    assert_eq!(refer_insertion(&candidate), "@abc ");
 
     let folder = ReferCandidate {
         text: "@[refer-folder](/x/y/z)".to_string(),
@@ -240,24 +240,16 @@ fn insertion_uses_ref_content_with_trailing_space() {
         tag: ReferTag::Refer(ReferKind::Folder),
         order: 0,
     };
-    assert_eq!(
-        refer_insertion(&folder),
-        "@[ref-content]/y/z/ ",
-        "文件夹带尾斜杠且保留末两段"
-    );
+    assert_eq!(refer_insertion(&folder), "@[refer-folder](/x/y/z) ");
 
-    let single = ReferCandidate {
-        text: "@main.rs".to_string(),
+    let short = ReferCandidate {
+        text: "@ref/main.rs".to_string(),
         name: "main.rs".to_string(),
         path: "main.rs".to_string(),
-        tag: ReferTag::File,
+        tag: ReferTag::ShortRef,
         order: 0,
     };
-    assert_eq!(
-        refer_insertion(&single),
-        "@[ref-content]/main.rs ",
-        "单段路径也使用完整相对路径"
-    );
+    assert_eq!(refer_insertion(&short), "@ref/main.rs ", "短引用原样插入");
 }
 
 #[test]
@@ -355,6 +347,18 @@ fn trigger_blocked_on_supplement_structural_lines() {
 }
 
 #[test]
+fn candidates_do_not_double_count_short_ref_with_trailing_period() {
+    let text = "见 @ref/foo/bar.md. 再输入 bar";
+    let cursor = text.len();
+    let trigger = refer_trigger(text, cursor).expect("trigger");
+    let scope = refer_scope(text, cursor).expect("scope");
+    let candidates = refer_candidates(text, &scope, &trigger.range, &[]);
+    assert_eq!(candidates.len(), 1, "同一短引用只产生一个候选");
+    assert_eq!(candidates[0].text, "@ref/foo/bar.md", "句点不进入短引用");
+    assert_eq!(candidates[0].tag, ReferTag::ShortRef);
+}
+
+#[test]
 fn candidates_dedupe_when_mention_and_short_ref_refer_to_same_folder() {
     // 对应用户反馈的 bug 场景：先写 @docs/...，再使用快捷引用插入 @ref/...，输入 pro 再次唤起
     let text = "- Reference: @docs/feature/prompt-per-workspace/\n- @ref/feature/prompt-per-workspace/\n- pro";
@@ -375,8 +379,8 @@ fn candidates_dedupe_when_mention_and_short_ref_refer_to_same_folder() {
     );
     assert_eq!(
         refer_insertion(&filtered[0]),
-        "@[ref-content]/feature/prompt-per-workspace/ ",
-        "确认插入结果仍为规范快捷引用"
+        "@docs/feature/prompt-per-workspace/ ",
+        "确认插入首个出现的完整引用原文"
     );
 }
 

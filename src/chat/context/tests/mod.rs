@@ -8,6 +8,7 @@
 
 use super::*;
 
+mod attachments;
 mod budget;
 mod compact;
 mod legacy;

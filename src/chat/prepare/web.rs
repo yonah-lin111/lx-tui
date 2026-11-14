@@ -8,8 +8,8 @@ use crate::db::chat::{MessageAttachmentInput, MessageAttachmentKind, MessageAtta
 use crate::platform::sniff_image_file;
 
 use super::{
-    markdown_mention_token_ranges, parse_short_ref_tokens, resolve_ref_content_target,
-    resolve_reference_path, strip_marker_ranges,
+    markdown_mention_token_ranges, parse_short_ref_tokens, resolve_reference_path,
+    strip_marker_ranges,
 };
 
 /// AI Web 消息准备错误。
@@ -128,21 +128,34 @@ pub fn prepare_ai_web_message(
                         });
                     }
                     Err(_) => {
+                        let kind = if reference.kind == ReferKind::Image
+                            || is_image_filename(&reference.path)
+                        {
+                            MessageAttachmentKind::Image
+                        } else {
+                            MessageAttachmentKind::File
+                        };
                         if let Some(pos) = remaining_cloud
                             .iter()
                             .position(|name| name == &reference.path)
                         {
                             let kept = remaining_cloud.remove(pos);
-                            let kind =
-                                if reference.kind == ReferKind::Image || is_image_filename(&kept) {
-                                    MessageAttachmentKind::Image
-                                } else {
-                                    MessageAttachmentKind::File
-                                };
                             keep_files.push(kept.clone());
                             inputs.push(MessageAttachmentInput {
                                 kind,
                                 label: kept,
+                                marker_start: Some(range_start),
+                                marker_end: Some(range_end),
+                                source_path: None,
+                                mime: None,
+                                width: None,
+                                height: None,
+                            });
+                        } else if keep_files.iter().any(|name| name == &reference.path) {
+                            // 同一云端文件重复引用：保留第二条附件记录，展示层按目标收敛。
+                            inputs.push(MessageAttachmentInput {
+                                kind,
+                                label: reference.path.clone(),
                                 marker_start: Some(range_start),
                                 marker_end: Some(range_end),
                                 source_path: None,
@@ -204,54 +217,6 @@ pub fn prepare_ai_web_message(
         }
     }
 
-    // 3. 解析 `@[ref-content]/` 快捷引用
-    for range in crate::app::markdown::ref_content_ranges(&masked) {
-        if claimed_ranges
-            .iter()
-            .any(|(s, e)| range.start < *e && range.end > *s)
-        {
-            continue;
-        }
-        let token_text =
-            &raw_text[range.start + crate::app::markdown::REF_CONTENT_PREFIX.len()..range.end];
-        let trimmed_token = token_text.trim_end_matches('/');
-        if let Some((resolved, relative_path)) =
-            resolve_ref_content_target(workspace_root, trimmed_token, &inputs)
-            && let Ok(metadata) = std::fs::metadata(&resolved)
-        {
-            if metadata.is_dir() {
-                return Err(AiWebPrepareError::FolderUnsupported);
-            }
-            if !metadata.is_file() {
-                continue;
-            }
-            let mut end = range.end;
-            if raw_text[end..].starts_with(' ') {
-                end += 1;
-            }
-            claimed_ranges.push((range.start, end));
-            let abs_path = std::fs::canonicalize(&resolved)
-                .unwrap_or(resolved.clone())
-                .to_string_lossy()
-                .into_owned();
-            let kind = if sniff_image_file(&resolved) || is_image_filename(&relative_path) {
-                MessageAttachmentKind::Image
-            } else {
-                MessageAttachmentKind::File
-            };
-            inputs.push(MessageAttachmentInput {
-                kind,
-                label: relative_path,
-                marker_start: Some(range.start),
-                marker_end: Some(end),
-                source_path: Some(abs_path),
-                mime: None,
-                width: None,
-                height: None,
-            });
-        }
-    }
-
     // 4. 解析 `@ref/` 短引用
     for (start, end, short_name) in parse_short_ref_tokens(&masked) {
         if claimed_ranges.iter().any(|(s, e)| start < *e && end > *s) {
@@ -274,18 +239,21 @@ pub fn prepare_ai_web_message(
             })
             .collect();
         if matches.len() == 1 {
-            let matched = matches[0];
+            let (kind, source_path) = {
+                let matched = matches[0];
+                (matched.kind, matched.source_path.clone())
+            };
             let mut marker_end = end;
             if raw_text[marker_end..].starts_with(' ') {
                 marker_end += 1;
             }
             claimed_ranges.push((start, marker_end));
             inputs.push(MessageAttachmentInput {
-                kind: matched.kind,
+                kind,
                 label: short_name.to_string(),
                 marker_start: Some(start),
                 marker_end: Some(marker_end),
-                source_path: matched.source_path.clone(),
+                source_path,
                 mime: None,
                 width: None,
                 height: None,
