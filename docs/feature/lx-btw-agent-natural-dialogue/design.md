@@ -863,3 +863,16 @@ cargo test --lib event::chat::tests
 1. **`BtwRecipientStart.model` 是否总是冻结了回答者模型**：已核验 `src/db/chat/btw.rs:128-141` 携带 `model: ModelSnapshot`；若历史线程目标模型缺失，仍会回退默认模型，展示名随之回退，可接受。
 2. **`src/event/mod.rs` 与 `src/event/chat/btw.rs` 已超 1000 行红线**：本次不新增行数，只在既有结构内替换；不在本任务内做拆分。
 3. **`@` 面板在 Agents composer 的根目录来源**：依赖 `sync_lx_mention_root` 已注入 root；若用户在从未选中过工作区的空会话里打开 Agents 详情，面板会显示空态而不是崩溃（`view()` 已有 root 判定）。
+
+---
+
+## 9. 代码审查修复（2026-11-14）
+
+完整报告见 [`review.md`](review.md)。本 feature 范围内的修复：
+
+- **迟到扫描清理**：`LxMention::abandon_scan` / `Lx::abandon_mention_scan` 在 owner 切换、结果被丢弃时清掉原 composer 的在途标记；否则 Files Tab 会永久停在 Loading。
+- **Shift+Enter 回落**：`mention_enter_folder()` 未消费时回落为换行，Agents 与 BTW composer 同步。
+- **上下文同步短路**：`set_skills` / `set_mcp_servers` / `set_disabled_mcp_servers` 内容相同直接返回，避免每帧对 20k 条扫描结果重复过滤。
+- **禁用 MCP 继承**：Agents composer 同步当前窗格的 `disabled_mcp_servers`。
+- **死字段清理**：`BtwTargetView` 删除已无读取方的 `key` / `label`；`resolve_target_views` 不再为展示标签查 `list_subagents`。
+- **测试补强**：迟到扫描恢复、Shift+Enter 回落、`/` 真实路由、满队列保留草稿、BTW 窄窗格胶囊。

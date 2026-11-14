@@ -13,13 +13,11 @@ use crate::app::state::Lx;
 use crate::app::state::lx::composer::DetailComposer;
 use crate::app::state::lx::slash::PanelWindow;
 
-/// 当前线程的回答者展示项。
+/// 当前线程的回答者。
+///
+/// composer 已不再展示目标段，这里只保留回查 subagent 实例所需的稳定 ID。
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct BtwTargetView {
-    /// 稳定目标键：`default` 或 `agent_id`。
-    pub key: String,
-    /// 展示标签（昵称 + 角色）。
-    pub label: String,
     /// 稳定实例 ID（默认助手为 None）。
     pub agent_id: Option<String>,
 }
@@ -27,11 +25,7 @@ pub struct BtwTargetView {
 impl BtwTargetView {
     /// 默认旁路助手。
     pub fn default_assistant() -> Self {
-        Self {
-            key: "default".to_string(),
-            label: crate::chat::prompt::AGENT_NAME.to_string(),
-            agent_id: None,
-        }
+        Self { agent_id: None }
     }
 }
 

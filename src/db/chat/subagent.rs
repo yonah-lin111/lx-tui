@@ -407,6 +407,17 @@ impl Database {
                     .ok()
                     .flatten()
             });
+        // 报告行锚到本轮输入自己的 user 消息，而不是轮内 steer 新开的片段。
+        let report_user_message_id: Option<String> = transaction
+            .query_row(
+                r#"SELECT child_user_message_id FROM agent_subagent_input
+                   WHERE agent_id = ?1 AND status = 'running'
+                     AND child_user_message_id IS NOT NULL
+                   LIMIT 1"#,
+                params![agent_id],
+                |row| row.get(0),
+            )
+            .optional()?;
         transaction.execute(
             r#"UPDATE agent_subagent_input
                SET status = ?1, completed_at_ms = ?2, error_code = COALESCE(?3, error_code)
@@ -455,7 +466,9 @@ impl Database {
                 params![
                     new_external_id("rep"),
                     agent_id,
-                    child_user_message_id,
+                    report_user_message_id
+                        .as_deref()
+                        .or(child_user_message_id.as_deref()),
                     row_status,
                     json_text,
                     now,
@@ -560,7 +573,8 @@ impl Database {
     /// 最近一次人类私聊的紧凑 transcript（user/assistant 文本，含轮内 steer）。
     ///
     /// 只有 `list_agents(include_private=true)` 会调用；默认路径不读取、不注入主 agent 上下文。
-    /// 从该私聊输入对应的 user 消息起，截到下一条正式提交的 user 消息之前；上限 4 KiB。
+    /// 用 `agent_message.sequence` 而不是入队时间戳确定边界：优先级插队与同毫秒输入
+    /// 都不会切错轮次。转录保留最近内容，超 4 KiB 时从尾部截取并回退到 UTF-8 边界。
     pub fn private_turn_tail(
         &self,
         workspace: &Path,
@@ -568,38 +582,44 @@ impl Database {
         agent_id: &str,
     ) -> Result<Option<String>> {
         const MAX_TAIL_BYTES: usize = 4096;
+        const TRUNCATION_MARKER: &str = "… [truncated]\n";
+
         let Some(workspace_external) = self.workspace_external_id(workspace)? else {
             return Ok(None);
         };
-        let latest: Option<(String, i64)> = self
+        let start_sequence: Option<i64> = self
             .conn
             .query_row(
-                r#"SELECT i.child_user_message_id, i.created_at_ms
+                r#"SELECT m.sequence
                    FROM agent_subagent_input i
                    JOIN agent_subagent a ON a.external_id = i.agent_id
                    JOIN agent_session p ON p.external_id = a.parent_session_id
+                   JOIN agent_message m ON m.external_id = i.child_user_message_id
                    WHERE i.agent_id = ?1 AND a.parent_session_id = ?2
                      AND p.workspace_id = ?3
                      AND i.notify_parent = 0 AND i.child_user_message_id IS NOT NULL
-                   ORDER BY i.created_at_ms DESC, i.id DESC LIMIT 1"#,
+                   ORDER BY m.sequence DESC LIMIT 1"#,
                 params![agent_id, parent_session, workspace_external],
-                |row| Ok((row.get(0)?, row.get(1)?)),
-            )
-            .optional()?;
-        let Some((start_message_id, submitted_at_ms)) = latest else {
-            return Ok(None);
-        };
-        let next_message_id: Option<String> = self
-            .conn
-            .query_row(
-                r#"SELECT child_user_message_id FROM agent_subagent_input
-                   WHERE agent_id = ?1 AND child_user_message_id IS NOT NULL
-                     AND created_at_ms > ?2
-                   ORDER BY created_at_ms ASC, id ASC LIMIT 1"#,
-                params![agent_id, submitted_at_ms],
                 |row| row.get(0),
             )
             .optional()?;
+        let Some(start_sequence) = start_sequence else {
+            return Ok(None);
+        };
+        // 下一条正式提交的 user 消息（含汇报轮）是私聊转录的硬边界。
+        let end_sequence: Option<i64> = self
+            .conn
+            .query_row(
+                r#"SELECT MIN(m.sequence)
+                   FROM agent_subagent_input i
+                   JOIN agent_message m ON m.external_id = i.child_user_message_id
+                   WHERE i.agent_id = ?1 AND i.child_user_message_id IS NOT NULL
+                     AND m.sequence > ?2"#,
+                params![agent_id, start_sequence],
+                |row| row.get::<_, Option<i64>>(0),
+            )
+            .optional()?
+            .flatten();
         let child_session: Option<String> = self
             .conn
             .query_row(
@@ -611,58 +631,154 @@ impl Database {
         let Some(child_session) = child_session else {
             return Ok(None);
         };
-        let Some(messages) = self.load_chat_session(workspace, &child_session)? else {
-            return Ok(None);
-        };
-        let Some(start_sequence) = messages
-            .iter()
-            .find(|message| message.external_id == start_message_id)
-            .map(|message| message.sequence)
-        else {
-            return Ok(None);
-        };
-        let end_sequence = next_message_id.and_then(|id| {
-            messages
-                .iter()
-                .find(|message| message.external_id == id)
-                .map(|message| message.sequence)
-        });
-        let mut out = String::new();
-        for message in &messages {
-            if message.sequence < start_sequence {
-                continue;
+
+        let mut statement = self.conn.prepare(
+            r#"SELECT m.sequence, m.role, p.content
+               FROM agent_message m
+               JOIN agent_message_part p ON p.message_id = m.external_id AND p.kind = 'text'
+               WHERE m.session_id = ?1 AND m.sequence >= ?2
+                 AND (?3 IS NULL OR m.sequence < ?3)
+                 AND m.role IN ('user', 'assistant')
+               ORDER BY m.sequence ASC, p.position ASC"#,
+        )?;
+        let rows = statement.query_map(
+            params![child_session, start_sequence, end_sequence],
+            |row| {
+                Ok((
+                    row.get::<_, i64>(0)?,
+                    row.get::<_, String>(1)?,
+                    row.get::<_, String>(2)?,
+                ))
+            },
+        )?;
+        // 同一消息的多个 text part 按段落拼接，避免 `done.Now` 粘连。
+        let mut messages: Vec<String> = Vec::new();
+        let mut current: Option<(i64, String, String)> = None;
+        for row in rows {
+            let (sequence, role, content) = row?;
+            if current.as_ref().map(|(seq, ..)| *seq) != Some(sequence) {
+                if let Some((_, role, text)) = current.take() {
+                    push_tail_message(&mut messages, &role, &text);
+                }
+                current = Some((sequence, role, String::new()));
             }
-            if end_sequence.is_some_and(|end| message.sequence >= end) {
-                break;
-            }
-            if message.role != "user" && message.role != "assistant" {
-                continue;
-            }
-            let text: String = message
-                .parts
-                .iter()
-                .filter(|part| part.kind == "text")
-                .map(|part| part.content.as_str())
-                .collect();
-            let text = text.trim();
-            if text.is_empty() {
-                continue;
-            }
-            out.push_str(if message.role == "user" {
-                "user: "
-            } else {
-                "assistant: "
-            });
-            out.push_str(text);
-            out.push('\n');
-            if out.len() >= MAX_TAIL_BYTES {
-                out.truncate(MAX_TAIL_BYTES);
-                out.push_str("… [truncated]");
-                break;
+            if let Some((_, _, text)) = current.as_mut() {
+                if !text.is_empty() {
+                    text.push('\n');
+                }
+                text.push_str(&content);
             }
         }
+        if let Some((_, role, text)) = current {
+            push_tail_message(&mut messages, &role, &text);
+        }
+        if messages.is_empty() {
+            return Ok(None);
+        }
+
+        let budget = MAX_TAIL_BYTES.saturating_sub(TRUNCATION_MARKER.len());
+        let mut selected: Vec<String> = Vec::new();
+        let mut used = 0usize;
+        let mut truncated = false;
+        for message in messages.into_iter().rev() {
+            let separator = usize::from(!selected.is_empty());
+            if used + separator + message.len() <= budget {
+                used += separator + message.len();
+                selected.push(message);
+                continue;
+            }
+            let available = budget.saturating_sub(used + separator);
+            if available > 0 {
+                selected.push(tail_by_bytes(&message, available));
+            }
+            truncated = true;
+            break;
+        }
+        selected.reverse();
+        let mut out = String::new();
+        if truncated {
+            out.push_str(TRUNCATION_MARKER);
+        }
+        out.push_str(&selected.join("\n"));
         let out = out.trim_end().to_string();
         Ok((!out.is_empty()).then_some(out))
+    }
+
+    /// 子会话本轮所有片段（含轮内 steer）的已提交改动路径并集。
+    pub fn list_changed_paths_for_turn(
+        &self,
+        workspace: &Path,
+        child_session: &str,
+        user_message_ids: &[String],
+    ) -> Result<(usize, Vec<String>)> {
+        if user_message_ids.is_empty() {
+            return Ok((0, Vec::new()));
+        }
+        let Some(workspace_external) = self.workspace_external_id(workspace)? else {
+            return Ok((0, Vec::new()));
+        };
+        let placeholders = std::iter::repeat_n("?", user_message_ids.len())
+            .collect::<Vec<_>>()
+            .join(",");
+        let mut values: Vec<rusqlite::types::Value> =
+            Vec::with_capacity(user_message_ids.len() + 3);
+        values.push(rusqlite::types::Value::Text(child_session.to_string()));
+        for id in user_message_ids {
+            values.push(id.clone().into());
+        }
+        values.push(workspace_external.into());
+        let count_sql = format!(
+            r#"SELECT COUNT(DISTINCT m.target_path) FROM agent_file_mutation m
+               WHERE m.session_id = ?1 AND m.user_message_id IN ({placeholders})
+                 AND m.state = 'committed' AND m.success = 1
+                 AND m.session_id IN (
+                     SELECT external_id FROM agent_session WHERE workspace_id = ?{}
+                 )"#,
+            user_message_ids.len() + 2
+        );
+        let total: i64 = self.conn.query_row(
+            &count_sql,
+            rusqlite::params_from_iter(values.iter()),
+            |row| row.get(0),
+        )?;
+        let total = usize::try_from(total).unwrap_or_default();
+        if total == 0 {
+            return Ok((0, Vec::new()));
+        }
+        let limit_placeholder = user_message_ids.len() + 3;
+        let list_sql = format!(
+            r#"SELECT m.target_path FROM agent_file_mutation m
+               WHERE m.session_id = ?1 AND m.user_message_id IN ({placeholders})
+                 AND m.state = 'committed' AND m.success = 1
+                 AND m.session_id IN (
+                     SELECT external_id FROM agent_session WHERE workspace_id = ?{}
+                 )
+               GROUP BY m.target_path
+               ORDER BY MIN(m.id) ASC
+               LIMIT ?{limit_placeholder}"#,
+            user_message_ids.len() + 2
+        );
+        values.push((crate::chat::agent::MAX_REPORT_CHANGED_PATHS as i64).into());
+        let mut statement = self.conn.prepare(&list_sql)?;
+        let rows = statement.query_map(rusqlite::params_from_iter(values.iter()), |row| {
+            row.get::<_, String>(0)
+        })?;
+        let mut paths = Vec::new();
+        for row in rows {
+            let raw = row?;
+            let relative = Path::new(&raw)
+                .strip_prefix(workspace)
+                .map(|path| {
+                    if path.as_os_str().is_empty() {
+                        ".".to_string()
+                    } else {
+                        path.display().to_string()
+                    }
+                })
+                .unwrap_or(raw);
+            paths.push(relative);
+        }
+        Ok((total, paths))
     }
 
     /// 列表：一条 SQL 联查元数据（不含消息流）。
@@ -808,52 +924,11 @@ impl Database {
         child_session: &str,
         child_user_message_id: &str,
     ) -> Result<(usize, Vec<String>)> {
-        let total = self.count_changed_paths(workspace, child_session, child_user_message_id)?;
-        if total == 0 {
-            return Ok((0, Vec::new()));
-        }
-        let Some(workspace_external) = self.workspace_external_id(workspace)? else {
-            return Ok((total, Vec::new()));
-        };
-        let mut statement = self.conn.prepare(
-            r#"SELECT m.target_path
-               FROM agent_file_mutation m
-               JOIN agent_turn_file_scope s
-                 ON s.session_id = m.session_id AND s.user_message_id = m.user_message_id
-               WHERE m.session_id = ?1 AND m.user_message_id = ?2
-                 AND m.state = 'committed' AND m.success = 1
-                 AND m.session_id IN (
-                     SELECT external_id FROM agent_session WHERE workspace_id = ?3
-                 )
-               GROUP BY m.target_path
-               ORDER BY MIN(m.id) ASC
-               LIMIT ?4"#,
-        )?;
-        let rows = statement.query_map(
-            params![
-                child_session,
-                child_user_message_id,
-                workspace_external,
-                crate::chat::agent::MAX_REPORT_CHANGED_PATHS as i64
-            ],
-            |row| row.get::<_, String>(0),
-        )?;
-        let mut paths = Vec::new();
-        for row in rows {
-            let raw = row?;
-            let relative = Path::new(&raw)
-                .strip_prefix(workspace)
-                .map(|path| {
-                    if path.as_os_str().is_empty() {
-                        ".".to_string()
-                    } else {
-                        path.display().to_string()
-                    }
-                })
-                .unwrap_or(raw);
-            paths.push(relative);
-        }
-        Ok((total, paths))
+        self.list_changed_paths_for_turn(
+            workspace,
+            child_session,
+            std::slice::from_ref(&child_user_message_id.to_string()),
+        )
     }
 
     /// 子会话本轮**已提交**的改动路径数（去重；报告尾巴用）。
@@ -937,6 +1012,27 @@ impl Database {
         transaction.commit()?;
         Ok(())
     }
+}
+
+/// 私聊转录的一条消息：跳过空文本，统一 `role: text` 前缀。
+fn push_tail_message(messages: &mut Vec<String>, role: &str, text: &str) {
+    let text = text.trim();
+    if text.is_empty() {
+        return;
+    }
+    messages.push(format!("{role}: {text}"));
+}
+
+/// 从字符串尾部截取至多 `max` 字节，并回退到 UTF-8 字符边界。
+fn tail_by_bytes(text: &str, max: usize) -> String {
+    if text.len() <= max {
+        return text.to_string();
+    }
+    let mut start = text.len() - max;
+    while start < text.len() && !text.is_char_boundary(start) {
+        start += 1;
+    }
+    text[start..].to_string()
 }
 
 /// 剥离报告正文中的控制字符（保留换行和制表符）并限制长度。

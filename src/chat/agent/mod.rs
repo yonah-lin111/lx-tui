@@ -329,7 +329,10 @@ pub fn joined_input_text(items: &[SubagentInputItem]) -> String {
     }
 }
 
-/// `list_agents` 的单条子 agent 概览（不含完整消息流或报告正文）。
+/// `list_agents` 的单条子 agent 概览。
+///
+/// 默认不含消息流；`include_private=true` 时 `private_tail` 携带最近一次人类私聊的
+/// 紧凑转录（上限 4 KiB）。
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct AgentListItemView {
     pub agent_id: String,

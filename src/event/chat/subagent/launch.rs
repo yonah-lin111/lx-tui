@@ -134,10 +134,21 @@ pub(super) fn launch_child_turn(
     };
     let child_chat = build_child_chat();
     let ui_chat = build_child_chat();
+    // 私聊追问不更新父可见任务摘要：`task` 会进入 `@` 引用块与快照标题兜底。
+    let previous_task = state
+        .pane_anywhere(parent_key.pane)
+        .and_then(|pane| pane.lx.agents.by_agent(&record.agent_id))
+        .map(|run| run.task.clone());
+    let visible_task = crate::app::state::lx::agent::visible_task(
+        task_text,
+        notify_parent,
+        previous_task.as_deref(),
+        &record.title,
+    );
 
     if is_new_agent {
         let mut run = SubagentRun::from_record(record);
-        run.task = task_text.to_string();
+        run.task = visible_task.clone();
         run.status = STATUS_RUNNING.to_string();
         run.chat = ui_chat;
         run.compact.replace(existing_checkpoints);
@@ -148,7 +159,7 @@ pub(super) fn launch_child_turn(
             run.status = STATUS_RUNNING.to_string();
             run.completed_at_ms = None;
             run.started_at_ms = started_at_ms;
-            run.task = task_text.to_string();
+            run.task = visible_task.clone();
             run.chat = ui_chat;
             run.compact.replace(existing_checkpoints);
             run.loaded = true;
@@ -157,7 +168,7 @@ pub(super) fn launch_child_turn(
             let mut run = SubagentRun::from_record(record);
             run.status = STATUS_RUNNING.to_string();
             run.started_at_ms = started_at_ms;
-            run.task = task_text.to_string();
+            run.task = visible_task.clone();
             run.chat = ui_chat;
             run.compact.replace(existing_checkpoints);
             run.loaded = true;
@@ -165,6 +176,7 @@ pub(super) fn launch_child_turn(
         }
         pane.lx.sync_mention_subagent_runs();
     }
+    let turn_user_message_ids = vec![child_user_message_id.to_string()];
 
     let (cancel_sender, cancel) = watch::channel(false);
     let done_sender = reused_done.unwrap_or_else(|| watch::channel(false).0);
@@ -189,9 +201,10 @@ pub(super) fn launch_child_turn(
         child_session_id: record.child_session_id.clone(),
         child_assistant_id: child_assistant_id.to_string(),
         child_user_message_id: child_user_message_id.to_string(),
+        turn_user_message_ids,
         role: record.role,
         title: record.title.clone(),
-        task: task_text.to_string(),
+        task: visible_task,
         cancel: cancel_sender.clone(),
         done: done_sender,
         status: STATUS_RUNNING,

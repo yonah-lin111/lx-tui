@@ -364,8 +364,8 @@ pub fn submit_current(state: &mut AppState, pane: PaneId) -> bool {
             return false;
         }
     };
-    // 当前草稿没有新的 `@` 时沿用上一次回答者集合（UI 胶囊已经显示该集合；
-    // 只更新 badge 而不把集合带进提交会让实际回答者悄悄退回 lx）。
+    // 当前草稿没有新的 `@` 时沿用上一次回答者集合；composer 已不再展示目标，
+    // 但提交语义仍需保持，否则实际回答者会悄悄退回 lx。
     let targets = if targets.is_empty() {
         let (previous, missing) = previous_targets(&target.lx);
         if missing && previous.is_empty() {
@@ -398,8 +398,6 @@ pub fn submit_current(state: &mut AppState, pane: PaneId) -> bool {
         thread.targets = targets
             .iter()
             .map(|choice| BtwTargetView {
-                key: choice.agent_id.clone(),
-                label: format!("{} [{}]", choice.display_nickname, choice.role_name),
                 agent_id: Some(choice.agent_id.clone()),
             })
             .collect();

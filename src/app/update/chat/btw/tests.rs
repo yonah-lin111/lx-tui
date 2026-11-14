@@ -422,8 +422,6 @@ fn btw_follow_up_without_mention_keeps_previous_agent_target() {
         target.lx.agents.runs.push(run);
         let thread = target.lx.btw.active_thread_mut().expect("thread");
         thread.targets = vec![crate::app::state::lx::BtwTargetView {
-            key: "sub-1".into(),
-            label: "Turing [explorer]".into(),
             agent_id: Some("sub-1".into()),
         }];
         thread.composer.editor_mut().replace_input("follow up");
@@ -453,8 +451,6 @@ fn btw_follow_up_missing_previous_target_falls_back_to_default() {
         target.lx.agents.runs.clear();
         let thread = target.lx.btw.active_thread_mut().expect("thread");
         thread.targets = vec![crate::app::state::lx::BtwTargetView {
-            key: "missing-agent".into(),
-            label: "Missing [explorer]".into(),
             agent_id: Some("missing-agent".into()),
         }];
         thread.composer.editor_mut().replace_input("continue");

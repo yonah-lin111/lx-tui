@@ -2,7 +2,8 @@
 
 - **关联设计**：[`design.md`](design.md)
 - **执行前提**：用户审核确认 `design.md` 与本 `task.md` 后才开始改代码。
-- **当前状态**：T1–T6 全部完成（分支 `feat/btw-agent-natural-dialogue`），待用户确认后合并。
+- **当前状态**：T1–T6 全部完成（分支 `feat/btw-agent-natural-dialogue`），2026-11-14 代码审查修复后待用户确认合并。
+- **审查报告**：[`review.md`](review.md)。
 
 ---
 
@@ -354,7 +355,7 @@ cargo test --lib event::chat::tests
 
 - `cargo fmt`：通过；
 - `cargo clippy --all-targets -- -D warnings`：通过；
-- `cargo test`：5373 passed / 0 failed（含全部集成测试）；
+- `cargo test`：5391 passed / 0 failed（含全部集成测试；审查修复后）；
 - 受影响模块：`ui::main_content::lx::task` 93 passed、`app::state::lx` 246 passed、`app::update` 986 passed、`app::update::chat::btw` 18 passed、`event::chat::tests` 120 passed。
 
 交互观感仍需用户 `cargo run` 复核：

@@ -2,7 +2,8 @@
 
 use tokio::sync::oneshot;
 
-use super::runner::{schedule_next_queued_input_with_done, sync_agent_ui_queue};
+use super::runner::schedule_next_queued_input_with_done;
+use super::snapshot::sync_agent_ui_queue;
 use super::*;
 use crate::app::state::{RequestKey, RequestState, SubagentReportView};
 use crate::chat::agent::{format_report_envelope, reports_to_json};
@@ -75,11 +76,16 @@ pub(crate) fn finish_subagent_with_billing(
     let mut report_view = None;
     if let Some(database) = persistence.database() {
         let report = (!was_closed && handle.notify_parent).then(|| {
+            let turn_user_message_ids = if handle.turn_user_message_ids.is_empty() {
+                vec![handle.child_user_message_id.clone()]
+            } else {
+                handle.turn_user_message_ids.clone()
+            };
             let (files_changed, changed_paths) = database
-                .list_changed_paths(
+                .list_changed_paths_for_turn(
                     &handle.workspace,
                     &key.session,
-                    &handle.child_user_message_id,
+                    &turn_user_message_ids,
                 )
                 .unwrap_or_default();
             let mut body = report_body(&handle);
@@ -88,7 +94,7 @@ pub(crate) fn finish_subagent_with_billing(
             if handle.status != STATUS_COMPLETED && !body.starts_with("[Partial report") {
                 body = crate::chat::agent::synthesize_partial_report_body(
                     &body,
-                    completed_tools(&handle.chat, &handle.child_assistant_id),
+                    completed_tools(&handle),
                     &changed_paths,
                     partial_reason_label(&reason, handle.max_tokens, usage, budget_exceeded),
                 );
@@ -155,7 +161,7 @@ pub(crate) fn finish_subagent_with_billing(
         );
     }
     let _ = update::on_subagent_finished(state, &key.session, handle.status, report_view, usage);
-    // 竞态：steer 尚未被 loop 取走、轮次就结束时，落成一次新的追问，避免用户文本丢失。
+    // 竞态：steer 尚未被 loop 取走、轮次就结束时，避免用户文本丢失。
     let undelivered: Vec<String> = state
         .pane_mut_anywhere(handle.parent.pane)
         .and_then(|target| target.lx.agents.by_agent_mut(&handle.agent_id))
@@ -167,16 +173,25 @@ pub(crate) fn finish_subagent_with_billing(
                 .collect()
         })
         .unwrap_or_default();
-    for text in undelivered {
-        state
-            .effects
-            .push(crate::app::effects::Effect::SendSubagentUserInput {
-                pane: handle.parent.pane,
-                session_id: handle.parent.session.clone(),
-                agent_id: handle.agent_id.clone(),
-                text,
-                notify_parent: handle.notify_parent,
-            });
+    // 只有正常完成才自动起新一轮；停止/中断/预算/失败后重启会绕过暂停语义。
+    let safe_to_restart = matches!(&reason, StopReason::Complete)
+        && !was_closed
+        && !was_paused_by_interrupt
+        && !budget_hit;
+    if safe_to_restart {
+        for text in undelivered {
+            state
+                .effects
+                .push(crate::app::effects::Effect::SendSubagentUserInput {
+                    pane: handle.parent.pane,
+                    session_id: handle.parent.session.clone(),
+                    agent_id: handle.agent_id.clone(),
+                    text,
+                    notify_parent: handle.notify_parent,
+                });
+        }
+    } else if !undelivered.is_empty() {
+        restore_steer_draft(state, handle.parent.pane, &handle.agent_id, &undelivered);
     }
     let cancel_key = RequestKey {
         pane: handle.parent.pane,
@@ -471,32 +486,83 @@ pub(crate) fn drain_reports(state: &mut AppState, persistence: &Persistence, pan
     update::on_report_batch_committed(state, pane, &committed, reports)
 }
 
-/// 报告正文：子会话最后一条 assistant 的正文，超限截断。
-fn report_body(handle: &SubagentHandle) -> String {
-    let text = handle
+/// 轮次异常结束时把未投递的 steer 退回 composer，避免自动重跑或丢文本。
+fn restore_steer_draft(
+    state: &mut AppState,
+    pane: PaneId,
+    agent_id: &str,
+    texts: &[String],
+) -> bool {
+    let restored = if let Some(target) = state.pane_mut_anywhere(pane) {
+        let composer = target.lx.agents.ensure_composer(agent_id);
+        if !composer.is_empty() {
+            composer.editor_mut().insert_str("\n");
+        }
+        composer.editor_mut().insert_str(&texts.join("\n"));
+        true
+    } else {
+        tracing::warn!(
+            pane = pane.raw(),
+            agent_id,
+            "steer draft lost: pane unavailable"
+        );
+        false
+    };
+    if restored {
+        crate::app::update::show_lx_toast(
+            state,
+            pane,
+            crate::app::toast::Toast::new(
+                crate::app::toast::ToastKind::Warning,
+                crate::ui::text::LX_STEER_RESTORED.to_string(),
+                Some(pane),
+                std::time::Instant::now(),
+            ),
+        );
+    }
+    restored
+}
+
+/// 本轮消息切片：从 claim 的 user 消息（或轮内第一条 steer）到当前。
+fn turn_messages(handle: &SubagentHandle) -> &[crate::app::state::ChatMessageView] {
+    let start = handle
+        .turn_user_message_ids
+        .first()
+        .map(String::as_str)
+        .unwrap_or(handle.child_user_message_id.as_str());
+    handle
         .chat
         .messages
         .iter()
-        .rev()
-        .find(|message| message.role == "assistant")
-        .map(|message| message.text())
-        .unwrap_or_default();
-    crate::chat::agent::truncate_report_body(&text)
+        .position(|message| message.id == start)
+        .map_or(&handle.chat.messages, |index| {
+            &handle.chat.messages[index..]
+        })
 }
 
-/// 本轮已结算的工具调用数（半程汇报正文用）。
-fn completed_tools(chat: &crate::app::state::LxChat, assistant_id: &str) -> usize {
-    chat.messages
+/// 报告正文：本轮所有 assistant 片段（含 steer 截断的前半段），超限截断。
+fn report_body(handle: &SubagentHandle) -> String {
+    let mut texts = Vec::new();
+    for message in turn_messages(handle) {
+        if message.role != "assistant" {
+            continue;
+        }
+        let text = message.text();
+        if !text.trim().is_empty() {
+            texts.push(text);
+        }
+    }
+    crate::chat::agent::truncate_report_body(&texts.join("\n\n"))
+}
+
+/// 本轮已结算的工具调用数（跨 steer 片段；半程汇报正文用）。
+fn completed_tools(handle: &SubagentHandle) -> usize {
+    turn_messages(handle)
         .iter()
-        .find(|message| message.id == assistant_id)
-        .map(|message| {
-            message
-                .steps
-                .iter()
-                .filter(|step| matches!(step, crate::app::state::AssistantStepView::Tool { .. }))
-                .count()
-        })
-        .unwrap_or_default()
+        .filter(|message| message.role == "assistant")
+        .flat_map(|message| message.steps.iter())
+        .filter(|step| matches!(step, crate::app::state::AssistantStepView::Tool { .. }))
+        .count()
 }
 
 /// 交互式事件层拿不到 `TurnSummary.budget_exceeded` 的历史路径：用「被取消 + 本步用量已达预算」兜底。

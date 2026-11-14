@@ -1149,6 +1149,17 @@ fn late_mention_result_is_dropped_after_switching_agent() {
             .is_some_and(|composer| composer.editor().mention_open()),
         "迟到结果不写入已切换的 agent"
     );
+    // 丢弃回执时必须清掉原 composer 的在途标记，否则 Files Tab 永久 Loading。
+    let retry = state
+        .pane_mut_anywhere(pane)
+        .expect("pane")
+        .lx
+        .agents
+        .composer_mut("sub-done")
+        .expect("composer")
+        .editor_mut()
+        .take_mention_scan_request();
+    assert!(retry.is_some(), "迟到结果丢弃后应允许重新发起扫描");
 }
 
 #[test]
@@ -1232,4 +1243,112 @@ fn enter_while_agent_running_emits_a_steer_instead_of_a_new_turn() {
         "steer 不应落成新的排队输入：{:?}",
         state.effects
     );
+}
+
+/// Shift+Enter 在 @ 面板高亮普通文件时必须回落为换行，不能吞键。
+#[test]
+fn shift_enter_falls_back_to_newline_when_mention_target_is_not_a_directory() {
+    let (mut state, pane) = state_with_session("");
+    open_agents_with_statuses(&mut state, pane);
+    open_agent_mention(&mut state, pane);
+    let input = crate::app::update::pane::apply_lx_input;
+    input(&mut state, crate::app::actions::LxInput::EnterFolder);
+    let text = state
+        .pane_anywhere(pane)
+        .expect("pane")
+        .lx
+        .agents
+        .composer("sub-done")
+        .map(|composer| composer.text().to_string());
+    assert_eq!(text.as_deref(), Some("@\n"), "Shift+Enter 应插入换行");
+}
+
+/// `/` 在 Agents composer 中必须只写入字符，不能打开任何编辑浮层。
+#[test]
+fn agent_composer_slash_does_not_open_panels() {
+    let (mut state, pane) = state_with_session("");
+    open_agents_with_statuses(&mut state, pane);
+    let input = crate::app::update::pane::apply_lx_input;
+    input(&mut state, crate::app::actions::LxInput::EnterFolder);
+    input(&mut state, crate::app::actions::LxInput::Char('/'));
+    let editor = state
+        .pane_anywhere(pane)
+        .expect("pane")
+        .lx
+        .agents
+        .composer("sub-done")
+        .expect("composer")
+        .editor();
+    assert_eq!(editor.input, "/");
+    assert!(editor.slash.is_none(), "不打开斜杠面板");
+    assert!(editor.panel.is_none(), "不打开 markdown 块面板");
+    assert!(editor.paste_panel().is_none(), "不打开粘贴面板");
+    assert!(editor.refer.is_none(), "不打开快捷引用面板");
+}
+
+/// steer 达到上限时提交侧必须保留草稿，不能等事件层拒绝后才发现文本已清空。
+#[test]
+fn full_steer_queue_keeps_the_agent_draft() {
+    let (mut state, pane) = state_with_session("");
+    open_agents_with_statuses(&mut state, pane);
+    state
+        .pane_mut_anywhere(pane)
+        .expect("pane")
+        .lx
+        .task
+        .as_mut()
+        .expect("task")
+        .agents_window
+        .active = 0; // sub-run
+    let input = crate::app::update::pane::apply_lx_input;
+    input(&mut state, crate::app::actions::LxInput::EnterFolder);
+    {
+        let run = state
+            .pane_mut_anywhere(pane)
+            .expect("pane")
+            .lx
+            .agents
+            .by_agent_mut("sub-run")
+            .expect("run");
+        for index in 0..crate::app::state::lx::chat::steer::MAX_PENDING_STEERS {
+            run.chat
+                .pending_steers
+                .push(crate::app::state::lx::chat::steer::PendingSteer {
+                    text: format!("steer-{index}"),
+                    attachments: Vec::new(),
+                    model_images: Vec::new(),
+                    model: crate::db::chat::ModelSnapshot {
+                        provider: "p".into(),
+                        model: "m".into(),
+                        variant: None,
+                    },
+                });
+        }
+        state
+            .pane_mut_anywhere(pane)
+            .expect("pane")
+            .lx
+            .agents
+            .composer_mut("sub-run")
+            .expect("composer")
+            .editor_mut()
+            .replace_input("too many");
+    }
+    input(&mut state, crate::app::actions::LxInput::Enter);
+    assert!(
+        !state
+            .effects
+            .iter()
+            .any(|effect| matches!(effect, crate::app::effects::Effect::SteerSubagent { .. })),
+        "满队列不得再发 steer：{:?}",
+        state.effects
+    );
+    let draft = state
+        .pane_anywhere(pane)
+        .expect("pane")
+        .lx
+        .agents
+        .composer("sub-run")
+        .map(|composer| composer.text().to_string());
+    assert_eq!(draft.as_deref(), Some("too many"), "草稿必须保留");
 }

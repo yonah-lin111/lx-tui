@@ -94,6 +94,8 @@ struct ChildHandle {
     processes: Arc<ProcessManager>,
     join_handle: Option<tokio::task::JoinHandle<()>>,
     uncheckpointed_bytes: usize,
+    /// 本轮完成后是否向主 agent 投递报告；面板私聊轮为 false。
+    notify_parent: bool,
     /// `close_agent` / 退出关闭：结算时不生成半程汇报。
     closed_without_report: bool,
 }
@@ -654,13 +656,21 @@ impl ExecSubagentPool {
                 queued_count: queues.get(&record.agent_id).map_or(0, |q| q.queued_count),
                 private_tail: include_private
                     .then(|| {
-                        db.private_turn_tail(
+                        match db.private_turn_tail(
                             &self.workspace,
                             &record.parent_session_id,
                             &record.agent_id,
-                        )
-                        .ok()
-                        .flatten()
+                        ) {
+                            Ok(tail) => tail,
+                            Err(error) => {
+                                tracing::warn!(
+                                    %error,
+                                    agent_id = %record.agent_id,
+                                    "private subagent transcript unavailable"
+                                );
+                                None
+                            }
+                        }
                     })
                     .flatten(),
             })
@@ -817,6 +827,7 @@ impl ExecSubagentPool {
             &record.title,
             claimed.started_at_ms,
             &claimed.items,
+            claimed.notify_parent,
             reused_done.unwrap_or_else(|| watch::channel(false).0),
         )?;
         Ok(Some(claimed))

@@ -19,6 +19,10 @@ pub const LX_STEER_TOO_MANY: &str = "Too many pending steers";
 pub const LX_STEER_IMAGE_LIMIT: &str = "Too many pending images";
 /// 单条 steer 文本超过消息上限。
 pub const LX_STEER_TEXT_LIMIT: &str = "Steer is too large";
+/// 轮次异常结束时未投递 steer 已退回输入框。
+pub const LX_STEER_RESTORED: &str = "Steer not delivered; restored to the composer";
+/// steer 与回退追问都无法投递。
+pub const LX_STEER_FAILED: &str = "Steer failed";
 
 /// `+N more pending`：超出提示区可见条数时的末行文案。
 pub fn lx_steer_more(count: usize) -> String {

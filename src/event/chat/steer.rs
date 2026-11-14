@@ -336,6 +336,9 @@ fn deliver_child(
     if let Some(handle) = streams.subagents.get_mut(&key.session) {
         handle.child_assistant_id = committed.assistant_message_id.clone();
         handle.child_user_message_id = committed.user_message_id.clone();
+        handle
+            .turn_user_message_ids
+            .push(committed.user_message_id.clone());
         if let Ok(mut id) = handle.mutation_user_id.write() {
             *id = committed.user_message_id.clone();
         }
@@ -382,6 +385,8 @@ fn apply_steer_segment(
     model_label: Option<String>,
     key: &crate::app::state::RequestKey,
 ) {
+    // 与主对话路径一致：先收尾旧片段里的开放思考/工具步骤，再标记新 user 为 steer。
+    chat.close_stream(&StopReason::Complete);
     if let Some(message) = chat
         .messages
         .iter_mut()
@@ -422,6 +427,7 @@ fn apply_steer_segment(
         reports: Vec::new(),
         attachments: committed.attachments.clone(),
     });
+    chat.mark_steered_user_message(&committed.user_message_id);
     chat.messages.push(ChatMessageView {
         sequence: committed.assistant_sequence,
         id: committed.assistant_message_id.clone(),

@@ -522,6 +522,7 @@ fn subagent_steer_inputs_returns_empty_without_cancelling_child_turn() {
             child_session_id: child_key.session.clone(),
             child_assistant_id: "msg-child-a".into(),
             child_user_message_id: "msg-child-u".into(),
+            turn_user_message_ids: vec!["msg-child-u".into()],
             role: crate::chat::agent::AgentRole::Explorer,
             title: "check".into(),
             task: "explore".into(),

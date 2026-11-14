@@ -484,7 +484,7 @@ pub(super) fn send_input(
         .map_err(|err| err.code().to_string())?;
 
     if !trigger_turn {
-        sync_agent_ui_queue(
+        super::snapshot::sync_agent_ui_queue(
             state,
             streams,
             persistence,
@@ -513,7 +513,7 @@ pub(super) fn send_input(
                 let _ = handle.cancel.send(true);
             }
         }
-        sync_agent_ui_queue(
+        super::snapshot::sync_agent_ui_queue(
             state,
             streams,
             persistence,
@@ -543,7 +543,7 @@ pub(super) fn send_input(
         }
         Ok(None) => {}
         Err(err) => {
-            sync_agent_ui_queue(
+            super::snapshot::sync_agent_ui_queue(
                 state,
                 streams,
                 persistence,
@@ -554,7 +554,7 @@ pub(super) fn send_input(
             return Err(err);
         }
     }
-    sync_agent_ui_queue(
+    super::snapshot::sync_agent_ui_queue(
         state,
         streams,
         persistence,
@@ -663,7 +663,7 @@ pub(super) fn resume(
         agent_id,
     ) {
         Ok(Some(claimed)) => {
-            sync_agent_ui_queue(
+            super::snapshot::sync_agent_ui_queue(
                 state,
                 streams,
                 persistence,
@@ -678,7 +678,7 @@ pub(super) fn resume(
             })
         }
         Ok(None) => {
-            sync_agent_ui_queue(
+            super::snapshot::sync_agent_ui_queue(
                 state,
                 streams,
                 persistence,
@@ -693,7 +693,7 @@ pub(super) fn resume(
             })
         }
         Err(err) => {
-            sync_agent_ui_queue(
+            super::snapshot::sync_agent_ui_queue(
                 state,
                 streams,
                 persistence,
@@ -908,56 +908,6 @@ pub(crate) fn schedule_next_queued_input_with_done(
     )?;
 
     Ok(Some(claimed))
-}
-
-/// 同步窗格 `Agents` 列表中的状态投影与 `queued_count`（并刷新底栏 `N blocked` 计数与筛选高亮）。
-pub(super) fn sync_agent_ui_queue(
-    state: &mut AppState,
-    streams: &ChatStreams,
-    persistence: &Persistence,
-    pane: PaneId,
-    workspace: &Path,
-    parent_session: &str,
-) -> bool {
-    let Some(database) = persistence.database() else {
-        return false;
-    };
-    let tree = load_subagent_tree(database, workspace, parent_session);
-    if tree.records.is_empty() {
-        return false;
-    }
-    let queue_states = tree_queue_states(database, workspace, &tree);
-    let Some(target) = state.pane_mut_anywhere(pane) else {
-        return false;
-    };
-    let selected_agent_id = target
-        .lx
-        .task
-        .as_ref()
-        .and_then(|page| page.detail_agent_index(&target.lx.agents))
-        .and_then(|index| target.lx.agents.runs.get(index))
-        .map(|run| run.agent_id.clone());
-    let mut changed = false;
-    for record in &tree.records {
-        let q = queue_states.get(&record.agent_id);
-        let projected = super::projected_agent_status(streams, record, q);
-        let queued_count = q.map_or(0, |s| s.queued_count);
-        if let Some(run) = target.lx.agents.by_agent_mut(&record.agent_id)
-            && (run.status != projected || run.queued_count != queued_count)
-        {
-            run.status = projected;
-            run.queued_count = queued_count;
-            changed = true;
-        }
-    }
-    let blocked = target.lx.agents.blocked_count();
-    if target.lx.chat.status.blocked_subagents != blocked {
-        target.lx.chat.status.blocked_subagents = blocked;
-        changed = true;
-    }
-    crate::app::update::restore_selected_task_agent(&mut target.lx, selected_agent_id.as_deref());
-    target.lx.sync_mention_subagent_runs();
-    changed
 }
 
 /// 解析父会话的最新模型快照：

@@ -42,23 +42,45 @@ pub(super) fn steer_from_panel(
     if text.is_empty() {
         return false;
     }
+    if text.len() > crate::db::chat::MAX_MESSAGE_BYTES {
+        crate::app::update::show_lx_toast(
+            state,
+            pane,
+            crate::app::toast::Toast::new(
+                crate::app::toast::ToastKind::Warning,
+                crate::ui::text::LX_STEER_TEXT_LIMIT.to_string(),
+                Some(pane),
+                Instant::now(),
+            ),
+        );
+        return true;
+    }
     let live = streams
         .subagents
         .values()
         .any(|handle| handle.agent_id == agent_id && handle.status == STATUS_RUNNING);
     if !live {
-        let Some(session_id) = state
-            .pane_anywhere(pane)
-            .and_then(|target| target.lx.chat.session_id.clone())
-        else {
-            return false;
-        };
-        return send_from_panel(
+        return follow_up_or_fail(
             state,
             streams,
             persistence,
             pane,
-            &session_id,
+            agent_id,
+            text,
+            notify_parent,
+        );
+    }
+    // 当前窗格没有该 run（同一会话在另一窗格）时退化为排队追问，不能静默丢弃。
+    let has_run = state
+        .pane_anywhere(pane)
+        .and_then(|target| target.lx.agents.by_agent(agent_id))
+        .is_some();
+    if !has_run {
+        return follow_up_or_fail(
+            state,
+            streams,
+            persistence,
+            pane,
             agent_id,
             text,
             notify_parent,
@@ -70,10 +92,22 @@ pub(super) fn steer_from_panel(
         .and_then(|run| run.chat.effective_selection(&state.models))
         .or_else(|| state.models.default_selection())
     else {
-        return false;
+        return follow_up_or_fail(
+            state,
+            streams,
+            persistence,
+            pane,
+            agent_id,
+            text,
+            notify_parent,
+        );
     };
-    let Some(frozen) = crate::app::state::FrozenModel::resolve(&state.models, &selection) else {
-        return false;
+    // steer 实际由事件层使用冻结模型注入；这里只为 pending 记录回退快照，
+    // 不要求当前 provider 配置仍然可解析。
+    let model = crate::db::chat::ModelSnapshot {
+        provider: selection.provider,
+        model: selection.model,
+        variant: selection.variant,
     };
     let full = {
         let Some(target) = state.pane_mut_anywhere(pane) else {
@@ -91,11 +125,7 @@ pub(super) fn steer_from_panel(
                     text: text.to_string(),
                     attachments: Vec::new(),
                     model_images: Vec::new(),
-                    model: crate::db::chat::ModelSnapshot {
-                        provider: frozen.provider.clone(),
-                        model: frozen.model.clone(),
-                        variant: frozen.variant.clone(),
-                    },
+                    model,
                 });
             false
         }
@@ -129,4 +159,50 @@ pub(super) fn steer_from_panel(
         ),
     );
     true
+}
+
+/// 非 live / 无 run / 无模型时退化为排队追问；失败也要给用户可见反馈。
+#[allow(clippy::too_many_arguments)]
+fn follow_up_or_fail(
+    state: &mut AppState,
+    streams: &mut ChatStreams,
+    persistence: &Persistence,
+    pane: PaneId,
+    agent_id: &str,
+    text: &str,
+    notify_parent: bool,
+) -> bool {
+    let Some(session_id) = state
+        .pane_anywhere(pane)
+        .and_then(|target| target.lx.chat.session_id.clone())
+    else {
+        show_steer_failed(state, pane);
+        return true;
+    };
+    if !send_from_panel(
+        state,
+        streams,
+        persistence,
+        pane,
+        &session_id,
+        agent_id,
+        text,
+        notify_parent,
+    ) {
+        show_steer_failed(state, pane);
+    }
+    true
+}
+
+fn show_steer_failed(state: &mut AppState, pane: PaneId) {
+    crate::app::update::show_lx_toast(
+        state,
+        pane,
+        crate::app::toast::Toast::new(
+            crate::app::toast::ToastKind::Danger,
+            crate::ui::text::LX_STEER_FAILED.to_string(),
+            Some(pane),
+            Instant::now(),
+        ),
+    );
 }

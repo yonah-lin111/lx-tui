@@ -239,6 +239,7 @@ impl Lx {
         let folders = self.mention.referenced_folders().to_vec();
         let skills = self.mention_skills();
         let mcp = self.mention_mcp_servers();
+        let disabled_mcp = self.disabled_mcp_servers().clone();
         let Some(composer) = self.agents.composer_mut(&agent_id) else {
             return false;
         };
@@ -248,6 +249,9 @@ impl Lx {
         let folders_changed = composer.sync_referenced_folders(&folders);
         composer.set_mention_skills(skills);
         composer.set_mention_mcp_servers(mcp);
+        composer
+            .mention
+            .set_disabled_mcp_servers(disabled_mcp, &composer.input, composer.cursor);
         root_changed || project_changed || folders_changed
     }
 
@@ -266,6 +270,11 @@ impl Lx {
     /// 需要新扫描时返回（代号，扫描根）；仅事件层调用。
     pub fn take_mention_scan_request(&mut self) -> Option<(u64, std::path::PathBuf)> {
         self.mention.take_scan_request(&self.input, self.cursor)
+    }
+
+    /// 扫描结果因归属切换被丢弃时清掉在途标记；仅事件层调用。
+    pub fn abandon_mention_scan(&mut self, generation: u64, root: &std::path::Path) {
+        self.mention.abandon_scan(generation, root);
     }
 
     /// 写入扫描结果；代号或根过期时丢弃；返回是否采纳。

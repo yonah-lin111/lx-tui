@@ -68,6 +68,12 @@ fn btw_edit_badge_shows_only_the_question() {
         "composer 胶囊只显示主问题：{text:?}"
     );
     assert!(!text.contains("To:"), "胶囊不再展示目标段：{text:?}");
+
+    // 窄窗格只降级/隐藏，不能画出半截 `To:` 或越界。
+    for width in [16, 20, 24, 32, 48] {
+        let narrow = render_lines(&lx, width, 24).join("\n");
+        assert!(!narrow.contains("To:"), "width={width}: {narrow:?}");
+    }
 }
 
 #[test]

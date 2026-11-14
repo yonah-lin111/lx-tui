@@ -91,6 +91,26 @@ pub struct SubagentRun {
     pub last_accessed_ms: i64,
 }
 
+/// 父可见任务摘要：只有汇报轮才用最新输入覆盖；私聊轮保留原任务或标题。
+///
+/// `task` 会进入主 agent 的 `@` 引用块与 `<subagents>` 快照标题兜底，
+/// 因此私聊文本绝不能写进这里。
+pub(crate) fn visible_task(
+    task_text: &str,
+    notify_parent: bool,
+    previous: Option<&str>,
+    title: &str,
+) -> String {
+    if notify_parent {
+        return task_text.to_string();
+    }
+    previous
+        .map(str::trim)
+        .filter(|task| !task.is_empty())
+        .map(str::to_string)
+        .unwrap_or_else(|| title.to_string())
+}
+
 impl SubagentRun {
     /// 由持久化元数据构造（消息流待懒加载）。
     pub fn from_record(record: &SubagentRecord) -> Self {

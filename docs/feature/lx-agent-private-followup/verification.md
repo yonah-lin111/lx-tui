@@ -1,10 +1,11 @@
 # 验证报告：Agents 私聊 / 汇报 / steer（含 BTW / Agents 自然对话回归）
 
-> 状态：**CLI 实机与自动化通过；TUI 交互项待用户 `cargo run` 复核**。
+> 状态：**CLI 实机与自动化通过；2026-11-14 代码审查修复后，TUI 交互项待用户 `cargo run` 复核**。
 >
 > 验证分支：`feat/btw-agent-natural-dialogue`
-> 验证提交：`45dd6b17 test(lx): cover steer fallback when the turn settles first`
+> 验证提交：`review 修复提交（见 git log）`
 > 验证日期：2026-11-14
+> 审查报告：[`review.md`](review.md)
 > 工作区：`/Users/yonah/projects/agent/lx-tui/.worktrees/btw-agent-natural-dialogue`
 > 隔离库：`~/.lx-t-dev/db/worktrees/btw-agent-natural-dialogue-82e1f845/lx.db`
 > 默认模型：`provider-alq374/cbcn/deepseek-v4.1-flash#medium`
@@ -41,7 +42,12 @@ CLI 会话使用 `./target/debug/lx-tui exec` 创建，模型为默认模型；�
 | A10 | `list_agents(include_private=true)` 的模型可见文本 | `cargo test --lib subagent_list_renders_private_tail_only_when_present` | 仅带转录的条目输出 `private_tail:`，默认条目没有 | PASS |
 | A11 | `list_agents` 空参数、`path_prefix`、`include_private` 与 schema | `cargo test --lib parse_list_supports_empty_and_path_prefix`、`subagent_schemas_declare_hierarchy_and_budget_fields` | 默认 `include_private=false`；显式 true 被解析；schema 暴露 boolean | PASS |
 | A12 | 系统提示中的私聊约束与版本 | 检查 `LX_SYSTEM_PROMPT` 含 `private follow-ups ... not reported` 与“仅用户明确要求时查看”；`cargo test --lib prompt_documents_the_ask_tool` | 模型被明确告知私聊不自动汇报、不得主动窥探；`PROMPT_VERSION=lx-14` | PASS |
-| A13 | 全量静态检查与测试 | `cargo fmt`、`cargo clippy --all-targets -- -D warnings`、`cargo test` | 全部通过；lib `5382 passed / 0 failed / 6 ignored` | PASS |
+| A13 | 全量静态检查与测试 | `cargo fmt`、`cargo clippy --all-targets -- -D warnings`、`cargo test` | 全部通过；lib `5391 passed / 0 failed / 6 ignored` | PASS |
+| A14 | 私聊转录含中文且超过 4 KiB；后面紧跟一条汇报输入 | `cargo test --lib private_turn_tail` | 按消息序列截止到下一轮；不 panic；保留最新内容；总字节 ≤ 4096 | PASS |
+| A15 | report 模式子轮：先输出 `FIRST HALF`，steer 后再输出 `SECOND HALF`，最后完成 | `cargo test --lib report_mode_steer_keeps_both_segments_in_the_report`、`list_changed_paths_for_turn_unions_steer_segments` | 报告正文同时含两段；文件路径取两段并集；`turn_user_message_ids` 含 claim + steer 两条 | PASS |
+| A16 | 扫描中切换 agent，迟到结果回投；随后回到原 agent 再输入 `@` | `cargo test --lib late_mention_result_is_dropped_after_switching_agent` | 迟到结果不写入新 agent；原 composer 的 pending 被清；可再次发起扫描 | PASS |
+| A17 | 运行中 agent 已有 8 条 pending steer，再按 Enter；异常结束（Cancelled）时仍有未消费 steer | `cargo test --lib full_steer_queue_keeps_the_agent_draft`、`abnormal_settle_restores_undelivered_steer_to_the_composer` | 满队列保留草稿且不发 effect；异常结束不自动重启，文本退回 composer | PASS |
+| A18 | Agents composer 输入 `/`；私聊不覆盖父可见 task | `cargo test --lib agent_composer_slash_does_not_open_panels`、`private_follow_up_keeps_the_parent_visible_task` | `/` 只写字符、不开任何浮层；私聊后 `run.task` 保持原任务 | PASS |
 
 ## 3. TUI 手工验证（待用户）
 
@@ -56,12 +62,14 @@ CLI 会话使用 `./target/debug/lx-tui exec` 创建，模型为默认模型；�
 | M07 | 在运行中 agent 的 composer 发送 `补充：先检查 src/db` | 观察胶囊与详情 | 胶囊为 `· steer`；消息在当前轮下一步注入；详情出现新 user 消息；pending 计数归零 | [ ] |
 | M08 | 给两个 agent 分别设置 private/report，来回切换；重启应用 | 观察胶囊后缀 | 同一会话内每个 agent 保持自己的模式；重启后全部回到 private | [ ] |
 | M09 | 把 agent 编辑态窗格从宽拖到窄 | 观察胶囊降级 | 先显示 `Turing [executor] · private`，放不下时降为 `Turing [executor]`，再放不下整块隐藏；不截半截 | [ ] |
-| M10 | 主对话输入“看一下和 Turing 的私聊” | 观察主 agent 是否调用 `list_agents(include_private=true)` 并展示内容 | 工具卡片出现 `private_tail`；未明确要求时默认不读取 | [ ] |
+| M10 | 主对话输入“看一下和 Turing 的私聊” | 观察主 agent 是否调用 `list_agents(include_private=true)` 并在回复中引用内容 | 模型回复能引用私聊正文；`list_agents` 工具卡片只显示 agent 元数据（`private_tail` 不进卡片渲染）；未明确要求时默认不读取 | [ ] |
 
 ## 4. 边界与备注
 
 - `include_private` 是模型填写的工具参数，属于“不主动汇报”，不是硬隔离；系统提示要求仅在用户明确要求时查看。
 - 私聊轮不生成报告，`wait_agent` 只返回状态；查看内容走 `list_agents(include_private=true)` 或 TUI 详情。
+- 私聊转录按消息序列取边界、保留最新内容；超 4 KiB 时在 UTF-8 边界截断并带 `… [truncated]`。
+- report 模式的 steer 按整轮聚合报告正文与文件路径；停止/中断/失败后的未消费 steer 退回草稿，不自动重启。
 - 模式按 agent 存内存，重启复位为 private。
 - CLI 会话写入当前 worktree 的隔离开发库；主 checkout 的 `~/.lx-t-dev/db/lx.db` 与生产库未受影响。
 - 当前 `dev` 已前进到 `8c995980`（并行只读审查），合并本分支前需先处理 `src/chat/agent_loop` 等差异与可能的冲突。

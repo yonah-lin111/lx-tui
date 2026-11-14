@@ -115,21 +115,26 @@ pub fn apply_lx_mention_entries(
             pane.lx.apply_mention_entries(generation, root, entries);
         }
         MentionScanOwner::Btw(qa_id) => {
-            if pane.lx.btw.active.as_deref() != Some(qa_id.as_str()) {
-                return;
-            }
-            if let Some(composer) = pane.lx.btw.active_composer_mut() {
-                composer.apply_mention_entries(generation, root, entries);
+            let active = pane.lx.btw.active.as_deref() == Some(qa_id.as_str());
+            if let Some(thread) = pane.lx.btw.thread_mut(&qa_id) {
+                let composer = thread.composer.editor_mut();
+                if active {
+                    composer.apply_mention_entries(generation, root, entries);
+                } else {
+                    // 迟到结果被丢弃时必须清掉在途标记，否则该线程的 Files Tab 永久 Loading。
+                    composer.abandon_mention_scan(generation, root);
+                }
             }
         }
         MentionScanOwner::Agent(agent_id) => {
-            if pane.lx.agent_edit_id() != Some(agent_id.as_str()) {
-                return;
-            }
+            let editing = pane.lx.agent_edit_id() == Some(agent_id.as_str());
             if let Some(composer) = pane.lx.agents.composer_mut(&agent_id) {
-                composer
-                    .editor_mut()
-                    .apply_mention_entries(generation, root, entries);
+                let editor = composer.editor_mut();
+                if editing {
+                    editor.apply_mention_entries(generation, root, entries);
+                } else {
+                    editor.abandon_mention_scan(generation, root);
+                }
             }
         }
     }

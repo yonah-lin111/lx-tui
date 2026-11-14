@@ -1477,3 +1477,252 @@ fn dev_database_copy_migrates_to_current_version_and_passes_integrity_check() {
     drop(migrated);
     cleanup(temp_dir);
 }
+
+/// 私聊转录按消息序列取轮次边界：后续汇报轮不得混入，中文超长转录不得 panic。
+#[test]
+fn private_turn_tail_uses_sequence_boundaries_and_survives_multibyte_truncation() {
+    let fixture = Fixture::new("private-tail");
+    let parent = fixture.parent();
+    let committed = fixture.spawn(&parent, AgentRole::Explorer, "first task");
+    fixture.finish_child(
+        &committed,
+        TurnOutcome::Complete {
+            stop_reason: Some("complete".into()),
+        },
+        None,
+    );
+
+    let private = fixture
+        .database
+        .enqueue_input(
+            fixture.workspace(),
+            &parent,
+            &committed.agent_id,
+            "private-1",
+            None,
+            None,
+            &[PersistedInputItem::Text {
+                text: "secret question".into(),
+            }],
+            false,
+            false,
+        )
+        .expect("enqueue private");
+    let claimed = fixture
+        .database
+        .claim_input(
+            fixture.workspace(),
+            &parent,
+            &committed.agent_id,
+            &private.submission_id,
+            &Fixture::model(),
+        )
+        .expect("claim private");
+    fixture
+        .database
+        .finish_subagent_turn(
+            fixture.workspace(),
+            &committed.agent_id,
+            &claimed.child_assistant_id,
+            &[part(0, "private reply")],
+            &TurnOutcome::Complete {
+                stop_reason: Some("complete".into()),
+            },
+            Usage::default(),
+            Usage::default(),
+            None,
+        )
+        .expect("finish private");
+
+    // 紧随其后的汇报轮是硬边界，不能混进私聊转录。
+    let report_input = fixture
+        .database
+        .enqueue_input(
+            fixture.workspace(),
+            &parent,
+            &committed.agent_id,
+            "report-1",
+            None,
+            None,
+            &[PersistedInputItem::Text {
+                text: "later report".into(),
+            }],
+            false,
+            true,
+        )
+        .expect("enqueue report");
+    let report_claimed = fixture
+        .database
+        .claim_input(
+            fixture.workspace(),
+            &parent,
+            &committed.agent_id,
+            &report_input.submission_id,
+            &Fixture::model(),
+        )
+        .expect("claim report");
+    fixture
+        .database
+        .finish_subagent_turn(
+            fixture.workspace(),
+            &committed.agent_id,
+            &report_claimed.child_assistant_id,
+            &[part(0, "report reply")],
+            &TurnOutcome::Complete {
+                stop_reason: Some("complete".into()),
+            },
+            Usage::default(),
+            Usage::default(),
+            None,
+        )
+        .expect("finish report");
+
+    let tail = fixture
+        .database
+        .private_turn_tail(fixture.workspace(), &parent, &committed.agent_id)
+        .expect("query private tail")
+        .expect("private tail");
+    assert!(tail.contains("secret question"), "tail: {tail}");
+    assert!(tail.contains("private reply"), "tail: {tail}");
+    assert!(!tail.contains("later report"), "汇报轮不得混入：{tail}");
+    assert!(!tail.contains("report reply"), "汇报轮不得混入：{tail}");
+}
+
+/// 4 KiB 上限按 UTF-8 字符边界截断，保留最新内容而不是开头。
+#[test]
+fn private_turn_tail_truncates_multibyte_text_at_a_char_boundary() {
+    let fixture = Fixture::new("private-tail-utf8");
+    let parent = fixture.parent();
+    let committed = fixture.spawn(&parent, AgentRole::Explorer, "first task");
+    fixture.finish_child(
+        &committed,
+        TurnOutcome::Complete {
+            stop_reason: Some("complete".into()),
+        },
+        None,
+    );
+    let long_text = "中".repeat(2_000);
+    let private = fixture
+        .database
+        .enqueue_input(
+            fixture.workspace(),
+            &parent,
+            &committed.agent_id,
+            "private-long",
+            None,
+            None,
+            &[PersistedInputItem::Text {
+                text: long_text.clone(),
+            }],
+            false,
+            false,
+        )
+        .expect("enqueue private");
+    let claimed = fixture
+        .database
+        .claim_input(
+            fixture.workspace(),
+            &parent,
+            &committed.agent_id,
+            &private.submission_id,
+            &Fixture::model(),
+        )
+        .expect("claim private");
+    fixture
+        .database
+        .finish_subagent_turn(
+            fixture.workspace(),
+            &committed.agent_id,
+            &claimed.child_assistant_id,
+            &[part(0, "assistant tail")],
+            &TurnOutcome::Complete {
+                stop_reason: Some("complete".into()),
+            },
+            Usage::default(),
+            Usage::default(),
+            None,
+        )
+        .expect("finish private");
+
+    let tail = fixture
+        .database
+        .private_turn_tail(fixture.workspace(), &parent, &committed.agent_id)
+        .expect("query private tail")
+        .expect("private tail");
+    assert!(tail.len() <= 4096, "tail bytes: {}", tail.len());
+    assert!(tail.starts_with("… [truncated]"), "tail: {tail}");
+    assert!(tail.contains('中'), "尾部内容应保留：{tail}");
+    assert!(tail.contains("assistant tail"), "最新片段应保留：{tail}");
+}
+
+/// 轮内 steer 的 mutation 归属切到新 user 消息；整轮报告必须取两段并集。
+#[test]
+fn list_changed_paths_for_turn_unions_steer_segments() {
+    let fixture = Fixture::new("changed-paths-turn");
+    let parent = fixture.parent();
+    let committed = fixture.spawn(&parent, AgentRole::Executor, "edit files");
+    let first = fixture
+        .workspace()
+        .join("src/a.rs")
+        .to_string_lossy()
+        .into_owned();
+    let second = fixture
+        .workspace()
+        .join("src/b.rs")
+        .to_string_lossy()
+        .into_owned();
+    let commit = |user_message_id: &str, call_id: &str, path: &str| {
+        let ticket = fixture
+            .database
+            .prepare_mutations(
+                fixture.workspace(),
+                &committed.child_session_id,
+                user_message_id,
+                call_id,
+                &[created_path(path)],
+            )
+            .expect("prepare");
+        fixture
+            .database
+            .commit_mutations(
+                fixture.workspace(),
+                &committed.child_session_id,
+                &ticket,
+                &[crate::db::chat::rewind::ObservedWrite {
+                    actual_after: image_write("regular", Some(b"after")),
+                    success: true,
+                }],
+            )
+            .expect("commit");
+    };
+    // 第一段在 steer 前提交；steer 会封口旧 scope 并开新 scope。
+    commit(&committed.child_user_message_id, "call-1", &first);
+    let steered = fixture
+        .database
+        .begin_steer_turn(
+            fixture.workspace(),
+            &committed.child_session_id,
+            &committed.child_assistant_id,
+            &[],
+            "steer",
+            &[],
+            &Fixture::model(),
+        )
+        .expect("steer");
+    commit(&steered.user_message_id, "call-2", &second);
+
+    let (total, paths) = fixture
+        .database
+        .list_changed_paths_for_turn(
+            fixture.workspace(),
+            &committed.child_session_id,
+            &[
+                committed.child_user_message_id.clone(),
+                steered.user_message_id.clone(),
+            ],
+        )
+        .expect("changed paths");
+    assert_eq!(total, 2);
+    assert_eq!(paths, vec!["src/a.rs".to_string(), "src/b.rs".to_string()]);
+    cleanup(fixture.root);
+}

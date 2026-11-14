@@ -1,7 +1,8 @@
 # Agents 面板私聊 / 汇报 / 轮内 steer
 
-- **状态**：已完成（分支 `feat/btw-agent-natural-dialogue`），待用户实机验收。
+- **状态**：已完成（分支 `feat/btw-agent-natural-dialogue`），2026-11-14 代码审查修复后待用户实机验收。
 - **关联**：BTW/Agents 自然对话（`docs/feature/lx-btw-agent-natural-dialogue/`）。
+- **审查报告**：[`review.md`](review.md)。
 
 ## 1. 目标
 
@@ -30,6 +31,7 @@
   - 结算时 **不生成** `ReportPayload`，不写 `agent_subagent_report`，`drain_reports` 无内容可投递；
   - 主 agent 的 `<subagents>` 快照只看到状态/标题，看不到正文。
 - 主 agent 显式查看：`list_agents(include_private: true)` 为每个 agent 附带最近一次私聊的紧凑 transcript（user/assistant 文本，含轮内 steer，上限 4 KiB）。默认 `false`。
+- 转录边界按 `agent_message.sequence` 取，不依赖入队时间戳；只查询区间内的文本 part，保留最新内容并在 UTF-8 字符边界截断。查询失败记录 `tracing::warn!`，不把 DB 错误伪装成“没有私聊”。
 - 隐私边界说明：该参数由模型在工具调用里填写，因此“私聊”是**不自动进入主 agent 上下文**，不是密码学隔离；系统提示要求模型仅在用户明确要求时传 `include_private`。
 
 ## 4. 轮内 steer
@@ -42,7 +44,9 @@
   4. 同步事件侧 `handle.chat` 与 UI `run.chat`，消费 pending；
   5. 回执 `SteerInput` 给 loop。
 - steer 不改变本轮的私聊/汇报策略：策略在轮次开始时冻结。
-- 竞态兜底：轮次在 steer 被取走前结束，`settle` 把未消费的 pending steer 落成一条新的追问（沿用本轮 `notify_parent`），避免用户文本丢失。
+- report 模式下的报告按整轮聚合：`SubagentHandle.turn_user_message_ids` 记录 claim 的 user 与每次 steer 的 user；结算时文件路径取各片段并集，报告正文拼接本轮全部 assistant 片段，工具数跨片段统计。
+- 竞态兜底：轮次正常完成时，`settle` 把未消费的 pending steer 落成一条新的追问（沿用本轮 `notify_parent`）；停止/中断/预算/失败时不自动重启，文本退回 composer 并 toast。
+- 提交侧先校验单条文本上限与 pending 上限，失败保留草稿；事件层无 run/无模型时退化为排队追问，不静默丢弃。
 
 ## 5. 关键改动
 
@@ -50,9 +54,10 @@
 |---|---|
 | `src/db/migration.rs` / `src/db/mod.rs` | v29：`agent_subagent_input.notify_parent` |
 | `src/db/chat/subagent/queue.rs` | enqueue/claim 携带 `notify_parent` |
-| `src/db/chat/subagent.rs` | `private_turn_tail`（最近私聊 transcript） |
-| `src/event/chat/subagent/{runner,launch,settle}.rs` | 策略透传、报告抑制、steer 竞态兜底、mutation Arc |
-| `src/event/chat/subagent/panel.rs` | 面板私聊/汇报/steer 效应入口 |
+| `src/db/chat/subagent.rs` | `private_turn_tail`（最近私聊 transcript）、`list_changed_paths_for_turn`（整轮并集） |
+| `src/event/chat/subagent/{runner,launch,settle}.rs` | 策略透传、报告抑制、整轮聚合、steer 竞态兜底、mutation Arc |
+| `src/event/chat/subagent/snapshot.rs` | 面板内联追问、`sync_agent_ui_queue`（从 runner 迁入） |
+| `src/event/chat/subagent/panel.rs` | 面板私聊/汇报/steer 效应入口、容量/长度预检与回退 |
 | `src/event/chat/steer.rs` | `deliver_child` / `apply_steer_segment` |
 | `src/app/state/lx/agent.rs` | `AgentReplyMode` 与 per-agent 模式 |
 | `src/app/update/pane/task_page.rs` | Shift+Tab、running → steer、效果字段 |
@@ -65,4 +70,5 @@
 
 - `BTW` 仍是“就主对话问一个旁路助手”，不读取子 agent 会话；与私聊不重叠。
 - 私聊轮如果后续被模型 `send_input` 继续，后续正常轮的报告可能包含模型自己引用的私聊上下文；这是子 agent 的模型行为，不做硬隔离。
-- `exec` 无头模式没有面板入口，`notify_parent` 恒为 true。
+- `exec` 无头模式没有面板入口，新建输入恒为 true；但队列中已有的 `notify_parent=0` 输入被 exec resume 时，结算仍沿用 claim 时冻结的 flag，不自动汇报。
+- 同一会话开在两个窗格时，steer 可能退化为排队追问；当前实现优先保证文本不丢失，不保证跨窗格的真轮内注入。

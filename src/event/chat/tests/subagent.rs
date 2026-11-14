@@ -902,6 +902,7 @@ fn deleting_the_parent_session_cancels_live_children() {
             child_session_id: "sess-child".into(),
             child_assistant_id: "msg-child".into(),
             child_user_message_id: "msg-user".into(),
+            turn_user_message_ids: vec!["msg-user".into()],
             role: AgentRole::Explorer,
             title: "work".into(),
             task: "work".into(),

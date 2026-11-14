@@ -85,8 +85,10 @@ pub(crate) struct SubagentHandle {
     pub child_session_id: String,
     /// 当前子轮落库的 assistant 行（子 turn 工具归属校验的锚点）。
     pub child_assistant_id: String,
-    /// 当前子轮 user 消息 id（文件 mutation 归属）。
+    /// 当前子轮 user 消息 id（文件 mutation 归属；steer 会切到新片段）。
     pub child_user_message_id: String,
+    /// 本轮从 claim 到结算包含的所有 user 消息（含轮内 steer）；报告与文件统计按整轮聚合。
+    pub turn_user_message_ids: Vec<String>,
     /// 角色。
     pub role: AgentRole,
     /// 面向用户的短标题。
@@ -571,14 +573,21 @@ fn list_agents(
                 queued_count: q.map_or(0, |s| s.queued_count),
                 private_tail: include_private
                     .then(|| {
-                        database
-                            .private_turn_tail(
-                                workspace,
-                                &record.parent_session_id,
-                                &record.agent_id,
-                            )
-                            .ok()
-                            .flatten()
+                        match database.private_turn_tail(
+                            workspace,
+                            &record.parent_session_id,
+                            &record.agent_id,
+                        ) {
+                            Ok(tail) => tail,
+                            Err(error) => {
+                                tracing::warn!(
+                                    %error,
+                                    agent_id = %record.agent_id,
+                                    "private subagent transcript unavailable"
+                                );
+                                None
+                            }
+                        }
                     })
                     .flatten(),
             }
@@ -654,7 +663,7 @@ fn cancel_input(
     {
         queued_count = claimed.queued_remaining;
     }
-    runner::sync_agent_ui_queue(
+    snapshot::sync_agent_ui_queue(
         state,
         streams,
         persistence,
@@ -853,7 +862,7 @@ pub fn apply_subagent_effects(
                         }
                     }
                 }
-                if runner::sync_agent_ui_queue(
+                if snapshot::sync_agent_ui_queue(
                     state,
                     streams,
                     persistence,

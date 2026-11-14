@@ -15,7 +15,7 @@ impl DetailComposer {
         Self(Box::new(Lx::composer()))
     }
 
-    /// Agents 追问：纯文本编辑，不打开 `@` / `/` / 路径粘贴面板。
+    /// Agents 追问：开启最小 `@`（4 Tab、朴素插入）；`/` / 路径粘贴 / markdown 面板保持关闭。
     pub fn new_agent() -> Self {
         Self(Box::new(Lx::agent_composer()))
     }

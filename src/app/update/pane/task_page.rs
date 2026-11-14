@@ -296,7 +296,10 @@ fn apply_agent_mention_input(state: &mut AppState, pane: PaneId, command: LxInpu
                 return true;
             }
             LxInput::EnterFolder => {
-                editor.mention_enter_folder();
+                if !editor.mention_enter_folder() {
+                    // 非目录 / 非 Files / 加载态：按契约回落为换行，不能吞掉 Shift+Enter。
+                    super::apply_editor_edit(editor, command);
+                }
                 return true;
             }
             _ => {}
@@ -320,9 +323,17 @@ fn apply_agent_mention_input(state: &mut AppState, pane: PaneId, command: LxInpu
         }
     }
     if editor.mention_visible() {
-        // 面板只有状态行（扫描中 / 无匹配）：按键继续编辑过滤词，Enter 不发送半截文本。
-        super::apply_editor_edit(editor, command);
-        return true;
+        // 面板只有状态行（扫描中 / 无匹配）：Enter/Tab 不发送半截文本；
+        // 其余未消费的全局键（Ctrl+D、PgUp/PgDn、Shift+Tab）继续交给外层。
+        match command {
+            LxInput::Enter | LxInput::Tab => return true,
+            _ => {
+                if super::apply_editor_edit(editor, command) {
+                    return true;
+                }
+                return false;
+            }
+        }
     }
     false
 }
@@ -667,7 +678,7 @@ fn leave_agent_edit(state: &mut AppState, pane: PaneId) -> bool {
 
 /// 提交追问：成功后清空草稿但留在编辑态。
 fn submit_agent_edit(state: &mut AppState, pane: PaneId) -> bool {
-    let (agent_id, text, closed, running, mode, session_id) = {
+    let (agent_id, text, closed, running, pending_steers, mode, session_id) = {
         let Some(target) = state.pane_anywhere(pane) else {
             return false;
         };
@@ -686,12 +697,14 @@ fn submit_agent_edit(state: &mut AppState, pane: PaneId) -> bool {
         let run = target.lx.agents.by_agent(&agent_id);
         let closed = run.is_some_and(|run| run.status == "cancelled");
         let running = run.is_some_and(|run| run.status == "running");
+        let pending_steers = run.map_or(0, |run| run.chat.pending_steers.len());
         let mode = target.lx.agents.reply_mode(&agent_id);
         (
             agent_id,
             text,
             closed,
             running,
+            pending_steers,
             mode,
             target.lx.chat.session_id.clone(),
         )
@@ -714,6 +727,33 @@ fn submit_agent_edit(state: &mut AppState, pane: PaneId) -> bool {
     }
     if running {
         // 子轮仍在输出：作为轮内 steer 注入；不新起私聊/汇报轮。
+        // 先在提交侧拦截，避免 effect 被拒后草稿已经清空。
+        if text.len() > crate::db::chat::MAX_MESSAGE_BYTES {
+            crate::app::update::show_lx_toast(
+                state,
+                pane,
+                crate::app::toast::Toast::new(
+                    crate::app::toast::ToastKind::Warning,
+                    crate::ui::text::LX_STEER_TEXT_LIMIT.to_string(),
+                    Some(pane),
+                    std::time::Instant::now(),
+                ),
+            );
+            return true;
+        }
+        if pending_steers >= crate::app::state::lx::chat::steer::MAX_PENDING_STEERS {
+            crate::app::update::show_lx_toast(
+                state,
+                pane,
+                crate::app::toast::Toast::new(
+                    crate::app::toast::ToastKind::Warning,
+                    crate::ui::text::LX_STEER_TOO_MANY.to_string(),
+                    Some(pane),
+                    std::time::Instant::now(),
+                ),
+            );
+            return true;
+        }
         state
             .effects
             .push(crate::app::effects::Effect::SteerSubagent {

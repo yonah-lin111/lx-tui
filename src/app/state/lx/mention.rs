@@ -474,6 +474,13 @@ impl LxMention {
         Some((self.generation, root))
     }
 
+    /// 结果因归属切换被丢弃时清掉在途标记；不写缓存，原编辑器下次可重新扫描。
+    pub fn abandon_scan(&mut self, generation: u64, root: &Path) {
+        if self.pending && self.generation == generation && self.root.as_deref() == Some(root) {
+            self.pending = false;
+        }
+    }
+
     /// 写入扫描结果；代号或根不匹配（过期）时丢弃；返回是否采纳。
     pub fn apply_entries(
         &mut self,
@@ -761,6 +768,9 @@ impl LxMention {
         text: &str,
         cursor: usize,
     ) {
+        if self.skills == skills {
+            return;
+        }
         self.skills = skills;
         self.refresh(text, cursor);
     }
@@ -770,8 +780,16 @@ impl LxMention {
         &self.mcp_servers
     }
 
+    /// 当前已禁用的 MCP server 集合；Agents composer 同步上下文时复制。
+    pub fn disabled_mcp_servers(&self) -> &std::collections::BTreeSet<String> {
+        &self.disabled_mcp_servers
+    }
+
     /// 写入当前可用 MCP server；有打开的 `@` 面板时立即重算候选。
     pub fn set_mcp_servers(&mut self, servers: Vec<McpMentionEntry>, text: &str, cursor: usize) {
+        if self.mcp_servers == servers {
+            return;
+        }
         self.mcp_servers = servers;
         self.refresh(text, cursor);
     }
@@ -783,6 +801,9 @@ impl LxMention {
         text: &str,
         cursor: usize,
     ) {
+        if self.disabled_mcp_servers == disabled {
+            return;
+        }
         self.disabled_mcp_servers = disabled;
         self.refresh(text, cursor);
     }
