@@ -523,7 +523,7 @@ pub struct AgentListItem<'a> {
     pub pane_id: PaneId,
     pub kind: SidebarAgentKind,
     pub state: AgentState,
-    /// 第二行标题：内存覆盖优先，其次会话标题 / 终端 OSC 标题。
+    /// 第二行标题：只来自内存覆盖（Recent 页快照或自定义输入），无覆盖为 None。
     pub title: Option<&'a str>,
     /// 标题绑定页的模板状态（与 Prompt Recent 状态色一致）；自定义标题为 None。
     pub status: Option<TemplateStatus>,
@@ -538,7 +538,8 @@ pub fn agent_items<'a>(state: &'a AppState) -> Vec<AgentListItem<'a>> {
             let title = state
                 .pane_anywhere(entry.pane_id)
                 .and_then(|pane| pane.agent_display_title(entry.kind));
-            let status = state.agent_title_status(entry.pane_id, entry.kind);
+            let status =
+                state.agent_title_status(state.active_workspace, entry.pane_id, entry.kind);
             AgentListItem {
                 tab_index: entry.tab_index,
                 pane_index: entry.pane_index,
@@ -590,10 +591,17 @@ fn agent_visible_items(list: Rect) -> usize {
 }
 
 /// Agents 实际渲染区：高度向下取偶，避免底部出现半个条目。
+///
+/// 高度不足 2 行时连一个完整条目都放不下，按 0 行处理；否则会出现
+/// “ratatui 不渲染、命中层却仍可点”的幽灵条目。
 fn agent_content_rect(list: Rect) -> Rect {
-    let height = u16::try_from(agent_visible_items(list).saturating_mul(2))
-        .unwrap_or(u16::MAX)
-        .min(list.height);
+    let height = if list.height < 2 {
+        0
+    } else {
+        u16::try_from(agent_visible_items(list).saturating_mul(2))
+            .unwrap_or(u16::MAX)
+            .min(list.height)
+    };
     Rect { height, ..list }
 }
 
@@ -752,13 +760,8 @@ fn agent_list_items<'a>(
         let prefix = text::agent::TREE_LEAF;
         let title = text::ellipsize_width(title, width.saturating_sub(prefix.width()));
         let title_padding = width.saturating_sub(prefix.width() + title.width());
-        // 标题状态色与 Prompt 抽屉的 Recent 一致：todo 亮白、in_progress 黄、
-        // done 绿、无状态或无绑定压暗；悬停只叠加底色，不覆盖状态前景色。
-        let title_style = match item.status {
-            Some(TemplateStatus::Todo) => style::text(),
-            Some(status) => style::template_status(status),
-            None => style::muted(),
-        };
+        // 标题状态色与 Prompt 抽屉的 Recent 一致；悬停只叠加底色，不覆盖状态前景色。
+        let title_style = style::template_page_title(item.status);
         lines.push(Line::from(vec![
             Span::styled(prefix, style::muted().patch(highlight)),
             Span::styled(title, highlight.patch(title_style)),

@@ -3,6 +3,10 @@
 use super::*;
 use std::path::Path;
 
+use crate::app::markdown::TemplateStatus;
+use crate::app::prompt::{PromptItem, PromptPage, PromptPageId, PromptTree};
+use crate::app::state::{AgentPromptRef, AgentTitleOverride, AiWebSite, LxEntry, SidebarAgentKind};
+
 #[test]
 fn demo_state_has_expected_shape() {
     let state = AppState::demo();
@@ -29,6 +33,95 @@ fn path_tail_two_keeps_last_two_segments_with_fallbacks() {
     assert_eq!(path_tail_two(Path::new("/lx-tui")), "lx-tui", "单段用全部");
     assert_eq!(path_tail_two(Path::new("/a/b/c/d")), "c/d", "只取末两段");
     assert_eq!(path_tail_two(Path::new("/")), "/", "无段回退完整路径");
+}
+
+#[test]
+fn agent_title_status_resolves_the_entry_workspace() {
+    fn seed_page(workspace: &mut Workspace, item_id: i64, page_id: i64, content: &str) {
+        let page = PromptPage::saved_at(page_id, "Status page", content, 100);
+        let item = PromptItem {
+            id: item_id,
+            folder_id: None,
+            name: "Prompt".to_string(),
+            active_page: page.id,
+            pages: vec![page],
+        };
+        workspace.prompt_panel.tree = PromptTree::new();
+        workspace.prompt_panel.tree.replace(Vec::new(), vec![item]);
+    }
+
+    let mut state = AppState::demo();
+    let first_pane = state.active_tab().layout.focus();
+    state
+        .pane_mut_anywhere(first_pane)
+        .expect("pane")
+        .lx
+        .chat
+        .session_id = Some("first".to_string());
+    seed_page(
+        state.active_workspace_mut(),
+        7,
+        9,
+        "&&& addTemplate --start\n{title: First}\n&&& addTemplate --end done",
+    );
+    let kind = SidebarAgentKind::Lx {
+        entry: LxEntry::Native,
+        ai_web_site: AiWebSite::Deepseek,
+    };
+    state
+        .pane_mut_anywhere(first_pane)
+        .expect("pane")
+        .set_agent_title_override(
+            kind,
+            Some(AgentTitleOverride {
+                text: "First".to_string(),
+                prompt: Some(AgentPromptRef {
+                    item_id: 7,
+                    page_id: PromptPageId::Saved(9),
+                }),
+            }),
+        );
+
+    state.workspaces.push(Workspace::single_terminal(
+        "second".to_string(),
+        Some(PathBuf::from("/second")),
+    ));
+    let second_pane = state.workspaces[1].tabs[0].layout.focus();
+    state
+        .pane_mut_anywhere(second_pane)
+        .expect("pane")
+        .lx
+        .chat
+        .session_id = Some("second".to_string());
+    seed_page(
+        &mut state.workspaces[1],
+        8,
+        8,
+        "&&& addTemplate --start\n{title: Second}\n&&& addTemplate --end in_progress",
+    );
+    state
+        .pane_mut_anywhere(second_pane)
+        .expect("pane")
+        .set_agent_title_override(
+            kind,
+            Some(AgentTitleOverride {
+                text: "Second".to_string(),
+                prompt: Some(AgentPromptRef {
+                    item_id: 8,
+                    page_id: PromptPageId::Saved(8),
+                }),
+            }),
+        );
+
+    assert_eq!(
+        state.agent_title_status(0, first_pane, kind),
+        Some(TemplateStatus::Done)
+    );
+    assert_eq!(
+        state.agent_title_status(1, second_pane, kind),
+        Some(TemplateStatus::InProgress),
+        "必须用条目所属工作区的 Prompt 面板解析"
+    );
 }
 
 #[test]

@@ -4,12 +4,27 @@
 //! 绑定页也只在打开时保存页标题快照，后续改名不自动跟随。
 
 use crate::app::actions::OverlayKey;
-use crate::app::overlay::{AgentTitleDialog, Overlay, TextInput};
+use crate::app::overlay::{AgentTitleDialog, Overlay, OverlayTarget, TextInput};
 use crate::app::state::{AgentPromptRef, AgentTitleOverride, AppState, SidebarAgentKind};
 use crate::tiling::PaneId;
 
 use super::menu::close_overlay;
 use super::prompt::prompt_recent_rows_for_workspace;
+
+/// 会话身份变化后关闭指向该窗格的 Agent 菜单/标题弹窗，避免动作落到新会话。
+pub fn close_agent_overlays_for_pane(state: &mut AppState, pane: PaneId) {
+    let targeted = match state.overlay.as_ref() {
+        Some(Overlay::Menu(menu)) => matches!(
+            &menu.target,
+            OverlayTarget::Agent { pane: target, .. } if *target == pane
+        ),
+        Some(Overlay::AgentTitle(dialog)) => dialog.pane == pane,
+        _ => false,
+    };
+    if targeted {
+        state.overlay = None;
+    }
+}
 
 /// 打开 Agents 标题编辑弹窗：预填当前标题与绑定，并快照目标工作区的 Recent 页。
 pub fn open_agent_title_dialog(
@@ -19,6 +34,15 @@ pub fn open_agent_title_dialog(
     pane: PaneId,
     kind: SidebarAgentKind,
 ) {
+    let target_accepts = state
+        .workspaces
+        .get(workspace)
+        .and_then(|workspace_state| workspace_state.tabs.get(tab))
+        .and_then(|tab_state| tab_state.pane(pane))
+        .is_some_and(|pane_state| pane_state.accepts_agent_title(kind));
+    if !target_accepts {
+        return;
+    }
     let current = state
         .workspaces
         .get(workspace)
@@ -52,10 +76,11 @@ pub fn agent_title_prompt(
         .pane(pane)?
         .agent_title_override(kind)?
         .prompt?;
-    prompt_page_exists(state, workspace, prompt).then_some(prompt)
+    (prompt.page_id.saved().is_some() && prompt_page_exists(state, workspace, prompt))
+        .then_some(prompt)
 }
 
-/// 取消 Recent 绑定并清空标题覆盖，第二行回到 `(no title)`。
+/// 移除标题覆盖（含 Recent 绑定），第二行回到 `(no title)`。
 pub fn remove_agent_title(
     state: &mut AppState,
     workspace: usize,
@@ -152,24 +177,38 @@ pub fn clear_agent_title_input(state: &mut AppState) -> bool {
 
 /// 提交标题：空输入清除覆盖；有效绑定保留 Recent 页引用，否则存为自定义标题。
 pub fn commit_agent_title(state: &mut AppState) {
+    let Some(Overlay::AgentTitle(dialog)) = state.overlay.as_ref() else {
+        return;
+    };
+    let (workspace, tab, pane, kind) = (dialog.workspace, dialog.tab, dialog.pane, dialog.kind);
+    let target_accepts = state
+        .workspaces
+        .get(workspace)
+        .and_then(|workspace_state| workspace_state.tabs.get(tab))
+        .and_then(|tab_state| tab_state.pane(pane))
+        .is_some_and(|pane_state| pane_state.accepts_agent_title(kind));
+    if !target_accepts {
+        // 目标已关闭 / 会话已结束 / 终端换了 Agent：保留弹窗，避免静默吞掉输入。
+        return;
+    }
     let Some(Overlay::AgentTitle(dialog)) = state.overlay.take() else {
         return;
     };
     let text = dialog.input.text().trim().to_string();
     let binding = dialog
         .binding
-        .filter(|prompt| prompt_page_exists(state, dialog.workspace, *prompt));
+        .filter(|prompt| prompt_page_exists(state, workspace, *prompt));
     let title = (!text.is_empty()).then_some(AgentTitleOverride {
         text,
         prompt: binding,
     });
     if let Some(pane_state) = state
         .workspaces
-        .get_mut(dialog.workspace)
-        .and_then(|workspace_state| workspace_state.tabs.get_mut(dialog.tab))
-        .and_then(|tab_state| tab_state.pane_mut(dialog.pane))
+        .get_mut(workspace)
+        .and_then(|workspace_state| workspace_state.tabs.get_mut(tab))
+        .and_then(|tab_state| tab_state.pane_mut(pane))
     {
-        pane_state.set_agent_title_override(dialog.kind, title);
+        pane_state.set_agent_title_override(kind, title);
     }
 }
 
@@ -192,8 +231,7 @@ pub fn open_agent_prompt(
     if state.prompt_pinned.is_some() {
         super::release_prompt_pin(state);
     }
-    if state.prompt_workspace() != workspace {
-        return false;
-    }
+    // 释放钉住后 Prompt 面板必然回到活动工作区；绑定页也已在上面校验为
+    // 存在且已入库，因此这里可以直接打开。
     super::open_prompt_page(state, prompt.item_id, prompt.page_id)
 }

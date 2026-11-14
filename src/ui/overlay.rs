@@ -9,8 +9,7 @@ pub mod save_draft;
 mod worktree;
 
 pub use agent_title::{
-    AgentTitleButton, agent_title_button_at, agent_title_max_rows, agent_title_row_at,
-    agent_title_shell, agent_title_visible_start,
+    AgentTitleButton, agent_title_button_at, agent_title_row_at, agent_title_shell,
 };
 pub use connect::{
     CONNECT_HEIGHT, CONNECT_WIDTH, ConnectLayout, connect_layout, connect_row_at, render_connect,
@@ -52,7 +51,7 @@ use crate::ui::widgets;
 pub fn render(frame: &mut Frame<'_>, screen: Rect, state: &AppState) -> Option<(u16, u16)> {
     match state.overlay.as_ref()? {
         Overlay::Menu(menu_state) => {
-            let labels = menu::menu_labels(state, menu_state);
+            let labels = menu::menu_labels(menu_state);
             let title = menu::menu_title(state, menu_state);
             let layout = widgets::menu::layout(screen, menu_state.anchor, &title, &labels);
             let selected = state.menu_hover.then_some(menu_state.selected);

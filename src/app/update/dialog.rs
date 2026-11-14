@@ -536,6 +536,7 @@ pub fn apply_overlay_paste(state: &mut AppState, text: &str) -> bool {
                     .selection()
                     .is_some_and(|(start, end)| start == 0 && end == current.chars().count())
         };
+        let before = input.text().to_string();
         let inserted = if whole_replace {
             let normalized = crate::platform::normalize_pasted_path_input(text);
             // 纯引号/空 URI 归一化后没有有效路径：吞掉粘贴，不插入字面量 `''`。
@@ -555,7 +556,9 @@ pub fn apply_overlay_paste(state: &mut AppState, text: &str) -> bool {
             Overlay::ResumeSessionEdit(edit) => edit.hint = None,
             Overlay::WorktreeOpen(dialog) => dialog.normalize_selection(),
             Overlay::Connect(panel) => panel.clear_error(),
-            Overlay::AgentTitle(dialog) if inserted => dialog.mark_custom(),
+            Overlay::AgentTitle(dialog) if inserted && dialog.input.text() != before => {
+                dialog.mark_custom();
+            }
             _ => {}
         }
         (

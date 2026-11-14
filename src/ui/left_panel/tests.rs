@@ -901,6 +901,32 @@ fn agent_title_uses_recent_template_status_colors() {
 }
 
 #[test]
+fn sidebar_title_status_follows_live_edited_page() {
+    let mut state = state_with_bound_title(Some(TemplateStatus::Todo));
+    let panel = &mut state.active_workspace_mut().prompt_panel;
+    panel.mode = crate::app::prompt::PromptMode::Editor;
+    panel.editing = Some(crate::app::prompt::PromptEditing::Item(7));
+    state.prompt.set_text(
+        "&&& addTemplate --start\n{title: Auth Flow}\n- body\n&&& addTemplate --end in_progress",
+    );
+
+    let (fg, _, _) = agent_title_cell(&state);
+    assert_eq!(fg, Color::Yellow, "侧栏应读取正在编辑页的实时状态");
+}
+
+#[test]
+fn one_row_agents_area_has_no_hit_slot() {
+    assert_eq!(agent_content_rect(Rect::new(0, 0, 20, 1)).height, 0);
+    assert_eq!(agent_content_rect(Rect::new(0, 0, 20, 2)).height, 2);
+    let state = AppState::demo();
+    assert_eq!(
+        agent_scrollbar_for(Rect::new(0, 0, 20, 1), &state, 3),
+        None,
+        "没有完整条目槽位时不画滚动条"
+    );
+}
+
+#[test]
 fn hovered_agent_title_keeps_status_color_over_selection() {
     let mut state = state_with_bound_title(Some(TemplateStatus::InProgress));
     state.agent_hover = Some(0);

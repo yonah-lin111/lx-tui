@@ -880,6 +880,7 @@ impl AppState {
     /// 无绑定、绑定页已删除或无 `&&&` 模板块时返回 None。
     pub fn agent_title_status(
         &self,
+        workspace: usize,
         pane: PaneId,
         kind: SidebarAgentKind,
     ) -> Option<crate::app::markdown::TemplateStatus> {
@@ -887,7 +888,6 @@ impl AppState {
             .pane_anywhere(pane)?
             .agent_title_override(kind)?
             .prompt?;
-        let workspace = self.active_workspace;
         let panel = &self.workspaces.get(workspace)?.prompt_panel;
         let item = panel.tree.item(prompt.item_id)?;
         let page = item.page(prompt.page_id)?;

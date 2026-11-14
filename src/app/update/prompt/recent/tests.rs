@@ -154,6 +154,29 @@ fn open_prompt_page_switches_exact_item_and_page() {
 }
 
 #[test]
+fn opening_current_page_expands_collapsed_prompt() {
+    let mut state = demo_state();
+    assert!(open_prompt_page(&mut state, 10, PromptPageId::Saved(10)));
+    state.prompt_collapsed = true;
+
+    assert!(open_prompt_page(&mut state, 10, PromptPageId::Saved(10)));
+
+    assert!(!state.prompt_collapsed, "当前页也要展开折叠的 Prompt 面板");
+    assert!(state.prompt_focused());
+}
+
+#[test]
+fn open_prompt_page_rejects_missing_and_temp_pages() {
+    let mut state = demo_state();
+    let editing = state.workspaces[0].prompt_panel.editing;
+
+    assert!(!open_prompt_page(&mut state, 10, PromptPageId::Temp(1)));
+    assert!(!open_prompt_page(&mut state, 99, PromptPageId::Saved(99)));
+
+    assert_eq!(state.workspaces[0].prompt_panel.editing, editing);
+}
+
+#[test]
 fn selecting_current_page_closes_without_reload() {
     let mut state = demo_state();
     state.workspaces[0].prompt_panel.recent_open = true;

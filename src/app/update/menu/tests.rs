@@ -6,7 +6,8 @@ use crate::app::actions::OverlayKey;
 use crate::app::prompt::{PromptItem, PromptPage, PromptPageId, PromptTree};
 use crate::app::state::{AgentPromptRef, AgentTitleOverride, AiWebSite, ChatMessageView, LxEntry};
 use crate::app::update::{
-    apply_overlay_key, clear_agent_title_input, new_session, update_pane_agent,
+    apply_overlay_key, apply_overlay_paste, clear_agent_title_input, new_session,
+    on_session_loaded_full, update_pane_agent,
 };
 use crate::detect::{AgentKind, AgentState, PaneAgentSnapshot};
 
@@ -164,6 +165,7 @@ fn lx_agent_menu_offers_edit_and_close_without_binding() {
                 tab: 0,
                 pane,
                 kind: lx_kind(),
+                bound: false,
             }
         ),
         _ => panic!("expected menu overlay"),
@@ -910,4 +912,228 @@ fn close_agent_requires_confirmation_but_edit_title_does_not() {
     assert!(MenuCommand::RemoveAgentTitle.requires_confirm());
     assert!(!MenuCommand::EditAgentTitle.requires_confirm());
     assert!(!MenuCommand::OpenPrompt.requires_confirm());
+}
+
+#[test]
+fn session_switch_closes_agent_menu_and_title_dialog() {
+    let mut state = AppState::demo();
+    let pane = state.active_tab().layout.focus();
+    set_lx_session(&mut state, pane, "session-a");
+    open_agent_menu(&mut state, 0, (0, 0));
+    assert!(matches!(state.overlay, Some(Overlay::Menu(_))));
+
+    on_session_loaded_full(&mut state, pane, "session-b", &[], &[], 0, None);
+
+    assert!(state.overlay.is_none(), "会话切换后旧菜单必须关闭");
+
+    open_agent_title_dialog(&mut state, 0, 0, pane, lx_kind());
+    assert!(matches!(state.overlay, Some(Overlay::AgentTitle(_))));
+
+    on_session_loaded_full(&mut state, pane, "session-c", &[], &[], 0, None);
+
+    assert!(state.overlay.is_none(), "会话切换后旧标题弹窗必须关闭");
+}
+
+#[test]
+fn terminal_kind_change_closes_agent_menu() {
+    let mut state = AppState::demo();
+    let pane = state.active_tab().layout.focus();
+    update_pane_agent(
+        &mut state,
+        pane,
+        Some(snapshot(AgentKind::Claude, AgentState::Idle, None)),
+    );
+    let index = agent_entry_index(&state, pane, SidebarAgentKind::Terminal(AgentKind::Claude));
+    open_agent_menu(&mut state, index, (0, 0));
+    assert!(matches!(state.overlay, Some(Overlay::Menu(_))));
+
+    update_pane_agent(
+        &mut state,
+        pane,
+        Some(snapshot(AgentKind::Codex, AgentState::Idle, None)),
+    );
+
+    assert!(state.overlay.is_none(), "终端换 Agent 后旧菜单必须关闭");
+}
+
+#[test]
+fn commit_after_target_lost_keeps_dialog_and_does_not_write_title() {
+    let mut state = AppState::demo();
+    let pane = state.active_tab().layout.focus();
+    set_lx_session(&mut state, pane, "session-a");
+    open_agent_title_dialog(&mut state, 0, 0, pane, lx_kind());
+    state
+        .pane_mut_anywhere(pane)
+        .expect("pane")
+        .lx
+        .chat
+        .session_id = None;
+
+    apply_overlay_key(&mut state, OverlayKey::Enter);
+
+    assert!(
+        matches!(state.overlay, Some(Overlay::AgentTitle(_))),
+        "目标失效时保留弹窗，避免静默丢弃输入"
+    );
+    assert_eq!(
+        state
+            .pane_anywhere(pane)
+            .expect("pane")
+            .lx
+            .chat
+            .agent_title_override,
+        None
+    );
+}
+
+#[test]
+fn pasting_same_bound_title_keeps_recent_binding() {
+    let mut state = AppState::demo();
+    let pane = state.active_tab().layout.focus();
+    set_lx_session(&mut state, pane, "session-1");
+    seed_recent_page(
+        &mut state,
+        7,
+        "Backend Prompt",
+        9,
+        "Auth Flow",
+        "Auth content",
+    );
+    open_agent_title_dialog(&mut state, 0, 0, pane, lx_kind());
+    assert!(crate::app::update::move_agent_title_selection(
+        &mut state, 1
+    ));
+    if let Some(Overlay::AgentTitle(dialog)) = state.overlay.as_mut() {
+        dialog.input.select_all();
+    }
+
+    assert!(apply_overlay_paste(&mut state, "Auth Flow"));
+
+    let Some(Overlay::AgentTitle(dialog)) = state.overlay.as_ref() else {
+        panic!("title dialog expected");
+    };
+    assert_eq!(
+        dialog.binding,
+        Some(AgentPromptRef {
+            item_id: 7,
+            page_id: PromptPageId::Saved(9)
+        }),
+        "文本未变化时不得解除 Recent 绑定"
+    );
+    assert_eq!(dialog.selected, Some(0));
+}
+
+#[test]
+fn escape_cancels_title_dialog_without_committing() {
+    let mut state = AppState::demo();
+    let pane = state.active_tab().layout.focus();
+    set_lx_session(&mut state, pane, "session-1");
+    open_agent_title_dialog(&mut state, 0, 0, pane, lx_kind());
+    if let Some(Overlay::AgentTitle(dialog)) = state.overlay.as_mut() {
+        dialog.input = TextInput::new("Draft title");
+    }
+
+    apply_overlay_key(&mut state, OverlayKey::Esc);
+
+    assert!(state.overlay.is_none());
+    assert_eq!(
+        state
+            .pane_anywhere(pane)
+            .expect("pane")
+            .lx
+            .chat
+            .agent_title_override,
+        None,
+        "Esc 不得提交标题"
+    );
+}
+
+#[test]
+fn up_from_no_recent_selection_binds_last_row() {
+    let mut state = AppState::demo();
+    let pane = state.active_tab().layout.focus();
+    set_lx_session(&mut state, pane, "session-1");
+    let page_a = PromptPage::saved_at(9, "Auth Flow", "body", 100);
+    let page_b = PromptPage::saved_at(10, "Deploy Plan", "body", 200);
+    let panel = &mut state.active_workspace_mut().prompt_panel;
+    panel.tree = PromptTree::new();
+    panel.tree.replace(
+        Vec::new(),
+        vec![
+            PromptItem {
+                id: 7,
+                folder_id: None,
+                name: "Backend Prompt".to_string(),
+                active_page: page_a.id,
+                pages: vec![page_a],
+            },
+            PromptItem {
+                id: 8,
+                folder_id: None,
+                name: "Release Prompt".to_string(),
+                active_page: page_b.id,
+                pages: vec![page_b],
+            },
+        ],
+    );
+    open_agent_title_dialog(&mut state, 0, 0, pane, lx_kind());
+
+    apply_overlay_key(&mut state, OverlayKey::Up);
+
+    let Some(Overlay::AgentTitle(dialog)) = state.overlay.as_ref() else {
+        panic!("title dialog expected");
+    };
+    let last = dialog.rows.len() - 1;
+    assert_eq!(dialog.selected, Some(last));
+    assert_eq!(
+        dialog.binding,
+        Some(AgentPromptRef {
+            item_id: dialog.rows[last].item_id,
+            page_id: dialog.rows[last].page_id,
+        })
+    );
+    assert_eq!(dialog.input.text(), dialog.rows[last].page_title);
+}
+
+#[test]
+fn terminal_agent_edit_title_commits_without_effects_or_snapshot_changes() {
+    let mut state = AppState::demo();
+    let pane = state.active_tab().layout.focus();
+    update_pane_agent(
+        &mut state,
+        pane,
+        Some(snapshot(
+            AgentKind::Claude,
+            AgentState::Idle,
+            Some("Claude OSC"),
+        )),
+    );
+    let index = agent_entry_index(&state, pane, SidebarAgentKind::Terminal(AgentKind::Claude));
+    open_agent_menu(&mut state, index, (0, 0));
+    select_command(&mut state, MenuCommand::EditAgentTitle);
+    activate_menu(&mut state);
+    let Some(Overlay::AgentTitle(dialog)) = state.overlay.as_mut() else {
+        panic!("title dialog expected");
+    };
+    dialog.input = TextInput::new("Terminal title");
+
+    apply_overlay_key(&mut state, OverlayKey::Enter);
+
+    let target = state.pane_anywhere(pane).expect("pane");
+    assert_eq!(
+        target.terminal_agent_title,
+        Some((
+            AgentKind::Claude,
+            AgentTitleOverride::custom("Terminal title")
+        ))
+    );
+    assert_eq!(
+        target
+            .agent
+            .as_ref()
+            .and_then(|snapshot| snapshot.title.as_deref()),
+        Some("Claude OSC"),
+        "不得修改终端 OSC 快照"
+    );
+    assert!(state.effects.is_empty(), "标题编辑不得产生任何 Effect");
 }

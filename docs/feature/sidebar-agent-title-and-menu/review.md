@@ -1,166 +1,189 @@
-# 侧栏 Agents 标题与右键菜单 — 实现记录
+# 侧栏 Agents 标题与右键菜单 — 审查记录
 
 > 设计：[design.md](design.md) ｜ 任务：[task.md](task.md)
 > 分支：`feat/sidebar-agent-title-and-menu` ｜ 工作树：`.worktrees/sidebar-agent-title-and-menu`
+> 审查范围：`dev..HEAD` 的 6 个提交（`6ba04d88`、`179389d8`、`f836e21c`、`7284e1d6`、`95e567e5`、`a97a64f0`）
+> 审查方式：Codegraph / Codebase Memory 结构核对、逐文件静态审查、专项测试与全量 `cargo test --lib`、3 个并行只读审查子任务。
 
-## 1. 落地范围
+## 1. 关键结论
 
-| 决策 | 实现 |
-|---|---|
-| D1 `Delete` → `Close` | 菜单命令 `MenuCommand::CloseAgent`，文案 `Close`，只关闭不删内容 |
-| D2 lx Close | 复用 `update::new_session`：停流、解绑会话、回欢迎页；DB 历史保留 |
-| D3 终端 Close | 复用 `close_pane`：关闭目标窗格并结束进程 |
-| D4 两端都可编辑标题 | `EditAgentTitle` 对 lx / 终端均提供 |
-| D5 纯内存 | `LxChat.agent_title_override` 与 `Pane.terminal_agent_title`，不写 DB、不改真实标题 |
-| D6 默认标题 | lx 取 `chat.session_title`；终端取 `PaneAgentSnapshot.title` |
-| D7 空标题 | 第二行显示 `(no title)`；空输入清除覆盖 |
-| D8 覆盖生命周期 | 会话重置/切换、Agent 退出/种类变化、窗格关闭时清除；重启丢失 |
-| D9 行内二次确认 | `CloseAgent` 进入 `requires_confirm`；`Confirm close` |
-| D10 `[T1 P1]` | `text::agent_location(tab_index, pane_index)`，两者 0 基入参、显示 +1 |
-| D11 唯一窗格保护 | 终端 Agent 是 tab 唯一窗格时菜单只有 `Edit title` |
-| D12 编辑交互 | 复用 `Overlay::Rename` 居中单行输入 |
-| D13 生成中可关闭 | `new_session` 内部先 `stop_stream` |
-| D14 覆盖优先 | `Pane::agent_display_title` 覆盖优先，清除后回落实时默认标题 |
+- **主路径成立**：Agents 每个条目固定两行；标题只来自 Recent 页绑定或自定义输入，不写 DB、不改 `session_title`、不改终端 OSC 标题、不影响 `/resume` 与标题胶囊。
+- **生命周期基本闭环**：`/new`、删除会话、会话切换、AI Web 站点切换、终端 Agent 退出/种类变化、窗格关闭都会清空覆盖；重启丢失。
+- **菜单与弹窗闭环**：`Edit title` → 标题弹窗；有效绑定追加 `Open prompt`；有覆盖追加 `Unbind recent` / `Remove title`；`Close` 与移除项均需行内二次确认。
+- **主要风险不在功能主路径，而在状态身份竞态与文档漂移**：菜单/弹窗打开期间会话被异步切换，动作可能落到新会话；V1 设计段落与最终 V2 实现互相矛盾。
+- **未发现 P0**（无崩溃、数据丢失、越权写库或安全边界破坏）。
 
-## 2. 生产代码变更
+## 2. 问题清单（按 P0 → P3）
 
-```text
-src/app/overlay.rs               OverlayTarget::Agent / MenuCommand::{EditAgentTitle, CloseAgent} /
-                                 RenameTarget::AgentTitle / CloseAgent 行内确认
-src/app/state.rs                 agent_entries 枚举 pane_index
-src/app/state/pane.rs            SidebarAgentEntry.pane_index、Pane.terminal_agent_title、
-                                 agent_display_title / set_agent_title_override
-src/app/state/lx/chat.rs         LxChat.agent_title_override 初始化与 reset 清理
-src/app/update/pane.rs           update_pane_agent 在 AgentKind 变化/退出时清空终端覆盖
-src/app/update/chat/session.rs   on_session_loaded_full 会话切换清空 lx 覆盖
-src/app/update/menu.rs           open_agent_menu / close_agent / activate_menu 分支
-src/app/update/dialog.rs         commit_rename 支持 AgentTitle 空值清除
-src/ui/left_panel/mod.rs         两行条目、[T1 P1]、条目槽位滚动/命中模型
-src/ui/overlay/menu.rs           Agent 菜单标题与命令文案
-src/ui/overlay/dialog.rs         Agent 重命名浮层标题
-src/ui/text/workspace.rs         agent_location(tab, pane)、AGENT_NO_TITLE、菜单/重命名文案
-src/ui/main_content/tests.rs     Pane 字面量补 terminal_agent_title
-src/event/overlay.rs             右键 Agents 条目打开 Agent 菜单
-```
+### P0 — 阻断
 
-测试新增/修改：
+无。
 
-```text
-src/app/state/pane/tests.rs           10 项：标题解析、覆盖优先级、生命周期、kind 切换清理
-src/app/update/menu/tests.rs          13 项：菜单命令集合、二次确认、关闭分派、重命名提交
-src/app/update/chat/tests/session.rs  1 项：同会话重载保留覆盖、切会话清空覆盖
-src/ui/left_panel/tests.rs            两行渲染、[T1 P1]、命中、悬停、奇数高度、窄侧栏、CJK 截断
-src/ui/text/tests.rs                  agent_location 格式与新增英文文案
-src/event/tests/agent_menu.rs         6 项：两行右键、唯一窗格无 Close、左键跳转、滚动后命中
-src/event/tests/mouse_click.rs        双条目点击行偏移改为 +2，并覆盖标题行点击
-```
+### P1 — 必须修复
 
-## 3. 与设计的偏差
+#### P1-1（已修复）`Open prompt` 在绑定页已是当前页时不会展开折叠的 Prompt 面板
 
-1. **`pane_index` 存储改为 0 基**：设计写的是 1 基存储。实现改为与 `tab_index` 一致的下标语义（0 基），由 `agent_location` 统一 +1 显示。
-   - 原因：避免 `agent_location(tab_index, pane_index)` 一个 0 基、一个 1 基的隐性约定；测试与调用方直接传条目字段即可。
-   - 显示结果不变：首窗格仍为 `[T1 P1]`。
-2. **新增 `RENAME_AGENT_TITLE`**：设计只要求复用 Rename 浮层，未指定浮层标题；实现为 `Edit title`。
-3. **`set_lx_entry` 的注释修正**：设计假设所有入口切换都会 `reset_session_view`。实际 Native/Hybrid/Automation 互切保留同一会话，因此侧栏覆盖会保留；AI Web 跨越或站点切换仍会重置并清空。该行为符合 D8（只有会话关闭/切换才清除）。
-4. **UI 测试文件行数**：`src/ui/left_panel/tests.rs` 从 819 行增至 1140 行，低于 1500 行上限，未再拆分。
+- **位置**：`src/app/update/prompt/recent.rs` 当前页短路分支。
+- **现象**：Prompt 面板折叠、绑定页恰好是当前编辑页时，点击 `Open prompt` 只切换焦点和视图，不展开面板；焦点落到不可见的编辑器。
+- **错误原因**：当前页分支只设置 `PromptMode::Editor`、`focus_prompt` 并关闭抽屉，没有执行非当前页分支里的 `state.prompt_collapsed = false`。
+- **修复**：当前页分支同样展开面板；补“折叠 + 当前页”回归测试。
 
-## 4. 验证结果
+#### P1-2（已修复）Lx 标题清除被 `has_active_session()` 绑死，临时态可留下无法清除的覆盖
+
+- **位置**：`src/app/state/pane.rs::set_agent_title_override`、`src/app/update/pane.rs::set_lx_entry`。
+- **现象**：`has_active_session()` 包含 `loading_session` / `Committing` / shell 等无稳定 `session_id` 的临时态，允许写入标题；条目消失后清除分支同样被该判断拒绝。加载失败或跨入口清除 `loading_session` 后，旧标题可能留到下一次未重置的会话。
+- **错误原因**：同一个“目标仍可写”判断同时用于设置与清除；`set_lx_entry` 跨 AI Web 时只在 `incompatible` 时重置，没有独立清理标题。
+- **修复**：设置要求目标可接受标题，清除无条件生效；跨 AI Web 入口切换直接清空 lx 标题覆盖；补无会话清除与跨入口清理测试。
+
+#### P1-3（已修复）菜单/标题弹窗打开期间会话切换，动作会落到新会话
+
+- **位置**：`src/app/overlay.rs::OverlayTarget::Agent`、`src/app/update/menu.rs::close_agent`、`src/app/update/chat/session.rs::on_session_loaded_full`、`src/app/update/pane.rs::update_pane_agent`。
+- **现象**：在会话 A 上打开 `Close` 菜单或标题弹窗，异步 `/resume` 到 B 完成后，目标校验只比较 `tab/pane/kind`，仍会通过；再次确认 `Close` 会关闭 B（生成中还会停流），标题也会写到 B。
+- **错误原因**：`OverlayTarget::Agent` 没有会话身份；菜单/弹窗没有在会话切换时失效。
+- **修复**：会话实际切换、终端 Agent 种类变化时关闭指向该窗格的 Agent 菜单/标题弹窗；补 A→B 切换后菜单与弹窗均已失效的测试。
+
+#### P1-4（已修复）`commit_agent_title` 先吞掉弹窗，目标失效时静默丢弃输入
+
+- **位置**：`src/app/update/agent_title.rs::commit_agent_title`。
+- **现象**：弹窗打开后窗格关闭、lx 会话结束或终端 Agent 换 kind，按 Enter 仍会关闭弹窗，但标题未保存且无任何反馈。
+- **错误原因**：函数开头直接 `state.overlay.take()`，之后才查找目标；失败分支没有恢复或提示。
+- **修复**：提交前校验目标仍存在且接受该 Agent 标题；失败时保留弹窗，让用户可取消或改目标；补目标失效时弹窗保留的测试。
+
+### P2 — 应当修复
+
+#### P2-1（已修复）全选后粘贴与当前标题相同的文本会解除 Recent 绑定
+
+- **位置**：`src/app/update/dialog.rs::apply_overlay_paste`。
+- **现象**：绑定 Recent 后全选并粘贴同标题，文本未变，但 `mark_custom()` 被调用，`Open prompt` 消失，移除项从 `Unbind recent` 变为 `Remove title`。
+- **错误原因**：只判断 `insert_str` 是否执行，没有比较粘贴前后文本；键盘编辑路径已经做了前后比较。
+- **修复**：粘贴前后文本不同才 `mark_custom()`；补相同文本粘贴测试。
+
+#### P2-2（已修复）`open_prompt_page` 在存在性检查前短路当前页，且不校验已入库页
+
+- **位置**：`src/app/update/prompt/recent.rs::open_prompt_page`。
+- **现象**：当前页分支只比较 `editing` 与 `active_page`，不验证 item/page 仍存在，也不拒绝 `Temp` 页；与函数注释“只接受已入库页”不符。
+- **错误原因**：重构时保留了旧 `open_recent_page` 的语义注释，但校验没有迁移到公共入口。
+- **修复**：入口先拒绝非 Saved 页并确认 item/page 存在，再做当前页短路；补不存在页与 Temp 页测试。
+
+#### P2-3（已修复）`agent_title_status` 用活动工作区的 Prompt 面板解析任意 pane 的绑定
+
+- **位置**：`src/app/state.rs::agent_title_status`。
+- **现象**：当前 UI 只查询活动工作区条目，所以未显现；但 API 一旦用于非活动条目，会把 A 工作区的 item/page id 拿到 B 工作区的树里解析，状态色错误。
+- **错误原因**：签名没有 workspace，内部固定使用 `self.active_workspace`；与其他标题 API（都显式带 workspace）不一致。
+- **修复**：签名增加 `workspace`，按条目所属工作区解析；UI 传入 `state.active_workspace`；补跨工作区状态解析测试。
+
+#### P2-4（已修复）页标题状态色映射在三处重复，Todo 特例容易漏改
+
+- **位置**：`src/ui/left_panel/mod.rs`、`src/ui/overlay/agent_title.rs`、`src/ui/right_panel/prompt/recent.rs`。
+- **现象**：三处都手写 `Todo → style::text()`、其余 `template_status`、`None → muted`；`style::template_status(Todo)` 本身返回 muted，依赖调用点覆盖。
+- **错误原因**：缺少“页标题状态色”的单一语义函数。
+- **修复**：在 `ui/style.rs` 增加 `template_page_title(Option<TemplateStatus>)`，三处统一引用；补样式映射测试。
+
+#### P2-5（已修复）移除项文案随实时绑定状态翻转，菜单宽度会自行变化
+
+- **位置**：`src/app/overlay.rs::OverlayTarget::Agent`、`src/ui/overlay/menu.rs::menu_labels`。
+- **现象**：菜单打开期间终端 Agent 退出或覆盖被清空，`Unbind recent` 会变成 `Remove title`，菜单宽度收缩；指针停在原右边界时可能点到菜单外，确认文案也会跳变。
+- **错误原因**：目标只存 `pane/kind`，文案在渲染时重新查询实时状态。
+- **修复**：打开菜单时把“是否带绑定”固化进 `OverlayTarget::Agent`，菜单存续期间文案稳定；补菜单打开后覆盖变化仍保持标签的测试。
+
+#### P2-6（已修复）小屏下标题弹窗的分割线/空态/按钮行越界并与输入行重叠
+
+- **位置**：`src/ui/overlay/agent_title.rs`。
+- **现象**：终端高度 3–4 行时，`modal::layout` 的 `inner.height` 可低至 1；分割线画到内框之外，空态文字写出列表区，按钮行被夹到输入行，鼠标点按钮实际落在输入框。
+- **错误原因**：渲染与命中没有对 `inner.height` / `list_area.height` 做最小行数保护；同类弹窗已有 `shell.inner.height > 1` 的保护。
+- **修复**：分割线、空态、按钮行分别加高度守卫；按钮命中在无按钮行时返回 None；补小屏渲染与命中测试。
+
+### P3 — 建议修复 / 记录
+
+#### P3-1（已修复）Agents 区高 1 行时存在“不可见但可点”的条目
+
+- **位置**：`src/ui/left_panel/mod.rs::agent_visible_items / agent_content_rect / agent_item_index_at`。
+- **现象**：`agent_visible_items` 用 `.max(1)` 保证滚动计算，内容区高 1 行时 ratatui 实际渲染 0 条，但命中层仍把该行映射到第 0 条。
+- **修复**：内容区高度不足 2 行时按 0 行处理，命中与滚动条均返回 None；保留滚轮分区判定。
+
+#### P3-2（已修复）`ui/overlay.rs` 导出未使用的弹窗几何函数
+
+- **位置**：`src/ui/overlay.rs` 的 `pub use agent_title::{agent_title_max_rows, agent_title_visible_start, ...}`。
+- **修复**：仅保留事件层与测试实际使用的导出。
+
+#### P3-3（已修复）输入层“所有文本浮层”回归测试漏掉 `AgentTitle`
+
+- **位置**：`src/input/tests.rs::all_text_overlays_route_word_ops_and_cut`。
+- **修复**：列表补 `OverlayKind::AgentTitle`。
+
+#### P3-4（部分修复）测试缺口
+
+- **缺口**：Esc/Cancel 取消、无选中时按 ↑、侧栏实时编辑状态色、标题编辑无 Effect、跨工作区标题保留、终端 Edit→提交闭环、滚动条按偶数内容高度计算。
+- **修复**：至少补 Esc、↑、实时状态色、无 Effect、跨工作区与终端提交闭环；其余记录为后续。
+
+#### P3-5（已修复）文档与注释漂移
+
+- **修复前位置**：`design.md` 第 1–11 节仍按 V1 写默认会话/OSC 标题、Rename 浮层、`pane_index` 1 基；`task.md` 全部未勾选；`review.md` 原为实现日志；`src/ui/left_panel/mod.rs` 的 `title` 注释仍写“其次会话标题 / 终端 OSC 标题”；`docs/standards/tui-design-requirements.md` 的 Agents 行仍写 `[tab N]`。
+- **修复**：按最终 V2 重写设计/任务/审查文档，更新标准与代码注释。
+
+#### P3-6（保留）标题状态每帧全量扫描绑定页正文
+
+- **位置**：`src/app/state.rs::agent_title_status` → `page_title_status` → `markdown::block_scan`。
+- **风险**：绑定到数千行 Prompt 时，侧栏每次重绘都分配并扫描整页；流式输出期间重绘频繁。
+- **处理**：本次保留，记录为性能债；后续可按内容 revision 缓存首个模板块状态，或提供轻量早退扫描。
+
+#### P3-7（保留）`src/app/state/lx/chat.rs` 超过 1000 行
+
+- **现状**：`dev` 基线已 1057 行，本分支仅新增 5 行字段/清理。
+- **处理**：属于既有结构债，不在本功能内拆分；本次不扩大该文件。
+
+## 3. 修复与验证
+
+| 编号 | 修复 | 回归测试 |
+|---|---|---|
+| P1-1 | 当前页分支补 `prompt_collapsed = false` | `recent::tests::opening_current_page_expands_collapsed_prompt` |
+| P1-2 | 清除无条件生效；跨 AI Web 入口清空临时态标题 | `pane::tests::lx_override_write_requires_live_session_but_clear_is_unconditional`、`web::tests::switching_to_ai_web_clears_stale_agent_title_without_session` |
+| P1-3 | 会话切换/终端换 kind 关闭 Agent 菜单与标题弹窗 | `menu::tests::session_switch_closes_agent_menu_and_title_dialog`、`terminal_kind_change_closes_agent_menu` |
+| P1-4 | 提交前校验目标；失效保留弹窗 | `menu::tests::commit_after_target_lost_keeps_dialog_and_does_not_write_title` |
+| P2-1 | 粘贴前后文本不同才转自定义 | `menu::tests::pasting_same_bound_title_keeps_recent_binding` |
+| P2-2 | 入口先校验 Saved/页存在，再短路 | `recent::tests::open_prompt_page_rejects_missing_and_temp_pages` |
+| P2-3 | `agent_title_status(workspace, ...)` 按所属工作区解析 | `state::tests::agent_title_status_resolves_the_entry_workspace` |
+| P2-4 | 新增 `style::template_page_title` 并替换三处映射 | `style::tests::template_page_title_maps_all_statuses_consistently` |
+| P2-5 | `OverlayTarget::Agent.bound` 固化移除项文案 | `ui::overlay::tests::agent_remove_title_label_stays_frozen_after_binding_cleared` |
+| P2-6 | 小屏分割线/空态/按钮行守卫 | `ui::overlay::agent_title::tests::tiny_shell_has_no_button_row_to_overlap_input` |
+| P3-1 | 高度 < 2 行时内容区为 0 | `left_panel::tests::one_row_agents_area_has_no_hit_slot` |
+| P3-2 | 移除未使用导出 | 编译与 clippy |
+| P3-3 | 文本浮层测试补 `AgentTitle` | `input::tests::all_text_overlays_route_word_ops_and_cut` |
+| P3-4 | 补 Esc、无选中时 ↑、实时状态色、无 Effect、跨工作区、终端提交闭环 | `menu::tests::escape_cancels_title_dialog_without_committing`、`up_from_no_recent_selection_binds_last_row`、`terminal_agent_edit_title_commits_without_effects_or_snapshot_changes`、`left_panel::tests::sidebar_title_status_follows_live_edited_page`、`state::tests::agent_title_status_resolves_the_entry_workspace` |
+| P3-5 | 重写设计/任务/审查文档、更新 TUI 标准与注释 | 文档检查 |
+
+### 3.1 验证结果
 
 ```text
 cargo fmt                                             通过
 cargo clippy --all-targets -- -D warnings             通过
-cargo test --lib                                      5471 passed, 0 failed, 6 ignored
+cargo test --lib                                      5523 passed, 0 failed, 6 ignored
 ```
 
 专项：
 
 ```text
-cargo test --lib app::state::pane::                   10 passed
-cargo test --lib app::update::menu::                  13 passed
-cargo test --lib ui::left_panel::                     34 passed
-cargo test --lib ui::text::                           47 passed
-cargo test --lib event::tests::agent_menu::            6 passed
-cargo test --lib event::tests::mouse_click::          23 passed
-cargo test --lib event::tests::mouse_drag::            9 passed
-```
-
-## 5. 未验证与风险
-
-- 未运行 `cargo run` 做人工视觉确认：右对齐标签、两行悬停背景、菜单确认态需用户在真实终端确认。
-- 终端 Agent 的唯一窗格保护在“菜单打开后窗格被外部关闭”的竞态下仍由 `close_pane` 的最后窗格保护兜底，不会误关。
-- 侧栏标题覆盖只在内存，重启后回到默认标题；这是需求约定，不是缺陷。
-
----
-
-## 6. V2 补充：Recent 标题与 Open prompt
-
-> 用户追加需求：标题只能来自 Prompt 面板 Recent 列表或自定义输入；右键菜单增加打开该提示词的入口。
-
-### 6.1 落地范围
-
-| 决策 | 实现 |
-|---|---|
-| D15 移除自动标题来源 | `Pane::agent_display_title` 只读 `AgentTitleOverride`；`session_title` / OSC `title` 不再参与 |
-| D16 Recent 选择绑定页 | `AgentTitleDialog` 快照目标工作区 Recent 行；选择后回填页标题并绑定 `(item_id, page_id)` |
-| D17 单输入框交互 | ↑/↓ 回填并绑定；直接编辑转自定义并解除绑定；Enter 提交；Esc 取消 |
-| D18 标题快照 | `AgentTitleOverride.text` 保存选中时页标题；后续页改名不自动跟随 |
-| D19 Open prompt | 绑定有效时菜单插入 `OpenPrompt`；打开精确页并聚焦 Prompt 面板 |
-| D20 生命周期沿用 | 覆盖随会话重置/切换、Agent 退出/种类变化、窗格关闭清除；重启丢失 |
-| D21 状态色对齐 | 弹窗 Recent 页标题复用 Prompt 抽屉状态色（todo 亮白、in_progress 黄、done 绿、无状态压暗） |
-| D22 移除标题入口 | 有标题覆盖时菜单提供移除项：绑定时 `Unbind recent`、自定义标题 `Remove title`；行内二次确认后清空覆盖；绑定页失效时仍可移除 |
-| D23 侧栏标题状态色 | Agents 标题按绑定页实时模板状态着色，与 Recent 一致；悬停保留状态前景色 |
-
-### 6.2 生产代码变更
-
-```text
-src/app/state/pane.rs             AgentPromptRef / AgentTitleOverride
-                                  Pane::agent_title_override / agent_display_title / set_agent_title_override
-src/app/state/lx/chat.rs          LxChat.agent_title_override 改为 Option<AgentTitleOverride>
-src/app/state.rs                  重导出 AgentPromptRef / AgentTitleOverride
-src/app/overlay.rs                AgentTitleDialog、OverlayKind::AgentTitle、Overlay::AgentTitle
-src/app/update/agent_title.rs     打开弹窗、Recent 选择、编辑转自定义、提交、Open prompt
-src/app/update/menu.rs            EditAgentTitle 打开新弹窗；绑定有效时追加 OpenPrompt
-src/app/update/dialog.rs          AgentTitle 分支路由；移除 RenameTarget::AgentTitle 提交
-src/app/update/prompt/recent.rs   open_prompt_page(item_id, page_id)、prompt_recent_rows_for_workspace
-src/ui/overlay/agent_title.rs     弹窗几何、命中与渲染
-src/ui/overlay.rs                 dispatch 与导出
-src/input/mod.rs                  AgentTitle 键位映射
-src/event/overlay.rs              鼠标点击、输入框命中与外部关闭
-src/ui/text/workspace.rs          AGENT_TITLE_PLACEHOLDER
-```
-
-### 6.3 与设计的偏差
-
-1. **不复用 `Overlay::Rename`**：设计 V1/D12 要求复用 Rename 浮层，但 Recent 列表与行选择无法塞进单行 Rename；新增独立 `AgentTitleDialog`。
-2. **复用 `MenuCommand::OpenPrompt`**：未新增命令；通过 `OverlayTarget::Agent` 分支分派到 `open_agent_prompt`，菜单文案保持 `Open prompt`。
-3. **Recent 行快照**：弹窗打开时生成 `Vec<RecentPageRow>`，打开期间不随底部抽屉刷新；避免模态期间列表重排导致选择错位。
-4. **按工作区取 Recent**：新增 `prompt_recent_rows_for_workspace`；Prompt 面板被钉在别的工作区时，Agents 弹窗仍取条目所属工作区的 Recent。
-5. **提交时再次校验绑定**：弹窗打开后页被删除，Enter 会将文本存为自定义标题而不是保留失效绑定；菜单不会提供 `Open prompt`。
-6. **空输入不回落**：提交空输入直接清除覆盖，第二行显示 `(no title)`；这是“只允许 Recent 或自定义”的直接结果。
-
-### 6.4 验证结果
-
-```text
-cargo fmt                                             通过
-cargo clippy --all-targets -- -D warnings             通过
-cargo test --lib                                      5505 passed, 0 failed, 6 ignored
-```
-
-专项（V2）：
-
-```text
-cargo test --lib app::state::pane::                   11 passed
-cargo test --lib app::update::menu::                  24 passed
-cargo test --lib app::update::prompt::recent::        10 passed
-cargo test --lib ui::overlay::agent_title::            9 passed
-cargo test --lib input::tests_agent_title::            1 passed
+cargo test --lib app::state::pane::                   13 passed
+cargo test --lib app::state::tests::agent_title_status 1 passed
+cargo test --lib app::update::menu::                  31 passed
+cargo test --lib app::update::prompt::recent::        12 passed
+cargo test --lib app::update::chat::web::             25 passed
+cargo test --lib ui::left_panel::                     38 passed
+cargo test --lib ui::overlay::agent_title::           10 passed
+cargo test --lib ui::style::                           21 passed
 cargo test --lib event::tests::agent_menu::           13 passed
-cargo test --lib ui::left_panel::                     36 passed
+cargo test --lib input::tests::all_text_overlays_route_word_ops_and_cut 1 passed
 ```
 
-### 6.5 未验证与风险
+### 3.2 未修复项
 
-- 未运行 `cargo run` 做人工视觉确认：弹窗高度、Recent 选中底色、按钮间距需真实终端复核。
-- 弹窗列表最多显示 5 条，超过时通过 ↑/↓ 自动滚动；未接入滚轮/滚动条。
-- 绑定页被删除后标题文本仍保留为快照，`Open prompt` 隐藏；这是有意的降级行为。
-- 所有条目初始显示 `(no title)`，不再自动出现会话/终端标题；这是 V2 需求约定。
+- P3-6：标题状态每帧全量扫描绑定页正文，保留为性能债。
+- P3-7：`src/app/state/lx/chat.rs` 超过 1000 行，属于既有结构债，本次不拆分。
+- 真实终端人工验收仍待用户 `cargo run` 完成。
+
+## 4. 残余风险
+
+- 终端同一 `AgentKind` 的进程快速替换（旧 Claude 退出、新 Claude 启动且轮询未观察到 `None`）无法区分，标题可能被新进程继承；检测快照没有进程身份，当前只能覆盖“种类变化 / 退出”路径。
+- 绑定页被删除后保留标题文本快照、隐藏 `Open prompt`、保留 `Unbind recent`，属有意降级。
+- 标题只存内存，重启丢失，属需求约定。
+- 真实终端观感（弹窗高度、Recent 选中底色、按钮间距、小屏退化）仍需用户 `cargo run` 人工验收。

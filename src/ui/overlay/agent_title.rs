@@ -7,7 +7,6 @@ use ratatui::text::{Line, Span};
 use ratatui::widgets::Paragraph;
 use unicode_width::UnicodeWidthStr;
 
-use crate::app::markdown::TemplateStatus;
 use crate::app::overlay::AgentTitleDialog;
 use crate::app::prompt::RecentPageRow;
 use crate::ui::widgets;
@@ -84,6 +83,10 @@ pub fn agent_title_button_at(
     column: u16,
     row: u16,
 ) -> Option<AgentTitleButton> {
+    // 内框不足 2 行时没有独立按钮行，避免与输入行重叠。
+    if shell.inner.height < 2 {
+        return None;
+    }
     let rects = widgets::modal::button_row(
         shell.inner,
         &AGENT_TITLE_BUTTONS,
@@ -117,22 +120,26 @@ pub(super) fn render_agent_title(
         dialog.input.selection(),
         Some(text::AGENT_TITLE_PLACEHOLDER),
     );
-    render_recent_rule(frame, shell.inner);
-    render_recent_rows(frame, shell.inner, dialog);
-    render_buttons(
-        frame,
-        &widgets::modal::button_row(
-            shell.inner,
-            &AGENT_TITLE_BUTTONS,
-            BUTTON_GAP,
-            shell.inner.height.saturating_sub(1),
-        ),
-        &[
-            (text::BUTTON_SAVE, style::button_primary()),
-            (text::BUTTON_CLEAR, style::button_secondary()),
-            (text::BUTTON_CANCEL, style::button_secondary()),
-        ],
-    );
+    if shell.inner.height >= 3 {
+        render_recent_rule(frame, shell.inner);
+        render_recent_rows(frame, shell.inner, dialog);
+    }
+    if shell.inner.height >= 2 {
+        render_buttons(
+            frame,
+            &widgets::modal::button_row(
+                shell.inner,
+                &AGENT_TITLE_BUTTONS,
+                BUTTON_GAP,
+                shell.inner.height.saturating_sub(1),
+            ),
+            &[
+                (text::BUTTON_SAVE, style::button_primary()),
+                (text::BUTTON_CLEAR, style::button_secondary()),
+                (text::BUTTON_CANCEL, style::button_secondary()),
+            ],
+        );
+    }
     cursor
 }
 
@@ -157,6 +164,9 @@ fn render_recent_rule(frame: &mut Frame<'_>, inner: Rect) {
 fn render_recent_rows(frame: &mut Frame<'_>, inner: Rect, dialog: &AgentTitleDialog) {
     let list_y = inner.y.saturating_add(2);
     let list_height = inner.height.saturating_sub(3);
+    if list_height == 0 {
+        return;
+    }
     let list_area = Rect::new(inner.x, list_y, inner.width, list_height);
     if dialog.rows.is_empty() {
         let label = text::PROMPT_RECENT_EMPTY;
@@ -218,13 +228,8 @@ fn render_recent_row(
         .max(1);
     let title = text::ellipsize_width(&row.page_title, title_width);
     let padding = width.saturating_sub(marker.width() + title.width() + time_width);
-    // 页标题状态色与 Prompt 抽屉的 Recent 一致：todo 默认亮白、in_progress 黄、
-    // done 绿、无状态压暗；选中项在此基础上加粗。
-    let title_style = match row.status {
-        Some(TemplateStatus::Todo) => style::text(),
-        Some(status) => style::template_status(status),
-        None => style::muted(),
-    };
+    // 页标题状态色与 Prompt 抽屉的 Recent 一致；选中项在此基础上加粗。
+    let title_style = style::template_page_title(row.status);
     let title_style = if selected {
         title_style.patch(style::strong())
     } else {

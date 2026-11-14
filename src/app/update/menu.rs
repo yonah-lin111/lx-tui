@@ -226,15 +226,17 @@ pub fn close_overlay(state: &mut AppState) {
     state.overlay = None;
 }
 
-/// 打开 Agents 条目右键菜单：绑定有效 Recent 页时提供 `Open prompt`，仍带
-/// 绑定时提供 `Unbind recent`；`Edit title` 恒可用；`Close` 对 lx 恒可用，
-/// 终端 Agent 仅在其窗格不是当前标签页唯一窗格时可用。
+/// 打开 Agents 条目右键菜单：绑定有效 Recent 页时提供 `Open prompt`；有标题
+/// 覆盖时提供移除项（绑定标题 `Unbind recent`、自定义标题 `Remove title`）；
+/// `Edit title` 恒可用；`Close` 对 lx 恒可用，终端 Agent 仅在其窗格不是当前
+/// 标签页唯一窗格时可用。
 pub fn open_agent_menu(state: &mut AppState, index: usize, anchor: (u16, u16)) {
     let Some(entry) = state.agent_entries().get(index).copied() else {
         return;
     };
     state.agent_scroll_drag = None;
     let workspace = state.active_workspace;
+    let bound = state.agent_title_has_binding(entry.pane_id, entry.kind);
     let mut commands = vec![MenuCommand::EditAgentTitle];
     if agent_title_prompt(state, workspace, entry.tab_index, entry.pane_id, entry.kind).is_some() {
         commands.push(MenuCommand::OpenPrompt);
@@ -263,6 +265,7 @@ pub fn open_agent_menu(state: &mut AppState, index: usize, anchor: (u16, u16)) {
             tab: entry.tab_index,
             pane: entry.pane_id,
             kind: entry.kind,
+            bound,
         },
         commands,
         selected: 0,
@@ -706,6 +709,7 @@ pub fn activate_menu(state: &mut AppState) -> Option<(PaneId, Vec<u8>)> {
                 tab,
                 pane,
                 kind,
+                ..
             },
         ) => {
             open_agent_prompt(state, workspace, tab, pane, kind);
@@ -717,6 +721,7 @@ pub fn activate_menu(state: &mut AppState) -> Option<(PaneId, Vec<u8>)> {
                 tab,
                 pane,
                 kind,
+                ..
             },
         ) => {
             remove_agent_title(state, workspace, tab, pane, kind);
@@ -728,6 +733,7 @@ pub fn activate_menu(state: &mut AppState) -> Option<(PaneId, Vec<u8>)> {
                 tab,
                 pane,
                 kind,
+                ..
             },
         ) => {
             open_agent_title_dialog(state, workspace, tab, pane, kind);
@@ -739,6 +745,7 @@ pub fn activate_menu(state: &mut AppState) -> Option<(PaneId, Vec<u8>)> {
                 tab,
                 pane,
                 kind,
+                ..
             },
         ) => {
             close_agent(state, workspace, tab, pane, kind);

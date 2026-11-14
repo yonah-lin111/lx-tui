@@ -100,6 +100,38 @@ fn lx_override_shows_custom_title_and_clear_removes_title() {
 }
 
 #[test]
+fn lx_override_write_requires_live_session_but_clear_is_unconditional() {
+    let mut pane = Pane::new();
+    pane.set_agent_title_override(lx_kind(), Some(custom("No session")));
+    assert_eq!(pane.lx.chat.agent_title_override, None, "无会话不得写入");
+
+    pane.lx.chat.loading_session = true;
+    pane.set_agent_title_override(lx_kind(), Some(custom("Loading")));
+    assert_eq!(
+        pane.agent_display_title(lx_kind()),
+        Some("Loading"),
+        "加载中的临时态仍可编辑标题"
+    );
+
+    pane.lx.chat.loading_session = false;
+    pane.set_agent_title_override(lx_kind(), None);
+    assert_eq!(
+        pane.lx.chat.agent_title_override, None,
+        "条目消失后清除必须仍然生效"
+    );
+}
+
+#[test]
+fn terminal_override_clear_is_unconditional_on_kind_change() {
+    let mut pane = Pane::new();
+    pane.terminal_agent_title = Some((AgentKind::Claude, custom("Stale")));
+    pane.agent = Some(snapshot(AgentKind::Codex, AgentState::Idle, None));
+
+    pane.set_agent_title_override(terminal_kind(AgentKind::Claude), None);
+    assert_eq!(pane.terminal_agent_title, None);
+}
+
+#[test]
 fn lx_override_keeps_prompt_binding() {
     let mut pane = active_lx_pane();
     pane.set_agent_title_override(lx_kind(), Some(bound("Auth Flow", 7, 9)));

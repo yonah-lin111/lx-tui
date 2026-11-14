@@ -13,7 +13,7 @@ pub fn menu_layout(state: &AppState, screen: Rect, menu: &Menu) -> widgets::menu
         screen,
         menu.anchor,
         &menu_title(state, menu),
-        &menu_labels(state, menu),
+        &menu_labels(menu),
     )
 }
 
@@ -89,7 +89,7 @@ pub(crate) fn menu_title(state: &AppState, menu: &Menu) -> String {
 }
 
 /// 菜单命令到文案的映射；当选中项处于 `confirming` 状态时切换为行内确认文案。
-pub(crate) fn menu_labels(state: &AppState, menu: &Menu) -> Vec<&'static str> {
+pub(crate) fn menu_labels(menu: &Menu) -> Vec<&'static str> {
     menu.commands
         .iter()
         .enumerate()
@@ -187,7 +187,8 @@ pub(crate) fn menu_labels(state: &AppState, menu: &Menu) -> Vec<&'static str> {
                 MenuCommand::DeleteMissingWorkspaces => text::MENU_DELETE_MISSING_WORKSPACES,
                 MenuCommand::EditAgentTitle => text::MENU_AGENT_EDIT_TITLE,
                 MenuCommand::RemoveAgentTitle => {
-                    if agent_title_bound(state, &menu.target) {
+                    let bound = matches!(menu.target, OverlayTarget::Agent { bound: true, .. });
+                    if bound {
                         if confirming {
                             text::MENU_CONFIRM_UNBIND
                         } else {
@@ -209,14 +210,6 @@ pub(crate) fn menu_labels(state: &AppState, menu: &Menu) -> Vec<&'static str> {
             }
         })
         .collect()
-}
-
-/// Agents 标题当前是否带 Recent 绑定：决定移除项显示 `Unbind recent` 还是 `Remove title`。
-fn agent_title_bound(state: &AppState, target: &OverlayTarget) -> bool {
-    match target {
-        OverlayTarget::Agent { pane, kind, .. } => state.agent_title_has_binding(*pane, *kind),
-        _ => false,
-    }
 }
 
 /// 提示词页名（删除确认用）。

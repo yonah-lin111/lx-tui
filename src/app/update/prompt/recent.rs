@@ -113,7 +113,20 @@ pub fn open_recent_page(state: &mut AppState, index: usize) -> bool {
 ///
 /// 只接受已入库页；目标条目/页不存在时返回 false。
 pub fn open_prompt_page(state: &mut AppState, item_id: i64, page_id: PromptPageId) -> bool {
+    // 只接受已入库页；当前页短路也必须先确认 item/page 仍存在。
+    if page_id.saved().is_none() {
+        return false;
+    }
     let workspace = state.prompt_workspace();
+    let page_exists = state
+        .workspaces
+        .get(workspace)
+        .and_then(|workspace| workspace.prompt_panel.tree.item(item_id))
+        .and_then(|item| item.page(page_id))
+        .is_some();
+    if !page_exists {
+        return false;
+    }
     if state.workspaces.get(workspace).is_some_and(|workspace| {
         let panel = &workspace.prompt_panel;
         panel.editing == Some(PromptEditing::Item(item_id))
@@ -127,6 +140,7 @@ pub fn open_prompt_page(state: &mut AppState, item_id: i64, page_id: PromptPageI
         if let Some(workspace_state) = state.workspaces.get_mut(workspace) {
             workspace_state.prompt_panel.mode = PromptMode::Editor;
         }
+        state.prompt_collapsed = false;
         state.prompt_recent_hover = None;
         // 抽屉可能由鼠标从窗格焦点打开；关闭后键盘焦点交还 prompt。
         crate::app::update::focus_prompt(state);

@@ -319,3 +319,14 @@ fn narrow_and_small_screens_render_without_panic() {
     let empty = dialog(Vec::new(), None, "");
     let _ = draw(&empty, 20, 8);
 }
+
+#[test]
+fn tiny_shell_has_no_button_row_to_overlap_input() {
+    let shell = agent_title_shell(Rect::new(0, 0, 20, 3), 1).expect("shell fits");
+    assert!(shell.inner.height < 2);
+    assert_eq!(
+        agent_title_button_at(&shell, shell.inner.x, shell.inner.y),
+        None,
+        "没有独立按钮行时不得命中按钮"
+    );
+}

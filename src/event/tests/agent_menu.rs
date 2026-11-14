@@ -70,6 +70,7 @@ fn assert_agent_menu(
             tab: entry.tab_index,
             pane: entry.pane_id,
             kind: entry.kind,
+            bound: state.agent_title_has_binding(entry.pane_id, entry.kind),
         },
         "右键 Agents 条目必须命中 Agent 目标，不得误开工作区/Tab/Pane 菜单"
     );

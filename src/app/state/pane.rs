@@ -224,7 +224,23 @@ impl Pane {
             .filter(|title| !title.is_empty())
     }
 
-    /// 写入/清除侧栏标题覆盖；目标 Agent 已不在该窗格时忽略。
+    /// 该窗格当前是否仍接受指定 Agent 的标题写入。
+    ///
+    /// lx 以会话视图存活为准；终端 Agent 必须与当前快照种类一致。
+    pub fn accepts_agent_title(&self, kind: SidebarAgentKind) -> bool {
+        match kind {
+            SidebarAgentKind::Lx { .. } => self.lx.has_active_session(),
+            SidebarAgentKind::Terminal(agent) => self
+                .agent
+                .as_ref()
+                .is_some_and(|snapshot| snapshot.kind == agent),
+        }
+    }
+
+    /// 写入/清除侧栏标题覆盖。
+    ///
+    /// 写入要求目标 Agent 仍可接受标题；清除无条件生效，避免条目消失后
+    /// 旧覆盖残留在 `LxChat` / `Pane` 上并漂移到下一个会话。
     pub fn set_agent_title_override(
         &mut self,
         kind: SidebarAgentKind,
@@ -237,19 +253,16 @@ impl Pane {
                 prompt: override_title.prompt,
             })
         });
+        if title.is_some() && !self.accepts_agent_title(kind) {
+            return;
+        }
         match kind {
-            SidebarAgentKind::Lx { .. } if self.lx.has_active_session() => {
+            SidebarAgentKind::Lx { .. } => {
                 self.lx.chat.agent_title_override = title;
             }
-            SidebarAgentKind::Terminal(agent)
-                if self
-                    .agent
-                    .as_ref()
-                    .is_some_and(|snapshot| snapshot.kind == agent) =>
-            {
+            SidebarAgentKind::Terminal(agent) => {
                 self.terminal_agent_title = title.map(|title| (agent, title));
             }
-            _ => {}
         }
     }
 

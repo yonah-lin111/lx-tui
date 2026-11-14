@@ -1,108 +1,76 @@
 # 侧栏 Agents 条目第二行标题与右键菜单 — 设计
 
-> 状态：**待用户审核**（审核通过前不修改生产代码）
-> 关联任务：[task.md](task.md)
-> 依据：用户需求 + 11 轮 Grill Me 收口结论
-> 说明：用户提到的 `ref-content/ui/left_panel/` 在当前仓库与工作区中不存在；本设计以用户给出的行格式示例为唯一视觉依据。
-
----
+> 状态：**已实现（V2 最终形态）**
+> 关联任务：[task.md](task.md) ｜ 审查记录：[review.md](review.md)
+> 依据：用户需求 + Grill Me 收口结论 + 实现期补齐的 Recent 标题/Open prompt/状态色/移除项需求。
 
 ## 1. 背景与目标
 
-当前左侧栏 `Agents` 分区每个条目只有一行：
-
-```text
-❯ ● lx-native            [tab 1]
-  ○ claude               [tab 2]
-```
-
-用户要求：
-
-1. 每个条目增加第二行，显示 Agent 标题；
-2. 第一行把 `[tab N]` 改为 `[T1 P1]`，同时标识 Tab 与 Pane；
-3. 条目支持右键菜单：编辑标题、关闭条目（行内二次确认）；
-4. 所有对 Agent 条目的修改**只存在于内存**，不写 DB、不修改会话标题、不修改终端 OSC 标题、不影响 `/resume` 与输入框右上角标题胶囊。
-
-目标形态：
+侧栏 `Agents` 分区原本每个条目只有一行。最终形态为每个条目固定两行：第一行显示 Agent 身份、运行状态与归属位置，第二行显示标题或 `(no title)`。
 
 ```text
 ❯ ● lx-native            [T1 P1]
-  └─ Fix login bug
+  └─ Auth Flow
   ○ claude               [T1 P2]
   └─ (no title)
 ```
 
+标题只允许两种来源：
+
+1. Prompt 面板 Recent 列表中的页（保存页标题快照并绑定 `(item_id, page_id)`）；
+2. 用户在标题弹窗中直接输入的自定义文本。
+
+标题编辑只改侧栏显示，**不写 DB、不修改 `LxChat::session_title`、不修改输入框右上角标题胶囊、不影响 `/resume` 列表、不向终端写 OSC 标题**。重启后全部丢失。
+
 右键菜单：
 
 ```text
-┌─ claude ──────┐
-│ Edit title    │
-│ Close         │
-└───────────────┘
+┌─ lx-native ───────────┐
+│ Edit title            │
+│ Open prompt           │  ← 仅绑定仍可解析时显示
+│ Unbind recent         │  ← 有绑定；自定义标题显示 Remove title
+│ Close                 │  ← 行内二次确认
+└───────────────────────┘
 ```
 
-第一次点击 `Close` 后：
+## 2. 最终决策
 
-```text
-│ Confirm close │
-```
-
-第二次点击/回车才真正执行；切换选中项或关闭菜单自动取消确认。
-
----
-
-## 2. 现状核实（Codegraph / Codebase Memory）
-
-| 事实 | 现有代码位置 | 对本设计的影响 |
+| 编号 | 决策维度 | 最终结论 |
 |---|---|---|
-| Agents 条目是派生视图，没有独立持久化实体 | `AppState::agent_entries`（`src/app/state.rs`）遍历当前工作区各 Tab、各 Pane，按 `pane.lx.has_active_session()` 与 `pane.agent.is_some()` 生成 | “编辑标题/关闭”不能假设存在 Agent 记录；标题覆盖必须挂在 Pane/会话的运行时状态上 |
-| `SidebarAgentEntry` 只含 `tab_index / pane_id / kind / state` | `src/app/state/pane.rs` | 需要补 `pane_index` 供 `[T1 P1]` 使用 |
-| `AgentListItem` 与 `agent_items` 只承载一行数据 | `src/ui/left_panel/mod.rs` | 需要补 `pane_index` 与第二行标题（借用 `&str`，避免每帧分配） |
-| lx 会话标题已有内存字段 | `LxChat::session_title`（`src/app/state/lx/chat.rs`） | lx 条目的默认标题直接读它，不改它 |
-| 终端 Agent 的 OSC 标题已进入快照 | `PaneAgentSnapshot.title`（`src/detect/mod.rs`），由 `poll_active_agents` 从 `terminal.title()` 捕获 | 终端条目的默认标题直接读它，不改它 |
-| 工作区、Tab、提示词已有统一重命名浮层 | `Overlay::Rename` / `RenameTarget` / `commit_rename`（`src/app/overlay.rs`、`src/app/update/dialog.rs`） | Agent 标题编辑复用该浮层，只新增目标变体 |
-| 右键菜单已有统一下拉组件与行内二次确认 | `MenuCommand::requires_confirm`、`Menu::confirming`、`menu_labels`（`src/app/overlay.rs`、`src/ui/overlay/menu.rs`） | 不需要新增弹窗组件 |
-| 右键分派当前没有任何 Agent 分支 | `open_right_click_menu`（`src/event/overlay.rs`） | 需要在工作区命中之后新增 Agent 条目命中 |
-| `close_pane` 拒绝关闭标签页最后一个窗格 | `Tab::remove_pane` / `TileLayout::remove_pane`（`src/app/state/pane.rs`、`src/tiling.rs`） | 终端 Agent 是唯一窗格时不能提供 `Close`，否则菜单点了没反应 |
-| lx `/new` 已有完整“停流 + 解绑会话 + 回欢迎页”路径 | `update::new_session`（`src/app/update/chat/session.rs`） | lx 条目的 `Close` 直接复用，保证 DB 历史保留 |
-| Agents 滚动与命中按“一行一个条目”计算 | `agent_list_rows` / `agent_item_index_at` / `agent_scrollbar_for`（`src/ui/left_panel/mod.rs`） | 必须改成“两行一个条目”的条目槽位模型 |
-| 侧栏 Agents 区已有内存悬停/滚动/拖拽状态 | `AppState::agent_hover` / `agent_scroll` / `agent_scroll_drag` | 沿用，不新增滚动状态 |
+| D1 | 移除语义 | 菜单不使用 `Delete`，统一 `Close`：只关闭，不删除 DB 内容 |
+| D2 | lx `Close` | 等价 `/new`：停流、解绑当前会话、回空白欢迎页；DB 历史保留；窗格与同窗格终端 Agent 保留 |
+| D3 | 终端 Agent `Close` | 关闭所属窗格并结束进程；同窗格 lx 会话随窗格关闭，但 DB 历史仍可在 `/resume` |
+| D4 | 标题编辑范围 | lx 与终端 Agent 都提供 `Edit title`，全部只改侧栏显示 |
+| D5 | 持久化 | 纯内存覆盖；不写 DB、不产生 Effect、不改真实会话/终端标题 |
+| D6 | 默认标题 | V2 起**没有默认标题来源**：未设置覆盖时显示 `(no title)`；`session_title` 与终端 OSC 标题都不参与 |
+| D7 | 空标题/清空 | 第二行始终存在；空输入提交 = 清除覆盖并显示 `(no title)` |
+| D8 | 覆盖生命周期 | 切 Tab、切工作区、窗格重排后保留；lx 会话重置/切换、终端 Agent 退出/种类变化、窗格关闭时清除；重启丢失 |
+| D9 | `Close` 确认 | 菜单行内二次确认：`Close` → `Confirm close`，切换选中项复位 |
+| D10 | `[T1 P1]` 编号 | `T` = 当前工作区内 Tab 位置（1 基）；`P` = 窗格在 `layout.pane_ids()` 树序中的位置（1 基）；同一窗格 lx/终端两行一致；标签右对齐 |
+| D11 | 终端唯一窗格 | 终端 Agent 是标签页唯一窗格时菜单不显示 `Close`；关闭整个 Tab 走标签栏菜单 |
+| D12 | 标题编辑交互 | 独立 `AgentTitleDialog`：单行输入 + Recent 页快照列表；↑/↓ 选择并绑定；直接编辑转自定义；Enter 提交；Esc 取消 |
+| D13 | 生成中关闭 lx | 允许；`new_session` 内部先 `stop_stream`，已落库消息保留 |
+| D14 | 覆盖与真实标题 | 覆盖只影响侧栏；清除覆盖后不回退任何真实标题，直接 `(no title)` |
+| D15 | 移除自动标题来源 | `lx.chat.session_title` 与 `PaneAgentSnapshot.title` 不再参与侧栏第二行 |
+| D16 | Recent 选择绑定 | 选中 Recent 行时用页标题回填输入框，并绑定 `AgentPromptRef { item_id, page_id }` |
+| D17 | 单输入框交互 | ↑/↓ 浏览 Recent 并回填/绑定；直接编辑输入框转为自定义并解绑；Enter 提交；Esc 取消；鼠标点行等价 ↑/↓；`Save` / `Clear` / `Cancel` 与键盘一致 |
+| D18 | 标题快照 | 绑定时保存选中时的页标题文本；页后续改名不自动跟随 |
+| D19 | Open prompt | 仅当绑定页仍存在且已入库时，在 `Edit title` 后插入 `Open prompt`；点击释放 Prompt 钉住、结算当前编辑、打开精确 item/page、展开并聚焦 Prompt 面板 |
+| D20 | 生命周期沿用 | 绑定随覆盖一起清除/丢失，不单独持久化 |
+| D21 | 弹窗状态色 | Recent 行页标题状态色与 Prompt 抽屉一致：todo 亮白、in_progress 黄、done 绿、无状态压暗；选中项保留状态前景并加粗 |
+| D22 | 移除标题入口 | 有标题覆盖时菜单在 `Open prompt` 后追加移除项：带绑定显示 `Unbind recent`，自定义标题显示 `Remove title`；行内二次确认（`Confirm unbind` / `Confirm remove title`）后清空绑定与标题；绑定页失效仍可移除；无覆盖不显示 |
+| D23 | 侧栏标题状态色 | Agents 第二行在绑定可解析时按绑定页实时模板状态着色，与 Recent 一致；悬停只叠加底色，不覆盖状态前景色；自定义/失效绑定压暗 |
 
----
+## 3. 数据模型
 
-## 3. 已确认决策（Grill Me 收口）
+### 3.1 条目与位置
 
-| 编号 | 决策维度 | 确认结论 |
-|---|---|---|
-| D1 | `Delete` 的语义 | 不删除任何内容，只“关闭”；菜单文案统一使用 `Close` |
-| D2 | lx 条目的 `Close` | 只关闭当前会话视图，等价 `/new`：停流、解绑 `session_id`、回到空白欢迎页；**不删 DB 会话，不删历史消息**；窗格和同窗格终端 Agent 保留 |
-| D3 | 终端 Agent 的 `Close` | 关闭其所属窗格并结束进程；同窗格 lx 会话会随窗格一起关闭，但 DB 历史仍在 `/resume` |
-| D4 | 标题编辑范围 | lx 与终端 Agent 都提供 `Edit title`；全部只改侧栏显示 |
-| D5 | 标题修改的持久化 | **纯内存**：不写 DB、不改 `LxChat::session_title`、不改输入框右上角标题胶囊、不改 `/resume` 列表、不向终端进程写任何内容 |
-| D6 | 默认标题来源 | `lx-*` 读 `chat.session_title`；终端 Agent 读 `PaneAgentSnapshot.title`（终端 OSC 标题） |
-| D7 | 空标题与清空编辑 | 默认标题为空时第二行显示 `└─ (no title)`；`Edit title` 输入非空 = 设置内存覆盖，输入空 = 清除覆盖并回落默认标题 |
-| D8 | 内存覆盖生命周期 | 覆盖按“当前 Agent 条目身份”保存：切 Tab、切工作区、窗格重排后仍保留；条目消失（lx 会话关闭/切换、终端 Agent 退出或种类变化、窗格/工作区关闭）即清除；进程重启全部丢失 |
-| D9 | `Close` 二次确认形式 | 菜单行内二次确认：`Close` → `Confirm close`，与现有 `CloseWorkspace` / `CloseTab` / `ClosePane` 一致 |
-| D10 | `[T1 P1]` 编号规则 | `T` = 当前工作区内 Tab 位置（1 基）；`P` = 窗格在该 Tab `layout.pane_ids()` 树序中的位置（1 基）；同一窗格的 lx 与终端 Agent 两行显示相同编号；标签右对齐，名称先截断 |
-| D11 | 终端 Agent 是标签页唯一窗格时 | 菜单只显示 `Edit title`，不显示 `Close`；关闭整个 Tab 仍走标签栏右键菜单 |
-| D12 | 编辑标题交互 | 复用 `Overlay::Rename` 居中单行输入框；`Enter` 保存，`Esc` 取消 |
-| D13 | lx 条目在生成中执行 `Close` | 允许；复用 `/new` 的停流收尾，已落库消息保留 |
-| D14 | 标题覆盖与默认标题的关系 | 覆盖优先；清除覆盖后立即回落到实时默认标题（lx 自动标题后续变化仍会显示，终端 OSC 标题变化也会显示） |
-
----
-
-## 4. 数据模型与状态设计
-
-### 4.1 `SidebarAgentEntry` 增加 `pane_index`
-
-`src/app/state/pane.rs`：
+`SidebarAgentEntry` 增加 `pane_index`：
 
 ```rust
-/// 侧栏 `Agents` 分区的单行条目数据。
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct SidebarAgentEntry {
     pub tab_index: usize,
-    /// 窗格在该标签页 `layout.pane_ids()` 树序中的位置（1 基，`[T1 P1]` 的 P）。
+    /// 窗格在 layout.pane_ids() 树序中的位置（0 基存储；显示时 +1）。
     pub pane_index: usize,
     pub pane_id: PaneId,
     pub kind: SidebarAgentKind,
@@ -110,799 +78,304 @@ pub struct SidebarAgentEntry {
 }
 ```
 
-`src/app/state.rs` 的 `agent_entries()` 改为按树序枚举：
+`AppState::agent_entries()` 按 Tab 顺序与 `layout.pane_ids()` 树序枚举；同一窗格先 lx 后终端 Agent，两条记录共享 `pane_index`。
+
+### 3.2 标题覆盖
 
 ```rust
-pub fn agent_entries(&self) -> Vec<SidebarAgentEntry> {
-    let workspace = self.active_workspace();
-    let mut entries = Vec::new();
-    for (tab_index, tab) in workspace.tabs.iter().enumerate() {
-        for (pane_offset, pane_id) in tab.layout.pane_ids().into_iter().enumerate() {
-            let Some(pane) = tab.pane(pane_id) else {
-                continue;
-            };
-            let pane_index = pane_offset + 1;
-            if pane.lx.has_active_session() {
-                entries.push(SidebarAgentEntry {
-                    tab_index,
-                    pane_index,
-                    pane_id,
-                    kind: SidebarAgentKind::Lx {
-                        entry: pane.lx.entry,
-                        ai_web_site: pane.lx.ai_web_site,
-                    },
-                    state: pane.lx.agent_state(),
-                });
-            }
-            if let Some(snapshot) = pane.agent.as_ref() {
-                entries.push(SidebarAgentEntry {
-                    tab_index,
-                    pane_index,
-                    pane_id,
-                    kind: SidebarAgentKind::Terminal(snapshot.kind),
-                    state: snapshot.state,
-                });
-            }
-        }
-    }
-    entries
+pub struct AgentPromptRef {
+    pub item_id: i64,
+    pub page_id: PromptPageId,
+}
+
+pub struct AgentTitleOverride {
+    /// 选中时的显示快照。
+    pub text: String,
+    /// Some = 来自 Recent 页；None = 自定义输入。
+    pub prompt: Option<AgentPromptRef>,
 }
 ```
 
-**关键点**：
+存放位置：
 
-- `pane_index` 基于 `layout.pane_ids()` 的树序，不是 `PaneId` 原始值；关闭其他窗格后不会出现 `[T1 P7]`。
-- 同一窗格两条记录共享同一个 `pane_index`。
-- `agent_entry_count()` 不需要改；它只计数，不关心序号。
+- lx：`LxChat::agent_title_override: Option<AgentTitleOverride>`；
+- 终端：`Pane::terminal_agent_title: Option<(AgentKind, AgentTitleOverride)>`。
 
-### 4.2 内存标题覆盖的存放位置
+不使用全局 `HashMap`，避免工作区索引变化、PaneId 复用与跨重启残留。
 
-覆盖分两处存放，均属于运行时状态，不进入 DB：
+### 3.3 生命周期
 
-1. **lx 会话覆盖**：放在 `LxChat` 内，跟随会话视图生命周期。
+| 事件 | 结果 |
+|---|---|
+| 切 Tab / 切工作区 / 窗格重排 | 覆盖保留 |
+| lx `/new`、删除当前会话、rewind 删空会话 | `reset_session_view` 清空 |
+| lx `/resume` 切到另一会话 | `on_session_loaded_full` 的 `session_changed` 分支清空 |
+| 同会话重载 | 保留 |
+| AI Web 站点切换 | `reset_session_view` 清空 |
+| 跨 AI Web / 本地入口切换 | 清空 lx 覆盖（包括没有 `session_id` 的 loading/shell 临时态） |
+| 终端 Agent 退出、换 `AgentKind` | `update_pane_agent` 清空 |
+| 终端 Agent 同种类 state/OSC 更新 | 保留 |
+| 窗格关闭 | `Pane` 销毁，覆盖自然消失 |
+| 进程重启 | 全部丢失 |
 
-`src/app/state/lx/chat.rs`：
+**关键不变量**：写入覆盖要求目标仍可接受标题（lx 会话视图存活；终端 kind 匹配）；**清除无条件生效**，避免条目消失后旧覆盖漂移到下一个会话。
 
-```rust
-pub struct LxChat {
-    // ...
-    /// 侧栏 Agents 条目的临时显示标题（仅内存；不改会话标题、不落库、
-    /// 不影响输入框右上角标题胶囊与 `/resume` 列表）。
-    pub agent_title_override: Option<String>,
-}
-```
+### 3.4 标题解析
 
-`LxChat::new()` 初始化为 `None`。
+`Pane::agent_display_title(kind)` 只读 `AgentTitleOverride.text`，不读 `session_title` 或 OSC `title`。无覆盖/空文本返回 `None`，UI 显示 `(no title)`。
 
-`LxChat::reset_session_view()` 末尾增加：
+`AppState::agent_title_status(workspace, pane, kind)` 按条目所属工作区解析绑定页：
 
-```rust
-self.agent_title_override = None;
-```
+- 绑定页正是当前显示的 Prompt 编辑页时，读取编辑器实时正文；
+- 否则读取内存页正文；
+- 无绑定、绑定页删除、无模板块时返回 `None`。
 
-`on_session_loaded_full`（`src/app/update/chat/session.rs`）的 `session_changed` 分支增加：
+状态色统一走 `style::template_page_title(Option<TemplateStatus>)`：todo 亮白、in_progress 黄、done 绿、无状态压暗。
 
-```rust
-target.lx.chat.agent_title_override = None;
-```
+## 4. 菜单模型
 
-这样 `/new`、删除会话、切换 lx 模式、切换 AI Web 站点、`/resume` 切换到另一条会话、rewind 删除会话等路径都会清空覆盖。
-
-2. **终端 Agent 覆盖**：放在 `Pane` 上，并带 `AgentKind` 标签。
-
-`src/app/state/pane.rs`：
+### 4.1 目标与命令
 
 ```rust
-pub struct Pane {
-    // ...
-    /// 侧栏 Agents 中终端 Agent 的临时显示标题（仅内存；Agent 种类变化、
-    /// 退出或窗格关闭时清除）。
-    pub terminal_agent_title: Option<(AgentKind, String)>,
-}
-```
-
-`Pane::new()` 初始化为 `None`。
-
-`update_pane_agent`（`src/app/update/pane.rs`）在写入快照前清理：
-
-```rust
-pub fn update_pane_agent(
-    state: &mut AppState,
-    id: PaneId,
-    snapshot: Option<PaneAgentSnapshot>,
-) -> bool {
-    let Some(pane) = state.pane_mut_anywhere(id) else {
-        return false;
-    };
-    if pane.agent == snapshot {
-        return false;
-    }
-    let previous_kind = pane.agent.as_ref().map(|snapshot| snapshot.kind);
-    let next_kind = snapshot.as_ref().map(|snapshot| snapshot.kind);
-    if previous_kind != next_kind {
-        pane.terminal_agent_title = None;
-    }
-    pane.agent = snapshot;
-    true
-}
-```
-
-**关键点**：
-
-- 终端 Agent 同行更新 state（比如 `Idle → Working`）或 OSC 标题变化时，覆盖保留。
-- Agent 退出（`Some → None`）或切换成另一种 Agent（`claude → codex`）时，覆盖清除。
-- 窗格关闭时 `Pane` 整体销毁，覆盖自然消失。
-- 不使用全局 `HashMap`，避免工作区索引变化、PaneId 复用和跨重启残留问题。
-
-### 4.3 标题解析
-
-`src/app/state/pane.rs` 的 `impl Pane` 新增：
-
-```rust
-impl Pane {
-    /// 侧栏 Agents 条目的第二行标题：内存覆盖优先，其次 lx 会话标题 /
-    /// 终端 Agent 的 OSC 标题；空标题返回 None。
-    pub fn agent_display_title(&self, kind: SidebarAgentKind) -> Option<&str> {
-        match kind {
-            SidebarAgentKind::Lx { .. } => self
-                .lx
-                .chat
-                .agent_title_override
-                .as_deref()
-                .or(self.lx.chat.session_title.as_deref()),
-            SidebarAgentKind::Terminal(agent) => self
-                .terminal_agent_title
-                .as_ref()
-                .filter(|(kind, _)| *kind == agent)
-                .map(|(_, title)| title.as_str())
-                .or_else(|| {
-                    self.agent
-                        .as_ref()
-                        .filter(|snapshot| snapshot.kind == agent)
-                        .and_then(|snapshot| snapshot.title.as_deref())
-                })
-                .filter(|title| !title.is_empty()),
-        }
-    }
-
-    /// 写入/清除侧栏标题覆盖；目标 Agent 已不在该窗格时忽略。
-    pub fn set_agent_title_override(
-        &mut self,
-        kind: SidebarAgentKind,
-        title: Option<String>,
-    ) {
-        let title = title.filter(|title| !title.trim().is_empty());
-        match kind {
-            SidebarAgentKind::Lx { .. } if self.lx.has_active_session() => {
-                self.lx.chat.agent_title_override = title;
-            }
-            SidebarAgentKind::Terminal(agent)
-                if self.agent.as_ref().is_some_and(|snapshot| snapshot.kind == agent) =>
-            {
-                self.terminal_agent_title = title.map(|title| (agent, title));
-            }
-            _ => {}
-        }
-    }
-}
-```
-
-**关键点**：
-
-- lx 覆盖不校验 `LxEntry` / `AiWebSite`，因为所有会切换这些身份的路径都会清空会话视图并调用 `reset_session_view`。
-- 终端覆盖带 `AgentKind` 校验，避免 `claude` 的缓存标题被 `codex` 复用。
-- 返回 `Option<&str>` 供 UI 直接借用，避免每帧克隆字符串。
-
-### 4.4 UI 条目模型
-
-`src/ui/left_panel/mod.rs`：
-
-```rust
-/// Agents 分区条目：标签索引、标签内窗格序号、窗格标识、Agent 种类、
-/// 运行状态与第二行标题；渲染与命中一一对应。
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct AgentListItem<'a> {
-    pub tab_index: usize,
-    pub pane_index: usize,
-    pub pane_id: PaneId,
-    pub kind: SidebarAgentKind,
-    pub state: AgentState,
-    /// 第二行标题：内存覆盖优先，其次会话标题 / 终端 OSC 标题。
-    pub title: Option<&'a str>,
-}
-
-/// 当前激活工作区的 Agents 条目（按标签与树序，同一窗格先 lx 后终端 Agent）。
-pub fn agent_items<'a>(state: &'a AppState) -> Vec<AgentListItem<'a>> {
-    state
-        .agent_entries()
-        .into_iter()
-        .map(|entry| {
-            let title = state
-                .pane_anywhere(entry.pane_id)
-                .and_then(|pane| pane.agent_display_title(entry.kind));
-            AgentListItem {
-                tab_index: entry.tab_index,
-                pane_index: entry.pane_index,
-                pane_id: entry.pane_id,
-                kind: entry.kind,
-                state: entry.state,
-                title,
-            }
-        })
-        .collect()
-}
-```
-
-**关键点**：
-
-- `AgentListItem` 带生命周期，但仍是 `Copy`，测试与调用方改动最小。
-- 标题借用 `AppState`，不引入每帧字符串分配。
-- `agent_target_at` 只使用 `pane_id` / `kind.target_view()`，不受影响。
-
----
-
-## 5. 菜单模型与更新逻辑
-
-### 5.1 新增菜单目标与命令
-
-`src/app/overlay.rs`：
-
-```rust
-/// 菜单与关闭确认作用目标：在既有工作区/Tab/Pane/提示词之外，新增
-/// 侧栏 Agents 条目（同一窗格可能同时有 lx 与终端两条，必须带 kind）。
-pub enum OverlayTarget {
-    // ...
-    Agent {
-        workspace: usize,
-        tab: usize,
-        pane: PaneId,
-        kind: SidebarAgentKind,
-    },
-}
-
-pub enum MenuCommand {
-    // ...
-    /// 侧栏 Agents：编辑标题（纯内存覆盖）。
-    EditAgentTitle,
-    /// 侧栏 Agents：关闭条目（lx 关会话视图，终端 Agent 关窗格）。
-    CloseAgent,
-}
-
-impl MenuCommand {
-    pub fn requires_confirm(self) -> bool {
-        matches!(
-            self,
-            // ...
-            Self::CloseAgent
-        )
-    }
-}
-```
-
-`RenameTarget` 增加：
-
-```rust
-pub enum RenameTarget {
-    // ...
-    AgentTitle {
-        workspace: usize,
-        tab: usize,
-        pane: PaneId,
-        kind: SidebarAgentKind,
-    },
-}
-```
-
-`RenameTarget` 仍可保持 `Copy`，因为 `SidebarAgentKind` 是 `Copy`。
-
-### 5.2 打开 Agent 菜单
-
-`src/app/update/menu.rs` 新增：
-
-```rust
-/// 打开 Agents 条目右键菜单：`Edit title` 恒可用；`Close` 对 lx 恒可用，
-/// 终端 Agent 仅在其窗格不是当前标签页唯一窗格时可用。
-pub fn open_agent_menu(state: &mut AppState, index: usize, anchor: (u16, u16)) {
-    let Some(entry) = state.agent_entries().get(index).copied() else {
-        return;
-    };
-    state.agent_scroll_drag = None;
-    let workspace = state.active_workspace;
-    let mut commands = vec![MenuCommand::EditAgentTitle];
-    let closable = match entry.kind {
-        SidebarAgentKind::Lx { .. } => true,
-        SidebarAgentKind::Terminal(_) => state
-            .workspaces
-            .get(workspace)
-            .and_then(|workspace| workspace.tabs.get(entry.tab_index))
-            .is_some_and(|tab| tab.layout.pane_ids().len() > 1),
-    };
-    if closable {
-        commands.push(MenuCommand::CloseAgent);
-    }
-    state.overlay = Some(Overlay::Menu(Menu {
-        anchor,
-        target: OverlayTarget::Agent {
-            workspace,
-            tab: entry.tab_index,
-            pane: entry.pane_id,
-            kind: entry.kind,
-        },
-        commands,
-        selected: 0,
-        confirming: false,
-    }));
-}
-```
-
-**关键点**：
-
-- 命中下标来自 `ui::agent_item_index_at`，与渲染同源。
-- 菜单目标记录 `workspace/tab/pane/kind`，同一窗格两条记录不会串。
-- `Close` 的可用性在“打开菜单时”判定；菜单存续期间窗格被外部关闭的竞态，由执行时的二次校验兜底。
-
-### 5.3 菜单命令执行
-
-`src/app/update/menu.rs` 的 `activate_menu` 新增分支：
-
-```rust
-(Some(MenuCommand::EditAgentTitle), OverlayTarget::Agent { workspace, tab, pane, kind }) => {
-    let current = state
-        .workspaces
-        .get(workspace)
-        .and_then(|workspace| workspace.tabs.get(tab))
-        .and_then(|tab| tab.pane(pane))
-        .and_then(|pane| pane.agent_display_title(kind))
-        .unwrap_or_default()
-        .to_string();
-    state.overlay = Some(Overlay::Rename(Rename {
-        target: RenameTarget::AgentTitle { workspace, tab, pane, kind },
-        input: TextInput::new(current),
-    }));
-}
-(Some(MenuCommand::CloseAgent), OverlayTarget::Agent { workspace, tab, pane, kind }) => {
-    close_agent(state, workspace, tab, pane, kind);
-}
-```
-
-关闭逻辑：
-
-```rust
-/// 关闭一个 Agents 条目。执行前再次确认目标仍存在，避免菜单打开期间
-/// Agent 退出/会话切换导致误关。
-fn close_agent(
-    state: &mut AppState,
+OverlayTarget::Agent {
     workspace: usize,
     tab: usize,
     pane: PaneId,
     kind: SidebarAgentKind,
-) {
-    if state.active_workspace != workspace
-        || !state
-            .agent_entries()
-            .iter()
-            .any(|entry| entry.tab_index == tab && entry.pane_id == pane && entry.kind == kind)
-    {
-        return;
-    }
-    match kind {
-        SidebarAgentKind::Lx { .. } => {
-            // 等价 `/new`：停流、解绑当前会话、回空白欢迎页；DB 历史保留。
-            let _ = super::chat::new_session(state, pane);
-        }
-        SidebarAgentKind::Terminal(_) => {
-            // 菜单只在该窗格可关闭时提供 Close；close_pane 仍保留最后窗格保护。
-            super::workspace::close_pane(state, workspace, tab, pane);
-        }
-    }
+    /// 打开菜单时是否带 Recent 绑定；固化移除项文案。
+    bound: bool,
 }
+
+MenuCommand::{EditAgentTitle, OpenPrompt, RemoveAgentTitle, CloseAgent}
 ```
 
-**关键点**：
+`EditAgentTitle` 不进入 `requires_confirm`；`RemoveAgentTitle` 与 `CloseAgent` 进入行内二次确认。
 
-- lx 关闭复用 `update::new_session`，它内部先 `stop_stream`（生成中也能关），再 `reset_session_view`，不触发 `DeleteChatSession`。
-- 终端关闭复用 `close_pane`，不新增进程信号路径。
-- 目标二次校验避免“菜单打开后 Agent 退出、同一窗格换了另一个 Agent，Close 误杀新 Agent”。
+### 4.2 命令顺序
 
-### 5.4 重命名提交
+1. `EditAgentTitle`（恒有）
+2. `OpenPrompt`（绑定页仍存在且已入库）
+3. `RemoveAgentTitle`（存在标题覆盖）
+4. `CloseAgent`（lx 恒有；终端仅当 Tab 内窗格数 > 1）
 
-`src/app/update/dialog.rs` 的 `commit_rename` 调整：
+菜单标题使用 Agent 身份名（`text::sidebar_agent_label(kind)`），不使用可能被改写的标题文本。
 
-```rust
-fn commit_rename(state: &mut AppState) {
-    let Some(Overlay::Rename(rename)) = state.overlay.as_ref() else {
-        return;
-    };
-    let name = rename.input.text().trim().to_string();
-    let target = rename.target;
-    // 只有 Agent 标题允许空值：空 = 清除内存覆盖，回落默认标题。
-    let allows_empty = matches!(target, RenameTarget::AgentTitle { .. });
-    if name.is_empty() && !allows_empty {
-        return;
-    }
-    match target {
-        // ...既有 Workspace / WorkspaceHistory / Tab / PromptFolder / PromptItem 分支...
-        RenameTarget::AgentTitle { workspace, tab, pane, kind } => {
-            if let Some(target) = state
-                .workspaces
-                .get_mut(workspace)
-                .and_then(|workspace| workspace.tabs.get_mut(tab))
-                .and_then(|tab| tab.pane_mut(pane))
-            {
-                target.set_agent_title_override(kind, (!name.is_empty()).then_some(name));
-            }
-        }
-    }
-    state.overlay = None;
-}
-```
+### 4.3 移除项文案
 
-**关键点**：
+移除项文案在打开菜单时固化：
 
-- 其他目标继续保持“空名不保存、浮层不关闭”的既有语义。
-- Agent 标题空值即清除覆盖，不需要额外提示或错误。
-- 只写 `LxChat.agent_title_override` 或 `Pane.terminal_agent_title`，不触发任何 `Effect`。
+- `bound = true` → `Unbind recent` / 确认态 `Confirm unbind`；
+- `bound = false` → `Remove title` / 确认态 `Confirm remove title`。
 
-### 5.5 菜单文案与标题
+菜单存续期间即使覆盖被外部清空，标签与菜单宽度也保持不变，避免指针落点漂移。
 
-`src/ui/text/workspace.rs` 新增：
+### 4.4 Close
 
-```rust
-/// Agents 条目第二行：无标题占位。
-pub const AGENT_NO_TITLE: &str = "(no title)";
-/// Agents 条目右键菜单。
-pub const MENU_AGENT_EDIT_TITLE: &str = "Edit title";
-pub const MENU_AGENT_CLOSE: &str = "Close";
-```
+- lx：复用 `update::chat::new_session`，先停流再重置视图，不产生 `DeleteChatSession`；
+- 终端：复用 `close_pane`，保留最后窗格保护；
+- 执行前再次校验目标仍存在；会话切换或终端换 kind 时直接关闭旧菜单/标题弹窗。
 
-`src/ui/overlay/menu.rs`：
+## 5. 标题弹窗
 
-```rust
-MenuCommand::EditAgentTitle => text::MENU_AGENT_EDIT_TITLE,
-MenuCommand::CloseAgent => {
-    if confirming {
-        text::MENU_CONFIRM_CLOSE
-    } else {
-        text::MENU_AGENT_CLOSE
-    }
-}
-```
+### 5.1 结构
 
-菜单边框标题使用第一行的 Agent 名称：
-
-```rust
-OverlayTarget::Agent { kind, .. } => text::sidebar_agent_label(*kind).to_string(),
-```
-
-**理由**：标题可能被用户改成很长或与第二行重复；边框标题保持稳定身份名，便于识别目标。
-
----
-
-## 6. 渲染设计
-
-### 6.1 位置标签
-
-`src/ui/text/workspace.rs`：
-
-```rust
-/// Agents 条目归属标签 `[T1 P1]`：T 为标签位置、P 为窗格树序位置（均 1 基）。
-pub fn agent_location(tab_index: usize, pane_index: usize) -> String {
-    format!(
-        "[T{} P{}]",
-        tab_index.saturating_add(1),
-        pane_index.saturating_add(1)
-    )
-}
-```
-
-测试中的 `text::agent_location(0)` 全部改为 `text::agent_location(0, 0)` 等实际窗格序号。
-
-### 6.2 两行条目
-
-`agent_list_items` 的每个 `ListItem` 由两行组成：
+`Overlay::AgentTitle(AgentTitleDialog)`：
 
 ```text
-第一行：marker(2) + dot(1) + space(1) + name + padding + [T1 P1]
+┌─ Edit title ─────────────────────────────┐
+│ > title or pick recent                   │
+│ ── recent ─────────────────────────────  │
+│ ❯ Auth Flow                      2m      │
+│   Backend Prompt                         │
+│   Deploy Plan                    5m      │
+│   Release Prompt                         │
+│              ↵ save  ^c clear  esc cancel│
+└──────────────────────────────────────────┘
+```
+
+- 输入框预填当前标题；已绑定时高亮对应 Recent 行。
+- Recent 行快照在打开时生成；打开期间不随底部抽屉刷新，避免模态期间重排。
+- 列表最多显示 5 条，超过时通过 ↑/↓ 滚动窗口；选中项始终可见。
+- 空态显示 `no recent pages`。
+
+### 5.2 交互
+
+| 操作 | 行为 |
+|---|---|
+| ↑/↓ | 移动 Recent 高亮，回填页标题并建立绑定 |
+| 直接输入/删除/粘贴/剪切 | 转为自定义标题，清除绑定与高亮 |
+| Enter / `Save` | 提交；空输入清除覆盖 |
+| `Clear` | 清空输入与绑定，弹窗保持打开 |
+| Esc / `Cancel` / 点击弹窗外 | 取消，不提交 |
+| 鼠标点击 Recent 行 | 等价 ↑/↓ |
+| 点击输入框 | 进入文本选择/编辑 |
+
+提交前校验目标仍存在且接受该 Agent 标题；目标失效时保留弹窗，不静默丢弃输入。
+
+### 5.3 绑定有效性
+
+- 绑定时保存 `item_id/page_id` 与页标题快照；
+- 提交时再次确认页存在，否则存为自定义标题（无绑定）；
+- 绑定页删除后：标题文本保留、`Open prompt` 隐藏、移除项仍为 `Unbind recent`；
+- 只有绑定页存在且为 Saved 页时才允许 `Open prompt`。
+
+## 6. 渲染与命中
+
+### 6.1 两行条目
+
+```text
+第一行：marker(2) + dot(2) + name + padding + [T1 P1]
 第二行：TREE_LEAF("  └─ ") + title + padding
 ```
 
-示意：
+- 第一行名称先按显示宽度截断，`[T1 P1]` 固定右对齐；
+- 第二行前缀复用 `text::agent::TREE_LEAF`，`└` 与第一行状态圆点同列；
+- 标题按显示宽度截断，CJK/emoji 不越界；
+- 前缀恒为 muted；标题按绑定页状态着色；无标题 `(no title)` 为 muted；
+- 悬停由 `ListItem.style` 铺满两行，标题前景保留状态色。
 
-```text
-❯ ● lx-native            [T1 P1]
-  └─ Fix login bug
-```
+### 6.2 槽位模型
 
-- 第二行前缀复用 `text::agent::TREE_LEAF`（`"  └─ "`，5 列），`└` 正好落在第一行状态圆点列。
-- 标题按**显示宽度**截断：`text::ellipsize_width(title, width - prefix_width)`，中文/emoji 不会撑破侧栏。
-- 标题与前缀使用 `style::muted()`，并 `patch(highlight)` 叠加悬停背景；标题短时补空格到整行宽度，保证 hover 高亮铺满整行。
-- 无标题时显示 `text::AGENT_NO_TITLE`，样式同为 muted。
-- 第一行位置标签固定右对齐；名称超宽先截断名称，`[T1 P1]` 不丢。
+每个条目固定 2 行，滚动状态以条目为单位：
 
-关键代码：
+- `agent_visible_items(list) = (height / 2).max(1)`（滚动计算用）；
+- `agent_content_rect(list)`：高度向下取偶；**高度 < 2 时返回 0 行**，避免“实际不渲染但命中层可点”的幽灵条目；
+- 渲染、滚动条、命中统一使用 `agent_content_rect`；
+- 点击/右键第一行或第二行都命中同一条目；底部留空行与滚动条列不命中；
+- 滚动条 `visible` 使用条目数，不使用行数。
 
-```rust
-fn agent_list_items<'a>(
-    state: &'a AppState,
-    items: &[AgentListItem<'a>],
-    width: usize,
-) -> Vec<ListItem<'a>> {
-    // ...第一行 marker/dot/name/location...
-    let mut lines = vec![Line::from(spans)];
+### 6.3 命中
 
-    let title = item
-        .title
-        .filter(|title| !title.is_empty())
-        .unwrap_or(text::AGENT_NO_TITLE);
-    let prefix = text::agent::TREE_LEAF;
-    let title_width = width.saturating_sub(prefix.width());
-    let title = text::ellipsize_width(title, title_width);
-    let padding = width.saturating_sub(prefix.width() + title.width());
-    lines.push(Line::from(vec![
-        Span::styled(prefix, style::muted().patch(highlight)),
-        Span::styled(title, style::muted().patch(highlight)),
-        Span::styled(" ".repeat(padding), Style::default().patch(highlight)),
-    ]));
-
-    rows.push(ListItem::new(lines).style(highlight));
-}
-```
-
-### 6.3 两行条目的滚动与命中模型
-
-每个条目固定占 2 行，滚动状态仍以**条目**为单位（`AppState.agent_scroll`）。
-
-新增辅助：
-
-```rust
-/// Agents 分区可见的完整条目数；每个条目固定 2 行。
-fn agent_visible_items(list: Rect) -> usize {
-    (usize::from(list.height) / 2).max(1)
-}
-
-/// Agents 实际渲染区：高度向下取偶，避免底部出现半个条目。
-fn agent_content_rect(list: Rect) -> Rect {
-    let visible = agent_visible_items(list);
-    let height = u16::try_from(visible.saturating_mul(2))
-        .unwrap_or(u16::MAX)
-        .min(list.height);
-    Rect {
-        height,
-        ..list
-    }
-}
-```
-
-调整点：
-
-1. `agent_list_rows(view, state)` 返回 `agent_visible_items(list)`，语义从“可见行数”改为“可见条目数”。
-2. `agent_scrollbar_for` 使用 `agent_content_rect(list)` 作为轨道区域，`visible = agent_visible_items(list)`。
-3. `render_agents` 在 `agent_content_rect(area)` 内渲染 `List`，底部不足一个条目的行留空。
-4. `agent_item_index_at`：
-
-```rust
-let content = agent_content_rect(list);
-if !content.contains((column, row).into()) {
-    return None;
-}
-let row_offset = usize::from(row - content.y);
-let slot = state.agent_scroll.saturating_add(row_offset / 2);
-(slot < total).then_some(slot)
-```
-
-这样：
-
-- 第一行和第二行都命中同一条目；
-- 底部留空行不命中；
-- 滚动条、滚轮、拖拽、悬停全部沿用原路径，只是 `visible` 单位从“行”变成“条目”。
-
-**边界说明**：当 Agents 区高度为奇数时，最底部 1 行留空；这是为了避免标题被裁成半行。侧栏高度极小时仍允许渲染第一行，行为与现有窄屏退化一致。
-
----
+- `agent_item_index_at`：`slot = agent_scroll + (row - content.y) / 2`；
+- 左键 `agent_target_at` → `focus_agent_pane_view`；
+- 右键 `agent_item_index_at` → `open_agent_menu`；
+- 悬停/滚轮复用同一命中函数，滚动后按新偏移重算。
 
 ## 7. 事件接入
 
-### 7.1 右键
+- 右键：工作区列表之后、右栏/主区之前命中 Agents 条目；
+- 左键：沿用 `handle_sidebar_press`，两行同命中；
+- 滚轮：只滚动 Agents 列表，不穿透；
+- 标题弹窗：`OverlayKind::AgentTitle` 接管 Esc/Enter/↑/↓ 与文本编辑键；鼠标点击输入框、Recent 行、按钮、弹窗外；
+- 会话切换 / 终端换 kind：关闭指向该窗格的 Agent 菜单与标题弹窗。
 
-`src/event/overlay.rs` 的 `open_right_click_menu`，在工作区列表命中之后新增：
+## 8. 不变量
 
-```rust
-if let Some(index) = ui::agent_item_index_at(view, state, column, row) {
-    update::open_agent_menu(state, index, (column, row));
-    return true;
-}
-```
-
-顺序放在 `workspace_item_at` / `workspace_list_blank_at` 之后、右栏与主区窗格之前。Agents 区与工作区列表矩形不重叠，顺序不会互相截胡。
-
-### 7.2 左键
-
-左键继续走 `handle_sidebar_press` → `ui::agent_target_at` → `update::focus_agent_pane_view`。由于 `agent_item_index_at` 已改成两行映射，点击第一行或第二行都能聚焦同一条目，无需新增分支。
-
-### 7.3 悬停 / 滚轮
-
-`event/mouse/hover.rs` 与 `event/mouse/wheel.rs` 已经统一调用 `ui::agent_item_index_at`，改一处即可让两行同时高亮、悬停与滚动后重算正确。
-
----
-
-## 8. 边界与不变量
-
-1. **绝不写 DB**：`Edit title` 只改内存；`Close` 只调用 `new_session` / `close_pane`；不新增 `Effect`，不新增迁移。
-2. **绝不改会话真实标题**：`LxChat::session_title`、输入框右上角标题胶囊、`/resume` 列表保持原样。
-3. **绝不改终端进程**：不向 PTY 写标题、不发信号；终端 OSC 标题只读。
-4. **条目身份**：同一窗格的 lx 与终端两行必须能区分；菜单目标与覆盖都带 `SidebarAgentKind`。
-5. **条目消失即覆盖失效**：
-   - lx：`reset_session_view` / 会话切换清空；
-   - 终端：`update_pane_agent` 在 Agent 退出或种类变化时清空。
-6. **最后窗格保护**：终端 Agent 是标签页唯一窗格时不提供 `Close`；`close_pane` 自己的保护保留。
-7. **二次确认**：`CloseAgent` 必须进入 `requires_confirm`；`EditAgentTitle` 不进入。
-8. **空标题**：第二行始终存在，默认标题为空时显示 `(no title)`；`Edit title` 空输入清除覆盖。
-9. **窄侧栏**：名称先截断，`[T1 P1]` 保留；第二行标题按显示宽度截断。
+1. **绝不写 DB**：标题编辑、移除、解绑不产生 Effect；`Open prompt` 的 `SetActivePage` 等属于 Prompt 自身行为。
+2. **绝不改真实标题**：`LxChat::session_title`、标题胶囊、`/resume` 列表、终端 OSC 标题保持原样。
+3. **绝不向终端写内容**：不因标题功能向 PTY 写标题、发信号。
+4. **条目身份**：同一窗格 lx 与终端两行必须可区分；菜单目标与覆盖都带 `SidebarAgentKind`。
+5. **条目消失即覆盖失效**：会话重置/切换、终端退出/换 kind、窗格关闭清除；清除路径不得被存活判断阻断。
+6. **菜单/弹窗目标失效即关闭**：会话切换、终端换 kind 后旧浮层不得作用于新目标。
+7. **最后窗格保护**：终端唯一窗格不提供 `Close`。
+8. **二次确认**：`CloseAgent` 与 `RemoveAgentTitle` 必须行内确认。
+9. **窄侧栏**：名称先截断，`[T1 P1]` 保留；第二行标题不越界。
 10. **渲染只读**：`ui/` 只读 `AppState`，不修改覆盖、不执行关闭。
 
----
-
-## 9. 变更文件清单
+## 9. 文件清单
 
 ```text
-src/
-  app/
-    overlay.rs                     新增 OverlayTarget::Agent、MenuCommand::{EditAgentTitle, CloseAgent}、
-                                   RenameTarget::AgentTitle、requires_confirm
-    state/
-      pane.rs                      SidebarAgentEntry 增加 pane_index；Pane 增加 terminal_agent_title；
-                                   agent_display_title / set_agent_title_override
-      lx/
-        chat.rs                     LxChat 增加 agent_title_override；new / reset_session_view 初始化与清理
-    state.rs                       agent_entries 枚举 pane_index
-    update/
-      pane.rs                      update_pane_agent 在 Agent 种类变化/退出时清除终端覆盖
-      chat/session.rs              on_session_loaded_full 的 session_changed 分支清除 lx 覆盖
-      menu.rs                      open_agent_menu、close_agent、activate_menu 分支
-      dialog.rs                    commit_rename 支持 AgentTitle（含空值清除）
-  ui/
-    left_panel/mod.rs              AgentListItem 增加 pane_index/title；两行渲染；两行命中与滚动模型
-    overlay/menu.rs                Agent 菜单标题与命令文案
-    text/workspace.rs              agent_location 新格式、AGENT_NO_TITLE、菜单文案
-  event/
-    overlay.rs                     右键命中 Agents 条目并打开菜单
-tests（按模块归属拆分）：
-  src/app/state/pane/tests.rs      （新增文件）标题解析、覆盖生命周期、Agent 种类切换清理
-  src/app/update/menu/tests.rs     （新增文件）菜单命令集合、行内确认、关闭分派、重命名提交
-  src/ui/left_panel/tests.rs       两行渲染、`[T1 P1]`、悬停、命中、滚动、窄侧栏
-  src/event/tests/agent_menu.rs    （新增文件）右键打开、终端唯一窗格无 Close、点击两行跳转
-  src/ui/text/tests.rs             新文案与 location 格式
+src/app/overlay.rs                 OverlayTarget::Agent { bound }、AgentTitleDialog、
+                                   MenuCommand::{EditAgentTitle, RemoveAgentTitle, CloseAgent}
+src/app/state/pane.rs              SidebarAgentEntry.pane_index、AgentPromptRef、
+                                   AgentTitleOverride、accepts_agent_title、
+                                   agent_title_override / agent_display_title /
+                                   set_agent_title_override
+src/app/state/lx/chat.rs           LxChat.agent_title_override 初始化与 reset 清理
+src/app/state.rs                   agent_entries 枚举 pane_index、agent_title_status(workspace, ...)
+src/app/update/pane.rs             set_lx_entry 跨入口清空标题；update_pane_agent 清空/关浮层
+src/app/update/chat/session.rs     会话切换清空覆盖并关闭 Agent 浮层
+src/app/update/agent_title.rs      打开弹窗、Recent 选择、提交、移除、Open prompt、浮层失效
+src/app/update/menu.rs             open_agent_menu / close_agent / 命令分派
+src/app/update/dialog.rs           粘贴/剪切转自定义的逻辑
+src/app/update/prompt/recent.rs    open_prompt_page 校验、当前页展开、Recent 行
+src/ui/left_panel/mod.rs           两行渲染、[T1 P1]、状态色、槽位命中/滚动
+src/ui/overlay/agent_title.rs      弹窗几何、命中、渲染、小屏保护
+src/ui/overlay/menu.rs             Agent 菜单标题与命令文案
+src/ui/style.rs                    template_page_title
+src/ui/text/workspace.rs           AGENT_NO_TITLE、菜单/确认/弹窗文案
+src/input/mod.rs                   AgentTitle 键位映射
+src/event/overlay.rs               右键、弹窗鼠标、外部关闭
 ```
 
-> 说明：现有 `src/app/update/tests.rs` 已超过 6000 行，本次不继续往该文件堆测试，新增测试按模块拆到 `menu/tests.rs`、`state/pane/tests.rs` 与 `event/tests/agent_menu.rs`。
+测试按模块归属：
 
----
+```text
+src/app/state/pane/tests.rs            标题解析、覆盖生命周期、清除语义
+src/app/state/tests.rs                 跨工作区状态解析
+src/app/update/menu/tests.rs           菜单命令、确认、关闭、弹窗、Open prompt、目标失效
+src/app/update/prompt/recent/tests.rs  当前页展开、无效页拒绝、Recent 行
+src/app/update/chat/web/tests.rs       跨 AI Web 入口清空临时标题
+src/ui/left_panel/tests.rs             两行渲染、[T1 P1]、状态色、实时正文、命中/滚动
+src/ui/overlay/agent_title/tests.rs    几何、命中、渲染、状态色、小屏
+src/ui/overlay/tests.rs                菜单文案固化
+src/ui/style/tests.rs                  页标题状态色映射
+src/input/tests.rs / tests_agent_title.rs
+src/event/tests/agent_menu.rs          右键、左键、滚轮、弹窗鼠标
+```
 
-## 10. 测试计划（审核通过后执行）
+## 10. 测试与验收
 
-### 10.1 状态与标题
+### 10.1 状态与生命周期
 
-- `AgentListItem.title`：
-  - lx session_title 有值 → 第二行取它；
-  - lx session_title 为空 → `None`；
-  - 终端 OSC title 有值 → 取它；
-  - OSC title 为空字符串 → `None`。
-- 内存覆盖：
-  - lx 设置覆盖后优先于 session_title；
-  - 清除覆盖后回落到 session_title；
-  - 终端覆盖只在同 `AgentKind` 下生效；
-  - `update_pane_agent` 在 `claude → codex`、`claude → None` 时清空覆盖；
-  - `reset_session_view` 与 `on_session_loaded_full` 切换会话后清空 lx 覆盖；
-  - 覆盖不修改 `session_title` 本身。
+- 未设置覆盖时 lx / 终端都显示 `(no title)`，不读取 session/OSC 标题；
+- 自定义标题、绑定标题、绑定快照；
+- 无会话拒绝写入、无会话仍可清除；
+- 终端 kind 变化/退出清空，同 kind 更新保留；
+- 会话重置/切换、AI Web 跨入口清空；
+- 跨工作区保留覆盖，状态按所属工作区解析。
 
-### 10.2 菜单
+### 10.2 菜单与弹窗
 
-- `open_agent_menu`：
-  - lx 条目命令为 `[EditAgentTitle, CloseAgent]`；
-  - 终端条目的标签页有 >1 窗格时命令为 `[EditAgentTitle, CloseAgent]`；
-  - 终端条目是唯一窗格时命令只有 `[EditAgentTitle]`；
-  - 菜单目标包含正确的 workspace/tab/pane/kind。
-- `activate_menu`：
-  - `EditAgentTitle` 打开 `Overlay::Rename` 并预填当前显示标题；
-  - `CloseAgent` 第一次只设置 `confirming`，第二次才执行；
-  - 切换选中项后 `confirming` 复位；
-  - lx `CloseAgent` 调用 `/new` 语义：`session_id=None`、消息清空、DB 效果队列中没有 `DeleteChatSession`；
-  - 终端 `CloseAgent` 关闭目标窗格；
-  - 菜单打开后目标消失，执行时不误关其他 Agent。
-- `commit_rename`：
-  - AgentTitle 输入 `my title` → 覆盖生效；
-  - AgentTitle 输入空 → 清除覆盖、浮层关闭；
-  - 其他 RenameTarget 输入空仍保持浮层不关闭。
+- 无标题：`[EditAgentTitle, CloseAgent]`；
+- 自定义标题：`[EditAgentTitle, RemoveAgentTitle, CloseAgent]`；
+- 有效绑定：`[EditAgentTitle, OpenPrompt, RemoveAgentTitle, CloseAgent]`；
+- 终端唯一窗格无 `Close`；
+- 移除项文案在菜单打开时固化；
+- `Edit title` 打开弹窗并预填；
+- ↑/↓、直接编辑、粘贴/剪切、Enter、Esc、Clear、Save、鼠标行点击；
+- 绑定页删除后提交为自定义、菜单无 `Open prompt`；
+- 会话切换/终端换 kind 关闭旧浮层；
+- `Open prompt` 折叠时展开、钉住时释放并打开精确页。
 
 ### 10.3 渲染与命中
 
-- 第一行以 `[T1 P1]` 结尾；`T`/`P` 按位置递增；
-- 同一窗格两行编号相同；
-- 第二行以 `"  └─ "` 开头；无标题显示 `(no title)`；
-- 宽字符标题按显示宽度截断，不越界；
-- 悬停时两行都有 selection 背景；
-- 点击第一行/第二行都命中同一条目；
-- 底部留空行不命中；
-- 滚动条可见条目数按 `高度 / 2` 计算；
-- 窄侧栏名称截断但 `[T1 P1]` 保留。
+- 第一行 `[T1 P1]`，同窗格两行一致；
+- 第二行 `"  └─ "`，无标题 `(no title)`；
+- CJK 截断、悬停两行底色、状态色；
+- 两行点击/右键同命中；
+- 底部留空行与滚动条列不命中；
+- 高度 < 2 行无命中槽位；
+- 小屏弹窗不 panic、按钮不与输入行重叠。
 
-### 10.4 事件
-
-- 右键 Agents 条目打开菜单，且不会错误打开工作区/Tab/Pane 菜单；
-- 右键第二行同样打开菜单；
-- 左键两行都聚焦对应 Pane 与目标视图；
-- 滚轮滚动后悬停按新偏移重算。
-
-### 10.5 精确验证命令
+### 10.4 验证命令
 
 ```bash
 cargo fmt
 cargo clippy --all-targets -- -D warnings
-cargo test --lib ui::left_panel::
-cargo test --lib ui::text::
-cargo test --lib app::state::pane::
-cargo test --lib app::update::menu::
-cargo test --lib event::tests::agent_menu::
-cargo test --lib event::tests::mouse_click::
+cargo test --lib
 ```
-
----
 
 ## 11. 验收标准
 
-- 侧栏 Agents 每个条目固定两行，第二行为标题或 `(no title)`。
-- 第一行显示 `[T1 P1]`，T/P 均为 1 基位置，同一窗格两行一致。
-- 右键条目打开菜单，包含 `Edit title`；可关闭的条目包含 `Close`。
-- `Close` 需要行内二次确认，执行后只关闭、不删 DB。
-- `Edit title` 复用居中重命名浮层；空输入清除覆盖。
-- 所有标题修改只在内存，重启后丢失；终端/会话真实标题完全不变。
-- 最后窗格保护的终端 Agent 不显示 `Close`。
-- 两行条目的悬停、点击、右键、滚轮、滚动条全部正确。
-- `cargo fmt`、`cargo clippy --all-targets -- -D warnings`、受影响模块测试全部通过。
+- 每个 Agents 条目固定两行，第二行为标题或 `(no title)`。
+- 第一行显示 `[T1 P1]`，T/P 为 1 基位置，同窗格两行一致。
+- 标题只来自 Recent 或自定义输入；不出现会话标题/终端 OSC 标题。
+- 右键菜单按顺序显示 `Edit title` / 可选 `Open prompt` / 可选移除项 / 可选 `Close`。
+- `Close` 与移除项均需行内二次确认；`Close` 只关闭不删 DB。
+- 绑定有效时 `Open prompt` 打开精确页并聚焦 Prompt 面板。
+- 标题状态色与 Prompt Recent 一致；悬停保留状态前景。
+- 所有标题修改只在内存；重启丢失；真实标题、`/resume`、标题胶囊、OSC 不变。
+- 终端 Agent 是唯一窗格时不显示 `Close`。
+- 两行条目的左键、右键、悬停、滚轮、滚动条、窄侧栏、小屏全部正确。
+- `cargo fmt`、`cargo clippy --all-targets -- -D warnings`、`cargo test --lib` 通过。
 
----
+## 12. V1 历史（已被 V2 取代）
 
-## 12. V2 补充：Recent 标题与 Open prompt
+以下是实现过程中被 V2 取代的 V1 约定，仅作历史记录，不再作为实现依据：
 
-> 用户追加需求：标题只能来自 Prompt 面板 Recent 列表或自定义输入；右键菜单增加打开该提示词的入口。
-
-### 12.1 决策
-
-- **D15 移除自动标题来源**：`lx.chat.session_title` 与 `PaneAgentSnapshot.title` 不再参与侧栏第二行；未设置覆盖时统一显示 `(no title)`。
-- **D16 Recent 选择绑定页**：`Edit title` 打开居中弹窗；弹窗展示目标工作区 Recent 抽屉的页快照（页标题 + 提示词名）。选中一条时用页标题回填输入框，并绑定 `(item_id, page_id)`。
-- **D17 单输入框交互**：↑/↓ 浏览 Recent 并回填/绑定；直接编辑输入框转为自定义标题并解除绑定；Enter 提交当前显示值；Esc 取消。鼠标点行等价 ↑/↓；底部 `Save` / `Clear` / `Cancel` 与键盘一致。
-- **D18 标题快照**：绑定保存选中时的页标题文本；提示词页后续改名不自动跟随。空输入提交清除覆盖。
-- **D19 Open prompt**：仅当标题绑定仍可解析时，在菜单 `Edit title` 后插入 `Open prompt`；点击后释放 Prompt 钉住、结算当前编辑、在右侧 Prompt 面板打开该 item/page 并聚焦。自定义标题或绑定失效时不显示该项。
-- **D20 生命周期沿用**：绑定随覆盖一起在会话重置/切换、终端 Agent 退出/种类变化、窗格关闭时清除；重启丢失。
-- **D21 状态色对齐**：弹窗 Recent 行的页标题状态色与 Prompt 抽屉一致：todo 默认亮白、in_progress 黄、done 绿、无状态压暗；选中项保留选中底色并加粗。
-- **D22 移除标题入口**：条目存在标题覆盖时，右键菜单在 `Open prompt` 后提供移除项：带 Recent 绑定时显示 `Unbind recent`，自定义标题显示 `Remove title`；点击需行内二次确认（`Confirm unbind` / `Confirm remove title`），确认后清空绑定与标题覆盖，第二行回到 `(no title)`。绑定页已删除（`Open prompt` 隐藏）时仍保留移除入口；无标题覆盖时不显示该项。
-- **D23 侧栏标题状态色**：Agents 第二行标题在绑定可解析时按绑定页当前模板状态着色（todo 亮白、in_progress 黄、done 绿、无状态或无绑定压暗），与 Prompt 抽屉 Recent 一致；悬停只叠加底色，不覆盖状态前景色。状态实时读取绑定页正文（正在编辑的页取实时正文），标题文本仍是选择时的快照。
-
-### 12.2 数据模型与模块
-
-```text
-src/app/state/pane.rs          AgentPromptRef / AgentTitleOverride
-                               Pane::agent_title_override / agent_display_title / set_agent_title_override
-src/app/state/lx/chat.rs       LxChat.agent_title_override 改为 Option<AgentTitleOverride>
-src/app/overlay.rs             AgentTitleDialog、OverlayKind::AgentTitle、Overlay::AgentTitle
-src/app/update/agent_title.rs  打开弹窗、Recent 选择、提交、Open prompt
-src/app/update/menu.rs         EditAgentTitle 打开弹窗；绑定有效时追加 OpenPrompt
-src/app/update/prompt/recent.rs  open_prompt_page(item_id, page_id) 与按工作区取 Recent 行
-src/ui/overlay/agent_title.rs  弹窗几何、命中、渲染
-src/ui/text/workspace.rs       AGENT_TITLE_PLACEHOLDER
-```
-
-### 12.3 测试要求
-
-- 状态层：会话/OSC 标题不再作为来源；自定义与绑定标题；清除后显示 `(no title)`；绑定生命周期。
-- 菜单/更新层：无绑定菜单为 `[EditAgentTitle, CloseAgent]`；绑定后为 `[EditAgentTitle, OpenPrompt, CloseAgent]`；弹窗预填、↑/↓ 回填、编辑转自定义、空输入清除、Open prompt 打开精确页、页删除后不误开。
-- UI 层：弹窗高度夹取、两行命中、滚动窗口、选中底色、空态、按钮命中、窄屏不 panic。
-- 事件层：右键 → Edit title → 弹窗；点击行/Save/Clear/Cancel/外部；Open prompt 打开 Prompt 面板。
-
-### 12.4 验收补充
-
-- Agents 第二行初始为 `(no title)`，不会自动出现会话标题或终端 OSC 标题。
-- `Edit title` 弹窗同时支持 Recent 选择与自定义输入；Recent 行显示页标题与提示词名。
-- 绑定 Recent 后右键菜单出现 `Open prompt`，点击在 Prompt 面板打开对应页。
-- 自定义标题、空标题、绑定失效时没有 `Open prompt`。
-- 所有标题仍为纯内存覆盖，不写 DB、不改真实标题。
+- V1/D6：lx 默认读 `session_title`、终端默认读 OSC title；V2/D15 改为无默认标题来源。
+- V1/D7：清空覆盖后回落默认标题；V2 改为 `(no title)`。
+- V1/D12：复用 `Overlay::Rename` 单行输入；V2 改为 `AgentTitleDialog` + Recent 列表。
+- V1/D14：覆盖清除后回落实时默认标题；V2 取消该回退。
+- V1 `pane_index` 设计为 1 基存储；实现统一为 0 基存储、显示 +1。

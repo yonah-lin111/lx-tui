@@ -1188,6 +1188,7 @@ fn all_text_overlays_route_word_ops_and_cut() {
         OverlayKind::ReferencedFolderSearch,
         OverlayKind::ResumeSessionEdit,
         OverlayKind::Connect,
+        OverlayKind::AgentTitle,
     ];
     let cases = [
         (

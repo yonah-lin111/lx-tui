@@ -716,6 +716,9 @@ pub fn set_lx_entry(state: &mut AppState, id: PaneId, entry: crate::app::state::
             pane.lx.slash = None;
         }
         if crossing_ai_web {
+            // 跨 AI Web / 本地入口必然改变会话归属；即使当前只有 loading/shell
+            // 临时态（没有 session_id）也要清掉侧栏标题，避免旧标题漂到新会话。
+            pane.lx.chat.agent_title_override = None;
             let incompatible = pane
                 .lx
                 .chat
@@ -933,10 +936,15 @@ pub fn update_pane_agent(
     }
     let previous_kind = pane.agent.as_ref().map(|snapshot| snapshot.kind);
     let next_kind = snapshot.as_ref().map(|snapshot| snapshot.kind);
-    if previous_kind != next_kind {
+    let kind_changed = previous_kind != next_kind;
+    if kind_changed {
         pane.terminal_agent_title = None;
     }
     pane.agent = snapshot;
+    if kind_changed {
+        // Agent 退出或换种类后，指向旧条目的菜单/标题弹窗必须失效。
+        super::close_agent_overlays_for_pane(state, id);
+    }
     true
 }
 
