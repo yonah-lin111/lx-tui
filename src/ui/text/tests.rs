@@ -56,6 +56,7 @@ fn user_visible_labels_are_clean_ascii() {
         AGENT_NO_TITLE,
         MENU_AGENT_EDIT_TITLE,
         MENU_AGENT_CLOSE,
+        AGENT_TITLE_PLACEHOLDER,
         CONFIRM_DELETE_PAGE_TITLE,
         RENAME_PROMPT_TITLE,
         RENAME_FOLDER_TITLE,
@@ -190,6 +191,8 @@ fn agent_location_and_menu_labels_are_stable() {
     assert_eq!(AGENT_NO_TITLE, "(no title)");
     assert_eq!(MENU_AGENT_EDIT_TITLE, "Edit title");
     assert_eq!(MENU_AGENT_CLOSE, "Close");
+    assert_eq!(RENAME_AGENT_TITLE, "Edit title");
+    assert_eq!(AGENT_TITLE_PLACEHOLDER, "title or pick recent");
 }
 
 #[test]

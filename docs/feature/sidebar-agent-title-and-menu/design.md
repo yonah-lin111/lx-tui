@@ -859,3 +859,47 @@ cargo test --lib event::tests::mouse_click::
 - 最后窗格保护的终端 Agent 不显示 `Close`。
 - 两行条目的悬停、点击、右键、滚轮、滚动条全部正确。
 - `cargo fmt`、`cargo clippy --all-targets -- -D warnings`、受影响模块测试全部通过。
+
+---
+
+## 12. V2 补充：Recent 标题与 Open prompt
+
+> 用户追加需求：标题只能来自 Prompt 面板 Recent 列表或自定义输入；右键菜单增加打开该提示词的入口。
+
+### 12.1 决策
+
+- **D15 移除自动标题来源**：`lx.chat.session_title` 与 `PaneAgentSnapshot.title` 不再参与侧栏第二行；未设置覆盖时统一显示 `(no title)`。
+- **D16 Recent 选择绑定页**：`Edit title` 打开居中弹窗；弹窗展示目标工作区 Recent 抽屉的页快照（页标题 + 提示词名）。选中一条时用页标题回填输入框，并绑定 `(item_id, page_id)`。
+- **D17 单输入框交互**：↑/↓ 浏览 Recent 并回填/绑定；直接编辑输入框转为自定义标题并解除绑定；Enter 提交当前显示值；Esc 取消。鼠标点行等价 ↑/↓；底部 `Save` / `Clear` / `Cancel` 与键盘一致。
+- **D18 标题快照**：绑定保存选中时的页标题文本；提示词页后续改名不自动跟随。空输入提交清除覆盖。
+- **D19 Open prompt**：仅当标题绑定仍可解析时，在菜单 `Edit title` 后插入 `Open prompt`；点击后释放 Prompt 钉住、结算当前编辑、在右侧 Prompt 面板打开该 item/page 并聚焦。自定义标题或绑定失效时不显示该项。
+- **D20 生命周期沿用**：绑定随覆盖一起在会话重置/切换、终端 Agent 退出/种类变化、窗格关闭时清除；重启丢失。
+
+### 12.2 数据模型与模块
+
+```text
+src/app/state/pane.rs          AgentPromptRef / AgentTitleOverride
+                               Pane::agent_title_override / agent_display_title / set_agent_title_override
+src/app/state/lx/chat.rs       LxChat.agent_title_override 改为 Option<AgentTitleOverride>
+src/app/overlay.rs             AgentTitleDialog、OverlayKind::AgentTitle、Overlay::AgentTitle
+src/app/update/agent_title.rs  打开弹窗、Recent 选择、提交、Open prompt
+src/app/update/menu.rs         EditAgentTitle 打开弹窗；绑定有效时追加 OpenPrompt
+src/app/update/prompt/recent.rs  open_prompt_page(item_id, page_id) 与按工作区取 Recent 行
+src/ui/overlay/agent_title.rs  弹窗几何、命中、渲染
+src/ui/text/workspace.rs       AGENT_TITLE_PLACEHOLDER
+```
+
+### 12.3 测试要求
+
+- 状态层：会话/OSC 标题不再作为来源；自定义与绑定标题；清除后显示 `(no title)`；绑定生命周期。
+- 菜单/更新层：无绑定菜单为 `[EditAgentTitle, CloseAgent]`；绑定后为 `[EditAgentTitle, OpenPrompt, CloseAgent]`；弹窗预填、↑/↓ 回填、编辑转自定义、空输入清除、Open prompt 打开精确页、页删除后不误开。
+- UI 层：弹窗高度夹取、两行命中、滚动窗口、选中底色、空态、按钮命中、窄屏不 panic。
+- 事件层：右键 → Edit title → 弹窗；点击行/Save/Clear/Cancel/外部；Open prompt 打开 Prompt 面板。
+
+### 12.4 验收补充
+
+- Agents 第二行初始为 `(no title)`，不会自动出现会话标题或终端 OSC 标题。
+- `Edit title` 弹窗同时支持 Recent 选择与自定义输入；Recent 行显示页标题与提示词名。
+- 绑定 Recent 后右键菜单出现 `Open prompt`，点击在 Prompt 面板打开对应页。
+- 自定义标题、空标题、绑定失效时没有 `Open prompt`。
+- 所有标题仍为纯内存覆盖，不写 DB、不改真实标题。

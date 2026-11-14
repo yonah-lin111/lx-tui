@@ -382,6 +382,8 @@ pub const NEW_WORKSPACE_PLACEHOLDER: &str = "path to directory";
 pub const RENAME_TAB_TITLE: &str = "Rename tab";
 /// 侧栏 Agents 条目标题编辑浮层。
 pub const RENAME_AGENT_TITLE: &str = "Edit title";
+/// Agents 标题弹窗输入为空时的占位说明。
+pub const AGENT_TITLE_PLACEHOLDER: &str = "title or pick recent";
 
 /// 信任工作区模态：标题、问题与按钮。
 pub const TRUST_WORKSPACE_TITLE: &str = "Trust workspace";

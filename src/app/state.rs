@@ -46,7 +46,10 @@ pub use lx::{
     TaskTab, ToolCallView, ToolDetailView, ToolStatus, ToolSummary, UserShellView,
     WebSearchDetailView, ai_web_remote_session, is_ai_web_session,
 };
-pub use pane::{Direction, Pane, PaneKind, PaneView, SidebarAgentEntry, SidebarAgentKind, Tab};
+pub use pane::{
+    AgentPromptRef, AgentTitleOverride, Direction, Pane, PaneKind, PaneView, SidebarAgentEntry,
+    SidebarAgentKind, Tab,
+};
 pub use prompt_history::{PROMPT_HISTORY_LIMIT, PROMPT_HISTORY_MAX_BYTES, PromptHistory};
 pub use todo::{TodoChartKind, TodoEdit, TodoEditTarget, TodoGroupRole, TodoPanel, WeekDayView};
 pub use workspace::{

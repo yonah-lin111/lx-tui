@@ -452,13 +452,15 @@ fn overlay_key(key: KeyEvent, kind: OverlayKind) -> Option<OverlayKey> {
             KeyCode::Down if kind == OverlayKind::ConfirmClose => Some(OverlayKey::Down),
             _ => overlay_text_edit_key(key),
         },
-        OverlayKind::WorktreeOpen | OverlayKind::SaveDraft => match key.code {
-            KeyCode::Esc => Some(OverlayKey::Esc),
-            KeyCode::Enter => Some(OverlayKey::Enter),
-            KeyCode::Up => Some(OverlayKey::Up),
-            KeyCode::Down => Some(OverlayKey::Down),
-            _ => overlay_text_edit_key(key),
-        },
+        OverlayKind::WorktreeOpen | OverlayKind::SaveDraft | OverlayKind::AgentTitle => {
+            match key.code {
+                KeyCode::Esc => Some(OverlayKey::Esc),
+                KeyCode::Enter => Some(OverlayKey::Enter),
+                KeyCode::Up => Some(OverlayKey::Up),
+                KeyCode::Down => Some(OverlayKey::Down),
+                _ => overlay_text_edit_key(key),
+            }
+        }
     }
 }
 
@@ -563,6 +565,8 @@ fn editor_command(key: KeyEvent) -> Option<EditorCommand> {
 
 #[cfg(test)]
 mod tests;
+#[cfg(test)]
+mod tests_agent_title;
 
 #[cfg(test)]
 mod process_keys;

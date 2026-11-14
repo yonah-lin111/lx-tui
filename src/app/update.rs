@@ -1,5 +1,6 @@
 //! 行为到状态的转换；几何信息由事件循环传入，保证逻辑纯且可测。
 
+mod agent_title;
 mod chat;
 mod dialog;
 mod editor;
@@ -20,6 +21,7 @@ mod workspace_history;
 mod workspace_list;
 mod worktree;
 
+pub use agent_title::*;
 pub use chat::*;
 pub use dialog::*;
 pub use editor::*;

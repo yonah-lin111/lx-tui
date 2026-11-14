@@ -622,7 +622,7 @@ pub struct LxChat {
     pub loading_session: bool,
     /// 侧栏 Agents 条目的临时显示标题（仅内存；不改会话标题、不落库、
     /// 不影响输入框右上角标题胶囊与 `/resume` 列表）。
-    pub agent_title_override: Option<String>,
+    pub agent_title_override: Option<crate::app::state::AgentTitleOverride>,
 }
 
 pub use crate::ui::style::SESSION_TITLE_PALETTE_COUNT;

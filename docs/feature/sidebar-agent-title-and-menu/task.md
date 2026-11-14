@@ -250,3 +250,53 @@
 - [ ] 终端 Agent 是唯一窗格时不显示 `Close`。
 - [ ] 两行条目的左键、右键、悬停、滚轮、滚动条、窄侧栏全部正确。
 - [ ] 受影响的 fmt / clippy / 单元测试全部通过。
+
+---
+
+## P6. V2 补充：Recent 标题与 Open prompt
+
+> 依据 [design.md](design.md) 第 12 节。标题不再跟随会话/终端标题。
+
+### 6.1 状态模型
+
+- [ ] `src/app/state/pane.rs`：新增 `AgentPromptRef { item_id, page_id }` 与 `AgentTitleOverride { text, prompt }`。
+- [ ] `LxChat.agent_title_override`、`Pane.terminal_agent_title` 改为保存 `AgentTitleOverride`。
+- [ ] `agent_display_title` 只读覆盖文本；`session_title` / OSC `title` 不再参与。
+- [ ] `set_agent_title_override` 保持空白过滤与 AgentKind / active session 校验。
+- [ ] 会话重置/切换、终端 Agent 退出/种类变化、窗格关闭继续清空覆盖。
+
+### 6.2 标题弹窗
+
+- [ ] 新增 `AgentTitleDialog`、`OverlayKind::AgentTitle`、`Overlay::AgentTitle`。
+- [ ] `Edit title` 不再打开 `Overlay::Rename`；打开新弹窗并快照目标工作区 Recent 页。
+- [ ] 输入框预填当前标题；已绑定时高亮对应 Recent 行。
+- [ ] ↑/↓ 浏览 Recent：回填页标题并绑定 `(item_id, page_id)`。
+- [ ] 直接编辑输入框：转为自定义标题并解除绑定与高亮。
+- [ ] Enter 提交；空输入清除覆盖；Esc 取消。
+- [ ] 底部 Save/Clear/Cancel 按钮、点击行、点击外部行为与键盘一致。
+- [ ] 弹窗显示 Recent 两行（页标题 + 提示词名）、空态与 `recent` 分割线。
+- [ ] 删除 `RenameTarget::AgentTitle` 与 `commit_rename` 的 AgentTitle 分支。
+
+### 6.3 Open prompt
+
+- [ ] `open_agent_menu` 在绑定有效时于 `Edit title` 后插入 `OpenPrompt`。
+- [ ] `OpenPrompt` 对 Agent 目标调用 `open_agent_prompt`：释放 Prompt 钉住、结算当前编辑、打开精确 item/page、聚焦 Prompt 面板。
+- [ ] 自定义标题、页已删除、绑定失效时不显示 `OpenPrompt`。
+- [ ] 菜单打开后页被删除，执行 `OpenPrompt` 不得误切换。
+
+### 6.4 测试
+
+- [ ] `src/app/state/pane/tests.rs`：标题来源、绑定、清除、生命周期。
+- [ ] `src/app/update/menu/tests.rs`：菜单命令集合、弹窗预填/选择/编辑/提交、Open prompt 打开精确页、页删除保护。
+- [ ] `src/ui/left_panel/tests.rs`：会话/OSC 标题不再显示；自定义/绑定显示；CJK 截断。
+- [ ] `src/ui/overlay/agent_title/tests.rs`：几何、命中、滚动、渲染、空态、按钮、窄屏。
+- [ ] `src/input/tests.rs`：AgentTitle 键位映射。
+- [ ] `src/event/tests/agent_menu.rs`：右键 → Edit title → 弹窗、点击行/Save/Clear/Cancel/外部、Open prompt。
+- [ ] `src/ui/text/tests.rs`：新文案与 `agent_location` 保持稳定。
+
+### 6.5 验证
+
+- [ ] `cargo fmt`
+- [ ] `cargo clippy --all-targets -- -D warnings`
+- [ ] `cargo test --lib`
+- [ ] 更新 `review.md` 记录 V2 实现与偏差。

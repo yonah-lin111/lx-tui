@@ -10,6 +10,7 @@ use crate::app::toast::{Toast, ToastKind};
 use crate::tiling::PaneId;
 use crate::ui::text;
 
+use super::agent_title::apply_agent_title_key;
 use super::interaction::show_toast;
 use super::menu::{activate_menu, close_overlay, move_menu_selection};
 use super::prompt::{apply_new_node_key, apply_save_draft_key, commit_prompt_rename};
@@ -34,6 +35,11 @@ pub fn apply_overlay_key(state: &mut AppState, key: OverlayKey) -> Option<(PaneI
     }
     if matches!(state.overlay, Some(Overlay::WorktreeOpen(_))) {
         apply_worktree_open_key(state, key);
+        return None;
+    }
+    // Agents 标题：上下浏览 Recent 并回填，直接编辑转自定义，Enter 提交。
+    if matches!(state.overlay, Some(Overlay::AgentTitle(_))) {
+        apply_agent_title_key(state, key);
         return None;
     }
     // `/resume` 会话编辑模态：Enter 保存、^D 删除（二次确认）、Esc 关闭/退回。
@@ -197,7 +203,8 @@ pub fn apply_overlay_key(state: &mut AppState, key: OverlayKey) -> Option<(PaneI
                 | OverlayKind::ReferencedFolderSearch
                 | OverlayKind::ReferencedFolderDelete
                 | OverlayKind::ResumeSessionEdit
-                | OverlayKind::Connect,
+                | OverlayKind::Connect
+                | OverlayKind::AgentTitle,
             )
             | None => None,
         },
@@ -334,12 +341,10 @@ fn commit_rename(state: &mut AppState) {
         return;
     };
     let name = rename.input.text().trim().to_string();
-    let target = rename.target;
-    // 只有 Agent 标题允许空值：空 = 清除内存覆盖，回落默认标题。
-    let allows_empty = matches!(target, RenameTarget::AgentTitle { .. });
-    if name.is_empty() && !allows_empty {
+    if name.is_empty() {
         return;
     }
+    let target = rename.target;
     match target {
         RenameTarget::Workspace(index) => {
             let Some(workspace) = state.workspaces.get_mut(index) else {
@@ -388,21 +393,6 @@ fn commit_rename(state: &mut AppState) {
         }
         RenameTarget::PromptFolder { .. } | RenameTarget::PromptItem { .. } => {
             commit_prompt_rename(state, target, name);
-        }
-        RenameTarget::AgentTitle {
-            workspace,
-            tab,
-            pane,
-            kind,
-        } => {
-            if let Some(pane_state) = state
-                .workspaces
-                .get_mut(workspace)
-                .and_then(|workspace| workspace.tabs.get_mut(tab))
-                .and_then(|tab_state| tab_state.pane_mut(pane))
-            {
-                pane_state.set_agent_title_override(kind, (!name.is_empty()).then_some(name));
-            }
         }
     }
     state.overlay = None;
@@ -546,7 +536,7 @@ pub fn apply_overlay_paste(state: &mut AppState, text: &str) -> bool {
                     .selection()
                     .is_some_and(|(start, end)| start == 0 && end == current.chars().count())
         };
-        if whole_replace {
+        let inserted = if whole_replace {
             let normalized = crate::platform::normalize_pasted_path_input(text);
             // 纯引号/空 URI 归一化后没有有效路径：吞掉粘贴，不插入字面量 `''`。
             if normalized.is_empty() {
@@ -565,6 +555,7 @@ pub fn apply_overlay_paste(state: &mut AppState, text: &str) -> bool {
             Overlay::ResumeSessionEdit(edit) => edit.hint = None,
             Overlay::WorktreeOpen(dialog) => dialog.normalize_selection(),
             Overlay::Connect(panel) => panel.clear_error(),
+            Overlay::AgentTitle(dialog) if inserted => dialog.mark_custom(),
             _ => {}
         }
         (
@@ -608,6 +599,7 @@ pub fn cut_overlay_selected_text(state: &mut AppState) -> Option<String> {
             }
             Overlay::WorktreeOpen(dialog) => dialog.normalize_selection(),
             Overlay::Connect(panel) => panel.clear_error(),
+            Overlay::AgentTitle(dialog) => dialog.mark_custom(),
             _ => {}
         }
         (

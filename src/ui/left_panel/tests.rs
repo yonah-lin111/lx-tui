@@ -1,7 +1,7 @@
 //! 单元测试；仅测试构建编译。
 
 use super::*;
-use crate::app::state::{AppState, Workspace};
+use crate::app::state::{AgentTitleOverride, AppState, Workspace};
 use crate::app::update;
 use crate::config::Config;
 use crate::detect::{AgentKind, AgentState, PaneAgentSnapshot};
@@ -702,7 +702,7 @@ fn agent_title_line_starts_with_tree_leaf_and_shows_placeholder() {
 }
 
 #[test]
-fn lx_agent_title_prefers_session_title_then_override_then_fallback() {
+fn lx_agent_title_ignores_session_title_and_uses_custom_override() {
     let mut state = AppState::demo();
     let pane = state.active_tab().layout.focus();
     if let Some(target) = state.active_tab_mut().pane_mut(pane) {
@@ -711,19 +711,23 @@ fn lx_agent_title_prefers_session_title_then_override_then_fallback() {
     }
 
     let kind = agent_items(&state)[0].kind;
-    assert_eq!(agent_items(&state)[0].title, Some("Fix login bug"));
-    assert!(agent_item_line(&state, 0, 1).contains("Fix login bug"));
+    assert_eq!(
+        agent_items(&state)[0].title,
+        None,
+        "会话标题不再作为侧栏标题来源"
+    );
+    assert!(agent_item_line(&state, 0, 1).contains(text::AGENT_NO_TITLE));
 
     state
         .pane_mut_anywhere(pane)
         .expect("pane exists")
-        .set_agent_title_override(kind, Some("Sidebar label".to_string()));
+        .set_agent_title_override(kind, Some(AgentTitleOverride::custom("Sidebar label")));
     assert_eq!(agent_items(&state)[0].title, Some("Sidebar label"));
     let line = agent_item_line(&state, 0, 1);
     assert!(line.contains("Sidebar label"), "{line:?}");
     assert!(
         !line.contains("Fix login bug"),
-        "内存覆盖必须优先于会话标题: {line:?}"
+        "侧栏标题不得回退会话标题: {line:?}"
     );
     assert_eq!(
         state
@@ -739,16 +743,16 @@ fn lx_agent_title_prefers_session_title_then_override_then_fallback() {
         .set_agent_title_override(kind, None);
     assert_eq!(
         agent_items(&state)[0].title,
-        Some("Fix login bug"),
-        "清除覆盖后回落到会话标题"
+        None,
+        "清除覆盖后不回退会话标题"
     );
     let line = agent_item_line(&state, 0, 1);
-    assert!(line.contains("Fix login bug"), "{line:?}");
+    assert!(line.contains(text::AGENT_NO_TITLE), "{line:?}");
     assert!(!line.contains("Sidebar label"), "{line:?}");
 }
 
 #[test]
-fn terminal_agent_title_prefers_osc_then_override_and_clears_on_kind_change() {
+fn terminal_agent_title_ignores_osc_and_clears_override_on_kind_change() {
     let mut state = AppState::demo();
     let pane = add_agent(&mut state, AgentKind::Claude, AgentState::Working);
     update::update_pane_agent(
@@ -760,20 +764,24 @@ fn terminal_agent_title_prefers_osc_then_override_and_clears_on_kind_change() {
             title: Some("Claude Code".to_string()),
         }),
     );
-    assert_eq!(agent_items(&state)[0].title, Some("Claude Code"));
-    assert!(agent_item_line(&state, 0, 1).contains("Claude Code"));
+    assert_eq!(
+        agent_items(&state)[0].title,
+        None,
+        "终端 OSC 标题不再作为侧栏标题来源"
+    );
+    assert!(agent_item_line(&state, 0, 1).contains(text::AGENT_NO_TITLE));
 
     let kind = agent_items(&state)[0].kind;
     state
         .pane_mut_anywhere(pane)
         .expect("pane exists")
-        .set_agent_title_override(kind, Some("My claude".to_string()));
+        .set_agent_title_override(kind, Some(AgentTitleOverride::custom("My claude")));
     assert_eq!(agent_items(&state)[0].title, Some("My claude"));
     let line = agent_item_line(&state, 0, 1);
     assert!(line.contains("My claude"), "{line:?}");
     assert!(
         !line.contains("Claude Code"),
-        "内存覆盖必须优先于 OSC 标题: {line:?}"
+        "侧栏标题不得回退 OSC 标题: {line:?}"
     );
 
     // 同种类仅状态/OSC 标题更新：覆盖保留。
@@ -788,7 +796,7 @@ fn terminal_agent_title_prefers_osc_then_override_and_clears_on_kind_change() {
     );
     assert_eq!(agent_items(&state)[0].title, Some("My claude"));
 
-    // AgentKind 变化：覆盖清空，回落到新种类的 OSC 标题。
+    // AgentKind 变化：覆盖清空，不回退新种类的 OSC 标题。
     update::update_pane_agent(
         &mut state,
         pane,
@@ -798,22 +806,13 @@ fn terminal_agent_title_prefers_osc_then_override_and_clears_on_kind_change() {
             title: Some("Codex CLI".to_string()),
         }),
     );
-    assert_eq!(agent_items(&state)[0].title, Some("Codex CLI"));
-    let line = agent_item_line(&state, 0, 1);
-    assert!(line.contains("Codex CLI"), "{line:?}");
-    assert!(
-        !line.contains("My claude"),
-        "AgentKind 变化必须清空终端标题覆盖: {line:?}"
-    );
-
-    // 新种类没有 OSC 标题：显示占位符。
-    update::update_pane_agent(
-        &mut state,
-        pane,
-        Some(agent_snapshot(AgentKind::Codex, AgentState::Idle)),
-    );
     assert_eq!(agent_items(&state)[0].title, None);
-    assert!(agent_item_line(&state, 0, 1).contains(text::AGENT_NO_TITLE));
+    let line = agent_item_line(&state, 0, 1);
+    assert!(line.contains(text::AGENT_NO_TITLE), "{line:?}");
+    assert!(
+        !line.contains("My claude") && !line.contains("Codex CLI"),
+        "AgentKind 变化必须清空终端标题覆盖且不回退 OSC: {line:?}"
+    );
 }
 
 #[test]
@@ -825,8 +824,12 @@ fn cjk_agent_title_is_ellipsized_within_content_width() {
     let title = "修复登录问题并审查权限路径中的潜在越权风险";
     if let Some(target) = state.active_tab_mut().pane_mut(pane) {
         target.lx.chat.session_id = Some("ses-cjk".to_string());
-        target.lx.chat.session_title = Some(title.to_string());
     }
+    let kind = agent_items(&state)[0].kind;
+    state
+        .pane_mut_anywhere(pane)
+        .expect("pane exists")
+        .set_agent_title_override(kind, Some(AgentTitleOverride::custom(title)));
 
     let view = view_for(&state);
     let sections = layout::sidebar_sections(view.left_panel, false).expect("sections are visible");

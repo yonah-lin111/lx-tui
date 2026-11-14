@@ -2,7 +2,11 @@ use super::test_support::*;
 use super::*;
 
 use crate::app::overlay::{MenuCommand, OverlayTarget};
-use crate::app::state::{SidebarAgentEntry, SidebarAgentKind};
+use crate::app::prompt::{PromptEditing, PromptItem, PromptPage, PromptPageId, PromptTree};
+use crate::app::state::{
+    AgentPromptRef, AgentTitleOverride, FocusedContainer, RightTab, SidebarAgentEntry,
+    SidebarAgentKind,
+};
 use crate::detect::{AgentKind, AgentState};
 use crate::event::session::Geometry;
 use crate::tiling::PaneId;
@@ -287,4 +291,385 @@ fn wheel_scroll_then_hover_and_right_click_use_new_row_offset() {
     );
     assert!(dirty);
     assert_agent_menu(&state, expected, anchor, &[MenuCommand::EditAgentTitle]);
+}
+
+// ===== Agents 标题弹窗与 Open prompt（鼠标路径） =====
+
+/// 已入库页种子：`(page_id, page_title, content, updated_at)`；Recent 按时间倒序。
+type SeededPage = (i64, &'static str, &'static str, i64);
+
+/// 带 lx 会话、Recent 页与几何的标题弹窗测试场景。
+struct TitleFixture {
+    state: AppState,
+    config: Config,
+    geo: Geometry,
+    pane: PaneId,
+    index: usize,
+    kind: SidebarAgentKind,
+}
+
+fn seed_recent_pages(state: &mut AppState, pages: &[SeededPage]) {
+    let pages: Vec<PromptPage> = pages
+        .iter()
+        .map(|(id, title, content, updated_at)| {
+            PromptPage::saved_at(*id, *title, *content, *updated_at)
+        })
+        .collect();
+    let item = PromptItem {
+        id: 7,
+        folder_id: None,
+        name: "Backend Prompt".to_string(),
+        active_page: pages[0].id,
+        pages,
+    };
+    let panel = &mut state.active_workspace_mut().prompt_panel;
+    panel.tree = PromptTree::new();
+    panel.tree.replace(Vec::new(), vec![item]);
+}
+
+fn title_fixture(pages: &[SeededPage]) -> TitleFixture {
+    let mut state = demo_terminal();
+    let pane = state.active_tab().layout.focus();
+    state
+        .pane_mut_anywhere(pane)
+        .expect("pane")
+        .lx
+        .chat
+        .session_id = Some("ses-agent-title".to_string());
+    seed_recent_pages(&mut state, pages);
+    let config = Config::default();
+    let geo = geometry(&state, &config, Rect::new(0, 0, 120, 30));
+    let index = state
+        .agent_entries()
+        .iter()
+        .position(|entry| {
+            entry.pane_id == pane && matches!(entry.kind, SidebarAgentKind::Lx { .. })
+        })
+        .expect("lx agent entry");
+    let kind = state.agent_entries()[index].kind;
+    TitleFixture {
+        state,
+        config,
+        geo,
+        pane,
+        index,
+        kind,
+    }
+}
+
+fn set_override(fixture: &mut TitleFixture, title: AgentTitleOverride) {
+    fixture
+        .state
+        .pane_mut_anywhere(fixture.pane)
+        .expect("pane")
+        .set_agent_title_override(fixture.kind, Some(title));
+}
+
+fn bound_title(text: &str, page_id: i64) -> AgentTitleOverride {
+    AgentTitleOverride {
+        text: text.to_string(),
+        prompt: Some(AgentPromptRef {
+            item_id: 7,
+            page_id: PromptPageId::Saved(page_id),
+        }),
+    }
+}
+
+/// 在真实 Agents 分区坐标右键目标条目；返回锚点。
+fn right_click_agent(fixture: &mut TitleFixture) -> (u16, u16) {
+    let agents = agents_section(&fixture.geo, &fixture.state);
+    let anchor = (agents.x + 1, agents.y + fixture.index as u16 * 2);
+    let dirty = send_mouse(
+        &mut fixture.state,
+        &fixture.geo,
+        &fixture.config,
+        MouseEventKind::Down(MouseButton::Right),
+        anchor.0,
+        anchor.1,
+    );
+    assert!(dirty);
+    anchor
+}
+
+fn menu_commands(state: &AppState) -> Vec<MenuCommand> {
+    match state.overlay.as_ref() {
+        Some(Overlay::Menu(menu)) => menu.commands.clone(),
+        _ => panic!("expected menu overlay"),
+    }
+}
+
+/// 用菜单真实几何坐标左键点击指定命令。
+fn click_menu_command(fixture: &mut TitleFixture, command: MenuCommand) {
+    let item = {
+        let Some(Overlay::Menu(menu)) = fixture.state.overlay.as_ref() else {
+            panic!("expected menu overlay");
+        };
+        let layout = ui::overlay::menu_layout(&fixture.state, fixture.geo.screen, menu);
+        let index = menu
+            .commands
+            .iter()
+            .position(|candidate| *candidate == command)
+            .expect("menu command offered");
+        layout.item_rects[index]
+    };
+    let dirty = send_mouse(
+        &mut fixture.state,
+        &fixture.geo,
+        &fixture.config,
+        MouseEventKind::Down(MouseButton::Left),
+        item.x + 1,
+        item.y,
+    );
+    assert!(dirty);
+}
+
+fn open_title_dialog(fixture: &mut TitleFixture) {
+    right_click_agent(fixture);
+    click_menu_command(fixture, MenuCommand::EditAgentTitle);
+    assert!(
+        matches!(fixture.state.overlay, Some(Overlay::AgentTitle(_))),
+        "Edit title 激活后必须打开标题弹窗"
+    );
+}
+
+fn title_shell(fixture: &TitleFixture) -> ui::widgets::modal::ModalShell {
+    let Some(Overlay::AgentTitle(dialog)) = fixture.state.overlay.as_ref() else {
+        panic!("expected agent title dialog");
+    };
+    ui::overlay::agent_title_shell(fixture.geo.screen, dialog.rows.len()).expect("title shell")
+}
+
+/// 扫描弹窗内容区，取命中指定 Recent 行的真实屏幕坐标。
+fn row_point(fixture: &TitleFixture, index: usize) -> (u16, u16) {
+    let shell = title_shell(fixture);
+    let Some(Overlay::AgentTitle(dialog)) = fixture.state.overlay.as_ref() else {
+        panic!("expected agent title dialog");
+    };
+    for row in shell.inner.y..shell.inner.bottom() {
+        for column in shell.inner.x..shell.inner.right() {
+            if ui::overlay::agent_title_row_at(&shell, dialog, column, row) == Some(index) {
+                return (column, row);
+            }
+        }
+    }
+    panic!("recent row {index} not hit");
+}
+
+/// 扫描弹窗按钮行，取指定按钮的真实屏幕坐标。
+fn button_point(fixture: &TitleFixture, button: ui::overlay::AgentTitleButton) -> (u16, u16) {
+    let shell = title_shell(fixture);
+    for row in shell.inner.y..shell.inner.bottom() {
+        for column in shell.inner.x..shell.inner.right() {
+            if ui::overlay::agent_title_button_at(&shell, column, row) == Some(button) {
+                return (column, row);
+            }
+        }
+    }
+    panic!("title button {button:?} not hit");
+}
+
+fn click_at(fixture: &mut TitleFixture, point: (u16, u16)) -> bool {
+    send_mouse(
+        &mut fixture.state,
+        &fixture.geo,
+        &fixture.config,
+        MouseEventKind::Down(MouseButton::Left),
+        point.0,
+        point.1,
+    )
+}
+
+fn dialog(fixture: &TitleFixture) -> &crate::app::overlay::AgentTitleDialog {
+    match fixture.state.overlay.as_ref() {
+        Some(Overlay::AgentTitle(dialog)) => dialog,
+        _ => panic!("expected agent title dialog"),
+    }
+}
+
+#[test]
+fn right_click_edit_title_opens_dialog_with_prefilled_title_and_recent_rows() {
+    let mut fixture = title_fixture(&[(9, "Auth Flow", "Auth content", 100)]);
+    set_override(&mut fixture, AgentTitleOverride::custom("Manual title"));
+
+    open_title_dialog(&mut fixture);
+
+    let dialog = dialog(&fixture);
+    assert_eq!(
+        (dialog.workspace, dialog.tab, dialog.pane, dialog.kind),
+        (0, 0, fixture.pane, fixture.kind)
+    );
+    assert_eq!(dialog.input.text(), "Manual title");
+    assert_eq!(dialog.binding, None);
+    assert_eq!(dialog.selected, None);
+    assert_eq!(dialog.rows.len(), 1);
+    assert_eq!(dialog.rows[0].item_id, 7);
+    assert_eq!(dialog.rows[0].page_title, "Auth Flow");
+    assert_eq!(dialog.rows[0].prompt_name, "Backend Prompt");
+}
+
+#[test]
+fn clicking_recent_rows_fills_title_and_binds_page() {
+    // 三条页保证弹窗高度可容纳两行可见 Recent 条目。
+    let mut fixture = title_fixture(&[
+        (9, "Auth Flow", "Auth content", 100),
+        (10, "Deploy Plan", "Deploy content", 200),
+        (11, "Hotfix", "Hotfix content", 50),
+    ]);
+    open_title_dialog(&mut fixture);
+
+    let first = row_point(&fixture, 0);
+    assert!(click_at(&mut fixture, first));
+    {
+        let dialog = dialog(&fixture);
+        assert_eq!(dialog.input.text(), "Deploy Plan");
+        assert_eq!(dialog.selected, Some(0));
+        assert_eq!(
+            dialog.binding,
+            Some(AgentPromptRef {
+                item_id: 7,
+                page_id: PromptPageId::Saved(10),
+            })
+        );
+    }
+
+    let second = row_point(&fixture, 1);
+    assert!(click_at(&mut fixture, second));
+    let dialog = dialog(&fixture);
+    assert_eq!(dialog.input.text(), "Auth Flow");
+    assert_eq!(dialog.selected, Some(1));
+    assert_eq!(
+        dialog.binding,
+        Some(AgentPromptRef {
+            item_id: 7,
+            page_id: PromptPageId::Saved(9),
+        })
+    );
+    assert!(
+        matches!(fixture.state.overlay, Some(Overlay::AgentTitle(_))),
+        "点选 Recent 行只回填输入，不关闭弹窗"
+    );
+}
+
+#[test]
+fn save_commits_title_and_menu_offers_open_prompt() {
+    let mut fixture = title_fixture(&[
+        (9, "Auth Flow", "Auth content", 100),
+        (10, "Deploy Plan", "Deploy content", 200),
+        (11, "Hotfix", "Hotfix content", 50),
+    ]);
+    open_title_dialog(&mut fixture);
+    let first = row_point(&fixture, 0);
+    assert!(click_at(&mut fixture, first));
+
+    let save = button_point(&fixture, ui::overlay::AgentTitleButton::Save);
+    assert!(click_at(&mut fixture, save));
+
+    assert!(fixture.state.overlay.is_none());
+    let target = fixture.state.pane_anywhere(fixture.pane).expect("pane");
+    let title = target
+        .agent_title_override(fixture.kind)
+        .expect("committed title");
+    assert_eq!(title.text, "Deploy Plan");
+    assert_eq!(
+        title.prompt,
+        Some(AgentPromptRef {
+            item_id: 7,
+            page_id: PromptPageId::Saved(10),
+        })
+    );
+    assert_eq!(
+        target.agent_display_title(fixture.kind),
+        Some("Deploy Plan")
+    );
+
+    let anchor = right_click_agent(&mut fixture);
+    let entry = fixture.state.agent_entries()[fixture.index];
+    assert_agent_menu(
+        &fixture.state,
+        entry,
+        anchor,
+        &[
+            MenuCommand::EditAgentTitle,
+            MenuCommand::OpenPrompt,
+            MenuCommand::CloseAgent,
+        ],
+    );
+}
+
+#[test]
+fn clear_then_save_removes_title_override_and_binding() {
+    let mut fixture = title_fixture(&[
+        (9, "Auth Flow", "Auth content", 100),
+        (10, "Deploy Plan", "Deploy content", 200),
+    ]);
+    set_override(&mut fixture, bound_title("Auth Flow", 9));
+    open_title_dialog(&mut fixture);
+    assert_eq!(dialog(&fixture).input.text(), "Auth Flow");
+
+    let clear = button_point(&fixture, ui::overlay::AgentTitleButton::Clear);
+    assert!(click_at(&mut fixture, clear));
+    {
+        let dialog = dialog(&fixture);
+        assert_eq!(dialog.input.text(), "");
+        assert_eq!(dialog.binding, None);
+        assert_eq!(dialog.selected, None);
+    }
+
+    let save = button_point(&fixture, ui::overlay::AgentTitleButton::Save);
+    assert!(click_at(&mut fixture, save));
+
+    assert!(fixture.state.overlay.is_none());
+    let target = fixture.state.pane_anywhere(fixture.pane).expect("pane");
+    assert_eq!(target.agent_title_override(fixture.kind), None);
+    assert_eq!(
+        target.agent_display_title(fixture.kind),
+        None,
+        "空标题必须回落到 UI 的 (no title) 展示"
+    );
+}
+
+#[test]
+fn outside_click_dismisses_title_dialog_without_committing() {
+    let mut fixture = title_fixture(&[(9, "Auth Flow", "Auth content", 100)]);
+    set_override(&mut fixture, AgentTitleOverride::custom("Manual title"));
+    open_title_dialog(&mut fixture);
+
+    assert!(click_at(&mut fixture, (0, 0)));
+
+    assert!(fixture.state.overlay.is_none());
+    let target = fixture.state.pane_anywhere(fixture.pane).expect("pane");
+    let title = target
+        .agent_title_override(fixture.kind)
+        .expect("title unchanged");
+    assert_eq!(title.text, "Manual title");
+    assert_eq!(title.prompt, None);
+}
+
+#[test]
+fn open_prompt_menu_item_opens_bound_page_in_prompt_panel() {
+    let mut fixture = title_fixture(&[(9, "Auth Flow", "Auth content", 100)]);
+    set_override(&mut fixture, bound_title("Auth Flow", 9));
+
+    right_click_agent(&mut fixture);
+    assert_eq!(
+        menu_commands(&fixture.state),
+        vec![
+            MenuCommand::EditAgentTitle,
+            MenuCommand::OpenPrompt,
+            MenuCommand::CloseAgent,
+        ]
+    );
+
+    click_menu_command(&mut fixture, MenuCommand::OpenPrompt);
+
+    assert!(fixture.state.overlay.is_none());
+    let panel = &fixture.state.prompt_owner().prompt_panel;
+    assert_eq!(panel.editing, Some(PromptEditing::Item(7)));
+    assert_eq!(
+        panel.tree.item(7).map(|item| item.active_page),
+        Some(PromptPageId::Saved(9))
+    );
+    assert_eq!(fixture.state.prompt.text(), "Auth content");
+    assert_eq!(fixture.state.right_tab, RightTab::Prompt);
+    assert_eq!(fixture.state.focused, FocusedContainer::Prompt);
 }

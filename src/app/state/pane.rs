@@ -5,6 +5,7 @@ use std::path::PathBuf;
 
 pub use ratatui::layout::Direction;
 
+use crate::app::prompt::PromptPageId;
 use crate::detect::{AgentKind, AgentState, PaneAgentSnapshot};
 use crate::terminal::Terminal;
 use crate::tiling::{PaneId, TileLayout};
@@ -61,6 +62,33 @@ impl SidebarAgentKind {
     }
 }
 
+/// 侧栏 Agents 标题绑定的提示词页。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct AgentPromptRef {
+    pub item_id: i64,
+    pub page_id: PromptPageId,
+}
+
+/// 侧栏 Agents 第二行标题：只来自 Recent 页选择或自定义输入。
+///
+/// `text` 是选中时的显示快照；绑定页后续改名不自动跟随。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct AgentTitleOverride {
+    pub text: String,
+    /// `Some` 表示来自 Recent 页，可被 `Open prompt` 精确打开；自定义输入为 None。
+    pub prompt: Option<AgentPromptRef>,
+}
+
+impl AgentTitleOverride {
+    /// 自定义标题（无 Recent 绑定）。
+    pub fn custom(text: impl Into<String>) -> Self {
+        Self {
+            text: text.into(),
+            prompt: None,
+        }
+    }
+}
+
 /// 侧栏 `Agents` 分区的条目数据。
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct SidebarAgentEntry {
@@ -89,7 +117,7 @@ pub struct Pane {
     pub agent: Option<PaneAgentSnapshot>,
     /// 侧栏 Agents 中终端 Agent 的临时显示标题（仅内存；Agent 种类变化、
     /// 退出或窗格关闭时清除）。
-    pub terminal_agent_title: Option<(AgentKind, String)>,
+    pub terminal_agent_title: Option<(AgentKind, AgentTitleOverride)>,
 }
 
 impl Tab {
@@ -177,35 +205,37 @@ impl Pane {
         }
     }
 
-    /// 侧栏 Agents 条目的第二行标题：内存覆盖优先，其次 lx 会话标题 /
-    /// 终端 Agent 的 OSC 标题；空标题返回 None。
-    pub fn agent_display_title(&self, kind: SidebarAgentKind) -> Option<&str> {
+    /// 指定 Agent 的侧栏标题覆盖；种类不匹配或未设置返回 None。
+    pub fn agent_title_override(&self, kind: SidebarAgentKind) -> Option<&AgentTitleOverride> {
         match kind {
-            SidebarAgentKind::Lx { .. } => self.lx.chat.agent_title_override.as_deref().or(self
-                .lx
-                .chat
-                .session_title
-                .as_deref()),
+            SidebarAgentKind::Lx { .. } => self.lx.chat.agent_title_override.as_ref(),
             SidebarAgentKind::Terminal(agent) => self
                 .terminal_agent_title
                 .as_ref()
                 .filter(|(kind, _)| *kind == agent)
-                .map(|(_, title)| title.as_str())
-                .or_else(|| {
-                    self.agent
-                        .as_ref()
-                        .filter(|snapshot| snapshot.kind == agent)
-                        .and_then(|snapshot| snapshot.title.as_deref())
-                })
-                .filter(|title| !title.is_empty()),
+                .map(|(_, title)| title),
         }
     }
 
+    /// 侧栏 Agents 条目的第二行标题；不再回退会话标题或终端 OSC 标题。
+    pub fn agent_display_title(&self, kind: SidebarAgentKind) -> Option<&str> {
+        self.agent_title_override(kind)
+            .map(|title| title.text.as_str())
+            .filter(|title| !title.is_empty())
+    }
+
     /// 写入/清除侧栏标题覆盖；目标 Agent 已不在该窗格时忽略。
-    pub fn set_agent_title_override(&mut self, kind: SidebarAgentKind, title: Option<String>) {
-        let title = title.and_then(|raw| {
-            let trimmed = raw.trim();
-            (!trimmed.is_empty()).then(|| trimmed.to_string())
+    pub fn set_agent_title_override(
+        &mut self,
+        kind: SidebarAgentKind,
+        title: Option<AgentTitleOverride>,
+    ) {
+        let title = title.and_then(|override_title| {
+            let text = override_title.text.trim();
+            (!text.is_empty()).then(|| AgentTitleOverride {
+                text: text.to_string(),
+                prompt: override_title.prompt,
+            })
         });
         match kind {
             SidebarAgentKind::Lx { .. } if self.lx.has_active_session() => {

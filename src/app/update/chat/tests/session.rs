@@ -263,7 +263,9 @@ fn session_switch_clears_agent_title_override() {
     let pane = focus_pane(&state);
     if let Some(target) = state.pane_mut_anywhere(pane) {
         target.lx.chat.session_id = Some("ses-a".to_string());
-        target.lx.chat.agent_title_override = Some("Sidebar alias".to_string());
+        target.lx.chat.agent_title_override = Some(crate::app::state::AgentTitleOverride::custom(
+            "Sidebar alias",
+        ));
     }
 
     assert!(on_session_loaded_full(
@@ -278,7 +280,8 @@ fn session_switch_clears_agent_title_override() {
     assert_eq!(
         state
             .pane_anywhere(pane)
-            .and_then(|target| target.lx.chat.agent_title_override.as_deref()),
+            .and_then(|target| target.lx.chat.agent_title_override.as_ref())
+            .map(|title| title.text.as_str()),
         Some("Sidebar alias"),
         "同会话重载不得丢失侧栏标题覆盖"
     );
@@ -295,7 +298,8 @@ fn session_switch_clears_agent_title_override() {
     assert_eq!(
         state
             .pane_anywhere(pane)
-            .and_then(|target| target.lx.chat.agent_title_override.as_deref()),
+            .and_then(|target| target.lx.chat.agent_title_override.as_ref())
+            .map(|title| title.text.as_str()),
         None,
         "切换到另一会话必须清空上一会话的侧栏标题覆盖"
     );

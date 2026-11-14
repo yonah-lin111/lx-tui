@@ -10,6 +10,7 @@ use crate::app::state::{AppState, PaneView, SidebarAgentKind, TodoEditTarget, ta
 use crate::app::trust::TrustTrigger;
 use crate::tiling::PaneId;
 
+use super::agent_title::{agent_title_prompt, open_agent_prompt, open_agent_title_dialog};
 use super::focus_prompt;
 use super::pane::toggle_pane_view;
 use super::prompt::{
@@ -223,8 +224,9 @@ pub fn close_overlay(state: &mut AppState) {
     state.overlay = None;
 }
 
-/// 打开 Agents 条目右键菜单：`Edit title` 恒可用；`Close` 对 lx 恒可用，
-/// 终端 Agent 仅在其窗格不是当前标签页唯一窗格时可用。
+/// 打开 Agents 条目右键菜单：绑定有效 Recent 页时提供 `Open prompt`；
+/// `Edit title` 恒可用；`Close` 对 lx 恒可用，终端 Agent 仅在其窗格
+/// 不是当前标签页唯一窗格时可用。
 pub fn open_agent_menu(state: &mut AppState, index: usize, anchor: (u16, u16)) {
     let Some(entry) = state.agent_entries().get(index).copied() else {
         return;
@@ -232,6 +234,9 @@ pub fn open_agent_menu(state: &mut AppState, index: usize, anchor: (u16, u16)) {
     state.agent_scroll_drag = None;
     let workspace = state.active_workspace;
     let mut commands = vec![MenuCommand::EditAgentTitle];
+    if agent_title_prompt(state, workspace, entry.tab_index, entry.pane_id, entry.kind).is_some() {
+        commands.push(MenuCommand::OpenPrompt);
+    }
     let closable = match entry.kind {
         SidebarAgentKind::Lx { .. } => true,
         SidebarAgentKind::Terminal(_) => state
@@ -687,6 +692,17 @@ pub fn activate_menu(state: &mut AppState) -> Option<(PaneId, Vec<u8>)> {
             focus_prompt_when_editor(state);
         }
         (
+            Some(MenuCommand::OpenPrompt),
+            OverlayTarget::Agent {
+                workspace,
+                tab,
+                pane,
+                kind,
+            },
+        ) => {
+            open_agent_prompt(state, workspace, tab, pane, kind);
+        }
+        (
             Some(MenuCommand::EditAgentTitle),
             OverlayTarget::Agent {
                 workspace,
@@ -695,23 +711,7 @@ pub fn activate_menu(state: &mut AppState) -> Option<(PaneId, Vec<u8>)> {
                 kind,
             },
         ) => {
-            let current = state
-                .workspaces
-                .get(workspace)
-                .and_then(|workspace| workspace.tabs.get(tab))
-                .and_then(|tab_state| tab_state.pane(pane))
-                .and_then(|pane_state| pane_state.agent_display_title(kind))
-                .unwrap_or_default()
-                .to_string();
-            state.overlay = Some(Overlay::Rename(Rename {
-                target: RenameTarget::AgentTitle {
-                    workspace,
-                    tab,
-                    pane,
-                    kind,
-                },
-                input: TextInput::new(current),
-            }));
+            open_agent_title_dialog(state, workspace, tab, pane, kind);
         }
         (
             Some(MenuCommand::CloseAgent),

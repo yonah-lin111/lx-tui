@@ -2,7 +2,9 @@
 
 use crate::app::actions::EditorCommand;
 use crate::app::effects::Effect;
-use crate::app::prompt::{PromptEditing, PromptMode, RecentPageRow, recent_page_rows};
+use crate::app::prompt::{
+    PromptEditing, PromptMode, PromptPageId, RecentPageRow, recent_page_rows,
+};
 use crate::app::state::AppState;
 use ratatui::layout::Rect;
 
@@ -10,8 +12,16 @@ use super::commit_editing_prompt;
 
 /// 当前工作区的最近页面行（实时正文参与标题/状态刷新）。
 pub fn prompt_recent_rows(state: &AppState) -> Vec<RecentPageRow> {
-    let panel = &state.prompt_owner().prompt_panel;
-    let live = if panel.mode == PromptMode::Tree {
+    prompt_recent_rows_for_workspace(state, state.prompt_workspace())
+}
+
+/// 指定工作区的最近页面行；仅当该工作区正在显示时带入实时正文。
+pub fn prompt_recent_rows_for_workspace(state: &AppState, workspace: usize) -> Vec<RecentPageRow> {
+    let Some(workspace_state) = state.workspaces.get(workspace) else {
+        return Vec::new();
+    };
+    let panel = &workspace_state.prompt_panel;
+    let live = if workspace != state.prompt_workspace() || panel.mode == PromptMode::Tree {
         None
     } else {
         panel.editing.and_then(|editing| {
@@ -93,20 +103,24 @@ pub fn close_prompt_recent(state: &mut AppState) -> bool {
 /// 单击抽屉条目：结算当前编辑，切换对应条目 + 页，随后收起抽屉；
 /// 选中当前页只收起抽屉并把焦点/视图交还编辑器。
 pub fn open_recent_page(state: &mut AppState, index: usize) -> bool {
-    let workspace = state.prompt_workspace();
     let Some(target) = prompt_recent_rows(state).get(index).cloned() else {
         return false;
     };
-    let Some(page_id) = target.page_id.saved() else {
-        return false;
-    };
+    open_prompt_page(state, target.item_id, target.page_id)
+}
+
+/// 打开指定条目 + 页：结算当前编辑，切换页、收起 recent 抽屉并聚焦 Prompt。
+///
+/// 只接受已入库页；目标条目/页不存在时返回 false。
+pub fn open_prompt_page(state: &mut AppState, item_id: i64, page_id: PromptPageId) -> bool {
+    let workspace = state.prompt_workspace();
     if state.workspaces.get(workspace).is_some_and(|workspace| {
         let panel = &workspace.prompt_panel;
-        panel.editing == Some(PromptEditing::Item(target.item_id))
+        panel.editing == Some(PromptEditing::Item(item_id))
             && panel
                 .tree
-                .item(target.item_id)
-                .is_some_and(|item| item.active_page == target.page_id)
+                .item(item_id)
+                .is_some_and(|item| item.active_page == page_id)
     }) {
         // 已经是当前页：不重载正文，只收起抽屉。页列表视图下仍须回到
         // 编辑视图，否则“选中条目”只关了抽屉、画面还停在页列表。
@@ -124,9 +138,9 @@ pub fn open_recent_page(state: &mut AppState, index: usize) -> bool {
     let Some((content, page)) = state
         .workspaces
         .get(workspace)
-        .and_then(|workspace| workspace.prompt_panel.tree.item(target.item_id))
+        .and_then(|workspace| workspace.prompt_panel.tree.item(item_id))
         .and_then(|item| {
-            let page = item.page(target.page_id)?;
+            let page = item.page(page_id)?;
             Some((page.content.clone(), page.id))
         })
     else {
@@ -138,24 +152,24 @@ pub fn open_recent_page(state: &mut AppState, index: usize) -> bool {
     let cwd = workspace_state.cwd.clone();
     {
         let panel = &mut workspace_state.prompt_panel;
-        let Some(item) = panel.tree.item_mut(target.item_id) else {
+        let Some(item) = panel.tree.item_mut(item_id) else {
             return false;
         };
         item.active_page = page;
         panel.mode = PromptMode::Editor;
-        panel.editing = Some(PromptEditing::Item(target.item_id));
+        panel.editing = Some(PromptEditing::Item(item_id));
     }
-    if let Some(cwd) = cwd {
+    if let (Some(page_id), Some(cwd)) = (page.saved(), cwd) {
         state.effects.push(Effect::SetActivePage {
             workspace: cwd,
-            id: target.item_id,
+            id: item_id,
             page_id,
         });
     }
     super::load_editor_target(
         state,
         workspace,
-        PromptEditing::Item(target.item_id),
+        PromptEditing::Item(item_id),
         Some(page),
         &content,
     );

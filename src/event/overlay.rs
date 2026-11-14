@@ -170,6 +170,37 @@ pub(crate) fn handle_overlay_click(
                 None => None,
             }
         }
+        Some(Overlay::AgentTitle(dialog)) => {
+            let Some(shell) = ui::overlay::agent_title_shell(screen, dialog.rows.len()) else {
+                update::close_overlay(state);
+                return None;
+            };
+            if modal_dismissed(state, &shell, column, row) {
+                return None;
+            }
+            let Some(Overlay::AgentTitle(dialog)) = state.overlay.as_ref() else {
+                return None;
+            };
+            if let Some(index) = ui::overlay::agent_title_row_at(&shell, dialog, column, row) {
+                update::set_agent_title_selection(state, index);
+                return None;
+            }
+            match ui::overlay::agent_title_button_at(&shell, column, row) {
+                Some(ui::overlay::AgentTitleButton::Save) => {
+                    update::apply_overlay_key(state, OverlayKey::Enter)
+                }
+                Some(ui::overlay::AgentTitleButton::Clear) => {
+                    update::clear_agent_title_input(state);
+                    None
+                }
+                Some(ui::overlay::AgentTitleButton::Cancel) => {
+                    update::close_overlay(state);
+                    None
+                }
+                // 内部空白：保持打开。
+                None => None,
+            }
+        }
         Some(Overlay::NewNode(_)) => {
             let Some(shell) = ui::overlay::new_node_shell(screen) else {
                 update::cancel_new_node(state);
@@ -486,6 +517,15 @@ pub(crate) fn overlay_input_rect(state: &AppState, screen: Rect) -> Option<Rect>
         }
         Overlay::WorktreeOpen(w) => {
             let shell = ui::overlay::worktree_dialog_shell(screen, w.entries.len())?;
+            Some(Rect::new(
+                shell.inner.x,
+                shell.inner.y,
+                shell.inner.width,
+                1,
+            ))
+        }
+        Overlay::AgentTitle(d) => {
+            let shell = ui::overlay::agent_title_shell(screen, d.rows.len())?;
             Some(Rect::new(
                 shell.inner.x,
                 shell.inner.y,

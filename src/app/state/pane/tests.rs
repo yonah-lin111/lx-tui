@@ -2,6 +2,7 @@
 
 use super::*;
 
+use crate::app::prompt::PromptPageId;
 use crate::app::state::{AiWebSite, AppState, LxEntry};
 use crate::app::update::update_pane_agent;
 use crate::detect::{AgentKind, AgentState, PaneAgentSnapshot};
@@ -25,6 +26,20 @@ fn snapshot(kind: AgentKind, state: AgentState, title: Option<&str>) -> PaneAgen
     }
 }
 
+fn custom(text: &str) -> AgentTitleOverride {
+    AgentTitleOverride::custom(text)
+}
+
+fn bound(text: &str, item_id: i64, page_id: i64) -> AgentTitleOverride {
+    AgentTitleOverride {
+        text: text.to_string(),
+        prompt: Some(AgentPromptRef {
+            item_id,
+            page_id: PromptPageId::Saved(page_id),
+        }),
+    }
+}
+
 fn active_lx_pane() -> Pane {
     let mut pane = Pane::new();
     pane.lx.chat.session_id = Some("session-1".to_string());
@@ -39,24 +54,28 @@ fn pane_new_has_no_agent_title_overrides() {
 }
 
 #[test]
-fn lx_default_title_uses_session_title() {
+fn lx_session_title_is_not_used_without_override() {
     let mut pane = active_lx_pane();
     assert_eq!(pane.agent_display_title(lx_kind()), None);
 
     pane.lx.chat.session_title = Some("Fix login bug".to_string());
-    assert_eq!(pane.agent_display_title(lx_kind()), Some("Fix login bug"));
+    assert_eq!(
+        pane.agent_display_title(lx_kind()),
+        None,
+        "lx 会话标题不再作为侧栏标题来源"
+    );
 }
 
 #[test]
-fn lx_override_wins_and_clear_falls_back() {
+fn lx_override_shows_custom_title_and_clear_removes_title() {
     let mut pane = active_lx_pane();
     pane.lx.chat.session_title = Some("Auto title".to_string());
 
-    pane.set_agent_title_override(lx_kind(), Some("  Manual title  ".to_string()));
+    pane.set_agent_title_override(lx_kind(), Some(custom("  Manual title  ")));
     assert_eq!(
         pane.agent_display_title(lx_kind()),
         Some("Manual title"),
-        "覆盖优先且首尾空白被裁掉"
+        "覆盖首尾空白被裁掉"
     );
     assert_eq!(
         pane.lx.chat.session_title.as_deref(),
@@ -65,15 +84,38 @@ fn lx_override_wins_and_clear_falls_back() {
     );
 
     pane.set_agent_title_override(lx_kind(), None);
-    assert_eq!(pane.agent_display_title(lx_kind()), Some("Auto title"));
-
-    pane.set_agent_title_override(lx_kind(), Some("Manual title".to_string()));
-    pane.set_agent_title_override(lx_kind(), Some("   ".to_string()));
     assert_eq!(
         pane.agent_display_title(lx_kind()),
-        Some("Auto title"),
+        None,
+        "清除覆盖后不再回退会话标题"
+    );
+
+    pane.set_agent_title_override(lx_kind(), Some(custom("Manual title")));
+    pane.set_agent_title_override(lx_kind(), Some(custom("   ")));
+    assert_eq!(
+        pane.agent_display_title(lx_kind()),
+        None,
         "空白覆盖按清除处理"
     );
+}
+
+#[test]
+fn lx_override_keeps_prompt_binding() {
+    let mut pane = active_lx_pane();
+    pane.set_agent_title_override(lx_kind(), Some(bound("Auth Flow", 7, 9)));
+
+    let title = pane
+        .agent_title_override(lx_kind())
+        .expect("title override");
+    assert_eq!(title.text, "Auth Flow");
+    assert_eq!(
+        title.prompt,
+        Some(AgentPromptRef {
+            item_id: 7,
+            page_id: PromptPageId::Saved(9)
+        })
+    );
+    assert_eq!(pane.agent_display_title(lx_kind()), Some("Auth Flow"));
 }
 
 #[test]
@@ -81,14 +123,14 @@ fn lx_override_requires_active_session() {
     let mut pane = Pane::new();
     pane.lx.chat.session_title = Some("Auto title".to_string());
 
-    pane.set_agent_title_override(lx_kind(), Some("Manual title".to_string()));
+    pane.set_agent_title_override(lx_kind(), Some(custom("Manual title")));
 
     assert_eq!(pane.lx.chat.agent_title_override, None);
-    assert_eq!(pane.agent_display_title(lx_kind()), Some("Auto title"));
+    assert_eq!(pane.agent_display_title(lx_kind()), None);
 }
 
 #[test]
-fn terminal_default_title_uses_snapshot_title_and_blank_is_none() {
+fn terminal_snapshot_title_is_not_used_without_override() {
     let mut pane = Pane::new();
     let kind = terminal_kind(AgentKind::Claude);
 
@@ -98,13 +140,11 @@ fn terminal_default_title_uses_snapshot_title_and_blank_is_none() {
         AgentState::Idle,
         Some("Refactor parser"),
     ));
-    assert_eq!(pane.agent_display_title(kind), Some("Refactor parser"));
-
-    pane.agent = Some(snapshot(AgentKind::Claude, AgentState::Idle, Some("")));
-    assert_eq!(pane.agent_display_title(kind), None);
-
-    pane.agent = Some(snapshot(AgentKind::Claude, AgentState::Idle, None));
-    assert_eq!(pane.agent_display_title(kind), None);
+    assert_eq!(
+        pane.agent_display_title(kind),
+        None,
+        "终端 OSC 标题不再作为侧栏标题来源"
+    );
 }
 
 #[test]
@@ -116,7 +156,7 @@ fn terminal_override_only_applies_to_matching_kind() {
         Some("Claude OSC"),
     ));
 
-    pane.set_agent_title_override(terminal_kind(AgentKind::Claude), Some("Manual".to_string()));
+    pane.set_agent_title_override(terminal_kind(AgentKind::Claude), Some(custom("Manual")));
     assert_eq!(
         pane.agent_display_title(terminal_kind(AgentKind::Claude)),
         Some("Manual")
@@ -128,14 +168,14 @@ fn terminal_override_only_applies_to_matching_kind() {
     );
     assert_eq!(
         pane.terminal_agent_title,
-        Some((AgentKind::Claude, "Manual".to_string()))
+        Some((AgentKind::Claude, custom("Manual")))
     );
 
     // 当前窗格是 Claude 时，写入 Codex 的覆盖无效。
-    pane.set_agent_title_override(terminal_kind(AgentKind::Codex), Some("Wrong".to_string()));
+    pane.set_agent_title_override(terminal_kind(AgentKind::Codex), Some(custom("Wrong")));
     assert_eq!(
         pane.terminal_agent_title,
-        Some((AgentKind::Claude, "Manual".to_string()))
+        Some((AgentKind::Claude, custom("Manual")))
     );
 
     // 覆盖按 AgentKind 存储：查询另一种 Agent 不借用 Claude 的覆盖。
@@ -161,7 +201,7 @@ fn update_pane_agent_clears_override_on_kind_change() {
     state
         .pane_mut_anywhere(pane_id)
         .expect("pane")
-        .set_agent_title_override(terminal_kind(AgentKind::Claude), Some("Manual".to_string()));
+        .set_agent_title_override(terminal_kind(AgentKind::Claude), Some(custom("Manual")));
 
     assert!(update_pane_agent(
         &mut state,
@@ -198,7 +238,7 @@ fn update_pane_agent_clears_override_on_agent_exit() {
     state
         .pane_mut_anywhere(pane_id)
         .expect("pane")
-        .set_agent_title_override(terminal_kind(AgentKind::Claude), Some("Manual".to_string()));
+        .set_agent_title_override(terminal_kind(AgentKind::Claude), Some(custom("Manual")));
 
     assert!(update_pane_agent(&mut state, pane_id, None));
 
@@ -227,7 +267,7 @@ fn update_pane_agent_keeps_override_for_same_kind() {
     state
         .pane_mut_anywhere(pane_id)
         .expect("pane")
-        .set_agent_title_override(terminal_kind(AgentKind::Claude), Some("Manual".to_string()));
+        .set_agent_title_override(terminal_kind(AgentKind::Claude), Some(custom("Manual")));
 
     assert!(update_pane_agent(
         &mut state,
@@ -242,7 +282,7 @@ fn update_pane_agent_keeps_override_for_same_kind() {
     let pane = state.pane_anywhere(pane_id).expect("pane");
     assert_eq!(
         pane.terminal_agent_title,
-        Some((AgentKind::Claude, "Manual".to_string()))
+        Some((AgentKind::Claude, custom("Manual")))
     );
     assert_eq!(
         pane.agent_display_title(terminal_kind(AgentKind::Claude)),
@@ -254,9 +294,13 @@ fn update_pane_agent_keeps_override_for_same_kind() {
 fn reset_session_view_clears_lx_override() {
     let mut pane = active_lx_pane();
     pane.lx.chat.session_title = Some("Auto title".to_string());
-    pane.set_agent_title_override(lx_kind(), Some("Manual title".to_string()));
+    pane.set_agent_title_override(lx_kind(), Some(custom("Manual title")));
     assert_eq!(
-        pane.lx.chat.agent_title_override.as_deref(),
+        pane.lx
+            .chat
+            .agent_title_override
+            .as_ref()
+            .map(|t| t.text.as_str()),
         Some("Manual title")
     );
 
