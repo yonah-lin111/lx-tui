@@ -116,20 +116,16 @@ pub fn prepare_ai_web_message(
                         } else {
                             MessageAttachmentKind::File
                         };
-                        super::push_unique_attachment(
-                            workspace_root,
-                            &mut inputs,
-                            MessageAttachmentInput {
-                                kind,
-                                label: reference.path.clone(),
-                                marker_start: Some(range_start),
-                                marker_end: Some(range_end),
-                                source_path: Some(abs_path),
-                                mime: None,
-                                width: None,
-                                height: None,
-                            },
-                        );
+                        inputs.push(MessageAttachmentInput {
+                            kind,
+                            label: reference.path.clone(),
+                            marker_start: Some(range_start),
+                            marker_end: Some(range_end),
+                            source_path: Some(abs_path),
+                            mime: None,
+                            width: None,
+                            height: None,
+                        });
                     }
                     Err(_) => {
                         let kind = if reference.kind == ReferKind::Image
@@ -145,36 +141,28 @@ pub fn prepare_ai_web_message(
                         {
                             let kept = remaining_cloud.remove(pos);
                             keep_files.push(kept.clone());
-                            super::push_unique_attachment(
-                                workspace_root,
-                                &mut inputs,
-                                MessageAttachmentInput {
-                                    kind,
-                                    label: kept,
-                                    marker_start: Some(range_start),
-                                    marker_end: Some(range_end),
-                                    source_path: None,
-                                    mime: None,
-                                    width: None,
-                                    height: None,
-                                },
-                            );
+                            inputs.push(MessageAttachmentInput {
+                                kind,
+                                label: kept,
+                                marker_start: Some(range_start),
+                                marker_end: Some(range_end),
+                                source_path: None,
+                                mime: None,
+                                width: None,
+                                height: None,
+                            });
                         } else if keep_files.iter().any(|name| name == &reference.path) {
-                            // 同一云端文件重复引用：已保留，只保留首个引用行。
-                            super::push_unique_attachment(
-                                workspace_root,
-                                &mut inputs,
-                                MessageAttachmentInput {
-                                    kind,
-                                    label: reference.path.clone(),
-                                    marker_start: Some(range_start),
-                                    marker_end: Some(range_end),
-                                    source_path: None,
-                                    mime: None,
-                                    width: None,
-                                    height: None,
-                                },
-                            );
+                            // 同一云端文件重复引用：保留第二条附件记录，展示层按目标收敛。
+                            inputs.push(MessageAttachmentInput {
+                                kind,
+                                label: reference.path.clone(),
+                                marker_start: Some(range_start),
+                                marker_end: Some(range_end),
+                                source_path: None,
+                                mime: None,
+                                width: None,
+                                height: None,
+                            });
                         } else {
                             return Err(AiWebPrepareError::FileNotFound);
                         }
@@ -216,20 +204,16 @@ pub fn prepare_ai_web_message(
             } else {
                 MessageAttachmentKind::File
             };
-            super::push_unique_attachment(
-                workspace_root,
-                &mut inputs,
-                MessageAttachmentInput {
-                    kind,
-                    label: token_text.to_string(),
-                    marker_start: Some(range.start),
-                    marker_end: Some(end),
-                    source_path: Some(abs_path),
-                    mime: None,
-                    width: None,
-                    height: None,
-                },
-            );
+            inputs.push(MessageAttachmentInput {
+                kind,
+                label: token_text.to_string(),
+                marker_start: Some(range.start),
+                marker_end: Some(end),
+                source_path: Some(abs_path),
+                mime: None,
+                width: None,
+                height: None,
+            });
         }
     }
 
@@ -264,20 +248,16 @@ pub fn prepare_ai_web_message(
                 marker_end += 1;
             }
             claimed_ranges.push((start, marker_end));
-            super::push_unique_attachment(
-                workspace_root,
-                &mut inputs,
-                MessageAttachmentInput {
-                    kind,
-                    label: short_name.to_string(),
-                    marker_start: Some(start),
-                    marker_end: Some(marker_end),
-                    source_path,
-                    mime: None,
-                    width: None,
-                    height: None,
-                },
-            );
+            inputs.push(MessageAttachmentInput {
+                kind,
+                label: short_name.to_string(),
+                marker_start: Some(start),
+                marker_end: Some(marker_end),
+                source_path,
+                mime: None,
+                width: None,
+                height: None,
+            });
         }
     }
 

@@ -720,6 +720,7 @@ mod guard;
 mod limits;
 mod process_tools;
 mod resume;
+mod skills;
 mod steer;
 mod subagent;
 mod subagent_roles;

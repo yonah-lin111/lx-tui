@@ -342,6 +342,9 @@ pub fn refer_candidates(
         .filter(|range| {
             in_scope(range)
                 && !overlaps(range)
+                // `@ref/` 由短引用来源统一处理：尾句点会让 mention 区间比
+                // 短引用多一个字符，不能只靠区间包含判断。
+                && !text[range.clone()].starts_with(super::SHORT_REF_PREFIX)
                 && !short_ranges
                     .iter()
                     .any(|short| short.start <= range.start && range.end <= short.end)

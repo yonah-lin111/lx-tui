@@ -248,6 +248,11 @@ impl Lx {
         self.mention.take_scan_request()
     }
 
+    /// 路由丢弃扫描结果时按代号/根清掉在途标记。
+    pub fn abandon_mention_scan(&mut self, generation: u64, root: &std::path::Path) {
+        self.mention.abandon_scan(generation, root);
+    }
+
     /// 写入扫描结果；代号或根过期时丢弃；返回是否采纳。
     pub fn apply_mention_entries(
         &mut self,

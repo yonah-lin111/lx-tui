@@ -99,25 +99,36 @@ fn prepare_deduplicates_same_image() {
 }
 
 #[test]
-fn prepare_deduplicates_repeated_text_reference() {
+fn prepare_keeps_repeated_text_reference_markers() {
     let dir = temp_dir("dedupe-ref");
     std::fs::write(dir.join("Cargo.toml"), "[package]").expect("write");
 
     let text = "@Cargo.toml 这个说什么\n\n@Cargo.toml 有什么功能";
     let prepared = prepare_user_message(&dir, text, &[]).expect("prepare");
-    assert_eq!(prepared.attachments.len(), 1, "同一目标重复引用只保留一条");
     assert_eq!(
-        prepared.attachments[0].marker_start,
-        Some(0),
-        "保留首次出现"
+        prepared.attachments.len(),
+        2,
+        "每个出现位置都保留 marker，标题与 rewind 才能处理全部引用"
     );
-    assert_eq!(prepared.attachments[0].kind, MessageAttachmentKind::File);
+    assert_eq!(prepared.attachments[0].marker_start, Some(0));
+    assert_eq!(prepared.attachments[1].marker_start, Some(29));
+    assert!(
+        prepared
+            .attachments
+            .iter()
+            .all(|att| att.kind == MessageAttachmentKind::File)
+    );
+    let stripped = strip_references_from_inputs(text, &prepared.attachments);
+    assert!(
+        !stripped.contains("@Cargo.toml"),
+        "标题剥离必须覆盖重复引用: {stripped}"
+    );
 
     let _ = std::fs::remove_dir_all(&dir);
 }
 
 #[test]
-fn prepare_deduplicates_same_target_across_syntaxes() {
+fn prepare_keeps_same_target_across_syntaxes() {
     let dir = temp_dir("dedupe-syntax");
     std::fs::write(dir.join("src.rs"), "fn main() {}").expect("write");
 
@@ -125,35 +136,61 @@ fn prepare_deduplicates_same_target_across_syntaxes() {
     let prepared = prepare_user_message(&dir, text, &[]).expect("prepare");
     assert_eq!(
         prepared.attachments.len(),
-        1,
-        "不同写法指向同一文件只保留一条"
+        2,
+        "不同写法都保留 marker，展示层再按目标收敛"
     );
     assert_eq!(
         prepared.attachments[0].source_path.as_deref(),
         Some("src.rs")
+    );
+    assert_eq!(
+        prepared.attachments[1].source_path.as_deref(),
+        Some("src.rs")
+    );
+    assert!(
+        prepared.attachments[0].marker_start < prepared.attachments[1].marker_start,
+        "按正文出现顺序排列"
     );
 
     let _ = std::fs::remove_dir_all(&dir);
 }
 
 #[test]
-fn prepare_keeps_same_named_files_in_different_dirs() {
-    let dir = temp_dir("dedupe-dirs");
-    std::fs::create_dir_all(dir.join("a")).expect("mkdir a");
-    std::fs::create_dir_all(dir.join("b")).expect("mkdir b");
-    std::fs::write(dir.join("a/lib.rs"), "pub fn a() {}").expect("write a");
-    std::fs::write(dir.join("b/lib.rs"), "pub fn b() {}").expect("write b");
+fn prepare_keeps_duplicate_image_markers_but_sends_one_image() {
+    let dir = temp_dir("dedupe-image");
+    let png = create_png_bytes(10, 10);
+    std::fs::write(dir.join("photo.png"), &png).expect("write image");
 
-    let prepared = prepare_user_message(&dir, "看 @a/lib.rs 和 @b/lib.rs", &[]).expect("prepare");
-    assert_eq!(prepared.attachments.len(), 2, "同名不同目录是独立目标");
-    assert_eq!(
-        prepared.attachments[0].source_path.as_deref(),
-        Some("a/lib.rs")
+    let text = "看 @photo.png 和 @photo.png";
+    let prepared = prepare_user_message(&dir, text, &[]).expect("prepare");
+    assert_eq!(prepared.attachments.len(), 2, "两个 marker 都保留");
+    assert!(
+        prepared
+            .attachments
+            .iter()
+            .all(|att| att.kind == MessageAttachmentKind::Image)
     );
+    assert_eq!(prepared.model_images.len(), 1, "模型只收到一份图片");
+
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn prepare_keeps_image_kind_when_explicit_file_reference_comes_first() {
+    let dir = temp_dir("dedupe-kind");
+    let png = create_png_bytes(10, 10);
+    std::fs::write(dir.join("photo.png"), &png).expect("write image");
+
+    let text = "看 @[refer-file](photo.png) 和 @photo.png";
+    let prepared = prepare_user_message(&dir, text, &[]).expect("prepare");
+    assert_eq!(prepared.attachments.len(), 2);
+    assert_eq!(prepared.attachments[0].kind, MessageAttachmentKind::File);
     assert_eq!(
-        prepared.attachments[1].source_path.as_deref(),
-        Some("b/lib.rs")
+        prepared.attachments[1].kind,
+        MessageAttachmentKind::Image,
+        "显式 File 引用不得吞掉后面的 Image 附件"
     );
+    assert_eq!(prepared.model_images.len(), 1, "模型图片仍按内容去重");
 
     let _ = std::fs::remove_dir_all(&dir);
 }
@@ -265,15 +302,71 @@ fn prepare_ai_web_message_handles_local_files_cloud_keep_files_and_rejects_folde
 }
 
 #[test]
-fn prepare_ai_web_deduplicates_repeated_reference() {
+fn prepare_ai_web_keeps_repeated_reference_markers_but_uploads_once() {
     let dir = temp_dir("ai-web-dedup");
     std::fs::write(dir.join("note.txt"), "hello").expect("write note");
 
     let prepared =
         prepare_ai_web_message(&dir, "u-1", "看 @note.txt 以及 @note.txt", &[]).expect("prepare");
-    assert_eq!(prepared.attachments.len(), 1, "网页路径同样只保留一条");
-    assert_eq!(prepared.files.len(), 1);
+    assert_eq!(prepared.attachments.len(), 2, "每个出现位置都保留 marker");
+    assert_eq!(prepared.files.len(), 1, "上传路径去重");
     assert!(prepared.files[0].ends_with("note.txt"));
+    assert_eq!(
+        prepared.web_prompt, "看 以及",
+        "重复引用标记都必须从网页 prompt 剥离"
+    );
+
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn prepare_treats_legacy_ref_content_token_as_plain_text() {
+    let dir = temp_dir("legacy-ref-content");
+    std::fs::write(dir.join("refer.rs"), "fn main() {}").expect("write");
+
+    let text = "看 @[ref-content]/refer.rs 这个";
+    let prepared = prepare_user_message(&dir, text, &[]).expect("prepare");
+    assert!(prepared.attachments.is_empty(), "旧 token 不再挂载文件");
+    assert_eq!(prepared.raw_text, text, "正文原样保留");
+
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn prepare_resolves_short_ref_when_full_reference_exists() {
+    let dir = temp_dir("short-ref");
+    std::fs::create_dir_all(dir.join("docs/feature/x")).expect("mkdir");
+    std::fs::write(dir.join("docs/feature/x/design.md"), "design").expect("write");
+
+    let text = "见 @docs/feature/x/design.md 和 @ref/x/design.md";
+    let prepared = prepare_user_message(&dir, text, &[]).expect("prepare");
+    assert_eq!(prepared.attachments.len(), 2, "完整引用 + 短引用各一条");
+    assert_eq!(
+        prepared.attachments[0].source_path.as_deref(),
+        Some("docs/feature/x/design.md")
+    );
+    assert_eq!(
+        prepared.attachments[1].source_path.as_deref(),
+        Some("docs/feature/x/design.md")
+    );
+
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn prepare_ai_web_keeps_duplicate_cloud_reference_without_error() {
+    let dir = temp_dir("ai-web-cloud-dup");
+    let prepared = prepare_ai_web_message(
+        &dir,
+        "u-1",
+        "看 @[refer-image](cloud.png) 和 @[refer-image](cloud.png)",
+        &["cloud.png".to_string()],
+    )
+    .expect("duplicate cloud reference is not an error");
+    assert_eq!(prepared.attachments.len(), 2);
+    assert_eq!(prepared.keep_files, vec!["cloud.png".to_string()]);
+    assert!(prepared.files.is_empty());
+    assert_eq!(prepared.web_prompt, "看 和");
 
     let _ = std::fs::remove_dir_all(&dir);
 }

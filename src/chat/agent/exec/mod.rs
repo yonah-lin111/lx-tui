@@ -589,6 +589,8 @@ pub(crate) fn skills_catalog_prompt(workspace: &Path, subagent: bool) -> Option<
 fn skill_reference_blocks(workspace: &Path, raw_prompt: &str) -> Vec<String> {
     let catalog = discover_workspace_skills(workspace);
     let mut blocks = Vec::new();
+    // `$skill` 重复出现时只注入一次全文。
+    let mut seen = std::collections::HashSet::new();
     for token in raw_prompt.split_whitespace() {
         let Some(name) = token.strip_prefix('$').filter(|name| {
             !name.is_empty()
@@ -603,6 +605,9 @@ fn skill_reference_blocks(workspace: &Path, raw_prompt: &str) -> Vec<String> {
         }) else {
             continue;
         };
+        if !seen.insert(entry.path.clone()) {
+            continue;
+        }
         blocks.push(match crate::skills::load_skill_body(&entry.path) {
             Ok(body) => {
                 crate::skills::render_injection(

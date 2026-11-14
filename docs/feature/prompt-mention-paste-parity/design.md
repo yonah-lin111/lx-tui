@@ -1,6 +1,6 @@
 # Prompt / Lx `@` 提及与粘贴面板交互对齐设计
 
-状态：**待用户审核**。审核通过前不得修改功能代码。
+状态：**已实施并通过评审修正**（2026-11-14）。评审记录见 `review.md`。
 
 关联任务清单：`docs/feature/prompt-mention-paste-parity/task.md`
 
@@ -312,6 +312,10 @@ pub(super) fn refresh_if_active(&mut self, text: &str, cursor: usize) {
 }
 ```
 
+`refresh` / `set_root` / `take_scan_request` 在状态层统一 `mask_pasted_text`：
+调用方可以传原始文本（根同步、后台快照、操作根选择），折叠粘贴块正文不得参与
+围栏/块绑定判断。这样不会出现“编辑路径用 masked、同步路径用 raw”的分裂。
+
 `set_root` 改为不新开面板，也不在根/绑定切换时解除压制：
 
 ```rust
@@ -424,7 +428,7 @@ pub fn refresh_if_active(&mut self, text: &str, cursor: usize) {
 ```
 
 `view` 改为读取已存 `trigger`，与 Prompt 的 `view_open` 对齐（否则 UI 仍会按文本现算出面板）；
-文本判定与 `refresh` 一样先 `mask_pasted_text`，避免折叠 token 正文让 UI 与状态层判断不一致：
+文本判定与 `refresh` 一样先 `mask_pasted_text`，且 `refresh` 内部也统一遮蔽，避免折叠 token 正文让 UI 与状态层判断不一致：
 
 ```rust
 pub fn view(&self, text: &str, cursor: usize) -> LxMentionView {
@@ -535,7 +539,9 @@ apply_editor(command)
 - `escape_then_move_stays_closed_until_edit`
   - Esc 后 `move_left()` 多次仍不弹；`insert_char('a')` 后弹（query 正确）。
 - `background_skill_sync_does_not_open_closed_panel`
-  - 光标在 `@src`、会话关闭态下 `set_mention_skills`；断言不弹。
+  - 光标落在已有 `@main.rs` 内部、会话关闭态下 `set_mention_skills` / `set_mention_mcp_servers`；断言不弹。
+- `root_change_with_folded_fence_token_keeps_open_panel`
+  - 折叠粘贴块正文含代码围栏，块后输入 `@src` 后切根；断言会话保持打开。
 
 ### 7.4 回归
 
@@ -592,12 +598,13 @@ apply_editor(command)
 | 文件 | 改动 |
 | --- | --- |
 | `src/app/prompt.rs` | 新增 `paste_proposal_open()`；`autosave_deadline` 在提案期间返回 None；undo/redo 复用判断；`settle`/`settle_moved`/`settle_panels(edited)` 分流；skills/MCP 快照走 `refresh_if_active` |
-| `src/app/prompt/mention.rs` | 新增 `refresh_if_active`；`set_root` 只更新根/缓存、不解除压制、不开面板；`take_scan_request` 只认已存 `trigger`；worktree 三个同步入口收敛；`apply_entries` 只喂缓存 |
+| `src/app/prompt/mention.rs` | 新增 `refresh_if_active`；`set_root` 只更新根/缓存、不解除压制、不开面板；`take_scan_request` 只认已存 `trigger`；worktree 三个同步入口收敛；`apply_entries` 只喂缓存；`refresh` / `set_root` / `take_scan_request` 内部统一 `mask_pasted_text` |
 | `src/app/prompt/navigation.rs`、`viewport.rs` | 纯移动与鼠标落点改走 `settle_moved()` |
 | `src/app/state/lx/panels.rs` | `refresh_panel()` / `refresh_panel_moved()` 分流；`refresh_panels(edited)` |
-| `src/app/state/lx/mention.rs` | 新增 `refresh_if_active`；`view` 读已存 trigger 并先 mask；`set_root` 不清压制；`take_scan_request` 去掉参数并加压制/会话门禁；后台快照同步收敛；`apply_entries` 只喂缓存 |
+| `src/app/state/lx/mention.rs` | 新增 `refresh_if_active`、`abandon_scan`；`view` 读已存 trigger 并先 mask；`refresh` 内部统一 mask；`set_root` 不清压制；`take_scan_request` 去掉参数并加压制/会话门禁；后台快照同步收敛；`apply_entries` 只喂缓存 |
 | `src/app/state/lx/edit.rs`、`selection.rs` | 方向键/行首行尾/按词移动/文档首尾改走 `refresh_panel_moved()` |
 | `src/app/update/interaction.rs`、`prompt/save.rs` | 自动保存 tick 与手动保存改用 `paste_proposal_open()` |
+| `src/app/update/pane.rs`、`pane/popups.rs` | 切回 lx 用 `refresh_panel_moved()`；BTW 丢弃扫描结果时清原 composer `pending` |
 
 ### 11.2 测试
 
@@ -606,14 +613,28 @@ apply_editor(command)
 - `src/app/prompt/tests/mention_timing.rs`：移动/鼠标落点/根同步不新开；路径中间打字重开；确认后第一次按键当次重开；Esc 后移动不解除；根切换与迟到扫描结果不重开。
 - `src/app/update/prompt/tests/mention_timing.rs`：事件层 `sync_mention_root -> insert_char` 顺序下第一次 `@` 当次出面板；确认后方向键不重开。
 - `src/app/update/prompt/tests.rs`：文本粘贴提案暂停自动保存且不安排唤醒；路径提案在已有观察下不被 tick 关闭。
-- `src/app/state/lx/mention/tests.rs`：移动不新开；Esc 后移动不解除；后台 skills/MCP 同步不新开；根切换与迟到扫描结果不重开。
+- `src/app/state/lx/mention/tests.rs`：移动不新开；Esc 后移动不解除；后台 skills/MCP 同步不新开；根切换与迟到扫描结果不重开；折叠 token 含围栏时切根不关面板。
+- `src/app/update/tests.rs`：BTW 扫描结果被路由丢弃后清 `pending`；切回 lx 视图不重开 Esc 面板。
 
 验证结果（在 `.worktrees/prompt-mention-paste-parity`）：
 
 - `cargo fmt`、`cargo clippy --all-targets -- -D warnings`：通过。
-- `cargo test`：lib 5399 passed / 0 failed（6 ignored），全部集成测试套件通过。
+- `cargo test`：lib 5436 passed / 0 failed（6 ignored），全部集成测试套件通过。
 
 ### 11.3 未验证
 
 - 真实终端下的鼠标点击落点、终端粘贴时序与视觉呈现需用户 `cargo run` 手工确认（验收清单见 `task.md`）。
 - 未改动 `@` 文本存储形态与桌面端原子 mention 模型。
+
+
+---
+
+## 12. 评审修正（review.md）
+
+| 级别 | 问题 | 修正 |
+| --- | --- | --- |
+| P1 | BTW 扫描结果被路由丢弃后 `pending` 永不清，永久 Loading | 新增 `LxMention::abandon_scan` / `Lx::abandon_mention_scan`；`apply_lx_mention_entries` 丢弃结果时按 qa 找回 composer 清在途标记 |
+| P2 | 根同步/后台快照用原始文本刷新，折叠 token 里的围栏会误关面板 | `refresh` / `set_root` / `take_scan_request` 统一在状态层 `mask_pasted_text` |
+| P2 | `toggle_pane_view` 用编辑语义收尾，切回 lx 重开已 Esc 面板 | 改用 `refresh_panel_moved()` |
+| P2 | 两个新增测试在旧实现上同样通过 | 重写路径自动保存测试与 lx 后台同步测试；补 Prompt 侧测试 |
+| P2 | 文档/注释仍写“根变化解除压制” | 同步 `task.md` 与字段注释 |

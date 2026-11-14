@@ -1,7 +1,7 @@
 # 移除 `@[ref-content]/` 快捷引用标记任务清单
 
 > 设计：`docs/feature/refer-content-token-removal/design.md`
-> 状态：**已实施**（2026-11-14）。用户已确认“全链路删除 + 插入候选原文”。
+> 状态：**已实施并通过评审修正**（2026-11-14）。用户已确认“全链路删除 + 插入候选原文”。评审记录见 `review.md`。
 > 执行顺序：Task 1 → 5；每个 Task 完成后跑对应精确测试，最后统一 fmt/clippy/test。
 
 ---
@@ -84,3 +84,16 @@
 - 旧草稿/历史消息里的 `@[ref-content]/...` 变为普通文本，不再挂载文件（已确认不迁移）。
 - 旧消息附件树可能显示一条 ref-content 标签（不再过滤）。
 - 本环境无法交互验证 TUI 渲染，需用户 `cargo run` 确认。
+
+
+---
+
+## 评审修正（review.md）
+
+- [x] P2：`refer_candidates` 跳过 `@ref/` 开头的 mention 区间，尾句点不再产生双候选。
+- [x] P2：展示层把旧 `@[ref-content]` 标签还原为 `source_path`，不暴露内部 token。
+- [x] P2：更新快捷引用测试名、失败消息与恒真断言；目录候选改为精确整段断言。
+- [x] P2：补旧 token 0 附件、完整引用 + 短引用解析、尾句点候选、旧标签展示测试。
+- [x] P2：`extract_mention_paths` 复用 `mention_token_ranges`，删除第三套扫描逻辑。
+- [x] 接受项：单独确认悬空 `@ref/` 不会额外解析；合法短引用仍要求同消息完整引用（D2/D3）。
+- [x] 验证：`cargo fmt --check`、`cargo clippy --all-targets -- -D warnings`、`cargo test`、`cargo test --test prompt_short_ref`。

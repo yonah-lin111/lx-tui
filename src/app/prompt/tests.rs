@@ -2792,7 +2792,7 @@ fn refer_shortcut_escape_closes_until_next_edit() {
 }
 
 #[test]
-fn refer_shortcut_reference_candidates_insert_short_ref() {
+fn refer_shortcut_reference_candidates_insert_original_text() {
     let mut prompt = prompt(80, 8);
     prompt.set_text("@[refer-image](/tmp/shot.png) 日志\nsh");
     // set_text 不触发面板重算：模拟一次光标移动。
@@ -2818,14 +2818,17 @@ fn refer_shortcut_directory_candidate_inserts_original_marker() {
     assert_eq!(
         prompt.text(),
         "@[refer-folder](/Users/yonah/projects/agent/lx-agent) 仓库\n@[refer-folder](/Users/yonah/projects/agent/lx-agent) ",
-        "文件夹快捷引用带尾斜杠且保留末两段"
+        "文件夹快捷引用插入原标记，目录尾斜杠保留"
     );
 }
 
 #[test]
 fn refer_shortcut_finds_existing_short_ref_again() {
     let mut prompt = prompt(80, 8);
-    prompt.set_text("@ref/lx-at-mention/design.md 需求\ndesign");
+    // 短引用 + 同目标的完整引用：快捷面板保留先出现的原文，发送时短引用仍可解析。
+    prompt.set_text(
+        "@ref/lx-at-mention/design.md 需求\n@docs/feature/lx-at-mention/design.md\n设计\ndesign",
+    );
     prompt.move_right();
     let panel = prompt.refer_panel().expect("panel");
     let texts: Vec<&str> = panel
@@ -2842,7 +2845,7 @@ fn refer_shortcut_finds_existing_short_ref_again() {
     assert!(prompt.refer_confirm());
     assert_eq!(
         prompt.text(),
-        "@ref/lx-at-mention/design.md 需求\n@ref/lx-at-mention/design.md "
+        "@ref/lx-at-mention/design.md 需求\n@docs/feature/lx-at-mention/design.md\n设计\n@ref/lx-at-mention/design.md "
     );
 }
 

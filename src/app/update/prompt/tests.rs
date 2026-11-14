@@ -1459,6 +1459,8 @@ fn autosave_does_not_close_path_paste_panel_with_pending_watch() {
     let now = Instant::now();
     assert!(!tick(&mut state, now), "首个观察点只记录计时");
     stage_paste(&mut state);
+    // `paste_stage` 推进 revision；重新记录静置起点，旧实现会因此返回一个已到期的保存期限。
+    assert!(!state.prompt.autosave_due(now, Duration::from_millis(800)));
     state.effects.clear();
     assert!(!tick(&mut state, now + Duration::from_millis(900)));
     assert!(

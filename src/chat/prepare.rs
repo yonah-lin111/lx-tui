@@ -47,38 +47,6 @@ pub struct PreparedUserMessage {
     pub skill_notices: Vec<SkillNotice>,
 }
 
-/// 同一引用目标只保留首个附件：正文重复出现同一 `@引用` 时不重复落库、不重复展示。
-///
-/// 只比较文本引用（`marker_start` 有值）；直接草稿附件与文本引用仍是两条独立展示行。
-pub(crate) fn push_unique_attachment(
-    workspace_root: &Path,
-    attachments: &mut Vec<MessageAttachmentInput>,
-    attachment: MessageAttachmentInput,
-) {
-    if attachment.marker_start.is_some() {
-        let target = attachment_target(workspace_root, &attachment);
-        let duplicate = attachments.iter().any(|existing| {
-            existing.marker_start.is_some() && attachment_target(workspace_root, existing) == target
-        });
-        if duplicate {
-            return;
-        }
-    }
-    attachments.push(attachment);
-}
-
-/// 附件目标身份：可解析时用规范化绝对路径，否则用去掉尾随 `/` 的原始路径/标签。
-fn attachment_target(workspace_root: &Path, attachment: &MessageAttachmentInput) -> String {
-    let raw = attachment
-        .source_path
-        .as_deref()
-        .unwrap_or(&attachment.label);
-    let resolved = resolve_reference_path(workspace_root, raw);
-    std::fs::canonicalize(&resolved)
-        .map(|path| path.to_string_lossy().into_owned())
-        .unwrap_or_else(|_| raw.trim_end_matches('/').to_string())
-}
-
 /// 准备一条用户消息。
 ///
 /// 1. 提取所有直接草稿附件；
@@ -86,8 +54,10 @@ fn attachment_target(workspace_root: &Path, attachment: &MessageAttachmentInput)
 /// 3. 解析文本中的 `@相对路径` 有效引用（跳过代码围栏）；
 /// 4. 尝试解析 `@ref/` 唯一短引用；
 /// 5. 校验图片存在性、格式与 20 MiB/张、4 张/条、40 MiB/条总量预算；
-/// 6. 对规范化路径或二进制相同的图片去重（模型只发一份，显示行仍保留位置）；
-/// 7. 文本引用按目标规范化路径去重：正文重复出现同一 `@引用` 只保留首次处理的附件。
+/// 6. 对规范化路径或二进制相同的图片去重（模型只发一份，显示行仍保留位置）。
+///
+/// 文本引用不在准备阶段丢弃：每个出现位置都保留 marker，供标题剥离、`/rewind`
+/// 回填与 Web prompt 清洗使用；重复展示由 UI 按目标收敛。
 pub fn prepare_user_message(
     workspace_root: &Path,
     raw_text: &str,
@@ -142,20 +112,16 @@ pub fn prepare_user_message(
             .as_ref()
             .map(|p| p.to_string_lossy().into_owned())
             .unwrap_or_else(|| draft.image.source_name.clone());
-        push_unique_attachment(
-            workspace_root,
-            &mut attachments,
-            MessageAttachmentInput {
-                kind: MessageAttachmentKind::Image,
-                label: draft.image.source_name.clone(),
-                marker_start: None,
-                marker_end: None,
-                source_path: Some(source_path),
-                mime: Some(draft.image.mime.clone()),
-                width: Some(draft.image.width),
-                height: Some(draft.image.height),
-            },
-        );
+        attachments.push(MessageAttachmentInput {
+            kind: MessageAttachmentKind::Image,
+            label: draft.image.source_name.clone(),
+            marker_start: None,
+            marker_end: None,
+            source_path: Some(source_path),
+            mime: Some(draft.image.mime.clone()),
+            width: Some(draft.image.width),
+            height: Some(draft.image.height),
+        });
     }
 
     // 2. 解析显式 `@[refer-*](path)` 引用（忽略折叠粘贴块内部内容）
@@ -171,36 +137,28 @@ pub fn prepare_user_message(
 
         match reference.kind {
             ReferKind::Folder => {
-                push_unique_attachment(
-                    workspace_root,
-                    &mut attachments,
-                    MessageAttachmentInput {
-                        kind: MessageAttachmentKind::Folder,
-                        label: reference.path.clone(),
-                        marker_start: Some(range_start),
-                        marker_end: Some(range_end),
-                        source_path: Some(reference.path.clone()),
-                        mime: None,
-                        width: None,
-                        height: None,
-                    },
-                );
+                attachments.push(MessageAttachmentInput {
+                    kind: MessageAttachmentKind::Folder,
+                    label: reference.path.clone(),
+                    marker_start: Some(range_start),
+                    marker_end: Some(range_end),
+                    source_path: Some(reference.path.clone()),
+                    mime: None,
+                    width: None,
+                    height: None,
+                });
             }
             ReferKind::File => {
-                push_unique_attachment(
-                    workspace_root,
-                    &mut attachments,
-                    MessageAttachmentInput {
-                        kind: MessageAttachmentKind::File,
-                        label: reference.path.clone(),
-                        marker_start: Some(range_start),
-                        marker_end: Some(range_end),
-                        source_path: Some(reference.path.clone()),
-                        mime: None,
-                        width: None,
-                        height: None,
-                    },
-                );
+                attachments.push(MessageAttachmentInput {
+                    kind: MessageAttachmentKind::File,
+                    label: reference.path.clone(),
+                    marker_start: Some(range_start),
+                    marker_end: Some(range_end),
+                    source_path: Some(reference.path.clone()),
+                    mime: None,
+                    width: None,
+                    height: None,
+                });
             }
             ReferKind::Skill => {
                 let path = Path::new(&reference.path);
@@ -231,20 +189,16 @@ pub fn prepare_user_message(
                         });
                     }
                 }
-                push_unique_attachment(
-                    workspace_root,
-                    &mut attachments,
-                    MessageAttachmentInput {
-                        kind: MessageAttachmentKind::Skill,
-                        label: name,
-                        marker_start: Some(range_start),
-                        marker_end: Some(range_end),
-                        source_path: Some(reference.path.clone()),
-                        mime: None,
-                        width: None,
-                        height: None,
-                    },
-                );
+                attachments.push(MessageAttachmentInput {
+                    kind: MessageAttachmentKind::Skill,
+                    label: name,
+                    marker_start: Some(range_start),
+                    marker_end: Some(range_end),
+                    source_path: Some(reference.path.clone()),
+                    mime: None,
+                    width: None,
+                    height: None,
+                });
             }
             ReferKind::Mcp | ReferKind::Subagent => {
                 // MCP 与 Subagent 引用为编辑器纯文本语法糖（已记入 claimed_ranges），随正文原样发送。
@@ -253,20 +207,16 @@ pub fn prepare_user_message(
                 let resolved = resolve_reference_path(workspace_root, &reference.path);
                 let processed = load_and_process_image_file(&resolved)?;
                 add_unique_image(processed.clone())?;
-                push_unique_attachment(
-                    workspace_root,
-                    &mut attachments,
-                    MessageAttachmentInput {
-                        kind: MessageAttachmentKind::Image,
-                        label: reference.path.clone(),
-                        marker_start: Some(range_start),
-                        marker_end: Some(range_end),
-                        source_path: Some(resolved.to_string_lossy().into_owned()),
-                        mime: Some(processed.mime),
-                        width: Some(processed.width),
-                        height: Some(processed.height),
-                    },
-                );
+                attachments.push(MessageAttachmentInput {
+                    kind: MessageAttachmentKind::Image,
+                    label: reference.path.clone(),
+                    marker_start: Some(range_start),
+                    marker_end: Some(range_end),
+                    source_path: Some(resolved.to_string_lossy().into_owned()),
+                    mime: Some(processed.mime),
+                    width: Some(processed.width),
+                    height: Some(processed.height),
+                });
             }
         }
     }
@@ -292,52 +242,40 @@ pub fn prepare_user_message(
             claimed_ranges.push((range.start, end));
 
             if metadata.is_dir() {
-                push_unique_attachment(
-                    workspace_root,
-                    &mut attachments,
-                    MessageAttachmentInput {
-                        kind: MessageAttachmentKind::Folder,
-                        label: token_text.to_string(),
-                        marker_start: Some(range.start),
-                        marker_end: Some(end),
-                        source_path: Some(token_text.to_string()),
-                        mime: None,
-                        width: None,
-                        height: None,
-                    },
-                );
+                attachments.push(MessageAttachmentInput {
+                    kind: MessageAttachmentKind::Folder,
+                    label: token_text.to_string(),
+                    marker_start: Some(range.start),
+                    marker_end: Some(end),
+                    source_path: Some(token_text.to_string()),
+                    mime: None,
+                    width: None,
+                    height: None,
+                });
             } else if sniff_image_file(&resolved) {
                 let processed = load_and_process_image_file(&resolved)?;
                 add_unique_image(processed.clone())?;
-                push_unique_attachment(
-                    workspace_root,
-                    &mut attachments,
-                    MessageAttachmentInput {
-                        kind: MessageAttachmentKind::Image,
-                        label: token_text.to_string(),
-                        marker_start: Some(range.start),
-                        marker_end: Some(end),
-                        source_path: Some(resolved.to_string_lossy().into_owned()),
-                        mime: Some(processed.mime),
-                        width: Some(processed.width),
-                        height: Some(processed.height),
-                    },
-                );
+                attachments.push(MessageAttachmentInput {
+                    kind: MessageAttachmentKind::Image,
+                    label: token_text.to_string(),
+                    marker_start: Some(range.start),
+                    marker_end: Some(end),
+                    source_path: Some(resolved.to_string_lossy().into_owned()),
+                    mime: Some(processed.mime),
+                    width: Some(processed.width),
+                    height: Some(processed.height),
+                });
             } else {
-                push_unique_attachment(
-                    workspace_root,
-                    &mut attachments,
-                    MessageAttachmentInput {
-                        kind: MessageAttachmentKind::File,
-                        label: token_text.to_string(),
-                        marker_start: Some(range.start),
-                        marker_end: Some(end),
-                        source_path: Some(token_text.to_string()),
-                        mime: None,
-                        width: None,
-                        height: None,
-                    },
-                );
+                attachments.push(MessageAttachmentInput {
+                    kind: MessageAttachmentKind::File,
+                    label: token_text.to_string(),
+                    marker_start: Some(range.start),
+                    marker_end: Some(end),
+                    source_path: Some(token_text.to_string()),
+                    mime: None,
+                    width: None,
+                    height: None,
+                });
             }
         }
     }
@@ -381,20 +319,16 @@ pub fn prepare_user_message(
                 marker_end += 1;
             }
             claimed_ranges.push((start, marker_end));
-            push_unique_attachment(
-                workspace_root,
-                &mut attachments,
-                MessageAttachmentInput {
-                    kind,
-                    label: short_name.to_string(),
-                    marker_start: Some(start),
-                    marker_end: Some(marker_end),
-                    source_path,
-                    mime,
-                    width,
-                    height,
-                },
-            );
+            attachments.push(MessageAttachmentInput {
+                kind,
+                label: short_name.to_string(),
+                marker_start: Some(start),
+                marker_end: Some(marker_end),
+                source_path,
+                mime,
+                width,
+                height,
+            });
         }
     }
 

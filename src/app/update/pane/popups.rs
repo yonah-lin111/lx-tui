@@ -90,6 +90,13 @@ pub fn apply_lx_mention_entries(
     match qa {
         Some(qa_id) => {
             if pane.lx.btw.active.as_deref() != Some(qa_id.as_str()) {
+                // 结果只回投当前 QA；其它线程的结果丢弃，但必须清掉原 composer 的在途标记。
+                if let Some(thread) = pane.lx.btw.thread_mut(&qa_id) {
+                    thread
+                        .composer
+                        .editor_mut()
+                        .abandon_mention_scan(generation, root);
+                }
                 return;
             }
             if let Some(composer) = pane.lx.btw.active_composer_mut() {

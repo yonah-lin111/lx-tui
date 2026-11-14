@@ -522,7 +522,7 @@ pub fn mention_deletion_range(text: &str, cursor: usize) -> Option<Range<usize>>
 ///
 /// 与 `parse_references_in` 同一排除规则：围栏内的 `@abc` 是示例文本而非提及，
 /// 既不作为快捷候选，也不按整块删除。
-fn mention_token_ranges(text: &str) -> Vec<Range<usize>> {
+pub(crate) fn mention_token_ranges(text: &str) -> Vec<Range<usize>> {
     let mut ranges = Vec::new();
     let mut index = 0;
     while let Some(offset) = text[index..].find('@') {

@@ -130,7 +130,7 @@ pub struct MentionState {
     worktree_pending: bool,
     /// 最近一次发起 worktree 查询的时刻；用于未解析绑定的重试节流。
     worktree_queried_at: Option<Instant>,
-    /// 面板压制：Esc/确认后保持关闭，直到绑定切换或编辑重置。
+    /// 面板压制：Esc/确认后保持关闭，只有下一次文本编辑才解除。
     suppressed: bool,
     /// @ 面板取根选择（绑定 linked worktree 时先选 main / wt）。
     choice: Option<MentionRootChoice>,
@@ -410,7 +410,8 @@ impl MentionState {
         if self.pending || self.suppressed || self.trigger.is_none() {
             return None;
         }
-        let root = self.effective_root(text, cursor)?;
+        let masked = crate::app::paste::mask_pasted_text(text);
+        let root = self.effective_root(masked.as_ref(), cursor)?;
         if self.cache.is_some() {
             return None;
         }
@@ -680,6 +681,9 @@ impl MentionState {
     /// 仅已有 `@` 会话（含压制态）时重算，纯根同步不得新开面板，也不解除压制。
     pub fn set_root(&mut self, root: Option<PathBuf>, text: &str, cursor: usize) {
         let had_session = self.trigger.is_some() || self.suppressed;
+        // 折叠粘贴块正文不得参与块绑定/围栏判断；所有入口统一在状态层遮蔽。
+        let masked = crate::app::paste::mask_pasted_text(text);
+        let text = masked.as_ref();
         let previous = self.effective_root(text, cursor);
         self.root = root;
         let current = self.effective_root(text, cursor);
@@ -693,7 +697,7 @@ impl MentionState {
         }
     }
 
-    /// 面板压制标记：Esc 关闭或确认插入后不再重新弹出，直到绑定切换或显式清除。
+    /// 面板压制标记：Esc 关闭或确认插入后不再重新弹出，只有文本编辑才解除。
     pub fn suppress(&mut self) {
         self.suppressed = true;
     }
@@ -750,6 +754,9 @@ impl MentionState {
     ///
     /// 进入/回退目录会改变 query 的目录范围，此时高亮回到首项；同一层内继续过滤保持高亮。
     pub(super) fn refresh(&mut self, text: &str, cursor: usize) {
+        // 调用方可能传原始文本（根同步/后台快照/操作根选择）；统一遮蔽折叠粘贴块。
+        let masked = crate::app::paste::mask_pasted_text(text);
+        let text = masked.as_ref();
         if self.suppressed {
             self.panel = None;
             self.chooser = None;

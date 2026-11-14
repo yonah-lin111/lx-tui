@@ -855,6 +855,9 @@ fn escape_then_move_stays_closed_until_edit() {
 #[test]
 fn background_skill_sync_does_not_open_closed_panel() {
     let mut lx = confirmed_mention_with_cache();
+    // 光标放进已有 `@main.rs` 内部：旧的无条件 refresh 会在这里新开面板。
+    lx.cursor = 3;
+    assert!(!lx.mention_visible());
     lx.set_mention_skills(vec![skill("pdf", "/skills/pdf/SKILL.md")]);
     assert!(!lx.mention_visible(), "后台 skill 快照同步不得新开面板");
     lx.set_mention_mcp_servers(vec![McpMentionEntry::new("codegraph", "stdio")]);
@@ -867,6 +870,30 @@ fn escape_then_root_change_stays_closed() {
     assert!(lx.mention_escape());
     assert!(lx.set_mention_root(Some(std::path::PathBuf::from("/other"))));
     assert!(!lx.mention_visible(), "根变化不得解除 Esc 压制重新打开面板");
+}
+
+#[test]
+fn root_change_with_folded_fence_token_keeps_open_panel() {
+    let mut lx = Lx::new();
+    lx.set_mention_root(Some(std::path::PathBuf::from(ROOT)));
+    let tok = crate::app::paste::encode_pasted_text("alpha\n```\nbeta\n```\n");
+    lx.insert_str(&tok);
+    for ch in "@src".chars() {
+        lx.insert_char(ch);
+    }
+    assert!(lx.mention_visible(), "编辑后在 token 后打开面板");
+
+    // 模拟事件层根同步：原始 token 正文含围栏，旧实现会误判触发词在围栏内。
+    assert!(lx.set_mention_root(Some(std::path::PathBuf::from("/other"))));
+    assert!(
+        lx.mention_visible(),
+        "根同步必须遮蔽折叠 token 后再判定触发词"
+    );
+    lx.move_left();
+    assert!(
+        lx.mention_visible(),
+        "纯移动只收敛已打开会话，不得被 token 正文的围栏关掉"
+    );
 }
 
 #[test]

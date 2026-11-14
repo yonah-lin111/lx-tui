@@ -347,6 +347,18 @@ fn trigger_blocked_on_supplement_structural_lines() {
 }
 
 #[test]
+fn candidates_do_not_double_count_short_ref_with_trailing_period() {
+    let text = "见 @ref/foo/bar.md. 再输入 bar";
+    let cursor = text.len();
+    let trigger = refer_trigger(text, cursor).expect("trigger");
+    let scope = refer_scope(text, cursor).expect("scope");
+    let candidates = refer_candidates(text, &scope, &trigger.range, &[]);
+    assert_eq!(candidates.len(), 1, "同一短引用只产生一个候选");
+    assert_eq!(candidates[0].text, "@ref/foo/bar.md", "句点不进入短引用");
+    assert_eq!(candidates[0].tag, ReferTag::ShortRef);
+}
+
+#[test]
 fn candidates_dedupe_when_mention_and_short_ref_refer_to_same_folder() {
     // 对应用户反馈的 bug 场景：先写 @docs/...，再使用快捷引用插入 @ref/...，输入 pro 再次唤起
     let text = "- Reference: @docs/feature/prompt-per-workspace/\n- @ref/feature/prompt-per-workspace/\n- pro";

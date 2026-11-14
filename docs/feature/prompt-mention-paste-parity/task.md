@@ -1,7 +1,7 @@
 # Prompt / Lx `@` 提及与粘贴面板交互对齐任务清单
 
 > 设计：`docs/feature/prompt-mention-paste-parity/design.md`
-> 状态：**已实施**（2026-11-14）。
+> 状态：**已实施并通过评审修正**（2026-11-14）。评审记录见 `review.md`。
 > 执行顺序：Task 1 → Task 2 → Task 3 → Task 4 → Task 5。每个 Task 完成后只跑对应精确校验，最后统一 fmt/clippy/test。
 
 ---
@@ -67,7 +67,7 @@ pub fn paste_proposal_open(&self) -> bool {
 
 - [x] `src/app/prompt/mention.rs`：
   - 新增 `pub(super) fn refresh_if_active(&mut self, text: &str, cursor: usize)`：`trigger.is_some() || suppressed` 才 `refresh`。
-  - `set_root`：在清理缓存/generation 前记录 `was_session = trigger.is_some() || suppressed`；根变化后仍清缓存并 `suppressed = false`；仅 `was_session` 为真时 `refresh`；其余情况不重算、不新开。
+  - `set_root`：在清理缓存/generation 前记录 `was_session = trigger.is_some() || suppressed`；根变化后清缓存与 `pending`，**压制态保持不变**；仅 `was_session` 为真时 `refresh`；其余情况不重算、不新开。
   - `set_worktree_repo`、`apply_worktree_entries`、`worktree_failed` 的 `refresh` 改为 `refresh_if_active`。
   - `take_scan_request`：去掉现算 `markdown::mention_trigger`，改为要求 `!self.suppressed && self.trigger.is_some()`；`pending` / `cache.is_some()` 早退保持不变。
 - [x] `src/app/prompt.rs::set_mention_skills` / `set_mention_mcp_servers`：`mention.refresh(...)` 改为 `mention.refresh_if_active(...)`。
@@ -177,3 +177,15 @@ pub fn paste_proposal_open(&self) -> bool {
 - 本环境无法交互式验证 TUI 外观与真实鼠标/终端粘贴时序；需用户 `cargo run` 确认。
 - opencode TUI 的 `dismissedValue` 是“相同文本不重开”；本次用“文本编辑才解除压制”的等价布尔语义，未引入逐字符比较。
 - 不改桌面端的原子 mention 模型；本任务只对齐 TUI 的触发时机。
+
+
+---
+
+## 评审修正（review.md）
+
+- [x] P1：`LxMention::abandon_scan` / `Lx::abandon_mention_scan`；BTW 扫描结果被路由丢弃时清原 composer 的 `pending`。
+- [x] P2：`MentionState` / `LxMention::refresh`、`set_root`、`take_scan_request` 统一在状态层遮蔽折叠粘贴块。
+- [x] P2：`toggle_pane_view` 切回 lx 使用 `refresh_panel_moved()`，不解除压制、不新开面板。
+- [x] P2：重写路径粘贴自动保存测试；lx 后台同步测试把光标放进 `@main.rs`；补 Prompt 侧同类测试。
+- [x] P2：同步 `task.md` 与字段注释的压制生命周期描述。
+- [x] 验证：`cargo fmt --check`、`cargo clippy --all-targets -- -D warnings`、`cargo test`。

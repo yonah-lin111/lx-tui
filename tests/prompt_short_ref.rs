@@ -72,7 +72,7 @@ fn selecting_candidate_inserts_original_reference_text() {
     );
 }
 
-/// 引用根形式的目录候选：短名带尾斜杠，绝不出现根目录歧义。
+/// 引用根形式的目录候选：确认后插入原标记，不引入根目录歧义。
 #[test]
 fn directory_candidate_inserts_original_reference_marker() {
     let (mut state, _config, _view) = ready_state();
@@ -84,17 +84,10 @@ fn directory_candidate_inserts_original_reference_marker() {
 
     assert!(state.prompt.refer_panel().is_some(), "目录候选可匹配");
     update::apply_editor(&mut state, EditorCommand::Newline);
-    assert!(
-        state
-            .prompt
-            .text()
-            .ends_with("@[refer-folder](/Users/yonah/projects/agent/lx-agent) "),
-        "目录候选插入原标记: {}",
-        state.prompt.text()
-    );
-    assert!(
-        !state.prompt.text().contains("@/agent"),
-        "短名不以 / 开头（不会被读成根目录）"
+    assert_eq!(
+        state.prompt.text(),
+        "@[refer-folder](/Users/yonah/projects/agent/lx-agent) 参考仓库\n@[refer-folder](/Users/yonah/projects/agent/lx-agent) ",
+        "目录候选插入原标记"
     );
 }
 
@@ -130,7 +123,10 @@ fn short_ref_is_highlighted_distinctly() {
 fn existing_short_ref_is_offered_again() {
     let (mut state, _config, _view) = ready_state();
     update::focus_prompt(&mut state);
-    state.prompt.set_text("@ref/lx-at-mention/design.md 需求\n");
+    // 同目标的完整引用保证短引用在发送时仍可解析。
+    state
+        .prompt
+        .set_text("@ref/lx-at-mention/design.md 需求\n@docs/feature/lx-at-mention/design.md\n");
     type_text(&mut state, "design");
 
     let panel = state.prompt.refer_panel().expect("panel");

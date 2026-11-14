@@ -113,6 +113,55 @@ fn root_change_while_suppressed_stays_closed() {
 }
 
 #[test]
+fn background_skill_sync_does_not_open_closed_panel() {
+    let mut prompt = confirmed_mention_with_cache();
+    // 光标放进已有 `@src/app.rs` 内部：旧的无条件 refresh 会在这里新开面板。
+    prompt.set_cursor_offset(6);
+    assert!(prompt.mention().is_none());
+    prompt.set_mention_skills(vec![crate::skills::SkillEntry {
+        name: "pdf".into(),
+        description: "pdf description".into(),
+        path: PathBuf::from("/skills/pdf/SKILL.md"),
+        scope: crate::skills::SkillScope::User,
+        source: crate::skills::SkillSource::Lx,
+        enabled: true,
+        shadowed_by: None,
+    }]);
+    assert!(
+        prompt.mention().is_none(),
+        "后台 skill 快照同步不得新开面板"
+    );
+    prompt.set_mention_mcp_servers(vec![McpMentionEntry::new("codegraph", "stdio")]);
+    assert!(prompt.mention().is_none(), "后台 MCP 快照同步不得新开面板");
+}
+
+#[test]
+fn root_sync_with_folded_fence_token_keeps_open_panel() {
+    let mut prompt = prompt(60, 10);
+    let tok = crate::app::paste::encode_pasted_text("alpha\n```\nbeta\n```\n");
+    prompt.insert_str(&tok);
+    for ch in "@src".chars() {
+        prompt.insert_char(ch);
+    }
+    assert!(
+        prompt.mention_trigger().is_some(),
+        "编辑后在 token 后建立会话"
+    );
+
+    // 根同步读原始文本时，token 正文里的围栏会误判触发词在围栏内。
+    prompt.set_mention_root(Some(PathBuf::from("/tmp/ws")));
+    assert!(
+        prompt.mention_trigger().is_some(),
+        "根同步必须遮蔽折叠 token 后再判定触发词"
+    );
+    prompt.move_left();
+    assert!(
+        prompt.mention_trigger().is_some(),
+        "纯移动只收敛已打开会话，不得被 token 正文的围栏关掉"
+    );
+}
+
+#[test]
 fn scan_result_after_move_stays_closed() {
     let mut prompt = prompt(40, 8);
     prompt.set_mention_root(Some(PathBuf::from("/tmp/ws")));

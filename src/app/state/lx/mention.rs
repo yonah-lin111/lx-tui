@@ -133,7 +133,7 @@ pub struct LxMention {
     pending: bool,
     /// 过滤后的候选面板；无候选或未扫描时为 None。
     panel: Option<MentionPanel>,
-    /// Esc/确认后压制自动重开，直到下一次编辑或根变化。
+    /// Esc/确认后压制自动重开，只有下一次文本编辑才解除。
     suppressed: bool,
     /// 当前活跃 Tab：Files / refDir / Skills / MCP / Subagents。
     tab: MentionTab,
@@ -496,6 +496,13 @@ impl LxMention {
         Some((self.generation, root))
     }
 
+    /// 路由丢弃扫描结果时清掉同代号/同根的在途标记，避免该 composer 永久停在 Loading。
+    pub fn abandon_scan(&mut self, generation: u64, root: &Path) {
+        if self.generation == generation && self.root.as_deref() == Some(root) {
+            self.pending = false;
+        }
+    }
+
     /// 写入扫描结果；代号或根不匹配（过期）时丢弃；返回是否采纳。
     pub fn apply_entries(
         &mut self,
@@ -523,6 +530,9 @@ impl LxMention {
 
     /// 按当前文本、光标与缓存重算面板；压制时保持关闭。
     pub fn refresh(&mut self, text: &str, cursor: usize) {
+        // 根同步/后台快照可能传原始文本；统一遮蔽折叠粘贴块，保持与 `view` 判定一致。
+        let masked = crate::app::paste::mask_pasted_text(text);
+        let text = masked.as_ref();
         if self.suppressed {
             self.reset_session();
             return;

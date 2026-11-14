@@ -1,6 +1,6 @@
 # 移除 `@[ref-content]/` 快捷引用标记设计
 
-状态：**已实施**（2026-11-14）。用户已确认：全链路删除；字母快捷面板改为插入候选原文。
+状态：**已实施并通过评审修正**（2026-11-14）。用户已确认：全链路删除；字母快捷面板改为插入候选原文。评审记录见 `review.md`。
 
 关联任务清单：`docs/feature/refer-content-token-removal/task.md`
 
@@ -19,7 +19,7 @@
 目标：
 
 1. **移除 `@[ref-content]/` token 标记的全链路**：不再产生、不再解析、不再高亮、不再整块删除。
-2. 字母快捷面板确认时**插入候选原文**（`@docs/.../design.md`、`@[refer-folder](/abs)`、`@ref/...`），语义与分辨率完全不变，且不再截断路径。
+2. 字母快捷面板确认时**插入候选原文**（`@docs/.../design.md`、`@[refer-folder](/abs)`、`@ref/...`），不再截断路径。普通完整引用的语义不变；`@ref/` 仍遵循既有规则（同一消息内需存在唯一完整引用），旧 ref-content 的隐式工作区后缀扫描随标记一起删除。
 
 非目标：
 
@@ -70,14 +70,15 @@ pub fn refer_insertion(candidate: &ReferCandidate) -> String {
 - `candidate.text` 就是正文中该引用首次出现时的原始文本，因此文件、目录、`@[refer-*]`、`@ref/...` 全部保持原语义。
 - `trim_end` 只去掉原文多余尾随空白，避免双空格。
 - 不再截断为末两段，长路径按原样插入。
+- **边界**：单独确认一个悬空的 `@ref/末两段` 不会额外解析文件；它仍要求同一消息内存在唯一完整引用。旧流程能做到这一点，是因为 `@[ref-content]` 会做工作区后缀扫描；该能力已按 D1 删除。
 
 ### 4.2 候选收集去掉 `RefContent`
 
-`refer_candidates` 删除 `Source::RefContent` 分支及对应区间收集；`mention_token_ranges` 的过滤只需排除 `@ref/` 短引用区间，不再排除 ref-content。其余来源（普通 `@`、`@[refer-*]`、`@ref/`）与排序、去重规则不变。
+`refer_candidates` 删除 `Source::RefContent` 分支及对应区间收集。普通 mention 区间直接跳过以 `@ref/` 开头的 token：尾句点会让 mention 区间比短引用多一个字符，只靠区间包含判断会产生双候选。其余来源（普通 `@`、`@[refer-*]`、`@ref/`）与排序、去重规则不变。
 
 ### 4.3 历史消息路径提取
 
-`extract_mention_paths` 原本在 `ref_content.rs`，同时承担 `@[ref-content]/` 与普通 `@` 的提取。删除标记后迁到 `src/app/markdown/mention_paths.rs`，只保留普通 `@` 提及：
+`extract_mention_paths` 原本在 `ref_content.rs`，同时承担 `@[ref-content]/` 与普通 `@` 的提取。删除标记后迁到 `src/app/markdown/mention_paths.rs`，复用 `markdown::mention_token_ranges`，只过滤 `@[refer-` 与 `@ref/`：
 
 ```text
 跳过 @ref/ 与 @[refer- 前缀；按行首/空白边界解析 @路径；围栏内不解析。
@@ -95,7 +96,7 @@ pub fn refer_insertion(candidate: &ReferCandidate) -> String {
 
 - 删除 `TokenKind::RefContent`、`ui/style.rs::markdown_ref_content` 与 prompt 渲染分支。
 - `@[ref-content]/...` 文本此后按普通正文渲染；`@ref/...` 仍有独立高亮。
-- 附件树不再过滤 ref-content 标签。
+- 附件树不再过滤旧标签，但展示层把 label 以 `@[` 开头且带 `source_path` 的旧附件还原成可读路径，不暴露内部 token。
 
 ---
 
@@ -104,7 +105,7 @@ pub fn refer_insertion(candidate: &ReferCandidate) -> String {
 1. 字母快捷面板仍只从当前分段已出现的引用生成候选，不扫描文件系统。
 2. 确认后插入的文本必须与候选原文逐字一致（仅补一个尾随空格）。
 3. `@` 文件提及面板、`@[refer-*]`、`@ref/` 的解析与附件语义不变。
-4. 代码中不再存在 `@[ref-content]/` 前缀、格式化函数、区间解析、专用高亮或 prepare 分支。
+4. 生产代码中不再存在 `@[ref-content]/` 前缀、格式化函数、区间解析、专用高亮或 prepare 分支；测试保留该字面量仅用于锁定旧数据的降级行为。
 5. 不改数据库 schema，不写迁移。
 
 ---
@@ -168,18 +169,33 @@ pub fn refer_insertion(candidate: &ReferCandidate) -> String {
 
 ### 8.2 测试
 
-- `refer_shortcut`：原文插入（文件 / `@[refer-folder]` / `@ref/`）、去重后仍插首个完整原文。
+- `refer_shortcut`：原文插入（文件 / `@[refer-folder]` / `@ref/`）、去重后仍插首个完整原文、尾句点短引用只产生一个候选。
 - `mention_paths`：普通 `@` 提取、跳过 `@ref/` 与 `@[refer-`、围栏内忽略。
 - prompt / lx / update / 集成测试：快捷面板确认后插入原文；`@ref/` 高亮与整块删除保留。
+- prepare：旧 `@[ref-content]` 文本 0 附件且正文原样；完整引用 + 短引用两条附件指向同一目标。
+- 历史展示：旧 `@[ref-content]` 附件标签显示为 `source_path`。
 - 删除 ref-content 专用插入、高亮、退格、prepare 解析与附件树过滤用例。
 
 验证结果（在本 worktree）：
 
 - `cargo fmt`、`cargo clippy --all-targets -- -D warnings`：通过。
-- `cargo test`：lib 5400 passed / 0 failed（6 ignored），全部集成测试通过。
+- `cargo test`：lib 5436 passed / 0 failed（6 ignored），全部集成测试通过。
 - `rg "@\[ref-content\]|REF_CONTENT_PREFIX|ref_content|RefContent" src tests`：无残留。
 
 ### 8.3 未验证
 
 - TUI 交互与渲染需用户 `cargo run` 确认（验收清单见 `task.md`）。
 - 旧草稿/历史消息中的 `@[ref-content]/...` 已按约定变为普通文本。
+
+
+---
+
+## 9. 评审修正（review.md）
+
+| 级别 | 问题 | 处置 |
+| --- | --- | --- |
+| P2 | `@ref/` 候选单独发送不再解析 | 按 D2/D3 接受：插入候选原文；合法短引用仍要求同消息完整引用，补测试锁定 |
+| P2 | 尾句点产生 mention + 短引用双候选 | `refer_candidates` 跳过 `@ref/` 开头的 mention 区间 |
+| P2 | 旧 ref-content 标签暴露内部 token | 展示层用 `source_path` 还原可读标签 |
+| P2 | 测试名/断言与原文插入语义脱节 | 改名、改消息、替换恒真断言为精确插入断言 |
+| P2 | 缺少旧 token / 短引用 / 旧标签覆盖；扫描逻辑三份重复 | 补测试；`extract_mention_paths` 复用 `mention_token_ranges` |

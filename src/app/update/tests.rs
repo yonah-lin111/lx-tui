@@ -3371,6 +3371,39 @@ fn toggle_pane_view_flips_target_and_hides_terminal_state() {
 }
 
 #[test]
+fn toggling_back_to_lx_does_not_reopen_escaped_mention_panel() {
+    let mut state = AppState::demo();
+    let pane = state.active_tab().layout.focus();
+    set_pane_cwd(&mut state, pane, "/root");
+    sync_lx_mention_root(&mut state, pane);
+    apply_lx_input(&mut state, LxInput::Char('@'));
+    assert!(
+        state
+            .pane_anywhere(pane)
+            .expect("pane")
+            .lx
+            .mention_visible()
+    );
+
+    apply_lx_input(&mut state, LxInput::Escape);
+    assert!(
+        !state.pane_anywhere(pane).expect("pane").lx.mention_open(),
+        "Esc 关闭并压制"
+    );
+
+    assert!(toggle_pane_view(&mut state, pane));
+    assert!(toggle_pane_view(&mut state, pane));
+    assert!(
+        !state
+            .pane_anywhere(pane)
+            .expect("pane")
+            .lx
+            .mention_visible(),
+        "非编辑的视图切换不得解除 Esc 压制"
+    );
+}
+
+#[test]
 fn toggling_terminal_pane_to_lx_initializes_status_model() {
     let mut state = demo_with_default_model();
     let pane = state.active_tab().layout.focus();
@@ -5192,6 +5225,59 @@ fn lx_mention_root_change_invalidates_inflight_result() {
         }],
     );
     assert!(state.pane_anywhere(pane).expect("pane").lx.mention_open());
+}
+
+#[test]
+fn dropped_btw_scan_result_clears_composer_pending() {
+    let mut state = AppState::demo();
+    let pane = state.active_tab().layout.focus();
+    let root = PathBuf::from("/btw-root");
+    let (generation, request_root) = {
+        let target = state.pane_mut_anywhere(pane).expect("pane");
+        target.lx.btw.ensure_thread("qa-1");
+        let composer = target
+            .lx
+            .btw
+            .thread_mut("qa-1")
+            .expect("thread")
+            .composer
+            .editor_mut();
+        composer.set_mention_root(Some(root.clone()));
+        composer.insert_char('@');
+        composer
+            .take_mention_scan_request()
+            .expect("scan requested")
+    };
+    assert_eq!(request_root, root);
+
+    // 扫描未回投前切到另一个 QA；旧结果按 qa 丢弃。
+    state
+        .pane_mut_anywhere(pane)
+        .expect("pane")
+        .lx
+        .btw
+        .ensure_thread("qa-2");
+    apply_lx_mention_entries(
+        &mut state,
+        pane,
+        Some("qa-1".into()),
+        generation,
+        &request_root,
+        vec![],
+    );
+
+    let target = state.pane_mut_anywhere(pane).expect("pane");
+    let composer = target
+        .lx
+        .btw
+        .thread_mut("qa-1")
+        .expect("thread")
+        .composer
+        .editor_mut();
+    assert!(
+        composer.take_mention_scan_request().is_some(),
+        "被路由丢弃的结果必须清掉原 composer 的 pending，否则永久 Loading"
+    );
 }
 
 #[test]
