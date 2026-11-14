@@ -874,6 +874,7 @@ cargo test --lib event::tests::mouse_click::
 - **D18 标题快照**：绑定保存选中时的页标题文本；提示词页后续改名不自动跟随。空输入提交清除覆盖。
 - **D19 Open prompt**：仅当标题绑定仍可解析时，在菜单 `Edit title` 后插入 `Open prompt`；点击后释放 Prompt 钉住、结算当前编辑、在右侧 Prompt 面板打开该 item/page 并聚焦。自定义标题或绑定失效时不显示该项。
 - **D20 生命周期沿用**：绑定随覆盖一起在会话重置/切换、终端 Agent 退出/种类变化、窗格关闭时清除；重启丢失。
+- **D21 状态色对齐**：弹窗 Recent 行的页标题状态色与 Prompt 抽屉一致：todo 默认亮白、in_progress 黄、done 绿、无状态压暗；选中项保留选中底色并加粗。
 
 ### 12.2 数据模型与模块
 

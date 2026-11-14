@@ -106,6 +106,7 @@ cargo test --lib event::tests::mouse_drag::            9 passed
 | D18 标题快照 | `AgentTitleOverride.text` 保存选中时页标题；后续页改名不自动跟随 |
 | D19 Open prompt | 绑定有效时菜单插入 `OpenPrompt`；打开精确页并聚焦 Prompt 面板 |
 | D20 生命周期沿用 | 覆盖随会话重置/切换、Agent 退出/种类变化、窗格关闭清除；重启丢失 |
+| D21 状态色对齐 | 弹窗 Recent 页标题复用 Prompt 抽屉状态色（todo 亮白、in_progress 黄、done 绿、无状态压暗） |
 
 ### 6.2 生产代码变更
 

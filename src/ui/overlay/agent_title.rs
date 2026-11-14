@@ -7,6 +7,7 @@ use ratatui::text::{Line, Span};
 use ratatui::widgets::Paragraph;
 use unicode_width::UnicodeWidthStr;
 
+use crate::app::markdown::TemplateStatus;
 use crate::app::overlay::AgentTitleDialog;
 use crate::app::prompt::RecentPageRow;
 use crate::ui::widgets;
@@ -217,15 +218,24 @@ fn render_recent_row(
         .max(1);
     let title = text::ellipsize_width(&row.page_title, title_width);
     let padding = width.saturating_sub(marker.width() + title.width() + time_width);
-    let title_style = if selected {
-        style::strong()
-    } else {
-        style::text()
+    // 页标题状态色与 Prompt 抽屉的 Recent 一致：todo 默认亮白、in_progress 黄、
+    // done 绿、无状态压暗；选中项在此基础上加粗。
+    let title_style = match row.status {
+        Some(TemplateStatus::Todo) => style::text(),
+        Some(status) => style::template_status(status),
+        None => style::muted(),
     };
+    let title_style = if selected {
+        title_style.patch(style::strong())
+    } else {
+        title_style
+    };
+    // 状态色优先于选中行前景色，选中底色继续保留。
+    let title_style = style::text().patch(highlight).patch(title_style);
     frame.render_widget(
         Paragraph::new(Line::from(vec![
             Span::styled(marker.clone(), style::strong().patch(highlight)),
-            Span::styled(title, title_style.patch(highlight)),
+            Span::styled(title, title_style),
             Span::styled(" ".repeat(padding), Style::default().patch(highlight)),
             Span::styled(row.time_label.clone(), style::muted().patch(highlight)),
         ])),

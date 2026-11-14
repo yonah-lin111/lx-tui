@@ -2,6 +2,7 @@
 
 use super::*;
 
+use crate::app::markdown::TemplateStatus;
 use crate::app::overlay::TextInput;
 use crate::app::prompt::{PromptPageId, RecentPageRow};
 use crate::app::state::{AiWebSite, LxEntry, SidebarAgentKind};
@@ -13,7 +14,7 @@ use ratatui::Terminal;
 use ratatui::backend::TestBackend;
 use ratatui::buffer::Buffer;
 use ratatui::layout::Rect;
-use ratatui::style::Color;
+use ratatui::style::{Color, Modifier};
 
 const SCREEN: Rect = Rect {
     x: 0,
@@ -32,6 +33,18 @@ fn row(index: i64, page_title: &str, prompt_name: &str) -> RecentPageRow {
         updated_at: index,
         time_label: "2m".into(),
         current: false,
+    }
+}
+
+fn row_with_status(
+    index: i64,
+    page_title: &str,
+    prompt_name: &str,
+    status: Option<TemplateStatus>,
+) -> RecentPageRow {
+    RecentPageRow {
+        status,
+        ..row(index, page_title, prompt_name)
     }
 }
 
@@ -228,6 +241,62 @@ fn renders_input_recent_rows_selection_and_buttons() {
     }
     // 未选中条目的第二行没有 selection 底色。
     assert_ne!(buffer[(shell.inner.x, list_y + 1)].bg, Color::Indexed(240));
+}
+
+#[test]
+fn recent_rows_use_template_status_colors() {
+    let rows = vec![
+        row_with_status(0, "todo page", "todo prompt", Some(TemplateStatus::Todo)),
+        row_with_status(
+            1,
+            "doing page",
+            "doing prompt",
+            Some(TemplateStatus::InProgress),
+        ),
+        row_with_status(2, "done page", "done prompt", Some(TemplateStatus::Done)),
+        row_with_status(3, "plain page", "plain prompt", None),
+    ];
+    let dialog = dialog(rows, None, "");
+    let (_, buffer, _) = draw(&dialog, SCREEN.width, SCREEN.height);
+    let shell = agent_title_shell(SCREEN, 4).expect("shell fits");
+    let list_y = shell.inner.y + 2;
+    // 未选中条目 marker 为两列空白，页标题从 inner.x + 2 开始。
+    let title_x = shell.inner.x + 2;
+
+    let cases = [
+        (0, Color::Reset, false),
+        (1, Color::Yellow, false),
+        (2, Color::Green, false),
+        (3, Color::Reset, true),
+    ];
+    for (offset, color, dim) in cases {
+        let cell = &buffer[(title_x, list_y + offset * 2)];
+        assert_eq!(cell.fg, color, "row {offset} 页标题状态色");
+        assert_eq!(
+            cell.modifier.contains(Modifier::DIM),
+            dim,
+            "row {offset} DIM"
+        );
+    }
+}
+
+#[test]
+fn selected_row_keeps_status_color_under_highlight() {
+    let rows = vec![row_with_status(
+        0,
+        "doing page",
+        "doing prompt",
+        Some(TemplateStatus::InProgress),
+    )];
+    let dialog = dialog(rows, Some(0), "");
+    let (_, buffer, _) = draw(&dialog, SCREEN.width, SCREEN.height);
+    let shell = agent_title_shell(SCREEN, 1).expect("shell fits");
+    let list_y = shell.inner.y + 2;
+    // 选中项 marker 为 `❯ `，同样占两列。
+    let cell = &buffer[(shell.inner.x + 2, list_y)];
+    assert_eq!(cell.fg, Color::Yellow, "选中项保留状态色");
+    assert_eq!(cell.bg, Color::Indexed(240), "选中底色保留");
+    assert!(cell.modifier.contains(Modifier::BOLD), "选中项加粗");
 }
 
 #[test]
