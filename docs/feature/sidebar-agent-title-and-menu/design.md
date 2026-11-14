@@ -1,6 +1,6 @@
 # 侧栏 Agents 条目第二行标题与右键菜单 — 设计
 
-> 状态：**已实现（V2 最终形态）**
+> 状态：**已实现并合入 dev（V2 最终形态）**
 > 关联任务：[task.md](task.md) ｜ 审查记录：[review.md](review.md)
 > 依据：用户需求 + Grill Me 收口结论 + 实现期补齐的 Recent 标题/Open prompt/状态色/移除项需求。
 

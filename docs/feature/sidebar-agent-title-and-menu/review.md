@@ -1,8 +1,8 @@
 # 侧栏 Agents 标题与右键菜单 — 审查记录
 
 > 设计：[design.md](design.md) ｜ 任务：[task.md](task.md)
-> 分支：`feat/sidebar-agent-title-and-menu` ｜ 工作树：`.worktrees/sidebar-agent-title-and-menu`
-> 审查范围：`dev..HEAD` 的 6 个提交（`6ba04d88`、`179389d8`、`f836e21c`、`7284e1d6`、`95e567e5`、`a97a64f0`）
+> 分支：`feat/sidebar-agent-title-and-menu`（已合入 `dev`）｜ 工作树：`.worktrees/sidebar-agent-title-and-menu`（已移除）
+> 审查范围：`dev..HEAD` 的 7 个提交（`6ba04d88`、`179389d8`、`f836e21c`、`7284e1d6`、`95e567e5`、`a97a64f0`、`edca616d`）
 > 审查方式：Codegraph / Codebase Memory 结构核对、逐文件静态审查、专项测试与全量 `cargo test --lib`、3 个并行只读审查子任务。
 
 ## 1. 关键结论
@@ -154,10 +154,20 @@
 
 ### 3.1 验证结果
 
+功能分支（合并前）：
+
 ```text
 cargo fmt                                             通过
 cargo clippy --all-targets -- -D warnings             通过
 cargo test --lib                                      5523 passed, 0 failed, 6 ignored
+```
+
+合并 `dev` 后（`bc5d6f3a` 之后的 15 个提交 + 本功能 7 个提交）：
+
+```text
+cargo fmt                                             通过
+cargo clippy --all-targets -- -D warnings             通过
+cargo test --lib                                      5549 passed, 0 failed, 6 ignored
 ```
 
 专项：
@@ -179,7 +189,13 @@ cargo test --lib input::tests::all_text_overlays_route_word_ops_and_cut 1 passed
 
 - P3-6：标题状态每帧全量扫描绑定页正文，保留为性能债。
 - P3-7：`src/app/state/lx/chat.rs` 超过 1000 行，属于既有结构债，本次不拆分。
-- 真实终端人工验收仍待用户 `cargo run` 完成。
+- 真实终端人工验收仍建议在合并后的 `dev` 上执行一次 `cargo run`。
+
+### 3.3 合并记录
+
+- 合并 `dev` 时仅 `docs/standards/tui-design-requirements.md` 冲突：`dev` 的侧栏底栏已统一为 `[WEB]`，功能分支文档仍写 `[SET]` / `[USE]`。
+- 解决方式：保留 `dev` 的 `[WEB]` 底栏描述，同时合入本功能的 Agents 两行条目、标题状态色、右键菜单与标题弹窗规则。
+- `SCHEMA_VERSION` 两侧均为 29，无迁移冲突；合并后全量测试通过。
 
 ## 4. 残余风险
 
