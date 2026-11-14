@@ -51,7 +51,7 @@ pub use pane::{
     SidebarAgentKind, Tab,
 };
 pub use prompt_history::{PROMPT_HISTORY_LIMIT, PROMPT_HISTORY_MAX_BYTES, PromptHistory};
-pub use todo::{TodoChartKind, TodoEdit, TodoEditTarget, TodoGroupRole, TodoPanel, WeekDayView};
+pub use todo::{TodoEdit, TodoEditTarget, TodoGroupRole, TodoPanel, WeekDayView};
 pub use workspace::{
     GitRetry, PromptDraft, Workspace, WorkspaceGit, WorkspaceIdentity, WorkspaceRow,
     current_workspace_identity, home_dir, path_tail_two, tab_label, unique_workspace_name,

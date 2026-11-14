@@ -280,22 +280,6 @@ pub fn dismiss_todo_rollover(state: &mut AppState) -> bool {
     changed
 }
 
-/// 切换到下一张底部统计图表。
-pub fn next_todo_chart(state: &mut AppState) -> bool {
-    state.todo.set_pending_g(false);
-    let mut changed = state.todo.next_chart();
-    changed |= focus_todo(state);
-    changed
-}
-
-/// 切换到上一张底部统计图表。
-pub fn prev_todo_chart(state: &mut AppState) -> bool {
-    state.todo.set_pending_g(false);
-    let mut changed = state.todo.prev_chart();
-    changed |= focus_todo(state);
-    changed
-}
-
 /// 进入编辑。
 ///
 /// - `New`：末尾追加（独立条目，`group_id == None`）；

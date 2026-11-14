@@ -1,56 +1,11 @@
-//! Todo 日程切换、历史未完成顺延、7 日周感知带与统计图表投影。
+//! Todo 日程切换、历史未完成顺延与 7 日周感知带投影。
 
 use crate::db::todo::{
-    TodoDayStats, TodoPriority, TodoStatus, day_of_month, recent_dates, shift_date, week_dates,
-    weekday_initial, weekday_short,
+    TodoStatus, day_of_month, shift_date, week_dates, weekday_initial, weekday_short,
 };
 
 use super::TodoPanel;
 use super::group::normalize_slice_groups_and_positions;
-
-/// 单日统计类型别名。
-pub type TodoStats = TodoDayStats;
-
-/// 统计图表种类（一次仅展示一个，支持主动切换）。
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
-pub enum TodoChartKind {
-    /// 三态分布与完成率（1/3）。
-    #[default]
-    StatusAndRate,
-    /// 优先级 P0..P3 分布（2/3）。
-    Priority,
-    /// 近 7 日计划与完成双柱趋势（3/3）。
-    Trend7Day,
-}
-
-impl TodoChartKind {
-    /// 顺时针切换到下一张图表。
-    pub fn next(self) -> Self {
-        match self {
-            Self::StatusAndRate => Self::Priority,
-            Self::Priority => Self::Trend7Day,
-            Self::Trend7Day => Self::StatusAndRate,
-        }
-    }
-
-    /// 逆时针切换到上一张图表。
-    pub fn prev(self) -> Self {
-        match self {
-            Self::StatusAndRate => Self::Trend7Day,
-            Self::Priority => Self::StatusAndRate,
-            Self::Trend7Day => Self::Priority,
-        }
-    }
-
-    /// 1 基序号（1..=3）。
-    pub fn number(self) -> usize {
-        match self {
-            Self::StatusAndRate => 1,
-            Self::Priority => 2,
-            Self::Trend7Day => 3,
-        }
-    }
-}
 
 /// 周感知带中单日的只读投影。
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -128,32 +83,6 @@ impl TodoPanel {
         }
         let next = shift_date(&self.selected_date, delta_weeks.saturating_mul(7));
         self.select_date(next)
-    }
-
-    /// 当前激活的统计图表类型。
-    pub fn active_chart(&self) -> TodoChartKind {
-        self.active_chart
-    }
-
-    /// 切换到下一张图表。
-    pub fn next_chart(&mut self) -> bool {
-        self.active_chart = self.active_chart.next();
-        true
-    }
-
-    /// 切换到上一张图表。
-    pub fn prev_chart(&mut self) -> bool {
-        self.active_chart = self.active_chart.prev();
-        true
-    }
-
-    /// 直接设定图表类型。
-    pub fn set_chart(&mut self, chart: TodoChartKind) -> bool {
-        if self.active_chart == chart {
-            return false;
-        }
-        self.active_chart = chart;
-        true
     }
 
     /// 历史日期（`< today_date`）中未完成条目的总数。
@@ -274,60 +203,11 @@ impl TodoPanel {
         })
     }
 
-    /// 生成以当前选中日期为终点、最近 7 天的每日统计序列（用于 7 日趋势图表）。
-    pub fn trend_7_days(&self) -> Vec<TodoDayStats> {
-        recent_dates(&self.selected_date, 7)
-            .into_iter()
-            .map(|date| {
-                let (planned_count, completed_count) = self.day_counts(&date);
-                TodoDayStats {
-                    date,
-                    planned_count,
-                    completed_count,
-                }
-            })
-            .collect()
-    }
-
-    /// 完成项数量（工具栏与统计用）。
+    /// 完成项数量（周感知带按日统计用）。
     pub fn done_count(&self) -> usize {
         self.items
             .iter()
             .filter(|item| item.status == TodoStatus::Done)
             .count()
-    }
-
-    /// 未开始数量（底部统计柱图用）。
-    pub fn open_count(&self) -> usize {
-        self.items
-            .iter()
-            .filter(|item| item.status == TodoStatus::Todo)
-            .count()
-    }
-
-    /// 进行中数量（底部统计用）。
-    pub fn in_progress_count(&self) -> usize {
-        self.items
-            .iter()
-            .filter(|item| item.status == TodoStatus::InProgress)
-            .count()
-    }
-
-    /// 指定优先级的条目数量（优先级分布图表用）。
-    pub fn priority_count(&self, priority: TodoPriority) -> usize {
-        self.items
-            .iter()
-            .filter(|item| item.priority == priority)
-            .count()
-    }
-
-    /// 当前选中日期下 P0..P3 四档优先级的条目计数分布。
-    pub fn priority_distribution(&self) -> [usize; 4] {
-        [
-            self.priority_count(TodoPriority::P0),
-            self.priority_count(TodoPriority::P1),
-            self.priority_count(TodoPriority::P2),
-            self.priority_count(TodoPriority::P3),
-        ]
     }
 }

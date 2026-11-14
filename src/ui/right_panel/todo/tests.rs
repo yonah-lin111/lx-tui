@@ -12,7 +12,6 @@ use ratatui::backend::TestBackend;
 use ratatui::buffer::Buffer;
 use ratatui::style::{Color, Modifier};
 
-mod charts;
 mod grouping;
 mod schedule;
 
@@ -297,6 +296,40 @@ fn scrollbar_only_when_overflowing() {
     assert_eq!(bar.total, total);
     assert_eq!(bar.visible, visible);
     assert!(bar.thumb.height >= 1, "thumb 高度至少 1 行: {bar:?}");
+}
+
+/// 删除底部统计块后，列表必须独占主体区剩余高度，滚动条轨道贴到列表底边。
+#[test]
+fn list_rect_uses_full_body_below_week_strip() {
+    let mut state = AppState::demo();
+    state.right_tab = crate::app::state::RightTab::Todo;
+    let area = panel(38);
+    let body = body_rect(area);
+    let strip = u16::from(week_strip_rect(area).is_some());
+    let list = list_rect(area);
+
+    assert_eq!(list.y, body.y.saturating_add(strip), "列表紧贴周感知带下沿");
+    assert_eq!(
+        list.height,
+        body.height.saturating_sub(strip),
+        "列表高度 = 主体区 - 周感知带"
+    );
+    assert_eq!(
+        list.width,
+        body.width.saturating_sub(1),
+        "最右 1 列留给滚动条"
+    );
+    assert_eq!(list.bottom(), body.bottom(), "列表必须贴到主体区底边");
+
+    state
+        .todo
+        .replace(records(visible_rows(area).saturating_add(5)));
+    let bar = scrollbar(area, &state).expect("溢出时必须出现滚动条");
+    assert_eq!(
+        bar.track.bottom(),
+        list.bottom(),
+        "滚动条轨道底边必须与列表底边对齐"
+    );
 }
 
 #[test]

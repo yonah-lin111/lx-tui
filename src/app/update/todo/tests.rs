@@ -795,30 +795,6 @@ fn date_selection_and_rollover_past_incomplete_to_today() {
 }
 
 #[test]
-fn chart_cycles_across_three_modes() {
-    let mut state = todo_state(&["a"]);
-    assert_eq!(
-        state.todo.active_chart(),
-        crate::app::state::TodoChartKind::StatusAndRate
-    );
-    assert!(apply_todo_key(&mut state, TodoKey::Char('c')));
-    assert_eq!(
-        state.todo.active_chart(),
-        crate::app::state::TodoChartKind::Priority
-    );
-    assert!(next_todo_chart(&mut state));
-    assert_eq!(
-        state.todo.active_chart(),
-        crate::app::state::TodoChartKind::Trend7Day
-    );
-    assert!(prev_todo_chart(&mut state));
-    assert_eq!(
-        state.todo.active_chart(),
-        crate::app::state::TodoChartKind::Priority
-    );
-}
-
-#[test]
 fn pending_g_is_cleared_by_non_g_keys_and_clear_done_preserves_edit_commit() {
     let mut state = todo_state(&["a", "b", "c"]);
     assert!(apply_todo_key(&mut state, TodoKey::Char('G')));

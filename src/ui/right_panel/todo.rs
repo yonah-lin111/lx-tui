@@ -1,9 +1,8 @@
 //! 右侧容器的 Todo 日程面板体：工具栏按钮、一周快速切日感知带、历史顺延横幅、
-//! 带优先级徽标与聚合树连接符的三态列表行、行内多行编辑、滚动条与底部多图表统计。
+//! 带优先级徽标与聚合树连接符的三态列表行、行内多行编辑与滚动条。
 //!
 //! 绘制与命中共用同一组几何函数（项目既有不变量）；本模块只读状态，不改状态、不做 IO。
 
-pub mod charts;
 mod item;
 pub mod schedule;
 
@@ -12,7 +11,6 @@ use ratatui::buffer::Buffer;
 use ratatui::layout::Rect;
 use ratatui::style::Style;
 
-pub use charts::{ChartSwitchHit, chart_switch_hit_at};
 pub use schedule::{
     RolloverHit, WeekStripHit, rollover_banner_rect, rollover_hit_at, week_strip_hit_at,
     week_strip_rect,
@@ -41,12 +39,8 @@ pub(super) const GROUP_BRANCH_WIDTH: u16 = 3;
 pub(super) const PRIORITY_WIDTH: u16 = 2;
 /// 单个待办条目最多占用的视觉行数；超出时在末行用 `…` 截断。
 pub const MAX_TODO_ITEM_ROWS: usize = 3;
-/// 主体区低于此行数时不上下两分：列表独占，统计块整块隐藏。
+/// 主体区低于此行数时降级：周感知带整块隐藏，列表独占。
 const MIN_SPLIT_BODY: u16 = 7;
-/// 统计块的最少行数：摘要 1 行 + 柱区 1 行 + 轴标签 1 行。
-const MIN_STATS_ROWS: u16 = 3;
-/// 柱状图每根柱子的宽度（列）；槽位更窄时取槽宽。
-const BAR_WIDTH: u16 = 3;
 
 /// 工具栏左侧组：新建（`[+]`，贴近左边框）。
 const LEFT_BUTTONS: [(TodoButton, u16); 1] = [(TodoButton::New, NEW_WIDTH)];
@@ -61,34 +55,14 @@ fn body_rect(panel: Rect) -> Rect {
     super::geometry::body_rect(crate::tiling::pane_inner_rect(panel))
 }
 
-/// 统计块高度：扣掉顶部 1 行周感知带后，与列表**平分**剩余主体区（分割线占 1 行，取整余数留给列表）。
-///
-/// 返回 0 表示不分块：主体区太矮时列表独占，避免统计块把列表挤到 1 行。
-fn stats_height(panel: Rect) -> u16 {
-    let body = body_rect(panel).height;
-    if body < MIN_SPLIT_BODY {
-        return 0;
-    }
-    let strip = u16::from(week_strip_rect(panel).is_some());
-    let rem = body.saturating_sub(strip);
-    (rem.saturating_sub(1)) / 2
-}
-
-/// 列表区矩形：主体区扣掉顶部周感知带、分割线与统计块，且让出最右 1 列滚动条槽。
+/// 列表区矩形：主体区扣掉顶部周感知带后整块，且让出最右 1 列滚动条槽。
 pub fn list_rect(panel: Rect) -> Rect {
     let body = body_rect(panel);
     let strip = u16::from(week_strip_rect(panel).is_some());
-    let stats = stats_height(panel);
-    let rem = body.height.saturating_sub(strip);
-    let height = if stats == 0 {
-        rem
-    } else {
-        rem.saturating_sub(stats).saturating_sub(1)
-    };
     Rect {
         y: body.y.saturating_add(strip),
         width: body.width.saturating_sub(1),
-        height,
+        height: body.height.saturating_sub(strip),
         ..body
     }
 }
@@ -105,26 +79,6 @@ pub fn effective_list_rect(panel: Rect, state: &AppState) -> Rect {
     } else {
         base
     }
-}
-
-/// 列表与统计块之间的分割线行（整宽，两端 `├` / `┤` 衔接外框）。
-pub fn stats_divider_rect(panel: Rect) -> Option<Rect> {
-    let body = body_rect(panel);
-    (stats_height(panel) > 0).then(|| Rect::new(body.x, list_rect(panel).bottom(), body.width, 1))
-}
-
-/// 统计块矩形（整宽，位于分割线之下、贴主体区底边）。
-pub fn stats_rect(panel: Rect) -> Option<Rect> {
-    let body = body_rect(panel);
-    let stats = stats_height(panel);
-    (stats > 0).then(|| {
-        Rect::new(
-            body.x,
-            body.bottom().saturating_sub(stats),
-            body.width,
-            stats,
-        )
-    })
 }
 
 /// 可见行数（基础几何）。
@@ -570,7 +524,7 @@ pub fn edit_input_drag_char_at(
     ))
 }
 
-/// 滚动条几何（无溢出时为 None）；轨道只覆盖列表区，不含底部统计块。
+/// 滚动条几何（无溢出时为 None）；轨道覆盖列表区整高。
 pub fn scrollbar(panel: Rect, state: &AppState) -> Option<widgets::scrollbar::ScrollbarLayout> {
     if state.right_tab != crate::app::state::RightTab::Todo || state.prompt_collapsed {
         return None;
@@ -605,7 +559,6 @@ pub(crate) fn render(frame: &mut Frame<'_>, area: Rect, state: &AppState) -> Opt
     if let Some(bar) = scrollbar(area, state) {
         widgets::scrollbar::render_buffer(buf, &bar);
     }
-    charts::render_stats(area, buf, state, focused);
     cursor
 }
 

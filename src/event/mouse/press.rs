@@ -331,16 +331,6 @@ pub(crate) fn handle_mouse_down_left(
                 }
                 ui::right_panel::todo::RolloverHit::Dismiss => update::dismiss_todo_rollover(state),
             };
-        } else if let Some(hit) = ui::right_panel::todo::chart_switch_hit_at(
-            view.right_panel,
-            state,
-            mouse.column,
-            mouse.row,
-        ) {
-            changed = match hit {
-                ui::right_panel::todo::ChartSwitchHit::Prev => update::prev_todo_chart(state),
-                ui::right_panel::todo::ChartSwitchHit::Next => update::next_todo_chart(state),
-            };
         } else if let Some(row) =
             ui::right_panel::todo::status_at(view.right_panel, state, mouse.column, mouse.row)
         {
@@ -354,8 +344,8 @@ pub(crate) fn handle_mouse_down_left(
         {
             changed = update::begin_todo_row_press(state, row, Instant::now());
         }
-        // 容器内其余位置（工具栏空白 / 分割线 / 统计块 / 列表外空白）同样让容器进入
-        // 选中态，但不改数据、不打断编辑、不穿透到窗格。焦点高亮只由边框表达，
+        // 容器内其余位置（工具栏空白 / 列表外空白）同样让容器进入选中态，
+        // 但不改数据、不打断编辑、不穿透到窗格。焦点高亮只由边框表达，
         // 不再依赖"点进输入框"才算选中。
         changed |= update::focus_todo_from_click(state);
         if changed {
