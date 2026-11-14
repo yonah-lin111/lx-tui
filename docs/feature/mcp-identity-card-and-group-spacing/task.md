@@ -1,6 +1,6 @@
 # MCP 身份卡、read 行数与合并组间隔 — 执行任务清单
 
-> 状态：代码、测试与规范文档已完成；`cargo fmt` / `cargo clippy -D warnings` / `cargo test` 全部通过。Review 发现的问题已修复，见 [`review.md`](review.md)；验证报告见 [`verification.md`](verification.md)，待用户运行 `cargo run` 做视觉验收。
+> 状态：已合入 `dev`（2026-11-14，fast-forward 至 `41fc6751`）；代码、测试与规范文档已完成，Review 发现的问题已修复，见 [`review.md`](review.md)；真实 TUI 视觉验收仍按 [`verification.md`](verification.md) V14 待用户执行。
 > 关联文档：`docs/feature/mcp-identity-card-and-group-spacing/design.md`
 > 规则：生产代码禁止 `unwrap()/expect()`；文案一律英文；单文件 ≤1000 行；改动后按影响范围验证。
 
@@ -331,6 +331,14 @@ rg -n "MCP 卡片的参数块|组内不空行|MCP 结果|read.*不显示.*行数
 - [x] P2：修正文档中的分隔符颜色、合并态示例、失败组头与窄宽分隔行规则；补足中断颜色、窄宽绝对行数、分隔行存在性断言。
 - [x] P3：回填 `task.md` 实际测试名，更新 `McpDetailView` 模块注释，去掉验证报告中的固定测试总数。
 - [x] 新增回归测试：流式身份卡、中断去重/颜色、取消状态、图片省略计数、身份字段上界、`read` 恰好放得下、组合字符单行、图片摘要一致性、键盘导航排除、窄宽单根组分隔行。
+
+---
+
+## 阶段 8：合入（已完成）
+
+- [x] `git merge --ff-only feat/mcp-identity-card`：`dev` 从 `8c995980` 快进至 `41fc6751`，无代码冲突。
+- [x] 合入后 `cargo fmt --check`、`cargo clippy --all-targets -- -D warnings`、`cargo test`（5408 passed / 0 failed / 6 ignored）通过。
+- [x] 清理 `mcp-identity-card` worktree、`feat/mcp-identity-card` 分支与隔离开发库。
 
 ---
 

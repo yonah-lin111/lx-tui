@@ -3,7 +3,7 @@
 - 任务目录：`docs/feature/mcp-identity-card-and-group-spacing/`
 - 目标代码：`src/ui/main_content/lx/history/tool/mcp.rs`、`src/ui/main_content/lx/history/tool/mcp/tests.rs`、`src/ui/main_content/lx/history/tool/group.rs`、`src/ui/main_content/lx/history/tool/file_summary.rs`、`src/ui/main_content/lx/history/tool.rs`、`src/ui/main_content/lx/history/snapshot/steps.rs`、`src/ui/text/agent.rs`
 - 目标文档：`docs/standards/lx-message-block-display.md`、`docs/standards/tui-design-requirements.md`
-- 状态：已实现，待用户验收（2026-11-14）。
+- 状态：已合入 `dev`（2026-11-14，fast-forward 至 `41fc6751`）；真实 TUI 视觉验收仍按 [`verification.md`](verification.md) V14 由用户执行。
 
 ---
 

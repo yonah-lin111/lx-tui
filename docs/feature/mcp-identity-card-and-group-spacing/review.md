@@ -3,7 +3,7 @@
 - 审查范围：`dev...feat/mcp-identity-card` 全部代码与文档改动
 - 审查基线：`7ac4b12b`
 - 审查方式：对照 `design.md` / 标准文档逐项阅读实现，CLI 会话复核，补充对抗性单测
-- 结论：P0 无；P1 1 项、P2 10 项、P3 3 项，均已修复；`cargo test` 5408 passed / 0 failed / 6 ignored，`cargo fmt --check` 与 `cargo clippy --all-targets -- -D warnings` 通过。
+- 结论：P0 无；P1 1 项、P2 10 项、P3 3 项，均已修复；`cargo test` 5408 passed / 0 failed / 6 ignored，`cargo fmt --check` 与 `cargo clippy --all-targets -- -D warnings` 通过；已合入 `dev`（fast-forward 至 `41fc6751`）。
 
 | 级别 | 数量 | 状态 |
 | --- | --- | --- |

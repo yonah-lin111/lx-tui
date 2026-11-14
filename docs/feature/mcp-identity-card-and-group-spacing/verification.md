@@ -1,14 +1,15 @@
 # MCP 身份卡、`read` 行数与合并组间隔 — 验证报告
 
-- 工作区：`/Users/yonah/projects/agent/lx-tui/.worktrees/mcp-identity-card`（`feat/mcp-identity-card`）
-- 代码基线：`a8e750ff feat(ui): make MCP cards identity-only`
+- 工作区：`/Users/yonah/projects/agent/lx-tui`（`dev`，由 `feat/mcp-identity-card` 快进合入）
+- 代码基线：`41fc6751 fix(ui): address MCP identity card review findings`
 - CLI 验证会话：`sess-18e7c5ca8ad0dae8-0`（`lx-tui exec`，默认模型 `provider-alq374/cbcn/deepseek-v4.1-flash#medium`）
-- 结论：CLI、自动化测试与文档检查全部通过；真实终端观感待用户 `cargo run` 确认。
+- 结论：CLI、自动化测试、文档检查与合入验证全部通过；真实终端观感待用户 `cargo run` 确认。
 
 | 验证范围 | 结果 |
 | --- | --- |
 | V1–V13：CLI 会话、渲染单测、几何、文档、构建 | 通过 |
 | V14：真实 TUI 视觉与交互 | 待用户人工确认 |
+| V15：合入 `dev` 与主工作区验证 | 通过 |
 
 ## V1 CLI 会话端到端 — 通过
 
@@ -108,3 +109,11 @@
 - 输入内容：V1 会话 `sess-18e7c5ca8ad0dae8-0`。
 - 验证步骤：在目标工作区运行 `cargo run`，打开上述会话，依次检查 MCP 合并卡、`read` 卡、两张 `wait_agent` 卡与滚动/点击。
 - 期望结果：MCP 卡为 `■ MCP · 2 calls`（server 一级、tool 二级、中间 `│`）；`read` 卡显示 `src/ui/text/agent.rs:58-107 · 50 lines`；两张 `wait_agent` 卡之间空一行；MCP/`read` 卡点击无展开；窄窗格无裁切、滚动位置与点击命中不偏移。
+
+## V15 合入 `dev` — 通过
+
+- 输入内容：`feat/mcp-identity-card` 的 3 个提交。
+- 验证步骤：`git merge --ff-only feat/mcp-identity-card`；随后在主工作区运行 `cargo fmt --check`、`cargo clippy --all-targets -- -D warnings`、`cargo test`。
+- 期望结果：无合并冲突；格式与 clippy 零告警；全量测试通过。
+- 实测：`dev` 从 `8c995980` 快进至 `41fc6751`；`cargo test` 5408 passed / 0 failed / 6 ignored。
+- 清理：合入后移除 `mcp-identity-card` worktree、`feat/mcp-identity-card` 分支与隔离开发库。
