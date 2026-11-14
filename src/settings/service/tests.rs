@@ -295,6 +295,10 @@ async fn page_requires_token_and_serves_self_contained_assets() {
         html.contains("/usage_charts.js") && html.contains("/usage.js"),
         "usage scripts linked"
     );
+    assert!(
+        html.contains("class=\"usage-controls\"") && !html.contains("usage-topbar"),
+        "usage filters render as a content toolbar instead of a second topbar"
+    );
 
     let web_css = request(port, &get("/web.css")).await;
     assert_eq!(status(&web_css), 200);
@@ -311,6 +315,11 @@ async fn page_requires_token_and_serves_self_contained_assets() {
     assert!(
         web_css_body.contains(".hidden { display: none !important; }"),
         "body-level overlays stay hidden when a view stylesheet is suspended"
+    );
+    assert!(
+        web_css_body.contains("*::-webkit-scrollbar")
+            && web_css_body.contains("scrollbar-color: var(--border-strong) transparent"),
+        "all scroll containers share one scrollbar style"
     );
 
     let web_js = request(port, &get("/web.js")).await;
@@ -433,14 +442,15 @@ async fn page_locks_viewport_and_avoids_extra_scrollbars() {
         css.contains("grid-template-rows: max-content max-content"),
         "narrow stacked grid sizes rows to content and scrolls inside"
     );
-    // 左栏列表独立滚动但隐藏滚动条；右栏卡片依赖细滚动条兜底。
+    // 左栏列表独立滚动但隐藏滚动条；其余滚动容器统一走 web.css 的细滚动条。
     assert!(
         css.contains(".command-list::-webkit-scrollbar { display: none; }"),
         "left list scrollbar hidden"
     );
     assert!(
-        css.contains(".editor-body::-webkit-scrollbar { width: 8px; }"),
-        "editor fallback scrollbar styled"
+        web_css.contains("*::-webkit-scrollbar { width: 8px; height: 8px; }")
+            && web_css.contains("scrollbar-width: thin"),
+        "shared scrollbar style"
     );
     // 左栏条目两行排版：第一行斜杠+名称，第二行 tag 与名称左对齐。
     assert!(
@@ -450,10 +460,6 @@ async fn page_locks_viewport_and_avoids_extra_scrollbars() {
     assert!(
         css.contains(".nav-item .tag { grid-column: 2; grid-row: 2;"),
         "tag on second line aligned to name"
-    );
-    assert!(
-        css.contains("scrollbar-width: thin"),
-        "editor fallback scrollbar thin"
     );
     // 所有容器/控件/卡片移除圆角（直角），仅三处状态小圆点保留 border-radius: 50%（侧栏未保存点、顶栏状态点、命令未保存点）。
     assert_eq!(
@@ -491,12 +497,9 @@ async fn models_page_scrolls_and_uses_shared_select_toast() {
         "models grid bounded by viewport"
     );
     assert!(
-        css.contains(".editor-body::-webkit-scrollbar-thumb"),
-        "editor scrollbar thumb visible"
-    );
-    assert!(
-        css.contains(".provider-list::-webkit-scrollbar"),
-        "provider list scrollbar styled"
+        web_css.contains("*::-webkit-scrollbar-thumb")
+            && web_css.contains("*::-webkit-scrollbar-thumb:hover"),
+        "shared scrollbar thumb visible"
     );
     // 左侧列表与右侧内容卡之间是可拖拽分隔条（对齐 Commands 页）。
     assert!(

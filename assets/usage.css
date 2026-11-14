@@ -21,20 +21,17 @@
   overflow: hidden;
 }
 
-/* ===== 顶部固定栏（Header + Filters 紧凑双行固定在视口顶部） ===== */
-.usage-topbar {
-  flex-shrink: 0;
-  z-index: 30;
-  background: var(--panel);
-  border-bottom: 1px solid var(--border);
-  padding: 8px 24px;
-}
-.topbar-inner {
+/* ===== 筛选控制条：全局顶栏已提供导航，这里只做内容区工具条，不再重复一层 bar ===== */
+.usage-controls {
+  flex: 0 0 auto;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px 10px;
+  width: 100%;
   max-width: 1480px;
   margin: 0 auto;
-  display: flex;
-  flex-direction: column;
-  gap: 6px;
+  padding: 12px 24px 0;
 }
 
 /* ===== 下方独立滚动内容区 ===== */
@@ -43,12 +40,7 @@
   min-height: 0;
   overflow-y: auto;
   overflow-x: hidden;
-  scrollbar-width: thin;
-  scrollbar-color: var(--border-strong) transparent;
 }
-.usage-main::-webkit-scrollbar { width: 8px; }
-.usage-main::-webkit-scrollbar-thumb { background: var(--border-strong); }
-.usage-main::-webkit-scrollbar-track { background: transparent; }
 
 .usage-content {
   max-width: 1480px;
@@ -59,19 +51,13 @@
   gap: 12px;
 }
 
-/* ===== 顶栏第一行：右侧操作区 ===== */
-.usage-toolbar {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: center;
-  justify-content: flex-end;
-  gap: 8px;
-}
+/* ===== 操作区：状态、自动刷新与手动刷新贴右 ===== */
 .header-actions {
   display: flex;
   flex-wrap: wrap;
   align-items: center;
   gap: 8px;
+  margin-left: auto;
 }
 .action-status {
   display: inline-flex;
@@ -102,9 +88,9 @@
 .auto-refresh-select {
   width: 76px;
 }
-.usage-topbar .select-button,
-.usage-topbar button.ghost,
-.usage-topbar input[type="date"] {
+.usage-controls .select-button,
+.usage-controls button.ghost,
+.usage-controls input[type="date"] {
   padding: 3px 8px;
   font-size: 12px;
   line-height: 1.25;
@@ -189,7 +175,6 @@ button.ghost:disabled { opacity: .45; cursor: default; }
   border: 1px solid var(--border-overlay);
   background: var(--overlay);
   box-shadow: var(--shadow-overlay);
-  scrollbar-width: thin;
 }
 .select-option {
   display: block;
@@ -210,21 +195,9 @@ button.ghost:disabled { opacity: .45; cursor: default; }
 .select-option.selected { background: var(--option-selected); color: #fff; font-weight: 600; }
 .select-option.selected:hover, .select-option.selected.active { background: var(--option-selected); }
 
-/* ===== 顶栏第二行：紧凑单行筛选栏 ===== */
-.usage-filters {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: center;
-  gap: 6px 8px;
-}
-.filter-range-row {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: center;
-  gap: 6px;
-  flex-shrink: 0;
-}
+/* ===== 时间范围与下拉筛选 ===== */
 .range-group {
+  flex-shrink: 0;
   display: inline-flex;
   border: 1px solid var(--border-strong);
   background: var(--field);
@@ -551,8 +524,6 @@ button.ghost:disabled { opacity: .45; cursor: default; }
 .table-wrap {
   width: 100%;
   overflow-x: auto;
-  scrollbar-width: thin;
-  scrollbar-color: var(--border-strong) transparent;
 }
 .usage-table {
   width: 100%;
@@ -646,7 +617,7 @@ button.ghost:disabled { opacity: .45; cursor: default; }
   .donut-layout { grid-template-columns: 1fr; }
 }
 @media (max-width: 640px) {
-  .usage-topbar { padding: 8px 12px; }
+  .usage-controls { padding: 10px 12px 0; }
   .usage-content { padding: 12px 12px 28px; }
   .summary-grid { grid-template-columns: 1fr; }
   .filter-selects { grid-template-columns: repeat(2, minmax(0, 1fr)); }

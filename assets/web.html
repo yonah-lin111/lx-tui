@@ -694,54 +694,47 @@
 
   <section id="view-usage" class="web-view" aria-label="Usage">
     <div class="usage-shell">
-      <header class="usage-topbar">
-        <div class="topbar-inner">
-          <div class="usage-toolbar">
-            <div class="header-actions">
-              <span id="usage-status" class="action-status">
-                <span id="usage-status-dot" class="status-dot clean"></span>
-                <span id="last-updated">Loading…</span>
-              </span>
-              <div class="auto-refresh-wrap">
-                <span class="filter-inline-label">Auto</span>
-                <div id="auto-refresh-filter" class="select-host auto-refresh-select"></div>
-              </div>
-              <button id="refresh-btn" type="button" class="ghost">Refresh</button>
-            </div>
-          </div>
-          <section class="usage-filters" aria-label="Usage filters">
-            <div class="filter-range-row">
-              <div class="range-group" role="group" aria-label="Time range">
-                <button type="button" class="range-btn" data-range="today" aria-pressed="false">Today</button>
-                <button type="button" class="range-btn active" data-range="7d" aria-pressed="true">7d</button>
-                <button type="button" class="range-btn" data-range="30d" aria-pressed="false">30d</button>
-                <button type="button" class="range-btn" data-range="all" aria-pressed="false">All</button>
-                <button type="button" class="range-btn" data-range="custom" aria-pressed="false">Custom</button>
-              </div>
-              <div id="custom-range-wrap" class="custom-range-wrap hidden">
-                <input type="date" id="custom-start" aria-label="Start date">
-                <span class="range-sep">to</span>
-                <input type="date" id="custom-end" aria-label="End date">
-              </div>
-            </div>
-
-            <div class="filter-selects">
-              <div class="filter-field">
-                <div id="filter-provider" class="select-host"></div>
-              </div>
-              <div class="filter-field">
-                <div id="filter-model" class="select-host"></div>
-              </div>
-              <div class="filter-field">
-                <div id="filter-workspace" class="select-host"></div>
-              </div>
-              <div class="filter-field">
-                <div id="filter-session" class="select-host"></div>
-              </div>
-            </div>
-          </section>
+      <section class="usage-controls" aria-label="Usage controls">
+        <div class="range-group" role="group" aria-label="Time range">
+          <button type="button" class="range-btn" data-range="today" aria-pressed="false">Today</button>
+          <button type="button" class="range-btn active" data-range="7d" aria-pressed="true">7d</button>
+          <button type="button" class="range-btn" data-range="30d" aria-pressed="false">30d</button>
+          <button type="button" class="range-btn" data-range="all" aria-pressed="false">All</button>
+          <button type="button" class="range-btn" data-range="custom" aria-pressed="false">Custom</button>
         </div>
-      </header>
+        <div id="custom-range-wrap" class="custom-range-wrap hidden">
+          <input type="date" id="custom-start" aria-label="Start date">
+          <span class="range-sep">to</span>
+          <input type="date" id="custom-end" aria-label="End date">
+        </div>
+
+        <div class="filter-selects">
+          <div class="filter-field">
+            <div id="filter-provider" class="select-host"></div>
+          </div>
+          <div class="filter-field">
+            <div id="filter-model" class="select-host"></div>
+          </div>
+          <div class="filter-field">
+            <div id="filter-workspace" class="select-host"></div>
+          </div>
+          <div class="filter-field">
+            <div id="filter-session" class="select-host"></div>
+          </div>
+        </div>
+
+        <div class="header-actions">
+          <span id="usage-status" class="action-status">
+            <span id="usage-status-dot" class="status-dot clean"></span>
+            <span id="last-updated">Loading…</span>
+          </span>
+          <div class="auto-refresh-wrap">
+            <span class="filter-inline-label">Auto</span>
+            <div id="auto-refresh-filter" class="select-host auto-refresh-select"></div>
+          </div>
+          <button id="refresh-btn" type="button" class="ghost">Refresh</button>
+        </div>
+      </section>
       <main class="usage-main">
         <div class="usage-content">
           <div id="usage-error" class="usage-error hidden" role="alert"></div>

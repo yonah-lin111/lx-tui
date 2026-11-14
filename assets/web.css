@@ -32,10 +32,17 @@
   --shadow-overlay: inset 0 1px 0 rgba(255, 255, 255, .06), 0 2px 6px rgba(0, 0, 0, .5), 0 16px 40px rgba(0, 0, 0, .6);
   --z-menu: 60;
   --z-toast: 1000;
-  --web-topbar-height: 48px;
+  --web-topbar-height: 40px;
 }
 
 * { box-sizing: border-box; }
+/* 统一滚动条：所有滚动容器共用细暗色滚动条，避免局部退回系统亮色样式。 */
+* { scrollbar-width: thin; scrollbar-color: var(--border-strong) transparent; }
+*::-webkit-scrollbar { width: 8px; height: 8px; }
+*::-webkit-scrollbar-track { background: transparent; }
+*::-webkit-scrollbar-thumb { background: var(--border-strong); }
+*::-webkit-scrollbar-thumb:hover { background: var(--border-overlay); }
+*::-webkit-scrollbar-corner { background: transparent; }
 html, body { height: 100%; }
 /* 全局 hidden：body 级浮层（select 菜单、图表 tooltip）不依赖当前激活的视图样式表。 */
 .hidden { display: none !important; }
@@ -65,13 +72,13 @@ body.resizing { cursor: col-resize; user-select: none; }
 .web-brand {
   display: inline-flex;
   align-items: center;
-  gap: 10px;
+  gap: 8px;
   color: var(--text);
   text-decoration: none;
   font-weight: 600;
   letter-spacing: .04em;
 }
-.web-brand-logo { width: 30px; height: auto; }
+.web-brand-logo { width: 26px; height: auto; }
 .web-tabs { display: flex; align-items: stretch; gap: 4px; height: 100%; }
 .web-tab {
   display: inline-flex;
