@@ -442,7 +442,7 @@ pub enum MenuCommand {
     /// 侧栏 Agents：编辑标题（纯内存覆盖）。
     EditAgentTitle,
     /// 侧栏 Agents：取消 Recent 页绑定并清空标题覆盖。
-    UnbindAgentPrompt,
+    RemoveAgentTitle,
     /// 侧栏 Agents：关闭条目（lx 关会话视图，终端 Agent 关窗格）。
     CloseAgent,
 }
@@ -464,7 +464,7 @@ impl MenuCommand {
                 | Self::SwitchToWorkspaceCwd
                 | Self::SyncWorkspaceToTerminalCwd
                 | Self::CloseAgent
-                | Self::UnbindAgentPrompt
+                | Self::RemoveAgentTitle
         )
     }
 }

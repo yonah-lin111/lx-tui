@@ -52,7 +52,7 @@ use crate::ui::widgets;
 pub fn render(frame: &mut Frame<'_>, screen: Rect, state: &AppState) -> Option<(u16, u16)> {
     match state.overlay.as_ref()? {
         Overlay::Menu(menu_state) => {
-            let labels = menu::menu_labels(menu_state);
+            let labels = menu::menu_labels(state, menu_state);
             let title = menu::menu_title(state, menu_state);
             let layout = widgets::menu::layout(screen, menu_state.anchor, &title, &labels);
             let selected = state.menu_hover.then_some(menu_state.selected);

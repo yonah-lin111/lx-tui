@@ -107,7 +107,7 @@ cargo test --lib event::tests::mouse_drag::            9 passed
 | D19 Open prompt | 绑定有效时菜单插入 `OpenPrompt`；打开精确页并聚焦 Prompt 面板 |
 | D20 生命周期沿用 | 覆盖随会话重置/切换、Agent 退出/种类变化、窗格关闭清除；重启丢失 |
 | D21 状态色对齐 | 弹窗 Recent 页标题复用 Prompt 抽屉状态色（todo 亮白、in_progress 黄、done 绿、无状态压暗） |
-| D22 解绑入口 | 仍带 Recent 绑定时菜单提供 `Unbind recent`，行内二次确认后清空绑定与标题覆盖；绑定页失效时仍可解绑 |
+| D22 移除标题入口 | 有标题覆盖时菜单提供移除项：绑定时 `Unbind recent`、自定义标题 `Remove title`；行内二次确认后清空覆盖；绑定页失效时仍可移除 |
 | D23 侧栏标题状态色 | Agents 标题按绑定页实时模板状态着色，与 Recent 一致；悬停保留状态前景色 |
 
 ### 6.2 生产代码变更
@@ -143,7 +143,7 @@ src/ui/text/workspace.rs          AGENT_TITLE_PLACEHOLDER
 ```text
 cargo fmt                                             通过
 cargo clippy --all-targets -- -D warnings             通过
-cargo test --lib                                      5504 passed, 0 failed, 6 ignored
+cargo test --lib                                      5505 passed, 0 failed, 6 ignored
 ```
 
 专项（V2）：

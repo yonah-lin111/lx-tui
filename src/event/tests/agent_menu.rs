@@ -591,7 +591,7 @@ fn save_commits_title_and_menu_offers_open_prompt() {
         &[
             MenuCommand::EditAgentTitle,
             MenuCommand::OpenPrompt,
-            MenuCommand::UnbindAgentPrompt,
+            MenuCommand::RemoveAgentTitle,
             MenuCommand::CloseAgent,
         ],
     );
@@ -657,7 +657,7 @@ fn open_prompt_menu_item_opens_bound_page_in_prompt_panel() {
         vec![
             MenuCommand::EditAgentTitle,
             MenuCommand::OpenPrompt,
-            MenuCommand::UnbindAgentPrompt,
+            MenuCommand::RemoveAgentTitle,
             MenuCommand::CloseAgent,
         ]
     );
@@ -687,12 +687,12 @@ fn unbind_recent_menu_item_clears_title_and_binding() {
         vec![
             MenuCommand::EditAgentTitle,
             MenuCommand::OpenPrompt,
-            MenuCommand::UnbindAgentPrompt,
+            MenuCommand::RemoveAgentTitle,
             MenuCommand::CloseAgent,
         ]
     );
 
-    click_menu_command(&mut fixture, MenuCommand::UnbindAgentPrompt);
+    click_menu_command(&mut fixture, MenuCommand::RemoveAgentTitle);
 
     let Some(Overlay::Menu(menu)) = fixture.state.overlay.as_ref() else {
         panic!("first unbind click must keep the menu open");
@@ -707,7 +707,7 @@ fn unbind_recent_menu_item_clears_title_and_binding() {
         "第一次点击不得解绑"
     );
 
-    click_menu_command(&mut fixture, MenuCommand::UnbindAgentPrompt);
+    click_menu_command(&mut fixture, MenuCommand::RemoveAgentTitle);
 
     assert!(fixture.state.overlay.is_none());
     let target = fixture.state.pane_anywhere(fixture.pane).expect("pane");

@@ -57,6 +57,8 @@ fn user_visible_labels_are_clean_ascii() {
         MENU_AGENT_EDIT_TITLE,
         MENU_AGENT_UNBIND_RECENT,
         MENU_CONFIRM_UNBIND,
+        MENU_AGENT_REMOVE_TITLE,
+        MENU_CONFIRM_REMOVE_TITLE,
         MENU_AGENT_CLOSE,
         AGENT_TITLE_PLACEHOLDER,
         CONFIRM_DELETE_PAGE_TITLE,
@@ -194,6 +196,8 @@ fn agent_location_and_menu_labels_are_stable() {
     assert_eq!(MENU_AGENT_EDIT_TITLE, "Edit title");
     assert_eq!(MENU_AGENT_UNBIND_RECENT, "Unbind recent");
     assert_eq!(MENU_CONFIRM_UNBIND, "Confirm unbind");
+    assert_eq!(MENU_AGENT_REMOVE_TITLE, "Remove title");
+    assert_eq!(MENU_CONFIRM_REMOVE_TITLE, "Confirm remove title");
     assert_eq!(MENU_AGENT_CLOSE, "Close");
     assert_eq!(RENAME_AGENT_TITLE, "Edit title");
     assert_eq!(AGENT_TITLE_PLACEHOLDER, "title or pick recent");

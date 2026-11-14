@@ -859,6 +859,21 @@ impl AppState {
         entries
     }
 
+    /// 指定 Agent 的侧栏标题覆盖；无覆盖返回 None。
+    pub fn agent_title_override(
+        &self,
+        pane: PaneId,
+        kind: SidebarAgentKind,
+    ) -> Option<&AgentTitleOverride> {
+        self.pane_anywhere(pane)?.agent_title_override(kind)
+    }
+
+    /// 指定 Agent 的侧栏标题是否带 Recent 绑定（不要求绑定页仍存在）。
+    pub fn agent_title_has_binding(&self, pane: PaneId, kind: SidebarAgentKind) -> bool {
+        self.agent_title_override(pane, kind)
+            .is_some_and(|title| title.prompt.is_some())
+    }
+
     /// Agents 标题绑定页的模板状态：与 Prompt 面板 Recent 同源。
     ///
     /// 绑定页正是 Prompt 面板当前编辑的页时使用实时正文，否则读取内存页正文；

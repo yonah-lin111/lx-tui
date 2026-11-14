@@ -55,25 +55,8 @@ pub fn agent_title_prompt(
     prompt_page_exists(state, workspace, prompt).then_some(prompt)
 }
 
-/// 标题是否仍带 Recent 绑定（不要求绑定页还存在）；用于菜单是否提供解绑。
-pub fn agent_title_has_prompt_binding(
-    state: &AppState,
-    workspace: usize,
-    tab: usize,
-    pane: PaneId,
-    kind: SidebarAgentKind,
-) -> bool {
-    state
-        .workspaces
-        .get(workspace)
-        .and_then(|workspace_state| workspace_state.tabs.get(tab))
-        .and_then(|tab_state| tab_state.pane(pane))
-        .and_then(|pane_state| pane_state.agent_title_override(kind))
-        .is_some_and(|title| title.prompt.is_some())
-}
-
 /// 取消 Recent 绑定并清空标题覆盖，第二行回到 `(no title)`。
-pub fn unbind_agent_prompt(
+pub fn remove_agent_title(
     state: &mut AppState,
     workspace: usize,
     tab: usize,

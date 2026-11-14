@@ -11,8 +11,7 @@ use crate::app::trust::TrustTrigger;
 use crate::tiling::PaneId;
 
 use super::agent_title::{
-    agent_title_has_prompt_binding, agent_title_prompt, open_agent_prompt, open_agent_title_dialog,
-    unbind_agent_prompt,
+    agent_title_prompt, open_agent_prompt, open_agent_title_dialog, remove_agent_title,
 };
 use super::focus_prompt;
 use super::pane::toggle_pane_view;
@@ -240,9 +239,11 @@ pub fn open_agent_menu(state: &mut AppState, index: usize, anchor: (u16, u16)) {
     if agent_title_prompt(state, workspace, entry.tab_index, entry.pane_id, entry.kind).is_some() {
         commands.push(MenuCommand::OpenPrompt);
     }
-    if agent_title_has_prompt_binding(state, workspace, entry.tab_index, entry.pane_id, entry.kind)
+    if state
+        .agent_title_override(entry.pane_id, entry.kind)
+        .is_some()
     {
-        commands.push(MenuCommand::UnbindAgentPrompt);
+        commands.push(MenuCommand::RemoveAgentTitle);
     }
     let closable = match entry.kind {
         SidebarAgentKind::Lx { .. } => true,
@@ -710,7 +711,7 @@ pub fn activate_menu(state: &mut AppState) -> Option<(PaneId, Vec<u8>)> {
             open_agent_prompt(state, workspace, tab, pane, kind);
         }
         (
-            Some(MenuCommand::UnbindAgentPrompt),
+            Some(MenuCommand::RemoveAgentTitle),
             OverlayTarget::Agent {
                 workspace,
                 tab,
@@ -718,7 +719,7 @@ pub fn activate_menu(state: &mut AppState) -> Option<(PaneId, Vec<u8>)> {
                 kind,
             },
         ) => {
-            unbind_agent_prompt(state, workspace, tab, pane, kind);
+            remove_agent_title(state, workspace, tab, pane, kind);
         }
         (
             Some(MenuCommand::EditAgentTitle),

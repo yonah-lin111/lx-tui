@@ -295,6 +295,10 @@ pub const MENU_AGENT_EDIT_TITLE: &str = "Edit title";
 pub const MENU_AGENT_UNBIND_RECENT: &str = "Unbind recent";
 /// 侧栏 Agents：解绑的行内二次确认文案。
 pub const MENU_CONFIRM_UNBIND: &str = "Confirm unbind";
+/// 侧栏 Agents：移除自定义标题。
+pub const MENU_AGENT_REMOVE_TITLE: &str = "Remove title";
+/// 侧栏 Agents：移除自定义标题的行内二次确认文案。
+pub const MENU_CONFIRM_REMOVE_TITLE: &str = "Confirm remove title";
 pub const MENU_AGENT_CLOSE: &str = "Close";
 
 /// 提示词树右键菜单项。

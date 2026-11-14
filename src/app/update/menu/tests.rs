@@ -236,7 +236,7 @@ fn bound_title_adds_open_prompt_after_edit_title() {
         vec![
             MenuCommand::EditAgentTitle,
             MenuCommand::OpenPrompt,
-            MenuCommand::UnbindAgentPrompt,
+            MenuCommand::RemoveAgentTitle,
             MenuCommand::CloseAgent
         ]
     );
@@ -277,7 +277,7 @@ fn terminal_bound_title_adds_open_prompt_and_opens_page() {
         vec![
             MenuCommand::EditAgentTitle,
             MenuCommand::OpenPrompt,
-            MenuCommand::UnbindAgentPrompt
+            MenuCommand::RemoveAgentTitle
         ],
         "唯一窗格的终端 Agent 不提供 Close，但绑定后提供 Open prompt 与解绑"
     );
@@ -297,7 +297,7 @@ fn terminal_bound_title_adds_open_prompt_and_opens_page() {
 }
 
 #[test]
-fn custom_title_does_not_add_open_prompt() {
+fn custom_title_offers_remove_title_without_open_prompt() {
     let mut state = AppState::demo();
     let pane = state.active_tab().layout.focus();
     set_lx_session(&mut state, pane, "session-1");
@@ -315,7 +315,30 @@ fn custom_title_does_not_add_open_prompt() {
 
     assert_eq!(
         menu_commands(&state),
-        vec![MenuCommand::EditAgentTitle, MenuCommand::CloseAgent]
+        vec![
+            MenuCommand::EditAgentTitle,
+            MenuCommand::RemoveAgentTitle,
+            MenuCommand::CloseAgent
+        ],
+        "自定义标题不提供 Open prompt，但提供移除标题"
+    );
+    select_command(&mut state, MenuCommand::RemoveAgentTitle);
+    assert_eq!(activate_menu(&mut state), None);
+    assert!(
+        state
+            .pane_anywhere(pane)
+            .and_then(|target| target.agent_title_override(lx_kind()))
+            .is_some(),
+        "第一次触发只进入行内确认态"
+    );
+
+    assert_eq!(activate_menu(&mut state), None);
+    assert!(state.overlay.is_none());
+    assert_eq!(
+        state
+            .pane_anywhere(pane)
+            .and_then(|target| target.agent_title_override(lx_kind())),
+        None
     );
 }
 
@@ -341,7 +364,7 @@ fn stale_binding_does_not_add_open_prompt() {
         menu_commands(&state),
         vec![
             MenuCommand::EditAgentTitle,
-            MenuCommand::UnbindAgentPrompt,
+            MenuCommand::RemoveAgentTitle,
             MenuCommand::CloseAgent
         ],
         "绑定页已删除时不再提供 Open prompt，但保留解绑入口"
@@ -550,7 +573,7 @@ fn enter_commits_recent_binding_and_enables_open_prompt() {
         vec![
             MenuCommand::EditAgentTitle,
             MenuCommand::OpenPrompt,
-            MenuCommand::UnbindAgentPrompt,
+            MenuCommand::RemoveAgentTitle,
             MenuCommand::CloseAgent
         ]
     );
@@ -571,14 +594,14 @@ fn unbind_recent_clears_title_and_binding() {
     );
     set_override(&mut state, pane, lx_kind(), bound("Auth Flow", 7, 9));
     open_agent_menu(&mut state, 0, (0, 0));
-    select_command(&mut state, MenuCommand::UnbindAgentPrompt);
+    select_command(&mut state, MenuCommand::RemoveAgentTitle);
 
     assert_eq!(activate_menu(&mut state), None);
     match state.overlay.as_ref() {
         Some(Overlay::Menu(menu)) => {
             assert_eq!(
                 menu.commands.get(menu.selected),
-                Some(&MenuCommand::UnbindAgentPrompt)
+                Some(&MenuCommand::RemoveAgentTitle)
             );
             assert!(menu.confirming, "第一次触发只进入行内确认态");
         }
@@ -884,7 +907,7 @@ fn workspace_empty_rename_keeps_overlay_open() {
 #[test]
 fn close_agent_requires_confirmation_but_edit_title_does_not() {
     assert!(MenuCommand::CloseAgent.requires_confirm());
-    assert!(MenuCommand::UnbindAgentPrompt.requires_confirm());
+    assert!(MenuCommand::RemoveAgentTitle.requires_confirm());
     assert!(!MenuCommand::EditAgentTitle.requires_confirm());
     assert!(!MenuCommand::OpenPrompt.requires_confirm());
 }

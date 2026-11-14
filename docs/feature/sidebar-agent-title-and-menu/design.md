@@ -875,7 +875,7 @@ cargo test --lib event::tests::mouse_click::
 - **D19 Open prompt**：仅当标题绑定仍可解析时，在菜单 `Edit title` 后插入 `Open prompt`；点击后释放 Prompt 钉住、结算当前编辑、在右侧 Prompt 面板打开该 item/page 并聚焦。自定义标题或绑定失效时不显示该项。
 - **D20 生命周期沿用**：绑定随覆盖一起在会话重置/切换、终端 Agent 退出/种类变化、窗格关闭时清除；重启丢失。
 - **D21 状态色对齐**：弹窗 Recent 行的页标题状态色与 Prompt 抽屉一致：todo 默认亮白、in_progress 黄、done 绿、无状态压暗；选中项保留选中底色并加粗。
-- **D22 解绑入口**：标题仍带 Recent 绑定时，右键菜单在 `Open prompt` 后提供 `Unbind recent`；点击需行内二次确认（首次触发显示 `Confirm unbind`），确认后同时清空绑定与标题覆盖，第二行回到 `(no title)`。绑定页已删除（`Open prompt` 隐藏）时仍保留解绑入口；自定义标题不显示该项。
+- **D22 移除标题入口**：条目存在标题覆盖时，右键菜单在 `Open prompt` 后提供移除项：带 Recent 绑定时显示 `Unbind recent`，自定义标题显示 `Remove title`；点击需行内二次确认（`Confirm unbind` / `Confirm remove title`），确认后清空绑定与标题覆盖，第二行回到 `(no title)`。绑定页已删除（`Open prompt` 隐藏）时仍保留移除入口；无标题覆盖时不显示该项。
 - **D23 侧栏标题状态色**：Agents 第二行标题在绑定可解析时按绑定页当前模板状态着色（todo 亮白、in_progress 黄、done 绿、无状态或无绑定压暗），与 Prompt 抽屉 Recent 一致；悬停只叠加底色，不覆盖状态前景色。状态实时读取绑定页正文（正在编辑的页取实时正文），标题文本仍是选择时的快照。
 
 ### 12.2 数据模型与模块
