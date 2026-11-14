@@ -1,6 +1,7 @@
 # 任务清单：Agents 面板私聊 / 汇报 / steer
 
 - **状态**：T1–T6 已完成，待 `cargo run` 实机验收后合并。
+- **验证报告**：[`verification.md`](verification.md)（CLI 实机 + 自动化 + TUI 手工清单）。
 
 | 任务 | 内容 | 状态 |
 |---|---|---|
@@ -19,13 +20,16 @@
 - `shift_tab_switches_agent_reply_mode_and_report_submit_carries_the_flag`：默认私聊、Shift+Tab、汇报标志。
 - `enter_while_agent_running_emits_a_steer_instead_of_a_new_turn`：运行中不发新排队输入。
 - `agent_composer_renders_target_badge_and_draft`：`· private` / `· report` / `· steer 1` 胶囊。
+- `settle_moves_undelivered_steers_into_a_new_follow_up`：轮次先结束时未生效 steer 落成新追问。
+- `subagent_list_renders_private_tail_only_when_present`：`private_tail` 进入模型可见文本。
 - `list_agents` schema/parse 测试。
 
 ## 验证结果（2026-11-14，本 worktree）
 
 - `cargo fmt`：通过。
 - `cargo clippy --all-targets -- -D warnings`：通过。
-- `cargo test`：5380 passed / 0 failed。
+- `cargo test`：5382 passed / 0 failed（6 ignored）。
+- CLI 实机：v29 迁移、默认模型会话、spawn/wait/send_input、`list_agents(include_private)` 均通过；首次验证发现并修复 `private_tail` 未进入工具文本（`db19e05c`）。
 
 ## 验收要点
 

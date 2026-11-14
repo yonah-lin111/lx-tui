@@ -58,6 +58,7 @@
 | `src/app/update/pane/task_page.rs` | Shift+Tab、running → steer、效果字段 |
 | `src/ui/main_content/lx/task/agents.rs` | 胶囊模式/steer 后缀 |
 | `src/chat/agent/{mod,parse}.rs`、`src/chat/tools/subagent.rs` | `list_agents.include_private` 与 `private_tail` |
+| `src/chat/tools/output.rs` | 工具结果文本渲染 `private_tail`（模型实际读取的通道） |
 | `src/chat/prompt.rs` | 提示模型不要主动窥探私聊；`PROMPT_VERSION=lx-14` |
 
 ## 6. 边界
