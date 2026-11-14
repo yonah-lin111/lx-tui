@@ -373,6 +373,14 @@ fn format_subagent(outcome: &crate::chat::agent::SubagentOutcome) -> String {
                     agent.queued_count,
                     agent.title
                 ));
+                // 只有 `include_private=true` 才会带上私聊转录；默认列表没有该字段。
+                if let Some(tail) = agent.private_tail.as_deref() {
+                    text.push_str("private_tail:\n");
+                    text.push_str(tail);
+                    if !tail.ends_with('\n') {
+                        text.push('\n');
+                    }
+                }
             }
             text
         }

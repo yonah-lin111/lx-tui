@@ -1150,3 +1150,39 @@ fn lx_ask_answered(
         answers: answers.iter().map(|answer| answer.to_string()).collect(),
     }
 }
+
+/// `list_agents(include_private=true)` 的私聊转录必须进入模型可见文本。
+#[test]
+fn subagent_list_renders_private_tail_only_when_present() {
+    use crate::chat::agent::{AgentListItemView, AgentRole, SubagentOutcome};
+
+    let item = |id: &str, tail: Option<&str>| AgentListItemView {
+        agent_id: id.into(),
+        nickname: None,
+        agent_path: None,
+        role: AgentRole::Explorer,
+        title: "inspect".into(),
+        status: "completed".into(),
+        queued_count: 0,
+        private_tail: tail.map(str::to_string),
+    };
+    let listed = ToolExecutionResult::Subagent(Box::new(SubagentOutcome::Listed {
+        agents: vec![
+            item(
+                "sub-private",
+                Some("user: secret\nassistant: private reply"),
+            ),
+            item("sub-plain", None),
+        ],
+    }));
+    let text = format_for_model(&listed);
+    assert!(
+        text.contains("private_tail:\nuser: secret\nassistant: private reply\n"),
+        "text: {text}"
+    );
+    assert_eq!(
+        text.matches("private_tail:").count(),
+        1,
+        "默认列表项不得有转录：{text}"
+    );
+}
