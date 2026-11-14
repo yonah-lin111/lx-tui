@@ -170,6 +170,37 @@ pub(crate) fn handle_overlay_click(
                 None => None,
             }
         }
+        Some(Overlay::AgentTitle(dialog)) => {
+            let Some(shell) = ui::overlay::agent_title_shell(screen, dialog.rows.len()) else {
+                update::close_overlay(state);
+                return None;
+            };
+            if modal_dismissed(state, &shell, column, row) {
+                return None;
+            }
+            let Some(Overlay::AgentTitle(dialog)) = state.overlay.as_ref() else {
+                return None;
+            };
+            if let Some(index) = ui::overlay::agent_title_row_at(&shell, dialog, column, row) {
+                update::set_agent_title_selection(state, index);
+                return None;
+            }
+            match ui::overlay::agent_title_button_at(&shell, column, row) {
+                Some(ui::overlay::AgentTitleButton::Save) => {
+                    update::apply_overlay_key(state, OverlayKey::Enter)
+                }
+                Some(ui::overlay::AgentTitleButton::Clear) => {
+                    update::clear_agent_title_input(state);
+                    None
+                }
+                Some(ui::overlay::AgentTitleButton::Cancel) => {
+                    update::close_overlay(state);
+                    None
+                }
+                // 内部空白：保持打开。
+                None => None,
+            }
+        }
         Some(Overlay::NewNode(_)) => {
             let Some(shell) = ui::overlay::new_node_shell(screen) else {
                 update::cancel_new_node(state);
@@ -493,6 +524,15 @@ pub(crate) fn overlay_input_rect(state: &AppState, screen: Rect) -> Option<Rect>
                 1,
             ))
         }
+        Overlay::AgentTitle(d) => {
+            let shell = ui::overlay::agent_title_shell(screen, d.rows.len())?;
+            Some(Rect::new(
+                shell.inner.x,
+                shell.inner.y,
+                shell.inner.width,
+                1,
+            ))
+        }
         Overlay::ReferencedFolderInput(i) if !i.validating => {
             let shell = ui::overlay::referenced_input_shell(screen)?;
             Some(Rect::new(
@@ -576,6 +616,11 @@ pub(crate) fn open_right_click_menu(
     // 工作区列表空白区域：打开公共新建菜单。
     if ui::workspace_list_blank_at(view, state, column, row) {
         update::open_workspace_list_menu(state, (column, row));
+        return true;
+    }
+    // 侧栏 Agents 条目：两行命中同一条目，打开编辑标题/关闭菜单。
+    if let Some(index) = ui::agent_item_index_at(view, state, column, row) {
+        update::open_agent_menu(state, index, (column, row));
         return true;
     }
     // 底部 recent 抽屉区域：右键一律吞掉，不穿透打开上方树/页列表/编辑器菜单。

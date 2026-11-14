@@ -8,7 +8,8 @@ use crate::tiling::PaneId;
 
 pub use text_input::TextInput;
 
-use super::prompt::{PromptEditing, PromptPageId};
+use super::prompt::{PromptEditing, PromptPageId, RecentPageRow};
+use super::state::{AgentPromptRef, SidebarAgentKind};
 use super::trust::TrustWorkspace;
 
 /// 删除确认浮层要求输入的固定英文确认口令（忽略首尾空白与 ASCII 大小写）。
@@ -40,6 +41,8 @@ pub enum OverlayKind {
     ResumeSessionEdit,
     /// `/connect` 预设供应商居中模态。
     Connect,
+    /// 侧栏 Agents 标题编辑：自定义输入 + Recent 页选择。
+    AgentTitle,
 }
 
 /// 浮层：同一时刻最多一个，由 `Option` 保证。
@@ -61,6 +64,8 @@ pub enum Overlay {
     ResumeSessionEdit(ResumeSessionEdit),
     /// `/connect` 预设供应商居中模态。
     Connect(Box<crate::app::state::ConnectPanel>),
+    /// 侧栏 Agents 标题编辑：自定义输入 + Recent 页选择。
+    AgentTitle(AgentTitleDialog),
 }
 
 impl Overlay {
@@ -81,6 +86,7 @@ impl Overlay {
             Self::ReferencedFolderDelete(_) => OverlayKind::ReferencedFolderDelete,
             Self::ResumeSessionEdit(_) => OverlayKind::ResumeSessionEdit,
             Self::Connect(_) => OverlayKind::Connect,
+            Self::AgentTitle(_) => OverlayKind::AgentTitle,
         }
     }
 
@@ -97,6 +103,7 @@ impl Overlay {
             Self::ReferencedFolderSearch(s) => Some(&s.query),
             Self::ResumeSessionEdit(r) => Some(&r.input),
             Self::Connect(panel) if panel.has_text_input() => Some(&panel.input),
+            Self::AgentTitle(dialog) => Some(&dialog.input),
             _ => None,
         }
     }
@@ -116,6 +123,7 @@ impl Overlay {
             Self::Connect(panel) if panel.has_text_input() && !panel.validating => {
                 Some(&mut panel.input)
             }
+            Self::AgentTitle(dialog) => Some(&mut dialog.input),
             _ => None,
         }
     }
@@ -138,6 +146,7 @@ impl Overlay {
             Self::ReferencedFolderSearch(s) => s.query.clear_selection(),
             Self::ResumeSessionEdit(r) => r.input.clear_selection(),
             Self::Connect(panel) => panel.input.clear_selection(),
+            Self::AgentTitle(dialog) => dialog.input.clear_selection(),
             _ => {}
         }
     }
@@ -362,6 +371,15 @@ pub enum OverlayTarget {
     },
     /// Todo 列表空白区域。
     TodoBlank,
+    /// 侧栏 Agents 条目；同一窗格可能同时有 lx 与终端两条，必须带 kind 区分。
+    Agent {
+        workspace: usize,
+        tab: usize,
+        pane: PaneId,
+        kind: SidebarAgentKind,
+        /// 打开菜单时是否带 Recent 绑定；固化移除项文案，避免菜单存续期间翻转。
+        bound: bool,
+    },
 }
 
 /// 菜单命令；文案由 `ui/text.rs` 按命令映射，app 层不持有用户可见字符串。
@@ -423,6 +441,12 @@ pub enum MenuCommand {
     DeleteWorkspaceHistory,
     /// 工作区历史列表：一键删除全部路径不存在的工作区（菜单内 2 击确认 + 模态弹窗输入确认）。
     DeleteMissingWorkspaces,
+    /// 侧栏 Agents：编辑标题（纯内存覆盖）。
+    EditAgentTitle,
+    /// 侧栏 Agents：移除标题覆盖（含 Recent 页绑定）。
+    RemoveAgentTitle,
+    /// 侧栏 Agents：关闭条目（lx 关会话视图，终端 Agent 关窗格）。
+    CloseAgent,
 }
 
 impl MenuCommand {
@@ -441,6 +465,8 @@ impl MenuCommand {
                 | Self::DeleteMissingWorkspaces
                 | Self::SwitchToWorkspaceCwd
                 | Self::SyncWorkspaceToTerminalCwd
+                | Self::CloseAgent
+                | Self::RemoveAgentTitle
         )
     }
 }
@@ -460,6 +486,82 @@ pub enum RenameTarget {
 pub struct Rename {
     pub target: RenameTarget,
     pub input: TextInput,
+}
+
+/// 侧栏 Agents 标题编辑弹窗：自定义输入 + Recent 页快照。
+///
+/// 输入框始终显示将要保存的标题；`binding` 只在标题来自 Recent 页时存在。
+/// 直接编辑输入框会清除绑定并转为自定义标题。
+#[derive(Debug)]
+pub struct AgentTitleDialog {
+    pub workspace: usize,
+    pub tab: usize,
+    pub pane: PaneId,
+    pub kind: SidebarAgentKind,
+    pub input: TextInput,
+    /// 当前绑定的 Recent 页；自定义标题为 None。
+    pub binding: Option<AgentPromptRef>,
+    /// 当前高亮的 Recent 行下标。
+    pub selected: Option<usize>,
+    /// 打开时的 Recent 页快照（页标题 + 提示词名）。
+    pub rows: Vec<RecentPageRow>,
+}
+
+impl AgentTitleDialog {
+    /// 打开弹窗：预填当前标题，并尽量高亮已绑定的 Recent 行。
+    pub fn new(
+        workspace: usize,
+        tab: usize,
+        pane: PaneId,
+        kind: SidebarAgentKind,
+        input: TextInput,
+        binding: Option<AgentPromptRef>,
+        rows: Vec<RecentPageRow>,
+    ) -> Self {
+        let selected = binding.and_then(|bound| {
+            rows.iter()
+                .position(|row| row.item_id == bound.item_id && row.page_id == bound.page_id)
+        });
+        Self {
+            workspace,
+            tab,
+            pane,
+            kind,
+            input,
+            binding,
+            selected,
+            rows,
+        }
+    }
+
+    /// 选中一条 Recent 行：高亮、绑定该页，并用页标题回填输入框。
+    pub fn select_row(&mut self, index: usize) {
+        let Some(row) = self.rows.get(index) else {
+            return;
+        };
+        self.selected = Some(index);
+        self.binding = Some(AgentPromptRef {
+            item_id: row.item_id,
+            page_id: row.page_id,
+        });
+        self.input.select_all();
+        self.input.insert_str(&row.page_title);
+        // 空输入时 `select_all` 不产生有效选区，插入后必须显式清除锚点，
+        // 否则下一次输入会替换整个页标题。
+        self.input.clear_selection();
+    }
+
+    /// 文本被直接编辑：转为自定义标题，解除 Recent 绑定与高亮。
+    pub fn mark_custom(&mut self) {
+        self.binding = None;
+        self.selected = None;
+    }
+
+    /// 清空输入：无标题、无绑定。
+    pub fn clear_input(&mut self) {
+        self.input.clear();
+        self.mark_custom();
+    }
 }
 
 /// 关闭/删除确认浮层：目标、确认短语单行输入与待删工作区列表滚动状态。

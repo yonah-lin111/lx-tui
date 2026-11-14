@@ -10,6 +10,7 @@ use crate::app::toast::{Toast, ToastKind};
 use crate::tiling::PaneId;
 use crate::ui::text;
 
+use super::agent_title::apply_agent_title_key;
 use super::interaction::show_toast;
 use super::menu::{activate_menu, close_overlay, move_menu_selection};
 use super::prompt::{apply_new_node_key, apply_save_draft_key, commit_prompt_rename};
@@ -34,6 +35,11 @@ pub fn apply_overlay_key(state: &mut AppState, key: OverlayKey) -> Option<(PaneI
     }
     if matches!(state.overlay, Some(Overlay::WorktreeOpen(_))) {
         apply_worktree_open_key(state, key);
+        return None;
+    }
+    // Agents 标题：上下浏览 Recent 并回填，直接编辑转自定义，Enter 提交。
+    if matches!(state.overlay, Some(Overlay::AgentTitle(_))) {
+        apply_agent_title_key(state, key);
         return None;
     }
     // `/resume` 会话编辑模态：Enter 保存、^D 删除（二次确认）、Esc 关闭/退回。
@@ -197,7 +203,8 @@ pub fn apply_overlay_key(state: &mut AppState, key: OverlayKey) -> Option<(PaneI
                 | OverlayKind::ReferencedFolderSearch
                 | OverlayKind::ReferencedFolderDelete
                 | OverlayKind::ResumeSessionEdit
-                | OverlayKind::Connect,
+                | OverlayKind::Connect
+                | OverlayKind::AgentTitle,
             )
             | None => None,
         },
@@ -529,7 +536,8 @@ pub fn apply_overlay_paste(state: &mut AppState, text: &str) -> bool {
                     .selection()
                     .is_some_and(|(start, end)| start == 0 && end == current.chars().count())
         };
-        if whole_replace {
+        let before = input.text().to_string();
+        let inserted = if whole_replace {
             let normalized = crate::platform::normalize_pasted_path_input(text);
             // 纯引号/空 URI 归一化后没有有效路径：吞掉粘贴，不插入字面量 `''`。
             if normalized.is_empty() {
@@ -548,6 +556,9 @@ pub fn apply_overlay_paste(state: &mut AppState, text: &str) -> bool {
             Overlay::ResumeSessionEdit(edit) => edit.hint = None,
             Overlay::WorktreeOpen(dialog) => dialog.normalize_selection(),
             Overlay::Connect(panel) => panel.clear_error(),
+            Overlay::AgentTitle(dialog) if inserted && dialog.input.text() != before => {
+                dialog.mark_custom();
+            }
             _ => {}
         }
         (
@@ -591,6 +602,7 @@ pub fn cut_overlay_selected_text(state: &mut AppState) -> Option<String> {
             }
             Overlay::WorktreeOpen(dialog) => dialog.normalize_selection(),
             Overlay::Connect(panel) => panel.clear_error(),
+            Overlay::AgentTitle(dialog) => dialog.mark_custom(),
             _ => {}
         }
         (

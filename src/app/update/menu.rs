@@ -6,10 +6,13 @@ use crate::app::effects::Effect;
 use crate::app::overlay::{
     Menu, MenuCommand, Overlay, OverlayTarget, Rename, RenameTarget, TextInput,
 };
-use crate::app::state::{AppState, PaneView, TodoEditTarget, tab_label};
+use crate::app::state::{AppState, PaneView, SidebarAgentKind, TodoEditTarget, tab_label};
 use crate::app::trust::TrustTrigger;
 use crate::tiling::PaneId;
 
+use super::agent_title::{
+    agent_title_prompt, open_agent_prompt, open_agent_title_dialog, remove_agent_title,
+};
 use super::focus_prompt;
 use super::pane::toggle_pane_view;
 use super::prompt::{
@@ -221,6 +224,82 @@ pub fn open_pane_menu(state: &mut AppState, pane: PaneId, anchor: (u16, u16)) {
 /// 关闭当前浮层。
 pub fn close_overlay(state: &mut AppState) {
     state.overlay = None;
+}
+
+/// 打开 Agents 条目右键菜单：绑定有效 Recent 页时提供 `Open prompt`；有标题
+/// 覆盖时提供移除项（绑定标题 `Unbind recent`、自定义标题 `Remove title`）；
+/// `Edit title` 恒可用；`Close` 对 lx 恒可用，终端 Agent 仅在其窗格不是当前
+/// 标签页唯一窗格时可用。
+pub fn open_agent_menu(state: &mut AppState, index: usize, anchor: (u16, u16)) {
+    let Some(entry) = state.agent_entries().get(index).copied() else {
+        return;
+    };
+    state.agent_scroll_drag = None;
+    let workspace = state.active_workspace;
+    let bound = state.agent_title_has_binding(entry.pane_id, entry.kind);
+    let mut commands = vec![MenuCommand::EditAgentTitle];
+    if agent_title_prompt(state, workspace, entry.tab_index, entry.pane_id, entry.kind).is_some() {
+        commands.push(MenuCommand::OpenPrompt);
+    }
+    if state
+        .agent_title_override(entry.pane_id, entry.kind)
+        .is_some()
+    {
+        commands.push(MenuCommand::RemoveAgentTitle);
+    }
+    let closable = match entry.kind {
+        SidebarAgentKind::Lx { .. } => true,
+        SidebarAgentKind::Terminal(_) => state
+            .workspaces
+            .get(workspace)
+            .and_then(|workspace| workspace.tabs.get(entry.tab_index))
+            .is_some_and(|tab| tab.layout.pane_ids().len() > 1),
+    };
+    if closable {
+        commands.push(MenuCommand::CloseAgent);
+    }
+    state.overlay = Some(Overlay::Menu(Menu {
+        anchor,
+        target: OverlayTarget::Agent {
+            workspace,
+            tab: entry.tab_index,
+            pane: entry.pane_id,
+            kind: entry.kind,
+            bound,
+        },
+        commands,
+        selected: 0,
+        confirming: false,
+    }));
+}
+
+/// 关闭一个 Agents 条目。执行前再次确认目标仍存在，避免菜单打开期间
+/// Agent 退出/会话切换导致误关。
+fn close_agent(
+    state: &mut AppState,
+    workspace: usize,
+    tab: usize,
+    pane: PaneId,
+    kind: SidebarAgentKind,
+) {
+    if state.active_workspace != workspace
+        || !state
+            .agent_entries()
+            .iter()
+            .any(|entry| entry.tab_index == tab && entry.pane_id == pane && entry.kind == kind)
+    {
+        return;
+    }
+    match kind {
+        SidebarAgentKind::Lx { .. } => {
+            // 等价 `/new`：停流、解绑当前会话、回空白欢迎页；DB 历史保留。
+            super::chat::new_session(state, pane);
+        }
+        SidebarAgentKind::Terminal(_) => {
+            // 菜单只在该窗格可关闭时提供 Close；close_pane 仍保留最后窗格保护。
+            close_pane(state, workspace, tab, pane);
+        }
+    }
 }
 
 /// 菜单高亮按步长循环移动。
@@ -623,6 +702,54 @@ pub fn activate_menu(state: &mut AppState) -> Option<(PaneId, Vec<u8>)> {
             perform_delete_page(state, workspace, owner, page);
             focus_prompt_when_editor(state);
         }
+        (
+            Some(MenuCommand::OpenPrompt),
+            OverlayTarget::Agent {
+                workspace,
+                tab,
+                pane,
+                kind,
+                ..
+            },
+        ) => {
+            open_agent_prompt(state, workspace, tab, pane, kind);
+        }
+        (
+            Some(MenuCommand::RemoveAgentTitle),
+            OverlayTarget::Agent {
+                workspace,
+                tab,
+                pane,
+                kind,
+                ..
+            },
+        ) => {
+            remove_agent_title(state, workspace, tab, pane, kind);
+        }
+        (
+            Some(MenuCommand::EditAgentTitle),
+            OverlayTarget::Agent {
+                workspace,
+                tab,
+                pane,
+                kind,
+                ..
+            },
+        ) => {
+            open_agent_title_dialog(state, workspace, tab, pane, kind);
+        }
+        (
+            Some(MenuCommand::CloseAgent),
+            OverlayTarget::Agent {
+                workspace,
+                tab,
+                pane,
+                kind,
+                ..
+            },
+        ) => {
+            close_agent(state, workspace, tab, pane, kind);
+        }
         _ => {}
     }
     None
@@ -671,3 +798,6 @@ pub(crate) fn split_pane(
     super::chat::refresh_lx_status(state, created);
     true
 }
+
+#[cfg(test)]
+mod tests;

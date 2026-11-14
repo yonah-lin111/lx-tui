@@ -46,7 +46,10 @@ pub use lx::{
     TaskTab, ToolCallView, ToolDetailView, ToolStatus, ToolSummary, UserShellView,
     WebSearchDetailView, ai_web_remote_session, is_ai_web_session,
 };
-pub use pane::{Direction, Pane, PaneKind, PaneView, SidebarAgentEntry, SidebarAgentKind, Tab};
+pub use pane::{
+    AgentPromptRef, AgentTitleOverride, Direction, Pane, PaneKind, PaneView, SidebarAgentEntry,
+    SidebarAgentKind, Tab,
+};
 pub use prompt_history::{PROMPT_HISTORY_LIMIT, PROMPT_HISTORY_MAX_BYTES, PromptHistory};
 pub use todo::{TodoChartKind, TodoEdit, TodoEditTarget, TodoGroupRole, TodoPanel, WeekDayView};
 pub use workspace::{
@@ -822,13 +825,15 @@ impl AppState {
         let workspace = self.active_workspace();
         let mut entries = Vec::new();
         for (tab_index, tab) in workspace.tabs.iter().enumerate() {
-            for pane_id in tab.layout.pane_ids() {
+            for (pane_offset, pane_id) in tab.layout.pane_ids().into_iter().enumerate() {
                 let Some(pane) = tab.pane(pane_id) else {
                     continue;
                 };
+                let pane_index = pane_offset;
                 if pane.lx.has_active_session() {
                     entries.push(SidebarAgentEntry {
                         tab_index,
+                        pane_index,
                         pane_id,
                         kind: SidebarAgentKind::Lx {
                             entry: pane.lx.entry,
@@ -840,6 +845,7 @@ impl AppState {
                 if let Some(snapshot) = pane.agent.as_ref() {
                     entries.push(SidebarAgentEntry {
                         tab_index,
+                        pane_index,
                         pane_id,
                         kind: SidebarAgentKind::Terminal(snapshot.kind),
                         state: snapshot.state,
@@ -848,6 +854,50 @@ impl AppState {
             }
         }
         entries
+    }
+
+    /// 指定 Agent 的侧栏标题覆盖；无覆盖返回 None。
+    pub fn agent_title_override(
+        &self,
+        pane: PaneId,
+        kind: SidebarAgentKind,
+    ) -> Option<&AgentTitleOverride> {
+        self.pane_anywhere(pane)?.agent_title_override(kind)
+    }
+
+    /// 指定 Agent 的侧栏标题是否带 Recent 绑定（不要求绑定页仍存在）。
+    pub fn agent_title_has_binding(&self, pane: PaneId, kind: SidebarAgentKind) -> bool {
+        self.agent_title_override(pane, kind)
+            .is_some_and(|title| title.prompt.is_some())
+    }
+
+    /// Agents 标题绑定页的模板状态：与 Prompt 面板 Recent 同源。
+    ///
+    /// 绑定页正是 Prompt 面板当前编辑的页时使用实时正文，否则读取内存页正文；
+    /// 无绑定、绑定页已删除或无 `&&&` 模板块时返回 None。
+    pub fn agent_title_status(
+        &self,
+        workspace: usize,
+        pane: PaneId,
+        kind: SidebarAgentKind,
+    ) -> Option<crate::app::markdown::TemplateStatus> {
+        let prompt = self
+            .pane_anywhere(pane)?
+            .agent_title_override(kind)?
+            .prompt?;
+        let panel = &self.workspaces.get(workspace)?.prompt_panel;
+        let item = panel.tree.item(prompt.item_id)?;
+        let page = item.page(prompt.page_id)?;
+        let live = self.prompt_workspace() == workspace
+            && panel.mode != super::prompt::PromptMode::Tree
+            && panel.editing == Some(super::prompt::PromptEditing::Item(prompt.item_id))
+            && item.active_page == prompt.page_id;
+        let content = if live {
+            self.prompt.text()
+        } else {
+            page.content.as_str()
+        };
+        super::prompt::page_title_status(content).1
     }
 
     /// 当前工作区内启用的 Agent 条目总数（不计算 `agent_state`、不分配 `Vec`，供滚动钳制与命中边界高频查询）。

@@ -713,6 +713,16 @@ pub fn template_status(status: TemplateStatus) -> Style {
     }
 }
 
+/// 页标题状态色（Prompt 抽屉 / Agents 弹窗 / 侧栏标题共用）：
+/// todo 默认亮白、in_progress 黄、done 绿、无状态压暗。
+pub fn template_page_title(status: Option<TemplateStatus>) -> Style {
+    match status {
+        Some(TemplateStatus::Todo) => text(),
+        Some(status) => template_status(status),
+        None => muted(),
+    }
+}
+
 /// &&& 模板块色条与分割线：固定为 lx 品牌粉（`Indexed 218`），不随状态变色；
 /// 与 +++（品红）及三态色（蓝/黄/绿）保持区分。
 pub fn template_block_bar() -> Style {

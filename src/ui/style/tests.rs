@@ -21,6 +21,27 @@ fn styles_stay_palette_native() {
 }
 
 #[test]
+fn template_page_title_maps_all_statuses_consistently() {
+    use crate::app::markdown::TemplateStatus;
+
+    assert_eq!(
+        template_page_title(Some(TemplateStatus::Todo)).fg,
+        text().fg
+    );
+    assert_eq!(
+        template_page_title(Some(TemplateStatus::InProgress)).fg,
+        Some(Color::Yellow)
+    );
+    assert_eq!(
+        template_page_title(Some(TemplateStatus::Done)).fg,
+        Some(Color::Green)
+    );
+    let none = template_page_title(None);
+    assert_eq!(none.fg, muted().fg);
+    assert!(none.add_modifier.contains(Modifier::DIM));
+}
+
+#[test]
 fn selected_item_fills_accent_with_contrast_foreground() {
     let style = selected_item();
     assert_eq!(style.fg, Some(Color::Black));

@@ -83,9 +83,13 @@ pub fn agent_status_dot(state: AgentState) -> &'static str {
 /// 窗格顶边框 Agent 标记前缀；前缀强调色、值 muted，与 prompt 的 `ws:` 样式对齐。
 pub const PANE_AGENT_PREFIX: &str = "agent:";
 
-/// Agents 条目归属标签 `[tab N]`：N 为标签位置（1 基）。
-pub fn agent_location(tab_index: usize) -> String {
-    format!("[tab {}]", tab_index.saturating_add(1))
+/// Agents 条目归属标签 `[T1 P1]`：T 为标签位置、P 为窗格树序位置（均 1 基）。
+pub fn agent_location(tab_index: usize, pane_index: usize) -> String {
+    format!(
+        "[T{} P{}]",
+        tab_index.saturating_add(1),
+        pane_index.saturating_add(1)
+    )
 }
 
 // ===== 右栏：提示词树、编辑器与引用文件夹 =====
@@ -284,6 +288,18 @@ pub const MENU_SWITCH_TO_WORKSPACE_CWD: &str = "Switch to ws path";
 pub const MENU_SYNC_WS_TO_TERMINAL_CWD: &str = "Sync ws to terminal path";
 pub const MENU_COPY_PATH: &str = "Copy path";
 pub const MENU_CLOSE_PANE: &str = "Close";
+/// Agents 分区第二行无标题占位与条目右键菜单。
+pub const AGENT_NO_TITLE: &str = "(no title)";
+pub const MENU_AGENT_EDIT_TITLE: &str = "Edit title";
+/// 侧栏 Agents：取消 Recent 页绑定并清空标题覆盖。
+pub const MENU_AGENT_UNBIND_RECENT: &str = "Unbind recent";
+/// 侧栏 Agents：解绑的行内二次确认文案。
+pub const MENU_CONFIRM_UNBIND: &str = "Confirm unbind";
+/// 侧栏 Agents：移除自定义标题。
+pub const MENU_AGENT_REMOVE_TITLE: &str = "Remove title";
+/// 侧栏 Agents：移除自定义标题的行内二次确认文案。
+pub const MENU_CONFIRM_REMOVE_TITLE: &str = "Confirm remove title";
+pub const MENU_AGENT_CLOSE: &str = "Close";
 
 /// 提示词树右键菜单项。
 pub const MENU_PROMPT_NEW_PROMPT: &str = "New prompt";
@@ -372,6 +388,10 @@ pub const RENAME_PLACEHOLDER: &str = "new name";
 /// new workspace 路径输入为空时的输入说明占位。
 pub const NEW_WORKSPACE_PLACEHOLDER: &str = "path to directory";
 pub const RENAME_TAB_TITLE: &str = "Rename tab";
+/// 侧栏 Agents 条目标题编辑浮层。
+pub const RENAME_AGENT_TITLE: &str = "Edit title";
+/// Agents 标题弹窗输入为空时的占位说明。
+pub const AGENT_TITLE_PLACEHOLDER: &str = "title or pick recent";
 
 /// 信任工作区模态：标题、问题与按钮。
 pub const TRUST_WORKSPACE_TITLE: &str = "Trust workspace";

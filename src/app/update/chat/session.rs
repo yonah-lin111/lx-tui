@@ -219,6 +219,7 @@ pub fn on_session_loaded_full(
         target.lx.chat.stop_armed_at = None;
         target.lx.chat.session_title = None;
         target.lx.chat.session_title_palette = 0;
+        target.lx.chat.agent_title_override = None;
         if let Some(page) = target.lx.task.as_mut() {
             page.agents_window = Default::default();
             page.agents_focus = None;
@@ -284,6 +285,11 @@ pub fn on_session_loaded_full(
     // 计划：从本会话最后一条**成功**的 update_plan 结果恢复（失败/中断不覆盖）。
     // 先克隆视图，避免在可变借用期间再借 `state`。
     let restored_messages = target.lx.chat.messages.clone();
+    if session_changed {
+        // 菜单/标题弹窗打开期间切到另一条会话：旧目标已失效，必须关闭，
+        // 否则 Close / 提交标题会落到新会话。
+        crate::app::update::close_agent_overlays_for_pane(state, pane);
+    }
     refresh_lx_status(state, pane);
     // `/resume` 绑定会话模型即视为一次实际使用：只记 recentModels，不改 defaultModel。
     // 先按可发送口径过滤：供应商停用/无 Key/variant 失效的旧会话不得污染 recent。

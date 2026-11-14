@@ -5,6 +5,7 @@ use std::path::PathBuf;
 
 pub use ratatui::layout::Direction;
 
+use crate::app::prompt::PromptPageId;
 use crate::detect::{AgentKind, AgentState, PaneAgentSnapshot};
 use crate::terminal::Terminal;
 use crate::tiling::{PaneId, TileLayout};
@@ -61,10 +62,39 @@ impl SidebarAgentKind {
     }
 }
 
-/// 侧栏 `Agents` 分区的单行条目数据。
+/// 侧栏 Agents 标题绑定的提示词页。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct AgentPromptRef {
+    pub item_id: i64,
+    pub page_id: PromptPageId,
+}
+
+/// 侧栏 Agents 第二行标题：只来自 Recent 页选择或自定义输入。
+///
+/// `text` 是选中时的显示快照；绑定页后续改名不自动跟随。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct AgentTitleOverride {
+    pub text: String,
+    /// `Some` 表示来自 Recent 页，可被 `Open prompt` 精确打开；自定义输入为 None。
+    pub prompt: Option<AgentPromptRef>,
+}
+
+impl AgentTitleOverride {
+    /// 自定义标题（无 Recent 绑定）。
+    pub fn custom(text: impl Into<String>) -> Self {
+        Self {
+            text: text.into(),
+            prompt: None,
+        }
+    }
+}
+
+/// 侧栏 `Agents` 分区的条目数据。
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct SidebarAgentEntry {
     pub tab_index: usize,
+    /// 窗格在该标签页 `layout.pane_ids()` 树序中的位置（0 基；显示时 +1，`[T1 P1]` 的 P）。
+    pub pane_index: usize,
     pub pane_id: PaneId,
     pub kind: SidebarAgentKind,
     pub state: AgentState,
@@ -85,6 +115,9 @@ pub struct Pane {
     pub cwd: Option<PathBuf>,
     /// 窗格前台进程探测到的 Agent 快照；None 表示纯 Shell 或未识别程序。
     pub agent: Option<PaneAgentSnapshot>,
+    /// 侧栏 Agents 中终端 Agent 的临时显示标题（仅内存；Agent 种类变化、
+    /// 退出或窗格关闭时清除）。
+    pub terminal_agent_title: Option<(AgentKind, AgentTitleOverride)>,
 }
 
 impl Tab {
@@ -168,6 +201,68 @@ impl Pane {
             cwd_label: None,
             cwd: None,
             agent: None,
+            terminal_agent_title: None,
+        }
+    }
+
+    /// 指定 Agent 的侧栏标题覆盖；种类不匹配或未设置返回 None。
+    pub fn agent_title_override(&self, kind: SidebarAgentKind) -> Option<&AgentTitleOverride> {
+        match kind {
+            SidebarAgentKind::Lx { .. } => self.lx.chat.agent_title_override.as_ref(),
+            SidebarAgentKind::Terminal(agent) => self
+                .terminal_agent_title
+                .as_ref()
+                .filter(|(kind, _)| *kind == agent)
+                .map(|(_, title)| title),
+        }
+    }
+
+    /// 侧栏 Agents 条目的第二行标题；不再回退会话标题或终端 OSC 标题。
+    pub fn agent_display_title(&self, kind: SidebarAgentKind) -> Option<&str> {
+        self.agent_title_override(kind)
+            .map(|title| title.text.as_str())
+            .filter(|title| !title.is_empty())
+    }
+
+    /// 该窗格当前是否仍接受指定 Agent 的标题写入。
+    ///
+    /// lx 以会话视图存活为准；终端 Agent 必须与当前快照种类一致。
+    pub fn accepts_agent_title(&self, kind: SidebarAgentKind) -> bool {
+        match kind {
+            SidebarAgentKind::Lx { .. } => self.lx.has_active_session(),
+            SidebarAgentKind::Terminal(agent) => self
+                .agent
+                .as_ref()
+                .is_some_and(|snapshot| snapshot.kind == agent),
+        }
+    }
+
+    /// 写入/清除侧栏标题覆盖。
+    ///
+    /// 写入要求目标 Agent 仍可接受标题；清除无条件生效，避免条目消失后
+    /// 旧覆盖残留在 `LxChat` / `Pane` 上并漂移到下一个会话。
+    pub fn set_agent_title_override(
+        &mut self,
+        kind: SidebarAgentKind,
+        title: Option<AgentTitleOverride>,
+    ) {
+        let title = title.and_then(|override_title| {
+            let text = override_title.text.trim();
+            (!text.is_empty()).then(|| AgentTitleOverride {
+                text: text.to_string(),
+                prompt: override_title.prompt,
+            })
+        });
+        if title.is_some() && !self.accepts_agent_title(kind) {
+            return;
+        }
+        match kind {
+            SidebarAgentKind::Lx { .. } => {
+                self.lx.chat.agent_title_override = title;
+            }
+            SidebarAgentKind::Terminal(agent) => {
+                self.terminal_agent_title = title.map(|title| (agent, title));
+            }
         }
     }
 
@@ -184,3 +279,6 @@ impl Pane {
             .set_mention_subagent_roles(source.lx.mention_subagent_roles().to_vec());
     }
 }
+
+#[cfg(test)]
+mod tests;

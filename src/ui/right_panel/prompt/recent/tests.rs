@@ -1,6 +1,7 @@
 //! 最近页面抽屉渲染测试：分割线、双行条目、时间/状态与悬停高亮。
 
 use super::*;
+use crate::app::markdown::TemplateStatus;
 use crate::app::prompt::PromptPageId;
 use ratatui::style::{Color, Modifier};
 

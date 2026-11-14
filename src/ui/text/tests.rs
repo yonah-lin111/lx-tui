@@ -53,6 +53,14 @@ fn user_visible_labels_are_clean_ascii() {
         MENU_TITLE_PROMPT_TREE,
         MENU_TITLE_TODO_ITEM,
         MENU_TITLE_TODO_BLANK,
+        AGENT_NO_TITLE,
+        MENU_AGENT_EDIT_TITLE,
+        MENU_AGENT_UNBIND_RECENT,
+        MENU_CONFIRM_UNBIND,
+        MENU_AGENT_REMOVE_TITLE,
+        MENU_CONFIRM_REMOVE_TITLE,
+        MENU_AGENT_CLOSE,
+        AGENT_TITLE_PLACEHOLDER,
         CONFIRM_DELETE_PAGE_TITLE,
         RENAME_PROMPT_TITLE,
         RENAME_FOLDER_TITLE,
@@ -177,6 +185,22 @@ fn workspace_menu_copy_is_ws_abbreviated_english() {
         MENU_CONFIRM_SYNC_WS_TO_TERMINAL_CWD,
         "Confirm sync ws to terminal path"
     );
+}
+
+/// Agents 归属标签固定 `[T{n} P{m}]`，入参为 0 基，展示为 1 基。
+#[test]
+fn agent_location_and_menu_labels_are_stable() {
+    assert_eq!(agent_location(0, 0), "[T1 P1]");
+    assert_eq!(agent_location(2, 3), "[T3 P4]");
+    assert_eq!(AGENT_NO_TITLE, "(no title)");
+    assert_eq!(MENU_AGENT_EDIT_TITLE, "Edit title");
+    assert_eq!(MENU_AGENT_UNBIND_RECENT, "Unbind recent");
+    assert_eq!(MENU_CONFIRM_UNBIND, "Confirm unbind");
+    assert_eq!(MENU_AGENT_REMOVE_TITLE, "Remove title");
+    assert_eq!(MENU_CONFIRM_REMOVE_TITLE, "Confirm remove title");
+    assert_eq!(MENU_AGENT_CLOSE, "Close");
+    assert_eq!(RENAME_AGENT_TITLE, "Edit title");
+    assert_eq!(AGENT_TITLE_PLACEHOLDER, "title or pick recent");
 }
 
 #[test]

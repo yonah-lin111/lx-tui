@@ -367,39 +367,53 @@ fn clicking_dual_agent_rows_on_same_pane_switches_between_lx_and_terminal_views(
         ui::layout::sidebar_sections(geo.view.left_panel, false).expect("sections are visible");
     let mut dirty = false;
 
-    // 点击第 0 行（lx-native）：切回 PaneView::Lx。
-    handle_terminal_event(
-        mouse(
-            MouseEventKind::Down(MouseButton::Left),
-            sections.agents.x + 1,
-            sections.agents.y,
-        ),
-        &mut state,
-        &mut sessions,
-        &geo,
-        &config,
-        &mut ui::RenderCache::default(),
-        &mut dirty,
-    );
+    fn set_view(state: &mut AppState, pane: crate::tiling::PaneId, view: PaneView) {
+        if let Some(target) = state.active_tab_mut().pane_mut(pane) {
+            target.view = view;
+        }
+    }
+    let mut click = |state: &mut AppState, row: u16| {
+        handle_terminal_event(
+            mouse(
+                MouseEventKind::Down(MouseButton::Left),
+                sections.agents.x + 1,
+                row,
+            ),
+            state,
+            &mut sessions,
+            &geo,
+            &config,
+            &mut ui::RenderCache::default(),
+            &mut dirty,
+        );
+    };
+
+    // 条目 0 第一行（lx-native）：切回 PaneView::Lx。
+    click(&mut state, sections.agents.y);
     assert_eq!(
         state.active_tab().pane(pane).map(|target| target.view),
         Some(PaneView::Lx)
     );
 
-    // 点击第 1 行（claude）：切到 PaneView::Terminal。
-    handle_terminal_event(
-        mouse(
-            MouseEventKind::Down(MouseButton::Left),
-            sections.agents.x + 1,
-            sections.agents.y + 1,
-        ),
-        &mut state,
-        &mut sessions,
-        &geo,
-        &config,
-        &mut ui::RenderCache::default(),
-        &mut dirty,
+    // 条目 0 第二行（标题行）：命中同一条目，仍切回 PaneView::Lx。
+    set_view(&mut state, pane, PaneView::Terminal);
+    click(&mut state, sections.agents.y + 1);
+    assert_eq!(
+        state.active_tab().pane(pane).map(|target| target.view),
+        Some(PaneView::Lx)
     );
+
+    // 条目 1 第一行（claude）：切到 PaneView::Terminal。
+    set_view(&mut state, pane, PaneView::Lx);
+    click(&mut state, sections.agents.y + 2);
+    assert_eq!(
+        state.active_tab().pane(pane).map(|target| target.view),
+        Some(PaneView::Terminal)
+    );
+
+    // 条目 1 第二行（标题行）：命中同一条目，仍切到 PaneView::Terminal。
+    set_view(&mut state, pane, PaneView::Lx);
+    click(&mut state, sections.agents.y + 3);
     assert_eq!(
         state.active_tab().pane(pane).map(|target| target.view),
         Some(PaneView::Terminal)

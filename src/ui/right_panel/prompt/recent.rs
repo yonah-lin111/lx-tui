@@ -5,7 +5,6 @@ use ratatui::layout::Rect;
 use ratatui::style::Style;
 use unicode_width::UnicodeWidthStr;
 
-use crate::app::markdown::TemplateStatus;
 use crate::app::prompt::RecentPageRow;
 use crate::ui::{style, text};
 
@@ -131,11 +130,7 @@ fn paint_entry(buf: &mut Buffer, area: Rect, y: u16, row: &RecentPageRow, hovere
         area.right()
     };
     // 页标题按 &&& 状态着色：todo 默认亮白、in_progress 黄、done 绿、无状态暗灰。
-    let title_style = match row.status {
-        Some(TemplateStatus::Todo) => style::text(),
-        Some(status) => style::template_status(status),
-        None => style::muted(),
-    };
+    let title_style = style::template_page_title(row.status);
     let title_style = if row.current {
         title_style.patch(style::strong())
     } else {

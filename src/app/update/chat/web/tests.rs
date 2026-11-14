@@ -1,5 +1,5 @@
 use super::*;
-use crate::app::state::{AiWebSite, GrokWebModel, LxEntry};
+use crate::app::state::{AgentTitleOverride, AiWebSite, GrokWebModel, LxEntry};
 use crate::chat::events::{ChatDelta, PartDelta, StopReason};
 use crate::db::chat::Usage;
 
@@ -743,6 +743,29 @@ fn switching_between_ai_web_and_native_isolates_sessions_and_blocks_shell_mode()
     let target = state.pane_anywhere(pane).expect("pane");
     assert!(target.lx.chat.session_id.is_none());
     assert!(target.lx.ai_web_edit_user_index.is_none());
+}
+
+#[test]
+fn switching_to_ai_web_clears_stale_agent_title_without_session() {
+    let mut state = AppState::demo();
+    let pane = state.active_tab().layout.focus();
+    if let Some(target) = state.pane_mut_anywhere(pane) {
+        target.lx.chat.loading_session = true;
+        target.lx.chat.agent_title_override = Some(AgentTitleOverride::custom("stale"));
+    }
+
+    crate::app::update::set_lx_entry(&mut state, pane, LxEntry::AiWeb);
+
+    assert_eq!(
+        state
+            .pane_anywhere(pane)
+            .expect("pane")
+            .lx
+            .chat
+            .agent_title_override,
+        None,
+        "跨入口切换必须清掉无 session_id 的临时标题"
+    );
 }
 
 #[test]

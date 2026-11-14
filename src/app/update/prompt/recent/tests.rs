@@ -2,7 +2,7 @@
 
 use super::*;
 use crate::app::prompt::{PromptEditing, PromptPage, PromptPageId};
-use crate::app::state::FocusedContainer;
+use crate::app::state::{FocusedContainer, Workspace};
 use crate::app::update::apply_prompt_tree;
 use crate::db::{PromptPageRecord, PromptRecord};
 use ratatui::layout::Rect;
@@ -98,6 +98,82 @@ fn open_recent_page_commits_current_and_switches_target() {
         .and_then(|item| item.page(PromptPageId::Saved(10)))
         .expect("alpha page");
     assert_eq!(alpha.content, "alpha edited");
+}
+
+#[test]
+fn recent_rows_for_workspace_ignore_pinned_prompt_panel() {
+    let mut state = demo_state();
+    state.workspaces.push(Workspace::single_terminal(
+        "Second".to_string(),
+        Some(std::path::PathBuf::from("/ws2")),
+    ));
+    apply_prompt_tree(
+        &mut state,
+        1,
+        std::path::Path::new("/ws2"),
+        Vec::new(),
+        vec![PromptRecord {
+            id: 20,
+            folder_id: None,
+            name: "Pinned".into(),
+            content: "pinned".into(),
+            active_page_id: Some(20),
+            pages: vec![PromptPageRecord {
+                id: 20,
+                position: 0,
+                name: "Pinned page".into(),
+                content: "pinned".into(),
+                updated_at: 300,
+            }],
+        }],
+    );
+    state.prompt_pinned = Some(1);
+
+    let owner_rows = prompt_recent_rows(&state);
+    assert_eq!(owner_rows.len(), 1);
+    assert_eq!(owner_rows[0].prompt_name, "Pinned");
+
+    let workspace_rows = prompt_recent_rows_for_workspace(&state, 0);
+    assert_eq!(workspace_rows.len(), 2);
+    assert!(
+        workspace_rows.iter().all(|row| row.prompt_name != "Pinned"),
+        "Agents 标题弹窗必须取条目所属工作区的 Recent，而不是钉住的 Prompt 面板"
+    );
+}
+
+#[test]
+fn open_prompt_page_switches_exact_item_and_page() {
+    let mut state = demo_state();
+    assert!(open_prompt_page(&mut state, 10, PromptPageId::Saved(10)));
+
+    let panel = &state.workspaces[0].prompt_panel;
+    assert_eq!(panel.mode, PromptMode::Editor);
+    assert_eq!(panel.editing, Some(PromptEditing::Item(10)));
+    assert_eq!(state.prompt.text(), "alpha");
+    assert_eq!(state.focused, FocusedContainer::Prompt);
+}
+
+#[test]
+fn opening_current_page_expands_collapsed_prompt() {
+    let mut state = demo_state();
+    assert!(open_prompt_page(&mut state, 10, PromptPageId::Saved(10)));
+    state.prompt_collapsed = true;
+
+    assert!(open_prompt_page(&mut state, 10, PromptPageId::Saved(10)));
+
+    assert!(!state.prompt_collapsed, "当前页也要展开折叠的 Prompt 面板");
+    assert!(state.prompt_focused());
+}
+
+#[test]
+fn open_prompt_page_rejects_missing_and_temp_pages() {
+    let mut state = demo_state();
+    let editing = state.workspaces[0].prompt_panel.editing;
+
+    assert!(!open_prompt_page(&mut state, 10, PromptPageId::Temp(1)));
+    assert!(!open_prompt_page(&mut state, 99, PromptPageId::Saved(99)));
+
+    assert_eq!(state.workspaces[0].prompt_panel.editing, editing);
 }
 
 #[test]

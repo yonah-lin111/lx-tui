@@ -1,5 +1,6 @@
 //! 浮层渲染：右键菜单、重命名与关闭确认；几何与命中供事件循环复用。
 
+mod agent_title;
 mod connect;
 pub mod dialog;
 pub mod menu;
@@ -7,6 +8,9 @@ mod referenced;
 pub mod save_draft;
 mod worktree;
 
+pub use agent_title::{
+    AgentTitleButton, agent_title_button_at, agent_title_row_at, agent_title_shell,
+};
 pub use connect::{
     CONNECT_HEIGHT, CONNECT_WIDTH, ConnectLayout, connect_layout, connect_row_at, render_connect,
 };
@@ -29,6 +33,7 @@ pub(crate) use dialog::BUTTON_GAP;
 #[cfg(test)]
 pub(crate) use save_draft::SAVE_DRAFT_BUTTONS;
 
+use agent_title::render_agent_title;
 use referenced::{
     render_referenced_input, render_referenced_menu, render_referenced_menu_footer,
     render_referenced_search, render_referenced_search_footer,
@@ -88,6 +93,7 @@ pub fn render(frame: &mut Frame<'_>, screen: Rect, state: &AppState) -> Option<(
             None
         }
         Overlay::Connect(panel) => render_connect(frame, screen, panel),
+        Overlay::AgentTitle(dialog) => render_agent_title(frame, screen, dialog),
     }
 }
 

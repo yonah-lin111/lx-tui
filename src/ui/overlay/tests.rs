@@ -6,6 +6,7 @@ use crate::app::overlay::{
     TextInput,
 };
 use crate::app::referenced::ReferencedEntry;
+use crate::app::state::AgentTitleOverride;
 use crate::ui::style;
 use crate::ui::text;
 use crate::ui::widgets;
@@ -49,6 +50,38 @@ fn menu_state(commands: Vec<MenuCommand>, selected: usize) -> AppState {
         target: OverlayTarget::Workspace(0),
         commands,
         selected,
+        confirming: false,
+    }));
+    state
+}
+
+/// 构造 Agents 菜单状态：标题覆盖决定移除项文案。
+fn agent_menu_state(title: crate::app::state::AgentTitleOverride) -> AppState {
+    let mut state = AppState::demo();
+    let bound = title.prompt.is_some();
+    let pane = state.active_tab().layout.focus();
+    state
+        .pane_mut_anywhere(pane)
+        .expect("pane")
+        .lx
+        .chat
+        .session_id = Some("ses-title-menu".to_string());
+    let kind = state.agent_entries()[0].kind;
+    state
+        .pane_mut_anywhere(pane)
+        .expect("pane")
+        .set_agent_title_override(kind, Some(title));
+    state.overlay = Some(Overlay::Menu(Menu {
+        anchor: (10, 5),
+        target: OverlayTarget::Agent {
+            workspace: 0,
+            tab: 0,
+            pane,
+            kind,
+            bound,
+        },
+        commands: vec![MenuCommand::RemoveAgentTitle],
+        selected: 0,
         confirming: false,
     }));
     state
@@ -286,6 +319,82 @@ fn menu_labels_cover_terminal_prompt_and_workspace_path_commands() {
             text::MENU_SYNC_WS_TO_TERMINAL_CWD,
             text::MENU_COPY_PATH,
         ]
+    );
+}
+
+#[test]
+fn agent_remove_title_label_follows_binding_and_confirmation() {
+    let custom = agent_menu_state(AgentTitleOverride::custom("Manual title"));
+    let Some(Overlay::Menu(menu)) = custom.overlay.as_ref() else {
+        panic!("menu overlay expected");
+    };
+    assert_eq!(menu_labels(menu), vec![text::MENU_AGENT_REMOVE_TITLE]);
+
+    let bound = agent_menu_state(AgentTitleOverride {
+        text: "Auth Flow".to_string(),
+        prompt: Some(crate::app::state::AgentPromptRef {
+            item_id: 7,
+            page_id: crate::app::prompt::PromptPageId::Saved(9),
+        }),
+    });
+    let Some(Overlay::Menu(menu)) = bound.overlay.as_ref() else {
+        panic!("menu overlay expected");
+    };
+    assert_eq!(menu_labels(menu), vec![text::MENU_AGENT_UNBIND_RECENT]);
+
+    let mut confirming = agent_menu_state(AgentTitleOverride::custom("Manual title"));
+    if let Some(Overlay::Menu(menu)) = confirming.overlay.as_mut() {
+        menu.confirming = true;
+    }
+    let Some(Overlay::Menu(menu)) = confirming.overlay.as_ref() else {
+        panic!("menu overlay expected");
+    };
+    assert_eq!(menu_labels(menu), vec![text::MENU_CONFIRM_REMOVE_TITLE]);
+
+    let mut confirming = agent_menu_state(AgentTitleOverride {
+        text: "Auth Flow".to_string(),
+        prompt: Some(crate::app::state::AgentPromptRef {
+            item_id: 7,
+            page_id: crate::app::prompt::PromptPageId::Saved(9),
+        }),
+    });
+    if let Some(Overlay::Menu(menu)) = confirming.overlay.as_mut() {
+        menu.confirming = true;
+    }
+    let Some(Overlay::Menu(menu)) = confirming.overlay.as_ref() else {
+        panic!("menu overlay expected");
+    };
+    assert_eq!(menu_labels(menu), vec![text::MENU_CONFIRM_UNBIND]);
+}
+
+#[test]
+fn agent_remove_title_label_stays_frozen_after_binding_cleared() {
+    let mut state = agent_menu_state(AgentTitleOverride {
+        text: "Auth Flow".to_string(),
+        prompt: Some(crate::app::state::AgentPromptRef {
+            item_id: 7,
+            page_id: crate::app::prompt::PromptPageId::Saved(9),
+        }),
+    });
+    let (pane, kind) = match state.overlay.as_ref() {
+        Some(Overlay::Menu(menu)) => match &menu.target {
+            OverlayTarget::Agent { pane, kind, .. } => (*pane, *kind),
+            _ => panic!("agent target expected"),
+        },
+        _ => panic!("menu overlay expected"),
+    };
+    state
+        .pane_mut_anywhere(pane)
+        .expect("pane")
+        .set_agent_title_override(kind, None);
+
+    let Some(Overlay::Menu(menu)) = state.overlay.as_ref() else {
+        panic!("menu overlay expected");
+    };
+    assert_eq!(
+        menu_labels(menu),
+        vec![text::MENU_AGENT_UNBIND_RECENT],
+        "菜单打开后文案不得随实时绑定状态翻转"
     );
 }
 
