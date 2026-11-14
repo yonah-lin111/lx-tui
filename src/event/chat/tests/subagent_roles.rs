@@ -1469,3 +1469,77 @@ async fn running_subagent_steer_commits_a_new_segment_and_returns_input() {
         "DB 写入 steer user 消息"
     );
 }
+
+/// 轮次在 steer 被取走前结束：pending 落成新追问，不丢文本，并沿用本轮策略。
+#[tokio::test]
+async fn settle_moves_undelivered_steers_into_a_new_follow_up() {
+    let (_fixture, mut state, key, persistence, mut streams, _parent) = fixture_with_parent();
+    let agent_id = spawn_explorer(&mut state, &mut streams, &persistence, &key, "first task").await;
+    let child_session = streams
+        .subagents
+        .values()
+        .find(|handle| handle.agent_id == agent_id)
+        .expect("handle")
+        .child_session_id
+        .clone();
+    if let Some(handle) = streams.subagents.get_mut(&child_session) {
+        handle.notify_parent = false;
+    }
+    state
+        .pane_mut_anywhere(key.pane)
+        .expect("pane")
+        .lx
+        .agents
+        .by_agent_mut(&agent_id)
+        .expect("run")
+        .chat
+        .pending_steers
+        .push(crate::app::state::lx::chat::steer::PendingSteer {
+            text: "late steer".into(),
+            attachments: Vec::new(),
+            model_images: Vec::new(),
+            model: crate::db::chat::ModelSnapshot {
+                provider: "p".into(),
+                model: "m".into(),
+                variant: None,
+            },
+        });
+    crate::event::chat::finish_subagent(
+        &mut state,
+        &mut streams,
+        &persistence,
+        RequestKey {
+            pane: key.pane,
+            session: child_session,
+            generation: key.generation,
+        },
+        StopReason::Complete,
+        Usage::default(),
+    );
+    assert!(
+        state.effects.iter().any(|effect| matches!(
+            effect,
+            Effect::SendSubagentUserInput {
+                agent_id: id,
+                text,
+                notify_parent: false,
+                ..
+            } if id == &agent_id && text == "late steer"
+        )),
+        "未生效 steer 必须落成新追问：{:?}",
+        state.effects
+    );
+    assert!(
+        state
+            .pane_anywhere(key.pane)
+            .expect("pane")
+            .lx
+            .agents
+            .by_agent(&agent_id)
+            .expect("run")
+            .chat
+            .pending_steers
+            .is_empty(),
+        "pending 应被消费"
+    );
+}
