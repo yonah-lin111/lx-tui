@@ -223,8 +223,8 @@ pub fn toast_copied_chars(count: usize) -> String {
     }
 }
 
-/// 设置服务不可用时的提示。
-pub const TOAST_SETTINGS_UNAVAILABLE: &str = "Settings service unavailable";
+/// Web 控制台服务不可用时的提示。
+pub const TOAST_WEB_UNAVAILABLE: &str = "Web console unavailable";
 
 /// 提示词保存失败：内容保留脏状态，自动保存将重试。
 pub const TOAST_PROMPT_SAVE_FAILED: &str = "Prompt save failed; will retry";

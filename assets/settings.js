@@ -44,14 +44,6 @@ function showTab(name) {
   refreshActionBars();
 }
 
-// 页面级辅助：创建带 class 与文本的元素。
-function element(tag, className, text) {
-  const node = document.createElement(tag);
-  if (className) { node.className = className; }
-  if (text !== undefined && text !== null) { node.textContent = text; }
-  return node;
-}
-
 // ===== 页面级组件：视图操作条（状态 + Reset + Save）=====
 // 每个视图注册一个控制器（isDirty/save/reset），标题行右侧只有这一套按钮；
 // 页面内不再有其它保存入口。状态圆点：绿=已保存，白=未保存，红=保存失败，灰脉冲=保存中。
@@ -92,14 +84,14 @@ function saveAllDirty() {
 
 function createActionBar(hostId, controller) {
   const host = document.getElementById(hostId);
-  const status = element('span', 'action-status');
-  const dot = element('span', 'status-dot clean');
-  const text = element('span', null, 'Saved');
+  const status = domEl('span', 'action-status');
+  const dot = domEl('span', 'status-dot clean');
+  const text = domEl('span', null, 'Saved');
   status.appendChild(dot);
   status.appendChild(text);
-  const reset = element('button', 'ghost', 'Reset');
+  const reset = domEl('button', 'ghost', 'Reset');
   reset.type = 'button';
-  const save = element('button', 'primary', 'Save');
+  const save = domEl('button', 'primary', 'Save');
   save.type = 'button';
   host.appendChild(status);
   host.appendChild(reset);
@@ -458,7 +450,7 @@ function renderCommands() {
   document.getElementById('editor-empty-text').textContent =
     all.length === 0 ? 'No custom commands yet.' : 'Select a command to edit.';
   if (commands.length === 0) {
-    list.appendChild(element('p', 'nav-empty', all.length === 0 ? 'No custom commands yet.' : 'No commands match this filter.'));
+    list.appendChild(domEl('p', 'nav-empty', all.length === 0 ? 'No custom commands yet.' : 'No commands match this filter.'));
   }
   for (const command of commands) {
     const key = commandKey(command);
@@ -469,9 +461,9 @@ function renderCommands() {
     row.className = 'nav-item' + (isSelected ? ' selected' : '') + (isDirty ? ' dirty' : '');
     row.dataset.key = key;
     if (isSelected) { row.setAttribute('aria-current', 'true'); }
-    const slash = element('span', 'nav-slash', '/');
-    const name = element('span', 'nav-name', command.name);
-    const tag = element('span', 'tag', (command.scope === 'project' ? 'Project' : 'User') + ' · ' + (KIND_LABELS[command.kind] || command.kind));
+    const slash = domEl('span', 'nav-slash', '/');
+    const name = domEl('span', 'nav-name', command.name);
+    const tag = domEl('span', 'tag', (command.scope === 'project' ? 'Project' : 'User') + ' · ' + (KIND_LABELS[command.kind] || command.kind));
     row.appendChild(slash);
     row.appendChild(name);
     row.appendChild(tag);
@@ -766,9 +758,6 @@ function deleteCommand() {
 }
 
 function initSettingsView() {
-  if (window.__settingsInitialized) { return; }
-  window.__settingsInitialized = true;
-
   const SIDE_MIN_WIDTH = 140;
   const SIDE_MAX_WIDTH = 360;
   const LIST_MIN_WIDTH = 140;
@@ -780,6 +769,7 @@ function initSettingsView() {
   }
 
   function setupResizer(handle, read, write, min, max) {
+    if (!handle) { return; }
     handle.addEventListener('pointerdown', (event) => {
       event.preventDefault();
       const startX = event.clientX;
@@ -816,14 +806,26 @@ function initSettingsView() {
     LIST_MIN_WIDTH,
     LIST_MAX_WIDTH
   );
-  let modelsListWidth = 220;
-  setupResizer(
-    document.getElementById('models-resizer'),
-    () => modelsListWidth,
-    (width) => { modelsListWidth = width; document.querySelector('.models-grid').style.setProperty('--models-list-width', width + 'px'); },
-    LIST_MIN_WIDTH,
-    LIST_MAX_WIDTH
-  );
+  // Provider / MCP / Skills / Subagents 四个列表各自记住宽度。
+  for (const [handleId, gridSelector] of [
+    ['models-resizer', '#view-provider .models-grid'],
+    ['mcp-resizer', '#view-mcp .models-grid'],
+    ['skill-resizer', '#view-skills .models-grid'],
+    ['subagent-resizer', '#view-subagents .models-grid']
+  ]) {
+    let listWidth = 220;
+    setupResizer(
+      document.getElementById(handleId),
+      () => listWidth,
+      (width) => {
+        listWidth = width;
+        const grid = document.querySelector(gridSelector);
+        if (grid) { grid.style.setProperty('--models-list-width', width + 'px'); }
+      },
+      LIST_MIN_WIDTH,
+      LIST_MAX_WIDTH
+    );
+  }
   actionBars.general = createActionBar('actions-general', { isDirty: generalDirty, save: saveGeneral, reset: resetGeneral });
   actionBars.commands = createActionBar('actions-commands', { isDirty: commandsDirty, save: saveCommand, reset: resetCommandEditor });
   initLoggingSelect();

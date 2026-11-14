@@ -134,10 +134,9 @@ body.resizing { cursor: col-resize; user-select: none; }
 /* ===== 视图外壳 ===== */
 .settings-shell { display: flex; height: 100%; overflow: hidden; }
 .settings-shell main { flex: 1; min-width: 0; display: flex; flex-direction: column; overflow: hidden; padding: 24px; }
-.usage-shell { height: 100%; }
 
 /* ===== 共享 toast ===== */
-.toast-host { position: fixed; left: 50%; top: 16px; z-index: var(--z-toast); display: flex; flex-direction: column; align-items: center; gap: 8px; max-width: min(480px, calc(100vw - 32px)); transform: translateX(-50%); pointer-events: none; }
+.toast-host { position: fixed; left: 50%; top: calc(var(--web-topbar-height) + 12px); z-index: var(--z-toast); display: flex; flex-direction: column; align-items: center; gap: 8px; max-width: min(480px, calc(100vw - 32px)); transform: translateX(-50%); pointer-events: none; }
 .toast { padding: 8px 14px; border: 1px solid var(--border-overlay); border-left: 3px solid var(--accent); background: var(--overlay); color: var(--text); font-size: 12px; box-shadow: var(--shadow-overlay); pointer-events: auto; animation: toast-in .16s ease-out; }
 .toast.ok { border-left-color: var(--ok); }
 .toast.error { border-left-color: var(--err); }

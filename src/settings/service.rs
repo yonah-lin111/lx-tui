@@ -325,6 +325,11 @@ impl SettingsService {
         format!("http://127.0.0.1:{}/?token={}", self.port, self.token())
     }
 
+    /// 浏览器直达 Settings 视图 URL；`settings open` 继续落在设置页。
+    pub fn settings_url(&self) -> String {
+        format!("{}#/settings", self.url())
+    }
+
     /// 测试注入的用户数据根（生产为 None，走环境推导）。
     #[cfg(test)]
     pub(crate) fn user_root_for_tests(&self) -> PathBuf {

@@ -351,12 +351,12 @@ async fn run_loop(
                     }
                 });
             } else {
-                tracing::warn!("settings web service is unavailable");
+                tracing::warn!("web console service is unavailable");
                 update::show_toast(
                     state,
                     crate::app::toast::Toast::new(
                         crate::app::toast::ToastKind::Danger,
-                        ui::text::TOAST_SETTINGS_UNAVAILABLE,
+                        ui::text::TOAST_WEB_UNAVAILABLE,
                         None,
                         Instant::now(),
                     ),

@@ -281,14 +281,14 @@ async fn page_requires_token_and_serves_self_contained_assets() {
         service.url(),
         format!("http://127.0.0.1:{port}/?token={token}")
     );
+    assert_eq!(
+        service.settings_url(),
+        format!("http://127.0.0.1:{port}/?token={token}#/settings")
+    );
     for path in ["/settings", "/usage"] {
         let page = request(port, &get(&format!("{path}?token={token}"))).await;
         assert_eq!(status(&page), 200, "{path} serves the unified shell");
-        let page_html = body(&page);
-        assert!(
-            page_html.contains("id=\"view-home\"") && page_html.contains("id=\"view-usage\""),
-            "{path} serves the same unified shell"
-        );
+        assert_eq!(body(&page), html, "{path} serves the same bytes");
     }
     assert!(html.contains("/usage.css"), "usage styles linked");
     assert!(
@@ -299,6 +299,26 @@ async fn page_requires_token_and_serves_self_contained_assets() {
         html.contains("class=\"usage-controls\"") && !html.contains("usage-topbar"),
         "usage filters render as a content toolbar instead of a second topbar"
     );
+    for hook in [
+        "summary-cards",
+        "chart-trend",
+        "chart-requests",
+        "chart-models",
+        "chart-providers",
+        "chart-composition",
+        "table-container",
+        "logs-pagination",
+        "filter-provider",
+        "filter-model",
+        "filter-workspace",
+        "filter-session",
+        "auto-refresh-filter",
+    ] {
+        assert!(
+            html.contains(&format!("id=\"{hook}\"")),
+            "usage view hook present: {hook}"
+        );
+    }
 
     let web_css = request(port, &get("/web.css")).await;
     assert_eq!(status(&web_css), 200);
@@ -501,19 +521,26 @@ async fn models_page_scrolls_and_uses_shared_select_toast() {
             && web_css.contains("*::-webkit-scrollbar-thumb:hover"),
         "shared scrollbar thumb visible"
     );
-    // 左侧列表与右侧内容卡之间是可拖拽分隔条（对齐 Commands 页）。
-    assert!(
-        html.contains("id=\"models-resizer\""),
-        "models list resizer present"
-    );
+    // 左侧列表与右侧内容卡之间是可拖拽分隔条；四个列表各自记住宽度。
+    for id in [
+        "models-resizer",
+        "mcp-resizer",
+        "skill-resizer",
+        "subagent-resizer",
+    ] {
+        assert!(
+            html.contains(&format!("id=\"{id}\"")),
+            "list resizer present: {id}"
+        );
+    }
     assert!(css.contains(".models-resizer"), "models resizer styled");
     assert!(
         css.contains("--models-list-width, 220px"),
         "models list width variable wired"
     );
     assert!(
-        js.contains("modelsListWidth"),
-        "models list width clamp wired"
+        js.contains("mcp-resizer") && js.contains("subagent-resizer"),
+        "all list resizers wired"
     );
 
     // 页面上不再有原生下拉，全部换成全局 select 组件挂载点。
@@ -619,10 +646,10 @@ async fn models_page_scrolls_and_uses_shared_select_toast() {
         models_js.contains("provider.apiKey"),
         "key round-trips via API"
     );
-    // toast 顶部居中。
+    // toast 顶部居中，并让出全局顶栏高度。
     assert!(
-        web_css.contains("left: 50%; top: 16px;"),
-        "toast anchored top center"
+        web_css.contains("left: 50%; top: calc(var(--web-topbar-height) + 12px);"),
+        "toast anchored below the global topbar"
     );
     service.shutdown();
 }

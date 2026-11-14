@@ -1,9 +1,10 @@
 # 统一 Web 控制台 — 任务清单
 
-> 状态：**已执行完成**（分支 `feat/web-console-merge`）。
+> 状态：**已执行完成并复审修复**（分支 `feat/web-console-merge`）。
 > 设计文档：[design.md](design.md)
+> 复审记录：[review.md](review.md)
 > 日期：2026-11-14
-> 执行位置：主工作区 `/Users/yonah/projects/agent/lx-tui`
+> 执行位置：linked worktree `/Users/yonah/projects/agent/lx-tui/.worktrees/web-console-merge`
 
 ---
 
@@ -235,7 +236,7 @@
   5. `#web-app` 内三个 `<section class="web-view">`：
      - `#view-home`：hero + 两张卡。
      - `#view-settings`：`.settings-shell` 包住原 `nav.side`（删除 `<h1>lx-tui</h1>`）、`side-resizer`、`<main class="settings-main">`（原 7 个 section）。
-     - `#view-usage`：`.usage-shell` 包住原 `usage-topbar` 与 `usage-main`；删除 `.header-titles` / `h1 USAGE` / subtitle，把 `.header-actions` 放进 `.usage-toolbar`。
+     - `#view-usage`：`.usage-shell` 包住 `.usage-controls` 与 `usage-main`；删除第二层 `usage-topbar` / `.header-titles` / `h1 USAGE` / subtitle，把时间范围、筛选与 `.header-actions` 合并为一条内容区工具条。
   6. 脚本顺序：
      ```html
      <script src="/web.js"></script>
@@ -272,7 +273,9 @@
 
 ### T4.1 创建 `assets/web.css`
 
-- [x] 写入 `design.md` §6.3 的 `:root` 令牌、`html/body`、`.web-topbar`、`.web-brand`、`.web-tabs`、`#web-app`、`.web-view`、`.home-*`、`.settings-shell`、`.usage-shell { height:100% }`。
+- [x] 写入 `design.md` §6.3 的 `:root` 令牌（`--web-topbar-height: 40px`）、`html/body`、`.web-topbar`、`.web-brand`、`.web-tabs`、`#web-app`、`.web-view`、`.home-*`、`.settings-shell`。
+- [x] 增加全局 `.hidden` 与统一滚动条（`*` + `::-webkit-scrollbar*`）；视图 CSS 不再重复定义。
+- [x] toast host 定位到顶栏下方（`calc(var(--web-topbar-height) + 12px)`），不遮挡 tab。
 - [x] 迁移共享反馈样式（从 `settings.css` / `usage.css` 删除，只保留这里一份）：
   - `.toast-host` / `.toast` / `.toast.ok` / `.toast.error` / `.toast.leaving`。
   - `@keyframes toast-in` / `@keyframes dot-pulse`。
@@ -297,28 +300,30 @@
 - [x] `body.resizing` 规则删除（已移入 `web.css`）。
 - [x] `nav.side` 增加 `height: 100%; overflow-y: auto;`。
 - [x] 删除 `nav.side h1` 规则。
-- [x] `main { ... }` → `.settings-shell main { ... }`。
+- [x] `main { ... }` → `.settings-shell main { ... }`；复审后 shell 规则只保留在 `web.css`。
 - [x] 删除 `.toast*` 与 `@keyframes toast-in` / `@keyframes dot-pulse`。
+- [x] 删除 `.editor-body` / `.provider-list` / `.select-menu` / `.fetch-candidates` 的局部滚动条规则。
 - [x] **保留** `.select-*` 块。
-- [x] 保留 `.hidden`（Settings 内部仍在用）。
+- [x] 删除 `* { box-sizing }`、普通 `.hidden` 与重复的 `.settings-shell main`。
 
 ### T4.3 清理 `usage.css`
 
-- [x] 删除 `:root` 基础令牌，保留 `--chart-*`、`--z-tooltip` 等 Usage 专属令牌。
-- [x] 删除 `html, body` 与 `body { ... }`。
-- [x] `.usage-shell { height: 100vh; }` → `height: 100%;`。
+- [x] 删除 `:root` 基础令牌与 `color-scheme`，保留 `--chart-*`、`--z-tooltip` 等 Usage 专属令牌。
+- [x] 删除 `html, body`、`body { ... }`、`* { box-sizing }` 与全局 `.hidden`。
+- [x] `.usage-shell { height: 100vh; }` → `height: 100%;`，保留 flex 列布局。
 - [x] 删除 `.header-titles`、`.usage-header h1`、`.usage-header .subtitle`。
-- [x] 新增 `.usage-toolbar { display:flex; justify-content:flex-end; align-items:center; flex-wrap:wrap; gap:8px; }`。
+- [x] 删除 `.usage-topbar` / `.topbar-inner` / `.usage-toolbar` / `.usage-filters` / `.filter-range-row`。
+- [x] 新增 `.usage-controls`（可换行工具条）与 `.header-actions { margin-left:auto; }`。
+- [x] 删除 `.usage-main` / `.table-wrap` / `.select-menu` 的局部滚动条规则。
 - [x] 删除 `.toast*` 与 `@keyframes toast-in` / `@keyframes dot-pulse`。
 - [x] **保留** `.select-*` 块。
-- [x] 保留 `.hidden`（Usage 内部仍在用）。
 
 - [x] 验收：
   ```bash
-  rg "height: 100vh" assets/usage.css
-  rg ":root" assets/settings.css assets/usage.css
+  rg "height: 100vh|usage-topbar|usage-toolbar|usage-filters" assets/usage.css
+  rg "scrollbar" assets/settings.css assets/usage.css
   ```
-  第一个无结果；第二个只允许 `usage.css` 保留图表令牌块。
+  第一条无结果；第二条只允许 `.command-list` 的隐藏滚动条规则。
 
 ---
 
@@ -470,6 +475,7 @@
 - [x] `cargo test event::tests::mouse_click`
 - [x] `cargo test settings::service`
 - [x] `cargo test settings::service::usage`
+- [x] `cargo test --test web_assets`
 
 ### T7.3 浏览器手工验收（用户执行 `cargo run`）
 
@@ -488,7 +494,24 @@
 - [x] 确认 `assets/settings.html`、`assets/usage.html` 已删除。
 - [x] 确认无 `[SET]` / `[USE]` 残留（历史 docs 除外）。
 - [x] 确认 `usage_url()`、`usage_html()`、`settings_open_requested`、`usage_open_requested`、`SidebarSettings`、`SidebarUsage` 全部删除。
-- [x] 如需提交：按项目 Git 规范单独提交（**未获授权不执行 commit**）。
+- [x] 已按项目 Git 规范提交：`7cb05db5`（统一控制台）、`a7f67eef`（脚本语法回归测试）、`a3acca2d`（紧凑顶栏与 Usage 工具条）。
+
+### T7.5 复审修复（`review.md`）
+
+- [x] R1：新增 `SettingsService::settings_url()`；`lx-tui settings open` 与 JSON `url` 直达 `#/settings`。
+- [x] R2：toast 移到顶栏下方，不再遮挡 / 吞掉 tab 点击。
+- [x] R3：Usage 自动刷新在视图非 active 时跳过请求与错误 toast。
+- [x] R4：删除视图内层 `__*Initialized` 守卫；`bootWeb` 先注册 `hashchange` 再初始化，失败可重试。
+- [x] R5：三路由响应与 `page::html()` 字节一致；补 Usage DOM 挂载点断言。
+- [x] R6：`tests/web_assets.rs` 按 HTML 顺序拼接脚本后 `node --check`，并校验 `getElementById` 静态 id。
+- [x] R7：同步 `design.md` / `task.md` / `html-assets.md` / `project-directory-structure.md`。
+- [x] R8：分页以响应 `page` 为准；超出总页数时回到最后一页。
+- [x] R9：文档改为统一 `Cache-Control: no-store`。
+- [x] R10：删除失效 `btn-empty-new-provider` 查找；MCP / Skills / Subagents resizer 接线并补 id。
+- [x] R11：不可用提示改为 “Web console unavailable”。
+- [x] R12：清理重复 `color-scheme` / `box-sizing` / `.hidden` / shell 规则、`element()`、`currentView`、无效 `MAX_HEADER_BYTES` 语句。
+- [x] R13：顶栏 tab 切换补 `aria-current="page"`。
+- [x] 复审验证：`cargo fmt`、`cargo clippy --all-targets -- -D warnings`、`cargo test`、浏览器 1448 / 900 / 640 宽度回归。
 
 ---
 

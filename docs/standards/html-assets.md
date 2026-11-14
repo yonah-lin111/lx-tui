@@ -14,7 +14,7 @@
 ```text
 assets/
   web.html                统一 Web 控制台结构（Home / Settings / Usage 单文档；src/settings/service/page.rs 经 include_str! 加载）
-  web.css                 全局外壳样式（顶部 bar、Home、共享 toast、视图容器）
+  web.css                 全局外壳样式（顶部 bar、Home、共享 toast、视图容器、统一滚动条、全局 hidden）
   web.js                  共享核心（token、DOM 帮助函数、toast、自绘 select）与 hash 路由、懒初始化
   settings.css            Settings 视图样式（非当前视图时以 media="not all" 挂起）
   settings.js             设置页骨架与 General / Commands 业务（首次进入 Settings 视图才初始化）
@@ -33,14 +33,14 @@ assets/
 
 - 文件名使用小写 `snake_case`，一名一页；同一页面的 HTML / CSS / JS 共用词干（`<name>.html` / `.css` / `.js`）。
 - `web.html` 是唯一 HTML 文档：`GET /`、`GET /settings`、`GET /usage` 都返回它，前端读取 `location.pathname` / `location.hash` 决定初始视图；页面内顶部 bar 用 hash（`#/`、`#/settings`、`#/usage`）切换，旧地址启动时规范化为 `/?token=...#/<view>`。
-- **视图级样式隔离**：`settings.css` 与 `usage.css` 都以 `media="not all"` 引入，`web.js` 只切换当前视图样式表的 `media`，两套通用选择器不会同时生效；`web.css` 只放全局外壳与共享反馈组件，`.select-*` 等存在视图差异的样式仍留在各自视图 CSS。
-- 单页脚本超过 1000 行时按职责拆分：主 `<name>.js` 保留页面骨架与全局组件，其余视图拆为 `<name>_<section>.js`，均在 `page::asset` 登记并按 HTML 中的顺序加载（`web.js` → `settings.js` → `settings_models_card.js` → `settings_models.js` → `settings_connect.js` → `settings_mcp.js` → `settings_skills.js` → `settings_subagents.js` → `usage_charts.js` → `usage.js`）。拆分后的脚本共享同一全局作用域，加载顺序即依赖顺序：后加载文件可调用先加载文件定义的全局函数与变量；`web.js` 必须最先加载，且只定义共享核心与路由，不立即发数据请求。
+- **视图级样式隔离**：`settings.css` 与 `usage.css` 都以 `media="not all"` 引入，`web.js` 只切换当前视图样式表的 `media`，两套通用选择器不会同时生效；`web.css` 只放全局外壳、共享反馈组件、统一滚动条与全局 `.hidden`，`.select-*` 等存在视图差异的样式仍留在各自视图 CSS。视图 CSS 不得再重复定义这些全局能力。
+- 单页脚本超过 1000 行时按职责拆分：共享核心与路由固定在 `web.js`，各视图主脚本保留页面骨架与业务函数并暴露 `init<View>View`，其余子视图拆为 `<name>_<section>.js`，均在 `page::asset` 登记并按 HTML 中的顺序加载（`web.js` → `settings.js` → `settings_models_card.js` → `settings_models.js` → `settings_connect.js` → `settings_mcp.js` → `settings_skills.js` → `settings_subagents.js` → `usage_charts.js` → `usage.js`）。拆分后的脚本共享同一全局作用域，加载顺序即依赖顺序：后加载文件可调用先加载文件定义的全局函数与变量；`web.js` 必须最先加载，且只定义共享核心与路由，不立即发数据请求。跨文件禁止重复声明顶层 `const` / `let` / `function`。
 - **结构、样式、脚本分文件维护**：HTML 不含内联 `<style>` / `<script>` 正文，改为 `<link rel="stylesheet" href="/<name>.css">` 与 `<script src="/<name>.js"></script>`。
 - 若确需嵌入非 HTML 资源（图标、字体等二进制），单独放置并以扩展名区分；二进制用 `include_bytes!`，文本用 `include_str!`。
 
 ## 提供方式
 
-- 资源经**独立路由**提供，与页面同源：`GET /web.css`、`GET /web.js`、`GET /settings.css`、`GET /usage.css`。浏览器对每个资源独立发起请求并可分别缓存。
+- 资源经**独立路由**提供，与页面同源：`GET /web.css`、`GET /web.js`、`GET /settings.css`、`GET /usage.css`。浏览器对每个资源独立发起请求；服务端统一返回 `Cache-Control: no-store`，避免二进制重启后命中旧资源。
 - 每个资源在 Rust 侧以 `include_str!` 嵌入，注册进静态资源表（`page::asset`：路径 → `(Content-Type, body)`），由路由分派；新增资源只需在表中加一行。
 - `Content-Type` 必须正确：`.css` 用 `text/css; charset=utf-8`，`.js` 用 `text/javascript; charset=utf-8`，`.html` 用 `text/html; charset=utf-8`。
 - 资源表按**白名单**匹配：只有登记过的裸路径在 token 校验之前放行；其它路径仍走正常校验与路由（未知路径回 404）。
@@ -89,6 +89,7 @@ assets/
 - 直接编辑 `assets/` 下的文件即改变前端，遵循上述格式约束。
 - 迁移或拆分必须保持**输出字节不变**时，用 `git show HEAD:<旧文件>` 或抽取脚本做逐字节比对，再跑测试。
 - 设置页相关测试位于 `src/settings/service/tests.rs`：统一 shell 与三个页面地址的断言在页面响应内，CSS / JS 断言需**单独请求对应资源**再断言；改动结构、样式或脚本时同步更新这些断言，避免测试与资源漂移。
+- 浏览器资源契约测试位于 `tests/web_assets.rs`：按 `web.html` 顺序校验脚本清单，Node.js 可用时逐文件检查并按同一顺序拼接后再 `node --check`，同时校验 `getElementById('静态 id')` 必须存在于 `web.html`。改动脚本或页面结构后至少运行 `cargo test --test web_assets`。
 - 提交前按影响范围执行 `cargo fmt`、`cargo clippy --all-targets -- -D warnings`、`cargo test`。
 - 交互与外观改动无法由 Agent 在终端内验证，需由用户运行 `cargo run` 并在浏览器中确认。
 

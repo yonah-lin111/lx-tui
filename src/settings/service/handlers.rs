@@ -131,7 +131,6 @@ pub fn parse_request(buffer: &[u8]) -> std::io::Result<Option<Request>> {
     }
     let body =
         String::from_utf8_lossy(&buffer[body_start..body_start + content_length]).into_owned();
-    let _ = MAX_HEADER_BYTES;
     Ok(Some(Request {
         method: method.to_string(),
         path,

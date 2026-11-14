@@ -100,8 +100,7 @@ function switchProviderTab(tab) {
 
 // 空态的 “New provider” 只属于 Custom；Quick Connect 预设不能再新建。
 function setEmptyNewProviderVisible(visible) {
-  const button = document.getElementById('btn-empty-new-provider')
-    || document.querySelector('#provider-empty .primary');
+  const button = document.querySelector('#provider-empty .primary');
   if (button) { button.classList.toggle('hidden', !visible); }
 }
 

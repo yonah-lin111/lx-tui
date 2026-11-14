@@ -1,5 +1,4 @@
 
-* { box-sizing: border-box; }
 nav.side { width: 200px; flex-shrink: 0; height: 100%; overflow-y: auto; padding: 16px 0; background: var(--panel); }
 .side-resizer { flex-shrink: 0; width: 5px; position: relative; cursor: col-resize; }
 .side-resizer::after { content: ''; position: absolute; top: 0; bottom: 0; left: 2px; width: 1px; background: var(--border); }
@@ -9,7 +8,6 @@ nav.side button::before { content: ''; flex: 0 0 6px; width: 6px; height: 6px; b
 nav.side button.dirty::before { background: var(--warn); }
 nav.side button:hover { color: var(--text); background: var(--hover); }
 nav.side button.active { background: var(--active); color: var(--text); font-weight: 600; }
-.settings-shell main { flex: 1; min-width: 0; display: flex; flex-direction: column; overflow: hidden; padding: 24px; }
 .view { display: flex; flex: 1 1 auto; min-height: 0; flex-direction: column; }
 .view.hidden { display: none; }
 #view-general, #view-model { overflow-y: auto; }
@@ -188,5 +186,3 @@ button.danger { background: none; border: 1px solid var(--err); color: var(--err
 #preset-form-fields .field-wide { grid-column: 1 / -1; }
 #prov-name[readonly] { opacity: 0.7; }
 #log_path { overflow-wrap: anywhere; word-break: break-all; }
-
-.hidden { display: none; }

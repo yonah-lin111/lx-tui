@@ -392,7 +392,7 @@ fn run_open(ctx: &WorkspaceContext, out: &Output, no_open: bool) -> Result<(), S
             }
             service.set_commands_snapshot(&views);
         }
-        let url = service.url();
+        let url = service.settings_url();
         let value = json!({
             "url": url,
             "port": service.port(),

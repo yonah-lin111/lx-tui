@@ -209,7 +209,6 @@ window.addEventListener('scroll', () => {
 const VIEWS = ['home', 'settings', 'usage'];
 const VIEW_TITLES = { home: 'lx-tui', settings: 'lx-tui · Settings', usage: 'lx-tui · Usage' };
 const VIEW_CSS = { settings: 'css-settings', usage: 'css-usage' };
-let currentView = 'home';
 
 function viewFromLocation() {
   if (location.hash === '#' || location.hash === '#/') { return 'home'; }
@@ -224,14 +223,20 @@ function viewFromLocation() {
 
 function showView(view) {
   if (!VIEWS.includes(view)) { view = 'home'; }
-  currentView = view;
   // 视图切换先收起挂在 body 上的浮层，避免它们脱离视图样式表后裸露。
   openSelects.forEach((inst) => inst.close());
   for (const name of VIEWS) {
     const section = document.getElementById('view-' + name);
     if (section) { section.classList.toggle('active', name === view); }
     const tab = document.querySelector('.web-tab[data-view="' + name + '"]');
-    if (tab) { tab.classList.toggle('active', name === view); }
+    if (tab) {
+      tab.classList.toggle('active', name === view);
+      if (name === view) {
+        tab.setAttribute('aria-current', 'page');
+      } else {
+        tab.removeAttribute('aria-current');
+      }
+    }
   }
   // 非当前视图的样式表用 media="not all" 挂起，不销毁节点、不重新请求。
   for (const name of ['settings', 'usage']) {
@@ -257,7 +262,6 @@ function initOnce(key, fn) {
   } catch (error) {
     window.__webInit[key] = 'failed';
     showToast('Failed to initialise ' + key, 'error');
-    throw error;
   }
 }
 
@@ -269,8 +273,9 @@ function bootWeb() {
     const hash = initial === 'home' ? '#/' : '#/' + initial;
     history.replaceState(null, '', '/' + location.search + hash);
   }
-  showView(initial);
+  // 先接管路由：初始视图初始化失败时，顶栏切页仍然可用并会触发重试。
   window.addEventListener('hashchange', () => showView(viewFromLocation()));
+  showView(initial);
 }
 
 if (document.readyState === 'loading') {

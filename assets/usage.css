@@ -1,5 +1,4 @@
 :root {
-  color-scheme: dark;
   --z-tooltip: 200;
 
   /* 图表专用语义色令牌（协调于暗色工业风背景） */
@@ -11,8 +10,6 @@
   --chart-requests: #38bdf8;
   --chart-grid: #262626;
 }
-
-* { box-sizing: border-box; }
 
 .usage-shell {
   height: 100%;
@@ -605,8 +602,6 @@ button.ghost:disabled { opacity: .45; cursor: default; }
   align-items: center;
   gap: 6px;
 }
-
-.hidden { display: none !important; }
 
 @media (max-width: 1100px) {
   .summary-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }

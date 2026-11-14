@@ -120,6 +120,12 @@ function setErrorBanner(message) {
   }
 }
 
+// 统一 shell 中视图可能被隐藏：后台刷新与错误 toast 不得泄漏到其他视图。
+function isUsageViewActive() {
+  const section = document.getElementById('view-usage');
+  return !!section && section.classList.contains('active');
+}
+
 async function loadUsageDashboard() {
   const reqId = ++usageState.requestSeq;
   usageState.loading = true;
@@ -139,6 +145,11 @@ async function loadUsageDashboard() {
     if (reqId !== usageState.requestSeq) { return; }
     usageState.overview = overview || {};
     usageState.logPage = logPage || {rows: [], total: 0, page: 1, pageSize: usageState.pageSize};
+    const totalPages = Math.max(1, Math.ceil(Number(usageState.logPage.total || 0) / usageState.pageSize));
+    if (usageState.page > totalPages) {
+      usageState.page = totalPages;
+      return loadUsageDashboard();
+    }
     if (syncFilterOptions(usageState.overview.filters || {})) {
       usageState.page = 1;
       return loadUsageDashboard();
@@ -153,7 +164,7 @@ async function loadUsageDashboard() {
     if (reqId !== usageState.requestSeq) { return; }
     setStatusIndicator('error', 'Load failed');
     setErrorBanner('Failed to load usage analytics: ' + error.message);
-    showToast(error.message, 'error');
+    if (isUsageViewActive()) { showToast(error.message, 'error'); }
   } finally {
     if (reqId === usageState.requestSeq) {
       usageState.loading = false;
@@ -175,15 +186,20 @@ async function loadUsageLogsPage(nextPage) {
   try {
     const logPage = await apiGet('/api/usage/logs', logParams);
     if (reqId !== usageState.requestSeq) { return; }
-    usageState.page = targetPage;
     usageState.logPage = logPage || {rows: [], total: 0, page: targetPage, pageSize: usageState.pageSize};
+    usageState.page = Number(usageState.logPage.page) || targetPage;
+    const totalPages = Math.max(1, Math.ceil(Number(usageState.logPage.total || 0) / usageState.pageSize));
+    if (usageState.page > totalPages) {
+      usageState.page = totalPages;
+      return loadUsageLogsPage(totalPages);
+    }
     renderTableSection();
     const nowText = new Date().toLocaleTimeString('en-US', {hour12: false});
     setStatusIndicator('clean', 'Updated ' + nowText);
   } catch (error) {
     if (reqId !== usageState.requestSeq) { return; }
     setStatusIndicator('error', 'Load failed');
-    showToast(error.message, 'error');
+    if (isUsageViewActive()) { showToast(error.message, 'error'); }
   } finally {
     if (reqId === usageState.requestSeq) {
       usageState.loading = false;
@@ -581,7 +597,7 @@ function updateAutoRefresh(intervalMs) {
   }
   if (usageState.autoRefreshMs > 0) {
     usageState.autoRefreshTimer = setInterval(() => {
-      loadUsageDashboard();
+      if (isUsageViewActive()) { loadUsageDashboard(); }
     }, usageState.autoRefreshMs);
   }
 }
@@ -717,7 +733,5 @@ function initUsageDashboard() {
 }
 
 function initUsageView() {
-  if (window.__usageInitialized) { return; }
-  window.__usageInitialized = true;
   initUsageDashboard();
 }

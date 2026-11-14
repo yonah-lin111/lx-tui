@@ -2,8 +2,9 @@
 
 > 状态：**已实施**（分支 `feat/web-console-merge`，待合并审核）。
 > 任务清单：[task.md](task.md)
+> 复审记录：[review.md](review.md)
 > 日期：2026-11-14
-> 执行位置：主工作区 `/Users/yonah/projects/agent/lx-tui`
+> 执行位置：linked worktree `/Users/yonah/projects/agent/lx-tui/.worktrees/web-console-merge`
 > 适用规范：`docs/standards/html-assets.md`、`docs/standards/tui-design-requirements.md`
 
 ---
@@ -73,10 +74,10 @@ TUI 左侧栏底边框有两个独立按钮：
 | **D1** | 入口单词 | `[WEB]`。TUI 标签、顶部栏品牌入口、文档统一使用 `Web` / `[WEB]`；后续所有 HTML 页面都从这个入口进入。 |
 | **D2** | 旧地址兼容 | `/`、`/settings`、`/usage` 都返回同一个 `web.html`；前端按 `location.pathname` 决定初始视图，进入后顶部 bar 用 hash 切换（`#/`、`#/settings`、`#/usage`）。旧地址是"后门"，新入口是"正门"，两边到达同一套页面。 |
 | **D3** | 首页 logo | 复用 TUI 现有 LX 像素字标（`src/ui/main_content/lx/brand.rs` 的 `ICON_LX`，20×14 像素），首页用内联 SVG 按原像素网格重绘；配色映射为固定 hex（`k` `#00005f`、`p` `#ffafd7`、`n` `#d75f87`、`b` `#87d7ff`、`c` `#d7ffff`），不引入图片文件或外链。 |
-| **D4** | 顶部 bar | 左侧品牌区（缩小版 LX 图标 + `lx-tui` 字标，点击回 Home），右侧三个 tab：`Home` / `Settings` / `Usage`。Settings 保留现有左侧 7 个二级页签；Usage 保留现有筛选栏作为二级栏。 |
+| **D4** | 顶部 bar | 左侧品牌区（缩小版 LX 图标 + `lx-tui` 字标，点击回 Home），右侧三个 tab：`Home` / `Settings` / `Usage`，高度 40px。Settings 保留现有左侧 7 个二级页签；Usage 的筛选与操作合并为内容区工具条 `.usage-controls`，不再有第二层顶栏。 |
 | **D5** | 首页内容 | 居中 hero（大号 LX 像素 logo + `lx-tui` 字标 + 一行副标题），下方两张等宽入口卡：`Settings` 与 `Usage`；卡片可点击，效果等同顶部 tab。首页纯静态，不发任何 API 请求。 |
-| **D6** | 视觉调整 | 删除 Settings 左栏原有的 `lx-tui` 标题；删除 Usage 顶部原有的 `USAGE` 大标题与副标题，只保留状态、自动刷新、Refresh 与筛选栏。表单、图表、按钮、分组、滚动区的位置和样式一律不动。 |
-| **D7** | CSS 组织 | 保留 `settings.css` / `usage.css` 的主体不动，新增 `web.css` 负责全局 bar、Home 与视图容器；三个 `<link>` 同时引入，非当前视图的样式表用 `media="not all"` 挂起，切换视图时只改 `media` 属性，不销毁节点、不重新请求。 |
+| **D6** | 视觉调整 | 删除 Settings 左栏原有的 `lx-tui` 标题；删除 Usage 顶部原有的 `USAGE` 大标题与副标题，把状态、自动刷新、Refresh 与筛选合并为单条 `.usage-controls`。表单、图表、按钮、分组与滚动区原有位置不变；滚动条样式统一上移到 `web.css`。 |
+| **D7** | CSS 组织 | 保留 `settings.css` / `usage.css` 的业务样式，新增 `web.css` 负责全局 bar、Home、视图容器、统一滚动条与全局 `.hidden`；三个 `<link>` 同时引入，非当前视图的样式表用 `media="not all"` 挂起，切换视图时只改 `media` 属性，不销毁节点、不重新请求。视图 CSS 不得重复定义滚动条。 |
 | **D8** | 默认落点 | `[WEB]` 每次点击都固定落 Home（`/?token=...`，不带 hash）；只有用户手动保留的 `/settings`、`/usage` 旧地址或页面内 hash 才直达对应视图。不做"记住上次视图"。 |
 
 ---
@@ -120,7 +121,7 @@ TUI 左侧栏底边框有两个独立按钮：
 │  ├────────────────────────────────────────────────────────────────────────┤  │
 │  │ #view-home     （默认，纯静态 hero + 两张卡）                           │  │
 │  │ #view-settings （.settings-shell: nav.side + side-resizer + main）      │  │
-│  │ #view-usage    （.usage-shell: usage-topbar + usage-main）              │  │
+│  │ #view-usage    （.usage-shell: usage-controls + usage-main）             │  │
 │  └────────────────────────────────────────────────────────────────────────┘  │
 │                                                                              │
 │  web.js                                                                      │
@@ -423,7 +424,8 @@ pub fn url(&self) -> String {
   - `html.contains("id=\"view-usage\"")`
   - `html.contains("/web.css")`、`html.contains("/web.js")`
   - `html.contains("/settings.css")`、`html.contains("/usage.css")`
-- 删除 `service.usage_url()` 断言；改为断言 `service.url()` 仍为 `/?token=`。
+- 删除 `service.usage_url()` 断言；改为断言 `service.url()` 仍为 `/?token=`，并补 `settings_url()` 为 `url()#/settings`。
+- 三个页面地址的响应与 `page::html()` 字节一致，并补 Usage 的图表/表格/筛选/分页 DOM 挂载点。
 - 自包含扫描列表加入 `web_html`、`web_css`、`web_js`，移除重复的 `usage_html`（同一份 shell 只扫一次）。
 
 `src/settings/service/usage/tests.rs`：
@@ -520,19 +522,13 @@ let token = service.token().to_string();
 
   <section id="view-usage" class="web-view" aria-label="Usage">
     <div class="usage-shell">
-      <header class="usage-topbar">
-        <div class="topbar-inner">
-          <!-- 删除 header-titles / h1 USAGE / subtitle -->
-          <div class="usage-toolbar">
-            <div class="header-actions">
-              <!-- usage-status / auto-refresh / refresh-btn 原样保留 -->
-            </div>
-          </div>
-          <section class="usage-filters" aria-label="Usage filters">
-            <!-- 原 usage.html 的筛选栏原样迁入 -->
-          </section>
-        </div>
-      </header>
+      <!-- 全局顶栏是唯一导航栏；筛选、状态与刷新合并为内容区工具条。 -->
+      <section class="usage-controls" aria-label="Usage controls">
+        <div class="range-group" role="group" aria-label="Time range"><!-- Today / 7d / 30d / All / Custom --></div>
+        <div id="custom-range-wrap" class="custom-range-wrap hidden"><!-- 起止日期 --></div>
+        <div class="filter-selects"><!-- provider / model / workspace / session --></div>
+        <div class="header-actions"><!-- status / auto-refresh / refresh --></div>
+      </section>
       <main class="usage-main">
         <!-- 原 usage.html 的 usage-content 原样迁入 -->
       </main>
@@ -606,15 +602,16 @@ let token = service.token().to_string();
 
 职责：
 
-1. `:root` 基础令牌（从 `settings.css` / `usage.css` 的重复 `:root` 上移）：`--bg`、`--panel`、`--panel-raised`、`--overlay`、`--hover`、`--active`、`--field`、`--field-hover`、`--option-hover`、`--option-selected`、`--border`、`--border-strong`、`--border-overlay`、`--text`、`--muted`、`--faint`、`--accent`、`--accent-ink`、`--ok`、`--err`、`--warn`、`--shadow-raise`、`--shadow-overlay`、`--z-menu`、`--z-toast`、`--web-topbar-height: 48px`。
+1. `:root` 基础令牌（从 `settings.css` / `usage.css` 的重复 `:root` 上移）：`--bg`、`--panel`、`--panel-raised`、`--overlay`、`--hover`、`--active`、`--field`、`--field-hover`、`--option-hover`、`--option-selected`、`--border`、`--border-strong`、`--border-overlay`、`--text`、`--muted`、`--faint`、`--accent`、`--accent-ink`、`--ok`、`--err`、`--warn`、`--shadow-raise`、`--shadow-overlay`、`--z-menu`、`--z-toast`、`--web-topbar-height: 40px`。
 2. 全局 `html, body`、字体、背景、`body` 纵向 flex。
 3. `.web-topbar`、`.web-brand`、`.web-brand-logo`、`.web-tabs`、`.web-tab`。
 4. `#web-app`、`.web-view`、`.web-view.active`。
 5. `.home-shell`、`.home-hero`、`.home-logo`、`.home-cards`、`.home-card`。
-6. 共享反馈样式：`.toast-host` / `.toast` / `@keyframes toast-in` / `@keyframes dot-pulse`（两套 CSS 中这两块完全一致，上移到 `web.css` 只保留一份；Home 上的错误 toast 也能正常显示）。
-7. **不迁移** `.select-*` 样式：两套 CSS 的下拉菜单存在细节差异（Usage 的选项为 `font-size:12px` + 单行省略，Settings 继承 14px），为满足"原页面样式不动"，`.select-*` 仍留在各自视图 CSS 中；`web.js` 只统一行为，不统一视觉。
-8. 视图外壳：`.settings-shell`、`.usage-shell { height:100% }` 的覆盖（`settings.css` / `usage.css` 中删除 `height:100vh` 与 body 布局）。
-9. 窄屏媒体查询。
+6. 共享反馈样式：`.toast-host` / `.toast` / `@keyframes toast-in` / `@keyframes dot-pulse`（两套 CSS 中这两块完全一致，上移到 `web.css` 只保留一份；Home 上的错误 toast 也能正常显示）。toast 固定在顶栏下方（`top: calc(var(--web-topbar-height) + 12px)`），不得遮挡 tab。
+7. 全局 `.hidden { display: none !important }` 与统一滚动条：`*` 的 `scrollbar-width` / `scrollbar-color` + `::-webkit-scrollbar*` 兜底；视图 CSS 不再重复定义滚动条。
+8. **不迁移** `.select-*` 样式：两套 CSS 的下拉菜单存在细节差异（Usage 的选项为 `font-size:12px` + 单行省略，Settings 继承 14px），为满足"原页面样式不动"，`.select-*` 仍留在各自视图 CSS 中；`web.js` 只统一行为，不统一视觉。
+9. 视图外壳：`.settings-shell`、`.settings-shell main`；`.usage-shell` 的完整 flex 布局留在 `usage.css`。
+10. 窄屏媒体查询。
 
 关键代码：
 
@@ -646,7 +643,7 @@ let token = service.token().to_string();
   --shadow-overlay: inset 0 1px 0 rgba(255, 255, 255, .06), 0 2px 6px rgba(0, 0, 0, .5), 0 16px 40px rgba(0, 0, 0, .6);
   --z-menu: 60;
   --z-toast: 1000;
-  --web-topbar-height: 48px;
+  --web-topbar-height: 40px;
 }
 
 * { box-sizing: border-box; }
@@ -674,13 +671,13 @@ body {
 .web-brand {
   display: inline-flex;
   align-items: center;
-  gap: 10px;
+  gap: 8px;
   color: var(--text);
   text-decoration: none;
   font-weight: 600;
   letter-spacing: .04em;
 }
-.web-brand-logo { width: 30px; height: auto; }
+.web-brand-logo { width: 26px; height: auto; }
 .web-tabs { display: flex; align-items: stretch; gap: 4px; height: 100%; }
 .web-tab {
   display: inline-flex;
@@ -715,21 +712,23 @@ body {
 - `body.resizing` 改为 `.settings-shell.resizing` 或在 `web.js`/`settings.js` 中继续给 `document.body` 加类（`web.css` 增加 `body.resizing { cursor: col-resize; user-select: none; }`）。
 - `nav.side` 增加 `height:100%; overflow-y:auto;`。
 - 删除 `nav.side h1` 规则（HTML 已删除 h1）。
-- `main { ... }` 改为 `.settings-shell main { ... }`。
+- `main { ... }` 改为 `.settings-shell main { ... }`；该 shell 规则最终只保留在 `web.css`。
 - 删除 `.toast-host` / `.toast*` / `@keyframes toast-in` / `@keyframes dot-pulse`（迁入 `web.css`）。
+- 删除组件级滚动条规则（`.editor-body` / `.provider-list` / `.select-menu` / `.fetch-candidates`），统一走 `web.css`。
 - **保留** `.select-*` 块（与 Usage 版本存在细节差异，不合并，避免视觉变化）。
 - 其余字段、命令、模型、MCP、Skills、Subagents 样式保持不变。
 
 `usage.css`：
 
-- 删除文件顶部重复的 `:root` 基础令牌；保留图表语义色令牌（`--chart-*`）。
-- 删除 `html, body` 与 `body { ... }`；字体/背景由 `web.css` 统一。
-- `.usage-shell { height: 100vh; }` → `height: 100%;`。
+- 删除文件顶部重复的 `:root` 基础令牌与 `color-scheme`；保留图表语义色令牌（`--chart-*`）。
+- 删除 `html, body`、`body { ... }`、`* { box-sizing }` 与全局 `.hidden`；字体/背景/布局基线由 `web.css` 统一。
+- `.usage-shell { height: 100vh; }` → `height: 100%;`，并保留 `display:flex; flex-direction:column; overflow:hidden`。
 - 删除 `.header-titles`、`.usage-header h1`、`.usage-header .subtitle`（HTML 已删除标题行）。
-- `.usage-header` 改为 `.usage-toolbar`：`display:flex; justify-content:flex-end; align-items:center; flex-wrap:wrap; gap:8px;`。
+- 删除 `.usage-topbar` / `.topbar-inner` / `.usage-toolbar` / `.usage-filters` / `.filter-range-row`；新增 `.usage-controls`（可换行工具条），`.header-actions { margin-left:auto }` 贴右。
+- 删除 `.usage-main` / `.table-wrap` / `.select-menu` 的局部滚动条规则，统一走 `web.css`。
 - 删除 `.toast-host` / `.toast*` / `@keyframes toast-in` / `@keyframes dot-pulse`（迁入 `web.css`）。
 - **保留** `.select-*` 块（与 Settings 版本存在细节差异，不合并，避免视觉变化）。
-- 其余筛选、卡片、图表、表格、分页样式保持不变。
+- 其余卡片、图表、表格、分页样式保持不变。
 
 **关键点**：
 
@@ -786,7 +785,6 @@ function createSelect(host, config) {
 const VIEWS = ['home', 'settings', 'usage'];
 const VIEW_TITLES = { home: 'lx-tui', settings: 'lx-tui · Settings', usage: 'lx-tui · Usage' };
 const VIEW_CSS = { settings: 'css-settings', usage: 'css-usage' };
-let currentView = 'home';
 
 function viewFromLocation() {
   if (location.hash === '#' || location.hash === '#/') { return 'home'; }
@@ -800,11 +798,15 @@ function viewFromLocation() {
 
 function showView(view) {
   if (!VIEWS.includes(view)) { view = 'home'; }
-  currentView = view;
+  openSelects.forEach((inst) => inst.close());
   for (const name of VIEWS) {
     document.getElementById('view-' + name).classList.toggle('active', name === view);
     const tab = document.querySelector('.web-tab[data-view="' + name + '"]');
-    if (tab) { tab.classList.toggle('active', name === view); }
+    if (tab) {
+      tab.classList.toggle('active', name === view);
+      if (name === view) { tab.setAttribute('aria-current', 'page'); }
+      else { tab.removeAttribute('aria-current'); }
+    }
   }
   for (const name of ['settings', 'usage']) {
     const link = document.getElementById(VIEW_CSS[name]);
@@ -824,9 +826,9 @@ function initOnce(key, fn) {
     fn();
     window.__webInit[key] = 'done';
   } catch (error) {
+    // 只提示、不抛出：路由监听已注册，下一次切页会重试。
     window.__webInit[key] = 'failed';
     showToast('Failed to initialise ' + key, 'error');
-    throw error;
   }
 }
 
@@ -838,8 +840,9 @@ function bootWeb() {
     const hash = initial === 'home' ? '#/' : '#/' + initial;
     history.replaceState(null, '', '/' + location.search + hash);
   }
-  showView(initial);
+  // 先接管路由，再初始化首个视图：初始化失败不会让顶栏切页失效。
   window.addEventListener('hashchange', () => showView(viewFromLocation()));
+  showView(initial);
 }
 
 if (document.readyState === 'loading') {
@@ -854,7 +857,9 @@ if (document.readyState === 'loading') {
 - `token` 只定义一次；所有页面脚本的函数在运行时通过全局词法环境读取。
 - `domEl` 从 `usage_charts.js` 上移；`usage_charts.js` 删除本地定义。
 - `createSelect` 采用 usage.js 的完整实现（`aria-expanded`、菜单宽度夹取、`replaceChildren`），并保留 Settings 需要的 `refreshActionBars()` 守卫调用。相对旧 Settings 版本，唯一行为差异是下拉菜单最小宽度 140、靠近视口边缘时自动夹取（Usage 现有行为），不改变选项内容与选择结果；两套 `.select-*` 视觉样式仍分别留在各自视图 CSS。
-- `initOnce` 在失败时允许下次重试，避免一次异常把视图永久卡死。
+- `initOnce` 是唯一初始化守卫：视图脚本不再保留 `__*Initialized` 标志；失败只 toast 并允许下次切页重试。
+- `bootWeb` 先注册 `hashchange`，再 `showView(initial)`；初始视图抛错不会中断后续路由。
+- Usage 自动刷新在 `#view-usage` 非 active 时跳过请求与错误 toast，避免在 Home/Settings 上弹出隐藏视图的错误。
 - `history.replaceState` 只用于旧地址规范化；正常 tab 切换用 `location.hash`，因此浏览器前进/后退可用。
 - 不写 `innerHTML`，动态文本全部 `textContent`，保持现有 XSS 约束。
 
@@ -878,17 +883,13 @@ if (document.readyState === 'loading') {
 // loadState();
 
 function initSettingsView() {
-  if (window.__settingsInitialized) { return; }
-  window.__settingsInitialized = true;
-
   const SIDE_MIN_WIDTH = 140;
   const SIDE_MAX_WIDTH = 360;
   const LIST_MIN_WIDTH = 140;
   const LIST_MAX_WIDTH = 560;
   let cmdListWidth = 220;
 
-  setupResizer(/* ... */);
-  setupResizer(/* ... */);
+  // side-resizer / cmd-resizer / 四个列表 resizer（Provider / MCP / Skills / Subagents）
   setupResizer(/* ... */);
   actionBars.general = createActionBar('actions-general', { isDirty: generalDirty, save: saveGeneral, reset: resetGeneral });
   actionBars.commands = createActionBar('actions-commands', { isDirty: commandsDirty, save: saveCommand, reset: resetCommandEditor });
@@ -918,8 +919,6 @@ function initSettingsView() {
 // 原：initUsageDashboard();
 
 function initUsageView() {
-  if (window.__usageInitialized) { return; }
-  window.__usageInitialized = true;
   initUsageDashboard();
 }
 ```
@@ -928,7 +927,8 @@ function initUsageView() {
 
 - 首次进入 Usage 才发起 `/api/usage/overview` 等请求。
 - Usage 内部筛选、图表、表格、分页状态在视图切换后保留（DOM 不销毁）。
-- 默认 `Auto = Off`，切走视图不会产生额外轮询；若用户开启自动刷新，切走后定时器仍按原逻辑运行（不在本任务改变该行为）。
+- 默认 `Auto = Off`；用户开启自动刷新后，定时器保留但 `#view-usage` 非 active 时跳过请求，回到 Usage 继续刷新。
+- 错误 toast 只在 Usage 视图 active 时显示，避免泄漏到 Home/Settings。
 
 ### 6.8 `usage_charts.js` 改动
 
@@ -978,8 +978,9 @@ function initUsageView() {
 
 - `cargo test ui::controls`：`[WEB]` 几何、阈值 11、底边框无残留、tooltip。
 - `cargo test event::tests::mouse_click`：点击置位 `web_open_requested`。
-- `cargo test settings::service`：三个路径同一 shell、资源白名单、无外链、无 `innerHTML`、`service.url()`。
+- `cargo test settings::service`：三个路径字节一致、Usage DOM 挂载点、资源白名单、无外链、无 `innerHTML`、`service.url()` / `settings_url()`。
 - `cargo test settings::service::usage`：`/api/usage/*` 与页面资源仍正常（token 改从 `service.token()` 取）。
+- `cargo test --test web_assets`：按 HTML 顺序校验脚本清单、逐文件与拼接后的 Node 语法、`getElementById` 静态 id 契约。
 
 ### 7.2 浏览器手工验收
 
@@ -1016,8 +1017,8 @@ cargo test settings::service
 | 风险 | 影响 | 缓解 |
 |---|---|---|
 | CSS 通用选择器互相污染 | Settings/Usage 视觉错乱 | 非当前视图的样式表 `media="not all"` 物理隔离；只保留当前视图一套 |
-| `settings.js` / `usage.js` 仍有未发现的重复全局 | 页面 `SyntaxError`，整页白屏 | 迁移前用声明扫描确认重复项；迁移后浏览器控制台零报错作为验收项 |
-| 懒初始化顺序错误 | Settings/Usage 空白或按钮无响应 | `initOnce` 在首次进入视图时调用；`actionBars` 在 `showTab` 前创建；手工验收覆盖 |
+| 10 个脚本仍有未发现的跨文件重复全局 | 页面 `SyntaxError`，整页白屏 | `tests/web_assets.rs` 按 HTML 顺序拼接后 `node --check`；浏览器控制台零报错作为验收项 |
+| 懒初始化顺序错误 | Settings/Usage 空白或按钮无响应 | `initOnce` 是唯一守卫；`bootWeb` 先注册 `hashchange` 再初始化；失败可重试 |
 | 旧地址兼容 | 旧书签 404 或落错视图 | `/settings`、`/usage` 都返回同一 shell；启动时按 pathname 选视图并规范化 URL |
 | Usage `height:100vh` 未改 | 顶部 bar 下方出现纵向滚动条/内容被裁 | 改为 `height:100%`，由 `.web-view` 提供高度 |
 | 首页 SVG 体积 | HTML 变大 | 使用 `<g>` + `<use>` 复用，只在文档中出现一份路径数据 |
@@ -1039,13 +1040,15 @@ cargo test settings::service
 - `src/app/state.rs`：两个请求位 → `web_open_requested`。
 - `src/event/mouse/press.rs`：点击分支合并。
 - `src/event/mod.rs`：消费请求并打开统一 URL。
-- `src/settings/service.rs`：删除 `usage_url()`。
+- `src/settings/service.rs`：删除 `usage_url()`，新增 `settings_url()`（`url()#/settings`）。
 - `src/settings/service/handlers.rs`：三个路径统一返回 `web.html`。
 - `src/settings/service/page.rs`：`web.html` / `web.css` / `web.js` 登记，删除 `usage_html()`。
 - `src/ui/controls/tests.rs`：按钮测试重写。
 - `src/event/tests/mouse_click.rs`：点击测试重写。
-- `src/settings/service/tests.rs`：HTTP/资源断言更新。
+- `src/settings/service/tests.rs`：HTTP/资源断言更新；三路径字节一致、Usage DOM 挂载点、`settings_url()`。
 - `src/settings/service/usage/tests.rs`：token 获取方式更新。
+- `tests/web_assets.rs`：脚本顺序、逐文件与拼接语法、JS→DOM id 契约。
+- `docs/feature/web-console-merge/review.md`：复审发现、根因与修复记录。
 
 ### 9.2 前端资源
 
