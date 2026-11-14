@@ -1,10 +1,10 @@
 # 统一 Web 控制台（`[WEB]` 入口 + Home / Settings / Usage 单页）— 设计文档
 
-> 状态：**已实施**（分支 `feat/web-console-merge`，待合并审核）。
+> 状态：**已合并到 `dev`**（merge `bc5d6f3a`）。
 > 任务清单：[task.md](task.md)
 > 复审记录：[review.md](review.md)
 > 日期：2026-11-14
-> 执行位置：linked worktree `/Users/yonah/projects/agent/lx-tui/.worktrees/web-console-merge`
+> 实现位置：linked worktree `/Users/yonah/projects/agent/lx-tui/.worktrees/web-console-merge`（合并后已移除）
 > 适用规范：`docs/standards/html-assets.md`、`docs/standards/tui-design-requirements.md`
 
 ---

@@ -1,10 +1,10 @@
 # 统一 Web 控制台 — 任务清单
 
-> 状态：**已执行完成并复审修复**（分支 `feat/web-console-merge`）。
+> 状态：**已合并到 `dev`**（merge `bc5d6f3a`）。
 > 设计文档：[design.md](design.md)
 > 复审记录：[review.md](review.md)
 > 日期：2026-11-14
-> 执行位置：linked worktree `/Users/yonah/projects/agent/lx-tui/.worktrees/web-console-merge`
+> 实现位置：linked worktree `/Users/yonah/projects/agent/lx-tui/.worktrees/web-console-merge`（合并后已移除）
 
 ---
 
@@ -512,6 +512,13 @@
 - [x] R12：清理重复 `color-scheme` / `box-sizing` / `.hidden` / shell 规则、`element()`、`currentView`、无效 `MAX_HEADER_BYTES` 语句。
 - [x] R13：顶栏 tab 切换补 `aria-current="page"`。
 - [x] 复审验证：`cargo fmt`、`cargo clippy --all-targets -- -D warnings`、`cargo test`、浏览器 1448 / 900 / 640 宽度回归。
+
+### T7.6 合并与清理
+
+- [x] `feat/web-console-merge` 以 `--no-ff` 合并到 `dev`（merge `bc5d6f3a`），无冲突。
+- [x] 合并后在主工作区重跑 `cargo fmt --check`、`cargo clippy --all-targets -- -D warnings`、`cargo test`。
+- [x] 更新 `design.md` / `task.md` / `review.md` 的合并状态并提交。
+- [x] 删除 worktree `.worktrees/web-console-merge`、分支 `feat/web-console-merge` 与隔离库 `~/.lx-t-dev/db/worktrees/web-console-merge-1472ed18/`。
 
 ---
 

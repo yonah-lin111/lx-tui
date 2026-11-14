@@ -1,6 +1,6 @@
 # 统一 Web 控制台 — 复审记录
 
-> 复审对象：`feat/web-console-merge`（`7cb05db5`、`a7f67eef`、`a3acca2d`）
+> 复审对象：`feat/web-console-merge`（`7cb05db5`、`a7f67eef`、`a3acca2d`，修复提交 `ec5246a1`）
 > 复审范围：`git diff dev...HEAD`，含 TUI 入口、Rust 服务路由、全部浏览器资源、测试与规范文档
 > 复审方式：codegraph / codebase-memory 调用链核对、静态检查、Node 语法检查、1448 / 900 / 640 宽度浏览器实测
 > 结论：无 P0；P1 4 项、P2 5 项、P3 4 项，全部已在本分支修复。
@@ -129,3 +129,4 @@
   - MCP resizer 拖拽后只更新 MCP 网格宽度，Provider 不受影响。
   - 1448 / 900 / 640 宽度下 Home / Settings / Usage 无横向溢出，Usage 工具条按预期换行。
 - 本次复审修复随 `feat/web-console-merge` 一并提交。
+- 已通过 `--no-ff` 合并到 `dev`（merge `bc5d6f3a`）；合并无冲突，合并后在主工作区重新执行 `cargo fmt --check`、`cargo clippy --all-targets -- -D warnings`、`cargo test`。
