@@ -574,6 +574,25 @@ fn unbind_recent_clears_title_and_binding() {
     select_command(&mut state, MenuCommand::UnbindAgentPrompt);
 
     assert_eq!(activate_menu(&mut state), None);
+    match state.overlay.as_ref() {
+        Some(Overlay::Menu(menu)) => {
+            assert_eq!(
+                menu.commands.get(menu.selected),
+                Some(&MenuCommand::UnbindAgentPrompt)
+            );
+            assert!(menu.confirming, "第一次触发只进入行内确认态");
+        }
+        _ => panic!("first activation must keep the menu open"),
+    }
+    assert!(
+        state
+            .pane_anywhere(pane)
+            .and_then(|target| target.agent_title_override(lx_kind()))
+            .is_some(),
+        "第一次触发不得解绑"
+    );
+
+    assert_eq!(activate_menu(&mut state), None);
 
     assert!(state.overlay.is_none());
     let target = state.pane_anywhere(pane).expect("pane");
@@ -865,7 +884,7 @@ fn workspace_empty_rename_keeps_overlay_open() {
 #[test]
 fn close_agent_requires_confirmation_but_edit_title_does_not() {
     assert!(MenuCommand::CloseAgent.requires_confirm());
+    assert!(MenuCommand::UnbindAgentPrompt.requires_confirm());
     assert!(!MenuCommand::EditAgentTitle.requires_confirm());
     assert!(!MenuCommand::OpenPrompt.requires_confirm());
-    assert!(!MenuCommand::UnbindAgentPrompt.requires_confirm());
 }

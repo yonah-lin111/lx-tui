@@ -464,6 +464,7 @@ impl MenuCommand {
                 | Self::SwitchToWorkspaceCwd
                 | Self::SyncWorkspaceToTerminalCwd
                 | Self::CloseAgent
+                | Self::UnbindAgentPrompt
         )
     }
 }

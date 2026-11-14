@@ -9,6 +9,7 @@ use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, List, ListItem, ListState};
 use unicode_width::UnicodeWidthStr;
 
+use crate::app::markdown::TemplateStatus;
 use crate::app::state::{AppState, PaneView, SidebarAgentKind, Workspace, WorkspaceMode};
 use crate::detect::AgentState;
 use crate::tiling::{COLLAPSED_STRIP, PaneId};
@@ -524,6 +525,8 @@ pub struct AgentListItem<'a> {
     pub state: AgentState,
     /// 第二行标题：内存覆盖优先，其次会话标题 / 终端 OSC 标题。
     pub title: Option<&'a str>,
+    /// 标题绑定页的模板状态（与 Prompt Recent 状态色一致）；自定义标题为 None。
+    pub status: Option<TemplateStatus>,
 }
 
 /// 当前激活工作区的 Agents 条目（按标签与树序，同一窗格先 lx 后终端 Agent）。
@@ -535,6 +538,7 @@ pub fn agent_items<'a>(state: &'a AppState) -> Vec<AgentListItem<'a>> {
             let title = state
                 .pane_anywhere(entry.pane_id)
                 .and_then(|pane| pane.agent_display_title(entry.kind));
+            let status = state.agent_title_status(entry.pane_id, entry.kind);
             AgentListItem {
                 tab_index: entry.tab_index,
                 pane_index: entry.pane_index,
@@ -542,6 +546,7 @@ pub fn agent_items<'a>(state: &'a AppState) -> Vec<AgentListItem<'a>> {
                 kind: entry.kind,
                 state: entry.state,
                 title,
+                status,
             }
         })
         .collect()
@@ -747,9 +752,16 @@ fn agent_list_items<'a>(
         let prefix = text::agent::TREE_LEAF;
         let title = text::ellipsize_width(title, width.saturating_sub(prefix.width()));
         let title_padding = width.saturating_sub(prefix.width() + title.width());
+        // 标题状态色与 Prompt 抽屉的 Recent 一致：todo 亮白、in_progress 黄、
+        // done 绿、无状态或无绑定压暗；悬停只叠加底色，不覆盖状态前景色。
+        let title_style = match item.status {
+            Some(TemplateStatus::Todo) => style::text(),
+            Some(status) => style::template_status(status),
+            None => style::muted(),
+        };
         lines.push(Line::from(vec![
             Span::styled(prefix, style::muted().patch(highlight)),
-            Span::styled(title, style::muted().patch(highlight)),
+            Span::styled(title, highlight.patch(title_style)),
             Span::styled(" ".repeat(title_padding), Style::default().patch(highlight)),
         ]));
 

@@ -694,6 +694,21 @@ fn unbind_recent_menu_item_clears_title_and_binding() {
 
     click_menu_command(&mut fixture, MenuCommand::UnbindAgentPrompt);
 
+    let Some(Overlay::Menu(menu)) = fixture.state.overlay.as_ref() else {
+        panic!("first unbind click must keep the menu open");
+    };
+    assert!(menu.confirming, "第一次点击只进入行内确认态");
+    assert!(
+        fixture
+            .state
+            .pane_anywhere(fixture.pane)
+            .and_then(|target| target.agent_title_override(fixture.kind))
+            .is_some(),
+        "第一次点击不得解绑"
+    );
+
+    click_menu_command(&mut fixture, MenuCommand::UnbindAgentPrompt);
+
     assert!(fixture.state.overlay.is_none());
     let target = fixture.state.pane_anywhere(fixture.pane).expect("pane");
     assert_eq!(target.agent_title_override(fixture.kind), None);

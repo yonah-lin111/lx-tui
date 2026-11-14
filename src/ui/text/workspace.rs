@@ -293,6 +293,8 @@ pub const AGENT_NO_TITLE: &str = "(no title)";
 pub const MENU_AGENT_EDIT_TITLE: &str = "Edit title";
 /// 侧栏 Agents：取消 Recent 页绑定并清空标题覆盖。
 pub const MENU_AGENT_UNBIND_RECENT: &str = "Unbind recent";
+/// 侧栏 Agents：解绑的行内二次确认文案。
+pub const MENU_CONFIRM_UNBIND: &str = "Confirm unbind";
 pub const MENU_AGENT_CLOSE: &str = "Close";
 
 /// 提示词树右键菜单项。

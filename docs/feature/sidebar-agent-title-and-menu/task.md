@@ -282,7 +282,8 @@
 - [ ] `open_agent_menu` 在绑定有效时于 `Edit title` 后插入 `OpenPrompt`。
 - [ ] `OpenPrompt` 对 Agent 目标调用 `open_agent_prompt`：释放 Prompt 钉住、结算当前编辑、打开精确 item/page、聚焦 Prompt 面板。
 - [ ] 自定义标题、页已删除、绑定失效时不显示 `OpenPrompt`。
-- [ ] 仍带 Recent 绑定时菜单在 `OpenPrompt` 后追加 `UnbindAgentPrompt`；点击清空绑定与标题覆盖；绑定页已删除时仍可解绑。
+- [ ] 仍带 Recent 绑定时菜单在 `OpenPrompt` 后追加 `UnbindAgentPrompt`；点击进入行内二次确认，确认后清空绑定与标题覆盖；绑定页已删除时仍可解绑。
+- [ ] Agents 第二行标题按绑定页模板状态着色（todo 亮白、in_progress 黄、done 绿、无状态/无绑定压暗），悬停保留状态色。
 - [ ] 菜单打开后页被删除，执行 `OpenPrompt` 不得误切换。
 
 ### 6.4 测试

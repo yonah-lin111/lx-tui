@@ -1,7 +1,9 @@
 //! 单元测试；仅测试构建编译。
 
 use super::*;
-use crate::app::state::{AgentTitleOverride, AppState, Workspace};
+use crate::app::markdown::TemplateStatus;
+use crate::app::prompt::{PromptItem, PromptPage, PromptPageId, PromptTree};
+use crate::app::state::{AgentPromptRef, AgentTitleOverride, AppState, Workspace};
 use crate::app::update;
 use crate::config::Config;
 use crate::detect::{AgentKind, AgentState, PaneAgentSnapshot};
@@ -10,6 +12,7 @@ use crate::ui::render;
 use crate::ui::test_support::{git_info, push_git_workspace};
 use ratatui::Terminal as RatatuiTerminal;
 use ratatui::backend::TestBackend;
+use ratatui::style::{Color, Modifier};
 
 fn view_for(state: &AppState) -> layout::ViewLayout {
     layout::compute(
@@ -82,6 +85,72 @@ fn agent_item_line(state: &AppState, item_index: usize, line: usize) -> String {
 /// 条目应显示的归属标签：T 为 1 基标签序，P 为 1 基窗格树序。
 fn item_location(item: &AgentListItem<'_>) -> String {
     format!("[T{} P{}]", item.tab_index + 1, item.pane_index + 1)
+}
+
+/// 绑定 Recent 页的侧栏状态色测试状态：页正文按 `&&&` 结束行设置模板状态。
+fn state_with_bound_title(status: Option<TemplateStatus>) -> AppState {
+    let mut state = AppState::demo();
+    let pane = state.active_tab().layout.focus();
+    state
+        .pane_mut_anywhere(pane)
+        .expect("pane exists")
+        .lx
+        .chat
+        .session_id = Some("ses-title-color".to_string());
+    let content = match status {
+        Some(TemplateStatus::Todo) => {
+            "&&& addTemplate --start\n{title: Auth Flow}\n- body\n&&& addTemplate --end"
+        }
+        Some(TemplateStatus::InProgress) => {
+            "&&& addTemplate --start\n{title: Auth Flow}\n- body\n&&& addTemplate --end in_progress"
+        }
+        Some(TemplateStatus::Done) => {
+            "&&& addTemplate --start\n{title: Auth Flow}\n- body\n&&& addTemplate --end done"
+        }
+        None => "plain body",
+    };
+    let page = PromptPage::saved_at(9, "Auth Flow", content, 100);
+    let item = PromptItem {
+        id: 7,
+        folder_id: None,
+        name: "Backend Prompt".to_string(),
+        active_page: page.id,
+        pages: vec![page],
+    };
+    let panel = &mut state.active_workspace_mut().prompt_panel;
+    panel.tree = PromptTree::new();
+    panel.tree.replace(Vec::new(), vec![item]);
+    let kind = agent_items(&state)[0].kind;
+    state
+        .pane_mut_anywhere(pane)
+        .expect("pane exists")
+        .set_agent_title_override(
+            kind,
+            Some(AgentTitleOverride {
+                text: "Auth Flow".to_string(),
+                prompt: Some(AgentPromptRef {
+                    item_id: 7,
+                    page_id: PromptPageId::Saved(9),
+                }),
+            }),
+        );
+    state
+}
+
+/// 第一行 Agents 条目标题首字符的单元格样式。
+fn agent_title_cell(state: &AppState) -> (Color, Modifier, Color) {
+    use unicode_width::UnicodeWidthStr;
+
+    let view = view_for(state);
+    let sections = layout::sidebar_sections(view.left_panel, false).expect("sections are visible");
+    let buffer = render_buffer(state);
+    let x = view
+        .left_panel
+        .x
+        .saturating_add(1)
+        .saturating_add(u16::try_from(text::agent::TREE_LEAF.width()).expect("prefix width"));
+    let cell = &buffer[(x, sections.agents.y + 1)];
+    (cell.fg, cell.modifier, cell.bg)
 }
 
 fn agent_snapshot(kind: AgentKind, state: AgentState) -> PaneAgentSnapshot {
@@ -812,6 +881,36 @@ fn terminal_agent_title_ignores_osc_and_clears_override_on_kind_change() {
     assert!(
         !line.contains("My claude") && !line.contains("Codex CLI"),
         "AgentKind 变化必须清空终端标题覆盖且不回退 OSC: {line:?}"
+    );
+}
+
+#[test]
+fn agent_title_uses_recent_template_status_colors() {
+    let cases = [
+        (Some(TemplateStatus::Todo), Color::Reset, false),
+        (Some(TemplateStatus::InProgress), Color::Yellow, false),
+        (Some(TemplateStatus::Done), Color::Green, false),
+        (None, Color::Reset, true),
+    ];
+    for (status, fg, dim) in cases {
+        let state = state_with_bound_title(status);
+        let (actual_fg, modifier, _) = agent_title_cell(&state);
+        assert_eq!(actual_fg, fg, "{status:?} 标题前景色");
+        assert_eq!(modifier.contains(Modifier::DIM), dim, "{status:?} DIM");
+    }
+}
+
+#[test]
+fn hovered_agent_title_keeps_status_color_over_selection() {
+    let mut state = state_with_bound_title(Some(TemplateStatus::InProgress));
+    state.agent_hover = Some(0);
+
+    let (fg, _, bg) = agent_title_cell(&state);
+    assert_eq!(fg, Color::Yellow, "悬停不得覆盖状态前景色");
+    assert_eq!(
+        bg,
+        style::selection().bg.expect("selection background"),
+        "悬停底色保留"
     );
 }
 

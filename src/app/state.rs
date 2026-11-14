@@ -859,6 +859,35 @@ impl AppState {
         entries
     }
 
+    /// Agents 标题绑定页的模板状态：与 Prompt 面板 Recent 同源。
+    ///
+    /// 绑定页正是 Prompt 面板当前编辑的页时使用实时正文，否则读取内存页正文；
+    /// 无绑定、绑定页已删除或无 `&&&` 模板块时返回 None。
+    pub fn agent_title_status(
+        &self,
+        pane: PaneId,
+        kind: SidebarAgentKind,
+    ) -> Option<crate::app::markdown::TemplateStatus> {
+        let prompt = self
+            .pane_anywhere(pane)?
+            .agent_title_override(kind)?
+            .prompt?;
+        let workspace = self.active_workspace;
+        let panel = &self.workspaces.get(workspace)?.prompt_panel;
+        let item = panel.tree.item(prompt.item_id)?;
+        let page = item.page(prompt.page_id)?;
+        let live = self.prompt_workspace() == workspace
+            && panel.mode != super::prompt::PromptMode::Tree
+            && panel.editing == Some(super::prompt::PromptEditing::Item(prompt.item_id))
+            && item.active_page == prompt.page_id;
+        let content = if live {
+            self.prompt.text()
+        } else {
+            page.content.as_str()
+        };
+        super::prompt::page_title_status(content).1
+    }
+
     /// 当前工作区内启用的 Agent 条目总数（不计算 `agent_state`、不分配 `Vec`，供滚动钳制与命中边界高频查询）。
     pub fn agent_entry_count(&self) -> usize {
         let workspace = self.active_workspace();
