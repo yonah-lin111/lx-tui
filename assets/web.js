@@ -206,18 +206,24 @@ window.addEventListener('scroll', () => {
 
 // ===== 视图路由 =====
 
-const VIEWS = ['home', 'settings', 'usage'];
-const VIEW_TITLES = { home: 'lx-tui', settings: 'lx-tui · Settings', usage: 'lx-tui · Usage' };
-const VIEW_CSS = { settings: 'css-settings', usage: 'css-usage' };
+const VIEWS = ['home', 'settings', 'usage', 'todo'];
+const VIEW_TITLES = {
+  home: 'lx-tui',
+  settings: 'lx-tui · Settings',
+  usage: 'lx-tui · Usage',
+  todo: 'lx-tui · Todo'
+};
+const VIEW_CSS = { settings: 'css-settings', usage: 'css-usage', todo: 'css-todo' };
 
 function viewFromLocation() {
   if (location.hash === '#' || location.hash === '#/') { return 'home'; }
   const hash = location.hash.replace(/^#\/?/, '');
   if (VIEWS.includes(hash)) { return hash; }
-  // 旧地址 /settings、/usage 直达对应视图。
+  // 旧地址 /settings、/usage、/todo 直达对应视图。
   const path = location.pathname.replace(/\/+$/, '') || '/';
   if (path === '/settings') { return 'settings'; }
   if (path === '/usage') { return 'usage'; }
+  if (path === '/todo') { return 'todo'; }
   return 'home';
 }
 
@@ -239,12 +245,13 @@ function showView(view) {
     }
   }
   // 非当前视图的样式表用 media="not all" 挂起，不销毁节点、不重新请求。
-  for (const name of ['settings', 'usage']) {
-    const link = document.getElementById(VIEW_CSS[name]);
+  for (const [name, id] of Object.entries(VIEW_CSS)) {
+    const link = document.getElementById(id);
     if (link) { link.media = name === view ? '' : 'not all'; }
   }
   if (view === 'settings') { initOnce('settings', window.initSettingsView); }
   if (view === 'usage') { initOnce('usage', window.initUsageView); }
+  if (view === 'todo') { initOnce('todo', window.initTodoView); }
   // 离开 Usage 时收起图表 tooltip，避免它脱离视图样式表后裸露在别的视图上。
   if (view !== 'usage' && typeof hideChartTooltip === 'function') { hideChartTooltip(); }
   document.title = VIEW_TITLES[view];
@@ -269,7 +276,7 @@ function bootWeb() {
   const initial = viewFromLocation();
   const path = location.pathname.replace(/\/+$/, '') || '/';
   // 旧地址统一重写为 /?token=...#/<view>，之后切换只改 hash。
-  if (path === '/settings' || path === '/usage') {
+  if (path === '/settings' || path === '/usage' || path === '/todo') {
     const hash = initial === 'home' ? '#/' : '#/' + initial;
     history.replaceState(null, '', '/' + location.search + hash);
   }

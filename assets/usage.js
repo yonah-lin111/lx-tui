@@ -626,12 +626,12 @@ function initUsageDashboard() {
     });
   }
 
-  for (const btn of document.querySelectorAll('.range-btn')) {
+  for (const btn of document.querySelectorAll('#view-usage .range-btn')) {
     btn.addEventListener('click', () => {
       const preset = btn.dataset.range || '7d';
       usageState.rangePreset = preset;
       usageState.page = 1;
-      for (const other of document.querySelectorAll('.range-btn')) {
+      for (const other of document.querySelectorAll('#view-usage .range-btn')) {
         const isCurrent = other === btn;
         other.classList.toggle('active', isCurrent);
         other.setAttribute('aria-pressed', isCurrent ? 'true' : 'false');

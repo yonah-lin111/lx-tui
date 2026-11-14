@@ -238,7 +238,7 @@ pub async fn route(request: &Request, state: &ServiceState) -> Response {
         return Response::error(403, "cross-origin write rejected");
     }
     match (request.method.as_str(), request.path.as_str()) {
-        ("GET", "/") | ("GET", "/settings") | ("GET", "/usage") => {
+        ("GET", "/") | ("GET", "/settings") | ("GET", "/usage") | ("GET", "/todo") => {
             Response::ok("text/html; charset=utf-8", page::html().to_string())
         }
         ("GET", "/api/state") => state_json(state),
@@ -255,6 +255,7 @@ pub async fn route(request: &Request, state: &ServiceState) -> Response {
             super::subagents::route(request, state).await
         }
         (_, path) if path.starts_with("/api/usage") => super::usage::route(request, state),
+        (_, path) if path.starts_with("/api/todo") => super::todo::route(request, state),
         _ => Response::error(404, "not found"),
     }
 }

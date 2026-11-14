@@ -22,6 +22,7 @@ const SCRIPTS: &[&str] = &[
     "settings_subagents.js",
     "usage_charts.js",
     "usage.js",
+    "todo.js",
 ];
 
 fn assets_dir() -> PathBuf {

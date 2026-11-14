@@ -97,18 +97,21 @@ async fn page_requires_token_and_serves_self_contained_assets() {
         "settings view present"
     );
     assert!(html.contains("id=\"view-usage\""), "usage view present");
+    assert!(html.contains("id=\"view-todo\""), "todo view present");
     assert!(
         html.contains("/web.css") && html.contains("/web.js"),
         "web shell assets linked"
     );
     assert!(
-        html.contains("id=\"css-settings\"") && html.contains("id=\"css-usage\""),
+        html.contains("id=\"css-settings\"")
+            && html.contains("id=\"css-usage\"")
+            && html.contains("id=\"css-todo\""),
         "per-view stylesheets toggleable"
     );
     assert_eq!(
         html.matches("media=\"not all\"").count(),
-        2,
-        "both view stylesheets start suspended"
+        3,
+        "all view stylesheets start suspended"
     );
     assert_eq!(
         html.matches("<h1>").count(),
@@ -119,16 +122,21 @@ async fn page_requires_token_and_serves_self_contained_assets() {
         html.contains("data-view=\"home\"")
             && html.contains("data-view=\"settings\"")
             && html.contains("data-view=\"usage\"")
+            && html.contains("data-view=\"todo\"")
             && html.contains("href=\"#/settings\"")
-            && html.contains("href=\"#/usage\""),
-        "topbar exposes hash-linked Home / Settings / Usage tabs"
+            && html.contains("href=\"#/usage\"")
+            && html.contains("href=\"#/todo\""),
+        "topbar exposes hash-linked Home / Settings / Usage / Todo tabs"
     );
     let web_js_pos = html.find("/web.js").expect("web.js linked");
     let settings_js_pos = html.find("/settings.js").expect("settings.js linked");
     let usage_charts_pos = html.find("/usage_charts.js").expect("usage charts linked");
     let usage_js_pos = html.find("/usage.js").expect("usage.js linked");
+    let todo_js_pos = html.find("/todo.js").expect("todo.js linked");
     assert!(
-        web_js_pos < settings_js_pos && usage_charts_pos < usage_js_pos,
+        web_js_pos < settings_js_pos
+            && usage_charts_pos < usage_js_pos
+            && usage_js_pos < todo_js_pos,
         "shared core loads before the view scripts"
     );
 
@@ -277,6 +285,8 @@ async fn page_requires_token_and_serves_self_contained_assets() {
     // 三个页面地址返回同一份统一 shell，且 `[WEB]` 的 URL 仍固定落在 `/`。
     let usage_denied = request(port, &get("/usage")).await;
     assert_eq!(status(&usage_denied), 403);
+    let todo_denied = request(port, &get("/todo")).await;
+    assert_eq!(status(&todo_denied), 403);
     assert_eq!(
         service.url(),
         format!("http://127.0.0.1:{port}/?token={token}")
@@ -285,7 +295,7 @@ async fn page_requires_token_and_serves_self_contained_assets() {
         service.settings_url(),
         format!("http://127.0.0.1:{port}/?token={token}#/settings")
     );
-    for path in ["/settings", "/usage"] {
+    for path in ["/settings", "/usage", "/todo"] {
         let page = request(port, &get(&format!("{path}?token={token}"))).await;
         assert_eq!(status(&page), 200, "{path} serves the unified shell");
         assert_eq!(body(&page), html, "{path} serves the same bytes");
@@ -295,6 +305,27 @@ async fn page_requires_token_and_serves_self_contained_assets() {
         html.contains("/usage_charts.js") && html.contains("/usage.js"),
         "usage scripts linked"
     );
+    assert!(
+        html.contains("/todo.css") && html.contains("/todo.js"),
+        "todo assets linked"
+    );
+    assert!(
+        html.contains("class=\"todo-controls\""),
+        "todo filters render as a content toolbar"
+    );
+    for hook in [
+        "todo-filter-status",
+        "todo-filter-priority",
+        "todo-search",
+        "todo-summary-cards",
+        "todo-table-container",
+        "todo-pagination",
+    ] {
+        assert!(
+            html.contains(&format!("id=\"{hook}\"")),
+            "todo view hook present: {hook}"
+        );
+    }
     assert!(
         html.contains("class=\"usage-controls\"") && !html.contains("usage-topbar"),
         "usage filters render as a content toolbar instead of a second topbar"
@@ -393,6 +424,33 @@ async fn page_requires_token_and_serves_self_contained_assets() {
         "no innerHTML in usage charts js"
     );
 
+    let todo_css = request(port, &get("/todo.css")).await;
+    assert_eq!(status(&todo_css), 200);
+    assert!(todo_css.contains("text/css"), "todo css content type");
+    let todo_css_body = body(&todo_css);
+
+    let todo_js = request(port, &get("/todo.js")).await;
+    assert_eq!(status(&todo_js), 200);
+    assert!(todo_js.contains("javascript"), "todo js content type");
+    let todo_js_body = body(&todo_js);
+    assert!(
+        !todo_js_body.contains(".innerHTML"),
+        "no innerHTML in todo js"
+    );
+    assert!(
+        !todo_js_body.contains("function createSelect")
+            && !todo_js_body.contains("function showToast"),
+        "shared select/toast live in web.js"
+    );
+    assert!(
+        todo_js_body.contains("function initTodoView"),
+        "todo initialises lazily"
+    );
+    assert!(
+        todo_js_body.contains("/api/todo/overview") && todo_js_body.contains("/api/todo/items"),
+        "todo controller targets its own APIs"
+    );
+
     // 全部资源均无外部引用。
     for (name, text) in [
         ("html", html),
@@ -409,6 +467,8 @@ async fn page_requires_token_and_serves_self_contained_assets() {
         ("usage_css", usage_css_body),
         ("usage_js", usage_js_body),
         ("usage_charts_js", usage_charts_js_body),
+        ("todo_css", todo_css_body),
+        ("todo_js", todo_js_body),
     ] {
         assert!(
             !text.contains("https://"),

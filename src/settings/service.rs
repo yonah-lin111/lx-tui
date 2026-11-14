@@ -11,6 +11,7 @@ mod models;
 mod page;
 mod skills;
 mod subagents;
+mod todo;
 mod usage;
 
 #[cfg(test)]

@@ -1,9 +1,9 @@
 //! 统一 Web 控制台前端资源：`assets/` 下的 HTML/CSS/JS，经 `include_str!` 编译进二进制。
 //!
-//! `GET /`、`GET /settings`、`GET /usage` 都返回同一份 `web.html`，由前端按
+//! `GET /`、`GET /settings`、`GET /usage`、`GET /todo` 都返回同一份 `web.html`，由前端按
 //! `location.pathname` / `location.hash` 选择初始视图；`web.css` / `web.js` 提供
-//! 全局外壳、共享核心与路由，`settings*.{css,js}`、`usage*.{css,js}` 仍按视图
-//! 独立加载。所有资源自包含、无外部依赖，遵循 `docs/standards/html-assets.md`。
+//! 全局外壳、共享核心与路由，`settings*.{css,js}`、`usage*.{css,js}`、`todo*.{css,js}`
+//! 仍按视图独立加载。所有资源自包含、无外部依赖，遵循 `docs/standards/html-assets.md`。
 
 /// 统一 Web 控制台正文；`token` 从 `location.search` 读取，所有请求附带。
 pub fn html() -> &'static str {
@@ -66,6 +66,14 @@ pub fn asset(path: &str) -> Option<(&'static str, &'static str)> {
         "/usage_charts.js" => Some((
             "text/javascript; charset=utf-8",
             include_str!("../../../assets/usage_charts.js"),
+        )),
+        "/todo.css" => Some((
+            "text/css; charset=utf-8",
+            include_str!("../../../assets/todo.css"),
+        )),
+        "/todo.js" => Some((
+            "text/javascript; charset=utf-8",
+            include_str!("../../../assets/todo.js"),
         )),
         _ => None,
     }
