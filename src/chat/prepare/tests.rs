@@ -99,6 +99,66 @@ fn prepare_deduplicates_same_image() {
 }
 
 #[test]
+fn prepare_deduplicates_repeated_text_reference() {
+    let dir = temp_dir("dedupe-ref");
+    std::fs::write(dir.join("Cargo.toml"), "[package]").expect("write");
+
+    let text = "@Cargo.toml 这个说什么\n\n@Cargo.toml 有什么功能";
+    let prepared = prepare_user_message(&dir, text, &[]).expect("prepare");
+    assert_eq!(prepared.attachments.len(), 1, "同一目标重复引用只保留一条");
+    assert_eq!(
+        prepared.attachments[0].marker_start,
+        Some(0),
+        "保留首次出现"
+    );
+    assert_eq!(prepared.attachments[0].kind, MessageAttachmentKind::File);
+
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn prepare_deduplicates_same_target_across_syntaxes() {
+    let dir = temp_dir("dedupe-syntax");
+    std::fs::write(dir.join("src.rs"), "fn main() {}").expect("write");
+
+    let text = "看 @src.rs 和 @[refer-file](src.rs)";
+    let prepared = prepare_user_message(&dir, text, &[]).expect("prepare");
+    assert_eq!(
+        prepared.attachments.len(),
+        1,
+        "不同写法指向同一文件只保留一条"
+    );
+    assert_eq!(
+        prepared.attachments[0].source_path.as_deref(),
+        Some("src.rs")
+    );
+
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn prepare_keeps_same_named_files_in_different_dirs() {
+    let dir = temp_dir("dedupe-dirs");
+    std::fs::create_dir_all(dir.join("a")).expect("mkdir a");
+    std::fs::create_dir_all(dir.join("b")).expect("mkdir b");
+    std::fs::write(dir.join("a/lib.rs"), "pub fn a() {}").expect("write a");
+    std::fs::write(dir.join("b/lib.rs"), "pub fn b() {}").expect("write b");
+
+    let prepared = prepare_user_message(&dir, "看 @a/lib.rs 和 @b/lib.rs", &[]).expect("prepare");
+    assert_eq!(prepared.attachments.len(), 2, "同名不同目录是独立目标");
+    assert_eq!(
+        prepared.attachments[0].source_path.as_deref(),
+        Some("a/lib.rs")
+    );
+    assert_eq!(
+        prepared.attachments[1].source_path.as_deref(),
+        Some("b/lib.rs")
+    );
+
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
 fn prepare_rejects_more_than_four_unique_images() {
     let dir = temp_dir("limit");
     let mut drafts = Vec::new();
@@ -200,6 +260,20 @@ fn prepare_ai_web_message_handles_local_files_cloud_keep_files_and_rejects_folde
         prepare_ai_web_message(&dir, "u-3", "用 @[refer-skill](/tmp/s) 处理", &[]),
         Err(AiWebPrepareError::LocalReferenceUnsupported)
     );
+
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn prepare_ai_web_deduplicates_repeated_reference() {
+    let dir = temp_dir("ai-web-dedup");
+    std::fs::write(dir.join("note.txt"), "hello").expect("write note");
+
+    let prepared =
+        prepare_ai_web_message(&dir, "u-1", "看 @note.txt 以及 @note.txt", &[]).expect("prepare");
+    assert_eq!(prepared.attachments.len(), 1, "网页路径同样只保留一条");
+    assert_eq!(prepared.files.len(), 1);
+    assert!(prepared.files[0].ends_with("note.txt"));
 
     let _ = std::fs::remove_dir_all(&dir);
 }

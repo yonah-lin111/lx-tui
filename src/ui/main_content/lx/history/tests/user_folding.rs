@@ -196,6 +196,45 @@ fn user_message_renders_reference_tree_without_user_background() {
 }
 
 #[test]
+fn user_message_dedupes_repeated_reference_tree_rows() {
+    let raw = "@Cargo.toml 这个说什么\n\n@Cargo.toml 有什么功能";
+    let mut msg = user_msg_with_text("u1", raw);
+    msg.attachments = vec![
+        MessageAttachmentMeta {
+            id: "att-1".into(),
+            position: 0,
+            kind: MessageAttachmentKind::File,
+            label: "Cargo.toml".into(),
+            marker_start: Some(0),
+            marker_end: Some(12),
+            source_path: Some("Cargo.toml".into()),
+            mime: None,
+            width: None,
+            height: None,
+        },
+        MessageAttachmentMeta {
+            id: "att-2".into(),
+            position: 1,
+            kind: MessageAttachmentKind::File,
+            label: "Cargo.toml".into(),
+            marker_start: Some(29),
+            marker_end: Some(41),
+            source_path: Some("Cargo.toml".into()),
+            mime: None,
+            width: None,
+            height: None,
+        },
+    ];
+
+    let lx = lx_with(vec![msg]);
+    let mut cache = cache();
+    let snap = cache.snapshot(60, &lx);
+
+    // 历史消息里已存的重复行在展示时收敛：正文 3 行（含空行）+ 附件 1 行。
+    assert_eq!(snap.entries[0].blocks[0].rows, 4);
+}
+
+#[test]
 fn user_message_folded_paste_chip_renders_and_toggles_independently() {
     let tok =
         crate::app::paste::encode_pasted_text("alpha\nbeta\ngamma\ndelta\nepsilon\nzeta\neta");

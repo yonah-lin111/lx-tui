@@ -113,12 +113,26 @@ pub(crate) struct UserRefLine {
 
 impl UserRefLine {
     /// 从消息附件元数据组装可见引用树行。
+    ///
+    /// 同一目标只保留首行：历史消息（去重上线前）可能已存了重复行，展示时一并收敛。
     pub(crate) fn from_attachments(
         attachments: &[crate::db::chat::MessageAttachmentMeta],
     ) -> Vec<Self> {
-        let len = attachments.len();
-        attachments
+        let mut seen = std::collections::HashSet::new();
+        let display: Vec<_> = attachments
             .iter()
+            .filter(|att| {
+                let key = att
+                    .source_path
+                    .as_deref()
+                    .unwrap_or(&att.label)
+                    .trim_end_matches('/');
+                seen.insert((att.kind.as_str(), key.to_string()))
+            })
+            .collect();
+        let len = display.len();
+        display
+            .into_iter()
             .enumerate()
             .map(|(i, att)| Self {
                 is_last: i + 1 == len,
