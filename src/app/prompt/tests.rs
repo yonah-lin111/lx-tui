@@ -1,5 +1,6 @@
 //! 单元测试；仅测试构建编译。
 
+mod mention_timing;
 mod paste_folded;
 
 use std::path::PathBuf;

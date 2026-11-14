@@ -9,10 +9,20 @@ use super::mention::SubagentRunMentionEntry;
 use super::{Lx, LxInputMode, LxMention, LxMentionView, LxPaste};
 
 impl Lx {
-    /// 重算块命令面板与 `@` 提及面板：二者互斥，提及命中时压制块面板。
+    /// 编辑后的收尾：解除提及压制并重算块命令与 `@` 提及面板（二者互斥，提及命中时压制块面板）。
     ///
-    /// 编辑或移动光标后调用；同时清除输入框文本选区、解除提及面板的压制，按当前文本与根重新评估。
+    /// 同时清除输入框文本选区；按当前文本与根重新评估。
     pub fn refresh_panel(&mut self) {
+        self.refresh_panels(true);
+    }
+
+    /// 纯光标移动/点击后的收尾：只收敛已打开的提及会话，不解除压制、不新开面板。
+    pub fn refresh_panel_moved(&mut self) {
+        self.refresh_panels(false);
+    }
+
+    /// 面板收尾；`edited` 区分文本编辑与纯移动。
+    fn refresh_panels(&mut self, edited: bool) {
         self.text_selection = None;
         self.preview_selection = None;
         self.preview_drag = None;
@@ -49,8 +59,12 @@ impl Lx {
         }
         self.sync_mention_subagent_runs();
         let masked = crate::app::paste::mask_pasted_text(&self.input).into_owned();
-        self.mention.unsuppress();
-        self.mention.refresh(&masked, self.cursor);
+        if edited {
+            self.mention.unsuppress();
+            self.mention.refresh(&masked, self.cursor);
+        } else {
+            self.mention.refresh_if_active(&masked, self.cursor);
+        }
         if self.mention.is_open() || self.mention_visible() {
             self.panel = None;
             self.refer = None;
@@ -231,7 +245,7 @@ impl Lx {
 
     /// 需要新扫描时返回（代号，扫描根）；仅事件层调用。
     pub fn take_mention_scan_request(&mut self) -> Option<(u64, std::path::PathBuf)> {
-        self.mention.take_scan_request(&self.input, self.cursor)
+        self.mention.take_scan_request()
     }
 
     /// 写入扫描结果；代号或根过期时丢弃；返回是否采纳。

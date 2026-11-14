@@ -13,14 +13,14 @@ impl Prompt {
     pub fn move_left(&mut self) {
         self.break_group();
         self.cursor = prev_pasted_boundary(&self.text, self.cursor);
-        self.settle();
+        self.settle_moved();
     }
 
     /// 光标右移一个字符（遇到折叠 token 时整块跨过）。
     pub fn move_right(&mut self) {
         self.break_group();
         self.cursor = next_pasted_boundary(&self.text, self.cursor);
-        self.settle();
+        self.settle_moved();
     }
 
     /// 光标上移一个视觉行，保持显示列；首行时钳到行首。
@@ -28,7 +28,7 @@ impl Prompt {
         self.break_group();
         let rows = self.visual_rows();
         if rows.is_empty() {
-            self.settle();
+            self.settle_moved();
             return;
         }
         let proj = self.projection();
@@ -40,7 +40,7 @@ impl Prompt {
         } else {
             self.cursor = proj.display_to_raw_directed(rows[index].start, false);
         }
-        self.settle();
+        self.settle_moved();
     }
 
     /// 光标下移一个视觉行，保持显示列；末行时钳到行尾。
@@ -48,7 +48,7 @@ impl Prompt {
         self.break_group();
         let rows = self.visual_rows();
         if rows.is_empty() {
-            self.settle();
+            self.settle_moved();
             return;
         }
         let proj = self.projection();
@@ -60,7 +60,7 @@ impl Prompt {
         } else {
             self.cursor = proj.display_to_raw_directed(rows[index].end, true);
         }
-        self.settle();
+        self.settle_moved();
     }
 
     /// 光标移到当前视觉行行首。
@@ -68,13 +68,13 @@ impl Prompt {
         self.break_group();
         let rows = self.visual_rows();
         if rows.is_empty() {
-            self.settle();
+            self.settle_moved();
             return;
         }
         let proj = self.projection();
         let (index, _) = self.cursor_visual_in(&rows);
         self.cursor = proj.display_to_raw_directed(rows[index].start, false);
-        self.settle();
+        self.settle_moved();
     }
 
     /// 光标移到当前视觉行行尾。
@@ -82,27 +82,27 @@ impl Prompt {
         self.break_group();
         let rows = self.visual_rows();
         if rows.is_empty() {
-            self.settle();
+            self.settle_moved();
             return;
         }
         let proj = self.projection();
         let (index, _) = self.cursor_visual_in(&rows);
         self.cursor = proj.display_to_raw_directed(rows[index].end, true);
-        self.settle();
+        self.settle_moved();
     }
 
     /// 光标移到逻辑行行首。
     pub fn move_line_start(&mut self) {
         self.break_group();
         self.cursor = clamp_line_start(&self.text, self.cursor);
-        self.settle();
+        self.settle_moved();
     }
 
     /// 光标移到逻辑行行尾（换行前）。
     pub fn move_line_end(&mut self) {
         self.break_group();
         self.cursor = clamp_line_end(&self.text, self.cursor);
-        self.settle();
+        self.settle_moved();
     }
 
     /// 光标左移到前一个词的词首（遇到折叠 token 时跳到 token 起点）。
@@ -110,7 +110,7 @@ impl Prompt {
         self.break_group();
         let target = self.word_start_before(self.cursor);
         self.cursor = clamp_cursor(&self.text, target);
-        self.settle();
+        self.settle_moved();
     }
 
     /// 光标右移到下一个词的词尾（遇到折叠 token 时跳到 token 终点）。
@@ -124,7 +124,7 @@ impl Prompt {
             }
         }
         self.cursor = target;
-        self.settle();
+        self.settle_moved();
     }
 
     /// 删除光标前一个词及其后分隔符（readline ctrl+w 语义）。

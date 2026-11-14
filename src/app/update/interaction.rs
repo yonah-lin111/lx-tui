@@ -363,7 +363,7 @@ fn tick_slash_panel_clock(state: &mut AppState) -> bool {
 /// 临时提示词与树视图不参与；粘贴提案未收束时占位文本不得落库；返回是否触发保存。
 fn tick_prompt_autosave(state: &mut AppState, now: Instant) -> bool {
     if !prompt_item_editing(state)
-        || state.prompt.paste_panel().is_some()
+        || state.prompt.paste_proposal_open()
         || !state.prompt.autosave_due(now, PROMPT_AUTOSAVE_DELAY)
     {
         return false;

@@ -133,7 +133,7 @@ impl Prompt {
     pub fn set_cursor_from_cell(&mut self, row: u16, col: u16) {
         self.break_group();
         self.cursor = self.viewport_offset((row, col), false);
-        self.settle();
+        self.settle_moved();
     }
 
     /// 直接将光标设置到指定字节偏移（多击选词/选行时同步光标）。
@@ -141,7 +141,7 @@ impl Prompt {
         self.break_group();
         let clamped = self.text.floor_char_boundary(offset.min(self.text.len()));
         self.cursor = clamp_cursor(&self.text, clamped);
-        self.settle();
+        self.settle_moved();
     }
 
     /// 按选区粒度（单字 / 词 / 逻辑行）计算内容行坐标下的单元格闭区间与字节范围。

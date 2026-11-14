@@ -376,7 +376,7 @@ impl MentionState {
         self.worktree_repo = repo;
         self.worktree_candidates = None;
         self.worktree_pending = false;
-        self.refresh(text, cursor);
+        self.refresh_if_active(text, cursor);
     }
 
     /// 选择器打开时清空旧候选并允许新一轮加载（不直接发起，由事件层调度）。
@@ -407,14 +407,13 @@ impl MentionState {
 
     /// 需要新扫描时返回（代号，扫描根列表）并标记处理中；仅事件循环调用。
     pub fn take_scan_request(&mut self, text: &str, cursor: usize) -> Option<(u64, PathBuf)> {
-        if self.pending {
+        if self.pending || self.suppressed || self.trigger.is_none() {
             return None;
         }
         let root = self.effective_root(text, cursor)?;
         if self.cache.is_some() {
             return None;
         }
-        markdown::mention_trigger(text, cursor)?;
         self.pending = true;
         Some((self.generation, root))
     }
@@ -475,14 +474,14 @@ impl MentionState {
             self.pending = false;
             self.generation = self.generation.wrapping_add(1);
         }
-        self.refresh(text, cursor);
+        self.refresh_if_active(text, cursor);
     }
 
     /// worktree 查询失败：清空候选并允许后续重试（节流由查询时刻控制）。
     pub fn worktree_failed(&mut self, text: &str, cursor: usize) {
         self.worktree_pending = false;
         self.worktree_candidates = None;
-        self.refresh(text, cursor);
+        self.refresh_if_active(text, cursor);
     }
 
     /// 取根选择器确认：记录选择、作废旧候选并转为文件面板；返回是否消费。
@@ -677,9 +676,10 @@ impl MentionState {
         self.generation = self.generation.wrapping_add(1);
     }
 
-    /// 同步扫描根；根或 worktree 绑定变化时清除缓存、关闭面板并作废在途结果；
-    /// 根未变化也重算面板（绑定可能随光标移动切换）。
+    /// 同步扫描根；根或 worktree 绑定变化时清除缓存并作废在途结果；
+    /// 仅已有 `@` 会话（含压制态）时重算，纯根同步不得新开面板，也不解除压制。
     pub fn set_root(&mut self, root: Option<PathBuf>, text: &str, cursor: usize) {
+        let had_session = self.trigger.is_some() || self.suppressed;
         let previous = self.effective_root(text, cursor);
         self.root = root;
         let current = self.effective_root(text, cursor);
@@ -687,10 +687,10 @@ impl MentionState {
             self.cache = None;
             self.pending = false;
             self.generation = self.generation.wrapping_add(1);
-            // 绑定切换是新上下文：解除 Esc/确认后的压制。
-            self.suppressed = false;
         }
-        self.refresh(text, cursor);
+        if had_session {
+            self.refresh(text, cursor);
+        }
     }
 
     /// 面板压制标记：Esc 关闭或确认插入后不再重新弹出，直到绑定切换或显式清除。
@@ -698,7 +698,7 @@ impl MentionState {
         self.suppressed = true;
     }
 
-    /// 显式解除压制（编辑/移动后由调用方清除）。
+    /// 显式解除压制（文本编辑后由调用方清除；移动不解除）。
     pub fn unsuppress(&mut self) {
         self.suppressed = false;
     }
@@ -716,7 +716,7 @@ impl MentionState {
         }
         self.pending = false;
         self.cache = Some(entries);
-        self.refresh(text, cursor);
+        self.refresh_if_active(text, cursor);
         true
     }
 
@@ -736,6 +736,13 @@ impl MentionState {
             }
             Some(WorktreeBinding::Missing(_) | WorktreeBinding::Ambiguous(_)) => None,
             Some(WorktreeBinding::None) | None => self.root.clone(),
+        }
+    }
+
+    /// 仅当当前已有 `@` 会话（含压制态）时重算；纯移动/后台同步不得新开面板。
+    pub(super) fn refresh_if_active(&mut self, text: &str, cursor: usize) {
+        if self.trigger.is_some() || self.suppressed {
+            self.refresh(text, cursor);
         }
     }
 

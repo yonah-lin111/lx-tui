@@ -210,7 +210,7 @@ impl LxMention {
             return false;
         }
         self.referenced_folders = folders.to_vec();
-        self.refresh(text, cursor);
+        self.refresh_if_active(text, cursor);
         true
     }
 
@@ -424,8 +424,11 @@ impl LxMention {
     }
 
     /// 面板视图种类；`text`/`cursor` 为当前输入缓冲与光标。
+    ///
+    /// 会话是否存在只看已存的 `trigger`：纯移动/后台同步不重算，UI 不得按文本现算绕过状态层。
     pub fn view(&self, text: &str, cursor: usize) -> LxMentionView {
-        if self.suppressed || mention_trigger(text, cursor).is_none() {
+        let masked = crate::app::paste::mask_pasted_text(text);
+        if self.suppressed || self.trigger.is_none() || mention_trigger(&masked, cursor).is_none() {
             return LxMentionView::Hidden;
         }
         if self.root.is_none()
@@ -458,30 +461,37 @@ impl LxMention {
         }
     }
 
-    /// 同步有效扫描根；根变化时清缓存、作废在途结果、解除压制并重算面板。
+    /// 同步有效扫描根；根变化时清缓存、作废在途结果；
+    /// 仅已有 `@` 会话（含压制态）时重算，纯根同步不得新开面板，也不解除压制。
     ///
     /// 返回根是否发生变化（供调用方置脏重绘）。
     pub fn set_root(&mut self, root: Option<PathBuf>, text: &str, cursor: usize) -> bool {
         if self.root == root {
             return false;
         }
+        let had_session = self.trigger.is_some() || self.suppressed;
         self.root = root;
         self.cache = None;
         self.pending = false;
-        self.suppressed = false;
         self.generation = self.generation.wrapping_add(1);
-        self.refresh(text, cursor);
+        if had_session {
+            self.refresh(text, cursor);
+        }
         true
     }
 
     /// 需要新扫描时返回（代号，扫描根）并标记在途；仅 `Files` Tab 生效，
-    /// 已有缓存或在途时返回 None。
-    pub fn take_scan_request(&mut self, text: &str, cursor: usize) -> Option<(u64, PathBuf)> {
-        if self.tab != MentionTab::Files || self.pending || self.cache.is_some() {
+    /// 已有缓存、在途、压制态或没有活跃 `@` 会话时返回 None。
+    pub fn take_scan_request(&mut self) -> Option<(u64, PathBuf)> {
+        if self.tab != MentionTab::Files
+            || self.pending
+            || self.suppressed
+            || self.trigger.is_none()
+            || self.cache.is_some()
+        {
             return None;
         }
         let root = self.root.clone()?;
-        mention_trigger(text, cursor)?;
         self.pending = true;
         Some((self.generation, root))
     }
@@ -500,8 +510,15 @@ impl LxMention {
         }
         self.pending = false;
         self.cache = Some(entries);
-        self.refresh(text, cursor);
+        self.refresh_if_active(text, cursor);
         true
+    }
+
+    /// 仅当当前已有 `@` 会话（含压制态）时重算；纯移动/后台同步不得新开面板。
+    pub fn refresh_if_active(&mut self, text: &str, cursor: usize) {
+        if self.trigger.is_some() || self.suppressed {
+            self.refresh(text, cursor);
+        }
     }
 
     /// 按当前文本、光标与缓存重算面板；压制时保持关闭。
@@ -735,7 +752,7 @@ impl LxMention {
         self.suppressed = true;
     }
 
-    /// 解除压制（编辑或移动光标后由调用方清除）。
+    /// 解除压制（文本编辑后由调用方清除；移动不解除）。
     pub fn unsuppress(&mut self) {
         self.suppressed = false;
     }
@@ -755,7 +772,7 @@ impl LxMention {
         cursor: usize,
     ) {
         self.skills = skills;
-        self.refresh(text, cursor);
+        self.refresh_if_active(text, cursor);
     }
 
     /// 当前可用 MCP server 快照；分割窗格时复制给新窗格。
@@ -766,7 +783,7 @@ impl LxMention {
     /// 写入当前可用 MCP server；有打开的 `@` 面板时立即重算候选。
     pub fn set_mcp_servers(&mut self, servers: Vec<McpMentionEntry>, text: &str, cursor: usize) {
         self.mcp_servers = servers;
-        self.refresh(text, cursor);
+        self.refresh_if_active(text, cursor);
     }
 
     /// 同步本窗格已禁用的 MCP server 集合；有打开的 `@` 面板时立即重算候选。
@@ -777,7 +794,7 @@ impl LxMention {
         cursor: usize,
     ) {
         self.disabled_mcp_servers = disabled;
-        self.refresh(text, cursor);
+        self.refresh_if_active(text, cursor);
     }
 
     /// 当前引用文件夹快照；新建窗格/标签时复制给新窗格。
@@ -798,7 +815,7 @@ impl LxMention {
         cursor: usize,
     ) {
         self.subagent_roles = roles;
-        self.refresh(text, cursor);
+        self.refresh_if_active(text, cursor);
     }
 
     /// 当前会话存活 subagent 快照。
@@ -817,7 +834,7 @@ impl LxMention {
             return false;
         }
         self.subagent_runs = runs;
-        self.refresh(text, cursor);
+        self.refresh_if_active(text, cursor);
         true
     }
 }
