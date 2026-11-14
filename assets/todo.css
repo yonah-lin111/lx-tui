@@ -365,12 +365,6 @@ button.ghost:disabled { opacity: .45; cursor: default; }
 .todo-priority-p2 { color: var(--text); border-color: var(--border-overlay); }
 .todo-priority-p3 { color: var(--faint); border-color: var(--border); }
 
-.priority-badge {
-  display: inline-block;
-  min-width: 28px;
-  text-align: center;
-}
-
 /* ===== 分页 ===== */
 .pagination-bar {
   display: flex;

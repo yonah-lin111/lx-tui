@@ -197,7 +197,7 @@ async fn todo_items_filters_and_paginates() {
 
     let alpha = request(
         port,
-        &get(&format!("/api/todo/items?token={token}&q=alpha")),
+        &get(&format!("/api/todo/items?token={token}&q=ALPHA")),
     )
     .await;
     let alpha: Value = serde_json::from_str(body(&alpha)).expect("alpha json");
@@ -230,6 +230,7 @@ async fn todo_api_rejects_bad_params_and_methods() {
     for bad_query in [
         "startDate=2026-13-01",
         "startDate=2026-02-31",
+        "startDate=2026-1-1",
         "endDate=not-a-date",
         "status=nope",
         "priority=P9",

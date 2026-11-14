@@ -179,6 +179,10 @@ fn parse_date_param(query: &HashMap<String, String>, key: &str) -> Result<Option
     if trimmed.is_empty() {
         return Ok(None);
     }
+    // 只接受定长 `YYYY-MM-DD`；`2026-1-1` 这类宽松写法直接拒绝。
+    if trimmed.len() != 10 || trimmed.as_bytes()[4] != b'-' || trimmed.as_bytes()[7] != b'-' {
+        return Err(format!("invalid query parameter '{key}'"));
+    }
     let Some((year, month, day)) = parse_date(trimmed) else {
         return Err(format!("invalid query parameter '{key}'"));
     };
