@@ -696,9 +696,10 @@ pub const LX_TASK_HINTS_AGENTS: [Hint; 6] = [
     hint("close", "esc"),
 ];
 /// Agents 编辑态的底边框键位提示。
-pub const LX_TASK_HINTS_AGENTS_EDIT: [Hint; 4] = [
+pub const LX_TASK_HINTS_AGENTS_EDIT: [Hint; 5] = [
     hint("send", "↵"),
     hint("newline", "⇧↵"),
+    hint("mode", "⇧⇥"),
     hint("stop", "^d"),
     hint("back", "esc"),
 ];
@@ -751,6 +752,8 @@ pub const LX_TASK_STOPPED: &str = "Stopped 1 background process";
 pub const LX_TASK_SELECTED_AGENT_NOT_RUNNING: &str = "Selected subagent is not running";
 /// Agents 面板内联追问目标已被关闭（cancelled 不可再接收输入）。
 pub const LX_TASK_AGENT_REPLY_CLOSED: &str = "Cannot send input to a closed subagent";
+/// 子 agent 轮内 steer 挂起条数达到上限。
+pub const LX_TASK_STEER_LIMIT: &str = "Too many pending steers for this subagent";
 /// Agents 面板停止选中子 agent 的提示。
 pub fn stopping_subagents(count: usize) -> String {
     let noun = if count == 1 { "subagent" } else { "subagents" };

@@ -287,6 +287,7 @@ fn snapshot_handle(
         child_session_id: format!("child-{id}"),
         child_assistant_id: String::new(),
         child_user_message_id: String::new(),
+        turn_user_message_ids: Vec::new(),
         role: AgentRole::Explorer,
         title: "Auth flow lookup".into(),
         task: "Auth flow lookup".into(),
@@ -296,6 +297,8 @@ fn snapshot_handle(
         started_at_ms,
         max_tokens: None,
         closed_without_report: false,
+        notify_parent: true,
+        mutation_user_id: std::sync::Arc::new(std::sync::RwLock::new(String::new())),
         chat: crate::app::state::LxChat::new(),
         workspace: std::path::PathBuf::new(),
     }
@@ -468,7 +471,7 @@ async fn interrupted_turn_is_replayed_with_turn_aborted_and_followup_envelope() 
 
 #[tokio::test]
 async fn send_subagent_user_input_effect_resumes_completed_agent_and_starts_a_turn() {
-    let (fixture, mut state, key, persistence, mut streams, _parent) = fixture_with_parent();
+    let (fixture, mut state, key, mut persistence, mut streams, _parent) = fixture_with_parent();
     let agent_id = spawn_explorer(&mut state, &mut streams, &persistence, &key, "first task").await;
     let child_session = streams
         .subagents
@@ -496,7 +499,18 @@ async fn send_subagent_user_input_effect_resumes_completed_agent_and_starts_a_tu
         session_id: key.session.clone(),
         agent_id: agent_id.clone(),
         text: "  ask again  ".into(),
+        notify_parent: false,
     });
+    // 事件循环顺序：持久化泵先执行；该效应必须被认作聊天效应留到下一层，不能被吞掉。
+    persistence.pump(&mut state);
+    assert!(
+        matches!(
+            state.effects.as_slice(),
+            [Effect::SendSubagentUserInput { .. }]
+        ),
+        "面板追问被持久化泵吞掉：{:?}",
+        state.effects
+    );
     let changed =
         crate::event::chat::apply_subagent_effects(&mut state, &mut streams, &persistence);
     assert!(changed);
@@ -1114,4 +1128,264 @@ fn subagent_reference_blocks_prefer_bare_role_name_over_same_named_instance() {
     assert!(blocks[0].contains("kind: role"), "{}", blocks[0]);
     assert!(blocks[0].contains("role: explorer"), "{}", blocks[0]);
     assert!(!blocks[0].contains("agent_id:"), "{}", blocks[0]);
+}
+
+/// 面板追问完成后：新子轮的 user 消息与流式 delta 必须都落到 Agents 详情。
+#[tokio::test]
+async fn resumed_completed_agent_deltas_land_in_the_detail_chat() {
+    let (fixture, mut state, key, persistence, mut streams, _parent) = fixture_with_parent();
+    let agent_id = spawn_explorer(&mut state, &mut streams, &persistence, &key, "first task").await;
+    let child_session = streams
+        .subagents
+        .values()
+        .find(|handle| handle.agent_id == agent_id)
+        .expect("handle")
+        .child_session_id
+        .clone();
+    crate::event::chat::finish_subagent(
+        &mut state,
+        &mut streams,
+        &persistence,
+        RequestKey {
+            pane: key.pane,
+            session: child_session.clone(),
+            generation: key.generation,
+        },
+        StopReason::Complete,
+        Usage::default(),
+    );
+    assert!(!streams.subagents.contains_key(&child_session));
+
+    state.effects.push(Effect::SendSubagentUserInput {
+        pane: key.pane,
+        session_id: key.session.clone(),
+        agent_id: agent_id.clone(),
+        text: "ask again".into(),
+        notify_parent: false,
+    });
+    assert!(crate::event::chat::apply_subagent_effects(
+        &mut state,
+        &mut streams,
+        &persistence
+    ));
+
+    let run = state
+        .pane_anywhere(key.pane)
+        .expect("pane")
+        .lx
+        .agents
+        .by_agent(&agent_id)
+        .expect("run");
+    assert_eq!(run.status, "running", "resume 后应重新进入 running");
+    assert!(
+        run.chat
+            .messages
+            .iter()
+            .any(|message| message.role == "user" && message.text().contains("ask again")),
+        "详情缺少新追问的用户消息：{:?}",
+        run.chat
+            .messages
+            .iter()
+            .map(|message| (message.role.clone(), message.text()))
+            .collect::<Vec<_>>()
+    );
+
+    let changed = crate::event::chat::handle_subagent_net_event(
+        &mut state,
+        &mut streams,
+        super::ChatNetEvent::Delta {
+            key: RequestKey {
+                pane: key.pane,
+                session: child_session,
+                generation: key.generation,
+            },
+            deltas: vec![ChatDelta::Part(crate::chat::events::PartDelta {
+                kind: PartKind::Text,
+                text: "second reply".into(),
+                metadata: None,
+            })],
+        },
+    );
+    assert!(changed);
+    let run = state
+        .pane_anywhere(key.pane)
+        .expect("pane")
+        .lx
+        .agents
+        .by_agent(&agent_id)
+        .expect("run");
+    assert!(
+        run.chat
+            .messages
+            .iter()
+            .any(|message| message.role == "assistant" && message.text().contains("second reply")),
+        "详情缺少新子轮输出：{:?}",
+        run.chat
+            .messages
+            .iter()
+            .map(|message| (message.role.clone(), message.text()))
+            .collect::<Vec<_>>()
+    );
+    let _ = fixture;
+}
+
+/// 运行中子 agent 的 steer：DB 切片段、handle 锚点前移、pending 被消费并回执给 loop。
+#[tokio::test]
+async fn running_subagent_steer_commits_a_new_segment_and_returns_input() {
+    let (fixture, mut state, key, persistence, mut streams, _parent) = fixture_with_parent();
+    let agent_id = spawn_explorer(&mut state, &mut streams, &persistence, &key, "first task").await;
+    let child_session = streams
+        .subagents
+        .values()
+        .find(|handle| handle.agent_id == agent_id)
+        .expect("handle")
+        .child_session_id
+        .clone();
+    let previous_assistant = streams.subagents[&child_session].child_assistant_id.clone();
+    let target = state.pane_mut_anywhere(key.pane).expect("pane");
+    target
+        .lx
+        .agents
+        .by_agent_mut(&agent_id)
+        .expect("run")
+        .chat
+        .pending_steers
+        .push(crate::app::state::lx::chat::steer::PendingSteer {
+            text: "steer this turn".into(),
+            attachments: Vec::new(),
+            model_images: Vec::new(),
+            model: crate::db::chat::ModelSnapshot {
+                provider: "p".into(),
+                model: "m".into(),
+                variant: None,
+            },
+        });
+    let (reply, receiver) = tokio::sync::oneshot::channel();
+    let changed = crate::event::chat::steer::deliver(
+        &mut state,
+        &mut streams,
+        &persistence,
+        RequestKey {
+            pane: key.pane,
+            session: child_session.clone(),
+            generation: key.generation,
+        },
+        reply,
+    );
+    assert!(changed);
+    let inputs = receiver.await.expect("reply").expect("steer inputs");
+    assert_eq!(inputs.len(), 1);
+    assert_eq!(inputs[0].text, "steer this turn");
+    assert_ne!(
+        streams.subagents[&child_session].child_assistant_id, previous_assistant,
+        "handle 必须切到新 assistant 片段"
+    );
+    let run = state
+        .pane_anywhere(key.pane)
+        .expect("pane")
+        .lx
+        .agents
+        .by_agent(&agent_id)
+        .expect("run");
+    assert!(run.chat.pending_steers.is_empty(), "pending 被消费");
+    assert!(
+        run.chat
+            .messages
+            .iter()
+            .any(|message| message.role == "user" && message.text() == "steer this turn"),
+        "UI 出现 steer user 消息：{:?}",
+        run.chat
+            .messages
+            .iter()
+            .map(|message| (message.role.clone(), message.text()))
+            .collect::<Vec<_>>()
+    );
+    let messages = persistence
+        .database()
+        .expect("db")
+        .load_chat_session(fixture.workspace(), &child_session)
+        .expect("load")
+        .expect("messages");
+    assert!(
+        messages.iter().any(|message| message.role == "user"
+            && message
+                .parts
+                .iter()
+                .any(|part| part.content == "steer this turn")),
+        "DB 写入 steer user 消息"
+    );
+}
+
+/// 轮次在 steer 被取走前结束：pending 落成新追问，不丢文本，并沿用本轮策略。
+#[tokio::test]
+async fn settle_moves_undelivered_steers_into_a_new_follow_up() {
+    let (_fixture, mut state, key, persistence, mut streams, _parent) = fixture_with_parent();
+    let agent_id = spawn_explorer(&mut state, &mut streams, &persistence, &key, "first task").await;
+    let child_session = streams
+        .subagents
+        .values()
+        .find(|handle| handle.agent_id == agent_id)
+        .expect("handle")
+        .child_session_id
+        .clone();
+    if let Some(handle) = streams.subagents.get_mut(&child_session) {
+        handle.notify_parent = false;
+    }
+    state
+        .pane_mut_anywhere(key.pane)
+        .expect("pane")
+        .lx
+        .agents
+        .by_agent_mut(&agent_id)
+        .expect("run")
+        .chat
+        .pending_steers
+        .push(crate::app::state::lx::chat::steer::PendingSteer {
+            text: "late steer".into(),
+            attachments: Vec::new(),
+            model_images: Vec::new(),
+            model: crate::db::chat::ModelSnapshot {
+                provider: "p".into(),
+                model: "m".into(),
+                variant: None,
+            },
+        });
+    crate::event::chat::finish_subagent(
+        &mut state,
+        &mut streams,
+        &persistence,
+        RequestKey {
+            pane: key.pane,
+            session: child_session,
+            generation: key.generation,
+        },
+        StopReason::Complete,
+        Usage::default(),
+    );
+    assert!(
+        state.effects.iter().any(|effect| matches!(
+            effect,
+            Effect::SendSubagentUserInput {
+                agent_id: id,
+                text,
+                notify_parent: false,
+                ..
+            } if id == &agent_id && text == "late steer"
+        )),
+        "未生效 steer 必须落成新追问：{:?}",
+        state.effects
+    );
+    assert!(
+        state
+            .pane_anywhere(key.pane)
+            .expect("pane")
+            .lx
+            .agents
+            .by_agent(&agent_id)
+            .expect("run")
+            .chat
+            .pending_steers
+            .is_empty(),
+        "pending 应被消费"
+    );
 }

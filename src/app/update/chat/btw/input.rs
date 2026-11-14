@@ -275,7 +275,10 @@ fn apply_composer_panel_input(
                 return true;
             }
             LxInput::EnterFolder => {
-                composer.mention_enter_folder();
+                if !composer.mention_enter_folder() {
+                    // 非目录 / 非 Files / 加载态：回落为换行，不能吞掉 Shift+Enter。
+                    super::super::super::pane::apply_editor_edit(composer, command);
+                }
                 return true;
             }
             _ => {}

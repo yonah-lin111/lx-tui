@@ -810,3 +810,83 @@ fn ai_web_entry_blocks_subagents_tab() {
     );
     assert_eq!(lx.mention_tab(), MentionTab::Files);
 }
+
+/// Agents 追问 composer：带根、键入 `@` 并回投候选。
+fn agent_ready(entries: Vec<MentionEntry>) -> Lx {
+    let mut lx = Lx::agent_composer();
+    lx.set_mention_root(Some(std::path::PathBuf::from(ROOT)));
+    lx.insert_char('@');
+    if let Some((generation, _)) = lx.take_mention_scan_request() {
+        lx.apply_mention_entries(generation, Path::new(ROOT), entries);
+    }
+    lx
+}
+
+#[test]
+fn agent_composer_mention_tabs_stop_at_mcp_and_keep_other_panels_closed() {
+    let mut lx = agent_ready(entries());
+    assert_eq!(
+        lx.mention_tabs(),
+        &MentionTab::PROMPT_ALL,
+        "与右侧 Prompt 同集合"
+    );
+    // 4 Tab 内循环：Files 左移落到 MCP，永远不会停在会话态 Subagents。
+    assert!(lx.mention_switch_tab(-1));
+    assert_eq!(lx.mention_tab(), MentionTab::Mcp);
+    assert!(lx.mention_switch_tab(1));
+    assert_eq!(lx.mention_tab(), MentionTab::Files);
+    assert!(
+        !lx.mention_set_tab(MentionTab::Subagents),
+        "Subagents 不在集合内"
+    );
+    assert_eq!(lx.mention_tab(), MentionTab::Files);
+    // `/` 与快捷引用保持关闭：Agents 追问只有 `@`。
+    lx.insert_char('/');
+    assert!(lx.slash.is_none(), "不打开斜杠面板");
+    assert!(lx.refer.is_none(), "不打开快捷引用面板");
+}
+
+#[test]
+fn agent_composer_inserts_plain_reference_text_for_every_tab() {
+    let mut lx = Lx::agent_composer();
+    lx.set_mention_root(Some(std::path::PathBuf::from(ROOT)));
+    lx.sync_referenced_folders(&[crate::app::referenced::ReferencedFolder {
+        id: 1,
+        path: std::path::PathBuf::from("/work/docs"),
+    }]);
+    lx.set_mention_skills(vec![skill("pdf", "/skills/pdf/SKILL.md")]);
+    lx.set_mention_mcp_servers(vec![McpMentionEntry::new("codegraph", "stdio")]);
+    lx.insert_char('@');
+    if let Some((generation, _)) = lx.take_mention_scan_request() {
+        lx.apply_mention_entries(generation, Path::new(ROOT), vec![file("main.rs")]);
+    }
+
+    // Files：相对路径。
+    assert!(lx.mention_confirm());
+    assert_eq!(lx.input, "@main.rs ");
+
+    // RefDir：绝对路径。
+    lx.insert_char('@');
+    assert!(lx.mention_switch_tab(1));
+    assert_eq!(lx.mention_tab(), MentionTab::RefDir);
+    assert!(lx.mention_confirm());
+    assert_eq!(lx.input, "@main.rs @/work/docs ");
+
+    // Skills：skill 名。
+    lx.insert_char('@');
+    assert!(lx.mention_switch_tab(1));
+    assert!(lx.mention_switch_tab(1));
+    assert_eq!(lx.mention_tab(), MentionTab::Skills);
+    assert!(lx.mention_confirm());
+    assert_eq!(lx.input, "@main.rs @/work/docs @pdf ");
+
+    // MCP：server 名。
+    lx.insert_char('@');
+    assert!(lx.mention_switch_tab(1));
+    assert!(lx.mention_switch_tab(1));
+    assert!(lx.mention_switch_tab(1));
+    assert_eq!(lx.mention_tab(), MentionTab::Mcp);
+    assert!(lx.mention_confirm());
+    assert_eq!(lx.input, "@main.rs @/work/docs @pdf @codegraph ");
+    assert!(!lx.input.contains("@[refer-"), "子 agent 侧不写引用标记");
+}

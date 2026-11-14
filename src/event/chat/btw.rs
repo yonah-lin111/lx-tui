@@ -294,7 +294,7 @@ fn load_thread(
         .ok()
         .flatten()
         .unwrap_or_default();
-    let targets = resolve_target_views(persistence, &workspace, parent_session_id, &thread);
+    let targets = resolve_target_views(&thread);
     let _ = sender.send(AppEvent::Btw(BtwEvent::ThreadLoaded {
         pane,
         parent_session_id: parent_session_id.to_string(),
@@ -311,44 +311,20 @@ fn load_thread(
     true
 }
 
-/// 线程保存的稳定 agent ID → 展示标签（找不到记录时只显示 ID）。
-fn resolve_target_views(
-    persistence: &Persistence,
-    workspace: &Path,
-    parent_session_id: &str,
-    thread: &BtwThreadRecord,
-) -> Vec<crate::app::state::lx::BtwTargetView> {
-    if thread.answerers.is_empty() {
-        return Vec::new();
-    }
-    let records = persistence
-        .database()
-        .and_then(|db| db.list_subagents(workspace, parent_session_id).ok())
-        .unwrap_or_default();
+/// 线程保存的稳定目标键 → 回查实例用的视图；`default` 是默认助手哨兵。
+fn resolve_target_views(thread: &BtwThreadRecord) -> Vec<crate::app::state::lx::BtwTargetView> {
     thread
         .answerers
         .iter()
-        .map(|id| target_view_for(id, &records))
+        .map(|id| target_view_for(id))
         .collect()
 }
 
-/// 把持久化目标键换成展示项；`default` 是默认助手哨兵，不是 agent ID。
-fn target_view_for(
-    id: &str,
-    records: &[crate::db::chat::SubagentRecord],
-) -> crate::app::state::lx::BtwTargetView {
+fn target_view_for(id: &str) -> crate::app::state::lx::BtwTargetView {
     if id == "default" {
         return crate::app::state::lx::BtwTargetView::default_assistant();
     }
-    let record = records.iter().find(|record| record.agent_id == id);
     crate::app::state::lx::BtwTargetView {
-        key: id.to_string(),
-        label: record
-            .map(|record| {
-                let name = record.nickname.clone().unwrap_or_else(|| id.to_string());
-                format!("{name} [{}]", record.role.as_str())
-            })
-            .unwrap_or_else(|| id.to_string()),
         agent_id: Some(id.to_string()),
     }
 }
@@ -662,20 +638,17 @@ fn start_recipient(
     let (cancel_sender, cancel) = watch::channel(false);
     streams.cancels.insert(key.clone(), cancel_sender.clone());
     streams.db_workspaces.insert(key.clone(), workspace.clone());
+    // 统计行展示回答者模型，而不是回答者身份；与 DB reload 的 view_message_of 同源，
+    // 同一条线程不会因加载路径不同而变样。
+    let model_label = state
+        .models
+        .model_display_name(&start.model.provider, &start.model.model);
     let mut buffer = crate::app::state::LxChat::new();
     buffer
         .messages
         .push(crate::app::update::new_btw_assistant_message(
             &start.assistant_message_id,
-            &format!(
-                "{} [{}]",
-                start.display_nickname,
-                if start.target_kind == "default" {
-                    "lx".to_string()
-                } else {
-                    start.target_kind.clone()
-                }
-            ),
+            &model_label,
         ));
     let run = BtwRun {
         thread_id: pending.thread_id.clone(),
@@ -688,15 +661,7 @@ fn start_recipient(
         _guard: guard,
         started_at_ms: crate::db::now_ms(),
         last_checkpoint_ms: crate::db::now_ms(),
-        label: format!(
-            "{} [{}]",
-            start.display_nickname,
-            if start.target_kind == "default" {
-                "lx".to_string()
-            } else {
-                start.target_kind.clone()
-            }
-        ),
+        label: model_label,
     };
     let label = run.label.clone();
     streams.btw.runs.insert(key.clone(), run);

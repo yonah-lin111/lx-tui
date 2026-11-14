@@ -902,6 +902,7 @@ fn deleting_the_parent_session_cancels_live_children() {
             child_session_id: "sess-child".into(),
             child_assistant_id: "msg-child".into(),
             child_user_message_id: "msg-user".into(),
+            turn_user_message_ids: vec!["msg-user".into()],
             role: AgentRole::Explorer,
             title: "work".into(),
             task: "work".into(),
@@ -911,6 +912,8 @@ fn deleting_the_parent_session_cancels_live_children() {
             started_at_ms: 0,
             max_tokens: None,
             closed_without_report: false,
+            notify_parent: true,
+            mutation_user_id: std::sync::Arc::new(std::sync::RwLock::new(String::new())),
             chat: crate::app::state::LxChat::new(),
             workspace: fixture.workspace().to_path_buf(),
         },
@@ -1259,6 +1262,7 @@ async fn nested_spawn_allocates_paths_and_enforces_the_depth_limit() {
         &key,
         SubagentOp::List {
             path_prefix: Some("turing/curie".into()),
+            include_private: false,
         },
     )
     .await

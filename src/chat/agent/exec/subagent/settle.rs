@@ -98,7 +98,8 @@ impl ExecSubagentPool {
             );
         }
         let outcome = db_outcome(&summary.outcome);
-        let report = if was_closed {
+        // 沿用 claim 时冻结的策略：TUI 私聊轮即使被 exec resume 也不自动汇报。
+        let report = if was_closed || !handle.notify_parent {
             None
         } else {
             let (files_changed, changed_paths) = db

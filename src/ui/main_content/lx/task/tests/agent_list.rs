@@ -860,12 +860,53 @@ fn agent_composer_renders_target_badge_and_draft() {
         "composer 左侧标记：{lines:?}"
     );
     assert!(
-        lines
-            .iter()
-            .any(|line| line.contains("To: Turing [executor]")),
+        lines.iter().any(|line| line.contains("Turing [executor]")),
         "composer 右侧目标：{lines:?}"
     );
+    assert!(
+        lines
+            .iter()
+            .any(|line| line.contains("Turing [executor] · private")),
+        "默认私聊模式：{lines:?}"
+    );
+    assert!(
+        !lines.iter().any(|line| line.contains("To:")),
+        "composer 右侧目标不再带 To: 前缀：{lines:?}"
+    );
     assert!(lines.iter().any(|line| line.contains("hello")));
+
+    // Shift+Tab 切到汇报模式。
+    lx.agents.toggle_reply_mode("a");
+    let lines = render_lines(&lx, 80, 20);
+    assert!(
+        lines
+            .iter()
+            .any(|line| line.contains("Turing [executor] · report")),
+        "切换后显示汇报模式：{lines:?}"
+    );
+
+    // 运行中的 agent 显示 steer，而不是 private/report。
+    lx.agents.runs[0].status = "running".into();
+    lx.agents.runs[0]
+        .chat
+        .pending_steers
+        .push(crate::app::state::lx::chat::steer::PendingSteer {
+            text: "steer me".into(),
+            attachments: Vec::new(),
+            model_images: Vec::new(),
+            model: crate::db::chat::ModelSnapshot {
+                provider: "p".into(),
+                model: "m".into(),
+                variant: None,
+            },
+        });
+    let lines = render_lines(&lx, 80, 20);
+    assert!(
+        lines
+            .iter()
+            .any(|line| line.contains("Turing [executor] · steer 1")),
+        "运行中显示待注入 steer：{lines:?}"
+    );
 }
 
 #[test]
@@ -909,4 +950,40 @@ fn agents_list_mode_has_search_and_five_rows() {
     assert_eq!(search.height, 1);
     assert_eq!(rows.height, 5);
     assert_eq!(search.y + 1, rows.y);
+}
+
+#[test]
+fn agent_composer_mention_panel_lists_four_tabs_without_subagents() {
+    let mut lx = lx_with_messages();
+    let mut run = tree_agent("a", "/root/turing", "running", None);
+    run.nickname = Some("Turing".into());
+    lx.agents.runs.push(run);
+    lx.agents.selected_id = Some("a".into());
+    lx.task = Some(TaskPage {
+        tab: TaskTab::Agents,
+        agent_edit: Some("a".into()),
+        ..TaskPage::default()
+    });
+    let composer = lx.agents.ensure_composer("a").editor_mut();
+    composer.set_mention_root(Some(std::path::PathBuf::from("/work/demo")));
+    composer.insert_char('@');
+    let (generation, root) = composer.take_mention_scan_request().expect("scan");
+    composer.apply_mention_entries(
+        generation,
+        &root,
+        vec![crate::app::markdown::MentionEntry {
+            path: "main.rs".into(),
+            is_directory: false,
+        }],
+    );
+
+    let text = render_lines(&lx, 80, 24).join("\n");
+    for label in ["Files", "refDir", "Skills", "MCP"] {
+        assert!(text.contains(label), "缺少 Tab {label}：{text}");
+    }
+    assert!(
+        !text.contains("Subagents"),
+        "Agents 追问不显示 Subagents：{text}"
+    );
+    assert!(text.contains("main.rs"), "候选可见：{text}");
 }

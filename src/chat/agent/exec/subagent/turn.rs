@@ -86,6 +86,7 @@ impl ExecSubagentPool {
         title: &str,
         started_at_ms: i64,
         current_items: &[PersistedInputItem],
+        notify_parent: bool,
         done_tx: watch::Sender<bool>,
     ) -> Result<(), HostError> {
         let context = self
@@ -229,6 +230,7 @@ impl ExecSubagentPool {
                 processes,
                 join_handle: Some(join_handle),
                 uncheckpointed_bytes: 0,
+                notify_parent,
                 closed_without_report: false,
             },
         );
@@ -577,6 +579,7 @@ impl ExecSubagentPool {
             &title,
             committed.created_at_ms,
             &persisted,
+            true,
             watch::channel(false).0,
         );
         if let Err(error) = started {

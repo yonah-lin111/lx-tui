@@ -299,6 +299,24 @@ fn fallback_selection_is_none_without_usable_model() {
 }
 
 #[test]
+fn model_display_name_prefers_configured_name_and_falls_back_to_id() {
+    let models = ModelsSnapshot {
+        settings: settings_with(&[("p1", &["m1"])]),
+    };
+    assert_eq!(models.model_display_name("p1", "m1"), "m1 display");
+    assert_eq!(
+        models.model_display_name("p1", "unknown"),
+        "unknown",
+        "未知模型回退模型 id"
+    );
+    assert_eq!(
+        ModelsSnapshot::default().model_display_name("p0", "m0"),
+        "m0",
+        "空快照回退模型 id"
+    );
+}
+
+#[test]
 fn remember_model_prepends_dedupes_overrides_variant_and_caps() {
     let mut models = ModelsSnapshot::default();
     assert!(models.remember_model(&selection("p", "a")));

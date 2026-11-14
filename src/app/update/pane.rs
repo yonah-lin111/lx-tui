@@ -18,8 +18,8 @@ mod task_page;
 #[cfg(test)]
 pub use super::chat::accept_slash_command;
 pub use popups::{
-    apply_lx_mention_entries, hover_lx_mention, hover_lx_paste, hover_lx_refer, hover_lx_slash,
-    lx_mention_root_for_pane, scroll_lx_mention, scroll_lx_refer, scroll_lx_slash,
+    MentionScanOwner, apply_lx_mention_entries, hover_lx_mention, hover_lx_paste, hover_lx_refer,
+    hover_lx_slash, lx_mention_root_for_pane, scroll_lx_mention, scroll_lx_refer, scroll_lx_slash,
     select_lx_mention, select_lx_paste, select_lx_refer, select_lx_slash, switch_lx_mention_tab,
     sync_all_lx_mention_roots, sync_lx_mention_root, take_lx_mention_scan_requests,
 };

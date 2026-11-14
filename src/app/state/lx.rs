@@ -191,6 +191,8 @@ pub struct Lx {
     mention_runs_external: bool,
     /// 是否允许打开 `@` / `/` / 粘贴 / 引用等编辑面板。
     allow_panels: bool,
+    /// Agents 追问 composer：只开 `@`（4 Tab、朴素插入），其余编辑浮层保持关闭。
+    mention_minimal: bool,
     /// 本会话正在运行的后台任务数（底部状态行指标）。
     pub background_tasks: usize,
     /// 首页资源计数：MCP server 与 skill 的加载/失败状态。
@@ -263,11 +265,13 @@ impl Lx {
         lx
     }
 
-    /// Agents 追问输入缓冲：纯文本编辑，不打开提及/斜杠/粘贴等面板。
+    /// Agents 追问输入缓冲：文本编辑 + `@` 提及（4 Tab、朴素插入）；
+    /// `/`、markdown 块面板、路径粘贴参照面板保持关闭。
     pub fn agent_composer() -> Self {
         let mut lx = Self::build(false);
         lx.no_shell = true;
         lx.allow_panels = false;
+        lx.mention_minimal = true;
         lx
     }
 
@@ -310,6 +314,7 @@ impl Lx {
             no_shell: false,
             mention_runs_external: false,
             allow_panels: true,
+            mention_minimal: false,
             background_tasks: 0,
             startup: StartupCounts::default(),
             disabled_mcp_servers: std::collections::BTreeSet::new(),

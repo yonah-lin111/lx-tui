@@ -234,8 +234,11 @@ fn apply_agents_list_input(state: &mut AppState, pane: PaneId, command: LxInput)
     }
 }
 
-/// 编辑态：Enter 发送、Esc 返回列表、PgUp/PgDn 翻详情。
+/// 编辑态：`@` 面板优先，其次 Enter 发送、Esc 返回列表、PgUp/PgDn 翻详情。
 fn apply_agent_edit_input(state: &mut AppState, pane: PaneId, command: LxInput) -> bool {
+    if apply_agent_mention_input(state, pane, command) {
+        return true;
+    }
     match command {
         LxInput::Escape => leave_agent_edit(state, pane),
         LxInput::Enter => submit_agent_edit(state, pane),
@@ -248,9 +251,91 @@ fn apply_agent_edit_input(state: &mut AppState, pane: PaneId, command: LxInput) 
             chat::scroll_agents_detail(state, pane, delta);
             true
         }
-        LxInput::Tab | LxInput::PrevStep => true,
+        LxInput::PrevStep => toggle_agent_reply_mode(state, pane),
+        LxInput::Tab => true,
         _ => edit_agent_composer(state, pane, command),
     }
+}
+
+/// Shift+Tab：切换当前 agent 的追问模式（私聊 / 汇报）。
+fn toggle_agent_reply_mode(state: &mut AppState, pane: PaneId) -> bool {
+    let Some(target) = state.pane_mut_anywhere(pane) else {
+        return false;
+    };
+    let Some(agent_id) = target.lx.agent_edit_id().map(str::to_string) else {
+        return false;
+    };
+    target.lx.agents.toggle_reply_mode(&agent_id);
+    true
+}
+
+/// `@` 面板按键：镜像 BTW composer（`chat/btw/input.rs`），面板打开时优先于发送与退出。
+fn apply_agent_mention_input(state: &mut AppState, pane: PaneId, command: LxInput) -> bool {
+    let Some(target) = state.pane_mut_anywhere(pane) else {
+        return false;
+    };
+    let Some(agent_id) = target.lx.agent_edit_id().map(str::to_string) else {
+        return false;
+    };
+    let Some(composer) = target.lx.agents.composer_mut(&agent_id) else {
+        return false;
+    };
+    let editor = composer.editor_mut();
+    if editor.mention_visible() {
+        match command {
+            LxInput::Left => {
+                editor.mention_switch_tab(-1);
+                return true;
+            }
+            LxInput::Right => {
+                editor.mention_switch_tab(1);
+                return true;
+            }
+            LxInput::Escape => {
+                editor.mention_escape();
+                return true;
+            }
+            LxInput::EnterFolder => {
+                if !editor.mention_enter_folder() {
+                    // 非目录 / 非 Files / 加载态：按契约回落为换行，不能吞掉 Shift+Enter。
+                    super::apply_editor_edit(editor, command);
+                }
+                return true;
+            }
+            _ => {}
+        }
+    }
+    if editor.mention_open() {
+        match command {
+            LxInput::Up => {
+                editor.mention_move(-1);
+                return true;
+            }
+            LxInput::Down => {
+                editor.mention_move(1);
+                return true;
+            }
+            LxInput::Tab | LxInput::Enter => {
+                editor.mention_confirm();
+                return true;
+            }
+            _ => {}
+        }
+    }
+    if editor.mention_visible() {
+        // 面板只有状态行（扫描中 / 无匹配）：Enter/Tab 不发送半截文本；
+        // 其余未消费的全局键（Ctrl+D、PgUp/PgDn、Shift+Tab）继续交给外层。
+        match command {
+            LxInput::Enter | LxInput::Tab => return true,
+            _ => {
+                if super::apply_editor_edit(editor, command) {
+                    return true;
+                }
+                return false;
+            }
+        }
+    }
+    false
 }
 
 fn edit_agent_composer(state: &mut AppState, pane: PaneId, command: LxInput) -> bool {
@@ -568,8 +653,13 @@ pub fn enter_task_agent_edit(state: &mut AppState, pane: PaneId) -> bool {
     target.lx.agents.ensure_composer(&agent_id);
     target.lx.agents.selected_id = Some(agent_id.clone());
     if let Some(page) = target.lx.task.as_mut() {
-        page.agent_edit = Some(agent_id);
+        page.agent_edit = Some(agent_id.clone());
     }
+    if let Some(composer) = target.lx.agents.composer_mut(&agent_id) {
+        // 每次进入编辑态都重置 `@` 面板，避免上一次会话的候选残留。
+        composer.editor_mut().mention_escape();
+    }
+    target.lx.sync_agent_composer_context();
     true
 }
 
@@ -588,7 +678,7 @@ fn leave_agent_edit(state: &mut AppState, pane: PaneId) -> bool {
 
 /// 提交追问：成功后清空草稿但留在编辑态。
 fn submit_agent_edit(state: &mut AppState, pane: PaneId) -> bool {
-    let (agent_id, text, closed, session_id) = {
+    let (agent_id, text, closed, running, pending_steers, mode, session_id) = {
         let Some(target) = state.pane_anywhere(pane) else {
             return false;
         };
@@ -604,12 +694,20 @@ fn submit_agent_edit(state: &mut AppState, pane: PaneId) -> bool {
             .composer(&agent_id)
             .map(|composer| composer.text().trim().to_string())
             .unwrap_or_default();
-        let closed = target
-            .lx
-            .agents
-            .by_agent(&agent_id)
-            .is_some_and(|run| run.status == "cancelled");
-        (agent_id, text, closed, target.lx.chat.session_id.clone())
+        let run = target.lx.agents.by_agent(&agent_id);
+        let closed = run.is_some_and(|run| run.status == "cancelled");
+        let running = run.is_some_and(|run| run.status == "running");
+        let pending_steers = run.map_or(0, |run| run.chat.pending_steers.len());
+        let mode = target.lx.agents.reply_mode(&agent_id);
+        (
+            agent_id,
+            text,
+            closed,
+            running,
+            pending_steers,
+            mode,
+            target.lx.chat.session_id.clone(),
+        )
     };
     if text.is_empty() {
         return true;
@@ -627,17 +725,57 @@ fn submit_agent_edit(state: &mut AppState, pane: PaneId) -> bool {
         );
         return true;
     }
-    let Some(session_id) = session_id else {
-        return false;
-    };
-    state
-        .effects
-        .push(crate::app::effects::Effect::SendSubagentUserInput {
-            pane,
-            session_id,
-            agent_id: agent_id.clone(),
-            text,
-        });
+    if running {
+        // 子轮仍在输出：作为轮内 steer 注入；不新起私聊/汇报轮。
+        // 先在提交侧拦截，避免 effect 被拒后草稿已经清空。
+        if text.len() > crate::db::chat::MAX_MESSAGE_BYTES {
+            crate::app::update::show_lx_toast(
+                state,
+                pane,
+                crate::app::toast::Toast::new(
+                    crate::app::toast::ToastKind::Warning,
+                    crate::ui::text::LX_STEER_TEXT_LIMIT.to_string(),
+                    Some(pane),
+                    std::time::Instant::now(),
+                ),
+            );
+            return true;
+        }
+        if pending_steers >= crate::app::state::lx::chat::steer::MAX_PENDING_STEERS {
+            crate::app::update::show_lx_toast(
+                state,
+                pane,
+                crate::app::toast::Toast::new(
+                    crate::app::toast::ToastKind::Warning,
+                    crate::ui::text::LX_STEER_TOO_MANY.to_string(),
+                    Some(pane),
+                    std::time::Instant::now(),
+                ),
+            );
+            return true;
+        }
+        state
+            .effects
+            .push(crate::app::effects::Effect::SteerSubagent {
+                pane,
+                agent_id: agent_id.clone(),
+                text,
+                notify_parent: mode.notify_parent(),
+            });
+    } else {
+        let Some(session_id) = session_id else {
+            return false;
+        };
+        state
+            .effects
+            .push(crate::app::effects::Effect::SendSubagentUserInput {
+                pane,
+                session_id,
+                agent_id: agent_id.clone(),
+                text,
+                notify_parent: mode.notify_parent(),
+            });
+    }
     if let Some(composer) = state
         .pane_mut_anywhere(pane)
         .and_then(|target| target.lx.agents.composer_mut(&agent_id))

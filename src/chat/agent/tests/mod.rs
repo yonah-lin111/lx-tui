@@ -370,6 +370,7 @@ fn outcome_json_roundtrips() {
                 title: "inspect".into(),
                 status: "idle".into(),
                 queued_count: 1,
+                private_tail: None,
             }],
         },
         SubagentOutcome::InputCancelled {
@@ -525,7 +526,10 @@ fn parse_control_handles_new_codex_tools_and_items_contract() {
     );
     assert_eq!(
         parse_control("list_agents", "{}"),
-        Some(Ok(SubagentOp::List { path_prefix: None }))
+        Some(Ok(SubagentOp::List {
+            path_prefix: None,
+            include_private: false
+        }))
     );
     assert_eq!(
         parse_control("cancel_agent_input", r#"{"submission_id":"input_1"}"#),
@@ -1084,16 +1088,30 @@ fn parse_send_input_supports_trigger_turn() {
 fn parse_list_supports_empty_and_path_prefix() {
     assert_eq!(
         parse_control("list_agents", ""),
-        Some(Ok(SubagentOp::List { path_prefix: None }))
+        Some(Ok(SubagentOp::List {
+            path_prefix: None,
+            include_private: false
+        }))
     );
     assert_eq!(
         parse_control("list_agents", "{}"),
-        Some(Ok(SubagentOp::List { path_prefix: None }))
+        Some(Ok(SubagentOp::List {
+            path_prefix: None,
+            include_private: false
+        }))
     );
     assert_eq!(
         parse_control("list_agents", r#"{"path_prefix":"turing"}"#),
         Some(Ok(SubagentOp::List {
             path_prefix: Some("turing".into()),
+            include_private: false,
+        }))
+    );
+    assert_eq!(
+        parse_control("list_agents", r#"{"include_private":true}"#),
+        Some(Ok(SubagentOp::List {
+            path_prefix: None,
+            include_private: true,
         }))
     );
     assert!(

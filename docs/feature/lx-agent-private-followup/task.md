@@ -1,0 +1,55 @@
+# 任务清单：Agents 面板私聊 / 汇报 / steer
+
+- **状态**：T1–T6 已完成，2026-11-14 代码审查修复后待 `cargo run` 实机验收。
+- **验证报告**：[`verification.md`](verification.md)（CLI 实机 + 自动化 + TUI 手工清单）。
+- **审查报告**：[`review.md`](review.md)（P0–P3、根因与修复状态）。
+
+| 任务 | 内容 | 状态 |
+|---|---|---|
+| **T1** | DB v29：`notify_parent` 列、enqueue/claim 透传、`private_turn_tail` 查询 | 已完成 |
+| **T2** | 事件层：私聊报告抑制、面板私聊/汇报入口、steer 竞态兜底 | 已完成 |
+| **T3** | 子 agent 轮内 steer：`deliver_child`、片段切换、mutation 锚点、pending 消费 | 已完成 |
+| **T4** | App/UI：`AgentReplyMode`、Shift+Tab、胶囊后缀、running→steer | 已完成 |
+| **T5** | `list_agents(include_private)`：schema/解析/结果/提示词 | 已完成 |
+| **T6** | 测试与校验：单元/事件/渲染/迁移回归，`fmt` / `clippy` / 全量 `test` | 已完成 |
+
+## 测试覆盖
+
+- `pump_defers_panel_subagent_input_to_the_chat_layer` / `pump_defers_subagent_steer_to_the_chat_layer`：效应不被持久化泵吞掉。
+- `private_panel_follow_up_stays_out_of_the_parent_and_is_readable_on_request`：私聊不产生 pending report、不新增父消息；`private_turn_tail` 与 `list_agents(include_private)` 能读到。
+- `running_subagent_steer_commits_a_new_segment_and_returns_input`：DB 切片段、handle 锚点前移、pending 消费、UI 出现 steer 消息。
+- `shift_tab_switches_agent_reply_mode_and_report_submit_carries_the_flag`：默认私聊、Shift+Tab、汇报标志。
+- `enter_while_agent_running_emits_a_steer_instead_of_a_new_turn`：运行中不发新排队输入。
+- `agent_composer_renders_target_badge_and_draft`：`· private` / `· report` / `· steer 1` 胶囊。
+- `settle_moves_undelivered_steers_into_a_new_follow_up`：轮次正常完成时未生效 steer 落成新追问。
+- `subagent_list_renders_private_tail_only_when_present`：`private_tail` 进入模型可见文本。
+- `list_agents` schema/parse 测试。
+
+### 代码审查新增回归（2026-11-14）
+
+- `private_turn_tail_uses_sequence_boundaries_and_survives_multibyte_truncation`：序列边界、汇报轮隔离、中文转录不 panic。
+- `private_turn_tail_truncates_multibyte_text_at_a_char_boundary`：4 KiB 上限、UTF-8 边界、保留最新内容。
+- `list_changed_paths_for_turn_unions_steer_segments`：steer 前后 mutation 并集。
+- `report_mode_steer_keeps_both_segments_in_the_report`：report 模式报告覆盖 steer 前后正文。
+- `abnormal_settle_restores_undelivered_steer_to_the_composer`：停止/失败不自动重启，文本退回草稿。
+- `private_follow_up_keeps_the_parent_visible_task`：私聊不覆盖父可见任务摘要。
+- `private_panel_follow_up_stays_out...`：追加 `include_private=false` 全链路隐藏断言。
+- `late_mention_result_is_dropped_after_switching_agent`：追加丢弃后可重新扫描断言。
+- `shift_enter_falls_back_to_newline_when_mention_target_is_not_a_directory`：Shift+Enter 回落换行。
+- `full_steer_queue_keeps_the_agent_draft`：满 8 条时保留草稿。
+- `agent_composer_slash_does_not_open_panels`：`/` 走真实路由且不打开浮层。
+
+## 验证结果（2026-11-14，本 worktree）
+
+- `cargo fmt`：通过。
+- `cargo clippy --all-targets -- -D warnings`：通过。
+- `cargo test`：5391 passed / 0 failed（6 ignored，审查修复后）。
+- CLI 实机：v29 迁移、默认模型会话、spawn/wait/send_input、`list_agents(include_private)` 均通过；首次验证发现并修复 `private_tail` 未进入工具文本（`db19e05c`）。
+- 代码审查：P0 中文截断 panic、P1 私聊 `task` 泄漏、P1 report 模式 steer 报告残缺、P1 mention 扫描卡死均已修复并有回归测试，详见 [`review.md`](review.md)。
+
+## 验收要点
+
+1. 完成态子 agent：`Shift+Enter` 打开输入框，胶囊为 `· private`；发送后主 agent 不应出现报告轮。
+2. `Shift+Tab` 变 `· report`；发送后主 agent 照旧收到报告并自动回复。
+3. 运行态子 agent：胶囊为 `· steer`；发送后消息在下一步注入当前轮（详情出现新的 user 消息，pending 计数消失）。
+4. 主 agent 主动调用 `list_agents(include_private: true)` 时能看到最近私聊；默认调用看不到。

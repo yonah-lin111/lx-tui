@@ -193,7 +193,14 @@ pub(crate) fn seed_lx_mention(
         .pane_mut_anywhere(pane)
         .and_then(|p| p.lx.take_mention_scan_request())
         .expect("scan request");
-    update::apply_lx_mention_entries(state, pane, None, generation, &root, entries);
+    update::apply_lx_mention_entries(
+        state,
+        pane,
+        update::MentionScanOwner::Main,
+        generation,
+        &root,
+        entries,
+    );
 }
 
 // ===== ask 面板接线：点击吞掉、粘贴只进手写缓冲 =====

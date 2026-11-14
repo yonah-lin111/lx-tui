@@ -94,6 +94,8 @@ struct ChildHandle {
     processes: Arc<ProcessManager>,
     join_handle: Option<tokio::task::JoinHandle<()>>,
     uncheckpointed_bytes: usize,
+    /// 本轮完成后是否向主 agent 投递报告；面板私聊轮为 false。
+    notify_parent: bool,
     /// `close_agent` / 退出关闭：结算时不生成半程汇报。
     closed_without_report: bool,
 }
@@ -292,8 +294,11 @@ impl ExecSubagentPool {
                 let out = self.close(db, &target);
                 let _ = reply.send(out);
             }
-            SubagentOp::List { path_prefix } => {
-                let out = self.list(db, path_prefix.as_deref());
+            SubagentOp::List {
+                path_prefix,
+                include_private,
+            } => {
+                let out = self.list(db, path_prefix.as_deref(), include_private);
                 let _ = reply.send(out);
             }
             SubagentOp::CancelInput { submission_id } => {
@@ -413,6 +418,7 @@ impl ExecSubagentPool {
                 Some(parent_assistant_id),
                 &persisted,
                 interrupt,
+                true,
             )
             .map_err(db_failed)?;
         if !trigger_turn {
@@ -610,7 +616,12 @@ impl ExecSubagentPool {
         })
     }
 
-    fn list(&self, db: &Database, path_prefix: Option<&str>) -> Result<SubagentOutcome, HostError> {
+    fn list(
+        &self,
+        db: &Database,
+        path_prefix: Option<&str>,
+        include_private: bool,
+    ) -> Result<SubagentOutcome, HostError> {
         let (root_session, _, caller_path) = db
             .resolve_session_tree_root(&self.workspace, &self.parent_session_id)
             .unwrap_or_else(|_| {
@@ -643,6 +654,25 @@ impl ExecSubagentPool {
                 title: record.title.clone(),
                 status: self.projected_status(record, queues.get(&record.agent_id)),
                 queued_count: queues.get(&record.agent_id).map_or(0, |q| q.queued_count),
+                private_tail: include_private
+                    .then(|| {
+                        match db.private_turn_tail(
+                            &self.workspace,
+                            &record.parent_session_id,
+                            &record.agent_id,
+                        ) {
+                            Ok(tail) => tail,
+                            Err(error) => {
+                                tracing::warn!(
+                                    %error,
+                                    agent_id = %record.agent_id,
+                                    "private subagent transcript unavailable"
+                                );
+                                None
+                            }
+                        }
+                    })
+                    .flatten(),
             })
             .collect();
         Ok(SubagentOutcome::Listed { agents })
@@ -797,6 +827,7 @@ impl ExecSubagentPool {
             &record.title,
             claimed.started_at_ms,
             &claimed.items,
+            claimed.notify_parent,
             reused_done.unwrap_or_else(|| watch::channel(false).0),
         )?;
         Ok(Some(claimed))

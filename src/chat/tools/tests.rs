@@ -365,6 +365,10 @@ fn subagent_schemas_declare_hierarchy_and_budget_fields() {
         list["properties"]["path_prefix"]["type"], "string",
         "list_agents must expose path_prefix"
     );
+    assert_eq!(
+        list["properties"]["include_private"]["type"], "boolean",
+        "list_agents must expose include_private"
+    );
 
     for tool in ["send_input", "interrupt_agent", "close_agent"] {
         let tool_spec = spec(tool);

@@ -6,6 +6,7 @@
 use std::path::Path;
 use std::time::Instant;
 
+use super::runner::{load_subagent_tree, tree_queue_states};
 use super::*;
 use crate::chat::agent::{AgentRole, AgentStatus, BaseRole, SubagentInputItem, ToolSurface};
 use crate::db::Database;
@@ -392,6 +393,7 @@ pub(super) fn send_user_input_from_panel(
     session_id: &str,
     agent_id: &str,
     text: &str,
+    notify_parent: bool,
 ) -> bool {
     let text = text.trim();
     if text.is_empty() {
@@ -479,6 +481,7 @@ pub(super) fn send_user_input_from_panel(
         }],
         false,
         true,
+        notify_parent,
     );
     match outcome {
         Ok(_) => {
@@ -616,4 +619,54 @@ fn reference_prompt(text: &str) -> String {
         "\n...[truncated]",
         true,
     )
+}
+
+/// 同步窗格 `Agents` 列表中的状态投影与 `queued_count`（并刷新底栏 `N blocked` 计数与筛选高亮）。
+pub(super) fn sync_agent_ui_queue(
+    state: &mut AppState,
+    streams: &ChatStreams,
+    persistence: &Persistence,
+    pane: PaneId,
+    workspace: &Path,
+    parent_session: &str,
+) -> bool {
+    let Some(database) = persistence.database() else {
+        return false;
+    };
+    let tree = load_subagent_tree(database, workspace, parent_session);
+    if tree.records.is_empty() {
+        return false;
+    }
+    let queue_states = tree_queue_states(database, workspace, &tree);
+    let Some(target) = state.pane_mut_anywhere(pane) else {
+        return false;
+    };
+    let selected_agent_id = target
+        .lx
+        .task
+        .as_ref()
+        .and_then(|page| page.detail_agent_index(&target.lx.agents))
+        .and_then(|index| target.lx.agents.runs.get(index))
+        .map(|run| run.agent_id.clone());
+    let mut changed = false;
+    for record in &tree.records {
+        let q = queue_states.get(&record.agent_id);
+        let projected = super::projected_agent_status(streams, record, q);
+        let queued_count = q.map_or(0, |s| s.queued_count);
+        if let Some(run) = target.lx.agents.by_agent_mut(&record.agent_id)
+            && (run.status != projected || run.queued_count != queued_count)
+        {
+            run.status = projected;
+            run.queued_count = queued_count;
+            changed = true;
+        }
+    }
+    let blocked = target.lx.agents.blocked_count();
+    if target.lx.chat.status.blocked_subagents != blocked {
+        target.lx.chat.status.blocked_subagents = blocked;
+        changed = true;
+    }
+    crate::app::update::restore_selected_task_agent(&mut target.lx, selected_agent_id.as_deref());
+    target.lx.sync_mention_subagent_runs();
+    changed
 }

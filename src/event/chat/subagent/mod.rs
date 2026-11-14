@@ -14,6 +14,7 @@ use super::*;
 mod context;
 mod launch;
 mod model_resolve;
+mod panel;
 mod runner;
 mod settle;
 pub(crate) mod snapshot;
@@ -84,8 +85,10 @@ pub(crate) struct SubagentHandle {
     pub child_session_id: String,
     /// 当前子轮落库的 assistant 行（子 turn 工具归属校验的锚点）。
     pub child_assistant_id: String,
-    /// 当前子轮 user 消息 id（文件 mutation 归属）。
+    /// 当前子轮 user 消息 id（文件 mutation 归属；steer 会切到新片段）。
     pub child_user_message_id: String,
+    /// 本轮从 claim 到结算包含的所有 user 消息（含轮内 steer）；报告与文件统计按整轮聚合。
+    pub turn_user_message_ids: Vec<String>,
     /// 角色。
     pub role: AgentRole,
     /// 面向用户的短标题。
@@ -104,6 +107,10 @@ pub(crate) struct SubagentHandle {
     pub max_tokens: Option<u64>,
     /// `close_agent` / 窗格或应用关闭：结算时不生成半程汇报。
     pub closed_without_report: bool,
+    /// 本轮完成后是否向主 agent 投递报告；人类私聊输入为 false。
+    pub notify_parent: bool,
+    /// 当前轮文件 mutation 归属的 user 消息 id；轮内 steer 会切换到新 user 消息。
+    pub mutation_user_id: std::sync::Arc<std::sync::RwLock<String>>,
     /// 子会话消息模型（持久化来源；窗格关闭后仍存在）。
     pub chat: crate::app::state::LxChat,
     /// 子会话 DB 工作区键。
@@ -224,6 +231,7 @@ pub(crate) fn handle_subagent_op_with_call(
                 &items,
                 interrupt,
                 trigger_turn,
+                true,
             );
             let changed = result.is_ok();
             match result {
@@ -261,8 +269,17 @@ pub(crate) fn handle_subagent_op_with_call(
             let _ = reply.send(result);
             changed
         }
-        SubagentOp::List { path_prefix } => {
-            let result = list_agents(streams, persistence, &key, path_prefix.as_deref());
+        SubagentOp::List {
+            path_prefix,
+            include_private,
+        } => {
+            let result = list_agents(
+                streams,
+                persistence,
+                &key,
+                path_prefix.as_deref(),
+                include_private,
+            );
             let _ = reply.send(result);
             false
         }
@@ -522,6 +539,7 @@ fn list_agents(
     persistence: &Persistence,
     key: &RequestKey,
     path_prefix: Option<&str>,
+    include_private: bool,
 ) -> Result<SubagentOutcome, HostError> {
     let Some(database) = persistence.database() else {
         return Err(HostError::Failed {
@@ -553,6 +571,25 @@ fn list_agents(
                 title: record.title.clone(),
                 status: projected_agent_status(streams, record, q),
                 queued_count: q.map_or(0, |s| s.queued_count),
+                private_tail: include_private
+                    .then(|| {
+                        match database.private_turn_tail(
+                            workspace,
+                            &record.parent_session_id,
+                            &record.agent_id,
+                        ) {
+                            Ok(tail) => tail,
+                            Err(error) => {
+                                tracing::warn!(
+                                    %error,
+                                    agent_id = %record.agent_id,
+                                    "private subagent transcript unavailable"
+                                );
+                                None
+                            }
+                        }
+                    })
+                    .flatten(),
             }
         })
         .collect();
@@ -626,7 +663,7 @@ fn cancel_input(
     {
         queued_count = claimed.queued_remaining;
     }
-    runner::sync_agent_ui_queue(
+    snapshot::sync_agent_ui_queue(
         state,
         streams,
         persistence,
@@ -773,6 +810,7 @@ pub fn apply_subagent_effects(
                     | Effect::CancelSubagents { .. }
                     | Effect::DrainSubagentReports { .. }
                     | Effect::SendSubagentUserInput { .. }
+                    | Effect::SteerSubagent { .. }
             )
         })
         .cloned()
@@ -788,6 +826,7 @@ pub fn apply_subagent_effects(
                 | Effect::CancelSubagents { .. }
                 | Effect::DrainSubagentReports { .. }
                 | Effect::SendSubagentUserInput { .. }
+                | Effect::SteerSubagent { .. }
         )
     });
     let mut changed = false;
@@ -823,7 +862,7 @@ pub fn apply_subagent_effects(
                         }
                     }
                 }
-                if runner::sync_agent_ui_queue(
+                if snapshot::sync_agent_ui_queue(
                     state,
                     streams,
                     persistence,
@@ -921,8 +960,9 @@ pub fn apply_subagent_effects(
                 session_id,
                 agent_id,
                 text,
+                notify_parent,
             } => {
-                changed |= snapshot::send_user_input_from_panel(
+                changed |= panel::send_from_panel(
                     state,
                     streams,
                     persistence,
@@ -930,6 +970,23 @@ pub fn apply_subagent_effects(
                     &session_id,
                     &agent_id,
                     &text,
+                    notify_parent,
+                );
+            }
+            Effect::SteerSubagent {
+                pane,
+                agent_id,
+                text,
+                notify_parent,
+            } => {
+                changed |= panel::steer_from_panel(
+                    state,
+                    streams,
+                    persistence,
+                    pane,
+                    &agent_id,
+                    &text,
+                    notify_parent,
                 );
             }
             _ => {}

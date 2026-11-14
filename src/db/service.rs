@@ -583,6 +583,9 @@ fn is_network_effect(state: &AppState, effect: &Effect) -> bool {
             | Effect::LoadSubagentSession { .. }
             | Effect::CancelSubagents { .. }
             | Effect::DrainSubagentReports { .. }
+            // 面板追问/steer 要由 `apply_subagent_effects` 做 resume + 入队，持久化泵不能吞掉。
+            | Effect::SendSubagentUserInput { .. }
+            | Effect::SteerSubagent { .. }
             | Effect::PrepareRewind { .. }
             | Effect::ExecuteRewind(_)
             | Effect::ExecuteCompact(_)

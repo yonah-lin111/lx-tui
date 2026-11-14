@@ -256,7 +256,8 @@ pub(super) fn draw_edit(
             rect.width.saturating_sub(2),
         );
     }
-    draw_agent_badge(grid, rect, run, marker_w);
+    let mode = lx.agents.reply_mode(agent_id);
+    draw_agent_badge(grid, rect, run, marker_w, mode);
     dims
 }
 
@@ -270,25 +271,41 @@ pub(crate) fn composer_rect(rect: Rect, lx: &crate::app::state::Lx) -> Option<Re
     Some(rect)
 }
 
-/// 右侧目标胶囊：` To: <nickname> [role] `；左侧必须给 `Subagent` 标记留位。
-fn draw_agent_badge(grid: &mut Grid, rect: Rect, run: &SubagentRun, marker_w: u16) {
-    let label = format!(
-        " To: {} [{}] ",
-        run.nickname
-            .as_deref()
-            .filter(|nickname| !nickname.is_empty())
-            .unwrap_or_else(|| run.role.as_str()),
-        run.role.as_str()
-    );
-    let width = u16::try_from(label.width()).unwrap_or(u16::MAX);
-    if rect.width <= width.saturating_add(marker_w).saturating_add(2) {
+/// 右侧目标胶囊：` <nickname> [role] · private|report|steer `；左侧必须给 `Subagent` 标记留位。
+fn draw_agent_badge(
+    grid: &mut Grid,
+    rect: Rect,
+    run: &SubagentRun,
+    marker_w: u16,
+    mode: crate::app::state::lx::agent::AgentReplyMode,
+) {
+    let name = run
+        .nickname
+        .as_deref()
+        .filter(|nickname| !nickname.is_empty())
+        .unwrap_or_else(|| run.role.as_str());
+    let mode = if run.status == "running" {
+        match run.chat.pending_steers.len() {
+            0 => "steer".to_string(),
+            count => format!("steer {count}"),
+        }
+    } else {
+        mode.label().to_string()
+    };
+    let with_mode = format!(" {name} [{}] · {mode} ", run.role.as_str());
+    let base = format!(" {name} [{}] ", run.role.as_str());
+    for label in [with_mode.as_str(), base.as_str()] {
+        let width = u16::try_from(label.width()).unwrap_or(u16::MAX);
+        if rect.width <= width.saturating_add(marker_w).saturating_add(2) {
+            continue;
+        }
+        let x = rect.right().saturating_sub(width).saturating_sub(1);
+        if x <= rect.x.saturating_add(marker_w) {
+            continue;
+        }
+        grid.put(x, rect.y, label, style::btw_qa_badge());
         return;
     }
-    let x = rect.right().saturating_sub(width).saturating_sub(1);
-    if x <= rect.x.saturating_add(marker_w) {
-        return;
-    }
-    grid.put(x, rect.y, &label, style::btw_qa_badge());
 }
 
 /// 列表绘制：`❯ ■ Turing [explorer]  running  2m 59s  <task 首行>`。

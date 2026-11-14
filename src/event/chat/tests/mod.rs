@@ -722,6 +722,7 @@ mod process_tools;
 mod resume;
 mod steer;
 mod subagent;
+mod subagent_private;
 mod subagent_roles;
 mod user_shell;
 mod workspace;

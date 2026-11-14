@@ -329,7 +329,10 @@ pub fn joined_input_text(items: &[SubagentInputItem]) -> String {
     }
 }
 
-/// `list_agents` 的单条子 agent 概览（不含完整消息流或报告正文）。
+/// `list_agents` 的单条子 agent 概览。
+///
+/// 默认不含消息流；`include_private=true` 时 `private_tail` 携带最近一次人类私聊的
+/// 紧凑转录（上限 4 KiB）。
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct AgentListItemView {
     pub agent_id: String,
@@ -340,6 +343,8 @@ pub struct AgentListItemView {
     pub title: String,
     pub status: String,
     pub queued_count: usize,
+    /// `include_private=true` 时附带的最近一次人类私聊（user + assistant）；默认不返回。
+    pub private_tail: Option<String>,
 }
 
 /// 子 agent 控制工具操作；由 loop 转投事件层执行（与 `ask` 同一分支位置）。
@@ -388,7 +393,11 @@ pub enum SubagentOp {
     /// 停止一个子 agent（不产生报告）。
     Close { target: String },
     /// 列出当前父会话（或指定路径前缀下）的子 agent 状态与排队计数。
-    List { path_prefix: Option<String> },
+    List {
+        path_prefix: Option<String>,
+        /// 是否附带人类私聊内容（默认 false：私聊不主动进入主 agent 上下文）。
+        include_private: bool,
+    },
     /// 取消一条尚未开始的排队输入。
     CancelInput { submission_id: String },
 }
@@ -646,6 +655,9 @@ impl SubagentOutcome {
                             {
                                 map.insert("agent_path".into(), Value::String(path.to_string()));
                             }
+                            if let Some(tail) = agent.private_tail.as_deref() {
+                                map.insert("private_tail".into(), Value::String(tail.to_string()));
+                            }
                         }
                         item
                     })
@@ -833,6 +845,10 @@ impl SubagentOutcome {
                                 .unwrap_or(0),
                         )
                         .unwrap_or(0),
+                        private_tail: entry
+                            .get("private_tail")
+                            .and_then(Value::as_str)
+                            .map(str::to_string),
                     });
                 }
                 Some(Self::Listed { agents })

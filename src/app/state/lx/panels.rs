@@ -16,14 +16,20 @@ impl Lx {
         self.text_selection = None;
         self.preview_selection = None;
         self.preview_drag = None;
-        // Agents 追问是纯文本：不打开任何编辑浮层，避免 @/斜杠/路径面板抢占按键。
+        // Agents 追问：只保留 `@`，其余编辑浮层全部关闭，避免与子 agent 文本输入抢按键。
         if !self.allow_panels {
             self.panel = None;
             self.slash = None;
             self.paste = None;
             self.text_paste = None;
             self.refer = None;
-            self.mention.suppress();
+            if self.mention_minimal {
+                let masked = crate::app::paste::mask_pasted_text(&self.input).into_owned();
+                self.mention.unsuppress();
+                self.mention.refresh(&masked, self.cursor);
+            } else {
+                self.mention.suppress();
+            }
             self.scroll_cursor_into_view();
             return;
         }
@@ -145,6 +151,10 @@ impl Lx {
     /// 从 `self.agents.runs` 提取当前会话存活（`running` / `idle` / `blocked`）的 subagent，
     /// 同步至 `@` 提及面板；内容变化时自动重算面板。
     pub fn sync_mention_subagent_runs(&mut self) -> bool {
+        // Agents 追问没有 `Subagents` Tab，不维护也不会显示实例集合。
+        if self.mention_minimal {
+            return false;
+        }
         // 旁路 composer 没有自己的 `agents`，实例列表由主编辑器经
         // `sync_btw_composer_context` 注入；这里若按空列表重算会把注入项清掉。
         if self.mention_runs_external {
@@ -217,6 +227,34 @@ impl Lx {
             .sync_subagent_runs(entries, &masked, composer.cursor)
     }
 
+    /// 把主编辑器的项目根与 `@` 候选数据复制给当前 Agents 追问 composer。
+    ///
+    /// 进入编辑态与工作区/根刷新后调用；没有正在编辑的 composer 时返回 false。
+    pub fn sync_agent_composer_context(&mut self) -> bool {
+        let Some(agent_id) = self.agent_edit_id().map(str::to_string) else {
+            return false;
+        };
+        let root = self.mention.root().map(std::path::Path::to_path_buf);
+        let project = self.chat.project_root.clone();
+        let folders = self.mention.referenced_folders().to_vec();
+        let skills = self.mention_skills();
+        let mcp = self.mention_mcp_servers();
+        let disabled_mcp = self.disabled_mcp_servers().clone();
+        let Some(composer) = self.agents.composer_mut(&agent_id) else {
+            return false;
+        };
+        let composer = composer.editor_mut();
+        let root_changed = composer.set_mention_root(root);
+        let project_changed = composer.set_project_root(project);
+        let folders_changed = composer.sync_referenced_folders(&folders);
+        composer.set_mention_skills(skills);
+        composer.set_mention_mcp_servers(mcp);
+        composer
+            .mention
+            .set_disabled_mcp_servers(disabled_mcp, &composer.input, composer.cursor);
+        root_changed || project_changed || folders_changed
+    }
+
     /// 同步当前项目根目录（主会话与子 agent 详情区共用），将工具卡片内的当前项目路径收短为相对路径。
     pub fn set_project_root(&mut self, root: Option<std::path::PathBuf>) -> bool {
         let mut changed = self.chat.set_project_root(root.clone());
@@ -232,6 +270,11 @@ impl Lx {
     /// 需要新扫描时返回（代号，扫描根）；仅事件层调用。
     pub fn take_mention_scan_request(&mut self) -> Option<(u64, std::path::PathBuf)> {
         self.mention.take_scan_request(&self.input, self.cursor)
+    }
+
+    /// 扫描结果因归属切换被丢弃时清掉在途标记；仅事件层调用。
+    pub fn abandon_mention_scan(&mut self, generation: u64, root: &std::path::Path) {
+        self.mention.abandon_scan(generation, root);
     }
 
     /// 写入扫描结果；代号或根过期时丢弃；返回是否采纳。
@@ -272,7 +315,8 @@ impl Lx {
         if self.entry == super::LxEntry::AiWeb && self.mention.active_is_directory() {
             return self.mention_enter_folder();
         }
-        let Some((range, insertion)) = self.mention.confirm(self.input.len()) else {
+        let plain = self.mention_minimal;
+        let Some((range, insertion)) = self.mention.confirm(self.input.len(), plain) else {
             return false;
         };
         self.snapshot();
@@ -317,20 +361,31 @@ impl Lx {
         self.mention.tab()
     }
 
-    /// 提及面板切换 Tab：左右循环切换；面板不可见返回 false。
-    pub fn mention_switch_tab(&mut self, delta: isize) -> bool {
-        self.sync_mention_subagent_runs();
-        let ai_web = self.entry == super::LxEntry::AiWeb;
-        self.mention
-            .switch_tab_for_entry(delta, &self.input, self.cursor, ai_web)
+    /// `@` 面板可用 Tab 集合：AI Web 仅 Files；Agents 追问不含会话态 Subagents；其余 5 项。
+    pub fn mention_tabs(&self) -> &'static [crate::app::prompt::MentionTab] {
+        use crate::app::prompt::MentionTab;
+        if self.entry == super::LxEntry::AiWeb {
+            &[MentionTab::Files]
+        } else if self.mention_minimal {
+            &MentionTab::PROMPT_ALL
+        } else {
+            &MentionTab::ALL
+        }
     }
 
-    /// 提及面板直接设置 Tab。
+    /// 提及面板切换 Tab：在可用集合内循环；面板不可见返回 false。
+    pub fn mention_switch_tab(&mut self, delta: isize) -> bool {
+        self.sync_mention_subagent_runs();
+        let tabs = self.mention_tabs();
+        self.mention
+            .switch_tab(delta, &self.input, self.cursor, tabs)
+    }
+
+    /// 提及面板直接设置 Tab；不在可用集合内返回 false。
     pub fn mention_set_tab(&mut self, tab: crate::app::prompt::MentionTab) -> bool {
         self.sync_mention_subagent_runs();
-        let ai_web = self.entry == super::LxEntry::AiWeb;
-        self.mention
-            .set_tab_for_entry(tab, &self.input, self.cursor, ai_web)
+        let tabs = self.mention_tabs();
+        self.mention.set_tab(tab, &self.input, self.cursor, tabs)
     }
 
     /// 无视可见性守卫，强制将提及面板 Tab 归位。

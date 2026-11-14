@@ -863,7 +863,8 @@ fn shift_enter_opens_agent_composer_and_submit_keeps_editing() {
                 session_id,
                 agent_id,
                 text,
-            } if *p == pane && session_id == "sess-1" && agent_id == "sub-done" && text == "hi"
+                notify_parent,
+            } if *p == pane && session_id == "sess-1" && agent_id == "sub-done" && text == "hi" && !*notify_parent
         )),
         "Enter 提交追问：{:?}",
         state.effects
@@ -1005,4 +1006,349 @@ fn ctrl_a_in_agent_search_moves_cursor_without_stopping_agents() {
         "Ctrl+A 不再停止全部 agent：{:?}",
         state.effects
     );
+}
+
+/// 进入 Agents 追问编辑态，并把 `@` 面板驱动到有候选。
+fn open_agent_mention(state: &mut AppState, pane: PaneId) {
+    // 主编辑器先拿到扫描根；进入编辑态时 composer 会继承它。
+    state
+        .pane_mut_anywhere(pane)
+        .expect("pane")
+        .lx
+        .set_mention_root(Some(std::path::PathBuf::from("/work/demo")));
+    let input = crate::app::update::pane::apply_lx_input;
+    input(state, crate::app::actions::LxInput::EnterFolder);
+    assert!(page(state, pane).agent_edit.is_some(), "进入编辑态");
+    input(state, crate::app::actions::LxInput::Char('@'));
+    let (_, owner, generation, root) = crate::app::update::take_lx_mention_scan_requests(state)
+        .into_iter()
+        .find(|(_, owner, ..)| matches!(owner, crate::app::update::MentionScanOwner::Agent(_)))
+        .expect("Agents composer 发起扫描");
+    assert_eq!(
+        owner,
+        crate::app::update::MentionScanOwner::Agent("sub-done".into())
+    );
+    crate::app::update::apply_lx_mention_entries(
+        state,
+        pane,
+        owner,
+        generation,
+        &root,
+        vec![crate::app::markdown::MentionEntry {
+            path: "src/main.rs".into(),
+            is_directory: false,
+        }],
+    );
+}
+
+#[test]
+fn mention_enter_confirms_candidate_instead_of_sending() {
+    let (mut state, pane) = state_with_session("");
+    open_agents_with_statuses(&mut state, pane);
+    open_agent_mention(&mut state, pane);
+    state.effects.clear();
+
+    let input = crate::app::update::pane::apply_lx_input;
+    input(&mut state, crate::app::actions::LxInput::Enter);
+    let text = state
+        .pane_anywhere(pane)
+        .expect("pane")
+        .lx
+        .agents
+        .composer("sub-done")
+        .map(|composer| composer.text().to_string());
+    assert_eq!(text.as_deref(), Some("@src/main.rs "), "Enter 采纳候选");
+    assert!(
+        !state.effects.iter().any(|effect| matches!(
+            effect,
+            crate::app::effects::Effect::SendSubagentUserInput { .. }
+        )),
+        "面板打开时 Enter 不发送：{:?}",
+        state.effects
+    );
+
+    input(&mut state, crate::app::actions::LxInput::Enter);
+    assert!(
+        state.effects.iter().any(|effect| matches!(
+            effect,
+            crate::app::effects::Effect::SendSubagentUserInput { text, .. }
+                if text == "@src/main.rs"
+        )),
+        "面板关闭后发送同一段朴素文本（提交时裁剪尾随空格）：{:?}",
+        state.effects
+    );
+}
+
+#[test]
+fn escape_closes_mention_panel_before_leaving_the_composer() {
+    let (mut state, pane) = state_with_session("");
+    open_agents_with_statuses(&mut state, pane);
+    open_agent_mention(&mut state, pane);
+
+    let input = crate::app::update::pane::apply_lx_input;
+    input(&mut state, crate::app::actions::LxInput::Escape);
+    assert!(page(&state, pane).agent_edit.is_some(), "第一下只关面板");
+    assert!(
+        state
+            .pane_anywhere(pane)
+            .expect("pane")
+            .lx
+            .agents
+            .composer("sub-done")
+            .is_some_and(|composer| !composer.editor().mention_open()),
+        "面板已关闭"
+    );
+    input(&mut state, crate::app::actions::LxInput::Escape);
+    assert!(page(&state, pane).agent_edit.is_none(), "第二下退出编辑态");
+}
+
+#[test]
+fn late_mention_result_is_dropped_after_switching_agent() {
+    let (mut state, pane) = state_with_session("");
+    open_agents_with_statuses(&mut state, pane);
+    state
+        .pane_mut_anywhere(pane)
+        .expect("pane")
+        .lx
+        .set_mention_root(Some(std::path::PathBuf::from("/work/demo")));
+    let input = crate::app::update::pane::apply_lx_input;
+    input(&mut state, crate::app::actions::LxInput::EnterFolder);
+    input(&mut state, crate::app::actions::LxInput::Char('@'));
+    let (_, owner, generation, root) =
+        crate::app::update::take_lx_mention_scan_requests(&mut state)
+            .into_iter()
+            .find(|(_, owner, ..)| matches!(owner, crate::app::update::MentionScanOwner::Agent(_)))
+            .expect("Agents composer 发起扫描");
+    // 结果到达前切到另一个 agent：旧归属的迟到回执必须被丢弃。
+    state
+        .pane_mut_anywhere(pane)
+        .expect("pane")
+        .lx
+        .task
+        .as_mut()
+        .expect("task")
+        .agent_edit = Some("sub-idle".into());
+    crate::app::update::apply_lx_mention_entries(
+        &mut state,
+        pane,
+        owner,
+        generation,
+        &root,
+        vec![crate::app::markdown::MentionEntry {
+            path: "stale.rs".into(),
+            is_directory: false,
+        }],
+    );
+    assert!(
+        !state
+            .pane_anywhere(pane)
+            .expect("pane")
+            .lx
+            .agents
+            .composer("sub-done")
+            .is_some_and(|composer| composer.editor().mention_open()),
+        "迟到结果不写入已切换的 agent"
+    );
+    // 丢弃回执时必须清掉原 composer 的在途标记，否则 Files Tab 永久 Loading。
+    let retry = state
+        .pane_mut_anywhere(pane)
+        .expect("pane")
+        .lx
+        .agents
+        .composer_mut("sub-done")
+        .expect("composer")
+        .editor_mut()
+        .take_mention_scan_request();
+    assert!(retry.is_some(), "迟到结果丢弃后应允许重新发起扫描");
+}
+
+#[test]
+fn shift_tab_switches_agent_reply_mode_and_report_submit_carries_the_flag() {
+    let (mut state, pane) = state_with_session("");
+    open_agents_with_statuses(&mut state, pane);
+    let input = crate::app::update::pane::apply_lx_input;
+    input(&mut state, crate::app::actions::LxInput::EnterFolder);
+    let mode = |state: &AppState| {
+        state
+            .pane_anywhere(pane)
+            .expect("pane")
+            .lx
+            .agents
+            .reply_mode("sub-done")
+    };
+    assert_eq!(
+        mode(&state),
+        crate::app::state::lx::agent::AgentReplyMode::Private,
+        "默认私聊"
+    );
+    input(&mut state, crate::app::actions::LxInput::PrevStep);
+    assert_eq!(
+        mode(&state),
+        crate::app::state::lx::agent::AgentReplyMode::Report,
+        "Shift+Tab 切到汇报"
+    );
+    state.effects.clear();
+    for ch in "hi".chars() {
+        input(&mut state, crate::app::actions::LxInput::Char(ch));
+    }
+    input(&mut state, crate::app::actions::LxInput::Enter);
+    assert!(
+        state.effects.iter().any(|effect| matches!(
+            effect,
+            crate::app::effects::Effect::SendSubagentUserInput {
+                agent_id,
+                text,
+                notify_parent: true,
+                ..
+            } if agent_id == "sub-done" && text == "hi"
+        )),
+        "汇报模式发送 notify_parent=true：{:?}",
+        state.effects
+    );
+}
+
+#[test]
+fn enter_while_agent_running_emits_a_steer_instead_of_a_new_turn() {
+    let (mut state, pane) = state_with_session("");
+    open_agents_with_statuses(&mut state, pane);
+    let target = state.pane_mut_anywhere(pane).expect("pane");
+    target.lx.task.as_mut().expect("task").agents_window.active = 0;
+    target.lx.agents.selected_id = Some("sub-run".into());
+    let input = crate::app::update::pane::apply_lx_input;
+    input(&mut state, crate::app::actions::LxInput::EnterFolder);
+    assert_eq!(page(&state, pane).agent_edit.as_deref(), Some("sub-run"));
+    state.effects.clear();
+    for ch in "hi".chars() {
+        input(&mut state, crate::app::actions::LxInput::Char(ch));
+    }
+    input(&mut state, crate::app::actions::LxInput::Enter);
+    assert!(
+        state.effects.iter().any(|effect| matches!(
+            effect,
+            crate::app::effects::Effect::SteerSubagent {
+                agent_id,
+                text,
+                notify_parent: false,
+                ..
+            } if agent_id == "sub-run" && text == "hi"
+        )),
+        "运行中的 agent 发送 steer：{:?}",
+        state.effects
+    );
+    assert!(
+        !state.effects.iter().any(|effect| matches!(
+            effect,
+            crate::app::effects::Effect::SendSubagentUserInput { .. }
+        )),
+        "steer 不应落成新的排队输入：{:?}",
+        state.effects
+    );
+}
+
+/// Shift+Enter 在 @ 面板高亮普通文件时必须回落为换行，不能吞键。
+#[test]
+fn shift_enter_falls_back_to_newline_when_mention_target_is_not_a_directory() {
+    let (mut state, pane) = state_with_session("");
+    open_agents_with_statuses(&mut state, pane);
+    open_agent_mention(&mut state, pane);
+    let input = crate::app::update::pane::apply_lx_input;
+    input(&mut state, crate::app::actions::LxInput::EnterFolder);
+    let text = state
+        .pane_anywhere(pane)
+        .expect("pane")
+        .lx
+        .agents
+        .composer("sub-done")
+        .map(|composer| composer.text().to_string());
+    assert_eq!(text.as_deref(), Some("@\n"), "Shift+Enter 应插入换行");
+}
+
+/// `/` 在 Agents composer 中必须只写入字符，不能打开任何编辑浮层。
+#[test]
+fn agent_composer_slash_does_not_open_panels() {
+    let (mut state, pane) = state_with_session("");
+    open_agents_with_statuses(&mut state, pane);
+    let input = crate::app::update::pane::apply_lx_input;
+    input(&mut state, crate::app::actions::LxInput::EnterFolder);
+    input(&mut state, crate::app::actions::LxInput::Char('/'));
+    let editor = state
+        .pane_anywhere(pane)
+        .expect("pane")
+        .lx
+        .agents
+        .composer("sub-done")
+        .expect("composer")
+        .editor();
+    assert_eq!(editor.input, "/");
+    assert!(editor.slash.is_none(), "不打开斜杠面板");
+    assert!(editor.panel.is_none(), "不打开 markdown 块面板");
+    assert!(editor.paste_panel().is_none(), "不打开粘贴面板");
+    assert!(editor.refer.is_none(), "不打开快捷引用面板");
+}
+
+/// steer 达到上限时提交侧必须保留草稿，不能等事件层拒绝后才发现文本已清空。
+#[test]
+fn full_steer_queue_keeps_the_agent_draft() {
+    let (mut state, pane) = state_with_session("");
+    open_agents_with_statuses(&mut state, pane);
+    state
+        .pane_mut_anywhere(pane)
+        .expect("pane")
+        .lx
+        .task
+        .as_mut()
+        .expect("task")
+        .agents_window
+        .active = 0; // sub-run
+    let input = crate::app::update::pane::apply_lx_input;
+    input(&mut state, crate::app::actions::LxInput::EnterFolder);
+    {
+        let run = state
+            .pane_mut_anywhere(pane)
+            .expect("pane")
+            .lx
+            .agents
+            .by_agent_mut("sub-run")
+            .expect("run");
+        for index in 0..crate::app::state::lx::chat::steer::MAX_PENDING_STEERS {
+            run.chat
+                .pending_steers
+                .push(crate::app::state::lx::chat::steer::PendingSteer {
+                    text: format!("steer-{index}"),
+                    attachments: Vec::new(),
+                    model_images: Vec::new(),
+                    model: crate::db::chat::ModelSnapshot {
+                        provider: "p".into(),
+                        model: "m".into(),
+                        variant: None,
+                    },
+                });
+        }
+        state
+            .pane_mut_anywhere(pane)
+            .expect("pane")
+            .lx
+            .agents
+            .composer_mut("sub-run")
+            .expect("composer")
+            .editor_mut()
+            .replace_input("too many");
+    }
+    input(&mut state, crate::app::actions::LxInput::Enter);
+    assert!(
+        !state
+            .effects
+            .iter()
+            .any(|effect| matches!(effect, crate::app::effects::Effect::SteerSubagent { .. })),
+        "满队列不得再发 steer：{:?}",
+        state.effects
+    );
+    let draft = state
+        .pane_anywhere(pane)
+        .expect("pane")
+        .lx
+        .agents
+        .composer("sub-run")
+        .map(|composer| composer.text().to_string());
+    assert_eq!(draft.as_deref(), Some("too many"), "草稿必须保留");
 }
