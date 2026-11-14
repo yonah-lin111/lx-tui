@@ -3,7 +3,7 @@
 > 状态：**CLI 实机与自动化通过；2026-11-14 代码审查修复后，TUI 交互项待用户 `cargo run` 复核**。
 >
 > 验证分支：`feat/btw-agent-natural-dialogue`
-> 验证提交：`review 修复提交（见 git log）`
+> 验证提交：`d835cd6d fix(lx): address private follow-up and mention review findings`
 > 验证日期：2026-11-14
 > 审查报告：[`review.md`](review.md)
 > 工作区：`/Users/yonah/projects/agent/lx-tui/.worktrees/btw-agent-natural-dialogue`
