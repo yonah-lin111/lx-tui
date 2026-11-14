@@ -1518,12 +1518,24 @@ fn private_turn_tail_uses_sequence_boundaries_and_survives_multibyte_truncation(
             &Fixture::model(),
         )
         .expect("claim private");
+    let steered = fixture
+        .database
+        .begin_steer_turn(
+            fixture.workspace(),
+            &committed.child_session_id,
+            &claimed.child_assistant_id,
+            &[],
+            "private steer",
+            &[],
+            &Fixture::model(),
+        )
+        .expect("private steer");
     fixture
         .database
         .finish_subagent_turn(
             fixture.workspace(),
             &committed.agent_id,
-            &claimed.child_assistant_id,
+            &steered.assistant_message_id,
             &[part(0, "private reply")],
             &TurnOutcome::Complete {
                 stop_reason: Some("complete".into()),
@@ -1583,6 +1595,10 @@ fn private_turn_tail_uses_sequence_boundaries_and_survives_multibyte_truncation(
         .expect("query private tail")
         .expect("private tail");
     assert!(tail.contains("secret question"), "tail: {tail}");
+    assert!(
+        tail.contains("private steer"),
+        "轮内 steer 必须包含：{tail}"
+    );
     assert!(tail.contains("private reply"), "tail: {tail}");
     assert!(!tail.contains("later report"), "汇报轮不得混入：{tail}");
     assert!(!tail.contains("report reply"), "汇报轮不得混入：{tail}");

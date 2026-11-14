@@ -43,7 +43,7 @@ CLI 会话使用 `./target/debug/lx-tui exec` 创建，模型为默认模型；�
 | A11 | `list_agents` 空参数、`path_prefix`、`include_private` 与 schema | `cargo test --lib parse_list_supports_empty_and_path_prefix`、`subagent_schemas_declare_hierarchy_and_budget_fields` | 默认 `include_private=false`；显式 true 被解析；schema 暴露 boolean | PASS |
 | A12 | 系统提示中的私聊约束与版本 | 检查 `LX_SYSTEM_PROMPT` 含 `private follow-ups ... not reported` 与“仅用户明确要求时查看”；`cargo test --lib prompt_documents_the_ask_tool` | 模型被明确告知私聊不自动汇报、不得主动窥探；`PROMPT_VERSION=lx-14` | PASS |
 | A13 | 全量静态检查与测试 | `cargo fmt`、`cargo clippy --all-targets -- -D warnings`、`cargo test` | 全部通过；lib `5391 passed / 0 failed / 6 ignored` | PASS |
-| A14 | 私聊转录含中文且超过 4 KiB；后面紧跟一条汇报输入 | `cargo test --lib private_turn_tail` | 按消息序列截止到下一轮；不 panic；保留最新内容；总字节 ≤ 4096 | PASS |
+| A14 | 私聊转录含中文且超过 4 KiB；轮内 steer；后面紧跟一条汇报输入 | `cargo test --lib private_turn_tail` | 按消息序列截止到下一轮；包含轮内 steer；不 panic；保留最新内容；总字节 ≤ 4096 | PASS |
 | A15 | report 模式子轮：先输出 `FIRST HALF`，steer 后再输出 `SECOND HALF`，最后完成 | `cargo test --lib report_mode_steer_keeps_both_segments_in_the_report`、`list_changed_paths_for_turn_unions_steer_segments` | 报告正文同时含两段；文件路径取两段并集；`turn_user_message_ids` 含 claim + steer 两条 | PASS |
 | A16 | 扫描中切换 agent，迟到结果回投；随后回到原 agent 再输入 `@` | `cargo test --lib late_mention_result_is_dropped_after_switching_agent` | 迟到结果不写入新 agent；原 composer 的 pending 被清；可再次发起扫描 | PASS |
 | A17 | 运行中 agent 已有 8 条 pending steer，再按 Enter；异常结束（Cancelled）时仍有未消费 steer | `cargo test --lib full_steer_queue_keeps_the_agent_draft`、`abnormal_settle_restores_undelivered_steer_to_the_composer` | 满队列保留草稿且不发 effect；异常结束不自动重启，文本退回 composer | PASS |
