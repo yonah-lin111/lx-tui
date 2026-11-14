@@ -157,3 +157,7 @@
 - `list_agents(include_private=false)` 惰性求值，不执行私聊查询；`true` 时模型可见文本包含 `private_tail`。
 - `include_private` 参数为模型可控，不是硬隔离；系统提示要求仅用户明确要求时查看。
 - 新增生产代码无 `unwrap()` / `expect()`，用户可见文案为英文，UI 渲染只读状态。
+
+## 合并状态（2026-11-14）
+
+已合并到 `dev`（merge `bd8668d0`），功能分支已删除；主工作区 `cargo fmt`、`cargo clippy --all-targets -- -D warnings`、`cargo test`（5433 passed / 0 failed / 6 ignored）通过。

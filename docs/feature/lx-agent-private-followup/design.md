@@ -1,6 +1,6 @@
 # Agents 面板私聊 / 汇报 / 轮内 steer
 
-- **状态**：已完成（分支 `feat/btw-agent-natural-dialogue`），2026-11-14 代码审查修复后待用户实机验收。
+- **状态**：已完成并合并到 `dev`（merge `bd8668d0`）；代码审查 P0–P3 修复后，TUI 手工交互项仍建议实机复核。
 - **关联**：BTW/Agents 自然对话（`docs/feature/lx-btw-agent-natural-dialogue/`）。
 - **审查报告**：[`review.md`](review.md)。
 

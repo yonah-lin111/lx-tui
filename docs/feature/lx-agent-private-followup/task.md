@@ -1,8 +1,9 @@
 # 任务清单：Agents 面板私聊 / 汇报 / steer
 
-- **状态**：T1–T6 已完成，2026-11-14 代码审查修复后待 `cargo run` 实机验收。
+- **状态**：T1–T6 已完成并合并到 `dev`（merge `bd8668d0`）；TUI 手工交互项仍建议实机复核。
 - **验证报告**：[`verification.md`](verification.md)（CLI 实机 + 自动化 + TUI 手工清单）。
 - **审查报告**：[`review.md`](review.md)（P0–P3、根因与修复状态）。
+- **合并记录**：`dev@f354b4af` + 功能分支 `9d3df292` → `bd8668d0`；Schema 保持 v29（dev 为 v28）；无冲突；主工作区 `cargo test` 5433 passed。
 
 | 任务 | 内容 | 状态 |
 |---|---|---|
@@ -43,7 +44,7 @@
 
 - `cargo fmt`：通过。
 - `cargo clippy --all-targets -- -D warnings`：通过。
-- `cargo test`：5391 passed / 0 failed（6 ignored，审查修复后）。
+- `cargo test`：5433 passed / 0 failed（6 ignored，审查修复后）。
 - CLI 实机：v29 迁移、默认模型会话、spawn/wait/send_input、`list_agents(include_private)` 均通过；首次验证发现并修复 `private_tail` 未进入工具文本（`db19e05c`）。
 - 代码审查：P0 中文截断 panic、P1 私聊 `task` 泄漏、P1 report 模式 steer 报告残缺、P1 mention 扫描卡死均已修复并有回归测试，详见 [`review.md`](review.md)。
 

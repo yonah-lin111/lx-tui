@@ -1,13 +1,14 @@
 # 验证报告：Agents 私聊 / 汇报 / steer（含 BTW / Agents 自然对话回归）
 
-> 状态：**CLI 实机与自动化通过；2026-11-14 代码审查修复后，TUI 交互项待用户 `cargo run` 复核**。
+> 状态：**CLI 实机与自动化通过，已合并到 `dev`（merge `bd8668d0`）；TUI 交互项待用户 `cargo run` 复核**。
 >
-> 验证分支：`feat/btw-agent-natural-dialogue`
+> 验证分支：`feat/btw-agent-natural-dialogue`（合并后已删除）
 > 验证提交：`d835cd6d fix(lx): address private follow-up and mention review findings`
+> 合并提交：`bd8668d0 merge: BTW/Agents natural dialogue and private follow-ups`
 > 验证日期：2026-11-14
 > 审查报告：[`review.md`](review.md)
-> 工作区：`/Users/yonah/projects/agent/lx-tui/.worktrees/btw-agent-natural-dialogue`
-> 隔离库：`~/.lx-t-dev/db/worktrees/btw-agent-natural-dialogue-82e1f845/lx.db`
+> 验证工作区：`/Users/yonah/projects/agent/lx-tui/.worktrees/btw-agent-natural-dialogue`（已移除）
+> 隔离库：`~/.lx-t-dev/db/worktrees/btw-agent-natural-dialogue-82e1f845/lx.db`（随 worktree 清理）
 > 默认模型：`provider-alq374/cbcn/deepseek-v4.1-flash#medium`
 
 ## 1. CLI 实机验证
@@ -42,7 +43,7 @@ CLI 会话使用 `./target/debug/lx-tui exec` 创建，模型为默认模型；�
 | A10 | `list_agents(include_private=true)` 的模型可见文本 | `cargo test --lib subagent_list_renders_private_tail_only_when_present` | 仅带转录的条目输出 `private_tail:`，默认条目没有 | PASS |
 | A11 | `list_agents` 空参数、`path_prefix`、`include_private` 与 schema | `cargo test --lib parse_list_supports_empty_and_path_prefix`、`subagent_schemas_declare_hierarchy_and_budget_fields` | 默认 `include_private=false`；显式 true 被解析；schema 暴露 boolean | PASS |
 | A12 | 系统提示中的私聊约束与版本 | 检查 `LX_SYSTEM_PROMPT` 含 `private follow-ups ... not reported` 与“仅用户明确要求时查看”；`cargo test --lib prompt_documents_the_ask_tool` | 模型被明确告知私聊不自动汇报、不得主动窥探；`PROMPT_VERSION=lx-14` | PASS |
-| A13 | 全量静态检查与测试 | `cargo fmt`、`cargo clippy --all-targets -- -D warnings`、`cargo test` | 全部通过；lib `5391 passed / 0 failed / 6 ignored` | PASS |
+| A13 | 全量静态检查与测试 | `cargo fmt`、`cargo clippy --all-targets -- -D warnings`、`cargo test` | 全部通过；lib `5433 passed / 0 failed / 6 ignored` | PASS |
 | A14 | 私聊转录含中文且超过 4 KiB；轮内 steer；后面紧跟一条汇报输入 | `cargo test --lib private_turn_tail` | 按消息序列截止到下一轮；包含轮内 steer；不 panic；保留最新内容；总字节 ≤ 4096 | PASS |
 | A15 | report 模式子轮：先输出 `FIRST HALF`，steer 后再输出 `SECOND HALF`，最后完成 | `cargo test --lib report_mode_steer_keeps_both_segments_in_the_report`、`list_changed_paths_for_turn_unions_steer_segments` | 报告正文同时含两段；文件路径取两段并集；`turn_user_message_ids` 含 claim + steer 两条 | PASS |
 | A16 | 扫描中切换 agent，迟到结果回投；随后回到原 agent 再输入 `@` | `cargo test --lib late_mention_result_is_dropped_after_switching_agent` | 迟到结果不写入新 agent；原 composer 的 pending 被清；可再次发起扫描 | PASS |

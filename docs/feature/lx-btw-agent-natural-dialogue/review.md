@@ -74,3 +74,7 @@
 - BTW 统计行使用模型显示名，live 与 reload 同源。
 - Agents composer 的 `@` 只有 Files/RefDir/Skills/MCP 四 Tab，朴素插入无 refer marker；`/`、粘贴、markdown 面板保持关闭。
 - generation/root/agent_id 校验能阻止迟到结果写入错误编辑器；本次补齐丢弃后的在途标记清理。
+
+## 合并状态（2026-11-14）
+
+已合并到 `dev`（merge `bd8668d0`），功能分支已删除；主工作区 `cargo fmt`、`cargo clippy --all-targets -- -D warnings`、`cargo test`（5433 passed / 0 failed / 6 ignored）通过。

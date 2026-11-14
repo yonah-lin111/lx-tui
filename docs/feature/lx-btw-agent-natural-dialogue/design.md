@@ -3,7 +3,7 @@
 - **特性目录**：`docs/feature/lx-btw-agent-natural-dialogue/`
 - **关联任务**：[`task.md`](task.md)
 - **目标范围**：`src/app/state/lx.rs`、`src/app/state/lx/{panels,mention,btw}.rs`、`src/app/prompt/mention.rs`、`src/app/update/pane/{task_page,popups}.rs`、`src/event/{mod,chat/btw}.rs`、`src/ui/main_content/lx/{mention.rs,task/{btw,agents}.rs}`、`src/ui/text/btw.rs`
-- **当前状态**：**已实现于分支 `feat/btw-agent-natural-dialogue`，待合并**；验证见 [`task.md`](task.md) T6。
+- **当前状态**：**已合并到 `dev`（merge `bd8668d0`）**；验证见 [`task.md`](task.md) T6。合并预演无冲突，主工作区 `cargo test` 5433 passed。
 
 ---
 
