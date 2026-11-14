@@ -63,6 +63,7 @@ seen.insert(key)
 - 图片用原始 `label`：入库时 `source_path` 会被改写成归档路径，内容相同、basename 相同的不同原图会共用该路径，不能作为身份。
 - 其余类型用 `source_path`（引用原文/规范化路径），缺失时回退 `label`。
 - 旧版快捷引用 label 以 `@[` 开头：展示为 `source_path`，不向用户暴露内部 token。
+- UI 不做 IO，无法 canonicalize：同一目标的绝对路径/相对路径两种写法可能仍显示两行；相同写法的重复引用会收敛。模型侧图片/skill 仍按规范化路径去重。
 
 ### 3.2 云端文件重复引用
 
