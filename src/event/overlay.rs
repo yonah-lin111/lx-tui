@@ -578,6 +578,11 @@ pub(crate) fn open_right_click_menu(
         update::open_workspace_list_menu(state, (column, row));
         return true;
     }
+    // 侧栏 Agents 条目：两行命中同一条目，打开编辑标题/关闭菜单。
+    if let Some(index) = ui::agent_item_index_at(view, state, column, row) {
+        update::open_agent_menu(state, index, (column, row));
+        return true;
+    }
     // 底部 recent 抽屉区域：右键一律吞掉，不穿透打开上方树/页列表/编辑器菜单。
     if ui::right_panel::prompt::frame::prompt_recent_contains(view.right_panel, state, column, row)
     {

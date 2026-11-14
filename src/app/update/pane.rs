@@ -931,6 +931,11 @@ pub fn update_pane_agent(
     if pane.agent == snapshot {
         return false;
     }
+    let previous_kind = pane.agent.as_ref().map(|snapshot| snapshot.kind);
+    let next_kind = snapshot.as_ref().map(|snapshot| snapshot.kind);
+    if previous_kind != next_kind {
+        pane.terminal_agent_title = None;
+    }
     pane.agent = snapshot;
     true
 }

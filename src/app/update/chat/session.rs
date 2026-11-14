@@ -219,6 +219,7 @@ pub fn on_session_loaded_full(
         target.lx.chat.stop_armed_at = None;
         target.lx.chat.session_title = None;
         target.lx.chat.session_title_palette = 0;
+        target.lx.chat.agent_title_override = None;
         if let Some(page) = target.lx.task.as_mut() {
             page.agents_window = Default::default();
             page.agents_focus = None;

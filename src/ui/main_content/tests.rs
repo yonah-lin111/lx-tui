@@ -107,6 +107,7 @@ fn pane_with(view: PaneView, terminal: Terminal) -> Pane {
         cwd_label: None,
         cwd: None,
         agent: None,
+        terminal_agent_title: None,
     }
 }
 

@@ -53,6 +53,9 @@ fn user_visible_labels_are_clean_ascii() {
         MENU_TITLE_PROMPT_TREE,
         MENU_TITLE_TODO_ITEM,
         MENU_TITLE_TODO_BLANK,
+        AGENT_NO_TITLE,
+        MENU_AGENT_EDIT_TITLE,
+        MENU_AGENT_CLOSE,
         CONFIRM_DELETE_PAGE_TITLE,
         RENAME_PROMPT_TITLE,
         RENAME_FOLDER_TITLE,
@@ -177,6 +180,16 @@ fn workspace_menu_copy_is_ws_abbreviated_english() {
         MENU_CONFIRM_SYNC_WS_TO_TERMINAL_CWD,
         "Confirm sync ws to terminal path"
     );
+}
+
+/// Agents 归属标签固定 `[T{n} P{m}]`，入参为 0 基，展示为 1 基。
+#[test]
+fn agent_location_and_menu_labels_are_stable() {
+    assert_eq!(agent_location(0, 0), "[T1 P1]");
+    assert_eq!(agent_location(2, 3), "[T3 P4]");
+    assert_eq!(AGENT_NO_TITLE, "(no title)");
+    assert_eq!(MENU_AGENT_EDIT_TITLE, "Edit title");
+    assert_eq!(MENU_AGENT_CLOSE, "Close");
 }
 
 #[test]

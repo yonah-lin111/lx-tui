@@ -61,10 +61,12 @@ impl SidebarAgentKind {
     }
 }
 
-/// 侧栏 `Agents` 分区的单行条目数据。
+/// 侧栏 `Agents` 分区的条目数据。
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct SidebarAgentEntry {
     pub tab_index: usize,
+    /// 窗格在该标签页 `layout.pane_ids()` 树序中的位置（0 基；显示时 +1，`[T1 P1]` 的 P）。
+    pub pane_index: usize,
     pub pane_id: PaneId,
     pub kind: SidebarAgentKind,
     pub state: AgentState,
@@ -85,6 +87,9 @@ pub struct Pane {
     pub cwd: Option<PathBuf>,
     /// 窗格前台进程探测到的 Agent 快照；None 表示纯 Shell 或未识别程序。
     pub agent: Option<PaneAgentSnapshot>,
+    /// 侧栏 Agents 中终端 Agent 的临时显示标题（仅内存；Agent 种类变化、
+    /// 退出或窗格关闭时清除）。
+    pub terminal_agent_title: Option<(AgentKind, String)>,
 }
 
 impl Tab {
@@ -168,6 +173,53 @@ impl Pane {
             cwd_label: None,
             cwd: None,
             agent: None,
+            terminal_agent_title: None,
+        }
+    }
+
+    /// 侧栏 Agents 条目的第二行标题：内存覆盖优先，其次 lx 会话标题 /
+    /// 终端 Agent 的 OSC 标题；空标题返回 None。
+    pub fn agent_display_title(&self, kind: SidebarAgentKind) -> Option<&str> {
+        match kind {
+            SidebarAgentKind::Lx { .. } => self.lx.chat.agent_title_override.as_deref().or(self
+                .lx
+                .chat
+                .session_title
+                .as_deref()),
+            SidebarAgentKind::Terminal(agent) => self
+                .terminal_agent_title
+                .as_ref()
+                .filter(|(kind, _)| *kind == agent)
+                .map(|(_, title)| title.as_str())
+                .or_else(|| {
+                    self.agent
+                        .as_ref()
+                        .filter(|snapshot| snapshot.kind == agent)
+                        .and_then(|snapshot| snapshot.title.as_deref())
+                })
+                .filter(|title| !title.is_empty()),
+        }
+    }
+
+    /// 写入/清除侧栏标题覆盖；目标 Agent 已不在该窗格时忽略。
+    pub fn set_agent_title_override(&mut self, kind: SidebarAgentKind, title: Option<String>) {
+        let title = title.and_then(|raw| {
+            let trimmed = raw.trim();
+            (!trimmed.is_empty()).then(|| trimmed.to_string())
+        });
+        match kind {
+            SidebarAgentKind::Lx { .. } if self.lx.has_active_session() => {
+                self.lx.chat.agent_title_override = title;
+            }
+            SidebarAgentKind::Terminal(agent)
+                if self
+                    .agent
+                    .as_ref()
+                    .is_some_and(|snapshot| snapshot.kind == agent) =>
+            {
+                self.terminal_agent_title = title.map(|title| (agent, title));
+            }
+            _ => {}
         }
     }
 
@@ -184,3 +236,6 @@ impl Pane {
             .set_mention_subagent_roles(source.lx.mention_subagent_roles().to_vec());
     }
 }
+
+#[cfg(test)]
+mod tests;

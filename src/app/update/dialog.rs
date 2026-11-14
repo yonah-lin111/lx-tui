@@ -334,10 +334,12 @@ fn commit_rename(state: &mut AppState) {
         return;
     };
     let name = rename.input.text().trim().to_string();
-    if name.is_empty() {
+    let target = rename.target;
+    // 只有 Agent 标题允许空值：空 = 清除内存覆盖，回落默认标题。
+    let allows_empty = matches!(target, RenameTarget::AgentTitle { .. });
+    if name.is_empty() && !allows_empty {
         return;
     }
-    let target = rename.target;
     match target {
         RenameTarget::Workspace(index) => {
             let Some(workspace) = state.workspaces.get_mut(index) else {
@@ -386,6 +388,21 @@ fn commit_rename(state: &mut AppState) {
         }
         RenameTarget::PromptFolder { .. } | RenameTarget::PromptItem { .. } => {
             commit_prompt_rename(state, target, name);
+        }
+        RenameTarget::AgentTitle {
+            workspace,
+            tab,
+            pane,
+            kind,
+        } => {
+            if let Some(pane_state) = state
+                .workspaces
+                .get_mut(workspace)
+                .and_then(|workspace| workspace.tabs.get_mut(tab))
+                .and_then(|tab_state| tab_state.pane_mut(pane))
+            {
+                pane_state.set_agent_title_override(kind, (!name.is_empty()).then_some(name));
+            }
         }
     }
     state.overlay = None;

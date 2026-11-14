@@ -825,13 +825,15 @@ impl AppState {
         let workspace = self.active_workspace();
         let mut entries = Vec::new();
         for (tab_index, tab) in workspace.tabs.iter().enumerate() {
-            for pane_id in tab.layout.pane_ids() {
+            for (pane_offset, pane_id) in tab.layout.pane_ids().into_iter().enumerate() {
                 let Some(pane) = tab.pane(pane_id) else {
                     continue;
                 };
+                let pane_index = pane_offset;
                 if pane.lx.has_active_session() {
                     entries.push(SidebarAgentEntry {
                         tab_index,
+                        pane_index,
                         pane_id,
                         kind: SidebarAgentKind::Lx {
                             entry: pane.lx.entry,
@@ -843,6 +845,7 @@ impl AppState {
                 if let Some(snapshot) = pane.agent.as_ref() {
                     entries.push(SidebarAgentEntry {
                         tab_index,
+                        pane_index,
                         pane_id,
                         kind: SidebarAgentKind::Terminal(snapshot.kind),
                         state: snapshot.state,

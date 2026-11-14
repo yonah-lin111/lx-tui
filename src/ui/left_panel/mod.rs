@@ -513,25 +513,36 @@ pub(super) fn agents_button_area(sidebar: Rect, divider: Rect) -> Rect {
     )
 }
 
-/// Agents 分区条目：标签索引、窗格标识、Agent 种类与运行状态；渲染与命中一一对应。
+/// Agents 分区条目：标签索引、标签内窗格序号、窗格标识、Agent 种类、运行状态与
+/// 第二行标题；渲染与命中一一对应。
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct AgentListItem {
+pub struct AgentListItem<'a> {
     pub tab_index: usize,
+    pub pane_index: usize,
     pub pane_id: PaneId,
     pub kind: SidebarAgentKind,
     pub state: AgentState,
+    /// 第二行标题：内存覆盖优先，其次会话标题 / 终端 OSC 标题。
+    pub title: Option<&'a str>,
 }
 
 /// 当前激活工作区的 Agents 条目（按标签与树序，同一窗格先 lx 后终端 Agent）。
-pub fn agent_items(state: &AppState) -> Vec<AgentListItem> {
+pub fn agent_items<'a>(state: &'a AppState) -> Vec<AgentListItem<'a>> {
     state
         .agent_entries()
         .into_iter()
-        .map(|entry| AgentListItem {
-            tab_index: entry.tab_index,
-            pane_id: entry.pane_id,
-            kind: entry.kind,
-            state: entry.state,
+        .map(|entry| {
+            let title = state
+                .pane_anywhere(entry.pane_id)
+                .and_then(|pane| pane.agent_display_title(entry.kind));
+            AgentListItem {
+                tab_index: entry.tab_index,
+                pane_index: entry.pane_index,
+                pane_id: entry.pane_id,
+                kind: entry.kind,
+                state: entry.state,
+                title,
+            }
         })
         .collect()
 }
@@ -559,12 +570,31 @@ fn agent_scrollbar_for(
     state: &AppState,
     total: usize,
 ) -> Option<widgets::scrollbar::ScrollbarLayout> {
-    widgets::scrollbar::layout(list, total, usize::from(list.height), state.agent_scroll)
+    let content = agent_content_rect(list);
+    widgets::scrollbar::layout(
+        content,
+        total,
+        agent_visible_items(list),
+        state.agent_scroll,
+    )
 }
 
-/// Agents 列表可见行数；分区缺失或折叠时为 None。
+/// Agents 分区可见的完整条目数；每个条目固定 2 行。
+fn agent_visible_items(list: Rect) -> usize {
+    (usize::from(list.height) / 2).max(1)
+}
+
+/// Agents 实际渲染区：高度向下取偶，避免底部出现半个条目。
+fn agent_content_rect(list: Rect) -> Rect {
+    let height = u16::try_from(agent_visible_items(list).saturating_mul(2))
+        .unwrap_or(u16::MAX)
+        .min(list.height);
+    Rect { height, ..list }
+}
+
+/// Agents 列表可见条目数；分区缺失或折叠时为 None。
 pub fn agent_list_rows(view: &layout::ViewLayout, state: &AppState) -> Option<usize> {
-    agents_list_rect(view, state).map(|list| usize::from(list.height))
+    agents_list_rect(view, state).map(agent_visible_items)
 }
 
 /// 坐标是否落在 Agents 分区（含空白与滚动条列）。
@@ -577,7 +607,7 @@ pub fn agents_section_at(
     agents_list_rect(view, state).is_some_and(|list| list.contains((column, row).into()))
 }
 
-/// Agents 条目槽位命中（含滚动偏移）；滚动条列、空行不命中。
+/// Agents 条目槽位命中（含滚动偏移）；两行命中同一条目，滚动条列与底部留空行不命中。
 pub fn agent_item_index_at(
     view: &layout::ViewLayout,
     state: &AppState,
@@ -585,18 +615,21 @@ pub fn agent_item_index_at(
     row: u16,
 ) -> Option<usize> {
     let list = agents_list_rect(view, state)?;
-    if !list.contains((column, row).into()) {
+    let content = agent_content_rect(list);
+    if !content.contains((column, row).into()) {
         return None;
     }
     let total = state.agent_entry_count();
     let content_width = match agent_scrollbar_for(list, state, total) {
-        Some(_) => list.width.saturating_sub(1),
-        None => list.width,
+        Some(_) => content.width.saturating_sub(1),
+        None => content.width,
     };
-    if column >= list.x.saturating_add(content_width) {
+    if column >= content.x.saturating_add(content_width) {
         return None;
     }
-    let slot = state.agent_scroll.saturating_add(usize::from(row - list.y));
+    let slot = state
+        .agent_scroll
+        .saturating_add(usize::from(row - content.y) / 2);
     (slot < total).then_some(slot)
 }
 
@@ -644,13 +677,14 @@ pub fn render_agents(frame: &mut Frame<'_>, area: Rect, state: &AppState) {
         );
         return;
     }
+    let content = agent_content_rect(area);
     let scrollbar = agent_scrollbar_for(area, state, items.len());
     let list_area = match &scrollbar {
         Some(_) => Rect {
-            width: area.width.saturating_sub(1),
-            ..area
+            width: content.width.saturating_sub(1),
+            ..content
         },
-        None => area,
+        None => content,
     };
     let items = agent_list_items(state, &items, usize::from(list_area.width));
     let mut list_state = ListState::default().with_offset(state.agent_scroll);
@@ -660,11 +694,12 @@ pub fn render_agents(frame: &mut Frame<'_>, area: Rect, state: &AppState) {
     }
 }
 
-/// Agents 条目行：悬停使用高亮底色；聚焦窗格且与条目目标视图匹配时用行首符号标记（不独立着色）；
+/// Agents 条目：每条固定两行（状态/名称/归属 + 标题）；悬停使用高亮底色；
+/// 聚焦窗格且与条目目标视图匹配时用行首符号标记（不独立着色）；
 /// 工作/阻塞实心圆点着色、空闲空心圆点弱化；归属标签固定右对齐，宽度不足先截断名称。
 fn agent_list_items<'a>(
     state: &'a AppState,
-    items: &[AgentListItem],
+    items: &[AgentListItem<'a>],
     width: usize,
 ) -> Vec<ListItem<'a>> {
     let active_tab = state.active_workspace().active_tab;
@@ -686,7 +721,8 @@ fn agent_list_items<'a>(
             "  ".to_string()
         };
         let dot = format!("{} ", text::agent_status_dot(item.state));
-        let location = text::agent_location(item.tab_index);
+        // 条目模型与 `agent_location` 的窗格序号均为 0 基，显示时统一 +1。
+        let location = text::agent_location(item.tab_index, item.pane_index);
         let fixed = marker.chars().count() + dot.chars().count() + location.chars().count();
         let name = text::ellipsize(
             text::sidebar_agent_label(item.kind),
@@ -696,14 +732,28 @@ fn agent_list_items<'a>(
         let marker_style = style::strong().patch(highlight);
         // 状态圆点特殊色叠在行底之上：hover 只提供背景，不覆盖运行/阻塞状态色。
         let dot_style = highlight.patch(style::agent_status(item.state));
-        let spans = vec![
+        let mut lines = vec![Line::from(vec![
             Span::styled(marker, marker_style),
             Span::styled(dot, dot_style),
             Span::styled(name, style::strong().patch(highlight)),
             Span::styled(" ".repeat(padding), Style::default().patch(highlight)),
             Span::styled(location, style::muted().patch(highlight)),
-        ];
-        rows.push(ListItem::new(Line::from(spans)).style(highlight));
+        ])];
+
+        let title = item
+            .title
+            .filter(|title| !title.is_empty())
+            .unwrap_or(text::AGENT_NO_TITLE);
+        let prefix = text::agent::TREE_LEAF;
+        let title = text::ellipsize_width(title, width.saturating_sub(prefix.width()));
+        let title_padding = width.saturating_sub(prefix.width() + title.width());
+        lines.push(Line::from(vec![
+            Span::styled(prefix, style::muted().patch(highlight)),
+            Span::styled(title, style::muted().patch(highlight)),
+            Span::styled(" ".repeat(title_padding), Style::default().patch(highlight)),
+        ]));
+
+        rows.push(ListItem::new(lines).style(highlight));
     }
     rows
 }

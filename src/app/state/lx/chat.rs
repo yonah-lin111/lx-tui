@@ -620,6 +620,9 @@ pub struct LxChat {
     pub session_title_palette: u8,
     /// `/resume` 选中会话后，历史消息是否仍在后台拉取中。
     pub loading_session: bool,
+    /// 侧栏 Agents 条目的临时显示标题（仅内存；不改会话标题、不落库、
+    /// 不影响输入框右上角标题胶囊与 `/resume` 列表）。
+    pub agent_title_override: Option<String>,
 }
 
 pub use crate::ui::style::SESSION_TITLE_PALETTE_COUNT;
@@ -726,6 +729,7 @@ impl LxChat {
             session_title: None,
             session_title_palette: 0,
             loading_session: false,
+            agent_title_override: None,
         }
     }
 
@@ -804,6 +808,7 @@ impl LxChat {
         self.session_title = None;
         self.session_title_palette = 0;
         self.loading_session = false;
+        self.agent_title_override = None;
         self.status.streaming = false;
         if matches!(self.request, RequestState::Committing { .. }) {
             self.request = RequestState::Idle;

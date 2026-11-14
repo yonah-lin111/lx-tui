@@ -9,6 +9,7 @@ use crate::tiling::PaneId;
 pub use text_input::TextInput;
 
 use super::prompt::{PromptEditing, PromptPageId};
+use super::state::SidebarAgentKind;
 use super::trust::TrustWorkspace;
 
 /// 删除确认浮层要求输入的固定英文确认口令（忽略首尾空白与 ASCII 大小写）。
@@ -362,6 +363,13 @@ pub enum OverlayTarget {
     },
     /// Todo 列表空白区域。
     TodoBlank,
+    /// 侧栏 Agents 条目；同一窗格可能同时有 lx 与终端两条，必须带 kind 区分。
+    Agent {
+        workspace: usize,
+        tab: usize,
+        pane: PaneId,
+        kind: SidebarAgentKind,
+    },
 }
 
 /// 菜单命令；文案由 `ui/text.rs` 按命令映射，app 层不持有用户可见字符串。
@@ -423,6 +431,10 @@ pub enum MenuCommand {
     DeleteWorkspaceHistory,
     /// 工作区历史列表：一键删除全部路径不存在的工作区（菜单内 2 击确认 + 模态弹窗输入确认）。
     DeleteMissingWorkspaces,
+    /// 侧栏 Agents：编辑标题（纯内存覆盖）。
+    EditAgentTitle,
+    /// 侧栏 Agents：关闭条目（lx 关会话视图，终端 Agent 关窗格）。
+    CloseAgent,
 }
 
 impl MenuCommand {
@@ -441,6 +453,7 @@ impl MenuCommand {
                 | Self::DeleteMissingWorkspaces
                 | Self::SwitchToWorkspaceCwd
                 | Self::SyncWorkspaceToTerminalCwd
+                | Self::CloseAgent
         )
     }
 }
@@ -450,9 +463,25 @@ impl MenuCommand {
 pub enum RenameTarget {
     Workspace(usize),
     WorkspaceHistory(usize),
-    Tab { workspace: usize, tab: usize },
-    PromptFolder { workspace: usize, folder_id: i64 },
-    PromptItem { workspace: usize, item_id: i64 },
+    Tab {
+        workspace: usize,
+        tab: usize,
+    },
+    PromptFolder {
+        workspace: usize,
+        folder_id: i64,
+    },
+    PromptItem {
+        workspace: usize,
+        item_id: i64,
+    },
+    /// 侧栏 Agents 条目标题（仅覆盖显示，不改会话/终端真实标题）。
+    AgentTitle {
+        workspace: usize,
+        tab: usize,
+        pane: PaneId,
+        kind: SidebarAgentKind,
+    },
 }
 
 /// 重命名浮层：目标与单行输入。
