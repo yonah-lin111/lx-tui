@@ -1421,7 +1421,7 @@ fn unknown_command_detection_matches_panel_rules() {
 }
 
 #[test]
-fn ctrl_o_on_mcp_card_toggles_section_instead_of_opening_task_page() {
+fn ctrl_o_on_mcp_card_is_a_noop() {
     let mut state = AppState::demo();
     let pane = focus_pane(&state);
     let mut call = crate::app::state::ToolCallView::new("call-mcp", "mcp__codegraph__explore", 0);
@@ -1467,18 +1467,24 @@ fn ctrl_o_on_mcp_card_toggles_section_instead_of_opening_task_page() {
         .chat
         .messages
         .push(assistant);
+    if let Some(target) = state.pane_mut_anywhere(pane) {
+        target.lx.chat.selected_tool = Some(("msg-a".into(), "call-mcp".into()));
+    }
 
-    assert!(open_task_for_selected_tool(&mut state, pane));
+    assert!(!open_task_for_selected_tool(&mut state, pane));
     let target = state.pane_anywhere(pane).expect("pane");
     assert!(
         target.lx.task.is_none(),
-        "Ctrl+O on MCP card must not open the background task panel"
+        "MCP card must not open the task page"
     );
-    assert!(target.lx.chat.section_is_expanded(
-        "msg-a",
-        "call-mcp",
-        crate::app::state::CardSection::Output
-    ));
+    assert!(
+        !target.lx.chat.section_is_expanded(
+            "msg-a",
+            "call-mcp",
+            crate::app::state::CardSection::Output
+        ),
+        "MCP card has no expandable section"
+    );
 }
 
 #[test]

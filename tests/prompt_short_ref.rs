@@ -46,7 +46,7 @@ fn type_text(state: &mut AppState, text: &str) {
 
 /// 文档里先有一个模板块文件提及（长路径），用户随后输入 `design` 并用面板确认。
 #[test]
-fn selecting_candidate_inserts_last_two_segments() {
+fn selecting_candidate_inserts_original_reference_text() {
     let (mut state, _config, _view) = ready_state();
     update::focus_prompt(&mut state);
     state
@@ -66,15 +66,15 @@ fn selecting_candidate_inserts_last_two_segments() {
         state
             .prompt
             .text()
-            .ends_with("@[ref-content]/lx-at-mention/design.md "),
-        "确认后插入末两段快捷引用: {}",
+            .ends_with("@docs/feature/lx-at-mention/design.md "),
+        "确认后插入候选原文: {}",
         state.prompt.text()
     );
 }
 
 /// 引用根形式的目录候选：短名带尾斜杠，绝不出现根目录歧义。
 #[test]
-fn directory_candidate_inserts_slash_suffixed_short_name() {
+fn directory_candidate_inserts_original_reference_marker() {
     let (mut state, _config, _view) = ready_state();
     update::focus_prompt(&mut state);
     state
@@ -88,8 +88,8 @@ fn directory_candidate_inserts_slash_suffixed_short_name() {
         state
             .prompt
             .text()
-            .ends_with("@[ref-content]/agent/lx-agent/ "),
-        "目录快捷引用带尾斜杠: {}",
+            .ends_with("@[refer-folder](/Users/yonah/projects/agent/lx-agent) "),
+        "目录候选插入原标记: {}",
         state.prompt.text()
     );
     assert!(
@@ -125,30 +125,6 @@ fn short_ref_is_highlighted_distinctly() {
     assert_ne!(short.fg, mention.fg, "两种 @ 一眼可分");
 }
 
-/// ref-content 快捷引用有独立高亮颜色：柔紫（Indexed 141）加粗。
-#[test]
-fn ref_content_is_highlighted_distinctly() {
-    let (mut state, config, view) = ready_state();
-    update::focus_prompt(&mut state);
-    state.prompt.set_text("@[ref-content]/a/b.md @src/main.rs");
-    let mut terminal =
-        Terminal::new(TestBackend::new(120, 24)).expect("test backend is infallible");
-    terminal
-        .draw(|frame| ui::render(frame, &state, &config))
-        .expect("draw succeeds");
-
-    let buffer = terminal.backend().buffer();
-    let text = geometry::prompt_text_rect(view.right_panel);
-    let ref_content = &buffer[(text.x, text.y)];
-    assert_eq!(ref_content.symbol(), "@");
-    assert_eq!(ref_content.fg, Color::Indexed(141), "快捷引用柔紫");
-    assert!(
-        ref_content.modifier.contains(Modifier::BOLD),
-        "快捷引用加粗"
-    );
-    assert!(!ref_content.modifier.contains(Modifier::UNDERLINED));
-}
-
 /// 再输入同名片段时，已有的短引用也能被面板重新选中。
 #[test]
 fn existing_short_ref_is_offered_again() {
@@ -165,8 +141,8 @@ fn existing_short_ref_is_offered_again() {
         state
             .prompt
             .text()
-            .ends_with("@[ref-content]/lx-at-mention/design.md "),
-        "重复确认同一短引用转换为标准快捷引用: {}",
+            .ends_with("@ref/lx-at-mention/design.md "),
+        "重复确认短引用仍插入原文: {}",
         state.prompt.text()
     );
 }
@@ -180,15 +156,4 @@ fn backspace_deletes_short_ref_as_one_block() {
     type_text(&mut state, "");
     update::apply_editor(&mut state, EditorCommand::Backspace);
     assert_eq!(state.prompt.text(), "见 ", "整块删除");
-}
-
-/// Backspace 把整段 ref-content 快捷引用（含尾随空白）一次删净。
-#[test]
-fn backspace_deletes_ref_content_as_one_block() {
-    let (mut state, _config, _view) = ready_state();
-    update::focus_prompt(&mut state);
-    state.prompt.set_text("见 @[ref-content]/src/main.rs ");
-    type_text(&mut state, "");
-    update::apply_editor(&mut state, EditorCommand::Backspace);
-    assert_eq!(state.prompt.text(), "见 ", "整块删除 ref-content");
 }

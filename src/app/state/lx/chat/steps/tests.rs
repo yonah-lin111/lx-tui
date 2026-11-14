@@ -190,6 +190,41 @@ fn accept_arguments_marks_pending_or_reports_invalid() {
 }
 
 #[test]
+fn mcp_call_has_identity_detail_before_arguments_arrive() {
+    let call = ToolCallView::new("c-mcp", "mcp__github__create_issue", 0);
+    let Some(crate::app::state::ToolDetailView::Mcp(view)) = call.detail.as_deref() else {
+        panic!("MCP 调用必须在流式早期就带身份详情");
+    };
+    assert_eq!(view.server, "github");
+    assert_eq!(view.tool, "create_issue");
+    assert_eq!(view.duration_ms, None);
+}
+
+#[test]
+fn resource_call_has_identity_detail_before_arguments_arrive() {
+    let call = ToolCallView::new("c-resource", "read_resource", 0);
+    let Some(crate::app::state::ToolDetailView::Mcp(view)) = call.detail.as_deref() else {
+        panic!("resources 桥接工具也必须有身份详情");
+    };
+    assert_eq!(view.server, "all servers");
+    assert_eq!(view.tool, "read_resource");
+}
+
+#[test]
+fn image_result_clears_argument_derived_range() {
+    let summary = ToolSummary::from_arguments(r#"{"path":"a.png","offset":12,"limit":29}"#);
+    assert_eq!(summary.range, Some((12, 40)));
+    let result = ToolSummary {
+        path: Some("a.png".into()),
+        read_kind: Some(crate::chat::tools::ReadKind::Image),
+        ..ToolSummary::default()
+    };
+    let merged = summary.absorb_summary(&result);
+    assert_eq!(merged.range, None, "图片结果必须清掉参数推测区间");
+    assert_eq!(merged.read_lines, None);
+}
+
+#[test]
 fn relativize_project_path_strips_current_project_prefix_and_keeps_external_paths() {
     let root = std::path::Path::new("/Users/yonah/projects/agent/lx-tui");
     assert_eq!(
@@ -289,12 +324,12 @@ fn user_history_reference_paths_extracts_attachments_and_mentions_from_user_mess
     });
     chat.messages.push(msg2);
 
-    // 3. 用户消息 2：包含 @[ref-content]/docs/readme.md
+    // 3. 用户消息 2：包含 @docs/readme.md
     let mut msg3 = assistant();
     msg3.role = "user".into();
     msg3.steps.push(AssistantStepView::Part {
         position: 0,
-        part: text("再看 @[ref-content]/docs/readme.md 以及已有的 @src/main.rs"),
+        part: text("再看 @docs/readme.md 以及已有的 @src/main.rs"),
     });
     chat.messages.push(msg3);
 

@@ -2,7 +2,8 @@
 
 > 状态：**已实现**（2026-11-11）。
 > 本文件是 `tui-design-requirements.md` 的 lx 消息块分册，专门记录消息列表里每个工具、每个非正文块的单体显示与合并显示。
-> 合并与 `read` 单条路径的详细设计与实施记录见 `docs/feature/lx-tool-call-grouping/`。
+> 合并与 `read` 单条路径的历史设计见 `docs/feature/lx-tool-call-grouping/`；
+> MCP 身份卡、`read` 行数与合并组分隔行的最新设计见 `docs/feature/mcp-identity-card-and-group-spacing/`。
 
 ## 1. 适用范围
 
@@ -45,21 +46,22 @@
 
 - 标题行是唯一不带连接符的行。
 - 单卡树体使用 `├─` / `└─` / `│`，一级前缀固定 5 列（`TREE_COLS = 5`）；末节点续行用等宽空白，不补 `│`。
-- 工具列表合并组内：每个调用的一级首节点（或多目标 `wait_agent` 的各目标行）在非末调用时用 `  ├─ `、末调用最后一个一级节点用 `  └─ `（5 列前缀）；该调用内部的后续子节点（结果、命令输出、搜索命中、diff、子 agent 报告等）缩进为二级子树，前缀固定 8 列（`TREE_NESTED_COLS = 8`：非末调用 `  │  └─ ` + 续行 `  │     `，末调用 `     └─ ` + 续行 `        `），并按 `width - 8` 折行，防止右侧 3 列被裁切。
+- 工具列表合并组内：每个调用的一级首节点在非末调用时用 `  ├─ `、末调用最后一个一级节点用 `  └─ `（5 列前缀）；该调用内部的后续子节点（结果、命令输出、搜索命中、diff、子 agent 报告等）缩进为二级子树，前缀固定 8 列（`TREE_NESTED_COLS = 8`：非末调用 `  │  └─ ` + 续行 `  │     `，末调用 `     └─ ` + 续行 `        `），并按 `width - 8` 折行，防止右侧 3 列被裁切。
+- 列表合并组的**非末尾调用体**尾部多一行 `  │  ` 分隔（5 列树前缀、无正文）；末尾调用与快照合并组不追加。分隔行只在 `width > TREE_NESTED_COLS` 时绘制竖线，更窄时仅占一行空白（仍计入行数、不登记点击面），避免孤立竖线。
 - 极窄宽度放不下树体前缀（单卡 `width <= 5`、二级子树 `width <= 8`）时整段让位，内容按整宽折行，不画半个宽字符。
 
 ### 2.4 空行
 
 - 同一条消息内任意两个块之间**空一行**。
-- **例外**：工具合并组内部不空行；组头与第一个调用、调用与调用之间都紧邻。
-- 组与前后块之间仍空一行。
+- 工具合并组：组头与第一个调用紧邻；调用体之间由**非末尾调用尾部的一行 `  │  `** 分隔（不是 `snapshot::spacer()` 的整行空行）；末尾调用后不再追加，组与前后块之间仍空一行。
+- 快照合并组只有一个调用体，天然没有调用间分隔行。
 - 空行只由 `history::snapshot` 累加，绘制路径不得另算。
 
 ### 2.5 折叠
 
 - 每个可折叠块独立；点击一块只切换该块。
 - 工具合并组头不可点击，不提供“整组折叠”。
-- `read` 标题下方只显示一条路径；路径不换行，结果正文与参数事实不占第二行。
+- `read` 标题下方只显示一条路径（结果体确认后带 `:12-40 · 29 lines` 后缀）；路径不换行，结果正文不占第二行。
 - 折叠提示行属于折叠区，计入点击面；`… N more lines` 不单独收口。
 - 执行阶段发生输出截断（`truncated == true`）时，不在工具标题栏、组头或输出正文中显示截断标签或 `output limited`，统一在 `… N more lines` 提示行末尾追加 `[truncated]`（`… N more lines [truncated]`）；无 `more lines` 提示行时不单独渲染 `[truncated]` 行。
 
@@ -69,6 +71,8 @@
 
 - 同一条 assistant 消息内、相邻的 `Tool` 步骤。
 - 精确工具名相同（`call.name`）才合并；`edit` 与 `write` 不合并，`read` 与 `search` 不合并。
+- **MCP 例外**：所有相邻 MCP 工具与 resources 桥接工具统一按常量键 `mcp` 合并，不区分 server / tool。
+- `wait_agent` 不合并：每次等待的目标集合与条件独立，各自成卡。
 - `write_stdin` 额外按**显示动词**区分：`Send input` / `Read command output` / `Stop command` 不同动词不合并。
 - 正文、思考、消息结束打断分组；跨消息不合并。
 - 组内至少 2 个调用才显示组头；单调用保持单体卡片。
@@ -90,9 +94,9 @@
 
 - 每个调用的第一个可见树节点就是该调用的摘要行。
 - 原单体标题状态（`Exited 0 · 241ms`、`3 matches`、`1/3 completed`、`2 questions` 等）移动到该调用首节点尾部，仍用 ` · ` 分隔。
-- 每个调用保留完整树体；`read` 例外：标题下方只显示一条路径。
+- 每个调用保留完整树体；`read` 例外：标题下方只显示一条路径（可带结果体行区间/行数）；MCP 例外：只显示 server/tool 身份行。
 - 失败/中断调用保留错误/中断文案；连接符与状态文字用对应语义色，错误正文保持正常前景。
-- 每个调用体保留自己的折叠状态、点击面、行底色、链接热区。
+- 每个调用体保留自己的折叠状态、点击面、行底色、链接热区；末尾的分隔行只占行数，不登记任何点击面。
 
 ### 3.4 合并形态分类
 
@@ -100,13 +104,13 @@
 | --- | --- | --- |
 | 列表合并 | 组头下按顺序显示每个调用 | 大多数工具 |
 | 快照合并 | 组头下只显示**最后一次**调用，组头标注更新次数 | 状态快照类工具 |
-| 不合并 | 每个调用/块独立显示，中间空一行 | 阻塞交互、系统事件、消息级块 |
+| 不合并 | 每个调用/块独立显示，中间空一行 | `ask`、`wait_agent`、系统事件、消息级块 |
 
 ## 4. 工具清单
 
 | 工具 | 单体标题 | 合并形态 | 合并键 | 实现位置 |
 | --- | --- | --- | --- | --- |
-| `read` | `■ Read · file` / `· folder · N files` / `· image` | 列表合并；每调用只显示一条路径 | `read` | `tool/file_summary.rs` |
+| `read` | `■ Read · file` / `· folder · N files` / `· image` | 列表合并；路径 + 结果体行区间/行数 | `read` | `tool/file_summary.rs` |
 | `search` | `■ Search · N matches` | 列表合并；组头可汇总命中 | `search` | `tool/search.rs` |
 | `web_search` | `■ Web search · provider · 840ms` | 列表合并 | `web_search` | `tool/web_search.rs` |
 | `edit` | `■ Edit` | 列表合并；组头汇总增删 | `edit` | `tool/file_diff.rs` / `file_summary.rs` |
@@ -120,12 +124,12 @@
 | `send_input` | `■ Send agent input · status` | 列表合并 | `send_input` | `tool/subagent.rs` |
 | `interrupt_agent` | `■ Interrupt agent` | 列表合并 | `interrupt_agent` | `tool/subagent.rs` |
 | `resume_agent` | `■ Resume agent · status` | 列表合并 | `resume_agent` | `tool/subagent.rs` |
-| `wait_agent` | `■ Wait agents · 条件` | 列表合并 | `wait_agent` | `tool/subagent.rs` |
+| `wait_agent` | `■ Wait agents · 条件` | **不合并**；每次等待独立 | — | `tool/subagent.rs` |
 | `close_agent` | `■ Close agent` | 列表合并 | `close_agent` | `tool/subagent.rs` |
 | `list_agents` | `■ List agents` | **快照合并**：只显示最新列表，组头 `· N updates` | `list_agents` | `tool/subagent.rs` |
 | `cancel_agent_input` | `■ Cancel agent input · status` | 列表合并 | `cancel_agent_input` | `tool/subagent.rs` |
-| MCP 工具 | `■ server · tool · 840ms` | 列表合并 | 完整 MCP 工具名 | `tool/mcp.rs` |
-| MCP resources | `■ server · tool` | 列表合并 | 完整工具名 | `tool/mcp.rs` |
+| MCP 工具 | `■ MCP · 840ms` | 列表合并；纯身份卡，无参数/结果 | `mcp` | `tool/mcp.rs` |
+| MCP resources | `■ MCP · 840ms` | 与 MCP 工具同组同规则 | `mcp` | `tool/mcp.rs` |
 | 未知工具 | `■ <tool name>` | 列表合并 | 完整工具名 | `tool/file_summary.rs` |
 
 ## 5. 各工具显示
@@ -136,27 +140,30 @@
 
 ```text
 ■ Read · file
-  └─ src/event/mod.rs
+  └─ src/event/mod.rs:12-40 · 29 lines
 ```
 
 合并：
 
 ```text
 ■ Read · 3 calls
-  ├─ src/event/mod.rs
-  ├─ src/app/state.rs
-  └─ src/main.rs
+  ├─ src/event/mod.rs:12-40 · 29 lines
+  │
+  ├─ src/app/state.rs:1-20 · 20 lines
+  │
+  └─ src/main.rs:7 · 1 line
 ```
 
 规则：
 
 - 标题保留 `file` / `folder · N files` / `image` 状态；目录条目数照常显示。
 - 标题下方**只显示一条路径**：路径、目录条目、图片路径都一样，不出现第二条内容行。
-- 不显示行范围、实际行数、`output limited`、`… N more lines`，也不渲染读取结果正文。
-- 路径超宽时**单行尾部省略**，不软换行成第二行。
+- 结果体确认后，路径后追加 `:start-end · N lines`（单行 `:start · 1 line`）；`range` 与 `read_lines` **只认结果体**，运行中/旧记录只显示路径，绝不拿参数 `offset`/`limit` 预估。
+- 目录与图片不显示行区间；也不显示 `output limited`、`… N more lines`，不渲染读取结果正文。
+- 路径超宽时**后缀优先保留**，路径自身单行尾部省略；后缀放不下时整段丢弃，只显示路径。
 - 失败/中断：显示一条错误/中断原因（单行尾部省略），不显示路径与结果正文。
 - `read` 没有可展开内容，不登记点击面。
-- 合并后每个调用只保留自己的一条路径，不扁平混合成多行参数。
+- 合并后每个调用只保留自己的一条路径（带各自行区间），不扁平混合成多行参数。
 
 ### 5.2 `search`
 
@@ -412,50 +419,71 @@
      └─ Report: ...
 ```
 
-`wait_agent`：
+`wait_agent`（**不合并**，每次等待独立成卡）：
 
 ```text
 ■ Wait agents · 2 targets · all · until done
   ├─ ■ explorer · completed
   └─ ■ executor · running
+
+■ Wait agents · 1 target · any · until done
+  └─ ■ explorer · running
 ```
 
 规则：
 
-- 目标行是链接，点击打开 Agents 面板并定位；合并后链接偏移按调用体重新计算。
+- 目标行是链接，点击打开 Agents 面板并定位；链接偏移按每张卡自己的树体重新计算。
 - `spawn_agent` / `send_input` / `resume_agent` / `cancel_agent_input` 的状态在首节点尾部；`wait_agent` 的等待条件在首节点尾部；`close_agent` 无状态。
 - `list_agents` 连续调用是状态快照：**快照合并**，只显示最新列表，组头 `· N updates`。
 - 其他子 agent 工具列表合并；`spawn_agent` 重复调用是多个独立委派，不折叠。
+- `wait_agent` 退出列表合并：等待目标集合与条件属于每次调用自己的语义，合并会丢失“这一次等了谁”；连续等待之间走普通块间空行。
 - `wait_agent` 不用呼吸动画，目标状态只用静态绿/黄/红。
 
 ### 5.11 MCP 工具与 resources
 
-单体：
+MCP 卡片是**纯身份卡**：只回答“哪个 server、调了哪个 tool、花了多久、有没有图片、失败原因是什么”，**不显示参数与结果正文**，也不可展开。
+
+单体成功：
 
 ```text
-■ filesystem · read_file · 120ms · 1 image
-  ├─ path: src/main.rs
-  └─ Result markdown...
-     … 2 more lines
+■ MCP · 120ms
+  └─ filesystem · read_file
+```
+
+单体带图片：
+
+```text
+■ MCP · 120ms · 1 image(s)
+  └─ filesystem · read_file
+```
+
+单体失败/中断（不写耗时）：
+
+```text
+■ MCP
+  ├─ filesystem · read_file
+  └─ failed: server not connected
 ```
 
 合并：
 
 ```text
-■ filesystem · read_file · 2 calls
-  ├─ path: src/main.rs
-  │  └─ Result...
-  └─ path: src/lib.rs
-     └─ Result...
+■ MCP · 2 calls
+  ├─ codegraph · 38ms
+  │  └─ codegraph_explore
+  │
+  └─ codebase-memory-mcp · 38ms
+     └─ list_projects
 ```
 
 规则：
 
-- 标题为 `server · tool`；状态为耗时与图片数，结果截断统一在 `… N more lines [truncated]` 提示行末尾展示。
-- 参数块与结果块各自独立折叠；图片只显示一行元数据（路径可复制），不读字节。
-- 合并组内若调用无参数（`arguments` 为空），以 `(no arguments)` 作为一级首节点并承载耗时等状态，结果块统一缩进为二级子节点。
-- 合并键是完整工具名（含 server 前缀）；同名 MCP 工具才合并。
-- MCP resources 桥接工具 `list_resources` / `list_resource_templates` / `read_resource` 同规则。
+- 标题动词固定为 `MCP`；状态为耗时与图片数。失败/中断不写耗时，标题与首节点连接符走语义色。
+- 单体身份行 `server · tool`：server 浅黄（`chat_tool_param()`），` · ` 用次要信息色（`agent_step_detail()`），tool 名用正常文字色；身份行超宽时按普通树体规则折行，不做单行截断（超长 server/tool 有 512 字符安全上限）。
+- 合并组内 server 是一级节点（承载耗时/图片状态），tool 是二级子节点；失败/中断原因行是 tool 的兄弟二级节点，恒单行尾部省略。
+- **所有相邻 MCP 调用共用常量合并键 `mcp`**，不区分 server/tool；MCP resources 桥接工具 `list_resources` / `list_resource_templates` / `read_resource` 同组同规则。
+- 不渲染参数、结果、图片元数据行、`… N more lines`、`[truncated]`，也不登记任何点击面；需要完整结果请查日志/调试输出。
+- 调用体之间由合并组统一的分隔行承担空行（非末尾调用尾部一行 `  │`）。
 
 ### 5.12 未知工具
 
@@ -658,16 +686,17 @@ for step in message.steps:
 
 - 组大小 >= 2 才渲染组头；否则按单体。
 - 快照合并工具（`update_plan` / `list_agents`）在组内只保留最后一次调用的正文，组头计数为调用次数。
-- 不合并工具（`ask`）遇到同种调用也各自成块。
+- 不合并工具（`ask` / `wait_agent`）遇到同种调用也各自成块。
 - 非工具块不参与工具分组。
-- 组合并键在 `write_stdin` 上为 `(name, display verb)`。
+- 组合并键在 `write_stdin` 上为 `(name, display verb)`；MCP 工具与 resources 桥接工具统一为常量 `mcp`。
 
 ## 8. 几何与命中
 
 - 组头块 1 行，不可点击。
-- 每个调用体一个独立块；组内连续放置，不插入 spacer。
-- 调用体的点击面、折叠 hover 区、agent 链接偏移都相对**该调用体块首**，不含组头。
-- `read` 只有一条路径，不登记点击面。
+- 每个调用体一个独立块；组内连续放置，不插入 `snapshot::spacer()`。
+- 列表合并组的非末尾调用体尾部多 1 行 `  │`（计入该块行数与滚动几何），分隔行不属于任何点击面。
+- 调用体的点击面、折叠 hover 区、agent 链接偏移都相对**该调用体块首**，不含组头与分隔行。
+- `read` 只有一条路径，不登记点击面；MCP 身份卡不显示参数/结果，也不登记点击面。
 - `rows` / `draw` / 命中 / 滚动条 / 置顶行全部读同一份 `history::snapshot`，禁止在绘制路径另算行数。
 
 ## 9. 新增工具时的更新清单
@@ -685,6 +714,7 @@ for step in message.steps:
 ## 10. 相关文档
 
 - `docs/feature/lx-tool-call-grouping/design.md`：合并与 `read` 单条路径的详细设计与待确认项。
+- `docs/feature/mcp-identity-card-and-group-spacing/design.md`：MCP 身份卡、`read` 行数与合并组分隔行的详细设计。
 - `docs/feature/lx-tool-call-grouping/task.md`：实施步骤与测试矩阵。
 - `docs/standards/tui-design-requirements.md`：lx 聊天区的完整交互与视觉规范。
 - `docs/feature/lx-file-tool-diff/design.md`：文件 diff 卡的历史设计（其旧合并卡描述已被本文取代）。

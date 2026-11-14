@@ -1,7 +1,8 @@
-//! MCP 工具卡片：`■ server · tool  参数摘要  耗时` + 参数/结果/图片树体。
+//! MCP 工具身份卡：`■ MCP · 耗时` + `server · tool`。
 //!
-//! 折叠态只显示参数摘要与每个块的前 3 行；展开态铺开参数与结果（各最多 20 行）。
-//! 图片只显示一行元数据（路径可复制），不读取字节。
+//! 卡片只回答“调了哪个 server / tool、花了多久、有没有图片、失败原因是什么”：
+//! 参数与结果正文一律不渲染，也不登记点击面。合并组内 server 为一级节点
+//! （承载耗时/图片状态），tool 与其错误原因缩进为二级子节点。
 
 use ratatui::layout::Rect;
 
@@ -9,228 +10,97 @@ use crate::app::state::{McpDetailView, ToolCallView, ToolStatus};
 use crate::ui::{style, text};
 
 use super::super::{Grid, visible_row};
-use super::tree::{self, Node, Preview, Section};
-use super::{
-    Folds, Segment, header_with_verb, muted_markdown_lines, output_style, put_segments, single_line,
-};
+use super::tree::{self, Node, Section};
+use super::{Folds, Segment, TEXT_SAMPLE_CHARS, header_with_verb, put_segments, single_line};
 
-const BLOCK_PREVIEW_ROWS: usize = 3;
-
+/// MCP 卡片的排版结果：只含身份行与错误原因行。
 pub(super) struct McpLayout {
     layout: tree::Layout,
-    /// 参数块（Body）的物理行数（含标题行时为 offset 0 的区域）。
-    pub(super) arguments_rows: usize,
-    /// 结果块（Output）的物理行数。
-    pub(super) result_rows: usize,
-    pub(super) arguments_expandable: bool,
-    pub(super) result_expandable: bool,
 }
 
-fn arguments_section(view: &McpDetailView, expanded: bool, in_group: bool) -> Option<Section> {
-    if view.arguments.is_empty() {
-        return in_group.then(|| {
-            Section::fixed(vec![Node::text(
-                text::agent::MCP_NO_ARGUMENTS,
-                style::agent_step_detail(),
-            )])
-        });
-    }
-    let lines: Vec<Vec<Segment>> = view
-        .arguments
-        .iter()
-        .map(|line| {
-            vec![Segment::new(
-                single_line(line, 2000),
-                style::chat_tool_param(),
-            )]
-        })
-        .collect();
-    Some(
-        Section::new(
-            vec![Node::block(lines)],
-            (!expanded).then(|| Preview::head(BLOCK_PREVIEW_ROWS)),
-        )
-        .with_omitted(view.arguments_more),
-    )
+/// 单个调用的身份行：server 浅黄，tool 正常文字色。
+fn identity_node(view: &McpDetailView) -> Node {
+    Node::new(vec![
+        Segment::new(
+            single_line(&view.server, TEXT_SAMPLE_CHARS),
+            style::chat_tool_param(),
+        ),
+        Segment::new(text::LX_CHAT_TOOL_STATUS_SEP, style::agent_step_detail()),
+        Segment::new(single_line(&view.tool, TEXT_SAMPLE_CHARS), style::text()),
+    ])
 }
 
-fn sanitize_result_line(line: &str, max_chars: usize) -> String {
-    let (cleaned, had_ellipsis) = if let Some(prefix) = line
-        .strip_suffix("…[truncated]")
-        .or_else(|| line.strip_suffix("[...truncated]"))
-    {
-        (prefix, !prefix.is_empty())
-    } else if let Some(prefix) = line.strip_suffix(text::agent::INLINE_TRUNCATED) {
-        (prefix, prefix.ends_with('…'))
-    } else {
-        (line, false)
-    };
-    let mut text = String::with_capacity(cleaned.len().min(max_chars + 4));
-    let mut clipped = false;
-    for (count, ch) in cleaned.chars().enumerate() {
-        if count == max_chars {
-            text.push('…');
-            clipped = true;
-            break;
-        }
-        text.push(if ch.is_control() { ' ' } else { ch });
-    }
-    let trimmed = text.trim_end();
-    if had_ellipsis && !clipped && !trimmed.is_empty() && !trimmed.ends_with('…') {
-        format!("{trimmed}…")
-    } else {
-        trimmed.to_string()
-    }
-}
-
-fn result_section(
-    call: &ToolCallView,
-    view: &McpDetailView,
-    width: u16,
-    expanded: bool,
-    in_group: bool,
-) -> Option<Section> {
-    let error_fallback = if view.result.is_empty()
-        && matches!(call.status, ToolStatus::Failed | ToolStatus::Interrupted)
-    {
-        call.error.as_deref().filter(|error| !error.is_empty())
-    } else {
-        None
-    };
-    if view.result.is_empty()
-        && error_fallback.is_none()
-        && view.images.is_empty()
-        && view.images_omitted == 0
-    {
+/// 失败/中断原因行：`failed: ...` / `interrupted: ...`，恒一行尾部省略。
+///
+/// 中断的稳定错误码本身就是 `interrupted`，与状态词重复时只输出一次。
+fn error_node(call: &ToolCallView, width: u16, in_group: bool) -> Option<Node> {
+    if !matches!(
+        call.status,
+        ToolStatus::Failed | ToolStatus::Interrupted | ToolStatus::Cancelled
+    ) {
         return None;
     }
-    let body_style = output_style(expanded);
-    let cols = if in_group {
+    let label = text::tool_status_label(call.status);
+    let reason = call
+        .error
+        .as_deref()
+        .map(|reason| single_line(reason, TEXT_SAMPLE_CHARS))
+        .unwrap_or_default();
+    let reason = reason.trim();
+    let message = if reason.is_empty() {
+        if call.status == ToolStatus::Cancelled {
+            label.to_string()
+        } else {
+            return None;
+        }
+    } else if reason.eq_ignore_ascii_case(label) {
+        label.to_string()
+    } else {
+        format!("{label}: {reason}")
+    };
+    let body = if in_group {
         tree::nested_content_width(width)
     } else {
         tree::content_width(width)
     };
-    let body_width = u16::try_from(cols).unwrap_or(u16::MAX);
-    let (mut lines, more) = if let Some(error) = error_fallback {
-        let error_lines: Vec<Vec<Segment>> = error
-            .lines()
-            .take(20)
-            .map(|line| sanitize_result_line(line, 8000))
-            .filter(|line| !line.is_empty())
-            .map(|line| vec![Segment::new(line, style::text())])
-            .collect();
-        (error_lines, error.lines().count().saturating_sub(20))
-    } else {
-        let raw_source = view
-            .result
-            .iter()
-            .map(|line| sanitize_result_line(line, 8000))
-            .collect::<Vec<_>>()
-            .join("\n");
-        (
-            muted_markdown_lines(&raw_source, body_width),
-            view.result_more,
-        )
-    };
-    let truncated = error_fallback.is_none()
-        && call
-            .summary
-            .as_deref()
-            .is_some_and(|summary| summary.truncated);
-    for image in &view.images {
-        lines.push(vec![Segment::new(
-            text::mcp::image_line(&image.mime, image.width, image.height, &image.path),
-            body_style,
-        )]);
-    }
-    if view.images_omitted > 0 {
-        lines.push(vec![Segment::new(
-            text::mcp::images_label(view.images_omitted),
-            style::fold_hint(),
-        )]);
-    }
-    if lines.is_empty() {
-        return None;
-    }
-    Some(
-        Section::new(
-            vec![Node::block(lines)],
-            (!expanded).then(|| Preview::head(BLOCK_PREVIEW_ROWS)),
-        )
-        .with_omitted(more)
-        .with_truncated(truncated),
-    )
-}
-
-pub(super) fn layout(
-    call: &ToolCallView,
-    view: &McpDetailView,
-    width: u16,
-    folds: Folds,
-) -> McpLayout {
-    layout_with_group(call, view, width, folds, false)
+    Some(Node::text(
+        crate::ui::main_content::lx::history::truncate_with_ellipsis(&message, body),
+        style::text(),
+    ))
 }
 
 pub(super) fn layout_with_group(
     call: &ToolCallView,
     view: &McpDetailView,
     width: u16,
-    folds: Folds,
+    _folds: Folds,
     in_group: bool,
 ) -> McpLayout {
-    let folded_arguments = arguments_section(view, false, in_group);
-    let folded_result = result_section(call, view, width, false, in_group);
-    let arguments_expandable = folded_arguments.as_ref().is_some_and(|section| {
-        let l = if in_group && folded_result.is_some() {
-            tree::layout_in_group(std::slice::from_ref(section), width, 1)
-        } else {
-            tree::layout(std::slice::from_ref(section), width)
-        };
-        l.hidden > 0
-    });
-    let result_expandable = folded_result.as_ref().is_some_and(|section| {
-        let l = if in_group {
-            tree::layout_in_group(std::slice::from_ref(section), width, 0)
-        } else {
-            tree::layout(std::slice::from_ref(section), width)
-        };
-        l.hidden > 0
-    });
-    let arguments = arguments_section(view, folds.body, in_group);
-    let result = result_section(call, view, width, folds.output, in_group);
-    let arguments_rows = arguments.as_ref().map_or(0, |section| {
-        if in_group && result.is_some() {
-            tree::layout_in_group(std::slice::from_ref(section), width, 1)
-                .rows
-                .len()
-        } else {
-            tree::layout(std::slice::from_ref(section), width)
-                .rows
-                .len()
-        }
-    });
-    let result_rows = result.as_ref().map_or(0, |section| {
-        if in_group {
-            tree::layout_in_group(std::slice::from_ref(section), width, 0)
-                .rows
-                .len()
-        } else {
-            tree::layout(std::slice::from_ref(section), width)
-                .rows
-                .len()
-        }
-    });
-    let sections: Vec<Section> = arguments.into_iter().chain(result).collect();
+    let mut sections = Vec::with_capacity(2);
+    if in_group {
+        // 合并态：server 为一级节点（承载耗时/图片状态），tool 与错误原因为二级子节点。
+        sections.push(Section::fixed(vec![Node::text(
+            single_line(&view.server, TEXT_SAMPLE_CHARS),
+            style::chat_tool_param(),
+        )]));
+        let mut children = vec![Node::text(
+            single_line(&view.tool, TEXT_SAMPLE_CHARS),
+            style::text(),
+        )];
+        children.extend(error_node(call, width, true));
+        sections.push(Section::fixed(children));
+    } else {
+        // 单体：`server · tool` 一行，`└─` 收口；错误原因是兄弟节点。
+        let mut roots = vec![identity_node(view)];
+        roots.extend(error_node(call, width, false));
+        sections.push(Section::fixed(roots));
+    }
     McpLayout {
         layout: if in_group {
             tree::layout_in_group(&sections, width, 1)
         } else {
             tree::layout(&sections, width)
         },
-        arguments_rows,
-        result_rows,
-        arguments_expandable,
-        result_expandable,
     }
 }
 
@@ -256,27 +126,21 @@ pub(super) fn rows_with_group(
         .len()
 }
 
-/// 展开后是否真的多出内容。
-#[cfg(test)]
-pub(super) fn has_more(call: &ToolCallView, view: &McpDetailView, width: u16) -> bool {
-    if width == 0 {
-        return false;
-    }
-    let layout = layout(call, view, width, Folds::default());
-    layout.arguments_expandable || layout.result_expandable
-}
-
 /// 标题状态：耗时与图片数；失败/中断交给标题染色。
 fn status_of(call: &ToolCallView, view: &McpDetailView) -> Option<String> {
-    if matches!(call.status, ToolStatus::Failed | ToolStatus::Interrupted) {
+    if matches!(
+        call.status,
+        ToolStatus::Failed | ToolStatus::Interrupted | ToolStatus::Cancelled
+    ) {
         return None;
     }
     let mut parts = Vec::new();
     if let Some(duration) = view.duration_ms {
         parts.push(text::agent::duration_label(duration));
     }
-    if !view.images.is_empty() {
-        parts.push(text::mcp::images_label(view.images.len()));
+    let images = view.images.len().saturating_add(view.images_omitted);
+    if images > 0 {
+        parts.push(text::mcp::images_label(images));
     }
     (!parts.is_empty()).then(|| parts.join(text::LX_CHAT_TOOL_STATUS_SEP))
 }
@@ -298,28 +162,29 @@ pub(super) fn draw(
         return;
     }
     if let Some(y) = visible_row(rect, scroll, *row_index) {
-        let verb = format!("{} · {}", view.server, view.tool);
         let segments = header_with_verb(
             call,
             rect.width,
             loading_frame,
             animating,
-            &verb,
+            text::agent::VERB_MCP,
             status_of(call, view),
         );
         put_segments(grid, rect.x, y, rect.width, &segments);
     }
     *row_index += 1;
-    tree::draw(
-        grid,
-        rect,
-        scroll,
-        row_index,
-        &layout(call, view, rect.width, folds).layout.rows,
-    );
+    let mut layout = layout_with_group(call, view, rect.width, folds, false).layout;
+    if matches!(
+        call.status,
+        ToolStatus::Failed | ToolStatus::Interrupted | ToolStatus::Cancelled
+    ) && let Some(first) = layout.rows.first_mut()
+    {
+        first.prefix_style = Some(tree::connector_style_of(call));
+    }
+    tree::draw(grid, rect, scroll, row_index, &layout.rows);
 }
 
-/// 合并组内调用体：跳过标题，状态追加到首个参数节点尾部。
+/// 合并组内调用体：跳过标题，耗时/图片状态追加到 server 节点尾部。
 #[allow(clippy::too_many_arguments)]
 pub(super) fn draw_body(
     grid: &mut Grid,

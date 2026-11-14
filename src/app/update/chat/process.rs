@@ -632,22 +632,20 @@ pub fn open_task_for_selected_tool(state: &mut AppState, pane: PaneId) -> bool {
         .iter()
         .find(|message| message.id == message_id)
         .and_then(|message| message.tool(&call_id));
-    // 非进程类的可展开卡片（文件差异 / MCP / 搜索 / 子 agent）：`^o` 直接切换卡片展开，
+    // 非进程类的可展开卡片（文件差异 / 搜索 / 子 agent）：`^o` 直接切换卡片展开，
     // 绝不打开后台任务面板。判据用 app 层的视图本身（`app` 不得反向依赖 `ui`）。
+    // MCP 身份卡没有可展开内容：`^o` 对它必须是 no-op，不能切换一个永远不可见的折叠位。
+    if let Some(call) = call
+        && matches!(
+            call.detail.as_deref(),
+            Some(crate::app::state::ToolDetailView::Mcp(_))
+        )
+    {
+        return false;
+    }
     if let Some(section) = call.and_then(|call| match call.detail.as_deref() {
         Some(crate::app::state::ToolDetailView::File(view)) if !view.is_empty() => {
             Some(crate::app::state::CardSection::Body)
-        }
-        Some(crate::app::state::ToolDetailView::Mcp(view)) => {
-            if !view.result.is_empty()
-                || !view.images.is_empty()
-                || view.images_omitted > 0
-                || call.error.is_some()
-            {
-                Some(crate::app::state::CardSection::Output)
-            } else {
-                Some(crate::app::state::CardSection::Body)
-            }
         }
         Some(crate::app::state::ToolDetailView::Search(_))
         | Some(crate::app::state::ToolDetailView::Subagent(_)) => {
@@ -751,7 +749,15 @@ fn latest_expandable(chat: &crate::app::state::LxChat) -> Option<(String, String
 }
 
 /// 是否有可展开的详情（进程/计划工具有类型化视图；文件工具有摘要或结果体）。
+///
+/// MCP 身份卡不渲染参数/结果，也没有点击面，不能参与 Alt+↑/↓ 的可展开卡片导航。
 pub fn is_expandable(call: &crate::app::state::ToolCallView) -> bool {
+    if matches!(
+        call.detail.as_deref(),
+        Some(crate::app::state::ToolDetailView::Mcp(_))
+    ) {
+        return false;
+    }
     if call.detail.is_some() {
         return true;
     }

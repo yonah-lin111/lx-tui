@@ -1,4 +1,6 @@
-//! MCP 工具卡片详情：参数与结果的有限行窗口（纯数据，渲染层只读）。
+//! MCP 工具身份数据：server / tool / 耗时 / 图片计数，以及错误原因。
+//!
+//! 参数与结果行仍保留在结构中，供旧记录兼容与数据指纹使用；身份卡渲染层不再展示它们。
 
 use serde_json::Value;
 
@@ -11,7 +13,7 @@ pub struct McpImageView {
     pub height: u32,
 }
 
-/// MCP 工具卡片详情：参数与结果的有限行窗口。
+/// MCP 工具身份数据：server / tool / 耗时 / 图片计数，以及错误原因。
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct McpDetailView {
     pub server: String,

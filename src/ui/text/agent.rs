@@ -98,6 +98,8 @@ pub const VERB_TOOL_EDIT: &str = "Edit";
 pub const VERB_TOOL_WRITE: &str = "Write";
 /// `web_search` 卡片动词。
 pub const VERB_TOOL_WEB_SEARCH: &str = "Web search";
+/// MCP 工具卡片与合并组头动词：身份卡不再把 `server · tool` 当动词。
+pub const VERB_MCP: &str = "MCP";
 
 /// 工具行 diff 计数的前缀（绿 `+N` / 红 `-N`）。
 pub const TOOL_DIFF_ADD_PREFIX: &str = "+";
@@ -213,8 +215,6 @@ pub fn group_running_label(count: usize) -> String {
     format!("{count} {}", crate::ui::text::LX_CHAT_TOOL_RUNNING)
 }
 
-/// 合并组内无参数 MCP 调用的一级占位标签。
-pub const MCP_NO_ARGUMENTS: &str = "(no arguments)";
 /// 新增行数：`+12`。
 pub fn added_label(count: usize) -> String {
     format!("{TOOL_DIFF_ADD_PREFIX}{count}")

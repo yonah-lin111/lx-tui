@@ -193,6 +193,19 @@ fn clicking_a_finished_card_toggles_its_detail() {
 }
 
 #[test]
+fn mcp_identity_card_is_not_expandable_for_keyboard_navigation() {
+    let call = ToolCallView::new("call-mcp", "mcp__codegraph__explore", 0);
+    assert!(matches!(
+        call.detail.as_deref(),
+        Some(ToolDetailView::Mcp(_))
+    ));
+    assert!(
+        !crate::app::update::chat::process::is_expandable(&call),
+        "MCP 身份卡不得进入 Alt+↑/↓ 的可展开卡片导航"
+    );
+}
+
+#[test]
 fn adjacent_selection_moves_within_expandable_cards() {
     let mut state = AppState::demo();
     let pane = state.active_tab().layout.focus();

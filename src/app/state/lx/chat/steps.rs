@@ -421,13 +421,16 @@ impl ToolSummary {
         }
         // 结果侧优先、未给出才保留参数值的字段。
         //
-        // `range` / `read_lines` 需要一条额外口径：`read` 的结果侧摘要**一定带
-        // `total_lines`**（文件总行数 / 目录条目数），它出现就说明结果体已经对区间下了
-        // 结论——此时结果侧的 `None`（空文件、目录读取）也是权威答案，必须覆盖参数
-        // 兜底值，否则实时路径会留着参数推测的区间、重载路径已清空，两条路又不一致。
-        if let Some(total_lines) = result.total_lines {
+        // `range` / `read_lines` 需要一条额外口径：`read` 的结果侧摘要一旦给出
+        // `read_kind` 或 `total_lines`，就说明结果体已经对区间下了结论——此时结果侧的
+        // `None`（空文件、目录、图片）也是权威答案，必须覆盖参数兜底值，否则实时路径会
+        // 留着参数推测的区间、重载路径已清空，两条路又不一致。图片结果没有
+        // `total_lines`，只看它会被漏掉。
+        if result.read_kind.is_some() || result.total_lines.is_some() {
             self.range = result.range;
             self.read_lines = result.read_lines;
+        }
+        if let Some(total_lines) = result.total_lines {
             self.total_lines = Some(total_lines);
         }
         if result.matches.is_some() {
@@ -538,17 +541,26 @@ pub struct ToolCallView {
 
 impl ToolCallView {
     /// 新建一个正在接收参数的工具步骤。
+    ///
+    /// MCP 的身份（server / tool）只由工具名决定，参数还没到也能先建身份卡：
+    /// 否则流式早期会退回通用工具卡，短暂显示旧的 `server · tool` 标题甚至参数。
     pub fn new(call_id: impl Into<String>, name: impl Into<String>, position: i64) -> Self {
+        let name = name.into();
+        let detail = crate::mcp::is_mcp_or_resource_tool(&name)
+            .then(|| super::tool_view::McpDetailView::from_arguments(&name, ""))
+            .flatten()
+            .map(super::tool_view::ToolDetailView::Mcp)
+            .map(Box::new);
         Self {
             call_id: call_id.into(),
-            name: name.into(),
+            name,
             position,
             arguments_json: String::new(),
             status: ToolStatus::InputStreaming,
             summary: None,
             error: None,
             result_json: None,
-            detail: None,
+            detail,
         }
     }
 

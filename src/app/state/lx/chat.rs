@@ -1034,7 +1034,7 @@ impl LxChat {
                     results.push((trimmed.to_string(), is_dir));
                 }
             }
-            // 2. 从正文中提取显式 @ 提及与 @[ref-content]/（先遮蔽折叠粘贴块正文）
+            // 2. 从正文中提取显式 @ 提及（先遮蔽折叠粘贴块正文）
             for step in &msg.steps {
                 if let AssistantStepView::Part { part, .. } = step
                     && part.kind == crate::chat::events::PartKind::Text
