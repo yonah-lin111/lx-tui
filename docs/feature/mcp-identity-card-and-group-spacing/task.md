@@ -1,6 +1,6 @@
 # MCP 身份卡、read 行数与合并组间隔 — 执行任务清单
 
-> 状态：代码、测试与规范文档已完成；`cargo fmt` / `cargo clippy -D warnings` / `cargo test` 全部通过，待用户运行 `cargo run` 做视觉验收。
+> 状态：代码、测试与规范文档已完成；`cargo fmt` / `cargo clippy -D warnings` / `cargo test` 全部通过，验证报告见 [`verification.md`](verification.md)，待用户运行 `cargo run` 做视觉验收。
 > 关联文档：`docs/feature/mcp-identity-card-and-group-spacing/design.md`
 > 规则：生产代码禁止 `unwrap()/expect()`；文案一律英文；单文件 ≤1000 行；改动后按影响范围验证。
 
@@ -307,6 +307,7 @@ rg -n "MCP 卡片的参数块|组内不空行|MCP 结果|read.*不显示.*行数
 - [x] `cargo clippy --all-targets -- -D warnings`
 - [x] `cargo test ui::main_content::lx::history`
 - [x] `cargo test`（全量）
+- [x] 编写 [`verification.md`](verification.md)：CLI 会话、逐项输入/步骤/期望、自动化与文档检查
 - [ ] 人工检查 `cargo run`（由用户执行）：
   - 单个 MCP 卡；
   - 两个不同 server 的 MCP 合并卡；

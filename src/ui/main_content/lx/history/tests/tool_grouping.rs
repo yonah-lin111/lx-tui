@@ -259,6 +259,28 @@ fn group_separator_row_is_not_inside_any_tool_card_region() {
     }
 }
 
+/// 极窄宽度下树体让位，分隔行仍占行数，但不画孤立竖线。
+#[test]
+fn narrow_group_counts_separator_rows_without_drawing_tree_prefix() {
+    let mut message = message("assistant", "complete", Vec::new());
+    message
+        .steps
+        .push(file_step(1, "call-a", "edit", ToolStatus::Completed));
+    message
+        .steps
+        .push(file_step(2, "call-b", "edit", ToolStatus::Completed));
+    let lx = lx_with(vec![message]);
+    let area = Rect::new(0, 0, 6, 40);
+    let computed = layout(area, &lx, &mut cache());
+    assert_eq!(
+        render_rows(area, &lx, 0),
+        computed.total_rows,
+        "窄宽分隔行仍计入几何"
+    );
+    let text = rendered_text(&lx, area);
+    assert!(!text.contains('│'), "极窄宽度不得画孤立分隔竖线：{text}");
+}
+
 /// `write_stdin` 按显示动词分组：读输出与写入不混组，且后台运行中进程使组头聚合 `running`。
 #[test]
 fn write_stdin_groups_by_display_verb() {
