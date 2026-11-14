@@ -147,6 +147,43 @@ fn narrow_read_drops_suffix_before_path() {
     assert!(!detail.contains("lines"), "放不下时丢弃后缀：{detail}");
 }
 
+/// 路径与后缀恰好占满内容宽时仍保留后缀，不因预留省略符而丢弃。
+#[test]
+fn read_suffix_is_kept_when_it_exactly_fits() {
+    let call = read_call(
+        Some(ReadKind::File),
+        ToolSummary {
+            path: Some("a".into()),
+            range: Some((12, 40)),
+            read_lines: Some(29),
+            total_lines: Some(1000),
+            ..ToolSummary::default()
+        },
+    );
+    // 内容宽 18 = 路径 1 + 后缀 `:12-40 · 29 lines` 17。
+    let detail = detail_text(&call, 23);
+    assert!(detail.contains("a:12-40 · 29 lines"), "{detail}");
+}
+
+/// 组合字符按 0 列计宽，`read` 路径仍必须保持单行。
+#[test]
+fn combining_marks_do_not_wrap_read_path() {
+    let path = "e\u{301}".repeat(20);
+    let call = read_call(
+        Some(ReadKind::File),
+        ToolSummary {
+            path: Some(path),
+            range: Some((1, 1)),
+            read_lines: Some(1),
+            total_lines: Some(1),
+            ..ToolSummary::default()
+        },
+    );
+    let detail = detail_text(&call, 18);
+    assert_eq!(detail.lines().count(), 1, "路径恒单行：{detail}");
+    assert!(detail.contains('…'), "超长路径应尾部省略：{detail}");
+}
+
 /// 目录 `read`：标题 `Read · folder · 18 files`，树体只有路径。
 #[test]
 fn read_directory_shows_count_in_title_and_path_in_body() {

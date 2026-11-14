@@ -24,33 +24,33 @@
 ## V2 MCP 单体身份卡 — 通过
 
 - 输入内容：`McpDetailView { server: "github", tool: "create_issue", duration_ms: 1200, images: 1, arguments/result 非空 }`。
-- 验证步骤：`cargo test single_card_shows_only_identity_duration_and_image_count`、`cargo test identity_line_uses_param_normal_and_muted_styles`、`cargo test long_server_and_tool_wrap_without_losing_content`、`cargo test narrow_widths_keep_rows_and_draw_in_step`。
-- 期望结果：2 行——`■ MCP · 1.2s · 1 image(s)` 与 `└─ github · create_issue`；server 浅黄、分隔与 tool 正常色；不出现参数、结果、`[image`；长身份名折行不丢字符；宽度 1/4/8/12/20 下 `rows == draw`。
+- 验证步骤：`cargo test single_card_shows_only_identity_duration_and_image_count`、`cargo test identity_line_uses_param_normal_and_muted_styles`、`cargo test long_server_and_tool_wrap_without_losing_content`、`cargo test narrow_widths_keep_rows_and_draw_in_step`、`cargo test image_count_includes_omitted_images`。
+- 期望结果：2 行——`■ MCP · 1.2s · 1 image(s)` 与 `└─ github · create_issue`；server 浅黄、` · ` muted、tool 正常色；不出现参数、结果、`[image`；长身份名折行不丢字符；宽度 1/4/8/12/20 下 `rows == draw`；`images_omitted` 计入图片总数。
 
 ## V3 MCP 失败/中断 — 通过
 
-- 输入内容：`Failed` / `Interrupted` 且带原因；原因为空；多行超长原因。
-- 验证步骤：`cargo test failed_card_appends_one_reason_line_without_duration`、`cargo test interrupted_card_appends_one_reason_line`、`cargo test failed_card_without_reason_has_no_reason_line`、`cargo test multiline_reason_is_collapsed_to_one_truncated_line`、`cargo test failed_single_card_uses_semantic_connector_color`。
-- 期望结果：标题不写耗时；原因行恒为一条 `failed: …` / `interrupted: …` 并尾部省略；原因为空时不追加行（总行数 2）；失败首节点连接符红色、中断黄色。
+- 输入内容：`Failed` / `Interrupted` / `Cancelled` 且带原因；原因为空；多行超长原因；稳定中断错误码 `interrupted`。
+- 验证步骤：`cargo test failed_card_appends_one_reason_line_without_duration`、`cargo test interrupted_card_appends_one_reason_line`、`cargo test interrupted_reason_equal_to_status_word_is_not_duplicated`、`cargo test cancelled_card_shows_status_word_without_duration`、`cargo test failed_card_without_reason_has_no_reason_line`、`cargo test multiline_reason_is_collapsed_to_one_truncated_line`、`cargo test failed_single_card_uses_semantic_connector_color`、`cargo test interrupted_single_card_uses_warn_connector_color`。
+- 期望结果：标题不写耗时；原因行恒为一条 `failed: …` / `interrupted: …`；稳定错误码与状态词重复时只显示一次；取消显示 `cancelled`；原因为空时失败卡不追加行（总行数 2）；失败首节点连接符红色、中断黄色。
 
 ## V4 MCP 合并组 — 通过
 
-- 输入内容：两个不同 server/tool 的相邻 MCP 调用；`read_resource` 桥接工具；`detail = None` 的 MCP 调用；失败 MCP 合并调用。
-- 验证步骤：`cargo test adjacent_mcp_calls_merge_into_one_identity_group`、`cargo test mcp_and_resource_bridge_tools_share_one_group_key`、`cargo test group_body_puts_server_at_root_and_tool_below_it`、`cargo test group_body_puts_error_reason_below_tool`；对照 V1 会话前两个调用。
-- 期望结果：组头 `■ MCP · N calls`；server 为一级节点并承载耗时/图片数，tool 为二级；不同 server/tool 与 resources 桥接工具同组；失败原因作为 tool 的兄弟二级节点；`detail` 缺失时动词仍为 `MCP`。
+- 输入内容：两个不同 server/tool 的相邻 MCP 调用；`read_resource` 桥接工具；流式早期尚未收到参数的 MCP 调用；失败 MCP 合并调用。
+- 验证步骤：`cargo test adjacent_mcp_calls_merge_into_one_identity_group`、`cargo test mcp_and_resource_bridge_tools_share_one_group_key`、`cargo test group_body_puts_server_at_root_and_tool_below_it`、`cargo test group_body_puts_error_reason_below_tool`、`cargo test streaming_new_call_renders_identity_card_not_generic_card`、`cargo test mcp_call_has_identity_detail_before_arguments_arrive`；对照 V1 会话前两个调用。
+- 期望结果：组头 `■ MCP · N calls`（含失败调用时追加 `· N failed`）；server 为一级节点并承载耗时/图片数，tool 为二级；不同 server/tool 与 resources 桥接工具同组；失败原因作为 tool 的兄弟二级节点；流式早期也直接显示身份卡，不退回 `server · tool` 通用卡。
 - 实测：V1 会话前两个调用相邻，TUI 应显示 `■ MCP · 2 calls`，`codegraph · 162ms` 与 `codebase-memory-mcp · 1.1s` 各带二级 tool。
 
 ## V5 MCP 点击面与可展开性 — 通过
 
 - 输入内容：带长参数、长结果、图片元数据的 MCP 调用。
-- 验证步骤：`cargo test mcp_card_has_no_expandable_content_or_click_region`。
-- 期望结果：`has_expandable_content == false`；`card_regions` 为空；参数/结果不因点击出现。
+- 验证步骤：`cargo test mcp_card_has_no_expandable_content_or_click_region`、`cargo test mcp_identity_card_is_not_expandable_for_keyboard_navigation`、`cargo test ctrl_o_on_mcp_card_is_a_noop`。
+- 期望结果：`has_expandable_content == false`；`card_regions` 为空；参数/结果不因点击出现；Alt+↑/↓ 不选中 MCP；Ctrl+O 不切换隐藏折叠位、不打开任务面板。
 
 ## V6 `read` 完成态区间与行数 — 通过
 
 - 输入内容：`path = src/ui/style.rs`、`range = (12, 40)`、`read_lines = 29`；单行 `range = (12, 12)`、`read_lines = 1`；V1 会话的真实结果 `58–107`。
-- 验证步骤：`cargo test read_file_shows_kind_in_title_and_range_in_body`、`cargo test single_line_read_uses_one_line_number_and_singular_label`；对照 V1 会话 `read` 结果。
-- 期望结果：`src/ui/style.rs:12-40 · 29 lines`；单行 `src/a.rs:12 · 1 line`；后缀 muted；V1 会话显示 `src/ui/text/agent.rs:58-107 · 50 lines`。
+- 验证步骤：`cargo test read_file_shows_kind_in_title_and_range_in_body`、`cargo test single_line_read_uses_one_line_number_and_singular_label`、`cargo test read_suffix_is_kept_when_it_exactly_fits`；对照 V1 会话 `read` 结果。
+- 期望结果：`src/ui/style.rs:12-40 · 29 lines`；单行 `src/a.rs:12 · 1 line`；后缀 muted；路径与后缀恰好占满内容宽时仍保留后缀；V1 会话显示 `src/ui/text/agent.rs:58-107 · 50 lines`。
 
 ## V7 `read` 运行中/旧记录 — 通过
 
@@ -60,9 +60,9 @@
 
 ## V8 `read` 长路径、窄宽、目录与图片 — 通过
 
-- 输入内容：120 字符路径；宽 12；目录读取；图片读取。
-- 验证步骤：`cargo test long_read_path_keeps_suffix_and_truncates_path`、`cargo test narrow_read_drops_suffix_before_path`、`cargo test read_directory_shows_count_in_title_and_path_in_body`、`cargo test read_image_shows_image_kind_in_title_and_path_in_body`。
-- 期望结果：长路径优先保留 `:12-40 · 29 lines`，路径自身省略；后缀放不下时整段丢弃；目录/图片不显示行数；路径始终单行。
+- 输入内容：120 字符路径；宽 12；含组合字符的 NFD 路径；宽 18；目录读取；图片读取。
+- 验证步骤：`cargo test long_read_path_keeps_suffix_and_truncates_path`、`cargo test narrow_read_drops_suffix_before_path`、`cargo test combining_marks_do_not_wrap_read_path`、`cargo test read_directory_shows_count_in_title_and_path_in_body`、`cargo test read_image_shows_image_kind_in_title_and_path_in_body`。
+- 期望结果：长路径优先保留 `:12-40 · 29 lines`，路径自身省略；后缀放不下时整段丢弃；目录/图片不显示行数；组合字符按 0 列计宽，路径始终单行。
 
 ## V9 `wait_agent` 不合并 — 通过
 
@@ -72,15 +72,15 @@
 
 ## V10 列表合并组分隔行 — 通过
 
-- 输入内容：连续 3 个 `read`、2 个 `web_search`、2 个 `edit`；宽度 6 的窄窗格。
-- 验证步骤：`cargo test consecutive_tool_steps_share_one_group_header`、`cargo test web_search_group_nests_results_under_each_query`、`cargo test consecutive_file_tools_share_a_group_header`、`cargo test narrow_group_counts_separator_rows_without_drawing_tree_prefix`。
-- 期望结果：每个非末尾调用体尾部恰有 1 行 `  │`，末尾调用与快照组不追加；分隔行计入块行数与滚动几何；极窄宽度仍占行数但不画孤立竖线。
+- 输入内容：连续 3 个 `read`、2 个 `web_search`、2 个 `edit`；宽度 6 的窄窗格；宽度 7 的两个 `read` 单根组。
+- 验证步骤：`cargo test consecutive_tool_steps_share_one_group_header`、`cargo test web_search_group_nests_results_under_each_query`、`cargo test consecutive_file_tools_share_a_group_header`、`cargo test narrow_group_counts_separator_rows_without_drawing_tree_prefix`、`cargo test narrow_single_root_group_keeps_tree_but_blank_separator`。
+- 期望结果：每个非末尾调用体尾部恰有 1 行 `  │`，末尾调用与快照组不追加；分隔行计入块行数与滚动几何，但不登记点击面；宽度大于 `TREE_NESTED_COLS` 才画竖线，更窄时仅保留一行空白（单根组在 6–8 列仍保留自己的 `├─`）。
 
 ## V11 分隔行点击面与快照组 — 通过
 
 - 输入内容：两个合并 `edit` 调用；`update_plan` 连续两次更新。
 - 验证步骤：`cargo test group_separator_row_is_not_inside_any_tool_card_region`、`cargo test plan_snapshot_group_shows_only_the_latest_update_and_header_progress`。
-- 期望结果：所有调用体点击面止于分隔行之前；快照组合并只有一个调用体，不出现分隔行。
+- 期望结果：先断言分隔行文本确为 `  │`，再确认所有调用体点击面止于分隔行之前；快照组合并只有一个调用体，不出现分隔行。
 
 ## V12 规范文档同步 — 通过
 
@@ -101,7 +101,7 @@
   cargo test
   ```
 - 期望结果：格式无差异；clippy 零警告；全量测试通过。
-- 实测：lib `5395 passed; 0 failed; 6 ignored`，全部集成测试通过。
+- 实测：lib 全量测试与全部集成测试通过（具体数量以本次运行为准）。
 
 ## V14 真实 TUI 视觉验收 — 待用户确认
 

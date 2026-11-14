@@ -79,12 +79,12 @@
 
 规则：
 
-- 标题动词固定 `MCP`（新增 `text::agent::VERB_MCP`），右侧状态为 `耗时 [· 图片数]`，失败/中断时状态置空、整行走语义色。
-- 身份行由两段组成：server 浅黄（`style::chat_tool_param()`）、` · ` 与 tool 名用正常文字色（`style::text()`）。
+- 标题动词固定 `MCP`（新增 `text::agent::VERB_MCP`），右侧状态为 `耗时 [· 图片数]`；图片数包含 `images_omitted`。失败/中断/取消时状态置空、整行走语义色。
+- 身份行由两段组成：server 浅黄（`style::chat_tool_param()`）、` · ` 用次要信息色（`style::agent_step_detail()`），tool 名用正常文字色（`style::text()`）。
 - 无参数、无结果、无 `… N more lines`、无 `[truncated]`、无点击面。
-- 身份行超宽时按普通树体规则折行（不做 read 那样的强制单行截断），保证长 server/tool 名不丢信息。
+- 身份行超宽时按普通树体规则折行（不做 read 那样的强制单行截断），保证真实长 server/tool 名不丢信息；进入布局前先 `single_line(..., TEXT_SAMPLE_CHARS)`，控制字符转空格并受 512 字符安全上限约束。
 
-### 4.2 MCP 单体（失败/中断）
+### 4.2 MCP 单体（失败/中断/取消）
 
 ```text
 ■ MCP
@@ -95,8 +95,9 @@
 规则：
 
 - 失败/中断时标题不写耗时（沿用现有 `status_of` 行为），标题与首节点连接符走红/黄语义色。
-- 原因行是第二个一级节点：`failed: ` / `interrupted: ` 前缀取 `text::tool_status_label(status)`，原因先 `single_line(reason, TEXT_SAMPLE_CHARS)` 再按内容宽度尾部省略，**恒一行**。
-- 原因为空时不画原因行；合并态由 `decorate_group_call` 在首节点尾部补 ` · failed` / ` · interrupted`（现有逻辑）。
+- 原因行是第二个一级节点：`failed: ` / `interrupted: ` 前缀取 `text::tool_status_label(status)`，原因先 `single_line(reason, TEXT_SAMPLE_CHARS)` 再按内容宽度尾部省略，**恒一行**。中断的稳定错误码与状态词同为 `interrupted` 时只输出一次。
+- 原因为空时失败/中断不画原因行；`Cancelled` 无原因时显示一行 `cancelled`。
+- 合并态由 `decorate_group_call` 在首节点尾部补 ` · failed` / ` · interrupted`（仅原因为空时）；`Cancelled` 作为 tool 的兄弟节点显示 `cancelled`。
 
 ### 4.3 MCP 合并
 
@@ -117,7 +118,7 @@
 - 失败/中断调用的原因行是 tool 的兄弟二级节点：
 
 ```text
-■ MCP · 2 calls
+■ MCP · 2 calls · 1 failed
   ├─ filesystem
   │  ├─ read_file
   │  └─ failed: server not connected
@@ -148,7 +149,8 @@
 - `range == (start, end)` 且 `read_lines == Some(n)` 才显示。`start == end` 时只写 `:12`。
 - 两个字段都只来自结果体（`ToolSummary::absorb_result_json`），运行中/旧记录没有结果体时只显示路径，绝不拿参数 `offset`/`limit` 预估。
 - 目录（`folder`）、图片（`image`）不显示行数；目录条目数仍在标题 `folder · N files`。
-- 仍保持单行：先按内容宽度为后缀预留列，再截断路径；后缀放不下时丢弃后缀、只截断路径。路径尾部省略符为 `…`。
+- 仍保持单行：先按内容宽度为后缀预留列，再截断路径；后缀放不下时丢弃后缀、只截断路径。路径恰好放得下时，1 列内容即可保留后缀；只有路径需要省略时才要求 2 列（1 列内容 + `…`）。路径尾部省略符为 `…`。
+- 组合字符/零宽字符不占列：截断与折行统一按 `ch.width().unwrap_or(0)` 计宽，NFD 路径也不会被拆成多行。
 - 合并组内每个 `read` 调用体同样带行数，因为组内不再显示标题状态，行数必须挂在路径行上。
 
 ### 4.5 `wait_agent`
@@ -198,36 +200,48 @@ pub(super) struct McpLayout {
     layout: tree::Layout,
 }
 
-/// 单个调用的身份行：server 浅黄，tool 正常文字色。
+/// 单个调用的身份行：server 浅黄，` · ` muted，tool 正常文字色；两者先单行化并限长。
 fn identity_node(view: &McpDetailView) -> Node {
     Node::new(vec![
-        Segment::new(view.server.clone(), style::chat_tool_param()),
+        Segment::new(single_line(&view.server, TEXT_SAMPLE_CHARS), style::chat_tool_param()),
         Segment::new(text::LX_CHAT_TOOL_STATUS_SEP, style::agent_step_detail()),
-        Segment::new(view.tool.clone(), style::text()),
+        Segment::new(single_line(&view.tool, TEXT_SAMPLE_CHARS), style::text()),
     ])
 }
 
-/// 失败/中断原因行：`failed: ...` / `interrupted: ...`，单行尾部省略。
+/// 失败/中断/取消原因行：恒一行；稳定错误码与状态词重复时只输出一次。
 fn error_node(call: &ToolCallView, width: u16, in_group: bool) -> Option<Node> {
-    if !matches!(call.status, ToolStatus::Failed | ToolStatus::Interrupted) {
+    if !matches!(
+        call.status,
+        ToolStatus::Failed | ToolStatus::Interrupted | ToolStatus::Cancelled
+    ) {
         return None;
     }
-    let reason = single_line(call.error.as_deref()?, TEXT_SAMPLE_CHARS);
+    let label = text::tool_status_label(call.status);
+    let reason = call
+        .error
+        .as_deref()
+        .map(|reason| single_line(reason, TEXT_SAMPLE_CHARS))
+        .unwrap_or_default();
     let reason = reason.trim();
-    if reason.is_empty() {
-        return None;
-    }
+    let message = if reason.is_empty() {
+        if call.status == ToolStatus::Cancelled {
+            label.to_string()
+        } else {
+            return None;
+        }
+    } else if reason.eq_ignore_ascii_case(label) {
+        label.to_string()
+    } else {
+        format!("{label}: {reason}")
+    };
     let body = if in_group {
         tree::nested_content_width(width)
     } else {
         tree::content_width(width)
     };
-    let label = text::tool_status_label(call.status);
     Some(Node::text(
-        crate::ui::main_content::lx::history::truncate_with_ellipsis(
-            &format!("{label}: {reason}"),
-            body,
-        ),
+        crate::ui::main_content::lx::history::truncate_with_ellipsis(&message, body),
         style::text(),
     ))
 }
@@ -239,23 +253,24 @@ pub(super) fn layout_with_group(
     _folds: Folds,
     in_group: bool,
 ) -> McpLayout {
-    let mut sections = Vec::new();
+    let mut sections = Vec::with_capacity(2);
     if in_group {
-        // 合并态：server 为一级节点（承载耗时/图片状态），tool 为二级子节点。
+        // 合并态：server 为一级节点（承载耗时/图片状态），tool 与错误原因为二级子节点。
         sections.push(Section::fixed(vec![Node::text(
-            view.server.clone(),
+            single_line(&view.server, TEXT_SAMPLE_CHARS),
             style::chat_tool_param(),
         )]));
-        sections.push(Section::fixed(vec![Node::text(
-            view.tool.clone(),
+        let mut children = vec![Node::text(
+            single_line(&view.tool, TEXT_SAMPLE_CHARS),
             style::text(),
-        )]));
+        )];
+        children.extend(error_node(call, width, true));
+        sections.push(Section::fixed(children));
     } else {
-        // 单体：server · tool 一行，`└─` 收口。
-        sections.push(Section::fixed(vec![identity_node(view)]));
-    }
-    if let Some(node) = error_node(call, width, in_group) {
-        sections.push(Section::fixed(vec![node]));
+        // 单体：`server · tool` 一行，`└─` 收口；错误原因是兄弟节点。
+        let mut roots = vec![identity_node(view)];
+        roots.extend(error_node(call, width, false));
+        sections.push(Section::fixed(roots));
     }
     McpLayout {
         layout: if in_group {
@@ -294,7 +309,7 @@ pub(super) fn draw_body(..., last: bool) {
 }
 ```
 
-`status_of` 保持不变：完成态返回 `耗时 [· 图片数]`，失败/中断返回 `None`。
+`status_of`：完成态返回 `耗时 [· 图片数]`，图片数包含 `images_omitted`；失败/中断/取消返回 `None`。流式早期由 `ToolCallView::new` 直接写入 `McpDetailView`，不等参数接收完成。
 
 ### 5.2 MCP 点击面与可展开判定（`tool.rs`）
 
@@ -491,9 +506,9 @@ pub const VERB_MCP: &str = "MCP";
 
 1. **单一来源**：MCP/read/分隔行的行数只由 `tool::rows*` / `body_rows` 产生；`snapshot`、滚动条、sticky、点击面、渲染全部读同一份快照。
 2. **分隔行归属**：分隔行是“非末尾调用体”的最后一行，属于该块的行数，但不属于任何 `CardSection` 点击面。
-3. **MCP 无点击面**：`has_expandable_content_with_group(Mcp)` = false，`card_regions_with_group(Mcp)` = 空。
+3. **MCP 无点击面**：`has_expandable_content_with_group(Mcp)` = false，`card_regions_with_group(Mcp)` = 空；Ctrl+O 命中 MCP 为 no-op，Alt+↑/↓ 的 `is_expandable` 排除 MCP。
 4. **缓存指纹**：`tool_body_block_signature` 已包含 `GroupSlot` 与 `Folds`，`group.is_last()` 变化会改变指纹并触发重排；无需新增字段。MCP 布局不再依赖 folds，但签名仍会随 folds 变化，属于可接受的保守失效。
-5. **极窄宽度**：`width <= TREE_COLS` 时树前缀整体让位，身份行/原因行按整宽排版；`width == 0` 时 `rows == 0` 且 `draw` 直接返回。
+5. **极窄宽度**：`width <= TREE_COLS` 时树前缀整体让位，身份行/原因行按整宽排版；分隔行只在 `width > TREE_NESTED_COLS` 时绘制竖线，更窄时仅保留一行空白（仍计入行数），避免孤立竖线。`width == 0` 时 `rows == 0` 且 `draw` 直接返回。
 
 ---
 

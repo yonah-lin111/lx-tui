@@ -90,16 +90,7 @@ pub(in crate::ui::main_content::lx::history) fn verb_label(call: &ToolCallView) 
             | "close_agent" | "list_agents" | "cancel_agent_input" => {
                 subagent::verb(&call.name).to_string()
             }
-            name if name.starts_with(crate::mcp::MCP_PREFIX) => {
-                if let Some((server, tool)) = name
-                    .strip_prefix(crate::mcp::MCP_PREFIX)
-                    .and_then(|rest| rest.split_once("__"))
-                {
-                    format!("{server} · {tool}")
-                } else {
-                    single_line(name, TEXT_SAMPLE_CHARS)
-                }
-            }
+            name if crate::mcp::is_mcp_or_resource_tool(name) => a::VERB_MCP.to_string(),
             _ => single_line(&call.name, TEXT_SAMPLE_CHARS),
         },
     }
@@ -316,7 +307,7 @@ pub(in crate::ui::main_content::lx::history) fn wrap_spans(
         let mut buf = String::new();
         let mut pending_table = source.table.clone();
         for ch in source.text.chars() {
-            let cell = ch.width().unwrap_or(1).max(1);
+            let cell = ch.width().unwrap_or(0);
             if col + cell > width && col > 0 {
                 if !buf.is_empty() {
                     let mut seg = Segment::new(std::mem::take(&mut buf), source.style);

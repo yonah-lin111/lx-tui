@@ -245,6 +245,13 @@ fn group_separator_row_is_not_inside_any_tool_card_region() {
         .collect();
     assert!(body_starts.len() >= 2, "两个调用体块：{body_starts:?}");
     let separator_row = body_starts[1].saturating_sub(1);
+    let text = rendered_text(&lx, area);
+    let separator = text.lines().nth(separator_row).unwrap_or_default();
+    assert_eq!(
+        separator.trim_end(),
+        text::agent::TREE_BAR.trim_end(),
+        "分隔行必须真实存在：{text}"
+    );
     let first_cards: Vec<_> = snapshot
         .cards
         .iter()
@@ -279,6 +286,49 @@ fn narrow_group_counts_separator_rows_without_drawing_tree_prefix() {
     );
     let text = rendered_text(&lx, area);
     assert!(!text.contains('│'), "极窄宽度不得画孤立分隔竖线：{text}");
+}
+
+/// 单根节点的 `read` 组在 6–8 列仍保留树前缀；分隔行只占位，不画孤立竖线。
+#[test]
+fn narrow_single_root_group_keeps_tree_but_blank_separator() {
+    let mut message = message("assistant", "complete", Vec::new());
+    message.steps.push(read_step(1, ToolStatus::Completed));
+    message.steps.push(read_step(2, ToolStatus::Completed));
+    let lx = lx_with(vec![message]);
+    let area = Rect::new(0, 0, 7, 20);
+    let mut pane_cache = cache();
+    let snapshot = pane_cache.snapshot(super::content_rect(area).width, &lx);
+    let body_starts: Vec<usize> = snapshot
+        .entries
+        .iter()
+        .flat_map(|entry| entry.blocks.iter())
+        .filter_map(|block| match block.source {
+            BlockSource::ToolBody { .. } => Some(block.start),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(body_starts.len(), 2, "两个 read 调用体：{body_starts:?}");
+    assert_eq!(
+        body_starts[1] - body_starts[0],
+        2,
+        "调用体之间必须有一行分隔：{body_starts:?}"
+    );
+    let text = rendered_text(&lx, area);
+    let lines: Vec<&str> = text.lines().collect();
+    assert!(
+        lines[body_starts[0]].starts_with(text::agent::TREE_BRANCH),
+        "单根节点在 7 列仍保留树前缀：{text}"
+    );
+    assert!(
+        lines[body_starts[0] + 1].trim().is_empty(),
+        "分隔行在窄宽只占位不画竖线：{text}"
+    );
+    assert!(!text.contains('│'), "窄宽不得出现孤立竖线：{text}");
+    assert_eq!(
+        render_rows(area, &lx, 0),
+        layout(area, &lx, &mut cache()).total_rows,
+        "分隔行仍计入几何"
+    );
 }
 
 /// `write_stdin` 按显示动词分组：读输出与写入不混组，且后台运行中进程使组头聚合 `running`。

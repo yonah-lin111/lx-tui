@@ -98,13 +98,12 @@ fn read_path_node(call: &ToolCallView, width: u16) -> Option<Node> {
     let available = tree::content_width(width);
     let suffix = read_line_suffix(call.summary.as_deref());
     let suffix_width = suffix.as_deref().map_or(0, UnicodeWidthStr::width);
-    // 后缀放得下才保留；路径至少保留 1 列 + 省略符。
-    let keep_suffix = suffix_width > 0 && available > suffix_width.saturating_add(1);
-    let path_budget = if keep_suffix {
-        available.saturating_sub(suffix_width)
-    } else {
-        available
-    };
+    let path_width = UnicodeWidthStr::width(path.as_str());
+    let remaining = available.saturating_sub(suffix_width);
+    // 后缀放得下才保留；路径放不下时至少给它 1 列内容 + 1 列省略符。
+    let keep_suffix =
+        suffix_width > 0 && remaining > 0 && (path_width <= remaining || remaining >= 2);
+    let path_budget = if keep_suffix { remaining } else { available };
     let path = crate::ui::main_content::lx::history::truncate_with_ellipsis(&path, path_budget);
     if path.is_empty() {
         return None;

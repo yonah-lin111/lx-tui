@@ -1,6 +1,6 @@
 # MCP 身份卡、read 行数与合并组间隔 — 执行任务清单
 
-> 状态：代码、测试与规范文档已完成；`cargo fmt` / `cargo clippy -D warnings` / `cargo test` 全部通过，验证报告见 [`verification.md`](verification.md)，待用户运行 `cargo run` 做视觉验收。
+> 状态：代码、测试与规范文档已完成；`cargo fmt` / `cargo clippy -D warnings` / `cargo test` 全部通过。Review 发现的问题已修复，见 [`review.md`](review.md)；验证报告见 [`verification.md`](verification.md)，待用户运行 `cargo run` 做视觉验收。
 > 关联文档：`docs/feature/mcp-identity-card-and-group-spacing/design.md`
 > 规则：生产代码禁止 `unwrap()/expect()`；文案一律英文；单文件 ≤1000 行；改动后按影响范围验证。
 
@@ -231,25 +231,26 @@ rg -n "body_rows\(" src
 
 删除旧的参数/结果/截断/图片元数据测试，新增：
 
-- [x] `single_card_shows_only_identity_and_duration`：
+- [x] `single_card_shows_only_identity_duration_and_image_count`：
   - 文案包含 `MCP`、`1.2s`、`github · create_issue`；
   - 不包含参数值 `Fix login crash on iOS`/`{`；
   - 不包含结果 `created #42`；
   - 不包含 `[image`。
-- [x] `single_card_keeps_image_count`：标题包含 `1 image(s)`。
-- [x] `failed_card_appends_reason_line`：包含 `failed: mcp tool timed out after 30s`。
-- [x] `interrupted_card_appends_reason_line`：包含 `interrupted: ...`。
-- [x] `mcp_card_registers_no_click_region`：`card_regions(...)` 为空；`has_expandable_content(...)` 为 false。
-- [x] `narrow_width_does_not_panic`：宽度 1/4/8 下 rows == draw。
+- [x] `image_count_includes_omitted_images`：标题把 `images_omitted` 计入总数。
+- [x] `failed_card_appends_one_reason_line_without_duration`：包含 `failed: mcp tool timed out after 30s`。
+- [x] `interrupted_card_appends_one_reason_line` + `interrupted_reason_equal_to_status_word_is_not_duplicated`：中断原因恒一行，稳定错误码不重复。
+- [x] `mcp_card_has_no_expandable_content_or_click_region`：`card_regions(...)` 为空；`has_expandable_content(...)` 为 false。
+- [x] `narrow_widths_keep_rows_and_draw_in_step`：宽度 1/4/8/12/20 下 rows == draw。
+- [x] `streaming_new_call_renders_identity_card_not_generic_card`：流式早期 `detail` 已就位，不退回通用工具卡。
 - [x] 保留 `render_with` 的 `row == total` 断言。
 
 ### 5.2 `history/tests/tool_grouping.rs`
 
-- [x] 重写 `mcp_no_arg_step` 相关测试：
+- [x] `adjacent_mcp_calls_merge_into_one_identity_group`：
   - 两个不同 MCP 工具现在合并为一个 `■ MCP · 2 calls`；
   - 断言 server 一级、tool 二级、调用间 `TREE_BAR` 分隔行；
   - 断言总行数 = 组头 1 + 调用 A 2 行 + 分隔 1 + 调用 B 2 行。
-- [x] 重写 `multi_target_wait_agent_in_group_keeps_all_targets_at_level_one`：
+- [x] `consecutive_wait_agent_calls_stay_as_separate_cards`：
   - `wait_agent` 不再合并，两次调用各自标题；
   - 每张卡内部多目标仍是一级平级分支；
   - 两卡之间是普通块间空行。
@@ -318,6 +319,18 @@ rg -n "MCP 卡片的参数块|组内不空行|MCP 结果|read.*不显示.*行数
 
 > 验证记录（2026-11-14）：`cargo fmt` 无差异；`cargo clippy --all-targets -- -D warnings` 通过；`cargo test` 全量通过。
 > 新增/更新的自动化用例覆盖 MCP 身份卡（参数/结果隐藏、图片数、失败原因、无点击面、合并嵌套）、`read` 区间/行数（单行、复数、运行中、旧记录、长路径、窄宽）、`wait_agent` 独立成卡、MCP resources 同组、快照组无分隔行、分隔行不进入点击面。
+
+---
+
+## 阶段 7：Review 修复（已完成）
+
+- [x] P1：MCP 流式早期在 `ToolCallView::new` 即建 `McpDetailView`，`verb_label` 统一返回 `VERB_MCP`。
+- [x] P2：中断原因与状态词去重；`Cancelled` 显示状态词；server/tool 单行化并有 512 字符上限；`images_omitted` 计入图片总数。
+- [x] P2：`read` 后缀恰好放得下时保留；组合字符按 0 列计宽，路径恒单行；图片结果的参数区间在实时/重载两条路径都清空。
+- [x] P2：MCP 不再参与 Ctrl+O / Alt+↑/↓ 的卡片展开导航。
+- [x] P2：修正文档中的分隔符颜色、合并态示例、失败组头与窄宽分隔行规则；补足中断颜色、窄宽绝对行数、分隔行存在性断言。
+- [x] P3：回填 `task.md` 实际测试名，更新 `McpDetailView` 模块注释，去掉验证报告中的固定测试总数。
+- [x] 新增回归测试：流式身份卡、中断去重/颜色、取消状态、图片省略计数、身份字段上界、`read` 恰好放得下、组合字符单行、图片摘要一致性、键盘导航排除、窄宽单根组分隔行。
 
 ---
 

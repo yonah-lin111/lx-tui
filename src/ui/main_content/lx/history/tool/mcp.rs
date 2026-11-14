@@ -21,33 +21,50 @@ pub(super) struct McpLayout {
 /// 单个调用的身份行：server 浅黄，tool 正常文字色。
 fn identity_node(view: &McpDetailView) -> Node {
     Node::new(vec![
-        Segment::new(view.server.clone(), style::chat_tool_param()),
+        Segment::new(
+            single_line(&view.server, TEXT_SAMPLE_CHARS),
+            style::chat_tool_param(),
+        ),
         Segment::new(text::LX_CHAT_TOOL_STATUS_SEP, style::agent_step_detail()),
-        Segment::new(view.tool.clone(), style::text()),
+        Segment::new(single_line(&view.tool, TEXT_SAMPLE_CHARS), style::text()),
     ])
 }
 
 /// 失败/中断原因行：`failed: ...` / `interrupted: ...`，恒一行尾部省略。
+///
+/// 中断的稳定错误码本身就是 `interrupted`，与状态词重复时只输出一次。
 fn error_node(call: &ToolCallView, width: u16, in_group: bool) -> Option<Node> {
-    if !matches!(call.status, ToolStatus::Failed | ToolStatus::Interrupted) {
+    if !matches!(
+        call.status,
+        ToolStatus::Failed | ToolStatus::Interrupted | ToolStatus::Cancelled
+    ) {
         return None;
     }
-    let reason = single_line(call.error.as_deref()?, TEXT_SAMPLE_CHARS);
+    let label = text::tool_status_label(call.status);
+    let reason = call
+        .error
+        .as_deref()
+        .map(|reason| single_line(reason, TEXT_SAMPLE_CHARS))
+        .unwrap_or_default();
     let reason = reason.trim();
-    if reason.is_empty() {
-        return None;
-    }
+    let message = if reason.is_empty() {
+        if call.status == ToolStatus::Cancelled {
+            label.to_string()
+        } else {
+            return None;
+        }
+    } else if reason.eq_ignore_ascii_case(label) {
+        label.to_string()
+    } else {
+        format!("{label}: {reason}")
+    };
     let body = if in_group {
         tree::nested_content_width(width)
     } else {
         tree::content_width(width)
     };
-    let label = text::tool_status_label(call.status);
     Some(Node::text(
-        crate::ui::main_content::lx::history::truncate_with_ellipsis(
-            &format!("{label}: {reason}"),
-            body,
-        ),
+        crate::ui::main_content::lx::history::truncate_with_ellipsis(&message, body),
         style::text(),
     ))
 }
@@ -63,10 +80,13 @@ pub(super) fn layout_with_group(
     if in_group {
         // 合并态：server 为一级节点（承载耗时/图片状态），tool 与错误原因为二级子节点。
         sections.push(Section::fixed(vec![Node::text(
-            view.server.clone(),
+            single_line(&view.server, TEXT_SAMPLE_CHARS),
             style::chat_tool_param(),
         )]));
-        let mut children = vec![Node::text(view.tool.clone(), style::text())];
+        let mut children = vec![Node::text(
+            single_line(&view.tool, TEXT_SAMPLE_CHARS),
+            style::text(),
+        )];
         children.extend(error_node(call, width, true));
         sections.push(Section::fixed(children));
     } else {
@@ -108,15 +128,19 @@ pub(super) fn rows_with_group(
 
 /// 标题状态：耗时与图片数；失败/中断交给标题染色。
 fn status_of(call: &ToolCallView, view: &McpDetailView) -> Option<String> {
-    if matches!(call.status, ToolStatus::Failed | ToolStatus::Interrupted) {
+    if matches!(
+        call.status,
+        ToolStatus::Failed | ToolStatus::Interrupted | ToolStatus::Cancelled
+    ) {
         return None;
     }
     let mut parts = Vec::new();
     if let Some(duration) = view.duration_ms {
         parts.push(text::agent::duration_label(duration));
     }
-    if !view.images.is_empty() {
-        parts.push(text::mcp::images_label(view.images.len()));
+    let images = view.images.len().saturating_add(view.images_omitted);
+    if images > 0 {
+        parts.push(text::mcp::images_label(images));
     }
     (!parts.is_empty()).then(|| parts.join(text::LX_CHAT_TOOL_STATUS_SEP))
 }
@@ -150,8 +174,10 @@ pub(super) fn draw(
     }
     *row_index += 1;
     let mut layout = layout_with_group(call, view, rect.width, folds, false).layout;
-    if matches!(call.status, ToolStatus::Failed | ToolStatus::Interrupted)
-        && let Some(first) = layout.rows.first_mut()
+    if matches!(
+        call.status,
+        ToolStatus::Failed | ToolStatus::Interrupted | ToolStatus::Cancelled
+    ) && let Some(first) = layout.rows.first_mut()
     {
         first.prefix_style = Some(tree::connector_style_of(call));
     }

@@ -153,6 +153,98 @@ fn interrupted_card_appends_one_reason_line() {
     let call = call(ToolStatus::Interrupted, Some("cancelled by user"));
     let text = render_with(&call, &view(), 100, Folds::default());
     assert!(text.contains("interrupted: cancelled by user"), "{text}");
+    assert!(!text.contains("1.2s"), "中断卡片不显示耗时状态：{text}");
+}
+
+#[test]
+fn interrupted_reason_equal_to_status_word_is_not_duplicated() {
+    let call = call(
+        ToolStatus::Interrupted,
+        Some(crate::db::chat::INTERRUPTED_ERROR_CODE),
+    );
+    let text = render_with(&call, &view(), 100, Folds::default());
+    assert_eq!(
+        text.matches(crate::db::chat::INTERRUPTED_ERROR_CODE)
+            .count(),
+        1,
+        "稳定错误码与状态词重复时只显示一次：{text}"
+    );
+    assert!(!text.contains("interrupted: interrupted"), "{text}");
+}
+
+#[test]
+fn interrupted_single_card_uses_warn_connector_color() {
+    let call = call(ToolStatus::Interrupted, Some("cancelled by user"));
+    let view = view();
+    let total = rows(&call, &view, 80, Folds::default());
+    let rect = Rect::new(0, 0, 80, u16::try_from(total).unwrap_or(u16::MAX));
+    let mut grid = Grid::new(rect);
+    let mut row = 0;
+    draw(
+        &mut grid,
+        rect,
+        0,
+        &mut row,
+        &call,
+        &view,
+        0,
+        Folds::default(),
+        false,
+    );
+    assert_eq!(
+        Some(grid.cell(2, 1).style.fg),
+        Some(style::agent_warn().fg),
+        "中断单体身份行的连接符应染黄"
+    );
+}
+
+#[test]
+fn cancelled_card_shows_status_word_without_duration() {
+    let call = call(ToolStatus::Cancelled, None);
+    let text = render_with(&call, &view(), 100, Folds::default());
+    assert!(text.contains("cancelled"), "{text}");
+    assert!(!text.contains("1.2s"), "取消卡片不显示耗时状态：{text}");
+}
+
+#[test]
+fn image_count_includes_omitted_images() {
+    let mut view = view();
+    view.images_omitted = 2;
+    let text = render_with(
+        &call(ToolStatus::Completed, None),
+        &view,
+        100,
+        Folds::default(),
+    );
+    assert!(text.contains("3 image(s)"), "省略图片也计入总数：{text}");
+}
+
+#[test]
+fn identity_fields_are_single_line_and_bounded() {
+    let mut view = view();
+    view.server = format!("server\nwith-control{}", "x".repeat(10_000));
+    view.tool = format!("tool\twith-control{}", "y".repeat(10_000));
+    let call = call(ToolStatus::Completed, None);
+    let total = rows(&call, &view, 40, Folds::default());
+    assert!(total < 100, "超长身份字段必须有界：{total} rows");
+    let text = render_with(&call, &view, 40, Folds::default());
+    assert!(text.contains("server with-control"), "{text}");
+    assert!(text.contains("tool with-"), "{text}");
+    assert!(text.contains("controly"), "{text}");
+}
+
+#[test]
+fn streaming_new_call_renders_identity_card_not_generic_card() {
+    let call = ToolCallView::new("call-streaming", "mcp__github__create_issue", 0);
+    let total = super::super::rows(&call, 80, Folds::default());
+    let rect = Rect::new(0, 0, 80, u16::try_from(total.max(1)).unwrap_or(u16::MAX));
+    let mut grid = Grid::new(rect);
+    let mut row = 0;
+    super::super::draw(&mut grid, rect, 0, &mut row, &call, 0, Folds::default());
+    let text = text_of(&grid, 80, total);
+    assert!(text.contains(text::agent::VERB_MCP), "{text}");
+    assert!(text.contains("github · create_issue"), "{text}");
+    assert!(!text.contains("receiving input"), "{text}");
 }
 
 #[test]
