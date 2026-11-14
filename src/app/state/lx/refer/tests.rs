@@ -71,7 +71,7 @@ fn refer_panel_triggers_from_user_history_and_confirms() {
     assert_eq!(panel.items()[0].path, "src/main.rs");
 
     assert!(lx.refer_confirm());
-    assert_eq!(lx.input, "@[ref-content]/src/main.rs ");
+    assert_eq!(lx.input, "@src/main.rs ");
     assert_eq!(lx.cursor, lx.input.len());
     assert!(lx.refer_panel().is_none(), "确认后面板关闭");
 
@@ -81,7 +81,7 @@ fn refer_panel_triggers_from_user_history_and_confirms() {
 }
 
 #[test]
-fn refer_quick_backspace_deletes_ref_content_as_one_block() {
+fn refer_quick_backspace_deletes_inserted_mention_as_one_block() {
     let mut lx = Lx::new();
     lx.chat
         .messages
@@ -89,11 +89,11 @@ fn refer_quick_backspace_deletes_ref_content_as_one_block() {
     lx.insert_char('c');
     lx.insert_char('o');
     assert!(lx.refer_confirm());
-    assert_eq!(lx.input, "@[ref-content]/src/config.rs ");
+    assert_eq!(lx.input, "@src/config.rs ");
 
     // 光标紧跟空格，按 Backspace
     lx.backspace();
-    assert_eq!(lx.input, "", "一键删除整段快捷引用");
+    assert_eq!(lx.input, "", "一键删除整段快捷引用（普通提及整块删除）");
 }
 
 #[test]
@@ -149,15 +149,15 @@ fn refer_escape_suppressed_recovers_on_backspace() {
 }
 
 #[test]
-fn refer_panel_upgrades_short_path_when_history_has_full_path() {
+fn refer_panel_upgrades_short_ref_when_history_has_full_path() {
     let mut lx = Lx::new();
     // 历史中有完整路径
     lx.chat.messages.push(user_message(
         "history",
         Some(("src/ui/main_content/lx/refer.rs", false)),
     ));
-    // 输入框中先出现了末两段形式的快捷引用
-    lx.insert_str("@[ref-content]/lx/refer.rs ");
+    // 输入框中先出现了 `@ref/` 短引用
+    lx.insert_str("@ref/lx/refer.rs ");
     // 用户再次输入 ref 触发
     lx.insert_char('r');
     lx.insert_char('e');

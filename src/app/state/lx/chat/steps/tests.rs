@@ -324,12 +324,12 @@ fn user_history_reference_paths_extracts_attachments_and_mentions_from_user_mess
     });
     chat.messages.push(msg2);
 
-    // 3. 用户消息 2：包含 @[ref-content]/docs/readme.md
+    // 3. 用户消息 2：包含 @docs/readme.md
     let mut msg3 = assistant();
     msg3.role = "user".into();
     msg3.steps.push(AssistantStepView::Part {
         position: 0,
-        part: text("再看 @[ref-content]/docs/readme.md 以及已有的 @src/main.rs"),
+        part: text("再看 @docs/readme.md 以及已有的 @src/main.rs"),
     });
     chat.messages.push(msg3);
 

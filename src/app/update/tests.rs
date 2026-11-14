@@ -4564,8 +4564,8 @@ fn refer_panel_routes_keys_before_slash_and_edits() {
     assert!(state.prompt.refer_panel().is_some());
     apply_editor(&mut state, EditorCommand::Newline);
     assert!(
-        state.prompt.text().ends_with("@[ref-content]/abc "),
-        "回车确认快捷候选并插入快捷格式: {}",
+        state.prompt.text().ends_with("@abc "),
+        "回车确认快捷候选并插入候选原文: {}",
         state.prompt.text()
     );
     state.prompt.undo();
@@ -4623,7 +4623,7 @@ fn lx_refer_panel_triggers_confirms_and_quick_deletes() {
 
     apply_lx_input(&mut state, LxInput::Enter);
     let pane = state.active_pane().expect("pane");
-    assert_eq!(pane.lx.input, "@[ref-content]/src/main.rs ");
+    assert_eq!(pane.lx.input, "@src/main.rs ");
     assert!(pane.lx.refer_panel().is_none());
 
     // 快捷删除：空格后按退格，整块删除

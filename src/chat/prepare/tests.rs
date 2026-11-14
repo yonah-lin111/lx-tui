@@ -167,61 +167,6 @@ fn prepare_sorts_attachments_by_marker_order_and_skips_inline_code() {
 }
 
 #[test]
-fn prepare_parses_ref_content_and_keeps_in_display_text() {
-    let dir = temp_dir("ref-content");
-    std::fs::write(dir.join("test.rs"), "fn hello() {}").expect("write test");
-
-    let text = "Check @[ref-content]/test.rs now";
-    let prepared = prepare_user_message(&dir, text, &[]).expect("prepare");
-    assert_eq!(prepared.attachments.len(), 1);
-    assert_eq!(prepared.attachments[0].label, "@[ref-content]/test.rs");
-    assert_eq!(prepared.attachments[0].kind, MessageAttachmentKind::File);
-
-    let metas = vec![crate::db::chat::MessageAttachmentMeta {
-        id: "1".into(),
-        position: 0,
-        kind: MessageAttachmentKind::File,
-        label: "@[ref-content]/test.rs".into(),
-        marker_start: prepared.attachments[0].marker_start,
-        marker_end: prepared.attachments[0].marker_end,
-        source_path: Some("test.rs".into()),
-        mime: None,
-        width: None,
-        height: None,
-    }];
-
-    // 快捷引用不从展示文本中被剥离
-    let display_text = strip_references_for_display(text, &metas);
-    assert_eq!(display_text, "Check @[ref-content]/test.rs now");
-
-    let _ = std::fs::remove_dir_all(&dir);
-}
-
-#[test]
-fn prepare_resolves_deep_nested_ref_content_via_workspace_scan() {
-    let dir = temp_dir("nested-ref");
-    let deep_dir = dir.join("src").join("ui").join("nested");
-    std::fs::create_dir_all(&deep_dir).expect("create deep dir");
-    std::fs::write(deep_dir.join("code.rs"), "fn deep() {}").expect("write code");
-
-    // 末两段为 nested/code.rs
-    let text = "Look at @[ref-content]/nested/code.rs please";
-    let prepared = prepare_user_message(&dir, text, &[]).expect("prepare");
-    assert_eq!(prepared.attachments.len(), 1);
-    assert_eq!(
-        prepared.attachments[0].label,
-        "@[ref-content]/nested/code.rs"
-    );
-    assert_eq!(
-        prepared.attachments[0].source_path.as_deref(),
-        Some("src/ui/nested/code.rs"),
-        "source_path 必须正确恢复为完整相对路径"
-    );
-
-    let _ = std::fs::remove_dir_all(&dir);
-}
-
-#[test]
 fn prepare_ai_web_message_handles_local_files_cloud_keep_files_and_rejects_folders() {
     let dir = temp_dir("ai-web-prepare");
     let file_path = dir.join("note.txt");

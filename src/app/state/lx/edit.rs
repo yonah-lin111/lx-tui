@@ -149,10 +149,7 @@ impl Lx {
         if !self.mention.is_open()
             && self.refer.is_none()
             && let Some(range) =
-                crate::app::markdown::ref_content_deletion_range(&self.input, self.cursor)
-                    .or_else(|| {
-                        crate::app::markdown::mention_deletion_range(&self.input, self.cursor)
-                    })
+                crate::app::markdown::mention_deletion_range(&self.input, self.cursor)
                     .or_else(|| {
                         crate::app::markdown::reference_deletion_range(&self.input, self.cursor)
                     })

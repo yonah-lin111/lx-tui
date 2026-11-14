@@ -116,16 +116,9 @@ impl UserRefLine {
     pub(crate) fn from_attachments(
         attachments: &[crate::db::chat::MessageAttachmentMeta],
     ) -> Vec<Self> {
-        let display: Vec<_> = attachments
+        let len = attachments.len();
+        attachments
             .iter()
-            .filter(|att| {
-                !att.label
-                    .starts_with(crate::app::markdown::REF_CONTENT_PREFIX)
-            })
-            .collect();
-        let len = display.len();
-        display
-            .into_iter()
             .enumerate()
             .map(|(i, att)| Self {
                 is_last: i + 1 == len,
