@@ -10,7 +10,10 @@ use crate::app::state::{AppState, PaneView, SidebarAgentKind, TodoEditTarget, ta
 use crate::app::trust::TrustTrigger;
 use crate::tiling::PaneId;
 
-use super::agent_title::{agent_title_prompt, open_agent_prompt, open_agent_title_dialog};
+use super::agent_title::{
+    agent_title_has_prompt_binding, agent_title_prompt, open_agent_prompt, open_agent_title_dialog,
+    unbind_agent_prompt,
+};
 use super::focus_prompt;
 use super::pane::toggle_pane_view;
 use super::prompt::{
@@ -224,9 +227,9 @@ pub fn close_overlay(state: &mut AppState) {
     state.overlay = None;
 }
 
-/// 打开 Agents 条目右键菜单：绑定有效 Recent 页时提供 `Open prompt`；
-/// `Edit title` 恒可用；`Close` 对 lx 恒可用，终端 Agent 仅在其窗格
-/// 不是当前标签页唯一窗格时可用。
+/// 打开 Agents 条目右键菜单：绑定有效 Recent 页时提供 `Open prompt`，仍带
+/// 绑定时提供 `Unbind recent`；`Edit title` 恒可用；`Close` 对 lx 恒可用，
+/// 终端 Agent 仅在其窗格不是当前标签页唯一窗格时可用。
 pub fn open_agent_menu(state: &mut AppState, index: usize, anchor: (u16, u16)) {
     let Some(entry) = state.agent_entries().get(index).copied() else {
         return;
@@ -236,6 +239,10 @@ pub fn open_agent_menu(state: &mut AppState, index: usize, anchor: (u16, u16)) {
     let mut commands = vec![MenuCommand::EditAgentTitle];
     if agent_title_prompt(state, workspace, entry.tab_index, entry.pane_id, entry.kind).is_some() {
         commands.push(MenuCommand::OpenPrompt);
+    }
+    if agent_title_has_prompt_binding(state, workspace, entry.tab_index, entry.pane_id, entry.kind)
+    {
+        commands.push(MenuCommand::UnbindAgentPrompt);
     }
     let closable = match entry.kind {
         SidebarAgentKind::Lx { .. } => true,
@@ -701,6 +708,17 @@ pub fn activate_menu(state: &mut AppState) -> Option<(PaneId, Vec<u8>)> {
             },
         ) => {
             open_agent_prompt(state, workspace, tab, pane, kind);
+        }
+        (
+            Some(MenuCommand::UnbindAgentPrompt),
+            OverlayTarget::Agent {
+                workspace,
+                tab,
+                pane,
+                kind,
+            },
+        ) => {
+            unbind_agent_prompt(state, workspace, tab, pane, kind);
         }
         (
             Some(MenuCommand::EditAgentTitle),

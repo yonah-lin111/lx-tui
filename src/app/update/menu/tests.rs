@@ -236,6 +236,7 @@ fn bound_title_adds_open_prompt_after_edit_title() {
         vec![
             MenuCommand::EditAgentTitle,
             MenuCommand::OpenPrompt,
+            MenuCommand::UnbindAgentPrompt,
             MenuCommand::CloseAgent
         ]
     );
@@ -273,8 +274,12 @@ fn terminal_bound_title_adds_open_prompt_and_opens_page() {
     open_agent_menu(&mut state, index, (0, 0));
     assert_eq!(
         menu_commands(&state),
-        vec![MenuCommand::EditAgentTitle, MenuCommand::OpenPrompt],
-        "唯一窗格的终端 Agent 不提供 Close，但绑定后提供 Open prompt"
+        vec![
+            MenuCommand::EditAgentTitle,
+            MenuCommand::OpenPrompt,
+            MenuCommand::UnbindAgentPrompt
+        ],
+        "唯一窗格的终端 Agent 不提供 Close，但绑定后提供 Open prompt 与解绑"
     );
     select_command(&mut state, MenuCommand::OpenPrompt);
 
@@ -334,8 +339,12 @@ fn stale_binding_does_not_add_open_prompt() {
 
     assert_eq!(
         menu_commands(&state),
-        vec![MenuCommand::EditAgentTitle, MenuCommand::CloseAgent],
-        "绑定页已删除时不再提供 Open prompt"
+        vec![
+            MenuCommand::EditAgentTitle,
+            MenuCommand::UnbindAgentPrompt,
+            MenuCommand::CloseAgent
+        ],
+        "绑定页已删除时不再提供 Open prompt，但保留解绑入口"
     );
 }
 
@@ -541,8 +550,45 @@ fn enter_commits_recent_binding_and_enables_open_prompt() {
         vec![
             MenuCommand::EditAgentTitle,
             MenuCommand::OpenPrompt,
+            MenuCommand::UnbindAgentPrompt,
             MenuCommand::CloseAgent
         ]
+    );
+}
+
+#[test]
+fn unbind_recent_clears_title_and_binding() {
+    let mut state = AppState::demo();
+    let pane = state.active_tab().layout.focus();
+    set_lx_session(&mut state, pane, "session-1");
+    seed_recent_page(
+        &mut state,
+        7,
+        "Backend Prompt",
+        9,
+        "Auth Flow",
+        "Auth content",
+    );
+    set_override(&mut state, pane, lx_kind(), bound("Auth Flow", 7, 9));
+    open_agent_menu(&mut state, 0, (0, 0));
+    select_command(&mut state, MenuCommand::UnbindAgentPrompt);
+
+    assert_eq!(activate_menu(&mut state), None);
+
+    assert!(state.overlay.is_none());
+    let target = state.pane_anywhere(pane).expect("pane");
+    assert_eq!(
+        target.agent_title_override(lx_kind()),
+        None,
+        "解绑必须同时清空标题覆盖"
+    );
+    assert_eq!(target.agent_display_title(lx_kind()), None);
+
+    open_agent_menu(&mut state, 0, (0, 0));
+    assert_eq!(
+        menu_commands(&state),
+        vec![MenuCommand::EditAgentTitle, MenuCommand::CloseAgent],
+        "解绑后不再提供 Open prompt / Unbind recent"
     );
 }
 
@@ -821,4 +867,5 @@ fn close_agent_requires_confirmation_but_edit_title_does_not() {
     assert!(MenuCommand::CloseAgent.requires_confirm());
     assert!(!MenuCommand::EditAgentTitle.requires_confirm());
     assert!(!MenuCommand::OpenPrompt.requires_confirm());
+    assert!(!MenuCommand::UnbindAgentPrompt.requires_confirm());
 }

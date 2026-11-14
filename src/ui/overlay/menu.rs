@@ -186,6 +186,7 @@ pub(crate) fn menu_labels(menu: &Menu) -> Vec<&'static str> {
                 }
                 MenuCommand::DeleteMissingWorkspaces => text::MENU_DELETE_MISSING_WORKSPACES,
                 MenuCommand::EditAgentTitle => text::MENU_AGENT_EDIT_TITLE,
+                MenuCommand::UnbindAgentPrompt => text::MENU_AGENT_UNBIND_RECENT,
                 MenuCommand::CloseAgent => {
                     if confirming {
                         text::MENU_CONFIRM_CLOSE

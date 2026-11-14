@@ -291,6 +291,8 @@ pub const MENU_CLOSE_PANE: &str = "Close";
 /// Agents 分区第二行无标题占位与条目右键菜单。
 pub const AGENT_NO_TITLE: &str = "(no title)";
 pub const MENU_AGENT_EDIT_TITLE: &str = "Edit title";
+/// 侧栏 Agents：取消 Recent 页绑定并清空标题覆盖。
+pub const MENU_AGENT_UNBIND_RECENT: &str = "Unbind recent";
 pub const MENU_AGENT_CLOSE: &str = "Close";
 
 /// 提示词树右键菜单项。

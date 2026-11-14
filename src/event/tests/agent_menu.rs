@@ -591,6 +591,7 @@ fn save_commits_title_and_menu_offers_open_prompt() {
         &[
             MenuCommand::EditAgentTitle,
             MenuCommand::OpenPrompt,
+            MenuCommand::UnbindAgentPrompt,
             MenuCommand::CloseAgent,
         ],
     );
@@ -656,6 +657,7 @@ fn open_prompt_menu_item_opens_bound_page_in_prompt_panel() {
         vec![
             MenuCommand::EditAgentTitle,
             MenuCommand::OpenPrompt,
+            MenuCommand::UnbindAgentPrompt,
             MenuCommand::CloseAgent,
         ]
     );
@@ -672,4 +674,41 @@ fn open_prompt_menu_item_opens_bound_page_in_prompt_panel() {
     assert_eq!(fixture.state.prompt.text(), "Auth content");
     assert_eq!(fixture.state.right_tab, RightTab::Prompt);
     assert_eq!(fixture.state.focused, FocusedContainer::Prompt);
+}
+
+#[test]
+fn unbind_recent_menu_item_clears_title_and_binding() {
+    let mut fixture = title_fixture(&[(9, "Auth Flow", "Auth content", 100)]);
+    set_override(&mut fixture, bound_title("Auth Flow", 9));
+
+    right_click_agent(&mut fixture);
+    assert_eq!(
+        menu_commands(&fixture.state),
+        vec![
+            MenuCommand::EditAgentTitle,
+            MenuCommand::OpenPrompt,
+            MenuCommand::UnbindAgentPrompt,
+            MenuCommand::CloseAgent,
+        ]
+    );
+
+    click_menu_command(&mut fixture, MenuCommand::UnbindAgentPrompt);
+
+    assert!(fixture.state.overlay.is_none());
+    let target = fixture.state.pane_anywhere(fixture.pane).expect("pane");
+    assert_eq!(target.agent_title_override(fixture.kind), None);
+    assert_eq!(
+        target.agent_display_title(fixture.kind),
+        None,
+        "解绑后第二行回到 (no title)"
+    );
+
+    let entry = fixture.state.agent_entries()[fixture.index];
+    let anchor = right_click_agent(&mut fixture);
+    assert_agent_menu(
+        &fixture.state,
+        entry,
+        anchor,
+        &[MenuCommand::EditAgentTitle, MenuCommand::CloseAgent],
+    );
 }
