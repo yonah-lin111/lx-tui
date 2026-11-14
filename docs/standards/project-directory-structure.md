@@ -55,7 +55,7 @@ lx-tui/
                                 输入模式判定（shell.rs：仅首个非空白 `!`/`！` 进入 shell）、
                                 本地命令卡片与队列视图（chat/shell.rs）
       state/todo/               右侧 Todo 面板状态：列表/编辑/视口（todo.rs）、聚合组角色与不变量归一（group.rs）、
-                                跨日顺延与周带/图表统计投影（schedule.rs）
+                                跨日顺延与周带投影（schedule.rs）
       prompt/                   Prompt 纯状态与纯几何：编辑器/页/树/视口、`geometry.rs`（app 使用的 gutter、
                                 列表头高度、`PromptBodySplit` 与 `prompt_body_split`；UI 从 app 重导出）
       update/                   行为到状态的转换（含 update/pane/popups.rs：lx 输入框浮层更新；
@@ -91,7 +91,7 @@ lx-tui/
       right_panel/              右侧统一容器：外框 + `Prompt`/`Todo` tab（mod.rs）、
                                 右栏通用几何（geometry.rs：border/header/toolbar/divider/body rect）
       right_panel/todo/         右侧 Todo 面板渲染：面板布局与几何命中（todo.rs）、单条与聚合组树形连接符渲染（item.rs）、
-                                7 日周感知带与顺延横幅（schedule.rs）、底部三视图统计图表（charts.rs）
+                                7 日周感知带与顺延横幅（schedule.rs）
       right_panel/prompt/       Prompt 编辑器渲染：mod.rs、frame.rs（几何/命中 helper）、geometry.rs（prompt 专属几何，
                                 并重导出 app::prompt::geometry）、header.rs / pages.rs / panels.rs / recent.rs / tree.rs
       controls/                 界面控制按钮与装饰：mod.rs（声明与重导出）、panels.rs（折叠/Pin/窄条与
@@ -126,6 +126,8 @@ lx-tui/
                                 终态提交（revision 单调）、按会话批量加载与启动恢复
       usage/                    模型调用统计流水表（usage_log）：写入、供应商名称与历史成本同步（mod.rs）、
                                 按时间/模型/供应商/会话聚合与分页查询（queries.rs）
+      todo.rs                   全局 Todo 面板持久化：按日读取、UPSERT、重排、跨日顺延与聚合组清理
+      todo/query.rs             Web 控制台 Todo 看板只读查询：筛选、分页、汇总、按日聚合与聚合组统计
       service.rs                同步持久化服务入口与连接管理（聊天会话落库见 service/chat.rs，
                                 工作区/提示词/引用文件夹/Todo 效应执行见 service/workspace.rs）
     tui/                        终端生命周期：原始模式、备用屏幕、恢复
@@ -191,11 +193,12 @@ lx-tui/
       service/models/           模型设置与 Quick Connect API：GET/PUT `/api/models/settings`、POST `/api/models/fetch`（mod.rs）、
                                 `/api/models/connect/*` 预设保存/断开与 OAuth 授权流（connect.rs）
       service/usage.rs          模型用量统计看板 API：GET `/api/usage/overview` 与 GET `/api/usage/logs`
+      service/todo.rs           Todo 看板 API：GET `/api/todo/overview` 与 GET `/api/todo/items`
     platform/                   OS 专属实现（剪贴板、会话图片归档与 30 天 GC、日志目录推导 log.rs、鼠标捕获与指针形状、默认 shell、进程 cwd、打开浏览器、文件/目录权限、随机数填充、原子文件替换）
   tests/                        集成测试（web_assets.rs：脚本语法、加载顺序与 DOM id 契约）
   scripts/                      开发与维护脚本，按需创建
   assets/                       浏览器前端资源（HTML/CSS/JS），经 include_str! 嵌入二进制
-    web.html                    统一 Web 控制台结构（Home / Settings / Usage 单文档）
+    web.html                    统一 Web 控制台结构（Home / Settings / Usage / Todo 单文档）
     web.css                     全局外壳、Home、共享 toast、统一滚动条与全局 hidden 样式
     web.js                      共享核心（token/DOM/toast/select）与 hash 路由、懒初始化
     settings.css                Settings 视图样式（按 media 挂起）
@@ -209,6 +212,8 @@ lx-tui/
     usage.css                   模型用量统计看板样式（按 media 挂起）
     usage_charts.js             模型用量统计看板原生 SVG 图表渲染与格式化工具
     usage.js                    模型用量统计看板状态、筛选、汇总卡、表格与分页脚本
+    todo.css                    Todo 看板样式（按 media 挂起，刻意与 usage.css 重复以保持视图隔离）
+    todo.js                     Todo 看板状态、筛选、汇总卡、表格与分页脚本
     oauth_callback.html         OAuth 浏览器回调结果页模板
     oauth_implicit.html         OAuth 隐式授权流回调页模板
 ```

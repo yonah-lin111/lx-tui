@@ -1,6 +1,6 @@
 # Web 控制台 Todo 看板 + TUI 字符统计块移除：设计方案
 
-> 状态：**待用户审核（未开始实现）**
+> 状态：**Phase 1–5 已实现；Phase 6 全量验证与真机验收待完成**
 > 日期：2026-11-14
 > 项目：`/Users/yonah/projects/agent/lx-tui`（分支 `dev`，工作区干净）
 > 配套执行清单：[task.md](./task.md)
