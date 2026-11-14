@@ -20,13 +20,6 @@ const PROVIDER_PALETTE = [
   '#f472b6', '#38bdf8', '#fb923c', '#94a3b8'
 ];
 
-function domEl(tag, className, text) {
-  const node = document.createElement(tag);
-  if (className) { node.className = className; }
-  if (text !== undefined && text !== null) { node.textContent = String(text); }
-  return node;
-}
-
 function svgEl(tag, attrs, text) {
   const node = document.createElementNS(SVG_NS, tag);
   if (attrs) {
@@ -408,9 +401,9 @@ function renderTrendChart(host, series, granularity) {
     svg.appendChild(svgEl('path', {d: lineD, fill: 'none', stroke: layer.stroke, 'stroke-width': '1.8'}));
   }
 
-  // 右 Y 轴成本虚线折线
-  const hasAnyCost = computed.some((d) => d.cost !== null && d.cost > 0);
-  if (hasAnyCost) {
+  // 右 Y 轴成本虚线折线（与上方轴标签用的 hasAnyCost 区分：这里只画正成本序列）。
+  const hasCostSeries = computed.some((d) => d.cost !== null && d.cost > 0);
+  if (hasCostSeries) {
     const costPts = computed.map((d, idx) => xAt(idx).toFixed(1) + ',' + yCost(d.cost || 0).toFixed(1));
     if (n > 1) {
       svg.appendChild(svgEl('path', {

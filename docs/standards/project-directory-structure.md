@@ -192,17 +192,21 @@ lx-tui/
                                 `/api/models/connect/*` 预设保存/断开与 OAuth 授权流（connect.rs）
       service/usage.rs          模型用量统计看板 API：GET `/api/usage/overview` 与 GET `/api/usage/logs`
     platform/                   OS 专属实现（剪贴板、会话图片归档与 30 天 GC、日志目录推导 log.rs、鼠标捕获与指针形状、默认 shell、进程 cwd、打开浏览器、文件/目录权限、随机数填充、原子文件替换）
-  tests/                        集成测试
+  tests/                        集成测试（web_assets.rs：脚本语法、加载顺序与 DOM id 契约）
   scripts/                      开发与维护脚本，按需创建
   assets/                       浏览器前端资源（HTML/CSS/JS），经 include_str! 嵌入二进制
-    settings.html               设置页结构
-    settings.css                设置页样式
-    settings.js                 设置页骨架与全局组件
+    web.html                    统一 Web 控制台结构（Home / Settings / Usage 单文档）
+    web.css                     全局外壳、Home、共享 toast、统一滚动条与全局 hidden 样式
+    web.js                      共享核心（token/DOM/toast/select）与 hash 路由、懒初始化
+    settings.css                Settings 视图样式（按 media 挂起）
+    settings.js                 设置页骨架与 General / Commands 业务
     settings_models_card.js     设置页模型卡片、单价、模态与思考等级编辑组件
     settings_models.js          设置页 Models 视图脚本
     settings_connect.js         设置页 Quick Connect 视图脚本
-    usage.html                  模型用量统计看板结构
-    usage.css                   模型用量统计看板样式
+    settings_mcp.js             设置页 MCP 视图脚本
+    settings_skills.js          设置页 Skills 视图脚本
+    settings_subagents.js       设置页 Subagents 视图脚本
+    usage.css                   模型用量统计看板样式（按 media 挂起）
     usage_charts.js             模型用量统计看板原生 SVG 图表渲染与格式化工具
     usage.js                    模型用量统计看板状态、筛选、汇总卡、表格与分页脚本
     oauth_callback.html         OAuth 浏览器回调结果页模板

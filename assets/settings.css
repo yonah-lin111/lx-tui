@@ -1,53 +1,13 @@
 
-:root {
-  color-scheme: dark;
-  /* 黑灰分层：底色 < 面板 < 卡片 < 悬浮层，每层差一个可见但克制的灰阶。 */
-  --bg: #0f0f0f;
-  --panel: #171717;
-  --panel-raised: #1f1f1f;
-  --overlay: #272727;
-  --hover: #212121;
-  --active: #2b2b2b;
-  /* 输入框/下拉触发器：比卡片亮一档，聚焦与展开时再提亮，避免和卡片糊在一起。 */
-  --field: #232323;
-  --field-hover: #2f2f2f;
-  /* 悬浮菜单里的选项高亮：菜单底色是 --overlay #272727，选项必须再亮两档
-     才看得出 hover/选中（#575757 对菜单底约 2.07:1，#666 选中约 2.6:1）。 */
-  --option-hover: #575757;
-  --option-selected: #666666;
-  --border: #2e2e2e;
-  --border-strong: #3d3d3d;
-  --border-overlay: #4a4a4a;
-  --text: #e8e8e8;
-  --muted: #9a9a9a;
-  --faint: #5f5f5f;
-  /* 黑白灰主题：唯一强调色是浅灰；绿/红只用于成功与失败语义。 */
-  --accent: #d4d4d4;
-  --accent-ink: #141414;
-  --ok: #3ecf8e;
-  --err: #ef6b6b;
-  --warn: #fbbf24;
-  /* 层级：内高光 + 近距硬阴影 + 远距柔阴影，悬浮元素才"浮"得起来。 */
-  --shadow-raise: 0 1px 2px rgba(0, 0, 0, .45);
-  --shadow-overlay: inset 0 1px 0 rgba(255, 255, 255, .06), 0 2px 6px rgba(0, 0, 0, .5), 0 16px 40px rgba(0, 0, 0, .6);
-  --z-menu: 60;
-  --z-toast: 1000;
-}
-* { box-sizing: border-box; }
-html, body { height: 100%; }
-body { margin: 0; font: 14px/1.5 ui-monospace, SFMono-Regular, Menlo, monospace; display: flex; overflow: hidden; background: var(--bg); color: var(--text); }
-nav.side { width: 200px; flex-shrink: 0; padding: 16px 0; background: var(--panel); }
+nav.side { width: 200px; flex-shrink: 0; height: 100%; overflow-y: auto; padding: 16px 0; background: var(--panel); }
 .side-resizer { flex-shrink: 0; width: 5px; position: relative; cursor: col-resize; }
 .side-resizer::after { content: ''; position: absolute; top: 0; bottom: 0; left: 2px; width: 1px; background: var(--border); }
 .side-resizer:hover::after, .side-resizer.dragging::after { background: var(--accent); }
-body.resizing { cursor: col-resize; user-select: none; }
-nav.side h1 { font-size: 13px; margin: 0 16px 12px; text-transform: uppercase; letter-spacing: .08em; color: var(--muted); }
 nav.side button { display: flex; align-items: center; gap: 8px; width: 100%; text-align: left; padding: 8px 16px; border: 0; background: none; font: inherit; cursor: pointer; color: var(--muted); }
 nav.side button::before { content: ''; flex: 0 0 6px; width: 6px; height: 6px; border-radius: 50%; background: transparent; }
 nav.side button.dirty::before { background: var(--warn); }
 nav.side button:hover { color: var(--text); background: var(--hover); }
 nav.side button.active { background: var(--active); color: var(--text); font-weight: 600; }
-main { flex: 1; min-width: 0; display: flex; flex-direction: column; overflow: hidden; padding: 24px; }
 .view { display: flex; flex: 1 1 auto; min-height: 0; flex-direction: column; }
 .view.hidden { display: none; }
 #view-general, #view-model { overflow-y: auto; }
@@ -62,7 +22,6 @@ h2 { font-size: 16px; margin: 0 0 16px; }
 .status-dot.dirty { background: var(--text); }
 .status-dot.error { background: var(--err); }
 .status-dot.saving { background: var(--muted); animation: dot-pulse 1s ease-in-out infinite; }
-@keyframes dot-pulse { 0%, 100% { opacity: .4; } 50% { opacity: 1; } }
 fieldset { border: 1px solid var(--border); margin: 0 0 16px; padding: 12px; background: var(--panel); }
 legend { font-size: 12px; color: var(--muted); padding: 0 6px; }
 label { display: block; margin: 8px 0 4px; font-size: 12px; color: var(--muted); }
@@ -109,10 +68,7 @@ button.danger { background: none; border: 1px solid var(--err); color: var(--err
 .editor-head { display: flex; flex-wrap: wrap; flex-shrink: 0; align-items: center; justify-content: space-between; gap: 8px 12px; border-bottom: 1px solid var(--border); margin-bottom: 12px; padding-bottom: 8px; }
 .editor-head h3 { margin: 0; font-size: 14px; font-weight: 600; }
 .editor-head .actions { margin: 0; }
-.editor-body { display: flex; flex: 1 1 auto; min-height: 0; flex-direction: column; overflow-y: auto; scrollbar-width: thin; scrollbar-color: var(--border-strong) transparent; }
-.editor-body::-webkit-scrollbar { width: 8px; }
-.editor-body::-webkit-scrollbar-thumb { background: var(--border-strong); }
-.editor-body::-webkit-scrollbar-track { background: transparent; }
+.editor-body { display: flex; flex: 1 1 auto; min-height: 0; flex-direction: column; overflow-y: auto; }
 .editor-body > fieldset:first-of-type { flex-shrink: 0; }
 /* Skills 正文编辑区：占满剩余高度，超长时由 editor-body 滚动。 */
 #skill-body { min-height: 420px; }
@@ -126,7 +82,7 @@ button.danger { background: none; border: 1px solid var(--err); color: var(--err
   .field-grid { grid-template-columns: 1fr; }
 }
 
-/* ===== 全局组件：自绘 select 与 toast ===== */
+/* ===== 全局组件：自绘 select ===== */
 .select-host { position: relative; }
 .select-button { display: flex; width: 100%; align-items: center; justify-content: space-between; gap: 8px; padding: 6px 8px; border: 1px solid var(--border-strong); background: var(--field); color: var(--text); font: inherit; cursor: pointer; text-align: left; }
 .select-button:hover { border-color: var(--border-overlay); background: var(--field-hover); }
@@ -139,7 +95,7 @@ button.danger { background: none; border: 1px solid var(--err); color: var(--err
 .select-caret { flex-shrink: 0; color: var(--muted); font-size: 10px; }
 /* 菜单是浮层：比卡片更亮一档 + 亮边 + 双层阴影，脱离文档流也不会糊进背景。
    菜单挂在 body 上，用 position: fixed 跟随按钮的视口坐标，避免被祖先容器裁剪。 */
-.select-menu { position: fixed; z-index: var(--z-menu); left: 0; right: auto; max-height: 240px; overflow-y: auto; padding: 4px; border: 1px solid var(--border-overlay); background: var(--overlay); box-shadow: var(--shadow-overlay); scrollbar-width: thin; }
+.select-menu { position: fixed; z-index: var(--z-menu); left: 0; right: auto; max-height: 240px; overflow-y: auto; padding: 4px; border: 1px solid var(--border-overlay); background: var(--overlay); box-shadow: var(--shadow-overlay); }
 /* 选项高亮在悬浮层之内，必须比菜单底色更亮；选中项靠更亮底色 + 字重标记。 */
 .select-option { display: block; width: 100%; padding: 6px 10px; border: 0; background: none; color: var(--text); font: inherit; text-align: left; cursor: pointer; }
 .select-option:hover, .select-option.active { background: var(--option-hover); color: #fff; }
@@ -147,13 +103,6 @@ button.danger { background: none; border: 1px solid var(--err); color: var(--err
 /* 选中项同时被悬停时保持选中底色（选中 > 悬停），避免高亮跳回 hover 档。 */
 .select-option.selected:hover, .select-option.selected.active { background: var(--option-selected); }
 .toolbar-select { width: 220px; }
-.toast-host { position: fixed; left: 50%; top: 16px; z-index: var(--z-toast); display: flex; flex-direction: column; align-items: center; gap: 8px; max-width: min(480px, calc(100vw - 32px)); transform: translateX(-50%); pointer-events: none; }
-.toast { padding: 8px 14px; border: 1px solid var(--border-overlay); border-left: 3px solid var(--accent); background: var(--overlay); color: var(--text); font-size: 12px; box-shadow: var(--shadow-overlay); pointer-events: auto; animation: toast-in .16s ease-out; }
-.toast.ok { border-left-color: var(--ok); }
-.toast.error { border-left-color: var(--err); }
-.toast.leaving { opacity: 0; transform: translateY(-4px); transition: opacity .18s ease, transform .18s ease; }
-/* 只淡入不改 transform：入场动画与离场位移各管一个属性，避免把 toast 卡在偏移位置。 */
-@keyframes toast-in { from { opacity: 0; } to { opacity: 1; } }
 
 /* ===== Models view ===== */
 .models-toolbar { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 12px; margin-bottom: 10px; }
@@ -163,9 +112,7 @@ button.danger { background: none; border: 1px solid var(--err); color: var(--err
 .models-resizer { position: relative; cursor: col-resize; }
 .models-resizer::after { content: ''; position: absolute; top: 0; bottom: 0; left: 2px; width: 1px; background: var(--border); }
 .models-resizer:hover::after, .models-resizer.dragging::after { background: var(--accent); }
-.provider-list { display: flex; min-height: 60px; flex: 1 1 auto; flex-direction: column; gap: 2px; overflow-y: auto; scrollbar-width: thin; scrollbar-color: var(--border-strong) transparent; }
-.provider-list::-webkit-scrollbar { width: 8px; }
-.provider-list::-webkit-scrollbar-thumb { background: var(--border-strong); }
+.provider-list { display: flex; min-height: 60px; flex: 1 1 auto; flex-direction: column; gap: 2px; overflow-y: auto; }
 .field-wide { grid-column: 1 / -1; }
 .field-hint { display: inline-flex; align-items: center; gap: 6px; margin-top: 6px; color: var(--muted); font-size: 12px; }
 .input-with-action { position: relative; }
@@ -199,7 +146,7 @@ button.danger { background: none; border: 1px solid var(--err); color: var(--err
 .variant-default .check-title { margin: 0; }
 .variant-default .select-host { width: 160px; }
 .variant-row { display: grid; grid-template-columns: 140px minmax(0, 1fr) auto; gap: 8px; align-items: center; margin-bottom: 6px; }
-.fetch-candidates { display: flex; flex-direction: column; gap: 4px; max-height: 220px; overflow-y: auto; margin-bottom: 8px; border: 1px dashed var(--border-strong); padding: 8px; scrollbar-width: thin; }
+.fetch-candidates { display: flex; flex-direction: column; gap: 4px; max-height: 220px; overflow-y: auto; margin-bottom: 8px; border: 1px dashed var(--border-strong); padding: 8px; }
 .fetch-row { display: flex; align-items: center; justify-content: space-between; gap: 8px; font-size: 12px; }
 .fetch-candidates.hidden { display: none; }
 #prov-id[readonly] { opacity: 0.7; }
@@ -239,5 +186,3 @@ button.danger { background: none; border: 1px solid var(--err); color: var(--err
 #preset-form-fields .field-wide { grid-column: 1 / -1; }
 #prov-name[readonly] { opacity: 0.7; }
 #log_path { overflow-wrap: anywhere; word-break: break-all; }
-
-.hidden { display: none; }

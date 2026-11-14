@@ -1,18 +1,13 @@
-//! 设置页前端资源：`assets/` 下的 HTML/CSS/JS，经 `include_str!` 编译进二进制。
+//! 统一 Web 控制台前端资源：`assets/` 下的 HTML/CSS/JS，经 `include_str!` 编译进二进制。
 //!
-//! 页面与静态资源分离：`GET /` 返回 `settings.html`，`GET /settings.css` 与
-//! `settings.js`、`settings_models.js`、`settings_connect.js`、`settings_mcp.js`、
-//! `settings_skills.js`、`settings_subagents.js` 分别返回对应脚本。所有资源自包含、
-//! 无外部依赖，遵循 `docs/standards/html-assets.md`。
+//! `GET /`、`GET /settings`、`GET /usage` 都返回同一份 `web.html`，由前端按
+//! `location.pathname` / `location.hash` 选择初始视图；`web.css` / `web.js` 提供
+//! 全局外壳、共享核心与路由，`settings*.{css,js}`、`usage*.{css,js}` 仍按视图
+//! 独立加载。所有资源自包含、无外部依赖，遵循 `docs/standards/html-assets.md`。
 
-/// 设置页正文；`token` 从 `location.search` 读取，所有请求附带。
+/// 统一 Web 控制台正文；`token` 从 `location.search` 读取，所有请求附带。
 pub fn html() -> &'static str {
-    include_str!("../../../assets/settings.html")
-}
-
-/// 用量统计页 HTML 主文档。
-pub fn usage_html() -> &'static str {
-    include_str!("../../../assets/usage.html")
+    include_str!("../../../assets/web.html")
 }
 
 /// 静态资源：返回 `(content_type, body)`；未知路径返回 None（交由路由回 404）。
@@ -20,6 +15,14 @@ pub fn usage_html() -> &'static str {
 /// 资源不含敏感内容，故不要求 token；页面与 JSON API 仍逐请求校验。
 pub fn asset(path: &str) -> Option<(&'static str, &'static str)> {
     match path {
+        "/web.css" => Some((
+            "text/css; charset=utf-8",
+            include_str!("../../../assets/web.css"),
+        )),
+        "/web.js" => Some((
+            "text/javascript; charset=utf-8",
+            include_str!("../../../assets/web.js"),
+        )),
         "/settings.css" => Some((
             "text/css; charset=utf-8",
             include_str!("../../../assets/settings.css"),

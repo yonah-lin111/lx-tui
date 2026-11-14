@@ -527,11 +527,8 @@ pub const SLASH_TAG_GIT: &str = "Git";
 pub const SLASH_WORKTREE_LABEL: &str = "/gitWorkTree";
 pub const SLASH_WORKTREE_PREVIEW: &str = "bind a worktree to this block";
 
-/// prompt 底边框左侧设置按钮与 tooltip。
-/// 设置按钮文案（纯 ASCII，宽度稳定、无 emoji 呈现）。
-pub const SETTINGS_LABEL: &str = "[SET]";
-/// 侧栏底边框用量统计按钮文案（纯 ASCII，位于 `[SET]` 右侧）。
-pub const USAGE_LABEL: &str = "[USE]";
+/// 侧栏底边框统一 Web 控制台入口按钮文案（纯 ASCII，宽度稳定、无 emoji 呈现）。
+pub const WEB_LABEL: &str = "[WEB]";
 
 /// 模板块操作按钮文案（复制/清理/删除图标）。
 pub const TEMPLATE_BUTTON_COPY: &str = "[❐]";

@@ -1,0 +1,837 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>lx-tui</title>
+<link rel="stylesheet" href="/web.css">
+<link rel="stylesheet" href="/settings.css" media="not all" id="css-settings">
+<link rel="stylesheet" href="/usage.css" media="not all" id="css-usage">
+</head>
+<body>
+<!-- Pixel logo definition shared by the home hero and the topbar brand. -->
+<svg class="lx-art" width="0" height="0" aria-hidden="true" focusable="false">
+  <defs>
+    <g id="lx-logo-art">
+      <path fill="#00005f" d="M1 0h3v1h-3zM7 0h5v1h-5zM16 0h4v1h-4zM0 1h1v1h-1zM4 1h1v1h-1zM7 1h1v1h-1zM11 1h1v1h-1zM15 1h1v1h-1zM19 1h1v1h-1zM0 2h1v1h-1zM4 2h1v1h-1zM7 2h1v1h-1zM11 2h1v1h-1zM15 2h1v1h-1zM19 2h1v1h-1zM0 3h1v1h-1zM4 3h1v1h-1zM7 3h1v1h-1zM11 3h1v1h-1zM14 3h1v1h-1zM19 3h1v1h-1zM0 4h1v1h-1zM4 4h1v1h-1zM7 4h2v1h-2zM13 4h1v1h-1zM18 4h1v1h-1zM0 5h1v1h-1zM4 5h1v1h-1zM8 5h1v1h-1zM12 5h1v1h-1zM17 5h1v1h-1zM0 6h1v1h-1zM4 6h1v1h-1zM9 6h1v1h-1zM11 6h1v1h-1zM16 6h1v1h-1zM0 7h1v1h-1zM4 7h1v1h-1zM9 7h1v1h-1zM11 7h1v1h-1zM15 7h1v1h-1zM0 8h1v1h-1zM4 8h1v1h-1zM9 8h1v1h-1zM14 8h1v1h-1zM17 8h1v1h-1zM0 9h1v1h-1zM4 9h1v1h-1zM8 9h1v1h-1zM13 9h1v1h-1zM17 9h1v1h-1zM0 10h1v1h-1zM4 10h1v1h-1zM7 10h1v1h-1zM12 10h1v1h-1zM18 10h1v1h-1zM0 11h1v1h-1zM4 11h1v1h-1zM7 11h1v1h-1zM12 11h2v1h-2zM15 11h1v1h-1zM19 11h1v1h-1zM0 12h1v1h-1zM6 12h1v1h-1zM10 12h2v1h-2zM15 12h1v1h-1zM19 12h1v1h-1zM0 13h11v1h-11zM16 13h4v1h-4z"/>
+      <path fill="#ffafd7" d="M1 1h2v1h-2zM16 1h3v1h-3zM1 2h2v1h-2zM16 2h2v1h-2zM1 3h2v1h-2zM15 3h2v1h-2zM1 4h2v1h-2zM14 4h2v1h-2zM1 5h2v1h-2zM13 5h2v1h-2zM1 6h2v1h-2zM12 6h2v1h-2zM1 7h2v1h-2zM12 7h2v1h-2zM1 8h2v1h-2zM10 8h2v1h-2zM16 8h1v1h-1zM1 9h2v1h-2zM9 9h2v1h-2zM16 9h1v1h-1zM1 10h2v1h-2zM8 10h2v1h-2zM17 10h1v1h-1zM1 11h2v1h-2zM5 11h2v1h-2zM8 11h3v1h-3zM7 12h1v1h-1z"/>
+      <path fill="#d75f87" d="M18 2h1v1h-1zM17 3h2v1h-2zM16 4h2v1h-2zM15 5h2v1h-2zM14 6h2v1h-2zM14 7h1v1h-1zM12 8h2v1h-2zM15 8h1v1h-1zM11 9h2v1h-2zM14 9h2v1h-2zM10 10h2v1h-2zM13 10h4v1h-4zM11 11h1v1h-1zM16 11h3v1h-3zM8 12h2v1h-2zM16 12h3v1h-3z"/>
+      <path fill="#87d7ff" d="M3 1h1v1h-1zM3 2h1v1h-1zM8 2h3v1h-3zM3 3h1v1h-1zM8 3h3v1h-3zM3 4h1v1h-1zM9 4h4v1h-4zM3 5h1v1h-1zM9 5h3v1h-3zM3 6h1v1h-1zM10 6h1v1h-1zM3 7h1v1h-1zM10 7h1v1h-1zM3 8h1v1h-1zM3 9h1v1h-1zM3 10h1v1h-1zM3 11h1v1h-1zM1 12h5v1h-5z"/>
+      <path fill="#d7ffff" d="M8 1h3v1h-3z"/>
+    </g>
+  </defs>
+</svg>
+
+<div id="toast-host" class="toast-host" aria-live="polite"></div>
+<div id="chart-tooltip" class="chart-tooltip" role="tooltip" hidden></div>
+
+<header class="web-topbar">
+  <a class="web-brand" href="#/" aria-label="lx-tui home">
+    <svg class="web-brand-logo" viewBox="0 0 20 14" aria-hidden="true"><use href="#lx-logo-art"/></svg>
+    <span>lx-tui</span>
+  </a>
+  <nav class="web-tabs" aria-label="Web console">
+    <a class="web-tab active" data-view="home" href="#/">Home</a>
+    <a class="web-tab" data-view="settings" href="#/settings">Settings</a>
+    <a class="web-tab" data-view="usage" href="#/usage">Usage</a>
+  </nav>
+</header>
+
+<div id="web-app">
+  <section id="view-home" class="web-view active" aria-label="Home">
+    <div class="home-shell">
+      <div class="home-hero">
+        <svg class="home-logo" viewBox="0 0 20 14" role="img" aria-label="lx-tui logo"><use href="#lx-logo-art"/></svg>
+        <h1>lx-tui</h1>
+        <p>Local agent workspace · configuration and usage in one place</p>
+      </div>
+      <div class="home-cards">
+        <a class="home-card" href="#/settings">
+          <span class="home-card-title">Settings</span>
+          <span class="home-card-desc">Models, providers, MCP servers, skills, and subagents.</span>
+          <span class="home-card-action">Open settings →</span>
+        </a>
+        <a class="home-card" href="#/usage">
+          <span class="home-card-title">Usage</span>
+          <span class="home-card-desc">Token usage, cost, and request history across model calls.</span>
+          <span class="home-card-action">Open usage →</span>
+        </a>
+      </div>
+    </div>
+  </section>
+
+  <section id="view-settings" class="web-view" aria-label="Settings">
+    <div class="settings-shell">
+      <nav class="side">
+        <button id="tab-general" class="active" onclick="showTab('general')">General</button>
+        <button id="tab-commands" onclick="showTab('commands')">Commands</button>
+        <button id="tab-model" onclick="showTab('model')">Model</button>
+        <button id="tab-provider" onclick="showTab('provider')">Provider</button>
+        <button id="tab-mcp" onclick="showTab('mcp')">MCP</button>
+        <button id="tab-skills" onclick="showTab('skills')">Skills</button>
+        <button id="tab-subagents" onclick="showTab('subagents')">Subagents</button>
+      </nav>
+      <div class="side-resizer" id="side-resizer" role="separator" aria-orientation="vertical" aria-label="Resize sidebar"></div>
+      <main class="settings-main">
+        <section id="view-general" class="view">
+          <div class="view-head">
+            <h2>General</h2>
+            <div id="actions-general" class="view-actions"></div>
+          </div>
+          <p class="status" id="general-status">Loading…</p>
+          <fieldset>
+            <legend>Layout</legend>
+            <div class="grid">
+              <div><label for="sidebar_width">Sidebar width</label><input id="sidebar_width" type="number" min="1" max="200"></div>
+              <div><label for="sidebar_min_width">Sidebar min width</label><input id="sidebar_min_width" type="number" min="1" max="200"></div>
+              <div><label for="sidebar_max_width">Sidebar max width</label><input id="sidebar_max_width" type="number" min="1" max="200"></div>
+              <div><label for="narrow_width">Narrow width</label><input id="narrow_width" type="number" min="1" max="500"></div>
+              <div><label for="min_width">Min screen width</label><input id="min_width" type="number" min="1" max="500"></div>
+              <div><label for="min_height">Min screen height</label><input id="min_height" type="number" min="1" max="500"></div>
+              <div><label for="min_pane_width">Min pane width</label><input id="min_pane_width" type="number" min="1" max="500"></div>
+              <div><label for="min_pane_height">Min pane height</label><input id="min_pane_height" type="number" min="1" max="500"></div>
+            </div>
+          </fieldset>
+          <fieldset>
+            <legend>Web Search</legend>
+            <div class="field-grid">
+              <div class="field-wide">
+                <label for="web_search_exa_api_key">Exa API key</label>
+                <div class="input-with-action">
+                  <input id="web_search_exa_api_key" type="password" autocomplete="off" placeholder="Exa API key (optional, falls back to anonymous or Tavily)">
+                  <button id="exa-key-reveal" type="button" class="input-action" aria-label="Show API key" aria-pressed="false">
+                    <svg viewBox="0 0 16 16" aria-hidden="true" focusable="false"><path d="M8 3.2C4.7 3.2 2.2 5.7 1.3 8c.9 2.3 3.4 4.8 6.7 4.8s5.8-2.5 6.7-4.8C13.8 5.7 11.3 3.2 8 3.2Z"/><circle cx="8" cy="8" r="2.1"/></svg>
+                  </button>
+                </div>
+              </div>
+              <div class="field-wide">
+                <label for="web_search_tavily_api_key">Tavily API key</label>
+                <div class="input-with-action">
+                  <input id="web_search_tavily_api_key" type="password" autocomplete="off" placeholder="Tavily API key (fallback search provider)">
+                  <button id="tavily-key-reveal" type="button" class="input-action" aria-label="Show API key" aria-pressed="false">
+                    <svg viewBox="0 0 16 16" aria-hidden="true" focusable="false"><path d="M8 3.2C4.7 3.2 2.2 5.7 1.3 8c.9 2.3 3.4 4.8 6.7 4.8s5.8-2.5 6.7-4.8C13.8 5.7 11.3 3.2 8 3.2Z"/><circle cx="8" cy="8" r="2.1"/></svg>
+                  </button>
+                </div>
+              </div>
+            </div>
+          </fieldset>
+          <fieldset>
+            <legend>Downloads</legend>
+            <div class="field-grid">
+              <div class="field-wide">
+                <label for="image_download_dir">Image download directory</label>
+                <input id="image_download_dir" type="text" autocomplete="off" placeholder="~/Desktop (default)">
+              </div>
+            </div>
+          </fieldset>
+          <fieldset>
+            <legend>Logging</legend>
+            <div class="field-grid">
+              <div>
+                <label>Log level</label>
+                <div id="log-level-host" class="select-host"></div>
+              </div>
+              <div class="field-wide">
+                <label class="field-hint">
+                  <input id="log_payload" type="checkbox">
+                  Log request/response payloads (may contain prompts and code)
+                </label>
+              </div>
+              <div class="field-wide">
+                <label>Log files</label>
+                <code id="log_path">-</code>
+                <div class="actions">
+                  <button type="button" class="ghost" onclick="copyLogPath()">Copy path</button>
+                  <button type="button" class="ghost" onclick="openLogFolder()">Open folder</button>
+                </div>
+              </div>
+            </div>
+          </fieldset>
+          <div class="actions">
+            <button class="ghost" onclick="loadGeneral()">Reload</button>
+          </div>
+        </section>
+
+        <section id="view-commands" class="view hidden">
+          <div class="view-head">
+            <h2>Commands</h2>
+            <div id="actions-commands" class="view-actions"></div>
+          </div>
+          <div class="commands-toolbar">
+            <label>Type</label>
+            <div id="cmd-filter-select" class="select-host toolbar-select"></div>
+            <button class="ghost" onclick="reloadCommands(true)">Reload</button>
+            <span class="status" id="commands-status">Loading…</span>
+          </div>
+          <div class="commands-grid">
+            <nav class="commands-nav" aria-label="Custom commands">
+              <div id="command-list" class="command-list"></div>
+              <button id="new-command-row" type="button" class="nav-item new" onclick="newCommand()">
+                <span class="nav-slash">+</span>
+                <span class="nav-name">New command</span>
+              </button>
+            </nav>
+            <div class="cmd-resizer" id="cmd-resizer" role="separator" aria-orientation="vertical" aria-label="Resize command list"></div>
+
+            <section class="editor-card">
+              <div id="editor-empty" class="editor-empty">
+                <p id="editor-empty-text">Select a command to edit.</p>
+                <button class="primary" onclick="newCommand()">New command</button>
+              </div>
+
+              <div id="editor" class="hidden">
+                <div class="editor-head">
+                  <h3 id="editor-legend">Edit command</h3>
+                  <div class="actions">
+                    <button class="ghost" onclick="hideEditor()">Cancel</button>
+                    <button class="danger" onclick="deleteCommand()">Delete</button>
+                  </div>
+                </div>
+                <div class="editor-body">
+                  <fieldset>
+                    <div class="field-grid">
+                      <div>
+                        <label for="cmd-name">Name</label>
+                        <input id="cmd-name" type="text" placeholder="my-command">
+                      </div>
+                      <div>
+                        <label>Scope</label>
+                        <div id="cmd-scope-select" class="select-host"></div>
+                      </div>
+                      <div>
+                        <label>Type</label>
+                        <div id="cmd-kind-select" class="select-host"></div>
+                      </div>
+                      <div>
+                        <label>Visibility</label>
+                        <div id="cmd-md-scope-select" class="select-host"></div>
+                      </div>
+                      <div>
+                        <label>Block type (agent block only)</label>
+                        <div id="cmd-block-type-select" class="select-host"></div>
+                      </div>
+                      <div>
+                        <label for="cmd-title">Block title (agent block only)</label>
+                        <input id="cmd-title" type="text" placeholder="title">
+                      </div>
+                      <div>
+                        <label for="cmd-description">Description</label>
+                        <input id="cmd-description" type="text">
+                      </div>
+                    </div>
+                  </fieldset>
+                  <fieldset class="editor-markdown">
+                    <legend>Markdown body</legend>
+                    <textarea id="cmd-body"></textarea>
+                  </fieldset>
+                </div>
+              </div>
+            </section>
+          </div>
+        </section>
+
+        <section id="view-model" class="view hidden">
+          <div class="view-head">
+            <h2>Model</h2>
+            <div id="actions-model" class="view-actions"></div>
+          </div>
+          <div class="models-toolbar">
+            <button class="ghost" onclick="loadModels()">Reload</button>
+            <span class="status" id="model-settings-status">Loading…</span>
+          </div>
+          <fieldset>
+            <legend>Default Model</legend>
+            <div class="field-grid">
+              <div class="field-wide">
+                <label>Default model</label>
+                <div id="default-model-host" class="select-host"></div>
+              </div>
+            </div>
+          </fieldset>
+          <fieldset>
+            <legend>Title Generation</legend>
+            <div class="field-grid">
+              <div class="field-wide">
+                <label>Title model</label>
+                <div id="title-model-host" class="select-host"></div>
+              </div>
+              <div class="field-wide">
+                <label>Title language</label>
+                <div id="title-language-host" class="select-host"></div>
+              </div>
+            </div>
+          </fieldset>
+          <fieldset>
+            <legend>Recap</legend>
+            <div class="field-grid">
+              <div class="field-wide">
+                <label class="field-hint">
+                  <input id="recap-enabled" type="checkbox">
+                  Automatically generate a recap after 30 minutes away
+                </label>
+              </div>
+              <div class="field-wide">
+                <label>Recap model</label>
+                <div id="recap-model-host" class="select-host"></div>
+              </div>
+            </div>
+          </fieldset>
+        </section>
+
+        <section id="view-provider" class="view hidden">
+          <div class="view-head">
+            <h2>Provider</h2>
+            <div id="actions-provider" class="view-actions"></div>
+          </div>
+          <div class="models-toolbar">
+            <button class="ghost" onclick="loadModels()">Reload</button>
+            <span class="status" id="models-status">Loading…</span>
+            <span class="status" id="models-revision"></span>
+          </div>
+          <div class="models-grid">
+            <nav class="models-nav" aria-label="Model providers">
+              <div class="provider-tabs" role="tablist" aria-label="Provider source">
+                <button class="provider-tab active" id="prov-tab-quick" type="button" role="tab" aria-selected="true" onclick="switchProviderTab('quick')">Quick Connect</button>
+                <button class="provider-tab" id="prov-tab-custom" type="button" role="tab" aria-selected="false" onclick="switchProviderTab('custom')">Custom</button>
+              </div>
+              <div class="provider-search-wrap" id="provider-search-wrap">
+                <input class="input input-sm" id="provider-search" type="search" placeholder="Filter providers…">
+              </div>
+              <div id="provider-list" class="provider-list"></div>
+              <button id="new-provider-row" type="button" class="nav-item new" onclick="newProvider()">
+                <span class="nav-slash">+</span>
+                <span class="nav-name">New provider</span>
+              </button>
+            </nav>
+            <div class="models-resizer" id="models-resizer" role="separator" aria-orientation="vertical" aria-label="Resize provider list"></div>
+            <section class="editor-card">
+              <div id="provider-empty" class="editor-empty">
+                <p id="provider-empty-text">Select a provider to edit.</p>
+                <button class="primary" onclick="newProvider()">New provider</button>
+              </div>
+              <div id="provider-editor" class="hidden">
+                <div class="preset-banner hidden" id="preset-banner">
+                  <div class="preset-banner-main">
+                    <div class="preset-banner-title-row">
+                      <span class="preset-badge">Quick Connect Preset</span>
+                      <span class="preset-status-badge" id="preset-status-badge">Not connected</span>
+                    </div>
+                    <p class="preset-banner-desc" id="preset-banner-desc"></p>
+                    <p class="preset-banner-methods" id="preset-banner-methods"></p>
+                  </div>
+                </div>
+                <div class="editor-head">
+                  <h3 id="provider-legend">Edit provider</h3>
+                  <div class="actions" id="custom-editor-actions">
+                    <button class="ghost" type="button" onclick="cancelProvider()">Cancel</button>
+                    <button class="ghost" type="button" onclick="duplicateProvider()">Duplicate</button>
+                    <button class="danger" type="button" onclick="deleteProvider()">Delete</button>
+                  </div>
+                  <div class="actions hidden" id="preset-editor-actions">
+                    <button class="ghost" id="cancel-preset-btn" type="button" onclick="cancelPresetProvider()">Cancel</button>
+                    <button class="ghost" id="reset-preset-btn" type="button" onclick="resetPresetProvider()">Reset to Preset</button>
+                    <button class="danger" id="disconnect-preset-btn" type="button" onclick="disconnectPresetProvider()">Disconnect</button>
+                  </div>
+                </div>
+                <div class="editor-body" id="provider-editor-body">
+                  <div class="card hidden" id="preset-oauth-card">
+                    <div class="card-head"><h3 class="card-title">Quick Sign-in (OAuth / URL)</h3></div>
+                    <div id="preset-oauth-methods" class="preset-oauth-methods"></div>
+                    <div id="preset-oauth-pending" class="preset-oauth-pending hidden"></div>
+                  </div>
+                  <div class="card hidden" id="preset-fields-card">
+                    <div class="card-head"><h3 class="card-title">Preset Settings</h3></div>
+                    <div id="preset-form-fields" class="field-grid"></div>
+                  </div>
+                  <div class="card">
+                    <div class="card-head"><h3 class="card-title">Provider</h3></div>
+                    <div class="field-grid">
+                      <div>
+                        <label for="prov-id">ID (stable key)</label>
+                        <input id="prov-id" type="text" readonly>
+                      </div>
+                      <div>
+                        <label for="prov-name">Display name</label>
+                        <input id="prov-name" type="text">
+                      </div>
+                      <div class="field-wide">
+                        <label>Transport type</label>
+                        <div id="prov-type-host" class="select-host"></div>
+                      </div>
+                      <div class="field-wide">
+                        <label class="field-hint"><input id="prov-enabled" type="checkbox"> Enabled</label>
+                      </div>
+                      <div class="field-wide">
+                        <label for="prov-base-url">Base URL</label>
+                        <input id="prov-base-url" type="text" placeholder="api.host/v1 (scheme required on save)">
+                      </div>
+                      <div class="field-wide">
+                        <label for="prov-api-key">API key</label>
+                        <div class="input-with-action">
+                          <input id="prov-api-key" type="password" autocomplete="off" placeholder="paste the provider key">
+                          <button id="prov-key-reveal" type="button" class="input-action" aria-label="Show API key" aria-pressed="false">
+                            <svg viewBox="0 0 16 16" aria-hidden="true" focusable="false"><path d="M8 3.2C4.7 3.2 2.2 5.7 1.3 8c.9 2.3 3.4 4.8 6.7 4.8s5.8-2.5 6.7-4.8C13.8 5.7 11.3 3.2 8 3.2Z"/><circle cx="8" cy="8" r="2.1"/></svg>
+                          </button>
+                        </div>
+                      </div>
+                    </div>
+                  </div>
+                  <div class="card">
+                    <div class="card-head">
+                      <h3 class="card-title">Models</h3>
+                      <div class="card-tools">
+                        <button class="ghost" onclick="addModel()">Add model</button>
+                        <button class="ghost" onclick="fetchModels()">Fetch models</button>
+                      </div>
+                    </div>
+                    <div id="fetch-candidates" class="fetch-candidates hidden"></div>
+                    <div id="model-list" class="model-list"></div>
+                  </div>
+                </div>
+              </div>
+            </section>
+          </div>
+        </section>
+
+        <section id="view-mcp" class="view hidden">
+          <div class="view-head">
+            <h2>MCP</h2>
+            <div id="actions-mcp" class="view-actions"></div>
+          </div>
+          <div class="models-toolbar">
+            <button class="ghost" onclick="loadMcp(true)">Reload</button>
+            <span class="status" id="mcp-status">Loading…</span>
+          </div>
+          <div class="models-grid">
+            <nav class="models-nav" aria-label="MCP servers">
+              <div id="mcp-list" class="provider-list"></div>
+              <button id="new-mcp-row" type="button" class="nav-item new" onclick="newMcpServer()">
+                <span class="nav-slash">+</span>
+                <span class="nav-name">New server</span>
+              </button>
+            </nav>
+            <div class="models-resizer" id="mcp-resizer" role="separator" aria-orientation="vertical" aria-label="Resize MCP server list"></div>
+            <section class="editor-card">
+              <div id="mcp-empty" class="editor-empty">
+                <p>Select a server to edit.</p>
+                <button class="primary" onclick="newMcpServer()">New server</button>
+              </div>
+              <div id="mcp-editor" class="hidden">
+                <div class="editor-head">
+                  <h3 id="mcp-legend">Edit server</h3>
+                  <div class="actions">
+                    <button class="ghost" onclick="hideMcpEditor()">Cancel</button>
+                    <button class="danger" onclick="deleteMcpServer()">Delete</button>
+                  </div>
+                </div>
+                <div class="editor-body">
+                  <fieldset>
+                    <div class="field-grid">
+                      <div>
+                        <label for="mcp-name">Name</label>
+                        <input id="mcp-name" type="text" placeholder="github">
+                      </div>
+                      <div>
+                        <label>Scope</label>
+                        <div id="mcp-scope-host" class="select-host"></div>
+                      </div>
+                      <div>
+                        <label>Transport</label>
+                        <div id="mcp-transport-host" class="select-host"></div>
+                      </div>
+                      <div class="field-wide">
+                        <label class="field-hint"><input id="mcp-enabled" type="checkbox"> Enabled</label>
+                      </div>
+                    </div>
+                  </fieldset>
+                  <fieldset id="mcp-stdio-fields">
+                    <legend>stdio</legend>
+                    <div class="field-grid">
+                      <div class="field-wide">
+                        <label for="mcp-command">Command</label>
+                        <input id="mcp-command" type="text" placeholder="npx">
+                      </div>
+                      <div class="field-wide">
+                        <label for="mcp-args">Args (one per line)</label>
+                        <textarea id="mcp-args" rows="3"></textarea>
+                      </div>
+                      <div class="field-wide">
+                        <label for="mcp-cwd">Cwd (optional, relative to project)</label>
+                        <input id="mcp-cwd" type="text">
+                      </div>
+                      <div class="field-wide">
+                        <label for="mcp-env-vars">Env vars to pass through (one per line)</label>
+                        <textarea id="mcp-env-vars" rows="2"></textarea>
+                      </div>
+                      <div class="field-wide">
+                        <label for="mcp-env">Env overrides (KEY=VALUE per line)</label>
+                        <textarea id="mcp-env" rows="2"></textarea>
+                      </div>
+                    </div>
+                  </fieldset>
+                  <fieldset id="mcp-http-fields" class="hidden">
+                    <legend>http</legend>
+                    <div class="field-grid">
+                      <div class="field-wide">
+                        <label for="mcp-url">URL</label>
+                        <input id="mcp-url" type="text" placeholder="mcp.example.com/mcp">
+                      </div>
+                      <div>
+                        <label>Auth</label>
+                        <div id="mcp-auth-host" class="select-host"></div>
+                      </div>
+                      <div class="field-wide" id="mcp-bearer-token-row">
+                        <label for="mcp-bearer-token">Bearer token</label>
+                        <input id="mcp-bearer-token" type="password" autocomplete="off" placeholder="leave empty to keep the current value">
+                      </div>
+                      <div class="field-wide hidden" id="mcp-bearer-env-row">
+                        <label for="mcp-bearer-env">Bearer token env var</label>
+                        <input id="mcp-bearer-env" type="text" placeholder="GITHUB_TOKEN">
+                      </div>
+                      <div class="field-wide">
+                        <label for="mcp-headers">Headers (Name=Value per line)</label>
+                        <textarea id="mcp-headers" rows="2"></textarea>
+                      </div>
+                      <div class="field-wide">
+                        <label for="mcp-env-headers">Env headers (Name=ENV_VAR per line)</label>
+                        <textarea id="mcp-env-headers" rows="2"></textarea>
+                      </div>
+                      <div class="field-wide hidden" id="mcp-oauth-fields">
+                        <label for="mcp-scopes">Scopes (space separated)</label>
+                        <input id="mcp-scopes" type="text">
+                        <label for="mcp-client-id">Client ID (optional)</label>
+                        <input id="mcp-client-id" type="text">
+                        <label for="mcp-client-secret">Client secret (optional)</label>
+                        <input id="mcp-client-secret" type="password" autocomplete="off" placeholder="leave empty to keep the current value">
+                        <div class="actions">
+                          <button class="ghost" onclick="mcpLogin()">Login</button>
+                          <button class="ghost" onclick="mcpLogout()">Logout</button>
+                        </div>
+                      </div>
+                    </div>
+                  </fieldset>
+                  <fieldset>
+                    <legend>Tools</legend>
+                    <div id="mcp-tools" class="model-list"><p class="field-hint">Test the connection to list tools.</p></div>
+                  </fieldset>
+                  <div class="actions">
+                    <button class="ghost" onclick="mcpProbe()">Test connection</button>
+                    <button class="ghost" onclick="mcpRestart()">Restart</button>
+                  </div>
+                </div>
+              </div>
+            </section>
+          </div>
+        </section>
+
+        <section id="view-skills" class="view hidden">
+          <div class="view-head">
+            <h2>Skills</h2>
+            <div id="actions-skills" class="view-actions"></div>
+          </div>
+          <div class="models-toolbar">
+            <button class="ghost" onclick="loadSkills(true)">Reload</button>
+            <span class="status" id="skills-status">Loading…</span>
+          </div>
+          <div class="models-grid">
+            <nav class="models-nav" aria-label="Skills">
+              <div id="skill-list" class="provider-list"></div>
+              <button id="new-skill-row" type="button" class="nav-item new" onclick="newSkill()">
+                <span class="nav-slash">+</span>
+                <span class="nav-name">New skill</span>
+              </button>
+            </nav>
+            <div class="models-resizer" id="skill-resizer" role="separator" aria-orientation="vertical" aria-label="Resize skill list"></div>
+            <section class="editor-card">
+              <div id="skill-empty" class="editor-empty">
+                <p>Select a skill to edit.</p>
+                <button class="primary" onclick="newSkill()">New skill</button>
+              </div>
+              <div id="skill-editor" class="hidden">
+                <div class="editor-head">
+                  <h3 id="skill-legend">Edit skill</h3>
+                  <div class="actions">
+                    <button class="ghost" onclick="hideSkillEditor()">Cancel</button>
+                    <button class="danger" onclick="deleteSkill()">Delete</button>
+                  </div>
+                </div>
+                <div class="editor-body">
+                  <fieldset>
+                    <div class="field-grid">
+                      <div>
+                        <label for="skill-name">Name</label>
+                        <input id="skill-name" type="text" placeholder="release-checklist">
+                      </div>
+                      <div>
+                        <label>Scope</label>
+                        <div id="skill-scope-host" class="select-host"></div>
+                      </div>
+                      <div class="field-wide">
+                        <label for="skill-path">Path</label>
+                        <input id="skill-path" type="text" readonly>
+                      </div>
+                      <div class="field-wide">
+                        <label class="field-hint"><input id="skill-enabled" type="checkbox" onchange="toggleSkillEnabled()"> Enabled</label>
+                      </div>
+                      <div class="field-wide">
+                        <label for="skill-description">Description</label>
+                        <input id="skill-description" type="text">
+                      </div>
+                    </div>
+                  </fieldset>
+                  <fieldset>
+                    <legend>Body</legend>
+                    <textarea id="skill-body" rows="22"></textarea>
+                  </fieldset>
+                </div>
+              </div>
+            </section>
+          </div>
+        </section>
+
+        <section id="view-subagents" class="view hidden">
+          <div class="view-head">
+            <h2>Subagents</h2>
+            <div id="actions-subagents" class="view-actions"></div>
+          </div>
+          <div class="models-toolbar">
+            <button class="ghost" onclick="loadSubagents(true)">Reload</button>
+            <span class="status" id="subagents-status">Loading…</span>
+          </div>
+          <fieldset>
+            <legend>General</legend>
+            <div class="field-grid">
+              <div>
+                <label for="subagents-max-concurrent">Max concurrent subagents per session (1–12)</label>
+                <input id="subagents-max-concurrent" type="number" min="1" max="12" value="4">
+              </div>
+              <div>
+                <label for="subagents-max-depth">Max delegation depth (1–3)</label>
+                <input id="subagents-max-depth" type="number" min="1" max="3" value="2">
+              </div>
+              <div>
+                <label for="subagents-default-max-tokens">Default token budget per turn (optional, min 1000)</label>
+                <input id="subagents-default-max-tokens" type="number" min="1000" step="1000" placeholder="Unlimited">
+              </div>
+              <div>
+                <label>Delegation mode</label>
+                <div id="subagents-delegation-mode" class="select-host"></div>
+              </div>
+            </div>
+          </fieldset>
+          <div class="models-grid">
+            <nav class="models-nav" aria-label="Subagent roles">
+              <div id="subagent-role-list" class="provider-list"></div>
+              <button id="new-subagent-role-row" type="button" class="nav-item new" onclick="newSubagentRole()">
+                <span class="nav-slash">+</span>
+                <span class="nav-name">New role</span>
+              </button>
+            </nav>
+            <div class="models-resizer" id="subagent-resizer" role="separator" aria-orientation="vertical" aria-label="Resize subagent role list"></div>
+            <section class="editor-card">
+              <div id="subagent-empty" class="editor-empty">
+                <p>Select a subagent role to configure or create a custom role.</p>
+                <button class="primary" onclick="newSubagentRole()">New role</button>
+              </div>
+              <div id="subagent-editor" class="hidden">
+                <div class="editor-head">
+                  <h3 id="subagent-legend">Edit role</h3>
+                  <div class="actions">
+                    <button class="ghost" onclick="hideSubagentEditor()">Cancel</button>
+                    <button id="subagent-reset-default" class="ghost hidden" onclick="resetBuiltinRoleToDefault()">Reset to default</button>
+                    <button id="subagent-delete-role" class="danger hidden" onclick="deleteSubagentRole()">Delete</button>
+                  </div>
+                </div>
+                <div class="editor-body">
+                  <fieldset>
+                    <div class="field-grid">
+                      <div>
+                        <label for="subagent-name">Role name (lowercase a-z, 0-9, _)</label>
+                        <input id="subagent-name" type="text" placeholder="reviewer">
+                      </div>
+                      <div>
+                        <label>Base permission</label>
+                        <div id="subagent-base-role-host" class="select-host"></div>
+                      </div>
+                      <div>
+                        <label>Default model</label>
+                        <div id="subagent-model-host" class="select-host"></div>
+                      </div>
+                      <div>
+                        <label>Default reasoning effort</label>
+                        <div id="subagent-effort-host" class="select-host"></div>
+                      </div>
+                      <div class="field-wide">
+                        <label for="subagent-nicknames">Nickname candidates (comma separated, optional)</label>
+                        <input id="subagent-nicknames" type="text" placeholder="Turing, Curie, Euler, Noether">
+                      </div>
+                      <div class="field-wide">
+                        <label for="subagent-description">Description (shown to main agent in spawn_agent)</label>
+                        <input id="subagent-description" type="text" placeholder="Short description of when to delegate to this role">
+                      </div>
+                      <div class="field-wide">
+                        <label class="field-hint"><input id="subagent-lock-model" type="checkbox"> Lock model &amp; reasoning effort (ignore caller overrides)</label>
+                      </div>
+                      <div class="field-wide check-row">
+                        <label class="check-item"><input id="subagent-allow-web-search" type="checkbox"> Allow web_search</label>
+                        <label class="check-item"><input id="subagent-allow-mcp" type="checkbox"> Allow MCP tools</label>
+                        <label class="check-item"><input id="subagent-allow-skills" type="checkbox"> Allow skills</label>
+                      </div>
+                    </div>
+                  </fieldset>
+                  <fieldset>
+                    <legend>System prompt</legend>
+                    <textarea id="subagent-prompt" rows="18"></textarea>
+                  </fieldset>
+                </div>
+              </div>
+            </section>
+          </div>
+        </section>
+      </main>
+    </div>
+  </section>
+
+  <section id="view-usage" class="web-view" aria-label="Usage">
+    <div class="usage-shell">
+      <section class="usage-controls" aria-label="Usage controls">
+        <div class="range-group" role="group" aria-label="Time range">
+          <button type="button" class="range-btn" data-range="today" aria-pressed="false">Today</button>
+          <button type="button" class="range-btn active" data-range="7d" aria-pressed="true">7d</button>
+          <button type="button" class="range-btn" data-range="30d" aria-pressed="false">30d</button>
+          <button type="button" class="range-btn" data-range="all" aria-pressed="false">All</button>
+          <button type="button" class="range-btn" data-range="custom" aria-pressed="false">Custom</button>
+        </div>
+        <div id="custom-range-wrap" class="custom-range-wrap hidden">
+          <input type="date" id="custom-start" aria-label="Start date">
+          <span class="range-sep">to</span>
+          <input type="date" id="custom-end" aria-label="End date">
+        </div>
+
+        <div class="filter-selects">
+          <div class="filter-field">
+            <div id="filter-provider" class="select-host"></div>
+          </div>
+          <div class="filter-field">
+            <div id="filter-model" class="select-host"></div>
+          </div>
+          <div class="filter-field">
+            <div id="filter-workspace" class="select-host"></div>
+          </div>
+          <div class="filter-field">
+            <div id="filter-session" class="select-host"></div>
+          </div>
+        </div>
+
+        <div class="header-actions">
+          <span id="usage-status" class="action-status">
+            <span id="usage-status-dot" class="status-dot clean"></span>
+            <span id="last-updated">Loading…</span>
+          </span>
+          <div class="auto-refresh-wrap">
+            <span class="filter-inline-label">Auto</span>
+            <div id="auto-refresh-filter" class="select-host auto-refresh-select"></div>
+          </div>
+          <button id="refresh-btn" type="button" class="ghost">Refresh</button>
+        </div>
+      </section>
+      <main class="usage-main">
+        <div class="usage-content">
+          <div id="usage-error" class="usage-error hidden" role="alert"></div>
+
+          <section id="summary-cards" class="summary-grid" aria-label="Usage summary"></section>
+
+      <section class="charts-grid" aria-label="Usage charts">
+        <article class="chart-card chart-wide">
+          <div class="chart-head">
+            <div>
+              <h2 class="chart-title">Token &amp; Cost Trend</h2>
+              <p class="chart-subtitle" id="chart-trend-subtitle">Stacked token volume and USD cost over time</p>
+            </div>
+            <div class="chart-legend">
+              <span class="legend-item"><span class="legend-swatch swatch-fresh-input"></span>Fresh Input</span>
+              <span class="legend-item"><span class="legend-swatch swatch-cache-read"></span>Cache Read</span>
+              <span class="legend-item"><span class="legend-swatch swatch-cache-write"></span>Cache Write</span>
+              <span class="legend-item"><span class="legend-swatch swatch-output"></span>Output</span>
+              <span class="legend-item"><span class="legend-line swatch-cost"></span>Cost (USD)</span>
+            </div>
+          </div>
+          <div id="chart-trend" class="chart-body chart-body-wide"></div>
+        </article>
+
+        <article class="chart-card">
+          <div class="chart-head">
+            <div>
+              <h2 class="chart-title">Requests</h2>
+              <p class="chart-subtitle">Requests per time bucket</p>
+            </div>
+          </div>
+          <div id="chart-requests" class="chart-body"></div>
+        </article>
+
+        <article class="chart-card">
+          <div class="chart-head">
+            <div>
+              <h2 class="chart-title">Model Distribution</h2>
+              <p id="chart-models-subtitle" class="chart-subtitle">Top 8 by cost</p>
+            </div>
+          </div>
+          <div id="chart-models" class="chart-body"></div>
+        </article>
+
+        <article class="chart-card">
+          <div class="chart-head">
+            <div>
+              <h2 class="chart-title">Provider Distribution</h2>
+              <p id="chart-providers-subtitle" class="chart-subtitle">Top 8 by cost (USD)</p>
+            </div>
+          </div>
+          <div id="chart-providers" class="chart-body"></div>
+        </article>
+
+        <article class="chart-card">
+          <div class="chart-head">
+            <div>
+              <h2 class="chart-title">Token Composition</h2>
+              <p class="chart-subtitle">Share of fresh input, output, and cache tokens</p>
+            </div>
+          </div>
+          <div id="chart-composition" class="chart-body"></div>
+        </article>
+      </section>
+
+      <section class="table-section card" aria-label="Usage breakdown tables">
+        <div class="provider-tabs usage-tabs" role="tablist" aria-label="Usage tables">
+          <button type="button" class="provider-tab active" data-tab="logs" id="tab-btn-logs" role="tab" aria-selected="true">Request Logs (0)</button>
+          <button type="button" class="provider-tab" data-tab="models" id="tab-btn-models" role="tab" aria-selected="false">Model Stats (0)</button>
+          <button type="button" class="provider-tab" data-tab="providers" id="tab-btn-providers" role="tab" aria-selected="false">Provider Stats (0)</button>
+        </div>
+
+        <div id="table-container" class="table-wrap" role="tabpanel"></div>
+
+        <div id="logs-pagination" class="pagination-bar">
+          <span id="pagination-info" class="pagination-info">Page 1 of 1 · 0 requests</span>
+          <div class="pagination-actions">
+            <button type="button" id="page-prev" class="ghost" disabled>Prev</button>
+            <button type="button" id="page-next" class="ghost" disabled>Next</button>
+          </div>
+        </div>
+      </section>
+        </div>
+      </main>
+    </div>
+  </section>
+</div>
+
+<script src="/web.js"></script>
+<script src="/settings.js"></script>
+<script src="/settings_models_card.js"></script>
+<script src="/settings_models.js"></script>
+<script src="/settings_connect.js"></script>
+<script src="/settings_mcp.js"></script>
+<script src="/settings_skills.js"></script>
+<script src="/settings_subagents.js"></script>
+<script src="/usage_charts.js"></script>
+<script src="/usage.js"></script>
+</body>
+</html>

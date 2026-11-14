@@ -1,8 +1,6 @@
 // ===== Usage Dashboard Controller =====
 // 状态管理、筛选器、API 拉取、8 张汇总卡、3 个数据表格与分页控制。
 
-const token = new URLSearchParams(window.location.search).get('token') || '';
-
 const usageState = {
   rangePreset: '7d',
   customStart: '',
@@ -23,188 +21,6 @@ const usageState = {
 };
 
 const selects = {};
-const openSelects = new Set();
-
-function showToast(message, kind) {
-  const host = document.getElementById('toast-host');
-  if (!host) { return; }
-  const item = domEl('div', 'toast' + (kind ? ' ' + kind : ''), message);
-  host.appendChild(item);
-  setTimeout(() => {
-    item.classList.add('leaving');
-    setTimeout(() => item.remove(), 200);
-  }, 3200);
-}
-
-// ===== 自绘下拉选择器（与 settings.js 交互一致） =====
-
-function createSelect(host, config) {
-  if (!host) { return null; }
-  const optionsConfig = config || {};
-  if (host._selectInstance) {
-    openSelects.delete(host._selectInstance);
-  }
-  if (host._selectMenu && host._selectMenu.parentNode) {
-    host._selectMenu.parentNode.removeChild(host._selectMenu);
-  }
-  host.replaceChildren();
-  host.classList.add('select-host');
-
-  const button = document.createElement('button');
-  button.type = 'button';
-  button.className = 'select-button';
-  button.disabled = !!optionsConfig.disabled;
-  button.setAttribute('aria-haspopup', 'listbox');
-  button.setAttribute('aria-expanded', 'false');
-  if (optionsConfig.ariaLabel) {
-    button.setAttribute('aria-label', optionsConfig.ariaLabel);
-  }
-  const label = domEl('span', 'select-label');
-  const caret = domEl('span', 'select-caret', '▾');
-  button.appendChild(label);
-  button.appendChild(caret);
-  host.appendChild(button);
-
-  const menu = domEl('div', 'select-menu hidden');
-  menu.setAttribute('role', 'listbox');
-  document.body.appendChild(menu);
-
-  let options = [];
-  let current = optionsConfig.value === undefined ? '' : optionsConfig.value;
-  let active = 0;
-  let opened = false;
-
-  const renderLabel = () => {
-    const match = options.find((opt) => opt.value === current);
-    label.textContent = match ? match.label : (optionsConfig.placeholder || '');
-    label.classList.toggle('placeholder', !match);
-  };
-
-  const renderMenu = () => {
-    menu.replaceChildren();
-    options.forEach((opt, index) => {
-      const row = domEl(
-        'button',
-        'select-option' + (opt.value === current ? ' selected' : '') + (index === active ? ' active' : ''),
-        opt.label
-      );
-      row.type = 'button';
-      row.setAttribute('role', 'option');
-      row.onclick = () => choose(opt.value, true);
-      menu.appendChild(row);
-    });
-  };
-
-  const reposition = () => {
-    const rect = button.getBoundingClientRect();
-    const spaceBelow = window.innerHeight - rect.bottom - 8;
-    const spaceAbove = rect.top - 8;
-    const openUp = spaceBelow < 140 && spaceAbove > spaceBelow;
-    const menuWidth = Math.max(rect.width, 140);
-    const clampedLeft = Math.max(8, Math.min(rect.left, window.innerWidth - menuWidth - 8));
-    menu.style.left = clampedLeft + 'px';
-    menu.style.width = menuWidth + 'px';
-    menu.style.maxHeight = Math.min(240, Math.max(120, openUp ? spaceAbove : spaceBelow)) + 'px';
-    if (openUp) {
-      menu.style.top = 'auto';
-      menu.style.bottom = (window.innerHeight - rect.top + 4) + 'px';
-    } else {
-      menu.style.bottom = 'auto';
-      menu.style.top = (rect.bottom + 4) + 'px';
-    }
-  };
-
-  const close = () => {
-    opened = false;
-    menu.classList.add('hidden');
-    button.setAttribute('aria-expanded', 'false');
-    openSelects.delete(instance);
-  };
-
-  const choose = (value, notify) => {
-    const changed = value !== current;
-    current = value;
-    close();
-    renderLabel();
-    if (notify && changed && typeof optionsConfig.onChange === 'function') {
-      optionsConfig.onChange(value);
-    }
-  };
-
-  const open = () => {
-    if (opened || button.disabled) { return; }
-    openSelects.forEach((other) => other.close());
-    opened = true;
-    menu.classList.remove('hidden');
-    button.setAttribute('aria-expanded', 'true');
-    active = Math.max(0, options.findIndex((opt) => opt.value === current));
-    renderMenu();
-    reposition();
-    openSelects.add(instance);
-  };
-
-  button.addEventListener('click', () => {
-    if (opened) { close(); } else { open(); }
-  });
-  button.addEventListener('keydown', (evt) => {
-    if (evt.key === 'ArrowDown' || evt.key === 'ArrowUp') {
-      evt.preventDefault();
-      if (!opened) { open(); return; }
-      const step = evt.key === 'ArrowDown' ? 1 : -1;
-      active = (active + step + options.length) % Math.max(1, options.length);
-      renderMenu();
-      return;
-    }
-    if (evt.key === 'Enter' || evt.key === ' ') {
-      evt.preventDefault();
-      if (!opened) { open(); return; }
-      if (options[active]) { choose(options[active].value, true); }
-      return;
-    }
-    if (evt.key === 'Escape') { close(); }
-  });
-
-  const instance = {
-    el: host,
-    menu: menu,
-    value: () => current,
-    close: close,
-    reposition: reposition,
-    setOptions: (next, value) => {
-      options = next || [];
-      if (value !== undefined) { current = value; }
-      if (!options.some((opt) => opt.value === current)) { current = ''; }
-      renderLabel();
-      renderMenu();
-    },
-    setValue: (value) => {
-      current = value;
-      renderLabel();
-      if (opened) { renderMenu(); }
-    },
-    setDisabled: (disabled) => {
-      button.disabled = !!disabled;
-      if (disabled && opened) { close(); }
-    }
-  };
-  host._selectMenu = menu;
-  host._selectInstance = instance;
-  instance.setOptions(optionsConfig.options || [], current);
-  return instance;
-}
-
-document.addEventListener('click', (evt) => {
-  openSelects.forEach((inst) => {
-    if (!inst.el.contains(evt.target) && !inst.menu.contains(evt.target)) {
-      inst.close();
-    }
-  });
-});
-window.addEventListener('resize', () => openSelects.forEach((inst) => inst.reposition()));
-window.addEventListener('scroll', () => {
-  openSelects.forEach((inst) => inst.reposition());
-  hideChartTooltip();
-}, true);
 
 // ===== API 与时间范围解析 =====
 
@@ -304,6 +120,12 @@ function setErrorBanner(message) {
   }
 }
 
+// 统一 shell 中视图可能被隐藏：后台刷新与错误 toast 不得泄漏到其他视图。
+function isUsageViewActive() {
+  const section = document.getElementById('view-usage');
+  return !!section && section.classList.contains('active');
+}
+
 async function loadUsageDashboard() {
   const reqId = ++usageState.requestSeq;
   usageState.loading = true;
@@ -323,6 +145,11 @@ async function loadUsageDashboard() {
     if (reqId !== usageState.requestSeq) { return; }
     usageState.overview = overview || {};
     usageState.logPage = logPage || {rows: [], total: 0, page: 1, pageSize: usageState.pageSize};
+    const totalPages = Math.max(1, Math.ceil(Number(usageState.logPage.total || 0) / usageState.pageSize));
+    if (usageState.page > totalPages) {
+      usageState.page = totalPages;
+      return loadUsageDashboard();
+    }
     if (syncFilterOptions(usageState.overview.filters || {})) {
       usageState.page = 1;
       return loadUsageDashboard();
@@ -337,7 +164,7 @@ async function loadUsageDashboard() {
     if (reqId !== usageState.requestSeq) { return; }
     setStatusIndicator('error', 'Load failed');
     setErrorBanner('Failed to load usage analytics: ' + error.message);
-    showToast(error.message, 'error');
+    if (isUsageViewActive()) { showToast(error.message, 'error'); }
   } finally {
     if (reqId === usageState.requestSeq) {
       usageState.loading = false;
@@ -359,15 +186,20 @@ async function loadUsageLogsPage(nextPage) {
   try {
     const logPage = await apiGet('/api/usage/logs', logParams);
     if (reqId !== usageState.requestSeq) { return; }
-    usageState.page = targetPage;
     usageState.logPage = logPage || {rows: [], total: 0, page: targetPage, pageSize: usageState.pageSize};
+    usageState.page = Number(usageState.logPage.page) || targetPage;
+    const totalPages = Math.max(1, Math.ceil(Number(usageState.logPage.total || 0) / usageState.pageSize));
+    if (usageState.page > totalPages) {
+      usageState.page = totalPages;
+      return loadUsageLogsPage(totalPages);
+    }
     renderTableSection();
     const nowText = new Date().toLocaleTimeString('en-US', {hour12: false});
     setStatusIndicator('clean', 'Updated ' + nowText);
   } catch (error) {
     if (reqId !== usageState.requestSeq) { return; }
     setStatusIndicator('error', 'Load failed');
-    showToast(error.message, 'error');
+    if (isUsageViewActive()) { showToast(error.message, 'error'); }
   } finally {
     if (reqId === usageState.requestSeq) {
       usageState.loading = false;
@@ -765,7 +597,7 @@ function updateAutoRefresh(intervalMs) {
   }
   if (usageState.autoRefreshMs > 0) {
     usageState.autoRefreshTimer = setInterval(() => {
-      loadUsageDashboard();
+      if (isUsageViewActive()) { loadUsageDashboard(); }
     }, usageState.autoRefreshMs);
   }
 }
@@ -900,4 +732,6 @@ function initUsageDashboard() {
   loadUsageDashboard();
 }
 
-initUsageDashboard();
+function initUsageView() {
+  initUsageDashboard();
+}

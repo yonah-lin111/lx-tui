@@ -78,7 +78,7 @@ Common Prompt panel keys:
 - `lx-tui settings reset` restores defaults.
 - `lx-tui settings open [--no-open]` starts the local browser settings server on `127.0.0.1` until `Ctrl+C`.
 
-The browser settings page covers providers and models, connect/OAuth, MCP servers, skills, custom slash commands, and subagent roles. In the TUI, the sidebar's `[SET]` button opens the same page. The `Subagents`, `Skills`, and `MCP` sections write user-scoped config under `<data_root>/` (`config/subagents.json`, `config/skills.json`, and the MCP config).
+The browser web console covers a Home landing page (LX pixel logo plus Settings / Usage entry cards) and the Settings / Usage views: providers and models, connect/OAuth, MCP servers, skills, custom slash commands, and subagent roles, plus token/cost/request analytics. In the TUI, the sidebar's `[WEB]` button opens the unified console at Home; the top bar switches between Home, Settings, and Usage. The `Subagents`, `Skills`, and `MCP` sections write user-scoped config under `<data_root>/` (`config/subagents.json`, `config/skills.json`, and the MCP config).
 
 Most settings changes are hot-reloaded: the settings service emits a change event and the TUI re-scans skills, MCP servers, commands, models, or subagent roles without a restart.
 

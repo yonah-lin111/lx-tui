@@ -91,12 +91,51 @@ async fn page_requires_token_and_serves_self_contained_assets() {
     assert!(html.contains("/settings.css"), "styles linked");
     assert!(html.contains("/settings.js"), "script linked");
     assert!(!html.contains("cmd-preview"), "no preview pane");
+    assert!(html.contains("id=\"view-home\""), "home view present");
+    assert!(
+        html.contains("id=\"view-settings\""),
+        "settings view present"
+    );
+    assert!(html.contains("id=\"view-usage\""), "usage view present");
+    assert!(
+        html.contains("/web.css") && html.contains("/web.js"),
+        "web shell assets linked"
+    );
+    assert!(
+        html.contains("id=\"css-settings\"") && html.contains("id=\"css-usage\""),
+        "per-view stylesheets toggleable"
+    );
+    assert_eq!(
+        html.matches("media=\"not all\"").count(),
+        2,
+        "both view stylesheets start suspended"
+    );
+    assert_eq!(
+        html.matches("<h1>").count(),
+        1,
+        "only the Home hero has an h1"
+    );
+    assert!(
+        html.contains("data-view=\"home\"")
+            && html.contains("data-view=\"settings\"")
+            && html.contains("data-view=\"usage\"")
+            && html.contains("href=\"#/settings\"")
+            && html.contains("href=\"#/usage\""),
+        "topbar exposes hash-linked Home / Settings / Usage tabs"
+    );
+    let web_js_pos = html.find("/web.js").expect("web.js linked");
+    let settings_js_pos = html.find("/settings.js").expect("settings.js linked");
+    let usage_charts_pos = html.find("/usage_charts.js").expect("usage charts linked");
+    let usage_js_pos = html.find("/usage.js").expect("usage.js linked");
+    assert!(
+        web_js_pos < settings_js_pos && usage_charts_pos < usage_js_pos,
+        "shared core loads before the view scripts"
+    );
 
     // 静态资源以裸路径提供（浏览器 link/script 不携带 token），且带正确 MIME。
     let css = request(port, &get("/settings.css")).await;
     assert_eq!(status(&css), 200);
     assert!(css.contains("text/css"), "css content type");
-    assert!(body(&css).contains("color-scheme: dark"), "dark theme");
     assert!(body(&css).contains(".models-grid"), "models layout styles");
     assert!(
         body(&css).contains("#mcp-editor") && body(&css).contains("#skill-editor"),
@@ -119,6 +158,14 @@ async fn page_requires_token_and_serves_self_contained_assets() {
     assert!(
         !js_body.contains(".innerHTML"),
         "no innerHTML in settings js"
+    );
+    assert!(
+        !js_body.contains("function createSelect") && !js_body.contains("function showToast"),
+        "shared select/toast live in web.js"
+    );
+    assert!(
+        js_body.contains("function initSettingsView"),
+        "settings initialises lazily"
     );
 
     // Models 视图独立资源：加载/保存/复制/删除/远端获取与模态、思考等级入口。
@@ -227,19 +274,88 @@ async fn page_requires_token_and_serves_self_contained_assets() {
         "no innerHTML in models card js"
     );
 
+    // 三个页面地址返回同一份统一 shell，且 `[WEB]` 的 URL 仍固定落在 `/`。
     let usage_denied = request(port, &get("/usage")).await;
     assert_eq!(status(&usage_denied), 403);
     assert_eq!(
-        service.usage_url(),
-        format!("http://127.0.0.1:{port}/usage?token={token}")
+        service.url(),
+        format!("http://127.0.0.1:{port}/?token={token}")
     );
-    let usage_ok = request(port, &get(&format!("/usage?token={token}"))).await;
-    assert_eq!(status(&usage_ok), 200);
-    let usage_html = body(&usage_ok);
-    assert!(usage_html.contains("/usage.css"), "usage styles linked");
+    assert_eq!(
+        service.settings_url(),
+        format!("http://127.0.0.1:{port}/?token={token}#/settings")
+    );
+    for path in ["/settings", "/usage"] {
+        let page = request(port, &get(&format!("{path}?token={token}"))).await;
+        assert_eq!(status(&page), 200, "{path} serves the unified shell");
+        assert_eq!(body(&page), html, "{path} serves the same bytes");
+    }
+    assert!(html.contains("/usage.css"), "usage styles linked");
     assert!(
-        usage_html.contains("/usage_charts.js") && usage_html.contains("/usage.js"),
+        html.contains("/usage_charts.js") && html.contains("/usage.js"),
         "usage scripts linked"
+    );
+    assert!(
+        html.contains("class=\"usage-controls\"") && !html.contains("usage-topbar"),
+        "usage filters render as a content toolbar instead of a second topbar"
+    );
+    for hook in [
+        "summary-cards",
+        "chart-trend",
+        "chart-requests",
+        "chart-models",
+        "chart-providers",
+        "chart-composition",
+        "table-container",
+        "logs-pagination",
+        "filter-provider",
+        "filter-model",
+        "filter-workspace",
+        "filter-session",
+        "auto-refresh-filter",
+    ] {
+        assert!(
+            html.contains(&format!("id=\"{hook}\"")),
+            "usage view hook present: {hook}"
+        );
+    }
+
+    let web_css = request(port, &get("/web.css")).await;
+    assert_eq!(status(&web_css), 200);
+    assert!(web_css.contains("text/css"), "web css content type");
+    let web_css_body = body(&web_css);
+    assert!(
+        web_css_body.contains(".web-topbar") && web_css_body.contains(".home-shell"),
+        "web shell and home styles present"
+    );
+    assert!(
+        web_css_body.contains("color-scheme: dark"),
+        "dark theme declared once in the web shell"
+    );
+    assert!(
+        web_css_body.contains(".hidden { display: none !important; }"),
+        "body-level overlays stay hidden when a view stylesheet is suspended"
+    );
+    assert!(
+        web_css_body.contains("*::-webkit-scrollbar")
+            && web_css_body.contains("scrollbar-color: var(--border-strong) transparent"),
+        "all scroll containers share one scrollbar style"
+    );
+
+    let web_js = request(port, &get("/web.js")).await;
+    assert_eq!(status(&web_js), 200);
+    assert!(web_js.contains("javascript"), "web js content type");
+    let web_js_body = body(&web_js);
+    for entry in ["function viewFromLocation", "function showView", "bootWeb"] {
+        assert!(web_js_body.contains(entry), "web js entry: {entry}");
+    }
+    assert!(
+        web_js_body.contains("function createSelect") && web_js_body.contains("function showToast"),
+        "shared select/toast live in web.js"
+    );
+    assert!(
+        !web_js_body.contains(".innerHTML"),
+        "no innerHTML in web js"
     );
 
     let usage_css = request(port, &get("/usage.css")).await;
@@ -254,6 +370,15 @@ async fn page_requires_token_and_serves_self_contained_assets() {
     assert!(
         !usage_js_body.contains(".innerHTML"),
         "no innerHTML in usage js"
+    );
+    assert!(
+        !usage_js_body.contains("function createSelect")
+            && !usage_js_body.contains("function showToast"),
+        "shared select/toast live in web.js"
+    );
+    assert!(
+        usage_js_body.contains("function initUsageView"),
+        "usage initialises lazily"
     );
 
     let usage_charts_js = request(port, &get("/usage_charts.js")).await;
@@ -279,7 +404,8 @@ async fn page_requires_token_and_serves_self_contained_assets() {
         ("mcp_js", mcp_js_body),
         ("skills_js", skills_js_body),
         ("subagents_js", subagents_js_body),
-        ("usage_html", usage_html),
+        ("web_css", web_css_body),
+        ("web_js", web_js_body),
         ("usage_css", usage_css_body),
         ("usage_js", usage_js_body),
         ("usage_charts_js", usage_charts_js_body),
@@ -316,19 +442,17 @@ async fn unknown_asset_is_not_found() {
 #[tokio::test]
 async fn page_locks_viewport_and_avoids_extra_scrollbars() {
     let (service, _events, _dir) = start("page-layout").await;
+    let web_css = body(&request(service.port(), &get("/web.css")).await).to_string();
     let response = request(service.port(), &get("/settings.css")).await;
     assert_eq!(status(&response), 200);
     let css = body(&response);
 
-    // 根容器锁定视口高度，永不出现根滚动条。
+    // 根容器锁定视口高度，永不出现根滚动条（统一外壳在 web.css）。
     assert!(
-        css.contains("html, body { height: 100%; }"),
+        web_css.contains("html, body { height: 100%; }"),
         "viewport height locked"
     );
-    assert!(
-        css.contains("display: flex; overflow: hidden;"),
-        "body overflow hidden"
-    );
+    assert!(web_css.contains("overflow: hidden"), "body overflow hidden");
     // 宽屏时命令网格的行高被视口约束，滚动只发生在栏内。
     assert!(
         css.contains("grid-template-rows: minmax(0, 1fr)"),
@@ -338,14 +462,15 @@ async fn page_locks_viewport_and_avoids_extra_scrollbars() {
         css.contains("grid-template-rows: max-content max-content"),
         "narrow stacked grid sizes rows to content and scrolls inside"
     );
-    // 左栏列表独立滚动但隐藏滚动条；右栏卡片依赖细滚动条兜底。
+    // 左栏列表独立滚动但隐藏滚动条；其余滚动容器统一走 web.css 的细滚动条。
     assert!(
         css.contains(".command-list::-webkit-scrollbar { display: none; }"),
         "left list scrollbar hidden"
     );
     assert!(
-        css.contains(".editor-body::-webkit-scrollbar { width: 8px; }"),
-        "editor fallback scrollbar styled"
+        web_css.contains("*::-webkit-scrollbar { width: 8px; height: 8px; }")
+            && web_css.contains("scrollbar-width: thin"),
+        "shared scrollbar style"
     );
     // 左栏条目两行排版：第一行斜杠+名称，第二行 tag 与名称左对齐。
     assert!(
@@ -355,10 +480,6 @@ async fn page_locks_viewport_and_avoids_extra_scrollbars() {
     assert!(
         css.contains(".nav-item .tag { grid-column: 2; grid-row: 2;"),
         "tag on second line aligned to name"
-    );
-    assert!(
-        css.contains("scrollbar-width: thin"),
-        "editor fallback scrollbar thin"
     );
     // 所有容器/控件/卡片移除圆角（直角），仅三处状态小圆点保留 border-radius: 50%（侧栏未保存点、顶栏状态点、命令未保存点）。
     assert_eq!(
@@ -381,7 +502,9 @@ async fn models_page_scrolls_and_uses_shared_select_toast() {
     let token = service.token().to_string();
     let html = body(&request(port, &get(&format!("/?token={token}"))).await).to_string();
     let css = body(&request(port, &get("/settings.css")).await).to_string();
+    let web_css = body(&request(port, &get("/web.css")).await).to_string();
     let js = body(&request(port, &get("/settings.js")).await).to_string();
+    let web_js = body(&request(port, &get("/web.js")).await).to_string();
     let models_js = body(&request(port, &get("/settings_models.js")).await).to_string();
     assert!(
         html.contains("/settings.js") && html.contains("/settings_models.js"),
@@ -394,26 +517,30 @@ async fn models_page_scrolls_and_uses_shared_select_toast() {
         "models grid bounded by viewport"
     );
     assert!(
-        css.contains(".editor-body::-webkit-scrollbar-thumb"),
-        "editor scrollbar thumb visible"
+        web_css.contains("*::-webkit-scrollbar-thumb")
+            && web_css.contains("*::-webkit-scrollbar-thumb:hover"),
+        "shared scrollbar thumb visible"
     );
-    assert!(
-        css.contains(".provider-list::-webkit-scrollbar"),
-        "provider list scrollbar styled"
-    );
-    // 左侧列表与右侧内容卡之间是可拖拽分隔条（对齐 Commands 页）。
-    assert!(
-        html.contains("id=\"models-resizer\""),
-        "models list resizer present"
-    );
+    // 左侧列表与右侧内容卡之间是可拖拽分隔条；四个列表各自记住宽度。
+    for id in [
+        "models-resizer",
+        "mcp-resizer",
+        "skill-resizer",
+        "subagent-resizer",
+    ] {
+        assert!(
+            html.contains(&format!("id=\"{id}\"")),
+            "list resizer present: {id}"
+        );
+    }
     assert!(css.contains(".models-resizer"), "models resizer styled");
     assert!(
         css.contains("--models-list-width, 220px"),
         "models list width variable wired"
     );
     assert!(
-        js.contains("modelsListWidth"),
-        "models list width clamp wired"
+        js.contains("mcp-resizer") && js.contains("subagent-resizer"),
+        "all list resizers wired"
     );
 
     // 页面上不再有原生下拉，全部换成全局 select 组件挂载点。
@@ -430,29 +557,32 @@ async fn models_page_scrolls_and_uses_shared_select_toast() {
     }
     assert!(!html.contains("<select"), "no native select left");
 
-    // 全局 toast 与自绘 select 组件入口和样式。
-    assert!(js.contains("function showToast"), "toast component");
-    assert!(js.contains("function createSelect"), "select component");
-    assert!(css.contains(".toast-host"), "toast host styles");
+    // 全局 toast 与自绘 select：行为在 web.js，toast 样式在 web.css，select 视觉留在 settings.css。
+    assert!(web_js.contains("function showToast"), "toast component");
+    assert!(web_js.contains("function createSelect"), "select component");
+    assert!(web_css.contains(".toast-host"), "toast host styles");
     assert!(css.contains(".select-menu"), "select menu styles");
     // 黑灰分层：色板走变量，悬浮层（toast / select 菜单）比卡片更亮并带阴影层级。
-    assert!(css.contains("--bg: #0f0f0f"), "page uses dark gray base");
-    assert!(css.contains("--overlay: #272727"), "overlay tone defined");
+    assert!(
+        web_css.contains("--bg: #0f0f0f"),
+        "page uses dark gray base"
+    );
+    assert!(
+        web_css.contains("--overlay: #272727"),
+        "overlay tone defined"
+    );
     assert!(
         css.contains(".select-menu { position: fixed; z-index: var(--z-menu);"),
         "select menu is an elevated fixed layer"
     );
     assert!(
-        css.contains("background: var(--overlay); box-shadow: var(--shadow-overlay);"),
-        "toast/menu share overlay tone and shadow"
-    );
-    assert!(
-        css.contains("--z-toast: 1000") && css.contains("--z-menu: 60"),
+        web_css.contains("--z-toast: 1000") && web_css.contains("--z-menu: 60"),
         "toast stacks above menus"
     );
     // 菜单内选项高亮必须比菜单底色更亮，否则 hover/选中在悬浮层上不可见。
     assert!(
-        css.contains("--option-hover: #575757") && css.contains("--option-selected: #666666"),
+        web_css.contains("--option-hover: #575757")
+            && web_css.contains("--option-selected: #666666"),
         "option highlight tones above overlay"
     );
     assert!(
@@ -516,10 +646,10 @@ async fn models_page_scrolls_and_uses_shared_select_toast() {
         models_js.contains("provider.apiKey"),
         "key round-trips via API"
     );
-    // toast 顶部居中。
+    // toast 顶部居中，并让出全局顶栏高度。
     assert!(
-        css.contains("left: 50%; top: 16px;"),
-        "toast anchored top center"
+        web_css.contains("left: 50%; top: calc(var(--web-topbar-height) + 12px);"),
+        "toast anchored below the global topbar"
     );
     service.shutdown();
 }
@@ -609,7 +739,14 @@ async fn page_editor_supports_rename_flow() {
     let html = body(&page).to_string();
     let css = body(&request(port, &get("/settings.css")).await).to_string();
     let js = body(&request(port, &get("/settings.js")).await).to_string();
-    assert!(!html.contains("disabled"), "name input never disabled");
+    let name_start = html.find("id=\"cmd-name\"").expect("name input present");
+    let tag_start = html[..name_start].rfind('<').expect("input tag start");
+    let tag_end = name_start + html[name_start..].find('>').expect("input tag end");
+    let name_tag = &html[tag_start..=tag_end];
+    assert!(
+        !name_tag.contains("disabled"),
+        "name input never disabled: {name_tag}"
+    );
     assert!(!css.contains(".disabled"), "no disabled styling");
     assert!(js.contains("'/rename'"), "rename endpoint wired");
     assert!(

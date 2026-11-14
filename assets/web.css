@@ -1,0 +1,155 @@
+/* 统一 Web 控制台：全局令牌、顶部 bar、视图容器、Home 与共享组件。 */
+
+:root {
+  color-scheme: dark;
+  /* 黑灰分层：底色 < 面板 < 卡片 < 悬浮层，每层差一个可见但克制的灰阶。 */
+  --bg: #0f0f0f;
+  --panel: #171717;
+  --panel-raised: #1f1f1f;
+  --overlay: #272727;
+  --hover: #212121;
+  --active: #2b2b2b;
+  /* 输入框/下拉触发器：比卡片亮一档，聚焦与展开时再提亮，避免和卡片糊在一起。 */
+  --field: #232323;
+  --field-hover: #2f2f2f;
+  /* 悬浮菜单里的选项高亮：菜单底色是 --overlay，选项必须再亮两档才看得出层次。 */
+  --option-hover: #575757;
+  --option-selected: #666666;
+  --border: #2e2e2e;
+  --border-strong: #3d3d3d;
+  --border-overlay: #4a4a4a;
+  --text: #e8e8e8;
+  --muted: #9a9a9a;
+  --faint: #5f5f5f;
+  /* 黑白灰主题：唯一强调色是浅灰；绿/红只用于成功与失败语义。 */
+  --accent: #d4d4d4;
+  --accent-ink: #141414;
+  --ok: #3ecf8e;
+  --err: #ef6b6b;
+  --warn: #fbbf24;
+  /* 层级：内高光 + 近距硬阴影 + 远距柔阴影，悬浮元素才"浮"得起来。 */
+  --shadow-raise: 0 1px 2px rgba(0, 0, 0, .45);
+  --shadow-overlay: inset 0 1px 0 rgba(255, 255, 255, .06), 0 2px 6px rgba(0, 0, 0, .5), 0 16px 40px rgba(0, 0, 0, .6);
+  --z-menu: 60;
+  --z-toast: 1000;
+  --web-topbar-height: 40px;
+}
+
+* { box-sizing: border-box; }
+/* 统一滚动条：所有滚动容器共用细暗色滚动条，避免局部退回系统亮色样式。 */
+* { scrollbar-width: thin; scrollbar-color: var(--border-strong) transparent; }
+*::-webkit-scrollbar { width: 8px; height: 8px; }
+*::-webkit-scrollbar-track { background: transparent; }
+*::-webkit-scrollbar-thumb { background: var(--border-strong); }
+*::-webkit-scrollbar-thumb:hover { background: var(--border-overlay); }
+*::-webkit-scrollbar-corner { background: transparent; }
+html, body { height: 100%; }
+/* 全局 hidden：body 级浮层（select 菜单、图表 tooltip）不依赖当前激活的视图样式表。 */
+.hidden { display: none !important; }
+body {
+  margin: 0;
+  font: 14px/1.5 ui-monospace, SFMono-Regular, Menlo, monospace;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  background: var(--bg);
+  color: var(--text);
+}
+/* Settings 拖拽侧栏时由 settings.js 给 body 加类，全局统一光标与禁选。 */
+body.resizing { cursor: col-resize; user-select: none; }
+
+/* ===== 顶部全局 bar ===== */
+.web-topbar {
+  flex: 0 0 var(--web-topbar-height);
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 24px;
+  padding: 0 20px;
+  background: var(--panel);
+  border-bottom: 1px solid var(--border);
+}
+.web-brand {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  color: var(--text);
+  text-decoration: none;
+  font-weight: 600;
+  letter-spacing: .04em;
+}
+.web-brand-logo { width: 26px; height: auto; }
+.web-tabs { display: flex; align-items: stretch; gap: 4px; height: 100%; }
+.web-tab {
+  display: inline-flex;
+  align-items: center;
+  border-bottom: 2px solid transparent;
+  color: var(--muted);
+  font: inherit;
+  padding: 0 14px;
+  text-decoration: none;
+  cursor: pointer;
+}
+.web-tab:hover { color: var(--text); background: var(--hover); }
+.web-tab.active { color: var(--text); border-bottom-color: var(--accent); font-weight: 600; }
+
+/* ===== 视图容器：同一时间只有 active 视图可见 ===== */
+#web-app { flex: 1 1 auto; min-height: 0; position: relative; }
+.web-view { position: absolute; inset: 0; display: none; }
+.web-view.active { display: block; }
+
+/* ===== Home ===== */
+.home-shell {
+  height: 100%;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 40px;
+  padding: 48px 24px;
+  overflow-y: auto;
+}
+.home-hero { display: flex; flex-direction: column; align-items: center; gap: 12px; text-align: center; }
+.home-logo { width: 200px; height: auto; image-rendering: pixelated; }
+.home-hero h1 { margin: 0; font-size: 32px; letter-spacing: .06em; }
+.home-hero p { margin: 0; color: var(--muted); font-size: 13px; }
+.home-cards { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 16px; width: min(760px, 100%); }
+.home-card {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  text-align: left;
+  padding: 20px;
+  border: 1px solid var(--border-strong);
+  background: var(--panel);
+  color: var(--text);
+  text-decoration: none;
+  cursor: pointer;
+}
+.home-card:hover { border-color: var(--accent); background: var(--panel-raised); }
+.home-card-title { font-size: 16px; font-weight: 600; }
+.home-card-desc { color: var(--muted); font-size: 13px; }
+.home-card-action { color: var(--text); font-size: 12px; margin-top: auto; }
+
+/* ===== 视图外壳 ===== */
+.settings-shell { display: flex; height: 100%; overflow: hidden; }
+.settings-shell main { flex: 1; min-width: 0; display: flex; flex-direction: column; overflow: hidden; padding: 24px; }
+
+/* ===== 共享 toast ===== */
+.toast-host { position: fixed; left: 50%; top: calc(var(--web-topbar-height) + 12px); z-index: var(--z-toast); display: flex; flex-direction: column; align-items: center; gap: 8px; max-width: min(480px, calc(100vw - 32px)); transform: translateX(-50%); pointer-events: none; }
+.toast { padding: 8px 14px; border: 1px solid var(--border-overlay); border-left: 3px solid var(--accent); background: var(--overlay); color: var(--text); font-size: 12px; box-shadow: var(--shadow-overlay); pointer-events: auto; animation: toast-in .16s ease-out; }
+.toast.ok { border-left-color: var(--ok); }
+.toast.error { border-left-color: var(--err); }
+.toast.leaving { opacity: 0; transform: translateY(-4px); transition: opacity .18s ease, transform .18s ease; }
+/* 只淡入不改 transform：入场动画与离场位移各管一个属性，避免把 toast 卡在偏移位置。 */
+@keyframes toast-in { from { opacity: 0; } to { opacity: 1; } }
+/* 状态点脉冲：Settings/Usage 的 saving/loading 指示灯共用。 */
+@keyframes dot-pulse { 0%, 100% { opacity: .4; } 50% { opacity: 1; } }
+
+/* ===== 窄屏 ===== */
+@media (max-width: 640px) {
+  .home-cards { grid-template-columns: 1fr; }
+  .home-logo { width: 140px; }
+  .web-topbar { padding: 0 12px; }
+  .web-tab { padding: 0 10px; }
+}

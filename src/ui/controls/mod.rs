@@ -11,8 +11,8 @@ mod tests;
 
 pub(crate) use exit::render_exit_button;
 pub use exit::{exit_button, exit_button_at};
-pub(crate) use footer::{render_settings_button, render_usage_button};
-pub use footer::{settings_button, settings_button_at, usage_button, usage_button_at};
+pub(crate) use footer::render_web_button;
+pub use footer::{web_button, web_button_at};
 #[cfg(test)]
 pub(crate) use panels::collapsed_content_x;
 pub use panels::{

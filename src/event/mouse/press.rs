@@ -212,13 +212,8 @@ pub(crate) fn handle_mouse_down_left(
         *dirty = true;
         return;
     }
-    if ui::settings_button_at(view, state, mouse.column, mouse.row) {
-        state.settings_open_requested = true;
-        *dirty = true;
-        return;
-    }
-    if ui::usage_button_at(view, state, mouse.column, mouse.row) {
-        state.usage_open_requested = true;
+    if ui::web_button_at(view, state, mouse.column, mouse.row) {
+        state.web_open_requested = true;
         *dirty = true;
         return;
     }

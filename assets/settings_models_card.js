@@ -1,6 +1,6 @@
 // ===== Model Card & Pricing / Modalities / Thinking Variants =====
 // 从 settings_models.js 拆出的模型卡片渲染、单价（Pricing）、模态与思考等级编辑组件。
-// 在 settings.html 中先于 settings_models.js 加载，与 settings_models.js / settings_connect.js 共享全局作用域。
+// 在 web.html 中先于 settings_models.js 加载，与 settings_models.js / settings_connect.js 共享全局作用域。
 
 const INPUT_MODALITIES = ['text', 'image', 'audio', 'video', 'pdf'];
 const OUTPUT_MODALITIES = ['text', 'image', 'audio', 'video'];

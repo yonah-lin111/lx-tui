@@ -131,7 +131,6 @@ pub fn parse_request(buffer: &[u8]) -> std::io::Result<Option<Request>> {
     }
     let body =
         String::from_utf8_lossy(&buffer[body_start..body_start + content_length]).into_owned();
-    let _ = MAX_HEADER_BYTES;
     Ok(Some(Request {
         method: method.to_string(),
         path,
@@ -239,9 +238,8 @@ pub async fn route(request: &Request, state: &ServiceState) -> Response {
         return Response::error(403, "cross-origin write rejected");
     }
     match (request.method.as_str(), request.path.as_str()) {
-        ("GET", "/") => Response::ok("text/html; charset=utf-8", page::html().to_string()),
-        ("GET", "/usage") => {
-            Response::ok("text/html; charset=utf-8", page::usage_html().to_string())
+        ("GET", "/") | ("GET", "/settings") | ("GET", "/usage") => {
+            Response::ok("text/html; charset=utf-8", page::html().to_string())
         }
         ("GET", "/api/state") => state_json(state),
         ("PUT", "/api/config") => put_config(request, state),
