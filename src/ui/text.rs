@@ -874,8 +874,7 @@ pub fn tooltip_hint(target: TooltipTarget, state: &AppState) -> &'static str {
         TooltipTarget::PromptPin if state.prompt_pinned.is_some() => "unpin prompt",
         TooltipTarget::PromptPin => "pin prompt",
         TooltipTarget::SwapPromptSide => "swap prompt side",
-        TooltipTarget::SidebarSettings => "open settings",
-        TooltipTarget::SidebarUsage => "open usage",
+        TooltipTarget::SidebarWeb => "open web",
         TooltipTarget::PromptTemplateStatus => "cycle block status",
         TooltipTarget::TemplateButton { button, .. } => match button {
             TemplateButtonKind::Copy => "copy block",

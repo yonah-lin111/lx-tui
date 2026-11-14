@@ -84,8 +84,7 @@ pub(crate) fn render_cached(
             None
         } else {
             let cursor = left_panel::render(frame, view.left_panel, state);
-            controls::render_settings_button(frame, &view, state);
-            controls::render_usage_button(frame, &view, state);
+            controls::render_web_button(frame, &view, state);
             cursor
         }
     } else {

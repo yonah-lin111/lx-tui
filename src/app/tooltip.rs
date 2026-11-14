@@ -59,10 +59,8 @@ pub enum TooltipTarget {
     PromptRedo,
     PromptSave,
     PromptPin,
-    /// 侧栏底边框左侧设置按钮。
-    SidebarSettings,
-    /// 侧栏底边框用量统计按钮 `[USE]`。
-    SidebarUsage,
+    /// 侧栏底边框统一 Web 控制台入口 `[WEB]`。
+    SidebarWeb,
     /// 引用文件夹内容搜索弹窗标题行的原始路径复制按钮。
     ReferencedSearchCopyPath,
     /// 右侧容器 Todo 面板的工具栏按钮。

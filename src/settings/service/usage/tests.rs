@@ -385,12 +385,7 @@ async fn custom_provider_internal_id_is_synced_to_display_name() {
     drop(db);
 
     let port = service.port();
-    let token = service
-        .usage_url()
-        .split("token=")
-        .nth(1)
-        .unwrap_or("")
-        .to_string();
+    let token = service.token().to_string();
 
     let overview_resp = request(port, &get(&format!("/api/usage/overview?token={token}"))).await;
     assert_eq!(status(&overview_resp), 200);

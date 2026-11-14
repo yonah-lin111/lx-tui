@@ -342,39 +342,26 @@ async fn run_loop(
         ) {
             dirty = true;
         }
-        // 侧栏底边框 `[SET]` / `[USE]` 点击：后台打开对应本地页面，不阻塞事件循环。
-        for (requested, resolve_url, page) in [
-            (
-                std::mem::take(&mut state.settings_open_requested),
-                SettingsService::url as fn(&SettingsService) -> String,
-                "settings",
-            ),
-            (
-                std::mem::take(&mut state.usage_open_requested),
-                SettingsService::usage_url,
-                "usage",
-            ),
-        ] {
-            if requested {
-                if let Some(url) = settings_service.as_ref().map(resolve_url) {
-                    tokio::task::spawn_blocking(move || {
-                        if let Err(error) = crate::platform::open_browser(&url) {
-                            tracing::warn!(%error, page, "opening web page failed");
-                        }
-                    });
-                } else {
-                    tracing::warn!(page, "settings web service is unavailable");
-                    update::show_toast(
-                        state,
-                        crate::app::toast::Toast::new(
-                            crate::app::toast::ToastKind::Danger,
-                            ui::text::TOAST_SETTINGS_UNAVAILABLE,
-                            None,
-                            Instant::now(),
-                        ),
-                    );
-                    dirty = true;
-                }
+        // 侧栏底边框 `[WEB]` 点击：后台打开统一 Web 控制台，不阻塞事件循环。
+        if std::mem::take(&mut state.web_open_requested) {
+            if let Some(url) = settings_service.as_ref().map(SettingsService::url) {
+                tokio::task::spawn_blocking(move || {
+                    if let Err(error) = crate::platform::open_browser(&url) {
+                        tracing::warn!(%error, "opening web console failed");
+                    }
+                });
+            } else {
+                tracing::warn!("settings web service is unavailable");
+                update::show_toast(
+                    state,
+                    crate::app::toast::Toast::new(
+                        crate::app::toast::ToastKind::Danger,
+                        ui::text::TOAST_SETTINGS_UNAVAILABLE,
+                        None,
+                        Instant::now(),
+                    ),
+                );
+                dirty = true;
             }
         }
         // 显示工作区变化或设置页写入后重载自定义命令；git 元数据到达后同步仓库根。

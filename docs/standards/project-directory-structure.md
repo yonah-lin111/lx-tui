@@ -195,14 +195,15 @@ lx-tui/
   tests/                        集成测试
   scripts/                      开发与维护脚本，按需创建
   assets/                       浏览器前端资源（HTML/CSS/JS），经 include_str! 嵌入二进制
-    settings.html               设置页结构
-    settings.css                设置页样式
-    settings.js                 设置页骨架与全局组件
+    web.html                    统一 Web 控制台结构（Home / Settings / Usage 单文档）
+    web.css                     全局外壳、Home 与共享 toast 样式
+    web.js                      共享核心（token/DOM/toast/select）与 hash 路由、懒初始化
+    settings.css                Settings 视图样式（按 media 挂起）
+    settings.js                 设置页骨架与 General / Commands 业务
     settings_models_card.js     设置页模型卡片、单价、模态与思考等级编辑组件
     settings_models.js          设置页 Models 视图脚本
     settings_connect.js         设置页 Quick Connect 视图脚本
-    usage.html                  模型用量统计看板结构
-    usage.css                   模型用量统计看板样式
+    usage.css                   模型用量统计看板样式（按 media 挂起）
     usage_charts.js             模型用量统计看板原生 SVG 图表渲染与格式化工具
     usage.js                    模型用量统计看板状态、筛选、汇总卡、表格与分页脚本
     oauth_callback.html         OAuth 浏览器回调结果页模板

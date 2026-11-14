@@ -354,12 +354,10 @@ pub struct AppState {
     pub referenced_generation: u64,
     /// 已折叠的工作区分组（仓库根路径）；仅存内存，重启恢复展开。
     pub collapsed_groups: Vec<PathBuf>,
-    /// 本地设置 Web 服务是否可用；决定底边框设置按钮的可用态。
+    /// 本地 Web 控制台服务是否可用；决定底边框 `[WEB]` 按钮的可用态。
     pub settings_available: bool,
-    /// 设置按钮点击请求：事件层取走后打开浏览器。
-    pub settings_open_requested: bool,
-    /// 用户请求在外部浏览器打开模型用量统计页（鼠标点击 `[USE]` 置位，事件循环消费）。
-    pub usage_open_requested: bool,
+    /// `[WEB]` 点击请求：事件层取走后打开统一 Web 控制台。
+    pub web_open_requested: bool,
     /// 模型配置快照：设置页保存后由事件层更新；发送时冻结成 `FrozenModel`。
     pub models: ModelsSnapshot,
     /// 快捷连接配置快照（`connect.json`）：由事件层加载，`/connect` 面板据此展示连接状态。
@@ -533,8 +531,7 @@ impl AppState {
             referenced_generation: 0,
             collapsed_groups: Vec::new(),
             settings_available: false,
-            settings_open_requested: false,
-            usage_open_requested: false,
+            web_open_requested: false,
             models: ModelsSnapshot::default(),
             connect: crate::config::ai::connect::ConnectSettings::default(),
             connect_env: BTreeMap::new(),

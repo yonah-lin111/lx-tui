@@ -1,32 +1,6 @@
 :root {
   color-scheme: dark;
-  /* 黑灰分层：底色 < 面板 < 卡片 < 悬浮层，与 settings.css 完全一致。 */
-  --bg: #0f0f0f;
-  --panel: #171717;
-  --panel-raised: #1f1f1f;
-  --overlay: #272727;
-  --hover: #212121;
-  --active: #2b2b2b;
-  --field: #232323;
-  --field-hover: #2f2f2f;
-  --option-hover: #575757;
-  --option-selected: #666666;
-  --border: #2e2e2e;
-  --border-strong: #3d3d3d;
-  --border-overlay: #4a4a4a;
-  --text: #e8e8e8;
-  --muted: #9a9a9a;
-  --faint: #5f5f5f;
-  --accent: #d4d4d4;
-  --accent-ink: #141414;
-  --ok: #3ecf8e;
-  --err: #ef6b6b;
-  --warn: #fbbf24;
-  --shadow-raise: 0 1px 2px rgba(0, 0, 0, .45);
-  --shadow-overlay: inset 0 1px 0 rgba(255, 255, 255, .06), 0 2px 6px rgba(0, 0, 0, .5), 0 16px 40px rgba(0, 0, 0, .6);
-  --z-menu: 60;
   --z-tooltip: 200;
-  --z-toast: 1000;
 
   /* 图表专用语义色令牌（协调于暗色工业风背景） */
   --chart-fresh-input: #60a5fa;
@@ -39,17 +13,9 @@
 }
 
 * { box-sizing: border-box; }
-html, body { height: 100%; }
-body {
-  margin: 0;
-  font: 14px/1.5 ui-monospace, SFMono-Regular, Menlo, monospace;
-  overflow: hidden;
-  background: var(--bg);
-  color: var(--text);
-}
 
 .usage-shell {
-  height: 100vh;
+  height: 100%;
   display: flex;
   flex-direction: column;
   overflow: hidden;
@@ -93,30 +59,13 @@ body {
   gap: 12px;
 }
 
-/* ===== 顶栏第一行：标题与操作 ===== */
-.usage-header {
+/* ===== 顶栏第一行：右侧操作区 ===== */
+.usage-toolbar {
   display: flex;
   flex-wrap: wrap;
   align-items: center;
-  justify-content: space-between;
-  gap: 6px 14px;
-}
-.header-titles {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: baseline;
-  gap: 6px 10px;
-}
-.usage-header h1 {
-  margin: 0;
-  font-size: 14px;
-  font-weight: 600;
-  letter-spacing: .08em;
-  text-transform: uppercase;
-}
-.usage-header .subtitle {
-  font-size: 11px;
-  color: var(--muted);
+  justify-content: flex-end;
+  gap: 8px;
 }
 .header-actions {
   display: flex;
@@ -140,7 +89,6 @@ body {
 .status-dot.clean { background: var(--ok); }
 .status-dot.error { background: var(--err); }
 .status-dot.loading { background: var(--muted); animation: dot-pulse 1s ease-in-out infinite; }
-@keyframes dot-pulse { 0%, 100% { opacity: .4; } 50% { opacity: 1; } }
 
 .auto-refresh-wrap {
   display: inline-flex;
@@ -206,7 +154,7 @@ button.ghost {
 button.ghost:hover:not(:disabled) { border-color: var(--muted); background: var(--hover); }
 button.ghost:disabled { opacity: .45; cursor: default; }
 
-/* ===== 全局组件：自绘 select 与 toast ===== */
+/* ===== 全局组件：自绘 select ===== */
 .select-host { position: relative; }
 .select-button {
   display: flex;
@@ -261,35 +209,6 @@ button.ghost:disabled { opacity: .45; cursor: default; }
 .select-option:hover, .select-option.active { background: var(--option-hover); color: #fff; }
 .select-option.selected { background: var(--option-selected); color: #fff; font-weight: 600; }
 .select-option.selected:hover, .select-option.selected.active { background: var(--option-selected); }
-
-.toast-host {
-  position: fixed;
-  left: 50%;
-  top: 16px;
-  z-index: var(--z-toast);
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  gap: 8px;
-  max-width: min(480px, calc(100vw - 32px));
-  transform: translateX(-50%);
-  pointer-events: none;
-}
-.toast {
-  padding: 8px 14px;
-  border: 1px solid var(--border-overlay);
-  border-left: 3px solid var(--accent);
-  background: var(--overlay);
-  color: var(--text);
-  font-size: 12px;
-  box-shadow: var(--shadow-overlay);
-  pointer-events: auto;
-  animation: toast-in .16s ease-out;
-}
-.toast.ok { border-left-color: var(--ok); }
-.toast.error { border-left-color: var(--err); }
-.toast.leaving { opacity: 0; transform: translateY(-4px); transition: opacity .18s ease, transform .18s ease; }
-@keyframes toast-in { from { opacity: 0; } to { opacity: 1; } }
 
 /* ===== 顶栏第二行：紧凑单行筛选栏 ===== */
 .usage-filters {

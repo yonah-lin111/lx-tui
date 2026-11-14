@@ -1,4 +1,3 @@
-const token = new URLSearchParams(location.search).get('token') || '';
 let state = null;
 let selected = null;
 let draft = false;
@@ -45,168 +44,7 @@ function showTab(name) {
   refreshActionBars();
 }
 
-// ===== 页面级组件：toast 与自绘 select =====
-// 操作结果反馈走 toast；常驻状态（数量、revision、key 状态）留在页面内。
-// 所有 <select> 一律用 createSelect，避免系统原生弹层与黑灰主题分裂。
-const toastHost = document.createElement('div');
-toastHost.className = 'toast-host';
-document.body.appendChild(toastHost);
-function showToast(message, kind) {
-  const item = document.createElement('div');
-  item.className = 'toast' + (kind ? ' ' + kind : '');
-  item.textContent = message;
-  toastHost.appendChild(item);
-  setTimeout(() => {
-    item.classList.add('leaving');
-    setTimeout(() => item.remove(), 200);
-  }, 3200);
-}
-
-// 菜单挂在 body 上用固定定位，避免被滚动容器裁剪；打开中的实例统一关闭。
-const openSelects = new Set();
-function createSelect(host, config) {
-  const optionsConfig = config || {};
-  if (host._selectInstance) {
-    openSelects.delete(host._selectInstance);
-  }
-  if (host._selectMenu && host._selectMenu.parentNode) {
-    host._selectMenu.parentNode.removeChild(host._selectMenu);
-  }
-  host.replaceChildren();
-  host.classList.add('select-host');
-  const button = document.createElement('button');
-  button.type = 'button';
-  button.className = 'select-button';
-  button.disabled = !!optionsConfig.disabled;
-  button.setAttribute('aria-haspopup', 'listbox');
-  if (optionsConfig.ariaLabel) { button.setAttribute('aria-label', optionsConfig.ariaLabel); }
-  const label = document.createElement('span');
-  label.className = 'select-label';
-  const caret = document.createElement('span');
-  caret.className = 'select-caret';
-  caret.textContent = '▾';
-  button.appendChild(label);
-  button.appendChild(caret);
-  host.appendChild(button);
-  const menu = document.createElement('div');
-  menu.className = 'select-menu hidden';
-  menu.setAttribute('role', 'listbox');
-  document.body.appendChild(menu);
-  let options = [];
-  let current = optionsConfig.value === undefined ? '' : optionsConfig.value;
-  let active = 0;
-  let opened = false;
-  const renderLabel = () => {
-    const match = options.find((option) => option.value === current);
-    label.textContent = match ? match.label : (optionsConfig.placeholder || '');
-    label.classList.toggle('placeholder', !match);
-  };
-  const renderMenu = () => {
-    while (menu.firstChild) { menu.removeChild(menu.firstChild); }
-    options.forEach((option, index) => {
-      const row = document.createElement('button');
-      row.type = 'button';
-      row.className = 'select-option' + (option.value === current ? ' selected' : '') + (index === active ? ' active' : '');
-      row.setAttribute('role', 'option');
-      row.textContent = option.label;
-      row.onclick = () => { choose(option.value, true); };
-      menu.appendChild(row);
-    });
-  };
-  const reposition = () => {
-    const rect = button.getBoundingClientRect();
-    const spaceBelow = window.innerHeight - rect.bottom - 8;
-    const spaceAbove = rect.top - 8;
-    const openUp = spaceBelow < 140 && spaceAbove > spaceBelow;
-    menu.style.left = rect.left + 'px';
-    menu.style.width = rect.width + 'px';
-    menu.style.maxHeight = Math.min(240, Math.max(120, openUp ? spaceAbove : spaceBelow)) + 'px';
-    if (openUp) {
-      menu.style.top = 'auto';
-      menu.style.bottom = (window.innerHeight - rect.top + 4) + 'px';
-    } else {
-      menu.style.bottom = 'auto';
-      menu.style.top = (rect.bottom + 4) + 'px';
-    }
-  };
-  const close = () => {
-    opened = false;
-    menu.classList.add('hidden');
-    button.setAttribute('aria-expanded', 'false');
-    openSelects.delete(instance);
-  };
-  const choose = (value, notify) => {
-    const changed = value !== current;
-    current = value;
-    close();
-    renderLabel();
-    if (notify && changed && typeof optionsConfig.onChange === 'function') { optionsConfig.onChange(value); }
-    refreshActionBars();
-  };
-  const open = () => {
-    if (opened || button.disabled) { return; }
-    openSelects.forEach((other) => { other.close(); });
-    opened = true;
-    menu.classList.remove('hidden');
-    button.setAttribute('aria-expanded', 'true');
-    active = Math.max(0, options.findIndex((option) => option.value === current));
-    renderMenu();
-    reposition();
-    openSelects.add(instance);
-  };
-  button.addEventListener('click', () => { if (opened) { close(); } else { open(); } });
-  button.addEventListener('keydown', (event) => {
-    if (event.key === 'ArrowDown' || event.key === 'ArrowUp') {
-      event.preventDefault();
-      if (!opened) { open(); return; }
-      const step = event.key === 'ArrowDown' ? 1 : -1;
-      active = (active + step + options.length) % Math.max(1, options.length);
-      renderMenu();
-      return;
-    }
-    if (event.key === 'Enter' || event.key === ' ') {
-      event.preventDefault();
-      if (!opened) { open(); return; }
-      if (options[active]) { choose(options[active].value, true); }
-      return;
-    }
-    if (event.key === 'Escape') { close(); }
-  });
-  const instance = {
-    el: host,
-    menu,
-    value: () => current,
-    close,
-    reposition,
-    setOptions: (next, value) => {
-      options = next || [];
-      if (value !== undefined) { current = value; }
-      if (!options.some((option) => option.value === current)) { current = ''; }
-      renderLabel();
-      renderMenu();
-    },
-    setValue: (value) => {
-      current = value;
-      renderLabel();
-      if (opened) { renderMenu(); }
-    },
-    setDisabled: (disabled) => {
-      button.disabled = !!disabled;
-      if (disabled && opened) { close(); }
-    },
-  };
-  host._selectMenu = menu;
-  host._selectInstance = instance;
-  instance.setOptions(optionsConfig.options || [], current);
-  return instance;
-}
-document.addEventListener('click', (event) => {
-  openSelects.forEach((instance) => {
-    if (!instance.el.contains(event.target) && !instance.menu.contains(event.target)) { instance.close(); }
-  });
-});
-window.addEventListener('resize', () => { openSelects.forEach((instance) => instance.reposition()); });
-window.addEventListener('scroll', () => { openSelects.forEach((instance) => instance.reposition()); }, true);
+// 页面级辅助：创建带 class 与文本的元素。
 function element(tag, className, text) {
   const node = document.createElement(tag);
   if (className) { node.className = className; }
@@ -927,63 +765,68 @@ function deleteCommand() {
   });
 }
 
-const SIDE_MIN_WIDTH = 140;
-const SIDE_MAX_WIDTH = 360;
-const LIST_MIN_WIDTH = 140;
-const LIST_MAX_WIDTH = 560;
-let cmdListWidth = 220;
+function initSettingsView() {
+  if (window.__settingsInitialized) { return; }
+  window.__settingsInitialized = true;
 
-function clampWidth(value, min, max) {
-  return Math.min(max, Math.max(min, value));
+  const SIDE_MIN_WIDTH = 140;
+  const SIDE_MAX_WIDTH = 360;
+  const LIST_MIN_WIDTH = 140;
+  const LIST_MAX_WIDTH = 560;
+  let cmdListWidth = 220;
+
+  function clampWidth(value, min, max) {
+    return Math.min(max, Math.max(min, value));
+  }
+
+  function setupResizer(handle, read, write, min, max) {
+    handle.addEventListener('pointerdown', (event) => {
+      event.preventDefault();
+      const startX = event.clientX;
+      const startWidth = read();
+      handle.setPointerCapture(event.pointerId);
+      handle.classList.add('dragging');
+      document.body.classList.add('resizing');
+      const onMove = (moveEvent) => write(clampWidth(startWidth + moveEvent.clientX - startX, min, max));
+      const stop = () => {
+        handle.classList.remove('dragging');
+        document.body.classList.remove('resizing');
+        handle.removeEventListener('pointermove', onMove);
+      };
+      handle.addEventListener('pointermove', onMove);
+      handle.addEventListener('pointerup', stop, {once: true});
+      handle.addEventListener('pointercancel', stop, {once: true});
+    });
+  }
+
+  setupResizer(
+    document.getElementById('side-resizer'),
+    () => document.querySelector('nav.side').getBoundingClientRect().width,
+    (width) => { document.querySelector('nav.side').style.width = width + 'px'; },
+    SIDE_MIN_WIDTH,
+    SIDE_MAX_WIDTH
+  );
+  setupResizer(
+    document.getElementById('cmd-resizer'),
+    () => cmdListWidth,
+    (width) => {
+      cmdListWidth = width;
+      document.querySelector('.commands-grid').style.setProperty('--cmd-list-width', width + 'px');
+    },
+    LIST_MIN_WIDTH,
+    LIST_MAX_WIDTH
+  );
+  let modelsListWidth = 220;
+  setupResizer(
+    document.getElementById('models-resizer'),
+    () => modelsListWidth,
+    (width) => { modelsListWidth = width; document.querySelector('.models-grid').style.setProperty('--models-list-width', width + 'px'); },
+    LIST_MIN_WIDTH,
+    LIST_MAX_WIDTH
+  );
+  actionBars.general = createActionBar('actions-general', { isDirty: generalDirty, save: saveGeneral, reset: resetGeneral });
+  actionBars.commands = createActionBar('actions-commands', { isDirty: commandsDirty, save: saveCommand, reset: resetCommandEditor });
+  initLoggingSelect();
+  initCommandSelects();
+  loadState();
 }
-
-function setupResizer(handle, read, write, min, max) {
-  handle.addEventListener('pointerdown', (event) => {
-    event.preventDefault();
-    const startX = event.clientX;
-    const startWidth = read();
-    handle.setPointerCapture(event.pointerId);
-    handle.classList.add('dragging');
-    document.body.classList.add('resizing');
-    const onMove = (moveEvent) => write(clampWidth(startWidth + moveEvent.clientX - startX, min, max));
-    const stop = () => {
-      handle.classList.remove('dragging');
-      document.body.classList.remove('resizing');
-      handle.removeEventListener('pointermove', onMove);
-    };
-    handle.addEventListener('pointermove', onMove);
-    handle.addEventListener('pointerup', stop, {once: true});
-    handle.addEventListener('pointercancel', stop, {once: true});
-  });
-}
-
-setupResizer(
-  document.getElementById('side-resizer'),
-  () => document.querySelector('nav.side').getBoundingClientRect().width,
-  (width) => { document.querySelector('nav.side').style.width = width + 'px'; },
-  SIDE_MIN_WIDTH,
-  SIDE_MAX_WIDTH
-);
-setupResizer(
-  document.getElementById('cmd-resizer'),
-  () => cmdListWidth,
-  (width) => {
-    cmdListWidth = width;
-    document.querySelector('.commands-grid').style.setProperty('--cmd-list-width', width + 'px');
-  },
-  LIST_MIN_WIDTH,
-  LIST_MAX_WIDTH
-);
-let modelsListWidth = 220;
-setupResizer(
-  document.getElementById('models-resizer'),
-  () => modelsListWidth,
-  (width) => { modelsListWidth = width; document.querySelector('.models-grid').style.setProperty('--models-list-width', width + 'px'); },
-  LIST_MIN_WIDTH,
-  LIST_MAX_WIDTH
-);
-actionBars.general = createActionBar('actions-general', { isDirty: generalDirty, save: saveGeneral, reset: resetGeneral });
-actionBars.commands = createActionBar('actions-commands', { isDirty: commandsDirty, save: saveCommand, reset: resetCommandEditor });
-initLoggingSelect();
-initCommandSelects();
-loadState();

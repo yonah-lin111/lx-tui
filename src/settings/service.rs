@@ -320,18 +320,9 @@ impl SettingsService {
         self.state.token()
     }
 
-    /// 浏览器访问 URL：`http://127.0.0.1:<port>/?token=<token>`。
+    /// 浏览器访问统一 Web 控制台 URL：`http://127.0.0.1:<port>/?token=<token>`。
     pub fn url(&self) -> String {
         format!("http://127.0.0.1:{}/?token={}", self.port, self.token())
-    }
-
-    /// 浏览器访问用量统计页 URL：`http://127.0.0.1:<port>/usage?token=<token>`。
-    pub fn usage_url(&self) -> String {
-        format!(
-            "http://127.0.0.1:{}/usage?token={}",
-            self.port,
-            self.token()
-        )
     }
 
     /// 测试注入的用户数据根（生产为 None，走环境推导）。
