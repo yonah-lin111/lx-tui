@@ -1,6 +1,6 @@
 # Prompt / Lx `@` 提及与粘贴面板交互对齐设计
 
-状态：**已实施并通过评审修正**（2026-11-14）。评审记录见 `review.md`。
+状态：**已实施、通过评审修正并合并到 `dev`**（2026-11-14）。评审记录见 `review.md`。
 
 关联任务清单：`docs/feature/prompt-mention-paste-parity/task.md`
 

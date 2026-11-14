@@ -1,7 +1,7 @@
 # Prompt / Lx `@` 提及与粘贴面板交互对齐任务清单
 
 > 设计：`docs/feature/prompt-mention-paste-parity/design.md`
-> 状态：**已实施并通过评审修正**（2026-11-14）。评审记录见 `review.md`。
+> 状态：**已实施、通过评审修正并合并到 `dev`**（2026-11-14）。评审记录见 `review.md`。
 > 执行顺序：Task 1 → Task 2 → Task 3 → Task 4 → Task 5。每个 Task 完成后只跑对应精确校验，最后统一 fmt/clippy/test。
 
 ---
@@ -189,3 +189,11 @@ pub fn paste_proposal_open(&self) -> bool {
 - [x] P2：重写路径粘贴自动保存测试；lx 后台同步测试把光标放进 `@main.rs`；补 Prompt 侧同类测试。
 - [x] P2：同步 `task.md` 与字段注释的压制生命周期描述。
 - [x] 验证：`cargo fmt --check`、`cargo clippy --all-targets -- -D warnings`、`cargo test`。
+---
+
+## 合并记录（2026-11-14）
+
+- 已合并到 `dev`：`f939665e`（`merge: prompt mention/paste parity and @ reference cleanup`）。
+- 冲突处理：与 `dev` 的 BTW/Agents composer 改动合并时，保留 `MentionScanOwner` 归属路由与 Agents composer 的 `@` 支持，同时接入本次“只有文本编辑才重开面板”的时机模型；`panels.rs` 的编辑/移动分流同时覆盖主输入框与 detail composer。
+- 工作树 `.worktrees/prompt-mention-paste-parity` 与分支 `feat/prompt-mention-paste-parity` 已移除。
+- 合并后验证：`cargo fmt --check`、`cargo clippy --all-targets -- -D warnings`、`cargo test`（lib 5461 passed / 0 failed / 6 ignored，全部集成测试通过）。

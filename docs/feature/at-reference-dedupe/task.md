@@ -2,7 +2,7 @@
 
 > 设计：`docs/feature/at-reference-dedupe/design.md`
 > 评审：`docs/feature/at-reference-dedupe/review.md`
-> 状态：**已实施并通过评审修正**。
+> 状态：**已实施、通过评审修正并合并到 `dev`**。
 
 - [x] 撤销 prepare 阶段附件去重：`prepare_user_message` / `prepare_ai_web_message` 每个文本出现位置都保留 marker。
 - [x] 图片内容仍按规范化路径/字节去重（`add_unique_image`），Web 上传路径仍按 `source_path` 去重。
@@ -28,3 +28,11 @@
 
 - DB 仍保留重复附件行：这是 marker 完整性的代价；重复内容不在展示与模型装配中重复。
 - 不做旧库迁移：旧消息重复行由展示层收敛。
+---
+
+## 合并记录（2026-11-14）
+
+- 已合并到 `dev`：`f939665e`（`merge: prompt mention/paste parity and @ reference cleanup`）。
+- 冲突处理：与 `dev` 的 BTW/Agents composer 改动合并时，保留 `MentionScanOwner` 归属路由与 Agents composer 的 `@` 支持，同时接入本次“只有文本编辑才重开面板”的时机模型；`panels.rs` 的编辑/移动分流同时覆盖主输入框与 detail composer。
+- 工作树 `.worktrees/prompt-mention-paste-parity` 与分支 `feat/prompt-mention-paste-parity` 已移除。
+- 合并后验证：`cargo fmt --check`、`cargo clippy --all-targets -- -D warnings`、`cargo test`（lib 5461 passed / 0 failed / 6 ignored，全部集成测试通过）。
