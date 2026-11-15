@@ -212,6 +212,9 @@ pub fn enter_btw_edit(state: &mut AppState, pane: PaneId) -> bool {
     if !target.lx.btw.enter_edit() {
         return false;
     }
+    if let Some(composer) = target.lx.btw.active_composer_mut() {
+        composer.slash = None;
+    }
     crate::app::update::clear_lx_selection_for(state, pane);
     crate::app::update::sync_lx_mention_root(state, pane);
     true
@@ -219,9 +222,13 @@ pub fn enter_btw_edit(state: &mut AppState, pane: PaneId) -> bool {
 
 /// 退出编辑态并保留草稿。
 pub fn leave_btw_edit(state: &mut AppState, pane: PaneId) -> bool {
-    state
-        .pane_mut_anywhere(pane)
-        .is_some_and(|target| target.lx.btw.leave_edit())
+    let Some(target) = state.pane_mut_anywhere(pane) else {
+        return false;
+    };
+    if let Some(composer) = target.lx.btw.active_composer_mut() {
+        composer.slash = None;
+    }
+    target.lx.btw.leave_edit()
 }
 
 /// `/btw [prompt]` 命令入口：打开页签，把 prompt 放入当前 QA 的 composer 并提交。
@@ -310,6 +317,9 @@ pub fn ensure_loaded(state: &mut AppState, pane: PaneId) -> bool {
 
 /// 提交当前 QA 的草稿；返回是否登记了提交。
 pub fn submit_current(state: &mut AppState, pane: PaneId) -> bool {
+    if super::composer::try_submit(state, pane) {
+        return true;
+    }
     let Some(session_id) = state
         .pane_anywhere(pane)
         .and_then(|target| target.lx.chat.session_id.clone())

@@ -101,6 +101,10 @@ pub fn open_history(state: &mut AppState, pane: PaneId) -> bool {
 /// - `/model` 第二级 → 以高亮 variant 完成选择（真正写入下一轮选择）。
 /// - `/resume` → 打开高亮会话。
 pub fn apply_slash_enter(state: &mut AppState, pane: PaneId) -> bool {
+    // 详情 composer：命令集与主输入不同，交给 composer 路由。
+    if super::composer::context_of(state, pane).is_some() {
+        return super::composer::apply_enter(state, pane);
+    }
     let Some(panel) = state
         .pane_anywhere(pane)
         .and_then(|target| target.lx.slash.clone())
@@ -690,6 +694,14 @@ pub fn try_submit_rename_command(state: &mut AppState, pane: PaneId) -> bool {
 
 /// 编辑后刷新 `/` 命令候选面板：行首命令位置输入 `/` 时打开/过滤。
 pub(crate) fn refresh_slash_panel(state: &mut AppState, pane: PaneId) {
+    // 详情 composer（Agents / BTW）走独立命令集与 active editor。
+    if state
+        .pane_anywhere(pane)
+        .is_some_and(|target| target.lx.agents_editing() || target.lx.btw_editing())
+    {
+        super::composer::refresh_slash_panel(state, pane);
+        return;
+    }
     // Shell 模式：`/` 是命令字面值，不打开任何内置面板。
     if state
         .pane_anywhere(pane)

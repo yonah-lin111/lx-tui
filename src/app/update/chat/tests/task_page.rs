@@ -1263,9 +1263,9 @@ fn shift_enter_falls_back_to_newline_when_mention_target_is_not_a_directory() {
     assert_eq!(text.as_deref(), Some("@\n"), "Shift+Enter 应插入换行");
 }
 
-/// `/` 在 Agents composer 中必须只写入字符，不能打开任何编辑浮层。
+/// `/` 在 Agents composer 中只打开命令面板，不连带打开 md/粘贴/引用浮层。
 #[test]
-fn agent_composer_slash_does_not_open_panels() {
+fn agent_composer_slash_opens_only_the_command_panel() {
     let (mut state, pane) = state_with_session("");
     open_agents_with_statuses(&mut state, pane);
     let input = crate::app::update::pane::apply_lx_input;
@@ -1280,7 +1280,13 @@ fn agent_composer_slash_does_not_open_panels() {
         .expect("composer")
         .editor();
     assert_eq!(editor.input, "/");
-    assert!(editor.slash.is_none(), "不打开斜杠面板");
+    assert!(
+        matches!(
+            editor.slash,
+            Some(crate::app::state::SlashPanel::Commands { .. })
+        ),
+        "打开命令面板"
+    );
     assert!(editor.panel.is_none(), "不打开 markdown 块面板");
     assert!(editor.paste_panel().is_none(), "不打开粘贴面板");
     assert!(editor.refer.is_none(), "不打开快捷引用面板");

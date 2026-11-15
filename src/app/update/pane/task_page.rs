@@ -234,8 +234,11 @@ fn apply_agents_list_input(state: &mut AppState, pane: PaneId, command: LxInput)
     }
 }
 
-/// 编辑态：`@` 面板优先，其次 Enter 发送、Esc 返回列表、PgUp/PgDn 翻详情。
+/// 编辑态：`/` 面板优先，其次 `@` 面板、Enter 发送、Esc 返回列表、PgUp/PgDn 翻详情。
 fn apply_agent_edit_input(state: &mut AppState, pane: PaneId, command: LxInput) -> bool {
+    if super::super::chat::composer::apply_slash_input(state, pane, command) {
+        return true;
+    }
     if apply_agent_mention_input(state, pane, command) {
         return true;
     }
@@ -339,21 +342,27 @@ fn apply_agent_mention_input(state: &mut AppState, pane: PaneId, command: LxInpu
 }
 
 fn edit_agent_composer(state: &mut AppState, pane: PaneId, command: LxInput) -> bool {
-    let Some(target) = state.pane_mut_anywhere(pane) else {
-        return false;
+    let changed = {
+        let Some(target) = state.pane_mut_anywhere(pane) else {
+            return false;
+        };
+        let Some(page) = target.lx.task.as_ref() else {
+            return false;
+        };
+        let Some(agent_id) = page.agent_edit.clone() else {
+            return false;
+        };
+        let Some(composer) = target.lx.agents.composer_mut(&agent_id) else {
+            return false;
+        };
+        let before = composer.revision();
+        super::apply_editor_edit(composer.editor_mut(), command);
+        composer.revision() != before
     };
-    let Some(page) = target.lx.task.as_ref() else {
-        return false;
-    };
-    let Some(agent_id) = page.agent_edit.clone() else {
-        return false;
-    };
-    let Some(composer) = target.lx.agents.composer_mut(&agent_id) else {
-        return false;
-    };
-    let before = composer.revision();
-    super::apply_editor_edit(composer.editor_mut(), command);
-    composer.revision() != before
+    if changed {
+        chat::refresh_slash_panel(state, pane);
+    }
+    changed
 }
 
 /// `TaskPage` 打开时的粘贴：列表态单行化写入搜索框，编辑态写入 Agent composer。
@@ -368,16 +377,19 @@ pub fn apply_task_paste(state: &mut AppState, pane: PaneId, text: &str) -> bool 
                 .and_then(|target| target.lx.task.as_ref())
                 .and_then(|page| page.agent_edit.clone());
             if let Some(agent_id) = editing {
-                let Some(target) = state.pane_mut_anywhere(pane) else {
-                    return false;
-                };
-                let Some(composer) = target.lx.agents.composer_mut(&agent_id) else {
-                    return false;
-                };
                 if text.is_empty() {
                     return false;
                 }
-                composer.editor_mut().insert_str(text);
+                {
+                    let Some(target) = state.pane_mut_anywhere(pane) else {
+                        return false;
+                    };
+                    let Some(composer) = target.lx.agents.composer_mut(&agent_id) else {
+                        return false;
+                    };
+                    composer.editor_mut().insert_str(text);
+                }
+                chat::refresh_slash_panel(state, pane);
                 return true;
             }
             let single_line: String = text
@@ -552,6 +564,7 @@ pub fn cycle_task_tab(state: &mut AppState, pane: PaneId, delta: isize) -> bool 
             target.lx.clear_text_selection();
             target.lx.clear_preview_selection();
         }
+        chat::composer::close_all(state, pane);
         clamp_agents_window(state, pane);
         ensure_selected_agent_loaded(state, pane);
         crate::app::update::clear_lx_selection_for(state, pane);
@@ -656,28 +669,44 @@ pub fn enter_task_agent_edit(state: &mut AppState, pane: PaneId) -> bool {
         page.agent_edit = Some(agent_id.clone());
     }
     if let Some(composer) = target.lx.agents.composer_mut(&agent_id) {
-        // 每次进入编辑态都重置 `@` 面板，避免上一次会话的候选残留。
+        // 每次进入编辑态都重置 `@` 面板与 `/` 候选，避免上一次会话的候选残留。
         composer.editor_mut().mention_escape();
+        composer.editor_mut().slash = None;
     }
     target.lx.sync_agent_composer_context();
     true
 }
 
 fn leave_agent_edit(state: &mut AppState, pane: PaneId) -> bool {
-    let Some(page) = state
-        .pane_mut_anywhere(pane)
-        .and_then(|target| target.lx.task.as_mut())
-    else {
+    let Some(target) = state.pane_mut_anywhere(pane) else {
         return false;
     };
-    if page.agent_edit.take().is_none() {
+    let agent_id = target
+        .lx
+        .task
+        .as_ref()
+        .and_then(|page| page.agent_edit.clone());
+    let left = target
+        .lx
+        .task
+        .as_mut()
+        .is_some_and(|page| page.agent_edit.take().is_some());
+    if !left {
         return false;
+    }
+    if let Some(agent_id) = agent_id
+        && let Some(composer) = target.lx.agents.composer_mut(&agent_id)
+    {
+        composer.editor_mut().slash = None;
     }
     true
 }
 
 /// 提交追问：成功后清空草稿但留在编辑态。
 fn submit_agent_edit(state: &mut AppState, pane: PaneId) -> bool {
+    if super::super::chat::composer::try_submit(state, pane) {
+        return true;
+    }
     let (agent_id, text, closed, running, pending_steers, mode, session_id) = {
         let Some(target) = state.pane_anywhere(pane) else {
             return false;

@@ -23,6 +23,14 @@ pub fn apply_input(
     if !target.lx.btw.editing {
         return apply_list_input(state, pane, command);
     }
+    // `/` 命令面板优先于 `@`/粘贴等浮层。
+    if super::super::composer::apply_slash_input(state, pane, command) {
+        return true;
+    }
+    // 重新取窗格（上面的 composer 路由需要独占状态）。
+    let Some(target) = state.pane_anywhere(pane) else {
+        return false;
+    };
     // 浮层优先：提及 / 粘贴 / 快捷引用 / md 块。
     let panel_open = target.lx.btw.active_composer().is_some_and(|editor| {
         editor.mention_open()
@@ -180,15 +188,21 @@ fn edit_composer(
     pane: PaneId,
     command: crate::app::actions::LxInput,
 ) -> bool {
-    let Some(target) = state.pane_mut_anywhere(pane) else {
-        return false;
+    let changed = {
+        let Some(target) = state.pane_mut_anywhere(pane) else {
+            return false;
+        };
+        let Some(composer) = target.lx.btw.active_composer_mut() else {
+            return false;
+        };
+        let before = composer.revision();
+        super::super::super::pane::apply_editor_edit(composer, command);
+        composer.revision() != before
     };
-    let Some(composer) = target.lx.btw.active_composer_mut() else {
-        return false;
-    };
-    let before = composer.revision();
-    super::super::super::pane::apply_editor_edit(composer, command);
-    composer.revision() != before
+    if changed {
+        super::super::refresh_slash_panel(state, pane);
+    }
+    changed
 }
 
 /// 浮层优先的按键处理（与主输入同一套面板语义）。

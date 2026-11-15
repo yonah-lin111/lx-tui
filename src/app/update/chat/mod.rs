@@ -18,6 +18,7 @@ use crate::ui::text;
 pub mod ask;
 pub mod btw;
 pub mod compact;
+pub(crate) mod composer;
 mod connect;
 mod fork;
 pub mod mcp;

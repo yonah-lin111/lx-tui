@@ -366,6 +366,7 @@ pub(crate) fn handle_paste_event(
             .is_some_and(|pane| pane.lx.btw_editing())
         {
             if paste::handle_lx_paste(state, text) {
+                update::refresh_slash_panel(state, id);
                 *dirty = true;
             }
             return;

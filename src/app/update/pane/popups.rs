@@ -246,23 +246,28 @@ pub fn scroll_lx_refer(state: &mut AppState, id: PaneId, delta: isize, base: usi
 
 /// 鼠标悬停 `/` 命令面板条目：更新高亮（窗口不滚动）；返回是否变化。
 pub fn hover_lx_slash(state: &mut AppState, id: PaneId, index: usize) -> bool {
-    state
-        .pane_mut_anywhere(id)
-        .is_some_and(|pane| pane.lx.slash.as_mut().is_some_and(|p| p.set_active(index)))
+    state.pane_mut_anywhere(id).is_some_and(|pane| {
+        pane.lx.with_active_editor(|lx| {
+            lx.slash
+                .as_mut()
+                .is_some_and(|panel| panel.set_active(index))
+        })
+    })
 }
 
 /// 鼠标点选 `/` 命令面板条目：按该条目的 Enter 语义采纳；返回是否消费。
 pub fn select_lx_slash(state: &mut AppState, id: PaneId, index: usize) -> bool {
-    let valid = state
-        .pane_mut_anywhere(id)
-        .and_then(|pane| pane.lx.slash.as_mut())
-        .is_some_and(|panel| {
-            if index >= panel.item_count() {
-                return false;
-            }
-            let _ = panel.set_active(index);
-            true
-        });
+    let valid = state.pane_mut_anywhere(id).is_some_and(|pane| {
+        pane.lx.with_active_editor(|lx| {
+            lx.slash.as_mut().is_some_and(|panel| {
+                if index >= panel.item_count() {
+                    return false;
+                }
+                let _ = panel.set_active(index);
+                true
+            })
+        })
+    });
     if !valid {
         return false;
     }
@@ -272,9 +277,10 @@ pub fn select_lx_slash(state: &mut AppState, id: PaneId, index: usize) -> bool {
 /// 滚轮在 `/` 命令面板上滚动窗口；`base` 为当前窗口起点，高亮不动。
 pub fn scroll_lx_slash(state: &mut AppState, id: PaneId, delta: isize, base: usize) -> bool {
     state.pane_mut_anywhere(id).is_some_and(|pane| {
-        pane.lx
-            .slash
-            .as_mut()
-            .is_some_and(|p| p.scroll_viewport(delta, base))
+        pane.lx.with_active_editor(|lx| {
+            lx.slash
+                .as_mut()
+                .is_some_and(|panel| panel.scroll_viewport(delta, base))
+        })
     })
 }

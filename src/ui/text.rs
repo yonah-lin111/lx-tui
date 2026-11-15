@@ -4,6 +4,7 @@ pub mod agent;
 pub mod btw;
 pub mod chat;
 pub mod connect;
+pub mod detail;
 pub mod mcp;
 pub mod skills;
 mod steer;
