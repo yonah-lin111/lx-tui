@@ -59,7 +59,7 @@
 | D9 | 图表三张：日趋势分组柱（Planned vs Done，tooltip 带 Remaining）、状态环图、P0–P3 优先级横条；放在汇总卡下、表格上常驻，跟随全部筛选 | 覆盖时间/状态/优先级三个维度；只有优先级分布需要补聚合 |
 | D10 | 新建独立 `assets/todo_charts.js`（顶层名字 `todo` 前缀），不调用 `usage_charts.js` 的全局函数；长范围由前端分桶并补零（≤62 天按日、≤400 天按周、更久按月） | 遵守视图隔离（D6 同理）；不改 API 粒度、不截断历史；避免污染刚验收的 Usage |
 | D11 | 加载体验：懒加载视图首次初始化时显示顶部 2px 进度条（不遮内容、不阻塞操作、最短 180ms）；Todo/Usage 同时渲染与最终布局同尺寸的局部骨架；Settings 只用进度条。已有数据时刷新只转状态行内联 spinner，不改写时间戳 | 遮住半成品画面又保持页面可操作；骨架保证容器高度不跳；刷新不再闪文案 |
-| D12 | 状态指示器统一 `min-width` + `tabular-nums` + `nowrap`（含 spinner 槽位）：Usage/Todo 预留 `16ch + 30px`，Settings 预留 `15ch + 30px` | `Loading… / Updated HH:MM:SS / Saved / Unsaved changes` 切换时不再推挤按钮；刷新只转 spinner |
+| D12 | 状态指示器统一 `tabular-nums` + `nowrap`，宽度跟随文案（不预留 `min-width`）；容器整体右对齐，右侧操作按钮仍固定在右缘 | `Loading… / Updated HH:MM:SS / Saved / Unsaved changes` 切换时状态区不再留固定空白；数字等宽避免逐秒抖动 |
 
 ---
 
@@ -584,7 +584,7 @@ function todoFilterParams(range) {
 - **局部骨架**：Todo 首次加载绘制 6 张卡片、3 个图表块（带横向网格线的图表骨架）、状态 legend 与表格骨架；Usage 绘制 8 张卡片、5 个图表块与表格骨架。骨架复用 `.summary-card` / `.chart-body` / 表格行高，保证数据到达前后高度一致；扫光错峰、`prefers-reduced-motion` 下关闭动效；骨架切换真实数据时只淡入一次。
 - **刷新不骨架化**：只有首次进入（容器为空）才画骨架；点击 Refresh / 改筛选保留旧数据并更新状态点，避免闪屏。
 - **状态平滑**：已有数据时刷新只显示 `.status-spinner`，不再把 `Updated HH:MM:SS` 改成 `Refreshing…`；数据返回后一次性更新时间戳。spinner 用 opacity 过渡，快速请求只留下极轻微的呼吸感。
-- **状态宽度**：Usage/Todo 的 `.action-status` 与 Settings 的 action bar 统一预留最小宽度（D12），配合 `font-variant-numeric: tabular-nums`，文案与 spinner 出现时右侧按钮位置不变。
+- **状态宽度**：Usage/Todo 与 Settings 的 `.action-status` 不预留最小宽度，宽度跟随文案；配合 `font-variant-numeric: tabular-nums` 与 `nowrap`，状态区不再出现固定空白，容器右对齐让右侧按钮位置保持不变。
 - **失败兜底**：初始化 Promise 失败时关闭进度条并保留错误 banner/toast；`window.__webInit[key]` 标为 `failed`，下次切回该视图可重试。
 
 ---

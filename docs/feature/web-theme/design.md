@@ -19,7 +19,7 @@
 | D6 | 持久化字段 `web_theme`（`default` / `glass`）写入 `settings.json`，经 `/api/config` 读写 | 与服务端其余配置同源；换浏览器、重启二进制后仍生效 |
 | D7 | 页面响应时服务端注入 `data-theme`，`web.js` 启动后再读 `/api/config` 兜底 | 避免刷新时先画默认主题再闪成玻璃主题；兜底修正外部修改 |
 | D8 | 顶栏使用自绘 `createSelect`，右侧固定宽度；用户已手动切换后忽略迟到的初始读取，保存失败回滚并 toast | 与 Settings/Usage/Todo 的下拉一致；避免竞态把用户选择回滚，失败不留下“看起来已保存”的假象 |
-| D9 | 玻璃主题动效：顶栏 tab、视图内小 tab（range / provider）、设置页左侧竖向 nav、select 菜单与 Commands/Provider/MCP/Skills/Subagents 列表共用滑动指示块，hover 即预览、离场回落到选中项、文字颜色只在选中态变化；视图切换旧视图立即隐藏、新视图仅做 0.18s 透明度淡入，不对整页施加 transform/filter；下拉菜单 scale 0.97 入场；卡片/按钮/侧栏 hover 统一 0.18s 过渡 | 参考项目的液态手感来自指示块的位移与宽度弹簧；但整页 blur/位移会让带 `backdrop-filter` 的玻璃卡片逐帧重采样，产生卡顿与旧内容残留，因此把动效预算集中在指示块上 |
+| D9 | 玻璃主题动效：顶栏 tab、视图内小 tab（range / provider）、设置页左侧竖向 nav、select 菜单与 Commands/Provider/MCP/Skills/Subagents 列表共用滑动指示块，hover 即预览、移入分组内的标题/空白等非条目区域立即回落到选中项、离场同样回落、文字颜色只在选中态变化；视图切换旧视图立即隐藏、新视图仅做 0.18s 透明度淡入，不对整页施加 transform/filter；下拉菜单 scale 0.97 入场；卡片/按钮/侧栏 hover 统一 0.18s 过渡 | 参考项目的液态手感来自指示块的位移与宽度弹簧；但整页 blur/位移会让带 `backdrop-filter` 的玻璃卡片逐帧重采样，产生卡顿与旧内容残留，因此把动效预算集中在指示块上 |
 
 ## 实现
 
@@ -56,7 +56,7 @@
 - 顶栏 `.web-tab-pill` 绝对定位在 `.web-tabs` 内；`web.js::initSegmentPills` 为 `.range-group` / `.provider-tabs` 注入 `.seg-pill`，为 `nav.side` 注入竖向 `.seg-pill`；`syncSegmentPills` 在视图切换、主题切换、resize 与 `active` 类变化时同步位置与尺寸，滚动时指示块随内容一起移动。首次落位用 `no-transition` 直接定位，随后 24ms 解锁过渡，避免从 0 宽度滑入。
 - 设置页左侧 `nav.side` 的按钮使用 `width: calc(100% - 16px)` 扣除左右 8px 外边距，避免 `overflow-y:auto` 被撑出横向滚动条；竖向指示块用 `height` + `translateY` 跟随 hover / 选中项，并用 `offsetTop` / `offsetHeight` 量位置，避免菜单 scale 入场时量到缩放后的尺寸。
 - `.select-menu` 的选项与 `.command-list` / `.provider-list` 的 `.nav-item` 复用同一套竖向指示块；select 菜单点击、键盘上下选择与选项重绘后都会显式同步，列表整批重绘由 `childList` 变更观察补一次挂载。
-- 指示块跟随 hover / focus 预览目标项，`pointerleave` / `focusout` 后回落到 `.active`；文字颜色只在 `.active` 时变化，hover 不改变颜色，避免与选中态抢视觉。
+- 指示块跟随 hover / focus 预览目标项，`pointerleave` / `focusout` 后回落到 `.active`；`pointerover` 落在分组内的标题、空白等非条目区域时也必须清掉预览，不能停在上一个条目上。文字颜色只在 `.active` 时变化，hover 不改变颜色，避免与选中态抢视觉。
 - 视图切换把旧视图立即置为 `display:none`，新视图只加 `glass-enter` 做 0.18s 透明度淡入；不再对整页施加 `filter: blur()` 或位移动画，也不保留离场层。`animationend` 只在事件目标等于视图自身时清理。
 - 下拉菜单使用 `scale(.97) → 1` 的 0.2s 入场；按钮/卡片/侧栏 hover 统一 0.18s 颜色与阴影过渡，主按钮按压缩放 0.97。
 - `prefers-reduced-motion` 下关闭指示块过渡、视图淡入与菜单入场。

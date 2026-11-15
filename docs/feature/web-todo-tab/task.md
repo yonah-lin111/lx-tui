@@ -292,7 +292,7 @@
 - [x] Todo 局部骨架：6 张汇总卡、3 个图表块、状态 legend、表格行；只在首次加载绘制，数据到达淡入一次。
 - [x] Usage 局部骨架：8 张汇总卡、5 个图表块、表格行。
 - [x] Settings 使用全局进度条（`initSettingsView` 返回 `loadState()`）。
-- [x] 状态宽度：Usage/Todo `.action-status` 预留 `16ch + 30px`，Settings `15ch + 30px`，统一 `tabular-nums` + `nowrap`；刷新只转内联 spinner，不改写时间戳。
+- [x] 状态宽度：Usage/Todo/Settings `.action-status` 不预留固定宽度，统一 `tabular-nums` + `nowrap` 让宽度跟随文案；刷新只转内联 spinner，不改写时间戳。
 - [x] 文档：`design.md` D11/D12 与 §5.8、`html-assets.md` 加载态约定。
 - [x] 全量验证：`cargo fmt`、`cargo clippy --all-targets -- -D warnings`、`cargo test`、浏览器骨架/图表截图。
 - [ ] `cargo run` 手工验收（D11/D12 与图表）。
