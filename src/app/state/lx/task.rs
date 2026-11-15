@@ -178,10 +178,10 @@ pub struct TaskPage {
     pub agent_edit: Option<String>,
     /// Agents 列表请求在途（打开/切到该页时置位，列表回投后清除）。
     pub agents_loading: bool,
-    /// 详情 `/undo` 的预检结果（确认面板打开期间保留）。
-    pub detail_undo_pending: Option<crate::app::state::DetailUndoPlan>,
-    /// 详情 `/undo` 的执行幂等键；迟到回执据此过滤。
-    pub detail_undo_executing: Option<crate::app::state::DetailUndoExecution>,
+    /// 详情 `/rewind` 的预检结果（确认面板打开期间保留）。
+    pub detail_rewind_pending: Option<crate::app::state::DetailRewindPlan>,
+    /// 详情 `/rewind` 的执行幂等键；迟到回执据此过滤。
+    pub detail_rewind_executing: Option<crate::app::state::DetailRewindExecution>,
 }
 
 impl TaskPage {

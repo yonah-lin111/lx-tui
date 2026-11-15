@@ -3,11 +3,12 @@
 - **特性目录**：`docs/feature/lx-detail-slash-and-report/`
 - **关联任务**：[`task.md`](task.md)
 - **当前状态**：**已在 `detail-slash-report` 分支实现，自动化与 CLI 实机验证通过；TUI 交互/外观待用户确认后合并**（见 [`verification.md`](verification.md)）。
+- **2026-11-15 调整**：详情命令由 `/undo` 更名为 `/rewind`（`/undo` 保留隐藏别名）；确认面板与主聊天四项动作对齐；新增 compact 检查点撤销（`RestoreCompact`）。
 - **目标范围**：
   - `src/app/state/lx/{slash.rs,slash/composer.rs,agent.rs,rewind.rs,task.rs,detail.rs,panels.rs}`
-  - `src/app/update/chat/{slash.rs,composer.rs,detail_undo.rs,detail_report.rs,btw/*,compact.rs}`
+  - `src/app/update/chat/{slash.rs,composer.rs,detail_rewind.rs,detail_report.rs,btw/*,compact.rs}`
   - `src/app/update/pane/{task_page.rs,popups.rs}`
-  - `src/event/chat/{detail_undo.rs,detail_compact.rs,compact.rs,btw.rs,btw/maintenance.rs,rewind.rs}`
+  - `src/event/chat/{detail_rewind.rs,detail_compact.rs,compact.rs,btw.rs,btw/maintenance.rs,rewind.rs}`
   - `src/db/chat/subagent/queue.rs`
   - `src/ui/main_content/lx/{slash.rs,panels.rs,task/agents.rs,task/btw.rs,task.rs}`
   - `src/ui/text/detail.rs`（新增）、`src/ui/text.rs`（只加 `pub mod detail;`）
@@ -59,15 +60,16 @@
 
 ### 1.1 目标
 
-1. **Agents composer 支持 `/` 命令面板**：`/undo`、`/compact`、`/report`。
-2. **BTW composer 支持 `/` 命令面板**：`/undo`、`/compact`、`/new`。
+1. **Agents composer 支持 `/` 命令面板**：`/rewind`、`/compact`、`/report`；`/undo` 为 `/rewind` 的隐藏别名。
+2. **BTW composer 支持 `/` 命令面板**：`/rewind`、`/compact`、`/new`；同样保留 `/undo` 别名。
 3. **删除粘性 `private` / `report` 模式**：默认永远私聊；只有显式 `/report [note]` 才生成一轮面向主 agent 的汇报。
 4. **汇报内容由子 agent 专门生成**：`/report` 注入英文汇报指令（独立一轮、`notify_parent=true`），报告正文只取这一轮的 assistant 输出，不再转发闲聊原文。
-5. **`/undo` 语义与主聊天 `/rewind` 对齐**：
-   - Agents：撤回最后一条**人类私聊追问**的对话 + 该轮文件改动；
-   - BTW：撤回最后一轮问答（只读会话，无文件）；
-   - 只允许空闲、无排队输入时执行；spawn 初始任务轮、`/report` 轮、父 agent `send_input` 轮不可撤回；
-   - 执行前弹两行确认（默认 `Cancel`）。
+5. **详情 `/rewind` 语义与主聊天 `/rewind` 对齐**：
+   - 取最新时间线事件：普通轮次或 compact 检查点；
+   - 普通轮次提供与主聊天相同的四项动作（恢复文件并撤销对话 / 只撤销对话 / 只恢复文件 / 取消），默认第一项；
+   - compact 检查点只回退上下文指针（恢复与取消两项），不碰消息与文件；
+   - Agents 只允许撤回**人类私聊追问**；spawn 初始任务轮、`/report` 轮、父 agent `send_input` 轮与含 steer 的轮次不可撤回；
+   - 只允许空闲、无排队输入时执行；文件快照不可用时含文件动作禁用，仍可只撤销对话。
 6. **`/compact` 支持详情会话**：手动压缩子 agent / BTW 线程上下文，复用现有摘要请求、检查点与卡片渲染。
 7. **BTW `/new`**：删除当前 QA 的旁路线程（DB 级联）并从空白开始。
 8. 所有用户可见文案英文；底边框提示同步更新。
@@ -77,7 +79,6 @@
 - 不加 `/model`、`/status`、`/help`（`/` 面板本身就是命令清单）。
 - 不改主输入框的命令集与 `/rewind` 行为。
 - 不改主 agent 的模型驱动报告（`spawn_agent` / `send_input` 完成后照旧自动报告 + 自动轮）。
-- 不给 BTW 增加文件恢复（BTW 工具面只读，没有文件 mutation）。
 - 不改 DB schema / 不新增迁移。
 - 不改 `agent_subagent_input` 表结构；`notify_parent` 继续作为报告开关。
 - 不新增顶层 `panels/` / `commands/` 模块；全部落在既有职责目录。
@@ -89,9 +90,9 @@
 | 编号 | 决策 | 用户确认结论 |
 | :--- | :--- | :--- |
 | **Q1** | report 模式转发什么 | 删除粘性模式，改一次性 `/report [note]`；由子 agent 专门生成汇报正文，默认永远私聊。 |
-| **Q2** | 子 agent 撤回范围 | 与主聊天 `/rewind` 一致：最后一轮私聊追问的对话 + 文件；空闲才可执行；spawn 轮不可撤回。 |
-| **Q3** | 命令集合 | Agents：`/undo` `/compact` `/report`；BTW：`/undo` `/compact` `/new`。不加 `/model` `/status`。 |
-| **Q4** | 确认策略 | `/undo` 两行确认（默认 `Cancel`）；`/new`、`/compact` 直接执行。 |
+| **Q2** | 子 agent 撤回范围 | 与主聊天 `/rewind` 一致：最新轮次或 compact 检查点；Agents 只认人类私聊追问，BTW 认最新问答；空闲才可执行；spawn / 报告 / 父 `send_input` 轮不可撤回。 |
+| **Q3** | 命令集合 | Agents：`/rewind` `/compact` `/report`；BTW：`/rewind` `/compact` `/new`。`/undo` 作为 `/rewind` 隐藏别名；不加 `/model` `/status`。 |
+| **Q4** | 确认策略 | `/rewind` 与主聊天相同的四项动作面板（默认第一项）；compact 只有恢复与取消；`/new`、`/compact` 直接执行。 |
 | **Q5** | `/report` 是否自动起轮 | 保持自动起轮；复用现有报告批次与 `drain_reports`，不做“只投递不起轮”。 |
 
 > 本设计取代 `docs/feature/lx-agent-private-followup/design.md` §2/§3 中的 `AgentReplyMode` 交互；该文档保留为历史记录。
@@ -107,7 +108,7 @@
 │ Turing: 登录超时根因在 src/auth.rs，建议把超时改成 30s。        │
 │                                                              │
 │ ╭ Commands ────────────────────────────────────────────────╮  │
-│ │ ❯ /undo            Undo the last turn                    │  │
+│ │ ❯ /rewind            Rewind the last turn or a compact …   │  │
 │ │   /compact         Compact this conversation's context    │  │
 │ │   /report          Report progress to the parent agent    │  │
 │ ╰ ↑↓ select · ↵ open · esc close ───────────────────────────╯  │
@@ -116,18 +117,20 @@
 ╰─ [↵ send] [⇧↵ newline] [/ commands] [^d stop] [esc back] ─────╯
 ```
 
-### 3.2 `/undo` 两行确认（默认 Cancel）
+### 3.2 `/rewind` 动作面板（与主聊天一致，默认第一项）
 
 ```text
-│ ╭ Undo ──────────────────────────────── last private turn ──╮ │
-│ │ ❯ Cancel                                                  │ │
-│ │   Restore files and undo conversation                     │ │
+│ ╭ Rewind ───────────────────────────── last private turn ───╮ │
+│ │ ❯ Restore files and undo conversation                      │ │
+│ │   Undo conversation only                                   │ │
+│ │   Restore files only                                       │ │
+│ │   Cancel                                                   │ │
 │ ╰ ↑↓ select · ↵ confirm · esc cancel ───────────────────────╯ │
 ```
 
-- 只按一次 Enter 命中 `Cancel`，什么也不发生。
-- `↓` 再 Enter 才执行。
-- 文件快照不可用/不完整时不弹面板，直接 Toast：`Cannot restore files for this turn`。
+- 默认高亮第一项，与主聊天 `/rewind` 相同；`Enter` 直接执行高亮项。
+- 文件快照不可用/不完整时，两个含文件动作照常展示但不可执行（右侧显示原因）；`Undo conversation only` 仍可用。
+- compact 检查点比最新轮次更晚时，面板只显示 `Restore the context before this checkpoint` 与 `Cancel`。
 
 ### 3.3 BTW composer（编辑态）
 
@@ -182,12 +185,12 @@ pub enum DetailContext {
 }
 
 impl DetailCommand {
-    pub const AGENT: [Self; 3] = [Self::Undo, Self::Compact, Self::Report];
-    pub const BTW: [Self; 3] = [Self::Undo, Self::Compact, Self::New];
+    pub const AGENT: [Self; 3] = [Self::Rewind, Self::Compact, Self::Report];
+    pub const BTW: [Self; 3] = [Self::Rewind, Self::Compact, Self::New];
 
     pub const fn name(self) -> &'static str {
         match self {
-            Self::Undo => "undo",
+            Self::Rewind => "rewind",
             Self::Compact => "compact",
             Self::Report => "report",
             Self::New => "new",
@@ -196,7 +199,7 @@ impl DetailCommand {
 
     pub const fn text(self) -> &'static str {
         match self {
-            Self::Undo => "/undo",
+            Self::Rewind => "/rewind",
             Self::Compact => "/compact",
             Self::Report => "/report",
             Self::New => "/new",
@@ -205,7 +208,7 @@ impl DetailCommand {
 
     pub fn aliases(self) -> &'static [&'static str] {
         match self {
-            Self::Undo => &["rewind"],
+            Self::Rewind => &["undo"],
             Self::New => &["clear", "reset"],
             _ => &[],
         }
@@ -214,7 +217,7 @@ impl DetailCommand {
     /// 文案保持上下文中立：同一句在两个 composer 都成立。
     pub const fn description(self) -> &'static str {
         match self {
-            Self::Undo => "Undo the last turn",
+            Self::Rewind => "Rewind the last turn or a compact checkpoint",
             Self::Compact => "Compact this conversation's context",
             Self::Report => "Report progress to the parent agent",
             Self::New => "Start a fresh side thread",
@@ -276,7 +279,7 @@ pub fn entries(context: DetailContext, query: &str) -> Vec<SlashEntry> {
 ```rust
 /// 解析结果：`Report` 携带已 trim 的备注。
 pub enum ParsedDetailCommand<'a> {
-    Undo,
+    Rewind,
     Compact,
     Report(&'a str),
     New,
@@ -291,14 +294,14 @@ pub fn parse(input: &str, context: DetailContext) -> Option<ParsedDetailCommand<
         .split_once(char::is_whitespace)
         .map_or((line, ""), |(word, rest)| (word, rest));
     let command = match (context, word) {
-        (_, "undo") | (_, "rewind") => DetailCommand::Undo,
+        (_, "rewind") | (_, "undo") => DetailCommand::Rewind,
         (_, "compact") => DetailCommand::Compact,
         (DetailContext::Agent, "report") => DetailCommand::Report,
         (DetailContext::Btw, "new") | (DetailContext::Btw, "clear")
         | (DetailContext::Btw, "reset") => DetailCommand::New,
         _ => return None,
     };
-    // 同一行必须结束在命令词之后；`/undo x` 不是命令，交给未知命令提示。
+    // 同一行必须结束在命令词之后；`/rewind x` 不是命令，交给未知命令提示。
     if command != DetailCommand::Report && !rest.trim().is_empty() {
         return None;
     }
@@ -306,7 +309,7 @@ pub fn parse(input: &str, context: DetailContext) -> Option<ParsedDetailCommand<
         return None;
     }
     Some(match command {
-        DetailCommand::Undo => ParsedDetailCommand::Undo,
+        DetailCommand::Rewind => ParsedDetailCommand::Rewind,
         DetailCommand::Compact => ParsedDetailCommand::Compact,
         DetailCommand::Report => ParsedDetailCommand::Report(rest.trim()),
         DetailCommand::New => ParsedDetailCommand::New,
@@ -474,8 +477,8 @@ pub(crate) fn refresh_slash_panel(state: &mut AppState, pane: PaneId) {
 | Agents composer 编辑 | `task_page.rs::edit_agent_composer` | `apply_editor_edit` 后若 revision 变化，调用 `refresh_slash_panel` |
 | BTW composer 编辑 | `btw/input.rs::edit_composer` | 同上 |
 | composer 粘贴 | `task_page.rs::apply_task_paste`（Agents 编辑分支） | 插入后调用 `refresh_slash_panel` |
-| 进入/退出编辑 | `enter_task_agent_edit` / `leave_agent_edit` / `enter_btw_edit` / `leave_btw_edit` | 清空 composer 的 `slash` 与 `TaskPage.detail_undo_pending` |
-| 切 tab / 关面板 / 打开 agent 或 btw 页 | `cycle_task_tab` / `close_task_page` / `open_agent_page` / `open_btw_tab` | 清空 composer 的 `slash` 与 `detail_undo_pending` |
+| 进入/退出编辑 | `enter_task_agent_edit` / `leave_agent_edit` / `enter_btw_edit` / `leave_btw_edit` | 清空 composer 的 `slash` 与 `TaskPage.detail_rewind_pending` |
+| 切 tab / 关面板 / 打开 agent 或 btw 页 | `cycle_task_tab` / `close_task_page` / `open_agent_page` / `open_btw_tab` | 清空 composer 的 `slash` 与 `detail_rewind_pending` |
 | 会话切换 | `clear_agents` / BTW 复位 | composer 随状态销毁 |
 
 #### 4.3.3 按键路由
@@ -538,7 +541,7 @@ pub(crate) fn apply_slash_input(state: &mut AppState, pane: PaneId, command: LxI
 }
 ```
 
-`close(state, pane)` 同时清空 active editor 的 `slash` 与 `TaskPage.detail_undo_pending`，避免确认计划在面板关闭后残留。
+`close(state, pane)` 同时清空 active editor 的 `slash` 与 `TaskPage.detail_rewind_pending`，避免确认计划在面板关闭后残留。
 
 `Enter` 的执行顺序（`submit_agent_edit` / `submit_current` 开头）：
 
@@ -595,7 +598,7 @@ pub fn select_lx_slash(state: &mut AppState, id: PaneId, index: usize) -> bool {
 
 | 命令 | 上下文 | 动作 |
 | :--- | :--- | :--- |
-| `/undo` | Agent / Btw | `detail_undo::prepare`（清命令 → `Effect::PrepareDetailUndo` → 确认面板） |
+| `/rewind` | Agent / Btw | `detail_rewind::prepare`（清命令 → `Effect::PrepareDetailRewind` → 确认面板） |
 | `/compact` | Agent / Btw | 清命令 → `Effect::CompactDetail { pane, target }`；空闲检查在事件层 |
 | `/report` | Agent | `detail_report::submit`（清命令 → `SendSubagentUserInput { notify_parent: true }`） |
 | `/new` | Btw | `btw::request_reset_thread`（运行中拒绝 → `BtwEffect::DeleteThread`） |
@@ -609,7 +612,7 @@ pub(crate) fn execute(
     command: crate::app::state::lx::slash::composer::ParsedDetailCommand<'_>,
 ) -> bool {
     match command {
-        ParsedDetailCommand::Undo => detail_undo::prepare(state, pane),
+        ParsedDetailCommand::Rewind => detail_rewind::prepare(state, pane),
         ParsedDetailCommand::Compact => detail_compact::request(state, pane),
         ParsedDetailCommand::Report(note) => detail_report::submit(state, pane, note),
         ParsedDetailCommand::New => super::btw::request_reset_thread(state, pane),
@@ -755,7 +758,7 @@ pub(crate) fn visible_task(
 
 报告生成本身仍由本轮 `notify_parent=true` 驱动，不受影响。
 
-### 4.5 `/undo`（Agents）：最后一轮私聊追问
+### 4.5 `/rewind`（Agents / BTW）：最新轮次或 compact 检查点
 
 #### 4.5.0 共享类型（`src/app/state/lx/detail.rs`）
 
@@ -769,29 +772,33 @@ pub enum DetailTarget {
 
 /// 撤销确认面板只区分文案，不携带执行数据。
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum DetailUndoKind {
+pub enum DetailRewindKind {
     Agent,
     Btw,
 }
 
 /// 预检成功后冻结的撤销计划；确认后原样转成 RewindRequest。
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct DetailUndoPlan {
+pub struct DetailRewindPlan {
     pub target: DetailTarget,
     pub workspace: std::path::PathBuf,
     pub child_session: String,
+    /// 普通轮次为用户消息 ID；compact 为检查点 ID。
     pub user_message_id: String,
     pub expected_revision: u64,
     /// 确认后若草稿仍等于 input_at_open，则回填这段原文。
     pub input_at_open: String,
     pub user_text: String,
+    /// 用户确认的动作（打开面板时先填默认项）。
     pub action: crate::app::state::RewindAction,
     pub snapshot: crate::app::state::SnapshotState,
+    /// Turn 或 Compact：决定面板动作集与执行路径。
+    pub kind: crate::app::state::RewindTargetKind,
 }
 
 /// 执行中的幂等键；TaskPage 持有它用于迟到回执过滤。
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct DetailUndoExecution {
+pub struct DetailRewindExecution {
     pub operation_id: String,
     pub target: DetailTarget,
 }
@@ -800,8 +807,8 @@ pub struct DetailUndoExecution {
 `TaskPage` 增加：
 
 ```rust
-pub detail_undo_pending: Option<DetailUndoPlan>,
-pub detail_undo_executing: Option<DetailUndoExecution>,
+pub detail_rewind_pending: Option<DetailRewindPlan>,
+pub detail_rewind_executing: Option<DetailRewindExecution>,
 ```
 
 #### 4.5.1 可撤回判据（`src/db/chat/subagent/queue.rs` 新增）
@@ -863,7 +870,7 @@ pub fn latest_undoable_private_turn(
 App 侧只发效应：
 
 ```rust
-// src/app/update/chat/detail_undo.rs
+// src/app/update/chat/detail_rewind.rs
 pub fn prepare(state: &mut AppState, pane: PaneId) -> bool {
     let Some(agent_id) = state.pane_anywhere(pane).and_then(|t| t.lx.agent_edit_id().map(str::to_string))
     else {
@@ -872,7 +879,7 @@ pub fn prepare(state: &mut AppState, pane: PaneId) -> bool {
     // 命令文本先消费；若执行成功，撤回原文只在草稿仍为空时回填。
     clear_composer(state, pane);
     let input_at_open = String::new();
-    state.effects.push(Effect::PrepareDetailUndo {
+    state.effects.push(Effect::PrepareDetailRewind {
         pane,
         target: DetailTarget::Agent(agent_id),
         input_at_open,
@@ -881,7 +888,7 @@ pub fn prepare(state: &mut AppState, pane: PaneId) -> bool {
 }
 ```
 
-事件层 `src/event/chat/detail_undo.rs`：
+事件层 `src/event/chat/detail_rewind.rs`：
 
 ```rust
 pub(crate) fn prepare(
@@ -890,93 +897,65 @@ pub(crate) fn prepare(
     pane: PaneId,
     target: DetailTarget,
     input_at_open: String,
-) {
-    let Some(workspace) = workspace_for_pane(state, pane) else { return };
-    let Some(db) = persistence.database() else { return };
-    let plan = match target {
+) -> bool {
+    let Some(workspace) = workspace_for_pane(state, pane) else { return false };
+    let Some(db) = persistence.database() else { return false };
+    // 解析稳定目标与子会话；忙碌只提示，不打开面板。
+    let (target, child_session) = match &target {
         DetailTarget::Agent(agent_id) => {
-            let Some(main_session) = state
-                .pane_anywhere(pane)
-                .and_then(|t| t.lx.chat.session_id.clone())
-            else { return };
-            let Some(record) = db
-                .resolve_owned_subagent(&workspace, &main_session, &agent_id)
-                .ok()
-                .flatten()
-            else { return };
-            if agent_busy(state, &agent_id) {
-                toast(state, pane, text::LX_DETAIL_UNDO_BUSY);
-                return;
-            }
-            let Some(turn) = db
-                .latest_undoable_private_turn(&workspace, &record.child_session_id)
-                .ok()
-                .flatten()
-            else {
-                toast(state, pane, text::LX_DETAIL_UNDO_NOTHING);
-                return;
-            };
-            // 用 rewind_availability 的 revision/user_text 作为权威快照：它内部会再次
-            // 确认目标仍是最新轮，避免两次查询之间插入了新轮。
-            let Ok((availability, revision, user_text)) = persistence.rewind_availability(
-                &workspace,
-                &record.child_session_id,
-                &turn.user_message_id,
-            ) else {
-                toast(state, pane, text::LX_DETAIL_UNDO_UNAVAILABLE);
-                return;
-            };
-            if !SnapshotState::from_db(&availability).files_available() {
-                toast(state, pane, text::LX_DETAIL_UNDO_UNAVAILABLE);
-                return;
-            }
-            DetailUndoPlan {
-                target: DetailTarget::Agent(agent_id),
-                workspace: workspace.clone(),
-                child_session: record.child_session_id,
-                user_message_id: turn.user_message_id,
-                expected_revision: u64::try_from(revision).unwrap_or(0),
-                user_text,
-                action: RewindAction::RevertAndDelete,
-                input_at_open,
-                snapshot: SnapshotState::from_db(&availability),
-            }
+            let record = resolve_owned_subagent(...);
+            if agent_busy(state, pane, agent_id) { toast(BUSY); return true; }
+            (DetailTarget::Agent(agent_id.clone()), record.child_session_id)
         }
         DetailTarget::Btw(thread_id) => {
-            let Some(thread) = db.btw_thread(&workspace, &thread_id).ok().flatten() else { return };
-            if btw_busy(state, &thread.id) {
-                toast(state, pane, text::LX_DETAIL_UNDO_BUSY);
-                return;
-            }
-            let Some(turn) = db
-                .latest_user_turn(&workspace, &thread.child_session_id)
-                .ok()
-                .flatten()
-            else {
-                toast(state, pane, text::LX_DETAIL_UNDO_NOTHING);
-                return;
-            };
-            DetailUndoPlan {
-                target: DetailTarget::Btw(thread_id),
-                workspace: workspace.clone(),
-                child_session: thread.child_session_id,
-                user_message_id: turn.user_message_id,
-                expected_revision: u64::try_from(turn.revision).unwrap_or(0),
-                user_text: turn.text,
-                action: RewindAction::DeleteOnly,
-                input_at_open,
-                snapshot: SnapshotState::KnownEmpty,
-            }
+            let thread = db.btw_thread(&workspace, thread_id)...;
+            if btw_busy(state, pane, thread_id) { toast(BUSY); return true; }
+            (DetailTarget::Btw(thread_id.clone()), thread.child_session_id)
         }
     };
-    crate::app::update::on_detail_undo_prepared(state, pane, plan);
+    // 最新时间线事件：检查点比最新用户轮更晚时撤销 compact。
+    let latest = db.latest_user_turn(&workspace, &child_session).ok().flatten();
+    let checkpoint = db.compact_checkpoints(&workspace, &child_session).ok()
+        .and_then(|mut list| list.pop())
+        .filter(|cp| latest.as_ref().is_none_or(|turn| cp.sequence > turn.sequence));
+    if let Some(checkpoint) = checkpoint {
+        let revision = db.session_revision(&child_session)...;
+        return on_prepared(DetailRewindPlan {
+            user_message_id: checkpoint.id,
+            expected_revision: revision as u64,
+            user_text: String::new(),
+            action: RewindAction::RestoreCompact,
+            snapshot: SnapshotState::KnownEmpty,
+            kind: RewindTargetKind::Compact,
+            ...
+        });
+    }
+    // 轮次：Agents 只认人类私聊追问，BTW 只认线程最新问答。
+    let turn = match &target {
+        DetailTarget::Agent(_) => db.latest_undoable_private_turn(...),
+        DetailTarget::Btw(_) => latest,
+    }.ok().flatten() else { toast(NOTHING); return true };
+    let (availability, revision, user_text) = persistence.rewind_availability(
+        &workspace, &child_session, &turn.user_message_id,
+    )...;
+    on_prepared(DetailRewindPlan {
+        user_message_id: turn.user_message_id,
+        expected_revision: revision as u64,
+        user_text,
+        action: RewindAction::RevertAndDelete,
+        snapshot: SnapshotState::from_db(&availability),
+        kind: RewindTargetKind::Turn,
+        ...
+    })
 }
 ```
 
+文件快照 `Unavailable` / `Incomplete` 不再拒绝预检：计划照常冻结，面板按 `SnapshotState` 禁用含文件动作。
+
 `agent_busy` / `btw_busy` 判据：
 
-- Agents：`run.is_running() || run.queued_count > 0 || run.chat.pending_steers` 非空；
-- BTW：`thread.is_loading()` 或 `thread.pending_submit.is_some()` 或 `pending_recipients > 0`。
+- Agents：`run.is_running() || run.queued_count > 0 || run.chat.pending_steers` 非空，或 `run.compact.is_running()`；
+- BTW：`thread.is_loading()`（含 `pending_submit` / `pending_recipients` / 流中）或 `thread.compact.is_running()`。
 
 #### 4.5.3 确认面板
 
@@ -985,9 +964,8 @@ pub(crate) fn prepare(
 ```rust
 // src/app/state/lx/rewind.rs
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct DetailUndoPanel {
-    pub kind: DetailUndoKind,     // Agent | Btw（只影响文案）
-    pub action: RewindAction,     // RevertAndDelete / DeleteOnly
+pub struct DetailRewindPanel {
+    pub kind: DetailRewindKind, // Agent | Btw（只影响范围文案）
 }
 
 pub struct RewindPanel {
@@ -995,33 +973,31 @@ pub struct RewindPanel {
     pub snapshot: SnapshotState,
     pub actions: Vec<RewindAction>,
     /// Some 表示详情 composer 的撤销确认；执行路由据此走详情链路。
-    pub detail: Option<DetailUndoPanel>,
+    pub detail: Option<DetailRewindPanel>,
 }
 
-pub fn for_detail(kind: DetailUndoKind, snapshot: SnapshotState, action: RewindAction) -> Self {
+/// 轮次：与主 `/rewind` 相同的四项动作，默认第一项。
+pub fn for_detail(kind: DetailRewindKind, snapshot: SnapshotState) -> Self {
     Self {
-        // 默认高亮 Cancel（第 0 项），误触 Enter 不执行任何副作用。
         window: PanelWindow::new(0),
         snapshot,
-        actions: vec![RewindAction::Cancel, action],
-        detail: Some(DetailUndoPanel { kind, action }),
+        actions: RewindAction::ALL.to_vec(),
+        detail: Some(DetailRewindPanel { kind }),
+    }
+}
+
+/// compact：只有恢复上下文与取消。
+pub fn for_detail_compact(kind: DetailRewindKind) -> Self {
+    Self {
+        window: PanelWindow::new(0),
+        snapshot: SnapshotState::KnownEmpty,
+        actions: vec![RewindAction::RestoreCompact, RewindAction::Cancel],
+        detail: Some(DetailRewindPanel { kind }),
     }
 }
 ```
 
-构造器 `new` / `for_compact` / `for_model_switch` / `for_recap` 都补 `detail: None`。
-
-`scope()`：
-
-```rust
-pub fn scope(&self) -> RewindScope {
-    if self.detail.is_some() {
-        RewindScope::Detail
-    } else if self.actions.contains(&RewindAction::RestoreCompact) {
-        // ...
-    }
-}
-```
+其余构造器（`new` / `for_compact` / `for_model_switch` / `for_recap`）保持 `detail: None`。确认时先检查 `panel.enabled(action)`，再按 `plan.kind` 校验动作：`Compact` 只接受 `RestoreCompact`，`Turn` 只接受三项轮次动作；`Cancel` 只清计划。
 
 UI 增加 `RewindScope::Detail` 分支：
 
@@ -1029,27 +1005,27 @@ UI 增加 `RewindScope::Detail` 分支：
 // src/ui/main_content/lx/slash.rs
 SlashPanel::Rewind(panel) => (
     if panel.scope() == RewindScope::Detail {
-        text::LX_DETAIL_UNDO_PANEL_TITLE   // "Undo"
+        text::LX_DETAIL_REWIND_PANEL_TITLE   // "Undo"
     } else {
         text::LX_REWIND_PANEL_TITLE
     },
     panel.window,
     if panel.scope() == RewindScope::Detail {
-        text::LX_DETAIL_UNDO_FOOTER        // "↑↓ select · ↵ confirm · esc cancel"
+        text::LX_DETAIL_REWIND_FOOTER        // "↑↓ select · ↵ confirm · esc cancel"
     } else {
         text::LX_REWIND_PANEL_FOOTER
     },
 ),
 ```
 
-右端范围文案：`RewindScope::Detail => text::LX_DETAIL_UNDO_SCOPE`（Agents 显示 `last private turn`，BTW 显示 `last side turn`；可在 UI 层按 `DetailUndoKind` 选）。
+右端范围文案：`RewindScope::Detail => text::LX_DETAIL_REWIND_SCOPE`（Agents 显示 `last private turn`，BTW 显示 `last side turn`；可在 UI 层按 `DetailRewindKind` 选）。
 
-确认执行（`src/app/update/chat/detail_undo.rs`，由 `apply_slash_enter` 分流）：
+确认执行（`src/app/update/chat/detail_rewind.rs`，由 `apply_slash_enter` 分流）：
 
 ```rust
 // app/update/chat/slash.rs
 SlashPanel::Rewind(panel) if panel.detail.is_some() => {
-    super::detail_undo::apply_confirm(state, pane, &panel)
+    super::detail_rewind::apply_confirm(state, pane, &panel)
 }
 SlashPanel::Rewind(_) => super::rewind::apply_enter(state, pane),
 ```
@@ -1063,7 +1039,7 @@ pub fn apply_confirm(
     let Some(plan) = state
         .pane_anywhere(pane)
         .and_then(|target| target.lx.task.as_ref())
-        .and_then(|page| page.detail_undo_pending.clone())
+        .and_then(|page| page.detail_rewind_pending.clone())
     else {
         close_panel(state, pane);
         return true;
@@ -1092,8 +1068,8 @@ pub fn apply_confirm(
                 user_text: plan.user_text.clone(),
                 operation_id: operation_id.clone(),
             };
-            state.effects.push(crate::app::effects::Effect::ExecuteDetailUndo(
-                DetailUndoRequest {
+            state.effects.push(crate::app::effects::Effect::ExecuteDetailRewind(
+                DetailRewindRequest {
                     pane,
                     target: plan.target.clone(),
                     operation_id: operation_id.clone(),
@@ -1104,11 +1080,11 @@ pub fn apply_confirm(
                 .pane_mut_anywhere(pane)
                 .and_then(|target| target.lx.task.as_mut())
             {
-                page.detail_undo_executing = Some(crate::app::state::DetailUndoExecution {
+                page.detail_rewind_executing = Some(crate::app::state::DetailRewindExecution {
                     operation_id,
                     target: plan.target,
                 });
-                page.detail_undo_pending = None;
+                page.detail_rewind_pending = None;
             }
             close_panel(state, pane);
         }
@@ -1120,22 +1096,22 @@ pub fn apply_confirm(
 
 #### 4.5.4 执行
 
-`Effect::PrepareDetailUndo` / `Effect::ExecuteDetailUndo` 都挂进现有 `event/chat/rewind.rs::apply_rewind_effects`（事件循环调用点不变）：
+`Effect::PrepareDetailRewind` / `Effect::ExecuteDetailRewind` 都挂进现有 `event/chat/rewind.rs::apply_rewind_effects`（事件循环调用点不变）：
 
 ```rust
 // filter / retain 增加两个变体
-Effect::PrepareDetailUndo { pane, target, input_at_open } => {
-    detail_undo::prepare(state, persistence, pane, target, input_at_open)
+Effect::PrepareDetailRewind { pane, target, input_at_open } => {
+    detail_rewind::prepare(state, persistence, pane, target, input_at_open)
 }
-Effect::ExecuteDetailUndo(request) => detail_undo::execute(sender, persistence, request),
+Effect::ExecuteDetailRewind(request) => detail_rewind::execute(sender, persistence, request),
 ```
 
-`Effect::ExecuteDetailUndo` 与主撤销共用 `execute_rewind`：
+`Effect::ExecuteDetailRewind` 的轮次分支与主撤销共用 `execute_rewind`；compact 分支调用 `revert_compact`：
 
 ```rust
 // src/app/effects.rs（与 RewindRequest 同文件，Effect 变体直接携带）
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct DetailUndoRequest {
+pub struct DetailRewindRequest {
     pub pane: PaneId,
     pub target: crate::app::state::DetailTarget,
     pub operation_id: String,
@@ -1145,12 +1121,31 @@ pub struct DetailUndoRequest {
 pub(crate) fn execute(
     sender: &mpsc::UnboundedSender<AppEvent>,
     persistence: &Persistence,
-    request: DetailUndoRequest,
+    request: DetailRewindRequest,
 ) {
     let Some(path) = persistence.database_path() else { return };
     let sender = sender.clone();
     tokio::task::spawn_blocking(move || {
         let outcome = match crate::db::Database::open(&path) {
+            // compact 只回退上下文指针：不碰消息、文件与撤销提示。
+            Ok(database) if request.request.action == RewindAction::RestoreCompact => {
+                let revert = CompactRevert {
+                    operation_id: request.request.operation_id.clone(),
+                    session_id: request.request.session_id.clone(),
+                    checkpoint_id: request.request.target_user_message_id.clone(),
+                    expected_revision: request.request.expected_revision as i64,
+                };
+                database.revert_compact(&request.request.workspace, &revert)
+                    .map(|_| RewindOutcome::Succeeded {
+                        action: RewindAction::RestoreCompact,
+                        restored_files: 0,
+                        already_restored: false,
+                        user_text: String::new(),
+                        deleted: false,
+                        session_deleted: false,
+                    })
+                    .unwrap_or_else(|error| RewindOutcome::Failed { message: error.code().to_string() })
+            }
             Ok(database) => crate::event::chat::rewind::execute_rewind(
                 &database,
                 &request.request.workspace,
@@ -1176,10 +1171,10 @@ pub fn handle_rewind_finished(..., operation_id: &str, outcome: RewindOutcome) -
     if state
         .pane_anywhere(pane)
         .and_then(|target| target.lx.task.as_ref())
-        .and_then(|page| page.detail_undo_executing.as_ref())
+        .and_then(|page| page.detail_rewind_executing.as_ref())
         .is_some_and(|exec| exec.operation_id == operation_id)
     {
-        return crate::event::chat::detail_undo::handle_finished(
+        return crate::event::chat::detail_rewind::handle_finished(
             state, persistence, pane, session_id, workspace, operation_id, outcome,
         );
     }
@@ -1204,7 +1199,7 @@ pub(crate) fn handle_finished(
     };
     match outcome {
         RewindOutcome::Failed { message } => {
-            toast(state, pane, format!("{} ({message})", text::LX_DETAIL_UNDO_FAILED));
+            toast(state, pane, format!("{} ({message})", text::LX_DETAIL_REWIND_FAILED));
             true
         }
         RewindOutcome::Succeeded { user_text, session_deleted, .. } => {
@@ -1216,7 +1211,7 @@ pub(crate) fn handle_finished(
                 .database()
                 .and_then(|db| db.compact_checkpoints(workspace, child_session).ok())
                 .unwrap_or_default();
-            crate::app::update::on_detail_undo_succeeded(
+            crate::app::update::on_detail_rewind_succeeded(
                 state, pane, &plan, &messages, &checkpoints, session_deleted, &user_text,
             )
         }
@@ -1224,7 +1219,7 @@ pub(crate) fn handle_finished(
 }
 ```
 
-App 侧回填（`src/app/update/chat/detail_undo.rs`）：
+App 侧回填（`src/app/update/chat/detail_rewind.rs`）：
 
 - Agents：按 `agent_id` 找 run →
   - `run.chat.messages = messages.iter().map(|m| view_message_of(m, &models)).collect()`
@@ -1235,16 +1230,17 @@ App 侧回填（`src/app/update/chat/detail_undo.rs`）：
 - BTW：按 `thread_id` 找 thread →
   - `session_deleted` → `thread.reset_after_delete()`：`thread_id=None`、`child_session_id=None`、`chat=LxChat::new()`、`compact.reset()`、`targets.clear()`、`loaded=true`、`pending_* = 0`；并 push `LoadQaList` 刷新列表。
   - 否则同 Agents 的 messages/checkpoints/scroll 回填。
-- 草稿回填：仅当当前 composer 文本仍等于 `plan.input_at_open`（空串）时，写入 `user_text`；否则保留用户新输入（与主 `/rewind` 的 `input_at_open` 规则一致）。
-- 关闭 composer 的 `slash`，Toast `LX_DETAIL_UNDO_DONE`。
+- 草稿回填：只有 `plan.action.fills_draft()`（两种删对话动作）且当前 composer 文本仍等于 `plan.input_at_open`（空串）时，写入 `user_text`；否则保留用户新输入（与主 `/rewind` 的 `input_at_open` 规则一致）。
+- 关闭 composer 的 `slash`，按动作 Toast：`Conversation undone; restored files.` / `Conversation undone; files kept.` / `Restored files; conversation kept.`；compact 用 `Context restored to the previous checkpoint.`。
 - `commit_rewind` 写入的 `agent_session_notice` 在子 agent/BTW 详情不渲染（现有 `HistorySource` 不带 notices）；用户反馈统一走 Toast，避免为详情再造一套提示行。
 
-### 4.6 `/undo`（BTW）：最后一轮问答
+### 4.6 `/rewind`（BTW）：最新问答或 compact 检查点
 
-- 准备：`latest_user_turn`（无需文件预检）；面板动作只有 `DeleteOnly`（文案 `Undo conversation only`）。
-- 执行：`RewindAction::DeleteOnly` + `execute_rewind`。
-- 若删空（`session_deleted`）：等同于该 QA 线程被重置；UI 按 §4.5.5 的 reset 处理，并 Toast `LX_BTW_RESET_DONE`。
-- 只读会话无文件 mutation，`DeleteOnly` 不会读写快照。
+- 目标：线程子会话内最新的用户轮次（BTW 只有人类问答，无需私聊判据）或最新 compact 检查点，按 sequence 取更新者。
+- 轮次：与 Agents 相同的四项动作面板，快照可用性由 `rewind_availability` 计算；文件动作按快照状态启用/禁用。
+- compact：只显示恢复上下文与取消，执行 `revert_compact`。
+- 若轮次删空（`session_deleted`）：等同于该 QA 线程被重置；UI 按 §4.5.5 的 reset 处理。
+- 不新增事件与迁移：仍复用 `RewindFinished`，compact 分支由 `RewindAction::RestoreCompact` 区分。
 
 ### 4.7 `/compact`：详情会话压缩
 
@@ -1555,15 +1551,14 @@ pub(super) fn delete_thread(
 ```rust
 //! 详情输入框 `/` 命令、撤销确认与汇报/压缩反馈（英文）。
 
-pub const LX_DETAIL_UNDO_PANEL_TITLE: &str = "Undo";
-pub const LX_DETAIL_UNDO_SCOPE: &str = "last private turn";
-pub const LX_DETAIL_UNDO_SCOPE_BTW: &str = "last side turn";
-pub const LX_DETAIL_UNDO_FOOTER: &str = "↑↓ select · ↵ confirm · esc cancel";
-pub const LX_DETAIL_UNDO_DONE: &str = "Undid the last turn";
-pub const LX_DETAIL_UNDO_FAILED: &str = "Undo failed";
-pub const LX_DETAIL_UNDO_BUSY: &str = "Wait for the current turn to finish";
-pub const LX_DETAIL_UNDO_NOTHING: &str = "Nothing to undo";
-pub const LX_DETAIL_UNDO_UNAVAILABLE: &str = "Cannot restore files for this turn";
+pub const LX_DETAIL_REWIND_PANEL_TITLE: &str = "Rewind";
+pub const LX_DETAIL_REWIND_SCOPE: &str = "last private turn";
+pub const LX_DETAIL_REWIND_SCOPE_BTW: &str = "last side turn";
+pub const LX_DETAIL_REWIND_FOOTER: &str = "↑↓ select · ↵ confirm · esc cancel";
+pub const LX_DETAIL_REWIND_FAILED: &str = "Rewind failed";
+pub const LX_DETAIL_REWIND_BUSY: &str = "Wait for the current turn to finish";
+pub const LX_DETAIL_REWIND_NOTHING: &str = "Nothing to rewind";
+pub const LX_DETAIL_REWIND_UNAVAILABLE: &str = "Cannot rewind this turn";
 
 pub const LX_DETAIL_REPORT_BUSY: &str = "Wait for the current turn to finish";
 pub const LX_REPORT_NOTE_LIMIT: &str = "Report note is too long";
@@ -1583,17 +1578,17 @@ pub const LX_BTW_RESET_EMPTY: &str = "No side thread to clear";
 ### 5.1 无迁移
 
 - 不新增表/列/索引；`notify_parent`（v29）继续服务“这一轮是否报告”。
-- `/undo` 复用 `agent_turn_file_scope` / `agent_file_mutation` / `agent_rewind_operation`；`/new` 复用 `delete_btw_thread`。
+- `/rewind` 复用 `agent_turn_file_scope` / `agent_file_mutation` / `agent_rewind_operation`；`/new` 复用 `delete_btw_thread`。
 - 被撤销轮次的 `agent_subagent_input` 行保留为审计记录：状态已 `completed`，不会再被 claim；`child_turn_inputs` 以消息 join 取上下文，消息删除后自然不再回放。
 
 ### 5.2 并发与迟到回执
 
 | 场景 | 处理 |
 | :--- | :--- |
-| `/undo` 执行中重复 `/undo` | `TaskPage.detail_undo_executing` 已占用 → 拒绝并 Toast |
+| `/rewind` 执行中重复 `/rewind` | `TaskPage.detail_rewind_executing` 已占用 → 拒绝并 Toast |
 | 撤销回执迟到/换窗格 | `operation_id` 对不上 → 忽略 |
 | 撤销目标不再是最新轮 | `commit_rewind` 返回 `RewindTargetChanged` → 失败 Toast，不删任何东西 |
-| 含轮内 steer 的轮次 | 刻意不可撤回：同 turn_index 会新增 user 消息，文件 scope 只锚首条；`/undo` 按 `Nothing to undo` 拒绝 |
+| 含轮内 steer 的轮次 | 刻意不可撤回：同 turn_index 会新增 user 消息，文件 scope 只锚首条；`/rewind` 按 `Nothing to rewind` 拒绝 |
 | 撤销期间父 agent / 其他 agent 改了同一文件 | 复用 `restore_plan` 的 `actual_after_image_id` 检查；不覆盖后续修改（与主 `/rewind` 同规则） |
 | 撤销执行中应用崩溃 | 复用 `event::chat::rewind::recover_startup`；`unfinished_operation` 会阻止该会话再次撤销，直到恢复完成 |
 | `/compact` 期间子轮启动 | `expected_revision` 不匹配 → 提交失败，上下文不变 |
@@ -1603,8 +1598,8 @@ pub const LX_BTW_RESET_EMPTY: &str = "No side thread to clear";
 
 ### 5.3 失败语义
 
-- `/undo` 预检失败（快照 Unavailable/Incomplete）→ 不弹面板、不删对话。
-- `/undo` 执行失败 → 文件恢复幂等回滚/保留，DB 事务未提交；Toast。
+- `/rewind` 预检失败（快照 Unavailable/Incomplete）→ 不弹面板、不删对话。
+- `/rewind` 执行失败 → 文件恢复幂等回滚/保留，DB 事务未提交；Toast。
 - `/compact` 失败 → 不写检查点、不改上下文；Toast。
 - `/report` 队列失败 → 事件层 Toast（现有 `show_panel_toast`），草稿已消费（与普通追问一致）。
 - `/new` 删除失败 → 线程保留，Toast。
@@ -1616,13 +1611,13 @@ pub const LX_BTW_RESET_EMPTY: &str = "No side thread to clear";
 ### 6.1 状态与解析
 
 - `src/app/state/lx/slash/composer/tests.rs`
-  - `agent_context_lists_undo_compact_report_only`
-  - `btw_context_lists_undo_compact_new_only`
+  - `agent_context_lists_rewind_compact_report_only`
+  - `btw_context_lists_rewind_compact_new_only`
   - `report_takes_multiline_note`
   - `non_report_commands_reject_arguments`
   - `btw_new_accepts_clear_and_reset_aliases`
   - `argument_hint_only_for_report_prefix`
-  - `main_context_does_not_expose_detail_commands`（`/undo` 仍由 `/rewind` 别名命中）
+  - `main_context_does_not_expose_detail_commands`（主输入 `/undo` 仍由 `/rewind` 别名命中）
 
 ### 6.2 composer 面板与按键
 
@@ -1649,21 +1644,26 @@ pub const LX_BTW_RESET_EMPTY: &str = "No side thread to clear";
 
 ### 6.4 撤销
 
-- `src/db/chat/subagent/tests/undo.rs`（新增子模块文件）
+- `src/db/chat/subagent/tests/rewind.rs`（新增子模块文件）
   - `latest_undoable_turn_requires_human_panel_follow_up`
   - `spawn_input_and_parent_send_input_and_report_turns_are_not_undoable`
   - `steered_turn_is_not_undoable`
-- `src/event/chat/tests/detail_undo.rs`（新增）
-  - `detail_undo_restores_files_and_deletes_the_last_follow_up`
-  - `detail_undo_rejects_when_files_snapshot_is_unavailable`
-  - `detail_undo_ignores_late_operation_id`
+- `src/event/chat/tests/detail_rewind.rs`（新增）
+  - `detail_rewind_deletes_the_last_follow_up_and_reloads_the_run`
+  - `detail_rewind_disables_file_actions_when_snapshot_is_unavailable`
+  - `detail_rewind_ignores_late_operation_id`
+  - `detail_rewind_rejects_busy_agent_and_btw_thread`
+  - `detail_rewind_restores_the_latest_compact_checkpoint`
   - `btw_undo_deletes_the_last_turn_and_keeps_the_thread`
   - `btw_undo_of_the_only_turn_resets_the_thread`
 - `src/app/update/chat/tests/detail_commands.rs`
-  - `undo_prepare_shows_two_row_confirm_with_cancel_first`
-  - `undo_confirm_cancel_has_no_effect`
-  - `undo_confirm_down_enter_emits_execute_effect`
-  - `undo_busy_agent_does_not_open_confirm`
+  - `rewind_command_and_hidden_alias_emit_prepare_effect`
+  - `rewind_prepare_shows_four_actions_with_restore_first`
+  - `rewind_prepare_for_compact_shows_restore_and_cancel`
+  - `rewind_confirm_cancel_has_no_effect`
+  - `rewind_confirm_default_enter_emits_execute_effect`
+  - `rewind_confirm_disabled_file_action_is_swallowed`
+  - `rewind_busy_agent_does_not_open_confirm`
 
 ### 6.5 压缩
 
@@ -1696,7 +1696,7 @@ pub const LX_BTW_RESET_EMPTY: &str = "No side thread to clear";
 
 ### 6.8 回归
 
-- 主输入 `/` 面板、`/rewind`、`/compact`、`/report` 不存在于主命令集、AI Web 过滤、`/undo` 别名仍指向 `/rewind`。
+- 主输入 `/` 面板、`/rewind`、`/compact`、`/report` 不存在于主命令集、AI Web 过滤、主输入 `/undo` 别名仍指向 `/rewind`。
 - 全量：`cargo fmt`、`cargo clippy --all-targets -- -D warnings`、`cargo test`。
 
 ---
@@ -1705,7 +1705,7 @@ pub const LX_BTW_RESET_EMPTY: &str = "No side thread to clear";
 
 | 风险 | 影响 | 缓解 |
 | :--- | :--- | :--- |
-| `/undo` 回滚文件与并发写冲突 | 覆盖后续修改 | 复用 `restore_plan` 的 after-image 校验；不可用/不完整时拒绝；确认面板默认 Cancel |
+| `/rewind` 回滚文件与并发写冲突 | 覆盖后续修改 | 复用 `restore_plan` 的 after-image 校验；含文件动作按快照状态禁用；面板默认第一项与主聊天一致 |
 | 删除粘性模式改变既有习惯 | 用户找不到 `Shift+Tab` | 胶囊直接显示 `private`；底栏 `[/ commands]`；`/report` 出现在 `/` 面板 |
 | `/report` 额外一轮模型调用 | Token 成本 | 只在显式命令时触发；提示词要求简洁；不自动为每轮私聊调用 |
 | 详情压缩与子轮并发 | revision 冲突导致压缩失败 | 空闲/无排队检查 + `expected_revision` 提交校验；失败不改上下文 |
@@ -1719,11 +1719,11 @@ pub const LX_BTW_RESET_EMPTY: &str = "No side thread to clear";
 
 ## 8. 验收清单
 
-1. Agents 空闲输入 `/`：面板只出现 `/undo` `/compact` `/report`；`Enter` 执行，`Esc` 关闭并留在编辑态。
+1. Agents 空闲输入 `/`：面板只出现 `/rewind` `/compact` `/report`；`Enter` 执行，`Esc` 关闭并留在编辑态。
 2. 私聊多轮后不触发任何主 agent 报告；主 agent 不上报、不自动起轮。
 3. `/report 把登录 bug 结论汇报给主 agent`：子 agent 专门输出一份报告；主 agent 只收到该报告正文并自动起轮；之前的闲聊不进报告。
-4. `/undo` 回车 → 两行确认，默认 `Cancel`；直接 Enter 无副作用；`↓ ↵` 删除最后一轮私聊并恢复文件；spawn 轮/报告轮/父 send_input 轮不可撤回。
+4. 详情 `/rewind` 回车 → 与主聊天相同的四项动作面板（默认第一项）；删对话动作删除最后一轮私聊并恢复文件；spawn 轮/报告轮/父 send_input 轮不可撤回；`/compact` 后再次 `/rewind` 显示 compact 恢复项。
 5. `/compact` 显示 `compacting` 徽标，完成后出现压缩检查点卡片；再次执行提示 `Nothing new to compact.`。
-6. BTW `/undo` 删除最后一轮问答；删空时线程重置；`/new` 直接清空线程，列表 `● side thread` 消失。
+6. BTW `/rewind` 删除最后一轮问答；删空时线程重置；`/new` 直接清空线程，列表 `● side thread` 消失。
 7. 任意宽度下胶囊/提示不截半截；所有新文案为英文。
 8. `cargo fmt` / `cargo clippy --all-targets -- -D warnings` / `cargo test` 全绿。

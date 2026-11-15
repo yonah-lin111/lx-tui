@@ -821,10 +821,48 @@ fn detail_commands_render_inline_labels_and_tags() {
     let mut buf = Buffer::empty(area);
     let _ = render(area, &mut buf, &lx, false, None, &mut PaneCache::default());
     let lines = buffer_lines(&buf, area).join("\n");
-    for label in ["/undo", "/compact", "/report"] {
+    for label in ["/rewind", "/compact", "/report"] {
         assert!(lines.contains(label), "缺少 {label}：{lines}");
     }
+    assert!(!lines.contains("/undo"), "隐藏别名不进面板：{lines}");
     assert!(!lines.contains("/new"), "Agents 不出现 /new：{lines}");
-    assert!(lines.contains("Undo the last turn"), "{lines}");
+    assert!(lines.contains("Rewind the last turn"), "{lines}");
     assert!(lines.matches("Built-in").count() >= 3, "{lines}");
+}
+
+/// 详情 `Rewind` 面板：轮次显示四项动作与范围，compact 只显示恢复与取消。
+#[test]
+fn detail_rewind_panels_render_scope_and_actions() {
+    use crate::app::state::{DetailRewindKind, RewindPanel, SnapshotState};
+
+    let area = Rect::new(0, 0, 100, 24);
+    let mut lx = Lx::new();
+    lx.input = "/rewind".into();
+    lx.slash = Some(SlashPanel::Rewind(Box::new(RewindPanel::for_detail(
+        DetailRewindKind::Agent,
+        SnapshotState::KnownEmpty,
+    ))));
+    let mut buf = Buffer::empty(area);
+    let _ = render(area, &mut buf, &lx, false, None, &mut PaneCache::default());
+    let lines = buffer_lines(&buf, area).join("\n");
+    assert!(lines.contains("Rewind"), "{lines}");
+    assert!(lines.contains("last private turn"), "{lines}");
+    assert!(
+        lines.contains(text::LX_REWIND_ACTION_REVERT_AND_DELETE),
+        "{lines}"
+    );
+    assert!(lines.contains(text::LX_REWIND_ACTION_CANCEL), "{lines}");
+
+    lx.slash = Some(SlashPanel::Rewind(Box::new(
+        RewindPanel::for_detail_compact(DetailRewindKind::Btw),
+    )));
+    let mut buf = Buffer::empty(area);
+    let _ = render(area, &mut buf, &lx, false, None, &mut PaneCache::default());
+    let lines = buffer_lines(&buf, area).join("\n");
+    assert!(lines.contains(text::LX_COMPACT_SCOPE), "{lines}");
+    assert!(lines.contains(text::LX_COMPACT_ACTION_RESTORE), "{lines}");
+    assert!(
+        !lines.contains(text::LX_REWIND_ACTION_REVERT_AND_DELETE),
+        "{lines}"
+    );
 }

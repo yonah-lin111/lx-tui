@@ -1,14 +1,14 @@
 //! 详情输入框（Agents / BTW composer）的上下文命令：候选过滤、整段解析与参数提示。
 //!
-//! 与主输入框的 [`super::SlashCommand`] 刻意分离：主输入的 `/undo` 是 `/rewind` 的别名，
-//! 而详情里的 `/undo` 走独立的撤销管线；`/report`、`/new` 也不属于主命令集。
+//! 与主输入框的 [`super::SlashCommand`] 刻意分离：详情里的 `/rewind` 走子会话撤销管线，
+//! 但保留与主输入一致的 `/undo` 隐藏别名；`/report`、`/new` 也不属于主命令集。
 
 use super::{SlashEntry, alias_prefix_score, command_score};
 
 /// 详情输入框里的命令；只在 composer 上下文出现。
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum DetailCommand {
-    Undo,
+    Rewind,
     Compact,
     Report,
     New,
@@ -23,14 +23,14 @@ pub enum DetailContext {
 
 impl DetailCommand {
     /// Agents 详情命令（固定顺序）。
-    pub const AGENT: [Self; 3] = [Self::Undo, Self::Compact, Self::Report];
+    pub const AGENT: [Self; 3] = [Self::Rewind, Self::Compact, Self::Report];
     /// BTW 详情命令（固定顺序）。
-    pub const BTW: [Self; 3] = [Self::Undo, Self::Compact, Self::New];
+    pub const BTW: [Self; 3] = [Self::Rewind, Self::Compact, Self::New];
 
     /// 命令名（不含 `/`）。
     pub const fn name(self) -> &'static str {
         match self {
-            Self::Undo => "undo",
+            Self::Rewind => "rewind",
             Self::Compact => "compact",
             Self::Report => "report",
             Self::New => "new",
@@ -40,7 +40,7 @@ impl DetailCommand {
     /// 命令文本（含 `/`）。
     pub const fn text(self) -> &'static str {
         match self {
-            Self::Undo => "/undo",
+            Self::Rewind => "/rewind",
             Self::Compact => "/compact",
             Self::Report => "/report",
             Self::New => "/new",
@@ -50,7 +50,7 @@ impl DetailCommand {
     /// 额外别名（不含 `/`）。
     pub fn aliases(self) -> &'static [&'static str] {
         match self {
-            Self::Undo => &["rewind"],
+            Self::Rewind => &["undo"],
             Self::New => &["clear", "reset"],
             _ => &[],
         }
@@ -59,7 +59,7 @@ impl DetailCommand {
     /// 一句话描述；保持上下文中立，同一句在两个 composer 都成立。
     pub const fn description(self) -> &'static str {
         match self {
-            Self::Undo => "Undo the last turn",
+            Self::Rewind => "Rewind the last turn or a compact checkpoint",
             Self::Compact => "Compact this conversation's context",
             Self::Report => "Report progress to the parent agent",
             Self::New => "Start a fresh side thread",
@@ -118,7 +118,7 @@ pub fn entries(context: DetailContext, query: &str) -> Vec<SlashEntry> {
 /// 详情命令的整段解析结果；`Report` 携带已 trim 的备注。
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ParsedDetailCommand<'a> {
-    Undo,
+    Rewind,
     Compact,
     Report(&'a str),
     New,
@@ -134,7 +134,7 @@ pub fn parse(input: &str, context: DetailContext) -> Option<ParsedDetailCommand<
         .split_once(char::is_whitespace)
         .map_or((line, ""), |(word, rest)| (word, rest));
     let command = match (context, word) {
-        (_, "undo") | (_, "rewind") => DetailCommand::Undo,
+        (_, "rewind") | (_, "undo") => DetailCommand::Rewind,
         (_, "compact") => DetailCommand::Compact,
         (DetailContext::Agent, "report") => DetailCommand::Report,
         (DetailContext::Btw, "new")
@@ -142,12 +142,12 @@ pub fn parse(input: &str, context: DetailContext) -> Option<ParsedDetailCommand<
         | (DetailContext::Btw, "reset") => DetailCommand::New,
         _ => return None,
     };
-    // 非带参命令必须结束在命令词之后：`/undo x` 不是命令，交给未知命令提示。
+    // 非带参命令必须结束在命令词之后：`/rewind x` 不是命令，交给未知命令提示。
     if command != DetailCommand::Report && (!rest.trim().is_empty() || rest.contains('\n')) {
         return None;
     }
     Some(match command {
-        DetailCommand::Undo => ParsedDetailCommand::Undo,
+        DetailCommand::Rewind => ParsedDetailCommand::Rewind,
         DetailCommand::Compact => ParsedDetailCommand::Compact,
         DetailCommand::Report => ParsedDetailCommand::Report(rest.trim()),
         DetailCommand::New => ParsedDetailCommand::New,

@@ -274,9 +274,9 @@ fn view<'a>(
         SlashPanel::Rewind(panel) => {
             if panel.scope() == crate::app::state::RewindScope::Detail {
                 (
-                    text::detail::LX_DETAIL_UNDO_PANEL_TITLE,
+                    text::detail::LX_DETAIL_REWIND_PANEL_TITLE,
                     panel.window,
-                    text::detail::LX_DETAIL_UNDO_FOOTER,
+                    text::detail::LX_DETAIL_REWIND_FOOTER,
                 )
             } else {
                 (
@@ -299,16 +299,27 @@ fn view<'a>(
             crate::app::state::RewindScope::Compact => text::LX_COMPACT_SCOPE,
             crate::app::state::RewindScope::ModelSwitch => text::LX_MODEL_SWITCH_SCOPE,
             crate::app::state::RewindScope::Recap => text::LX_RECAP_SCOPE,
-            crate::app::state::RewindScope::Detail => panel
-                .detail
-                .as_ref()
-                .map(|detail| match detail.kind {
-                    crate::app::state::DetailUndoKind::Agent => text::detail::LX_DETAIL_UNDO_SCOPE,
-                    crate::app::state::DetailUndoKind::Btw => {
-                        text::detail::LX_DETAIL_UNDO_SCOPE_BTW
-                    }
-                })
-                .unwrap_or(text::detail::LX_DETAIL_UNDO_SCOPE),
+            crate::app::state::RewindScope::Detail => {
+                if panel
+                    .actions
+                    .contains(&crate::app::state::RewindAction::RestoreCompact)
+                {
+                    text::LX_COMPACT_SCOPE
+                } else {
+                    panel
+                        .detail
+                        .as_ref()
+                        .map(|detail| match detail.kind {
+                            crate::app::state::DetailRewindKind::Agent => {
+                                text::detail::LX_DETAIL_REWIND_SCOPE
+                            }
+                            crate::app::state::DetailRewindKind::Btw => {
+                                text::detail::LX_DETAIL_REWIND_SCOPE_BTW
+                            }
+                        })
+                        .unwrap_or(text::detail::LX_DETAIL_REWIND_SCOPE)
+                }
+            }
         }),
         _ => None,
     };

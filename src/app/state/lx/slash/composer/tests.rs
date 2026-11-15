@@ -14,20 +14,20 @@ fn names(context: DetailContext, query: &str) -> Vec<&'static str> {
 }
 
 #[test]
-fn agent_context_lists_undo_compact_report_only() {
+fn agent_context_lists_rewind_compact_report_only() {
     assert_eq!(
         names(DetailContext::Agent, ""),
-        vec!["/undo", "/compact", "/report"]
+        vec!["/rewind", "/compact", "/report"]
     );
     assert_eq!(names(DetailContext::Agent, "/rep"), vec!["/report"]);
     assert!(!names(DetailContext::Agent, "").contains(&"/new"));
 }
 
 #[test]
-fn btw_context_lists_undo_compact_new_only() {
+fn btw_context_lists_rewind_compact_new_only() {
     assert_eq!(
         names(DetailContext::Btw, ""),
-        vec!["/undo", "/compact", "/new"]
+        vec!["/rewind", "/compact", "/new"]
     );
     assert!(!names(DetailContext::Btw, "").contains(&"/report"));
 }
@@ -55,19 +55,24 @@ fn report_takes_multiline_note() {
 
 #[test]
 fn non_report_commands_reject_arguments() {
-    assert_eq!(parse("/undo x", DetailContext::Agent), None);
+    assert_eq!(parse("/rewind x", DetailContext::Agent), None);
     assert_eq!(parse("/compact now", DetailContext::Agent), None);
-    assert_eq!(parse("/undo\nsecond line", DetailContext::Agent), None);
+    assert_eq!(parse("/rewind\nsecond line", DetailContext::Agent), None);
+    assert_eq!(
+        parse("/rewind", DetailContext::Agent),
+        Some(ParsedDetailCommand::Rewind)
+    );
+    // `/undo` 保留为与主输入一致的隐藏别名。
     assert_eq!(
         parse("/undo", DetailContext::Agent),
-        Some(ParsedDetailCommand::Undo)
+        Some(ParsedDetailCommand::Rewind)
     );
     assert_eq!(
         parse("/compact", DetailContext::Btw),
         Some(ParsedDetailCommand::Compact)
     );
-    // 命令词必须完整：`/undoes` 不是 `/undo`。
-    assert_eq!(parse("/undoes", DetailContext::Agent), None);
+    // 命令词必须完整：`/rewinds` 不是 `/rewind`。
+    assert_eq!(parse("/rewinds", DetailContext::Agent), None);
 }
 
 #[test]
@@ -97,7 +102,7 @@ fn argument_hint_only_for_report_prefix() {
     assert_eq!(super::argument_hint("/report  "), Some("[note]"));
     assert_eq!(super::argument_hint("/report"), None);
     assert_eq!(super::argument_hint("/report note"), None);
-    assert_eq!(super::argument_hint("/undo "), None);
+    assert_eq!(super::argument_hint("/rewind "), None);
 }
 
 #[test]

@@ -22,7 +22,7 @@ pub(crate) mod composer;
 mod connect;
 mod detail_compact;
 mod detail_report;
-mod detail_undo;
+mod detail_rewind;
 mod fork;
 pub mod mcp;
 pub mod model_switch;
@@ -70,9 +70,9 @@ pub use detail_compact::{
     DetailCompactResult, handle_finished as on_detail_compact_finished,
     on_started as on_detail_compact_started,
 };
-pub use detail_undo::{
-    on_failed as on_detail_undo_failed, on_prepared as on_detail_undo_prepared,
-    on_succeeded as on_detail_undo_succeeded,
+pub use detail_rewind::{
+    on_failed as on_detail_rewind_failed, on_prepared as on_detail_rewind_prepared,
+    on_succeeded as on_detail_rewind_succeeded,
 };
 pub use fork::{on_fork_completed, on_fork_failed, open_fork_panel};
 pub use mcp::{

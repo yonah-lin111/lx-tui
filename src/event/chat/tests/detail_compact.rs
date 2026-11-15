@@ -257,7 +257,7 @@ async fn btw_compact_persists_checkpoint_and_reloads_thread() {
     use super::compact::{spawn_mock, summary_stream};
 
     let (fixture, mut state, key, _persistence, _streams, _parent) = fixture_with_parent();
-    let thread = super::detail_undo::btw_fixture(&fixture, &mut state, &key);
+    let thread = super::detail_rewind::btw_fixture(&fixture, &mut state, &key);
     let base_url = spawn_mock("200 OK", summary_stream()).await;
     state
         .models

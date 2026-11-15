@@ -160,15 +160,14 @@ pub enum RewindScope {
     Compact,
     ModelSwitch,
     Recap,
-    /// 详情 composer 的 `/undo` 确认。
+    /// 详情 composer 的 `/rewind` 确认。
     Detail,
 }
 
 /// 详情 composer 撤销确认面板的描述（只影响文案与执行路由）。
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct DetailUndoPanel {
-    pub kind: super::detail::DetailUndoKind,
-    pub action: RewindAction,
+pub struct DetailRewindPanel {
+    pub kind: super::detail::DetailRewindKind,
 }
 
 /// 撤销动作面板状态。
@@ -179,7 +178,7 @@ pub struct RewindPanel {
     /// 本面板的动作集（普通轮次四项；compact 只有恢复与取消）。
     pub actions: Vec<RewindAction>,
     /// Some 表示详情 composer 的撤销确认；执行路由据此走详情链路。
-    pub detail: Option<DetailUndoPanel>,
+    pub detail: Option<DetailRewindPanel>,
 }
 
 impl RewindPanel {
@@ -223,17 +222,23 @@ impl RewindPanel {
         }
     }
 
-    /// 详情 composer 的撤销确认：默认高亮 Cancel，误触 Enter 不产生副作用。
-    pub fn for_detail(
-        kind: super::detail::DetailUndoKind,
-        snapshot: SnapshotState,
-        action: RewindAction,
-    ) -> Self {
+    /// 详情 composer 的轮次撤销：与主 `/rewind` 相同的四项动作（默认第一项）。
+    pub fn for_detail(kind: super::detail::DetailRewindKind, snapshot: SnapshotState) -> Self {
         Self {
             window: PanelWindow::new(0),
             snapshot,
-            actions: vec![RewindAction::Cancel, action],
-            detail: Some(DetailUndoPanel { kind, action }),
+            actions: RewindAction::ALL.to_vec(),
+            detail: Some(DetailRewindPanel { kind }),
+        }
+    }
+
+    /// 详情 composer 的 compact 撤销：只有「恢复上下文」与「取消」。
+    pub fn for_detail_compact(kind: super::detail::DetailRewindKind) -> Self {
+        Self {
+            window: PanelWindow::new(0),
+            snapshot: SnapshotState::KnownEmpty,
+            actions: vec![RewindAction::RestoreCompact, RewindAction::Cancel],
+            detail: Some(DetailRewindPanel { kind }),
         }
     }
 

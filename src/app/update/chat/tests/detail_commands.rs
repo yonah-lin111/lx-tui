@@ -103,7 +103,7 @@ fn typing_slash_in_agent_composer_opens_three_commands() {
     type_str(&mut state, "/");
     assert_eq!(
         file_entries(&state, pane),
-        vec!["/undo", "/compact", "/report"]
+        vec!["/rewind", "/compact", "/report"]
     );
 }
 
@@ -113,7 +113,7 @@ fn typing_slash_in_btw_composer_opens_three_commands() {
     type_str(&mut state, "/");
     assert_eq!(
         file_entries(&state, pane),
-        vec!["/undo", "/compact", "/new"]
+        vec!["/rewind", "/compact", "/new"]
     );
 }
 
@@ -299,8 +299,8 @@ fn report_message_contains_marker_and_note() {
     assert!(!bare.contains("User note:"));
 }
 
-fn undo_plan(child_session: &str) -> crate::app::state::DetailUndoPlan {
-    crate::app::state::DetailUndoPlan {
+fn rewind_plan(child_session: &str) -> crate::app::state::DetailRewindPlan {
+    crate::app::state::DetailRewindPlan {
         target: crate::app::state::DetailTarget::Agent("sub-idle".into()),
         workspace: std::path::PathBuf::from("/work/demo"),
         child_session: child_session.into(),
@@ -310,52 +310,99 @@ fn undo_plan(child_session: &str) -> crate::app::state::DetailUndoPlan {
         user_text: "previous question".into(),
         action: crate::app::state::RewindAction::RevertAndDelete,
         snapshot: crate::app::state::SnapshotState::KnownEmpty,
+        kind: crate::app::state::RewindTargetKind::Turn,
+    }
+}
+
+fn compact_rewind_plan(child_session: &str) -> crate::app::state::DetailRewindPlan {
+    crate::app::state::DetailRewindPlan {
+        target: crate::app::state::DetailTarget::Agent("sub-idle".into()),
+        workspace: std::path::PathBuf::from("/work/demo"),
+        child_session: child_session.into(),
+        user_message_id: "compact-1".into(),
+        expected_revision: 4,
+        input_at_open: String::new(),
+        user_text: String::new(),
+        action: crate::app::state::RewindAction::RestoreCompact,
+        snapshot: crate::app::state::SnapshotState::KnownEmpty,
+        kind: crate::app::state::RewindTargetKind::Compact,
     }
 }
 
 #[test]
-fn undo_prepare_shows_two_row_confirm_with_cancel_first() {
+fn rewind_prepare_shows_four_actions_with_restore_first() {
     let (mut state, pane) = agents_editing_state();
-    assert!(crate::app::update::on_detail_undo_prepared(
+    assert!(crate::app::update::on_detail_rewind_prepared(
         &mut state,
         pane,
-        undo_plan("sess-idle")
+        rewind_plan("sess-idle")
     ));
     let Some(SlashPanel::Rewind(panel)) = panel(&state, pane) else {
-        panic!("expected undo panel");
+        panic!("expected rewind panel");
     };
-    assert_eq!(panel.actions.len(), 2, "两行确认");
+    assert_eq!(
+        panel.actions,
+        crate::app::state::RewindAction::ALL.to_vec(),
+        "与主 /rewind 相同的四项动作"
+    );
     assert_eq!(
         panel.active_action(),
-        crate::app::state::RewindAction::Cancel
+        crate::app::state::RewindAction::RevertAndDelete,
+        "默认第一项"
     );
     assert_eq!(panel.scope(), crate::app::state::RewindScope::Detail);
     assert_eq!(
         panel.detail.as_ref().map(|detail| detail.kind),
-        Some(crate::app::state::DetailUndoKind::Agent)
+        Some(crate::app::state::DetailRewindKind::Agent)
     );
 }
 
 #[test]
-fn undo_confirm_cancel_has_no_effect() {
+fn rewind_prepare_for_compact_shows_restore_and_cancel() {
     let (mut state, pane) = agents_editing_state();
-    assert!(crate::app::update::on_detail_undo_prepared(
+    assert!(crate::app::update::on_detail_rewind_prepared(
         &mut state,
         pane,
-        undo_plan("sess-idle")
+        compact_rewind_plan("sess-idle")
     ));
     let Some(SlashPanel::Rewind(panel)) = panel(&state, pane) else {
-        panic!("expected undo panel");
+        panic!("expected compact rewind panel");
     };
+    assert_eq!(
+        panel.actions,
+        vec![
+            crate::app::state::RewindAction::RestoreCompact,
+            crate::app::state::RewindAction::Cancel
+        ]
+    );
+    assert_eq!(
+        panel.active_action(),
+        crate::app::state::RewindAction::RestoreCompact
+    );
+    assert_eq!(panel.scope(), crate::app::state::RewindScope::Detail);
+}
+
+#[test]
+fn rewind_confirm_cancel_has_no_effect() {
+    let (mut state, pane) = agents_editing_state();
+    assert!(crate::app::update::on_detail_rewind_prepared(
+        &mut state,
+        pane,
+        rewind_plan("sess-idle")
+    ));
+    let Some(SlashPanel::Rewind(mut panel)) = panel(&state, pane) else {
+        panic!("expected rewind panel");
+    };
+    panel.window.active = panel.actions.len() - 1;
     state.effects.clear();
-    assert!(super::super::detail_undo::apply_confirm(
+    assert!(super::super::detail_rewind::apply_confirm(
         &mut state, pane, &panel
     ));
     assert!(
         !state
             .effects
             .iter()
-            .any(|effect| matches!(effect, crate::app::effects::Effect::ExecuteDetailUndo(_))),
+            .any(|effect| matches!(effect, crate::app::effects::Effect::ExecuteDetailRewind(_))),
         "Cancel 不执行：{:?}",
         state.effects
     );
@@ -363,22 +410,20 @@ fn undo_confirm_cancel_has_no_effect() {
 }
 
 #[test]
-fn undo_confirm_down_enter_emits_execute_effect() {
+fn rewind_confirm_default_enter_emits_execute_effect() {
     let (mut state, pane) = agents_editing_state();
-    assert!(crate::app::update::on_detail_undo_prepared(
+    assert!(crate::app::update::on_detail_rewind_prepared(
         &mut state,
         pane,
-        undo_plan("sess-idle")
+        rewind_plan("sess-idle")
     ));
-    // ↓ 到执行项，再 Enter。
-    crate::app::update::pane::apply_lx_input(&mut state, LxInput::Down);
     state.effects.clear();
     crate::app::update::pane::apply_lx_input(&mut state, LxInput::Enter);
     let request = state
         .effects
         .iter()
         .find_map(|effect| match effect {
-            crate::app::effects::Effect::ExecuteDetailUndo(request) => Some(request),
+            crate::app::effects::Effect::ExecuteDetailRewind(request) => Some(request),
             _ => None,
         })
         .expect("execute effect");
@@ -395,30 +440,74 @@ fn undo_confirm_down_enter_emits_execute_effect() {
         state
             .pane_anywhere(pane)
             .and_then(|target| target.lx.task.as_ref())
-            .and_then(|page| page.detail_undo_executing.as_ref())
+            .and_then(|page| page.detail_rewind_executing.as_ref())
             .map(|exec| exec.operation_id.as_str()),
         Some(request.operation_id.as_str())
+    );
+    assert!(
+        state
+            .pane_anywhere(pane)
+            .and_then(|target| target.lx.task.as_ref())
+            .and_then(|page| page.detail_rewind_pending.as_ref())
+            .is_some_and(|plan| plan.action == crate::app::state::RewindAction::RevertAndDelete),
+        "回投记录实际选择"
     );
 }
 
 #[test]
-fn undo_busy_agent_does_not_open_confirm() {
+fn rewind_confirm_disabled_file_action_is_swallowed() {
     let (mut state, pane) = agents_editing_state();
-    // 已有执行中的撤销：再次 /undo 只提示，不覆盖。
+    let mut plan = rewind_plan("sess-idle");
+    plan.snapshot = crate::app::state::SnapshotState::Unavailable;
+    assert!(crate::app::update::on_detail_rewind_prepared(
+        &mut state, pane, plan
+    ));
+    // 默认项含文件恢复：快照不可用时 Enter 被吞掉。
+    state.effects.clear();
+    crate::app::update::pane::apply_lx_input(&mut state, LxInput::Enter);
+    assert!(
+        !state
+            .effects
+            .iter()
+            .any(|effect| matches!(effect, crate::app::effects::Effect::ExecuteDetailRewind(_))),
+        "禁用动作不得执行：{:?}",
+        state.effects
+    );
+    // ↓ 到 DeleteOnly 后仍可只删对话。
+    crate::app::update::pane::apply_lx_input(&mut state, LxInput::Down);
+    crate::app::update::pane::apply_lx_input(&mut state, LxInput::Enter);
+    let request = state
+        .effects
+        .iter()
+        .find_map(|effect| match effect {
+            crate::app::effects::Effect::ExecuteDetailRewind(request) => Some(request),
+            _ => None,
+        })
+        .expect("DeleteOnly 可执行");
+    assert_eq!(
+        request.request.action,
+        crate::app::state::RewindAction::DeleteOnly
+    );
+}
+
+#[test]
+fn rewind_busy_agent_does_not_open_confirm() {
+    let (mut state, pane) = agents_editing_state();
+    // 已有执行中的撤销：再次 /rewind 只提示，不覆盖。
     if let Some(page) = state
         .pane_mut_anywhere(pane)
         .and_then(|target| target.lx.task.as_mut())
     {
-        page.detail_undo_executing = Some(crate::app::state::DetailUndoExecution {
+        page.detail_rewind_executing = Some(crate::app::state::DetailRewindExecution {
             operation_id: "op-1".into(),
             target: crate::app::state::DetailTarget::Agent("sub-idle".into()),
         });
     }
-    assert!(super::super::detail_undo::prepare(&mut state, pane));
+    assert!(super::super::detail_rewind::prepare(&mut state, pane));
     assert!(
         !state.effects.iter().any(|effect| matches!(
             effect,
-            crate::app::effects::Effect::PrepareDetailUndo { .. }
+            crate::app::effects::Effect::PrepareDetailRewind { .. }
         )),
         "执行中不得重复预检"
     );
@@ -430,7 +519,7 @@ fn panel_after_confirm_closed(state: &AppState, pane: PaneId) -> bool {
         && state
             .pane_anywhere(pane)
             .and_then(|target| target.lx.task.as_ref())
-            .is_some_and(|page| page.detail_undo_pending.is_none())
+            .is_some_and(|page| page.detail_rewind_pending.is_none())
 }
 
 #[test]
@@ -518,4 +607,26 @@ fn late_detail_compact_finished_is_ignored() {
         .running
         .clone();
     assert_eq!(running.as_deref(), Some("current-op"));
+}
+
+#[test]
+fn rewind_command_and_hidden_alias_emit_prepare_effect() {
+    for command in ["/rewind", "/undo"] {
+        let (mut state, pane) = agents_editing_state();
+        type_str(&mut state, command);
+        state.effects.clear();
+        crate::app::update::pane::apply_lx_input(&mut state, LxInput::Enter);
+        assert!(
+            state.effects.iter().any(|effect| matches!(
+                effect,
+                crate::app::effects::Effect::PrepareDetailRewind {
+                    target: crate::app::state::DetailTarget::Agent(agent_id),
+                    ..
+                } if agent_id == "sub-idle"
+            )),
+            "{command} 应进入详情撤销预检：{:?}",
+            state.effects
+        );
+        assert_eq!(editor_text(&state, pane), "", "{command} 已消费");
+    }
 }

@@ -11,29 +11,33 @@ pub enum DetailTarget {
 
 /// 撤销确认面板只区分文案，不携带执行数据。
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum DetailUndoKind {
+pub enum DetailRewindKind {
     Agent,
     Btw,
 }
 
 /// 预检成功后冻结的撤销计划；确认后原样转成 `RewindRequest`。
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct DetailUndoPlan {
+pub struct DetailRewindPlan {
     pub target: DetailTarget,
     pub workspace: std::path::PathBuf,
     pub child_session: String,
+    /// 普通轮次为用户消息 ID；compact 为检查点 ID。
     pub user_message_id: String,
     pub expected_revision: u64,
     /// 确认后若草稿仍等于 input_at_open，则回填这段原文。
     pub input_at_open: String,
     pub user_text: String,
+    /// 用户确认的动作（打开面板时先填默认项）。
     pub action: crate::app::state::RewindAction,
     pub snapshot: crate::app::state::SnapshotState,
+    /// 目标种类：普通轮次或 compact 检查点（决定动作集与执行路径）。
+    pub kind: crate::app::state::RewindTargetKind,
 }
 
 /// 执行中的幂等键；`TaskPage` 持有它用于迟到回执过滤。
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct DetailUndoExecution {
+pub struct DetailRewindExecution {
     pub operation_id: String,
     pub target: DetailTarget,
 }

@@ -97,7 +97,7 @@ impl BtwThreadState {
                 .any(|message| message.role == "assistant" && message.status == "streaming")
     }
 
-    /// 线程被删除（`/undo` 删空或 `/new`）：回到空白线程视图，取消所有在途状态。
+    /// 线程被删除（`/rewind` 删空或 `/new`）：回到空白线程视图，取消所有在途状态。
     pub fn reset_after_delete(&mut self) {
         self.thread_id = None;
         self.child_session_id = None;
@@ -192,7 +192,7 @@ impl LxBtw {
         self.threads.get_mut(qa_id)
     }
 
-    /// 按持久化线程 ID 查线程（详情 `/undo` 的回投目标）。
+    /// 按持久化线程 ID 查线程（详情 `/rewind` 的回投目标）。
     pub fn thread_by_thread_id(&self, thread_id: &str) -> Option<&BtwThreadState> {
         self.threads
             .values()

@@ -354,14 +354,14 @@ pub enum Effect {
     },
     /// 执行一次最新轮次撤销（唯一 operation id；事件层后台执行）。
     ExecuteRewind(RewindRequest),
-    /// 详情 composer 的 `/undo` 预检（只读，事件层同步执行）。
-    PrepareDetailUndo {
+    /// 详情 composer 的 `/rewind` 预检（只读，事件层同步执行）。
+    PrepareDetailRewind {
         pane: crate::tiling::PaneId,
         target: crate::app::state::DetailTarget,
         input_at_open: String,
     },
-    /// 详情 composer 的 `/undo` 执行（与主 `/rewind` 共用 `execute_rewind`）。
-    ExecuteDetailUndo(DetailUndoRequest),
+    /// 详情 composer 的 `/rewind` 执行（与主 `/rewind` 共用 `execute_rewind`）。
+    ExecuteDetailRewind(DetailRewindRequest),
     /// 详情会话（子 agent / BTW）的手动压缩。
     CompactDetail {
         pane: crate::tiling::PaneId,
@@ -555,7 +555,7 @@ pub struct RewindRequest {
 
 /// 详情 composer 的撤销请求：在共享 `RewindRequest` 之外携带回投目标。
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct DetailUndoRequest {
+pub struct DetailRewindRequest {
     pub pane: crate::tiling::PaneId,
     pub target: crate::app::state::DetailTarget,
     pub operation_id: String,

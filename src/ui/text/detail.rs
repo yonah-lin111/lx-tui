@@ -1,23 +1,21 @@
 //! 详情输入框 `/` 命令、撤销确认与汇报/压缩反馈（英文）。
 
 /// 撤销确认面板标题。
-pub const LX_DETAIL_UNDO_PANEL_TITLE: &str = "Undo";
+pub const LX_DETAIL_REWIND_PANEL_TITLE: &str = "Rewind";
 /// Agents 撤销范围（右端标签）。
-pub const LX_DETAIL_UNDO_SCOPE: &str = "last private turn";
+pub const LX_DETAIL_REWIND_SCOPE: &str = "last private turn";
 /// BTW 撤销范围（右端标签）。
-pub const LX_DETAIL_UNDO_SCOPE_BTW: &str = "last side turn";
+pub const LX_DETAIL_REWIND_SCOPE_BTW: &str = "last side turn";
 /// 撤销确认面板底边提示。
-pub const LX_DETAIL_UNDO_FOOTER: &str = "↑↓ select · ↵ confirm · esc cancel";
-/// 撤销成功。
-pub const LX_DETAIL_UNDO_DONE: &str = "Undid the last turn";
+pub const LX_DETAIL_REWIND_FOOTER: &str = "↑↓ select · ↵ confirm · esc cancel";
 /// 撤销失败。
-pub const LX_DETAIL_UNDO_FAILED: &str = "Undo failed";
+pub const LX_DETAIL_REWIND_FAILED: &str = "Rewind failed";
 /// 目标仍在运行/排队。
-pub const LX_DETAIL_UNDO_BUSY: &str = "Wait for the current turn to finish";
-/// 没有可撤回的轮次。
-pub const LX_DETAIL_UNDO_NOTHING: &str = "Nothing to undo";
-/// 文件快照不可用。
-pub const LX_DETAIL_UNDO_UNAVAILABLE: &str = "Cannot restore files for this turn";
+pub const LX_DETAIL_REWIND_BUSY: &str = "Wait for the current turn to finish";
+/// 没有可撤回的轮次或检查点。
+pub const LX_DETAIL_REWIND_NOTHING: &str = "Nothing to rewind";
+/// 目标已经变化，无法安全撤销。
+pub const LX_DETAIL_REWIND_UNAVAILABLE: &str = "Cannot rewind this turn";
 
 /// 汇报目标仍在运行。
 pub const LX_DETAIL_REPORT_BUSY: &str = "Wait for the current turn to finish";

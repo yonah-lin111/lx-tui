@@ -716,7 +716,7 @@ mod ack;
 mod ask;
 mod compact;
 mod detail_compact;
-mod detail_undo;
+mod detail_rewind;
 mod flow;
 mod guard;
 mod limits;

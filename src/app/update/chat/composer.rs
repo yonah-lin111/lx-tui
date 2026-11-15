@@ -112,9 +112,9 @@ pub(crate) fn close_all(state: &mut AppState, pane: PaneId) {
     }
     // 切 tab/离开编辑会取消未确认的撤销；执行中的回执仍需保留。
     if let Some(page) = target.lx.task.as_mut()
-        && page.detail_undo_executing.is_none()
+        && page.detail_rewind_executing.is_none()
     {
-        page.detail_undo_pending = None;
+        page.detail_rewind_pending = None;
     }
 }
 
@@ -144,7 +144,7 @@ pub(crate) fn apply_slash_input(state: &mut AppState, pane: PaneId, command: LxI
             true
         }
         LxInput::Escape => {
-            super::detail_undo::clear_pending(state, pane);
+            super::detail_rewind::clear_pending(state, pane);
             close(state, pane);
             true
         }
@@ -165,7 +165,7 @@ pub(crate) fn apply_enter(state: &mut AppState, pane: PaneId) -> bool {
     match panel {
         SlashPanel::Commands { .. } => accept(state, pane),
         SlashPanel::Rewind(panel) if panel.detail.is_some() => {
-            super::detail_undo::apply_confirm(state, pane, &panel)
+            super::detail_rewind::apply_confirm(state, pane, &panel)
         }
         SlashPanel::Rewind(_) => super::rewind::apply_enter(state, pane),
         _ => false,
@@ -233,7 +233,7 @@ fn standalone_line(input: &str, cursor: usize) -> bool {
 /// 面板条目 → 执行分支；`Report` 是带参回显命令，不在此列。
 fn parsed_command(command: DetailCommand) -> Option<ParsedDetailCommand<'static>> {
     match command {
-        DetailCommand::Undo => Some(ParsedDetailCommand::Undo),
+        DetailCommand::Rewind => Some(ParsedDetailCommand::Rewind),
         DetailCommand::Compact => Some(ParsedDetailCommand::Compact),
         DetailCommand::New => Some(ParsedDetailCommand::New),
         DetailCommand::Report => None,
@@ -248,7 +248,7 @@ pub(crate) fn execute(
 ) -> bool {
     match command {
         ParsedDetailCommand::Report(note) => super::detail_report::submit(state, pane, note),
-        ParsedDetailCommand::Undo => super::detail_undo::prepare(state, pane),
+        ParsedDetailCommand::Rewind => super::detail_rewind::prepare(state, pane),
         ParsedDetailCommand::Compact => super::detail_compact::request(state, pane),
         ParsedDetailCommand::New => super::btw::request_reset_thread(state, pane),
     }

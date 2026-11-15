@@ -55,8 +55,8 @@ pub fn apply_rewind_effects(
                 effect,
                 Effect::PrepareRewind { .. }
                     | Effect::ExecuteRewind(_)
-                    | Effect::PrepareDetailUndo { .. }
-                    | Effect::ExecuteDetailUndo(_)
+                    | Effect::PrepareDetailRewind { .. }
+                    | Effect::ExecuteDetailRewind(_)
                     | Effect::RevertModelSwitch(_)
                     | Effect::DeleteRecap(_)
             )
@@ -71,8 +71,8 @@ pub fn apply_rewind_effects(
             effect,
             Effect::PrepareRewind { .. }
                 | Effect::ExecuteRewind(_)
-                | Effect::PrepareDetailUndo { .. }
-                | Effect::ExecuteDetailUndo(_)
+                | Effect::PrepareDetailRewind { .. }
+                | Effect::ExecuteDetailRewind(_)
                 | Effect::RevertModelSwitch(_)
                 | Effect::DeleteRecap(_)
         )
@@ -85,15 +85,15 @@ pub fn apply_rewind_effects(
                 user_message_id,
             } => prepare(state, pane, &session_id, &user_message_id, persistence),
             Effect::ExecuteRewind(request) => execute(sender, persistence, request),
-            Effect::PrepareDetailUndo {
+            Effect::PrepareDetailRewind {
                 pane,
                 target,
                 input_at_open,
             } => {
-                super::detail_undo::prepare(state, persistence, pane, target, input_at_open);
+                super::detail_rewind::prepare(state, persistence, pane, target, input_at_open);
             }
-            Effect::ExecuteDetailUndo(request) => {
-                super::detail_undo::execute(sender, persistence, request)
+            Effect::ExecuteDetailRewind(request) => {
+                super::detail_rewind::execute(sender, persistence, request)
             }
             Effect::RevertModelSwitch(request) => revert_model_switch(state, persistence, request),
             Effect::DeleteRecap(request) => delete_recap(state, persistence, request),
@@ -343,10 +343,10 @@ pub fn handle_rewind_finished(
     if state
         .pane_anywhere(pane)
         .and_then(|target| target.lx.task.as_ref())
-        .and_then(|page| page.detail_undo_executing.as_ref())
+        .and_then(|page| page.detail_rewind_executing.as_ref())
         .is_some_and(|exec| exec.operation_id == operation_id)
     {
-        return super::detail_undo::handle_finished(
+        return super::detail_rewind::handle_finished(
             state,
             persistence,
             pane,
