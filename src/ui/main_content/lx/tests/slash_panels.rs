@@ -803,3 +803,28 @@ fn loading_session_renders_centered_in_chat_history_area() {
     let col_idx = line.find(text::LX_SESSION_LOADING).expect("col");
     assert!(col_idx > 15, "会话历史加载文案水平居中: col={col_idx}");
 }
+
+/// 详情命令在 `/` 面板里按普通内联条目渲染：命令名、说明与 Built-in 标签。
+#[test]
+fn detail_commands_render_inline_labels_and_tags() {
+    let area = Rect::new(0, 0, 80, 24);
+    let mut lx = Lx::new();
+    lx.input = "/".into();
+    lx.slash = Some(SlashPanel::Commands {
+        items: crate::app::state::lx::slash::composer::entries(
+            crate::app::state::lx::slash::composer::DetailContext::Agent,
+            "",
+        ),
+        window: PanelWindow::default(),
+        query: "/".into(),
+    });
+    let mut buf = Buffer::empty(area);
+    let _ = render(area, &mut buf, &lx, false, None, &mut PaneCache::default());
+    let lines = buffer_lines(&buf, area).join("\n");
+    for label in ["/undo", "/compact", "/report"] {
+        assert!(lines.contains(label), "缺少 {label}：{lines}");
+    }
+    assert!(!lines.contains("/new"), "Agents 不出现 /new：{lines}");
+    assert!(lines.contains("Undo the last turn"), "{lines}");
+    assert!(lines.matches("Built-in").count() >= 3, "{lines}");
+}

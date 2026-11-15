@@ -278,7 +278,7 @@ async fn detail_undo_ignores_late_operation_id() {
 }
 
 /// 建一个 BTW 线程：父会话已有 QA 锚点，child session 里有两轮问答。
-fn btw_fixture(
+pub(super) fn btw_fixture(
     fixture: &Fixture,
     state: &mut AppState,
     key: &RequestKey,
@@ -479,4 +479,163 @@ async fn btw_undo_of_the_only_turn_resets_the_thread() {
         .expect("thread view kept");
     assert!(thread_state.thread_id.is_none(), "删空后线程重置");
     assert!(thread_state.chat.messages.is_empty());
+}
+
+/// 文件快照不可用（缺 scope）：直接拒绝，不打开确认面板。
+#[tokio::test]
+async fn detail_undo_rejects_when_files_snapshot_is_unavailable() {
+    let (fixture, mut state, key, persistence, mut streams, _parent) = fixture_with_parent();
+    let agent_id = spawn_explorer(&mut state, &mut streams, &persistence, &key, "first task").await;
+    let child_session = streams
+        .subagents
+        .values()
+        .find(|handle| handle.agent_id == agent_id)
+        .expect("handle")
+        .child_session_id
+        .clone();
+    crate::event::chat::finish_subagent(
+        &mut state,
+        &mut streams,
+        &persistence,
+        RequestKey {
+            pane: key.pane,
+            session: child_session.clone(),
+            generation: key.generation,
+        },
+        StopReason::Complete,
+        Usage::default(),
+    );
+    run_child_turn(
+        &mut state,
+        &mut streams,
+        &persistence,
+        &key,
+        &child_session,
+        &agent_id,
+        "private follow-up",
+        false,
+    );
+    {
+        let target = state.pane_mut_anywhere(key.pane).expect("pane");
+        target.lx.agents.ensure_composer(&agent_id);
+        let page = target.lx.task.get_or_insert_with(Default::default);
+        page.tab = TaskTab::Agents;
+        page.agent_edit = Some(agent_id.clone());
+    }
+    let turn = fixture
+        .database()
+        .latest_undoable_private_turn(fixture.workspace(), &child_session)
+        .expect("query")
+        .expect("undoable turn");
+    let conn = rusqlite::Connection::open(fixture.db_path()).expect("raw db");
+    conn.execute(
+        "DELETE FROM agent_turn_file_scope WHERE user_message_id = ?1",
+        [&turn.user_message_id],
+    )
+    .expect("drop scope");
+    drop(conn);
+    state.effects.clear();
+    assert!(crate::event::chat::detail_undo::prepare(
+        &mut state,
+        &persistence,
+        key.pane,
+        DetailTarget::Agent(agent_id.clone()),
+        String::new(),
+    ));
+    assert!(
+        !state.effects.iter().any(|effect| matches!(
+            effect,
+            Effect::PrepareDetailUndo { .. } | Effect::ExecuteDetailUndo(_)
+        )),
+        "快照不可用时不得进入撤销：{:?}",
+        state.effects
+    );
+    assert!(
+        state
+            .pane_anywhere(key.pane)
+            .and_then(|target| target.lx.task.as_ref())
+            .is_some_and(|page| page.detail_undo_pending.is_none()),
+        "不打开确认面板"
+    );
+}
+
+/// 运行中的子 agent 与加载中的 BTW 线程都拒绝 `/undo` 预检。
+#[tokio::test]
+async fn detail_undo_rejects_busy_agent_and_btw_thread() {
+    let (fixture, mut state, key, persistence, mut streams, _parent) = fixture_with_parent();
+    let agent_id = spawn_explorer(&mut state, &mut streams, &persistence, &key, "first task").await;
+    {
+        let target = state.pane_mut_anywhere(key.pane).expect("pane");
+        target.lx.agents.ensure_composer(&agent_id);
+        let page = target.lx.task.get_or_insert_with(Default::default);
+        page.tab = TaskTab::Agents;
+        page.agent_edit = Some(agent_id.clone());
+    }
+    state.effects.clear();
+    assert!(crate::event::chat::detail_undo::prepare(
+        &mut state,
+        &persistence,
+        key.pane,
+        DetailTarget::Agent(agent_id),
+        String::new(),
+    ));
+    assert!(
+        !state.effects.iter().any(|effect| matches!(
+            effect,
+            Effect::PrepareDetailUndo { .. } | Effect::ExecuteDetailUndo(_)
+        )),
+        "运行中不得预检"
+    );
+
+    // BTW：先把 spawned run 停掉，避免影响后面的状态。
+    let child_session = streams
+        .subagents
+        .values()
+        .next()
+        .expect("handle")
+        .child_session_id
+        .clone();
+    crate::event::chat::finish_subagent(
+        &mut state,
+        &mut streams,
+        &persistence,
+        RequestKey {
+            pane: key.pane,
+            session: child_session,
+            generation: key.generation,
+        },
+        StopReason::Complete,
+        Usage::default(),
+    );
+    let thread = btw_fixture(&fixture, &mut state, &key);
+    state
+        .pane_anywhere(key.pane)
+        .expect("pane")
+        .lx
+        .btw
+        .thread_by_thread_id(&thread.id)
+        .expect("thread");
+    state
+        .pane_mut_anywhere(key.pane)
+        .expect("pane")
+        .lx
+        .btw
+        .active_thread_mut()
+        .expect("thread")
+        .pending_recipients = 1;
+    state.effects.clear();
+    assert!(crate::event::chat::detail_undo::prepare(
+        &mut state,
+        &persistence,
+        key.pane,
+        DetailTarget::Btw(thread.id),
+        String::new(),
+    ));
+    assert!(
+        !state.effects.iter().any(|effect| matches!(
+            effect,
+            Effect::PrepareDetailUndo { .. } | Effect::ExecuteDetailUndo(_)
+        )),
+        "BTW 生成中不得预检"
+    );
 }
