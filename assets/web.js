@@ -260,7 +260,7 @@ function hidePageLoading(seq) {
       if (seq !== pageLoadingState.seq) { return; }
       node.classList.add('hidden');
       node.classList.remove('leaving');
-    }, 140);
+    }, 220);
   }, wait);
 }
 

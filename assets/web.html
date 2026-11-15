@@ -41,8 +41,8 @@
 
 <div id="web-app">
   <div id="page-loading" class="page-loading hidden" role="status" aria-live="polite">
-    <div class="page-loading-spinner" aria-hidden="true"></div>
-    <div id="page-loading-label" class="page-loading-label">Loading…</div>
+    <span id="page-loading-label" class="sr-only">Loading…</span>
+    <span class="page-loading-bar" aria-hidden="true"></span>
   </div>
   <section id="view-home" class="web-view active" aria-label="Home">
     <div class="home-shell">
@@ -733,6 +733,7 @@
           <span id="usage-status" class="action-status">
             <span id="usage-status-dot" class="status-dot clean"></span>
             <span id="last-updated">Loading…</span>
+            <span id="usage-status-spinner" class="status-spinner" aria-hidden="true"></span>
           </span>
           <div class="auto-refresh-wrap">
             <span class="filter-inline-label">Auto</span>
@@ -860,6 +861,7 @@
           <span id="todo-status" class="action-status">
             <span id="todo-status-dot" class="status-dot clean"></span>
             <span id="todo-last-updated">Loading…</span>
+            <span id="todo-status-spinner" class="status-spinner" aria-hidden="true"></span>
           </span>
           <button id="todo-refresh" type="button" class="ghost">Refresh</button>
         </div>

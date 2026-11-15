@@ -330,6 +330,7 @@ async fn page_requires_token_and_serves_self_contained_assets() {
         "todo-chart-priority",
         "todo-table-container",
         "todo-pagination",
+        "todo-status-spinner",
     ] {
         assert!(
             html.contains(&format!("id=\"{hook}\"")),
@@ -354,6 +355,7 @@ async fn page_requires_token_and_serves_self_contained_assets() {
         "filter-workspace",
         "filter-session",
         "auto-refresh-filter",
+        "usage-status-spinner",
     ] {
         assert!(
             html.contains(&format!("id=\"{hook}\"")),
@@ -384,7 +386,13 @@ async fn page_requires_token_and_serves_self_contained_assets() {
     );
     assert!(
         web_css_body.contains(".page-loading") && web_css_body.contains(".skeleton"),
-        "global loading overlay and skeleton primitives present"
+        "global loading bar and skeleton primitives present"
+    );
+    assert!(
+        web_css_body.contains(".page-loading-bar")
+            && web_css_body.contains(".status-spinner")
+            && web_css_body.contains(".data-enter"),
+        "loading bar, inline spinner and data fade primitives present"
     );
     assert!(
         web_css_body.contains("prefers-reduced-motion"),

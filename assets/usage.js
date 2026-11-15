@@ -17,7 +17,8 @@ const usageState = {
   loading: false,
   requestSeq: 0,
   overview: null,
-  logPage: null
+  logPage: null,
+  initialRendered: false
 };
 
 const selects = {};
@@ -104,8 +105,14 @@ function buildFilterParams(range) {
 function setStatusIndicator(stateName, text) {
   const dot = document.getElementById('usage-status-dot');
   const label = document.getElementById('last-updated');
-  if (dot) { dot.className = 'status-dot ' + stateName; }
-  if (label) { label.textContent = text; }
+  const spinner = document.getElementById('usage-status-spinner');
+  const loading = stateName === 'loading';
+  const hasData = !!usageState.overview;
+  // 已有数据时刷新只转 spinner：不改写“Updated HH:MM:SS”，否则快速请求会闪文案。
+  if (dot && !(loading && hasData)) { dot.className = 'status-dot ' + stateName; }
+  if (spinner) { spinner.classList.toggle('on', loading); }
+  if (loading && hasData) { return; }
+  if (label) { label.textContent = loading ? 'Loading…' : text; }
 }
 
 function setErrorBanner(message) {
@@ -129,7 +136,7 @@ function isUsageViewActive() {
 async function loadUsageDashboard() {
   const reqId = ++usageState.requestSeq;
   usageState.loading = true;
-  setStatusIndicator('loading', 'Refreshing…');
+  setStatusIndicator('loading');
   const range = resolveTimeRange(usageState.rangePreset, usageState.customStart, usageState.customEnd);
   const baseParams = buildFilterParams(range);
   const logParams = Object.assign({}, baseParams, {
@@ -157,6 +164,10 @@ async function loadUsageDashboard() {
     renderSummaryCards(usageState.overview.summary || null);
     renderCharts(usageState.overview, range);
     renderTableSection();
+    if (!usageState.initialRendered) {
+      usageState.initialRendered = true;
+      usageFadeInInitial();
+    }
     setErrorBanner('');
     const nowText = new Date().toLocaleTimeString('en-US', {hour12: false});
     setStatusIndicator('clean', 'Updated ' + nowText);
@@ -182,7 +193,7 @@ async function loadUsageLogsPage(nextPage) {
   const targetPage = Math.max(1, nextPage);
   const reqId = ++usageState.requestSeq;
   usageState.loading = true;
-  setStatusIndicator('loading', 'Loading page…');
+  setStatusIndicator('loading');
   const range = resolveTimeRange(usageState.rangePreset, usageState.customStart, usageState.customEnd);
   const logParams = Object.assign({}, buildFilterParams(range), {
     page: targetPage,
@@ -300,6 +311,22 @@ function renderUsageSkeleton() {
   }
   const table = document.getElementById('table-container');
   if (table) { table.replaceChildren(usageSkeletonTable()); }
+}
+
+// 首次骨架切换为真实数据时统一淡入一次；后续刷新保留旧数据，不再触发。
+function usageFadeInInitial() {
+  for (const id of [
+    'summary-cards',
+    'chart-trend',
+    'chart-requests',
+    'chart-models',
+    'chart-providers',
+    'chart-composition',
+    'table-container'
+  ]) {
+    const host = document.getElementById(id);
+    if (host) { host.classList.add('data-enter'); }
+  }
 }
 
 function renderSummaryCards(summary) {

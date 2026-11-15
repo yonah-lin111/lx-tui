@@ -15,7 +15,8 @@ const todoState = {
   loading: false,
   requestSeq: 0,
   overview: null,
-  itemPage: null
+  itemPage: null,
+  initialRendered: false
 };
 
 const todoSelects = {};
@@ -77,8 +78,14 @@ function todoFilterParams(range) {
 function setTodoStatus(stateName, text) {
   const dot = document.getElementById('todo-status-dot');
   const label = document.getElementById('todo-last-updated');
-  if (dot) { dot.className = 'status-dot ' + stateName; }
-  if (label) { label.textContent = text; }
+  const spinner = document.getElementById('todo-status-spinner');
+  const loading = stateName === 'loading';
+  const hasData = !!todoState.overview;
+  // 已有数据时刷新只转 spinner：不改写“Updated HH:MM:SS”，否则快速请求会闪文案。
+  if (dot && !(loading && hasData)) { dot.className = 'status-dot ' + stateName; }
+  if (spinner) { spinner.classList.toggle('on', loading); }
+  if (loading && hasData) { return; }
+  if (label) { label.textContent = loading ? 'Loading…' : text; }
 }
 
 function setTodoError(message) {
@@ -101,7 +108,7 @@ function isTodoViewActive() {
 async function loadTodoDashboard() {
   const reqId = ++todoState.requestSeq;
   todoState.loading = true;
-  setTodoStatus('loading', 'Refreshing…');
+  setTodoStatus('loading');
   const range = resolveTodoRange(todoState.rangePreset, todoState.customStart, todoState.customEnd);
   const base = todoFilterParams(range);
   const itemParams = Object.assign({}, base, {
@@ -125,6 +132,10 @@ async function loadTodoDashboard() {
     renderTodoSummary(todoState.overview.summary || null);
     renderTodoCharts(todoState.overview || {}, range);
     renderTodoTableSection();
+    if (!todoState.initialRendered) {
+      todoState.initialRendered = true;
+      todoFadeInInitial();
+    }
     setTodoError('');
     const nowText = new Date().toLocaleTimeString('en-US', {hour12: false});
     setTodoStatus('clean', 'Updated ' + nowText);
@@ -150,7 +161,7 @@ async function loadTodoItemsPage(nextPage) {
   const targetPage = Math.max(1, nextPage);
   const reqId = ++todoState.requestSeq;
   todoState.loading = true;
-  setTodoStatus('loading', 'Loading page…');
+  setTodoStatus('loading');
   const range = resolveTodoRange(todoState.rangePreset, todoState.customStart, todoState.customEnd);
   const params = Object.assign({}, todoFilterParams(range), {
     page: targetPage,
@@ -233,6 +244,21 @@ function renderTodoSkeleton() {
   }
   const table = document.getElementById('todo-table-container');
   if (table) { table.replaceChildren(todoSkeletonTable()); }
+}
+
+// 首次骨架切换为真实数据时统一淡入一次；后续刷新保留旧数据，不再触发。
+function todoFadeInInitial() {
+  for (const id of [
+    'todo-summary-cards',
+    'todo-chart-trend',
+    'todo-chart-status',
+    'todo-status-legend',
+    'todo-chart-priority',
+    'todo-table-container'
+  ]) {
+    const host = document.getElementById(id);
+    if (host) { host.classList.add('data-enter'); }
+  }
 }
 
 function todoFormatNumber(value) {
