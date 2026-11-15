@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<html lang="en">
+<html lang="en" data-theme="default">
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
@@ -8,6 +8,7 @@
 <link rel="stylesheet" href="/settings.css" media="not all" id="css-settings">
 <link rel="stylesheet" href="/usage.css" media="not all" id="css-usage">
 <link rel="stylesheet" href="/todo.css" media="not all" id="css-todo">
+<link rel="stylesheet" href="/theme.css">
 </head>
 <body>
 <!-- Pixel logo definition shared by the home hero and the topbar brand. -->
@@ -27,16 +28,18 @@
 <div id="chart-tooltip" class="chart-tooltip" role="tooltip" hidden></div>
 
 <header class="web-topbar">
-  <a class="web-brand" href="#/" aria-label="lx-tui home">
-    <svg class="web-brand-logo" viewBox="0 0 20 14" aria-hidden="true"><use href="#lx-logo-art"/></svg>
-    <span>lx-tui</span>
-  </a>
-  <nav class="web-tabs" aria-label="Web console">
-    <a class="web-tab active" data-view="home" href="#/">Home</a>
-    <a class="web-tab" data-view="settings" href="#/settings">Settings</a>
-    <a class="web-tab" data-view="usage" href="#/usage">Usage</a>
-    <a class="web-tab" data-view="todo" href="#/todo">Todo</a>
-  </nav>
+  <div class="web-topbar-left">
+    <a class="web-brand" href="#/" aria-label="lx-tui home">
+      <svg class="web-brand-logo" viewBox="0 0 20 14" aria-hidden="true"><use href="#lx-logo-art"/></svg>
+    </a>
+    <nav class="web-tabs" aria-label="Web console">
+      <a class="web-tab active" data-view="home" href="#/">Home</a>
+      <a class="web-tab" data-view="settings" href="#/settings">Settings</a>
+      <a class="web-tab" data-view="usage" href="#/usage">Usage</a>
+      <a class="web-tab" data-view="todo" href="#/todo">Todo</a>
+    </nav>
+  </div>
+  <div id="web-theme-select" class="web-theme-select"></div>
 </header>
 
 <div id="web-app">

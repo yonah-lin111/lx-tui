@@ -92,6 +92,23 @@ fn logging_fields_round_trip_and_accept_legacy_bool_forms() {
 }
 
 #[test]
+fn web_theme_round_trips_and_rejects_unknown_values() {
+    let config = Config {
+        web_theme: "glass".into(),
+        ..Config::default()
+    };
+    let loaded = Config::from_json(&config.to_json()).expect("round trip");
+    assert_eq!(loaded.web_theme, "glass");
+
+    let trimmed = Config::from_json(r#"{"web_theme":" GLASS "}"#).expect("trim theme");
+    assert_eq!(trimmed.web_theme, "glass");
+    let null_theme = Config::from_json(r#"{"web_theme":null}"#).expect("null theme");
+    assert_eq!(null_theme.web_theme, "default");
+    assert!(Config::from_json(r#"{"web_theme":"neon"}"#).is_err());
+    assert!(Config::from_json(r#"{"web_theme":true}"#).is_err());
+}
+
+#[test]
 fn validate_enforces_width_relationships() {
     assert!(
         Config {

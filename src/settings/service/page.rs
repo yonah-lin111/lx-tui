@@ -10,6 +10,14 @@ pub fn html() -> &'static str {
     include_str!("../../../assets/web.html")
 }
 
+/// 页面按已持久化的主题注入 `data-theme`，避免首屏先画默认主题再闪成玻璃主题。
+///
+/// 只接受 `default` / `glass`；其它值回退 `default`，与配置校验保持一致。
+pub fn html_for_theme(theme: &str) -> String {
+    let theme = if theme == "glass" { "glass" } else { "default" };
+    html().replace("data-theme=\"default\"", &format!("data-theme=\"{theme}\""))
+}
+
 /// 静态资源：返回 `(content_type, body)`；未知路径返回 None（交由路由回 404）。
 ///
 /// 资源不含敏感内容，故不要求 token；页面与 JSON API 仍逐请求校验。
@@ -22,6 +30,10 @@ pub fn asset(path: &str) -> Option<(&'static str, &'static str)> {
         "/web.js" => Some((
             "text/javascript; charset=utf-8",
             include_str!("../../../assets/web.js"),
+        )),
+        "/theme.css" => Some((
+            "text/css; charset=utf-8",
+            include_str!("../../../assets/theme.css"),
         )),
         "/settings.css" => Some((
             "text/css; charset=utf-8",

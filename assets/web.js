@@ -61,7 +61,7 @@ function createSelect(host, config) {
   button.appendChild(caret);
   host.appendChild(button);
 
-  const menu = domEl('div', 'select-menu hidden');
+  const menu = domEl('div', 'select-menu hidden' + (optionsConfig.menuClass ? ' ' + optionsConfig.menuClass : ''));
   menu.setAttribute('role', 'listbox');
   document.body.appendChild(menu);
 
@@ -204,6 +204,82 @@ window.addEventListener('scroll', () => {
   if (typeof hideChartTooltip === 'function') { hideChartTooltip(); }
 }, true);
 
+// ===== 主题切换：顶部 select 修改外观并持久化到 settings.json =====
+// 服务端已在首屏按持久化值注入 <html data-theme>，这里只负责后续切换与跨浏览器同步。
+const WEB_THEME_OPTIONS = [
+  {value: 'default', label: 'Theme: Default'},
+  {value: 'glass', label: 'Theme: Glass'}
+];
+let webThemeSelect = null;
+let webThemeCurrent = document.documentElement.dataset.theme === 'glass' ? 'glass' : 'default';
+let webThemeTouched = false;
+
+function applyWebTheme(theme) {
+  const next = theme === 'glass' ? 'glass' : 'default';
+  webThemeCurrent = next;
+  document.documentElement.dataset.theme = next;
+  if (webThemeSelect) { webThemeSelect.setValue(next); }
+}
+
+async function loadWebTheme() {
+  const search = new URLSearchParams();
+  if (token) { search.set('token', token); }
+  try {
+    // 服务端没有独立的 GET /api/config；`/api/state` 已包含完整的 config。
+    const response = await fetch('/api/state?' + search.toString(), {
+      headers: {'Accept': 'application/json'}
+    });
+    if (!response.ok) { return; }
+    const data = await response.json();
+    const theme = data && data.config ? data.config.web_theme : '';
+    // 用户已经手动切过主题时，忽略这次迟到的初始读取，避免把选择回滚。
+    if (webThemeTouched) { return; }
+    if (theme === 'default' || theme === 'glass') { applyWebTheme(theme); }
+  } catch (_error) {
+    // 首屏主题已由服务端注入；拉取失败时保持当前外观，不打断页面。
+  }
+}
+
+async function saveWebTheme(theme) {
+  const search = new URLSearchParams();
+  if (token) { search.set('token', token); }
+  const response = await fetch('/api/config?' + search.toString(), {
+    method: 'PUT',
+    headers: {'Accept': 'application/json', 'Content-Type': 'application/json'},
+    body: JSON.stringify({config: {web_theme: theme}})
+  });
+  if (response.ok) { return; }
+  let message = 'HTTP ' + response.status;
+  try {
+    const data = await response.json();
+    if (data && data.error) { message = data.error; }
+  } catch (_error) {
+    // 保留状态码文案。
+  }
+  throw new Error(message);
+}
+
+function initWebTheme() {
+  const host = document.getElementById('web-theme-select');
+  if (!host) { return; }
+  webThemeSelect = createSelect(host, {
+    ariaLabel: 'Theme',
+    value: webThemeCurrent,
+    options: WEB_THEME_OPTIONS,
+    menuClass: 'web-theme-menu',
+    onChange: (value) => {
+      const previous = webThemeCurrent;
+      webThemeTouched = true;
+      applyWebTheme(value);
+      saveWebTheme(value).catch((error) => {
+        applyWebTheme(previous);
+        showToast('Failed to save theme: ' + error.message, 'error');
+      });
+    }
+  });
+  loadWebTheme();
+}
+
 // ===== 视图路由 =====
 
 const VIEWS = ['home', 'settings', 'usage', 'todo'];
@@ -335,6 +411,7 @@ function initOnce(key, label, fn) {
 
 function bootWeb() {
   const initial = viewFromLocation();
+  initWebTheme();
   const path = location.pathname.replace(/\/+$/, '') || '/';
   // 旧地址统一重写为 /?token=...#/<view>，之后切换只改 hash。
   if (path === '/settings' || path === '/usage' || path === '/todo') {

@@ -103,6 +103,14 @@ async fn page_requires_token_and_serves_self_contained_assets() {
         "web shell assets linked"
     );
     assert!(
+        html.contains("id=\"web-theme-select\"") && html.contains("href=\"/theme.css\""),
+        "topbar theme selector and its stylesheet are linked"
+    );
+    assert!(
+        !html.contains("<span>lx-tui</span>"),
+        "topbar brand text removed; only the logo remains"
+    );
+    assert!(
         html.contains("id=\"page-loading\"") && html.contains("id=\"page-loading-label\""),
         "global view-loading overlay present"
     );
@@ -399,6 +407,21 @@ async fn page_requires_token_and_serves_self_contained_assets() {
         "loading animations respect reduced motion"
     );
 
+    let theme_css = request(port, &get("/theme.css")).await;
+    assert_eq!(status(&theme_css), 200);
+    assert!(theme_css.contains("text/css"), "theme css content type");
+    let theme_css_body = body(&theme_css);
+    assert!(
+        theme_css_body.contains("html[data-theme=\"glass\"]")
+            && theme_css_body.contains("--glass-blur")
+            && theme_css_body.contains(".web-topbar"),
+        "glass theme is scoped to the data-theme attribute"
+    );
+    assert!(
+        theme_css_body.contains("backdrop-filter"),
+        "glass surfaces use backdrop blur"
+    );
+
     let web_js = request(port, &get("/web.js")).await;
     assert_eq!(status(&web_js), 200);
     assert!(web_js.contains("javascript"), "web js content type");
@@ -410,9 +433,15 @@ async fn page_requires_token_and_serves_self_contained_assets() {
         "function showPageLoading",
         "function hidePageLoading",
         "function resetPageLoading",
+        "function initWebTheme",
+        "function applyWebTheme",
     ] {
-        assert!(web_js_body.contains(entry), "global loading: {entry}");
+        assert!(web_js_body.contains(entry), "web js entry: {entry}");
     }
+    assert!(
+        web_js_body.contains("web_theme") && web_js_body.contains("/api/config"),
+        "theme selection persists through the config API"
+    );
     assert!(
         web_js_body.contains("function createSelect") && web_js_body.contains("function showToast"),
         "shared select/toast live in web.js"
@@ -504,6 +533,7 @@ async fn page_requires_token_and_serves_self_contained_assets() {
         ("skills_js", skills_js_body),
         ("subagents_js", subagents_js_body),
         ("web_css", web_css_body),
+        ("theme_css", theme_css_body),
         ("web_js", web_js_body),
         ("usage_css", usage_css_body),
         ("usage_js", usage_js_body),

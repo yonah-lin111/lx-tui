@@ -64,21 +64,79 @@ body.resizing { cursor: col-resize; user-select: none; }
   display: flex;
   align-items: center;
   justify-content: space-between;
-  gap: 24px;
+  gap: 16px;
   padding: 0 20px;
   background: var(--panel);
   border-bottom: 1px solid var(--border);
 }
+/* 顶栏左侧只留 logo 与紧邻的 tab；右侧由主题 select 收口。 */
+.web-topbar-left { display: flex; align-items: stretch; gap: 10px; min-width: 0; height: 100%; }
 .web-brand {
   display: inline-flex;
   align-items: center;
-  gap: 8px;
+  align-self: center;
   color: var(--text);
   text-decoration: none;
-  font-weight: 600;
-  letter-spacing: .04em;
 }
 .web-brand-logo { width: 26px; height: auto; }
+.web-theme-select { flex: 0 0 auto; width: 152px; }
+/* 顶栏主题 select 自包含样式：Home 视图下三张视图样式表都处于挂起状态，
+   不能依赖 settings.css / usage.css / todo.css 里的 .select-* 基础规则。 */
+.web-theme-select .select-button {
+  display: flex;
+  width: 100%;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 4px 10px;
+  border: 1px solid var(--border-strong);
+  background: var(--field);
+  color: var(--text);
+  font: inherit;
+  font-size: 12px;
+  line-height: 1.4;
+  text-align: left;
+  cursor: pointer;
+}
+.web-theme-select .select-button:hover { border-color: var(--border-overlay); background: var(--field-hover); }
+.web-theme-select .select-button:focus-visible { outline: 1px solid var(--accent); border-color: var(--accent); }
+.web-theme-select .select-button[aria-expanded="true"] { border-color: var(--accent); background: var(--field-hover); }
+.web-theme-select .select-label { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.web-theme-select .select-caret { flex-shrink: 0; color: var(--muted); font-size: 10px; }
+.web-theme-menu {
+  position: fixed;
+  z-index: var(--z-menu);
+  left: 0;
+  right: auto;
+  max-height: 240px;
+  overflow-y: auto;
+  padding: 4px;
+  border: 1px solid var(--border-overlay);
+  background: var(--overlay);
+  color: var(--text);
+  font: inherit;
+  box-shadow: var(--shadow-overlay);
+}
+.web-theme-menu .select-option {
+  display: block;
+  width: 100%;
+  padding: 6px 10px;
+  border: 0;
+  background: none;
+  color: var(--text);
+  font: inherit;
+  font-size: 12px;
+  text-align: left;
+  cursor: pointer;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.web-theme-menu .select-option:hover,
+.web-theme-menu .select-option.active { background: var(--option-hover); color: #fff; }
+.web-theme-menu .select-option.selected { background: var(--option-selected); color: #fff; font-weight: 600; }
+.web-theme-menu .select-option.selected:hover,
+.web-theme-menu .select-option.selected.active { background: var(--option-selected); }
 .web-tabs { display: flex; align-items: stretch; gap: 4px; height: 100%; }
 .web-tab {
   display: inline-flex;

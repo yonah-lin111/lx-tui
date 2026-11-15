@@ -39,6 +39,8 @@ pub struct Config {
     pub log_level: String,
     /// 是否记录原始请求/响应 payload（默认关闭）。
     pub log_payload: bool,
+    /// Web 控制台主题：`default`（黑白灰）或 `glass`（iOS 液态玻璃）。
+    pub web_theme: String,
 }
 
 impl Default for Config {
@@ -55,6 +57,7 @@ impl Default for Config {
             image_download_dir: String::new(),
             log_level: "info".into(),
             log_payload: false,
+            web_theme: "default".into(),
         }
     }
 }
@@ -102,6 +105,11 @@ impl Config {
                 "log_level must be one of trace|debug|info|warn|error|off".into(),
             ));
         }
+        if !matches!(self.web_theme.as_str(), "default" | "glass") {
+            return Err(ConfigError::Invalid(
+                "web_theme must be one of default|glass".into(),
+            ));
+        }
         Ok(())
     }
 
@@ -135,7 +143,8 @@ impl Config {
                 "  \"min_pane_height\": {},\n",
                 "  \"image_download_dir\": {},\n",
                 "  \"log_level\": {},\n",
-                "  \"log_payload\": {}\n",
+                "  \"log_payload\": {},\n",
+                "  \"web_theme\": {}\n",
                 "}}\n"
             ),
             self.sidebar_width,
@@ -149,6 +158,7 @@ impl Config {
             escape_json_string(&self.image_download_dir),
             escape_json_string(&self.log_level),
             self.log_payload,
+            escape_json_string(&self.web_theme),
         )
     }
 
@@ -194,6 +204,18 @@ impl Config {
                 config.log_payload = json_bool(value)
                     .ok_or_else(|| ConfigError::Invalid("log_payload must be a boolean".into()))?;
                 continue;
+            }
+            if key == "web_theme" {
+                match value {
+                    JsonValue::String(theme) => {
+                        config.web_theme = theme.trim().to_ascii_lowercase();
+                        continue;
+                    }
+                    JsonValue::Null => continue,
+                    _ => {
+                        return Err(ConfigError::Invalid("web_theme must be a string".into()));
+                    }
+                }
             }
             let slot = match key.as_str() {
                 "sidebar_width" => &mut config.sidebar_width,

@@ -239,7 +239,11 @@ pub async fn route(request: &Request, state: &ServiceState) -> Response {
     }
     match (request.method.as_str(), request.path.as_str()) {
         ("GET", "/") | ("GET", "/settings") | ("GET", "/usage") | ("GET", "/todo") => {
-            Response::ok("text/html; charset=utf-8", page::html().to_string())
+            // 首屏直接按持久化主题渲染，避免默认主题先闪一帧再切到玻璃主题。
+            let theme = crate::config::load_or_default(state.config_path())
+                .map(|config| config.web_theme)
+                .unwrap_or_else(|_| "default".into());
+            Response::ok("text/html; charset=utf-8", page::html_for_theme(&theme))
         }
         ("GET", "/api/state") => state_json(state),
         ("PUT", "/api/config") => put_config(request, state),
@@ -502,6 +506,16 @@ fn config_from_json(
                 _ => return Err("image_download_dir must be a string".into()),
             }
         }
+        if key == "web_theme" {
+            match value {
+                JsonValue::String(text) => {
+                    config.web_theme = text.trim().to_ascii_lowercase();
+                    continue;
+                }
+                JsonValue::Null => continue,
+                _ => return Err("web_theme must be a string".into()),
+            }
+        }
         let slot = match key.as_str() {
             "sidebar_width" => &mut config.sidebar_width,
             "sidebar_min_width" => &mut config.sidebar_min_width,
@@ -721,7 +735,7 @@ fn command_view_json(view: &CommandView) -> String {
 /// 配置 → JSON（键序固定）。
 fn config_json(config: &Config) -> String {
     format!(
-        "{{\"sidebar_width\":{},\"sidebar_min_width\":{},\"sidebar_max_width\":{},\"narrow_width\":{},\"min_width\":{},\"min_height\":{},\"min_pane_width\":{},\"min_pane_height\":{},\"image_download_dir\":{},\"log_level\":{},\"log_payload\":{}}}",
+        "{{\"sidebar_width\":{},\"sidebar_min_width\":{},\"sidebar_max_width\":{},\"narrow_width\":{},\"min_width\":{},\"min_height\":{},\"min_pane_width\":{},\"min_pane_height\":{},\"image_download_dir\":{},\"log_level\":{},\"log_payload\":{},\"web_theme\":{}}}",
         config.sidebar_width,
         config.sidebar_min_width,
         config.sidebar_max_width,
@@ -733,6 +747,7 @@ fn config_json(config: &Config) -> String {
         json_string(&config.image_download_dir),
         json_string(&config.log_level),
         config.log_payload,
+        json_string(&config.web_theme),
     )
 }
 
