@@ -2,8 +2,9 @@
 //!
 //! `GET /`、`GET /settings`、`GET /usage`、`GET /todo` 都返回同一份 `web.html`，由前端按
 //! `location.pathname` / `location.hash` 选择初始视图；`web.css` / `web.js` 提供
-//! 全局外壳、共享核心与路由，`settings*.{css,js}`、`usage*.{css,js}`、`todo*.{css,js}`
-//! 仍按视图独立加载。所有资源自包含、无外部依赖，遵循 `docs/standards/html-assets.md`。
+//! 全局外壳、共享核心与路由，`settings*.{css,js}`、`usage*.{css,js}`、`todo*.{css,js}`、
+//! `theme.css` 与 `home.js` 仍按职责独立加载。所有资源自包含、无外部依赖，
+//! 遵循 `docs/standards/html-assets.md`。
 
 /// 统一 Web 控制台正文；`token` 从 `location.search` 读取，所有请求附带。
 pub fn html() -> &'static str {

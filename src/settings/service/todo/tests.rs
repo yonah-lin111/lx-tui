@@ -175,6 +175,31 @@ async fn todo_home_returns_summary_and_limited_open_items() {
 }
 
 #[tokio::test]
+async fn todo_home_caps_open_items_at_five() {
+    let (service, _events, _dir) = start_todo_service("home-limit").await;
+    let port = service.port();
+    let token = service.token().to_string();
+    let today = today_date();
+
+    let db = Database::open(&db_path_for(&service)).expect("open db");
+    seed_todos(&db);
+    let extra = TodoRecord::new_on(&today, "extra-open", TodoStatus::Todo, TodoPriority::P3, 5);
+    db.save_todo(&extra).expect("save extra");
+    drop(db);
+
+    let resp = request(port, &get(&format!("/api/todo/home?token={token}"))).await;
+    assert_eq!(status(&resp), 200, "home: {}", body(&resp));
+    let home: Value = serde_json::from_str(body(&resp)).expect("home json");
+    let items = home["items"].as_array().expect("items");
+    assert_eq!(items.len(), 5, "Home 固定最多 5 条");
+    assert!(
+        items.iter().all(|item| item["text"] != "extra-open"),
+        "超出 limit 的低优先级条目不得出现"
+    );
+    assert_eq!(home["summary"]["todayOpen"], 5);
+}
+
+#[tokio::test]
 async fn todo_overview_overdue_ignores_date_range() {
     let (service, _events, _dir) = start_todo_service("overdue").await;
     let port = service.port();
@@ -272,6 +297,66 @@ async fn todo_items_filters_and_paginates() {
     assert_eq!(done["total"], 1, "status 与 priority 必须同时生效");
     assert_eq!(done["rows"][0]["text"], "zeta-g");
     assert!(done["rows"][0]["completedDate"].as_str().is_some());
+}
+
+#[tokio::test]
+async fn todo_range_swaps_inverted_dates() {
+    let (service, _events, _dir) = start_todo_service("range-swap").await;
+    let port = service.port();
+    let token = service.token().to_string();
+    let today = today_date();
+    let yesterday = shift_date(&today, -1);
+
+    let db = Database::open(&db_path_for(&service)).expect("open db");
+    seed_todos(&db);
+    drop(db);
+
+    let ordered = request(
+        port,
+        &get(&format!(
+            "/api/todo/overview?token={token}&startDate={yesterday}&endDate={today}"
+        )),
+    )
+    .await;
+    let inverted = request(
+        port,
+        &get(&format!(
+            "/api/todo/overview?token={token}&startDate={today}&endDate={yesterday}"
+        )),
+    )
+    .await;
+    assert_eq!(status(&ordered), 200, "ordered: {}", body(&ordered));
+    assert_eq!(status(&inverted), 200, "inverted: {}", body(&inverted));
+    let ordered: Value = serde_json::from_str(body(&ordered)).expect("ordered json");
+    let inverted: Value = serde_json::from_str(body(&inverted)).expect("inverted json");
+    assert_eq!(
+        ordered, inverted,
+        "startDate > endDate 必须交换后得到同一结果集"
+    );
+}
+
+#[tokio::test]
+async fn todo_page_size_is_clamped_over_http() {
+    let (service, _events, _dir) = start_todo_service("page-size").await;
+    let port = service.port();
+    let token = service.token().to_string();
+
+    let db = Database::open(&db_path_for(&service)).expect("open db");
+    seed_todos(&db);
+    drop(db);
+
+    for (query, expected) in [("pageSize=0", 1), ("pageSize=999", 200)] {
+        let resp = request(
+            port,
+            &get(&format!("/api/todo/items?token={token}&{query}")),
+        )
+        .await;
+        assert_eq!(status(&resp), 200, "{query}: {}", body(&resp));
+        let page: Value = serde_json::from_str(body(&resp)).expect("items json");
+        assert_eq!(page["pageSize"], expected, "{query} 必须钳制");
+        assert_eq!(page["page"], 1);
+        assert_eq!(page["total"], 7);
+    }
 }
 
 #[tokio::test]

@@ -1,6 +1,7 @@
 //! Todo 看板 JSON API：`/api/todo/*` 路由、查询参数解析与聚合序列化。
 //!
-//! 只读接口：`overview` 返回汇总卡、按日聚合与聚合组统计，`items` 返回分页明细。
+//! 只读接口：`overview` 返回汇总卡、按日聚合与聚合组统计，`items` 返回分页明细，
+//! `home` 返回 Home 摘要卡的计数与今日/逾期条目。
 //! 底层查询委托给 [`crate::db::Database`] 的 `query_todo_*` 方法。
 
 use std::collections::HashMap;

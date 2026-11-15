@@ -159,8 +159,8 @@ html:not([data-theme="glass"]) .web-theme-menu .select-option.selected.active { 
 #web-app { flex: 1 1 auto; min-height: 0; position: relative; }
 .web-view { position: absolute; inset: 0; display: none; }
 .web-view.active { display: block; animation: view-in .18s ease-out; }
-/* 切页只做 4px 上移淡入：足够让切换有“落位”感，又不会拖慢操作。 */
-@keyframes view-in { from { opacity: 0; transform: translateY(4px); } to { opacity: 1; transform: none; } }
+/* 只做透明度淡入：主题切换时动画属性重新生效也不会让整页位移。 */
+@keyframes view-in { from { opacity: 0; } to { opacity: 1; } }
 
 /* ===== Home ===== */
 .home-shell {
@@ -228,6 +228,8 @@ html:not([data-theme="glass"]) .web-theme-menu .select-option.selected.active { 
 .home-todo-meta.overdue { color: var(--err); }
 .home-todo-note { margin: 0; color: var(--muted); font-size: 12px; }
 .home-todo-note.error { color: var(--err); }
+.home-todo-note.retry { cursor: pointer; text-decoration: underline; }
+.home-todo-note.retry:focus-visible { outline: 1px solid var(--accent); outline-offset: 2px; }
 
 /* ===== 视图外壳 ===== */
 .settings-shell { display: flex; height: 100%; overflow: hidden; }
@@ -356,6 +358,13 @@ html:not([data-theme="glass"]) .web-theme-menu .select-option.selected.active { 
 @media (prefers-reduced-motion: reduce) {
   .skeleton, .skeleton::after, .status-spinner.on, .page-loading-bar, .data-enter { animation: none; }
   .web-view.active { animation: none; }
+  /* 兜底所有组件动效（toast、状态点脉冲、图表条形、按钮缩放等），不只覆盖外壳。 */
+  *, *::before, *::after {
+    animation-duration: .01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: .01ms !important;
+    scroll-behavior: auto !important;
+  }
 }
 
 /* ===== 窄屏 ===== */
@@ -366,6 +375,12 @@ html:not([data-theme="glass"]) .web-theme-menu .select-option.selected.active { 
 @media (max-width: 640px) {
   .home-links { flex-direction: column; }
   .home-logo { width: 120px; }
-  .web-topbar { padding: 0 12px; }
+  .web-topbar { padding: 0 12px; gap: 8px; }
+  /* tab 可横向滚动；主题 select 收成箭头按钮，避免右侧被挤出视口。 */
+  .web-tabs { min-width: 0; overflow-x: auto; scrollbar-width: none; }
+  .web-tabs::-webkit-scrollbar { display: none; }
   .web-tab { padding: 0 10px; }
+  .web-theme-select { width: 44px; }
+  .web-theme-select .select-label { display: none; }
+  .web-theme-select .select-button { justify-content: center; padding: 4px 8px; }
 }

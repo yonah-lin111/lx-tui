@@ -169,7 +169,9 @@ impl Database {
     /// `done` 与未来日期不进入卡片。
     pub fn query_todo_home(&self, today: &str, limit: usize) -> Result<TodoHome> {
         let limit = limit.clamp(1, 20);
-        let counts: (i64, i64, i64) = self.conn.query_row(
+        // 计数与列表必须来自同一读快照，避免 TUI 并发写入时出现数字与条目对不上。
+        let transaction = self.conn.unchecked_transaction()?;
+        let counts: (i64, i64, i64) = transaction.query_row(
             "SELECT
                  COALESCE(SUM(CASE WHEN entry_date = ?1 AND status != 'done' THEN 1 ELSE 0 END), 0),
                  COALESCE(SUM(CASE WHEN entry_date <= ?1 AND status = 'in_progress' THEN 1 ELSE 0 END), 0),
@@ -195,7 +197,7 @@ impl Database {
                               END,
                               t.entry_date ASC, t.position ASC, t.id ASC
                      LIMIT ?2"#;
-        let mut statement = self.conn.prepare(sql)?;
+        let mut statement = transaction.prepare(sql)?;
         let rows = statement.query_map(
             params![today, i64::try_from(limit).unwrap_or(i64::MAX)],
             |row| {
@@ -209,6 +211,8 @@ impl Database {
         for row in rows {
             items.push(row?);
         }
+        drop(statement);
+        transaction.commit()?;
 
         Ok(TodoHome {
             today_open: count_to_usize(counts.0),

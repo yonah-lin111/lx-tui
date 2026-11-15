@@ -825,6 +825,28 @@ fn pending_g_is_cleared_by_non_g_keys_and_clear_done_preserves_edit_commit() {
 }
 
 #[test]
+fn list_c_key_is_swallowed_without_state_change() {
+    let mut state = todo_state(&["alpha"]);
+
+    // 字符统计块删除后 `c` 不再切换图表；列表态必须吞掉且不产生任何副作用。
+    assert!(!apply_todo_key(&mut state, TodoKey::Char('c')));
+    assert_eq!(texts(&state), vec!["alpha"]);
+    assert_eq!(state.todo.selected(), Some(0));
+    assert!(!state.todo.pending_g());
+
+    // 编辑态仍按普通字符输入，不能被列表态的吞键规则影响。
+    assert!(apply_todo_key(&mut state, TodoKey::Enter));
+    assert!(apply_todo_key(&mut state, TodoKey::Char('c')));
+    assert!(
+        state
+            .todo
+            .edit_input()
+            .is_some_and(|input| input.text().contains('c')),
+        "编辑态必须能输入 c"
+    );
+}
+
+#[test]
 fn todo_item_and_blank_context_menu_commands_execute() {
     use crate::app::overlay::{MenuCommand, Overlay, OverlayTarget};
 

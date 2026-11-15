@@ -16,7 +16,8 @@ const todoState = {
   requestSeq: 0,
   overview: null,
   itemPage: null,
-  initialRendered: false
+  initialRendered: false,
+  lastFilterKey: ''
 };
 
 const todoSelects = {};
@@ -105,12 +106,21 @@ function isTodoViewActive() {
   return !!section && section.classList.contains('active');
 }
 
+// 筛选/搜索/页码变化后回到内容顶部；手动 Refresh 保持当前滚动位置。
+function todoScrollToTop() {
+  const main = document.querySelector('#view-todo .todo-main');
+  if (main) { main.scrollTop = 0; }
+}
+
 async function loadTodoDashboard() {
   const reqId = ++todoState.requestSeq;
   todoState.loading = true;
   setTodoStatus('loading');
   const range = resolveTodoRange(todoState.rangePreset, todoState.customStart, todoState.customEnd);
   const base = todoFilterParams(range);
+  const filterKey = JSON.stringify(base);
+  const resetScroll = filterKey !== todoState.lastFilterKey;
+  todoState.lastFilterKey = filterKey;
   const itemParams = Object.assign({}, base, {
     page: todoState.page,
     pageSize: todoState.pageSize
@@ -132,6 +142,7 @@ async function loadTodoDashboard() {
     renderTodoSummary(todoState.overview.summary || null);
     renderTodoCharts(todoState.overview || {}, range);
     renderTodoTableSection();
+    if (resetScroll) { todoScrollToTop(); }
     if (!todoState.initialRendered) {
       todoState.initialRendered = true;
       todoFadeInInitial();
@@ -179,6 +190,7 @@ async function loadTodoItemsPage(nextPage) {
       return loadTodoItemsPage(totalPages);
     }
     renderTodoTableSection();
+    todoScrollToTop();
     setTodoError('');
     const nowText = new Date().toLocaleTimeString('en-US', {hour12: false});
     setTodoStatus('clean', 'Updated ' + nowText);
@@ -456,7 +468,7 @@ function renderGroupsTable(container, groups) {
   ];
   const {table, tbody} = todoBuildTable(headers);
   if (!groups.length) {
-    todoAppendEmptyRow(tbody, headers.length);
+    todoAppendEmptyRow(tbody, headers.length, 'No grouped todos in the selected range.');
     container.appendChild(table);
     return;
   }
@@ -467,17 +479,36 @@ function renderGroupsTable(container, groups) {
     labelTd.title = String(group.groupId || group.label || '--');
     tr.appendChild(labelTd);
 
+    // 单元格顺序必须与表头 Date / Group / Items / Top Priority 一致。
+    tr.appendChild(domEl('td', 'num', todoFormatNumber(group.items)));
+
     const priorityTd = domEl('td');
     priorityTd.appendChild(domEl('span', todoPriorityClass(group.topPriority), group.topPriority || 'P1'));
     tr.appendChild(priorityTd);
 
-    tr.appendChild(domEl('td', 'num', todoFormatNumber(group.items)));
     tr.appendChild(domEl('td', 'num', todoFormatNumber(group.open)));
     tr.appendChild(domEl('td', 'num', todoFormatNumber(group.inProgress)));
     tr.appendChild(domEl('td', 'num', todoFormatNumber(group.done)));
     tbody.appendChild(tr);
   }
   container.appendChild(table);
+}
+
+// 只同步 tab 选中态与分页可见性；Home 跳转在数据返回前也要立即纠正界面。
+function todoSyncTableTabState() {
+  for (const [key, id] of [
+    ['todos', 'tab-btn-todos'],
+    ['daily', 'tab-btn-daily'],
+    ['groups', 'tab-btn-groups']
+  ]) {
+    const btn = document.getElementById(id);
+    if (!btn) { continue; }
+    const active = todoState.activeTab === key;
+    btn.classList.toggle('active', active);
+    btn.setAttribute('aria-selected', active ? 'true' : 'false');
+  }
+  const pagination = document.getElementById('todo-pagination');
+  if (pagination) { pagination.classList.toggle('hidden', todoState.activeTab !== 'todos'); }
 }
 
 function renderTodoPagination(itemPage) {
@@ -554,6 +585,8 @@ function todoFocusFromHome(text) {
   }
   const customWrap = document.getElementById('todo-custom-range');
   if (customWrap) { customWrap.classList.add('hidden'); }
+  // 慢请求/失败时界面也要立刻切回 Todos，不能停留在旧的 Daily/Groups。
+  todoSyncTableTabState();
   // 首次进入由 initOnce 带着当前状态加载；已初始化或首次加载仍在途时主动刷新，
   // 后者由 requestSeq 丢弃旧响应。
   if (window.__webInit && (window.__webInit.todo === 'done' || window.__webInit.todo === 'running')) {

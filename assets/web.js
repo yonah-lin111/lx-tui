@@ -90,6 +90,16 @@ function createSelect(host, config) {
       row.onclick = () => choose(opt.value, true);
       menu.appendChild(row);
     });
+    // 键盘移动时让 active 行保持在菜单可视区内，避免 Enter 选中看不见的项。
+    const activeRow = menu.querySelectorAll(':scope > .select-option')[active];
+    if (activeRow && menu.scrollHeight > menu.clientHeight) {
+      const top = activeRow.offsetTop;
+      const bottom = top + activeRow.offsetHeight;
+      if (top < menu.scrollTop) { menu.scrollTop = top; }
+      else if (bottom > menu.scrollTop + menu.clientHeight) {
+        menu.scrollTop = bottom - menu.clientHeight;
+      }
+    }
     syncSegmentPill(menu, SELECT_MENU_CONFIG, false);
   };
 
@@ -153,6 +163,8 @@ function createSelect(host, config) {
       if (!opened) { open(); return; }
       const step = evt.key === 'ArrowDown' ? 1 : -1;
       active = (active + step + options.length) % Math.max(1, options.length);
+      // 键盘接管后清除鼠标 hover 预览，否则胶囊会停在旧行。
+      clearSegmentPreview(menu, SELECT_MENU_CONFIG, 'hover');
       renderMenu();
       return;
     }
@@ -162,6 +174,7 @@ function createSelect(host, config) {
       if (options[active]) { choose(options[active].value, true); }
       return;
     }
+    if (evt.key === 'Tab') { close(); return; }
     if (evt.key === 'Escape') { close(); }
   });
 
@@ -170,6 +183,12 @@ function createSelect(host, config) {
     menu: menu,
     value: () => current,
     close: close,
+    // 宿主被整块重绘丢弃时调用：菜单挂在 body 上，必须显式移除。
+    destroy: () => {
+      close();
+      if (menu.parentNode) { menu.parentNode.removeChild(menu); }
+      host._selectMenu = null;
+    },
     reposition: reposition,
     setOptions: (next, value) => {
       options = next || [];
@@ -219,6 +238,10 @@ const WEB_THEME_OPTIONS = [
 let webThemeSelect = null;
 let webThemeCurrent = document.documentElement.dataset.theme === 'glass' ? 'glass' : 'default';
 let webThemeTouched = false;
+// 保存串行化：连续切换时 PUT 按点击顺序落盘，失败只回滚到最后一次成功持久化的主题。
+let webThemePersisted = webThemeCurrent;
+let webThemeSaveSeq = 0;
+let webThemeSaveChain = Promise.resolve();
 
 function applyWebTheme(theme) {
   const next = theme === 'glass' ? 'glass' : 'default';
@@ -243,7 +266,10 @@ async function loadWebTheme() {
     const theme = data && data.config ? data.config.web_theme : '';
     // 用户已经手动切过主题时，忽略这次迟到的初始读取，避免把选择回滚。
     if (webThemeTouched) { return; }
-    if (theme === 'default' || theme === 'glass') { applyWebTheme(theme); }
+    if (theme === 'default' || theme === 'glass') {
+      webThemePersisted = theme;
+      applyWebTheme(theme);
+    }
   } catch (_error) {
     // 首屏主题已由服务端注入；拉取失败时保持当前外观，不打断页面。
   }
@@ -277,13 +303,18 @@ function initWebTheme() {
     options: WEB_THEME_OPTIONS,
     menuClass: 'web-theme-menu',
     onChange: (value) => {
-      const previous = webThemeCurrent;
+      const seq = ++webThemeSaveSeq;
       webThemeTouched = true;
       applyWebTheme(value);
-      saveWebTheme(value).catch((error) => {
-        applyWebTheme(previous);
-        showToast('Failed to save theme: ' + error.message, 'error');
-      });
+      webThemeSaveChain = webThemeSaveChain
+        .then(() => saveWebTheme(value))
+        .then(() => { webThemePersisted = value; })
+        .catch((error) => {
+          // 已有更新的选择在排队时不要回滚，交给最后一次保存决定最终状态。
+          if (seq !== webThemeSaveSeq) { return; }
+          applyWebTheme(webThemePersisted);
+          showToast('Failed to save theme: ' + error.message, 'error');
+        });
     }
   });
   loadWebTheme();
@@ -583,8 +614,9 @@ function showView(view) {
   if (view === 'home' && typeof window.loadHomeSummary === 'function') {
     window.loadHomeSummary();
   }
-  // 离开 Usage 时收起图表 tooltip，避免它脱离视图样式表后裸露在别的视图上。
+  // 离开 Usage / Todo 时收起图表 tooltip，避免它脱离视图样式表后裸露在别的视图上。
   if (view !== 'usage' && typeof hideChartTooltip === 'function') { hideChartTooltip(); }
+  if (view !== 'todo' && typeof todoChartHideTooltip === 'function') { todoChartHideTooltip(); }
   document.title = VIEW_TITLES[view];
 }
 

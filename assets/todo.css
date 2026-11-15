@@ -25,6 +25,11 @@
 }
 
 .todo-main {
+  /* 图表与徽标色令牌：SVG 图表仍用 JS 调色板，CSS 图例与徽标引用这里。 */
+  --todo-chart-planned: #60a5fa;
+  --todo-chart-done: #3ecf8e;
+  --todo-in-progress: #60a5fa;
+  --todo-p0: #ef6b6b;
   flex: 1 1 auto;
   min-height: 0;
   overflow-y: auto;
@@ -319,8 +324,6 @@ button.ghost:disabled { opacity: .45; cursor: default; }
   white-space: nowrap;
 }
 .todo-table th {
-  position: sticky;
-  top: 0;
   background: var(--panel-raised);
   color: var(--muted);
   font-size: 11px;
@@ -360,10 +363,10 @@ button.ghost:disabled { opacity: .45; cursor: default; }
   text-transform: lowercase;
 }
 .todo-status-todo { color: var(--muted); border-color: var(--border-strong); }
-.todo-status-in_progress { color: #60a5fa; border-color: #60a5fa; }
+.todo-status-in_progress { color: var(--todo-in-progress); border-color: var(--todo-in-progress); }
 .todo-status-done { color: var(--ok); border-color: var(--ok); }
 
-.todo-priority-p0 { color: #ef6b6b; border-color: #ef6b6b; font-weight: 600; }
+.todo-priority-p0 { color: var(--todo-p0); border-color: var(--todo-p0); font-weight: 600; }
 .todo-priority-p1 { color: var(--warn); border-color: var(--warn); font-weight: 600; }
 .todo-priority-p2 { color: var(--text); border-color: var(--border-overlay); }
 .todo-priority-p3 { color: var(--faint); border-color: var(--border); }
@@ -402,9 +405,7 @@ button.ghost:disabled { opacity: .45; cursor: default; }
  */
 
 .todo-charts {
-  /* 图表颜色令牌：SVG 侧以 TODO_CHART_COLORS 为准，此处仅供 HTML 静态图例复用。 */
-  --todo-chart-planned: #60a5fa;
-  --todo-chart-done: #3ecf8e;
+  /* 颜色令牌定义在 `.todo-main`，避免元素自身声明压过 Glass 覆盖。 */
   min-width: 0;
 }
 

@@ -176,6 +176,10 @@ function presetHasForm(preset) {
 
 function renderPresetFormFields(preset) {
   const host = document.getElementById('preset-form-fields');
+  // select 菜单挂在 body 上，宿主重绘前必须销毁，否则每次改字段都残留一个菜单。
+  for (const selectHost of host.querySelectorAll('.select-host')) {
+    if (selectHost._selectInstance) { selectHost._selectInstance.destroy(); }
+  }
   while (host.firstChild) { host.removeChild(host.firstChild); }
   const answers = preset.formAnswers || (preset.formAnswers = {});
   const seen = new Set();

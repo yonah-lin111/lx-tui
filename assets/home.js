@@ -18,6 +18,24 @@ function homeSetNote(text, isError) {
   note.textContent = text || '';
   note.classList.toggle('error', !!isError);
   note.classList.toggle('hidden', !text);
+  const retry = !!isError && !homeState.loaded;
+  note.classList.toggle('retry', retry);
+  if (retry) {
+    note.setAttribute('role', 'button');
+    note.tabIndex = 0;
+    note.onclick = () => loadHomeSummary();
+    note.onkeydown = (event) => {
+      if (event.key === 'Enter' || event.key === ' ') {
+        event.preventDefault();
+        loadHomeSummary();
+      }
+    };
+  } else {
+    note.removeAttribute('role');
+    note.removeAttribute('tabindex');
+    note.onclick = null;
+    note.onkeydown = null;
+  }
 }
 
 function homeRenderStats(summary) {

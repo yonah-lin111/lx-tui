@@ -596,6 +596,18 @@ async fn page_requires_token_and_serves_self_contained_assets() {
         "todo status width follows its label"
     );
 
+    let todo_charts_js = request(port, &get("/todo_charts.js")).await;
+    assert_eq!(status(&todo_charts_js), 200);
+    assert!(
+        todo_charts_js.contains("javascript"),
+        "todo charts js content type"
+    );
+    let todo_charts_js_body = body(&todo_charts_js);
+    assert!(
+        !todo_charts_js_body.contains(".innerHTML"),
+        "no innerHTML in todo charts js"
+    );
+
     let todo_js = request(port, &get("/todo.js")).await;
     assert_eq!(status(&todo_js), 200);
     assert!(todo_js.contains("javascript"), "todo js content type");
@@ -645,7 +657,9 @@ async fn page_requires_token_and_serves_self_contained_assets() {
         ("usage_js", usage_js_body),
         ("usage_charts_js", usage_charts_js_body),
         ("todo_css", todo_css_body),
+        ("todo_charts_js", todo_charts_js_body),
         ("todo_js", todo_js_body),
+        ("home_js", home_js_body),
     ] {
         assert!(
             !text.contains("https://"),
