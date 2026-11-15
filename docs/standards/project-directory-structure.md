@@ -127,7 +127,7 @@ lx-tui/
       usage/                    模型调用统计流水表（usage_log）：写入、供应商名称与历史成本同步（mod.rs）、
                                 按时间/模型/供应商/会话聚合与分页查询（queries.rs）
       todo.rs                   全局 Todo 面板持久化：按日读取、UPSERT、重排、跨日顺延与聚合组清理
-      todo/query.rs             Web 控制台 Todo 看板只读查询：筛选、分页、汇总、按日聚合与聚合组统计
+      todo/query.rs             Web 控制台 Todo 看板只读查询：筛选、分页、汇总、优先级分布、按日聚合与聚合组统计
       service.rs                同步持久化服务入口与连接管理（聊天会话落库见 service/chat.rs，
                                 工作区/提示词/引用文件夹/Todo 效应执行见 service/workspace.rs）
     tui/                        终端生命周期：原始模式、备用屏幕、恢复
@@ -193,14 +193,14 @@ lx-tui/
       service/models/           模型设置与 Quick Connect API：GET/PUT `/api/models/settings`、POST `/api/models/fetch`（mod.rs）、
                                 `/api/models/connect/*` 预设保存/断开与 OAuth 授权流（connect.rs）
       service/usage.rs          模型用量统计看板 API：GET `/api/usage/overview` 与 GET `/api/usage/logs`
-      service/todo.rs           Todo 看板 API：GET `/api/todo/overview` 与 GET `/api/todo/items`
+      service/todo.rs           Todo 看板 API：GET `/api/todo/overview`（含优先级分布）与 GET `/api/todo/items`
     platform/                   OS 专属实现（剪贴板、会话图片归档与 30 天 GC、日志目录推导 log.rs、鼠标捕获与指针形状、默认 shell、进程 cwd、打开浏览器、文件/目录权限、随机数填充、原子文件替换）
   tests/                        集成测试（web_assets.rs：脚本语法、加载顺序与 DOM id 契约）
   scripts/                      开发与维护脚本，按需创建
   assets/                       浏览器前端资源（HTML/CSS/JS），经 include_str! 嵌入二进制
     web.html                    统一 Web 控制台结构（Home / Settings / Usage / Todo 单文档）
-    web.css                     全局外壳、Home、共享 toast、统一滚动条与全局 hidden 样式
-    web.js                      共享核心（token/DOM/toast/select）与 hash 路由、懒初始化
+    web.css                     全局外壳、Home、共享 toast、统一滚动条、全局 hidden、加载遮罩与骨架原语
+    web.js                      共享核心（token/DOM/toast/select）、hash 路由、懒初始化与全局加载编排
     settings.css                Settings 视图样式（按 media 挂起）
     settings.js                 设置页骨架与 General / Commands 业务
     settings_models_card.js     设置页模型卡片、单价、模态与思考等级编辑组件
@@ -213,7 +213,8 @@ lx-tui/
     usage_charts.js             模型用量统计看板原生 SVG 图表渲染与格式化工具
     usage.js                    模型用量统计看板状态、筛选、汇总卡、表格与分页脚本
     todo.css                    Todo 看板样式（按 media 挂起，刻意与 usage.css 重复以保持视图隔离）
-    todo.js                     Todo 看板状态、筛选、汇总卡、表格与分页脚本
+    todo_charts.js              Todo 看板原生 SVG 图表（日趋势、状态环图、优先级横条、分桶与 tooltip）
+    todo.js                     Todo 看板状态、筛选、汇总卡、图表调用、表格与分页脚本
     oauth_callback.html         OAuth 浏览器回调结果页模板
     oauth_implicit.html         OAuth 隐式授权流回调页模板
 ```

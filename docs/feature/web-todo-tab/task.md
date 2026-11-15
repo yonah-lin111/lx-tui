@@ -1,6 +1,6 @@
 # Web 控制台 Todo 看板 + TUI 字符统计块移除：执行清单
 
-> 状态：**Phase 1–5 已实现；Phase 6 全量验证与真机验收待完成**
+> 状态：**Phase 1–5、图表、加载态与状态宽度已实现；全量验证与真机验收待完成**
 > 日期：2026-11-14
 > 设计依据：[design.md](./design.md)
 > 检索工具：`codegraph`（project `lx-tui`）、`codebase-memory-mcp`（project `lx-tui` / `Users-yonah-projects-agent-lx-tui`）均已索引本仓库。
@@ -274,18 +274,45 @@
 
 ---
 
-## 7. 交付物
+## 7. Phase 7：追加图表（2026-11-15）
+
+- [x] DB：`query_todo_priority_counts` + 单测（空表、范围/状态/优先级/搜索）。
+- [x] API：`overview` 增加 `priority: {p0..p3}` + HTTP 断言。
+- [x] 前端：新建 `assets/todo_charts.js`（日趋势分组柱、状态环图、优先级横条、tooltip、空态、分日/周/月分桶）。
+- [x] 前端：`web.html` 图表区与脚本顺序、`todo.css` 图表样式、`todo.js` 调用 `renderTodoCharts`。
+- [x] 资源契约：`page.rs` 路由、`tests/web_assets.rs` 脚本清单、shell 断言、`/todo_charts.js` 请求测试。
+- [x] 文档：`design.md`（D3 作废、D9/D10、§5.7）、`html-assets.md` 脚本顺序。
+- [x] 验证：`cargo fmt`、`cargo clippy --all-targets -- -D warnings`、`cargo test`、node 拼接语法检查。
+
+---
+
+## 8. Phase 8：加载态与状态宽度（2026-11-15）
+
+- [x] 全局遮罩 `#page-loading`：懒加载视图的 init 返回首次加载 Promise，`web.js` 等待 settle，最短 180ms，顶部导航可点。
+- [x] Todo 局部骨架：6 张汇总卡、3 个图表块、状态 legend、表格行；只在首次加载绘制。
+- [x] Usage 局部骨架：8 张汇总卡、5 个图表块、表格行。
+- [x] Settings 使用全局遮罩（`initSettingsView` 返回 `loadState()`）。
+- [x] 状态宽度：Usage/Todo `.action-status` 预留 `16ch + 14px`，Settings `15ch + 14px`，统一 `tabular-nums` + `nowrap`。
+- [x] 文档：`design.md` D11/D12 与 §5.8、`html-assets.md` 加载态约定。
+- [x] 全量验证：`cargo fmt`、`cargo clippy --all-targets -- -D warnings`、`cargo test`、浏览器骨架/图表截图。
+- [ ] `cargo run` 手工验收（D11/D12 与图表）。
+
+---
+
+## 9. 交付物
 
 - [x] 代码改动按 Phase 1–4 完成。
 - [x] 规范文档按 Phase 5 同步。
 - [x] 测试按 Phase 6 全绿。
 - [x] 在本目录补 `review.md`（实现完成后按项目惯例记录 P0/P1/P2 审查项）。
+- [x] 图表按 Phase 7 完成并验证。
+- [x] 加载态与状态宽度按 Phase 8 完成并验证。
 
 ---
 
-## 8. 明确不做
+## 10. 明确不做
 
 - Web 写操作（新增/勾选/删除/排序）。
-- SVG 图表、自动刷新、Home 页 Todo 卡片。
+- 图表缩放、图例开关、自动刷新、Home 页 Todo 卡片。
 - Schema 迁移、`SCHEMA_VERSION` 变更。
 - TUI 列表/周带/顺延/编辑/聚合组/排序逻辑改造。

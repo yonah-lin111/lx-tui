@@ -42,3 +42,36 @@
 3. Todo 页无自动刷新，只保留手动 Refresh；只读接口不会与 TUI 内存态热同步。
 4. 未新增 Home 页 Todo 入口卡片。
 5. TUI 与浏览器外观/交互仍需用户 `cargo run` 真机验收（Agent 无法交互式验证）。
+
+---
+
+## 2026-11-15 追加：图表、加载态、状态宽度
+
+### 验证结果
+
+| 项目 | 结果 |
+| --- | --- |
+| `cargo test --lib db::todo::query` | 13 passed（含优先级分布 1 条） |
+| `cargo test --lib settings::service::todo` | 5 passed（overview 含 `priority` 断言） |
+| `cargo test --lib settings::service::tests::page_requires...` | 1 passed |
+| `cargo test --test web_assets` | 2 passed（脚本拼接 `node --check`） |
+| `cargo test` | 全量通过（含上述新增断言） |
+| `cargo clippy --all-targets -- -D warnings` | 通过 |
+| 浏览器 harness（`ego-browser`，API 延迟 900ms） | 加载遮罩与骨架可见；数据到达后趋势图/环图/优先级横条全部渲染 |
+| `.action-status` 宽度 | `Updated 10:01:45` / `Refreshing…` / 恢复后均为 120px |
+
+### P0（已处理）
+
+1. **用户截图中 Todo 图表不显示**：现场运行的二进制早于 `assets/todo.css`、`assets/todo_charts.js` 落盘（`include_str!` 资源随编译固定），HTML 已是新版而样式/脚本还是旧版。当前源码在 harness 中三图正常渲染；需重启 `cargo run` 后复验。
+2. **js 拼接作用域**：`todo_charts.js` 顶层符号全部 `todo` 前缀，`web_assets` 拼接解析通过。
+
+### P1（已处理）
+
+1. **首屏高度跳变**：Todo/Usage 首次加载渲染与最终布局同尺寸的局部骨架；全局遮罩等待 init Promise settle，最短 180ms；刷新保留旧数据不骨架化。
+2. **状态文案推挤按钮**：`.action-status` 预留 `16ch/15ch + 14px` 最小宽度，`tabular-nums` + `nowrap`；实测三种文案宽度恒为 120px。
+
+### P2（接受）
+
+1. `All` 跨越十年以上时月度柱会非常细，暂未加年度聚合或最大桶数上限。
+2. 全局遮罩只在视图首次初始化时出现；已初始化视图之间的切换不做假加载。
+3. 骨架扫光与遮罩过渡遵循 `prefers-reduced-motion`。

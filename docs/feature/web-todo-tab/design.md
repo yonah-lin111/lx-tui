@@ -1,7 +1,7 @@
 # Web 控制台 Todo 看板 + TUI 字符统计块移除：设计方案
 
-> 状态：**Phase 1–5 已实现；Phase 6 全量验证与真机验收待完成**
-> 日期：2026-11-14
+> 状态：**Phase 1–5 + 图表 / 加载态 / 状态宽度已实现；全量验证与真机验收待完成**
+> 日期：2026-11-14（2026-11-15 追加图表与加载体验需求，见 D9–D12 与 §5.7/§5.8）
 > 项目：`/Users/yonah/projects/agent/lx-tui`（分支 `dev`，工作区干净）
 > 配套执行清单：[task.md](./task.md)
 > 代码检索：`codegraph`（project `lx-tui`，indexed）+ `codebase-memory-mcp`（project `lx-tui` / `Users-yonah-projects-agent-lx-tui`，indexed）
@@ -21,7 +21,7 @@
 
 - 「字符表格」= Todo 面板底部的**字符统计块**：`total · doing · done` 摘要行 + 三张字符柱状图 + 分割线上的 `‹ title n/3 ›` 切换器。**不删**列表、工具栏、周感知带、顺延横幅、行内编辑。
 - Web Todo 页**只读**：只做查询、筛选、分页、统计展示，不新增、不勾选、不删除。
-- 不做 SVG 图表；本次只做表格 + 汇总卡片。
+- 图表按 2026-11-15 追加需求执行：卡片下常驻三图（日趋势、状态环图、优先级横条），跟随全部筛选；详见 §5.7。
 - TUI 删除统计块后，列表独占主体区剩余高度。
 
 ### 1.3 验收标准
@@ -38,6 +38,7 @@
 - 顶部 bar 出现 `Todo`，hash 路由 `#/todo` 可直达；`/todo` 直接访问同样返回统一 shell。
 - 默认 `7d`，日期范围 `Today / 7d / 30d / All / Custom`、`Status`、`Priority`、文本搜索可组合筛选。
 - 6 张汇总卡：Total / Open / In Progress / Done / Completion / Overdue。
+- 图表：日趋势（Planned vs Done，自动分日/周/月）、状态环图、P0–P3 横条；随筛选与日期范围更新。
 - 3 张表：`Todos`（分页）、`Daily`、`Groups`；空范围有空态文案。
 - 所有请求带 token；接口只读；无外部资源；无 `innerHTML`。
 
@@ -49,12 +50,16 @@
 | --- | --- | --- |
 | D1 | 只删 TUI 底部字符统计块（`charts.rs` 及其几何/状态/快捷键/命中），保留 Todo 列表与编辑 | Web 有真正的表格，TUI 保留「按日改状态」核心交互 |
 | D2 | Web Todo 页**只读** | TUI 内存态不会热同步外部写库，双写必然互相覆盖 |
-| D3 | 页面组成：顶部控件 + 6 张汇总卡 + 3 个 tab 表格，不画图表 | 表格是主需求；`Daily`/`Groups` 承接被删字符图的信息 |
+| D3 | 页面组成：顶部控件 + 6 张汇总卡 + **3 张图表** + 3 个 tab 表格（2026-11-15 追加需求，原「不画图表」作废） | 表格仍是明细入口；图表补回被删字符图的趋势/分布感知 |
 | D4 | 日期范围一律按 `entry_date` | 未完成条目没有 `completed_date`，按完成日期筛会漏掉全部待办 |
 | D5 | `Overdue` 卡片忽略日期范围、遵守 Status/Priority/搜索筛选，统计全库 `entry_date < 今天 && status != done`；`Daily` 表改叫 `Remaining`（Planned − Done） | `Today` 范围下历史欠账天然为 0，卡片会失效；Daily 一行代表某天，「剩余」才有意义 |
 | D6 | 新建独立 `assets/todo.css`，按需复制 Usage 的控件/卡片/表格样式，并注释「刻意重复，保持视图隔离」 | 遵守 `docs/standards/html-assets.md` 的视图级样式隔离；不把 Usage 控件抽到 `web.css`，避免大范围回归 |
 | D7 | 服务端做筛选、聚合与分页；前端只在翻页时单独请求 items | 与 Usage 的 `/api/usage/overview` + `/api/usage/logs` 同构，避免把全表拉到浏览器 |
 | D8 | 默认范围 `7d`、默认 tab `Todos`、页大小 50 | 与 Usage 默认一致；50 条足够一屏翻页 |
+| D9 | 图表三张：日趋势分组柱（Planned vs Done，tooltip 带 Remaining）、状态环图、P0–P3 优先级横条；放在汇总卡下、表格上常驻，跟随全部筛选 | 覆盖时间/状态/优先级三个维度；只有优先级分布需要补聚合 |
+| D10 | 新建独立 `assets/todo_charts.js`（顶层名字 `todo` 前缀），不调用 `usage_charts.js` 的全局函数；长范围由前端分桶并补零（≤62 天按日、≤400 天按周、更久按月） | 遵守视图隔离（D6 同理）；不改 API 粒度、不截断历史；避免污染刚验收的 Usage |
+| D11 | 加载体验：懒加载视图首次初始化时显示全局遮罩（只盖内容区、顶部导航可点、最短 180ms）；Todo/Usage 同时渲染与最终布局同尺寸的局部骨架；Settings 只用全局遮罩 | 遮住半成品画面，骨架保证容器高度不跳；刷新保留旧数据，不重新骨架化 |
+| D12 | 状态指示器统一 `min-width` + `tabular-nums` + `nowrap`：Usage/Todo 预留 `16ch + 14px`，Settings 预留 `15ch + 14px` | `Loading… / Refreshing… / Updated HH:MM:SS / Saved / Unsaved changes` 切换时不再推挤按钮 |
 
 ---
 
@@ -369,6 +374,42 @@ if (view === 'todo') { initOnce('todo', window.initTodoView); }
       <div class="todo-content">
         <div id="todo-error" class="todo-error hidden" role="alert"></div>
         <section id="todo-summary-cards" class="summary-grid todo-summary-grid" aria-label="Todo summary"></section>
+        <section class="todo-charts" aria-label="Todo charts">
+          <div class="todo-charts-grid">
+            <article class="chart-card chart-wide">
+              <div class="chart-head">
+                <div>
+                  <div class="chart-title">Daily activity</div>
+                  <div class="chart-subtitle" id="todo-trend-subtitle">Planned vs done</div>
+                </div>
+                <div class="chart-legend">
+                  <span class="legend-item"><span class="legend-swatch swatch-planned"></span>Planned</span>
+                  <span class="legend-item"><span class="legend-swatch swatch-done"></span>Done</span>
+                </div>
+              </div>
+              <div id="todo-chart-trend" class="chart-body chart-body-wide"></div>
+            </article>
+            <article class="chart-card">
+              <div class="chart-head">
+                <div>
+                  <div class="chart-title">Status distribution</div>
+                  <div class="chart-subtitle">Open / in progress / done</div>
+                </div>
+              </div>
+              <div id="todo-chart-status" class="chart-body"></div>
+              <div id="todo-status-legend" class="donut-legend"></div>
+            </article>
+            <article class="chart-card">
+              <div class="chart-head">
+                <div>
+                  <div class="chart-title">Priority distribution</div>
+                  <div class="chart-subtitle">P0–P3 in selected range</div>
+                </div>
+              </div>
+              <div id="todo-chart-priority" class="chart-body"></div>
+            </article>
+          </div>
+        </section>
         <section class="todo-table-section" aria-label="Todo tables">
           <div class="provider-tabs todo-tabs" role="tablist" aria-label="Todo tables">
             <button type="button" class="provider-tab active" data-tab="todos" id="tab-btn-todos" role="tab" aria-selected="true">Todos (0)</button>
@@ -523,6 +564,28 @@ function todoFilterParams(range) {
 
 > 不复用 `usage.css`，不把控件抽到 `web.css`；这是 D6 明确决策。
 
+### 5.7 图表（2026-11-15 追加）
+
+- **位置**：`#todo-summary-cards` 与 `.todo-table-section` 之间常驻，不随 tab 切换隐藏。
+- **三张图**：
+  1. `Daily activity`（宽卡）：Planned vs Done 分组竖柱；hover 显示 Planned / Done / Remaining；空范围显示 `No todos in the selected range.`。
+  2. `Status distribution`：Open / In Progress / Done 三片环图，中心显示完成率；右侧/下方 legend 带计数与占比。
+  3. `Priority distribution`：P0–P3 横条，显示计数与占比；零值也保留轨道。
+- **数据来源**：`overview.summary`、`overview.priority`（新增）、`overview.daily`。三图都随日期范围 / Status / Priority / 搜索筛选变化；`Overdue` 卡片仍按 D5 忽略日期范围。
+- **趋势分桶**：`daily` 只含有数据的日期，前端按跨度补零并分桶——≤62 天按日、≤400 天按周（周一对齐）、更久按月；`All` 以 `daily` 首尾日期为边界；副标题动态显示 `daily` / `weekly` / `monthly`。日期一律按本地 `YYYY-MM-DD` 手工拆段构造 `Date`，避免 UTC 偏移。
+- **代码组织**：`assets/todo_charts.js`，对外只暴露 `renderTodoCharts(overview, range)`；SVG 原语、tooltip、空态、分桶都在文件内，顶层符号统一 `todo` 前缀；`assets/todo.js` 在 `loadTodoDashboard` 完成 summary 渲染后调用。`assets/todo.css` 追加图表样式与颜色令牌，不依赖 `usage.css` 是否处于激活状态。
+- **视觉**：复用 Usage 的暗色卡片语言（`chart-card` / `chart-head` / `chart-title` / `chart-subtitle` / `legend-swatch` / `chart-svg` / `chart-empty` / 固定定位 tooltip），零外部依赖、零 `innerHTML`；≤1100px 图表单列，≤640px 收紧内边距。
+
+> 这是 D9/D10；原 D3「不画图表」已作废。
+
+### 5.8 加载态与尺寸稳定（2026-11-15 追加）
+
+- **全局遮罩**：`#page-loading`（`assets/web.css` 的 `.page-loading`）固定在顶部 bar 以下，覆盖内容区；顶部导航始终可点。懒加载视图的 `init<View>View` 返回首次数据加载 Promise，`web.js::initOnce` 在 Promise settle 后关闭遮罩；最短展示 180ms，避免快请求闪一下；切页时立刻收起旧遮罩并按新视图重新判断。
+- **局部骨架**：Todo 首次加载绘制 6 张卡片、3 个图表块、状态 legend 与表格骨架；Usage 绘制 8 张卡片、5 个图表块与表格骨架。骨架复用 `.summary-card` / `.chart-body` / 表格行高，保证数据到达前后高度一致；`prefers-reduced-motion` 下关闭扫光与旋转。
+- **刷新不骨架化**：只有首次进入（容器为空）才画骨架；点击 Refresh / 改筛选保留旧数据并更新状态点，避免闪屏。
+- **状态宽度**：Usage/Todo 的 `.action-status` 与 Settings 的 action bar 统一预留最小宽度（D12），配合 `font-variant-numeric: tabular-nums`，`Refreshing…` 与 `Updated 09:37:51` 切换时右侧按钮位置不变。
+- **失败兜底**：初始化 Promise 失败时关闭遮罩并保留错误 banner/toast；`window.__webInit[key]` 标为 `failed`，下次切回该视图可重试。
+
 ---
 
 ## 6. 服务端 API 方案
@@ -563,6 +626,7 @@ function todoFilterParams(range) {
     "done": 12,
     "overdue": 3
   },
+  "priority": {"p0": 3, "p1": 9, "p2": 6, "p3": 2},
   "daily": [
     {"date": "2026-11-14", "planned": 4, "done": 1, "remaining": 3}
   ],
@@ -604,7 +668,7 @@ function todoFilterParams(range) {
 }
 ```
 
-字段名统一 camelCase；`status` / `priority` 用库内原值（`todo` / `in_progress` / `done`、`P0`..`P3`）。`groupId` / `groupLabel` / `completedDate` 缺失为 `null`。
+字段名统一 camelCase；`status` / `priority` 用库内原值（`todo` / `in_progress` / `done`、`P0`..`P3`）。`groupId` / `groupLabel` / `completedDate` 缺失为 `null`。`priority` 为按当前筛选（含日期范围）统计的 P0–P3 计数，顺序固定，空表全零。
 
 ### 6.4 错误语义
 
@@ -738,6 +802,8 @@ pub struct TodoGroupRow {
 ```
 
 > JSON 序列化在 service 层用 `serde_json::json!` 组装，DB 结构不引入 serde，保持持久层纯粹。
+>
+> 追加（2026-11-15）：`Database::query_todo_priority_counts(&filter) -> Result<[usize; 4]>`，固定返回 `P0..P3` 计数；SQL 为 `SELECT priority, COUNT(*) FROM todo {FILTER_WHERE} GROUP BY priority`，空表全零，未知优先级忽略。
 
 ### 7.2 SQL 口径
 
