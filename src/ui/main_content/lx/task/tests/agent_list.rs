@@ -875,17 +875,7 @@ fn agent_composer_renders_target_badge_and_draft() {
     );
     assert!(lines.iter().any(|line| line.contains("hello")));
 
-    // Shift+Tab 切到汇报模式。
-    lx.agents.toggle_reply_mode("a");
-    let lines = render_lines(&lx, 80, 20);
-    assert!(
-        lines
-            .iter()
-            .any(|line| line.contains("Turing [executor] · report")),
-        "切换后显示汇报模式：{lines:?}"
-    );
-
-    // 运行中的 agent 显示 steer，而不是 private/report。
+    // 运行中的 agent 显示 steer，而不是 private。
     lx.agents.runs[0].status = "running".into();
     lx.agents.runs[0]
         .chat

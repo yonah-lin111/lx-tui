@@ -200,3 +200,101 @@ fn paste_into_composer_refreshes_slash_panel() {
     ));
     assert_eq!(file_entries(&state, pane), vec!["/report"]);
 }
+
+#[test]
+fn report_idle_agent_emits_send_input_with_notify_parent_true() {
+    let (mut state, pane) = agents_editing_state();
+    type_str(&mut state, "/report check the log");
+    state.effects.clear();
+    crate::app::update::pane::apply_lx_input(&mut state, LxInput::Enter);
+    let message = state
+        .effects
+        .iter()
+        .find_map(|effect| match effect {
+            crate::app::effects::Effect::SendSubagentUserInput {
+                agent_id,
+                text,
+                notify_parent,
+                ..
+            } if agent_id == "sub-idle" => Some((text.clone(), *notify_parent)),
+            _ => None,
+        })
+        .expect("汇报轮入队");
+    assert!(message.1, "显式 /report 必须 notify_parent=true");
+    assert!(
+        message
+            .0
+            .starts_with(crate::chat::agent::REPORT_REQUEST_MARKER),
+        "汇报请求带固定标记：{}",
+        message.0
+    );
+    assert!(message.0.contains("User note: check the log"));
+    assert_eq!(editor_text(&state, pane), "", "命令文本已消费");
+    assert!(panel(&state, pane).is_none());
+}
+
+#[test]
+fn report_running_agent_is_rejected_without_effect() {
+    let (mut state, pane) = agents_editing_state();
+    state
+        .pane_mut_anywhere(pane)
+        .expect("pane")
+        .lx
+        .agents
+        .by_agent_mut("sub-idle")
+        .expect("run")
+        .status = "running".into();
+    type_str(&mut state, "/report now");
+    state.effects.clear();
+    crate::app::update::pane::apply_lx_input(&mut state, LxInput::Enter);
+    assert!(
+        !state.effects.iter().any(|effect| matches!(
+            effect,
+            crate::app::effects::Effect::SendSubagentUserInput { .. }
+                | crate::app::effects::Effect::SteerSubagent { .. }
+        )),
+        "运行中拒绝汇报：{:?}",
+        state.effects
+    );
+    assert_eq!(editor_text(&state, pane), "");
+}
+
+#[test]
+fn private_follow_up_never_emits_report() {
+    let (mut state, _pane) = agents_editing_state();
+    type_str(&mut state, "今天天气不错");
+    state.effects.clear();
+    crate::app::update::pane::apply_lx_input(&mut state, LxInput::Enter);
+    assert!(
+        state.effects.iter().any(|effect| matches!(
+            effect,
+            crate::app::effects::Effect::SendSubagentUserInput {
+                notify_parent: false,
+                text,
+                ..
+            } if text == "今天天气不错"
+        )),
+        "闲聊按私聊追问发送：{:?}",
+        state.effects
+    );
+    assert!(
+        !state.effects.iter().any(|effect| matches!(
+            effect,
+            crate::app::effects::Effect::SendSubagentUserInput {
+                notify_parent: true,
+                ..
+            }
+        )),
+        "不得产生汇报轮"
+    );
+}
+
+#[test]
+fn report_message_contains_marker_and_note() {
+    let message = crate::chat::agent::report_request_message("  定位登录超时  ");
+    assert!(message.starts_with(crate::chat::agent::REPORT_REQUEST_MARKER));
+    assert!(message.contains("User note: 定位登录超时"));
+    assert!(message.contains("Do not include greetings"));
+    let bare = crate::chat::agent::report_request_message("  ");
+    assert!(!bare.contains("User note:"));
+}

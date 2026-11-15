@@ -20,6 +20,7 @@ pub mod btw;
 pub mod compact;
 pub(crate) mod composer;
 mod connect;
+mod detail_report;
 mod fork;
 pub mod mcp;
 pub mod model_switch;

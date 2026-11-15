@@ -7,6 +7,27 @@ use super::{AgentRole, MAX_REPORT_BYTES};
 /// 单份报告最多附带的变更文件路径条数。
 pub const MAX_REPORT_CHANGED_PATHS: usize = 32;
 
+/// `/report` 请求消息的固定首行（也是私聊/汇报的可见分界）。
+pub const REPORT_REQUEST_MARKER: &str = "[Report to parent agent]";
+
+/// 人类在详情面板显式要求汇报时注入的用户消息。
+///
+/// 指令只约束“写什么”，不把闲聊原文转发；报告正文仍由本轮 assistant 输出生成。
+pub fn report_request_message(note: &str) -> String {
+    let note = note.trim();
+    let mut out = String::from(
+        "[Report to parent agent]\n\
+Write a report for the parent agent. Include only what it needs to act: the user's request, \
+what you did or found, evidence (files, commands, results), current status, blockers, and \
+next steps. Do not include greetings, small talk, or casual conversation. Be concise and factual.",
+    );
+    if !note.is_empty() {
+        out.push_str("\nUser note: ");
+        out.push_str(note);
+    }
+    out
+}
+
 /// 汇报块数据源（父消息 `subagent_report_json` 反序列化）。
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SubagentReportView {

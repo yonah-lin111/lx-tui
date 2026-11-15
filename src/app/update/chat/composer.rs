@@ -4,7 +4,9 @@
 //! 候选刷新、面板按键、采纳与命令执行分派。所有读写都落到 `Lx::active_editor()`。
 
 use crate::app::actions::LxInput;
-use crate::app::state::lx::slash::composer::{self, DetailContext};
+use crate::app::state::lx::slash::composer::{
+    self, DetailCommand, DetailContext, ParsedDetailCommand,
+};
 use crate::app::state::{AppState, InputHintLevel, Lx, SlashEntry, SlashPanel};
 use crate::app::update::{show_lx_hint, show_lx_toast};
 use crate::tiling::PaneId;
@@ -181,7 +183,11 @@ fn accept(state: &mut AppState, pane: PaneId) -> bool {
     };
     let Some(prefix) = command.echo_prefix() else {
         close_command_candidates(state, pane);
-        return true;
+        let Some(parsed) = parsed_command(command) else {
+            return false;
+        };
+        clear(state, pane);
+        return execute(state, pane, parsed);
     };
     if !standalone_line(&input, cursor) {
         show_lx_hint(
@@ -213,6 +219,42 @@ fn standalone_line(input: &str, cursor: usize) -> bool {
         && line.starts_with('/')
 }
 
+/// 面板条目 → 执行分支；`Report` 是带参回显命令，不在此列。
+fn parsed_command(command: DetailCommand) -> Option<ParsedDetailCommand<'static>> {
+    match command {
+        DetailCommand::Undo => Some(ParsedDetailCommand::Undo),
+        DetailCommand::Compact => Some(ParsedDetailCommand::Compact),
+        DetailCommand::New => Some(ParsedDetailCommand::New),
+        DetailCommand::Report => None,
+    }
+}
+
+/// 执行一条整段详情命令（草稿已由调用方消费）。
+pub(crate) fn execute(
+    state: &mut AppState,
+    pane: PaneId,
+    command: ParsedDetailCommand<'_>,
+) -> bool {
+    match command {
+        ParsedDetailCommand::Report(note) => super::detail_report::submit(state, pane, note),
+        // T4–T7 逐个接入；在此之前明确提示而不是把命令文本发给模型。
+        ParsedDetailCommand::Undo | ParsedDetailCommand::Compact | ParsedDetailCommand::New => {
+            clear(state, pane);
+            show_lx_toast(
+                state,
+                pane,
+                crate::app::toast::Toast::new(
+                    crate::app::toast::ToastKind::Warning,
+                    text::detail::LX_DETAIL_COMMAND_UNAVAILABLE.to_string(),
+                    Some(pane),
+                    std::time::Instant::now(),
+                ),
+            );
+            true
+        }
+    }
+}
+
 /// 提交前拦截：整段详情命令执行、未知 `/` 命令提示；都不是则返回 false。
 pub(crate) fn try_submit(state: &mut AppState, pane: PaneId) -> bool {
     let Some(context) = context_of(state, pane) else {
@@ -224,19 +266,8 @@ pub(crate) fn try_submit(state: &mut AppState, pane: PaneId) -> bool {
     else {
         return false;
     };
-    if composer::parse(&draft, context).is_some() {
-        clear(state, pane);
-        show_lx_toast(
-            state,
-            pane,
-            crate::app::toast::Toast::new(
-                crate::app::toast::ToastKind::Warning,
-                text::detail::LX_DETAIL_COMMAND_UNAVAILABLE.to_string(),
-                Some(pane),
-                std::time::Instant::now(),
-            ),
-        );
-        return true;
+    if let Some(command) = composer::parse(&draft, context) {
+        return execute(state, pane, command);
     }
     if let Some(command) = super::slash::unknown_slash_command(&draft) {
         clear(state, pane);

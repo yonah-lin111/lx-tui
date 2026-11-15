@@ -254,22 +254,10 @@ fn apply_agent_edit_input(state: &mut AppState, pane: PaneId, command: LxInput) 
             chat::scroll_agents_detail(state, pane, delta);
             true
         }
-        LxInput::PrevStep => toggle_agent_reply_mode(state, pane),
+        LxInput::PrevStep => true,
         LxInput::Tab => true,
         _ => edit_agent_composer(state, pane, command),
     }
-}
-
-/// Shift+Tab：切换当前 agent 的追问模式（私聊 / 汇报）。
-fn toggle_agent_reply_mode(state: &mut AppState, pane: PaneId) -> bool {
-    let Some(target) = state.pane_mut_anywhere(pane) else {
-        return false;
-    };
-    let Some(agent_id) = target.lx.agent_edit_id().map(str::to_string) else {
-        return false;
-    };
-    target.lx.agents.toggle_reply_mode(&agent_id);
-    true
 }
 
 /// `@` 面板按键：镜像 BTW composer（`chat/btw/input.rs`），面板打开时优先于发送与退出。
@@ -707,7 +695,7 @@ fn submit_agent_edit(state: &mut AppState, pane: PaneId) -> bool {
     if super::super::chat::composer::try_submit(state, pane) {
         return true;
     }
-    let (agent_id, text, closed, running, pending_steers, mode, session_id) = {
+    let (agent_id, text, closed, running, pending_steers, session_id) = {
         let Some(target) = state.pane_anywhere(pane) else {
             return false;
         };
@@ -727,14 +715,12 @@ fn submit_agent_edit(state: &mut AppState, pane: PaneId) -> bool {
         let closed = run.is_some_and(|run| run.status == "cancelled");
         let running = run.is_some_and(|run| run.status == "running");
         let pending_steers = run.map_or(0, |run| run.chat.pending_steers.len());
-        let mode = target.lx.agents.reply_mode(&agent_id);
         (
             agent_id,
             text,
             closed,
             running,
             pending_steers,
-            mode,
             target.lx.chat.session_id.clone(),
         )
     };
@@ -789,7 +775,8 @@ fn submit_agent_edit(state: &mut AppState, pane: PaneId) -> bool {
                 pane,
                 agent_id: agent_id.clone(),
                 text,
-                notify_parent: mode.notify_parent(),
+                // 普通追问与 steer 永远私聊；只有显式 `/report` 才置 true。
+                notify_parent: false,
             });
     } else {
         let Some(session_id) = session_id else {
@@ -802,7 +789,8 @@ fn submit_agent_edit(state: &mut AppState, pane: PaneId) -> bool {
                 session_id,
                 agent_id: agent_id.clone(),
                 text,
-                notify_parent: mode.notify_parent(),
+                // 普通追问与 steer 永远私聊；只有显式 `/report` 才置 true。
+                notify_parent: false,
             });
     }
     if let Some(composer) = state

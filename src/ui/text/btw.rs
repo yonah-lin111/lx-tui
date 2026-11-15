@@ -52,9 +52,10 @@ pub const LX_BTW_HINTS_LIST: [crate::ui::text::Hint; 4] = [
     crate::ui::text::hint("close", "esc"),
 ];
 /// 编辑态底边框提示。
-pub const LX_BTW_HINTS_EDIT: [crate::ui::text::Hint; 4] = [
+pub const LX_BTW_HINTS_EDIT: [crate::ui::text::Hint; 5] = [
     crate::ui::text::hint("send", "↵"),
     crate::ui::text::hint("newline", "⇧↵"),
+    crate::ui::text::hint("commands", "/"),
     crate::ui::text::hint("stop", "^d"),
     crate::ui::text::hint("back", "esc"),
 ];

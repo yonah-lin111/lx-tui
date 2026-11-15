@@ -1163,30 +1163,13 @@ fn late_mention_result_is_dropped_after_switching_agent() {
 }
 
 #[test]
-fn shift_tab_switches_agent_reply_mode_and_report_submit_carries_the_flag() {
+fn shift_tab_no_longer_toggles_report_mode_and_follow_up_stays_private() {
     let (mut state, pane) = state_with_session("");
     open_agents_with_statuses(&mut state, pane);
     let input = crate::app::update::pane::apply_lx_input;
     input(&mut state, crate::app::actions::LxInput::EnterFolder);
-    let mode = |state: &AppState| {
-        state
-            .pane_anywhere(pane)
-            .expect("pane")
-            .lx
-            .agents
-            .reply_mode("sub-done")
-    };
-    assert_eq!(
-        mode(&state),
-        crate::app::state::lx::agent::AgentReplyMode::Private,
-        "默认私聊"
-    );
+    // Shift+Tab 不再切换模式：草稿与模式都不变，直接吞掉。
     input(&mut state, crate::app::actions::LxInput::PrevStep);
-    assert_eq!(
-        mode(&state),
-        crate::app::state::lx::agent::AgentReplyMode::Report,
-        "Shift+Tab 切到汇报"
-    );
     state.effects.clear();
     for ch in "hi".chars() {
         input(&mut state, crate::app::actions::LxInput::Char(ch));
@@ -1198,11 +1181,11 @@ fn shift_tab_switches_agent_reply_mode_and_report_submit_carries_the_flag() {
             crate::app::effects::Effect::SendSubagentUserInput {
                 agent_id,
                 text,
-                notify_parent: true,
+                notify_parent: false,
                 ..
             } if agent_id == "sub-done" && text == "hi"
         )),
-        "汇报模式发送 notify_parent=true：{:?}",
+        "普通追问永远私聊：{:?}",
         state.effects
     );
 }
