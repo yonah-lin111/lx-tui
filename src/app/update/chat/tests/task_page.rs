@@ -1341,3 +1341,32 @@ fn full_steer_queue_keeps_the_agent_draft() {
         .map(|composer| composer.text().to_string());
     assert_eq!(draft.as_deref(), Some("too many"), "草稿必须保留");
 }
+
+/// 进程输出滚动条按下/拖拽同样以滚动条几何为准，不读滞后一帧的 `output_visible`。
+#[test]
+fn set_task_output_scroll_uses_scrollbar_geometry() {
+    let (mut state, pane) = state_with_session("");
+    {
+        let target = state.pane_mut_anywhere(pane).expect("pane");
+        let page = target.lx.task.get_or_insert_with(Default::default);
+        page.tab = TaskTab::Processes;
+        page.output = (0..100).map(|index| format!("line {index}")).collect();
+        page.output_visible = 10;
+        page.output_scroll = 0;
+    }
+    // 滚动条几何（80/10）上限 70，旧状态（100/10）上限 90 不得参与。
+    assert!(crate::app::update::chat::set_task_output_scroll(
+        &mut state, pane, 71, 80, 10
+    ));
+    assert_eq!(
+        state
+            .pane_anywhere(pane)
+            .expect("pane")
+            .lx
+            .task
+            .as_ref()
+            .expect("page")
+            .output_scroll,
+        70
+    );
+}

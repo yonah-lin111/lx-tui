@@ -93,7 +93,7 @@ pub(super) fn handle_lx_pane_mouse_down_left(
             Some(grab) => state.task_scroll_drag = Some(grab),
             None => {
                 let offset = ui::widgets::scrollbar::offset_from_track_row(&bar, mouse.row);
-                update::set_task_output_scroll(state, pane, offset);
+                update::set_task_output_scroll(state, pane, offset, bar.total, bar.visible);
             }
         }
         update::focus_pane(state, pane);

@@ -10,7 +10,7 @@
 | 校验 | 命令 | 结果 |
 | :--- | :--- | :--- |
 | 格式 / 静态检查 | `cargo fmt && cargo clippy --all-targets -- -D warnings` | PASS（0 warning） |
-| 全量测试 | `cargo test` | PASS（lib **5608 passed / 6 ignored**；集成测试全通过） |
+| 全量测试 | `cargo test` | PASS（lib **5609 passed / 6 ignored**；集成测试全通过） |
 | 详情命令模型 | `cargo test --lib app::state::lx::slash::composer` | 7 passed |
 | composer 与命令分派 | `cargo test --lib app::update::chat::tests::detail_commands` | 21 passed |
 | BTW 更新 | `cargo test --lib app::update::chat::btw::tests` | 21 passed |
@@ -24,7 +24,7 @@
 | 详情压缩心跳 | `cargo test --lib detail_compact_ticks` | 2 passed |
 | 详情压缩聊天栏 | `cargo test --lib detail_agent_compacting` | 1 passed |
 | 详情运行中检查点 | `cargo test --lib detail_running_compact_shows_breathing` | 1 passed |
-| 详情滚动条几何 | `cargo test --lib scrollbar_geometry` | 3 passed |
+| 后台滚动条几何 | `cargo test --lib scrollbar_geometry` | 4 passed |
 
 CLI 实机会话（本工作区）：
 
@@ -98,9 +98,9 @@ CLI 实机会话（本工作区）：
 
 ### V12 — 后台详情滚动条几何一致性
 
-- **输入内容**：子 agent 详情（含压缩后检查点）滚动条拖动/轨道点击；BTW 对话区同款；滚轮在消息区上滚/下滚。
+- **输入内容**：子 agent 详情（含压缩后检查点）滚动条拖动/轨道点击；BTW 对话区、Processes 输出区同款；滚轮在消息区上滚/下滚。
 - **验证步骤**：执行 `cargo test --lib scrollbar_geometry`；实机在 `cargo run` 中拖动滚动条、点击轨道与滚轮。
-- **期望结果**：滚动条按下/拖拽的上限与绘制使用同一份 `ScrollbarLayout`（`total`/`visible`），即使 `run`/`thread` 的缓存行数滞后一帧也不会被旧上限钳回底部；首次拖动/点击立即到位，滚轮每次上移 3 行、贴底自动恢复跟随；其他后台列表（BTW、Agents 列表）保持同一口径（PASS）。
+- **期望结果**：Agents/BTW/Processes 的滚动条按下/拖拽上限与绘制使用同一份 `ScrollbarLayout`（`total`/`visible`），即使 `run`/`thread`/`output_visible` 的缓存行数滞后一帧也不会被旧上限钳回底部；首次拖动/点击立即到位，滚轮每次上移 3 行、贴底自动恢复跟随；Agents 列表沿用自身窗口几何（PASS）。
 
 ### V10 — 回归与边界
 

@@ -172,7 +172,7 @@ pub(crate) fn handle_mouse_drag(
                 continue;
             };
             let offset = ui::widgets::scrollbar::offset_from_drag_row(&bar, mouse.row, grab);
-            if update::set_task_output_scroll(state, *pane, offset) {
+            if update::set_task_output_scroll(state, *pane, offset, bar.total, bar.visible) {
                 *dirty = true;
             }
             return;
