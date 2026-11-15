@@ -19,6 +19,7 @@
 | D6 | 持久化字段 `web_theme`（`default` / `glass`）写入 `settings.json`，经 `/api/config` 读写 | 与服务端其余配置同源；换浏览器、重启二进制后仍生效 |
 | D7 | 页面响应时服务端注入 `data-theme`，`web.js` 启动后再读 `/api/config` 兜底 | 避免刷新时先画默认主题再闪成玻璃主题；兜底修正外部修改 |
 | D8 | 顶栏使用自绘 `createSelect`，右侧固定宽度；用户已手动切换后忽略迟到的初始读取，保存失败回滚并 toast | 与 Settings/Usage/Todo 的下拉一致；避免竞态把用户选择回滚，失败不留下“看起来已保存”的假象 |
+| D9 | 玻璃主题动效对齐参考项目：tab 用滑动指示块 + `--spring-ease`；视图切换做方向感知的 18px 位移、淡入淡出与 5px 模糊；下拉菜单 scale 0.97 入场；卡片/按钮/侧栏 hover 统一 0.18s 过渡 | 参考项目用近临界阻尼弹簧驱动位移与宽度；这类微动效是“液态”手感的主体，缺少会比配色更明显 |
 
 ## 实现
 
@@ -48,6 +49,14 @@
 - `web.html`：`<div class="web-topbar-left">` 包住 logo 与 `.web-tabs`，logo 与 tab 间距 10px；右侧 `#web-theme-select`。
 - 移除 `.web-brand` 内 `<span>lx-tui</span>`，保留 `aria-label="lx-tui home"` 与像素 logo。
 - `.web-theme-select` 固定 152px，避免 `Theme: Default` / `Theme: Glass` 切换时抖动。
+
+### 动效
+
+- `theme.css` 定义 `--spring-ease: cubic-bezier(.22, 1, .36, 1)`，作为玻璃主题所有位移/宽度过渡的统一曲线。
+- tab 指示块 `.web-tab-pill` 绝对定位在 `.web-tabs` 内，`web.js::syncTabPill` 在视图切换、主题切换与窗口 resize 时同步 `translateX` 与宽度；首次落位用 `no-transition` 直接定位，随后 24ms 解锁过渡，避免从 0 宽度滑入。
+- 视图切换按 `VIEWS` 顺序判断方向：进场视图从 ±18px 位移 + 0 透明度 + 5px 模糊弹入，离场视图向反方向位移 10px、淡出并模糊 4px；两者同时播放，离场层 `z-index: 1`、进场层 `z-index: 2`，`animationend` 只在事件目标等于视图自身时清理，避免子元素动画误触发。
+- 下拉菜单使用 `scale(.97) → 1` 的 0.2s 入场；按钮/卡片/侧栏 hover 统一 0.18s 颜色与阴影过渡，主按钮按压缩放 0.97。
+- `prefers-reduced-motion` 下关闭 tab 指示块过渡、视图进出动画与菜单入场，离场视图直接隐藏。
 
 ## 验证
 
