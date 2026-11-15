@@ -58,8 +58,8 @@
 | D8 | 默认范围 `7d`、默认 tab `Todos`、页大小 50 | 与 Usage 默认一致；50 条足够一屏翻页 |
 | D9 | 图表三张：日趋势分组柱（Planned vs Done，tooltip 带 Remaining）、状态环图、P0–P3 优先级横条；放在汇总卡下、表格上常驻，跟随全部筛选 | 覆盖时间/状态/优先级三个维度；只有优先级分布需要补聚合 |
 | D10 | 新建独立 `assets/todo_charts.js`（顶层名字 `todo` 前缀），不调用 `usage_charts.js` 的全局函数；长范围由前端分桶并补零（≤62 天按日、≤400 天按周、更久按月） | 遵守视图隔离（D6 同理）；不改 API 粒度、不截断历史；避免污染刚验收的 Usage |
-| D11 | 加载体验：懒加载视图首次初始化时显示全局遮罩（只盖内容区、顶部导航可点、最短 180ms）；Todo/Usage 同时渲染与最终布局同尺寸的局部骨架；Settings 只用全局遮罩 | 遮住半成品画面，骨架保证容器高度不跳；刷新保留旧数据，不重新骨架化 |
-| D12 | 状态指示器统一 `min-width` + `tabular-nums` + `nowrap`：Usage/Todo 预留 `16ch + 14px`，Settings 预留 `15ch + 14px` | `Loading… / Refreshing… / Updated HH:MM:SS / Saved / Unsaved changes` 切换时不再推挤按钮 |
+| D11 | 加载体验：懒加载视图首次初始化时显示顶部 2px 进度条（不遮内容、不阻塞操作、最短 180ms）；Todo/Usage 同时渲染与最终布局同尺寸的局部骨架；Settings 只用进度条。已有数据时刷新只转状态行内联 spinner，不改写时间戳 | 遮住半成品画面又保持页面可操作；骨架保证容器高度不跳；刷新不再闪文案 |
+| D12 | 状态指示器统一 `min-width` + `tabular-nums` + `nowrap`（含 spinner 槽位）：Usage/Todo 预留 `16ch + 30px`，Settings 预留 `15ch + 30px` | `Loading… / Updated HH:MM:SS / Saved / Unsaved changes` 切换时不再推挤按钮；刷新只转 spinner |
 
 ---
 
@@ -580,11 +580,12 @@ function todoFilterParams(range) {
 
 ### 5.8 加载态与尺寸稳定（2026-11-15 追加）
 
-- **全局遮罩**：`#page-loading`（`assets/web.css` 的 `.page-loading`）固定在顶部 bar 以下，覆盖内容区；顶部导航始终可点。懒加载视图的 `init<View>View` 返回首次数据加载 Promise，`web.js::initOnce` 在 Promise settle 后关闭遮罩；最短展示 180ms，避免快请求闪一下；切页时立刻收起旧遮罩并按新视图重新判断。
-- **局部骨架**：Todo 首次加载绘制 6 张卡片、3 个图表块、状态 legend 与表格骨架；Usage 绘制 8 张卡片、5 个图表块与表格骨架。骨架复用 `.summary-card` / `.chart-body` / 表格行高，保证数据到达前后高度一致；`prefers-reduced-motion` 下关闭扫光与旋转。
+- **全局进度条**：`#page-loading`（`assets/web.css` 的 `.page-loading`）固定在顶部 bar 以下 2px，覆盖内容区顶部但不遮挡内容；懒加载视图的 `init<View>View` 返回首次数据加载 Promise，`web.js::initOnce` 在 Promise settle 后淡出；最短展示 180ms，避免快请求闪一下；底层细线 + 循环亮带保证任何时刻都有可见反馈。切页时立刻收起旧进度条并按新视图重新判断。
+- **局部骨架**：Todo 首次加载绘制 6 张卡片、3 个图表块（带横向网格线的图表骨架）、状态 legend 与表格骨架；Usage 绘制 8 张卡片、5 个图表块与表格骨架。骨架复用 `.summary-card` / `.chart-body` / 表格行高，保证数据到达前后高度一致；扫光错峰、`prefers-reduced-motion` 下关闭动效；骨架切换真实数据时只淡入一次。
 - **刷新不骨架化**：只有首次进入（容器为空）才画骨架；点击 Refresh / 改筛选保留旧数据并更新状态点，避免闪屏。
-- **状态宽度**：Usage/Todo 的 `.action-status` 与 Settings 的 action bar 统一预留最小宽度（D12），配合 `font-variant-numeric: tabular-nums`，`Refreshing…` 与 `Updated 09:37:51` 切换时右侧按钮位置不变。
-- **失败兜底**：初始化 Promise 失败时关闭遮罩并保留错误 banner/toast；`window.__webInit[key]` 标为 `failed`，下次切回该视图可重试。
+- **状态平滑**：已有数据时刷新只显示 `.status-spinner`，不再把 `Updated HH:MM:SS` 改成 `Refreshing…`；数据返回后一次性更新时间戳。spinner 用 opacity 过渡，快速请求只留下极轻微的呼吸感。
+- **状态宽度**：Usage/Todo 的 `.action-status` 与 Settings 的 action bar 统一预留最小宽度（D12），配合 `font-variant-numeric: tabular-nums`，文案与 spinner 出现时右侧按钮位置不变。
+- **失败兜底**：初始化 Promise 失败时关闭进度条并保留错误 banner/toast；`window.__webInit[key]` 标为 `failed`，下次切回该视图可重试。
 
 ---
 

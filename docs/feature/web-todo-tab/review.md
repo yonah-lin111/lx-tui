@@ -57,8 +57,8 @@
 | `cargo test --test web_assets` | 2 passed（脚本拼接 `node --check`） |
 | `cargo test` | 全量通过（含上述新增断言） |
 | `cargo clippy --all-targets -- -D warnings` | 通过 |
-| 浏览器 harness（`ego-browser`，API 延迟 900ms） | 加载遮罩与骨架可见；数据到达后趋势图/环图/优先级横条全部渲染 |
-| `.action-status` 宽度 | `Updated 10:01:45` / `Refreshing…` / 恢复后均为 120px |
+| 浏览器 harness（`ego-browser`，API 延迟 900ms） | 顶部 2px 进度条 + 骨架可见；数据到达后趋势图/环图/优先级横条全部渲染；刷新期间时间戳不变、spinner 显示 |
+| `.action-status` 宽度 | `Updated 10:33:10` / 刷新中 / 恢复后均为 136px |
 
 ### P0（已处理）
 
@@ -67,11 +67,11 @@
 
 ### P1（已处理）
 
-1. **首屏高度跳变**：Todo/Usage 首次加载渲染与最终布局同尺寸的局部骨架；全局遮罩等待 init Promise settle，最短 180ms；刷新保留旧数据不骨架化。
-2. **状态文案推挤按钮**：`.action-status` 预留 `16ch/15ch + 14px` 最小宽度，`tabular-nums` + `nowrap`；实测三种文案宽度恒为 120px。
+1. **首屏高度跳变**：Todo/Usage 首次加载渲染与最终布局同尺寸的局部骨架；顶部 2px 进度条等待 init Promise settle（最短 180ms），不遮挡内容；骨架切真实数据淡入一次；刷新保留旧数据不骨架化。
+2. **状态文案快速切换**：已有数据时刷新只显示行内 `.status-spinner`，保持上一次 `Updated HH:MM:SS` 不变，数据返回后一次性更新时间；`.action-status` 预留 `16ch/15ch + 30px`（含 spinner 槽位），实测宽度恒为 136px。
 
 ### P2（接受）
 
 1. `All` 跨越十年以上时月度柱会非常细，暂未加年度聚合或最大桶数上限。
 2. 全局遮罩只在视图首次初始化时出现；已初始化视图之间的切换不做假加载。
-3. 骨架扫光与遮罩过渡遵循 `prefers-reduced-motion`。
+3. 骨架扫光、顶部进度条与视图淡入遵循 `prefers-reduced-motion`。
