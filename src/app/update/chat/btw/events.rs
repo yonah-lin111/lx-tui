@@ -3,12 +3,50 @@
 use crate::app::effects::{BtwEffect, Effect};
 use crate::app::state::lx::btw::BtwQaSummary;
 use crate::app::state::{AppState, ChatMessageView, CompactNoticeView, InputHintLevel};
-use crate::app::update::show_lx_hint;
+use crate::app::toast::{Toast, ToastKind};
+use crate::app::update::{show_lx_hint, show_lx_toast};
 use crate::chat::events::{ChatDelta, PartKind, StopReason};
 use crate::tiling::PaneId;
 use crate::ui::text;
 
 use super::submit_current;
+
+/// 事件层回投：线程已被 `/new` 删除；视图回到空白并刷新 QA 标记。
+pub fn on_thread_deleted(
+    state: &mut AppState,
+    pane: PaneId,
+    parent_session_id: &str,
+    qa_id: &str,
+) -> bool {
+    let matches_session = state
+        .pane_anywhere(pane)
+        .is_some_and(|target| target.lx.chat.session_id.as_deref() == Some(parent_session_id));
+    if !matches_session {
+        return false;
+    }
+    let Some(target) = state.pane_mut_anywhere(pane) else {
+        return false;
+    };
+    let Some(thread) = target.lx.btw.thread_mut(qa_id) else {
+        return false;
+    };
+    thread.reset_after_delete();
+    state.effects.push(Effect::Btw(BtwEffect::LoadQaList {
+        pane,
+        parent_session_id: parent_session_id.to_string(),
+    }));
+    show_lx_toast(
+        state,
+        pane,
+        Toast::new(
+            ToastKind::Default,
+            text::detail::LX_BTW_RESET_DONE,
+            Some(pane),
+            std::time::Instant::now(),
+        ),
+    );
+    true
+}
 
 /// 事件层回投：QA 列表已加载。
 pub fn on_qa_list_loaded(

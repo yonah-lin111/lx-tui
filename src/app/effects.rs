@@ -487,6 +487,13 @@ pub enum BtwEffect {
     },
     /// 提交一条旁路问题。
     Submit(Box<BtwSubmission>),
+    /// 删除某 QA 的旁路线程（`/new`）：DB 级联清理线程与 child session。
+    DeleteThread {
+        pane: crate::tiling::PaneId,
+        parent_session_id: String,
+        qa_id: String,
+        thread_id: String,
+    },
     /// 停止某线程的活动与排队回答；不影响原 agent 任务。
     Stop {
         pane: crate::tiling::PaneId,

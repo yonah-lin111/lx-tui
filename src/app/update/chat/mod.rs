@@ -50,8 +50,9 @@ pub use btw::{
     new_assistant_message as new_btw_assistant_message, on_accepted as on_btw_accepted,
     on_delta as on_btw_delta, on_failed as on_btw_failed, on_finished as on_btw_finished,
     on_qa_list_loaded, on_recipient_started as on_btw_recipient_started,
-    on_thread_loaded as on_btw_thread_loaded, on_tool_state as on_btw_tool_state, open_btw_tab,
-    scroll_btw_detail, select_btw_qa, set_task_btw_scroll, submit_current as submit_btw,
+    on_thread_deleted as on_btw_thread_deleted, on_thread_loaded as on_btw_thread_loaded,
+    on_tool_state as on_btw_tool_state, open_btw_tab, scroll_btw_detail, select_btw_qa,
+    set_task_btw_scroll, submit_current as submit_btw,
     sync_search_selection as sync_btw_search_selection, toggle_btw_card, try_submit_btw_command,
 };
 pub use compact::{

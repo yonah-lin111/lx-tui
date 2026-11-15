@@ -35,5 +35,3 @@ pub const LX_BTW_RESET_EMPTY: &str = "No side thread to clear";
 
 /// 详情命令必须整段独立输入。
 pub const LX_DETAIL_COMMAND_STANDALONE: &str = "Run this command on its own line";
-/// 命令尚未接入执行（过渡占位，任务 T3–T7 会替换）。
-pub const LX_DETAIL_COMMAND_UNAVAILABLE: &str = "This command is not available yet";

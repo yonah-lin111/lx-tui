@@ -8,7 +8,7 @@ use crate::app::state::lx::slash::composer::{
     self, DetailCommand, DetailContext, ParsedDetailCommand,
 };
 use crate::app::state::{AppState, InputHintLevel, Lx, SlashEntry, SlashPanel};
-use crate::app::update::{show_lx_hint, show_lx_toast};
+use crate::app::update::show_lx_hint;
 use crate::tiling::PaneId;
 use crate::ui::text;
 
@@ -243,21 +243,7 @@ pub(crate) fn execute(
         ParsedDetailCommand::Report(note) => super::detail_report::submit(state, pane, note),
         ParsedDetailCommand::Undo => super::detail_undo::prepare(state, pane),
         ParsedDetailCommand::Compact => super::detail_compact::request(state, pane),
-        // T7 接入；在此之前明确提示而不是把命令文本发给模型。
-        ParsedDetailCommand::New => {
-            clear(state, pane);
-            show_lx_toast(
-                state,
-                pane,
-                crate::app::toast::Toast::new(
-                    crate::app::toast::ToastKind::Warning,
-                    text::detail::LX_DETAIL_COMMAND_UNAVAILABLE.to_string(),
-                    Some(pane),
-                    std::time::Instant::now(),
-                ),
-            );
-            true
-        }
+        ParsedDetailCommand::New => super::btw::request_reset_thread(state, pane),
     }
 }
 

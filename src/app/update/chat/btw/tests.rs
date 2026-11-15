@@ -792,3 +792,90 @@ fn thread_loaded_restores_compact_checkpoints() {
     assert_eq!(thread.compact.checkpoints.len(), 1);
     assert_eq!(thread.compact.checkpoints[0].id, "compact-1");
 }
+
+#[test]
+fn btw_new_emits_delete_thread_and_rejects_while_loading() {
+    let (mut state, pane) = btw_pane();
+    state
+        .pane_mut_anywhere(pane)
+        .expect("pane")
+        .lx
+        .btw
+        .active_thread_mut()
+        .expect("thread")
+        .thread_id = Some("thread-1".into());
+    state.effects.clear();
+    assert!(request_reset_thread(&mut state, pane));
+    assert!(
+        state.effects.iter().any(|effect| matches!(
+            effect,
+            Effect::Btw(BtwEffect::DeleteThread { qa_id, thread_id, .. })
+                if qa_id == "qa-1" && thread_id == "thread-1"
+        )),
+        "发出删除线程效应：{:?}",
+        state.effects
+    );
+
+    // 回答仍在进行：拒绝且不清线程。
+    {
+        let thread = state
+            .pane_mut_anywhere(pane)
+            .expect("pane")
+            .lx
+            .btw
+            .active_thread_mut()
+            .expect("thread");
+        thread.pending_recipients = 1;
+    }
+    state.effects.clear();
+    assert!(request_reset_thread(&mut state, pane));
+    assert!(
+        !state
+            .effects
+            .iter()
+            .any(|effect| matches!(effect, Effect::Btw(BtwEffect::DeleteThread { .. }))),
+        "忙碌时不得删除：{:?}",
+        state.effects
+    );
+}
+
+#[test]
+fn thread_deleted_resets_view_and_qalist_mark() {
+    let (mut state, pane) = btw_pane();
+    {
+        let thread = state
+            .pane_mut_anywhere(pane)
+            .expect("pane")
+            .lx
+            .btw
+            .active_thread_mut()
+            .expect("thread");
+        thread.thread_id = Some("thread-1".into());
+        thread.child_session_id = Some("child-1".into());
+        thread.title = "old".into();
+    }
+    state.effects.clear();
+    assert!(on_thread_deleted(&mut state, pane, "sess-test", "qa-1"));
+    let thread = state
+        .pane_anywhere(pane)
+        .expect("pane")
+        .lx
+        .btw
+        .active_thread()
+        .expect("thread");
+    assert!(thread.thread_id.is_none());
+    assert!(thread.child_session_id.is_none());
+    assert!(thread.chat.messages.is_empty());
+    assert!(
+        state
+            .effects
+            .iter()
+            .any(|effect| matches!(effect, Effect::Btw(BtwEffect::LoadQaList { .. }))),
+        "删除后刷新 QA 列表：{:?}",
+        state.effects
+    );
+    assert!(
+        state.pane_anywhere(pane).expect("pane").lx.toast.is_some(),
+        "lx 页内 toast"
+    );
+}

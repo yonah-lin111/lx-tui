@@ -20,7 +20,7 @@ mod input;
 pub use events::{
     AcceptedBtw, BtwToolSettlement, BtwToolUpdate, btw_message_parts, new_assistant_message,
     on_accepted, on_delta, on_failed, on_finished, on_qa_list_loaded, on_recipient_started,
-    on_thread_loaded, on_tool_state,
+    on_thread_deleted, on_thread_loaded, on_tool_state,
 };
 pub use input::apply_input;
 
@@ -316,6 +316,60 @@ pub fn ensure_loaded(state: &mut AppState, pane: PaneId) -> bool {
 }
 
 /// 提交当前 QA 的草稿；返回是否登记了提交。
+/// `/new`：删除当前 QA 的旁路线程并从空白开始；回答/压缩中拒绝。
+pub fn request_reset_thread(state: &mut AppState, pane: PaneId) -> bool {
+    let Some((session_id, qa_id, thread_id, busy)) = state.pane_anywhere(pane).and_then(|target| {
+        if !target.lx.btw_editing() {
+            return None;
+        }
+        let session_id = target.lx.chat.session_id.clone()?;
+        let qa_id = target.lx.btw.active.clone()?;
+        let thread = target.lx.btw.active_thread()?;
+        Some((
+            session_id,
+            qa_id,
+            thread.thread_id.clone(),
+            thread.is_loading() || thread.compact.is_running(),
+        ))
+    }) else {
+        return false;
+    };
+    if busy {
+        show_lx_toast(
+            state,
+            pane,
+            Toast::new(
+                ToastKind::Warning,
+                text::detail::LX_BTW_RESET_BUSY,
+                Some(pane),
+                std::time::Instant::now(),
+            ),
+        );
+        return true;
+    }
+    let Some(thread_id) = thread_id else {
+        show_lx_toast(
+            state,
+            pane,
+            Toast::new(
+                ToastKind::Warning,
+                text::detail::LX_BTW_RESET_EMPTY,
+                Some(pane),
+                std::time::Instant::now(),
+            ),
+        );
+        return true;
+    };
+    super::composer::clear(state, pane);
+    state.effects.push(Effect::Btw(BtwEffect::DeleteThread {
+        pane,
+        parent_session_id: session_id,
+        qa_id,
+        thread_id,
+    }));
+    true
+}
+
 pub fn submit_current(state: &mut AppState, pane: PaneId) -> bool {
     if super::composer::try_submit(state, pane) {
         return true;
