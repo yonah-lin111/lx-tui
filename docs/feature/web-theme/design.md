@@ -49,6 +49,7 @@
 - `web.html`：`<div class="web-topbar-left">` 包住 logo 与 `.web-tabs`，logo 与 tab 间距 10px；右侧 `#web-theme-select`。
 - 移除 `.web-brand` 内 `<span>lx-tui</span>`，保留 `aria-label="lx-tui home"` 与像素 logo。
 - `.web-theme-select` 固定 152px，避免 `Theme: Default` / `Theme: Glass` 切换时抖动。
+- 主题 select 的下拉选项在 Glass 下与其他 select 完全一致：`web.css` 中 `.web-theme-menu` 的 hover/选中底色只作用于 Default（`html:not([data-theme="glass"])`），Glass 交给统一的 `.seg-pill` 与透明选项，不得叠加旧底色。
 
 ### 动效
 

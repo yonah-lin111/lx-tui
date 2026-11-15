@@ -11,6 +11,7 @@
 - [x] 顶栏与 range/provider 小 tab 统一胶囊滑块：hover 预览、离场回落选中项、文字颜色仅在选中态变化。
 - [x] 设置页左侧竖向 tab 使用同一套滑块：hover 上下预览；按钮宽度扣除左右外边距，消除横向滚动条。
 - [x] Select 菜单选项与 Commands/Provider/MCP/Skills/Subagents 列表复用竖向滑块：hover 预览、选中落位，列表重绘后自动重新挂载。
+- [x] 顶栏主题 select 下拉与其它 select 完全一致：Default 选项底色规则限定在 `html:not([data-theme="glass"])`，Glass 仅用 `.seg-pill`，选中项不再叠加旧底色。
 - [x] 玻璃切换性能：旧视图立即隐藏，新视图仅 opacity 淡入，移除整页 blur/translate 与离场层。
 - [x] Default 主题零回归：所有玻璃规则限定在 `html[data-theme="glass"]`。
 - [x] 测试：配置 round-trip/非法值、API 持久化与页面注入、资源路由与主题脚本断言。
