@@ -1,6 +1,6 @@
 # Web 控制台 Todo 看板 + TUI 字符统计块移除：执行清单
 
-> 状态：**Phase 1–5、图表、加载态、状态宽度与 Home 摘要卡已实现；全量验证与真机验收待完成**
+> 状态：**Phase 1–10 已实现并通过复审修复；全量验证与真机验收待完成**
 > 日期：2026-11-14
 > 设计依据：[design.md](./design.md)
 > 检索工具：`codegraph`（project `lx-tui`）、`codebase-memory-mcp`（project `lx-tui` / `Users-yonah-projects-agent-lx-tui`）均已索引本仓库。
@@ -10,7 +10,7 @@
 ## 0. 审核门槛 G0
 
 - [x] 用户审核 `design.md` 与 `task.md`，明确批准实施。
-- [x] 确认 §12 待审核项：默认 `7d`、Overdue 全库口径、Groups 标签、Todo tab 位置、不做 Home 卡片。
+- [x] 确认 §12 待审核项：默认 `7d`、Overdue 全库口径、Groups 标签、Todo tab 位置；初版不做 Home 卡片，后按 D13 追加实时摘要卡（见 Phase 9）。
 - [x] 开工前确认工作区干净；`SCHEMA_VERSION` 保持 29，不改迁移。
 
 > 任一步发现设计与代码事实冲突，先停下回报，不擅自改边界。
@@ -322,7 +322,21 @@
 
 ---
 
-## 11. 明确不做
+## 11. Phase 10：复审修复（2026-11-15 追加）
+
+- [x] P0：修正 Groups 表 `Items` 与 `Top Priority` 列错位。
+- [x] P1：筛选/搜索/翻页后 `.todo-main` 回到顶部；手动 Refresh 保持位置。
+- [x] P1：切离 Todo 时隐藏图表 tooltip，避免 `todo.css` 挂起后残留。
+- [x] P2：Home 首次失败支持卡内重试；Groups 空态文案改为分组专用。
+- [x] P2：Home 跳转立即同步 Todos tab 与分页可见性，慢请求/失败不残留旧 tab。
+- [x] P2：Home 计数与列表改为同一读事务。
+- [x] P2：补日期倒置、Home 5 条上限、`pageSize` 钳制、`c` 键无副作用、`home.js`/`todo_charts.js` 外部资源断言。
+- [x] P2：同步 `design.md` §5.10、§6.4 与本清单；`review.md` 记录本轮 P0–P2 与接受风险。
+- [ ] `cargo run` 真机复验 Phase 8/9/10（与 Home 卡片、Groups 表、滚动位置、tooltip 一并确认）。
+
+---
+
+## 12. 明确不做
 
 - Web 写操作（新增/勾选/删除/排序）。
 - 图表缩放、图例开关、自动刷新。

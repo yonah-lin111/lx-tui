@@ -40,13 +40,13 @@ assets/
 - `web.html` 是唯一 HTML 文档：`GET /`、`GET /settings`、`GET /usage`、`GET /todo` 都返回它，前端读取 `location.pathname` / `location.hash` 决定初始视图；页面内顶部 bar 用 hash（`#/`、`#/settings`、`#/usage`、`#/todo`）切换，旧地址启动时规范化为 `/?token=...#/<view>`。
 - **视图级样式隔离**：`settings.css`、`usage.css` 与 `todo.css` 都以 `media="not all"` 引入，`web.js` 只切换当前视图样式表的 `media`，多套通用选择器不会同时生效；`web.css` 只放全局外壳、共享反馈组件、统一滚动条与全局 `.hidden`，`.select-*` 等存在视图差异的样式仍留在各自视图 CSS。视图 CSS 不得再重复定义这些全局能力；`todo.css` 为保持视图隔离刻意重复 Usage 的控件/卡片/表格样式，修改任一侧不得连带另一侧。**主题覆盖集中在 `theme.css`**：全部规则以 `html[data-theme="glass"]` 前缀限定，并在四张样式表之后加载；不得把玻璃主题规则散落到视图 CSS。
 - 单页脚本超过 1000 行时按职责拆分：共享核心与路由固定在 `web.js`，各视图主脚本保留页面骨架与业务函数并暴露 `init<View>View`，其余子视图拆为 `<name>_<section>.js`，均在 `page::asset` 登记并按 HTML 中的顺序加载（`web.js` → `settings.js` → `settings_models_card.js` → `settings_models.js` → `settings_connect.js` → `settings_mcp.js` → `settings_skills.js` → `settings_subagents.js` → `usage_charts.js` → `usage.js` → `todo_charts.js` → `todo.js`）。拆分后的脚本共享同一全局作用域，加载顺序即依赖顺序：后加载文件可调用先加载文件定义的全局函数与变量；`web.js` 必须最先加载，且只定义共享核心与路由，不立即发数据请求。跨文件禁止重复声明顶层 `const` / `let` / `function`。
-- **首屏加载态**：`init<View>View` 必须返回首次数据加载 Promise（同步视图除外），由 `web.js` 的顶部进度条 `#page-loading` 等待 settle，进度条最短 180ms、不遮挡内容；数据容器在首次加载时绘制与最终布局同尺寸的局部骨架（骨架原语在 `web.css`），骨架切数据只淡入一次，刷新/筛选保留旧数据。状态指示器（`.action-status`）必须预留包含 spinner 的最小宽度并使用 `tabular-nums`；已有数据时刷新只转 `.status-spinner`，不得把 `Updated HH:MM:SS` 改成 `Refreshing…`。
+- **首屏加载态**：`init<View>View` 必须返回首次数据加载 Promise（同步视图除外），由 `web.js` 的顶部进度条 `#page-loading` 等待 settle，进度条最短 180ms、不遮挡内容；数据容器在首次加载时绘制与最终布局同尺寸的局部骨架（骨架原语在 `web.css`），骨架切数据只淡入一次，刷新/筛选保留旧数据。状态指示器（`.action-status`）宽度跟随文案、不预留固定 `min-width`，使用 `tabular-nums` 与 `nowrap`；spinner 只占自身槽位，容器整体右对齐保证右侧按钮位置稳定。已有数据时刷新只转 `.status-spinner`，不得把 `Updated HH:MM:SS` 改成 `Refreshing…`。
 - **结构、样式、脚本分文件维护**：HTML 不含内联 `<style>` / `<script>` 正文，改为 `<link rel="stylesheet" href="/<name>.css">` 与 `<script src="/<name>.js"></script>`。
 - 若确需嵌入非 HTML 资源（图标、字体等二进制），单独放置并以扩展名区分；二进制用 `include_bytes!`，文本用 `include_str!`。
 
 ## 提供方式
 
-- 资源经**独立路由**提供，与页面同源：`GET /web.css`、`GET /theme.css`、`GET /web.js`、`GET /settings.css`、`GET /usage.css`、`GET /todo.css`、`GET /todo_charts.js`、`GET /todo.js`。浏览器对每个资源独立发起请求；服务端统一返回 `Cache-Control: no-store`，避免二进制重启后命中旧资源。
+- 资源经**独立路由**提供，与页面同源：`GET /web.css`、`GET /theme.css`、`GET /web.js`、`GET /home.js`、`GET /settings.css`、`GET /usage.css`、`GET /todo.css`、`GET /todo_charts.js`、`GET /todo.js`。浏览器对每个资源独立发起请求；服务端统一返回 `Cache-Control: no-store`，避免二进制重启后命中旧资源。
 - 每个资源在 Rust 侧以 `include_str!` 嵌入，注册进静态资源表（`page::asset`：路径 → `(Content-Type, body)`），由路由分派；新增资源只需在表中加一行。
 - `Content-Type` 必须正确：`.css` 用 `text/css; charset=utf-8`，`.js` 用 `text/javascript; charset=utf-8`，`.html` 用 `text/html; charset=utf-8`。
 - 资源表按**白名单**匹配：只有登记过的裸路径在 token 校验之前放行；其它路径仍走正常校验与路由（未知路径回 404）。

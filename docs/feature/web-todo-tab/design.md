@@ -1,6 +1,6 @@
 # Web 控制台 Todo 看板 + TUI 字符统计块移除：设计方案
 
-> 状态：**Phase 1–5 + 图表 / 加载态 / 状态宽度 / Home 摘要卡已实现；全量验证与真机验收待完成**
+> 状态：**Phase 1–10 已实现并通过复审修复；全量验证与真机验收待完成**
 > 日期：2026-11-14（2026-11-15 追加图表与加载体验需求，见 D9–D12 与 §5.7/§5.8）
 > 项目：`/Users/yonah/projects/agent/lx-tui`（分支 `dev`，工作区干净）
 > 配套执行清单：[task.md](./task.md)
@@ -596,6 +596,16 @@ function todoFilterParams(range) {
 - **条目点击**：跳转 `#/todo`，调用 `todo.js::todoFocusFromHome(text)`：预填搜索框、范围按钮切到 `All`，已初始化时立即重载；未初始化时由 `initOnce` 带着状态完成首次加载。
 - **视觉**：Default 主题沿用方角与 monospace；Glass 主题复用卡片玻璃材质，统计块 12px 圆角、条目行 10px 圆角，hover 只变背景；`prefers-reduced-motion` 下关闭条目与卡片过渡。
 
+### 5.10 复审修复（2026-11-15）
+
+- **Groups 列序**：表头为 Date / Group / Items / Top Priority / Open / Doing / Done，行数据按同序追加；此前 `priorityTd` 插在 `items` 之前，导致 Items 显示优先级徽标、Top Priority 显示条目数（P0）。
+- **滚动位置**：筛选、搜索、翻页成功后 `.todo-main` 回到顶部；手动 Refresh 保持当前滚动位置。
+- **图表 tooltip**：切离 Todo 视图时调用 `todoChartHideTooltip()`，避免 `todo.css` 被挂起后 tooltip 以未样式化块残留在 body。
+- **Home 失败重试**：首次加载失败时卡内提示可点击/回车重试；已有数据刷新失败保留旧列表。
+- **读取一致性**：`query_todo_home` 的计数与列表在同一 deferred read transaction 内读取，避免 TUI 并发写入时数字与条目对不上。
+- **空态与跳转**：Groups 空态使用 `No grouped todos in the selected range.`；Home 跳转在请求返回前同步 Todos tab 与分页可见性。
+- **测试**：补日期倒置、Home 5 条上限、HTTP `pageSize` 钳制、`/home.js` 与 `/todo_charts.js` 外部资源断言、`c` 键无副作用。
+
 ---
 
 ## 6. 服务端 API 方案
@@ -711,7 +721,9 @@ function todoFilterParams(range) {
 | --- | --- | --- |
 | 非 GET | 405 | `{"error":"method not allowed"}` |
 | 未知路径 | 404 | `{"error":"not found"}` |
-| 日期/status/priority/page 非法 | 422 | `{"error":"invalid query parameter '<name>'"}` |
+| 日期/status/priority 非法 | 422 | `{"error":"invalid query parameter '<name>'"}` |
+| `page=0` | 422 | `{"error":"query parameter 'page' must be >= 1"}` |
+| `page` 非数字 / `pageSize` 非数字 | 422 | `{"error":"invalid query parameter '<name>'"}` |
 | DB 打开/查询失败 | 500 | `{"error":"<message>"}` |
 
 ### 6.5 关键服务端代码
@@ -735,6 +747,7 @@ pub(super) fn route(request: &Request, state: &ServiceState) -> Response {
     };
     match request.path.as_str() {
         "/api/todo/overview" => overview_json(&db, &params.filter),
+        "/api/todo/home" => home_json(&db),
         _ => items_json(&db, &params),
     }
 }

@@ -16,4 +16,10 @@
 - [x] Default 主题零回归：所有玻璃规则限定在 `html[data-theme="glass"]`。
 - [x] 测试：配置 round-trip/非法值、API 持久化与页面注入、资源路由与主题脚本断言。
 - [x] 文档：`docs/standards/html-assets.md` 与 `docs/feature/web-theme/design.md`。
+- [x] 复审 P1：`PUT /api/config` 服务端互斥；主题保存客户端串行化，失败只回滚到最后一次成功值。
+- [x] 复审 P1：`handlers.rs` 拆分 JSON 解析器，生产文件回到 1000 行以内。
+- [x] 复审 P1：≤640px 顶栏不再溢出；主题 select 收成箭头按钮。
+- [x] 复审 P1：Default 视图切换改为纯透明度淡入；`.action-status` 标准改为宽度跟随文案。
+- [x] 复审 P2：Todo 图表/徽标令牌统一；reduced-motion 全局兜底；select Tab/方向键与 Quick Connect 菜单清理。
+- [x] `review.md` 记录本轮 P1–P2 与接受风险。
 - [ ] 用户在真实浏览器确认观感与主题持久化。
