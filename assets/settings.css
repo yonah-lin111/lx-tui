@@ -16,7 +16,7 @@ h2 { font-size: 16px; margin: 0 0 16px; }
 .view-head h2 { margin: 0; }
 .view-actions { display: flex; align-items: center; gap: 8px; margin-left: auto; }
 .view-actions button:disabled { opacity: .45; cursor: default; }
-.action-status { display: inline-flex; align-items: center; gap: 6px; min-width: calc(15ch + 30px); font-size: 12px; color: var(--muted); font-variant-numeric: tabular-nums; white-space: nowrap; }
+.action-status { display: inline-flex; align-items: center; gap: 6px; font-size: 12px; color: var(--muted); font-variant-numeric: tabular-nums; white-space: nowrap; }
 .status-dot { width: 8px; height: 8px; border-radius: 50%; background: var(--border-strong); }
 .status-dot.clean { background: var(--ok); }
 .status-dot.dirty { background: var(--text); }

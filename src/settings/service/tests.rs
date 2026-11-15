@@ -474,6 +474,12 @@ async fn page_requires_token_and_serves_self_contained_assets() {
         "segmented pills preview the hovered item"
     );
     assert!(
+        web_js_body.contains(
+            "setSegmentPreview(group, config, 'hover', segmentItemOf(group, config, event.target));"
+        ) && !web_js_body.contains("if (item) { setSegmentPreview(group, config, 'hover'"),
+        "hovering non-item areas clears the pill preview"
+    );
+    assert!(
         web_js_body.contains("nav.side") && web_js_body.contains("vertical: true"),
         "settings side nav is registered as a vertical segmented group"
     );
@@ -508,6 +514,11 @@ async fn page_requires_token_and_serves_self_contained_assets() {
     assert_eq!(status(&usage_css), 200);
     assert!(usage_css.contains("text/css"), "usage css content type");
     let usage_css_body = body(&usage_css);
+    assert!(
+        usage_css_body.contains(".action-status")
+            && !usage_css_body.contains("min-width: calc(16ch + 30px)"),
+        "usage status width follows its label"
+    );
 
     let usage_js = request(port, &get("/usage.js")).await;
     assert_eq!(status(&usage_js), 200);
@@ -547,6 +558,11 @@ async fn page_requires_token_and_serves_self_contained_assets() {
     assert_eq!(status(&todo_css), 200);
     assert!(todo_css.contains("text/css"), "todo css content type");
     let todo_css_body = body(&todo_css);
+    assert!(
+        todo_css_body.contains(".action-status")
+            && !todo_css_body.contains("min-width: calc(16ch + 30px)"),
+        "todo status width follows its label"
+    );
 
     let todo_js = request(port, &get("/todo.js")).await;
     assert_eq!(status(&todo_js), 200);
@@ -865,6 +881,10 @@ async fn page_header_actions_fill_width_and_resizers() {
     assert!(
         css.contains(".action-status") && css.contains(".status-dot"),
         "action bar status styles"
+    );
+    assert!(
+        !css.contains("min-width: calc(15ch + 30px)"),
+        "settings status width follows its label"
     );
     // 编辑器头部保留标题与字段。
     let legend = html.find("id=\"editor-legend\"").expect("legend present");

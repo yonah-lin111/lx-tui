@@ -402,8 +402,9 @@ function bindSegmentGroup(group, config) {
   group.dataset.segmentBound = '1';
   ensureSegmentPill(group);
   group.addEventListener('pointerover', (event) => {
-    const item = segmentItemOf(group, config, event.target);
-    if (item) { setSegmentPreview(group, config, 'hover', item); }
+    // 悬停分组内的标题/空白同样是一次预览变更：没有条目就清掉，
+    // 否则指示块会停在上一个条目上，看起来像一直选中。
+    setSegmentPreview(group, config, 'hover', segmentItemOf(group, config, event.target));
   });
   group.addEventListener('pointerleave', () => clearSegmentPreview(group, config, 'hover'));
   group.addEventListener('focusin', (event) => {
