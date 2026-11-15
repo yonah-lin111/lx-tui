@@ -146,6 +146,82 @@ body.resizing { cursor: col-resize; user-select: none; }
 /* 状态点脉冲：Settings/Usage 的 saving/loading 指示灯共用。 */
 @keyframes dot-pulse { 0%, 100% { opacity: .4; } 50% { opacity: 1; } }
 
+/* ===== 首次加载遮罩：切到尚未初始化的视图时覆盖内容区，保留顶部导航可点 ===== */
+.page-loading {
+  position: fixed;
+  top: var(--web-topbar-height);
+  right: 0;
+  bottom: 0;
+  left: 0;
+  z-index: 900;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 10px;
+  background: rgba(15, 15, 15, .55);
+  backdrop-filter: blur(1px);
+  opacity: 1;
+  transition: opacity .14s ease;
+}
+.page-loading.leaving { opacity: 0; pointer-events: none; }
+.page-loading-spinner {
+  width: 22px;
+  height: 22px;
+  border: 2px solid var(--border-strong);
+  border-top-color: var(--text);
+  border-radius: 50%;
+  animation: page-spin .7s linear infinite;
+}
+.page-loading-label {
+  font-size: 12px;
+  color: var(--muted);
+  letter-spacing: .04em;
+}
+@keyframes page-spin { to { transform: rotate(360deg); } }
+
+/* ===== 局部骨架：数据容器首次加载时占位，尺寸与最终内容对齐，避免高度跳变 ===== */
+.skeleton {
+  position: relative;
+  overflow: hidden;
+  background: var(--border);
+}
+.skeleton::after {
+  content: '';
+  position: absolute;
+  inset: 0;
+  transform: translateX(-100%);
+  background: linear-gradient(90deg, transparent, rgba(255, 255, 255, .08), transparent);
+  animation: skeleton-sweep 1.1s ease-in-out infinite;
+}
+.skeleton-line { height: 9px; }
+.skeleton-line.title { width: 38%; }
+.skeleton-line.value { width: 52%; height: 16px; }
+.skeleton-line.sub { width: 68%; height: 8px; }
+
+.chart-skeleton { position: absolute; inset: 0; }
+.skeleton-legend { display: flex; flex-direction: column; gap: 6px; width: 100%; }
+.skeleton-legend .skeleton { height: 9px; }
+.skeleton-legend .skeleton:nth-child(2) { width: 78%; }
+.skeleton-legend .skeleton:nth-child(3) { width: 62%; }
+
+.skeleton-table { display: flex; flex-direction: column; gap: 9px; padding: 6px 0; }
+.skeleton-table-row { display: flex; align-items: center; gap: 10px; }
+.skeleton-table-row .skeleton { height: 10px; }
+.skeleton-table-row.head .skeleton { height: 7px; background: var(--border-strong); }
+.skeleton-table-row .w-date { flex: 0 0 84px; }
+.skeleton-table-row .w-status { flex: 0 0 76px; }
+.skeleton-table-row .w-priority { flex: 0 0 52px; }
+.skeleton-table-row .w-text { flex: 1 1 auto; }
+.skeleton-table-row .w-group { flex: 0 0 160px; }
+.skeleton-table-row .w-num { flex: 0 0 64px; }
+
+@keyframes skeleton-sweep { to { transform: translateX(100%); } }
+
+@media (prefers-reduced-motion: reduce) {
+  .page-loading-spinner, .skeleton::after { animation: none; }
+}
+
 /* ===== 窄屏 ===== */
 @media (max-width: 640px) {
   .home-cards { grid-template-columns: 1fr; }

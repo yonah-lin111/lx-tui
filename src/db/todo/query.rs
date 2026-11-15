@@ -198,6 +198,37 @@ impl Database {
         })
     }
 
+    /// 按优先级统计条目数，索引固定为 `P0..P3`；受全部筛选条件影响。
+    ///
+    /// 空表返回全零；未知优先级值（理论上不存在）直接忽略，不新增槽位。
+    pub fn query_todo_priority_counts(&self, filter: &TodoFilter) -> Result<[usize; 4]> {
+        let sql = format!("SELECT priority, COUNT(*) FROM todo {FILTER_WHERE} GROUP BY priority");
+        let mut statement = self.conn.prepare(&sql)?;
+        let rows = statement.query_map(
+            params![
+                filter.start_date.as_deref(),
+                filter.end_date.as_deref(),
+                filter.status.map(TodoStatus::as_str),
+                filter.priority.map(TodoPriority::as_str),
+                filter.search.as_deref(),
+            ],
+            |row| Ok((row.get::<_, String>(0)?, row.get::<_, i64>(1)?)),
+        )?;
+        let mut counts = [0usize; 4];
+        for row in rows {
+            let (priority, count) = row?;
+            let index = match priority.as_str() {
+                "P0" => 0,
+                "P1" => 1,
+                "P2" => 2,
+                "P3" => 3,
+                _ => continue,
+            };
+            counts[index] = count_to_usize(count);
+        }
+        Ok(counts)
+    }
+
     /// 按 `entry_date` 聚合每日计划数、完成数与剩余数（`planned - done`），日期倒序。
     pub fn query_todo_daily(&self, filter: &TodoFilter) -> Result<Vec<TodoDailyRow>> {
         let sql = format!(

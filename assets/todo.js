@@ -123,12 +123,19 @@ async function loadTodoDashboard() {
       return loadTodoDashboard();
     }
     renderTodoSummary(todoState.overview.summary || null);
+    renderTodoCharts(todoState.overview || {}, range);
     renderTodoTableSection();
     setTodoError('');
     const nowText = new Date().toLocaleTimeString('en-US', {hour12: false});
     setTodoStatus('clean', 'Updated ' + nowText);
   } catch (error) {
     if (reqId !== todoState.requestSeq) { return; }
+    // 首次请求失败时把骨架换成真正的空态，避免一直闪“加载中”而只有 banner 说明失败。
+    if (!todoState.overview) {
+      renderTodoSummary(null);
+      renderTodoCharts({}, range);
+      renderTodoTableSection();
+    }
     setTodoStatus('error', 'Load failed');
     setTodoError('Failed to load todos: ' + error.message);
     if (isTodoViewActive()) { showToast(error.message, 'error'); }
@@ -177,6 +184,56 @@ async function loadTodoItemsPage(nextPage) {
 }
 
 // ===== 汇总卡片 =====
+
+// 首次加载骨架：6 卡片 + 3 图表 + legend + 表格，尺寸与最终内容对齐，避免高度跳变。
+function todoSkeletonCard() {
+  const card = domEl('div', 'summary-card');
+  card.appendChild(domEl('div', 'skeleton skeleton-line title'));
+  card.appendChild(domEl('div', 'skeleton skeleton-line value'));
+  card.appendChild(domEl('div', 'skeleton skeleton-line sub'));
+  return card;
+}
+
+function todoSkeletonTable() {
+  const wrap = domEl('div', 'skeleton-table');
+  const columns = ['w-date', 'w-status', 'w-priority', 'w-text', 'w-group', 'w-num'];
+  const row = (head) => {
+    const tr = domEl('div', 'skeleton-table-row' + (head ? ' head' : ''));
+    for (const column of columns) {
+      tr.appendChild(domEl('div', 'skeleton ' + column));
+    }
+    return tr;
+  };
+  wrap.appendChild(row(true));
+  for (let index = 0; index < 7; index += 1) {
+    wrap.appendChild(row(false));
+  }
+  return wrap;
+}
+
+function renderTodoSkeleton() {
+  const summary = document.getElementById('todo-summary-cards');
+  if (summary) {
+    summary.replaceChildren();
+    for (let index = 0; index < 6; index += 1) {
+      summary.appendChild(todoSkeletonCard());
+    }
+  }
+  for (const id of ['todo-chart-trend', 'todo-chart-status', 'todo-chart-priority']) {
+    const host = document.getElementById(id);
+    if (host) { host.replaceChildren(domEl('div', 'skeleton chart-skeleton')); }
+  }
+  const legend = document.getElementById('todo-status-legend');
+  if (legend) {
+    const wrap = domEl('div', 'skeleton-legend');
+    for (let index = 0; index < 3; index += 1) {
+      wrap.appendChild(domEl('div', 'skeleton'));
+    }
+    legend.replaceChildren(wrap);
+  }
+  const table = document.getElementById('todo-table-container');
+  if (table) { table.replaceChildren(todoSkeletonTable()); }
+}
 
 function todoFormatNumber(value) {
   return Number(value || 0).toLocaleString('en-US');
@@ -569,9 +626,10 @@ function initTodoDashboard() {
     });
   }
 
-  loadTodoDashboard();
+  renderTodoSkeleton();
+  return loadTodoDashboard();
 }
 
 function initTodoView() {
-  initTodoDashboard();
+  return initTodoDashboard();
 }

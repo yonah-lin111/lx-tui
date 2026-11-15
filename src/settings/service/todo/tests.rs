@@ -108,6 +108,12 @@ async fn todo_overview_aggregates_summary_daily_and_groups() {
     assert_eq!(overview["summary"]["done"], 2);
     assert_eq!(overview["summary"]["overdue"], 1, "昨天未完成 1 条");
 
+    let priority = &overview["priority"];
+    assert_eq!(priority["p0"], 2, "b 与 g 为 P0");
+    assert_eq!(priority["p1"], 3, "a、d、f 为 P1");
+    assert_eq!(priority["p2"], 1, "c 为 P2");
+    assert_eq!(priority["p3"], 1, "e 为 P3");
+
     let daily = overview["daily"].as_array().expect("daily array");
     assert_eq!(daily.len(), 2);
     assert_eq!(daily[0]["planned"], 5, "按日期倒序，今天在前");
@@ -157,6 +163,10 @@ async fn todo_overview_overdue_ignores_date_range() {
         overview["summary"]["overdue"], 1,
         "Overdue 必须忽略日期范围，仍统计历史未完成"
     );
+    assert_eq!(overview["priority"]["p0"], 1, "优先级分布按日期范围收敛");
+    assert_eq!(overview["priority"]["p1"], 2);
+    assert_eq!(overview["priority"]["p2"], 1);
+    assert_eq!(overview["priority"]["p3"], 1);
 
     let done_only = request(
         port,
@@ -171,6 +181,13 @@ async fn todo_overview_overdue_ignores_date_range() {
         done_only["summary"]["overdue"], 0,
         "status=done 与未完成互斥，Overdue 归零"
     );
+    assert_eq!(
+        done_only["priority"]["p0"], 0,
+        "日期范围收窄到今天后，昨天的 g 不再计入"
+    );
+    assert_eq!(done_only["priority"]["p1"], 1, "今天仅 d 为 done/P1");
+    assert_eq!(done_only["priority"]["p2"], 0);
+    assert_eq!(done_only["priority"]["p3"], 0);
 }
 
 #[tokio::test]
@@ -279,8 +296,13 @@ async fn todo_page_and_assets_are_wired() {
         "data-view=\"todo\"",
         "href=\"#/todo\"",
         "/todo.css",
+        "/todo_charts.js",
         "/todo.js",
         "todo-summary-cards",
+        "todo-chart-trend",
+        "todo-chart-status",
+        "todo-status-legend",
+        "todo-chart-priority",
         "todo-table-container",
     ] {
         assert!(html.contains(needle), "shell missing {needle}");
@@ -303,4 +325,24 @@ async fn todo_page_and_assets_are_wired() {
     assert!(!js.contains("innerHTML"), "no innerHTML");
     assert!(!js.contains("function createSelect"), "reuse shared select");
     assert!(!js.contains("function showToast"), "reuse shared toast");
+    assert!(
+        js.contains("renderTodoCharts"),
+        "todo controller wires the chart renderer"
+    );
+    assert!(
+        js.contains("renderTodoSkeleton"),
+        "todo paints a stable first-load skeleton"
+    );
+
+    let charts = request(port, &get("/todo_charts.js")).await;
+    assert_eq!(status(&charts), 200);
+    assert!(
+        charts.contains("text/javascript; charset=utf-8"),
+        "todo_charts.js content type"
+    );
+    assert!(
+        charts.contains("function renderTodoCharts"),
+        "chart renderer entry"
+    );
+    assert!(!charts.contains("innerHTML"), "no innerHTML in charts");
 }

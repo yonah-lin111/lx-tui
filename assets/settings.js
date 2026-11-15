@@ -830,5 +830,5 @@ function initSettingsView() {
   actionBars.commands = createActionBar('actions-commands', { isDirty: commandsDirty, save: saveCommand, reset: resetCommandEditor });
   initLoggingSelect();
   initCommandSelects();
-  loadState();
+  return loadState();
 }

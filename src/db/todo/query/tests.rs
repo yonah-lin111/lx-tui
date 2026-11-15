@@ -545,6 +545,111 @@ fn overdue_ignores_date_range_but_respects_other_filters() {
 }
 
 #[test]
+fn priority_counts_respect_filters_and_empty_table_is_zero() {
+    let db = open_test_database();
+    assert_eq!(
+        db.query_todo_priority_counts(&TodoFilter::default())
+            .expect("empty priority counts"),
+        [0, 0, 0, 0]
+    );
+
+    save(
+        &db,
+        "2026-11-13",
+        "old done",
+        TodoStatus::Done,
+        TodoPriority::P1,
+    );
+    save(
+        &db,
+        "2026-11-13",
+        "alpha urgent",
+        TodoStatus::Todo,
+        TodoPriority::P0,
+    );
+    save(
+        &db,
+        "2026-11-14",
+        "alpha plan",
+        TodoStatus::Todo,
+        TodoPriority::P1,
+    );
+    save(
+        &db,
+        "2026-11-14",
+        "beta work",
+        TodoStatus::InProgress,
+        TodoPriority::P2,
+    );
+    save(
+        &db,
+        "2026-11-14",
+        "alpha low",
+        TodoStatus::Todo,
+        TodoPriority::P3,
+    );
+    save(
+        &db,
+        "2026-11-15",
+        "gamma done",
+        TodoStatus::Done,
+        TodoPriority::P0,
+    );
+
+    assert_eq!(
+        db.query_todo_priority_counts(&TodoFilter::default())
+            .expect("all priority counts"),
+        [2, 2, 1, 1],
+        "无筛选时按 P0..P3 顺序统计全部条目"
+    );
+
+    let today_only = TodoFilter {
+        start_date: Some("2026-11-14".into()),
+        end_date: Some("2026-11-14".into()),
+        ..Default::default()
+    };
+    assert_eq!(
+        db.query_todo_priority_counts(&today_only)
+            .expect("range priority counts"),
+        [0, 1, 1, 1],
+        "日期范围闭区间生效"
+    );
+
+    let open_only = TodoFilter {
+        status: Some(TodoStatus::Todo),
+        ..Default::default()
+    };
+    assert_eq!(
+        db.query_todo_priority_counts(&open_only)
+            .expect("status priority counts"),
+        [1, 1, 0, 1],
+        "状态筛选生效"
+    );
+
+    let by_search = TodoFilter {
+        search: Some("ALPHA".into()),
+        ..Default::default()
+    };
+    assert_eq!(
+        db.query_todo_priority_counts(&by_search)
+            .expect("search priority counts"),
+        [1, 1, 0, 1],
+        "搜索筛选生效且大小写不敏感"
+    );
+
+    let p0_only = TodoFilter {
+        priority: Some(TodoPriority::P0),
+        ..Default::default()
+    };
+    assert_eq!(
+        db.query_todo_priority_counts(&p0_only)
+            .expect("priority filtered counts"),
+        [2, 0, 0, 0],
+        "优先级筛选后其余档位归零"
+    );
+}
+
+#[test]
 fn daily_aggregates_planned_done_and_remaining() {
     let db = open_test_database();
     assert!(

@@ -51,8 +51,13 @@
   display: inline-flex;
   align-items: center;
   gap: 6px;
+  /* 状态文案在 Loading… / Refreshing… / Updated HH:MM:SS 之间切换：
+     预留最长态宽度并锁定数字等宽，右侧按钮组不再随状态抖动。 */
+  min-width: calc(16ch + 14px);
   font-size: 11px;
   color: var(--muted);
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
 }
 .status-dot {
   width: 7px;
@@ -392,4 +397,235 @@ button.ghost:disabled { opacity: .45; cursor: default; }
   .todo-content { padding: 12px 12px 28px; }
   .todo-summary-grid { grid-template-columns: 1fr; }
   .todo-filter-selects { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+}
+
+/* ===== 图表区 =====
+ * 与 usage.css 的图表样式刻意重复：视图样式隔离，不依赖 usage.css 的令牌。
+ */
+
+.todo-charts {
+  /* 图表颜色令牌：SVG 侧以 TODO_CHART_COLORS 为准，此处仅供 HTML 静态图例复用。 */
+  --todo-chart-planned: #60a5fa;
+  --todo-chart-done: #3ecf8e;
+  min-width: 0;
+}
+
+.todo-charts-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 12px;
+}
+.chart-wide { grid-column: 1 / -1; }
+
+.chart-card {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  padding: 12px;
+  border: 1px solid var(--border);
+  background: var(--panel);
+}
+.chart-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 6px 12px;
+  margin-bottom: 10px;
+}
+.chart-title {
+  margin: 0;
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--text);
+}
+.chart-subtitle {
+  margin: 2px 0 0;
+  font-size: 11px;
+  color: var(--muted);
+}
+.chart-legend {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px 12px;
+  font-size: 11px;
+  color: var(--muted);
+}
+.legend-item {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+}
+.legend-swatch {
+  display: inline-block;
+  width: 8px;
+  height: 8px;
+  flex-shrink: 0;
+}
+.todo-swatch-planned { background: var(--todo-chart-planned); }
+.todo-swatch-done { background: var(--todo-chart-done); }
+
+.chart-body {
+  position: relative;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 220px;
+}
+.chart-body-wide { min-height: 250px; }
+.chart-svg {
+  display: block;
+  width: 100%;
+  height: auto;
+  overflow: visible;
+}
+.chart-empty {
+  display: flex;
+  width: 100%;
+  min-height: 200px;
+  align-items: center;
+  justify-content: center;
+  padding: 0 12px;
+  border: 1px dashed var(--border-strong);
+  color: var(--muted);
+  font-size: 12px;
+  text-align: center;
+}
+
+/* 状态环形图 */
+.todo-donut-svg-wrap {
+  width: 180px;
+  height: 180px;
+}
+.todo-donut-svg-wrap .chart-svg {
+  width: 100%;
+  height: 100%;
+}
+.donut-legend {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  min-width: 0;
+  max-width: 100%;
+}
+.donut-legend-row {
+  display: grid;
+  grid-template-columns: 10px minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 8px;
+  padding: 2px 5px;
+  font-size: 11px;
+  cursor: default;
+}
+.donut-legend-row:hover { background: var(--hover); }
+.donut-legend-name {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--text);
+}
+.donut-legend-val {
+  color: var(--muted);
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+/* 优先级横条 */
+.todo-priority-bars {
+  display: flex;
+  width: 100%;
+  flex-direction: column;
+  gap: 14px;
+  padding: 6px 2px;
+}
+.todo-priority-row {
+  display: grid;
+  grid-template-columns: 26px minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 10px;
+  cursor: default;
+}
+.todo-priority-label {
+  font-size: 11px;
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+}
+.todo-priority-track {
+  display: block;
+  height: 8px;
+  border: 1px solid var(--border);
+  background: var(--field);
+  overflow: hidden;
+}
+.todo-priority-fill {
+  display: block;
+  width: 0;
+  height: 100%;
+  transition: width .2s ease-out;
+}
+.todo-priority-value {
+  color: var(--muted);
+  font-size: 11px;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+/* 浮动 Tooltip（挂 body，固定定位） */
+.todo-chart-tooltip {
+  position: fixed;
+  z-index: 55;
+  min-width: 170px;
+  max-width: 280px;
+  padding: 8px 10px;
+  border: 1px solid var(--border-overlay);
+  background: var(--overlay);
+  color: var(--text);
+  font-size: 11px;
+  box-shadow: var(--shadow-overlay);
+  pointer-events: none;
+}
+.todo-chart-tooltip[hidden] { display: none; }
+.todo-tooltip-title {
+  margin-bottom: 5px;
+  padding-bottom: 4px;
+  border-bottom: 1px solid var(--border-strong);
+  font-weight: 600;
+  color: var(--text);
+  word-break: break-word;
+}
+.todo-tooltip-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 1px 0;
+}
+.todo-tooltip-label {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  color: var(--muted);
+}
+.todo-tooltip-dot {
+  width: 7px;
+  height: 7px;
+  flex-shrink: 0;
+}
+.todo-tooltip-value {
+  font-weight: 600;
+  color: var(--text);
+  font-variant-numeric: tabular-nums;
+}
+
+@media (max-width: 1100px) {
+  .todo-charts-grid { grid-template-columns: 1fr; }
+}
+@media (max-width: 640px) {
+  .chart-card { padding: 10px; }
+  .todo-charts-grid { gap: 10px; }
+  .chart-body { min-height: 190px; }
+  .chart-body-wide { min-height: 210px; }
+  .todo-donut-svg-wrap { width: 160px; height: 160px; }
 }

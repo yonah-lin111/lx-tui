@@ -162,6 +162,12 @@ async function loadUsageDashboard() {
     setStatusIndicator('clean', 'Updated ' + nowText);
   } catch (error) {
     if (reqId !== usageState.requestSeq) { return; }
+    // 首次请求失败时把骨架换成真正的空态，避免一直闪“加载中”而只有 banner 说明失败。
+    if (!usageState.overview) {
+      renderSummaryCards(null);
+      renderCharts({}, range);
+      renderTableSection();
+    }
     setStatusIndicator('error', 'Load failed');
     setErrorBanner('Failed to load usage analytics: ' + error.message);
     if (isUsageViewActive()) { showToast(error.message, 'error'); }
@@ -253,6 +259,48 @@ function syncFilterOptions(filters) {
 }
 
 // ===== 8 张汇总卡片渲染 =====
+
+// 首次加载骨架：卡片/图表/表格先占位，避免数据到达前容器高度为 0 再突然撑开。
+function usageSkeletonCard() {
+  const card = domEl('div', 'summary-card');
+  card.appendChild(domEl('div', 'skeleton skeleton-line title'));
+  card.appendChild(domEl('div', 'skeleton skeleton-line value'));
+  card.appendChild(domEl('div', 'skeleton skeleton-line sub'));
+  return card;
+}
+
+function usageSkeletonTable() {
+  const wrap = domEl('div', 'skeleton-table');
+  const columns = ['w-date', 'w-status', 'w-text', 'w-group', 'w-num', 'w-num'];
+  const row = (head) => {
+    const tr = domEl('div', 'skeleton-table-row' + (head ? ' head' : ''));
+    for (const column of columns) {
+      tr.appendChild(domEl('div', 'skeleton ' + column));
+    }
+    return tr;
+  };
+  wrap.appendChild(row(true));
+  for (let index = 0; index < 7; index += 1) {
+    wrap.appendChild(row(false));
+  }
+  return wrap;
+}
+
+function renderUsageSkeleton() {
+  const summary = document.getElementById('summary-cards');
+  if (summary) {
+    summary.replaceChildren();
+    for (let index = 0; index < 8; index += 1) {
+      summary.appendChild(usageSkeletonCard());
+    }
+  }
+  for (const id of ['chart-trend', 'chart-requests', 'chart-models', 'chart-providers', 'chart-composition']) {
+    const host = document.getElementById(id);
+    if (host) { host.replaceChildren(domEl('div', 'skeleton chart-skeleton')); }
+  }
+  const table = document.getElementById('table-container');
+  if (table) { table.replaceChildren(usageSkeletonTable()); }
+}
 
 function renderSummaryCards(summary) {
   const host = document.getElementById('summary-cards');
@@ -729,9 +777,10 @@ function initUsageDashboard() {
     });
   }
 
-  loadUsageDashboard();
+  renderUsageSkeleton();
+  return loadUsageDashboard();
 }
 
 function initUsageView() {
-  initUsageDashboard();
+  return initUsageDashboard();
 }

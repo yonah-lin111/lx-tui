@@ -59,6 +59,10 @@ fn overview_json(db: &Database, filter: &TodoFilter) -> Response {
         Ok(summary) => summary,
         Err(error) => return Response::error(500, &error.to_string()),
     };
+    let priority = match db.query_todo_priority_counts(filter) {
+        Ok(counts) => counts,
+        Err(error) => return Response::error(500, &error.to_string()),
+    };
     let daily = match db.query_todo_daily(filter) {
         Ok(daily) => daily,
         Err(error) => return Response::error(500, &error.to_string()),
@@ -70,6 +74,12 @@ fn overview_json(db: &Database, filter: &TodoFilter) -> Response {
 
     let body = json!({
         "summary": summary_json(&summary),
+        "priority": {
+            "p0": priority[0],
+            "p1": priority[1],
+            "p2": priority[2],
+            "p3": priority[3],
+        },
         "daily": daily.iter().map(daily_json).collect::<Vec<_>>(),
         "groups": groups.iter().map(group_json).collect::<Vec<_>>(),
     });

@@ -103,6 +103,10 @@ async fn page_requires_token_and_serves_self_contained_assets() {
         "web shell assets linked"
     );
     assert!(
+        html.contains("id=\"page-loading\"") && html.contains("id=\"page-loading-label\""),
+        "global view-loading overlay present"
+    );
+    assert!(
         html.contains("id=\"css-settings\"")
             && html.contains("id=\"css-usage\"")
             && html.contains("id=\"css-todo\""),
@@ -132,11 +136,13 @@ async fn page_requires_token_and_serves_self_contained_assets() {
     let settings_js_pos = html.find("/settings.js").expect("settings.js linked");
     let usage_charts_pos = html.find("/usage_charts.js").expect("usage charts linked");
     let usage_js_pos = html.find("/usage.js").expect("usage.js linked");
+    let todo_charts_pos = html.find("/todo_charts.js").expect("todo charts linked");
     let todo_js_pos = html.find("/todo.js").expect("todo.js linked");
     assert!(
         web_js_pos < settings_js_pos
             && usage_charts_pos < usage_js_pos
-            && usage_js_pos < todo_js_pos,
+            && usage_js_pos < todo_charts_pos
+            && todo_charts_pos < todo_js_pos,
         "shared core loads before the view scripts"
     );
 
@@ -306,7 +312,7 @@ async fn page_requires_token_and_serves_self_contained_assets() {
         "usage scripts linked"
     );
     assert!(
-        html.contains("/todo.css") && html.contains("/todo.js"),
+        html.contains("/todo.css") && html.contains("/todo_charts.js") && html.contains("/todo.js"),
         "todo assets linked"
     );
     assert!(
@@ -318,6 +324,10 @@ async fn page_requires_token_and_serves_self_contained_assets() {
         "todo-filter-priority",
         "todo-search",
         "todo-summary-cards",
+        "todo-chart-trend",
+        "todo-chart-status",
+        "todo-status-legend",
+        "todo-chart-priority",
         "todo-table-container",
         "todo-pagination",
     ] {
@@ -372,6 +382,14 @@ async fn page_requires_token_and_serves_self_contained_assets() {
             && web_css_body.contains("scrollbar-color: var(--border-strong) transparent"),
         "all scroll containers share one scrollbar style"
     );
+    assert!(
+        web_css_body.contains(".page-loading") && web_css_body.contains(".skeleton"),
+        "global loading overlay and skeleton primitives present"
+    );
+    assert!(
+        web_css_body.contains("prefers-reduced-motion"),
+        "loading animations respect reduced motion"
+    );
 
     let web_js = request(port, &get("/web.js")).await;
     assert_eq!(status(&web_js), 200);
@@ -379,6 +397,13 @@ async fn page_requires_token_and_serves_self_contained_assets() {
     let web_js_body = body(&web_js);
     for entry in ["function viewFromLocation", "function showView", "bootWeb"] {
         assert!(web_js_body.contains(entry), "web js entry: {entry}");
+    }
+    for entry in [
+        "function showPageLoading",
+        "function hidePageLoading",
+        "function resetPageLoading",
+    ] {
+        assert!(web_js_body.contains(entry), "global loading: {entry}");
     }
     assert!(
         web_js_body.contains("function createSelect") && web_js_body.contains("function showToast"),
@@ -410,6 +435,10 @@ async fn page_requires_token_and_serves_self_contained_assets() {
     assert!(
         usage_js_body.contains("function initUsageView"),
         "usage initialises lazily"
+    );
+    assert!(
+        usage_js_body.contains("function renderUsageSkeleton"),
+        "usage paints a stable first-load skeleton"
     );
 
     let usage_charts_js = request(port, &get("/usage_charts.js")).await;
@@ -445,6 +474,10 @@ async fn page_requires_token_and_serves_self_contained_assets() {
     assert!(
         todo_js_body.contains("function initTodoView"),
         "todo initialises lazily"
+    );
+    assert!(
+        todo_js_body.contains("function renderTodoSkeleton"),
+        "todo paints a stable first-load skeleton"
     );
     assert!(
         todo_js_body.contains("/api/todo/overview") && todo_js_body.contains("/api/todo/items"),

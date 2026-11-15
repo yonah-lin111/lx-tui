@@ -215,6 +215,55 @@ const VIEW_TITLES = {
 };
 const VIEW_CSS = { settings: 'css-settings', usage: 'css-usage', todo: 'css-todo' };
 
+// ===== 全局加载遮罩：只盖内容区，顶部导航始终可点 =====
+const pageLoadingState = { seq: 0, startedAt: 0, hideTimer: null };
+
+function resetPageLoading() {
+  pageLoadingState.seq += 1;
+  if (pageLoadingState.hideTimer) {
+    clearTimeout(pageLoadingState.hideTimer);
+    pageLoadingState.hideTimer = null;
+  }
+  const node = document.getElementById('page-loading');
+  if (node) {
+    node.classList.add('hidden');
+    node.classList.remove('leaving');
+  }
+}
+
+function showPageLoading(label) {
+  const node = document.getElementById('page-loading');
+  if (!node) { return 0; }
+  if (pageLoadingState.hideTimer) {
+    clearTimeout(pageLoadingState.hideTimer);
+    pageLoadingState.hideTimer = null;
+  }
+  const labelNode = document.getElementById('page-loading-label');
+  if (labelNode) { labelNode.textContent = label || 'Loading…'; }
+  node.classList.remove('hidden', 'leaving');
+  pageLoadingState.seq += 1;
+  pageLoadingState.startedAt = Date.now();
+  return pageLoadingState.seq;
+}
+
+// 至少展示 180ms，避免快请求闪一下反而像故障；过期请求不得关闭新遮罩。
+function hidePageLoading(seq) {
+  const node = document.getElementById('page-loading');
+  if (!node || (seq && seq !== pageLoadingState.seq)) { return; }
+  const wait = Math.max(0, 180 - (Date.now() - pageLoadingState.startedAt));
+  if (pageLoadingState.hideTimer) { clearTimeout(pageLoadingState.hideTimer); }
+  pageLoadingState.hideTimer = setTimeout(() => {
+    pageLoadingState.hideTimer = null;
+    if (seq !== pageLoadingState.seq) { return; }
+    node.classList.add('leaving');
+    setTimeout(() => {
+      if (seq !== pageLoadingState.seq) { return; }
+      node.classList.add('hidden');
+      node.classList.remove('leaving');
+    }, 140);
+  }, wait);
+}
+
 function viewFromLocation() {
   if (location.hash === '#' || location.hash === '#/') { return 'home'; }
   const hash = location.hash.replace(/^#\/?/, '');
@@ -229,7 +278,8 @@ function viewFromLocation() {
 
 function showView(view) {
   if (!VIEWS.includes(view)) { view = 'home'; }
-  // 视图切换先收起挂在 body 上的浮层，避免它们脱离视图样式表后裸露。
+  // 切页先收起上一页尚未结束的加载遮罩与浮层，避免遮罩归属错乱。
+  resetPageLoading();
   openSelects.forEach((inst) => inst.close());
   for (const name of VIEWS) {
     const section = document.getElementById('view-' + name);
@@ -249,27 +299,38 @@ function showView(view) {
     const link = document.getElementById(id);
     if (link) { link.media = name === view ? '' : 'not all'; }
   }
-  if (view === 'settings') { initOnce('settings', window.initSettingsView); }
-  if (view === 'usage') { initOnce('usage', window.initUsageView); }
-  if (view === 'todo') { initOnce('todo', window.initTodoView); }
+  if (view === 'settings') { initOnce('settings', 'Loading settings…', window.initSettingsView); }
+  if (view === 'usage') { initOnce('usage', 'Loading usage…', window.initUsageView); }
+  if (view === 'todo') { initOnce('todo', 'Loading todos…', window.initTodoView); }
   // 离开 Usage 时收起图表 tooltip，避免它脱离视图样式表后裸露在别的视图上。
   if (view !== 'usage' && typeof hideChartTooltip === 'function') { hideChartTooltip(); }
   document.title = VIEW_TITLES[view];
 }
 
 // 首次进入才初始化；失败后允许下次重试，避免一次异常把视图永久卡死。
-function initOnce(key, fn) {
+// 初始化函数返回 Promise 时，全局遮罩持续到它 settle，保证懒加载视图不闪空容器。
+function initOnce(key, label, fn) {
   window.__webInit = window.__webInit || {};
   if (window.__webInit[key] === 'done' || window.__webInit[key] === 'running') { return; }
   if (typeof fn !== 'function') { return; }
   window.__webInit[key] = 'running';
+  let result;
   try {
-    fn();
-    window.__webInit[key] = 'done';
+    result = fn();
   } catch (error) {
     window.__webInit[key] = 'failed';
     showToast('Failed to initialise ' + key, 'error');
+    return;
   }
+  if (result && typeof result.then === 'function') {
+    const seq = showPageLoading(label);
+    result.then(
+      () => { window.__webInit[key] = 'done'; },
+      () => { window.__webInit[key] = 'failed'; }
+    ).finally(() => hidePageLoading(seq));
+    return;
+  }
+  window.__webInit[key] = 'done';
 }
 
 function bootWeb() {
