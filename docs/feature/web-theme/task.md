@@ -23,3 +23,5 @@
 - [x] 复审 P2：Todo 图表/徽标令牌统一；reduced-motion 全局兜底；select Tab/方向键与 Quick Connect 菜单清理。
 - [x] `review.md` 记录本轮 P1–P2 与接受风险。
 - [ ] 用户在真实浏览器确认观感与主题持久化。
+
+> 合并：`ddd4ec6d`（`merge: web todo dashboard and glass theme into dev`）。

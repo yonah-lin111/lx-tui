@@ -2,9 +2,10 @@
 
 > 日期：2026-11-15
 > 分支：`web-todo-tab`（worktree `.worktrees/web-todo-tab`）
+> 合并提交：`ddd4ec6d`（`merge: web todo dashboard and glass theme into dev`）
 > 范围：`dev...HEAD` 中主题、顶栏、分段控件、select、Quick Connect 表单与相关测试/文档
 > 方式：3 个只读 subagent 并行审查（Rust/API、前端交互、样式与文档），结论回到 HEAD 代码与定向测试复核
-> 结论：**无 P0；P1 4 项、P2 7 项，可修项已在本分支落地；人工真机验收待确认**
+> 结论：**无 P0；P1 4 项、P2 7 项，可修项已在本分支落地并随 `ddd4ec6d` 合并到 `dev`；人工真机验收待确认**
 
 ## 关键点
 

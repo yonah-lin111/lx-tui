@@ -2,9 +2,10 @@
 
 > 日期：2026-11-15
 > 分支：`web-todo-tab`（worktree `.worktrees/web-todo-tab`）
+> 合并提交：`ddd4ec6d`（`merge: web todo dashboard and glass theme into dev`）
 > 范围：`dev...HEAD` 全部生产代码、测试与 feature/standards 文档；重点覆盖 Todo DB/API、Home 摘要卡、Todo 视图交互、TUI 统计块移除
 > 方式：3 个只读 subagent 并行审查（Rust/API、前端交互、样式/TUI/文档），结论回到 HEAD 代码与定向测试复核
-> 结论：**P0 1 项、P1 2 项、P2 12 项，可修项已在本分支落地；人工真机验收待确认**
+> 结论：**P0 1 项、P1 2 项、P2 12 项，可修项已在本分支落地并随 `ddd4ec6d` 合并到 `dev`；人工真机验收待确认**
 
 ## 关键点
 

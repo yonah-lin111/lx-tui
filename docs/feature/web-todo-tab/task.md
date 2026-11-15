@@ -1,6 +1,6 @@
 # Web 控制台 Todo 看板 + TUI 字符统计块移除：执行清单
 
-> 状态：**Phase 1–10 已实现并通过复审修复；全量验证与真机验收待完成**
+> 状态：**Phase 1–10 已实现并通过复审修复，已随 `ddd4ec6d` 合并到 `dev`；全量验证通过，真机验收待完成**
 > 日期：2026-11-14
 > 设计依据：[design.md](./design.md)
 > 检索工具：`codegraph`（project `lx-tui`）、`codebase-memory-mcp`（project `lx-tui` / `Users-yonah-projects-agent-lx-tui`）均已索引本仓库。

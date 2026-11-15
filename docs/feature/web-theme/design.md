@@ -82,3 +82,4 @@
 - **reduced motion**：`web.css` 增加全局兜底，关闭 toast、状态点脉冲、图表条形与按钮缩放等残余动效。
 - **select 键盘**：Tab 关闭菜单；方向键清除 hover 预览并让 active 行滚入菜单可视区；Quick Connect 表单重绘前显式 `destroy()` 旧 select，避免 body 上累积孤立菜单。
 - **接受风险**：`loadWebTheme` 启动兜底仍读完整 `/api/state`（含 web_search Key），后续可换专用只读端点；`initOnce` 的异步加载失败仍记为 `done`，依赖各视图行内错误 + Refresh/Reload 重试。
+- **合并**：随 `ddd4ec6d`（`merge: web todo dashboard and glass theme into dev`）进入 `dev`。
