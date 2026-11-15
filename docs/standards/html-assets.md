@@ -15,7 +15,8 @@
 assets/
   web.html                统一 Web 控制台结构（Home / Settings / Usage / Todo 单文档；src/settings/service/page.rs 经 include_str! 加载）
   web.css                 全局外壳样式（顶部 bar、Home、共享 toast、视图容器、统一滚动条、全局 hidden、加载遮罩与骨架原语）
-  web.js                  共享核心（token、DOM 帮助函数、toast、自绘 select）、hash 路由、懒初始化与全局加载编排
+  web.js                  共享核心（token、DOM 帮助函数、toast、自绘 select）、hash 路由、主题切换、懒初始化与全局加载编排
+  theme.css               可选主题样式（`html[data-theme="glass"]` 下的 iOS 液态玻璃覆盖；Default 主题不受影响）
   settings.css            Settings 视图样式（非当前视图时以 media="not all" 挂起）
   settings.js             设置页骨架与 General / Commands 业务（首次进入 Settings 视图才初始化）
   settings_models_card.js 模型卡片渲染、单价（Pricing）、模态与思考等级编辑组件
@@ -36,7 +37,7 @@ assets/
 
 - 文件名使用小写 `snake_case`，一名一页；同一页面的 HTML / CSS / JS 共用词干（`<name>.html` / `.css` / `.js`）。
 - `web.html` 是唯一 HTML 文档：`GET /`、`GET /settings`、`GET /usage`、`GET /todo` 都返回它，前端读取 `location.pathname` / `location.hash` 决定初始视图；页面内顶部 bar 用 hash（`#/`、`#/settings`、`#/usage`、`#/todo`）切换，旧地址启动时规范化为 `/?token=...#/<view>`。
-- **视图级样式隔离**：`settings.css`、`usage.css` 与 `todo.css` 都以 `media="not all"` 引入，`web.js` 只切换当前视图样式表的 `media`，多套通用选择器不会同时生效；`web.css` 只放全局外壳、共享反馈组件、统一滚动条与全局 `.hidden`，`.select-*` 等存在视图差异的样式仍留在各自视图 CSS。视图 CSS 不得再重复定义这些全局能力；`todo.css` 为保持视图隔离刻意重复 Usage 的控件/卡片/表格样式，修改任一侧不得连带另一侧。
+- **视图级样式隔离**：`settings.css`、`usage.css` 与 `todo.css` 都以 `media="not all"` 引入，`web.js` 只切换当前视图样式表的 `media`，多套通用选择器不会同时生效；`web.css` 只放全局外壳、共享反馈组件、统一滚动条与全局 `.hidden`，`.select-*` 等存在视图差异的样式仍留在各自视图 CSS。视图 CSS 不得再重复定义这些全局能力；`todo.css` 为保持视图隔离刻意重复 Usage 的控件/卡片/表格样式，修改任一侧不得连带另一侧。**主题覆盖集中在 `theme.css`**：全部规则以 `html[data-theme="glass"]` 前缀限定，并在四张样式表之后加载；不得把玻璃主题规则散落到视图 CSS。
 - 单页脚本超过 1000 行时按职责拆分：共享核心与路由固定在 `web.js`，各视图主脚本保留页面骨架与业务函数并暴露 `init<View>View`，其余子视图拆为 `<name>_<section>.js`，均在 `page::asset` 登记并按 HTML 中的顺序加载（`web.js` → `settings.js` → `settings_models_card.js` → `settings_models.js` → `settings_connect.js` → `settings_mcp.js` → `settings_skills.js` → `settings_subagents.js` → `usage_charts.js` → `usage.js` → `todo_charts.js` → `todo.js`）。拆分后的脚本共享同一全局作用域，加载顺序即依赖顺序：后加载文件可调用先加载文件定义的全局函数与变量；`web.js` 必须最先加载，且只定义共享核心与路由，不立即发数据请求。跨文件禁止重复声明顶层 `const` / `let` / `function`。
 - **首屏加载态**：`init<View>View` 必须返回首次数据加载 Promise（同步视图除外），由 `web.js` 的顶部进度条 `#page-loading` 等待 settle，进度条最短 180ms、不遮挡内容；数据容器在首次加载时绘制与最终布局同尺寸的局部骨架（骨架原语在 `web.css`），骨架切数据只淡入一次，刷新/筛选保留旧数据。状态指示器（`.action-status`）必须预留包含 spinner 的最小宽度并使用 `tabular-nums`；已有数据时刷新只转 `.status-spinner`，不得把 `Updated HH:MM:SS` 改成 `Refreshing…`。
 - **结构、样式、脚本分文件维护**：HTML 不含内联 `<style>` / `<script>` 正文，改为 `<link rel="stylesheet" href="/<name>.css">` 与 `<script src="/<name>.js"></script>`。
@@ -44,7 +45,7 @@ assets/
 
 ## 提供方式
 
-- 资源经**独立路由**提供，与页面同源：`GET /web.css`、`GET /web.js`、`GET /settings.css`、`GET /usage.css`、`GET /todo.css`、`GET /todo_charts.js`、`GET /todo.js`。浏览器对每个资源独立发起请求；服务端统一返回 `Cache-Control: no-store`，避免二进制重启后命中旧资源。
+- 资源经**独立路由**提供，与页面同源：`GET /web.css`、`GET /theme.css`、`GET /web.js`、`GET /settings.css`、`GET /usage.css`、`GET /todo.css`、`GET /todo_charts.js`、`GET /todo.js`。浏览器对每个资源独立发起请求；服务端统一返回 `Cache-Control: no-store`，避免二进制重启后命中旧资源。
 - 每个资源在 Rust 侧以 `include_str!` 嵌入，注册进静态资源表（`page::asset`：路径 → `(Content-Type, body)`），由路由分派；新增资源只需在表中加一行。
 - `Content-Type` 必须正确：`.css` 用 `text/css; charset=utf-8`，`.js` 用 `text/javascript; charset=utf-8`，`.html` 用 `text/html; charset=utf-8`。
 - 资源表按**白名单**匹配：只有登记过的裸路径在 token 校验之前放行；其它路径仍走正常校验与路由（未知路径回 404）。
@@ -54,7 +55,13 @@ assets/
 ## 格式约束
 
 - **禁止外部请求**：不得出现 `http://` / `https://` 链接、CDN、外链字体或外链图片。全部资源本地嵌入，保证离线可用，并满足「无外部资源」的测试断言。
-- CSS 以 `:root` 集中配色令牌（`--bg` / `--panel` / `--accent` 等），组件只引用变量，不写死颜色；页面声明 `color-scheme: dark`。
+- CSS 以 `:root` 集中配色令牌（`--bg` / `--panel` / `--accent` 等），组件只引用变量，不写死颜色；页面声明 `color-scheme: dark`。可选主题在 `theme.css` 中以 `html[data-theme="<name>"]` 覆盖令牌与少量结构规则，默认主题保持原样；具体色值只允许出现在令牌定义处，组件规则仍引用变量。
+
+## 主题与持久化
+
+- 顶栏最右侧的自绘 select 提供 `Default` / `Glass` 两个主题；选择结果写入 `settings.json` 的 `web_theme`（取值 `default` / `glass`），经 `PUT /api/config` 持久化，不使用 localStorage 作为权威来源。
+- 页面响应前服务端读取 `web_theme` 并注入 `<html data-theme="...">`，保证刷新后首帧就是正确主题；`web.js` 启动时再读一次 `/api/state` 的 `config.web_theme` 兜底同步。用户已手动切换后到达的旧响应必须忽略，保存失败要回滚外观并提示。
+- `Glass` 主题的壁纸用纯 CSS 渐变模拟，不打包位图；字体切换为系统 SF Pro 栈，`Default` 保持 monospace。
 - **UTF-8 编码**；HTML 以 `<!DOCTYPE html>` 开头，`</html>` 加换行结尾。
 - 面向现代浏览器（系统自带浏览器即可），不使用需要构建或转译的语法。
 - 用户可见文案为英文；注释用简体中文，与代码规范一致。
