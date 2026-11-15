@@ -697,6 +697,52 @@ impl Database {
             .optional()?;
         Ok(exists.is_some())
     }
+
+    /// 最后一轮是否可被人类面板撤回；返回该轮 user 消息、revision 与原文。
+    ///
+    /// 判据（三者同时成立才是人类面板追问）：
+    /// - `agent_subagent_input.position > 0`（spawn 输入固定 position 0）；
+    /// - `parent_call_id IS NULL`（模型工具调用必有 call_id）；
+    /// - `notify_parent = 0`（`/report` 轮是 1）。
+    ///
+    /// 含轮内 steer 的轮次刻意不可撤回：steer 段只覆盖被截断之后的消息与文件，
+    /// 按最新段撤销只能回退半个逻辑轮次；`stop_reason = 'steer'` 直接拒绝。
+    pub fn latest_undoable_private_turn(
+        &self,
+        workspace: &Path,
+        child_session: &str,
+    ) -> Result<Option<crate::db::chat::LatestTurn>> {
+        let Some(latest) = self.latest_user_turn(workspace, child_session)? else {
+            return Ok(None);
+        };
+        let steer_segment: Option<Option<String>> = self
+            .conn
+            .query_row(
+                "SELECT stop_reason FROM agent_message WHERE external_id = ?1",
+                params![latest.user_message_id],
+                |row| row.get(0),
+            )
+            .optional()?;
+        if steer_segment.flatten().as_deref() == Some("steer") {
+            return Ok(None);
+        }
+        let row: Option<(i64, Option<String>, i64)> = self
+            .conn
+            .query_row(
+                r#"SELECT i.position, i.parent_call_id, i.notify_parent
+                   FROM agent_subagent_input i
+                   WHERE i.child_user_message_id = ?1
+                   ORDER BY i.position DESC
+                   LIMIT 1"#,
+                params![latest.user_message_id],
+                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+            )
+            .optional()?;
+        let undoable = row.is_some_and(|(position, call_id, notify_parent)| {
+            position > 0 && call_id.as_deref().is_none_or(str::is_empty) && notify_parent == 0
+        });
+        Ok(undoable.then_some(latest))
+    }
 }
 
 /// 校验 `agent_id` 属于 `(parent_session, workspace_external)` 并返回其 `child_session_id`。

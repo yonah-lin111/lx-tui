@@ -7,6 +7,7 @@ pub mod btw;
 pub mod compact;
 pub mod connect;
 mod context_summary;
+pub(crate) mod detail_undo;
 mod file_snapshots;
 mod host;
 pub mod mcp;

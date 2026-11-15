@@ -160,6 +160,15 @@ pub enum RewindScope {
     Compact,
     ModelSwitch,
     Recap,
+    /// 详情 composer 的 `/undo` 确认。
+    Detail,
+}
+
+/// 详情 composer 撤销确认面板的描述（只影响文案与执行路由）。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct DetailUndoPanel {
+    pub kind: super::detail::DetailUndoKind,
+    pub action: RewindAction,
 }
 
 /// 撤销动作面板状态。
@@ -169,6 +178,8 @@ pub struct RewindPanel {
     pub snapshot: SnapshotState,
     /// 本面板的动作集（普通轮次四项；compact 只有恢复与取消）。
     pub actions: Vec<RewindAction>,
+    /// Some 表示详情 composer 的撤销确认；执行路由据此走详情链路。
+    pub detail: Option<DetailUndoPanel>,
 }
 
 impl RewindPanel {
@@ -178,6 +189,7 @@ impl RewindPanel {
             window: PanelWindow::new(0),
             snapshot,
             actions: RewindAction::ALL.to_vec(),
+            detail: None,
         }
     }
 
@@ -187,6 +199,7 @@ impl RewindPanel {
             window: PanelWindow::new(0),
             snapshot: SnapshotState::KnownEmpty,
             actions: vec![RewindAction::RestoreCompact, RewindAction::Cancel],
+            detail: None,
         }
     }
 
@@ -196,6 +209,7 @@ impl RewindPanel {
             window: PanelWindow::new(0),
             snapshot: SnapshotState::KnownEmpty,
             actions: vec![RewindAction::RestoreModel, RewindAction::Cancel],
+            detail: None,
         }
     }
 
@@ -205,12 +219,29 @@ impl RewindPanel {
             window: PanelWindow::new(0),
             snapshot: SnapshotState::KnownEmpty,
             actions: vec![RewindAction::DeleteRecap, RewindAction::Cancel],
+            detail: None,
+        }
+    }
+
+    /// 详情 composer 的撤销确认：默认高亮 Cancel，误触 Enter 不产生副作用。
+    pub fn for_detail(
+        kind: super::detail::DetailUndoKind,
+        snapshot: SnapshotState,
+        action: RewindAction,
+    ) -> Self {
+        Self {
+            window: PanelWindow::new(0),
+            snapshot,
+            actions: vec![RewindAction::Cancel, action],
+            detail: Some(DetailUndoPanel { kind, action }),
         }
     }
 
     /// 面板范围类型；文案映射在 UI 层完成，状态层不依赖 `ui`。
     pub fn scope(&self) -> RewindScope {
-        if self.actions.contains(&RewindAction::RestoreCompact) {
+        if self.detail.is_some() {
+            RewindScope::Detail
+        } else if self.actions.contains(&RewindAction::RestoreCompact) {
             RewindScope::Compact
         } else if self.actions.contains(&RewindAction::RestoreModel) {
             RewindScope::ModelSwitch

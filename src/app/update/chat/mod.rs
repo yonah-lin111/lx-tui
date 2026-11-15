@@ -21,6 +21,7 @@ pub mod compact;
 pub(crate) mod composer;
 mod connect;
 mod detail_report;
+mod detail_undo;
 mod fork;
 pub mod mcp;
 pub mod model_switch;
@@ -62,6 +63,10 @@ pub use connect::{
     on_models_refreshed, on_preset_connected, on_preset_disconnected, on_preset_oauth_failed,
     on_preset_oauth_prompt, open_connect_panel, scroll_connect, set_connect_selection,
     set_connect_viewport,
+};
+pub use detail_undo::{
+    on_failed as on_detail_undo_failed, on_prepared as on_detail_undo_prepared,
+    on_succeeded as on_detail_undo_succeeded,
 };
 pub use fork::{on_fork_completed, on_fork_failed, open_fork_panel};
 pub use mcp::{

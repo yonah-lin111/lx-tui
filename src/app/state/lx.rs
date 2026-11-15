@@ -16,6 +16,7 @@ pub mod chat;
 pub mod compact;
 pub mod composer;
 pub mod connect;
+pub mod detail;
 mod edit;
 mod folded;
 mod history;
@@ -54,6 +55,7 @@ pub use composer::DetailComposer;
 pub use connect::{
     ConnectManageAction, ConnectPanel, ConnectPromptStep, ConnectProviderEntry, ConnectStage,
 };
+pub use detail::{DetailTarget, DetailUndoExecution, DetailUndoKind, DetailUndoPlan};
 pub use mcp::{McpCatalogEntry, McpPanel, McpPanelEntry, McpRuntimeState, McpServerState};
 pub use mention::{LxMention, LxMentionView, SubagentMentionItem, SubagentRunMentionEntry};
 pub use model_switch::{LxModelSwitch, ModelSwitchNoticeView};

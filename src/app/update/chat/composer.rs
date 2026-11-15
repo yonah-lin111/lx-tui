@@ -138,6 +138,7 @@ pub(crate) fn apply_slash_input(state: &mut AppState, pane: PaneId, command: LxI
             true
         }
         LxInput::Escape => {
+            super::detail_undo::clear_pending(state, pane);
             close(state, pane);
             true
         }
@@ -157,6 +158,9 @@ pub(crate) fn apply_enter(state: &mut AppState, pane: PaneId) -> bool {
     };
     match panel {
         SlashPanel::Commands { .. } => accept(state, pane),
+        SlashPanel::Rewind(panel) if panel.detail.is_some() => {
+            super::detail_undo::apply_confirm(state, pane, &panel)
+        }
         SlashPanel::Rewind(_) => super::rewind::apply_enter(state, pane),
         _ => false,
     }
@@ -237,8 +241,9 @@ pub(crate) fn execute(
 ) -> bool {
     match command {
         ParsedDetailCommand::Report(note) => super::detail_report::submit(state, pane, note),
-        // T4–T7 逐个接入；在此之前明确提示而不是把命令文本发给模型。
-        ParsedDetailCommand::Undo | ParsedDetailCommand::Compact | ParsedDetailCommand::New => {
+        ParsedDetailCommand::Undo => super::detail_undo::prepare(state, pane),
+        // T6/T7 接入；在此之前明确提示而不是把命令文本发给模型。
+        ParsedDetailCommand::Compact | ParsedDetailCommand::New => {
             clear(state, pane);
             show_lx_toast(
                 state,

@@ -55,6 +55,8 @@ pub fn apply_rewind_effects(
                 effect,
                 Effect::PrepareRewind { .. }
                     | Effect::ExecuteRewind(_)
+                    | Effect::PrepareDetailUndo { .. }
+                    | Effect::ExecuteDetailUndo(_)
                     | Effect::RevertModelSwitch(_)
                     | Effect::DeleteRecap(_)
             )
@@ -69,6 +71,8 @@ pub fn apply_rewind_effects(
             effect,
             Effect::PrepareRewind { .. }
                 | Effect::ExecuteRewind(_)
+                | Effect::PrepareDetailUndo { .. }
+                | Effect::ExecuteDetailUndo(_)
                 | Effect::RevertModelSwitch(_)
                 | Effect::DeleteRecap(_)
         )
@@ -81,6 +85,16 @@ pub fn apply_rewind_effects(
                 user_message_id,
             } => prepare(state, pane, &session_id, &user_message_id, persistence),
             Effect::ExecuteRewind(request) => execute(sender, persistence, request),
+            Effect::PrepareDetailUndo {
+                pane,
+                target,
+                input_at_open,
+            } => {
+                super::detail_undo::prepare(state, persistence, pane, target, input_at_open);
+            }
+            Effect::ExecuteDetailUndo(request) => {
+                super::detail_undo::execute(sender, persistence, request)
+            }
             Effect::RevertModelSwitch(request) => revert_model_switch(state, persistence, request),
             Effect::DeleteRecap(request) => delete_recap(state, persistence, request),
             _ => {}
@@ -325,6 +339,22 @@ pub fn handle_rewind_finished(
     operation_id: &str,
     outcome: RewindOutcome,
 ) -> bool {
+    // 详情 composer 的撤销：按 pending operation id 分流，不触碰主聊天。
+    if state
+        .pane_anywhere(pane)
+        .and_then(|target| target.lx.task.as_ref())
+        .and_then(|page| page.detail_undo_executing.as_ref())
+        .is_some_and(|exec| exec.operation_id == operation_id)
+    {
+        return super::detail_undo::handle_finished(
+            state,
+            persistence,
+            pane,
+            workspace,
+            operation_id,
+            outcome,
+        );
+    }
     // 迟到回执：当前正在执行的是更晚的一次撤销，旧结果不得清掉它的 executing。
     if let Some(executing) = state
         .pane_anywhere(pane)

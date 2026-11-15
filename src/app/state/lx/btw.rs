@@ -96,6 +96,23 @@ impl BtwThreadState {
                 .iter()
                 .any(|message| message.role == "assistant" && message.status == "streaming")
     }
+
+    /// 线程被删除（`/undo` 删空或 `/new`）：回到空白线程视图，取消所有在途状态。
+    pub fn reset_after_delete(&mut self) {
+        self.thread_id = None;
+        self.child_session_id = None;
+        self.title.clear();
+        self.chat = crate::app::state::LxChat::new();
+        self.compact.reset();
+        self.targets.clear();
+        self.scroll = 0;
+        self.total_rows = 0;
+        self.rows_dirty = true;
+        self.follow = true;
+        self.loaded = true;
+        self.pending_submit = None;
+        self.pending_recipients = 0;
+    }
 }
 
 /// QA 列表中的一行（由事件层从数据库回投）。
@@ -154,6 +171,13 @@ impl LxBtw {
     /// 按 QA 取线程，不修改 active（异步失败回投用）。
     pub fn thread_mut(&mut self, qa_id: &str) -> Option<&mut BtwThreadState> {
         self.threads.get_mut(qa_id)
+    }
+
+    /// 按持久化线程 ID 查线程（详情 `/undo` 的回投目标）。
+    pub fn thread_by_thread_id(&self, thread_id: &str) -> Option<&BtwThreadState> {
+        self.threads
+            .values()
+            .find(|thread| thread.thread_id.as_deref() == Some(thread_id))
     }
 
     /// 当前显示的 composer（供输入浮层读取编辑器状态）。

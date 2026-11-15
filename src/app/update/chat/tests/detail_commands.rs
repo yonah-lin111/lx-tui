@@ -298,3 +298,137 @@ fn report_message_contains_marker_and_note() {
     let bare = crate::chat::agent::report_request_message("  ");
     assert!(!bare.contains("User note:"));
 }
+
+fn undo_plan(child_session: &str) -> crate::app::state::DetailUndoPlan {
+    crate::app::state::DetailUndoPlan {
+        target: crate::app::state::DetailTarget::Agent("sub-idle".into()),
+        workspace: std::path::PathBuf::from("/work/demo"),
+        child_session: child_session.into(),
+        user_message_id: "msg-1".into(),
+        expected_revision: 3,
+        input_at_open: String::new(),
+        user_text: "previous question".into(),
+        action: crate::app::state::RewindAction::RevertAndDelete,
+        snapshot: crate::app::state::SnapshotState::KnownEmpty,
+    }
+}
+
+#[test]
+fn undo_prepare_shows_two_row_confirm_with_cancel_first() {
+    let (mut state, pane) = agents_editing_state();
+    assert!(crate::app::update::on_detail_undo_prepared(
+        &mut state,
+        pane,
+        undo_plan("sess-idle")
+    ));
+    let Some(SlashPanel::Rewind(panel)) = panel(&state, pane) else {
+        panic!("expected undo panel");
+    };
+    assert_eq!(panel.actions.len(), 2, "两行确认");
+    assert_eq!(
+        panel.active_action(),
+        crate::app::state::RewindAction::Cancel
+    );
+    assert_eq!(panel.scope(), crate::app::state::RewindScope::Detail);
+    assert_eq!(
+        panel.detail.as_ref().map(|detail| detail.kind),
+        Some(crate::app::state::DetailUndoKind::Agent)
+    );
+}
+
+#[test]
+fn undo_confirm_cancel_has_no_effect() {
+    let (mut state, pane) = agents_editing_state();
+    assert!(crate::app::update::on_detail_undo_prepared(
+        &mut state,
+        pane,
+        undo_plan("sess-idle")
+    ));
+    let Some(SlashPanel::Rewind(panel)) = panel(&state, pane) else {
+        panic!("expected undo panel");
+    };
+    state.effects.clear();
+    assert!(super::super::detail_undo::apply_confirm(
+        &mut state, pane, &panel
+    ));
+    assert!(
+        !state
+            .effects
+            .iter()
+            .any(|effect| matches!(effect, crate::app::effects::Effect::ExecuteDetailUndo(_))),
+        "Cancel 不执行：{:?}",
+        state.effects
+    );
+    assert!(panel_after_confirm_closed(&state, pane));
+}
+
+#[test]
+fn undo_confirm_down_enter_emits_execute_effect() {
+    let (mut state, pane) = agents_editing_state();
+    assert!(crate::app::update::on_detail_undo_prepared(
+        &mut state,
+        pane,
+        undo_plan("sess-idle")
+    ));
+    // ↓ 到执行项，再 Enter。
+    crate::app::update::pane::apply_lx_input(&mut state, LxInput::Down);
+    state.effects.clear();
+    crate::app::update::pane::apply_lx_input(&mut state, LxInput::Enter);
+    let request = state
+        .effects
+        .iter()
+        .find_map(|effect| match effect {
+            crate::app::effects::Effect::ExecuteDetailUndo(request) => Some(request),
+            _ => None,
+        })
+        .expect("execute effect");
+    assert_eq!(
+        request.target,
+        crate::app::state::DetailTarget::Agent("sub-idle".into())
+    );
+    assert_eq!(request.request.session_id, "sess-idle");
+    assert_eq!(
+        request.request.action,
+        crate::app::state::RewindAction::RevertAndDelete
+    );
+    assert_eq!(
+        state
+            .pane_anywhere(pane)
+            .and_then(|target| target.lx.task.as_ref())
+            .and_then(|page| page.detail_undo_executing.as_ref())
+            .map(|exec| exec.operation_id.as_str()),
+        Some(request.operation_id.as_str())
+    );
+}
+
+#[test]
+fn undo_busy_agent_does_not_open_confirm() {
+    let (mut state, pane) = agents_editing_state();
+    // 已有执行中的撤销：再次 /undo 只提示，不覆盖。
+    if let Some(page) = state
+        .pane_mut_anywhere(pane)
+        .and_then(|target| target.lx.task.as_mut())
+    {
+        page.detail_undo_executing = Some(crate::app::state::DetailUndoExecution {
+            operation_id: "op-1".into(),
+            target: crate::app::state::DetailTarget::Agent("sub-idle".into()),
+        });
+    }
+    assert!(super::super::detail_undo::prepare(&mut state, pane));
+    assert!(
+        !state.effects.iter().any(|effect| matches!(
+            effect,
+            crate::app::effects::Effect::PrepareDetailUndo { .. }
+        )),
+        "执行中不得重复预检"
+    );
+    assert!(panel(&state, pane).is_none());
+}
+
+fn panel_after_confirm_closed(state: &AppState, pane: PaneId) -> bool {
+    panel(state, pane).is_none()
+        && state
+            .pane_anywhere(pane)
+            .and_then(|target| target.lx.task.as_ref())
+            .is_some_and(|page| page.detail_undo_pending.is_none())
+}
