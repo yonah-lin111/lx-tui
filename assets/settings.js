@@ -87,8 +87,11 @@ function createActionBar(hostId, controller) {
   const status = domEl('span', 'action-status');
   const dot = domEl('span', 'status-dot clean');
   const text = domEl('span', null, 'Saved');
+  const spinner = domEl('span', 'status-spinner');
+  spinner.setAttribute('aria-hidden', 'true');
   status.appendChild(dot);
   status.appendChild(text);
+  status.appendChild(spinner);
   const reset = domEl('button', 'ghost', 'Reset');
   reset.type = 'button';
   const save = domEl('button', 'primary', 'Save');
@@ -99,11 +102,14 @@ function createActionBar(hostId, controller) {
   const refresh = (knownDirty, knownAnyDirty) => {
     const dirty = knownDirty !== undefined ? knownDirty : controller.isDirty();
     const anyDirty = knownAnyDirty !== undefined ? knownAnyDirty : anySettingsDirty();
-    const state = settingsSaving ? ['saving', 'Saving…']
+    // 保存中只转 spinner、保留 dirty/clean 文案，保存结束再一次性切到 Saved。
+    const saving = settingsSaving;
+    const state = saving ? ['saving', null]
       : settingsFailed ? ['error', 'Save failed']
         : anyDirty ? ['dirty', 'Unsaved changes'] : ['clean', 'Saved'];
-    dot.className = 'status-dot ' + state[0];
-    text.textContent = state[1];
+    dot.className = 'status-dot ' + (saving ? (anyDirty ? 'dirty' : 'clean') : state[0]);
+    spinner.classList.toggle('on', saving);
+    if (state[1] !== null) { text.textContent = state[1]; }
     save.disabled = settingsSaving || !anyDirty;
     reset.disabled = settingsSaving || !dirty;
   };
@@ -830,5 +836,5 @@ function initSettingsView() {
   actionBars.commands = createActionBar('actions-commands', { isDirty: commandsDirty, save: saveCommand, reset: resetCommandEditor });
   initLoggingSelect();
   initCommandSelects();
-  loadState();
+  return loadState();
 }

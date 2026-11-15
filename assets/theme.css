@@ -1,0 +1,541 @@
+/* 可选主题：iOS 26 液态玻璃。
+ *
+ * 只在 <html data-theme="glass"> 下生效，不改动 Default 黑白灰主题。
+ * 设计来源：本机 ufi-ui-prototypes 的视觉语言（深色壁纸 + 半透明玻璃卡片 +
+ * 大圆角 + SF Pro），壁纸用多层 CSS 渐变模拟，不引入外部图片。
+ * 所有覆盖都以 html[data-theme="glass"] 前缀提高优先级，并晚于视图样式表加载。
+ */
+
+html[data-theme="glass"] {
+  color-scheme: dark;
+  --bg: #101116;
+  --panel: rgba(32, 32, 39, .58);
+  --panel-raised: rgba(46, 46, 55, .68);
+  --overlay: rgba(38, 38, 46, .94);
+  --hover: rgba(118, 118, 128, .20);
+  --active: rgba(255, 255, 255, .18);
+  --field: rgba(118, 118, 128, .22);
+  --field-hover: rgba(118, 118, 128, .32);
+  --option-hover: rgba(255, 255, 255, .14);
+  --option-selected: rgba(255, 255, 255, .24);
+  --border: rgba(255, 255, 255, .12);
+  --border-strong: rgba(255, 255, 255, .18);
+  --border-overlay: rgba(255, 255, 255, .26);
+  --text: #f5f5f7;
+  --muted: rgba(235, 235, 245, .70);
+  --faint: rgba(235, 235, 245, .45);
+  --accent: #f2f2f7;
+  --accent-ink: #141416;
+  --ok: #30d158;
+  --err: #ff6961;
+  --warn: #ffd60a;
+  --shadow-raise: 0 1px 2px rgba(0, 0, 0, .35);
+  --shadow-overlay: inset 0 .5px 0 rgba(255, 255, 255, .24), 0 2px 8px rgba(0, 0, 0, .35), 0 20px 48px rgba(0, 0, 0, .45);
+  --glass-blur: 26px;
+  /* 与参考项目一致的弹簧曲线：位移/宽度回弹不拖泥带水。 */
+  --spring-ease: cubic-bezier(.22, 1, .36, 1);
+  --pill-indicator-bg: rgba(255, 255, 255, .18);
+  --pill-indicator-shadow: inset 0 .5px 0 rgba(255, 255, 255, .38), 0 2px 10px rgba(0, 0, 0, .22);
+  /* 玻璃卡片统一的内高光 + 近距投影，避免每个组件各写一套。 */
+  --glass-rim: inset 0 .5px 0 rgba(255, 255, 255, .20), 0 14px 34px -10px rgba(0, 0, 0, .42);
+}
+
+/* ===== 底板：深色壁纸用多层渐变模拟，固定不随内容滚动 ===== */
+html[data-theme="glass"] body {
+  font-family: -apple-system, BlinkMacSystemFont, "SF Pro Text", "SF Pro Display", "Helvetica Neue", "PingFang SC", "Hiragino Sans GB", sans-serif;
+  letter-spacing: -.005em;
+  background-color: #0e0f14;
+  background-image:
+    radial-gradient(1100px 720px at 12% -10%, rgba(88, 120, 210, .34), transparent 60%),
+    radial-gradient(900px 640px at 94% 2%, rgba(168, 92, 190, .24), transparent 62%),
+    radial-gradient(1200px 820px at 50% 114%, rgba(34, 150, 150, .20), transparent 64%),
+    linear-gradient(180deg, #181a22 0%, #0b0c10 100%);
+  background-attachment: fixed;
+}
+html[data-theme="glass"] ::-webkit-scrollbar { width: 8px; height: 8px; }
+html[data-theme="glass"] ::-webkit-scrollbar-thumb { border-radius: 999px; background: rgba(255, 255, 255, .22); border: 2px solid transparent; background-clip: padding-box; }
+html[data-theme="glass"] ::-webkit-scrollbar-thumb:hover { background: rgba(255, 255, 255, .34); background-clip: padding-box; }
+
+/* ===== 顶部 bar：玻璃 chrome，tab 改为胶囊高亮 ===== */
+html[data-theme="glass"] .web-topbar {
+  position: relative;
+  z-index: 40;
+  background: rgba(18, 19, 24, .72);
+  border-bottom-color: rgba(255, 255, 255, .10);
+  backdrop-filter: blur(24px) saturate(180%);
+  -webkit-backdrop-filter: blur(24px) saturate(180%);
+  box-shadow: 0 1px 0 rgba(255, 255, 255, .06), 0 10px 30px rgba(0, 0, 0, .28);
+}
+html[data-theme="glass"] .web-brand-logo { filter: drop-shadow(0 2px 6px rgba(0, 0, 0, .45)); transition: transform .3s var(--spring-ease); }
+html[data-theme="glass"] .web-brand:hover .web-brand-logo { transform: scale(1.06); }
+html[data-theme="glass"] .web-tabs { position: relative; gap: 4px; }
+/* 液态指示块：顶栏与视图内小 tab 共用。hover 时先滑到指针下预览，
+ * 文字颜色只在选中态变化，避免 hover 与选中同时抢视觉。 */
+html[data-theme="glass"] .web-tab-pill,
+html[data-theme="glass"] .seg-pill {
+  display: block;
+  position: absolute;
+  left: 0;
+  width: 0;
+  z-index: 0;
+  border-radius: 999px;
+  background: var(--pill-indicator-bg);
+  box-shadow: var(--pill-indicator-shadow);
+  pointer-events: none;
+  opacity: 0;
+  will-change: transform, width;
+  transition: transform .34s var(--spring-ease), width .34s var(--spring-ease), opacity .18s ease;
+}
+html[data-theme="glass"] .web-tab-pill { top: 5px; bottom: 5px; }
+html[data-theme="glass"] .seg-pill { top: 3px; bottom: 3px; }
+html[data-theme="glass"] .web-tab-pill.no-transition,
+html[data-theme="glass"] .seg-pill.no-transition { transition: none; }
+html[data-theme="glass"] .web-tab {
+  position: relative;
+  z-index: 1;
+  align-self: center;
+  height: auto;
+  padding: 6px 13px;
+  border-bottom: 0;
+  border-radius: 999px;
+  background: transparent;
+  color: var(--muted);
+  font-weight: 500;
+  transition: color .18s ease, opacity .14s ease;
+}
+html[data-theme="glass"] .web-tab:hover { background: transparent; color: var(--muted); }
+html[data-theme="glass"] .web-tab:active { opacity: .78; }
+html[data-theme="glass"] .web-tab.active {
+  background: transparent;
+  color: var(--text);
+  box-shadow: none;
+}
+html[data-theme="glass"] .web-theme-select .select-button {
+  border-radius: 999px;
+  border-color: rgba(255, 255, 255, .16);
+  background: rgba(118, 118, 128, .24);
+}
+html[data-theme="glass"] .web-theme-select .select-button:hover { background: rgba(118, 118, 128, .34); }
+
+/* ===== 视图切换：旧视图立即隐藏，只让新视图快速淡入 =====
+ * 不对整页做 translate/filter：玻璃卡片的 backdrop-filter 在逐帧重采样时非常昂贵，
+ * 同时把离场视图留在 display:block 会让旧内容残留并和新内容抢合成层。 */
+html[data-theme="glass"] .web-view.active {
+  z-index: 2;
+  animation: none;
+}
+html[data-theme="glass"] .web-view.glass-enter {
+  animation: glass-view-in .18s ease-out both;
+  will-change: opacity;
+}
+@keyframes glass-view-in {
+  from { opacity: 0; }
+  to { opacity: 1; }
+}
+
+/* ===== 通用玻璃容器 ===== */
+html[data-theme="glass"] fieldset,
+html[data-theme="glass"] .editor-card,
+html[data-theme="glass"] .card,
+html[data-theme="glass"] .summary-card,
+html[data-theme="glass"] .chart-card,
+html[data-theme="glass"] .preset-banner,
+html[data-theme="glass"] .todo-table-section {
+  border: 1px solid var(--border);
+  border-radius: 16px;
+  background: var(--panel);
+  backdrop-filter: blur(var(--glass-blur)) saturate(160%);
+  -webkit-backdrop-filter: blur(var(--glass-blur)) saturate(160%);
+  box-shadow: var(--glass-rim);
+}
+html[data-theme="glass"] fieldset { padding: 14px; }
+html[data-theme="glass"] .summary-card { padding: 12px 14px; border-radius: 18px; }
+html[data-theme="glass"] .chart-card { padding: 14px; border-radius: 18px; }
+html[data-theme="glass"] .todo-table-section { padding: 14px; }
+/* SVG 图表仍用 JS 调色板；这里覆盖 CSS 图例与徽标令牌，保持同视图色义一致。 */
+html[data-theme="glass"] .todo-main {
+  --todo-chart-planned: #64d2ff;
+  --todo-chart-done: #30d158;
+  --todo-in-progress: #64d2ff;
+  --todo-p0: var(--err);
+}
+html[data-theme="glass"] .card { padding: 14px; }
+html[data-theme="glass"] .preset-banner { padding: 12px 14px; }
+html[data-theme="glass"] .model-card {
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  background: rgba(118, 118, 128, .14);
+}
+/* 编辑器本身已是玻璃卡，内部 fieldset 退成一级子材质，避免层层叠玻璃。 */
+html[data-theme="glass"] .editor-card fieldset,
+html[data-theme="glass"] .card fieldset {
+  border-color: rgba(255, 255, 255, .08);
+  background: rgba(118, 118, 128, .10);
+  backdrop-filter: none;
+  -webkit-backdrop-filter: none;
+  box-shadow: none;
+}
+html[data-theme="glass"] .summary-card:hover,
+html[data-theme="glass"] .home-links .home-card:hover {
+  border-color: rgba(255, 255, 255, .24);
+  background: var(--panel-raised);
+}
+html[data-theme="glass"] .summary-card,
+html[data-theme="glass"] .chart-card,
+html[data-theme="glass"] .home-card {
+  transition: background-color .18s ease, border-color .18s ease, box-shadow .18s ease, transform .3s var(--spring-ease);
+}
+html[data-theme="glass"] .summary-card:hover,
+html[data-theme="glass"] .chart-card:hover {
+  background: var(--panel-raised);
+  border-color: rgba(255, 255, 255, .22);
+  box-shadow: var(--glass-rim), 0 18px 40px -12px rgba(0, 0, 0, .5);
+}
+html[data-theme="glass"] legend { color: var(--muted); padding: 0 8px; }
+
+/* ===== Home ===== */
+html[data-theme="glass"] .home-hero h1 { font-size: 34px; font-weight: 700; letter-spacing: .01em; }
+html[data-theme="glass"] .home-card {
+  border-radius: 20px;
+  border-color: var(--border);
+  background: var(--panel);
+  backdrop-filter: blur(var(--glass-blur)) saturate(160%);
+  -webkit-backdrop-filter: blur(var(--glass-blur)) saturate(160%);
+  box-shadow: var(--glass-rim);
+}
+html[data-theme="glass"] .home-links .home-card:hover { transform: translateY(-2px); }
+html[data-theme="glass"] .home-card-action { color: var(--text); opacity: .82; }
+html[data-theme="glass"] .home-stat {
+  border-radius: 12px;
+  border-color: rgba(255, 255, 255, .10);
+  background: rgba(118, 118, 128, .16);
+}
+html[data-theme="glass"] .home-todo-row {
+  border-radius: 10px;
+  transition: background-color .18s ease;
+}
+html[data-theme="glass"] .home-todo-row:hover { background: var(--hover); }
+html[data-theme="glass"] .home-todo-priority { border-radius: 6px; }
+
+/* ===== 表单、按钮与自绘 select ===== */
+html[data-theme="glass"] input,
+html[data-theme="glass"] textarea,
+html[data-theme="glass"] .select-button,
+html[data-theme="glass"] .provider-search-wrap input {
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: var(--field);
+  color: var(--text);
+  transition: background-color .18s ease, border-color .18s ease;
+}
+html[data-theme="glass"] input:hover,
+html[data-theme="glass"] textarea:hover,
+html[data-theme="glass"] .select-button:hover,
+html[data-theme="glass"] .provider-search-wrap input:hover {
+  background: var(--field-hover);
+  border-color: var(--border-strong);
+}
+html[data-theme="glass"] input:focus,
+html[data-theme="glass"] textarea:focus,
+html[data-theme="glass"] .select-button:focus-visible,
+html[data-theme="glass"] .provider-search-wrap input:focus {
+  outline: 3px solid rgba(255, 255, 255, .12);
+  outline-offset: 0;
+  border-color: rgba(255, 255, 255, .42);
+}
+html[data-theme="glass"] input[type="checkbox"] { accent-color: #f2f2f7; }
+html[data-theme="glass"] button.primary {
+  border: 0;
+  border-radius: 999px;
+  background: rgba(255, 255, 255, .92);
+  color: #141416;
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, .6), 0 4px 14px -4px rgba(0, 0, 0, .45);
+  transition: background-color .18s ease, box-shadow .18s ease, transform .16s var(--spring-ease);
+}
+html[data-theme="glass"] button.primary:hover { background: #fff; }
+html[data-theme="glass"] button.primary:active { transform: scale(.97); }
+html[data-theme="glass"] button.ghost,
+html[data-theme="glass"] button.danger,
+html[data-theme="glass"] .pagination-actions button {
+  border-radius: 999px;
+  background: rgba(118, 118, 128, .22);
+  border: 1px solid transparent;
+  color: var(--text);
+  transition: background-color .18s ease, border-color .18s ease, transform .16s var(--spring-ease);
+}
+html[data-theme="glass"] button.ghost:hover,
+html[data-theme="glass"] .pagination-actions button:hover {
+  background: rgba(118, 118, 128, .32);
+  border-color: var(--border);
+}
+html[data-theme="glass"] button.ghost:active,
+html[data-theme="glass"] button.danger:active,
+html[data-theme="glass"] .pagination-actions button:active { transform: scale(.97); }
+html[data-theme="glass"] button.danger {
+  background: rgba(255, 105, 97, .14);
+  border-color: rgba(255, 105, 97, .35);
+  color: var(--err);
+}
+html[data-theme="glass"] .select-menu {
+  border: 1px solid var(--border-overlay);
+  border-radius: 14px;
+  padding: 5px;
+  background: var(--overlay);
+  backdrop-filter: blur(28px) saturate(180%);
+  -webkit-backdrop-filter: blur(28px) saturate(180%);
+  box-shadow: var(--shadow-overlay);
+  animation: glass-menu-in .2s var(--spring-ease);
+}
+@keyframes glass-menu-in {
+  from { opacity: 0; transform: scale(.97); }
+  to { opacity: 1; transform: scale(1); }
+}
+html[data-theme="glass"] .select-option {
+  position: relative;
+  z-index: 1;
+  border-radius: 9px;
+  background: transparent;
+  color: var(--muted);
+  font-weight: 500;
+  transition: color .14s ease, opacity .12s ease;
+}
+html[data-theme="glass"] .select-option:hover { background: transparent; color: var(--muted); }
+html[data-theme="glass"] .select-option.active,
+html[data-theme="glass"] .select-option.selected {
+  background: transparent;
+  color: var(--text);
+  font-weight: 500;
+  box-shadow: none;
+}
+html[data-theme="glass"] .select-menu .seg-pill {
+  top: 0;
+  bottom: auto;
+  left: 5px;
+  right: 5px;
+  width: auto;
+  height: 0;
+  border-radius: 9px;
+  transition: transform .34s var(--spring-ease), height .34s var(--spring-ease), opacity .18s ease;
+  will-change: transform, height;
+}
+html[data-theme="glass"] .input-action { border-radius: 999px; }
+
+/* 时间范围与视图内小 tab：与顶栏共用滑块交互，容器与指示块统一胶囊圆角。 */
+html[data-theme="glass"] .range-group,
+html[data-theme="glass"] .provider-tabs {
+  position: relative;
+  gap: 2px;
+  padding: 3px;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  background: rgba(118, 118, 128, .18);
+}
+html[data-theme="glass"] .provider-tabs { display: flex; margin-bottom: 10px; }
+html[data-theme="glass"] .range-btn,
+html[data-theme="glass"] .provider-tab {
+  position: relative;
+  z-index: 1;
+  flex: 1 1 auto;
+  min-width: 0;
+  border: 0;
+  border-radius: 999px;
+  padding: 4px 10px;
+  background: transparent;
+  color: var(--muted);
+  font-weight: 500;
+  white-space: nowrap;
+  transition: color .18s ease, opacity .14s ease;
+}
+html[data-theme="glass"] .range-btn:hover,
+html[data-theme="glass"] .provider-tab:hover {
+  background: transparent;
+  color: var(--muted);
+}
+html[data-theme="glass"] .range-btn:active,
+html[data-theme="glass"] .provider-tab:active { opacity: .78; }
+html[data-theme="glass"] .range-btn.active,
+html[data-theme="glass"] .provider-tab.active {
+  border: 0;
+  border-radius: 999px;
+  background: transparent;
+  color: var(--text);
+  box-shadow: none;
+  font-weight: 500;
+}
+
+/* ===== 侧栏与 tab ===== */
+html[data-theme="glass"] nav.side {
+  position: relative;
+  background: rgba(18, 19, 24, .50);
+  border-right: 1px solid var(--border);
+  backdrop-filter: blur(22px) saturate(160%);
+  -webkit-backdrop-filter: blur(22px) saturate(160%);
+}
+/* 左右 margin 必须从宽度里扣除，否则 overflow-y:auto 会同时生成横向滚动条。 */
+html[data-theme="glass"] nav.side button,
+html[data-theme="glass"] .nav-item {
+  position: relative;
+  z-index: 1;
+  width: calc(100% - 16px);
+  margin: 1px 8px;
+  padding: 8px 10px;
+  border-radius: 10px;
+  transition: background-color .18s ease, color .18s ease, box-shadow .18s ease;
+}
+html[data-theme="glass"] nav.side button:hover,
+html[data-theme="glass"] .nav-item:hover { background: rgba(118, 118, 128, .22); }
+html[data-theme="glass"] nav.side button.active,
+html[data-theme="glass"] .nav-item.selected {
+  background: rgba(255, 255, 255, .16);
+  color: var(--text);
+  box-shadow: inset 0 .5px 0 rgba(255, 255, 255, .32);
+}
+/* 设置页左侧是一列竖向 tab：hover 时让同一颗指示块上下预览。 */
+html[data-theme="glass"] nav.side button {
+  position: relative;
+  z-index: 1;
+  background: transparent;
+  color: var(--muted);
+  font-weight: 500;
+  transition: color .18s ease, opacity .14s ease;
+}
+html[data-theme="glass"] nav.side button:hover { background: transparent; color: var(--muted); }
+html[data-theme="glass"] nav.side button:active { opacity: .78; }
+html[data-theme="glass"] nav.side button.active {
+  background: transparent;
+  color: var(--text);
+  box-shadow: none;
+  font-weight: 500;
+}
+html[data-theme="glass"] nav.side .seg-pill {
+  top: 0;
+  bottom: auto;
+  left: 8px;
+  right: 8px;
+  width: auto;
+  height: 0;
+  border-radius: 10px;
+  transition: transform .34s var(--spring-ease), height .34s var(--spring-ease), opacity .18s ease;
+  will-change: transform, height;
+}
+/* Commands / Provider / MCP / Skills / Subagents 的列表也是可选项列表。 */
+html[data-theme="glass"] .provider-list,
+html[data-theme="glass"] .command-list { position: relative; }
+html[data-theme="glass"] .provider-list .nav-item:hover,
+html[data-theme="glass"] .command-list .nav-item:hover { background: transparent; color: var(--muted); }
+html[data-theme="glass"] .provider-list .nav-item.selected,
+html[data-theme="glass"] .command-list .nav-item.selected {
+  background: transparent;
+  color: var(--text);
+  box-shadow: none;
+}
+html[data-theme="glass"] .provider-list .seg-pill,
+html[data-theme="glass"] .command-list .seg-pill {
+  top: 0;
+  bottom: auto;
+  left: 8px;
+  right: 8px;
+  width: auto;
+  height: 0;
+  border-radius: 10px;
+  transition: transform .34s var(--spring-ease), height .34s var(--spring-ease), opacity .18s ease;
+  will-change: transform, height;
+}
+html[data-theme="glass"] .nav-item.new { border-top: 0; }
+html[data-theme="glass"] .nav-item .tag,
+html[data-theme="glass"] .nav-item .nav-status,
+html[data-theme="glass"] .todo-badge,
+html[data-theme="glass"] .status-badge,
+html[data-theme="glass"] .purpose-badge,
+html[data-theme="glass"] .preset-badge,
+html[data-theme="glass"] .preset-status-badge {
+  border-radius: 999px;
+  padding: 1px 8px;
+  background: rgba(118, 118, 128, .16);
+}
+
+/* ===== 表格：表头与容器一起玻璃化 ===== */
+html[data-theme="glass"] .table-wrap { border-radius: 12px; }
+html[data-theme="glass"] .usage-table th,
+html[data-theme="glass"] .todo-table th {
+  background: rgba(28, 28, 34, .92);
+  color: var(--muted);
+}
+html[data-theme="glass"] .usage-table td,
+html[data-theme="glass"] .todo-table td { border-bottom-color: rgba(255, 255, 255, .07); }
+html[data-theme="glass"] .usage-table tbody tr:hover,
+html[data-theme="glass"] .todo-table tbody tr:hover { background: rgba(255, 255, 255, .06); }
+html[data-theme="glass"] .usage-table tbody tr:last-child td,
+html[data-theme="glass"] .todo-table tbody tr:last-child td { border-bottom: 0; }
+
+/* ===== 图表：保持颜色语义，只柔化容器与提示层 ===== */
+html[data-theme="glass"] .chart-empty { border-radius: 14px; border-color: var(--border-strong); }
+html[data-theme="glass"] .chart-tooltip,
+html[data-theme="glass"] .todo-chart-tooltip {
+  border: 1px solid var(--border-overlay);
+  border-radius: 12px;
+  background: var(--overlay);
+  backdrop-filter: blur(24px) saturate(180%);
+  -webkit-backdrop-filter: blur(24px) saturate(180%);
+  box-shadow: var(--shadow-overlay);
+}
+html[data-theme="glass"] .todo-priority-track,
+html[data-theme="glass"] .cache-hit-meter {
+  border-color: var(--border);
+  border-radius: 999px;
+  background: rgba(118, 118, 128, .24);
+  overflow: hidden;
+}
+html[data-theme="glass"] .todo-priority-fill,
+html[data-theme="glass"] .cache-hit-fill { border-radius: 999px; }
+html[data-theme="glass"] .donut-legend-row { border-radius: 8px; }
+
+/* ===== 反馈层与加载态 ===== */
+html[data-theme="glass"] .toast {
+  border: 1px solid var(--border-overlay);
+  border-left: 3px solid var(--accent);
+  border-radius: 12px;
+  background: var(--overlay);
+  backdrop-filter: blur(24px) saturate(180%);
+  -webkit-backdrop-filter: blur(24px) saturate(180%);
+  box-shadow: var(--shadow-overlay);
+}
+html[data-theme="glass"] .page-loading { background: rgba(255, 255, 255, .10); }
+html[data-theme="glass"] .page-loading-bar { background-image: linear-gradient(90deg, transparent, rgba(255, 255, 255, .92), transparent); }
+html[data-theme="glass"] .skeleton {
+  border-radius: 8px;
+  background: rgba(255, 255, 255, .07);
+}
+html[data-theme="glass"] .chart-skeleton {
+  border-radius: 12px;
+  background-color: rgba(255, 255, 255, .05);
+  background-image: repeating-linear-gradient(to bottom, rgba(255, 255, 255, .09) 0 1px, transparent 1px 52px);
+}
+html[data-theme="glass"] .skeleton-table-row.head .skeleton { background: rgba(255, 255, 255, .12); }
+
+/* ===== 其它零散组件 ===== */
+html[data-theme="glass"] .editor-empty {
+  border: 1px dashed var(--border-strong);
+  border-radius: 14px;
+}
+html[data-theme="glass"] .fetch-candidates { border-radius: 12px; border-color: var(--border-strong); }
+html[data-theme="glass"] #log_path,
+html[data-theme="glass"] .preset-oauth-code {
+  border-radius: 8px;
+  padding: 2px 8px;
+  background: rgba(118, 118, 128, .18);
+}
+html[data-theme="glass"] h2 { font-weight: 650; letter-spacing: -.01em; }
+html[data-theme="glass"] .view-head h2,
+html[data-theme="glass"] .chart-title,
+html[data-theme="glass"] .card-title { letter-spacing: -.01em; }
+
+@media (prefers-reduced-motion: reduce) {
+  html[data-theme="glass"] .home-links .home-card { transition: none; }
+  html[data-theme="glass"] .home-links .home-card:hover { transform: none; }
+  html[data-theme="glass"] .home-todo-row { transition: none; }
+  html[data-theme="glass"] .web-tab-pill,
+  html[data-theme="glass"] .seg-pill { transition: none; }
+  html[data-theme="glass"] .web-view.glass-enter { animation: none; will-change: auto; }
+  html[data-theme="glass"] .select-menu { animation: none; }
+}

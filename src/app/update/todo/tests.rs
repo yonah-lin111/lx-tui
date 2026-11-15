@@ -795,30 +795,6 @@ fn date_selection_and_rollover_past_incomplete_to_today() {
 }
 
 #[test]
-fn chart_cycles_across_three_modes() {
-    let mut state = todo_state(&["a"]);
-    assert_eq!(
-        state.todo.active_chart(),
-        crate::app::state::TodoChartKind::StatusAndRate
-    );
-    assert!(apply_todo_key(&mut state, TodoKey::Char('c')));
-    assert_eq!(
-        state.todo.active_chart(),
-        crate::app::state::TodoChartKind::Priority
-    );
-    assert!(next_todo_chart(&mut state));
-    assert_eq!(
-        state.todo.active_chart(),
-        crate::app::state::TodoChartKind::Trend7Day
-    );
-    assert!(prev_todo_chart(&mut state));
-    assert_eq!(
-        state.todo.active_chart(),
-        crate::app::state::TodoChartKind::Priority
-    );
-}
-
-#[test]
 fn pending_g_is_cleared_by_non_g_keys_and_clear_done_preserves_edit_commit() {
     let mut state = todo_state(&["a", "b", "c"]);
     assert!(apply_todo_key(&mut state, TodoKey::Char('G')));
@@ -846,6 +822,28 @@ fn pending_g_is_cleared_by_non_g_keys_and_clear_done_preserves_edit_commit() {
         "commit_todo_edit 清空文本时删除该条并返回变化"
     );
     assert!(state2.todo.is_empty());
+}
+
+#[test]
+fn list_c_key_is_swallowed_without_state_change() {
+    let mut state = todo_state(&["alpha"]);
+
+    // 字符统计块删除后 `c` 不再切换图表；列表态必须吞掉且不产生任何副作用。
+    assert!(!apply_todo_key(&mut state, TodoKey::Char('c')));
+    assert_eq!(texts(&state), vec!["alpha"]);
+    assert_eq!(state.todo.selected(), Some(0));
+    assert!(!state.todo.pending_g());
+
+    // 编辑态仍按普通字符输入，不能被列表态的吞键规则影响。
+    assert!(apply_todo_key(&mut state, TodoKey::Enter));
+    assert!(apply_todo_key(&mut state, TodoKey::Char('c')));
+    assert!(
+        state
+            .todo
+            .edit_input()
+            .is_some_and(|input| input.text().contains('c')),
+        "编辑态必须能输入 c"
+    );
 }
 
 #[test]

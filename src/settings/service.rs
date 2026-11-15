@@ -11,6 +11,7 @@ mod models;
 mod page;
 mod skills;
 mod subagents;
+mod todo;
 mod usage;
 
 #[cfg(test)]
@@ -98,6 +99,8 @@ pub struct ServiceState {
     >,
     /// 进行中的 Quick Connect OAuth 尝试（设置页轮询）。
     connect_oauth: models::connect::PendingConnectOAuthMap,
+    /// 串行化 `PUT /api/config` 的读改写：主题切换与 Settings 保存不能互相覆盖。
+    config_write: tokio::sync::Mutex<()>,
     shutdown: AtomicBool,
 }
 
@@ -115,6 +118,11 @@ impl ServiceState {
     /// 用户 settings.json 路径。
     pub fn config_path(&self) -> &PathBuf {
         &self.config_path
+    }
+
+    /// 配置写锁：所有 `PUT /api/config` 在锁内读改写，避免并发覆盖。
+    pub fn config_write_lock(&self) -> &tokio::sync::Mutex<()> {
+        &self.config_write
     }
 
     /// 监听端口。
@@ -301,6 +309,7 @@ impl SettingsService {
             mcp_status: std::sync::Mutex::new(Vec::new()),
             oauth: tokio::sync::Mutex::new(std::collections::HashMap::new()),
             connect_oauth: models::connect::PendingConnectOAuthMap::default(),
+            config_write: tokio::sync::Mutex::new(()),
             shutdown: AtomicBool::new(false),
         });
         let accept_state = state.clone();

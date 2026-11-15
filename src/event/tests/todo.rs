@@ -461,19 +461,16 @@ fn mouse_click_todo_border_blank_focuses_container() {
 }
 
 #[test]
-fn mouse_click_todo_stats_row_focuses_without_data_change() {
+fn mouse_click_todo_toolbar_gap_focuses_without_data_change() {
     let mut state = demo_terminal();
     let (config, geo) = toolbar_geometry(&mut state);
-    // 条目必须多到「统计行所在行」在列表下标范围内：若列表区误吞了统计块，
-    // 这一击就会选中一行——用单条列表测不出这个问题。
-    let rows = usize::from(crate::tiling::pane_inner_rect(geo.view.right_panel).height);
     state.todo.replace(
-        (0..rows.saturating_add(8))
+        (0..3)
             .map(|index| {
                 crate::db::todo::TodoRecord::new(
                     format!("item {index}"),
                     crate::db::todo::TodoStatus::Todo,
-                    i64::try_from(index).unwrap_or(i64::MAX),
+                    i64::from(index),
                 )
             })
             .collect(),
@@ -482,18 +479,19 @@ fn mouse_click_todo_stats_row_focuses_without_data_change() {
         &mut state,
         RightTab::Todo
     ));
-    let stats = crate::ui::right_panel::todo::stats_rect(geo.view.right_panel).expect("统计行可见");
+    let new = crate::ui::right_panel::todo::button_rect(
+        geo.view.right_panel,
+        crate::app::tooltip::TodoButton::New,
+    )
+    .expect("[+] visible");
     let cursor = state.prompt.cursor();
     let focused_pane = state.active_tab().layout.focus();
     let mut sessions = HashMap::new();
     let mut dirty = false;
 
+    // `[+]` 与 `[sort]` 之间的空档：不是按钮也不是行，应只聚焦容器。
     handle_terminal_event(
-        mouse(
-            MouseEventKind::Down(MouseButton::Left),
-            stats.x + 2,
-            stats.y,
-        ),
+        mouse(MouseEventKind::Down(MouseButton::Left), new.right(), new.y),
         &mut state,
         &mut sessions,
         &geo,
@@ -502,8 +500,8 @@ fn mouse_click_todo_stats_row_focuses_without_data_change() {
         &mut dirty,
     );
 
-    assert!(state.todo_focused(), "点统计块时右栏保持选中");
-    assert!(!state.todo.is_editing(), "统计块不是行，不进入编辑");
+    assert!(state.todo_focused(), "点工具栏空档时右栏保持选中");
+    assert!(!state.todo.is_editing(), "空档不是行，不进入编辑");
     assert_eq!(state.todo.selected(), Some(0), "选中行不变");
     assert_eq!(state.prompt.cursor(), cursor, "光标不动");
     assert_eq!(
@@ -511,7 +509,7 @@ fn mouse_click_todo_stats_row_focuses_without_data_change() {
         focused_pane,
         "窗格焦点不动"
     );
-    assert!(!dirty, "已聚焦时点统计块不产生变化");
+    assert!(!dirty, "已聚焦时点工具栏空档不产生变化");
 }
 
 #[test]

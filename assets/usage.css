@@ -60,8 +60,11 @@
   display: inline-flex;
   align-items: center;
   gap: 6px;
+  /* 宽度跟随文案；容器整体右对齐，按钮组位置不受影响。数字用等宽避免逐秒抖动。 */
   font-size: 11px;
   color: var(--muted);
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
 }
 .status-dot {
   width: 7px;

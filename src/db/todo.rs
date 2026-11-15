@@ -7,10 +7,14 @@
 //! `id` 是稳定业务键，UPSERT 与删除都以它为准。
 
 pub mod date;
+pub mod query;
 
 use std::collections::{BTreeSet, HashMap};
 
 pub use date::*;
+pub use query::{
+    TodoDailyRow, TodoFilter, TodoGroupRow, TodoHome, TodoItemRow, TodoPage, TodoSummary,
+};
 use rusqlite::{OptionalExtension, params};
 
 use super::{Database, DbError, Result, new_external_id, now_ms};

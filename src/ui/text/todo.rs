@@ -24,27 +24,6 @@ pub const TODO_ROLLOVER_ACTION_LABEL: &str = "[move to today]";
 pub const TODO_ROLLOVER_SHORT_ACTION_LABEL: &str = "[move]";
 pub const TODO_ROLLOVER_DISMISS_LABEL: &str = "[x]";
 
-/// 底部统计：标签、段间分隔符、百分比后缀与柱图字形。
-pub const TODO_STATS_TOTAL_LABEL: &str = "total";
-pub const TODO_STATS_OPEN_LABEL: &str = "open";
-pub const TODO_STATS_DOING_LABEL: &str = "doing";
-pub const TODO_STATS_DONE_LABEL: &str = "done";
-pub const TODO_STATS_PLANNED_LABEL: &str = "plan";
-pub const TODO_STATS_SEPARATOR: &str = " · ";
-pub const TODO_STATS_PERCENT_SUFFIX: &str = "%";
-
-/// 图表切换控件与标题。
-pub const TODO_CHART_PREV_LABEL: &str = "‹";
-pub const TODO_CHART_NEXT_LABEL: &str = "›";
-pub const TODO_CHART_TODAY_STATUS_TITLE: &str = "today · status";
-pub const TODO_CHART_DAY_STATUS_TITLE: &str = "day · status";
-pub const TODO_CHART_TODAY_PRIORITY_TITLE: &str = "today · priority";
-pub const TODO_CHART_DAY_PRIORITY_TITLE: &str = "day · priority";
-pub const TODO_CHART_WEEK_TREND_TITLE: &str = "week · 7d trend";
-pub const TODO_CHART_TODAY_SHORT_TITLE: &str = "today";
-pub const TODO_CHART_DAY_SHORT_TITLE: &str = "day";
-pub const TODO_CHART_WEEK_SHORT_TITLE: &str = "week";
-
 /// 顺延完成后的 Toast 提示文案。
 pub fn toast_todo_rollover(count: usize) -> String {
     if count == 1 {
@@ -53,10 +32,6 @@ pub fn toast_todo_rollover(count: usize) -> String {
         format!("Moved {count} uncompleted todos to today")
     }
 }
-
-/// 柱图实心格与计划浅格。
-pub const TODO_BAR_FILLED: &str = "█";
-pub const TODO_BAR_PLANNED: &str = "░";
 
 /// 写库失败提示。
 pub const TOAST_TODO_SAVE_FAILED: &str = "todo save failed";

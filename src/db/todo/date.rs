@@ -113,16 +113,3 @@ pub fn week_dates(selected_date: &str) -> [String; 7] {
         shift_date(&monday, offset)
     })
 }
-
-/// 返回以 `end_date` 为终点（含）、向前连续 `count` 天的升序日期列表。
-pub fn recent_dates(end_date: &str, count: usize) -> Vec<String> {
-    if count == 0 {
-        return Vec::new();
-    }
-    (0..count)
-        .map(|index| {
-            let back = i32::try_from(count - 1 - index).unwrap_or(0);
-            shift_date(end_date, -back)
-        })
-        .collect()
-}

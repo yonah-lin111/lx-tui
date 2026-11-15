@@ -17,7 +17,8 @@ const usageState = {
   loading: false,
   requestSeq: 0,
   overview: null,
-  logPage: null
+  logPage: null,
+  initialRendered: false
 };
 
 const selects = {};
@@ -104,8 +105,14 @@ function buildFilterParams(range) {
 function setStatusIndicator(stateName, text) {
   const dot = document.getElementById('usage-status-dot');
   const label = document.getElementById('last-updated');
-  if (dot) { dot.className = 'status-dot ' + stateName; }
-  if (label) { label.textContent = text; }
+  const spinner = document.getElementById('usage-status-spinner');
+  const loading = stateName === 'loading';
+  const hasData = !!usageState.overview;
+  // 已有数据时刷新只转 spinner：不改写“Updated HH:MM:SS”，否则快速请求会闪文案。
+  if (dot && !(loading && hasData)) { dot.className = 'status-dot ' + stateName; }
+  if (spinner) { spinner.classList.toggle('on', loading); }
+  if (loading && hasData) { return; }
+  if (label) { label.textContent = loading ? 'Loading…' : text; }
 }
 
 function setErrorBanner(message) {
@@ -129,7 +136,7 @@ function isUsageViewActive() {
 async function loadUsageDashboard() {
   const reqId = ++usageState.requestSeq;
   usageState.loading = true;
-  setStatusIndicator('loading', 'Refreshing…');
+  setStatusIndicator('loading');
   const range = resolveTimeRange(usageState.rangePreset, usageState.customStart, usageState.customEnd);
   const baseParams = buildFilterParams(range);
   const logParams = Object.assign({}, baseParams, {
@@ -157,11 +164,21 @@ async function loadUsageDashboard() {
     renderSummaryCards(usageState.overview.summary || null);
     renderCharts(usageState.overview, range);
     renderTableSection();
+    if (!usageState.initialRendered) {
+      usageState.initialRendered = true;
+      usageFadeInInitial();
+    }
     setErrorBanner('');
     const nowText = new Date().toLocaleTimeString('en-US', {hour12: false});
     setStatusIndicator('clean', 'Updated ' + nowText);
   } catch (error) {
     if (reqId !== usageState.requestSeq) { return; }
+    // 首次请求失败时把骨架换成真正的空态，避免一直闪“加载中”而只有 banner 说明失败。
+    if (!usageState.overview) {
+      renderSummaryCards(null);
+      renderCharts({}, range);
+      renderTableSection();
+    }
     setStatusIndicator('error', 'Load failed');
     setErrorBanner('Failed to load usage analytics: ' + error.message);
     if (isUsageViewActive()) { showToast(error.message, 'error'); }
@@ -176,7 +193,7 @@ async function loadUsageLogsPage(nextPage) {
   const targetPage = Math.max(1, nextPage);
   const reqId = ++usageState.requestSeq;
   usageState.loading = true;
-  setStatusIndicator('loading', 'Loading page…');
+  setStatusIndicator('loading');
   const range = resolveTimeRange(usageState.rangePreset, usageState.customStart, usageState.customEnd);
   const logParams = Object.assign({}, buildFilterParams(range), {
     page: targetPage,
@@ -253,6 +270,64 @@ function syncFilterOptions(filters) {
 }
 
 // ===== 8 张汇总卡片渲染 =====
+
+// 首次加载骨架：卡片/图表/表格先占位，避免数据到达前容器高度为 0 再突然撑开。
+function usageSkeletonCard() {
+  const card = domEl('div', 'summary-card');
+  card.appendChild(domEl('div', 'skeleton skeleton-line title'));
+  card.appendChild(domEl('div', 'skeleton skeleton-line value'));
+  card.appendChild(domEl('div', 'skeleton skeleton-line sub'));
+  return card;
+}
+
+function usageSkeletonTable() {
+  const wrap = domEl('div', 'skeleton-table');
+  const columns = ['w-date', 'w-status', 'w-text', 'w-group', 'w-num', 'w-num'];
+  const row = (head) => {
+    const tr = domEl('div', 'skeleton-table-row' + (head ? ' head' : ''));
+    for (const column of columns) {
+      tr.appendChild(domEl('div', 'skeleton ' + column));
+    }
+    return tr;
+  };
+  wrap.appendChild(row(true));
+  for (let index = 0; index < 7; index += 1) {
+    wrap.appendChild(row(false));
+  }
+  return wrap;
+}
+
+function renderUsageSkeleton() {
+  const summary = document.getElementById('summary-cards');
+  if (summary) {
+    summary.replaceChildren();
+    for (let index = 0; index < 8; index += 1) {
+      summary.appendChild(usageSkeletonCard());
+    }
+  }
+  for (const id of ['chart-trend', 'chart-requests', 'chart-models', 'chart-providers', 'chart-composition']) {
+    const host = document.getElementById(id);
+    if (host) { host.replaceChildren(domEl('div', 'skeleton chart-skeleton')); }
+  }
+  const table = document.getElementById('table-container');
+  if (table) { table.replaceChildren(usageSkeletonTable()); }
+}
+
+// 首次骨架切换为真实数据时统一淡入一次；后续刷新保留旧数据，不再触发。
+function usageFadeInInitial() {
+  for (const id of [
+    'summary-cards',
+    'chart-trend',
+    'chart-requests',
+    'chart-models',
+    'chart-providers',
+    'chart-composition',
+    'table-container'
+  ]) {
+    const host = document.getElementById(id);
+    if (host) { host.classList.add('data-enter'); }
+  }
+}
 
 function renderSummaryCards(summary) {
   const host = document.getElementById('summary-cards');
@@ -626,12 +701,12 @@ function initUsageDashboard() {
     });
   }
 
-  for (const btn of document.querySelectorAll('.range-btn')) {
+  for (const btn of document.querySelectorAll('#view-usage .range-btn')) {
     btn.addEventListener('click', () => {
       const preset = btn.dataset.range || '7d';
       usageState.rangePreset = preset;
       usageState.page = 1;
-      for (const other of document.querySelectorAll('.range-btn')) {
+      for (const other of document.querySelectorAll('#view-usage .range-btn')) {
         const isCurrent = other === btn;
         other.classList.toggle('active', isCurrent);
         other.setAttribute('aria-pressed', isCurrent ? 'true' : 'false');
@@ -729,9 +804,10 @@ function initUsageDashboard() {
     });
   }
 
-  loadUsageDashboard();
+  renderUsageSkeleton();
+  return loadUsageDashboard();
 }
 
 function initUsageView() {
-  initUsageDashboard();
+  return initUsageDashboard();
 }

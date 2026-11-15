@@ -93,22 +93,50 @@ async fn page_requires_token_and_serves_self_contained_assets() {
     assert!(!html.contains("cmd-preview"), "no preview pane");
     assert!(html.contains("id=\"view-home\""), "home view present");
     assert!(
+        html.contains("home-dashboard")
+            && html.contains("home-todo-list")
+            && html.contains("home-stat-today")
+            && html.contains("home-stat-progress")
+            && html.contains("home-stat-overdue"),
+        "home mounts the todo summary card"
+    );
+    assert!(html.contains("/home.js"), "home script linked");
+    assert!(
         html.contains("id=\"view-settings\""),
         "settings view present"
     );
     assert!(html.contains("id=\"view-usage\""), "usage view present");
+    assert!(html.contains("id=\"view-todo\""), "todo view present");
     assert!(
         html.contains("/web.css") && html.contains("/web.js"),
         "web shell assets linked"
     );
     assert!(
-        html.contains("id=\"css-settings\"") && html.contains("id=\"css-usage\""),
+        html.contains("id=\"web-theme-select\"") && html.contains("href=\"/theme.css\""),
+        "topbar theme selector and its stylesheet are linked"
+    );
+    assert!(
+        html.contains("class=\"web-tab-pill\""),
+        "glass tab indicator is present for the spring slider"
+    );
+    assert!(
+        !html.contains("<span>lx-tui</span>"),
+        "topbar brand text removed; only the logo remains"
+    );
+    assert!(
+        html.contains("id=\"page-loading\"") && html.contains("id=\"page-loading-label\""),
+        "global view-loading overlay present"
+    );
+    assert!(
+        html.contains("id=\"css-settings\"")
+            && html.contains("id=\"css-usage\"")
+            && html.contains("id=\"css-todo\""),
         "per-view stylesheets toggleable"
     );
     assert_eq!(
         html.matches("media=\"not all\"").count(),
-        2,
-        "both view stylesheets start suspended"
+        3,
+        "all view stylesheets start suspended"
     );
     assert_eq!(
         html.matches("<h1>").count(),
@@ -119,16 +147,23 @@ async fn page_requires_token_and_serves_self_contained_assets() {
         html.contains("data-view=\"home\"")
             && html.contains("data-view=\"settings\"")
             && html.contains("data-view=\"usage\"")
+            && html.contains("data-view=\"todo\"")
             && html.contains("href=\"#/settings\"")
-            && html.contains("href=\"#/usage\""),
-        "topbar exposes hash-linked Home / Settings / Usage tabs"
+            && html.contains("href=\"#/usage\"")
+            && html.contains("href=\"#/todo\""),
+        "topbar exposes hash-linked Home / Settings / Usage / Todo tabs"
     );
     let web_js_pos = html.find("/web.js").expect("web.js linked");
     let settings_js_pos = html.find("/settings.js").expect("settings.js linked");
     let usage_charts_pos = html.find("/usage_charts.js").expect("usage charts linked");
     let usage_js_pos = html.find("/usage.js").expect("usage.js linked");
+    let todo_charts_pos = html.find("/todo_charts.js").expect("todo charts linked");
+    let todo_js_pos = html.find("/todo.js").expect("todo.js linked");
     assert!(
-        web_js_pos < settings_js_pos && usage_charts_pos < usage_js_pos,
+        web_js_pos < settings_js_pos
+            && usage_charts_pos < usage_js_pos
+            && usage_js_pos < todo_charts_pos
+            && todo_charts_pos < todo_js_pos,
         "shared core loads before the view scripts"
     );
 
@@ -277,6 +312,8 @@ async fn page_requires_token_and_serves_self_contained_assets() {
     // 三个页面地址返回同一份统一 shell，且 `[WEB]` 的 URL 仍固定落在 `/`。
     let usage_denied = request(port, &get("/usage")).await;
     assert_eq!(status(&usage_denied), 403);
+    let todo_denied = request(port, &get("/todo")).await;
+    assert_eq!(status(&todo_denied), 403);
     assert_eq!(
         service.url(),
         format!("http://127.0.0.1:{port}/?token={token}")
@@ -285,7 +322,7 @@ async fn page_requires_token_and_serves_self_contained_assets() {
         service.settings_url(),
         format!("http://127.0.0.1:{port}/?token={token}#/settings")
     );
-    for path in ["/settings", "/usage"] {
+    for path in ["/settings", "/usage", "/todo"] {
         let page = request(port, &get(&format!("{path}?token={token}"))).await;
         assert_eq!(status(&page), 200, "{path} serves the unified shell");
         assert_eq!(body(&page), html, "{path} serves the same bytes");
@@ -295,6 +332,32 @@ async fn page_requires_token_and_serves_self_contained_assets() {
         html.contains("/usage_charts.js") && html.contains("/usage.js"),
         "usage scripts linked"
     );
+    assert!(
+        html.contains("/todo.css") && html.contains("/todo_charts.js") && html.contains("/todo.js"),
+        "todo assets linked"
+    );
+    assert!(
+        html.contains("class=\"todo-controls\""),
+        "todo filters render as a content toolbar"
+    );
+    for hook in [
+        "todo-filter-status",
+        "todo-filter-priority",
+        "todo-search",
+        "todo-summary-cards",
+        "todo-chart-trend",
+        "todo-chart-status",
+        "todo-status-legend",
+        "todo-chart-priority",
+        "todo-table-container",
+        "todo-pagination",
+        "todo-status-spinner",
+    ] {
+        assert!(
+            html.contains(&format!("id=\"{hook}\"")),
+            "todo view hook present: {hook}"
+        );
+    }
     assert!(
         html.contains("class=\"usage-controls\"") && !html.contains("usage-topbar"),
         "usage filters render as a content toolbar instead of a second topbar"
@@ -313,6 +376,7 @@ async fn page_requires_token_and_serves_self_contained_assets() {
         "filter-workspace",
         "filter-session",
         "auto-refresh-filter",
+        "usage-status-spinner",
     ] {
         assert!(
             html.contains(&format!("id=\"{hook}\"")),
@@ -341,6 +405,67 @@ async fn page_requires_token_and_serves_self_contained_assets() {
             && web_css_body.contains("scrollbar-color: var(--border-strong) transparent"),
         "all scroll containers share one scrollbar style"
     );
+    assert!(
+        web_css_body.contains(".page-loading") && web_css_body.contains(".skeleton"),
+        "global loading bar and skeleton primitives present"
+    );
+    assert!(
+        web_css_body.contains(".page-loading-bar")
+            && web_css_body.contains(".status-spinner")
+            && web_css_body.contains(".data-enter"),
+        "loading bar, inline spinner and data fade primitives present"
+    );
+    assert!(
+        web_css_body
+            .contains("html:not([data-theme=\"glass\"]) .web-theme-menu .select-option.selected")
+            && web_css_body.contains(
+                "html:not([data-theme=\"glass\"]) .web-theme-menu .select-option.selected.active"
+            ),
+        "theme select keeps its Default-only option backgrounds out of Glass"
+    );
+    assert!(
+        web_css_body.contains("prefers-reduced-motion"),
+        "loading animations respect reduced motion"
+    );
+
+    let theme_css = request(port, &get("/theme.css")).await;
+    assert_eq!(status(&theme_css), 200);
+    assert!(theme_css.contains("text/css"), "theme css content type");
+    let theme_css_body = body(&theme_css);
+    assert!(
+        theme_css_body.contains("html[data-theme=\"glass\"]")
+            && theme_css_body.contains("--glass-blur")
+            && theme_css_body.contains(".web-topbar"),
+        "glass theme is scoped to the data-theme attribute"
+    );
+    assert!(
+        theme_css_body.contains("backdrop-filter"),
+        "glass surfaces use backdrop blur"
+    );
+    assert!(
+        theme_css_body.contains(".web-tab-pill")
+            && theme_css_body.contains(".seg-pill")
+            && theme_css_body.contains("--spring-ease")
+            && theme_css_body.contains("@keyframes glass-view-in")
+            && !theme_css_body.contains("glass-leave"),
+        "glass tab pill and instant cross-view fade present"
+    );
+    assert!(
+        theme_css_body.contains("html[data-theme=\"glass\"] .range-group")
+            && theme_css_body.contains("html[data-theme=\"glass\"] .provider-tabs"),
+        "small segmented controls share the glass pill treatment"
+    );
+    assert!(
+        theme_css_body.contains("nav.side .seg-pill")
+            && theme_css_body.contains("width: calc(100% - 16px)"),
+        "settings side nav uses a vertical pill without horizontal overflow"
+    );
+    assert!(
+        theme_css_body.contains(".select-menu .seg-pill")
+            && theme_css_body.contains(".provider-list .seg-pill")
+            && theme_css_body.contains(".command-list .seg-pill"),
+        "select menus and settings lists reuse the vertical pill"
+    );
 
     let web_js = request(port, &get("/web.js")).await;
     assert_eq!(status(&web_js), 200);
@@ -349,6 +474,50 @@ async fn page_requires_token_and_serves_self_contained_assets() {
     for entry in ["function viewFromLocation", "function showView", "bootWeb"] {
         assert!(web_js_body.contains(entry), "web js entry: {entry}");
     }
+    for entry in [
+        "function showPageLoading",
+        "function hidePageLoading",
+        "function resetPageLoading",
+        "function initWebTheme",
+        "function applyWebTheme",
+        "function syncSegmentPills",
+        "function initSegmentPills",
+        "function settleViewTransitions",
+    ] {
+        assert!(web_js_body.contains(entry), "web js entry: {entry}");
+    }
+    assert!(
+        web_js_body.contains("pointerover") && web_js_body.contains("pointerleave"),
+        "segmented pills preview the hovered item"
+    );
+    assert!(
+        web_js_body.contains(
+            "setSegmentPreview(group, config, 'hover', segmentItemOf(group, config, event.target));"
+        ) && !web_js_body.contains("if (item) { setSegmentPreview(group, config, 'hover'"),
+        "hovering non-item areas clears the pill preview"
+    );
+    assert!(
+        web_js_body.contains("nav.side") && web_js_body.contains("vertical: true"),
+        "settings side nav is registered as a vertical segmented group"
+    );
+    assert!(
+        web_js_body.contains("SELECT_MENU_CONFIG")
+            && web_js_body.contains(".provider-list")
+            && web_js_body.contains(".command-list"),
+        "select menus and settings lists reuse the vertical segmented group"
+    );
+    assert!(
+        web_js_body.contains("target.offsetTop") && web_js_body.contains("childList: true"),
+        "vertical pills measure layout positions and remount after list rerenders"
+    );
+    assert!(
+        web_js_body.contains("glass-enter") && !web_js_body.contains("glass-leave"),
+        "view switching fades the new view without keeping the old one mounted"
+    );
+    assert!(
+        web_js_body.contains("web_theme") && web_js_body.contains("/api/config"),
+        "theme selection persists through the config API"
+    );
     assert!(
         web_js_body.contains("function createSelect") && web_js_body.contains("function showToast"),
         "shared select/toast live in web.js"
@@ -358,10 +527,30 @@ async fn page_requires_token_and_serves_self_contained_assets() {
         "no innerHTML in web js"
     );
 
+    let home_js = request(port, &get("/home.js")).await;
+    assert_eq!(status(&home_js), 200);
+    assert!(home_js.contains("javascript"), "home js content type");
+    let home_js_body = body(&home_js);
+    assert!(
+        home_js_body.contains("/api/todo/home")
+            && home_js_body.contains("todoFocusFromHome")
+            && home_js_body.contains("home-todo-list"),
+        "home card reads its own todo endpoint and hands off to the todo view"
+    );
+    assert!(
+        !home_js_body.contains(".innerHTML"),
+        "no innerHTML in home js"
+    );
+
     let usage_css = request(port, &get("/usage.css")).await;
     assert_eq!(status(&usage_css), 200);
     assert!(usage_css.contains("text/css"), "usage css content type");
     let usage_css_body = body(&usage_css);
+    assert!(
+        usage_css_body.contains(".action-status")
+            && !usage_css_body.contains("min-width: calc(16ch + 30px)"),
+        "usage status width follows its label"
+    );
 
     let usage_js = request(port, &get("/usage.js")).await;
     assert_eq!(status(&usage_js), 200);
@@ -380,6 +569,10 @@ async fn page_requires_token_and_serves_self_contained_assets() {
         usage_js_body.contains("function initUsageView"),
         "usage initialises lazily"
     );
+    assert!(
+        usage_js_body.contains("function renderUsageSkeleton"),
+        "usage paints a stable first-load skeleton"
+    );
 
     let usage_charts_js = request(port, &get("/usage_charts.js")).await;
     assert_eq!(status(&usage_charts_js), 200);
@@ -391,6 +584,59 @@ async fn page_requires_token_and_serves_self_contained_assets() {
     assert!(
         !usage_charts_js_body.contains(".innerHTML"),
         "no innerHTML in usage charts js"
+    );
+
+    let todo_css = request(port, &get("/todo.css")).await;
+    assert_eq!(status(&todo_css), 200);
+    assert!(todo_css.contains("text/css"), "todo css content type");
+    let todo_css_body = body(&todo_css);
+    assert!(
+        todo_css_body.contains(".action-status")
+            && !todo_css_body.contains("min-width: calc(16ch + 30px)"),
+        "todo status width follows its label"
+    );
+
+    let todo_charts_js = request(port, &get("/todo_charts.js")).await;
+    assert_eq!(status(&todo_charts_js), 200);
+    assert!(
+        todo_charts_js.contains("javascript"),
+        "todo charts js content type"
+    );
+    let todo_charts_js_body = body(&todo_charts_js);
+    assert!(
+        !todo_charts_js_body.contains(".innerHTML"),
+        "no innerHTML in todo charts js"
+    );
+
+    let todo_js = request(port, &get("/todo.js")).await;
+    assert_eq!(status(&todo_js), 200);
+    assert!(todo_js.contains("javascript"), "todo js content type");
+    let todo_js_body = body(&todo_js);
+    assert!(
+        !todo_js_body.contains(".innerHTML"),
+        "no innerHTML in todo js"
+    );
+    assert!(
+        !todo_js_body.contains("function createSelect")
+            && !todo_js_body.contains("function showToast"),
+        "shared select/toast live in web.js"
+    );
+    assert!(
+        todo_js_body.contains("function initTodoView"),
+        "todo initialises lazily"
+    );
+    assert!(
+        todo_js_body.contains("function renderTodoSkeleton"),
+        "todo paints a stable first-load skeleton"
+    );
+    assert!(
+        todo_js_body.contains("function todoFocusFromHome")
+            && todo_js_body.contains("todoState.rangePreset = 'all'"),
+        "home rows open the todo view filtered to the selected text"
+    );
+    assert!(
+        todo_js_body.contains("/api/todo/overview") && todo_js_body.contains("/api/todo/items"),
+        "todo controller targets its own APIs"
     );
 
     // 全部资源均无外部引用。
@@ -405,10 +651,15 @@ async fn page_requires_token_and_serves_self_contained_assets() {
         ("skills_js", skills_js_body),
         ("subagents_js", subagents_js_body),
         ("web_css", web_css_body),
+        ("theme_css", theme_css_body),
         ("web_js", web_js_body),
         ("usage_css", usage_css_body),
         ("usage_js", usage_js_body),
         ("usage_charts_js", usage_charts_js_body),
+        ("todo_css", todo_css_body),
+        ("todo_charts_js", todo_charts_js_body),
+        ("todo_js", todo_js_body),
+        ("home_js", home_js_body),
     ] {
         assert!(
             !text.contains("https://"),
@@ -681,6 +932,10 @@ async fn page_header_actions_fill_width_and_resizers() {
     assert!(
         css.contains(".action-status") && css.contains(".status-dot"),
         "action bar status styles"
+    );
+    assert!(
+        !css.contains("min-width: calc(15ch + 30px)"),
+        "settings status width follows its label"
     );
     // 编辑器头部保留标题与字段。
     let legend = html.find("id=\"editor-legend\"").expect("legend present");

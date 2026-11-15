@@ -1,4 +1,4 @@
-//! 全局 todo 日程面板状态：按日切片列表、选中、视口、编辑现场、聚合组、跨日顺延、多图表与删除撤销槽。
+//! 全局 todo 日程面板状态：按日切片列表、选中、视口、编辑现场、聚合组与删除撤销槽。
 //!
 //! 纯数据、无 IO；当前选中日期的列表恒按 `position` 升序且 `position == 下标`，
 //! 因此「行下标」可以直接当「position」用，渲染与命中无需换算。
@@ -9,7 +9,7 @@ pub mod schedule;
 use std::collections::BTreeMap;
 
 pub use group::TodoGroupRole;
-pub use schedule::{TodoChartKind, TodoStats, WeekDayView};
+pub use schedule::WeekDayView;
 
 use crate::app::overlay::TextInput;
 use crate::db::todo::{TodoRecord, TodoStatus, today_date};
@@ -95,8 +95,6 @@ pub struct TodoPanel {
     edit_cont_width: usize,
     /// 是否自动将选中/编辑项滚入视口（键盘移动/选中/编辑时置 true，手动滚轮/滚动条置 false）。
     follow_selected: bool,
-    /// 当前激活的统计图表类型。
-    active_chart: TodoChartKind,
     /// 是否已在当前会话中忽略历史未完成顺延提醒。
     rollover_dismissed: bool,
 }
@@ -126,7 +124,6 @@ impl TodoPanel {
             edit_text_width: 0,
             edit_cont_width: 0,
             follow_selected: true,
-            active_chart: TodoChartKind::StatusAndRate,
             rollover_dismissed: false,
         }
     }

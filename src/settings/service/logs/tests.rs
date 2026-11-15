@@ -12,10 +12,81 @@ async fn state_returns_config_defaults_and_logging_info() {
     assert!(json.contains("\"sidebar_width\":24"), "{json}");
     assert!(json.contains("\"log_level\":\"info\""), "{json}");
     assert!(json.contains("\"log_payload\":false"), "{json}");
+    assert!(json.contains("\"web_theme\":\"default\""), "{json}");
     assert!(json.contains("\"logging\":{\"dir\":"), "{json}");
     assert!(json.contains("\"env_locked\":"), "{json}");
     assert!(json.contains("\"payload_env_locked\":"), "{json}");
     assert!(json.contains("\"commands\":[]"), "{json}");
+    service.shutdown();
+}
+
+#[tokio::test]
+async fn web_theme_persists_and_is_injected_into_the_page() {
+    let (service, mut events, dir) = start("web-theme").await;
+    let port = service.port();
+    let token = service.token().to_string();
+    let url = format!("/api/config?token={token}");
+    let origin = format!("http://127.0.0.1:{port}");
+
+    let default_page = body(&request(port, &get(&format!("/?token={token}"))).await).to_string();
+    assert!(
+        default_page.contains("data-theme=\"default\""),
+        "page defaults to the monochrome theme"
+    );
+
+    let invalid = request(
+        port,
+        &write(
+            "PUT",
+            &url,
+            "{\"config\":{\"web_theme\":\"neon\"}}",
+            Some(&origin),
+        ),
+    )
+    .await;
+    assert_eq!(status(&invalid), 422);
+    assert!(
+        !dir.join("settings.json").exists(),
+        "invalid theme not written"
+    );
+
+    let saved = request(
+        port,
+        &write(
+            "PUT",
+            &url,
+            "{\"config\":{\"web_theme\":\"glass\"}}",
+            Some(&origin),
+        ),
+    )
+    .await;
+    assert_eq!(status(&saved), 200);
+    let text = std::fs::read_to_string(dir.join("settings.json")).expect("settings written");
+    assert!(text.contains("\"web_theme\": \"glass\""), "{text}");
+    match events.try_recv().expect("theme event") {
+        SettingsEvent::ConfigChanged(config) => assert_eq!(config.web_theme, "glass"),
+        other => panic!("unexpected event: {other:?}"),
+    }
+    let glass_page = body(&request(port, &get(&format!("/?token={token}"))).await).to_string();
+    assert!(
+        glass_page.contains("data-theme=\"glass\""),
+        "saved theme is injected before first paint"
+    );
+
+    // 只改布局时不得把已保存的主题覆盖回默认值。
+    let partial = request(
+        port,
+        &write(
+            "PUT",
+            &url,
+            "{\"config\":{\"sidebar_width\":30}}",
+            Some(&origin),
+        ),
+    )
+    .await;
+    assert_eq!(status(&partial), 200);
+    let text = std::fs::read_to_string(dir.join("settings.json")).expect("settings written");
+    assert!(text.contains("\"web_theme\": \"glass\""), "{text}");
     service.shutdown();
 }
 

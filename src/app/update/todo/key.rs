@@ -314,10 +314,6 @@ fn apply_todo_command(state: &mut AppState, ch: char) -> bool {
             state.todo.set_pending_g(false);
             sort_todos(state)
         }
-        'c' | 'C' => {
-            state.todo.set_pending_g(false);
-            state.todo.next_chart()
-        }
         '[' => {
             state.todo.set_pending_g(false);
             shift_todo_week(state, -1)

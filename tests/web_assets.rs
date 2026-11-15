@@ -1,7 +1,7 @@
 //! 浏览器资源回归：Node.js 可用时检查脚本语法，并校验 JS 与 `web.html` 的契约。
 //!
 //! Usage 看板曾因 `usage_charts.js` 内重复声明 `const hasAnyCost` 导致整个脚本
-//! `SyntaxError`，页面表现为「无法拉取数据」。统一控制台把 10 个脚本放进同一
+//! `SyntaxError`，页面表现为「无法拉取数据」。统一控制台把全部脚本放进同一
 //! 全局作用域，因此除了逐文件检查，还必须按 HTML 顺序拼接后再解析一次；同时
 //! 守住 `getElementById` 引用的静态 id 必须存在于 `web.html`。Node.js 缺失时
 //! 跳过语法检查（不阻断纯 Rust 环境），DOM 契约检查始终执行。
@@ -22,6 +22,9 @@ const SCRIPTS: &[&str] = &[
     "settings_subagents.js",
     "usage_charts.js",
     "usage.js",
+    "todo_charts.js",
+    "todo.js",
+    "home.js",
 ];
 
 fn assets_dir() -> PathBuf {
@@ -118,7 +121,7 @@ fn browser_scripts_parse_with_node() {
         node_check(&assets.join(name), name);
     }
 
-    // 10 个脚本共享同一全局作用域：拼成一个脚本再解析，跨文件重复 const/let 会在这里失败。
+    // 全部脚本共享同一全局作用域：拼成一个脚本再解析，跨文件重复 const/let 会在这里失败。
     let combined = SCRIPTS
         .iter()
         .map(|name| read(name))
