@@ -27,7 +27,7 @@ struct ParsedTodoParams {
 pub(super) fn route(request: &Request, state: &ServiceState) -> Response {
     let known_path = matches!(
         request.path.as_str(),
-        "/api/todo/overview" | "/api/todo/items"
+        "/api/todo/overview" | "/api/todo/items" | "/api/todo/home"
     );
     if !known_path {
         return Response::error(404, "not found");
@@ -48,6 +48,7 @@ pub(super) fn route(request: &Request, state: &ServiceState) -> Response {
 
     match request.path.as_str() {
         "/api/todo/overview" => overview_json(&db, &params.filter),
+        "/api/todo/home" => home_json(&db),
         _ => items_json(&db, &params),
     }
 }
@@ -82,6 +83,25 @@ fn overview_json(db: &Database, filter: &TodoFilter) -> Response {
         },
         "daily": daily.iter().map(daily_json).collect::<Vec<_>>(),
         "groups": groups.iter().map(group_json).collect::<Vec<_>>(),
+    });
+    json_response(&body)
+}
+
+/// `GET /api/todo/home`：Home 摘要卡的计数与前 5 条今日/逾期未完成条目。
+fn home_json(db: &Database) -> Response {
+    let today = today_date();
+    let home = match db.query_todo_home(&today, 5) {
+        Ok(home) => home,
+        Err(error) => return Response::error(500, &error.to_string()),
+    };
+    let body = json!({
+        "date": today,
+        "summary": {
+            "todayOpen": home.today_open,
+            "inProgress": home.in_progress,
+            "overdue": home.overdue,
+        },
+        "items": home.items.iter().map(item_json).collect::<Vec<_>>(),
     });
     json_response(&body)
 }

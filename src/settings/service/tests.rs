@@ -93,6 +93,15 @@ async fn page_requires_token_and_serves_self_contained_assets() {
     assert!(!html.contains("cmd-preview"), "no preview pane");
     assert!(html.contains("id=\"view-home\""), "home view present");
     assert!(
+        html.contains("home-dashboard")
+            && html.contains("home-todo-list")
+            && html.contains("home-stat-today")
+            && html.contains("home-stat-progress")
+            && html.contains("home-stat-overdue"),
+        "home mounts the todo summary card"
+    );
+    assert!(html.contains("/home.js"), "home script linked");
+    assert!(
         html.contains("id=\"view-settings\""),
         "settings view present"
     );
@@ -510,6 +519,21 @@ async fn page_requires_token_and_serves_self_contained_assets() {
         "no innerHTML in web js"
     );
 
+    let home_js = request(port, &get("/home.js")).await;
+    assert_eq!(status(&home_js), 200);
+    assert!(home_js.contains("javascript"), "home js content type");
+    let home_js_body = body(&home_js);
+    assert!(
+        home_js_body.contains("/api/todo/home")
+            && home_js_body.contains("todoFocusFromHome")
+            && home_js_body.contains("home-todo-list"),
+        "home card reads its own todo endpoint and hands off to the todo view"
+    );
+    assert!(
+        !home_js_body.contains(".innerHTML"),
+        "no innerHTML in home js"
+    );
+
     let usage_css = request(port, &get("/usage.css")).await;
     assert_eq!(status(&usage_css), 200);
     assert!(usage_css.contains("text/css"), "usage css content type");
@@ -584,6 +608,11 @@ async fn page_requires_token_and_serves_self_contained_assets() {
     assert!(
         todo_js_body.contains("function renderTodoSkeleton"),
         "todo paints a stable first-load skeleton"
+    );
+    assert!(
+        todo_js_body.contains("function todoFocusFromHome")
+            && todo_js_body.contains("todoState.rangePreset = 'all'"),
+        "home rows open the todo view filtered to the selected text"
     );
     assert!(
         todo_js_body.contains("/api/todo/overview") && todo_js_body.contains("/api/todo/items"),

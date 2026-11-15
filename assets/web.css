@@ -167,16 +167,26 @@ body.resizing { cursor: col-resize; user-select: none; }
   display: flex;
   flex-direction: column;
   align-items: center;
-  justify-content: center;
-  gap: 40px;
-  padding: 48px 24px;
+  gap: 32px;
+  padding: 40px 24px;
   overflow-y: auto;
 }
-.home-hero { display: flex; flex-direction: column; align-items: center; gap: 12px; text-align: center; }
-.home-logo { width: 200px; height: auto; image-rendering: pixelated; }
-.home-hero h1 { margin: 0; font-size: 32px; letter-spacing: .06em; }
+/* auto 外边距：高屏居中，内容超高时自动退化为顶部对齐，不裁掉 hero。 */
+.home-hero { margin-top: auto; display: flex; flex-direction: column; align-items: center; gap: 10px; text-align: center; }
+.home-logo { width: 150px; height: auto; image-rendering: pixelated; }
+.home-hero h1 { margin: 0; font-size: 28px; letter-spacing: .06em; }
 .home-hero p { margin: 0; color: var(--muted); font-size: 13px; }
-.home-cards { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 16px; width: min(760px, 100%); }
+/* 左侧 Todo 摘要承担信息密度，右侧 Settings / Usage 保持入口层级。 */
+.home-dashboard {
+  margin-bottom: auto;
+  display: grid;
+  grid-template-columns: minmax(0, 1.6fr) minmax(0, 1fr);
+  gap: 16px;
+  width: min(960px, 100%);
+  align-items: stretch;
+}
+.home-links { display: flex; flex-direction: column; gap: 16px; min-width: 0; }
+.home-links .home-card { flex: 1 1 0; }
 .home-card {
   display: flex;
   flex-direction: column;
@@ -187,12 +197,36 @@ body.resizing { cursor: col-resize; user-select: none; }
   background: var(--panel);
   color: var(--text);
   text-decoration: none;
-  cursor: pointer;
 }
-.home-card:hover { border-color: var(--accent); background: var(--panel-raised); }
+.home-links .home-card:hover { border-color: var(--accent); background: var(--panel-raised); }
 .home-card-title { font-size: 16px; font-weight: 600; }
 .home-card-desc { color: var(--muted); font-size: 13px; }
 .home-card-action { color: var(--text); font-size: 12px; margin-top: auto; }
+.home-todo { gap: 14px; }
+.home-todo-head { display: flex; align-items: flex-start; justify-content: space-between; gap: 12px; }
+.home-todo-heading { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
+.home-todo-heading h2 { margin: 0; }
+.home-todo-date { color: var(--faint); font-size: 11px; letter-spacing: .04em; text-transform: uppercase; }
+.home-todo-open { color: var(--muted); font-size: 12px; text-decoration: none; white-space: nowrap; }
+.home-todo-open:hover { color: var(--text); }
+.home-todo-stats { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 8px; }
+.home-stat { display: flex; flex-direction: column; gap: 2px; padding: 8px 10px; border: 1px solid var(--border); background: var(--panel-raised); min-width: 0; }
+.home-stat-label { color: var(--muted); font-size: 10px; letter-spacing: .04em; text-transform: uppercase; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.home-stat-value { color: var(--text); font-size: 20px; font-weight: 600; font-variant-numeric: tabular-nums; }
+.home-stat.alert .home-stat-value { color: var(--err); }
+.home-todo-list { display: flex; flex-direction: column; gap: 2px; margin: 0; padding: 0; list-style: none; }
+.home-todo-list > li { min-width: 0; }
+.home-todo-row { display: grid; grid-template-columns: auto minmax(0, 1fr) auto; align-items: center; gap: 10px; width: 100%; padding: 7px 8px; border: 0; background: none; color: var(--text); font: inherit; text-align: left; cursor: pointer; }
+.home-todo-row:hover { background: var(--hover); }
+.home-todo-row:focus-visible { outline: 1px solid var(--accent); outline-offset: -1px; }
+.home-todo-priority { padding: 1px 5px; border: 1px solid var(--border-strong); color: var(--muted); font-size: 10px; font-weight: 600; letter-spacing: .04em; }
+.home-todo-priority.p0 { border-color: var(--err); color: var(--err); }
+.home-todo-priority.p1 { border-color: var(--warn); color: var(--warn); }
+.home-todo-text { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.home-todo-meta { color: var(--faint); font-size: 11px; font-variant-numeric: tabular-nums; white-space: nowrap; }
+.home-todo-meta.overdue { color: var(--err); }
+.home-todo-note { margin: 0; color: var(--muted); font-size: 12px; }
+.home-todo-note.error { color: var(--err); }
 
 /* ===== 视图外壳 ===== */
 .settings-shell { display: flex; height: 100%; overflow: hidden; }
@@ -324,9 +358,13 @@ body.resizing { cursor: col-resize; user-select: none; }
 }
 
 /* ===== 窄屏 ===== */
+@media (max-width: 720px) {
+  .home-dashboard { grid-template-columns: 1fr; }
+  .home-links { flex-direction: row; }
+}
 @media (max-width: 640px) {
-  .home-cards { grid-template-columns: 1fr; }
-  .home-logo { width: 140px; }
+  .home-links { flex-direction: column; }
+  .home-logo { width: 120px; }
   .web-topbar { padding: 0 12px; }
   .web-tab { padding: 0 10px; }
 }

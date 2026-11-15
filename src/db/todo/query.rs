@@ -41,6 +41,19 @@ pub struct TodoPage {
     pub page_size: usize,
 }
 
+/// Home 摘要卡：今日 / 进行中 / 逾期计数与合并列表。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct TodoHome {
+    /// 今日未完成（todo + in_progress）。
+    pub today_open: usize,
+    /// 今日及更早仍在进行中的条目。
+    pub in_progress: usize,
+    /// 今天之前仍未完成的条目。
+    pub overdue: usize,
+    /// 今日 + 逾期未完成，按优先级、日期、位置排序。
+    pub items: Vec<TodoItemRow>,
+}
+
 /// 汇总卡片计数；`overdue` 忽略日期范围。
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub struct TodoSummary {
@@ -147,6 +160,61 @@ impl Database {
             total: count_to_usize(total),
             page,
             page_size,
+        })
+    }
+
+    /// Home 摘要卡：今日 / 进行中 / 逾期计数，以及今日 + 逾期未完成条目。
+    ///
+    /// 列表按优先级（P0→P3）、日期升序（更早的逾期先暴露）、位置排序；
+    /// `done` 与未来日期不进入卡片。
+    pub fn query_todo_home(&self, today: &str, limit: usize) -> Result<TodoHome> {
+        let limit = limit.clamp(1, 20);
+        let counts: (i64, i64, i64) = self.conn.query_row(
+            "SELECT
+                 COALESCE(SUM(CASE WHEN entry_date = ?1 AND status != 'done' THEN 1 ELSE 0 END), 0),
+                 COALESCE(SUM(CASE WHEN entry_date <= ?1 AND status = 'in_progress' THEN 1 ELSE 0 END), 0),
+                 COALESCE(SUM(CASE WHEN entry_date < ?1 AND status != 'done' THEN 1 ELSE 0 END), 0)
+               FROM todo",
+            params![today],
+            |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+        )?;
+
+        let sql = r#"SELECT t.id, t.entry_date, t.text, t.status, t.priority, t.completed_date,
+                            t.position, t.group_id,
+                            (SELECT t2.text FROM todo t2
+                              WHERE t2.group_id = t.group_id
+                              ORDER BY t2.entry_date ASC, t2.position ASC, t2.id ASC
+                              LIMIT 1) AS group_label
+                     FROM todo t
+                     WHERE t.entry_date <= ?1 AND t.status != 'done'
+                     ORDER BY CASE t.priority
+                                WHEN 'P0' THEN 0
+                                WHEN 'P1' THEN 1
+                                WHEN 'P2' THEN 2
+                                ELSE 3
+                              END,
+                              t.entry_date ASC, t.position ASC, t.id ASC
+                     LIMIT ?2"#;
+        let mut statement = self.conn.prepare(sql)?;
+        let rows = statement.query_map(
+            params![today, i64::try_from(limit).unwrap_or(i64::MAX)],
+            |row| {
+                Ok(TodoItemRow {
+                    record: map_todo_row(row)?,
+                    group_label: row.get(8)?,
+                })
+            },
+        )?;
+        let mut items = Vec::new();
+        for row in rows {
+            items.push(row?);
+        }
+
+        Ok(TodoHome {
+            today_open: count_to_usize(counts.0),
+            in_progress: count_to_usize(counts.1),
+            overdue: count_to_usize(counts.2),
+            items,
         })
     }
 

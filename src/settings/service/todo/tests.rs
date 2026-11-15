@@ -139,6 +139,42 @@ async fn todo_overview_aggregates_summary_daily_and_groups() {
 }
 
 #[tokio::test]
+async fn todo_home_returns_summary_and_limited_open_items() {
+    let (service, _events, _dir) = start_todo_service("home").await;
+    let port = service.port();
+    let token = service.token().to_string();
+    let today = today_date();
+
+    let db = Database::open(&db_path_for(&service)).expect("open db");
+    seed_todos(&db);
+    drop(db);
+
+    let resp = request(port, &get(&format!("/api/todo/home?token={token}"))).await;
+    assert_eq!(status(&resp), 200, "home: {}", body(&resp));
+    let home: Value = serde_json::from_str(body(&resp)).expect("home json");
+
+    assert_eq!(home["date"], today);
+    assert_eq!(home["summary"]["todayOpen"], 4, "今日未完成 a/b/c/e");
+    assert_eq!(home["summary"]["inProgress"], 1, "c 进行中");
+    assert_eq!(home["summary"]["overdue"], 1, "f 逾期");
+
+    let items = home["items"].as_array().expect("items");
+    let texts: Vec<&str> = items
+        .iter()
+        .filter_map(|item| item["text"].as_str())
+        .collect();
+    assert_eq!(
+        texts,
+        vec!["alpha-b", "epsilon-f", "alpha-a", "beta-c", "delta-e"],
+        "优先级 → 日期升序，且排除 done"
+    );
+    assert!(
+        items.iter().all(|item| item["status"] != "done"),
+        "home card is read-only open work"
+    );
+}
+
+#[tokio::test]
 async fn todo_overview_overdue_ignores_date_range() {
     let (service, _events, _dir) = start_todo_service("overdue").await;
     let port = service.port();

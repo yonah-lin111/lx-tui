@@ -172,7 +172,7 @@ html[data-theme="glass"] .card fieldset {
   box-shadow: none;
 }
 html[data-theme="glass"] .summary-card:hover,
-html[data-theme="glass"] .home-card:hover {
+html[data-theme="glass"] .home-links .home-card:hover {
   border-color: rgba(255, 255, 255, .24);
   background: var(--panel-raised);
 }
@@ -199,8 +199,19 @@ html[data-theme="glass"] .home-card {
   -webkit-backdrop-filter: blur(var(--glass-blur)) saturate(160%);
   box-shadow: var(--glass-rim);
 }
-html[data-theme="glass"] .home-card:hover { transform: translateY(-2px); }
+html[data-theme="glass"] .home-links .home-card:hover { transform: translateY(-2px); }
 html[data-theme="glass"] .home-card-action { color: var(--text); opacity: .82; }
+html[data-theme="glass"] .home-stat {
+  border-radius: 12px;
+  border-color: rgba(255, 255, 255, .10);
+  background: rgba(118, 118, 128, .16);
+}
+html[data-theme="glass"] .home-todo-row {
+  border-radius: 10px;
+  transition: background-color .18s ease;
+}
+html[data-theme="glass"] .home-todo-row:hover { background: var(--hover); }
+html[data-theme="glass"] .home-todo-priority { border-radius: 6px; }
 
 /* ===== 表单、按钮与自绘 select ===== */
 html[data-theme="glass"] input,
@@ -516,8 +527,9 @@ html[data-theme="glass"] .chart-title,
 html[data-theme="glass"] .card-title { letter-spacing: -.01em; }
 
 @media (prefers-reduced-motion: reduce) {
-  html[data-theme="glass"] .home-card { transition: none; }
-  html[data-theme="glass"] .home-card:hover { transform: none; }
+  html[data-theme="glass"] .home-links .home-card { transition: none; }
+  html[data-theme="glass"] .home-links .home-card:hover { transform: none; }
+  html[data-theme="glass"] .home-todo-row { transition: none; }
   html[data-theme="glass"] .web-tab-pill,
   html[data-theme="glass"] .seg-pill { transition: none; }
   html[data-theme="glass"] .web-view.glass-enter { animation: none; will-change: auto; }

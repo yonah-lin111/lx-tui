@@ -580,6 +580,9 @@ function showView(view) {
   if (view === 'settings') { initOnce('settings', 'Loading settings…', window.initSettingsView); }
   if (view === 'usage') { initOnce('usage', 'Loading usage…', window.initUsageView); }
   if (view === 'todo') { initOnce('todo', 'Loading todos…', window.initTodoView); }
+  if (view === 'home' && typeof window.loadHomeSummary === 'function') {
+    window.loadHomeSummary();
+  }
   // 离开 Usage 时收起图表 tooltip，避免它脱离视图样式表后裸露在别的视图上。
   if (view !== 'usage' && typeof hideChartTooltip === 'function') { hideChartTooltip(); }
   document.title = VIEW_TITLES[view];

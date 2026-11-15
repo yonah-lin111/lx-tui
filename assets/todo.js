@@ -534,6 +534,33 @@ function renderTodoTableSection() {
 
 // ===== 初始化与事件绑定 =====
 
+// Home 摘要卡：按条目文本搜索，并放宽到 All 范围，避免历史逾期条目被默认 7d 过滤。
+function todoFocusFromHome(text) {
+  todoState.search = String(text || '');
+  todoState.rangePreset = 'all';
+  todoState.status = '';
+  todoState.priority = '';
+  todoState.activeTab = 'todos';
+  todoState.page = 1;
+  const searchInput = document.getElementById('todo-search');
+  if (searchInput) { searchInput.value = todoState.search; }
+  // 旧的状态/优先级筛选会把目标条目藏掉，这里一并清空。
+  if (todoSelects.status) { todoSelects.status.setValue(''); }
+  if (todoSelects.priority) { todoSelects.priority.setValue(''); }
+  for (const btn of document.querySelectorAll('#view-todo .range-btn')) {
+    const isCurrent = btn.dataset.range === 'all';
+    btn.classList.toggle('active', isCurrent);
+    btn.setAttribute('aria-pressed', isCurrent ? 'true' : 'false');
+  }
+  const customWrap = document.getElementById('todo-custom-range');
+  if (customWrap) { customWrap.classList.add('hidden'); }
+  // 首次进入由 initOnce 带着当前状态加载；已初始化或首次加载仍在途时主动刷新，
+  // 后者由 requestSeq 丢弃旧响应。
+  if (window.__webInit && (window.__webInit.todo === 'done' || window.__webInit.todo === 'running')) {
+    loadTodoDashboard();
+  }
+}
+
 function initTodoDashboard() {
   const now = new Date();
   todoState.customStart = todoShiftDate(todoDateKey(now), -6);

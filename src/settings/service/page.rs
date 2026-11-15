@@ -31,6 +31,10 @@ pub fn asset(path: &str) -> Option<(&'static str, &'static str)> {
             "text/javascript; charset=utf-8",
             include_str!("../../../assets/web.js"),
         )),
+        "/home.js" => Some((
+            "text/javascript; charset=utf-8",
+            include_str!("../../../assets/home.js"),
+        )),
         "/theme.css" => Some((
             "text/css; charset=utf-8",
             include_str!("../../../assets/theme.css"),

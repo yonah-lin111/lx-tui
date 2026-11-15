@@ -53,19 +53,46 @@
       <div class="home-hero">
         <svg class="home-logo" viewBox="0 0 20 14" role="img" aria-label="lx-tui logo"><use href="#lx-logo-art"/></svg>
         <h1>lx-tui</h1>
-        <p>Local agent workspace · configuration and usage in one place</p>
+        <p>Local agent workspace · configuration, usage, and todos in one place</p>
       </div>
-      <div class="home-cards">
-        <a class="home-card" href="#/settings">
-          <span class="home-card-title">Settings</span>
-          <span class="home-card-desc">Models, providers, MCP servers, skills, and subagents.</span>
-          <span class="home-card-action">Open settings →</span>
-        </a>
-        <a class="home-card" href="#/usage">
-          <span class="home-card-title">Usage</span>
-          <span class="home-card-desc">Token usage, cost, and request history across model calls.</span>
-          <span class="home-card-action">Open usage →</span>
-        </a>
+      <div class="home-dashboard">
+        <section class="home-card home-todo" aria-labelledby="home-todo-title">
+          <div class="home-todo-head">
+            <div class="home-todo-heading">
+              <h2 id="home-todo-title" class="home-card-title">Todo</h2>
+              <span id="home-todo-date" class="home-todo-date"></span>
+            </div>
+            <a class="home-todo-open" href="#/todo">Open todo →</a>
+          </div>
+          <div class="home-todo-stats" aria-live="polite">
+            <div class="home-stat">
+              <span class="home-stat-label">Today</span>
+              <span id="home-stat-today" class="home-stat-value">–</span>
+            </div>
+            <div class="home-stat">
+              <span class="home-stat-label">In progress</span>
+              <span id="home-stat-progress" class="home-stat-value">–</span>
+            </div>
+            <div id="home-stat-overdue-block" class="home-stat">
+              <span class="home-stat-label">Overdue</span>
+              <span id="home-stat-overdue" class="home-stat-value">–</span>
+            </div>
+          </div>
+          <ul id="home-todo-list" class="home-todo-list"></ul>
+          <p id="home-todo-note" class="home-todo-note">Loading…</p>
+        </section>
+        <div class="home-links">
+          <a class="home-card" href="#/settings">
+            <span class="home-card-title">Settings</span>
+            <span class="home-card-desc">Models, providers, MCP servers, skills, and subagents.</span>
+            <span class="home-card-action">Open settings →</span>
+          </a>
+          <a class="home-card" href="#/usage">
+            <span class="home-card-title">Usage</span>
+            <span class="home-card-desc">Token usage, cost, and request history across model calls.</span>
+            <span class="home-card-action">Open usage →</span>
+          </a>
+        </div>
       </div>
     </div>
   </section>
@@ -950,5 +977,6 @@
 <script src="/usage.js"></script>
 <script src="/todo_charts.js"></script>
 <script src="/todo.js"></script>
+<script src="/home.js"></script>
 </body>
 </html>

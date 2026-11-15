@@ -827,3 +827,80 @@ fn groups_respect_filters() {
             .is_empty()
     );
 }
+
+#[test]
+fn home_counts_today_and_merges_overdue_open_items_by_priority() {
+    let db = open_test_database();
+    save(
+        &db,
+        "2026-11-13",
+        "old-p1",
+        TodoStatus::Todo,
+        TodoPriority::P1,
+    );
+    save(
+        &db,
+        "2026-11-14",
+        "done-old",
+        TodoStatus::Done,
+        TodoPriority::P0,
+    );
+    save(
+        &db,
+        "2026-11-15",
+        "today-p3",
+        TodoStatus::Todo,
+        TodoPriority::P3,
+    );
+    save(
+        &db,
+        "2026-11-15",
+        "today-p0",
+        TodoStatus::InProgress,
+        TodoPriority::P0,
+    );
+    save(
+        &db,
+        "2026-11-15",
+        "today-p1",
+        TodoStatus::Todo,
+        TodoPriority::P1,
+    );
+    save(
+        &db,
+        "2026-11-15",
+        "done-today",
+        TodoStatus::Done,
+        TodoPriority::P0,
+    );
+    save(
+        &db,
+        "2026-11-16",
+        "future",
+        TodoStatus::Todo,
+        TodoPriority::P0,
+    );
+
+    let home = db.query_todo_home("2026-11-15", 3).expect("home");
+    assert_eq!(home.today_open, 3, "今日未完成含 todo + in_progress");
+    assert_eq!(home.in_progress, 1);
+    assert_eq!(home.overdue, 1);
+    let texts: Vec<&str> = home
+        .items
+        .iter()
+        .map(|row| row.record.text.as_str())
+        .collect();
+    assert_eq!(
+        texts,
+        vec!["today-p0", "old-p1", "today-p1"],
+        "按优先级、日期升序、位置排序，limit 生效且排除 done/future"
+    );
+}
+
+#[test]
+fn home_is_empty_on_blank_database() {
+    let db = open_test_database();
+    let home = db.query_todo_home("2026-11-15", 5).expect("home");
+    assert_eq!((home.today_open, home.in_progress, home.overdue), (0, 0, 0));
+    assert!(home.items.is_empty());
+}
