@@ -198,7 +198,10 @@ document.addEventListener('click', (evt) => {
     }
   });
 });
-window.addEventListener('resize', () => openSelects.forEach((inst) => inst.reposition()));
+window.addEventListener('resize', () => {
+  openSelects.forEach((inst) => inst.reposition());
+  syncTabPill(true);
+});
 window.addEventListener('scroll', () => {
   openSelects.forEach((inst) => inst.reposition());
   if (typeof hideChartTooltip === 'function') { hideChartTooltip(); }
@@ -219,6 +222,8 @@ function applyWebTheme(theme) {
   webThemeCurrent = next;
   document.documentElement.dataset.theme = next;
   if (webThemeSelect) { webThemeSelect.setValue(next); }
+  settleViewTransitions();
+  syncTabPill(true);
 }
 
 async function loadWebTheme() {
@@ -291,6 +296,41 @@ const VIEW_TITLES = {
 };
 const VIEW_CSS = { settings: 'css-settings', usage: 'css-usage', todo: 'css-todo' };
 
+// ===== 顶栏 tab：玻璃主题下的弹簧滑块 =====
+let tabPillReady = false;
+
+// 把指示块移动到当前 active tab；首次与主题切换用 no-transition 直接落位。
+function syncTabPill(immediate) {
+  const pill = document.querySelector('.web-tab-pill');
+  const tabs = document.querySelector('.web-tabs');
+  const active = document.querySelector('.web-tab.active');
+  if (!pill || !tabs || !active) { return; }
+  const tabRect = active.getBoundingClientRect();
+  const tabsRect = tabs.getBoundingClientRect();
+  if (!tabRect.width) { return; }
+  const instant = immediate || !tabPillReady;
+  if (instant) { pill.classList.add('no-transition'); }
+  pill.style.width = Math.round(tabRect.width) + 'px';
+  pill.style.transform = 'translateX(' + Math.round(tabRect.left - tabsRect.left) + 'px)';
+  tabPillReady = true;
+  if (instant) {
+    // 先落位，再解锁过渡；用定时器而不是 rAF，后台标签页被节流时也不会卡住禁用态。
+    setTimeout(() => pill.classList.remove('no-transition'), 24);
+  }
+}
+
+// 切换主题/缩放时清掉残留的进场离场类，避免旧视图被固定在 display:block。
+function settleViewTransitions() {
+  for (const name of VIEWS) {
+    const section = document.getElementById('view-' + name);
+    if (!section) { continue; }
+    section.onanimationend = null;
+    section.classList.remove(
+      'glass-enter-right', 'glass-enter-left', 'glass-leave-right', 'glass-leave-left'
+    );
+  }
+}
+
 // ===== 全局加载遮罩：只盖内容区，顶部导航始终可点 =====
 const pageLoadingState = { seq: 0, startedAt: 0, hideTimer: null };
 
@@ -357,6 +397,13 @@ function showView(view) {
   // 切页先收起上一页尚未结束的加载遮罩与浮层，避免遮罩归属错乱。
   resetPageLoading();
   openSelects.forEach((inst) => inst.close());
+  const current = VIEWS.find((name) => {
+    const section = document.getElementById('view-' + name);
+    return section && section.classList.contains('active');
+  });
+  const direction = current && VIEWS.indexOf(view) < VIEWS.indexOf(current) ? -1 : 1;
+  const animateGlass = document.documentElement.dataset.theme === 'glass' && current && current !== view;
+  settleViewTransitions();
   for (const name of VIEWS) {
     const section = document.getElementById('view-' + name);
     if (section) { section.classList.toggle('active', name === view); }
@@ -370,6 +417,27 @@ function showView(view) {
       }
     }
   }
+  if (animateGlass) {
+    const leaving = document.getElementById('view-' + current);
+    const entering = document.getElementById('view-' + view);
+    if (leaving && entering) {
+      const leaveClass = direction > 0 ? 'glass-leave-left' : 'glass-leave-right';
+      const enterClass = direction > 0 ? 'glass-enter-right' : 'glass-enter-left';
+      leaving.classList.add(leaveClass);
+      entering.classList.add(enterClass);
+      leaving.onanimationend = (event) => {
+        if (event.target !== leaving) { return; }
+        leaving.classList.remove(leaveClass);
+        leaving.onanimationend = null;
+      };
+      entering.onanimationend = (event) => {
+        if (event.target !== entering) { return; }
+        entering.classList.remove(enterClass);
+        entering.onanimationend = null;
+      };
+    }
+  }
+  syncTabPill(!tabPillReady);
   // 非当前视图的样式表用 media="not all" 挂起，不销毁节点、不重新请求。
   for (const [name, id] of Object.entries(VIEW_CSS)) {
     const link = document.getElementById(id);

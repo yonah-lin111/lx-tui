@@ -138,6 +138,8 @@ body.resizing { cursor: col-resize; user-select: none; }
 .web-theme-menu .select-option.selected:hover,
 .web-theme-menu .select-option.selected.active { background: var(--option-selected); }
 .web-tabs { display: flex; align-items: stretch; gap: 4px; height: 100%; }
+/* 玻璃主题的滑动指示块：Default 不参与布局。 */
+.web-tab-pill { display: none; }
 .web-tab {
   display: inline-flex;
   align-items: center;

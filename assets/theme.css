@@ -35,6 +35,10 @@ html[data-theme="glass"] {
   --todo-chart-planned: #64d2ff;
   --todo-chart-done: #30d158;
   --glass-blur: 26px;
+  /* 与参考项目一致的弹簧曲线：位移/宽度回弹不拖泥带水。 */
+  --spring-ease: cubic-bezier(.22, 1, .36, 1);
+  --pill-indicator-bg: rgba(255, 255, 255, .18);
+  --pill-indicator-shadow: inset 0 .5px 0 rgba(255, 255, 255, .38), 0 2px 10px rgba(0, 0, 0, .22);
   /* 玻璃卡片统一的内高光 + 近距投影，避免每个组件各写一套。 */
   --glass-rim: inset 0 .5px 0 rgba(255, 255, 255, .20), 0 14px 34px -10px rgba(0, 0, 0, .42);
 }
@@ -65,21 +69,44 @@ html[data-theme="glass"] .web-topbar {
   -webkit-backdrop-filter: blur(24px) saturate(180%);
   box-shadow: 0 1px 0 rgba(255, 255, 255, .06), 0 10px 30px rgba(0, 0, 0, .28);
 }
-html[data-theme="glass"] .web-brand-logo { filter: drop-shadow(0 2px 6px rgba(0, 0, 0, .45)); }
-html[data-theme="glass"] .web-tabs { gap: 4px; }
+html[data-theme="glass"] .web-brand-logo { filter: drop-shadow(0 2px 6px rgba(0, 0, 0, .45)); transition: transform .3s var(--spring-ease); }
+html[data-theme="glass"] .web-brand:hover .web-brand-logo { transform: scale(1.06); }
+html[data-theme="glass"] .web-tabs { position: relative; gap: 4px; }
+/* 液态指示块：只移动/变宽，tab 自身不再铺底色，切换时才有“滑过去”的感觉。 */
+html[data-theme="glass"] .web-tab-pill {
+  display: block;
+  position: absolute;
+  top: 5px;
+  bottom: 5px;
+  left: 0;
+  width: 0;
+  z-index: 0;
+  border-radius: 999px;
+  background: var(--pill-indicator-bg);
+  box-shadow: var(--pill-indicator-shadow);
+  pointer-events: none;
+  will-change: transform, width;
+  transition: transform .42s var(--spring-ease), width .42s var(--spring-ease), opacity .2s ease;
+}
+html[data-theme="glass"] .web-tab-pill.no-transition { transition: none; }
 html[data-theme="glass"] .web-tab {
+  position: relative;
+  z-index: 1;
   align-self: center;
   height: auto;
   padding: 6px 13px;
   border-bottom: 0;
-  border-radius: 10px;
+  border-radius: 999px;
+  background: transparent;
   color: var(--muted);
+  transition: color .18s ease, opacity .14s ease;
 }
-html[data-theme="glass"] .web-tab:hover { background: rgba(118, 118, 128, .24); color: var(--text); }
+html[data-theme="glass"] .web-tab:hover { background: transparent; color: var(--text); }
+html[data-theme="glass"] .web-tab:active { opacity: .78; }
 html[data-theme="glass"] .web-tab.active {
-  background: rgba(255, 255, 255, .16);
+  background: transparent;
   color: var(--text);
-  box-shadow: inset 0 .5px 0 rgba(255, 255, 255, .35), 0 4px 12px -4px rgba(0, 0, 0, .35);
+  box-shadow: none;
 }
 html[data-theme="glass"] .web-theme-select .select-button {
   border-radius: 999px;
@@ -87,6 +114,40 @@ html[data-theme="glass"] .web-theme-select .select-button {
   background: rgba(118, 118, 128, .24);
 }
 html[data-theme="glass"] .web-theme-select .select-button:hover { background: rgba(118, 118, 128, .34); }
+
+/* ===== 视图切换：方向感知的弹簧位移 + 轻微模糊淡入淡出 ===== */
+html[data-theme="glass"] .web-view.active {
+  z-index: 2;
+  animation: none;
+}
+html[data-theme="glass"] .web-view.glass-enter-right { animation: glass-view-in-right .38s var(--spring-ease) both; will-change: transform, opacity, filter; }
+html[data-theme="glass"] .web-view.glass-enter-left { animation: glass-view-in-left .38s var(--spring-ease) both; will-change: transform, opacity, filter; }
+html[data-theme="glass"] .web-view.glass-leave-left,
+html[data-theme="glass"] .web-view.glass-leave-right {
+  display: block;
+  z-index: 1;
+  pointer-events: none;
+  will-change: transform, opacity, filter;
+}
+html[data-theme="glass"] .web-view.glass-leave-left { animation: glass-view-out-left .26s cubic-bezier(.4, 0, .6, 1) both; }
+html[data-theme="glass"] .web-view.glass-leave-right { animation: glass-view-out-right .26s cubic-bezier(.4, 0, .6, 1) both; }
+/* 进场从 18px 外弹入、出场向反方向让位；模糊只做 5px，避免整页重绘过重。 */
+@keyframes glass-view-in-right {
+  from { opacity: 0; transform: translate3d(18px, 0, 0); filter: blur(5px); }
+  to { opacity: 1; transform: translate3d(0, 0, 0); filter: blur(0); }
+}
+@keyframes glass-view-in-left {
+  from { opacity: 0; transform: translate3d(-18px, 0, 0); filter: blur(5px); }
+  to { opacity: 1; transform: translate3d(0, 0, 0); filter: blur(0); }
+}
+@keyframes glass-view-out-left {
+  from { opacity: 1; transform: translate3d(0, 0, 0); filter: blur(0); }
+  to { opacity: 0; transform: translate3d(-10px, 0, 0); filter: blur(4px); }
+}
+@keyframes glass-view-out-right {
+  from { opacity: 1; transform: translate3d(0, 0, 0); filter: blur(0); }
+  to { opacity: 0; transform: translate3d(10px, 0, 0); filter: blur(4px); }
+}
 
 /* ===== 通用玻璃容器 ===== */
 html[data-theme="glass"] fieldset,
@@ -128,6 +189,17 @@ html[data-theme="glass"] .home-card:hover {
   border-color: rgba(255, 255, 255, .24);
   background: var(--panel-raised);
 }
+html[data-theme="glass"] .summary-card,
+html[data-theme="glass"] .chart-card,
+html[data-theme="glass"] .home-card {
+  transition: background-color .18s ease, border-color .18s ease, box-shadow .18s ease, transform .3s var(--spring-ease);
+}
+html[data-theme="glass"] .summary-card:hover,
+html[data-theme="glass"] .chart-card:hover {
+  background: var(--panel-raised);
+  border-color: rgba(255, 255, 255, .22);
+  box-shadow: var(--glass-rim), 0 18px 40px -12px rgba(0, 0, 0, .5);
+}
 html[data-theme="glass"] legend { color: var(--muted); padding: 0 8px; }
 
 /* ===== Home ===== */
@@ -139,7 +211,6 @@ html[data-theme="glass"] .home-card {
   backdrop-filter: blur(var(--glass-blur)) saturate(160%);
   -webkit-backdrop-filter: blur(var(--glass-blur)) saturate(160%);
   box-shadow: var(--glass-rim);
-  transition: transform .18s ease, background-color .18s ease, border-color .18s ease;
 }
 html[data-theme="glass"] .home-card:hover { transform: translateY(-2px); }
 html[data-theme="glass"] .home-card-action { color: var(--text); opacity: .82; }
@@ -153,6 +224,7 @@ html[data-theme="glass"] .provider-search-wrap input {
   border-radius: 10px;
   background: var(--field);
   color: var(--text);
+  transition: background-color .18s ease, border-color .18s ease;
 }
 html[data-theme="glass"] input:hover,
 html[data-theme="glass"] textarea:hover,
@@ -176,8 +248,10 @@ html[data-theme="glass"] button.primary {
   background: rgba(255, 255, 255, .92);
   color: #141416;
   box-shadow: inset 0 1px 0 rgba(255, 255, 255, .6), 0 4px 14px -4px rgba(0, 0, 0, .45);
+  transition: background-color .18s ease, box-shadow .18s ease, transform .16s var(--spring-ease);
 }
 html[data-theme="glass"] button.primary:hover { background: #fff; }
+html[data-theme="glass"] button.primary:active { transform: scale(.97); }
 html[data-theme="glass"] button.ghost,
 html[data-theme="glass"] button.danger,
 html[data-theme="glass"] .pagination-actions button {
@@ -185,12 +259,16 @@ html[data-theme="glass"] .pagination-actions button {
   background: rgba(118, 118, 128, .22);
   border: 1px solid transparent;
   color: var(--text);
+  transition: background-color .18s ease, border-color .18s ease, transform .16s var(--spring-ease);
 }
 html[data-theme="glass"] button.ghost:hover,
 html[data-theme="glass"] .pagination-actions button:hover {
   background: rgba(118, 118, 128, .32);
   border-color: var(--border);
 }
+html[data-theme="glass"] button.ghost:active,
+html[data-theme="glass"] button.danger:active,
+html[data-theme="glass"] .pagination-actions button:active { transform: scale(.97); }
 html[data-theme="glass"] button.danger {
   background: rgba(255, 105, 97, .14);
   border-color: rgba(255, 105, 97, .35);
@@ -204,8 +282,16 @@ html[data-theme="glass"] .select-menu {
   backdrop-filter: blur(28px) saturate(180%);
   -webkit-backdrop-filter: blur(28px) saturate(180%);
   box-shadow: var(--shadow-overlay);
+  animation: glass-menu-in .2s var(--spring-ease);
 }
-html[data-theme="glass"] .select-option { border-radius: 9px; }
+@keyframes glass-menu-in {
+  from { opacity: 0; transform: scale(.97); }
+  to { opacity: 1; transform: scale(1); }
+}
+html[data-theme="glass"] .select-option {
+  border-radius: 9px;
+  transition: background-color .14s ease, color .14s ease;
+}
 html[data-theme="glass"] .select-option:hover,
 html[data-theme="glass"] .select-option.active { background: var(--option-hover); color: var(--text); }
 html[data-theme="glass"] .select-option.selected {
@@ -222,7 +308,7 @@ html[data-theme="glass"] .range-group {
   background: rgba(118, 118, 128, .20);
   overflow: hidden;
 }
-html[data-theme="glass"] .range-btn { border-right: 0; padding: 4px 10px; }
+html[data-theme="glass"] .range-btn { border-right: 0; padding: 4px 10px; transition: background-color .18s ease, color .18s ease; }
 html[data-theme="glass"] .range-btn:hover { background: rgba(118, 118, 128, .26); }
 html[data-theme="glass"] .range-btn.active {
   border-radius: 999px;
@@ -243,6 +329,7 @@ html[data-theme="glass"] .nav-item {
   margin: 1px 8px;
   padding: 8px 10px;
   border-radius: 10px;
+  transition: background-color .18s ease, color .18s ease, box-shadow .18s ease;
 }
 html[data-theme="glass"] nav.side button:hover,
 html[data-theme="glass"] .nav-item:hover { background: rgba(118, 118, 128, .22); }
@@ -276,6 +363,7 @@ html[data-theme="glass"] .provider-tab {
   border: 0;
   border-radius: 9px;
   padding: 6px 10px;
+  transition: background-color .18s ease, color .18s ease, box-shadow .18s ease;
 }
 html[data-theme="glass"] .provider-tab:hover { background: rgba(118, 118, 128, .24); }
 html[data-theme="glass"] .provider-tab.active {
@@ -365,4 +453,10 @@ html[data-theme="glass"] .card-title { letter-spacing: -.01em; }
 @media (prefers-reduced-motion: reduce) {
   html[data-theme="glass"] .home-card { transition: none; }
   html[data-theme="glass"] .home-card:hover { transform: none; }
+  html[data-theme="glass"] .web-tab-pill { transition: none; }
+  html[data-theme="glass"] .web-view.glass-enter-right,
+  html[data-theme="glass"] .web-view.glass-enter-left { animation: none; }
+  html[data-theme="glass"] .web-view.glass-leave-left,
+  html[data-theme="glass"] .web-view.glass-leave-right { display: none; animation: none; }
+  html[data-theme="glass"] .select-menu { animation: none; }
 }

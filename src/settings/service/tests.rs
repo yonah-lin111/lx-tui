@@ -107,6 +107,10 @@ async fn page_requires_token_and_serves_self_contained_assets() {
         "topbar theme selector and its stylesheet are linked"
     );
     assert!(
+        html.contains("class=\"web-tab-pill\""),
+        "glass tab indicator is present for the spring slider"
+    );
+    assert!(
         !html.contains("<span>lx-tui</span>"),
         "topbar brand text removed; only the logo remains"
     );
@@ -421,6 +425,13 @@ async fn page_requires_token_and_serves_self_contained_assets() {
         theme_css_body.contains("backdrop-filter"),
         "glass surfaces use backdrop blur"
     );
+    assert!(
+        theme_css_body.contains(".web-tab-pill")
+            && theme_css_body.contains("--spring-ease")
+            && theme_css_body.contains("@keyframes glass-view-in-right")
+            && theme_css_body.contains(".glass-leave-left"),
+        "glass tab pill and directional view transitions present"
+    );
 
     let web_js = request(port, &get("/web.js")).await;
     assert_eq!(status(&web_js), 200);
@@ -435,9 +446,15 @@ async fn page_requires_token_and_serves_self_contained_assets() {
         "function resetPageLoading",
         "function initWebTheme",
         "function applyWebTheme",
+        "function syncTabPill",
+        "function settleViewTransitions",
     ] {
         assert!(web_js_body.contains(entry), "web js entry: {entry}");
     }
+    assert!(
+        web_js_body.contains("glass-enter-right") && web_js_body.contains("glass-leave-left"),
+        "view switching applies the glass transition classes"
+    );
     assert!(
         web_js_body.contains("web_theme") && web_js_body.contains("/api/config"),
         "theme selection persists through the config API"
