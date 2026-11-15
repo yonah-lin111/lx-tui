@@ -69,10 +69,7 @@ impl<'a> From<&'a Lx> for HistorySource<'a> {
             chat: &lx.chat,
             // ask 等待用户作答期间不推进呼吸相位：步骤方块保持静态实心，
             // 不再一闪一闪（用户思考的时间不属于 Agent 执行过程）。
-            animating: (lx.chat.status.streaming
-                || lx.chat.has_running_shell()
-                || lx.compact.is_running())
-                && lx.ask.is_none(),
+            animating: (lx.chat.is_animating() || lx.compact.is_running()) && lx.ask.is_none(),
             compact: &lx.compact,
             model_switch: &lx.model_switch,
             recap: Some(&lx.recap),
@@ -122,7 +119,9 @@ impl<'a> HistorySource<'a> {
             checkpoints: &compact.checkpoints,
             switches: &[],
             chat,
-            animating: chat.status.streaming || compact.is_running(),
+            // 与主历史同一判据：BTW 的在途回答只体现在消息状态上，没有
+            // `status.streaming`；漏掉它会让详情步骤标记整段不呼吸。
+            animating: chat.is_animating() || compact.is_running(),
             compact,
             model_switch: &EMPTY_MODEL_SWITCH,
             recap: None,

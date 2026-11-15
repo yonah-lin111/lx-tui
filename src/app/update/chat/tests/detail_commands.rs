@@ -683,3 +683,61 @@ fn detail_btw_compact_ticks_elapsed_and_breathing_frame() {
     );
     assert_eq!(thread.chat.loading_frame, 1);
 }
+
+#[test]
+fn btw_streaming_thread_drives_loading_frame() {
+    let (mut state, pane) = btw_editing_state();
+    {
+        let thread = state
+            .pane_mut_anywhere(pane)
+            .expect("pane")
+            .lx
+            .btw
+            .active_thread_mut()
+            .expect("thread");
+        thread.loaded = true;
+        thread
+            .chat
+            .messages
+            .push(crate::app::state::ChatMessageView {
+                sequence: 0,
+                id: "a1".into(),
+                role: "assistant".into(),
+                status: "streaming".into(),
+                turn_index: 0,
+                kind: "chat".into(),
+                shell: None,
+                steps: Vec::new(),
+                model_label: None,
+                error_code: None,
+                input_tokens: None,
+                output_tokens: None,
+                cache_read_tokens: None,
+                duration_ms: None,
+                reports: Vec::new(),
+                attachments: Vec::new(),
+            });
+        thread.chat.loading_frame = 0;
+    }
+    assert!(state.has_streaming_lx(), "BTW 在途回答必须驱动心跳");
+    let before = state
+        .pane_anywhere(pane)
+        .expect("pane")
+        .lx
+        .btw
+        .active_thread()
+        .expect("thread")
+        .chat
+        .loading_frame;
+    assert!(crate::app::update::chat::advance_lx_loading(&mut state));
+    let after = state
+        .pane_anywhere(pane)
+        .expect("pane")
+        .lx
+        .btw
+        .active_thread()
+        .expect("thread")
+        .chat
+        .loading_frame;
+    assert_eq!(after, before + 1, "BTW 线程帧必须随心跳推进");
+}

@@ -5,6 +5,7 @@
 - **当前状态**：**已在 `detail-slash-report` 分支实现，自动化与 CLI 实机验证通过；TUI 交互/外观待用户确认后合并（含 2026-11-15 T10 修复）**（见 [`verification.md`](verification.md)）。
 - **2026-11-15 调整**：详情命令由 `/undo` 更名为 `/rewind`（`/undo` 保留隐藏别名）；确认面板与主聊天四项动作对齐；新增 compact 检查点撤销（`RestoreCompact`）。
 - **2026-11-15 修复**：详情 `/compact` 纳入 `has_streaming_lx` 心跳（耗时与菱形呼吸、聊天栏 `Compacting context... (Ns)`）；后台详情滚动条按下/拖拽上限改用 `ScrollbarLayout` 的 `total`/`visible`，不再读滞后一帧的缓存行数。
+- **2026-11-15 对齐**：历史动画判据收敛到 `LxChat::is_animating()`（流式状态 / 请求在途 / 本地命令 / 流式 assistant 投影），主会话、子 agent 详情与 BTW 线程共用；修复 BTW 不维护 `status.streaming` 导致步骤标记不呼吸。
 - **目标范围**：
   - `src/app/state/lx/{slash.rs,slash/composer.rs,agent.rs,rewind.rs,task.rs,detail.rs,panels.rs}`
   - `src/app/update/chat/{slash.rs,composer.rs,detail_rewind.rs,detail_report.rs,btw/*,compact.rs}`
@@ -1248,6 +1249,7 @@ App 侧回填（`src/app/update/chat/detail_rewind.rs`）：
 - 详情压缩是**静默等待**：`Lx::any_detail_compacting()` 必须进入 `AppState::has_streaming_lx`，事件循环才会每 100ms 调 `advance_lx_loading`；`tick_detail_compacting` 同时推进 `run.chat.loading_frame`（BTW 为线程帧），消息列表末尾的 `◆/◇ Compacting context... · Ns` 才会呼吸与计时。
 - 聊天栏：`chat_bar::task_loading` 在列表态与编辑态都返回压缩行（当前展示的 run / 当前 BTW 线程），并带本次耗时（`(Ns)`）；其余任务 loading 仍只在编辑态显示。
 - 滚动条：`set_task_agents_scroll` / `set_task_btw_scroll` 的 `total`/`visible` 由 `handle_*_scrollbar_press` / drag 传入同一份 `ScrollbarLayout`，与绘制同源；不能用 `run.total_rows` / `thread.total_rows` 这些“上一帧缓存”，否则压缩/内容变化后的首次拖拽会被旧上限钳回底部。
+- 动画判据：`HistorySource::from` / `from_chat` 统一走 `LxChat::is_animating()`（`status.streaming`、`request.is_busy()`、`has_running_shell()`、任一 assistant 消息 `streaming`），再叠加各自的 compact 状态；主会话额外用 `ask` 冻结。BTW 的在途回答只体现在消息状态上，不能只看 `status.streaming`。
 
 ### 4.7 `/compact`：详情会话压缩
 

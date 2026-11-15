@@ -10,7 +10,7 @@
 | 校验 | 命令 | 结果 |
 | :--- | :--- | :--- |
 | 格式 / 静态检查 | `cargo fmt && cargo clippy --all-targets -- -D warnings` | PASS（0 warning） |
-| 全量测试 | `cargo test` | PASS（lib **5609 passed / 6 ignored**；集成测试全通过） |
+| 全量测试 | `cargo test` | PASS（lib **5611 passed / 6 ignored**；集成测试全通过） |
 | 详情命令模型 | `cargo test --lib app::state::lx::slash::composer` | 7 passed |
 | composer 与命令分派 | `cargo test --lib app::update::chat::tests::detail_commands` | 21 passed |
 | BTW 更新 | `cargo test --lib app::update::chat::btw::tests` | 21 passed |
@@ -102,6 +102,12 @@ CLI 实机会话（本工作区）：
 - **验证步骤**：执行 `cargo test --lib scrollbar_geometry`；实机在 `cargo run` 中拖动滚动条、点击轨道与滚轮。
 - **期望结果**：Agents/BTW/Processes 的滚动条按下/拖拽上限与绘制使用同一份 `ScrollbarLayout`（`total`/`visible`），即使 `run`/`thread`/`output_visible` 的缓存行数滞后一帧也不会被旧上限钳回底部；首次拖动/点击立即到位，滚轮每次上移 3 行、贴底自动恢复跟随；Agents 列表沿用自身窗口几何（PASS）。
 
+### V13 — 主会话 / 子 agent / BTW 步骤呼吸对齐
+
+- **输入内容**：主会话、子 agent 详情、BTW 线程各保留一个运行中的工具步骤；BTW 线程生成中不设置 `chat.status.streaming`（只靠消息 `streaming` 表达在途）。
+- **验证步骤**：执行 `cargo test --lib btw_streaming_tool_step_breathes`；实机在 BTW 线程生成时观察上方消息列表的步骤标记。
+- **期望结果**：三处均按 `LxChat::is_animating()` 判定动画，`loading_frame` 每 `STEP_BREATH_TICKS` 帧翻转 `■/□`（约 400ms 一相）；BTW 的方块不再恒为实心；回答结束后终态恒实心。此前 `from_chat` 只看 `status.streaming`，BTW 从不设置该字段，导致步骤标记整段不呼吸（PASS）。
+
 ### V10 — 回归与边界
 
 - **输入内容**：主输入 `/`、`/rewind`、`/compact`、AI Web 允许命令；旧库追问行；含 steer 的轮次。
@@ -160,7 +166,11 @@ CLI 实机会话（本工作区）：
    - 输入内容：进入任一已完成的子 agent 详情，执行 `/compact`；压缩过程中与完成后各滚一次滚轮，并拖动右侧滚动条。
    - 验证步骤：观察消息列表末尾、输入框上方聊天栏、滚动条。
    - 期望结果：压缩中列表末尾出现呼吸的 `◆/◇ Compacting context... · Ns`，聊天栏显示 `Compacting context... (Ns)`；完成后两者消失、检查点卡片出现；首次滚轮/拖动即生效，无“卡一下再滚一次”的迟滞。
-7. **窄窗格与文案**
+7. **BTW 步骤呼吸**
+   - 输入内容：在 BTW 线程中提出一个需要只读工具（read/search）的问题。
+   - 验证步骤：观察生成过程中 BTW 消息列表的步骤标记。
+   - 期望结果：工具方块与思考圆点按与主会话、子 agent 相同的节奏闪烁，结束后恒实心，不再静止。
+8. **窄窗格与文案**
    - 输入内容：将窗格缩到约 60 列，重复打开胶囊、动作面板与底栏提示。
    - 验证步骤：观察截断与换行。
    - 期望结果：胶囊、动作面板、底栏提示与 `/` 面板均不截半截；全部文案为英文。
