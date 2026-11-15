@@ -4,6 +4,10 @@
 
 use crate::config::ai::{AiSettings, ModelSelection};
 
+pub mod composer;
+
+pub use composer::{DetailCommand, DetailContext};
+
 /// 面板候选窗口状态：键盘/悬停/滚轮共用的高亮、锚点与显式视口。
 ///
 /// 与 `@` 提及面板同一套语义：键盘移动高亮并让窗口锚点跟随；悬停只改高亮
@@ -66,10 +70,12 @@ impl Default for PanelWindow {
     }
 }
 
-/// `/` 面板的一条候选：保留命令。
+/// `/` 面板的一条候选：保留命令或详情输入框的上下文命令。
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum SlashEntry {
     Command(SlashCommand),
+    /// 详情输入框（Agents / BTW composer）的上下文命令。
+    Detail(composer::DetailCommand),
 }
 
 /// 保留命令。
@@ -890,7 +896,7 @@ pub(crate) fn command_score(name: &str, query: &str) -> Option<u32> {
 /// 别名匹配打分：仅精确/前缀（不做子串/子序列，避免 `/r` 之类误命中别名）。
 ///
 /// 别名是「用另一个名字访问同一命令」，按从头输入的名字匹配即可。
-fn alias_prefix_score(alias: &str, query: &str) -> Option<u32> {
+pub(crate) fn alias_prefix_score(alias: &str, query: &str) -> Option<u32> {
     if query.is_empty() {
         return Some(100);
     }
@@ -940,7 +946,8 @@ pub fn active_argument_hint(input: &str) -> Option<&'static str> {
             return command.argument_hint();
         }
     }
-    None
+    // 详情 composer 的 `/report `：主输入框不会命中 `/report` 命令，提示只是灰色文本。
+    composer::argument_hint(input)
 }
 
 /// 解析 `/btw [prompt]`：返回 `(prompt, 是否为裸命令)`。

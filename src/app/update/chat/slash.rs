@@ -797,7 +797,16 @@ pub fn accept_slash_command(state: &mut AppState, pane: PaneId) -> bool {
         }
         return false;
     };
-    let crate::app::state::SlashEntry::Command(command) = entry;
+    let command = match entry {
+        crate::app::state::SlashEntry::Command(command) => command,
+        // 详情命令的采纳由 composer 路由接管（见 `app/update/chat/composer.rs`）。
+        crate::app::state::SlashEntry::Detail(_) => {
+            if let Some(target) = state.pane_mut_anywhere(pane) {
+                target.lx.slash = None;
+            }
+            return false;
+        }
+    };
     // 带参回显命令（如 `/rename`）：必须独立占满单行，采纳后将输入替换为 `<cmd> ` 并留待输入参数。
     if let Some(prefix) = command.echo_prefix() {
         let trimmed = input.trim();

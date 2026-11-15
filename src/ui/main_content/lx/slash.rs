@@ -32,6 +32,11 @@ pub(super) fn items<'a>(
                     preview: command.description(),
                     tag: command.tag(),
                 },
+                crate::app::state::SlashEntry::Detail(command) => CommandItem::Inline {
+                    label: command.text(),
+                    preview: command.description(),
+                    tag: text::SLASH_TAG_BUILTIN,
+                },
             })
             .collect(),
         SlashPanel::Model(picker) => {
