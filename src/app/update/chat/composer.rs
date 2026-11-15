@@ -110,6 +110,12 @@ pub(crate) fn close_all(state: &mut AppState, pane: PaneId) {
     if let Some(composer) = target.lx.btw.active_composer_mut() {
         composer.slash = None;
     }
+    // 切 tab/离开编辑会取消未确认的撤销；执行中的回执仍需保留。
+    if let Some(page) = target.lx.task.as_mut()
+        && page.detail_undo_executing.is_none()
+    {
+        page.detail_undo_pending = None;
+    }
 }
 
 /// 消费 composer 的 `/` 面板按键；面板未打开返回 false 交由编辑逻辑。
@@ -191,7 +197,8 @@ fn accept(state: &mut AppState, pane: PaneId) -> bool {
             return false;
         };
         clear(state, pane);
-        return execute(state, pane, parsed);
+        execute(state, pane, parsed);
+        return true;
     };
     if !standalone_line(&input, cursor) {
         show_lx_hint(
@@ -259,9 +266,12 @@ pub(crate) fn try_submit(state: &mut AppState, pane: PaneId) -> bool {
         return false;
     };
     if let Some(command) = composer::parse(&draft, context) {
-        return execute(state, pane, command);
+        // 命令文本一律消费；执行失败（目标不在、忙碌）也不能回落成普通消息。
+        clear(state, pane);
+        execute(state, pane, command);
+        return true;
     }
-    if let Some(command) = super::slash::unknown_slash_command(&draft) {
+    if let Some(command) = unknown_command(&draft) {
         clear(state, pane);
         show_lx_hint(
             state,
@@ -272,6 +282,19 @@ pub(crate) fn try_submit(state: &mut AppState, pane: PaneId) -> bool {
         return true;
     }
     false
+}
+
+/// 详情 composer 里只允许整段单行 `/name`；其余带空格/多行/路径文本照常发送。
+fn unknown_command(draft: &str) -> Option<String> {
+    let trimmed = draft.trim();
+    if trimmed.contains(['\n', '\r']) || trimmed.contains(char::is_whitespace) {
+        return None;
+    }
+    let name = trimmed.strip_prefix('/')?;
+    if name.is_empty() || name.contains('/') {
+        return None;
+    }
+    Some(format!("/{name}"))
 }
 
 /// 清空当前 composer 草稿并关闭 `/` 面板。

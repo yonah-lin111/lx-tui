@@ -1,6 +1,6 @@
 # 任务清单：Agents / BTW 详情输入框 `/` 命令与私聊·汇报重做
 
-- **状态**：**待用户审核；审核通过前不执行任何代码改动。**
+- **状态**：**T1–T9 已完成（`detail-slash-report` 分支）；自动化验证见 [`verification.md`](verification.md)，TUI 实机项待用户确认。**
 - **设计文档**：[`design.md`](design.md)
 - **范围**：`src/app/state/lx/`、`src/app/update/`、`src/event/chat/`、`src/db/chat/subagent/`、`src/ui/main_content/lx/`、`src/ui/text/`、`src/chat/agent/report.rs`
 - **数据库**：**无迁移**（复用 `notify_parent`、`delete_btw_thread`、`commit_rewind`）。

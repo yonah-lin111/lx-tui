@@ -2,7 +2,7 @@
 
 - **特性目录**：`docs/feature/lx-detail-slash-and-report/`
 - **关联任务**：[`task.md`](task.md)
-- **当前状态**：**待用户审核，尚未改任何生产代码**。
+- **当前状态**：**已在 `detail-slash-report` 分支实现，自动化验证通过；待 TUI 实机确认与合并**（见 [`verification.md`](verification.md)）。
 - **目标范围**：
   - `src/app/state/lx/{slash.rs,slash/composer.rs,agent.rs,rewind.rs,task.rs,detail.rs,panels.rs}`
   - `src/app/update/chat/{slash.rs,composer.rs,detail_undo.rs,detail_report.rs,btw/*,compact.rs}`
