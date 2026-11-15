@@ -62,7 +62,7 @@ assets/
 - 顶栏最右侧的自绘 select 提供 `Default` / `Glass` 两个主题；选择结果写入 `settings.json` 的 `web_theme`（取值 `default` / `glass`），经 `PUT /api/config` 持久化，不使用 localStorage 作为权威来源。
 - 页面响应前服务端读取 `web_theme` 并注入 `<html data-theme="...">`，保证刷新后首帧就是正确主题；`web.js` 启动时再读一次 `/api/state` 的 `config.web_theme` 兜底同步。用户已手动切换后到达的旧响应必须忽略，保存失败要回滚外观并提示。
 - `Glass` 主题的壁纸用纯 CSS 渐变模拟，不打包位图；字体切换为系统 SF Pro 栈，`Default` 保持 monospace。
-- **玻璃动效与分段控件契约**：顶栏 `.web-tab-pill` 与视图内 `.range-group` / `.provider-tabs` 的 `.seg-pill` 共用同一套滑动指示块（`transform` / `width` + `--spring-ease`）；hover/focus 时指示块预览目标项，离开后回落到 `.active`，文字颜色只在选中态变化，容器与按钮必须同为胶囊圆角。视图切换只允许新视图 `glass-enter` 做透明度淡入，旧视图立即 `display:none`，禁止整页 `filter` / `transform` / 离场层；`animationend` 清理必须判断 `event.target` 是视图自身。所有动效在 `prefers-reduced-motion` 下关闭；不得在 Default 主题下新增玻璃动效。
+- **玻璃动效与分段控件契约**：顶栏 `.web-tab-pill` 与视图内 `.range-group` / `.provider-tabs` 的 `.seg-pill` 共用同一套滑动指示块（`transform` / `width` + `--spring-ease`）；设置页 `nav.side`、`.select-menu` 与 `.command-list` / `.provider-list` 使用竖向 `.seg-pill`（`transform` / `height`）。hover/focus 时指示块预览目标项，离开后回落到 `.active` / `.selected`，文字颜色只在选中态变化，容器与按钮必须同为胶囊圆角。带左右外边距的竖向 tab 必须同步扣减宽度（`calc(100% - 16px)`），不得因 `overflow-y:auto` 产生横向滚动条；竖向定位优先用 `offsetTop` / `offsetHeight`，避免浮层 scale 动画导致尺寸漂移。视图切换只允许新视图 `glass-enter` 做透明度淡入，旧视图立即 `display:none`，禁止整页 `filter` / `transform` / 离场层；`animationend` 清理必须判断 `event.target` 是视图自身。所有动效在 `prefers-reduced-motion` 下关闭；不得在 Default 主题下新增玻璃动效。
 - **UTF-8 编码**；HTML 以 `<!DOCTYPE html>` 开头，`</html>` 加换行结尾。
 - 面向现代浏览器（系统自带浏览器即可），不使用需要构建或转译的语法。
 - 用户可见文案为英文；注释用简体中文，与代码规范一致。
