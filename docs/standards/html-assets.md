@@ -31,6 +31,7 @@ assets/
   todo.css                Todo 看板样式（非当前视图时以 media="not all" 挂起；刻意与 usage.css 重复以保持视图隔离）
   todo_charts.js          Todo 看板原生 SVG 图表：日趋势分组柱、状态环图、P0–P3 横条与分桶
   todo.js                 Todo 看板状态、筛选、汇总卡、图表调用、表格与分页脚本（首次进入 Todo 视图才初始化）
+  home.js                 Home Todo 摘要卡：读取 `/api/todo/home`、渲染计数与今日/逾期条目、点击条目转交 Todo 搜索
   oauth_callback.html     OAuth 浏览器回调结果页模板（src/config/ai/oauth/browser.rs 经 include_str! 加载）
   oauth_implicit.html     OAuth 隐式授权流（fragment 转发）回调页模板
 ```

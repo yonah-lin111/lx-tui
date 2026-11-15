@@ -1,6 +1,6 @@
 # Web 控制台 Todo 看板 + TUI 字符统计块移除：设计方案
 
-> 状态：**Phase 1–5 + 图表 / 加载态 / 状态宽度已实现；全量验证与真机验收待完成**
+> 状态：**Phase 1–5 + 图表 / 加载态 / 状态宽度 / Home 摘要卡已实现；全量验证与真机验收待完成**
 > 日期：2026-11-14（2026-11-15 追加图表与加载体验需求，见 D9–D12 与 §5.7/§5.8）
 > 项目：`/Users/yonah/projects/agent/lx-tui`（分支 `dev`，工作区干净）
 > 配套执行清单：[task.md](./task.md)
@@ -60,6 +60,7 @@
 | D10 | 新建独立 `assets/todo_charts.js`（顶层名字 `todo` 前缀），不调用 `usage_charts.js` 的全局函数；长范围由前端分桶并补零（≤62 天按日、≤400 天按周、更久按月） | 遵守视图隔离（D6 同理）；不改 API 粒度、不截断历史；避免污染刚验收的 Usage |
 | D11 | 加载体验：懒加载视图首次初始化时显示顶部 2px 进度条（不遮内容、不阻塞操作、最短 180ms）；Todo/Usage 同时渲染与最终布局同尺寸的局部骨架；Settings 只用进度条。已有数据时刷新只转状态行内联 spinner，不改写时间戳 | 遮住半成品画面又保持页面可操作；骨架保证容器高度不跳；刷新不再闪文案 |
 | D12 | 状态指示器统一 `tabular-nums` + `nowrap`，宽度跟随文案（不预留 `min-width`）；容器整体右对齐，右侧操作按钮仍固定在右缘 | `Loading… / Updated HH:MM:SS / Saved / Unsaved changes` 切换时状态区不再留固定空白；数字等宽避免逐秒抖动 |
+| D13 | Home 新增宽 Todo 摘要卡：Today / In progress / Overdue 计数 + 今日与逾期未完成前 5 条；右侧竖排 Settings / Usage 入口。新增只读 `GET /api/todo/home`，条目按优先级、日期升序、位置排序；点击条目跳到 Todo 并预填文本搜索、范围切到 All | Home 从静态入口升级为概览页；独立端点一次返回精确计数与列表，避免复用 items 分页后客户端排序漏掉旧逾期项 |
 
 ---
 
@@ -587,6 +588,14 @@ function todoFilterParams(range) {
 - **状态宽度**：Usage/Todo 与 Settings 的 `.action-status` 不预留最小宽度，宽度跟随文案；配合 `font-variant-numeric: tabular-nums` 与 `nowrap`，状态区不再出现固定空白，容器右对齐让右侧按钮位置保持不变。
 - **失败兜底**：初始化 Promise 失败时关闭进度条并保留错误 banner/toast；`window.__webInit[key]` 标为 `failed`，下次切回该视图可重试。
 
+### 5.9 Home Todo 摘要卡（2026-11-15 追加）
+
+- **布局**：Home hero 下改为 `1.6fr / 1fr` 两列。左侧宽卡展示 Todo；右侧竖排 Settings / Usage 入口。窄屏（≤720px）单列，入口卡改为横排（≤640px 再竖排）。hero 用 auto 外边距居中，内容超高时退化为顶部对齐，不裁切。
+- **只读数据**：`home.js` 请求 `GET /api/todo/home`，不提供新增/勾选/删除。首次加载在卡内显示 `Loading…`，失败显示 `Todo unavailable.`；重新回到 Home 会刷新，已有数据时失败保留旧列表并提示 `Could not refresh todos.`。
+- **卡片结构**：`Today` = 今日未完成（todo + in_progress）；`In progress` = 今日及更早仍在进行中的条目；`Overdue` = 今天之前仍未完成的条目；三项互不排斥。列表合并今日 + 逾期未完成，按优先级（P0→P3）、`entry_date` 升序、`position` 升序取前 5 条；`done` 与未来日期不出现。
+- **条目点击**：跳转 `#/todo`，调用 `todo.js::todoFocusFromHome(text)`：预填搜索框、范围按钮切到 `All`，已初始化时立即重载；未初始化时由 `initOnce` 带着状态完成首次加载。
+- **视觉**：Default 主题沿用方角与 monospace；Glass 主题复用卡片玻璃材质，统计块 12px 圆角、条目行 10px 圆角，hover 只变背景；`prefers-reduced-motion` 下关闭条目与卡片过渡。
+
 ---
 
 ## 6. 服务端 API 方案
@@ -597,6 +606,7 @@ function todoFilterParams(range) {
 | --- | --- | --- |
 | GET | `/api/todo/overview` | 汇总卡、Daily、Groups 一次返回 |
 | GET | `/api/todo/items` | 分页 Todo 明细 |
+| GET | `/api/todo/home` | Home 摘要：Today / In progress / Overdue 计数 + 今日与逾期前 5 条 |
 
 新增 `src/settings/service/todo.rs`，在 `service.rs` 声明 `mod todo;`，在 `handlers.rs` 加前缀分派。非 GET → 405；未知 `/api/todo/*` → 404；参数非法 → 422；DB 错误 → 500。
 
@@ -671,6 +681,30 @@ function todoFilterParams(range) {
 
 字段名统一 camelCase；`status` / `priority` 用库内原值（`todo` / `in_progress` / `done`、`P0`..`P3`）。`groupId` / `groupLabel` / `completedDate` 缺失为 `null`。`priority` 为按当前筛选（含日期范围）统计的 P0–P3 计数，顺序固定，空表全零。
 
+`GET /api/todo/home`：
+
+```json
+{
+  "date": "2026-11-15",
+  "summary": {"todayOpen": 4, "inProgress": 1, "overdue": 1},
+  "items": [
+    {
+      "id": "todo-...",
+      "date": "2026-11-14",
+      "text": "write report",
+      "status": "todo",
+      "priority": "P1",
+      "groupId": null,
+      "groupLabel": null,
+      "completedDate": null,
+      "position": 0
+    }
+  ]
+}
+```
+
+`todayOpen` 只统计今日未完成；`inProgress` 与 `overdue` 覆盖今天及更早；`items` 固定最多 5 条，按优先级、日期升序、位置排序，不返回 done/future。
+
 ### 6.4 错误语义
 
 | 场景 | 状态码 | body |
@@ -687,7 +721,7 @@ function todoFilterParams(range) {
 pub(super) fn route(request: &Request, state: &ServiceState) -> Response {
     let known = matches!(
         request.path.as_str(),
-        "/api/todo/overview" | "/api/todo/items"
+        "/api/todo/overview" | "/api/todo/items" | "/api/todo/home"
     );
     if !known { return Response::error(404, "not found"); }
     if request.method != "GET" { return Response::error(405, "method not allowed"); }
@@ -1108,6 +1142,6 @@ cargo run
 - `Overdue` 卡片固定显示「全库历史未完成」，在 `Today` 下也不归零。
 - `Groups` 的组标签取「组内首条文本」，不显示原始 `tgrp-...`。
 - Todo tab 放在顶部 bar 最右侧（Home / Settings / Usage / Todo）。
-- 不新增 Home 页 Todo 入口卡片。
+- Home 页新增 Todo 摘要卡（D13）：今日/逾期计数与条目，点击条目跳转 Todo 并按文本搜索。
 
 审核通过后按 [task.md](./task.md) 执行。

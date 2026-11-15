@@ -1,6 +1,6 @@
 # Web 控制台 Todo 看板 + TUI 字符统计块移除：执行清单
 
-> 状态：**Phase 1–5、图表、加载态与状态宽度已实现；全量验证与真机验收待完成**
+> 状态：**Phase 1–5、图表、加载态、状态宽度与 Home 摘要卡已实现；全量验证与真机验收待完成**
 > 日期：2026-11-14
 > 设计依据：[design.md](./design.md)
 > 检索工具：`codegraph`（project `lx-tui`）、`codebase-memory-mcp`（project `lx-tui` / `Users-yonah-projects-agent-lx-tui`）均已索引本仓库。
@@ -307,12 +307,24 @@
 - [x] 在本目录补 `review.md`（实现完成后按项目惯例记录 P0/P1/P2 审查项）。
 - [x] 图表按 Phase 7 完成并验证。
 - [x] 加载态与状态宽度按 Phase 8 完成并验证。
+- [x] Home Todo 摘要卡按 Phase 9 完成并验证。
 
 ---
 
-## 10. 明确不做
+## 10. Phase 9：Home Todo 摘要卡（2026-11-15 追加）
+
+- [x] 后端：`GET /api/todo/home` 返回 `date`、`summary`（`todayOpen` / `inProgress` / `overdue`）与最多 5 条今日 + 逾期未完成条目；DB 查询 `query_todo_home` 按优先级、日期升序、位置排序。
+- [x] Home HTML：宽 Todo 卡 + 右侧 Settings / Usage 入口；统计块、条目列表与行内加载/空态/错误提示。
+- [x] `assets/home.js`：只读拉取与渲染；点击条目跳转 `#/todo` 并通过 `todoFocusFromHome` 预填搜索、范围切到 All。
+- [x] 样式：Default 方角 + Glass 玻璃卡片；≤720px 单列、≤640px 入口竖排；`prefers-reduced-motion` 关闭过渡。
+- [x] 测试：DB 计数/排序/limit、HTTP JSON、`/home.js` 资源契约、脚本拼接解析。
+- [ ] `cargo run` 手工验收 Home 卡片与条目跳转。
+
+---
+
+## 11. 明确不做
 
 - Web 写操作（新增/勾选/删除/排序）。
-- 图表缩放、图例开关、自动刷新、Home 页 Todo 卡片。
+- 图表缩放、图例开关、自动刷新。
 - Schema 迁移、`SCHEMA_VERSION` 变更。
 - TUI 列表/周带/顺延/编辑/聚合组/排序逻辑改造。

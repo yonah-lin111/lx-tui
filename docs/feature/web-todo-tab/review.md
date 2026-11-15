@@ -40,7 +40,7 @@
 1. `assets/todo.css` 刻意复制 Usage 的控件/卡片/表格样式（D6），两处独立维护；文件头已注明原因。
 2. `todo.js` 复用 `web.js` 的 `createSelect` / `showToast` / `domEl` 与 `usage.js` 的 `apiGet`；依赖顺序由 HTML 与 `tests/web_assets.rs` 固定。
 3. Todo 页无自动刷新，只保留手动 Refresh；只读接口不会与 TUI 内存态热同步。
-4. 未新增 Home 页 Todo 入口卡片。
+4. 初版未新增 Home 页 Todo 卡片；2026-11-15 追加 D13 摘要卡（只读、点击条目跳转搜索）。
 5. TUI 与浏览器外观/交互仍需用户 `cargo run` 真机验收（Agent 无法交互式验证）。
 
 ---
