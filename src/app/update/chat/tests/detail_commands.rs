@@ -432,3 +432,90 @@ fn panel_after_confirm_closed(state: &AppState, pane: PaneId) -> bool {
             .and_then(|target| target.lx.task.as_ref())
             .is_some_and(|page| page.detail_undo_pending.is_none())
 }
+
+#[test]
+fn compact_command_emits_detail_effect_once() {
+    let (mut state, pane) = agents_editing_state();
+    type_str(&mut state, "/compact");
+    state.effects.clear();
+    crate::app::update::pane::apply_lx_input(&mut state, LxInput::Enter);
+    let targets: Vec<_> = state
+        .effects
+        .iter()
+        .filter_map(|effect| match effect {
+            crate::app::effects::Effect::CompactDetail { target, .. } => Some(target.clone()),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(
+        targets,
+        vec![crate::app::state::DetailTarget::Agent("sub-idle".into())]
+    );
+    assert_eq!(editor_text(&state, pane), "");
+}
+
+#[test]
+fn detail_compact_finished_replaces_checkpoints_and_clears_running() {
+    let (mut state, pane) = agents_editing_state();
+    {
+        let target = state.pane_mut_anywhere(pane).expect("pane");
+        target
+            .lx
+            .agents
+            .by_agent_mut("sub-idle")
+            .expect("run")
+            .compact
+            .start("op-1".into(), 0);
+    }
+    assert!(crate::app::update::on_detail_compact_finished(
+        &mut state,
+        pane,
+        "sess-idle",
+        "op-1",
+        &crate::app::update::DetailCompactResult::Committed,
+        Some(&[]),
+    ));
+    let run = state
+        .pane_anywhere(pane)
+        .expect("pane")
+        .lx
+        .agents
+        .by_agent("sub-idle")
+        .expect("run");
+    assert!(!run.compact.is_running());
+    assert!(run.compact.checkpoints.is_empty());
+}
+
+#[test]
+fn late_detail_compact_finished_is_ignored() {
+    let (mut state, pane) = agents_editing_state();
+    {
+        let target = state.pane_mut_anywhere(pane).expect("pane");
+        target
+            .lx
+            .agents
+            .by_agent_mut("sub-idle")
+            .expect("run")
+            .compact
+            .start("current-op".into(), 0);
+    }
+    assert!(!crate::app::update::on_detail_compact_finished(
+        &mut state,
+        pane,
+        "sess-idle",
+        "stale-op",
+        &crate::app::update::DetailCompactResult::Empty,
+        None,
+    ));
+    let running = state
+        .pane_anywhere(pane)
+        .expect("pane")
+        .lx
+        .agents
+        .by_agent("sub-idle")
+        .expect("run")
+        .compact
+        .running
+        .clone();
+    assert_eq!(running.as_deref(), Some("current-op"));
+}

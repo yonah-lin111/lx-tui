@@ -362,6 +362,11 @@ pub enum Effect {
     },
     /// 详情 composer 的 `/undo` 执行（与主 `/rewind` 共用 `execute_rewind`）。
     ExecuteDetailUndo(DetailUndoRequest),
+    /// 详情会话（子 agent / BTW）的手动压缩。
+    CompactDetail {
+        pane: crate::tiling::PaneId,
+        target: crate::app::state::DetailTarget,
+    },
     /// 执行一次上下文压缩：独立摘要请求 → 事务写检查点 → 重载视图。
     ///
     /// 事件层负责整条链路（网络请求不经过持久化泵），成功/失败都回投

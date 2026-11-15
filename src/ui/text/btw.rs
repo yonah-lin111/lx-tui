@@ -60,6 +60,9 @@ pub const LX_BTW_HINTS_EDIT: [crate::ui::text::Hint; 5] = [
     crate::ui::text::hint("back", "esc"),
 ];
 
+/// 侧线程压缩中的胶囊后缀（宽度不足整段丢弃）。
+pub const LX_BTW_COMPACTING_TAG: &str = " · compacting";
+
 /// 侧线程状态标签。
 pub fn btw_status_label(status: &str) -> &'static str {
     match status {

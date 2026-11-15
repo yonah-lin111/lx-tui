@@ -151,6 +151,25 @@ impl LxBtw {
         self.threads.is_empty()
     }
 
+    /// 是否有 BTW 线程正在压缩。
+    pub fn any_compacting(&self) -> bool {
+        self.threads
+            .values()
+            .any(|thread| thread.compact.is_running())
+    }
+
+    /// 刷新所有 BTW 线程的压缩耗时。
+    pub fn tick_compacting(&mut self, now_ms: i64) {
+        for thread in self.threads.values_mut() {
+            if thread.compact.is_running() {
+                thread.compact.elapsed_ms = thread
+                    .compact
+                    .started_at_ms
+                    .map(|started| now_ms.saturating_sub(started).max(0));
+            }
+        }
+    }
+
     /// 已缓存的线程数。
     pub fn len(&self) -> usize {
         self.threads.len()
@@ -177,6 +196,13 @@ impl LxBtw {
     pub fn thread_by_thread_id(&self, thread_id: &str) -> Option<&BtwThreadState> {
         self.threads
             .values()
+            .find(|thread| thread.thread_id.as_deref() == Some(thread_id))
+    }
+
+    /// 按持久化线程 ID 查可变线程（详情 `/compact` 的状态回投）。
+    pub fn thread_by_thread_id_mut(&mut self, thread_id: &str) -> Option<&mut BtwThreadState> {
+        self.threads
+            .values_mut()
             .find(|thread| thread.thread_id.as_deref() == Some(thread_id))
     }
 

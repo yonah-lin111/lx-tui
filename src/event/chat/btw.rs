@@ -74,6 +74,8 @@ pub struct BtwLoadedView {
     pub title: String,
     pub messages: Vec<ChatMessage>,
     pub targets: Vec<crate::app::state::lx::BtwTargetView>,
+    /// 该线程的 compact 检查点（与消息一起回填，卡片才能显示）。
+    pub checkpoints: Vec<crate::db::chat::CompactCheckpoint>,
     pub loaded: bool,
 }
 
@@ -284,6 +286,7 @@ fn load_thread(
                 title: String::new(),
                 messages: Vec::new(),
                 targets: Vec::new(),
+                checkpoints: Vec::new(),
                 loaded: true,
             }),
         }));
@@ -295,6 +298,9 @@ fn load_thread(
         .flatten()
         .unwrap_or_default();
     let targets = resolve_target_views(&thread);
+    let checkpoints = database
+        .compact_checkpoints(&workspace, &thread.child_session_id)
+        .unwrap_or_default();
     let _ = sender.send(AppEvent::Btw(BtwEvent::ThreadLoaded {
         pane,
         parent_session_id: parent_session_id.to_string(),
@@ -305,6 +311,7 @@ fn load_thread(
             title: thread.title,
             messages,
             targets,
+            checkpoints,
             loaded: true,
         }),
     }));
@@ -1247,6 +1254,7 @@ pub(crate) fn apply_event_to_state(state: &mut AppState, event: BtwEvent) {
                 view.title,
                 view.messages,
                 view.targets,
+                view.checkpoints,
                 view.loaded,
             );
         }

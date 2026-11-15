@@ -38,18 +38,29 @@ pub fn apply_compact_effects(
     let effects: Vec<Effect> = state
         .effects
         .iter()
-        .filter(|effect| matches!(effect, Effect::ExecuteCompact(_) | Effect::RevertCompact(_)))
+        .filter(|effect| {
+            matches!(
+                effect,
+                Effect::ExecuteCompact(_) | Effect::RevertCompact(_) | Effect::CompactDetail { .. }
+            )
+        })
         .cloned()
         .collect();
     if effects.is_empty() {
         return false;
     }
-    state
-        .effects
-        .retain(|effect| !matches!(effect, Effect::ExecuteCompact(_) | Effect::RevertCompact(_)));
+    state.effects.retain(|effect| {
+        !matches!(
+            effect,
+            Effect::ExecuteCompact(_) | Effect::RevertCompact(_) | Effect::CompactDetail { .. }
+        )
+    });
     for effect in effects {
         match effect {
             Effect::ExecuteCompact(request) => execute_compact(sender, persistence, request),
+            Effect::CompactDetail { pane, target } => {
+                super::detail_compact::prepare(state, sender, persistence, pane, target);
+            }
             Effect::RevertCompact(request) => execute_revert(sender, persistence, request),
             _ => {}
         }
@@ -58,7 +69,7 @@ pub fn apply_compact_effects(
 }
 
 /// 启动一次压缩：装载增量 → 装配摘要请求 → 后台流式执行。
-fn execute_compact(
+pub(super) fn execute_compact(
     sender: &mpsc::UnboundedSender<AppEvent>,
     persistence: &Persistence,
     request: CompactRequest,
@@ -290,6 +301,18 @@ pub fn handle_compact_finished(
     operation_id: &str,
     outcome: CompactOutcome,
 ) -> bool {
+    // 详情会话（子 agent / BTW）先用 child session 认领回执。
+    if super::detail_compact::handle_finished(
+        state,
+        persistence,
+        pane,
+        session_id,
+        workspace,
+        operation_id,
+        &outcome,
+    ) {
+        return true;
+    }
     let running = state.pane_anywhere(pane).is_some_and(|target| {
         target.lx.chat.session_id.as_deref() == Some(session_id)
             && target.lx.compact.running.as_deref() == Some(operation_id)

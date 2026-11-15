@@ -543,6 +543,7 @@ fn stale_thread_loaded_does_not_overwrite_another_session_or_qa() {
         String::new(),
         Vec::new(),
         Vec::new(),
+        Vec::new(),
         true,
     ));
     assert!(
@@ -564,6 +565,7 @@ fn stale_thread_loaded_does_not_overwrite_another_session_or_qa() {
         None,
         None,
         String::new(),
+        Vec::new(),
         Vec::new(),
         Vec::new(),
         true,
@@ -597,6 +599,7 @@ fn stale_thread_loaded_does_not_overwrite_another_session_or_qa() {
         None,
         None,
         String::new(),
+        Vec::new(),
         Vec::new(),
         Vec::new(),
         true,
@@ -749,4 +752,43 @@ fn open_btw_tab_clears_stale_history_and_input_selection() {
         lx.text_selection_range().is_none(),
         "主输入框残留选区也必须清掉"
     );
+}
+
+#[test]
+fn thread_loaded_restores_compact_checkpoints() {
+    let (mut state, pane) = btw_pane();
+    let checkpoint = crate::db::chat::CompactCheckpoint {
+        id: "compact-1".into(),
+        sequence: 7,
+        operation_id: "op-1".into(),
+        base_checkpoint_id: None,
+        start_sequence: 0,
+        end_sequence: 4,
+        summary_text: "summary".into(),
+        model_label: "M".into(),
+        state: "active".into(),
+        created_at_ms: 1,
+    };
+    assert!(on_thread_loaded(
+        &mut state,
+        pane,
+        "sess-test",
+        "qa-1",
+        Some("thread-1".into()),
+        Some("child-1".into()),
+        "title".into(),
+        Vec::new(),
+        Vec::new(),
+        vec![checkpoint],
+        true,
+    ));
+    let thread = state
+        .pane_anywhere(pane)
+        .expect("pane")
+        .lx
+        .btw
+        .active_thread()
+        .expect("thread");
+    assert_eq!(thread.compact.checkpoints.len(), 1);
+    assert_eq!(thread.compact.checkpoints[0].id, "compact-1");
 }

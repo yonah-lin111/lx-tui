@@ -2,7 +2,7 @@
 
 use crate::app::effects::{BtwEffect, Effect};
 use crate::app::state::lx::btw::BtwQaSummary;
-use crate::app::state::{AppState, ChatMessageView, InputHintLevel};
+use crate::app::state::{AppState, ChatMessageView, CompactNoticeView, InputHintLevel};
 use crate::app::update::show_lx_hint;
 use crate::chat::events::{ChatDelta, PartKind, StopReason};
 use crate::tiling::PaneId;
@@ -95,6 +95,7 @@ pub fn on_thread_loaded(
     title: String,
     messages: Vec<crate::db::chat::ChatMessage>,
     targets: Vec<crate::app::state::lx::BtwTargetView>,
+    checkpoints: Vec<crate::db::chat::CompactCheckpoint>,
     loaded: bool,
 ) -> bool {
     let models = state.models.clone();
@@ -125,6 +126,12 @@ pub fn on_thread_loaded(
     if !targets.is_empty() && thread.submit_seq == 0 {
         thread.targets = targets;
     }
+    thread.compact.replace(
+        checkpoints
+            .iter()
+            .map(CompactNoticeView::from_record)
+            .collect(),
+    );
     thread.loaded = loaded;
     thread.rows_dirty = true;
     thread.follow = true;

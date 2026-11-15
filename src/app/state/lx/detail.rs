@@ -52,3 +52,23 @@ impl DetailTarget {
         }
     }
 }
+
+impl crate::app::state::Lx {
+    /// 是否有详情会话（子 agent / BTW 线程）正在压缩。
+    pub fn any_detail_compacting(&self) -> bool {
+        self.agents.runs.iter().any(|run| run.compact.is_running()) || self.btw.any_compacting()
+    }
+
+    /// 刷新详情压缩耗时（摘要请求没有流式输出，只能靠计时证明还在跑）。
+    pub fn tick_detail_compacting(&mut self, now_ms: i64) {
+        for run in &mut self.agents.runs {
+            if run.compact.is_running() {
+                run.compact.elapsed_ms = run
+                    .compact
+                    .started_at_ms
+                    .map(|started| now_ms.saturating_sub(started).max(0));
+            }
+        }
+        self.btw.tick_compacting(now_ms);
+    }
+}

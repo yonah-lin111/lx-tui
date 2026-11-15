@@ -193,15 +193,27 @@ fn draw_qa_badge(grid: &mut Grid, rect: Rect, lx: &Lx, marker_w: u16) {
         return;
     }
     let badge = format!(" {prefix}{title} ");
-    let badge_w = width(badge.as_str());
-    if rect.width <= badge_w.saturating_add(marker_w).saturating_add(2) {
+    let with_compacting = thread
+        .compact
+        .is_running()
+        .then(|| format!(" {prefix}{title}{} ", text::LX_BTW_COMPACTING_TAG));
+    // 先试带 ` · compacting` 的整段；放不下就整段丢弃，退化为原胶囊，不截半截。
+    for candidate in with_compacting
+        .as_deref()
+        .into_iter()
+        .chain([badge.as_str()])
+    {
+        let candidate_w = width(candidate);
+        if rect.width <= candidate_w.saturating_add(marker_w).saturating_add(2) {
+            continue;
+        }
+        let x = rect.right().saturating_sub(candidate_w).saturating_sub(1);
+        if x <= rect.x.saturating_add(marker_w) {
+            continue;
+        }
+        grid.put(x, rect.y, candidate, style::btw_qa_badge());
         return;
     }
-    let x = rect.right().saturating_sub(badge_w).saturating_sub(1);
-    if x <= rect.x.saturating_add(marker_w) {
-        return;
-    }
-    grid.put(x, rect.y, &badge, style::btw_qa_badge());
 }
 
 /// 对话区行数：与绘制同源；没有历史时按占位/loading 计 1 行。

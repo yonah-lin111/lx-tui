@@ -242,8 +242,9 @@ pub(crate) fn execute(
     match command {
         ParsedDetailCommand::Report(note) => super::detail_report::submit(state, pane, note),
         ParsedDetailCommand::Undo => super::detail_undo::prepare(state, pane),
-        // T6/T7 接入；在此之前明确提示而不是把命令文本发给模型。
-        ParsedDetailCommand::Compact | ParsedDetailCommand::New => {
+        ParsedDetailCommand::Compact => super::detail_compact::request(state, pane),
+        // T7 接入；在此之前明确提示而不是把命令文本发给模型。
+        ParsedDetailCommand::New => {
             clear(state, pane);
             show_lx_toast(
                 state,
