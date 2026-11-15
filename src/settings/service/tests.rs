@@ -416,6 +416,14 @@ async fn page_requires_token_and_serves_self_contained_assets() {
         "loading bar, inline spinner and data fade primitives present"
     );
     assert!(
+        web_css_body
+            .contains("html:not([data-theme=\"glass\"]) .web-theme-menu .select-option.selected")
+            && web_css_body.contains(
+                "html:not([data-theme=\"glass\"]) .web-theme-menu .select-option.selected.active"
+            ),
+        "theme select keeps its Default-only option backgrounds out of Glass"
+    );
+    assert!(
         web_css_body.contains("prefers-reduced-motion"),
         "loading animations respect reduced motion"
     );

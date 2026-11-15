@@ -132,11 +132,12 @@ body.resizing { cursor: col-resize; user-select: none; }
   text-overflow: ellipsis;
   white-space: nowrap;
 }
-.web-theme-menu .select-option:hover,
-.web-theme-menu .select-option.active { background: var(--option-hover); color: #fff; }
-.web-theme-menu .select-option.selected { background: var(--option-selected); color: #fff; font-weight: 600; }
-.web-theme-menu .select-option.selected:hover,
-.web-theme-menu .select-option.selected.active { background: var(--option-selected); }
+/* Default 用底色标 hover/选中；Glass 统一交给 .seg-pill，避免选中项叠加旧底色。 */
+html:not([data-theme="glass"]) .web-theme-menu .select-option:hover,
+html:not([data-theme="glass"]) .web-theme-menu .select-option.active { background: var(--option-hover); color: #fff; }
+html:not([data-theme="glass"]) .web-theme-menu .select-option.selected { background: var(--option-selected); color: #fff; font-weight: 600; }
+html:not([data-theme="glass"]) .web-theme-menu .select-option.selected:hover,
+html:not([data-theme="glass"]) .web-theme-menu .select-option.selected.active { background: var(--option-selected); }
 .web-tabs { display: flex; align-items: stretch; gap: 4px; height: 100%; }
 /* 玻璃主题的滑动指示块：Default 不参与布局，也不影响普通 tab 的背景。 */
 .web-tab-pill,
