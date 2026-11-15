@@ -156,8 +156,15 @@ pub fn scroll_btw_detail(state: &mut AppState, pane: PaneId, delta: isize) -> bo
     true
 }
 
-/// 直接设置 BTW 对话区顶部行（滚动条点击/拖拽）；语义与 Agents 详情一致。
-pub fn set_task_btw_scroll(state: &mut AppState, pane: PaneId, offset: usize) -> bool {
+/// 直接设置 BTW 对话区顶部行（滚动条点击/拖拽）；上限由滚动条几何给出，
+/// 不读可能滞后一帧的 `thread.total_rows` / `thread.visible`。
+pub fn set_task_btw_scroll(
+    state: &mut AppState,
+    pane: PaneId,
+    offset: usize,
+    total: usize,
+    visible: usize,
+) -> bool {
     let Some(target) = state.pane_mut_anywhere(pane) else {
         return false;
     };
@@ -167,7 +174,7 @@ pub fn set_task_btw_scroll(state: &mut AppState, pane: PaneId, offset: usize) ->
     let Some(thread) = target.lx.btw.active_thread_mut() else {
         return false;
     };
-    let max = thread.total_rows.saturating_sub(thread.visible.max(1));
+    let max = total.saturating_sub(visible.max(1));
     let clamped = offset.min(max);
     let before = thread.scroll;
     let was_following = thread.follow;

@@ -953,8 +953,16 @@ pub fn scroll_agents_detail(state: &mut AppState, pane: PaneId, delta: isize) ->
 }
 
 /// 直接设置 Agents 详情区顶部行（滚动条点击/拖拽）；语义与
-/// [`super::set_lx_history_scroll`] 一致：贴底即恢复跟随。
-pub fn set_task_agents_scroll(state: &mut AppState, pane: PaneId, offset: usize) -> bool {
+/// [`super::set_lx_history_scroll`] 一致：上限由**滚动条自身几何**给出
+/// （`total`/`visible` 来自同一份 `ScrollbarLayout`），不读可能滞后一帧的
+/// `run.total_rows` / `run.visible`，否则首次拖拽会被旧上限钳回底部。
+pub fn set_task_agents_scroll(
+    state: &mut AppState,
+    pane: PaneId,
+    offset: usize,
+    total: usize,
+    visible: usize,
+) -> bool {
     let Some(target) = state.pane_mut_anywhere(pane) else {
         return false;
     };
@@ -970,7 +978,7 @@ pub fn set_task_agents_scroll(state: &mut AppState, pane: PaneId, offset: usize)
     let Some(run) = target.lx.agents.runs.get_mut(active) else {
         return false;
     };
-    let max = run.total_rows.saturating_sub(run.visible.max(1));
+    let max = total.saturating_sub(visible.max(1));
     let clamped = offset.min(max);
     let before = run.scroll;
     let was_following = run.follow;

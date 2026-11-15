@@ -63,7 +63,8 @@ impl crate::app::state::Lx {
         self.agents.runs.iter().any(|run| run.compact.is_running()) || self.btw.any_compacting()
     }
 
-    /// 刷新详情压缩耗时（摘要请求没有流式输出，只能靠计时证明还在跑）。
+    /// 刷新详情压缩耗时并推进其呼吸帧（摘要请求没有流式输出，只能靠计时与动画
+    /// 证明还在跑；与主聊天 `/compact` 的 loading 行同一套反馈）。
     pub fn tick_detail_compacting(&mut self, now_ms: i64) {
         for run in &mut self.agents.runs {
             if run.compact.is_running() {
@@ -71,6 +72,9 @@ impl crate::app::state::Lx {
                     .compact
                     .started_at_ms
                     .map(|started| now_ms.saturating_sub(started).max(0));
+                // 历史里的运行中检查点行用 `run.chat.loading_frame` 呼吸；
+                // 主 loop 只给 running run 同步帧，手动压缩时 run 是空闲的。
+                run.chat.loading_frame = run.chat.loading_frame.wrapping_add(1);
             }
         }
         self.btw.tick_compacting(now_ms);

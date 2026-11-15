@@ -287,7 +287,7 @@ fn btw_wheel_scroll_and_scrollbar_clamp_to_the_thread() {
     assert!(thread.follow);
     assert!(!scroll_btw_detail(&mut state, pane, 3), "已在底部无变化");
 
-    assert!(set_task_btw_scroll(&mut state, pane, 7));
+    assert!(set_task_btw_scroll(&mut state, pane, 7, 25, 10));
     let thread = state
         .pane_anywhere(pane)
         .expect("pane")
@@ -298,7 +298,7 @@ fn btw_wheel_scroll_and_scrollbar_clamp_to_the_thread() {
     assert_eq!(thread.scroll, 7);
     assert!(!thread.follow);
 
-    assert!(set_task_btw_scroll(&mut state, pane, usize::MAX));
+    assert!(set_task_btw_scroll(&mut state, pane, usize::MAX, 25, 10));
     let thread = state
         .pane_anywhere(pane)
         .expect("pane")
@@ -308,7 +308,7 @@ fn btw_wheel_scroll_and_scrollbar_clamp_to_the_thread() {
         .expect("thread");
     assert_eq!(thread.scroll, 15, "滚动条拖到底应钳到最大偏移");
     assert!(thread.follow);
-    assert!(!set_task_btw_scroll(&mut state, pane, usize::MAX));
+    assert!(!set_task_btw_scroll(&mut state, pane, usize::MAX, 25, 10));
 
     // 对话区聚焦时 PgUp/PgDn 与 Agents 详情同口径翻 10 行。
     {
@@ -878,4 +878,31 @@ fn thread_deleted_resets_view_and_qalist_mark() {
         state.pane_anywhere(pane).expect("pane").lx.toast.is_some(),
         "lx 页内 toast"
     );
+}
+
+/// BTW 滚动条同样以几何为准，不受滞后一帧的线程状态影响。
+#[test]
+fn set_task_btw_scroll_uses_scrollbar_geometry() {
+    let (mut state, pane) = btw_pane();
+    {
+        let thread = state
+            .pane_mut_anywhere(pane)
+            .expect("pane")
+            .lx
+            .btw
+            .active_thread_mut()
+            .expect("thread");
+        thread.visible = 10;
+        thread.total_rows = 100;
+    }
+    assert!(set_task_btw_scroll(&mut state, pane, 71, 80, 10));
+    let thread = state
+        .pane_anywhere(pane)
+        .expect("pane")
+        .lx
+        .btw
+        .active_thread()
+        .expect("thread");
+    assert_eq!(thread.scroll, 70);
+    assert!(thread.follow);
 }

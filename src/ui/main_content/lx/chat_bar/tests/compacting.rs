@@ -109,3 +109,51 @@ fn finishing_compact_hides_the_loading_row() {
     lx.compact.finish();
     assert!(!visible(&lx), "压缩结束且空闲：整行消失");
 }
+
+/// 详情（Agents）压缩中：聊天栏同样显示 `Compacting context...` 与本次耗时，
+/// 并且列表态也显示——目标就是上方正在压缩的子 agent。
+#[test]
+fn detail_agent_compacting_shows_loading_and_elapsed() {
+    use crate::app::state::{SubagentRun, TaskPage, TaskTab};
+
+    let mut run = SubagentRun::from_record(&crate::db::chat::SubagentRecord {
+        agent_id: "a1".into(),
+        nickname: Some("Turing".into()),
+        agent_path: "/root/turing".into(),
+        child_session_id: "s1".into(),
+        parent_session_id: "p1".into(),
+        spawn_message_id: None,
+        role: crate::chat::agent::AgentRole::Explorer,
+        model_provider: String::new(),
+        model_id: String::new(),
+        model_variant: None,
+        status: "completed".into(),
+        title: "investigate".into(),
+        created_at_ms: 0,
+        completed_at_ms: Some(1_000),
+        report_json: None,
+        report_delivered: false,
+    });
+    run.compact.start("op-detail".into(), 0);
+    run.compact.elapsed_ms = Some(3_200);
+    run.chat.loading_frame = 0;
+    let mut lx = Lx::new();
+    lx.agents.selected_id = Some("a1".into());
+    lx.agents.runs.push(run);
+    lx.task = Some(TaskPage {
+        tab: TaskTab::Agents,
+        ..TaskPage::default()
+    });
+
+    assert!(visible(&lx), "列表态压缩中聊天栏也必须可见");
+    let (grid, bar) = draw_bar(&lx, 60);
+    let row = row_text(&grid, bar);
+    assert!(row.contains(text::chat::COMPACTING_LABEL), "{row:?}");
+    assert!(row.contains("(3s)"), "显示本次压缩耗时：{row:?}");
+    assert!(!row.contains(text::LX_JUMP_BOTTOM), "{row:?}");
+
+    // 呼吸帧来自 run 自己的 loading_frame：换帧后扫描高亮必须移动。
+    lx.agents.runs[0].chat.loading_frame = 2;
+    let (grid, bar) = draw_bar(&lx, 60);
+    assert!(row_text(&grid, bar).contains(text::chat::COMPACTING_LABEL));
+}

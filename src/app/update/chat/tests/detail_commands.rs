@@ -630,3 +630,56 @@ fn rewind_command_and_hidden_alias_emit_prepare_effect() {
         assert_eq!(editor_text(&state, pane), "", "{command} 已消费");
     }
 }
+
+#[test]
+fn detail_compact_ticks_elapsed_and_breathing_frame() {
+    let (mut state, pane) = agents_editing_state();
+    {
+        let run = &mut state.pane_mut_anywhere(pane).expect("pane").lx.agents.runs[0];
+        run.compact
+            .start("op-detail".into(), crate::db::now_ms() - 1_500);
+        run.chat.loading_frame = 0;
+        run.rows_dirty = false;
+    }
+    assert!(state.has_streaming_lx(), "详情压缩必须驱动心跳");
+    assert!(crate::app::update::chat::advance_lx_loading(&mut state));
+    let run = &state.pane_anywhere(pane).expect("pane").lx.agents.runs[0];
+    assert!(
+        run.compact
+            .elapsed_ms
+            .is_some_and(|elapsed| elapsed >= 1_000),
+        "压缩耗时必须随心跳刷新：{:?}",
+        run.compact.elapsed_ms
+    );
+    assert_eq!(run.chat.loading_frame, 1, "运行中检查点行必须呼吸");
+}
+
+#[test]
+fn detail_btw_compact_ticks_elapsed_and_breathing_frame() {
+    let (mut state, pane) = btw_editing_state();
+    {
+        let target = state.pane_mut_anywhere(pane).expect("pane");
+        let thread = target.lx.btw.active_thread_mut().expect("thread");
+        thread.loaded = true;
+        thread
+            .compact
+            .start("op-btw".into(), crate::db::now_ms() - 1_500);
+        thread.chat.loading_frame = 0;
+    }
+    assert!(state.has_streaming_lx());
+    assert!(crate::app::update::chat::advance_lx_loading(&mut state));
+    let thread = state
+        .pane_anywhere(pane)
+        .expect("pane")
+        .lx
+        .btw
+        .active_thread()
+        .expect("thread");
+    assert!(
+        thread
+            .compact
+            .elapsed_ms
+            .is_some_and(|elapsed| elapsed >= 1_000)
+    );
+    assert_eq!(thread.chat.loading_frame, 1);
+}

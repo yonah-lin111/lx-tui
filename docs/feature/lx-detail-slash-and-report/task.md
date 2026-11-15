@@ -1,6 +1,6 @@
 # 任务清单：Agents / BTW 详情输入框 `/` 命令与私聊·汇报重做
 
-- **状态**：**T1–T9 已完成（`detail-slash-report` 分支）；自动化与 CLI 实机验证见 [`verification.md`](verification.md)，TUI 交互/外观项待用户按 §4 实机确认。2026-11-15 追加：详情 `/undo` 更名为 `/rewind`（保留 `/undo` 隐藏别名），动作面板与主聊天对齐，并支持 compact 检查点撤销。**
+- **状态**：**T1–T10 已完成（`detail-slash-report` 分支）；自动化与 CLI 实机验证见 [`verification.md`](verification.md)，TUI 交互/外观项待用户按 §4 实机确认。2026-11-15 追加：详情 `/undo` 更名为 `/rewind`（保留 `/undo` 隐藏别名），动作面板与主聊天对齐，并支持 compact 检查点撤销；同日修复详情压缩无心跳/无计时与后台详情滚动条沿用滞后几何两个 bug。**
 - **设计文档**：[`design.md`](design.md)
 - **范围**：`src/app/state/lx/`、`src/app/update/`、`src/event/chat/`、`src/db/chat/subagent/`、`src/ui/main_content/lx/`、`src/ui/text/`、`src/chat/agent/report.rs`
 - **数据库**：**无迁移**（复用 `notify_parent`、`delete_btw_thread`、`commit_rewind`）。
@@ -16,6 +16,7 @@
 | **T7** | BTW `/new`：删除线程、重置视图、刷新 QA 列表 | 新增 `src/event/chat/btw/maintenance.rs`；改 `src/app/effects.rs`（`BtwEffect::DeleteThread`）、`src/event/chat/btw.rs`（分派）、`src/app/update/chat/btw/{mod.rs,events.rs}`、`src/app/state/lx/btw.rs` | `/new` 直接清空当前 QA 线程；回答中拒绝；删除失败保留线程并 Toast |
 | **T8** | 文案与键位：新增 `detail` 文案模块、底栏 `[/ commands]` | 新增 `src/ui/text/detail.rs`；改 `src/ui/text.rs`（只加 `pub mod detail;`）、`src/ui/text/btw.rs`、`src/ui/main_content/lx/task/{agents.rs,btw.rs}` | 所有新文案英文；窄宽度整项丢弃不截半截 |
 | **T9** | 测试、校验与文档 | 见 §测试清单 | `cargo fmt` / `cargo clippy --all-targets -- -D warnings` / `cargo test` 全绿；实机清单通过；补 `verification.md` |
+| **T10** | 详情压缩心跳与后台滚动几何修复：`has_streaming_lx` 纳入详情压缩/懒加载，心跳推进 `run.chat.loading_frame` 与 BTW 线程帧，聊天栏显示 `Compacting context... (Ns)`；滚动条按下/拖拽改用 `ScrollbarLayout` 的 `total`/`visible` | 改 `src/app/state.rs`、`src/app/state/lx/{detail.rs,btw.rs}`、`src/app/update/chat/{mod.rs,detail_compact.rs}`、`src/app/update/chat/{subagent.rs,btw/mod.rs}`、`src/event/mouse/{hit.rs,drag.rs}`、`src/ui/main_content/lx/chat_bar.rs`；测试见 `detail_commands.rs`、`subagent.rs`、`btw/tests.rs`、`chat_bar/tests/compacting.rs`、`task/tests/agent_list.rs` | 详情 `/compact` 期间菱形呼吸、耗时逐秒推进、聊天栏可见；压缩结束恢复检查点；滚动条首次拖拽/点击即按当前几何生效，无“卡一下再滚一次” |
 
 ---
 

@@ -10,7 +10,7 @@
 | 校验 | 命令 | 结果 |
 | :--- | :--- | :--- |
 | 格式 / 静态检查 | `cargo fmt && cargo clippy --all-targets -- -D warnings` | PASS（0 warning） |
-| 全量测试 | `cargo test` | PASS（lib **5602 passed / 6 ignored**；集成测试全通过） |
+| 全量测试 | `cargo test` | PASS（lib **5608 passed / 6 ignored**；集成测试全通过） |
 | 详情命令模型 | `cargo test --lib app::state::lx::slash::composer` | 7 passed |
 | composer 与命令分派 | `cargo test --lib app::update::chat::tests::detail_commands` | 21 passed |
 | BTW 更新 | `cargo test --lib app::update::chat::btw::tests` | 21 passed |
@@ -21,6 +21,10 @@
 | 详情渲染 | `cargo test --lib ui::main_content::lx::task::tests::detail_slash` | 4 passed |
 | 面板内联条目 | `cargo test --lib ui::main_content::lx::tests::slash_panels::detail_commands` | 1 passed |
 | 详情 Rewind 面板 | `cargo test --lib ui::main_content::lx::tests::slash_panels::detail_rewind_panels` | 1 passed |
+| 详情压缩心跳 | `cargo test --lib detail_compact_ticks` | 2 passed |
+| 详情压缩聊天栏 | `cargo test --lib detail_agent_compacting` | 1 passed |
+| 详情运行中检查点 | `cargo test --lib detail_running_compact_shows_breathing` | 1 passed |
+| 详情滚动条几何 | `cargo test --lib scrollbar_geometry` | 3 passed |
 
 CLI 实机会话（本工作区）：
 
@@ -86,6 +90,18 @@ CLI 实机会话（本工作区）：
 - **验证步骤**：执行 `cargo test --lib ui::main_content::lx::task::tests::detail_slash` 与 `cargo test --lib ui::main_content::lx::tests::slash_panels::detail_commands`。
 - **期望结果**：Agents 胶囊依次显示 `private` / `steer N` / `compacting`；BTW 胶囊空间不足时整段丢弃 ` · compacting`，不截半截；底栏显示 `[/ commands]`，不再显示 `Shift+Tab` 模式；`/` 面板贴 composer 上沿；详情命令以内联标签 + `Built-in` 标签渲染，命令名为 `/rewind`；全部文案英文。自动化覆盖胶囊、BTW 34 列降级、底栏与面板锚点；Agents 窄窗格与动作面板由 §4 实机确认（PASS）。
 
+### V11 — 详情压缩心跳、呼吸与聊天栏
+
+- **输入内容**：选中子 agent 详情后执行 `/compact`；等待摘要请求完成（数秒）；期间观察消息列表末尾与输入框上方一行。BTW 线程同样执行一次 `/compact`。
+- **验证步骤**：执行 `cargo test --lib detail_compact_ticks`、`cargo test --lib detail_agent_compacting`、`cargo test --lib detail_running_compact`；实机观察 `cargo run` 中的压缩过程。
+- **期望结果**：压缩开始后消息列表末尾出现 `◆ Compacting context... · Ns`，菱形随 100ms 心跳在 `◆/◇` 间呼吸，耗时逐秒推进；输入框上方聊天栏同时显示 `Compacting context... (Ns)`，列表态与编辑态都显示；压缩结束后两者消失并出现检查点卡片；BTW 线程同款。此前 `has_streaming_lx` 未包含详情压缩，界面会整段冻结、无呼吸也无耗时（PASS）。
+
+### V12 — 后台详情滚动条几何一致性
+
+- **输入内容**：子 agent 详情（含压缩后检查点）滚动条拖动/轨道点击；BTW 对话区同款；滚轮在消息区上滚/下滚。
+- **验证步骤**：执行 `cargo test --lib scrollbar_geometry`；实机在 `cargo run` 中拖动滚动条、点击轨道与滚轮。
+- **期望结果**：滚动条按下/拖拽的上限与绘制使用同一份 `ScrollbarLayout`（`total`/`visible`），即使 `run`/`thread` 的缓存行数滞后一帧也不会被旧上限钳回底部；首次拖动/点击立即到位，滚轮每次上移 3 行、贴底自动恢复跟随；其他后台列表（BTW、Agents 列表）保持同一口径（PASS）。
+
 ### V10 — 回归与边界
 
 - **输入内容**：主输入 `/`、`/rewind`、`/compact`、AI Web 允许命令；旧库追问行；含 steer 的轮次。
@@ -140,7 +156,11 @@ CLI 实机会话（本工作区）：
    - 输入内容：BTW 线程问几轮后 `/rewind`；再 `/new`；回答中再试 `/new`；线程内先 `/compact` 再 `/rewind`。
    - 验证步骤：观察最后一轮、线程列表与 QA 列表标记。
    - 期望结果：`/rewind` 删除最后一轮或恢复 compact 上下文；`/new` 清空线程且 `● side thread` 消失；回答中 `/new` 被拒绝。
-6. **窄窗格与文案**
+6. **子 agent 压缩反馈与滚动**
+   - 输入内容：进入任一已完成的子 agent 详情，执行 `/compact`；压缩过程中与完成后各滚一次滚轮，并拖动右侧滚动条。
+   - 验证步骤：观察消息列表末尾、输入框上方聊天栏、滚动条。
+   - 期望结果：压缩中列表末尾出现呼吸的 `◆/◇ Compacting context... · Ns`，聊天栏显示 `Compacting context... (Ns)`；完成后两者消失、检查点卡片出现；首次滚轮/拖动即生效，无“卡一下再滚一次”的迟滞。
+7. **窄窗格与文案**
    - 输入内容：将窗格缩到约 60 列，重复打开胶囊、动作面板与底栏提示。
    - 验证步骤：观察截断与换行。
    - 期望结果：胶囊、动作面板、底栏提示与 `/` 面板均不截半截；全部文案为英文。

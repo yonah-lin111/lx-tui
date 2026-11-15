@@ -1045,8 +1045,9 @@ pub fn advance_lx_loading(state: &mut AppState) -> bool {
         let recapping = target.lx.recap.pending.is_some();
         // 仍有子 agent 在跑：推进同一套 loading 帧（Agents 详情动画与等待行）。
         let agents_running = target.lx.agents.runs.iter().any(|run| run.is_running());
-        // 详情会话（子 agent / BTW 线程）的手动压缩同样没有流式输出。
-        let detail_compacting = target.lx.any_detail_compacting();
+        // 详情会话（子 agent / BTW 线程）的手动压缩同样没有流式输出，不能依赖
+        // 子 agent 自身在跑；否则压缩期间整段界面冻结。
+        let detail_animating = target.lx.any_detail_compacting();
         // BTW 面板可见时，生成中或线程历史加载中都需要推进帧；关掉面板不空转重绘。
         let btw_running = target.lx.is_btw_tab()
             && target
@@ -1059,7 +1060,7 @@ pub fn advance_lx_loading(state: &mut AppState) -> bool {
             && !recapping
             && !agents_running
             && !btw_running
-            && !detail_compacting
+            && !detail_animating
         {
             continue;
         }
@@ -1075,7 +1076,7 @@ pub fn advance_lx_loading(state: &mut AppState) -> bool {
                 .map(|started| crate::db::now_ms().saturating_sub(started).max(0));
             advanced = true;
         }
-        if detail_compacting {
+        if detail_animating {
             target.lx.tick_detail_compacting(crate::db::now_ms());
             advanced = true;
         }

@@ -158,7 +158,7 @@ impl LxBtw {
             .any(|thread| thread.compact.is_running())
     }
 
-    /// 刷新所有 BTW 线程的压缩耗时。
+    /// 刷新所有 BTW 线程的压缩耗时；同时推进压缩线程的呼吸帧（运行中的检查点行）。
     pub fn tick_compacting(&mut self, now_ms: i64) {
         for thread in self.threads.values_mut() {
             if thread.compact.is_running() {
@@ -166,6 +166,7 @@ impl LxBtw {
                     .compact
                     .started_at_ms
                     .map(|started| now_ms.saturating_sub(started).max(0));
+                thread.chat.loading_frame = thread.chat.loading_frame.wrapping_add(1);
             }
         }
     }

@@ -645,7 +645,9 @@ fn agents_scrollbar_offset_updates_follow_at_bottom() {
         run.visible = 10;
         run.total_rows = 100;
     }
-    assert!(update::set_task_agents_scroll(&mut state, pane, 20));
+    assert!(update::set_task_agents_scroll(
+        &mut state, pane, 20, 100, 10
+    ));
     let run = state
         .pane_anywhere(pane)
         .expect("pane")
@@ -656,7 +658,9 @@ fn agents_scrollbar_offset_updates_follow_at_bottom() {
         .expect("run");
     assert_eq!(run.scroll, 20);
     assert!(!run.follow);
-    assert!(update::set_task_agents_scroll(&mut state, pane, 90));
+    assert!(update::set_task_agents_scroll(
+        &mut state, pane, 90, 100, 10
+    ));
     let run = state
         .pane_anywhere(pane)
         .expect("pane")
@@ -1383,4 +1387,41 @@ fn detail_only_settle_marks_rows_dirty() {
         state.pane_anywhere(pane).expect("pane").lx.agents.runs[0].rows_dirty,
         "detail-only 变化也必须置 rows_dirty"
     );
+}
+
+/// 滚动条按下/拖拽的上限必须来自滚动条几何（与绘制同一帧），
+/// 不能读滞后一帧的 `run.total_rows` / `run.visible`：否则首次拖动会被旧上限
+/// 钳回底部，用户要再拖一次才动。
+#[test]
+fn set_task_agents_scroll_uses_scrollbar_geometry() {
+    let mut state = AppState::demo();
+    let pane = state.active_tab().layout.focus();
+    update::on_subagent_started(
+        &mut state,
+        pane,
+        run("sess-a", "sub-a", AgentRole::Explorer),
+    );
+    {
+        let target = state.pane_mut_anywhere(pane).expect("pane");
+        target.lx.task = Some(crate::app::state::TaskPage {
+            tab: crate::app::state::TaskTab::Agents,
+            ..Default::default()
+        });
+        let run = &mut target.lx.agents.runs[0];
+        // 状态里的旧几何：上限 90。
+        run.visible = 10;
+        run.total_rows = 100;
+    }
+    // 绘制几何（滚动条）是压缩后的 80/10：上限 70。
+    assert!(update::set_task_agents_scroll(&mut state, pane, 71, 80, 10));
+    let run = state
+        .pane_anywhere(pane)
+        .expect("pane")
+        .lx
+        .agents
+        .runs
+        .first()
+        .expect("run");
+    assert_eq!(run.scroll, 70, "按滚动条几何钳制，不按旧 run 状态");
+    assert!(run.follow, "滚到滚动条给出的底部即恢复跟随");
 }

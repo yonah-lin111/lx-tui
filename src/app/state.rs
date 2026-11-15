@@ -795,6 +795,9 @@ impl AppState {
                     || target.lx.chat.has_running_shell()
                     || target.lx.compact.is_running()
                     || target.lx.recap.pending.is_some()
+                    // 详情会话（子 agent / BTW 线程）的手动压缩同样是静默等待，
+                    // 必须驱动计时与呼吸帧，否则界面整段冻结。
+                    || target.lx.any_detail_compacting()
                     // 子 agent 在后台跑时主 loading 也要扫描，即使 Agents 面板没开。
                     || target.lx.agents.runs.iter().any(|run| run.is_running())
                     // BTW 的 loading 帧由 `advance_lx_loading` 独立推进；没有这个

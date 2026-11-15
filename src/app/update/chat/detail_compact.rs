@@ -61,13 +61,21 @@ pub fn on_started(
             .lx
             .agents
             .by_agent_mut(agent_id)
-            .map(|run| run.compact.start(operation_id.clone(), now))
+            .map(|run| {
+                run.compact.start(operation_id.clone(), now);
+                // 运行中的检查点行是新增内容：总行数必须重量，否则滚动上限、
+                // 滚动条与“贴底”判定会一直沿用压缩前的旧值。
+                run.rows_dirty = true;
+            })
             .is_some(),
         DetailTarget::Btw(thread_id) => target_state
             .lx
             .btw
             .thread_by_thread_id_mut(thread_id)
-            .map(|thread| thread.compact.start(operation_id.clone(), now))
+            .map(|thread| {
+                thread.compact.start(operation_id.clone(), now);
+                thread.rows_dirty = true;
+            })
             .is_some(),
     };
     if !started {
