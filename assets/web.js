@@ -200,7 +200,7 @@ document.addEventListener('click', (evt) => {
 });
 window.addEventListener('resize', () => {
   openSelects.forEach((inst) => inst.reposition());
-  syncTabPill(true);
+  syncSegmentPills(true);
 });
 window.addEventListener('scroll', () => {
   openSelects.forEach((inst) => inst.reposition());
@@ -223,7 +223,8 @@ function applyWebTheme(theme) {
   document.documentElement.dataset.theme = next;
   if (webThemeSelect) { webThemeSelect.setValue(next); }
   settleViewTransitions();
-  syncTabPill(true);
+  initSegmentPills();
+  syncSegmentPills(true);
 }
 
 async function loadWebTheme() {
@@ -296,38 +297,145 @@ const VIEW_TITLES = {
 };
 const VIEW_CSS = { settings: 'css-settings', usage: 'css-usage', todo: 'css-todo' };
 
-// ===== 顶栏 tab：玻璃主题下的弹簧滑块 =====
-let tabPillReady = false;
+// ===== 分段指示块：顶栏 tab 与视图内小 tab 共用 hover / 选中逻辑 =====
+// 顶栏的 pill 已在 HTML 中；range/provider 分组在启动时注入 .seg-pill。
+const SEGMENT_GROUPS = [
+  {selector: '.web-tabs', item: '.web-tab', active: '.web-tab.active'},
+  {selector: '.range-group', item: '.range-btn', active: '.range-btn.active'},
+  {selector: '.provider-tabs', item: '.provider-tab', active: '.provider-tab.active'}
+];
+const segmentPreview = new WeakMap();
+const segmentPillTimers = new WeakMap();
+let glassEnterTimer = null;
 
-// 把指示块移动到当前 active tab；首次与主题切换用 no-transition 直接落位。
-function syncTabPill(immediate) {
-  const pill = document.querySelector('.web-tab-pill');
-  const tabs = document.querySelector('.web-tabs');
-  const active = document.querySelector('.web-tab.active');
-  if (!pill || !tabs || !active) { return; }
-  const tabRect = active.getBoundingClientRect();
-  const tabsRect = tabs.getBoundingClientRect();
-  if (!tabRect.width) { return; }
-  const instant = immediate || !tabPillReady;
-  if (instant) { pill.classList.add('no-transition'); }
-  pill.style.width = Math.round(tabRect.width) + 'px';
-  pill.style.transform = 'translateX(' + Math.round(tabRect.left - tabsRect.left) + 'px)';
-  tabPillReady = true;
+function segmentItemOf(group, config, target) {
+  if (!(target instanceof Element)) { return null; }
+  const item = target.closest(config.item);
+  return item && item.parentElement === group ? item : null;
+}
+
+function ensureSegmentPill(group) {
+  let pill = group.querySelector(':scope > .web-tab-pill, :scope > .seg-pill');
+  if (!pill) {
+    pill = document.createElement('span');
+    pill.className = 'seg-pill';
+    pill.setAttribute('aria-hidden', 'true');
+    group.prepend(pill);
+  }
+  return pill;
+}
+
+// hover / focus 优先，其次才是 active；离开分组后自动回落到选中项。
+function segmentTarget(group, config) {
+  const preview = segmentPreview.get(group);
+  if (preview && preview.hover && preview.hover.isConnected) { return preview.hover; }
+  if (preview && preview.focus && preview.focus.isConnected) { return preview.focus; }
+  return group.querySelector(config.active) || group.querySelector(config.item);
+}
+
+function syncSegmentPill(group, config, immediate) {
+  const pill = ensureSegmentPill(group);
+  const target = segmentTarget(group, config);
+  if (!target) { return; }
+  const groupRect = group.getBoundingClientRect();
+  const rect = target.getBoundingClientRect();
+  if (!rect.width || !groupRect.width) {
+    // 隐藏视图量不到布局：等可见后再直接落位，避免从 0 宽度滑入。
+    pill.style.opacity = '0';
+    delete pill.dataset.segmentSized;
+    return;
+  }
+  const instant = immediate || !pill.dataset.segmentSized;
   if (instant) {
-    // 先落位，再解锁过渡；用定时器而不是 rAF，后台标签页被节流时也不会卡住禁用态。
-    setTimeout(() => pill.classList.remove('no-transition'), 24);
+    pill.classList.add('no-transition');
+    const timer = segmentPillTimers.get(pill);
+    if (timer) { clearTimeout(timer); }
+    segmentPillTimers.set(pill, setTimeout(() => {
+      pill.classList.remove('no-transition');
+      segmentPillTimers.delete(pill);
+    }, 24));
+  }
+  pill.dataset.segmentSized = '1';
+  pill.style.opacity = '1';
+  pill.style.width = rect.width + 'px';
+  pill.style.transform = 'translate3d(' + (rect.left - groupRect.left - group.clientLeft) + 'px, 0, 0)';
+}
+
+function setSegmentPreview(group, config, key, item) {
+  const state = segmentPreview.get(group) || {hover: null, focus: null};
+  if (state[key] === item) { return; }
+  state[key] = item;
+  segmentPreview.set(group, state);
+  syncSegmentPill(group, config, false);
+}
+
+function clearSegmentPreview(group, config, key) {
+  const state = segmentPreview.get(group);
+  if (!state || !state[key]) { return; }
+  state[key] = null;
+  syncSegmentPill(group, config, false);
+}
+
+function bindSegmentGroup(group, config) {
+  if (group.dataset.segmentBound === '1') { return; }
+  group.dataset.segmentBound = '1';
+  ensureSegmentPill(group);
+  group.addEventListener('pointerover', (event) => {
+    const item = segmentItemOf(group, config, event.target);
+    if (item) { setSegmentPreview(group, config, 'hover', item); }
+  });
+  group.addEventListener('pointerleave', () => clearSegmentPreview(group, config, 'hover'));
+  group.addEventListener('focusin', (event) => {
+    const item = segmentItemOf(group, config, event.target);
+    if (item) { setSegmentPreview(group, config, 'focus', item); }
+  });
+  group.addEventListener('focusout', (event) => {
+    if (event.relatedTarget && group.contains(event.relatedTarget)) { return; }
+    clearSegmentPreview(group, config, 'focus');
+  });
+  // active 类由各视图脚本切换，监听类名变化把指示块跟到新的选中项。
+  new MutationObserver((records) => {
+    for (const record of records) {
+      if (record.target instanceof Element && record.target.matches(config.item)) {
+        syncSegmentPill(group, config, false);
+        return;
+      }
+    }
+  }).observe(group, {subtree: true, attributes: true, attributeFilter: ['class']});
+  // Settings 的 provider tabs 位于懒加载子视图里：从 display:none 变为可见时
+  // 分组尺寸才会出现，靠 ResizeObserver 补一次直接落位。
+  if (typeof ResizeObserver === 'function') {
+    new ResizeObserver(() => syncSegmentPill(group, config, false)).observe(group);
   }
 }
 
-// 切换主题/缩放时清掉残留的进场离场类，避免旧视图被固定在 display:block。
+function initSegmentPills() {
+  for (const config of SEGMENT_GROUPS) {
+    for (const group of document.querySelectorAll(config.selector)) {
+      bindSegmentGroup(group, config);
+    }
+  }
+}
+
+function syncSegmentPills(immediate) {
+  for (const config of SEGMENT_GROUPS) {
+    for (const group of document.querySelectorAll(config.selector)) {
+      syncSegmentPill(group, config, immediate);
+    }
+  }
+}
+
+// 切换主题/缩放时清掉残留的进场类，避免旧视图被固定在动画终态。
 function settleViewTransitions() {
+  if (glassEnterTimer) {
+    clearTimeout(glassEnterTimer);
+    glassEnterTimer = null;
+  }
   for (const name of VIEWS) {
     const section = document.getElementById('view-' + name);
     if (!section) { continue; }
     section.onanimationend = null;
-    section.classList.remove(
-      'glass-enter-right', 'glass-enter-left', 'glass-leave-right', 'glass-leave-left'
-    );
+    section.classList.remove('glass-enter');
   }
 }
 
@@ -401,8 +509,10 @@ function showView(view) {
     const section = document.getElementById('view-' + name);
     return section && section.classList.contains('active');
   });
-  const direction = current && VIEWS.indexOf(view) < VIEWS.indexOf(current) ? -1 : 1;
-  const animateGlass = document.documentElement.dataset.theme === 'glass' && current && current !== view;
+  const reduceMotion = window.matchMedia
+    && window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+  const animateGlass = document.documentElement.dataset.theme === 'glass'
+    && current && current !== view && !reduceMotion;
   settleViewTransitions();
   for (const name of VIEWS) {
     const section = document.getElementById('view-' + name);
@@ -418,31 +528,29 @@ function showView(view) {
     }
   }
   if (animateGlass) {
-    const leaving = document.getElementById('view-' + current);
     const entering = document.getElementById('view-' + view);
-    if (leaving && entering) {
-      const leaveClass = direction > 0 ? 'glass-leave-left' : 'glass-leave-right';
-      const enterClass = direction > 0 ? 'glass-enter-right' : 'glass-enter-left';
-      leaving.classList.add(leaveClass);
-      entering.classList.add(enterClass);
-      leaving.onanimationend = (event) => {
-        if (event.target !== leaving) { return; }
-        leaving.classList.remove(leaveClass);
-        leaving.onanimationend = null;
+    if (entering) {
+      const done = () => {
+        entering.classList.remove('glass-enter');
+        entering.onanimationend = null;
+        glassEnterTimer = null;
       };
+      entering.classList.add('glass-enter');
       entering.onanimationend = (event) => {
         if (event.target !== entering) { return; }
-        entering.classList.remove(enterClass);
-        entering.onanimationend = null;
+        done();
       };
+      // 后台标签页可能不派发 animationend；兜底清理，避免 will-change 长期驻留。
+      glassEnterTimer = setTimeout(done, 260);
     }
   }
-  syncTabPill(!tabPillReady);
   // 非当前视图的样式表用 media="not all" 挂起，不销毁节点、不重新请求。
   for (const [name, id] of Object.entries(VIEW_CSS)) {
     const link = document.getElementById(id);
     if (link) { link.media = name === view ? '' : 'not all'; }
   }
+  // 等目标视图的样式表恢复后再量指示块，避免按无样式布局量出错误宽度。
+  syncSegmentPills(false);
   if (view === 'settings') { initOnce('settings', 'Loading settings…', window.initSettingsView); }
   if (view === 'usage') { initOnce('usage', 'Loading usage…', window.initUsageView); }
   if (view === 'todo') { initOnce('todo', 'Loading todos…', window.initTodoView); }
@@ -479,6 +587,7 @@ function initOnce(key, label, fn) {
 
 function bootWeb() {
   const initial = viewFromLocation();
+  initSegmentPills();
   initWebTheme();
   const path = location.pathname.replace(/\/+$/, '') || '/';
   // 旧地址统一重写为 /?token=...#/<view>，之后切换只改 hash。

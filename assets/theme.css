@@ -72,12 +72,12 @@ html[data-theme="glass"] .web-topbar {
 html[data-theme="glass"] .web-brand-logo { filter: drop-shadow(0 2px 6px rgba(0, 0, 0, .45)); transition: transform .3s var(--spring-ease); }
 html[data-theme="glass"] .web-brand:hover .web-brand-logo { transform: scale(1.06); }
 html[data-theme="glass"] .web-tabs { position: relative; gap: 4px; }
-/* 液态指示块：只移动/变宽，tab 自身不再铺底色，切换时才有“滑过去”的感觉。 */
-html[data-theme="glass"] .web-tab-pill {
+/* 液态指示块：顶栏与视图内小 tab 共用。hover 时先滑到指针下预览，
+ * 文字颜色只在选中态变化，避免 hover 与选中同时抢视觉。 */
+html[data-theme="glass"] .web-tab-pill,
+html[data-theme="glass"] .seg-pill {
   display: block;
   position: absolute;
-  top: 5px;
-  bottom: 5px;
   left: 0;
   width: 0;
   z-index: 0;
@@ -85,10 +85,14 @@ html[data-theme="glass"] .web-tab-pill {
   background: var(--pill-indicator-bg);
   box-shadow: var(--pill-indicator-shadow);
   pointer-events: none;
+  opacity: 0;
   will-change: transform, width;
-  transition: transform .42s var(--spring-ease), width .42s var(--spring-ease), opacity .2s ease;
+  transition: transform .34s var(--spring-ease), width .34s var(--spring-ease), opacity .18s ease;
 }
-html[data-theme="glass"] .web-tab-pill.no-transition { transition: none; }
+html[data-theme="glass"] .web-tab-pill { top: 5px; bottom: 5px; }
+html[data-theme="glass"] .seg-pill { top: 3px; bottom: 3px; }
+html[data-theme="glass"] .web-tab-pill.no-transition,
+html[data-theme="glass"] .seg-pill.no-transition { transition: none; }
 html[data-theme="glass"] .web-tab {
   position: relative;
   z-index: 1;
@@ -99,9 +103,10 @@ html[data-theme="glass"] .web-tab {
   border-radius: 999px;
   background: transparent;
   color: var(--muted);
+  font-weight: 500;
   transition: color .18s ease, opacity .14s ease;
 }
-html[data-theme="glass"] .web-tab:hover { background: transparent; color: var(--text); }
+html[data-theme="glass"] .web-tab:hover { background: transparent; color: var(--muted); }
 html[data-theme="glass"] .web-tab:active { opacity: .78; }
 html[data-theme="glass"] .web-tab.active {
   background: transparent;
@@ -115,38 +120,20 @@ html[data-theme="glass"] .web-theme-select .select-button {
 }
 html[data-theme="glass"] .web-theme-select .select-button:hover { background: rgba(118, 118, 128, .34); }
 
-/* ===== 视图切换：方向感知的弹簧位移 + 轻微模糊淡入淡出 ===== */
+/* ===== 视图切换：旧视图立即隐藏，只让新视图快速淡入 =====
+ * 不对整页做 translate/filter：玻璃卡片的 backdrop-filter 在逐帧重采样时非常昂贵，
+ * 同时把离场视图留在 display:block 会让旧内容残留并和新内容抢合成层。 */
 html[data-theme="glass"] .web-view.active {
   z-index: 2;
   animation: none;
 }
-html[data-theme="glass"] .web-view.glass-enter-right { animation: glass-view-in-right .38s var(--spring-ease) both; will-change: transform, opacity, filter; }
-html[data-theme="glass"] .web-view.glass-enter-left { animation: glass-view-in-left .38s var(--spring-ease) both; will-change: transform, opacity, filter; }
-html[data-theme="glass"] .web-view.glass-leave-left,
-html[data-theme="glass"] .web-view.glass-leave-right {
-  display: block;
-  z-index: 1;
-  pointer-events: none;
-  will-change: transform, opacity, filter;
+html[data-theme="glass"] .web-view.glass-enter {
+  animation: glass-view-in .18s ease-out both;
+  will-change: opacity;
 }
-html[data-theme="glass"] .web-view.glass-leave-left { animation: glass-view-out-left .26s cubic-bezier(.4, 0, .6, 1) both; }
-html[data-theme="glass"] .web-view.glass-leave-right { animation: glass-view-out-right .26s cubic-bezier(.4, 0, .6, 1) both; }
-/* 进场从 18px 外弹入、出场向反方向让位；模糊只做 5px，避免整页重绘过重。 */
-@keyframes glass-view-in-right {
-  from { opacity: 0; transform: translate3d(18px, 0, 0); filter: blur(5px); }
-  to { opacity: 1; transform: translate3d(0, 0, 0); filter: blur(0); }
-}
-@keyframes glass-view-in-left {
-  from { opacity: 0; transform: translate3d(-18px, 0, 0); filter: blur(5px); }
-  to { opacity: 1; transform: translate3d(0, 0, 0); filter: blur(0); }
-}
-@keyframes glass-view-out-left {
-  from { opacity: 1; transform: translate3d(0, 0, 0); filter: blur(0); }
-  to { opacity: 0; transform: translate3d(-10px, 0, 0); filter: blur(4px); }
-}
-@keyframes glass-view-out-right {
-  from { opacity: 1; transform: translate3d(0, 0, 0); filter: blur(0); }
-  to { opacity: 0; transform: translate3d(10px, 0, 0); filter: blur(4px); }
+@keyframes glass-view-in {
+  from { opacity: 0; }
+  to { opacity: 1; }
 }
 
 /* ===== 通用玻璃容器 ===== */
@@ -301,20 +288,47 @@ html[data-theme="glass"] .select-option.selected {
 }
 html[data-theme="glass"] .input-action { border-radius: 999px; }
 
-/* 时间范围：整组做成胶囊分段控件。 */
-html[data-theme="glass"] .range-group {
+/* 时间范围与视图内小 tab：与顶栏共用滑块交互，容器与指示块统一胶囊圆角。 */
+html[data-theme="glass"] .range-group,
+html[data-theme="glass"] .provider-tabs {
+  position: relative;
+  gap: 2px;
+  padding: 3px;
   border: 1px solid var(--border);
   border-radius: 999px;
-  background: rgba(118, 118, 128, .20);
-  overflow: hidden;
+  background: rgba(118, 118, 128, .18);
 }
-html[data-theme="glass"] .range-btn { border-right: 0; padding: 4px 10px; transition: background-color .18s ease, color .18s ease; }
-html[data-theme="glass"] .range-btn:hover { background: rgba(118, 118, 128, .26); }
-html[data-theme="glass"] .range-btn.active {
+html[data-theme="glass"] .provider-tabs { display: flex; margin-bottom: 10px; }
+html[data-theme="glass"] .range-btn,
+html[data-theme="glass"] .provider-tab {
+  position: relative;
+  z-index: 1;
+  flex: 1 1 auto;
+  min-width: 0;
+  border: 0;
   border-radius: 999px;
-  background: rgba(255, 255, 255, .90);
-  color: #141416;
-  box-shadow: inset 0 .5px 0 rgba(255, 255, 255, .6);
+  padding: 4px 10px;
+  background: transparent;
+  color: var(--muted);
+  font-weight: 500;
+  white-space: nowrap;
+  transition: color .18s ease, opacity .14s ease;
+}
+html[data-theme="glass"] .range-btn:hover,
+html[data-theme="glass"] .provider-tab:hover {
+  background: transparent;
+  color: var(--muted);
+}
+html[data-theme="glass"] .range-btn:active,
+html[data-theme="glass"] .provider-tab:active { opacity: .78; }
+html[data-theme="glass"] .range-btn.active,
+html[data-theme="glass"] .provider-tab.active {
+  border: 0;
+  border-radius: 999px;
+  background: transparent;
+  color: var(--text);
+  box-shadow: none;
+  font-weight: 500;
 }
 
 /* ===== 侧栏与 tab ===== */
@@ -350,28 +364,6 @@ html[data-theme="glass"] .preset-status-badge {
   border-radius: 999px;
   padding: 1px 8px;
   background: rgba(118, 118, 128, .16);
-}
-html[data-theme="glass"] .provider-tabs {
-  gap: 4px;
-  margin-bottom: 10px;
-  padding: 4px;
-  border-bottom: 0;
-  border-radius: 12px;
-  background: rgba(118, 118, 128, .16);
-}
-html[data-theme="glass"] .provider-tab {
-  border: 0;
-  border-radius: 9px;
-  padding: 6px 10px;
-  transition: background-color .18s ease, color .18s ease, box-shadow .18s ease;
-}
-html[data-theme="glass"] .provider-tab:hover { background: rgba(118, 118, 128, .24); }
-html[data-theme="glass"] .provider-tab.active {
-  border: 0;
-  border-radius: 9px;
-  background: rgba(255, 255, 255, .18);
-  color: var(--text);
-  box-shadow: inset 0 .5px 0 rgba(255, 255, 255, .34);
 }
 
 /* ===== 表格：表头与容器一起玻璃化 ===== */
@@ -453,10 +445,8 @@ html[data-theme="glass"] .card-title { letter-spacing: -.01em; }
 @media (prefers-reduced-motion: reduce) {
   html[data-theme="glass"] .home-card { transition: none; }
   html[data-theme="glass"] .home-card:hover { transform: none; }
-  html[data-theme="glass"] .web-tab-pill { transition: none; }
-  html[data-theme="glass"] .web-view.glass-enter-right,
-  html[data-theme="glass"] .web-view.glass-enter-left { animation: none; }
-  html[data-theme="glass"] .web-view.glass-leave-left,
-  html[data-theme="glass"] .web-view.glass-leave-right { display: none; animation: none; }
+  html[data-theme="glass"] .web-tab-pill,
+  html[data-theme="glass"] .seg-pill { transition: none; }
+  html[data-theme="glass"] .web-view.glass-enter { animation: none; will-change: auto; }
   html[data-theme="glass"] .select-menu { animation: none; }
 }

@@ -427,10 +427,16 @@ async fn page_requires_token_and_serves_self_contained_assets() {
     );
     assert!(
         theme_css_body.contains(".web-tab-pill")
+            && theme_css_body.contains(".seg-pill")
             && theme_css_body.contains("--spring-ease")
-            && theme_css_body.contains("@keyframes glass-view-in-right")
-            && theme_css_body.contains(".glass-leave-left"),
-        "glass tab pill and directional view transitions present"
+            && theme_css_body.contains("@keyframes glass-view-in")
+            && !theme_css_body.contains("glass-leave"),
+        "glass tab pill and instant cross-view fade present"
+    );
+    assert!(
+        theme_css_body.contains("html[data-theme=\"glass\"] .range-group")
+            && theme_css_body.contains("html[data-theme=\"glass\"] .provider-tabs"),
+        "small segmented controls share the glass pill treatment"
     );
 
     let web_js = request(port, &get("/web.js")).await;
@@ -446,14 +452,19 @@ async fn page_requires_token_and_serves_self_contained_assets() {
         "function resetPageLoading",
         "function initWebTheme",
         "function applyWebTheme",
-        "function syncTabPill",
+        "function syncSegmentPills",
+        "function initSegmentPills",
         "function settleViewTransitions",
     ] {
         assert!(web_js_body.contains(entry), "web js entry: {entry}");
     }
     assert!(
-        web_js_body.contains("glass-enter-right") && web_js_body.contains("glass-leave-left"),
-        "view switching applies the glass transition classes"
+        web_js_body.contains("pointerover") && web_js_body.contains("pointerleave"),
+        "segmented pills preview the hovered item"
+    );
+    assert!(
+        web_js_body.contains("glass-enter") && !web_js_body.contains("glass-leave"),
+        "view switching fades the new view without keeping the old one mounted"
     );
     assert!(
         web_js_body.contains("web_theme") && web_js_body.contains("/api/config"),
