@@ -438,6 +438,17 @@ async fn page_requires_token_and_serves_self_contained_assets() {
             && theme_css_body.contains("html[data-theme=\"glass\"] .provider-tabs"),
         "small segmented controls share the glass pill treatment"
     );
+    assert!(
+        theme_css_body.contains("nav.side .seg-pill")
+            && theme_css_body.contains("width: calc(100% - 16px)"),
+        "settings side nav uses a vertical pill without horizontal overflow"
+    );
+    assert!(
+        theme_css_body.contains(".select-menu .seg-pill")
+            && theme_css_body.contains(".provider-list .seg-pill")
+            && theme_css_body.contains(".command-list .seg-pill"),
+        "select menus and settings lists reuse the vertical pill"
+    );
 
     let web_js = request(port, &get("/web.js")).await;
     assert_eq!(status(&web_js), 200);
@@ -461,6 +472,20 @@ async fn page_requires_token_and_serves_self_contained_assets() {
     assert!(
         web_js_body.contains("pointerover") && web_js_body.contains("pointerleave"),
         "segmented pills preview the hovered item"
+    );
+    assert!(
+        web_js_body.contains("nav.side") && web_js_body.contains("vertical: true"),
+        "settings side nav is registered as a vertical segmented group"
+    );
+    assert!(
+        web_js_body.contains("SELECT_MENU_CONFIG")
+            && web_js_body.contains(".provider-list")
+            && web_js_body.contains(".command-list"),
+        "select menus and settings lists reuse the vertical segmented group"
+    );
+    assert!(
+        web_js_body.contains("target.offsetTop") && web_js_body.contains("childList: true"),
+        "vertical pills measure layout positions and remount after list rerenders"
     );
     assert!(
         web_js_body.contains("glass-enter") && !web_js_body.contains("glass-leave"),

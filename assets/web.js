@@ -64,6 +64,7 @@ function createSelect(host, config) {
   const menu = domEl('div', 'select-menu hidden' + (optionsConfig.menuClass ? ' ' + optionsConfig.menuClass : ''));
   menu.setAttribute('role', 'listbox');
   document.body.appendChild(menu);
+  bindSegmentGroup(menu, SELECT_MENU_CONFIG);
 
   let options = [];
   let current = optionsConfig.value === undefined ? '' : optionsConfig.value;
@@ -77,7 +78,7 @@ function createSelect(host, config) {
   };
 
   const renderMenu = () => {
-    menu.replaceChildren();
+    menu.querySelectorAll(':scope > .select-option').forEach((row) => row.remove());
     options.forEach((opt, index) => {
       const row = domEl(
         'button',
@@ -89,6 +90,7 @@ function createSelect(host, config) {
       row.onclick = () => choose(opt.value, true);
       menu.appendChild(row);
     });
+    syncSegmentPill(menu, SELECT_MENU_CONFIG, false);
   };
 
   const reposition = () => {
@@ -138,6 +140,7 @@ function createSelect(host, config) {
     active = Math.max(0, options.findIndex((opt) => opt.value === current));
     renderMenu();
     reposition();
+    syncSegmentPill(menu, SELECT_MENU_CONFIG, true);
     openSelects.add(instance);
   };
 
@@ -299,10 +302,15 @@ const VIEW_CSS = { settings: 'css-settings', usage: 'css-usage', todo: 'css-todo
 
 // ===== 分段指示块：顶栏 tab 与视图内小 tab 共用 hover / 选中逻辑 =====
 // 顶栏的 pill 已在 HTML 中；range/provider 分组在启动时注入 .seg-pill。
+const SELECT_MENU_CONFIG = {selector: '.select-menu', item: '.select-option', active: '.select-option.active', vertical: true};
 const SEGMENT_GROUPS = [
   {selector: '.web-tabs', item: '.web-tab', active: '.web-tab.active'},
   {selector: '.range-group', item: '.range-btn', active: '.range-btn.active'},
-  {selector: '.provider-tabs', item: '.provider-tab', active: '.provider-tab.active'}
+  {selector: '.provider-tabs', item: '.provider-tab', active: '.provider-tab.active'},
+  {selector: 'nav.side', item: 'button', active: 'button.active', vertical: true},
+  {selector: '.command-list', item: '.nav-item', active: '.nav-item.selected', vertical: true, fallback: false},
+  {selector: '.provider-list', item: '.nav-item', active: '.nav-item.selected', vertical: true, fallback: false},
+  SELECT_MENU_CONFIG
 ];
 const segmentPreview = new WeakMap();
 const segmentPillTimers = new WeakMap();
@@ -330,13 +338,19 @@ function segmentTarget(group, config) {
   const preview = segmentPreview.get(group);
   if (preview && preview.hover && preview.hover.isConnected) { return preview.hover; }
   if (preview && preview.focus && preview.focus.isConnected) { return preview.focus; }
-  return group.querySelector(config.active) || group.querySelector(config.item);
+  const active = group.querySelector(config.active);
+  if (active) { return active; }
+  return config.fallback === false ? null : group.querySelector(config.item);
 }
 
 function syncSegmentPill(group, config, immediate) {
   const pill = ensureSegmentPill(group);
   const target = segmentTarget(group, config);
-  if (!target) { return; }
+  if (!target) {
+    pill.style.opacity = '0';
+    delete pill.dataset.segmentSized;
+    return;
+  }
   const groupRect = group.getBoundingClientRect();
   const rect = target.getBoundingClientRect();
   if (!rect.width || !groupRect.width) {
@@ -357,8 +371,15 @@ function syncSegmentPill(group, config, immediate) {
   }
   pill.dataset.segmentSized = '1';
   pill.style.opacity = '1';
-  pill.style.width = rect.width + 'px';
-  pill.style.transform = 'translate3d(' + (rect.left - groupRect.left - group.clientLeft) + 'px, 0, 0)';
+  if (config.vertical) {
+    // offsetTop/Height 不受父级 scale 动画影响，菜单/列表入场时也能量到真实位置。
+    pill.style.height = target.offsetHeight + 'px';
+    pill.style.transform = 'translate3d(0, ' + target.offsetTop + 'px, 0)';
+  } else {
+    const x = rect.left - groupRect.left - group.clientLeft + group.scrollLeft;
+    pill.style.width = rect.width + 'px';
+    pill.style.transform = 'translate3d(' + x + 'px, 0, 0)';
+  }
 }
 
 function setSegmentPreview(group, config, key, item) {
@@ -393,15 +414,19 @@ function bindSegmentGroup(group, config) {
     if (event.relatedTarget && group.contains(event.relatedTarget)) { return; }
     clearSegmentPreview(group, config, 'focus');
   });
-  // active 类由各视图脚本切换，监听类名变化把指示块跟到新的选中项。
+  // active 类由各视图脚本切换；childList 负责列表/下拉选项整批重绘后的重新挂载。
   new MutationObserver((records) => {
     for (const record of records) {
+      if (record.type === 'childList') {
+        syncSegmentPill(group, config, false);
+        return;
+      }
       if (record.target instanceof Element && record.target.matches(config.item)) {
         syncSegmentPill(group, config, false);
         return;
       }
     }
-  }).observe(group, {subtree: true, attributes: true, attributeFilter: ['class']});
+  }).observe(group, {subtree: true, childList: true, attributes: true, attributeFilter: ['class']});
   // Settings 的 provider tabs 位于懒加载子视图里：从 display:none 变为可见时
   // 分组尺寸才会出现，靠 ResizeObserver 补一次直接落位。
   if (typeof ResizeObserver === 'function') {
