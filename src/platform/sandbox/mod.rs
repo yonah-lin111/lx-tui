@@ -1,8 +1,79 @@
 //! 平台沙箱后端与共享根解析。OS 专属实现按 `#[cfg]` 门控在本模块内。
 
-use std::path::Path;
+use std::ffi::{OsStr, OsString};
+use std::path::{Path, PathBuf};
 
 pub mod roots;
+
+#[cfg(target_os = "linux")]
+pub mod bwrap;
+#[cfg(target_os = "macos")]
+pub mod seatbelt;
+
+/// 包装一次命令所需的沙箱规格。
+#[derive(Debug, Clone, Copy)]
+pub struct SandboxSpec<'a> {
+    /// 命令工作目录（已解析为绝对路径）。
+    pub cwd: &'a Path,
+    /// 可写根（已规范化）。
+    pub writable_roots: &'a [PathBuf],
+    /// 保护路径（只读）。
+    pub protected: &'a [PathBuf],
+    /// 是否允许网络。
+    pub network_access: bool,
+}
+
+/// 包装后的程序与参数。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Wrapped {
+    /// 实际启动的程序（`sandbox-exec` / `bwrap`）。
+    pub program: PathBuf,
+    /// 完整参数（含原程序与参数）。
+    pub args: Vec<OsString>,
+}
+
+/// 沙箱包装失败。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum SandboxError {
+    /// 平台后端不可用（缺失二进制或无法创建 namespace）。
+    Unavailable(String),
+    /// 规格非法（相对路径、控制字符等）。
+    Invalid(String),
+}
+
+impl std::fmt::Display for SandboxError {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Unavailable(message) => write!(formatter, "sandbox unavailable: {message}"),
+            Self::Invalid(message) => write!(formatter, "invalid sandbox spec: {message}"),
+        }
+    }
+}
+
+impl std::error::Error for SandboxError {}
+
+/// 按平台包装命令；不支持的平台返回 `Unavailable`（调用方 fail-closed）。
+pub fn wrap(
+    spec: &SandboxSpec<'_>,
+    program: &OsStr,
+    args: &[OsString],
+) -> Result<Wrapped, SandboxError> {
+    #[cfg(target_os = "macos")]
+    {
+        seatbelt::wrap(spec, program, args)
+    }
+    #[cfg(target_os = "linux")]
+    {
+        bwrap::wrap(spec, program, args)
+    }
+    #[cfg(not(any(target_os = "macos", target_os = "linux")))]
+    {
+        let _ = (spec, program, args);
+        Err(SandboxError::Unavailable(
+            "process sandbox is not implemented on this platform".into(),
+        ))
+    }
+}
 
 /// 当前平台的沙箱能力。
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
