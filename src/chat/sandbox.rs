@@ -7,7 +7,18 @@ use std::path::PathBuf;
 
 use crate::config::sandbox::SandboxSettings;
 use crate::config::sandbox::{EscalationPolicy, SandboxMode};
-use crate::platform::sandbox::{self, SandboxSupport};
+use crate::platform::sandbox::{self, SandboxSpec, SandboxSupport};
+
+/// 本次命令的沙箱处置。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CommandSandbox {
+    /// 用平台后端包装。
+    Wrap,
+    /// 不套进程沙箱（danger-full-access 或无进程沙箱的平台）。
+    None,
+    /// 受限档但平台后端缺失：fail-closed。
+    Unavailable,
+}
 
 /// 单次命令的提权覆盖。
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
@@ -108,6 +119,28 @@ impl SandboxPlan {
                 plan.network_access = plan.network_access || *network;
                 plan
             }
+        }
+    }
+
+    /// 本次命令的沙箱处置。
+    pub fn command_sandbox(&self) -> CommandSandbox {
+        if !self.mode.process_sandboxed() || self.support == SandboxSupport::FileToolsOnly {
+            return CommandSandbox::None;
+        }
+        if self.support.supports_process_sandbox() {
+            CommandSandbox::Wrap
+        } else {
+            CommandSandbox::Unavailable
+        }
+    }
+
+    /// 平台层包装规格（调用方仅在 `CommandSandbox::Wrap` 时使用）。
+    pub fn spec<'a>(&'a self, cwd: &'a std::path::Path) -> SandboxSpec<'a> {
+        SandboxSpec {
+            cwd,
+            writable_roots: &self.writable_roots,
+            protected: &self.protected,
+            network_access: self.network_access,
         }
     }
 

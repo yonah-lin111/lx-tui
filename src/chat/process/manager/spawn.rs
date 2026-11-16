@@ -3,12 +3,15 @@
 //! 拆成独立子模块的原因：这部分只与 OS/子进程句柄打交道，和「管理器状态与生命周期」
 //! 是两类职责；单文件行数上限也要求分开。
 
+use std::ffi::{OsStr, OsString};
 use std::path::Path;
 use std::sync::Arc;
 use std::time::Duration;
 
 use tokio::io::AsyncWriteExt;
 use tokio::sync::{mpsc, oneshot};
+
+use crate::platform::sandbox::SandboxSpec;
 
 use super::super::output::OutputSource;
 use super::super::{ExecArgs, ProcessState};
@@ -61,12 +64,14 @@ impl ProcessManager {
         shell: &str,
         args: &ExecArgs,
         cwd: &Path,
+        sandbox: Option<&SandboxSpec<'_>>,
     ) -> Result<(), ProcessError> {
-        let mut command = tokio::process::Command::new(shell);
+        let (program, shell_args) = spawn_command(shell, args, sandbox)?;
+        let mut command = tokio::process::Command::new(program);
         // shell 参数由 platform 决定（POSIX `-l -c` / Windows `/C`）：在 chat/ 里
         // 硬编码 `-l`/`-c` 会让 Windows 上的 exec_command 全部启动失败。
         command
-            .args(crate::platform::shell_arguments(args.login, &args.cmd))
+            .args(shell_args)
             .current_dir(cwd)
             .stdin(std::process::Stdio::piped())
             .stdout(std::process::Stdio::piped())
@@ -105,6 +110,7 @@ impl ProcessManager {
         shell: &str,
         args: &ExecArgs,
         cwd: &Path,
+        sandbox: Option<&SandboxSpec<'_>>,
     ) -> Result<(), ProcessError> {
         use portable_pty::{CommandBuilder, PtySize, native_pty_system};
 
@@ -119,10 +125,11 @@ impl ProcessManager {
             .map_err(|error| {
                 ProcessError::new("spawn_failed", format!("failed to open pty: {error}"))
             })?;
-        let mut builder = CommandBuilder::new(shell);
+        let (program, shell_args) = spawn_command(shell, args, sandbox)?;
+        let mut builder = CommandBuilder::new(program);
         builder.env("TERM", "xterm-256color");
         builder.cwd(cwd);
-        for arg in crate::platform::shell_arguments(args.login, &args.cmd) {
+        for arg in shell_args {
             builder.arg(arg);
         }
         let mut child = pair.slave.spawn_command(builder).map_err(|error| {
@@ -344,5 +351,22 @@ impl ProcessManager {
                 }
             })
             .ok();
+    }
+}
+
+/// 解析实际启动的程序与参数：需要沙箱时交给平台后端包装，否则直接启动 shell。
+fn spawn_command(
+    shell: &str,
+    args: &ExecArgs,
+    sandbox: Option<&SandboxSpec<'_>>,
+) -> Result<(OsString, Vec<OsString>), ProcessError> {
+    let shell_args = crate::platform::shell_arguments(args.login, &args.cmd);
+    match sandbox {
+        None => Ok((OsString::from(shell), shell_args)),
+        Some(spec) => {
+            let wrapped = crate::platform::sandbox::wrap(spec, OsStr::new(shell), &shell_args)
+                .map_err(|error| ProcessError::new("sandbox_unavailable", error.to_string()))?;
+            Ok((wrapped.program.into_os_string(), wrapped.args))
+        }
     }
 }

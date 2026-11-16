@@ -317,7 +317,7 @@ fn begin(
             });
         };
         if let Err(error) = manager
-            .exec_observed(args, &workspace, &message_id, &on_spawn)
+            .exec_observed(args, &workspace, &message_id, None, &on_spawn)
             .await
         {
             let _ = sender.send(AppEvent::UserShellSpawnFailed {

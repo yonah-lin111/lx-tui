@@ -488,6 +488,10 @@ pub async fn run_exec_turn(
         user_message_id.clone(),
     ))
     .with_reads(read_registry(&session_id))
+    .with_sandbox(crate::chat::sandbox::SandboxPlan::for_turn(
+        &crate::config::sandbox::load_sandbox_or_default(),
+        &cwd,
+    ))
     .with_image_support(model.supports_image_input)
     .with_web_search_keys(exa_api_key.clone(), tavily_api_key.clone())
     .with_mcp(

@@ -189,6 +189,10 @@ pub enum ToolErrorCode {
     McpError,
     /// 用户取消（MCP 调用 / 等待中的外部请求）。
     Cancelled,
+    /// 沙箱模式或用户审批拒绝了本次操作。
+    SandboxDenied,
+    /// 当前平台沙箱不可用（缺失后端或 profile 生成失败）。
+    SandboxUnavailable,
 }
 
 impl ToolErrorCode {
@@ -221,6 +225,8 @@ impl ToolErrorCode {
             Self::StaleRead => "stale_read",
             Self::McpError => "mcp_error",
             Self::Cancelled => "cancelled",
+            Self::SandboxDenied => "sandbox_denied",
+            Self::SandboxUnavailable => "sandbox_unavailable",
         }
     }
 }

@@ -147,7 +147,7 @@ impl ProcessManager {
         origin_call_id: &str,
     ) -> Result<ProcessResult, ProcessError> {
         let mut result = self
-            .exec_observed(args, workspace, origin_call_id, &|_| {})
+            .exec_observed(args, workspace, origin_call_id, None, &|_| {})
             .await?;
         result.enforce_output_bounds();
         Ok(result)
@@ -163,6 +163,7 @@ impl ProcessManager {
         args: ExecArgs,
         workspace: &Path,
         origin_call_id: &str,
+        sandbox: Option<&crate::platform::sandbox::SandboxSpec<'_>>,
         on_spawn: &(dyn Fn(u64) + Sync),
     ) -> Result<ProcessResult, ProcessError> {
         self.prune_finished();
@@ -197,9 +198,9 @@ impl ProcessManager {
             self.ui.clone(),
         ));
         let spawned = if args.tty {
-            self.spawn_pty(&handle, &shell, &args, &cwd)
+            self.spawn_pty(&handle, &shell, &args, &cwd, sandbox)
         } else {
-            self.spawn_pipe(&handle, &shell, &args, &cwd)
+            self.spawn_pipe(&handle, &shell, &args, &cwd, sandbox)
         };
         if let Err(error) = spawned {
             handle.settle(ProcessState::Failed {

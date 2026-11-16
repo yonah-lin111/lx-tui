@@ -303,6 +303,10 @@ pub(super) fn start_stream(
     let executor = AgentTools::new(runtime.manager.clone(), turn)
         .with_recorder(std::sync::Arc::new(recorder))
         .with_reads(reads)
+        .with_sandbox(crate::chat::sandbox::SandboxPlan::for_turn(
+            &crate::config::sandbox::load_sandbox_or_default(),
+            &prepared.cwd,
+        ))
         .with_image_support(frozen.supports_image_input)
         .with_web_search_keys(
             state.models.settings.web_search.exa_api_key.clone(),

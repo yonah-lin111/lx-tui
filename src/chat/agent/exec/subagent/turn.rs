@@ -126,6 +126,10 @@ impl ExecSubagentPool {
             child_user_message_id.to_string(),
         ))
         .with_reads(crate::chat::tools::read_registry(child_session_id))
+        .with_sandbox(crate::chat::sandbox::SandboxPlan::for_turn(
+            &crate::config::sandbox::load_sandbox_or_default(),
+            &self.cwd,
+        ))
         .with_image_support(child_model.supports_image_input)
         .with_web_search_keys(self.exa_api_key.clone(), self.tavily_api_key.clone())
         .with_mcp(

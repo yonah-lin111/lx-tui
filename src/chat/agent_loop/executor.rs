@@ -19,9 +19,10 @@ use tokio::sync::Mutex;
 
 use crate::chat::plan::PlanSnapshot;
 use crate::chat::process::{ProcessManager, ProcessResultKind, Rtk};
+use crate::chat::sandbox::{CommandSandbox, SandboxPlan};
 use crate::chat::tools::{
-    MutationRecorder, MutationRecorderFactory, ToolExecutionResult, build_plan_result,
-    parse_exec_args, parse_stdin_args, process_failure,
+    MutationRecorder, MutationRecorderFactory, ToolErrorCode, ToolExecutionResult, ToolFailure,
+    build_plan_result, parse_exec_args, parse_stdin_args, process_failure,
 };
 use crate::db::chat::ToolCallTicket;
 
@@ -105,6 +106,8 @@ pub struct AgentTools {
     mcp: Option<McpRuntime>,
     /// 会话 id：工具结果图片归档目录。
     session_id: String,
+    /// 本轮冻结的沙箱计划。
+    sandbox: SandboxPlan,
 }
 
 /// 本轮 MCP 依赖。
@@ -138,7 +141,14 @@ impl AgentTools {
             rtk: Rtk::detect(),
             mcp: None,
             session_id: String::new(),
+            sandbox: SandboxPlan::unsandboxed(),
         }
+    }
+
+    /// 注入本轮冻结的沙箱计划（生产入口必须调用）。
+    pub fn with_sandbox(mut self, sandbox: SandboxPlan) -> Self {
+        self.sandbox = sandbox;
+        self
     }
 
     /// 注入每轮 mutation recorder 工厂（生产路径必须调用）。
@@ -369,6 +379,17 @@ impl AgentTools {
             // 结果里的 command 仍还原为用户原始命令（卡片/上下文事实不变）。
             let prepared = self.rtk.prepare(&args.cmd);
             args.cmd = prepared.command.clone();
+            let spec = match self.sandbox.command_sandbox() {
+                CommandSandbox::Wrap => Some(self.sandbox.spec(cwd)),
+                CommandSandbox::None => None,
+                CommandSandbox::Unavailable => {
+                    return ToolFailure::new(
+                        ToolErrorCode::SandboxUnavailable,
+                        "process sandbox is unavailable on this platform; install the backend or switch to danger-full-access",
+                    )
+                    .into_result(Vec::new());
+                }
+            };
             // 用 `exec_observed` 提前登记：等待窗口期间也能被本轮停止杀掉。
             let turn = Arc::clone(&self.turn);
             let on_spawn = move |session_id: u64| {
@@ -380,7 +401,7 @@ impl AgentTools {
             };
             return match self
                 .processes
-                .exec_observed(args, cwd, call_id, &on_spawn)
+                .exec_observed(args, cwd, call_id, spec.as_ref(), &on_spawn)
                 .await
             {
                 Ok(mut result) => {

@@ -103,6 +103,42 @@ async fn short_command_returns_real_exit_code_and_output() {
 ///
 /// 真实案例：`pgrep -af ... ; ... | grep -c ...` 的 `grep -c` 在没有匹配时返回 1，
 /// 这是"没找到"这个答案的正常表达，把它标成失败会让界面显示红叉。
+#[cfg(target_os = "macos")]
+#[tokio::test]
+async fn exec_observed_wraps_commands_in_seatbelt() {
+    let dir = TempDir::new("seatbelt");
+    let manager = manager(&dir);
+    let root = std::fs::canonicalize(&dir.path).expect("canonical workspace");
+    let outside = std::env::temp_dir().join(format!(
+        "lx-seatbelt-outside-{}-{}.txt",
+        std::process::id(),
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_nanos())
+            .unwrap_or_default()
+    ));
+    let spec = crate::platform::sandbox::SandboxSpec {
+        cwd: &root,
+        writable_roots: std::slice::from_ref(&root),
+        protected: &[],
+        network_access: false,
+    };
+    let script = format!("echo ok > inside.txt; echo bad > '{}'", outside.display());
+    let result = manager
+        .exec_observed(
+            exec(&script, 5_000),
+            &dir.path,
+            "call-sandbox",
+            Some(&spec),
+            &|_| {},
+        )
+        .await
+        .expect("exec");
+    assert!(dir.path.join("inside.txt").exists());
+    assert!(!outside.exists());
+    assert_ne!(result.exit_code, Some(0));
+}
+
 #[tokio::test]
 async fn non_zero_exit_is_a_result_not_a_failure() {
     let dir = TempDir::new("nonzero");
