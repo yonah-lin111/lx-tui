@@ -315,6 +315,7 @@ pub(crate) fn settle_wait(
             title: record.title.clone(),
             role: record.role,
             status,
+            stopped_by_user: streams.user_stopped.contains(target),
             report,
         });
     }

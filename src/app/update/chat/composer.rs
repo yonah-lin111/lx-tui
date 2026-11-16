@@ -48,8 +48,11 @@ pub(crate) fn refresh_slash_panel(state: &mut AppState, pane: PaneId) {
         return;
     };
     target.lx.with_active_editor(|editor| {
-        // 撤销确认是模态面板，不被命令候选覆盖。
-        if matches!(editor.slash, Some(SlashPanel::Rewind(_))) {
+        // 撤销 / 停止 / 报告确认都是模态面板，不被命令候选覆盖。
+        if matches!(
+            editor.slash,
+            Some(SlashPanel::Rewind(_) | SlashPanel::Stop(_) | SlashPanel::Report(_))
+        ) {
             return;
         }
         if matching.is_empty() {
@@ -147,8 +150,14 @@ pub(crate) fn apply_slash_input(state: &mut AppState, pane: PaneId, command: LxI
             close(state, pane);
             true
         }
-        // 撤销确认是模态面板：其余编辑键不落到 composer，避免面板与草稿错位。
-        _ if matches!(panel, SlashPanel::Rewind(_)) => true,
+        // 撤销 / 停止 / 报告确认是模态面板：其余编辑键不落到 composer，避免面板与草稿错位。
+        _ if matches!(
+            panel,
+            SlashPanel::Rewind(_) | SlashPanel::Stop(_) | SlashPanel::Report(_)
+        ) =>
+        {
+            true
+        }
         _ => false,
     }
 }

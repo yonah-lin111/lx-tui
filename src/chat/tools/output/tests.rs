@@ -1163,6 +1163,7 @@ fn subagent_list_renders_private_tail_only_when_present() {
         role: AgentRole::Explorer,
         title: "inspect".into(),
         status: "completed".into(),
+        stopped_by_user: false,
         queued_count: 0,
         private_tail: tail.map(str::to_string),
     };

@@ -135,6 +135,8 @@ pub struct ChatStreams {
     pub(crate) interrupted_subagents: std::collections::HashSet<String>,
     /// 因 `interrupt_agent` 正在中断当前轮、封口后保持 `idle` 且暂停自动消费队列的 `agent_id` 集合。
     pub(crate) paused_by_interrupt: std::collections::HashSet<String>,
+    /// 被用户从面板主动停止、尚待显式恢复的 `agent_id`（仅内存）。
+    pub(crate) user_stopped: std::collections::HashSet<String>,
     /// spawn 时冻结的模型（父会话与子会话各登记一份）。
     pub(crate) frozen: HashMap<String, crate::app::state::FrozenModel>,
     /// 显式覆写或角色绑定了专属模型的子会话（`child_session_id -> FrozenModel`）。

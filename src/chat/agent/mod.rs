@@ -343,6 +343,8 @@ pub struct AgentListItemView {
     pub role: AgentRole,
     pub title: String,
     pub status: String,
+    /// 是否由用户主动停止（模型据此不得自行恢复）。
+    pub stopped_by_user: bool,
     pub queued_count: usize,
     /// `include_private=true` 时附带的最近一次人类私聊（user + assistant）；默认不返回。
     pub private_tail: Option<String>,
@@ -485,6 +487,8 @@ pub struct AgentStatusView {
     pub role: AgentRole,
     /// `running` / `completed` / `failed` / `cancelled`。
     pub status: String,
+    /// 是否由用户主动停止（模型据此不得自行恢复）。
+    pub stopped_by_user: bool,
     /// 本次等待结算到的报告正文；未结束或已投递过为 None。
     pub report: Option<String>,
 }
@@ -623,6 +627,9 @@ impl SubagentOutcome {
                             {
                                 map.insert("agent_path".into(), Value::String(path.to_string()));
                             }
+                            if agent.stopped_by_user {
+                                map.insert("stopped_by_user".into(), Value::Bool(true));
+                            }
                         }
                         item
                     })
@@ -658,6 +665,9 @@ impl SubagentOutcome {
                             }
                             if let Some(tail) = agent.private_tail.as_deref() {
                                 map.insert("private_tail".into(), Value::String(tail.to_string()));
+                            }
+                            if agent.stopped_by_user {
+                                map.insert("stopped_by_user".into(), Value::Bool(true));
                             }
                         }
                         item
@@ -794,6 +804,10 @@ impl SubagentOutcome {
                             .to_string(),
                         role: AgentRole::parse(agent.get("role")?.as_str()?)?,
                         status: agent.get("status")?.as_str()?.to_string(),
+                        stopped_by_user: agent
+                            .get("stopped_by_user")
+                            .and_then(Value::as_bool)
+                            .unwrap_or(false),
                         report: agent
                             .get("report")
                             .and_then(Value::as_str)
@@ -839,6 +853,10 @@ impl SubagentOutcome {
                             .unwrap_or_default()
                             .to_string(),
                         status: entry.get("status")?.as_str()?.to_string(),
+                        stopped_by_user: entry
+                            .get("stopped_by_user")
+                            .and_then(Value::as_bool)
+                            .unwrap_or(false),
                         queued_count: usize::try_from(
                             entry
                                 .get("queued_count")

@@ -179,7 +179,7 @@ fn context_menu_delete_requires_two_clicks_and_typed_phrase() {
         state
             .effects
             .iter()
-            .any(|eff| matches!(eff, Effect::CancelUserShells { pane } if *pane == pane_id)),
+            .any(|eff| matches!(eff, Effect::CancelUserShells { pane, .. } if *pane == pane_id)),
         "必须中断正在运行的本地命令"
     );
     assert!(
@@ -430,7 +430,7 @@ fn delete_missing_interrupts_and_closes_open_missing_workspace() {
         state
             .effects
             .iter()
-            .any(|eff| matches!(eff, Effect::CancelUserShells { pane } if *pane == pane_id))
+            .any(|eff| matches!(eff, Effect::CancelUserShells { pane, .. } if *pane == pane_id))
     );
     assert!(state.effects.iter().any(
         |effect| matches!(effect, Effect::DeleteWorkspaceHistory { path } if *path == missing)

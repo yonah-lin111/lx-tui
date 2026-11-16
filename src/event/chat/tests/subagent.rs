@@ -884,6 +884,219 @@ async fn selected_cancel_only_stops_the_target_child() {
     assert!(!*second_cancel.borrow(), "其他 running 子 agent 继续");
 }
 
+#[tokio::test]
+async fn user_stop_marks_stopped_and_cancels_queued_inputs() {
+    let (fixture, mut state, key, persistence, mut streams, parent) = fixture_with_parent();
+    let agent_id = spawn_explorer(&mut state, &mut streams, &persistence, &key, "first").await;
+    // 运行中排队第二条输入：停止时它必须一起取消。
+    let queued = op(
+        &mut state,
+        &mut streams,
+        &persistence,
+        &key,
+        SubagentOp::SendInput {
+            target: agent_id.clone(),
+            items: vec![SubagentInputItem::Text {
+                text: "later".into(),
+            }],
+            interrupt: false,
+            trigger_turn: true,
+        },
+    )
+    .await
+    .expect("queued input");
+    assert_eq!(queued.tool_name(), "send_input");
+
+    let stopped = crate::event::chat::subagent::stop_subagents_by_user(
+        &mut state,
+        &mut streams,
+        &persistence,
+        key.pane,
+        &parent,
+        Some(&agent_id),
+    );
+    assert_eq!(stopped, 1);
+    assert!(streams.user_stopped.contains(&agent_id));
+    let handle = streams
+        .subagents
+        .values()
+        .find(|handle| handle.agent_id == agent_id)
+        .expect("handle");
+    assert!(handle.stopped_by_user);
+    assert!(*handle.cancel.borrow(), "在途轮次收到取消信号");
+
+    let database = persistence.database().expect("db");
+    let queues = database
+        .subagent_queue_states(fixture.workspace(), &parent)
+        .expect("queues");
+    assert_eq!(queues.get(&agent_id).map_or(0, |q| q.queued_count), 0);
+    let run = state
+        .pane_anywhere(key.pane)
+        .unwrap()
+        .lx
+        .agents
+        .by_agent(&agent_id)
+        .expect("run");
+    assert!(run.stopped_by_user);
+    assert_eq!(run.display_status(), "stopped");
+    assert_eq!(run.queued_count, 0);
+}
+
+#[tokio::test]
+async fn user_stop_produces_no_report_on_settlement() {
+    let (fixture, mut state, key, persistence, mut streams, parent) = fixture_with_parent();
+    let agent_id = spawn_explorer(&mut state, &mut streams, &persistence, &key, "report?").await;
+    crate::event::chat::subagent::stop_subagents_by_user(
+        &mut state,
+        &mut streams,
+        &persistence,
+        key.pane,
+        &parent,
+        Some(&agent_id),
+    );
+    let child_session = streams
+        .subagents
+        .values()
+        .find(|handle| handle.agent_id == agent_id)
+        .map(|handle| handle.child_session_id.clone())
+        .expect("handle");
+    crate::event::chat::subagent::finish_subagent(
+        &mut state,
+        &mut streams,
+        &persistence,
+        RequestKey {
+            pane: key.pane,
+            session: child_session,
+            generation: key.generation,
+        },
+        crate::chat::events::StopReason::Cancelled,
+        crate::db::chat::Usage::default(),
+    );
+    let pending = persistence
+        .database()
+        .expect("db")
+        .pending_reports(fixture.workspace(), &parent)
+        .expect("pending");
+    assert!(pending.is_empty(), "用户主动停止不得生成报告");
+}
+
+#[tokio::test]
+async fn wait_and_list_mark_stopped_by_user() {
+    let (_fixture, mut state, key, persistence, mut streams, parent) = fixture_with_parent();
+    let agent_id = spawn_explorer(&mut state, &mut streams, &persistence, &key, "stop me").await;
+    crate::event::chat::subagent::stop_subagents_by_user(
+        &mut state,
+        &mut streams,
+        &persistence,
+        key.pane,
+        &parent,
+        Some(&agent_id),
+    );
+    // 取消后句柄仍在结算路径；wait 结算必须带 stopped_by_user。
+    let waited = crate::event::chat::subagent::settle_wait(
+        &mut streams,
+        &persistence,
+        &key,
+        std::slice::from_ref(&agent_id),
+        false,
+        false,
+        crate::chat::agent::WaitMode::Any,
+    )
+    .expect("wait");
+    match waited {
+        SubagentOutcome::Waited { agents, .. } => {
+            assert_eq!(agents.len(), 1);
+            assert!(agents[0].stopped_by_user);
+        }
+        other => panic!("expected waited, got {other:?}"),
+    }
+
+    let listed = op(
+        &mut state,
+        &mut streams,
+        &persistence,
+        &key,
+        SubagentOp::List {
+            path_prefix: None,
+            include_private: false,
+        },
+    )
+    .await
+    .expect("list");
+    match listed {
+        SubagentOutcome::Listed { agents } => {
+            assert!(
+                agents.iter().any(|agent| agent.agent_id == agent_id
+                    && agent.stopped_by_user),
+                "list_agents 必须标记 stopped_by_user"
+            );
+        }
+        other => panic!("expected listed, got {other:?}"),
+    }
+}
+
+#[tokio::test]
+async fn send_input_wakes_user_stopped_agent() {
+    let (_fixture, mut state, key, persistence, mut streams, parent) = fixture_with_parent();
+    let agent_id = spawn_explorer(&mut state, &mut streams, &persistence, &key, "wake me").await;
+    crate::event::chat::subagent::stop_subagents_by_user(
+        &mut state,
+        &mut streams,
+        &persistence,
+        key.pane,
+        &parent,
+        Some(&agent_id),
+    );
+    let resumed = op(
+        &mut state,
+        &mut streams,
+        &persistence,
+        &key,
+        SubagentOp::SendInput {
+            target: agent_id.clone(),
+            items: vec![SubagentInputItem::Text {
+                text: "keep going".into(),
+            }],
+            interrupt: false,
+            trigger_turn: true,
+        },
+    )
+    .await
+    .expect("wake via send_input");
+    assert_eq!(resumed.tool_name(), "send_input");
+    assert!(
+        !streams.user_stopped.contains(&agent_id),
+        "显式唤醒后解除用户停止标记"
+    );
+}
+
+#[tokio::test]
+async fn resume_wakes_user_stopped_agent() {
+    let (_fixture, mut state, key, persistence, mut streams, parent) = fixture_with_parent();
+    let agent_id = spawn_explorer(&mut state, &mut streams, &persistence, &key, "resume me").await;
+    crate::event::chat::subagent::stop_subagents_by_user(
+        &mut state,
+        &mut streams,
+        &persistence,
+        key.pane,
+        &parent,
+        Some(&agent_id),
+    );
+    let resumed = op(
+        &mut state,
+        &mut streams,
+        &persistence,
+        &key,
+        SubagentOp::Resume {
+            id: agent_id.clone(),
+        },
+    )
+    .await
+    .expect("resume");
+    assert_eq!(resumed.tool_name(), "resume_agent");
+    assert!(!streams.user_stopped.contains(&agent_id));
+}
+
 #[test]
 fn deleting_the_parent_session_cancels_live_children() {
     let (fixture, _state, key, persistence, mut streams, parent) = fixture_with_parent();
@@ -912,6 +1125,7 @@ fn deleting_the_parent_session_cancels_live_children() {
             started_at_ms: 0,
             max_tokens: None,
             closed_without_report: false,
+            stopped_by_user: false,
             notify_parent: true,
             mutation_user_id: std::sync::Arc::new(std::sync::RwLock::new(String::new())),
             chat: crate::app::state::LxChat::new(),

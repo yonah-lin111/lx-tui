@@ -771,6 +771,7 @@ fn consecutive_wait_agent_calls_stay_as_separate_cards() {
                 role: AgentRole::Explorer,
                 title: "task".into(),
                 status: "completed".into(),
+                stopped_by_user: false,
                 report: None,
             })
             .collect();

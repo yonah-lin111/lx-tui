@@ -211,6 +211,7 @@ pub(super) fn launch_child_turn(
         started_at_ms,
         max_tokens: limits.max_tokens,
         closed_without_report: false,
+        stopped_by_user: false,
         notify_parent,
         mutation_user_id: mutation_user_id.clone(),
         chat: child_chat,

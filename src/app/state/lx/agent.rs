@@ -59,6 +59,8 @@ pub struct SubagentRun {
     pub task: String,
     /// `running` / `idle` / `blocked` / `completed` / `failed` / `cancelled` / `interrupted`。
     pub status: String,
+    /// 是否由用户主动停止（仅内存；DB 仍为 `cancelled`）。
+    pub stopped_by_user: bool,
     /// 当前未处理的排队输入数。
     pub queued_count: usize,
     /// 启动时刻（UTC 毫秒）。
@@ -128,6 +130,7 @@ impl SubagentRun {
             // 旧记录没有单独 title；这里不拿 task 首行冒充标题，保持为空。
             task: record.title.clone(),
             status: record.status.clone(),
+            stopped_by_user: false,
             queued_count: 0,
             started_at_ms: record.created_at_ms,
             completed_at_ms: record.completed_at_ms,
@@ -178,6 +181,15 @@ impl SubagentRun {
     /// 是否仍在运行。
     pub fn is_running(&self) -> bool {
         self.status == "running"
+    }
+
+    /// 列表/详情展示状态：用户主动停止显示 `stopped`，其余沿用持久化状态。
+    pub fn display_status(&self) -> &str {
+        if self.stopped_by_user {
+            "stopped"
+        } else {
+            self.status.as_str()
+        }
     }
 
     /// 层级深度：`/root` -> 0，`/root/turing` -> 1，`/root/turing/curie` -> 2。
@@ -486,6 +498,14 @@ impl AgentsState {
     /// 仍在运行的子 agent 数（底边框运行指标）。
     pub fn running_count(&self) -> usize {
         self.runs.iter().filter(|run| run.is_running()).count()
+    }
+
+    /// 可停止的子 agent 数：运行中，或空闲但仍有排队输入。
+    pub fn stoppable_count(&self) -> usize {
+        self.runs
+            .iter()
+            .filter(|run| run.is_running() || run.queued_count > 0)
+            .count()
     }
 
     /// 阻塞（队首输入校验失败）的子 agent 数（底边框异常提醒）。

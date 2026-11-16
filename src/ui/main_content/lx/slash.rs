@@ -18,9 +18,11 @@ use super::mention;
 ///
 /// 返回的 `CommandItem` 只借用 `panel` 与 `time_labels`（含 `&'static str` 占位），
 /// 无自有字符串；相对时间由调用方预先算好并以切片传入，避免在条目里持有临时值。
+/// 面板条目；`extra_tags` 是停止/报告面板的右端标签（计数或禁用原因）。
 pub(super) fn items<'a>(
     panel: &'a crate::app::state::SlashPanel,
     time_labels: &'a [String],
+    extra_tags: &'a [String],
 ) -> Vec<CommandItem<'a>> {
     use crate::app::state::{ModelPickerStage, SlashPanel};
     match panel {
@@ -151,6 +153,31 @@ pub(super) fn items<'a>(
                 }
             })
             .collect(),
+        SlashPanel::Stop(panel) => panel
+            .actions
+            .iter()
+            .enumerate()
+            .map(|(index, action)| CommandItem::Inline {
+                label: stop_action_label(*action),
+                preview: "",
+                tag: extra_tags.get(index).map_or("", String::as_str),
+            })
+            .collect(),
+        SlashPanel::Report(panel) => panel
+            .actions
+            .iter()
+            .map(|action| CommandItem::Inline {
+                label: report_action_label(*action),
+                preview: "",
+                tag: if *action == crate::app::state::ReportAction::Resend
+                    && !panel.enabled(*action)
+                {
+                    text::detail::LX_REPORT_NO_PREVIOUS
+                } else {
+                    ""
+                },
+            })
+            .collect(),
         SlashPanel::Mcp(panel) => {
             if panel.entries.is_empty() {
                 return vec![CommandItem::Inline {
@@ -193,6 +220,68 @@ fn action_label(action: crate::app::state::RewindAction) -> &'static str {
     }
 }
 
+/// 当前面板的额外右端标签（只有停止面板用计数/禁用原因）。
+fn panel_tags(panel: &crate::app::state::SlashPanel) -> Vec<String> {
+    match panel {
+        crate::app::state::SlashPanel::Stop(stop) => stop_tags(stop),
+        _ => Vec::new(),
+    }
+}
+
+/// 停止动作文案（集中 `ui::text`）。
+fn stop_action_label(action: crate::app::state::StopAction) -> &'static str {
+    use crate::app::state::StopAction;
+    match action {
+        StopAction::All => text::LX_STOP_ACTION_ALL,
+        StopAction::Main => text::LX_STOP_ACTION_MAIN,
+        StopAction::Subagents => text::LX_STOP_ACTION_SUBAGENTS,
+        StopAction::Shells => text::LX_STOP_ACTION_SHELLS,
+        StopAction::Cancel => text::LX_STOP_ACTION_CANCEL,
+    }
+}
+
+/// 报告动作文案。
+fn report_action_label(action: crate::app::state::ReportAction) -> &'static str {
+    use crate::app::state::ReportAction;
+    match action {
+        ReportAction::Resend => text::detail::LX_REPORT_ACTION_RESEND,
+        ReportAction::Regenerate => text::detail::LX_REPORT_ACTION_REGENERATE,
+        ReportAction::Cancel => text::detail::LX_REPORT_ACTION_CANCEL,
+    }
+}
+
+/// 停止面板每行的右端标签：可用时给计数，禁用时给原因。
+fn stop_tags(panel: &crate::app::state::StopPanel) -> Vec<String> {
+    use crate::app::state::StopAction;
+    panel
+        .actions
+        .iter()
+        .map(|action| match action {
+            StopAction::Main if !panel.enabled(*action) => {
+                text::LX_STOP_UNAVAILABLE_MAIN.to_string()
+            }
+            StopAction::Subagents if !panel.enabled(*action) => {
+                text::LX_STOP_UNAVAILABLE_SUBAGENTS.to_string()
+            }
+            StopAction::Subagents => format!("{} running", panel.availability.subagents),
+            StopAction::Shells if !panel.enabled(*action) => {
+                text::LX_STOP_UNAVAILABLE_SHELLS.to_string()
+            }
+            StopAction::Shells => shell_count_label(panel.availability),
+            _ => String::new(),
+        })
+        .collect()
+}
+
+/// 用户 shell 与受管后台进程的合并计数。
+fn shell_count_label(availability: crate::app::state::StopAvailability) -> String {
+    match (availability.shells, availability.processes) {
+        (0, processes) => format!("{processes} processes"),
+        (shells, 0) => format!("{shells} shells"),
+        (shells, processes) => format!("{shells} shells · {processes} processes"),
+    }
+}
+
 /// 历史/分支条目的相对时间标签（与 `items` 的过滤视图同序）；其它面板为空。
 pub(super) fn history_time_labels(panel: &crate::app::state::SlashPanel) -> Vec<String> {
     match panel {
@@ -220,17 +309,32 @@ fn is_placeholder(panel: &crate::app::state::SlashPanel) -> bool {
         crate::app::state::SlashPanel::Fork(_) => false,
         crate::app::state::SlashPanel::Commands { .. } => false,
         crate::app::state::SlashPanel::Rewind(_) => false,
+        crate::app::state::SlashPanel::Stop(_) => false,
+        crate::app::state::SlashPanel::Report(_) => false,
         crate::app::state::SlashPanel::Mcp(p) => p.entries.is_empty() || p.is_filter_empty(),
     }
 }
 
-/// 面板各可见行的置灰掩码（仅 `/mcp` 面板对 `Disabled in settings` 行置灰）。
+/// 面板各可见行的置灰掩码（`/mcp` 的设置禁用行、停止/报告面板的不可用动作）。
 fn disabled_mask(panel: &crate::app::state::SlashPanel) -> Option<Vec<bool>> {
     match panel {
         crate::app::state::SlashPanel::Mcp(mcp) if !is_placeholder(panel) => Some(
             mcp.visible()
                 .into_iter()
                 .map(crate::app::state::McpPanelEntry::is_settings_disabled)
+                .collect(),
+        ),
+        crate::app::state::SlashPanel::Stop(stop) => Some(
+            stop.actions
+                .iter()
+                .map(|action| !stop.enabled(*action))
+                .collect(),
+        ),
+        crate::app::state::SlashPanel::Report(report) => Some(
+            report
+                .actions
+                .iter()
+                .map(|action| !report.enabled(*action))
                 .collect(),
         ),
         _ => None,
@@ -286,6 +390,16 @@ fn view<'a>(
                 )
             }
         }
+        SlashPanel::Stop(panel) => (
+            text::LX_STOP_PANEL_TITLE,
+            panel.window,
+            text::LX_STOP_PANEL_FOOTER,
+        ),
+        SlashPanel::Report(panel) => (
+            text::detail::LX_REPORT_PANEL_TITLE,
+            panel.window,
+            text::detail::LX_REPORT_PANEL_FOOTER,
+        ),
         SlashPanel::Mcp(panel) => (
             text::LX_MCP_PANEL_TITLE,
             panel.window,
@@ -294,6 +408,11 @@ fn view<'a>(
     };
     // 撤销面板顶边右侧固定说明恢复范围。
     let right_title = match panel {
+        SlashPanel::Stop(_) => Some(text::LX_STOP_SCOPE),
+        SlashPanel::Report(panel) => Some(match panel.target {
+            crate::app::state::DetailTarget::Agent(_) => text::detail::LX_REPORT_SCOPE_AGENT,
+            crate::app::state::DetailTarget::Btw(_) => text::detail::LX_REPORT_SCOPE_BTW,
+        }),
         SlashPanel::Rewind(panel) => Some(match panel.scope() {
             crate::app::state::RewindScope::Turn => text::LX_REWIND_SCOPE,
             crate::app::state::RewindScope::Compact => text::LX_COMPACT_SCOPE,
@@ -362,7 +481,8 @@ pub(crate) fn layout(area: Rect, lx: &Lx) -> Option<PanelLayout> {
     let panel = editor.slash.as_ref()?;
     let input = super::input_rect(area, lx)?;
     let time_labels = history_time_labels(panel);
-    let items = items(panel, &time_labels);
+    let extra_tags = panel_tags(panel);
+    let items = items(panel, &time_labels, &extra_tags);
     let disabled = disabled_mask(panel);
     command_panel::layout(
         area_of(input, area),
@@ -380,7 +500,8 @@ pub(crate) fn item_at(area: Rect, lx: &Lx, column: u16, row: u16) -> Option<usiz
     }
     let input = super::input_rect(area, lx)?;
     let time_labels = history_time_labels(panel);
-    let items = items(panel, &time_labels);
+    let extra_tags = panel_tags(panel);
+    let items = items(panel, &time_labels, &extra_tags);
     let disabled = disabled_mask(panel);
     let layout = command_panel::layout(
         area_of(input, area),
@@ -399,7 +520,8 @@ pub(super) fn render(area: Rect, buf: &mut ratatui::buffer::Buffer, lx: &Lx) {
         return;
     };
     let time_labels = history_time_labels(panel);
-    let items = items(panel, &time_labels);
+    let extra_tags = panel_tags(panel);
+    let items = items(panel, &time_labels, &extra_tags);
     let disabled = disabled_mask(panel);
     command_panel::render(
         area_of(input, area),

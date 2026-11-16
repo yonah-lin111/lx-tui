@@ -550,6 +550,31 @@ impl Database {
         Ok(())
     }
 
+    /// 用户主动停止时取消指定 agent 的全部 `queued` 输入；返回取消条数。
+    ///
+    /// 不改 `running` 行：在途轮次由取消信号收敛，结算后自然落库。
+    pub fn cancel_queued_inputs_for_agent(
+        &self,
+        workspace: &Path,
+        parent_session: &str,
+        agent_id: &str,
+    ) -> Result<usize> {
+        let workspace_external = self
+            .workspace_external_id(workspace)?
+            .ok_or(DbError::WorkspaceMissing)?;
+        let now = now_ms();
+        let transaction = self.conn.unchecked_transaction()?;
+        ensure_agent_owned(&transaction, agent_id, parent_session, &workspace_external)?;
+        let cancelled = transaction.execute(
+            r#"UPDATE agent_subagent_input
+               SET status = 'cancelled', completed_at_ms = ?1, error_code = NULL
+               WHERE agent_id = ?2 AND status = 'queued'"#,
+            params![now, agent_id],
+        )?;
+        transaction.commit()?;
+        Ok(cancelled)
+    }
+
     /// 批量读取当前父会话下所有子 agent 的队列统计（`queued_count`、队首 `error_code`、最近输入状态）。
     pub fn subagent_queue_states(
         &self,

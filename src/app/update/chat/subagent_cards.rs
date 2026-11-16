@@ -31,6 +31,7 @@ impl RunCardSnapshot {
             title: self.title.clone(),
             role: self.role,
             status: self.status.clone(),
+            stopped_by_user: false,
             report: self
                 .report
                 .as_ref()

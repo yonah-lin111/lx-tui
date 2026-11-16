@@ -25,7 +25,7 @@ use crate::platform::EnvironmentFacts;
 pub const AGENT_NAME: &str = "lx";
 
 /// 系统提示词版本：提示词语义变化时必须递增（测试与日志据此判定版本）。
-pub const PROMPT_VERSION: &str = "lx-14";
+pub const PROMPT_VERSION: &str = "lx-15";
 
 /// 环境快照单字段最大字符数（转义前）。
 const MAX_FIELD_CHARS: usize = 240;
@@ -132,6 +132,7 @@ Rules:
 - Start a subagent, keep working, and call `wait_agent` when needed (`wait_for: \"any\"` for first result; default `\"all\"` waits until done). Prefer long waits (minutes).
 - Use `send_input` for follow-ups (`interrupt: false` queues; `interrupt: true` cancels the current turn and runs next; `trigger_turn: false` queues without waking an `idle` subagent).
 - Use `interrupt_agent` to stop a running turn while keeping the agent `idle` and producing a partial report; `close_agent` cascades to descendants and stops without a report.
+- A subagent may be stopped by the user from the task panel. That stop is an explicit user decision: do not resume it or send it more work unless the user explicitly asks you to continue that subagent. `wait_agent` and `list_agents` mark such agents with `stopped_by_user: true`.
 - Call `resume_agent` before `send_input` on a finished/failed/closed agent; use `list_agents` (optional `path_prefix`) to inspect status and `cancel_agent_input` (`submission_id`) if a queued image is `blocked`.
 - The user can send private follow-ups directly to a subagent; those turns are not reported to you. Do not call `list_agents(include_private: true)` unless the user explicitly asks you to inspect that private conversation.
 
@@ -557,7 +558,12 @@ mod tests {
                 "提示缺少 ask 规则 `{needle}`"
             );
         }
-        assert_eq!(PROMPT_VERSION, "lx-14");
+        assert_eq!(PROMPT_VERSION, "lx-15");
+        assert!(
+            LX_SYSTEM_PROMPT.contains("stopped_by_user: true")
+                && LX_SYSTEM_PROMPT.contains("do not resume it"),
+            "提示必须约束用户主动停止后的自动恢复"
+        );
         assert!(
             LX_SYSTEM_PROMPT.contains("You can call these tools:")
                 && LX_SYSTEM_PROMPT.contains("`ask`"),

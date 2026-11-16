@@ -329,6 +329,7 @@ fn outcome_json_roundtrips() {
                     title: "compact entry".into(),
                     role: AgentRole::Explorer,
                     status: "completed".into(),
+                    stopped_by_user: false,
                     report: Some("found it".into()),
                 },
                 AgentStatusView {
@@ -338,6 +339,7 @@ fn outcome_json_roundtrips() {
                     title: "fix tests".into(),
                     role: AgentRole::Executor,
                     status: "running".into(),
+                    stopped_by_user: false,
                     report: None,
                 },
             ],
@@ -369,6 +371,7 @@ fn outcome_json_roundtrips() {
                 role: AgentRole::Explorer,
                 title: "inspect".into(),
                 status: "idle".into(),
+                stopped_by_user: false,
                 queued_count: 1,
                 private_tail: None,
             }],

@@ -331,6 +331,11 @@ pub fn apply_lx_input(state: &mut AppState, command: LxInput) {
                         lx.slash = None;
                         lx.rewind.panel = None;
                     }
+                    // 停止 / 报告面板 Esc：只关面板，不清输入框。
+                    super::super::state::SlashPanel::Stop(_)
+                    | super::super::state::SlashPanel::Report(_) => {
+                        lx.slash = None;
+                    }
                     // 真正关闭二级面板（`/model` 第一级、`/resume`、命令候选）：整框清空。
                     // 命令候选面板（`/`）不清：它的过滤词就是命令本身，由
                     // `accept_slash_command` 按行删除，`Esc` 关闭时草稿应原样保留。

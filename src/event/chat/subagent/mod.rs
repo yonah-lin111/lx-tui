@@ -107,6 +107,8 @@ pub(crate) struct SubagentHandle {
     pub max_tokens: Option<u64>,
     /// `close_agent` / 窗格或应用关闭：结算时不生成半程汇报。
     pub closed_without_report: bool,
+    /// 用户主动停止：不生成报告，等待用户显式恢复。
+    pub stopped_by_user: bool,
     /// 本轮完成后是否向主 agent 投递报告；人类私聊输入为 false。
     pub notify_parent: bool,
     /// 当前轮文件 mutation 归属的 user 消息 id；轮内 steer 会切换到新 user 消息。
@@ -570,6 +572,7 @@ fn list_agents(
                 role: record.role,
                 title: record.title.clone(),
                 status: projected_agent_status(streams, record, q),
+                stopped_by_user: streams.user_stopped.contains(&record.agent_id),
                 queued_count: q.map_or(0, |s| s.queued_count),
                 private_tail: include_private
                     .then(|| {
@@ -793,6 +796,115 @@ pub(crate) fn cancel_for_session(
     cancelled
 }
 
+/// 用户主动停止：标记目标子树 `stopped_by_user`、取消在途轮次与排队输入。
+///
+/// 与 [`cancel_for_session`] 的区别：
+/// - 只停目标（`Some`）或整棵当前会话树（`None`），不涉及会话删除；
+/// - 不设置 `closed_without_report`，结算时按 `stopped_by_user` 抑制报告；
+/// - 队列输入全部取消，恢复后只执行新输入；
+/// - 标记保留在 `ChatStreams.user_stopped`，直到用户显式恢复。
+///
+/// 返回被标记的 agent 数（用于 Toast）。
+pub(crate) fn stop_subagents_by_user(
+    state: &mut AppState,
+    streams: &mut ChatStreams,
+    persistence: &Persistence,
+    pane: PaneId,
+    session_id: &str,
+    agent_id: Option<&str>,
+) -> usize {
+    let Some(workspace) = workspace_for_pane(state, pane) else {
+        return 0;
+    };
+    let Some(database) = persistence.database() else {
+        return 0;
+    };
+    let tree = runner::load_subagent_tree(database, &workspace, session_id);
+    let selected_paths: Vec<String> = match agent_id {
+        Some(target) => match runner::resolve_tree_target(&tree, target) {
+            Some(record) => runner::subtree_paths(&tree.records, &record.agent_path),
+            None => return 0,
+        },
+        None => tree
+            .records
+            .iter()
+            .map(|record| record.agent_path.clone())
+            .collect(),
+    };
+    let selected = |path: &str| {
+        selected_paths
+            .iter()
+            .any(|target| path.eq_ignore_ascii_case(target))
+    };
+    let selected_records: Vec<&SubagentRecord> = tree
+        .records
+        .iter()
+        .filter(|record| selected(&record.agent_path))
+        .collect();
+    if selected_records.is_empty() {
+        return 0;
+    }
+
+    // 1. 先写内存标记：即使 handle 在本帧结算，后续状态投影也不会丢失用户意图。
+    let mut stopped = 0usize;
+    for record in &selected_records {
+        streams.user_stopped.insert(record.agent_id.clone());
+        stopped += 1;
+        // 2. 取消该 agent 自己的排队输入（孙 agent 各自有独立父会话）。
+        if let Err(error) = database.cancel_queued_inputs_for_agent(
+            &workspace,
+            &record.parent_session_id,
+            &record.agent_id,
+        ) {
+            tracing::warn!(
+                %error,
+                agent_id = %record.agent_id,
+                "cancelling queued subagent inputs failed"
+            );
+        }
+    }
+
+    // 3. 取消在途 handle，并清掉“自动恢复”标记。
+    let selected_agent_ids: std::collections::HashSet<&str> = selected_records
+        .iter()
+        .map(|record| record.agent_id.as_str())
+        .collect();
+    let mut dead = Vec::new();
+    for (child, handle) in &mut streams.subagents {
+        if !selected_agent_ids.contains(handle.agent_id.as_str()) && !selected(&handle.agent_path) {
+            continue;
+        }
+        handle.stopped_by_user = true;
+        if handle.cancel.send(true).is_err() {
+            dead.push(child.clone());
+        }
+    }
+    for id in selected_agent_ids {
+        streams.resumed_subagents.remove(id);
+        streams.interrupted_subagents.remove(id);
+        streams.paused_by_interrupt.remove(id);
+    }
+    for child in dead {
+        streams.subagents.remove(&child);
+        streams.frozen.remove(&child);
+    }
+
+    // 4. 立刻把 UI 标成 stopped、队列清零；结算回执随后只更新正文与终态。
+    if let Some(target) = state.pane_mut_anywhere(pane) {
+        for record in &selected_records {
+            if let Some(run) = target.lx.agents.by_agent_mut(&record.agent_id) {
+                run.stopped_by_user = true;
+                run.queued_count = 0;
+                run.completed_at_ms.get_or_insert_with(crate::db::now_ms);
+                run.rows_dirty = true;
+            }
+        }
+        target.lx.sync_mention_subagent_runs();
+    }
+    update::request_subagent_cards_refresh(state, pane);
+    stopped
+}
+
 /// 应用子 agent 效应（列表、懒加载、停止、报告投递）。
 pub fn apply_subagent_effects(
     state: &mut AppState,
@@ -808,6 +920,7 @@ pub fn apply_subagent_effects(
                 Effect::ListSubagents { .. }
                     | Effect::LoadSubagentSession { .. }
                     | Effect::CancelSubagents { .. }
+                    | Effect::StopSubagentsByUser { .. }
                     | Effect::DrainSubagentReports { .. }
                     | Effect::SendSubagentUserInput { .. }
                     | Effect::SteerSubagent { .. }
@@ -824,6 +937,7 @@ pub fn apply_subagent_effects(
             Effect::ListSubagents { .. }
                 | Effect::LoadSubagentSession { .. }
                 | Effect::CancelSubagents { .. }
+                | Effect::StopSubagentsByUser { .. }
                 | Effect::DrainSubagentReports { .. }
                 | Effect::SendSubagentUserInput { .. }
                 | Effect::SteerSubagent { .. }
@@ -858,6 +972,15 @@ pub fn apply_subagent_effects(
                             && run.queued_count != queue.queued_count
                         {
                             run.queued_count = queue.queued_count;
+                            changed = true;
+                        }
+                    }
+                    // 用户停止状态只在内存 streams 里；列表刷新必须回写，避免被 DB
+                    // 的 `cancelled` 覆盖回普通取消。
+                    for run in &mut target.lx.agents.runs {
+                        let stopped = streams.user_stopped.contains(&run.agent_id);
+                        if run.stopped_by_user != stopped {
+                            run.stopped_by_user = stopped;
                             changed = true;
                         }
                     }
@@ -951,6 +1074,51 @@ pub fn apply_subagent_effects(
                         }
                     }
                 };
+            }
+            Effect::StopSubagentsByUser {
+                session_id,
+                agent_id,
+            } => {
+                let pane = state.all_pane_ids().into_iter().find(|pane| {
+                    state
+                        .pane_anywhere(*pane)
+                        .and_then(|target| target.lx.chat.session_id.as_deref())
+                        == Some(session_id.as_str())
+                });
+                if let Some(pane) = pane {
+                    let stopped = stop_subagents_by_user(
+                        state,
+                        streams,
+                        persistence,
+                        pane,
+                        &session_id,
+                        agent_id.as_deref(),
+                    );
+                    if stopped == 0 {
+                        crate::app::update::show_lx_toast(
+                            state,
+                            pane,
+                            crate::app::toast::Toast::new(
+                                crate::app::toast::ToastKind::Warning,
+                                crate::ui::text::LX_NOTHING_TO_STOP,
+                                Some(pane),
+                                std::time::Instant::now(),
+                            ),
+                        );
+                    } else {
+                        crate::app::update::show_lx_toast(
+                            state,
+                            pane,
+                            crate::app::toast::Toast::new(
+                                crate::app::toast::ToastKind::Default,
+                                crate::ui::text::stopped_subagents(stopped),
+                                Some(pane),
+                                std::time::Instant::now(),
+                            ),
+                        );
+                    }
+                    changed = true;
+                }
             }
             Effect::DrainSubagentReports { pane } => {
                 changed |= drain_reports(state, persistence, pane);

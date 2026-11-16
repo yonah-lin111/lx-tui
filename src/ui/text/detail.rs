@@ -40,3 +40,26 @@ pub const LX_BTW_RESET_EMPTY: &str = "No side thread to clear";
 
 /// 详情命令必须整段独立输入。
 pub const LX_DETAIL_COMMAND_STANDALONE: &str = "Run this command on its own line";
+
+// ===== 报告二级面板 =====
+
+/// 报告面板标题。
+pub const LX_REPORT_PANEL_TITLE: &str = "Report";
+/// 报告面板底边快捷键提示。
+pub const LX_REPORT_PANEL_FOOTER: &str = "↑↓ select · ↵ run · esc close";
+/// 报告面板右端来源（Agents）。
+pub const LX_REPORT_SCOPE_AGENT: &str = "subagent";
+/// 报告面板右端来源（BTW）。
+pub const LX_REPORT_SCOPE_BTW: &str = "btw";
+/// 三项动作文案（顺序与 `ReportAction::ALL` 一致）。
+pub const LX_REPORT_ACTION_RESEND: &str = "Resend last report";
+pub const LX_REPORT_ACTION_REGENERATE: &str = "Regenerate report";
+pub const LX_REPORT_ACTION_CANCEL: &str = "Cancel";
+/// `Resend` 不可用原因。
+pub const LX_REPORT_NO_PREVIOUS: &str = "No previous report";
+/// 打开面板后目标被切走。
+pub const LX_REPORT_TARGET_CHANGED: &str = "Report target changed";
+/// 报告生成失败或正文为空。
+pub const LX_REPORT_UNAVAILABLE: &str = "Report unavailable";
+/// BTW 合并报告全部失败。
+pub const LX_BTW_REPORT_UNAVAILABLE: &str = "BTW report unavailable";

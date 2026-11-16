@@ -132,6 +132,10 @@ fn arm(state: &mut AppState, pane: PaneId) -> Option<()> {
     if target.view != crate::app::state::PaneView::Lx {
         return None;
     }
+    // 有主轮/subagent/shell/受管进程可停时，Esc 归停止面板，不做撤销待命。
+    if crate::app::state::StopAvailability::from_lx(&target.lx).any() {
+        return None;
+    }
     // 忙时保留现有双 Esc 停止语义；草稿非空或根本没有聊天用户轮次时不进入撤销。
     //
     // 本地命令不占用 `RequestState`：命令在跑时仍是 `Idle`，且命令卡片 `role == "user"`。
@@ -158,12 +162,6 @@ fn arm(state: &mut AppState, pane: PaneId) -> Option<()> {
     let target = state.pane_mut_anywhere(pane)?;
     target.lx.rewind.armed_at = Some(Instant::now());
     target.lx.chat.stop_armed_at = None;
-    show_lx_hint(
-        state,
-        pane,
-        InputHintLevel::Warning,
-        text::LX_REWIND_ARMED_HINT,
-    );
     Some(())
 }
 

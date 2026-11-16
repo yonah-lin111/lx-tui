@@ -32,6 +32,7 @@ pub mod rewind;
 mod session;
 mod slash;
 mod steer;
+mod stop;
 pub(crate) mod subagent;
 mod subagent_cards;
 mod task_page;
@@ -720,8 +721,9 @@ pub(crate) fn request_report_drain_if_idle(state: &mut AppState, pane: PaneId) -
 /// Esc 停止的待命窗口：窗口内再按一次才真正停止（与撤销待命统一为 3 秒）。
 pub const STOP_ARM_WINDOW: Duration = Duration::from_secs(3);
 
-/// 流中按 `Esc`：若存在待生效的 pending steer，单次 `Esc` 优先按 LIFO 弹出最近一条并回显输入框；
-/// 队列为空时（对齐 opencode 的双击停止）首次只**待命**并显示提示，窗口内再按一次才停止。
+/// 有可停止工作时按 `Esc`：若存在待生效的 pending steer，单次 `Esc` 优先按 LIFO
+/// 弹出最近一条并回显输入框；否则首次只**待命**并显示统一提示，窗口内再按一次
+/// **打开停止面板**（不立即执行停止）。
 pub fn escape_stop(state: &mut AppState, pane: PaneId) -> bool {
     if state
         .pane_anywhere(pane)
@@ -730,11 +732,11 @@ pub fn escape_stop(state: &mut AppState, pane: PaneId) -> bool {
     {
         return true;
     }
-    let Some(target) = state.pane_mut_anywhere(pane) else {
+    let Some(target) = state.pane_anywhere(pane) else {
         return false;
     };
-    // 目标集合 = 模型在途 ∪ 本地命令在途（含尚未拿到进程 ID 的 pending）。
-    if !target.lx.chat.request.is_busy() && !target.lx.chat.has_running_shell() {
+    let availability = crate::app::state::StopAvailability::from_lx(&target.lx);
+    if !availability.any() {
         return false;
     }
     let now = Instant::now();
@@ -744,26 +746,26 @@ pub fn escape_stop(state: &mut AppState, pane: PaneId) -> bool {
         .stop_armed_at
         .is_some_and(|at| now.saturating_duration_since(at) <= STOP_ARM_WINDOW);
     if !armed {
-        let shell_only = !target.lx.chat.request.is_busy()
-            && target.lx.chat.has_running_shell()
-            && !target.lx.chat.status.streaming;
+        let Some(target) = state.pane_mut_anywhere(pane) else {
+            return false;
+        };
         target.lx.chat.stop_armed_at = Some(now);
-        // 只有本地命令在跑时没有 loading 行，首次 Esc 必须给出可见提示。
-        if shell_only {
-            show_lx_hint(
-                state,
-                pane,
-                InputHintLevel::Warning,
-                text::LX_SHELL_STOP_ARMED,
-            );
-        }
+        target.lx.rewind.armed_at = None;
+        show_lx_hint(
+            state,
+            pane,
+            InputHintLevel::Warning,
+            text::LX_STOP_ARMED,
+        );
         return true;
     }
+    let Some(target) = state.pane_mut_anywhere(pane) else {
+        return false;
+    };
     target.lx.chat.stop_armed_at = None;
-    if target.lx.chat.request.is_busy() {
-        stop_stream(state, pane);
-    }
-    super::user_shell::cancel_user_shells(state, pane);
+    target.lx.slash = Some(crate::app::state::SlashPanel::Stop(Box::new(
+        crate::app::state::StopPanel::new(availability),
+    )));
     true
 }
 

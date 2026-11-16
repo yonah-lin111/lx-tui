@@ -483,18 +483,39 @@ pub fn toggle_shell_section(
 
 /// 双 Esc：停止该窗格在途的本地命令并清空队列。
 pub fn cancel_user_shells(state: &mut AppState, pane: PaneId) -> bool {
+    cancel_user_shells_with_scope(
+        state,
+        pane,
+        crate::app::effects::UserShellStopScope::All,
+    )
+}
+
+/// 按范围停止用户 shell：`ShellsOnly` 保留普通聊天排队项。
+pub fn cancel_user_shells_with_scope(
+    state: &mut AppState,
+    pane: PaneId,
+    scope: crate::app::effects::UserShellStopScope,
+) -> bool {
+    use crate::app::effects::UserShellStopScope;
     let Some(target) = state.pane_mut_anywhere(pane) else {
         return false;
     };
     let had_pending = !target.lx.chat.pending_shells.is_empty();
     let running = target.lx.chat.has_running_shell();
     target.lx.chat.pending_shells.clear();
-    target.lx.chat.queue.clear();
+    match scope {
+        UserShellStopScope::All => target.lx.chat.queue.clear(),
+        UserShellStopScope::ShellsOnly => target
+            .lx
+            .chat
+            .queue
+            .retain(|item| !matches!(item, QueuedSubmission::Shell { .. })),
+    }
     if !had_pending && !running {
         return false;
     }
     state
         .effects
-        .push(crate::app::effects::Effect::CancelUserShells { pane });
+        .push(crate::app::effects::Effect::CancelUserShells { pane, scope });
     true
 }

@@ -61,7 +61,7 @@ pub const LX_SHELL_SPAWN_FAILED: &str = "Could not start the command";
 pub const LX_SHELL_RUNNING: &str = "Running";
 pub const LX_SHELL_COMMAND: &str = "You run command";
 pub const LX_SHELL_NO_OUTPUT: &str = "(no output)";
-pub const LX_SHELL_STOP_ARMED: &str = "Press Esc again to stop the running command";
+
 /// loading 行右端的回到底部控件：箭头 + 右侧说明文字。
 pub const LX_JUMP_BOTTOM: &str = "↓";
 pub const LX_JUMP_BOTTOM_HINT: &str = "jump to bottom";
@@ -413,8 +413,7 @@ pub const LX_MENTION_FOOTER_REF_DIR: &str = "←→ tabs · ↑↓ select · ↵
 pub const LX_REWIND_PANEL_TITLE: &str = "Rewind";
 /// 撤销动作面板底边快捷键提示。
 pub const LX_REWIND_PANEL_FOOTER: &str = "↑↓ select · ↵ open · esc back";
-/// 第一次 Esc 后的待命提示（toast，不写历史）。
-pub const LX_REWIND_ARMED_HINT: &str = "Press esc again to rewind";
+
 /// 面板范围说明。
 pub const LX_REWIND_SCOPE: &str = "Files changed by edit/write only";
 /// 四项动作文案（顺序与 `RewindAction::ALL` 一致）。
@@ -438,6 +437,50 @@ pub const LX_REWIND_SNAPSHOT_LOADING: &str = "Checking file snapshot...";
 pub const LX_REWIND_FILES_ALREADY_RESTORED: &str = "Files already restored";
 /// 撤销提示标题（独立于 user/assistant）。
 pub const LX_REWIND_NOTICE_TITLE: &str = "Rewind";
+
+// ===== 停止面板 =====
+
+/// 停止面板标题。
+pub const LX_STOP_PANEL_TITLE: &str = "Stop";
+/// 停止面板底边快捷键提示。
+pub const LX_STOP_PANEL_FOOTER: &str = "↑↓ select · ↵ stop · esc close";
+/// 停止面板右端作用域说明。
+pub const LX_STOP_SCOPE: &str = "current session";
+/// 第一次 Esc 后的停止待命提示。
+pub const LX_STOP_ARMED: &str = "Press Esc again to stop...";
+/// 五项动作文案（顺序与 `StopAction::ALL` 一致）。
+pub const LX_STOP_ACTION_ALL: &str = "Stop all";
+pub const LX_STOP_ACTION_MAIN: &str = "Stop main response";
+pub const LX_STOP_ACTION_SUBAGENTS: &str = "Stop all subagents";
+pub const LX_STOP_ACTION_SHELLS: &str = "Stop all shells";
+pub const LX_STOP_ACTION_CANCEL: &str = "Cancel";
+/// 目标在面板打开后自然结束。
+pub const LX_NOTHING_TO_STOP: &str = "Nothing to stop";
+/// 禁用原因。
+pub const LX_STOP_UNAVAILABLE_MAIN: &str = "No active response";
+pub const LX_STOP_UNAVAILABLE_SUBAGENTS: &str = "No running subagents";
+pub const LX_STOP_UNAVAILABLE_SHELLS: &str = "No running shells";
+/// 停止数量反馈。
+pub fn stopped_subagents(count: usize) -> String {
+    if count == 1 {
+        "Stopped 1 subagent".to_string()
+    } else {
+        format!("Stopped {count} subagents")
+    }
+}
+
+pub fn stopped_processes(count: usize) -> String {
+    if count == 1 {
+        "Stopped 1 background process".to_string()
+    } else {
+        format!("Stopped {count} background processes")
+    }
+}
+
+/// `^d` 停止选中 subagent 的即时反馈。
+pub fn stopping_agent(name: &str) -> String {
+    format!("Stopping {name}")
+}
 
 /// 撤销提示标题：连续多条合并时带数量（`Rewind x2`）。
 pub fn rewind_notice_title(count: usize) -> String {

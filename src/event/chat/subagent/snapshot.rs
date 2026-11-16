@@ -430,16 +430,19 @@ pub(super) fn send_user_input_from_panel(
         .subagents
         .values()
         .any(|handle| handle.agent_id == agent_id && handle.closed_without_report);
-    let closed_in_db = record.as_ref().is_some_and(|rec| {
-        let queue = persistence.database().and_then(|db| {
-            streams.db_workspaces.get(&key).and_then(|ws| {
-                db.subagent_queue_states(ws, &rec.parent_session_id)
-                    .ok()
-                    .and_then(|mut map| map.remove(&rec.agent_id))
-            })
+    // 用户主动停止的 agent 允许从面板直接输入恢复；普通 cancelled 仍视为已关闭。
+    let user_stopped = streams.user_stopped.contains(agent_id);
+    let closed_in_db = !user_stopped
+        && record.as_ref().is_some_and(|rec| {
+            let queue = persistence.database().and_then(|db| {
+                streams.db_workspaces.get(&key).and_then(|ws| {
+                    db.subagent_queue_states(ws, &rec.parent_session_id)
+                        .ok()
+                        .and_then(|mut map| map.remove(&rec.agent_id))
+                })
+            });
+            super::projected_agent_status(streams, rec, queue.as_ref()) == STATUS_CANCELLED
         });
-        super::projected_agent_status(streams, rec, queue.as_ref()) == STATUS_CANCELLED
-    });
     if closed_in_memory || closed_in_db {
         show_panel_toast(
             state,
@@ -454,7 +457,8 @@ pub(super) fn send_user_input_from_panel(
         handle.agent_id == agent_id
             && handle.status == STATUS_RUNNING
             && !handle.closed_without_report
-    }) || streams.resumed_subagents.contains(agent_id);
+    }) || streams.resumed_subagents.contains(agent_id)
+        || streams.user_stopped.contains(agent_id);
     if !is_active && let Err(error) = runner::resume(state, streams, persistence, &key, agent_id) {
         show_panel_toast(state, pane, ToastKind::Danger, error);
         return true;

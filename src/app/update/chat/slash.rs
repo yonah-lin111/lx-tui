@@ -213,6 +213,10 @@ pub fn apply_slash_enter(state: &mut AppState, pane: PaneId) -> bool {
         }
         // 撤销动作面板：第二次 Enter 才执行（第一次 Enter 只是打开面板）。
         SlashPanel::Rewind(_) => super::rewind::apply_enter(state, pane),
+        // 停止面板：Enter 执行高亮动作并关闭面板。
+        SlashPanel::Stop(_) => super::stop::apply_enter(state, pane),
+        // 报告面板只出现在详情 composer，由 composer 路由接管。
+        SlashPanel::Report(_) => false,
         // `/mcp` 面板：Enter 原地切换当前高亮项启用/禁用或触发失败重连（保持面板打开）。
         SlashPanel::Mcp(_) => super::mcp::toggle_mcp_entry(state, pane),
     }

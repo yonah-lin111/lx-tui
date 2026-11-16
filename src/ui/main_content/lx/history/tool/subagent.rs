@@ -623,6 +623,7 @@ mod tests {
                     title: "调查事件流".into(),
                     role: AgentRole::Explorer,
                     status: "completed".into(),
+                    stopped_by_user: false,
                     report: None,
                 },
                 AgentStatusView {
@@ -632,6 +633,7 @@ mod tests {
                     title: "检查存储层".into(),
                     role: AgentRole::Explorer,
                     status: "running".into(),
+                    stopped_by_user: false,
                     report: None,
                 },
             ],

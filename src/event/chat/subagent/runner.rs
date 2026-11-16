@@ -410,8 +410,18 @@ pub(super) fn send_input(
         .values()
         .any(|h| h.agent_id == target && h.status == STATUS_RUNNING && !h.closed_without_report);
     let is_resumed = streams.resumed_subagents.contains(target);
-    if !is_running && !is_resumed {
+    // 用户主动停止的 agent：允许 `send_input` 唤醒（用户明确要求继续），
+    // 但系统提示禁止模型自行恢复。
+    let is_user_stopped = streams.user_stopped.contains(target);
+    if !is_running && !is_resumed && !is_user_stopped {
         return Err(NOT_ACTIVE_CODE.to_string());
+    }
+    if is_user_stopped {
+        database
+            .recover_subagent_for_resume(&workspace, &owner_session, target)
+            .map_err(|err| err.code().to_string())?;
+        streams.user_stopped.remove(target);
+        streams.resumed_subagents.insert(target.to_string());
     }
     // `trigger_turn=false` 只入队：`interrupt` 在解析层已禁止与它同传，且不解除 interrupt 暂停态。
     let interrupt = interrupt && trigger_turn;
@@ -595,6 +605,8 @@ pub(super) fn resume(
         .cloned()
         .ok_or_else(|| NOT_FOUND_CODE.to_string())?;
     let agent_id = record.agent_id.as_str();
+    // 显式 resume 即用户要求恢复：解除“用户主动停止”闸门。
+    streams.user_stopped.remove(agent_id);
     // 队列/归属操作必须使用目标真正的父会话（目标可能是孙 agent）。
     let owner_session = record.parent_session_id.clone();
     let owner_key = RequestKey {

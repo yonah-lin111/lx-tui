@@ -490,7 +490,7 @@ fn ctrl_d_on_agents_tab_stops_the_selected_subagent() {
     assert!(
         state.effects.iter().any(|effect| matches!(
             effect,
-            crate::app::effects::Effect::CancelSubagents { session_id, agent_id }
+            crate::app::effects::Effect::StopSubagentsByUser { session_id, agent_id }
                 if session_id == "sess-1" && agent_id.as_deref() == Some("sub-b")
         )),
         "Agents 面板 ^d 只停选中的子 agent：{:?}",

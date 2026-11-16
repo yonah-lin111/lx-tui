@@ -297,6 +297,7 @@ fn snapshot_handle(
         started_at_ms,
         max_tokens: None,
         closed_without_report: false,
+        stopped_by_user: false,
         notify_parent: true,
         mutation_user_id: std::sync::Arc::new(std::sync::RwLock::new(String::new())),
         chat: crate::app::state::LxChat::new(),

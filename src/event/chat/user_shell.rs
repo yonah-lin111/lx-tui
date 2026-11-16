@@ -182,7 +182,7 @@ pub fn pump_user_shells(
                     },
                 );
             }
-            Effect::CancelUserShells { pane } => {
+            Effect::CancelUserShells { pane, .. } => {
                 changed |= cancel(state, streams, pane);
             }
             _ => {}

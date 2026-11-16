@@ -237,7 +237,10 @@ async fn cancel_stops_running_command_and_keeps_output() {
     tokio::time::sleep(Duration::from_millis(300)).await;
     state
         .effects
-        .push(crate::app::effects::Effect::CancelUserShells { pane });
+        .push(crate::app::effects::Effect::CancelUserShells {
+            pane,
+            scope: crate::app::effects::UserShellStopScope::All,
+        });
     assert!(pump_user_shells(
         &mut state,
         &mut streams,

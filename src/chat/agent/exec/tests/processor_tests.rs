@@ -96,6 +96,7 @@ pub(super) fn agent_status(
         title: title.to_string(),
         role,
         status: status.to_string(),
+        stopped_by_user: false,
         report: None,
     }
 }
@@ -108,6 +109,7 @@ pub(super) fn agent_list_item(agent_id: &str, role: AgentRole, title: &str) -> A
         role,
         title: title.to_string(),
         status: "completed".to_string(),
+        stopped_by_user: false,
         queued_count: 0,
         private_tail: None,
     }

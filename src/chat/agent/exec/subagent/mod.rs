@@ -653,6 +653,7 @@ impl ExecSubagentPool {
                 role: record.role,
                 title: record.title.clone(),
                 status: self.projected_status(record, queues.get(&record.agent_id)),
+                stopped_by_user: false,
                 queued_count: queues.get(&record.agent_id).map_or(0, |q| q.queued_count),
                 private_tail: include_private
                     .then(|| {
