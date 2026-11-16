@@ -259,11 +259,53 @@ fn down_arrow_on_an_empty_draft_opens_the_page() {
 }
 
 #[test]
-fn down_arrow_with_a_draft_still_moves_the_cursor() {
-    // 有草稿时 ↓ 仍是光标移动：不能因为新增入口就让正在写的内容突然换页。
+fn down_arrow_with_a_draft_at_the_end_opens_the_page() {
+    // 光标已在正文末尾（末行最后位置）：↓ 落到下层，进入后台任务页。
     let (mut state, pane) = state_with_session("写点东西");
+    {
+        let lx = &mut state.pane_mut_anywhere(pane).expect("pane").lx;
+        lx.cursor = lx.input.len();
+    }
     crate::app::update::pane::apply_lx_input(&mut state, crate::app::actions::LxInput::Down);
-    assert!(state.pane_anywhere(pane).unwrap().lx.task.is_none());
+    assert!(
+        state.pane_anywhere(pane).unwrap().lx.task.is_some(),
+        "正文末尾按 ↓ 进入后台任务页"
+    );
+}
+
+#[test]
+fn down_arrow_on_the_last_line_moves_to_the_end_before_opening() {
+    // 末行中间：第一次 ↓ 只把光标落到正文末尾，第二次才换页。
+    let (mut state, pane) = state_with_session("first\nsecond");
+    {
+        let lx = &mut state.pane_mut_anywhere(pane).expect("pane").lx;
+        lx.cursor = 9;
+    }
+    crate::app::update::pane::apply_lx_input(&mut state, crate::app::actions::LxInput::Down);
+    {
+        let lx = &state.pane_anywhere(pane).unwrap().lx;
+        assert_eq!(lx.cursor, lx.input.len(), "末行中间先跳到行尾");
+        assert!(lx.task.is_none(), "第一次 ↓ 不换页");
+    }
+    crate::app::update::pane::apply_lx_input(&mut state, crate::app::actions::LxInput::Down);
+    assert!(
+        state.pane_anywhere(pane).unwrap().lx.task.is_some(),
+        "已在末尾时第二次 ↓ 换页"
+    );
+}
+
+#[test]
+fn down_arrow_before_the_last_line_moves_normally() {
+    // 非末行：保持显示列下移一行，不直接跳到正文末尾。
+    let (mut state, pane) = state_with_session("first\nsecond");
+    {
+        let lx = &mut state.pane_mut_anywhere(pane).expect("pane").lx;
+        lx.cursor = 2;
+    }
+    crate::app::update::pane::apply_lx_input(&mut state, crate::app::actions::LxInput::Down);
+    let lx = &state.pane_anywhere(pane).unwrap().lx;
+    assert_eq!(lx.cursor, 8, "下移到下一行同一列");
+    assert!(lx.task.is_none());
 }
 
 #[test]

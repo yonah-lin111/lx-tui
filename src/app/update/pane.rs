@@ -392,9 +392,9 @@ pub fn apply_lx_input(state: &mut AppState, command: LxInput) {
             lx.panel_accept();
         }
         LxInput::Escape if panel_open => lx.panel_close(),
-        // ↓ 落空：历史不接管、草稿为空、光标在末尾时进入后台任务页（对齐 opencode 的
-        // `run() == false` 向下层派发）。有草稿时 ↓ 仍是光标/历史移动，不会突然换页。
-        LxInput::Down if lx.input.trim().is_empty() && lx.cursor == lx.input.len() => {
+        // ↓ 落空：历史不接管、光标已在正文末尾时进入后台任务页（对齐 opencode 的
+        // `run() == false` 向下层派发）。末行中间位置先落到行尾，下一次 ↓ 再换页。
+        LxInput::Down if lx.cursor == lx.input.len() => {
             super::chat::open_task_page(state, pane_id);
         }
         LxInput::Down => lx.move_down(),
@@ -487,6 +487,7 @@ pub(crate) trait TextEdit {
     fn move_left(&mut self);
     fn move_right(&mut self);
     fn move_up(&mut self);
+    fn move_down(&mut self);
     fn home(&mut self);
     fn end(&mut self);
     fn word_left(&mut self);
@@ -524,6 +525,7 @@ macro_rules! impl_text_edit {
                 fn move_left(&mut self) { <$ty>::move_left(self); }
                 fn move_right(&mut self) { <$ty>::move_right(self); }
                 fn move_up(&mut self) { <$ty>::move_up(self); }
+                fn move_down(&mut self) { <$ty>::move_down(self); }
                 fn home(&mut self) { <$ty>::home(self); }
                 fn end(&mut self) { <$ty>::end(self); }
                 fn word_left(&mut self) { <$ty>::word_left(self); }
@@ -555,10 +557,10 @@ macro_rules! impl_text_edit {
 
 impl_text_edit!(Lx, crate::app::state::AskEditor);
 
-/// 纯文本编辑分派（不含面板/发送/停止语义）；返回是否改写了文本。
+/// 纯文本编辑分派（不含面板/发送/停止语义）；返回是否处理了该命令。
 ///
-/// `Down` 特意不在此列：无面板且草稿为空时它要落到「打开后台任务页」，
-/// 有草稿时才下调光标——那段路由留在调用点。
+/// 主输入框的 `Down` 在调用点先判「正文末尾 → 打开后台任务页」，因此这里
+/// 处理的是其余位置与所有独立输入框：末行中间先落到行尾，其它位置下移一行。
 pub(crate) fn apply_editor_edit<T: TextEdit>(target: &mut T, command: LxInput) -> bool {
     match command {
         LxInput::Char(ch) => target.insert_char(ch),
@@ -569,6 +571,7 @@ pub(crate) fn apply_editor_edit<T: TextEdit>(target: &mut T, command: LxInput) -
         LxInput::Left => target.move_left(),
         LxInput::Right => target.move_right(),
         LxInput::Up => target.move_up(),
+        LxInput::Down => target.move_down(),
         LxInput::Home | LxInput::LineStart => target.home(),
         LxInput::End | LxInput::LineEnd => target.end(),
         LxInput::WordLeft => target.word_left(),

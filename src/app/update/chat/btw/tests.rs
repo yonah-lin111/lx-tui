@@ -906,3 +906,32 @@ fn set_task_btw_scroll_uses_scrollbar_geometry() {
     assert_eq!(thread.scroll, 70);
     assert!(thread.follow);
 }
+
+#[test]
+fn btw_composer_down_jumps_to_the_end_of_the_last_line() {
+    let (mut state, pane) = btw_pane();
+    {
+        let composer = state
+            .pane_mut_anywhere(pane)
+            .expect("pane")
+            .lx
+            .btw
+            .active_composer_mut()
+            .expect("composer");
+        composer.replace_input("first\nsecond");
+        composer.cursor = 9;
+    }
+    apply_input(&mut state, pane, LxInput::Down);
+    let composer = state
+        .pane_anywhere(pane)
+        .expect("pane")
+        .lx
+        .btw
+        .active_composer()
+        .expect("composer");
+    assert_eq!(
+        composer.cursor,
+        composer.input.len(),
+        "BTW composer 末行中间按 ↓ 落到行尾"
+    );
+}
