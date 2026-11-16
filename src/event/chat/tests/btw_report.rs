@@ -77,14 +77,12 @@ async fn btw_report_submission_registers_batch_and_projects_accepted() {
     let (mut state, key, persistence, session) = streaming_state(&fixture);
     let (qa_id, thread_id) = thread_fixture(&fixture, &persistence, &session);
     // UI 侧已加载线程并处于编辑态：`on_accepted` 需要匹配 pending_submit。
-    let revision = {
+    {
         let target = state.pane_mut_anywhere(key.pane).expect("pane");
         let thread = target.lx.btw.ensure_thread(&qa_id);
         thread.thread_id = Some(thread_id.clone());
         thread.pending_submit = Some(("btw-report-1".into(), thread.composer.revision()));
-        thread.composer.revision()
-    };
-    let _ = revision;
+    }
 
     let (sender, mut receiver) = mpsc::unbounded_channel::<AppEvent>();
     let (process_sender, _process_receiver) = mpsc::unbounded_channel();
@@ -104,32 +102,6 @@ async fn btw_report_submission_registers_batch_and_projects_accepted() {
         1,
         "报告批次必须登记，结算时才能聚合"
     );
-    let runs: Vec<_> = streams
-        .btw
-        .runs
-        .values()
-        .map(|run| {
-            (
-                run.thread_id.clone(),
-                run.batch_id.clone(),
-                run.label.clone(),
-            )
-        })
-        .collect();
-    let mut events: Vec<String> = Vec::new();
-    let mut arrived: Vec<AppEvent> = Vec::new();
-    while let Ok(event) = receiver.try_recv() {
-        let label = match &event {
-            AppEvent::Btw(crate::event::chat::btw::BtwEvent::Failed { message, .. }) => {
-                format!("failed: {message}")
-            }
-            AppEvent::Btw(_) => "btw-event".to_string(),
-            other => format!("other: {other:?}"),
-        };
-        events.push(label);
-        arrived.push(event);
-    }
-    eprintln!("runs={runs:?} events={events:?}");
     assert!(
         streams
             .btw
@@ -141,12 +113,16 @@ async fn btw_report_submission_registers_batch_and_projects_accepted() {
 
     // Accepted 回执把报告请求投影进 BTW 线程。
     let mut accepted = false;
+    let mut arrived: Vec<AppEvent> = Vec::new();
+    while let Ok(event) = receiver.try_recv() {
+        accepted |= matches!(
+            event,
+            AppEvent::Btw(crate::event::chat::btw::BtwEvent::Accepted { .. })
+        );
+        arrived.push(event);
+    }
     for event in arrived {
         if let AppEvent::Btw(btw_event) = event {
-            accepted |= matches!(
-                btw_event,
-                crate::event::chat::btw::BtwEvent::Accepted { .. }
-            );
             crate::event::chat::btw::apply_event_to_state(&mut state, btw_event);
         }
     }
