@@ -3,7 +3,7 @@
 - 审查对象：`fix/prompt-scroll-isolation`（`dev...HEAD`）
 - 关联：`design.md`、`task.md`
 - 审查方式：逐条核对 design §4 不变量与 §5 调用点分类；用 codegraph / codebase-memory 追踪 `scroll_cursor_into_view`、`scroll_selection_into_view`、`keep_visible`、`clamp_*` 的全部生产调用点；运行新增与既有回归测试验证行为。
-- 结论：主复现链路（工作区切换拽回光标）已修复，I1 / I3 / I4 成立；I5 与 I2 的“几何变化”各有一处缺口，另有测试与文档偏差。已按 P0 → P2 修复并补齐验证。
+- 结论：主复现链路（工作区切换拽回光标）已修复，I1 / I3 / I4 成立；I5 与 I2 的“几何变化”各有一处缺口，另有测试与文档偏差。已按 P0 → P3 全部修复并补齐验证。
 
 ## 1. 关键点核对
 
@@ -72,7 +72,7 @@
 - `cargo test --lib -q app::update::prompt`：137 passed。
 - `cargo test --lib`：5660 passed，0 failed，6 ignored。
 - `cargo clippy --all-targets -- -D warnings`、`cargo fmt`：通过。
-- 全量 `cargo test`（含集成测试）：见提交前验证记录。
+- 全量 `cargo test`：lib 5660 passed，集成测试全部通过（提交前运行）。
 
 ## 4. 未覆盖与手工验收
 
@@ -81,3 +81,7 @@
   - Recent 自动同步不跟随 active 行；
   - 窗口缩放时“变化前光标可见才继续跟随”的混合手感；
   - 左侧 Workspaces / Agents / 历史列表行为不变。
+
+## 5. 后续建议（不阻塞本次合并）
+
+- `src/app/update/prompt/tests.rs`（约 2900 行）与 `src/app/prompt/tests.rs`（约 3000 行）已超过项目规范建议的测试文件上限（1000 行，硬上限 1500 行）。本次按最小修改只追加用例，未做拆分；建议后续按 `items / pages / recent / tree` 场景聚类拆成子测试文件，与生产模块拆分保持同构。
