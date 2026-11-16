@@ -36,6 +36,9 @@ pub use clipboard_image::{
 };
 
 mod raw_image;
+
+pub mod sandbox;
+
 pub use raw_image::{
     RawImage, RawKind, VERSION_PREFIX, exists as entry_exists, hard_link_count, read as read_raw,
     remove_entry, version_token, version_token_from_parts, version_token_of,

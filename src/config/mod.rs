@@ -5,6 +5,7 @@
 
 pub mod ai;
 pub mod mcp;
+pub mod sandbox;
 pub mod skills;
 pub mod subagents;
 
