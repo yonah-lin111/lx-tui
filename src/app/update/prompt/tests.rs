@@ -89,6 +89,78 @@ fn apply_tree_loads_rows_and_marks_loaded() {
 }
 
 #[test]
+fn background_parked_refresh_preserves_scroll() {
+    let mut state = demo_state();
+    crate::app::update::create_workspace(&mut state);
+    assert_eq!(state.active_workspace, 1, "前提：切到新工作区");
+    state.workspaces[0].prompt_panel.editing = Some(PromptEditing::Item(10));
+
+    let old_content = (0..50)
+        .map(|index| format!("line {index}: old body for parked draft"))
+        .collect::<Vec<_>>()
+        .join("\n");
+    let new_content = (0..50)
+        .map(|index| format!("line {index}: refreshed body for parked draft"))
+        .collect::<Vec<_>>()
+        .join("\n");
+    {
+        let draft = state.workspaces[0]
+            .prompt
+            .as_mut()
+            .expect("工作区 0 草稿已停泊");
+        draft.editor.resize(40, 10);
+        draft.editor.set_text(&old_content);
+        draft.editor.scroll_to(5);
+        assert_eq!(draft.editor.scroll(), 5);
+    }
+
+    let prompts = vec![PromptRecord {
+        id: 10,
+        folder_id: None,
+        name: "loose".into(),
+        content: new_content.clone(),
+        active_page_id: Some(10),
+        pages: vec![PromptPageRecord {
+            id: 10,
+            position: 0,
+            name: "Page 1".into(),
+            content: new_content.clone(),
+            updated_at: 0,
+        }],
+    }];
+    apply_prompt_tree(
+        &mut state,
+        0,
+        std::path::Path::new("/ws"),
+        Vec::new(),
+        prompts,
+    );
+
+    assert_eq!(state.active_workspace, 1, "前提：切到新工作区");
+    let tree_content = state.workspaces[0]
+        .prompt_panel
+        .tree
+        .item(10)
+        .map(|item| item.active_content().to_string());
+    assert_eq!(
+        tree_content.as_deref(),
+        Some(new_content.as_str()),
+        "前提：树已刷新为同一页的新正文"
+    );
+
+    let draft = state.workspaces[0]
+        .prompt
+        .as_ref()
+        .expect("停泊草稿仍在");
+    assert_eq!(draft.editor.text(), new_content.as_str(), "后台刷新正文");
+    assert_eq!(
+        draft.editor.scroll(),
+        5,
+        "同一页后台正文刷新保留视口滚动"
+    );
+}
+
+#[test]
 fn toggle_mode_and_keyboard_navigation() {
     let mut state = demo_state();
     // 默认编辑视图下 Esc 无绑定不切树。

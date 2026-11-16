@@ -164,7 +164,7 @@ pub fn apply_prompt_tree(
             && (page_switched
                 || (draft.editor.is_saved() && draft.editor.text() != active_content.as_str()))
         {
-            draft.editor.set_text(&active_content);
+            draft.editor.replace_text_preserving_view(&active_content);
             draft.editor.mark_saved();
         }
     }
