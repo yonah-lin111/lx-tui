@@ -31,8 +31,16 @@ pub(super) const CONTENT_PREVIEW_ROWS: usize = 2;
 pub(crate) struct SystemCard {
     header: Vec<Vec<Segment>>,
     body: Layout,
-    /// 可折叠正文在卡片内的行区间（相对卡首，含 `… N more lines` 提示行）。
-    click: Option<(usize, usize)>,
+    /// 可折叠正文在卡片内的行区间与逐行文字列（相对卡首，含 `… N more lines` 提示行）。
+    click: Option<ClickSpan>,
+}
+
+/// 可折叠正文的点击范围：起始行、行数与逐行文字列区间。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(super) struct ClickSpan {
+    pub(super) offset: usize,
+    pub(super) rows: usize,
+    pub(super) cols: Vec<Option<(u16, u16)>>,
 }
 
 impl SystemCard {
@@ -61,9 +69,13 @@ impl SystemCard {
         let click = foldable
             .then(|| {
                 let first = body.node_rows.get(fixed_count).copied().unwrap_or(0);
-                (header.len() + first, body.rows.len().saturating_sub(first))
+                ClickSpan {
+                    offset: header.len() + first,
+                    rows: body.rows.len().saturating_sub(first),
+                    cols: body.row_cols().get(first..).unwrap_or(&[]).to_vec(),
+                }
             })
-            .filter(|(_, rows)| *rows > 0);
+            .filter(|span| span.rows > 0);
         Self {
             header,
             body,
@@ -76,9 +88,9 @@ impl SystemCard {
         self.header.len() + self.body.rows.len()
     }
 
-    /// 可折叠正文的点击区（相对卡首的起始行与行数）；没有可折叠内容时为 None。
-    pub(super) fn click_span(&self) -> Option<(usize, usize)> {
-        self.click
+    /// 可折叠正文的点击区（相对卡首）；没有可折叠内容时为 None。
+    pub(super) fn click_span(&self) -> Option<ClickSpan> {
+        self.click.clone()
     }
 
     /// 绘制并推进内容行号；行数恒等于 [`Self::rows`]。

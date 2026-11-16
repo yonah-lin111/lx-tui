@@ -416,7 +416,7 @@ fn report_more_hint_is_a_separate_click_target() {
         more.card_start.saturating_sub(view.scroll),
     ));
     assert_eq!(
-        crate::ui::main_content::lx::card_target_at(area, &lx, view.body.x + 2, row, &mut cache),
+        crate::ui::main_content::lx::card_target_at(area, &lx, view.body.x + 5, row, &mut cache),
         Some(CardTarget::Report {
             message_id: "assistant-1".into(),
             agent_id: "sub-1".into(),

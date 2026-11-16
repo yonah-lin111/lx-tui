@@ -38,11 +38,13 @@ const PREVIEW_TAIL: usize = 2;
 /// 命令参数折叠态保留的物理行数。
 const PARAM_PREVIEW: usize = 2;
 
-/// 树体两块的行数（标题之外）：命令参数与输出。
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+/// 树体两块的行数与逐行文字列区间（标题之外）：命令参数与输出。
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct Blocks {
     pub params: usize,
     pub output: usize,
+    pub params_cols: Vec<Option<(u16, u16)>>,
+    pub output_cols: Vec<Option<(u16, u16)>>,
 }
 
 /// 标题右侧状态：`Running` / `exit 2 · 1.2s`。
@@ -141,9 +143,13 @@ pub fn blocks(shell: &UserShellView, width: u16, folds: Folds) -> Blocks {
         return Blocks::default();
     }
     let (params, output) = sections(shell, width, folds);
+    let params_layout = tree::layout(&params, width);
+    let output_layout = tree::layout(&output, width);
     Blocks {
-        params: tree::layout(&params, width).rows.len(),
-        output: tree::layout(&output, width).rows.len(),
+        params: params_layout.rows.len(),
+        output: output_layout.rows.len(),
+        params_cols: params_layout.row_cols(),
+        output_cols: output_layout.row_cols(),
     }
 }
 
@@ -184,7 +190,7 @@ pub fn regions(shell: &UserShellView, width: u16, folds: Folds) -> Vec<Region> {
         section: CardSection::Body,
         offset: 1,
         rows: blocks.params,
-        cols: CardCols::Full,
+        cols: CardCols::Text(blocks.params_cols),
         clickable: params_expandable(shell, width),
     }];
     if blocks.output > 0 {
@@ -192,7 +198,7 @@ pub fn regions(shell: &UserShellView, width: u16, folds: Folds) -> Vec<Region> {
             section: CardSection::Output,
             offset: params_end,
             rows: blocks.output,
-            cols: CardCols::Full,
+            cols: CardCols::Text(blocks.output_cols),
             clickable: output_expandable(shell, width),
         });
     }

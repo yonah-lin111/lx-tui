@@ -292,15 +292,15 @@ impl Builder<'_> {
         });
         self.rows += block.rows;
         // 点击面只覆盖可折叠正文（标题与元信息不响应）；正文未超预算时不登记。
-        if let Some((offset, height)) = click {
+        if let Some(span) = click {
             self.snapshot.cards.push(CardRegion {
                 kind: CardKind::Compact {
                     checkpoint_id: notice.id.clone(),
                     expanded,
                 },
-                card_start: start + offset,
-                card_rows: height,
-                card_cols: CardCols::Full,
+                card_start: start + span.offset,
+                card_rows: span.rows,
+                card_cols: CardCols::Text(span.cols),
                 clickable: true,
             });
         }
@@ -366,16 +366,16 @@ impl Builder<'_> {
         );
         self.rows += block.rows;
         // 点击面只覆盖注入提示词（标题、模型与跃迁链不响应）。
-        if let Some((offset, height)) = click {
+        if let Some(span) = click {
             self.snapshot.cards.push(CardRegion {
                 kind: CardKind::ModelSwitch {
                     // 锚定区间首条：追加切换时 `first` 不变，展开态天然保持。
                     switch_id: source.switches[first].id.clone(),
                     expanded,
                 },
-                card_start: start + offset,
-                card_rows: height,
-                card_cols: CardCols::Full,
+                card_start: start + span.offset,
+                card_rows: span.rows,
+                card_cols: CardCols::Text(span.cols),
                 clickable: true,
             });
         }
@@ -460,6 +460,7 @@ impl Builder<'_> {
                 },
             );
             let block_rows = block.rows;
+            let mut report_cols = metrics.cols;
             // 提示行单独登记在整块之前：命中查找取第一条，先命中「再展开一批」。
             if let Some(offset) = metrics.hint_row {
                 self.snapshot.cards.push(CardRegion {
@@ -471,7 +472,7 @@ impl Builder<'_> {
                     },
                     card_start: start.saturating_add(offset),
                     card_rows: 1,
-                    card_cols: CardCols::Full,
+                    card_cols: CardCols::Text(vec![report_cols.get(offset).copied().flatten()]),
                     clickable: true,
                 });
             }
@@ -485,7 +486,7 @@ impl Builder<'_> {
                     },
                     card_start: start,
                     card_rows: block_rows,
-                    card_cols: CardCols::Full,
+                    card_cols: CardCols::Text(std::mem::take(&mut report_cols)),
                     clickable: true,
                 });
             }
@@ -913,15 +914,15 @@ impl Builder<'_> {
             });
             self.rows += block.rows;
             if let BlockPaint::SystemEvent { card } = &*block.paint
-                && let Some((offset, rows)) = card.click_span()
+                && let Some(span) = card.click_span()
             {
                 self.snapshot.cards.push(CardRegion {
                     kind: CardKind::Recap {
                         message_id: message.id.clone(),
                     },
-                    card_start: start.saturating_add(offset),
-                    card_rows: rows,
-                    card_cols: CardCols::Full,
+                    card_start: start.saturating_add(span.offset),
+                    card_rows: span.rows,
+                    card_cols: CardCols::Text(span.cols),
                     clickable: true,
                 });
             }

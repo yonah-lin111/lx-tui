@@ -107,6 +107,8 @@ pub(super) struct Measure {
     pub(super) rows: usize,
     pub(super) hint_row: Option<usize>,
     pub(super) has_more: bool,
+    /// 每个物理行的文字列区间（相对卡片左缘，正文行已叠加缩进）；与 `rows` 等长。
+    pub(super) cols: Vec<Option<(u16, u16)>>,
 }
 
 /// 汇报块的行数（宽度 0 时为 0）。
@@ -143,6 +145,7 @@ pub(super) fn measure(
             rows: 0,
             hint_row: None,
             has_more: false,
+            cols: Vec::new(),
         };
     }
     let all = body_lines(report, width);
@@ -155,11 +158,85 @@ pub(super) fn measure(
     let remaining = all.len().saturating_sub(shown);
     let body_label = usize::from(!all.is_empty());
     let hint_row = (expanded && remaining > 0).then_some(2 + body_label + shown);
+    let indent = body_indent(width);
+    let mut cols = vec![
+        super::text_cols::segment_cols(&header_segments(report, width)),
+        super::text_cols::segment_cols(&agent_segments(report, width, !all.is_empty())),
+    ];
+    if !all.is_empty() {
+        cols.push(super::text_cols::segment_cols(&label_segments()));
+    }
+    cols.extend(all.iter().take(shown).map(|line| {
+        super::text_cols::segment_cols(line)
+            .map(|(start, end)| (indent.saturating_add(start), indent.saturating_add(end)))
+    }));
+    if remaining > 0 {
+        let hint = text::agent::file_diff_more_lines(remaining);
+        cols.push(
+            super::text_cols::line_cols(&hint)
+                .map(|(start, end)| (indent.saturating_add(start), indent.saturating_add(end))),
+        );
+    }
     Measure {
         rows: 2 + body_label + shown + usize::from(remaining > 0),
         hint_row,
         has_more: all.len() > REPORT_PREVIEW_ROWS,
+        cols,
     }
+}
+
+/// 标题行分段：方块 + 动词 + 状态（宽度不够时省略状态）。
+fn header_segments(report: &SubagentReportView, width: u16) -> Vec<Segment> {
+    let mark = report_mark(&report.status);
+    let mut header = vec![
+        Segment::new(
+            mark.segment(StepKind::Report, 0, false),
+            mark.style(StepKind::Report, false),
+        ),
+        Segment::new(
+            format!("{} ", text::agent::VERB_TOOL_SUBAGENT_REPORT),
+            verb_style(&report.status),
+        ),
+    ];
+    let status = format!("{}{}", text::LX_CHAT_TOOL_STATUS_SEP, report.status);
+    let status_segment = Segment::new(status, style::agent_step_detail());
+    if segments_cols(&header) + status_segment.cols() <= usize::from(width) {
+        header.push(status_segment);
+    }
+    header
+}
+
+/// `├─ agent名 · title` 行；正文为空时改用收口连接符。
+fn agent_segments(report: &SubagentReportView, width: u16, has_body: bool) -> Vec<Segment> {
+    let line = agent_line(report);
+    let connector = if has_body {
+        text::agent::TREE_BRANCH
+    } else {
+        text::agent::TREE_LEAF
+    };
+    let mut detail = vec![
+        Segment::new(connector, style::chat_notice_connector()),
+        Segment::new(line.clone(), style::text()),
+    ];
+    let room = usize::from(width).saturating_sub(connector.width());
+    if line.width() > room {
+        detail[1] = Segment::new(
+            crate::ui::text::truncate_to_width(&line, room),
+            style::text(),
+        );
+    }
+    detail
+}
+
+/// `└─ Report:` 标签行。
+fn label_segments() -> Vec<Segment> {
+    vec![
+        Segment::new(
+            text::agent::TREE_LEAF.to_string(),
+            style::chat_notice_connector(),
+        ),
+        Segment::new(text::agent::REPORT_LABEL, style::muted()),
+    ]
 }
 
 /// 绘制汇报块；推进行数必须与 [`rows`] 严格相等。
@@ -178,22 +255,7 @@ pub(super) fn draw(
     if rect.width == 0 {
         return;
     }
-    let mark = report_mark(&report.status);
-    let mut header = vec![
-        Segment::new(
-            mark.segment(StepKind::Report, 0, false),
-            mark.style(StepKind::Report, false),
-        ),
-        Segment::new(
-            format!("{} ", text::agent::VERB_TOOL_SUBAGENT_REPORT),
-            verb_style(&report.status),
-        ),
-    ];
-    let status = format!("{}{}", text::LX_CHAT_TOOL_STATUS_SEP, report.status);
-    let status_segment = Segment::new(status, style::agent_step_detail());
-    if segments_cols(&header) + status_segment.cols() <= usize::from(rect.width) {
-        header.push(status_segment);
-    }
+    let header = header_segments(report, rect.width);
     if let Some(y) = visible_row(rect, scroll, *row) {
         put_segments(grid, rect.x, y, rect.width, &header);
     }
@@ -201,36 +263,14 @@ pub(super) fn draw(
 
     // `├─ agent名 · title`：后面还有 Report 正文时用分支，否则收口。
     let body = body_view(report, rect.width, expanded, more_steps);
-    let line = agent_line(report);
-    let connector = if body.lines.is_empty() {
-        text::agent::TREE_LEAF
-    } else {
-        text::agent::TREE_BRANCH
-    };
-    let mut detail = vec![
-        Segment::new(connector, style::chat_notice_connector()),
-        Segment::new(line.clone(), style::text()),
-    ];
-    let room = usize::from(rect.width).saturating_sub(connector.width());
-    if line.width() > room {
-        detail[1] = Segment::new(
-            crate::ui::text::truncate_to_width(&line, room),
-            style::text(),
-        );
-    }
+    let detail = agent_segments(report, rect.width, !body.lines.is_empty());
     if let Some(y) = visible_row(rect, scroll, *row) {
         put_segments(grid, rect.x, y, rect.width, &detail);
     }
     *row += 1;
 
     if !body.lines.is_empty() {
-        let label = vec![
-            Segment::new(
-                text::agent::TREE_LEAF.to_string(),
-                style::chat_notice_connector(),
-            ),
-            Segment::new(text::agent::REPORT_LABEL, style::muted()),
-        ];
+        let label = label_segments();
         if let Some(y) = visible_row(rect, scroll, *row) {
             put_segments(grid, rect.x, y, rect.width, &label);
         }
