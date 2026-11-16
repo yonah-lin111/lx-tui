@@ -512,3 +512,36 @@ fn cross_workspace_access_is_rejected() {
             .is_none()
     );
 }
+
+/// 检查点之后又出现了用户轮：即使 revision 是最新的，也不能把上下文指针
+/// 回退到该轮之前（与轮次撤销的「必须是最新事件」同语义）。
+#[test]
+fn revert_rejects_when_a_later_user_turn_exists() {
+    let (database, workspace) = temp("revert-later-turn");
+    let first = turn(&database, &workspace, None, "q1", "a1");
+    let revision = database
+        .session_revision(&first.session_id)
+        .expect("revision");
+    let checkpoint = database
+        .commit_compact(
+            &workspace,
+            &commit_of(&first.session_id, revision, 0, 1, "op-1"),
+        )
+        .expect("compact");
+    turn(&database, &workspace, Some(&first.session_id), "q2", "a2");
+    let revision = database
+        .session_revision(&first.session_id)
+        .expect("revision");
+    assert!(matches!(
+        database.revert_compact(
+            &workspace,
+            &CompactRevert {
+                operation_id: "rewind-op".into(),
+                session_id: first.session_id.clone(),
+                checkpoint_id: checkpoint.checkpoint.id.clone(),
+                expected_revision: revision,
+            },
+        ),
+        Err(DbError::RewindTargetChanged)
+    ));
+}

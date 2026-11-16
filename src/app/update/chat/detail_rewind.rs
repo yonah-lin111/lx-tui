@@ -4,7 +4,7 @@
 //! （子会话 / BTW 线程）与回投后的视图重载。compact 检查点走同一份面板状态，
 //! 执行时由事件层改走 `revert_compact`。
 
-use crate::app::effects::{DetailRewindRequest, Effect, RewindRequest};
+use crate::app::effects::{BtwEffect, DetailRewindRequest, Effect, RewindRequest};
 use crate::app::state::{
     AppState, DetailRewindExecution, DetailRewindKind, DetailRewindPlan, DetailTarget,
     RewindAction, RewindPanel, RewindTargetKind, SlashPanel,
@@ -33,12 +33,23 @@ pub(crate) fn prepare(state: &mut AppState, pane: PaneId) -> bool {
             None
         }
     }) else {
-        return false;
+        // 上下文在、目标不在（新 QA 尚无线程 / agent 已被移除）：命令已消费，
+        // 必须给出可见反馈，不能静默吞掉。
+        show_lx_toast(
+            state,
+            pane,
+            Toast::new(
+                ToastKind::Warning,
+                text::detail::LX_DETAIL_REWIND_NOTHING,
+                Some(pane),
+                std::time::Instant::now(),
+            ),
+        );
+        return true;
     };
     let executing = state
         .pane_anywhere(pane)
-        .and_then(|target| target.lx.task.as_ref())
-        .is_some_and(|page| page.detail_rewind_executing.is_some());
+        .is_some_and(|target| target.lx.detail_rewind.is_executing());
     if executing {
         show_lx_toast(
             state,
@@ -81,9 +92,7 @@ pub fn on_prepared(state: &mut AppState, pane: PaneId, plan: DetailRewindPlan) -
     target
         .lx
         .with_active_editor(|editor| editor.slash = Some(SlashPanel::Rewind(Box::new(panel))));
-    if let Some(page) = target.lx.task.as_mut() {
-        page.detail_rewind_pending = Some(plan);
-    }
+    target.lx.detail_rewind.pending = Some(plan);
     true
 }
 
@@ -91,8 +100,7 @@ pub fn on_prepared(state: &mut AppState, pane: PaneId, plan: DetailRewindPlan) -
 pub(crate) fn apply_confirm(state: &mut AppState, pane: PaneId, panel: &RewindPanel) -> bool {
     let Some(plan) = state
         .pane_anywhere(pane)
-        .and_then(|target| target.lx.task.as_ref())
-        .and_then(|page| page.detail_rewind_pending.clone())
+        .and_then(|target| target.lx.detail_rewind.pending.clone())
     else {
         close_panel(state, pane);
         return true;
@@ -144,12 +152,9 @@ pub(crate) fn apply_confirm(state: &mut AppState, pane: PaneId, panel: &RewindPa
             operation_id: operation_id.clone(),
             request,
         }));
-    if let Some(page) = state
-        .pane_mut_anywhere(pane)
-        .and_then(|target| target.lx.task.as_mut())
-    {
-        page.detail_rewind_pending = Some(plan.clone());
-        page.detail_rewind_executing = Some(DetailRewindExecution {
+    if let Some(target) = state.pane_mut_anywhere(pane) {
+        target.lx.detail_rewind.pending = Some(plan.clone());
+        target.lx.detail_rewind.executing = Some(DetailRewindExecution {
             operation_id,
             target: plan.target,
         });
@@ -159,6 +164,10 @@ pub(crate) fn apply_confirm(state: &mut AppState, pane: PaneId, panel: &RewindPa
 }
 
 /// 执行回执成功：重载详情会话并回填草稿。
+///
+/// 回填只落在 `plan.target` 自己的 composer 上：用户可能在回执到达前退出编辑、
+/// 切到别的 agent / QA，绝不能把被撤回的原文写进主输入框。
+#[allow(clippy::too_many_arguments)]
 pub fn on_succeeded(
     state: &mut AppState,
     pane: PaneId,
@@ -166,6 +175,8 @@ pub fn on_succeeded(
     messages: &[crate::db::chat::ChatMessage],
     checkpoints: &[crate::db::chat::CompactCheckpoint],
     session_deleted: bool,
+    restored_files: usize,
+    already_restored: bool,
     user_text: &str,
 ) -> bool {
     let models = state.models.clone();
@@ -177,37 +188,38 @@ pub fn on_succeeded(
     let Some(target) = state.pane_mut_anywhere(pane) else {
         return false;
     };
-    let Some(page) = target.lx.task.as_mut() else {
-        return false;
-    };
-    page.detail_rewind_executing = None;
-    page.detail_rewind_pending = None;
+    target.lx.detail_rewind.clear();
+    let mut load_qa_list = false;
     match &plan.target {
         DetailTarget::Agent(agent_id) => {
-            let Some(run) = target.lx.agents.by_agent_mut(agent_id) else {
-                return false;
-            };
-            run.chat.messages = messages
-                .iter()
-                .map(|message| super::view::view_message_of(message, &models))
-                .collect();
-            run.chat.rebuild_steered_user_messages(messages);
-            run.chat.set_project_root(project_root);
-            run.loaded = true;
-            run.compact.replace(notices);
-            run.rows_dirty = true;
-            run.follow = true;
-            run.scroll = usize::MAX;
+            {
+                let Some(run) = target.lx.agents.by_agent_mut(agent_id) else {
+                    return false;
+                };
+                run.chat.messages = messages
+                    .iter()
+                    .map(|message| super::view::view_message_of(message, &models))
+                    .collect();
+                run.chat.rebuild_steered_user_messages(messages);
+                run.chat.set_project_root(project_root);
+                run.loaded = true;
+                run.compact.replace(notices);
+                run.rows_dirty = true;
+                run.follow = true;
+                run.scroll = usize::MAX;
+            }
+            if let Some(composer) = target.lx.agents.composer_mut(agent_id) {
+                backfill(composer.editor_mut(), plan, user_text);
+            }
         }
         DetailTarget::Btw(thread_id) => {
-            let Some(thread) = target.lx.btw.active_thread_mut() else {
+            let Some(thread) = target.lx.btw.thread_by_thread_id_mut(thread_id) else {
                 return false;
             };
-            if thread.thread_id.as_deref() != Some(thread_id.as_str()) && !session_deleted {
-                return false;
-            }
             if session_deleted {
                 thread.reset_after_delete();
+                // 线程行已随子会话级联删除；QA 列表的 `● side thread` 必须重载才消失。
+                load_qa_list = true;
             } else {
                 thread.chat.messages = messages
                     .iter()
@@ -221,28 +233,19 @@ pub fn on_succeeded(
                 thread.follow = true;
                 thread.scroll = usize::MAX;
             }
+            backfill(thread.composer.editor_mut(), plan, user_text);
         }
     }
-    // 草稿回填：只有删对话的动作才回填，且仅当 composer 仍等于发起时的内容。
-    let unchanged = target
-        .lx
-        .active_editor()
-        .input
-        .as_str()
-        .eq(plan.input_at_open.as_str());
-    if unchanged && plan.action.fills_draft() && !user_text.is_empty() {
-        target.lx.with_active_editor(|editor| {
-            editor.replace_input(user_text);
-            editor.slash = None;
-        });
-    } else {
-        target.lx.with_active_editor(|editor| editor.slash = None);
+    if load_qa_list && let Some(parent_session_id) = target.lx.chat.session_id.clone() {
+        state.effects.push(Effect::Btw(BtwEffect::LoadQaList {
+            pane,
+            parent_session_id,
+        }));
     }
-    let message = match plan.action {
-        RewindAction::RestoreCompact => text::LX_COMPACT_REWOUND,
-        RewindAction::RevertOnly => text::LX_REWIND_NOTICE_REVERT_ONLY,
-        RewindAction::DeleteOnly => text::LX_REWIND_NOTICE_DELETE_ONLY,
-        _ => text::LX_REWIND_NOTICE_REVERT_AND_DELETE,
+    let message = if plan.action == RewindAction::RestoreCompact {
+        text::LX_COMPACT_REWOUND.to_string()
+    } else {
+        text::rewind_notice(plan.action.as_str(), restored_files, already_restored)
     };
     show_toast_at(
         state,
@@ -257,16 +260,23 @@ pub fn on_succeeded(
     true
 }
 
+/// 草稿回填：只有删对话的动作才回填，且仅当该 composer 仍等于发起的原文。
+fn backfill(editor: &mut crate::app::state::Lx, plan: &DetailRewindPlan, user_text: &str) {
+    if editor.input == plan.input_at_open && plan.action.fills_draft() && !user_text.is_empty() {
+        editor.replace_input(user_text);
+    }
+    editor.slash = None;
+}
+
 /// 执行失败：清执行态、保留对话与草稿、提示原因。
 pub fn on_failed(state: &mut AppState, pane: PaneId, message: &str) -> bool {
     let Some(target) = state.pane_mut_anywhere(pane) else {
         return false;
     };
-    if let Some(page) = target.lx.task.as_mut() {
-        page.detail_rewind_executing = None;
-        page.detail_rewind_pending = None;
+    target.lx.detail_rewind.clear();
+    if target.lx.agents_editing() || target.lx.btw_editing() {
+        target.lx.with_active_editor(|editor| editor.slash = None);
     }
-    target.lx.with_active_editor(|editor| editor.slash = None);
     show_lx_toast(
         state,
         pane,
@@ -280,13 +290,32 @@ pub fn on_failed(state: &mut AppState, pane: PaneId, message: &str) -> bool {
     true
 }
 
+/// 执行成功但读回失败：提交已落库，保留当前视图并提示重载失败。
+pub fn on_reload_failed(state: &mut AppState, pane: PaneId) -> bool {
+    let Some(target) = state.pane_mut_anywhere(pane) else {
+        return false;
+    };
+    target.lx.detail_rewind.clear();
+    if target.lx.agents_editing() || target.lx.btw_editing() {
+        target.lx.with_active_editor(|editor| editor.slash = None);
+    }
+    show_lx_toast(
+        state,
+        pane,
+        Toast::new(
+            ToastKind::Warning,
+            text::detail::LX_DETAIL_REWIND_RELOAD_FAILED,
+            Some(pane),
+            std::time::Instant::now(),
+        ),
+    );
+    true
+}
+
 /// 清掉等待确认的计划（面板关闭时）。
 pub(crate) fn clear_pending(state: &mut AppState, pane: PaneId) {
-    if let Some(page) = state
-        .pane_mut_anywhere(pane)
-        .and_then(|target| target.lx.task.as_mut())
-    {
-        page.detail_rewind_pending = None;
+    if let Some(target) = state.pane_mut_anywhere(pane) {
+        target.lx.detail_rewind.pending = None;
     }
 }
 

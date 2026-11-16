@@ -343,9 +343,9 @@ fn edit_agent_composer(state: &mut AppState, pane: PaneId, command: LxInput) -> 
         let Some(composer) = target.lx.agents.composer_mut(&agent_id) else {
             return false;
         };
-        let before = composer.revision();
-        super::apply_editor_edit(composer.editor_mut(), command);
-        composer.revision() != before
+        // 光标移动同样要重算 `/` 面板：命令触发按光标所在行判定，面板不能停在
+        // 移动前的高亮上，否则 Enter 会执行一条已不在命令位置的命令。
+        super::apply_editor_edit(composer.editor_mut(), command)
     };
     if changed {
         chat::refresh_slash_panel(state, pane);
@@ -421,7 +421,13 @@ pub fn apply_task_paste(state: &mut AppState, pane: PaneId, text: &str) -> bool 
             for ch in single_line.chars() {
                 target.lx.btw.search.insert_char(ch);
             }
-            target.lx.btw.sync_selection_after_filter();
+            let switched = target.lx.btw.sync_selection_after_filter();
+            let qa_id = switched.then(|| target.lx.btw.active.clone()).flatten();
+            if let Some(qa_id) = qa_id {
+                // 搜索过滤把 active 切到另一个 QA：必须走 switch_qa 触发线程加载，
+                // 否则 `!loaded` 占位会永久显示并在心跳里空转。
+                chat::btw::switch_qa(state, pane, &qa_id);
+            }
             true
         }
         _ => false,
@@ -686,6 +692,9 @@ fn leave_agent_edit(state: &mut AppState, pane: PaneId) -> bool {
         && let Some(composer) = target.lx.agents.composer_mut(&agent_id)
     {
         composer.editor_mut().slash = None;
+    }
+    if !target.lx.detail_rewind.is_executing() {
+        target.lx.detail_rewind.pending = None;
     }
     true
 }

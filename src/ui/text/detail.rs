@@ -10,12 +10,19 @@ pub const LX_DETAIL_REWIND_SCOPE_BTW: &str = "last side turn";
 pub const LX_DETAIL_REWIND_FOOTER: &str = "↑↓ select · ↵ confirm · esc cancel";
 /// 撤销失败。
 pub const LX_DETAIL_REWIND_FAILED: &str = "Rewind failed";
+/// 撤销已提交，但重载详情视图失败。
+pub const LX_DETAIL_REWIND_RELOAD_FAILED: &str = "Rewound, but reload failed";
 /// 目标仍在运行/排队。
 pub const LX_DETAIL_REWIND_BUSY: &str = "Wait for the current turn to finish";
 /// 没有可撤回的轮次或检查点。
 pub const LX_DETAIL_REWIND_NOTHING: &str = "Nothing to rewind";
 /// 目标已经变化，无法安全撤销。
 pub const LX_DETAIL_REWIND_UNAVAILABLE: &str = "Cannot rewind this turn";
+
+/// 详情会话不可用（已被移除 / 尚未落库）。
+pub const LX_COMPACT_UNAVAILABLE: &str = "Cannot compact this conversation";
+/// 汇报目标不可用。
+pub const LX_DETAIL_REPORT_UNAVAILABLE: &str = "Cannot report from this agent";
 
 /// 汇报目标仍在运行。
 pub const LX_DETAIL_REPORT_BUSY: &str = "Wait for the current turn to finish";

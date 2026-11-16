@@ -55,7 +55,9 @@ pub use composer::DetailComposer;
 pub use connect::{
     ConnectManageAction, ConnectPanel, ConnectPromptStep, ConnectProviderEntry, ConnectStage,
 };
-pub use detail::{DetailRewindExecution, DetailRewindKind, DetailRewindPlan, DetailTarget};
+pub use detail::{
+    DetailRewindExecution, DetailRewindKind, DetailRewindPlan, DetailRewindState, DetailTarget,
+};
 pub use mcp::{McpCatalogEntry, McpPanel, McpPanelEntry, McpRuntimeState, McpServerState};
 pub use mention::{LxMention, LxMentionView, SubagentMentionItem, SubagentRunMentionEntry};
 pub use model_switch::{LxModelSwitch, ModelSwitchNoticeView};
@@ -171,6 +173,8 @@ pub struct Lx {
     pub agents: AgentsState,
     /// 最新轮次撤销：待命、目标选择、动作面板与执行中。
     pub rewind: LxRewind,
+    /// 详情（Agents / BTW）撤销的待确认计划与执行中状态。
+    pub detail_rewind: DetailRewindState,
     /// 上下文压缩：检查点、展开状态与执行中标记（只读视图，IO 在事件层）。
     pub compact: LxCompact,
     /// 会话中途模型切换记录与展开状态。
@@ -308,6 +312,7 @@ impl Lx {
             chat: LxChat::new(),
             agents: AgentsState::default(),
             rewind: LxRewind::default(),
+            detail_rewind: DetailRewindState::default(),
             compact: LxCompact::default(),
             model_switch: LxModelSwitch::default(),
             recap: LxRecap::default(),
@@ -361,6 +366,7 @@ impl Lx {
     /// 清空子 agent 展示态（会话切换/新建时随会话一起复位）。
     pub fn clear_agents(&mut self) {
         self.agents = AgentsState::default();
+        self.detail_rewind.clear();
         self.sync_mention_subagent_runs();
     }
 

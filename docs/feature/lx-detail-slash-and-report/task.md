@@ -1,6 +1,6 @@
 # 任务清单：Agents / BTW 详情输入框 `/` 命令与私聊·汇报重做
 
-- **状态**：**T1–T11 已完成（`detail-slash-report` 分支）；自动化与 CLI 实机验证见 [`verification.md`](verification.md)，TUI 交互/外观项待用户按 §4 实机确认。2026-11-15 追加：详情 `/undo` 更名为 `/rewind`（保留 `/undo` 隐藏别名），动作面板与主聊天对齐，并支持 compact 检查点撤销；同日修复详情压缩无心跳/无计时、后台详情滚动条沿用滞后几何两个 bug，并将主会话/子 agent/BTW 的历史动画判据统一到 `LxChat::is_animating()`。**
+- **状态**：**T1–T12 已完成（`detail-slash-report` 分支）；自动化与 CLI 实机验证见 [`verification.md`](verification.md)，TUI 交互/外观项待用户按 §4 实机确认。2026-11-15 追加：详情 `/undo` 更名为 `/rewind`（保留 `/undo` 隐藏别名），动作面板与主聊天对齐，并支持 compact 检查点撤销；同日修复详情压缩无心跳/无计时、后台详情滚动条沿用滞后几何两个 bug，并将主会话/子 agent/BTW 的历史动画判据统一到 `LxChat::is_animating()`。2026-11-16 完成代码 review 与 P0–P3 修复，见 [`review.md`](review.md)。**
 - **设计文档**：[`design.md`](design.md)
 - **范围**：`src/app/state/lx/`、`src/app/update/`、`src/event/chat/`、`src/db/chat/subagent/`、`src/ui/main_content/lx/`、`src/ui/text/`、`src/chat/agent/report.rs`
 - **数据库**：**无迁移**（复用 `notify_parent`、`delete_btw_thread`、`commit_rewind`）。
@@ -16,6 +16,7 @@
 | **T7** | BTW `/new`：删除线程、重置视图、刷新 QA 列表 | 新增 `src/event/chat/btw/maintenance.rs`；改 `src/app/effects.rs`（`BtwEffect::DeleteThread`）、`src/event/chat/btw.rs`（分派）、`src/app/update/chat/btw/{mod.rs,events.rs}`、`src/app/state/lx/btw.rs` | `/new` 直接清空当前 QA 线程；回答中拒绝；删除失败保留线程并 Toast |
 | **T8** | 文案与键位：新增 `detail` 文案模块、底栏 `[/ commands]` | 新增 `src/ui/text/detail.rs`；改 `src/ui/text.rs`（只加 `pub mod detail;`）、`src/ui/text/btw.rs`、`src/ui/main_content/lx/task/{agents.rs,btw.rs}` | 所有新文案英文；窄宽度整项丢弃不截半截 |
 | **T9** | 测试、校验与文档 | 见 §测试清单 | `cargo fmt` / `cargo clippy --all-targets -- -D warnings` / `cargo test` 全绿；实机清单通过；补 `verification.md` |
+| **T12** | Review 修复（详见 `review.md`）：自动压缩检查点不进 `/rewind`；执行态迁到 `Lx.detail_rewind`；回执按目标线程/agent 回填且只写目标 composer；无参命令采纳校验整段独立；详情压缩禁止重入、读回失败结束 running；BTW 搜索粘贴切换线程加载历史；steer 重投保持私聊 | 改 `src/app/state/lx/{detail.rs,compact.rs,agent.rs}`、`src/app/update/chat/{composer.rs,detail_rewind.rs,detail_compact.rs,subagent.rs}`、`src/event/chat/{detail_rewind.rs,detail_compact.rs,rewind.rs,subagent/settle.rs}`、`src/db/chat/compact.rs`；测试见 `detail_commands.rs`、`detail_rewind.rs`、`detail_compact.rs`、`subagent_private.rs`、`task_page.rs`、`compact/tests.rs` | 自动检查点不再抢占最后一轮；多行草稿不执行末行命令；BTW 删空只重置目标线程并刷新 QA 列表；压缩中再次 `/compact` 被拒；读回失败不留 `compacting`；私聊 steer 不因报告轮被转发 |
 | **T11** | 三处历史动画对齐：新增 `LxChat::is_animating()`（流式状态 / 请求在途 / 本地命令 / 流式 assistant 投影），主会话、子 agent 详情与 BTW 线程统一用它决定步骤标记呼吸 | 改 `src/app/state/lx/chat.rs`、`src/ui/main_content/lx/history/source.rs`；测试见 `task/tests/btw_list.rs` | BTW 线程生成中工具方块/圆点随 `loading_frame` 呼吸，终态恒实心；主会话、子 agent 与 BTW 三相节奏一致 |
 | **T10** | 详情压缩心跳与后台滚动几何修复：`has_streaming_lx` 纳入详情压缩/懒加载，心跳推进 `run.chat.loading_frame` 与 BTW 线程帧，聊天栏显示 `Compacting context... (Ns)`；滚动条按下/拖拽改用 `ScrollbarLayout` 的 `total`/`visible` | 改 `src/app/state.rs`、`src/app/state/lx/{detail.rs,btw.rs}`、`src/app/update/chat/{mod.rs,detail_compact.rs}`、`src/app/update/chat/{subagent.rs,btw/mod.rs}`、`src/event/mouse/{hit.rs,drag.rs}`、`src/ui/main_content/lx/chat_bar.rs`；测试见 `detail_commands.rs`、`subagent.rs`、`btw/tests.rs`、`chat_bar/tests/compacting.rs`、`task/tests/agent_list.rs` | 详情 `/compact` 期间菱形呼吸、耗时逐秒推进、聊天栏可见；压缩结束恢复检查点；滚动条首次拖拽/点击即按当前几何生效，无“卡一下再滚一次” |
 
@@ -66,6 +67,11 @@
 ### App/输入
 
 - `src/app/update/chat/tests/detail_commands.rs`
+  - `moving_cursor_refreshes_slash_candidates`
+  - `multiline_draft_does_not_execute_last_line_command`
+  - `btw_rewind_receipt_targets_the_planned_thread_only`
+  - `btw_search_paste_loads_the_switched_thread`
+  - `detail_compact_finished_without_readback_clears_running`
   - `typing_slash_in_agent_composer_opens_three_commands`
   - `typing_slash_in_btw_composer_opens_three_commands`
   - `enter_accepts_report_and_echoes_argument_hint`
@@ -88,10 +94,15 @@
 
 ### DB/事件
 
+- `src/db/chat/compact/tests.rs`
+  - `revert_rejects_when_a_later_user_turn_exists`
 - `src/db/chat/subagent/tests/rewind.rs`
   - `latest_undoable_turn_requires_human_panel_follow_up`
   - `spawn_input_and_parent_send_input_and_report_turns_are_not_undoable`
+- `src/app/update/chat/tests/task_page.rs`
+  - `closing_the_page_keeps_detail_rewind_execution`
 - `src/event/chat/tests/detail_rewind.rs`
+  - `auto_compact_checkpoint_is_not_a_rewind_target`
   - `detail_rewind_deletes_the_last_follow_up_and_reloads_the_run`
   - `detail_rewind_disables_file_actions_when_snapshot_is_unavailable`
   - `detail_rewind_ignores_late_operation_id`
@@ -100,12 +111,14 @@
   - `btw_undo_deletes_the_last_turn_and_keeps_the_thread`
   - `btw_undo_of_the_only_turn_resets_the_thread`
 - `src/event/chat/tests/detail_compact.rs`
+  - `compact_detail_rejects_reentry_while_compacting`
   - `compact_detail_commits_checkpoint_for_child_session`
   - `compact_detail_empty_reports_nothing_to_compact`
   - `compact_detail_busy_agent_is_rejected`
   - `btw_compact_persists_checkpoint_and_reloads_thread`
 - `src/event/chat/tests/subagent_private.rs`
   - `report_turn_body_excludes_previous_private_chat`
+  - `undelivered_steer_after_report_is_resent_privately`
 
 ### BTW 重置
 
@@ -185,3 +198,4 @@ cargo test --lib db::chat::subagent
 - 主输入 `/` 命令、`/rewind`、`/compact`、AI Web 命令列表无回归。
 - `cargo fmt` / `cargo clippy --all-targets -- -D warnings` / `cargo test` 全绿。
 - 补充 `docs/feature/lx-detail-slash-and-report/verification.md`，记录命令、测试数量与实机结果。
+- 完成 `review.md` 的 P0–P3 修复与回归测试；已知 P3（更早的自动检查点仍会作为上下文基线、隐藏详情压缩仍按 10Hz 更新耗时、`chat.rs` / `subagent.rs` 在此分支前已超 1000 行）记录在 `review.md` 的遗留项。

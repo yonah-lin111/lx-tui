@@ -10,14 +10,15 @@
 | 校验 | 命令 | 结果 |
 | :--- | :--- | :--- |
 | 格式 / 静态检查 | `cargo fmt && cargo clippy --all-targets -- -D warnings` | PASS（0 warning） |
-| 全量测试 | `cargo test` | PASS（lib **5611 passed / 6 ignored**；集成测试全通过） |
+| 全量测试 | `cargo test` | PASS（lib **5622 passed / 6 ignored**；集成测试全通过） |
 | 详情命令模型 | `cargo test --lib app::state::lx::slash::composer` | 7 passed |
-| composer 与命令分派 | `cargo test --lib app::update::chat::tests::detail_commands` | 21 passed |
+| composer 与命令分派 | `cargo test --lib app::update::chat::tests::detail_commands` | 29 passed |
 | BTW 更新 | `cargo test --lib app::update::chat::btw::tests` | 21 passed |
-| 详情撤销事件层 | `cargo test --lib event::chat::tests::detail_rewind` | 7 passed |
-| 详情压缩事件层 | `cargo test --lib event::chat::tests::detail_compact` | 5 passed |
-| 私聊 / 汇报 | `cargo test --lib event::chat::tests::subagent_private` | 5 passed |
+| 详情撤销事件层 | `cargo test --lib event::chat::tests::detail_rewind` | 8 passed |
+| 详情压缩事件层 | `cargo test --lib event::chat::tests::detail_compact` | 6 passed |
+| 私聊 / 汇报 | `cargo test --lib event::chat::tests::subagent_private` | 6 passed |
 | 可撤回判据 | `cargo test --lib db::chat::subagent::tests::rewind` | 3 passed |
+| 检查点撤销防护 | `cargo test --lib db::chat::compact` | 13 passed |
 | 详情渲染 | `cargo test --lib ui::main_content::lx::task::tests::detail_slash` | 4 passed |
 | 面板内联条目 | `cargo test --lib ui::main_content::lx::tests::slash_panels::detail_commands` | 1 passed |
 | 详情 Rewind 面板 | `cargo test --lib ui::main_content::lx::tests::slash_panels::detail_rewind_panels` | 1 passed |
@@ -108,6 +109,12 @@ CLI 实机会话（本工作区）：
 - **验证步骤**：执行 `cargo test --lib btw_streaming_tool_step_breathes`；实机在 BTW 线程生成时观察上方消息列表的步骤标记。
 - **期望结果**：三处均按 `LxChat::is_animating()` 判定动画，`loading_frame` 每 `STEP_BREATH_TICKS` 帧翻转 `■/□`（约 400ms 一相）；BTW 的方块不再恒为实心；回答结束后终态恒实心。此前 `from_chat` 只看 `status.streaming`，BTW 从不设置该字段，导致步骤标记整段不呼吸（PASS）。
 
+### V14 — 2026-11-16 review 回归
+
+- **输入内容**：自动压缩检查点 + 更晚的私聊轮；多行草稿末行 `/new` 且 `/` 面板打开；BTW 两个线程、确认撤销后 `Esc` 关闭任务页；压缩中再次 `/compact`；报告轮结束仍有未消费 steer；BTW 搜索粘贴把 active 过滤到另一个 QA。
+- **验证步骤**：执行 `cargo test --lib auto_compact_checkpoint_is_not_a_rewind_target`、`cargo test --lib multiline_draft_does_not_execute_last_line_command`、`cargo test --lib btw_rewind_receipt_targets_the_planned_thread_only`、`cargo test --lib closing_the_page_keeps_detail_rewind_execution`、`cargo test --lib compact_detail_rejects_reentry_while_compacting`、`cargo test --lib undelivered_steer_after_report_is_resent_privately`、`cargo test --lib btw_search_paste_loads_the_switched_thread`。
+- **期望结果**：自动检查点（`operation_id` 前缀 `autocompact-`）不进入 `/rewind` 目标；多行草稿只提示 `Run this command on its own line`，不执行、不清空；删空只重置 `plan.target` 对应线程并 push `LoadQaList`；关闭任务页后 `Lx.detail_rewind.executing` 保留；压缩中第二次 `/compact` 不覆盖幂等键；steer 重投 `notify_parent=false`；搜索粘贴切换 QA 会发 `LoadThread`（PASS）。
+
 ### V10 — 回归与边界
 
 - **输入内容**：主输入 `/`、`/rewind`、`/compact`、AI Web 允许命令；旧库追问行；含 steer 的轮次。
@@ -182,5 +189,5 @@ CLI 实机会话（本工作区）：
 - 含轮内 steer 的轮次不可 `/rewind`：steer 段只覆盖截断之后的消息与文件，按最新段撤销只能回退半个逻辑轮次，因此直接拒绝。
 - 旧库（v29 之前）的追问行 `notify_parent` 默认 1，会被判为不可撤回；安全默认，不回填历史。
 - `/report` 会额外消耗一次模型轮次（仅显式命令触发）。
-- 自动压缩产生的检查点不写数据库，不能通过 `/rewind` 恢复；只支持持久化检查点。
+- 自动压缩也写检查点表，但不能通过 `/rewind` 恢复（按 `operation_id` 前缀 `autocompact-` 跳过）；它是上下文基线，撤销更早的手动检查点也不会改变 active 指针。
 - CLI 无法直接触发面板专属命令（`/rewind`、`/report`、`/compact`、`/new`）；这些路径由 §1 的定向测试覆盖，TUI 交互见 §4。

@@ -21,7 +21,17 @@ pub(crate) fn submit(state: &mut AppState, pane: PaneId, note: &str) -> bool {
             target.lx.chat.session_id.clone(),
         ))
     }) else {
-        return false;
+        show_lx_toast(
+            state,
+            pane,
+            Toast::new(
+                ToastKind::Warning,
+                text::detail::LX_DETAIL_REPORT_UNAVAILABLE,
+                Some(pane),
+                std::time::Instant::now(),
+            ),
+        );
+        return true;
     };
     if running {
         super::composer::clear(state, pane);
@@ -38,7 +48,17 @@ pub(crate) fn submit(state: &mut AppState, pane: PaneId, note: &str) -> bool {
         return true;
     }
     let Some(session_id) = session_id else {
-        return false;
+        show_lx_toast(
+            state,
+            pane,
+            Toast::new(
+                ToastKind::Warning,
+                text::detail::LX_DETAIL_REPORT_UNAVAILABLE,
+                Some(pane),
+                std::time::Instant::now(),
+            ),
+        );
+        return true;
     };
     let message = crate::chat::agent::report_request_message(note);
     if message.len() > crate::db::chat::MAX_MESSAGE_BYTES {

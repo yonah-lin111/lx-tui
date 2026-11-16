@@ -516,7 +516,11 @@ fn cut_lx_selection(state: &mut AppState) -> bool {
         matches!(
             target.lx.slash,
             Some(crate::app::state::SlashPanel::History(_))
-        )
+        ) || target.lx.detail_rewind.is_executing()
+            || matches!(
+                target.lx.active_editor().slash,
+                Some(crate::app::state::SlashPanel::Rewind(_))
+            )
     }) {
         return false;
     }

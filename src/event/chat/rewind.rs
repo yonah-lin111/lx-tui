@@ -340,12 +340,14 @@ pub fn handle_rewind_finished(
     outcome: RewindOutcome,
 ) -> bool {
     // 详情 composer 的撤销：按 pending operation id 分流，不触碰主聊天。
-    if state
-        .pane_anywhere(pane)
-        .and_then(|target| target.lx.task.as_ref())
-        .and_then(|page| page.detail_rewind_executing.as_ref())
-        .is_some_and(|exec| exec.operation_id == operation_id)
-    {
+    if state.pane_anywhere(pane).is_some_and(|target| {
+        target
+            .lx
+            .detail_rewind
+            .executing
+            .as_ref()
+            .is_some_and(|exec| exec.operation_id == operation_id)
+    }) {
         return super::detail_rewind::handle_finished(
             state,
             persistence,
@@ -354,6 +356,11 @@ pub fn handle_rewind_finished(
             operation_id,
             outcome,
         );
+    }
+    // 详情撤销的 operation id 命名空间固定；执行态可能已随会话切换清掉，
+    // 这时也只能忽略，绝不能落进主聊天处理器。
+    if operation_id.starts_with("detail-rewind-") {
+        return false;
     }
     // 迟到回执：当前正在执行的是更晚的一次撤销，旧结果不得清掉它的 executing。
     if let Some(executing) = state

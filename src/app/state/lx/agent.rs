@@ -158,7 +158,8 @@ impl SubagentRun {
     ///
     /// 再次选中时由 `Effect::LoadSubagentSession` 从 SQLite 懒加载。
     pub fn evict_chat_memory(&mut self) {
-        if self.is_running() || !self.loaded {
+        // 压缩中不能卸载：compact.running 与检查点回填都挂在这份内存状态上。
+        if self.is_running() || !self.loaded || self.compact.is_running() {
             return;
         }
         self.chat = LxChat::new();
@@ -557,7 +558,7 @@ impl AgentsState {
                 .runs
                 .iter()
                 .enumerate()
-                .filter(|(_, run)| !run.is_running() && run.loaded)
+                .filter(|(_, run)| !run.is_running() && run.loaded && !run.compact.is_running())
                 .filter(|(_, run)| Some(run.agent_id.as_str()) != protected_agent_id)
                 .min_by_key(|(_, run)| run.last_accessed_ms)
                 .map(|(index, _)| index);

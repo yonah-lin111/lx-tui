@@ -345,14 +345,8 @@ fn select_recap(state: &mut AppState, pane: PaneId, session_id: &str) -> Option<
 /// 选中最近的 compact 检查点：只冻结检查点 id 与 revision，不请求文件预检。
 fn select_compact(state: &mut AppState, pane: PaneId, session_id: &str) -> Option<()> {
     let target = state.pane_anywhere(pane)?;
-    let checkpoint = target
-        .lx
-        .compact
-        .checkpoints
-        .iter()
-        .rev()
-        .find(|checkpoint| checkpoint.active)?
-        .clone();
+    // 自动压缩检查点不可撤销；只有最新 active 且为手动压缩时才作为目标。
+    let checkpoint = target.lx.compact.rewindable()?.clone();
     let revision = target.lx.chat.revision;
     let input_at_open = target.lx.input.clone();
     let target = state.pane_mut_anywhere(pane)?;

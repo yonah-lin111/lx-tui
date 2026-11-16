@@ -529,3 +529,64 @@ fn send_child(
     });
     crate::event::chat::apply_subagent_effects(state, streams, persistence)
 }
+
+/// 报告轮结束后重投未消费的 steer：它们仍是普通私聊，不能继承
+/// `handle.notify_parent`，否则私聊回答会被当成下一份报告转发给父 agent。
+#[tokio::test]
+async fn undelivered_steer_after_report_is_resent_privately() {
+    let (_fixture, mut state, key, persistence, mut streams, _parent) = fixture_with_parent();
+    let agent_id = spawn_explorer(&mut state, &mut streams, &persistence, &key, "first task").await;
+    let child_session = streams
+        .subagents
+        .values()
+        .find(|handle| handle.agent_id == agent_id)
+        .expect("handle")
+        .child_session_id
+        .clone();
+    assert!(streams.subagents[&child_session].notify_parent);
+    state
+        .pane_mut_anywhere(key.pane)
+        .expect("pane")
+        .lx
+        .agents
+        .by_agent_mut(&agent_id)
+        .expect("run")
+        .chat
+        .pending_steers
+        .push(crate::app::state::lx::chat::steer::PendingSteer {
+            text: "private steer".into(),
+            attachments: Vec::new(),
+            model_images: Vec::new(),
+            model: crate::db::chat::ModelSnapshot {
+                provider: "p".into(),
+                model: "m".into(),
+                variant: None,
+            },
+        });
+    state.effects.clear();
+    crate::event::chat::finish_subagent(
+        &mut state,
+        &mut streams,
+        &persistence,
+        RequestKey {
+            pane: key.pane,
+            session: child_session,
+            generation: key.generation,
+        },
+        StopReason::Complete,
+        Usage::default(),
+    );
+    let resent = state
+        .effects
+        .iter()
+        .find_map(|effect| match effect {
+            Effect::SendSubagentUserInput {
+                text,
+                notify_parent,
+                ..
+            } if text == "private steer" => Some(*notify_parent),
+            _ => None,
+        })
+        .expect("pending steer must be resent");
+    assert!(!resent, "steer 重投必须保持私聊");
+}

@@ -183,7 +183,7 @@ pub fn set_task_btw_scroll(
     before != clamped || was_following != thread.follow
 }
 
-pub(super) fn switch_qa(state: &mut AppState, pane: PaneId, qa_id: &str) -> bool {
+pub(crate) fn switch_qa(state: &mut AppState, pane: PaneId, qa_id: &str) -> bool {
     let Some(parent_session_id) = state
         .pane_anywhere(pane)
         .and_then(|target| target.lx.chat.session_id.clone())

@@ -10,7 +10,17 @@ use crate::ui::text;
 /// `/compact` 命令入口：冻结目标并交给事件层解析会话与模型。
 pub(crate) fn request(state: &mut AppState, pane: PaneId) -> bool {
     let Some(target) = detail_target(state, pane) else {
-        return false;
+        show_lx_toast(
+            state,
+            pane,
+            Toast::new(
+                ToastKind::Warning,
+                text::detail::LX_COMPACT_UNAVAILABLE,
+                Some(pane),
+                std::time::Instant::now(),
+            ),
+        );
+        return true;
     };
     super::composer::clear(state, pane);
     state.effects.push(Effect::CompactDetail { pane, target });
@@ -62,21 +72,28 @@ pub fn on_started(
             .agents
             .by_agent_mut(agent_id)
             .map(|run| {
-                run.compact.start(operation_id.clone(), now);
+                if !run.compact.start(operation_id.clone(), now) {
+                    return false;
+                }
+                run.touch_access();
                 // 运行中的检查点行是新增内容：总行数必须重量，否则滚动上限、
                 // 滚动条与“贴底”判定会一直沿用压缩前的旧值。
                 run.rows_dirty = true;
+                true
             })
-            .is_some(),
+            .unwrap_or(false),
         DetailTarget::Btw(thread_id) => target_state
             .lx
             .btw
             .thread_by_thread_id_mut(thread_id)
             .map(|thread| {
-                thread.compact.start(operation_id.clone(), now);
+                if !thread.compact.start(operation_id.clone(), now) {
+                    return false;
+                }
                 thread.rows_dirty = true;
+                true
             })
-            .is_some(),
+            .unwrap_or(false),
     };
     if !started {
         return false;
@@ -111,6 +128,9 @@ pub fn handle_finished(
             return false;
         }
         run.compact.finish();
+        // 运行中的检查点行已消失：无论成功/空/失败都要重量，否则滚动上限
+        // 会一直多算这一行。
+        run.rows_dirty = true;
         if let Some(notices) = notices.as_ref() {
             run.compact.replace(notices.clone());
             run.rows_dirty = true;
@@ -123,6 +143,7 @@ pub fn handle_finished(
             return false;
         }
         thread.compact.finish();
+        thread.rows_dirty = true;
         if let Some(notices) = notices {
             thread.compact.replace(notices);
             thread.rows_dirty = true;

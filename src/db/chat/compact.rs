@@ -45,6 +45,16 @@ impl CompactCheckpoint {
     pub fn is_active(&self) -> bool {
         self.state == COMPACT_ACTIVE
     }
+
+    /// 是否由 Agent 自动压缩产生。
+    ///
+    /// 自动压缩与手动 `/compact` 共用检查点表；它的 `operation_id` 前缀是唯一的
+    /// 区分依据（`autocompact-...`）。自动检查点不能作为 `/rewind` 目标。
+    pub fn is_auto(&self) -> bool {
+        self.operation_id
+            .strip_prefix("autocompact")
+            .is_some_and(|rest| rest.starts_with('-'))
+    }
 }
 
 /// 一次成功压缩的提交参数。
@@ -287,6 +297,21 @@ impl Database {
             |row| row.get(0),
         )?;
         if revision != revert.expected_revision {
+            return Err(DbError::RewindTargetChanged);
+        }
+        // 时间线里已经有更晚的用户轮：检查点不再是最新事件，恢复会让上下文
+        // 指针回退到该轮之前。与 `commit_rewind` 的 latest 防护同口径。
+        let later_turn: Option<String> = transaction
+            .query_row(
+                r#"SELECT external_id FROM agent_message
+                   WHERE session_id = ?1 AND role = 'user' AND kind <> 'user_shell'
+                     AND sequence > ?2
+                   ORDER BY sequence DESC LIMIT 1"#,
+                params![revert.session_id, checkpoint.sequence],
+                |row| row.get(0),
+            )
+            .optional()?;
+        if later_turn.is_some() {
             return Err(DbError::RewindTargetChanged);
         }
         // 只能撤销时间线上最新的一条生效检查点：更晚的 active 检查点存在时目标已过期。

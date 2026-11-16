@@ -180,7 +180,11 @@ fn unknown_slash_is_not_sent_to_model() {
     type_str(&mut state, "/nope");
     state.effects.clear();
     crate::app::update::pane::apply_lx_input(&mut state, LxInput::Enter);
-    assert_eq!(editor_text(&state, pane), "", "未知命令不留在草稿里");
+    assert_eq!(
+        editor_text(&state, pane),
+        "/nope",
+        "未知命令保留草稿，便于继续编辑"
+    );
     assert!(
         !state.effects.iter().any(|effect| matches!(
             effect,
@@ -439,16 +443,14 @@ fn rewind_confirm_default_enter_emits_execute_effect() {
     assert_eq!(
         state
             .pane_anywhere(pane)
-            .and_then(|target| target.lx.task.as_ref())
-            .and_then(|page| page.detail_rewind_executing.as_ref())
+            .and_then(|target| target.lx.detail_rewind.executing.as_ref())
             .map(|exec| exec.operation_id.as_str()),
         Some(request.operation_id.as_str())
     );
     assert!(
         state
             .pane_anywhere(pane)
-            .and_then(|target| target.lx.task.as_ref())
-            .and_then(|page| page.detail_rewind_pending.as_ref())
+            .and_then(|target| target.lx.detail_rewind.pending.as_ref())
             .is_some_and(|plan| plan.action == crate::app::state::RewindAction::RevertAndDelete),
         "回投记录实际选择"
     );
@@ -494,11 +496,8 @@ fn rewind_confirm_disabled_file_action_is_swallowed() {
 fn rewind_busy_agent_does_not_open_confirm() {
     let (mut state, pane) = agents_editing_state();
     // 已有执行中的撤销：再次 /rewind 只提示，不覆盖。
-    if let Some(page) = state
-        .pane_mut_anywhere(pane)
-        .and_then(|target| target.lx.task.as_mut())
-    {
-        page.detail_rewind_executing = Some(crate::app::state::DetailRewindExecution {
+    if let Some(target) = state.pane_mut_anywhere(pane) {
+        target.lx.detail_rewind.executing = Some(crate::app::state::DetailRewindExecution {
             operation_id: "op-1".into(),
             target: crate::app::state::DetailTarget::Agent("sub-idle".into()),
         });
@@ -518,8 +517,198 @@ fn panel_after_confirm_closed(state: &AppState, pane: PaneId) -> bool {
     panel(state, pane).is_none()
         && state
             .pane_anywhere(pane)
-            .and_then(|target| target.lx.task.as_ref())
-            .is_some_and(|page| page.detail_rewind_pending.is_none())
+            .is_some_and(|target| target.lx.detail_rewind.pending.is_none())
+}
+
+#[test]
+fn moving_cursor_refreshes_slash_candidates() {
+    let (mut state, pane) = agents_editing_state();
+    type_str(&mut state, "/co");
+    assert_eq!(file_entries(&state, pane), vec!["/compact"]);
+    // 光标移到行首：不在命令位置，候选必须关闭。
+    crate::app::update::pane::apply_lx_input(&mut state, LxInput::Home);
+    assert!(panel(&state, pane).is_none(), "离开命令位置必须关面板");
+    // 回到行尾：命令重新成立，候选回来。
+    crate::app::update::pane::apply_lx_input(&mut state, LxInput::End);
+    assert_eq!(file_entries(&state, pane), vec!["/compact"]);
+}
+
+#[test]
+fn multiline_draft_does_not_execute_last_line_command() {
+    let (mut state, pane) = btw_editing_state();
+    state
+        .pane_mut_anywhere(pane)
+        .expect("pane")
+        .lx
+        .btw
+        .active_composer_mut()
+        .expect("composer")
+        .insert_str("keep this\n/new");
+    crate::app::update::chat::refresh_slash_panel(&mut state, pane);
+    assert!(panel(&state, pane).is_some(), "末行命令照常出面板");
+    state.effects.clear();
+    crate::app::update::pane::apply_lx_input(&mut state, LxInput::Enter);
+    assert_eq!(
+        editor_text(&state, pane),
+        "keep this\n/new",
+        "命令夹在多行草稿里不得执行，也不得清空整框"
+    );
+    assert!(
+        !state.effects.iter().any(|effect| matches!(
+            effect,
+            crate::app::effects::Effect::Btw(crate::app::effects::BtwEffect::DeleteThread { .. })
+        )),
+        "不得删除线程"
+    );
+}
+
+#[test]
+fn btw_rewind_receipt_targets_the_planned_thread_only() {
+    use crate::app::state::{DetailRewindPlan, DetailTarget, RewindAction, RewindTargetKind};
+
+    let (mut state, pane) = btw_editing_state();
+    let target = state.pane_mut_anywhere(pane).expect("pane");
+    target.lx.input = "main draft".into();
+    target.lx.btw.ensure_thread("qa-2");
+    {
+        let first = target.lx.btw.thread_mut("qa-1").expect("qa-1");
+        first.thread_id = Some("t1".into());
+        first.child_session_id = Some("s1".into());
+        first.loaded = true;
+        let second = target.lx.btw.thread_mut("qa-2").expect("qa-2");
+        second.thread_id = Some("t2".into());
+        second.child_session_id = Some("s2".into());
+        second.loaded = true;
+    }
+    target.lx.btw.active = Some("qa-2".into());
+    let plan = DetailRewindPlan {
+        target: DetailTarget::Btw("t1".into()),
+        workspace: std::path::PathBuf::new(),
+        child_session: "s1".into(),
+        user_message_id: "u1".into(),
+        expected_revision: 0,
+        input_at_open: String::new(),
+        user_text: "hello".into(),
+        action: RewindAction::RevertAndDelete,
+        snapshot: crate::app::state::SnapshotState::KnownEmpty,
+        kind: RewindTargetKind::Turn,
+    };
+    state.effects.clear();
+    assert!(crate::app::update::on_detail_rewind_succeeded(
+        &mut state,
+        pane,
+        &plan,
+        &[],
+        &[],
+        true,
+        0,
+        false,
+        "hello",
+    ));
+    let target = state.pane_mut_anywhere(pane).expect("pane");
+    let first = target.lx.btw.thread_mut("qa-1").expect("qa-1");
+    assert!(first.thread_id.is_none(), "目标线程已重置");
+    let second = target.lx.btw.thread_mut("qa-2").expect("qa-2");
+    assert_eq!(
+        second.thread_id.as_deref(),
+        Some("t2"),
+        "无关线程不能被清空"
+    );
+    assert_eq!(target.lx.input, "main draft", "草稿不得回填进主输入框");
+    assert_eq!(
+        target
+            .lx
+            .btw
+            .thread_mut("qa-1")
+            .expect("qa-1")
+            .composer
+            .text(),
+        "hello",
+        "原文回填到目标线程自己的 composer"
+    );
+    assert!(
+        state.effects.iter().any(|effect| matches!(
+            effect,
+            crate::app::effects::Effect::Btw(crate::app::effects::BtwEffect::LoadQaList { .. })
+        )),
+        "删空线程后必须刷新 QA 列表标记"
+    );
+}
+
+#[test]
+fn detail_compact_finished_without_readback_clears_running() {
+    let (mut state, pane) = agents_editing_state();
+    {
+        let run = state
+            .pane_mut_anywhere(pane)
+            .expect("pane")
+            .lx
+            .agents
+            .by_agent_mut("sub-idle")
+            .expect("run");
+        assert!(run.compact.start("op-readback".into(), 0));
+        run.rows_dirty = false;
+    }
+    assert!(crate::app::update::on_detail_compact_finished(
+        &mut state,
+        pane,
+        "sess-idle",
+        "op-readback",
+        &crate::app::update::chat::DetailCompactResult::Committed,
+        None,
+    ));
+    let run = state
+        .pane_anywhere(pane)
+        .expect("pane")
+        .lx
+        .agents
+        .by_agent("sub-idle")
+        .expect("run");
+    assert!(!run.compact.is_running(), "读回失败也必须结束 compacting");
+    assert!(run.rows_dirty, "运行中检查点行消失后必须重量");
+}
+
+#[test]
+fn btw_search_paste_loads_the_switched_thread() {
+    let (mut state, pane) = btw_editing_state();
+    {
+        let target = state.pane_mut_anywhere(pane).expect("pane");
+        target.lx.btw.editing = false;
+        target.lx.btw.qa = vec![
+            crate::app::state::lx::btw::BtwQaSummary {
+                qa_id: "qa-1".into(),
+                title: "alpha".into(),
+                has_thread: true,
+                status: "idle".into(),
+            },
+            crate::app::state::lx::btw::BtwQaSummary {
+                qa_id: "qa-2".into(),
+                title: "beta".into(),
+                has_thread: true,
+                status: "idle".into(),
+            },
+        ];
+        target.lx.btw.active = Some("qa-1".into());
+    }
+    state.effects.clear();
+    assert!(crate::app::update::apply_task_paste(
+        &mut state, pane, "beta"
+    ));
+    let target = state.pane_anywhere(pane).expect("pane");
+    assert_eq!(
+        target.lx.btw.active.as_deref(),
+        Some("qa-2"),
+        "过滤后高亮切到唯一匹配项"
+    );
+    assert!(
+        state.effects.iter().any(|effect| matches!(
+            effect,
+            crate::app::effects::Effect::Btw(crate::app::effects::BtwEffect::LoadThread { qa_id, .. })
+                if qa_id == "qa-2"
+        )),
+        "粘贴触发的切换也必须加载线程：{:?}",
+        state.effects
+    );
 }
 
 #[test]

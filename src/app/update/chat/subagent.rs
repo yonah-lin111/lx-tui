@@ -665,8 +665,9 @@ pub fn toggle_agent_card(state: &mut AppState, pane: PaneId, target: CardTarget)
 
 /// 子 agent 运行时自动压缩：把摘要挂成 compact 检查点，详情区复用现有组件。
 ///
-/// 自动压缩不写数据库，因此没有真实的消息 sequence 范围；`from_auto` 用
-/// `auto · this run` 替代范围行。检查点插在当前时间线末尾，后续消息继续排在后面。
+/// 自动压缩与手动 `/compact` 共用检查点表，但不写真实的消息 sequence 范围；
+/// `from_auto` 用 `auto · this run` 替代范围行。事件层已经把检查点提交到数据库，
+/// 这里只追加即时 UI 投影；`/rewind` 会按 `operation_id` 前缀跳过自动检查点。
 pub fn on_subagent_auto_compact(
     state: &mut AppState,
     child_session: &str,
@@ -768,6 +769,9 @@ pub fn on_subagent_finished(
     };
     run.chat.close_stream(&reason);
     run.chat.status.streaming = false;
+    // 终态必须归还请求状态机：`is_animating()` 会把残留的 Streaming 当成在跑，
+    // 让已完成的历史永远按动画帧取相位。
+    run.chat.request = crate::app::state::RequestState::Idle;
     run.rows_dirty = true;
     run.status = status.to_string();
     run.completed_at_ms = Some(crate::db::now_ms());

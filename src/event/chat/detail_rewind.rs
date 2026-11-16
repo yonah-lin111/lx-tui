@@ -64,10 +64,12 @@ pub(crate) fn prepare(
     input_at_open: String,
 ) -> bool {
     let Some(workspace) = workspace_for_pane(state, pane) else {
-        return false;
+        toast(state, pane, text::detail::LX_DETAIL_REWIND_UNAVAILABLE);
+        return true;
     };
     let Some(database) = persistence.database() else {
-        return false;
+        toast(state, pane, text::detail::LX_DETAIL_REWIND_UNAVAILABLE);
+        return true;
     };
     // 先解析稳定目标与子会话：撤销永远落在子会话上。
     let (target, child_session) = match &target {
@@ -83,7 +85,8 @@ pub(crate) fn prepare(
                 .ok()
                 .flatten()
             else {
-                return false;
+                toast(state, pane, text::detail::LX_DETAIL_REWIND_UNAVAILABLE);
+                return true;
             };
             if agent_busy(state, pane, agent_id) {
                 toast(state, pane, text::detail::LX_DETAIL_REWIND_BUSY);
@@ -96,7 +99,8 @@ pub(crate) fn prepare(
         }
         DetailTarget::Btw(thread_id) => {
             let Some(thread) = database.btw_thread(&workspace, thread_id).ok().flatten() else {
-                return false;
+                toast(state, pane, text::detail::LX_DETAIL_REWIND_UNAVAILABLE);
+                return true;
             };
             if btw_busy(state, pane, thread_id) {
                 toast(state, pane, text::detail::LX_DETAIL_REWIND_BUSY);
@@ -109,6 +113,8 @@ pub(crate) fn prepare(
         }
     };
     // 时间线取最新事件：检查点比最新用户轮更晚时，`/rewind` 撤销压缩而不是轮次。
+    // 自动压缩也会写库，但它不是用户可撤销的手动检查点；只有「最新 active
+    // 检查点本身就是手动的」才允许恢复，否则落到轮次分支。
     let latest = database
         .latest_user_turn(&workspace, &child_session)
         .ok()
@@ -117,6 +123,7 @@ pub(crate) fn prepare(
         .compact_checkpoints(&workspace, &child_session)
         .ok()
         .and_then(|mut checkpoints| checkpoints.pop())
+        .filter(|checkpoint| !checkpoint.is_auto())
         .filter(|checkpoint| {
             latest
                 .as_ref()
@@ -248,16 +255,13 @@ pub(crate) fn handle_finished(
     operation_id: &str,
     outcome: RewindOutcome,
 ) -> bool {
-    let Some(plan) = state
-        .pane_anywhere(pane)
-        .and_then(|target| target.lx.task.as_ref())
-        .and_then(|page| {
-            page.detail_rewind_executing
-                .as_ref()
-                .filter(|exec| exec.operation_id == operation_id)
-                .and_then(|_| page.detail_rewind_pending.clone())
+    let Some(plan) = state.pane_anywhere(pane).and_then(|target| {
+        target.lx.detail_rewind.executing.as_ref().and_then(|exec| {
+            (exec.operation_id == operation_id)
+                .then(|| target.lx.detail_rewind.pending.clone())
+                .flatten()
         })
-    else {
+    }) else {
         return false;
     };
     match outcome {
@@ -265,22 +269,24 @@ pub(crate) fn handle_finished(
             crate::app::update::on_detail_rewind_failed(state, pane, &message)
         }
         RewindOutcome::Succeeded {
+            restored_files,
+            already_restored,
             user_text,
             session_deleted,
             ..
         } => {
             let Some(database) = persistence.database() else {
-                return crate::app::update::on_detail_rewind_failed(
-                    state,
-                    pane,
-                    "database unavailable",
-                );
+                return crate::app::update::on_detail_rewind_reload_failed(state, pane);
             };
-            let messages = database
-                .load_chat_session(workspace, &plan.child_session)
-                .ok()
-                .flatten()
-                .unwrap_or_default();
+            // 读失败不能用空列表覆盖已成功的会话视图；提示「已提交但重载失败」，
+            // 保留当前内容，等下一次选中时自然重载。
+            let messages = match database.load_chat_session(workspace, &plan.child_session) {
+                Ok(Some(messages)) => messages,
+                Ok(None) if session_deleted => Vec::new(),
+                _ => {
+                    return crate::app::update::on_detail_rewind_reload_failed(state, pane);
+                }
+            };
             let checkpoints = database
                 .compact_checkpoints(workspace, &plan.child_session)
                 .unwrap_or_default();
@@ -291,6 +297,8 @@ pub(crate) fn handle_finished(
                 &messages,
                 &checkpoints,
                 session_deleted,
+                restored_files,
+                already_restored,
                 &user_text,
             )
         }

@@ -827,6 +827,7 @@ impl LxChat {
             || self
                 .messages
                 .iter()
+                .rev()
                 .any(|message| message.role == "assistant" && message.status == "streaming")
     }
 

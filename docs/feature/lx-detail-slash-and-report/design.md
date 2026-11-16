@@ -2,10 +2,11 @@
 
 - **特性目录**：`docs/feature/lx-detail-slash-and-report/`
 - **关联任务**：[`task.md`](task.md)
-- **当前状态**：**已在 `detail-slash-report` 分支实现，自动化与 CLI 实机验证通过；TUI 交互/外观待用户确认后合并（含 2026-11-15 T10 修复）**（见 [`verification.md`](verification.md)）。
+- **当前状态**：**已在 `detail-slash-report` 分支实现，自动化与 CLI 实机验证通过；TUI 交互/外观待用户确认后合并（含 2026-11-15 T10 修复与 2026-11-16 review 修复）**（见 [`verification.md`](verification.md)、[`review.md`](review.md)）。
 - **2026-11-15 调整**：详情命令由 `/undo` 更名为 `/rewind`（`/undo` 保留隐藏别名）；确认面板与主聊天四项动作对齐；新增 compact 检查点撤销（`RestoreCompact`）。
 - **2026-11-15 修复**：详情 `/compact` 纳入 `has_streaming_lx` 心跳（耗时与菱形呼吸、聊天栏 `Compacting context... (Ns)`）；后台详情滚动条按下/拖拽上限改用 `ScrollbarLayout` 的 `total`/`visible`，不再读滞后一帧的缓存行数。
 - **2026-11-15 对齐**：历史动画判据收敛到 `LxChat::is_animating()`（流式状态 / 请求在途 / 本地命令 / 流式 assistant 投影），主会话、子 agent 详情与 BTW 线程共用；修复 BTW 不维护 `status.streaming` 导致步骤标记不呼吸。
+- **2026-11-16 review 修复**：自动压缩检查点不再进入 `/rewind` 目标；详情撤销执行态从 `TaskPage` 移到 `Lx.detail_rewind`；回执按 `thread_id`/`agent_id` 回填并只写目标 composer；无参命令采纳也校验整段独立；详情压缩禁止重入、读回失败也会结束 running；BTW 搜索粘贴切换线程会加载历史。详见 [`review.md`](review.md)。
 - **目标范围**：
   - `src/app/state/lx/{slash.rs,slash/composer.rs,agent.rs,rewind.rs,task.rs,detail.rs,panels.rs}`
   - `src/app/update/chat/{slash.rs,composer.rs,detail_rewind.rs,detail_report.rs,btw/*,compact.rs}`
@@ -479,8 +480,8 @@ pub(crate) fn refresh_slash_panel(state: &mut AppState, pane: PaneId) {
 | Agents composer 编辑 | `task_page.rs::edit_agent_composer` | `apply_editor_edit` 后若 revision 变化，调用 `refresh_slash_panel` |
 | BTW composer 编辑 | `btw/input.rs::edit_composer` | 同上 |
 | composer 粘贴 | `task_page.rs::apply_task_paste`（Agents 编辑分支） | 插入后调用 `refresh_slash_panel` |
-| 进入/退出编辑 | `enter_task_agent_edit` / `leave_agent_edit` / `enter_btw_edit` / `leave_btw_edit` | 清空 composer 的 `slash` 与 `TaskPage.detail_rewind_pending` |
-| 切 tab / 关面板 / 打开 agent 或 btw 页 | `cycle_task_tab` / `close_task_page` / `open_agent_page` / `open_btw_tab` | 清空 composer 的 `slash` 与 `detail_rewind_pending` |
+| 进入/退出编辑 | `enter_task_agent_edit` / `leave_agent_edit` / `enter_btw_edit` / `leave_btw_edit` | 清空 composer 的 `slash` 与 `Lx.detail_rewind.pending` |
+| 切 tab / 关面板 / 打开 agent 或 btw 页 | `cycle_task_tab` / `close_task_page` / `open_agent_page` / `open_btw_tab` | 清空 composer 的 `slash` 与 `Lx.detail_rewind.pending` |
 | 会话切换 | `clear_agents` / BTW 复位 | composer 随状态销毁 |
 
 #### 4.3.3 按键路由
@@ -543,7 +544,7 @@ pub(crate) fn apply_slash_input(state: &mut AppState, pane: PaneId, command: LxI
 }
 ```
 
-`close(state, pane)` 同时清空 active editor 的 `slash` 与 `TaskPage.detail_rewind_pending`，避免确认计划在面板关闭后残留。
+`close(state, pane)` 同时清空 active editor 的 `slash` 与 `Lx.detail_rewind.pending`，避免确认计划在面板关闭后残留。
 
 `Enter` 的执行顺序（`submit_agent_edit` / `submit_current` 开头）：
 
@@ -798,20 +799,28 @@ pub struct DetailRewindPlan {
     pub kind: crate::app::state::RewindTargetKind,
 }
 
-/// 执行中的幂等键；TaskPage 持有它用于迟到回执过滤。
+/// 执行中的幂等键；`Lx` 持有它用于迟到回执过滤。
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct DetailRewindExecution {
     pub operation_id: String,
     pub target: DetailTarget,
 }
+
+/// 详情撤销的待确认计划与执行态；**不能**挂在 `TaskPage` 上。
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct DetailRewindState {
+    pub pending: Option<DetailRewindPlan>,
+    pub executing: Option<DetailRewindExecution>,
+}
 ```
 
-`TaskPage` 增加：
+`Lx` 增加：
 
 ```rust
-pub detail_rewind_pending: Option<DetailRewindPlan>,
-pub detail_rewind_executing: Option<DetailRewindExecution>,
+pub detail_rewind: DetailRewindState,
 ```
+
+> 2026-11-16 review：原实现把执行态放在 `TaskPage`，`Esc` 关闭后台页会连状态一起销毁，回执随后漏进主聊天 `/rewind` 处理器。现在改挂 `Lx`，`clear_agents()` / 会话切换时才清理。
 
 #### 4.5.1 可撤回判据（`src/db/chat/subagent/queue.rs` 新增）
 
@@ -1040,8 +1049,7 @@ pub fn apply_confirm(
 ) -> bool {
     let Some(plan) = state
         .pane_anywhere(pane)
-        .and_then(|target| target.lx.task.as_ref())
-        .and_then(|page| page.detail_rewind_pending.clone())
+        .and_then(|target| target.lx.detail_rewind.pending.clone())
     else {
         close_panel(state, pane);
         return true;
@@ -1058,7 +1066,7 @@ pub fn apply_confirm(
             close_panel(state, pane);
         }
         action if Some(action) == panel.detail.as_ref().map(|detail| detail.action) => {
-            let operation_id = crate::db::new_external_id("detail-undo");
+            let operation_id = crate::db::new_external_id("detail-rewind");
             let request = crate::app::effects::RewindRequest {
                 pane,
                 session_id: plan.child_session.clone(),
@@ -1078,15 +1086,13 @@ pub fn apply_confirm(
                     request,
                 },
             ));
-            if let Some(page) = state
-                .pane_mut_anywhere(pane)
-                .and_then(|target| target.lx.task.as_mut())
-            {
-                page.detail_rewind_executing = Some(crate::app::state::DetailRewindExecution {
-                    operation_id,
-                    target: plan.target,
-                });
-                page.detail_rewind_pending = None;
+            if let Some(target) = state.pane_mut_anywhere(pane) {
+                target.lx.detail_rewind.executing =
+                    Some(crate::app::state::DetailRewindExecution {
+                        operation_id,
+                        target: plan.target,
+                    });
+                target.lx.detail_rewind.pending = None;
             }
             close_panel(state, pane);
         }
@@ -1170,15 +1176,23 @@ pub(crate) fn execute(
 
 ```rust
 pub fn handle_rewind_finished(..., operation_id: &str, outcome: RewindOutcome) -> bool {
-    if state
-        .pane_anywhere(pane)
-        .and_then(|target| target.lx.task.as_ref())
-        .and_then(|page| page.detail_rewind_executing.as_ref())
-        .is_some_and(|exec| exec.operation_id == operation_id)
-    {
+    let detail_executing = state.pane_anywhere(pane).and_then(|target| {
+        target
+            .lx
+            .detail_rewind
+            .executing
+            .as_ref()
+            .filter(|exec| exec.operation_id == operation_id)
+            .map(|_| ())
+    });
+    if detail_executing.is_some() {
         return crate::event::chat::detail_rewind::handle_finished(
             state, persistence, pane, session_id, workspace, operation_id, outcome,
         );
+    }
+    // 详情 operation id 前缀固定：即使执行态已被会话切换清掉，也只能忽略。
+    if operation_id.starts_with("detail-rewind-") {
+        return false;
     }
     // ... 现有主聊天逻辑
 }
@@ -1204,17 +1218,24 @@ pub(crate) fn handle_finished(
             toast(state, pane, format!("{} ({message})", text::LX_DETAIL_REWIND_FAILED));
             true
         }
-        RewindOutcome::Succeeded { user_text, session_deleted, .. } => {
-            let messages = persistence
-                .database()
-                .and_then(|db| db.load_chat_session(workspace, child_session).ok().flatten())
-                .unwrap_or_default();
-            let checkpoints = persistence
-                .database()
-                .and_then(|db| db.compact_checkpoints(workspace, child_session).ok())
+        RewindOutcome::Succeeded {
+            restored_files, already_restored, user_text, session_deleted, ..
+        } => {
+            let Some(database) = persistence.database() else {
+                return crate::app::update::on_detail_rewind_reload_failed(state, pane);
+            };
+            // 提交已成功：读失败保留现有视图，绝不写空列表。
+            let messages = match database.load_chat_session(workspace, child_session) {
+                Ok(Some(messages)) => messages,
+                Ok(None) if session_deleted => Vec::new(),
+                _ => return crate::app::update::on_detail_rewind_reload_failed(state, pane),
+            };
+            let checkpoints = database
+                .compact_checkpoints(workspace, child_session)
                 .unwrap_or_default();
             crate::app::update::on_detail_rewind_succeeded(
-                state, pane, &plan, &messages, &checkpoints, session_deleted, &user_text,
+                state, pane, &plan, &messages, &checkpoints, session_deleted,
+                restored_files, already_restored, &user_text,
             )
         }
     }
@@ -1232,8 +1253,8 @@ App 侧回填（`src/app/update/chat/detail_rewind.rs`）：
 - BTW：按 `thread_id` 找 thread →
   - `session_deleted` → `thread.reset_after_delete()`：`thread_id=None`、`child_session_id=None`、`chat=LxChat::new()`、`compact.reset()`、`targets.clear()`、`loaded=true`、`pending_* = 0`；并 push `LoadQaList` 刷新列表。
   - 否则同 Agents 的 messages/checkpoints/scroll 回填。
-- 草稿回填：只有 `plan.action.fills_draft()`（两种删对话动作）且当前 composer 文本仍等于 `plan.input_at_open`（空串）时，写入 `user_text`；否则保留用户新输入（与主 `/rewind` 的 `input_at_open` 规则一致）。
-- 关闭 composer 的 `slash`，按动作 Toast：`Conversation undone; restored files.` / `Conversation undone; files kept.` / `Restored files; conversation kept.`；compact 用 `Context restored to the previous checkpoint.`。
+- 草稿回填：只有 `plan.action.fills_draft()`（两种删对话动作）且 `plan.target` 自己的 composer 仍等于 `plan.input_at_open`（空串）时，写入 `user_text`；绝不使用 `active_editor()` 回退到主输入框或另一个 agent/QA（与主 `/rewind` 的 `input_at_open` 规则一致）。
+- 关闭目标 composer 的 `slash`，按动作与实际结果 Toast：复用 `text::rewind_notice(action, restored_files, already_restored)`（无文件变更/此前已恢复时不会谎报“restored files”）；compact 用 `Context restored to the previous checkpoint.`。
 - `commit_rewind` 写入的 `agent_session_notice` 在子 agent/BTW 详情不渲染（现有 `HistorySource` 不带 notices）；用户反馈统一走 Toast，避免为详情再造一套提示行。
 
 ### 4.6 `/rewind`（BTW）：最新问答或 compact 检查点
@@ -1406,9 +1427,12 @@ pub fn handle_compact_finished(...) -> bool {
 - 在 `pane.lx.agents.runs` 中按 `child_session_id` 找 run；或在 `pane.lx.btw` 中按 child session 找 thread（新增 `LxBtw::thread_by_child_session_mut`）。
 - 只认 `compact.running == Some(operation_id)`，否则返回 false（迟到回执）。
 - `Committed`：读 `compact_checkpoints` + revision → `run.compact.replace(...)` / `thread.compact.replace(...)`，`finish()`，`rows_dirty=true`，`follow=true`，Toast `LX_COMPACT_DONE`。
-- `Empty`：`finish()`，Toast `LX_COMPACT_EMPTY`。
-- `Failed`：`finish()`，Toast `format!("{} ({message})", LX_COMPACT_FAILED)`。
+- `Empty`：`finish()`，`rows_dirty=true`，Toast `LX_COMPACT_EMPTY`。
+- `Failed`：`finish()`，`rows_dirty=true`，Toast `format!("{} ({message})", LX_COMPACT_FAILED)`。
 - 不触碰主会话的 checkpoints / revision。
+- **重入**：`agent_busy` / `btw_busy` 必须包含 `compact.is_running()`；`LxCompact::start` 在已有 `running` 时返回 false。否则第二次 `/compact` 会覆盖幂等键，先提交者成功、后提交者失败，UI 却只能看到一个错位状态。
+- **读回失败**：`Committed` 回执读检查点失败时仍要调用 `on_detail_compact_finished(..., None)` 结束 `running`，保留现有卡片；否则 `any_detail_compacting()` 永久为真，心跳 10Hz 空转。
+- **自动压缩**：`CompactCheckpoint::is_auto()` 按 `operation_id` 的 `autocompact-` 前缀判定；`CompactNoticeView::from_record` 同步设置 `auto`，避免重载后把自动检查点渲染成伪造的手动范围。
 
 #### 4.7.4 BTW 线程检查点加载
 
@@ -1582,6 +1606,15 @@ pub const LX_BTW_RESET_EMPTY: &str = "No side thread to clear";
 
 ---
 
+### 4.11 2026-11-16 review 修复约束
+
+- **自动压缩检查点**：`agent_compact_checkpoint.operation_id` 的 `autocompact-` 前缀是唯一判据；`CompactCheckpoint::is_auto()` 同时驱动 `CompactNoticeView::from_record` 的 `auto` 标记与 `/rewind` 过滤。只有「最新 active 且非自动」的检查点可恢复；自动检查点后面的手动检查点也不能恢复（恢复不会改变 active 指针）。
+- **撤销目标与回填**：详情执行态挂在 `Lx.detail_rewind`（`pending`/`executing`），`Esc` 关闭任务页不会丢失；成功回执按 `agent_id` / `thread_id` 定位，BTW 删空只重置目标线程并 push `LoadQaList`，草稿只回填目标 composer。
+- **命令采纳**：`accept()` 对无参命令也执行 `standalone_line` 校验；多行草稿最后一行是 `/new` 时只提示、不清空、不执行。
+- **压缩重入**：`agent_busy` / `btw_busy` 包含 `compact.is_running()`；`LxCompact::start` 在 `running` 已存在时返回 false，不覆盖幂等键。`Committed` 回填读失败时仍调用 `finish()` 并 `rows_dirty=true`，绝不让界面永久停在 `compacting`。
+- **报告边界**：报告轮结束后重投未消费 steer 时固定 `notify_parent=false`；报告正文锚点缺失时返回空切片并告警，不回退整段历史。
+- **动画与心跳**：`on_subagent_finished` 归还 `RequestState::Idle`；BTW 心跳只看当前显示线程；`is_animating` 从消息尾部反向扫描，流式消息通常在末尾，避免每次几何计算全量扫描。
+
 ## 5. 数据、并发与失败模式
 
 ### 5.1 无迁移
@@ -1594,7 +1627,7 @@ pub const LX_BTW_RESET_EMPTY: &str = "No side thread to clear";
 
 | 场景 | 处理 |
 | :--- | :--- |
-| `/rewind` 执行中重复 `/rewind` | `TaskPage.detail_rewind_executing` 已占用 → 拒绝并 Toast |
+| `/rewind` 执行中重复 `/rewind` | `Lx.detail_rewind.executing` 已占用 → 拒绝并 Toast（执行态不随后台页关闭而销毁） |
 | 撤销回执迟到/换窗格 | `operation_id` 对不上 → 忽略 |
 | 撤销目标不再是最新轮 | `commit_rewind` 返回 `RewindTargetChanged` → 失败 Toast，不删任何东西 |
 | 含轮内 steer 的轮次 | 刻意不可撤回：同 turn_index 会新增 user 消息，文件 scope 只锚首条；`/rewind` 按 `Nothing to rewind` 拒绝 |

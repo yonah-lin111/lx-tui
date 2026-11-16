@@ -72,7 +72,7 @@ pub use detail_compact::{
 };
 pub use detail_rewind::{
     on_failed as on_detail_rewind_failed, on_prepared as on_detail_rewind_prepared,
-    on_succeeded as on_detail_rewind_succeeded,
+    on_reload_failed as on_detail_rewind_reload_failed, on_succeeded as on_detail_rewind_succeeded,
 };
 pub use fork::{on_fork_completed, on_fork_failed, open_fork_panel};
 pub use mcp::{

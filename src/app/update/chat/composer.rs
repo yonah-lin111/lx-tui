@@ -110,11 +110,10 @@ pub(crate) fn close_all(state: &mut AppState, pane: PaneId) {
     if let Some(composer) = target.lx.btw.active_composer_mut() {
         composer.slash = None;
     }
-    // 切 tab/离开编辑会取消未确认的撤销；执行中的回执仍需保留。
-    if let Some(page) = target.lx.task.as_mut()
-        && page.detail_rewind_executing.is_none()
-    {
-        page.detail_rewind_pending = None;
+    // 切 tab/离开编辑会取消未确认的撤销；执行中的回执仍需保留（执行态挂在
+    // `Lx` 上，不随后台页销毁）。
+    if !target.lx.detail_rewind.is_executing() {
+        target.lx.detail_rewind.pending = None;
     }
 }
 
@@ -192,6 +191,17 @@ fn accept(state: &mut AppState, pane: PaneId) -> bool {
         return false;
     };
     let Some(prefix) = command.echo_prefix() else {
+        // 无参命令同样必须整段独立：面板按行触发，多行草稿的最后一行是
+        // `/new` 时不能悄悄执行并清掉整框正文。
+        if !standalone_line(&input, cursor) {
+            show_lx_hint(
+                state,
+                pane,
+                InputHintLevel::Warning,
+                text::detail::LX_DETAIL_COMMAND_STANDALONE,
+            );
+            return true;
+        }
         close_command_candidates(state, pane);
         let Some(parsed) = parsed_command(command) else {
             return false;
@@ -271,8 +281,19 @@ pub(crate) fn try_submit(state: &mut AppState, pane: PaneId) -> bool {
         execute(state, pane, command);
         return true;
     }
+    // 已知命令但位置/参数不合法（`/rewind x`、尾随空行）：保留草稿，提示必须
+    // 整段独立；否则命令会作为普通消息发给模型。
+    if draft_command_word(&draft).is_some_and(|word| known_command(context, word)) {
+        show_lx_hint(
+            state,
+            pane,
+            InputHintLevel::Warning,
+            text::detail::LX_DETAIL_COMMAND_STANDALONE,
+        );
+        return true;
+    }
     if let Some(command) = unknown_command(&draft) {
-        clear(state, pane);
+        // 与主输入一致：未知命令保留草稿，用户可继续编辑或采纳面板候选。
         show_lx_hint(
             state,
             pane,
@@ -282,6 +303,24 @@ pub(crate) fn try_submit(state: &mut AppState, pane: PaneId) -> bool {
         return true;
     }
     false
+}
+
+/// 草稿首行 `/` 后的命令词（不含参数）。
+fn draft_command_word(draft: &str) -> Option<&str> {
+    let trimmed = draft.trim_start_matches([' ', '\t']);
+    let line = trimmed.strip_prefix('/')?;
+    Some(line.split_whitespace().next().unwrap_or(""))
+}
+
+/// 该命令词是否是当前上下文认识的详情命令（含隐藏别名）。
+fn known_command(context: DetailContext, word: &str) -> bool {
+    let commands = match context {
+        DetailContext::Agent => DetailCommand::AGENT.as_slice(),
+        DetailContext::Btw => DetailCommand::BTW.as_slice(),
+    };
+    commands
+        .iter()
+        .any(|command| command.name() == word || command.aliases().contains(&word))
 }
 
 /// 详情 composer 里只允许整段单行 `/name`；其余带空格/多行/路径文本照常发送。

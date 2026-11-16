@@ -800,15 +800,14 @@ impl AppState {
                     || target.lx.any_detail_compacting()
                     // 子 agent 在后台跑时主 loading 也要扫描，即使 Agents 面板没开。
                     || target.lx.agents.runs.iter().any(|run| run.is_running())
-                    // BTW 的 loading 帧由 `advance_lx_loading` 独立推进；没有这个
-                    // 门控，底部加载动画和工具卡片扫描在 BTW 独占时会静止。
+                    // BTW 只有当前显示线程的帧会被推进；后台线程的完成由事件
+                    // 回投，不需要 10Hz 空唤醒。
                     || (target.lx.is_btw_tab()
-                        && (target.lx.btw.is_loading()
-                            || target
-                                .lx
-                                .btw
-                                .active_thread()
-                                .is_some_and(|thread| !thread.loaded)))
+                        && target
+                            .lx
+                            .btw
+                            .active_thread()
+                            .is_some_and(|thread| thread.is_loading() || !thread.loaded))
             })
         })
     }

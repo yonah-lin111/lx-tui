@@ -35,11 +35,34 @@ pub struct DetailRewindPlan {
     pub kind: crate::app::state::RewindTargetKind,
 }
 
-/// 执行中的幂等键；`TaskPage` 持有它用于迟到回执过滤。
+/// 执行中的幂等键；`Lx` 持有它用于迟到回执过滤。
+///
+/// 不能挂在 `TaskPage` 上：`Esc` 关闭后台页会连同页面状态一起销毁，回执到达时
+/// 就找不到执行态，详情撤销会漏进主聊天处理器。
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct DetailRewindExecution {
     pub operation_id: String,
     pub target: DetailTarget,
+}
+
+/// 详情撤销的待确认计划与执行态（跨后台页开关存活）。
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct DetailRewindState {
+    /// 预检结果；确认面板打开期间保留。
+    pub pending: Option<DetailRewindPlan>,
+    /// 执行中的操作；迟到回执据此过滤。
+    pub executing: Option<DetailRewindExecution>,
+}
+
+impl DetailRewindState {
+    pub fn is_executing(&self) -> bool {
+        self.executing.is_some()
+    }
+
+    pub fn clear(&mut self) {
+        self.pending = None;
+        self.executing = None;
+    }
 }
 
 impl DetailTarget {

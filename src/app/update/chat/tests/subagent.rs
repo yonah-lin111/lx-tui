@@ -697,6 +697,10 @@ fn finished_run_records_status_and_tokens() {
     assert_eq!(run.input_tokens, Some(7));
     assert_eq!(run.output_tokens, Some(3));
     assert!(!run.chat.status.streaming, "终态停止步骤呼吸");
+    assert!(
+        !run.chat.is_animating(),
+        "终态必须归还请求状态机，历史动画判据不能一直为真"
+    );
     let message = run
         .chat
         .messages

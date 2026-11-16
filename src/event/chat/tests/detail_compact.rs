@@ -34,6 +34,64 @@ async fn compact_detail_busy_agent_is_rejected() {
 }
 
 #[tokio::test]
+async fn compact_detail_rejects_reentry_while_compacting() {
+    let (_fixture, mut state, key, persistence, mut streams, _parent) = fixture_with_parent();
+    let agent_id = spawn_explorer(&mut state, &mut streams, &persistence, &key, "first task").await;
+    let child_session = streams
+        .subagents
+        .values()
+        .find(|handle| handle.agent_id == agent_id)
+        .expect("handle")
+        .child_session_id
+        .clone();
+    crate::event::chat::finish_subagent(
+        &mut state,
+        &mut streams,
+        &persistence,
+        RequestKey {
+            pane: key.pane,
+            session: child_session,
+            generation: key.generation,
+        },
+        StopReason::Complete,
+        Usage::default(),
+    );
+    state
+        .pane_mut_anywhere(key.pane)
+        .expect("pane")
+        .lx
+        .agents
+        .by_agent_mut(&agent_id)
+        .expect("run")
+        .compact
+        .start("existing-op".into(), 1);
+    let (sender, mut receiver) = mpsc::unbounded_channel::<AppEvent>();
+    assert!(crate::event::chat::detail_compact::prepare(
+        &mut state,
+        &sender,
+        &persistence,
+        key.pane,
+        DetailTarget::Agent(agent_id.clone()),
+    ));
+    let run = state
+        .pane_anywhere(key.pane)
+        .expect("pane")
+        .lx
+        .agents
+        .by_agent(&agent_id)
+        .expect("run");
+    assert_eq!(
+        run.compact.running.as_deref(),
+        Some("existing-op"),
+        "第二次 /compact 不得覆盖执行中的幂等键"
+    );
+    assert!(
+        receiver.try_recv().is_err(),
+        "压缩中再次 /compact 不得发第二次摘要请求"
+    );
+}
+
+#[tokio::test]
 async fn compact_detail_finished_without_running_is_ignored() {
     let (fixture, mut state, key, _persistence, mut streams, _parent) = fixture_with_parent();
     let agent_id =

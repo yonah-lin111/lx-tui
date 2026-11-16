@@ -91,15 +91,11 @@ fn rewind_agent(
     ));
     let plan = state
         .pane_anywhere(pane)
-        .and_then(|target| target.lx.task.as_ref())
-        .and_then(|page| page.detail_rewind_pending.clone())
+        .and_then(|target| target.lx.detail_rewind.pending.clone())
         .expect("undo plan");
     let operation_id = "detail-rewind-test".to_string();
-    if let Some(page) = state
-        .pane_mut_anywhere(pane)
-        .and_then(|target| target.lx.task.as_mut())
-    {
-        page.detail_rewind_executing = Some(DetailRewindExecution {
+    if let Some(target) = state.pane_mut_anywhere(pane) {
+        target.lx.detail_rewind.executing = Some(DetailRewindExecution {
             operation_id: operation_id.clone(),
             target: plan.target.clone(),
         });
@@ -255,11 +251,8 @@ async fn detail_rewind_ignores_late_operation_id() {
         DetailTarget::Agent(agent_id.clone()),
         String::new(),
     ));
-    if let Some(page) = state
-        .pane_mut_anywhere(key.pane)
-        .and_then(|target| target.lx.task.as_mut())
-    {
-        page.detail_rewind_executing = Some(DetailRewindExecution {
+    if let Some(target) = state.pane_mut_anywhere(key.pane) {
+        target.lx.detail_rewind.executing = Some(DetailRewindExecution {
             operation_id: "current-op".into(),
             target: DetailTarget::Agent(agent_id),
         });
@@ -278,8 +271,7 @@ async fn detail_rewind_ignores_late_operation_id() {
     assert!(
         state
             .pane_anywhere(key.pane)
-            .and_then(|target| target.lx.task.as_ref())
-            .and_then(|page| page.detail_rewind_executing.as_ref())
+            .and_then(|target| target.lx.detail_rewind.executing.as_ref())
             .is_some_and(|exec| exec.operation_id == "current-op"),
         "当前执行不被旧回执清掉"
     );
@@ -355,15 +347,11 @@ fn rewind_btw(
     ));
     let plan = state
         .pane_anywhere(pane)
-        .and_then(|target| target.lx.task.as_ref())
-        .and_then(|page| page.detail_rewind_pending.clone())
+        .and_then(|target| target.lx.detail_rewind.pending.clone())
         .expect("btw undo plan");
     let operation_id = "btw-undo-test".to_string();
-    if let Some(page) = state
-        .pane_mut_anywhere(pane)
-        .and_then(|target| target.lx.task.as_mut())
-    {
-        page.detail_rewind_executing = Some(DetailRewindExecution {
+    if let Some(target) = state.pane_mut_anywhere(pane) {
+        target.lx.detail_rewind.executing = Some(DetailRewindExecution {
             operation_id: operation_id.clone(),
             target: plan.target.clone(),
         });
@@ -558,8 +546,7 @@ async fn detail_rewind_disables_file_actions_when_snapshot_is_unavailable() {
     ));
     let plan = state
         .pane_anywhere(key.pane)
-        .and_then(|target| target.lx.task.as_ref())
-        .and_then(|page| page.detail_rewind_pending.clone())
+        .and_then(|target| target.lx.detail_rewind.pending.clone())
         .expect("快照不可用也要打开确认面板");
     assert_eq!(plan.snapshot, crate::app::state::SnapshotState::Unavailable);
     let panel = state
@@ -779,18 +766,14 @@ async fn detail_rewind_restores_the_latest_compact_checkpoint() {
     ));
     let plan = state
         .pane_anywhere(key.pane)
-        .and_then(|target| target.lx.task.as_ref())
-        .and_then(|page| page.detail_rewind_pending.clone())
+        .and_then(|target| target.lx.detail_rewind.pending.clone())
         .expect("compact rewind plan");
     assert_eq!(plan.kind, crate::app::state::RewindTargetKind::Compact);
     assert_eq!(plan.action, RewindAction::RestoreCompact);
     assert_eq!(plan.user_message_id, committed.checkpoint.id);
     let operation_id = "detail-compact-rewind-test".to_string();
-    if let Some(page) = state
-        .pane_mut_anywhere(key.pane)
-        .and_then(|target| target.lx.task.as_mut())
-    {
-        page.detail_rewind_executing = Some(DetailRewindExecution {
+    if let Some(target) = state.pane_mut_anywhere(key.pane) {
+        target.lx.detail_rewind.executing = Some(DetailRewindExecution {
             operation_id: operation_id.clone(),
             target: plan.target.clone(),
         });
@@ -868,4 +851,88 @@ async fn detail_rewind_restores_the_latest_compact_checkpoint() {
             .map(|message| message.text())
             .collect::<Vec<_>>()
     );
+}
+
+/// 自动压缩也写检查点表，但它的 sequence 晚于本轮用户消息；`/rewind` 必须
+/// 继续针对最后一轮私聊，而不是弹出一个用户从未发起的 compact 恢复面板。
+#[tokio::test]
+async fn auto_compact_checkpoint_is_not_a_rewind_target() {
+    use crate::db::chat::CompactCommit;
+
+    let (fixture, mut state, key, persistence, mut streams, _parent) = fixture_with_parent();
+    let agent_id = spawn_explorer(&mut state, &mut streams, &persistence, &key, "first task").await;
+    let child_session = streams
+        .subagents
+        .values()
+        .find(|handle| handle.agent_id == agent_id)
+        .expect("handle")
+        .child_session_id
+        .clone();
+    crate::event::chat::finish_subagent(
+        &mut state,
+        &mut streams,
+        &persistence,
+        RequestKey {
+            pane: key.pane,
+            session: child_session.clone(),
+            generation: key.generation,
+        },
+        StopReason::Complete,
+        Usage::default(),
+    );
+    run_child_turn(
+        &mut state,
+        &mut streams,
+        &persistence,
+        &key,
+        &child_session,
+        &agent_id,
+        "private follow-up",
+        false,
+    );
+    {
+        let target = state.pane_mut_anywhere(key.pane).expect("pane");
+        target.lx.agents.ensure_composer(&agent_id);
+        let page = target.lx.task.get_or_insert_with(Default::default);
+        page.tab = TaskTab::Agents;
+        page.agent_edit = Some(agent_id.clone());
+    }
+    let database = fixture.database();
+    let revision = database.session_revision(&child_session).expect("revision");
+    let latest = database
+        .latest_user_turn(fixture.workspace(), &child_session)
+        .expect("latest")
+        .expect("turn");
+    database
+        .commit_compact(
+            fixture.workspace(),
+            &CompactCommit {
+                session_id: child_session.clone(),
+                expected_revision: revision,
+                base_checkpoint_id: None,
+                start_sequence: 0,
+                end_sequence: latest.sequence,
+                summary_text: "auto summary".into(),
+                model_label: "m".into(),
+                operation_id: "autocompact-test".into(),
+            },
+        )
+        .expect("auto checkpoint");
+    assert!(crate::event::chat::detail_rewind::prepare(
+        &mut state,
+        &persistence,
+        key.pane,
+        DetailTarget::Agent(agent_id),
+        String::new(),
+    ));
+    let plan = state
+        .pane_anywhere(key.pane)
+        .and_then(|target| target.lx.detail_rewind.pending.clone())
+        .expect("turn rewind plan");
+    assert_eq!(
+        plan.kind,
+        crate::app::state::RewindTargetKind::Turn,
+        "自动检查点不得成为撤销目标"
+    );
+    assert_eq!(plan.user_message_id, latest.user_message_id);
 }

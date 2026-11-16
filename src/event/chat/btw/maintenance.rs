@@ -20,9 +20,19 @@ pub(super) fn delete_thread(
     thread_id: &str,
 ) -> bool {
     let Some(database) = persistence.database() else {
+        let _ = sender.send(AppEvent::Btw(BtwEvent::Failed {
+            pane,
+            qa_id: Some(qa_id.to_string()),
+            message: crate::ui::text::detail::LX_BTW_RESET_FAILED.to_string(),
+        }));
         return false;
     };
     let Some(workspace) = workspace_for_pane(state, pane) else {
+        let _ = sender.send(AppEvent::Btw(BtwEvent::Failed {
+            pane,
+            qa_id: Some(qa_id.to_string()),
+            message: crate::ui::text::detail::LX_BTW_RESET_FAILED.to_string(),
+        }));
         return false;
     };
     match database.delete_btw_thread(&workspace, thread_id) {

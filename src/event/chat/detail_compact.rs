@@ -24,7 +24,10 @@ fn agent_busy(state: &AppState, pane: PaneId, agent_id: &str) -> bool {
         .pane_anywhere(pane)
         .and_then(|target| target.lx.agents.by_agent(agent_id))
         .is_some_and(|run| {
-            run.is_running() || run.queued_count > 0 || !run.chat.pending_steers.is_empty()
+            run.is_running()
+                || run.queued_count > 0
+                || !run.chat.pending_steers.is_empty()
+                || run.compact.is_running()
         })
 }
 
@@ -32,7 +35,7 @@ fn btw_busy(state: &AppState, pane: PaneId, thread_id: &str) -> bool {
     state
         .pane_anywhere(pane)
         .and_then(|target| target.lx.btw.thread_by_thread_id(thread_id))
-        .is_some_and(|thread| thread.is_loading())
+        .is_some_and(|thread| thread.is_loading() || thread.compact.is_running())
 }
 
 fn toast(state: &mut AppState, pane: PaneId, message: &str) {
@@ -57,10 +60,12 @@ pub(crate) fn prepare(
     target: DetailTarget,
 ) -> bool {
     let Some(workspace) = workspace_for_pane(state, pane) else {
-        return false;
+        toast(state, pane, text::detail::LX_COMPACT_UNAVAILABLE);
+        return true;
     };
     let Some(database) = persistence.database() else {
-        return false;
+        toast(state, pane, text::detail::LX_COMPACT_UNAVAILABLE);
+        return true;
     };
     let child_session = match &target {
         DetailTarget::Agent(agent_id) => {
@@ -68,14 +73,16 @@ pub(crate) fn prepare(
                 .pane_anywhere(pane)
                 .and_then(|target| target.lx.chat.session_id.clone())
             else {
-                return false;
+                toast(state, pane, text::detail::LX_COMPACT_UNAVAILABLE);
+                return true;
             };
             let Some(record) = database
                 .resolve_owned_subagent(&workspace, &main, agent_id)
                 .ok()
                 .flatten()
             else {
-                return false;
+                toast(state, pane, text::detail::LX_COMPACT_UNAVAILABLE);
+                return true;
             };
             if agent_busy(state, pane, agent_id) {
                 toast(state, pane, text::LX_COMPACT_BUSY);
@@ -85,7 +92,8 @@ pub(crate) fn prepare(
         }
         DetailTarget::Btw(thread_id) => {
             let Some(thread) = database.btw_thread(&workspace, thread_id).ok().flatten() else {
-                return false;
+                toast(state, pane, text::detail::LX_COMPACT_UNAVAILABLE);
+                return true;
             };
             if btw_busy(state, pane, thread_id) {
                 toast(state, pane, text::LX_COMPACT_BUSY);
@@ -125,7 +133,8 @@ pub(crate) fn prepare(
         return true;
     };
     let Ok(revision) = database.session_revision(&child_session) else {
-        return false;
+        toast(state, pane, text::detail::LX_COMPACT_UNAVAILABLE);
+        return true;
     };
     let base_checkpoint_id = database
         .active_checkpoint(&workspace, &child_session)
@@ -137,7 +146,8 @@ pub(crate) fn prepare(
         .models
         .model_display_name(&frozen.provider, &frozen.model);
     if !crate::app::update::on_detail_compact_started(state, pane, &target, operation_id.clone()) {
-        return false;
+        toast(state, pane, text::LX_COMPACT_BUSY);
+        return true;
     }
     execute_compact(
         sender,
@@ -190,16 +200,12 @@ pub(crate) fn handle_finished(
     if !running {
         return false;
     }
+    // 提交已成功；回填读失败时保留现有视图，但必须结束 running，否则
+    // `compacting` 会永久占位并让心跳以 10Hz 空转。
     let checkpoints = match outcome {
-        CompactOutcome::Committed => {
-            let readback = persistence
-                .database()
-                .and_then(|db| db.compact_checkpoints(workspace, session_id).ok());
-            let Some(checkpoints) = readback else {
-                return false;
-            };
-            Some(checkpoints)
-        }
+        CompactOutcome::Committed => persistence
+            .database()
+            .and_then(|db| db.compact_checkpoints(workspace, session_id).ok()),
         _ => None,
     };
     let result = match outcome {

@@ -134,6 +134,32 @@ fn closing_the_page_drops_only_the_page() {
 }
 
 #[test]
+fn closing_the_page_keeps_detail_rewind_execution() {
+    let (mut state, pane) = state_with_session("草稿");
+    state
+        .pane_mut_anywhere(pane)
+        .expect("pane")
+        .lx
+        .detail_rewind
+        .executing = Some(crate::app::state::DetailRewindExecution {
+        operation_id: "detail-rewind-keep".into(),
+        target: crate::app::state::DetailTarget::Agent("sub-a".into()),
+    });
+    open_with_processes(&mut state, pane);
+    assert!(close_task_page(&mut state, pane));
+    assert!(
+        state
+            .pane_anywhere(pane)
+            .expect("pane")
+            .lx
+            .detail_rewind
+            .executing
+            .is_some(),
+        "执行态必须跨后台页开关存活，回执才能回填详情"
+    );
+}
+
+#[test]
 fn listed_processes_fill_the_page_and_clamp_the_highlight() {
     let (mut state, pane) = state_with_session("x");
     open_with_processes(&mut state, pane);
