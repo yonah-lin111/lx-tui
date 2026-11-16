@@ -171,12 +171,17 @@ pub(super) fn start_stream(
             &model_switches,
             &skill_blocks,
         );
-        assembled.request.tools =
-            std::sync::Arc::new(crate::chat::tools::turn_tools_with_subagents(
-                crate::chat::agent::ToolSurface::Main,
-                &mcp_snapshot,
-                Some(&effective_subagents),
-            ));
+        let mut tool_decls = crate::chat::tools::turn_tools_with_subagents(
+            crate::chat::agent::ToolSurface::Main,
+            &mcp_snapshot,
+            Some(&effective_subagents),
+        );
+        if crate::config::sandbox::load_sandbox_or_default().escalation
+            == crate::config::sandbox::EscalationPolicy::Never
+        {
+            crate::chat::tools::trim_escalation_parameters(&mut tool_decls);
+        }
+        assembled.request.tools = std::sync::Arc::new(tool_decls);
         // 计划快照先克隆：运行上下文摘要要在后面的可变借用窗外拼装。
         let current_plan = pane.lx.chat.plan.clone();
         (

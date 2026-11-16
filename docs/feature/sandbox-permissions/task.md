@@ -1,6 +1,9 @@
 # Agent 沙箱与权限模式执行任务
 
-状态：草案（待用户审核 `design.md` 后开工）。设计依据：同目录 `design.md`；未确认的假设不得直接实施。
+状态：A 批实现完成，等待用户交互验收；B/C 未开始。
+
+- A 批（配置模型、macOS seatbelt、Linux bwrap 参数、进程接入、文件工具闸门、显式提权审批、on-failure 重试、`/permission`、DB v30、提示词、设置页/API）已落地并提交。
+- 验证结果见同目录 `verification.md`。交互外观与真实 on-failure 链路仍需用户运行 `cargo run` 确认。
 
 ## 0. 开工门槛
 

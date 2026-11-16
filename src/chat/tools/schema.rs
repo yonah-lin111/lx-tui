@@ -231,6 +231,32 @@ pub fn resource_tools() -> Vec<super::types::ToolDecl> {
     ]
 }
 
+/// `escalation = never` 时从 `exec_command` 声明里移除提权参数。
+///
+/// 静态 `ToolSpec` 不感知配置；这里在生成 `ToolDecl` 之后裁剪，避免改 18 个 spec。
+pub fn trim_escalation_parameters(decls: &mut [super::types::ToolDecl]) {
+    for decl in decls {
+        if decl.name != "exec_command" {
+            continue;
+        }
+        let Some(properties) = decl
+            .parameters
+            .get_mut("properties")
+            .and_then(serde_json::Value::as_object_mut)
+        else {
+            continue;
+        };
+        for key in [
+            "sandbox_permissions",
+            "justification",
+            "prefix_rule",
+            "additional_permissions",
+        ] {
+            properties.remove(key);
+        }
+    }
+}
+
 /// 一轮的完整工具声明：内置（按 surface 白名单）→ MCP（按 server/tool 排序）→ resources。
 pub fn turn_tools(
     surface: crate::chat::agent::ToolSurface,

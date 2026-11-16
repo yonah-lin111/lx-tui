@@ -139,6 +139,39 @@ async fn exec_observed_wraps_commands_in_seatbelt() {
     assert_ne!(result.exit_code, Some(0));
 }
 
+#[cfg(target_os = "macos")]
+#[tokio::test]
+async fn pty_commands_are_also_sandboxed() {
+    let dir = TempDir::new("seatbelt-pty");
+    let manager = manager(&dir);
+    let root = std::fs::canonicalize(&dir.path).expect("canonical workspace");
+    let outside = std::env::temp_dir().join(format!(
+        "lx-seatbelt-pty-outside-{}-{}.txt",
+        std::process::id(),
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_nanos())
+            .unwrap_or_default()
+    ));
+    let spec = crate::platform::sandbox::SandboxSpec {
+        cwd: &root,
+        writable_roots: std::slice::from_ref(&root),
+        protected: &[],
+        network_access: false,
+    };
+    let mut args = exec(
+        &format!("echo bad > '{}'; exit 3", outside.display()),
+        5_000,
+    );
+    args.tty = true;
+    let result = manager
+        .exec_observed(args, &dir.path, "call-pty", Some(&spec), &|_| {})
+        .await
+        .expect("exec");
+    assert!(!outside.exists());
+    assert_ne!(result.exit_code, Some(0));
+}
+
 #[tokio::test]
 async fn non_zero_exit_is_a_result_not_a_failure() {
     let dir = TempDir::new("nonzero");

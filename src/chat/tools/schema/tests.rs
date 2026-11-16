@@ -474,3 +474,25 @@ fn btw_tool_surface_is_read_only() {
     }
     assert_eq!(ToolSurface::Btw.names(), &["read", "search", "curr_time"]);
 }
+
+#[test]
+fn escalation_parameters_can_be_trimmed_for_never_policy() {
+    let mut decls = super::builtin_tools(crate::chat::agent::ToolSurface::Main);
+    super::trim_escalation_parameters(&mut decls);
+    let exec = decls
+        .iter()
+        .find(|decl| decl.name == "exec_command")
+        .expect("exec_command");
+    let properties = exec.parameters["properties"]
+        .as_object()
+        .expect("properties");
+    for key in [
+        "sandbox_permissions",
+        "justification",
+        "prefix_rule",
+        "additional_permissions",
+    ] {
+        assert!(!properties.contains_key(key), "trimmed {key}");
+    }
+    assert!(properties.contains_key("cmd"));
+}
