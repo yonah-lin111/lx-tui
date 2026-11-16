@@ -761,16 +761,30 @@ fn mouse_right_click_prompt_tree_on_todo_opens_todo_menu() {
         .replace(vec![], vec![PromptItem::single(7, None, "item", "body")]);
     let geo = geometry(&state, &config, Rect::new(0, 0, 120, 30));
     let area = paste::prompt_text_area(&geo.view);
-    let target = ui::right_panel::prompt::tree::row_at(
-        area,
-        &state.prompt_owner().prompt_panel,
-        area.x + 2,
-        area.y + 2,
-    )
-    .map(|_| (area.x + 2, area.y + 2));
-    let Some((col, row)) = target else {
-        panic!("前提：该坐标落在树行上");
-    };
+    let target = (area.y.saturating_add(2)..area.bottom())
+        .find_map(|row| {
+            let index = ui::right_panel::prompt::tree::row_at(
+                area,
+                &state.prompt_owner().prompt_panel,
+                area.x + 2,
+                row,
+            )?;
+            let kind = state
+                .prompt_owner()
+                .prompt_panel
+                .rows()
+                .get(index)?
+                .kind;
+            matches!(
+                kind,
+                crate::app::prompt::PromptRowKind::Item
+                    | crate::app::prompt::PromptRowKind::Temp
+                    | crate::app::prompt::PromptRowKind::Folder
+            )
+            .then_some((area.x + 2, row))
+        })
+        .expect("前提：树中有可打开菜单的行");
+    let (col, row) = target;
     let mut sessions = HashMap::new();
     let mut dirty = false;
 
