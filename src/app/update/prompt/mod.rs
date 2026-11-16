@@ -26,7 +26,10 @@ pub use tree_view::*;
 use std::path::Path;
 
 use crate::app::effects::Effect;
-use crate::app::prompt::{PromptEditing, PromptFolder, PromptItem, PromptMode, PromptPageId};
+use crate::app::prompt::{
+    MAX_RECENT_PAGES, PromptEditing, PromptFolder, PromptItem, PromptMode, PromptPageId, page_rows,
+    recent_page_count,
+};
 use crate::app::state::AppState;
 use crate::db::{FolderRecord, PromptRecord};
 
@@ -151,7 +154,8 @@ pub fn apply_prompt_tree(
         }
     }
     // 后台停泊工作区：同键面板切页或正文更新后刷新停泊缓冲，切回时才不会把
-    // 旧页正文提交进新的当前页。
+    // 旧页正文提交进新的当前页。页身份切换按换文档处理（光标文末、滚到光标），
+    // 只有同一页的后台正文刷新才保留视口。
     if !displayed
         && let Some(PromptEditing::Item(id)) = workspace_state.prompt_panel.editing
         && let Some(item) = workspace_state.prompt_panel.tree.item(id)
@@ -161,11 +165,14 @@ pub fn apply_prompt_tree(
             .workspaces
             .get_mut(workspace)
             .and_then(|workspace| workspace.prompt.as_mut())
-            && (page_switched
-                || (draft.editor.is_saved() && draft.editor.text() != active_content.as_str()))
         {
-            draft.editor.set_text(&active_content);
-            draft.editor.mark_saved();
+            if page_switched {
+                draft.editor.set_text(&active_content);
+                draft.editor.mark_saved();
+            } else if draft.editor.is_saved() && draft.editor.text() != active_content.as_str() {
+                draft.editor.replace_text_preserving_view(&active_content);
+                draft.editor.mark_saved();
+            }
         }
     }
     if displayed && page_switched {
@@ -219,6 +226,34 @@ pub fn show_prompt_tree(state: &mut AppState) {
     state.prompt_tree_hover = None;
     state.prompt_recent_hover = None;
     select_tree_entry_row(state, index);
+}
+
+/// 几何变化后按新的可见行数钳制 prompt 各列表的滚动范围。
+///
+/// 自动路径只钳制、不 reveal：树 / 页选中项可能留在视口外；Recent 只更新偏移上限。
+/// 供 `resize_panes` 在真实尺寸变化后调用，避免偏移越界导致下一次导航跳位。
+pub(crate) fn clamp_prompt_list_scroll(state: &mut AppState) {
+    let index = state.prompt_workspace();
+    let visible = prompt_tree_visible_rows(state);
+    let Some(workspace) = state.workspaces.get_mut(index) else {
+        return;
+    };
+    let panel = &mut workspace.prompt_panel;
+    panel.clamp_selection(visible);
+    // 树视图下没有编辑绑定（editing = None），页列表处于休眠态；
+    // 此时不能按 0 行钳制，否则会把用户上次的页列表滚动清零。
+    if let Some(page_len) = panel
+        .editing_pages()
+        .map(|(pages, active)| page_rows(pages, active, panel.pages_view.search.text()).len())
+    {
+        clamp_page_view(panel, page_len, visible);
+    }
+    if panel.recent_open {
+        let recent_len = recent_page_count(panel).min(MAX_RECENT_PAGES);
+        panel.recent_scroll = panel
+            .recent_scroll
+            .min(recent_len.saturating_sub(panel.recent_visible.max(1)));
+    }
 }
 
 /// 离开编辑视图前暂存编辑状态：绑定目标、当前页与当前编辑器历史。

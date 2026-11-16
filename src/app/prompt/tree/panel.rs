@@ -464,17 +464,13 @@ impl PromptPanel {
             .map(|item| item.id)
     }
 
-    /// 选中行钳制（树变化后调用）：吸附到最近可选中行，滚动同步跟随。
+    /// 选中行钳制（树变化后调用）：吸附到最近可选中行并钳制滚动范围；
+    /// 不把选中项滚入视口（自动路径只钳制，滚动只由用户滚动/导航触发）。
     pub fn clamp_selection(&mut self, visible: usize) {
         let rows = self.rows();
         let len = rows.len();
         self.selected = snap_selectable(&rows, self.selected.min(len.saturating_sub(1)));
         self.scroll = self.scroll.min(len.saturating_sub(visible.max(1)));
-        if self.selected < self.scroll {
-            self.scroll = self.selected;
-        } else if self.selected >= self.scroll + visible.max(1) {
-            self.scroll = self.selected + 1 - visible.max(1);
-        }
     }
 }
 

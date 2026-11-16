@@ -158,7 +158,7 @@ pub fn mark_prompt_page_persisted(
             && draft.editor.is_saved()
             && draft.editor.text() != content
         {
-            draft.editor.set_text(content);
+            draft.editor.replace_text_preserving_view(content);
             draft.editor.mark_saved();
         }
     }

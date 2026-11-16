@@ -870,6 +870,90 @@ fn resize_keeps_cursor_visible_and_guards_zero_size() {
 }
 
 #[test]
+fn resize_same_size_keeps_manual_scroll() {
+    let mut prompt = prompt(40, 10);
+    let content = (0..50)
+        .map(|index| format!("line {index}: long content for scroll guard"))
+        .collect::<Vec<_>>()
+        .join("\n");
+    prompt.insert_str(&content);
+    prompt.scroll_to(0);
+    assert!(prompt.cursor_cell().is_none(), "前提：光标在视口外");
+
+    prompt.resize(40, 10);
+
+    assert_eq!(prompt.scroll(), 0, "尺寸未变不得回拉光标");
+    assert!(prompt.cursor_cell().is_none());
+}
+
+#[test]
+fn resize_shrink_keeps_visible_cursor_visible() {
+    let mut prompt = prompt(40, 10);
+    prompt.insert_str("first\nsecond\nthird");
+    assert!(prompt.cursor_cell().is_some(), "前提：光标在视口内");
+
+    prompt.resize(20, 5);
+
+    assert!(prompt.cursor_cell().is_some(), "变化前可见的光标应保持可见");
+}
+
+#[test]
+fn resize_shrink_keeps_user_scrolled_away_cursor() {
+    let mut prompt = prompt(40, 10);
+    let content = (0..50)
+        .map(|index| format!("line {index}: long content for scroll guard"))
+        .collect::<Vec<_>>()
+        .join("\n");
+    prompt.insert_str(&content);
+    prompt.scroll_to(0);
+    assert!(prompt.cursor_cell().is_none(), "前提：光标在视口外");
+
+    prompt.resize(30, 6);
+
+    assert_eq!(prompt.scroll(), 0, "用户主动滚出光标后，尺寸变化只钳制");
+}
+
+#[test]
+fn restore_history_keeps_scrolled_view() {
+    let mut prompt = prompt(40, 10);
+    let content = (0..50)
+        .map(|index| format!("line {index}: long content for scroll guard"))
+        .collect::<Vec<_>>()
+        .join("\n");
+    prompt.insert_str(&content);
+    prompt.scroll_to(0);
+    let history = prompt.history();
+
+    prompt.restore_history(history);
+
+    assert_eq!(prompt.scroll(), 0, "恢复历史不得回拉光标");
+    assert!(prompt.cursor_cell().is_none());
+}
+
+#[test]
+fn replace_text_preserving_view_keeps_scroll_and_clamps_cursor() {
+    let mut prompt = prompt(40, 10);
+    let content = (0..50)
+        .map(|index| format!("line {index}: long content for scroll guard"))
+        .collect::<Vec<_>>()
+        .join("\n");
+    prompt.insert_str(&content);
+    prompt.scroll_to(5);
+
+    prompt.replace_text_preserving_view("short\nbody");
+
+    assert_eq!(prompt.scroll(), 0, "短正文越界时只钳制到新上限");
+    assert_eq!(prompt.cursor(), "short\nbody".len());
+
+    prompt.insert_str(&content);
+    prompt.scroll_to(5);
+    prompt.set_cursor_offset_for_test(10);
+    prompt.replace_text_preserving_view("short\nbody");
+    assert_eq!(prompt.cursor(), 10, "合法光标偏移原样保留");
+    assert_eq!(prompt.scroll(), 0);
+}
+
+#[test]
 fn panel_opens_on_trigger_and_closes_off_line_end() {
     let mut prompt = prompt(30, 10);
     prompt.insert_str("#");

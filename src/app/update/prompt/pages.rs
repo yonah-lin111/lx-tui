@@ -10,7 +10,9 @@ use crate::app::prompt::{
 use crate::app::state::AppState;
 use crate::ui::text;
 
-use super::pages_view::{clamp_page_view, hide_prompt_pages, prompt_pages_mode};
+use super::pages_view::{
+    clamp_page_view, hide_prompt_pages, prompt_pages_mode, reveal_page_selection,
+};
 use super::{commit_editing_prompt, prompt_tree_visible_rows, workspace_cwd};
 
 /// 相对切页（标题行箭头与 `Ctrl/Cmd+←/→`）；越界或无法切页返回 false。
@@ -223,7 +225,7 @@ pub fn open_new_page_with_content(state: &mut AppState, content: String) -> bool
                 match position {
                     Some((pos, rows_len)) => {
                         panel.pages_view.selected = pos;
-                        clamp_page_view(panel, rows_len, visible);
+                        reveal_page_selection(panel, rows_len, visible);
                     }
                     None => panel.mode = PromptMode::Editor,
                 }
@@ -267,7 +269,7 @@ pub fn create_or_toast_new_page(state: &mut AppState) -> bool {
                 if let Some(pos) = rows.iter().position(|row| row.page == empty_id) {
                     panel.pages_view.selected = pos;
                 }
-                clamp_page_view(panel, rows.len(), visible);
+                reveal_page_selection(panel, rows.len(), visible);
                 true
             });
         } else if empty_id != active {
@@ -497,7 +499,7 @@ pub fn open_created_page(
                 (pos, rows.len())
             };
             panel.pages_view.selected = pos;
-            clamp_page_view(panel, rows_len, visible);
+            reveal_page_selection(panel, rows_len, visible);
             return true;
         }
         item.active_page = page;

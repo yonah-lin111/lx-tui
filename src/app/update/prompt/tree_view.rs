@@ -152,9 +152,8 @@ pub fn open_prompt_row(state: &mut AppState, row: usize) -> bool {
     }
 }
 
-/// 从指定工作区树中按 id 选中文件夹（新建后由服务调用）。
+/// 从指定工作区树中按 id 选中文件夹（新建后由服务调用）；只改选中，不滚视口。
 pub fn select_prompt_folder(state: &mut AppState, workspace: usize, folder_id: i64) -> bool {
-    let visible = prompt_tree_visible_rows(state);
     let Some(workspace_state) = state.workspaces.get_mut(workspace) else {
         return false;
     };
@@ -171,7 +170,6 @@ pub fn select_prompt_folder(state: &mut AppState, workspace: usize, folder_id: i
         return false;
     };
     workspace_state.prompt_panel.selected = position;
-    scroll_selection_into_view(&mut workspace_state.prompt_panel, visible);
     true
 }
 
@@ -309,26 +307,8 @@ pub fn set_prompt_tree_scroll(state: &mut AppState, offset: usize, visible: usiz
     true
 }
 
-/// 几何变化后钳制树选中的可见性；返回是否变化。
-pub fn clamp_prompt_tree_scroll(state: &mut AppState, visible: usize) -> bool {
-    let index = state.prompt_workspace();
-    let Some(workspace) = state.workspaces.get_mut(index) else {
-        return false;
-    };
-    let before = (
-        workspace.prompt_panel.selected,
-        workspace.prompt_panel.scroll,
-    );
-    scroll_selection_into_view(&mut workspace.prompt_panel, visible);
-    (
-        workspace.prompt_panel.selected,
-        workspace.prompt_panel.scroll,
-    ) != before
-}
-
-/// 选中指定工作区树中的条目行（服务在新建后调用）。
+/// 选中指定工作区树中的条目行（服务在新建后调用）；只改选中，不滚视口。
 pub fn select_prompt_item(state: &mut AppState, workspace: usize, item_id: i64) -> bool {
-    let visible = prompt_tree_visible_rows(state);
     let Some(workspace_state) = state.workspaces.get_mut(workspace) else {
         return false;
     };
@@ -345,13 +325,11 @@ pub fn select_prompt_item(state: &mut AppState, workspace: usize, item_id: i64) 
         return false;
     };
     workspace_state.prompt_panel.selected = position;
-    scroll_selection_into_view(&mut workspace_state.prompt_panel, visible);
     true
 }
 
-/// 选中指定工作区中指定临时提示词行（服务/菜单在打开前调用）。
+/// 选中指定工作区中指定临时提示词行（服务/菜单在打开前调用）；只改选中，不滚视口。
 pub fn select_prompt_temp(state: &mut AppState, workspace: usize, temp_id: u64) -> bool {
-    let visible = prompt_tree_visible_rows(state);
     let Some(workspace_state) = state.workspaces.get_mut(workspace) else {
         return false;
     };
@@ -366,7 +344,6 @@ pub fn select_prompt_temp(state: &mut AppState, workspace: usize, temp_id: u64) 
         return false;
     };
     workspace_state.prompt_panel.selected = position;
-    scroll_selection_into_view(&mut workspace_state.prompt_panel, visible);
     true
 }
 
@@ -382,6 +359,7 @@ fn toggle_prompt_folder(state: &mut AppState, workspace: usize, row: PromptRow) 
     let id = folder.id;
     workspace_state.prompt_panel.tree.toggle_folder(id);
     workspace_state.prompt_panel.clamp_selection(visible.max(1));
+    scroll_selection_into_view(&mut workspace_state.prompt_panel, visible);
     true
 }
 
@@ -420,6 +398,7 @@ fn set_selected_folder_collapsed(state: &mut AppState, collapsed: bool) -> bool 
     let id = folder.id;
     workspace_state.prompt_panel.tree.toggle_folder(id);
     workspace_state.prompt_panel.clamp_selection(visible.max(1));
+    scroll_selection_into_view(&mut workspace_state.prompt_panel, visible);
     true
 }
 
