@@ -10,10 +10,10 @@
 | 不变量 | 结论 | 证据 |
 |--------|------|------|
 | I1 所有权：编辑器 / 树 / 页 / Recent 各自持有滚动 | 成立 | 四份滚动状态分别位于 `Prompt`、`PromptPanel`、`PageListView`、`PromptPanel.recent_scroll`，无跨容器读写 |
-| I2 自动路径只钳制 | 除“几何变化”外成立 | 工作区切换、树/页重载、保存回执、Recent 自动同步均已改为只钳制；`resize_panes` 的真实尺寸变化未回写列表上限（见 P1-1） |
+| I2 自动路径只钳制 | 成立（补齐几何变化钳制后） | 工作区切换、树/页重载、保存回执、Recent 自动同步均已改为只钳制；`resize_panes` 经 `clamp_prompt_list_scroll` 回写列表上限 |
 | I3 用户滚动意图 | 成立 | 滚轮 / 滚动条 / ↑↓ / 搜索过滤 / 编辑与折叠展开仍保留 reveal |
 | I4 尺寸混合规则 | 成立 | `Prompt::resize` 同尺寸直接返回；尺寸变化仅“变化前光标可见”时继续跟随 |
-| I5 换文档例外 | 停泊草稿换页被破坏 | `apply_prompt_tree` 把页身份切换并入“同页刷新”分支（见 P0-1） |
+| I5 换文档例外 | 成立（修复 P0-1 后） | 页身份切换恢复 `set_text`；同页后台刷新才保留视口 |
 
 ## 2. 问题清单
 
@@ -62,7 +62,7 @@
 ## 3. 修复记录
 
 - P0-1（`add1e82d`）：`apply_prompt_tree` 拆分换页 / 同页刷新分支；新增 `parked_page_switch_uses_new_document_view`。
-- P1-1（`add1e82d`）：新增 `clamp_prompt_list_scroll` 并在 `resize_panes` 更新尺寸 / `recent_visible` 后调用；新增 `resize_panes_clamps_prompt_tree_scroll`、`clamp_prompt_list_scroll_clamps_all_views`。
+- P1-1（`add1e82d`、`210679d7`）：新增 `clamp_prompt_list_scroll` 并在 `resize_panes` 更新尺寸 / `recent_visible` 后调用；树视图下页列表休眠时保留滚动；新增 `resize_panes_clamps_prompt_tree_scroll`、`clamp_prompt_list_scroll_clamps_all_views`、`clamp_prompt_list_scroll_keeps_dormant_pages_scroll`。
 - P2-1 / P2-2（`add1e82d`）：补 `workspace_switch_preserves_target_tree_scroll`、`parked_save_receipt_preserves_scroll`。
 - P3-1：同步 `design.md` / `task.md` / 本文件。
 
