@@ -309,7 +309,8 @@ impl AgentTools {
     ) -> ToolExecutionResult {
         let mut context = crate::chat::tools::ToolContext::new(cwd.to_path_buf())
             .with_image_support(self.supports_image_input)
-            .with_session_id(self.session_id.clone());
+            .with_session_id(self.session_id.clone())
+            .with_sandbox(self.sandbox.policy_view());
         if let Some(reads) = self.reads.as_ref() {
             context = context.with_reads(Arc::clone(reads));
         }

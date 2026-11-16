@@ -185,6 +185,11 @@ fn commit(
         Ok(declared) => declared,
         Err(failure) => return failure.into_result(Vec::new()),
     };
+    // 全量预检：补丁里每个会落盘的路径都必须位于当前沙箱可写范围。
+    let targets = write_targets(resolved);
+    if let Err(failure) = super::sandbox_gate::ensure_writable(ctx, &targets) {
+        return failure.into_result(Vec::new());
+    }
     // 全量预检：补丁里每个会修改**已存在文件**的路径都必须带回读版本。
     // 任一缺失即整批零写入（多文件补丁不能“改一半再报没读过”）。
     if let Some(failure) = precheck_versions(ctx, resolved, &declared) {
@@ -324,6 +329,27 @@ impl From<ToolFailure> for CommitFailure {
 /// 落盘单个 hunk；无实际变更时返回 `Ok(None)`。
 ///
 /// 捕获与写入同处一个临界区：before / planned-after 持久化 ACK 之后才发生任何 IO。
+/// 补丁会落盘的全部路径（新增/修改/删除/移动目标）。
+fn write_targets<'a>(resolved: &'a [Resolved<'a>]) -> Vec<&'a Path> {
+    let mut targets = Vec::new();
+    for plan in resolved {
+        match plan {
+            Resolved::Add { target, .. } | Resolved::Delete { target } => {
+                targets.push(target.as_path());
+            }
+            Resolved::Update {
+                target, move_to, ..
+            } => {
+                targets.push(target.as_path());
+                if let Some(destination) = move_to {
+                    targets.push(destination.as_path());
+                }
+            }
+        }
+    }
+    targets
+}
+
 fn commit_one(
     ctx: &ToolContext,
     plan: &Resolved<'_>,

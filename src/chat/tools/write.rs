@@ -49,6 +49,7 @@ fn run_inner(
     let expected = args.optional_str("read_version")?;
     let target = path::resolve(ctx, raw_path)?;
     let resolved = path::write_target(&target);
+    super::sandbox_gate::ensure_writable_resolved(ctx, &target, &resolved)?;
     // 目标路径与物理目标都要锁：链接路径与物理路径是两个入口。
     let paths: Vec<&Path> = if resolved == target {
         vec![target.as_path()]

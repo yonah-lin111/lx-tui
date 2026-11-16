@@ -63,6 +63,8 @@ pub struct ToolContext {
     pub clock_override_secs: Option<i64>,
     /// 会话 id：工具结果图片归档目录；空表示不归档（测试）。
     pub session_id: String,
+    /// 本轮冻结的沙箱策略（文件工具闸门只读）。
+    pub sandbox: crate::chat::sandbox::SandboxPolicyView,
 }
 
 impl Default for ToolContext {
@@ -73,7 +75,17 @@ impl Default for ToolContext {
             supports_image_input: true,
             clock_override_secs: None,
             session_id: String::new(),
+            sandbox: danger_view(),
         }
+    }
+}
+
+/// 测试与无沙箱入口的默认视图：不限制写入。
+fn danger_view() -> crate::chat::sandbox::SandboxPolicyView {
+    crate::chat::sandbox::SandboxPolicyView {
+        mode: crate::config::sandbox::SandboxMode::DangerFullAccess,
+        writable_roots: Vec::new(),
+        protected: Vec::new(),
     }
 }
 
@@ -95,6 +107,7 @@ impl ToolContext {
             supports_image_input: true,
             clock_override_secs: None,
             session_id: String::new(),
+            sandbox: danger_view(),
         }
     }
 
@@ -107,6 +120,12 @@ impl ToolContext {
     /// 注入会话 id（工具结果图片归档目录）。
     pub fn with_session_id(mut self, session_id: impl Into<String>) -> Self {
         self.session_id = session_id.into();
+        self
+    }
+
+    /// 注入本轮冻结的沙箱策略（生产执行器必须调用）。
+    pub fn with_sandbox(mut self, sandbox: crate::chat::sandbox::SandboxPolicyView) -> Self {
+        self.sandbox = sandbox;
         self
     }
 

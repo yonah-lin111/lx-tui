@@ -29,6 +29,7 @@ mod plan_args;
 mod process_args;
 mod read;
 mod read_version;
+mod sandbox_gate;
 mod schema;
 mod search;
 mod subagent;
