@@ -1,0 +1,347 @@
+//! 详情输入框（Agents / BTW composer）的 `/` 命令路由。
+//!
+//! 主输入框的面板逻辑留在 `chat/slash.rs`；这里只处理 composer 的上下文命令：
+//! 候选刷新、面板按键、采纳与命令执行分派。所有读写都落到 `Lx::active_editor()`。
+
+use crate::app::actions::LxInput;
+use crate::app::state::lx::slash::composer::{
+    self, DetailCommand, DetailContext, ParsedDetailCommand,
+};
+use crate::app::state::{AppState, InputHintLevel, Lx, SlashEntry, SlashPanel};
+use crate::app::update::show_lx_hint;
+use crate::tiling::PaneId;
+use crate::ui::text;
+
+/// 当前窗格是否停在某个详情 composer 上。
+pub(crate) fn context(lx: &Lx) -> Option<DetailContext> {
+    if lx.agents_editing() {
+        Some(DetailContext::Agent)
+    } else if lx.btw_editing() {
+        Some(DetailContext::Btw)
+    } else {
+        None
+    }
+}
+
+/// 窗格级的 composer 上下文判定。
+pub(crate) fn context_of(state: &AppState, pane: PaneId) -> Option<DetailContext> {
+    state
+        .pane_anywhere(pane)
+        .and_then(|target| context(&target.lx))
+}
+
+/// 编辑后重算 composer 的 `/` 命令候选（行首 `/` 触发、模糊过滤）。
+pub(crate) fn refresh_slash_panel(state: &mut AppState, pane: PaneId) {
+    let Some((context, query)) = state.pane_anywhere(pane).and_then(|target| {
+        let context = context(&target.lx)?;
+        let editor = target.lx.active_editor();
+        let masked = crate::app::paste::mask_pasted_text(&editor.input);
+        crate::app::state::lx::slash::slash_trigger(&masked, editor.cursor)
+            .map(|query| (context, query))
+    }) else {
+        // 离开命令位置：只关命令候选，不动撤销确认面板。
+        close_command_candidates(state, pane);
+        return;
+    };
+    let matching = composer::entries(context, &query);
+    let Some(target) = state.pane_mut_anywhere(pane) else {
+        return;
+    };
+    target.lx.with_active_editor(|editor| {
+        // 撤销确认是模态面板，不被命令候选覆盖。
+        if matches!(editor.slash, Some(SlashPanel::Rewind(_))) {
+            return;
+        }
+        if matching.is_empty() {
+            if matches!(editor.slash, Some(SlashPanel::Commands { .. })) {
+                editor.slash = None;
+            }
+            return;
+        }
+        // 过滤词变化时重置高亮至首项；未变时保留原窗口。
+        let query_changed = match &editor.slash {
+            Some(SlashPanel::Commands {
+                query: previous, ..
+            }) => previous != &query,
+            _ => true,
+        };
+        let mut window = match &editor.slash {
+            Some(SlashPanel::Commands { window, .. }) if !query_changed => *window,
+            _ => crate::app::state::lx::slash::PanelWindow::default(),
+        };
+        window.clamp(matching.len());
+        editor.slash = Some(SlashPanel::Commands {
+            items: matching,
+            window,
+            query,
+        });
+    });
+}
+
+/// 只关闭命令候选；保留撤销确认等模态面板。
+pub(crate) fn close_command_candidates(state: &mut AppState, pane: PaneId) {
+    let Some(target) = state.pane_mut_anywhere(pane) else {
+        return;
+    };
+    target.lx.with_active_editor(|editor| {
+        if matches!(editor.slash, Some(SlashPanel::Commands { .. })) {
+            editor.slash = None;
+        }
+    });
+}
+
+/// 关闭 composer 上任意 `/` 面板。
+pub(crate) fn close(state: &mut AppState, pane: PaneId) {
+    let Some(target) = state.pane_mut_anywhere(pane) else {
+        return;
+    };
+    target.lx.with_active_editor(|editor| editor.slash = None);
+}
+
+/// 切换 tab / 打开其它页面时清掉所有详情 composer 的 `/` 面板。
+pub(crate) fn close_all(state: &mut AppState, pane: PaneId) {
+    let Some(target) = state.pane_mut_anywhere(pane) else {
+        return;
+    };
+    target.lx.slash = None;
+    for composer in target.lx.agents.composers.values_mut() {
+        composer.editor_mut().slash = None;
+    }
+    if let Some(composer) = target.lx.btw.active_composer_mut() {
+        composer.slash = None;
+    }
+    // 切 tab/离开编辑会取消未确认的撤销；执行中的回执仍需保留（执行态挂在
+    // `Lx` 上，不随后台页销毁）。
+    if !target.lx.detail_rewind.is_executing() {
+        target.lx.detail_rewind.pending = None;
+    }
+}
+
+/// 消费 composer 的 `/` 面板按键；面板未打开返回 false 交由编辑逻辑。
+pub(crate) fn apply_slash_input(state: &mut AppState, pane: PaneId, command: LxInput) -> bool {
+    let Some(panel) = state.pane_anywhere(pane).and_then(|target| {
+        context(&target.lx)?;
+        target.lx.active_editor().slash.clone()
+    }) else {
+        return false;
+    };
+    match command {
+        LxInput::Up | LxInput::Down => {
+            let delta = if command == LxInput::Up { -1 } else { 1 };
+            let _ = state.pane_mut_anywhere(pane).is_some_and(|target| {
+                target.lx.with_active_editor(|editor| {
+                    editor
+                        .slash
+                        .as_mut()
+                        .is_some_and(|panel| panel.move_active(delta))
+                })
+            });
+            true
+        }
+        LxInput::Tab | LxInput::Enter => {
+            apply_enter(state, pane);
+            true
+        }
+        LxInput::Escape => {
+            super::detail_rewind::clear_pending(state, pane);
+            close(state, pane);
+            true
+        }
+        // 撤销确认是模态面板：其余编辑键不落到 composer，避免面板与草稿错位。
+        _ if matches!(panel, SlashPanel::Rewind(_)) => true,
+        _ => false,
+    }
+}
+
+/// 面板 Enter：采纳高亮命令（`apply_slash_enter` 的 composer 分支）。
+pub(crate) fn apply_enter(state: &mut AppState, pane: PaneId) -> bool {
+    let Some(panel) = state.pane_anywhere(pane).and_then(|target| {
+        context(&target.lx)?;
+        target.lx.active_editor().slash.clone()
+    }) else {
+        return false;
+    };
+    match panel {
+        SlashPanel::Commands { .. } => accept(state, pane),
+        SlashPanel::Rewind(panel) if panel.detail.is_some() => {
+            super::detail_rewind::apply_confirm(state, pane, &panel)
+        }
+        SlashPanel::Rewind(_) => super::rewind::apply_enter(state, pane),
+        _ => false,
+    }
+}
+
+/// 采纳高亮候选：带参命令回显前缀，其余命令保留文本等待 Enter 执行。
+fn accept(state: &mut AppState, pane: PaneId) -> bool {
+    let Some((entry, input, cursor)) = state.pane_anywhere(pane).and_then(|target| {
+        context(&target.lx)?;
+        let editor = target.lx.active_editor();
+        let Some(SlashPanel::Commands { items, window, .. }) = editor.slash.clone() else {
+            return None;
+        };
+        items
+            .get(window.active)
+            .cloned()
+            .map(|entry| (entry, editor.input.clone(), editor.cursor))
+    }) else {
+        close_command_candidates(state, pane);
+        return false;
+    };
+    let SlashEntry::Detail(command) = entry else {
+        return false;
+    };
+    let Some(prefix) = command.echo_prefix() else {
+        // 无参命令同样必须整段独立：面板按行触发，多行草稿的最后一行是
+        // `/new` 时不能悄悄执行并清掉整框正文。
+        if !standalone_line(&input, cursor) {
+            show_lx_hint(
+                state,
+                pane,
+                InputHintLevel::Warning,
+                text::detail::LX_DETAIL_COMMAND_STANDALONE,
+            );
+            return true;
+        }
+        close_command_candidates(state, pane);
+        let Some(parsed) = parsed_command(command) else {
+            return false;
+        };
+        clear(state, pane);
+        execute(state, pane, parsed);
+        return true;
+    };
+    if !standalone_line(&input, cursor) {
+        show_lx_hint(
+            state,
+            pane,
+            InputHintLevel::Warning,
+            text::detail::LX_DETAIL_COMMAND_STANDALONE,
+        );
+        return true;
+    }
+    if let Some(target) = state.pane_mut_anywhere(pane) {
+        target.lx.with_active_editor(|editor| {
+            editor.replace_input(prefix);
+            editor.slash = None;
+        });
+    }
+    true
+}
+
+/// 草稿必须整段就是当前命令行：无前后残留、单行、命令词无空白。
+fn standalone_line(input: &str, cursor: usize) -> bool {
+    let trimmed = input.trim();
+    let line_start = input[..cursor].rfind('\n').map_or(0, |offset| offset + 1);
+    let line = input[line_start..].trim();
+    trimmed == line
+        && input[cursor..].trim().is_empty()
+        && !line.contains(['\n', '\r'])
+        && !line.contains(char::is_whitespace)
+        && line.starts_with('/')
+}
+
+/// 面板条目 → 执行分支；`Report` 是带参回显命令，不在此列。
+fn parsed_command(command: DetailCommand) -> Option<ParsedDetailCommand<'static>> {
+    match command {
+        DetailCommand::Rewind => Some(ParsedDetailCommand::Rewind),
+        DetailCommand::Compact => Some(ParsedDetailCommand::Compact),
+        DetailCommand::New => Some(ParsedDetailCommand::New),
+        DetailCommand::Report => None,
+    }
+}
+
+/// 执行一条整段详情命令（草稿已由调用方消费）。
+pub(crate) fn execute(
+    state: &mut AppState,
+    pane: PaneId,
+    command: ParsedDetailCommand<'_>,
+) -> bool {
+    match command {
+        ParsedDetailCommand::Report(note) => super::detail_report::submit(state, pane, note),
+        ParsedDetailCommand::Rewind => super::detail_rewind::prepare(state, pane),
+        ParsedDetailCommand::Compact => super::detail_compact::request(state, pane),
+        ParsedDetailCommand::New => super::btw::request_reset_thread(state, pane),
+    }
+}
+
+/// 提交前拦截：整段详情命令执行、未知 `/` 命令提示；都不是则返回 false。
+pub(crate) fn try_submit(state: &mut AppState, pane: PaneId) -> bool {
+    let Some(context) = context_of(state, pane) else {
+        return false;
+    };
+    let Some(draft) = state
+        .pane_anywhere(pane)
+        .map(|target| target.lx.active_editor().input.clone())
+    else {
+        return false;
+    };
+    if let Some(command) = composer::parse(&draft, context) {
+        // 命令文本一律消费；执行失败（目标不在、忙碌）也不能回落成普通消息。
+        clear(state, pane);
+        execute(state, pane, command);
+        return true;
+    }
+    // 已知命令但位置/参数不合法（`/rewind x`、尾随空行）：保留草稿，提示必须
+    // 整段独立；否则命令会作为普通消息发给模型。
+    if draft_command_word(&draft).is_some_and(|word| known_command(context, word)) {
+        show_lx_hint(
+            state,
+            pane,
+            InputHintLevel::Warning,
+            text::detail::LX_DETAIL_COMMAND_STANDALONE,
+        );
+        return true;
+    }
+    if let Some(command) = unknown_command(&draft) {
+        // 与主输入一致：未知命令保留草稿，用户可继续编辑或采纳面板候选。
+        show_lx_hint(
+            state,
+            pane,
+            InputHintLevel::Warning,
+            text::chat::unknown_command(&command),
+        );
+        return true;
+    }
+    false
+}
+
+/// 草稿首行 `/` 后的命令词（不含参数）。
+fn draft_command_word(draft: &str) -> Option<&str> {
+    let trimmed = draft.trim_start_matches([' ', '\t']);
+    let line = trimmed.strip_prefix('/')?;
+    Some(line.split_whitespace().next().unwrap_or(""))
+}
+
+/// 该命令词是否是当前上下文认识的详情命令（含隐藏别名）。
+fn known_command(context: DetailContext, word: &str) -> bool {
+    let commands = match context {
+        DetailContext::Agent => DetailCommand::AGENT.as_slice(),
+        DetailContext::Btw => DetailCommand::BTW.as_slice(),
+    };
+    commands
+        .iter()
+        .any(|command| command.name() == word || command.aliases().contains(&word))
+}
+
+/// 详情 composer 里只允许整段单行 `/name`；其余带空格/多行/路径文本照常发送。
+fn unknown_command(draft: &str) -> Option<String> {
+    let trimmed = draft.trim();
+    if trimmed.contains(['\n', '\r']) || trimmed.contains(char::is_whitespace) {
+        return None;
+    }
+    let name = trimmed.strip_prefix('/')?;
+    if name.is_empty() || name.contains('/') {
+        return None;
+    }
+    Some(format!("/{name}"))
+}
+
+/// 清空当前 composer 草稿并关闭 `/` 面板。
+pub(crate) fn clear(state: &mut AppState, pane: PaneId) {
+    if let Some(target) = state.pane_mut_anywhere(pane) {
+        target.lx.with_active_editor(|editor| {
+            editor.clear();
+            editor.slash = None;
+        });
+    }
+}

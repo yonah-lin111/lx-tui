@@ -354,6 +354,19 @@ pub enum Effect {
     },
     /// 执行一次最新轮次撤销（唯一 operation id；事件层后台执行）。
     ExecuteRewind(RewindRequest),
+    /// 详情 composer 的 `/rewind` 预检（只读，事件层同步执行）。
+    PrepareDetailRewind {
+        pane: crate::tiling::PaneId,
+        target: crate::app::state::DetailTarget,
+        input_at_open: String,
+    },
+    /// 详情 composer 的 `/rewind` 执行（与主 `/rewind` 共用 `execute_rewind`）。
+    ExecuteDetailRewind(DetailRewindRequest),
+    /// 详情会话（子 agent / BTW）的手动压缩。
+    CompactDetail {
+        pane: crate::tiling::PaneId,
+        target: crate::app::state::DetailTarget,
+    },
     /// 执行一次上下文压缩：独立摘要请求 → 事务写检查点 → 重载视图。
     ///
     /// 事件层负责整条链路（网络请求不经过持久化泵），成功/失败都回投
@@ -474,6 +487,13 @@ pub enum BtwEffect {
     },
     /// 提交一条旁路问题。
     Submit(Box<BtwSubmission>),
+    /// 删除某 QA 的旁路线程（`/new`）：DB 级联清理线程与 child session。
+    DeleteThread {
+        pane: crate::tiling::PaneId,
+        parent_session_id: String,
+        qa_id: String,
+        thread_id: String,
+    },
     /// 停止某线程的活动与排队回答；不影响原 agent 任务。
     Stop {
         pane: crate::tiling::PaneId,
@@ -531,6 +551,15 @@ pub struct RewindRequest {
     pub input_at_open: String,
     pub user_text: String,
     pub operation_id: String,
+}
+
+/// 详情 composer 的撤销请求：在共享 `RewindRequest` 之外携带回投目标。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct DetailRewindRequest {
+    pub pane: crate::tiling::PaneId,
+    pub target: crate::app::state::DetailTarget,
+    pub operation_id: String,
+    pub request: RewindRequest,
 }
 
 /// 一次压缩请求：会话、冻结的 revision 与当前模型全部在发起时确定。

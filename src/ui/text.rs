@@ -4,6 +4,7 @@ pub mod agent;
 pub mod btw;
 pub mod chat;
 pub mod connect;
+pub mod detail;
 pub mod mcp;
 pub mod skills;
 mod steer;
@@ -699,7 +700,7 @@ pub const LX_TASK_HINTS_AGENTS: [Hint; 6] = [
 pub const LX_TASK_HINTS_AGENTS_EDIT: [Hint; 5] = [
     hint("send", "↵"),
     hint("newline", "⇧↵"),
-    hint("mode", "⇧⇥"),
+    hint("commands", "/"),
     hint("stop", "^d"),
     hint("back", "esc"),
 ];

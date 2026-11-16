@@ -4,6 +4,7 @@
 mod ask;
 mod compact;
 mod connect;
+mod detail_commands;
 mod fork;
 mod history;
 mod model_switch;

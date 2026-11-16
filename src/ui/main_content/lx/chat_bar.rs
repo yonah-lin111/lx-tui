@@ -56,18 +56,53 @@ pub(super) fn visible(lx: &Lx) -> bool {
     loading_visible(lx) || !lx.chat.follow_bottom
 }
 
-/// 后台面板编辑态的目标 loading：BTW 当前线程 / Agents 当前子 agent。
+/// 后台面板编辑态 / 压缩态的 loading：文案、呼吸帧与可选的本次耗时。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(super) struct TaskLoading {
+    pub label: String,
+    pub frame: usize,
+    /// 详情压缩的本次耗时（毫秒）；其它 loading 为 None。
+    pub elapsed_ms: Option<i64>,
+}
+
+/// 后台面板目标的 loading：BTW 当前线程 / Agents 当前子 agent。
 ///
-/// 返回 `(文案, loading_frame)`；列表态不返回，避免没有 composer 时出现无指代的 loading。
-pub(super) fn task_loading(lx: &Lx) -> Option<(String, usize)> {
+/// 压缩中在**列表态与编辑态都显示**：目标就是上方正在展示的详情，不会出现
+/// “没有指代”的加载行；其余任务 loading 仍只在编辑态显示。
+pub(super) fn task_loading(lx: &Lx) -> Option<TaskLoading> {
+    if lx.is_btw_tab()
+        && let Some(thread) = lx.btw.active_thread()
+        && thread.compact.is_running()
+    {
+        return Some(TaskLoading {
+            label: text::chat::COMPACTING_LABEL.to_string(),
+            frame: thread.chat.loading_frame,
+            elapsed_ms: thread.compact.elapsed_ms,
+        });
+    }
+    if let Some(run) = lx
+        .task
+        .as_ref()
+        .filter(|page| page.tab == crate::app::state::TaskTab::Agents)
+        .and_then(|page| page.detail_agent_index(&lx.agents))
+        .and_then(|index| lx.agents.runs.get(index))
+        && run.compact.is_running()
+    {
+        return Some(TaskLoading {
+            label: text::chat::COMPACTING_LABEL.to_string(),
+            frame: run.chat.loading_frame,
+            elapsed_ms: run.compact.elapsed_ms,
+        });
+    }
     if lx.btw_editing()
         && let Some(thread) = lx.btw.active_thread()
         && thread.is_loading()
     {
-        return Some((
-            activity_label_for_chat(&thread.chat).text(),
-            thread.chat.loading_frame,
-        ));
+        return Some(TaskLoading {
+            label: activity_label_for_chat(&thread.chat).text(),
+            frame: thread.chat.loading_frame,
+            elapsed_ms: None,
+        });
     }
     if lx.agents_editing()
         && let Some(run) = lx
@@ -75,10 +110,11 @@ pub(super) fn task_loading(lx: &Lx) -> Option<(String, usize)> {
             .and_then(|agent_id| lx.agents.by_agent(agent_id))
         && run.is_running()
     {
-        return Some((
-            activity_label_for_chat(&run.chat).text(),
-            run.chat.loading_frame,
-        ));
+        return Some(TaskLoading {
+            label: activity_label_for_chat(&run.chat).text(),
+            frame: run.chat.loading_frame,
+            elapsed_ms: None,
+        });
     }
     None
 }
@@ -373,9 +409,9 @@ pub(super) fn draw(grid: &mut Grid, bar: Option<Rect>, lx: &Lx) {
             );
         }
     }
-    // 后台面板编辑态：同一位置显示当前 BTW / 子 agent 的 loading。
-    if let Some((label, frame)) = task_loading(lx) {
-        draw_task_loading(grid, bar, &label, frame);
+    // 后台面板编辑态 / 压缩态：同一位置显示当前 BTW / 子 agent 的 loading。
+    if let Some(loading) = task_loading(lx) {
+        draw_task_loading(grid, bar, &loading);
         return;
     }
     if !loading_visible(lx) {
@@ -504,21 +540,50 @@ fn draw_scanned_label(
 }
 
 /// 后台面板目标 loading：与主聊天同一扫描窗口，但只用默认前景色（base dim / 窗口 bold）。
-fn draw_task_loading(grid: &mut Grid, bar: Rect, label: &str, loading_frame: usize) {
+fn draw_task_loading(grid: &mut Grid, bar: Rect, loading: &TaskLoading) {
     let x = bar.x.saturating_add(1);
     let limit = bar.right().saturating_sub(1);
     if x >= limit {
         return;
     }
-    draw_scanned_label_styled(
+    // 压缩耗时与主聊天 `/compact` 同款括号统计：静态 dim，不参与扫描。
+    let stats = loading
+        .elapsed_ms
+        .and_then(|elapsed| text::chat::stream_stats_label(Some(elapsed), None));
+    let stats_width = stats
+        .as_ref()
+        .map(|stats| u16::try_from(stats.width()).unwrap_or(u16::MAX));
+    let text_limit = match stats_width {
+        Some(width) => limit.saturating_sub(width).saturating_sub(STATS_GAP),
+        None => limit,
+    };
+    let text_end = draw_scanned_label_styled(
         grid,
         x,
         bar.y,
-        limit,
-        label,
-        loading_frame,
+        text_limit.max(x),
+        &loading.label,
+        loading.frame,
         style::task_loading_base(),
         style::task_loading_scan(),
+    );
+    let Some(stats) = stats else {
+        return;
+    };
+    let stats_x = if text_end > x {
+        text_end.saturating_add(STATS_GAP)
+    } else {
+        x
+    };
+    if stats_x >= limit {
+        return;
+    }
+    grid.put_clipped(
+        stats_x,
+        bar.y,
+        &stats,
+        style::task_loading_base(),
+        limit.saturating_sub(stats_x),
     );
 }
 

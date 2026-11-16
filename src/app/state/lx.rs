@@ -16,6 +16,7 @@ pub mod chat;
 pub mod compact;
 pub mod composer;
 pub mod connect;
+pub mod detail;
 mod edit;
 mod folded;
 mod history;
@@ -53,6 +54,9 @@ pub use compact::{CompactNoticeView, LxCompact};
 pub use composer::DetailComposer;
 pub use connect::{
     ConnectManageAction, ConnectPanel, ConnectPromptStep, ConnectProviderEntry, ConnectStage,
+};
+pub use detail::{
+    DetailRewindExecution, DetailRewindKind, DetailRewindPlan, DetailRewindState, DetailTarget,
 };
 pub use mcp::{McpCatalogEntry, McpPanel, McpPanelEntry, McpRuntimeState, McpServerState};
 pub use mention::{LxMention, LxMentionView, SubagentMentionItem, SubagentRunMentionEntry};
@@ -169,6 +173,8 @@ pub struct Lx {
     pub agents: AgentsState,
     /// 最新轮次撤销：待命、目标选择、动作面板与执行中。
     pub rewind: LxRewind,
+    /// 详情（Agents / BTW）撤销的待确认计划与执行中状态。
+    pub detail_rewind: DetailRewindState,
     /// 上下文压缩：检查点、展开状态与执行中标记（只读视图，IO 在事件层）。
     pub compact: LxCompact,
     /// 会话中途模型切换记录与展开状态。
@@ -191,6 +197,8 @@ pub struct Lx {
     mention_runs_external: bool,
     /// 是否允许打开 `@` / `/` / 粘贴 / 引用等编辑面板。
     allow_panels: bool,
+    /// 是否允许 `/` 命令面板（Agents composer 在 `allow_panels=false` 下单独放行）。
+    slash_enabled: bool,
     /// Agents 追问 composer：只开 `@`（4 Tab、朴素插入），其余编辑浮层保持关闭。
     mention_minimal: bool,
     /// 本会话正在运行的后台任务数（底部状态行指标）。
@@ -265,12 +273,13 @@ impl Lx {
         lx
     }
 
-    /// Agents 追问输入缓冲：文本编辑 + `@` 提及（4 Tab、朴素插入）；
-    /// `/`、markdown 块面板、路径粘贴参照面板保持关闭。
+    /// Agents 追问输入缓冲：文本编辑 + `@` 提及（4 Tab、朴素插入）+ `/` 命令面板；
+    /// markdown 块面板、路径粘贴参照面板保持关闭。
     pub fn agent_composer() -> Self {
         let mut lx = Self::build(false);
         lx.no_shell = true;
         lx.allow_panels = false;
+        lx.slash_enabled = true;
         lx.mention_minimal = true;
         lx
     }
@@ -303,6 +312,7 @@ impl Lx {
             chat: LxChat::new(),
             agents: AgentsState::default(),
             rewind: LxRewind::default(),
+            detail_rewind: DetailRewindState::default(),
             compact: LxCompact::default(),
             model_switch: LxModelSwitch::default(),
             recap: LxRecap::default(),
@@ -314,6 +324,7 @@ impl Lx {
             no_shell: false,
             mention_runs_external: false,
             allow_panels: true,
+            slash_enabled: true,
             mention_minimal: false,
             background_tasks: 0,
             startup: StartupCounts::default(),
@@ -355,6 +366,7 @@ impl Lx {
     /// 清空子 agent 展示态（会话切换/新建时随会话一起复位）。
     pub fn clear_agents(&mut self) {
         self.agents = AgentsState::default();
+        self.detail_rewind.clear();
         self.sync_mention_subagent_runs();
     }
 

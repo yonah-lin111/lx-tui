@@ -366,6 +366,7 @@ pub(crate) fn handle_paste_event(
             .is_some_and(|pane| pane.lx.btw_editing())
         {
             if paste::handle_lx_paste(state, text) {
+                update::refresh_slash_panel(state, id);
                 *dirty = true;
             }
             return;
@@ -515,7 +516,11 @@ fn cut_lx_selection(state: &mut AppState) -> bool {
         matches!(
             target.lx.slash,
             Some(crate::app::state::SlashPanel::History(_))
-        )
+        ) || target.lx.detail_rewind.is_executing()
+            || matches!(
+                target.lx.active_editor().slash,
+                Some(crate::app::state::SlashPanel::Rewind(_))
+            )
     }) {
         return false;
     }

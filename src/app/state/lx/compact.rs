@@ -25,8 +25,8 @@ pub struct CompactNoticeView {
     pub active: bool,
     /// 是否由子 agent 运行时自动压缩产生。
     ///
-    /// 自动压缩不写数据库，也没有真实的消息 sequence 范围；渲染层据此把范围行
-    /// 换成 `auto · this run`，避免显示伪造的 `sequence 0–0`。
+    /// 自动压缩与手动 `/compact` 共用检查点表；它没有真实的消息 sequence 范围，
+    /// 渲染层据此把范围行换成 `auto · this run`，`/rewind` 也会跳过它。
     pub auto: bool,
 }
 
@@ -42,7 +42,7 @@ impl CompactNoticeView {
             end_sequence: record.end_sequence,
             summary: record.summary_text.clone(),
             active: record.is_active(),
-            auto: false,
+            auto: record.is_auto(),
         }
     }
 
@@ -106,11 +106,27 @@ impl LxCompact {
         self.running.is_some()
     }
 
+    /// 可作为 `/rewind` 目标的检查点：必须是**最新** active，且不能是自动压缩。
+    ///
+    /// 更早的手动检查点即使存在也不能恢复：撤销只删一条检查点，晚于它的
+    /// active 检查点仍会接管上下文，恢复不会生效。
+    pub fn rewindable(&self) -> Option<&CompactNoticeView> {
+        let latest = self.checkpoints.iter().rev().find(|item| item.active)?;
+        (!latest.auto).then_some(latest)
+    }
+
     /// 开始一次压缩：记下幂等键与开始时刻（耗时由 tick 刷新，这里先清空）。
-    pub fn start(&mut self, operation_id: String, started_at_ms: i64) {
+    ///
+    /// 已有压缩在跑时拒绝覆盖（`running` 是唯一幂等键，覆盖会让旧回执永远
+    /// 对不上并留下一个假的 `compacting` 状态）。
+    pub fn start(&mut self, operation_id: String, started_at_ms: i64) -> bool {
+        if self.running.is_some() {
+            return false;
+        }
         self.running = Some(operation_id);
         self.started_at_ms = Some(started_at_ms);
         self.elapsed_ms = None;
+        true
     }
 
     /// 结束一次压缩（成功/空增量/失败共用）：执行态与计时一起清除。

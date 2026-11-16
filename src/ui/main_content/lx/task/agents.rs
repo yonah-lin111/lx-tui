@@ -256,8 +256,17 @@ pub(super) fn draw_edit(
             rect.width.saturating_sub(2),
         );
     }
-    let mode = lx.agents.reply_mode(agent_id);
-    draw_agent_badge(grid, rect, run, marker_w, mode);
+    let mode = if run.is_running() {
+        match run.chat.pending_steers.len() {
+            0 => "steer".to_string(),
+            count => format!("steer {count}"),
+        }
+    } else if run.compact.is_running() {
+        "compacting".to_string()
+    } else {
+        "private".to_string()
+    };
+    draw_agent_badge(grid, rect, run, marker_w, &mode);
     dims
 }
 
@@ -271,27 +280,13 @@ pub(crate) fn composer_rect(rect: Rect, lx: &crate::app::state::Lx) -> Option<Re
     Some(rect)
 }
 
-/// 右侧目标胶囊：` <nickname> [role] · private|report|steer `；左侧必须给 `Subagent` 标记留位。
-fn draw_agent_badge(
-    grid: &mut Grid,
-    rect: Rect,
-    run: &SubagentRun,
-    marker_w: u16,
-    mode: crate::app::state::lx::agent::AgentReplyMode,
-) {
+/// 右侧目标胶囊：` <nickname> [role] · private|steer N|compacting `；左侧必须给 `Subagent` 标记留位。
+fn draw_agent_badge(grid: &mut Grid, rect: Rect, run: &SubagentRun, marker_w: u16, mode: &str) {
     let name = run
         .nickname
         .as_deref()
         .filter(|nickname| !nickname.is_empty())
         .unwrap_or_else(|| run.role.as_str());
-    let mode = if run.status == "running" {
-        match run.chat.pending_steers.len() {
-            0 => "steer".to_string(),
-            count => format!("steer {count}"),
-        }
-    } else {
-        mode.label().to_string()
-    };
     let with_mode = format!(" {name} [{}] · {mode} ", run.role.as_str());
     let base = format!(" {name} [{}] ", run.role.as_str());
     for label in [with_mode.as_str(), base.as_str()] {

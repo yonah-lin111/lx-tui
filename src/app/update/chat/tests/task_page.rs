@@ -134,6 +134,32 @@ fn closing_the_page_drops_only_the_page() {
 }
 
 #[test]
+fn closing_the_page_keeps_detail_rewind_execution() {
+    let (mut state, pane) = state_with_session("草稿");
+    state
+        .pane_mut_anywhere(pane)
+        .expect("pane")
+        .lx
+        .detail_rewind
+        .executing = Some(crate::app::state::DetailRewindExecution {
+        operation_id: "detail-rewind-keep".into(),
+        target: crate::app::state::DetailTarget::Agent("sub-a".into()),
+    });
+    open_with_processes(&mut state, pane);
+    assert!(close_task_page(&mut state, pane));
+    assert!(
+        state
+            .pane_anywhere(pane)
+            .expect("pane")
+            .lx
+            .detail_rewind
+            .executing
+            .is_some(),
+        "执行态必须跨后台页开关存活，回执才能回填详情"
+    );
+}
+
+#[test]
 fn listed_processes_fill_the_page_and_clamp_the_highlight() {
     let (mut state, pane) = state_with_session("x");
     open_with_processes(&mut state, pane);
@@ -1163,30 +1189,13 @@ fn late_mention_result_is_dropped_after_switching_agent() {
 }
 
 #[test]
-fn shift_tab_switches_agent_reply_mode_and_report_submit_carries_the_flag() {
+fn shift_tab_no_longer_toggles_report_mode_and_follow_up_stays_private() {
     let (mut state, pane) = state_with_session("");
     open_agents_with_statuses(&mut state, pane);
     let input = crate::app::update::pane::apply_lx_input;
     input(&mut state, crate::app::actions::LxInput::EnterFolder);
-    let mode = |state: &AppState| {
-        state
-            .pane_anywhere(pane)
-            .expect("pane")
-            .lx
-            .agents
-            .reply_mode("sub-done")
-    };
-    assert_eq!(
-        mode(&state),
-        crate::app::state::lx::agent::AgentReplyMode::Private,
-        "默认私聊"
-    );
+    // Shift+Tab 不再切换模式：草稿与模式都不变，直接吞掉。
     input(&mut state, crate::app::actions::LxInput::PrevStep);
-    assert_eq!(
-        mode(&state),
-        crate::app::state::lx::agent::AgentReplyMode::Report,
-        "Shift+Tab 切到汇报"
-    );
     state.effects.clear();
     for ch in "hi".chars() {
         input(&mut state, crate::app::actions::LxInput::Char(ch));
@@ -1198,11 +1207,11 @@ fn shift_tab_switches_agent_reply_mode_and_report_submit_carries_the_flag() {
             crate::app::effects::Effect::SendSubagentUserInput {
                 agent_id,
                 text,
-                notify_parent: true,
+                notify_parent: false,
                 ..
             } if agent_id == "sub-done" && text == "hi"
         )),
-        "汇报模式发送 notify_parent=true：{:?}",
+        "普通追问永远私聊：{:?}",
         state.effects
     );
 }
@@ -1263,9 +1272,9 @@ fn shift_enter_falls_back_to_newline_when_mention_target_is_not_a_directory() {
     assert_eq!(text.as_deref(), Some("@\n"), "Shift+Enter 应插入换行");
 }
 
-/// `/` 在 Agents composer 中必须只写入字符，不能打开任何编辑浮层。
+/// `/` 在 Agents composer 中只打开命令面板，不连带打开 md/粘贴/引用浮层。
 #[test]
-fn agent_composer_slash_does_not_open_panels() {
+fn agent_composer_slash_opens_only_the_command_panel() {
     let (mut state, pane) = state_with_session("");
     open_agents_with_statuses(&mut state, pane);
     let input = crate::app::update::pane::apply_lx_input;
@@ -1280,7 +1289,13 @@ fn agent_composer_slash_does_not_open_panels() {
         .expect("composer")
         .editor();
     assert_eq!(editor.input, "/");
-    assert!(editor.slash.is_none(), "不打开斜杠面板");
+    assert!(
+        matches!(
+            editor.slash,
+            Some(crate::app::state::SlashPanel::Commands { .. })
+        ),
+        "打开命令面板"
+    );
     assert!(editor.panel.is_none(), "不打开 markdown 块面板");
     assert!(editor.paste_panel().is_none(), "不打开粘贴面板");
     assert!(editor.refer.is_none(), "不打开快捷引用面板");
@@ -1351,4 +1366,33 @@ fn full_steer_queue_keeps_the_agent_draft() {
         .composer("sub-run")
         .map(|composer| composer.text().to_string());
     assert_eq!(draft.as_deref(), Some("too many"), "草稿必须保留");
+}
+
+/// 进程输出滚动条按下/拖拽同样以滚动条几何为准，不读滞后一帧的 `output_visible`。
+#[test]
+fn set_task_output_scroll_uses_scrollbar_geometry() {
+    let (mut state, pane) = state_with_session("");
+    {
+        let target = state.pane_mut_anywhere(pane).expect("pane");
+        let page = target.lx.task.get_or_insert_with(Default::default);
+        page.tab = TaskTab::Processes;
+        page.output = (0..100).map(|index| format!("line {index}")).collect();
+        page.output_visible = 10;
+        page.output_scroll = 0;
+    }
+    // 滚动条几何（80/10）上限 70，旧状态（100/10）上限 90 不得参与。
+    assert!(crate::app::update::chat::set_task_output_scroll(
+        &mut state, pane, 71, 80, 10
+    ));
+    assert_eq!(
+        state
+            .pane_anywhere(pane)
+            .expect("pane")
+            .lx
+            .task
+            .as_ref()
+            .expect("page")
+            .output_scroll,
+        70
+    );
 }

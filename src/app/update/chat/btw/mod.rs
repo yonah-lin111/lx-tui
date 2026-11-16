@@ -20,7 +20,7 @@ mod input;
 pub use events::{
     AcceptedBtw, BtwToolSettlement, BtwToolUpdate, btw_message_parts, new_assistant_message,
     on_accepted, on_delta, on_failed, on_finished, on_qa_list_loaded, on_recipient_started,
-    on_thread_loaded, on_tool_state,
+    on_thread_deleted, on_thread_loaded, on_tool_state,
 };
 pub use input::apply_input;
 
@@ -156,8 +156,15 @@ pub fn scroll_btw_detail(state: &mut AppState, pane: PaneId, delta: isize) -> bo
     true
 }
 
-/// 直接设置 BTW 对话区顶部行（滚动条点击/拖拽）；语义与 Agents 详情一致。
-pub fn set_task_btw_scroll(state: &mut AppState, pane: PaneId, offset: usize) -> bool {
+/// 直接设置 BTW 对话区顶部行（滚动条点击/拖拽）；上限由滚动条几何给出，
+/// 不读可能滞后一帧的 `thread.total_rows` / `thread.visible`。
+pub fn set_task_btw_scroll(
+    state: &mut AppState,
+    pane: PaneId,
+    offset: usize,
+    total: usize,
+    visible: usize,
+) -> bool {
     let Some(target) = state.pane_mut_anywhere(pane) else {
         return false;
     };
@@ -167,7 +174,7 @@ pub fn set_task_btw_scroll(state: &mut AppState, pane: PaneId, offset: usize) ->
     let Some(thread) = target.lx.btw.active_thread_mut() else {
         return false;
     };
-    let max = thread.total_rows.saturating_sub(thread.visible.max(1));
+    let max = total.saturating_sub(visible.max(1));
     let clamped = offset.min(max);
     let before = thread.scroll;
     let was_following = thread.follow;
@@ -176,7 +183,7 @@ pub fn set_task_btw_scroll(state: &mut AppState, pane: PaneId, offset: usize) ->
     before != clamped || was_following != thread.follow
 }
 
-pub(super) fn switch_qa(state: &mut AppState, pane: PaneId, qa_id: &str) -> bool {
+pub(crate) fn switch_qa(state: &mut AppState, pane: PaneId, qa_id: &str) -> bool {
     let Some(parent_session_id) = state
         .pane_anywhere(pane)
         .and_then(|target| target.lx.chat.session_id.clone())
@@ -212,6 +219,9 @@ pub fn enter_btw_edit(state: &mut AppState, pane: PaneId) -> bool {
     if !target.lx.btw.enter_edit() {
         return false;
     }
+    if let Some(composer) = target.lx.btw.active_composer_mut() {
+        composer.slash = None;
+    }
     crate::app::update::clear_lx_selection_for(state, pane);
     crate::app::update::sync_lx_mention_root(state, pane);
     true
@@ -219,9 +229,13 @@ pub fn enter_btw_edit(state: &mut AppState, pane: PaneId) -> bool {
 
 /// 退出编辑态并保留草稿。
 pub fn leave_btw_edit(state: &mut AppState, pane: PaneId) -> bool {
-    state
-        .pane_mut_anywhere(pane)
-        .is_some_and(|target| target.lx.btw.leave_edit())
+    let Some(target) = state.pane_mut_anywhere(pane) else {
+        return false;
+    };
+    if let Some(composer) = target.lx.btw.active_composer_mut() {
+        composer.slash = None;
+    }
+    target.lx.btw.leave_edit()
 }
 
 /// `/btw [prompt]` 命令入口：打开页签，把 prompt 放入当前 QA 的 composer 并提交。
@@ -309,7 +323,64 @@ pub fn ensure_loaded(state: &mut AppState, pane: PaneId) -> bool {
 }
 
 /// 提交当前 QA 的草稿；返回是否登记了提交。
+/// `/new`：删除当前 QA 的旁路线程并从空白开始；回答/压缩中拒绝。
+pub fn request_reset_thread(state: &mut AppState, pane: PaneId) -> bool {
+    let Some((session_id, qa_id, thread_id, busy)) = state.pane_anywhere(pane).and_then(|target| {
+        if !target.lx.btw_editing() {
+            return None;
+        }
+        let session_id = target.lx.chat.session_id.clone()?;
+        let qa_id = target.lx.btw.active.clone()?;
+        let thread = target.lx.btw.active_thread()?;
+        Some((
+            session_id,
+            qa_id,
+            thread.thread_id.clone(),
+            thread.is_loading() || thread.compact.is_running(),
+        ))
+    }) else {
+        return false;
+    };
+    if busy {
+        show_lx_toast(
+            state,
+            pane,
+            Toast::new(
+                ToastKind::Warning,
+                text::detail::LX_BTW_RESET_BUSY,
+                Some(pane),
+                std::time::Instant::now(),
+            ),
+        );
+        return true;
+    }
+    let Some(thread_id) = thread_id else {
+        show_lx_toast(
+            state,
+            pane,
+            Toast::new(
+                ToastKind::Warning,
+                text::detail::LX_BTW_RESET_EMPTY,
+                Some(pane),
+                std::time::Instant::now(),
+            ),
+        );
+        return true;
+    };
+    super::composer::clear(state, pane);
+    state.effects.push(Effect::Btw(BtwEffect::DeleteThread {
+        pane,
+        parent_session_id: session_id,
+        qa_id,
+        thread_id,
+    }));
+    true
+}
+
 pub fn submit_current(state: &mut AppState, pane: PaneId) -> bool {
+    if super::composer::try_submit(state, pane) {
+        return true;
+    }
     let Some(session_id) = state
         .pane_anywhere(pane)
         .and_then(|target| target.lx.chat.session_id.clone())

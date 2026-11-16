@@ -115,14 +115,49 @@ fn start_and_finish_carry_the_timer() {
     assert_eq!(compact.elapsed_ms, None, "结束后不得残留耗时");
 }
 
-/// 重新开始压缩会重置计时，不能沿用上一次的耗时。
+/// 已有压缩在跑时不得覆盖幂等键：旧回执会因此永远对不上。
 #[test]
-fn restart_resets_the_timer() {
+fn start_refuses_to_overwrite_running() {
     let mut compact = LxCompact::default();
-    compact.start("op-1".into(), 1_000);
+    assert!(compact.start("op-1".into(), 1_000));
     compact.elapsed_ms = Some(5_000);
-    compact.start("op-2".into(), 9_000);
-    assert_eq!(compact.running.as_deref(), Some("op-2"));
-    assert_eq!(compact.started_at_ms, Some(9_000));
-    assert_eq!(compact.elapsed_ms, None);
+    assert!(!compact.start("op-2".into(), 9_000));
+    assert_eq!(compact.running.as_deref(), Some("op-1"));
+    assert_eq!(compact.started_at_ms, Some(1_000));
+    assert_eq!(compact.elapsed_ms, Some(5_000));
+}
+
+/// 自动压缩检查点即使是最新 active 也不能作为 `/rewind` 目标。
+#[test]
+fn rewindable_skips_auto_checkpoints() {
+    use crate::db::chat::CompactCheckpoint;
+
+    let record = |operation_id: &str, sequence: i64| CompactCheckpoint {
+        id: format!("cp-{sequence}"),
+        sequence,
+        operation_id: operation_id.into(),
+        base_checkpoint_id: None,
+        start_sequence: 0,
+        end_sequence: sequence,
+        summary_text: "summary".into(),
+        model_label: "m".into(),
+        state: "active".into(),
+        created_at_ms: 0,
+    };
+    let mut compact = LxCompact::default();
+    compact.replace(vec![
+        crate::app::state::CompactNoticeView::from_record(&record("compact-1", 1)),
+        crate::app::state::CompactNoticeView::from_record(&record("autocompact-2", 2)),
+    ]);
+    assert!(
+        compact.rewindable().is_none(),
+        "最新 active 是自动压缩时不得恢复更早的手动检查点"
+    );
+    compact.replace(vec![crate::app::state::CompactNoticeView::from_record(
+        &record("compact-3", 3),
+    )]);
+    assert_eq!(
+        compact.rewindable().map(|item| item.id.as_str()),
+        Some("cp-3")
+    );
 }

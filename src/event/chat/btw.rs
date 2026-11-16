@@ -6,6 +6,8 @@
 //! - 目标实例只读引用，不 resume、不发送输入、不打断原任务；
 //! - 关闭面板/切换主会话不取消：只有显式 Stop、删除归属或退出应用才停止。
 
+mod maintenance;
+
 use std::collections::{HashMap, HashSet, VecDeque};
 use std::path::{Path, PathBuf};
 use std::time::Duration;
@@ -42,6 +44,12 @@ pub enum BtwEvent {
         qa_id: String,
         view: Box<BtwLoadedView>,
     },
+    /// 线程已被删除（`/new`）：视图回到空白，QA 列表随后刷新。
+    ThreadDeleted {
+        pane: PaneId,
+        parent_session_id: String,
+        qa_id: String,
+    },
     /// 提交已被接受（user 消息与批次已落库）。
     Accepted {
         pane: PaneId,
@@ -74,6 +82,8 @@ pub struct BtwLoadedView {
     pub title: String,
     pub messages: Vec<ChatMessage>,
     pub targets: Vec<crate::app::state::lx::BtwTargetView>,
+    /// 该线程的 compact 检查点（与消息一起回填，卡片才能显示）。
+    pub checkpoints: Vec<crate::db::chat::CompactCheckpoint>,
     pub loaded: bool,
 }
 
@@ -145,6 +155,20 @@ pub(crate) fn apply_effect(
             qa_id,
         } => load_thread(state, persistence, sender, pane, &parent_session_id, &qa_id),
         BtwEffect::Submit(submission) => submit(state, streams, persistence, sender, *submission),
+        BtwEffect::DeleteThread {
+            pane,
+            parent_session_id,
+            qa_id,
+            thread_id,
+        } => maintenance::delete_thread(
+            state,
+            persistence,
+            sender,
+            pane,
+            &parent_session_id,
+            &qa_id,
+            &thread_id,
+        ),
         BtwEffect::Stop {
             pane,
             parent_session_id,
@@ -284,6 +308,7 @@ fn load_thread(
                 title: String::new(),
                 messages: Vec::new(),
                 targets: Vec::new(),
+                checkpoints: Vec::new(),
                 loaded: true,
             }),
         }));
@@ -295,6 +320,9 @@ fn load_thread(
         .flatten()
         .unwrap_or_default();
     let targets = resolve_target_views(&thread);
+    let checkpoints = database
+        .compact_checkpoints(&workspace, &thread.child_session_id)
+        .unwrap_or_default();
     let _ = sender.send(AppEvent::Btw(BtwEvent::ThreadLoaded {
         pane,
         parent_session_id: parent_session_id.to_string(),
@@ -305,6 +333,7 @@ fn load_thread(
             title: thread.title,
             messages,
             targets,
+            checkpoints,
             loaded: true,
         }),
     }));
@@ -1247,8 +1276,16 @@ pub(crate) fn apply_event_to_state(state: &mut AppState, event: BtwEvent) {
                 view.title,
                 view.messages,
                 view.targets,
+                view.checkpoints,
                 view.loaded,
             );
+        }
+        BtwEvent::ThreadDeleted {
+            pane,
+            parent_session_id,
+            qa_id,
+        } => {
+            crate::app::update::on_btw_thread_deleted(state, pane, &parent_session_id, &qa_id);
         }
         BtwEvent::Accepted {
             pane,

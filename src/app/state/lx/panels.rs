@@ -26,14 +26,18 @@ impl Lx {
         self.text_selection = None;
         self.preview_selection = None;
         self.preview_drag = None;
-        // Agents 追问：只保留 `@`，其余编辑浮层全部关闭，避免与子 agent 文本输入抢按键。
+        // Agents 追问：只保留 `@` 与 `/`，其余编辑浮层全部关闭，避免与子 agent 文本输入抢按键。
         if !self.allow_panels {
             self.panel = None;
-            self.slash = None;
+            if !self.slash_enabled {
+                self.slash = None;
+            }
             self.paste = None;
             self.text_paste = None;
             self.refer = None;
-            if self.mention_minimal {
+            if self.slash.is_some() {
+                self.mention.suppress();
+            } else if self.mention_minimal {
                 let masked = crate::app::paste::mask_pasted_text(&self.input).into_owned();
                 if edited {
                     self.mention.unsuppress();
@@ -58,9 +62,9 @@ impl Lx {
             self.scroll_cursor_into_view();
             return;
         }
-        // 二级斜杠面板（如 `/mcp`、`/model`、`/resume`、`/fork`）打开期间输入框全文作为过滤词，
-        // 压制 `@` 提及、Markdown 块与快捷引用面板，防止输入 `@` 唤醒隐藏面板抢走按键与鼠标。
-        if self.slash.is_some() && !matches!(self.slash, Some(super::SlashPanel::Commands { .. })) {
+        // 任意 `/` 面板打开期间输入框全文作为过滤词/候选菜单，压制 `@` 提及、
+        // Markdown 块与快捷引用面板，防止输入 `@` 唤醒隐藏面板抢走按键与鼠标。
+        if self.slash.is_some() {
             self.panel = None;
             self.refer = None;
             self.mention.suppress();

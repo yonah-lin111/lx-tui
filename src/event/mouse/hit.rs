@@ -331,7 +331,7 @@ pub(crate) fn handle_task_agents_scrollbar_press(
         Some(grab) => state.task_agents_scroll_drag = Some((pane, grab)),
         None => {
             let offset = ui::widgets::scrollbar::offset_from_track_row(&bar, row);
-            update::set_task_agents_scroll(state, pane, offset);
+            update::set_task_agents_scroll(state, pane, offset, bar.total, bar.visible);
         }
     }
     true
@@ -358,7 +358,7 @@ pub(crate) fn handle_task_btw_scrollbar_press(
         Some(grab) => state.task_btw_scroll_drag = Some((pane, grab)),
         None => {
             let offset = ui::widgets::scrollbar::offset_from_track_row(&bar, row);
-            update::set_task_btw_scroll(state, pane, offset);
+            update::set_task_btw_scroll(state, pane, offset, bar.total, bar.visible);
         }
     }
     true

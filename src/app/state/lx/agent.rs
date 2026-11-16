@@ -94,14 +94,17 @@ pub struct SubagentRun {
 /// 父可见任务摘要：只有汇报轮才用最新输入覆盖；私聊轮保留原任务或标题。
 ///
 /// `task` 会进入主 agent 的 `@` 引用块与 `<subagents>` 快照标题兜底，
-/// 因此私聊文本绝不能写进这里。
+/// 因此私聊文本绝不能写进这里。显式 `/report` 的输入是给子 agent 的指令，
+/// 同样保留原任务/标题，避免汇报指令全文出现在父侧。
 pub(crate) fn visible_task(
     task_text: &str,
     notify_parent: bool,
     previous: Option<&str>,
     title: &str,
 ) -> String {
-    if notify_parent {
+    let is_report_request =
+        task_text.lines().next().map(str::trim) == Some(crate::chat::agent::REPORT_REQUEST_MARKER);
+    if notify_parent && !is_report_request {
         return task_text.to_string();
     }
     previous
@@ -155,7 +158,8 @@ impl SubagentRun {
     ///
     /// 再次选中时由 `Effect::LoadSubagentSession` 从 SQLite 懒加载。
     pub fn evict_chat_memory(&mut self) {
-        if self.is_running() || !self.loaded {
+        // 压缩中不能卸载：compact.running 与检查点回填都挂在这份内存状态上。
+        if self.is_running() || !self.loaded || self.compact.is_running() {
             return;
         }
         self.chat = LxChat::new();
@@ -387,39 +391,6 @@ pub fn seed_chat_model(
     chat.status.streaming = true;
 }
 
-/// 面板追问模式：私聊不汇报主 agent；汇报沿用原来的逐轮报告与自动轮。
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
-pub enum AgentReplyMode {
-    /// 默认：只留在该 subagent 的会话里，主 agent 不收到报告。
-    #[default]
-    Private,
-    /// 本轮结束后向主 agent 投递报告并可能触发自动轮。
-    Report,
-}
-
-impl AgentReplyMode {
-    /// 面板胶囊后缀。
-    pub const fn label(self) -> &'static str {
-        match self {
-            Self::Private => "private",
-            Self::Report => "report",
-        }
-    }
-
-    /// 是否向主 agent 投递报告。
-    pub const fn notify_parent(self) -> bool {
-        matches!(self, Self::Report)
-    }
-
-    /// Shift+Tab 切换。
-    pub const fn toggled(self) -> Self {
-        match self {
-            Self::Private => Self::Report,
-            Self::Report => Self::Private,
-        }
-    }
-}
-
 /// 面板数据：本窗格的 subagent 集合（面板关闭时依然保留）。
 #[derive(Debug, Default)]
 pub struct AgentsState {
@@ -434,8 +405,6 @@ pub struct AgentsState {
     pub selected_id: Option<String>,
     /// agent_id -> 未发送草稿；只在实际进入编辑时惰性创建。
     pub composers: BTreeMap<String, DetailComposer>,
-    /// agent_id -> 面板追问模式；缺省为私聊。
-    pub reply_modes: BTreeMap<String, AgentReplyMode>,
 }
 
 impl AgentsState {
@@ -461,18 +430,6 @@ impl AgentsState {
     /// 按 agent id 查找可变引用。
     pub fn by_agent_mut(&mut self, agent_id: &str) -> Option<&mut SubagentRun> {
         self.runs.iter_mut().find(|run| run.agent_id == agent_id)
-    }
-
-    /// 当前追问模式；未设置过的 agent 默认私聊。
-    pub fn reply_mode(&self, agent_id: &str) -> AgentReplyMode {
-        self.reply_modes.get(agent_id).copied().unwrap_or_default()
-    }
-
-    /// 切换某 agent 的追问模式。
-    pub fn toggle_reply_mode(&mut self, agent_id: &str) -> AgentReplyMode {
-        let next = self.reply_mode(agent_id).toggled();
-        self.reply_modes.insert(agent_id.to_string(), next);
-        next
     }
 
     /// 按 `agent_path` 的树形前序重排：父节点之后紧跟其全部后代，再轮到下一个兄弟。
@@ -601,7 +558,7 @@ impl AgentsState {
                 .runs
                 .iter()
                 .enumerate()
-                .filter(|(_, run)| !run.is_running() && run.loaded)
+                .filter(|(_, run)| !run.is_running() && run.loaded && !run.compact.is_running())
                 .filter(|(_, run)| Some(run.agent_id.as_str()) != protected_agent_id)
                 .min_by_key(|(_, run)| run.last_accessed_ms)
                 .map(|(index, _)| index);

@@ -1742,3 +1742,5 @@ fn list_changed_paths_for_turn_unions_steer_segments() {
     assert_eq!(paths, vec!["src/a.rs".to_string(), "src/b.rs".to_string()]);
     cleanup(fixture.root);
 }
+
+mod rewind;

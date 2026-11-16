@@ -234,8 +234,11 @@ fn apply_agents_list_input(state: &mut AppState, pane: PaneId, command: LxInput)
     }
 }
 
-/// 编辑态：`@` 面板优先，其次 Enter 发送、Esc 返回列表、PgUp/PgDn 翻详情。
+/// 编辑态：`/` 面板优先，其次 `@` 面板、Enter 发送、Esc 返回列表、PgUp/PgDn 翻详情。
 fn apply_agent_edit_input(state: &mut AppState, pane: PaneId, command: LxInput) -> bool {
+    if super::super::chat::composer::apply_slash_input(state, pane, command) {
+        return true;
+    }
     if apply_agent_mention_input(state, pane, command) {
         return true;
     }
@@ -251,22 +254,10 @@ fn apply_agent_edit_input(state: &mut AppState, pane: PaneId, command: LxInput) 
             chat::scroll_agents_detail(state, pane, delta);
             true
         }
-        LxInput::PrevStep => toggle_agent_reply_mode(state, pane),
+        LxInput::PrevStep => true,
         LxInput::Tab => true,
         _ => edit_agent_composer(state, pane, command),
     }
-}
-
-/// Shift+Tab：切换当前 agent 的追问模式（私聊 / 汇报）。
-fn toggle_agent_reply_mode(state: &mut AppState, pane: PaneId) -> bool {
-    let Some(target) = state.pane_mut_anywhere(pane) else {
-        return false;
-    };
-    let Some(agent_id) = target.lx.agent_edit_id().map(str::to_string) else {
-        return false;
-    };
-    target.lx.agents.toggle_reply_mode(&agent_id);
-    true
 }
 
 /// `@` 面板按键：镜像 BTW composer（`chat/btw/input.rs`），面板打开时优先于发送与退出。
@@ -339,21 +330,27 @@ fn apply_agent_mention_input(state: &mut AppState, pane: PaneId, command: LxInpu
 }
 
 fn edit_agent_composer(state: &mut AppState, pane: PaneId, command: LxInput) -> bool {
-    let Some(target) = state.pane_mut_anywhere(pane) else {
-        return false;
+    let changed = {
+        let Some(target) = state.pane_mut_anywhere(pane) else {
+            return false;
+        };
+        let Some(page) = target.lx.task.as_ref() else {
+            return false;
+        };
+        let Some(agent_id) = page.agent_edit.clone() else {
+            return false;
+        };
+        let Some(composer) = target.lx.agents.composer_mut(&agent_id) else {
+            return false;
+        };
+        // 光标移动同样要重算 `/` 面板：命令触发按光标所在行判定，面板不能停在
+        // 移动前的高亮上，否则 Enter 会执行一条已不在命令位置的命令。
+        super::apply_editor_edit(composer.editor_mut(), command)
     };
-    let Some(page) = target.lx.task.as_ref() else {
-        return false;
-    };
-    let Some(agent_id) = page.agent_edit.clone() else {
-        return false;
-    };
-    let Some(composer) = target.lx.agents.composer_mut(&agent_id) else {
-        return false;
-    };
-    let before = composer.revision();
-    super::apply_editor_edit(composer.editor_mut(), command);
-    composer.revision() != before
+    if changed {
+        chat::refresh_slash_panel(state, pane);
+    }
+    changed
 }
 
 /// `TaskPage` 打开时的粘贴：列表态单行化写入搜索框，编辑态写入 Agent composer。
@@ -368,16 +365,19 @@ pub fn apply_task_paste(state: &mut AppState, pane: PaneId, text: &str) -> bool 
                 .and_then(|target| target.lx.task.as_ref())
                 .and_then(|page| page.agent_edit.clone());
             if let Some(agent_id) = editing {
-                let Some(target) = state.pane_mut_anywhere(pane) else {
-                    return false;
-                };
-                let Some(composer) = target.lx.agents.composer_mut(&agent_id) else {
-                    return false;
-                };
                 if text.is_empty() {
                     return false;
                 }
-                composer.editor_mut().insert_str(text);
+                {
+                    let Some(target) = state.pane_mut_anywhere(pane) else {
+                        return false;
+                    };
+                    let Some(composer) = target.lx.agents.composer_mut(&agent_id) else {
+                        return false;
+                    };
+                    composer.editor_mut().insert_str(text);
+                }
+                chat::refresh_slash_panel(state, pane);
                 return true;
             }
             let single_line: String = text
@@ -421,7 +421,13 @@ pub fn apply_task_paste(state: &mut AppState, pane: PaneId, text: &str) -> bool 
             for ch in single_line.chars() {
                 target.lx.btw.search.insert_char(ch);
             }
-            target.lx.btw.sync_selection_after_filter();
+            let switched = target.lx.btw.sync_selection_after_filter();
+            let qa_id = switched.then(|| target.lx.btw.active.clone()).flatten();
+            if let Some(qa_id) = qa_id {
+                // 搜索过滤把 active 切到另一个 QA：必须走 switch_qa 触发线程加载，
+                // 否则 `!loaded` 占位会永久显示并在心跳里空转。
+                chat::btw::switch_qa(state, pane, &qa_id);
+            }
             true
         }
         _ => false,
@@ -552,6 +558,7 @@ pub fn cycle_task_tab(state: &mut AppState, pane: PaneId, delta: isize) -> bool 
             target.lx.clear_text_selection();
             target.lx.clear_preview_selection();
         }
+        chat::composer::close_all(state, pane);
         clamp_agents_window(state, pane);
         ensure_selected_agent_loaded(state, pane);
         crate::app::update::clear_lx_selection_for(state, pane);
@@ -656,29 +663,48 @@ pub fn enter_task_agent_edit(state: &mut AppState, pane: PaneId) -> bool {
         page.agent_edit = Some(agent_id.clone());
     }
     if let Some(composer) = target.lx.agents.composer_mut(&agent_id) {
-        // 每次进入编辑态都重置 `@` 面板，避免上一次会话的候选残留。
+        // 每次进入编辑态都重置 `@` 面板与 `/` 候选，避免上一次会话的候选残留。
         composer.editor_mut().mention_escape();
+        composer.editor_mut().slash = None;
     }
     target.lx.sync_agent_composer_context();
     true
 }
 
 fn leave_agent_edit(state: &mut AppState, pane: PaneId) -> bool {
-    let Some(page) = state
-        .pane_mut_anywhere(pane)
-        .and_then(|target| target.lx.task.as_mut())
-    else {
+    let Some(target) = state.pane_mut_anywhere(pane) else {
         return false;
     };
-    if page.agent_edit.take().is_none() {
+    let agent_id = target
+        .lx
+        .task
+        .as_ref()
+        .and_then(|page| page.agent_edit.clone());
+    let left = target
+        .lx
+        .task
+        .as_mut()
+        .is_some_and(|page| page.agent_edit.take().is_some());
+    if !left {
         return false;
+    }
+    if let Some(agent_id) = agent_id
+        && let Some(composer) = target.lx.agents.composer_mut(&agent_id)
+    {
+        composer.editor_mut().slash = None;
+    }
+    if !target.lx.detail_rewind.is_executing() {
+        target.lx.detail_rewind.pending = None;
     }
     true
 }
 
 /// 提交追问：成功后清空草稿但留在编辑态。
 fn submit_agent_edit(state: &mut AppState, pane: PaneId) -> bool {
-    let (agent_id, text, closed, running, pending_steers, mode, session_id) = {
+    if super::super::chat::composer::try_submit(state, pane) {
+        return true;
+    }
+    let (agent_id, text, closed, running, pending_steers, session_id) = {
         let Some(target) = state.pane_anywhere(pane) else {
             return false;
         };
@@ -698,14 +724,12 @@ fn submit_agent_edit(state: &mut AppState, pane: PaneId) -> bool {
         let closed = run.is_some_and(|run| run.status == "cancelled");
         let running = run.is_some_and(|run| run.status == "running");
         let pending_steers = run.map_or(0, |run| run.chat.pending_steers.len());
-        let mode = target.lx.agents.reply_mode(&agent_id);
         (
             agent_id,
             text,
             closed,
             running,
             pending_steers,
-            mode,
             target.lx.chat.session_id.clone(),
         )
     };
@@ -760,7 +784,8 @@ fn submit_agent_edit(state: &mut AppState, pane: PaneId) -> bool {
                 pane,
                 agent_id: agent_id.clone(),
                 text,
-                notify_parent: mode.notify_parent(),
+                // 普通追问与 steer 永远私聊；只有显式 `/report` 才置 true。
+                notify_parent: false,
             });
     } else {
         let Some(session_id) = session_id else {
@@ -773,7 +798,8 @@ fn submit_agent_edit(state: &mut AppState, pane: PaneId) -> bool {
                 session_id,
                 agent_id: agent_id.clone(),
                 text,
-                notify_parent: mode.notify_parent(),
+                // 普通追问与 steer 永远私聊；只有显式 `/report` 才置 true。
+                notify_parent: false,
             });
     }
     if let Some(composer) = state

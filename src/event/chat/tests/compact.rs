@@ -21,7 +21,7 @@ use crate::db::chat::CompactCommit;
 use crate::event::chat::compact::CompactOutcome;
 
 /// 启动一次性 mock SSE 服务：读一个请求、回固定响应、关闭。
-async fn spawn_mock(status: &str, body: &'static str) -> String {
+pub(super) async fn spawn_mock(status: &str, body: &'static str) -> String {
     let listener = TcpListener::bind(("127.0.0.1", 0)).await.expect("bind");
     let port = listener.local_addr().expect("addr").port();
     let status = status.to_string();
@@ -65,7 +65,7 @@ async fn spawn_mock(status: &str, body: &'static str) -> String {
 }
 
 /// 一段正常的 OpenAI 兼容摘要流。
-fn summary_stream() -> &'static str {
+pub(super) fn summary_stream() -> &'static str {
     concat!(
         "data: {\"choices\":[{\"delta\":{\"content\":\"- goal: ship the harness\\n\"}}]}\n\n",
         "data: {\"choices\":[{\"delta\":{}, \"finish_reason\":\"stop\"}]}\n\n",

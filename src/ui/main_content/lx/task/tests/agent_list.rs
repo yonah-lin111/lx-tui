@@ -875,17 +875,7 @@ fn agent_composer_renders_target_badge_and_draft() {
     );
     assert!(lines.iter().any(|line| line.contains("hello")));
 
-    // Shift+Tab 切到汇报模式。
-    lx.agents.toggle_reply_mode("a");
-    let lines = render_lines(&lx, 80, 20);
-    assert!(
-        lines
-            .iter()
-            .any(|line| line.contains("Turing [executor] · report")),
-        "切换后显示汇报模式：{lines:?}"
-    );
-
-    // 运行中的 agent 显示 steer，而不是 private/report。
+    // 运行中的 agent 显示 steer，而不是 private。
     lx.agents.runs[0].status = "running".into();
     lx.agents.runs[0]
         .chat
@@ -986,4 +976,50 @@ fn agent_composer_mention_panel_lists_four_tabs_without_subagents() {
         "Agents 追问不显示 Subagents：{text}"
     );
     assert!(text.contains("main.rs"), "候选可见：{text}");
+}
+
+/// 详情 `/compact` 运行中：复用主历史的呼吸菱形与本次耗时，随 `run.chat.loading_frame` 闪烁。
+#[test]
+fn detail_running_compact_shows_breathing_glyph_and_elapsed() {
+    let mut run = detail_run();
+    if let Some(last) = run.chat.messages.last_mut() {
+        last.status = "complete".into();
+    }
+    run.follow = true;
+    run.compact.start("op-detail".into(), 0);
+    run.compact.elapsed_ms = Some(3_200);
+    run.chat.loading_frame = 0;
+    let (mut state, pane) = state_with_detail(run);
+    let rect = Rect::new(0, 0, 80, 24);
+    let mut cache = crate::ui::RenderCache::default();
+    let render = |state: &crate::app::state::AppState, cache: &mut crate::ui::RenderCache| {
+        let target = state.pane_anywhere(pane).expect("pane");
+        let run = &target.lx.agents.runs[0];
+        let mut grid = Grid::new(rect);
+        super::super::agents::draw_detail(&mut grid, rect, run, run.scroll, 0, cache.pane(pane));
+        (0..rect.height)
+            .map(|y| {
+                (0..rect.width)
+                    .map(|x| grid.cell(x, y).ch)
+                    .collect::<String>()
+            })
+            .collect::<Vec<_>>()
+            .join("\n")
+    };
+    let filled = render(&state, &mut cache);
+    assert!(filled.contains(text::chat::COMPACTING_LABEL), "{filled}");
+    assert!(filled.contains("3s"), "{filled}");
+    assert!(
+        filled.contains(text::agent::STEP_MARK_DIAMOND_FILLED),
+        "运行中检查点用实心菱形：{filled}"
+    );
+
+    state.pane_mut_anywhere(pane).expect("pane").lx.agents.runs[0]
+        .chat
+        .loading_frame = text::agent::STEP_BREATH_TICKS;
+    let hollow = render(&state, &mut cache);
+    assert!(
+        hollow.contains(text::agent::STEP_MARK_DIAMOND_HOLLOW),
+        "呼吸另一相必须变空心：{hollow}"
+    );
 }

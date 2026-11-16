@@ -37,8 +37,9 @@ pub use parse::parse_control;
 pub use path::*;
 pub use prompts::*;
 pub use report::{
-    MAX_REPORT_CHANGED_PATHS, SubagentReportView, format_report_envelope, reports_from_json,
-    reports_to_json, synthesize_partial_report_body, truncate_report_body,
+    MAX_REPORT_CHANGED_PATHS, REPORT_REQUEST_MARKER, SubagentReportView, format_report_envelope,
+    report_request_message, reports_from_json, reports_to_json, synthesize_partial_report_body,
+    truncate_report_body,
 };
 pub use role::{AgentRole, BaseRole, MAX_ROLE_NAME_LEN, is_valid_role_name};
 pub use status::*;

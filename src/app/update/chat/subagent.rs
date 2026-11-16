@@ -665,8 +665,9 @@ pub fn toggle_agent_card(state: &mut AppState, pane: PaneId, target: CardTarget)
 
 /// 子 agent 运行时自动压缩：把摘要挂成 compact 检查点，详情区复用现有组件。
 ///
-/// 自动压缩不写数据库，因此没有真实的消息 sequence 范围；`from_auto` 用
-/// `auto · this run` 替代范围行。检查点插在当前时间线末尾，后续消息继续排在后面。
+/// 自动压缩与手动 `/compact` 共用检查点表，但不写真实的消息 sequence 范围；
+/// `from_auto` 用 `auto · this run` 替代范围行。事件层已经把检查点提交到数据库，
+/// 这里只追加即时 UI 投影；`/rewind` 会按 `operation_id` 前缀跳过自动检查点。
 pub fn on_subagent_auto_compact(
     state: &mut AppState,
     child_session: &str,
@@ -768,6 +769,9 @@ pub fn on_subagent_finished(
     };
     run.chat.close_stream(&reason);
     run.chat.status.streaming = false;
+    // 终态必须归还请求状态机：`is_animating()` 会把残留的 Streaming 当成在跑，
+    // 让已完成的历史永远按动画帧取相位。
+    run.chat.request = crate::app::state::RequestState::Idle;
     run.rows_dirty = true;
     run.status = status.to_string();
     run.completed_at_ms = Some(crate::db::now_ms());
@@ -953,8 +957,16 @@ pub fn scroll_agents_detail(state: &mut AppState, pane: PaneId, delta: isize) ->
 }
 
 /// 直接设置 Agents 详情区顶部行（滚动条点击/拖拽）；语义与
-/// [`super::set_lx_history_scroll`] 一致：贴底即恢复跟随。
-pub fn set_task_agents_scroll(state: &mut AppState, pane: PaneId, offset: usize) -> bool {
+/// [`super::set_lx_history_scroll`] 一致：上限由**滚动条自身几何**给出
+/// （`total`/`visible` 来自同一份 `ScrollbarLayout`），不读可能滞后一帧的
+/// `run.total_rows` / `run.visible`，否则首次拖拽会被旧上限钳回底部。
+pub fn set_task_agents_scroll(
+    state: &mut AppState,
+    pane: PaneId,
+    offset: usize,
+    total: usize,
+    visible: usize,
+) -> bool {
     let Some(target) = state.pane_mut_anywhere(pane) else {
         return false;
     };
@@ -970,7 +982,7 @@ pub fn set_task_agents_scroll(state: &mut AppState, pane: PaneId, offset: usize)
     let Some(run) = target.lx.agents.runs.get_mut(active) else {
         return false;
     };
-    let max = run.total_rows.saturating_sub(run.visible.max(1));
+    let max = total.saturating_sub(visible.max(1));
     let clamped = offset.min(max);
     let before = run.scroll;
     let was_following = run.follow;

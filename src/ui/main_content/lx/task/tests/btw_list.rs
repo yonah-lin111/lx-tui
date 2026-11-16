@@ -338,3 +338,94 @@ fn btw_edit_hardware_cursor_stays_inside_the_composer() {
     );
     assert!(cursor.1 >= rects.list.x.saturating_add(2));
 }
+
+/// BTW 线程的在途回答只体现在消息状态上（不维护 `chat.status.streaming`）；
+/// 步骤标记也必须像主历史与子 agent 详情一样随 `loading_frame` 呼吸。
+#[test]
+fn btw_streaming_tool_step_breathes_like_main_history() {
+    use crate::app::state::{AssistantStepView, ChatMessageView, ToolCallView, ToolStatus};
+
+    let mut lx = Lx::new();
+    lx.task = Some(TaskPage {
+        tab: TaskTab::Btw,
+        ..Default::default()
+    });
+    lx.btw.ensure_thread("qa-1");
+    let thread = lx.btw.active_thread_mut().expect("thread");
+    thread.loaded = true;
+    thread.chat.messages.push(ChatMessageView {
+        sequence: 0,
+        id: "btw-a1".into(),
+        role: "assistant".into(),
+        status: "streaming".into(),
+        turn_index: 0,
+        kind: "chat".into(),
+        shell: None,
+        steps: vec![AssistantStepView::Tool {
+            position: 0,
+            call: ToolCallView {
+                call_id: "call-btw".into(),
+                name: "read".into(),
+                position: 0,
+                arguments_json: String::new(),
+                status: ToolStatus::Running,
+                summary: None,
+                error: None,
+                result_json: None,
+                detail: None,
+            },
+        }],
+        model_label: None,
+        error_code: None,
+        input_tokens: None,
+        output_tokens: None,
+        cache_read_tokens: None,
+        duration_ms: None,
+        reports: Vec::new(),
+        attachments: Vec::new(),
+    });
+    thread.rows_dirty = true;
+
+    let area = Rect::new(0, 0, 80, 24);
+    let output = task_output_rect(area, &lx).expect("output");
+    let mut cache = crate::ui::main_content::lx::PaneCache::default();
+    let glyph_at = |lx: &Lx, cache: &mut crate::ui::main_content::lx::PaneCache| {
+        let mut grid = super::super::super::grid::Grid::new(output);
+        super::btw::draw_conversation(&mut grid, output, lx, cache);
+        (output.y..output.bottom())
+            .flat_map(|y| (output.x..output.right()).map(move |x| (x, y)))
+            .map(|(x, y)| grid.cell(x, y).ch)
+            .find(|ch| {
+                matches!(
+                    *ch,
+                    crate::ui::text::agent::STEP_MARK_FILLED
+                        | crate::ui::text::agent::STEP_MARK_HOLLOW
+                )
+            })
+            .expect("running tool step must draw a square mark")
+    };
+
+    // 前提：BTW 从不设置 `chat.status.streaming`，仅靠消息状态表达在途。
+    assert!(
+        !lx.btw
+            .active_thread()
+            .expect("thread")
+            .chat
+            .status
+            .streaming
+    );
+    let filled = crate::ui::text::agent::STEP_MARK_FILLED;
+    let hollow = crate::ui::text::agent::STEP_MARK_HOLLOW;
+    assert_eq!(glyph_at(&lx, &mut cache), filled, "首帧实心");
+    let ticks = crate::ui::text::agent::STEP_BREATH_TICKS;
+    lx.btw
+        .active_thread_mut()
+        .expect("thread")
+        .chat
+        .loading_frame = ticks;
+    assert_eq!(glyph_at(&lx, &mut cache), hollow, "呼吸另一相必须空心");
+
+    // 回答结束后动画停止：相位即便停在空心也必须画实心。
+    lx.btw.active_thread_mut().expect("thread").chat.messages[0].status = "complete".into();
+    assert_eq!(glyph_at(&lx, &mut cache), filled, "终态恒实心");
+}

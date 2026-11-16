@@ -46,6 +46,12 @@ fn private_follow_up_keeps_the_parent_visible_task() {
         "title",
         "缺少原任务时退回非私聊标题"
     );
+    // 显式 /report 的输入是指令，不得覆盖父可见任务。
+    let report_request = crate::chat::agent::report_request_message("check the log");
+    assert_eq!(
+        visible_task(&report_request, true, Some("original task"), "title"),
+        "original task"
+    );
 }
 
 /// report 模式下 steer 一次，报告仍覆盖 steer 前后两个 assistant 片段。
@@ -364,4 +370,223 @@ async fn private_panel_follow_up_stays_out_of_the_parent_and_is_readable_on_requ
         .and_then(|agent| agent.private_tail.as_deref())
         .expect("list_agents include_private tail");
     assert!(tail.contains("secret") && tail.contains("private reply"));
+}
+
+/// 先私聊多轮，再 `/report`：报告正文只含报告轮 assistant 输出，闲聊不得进入主 agent。
+#[tokio::test]
+async fn report_turn_body_excludes_previous_private_chat() {
+    let (_fixture, mut state, key, persistence, mut streams, _parent) = fixture_with_parent();
+    let agent_id = spawn_explorer(&mut state, &mut streams, &persistence, &key, "first task").await;
+    let child_session = streams
+        .subagents
+        .values()
+        .find(|handle| handle.agent_id == agent_id)
+        .expect("handle")
+        .child_session_id
+        .clone();
+    let child_key = RequestKey {
+        pane: key.pane,
+        session: child_session.clone(),
+        generation: key.generation,
+    };
+    // 结束 spawn 轮并投递首轮报告，清空父对话。
+    crate::event::chat::finish_subagent(
+        &mut state,
+        &mut streams,
+        &persistence,
+        child_key.clone(),
+        StopReason::Complete,
+        Usage::default(),
+    );
+    {
+        let pane = state.pane_mut_anywhere(key.pane).expect("pane");
+        pane.lx.chat.request = crate::app::state::RequestState::Idle;
+        pane.lx.chat.status.streaming = false;
+    }
+    assert!(crate::event::chat::subagent::drain_reports(
+        &mut state,
+        &persistence,
+        key.pane
+    ));
+    {
+        let pane = state.pane_mut_anywhere(key.pane).expect("pane");
+        pane.lx.chat.request = crate::app::state::RequestState::Idle;
+        pane.lx.chat.status.streaming = false;
+        pane.lx.chat.messages.clear();
+        if let Some(run) = pane.lx.agents.by_agent_mut(&agent_id) {
+            run.report = None;
+        }
+    }
+
+    // 一轮纯私聊：不得产生报告。
+    assert!(send_child(
+        &mut state,
+        &mut streams,
+        &persistence,
+        &key,
+        &agent_id,
+        "今天天气不错",
+        false,
+    ));
+    assert!(crate::event::chat::handle_subagent_net_event(
+        &mut state,
+        &mut streams,
+        ChatNetEvent::Delta {
+            key: child_key.clone(),
+            deltas: vec![ChatDelta::Part(crate::chat::events::PartDelta {
+                kind: PartKind::Text,
+                text: "PRIVATE CHAT".into(),
+                metadata: None,
+            })],
+        },
+    ));
+    crate::event::chat::finish_subagent(
+        &mut state,
+        &mut streams,
+        &persistence,
+        child_key.clone(),
+        StopReason::Complete,
+        Usage::default(),
+    );
+    assert!(
+        state
+            .pane_anywhere(key.pane)
+            .expect("pane")
+            .lx
+            .agents
+            .by_agent(&agent_id)
+            .and_then(|run| run.report.as_ref())
+            .is_none(),
+        "私聊轮不产生报告"
+    );
+
+    // 显式汇报轮：报告正文只取本轮输出。
+    assert!(send_child(
+        &mut state,
+        &mut streams,
+        &persistence,
+        &key,
+        &agent_id,
+        &crate::chat::agent::report_request_message("locate the login bug"),
+        true,
+    ));
+    assert!(crate::event::chat::handle_subagent_net_event(
+        &mut state,
+        &mut streams,
+        ChatNetEvent::Delta {
+            key: child_key.clone(),
+            deltas: vec![ChatDelta::Part(crate::chat::events::PartDelta {
+                kind: PartKind::Text,
+                text: "REPORT BODY".into(),
+                metadata: None,
+            })],
+        },
+    ));
+    crate::event::chat::finish_subagent(
+        &mut state,
+        &mut streams,
+        &persistence,
+        child_key,
+        StopReason::Complete,
+        Usage::default(),
+    );
+    let report = state
+        .pane_anywhere(key.pane)
+        .expect("pane")
+        .lx
+        .agents
+        .by_agent(&agent_id)
+        .and_then(|run| run.report.as_ref())
+        .expect("report");
+    assert!(
+        report.body.contains("REPORT BODY"),
+        "报告正文应含本轮输出：{}",
+        report.body
+    );
+    assert!(
+        !report.body.contains("PRIVATE CHAT"),
+        "闲聊不得进入报告：{}",
+        report.body
+    );
+}
+
+/// 从面板发起一轮子 agent 输入（复用事件层入口）。
+fn send_child(
+    state: &mut AppState,
+    streams: &mut crate::event::chat::ChatStreams,
+    persistence: &crate::db::service::Persistence,
+    key: &RequestKey,
+    agent_id: &str,
+    text: &str,
+    notify_parent: bool,
+) -> bool {
+    state.effects.push(Effect::SendSubagentUserInput {
+        pane: key.pane,
+        session_id: key.session.clone(),
+        agent_id: agent_id.to_string(),
+        text: text.to_string(),
+        notify_parent,
+    });
+    crate::event::chat::apply_subagent_effects(state, streams, persistence)
+}
+
+/// 报告轮结束后重投未消费的 steer：它们仍是普通私聊，不能继承
+/// `handle.notify_parent`，否则私聊回答会被当成下一份报告转发给父 agent。
+#[tokio::test]
+async fn undelivered_steer_after_report_is_resent_privately() {
+    let (_fixture, mut state, key, persistence, mut streams, _parent) = fixture_with_parent();
+    let agent_id = spawn_explorer(&mut state, &mut streams, &persistence, &key, "first task").await;
+    let child_session = streams
+        .subagents
+        .values()
+        .find(|handle| handle.agent_id == agent_id)
+        .expect("handle")
+        .child_session_id
+        .clone();
+    assert!(streams.subagents[&child_session].notify_parent);
+    state
+        .pane_mut_anywhere(key.pane)
+        .expect("pane")
+        .lx
+        .agents
+        .by_agent_mut(&agent_id)
+        .expect("run")
+        .chat
+        .pending_steers
+        .push(crate::app::state::lx::chat::steer::PendingSteer {
+            text: "private steer".into(),
+            attachments: Vec::new(),
+            model_images: Vec::new(),
+            model: crate::db::chat::ModelSnapshot {
+                provider: "p".into(),
+                model: "m".into(),
+                variant: None,
+            },
+        });
+    state.effects.clear();
+    crate::event::chat::finish_subagent(
+        &mut state,
+        &mut streams,
+        &persistence,
+        RequestKey {
+            pane: key.pane,
+            session: child_session,
+            generation: key.generation,
+        },
+        StopReason::Complete,
+        Usage::default(),
+    );
+    let resent = state
+        .effects
+        .iter()
+        .find_map(|effect| match effect {
+            Effect::SendSubagentUserInput {
+                text,
+                notify_parent,
+                ..
+            } if text == "private steer" => Some(*notify_parent),
+            _ => None,
+        })
+        .expect("pending steer must be resent");
+    assert!(!resent, "steer 重投必须保持私聊");
 }

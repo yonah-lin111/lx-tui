@@ -187,7 +187,10 @@ pub(crate) fn finish_subagent_with_billing(
                     session_id: handle.parent.session.clone(),
                     agent_id: handle.agent_id.clone(),
                     text,
-                    notify_parent: handle.notify_parent,
+                    // 未消费的 steer 都是普通私聊追问；`/report` 是一轮性的，
+                    // 不能把 `handle.notify_parent` 继承给重投，否则私聊回答
+                    // 会被当成报告转发给父 agent。
+                    notify_parent: false,
                 });
         }
     } else if !undelivered.is_empty() {
@@ -524,20 +527,25 @@ fn restore_steer_draft(
 }
 
 /// 本轮消息切片：从 claim 的 user 消息（或轮内第一条 steer）到当前。
+///
+/// 找不到锚点时返回空切片并告警：回退整段 chat 会把之前的私聊正文一起塞进
+/// 报告发给父 agent。
 fn turn_messages(handle: &SubagentHandle) -> &[crate::app::state::ChatMessageView] {
     let start = handle
         .turn_user_message_ids
         .first()
         .map(String::as_str)
         .unwrap_or(handle.child_user_message_id.as_str());
-    handle
+    let Some(index) = handle
         .chat
         .messages
         .iter()
         .position(|message| message.id == start)
-        .map_or(&handle.chat.messages, |index| {
-            &handle.chat.messages[index..]
-        })
+    else {
+        tracing::warn!(anchor = %start, "subagent report anchor missing");
+        return &[];
+    };
+    &handle.chat.messages[index..]
 }
 
 /// 报告正文：本轮所有 assistant 片段（含 steer 截断的前半段），超限截断。

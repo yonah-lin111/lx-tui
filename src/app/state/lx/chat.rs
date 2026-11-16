@@ -815,6 +815,22 @@ impl LxChat {
         }
     }
 
+    /// 历史动画是否应推进：模型在流式/收尾、本地命令在跑，或仍有流式 assistant 投影。
+    ///
+    /// 主会话、子 agent 详情与 BTW 线程共用这一判据。BTW 不维护
+    /// [`ChatStatus::streaming`]，只把在途回答记在消息状态上；只看 status 会让
+    /// 旁路步骤标记冻结在实心（用户反馈 BTW 面板没有 step 闪烁）。
+    pub fn is_animating(&self) -> bool {
+        self.status.streaming
+            || self.request.is_busy()
+            || self.has_running_shell()
+            || self
+                .messages
+                .iter()
+                .rev()
+                .any(|message| message.role == "assistant" && message.status == "streaming")
+    }
+
     /// 是否仍有本地命令在途（已提交待 spawn 或消息仍显示运行中）。
     pub fn has_running_shell(&self) -> bool {
         !self.pending_shells.is_empty()

@@ -287,7 +287,7 @@ fn btw_wheel_scroll_and_scrollbar_clamp_to_the_thread() {
     assert!(thread.follow);
     assert!(!scroll_btw_detail(&mut state, pane, 3), "已在底部无变化");
 
-    assert!(set_task_btw_scroll(&mut state, pane, 7));
+    assert!(set_task_btw_scroll(&mut state, pane, 7, 25, 10));
     let thread = state
         .pane_anywhere(pane)
         .expect("pane")
@@ -298,7 +298,7 @@ fn btw_wheel_scroll_and_scrollbar_clamp_to_the_thread() {
     assert_eq!(thread.scroll, 7);
     assert!(!thread.follow);
 
-    assert!(set_task_btw_scroll(&mut state, pane, usize::MAX));
+    assert!(set_task_btw_scroll(&mut state, pane, usize::MAX, 25, 10));
     let thread = state
         .pane_anywhere(pane)
         .expect("pane")
@@ -308,7 +308,7 @@ fn btw_wheel_scroll_and_scrollbar_clamp_to_the_thread() {
         .expect("thread");
     assert_eq!(thread.scroll, 15, "滚动条拖到底应钳到最大偏移");
     assert!(thread.follow);
-    assert!(!set_task_btw_scroll(&mut state, pane, usize::MAX));
+    assert!(!set_task_btw_scroll(&mut state, pane, usize::MAX, 25, 10));
 
     // 对话区聚焦时 PgUp/PgDn 与 Agents 详情同口径翻 10 行。
     {
@@ -543,6 +543,7 @@ fn stale_thread_loaded_does_not_overwrite_another_session_or_qa() {
         String::new(),
         Vec::new(),
         Vec::new(),
+        Vec::new(),
         true,
     ));
     assert!(
@@ -564,6 +565,7 @@ fn stale_thread_loaded_does_not_overwrite_another_session_or_qa() {
         None,
         None,
         String::new(),
+        Vec::new(),
         Vec::new(),
         Vec::new(),
         true,
@@ -597,6 +599,7 @@ fn stale_thread_loaded_does_not_overwrite_another_session_or_qa() {
         None,
         None,
         String::new(),
+        Vec::new(),
         Vec::new(),
         Vec::new(),
         true,
@@ -749,4 +752,157 @@ fn open_btw_tab_clears_stale_history_and_input_selection() {
         lx.text_selection_range().is_none(),
         "主输入框残留选区也必须清掉"
     );
+}
+
+#[test]
+fn thread_loaded_restores_compact_checkpoints() {
+    let (mut state, pane) = btw_pane();
+    let checkpoint = crate::db::chat::CompactCheckpoint {
+        id: "compact-1".into(),
+        sequence: 7,
+        operation_id: "op-1".into(),
+        base_checkpoint_id: None,
+        start_sequence: 0,
+        end_sequence: 4,
+        summary_text: "summary".into(),
+        model_label: "M".into(),
+        state: "active".into(),
+        created_at_ms: 1,
+    };
+    assert!(on_thread_loaded(
+        &mut state,
+        pane,
+        "sess-test",
+        "qa-1",
+        Some("thread-1".into()),
+        Some("child-1".into()),
+        "title".into(),
+        Vec::new(),
+        Vec::new(),
+        vec![checkpoint],
+        true,
+    ));
+    let thread = state
+        .pane_anywhere(pane)
+        .expect("pane")
+        .lx
+        .btw
+        .active_thread()
+        .expect("thread");
+    assert_eq!(thread.compact.checkpoints.len(), 1);
+    assert_eq!(thread.compact.checkpoints[0].id, "compact-1");
+}
+
+#[test]
+fn btw_new_emits_delete_thread_and_rejects_while_loading() {
+    let (mut state, pane) = btw_pane();
+    state
+        .pane_mut_anywhere(pane)
+        .expect("pane")
+        .lx
+        .btw
+        .active_thread_mut()
+        .expect("thread")
+        .thread_id = Some("thread-1".into());
+    state.effects.clear();
+    assert!(request_reset_thread(&mut state, pane));
+    assert!(
+        state.effects.iter().any(|effect| matches!(
+            effect,
+            Effect::Btw(BtwEffect::DeleteThread { qa_id, thread_id, .. })
+                if qa_id == "qa-1" && thread_id == "thread-1"
+        )),
+        "发出删除线程效应：{:?}",
+        state.effects
+    );
+
+    // 回答仍在进行：拒绝且不清线程。
+    {
+        let thread = state
+            .pane_mut_anywhere(pane)
+            .expect("pane")
+            .lx
+            .btw
+            .active_thread_mut()
+            .expect("thread");
+        thread.pending_recipients = 1;
+    }
+    state.effects.clear();
+    assert!(request_reset_thread(&mut state, pane));
+    assert!(
+        !state
+            .effects
+            .iter()
+            .any(|effect| matches!(effect, Effect::Btw(BtwEffect::DeleteThread { .. }))),
+        "忙碌时不得删除：{:?}",
+        state.effects
+    );
+}
+
+#[test]
+fn thread_deleted_resets_view_and_qalist_mark() {
+    let (mut state, pane) = btw_pane();
+    {
+        let thread = state
+            .pane_mut_anywhere(pane)
+            .expect("pane")
+            .lx
+            .btw
+            .active_thread_mut()
+            .expect("thread");
+        thread.thread_id = Some("thread-1".into());
+        thread.child_session_id = Some("child-1".into());
+        thread.title = "old".into();
+    }
+    state.effects.clear();
+    assert!(on_thread_deleted(&mut state, pane, "sess-test", "qa-1"));
+    let thread = state
+        .pane_anywhere(pane)
+        .expect("pane")
+        .lx
+        .btw
+        .active_thread()
+        .expect("thread");
+    assert!(thread.thread_id.is_none());
+    assert!(thread.child_session_id.is_none());
+    assert!(thread.chat.messages.is_empty());
+    assert!(
+        state
+            .effects
+            .iter()
+            .any(|effect| matches!(effect, Effect::Btw(BtwEffect::LoadQaList { .. }))),
+        "删除后刷新 QA 列表：{:?}",
+        state.effects
+    );
+    assert!(
+        state.pane_anywhere(pane).expect("pane").lx.toast.is_some(),
+        "lx 页内 toast"
+    );
+}
+
+/// BTW 滚动条同样以几何为准，不受滞后一帧的线程状态影响。
+#[test]
+fn set_task_btw_scroll_uses_scrollbar_geometry() {
+    let (mut state, pane) = btw_pane();
+    {
+        let thread = state
+            .pane_mut_anywhere(pane)
+            .expect("pane")
+            .lx
+            .btw
+            .active_thread_mut()
+            .expect("thread");
+        thread.visible = 10;
+        thread.total_rows = 100;
+    }
+    assert!(set_task_btw_scroll(&mut state, pane, 71, 80, 10));
+    let thread = state
+        .pane_anywhere(pane)
+        .expect("pane")
+        .lx
+        .btw
+        .active_thread()
+        .expect("thread");
+    assert_eq!(thread.scroll, 70);
+    assert!(thread.follow);
 }

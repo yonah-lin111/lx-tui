@@ -301,14 +301,22 @@ pub fn set_task_list_scroll(state: &mut AppState, pane: PaneId, offset: usize) -
 }
 
 /// 直接设置输出视口顶部偏移（滚动条轨道点击/thumb 拖拽）；返回是否变化。
-pub fn set_task_output_scroll(state: &mut AppState, pane: PaneId, offset: usize) -> bool {
+///
+/// 上限由滚动条几何给出（与绘制同源），不读可能滞后一帧的 `output_visible`。
+pub fn set_task_output_scroll(
+    state: &mut AppState,
+    pane: PaneId,
+    offset: usize,
+    total: usize,
+    visible: usize,
+) -> bool {
     let Some(page) = state
         .pane_mut_anywhere(pane)
         .and_then(|target| target.lx.task.as_mut())
     else {
         return false;
     };
-    let next = offset.min(page.output_max_scroll());
+    let next = offset.min(total.saturating_sub(visible));
     if page.output_scroll == next {
         return false;
     }

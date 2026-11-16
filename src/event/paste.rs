@@ -63,7 +63,14 @@ pub(super) fn handle_lx_paste(state: &mut AppState, text: String) -> bool {
         return false;
     }
     // 执行中吞掉输入：粘贴不能把 executing 清掉，否则重复确认会二次执行。
-    if pane.lx.rewind.is_executing() {
+    if pane.lx.rewind.is_executing() || pane.lx.detail_rewind.is_executing() {
+        return false;
+    }
+    // 撤销确认是模态面板：背后的草稿不能被粘贴/剪切悄悄改掉。
+    if matches!(
+        pane.lx.active_editor().slash,
+        Some(crate::app::state::SlashPanel::Rewind(_))
+    ) {
         return false;
     }
     let canceled_text = pane.lx.with_active_editor(|lx| lx.text_paste_cancel());

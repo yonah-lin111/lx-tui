@@ -96,6 +96,23 @@ impl BtwThreadState {
                 .iter()
                 .any(|message| message.role == "assistant" && message.status == "streaming")
     }
+
+    /// 线程被删除（`/rewind` 删空或 `/new`）：回到空白线程视图，取消所有在途状态。
+    pub fn reset_after_delete(&mut self) {
+        self.thread_id = None;
+        self.child_session_id = None;
+        self.title.clear();
+        self.chat = crate::app::state::LxChat::new();
+        self.compact.reset();
+        self.targets.clear();
+        self.scroll = 0;
+        self.total_rows = 0;
+        self.rows_dirty = true;
+        self.follow = true;
+        self.loaded = true;
+        self.pending_submit = None;
+        self.pending_recipients = 0;
+    }
 }
 
 /// QA 列表中的一行（由事件层从数据库回投）。
@@ -134,6 +151,26 @@ impl LxBtw {
         self.threads.is_empty()
     }
 
+    /// 是否有 BTW 线程正在压缩。
+    pub fn any_compacting(&self) -> bool {
+        self.threads
+            .values()
+            .any(|thread| thread.compact.is_running())
+    }
+
+    /// 刷新所有 BTW 线程的压缩耗时；同时推进压缩线程的呼吸帧（运行中的检查点行）。
+    pub fn tick_compacting(&mut self, now_ms: i64) {
+        for thread in self.threads.values_mut() {
+            if thread.compact.is_running() {
+                thread.compact.elapsed_ms = thread
+                    .compact
+                    .started_at_ms
+                    .map(|started| now_ms.saturating_sub(started).max(0));
+                thread.chat.loading_frame = thread.chat.loading_frame.wrapping_add(1);
+            }
+        }
+    }
+
     /// 已缓存的线程数。
     pub fn len(&self) -> usize {
         self.threads.len()
@@ -154,6 +191,20 @@ impl LxBtw {
     /// 按 QA 取线程，不修改 active（异步失败回投用）。
     pub fn thread_mut(&mut self, qa_id: &str) -> Option<&mut BtwThreadState> {
         self.threads.get_mut(qa_id)
+    }
+
+    /// 按持久化线程 ID 查线程（详情 `/rewind` 的回投目标）。
+    pub fn thread_by_thread_id(&self, thread_id: &str) -> Option<&BtwThreadState> {
+        self.threads
+            .values()
+            .find(|thread| thread.thread_id.as_deref() == Some(thread_id))
+    }
+
+    /// 按持久化线程 ID 查可变线程（详情 `/compact` 的状态回投）。
+    pub fn thread_by_thread_id_mut(&mut self, thread_id: &str) -> Option<&mut BtwThreadState> {
+        self.threads
+            .values_mut()
+            .find(|thread| thread.thread_id.as_deref() == Some(thread_id))
     }
 
     /// 当前显示的 composer（供输入浮层读取编辑器状态）。

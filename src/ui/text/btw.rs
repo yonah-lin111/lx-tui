@@ -52,12 +52,16 @@ pub const LX_BTW_HINTS_LIST: [crate::ui::text::Hint; 4] = [
     crate::ui::text::hint("close", "esc"),
 ];
 /// 编辑态底边框提示。
-pub const LX_BTW_HINTS_EDIT: [crate::ui::text::Hint; 4] = [
+pub const LX_BTW_HINTS_EDIT: [crate::ui::text::Hint; 5] = [
     crate::ui::text::hint("send", "↵"),
     crate::ui::text::hint("newline", "⇧↵"),
+    crate::ui::text::hint("commands", "/"),
     crate::ui::text::hint("stop", "^d"),
     crate::ui::text::hint("back", "esc"),
 ];
+
+/// 侧线程压缩中的胶囊后缀（宽度不足整段丢弃）。
+pub const LX_BTW_COMPACTING_TAG: &str = " · compacting";
 
 /// 侧线程状态标签。
 pub fn btw_status_label(status: &str) -> &'static str {

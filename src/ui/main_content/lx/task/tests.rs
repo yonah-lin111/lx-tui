@@ -11,6 +11,7 @@ use ratatui::layout::Rect;
 
 mod agent_list;
 mod btw_list;
+mod detail_slash;
 mod history_takeover;
 mod perf;
 

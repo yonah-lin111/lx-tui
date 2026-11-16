@@ -18,7 +18,11 @@ use crate::ui::text;
 pub mod ask;
 pub mod btw;
 pub mod compact;
+pub(crate) mod composer;
 mod connect;
+mod detail_compact;
+mod detail_report;
+mod detail_rewind;
 mod fork;
 pub mod mcp;
 pub mod model_switch;
@@ -46,8 +50,9 @@ pub use btw::{
     new_assistant_message as new_btw_assistant_message, on_accepted as on_btw_accepted,
     on_delta as on_btw_delta, on_failed as on_btw_failed, on_finished as on_btw_finished,
     on_qa_list_loaded, on_recipient_started as on_btw_recipient_started,
-    on_thread_loaded as on_btw_thread_loaded, on_tool_state as on_btw_tool_state, open_btw_tab,
-    scroll_btw_detail, select_btw_qa, set_task_btw_scroll, submit_current as submit_btw,
+    on_thread_deleted as on_btw_thread_deleted, on_thread_loaded as on_btw_thread_loaded,
+    on_tool_state as on_btw_tool_state, open_btw_tab, scroll_btw_detail, select_btw_qa,
+    set_task_btw_scroll, submit_current as submit_btw,
     sync_search_selection as sync_btw_search_selection, toggle_btw_card, try_submit_btw_command,
 };
 pub use compact::{
@@ -60,6 +65,14 @@ pub use connect::{
     on_models_refreshed, on_preset_connected, on_preset_disconnected, on_preset_oauth_failed,
     on_preset_oauth_prompt, open_connect_panel, scroll_connect, set_connect_selection,
     set_connect_viewport,
+};
+pub use detail_compact::{
+    DetailCompactResult, handle_finished as on_detail_compact_finished,
+    on_started as on_detail_compact_started,
+};
+pub use detail_rewind::{
+    on_failed as on_detail_rewind_failed, on_prepared as on_detail_rewind_prepared,
+    on_reload_failed as on_detail_rewind_reload_failed, on_succeeded as on_detail_rewind_succeeded,
 };
 pub use fork::{on_fork_completed, on_fork_failed, open_fork_panel};
 pub use mcp::{
@@ -1032,6 +1045,9 @@ pub fn advance_lx_loading(state: &mut AppState) -> bool {
         let recapping = target.lx.recap.pending.is_some();
         // 仍有子 agent 在跑：推进同一套 loading 帧（Agents 详情动画与等待行）。
         let agents_running = target.lx.agents.runs.iter().any(|run| run.is_running());
+        // 详情会话（子 agent / BTW 线程）的手动压缩同样没有流式输出，不能依赖
+        // 子 agent 自身在跑；否则压缩期间整段界面冻结。
+        let detail_animating = target.lx.any_detail_compacting();
         // BTW 面板可见时，生成中或线程历史加载中都需要推进帧；关掉面板不空转重绘。
         let btw_running = target.lx.is_btw_tab()
             && target
@@ -1039,7 +1055,13 @@ pub fn advance_lx_loading(state: &mut AppState) -> bool {
                 .btw
                 .active_thread()
                 .is_some_and(|thread| thread.is_loading() || !thread.loaded);
-        if !streaming && !compacting && !recapping && !agents_running && !btw_running {
+        if !streaming
+            && !compacting
+            && !recapping
+            && !agents_running
+            && !btw_running
+            && !detail_animating
+        {
             continue;
         }
         // ask 等待用户作答：主会话本轮耗时与扫描帧冻结，子 agent 动画不受影响。
@@ -1052,6 +1074,10 @@ pub fn advance_lx_loading(state: &mut AppState) -> bool {
                 .compact
                 .started_at_ms
                 .map(|started| crate::db::now_ms().saturating_sub(started).max(0));
+            advanced = true;
+        }
+        if detail_animating {
+            target.lx.tick_detail_compacting(crate::db::now_ms());
             advanced = true;
         }
         if streaming {

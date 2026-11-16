@@ -32,6 +32,11 @@ pub(super) fn items<'a>(
                     preview: command.description(),
                     tag: command.tag(),
                 },
+                crate::app::state::SlashEntry::Detail(command) => CommandItem::Inline {
+                    label: command.text(),
+                    preview: command.description(),
+                    tag: text::SLASH_TAG_BUILTIN,
+                },
             })
             .collect(),
         SlashPanel::Model(picker) => {
@@ -266,11 +271,21 @@ fn view<'a>(
             panel.window,
             text::LX_FORK_PANEL_FOOTER,
         ),
-        SlashPanel::Rewind(panel) => (
-            text::LX_REWIND_PANEL_TITLE,
-            panel.window,
-            text::LX_REWIND_PANEL_FOOTER,
-        ),
+        SlashPanel::Rewind(panel) => {
+            if panel.scope() == crate::app::state::RewindScope::Detail {
+                (
+                    text::detail::LX_DETAIL_REWIND_PANEL_TITLE,
+                    panel.window,
+                    text::detail::LX_DETAIL_REWIND_FOOTER,
+                )
+            } else {
+                (
+                    text::LX_REWIND_PANEL_TITLE,
+                    panel.window,
+                    text::LX_REWIND_PANEL_FOOTER,
+                )
+            }
+        }
         SlashPanel::Mcp(panel) => (
             text::LX_MCP_PANEL_TITLE,
             panel.window,
@@ -284,6 +299,27 @@ fn view<'a>(
             crate::app::state::RewindScope::Compact => text::LX_COMPACT_SCOPE,
             crate::app::state::RewindScope::ModelSwitch => text::LX_MODEL_SWITCH_SCOPE,
             crate::app::state::RewindScope::Recap => text::LX_RECAP_SCOPE,
+            crate::app::state::RewindScope::Detail => {
+                if panel
+                    .actions
+                    .contains(&crate::app::state::RewindAction::RestoreCompact)
+                {
+                    text::LX_COMPACT_SCOPE
+                } else {
+                    panel
+                        .detail
+                        .as_ref()
+                        .map(|detail| match detail.kind {
+                            crate::app::state::DetailRewindKind::Agent => {
+                                text::detail::LX_DETAIL_REWIND_SCOPE
+                            }
+                            crate::app::state::DetailRewindKind::Btw => {
+                                text::detail::LX_DETAIL_REWIND_SCOPE_BTW
+                            }
+                        })
+                        .unwrap_or(text::detail::LX_DETAIL_REWIND_SCOPE)
+                }
+            }
         }),
         _ => None,
     };

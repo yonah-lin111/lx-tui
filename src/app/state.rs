@@ -31,17 +31,18 @@ pub use lx::{
     AskDetailView, AskEditor, AskHit, AskState, AskWheelZone, AssistantStepView, CardSection,
     CardTarget, ChatMessageView, ChatPartView, CommandView, CompactNoticeView, ConnectManageAction,
     ConnectPanel, ConnectPromptStep, ConnectProviderEntry, ConnectStage, DeepseekThinkingMode,
-    DiffHunkView, DiffLineView, FileChangeView, FileDiffDetailView, FileDiffView, ForkEntry,
-    ForkPanel, FrozenModel, GeminiThinkingLevel, GeminiWebModel, GeneratedImageOriginal,
-    GrokWebModel, HistoryEntry, HistoryPanel, InputHintLevel, InteractionAction, Lx, LxChat,
-    LxCompact, LxEntry, LxModelSwitch, MAX_RESIDENT_SUBAGENT_CHATS, McpCatalogEntry, McpDetailView,
-    McpImageView, McpPanel, McpPanelEntry, McpRuntimeState, McpServerState, ModelCandidate,
-    ModelPicker, ModelPickerStage, ModelSwitchNoticeView, ModelsSnapshot,
-    OriginalImageDownloadState, PanelWindow, PendingShell, PlanSnapshotView, PlanStepView,
-    ProcessEntry, ProcessInteractionView, ProcessStateView, QueuedSubmission, RequestKey,
-    RequestState, RewindAction, RewindExecution, RewindNoticeView, RewindPanel, RewindScope,
-    RewindTarget, RewindTargetKind, SHELL_SLOT, SearchDetailView, SearchMatchView, SlashCommand,
-    SlashEntry, SlashPanel, SnapshotState, StartupCount, StartupCounts, SubagentDetailView,
+    DetailRewindExecution, DetailRewindKind, DetailRewindPlan, DetailTarget, DiffHunkView,
+    DiffLineView, FileChangeView, FileDiffDetailView, FileDiffView, ForkEntry, ForkPanel,
+    FrozenModel, GeminiThinkingLevel, GeminiWebModel, GeneratedImageOriginal, GrokWebModel,
+    HistoryEntry, HistoryPanel, InputHintLevel, InteractionAction, Lx, LxChat, LxCompact, LxEntry,
+    LxModelSwitch, MAX_RESIDENT_SUBAGENT_CHATS, McpCatalogEntry, McpDetailView, McpImageView,
+    McpPanel, McpPanelEntry, McpRuntimeState, McpServerState, ModelCandidate, ModelPicker,
+    ModelPickerStage, ModelSwitchNoticeView, ModelsSnapshot, OriginalImageDownloadState,
+    PanelWindow, PendingShell, PlanSnapshotView, PlanStepView, ProcessEntry,
+    ProcessInteractionView, ProcessStateView, QueuedSubmission, RequestKey, RequestState,
+    RewindAction, RewindExecution, RewindNoticeView, RewindPanel, RewindScope, RewindTarget,
+    RewindTargetKind, SHELL_SLOT, SearchDetailView, SearchMatchView, SlashCommand, SlashEntry,
+    SlashPanel, SnapshotState, StartupCount, StartupCounts, SubagentDetailView,
     SubagentMentionItem, SubagentReportView, SubagentRun, SubagentRunMentionEntry, TaskPage,
     TaskTab, ToolCallView, ToolDetailView, ToolStatus, ToolSummary, UserShellView,
     WebSearchDetailView, ai_web_remote_session, is_ai_web_session,
@@ -794,17 +795,19 @@ impl AppState {
                     || target.lx.chat.has_running_shell()
                     || target.lx.compact.is_running()
                     || target.lx.recap.pending.is_some()
+                    // 详情会话（子 agent / BTW 线程）的手动压缩同样是静默等待，
+                    // 必须驱动计时与呼吸帧，否则界面整段冻结。
+                    || target.lx.any_detail_compacting()
                     // 子 agent 在后台跑时主 loading 也要扫描，即使 Agents 面板没开。
                     || target.lx.agents.runs.iter().any(|run| run.is_running())
-                    // BTW 的 loading 帧由 `advance_lx_loading` 独立推进；没有这个
-                    // 门控，底部加载动画和工具卡片扫描在 BTW 独占时会静止。
+                    // BTW 只有当前显示线程的帧会被推进；后台线程的完成由事件
+                    // 回投，不需要 10Hz 空唤醒。
                     || (target.lx.is_btw_tab()
-                        && (target.lx.btw.is_loading()
-                            || target
-                                .lx
-                                .btw
-                                .active_thread()
-                                .is_some_and(|thread| !thread.loaded)))
+                        && target
+                            .lx
+                            .btw
+                            .active_thread()
+                            .is_some_and(|thread| thread.is_loading() || !thread.loaded))
             })
         })
     }
