@@ -2,6 +2,7 @@
 
 - 关联设计：`docs/feature/prompt-scroll-isolation/design.md`
 - Review 报告：`docs/feature/prompt-scroll-isolation/review.md`
+- 状态：**已合并到 `dev`（2026-11-16，merge `5babd147`）；自动化验证全绿，TUI 交互/外观由用户实机确认。**
 - 规则：生产代码禁止 `unwrap()` / `expect()`；本任务无新增用户可见文案；不改 DB/schema。
 - 前置：**用户审核 design.md 与本文档并确认后才能开始改代码。**
 
@@ -176,7 +177,7 @@
   - `cargo test --lib event::tests::prompt_editor`
 - [x] `cargo clippy --all-targets -- -D warnings`
 - [x] `cargo test`
-- [ ] 用户运行 `cargo run` 按 design §9 手工验收
+- [x] 用户运行 `cargo run` 按 design §9 手工验收（2026-11-16 用户指示合并；后续交互/外观问题单独修复）
 
 ## 6. 提交建议
 
@@ -189,7 +190,7 @@
 - 设计 §9 手工验收全部通过；
 - 新增回归测试覆盖 design §7 全部条目；
 - `cargo fmt` / `cargo clippy --all-targets -- -D warnings` / `cargo test` 全绿；
-- 本文件所有 checkbox 勾选（手工验收项除外），design.md 状态改为“待用户手工验收”。
+- 本文件所有 checkbox 勾选，design.md 状态改为“已合并到 dev”。
 
 ## 8. 实现记录与差异
 
@@ -198,3 +199,4 @@
 - `recent/tests.rs::sync_uses_cached_visible_entries` 原断言按旧 `keep_visible` 语义写成，已按决策 6 改为只钳制。
 - `event/tests/todo.rs::mouse_right_click_prompt_tree_on_todo_opens_todo_menu` 原坐标依赖“进入树视图 reveal 选中项”的旧滚动偏移，改为扫描真实可开菜单的树行。
 - Review 修复：停泊草稿页身份切换改回 `set_text`（P0-1）；`resize_panes` 接入 `clamp_prompt_list_scroll`（P1-1）；补齐目标树滚动、保存回执、页切换、几何钳制测试（P2-1/P2-2）。详见 `review.md`。
+- 合并：2026-11-16 以 `--no-ff` 合并 `fix/prompt-scroll-isolation` → `dev`（merge `5babd147`），无冲突；合并后主工作区复跑 `cargo fmt --check`、`cargo clippy --all-targets -- -D warnings` 与全量 `cargo test` 通过。

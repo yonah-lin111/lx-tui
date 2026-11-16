@@ -1,7 +1,7 @@
 # Prompt 容器滚动隔离 — 设计
 
 - 建议分支：`fix/prompt-scroll-isolation`
-- 状态：**已实现，经 review 修复后待用户手工验收（2026-11-16）**
+- 状态：**已合并到 `dev`（2026-11-16，merge `5babd147`）；合并后 `cargo fmt --check`、clippy 与全量测试通过，TUI 交互/外观由用户实机确认**
 - Review 报告：`review.md`
 - 关联文档：`docs/feature/prompt-scroll-guard/`、`docs/feature/prompt-per-workspace/`、`docs/feature/prompt-header-and-recent-pages/`
 

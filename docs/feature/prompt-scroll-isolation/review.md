@@ -4,6 +4,7 @@
 - 关联：`design.md`、`task.md`
 - 审查方式：逐条核对 design §4 不变量与 §5 调用点分类；用 codegraph / codebase-memory 追踪 `scroll_cursor_into_view`、`scroll_selection_into_view`、`keep_visible`、`clamp_*` 的全部生产调用点；运行新增与既有回归测试验证行为。
 - 结论：主复现链路（工作区切换拽回光标）已修复，I1 / I3 / I4 成立；I5 与 I2 的“几何变化”各有一处缺口，另有测试与文档偏差。已按 P0 → P3 全部修复并补齐验证。
+- 合并：2026-11-16 以 `--no-ff` 合并 `fix/prompt-scroll-isolation` → `dev`（merge `5babd147`），无冲突；合并后 `cargo fmt --check`、`cargo clippy --all-targets -- -D warnings`、全量 `cargo test` 通过（lib 5660 passed / 6 ignored，集成测试全通过）。
 
 ## 1. 关键点核对
 
@@ -72,7 +73,7 @@
 - `cargo test --lib -q app::update::prompt`：137 passed。
 - `cargo test --lib`：5660 passed，0 failed，6 ignored。
 - `cargo clippy --all-targets -- -D warnings`、`cargo fmt`：通过。
-- 全量 `cargo test`：lib 5660 passed，集成测试全部通过（提交前运行）。
+- 全量 `cargo test`：合并后主工作区复跑，lib 5660 passed / 6 ignored，集成测试全部通过。`cargo fmt --check` 通过。
 
 ## 4. 未覆盖与手工验收
 
