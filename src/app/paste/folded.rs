@@ -15,7 +15,25 @@ const TOKEN_COMMON_PREFIX: &str = "<pasted-";
 const TOKEN_OPEN_END: &str = "\">";
 
 /// 闭合标签在 `<` 之后的后缀集合（用于转义/反转义判定）。
-const CLOSE_TAG_SUFFIXES: [&str; 3] = ["/pasted-text>", "/pasted-code>", "/pasted-log>"];
+const CLOSE_TAG_SUFFIXES: [&str; 5] = [
+    "/pasted-text>",
+    "/pasted-code>",
+    "/pasted-log>",
+    "/pasted-subagent-report>",
+    "/pasted-btw-report>",
+];
+
+/// 全部折叠类型（解析顺序固定：先普通粘贴，后报告）。
+const ALL_KINDS: [FoldedKind; 5] = [
+    FoldedKind::Text,
+    FoldedKind::Code,
+    FoldedKind::Log,
+    FoldedKind::SubagentReport,
+    FoldedKind::BtwReport,
+];
+
+/// 报告类 token 的 source 属性分隔符。
+const SOURCE_ATTR_END: &str = "\" lines=\"";
 
 /// 折叠粘贴块的语义类型。
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -23,6 +41,10 @@ pub enum FoldedKind {
     Text,
     Code,
     Log,
+    /// Agents 面板 `/report` 生成的 subagent 报告。
+    SubagentReport,
+    /// BTW 面板 `/report` 生成的报告。
+    BtwReport,
 }
 
 impl FoldedKind {
@@ -32,6 +54,8 @@ impl FoldedKind {
             Self::Text => "pasted-text",
             Self::Code => "pasted-code",
             Self::Log => "pasted-log",
+            Self::SubagentReport => "pasted-subagent-report",
+            Self::BtwReport => "pasted-btw-report",
         }
     }
 
@@ -41,15 +65,24 @@ impl FoldedKind {
             Self::Text => "text",
             Self::Code => "code",
             Self::Log => "log",
+            Self::SubagentReport => "subagent report",
+            Self::BtwReport => "btw report",
         }
     }
 
-    /// 起始标签前缀。
+    /// 是否为带来源的报告类芯片。
+    pub const fn is_report(self) -> bool {
+        matches!(self, Self::SubagentReport | Self::BtwReport)
+    }
+
+    /// 起始标签前缀；报告类只到 `source="`，来源值由解析器继续读取。
     const fn open_prefix(self) -> &'static str {
         match self {
             Self::Text => "<pasted-text lines=\"",
             Self::Code => "<pasted-code lines=\"",
             Self::Log => "<pasted-log lines=\"",
+            Self::SubagentReport => "<pasted-subagent-report source=\"",
+            Self::BtwReport => "<pasted-btw-report source=\"",
         }
     }
 
@@ -59,6 +92,8 @@ impl FoldedKind {
             Self::Text => "</pasted-text>",
             Self::Code => "</pasted-code>",
             Self::Log => "</pasted-log>",
+            Self::SubagentReport => "</pasted-subagent-report>",
+            Self::BtwReport => "</pasted-btw-report>",
         }
     }
 }
@@ -68,15 +103,17 @@ impl FoldedKind {
 pub struct FoldedToken {
     pub range: Range<usize>,
     pub kind: FoldedKind,
+    /// 报告类芯片的来源：subagent `agent_id` 或 BTW `thread_id`；普通粘贴为 `None`。
+    pub source: Option<String>,
     pub line_count: usize,
     /// 已反转义的原始正文。
     pub body: String,
-    /// 类型、正文与行数的稳定哈希（进程内身份）。
+    /// 类型、来源、正文与行数的稳定哈希（进程内身份）。
     pub id: u64,
 }
 
 impl FoldedToken {
-    /// 折叠态显示的芯片文本：`[Pasted <text|code|log> N lines]`（单行为 `1 line`）。
+    /// 折叠态显示的芯片文本：`[Pasted <kind> N lines]`（单行为 `1 line`）。
     pub fn label(&self) -> String {
         let word = self.kind.chip_word();
         if self.line_count == 1 {
@@ -486,6 +523,37 @@ pub fn encode(content: &str) -> String {
     encode_kind(FoldedKind::Text, content)
 }
 
+/// 报告正文 → 带来源的折叠 token：
+/// `<pasted-subagent-report source="..." lines="N">...</pasted-subagent-report>`。
+///
+/// 非报告类型退化为普通 [`encode_kind`]。
+pub fn encode_report(kind: FoldedKind, source: &str, content: &str) -> String {
+    if !kind.is_report() {
+        return encode_kind(kind, content);
+    }
+    let line_count = content.split('\n').count().max(1);
+    let tag = kind.tag_name();
+    format!(
+        "<{tag} source=\"{}\" lines=\"{line_count}\">{}</{tag}>",
+        sanitize_source(source),
+        escape_body(content)
+    )
+}
+
+/// 来源 id → 可安全嵌入属性值的文本：只保留字母数字与 `- _ . :`，其余替换为 `_`。
+fn sanitize_source(source: &str) -> String {
+    source
+        .chars()
+        .map(|ch| {
+            if ch.is_ascii_alphanumeric() || matches!(ch, '-' | '_' | '.' | ':') {
+                ch
+            } else {
+                '_'
+            }
+        })
+        .collect()
+}
+
 /// 扫描全文，返回所有在代码围栏外的合法折叠 token。
 ///
 /// 扫描器自行维护行首围栏状态：围栏内的 `<pasted-...>` 字面量被忽略，
@@ -672,16 +740,36 @@ pub fn next_boundary(text: &str, offset: usize) -> usize {
     next
 }
 
-/// 尝试在 `start` 处解析一个 `<pasted-{text|code|log} lines="N">...</pasted-...>` token。
+/// 尝试在 `start` 处解析一个折叠 token。
+///
+/// - 普通粘贴：`<pasted-{text|code|log} lines="N">...</pasted-...>`；
+/// - 报告芯片：`<pasted-{subagent|btw}-report source="..." lines="N">...</pasted-...>`。
 fn try_parse_token(text: &str, start: usize) -> Option<FoldedToken> {
     let slice = text.get(start..)?;
-    let kind = [FoldedKind::Text, FoldedKind::Code, FoldedKind::Log]
+    let kind = ALL_KINDS
         .into_iter()
         .find(|k| slice.starts_with(k.open_prefix()))?;
     let prefix = kind.open_prefix();
     let close_tag = kind.close_tag();
-    let after_prefix = start.checked_add(prefix.len())?;
-    let rest = text.get(after_prefix..)?;
+    let mut body_cursor = start.checked_add(prefix.len())?;
+    let source = if kind.is_report() {
+        let rest = text.get(body_cursor..)?;
+        let quote = rest.find('"')?;
+        let source = rest.get(..quote)?;
+        if source.is_empty() {
+            return None;
+        }
+        body_cursor = body_cursor.checked_add(quote)?;
+        let after_source = text.get(body_cursor..)?;
+        if !after_source.starts_with(SOURCE_ATTR_END) {
+            return None;
+        }
+        body_cursor = body_cursor.checked_add(SOURCE_ATTR_END.len())?;
+        Some(source.to_string())
+    } else {
+        None
+    };
+    let rest = text.get(body_cursor..)?;
     let digit_len = rest.bytes().take_while(|b| b.is_ascii_digit()).count();
     if digit_len == 0 {
         return None;
@@ -694,7 +782,7 @@ fn try_parse_token(text: &str, start: usize) -> Option<FoldedToken> {
     if !after_digits.starts_with(TOKEN_OPEN_END) {
         return None;
     }
-    let body_start = after_prefix + digit_len + TOKEN_OPEN_END.len();
+    let body_start = body_cursor + digit_len + TOKEN_OPEN_END.len();
     let body_rest = text.get(body_start..)?;
     let rel_end = body_rest.find(close_tag)?;
     let body_end = body_start + rel_end;
@@ -705,9 +793,10 @@ fn try_parse_token(text: &str, start: usize) -> Option<FoldedToken> {
     if raw_body.len() > MAX_FOLDED_BYTES.saturating_mul(2) {
         return None;
     }
-    if raw_body.contains(prefix) {
+    let open_tag = format!("<{}", kind.tag_name());
+    if raw_body.contains(&open_tag) {
         let escaped_close = format!("<\\/{}>", kind.tag_name());
-        if raw_body.matches(prefix).count() > raw_body.matches(&escaped_close).count() {
+        if raw_body.matches(&open_tag).count() > raw_body.matches(&escaped_close).count() {
             return None;
         }
     }
@@ -716,22 +805,31 @@ fn try_parse_token(text: &str, start: usize) -> Option<FoldedToken> {
     if body.is_empty() {
         return None;
     }
-    let id = compute_id(kind, line_count, &body);
+    let id = compute_id(kind, source.as_deref(), line_count, &body);
 
     Some(FoldedToken {
         range: start..token_end,
         kind,
+        source,
         line_count,
         body,
         id,
     })
 }
 
-/// 稳定 FNV-1a 64 位哈希：相同 `(kind, line_count, body)` 恒产出相同 `id`。
-fn compute_id(kind: FoldedKind, line_count: usize, body: &str) -> u64 {
+/// 稳定 FNV-1a 64 位哈希：相同 `(kind, source, line_count, body)` 恒产出相同 `id`。
+fn compute_id(kind: FoldedKind, source: Option<&str>, line_count: usize, body: &str) -> u64 {
     let mut hash: u64 = 0xcbf2_9ce4_8422_2325;
     hash ^= kind as u64;
     hash = hash.wrapping_mul(0x0100_0000_01b3);
+    if let Some(source) = source {
+        for &b in source.as_bytes() {
+            hash ^= u64::from(b);
+            hash = hash.wrapping_mul(0x0100_0000_01b3);
+        }
+        hash ^= 0xff;
+        hash = hash.wrapping_mul(0x0100_0000_01b3);
+    }
     for b in (line_count as u64).to_le_bytes() {
         hash ^= u64::from(b);
         hash = hash.wrapping_mul(0x0100_0000_01b3);

@@ -571,13 +571,18 @@ pub fn markdown_code_block() -> Style {
     text()
 }
 
-/// 折叠粘贴芯片：按语义类型区分前景色与深色背景（Text 黄字深灰底、Code 青字深蓝底、Log 亮绿字深绿底）。
+/// 折叠粘贴芯片：按语义类型区分前景色与深色背景。
+///
+/// Text 黄字深灰底、Code 青字深蓝底、Log 亮绿字深绿底；
+/// subagent 报告亮品红字深紫底、BTW 报告亮蓝字深蓝底。
 pub fn pasted_chip(kind: crate::app::paste::FoldedKind) -> Style {
     use crate::app::paste::FoldedKind;
     let (fg, bg) = match kind {
         FoldedKind::Text => (Color::Yellow, Color::Indexed(236)),
         FoldedKind::Code => (Color::Cyan, Color::Indexed(23)),
         FoldedKind::Log => (Color::LightGreen, Color::Indexed(22)),
+        FoldedKind::SubagentReport => (Color::LightMagenta, Color::Indexed(53)),
+        FoldedKind::BtwReport => (Color::LightBlue, Color::Indexed(17)),
     };
     Style::default().fg(fg).bg(bg).add_modifier(Modifier::BOLD)
 }
@@ -589,6 +594,8 @@ pub fn pasted_bg(kind: crate::app::paste::FoldedKind) -> Style {
         FoldedKind::Text => Color::Indexed(236),
         FoldedKind::Code => Color::Indexed(23),
         FoldedKind::Log => Color::Indexed(22),
+        FoldedKind::SubagentReport => Color::Indexed(53),
+        FoldedKind::BtwReport => Color::Indexed(17),
     };
     Style::default().bg(bg)
 }

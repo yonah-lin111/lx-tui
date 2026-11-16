@@ -193,6 +193,68 @@ fn atomic_boundaries_skip_and_snap_across_tokens() {
 }
 
 #[test]
+fn report_tokens_roundtrip_with_source_and_labels() {
+    let body = "[Subagent report] Curie · executor\nAll good.\nChanged files: src/a.rs";
+    let encoded = encode_report(FoldedKind::SubagentReport, "sa_curie-1", body);
+    assert!(encoded.starts_with(
+        "<pasted-subagent-report source=\"sa_curie-1\" lines=\"3\">"
+    ));
+    assert!(encoded.ends_with("</pasted-subagent-report>"));
+
+    let parsed = tokens(&encoded);
+    assert_eq!(parsed.len(), 1);
+    assert_eq!(parsed[0].kind, FoldedKind::SubagentReport);
+    assert_eq!(parsed[0].source.as_deref(), Some("sa_curie-1"));
+    assert_eq!(parsed[0].line_count, 3);
+    assert_eq!(parsed[0].body, body);
+    assert_eq!(
+        parsed[0].label(),
+        "[Pasted subagent report 3 lines]"
+    );
+
+    let single = &tokens(&encode_report(FoldedKind::BtwReport, "thread-9", "one"))[0];
+    assert_eq!(single.kind, FoldedKind::BtwReport);
+    assert_eq!(single.source.as_deref(), Some("thread-9"));
+    assert_eq!(single.label(), "[Pasted btw report 1 line]");
+}
+
+#[test]
+fn report_tokens_with_different_sources_have_distinct_identity() {
+    let body = "same body";
+    let a = &tokens(&encode_report(FoldedKind::SubagentReport, "agent-a", body))[0];
+    let b = &tokens(&encode_report(FoldedKind::SubagentReport, "agent-b", body))[0];
+    assert_eq!(a.body, b.body);
+    assert_ne!(a.id, b.id);
+}
+
+#[test]
+fn report_token_escapes_close_tag_and_sanitizes_source() {
+    let body = "before </pasted-subagent-report> after";
+    let encoded = encode_report(FoldedKind::SubagentReport, "agent\"1\nx", body);
+    assert!(encoded.contains("source=\"agent_1_x\""));
+    assert!(!encoded.contains("</pasted-subagent-report> after"));
+    let parsed = &tokens(&encoded)[0];
+    assert_eq!(parsed.source.as_deref(), Some("agent_1_x"));
+    assert_eq!(parsed.body, body);
+}
+
+#[test]
+fn report_token_without_source_attribute_is_not_parsed() {
+    let literal = "<pasted-subagent-report lines=\"1\">x</pasted-subagent-report>";
+    assert!(tokens(literal).is_empty());
+}
+
+#[test]
+fn expand_all_replaces_report_tokens_with_body() {
+    let report = encode_report(FoldedKind::BtwReport, "thread-1", "[BTW report] title\nbody");
+    let text = format!("keep {report} tail");
+    assert_eq!(
+        expand_all(&text),
+        "keep [BTW report] title\nbody tail"
+    );
+}
+
+#[test]
 fn display_to_raw_directed_and_unclosed_literal_opening_tag_guard() {
     let tok = encode("1\n2\n3");
     let raw = format!("ab{tok}cd");
