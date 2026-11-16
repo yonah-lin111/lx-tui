@@ -164,3 +164,107 @@ fn process_failures_map_to_stable_tool_codes() {
         assert_eq!(failure_code(result), expected, "code {code}");
     }
 }
+
+#[test]
+fn exec_request_defaults_to_no_escalation() {
+    let request = parse_exec_request(r#"{"cmd":"ls"}"#).expect("valid");
+    assert_eq!(request.args.cmd, "ls");
+    assert!(request.escalation.is_none());
+}
+
+#[test]
+fn require_escalated_needs_justification_and_accepts_safe_prefix() {
+    let request = parse_exec_request(
+        r#"{"cmd":"git push","sandbox_permissions":"require_escalated",
+            "justification":"push the branch","prefix_rule":["git","push"]}"#,
+    );
+    assert!(request.is_err(), "git prefix is banned");
+
+    let request = parse_exec_request(
+        r#"{"cmd":"cargo publish","sandbox_permissions":"require_escalated",
+            "justification":"publish the crate","prefix_rule":["cargo","publish"]}"#,
+    )
+    .expect("valid");
+    let escalation = request.escalation.expect("escalation");
+    assert_eq!(escalation.kind, EscalationKind::Unsandboxed);
+    assert_eq!(escalation.justification, "publish the crate");
+    assert_eq!(
+        escalation.prefix_rule,
+        Some(vec!["cargo".to_string(), "publish".to_string()])
+    );
+
+    assert!(
+        parse_exec_request(r#"{"cmd":"ls","sandbox_permissions":"require_escalated"}"#).is_err()
+    );
+}
+
+#[test]
+fn prefix_rule_rejects_shell_metacharacters_and_banned_prefixes() {
+    for prefix in [
+        r#"["sh","-c"]"#,
+        r#"["rm"]"#,
+        r#"["sudo"]"#,
+        r#"["echo;rm"]"#,
+        r#"[]"#,
+        r#"["a","b","c","d","e","f","g"]"#,
+    ] {
+        let body = format!(
+            r#"{{"cmd":"x","sandbox_permissions":"require_escalated","justification":"j","prefix_rule":{prefix}}}"#
+        );
+        assert!(parse_exec_request(&body).is_err(), "prefix {prefix}");
+    }
+}
+
+#[test]
+fn additional_permissions_accept_network_and_absolute_write_roots() {
+    let request = parse_exec_request(
+        r#"{"cmd":"make","sandbox_permissions":"with_additional_permissions",
+            "justification":"write build output",
+            "additional_permissions":{"network":{"enabled":true},"file_system":{"write":["/tmp/out"]}}}"#,
+    )
+    .expect("valid");
+    let additional = request
+        .escalation
+        .expect("escalation")
+        .additional
+        .expect("additional");
+    assert!(additional.network);
+    assert_eq!(
+        additional.write_roots,
+        vec![std::path::PathBuf::from("/tmp/out")]
+    );
+
+    for bad in [
+        r#"{"file_system":{"write":["relative"]}}"#,
+        r#"{"file_system":{"read":["/x"]}}"#,
+        r#"{"file_system":{"write":[]}}"#,
+        r#"{}"#,
+    ] {
+        let body = format!(
+            r#"{{"cmd":"x","sandbox_permissions":"with_additional_permissions","justification":"j","additional_permissions":{bad}}}"#
+        );
+        assert!(parse_exec_request(&body).is_err(), "additional {bad}");
+    }
+}
+
+#[test]
+fn fields_must_match_the_declared_permission_kind() {
+    assert!(
+        parse_exec_request(r#"{"cmd":"x","justification":"j"}"#).is_err(),
+        "use_default cannot carry justification"
+    );
+    assert!(
+        parse_exec_request(
+            r#"{"cmd":"x","sandbox_permissions":"with_additional_permissions","justification":"j","prefix_rule":["cargo"]}"#
+        )
+        .is_err(),
+        "prefix_rule only with require_escalated"
+    );
+    assert!(
+        parse_exec_request(
+            r#"{"cmd":"x","sandbox_permissions":"require_escalated","justification":"j","additional_permissions":{"network":{"enabled":true}}}"#
+        )
+        .is_err(),
+        "additional_permissions only with its own kind"
+    );
+}

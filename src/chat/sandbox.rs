@@ -20,6 +20,76 @@ pub enum CommandSandbox {
     Unavailable,
 }
 
+/// `with_additional_permissions` 的请求内容（A 批只支持网络与可写根）。
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub struct AdditionalPermissions {
+    /// 是否允许网络。
+    pub network: bool,
+    /// 追加的可写根（绝对路径）。
+    pub write_roots: Vec<PathBuf>,
+}
+
+/// 审批种类。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SandboxApprovalKind {
+    /// 模型显式申请提权。
+    Escalation,
+    /// 沙箱拒绝后的重试申请（A 批 §8.5）。
+    Retry,
+}
+
+impl SandboxApprovalKind {
+    /// 稳定标识。
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Escalation => "escalation",
+            Self::Retry => "retry",
+        }
+    }
+}
+
+/// 一次沙箱审批请求（UI 只读展示）。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SandboxApprovalRequest {
+    /// 审批种类。
+    pub kind: SandboxApprovalKind,
+    /// 命令原文（已截断）。
+    pub command: String,
+    /// 实际工作目录。
+    pub cwd: String,
+    /// 模型给出的理由（仅显式申请；不回过模型）。
+    pub justification: String,
+    /// 可申请的会话前缀规则。
+    pub prefix_rule: Option<Vec<String>>,
+    /// 附加权限（仅 `with_additional_permissions`）。
+    pub additional: Option<AdditionalPermissions>,
+    /// 被沙箱拒绝时的输出摘录（仅 on-failure）。
+    pub denial_excerpt: Option<String>,
+    /// 来源标签（子 agent 名称等）。
+    pub source: Option<String>,
+}
+
+impl SandboxApprovalRequest {
+    /// 是否允许「批准一次」以外的会话级批准。
+    pub fn can_approve_for_session(&self) -> bool {
+        match self.kind {
+            SandboxApprovalKind::Escalation => self.prefix_rule.is_some(),
+            SandboxApprovalKind::Retry => true,
+        }
+    }
+}
+
+/// 用户对审批的裁决。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SandboxApprovalDecision {
+    /// 仅本次命令。
+    Once,
+    /// 本会话内同类命令（前缀/精确命令）自动放行。
+    ForSession,
+    /// 拒绝。
+    Denied,
+}
+
 /// 单次命令的提权覆盖。
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub enum SandboxOverride {

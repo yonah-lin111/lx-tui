@@ -15,6 +15,7 @@ use crate::db::chat::{ModelSnapshot, TurnOutcome, Usage};
 use crate::tiling::PaneId;
 use crate::ui::text;
 
+pub mod approval;
 pub mod ask;
 pub mod btw;
 pub mod compact;
@@ -41,6 +42,7 @@ mod view;
 mod viewport;
 pub mod web;
 
+pub use approval::apply_input as apply_approval_input;
 pub use ask::{
     apply_ask_click, apply_ask_paste, apply_ask_wheel, apply_input as apply_ask_input, submit_all,
 };

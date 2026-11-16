@@ -186,6 +186,11 @@ impl RecordingHost {
 impl AgentHost for RecordingHost {
     fn send(&mut self, request: AgentHostRequest) {
         match request {
+            AgentHostRequest::ApproveSandbox { reply, .. } => {
+                let _ = reply.send(Err(HostError::Failed {
+                    code: "approval not scripted".into(),
+                }));
+            }
             AgentHostRequest::UserShellUpdates { reply } => {
                 let _ = reply.send(Vec::new());
             }

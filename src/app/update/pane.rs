@@ -117,6 +117,14 @@ pub fn apply_lx_input(state: &mut AppState, command: LxInput) {
         task_page::apply_task_page_input(state, pane_id, command);
         return;
     }
+    // 沙箱审批 strip：只吞决策键与 Enter，其余键仍可编辑草稿。
+    if state
+        .pane_anywhere(pane_id)
+        .is_some_and(|pane| !pane.lx.approvals.is_empty())
+    {
+        super::chat::apply_approval_input(state, pane_id, command);
+        return;
+    }
     // 挂起的 ask 面板：整块接管按键（不回落到输入框，也不改草稿）。
     if state
         .pane_anywhere(pane_id)

@@ -260,6 +260,12 @@ impl ExecRunner<'_> {
                 outcome,
                 reply,
             } => self.finish_tool(ticket, outcome, reply, processor),
+            AgentHostRequest::ApproveSandbox { reply, .. } => {
+                // 无头/子 agent 路径没有交互审批面：拒绝并让模型如实报告。
+                let _ = reply.send(Err(HostError::Failed {
+                    code: "sandbox_escalation_unavailable".to_string(),
+                }));
+            }
             AgentHostRequest::AskUser { reply, .. } => {
                 // 无头模式没有交互界面：让模型按 best-effort 继续，而不是挂起。
                 let _ = reply.send(Err(HostError::Failed {

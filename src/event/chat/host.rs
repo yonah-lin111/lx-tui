@@ -48,6 +48,13 @@ pub enum AgentHostEvent {
         outcome: ToolOutcome,
         reply: oneshot::Sender<Result<(), HostError>>,
     },
+    /// 沙箱审批（显式提权 / on-failure 重试）；回执丢失等价于取消。
+    ApproveSandbox {
+        key: RequestKey,
+        call_id: String,
+        request: crate::chat::sandbox::SandboxApprovalRequest,
+        reply: oneshot::Sender<Result<crate::chat::sandbox::SandboxApprovalDecision, HostError>>,
+    },
     /// 向用户提问并等待作答；回执丢失等价于取消。
     ///
     /// 与 `BeginTool`/`FinishTool` 不同，这里不改 DB：ask 的行状态已由前后两个门槛维护。
@@ -126,6 +133,16 @@ impl AgentHost for EventHost {
                 key: self.key.clone(),
                 ticket,
                 outcome,
+                reply,
+            },
+            AgentHostRequest::ApproveSandbox {
+                call_id,
+                request,
+                reply,
+            } => AgentHostEvent::ApproveSandbox {
+                key: self.key.clone(),
+                call_id,
+                request,
                 reply,
             },
             AgentHostRequest::AskUser {

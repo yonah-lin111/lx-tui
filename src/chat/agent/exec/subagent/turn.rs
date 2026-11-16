@@ -373,6 +373,12 @@ impl ExecSubagentPool {
                 };
                 let _ = reply.send(sent);
             }
+            AgentHostRequest::ApproveSandbox { reply, .. } => {
+                // 无头/子 agent 路径没有交互审批面：拒绝并让模型如实报告。
+                let _ = reply.send(Err(HostError::Failed {
+                    code: "sandbox_escalation_unavailable".to_string(),
+                }));
+            }
             AgentHostRequest::AskUser { reply, .. } => {
                 let _ = reply.send(Err(failed("unsupported in subagent")));
             }

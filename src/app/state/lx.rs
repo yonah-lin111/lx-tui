@@ -10,6 +10,7 @@ use crate::app::prompt::text;
 use crate::app::selection::SelectionUnit;
 
 pub mod agent;
+pub mod approval;
 pub mod ask;
 pub mod btw;
 pub mod chat;
@@ -38,6 +39,7 @@ pub(crate) use history::HistoryMove;
 pub use shell::LxInputMode;
 
 pub use agent::{AgentsState, MAX_RESIDENT_SUBAGENT_CHATS, SubagentReportView, SubagentRun};
+pub use approval::ApprovalState;
 pub use ask::{AskEditor, AskHit, AskState, AskWheelZone};
 pub use btw::{BtwTargetView, BtwThreadState, LxBtw};
 pub use chat::SHELL_SLOT;
@@ -187,6 +189,8 @@ pub struct Lx {
     pub task: Option<TaskPage>,
     /// 当前挂起的 ask 面板；`None` 表示输入框正常显示。
     pub ask: Option<AskState>,
+    /// 待处理的沙箱审批（FIFO，队首展示）。
+    pub approvals: std::collections::VecDeque<ApprovalState>,
     /// 旁路问答（`/btw`）视图缓存：按主 QA 隔离的线程与独立草稿。
     pub btw: LxBtw,
     /// 纯文本缓冲：不识别 shell 前缀、不弹 markdown/提及/斜杠面板。
@@ -319,6 +323,7 @@ impl Lx {
             toast: None,
             task: None,
             ask: None,
+            approvals: std::collections::VecDeque::new(),
             btw: LxBtw::default(),
             plain,
             no_shell: false,

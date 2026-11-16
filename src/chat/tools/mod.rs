@@ -57,7 +57,10 @@ pub use mutation::{
 };
 pub use output::{format_for_model, to_result_json, to_summary};
 pub use plan_args::build_plan_result;
-pub use process_args::{parse_exec_args, parse_stdin_args, process_failure};
+pub use process_args::{
+    EscalationKind, SandboxEscalation, parse_exec_args, parse_exec_request, parse_stdin_args,
+    process_failure,
+};
 pub use read_version::{
     ReadRegistry, ReadVersion, canonical_key as read_canonical_key, drop_registry as drop_reads,
     registry as read_registry, require_missing as require_new_target,

@@ -2,6 +2,7 @@
 //!
 //! 统一负责“DB 落库 → 状态 → 回执”顺序；delta 与终态按 `(pane, session, generation)` 过滤。
 
+pub mod approval;
 pub mod ask;
 pub mod btw;
 pub mod compact;
@@ -125,6 +126,8 @@ pub struct ChatStreams {
     pub(crate) user_shell_injected: HashMap<RequestKey, user_shell::ShellInjectionState>,
     /// 每轮最多一个挂起的 `ask` 提问（loop 串行）；回执通道的唯一持有者。
     pub(crate) asks: HashMap<RequestKey, PendingAsk>,
+    /// 每轮最多一个挂起的沙箱审批；回执通道的唯一持有者。
+    pub(crate) approvals: HashMap<RequestKey, PendingApproval>,
     /// 子 agent 句柄：`child_session_id -> handle`。
     pub(crate) subagents: HashMap<String, subagent::SubagentHandle>,
     /// 旁路问答（`/btw`）的独立运行状态与队列。
@@ -142,6 +145,12 @@ pub struct ChatStreams {
     /// spawn 时冻结的单轮 Token 预算覆写（`agent_id -> max_tokens`），
     /// 供后续排队/恢复轮次沿用，避免多轮累计预算退回默认值。
     pub(crate) subagent_budgets: HashMap<String, Option<u64>>,
+}
+
+/// 一次等待裁决的沙箱审批。
+pub(crate) struct PendingApproval {
+    pub call_id: String,
+    pub reply: oneshot::Sender<Result<crate::chat::sandbox::SandboxApprovalDecision, HostError>>,
 }
 
 /// 一次等待作答的提问：回执通道 + 归属用的 `call_id`。
@@ -242,6 +251,14 @@ impl ChatStreams {
     }
 
     /// 取走挂起的提问并回 `Cancelled`；无挂起项返回 `false`。
+    pub(crate) fn wake_approval(&mut self, key: &RequestKey) -> bool {
+        let Some(pending) = self.approvals.remove(key) else {
+            return false;
+        };
+        let _ = pending.reply.send(Err(HostError::Cancelled));
+        true
+    }
+
     pub(crate) fn wake_ask(&mut self, key: &RequestKey) -> bool {
         let Some(pending) = self.asks.remove(key) else {
             return false;
@@ -254,8 +271,9 @@ impl ChatStreams {
     ///
     /// **不清理进程**：正常结束一轮模型回答时，所属服务继续运行（下一轮复用同一实例）。
     fn finish(&mut self, key: &RequestKey) {
-        // 轮次结束不应还有提问在等；有就是没人再来回执了，一律按取消唤醒。
+        // 轮次结束不应还有提问/审批在等；有就是没人再来回执了，一律按取消唤醒。
         self.wake_ask(key);
+        self.wake_approval(key);
         self.cancels.remove(key);
         self.checkpoints.remove(key);
         self.db_workspaces.remove(key);
@@ -332,6 +350,7 @@ pub fn pump_chat_streams(
                     Effect::StartChatStream { .. }
                         | Effect::CancelChatStream { .. }
                         | Effect::AnswerAsk { .. }
+                        | Effect::AnswerApproval { .. }
                         | Effect::Btw(_)
                 )
         })
@@ -351,6 +370,7 @@ pub fn pump_chat_streams(
                     Effect::StartChatStream { .. }
                         | Effect::CancelChatStream { .. }
                         | Effect::AnswerAsk { .. }
+                        | Effect::AnswerApproval { .. }
                         | Effect::Btw(_)
                 )
         })
@@ -364,6 +384,7 @@ pub fn pump_chat_streams(
                 // loop 在下一个检查点停止未开始的工具与后续采样。
                 changed |= streams.cancel(&key);
                 changed |= ask::cancel(state, streams, &key);
+                changed |= approval::cancel(state, streams, &key);
                 // D9：同时停止本轮新建的进程与当前正在等待/交互的进程
                 // （此前启动、本轮未操作的旧服务保持运行）。
                 stop_turn_processes(streams, &key);
@@ -374,6 +395,13 @@ pub fn pump_chat_streams(
                 answers,
             } => {
                 changed |= ask::answer(state, streams, &key, &call_id, answers);
+            }
+            Effect::AnswerApproval {
+                key,
+                call_id,
+                decision,
+            } => {
+                changed |= approval::answer(state, streams, &key, &call_id, decision);
             }
             Effect::Btw(effect) => {
                 changed |= btw::apply_effect(state, streams, persistence, sender, effect);
@@ -639,7 +667,8 @@ pub fn handle_net_event(
             // 清除在途取消句柄、checkpoint 与冻结工作区。
             streams.finish(&key);
             // 防御 sweep：流程走完时不应还剩面板；留下就是悬挂 sender。
-            let cleared = ask::cancel(state, streams, &key);
+            let cleared =
+                ask::cancel(state, streams, &key) | approval::cancel(state, streams, &key);
             let settled = update::on_stream_finished(state, &key, &reason, usage, billing);
             settled | cleared
         }
@@ -662,6 +691,7 @@ pub fn handle_agent_host_event(
         AgentHostEvent::BeginTool { key, .. }
         | AgentHostEvent::FinishTool { key, .. }
         | AgentHostEvent::AskUser { key, .. }
+        | AgentHostEvent::ApproveSandbox { key, .. }
         | AgentHostEvent::UserShellUpdates { key, .. }
         | AgentHostEvent::SteerInputs { key, .. }
         | AgentHostEvent::HasPendingSteers { key, .. }
@@ -701,6 +731,12 @@ pub fn handle_agent_host_event(
             questions,
             reply,
         } => ask::request(state, streams, key, call_id, questions, reply),
+        AgentHostEvent::ApproveSandbox {
+            key,
+            call_id,
+            request,
+            reply,
+        } => approval::request(state, streams, key, call_id, request, reply),
         AgentHostEvent::UserShellUpdates { key, reply } => {
             // 只读握手：命令结果仍以数据库为事实来源。
             let updates = user_shell::poll_updates(state, streams, persistence, &key);

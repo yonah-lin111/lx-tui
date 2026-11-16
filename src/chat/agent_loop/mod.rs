@@ -132,6 +132,12 @@ pub enum AgentHostRequest {
         outcome: ToolOutcome,
         reply: oneshot::Sender<Result<(), HostError>>,
     },
+    /// 把沙箱提权申请交给 UI；回执丢失（窗格关闭）等价于取消。
+    ApproveSandbox {
+        call_id: String,
+        request: crate::chat::sandbox::SandboxApprovalRequest,
+        reply: oneshot::Sender<Result<crate::chat::sandbox::SandboxApprovalDecision, HostError>>,
+    },
     /// 把提问交给 UI 并等待作答；回执携带用户答案（`id -> 答案数组`）。
     ///
     /// 与 `BeginTool` 不同，这里没有 DB 写入：ask 的 pending/running 行已由
@@ -223,6 +229,29 @@ pub trait AgentHost: Send {
             self.send(AgentHostRequest::AskUser {
                 call_id,
                 questions,
+                reply,
+            });
+            match receiver.await {
+                Ok(result) => result,
+                Err(_) => Err(HostError::Cancelled),
+            }
+        }
+    }
+
+    /// 请求用户审批一次沙箱提权；回执丢失等价于取消。
+    fn approve_sandbox(
+        &mut self,
+        call_id: String,
+        request: crate::chat::sandbox::SandboxApprovalRequest,
+    ) -> impl Future<Output = Result<crate::chat::sandbox::SandboxApprovalDecision, HostError>> + Send
+    where
+        Self: Sized,
+    {
+        async move {
+            let (reply, receiver) = oneshot::channel();
+            self.send(AgentHostRequest::ApproveSandbox {
+                call_id,
+                request,
                 reply,
             });
             match receiver.await {
@@ -344,6 +373,28 @@ pub trait ToolExecutor: Send + Sync {
         Self: Sized,
     {
         self.execute(cwd, call)
+    }
+
+    /// 带沙箱覆盖的执行入口（显式提权/on-failure 重试）。
+    fn execute_tracked_sandboxed(
+        &self,
+        cwd: &Path,
+        call: &ReadyToolCall,
+        ticket: &ToolCallTicket,
+        sandbox: crate::chat::sandbox::SandboxOverride,
+    ) -> impl Future<Output = ToolExecutionResult> + Send
+    where
+        Self: Sized,
+    {
+        async move {
+            let _ = sandbox;
+            self.execute_tracked(cwd, call, ticket).await
+        }
+    }
+
+    /// 本执行器冻结的沙箱计划（测试执行器返回 None）。
+    fn sandbox_plan(&self) -> Option<&crate::chat::sandbox::SandboxPlan> {
+        None
     }
 
     /// 可取消的 MCP 调用；非 MCP 工具返回 None，由调用方走通用执行入口。
@@ -751,9 +802,14 @@ where
             {
                 result
             } else {
-                executor
-                    .execute_tracked(context.cwd(), &call, &ticket)
-                    .await
+                match sandbox_override_for(&mut host, &executor, &call, context.cwd()).await {
+                    Ok(sandbox) => {
+                        executor
+                            .execute_tracked_sandboxed(context.cwd(), &call, &ticket, sandbox)
+                            .await
+                    }
+                    Err(result) => result,
+                }
             };
             // MCP 取消不是工具结果：按用户取消结算，不再采样。
             if result.error_code() == Some(ToolErrorCode::Cancelled) {
@@ -960,5 +1016,92 @@ fn add_optional(total: Option<i64>, step: Option<i64>) -> Option<i64> {
     match (total, step) {
         (None, None) => None,
         (total, step) => Some(total.unwrap_or(0).saturating_add(step.unwrap_or(0))),
+    }
+}
+
+/// 解析显式提权并请求审批；返回本次命令的沙箱覆盖。
+///
+/// 规则优先级（design §18.4 的第 4 步）：规则文件/会话规则尚未接入前，这里只处理
+/// 模型请求；`escalation = never`、危险模式与无进程沙箱平台直接拒绝或放行。
+async fn sandbox_override_for<H, E>(
+    host: &mut H,
+    executor: &E,
+    call: &ReadyToolCall,
+    cwd: &Path,
+) -> Result<crate::chat::sandbox::SandboxOverride, ToolExecutionResult>
+where
+    H: AgentHost,
+    E: ToolExecutor,
+{
+    if call.name != "exec_command" {
+        return Ok(crate::chat::sandbox::SandboxOverride::None);
+    }
+    let request = match crate::chat::tools::parse_exec_request(&call.arguments_json) {
+        Ok(request) => request,
+        Err(failure) => return Err(failure.into_result(Vec::new())),
+    };
+    let Some(escalation) = request.escalation else {
+        return Ok(crate::chat::sandbox::SandboxOverride::None);
+    };
+    let Some(plan) = executor.sandbox_plan() else {
+        return Ok(crate::chat::sandbox::SandboxOverride::None);
+    };
+    if plan.mode == crate::config::sandbox::SandboxMode::DangerFullAccess {
+        return Ok(crate::chat::sandbox::SandboxOverride::None);
+    }
+    if plan.command_sandbox() == crate::chat::sandbox::CommandSandbox::Unavailable {
+        return Err(ToolFailure::new(
+            ToolErrorCode::SandboxUnavailable,
+            "process sandbox is unavailable on this platform; install the backend or switch to danger-full-access",
+        )
+        .into_result(Vec::new()));
+    }
+    if plan.escalation == crate::config::sandbox::EscalationPolicy::Never {
+        return Err(ToolFailure::new(
+            ToolErrorCode::SandboxDenied,
+            "sandbox escalation is disabled by settings",
+        )
+        .into_result(Vec::new()));
+    }
+    let approval = crate::chat::sandbox::SandboxApprovalRequest {
+        kind: crate::chat::sandbox::SandboxApprovalKind::Escalation,
+        command: request.args.cmd.clone(),
+        cwd: cwd.display().to_string(),
+        justification: escalation.justification.clone(),
+        prefix_rule: escalation.prefix_rule.clone(),
+        additional: escalation.additional.clone(),
+        denial_excerpt: None,
+        source: None,
+    };
+    let decision = host
+        .approve_sandbox(call.call_id.clone(), approval)
+        .await
+        .map_err(|error| match error {
+            HostError::Cancelled => {
+                ToolFailure::new(ToolErrorCode::Cancelled, "cancelled").into_result(Vec::new())
+            }
+            HostError::Failed { code } => {
+                ToolFailure::new(ToolErrorCode::SandboxDenied, code).into_result(Vec::new())
+            }
+        })?;
+    match decision {
+        crate::chat::sandbox::SandboxApprovalDecision::Once
+        | crate::chat::sandbox::SandboxApprovalDecision::ForSession => Ok(match escalation.kind {
+            crate::chat::tools::EscalationKind::Unsandboxed => {
+                crate::chat::sandbox::SandboxOverride::Unsandboxed
+            }
+            crate::chat::tools::EscalationKind::Additional => {
+                let additional = escalation.additional.unwrap_or_default();
+                crate::chat::sandbox::SandboxOverride::Additional {
+                    network: additional.network,
+                    write_roots: additional.write_roots,
+                }
+            }
+        }),
+        crate::chat::sandbox::SandboxApprovalDecision::Denied => Err(ToolFailure::new(
+            ToolErrorCode::SandboxDenied,
+            "the user denied sandbox escalation.",
+        )
+        .into_result(Vec::new())),
     }
 }

@@ -190,3 +190,338 @@ fn optional_int(value: &Value, key: &str, min: i64, max: i64) -> ToolResultPubli
 
 #[cfg(test)]
 mod tests;
+
+/// `exec_command` 的完整请求：进程参数 + 可选提权申请。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ExecRequest {
+    /// 进程参数。
+    pub args: ExecArgs,
+    /// 提权申请（默认无）。
+    pub escalation: Option<SandboxEscalation>,
+}
+
+/// 提权种类。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum EscalationKind {
+    /// 仅本次命令追加网络/可写根。
+    Additional,
+    /// 完全绕过沙箱。
+    Unsandboxed,
+}
+
+/// 模型显式提权申请。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SandboxEscalation {
+    /// 提权种类。
+    pub kind: EscalationKind,
+    /// 面向用户的理由（非空，≤500 字符；不回显给模型）。
+    pub justification: String,
+    /// 会话级前缀规则（仅 `Unsandboxed`）。
+    pub prefix_rule: Option<Vec<String>>,
+    /// 本次命令的附加权限（仅 `Additional`）。
+    pub additional: Option<AdditionalPermissions>,
+}
+
+pub use crate::chat::sandbox::AdditionalPermissions;
+
+/// 解析 `exec_command` 请求（含提权字段）。
+pub fn parse_exec_request(arguments_json: &str) -> ToolResultPublic<ExecRequest> {
+    let value = object_of(arguments_json)?;
+    let allowed = [
+        "cmd",
+        "workdir",
+        "shell",
+        "login",
+        "tty",
+        "yield_time_ms",
+        "timeout_ms",
+        "max_output_tokens",
+        "sandbox_permissions",
+        "justification",
+        "prefix_rule",
+        "additional_permissions",
+    ];
+    reject_unknown(&value, &allowed)?;
+    let args = parse_exec_args_from(&value)?;
+    let permissions = optional_string(&value, "sandbox_permissions")?
+        .unwrap_or_else(|| "use_default".to_string());
+    match permissions.as_str() {
+        "use_default" => {
+            for key in ["justification", "prefix_rule", "additional_permissions"] {
+                if value.get(key).is_some_and(|field| !field.is_null()) {
+                    return Err(ToolFailure::invalid(format!(
+                        "'{key}' is only valid with an explicit sandbox permission request"
+                    )));
+                }
+            }
+            Ok(ExecRequest {
+                args,
+                escalation: None,
+            })
+        }
+        "require_escalated" => {
+            let justification = required_justification(&value)?;
+            if value
+                .get("additional_permissions")
+                .is_some_and(|v| !v.is_null())
+            {
+                return Err(ToolFailure::invalid(
+                    "'additional_permissions' is only valid with 'with_additional_permissions'",
+                ));
+            }
+            let prefix_rule = parse_prefix_rule(&value)?;
+            Ok(ExecRequest {
+                args,
+                escalation: Some(SandboxEscalation {
+                    kind: EscalationKind::Unsandboxed,
+                    justification,
+                    prefix_rule,
+                    additional: None,
+                }),
+            })
+        }
+        "with_additional_permissions" => {
+            let justification = required_justification(&value)?;
+            if value.get("prefix_rule").is_some_and(|v| !v.is_null()) {
+                return Err(ToolFailure::invalid(
+                    "'prefix_rule' is only valid with 'require_escalated'",
+                ));
+            }
+            let Some(additional) = value.get("additional_permissions") else {
+                return Err(ToolFailure::invalid(
+                    "'additional_permissions' is required with 'with_additional_permissions'",
+                ));
+            };
+            let additional = parse_additional_permissions(additional)?;
+            Ok(ExecRequest {
+                args,
+                escalation: Some(SandboxEscalation {
+                    kind: EscalationKind::Additional,
+                    justification,
+                    prefix_rule: None,
+                    additional: Some(additional),
+                }),
+            })
+        }
+        other => Err(ToolFailure::invalid(format!(
+            "'sandbox_permissions' must be use_default, with_additional_permissions, or require_escalated (got '{other}')"
+        ))),
+    }
+}
+
+fn parse_exec_args_from(value: &Value) -> ToolResultPublic<ExecArgs> {
+    // 复用同一套字段校验：构造只含进程字段的对象，避免两套默认值漂移。
+    let mut process_only = serde_json::Map::new();
+    for key in [
+        "cmd",
+        "workdir",
+        "shell",
+        "login",
+        "tty",
+        "yield_time_ms",
+        "timeout_ms",
+        "max_output_tokens",
+    ] {
+        if let Some(field) = value.get(key) {
+            process_only.insert(key.to_string(), field.clone());
+        }
+    }
+    parse_exec_args(&Value::Object(process_only).to_string())
+}
+
+fn required_justification(value: &Value) -> ToolResultPublic<String> {
+    let text = value
+        .get("justification")
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|text| !text.is_empty())
+        .ok_or_else(|| ToolFailure::invalid("'justification' must be a non-empty string"))?;
+    if text.chars().count() > 500 {
+        return Err(ToolFailure::invalid(
+            "'justification' must be at most 500 characters",
+        ));
+    }
+    if text.chars().any(char::is_control) {
+        return Err(ToolFailure::invalid(
+            "'justification' must not contain control characters",
+        ));
+    }
+    Ok(text.to_string())
+}
+
+fn parse_prefix_rule(value: &Value) -> ToolResultPublic<Option<Vec<String>>> {
+    let Some(raw) = value.get("prefix_rule") else {
+        return Ok(None);
+    };
+    if raw.is_null() {
+        return Ok(None);
+    }
+    let Some(items) = raw.as_array() else {
+        return Err(ToolFailure::invalid(
+            "'prefix_rule' must be an array of strings",
+        ));
+    };
+    if items.is_empty() || items.len() > 6 {
+        return Err(ToolFailure::invalid(
+            "'prefix_rule' must contain between 1 and 6 tokens",
+        ));
+    }
+    let mut tokens = Vec::with_capacity(items.len());
+    for item in items {
+        let Some(token) = item.as_str() else {
+            return Err(ToolFailure::invalid(
+                "'prefix_rule' must contain only strings",
+            ));
+        };
+        if token.is_empty() || token.chars().any(char::is_control) {
+            return Err(ToolFailure::invalid(
+                "'prefix_rule' tokens must be non-empty without control characters",
+            ));
+        }
+        if token.chars().any(|ch| {
+            matches!(
+                ch,
+                '|' | ';' | '&' | '$' | '`' | '(' | ')' | '{' | '}' | '<' | '>'
+            )
+        }) {
+            return Err(ToolFailure::invalid(
+                "'prefix_rule' tokens must not contain shell metacharacters",
+            ));
+        }
+        tokens.push(token.to_string());
+    }
+    if banned_prefix(&tokens) {
+        return Err(ToolFailure::invalid(
+            "'prefix_rule' must not name a shell, interpreter, git, package runner, rm, or sudo",
+        ));
+    }
+    Ok(Some(tokens))
+}
+
+fn parse_additional_permissions(raw: &Value) -> ToolResultPublic<AdditionalPermissions> {
+    let Some(object) = raw.as_object() else {
+        return Err(ToolFailure::invalid(
+            "'additional_permissions' must be an object",
+        ));
+    };
+    if let Some(unknown) = object
+        .keys()
+        .find(|key| !matches!(key.as_str(), "network" | "file_system"))
+    {
+        return Err(ToolFailure::invalid(format!(
+            "unknown additional permission '{unknown}'; allowed: network, file_system"
+        )));
+    }
+    let mut permissions = AdditionalPermissions::default();
+    if let Some(network) = object.get("network") {
+        let Some(network) = network.as_object() else {
+            return Err(ToolFailure::invalid("'network' must be an object"));
+        };
+        if let Some(unknown) = network.keys().find(|key| key.as_str() != "enabled") {
+            return Err(ToolFailure::invalid(format!(
+                "unknown network permission '{unknown}'"
+            )));
+        }
+        permissions.network = network
+            .get("enabled")
+            .and_then(Value::as_bool)
+            .unwrap_or(false);
+    }
+    if let Some(file_system) = object.get("file_system") {
+        let Some(file_system) = file_system.as_object() else {
+            return Err(ToolFailure::invalid("'file_system' must be an object"));
+        };
+        if let Some(unknown) = file_system.keys().find(|key| key.as_str() != "write") {
+            return Err(ToolFailure::invalid(format!(
+                "unsupported file_system permission '{unknown}' in this release; only 'write' is supported"
+            )));
+        }
+        if let Some(write) = file_system.get("write") {
+            let Some(items) = write.as_array() else {
+                return Err(ToolFailure::invalid("'file_system.write' must be an array"));
+            };
+            if items.len() > 8 {
+                return Err(ToolFailure::invalid(
+                    "'file_system.write' must contain at most 8 paths",
+                ));
+            }
+            for item in items {
+                let Some(path) = item.as_str() else {
+                    return Err(ToolFailure::invalid(
+                        "'file_system.write' must contain only strings",
+                    ));
+                };
+                let path = std::path::Path::new(path);
+                if !path.is_absolute() {
+                    return Err(ToolFailure::invalid(format!(
+                        "write path '{}' must be absolute",
+                        path.display()
+                    )));
+                }
+                if path.to_string_lossy().chars().any(char::is_control) {
+                    return Err(ToolFailure::invalid(
+                        "write paths must not contain control characters",
+                    ));
+                }
+                permissions.write_roots.push(std::path::PathBuf::from(path));
+            }
+        }
+    }
+    if !permissions.network && permissions.write_roots.is_empty() {
+        return Err(ToolFailure::invalid(
+            "'additional_permissions' must request network or at least one write path",
+        ));
+    }
+    Ok(permissions)
+}
+
+fn banned_prefix(tokens: &[String]) -> bool {
+    const BANNED: &[&[&str]] = &[
+        &["bash"],
+        &["bash", "-c"],
+        &["bash", "-lc"],
+        &["sh"],
+        &["sh", "-c"],
+        &["sh", "-lc"],
+        &["zsh"],
+        &["zsh", "-c"],
+        &["zsh", "-lc"],
+        &["dash"],
+        &["dash", "-c"],
+        &["fish"],
+        &["fish", "-c"],
+        &["ksh"],
+        &["ksh", "-c"],
+        &["cmd"],
+        &["cmd.exe"],
+        &["powershell"],
+        &["pwsh"],
+        &["node"],
+        &["node", "-e"],
+        &["python"],
+        &["python3"],
+        &["py"],
+        &["ruby"],
+        &["perl"],
+        &["php"],
+        &["lua"],
+        &["deno"],
+        &["bun"],
+        &["julia"],
+        &["Rscript"],
+        &["git"],
+        &["npm", "run"],
+        &["pnpm", "run"],
+        &["yarn", "run"],
+        &["env"],
+        &["sudo"],
+        &["rm"],
+    ];
+    BANNED.iter().any(|prefix| {
+        tokens.len() >= prefix.len()
+            && tokens
+                .iter()
+                .zip(*prefix)
+                .all(|(token, expected)| token.as_str() == *expected)
+    })
+}

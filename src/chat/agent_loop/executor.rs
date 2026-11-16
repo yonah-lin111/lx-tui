@@ -22,7 +22,7 @@ use crate::chat::process::{ProcessManager, ProcessResultKind, Rtk};
 use crate::chat::sandbox::{CommandSandbox, SandboxPlan};
 use crate::chat::tools::{
     MutationRecorder, MutationRecorderFactory, ToolErrorCode, ToolExecutionResult, ToolFailure,
-    build_plan_result, parse_exec_args, parse_stdin_args, process_failure,
+    build_plan_result, parse_stdin_args, process_failure,
 };
 use crate::db::chat::ToolCallTicket;
 
@@ -370,18 +370,21 @@ impl AgentTools {
         name: &str,
         arguments_json: &str,
         call_id: &str,
+        sandbox: &crate::chat::sandbox::SandboxOverride,
     ) -> ToolExecutionResult {
         if name == "exec_command" {
-            let mut args = match parse_exec_args(arguments_json) {
-                Ok(args) => args,
+            let request = match crate::chat::tools::parse_exec_request(arguments_json) {
+                Ok(request) => request,
                 Err(failure) => return failure.into_result(Vec::new()),
             };
+            let mut args = request.args;
+            let plan = self.sandbox.with_override(sandbox);
             // rtk：外部安装优先；否则用内置过滤。包装只改实际执行的脚本，
             // 结果里的 command 仍还原为用户原始命令（卡片/上下文事实不变）。
             let prepared = self.rtk.prepare(&args.cmd);
             args.cmd = prepared.command.clone();
-            let spec = match self.sandbox.command_sandbox() {
-                CommandSandbox::Wrap => Some(self.sandbox.spec(cwd)),
+            let spec = match plan.command_sandbox() {
+                CommandSandbox::Wrap => Some(plan.spec(cwd)),
                 CommandSandbox::None => None,
                 CommandSandbox::Unavailable => {
                     return ToolFailure::new(
@@ -444,7 +447,8 @@ impl AgentTools {
 
 impl ToolExecutor for AgentTools {
     async fn execute(&self, cwd: &Path, call: &ReadyToolCall) -> ToolExecutionResult {
-        self.run(cwd, call, None).await
+        self.run(cwd, call, None, crate::chat::sandbox::SandboxOverride::None)
+            .await
     }
 
     async fn execute_tracked(
@@ -453,7 +457,27 @@ impl ToolExecutor for AgentTools {
         call: &ReadyToolCall,
         ticket: &ToolCallTicket,
     ) -> ToolExecutionResult {
-        self.run(cwd, call, Some(ticket)).await
+        self.run(
+            cwd,
+            call,
+            Some(ticket),
+            crate::chat::sandbox::SandboxOverride::None,
+        )
+        .await
+    }
+
+    async fn execute_tracked_sandboxed(
+        &self,
+        cwd: &Path,
+        call: &ReadyToolCall,
+        ticket: &ToolCallTicket,
+        sandbox: crate::chat::sandbox::SandboxOverride,
+    ) -> ToolExecutionResult {
+        self.run(cwd, call, Some(ticket), sandbox).await
+    }
+
+    fn sandbox_plan(&self) -> Option<&crate::chat::sandbox::SandboxPlan> {
+        Some(&self.sandbox)
     }
 
     async fn execute_mcp_cancellable(
@@ -498,11 +522,18 @@ impl AgentTools {
         cwd: &Path,
         call: &ReadyToolCall,
         ticket: Option<&ToolCallTicket>,
+        sandbox: crate::chat::sandbox::SandboxOverride,
     ) -> ToolExecutionResult {
         let result = match call.name.as_str() {
             "exec_command" | "write_stdin" => {
-                self.execute_process(cwd, &call.name, &call.arguments_json, &call.call_id)
-                    .await
+                self.execute_process(
+                    cwd,
+                    &call.name,
+                    &call.arguments_json,
+                    &call.call_id,
+                    &sandbox,
+                )
+                .await
             }
             name if crate::mcp::is_mcp_tool(name) => {
                 // 无取消信号的测试入口：通道永不取消，由 manager 超时兜底。

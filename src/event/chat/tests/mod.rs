@@ -483,6 +483,7 @@ fn pump(
                 AgentHostEvent::UserShellUpdates { .. } => {
                     // 由下方 handle_agent_host_event 读取真实增量并回执。
                 }
+                AgentHostEvent::ApproveSandbox { .. } => {}
                 AgentHostEvent::AskUser { .. } => {
                     // ask 的 UI 挂起与回执由后续阶段接入（本阶段事件层直接回取消）。
                 }

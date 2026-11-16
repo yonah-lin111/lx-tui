@@ -92,7 +92,7 @@ static TOOLS: [ToolSpec; 18] = [
     ToolSpec::new(
         "exec_command",
         "Run a shell command in the workspace and return its output. The command runs \
-         directly without an approval prompt. `workdir` defaults to the frozen workspace \
+         inside the session sandbox; escalation requires user approval. `workdir` defaults to the frozen workspace \
          directory and relative paths in it resolve against that directory. `tty: true` \
          runs the command in a dedicated pseudo terminal (fixed 120x40) so that it can be \
          driven with `write_stdin`; the default is a plain pipe. The call returns as soon \
@@ -491,6 +491,43 @@ fn exec_command_parameters() -> Value {
                 "minimum": 1,
                 "maximum": MAX_OUTPUT_TOKENS,
                 "description": format!("Approximate token budget for the returned output (max {MAX_OUTPUT_TOKENS}); the rest stays readable with `write_stdin`.")
+            },
+            "sandbox_permissions": {
+                "type": "string",
+                "enum": ["use_default", "with_additional_permissions", "require_escalated"],
+                "description": "Sandbox posture for this command. `require_escalated` asks the user to run it without the sandbox; `with_additional_permissions` asks for extra network or writable roots for this command only."
+            },
+            "justification": {
+                "type": "string",
+                "description": "Short user-facing reason for the escalation request; required for both request kinds and never shown back to the model."
+            },
+            "prefix_rule": {
+                "type": "array",
+                "items": {"type": "string"},
+                "description": "Optional command prefix (1-6 tokens) that may be approved for the rest of the session; only valid with `require_escalated`."
+            },
+            "additional_permissions": {
+                "type": "object",
+                "description": "Extra permissions for this command only; only valid with `with_additional_permissions`.",
+                "properties": {
+                    "network": {
+                        "type": "object",
+                        "properties": {"enabled": {"type": "boolean"}},
+                        "additionalProperties": false
+                    },
+                    "file_system": {
+                        "type": "object",
+                        "properties": {
+                            "write": {
+                                "type": "array",
+                                "items": {"type": "string"},
+                                "description": "Absolute paths to grant write access for this command."
+                            }
+                        },
+                        "additionalProperties": false
+                    }
+                },
+                "additionalProperties": false
             }
         },
         "required": ["cmd"],

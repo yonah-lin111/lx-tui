@@ -1223,6 +1223,10 @@ pub(crate) fn reject_host_request(event: AgentHostEvent) -> bool {
             let _ = reply.send(Err(HostError::Cancelled));
             true
         }
+        AgentHostEvent::ApproveSandbox { reply, .. } => {
+            let _ = reply.send(Err(crate::chat::agent_loop::HostError::Cancelled));
+            true
+        }
         AgentHostEvent::AskUser { reply, .. } => {
             let _ = reply.send(Err(HostError::Cancelled));
             true
