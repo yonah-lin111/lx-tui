@@ -265,6 +265,24 @@ fn clamp_prompt_list_scroll_clamps_all_views() {
 }
 
 #[test]
+fn clamp_prompt_list_scroll_keeps_dormant_pages_scroll() {
+    let mut state = demo_state();
+    state.prompt.resize(40, 4);
+    {
+        let panel = &mut state.workspaces[0].prompt_panel;
+        panel.editing = None;
+        panel.pages_view.scroll = 3;
+    }
+
+    clamp_prompt_list_scroll(&mut state);
+
+    assert_eq!(
+        state.workspaces[0].prompt_panel.pages_view.scroll, 3,
+        "树视图下页列表休眠，几何钳制不得把滚动清零"
+    );
+}
+
+#[test]
 fn toggle_mode_and_keyboard_navigation() {
     let mut state = demo_state();
     // 默认编辑视图下 Esc 无绑定不切树。

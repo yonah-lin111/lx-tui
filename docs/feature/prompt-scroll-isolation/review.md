@@ -32,8 +32,8 @@
 - 现象：窗口变高后树 / 页列表 / Recent 抽屉的可见行数变大、`max` 变小，但滚动偏移保留旧值并可能越界。渲染层 `effective_scroll` 会把越界值按末行显示，表现为“贴底 + 空白”；首次 ↑/↓、滚轮或翻页会从越界状态开始钳制，产生跳位。
 - 错误原因：实现删除了 `clamp_prompt_tree_scroll`（确认无生产调用方），但没有为“几何变化”补一个只钳制的调用点；`resize_panes` 只同步了编辑器尺寸与 `recent_visible`，没有回写三个列表的新上限。design §4 I2 明确把“几何变化同步”列为只钳制路径，实现漏掉了这个入口。
 - 影响：容器状态与视口不自洽；真实缩放（窗口、侧栏拖宽、Recent 开合）后的第一次导航出现跳位。属于“平时被渲染层钳制掩盖、交互时暴露”的缺陷。
-- 修复：新增 `app::update::prompt::clamp_prompt_list_scroll(state)`：树用只钳制版 `clamp_selection`，页用 `clamp_page_view`，Recent 按 `recent_page_count` 与 `recent_visible` 钳制；在 `resize_panes` 更新 prompt 尺寸与 `recent_visible` 后调用。
-- 验证：新增 `resize_panes_clamps_prompt_tree_scroll` 与 `clamp_prompt_list_scroll_clamps_all_views`。
+- 修复：新增 `app::update::prompt::clamp_prompt_list_scroll(state)`：树用只钳制版 `clamp_selection`，页仅在存在编辑绑定时用 `clamp_page_view`（树视图下页列表休眠，不能按 0 行清零），Recent 按 `recent_page_count` 与 `recent_visible` 钳制；在 `resize_panes` 更新 prompt 尺寸与 `recent_visible` 后调用。
+- 验证：新增 `resize_panes_clamps_prompt_tree_scroll`、`clamp_prompt_list_scroll_clamps_all_views`、`clamp_prompt_list_scroll_keeps_dormant_pages_scroll`。
 
 ### P2-1 设计要求的用例缺失，task.md 却标记完成（已修复）
 
@@ -68,9 +68,9 @@
 
 验证：
 
-- `cargo test --lib -q -- parked_page_switch_uses_new_document_view parked_save_receipt_preserves_scroll workspace_switch_preserves_target_tree_scroll resize_panes_clamps_prompt_tree_scroll clamp_prompt_list_scroll_clamps_all_views`：5 passed。
-- `cargo test --lib -q app::update::prompt`：136 passed。
-- `cargo test --lib`：5659 passed，0 failed，6 ignored。
+- `cargo test --lib -q -- parked_page_switch_uses_new_document_view parked_save_receipt_preserves_scroll workspace_switch_preserves_target_tree_scroll resize_panes_clamps_prompt_tree_scroll clamp_prompt_list_scroll_clamps_all_views`：5 passed；`clamp_prompt_list_scroll_keeps_dormant_pages_scroll` 单独通过。
+- `cargo test --lib -q app::update::prompt`：137 passed。
+- `cargo test --lib`：5660 passed，0 failed，6 ignored。
 - `cargo clippy --all-targets -- -D warnings`、`cargo fmt`：通过。
 - 全量 `cargo test`（含集成测试）：见提交前验证记录。
 

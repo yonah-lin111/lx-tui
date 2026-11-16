@@ -240,11 +240,14 @@ pub(crate) fn clamp_prompt_list_scroll(state: &mut AppState) {
     };
     let panel = &mut workspace.prompt_panel;
     panel.clamp_selection(visible);
-    let page_len = panel
+    // 树视图下没有编辑绑定（editing = None），页列表处于休眠态；
+    // 此时不能按 0 行钳制，否则会把用户上次的页列表滚动清零。
+    if let Some(page_len) = panel
         .editing_pages()
         .map(|(pages, active)| page_rows(pages, active, panel.pages_view.search.text()).len())
-        .unwrap_or(0);
-    clamp_page_view(panel, page_len, visible);
+    {
+        clamp_page_view(panel, page_len, visible);
+    }
     if panel.recent_open {
         let recent_len = recent_page_count(panel).min(MAX_RECENT_PAGES);
         panel.recent_scroll = panel

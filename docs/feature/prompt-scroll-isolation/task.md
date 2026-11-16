@@ -133,7 +133,7 @@
 
 - [x] 新增 `src/app/update/prompt/mod.rs::clamp_prompt_list_scroll(state)`：
   - 树：只钳制版 `PromptPanel::clamp_selection`
-  - 页：`clamp_page_view`
+  - 页：仅在存在编辑绑定时 `clamp_page_view`；树视图下页列表休眠，保留上次滚动
   - Recent：`recent_page_count.min(MAX_RECENT_PAGES)` 与 `recent_visible` 钳制 `recent_scroll`
 - [x] `src/app/update/pane.rs::resize_panes` 在更新 prompt 尺寸与 `recent_visible` 后调用；不 reveal 选中项
 
@@ -167,6 +167,7 @@
   - `cargo test --lib parked_save_receipt_preserves_scroll`
   - `cargo test --lib resize_panes_clamps_prompt_tree_scroll`
   - `cargo test --lib clamp_prompt_list_scroll_clamps_all_views`
+  - `cargo test --lib clamp_prompt_list_scroll_keeps_dormant_pages_scroll`
   - `cargo test --lib recent_auto_sync_does_not_scroll`
   - `cargo test --lib workspace_item_click_keeps_prompt_scroll`
 - [x] 受影响模块回归：

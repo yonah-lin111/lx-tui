@@ -334,8 +334,9 @@ panel.recent_scroll = panel.recent_scroll.min(max);
 
 - `src/app/update/pane.rs::resize_panes` 在更新 `state.prompt` 尺寸与 `recent_visible` 后调用
   `src/app/update/prompt/mod.rs::clamp_prompt_list_scroll`；
-- 该函数只做钳制：树走只钳制版 `PromptPanel::clamp_selection`，页走 `clamp_page_view`，
-  Recent 按 `recent_page_count.min(MAX_RECENT_PAGES) - recent_visible` 钳制 `recent_scroll`；
+- 该函数只做钳制：树走只钳制版 `PromptPanel::clamp_selection`，页在存在编辑绑定时走 `clamp_page_view`
+  （树视图下页列表休眠，保留上次滚动，不按 0 行清零），Recent 按
+  `recent_page_count.min(MAX_RECENT_PAGES) - recent_visible` 钳制 `recent_scroll`；
 - 不 reveal 选中项；越界偏移清理后，下一次 ↑/↓、滚轮或翻页不会先跳回上限。
 
 ### 5.7 左侧栏
