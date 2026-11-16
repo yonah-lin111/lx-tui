@@ -22,7 +22,6 @@ pub(crate) fn ensure_writable(ctx: &ToolContext, targets: &[&Path]) -> Result<()
     }
     for target in targets {
         let resolved = roots::resolve_write_target(target).ok_or_else(|| outside(target))?;
-        ensure_path(ctx, target)?;
         ensure_path(ctx, &resolved)?;
     }
     Ok(())
@@ -43,8 +42,9 @@ pub(crate) fn ensure_writable_resolved(
             "sandbox mode \"read-only\" blocks file writes; switch mode with /permission or ask the user to change it.",
         ));
     }
-    ensure_path(ctx, logical)?;
-    ensure_path(ctx, resolved)
+    let _ = logical;
+    let resolved = roots::resolve_write_target(resolved).ok_or_else(|| outside(resolved))?;
+    ensure_path(ctx, &resolved)
 }
 
 fn ensure_path(ctx: &ToolContext, path: &Path) -> Result<(), ToolFailure> {

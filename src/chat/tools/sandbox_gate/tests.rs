@@ -112,3 +112,19 @@ fn write_tool_respects_read_only_mode() {
     assert!(!target.exists());
     let _ = std::fs::remove_dir_all(dir);
 }
+
+#[test]
+fn write_tool_allows_a_new_file_inside_the_workspace() {
+    let dir = temp_dir("write-allow");
+    let ctx = ctx(&dir, SandboxMode::WorkspaceWrite);
+    let target = dir.join("notes").join("new.txt");
+    std::fs::create_dir_all(dir.join("notes")).expect("parent");
+    let arguments = format!(r#"{{"path":"{}","content":"x"}}"#, target.display());
+    let result = crate::chat::tools::execute(&ctx, "write", &arguments);
+    assert!(
+        matches!(result, ToolExecutionResult::Write { .. }),
+        "result: {result:?}"
+    );
+    assert!(target.exists());
+    let _ = std::fs::remove_dir_all(dir);
+}

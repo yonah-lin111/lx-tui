@@ -5634,7 +5634,7 @@ fn lx_slash_fuzzy_matches_subsequence_and_aliases() {
         .collect();
     assert_eq!(
         names,
-        vec!["resume", "rewind", "recap", "rename", "fork"],
+        vec!["resume", "rewind", "recap", "rename", "fork", "permission"],
         "前缀命中 /resume、/rewind、/recap 与 /rename；/fork 仅子序列命中排后"
     );
     // 别名：/clear → new，/session → resume，/title → rename。
