@@ -1,6 +1,6 @@
 # lx 消息列表折叠命中区收窄为文字：执行任务清单
 
-> 状态：**已实现并通过 review 修复与自动化验证，待用户手工验收**
+> 状态：**已合并到 `dev`（自动化验证通过），待用户手工验收**
 >
 > 关联文档：
 > - 设计方案：`docs/feature/lx-fold-hit-text-only/design.md`
@@ -246,3 +246,13 @@
   `cards` 3 项，其余测试套件均通过）。
 - Review 详情与残余风险：见 `review.md`。
 - 手工验收：待用户运行 `cargo run`，按设计文档 9.5 的 9 条步骤确认。
+
+## 合并记录
+
+- `dev` 在 feature 分支期间前进了 prompt-scroll 相关改动；合并前在 feature 分支
+  `git merge dev`（merge commit `19a5adf7`），无冲突。
+- 合并后在 feature 分支重跑：`cargo fmt --check`、`cargo clippy --all-targets -- -D warnings`、
+  `cargo test` 全量通过（5687 passed，0 failed，6 ignored）。
+- 主工作区 `dev` 以 `--ff-only` 快进到 `19a5adf7`，随后提交本文档更新。
+- worktree `.worktrees/lx-fold-hit-text-only`、分支 `fix/fold-hit-text-only` 与隔离库
+  `~/.lx-t-dev/db/worktrees/lx-fold-hit-text-only-8391afd2/` 已移除。

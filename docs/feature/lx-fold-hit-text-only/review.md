@@ -1,6 +1,6 @@
 # lx 消息列表折叠命中区收窄为文字：代码 Review
 
-> 状态：**Review 完成；P1/P2 已修复并通过自动化验证，待用户手工验收**
+> 状态：**Review 完成；P1/P2 已修复并通过自动化验证，已合并到 `dev`，待用户手工验收**
 >
 > 关联文档：
 > - 设计方案：`docs/feature/lx-fold-hit-text-only/design.md`
@@ -8,7 +8,8 @@
 >
 > 审查方式：codegraph + codebase-memory 结构检索；三个只读子代理分别审查核心命中、
 > 快照/系统块、工具卡；主 agent 复现并修复。审查基线为分支创建时的 7 个提交
-> （基于 `b5d3eff4`）；review 期间 `dev` 已前进，合并前必须同步 `dev` 并重跑验证。
+> （基于 `b5d3eff4`）。review 期间 `dev` 前进（prompt-scroll 合并），已先
+> `git merge dev`（`19a5adf7`，无冲突）并重跑全量验证后再合并。
 
 ---
 
