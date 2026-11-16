@@ -269,6 +269,89 @@ fn mouse_motion_tracks_workspace_and_tab_hover() {
 }
 
 #[test]
+fn workspace_item_click_keeps_prompt_scroll() {
+    let config = Config::default();
+    let mut state = demo_terminal();
+    crate::app::update::create_workspace(&mut state);
+    crate::app::update::switch_workspace(&mut state, 0);
+    assert_eq!(state.active_workspace, 0, "前提：回到工作区 0");
+
+    let screen = Rect::new(0, 0, 120, 30);
+    let geo = geometry(&state, &config, screen);
+    let panel = rect_of(&geo.rects, state.prompt.id());
+    let split = crate::app::prompt::geometry::prompt_body_split(panel, false, 0);
+    state.prompt.resize(split.main.width, split.main.height);
+    let content = (0..50)
+        .map(|index| format!("line {index}: content for workspace click"))
+        .collect::<Vec<_>>()
+        .join("\n");
+    state.prompt.set_text(&content);
+    state.prompt.scroll_to(0);
+    let before = crate::ui::right_panel::prompt::frame::prompt_scrollbar(&geo.view, &state)
+        .map(|bar| bar.thumb)
+        .expect("长正文显示滚动条");
+
+    let mut sessions = HashMap::new();
+    let mut dirty = false;
+    let target_slot = state
+        .workspace_rows()
+        .iter()
+        .position(|row| row.index == 1)
+        .expect("工作区 1 在列表中");
+    let sections =
+        ui::layout::sidebar_sections(geo.view.left_panel, false).expect("sections visible");
+    handle_terminal_event(
+        mouse(
+            MouseEventKind::Down(MouseButton::Left),
+            sections.workspaces.x + 2,
+            sections.workspaces.y + target_slot as u16,
+        ),
+        &mut state,
+        &mut sessions,
+        &geo,
+        &config,
+        &mut ui::RenderCache::default(),
+        &mut dirty,
+    );
+    assert_eq!(state.active_workspace, 1, "点击工作区条目完成切换");
+
+    // 事件循环在下一帧发现 prompt 草稿 id 变化并重排尺寸。
+    let geo1 = geometry(&state, &config, screen);
+    update::resize_panes(&mut state, &geo1.rects);
+
+    let back_slot = state
+        .workspace_rows()
+        .iter()
+        .position(|row| row.index == 0)
+        .expect("工作区 0 在列表中");
+    let sections =
+        ui::layout::sidebar_sections(geo1.view.left_panel, false).expect("sections visible");
+    handle_terminal_event(
+        mouse(
+            MouseEventKind::Down(MouseButton::Left),
+            sections.workspaces.x + 2,
+            sections.workspaces.y + back_slot as u16,
+        ),
+        &mut state,
+        &mut sessions,
+        &geo1,
+        &config,
+        &mut ui::RenderCache::default(),
+        &mut dirty,
+    );
+    assert_eq!(state.active_workspace, 0, "点击切回工作区 0");
+
+    let geo0 = geometry(&state, &config, screen);
+    update::resize_panes(&mut state, &geo0.rects);
+
+    assert_eq!(state.prompt.scroll(), 0, "切换工作区不得改变编辑器视口");
+    let after = crate::ui::right_panel::prompt::frame::prompt_scrollbar(&geo0.view, &state)
+        .map(|bar| bar.thumb)
+        .expect("长正文显示滚动条");
+    assert_eq!(after, before, "滚动条 thumb 位置保持不变");
+}
+
+#[test]
 fn wheel_over_workspace_list_rescrolls_hover() {
     let config = Config::default();
     let mut state = demo_terminal();

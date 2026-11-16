@@ -2685,6 +2685,36 @@ fn show_prompt_tree_preserves_scroll_without_revealing_selection() {
 }
 
 #[test]
+fn workspace_switch_preserves_editor_scroll() {
+    let mut state = demo_state();
+    assert!(edit_prompt_item(&mut state, 0, 10));
+    let rect = ratatui::layout::Rect::new(0, 0, 40, 12);
+    let split = crate::app::prompt::geometry::prompt_body_split(rect, false, 0);
+    state.prompt.resize(split.main.width, split.main.height);
+    let content = (0..50)
+        .map(|index| format!("line {index}: content for workspace switch"))
+        .collect::<Vec<_>>()
+        .join("\n");
+    state.prompt.set_text(&content);
+    state.prompt.scroll_to(0);
+    assert!(state.prompt.cursor_cell().is_none(), "前提：光标在视口外");
+
+    crate::app::update::create_workspace(&mut state);
+    let parked_id = state.prompt.id();
+    crate::app::update::resize_panes(&mut state, &[(parked_id, rect)]);
+    crate::app::update::switch_workspace(&mut state, 0);
+    let restored_id = state.prompt.id();
+    crate::app::update::resize_panes(&mut state, &[(restored_id, rect)]);
+
+    assert_eq!(
+        state.prompt.scroll(),
+        0,
+        "切换工作区后草稿视口保持离开时的位置"
+    );
+    assert!(state.prompt.cursor_cell().is_none());
+}
+
+#[test]
 fn switching_to_different_item_in_tree_does_not_inherit_previous_scroll() {
     let mut state = demo_state();
     let content = (0..50)
