@@ -5,7 +5,7 @@ use crate::app::state::AssistantStepView;
 use super::super::cache::{
     BlockKey, GROUP_HEADER_SLOT_BASE, tool_body_block_signature, tool_group_header_signature,
 };
-use super::super::paint::{BlockPaint, BlockSource, GroupSlot};
+use super::super::paint::{self, BlockPaint, BlockSource, GroupSlot};
 use super::super::source::HistorySource;
 use super::super::{CardCols, CardKind, folds_of, tool};
 use super::{CardRegion, SnapBlock, legacy};
@@ -164,15 +164,19 @@ impl super::Builder<'_> {
                     block_start,
                 );
             }
-            if matches!(
-                step,
-                AssistantStepView::Part { part, .. }
-                    if part.kind == crate::chat::events::PartKind::Reasoning
-            ) {
+            if let AssistantStepView::Part { part, .. } = step
+                && part.kind == crate::chat::events::PartKind::Reasoning
+            {
                 let expanded = source.chat.reasoning_expanded(message_index, step_index);
+                let streaming = source.chat.reasoning_streaming(message_index, step_index);
                 self.snapshot
                     .thinking
                     .push((message_index, step_index, (block_start, 1)));
+                let mut cols = Vec::with_capacity(block.rows);
+                cols.push(paint::thinking_header_cols(part, streaming, self.width));
+                if let BlockPaint::Thinking { body } = block.paint.as_ref() {
+                    cols.extend(paint::thinking_body_cols(body, self.width));
+                }
                 self.snapshot.cards.push(CardRegion {
                     kind: CardKind::Thinking {
                         message_index,
@@ -181,7 +185,7 @@ impl super::Builder<'_> {
                     },
                     card_start: block_start,
                     card_rows: block.rows,
-                    card_cols: CardCols::Full,
+                    card_cols: CardCols::Text(cols),
                     clickable: true,
                 });
             }

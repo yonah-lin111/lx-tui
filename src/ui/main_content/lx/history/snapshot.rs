@@ -21,6 +21,7 @@ use super::cache::{
 };
 use super::paint::{AssistantRefLine, BlockPaint, BlockSource, CardSpan, UserRefLine};
 use super::source::{HistorySource, is_legacy_report_row};
+use super::text_cols;
 use super::timeline::{TimelineEntry, timeline};
 use super::{
     CardCols, CardKind, Folds, MessageRows, compact, folds_of, model_switch, notice, recap,
@@ -729,6 +730,14 @@ impl Builder<'_> {
             }
             if fold_hint.is_some() {
                 let hint_offset = text_lines.len();
+                let hint_cols = fold_hint.as_deref().and_then(text_cols::line_cols).map(
+                    |(start_col, end_col)| {
+                        (
+                            super::USER_INDENT.saturating_add(start_col).min(self.width),
+                            super::USER_INDENT.saturating_add(end_col).min(self.width),
+                        )
+                    },
+                );
                 self.snapshot.cards.push(CardRegion {
                     kind: CardKind::UserMessage {
                         message_id: message.id.clone(),
@@ -736,7 +745,7 @@ impl Builder<'_> {
                     },
                     card_start: start.saturating_add(hint_offset),
                     card_rows: 1,
-                    card_cols: CardCols::Full,
+                    card_cols: CardCols::Text(vec![hint_cols]),
                     clickable: true,
                 });
             }

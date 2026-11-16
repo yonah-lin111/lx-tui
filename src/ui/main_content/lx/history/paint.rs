@@ -474,6 +474,62 @@ fn thinking_duration(part: &crate::app::state::ChatPartView) -> Option<i64> {
     Some(ended.saturating_sub(started).max(0))
 }
 
+/// 思考头部文案：生成中 `Thinking`；完成 `Thought · 6.3s`（无耗时不加分隔）。
+pub(crate) fn thinking_header_label(
+    part: &crate::app::state::ChatPartView,
+    streaming: bool,
+) -> String {
+    if streaming {
+        crate::ui::text::LX_CHAT_THINKING_LABEL.to_string()
+    } else {
+        let mut label = String::from(crate::ui::text::LX_CHAT_THOUGHT_LABEL);
+        if let Some(duration) = thinking_duration(part) {
+            label.push_str(super::THINKING_DURATION_SEP);
+            label.push_str(&super::format_duration(duration));
+        }
+        label
+    }
+}
+
+/// 思考头部文字列区间：标记在 0 列，标签从 [`STEP_GUTTER`] 列开始。
+pub(crate) fn thinking_header_cols(
+    part: &crate::app::state::ChatPartView,
+    streaming: bool,
+    width: u16,
+) -> Option<(u16, u16)> {
+    if width == 0 {
+        return None;
+    }
+    let label = thinking_header_label(part, streaming);
+    let end = STEP_GUTTER
+        .saturating_add(
+            u16::try_from(unicode_width::UnicodeWidthStr::width(label.as_str()))
+                .unwrap_or(u16::MAX),
+        )
+        .min(width);
+    (end > 0).then_some((0, end))
+}
+
+/// 展开的思考正文逐行文字列区间（相对内容区左缘）。
+pub(crate) fn thinking_body_cols(body: &[MdLine], width: u16) -> Vec<Option<(u16, u16)>> {
+    let base = super::thinking_body_indent(width);
+    let tree = super::thinking_tree(width);
+    body.iter()
+        .enumerate()
+        .map(|(index, line)| {
+            let (start, end) = super::text_cols::md_line_cols(line)?;
+            // 首个正文行在树模式下从 0 列画 `  └─`，因此区间起点覆盖连接符。
+            let start = if tree && index == 0 {
+                0
+            } else {
+                base.saturating_add(start)
+            };
+            let end = base.saturating_add(end).min(width);
+            (end > start).then_some((start, end))
+        })
+        .collect()
+}
+
 /// 消息与步骤 part（正文 / thinking）。
 fn step_of(
     history: HistorySource<'_>,
@@ -884,22 +940,8 @@ fn draw_thinking(
         );
         let x = rect.x.saturating_add(STEP_GUTTER);
         let limit = rect.right();
-        if streaming {
-            grid.put_clipped(
-                x,
-                y,
-                crate::ui::text::LX_CHAT_THINKING_LABEL,
-                header_style,
-                limit.saturating_sub(x),
-            );
-        } else {
-            let mut label = String::from(crate::ui::text::LX_CHAT_THOUGHT_LABEL);
-            if let Some(duration) = thinking_duration(part) {
-                label.push_str(super::THINKING_DURATION_SEP);
-                label.push_str(&super::format_duration(duration));
-            }
-            grid.put_clipped(x, y, &label, header_style, limit.saturating_sub(x));
-        }
+        let label = thinking_header_label(part, streaming);
+        grid.put_clipped(x, y, &label, header_style, limit.saturating_sub(x));
     }
     let tree = super::thinking_tree(rect.width);
     let body_indent = super::thinking_body_indent(rect.width);
