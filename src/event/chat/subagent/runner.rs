@@ -412,16 +412,25 @@ pub(super) fn send_input(
     let is_resumed = streams.resumed_subagents.contains(target);
     // 用户主动停止的 agent：允许 `send_input` 唤醒（用户明确要求继续），
     // 但系统提示禁止模型自行恢复。
-    let is_user_stopped = streams.user_stopped.contains(target);
-    if !is_running && !is_resumed && !is_user_stopped {
+    let was_user_stopped = streams.user_stopped.remove(target);
+    if !is_running && !is_resumed && !was_user_stopped {
         return Err(NOT_ACTIVE_CODE.to_string());
     }
-    if is_user_stopped {
-        database
-            .recover_subagent_for_resume(&workspace, &owner_session, target)
-            .map_err(|err| err.code().to_string())?;
-        streams.user_stopped.remove(target);
-        streams.resumed_subagents.insert(target.to_string());
+    if was_user_stopped {
+        // 用户明确要求继续：解除 handle 上的停止标记，排队输入照常生效。
+        if let Some(handle) = streams
+            .subagents
+            .values_mut()
+            .find(|handle| handle.agent_id == target)
+        {
+            handle.stopped_by_user = false;
+        }
+        if !is_running {
+            database
+                .recover_subagent_for_resume(&workspace, &owner_session, target)
+                .map_err(|err| err.code().to_string())?;
+            streams.resumed_subagents.insert(target.to_string());
+        }
     }
     // `trigger_turn=false` 只入队：`interrupt` 在解析层已禁止与它同传，且不解除 interrupt 暂停态。
     let interrupt = interrupt && trigger_turn;
@@ -517,7 +526,7 @@ pub(super) fn send_input(
     }
 
     if is_running {
-        if (interrupt || was_cancelling_from_interrupt) && enqueued.created {
+        if (interrupt || was_cancelling_from_interrupt || was_user_stopped) && enqueued.created {
             streams.interrupted_subagents.insert(target.to_string());
             if let Some(handle) = streams.subagents.values().find(|h| h.agent_id == target) {
                 let _ = handle.cancel.send(true);
@@ -631,6 +640,13 @@ pub(super) fn resume(
 
     // 已在运行中：幂等返回 running，绝不启动第二个并发轮次。
     if is_running {
+        if let Some(handle) = streams
+            .subagents
+            .values_mut()
+            .find(|handle| handle.agent_id == agent_id)
+        {
+            handle.stopped_by_user = false;
+        }
         streams.resumed_subagents.insert(agent_id.to_string());
         return Ok(SubagentOutcome::Resumed {
             agent_id: agent_id.to_string(),

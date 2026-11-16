@@ -496,7 +496,88 @@ pub fn submit_current(state: &mut AppState, pane: PaneId) -> bool {
             submit_id,
             draft_revision: revision,
             text: text_value,
+            report_to_main_input: false,
             targets,
+            default_model: crate::db::chat::ModelSnapshot {
+                provider: frozen.provider.clone(),
+                model: frozen.model.clone(),
+                variant: frozen.variant.clone(),
+            },
+            default_variant_params: frozen.variant_params.clone(),
+            idle_timeout_ms: frozen.idle_timeout_ms,
+        }))));
+    true
+}
+
+/// 面板 `/report`：按当前线程目标生成一轮合并报告（正文只填主输入框）。
+pub(crate) fn submit_report(state: &mut AppState, pane: PaneId, note: &str) -> bool {
+    let Some(session_id) = state
+        .pane_anywhere(pane)
+        .and_then(|target| target.lx.chat.session_id.clone())
+    else {
+        return false;
+    };
+    let Some((workspace, cwd)) = state
+        .chat_session_key_for_pane(pane)
+        .or_else(|| state.workspace_cwd_for_pane(pane))
+        .map(|workspace| {
+            let cwd = state
+                .workspace_cwd_for_pane(pane)
+                .unwrap_or_else(|| workspace.clone());
+            (workspace, cwd)
+        })
+    else {
+        return false;
+    };
+    let Some((qa_id, thread_id, target_choices)) = state.pane_anywhere(pane).and_then(|target| {
+        let qa_id = target.lx.btw.active.clone()?;
+        let thread = target.lx.btw.active_thread()?;
+        let thread_id = thread.thread_id.clone()?;
+        let (previous, _) = previous_targets(&target.lx);
+        Some((qa_id, thread_id, previous))
+    }) else {
+        return false;
+    };
+    let Some(selection) = state
+        .pane_anywhere(pane)
+        .and_then(|target| target.lx.chat.effective_selection(&state.models))
+    else {
+        return false;
+    };
+    let Some(frozen) = crate::app::state::FrozenModel::resolve(&state.models, &selection) else {
+        return false;
+    };
+    let Some(thread) = state
+        .pane_mut_anywhere(pane)
+        .and_then(|target| target.lx.btw.active_thread_mut())
+    else {
+        return false;
+    };
+    thread.submit_seq = thread.submit_seq.saturating_add(1);
+    let submit_id = format!(
+        "btw-report-{}-{}-{}",
+        crate::db::now_ms(),
+        pane.raw(),
+        thread.submit_seq
+    );
+    // 报告也走正常 Accepted 回执：绑定 submit_id 才能把 user 消息投影进面板。
+    thread.pending_submit = Some((submit_id.clone(), thread.composer.revision()));
+    thread.pending_recipients = target_choices.len().max(1);
+    state
+        .effects
+        .push(Effect::Btw(BtwEffect::Submit(Box::new(BtwSubmission {
+            pane,
+            parent_session_id: session_id,
+            qa_id,
+            workspace,
+            cwd,
+            thread_id: Some(thread_id),
+            submit_id,
+            // 报告不是草稿提交：不动 composer 的修订号。
+            draft_revision: 0,
+            text: crate::chat::agent::report_request_message(note),
+            report_to_main_input: true,
+            targets: target_choices,
             default_model: crate::db::chat::ModelSnapshot {
                 provider: frozen.provider.clone(),
                 model: frozen.model.clone(),

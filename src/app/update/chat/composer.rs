@@ -176,6 +176,7 @@ pub(crate) fn apply_enter(state: &mut AppState, pane: PaneId) -> bool {
             super::detail_rewind::apply_confirm(state, pane, &panel)
         }
         SlashPanel::Rewind(_) => super::rewind::apply_enter(state, pane),
+        SlashPanel::Report(panel) => super::detail_report::apply_confirm(state, pane, &panel),
         _ => false,
     }
 }

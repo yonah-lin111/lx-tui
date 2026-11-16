@@ -52,7 +52,47 @@ fn latest_undoable_turn_requires_human_panel_follow_up() {
     cleanup(fixture.root);
 }
 
-/// spawn 初始任务、父 agent `send_input` 与 `/report` 轮都不可撤回。
+/// 新版面板 `/report` 轮（`notify_parent=0`）是可撤回的普通私有轮次。
+#[test]
+fn panel_report_turn_is_undoable() {
+    let fixture = Fixture::new("undo-panel-report");
+    let parent = fixture.parent();
+    let committed = fixture.spawn(&parent, AgentRole::Explorer, "task");
+    fixture.finish_child(&committed, complete(), None);
+    let input = fixture
+        .database
+        .enqueue_input(
+            fixture.workspace(),
+            &parent,
+            &committed.agent_id,
+            "panel-report-1",
+            None,
+            None,
+            &text_item("[Report for main agent]\nstatus"),
+            false,
+            false,
+        )
+        .expect("enqueue report");
+    let claimed = fixture
+        .database
+        .claim_input(
+            fixture.workspace(),
+            &parent,
+            &committed.agent_id,
+            &input.submission_id,
+            &Fixture::model(),
+        )
+        .expect("claim report");
+    let turn = fixture
+        .database
+        .latest_undoable_private_turn(fixture.workspace(), &committed.child_session_id)
+        .expect("query")
+        .expect("panel report is undoable");
+    assert_eq!(turn.user_message_id, claimed.child_user_message_id);
+    cleanup(fixture.root);
+}
+
+/// spawn 初始任务、父 agent `send_input` 与旧版 `/report` 轮都不可撤回。
 #[test]
 fn spawn_input_and_parent_send_input_and_report_turns_are_not_undoable() {
     let fixture = Fixture::new("undo-nonhuman");

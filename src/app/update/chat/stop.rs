@@ -10,12 +10,13 @@ use crate::ui::text;
 
 /// 执行停止面板当前高亮动作；面板未打开或动作失效时只关闭面板。
 pub fn apply_enter(state: &mut AppState, pane: PaneId) -> bool {
-    let Some(panel) = state.pane_anywhere(pane).and_then(|target| {
-        match target.lx.slash.as_ref() {
+    let Some(panel) = state
+        .pane_anywhere(pane)
+        .and_then(|target| match target.lx.slash.as_ref() {
             Some(SlashPanel::Stop(panel)) => Some((**panel).clone()),
             _ => None,
-        }
-    }) else {
+        })
+    else {
         return false;
     };
 

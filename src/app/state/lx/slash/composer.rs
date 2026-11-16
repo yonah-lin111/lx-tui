@@ -25,7 +25,7 @@ impl DetailCommand {
     /// Agents 详情命令（固定顺序）。
     pub const AGENT: [Self; 3] = [Self::Rewind, Self::Compact, Self::Report];
     /// BTW 详情命令（固定顺序）。
-    pub const BTW: [Self; 3] = [Self::Rewind, Self::Compact, Self::New];
+    pub const BTW: [Self; 4] = [Self::Rewind, Self::Compact, Self::Report, Self::New];
 
     /// 命令名（不含 `/`）。
     pub const fn name(self) -> &'static str {
@@ -61,7 +61,7 @@ impl DetailCommand {
         match self {
             Self::Rewind => "Rewind the last turn or a compact checkpoint",
             Self::Compact => "Compact this conversation's context",
-            Self::Report => "Report progress to the parent agent",
+            Self::Report => "Fill the main agent input with a report",
             Self::New => "Start a fresh side thread",
         }
     }
@@ -136,7 +136,7 @@ pub fn parse(input: &str, context: DetailContext) -> Option<ParsedDetailCommand<
     let command = match (context, word) {
         (_, "rewind") | (_, "undo") => DetailCommand::Rewind,
         (_, "compact") => DetailCommand::Compact,
-        (DetailContext::Agent, "report") => DetailCommand::Report,
+        (DetailContext::Agent | DetailContext::Btw, "report") => DetailCommand::Report,
         (DetailContext::Btw, "new")
         | (DetailContext::Btw, "clear")
         | (DetailContext::Btw, "reset") => DetailCommand::New,

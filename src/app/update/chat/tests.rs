@@ -10,6 +10,7 @@ mod history;
 mod model_switch;
 mod process_cards;
 mod prompt_history;
+mod report_fill;
 mod rewind;
 mod session;
 mod slash_panels;

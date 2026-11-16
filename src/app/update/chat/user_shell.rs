@@ -483,11 +483,7 @@ pub fn toggle_shell_section(
 
 /// 双 Esc：停止该窗格在途的本地命令并清空队列。
 pub fn cancel_user_shells(state: &mut AppState, pane: PaneId) -> bool {
-    cancel_user_shells_with_scope(
-        state,
-        pane,
-        crate::app::effects::UserShellStopScope::All,
-    )
+    cancel_user_shells_with_scope(state, pane, crate::app::effects::UserShellStopScope::All)
 }
 
 /// 按范围停止用户 shell：`ShellsOnly` 保留普通聊天排队项。

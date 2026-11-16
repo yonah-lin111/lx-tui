@@ -1,7 +1,7 @@
 //! 停止面板与双 Esc 待命测试。
 
-use super::*;
 use super::super::stop as stop_panel;
+use super::*;
 use crate::app::state::{
     QueuedSubmission, SlashPanel, StopAction, StopAvailability, StopPanel, SubagentRun,
 };
@@ -119,17 +119,17 @@ fn stop_all_emits_main_subagent_and_shell_effects() {
     let (mut state, pane, _key) = streaming_state("sess-stop-all");
     {
         let target = state.pane_mut_anywhere(pane).unwrap();
+        target.lx.agents.runs.push(agent_run("curie", true, 0));
         target
             .lx
-            .agents
-            .runs
-            .push(agent_run("curie", true, 0));
-        target.lx.chat.pending_shells.push(crate::app::state::PendingShell {
-            generation: 1,
-            revision: 0,
-            command: "sleep 1".into(),
-            session: Some("sess-stop-all".into()),
-        });
+            .chat
+            .pending_shells
+            .push(crate::app::state::PendingShell {
+                generation: 1,
+                revision: 0,
+                command: "sleep 1".into(),
+                session: Some("sess-stop-all".into()),
+            });
     }
     open_stop_panel(
         &mut state,
@@ -161,12 +161,7 @@ fn stop_all_emits_main_subagent_and_shell_effects() {
         }
     )));
     assert!(
-        state
-            .pane_anywhere(pane)
-            .unwrap()
-            .lx
-            .slash
-            .is_none(),
+        state.pane_anywhere(pane).unwrap().lx.slash.is_none(),
         "执行后关闭面板"
     );
 }
@@ -177,25 +172,23 @@ fn stop_shells_keeps_chat_queue() {
     let pane = focus_pane(&state);
     {
         let target = state.pane_mut_anywhere(pane).unwrap();
-        target
-            .lx
-            .chat
-            .queue
-            .push(QueuedSubmission::Chat { draft: "keep".into() });
-        target
-            .lx
-            .chat
-            .queue
-            .push(QueuedSubmission::Shell {
-                full_text: "drop".into(),
-                cwd: "/tmp".into(),
-            });
-        target.lx.chat.pending_shells.push(crate::app::state::PendingShell {
-            generation: 1,
-            revision: 0,
-            command: "drop".into(),
-            session: None,
+        target.lx.chat.queue.push(QueuedSubmission::Chat {
+            draft: "keep".into(),
         });
+        target.lx.chat.queue.push(QueuedSubmission::Shell {
+            full_text: "drop".into(),
+            cwd: "/tmp".into(),
+        });
+        target
+            .lx
+            .chat
+            .pending_shells
+            .push(crate::app::state::PendingShell {
+                generation: 1,
+                revision: 0,
+                command: "drop".into(),
+                session: None,
+            });
     }
     open_stop_panel(
         &mut state,
@@ -231,11 +224,11 @@ fn stop_main_only_stops_response() {
             ..StopAvailability::default()
         },
     );
-    state.pane_mut_anywhere(pane).unwrap().lx.slash.as_mut().map(|panel| {
-        if let SlashPanel::Stop(panel) = panel {
-            panel.window.active = 1;
-        }
-    });
+    if let Some(SlashPanel::Stop(panel)) =
+        state.pane_mut_anywhere(pane).unwrap().lx.slash.as_mut()
+    {
+        panel.window.active = 1;
+    }
     state.effects.clear();
     assert!(stop_panel::apply_enter(&mut state, pane));
     assert!(
@@ -244,12 +237,10 @@ fn stop_main_only_stops_response() {
             .iter()
             .any(|effect| matches!(effect, crate::app::effects::Effect::CancelChatStream { .. }))
     );
-    assert!(
-        !state
-            .effects
-            .iter()
-            .any(|effect| matches!(effect, crate::app::effects::Effect::StopSubagentsByUser { .. }))
-    );
+    assert!(!state.effects.iter().any(|effect| matches!(
+        effect,
+        crate::app::effects::Effect::StopSubagentsByUser { .. }
+    )));
 }
 
 #[test]

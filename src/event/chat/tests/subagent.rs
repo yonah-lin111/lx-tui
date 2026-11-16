@@ -885,6 +885,76 @@ async fn selected_cancel_only_stops_the_target_child() {
 }
 
 #[tokio::test]
+async fn panel_report_turn_fills_main_input_without_parent_delivery() {
+    let (fixture, mut state, key, persistence, mut streams, parent) = fixture_with_parent();
+    let agent_id = spawn_explorer(&mut state, &mut streams, &persistence, &key, "report me").await;
+    let handle = streams
+        .subagents
+        .values_mut()
+        .find(|handle| handle.agent_id == agent_id)
+        .expect("handle");
+    handle.report_to_input = true;
+    handle.notify_parent = false;
+    handle
+        .chat
+        .messages
+        .push(crate::app::state::ChatMessageView {
+            id: "report-assistant".into(),
+            sequence: 99,
+            kind: "chat".into(),
+            role: "assistant".into(),
+            status: "complete".into(),
+            turn_index: 0,
+            shell: None,
+            steps: vec![crate::app::state::AssistantStepView::Part {
+                position: 0,
+                part: crate::app::state::ChatPartView {
+                    kind: crate::chat::events::PartKind::Text,
+                    content: "report body for main input".into(),
+                    provider_metadata_json: None,
+                    started_at_ms: None,
+                    ended_at_ms: None,
+                    completed_at_ms: None,
+                },
+            }],
+            model_label: None,
+            error_code: None,
+            input_tokens: None,
+            output_tokens: None,
+            cache_read_tokens: None,
+            duration_ms: None,
+            reports: Vec::new(),
+            attachments: Vec::new(),
+        });
+    let child_session = handle.child_session_id.clone();
+    crate::event::chat::subagent::finish_subagent(
+        &mut state,
+        &mut streams,
+        &persistence,
+        RequestKey {
+            pane: key.pane,
+            session: child_session,
+            generation: key.generation,
+        },
+        crate::chat::events::StopReason::Complete,
+        crate::db::chat::Usage::default(),
+    );
+    let pending = persistence
+        .database()
+        .expect("db")
+        .pending_reports(fixture.workspace(), &parent)
+        .expect("pending");
+    assert!(pending.is_empty(), "面板报告不得自动投递父轮");
+
+    let input = state.pane_anywhere(key.pane).unwrap().lx.input.clone();
+    let chips = crate::app::paste::folded_tokens(&input);
+    assert_eq!(chips.len(), 1);
+    assert_eq!(chips[0].kind, crate::app::paste::FoldedKind::SubagentReport);
+    assert_eq!(chips[0].source.as_deref(), Some(agent_id.as_str()));
+    assert!(chips[0].body.contains("report body for main input"));
+}
+
+#[tokio::test]
 async fn user_stop_marks_stopped_and_cancels_queued_inputs() {
     let (fixture, mut state, key, persistence, mut streams, parent) = fixture_with_parent();
     let agent_id = spawn_explorer(&mut state, &mut streams, &persistence, &key, "first").await;
@@ -1026,8 +1096,9 @@ async fn wait_and_list_mark_stopped_by_user() {
     match listed {
         SubagentOutcome::Listed { agents } => {
             assert!(
-                agents.iter().any(|agent| agent.agent_id == agent_id
-                    && agent.stopped_by_user),
+                agents
+                    .iter()
+                    .any(|agent| agent.agent_id == agent_id && agent.stopped_by_user),
                 "list_agents 必须标记 stopped_by_user"
             );
         }
@@ -1127,6 +1198,7 @@ fn deleting_the_parent_session_cancels_live_children() {
             closed_without_report: false,
             stopped_by_user: false,
             notify_parent: true,
+            report_to_input: false,
             mutation_user_id: std::sync::Arc::new(std::sync::RwLock::new(String::new())),
             chat: crate::app::state::LxChat::new(),
             workspace: fixture.workspace().to_path_buf(),

@@ -1,5 +1,7 @@
 use super::*;
-use crate::app::paste::{TextPasteAction, encode_pasted_text, folded_tokens};
+use crate::app::paste::{
+    FoldedKind, TextPasteAction, encode_pasted_text, encode_report, folded_tokens,
+};
 
 #[test]
 fn lx_text_paste_panel_respects_chat_mode_fences_and_plain_mode() {
@@ -37,6 +39,70 @@ fn lx_text_paste_panel_respects_chat_mode_fences_and_plain_mode() {
     assert_eq!(lx.input, "check");
     lx.redo();
     assert_eq!(lx.input, format!("check {tok} "));
+}
+
+#[test]
+fn report_chip_inserts_at_top_with_blank_line_and_keeps_draft() {
+    let mut lx = Lx::new();
+    lx.insert_str("先看登录流程");
+    let cursor_before = lx.cursor;
+    assert!(lx.insert_report_chip(
+        FoldedKind::SubagentReport,
+        "agent-1",
+        "[Subagent report] Curie\nbody"
+    ));
+    let token = encode_report(
+        FoldedKind::SubagentReport,
+        "agent-1",
+        "[Subagent report] Curie\nbody",
+    );
+    assert_eq!(lx.input, format!("{token}\n\n先看登录流程"));
+    assert_eq!(lx.cursor, cursor_before + token.len() + 2);
+    let parsed = folded_tokens(&lx.input);
+    assert_eq!(parsed.len(), 1);
+    assert_eq!(parsed[0].kind, FoldedKind::SubagentReport);
+    assert_eq!(parsed[0].source.as_deref(), Some("agent-1"));
+    assert_eq!(
+        lx.expanded_input(),
+        "[Subagent report] Curie\nbody\n\n先看登录流程"
+    );
+
+    // 一次撤销即恢复原草稿。
+    lx.undo();
+    assert_eq!(lx.input, "先看登录流程");
+}
+
+#[test]
+fn report_chip_replaces_same_source_in_place_and_keeps_other_sources() {
+    let mut lx = Lx::new();
+    lx.insert_str("draft");
+    assert!(lx.insert_report_chip(FoldedKind::SubagentReport, "agent-1", "old"));
+    assert!(lx.insert_report_chip(FoldedKind::BtwReport, "thread-1", "btw body"));
+    let before = folded_tokens(&lx.input);
+    assert_eq!(before.len(), 2);
+    assert_eq!(before[0].kind, FoldedKind::BtwReport, "新报告在顶部");
+
+    assert!(lx.insert_report_chip(FoldedKind::SubagentReport, "agent-1", "new body"));
+    let after = folded_tokens(&lx.input);
+    assert_eq!(after.len(), 2, "同源只保留一个芯片");
+    let report = after
+        .iter()
+        .find(|tok| tok.kind == FoldedKind::SubagentReport)
+        .expect("report chip");
+    assert_eq!(report.body, "new body");
+    assert_eq!(report.source.as_deref(), Some("agent-1"));
+    assert!(lx.input.ends_with("\n\ndraft"));
+}
+
+#[test]
+fn report_chip_expands_for_model_and_can_be_deleted_atomically() {
+    let mut lx = Lx::new();
+    assert!(lx.insert_report_chip(FoldedKind::BtwReport, "thread-1", "[BTW report] T\nanswer"));
+    assert_eq!(lx.expanded_input().trim_end(), "[BTW report] T\nanswer");
+    let token = folded_tokens(&lx.input).remove(0);
+    lx.cursor = token.range.end;
+    lx.backspace();
+    assert!(lx.input.trim().is_empty(), "芯片整块删除，仅留分隔空行");
 }
 
 #[test]

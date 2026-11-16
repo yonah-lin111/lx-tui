@@ -260,6 +260,13 @@ pub enum Effect {
     StopAllSessionProcesses { pane: crate::tiling::PaneId },
     /// 父轮次结束后尝试把未投递报告合并成自动轮；用户输入优先。
     DrainSubagentReports { pane: crate::tiling::PaneId },
+    /// Agents 面板 `/report`：让空闲子 agent 生成一轮报告，正文只填入主输入框。
+    SendSubagentReport {
+        pane: crate::tiling::PaneId,
+        session_id: String,
+        agent_id: String,
+        note: String,
+    },
     /// 在 `Agents` 面板向指定子 agent 直接发送内联追问（若已结束则自动先 `resume` 再触发新轮次）。
     SendSubagentUserInput {
         pane: crate::tiling::PaneId,
@@ -543,6 +550,8 @@ pub struct BtwSubmission {
     /// 草稿修订号：ACK 时只有相同修订号才清空输入。
     pub draft_revision: u64,
     pub text: String,
+    /// 面板 `/report` 提交：完成后聚合为报告填入主输入框，不自动起父轮。
+    pub report_to_main_input: bool,
     /// 本次显式选择回答者；空表示沿用线程回答者集合。
     pub targets: Vec<BtwTargetChoice>,
     /// 默认助手冻结模型。

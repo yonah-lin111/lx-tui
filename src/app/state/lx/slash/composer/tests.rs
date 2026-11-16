@@ -24,12 +24,11 @@ fn agent_context_lists_rewind_compact_report_only() {
 }
 
 #[test]
-fn btw_context_lists_rewind_compact_new_only() {
+fn btw_context_lists_rewind_compact_report_new() {
     assert_eq!(
         names(DetailContext::Btw, ""),
-        vec!["/rewind", "/compact", "/new"]
+        vec!["/rewind", "/compact", "/report", "/new"]
     );
-    assert!(!names(DetailContext::Btw, "").contains(&"/report"));
 }
 
 #[test]
@@ -50,6 +49,10 @@ fn report_takes_multiline_note() {
     assert_eq!(
         parse("  /report  spaced note  ", DetailContext::Agent),
         Some(ParsedDetailCommand::Report("spaced note"))
+    );
+    assert_eq!(
+        parse("/report side thread note", DetailContext::Btw),
+        Some(ParsedDetailCommand::Report("side thread note"))
     );
 }
 

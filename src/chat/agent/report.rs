@@ -7,7 +7,10 @@ use super::{AgentRole, MAX_REPORT_BYTES};
 /// 单份报告最多附带的变更文件路径条数。
 pub const MAX_REPORT_CHANGED_PATHS: usize = 32;
 
-/// `/report` 请求消息的固定首行（也是私聊/汇报的可见分界）。
+/// 新版面板 `/report` 请求消息的固定首行：报告只填入主输入框，不自动投递。
+pub const PANEL_REPORT_MARKER: &str = "[Report for main agent]";
+
+/// 旧版自动汇报标记；仅用于识别历史报告轮。
 pub const REPORT_REQUEST_MARKER: &str = "[Report to parent agent]";
 
 /// 人类在详情面板显式要求汇报时注入的用户消息。
@@ -16,8 +19,8 @@ pub const REPORT_REQUEST_MARKER: &str = "[Report to parent agent]";
 pub fn report_request_message(note: &str) -> String {
     let note = note.trim();
     let mut out = String::from(
-        "[Report to parent agent]\n\
-Write a report for the parent agent. Include only what it needs to act: the user's request, \
+        "[Report for main agent]\n\
+Write a report for the main agent. Include only what it needs to act: the user's request, \
 what you did or found, evidence (files, commands, results), current status, blockers, and \
 next steps. Do not include greetings, small talk, or casual conversation. Be concise and factual.",
     );
@@ -26,6 +29,14 @@ next steps. Do not include greetings, small talk, or casual conversation. Be con
         out.push_str(note);
     }
     out
+}
+
+/// 该用户消息是否是 `/report` 请求（新旧标记都识别）。
+pub fn is_report_request(text: &str) -> bool {
+    text.lines()
+        .next()
+        .map(str::trim)
+        .is_some_and(|line| line == PANEL_REPORT_MARKER || line == REPORT_REQUEST_MARKER)
 }
 
 /// 汇报块数据源（父消息 `subagent_report_json` 反序列化）。

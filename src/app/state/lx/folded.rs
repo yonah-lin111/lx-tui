@@ -1,8 +1,9 @@
 //! `Lx` 输入框的长文本折叠粘贴集成：面板状态、显示投影、展开文本解码与预览选区。
 
 use crate::app::paste::{
-    ChipHit, PasteAnchor, Projection, TextPasteAction, TextPastePanel, clamp_cursor,
-    encode_pasted_kind, expand_pasted_text, folded_tokens, mask_pasted_text, snap_pasted_range,
+    ChipHit, FoldedKind, PasteAnchor, Projection, TextPasteAction, TextPastePanel, clamp_cursor,
+    encode_pasted_kind, encode_report, expand_pasted_text, folded_tokens, mask_pasted_text,
+    snap_pasted_range,
 };
 use crate::app::prompt::{list, text};
 use crate::app::selection::SelectionUnit;
@@ -91,6 +92,47 @@ impl Lx {
     /// 取消长文本粘贴面板（不修改缓冲区）；原先打开时返回 `true`。
     pub fn text_paste_cancel(&mut self) -> bool {
         self.text_paste.take().is_some()
+    }
+
+    /// 插入/替换报告芯片：同源原位替换，否则插到顶部并与原草稿空一行。
+    ///
+    /// 报告芯片是用户可见草稿的一部分：写入即记一次撤销快照，光标按插入/替换
+    /// 长度平移（落在被替换块内时夹到块起点）。
+    pub(crate) fn insert_report_chip(
+        &mut self,
+        kind: FoldedKind,
+        source: &str,
+        body: &str,
+    ) -> bool {
+        if body.trim().is_empty() {
+            return false;
+        }
+        let token = encode_report(kind, source, body);
+        let existing = folded_tokens(&self.input)
+            .into_iter()
+            .find(|tok| tok.kind == kind && tok.source.as_deref() == Some(source));
+        self.snapshot();
+        if let Some(hit) = existing {
+            let old_cursor = self.cursor;
+            let old_len = hit.range.len();
+            self.input.replace_range(hit.range.clone(), &token);
+            self.cursor = if old_cursor <= hit.range.start {
+                old_cursor
+            } else if old_cursor >= hit.range.end {
+                old_cursor
+                    .saturating_add(token.len())
+                    .saturating_sub(old_len)
+            } else {
+                hit.range.start
+            };
+        } else {
+            let prefix = format!("{token}\n\n");
+            self.cursor = self.cursor.saturating_add(prefix.len());
+            self.input.insert_str(0, &prefix);
+        }
+        self.touch();
+        self.scroll_cursor_into_view();
+        true
     }
 
     /// 当前输入的折叠/展开显示投影。

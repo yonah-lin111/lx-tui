@@ -28,6 +28,66 @@ pub(super) fn send_from_panel(
     )
 }
 
+/// 面板 `/report`：入队一轮报告请求（`notify_parent=false`），完成后只填主输入框。
+pub(super) fn submit_report(
+    state: &mut AppState,
+    streams: &mut ChatStreams,
+    persistence: &Persistence,
+    pane: PaneId,
+    session_id: &str,
+    agent_id: &str,
+    note: &str,
+) -> bool {
+    let busy = state.pane_anywhere(pane).is_some_and(|target| {
+        target.lx.agents.by_agent(agent_id).is_some_and(|run| {
+            run.is_running()
+                || run.queued_count > 0
+                || !run.chat.pending_steers.is_empty()
+                || run.compact.is_running()
+        })
+    });
+    if busy {
+        crate::app::update::show_lx_toast(
+            state,
+            pane,
+            crate::app::toast::Toast::new(
+                crate::app::toast::ToastKind::Warning,
+                crate::ui::text::detail::LX_DETAIL_REPORT_BUSY,
+                Some(pane),
+                Instant::now(),
+            ),
+        );
+        return false;
+    }
+    let text = crate::chat::agent::report_request_message(note);
+    streams.report_to_input.insert(agent_id.to_string());
+    let sent = snapshot::send_user_input_from_panel(
+        state,
+        streams,
+        persistence,
+        pane,
+        session_id,
+        agent_id,
+        &text,
+        false,
+    );
+    if !sent {
+        streams.report_to_input.remove(agent_id);
+        return false;
+    }
+    crate::app::update::show_lx_toast(
+        state,
+        pane,
+        crate::app::toast::Toast::new(
+            crate::app::toast::ToastKind::Default,
+            crate::ui::text::detail::LX_REPORT_GENERATING,
+            Some(pane),
+            Instant::now(),
+        ),
+    );
+    true
+}
+
 /// 面板 steer：目标仍在运行时挂到该子轮；已结束时回退为普通追问。
 pub(super) fn steer_from_panel(
     state: &mut AppState,

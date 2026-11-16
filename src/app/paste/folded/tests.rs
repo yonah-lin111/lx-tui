@@ -196,9 +196,7 @@ fn atomic_boundaries_skip_and_snap_across_tokens() {
 fn report_tokens_roundtrip_with_source_and_labels() {
     let body = "[Subagent report] Curie · executor\nAll good.\nChanged files: src/a.rs";
     let encoded = encode_report(FoldedKind::SubagentReport, "sa_curie-1", body);
-    assert!(encoded.starts_with(
-        "<pasted-subagent-report source=\"sa_curie-1\" lines=\"3\">"
-    ));
+    assert!(encoded.starts_with("<pasted-subagent-report source=\"sa_curie-1\" lines=\"3\">"));
     assert!(encoded.ends_with("</pasted-subagent-report>"));
 
     let parsed = tokens(&encoded);
@@ -207,10 +205,7 @@ fn report_tokens_roundtrip_with_source_and_labels() {
     assert_eq!(parsed[0].source.as_deref(), Some("sa_curie-1"));
     assert_eq!(parsed[0].line_count, 3);
     assert_eq!(parsed[0].body, body);
-    assert_eq!(
-        parsed[0].label(),
-        "[Pasted subagent report 3 lines]"
-    );
+    assert_eq!(parsed[0].label(), "[Pasted subagent report 3 lines]");
 
     let single = &tokens(&encode_report(FoldedKind::BtwReport, "thread-9", "one"))[0];
     assert_eq!(single.kind, FoldedKind::BtwReport);
@@ -246,12 +241,13 @@ fn report_token_without_source_attribute_is_not_parsed() {
 
 #[test]
 fn expand_all_replaces_report_tokens_with_body() {
-    let report = encode_report(FoldedKind::BtwReport, "thread-1", "[BTW report] title\nbody");
-    let text = format!("keep {report} tail");
-    assert_eq!(
-        expand_all(&text),
-        "keep [BTW report] title\nbody tail"
+    let report = encode_report(
+        FoldedKind::BtwReport,
+        "thread-1",
+        "[BTW report] title\nbody",
     );
+    let text = format!("keep {report} tail");
+    assert_eq!(expand_all(&text), "keep [BTW report] title\nbody tail");
 }
 
 #[test]

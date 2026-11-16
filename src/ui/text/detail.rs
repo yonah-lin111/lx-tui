@@ -61,5 +61,9 @@ pub const LX_REPORT_NO_PREVIOUS: &str = "No previous report";
 pub const LX_REPORT_TARGET_CHANGED: &str = "Report target changed";
 /// 报告生成失败或正文为空。
 pub const LX_REPORT_UNAVAILABLE: &str = "Report unavailable";
+/// 报告已填入主输入框。
+pub const LX_REPORT_FILLED: &str = "Report added to the main input";
+/// 已发起报告生成。
+pub const LX_REPORT_GENERATING: &str = "Generating report...";
 /// BTW 合并报告全部失败。
 pub const LX_BTW_REPORT_UNAVAILABLE: &str = "BTW report unavailable";

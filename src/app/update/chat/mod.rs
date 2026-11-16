@@ -28,6 +28,7 @@ pub mod mcp;
 pub mod model_switch;
 mod process;
 pub mod recap;
+pub mod report_fill;
 pub mod rewind;
 mod session;
 mod slash;
@@ -89,6 +90,10 @@ pub use process::{
 pub use recap::{
     apply_recap, cancel_pending_recap, on_terminal_focus_gained, on_terminal_focus_lost,
     recap_command, recap_failed, set_message_recaps, take_pending_recap, tick_recap,
+};
+pub use report_fill::{
+    BtwReportReady, SubagentReportReady, fill_main_input, on_btw_report_ready,
+    on_subagent_report_ready,
 };
 pub use rewind::{
     apply_enter as apply_rewind_enter, apply_input as apply_rewind_input,
@@ -751,12 +756,7 @@ pub fn escape_stop(state: &mut AppState, pane: PaneId) -> bool {
         };
         target.lx.chat.stop_armed_at = Some(now);
         target.lx.rewind.armed_at = None;
-        show_lx_hint(
-            state,
-            pane,
-            InputHintLevel::Warning,
-            text::LX_STOP_ARMED,
-        );
+        show_lx_hint(state, pane, InputHintLevel::Warning, text::LX_STOP_ARMED);
         return true;
     }
     let Some(target) = state.pane_mut_anywhere(pane) else {

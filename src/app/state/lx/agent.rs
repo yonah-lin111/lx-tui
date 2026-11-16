@@ -104,8 +104,7 @@ pub(crate) fn visible_task(
     previous: Option<&str>,
     title: &str,
 ) -> String {
-    let is_report_request =
-        task_text.lines().next().map(str::trim) == Some(crate::chat::agent::REPORT_REQUEST_MARKER);
+    let is_report_request = crate::chat::agent::is_report_request(task_text);
     if notify_parent && !is_report_request {
         return task_text.to_string();
     }

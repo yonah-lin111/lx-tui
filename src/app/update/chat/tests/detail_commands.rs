@@ -26,6 +26,49 @@ fn agent_run(agent_id: &str, child_session: &str) -> SubagentRun {
     })
 }
 
+fn push_text_message(run: &mut SubagentRun, role: &str, text: &str, sequence: i64) {
+    run.chat.messages.push(crate::app::state::ChatMessageView {
+        id: format!("m{sequence}"),
+        sequence,
+        kind: "chat".into(),
+        role: role.into(),
+        status: "complete".into(),
+        turn_index: 0,
+        shell: None,
+        steps: vec![crate::app::state::AssistantStepView::Part {
+            position: 0,
+            part: crate::app::state::ChatPartView {
+                kind: PartKind::Text,
+                content: text.into(),
+                provider_metadata_json: None,
+                started_at_ms: None,
+                ended_at_ms: None,
+                completed_at_ms: None,
+            },
+        }],
+        model_label: None,
+        error_code: None,
+        input_tokens: None,
+        output_tokens: None,
+        cache_read_tokens: None,
+        duration_ms: None,
+        reports: Vec::new(),
+        attachments: Vec::new(),
+    });
+}
+
+fn seed_last_report(state: &mut AppState, pane: PaneId, agent_id: &str) {
+    let run = state
+        .pane_mut_anywhere(pane)
+        .expect("pane")
+        .lx
+        .agents
+        .by_agent_mut(agent_id)
+        .expect("run");
+    push_text_message(run, "user", crate::chat::agent::PANEL_REPORT_MARKER, 0);
+    push_text_message(run, "assistant", "previous report body", 1);
+}
+
 /// 打开 Agents 页并进入 `sub-idle` 的追问编辑态。
 fn agents_editing_state() -> (AppState, PaneId) {
     let mut state = ready_state("");
@@ -113,7 +156,7 @@ fn typing_slash_in_btw_composer_opens_three_commands() {
     type_str(&mut state, "/");
     assert_eq!(
         file_entries(&state, pane),
-        vec!["/rewind", "/compact", "/new"]
+        vec!["/rewind", "/compact", "/report", "/new"]
     );
 }
 
@@ -188,7 +231,8 @@ fn unknown_slash_is_not_sent_to_model() {
     assert!(
         !state.effects.iter().any(|effect| matches!(
             effect,
-            crate::app::effects::Effect::SendSubagentUserInput { .. }
+            crate::app::effects::Effect::SendSubagentReport { .. }
+                | crate::app::effects::Effect::SendSubagentUserInput { .. }
                 | crate::app::effects::Effect::SteerSubagent { .. }
         )),
         "未知 / 命令不得发给模型：{:?}",
@@ -206,35 +250,137 @@ fn paste_into_composer_refreshes_slash_panel() {
 }
 
 #[test]
-fn report_idle_agent_emits_send_input_with_notify_parent_true() {
+fn report_idle_agent_emits_fill_input_effect() {
     let (mut state, pane) = agents_editing_state();
     type_str(&mut state, "/report check the log");
     state.effects.clear();
     crate::app::update::pane::apply_lx_input(&mut state, LxInput::Enter);
-    let message = state
+    let note = state
         .effects
         .iter()
         .find_map(|effect| match effect {
-            crate::app::effects::Effect::SendSubagentUserInput {
-                agent_id,
-                text,
-                notify_parent,
-                ..
-            } if agent_id == "sub-idle" => Some((text.clone(), *notify_parent)),
+            crate::app::effects::Effect::SendSubagentReport { agent_id, note, .. }
+                if agent_id == "sub-idle" =>
+            {
+                Some(note.clone())
+            }
             _ => None,
         })
-        .expect("汇报轮入队");
-    assert!(message.1, "显式 /report 必须 notify_parent=true");
+        .expect("报告轮入队");
+    assert_eq!(note, "check the log");
     assert!(
-        message
-            .0
-            .starts_with(crate::chat::agent::REPORT_REQUEST_MARKER),
-        "汇报请求带固定标记：{}",
-        message.0
+        !state.effects.iter().any(|effect| matches!(
+            effect,
+            crate::app::effects::Effect::SendSubagentUserInput { .. }
+        )),
+        "报告不再走自动投递父轮链路"
     );
-    assert!(message.0.contains("User note: check the log"));
     assert_eq!(editor_text(&state, pane), "", "命令文本已消费");
     assert!(panel(&state, pane).is_none());
+}
+
+#[test]
+fn report_with_previous_opens_resend_panel_and_resend_fills_input() {
+    let (mut state, pane) = agents_editing_state();
+    seed_last_report(&mut state, pane, "sub-idle");
+    type_str(&mut state, "/report focus");
+    state.effects.clear();
+    crate::app::update::pane::apply_lx_input(&mut state, LxInput::Enter);
+    let Some(SlashPanel::Report(report_panel)) = panel(&state, pane) else {
+        panic!("expected report panel");
+    };
+    assert_eq!(
+        report_panel.active_action(),
+        crate::app::state::ReportAction::Resend
+    );
+    assert!(
+        report_panel
+            .last_report
+            .as_deref()
+            .is_some_and(|body| body.contains("previous report body"))
+    );
+
+    // Enter 直接重发：不产生模型效应，只填主输入框。
+    crate::app::update::pane::apply_lx_input(&mut state, LxInput::Enter);
+    assert!(panel(&state, pane).is_none(), "执行后关闭面板");
+    assert!(
+        !state.effects.iter().any(|effect| matches!(
+            effect,
+            crate::app::effects::Effect::SendSubagentReport { .. }
+        )),
+        "Resend 不调用模型"
+    );
+    let input = state.pane_anywhere(pane).unwrap().lx.input.clone();
+    let tokens = crate::app::paste::folded_tokens(&input);
+    assert_eq!(tokens.len(), 1);
+    assert_eq!(
+        tokens[0].kind,
+        crate::app::paste::FoldedKind::SubagentReport
+    );
+    assert!(
+        tokens[0].body.contains("previous report body"),
+        "芯片正文包含上一轮报告"
+    );
+}
+
+#[test]
+fn report_regenerate_uses_note_and_emits_effect() {
+    let (mut state, pane) = agents_editing_state();
+    seed_last_report(&mut state, pane, "sub-idle");
+    type_str(&mut state, "/report new focus");
+    crate::app::update::pane::apply_lx_input(&mut state, LxInput::Enter);
+    let mut found = false;
+    state
+        .pane_mut_anywhere(pane)
+        .unwrap()
+        .lx
+        .with_active_editor(|editor| {
+            if let Some(SlashPanel::Report(panel)) = editor.slash.as_mut() {
+                panel.window.active = 1;
+                found = true;
+            }
+        });
+    assert!(found, "expected report panel");
+    state.effects.clear();
+    crate::app::update::pane::apply_lx_input(&mut state, LxInput::Enter);
+    assert!(state.effects.iter().any(|effect| matches!(
+        effect,
+        crate::app::effects::Effect::SendSubagentReport { agent_id, note, .. }
+            if agent_id == "sub-idle" && note == "new focus"
+    )));
+}
+
+#[test]
+fn btw_report_submits_flag_with_report_marker() {
+    let (mut state, pane) = btw_editing_state();
+    {
+        let thread = state
+            .pane_mut_anywhere(pane)
+            .unwrap()
+            .lx
+            .btw
+            .active_thread_mut()
+            .expect("thread");
+        thread.thread_id = Some("thread-1".into());
+        thread.child_session_id = Some("child-1".into());
+        thread.title = "Side thread".into();
+    }
+    type_str(&mut state, "/report summarize");
+    state.effects.clear();
+    crate::app::update::pane::apply_lx_input(&mut state, LxInput::Enter);
+    let (flag, text) = state
+        .effects
+        .iter()
+        .find_map(|effect| match effect {
+            crate::app::effects::Effect::Btw(crate::app::effects::BtwEffect::Submit(
+                submission,
+            )) => Some((submission.report_to_main_input, submission.text.clone())),
+            _ => None,
+        })
+        .expect("btw report submission");
+    assert!(flag);
+    assert!(text.starts_with(crate::chat::agent::PANEL_REPORT_MARKER));
+    assert!(text.contains("User note: summarize"));
 }
 
 #[test]
@@ -254,7 +400,8 @@ fn report_running_agent_is_rejected_without_effect() {
     assert!(
         !state.effects.iter().any(|effect| matches!(
             effect,
-            crate::app::effects::Effect::SendSubagentUserInput { .. }
+            crate::app::effects::Effect::SendSubagentReport { .. }
+                | crate::app::effects::Effect::SendSubagentUserInput { .. }
                 | crate::app::effects::Effect::SteerSubagent { .. }
         )),
         "运行中拒绝汇报：{:?}",
@@ -296,7 +443,7 @@ fn private_follow_up_never_emits_report() {
 #[test]
 fn report_message_contains_marker_and_note() {
     let message = crate::chat::agent::report_request_message("  定位登录超时  ");
-    assert!(message.starts_with(crate::chat::agent::REPORT_REQUEST_MARKER));
+    assert!(message.starts_with(crate::chat::agent::PANEL_REPORT_MARKER));
     assert!(message.contains("User note: 定位登录超时"));
     assert!(message.contains("Do not include greetings"));
     let bare = crate::chat::agent::report_request_message("  ");

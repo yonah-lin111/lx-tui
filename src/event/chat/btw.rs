@@ -134,6 +134,20 @@ pub(crate) struct BtwStreams {
     generation: u64,
     /// 线程 → 最近的完成状态（停止/失败反馈用）。
     pub last_status: HashMap<String, String>,
+    /// `/report` 批次 → 待聚合的合并报告（按 batch_id）。
+    pub report_batches: HashMap<String, BtwReportBatch>,
+}
+
+/// 一次 `/report` 多目标批次的聚合状态。
+pub(crate) struct BtwReportBatch {
+    pub pane: PaneId,
+    pub parent_session_id: String,
+    pub thread_id: String,
+    pub title: String,
+    pub expected: usize,
+    pub done: usize,
+    pub sections: Vec<(String, String)>,
+    pub failed: Vec<String>,
 }
 
 /// 处理一条 BTW 效应；返回状态是否变化。
@@ -408,6 +422,21 @@ fn submit(
         .btw
         .sessions
         .insert(accepted.thread.child_session_id.clone());
+    if submission.report_to_main_input {
+        streams.btw.report_batches.insert(
+            accepted.batch_id.clone(),
+            BtwReportBatch {
+                pane: submission.pane,
+                parent_session_id: submission.parent_session_id.clone(),
+                thread_id: accepted.thread.id.clone(),
+                title: accepted.thread.title.clone(),
+                expected: accepted.recipients.len(),
+                done: 0,
+                sections: Vec::new(),
+                failed: Vec::new(),
+            },
+        );
+    }
     let _ = sender.send(AppEvent::Btw(BtwEvent::Accepted {
         pane: submission.pane,
         qa_id: submission.qa_id.clone(),
@@ -999,7 +1028,7 @@ fn finish_run(
     let workspace = streams.db_workspaces.get(key).cloned().unwrap_or_default();
     let duration_ms = crate::db::now_ms().saturating_sub(run.started_at_ms).max(0);
     // 先在内存收尾（关闭思考块/在途工具），再取 parts 落库；顺序反过来会丢最后一次收尾。
-    let changed = crate::app::update::on_btw_finished(
+    let mut changed = crate::app::update::on_btw_finished(
         state,
         child_session,
         assistant_id,
@@ -1011,6 +1040,13 @@ fn finish_run(
     if parts.is_empty() {
         parts = buffer_parts(&run.buffer, assistant_id);
     }
+    let report_text = parts
+        .iter()
+        .filter(|part| part.kind == "text")
+        .map(|part| part.content.trim())
+        .filter(|text| !text.is_empty())
+        .collect::<Vec<_>>()
+        .join("\n\n");
     let outcome = match &reason {
         StopReason::Complete => TurnOutcome::Complete {
             stop_reason: Some("complete".to_string()),
@@ -1045,6 +1081,30 @@ fn finish_run(
             Err(error) => tracing::warn!(code = error.code(), "btw settle failed"),
         }
     }
+    // `/report` 批次：记录本节，全部收口后合并填入主输入框。
+    let report_ready = if let Some(batch) = streams.btw.report_batches.get_mut(&run.batch_id) {
+        if matches!(reason, StopReason::Complete) && !report_text.trim().is_empty() {
+            batch.sections.push((run.label.clone(), report_text));
+        } else {
+            batch.failed.push(run.label.clone());
+        }
+        batch.done = batch.done.saturating_add(1);
+        if batch.done >= batch.expected {
+            let batch = streams.btw.report_batches.remove(&run.batch_id);
+            batch.map(|batch| crate::app::update::BtwReportReady {
+                pane: batch.pane,
+                parent_session: batch.parent_session_id,
+                thread_id: batch.thread_id,
+                title: batch.title,
+                sections: batch.sections,
+                failed: batch.failed,
+            })
+        } else {
+            None
+        }
+    } else {
+        None
+    };
     // 只清本 run 的执行资源；不按 session 清理其他目标的模型。
     streams.cancels.remove(key);
     streams.db_workspaces.remove(key);
@@ -1057,6 +1117,9 @@ fn finish_run(
             .is_some_and(|batch| batch == &run.batch_id)
     {
         streams.btw.active_batches.remove(&run.thread_id);
+    }
+    if let Some(ready) = report_ready {
+        changed |= crate::app::update::on_btw_report_ready(state, ready);
     }
     changed
 }

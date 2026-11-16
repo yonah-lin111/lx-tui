@@ -669,7 +669,7 @@ fn loading_tick_freezes_the_turn_clock_while_asking() {
 
 #[test]
 fn escape_arms_then_cancels_on_second_press() {
-    let (mut state, pane, key) = asking(vec![question("q", false, &["A"])]);
+    let (mut state, pane, _key) = asking(vec![question("q", false, &["A"])]);
     press(&mut state, LxInput::Escape);
     assert!(
         state
@@ -684,11 +684,18 @@ fn escape_arms_then_cancels_on_second_press() {
     assert!(ask_present(&state, pane), "待命不清面板");
     press(&mut state, LxInput::Escape);
     assert!(
-        state.effects.iter().any(|effect| matches!(
-            effect,
-            crate::app::effects::Effect::CancelChatStream { key: effect_key } if *effect_key == key
-        )),
-        "第二次 Esc 推 CancelChatStream"
+        matches!(
+            state.pane_anywhere(pane).unwrap().lx.slash,
+            Some(crate::app::state::SlashPanel::Stop(_))
+        ),
+        "第二次 Esc 打开停止面板"
+    );
+    assert!(
+        !state
+            .effects
+            .iter()
+            .any(|effect| matches!(effect, crate::app::effects::Effect::CancelChatStream { .. })),
+        "打开面板不立即取消"
     );
 }
 
