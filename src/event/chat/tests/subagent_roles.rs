@@ -299,7 +299,6 @@ fn snapshot_handle(
         closed_without_report: false,
         stopped_by_user: false,
         notify_parent: true,
-        report_to_input: false,
         mutation_user_id: std::sync::Arc::new(std::sync::RwLock::new(String::new())),
         chat: crate::app::state::LxChat::new(),
         workspace: std::path::PathBuf::new(),

@@ -146,6 +146,8 @@ fn compact_request(
         variant_params: None,
         idle_timeout_ms: 5_000,
         operation_id: crate::db::new_external_id("compact-op"),
+        kind: crate::db::chat::CompactKind::Compact,
+        note: String::new(),
     }
 }
 
@@ -398,5 +400,64 @@ fn late_compact_failure_for_another_operation_is_ignored() {
         target.lx.compact.running.as_deref(),
         Some("op-b"),
         "不得清掉正在执行的新一次压缩"
+    );
+}
+
+/// `/report` 与 compact 共用检查点管线，但写成 `kind = report`：
+/// 不参与上下文装配，且可被 `/rewind` 物理删除。
+#[tokio::test]
+async fn report_commits_a_report_checkpoint_not_context() {
+    let fixture = Fixture::new("report-commit");
+    let session_id = session_with_one_turn(&fixture);
+    let database = fixture.database();
+    let revision = database.session_revision(&session_id).expect("revision") as u64;
+    let base_url = spawn_mock("200 OK", summary_stream()).await;
+    let mut request = compact_request(&fixture, &session_id, revision, base_url);
+    request.kind = crate::db::chat::CompactKind::Report;
+    request.note = "focus on auth".into();
+    let operation_id = request.operation_id.clone();
+    let (sender, mut receiver) = mpsc::unbounded_channel::<AppEvent>();
+    let persistence = Persistence::with_database_at(database, fixture.db_path());
+
+    assert!(execute(&request, &sender, &persistence));
+    let outcome = tokio::time::timeout(Duration::from_secs(10), receiver.recv())
+        .await
+        .expect("report 必须在超时前回投")
+        .expect("report 事件");
+    let AppEvent::CompactFinished { outcome, .. } = outcome else {
+        panic!("expected CompactFinished");
+    };
+    assert_eq!(outcome, CompactOutcome::Committed);
+
+    let reopened = fixture.reopen();
+    let checkpoints = reopened
+        .compact_checkpoints(fixture.workspace(), &session_id)
+        .expect("checkpoints");
+    assert_eq!(checkpoints.len(), 1);
+    assert_eq!(checkpoints[0].kind, crate::db::chat::CompactKind::Report);
+    assert_eq!(checkpoints[0].operation_id, operation_id);
+    assert!(
+        reopened
+            .active_checkpoint(fixture.workspace(), &session_id)
+            .expect("active")
+            .is_none(),
+        "报告不能成为上下文起点"
+    );
+
+    let revert = crate::db::chat::CompactRevert {
+        operation_id: crate::db::new_external_id("report-rewind"),
+        session_id,
+        checkpoint_id: checkpoints[0].id.clone(),
+        expected_revision: i64::try_from(revision + 1).expect("revision"),
+    };
+    reopened
+        .revert_compact(fixture.workspace(), &revert)
+        .expect("report rewind");
+    assert!(
+        reopened
+            .compact_checkpoints(fixture.workspace(), &revert.session_id)
+            .expect("checkpoints")
+            .is_empty(),
+        "撤销报告必须删除时间线条目"
     );
 }

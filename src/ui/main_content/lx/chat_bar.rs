@@ -75,7 +75,12 @@ pub(super) fn task_loading(lx: &Lx) -> Option<TaskLoading> {
         && thread.compact.is_running()
     {
         return Some(TaskLoading {
-            label: text::chat::COMPACTING_LABEL.to_string(),
+            label: if thread.compact.running_report {
+                text::chat::REPORTING_LABEL
+            } else {
+                text::chat::COMPACTING_LABEL
+            }
+            .to_string(),
             frame: thread.chat.loading_frame,
             elapsed_ms: thread.compact.elapsed_ms,
         });
@@ -89,7 +94,12 @@ pub(super) fn task_loading(lx: &Lx) -> Option<TaskLoading> {
         && run.compact.is_running()
     {
         return Some(TaskLoading {
-            label: text::chat::COMPACTING_LABEL.to_string(),
+            label: if run.compact.running_report {
+                text::chat::REPORTING_LABEL
+            } else {
+                text::chat::COMPACTING_LABEL
+            }
+            .to_string(),
             frame: run.chat.loading_frame,
             elapsed_ms: run.compact.elapsed_ms,
         });

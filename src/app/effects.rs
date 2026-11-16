@@ -517,6 +517,13 @@ pub enum BtwEffect {
     },
     /// 提交一条旁路问题。
     Submit(Box<BtwSubmission>),
+    /// 面板 `/report`：对线程会话做一次独立总结（不落 user/assistant 消息）。
+    Report {
+        pane: crate::tiling::PaneId,
+        parent_session_id: String,
+        thread_id: String,
+        note: String,
+    },
     /// 删除某 QA 的旁路线程（`/new`）：DB 级联清理线程与 child session。
     DeleteThread {
         pane: crate::tiling::PaneId,
@@ -550,8 +557,6 @@ pub struct BtwSubmission {
     /// 草稿修订号：ACK 时只有相同修订号才清空输入。
     pub draft_revision: u64,
     pub text: String,
-    /// 面板 `/report` 提交：完成后聚合为报告填入主输入框，不自动起父轮。
-    pub report_to_main_input: bool,
     /// 本次显式选择回答者；空表示沿用线程回答者集合。
     pub targets: Vec<BtwTargetChoice>,
     /// 默认助手冻结模型。
@@ -594,9 +599,9 @@ pub struct DetailRewindRequest {
     pub request: RewindRequest,
 }
 
-/// 一次压缩请求：会话、冻结的 revision 与当前模型全部在发起时确定。
+/// 一次压缩/报告请求：会话、冻结的 revision 与当前模型全部在发起时确定。
 ///
-/// 摘要请求是**独立请求**（不带工具、不落普通消息）；事件层用它装配请求并执行。
+/// 请求是**独立请求**（不带工具、不落普通消息）；事件层用它装配请求并执行。
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct CompactRequest {
     pub pane: crate::tiling::PaneId,
@@ -616,8 +621,12 @@ pub struct CompactRequest {
     pub api_key: String,
     pub variant_params: Option<serde_json::Value>,
     pub idle_timeout_ms: u64,
-    /// 幂等键（同一次压缩的重复回执只写一次）。
+    /// 幂等键（同一次压缩/报告的重复回执只写一次）。
     pub operation_id: String,
+    /// 用途：上下文压缩或面板 `/report` 总结。
+    pub kind: crate::db::chat::CompactKind,
+    /// 报告备注（compact 为空）。
+    pub note: String,
 }
 
 /// 一次 compact 撤销请求。

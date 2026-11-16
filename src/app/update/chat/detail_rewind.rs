@@ -87,6 +87,7 @@ pub fn on_prepared(state: &mut AppState, pane: PaneId, plan: DetailRewindPlan) -
     };
     let panel = match plan.kind {
         RewindTargetKind::Compact => RewindPanel::for_detail_compact(kind),
+        RewindTargetKind::Report => RewindPanel::for_detail_report(kind),
         _ => RewindPanel::for_detail(kind, plan.snapshot),
     };
     target
@@ -120,7 +121,11 @@ pub(crate) fn apply_confirm(state: &mut AppState, pane: PaneId, panel: &RewindPa
         return true;
     }
     if action != RewindAction::Cancel
-        && (action == RewindAction::RestoreCompact) != (plan.kind == RewindTargetKind::Compact)
+        && (action == RewindAction::RestoreCompact)
+            != matches!(
+                plan.kind,
+                RewindTargetKind::Compact | RewindTargetKind::Report
+            )
     {
         return true;
     }
@@ -242,7 +247,9 @@ pub fn on_succeeded(
             parent_session_id,
         }));
     }
-    let message = if plan.action == RewindAction::RestoreCompact {
+    let message = if plan.kind == crate::app::state::RewindTargetKind::Report {
+        text::LX_REPORT_REWOUND.to_string()
+    } else if plan.action == RewindAction::RestoreCompact {
         text::LX_COMPACT_REWOUND.to_string()
     } else {
         text::rewind_notice(plan.action.as_str(), restored_files, already_restored)

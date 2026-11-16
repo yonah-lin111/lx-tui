@@ -581,6 +581,16 @@ pub const LX_COMPACT_REWOUND: &str = "Context restored to the previous checkpoin
 pub const LX_COMPACT_SCOPE: &str = "Restore context only; messages and files stay unchanged";
 /// compact 撤销面板的唯一动作文案。
 pub const LX_COMPACT_ACTION_RESTORE: &str = "Restore the context before this checkpoint";
+/// `/report` 总结条目标题（独立时间线条目）。
+pub const LX_REPORT_NOTICE_TITLE: &str = "Report";
+/// `/report` 撤销面板的范围说明。
+pub const LX_REPORT_REWIND_SCOPE: &str =
+    "Remove the report from the panel; the main input keeps its chip";
+/// `/report` 撤销面板的唯一动作文案。
+pub const LX_REPORT_REWIND_ACTION: &str = "Remove this report";
+/// `/report` 撤销成功提示。
+pub const LX_REPORT_REWOUND: &str = "Report removed from the panel.";
+
 /// 检查点条目标题（独立时间线条目）。
 pub const LX_COMPACT_NOTICE_TITLE: &str = "Context compacted";
 /// 展开态的范围标签。
@@ -594,6 +604,15 @@ pub fn compact_notice_title(count: usize) -> String {
         format!("Context compacted x{count}")
     } else {
         LX_COMPACT_NOTICE_TITLE.to_string()
+    }
+}
+
+/// 报告条目标题：连续多条合并时带数量（`Report x2`）。
+pub fn report_notice_title(count: usize) -> String {
+    if count > 1 {
+        format!("{LX_REPORT_NOTICE_TITLE} x{count}")
+    } else {
+        LX_REPORT_NOTICE_TITLE.to_string()
     }
 }
 

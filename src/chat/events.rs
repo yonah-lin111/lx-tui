@@ -188,6 +188,8 @@ pub enum RequestPurpose {
     Chat,
     /// 上下文压缩的摘要请求（专用系统提示、无工具）。
     CompactSummary,
+    /// 面板 `/report` 总结请求（专用系统提示、无工具、不落消息）。
+    Report,
     /// 子 agent 轮次：工具面由角色决定（explorer 只读）。
     Subagent(crate::chat::agent::AgentRole),
     /// CLI exec 无头对话轮次（16 工具，不含交互式 ask）。
@@ -204,7 +206,7 @@ impl RequestPurpose {
             Self::Subagent(role) => Some(crate::chat::agent::ToolSurface::from_role(role)),
             Self::ExecTurn => Some(crate::chat::agent::ToolSurface::ExecMain),
             Self::Btw => Some(crate::chat::agent::ToolSurface::Btw),
-            Self::CompactSummary => None,
+            Self::CompactSummary | Self::Report => None,
         }
     }
 
@@ -260,7 +262,7 @@ impl ChatRequest {
             RequestPurpose::ExecTurn => Some(crate::chat::agent::ToolSurface::ExecMain),
             RequestPurpose::Subagent(role) => Some(role.tool_surface_at_depth(depth, max_depth)),
             RequestPurpose::Btw => Some(crate::chat::agent::ToolSurface::Btw),
-            RequestPurpose::CompactSummary => None,
+            RequestPurpose::CompactSummary | RequestPurpose::Report => None,
         }
     }
 

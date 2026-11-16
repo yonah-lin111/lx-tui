@@ -26,37 +26,6 @@ fn agent_run(agent_id: &str, child_session: &str) -> SubagentRun {
     })
 }
 
-fn push_text_message(run: &mut SubagentRun, role: &str, text: &str, sequence: i64) {
-    run.chat.messages.push(crate::app::state::ChatMessageView {
-        id: format!("m{sequence}"),
-        sequence,
-        kind: "chat".into(),
-        role: role.into(),
-        status: "complete".into(),
-        turn_index: 0,
-        shell: None,
-        steps: vec![crate::app::state::AssistantStepView::Part {
-            position: 0,
-            part: crate::app::state::ChatPartView {
-                kind: PartKind::Text,
-                content: text.into(),
-                provider_metadata_json: None,
-                started_at_ms: None,
-                ended_at_ms: None,
-                completed_at_ms: None,
-            },
-        }],
-        model_label: None,
-        error_code: None,
-        input_tokens: None,
-        output_tokens: None,
-        cache_read_tokens: None,
-        duration_ms: None,
-        reports: Vec::new(),
-        attachments: Vec::new(),
-    });
-}
-
 fn seed_last_report(state: &mut AppState, pane: PaneId, agent_id: &str) {
     let run = state
         .pane_mut_anywhere(pane)
@@ -65,8 +34,19 @@ fn seed_last_report(state: &mut AppState, pane: PaneId, agent_id: &str) {
         .agents
         .by_agent_mut(agent_id)
         .expect("run");
-    push_text_message(run, "user", crate::chat::agent::PANEL_REPORT_MARKER, 0);
-    push_text_message(run, "assistant", "previous report body", 1);
+    run.compact
+        .replace(vec![crate::app::state::CompactNoticeView {
+            id: "report-1".into(),
+            sequence: 2,
+            model_label: "M".into(),
+            created_at_ms: 1_700_000_000_000,
+            start_sequence: 0,
+            end_sequence: 1,
+            summary: "previous report body".into(),
+            active: true,
+            auto: false,
+            report: true,
+        }]);
 }
 
 /// 打开 Agents 页并进入 `sub-idle` 的追问编辑态。
@@ -351,7 +331,7 @@ fn report_regenerate_uses_note_and_emits_effect() {
 }
 
 #[test]
-fn btw_report_submits_flag_with_report_marker() {
+fn btw_report_submits_one_shot_effect() {
     let (mut state, pane) = btw_editing_state();
     {
         let thread = state
@@ -368,23 +348,31 @@ fn btw_report_submits_flag_with_report_marker() {
     type_str(&mut state, "/report summarize");
     state.effects.clear();
     crate::app::update::pane::apply_lx_input(&mut state, LxInput::Enter);
-    let (flag, text) = state
+    let effect = state
         .effects
         .iter()
         .find_map(|effect| match effect {
-            crate::app::effects::Effect::Btw(crate::app::effects::BtwEffect::Submit(
-                submission,
-            )) => Some((submission.report_to_main_input, submission.text.clone())),
+            crate::app::effects::Effect::Btw(crate::app::effects::BtwEffect::Report {
+                thread_id,
+                note,
+                ..
+            }) => Some((thread_id.clone(), note.clone())),
             _ => None,
         })
-        .expect("btw report submission");
-    assert!(flag);
-    assert!(text.starts_with(crate::chat::agent::PANEL_REPORT_MARKER));
-    assert!(text.contains("User note: summarize"));
+        .expect("btw report effect");
+    assert_eq!(effect.0, "thread-1");
+    assert_eq!(effect.1, "summarize");
+    assert!(
+        !state.effects.iter().any(|effect| matches!(
+            effect,
+            crate::app::effects::Effect::Btw(crate::app::effects::BtwEffect::Submit(_))
+        )),
+        "报告不得走普通问答提交"
+    );
 }
 
 #[test]
-fn btw_report_without_previous_thread_still_emits_submission() {
+fn btw_report_without_thread_is_rejected() {
     let (mut state, pane) = btw_editing_state();
     {
         let thread = state
@@ -399,18 +387,23 @@ fn btw_report_without_previous_thread_still_emits_submission() {
     type_str(&mut state, "/report summarize");
     state.effects.clear();
     crate::app::update::pane::apply_lx_input(&mut state, LxInput::Enter);
-    let submission = state
-        .effects
-        .iter()
-        .find_map(|effect| match effect {
-            crate::app::effects::Effect::Btw(crate::app::effects::BtwEffect::Submit(
-                submission,
-            )) => Some(submission.as_ref()),
-            _ => None,
-        })
-        .expect("新 QA 的报告提交");
-    assert!(submission.report_to_main_input);
-    assert!(submission.thread_id.is_none(), "线程由事件层按 QA 锚点创建");
+    assert!(
+        !state.effects.iter().any(|effect| matches!(
+            effect,
+            crate::app::effects::Effect::Btw(crate::app::effects::BtwEffect::Report { .. })
+        )),
+        "无历史线程不能生成总结"
+    );
+    assert!(
+        state
+            .pane_anywhere(pane)
+            .expect("pane")
+            .lx
+            .toast
+            .as_ref()
+            .is_some_and(|toast| toast.message.contains("report")),
+        "必须提示报告不可用"
+    );
 }
 
 #[test]
@@ -833,6 +826,7 @@ fn detail_compact_finished_without_readback_clears_running() {
         "op-readback",
         &crate::app::update::chat::DetailCompactResult::Committed,
         None,
+        false,
     ));
     let run = state
         .pane_anywhere(pane)
@@ -929,6 +923,7 @@ fn detail_compact_finished_replaces_checkpoints_and_clears_running() {
         "op-1",
         &crate::app::update::DetailCompactResult::Committed,
         Some(&[]),
+        false,
     ));
     let run = state
         .pane_anywhere(pane)
@@ -961,6 +956,7 @@ fn late_detail_compact_finished_is_ignored() {
         "stale-op",
         &crate::app::update::DetailCompactResult::Empty,
         None,
+        false,
     ));
     let running = state
         .pane_anywhere(pane)
@@ -1106,4 +1102,43 @@ fn btw_streaming_thread_drives_loading_frame() {
         .chat
         .loading_frame;
     assert_eq!(after, before + 1, "BTW 线程帧必须随心跳推进");
+}
+
+#[test]
+fn finish_generated_fills_from_report_checkpoint() {
+    let (mut state, pane) = agents_editing_state();
+    let checkpoints = vec![crate::db::chat::CompactCheckpoint {
+        id: "report-1".into(),
+        sequence: 2,
+        operation_id: "detail-report-1".into(),
+        base_checkpoint_id: None,
+        start_sequence: 0,
+        end_sequence: 1,
+        summary_text: "one-shot report body".into(),
+        model_label: "M".into(),
+        kind: crate::db::chat::CompactKind::Report,
+        state: crate::db::chat::COMPACT_ACTIVE.into(),
+        created_at_ms: 1_700_000_000_000,
+    }];
+    assert!(crate::app::update::finish_generated(
+        &mut state,
+        pane,
+        "sess-idle",
+        &checkpoints,
+        vec!["src/a.rs".into()],
+    ));
+    let input = state.pane_anywhere(pane).expect("pane").lx.input.clone();
+    let tokens = crate::app::paste::folded_tokens(&input);
+    assert_eq!(tokens.len(), 1);
+    assert_eq!(
+        tokens[0].kind,
+        crate::app::paste::FoldedKind::SubagentReport
+    );
+    assert!(
+        tokens[0]
+            .body
+            .contains("[Subagent report] sub-idle · explorer")
+    );
+    assert!(tokens[0].body.contains("one-shot report body"));
+    assert!(tokens[0].body.contains("Changed files: src/a.rs"));
 }

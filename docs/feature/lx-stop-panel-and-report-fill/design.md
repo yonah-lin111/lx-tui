@@ -2,7 +2,7 @@
 
 - **状态**：已实施完成（分支 `feature/lx-stop-panel-and-report-fill`）；实施差异见 `task.md` 顶部。
 - **范围**：主 agent 双击 Esc 停止面板；后台任务页 `^d` 的用户主动停止语义；Agents / BTW 面板 `/report`、报告二级面板与主输入框折叠芯片；两类面板的 `/rewind` 报告撤销。
-- **不涉及**：数据库 schema 迁移、模型自动恢复策略之外的 `interrupt_agent` 行为、AI Web 入口、BTW 的 `^d` 停止入口。
+- **不涉及**：模型自动恢复策略之外的 `interrupt_agent` 行为、AI Web 入口、BTW 的 `^d` 停止入口。报告检查点为 `agent_compact_checkpoint` 新增 `kind` 列（schema v30），其余不迁移。
 
 ---
 
@@ -39,16 +39,16 @@
 2. **用户主动停止语义**：后台任务页 `^d` 与停止面板停止 subagent 时，明确标记 `stopped_by_user`；主 agent 不得自行恢复，只有用户明确要求才恢复。面板直接输入、主 agent 明确转发的 `send_input` 都可以唤醒。
 3. **报告只进主输入框**：Agents / BTW 的 `/report` 不再自动投递主 agent 并自动起轮；报告正文折叠成 `[Pasted subagent report N lines]` / `[Pasted btw report N lines]`，固定在主输入框顶部，与草稿空一行。
 4. **报告二级面板**：最后一轮已是报告时，再次 `/report` 打开 `Resend last report` / `Regenerate report` / `Cancel`，默认第一项。
-5. **报告轮可 `/rewind`**：两类面板里新生成的报告轮作为普通私有轮次，可用 `/rewind` 从面板消息列表撤销；不动主输入框里的芯片。
+5. **报告可 `/rewind`**：`/report` 像 `/compact` 一样只做一次性总结，结果写成 `kind = report` 的时间线检查点；`/rewind` 删除该检查点与面板卡片，不动主输入框里的芯片。
 6. **移除空闲 `/rewind` 提示**：空闲双击 Esc 进入 `/rewind` 时不再显示原来的 toast/提示文本。
 
 ### 1.2 非目标
 
-- 不新增数据库迁移；不持久化“报告待填入主输入框”的中间状态。
+- 报告检查点新增 `kind` 列（v30）；不持久化“报告待填入主输入框”的中间状态。
 - 不改变主 agent 自己调用 `interrupt_agent` 的行为；只改变“用户主动停止”的语义。
 - `Stop all` 不停止 BTW 线程；BTW 仍由自己的 `^d` 停止。
-- 不把 BTW 多目标拆成多个芯片；多目标合并为一份 BTW 报告。
-- 不追溯把旧的 `notify_parent=1` 报告轮变成可撤销；只保证新 `/report` 轮可撤销。
+- BTW `/report` 不再按目标重新起模型轮；只总结线程已有的完整问答。
+- 不追溯把旧的 `notify_parent=1` 报告轮变成可撤销；新 `/report` 不再产生报告轮。
 - 不改 AI Web 的 `/rewind` 行为。
 
 ---
@@ -59,10 +59,10 @@
 |---|---|---|
 | 1 | 停止面板出现条件 | 只在有可停止工作时出现：主轮在途、subagent 在跑/有排队、用户 shell 在跑、受管后台进程在跑。空闲且无后台工作时双击 Esc 仍是 `/rewind` |
 | 2 | 面板动作 | 五项：`Stop all`（默认）、`Stop main response`、`Stop all subagents`、`Stop all shells`、`Cancel`；`Stop all` 包含主轮 + 全部 subagent + 全部 shell/进程 |
-| 3 | `/report` 是否仍起模型轮 | 是；子 agent / BTW 助手专门写一轮报告，报告文字填主输入框，不再自动投递主 agent |
+| 3 | `/report` 是否仍起模型轮 | 不起普通聊天轮；像 `/compact` 一样发一次独立总结请求，不落 user/assistant 消息，报告文字填主输入框 |
 | 4 | 主 agent 恢复闸门 | 用户主动停止后，主 agent 默认不得自动恢复；只有用户明确要求才恢复 |
 | 5 | 报告写入位置 | 主输入框顶部；与原有草稿之间空一行；同源报告原位替换 |
-| 6 | `/rewind` 撤销报告轮 | 只删面板消息列表里的报告轮，不动主输入框里的报告芯片 |
+| 6 | `/rewind` 撤销报告 | 删除 `kind = report` 检查点与面板卡片，不动主输入框里的报告芯片 |
 | 7 | 面板输入唤醒 | 用户在 Agents 面板输入框直接输入并发送，视为明确恢复，允许自动 `resume` |
 | 8 | 主 agent 带话唤醒 | 用户在主 agent 输入框明确说“让 Curie 继续…”时，允许 `send_input` 唤醒并投递；主 agent 自己不得主动这么做 |
 | 9 | 停止时排队输入 | 用户停止子 agent 时，连同其后代的 queued 输入一起取消；恢复后只执行新输入 |
@@ -72,12 +72,12 @@
 | 13 | 二级面板备注 | `/report <note>` 仍打开二级面板；备注只作用于“重新生成”，“重新发送”忽略备注 |
 | 14 | 芯片配色 | subagent：`LightMagenta` 前景 + `Indexed(53)` 背景；BTW：`LightBlue` 前景 + `Indexed(17)` 背景 |
 | 15 | 停止待命提示 | 有可停止工作时第一次 Esc 显示统一提示；空闲 `/rewind` 提示移除 |
-| 16 | 重新生成 | 追加新报告轮，保留旧报告轮；主输入框同源芯片用新报告替换 |
+| 16 | 重新生成 | 追加新的报告检查点，保留旧报告检查点；主输入框同源芯片用新报告替换 |
 | 17 | 停止作用域 | 当前窗格所属会话树；不碰其他窗格/标签页 |
 | 18 | 最终唤醒规则 | 允许带提示词的 `send_input` 唤醒用户停掉的 agent；提示词禁止主 agent 自行恢复 |
 | 19 | BTW 是否纳入 Stop all | 不纳入；BTW 有独立 `^d` |
-| 20 | BTW 多目标 `/report` | 合并成一份 BTW 报告、一个芯片；正文按目标分节；默认无目标时由 BTW 默认助手生成 |
-| 21 | BTW 部分目标失败 | 成功的目标成节，失败/超时目标写 `[name] report unavailable (failed)`；至少一个成功才填芯片，全失败只 Toast |
+| 20 | BTW `/report` | 总结当前 BTW 线程已有的完整会话；不再按 `@目标` 重新查询，无线程时拒绝 |
+| 21 | BTW 报告失败 | 一次性总结空/失败只 Toast `BTW report unavailable`，不填芯片 |
 
 ---
 
@@ -188,56 +188,46 @@
 | `close_agent` / 会话删除 / 退出 | 现有 `cancel_for_session` / `close` | 否 | 否 | 否 |
 | 主 agent `interrupt_agent` | 现有 `interrupt` | 否（模型发起） | 半程报告 | 是（现有语义） |
 
-### 3.3 `/report` 流程
+### 3.3 `/report` 流程（一次性总结）
+
+`/report` 与 `/compact` 共用同一条一次性请求管线：**不追加 user/assistant 消息**，
+不触发普通聊天轮、工具调用或父轮投递；成功结果写成 `kind = report` 的检查点，
+在面板时间线里显示为可折叠的报告卡片。
 
 #### Agents 详情 composer
 
 ```text
 空闲 Curie 详情：
-  输入 /report [note] → 起一轮报告模型调用
-  → Curie 消息列表出现一轮报告
+  输入 /report [note]
+  → 对 Curie 子会话已有完整轮次做一次独立总结请求
+  → 成功：面板新增 Report 检查点卡片
   → 报告正文折叠成 [Pasted subagent report N lines] 放到主输入框顶部
   → 不自动投递主 agent、不自动起父轮
 
-最后一轮已经是报告：
+已有报告：
   输入 /report [note] → 打开二级面板
   ┌ Report ──────────────────────────────┐
   │ ❯ Resend last report                 │
   │   Regenerate report                  │
   │   Cancel                             │
   └ ↵ run · esc close ───────────────────┘
-  - Resend：直接复用上一轮报告正文，不调用模型
-  - Regenerate：按 note 起新一轮报告；完成后追加新报告轮并替换主输入框同源芯片
+  - Resend：直接复用最近一次报告检查点正文，不调用模型
+  - Regenerate：按 note 起新的一次性总结；完成后追加新检查点并替换同源芯片
   - Cancel：关闭面板，无副作用
 ```
 
-- `/report` 忙碌（目标 running / queued / compacting）拒绝，不产生效应，保留草稿。
-- `/report` 目标无 chat session / 已被移除：Toast `Cannot report from this agent`。
-- 报告轮失败/取消：
-  - 不填芯片；
-  - Toast `Report unavailable`；
-  - 报告轮保留在面板消息列表（可见错误/半程正文）。
-- 报告正文为空：不填芯片，Toast。
+- `/report` 忙碌（目标 running / queued / compacting，或正有报告在跑）拒绝，不产生效应。
+- 目标无会话 / 已被移除：Toast `Cannot report from this agent`。
+- 总结失败/取消/正文为空：不填芯片，Toast `Report unavailable`；不写检查点。
+- 报告检查点不参与上下文装配（`active_checkpoint` 只认 `kind = compact`）。
 
 #### BTW composer
 
-- 命令集新增 `/report`：`/rewind` `/compact` `/report` `/new`。
-- 默认无目标：由 BTW 自己的默认助手生成报告。
-- 有目标：沿用当前线程目标集合（可多个）。
-- 多目标：等待全部目标结束，合并成一份报告：
-  ```text
-  [BTW report] <thread title>
-  [Curie] ...
-  [Turing] ...
-  ```
-- 部分失败：
-  ```text
-  [BTW report] <thread title>
-  [Curie] ...
-  [Turing] report unavailable (failed)
-  ```
-- 全失败：不填芯片，Toast `BTW report unavailable`。
-- 最后一轮已是报告：同样打开二级面板；`Resend` 复用上一轮合并报告，`Regenerate` 按当前目标集合重新生成。
+- 命令集保持 `/rewind` `/compact` `/report` `/new`。
+- 只总结当前 BTW 线程已经完成的问答；没有线程（新 QA 尚未提问）时拒绝。
+- 不再按 `@Curie @Turing` 重新查询目标，也不再合并多目标分节。
+- 成功：BTW 线程时间线新增 Report 检查点，正文填主输入框；失败/空：Toast `BTW report unavailable`。
+- 已有报告：同样打开二级面板；`Resend` 复用最近报告，`Regenerate` 重新总结当前线程。
 
 ### 3.4 主输入框报告芯片
 
@@ -743,7 +733,7 @@ let is_active = running || resumed || user_stopped;
 - 停止面板 `Subagents` / `All`：
   - 发 `agent_id: None`。
 
-### 4.4 `/report` 命令与报告轮
+### 4.4 `/report` 命令与一次性总结
 
 #### 4.4.1 命令模型
 
@@ -756,193 +746,105 @@ impl DetailCommand {
 }
 ```
 
-- `parse`：
-  - `(DetailContext::Agent | DetailContext::Btw, "report") => DetailCommand::Report`；
-  - `/report` 的 note 仍允许换行。
-- `description`：
-  - `Report a summary to the main agent input`
-  - 避免说“自动汇报给父 agent”。
+- `parse`：`(DetailContext::Agent | DetailContext::Btw, "report") => DetailCommand::Report`；
+- `description`：`Report a summary to the main agent input`；
 - `echo_prefix` / `argument_hint`：不变。
-- 测试更新：
-  - BTW 命令列表包含 `/report`；
-  - `parse("/report note", DetailContext::Btw)` 返回 `Report("note")`。
 
-#### 4.4.2 报告请求标记
+#### 4.4.2 独立总结请求
 
-文件：`src/chat/agent/report.rs`
+文件：`src/chat/compact.rs`
 
 ```rust
-/// 面板 `/report` 请求消息的固定首行；报告正文只进入主输入框，不自动投递。
-pub const PANEL_REPORT_MARKER: &str = "[Report for main agent]";
+pub const REPORT_SYSTEM_PROMPT: &str = "You are writing a report for the main agent. ...";
 
-/// 旧版自动汇报标记；仅用于识别历史报告轮。
-pub const REPORT_REQUEST_MARKER: &str = "[Report to parent agent]";
-
-pub fn report_request_message(note: &str) -> String {
-    // 首行改用 PANEL_REPORT_MARKER
-}
+pub fn report_request_from_transcript(
+    transcript: &str,
+    start_sequence: i64,
+    end_sequence: i64,
+    message_count: usize,
+    omitted_turns: usize,
+    note: &str,
+    model: &ModelSnapshot,
+    variant_params: Option<serde_json::Value>,
+) -> ChatRequest;
 ```
 
-- `visible_task` 需要同时识别两个 marker，避免报告指令覆盖父可见任务标题。
-- 旧记录仍按 `REPORT_REQUEST_MARKER` 识别。
+- 与 `/compact` 共用 `<transcript>` 包装、输入上限与一次性请求形状；
+- `purpose = RequestPurpose::Report`、无工具、系统提示独立；
+- 正文校验 `validate_report`：空/超限失败，**不截断**；
+- 不读写普通消息表，不执行工具，不触发自动压缩。
 
-#### 4.4.3 Agents `/report` 提交流程
-
-文件：`src/app/update/chat/detail_report.rs`（重写）
-
-```rust
-pub(crate) fn submit(state: &mut AppState, pane: PaneId, note: &str) -> bool {
-    let Some(context) = resolve_context(state, pane) else { toast; return true; };
-
-    if context.busy() {
-        clear_composer(state, pane);
-        toast "Cannot report while the agent is running";
-        return true;
-    }
-
-    if let Some(last) = context.last_report_body() {
-        return open_report_panel(state, pane, context.target, note, last);
-    }
-
-    // 没有上一轮报告：起一轮新的报告模型调用
-    state.effects.push(Effect::SendSubagentReport {
-        pane,
-        session_id: context.session_id,
-        agent_id: context.agent_id,
-        note: note.to_string(),
-    });
-    clear_composer(state, pane);
-    true
-}
-```
-
-- `last_report_body()`：
-  - Agents：DB 最新 user turn 的 user 文本首行是 `PANEL_REPORT_MARKER` 或旧 marker，且该轮已有 assistant 正文；返回 body。
-  - BTW：当前线程最后一条 user 消息首行是 marker，且已有 assistant 正文。
-- 忙碌判据：
-  - Agents：`run.is_running() || run.queued_count > 0 || !run.chat.pending_steers.is_empty() || run.compact.is_running()`；
-  - BTW：`thread.is_loading() || thread.compact.is_running()`。
-
-#### 4.4.4 新效应与事件层落地
+#### 4.4.3 效应与事件层入口
 
 文件：`src/app/effects.rs`
 
 ```rust
-SendSubagentReport {
-    pane: PaneId,
-    session_id: String,
-    agent_id: String,
-    note: String,
-},
-SendBtwReport {
-    pane: PaneId,
-    parent_session_id: String,
-    qa_id: String,
-    note: String,
-},
+SendSubagentReport { pane, session_id, agent_id, note }, // 保留原名，语义改为一次性报告
+BtwEffect::Report { pane, parent_session_id, thread_id, note },
 ```
 
-Agents 事件层：
-- 校验目标归属与空闲；
-- `enqueue_input` 使用 `report_request_message(note)`；
-- `notify_parent = false`；
-- 在 `ChatStreams.report_to_input` 插入 `submission_id`；
-- 立即调度（目标空闲）；
-- 记 `report_to_input_turn`，避免与新报告混淆。
+文件：`src/event/chat/detail_report.rs`（新增）
 
-BTW 事件层：
-- 复用 `Submit` 链路，`BtwSubmission` 增加 `report_to_main_input: bool`；
-- `BtwStreams` 增加 `report_batches: HashMap<String, BtwReportBatch>`：
-  ```rust
-  struct BtwReportBatch {
-      thread_id: String,
-      expected: usize,
-      sections: Vec<(String, String)>, // (label, body)
-      failed: Vec<String>,
-  }
-  ```
-- 每个 recipient 结算时写入 section/failed；
-- 全部收口后发 `AppEvent::BtwReportReady`。
+```rust
+pub(crate) fn prepare(
+    state: &mut AppState,
+    sender: &mpsc::UnboundedSender<AppEvent>,
+    persistence: &Persistence,
+    pane: PaneId,
+    target: DetailTarget,
+    note: &str,
+) -> bool;
+```
 
-#### 4.4.5 报告轮结算与捕获
+- 解析 child session（Agents 走 `resolve_owned_subagent`；BTW 走 `btw_thread`）；
+- 忙碌判据：目标 running / queued / pending steer / compact 或报告执行中；BTW 还要 `is_loading`；
+- 模型冻结与 `/compact` 同口径；`OperationId = detail-report-*`；
+- 通过 `on_detail_report_started` 置 `compact.running_report = true`；
+- 交给 `execute_compact`（`CompactRequest.kind = Report`，`base_checkpoint_id = None`，携带 note）。
 
-Agents：
-- `SubagentHandle` 增加 `report_to_input: bool`。
-- `ChatStreams` 增加 `report_to_input: HashSet<String>`（按 submission id）。
-- `schedule_next_queued_input_with_done` 认领后：
-  ```rust
-  let report_to_input = streams.report_to_input.remove(&next_input.submission_id).is_some();
-  launch_child_turn(..., report_to_input, ...)
-  ```
-- `launch_child_turn` 把 `report_to_input` 写入 handle。
-- `finish_subagent_with_billing`：
-  ```rust
-  if handle.report_to_input && matches!(reason, StopReason::Complete) {
-      let body = report_body(&handle);
-      let changed_paths = database.list_changed_paths_for_turn(...).unwrap_or_default();
-      if !body.trim().is_empty() {
-          // 事件层直接回投 app 状态；Effect 是 app→event 方向，不能反向 push。
-          crate::app::update::on_subagent_report_ready(state, SubagentReportReady {
-              pane: handle.parent.pane,
-              parent_session: handle.parent.session.clone(),
-              agent_id: handle.agent_id.clone(),
-              nickname: handle.nickname.clone(),
-              title: handle.title.clone(),
-              role: handle.role,
-              body,
-              changed_paths,
-          });
-      } else {
-          crate::app::update::show_lx_toast(... "Report unavailable" ...);
-      }
-  }
-  ```
-- 不传 `report` payload 给 `finish_subagent_turn`（`None`），因此不写 `agent_subagent_report`、不触发 `drain_reports`。
-- `on_subagent_report_ready` 在 app 层组装来源头 + 变更文件摘要，再调用 `report_fill::fill_main_input`。
+效应归属：
+- Agents：`Effect::SendSubagentReport` 在 `apply_compact_effects` 中先于持久化泵消费；
+- BTW：`BtwEffect::Report` 在 `btw::apply_effect` 中直接调用 `detail_report::prepare`；
+- 两者都不创建 user/assistant 消息。
 
-BTW：
-- `BtwSubmission.report_to_main_input` 存入 `BtwPending` / `BtwRun`；
-- `on_finished` / 事件层结算时按 batch 聚合；
-- 全部完成后通过 `BtwEvent::ReportReady { ... }` / `AppEvent` 回投 app 层，由 `update::on_btw_report_ready` 组装合并报告并填主输入框；事件层不直接 push `Effect`。
+#### 4.4.4 执行与提交
+
+`execute_compact` 按 `kind` 分支：
+
+- compact：增量范围 = 上一个 active compact 检查点之后；
+- report：完整可回放会话（不按 compact 边界截断），装配 `report_request_from_transcript`；
+- 网络流 `StreamLog.kind = "report"`，失败/空/工具调用一律不写检查点；
+- 成功：`Database::commit_report` 写 `kind = report` 检查点并推进 revision；
+- 回执仍用 `AppEvent::CompactFinished` / `CompactOutcome`，由 `detail_compact::handle_finished` 按 `running_report` 分流。
+
+#### 4.4.5 数据库
+
+v30：`agent_compact_checkpoint.kind TEXT NOT NULL DEFAULT 'compact' CHECK (kind IN ('compact','report'))`。
+
+- `active_checkpoint` 只取 `kind = 'compact'`，报告不参与上下文装配；
+- `compact_checkpoints` 返回全部 active 条目，UI 渲染为 `Report` / `Context compacted` 两种系统卡片；
+- `revert_compact` 按检查点 id 删除，kind 不影响删除语义；
+- fork 复制时保留 kind。
 
 #### 4.4.6 报告正文格式
 
 Agents：
 ```text
 [Subagent report] Curie · executor · Fix login redirect
-<assistant 报告正文>
+<模型报告正文>
 Changed files: src/auth/session.rs, src/auth/login.rs
 ```
 
-- 来源头：
-  - `[Subagent report]`；
-  - `nickname` 或 `agent_id`；
-  - `role.as_str()`；
-  - `title`（空时省略）。
-- `Changed files`：
-  - 只在 `changed_paths` 非空时追加；
-  - 最多 `MAX_REPORT_CHANGED_PATHS` 条，余量 `(+N more)`；
-  - 与现有 `format_report_envelope` 的路径展示一致，但不使用 XML 信封。
+- 来源头由 app 层用 run 的 nickname/role/title 组装；
+- `Changed files` 来自 `list_all_changed_paths`（整个子会话去重，最多 8 条）；
+- BTW：`[BTW report] <thread title>` + 正文，不做多目标分节。
 
-BTW：
-```text
-[BTW report] <thread title>
-[Curie] <body>
-[Turing] <body>
-```
+#### 4.4.7 撤销
 
-- 默认助手 section label 用 `[BTW]`。
-- 失败 section：`[Turing] report unavailable (failed)`。
-- 只使用纯文本，不把 XML 信封塞进主输入框。
-
-#### 4.4.7 报告轮可撤销
-
-- 新 `/report` 轮是 `notify_parent=false` 的普通私有轮次：
-  - `latest_undoable_private_turn` 的 `notify_parent == 0` 条件自然满足；
-  - Agents `/rewind` 可以删除它；
-  - BTW `/rewind` 走 `latest_user_turn`，同样可以删除。
-- 旧 `notify_parent=1` 报告轮继续不可撤销，避免影响已自动投递的历史。
-- 撤销只删面板消息；主输入框芯片不变（决策 6）。
+- 报告检查点是时间线最新事件时，详情 `/rewind` 打开报告专用面板；
+- 执行 `RewindAction::RestoreCompact` → `revert_compact` 删除检查点并推进 revision；
+- 不触碰消息、文件或主输入框芯片；
+- 旧 `notify_parent=1` 报告轮仍按普通历史处理，不追溯。
 
 ### 4.5 报告二级面板
 
@@ -995,13 +897,13 @@ match action {
     }
     ReportAction::Regenerate => {
         close;
-        push Effect::SendSubagentReport / SendBtwReport { note };
+        push Effect::SendSubagentReport / BtwEffect::Report { note };
     }
 }
 ```
 
-- `Resend` 不调用模型，不新增报告轮。
-- `Regenerate` 按当前目标集合重新生成；Agents 单目标，BTW 多目标。
+- `Resend` 不调用模型，不新增检查点。
+- `Regenerate` 重新做一次当前面板会话的一次性总结；Agents / BTW 各只有一个来源。
 - 若面板打开后目标被切走（切 agent / 切 QA），执行前校验 `target.is_active(&lx)`；失效则关闭面板并 Toast `Report target changed`。
 - `note` 只传给 `Regenerate`；`Resend` 忽略备注（决策 13）。
 
@@ -1142,7 +1044,7 @@ pub(crate) fn fill_main_input(
 ) -> bool {
     let Some(target) = state.pane_mut_anywhere(pane) else { return false };
     if target.lx.chat.session_id.as_deref() != Some(parent_session_id) {
-        // 会话已切走：不污染新会话输入框；报告轮仍在面板里可再次 /report
+        // 会话已切走：不污染新会话输入框；报告检查点仍在面板时间线里
         return false;
     }
 
@@ -1208,21 +1110,13 @@ impl Lx {
 - `mask` 用于触发词扫描，自动把报告芯片视为空白，避免报告正文里的 `@`/`/` 误触发面板。
 - 选择、复制、Backspace/Delete 整块删除沿用现有 token 边界逻辑。
 
-### 4.7 `/rewind` 与报告轮
+### 4.7 `/rewind` 与报告
 
-- 新报告轮是普通私有轮次：
-  - Agents：`latest_undoable_private_turn` 返回它（`position > 0`、无 `parent_call_id`、`notify_parent = 0`）；
-  - BTW：`latest_user_turn` 返回它。
-- `/rewind` 删除该轮：
-  - 删除 user/assistant 消息与 parts；
-  - 恢复文件（如果报告轮有文件改动）；
-  - 主输入框芯片不变。
-- 报告轮删除后：
-  - 面板消息列表少一轮；
-  - 再次 `/report` 时，如果上一轮变成普通问答，则直接起新报告，不弹二级面板。
-- 旧 `notify_parent=1` 报告轮：
-  - 继续不可撤销；
-  - 二级面板仍可识别并 `Resend`（从 DB 读取正文），但不支持 `/rewind`。
+- 报告检查点是独立时间线条目，不产生 user/assistant 消息；
+- 最新 active 报告检查点比最新用户轮更晚时，详情 `/rewind` 选中它；
+- `RewindTargetKind::Report` 使用报告专用面板文案，执行仍走 `RestoreCompact`；
+- `revert_compact` 删除检查点并推进 revision，不触碰消息/文件/主输入框芯片；
+- 旧 `notify_parent=1` 报告轮继续按普通历史处理，不追溯。
 
 ### 4.8 提示词
 
@@ -1271,15 +1165,12 @@ impl Lx {
 
 ## 5. 数据、并发与失败模式
 
-### 5.1 无数据库迁移
+### 5.1 数据库与内存状态
 
-- `user_stopped`、`report_to_input`、`stopped_by_user` 都是内存状态。
-- DB 继续使用现有 `cancelled` 状态；UI 通过 `SubagentRun.stopped_by_user` 显示 `stopped`。
-- 应用重启后：
-  - `user_stopped` 丢失，DB 显示 `cancelled`；
-  - 不会自动恢复；
-  - 用户可重新打开面板发送消息/`/report`，走现有 resume 路径。
-- 报告待填充状态不持久化；报告轮本身已落库，用户可再次 `/report` 用 `Resend` 取回。
+- `user_stopped`、`stopped_by_user` 是内存状态；DB 继续使用现有 `cancelled`，UI 显示 `stopped`。
+- 应用重启后 `user_stopped` 丢失，DB 显示 `cancelled`；不会自动恢复，用户可重新发送消息。
+- v30 给 `agent_compact_checkpoint` 增加 `kind`（`compact` / `report`）：报告检查点与 compact 共用时间线、revision 与 `/rewind` 删除语义；只有 `kind = compact` 参与上下文装配。
+- 报告待填充状态不持久化；报告检查点本身已落库，用户可再次 `/report` 用 `Resend` 取回。
 
 ### 5.2 并发与迟到回执
 
@@ -1289,8 +1180,8 @@ impl Lx {
   - 若 handle 已自然完成并移除，仍把 `user_stopped` 写入，后续 `projected_agent_status` 显示 stopped；
   - 若在 settle 前移除 handle，`finish` 不会覆盖 `user_stopped`。
 - 报告回执迟到：
-  - 报告轮完成时 pane 已关闭：不填；报告轮仍在 DB；
-  - pane 已切会话：不填，避免污染新会话输入框；
+  - 报告完成时 pane 已关闭：不填；报告检查点仍在 DB，重新打开面板可见；
+  - pane 已切会话：不填，避免污染新会话输入框；报告检查点仍随会话时间线保留；
   - 同源芯片已被用户删除：重新插到顶部；
   - 主输入框已包含同源芯片：原位替换。
 - 报告二级面板打开后目标被切换：
@@ -1305,9 +1196,8 @@ impl Lx {
 | 失败 | 行为 |
 |---|---|
 | Agents `/report` 目标 running/queued/compacting | 拒绝，草稿保留，Toast |
-| Agents 报告轮 Failed/Cancelled | 不填芯片，Toast `Report unavailable`，报告轮保留 |
-| BTW 报告部分目标失败 | 成功 section + 失败占位；至少一个成功才填 |
-| BTW 报告全失败 | 不填芯片，Toast `BTW report unavailable` |
+| Agents 报告 Failed/Cancelled | 不填芯片，Toast `Report unavailable`；不写检查点 |
+| BTW 报告失败/空 | 不填芯片，Toast `BTW report unavailable`；不写检查点 |
 | 报告正文为空 | 不填芯片，Toast |
 | 报告芯片超 `MAX_FOLDED_BYTES` | 按现有折叠规则拒绝/降级；报告正文在组装阶段按 `MAX_REPORT_BODY` 截断 |
 | 主输入框会话不匹配 | 不填，不弹无关 Toast，记录 debug 日志 |
@@ -1346,23 +1236,20 @@ impl Lx {
 - 主 agent 提示词包含“不要自动恢复”的规则；`PROMPT_VERSION` 更新。
 - 旧 `close_agent` / 会话删除仍走 `cancel_for_session`，行为不变。
 
-### 6.3 `/report` 命令与报告轮
+### 6.3 `/report` 一次性总结
 
-- Agents `/report` 无上一轮报告：发 `SendSubagentReport`，`notify_parent=false`，报告轮落库。
-- 报告轮完成后主输入框出现 `[Pasted subagent report N lines]`；不自动起父轮。
-- BTW `/report` 无上一轮报告：发 `SendBtwReport`；完成后出现 `[Pasted btw report N lines]`。
-- 默认无目标 BTW 报告由 BTW 默认助手生成。
-- BTW 多目标合并成一份报告，按目标分节。
-- BTW 部分失败 → 失败占位；全失败 → 不填芯片。
-- 忙碌目标拒绝且不产生效应。
-- 报告轮失败/空正文 → 不填芯片 + Toast。
-- 报告正文包含来源头 + 变更文件摘要。
+- Agents `/report`：`SendSubagentReport` → `detail_report::prepare` → 独立总结请求；不创建 user/assistant 消息。
+- BTW `/report`：`BtwEffect::Report` → 同一管线；只总结线程已有问答，无线程时拒绝。
+- 成功后主输入框出现对应芯片；面板出现 Report 检查点卡片；不自动起父轮。
+- 忙碌目标拒绝且不产生效应；备注超长按单条消息上限拒绝。
+- 失败/空正文 → 不填芯片 + Toast；不写检查点。
+- 报告正文包含来源头 + 变更文件摘要（BTW 无变更文件尾巴）。
 
 ### 6.4 报告二级面板
 
-- 最后一轮是报告：`/report` 打开 `ReportPanel`，默认 `Resend`。
-- `Resend`：不产生模型效应；直接填芯片；备注忽略。
-- `Regenerate`：产生新的报告请求；带 note；追加报告轮；同源芯片替换。
+- 已有报告检查点：`/report` 打开 `ReportPanel`，默认 `Resend`。
+- `Resend`：不产生模型效应；直接用最近报告检查点正文填芯片；备注忽略。
+- `Regenerate`：产生新的一次性总结；带 note；追加报告检查点；同源芯片替换。
 - `Cancel`：无效应。
 - 目标切换后执行：面板关闭 + Toast，不产生效应。
 - `last_report` 为空：`Resend` 禁用，默认落到 `Regenerate`。
@@ -1379,13 +1266,12 @@ impl Lx {
 - 报告正文含 `</pasted-subagent-report>` 等闭合标签时正确转义/反转义。
 - 选择/复制/整块删除/展开状态沿用现有测试。
 
-### 6.6 `/rewind` 报告轮
+### 6.6 `/rewind` 报告
 
-- Agents 新报告轮是 `latest_undoable_private_turn` 的目标；`/rewind` 删除它。
-- BTW 新报告轮同样可删除。
-- 删除报告轮后主输入框芯片不变。
+- 最新报告检查点是详情 `/rewind` 的目标；执行后删除检查点卡片。
+- 主输入框芯片不变；消息与文件不变。
 - 旧 `notify_parent=1` 报告轮仍不可撤销。
-- 报告轮删除后再次 `/report` 不弹二级面板（上一轮已不是报告）。
+- 报告检查点删除后再次 `/report` 不弹二级面板。
 
 ### 6.7 渲染与文案
 
@@ -1407,11 +1293,12 @@ impl Lx {
 | 用户停止后主 agent 仍唤醒 | 提示词是软约束 | wait/list 结果带 `stopped_by_user`；面板输入/显式 `send_input` 才唤醒；后续可在评审中加硬闸门 |
 | 报告芯片解析兼容 | 新增两种 token 与 source 属性 | 旧 text/code/log 语法不变；新增往返/兼容测试 |
 | 报告自动投递改变 | 用户可能期待主 agent 自动继续 | 这是本次明确需求；报告只进输入框，用户可编辑后再发 |
-| BTW 多目标报告 | 合并可能丢失目标独立性 | 正文按目标分节；失败占位；后续可扩展为多芯片 |
-| 无迁移 | 重启后 `user_stopped` 丢失 | 不自动恢复；DB `cancelled` 仍可见；重新发送即恢复 |
+| BTW 报告语义变化 | 不再按 `@目标` 重新查询，只总结线程已有问答 | 与 compact 一致；需要目标新结论时先正常提问再 `/report` |
+| 报告检查点迁移 | v30 增加 `kind` 列；旧行默认 `compact` | 迁移幂等、旧库升级路径保留；报告不参与上下文 |
+| 重启后内存停止态丢失 | `user_stopped` 仅内存 | 不自动恢复；DB `cancelled` 仍可见；重新发送即恢复 |
 
 **回滚**：
-- 纯代码回滚，无数据库迁移。
+- 报告检查点迁移可保留（旧二进制忽略 `kind` 会当 compact 读，需回滚前清空报告检查点）；用户停止状态纯内存回滚。
 - 报告芯片 token 若已写入输入框草稿，回滚后旧版本不认识新 token，会当普通文本发送；这是可接受的草稿级影响。
 - 用户停止状态仅在内存，重启即清空。
 
@@ -1442,16 +1329,16 @@ impl Lx {
 
 ### 8.3 报告
 
-1. Curie 空闲，输入 `/report 总结登录 bug`：Curie 生成一轮报告；主输入框顶部出现 `[Pasted subagent report N lines]`，与草稿空一行；主 agent 不自动起轮。
-2. 展开芯片：正文以 `[Subagent report] Curie · ...` 开头，含变更文件摘要。
+1. Curie 空闲，输入 `/report 总结登录 bug`：Curie 面板新增 Report 卡片，**不出现报告 user 消息**；主输入框顶部出现 `[Pasted subagent report N lines]`，与草稿空一行；主 agent 不自动起轮。
+2. 展开报告卡片与芯片：正文以 `[Subagent report] Curie · ...` 开头，含变更文件摘要。
 3. 再次 `/report`：弹出 `Resend last report` / `Regenerate report` / `Cancel`，默认第一项。
 4. `Resend`：不调用模型，芯片内容不变。
-5. `Regenerate`：Curie 追加一轮新报告；主输入框同源芯片替换；面板保留旧报告轮。
+5. `Regenerate`：新增一个报告检查点；主输入框同源芯片替换；旧报告检查点保留。
 6. 同源报告反复填充：主输入框始终只有一个对应芯片。
 7. subagent 与 BTW 报告可同时存在，颜色分别为亮品红/深紫、亮蓝/深蓝。
-8. BTW 默认无目标：`/report` 由 BTW 默认助手生成报告。
-9. BTW 同时 @Curie @Turing：`/report` 生成一份合并报告，按目标分节；部分失败有占位；全失败不填芯片。
-10. 对新报告轮执行 `/rewind`：面板消息列表删除该轮；主输入框芯片保留。
+8. BTW 已有问答：`/report` 总结线程会话并生成一份报告；新 QA 无线程时拒绝。
+9. BTW 报告失败/空：不填芯片，Toast `BTW report unavailable`。
+10. 对最新报告执行 `/rewind`：面板报告卡片删除；主输入框芯片保留；消息与文件不变。
 11. 旧报告轮（本次改动前生成）不因 `/rewind` 被删除。
 
 ### 8.4 代码质量
@@ -1459,17 +1346,16 @@ impl Lx {
 - `cargo fmt` 通过。
 - `cargo clippy --all-targets -- -D warnings` 通过。
 - 受影响测试与全量 `cargo test` 通过。
-- 生产代码无 `unwrap()/expect()`；无中文 UI 文案；无 schema 版本变更。
+- 生产代码无 `unwrap()/expect()`；无中文 UI 文案；仅 v30 报告检查点迁移。
 - 文件行数：新增/修改文件遵守 1000 行上限；测试按场景拆分。
 
 ---
 
-## 9. 实施前待确认
+## 9. 后续修订（2026-11-16）
 
-本文档已按 21 项 Grill Me 决策收口。实施前只需用户确认：
+用户实机验收后确认报告语义改为：
 
-1. 是否同意“无数据库迁移、用户停止状态仅内存”的取舍；
-2. 是否同意“旧 `notify_parent=1` 报告轮不追溯可撤销”；
-3. 是否同意“BTW 多目标合并为一份报告芯片”。
-
-若三项均同意，按 `task.md` 的顺序执行。
+1. `/report` 与 `/compact` 一样做一次性总结，不发送 user 消息；报告写成 `kind = report` 检查点，可被 `/rewind` 删除。
+2. BTW 不再按 `@目标` 重新查询，只总结线程已有问答；新 QA 无线程时拒绝。
+3. 报告检查点使用 schema v30 的 `kind` 列；旧 `notify_parent=1` 报告轮不追溯。
+4. 主输入框/所有输入框的 `↓`：非末行下移；末行中间落到行尾；主输入框已在末尾时打开后台任务面板。

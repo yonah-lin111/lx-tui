@@ -32,13 +32,13 @@ pub(super) fn build(
 ) -> SystemCard {
     let mark = StepMark::Done.segment(StepKind::System, 0, false);
     let header = vec![Segment::new(
-        format!("{mark}{}", title(count)),
+        format!("{mark}{}", notice_title(notice, count)),
         style::accent(),
     )];
-    let fixed = vec![
-        Node::text(description(notice), style::muted()),
-        Node::text(range_line(notice), style::muted()),
-    ];
+    let mut fixed = vec![Node::text(description(notice), style::muted())];
+    if !notice.report {
+        fixed.push(Node::text(range_line(notice), style::muted()));
+    }
     let summary = super::tool::muted_markdown_lines(&notice.summary, body_width(width));
     SystemCard::new(width, header, fixed, summary, expanded)
 }
@@ -50,7 +50,11 @@ fn running_header_segments(
     animating: bool,
 ) -> Vec<Segment> {
     let mark = StepMark::Running.segment(StepKind::System, loading_frame, animating);
-    let title = text::chat::COMPACTING_LABEL;
+    let title = if compact.running_report {
+        text::chat::REPORTING_LABEL
+    } else {
+        text::chat::COMPACTING_LABEL
+    };
     let mut segments = vec![Segment::new(
         format!("{mark}{title}"),
         style::chat_step_mark_alive(),
@@ -68,9 +72,18 @@ pub(super) fn running_rows(compact: &LxCompact, width: u16) -> usize {
     super::tool::wrap_spans(&segments, usize::from(width)).len()
 }
 
-/// 标题（连续多条合并为 `Context compacted xN`）。
+/// 标题（连续多条合并为 `Context compacted xN` / `Report xN`）。
 pub(super) fn title(count: usize) -> String {
     text::compact_notice_title(count)
+}
+
+/// 按条目类型取标题。
+fn notice_title(notice: &CompactNoticeView, count: usize) -> String {
+    if notice.report {
+        text::report_notice_title(count)
+    } else {
+        title(count)
+    }
 }
 
 /// 头部描述：模型与时间；已撤销的条目明确标注。

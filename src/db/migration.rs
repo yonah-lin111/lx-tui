@@ -282,6 +282,28 @@ impl Database {
         if version < 29 {
             self.migrate_v29_private_followup()?;
         }
+        if version < 30 {
+            self.migrate_v30_report_checkpoint()?;
+        }
+        Ok(())
+    }
+
+    /// v30：compact 检查点增加 `kind`，区分上下文压缩与面板 `/report` 总结。
+    ///
+    /// 两者共用检查点表（sequence、revision、`/rewind` 删除语义一致），但只有
+    /// `compact` 参与上下文装配；旧行默认 `compact`。
+    fn migrate_v30_report_checkpoint(&mut self) -> Result<()> {
+        let transaction = self.conn.unchecked_transaction()?;
+        if !column_exists(&transaction, "agent_compact_checkpoint", "kind")? {
+            transaction.execute_batch(
+                "ALTER TABLE agent_compact_checkpoint
+                     ADD COLUMN kind TEXT NOT NULL DEFAULT 'compact'
+                     CHECK (kind IN ('compact', 'report'));",
+            )?;
+        }
+        ensure_no_foreign_key_violation(&transaction)?;
+        transaction.pragma_update(None, "user_version", 30)?;
+        transaction.commit()?;
         Ok(())
     }
 

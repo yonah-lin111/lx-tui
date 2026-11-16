@@ -171,7 +171,6 @@ pub(super) fn start_recipient(
             &start.assistant_message_id,
             &model_label,
         ));
-    let answerer_label = pending.answerer_label.clone();
     let run = BtwRun {
         thread_id: pending.thread_id.clone(),
         batch_id: pending.batch_id.clone(),
@@ -184,7 +183,6 @@ pub(super) fn start_recipient(
         started_at_ms: crate::db::now_ms(),
         last_checkpoint_ms: crate::db::now_ms(),
         label: model_label,
-        answerer_label,
     };
     let label = run.label.clone();
     streams.btw.runs.insert(key.clone(), run);
@@ -493,7 +491,7 @@ pub(super) fn finish_run(
     let workspace = streams.db_workspaces.get(key).cloned().unwrap_or_default();
     let duration_ms = crate::db::now_ms().saturating_sub(run.started_at_ms).max(0);
     // 先在内存收尾（关闭思考块/在途工具），再取 parts 落库；顺序反过来会丢最后一次收尾。
-    let mut changed = crate::app::update::on_btw_finished(
+    let changed = crate::app::update::on_btw_finished(
         state,
         child_session,
         assistant_id,
@@ -505,13 +503,6 @@ pub(super) fn finish_run(
     if parts.is_empty() {
         parts = buffer_parts(&run.buffer, assistant_id);
     }
-    let report_text = parts
-        .iter()
-        .filter(|part| part.kind == "text")
-        .map(|part| part.content.trim())
-        .filter(|text| !text.is_empty())
-        .collect::<Vec<_>>()
-        .join("\n\n");
     let outcome = match &reason {
         StopReason::Complete => TurnOutcome::Complete {
             stop_reason: Some("complete".to_string()),
@@ -546,12 +537,6 @@ pub(super) fn finish_run(
             Err(error) => tracing::warn!(code = error.code(), "btw settle failed"),
         }
     }
-    // `/report` 批次：记录本节，全部收口后合并填入主输入框。
-    let report_ready = streams.btw.record_report_outcome(
-        &run.batch_id,
-        &run.answerer_label,
-        matches!(reason, StopReason::Complete).then_some(report_text),
-    );
     // 只清本 run 的执行资源；不按 session 清理其他目标的模型。
     streams.cancels.remove(key);
     streams.db_workspaces.remove(key);
@@ -564,9 +549,6 @@ pub(super) fn finish_run(
             .is_some_and(|batch| batch == &run.batch_id)
     {
         streams.btw.active_batches.remove(&run.thread_id);
-    }
-    if let Some(ready) = report_ready {
-        changed |= crate::app::update::on_btw_report_ready(state, ready);
     }
     changed
 }

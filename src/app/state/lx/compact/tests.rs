@@ -14,6 +14,7 @@ fn checkpoint(id: &str, sequence: i64, active: bool) -> CompactNoticeView {
         summary: "sum".into(),
         active,
         auto: false,
+        report: false,
     }
 }
 
@@ -27,6 +28,7 @@ fn record(id: &str, sequence: i64, state: &str) -> CompactCheckpoint {
         end_sequence: 3,
         summary_text: "summary".into(),
         model_label: "gpt-5".into(),
+        kind: crate::db::chat::CompactKind::Compact,
         state: state.into(),
         created_at_ms: 1_700_000_000_000,
     }
@@ -141,6 +143,7 @@ fn rewindable_skips_auto_checkpoints() {
         end_sequence: sequence,
         summary_text: "summary".into(),
         model_label: "m".into(),
+        kind: crate::db::chat::CompactKind::Compact,
         state: "active".into(),
         created_at_ms: 0,
     };

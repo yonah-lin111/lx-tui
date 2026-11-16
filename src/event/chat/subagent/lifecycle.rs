@@ -78,7 +78,6 @@ pub(crate) fn cancel_for_session(
         streams.resumed_subagents.remove(&id);
         streams.interrupted_subagents.remove(&id);
         streams.paused_by_interrupt.remove(&id);
-        streams.report_to_input.remove(&id);
     }
     if let Some(target) = agent_id {
         streams.resumed_subagents.remove(target);
@@ -194,7 +193,6 @@ pub(crate) fn stop_subagents_by_user(
         streams.resumed_subagents.remove(id);
         streams.interrupted_subagents.remove(id);
         streams.paused_by_interrupt.remove(id);
-        streams.report_to_input.remove(id);
     }
     for child in dead {
         streams.subagents.remove(&child);

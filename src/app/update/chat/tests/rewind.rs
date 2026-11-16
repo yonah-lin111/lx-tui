@@ -717,6 +717,7 @@ fn reload_after_rewind_respects_compact_boundary() {
         end_sequence,
         summary_text: "sum".into(),
         model_label: "m".into(),
+        kind: crate::db::chat::CompactKind::Compact,
         state: crate::db::chat::COMPACT_ACTIVE.into(),
         created_at_ms: 0,
     };

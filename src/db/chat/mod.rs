@@ -26,7 +26,7 @@ pub use btw::{
 
 pub use compact::{
     COMPACT_ACTIVE, COMPACT_REVERTED, CompactCheckpoint, CompactCommit, CompactCommitted,
-    CompactRevert,
+    CompactKind, CompactRevert,
 };
 pub use fork::{ForkedChatSession, copy_session_images};
 pub use model_switch::{ModelSwitchCommit, ModelSwitchRecord};

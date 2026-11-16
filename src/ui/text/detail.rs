@@ -23,6 +23,8 @@ pub const LX_DETAIL_REWIND_UNAVAILABLE: &str = "Cannot rewind this turn";
 pub const LX_COMPACT_UNAVAILABLE: &str = "Cannot compact this conversation";
 /// 汇报目标不可用。
 pub const LX_DETAIL_REPORT_UNAVAILABLE: &str = "Cannot report from this agent";
+/// BTW 线程不存在时的报告提示。
+pub const LX_DETAIL_REPORT_UNAVAILABLE_BTW: &str = "Cannot report from this thread";
 
 /// 汇报目标仍在运行。
 pub const LX_DETAIL_REPORT_BUSY: &str = "Wait for the current turn to finish";

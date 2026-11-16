@@ -766,6 +766,7 @@ fn thread_loaded_restores_compact_checkpoints() {
         end_sequence: 4,
         summary_text: "summary".into(),
         model_label: "M".into(),
+        kind: crate::db::chat::CompactKind::Compact,
         state: "active".into(),
         created_at_ms: 1,
     };

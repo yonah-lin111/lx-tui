@@ -81,7 +81,13 @@ pub fn resolve_purpose(log: &StreamLog, request: &ChatRequest) -> UsagePurpose {
         UsagePurpose::Title
     } else if log.kind == "recap" {
         UsagePurpose::Recap
-    } else if log.kind == "compact" || matches!(request.purpose, RequestPurpose::CompactSummary) {
+    } else if log.kind == "compact"
+        || log.kind == "report"
+        || matches!(
+            request.purpose,
+            RequestPurpose::CompactSummary | RequestPurpose::Report
+        )
+    {
         UsagePurpose::Compaction
     } else if log.kind == "subagent" || matches!(request.purpose, RequestPurpose::Subagent(_)) {
         UsagePurpose::Subagent

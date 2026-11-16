@@ -936,3 +936,83 @@ async fn auto_compact_checkpoint_is_not_a_rewind_target() {
     );
     assert_eq!(plan.user_message_id, latest.user_message_id);
 }
+
+/// `/report` 检查点同样是最新时间线事件：`/rewind` 建报告专用面板，
+/// 动作仍是删除该检查点，不触碰消息与主输入框芯片。
+#[tokio::test]
+async fn detail_rewind_targets_the_latest_report_checkpoint() {
+    use crate::db::chat::CompactCommit;
+
+    let (fixture, mut state, key, persistence, mut streams, _parent) = fixture_with_parent();
+    let agent_id = spawn_explorer(&mut state, &mut streams, &persistence, &key, "task").await;
+    let child_session = streams
+        .subagents
+        .values()
+        .find(|handle| handle.agent_id == agent_id)
+        .expect("handle")
+        .child_session_id
+        .clone();
+    crate::event::chat::finish_subagent(
+        &mut state,
+        &mut streams,
+        &persistence,
+        RequestKey {
+            pane: key.pane,
+            session: child_session.clone(),
+            generation: key.generation,
+        },
+        StopReason::Complete,
+        Usage::default(),
+    );
+    {
+        let target = state.pane_mut_anywhere(key.pane).expect("pane");
+        target.lx.agents.ensure_composer(&agent_id);
+        let page = target.lx.task.get_or_insert_with(Default::default);
+        page.tab = TaskTab::Agents;
+        page.agent_edit = Some(agent_id.clone());
+    }
+    let database = fixture.database();
+    let revision = database.session_revision(&child_session).expect("revision");
+    let committed = database
+        .commit_report(
+            fixture.workspace(),
+            &CompactCommit {
+                session_id: child_session,
+                expected_revision: revision,
+                base_checkpoint_id: None,
+                start_sequence: 0,
+                end_sequence: 1,
+                summary_text: "report body".into(),
+                model_label: "m".into(),
+                operation_id: "report-rewind-test".into(),
+            },
+        )
+        .expect("commit report");
+    assert!(crate::event::chat::detail_rewind::prepare(
+        &mut state,
+        &persistence,
+        key.pane,
+        DetailTarget::Agent(agent_id),
+        String::new(),
+    ));
+    let plan = state
+        .pane_anywhere(key.pane)
+        .and_then(|target| target.lx.detail_rewind.pending.clone())
+        .expect("report rewind plan");
+    assert_eq!(plan.kind, crate::app::state::RewindTargetKind::Report);
+    assert_eq!(plan.action, RewindAction::RestoreCompact);
+    assert_eq!(plan.user_message_id, committed.checkpoint.id);
+    let panel = state
+        .pane_anywhere(key.pane)
+        .and_then(|target| target.lx.active_editor().slash.as_ref())
+        .and_then(|panel| match panel {
+            SlashPanel::Rewind(panel) => Some(panel),
+            _ => None,
+        })
+        .expect("report rewind panel");
+    assert!(panel.report, "必须使用报告专用文案");
+    assert_eq!(
+        panel.actions,
+        vec![RewindAction::RestoreCompact, RewindAction::Cancel]
+    );
+}

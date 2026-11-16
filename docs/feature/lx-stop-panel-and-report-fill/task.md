@@ -3,6 +3,8 @@
 > 状态：**已实施完成（分支 `feature/lx-stop-panel-and-report-fill`），待用户实机验收后合并**。
 > 规则：生产代码禁止 `unwrap()/expect()`；所有用户可见文案集中在 `src/ui/text.rs` / `src/ui/text/detail.rs`；模型可见文本用英文；先补复现测试，再改实现。
 >
+> **2026-11-16 修订**：`/report` 已改为与 `/compact` 同管线的一次性总结（§8）。下方 §1-§7 中关于“报告轮 / report_to_input / BTW 多目标批次”的描述仅保留为实施历史，以 §8 与代码为准。
+>
 > 实施差异（以代码为准）：
 > - 报告回执由事件层直接调用 `app::update::on_subagent_report_ready` / `on_btw_report_ready`，没有反向 `Effect::ReportReady`。
 > - BTW 报告通过 `BtwSubmission.report_to_main_input` + `event/chat/btw/run.rs` 的批次聚合实现，没有单独的 `SendBtwReport` 效应。
@@ -425,3 +427,38 @@ cargo test --lib slash_panels
   `docs/standards/tui-design-requirements.md` 同步。
 - **消息底色**：Agents 私聊（暗紫）、流中 steer（暗海蓝）、BTW 用户消息（暗琥珀）
   与主会话用户底色互不相同；私聊标记由 DB `agent_subagent_input` 判据重建。
+
+---
+
+## 8. 报告语义修订与输入框 ↓（2026-11-16）
+
+### 8.1 `/report` 改为一次性总结
+
+- [x] `agent_compact_checkpoint` 增加 `kind`（schema v30；旧行默认 `compact`）。
+- [x] 新增 `REPORT_SYSTEM_PROMPT` / `report_request_from_transcript` / `validate_report`。
+- [x] `CompactRequest` 增加 `kind` 与 `note`；`execute_compact` 按 kind 分支并调用 `commit_report`。
+- [x] Agents `SendSubagentReport` 与 BTW `BtwEffect::Report` 统一走 `detail_report::prepare`。
+- [x] 删除旧报告轮链路：`ChatStreams.report_to_input`、`SubagentHandle.report_to_input`、BTW `report_batches` / `BtwReportBatch`。
+- [x] `LxCompact` 增加 `report` 检查点视图与 `running_report` 执行态；chat bar / BTW 胶囊显示 reporting 文案。
+- [x] `/rewind` 识别报告检查点：`RewindTargetKind::Report` + 报告专用面板文案，执行删除检查点。
+- [x] 旧 `notify_parent=1` 报告轮保持历史行为，不追溯。
+
+### 8.2 输入框 ↓
+
+- [x] 主输入框：光标在正文末尾时 `↓` 打开后台任务页；末行中间先落到行尾，第二次才换页。
+- [x] `apply_editor_edit` 统一处理 `↓`，BTW / Agents composer 同样支持末行中间落行尾。
+- [x] `tui-design-requirements.md` 同步入口文案。
+
+### 8.3 测试
+
+- [x] `report_commits_a_report_checkpoint_not_context`：报告检查点不参与 `active_checkpoint`，可被 `revert_compact` 删除。
+- [x] `report_generates_one_shot_checkpoint_and_fills_main_input`：真实 mock SSE 端到端，子会话不新增消息，主输入框芯片生成。
+- [x] `finish_generated_fills_from_report_checkpoint`：app 层来源头 + 变更文件 + 芯片。
+- [x] `detail_rewind_targets_the_latest_report_checkpoint`：`/rewind` 选中报告检查点并打开报告专用面板。
+- [x] BTW 一次性总结、无线程拒绝、输入框 ↓ 的回归测试。
+
+### 8.4 验证
+
+- `cargo fmt --check`
+- `cargo clippy --all-targets -- -D warnings`
+- `cargo test`

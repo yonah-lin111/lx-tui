@@ -727,6 +727,8 @@ mod skills;
 mod steer;
 mod subagent;
 mod subagent_private;
+mod subagent_report;
 mod subagent_roles;
+mod subagent_stop;
 mod user_shell;
 mod workspace;

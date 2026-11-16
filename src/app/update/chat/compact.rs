@@ -95,6 +95,8 @@ pub fn compact_command(state: &mut AppState, pane: PaneId) -> bool {
         variant_params: frozen.variant_params.clone(),
         idle_timeout_ms: frozen.idle_timeout_ms,
         operation_id,
+        kind: crate::db::chat::CompactKind::Compact,
+        note: String::new(),
     }));
     true
 }

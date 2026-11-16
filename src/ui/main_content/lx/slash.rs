@@ -147,7 +147,13 @@ pub(super) fn items<'a>(
                     ""
                 };
                 CommandItem::Inline {
-                    label: action_label(*action),
+                    label: if panel.report
+                        && *action == crate::app::state::RewindAction::RestoreCompact
+                    {
+                        text::LX_REPORT_REWIND_ACTION
+                    } else {
+                        action_label(*action)
+                    },
                     preview: "",
                     tag: reason,
                 }
@@ -419,7 +425,9 @@ fn view<'a>(
             crate::app::state::RewindScope::ModelSwitch => text::LX_MODEL_SWITCH_SCOPE,
             crate::app::state::RewindScope::Recap => text::LX_RECAP_SCOPE,
             crate::app::state::RewindScope::Detail => {
-                if panel
+                if panel.report {
+                    text::LX_REPORT_REWIND_SCOPE
+                } else if panel
                     .actions
                     .contains(&crate::app::state::RewindAction::RestoreCompact)
                 {

@@ -1109,3 +1109,68 @@ fn migrate_v26_to_v27_adds_group_id_column_and_preserves_rows() {
     assert_eq!(items[0].text, "legacy item");
     assert_eq!(items[0].group_id, None);
 }
+
+/// v29 → v30：给 `agent_compact_checkpoint` 增加 `kind` 列，旧行默认 compact 且保留。
+#[test]
+fn migrate_v29_to_v30_adds_report_kind_and_preserves_checkpoints() {
+    let path = temp_db_path("v30-report-kind");
+    let workspace = workspace_path("v30-report-kind");
+    let turn = {
+        let database = Database::open(&path).expect("open v30");
+        database.trust_workspace(&workspace, "ws").expect("trust");
+        let turn = database
+            .begin_turn(&workspace, None, "legacy question", &model())
+            .expect("begin turn");
+        database
+            .connection()
+            .execute_batch(
+                r#"DROP TABLE agent_compact_checkpoint;
+                   CREATE TABLE agent_compact_checkpoint (
+                       id INTEGER PRIMARY KEY AUTOINCREMENT,
+                       external_id TEXT NOT NULL UNIQUE,
+                       session_id TEXT NOT NULL REFERENCES agent_session(external_id) ON DELETE CASCADE,
+                       sequence INTEGER NOT NULL CHECK (sequence >= 0),
+                       operation_id TEXT NOT NULL UNIQUE,
+                       base_checkpoint_id TEXT,
+                       start_sequence INTEGER NOT NULL CHECK (start_sequence >= 0),
+                       end_sequence INTEGER NOT NULL CHECK (end_sequence >= 0),
+                       summary_text TEXT NOT NULL,
+                       model_label TEXT NOT NULL,
+                       state TEXT NOT NULL CHECK (state IN ('active', 'reverted')),
+                       reverted_by_operation_id TEXT,
+                       created_at_ms INTEGER NOT NULL,
+                       UNIQUE(session_id, sequence),
+                       CHECK (end_sequence >= start_sequence)
+                   );
+                   PRAGMA user_version = 29;"#,
+            )
+            .unwrap_or_else(|error| panic!("downgrade checkpoint: {error}"));
+        database
+            .connection()
+            .execute(
+                r#"INSERT INTO agent_compact_checkpoint
+                       (external_id, session_id, sequence, operation_id, base_checkpoint_id,
+                        start_sequence, end_sequence, summary_text, model_label, state,
+                        reverted_by_operation_id, created_at_ms)
+                   VALUES ('cp-legacy', ?1, 2, 'op-legacy', NULL, 0, 1,
+                           'legacy summary', 'M', 'active', NULL, 100)"#,
+                rusqlite::params![turn.session_id],
+            )
+            .expect("insert legacy checkpoint");
+        turn
+    };
+    // 重新打开：v30 迁移应补列并保留旧行。
+    let database = Database::open(&path).expect("upgrade v29 -> v30");
+    let version: i64 = database
+        .connection()
+        .query_row("PRAGMA user_version", [], |row| row.get(0))
+        .expect("version");
+    assert_eq!(version, SCHEMA_VERSION);
+    assert!(columns(&database, "agent_compact_checkpoint").contains(&"kind".to_string()));
+    let checkpoints = database
+        .compact_checkpoints(&workspace, &turn.session_id)
+        .expect("checkpoints");
+    assert_eq!(checkpoints.len(), 1, "旧检查点必须保留");
+    assert_eq!(checkpoints[0].kind, crate::db::chat::CompactKind::Compact);
+    assert_eq!(checkpoints[0].summary_text, "legacy summary");
+}

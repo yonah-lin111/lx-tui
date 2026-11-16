@@ -1,7 +1,7 @@
 //! `/report`：让 Agents / BTW 面板生成一份报告，正文只填入主输入框。
 //!
-//! - 无上一轮报告：发起一轮专门的报告模型调用（不自动投递父轮）；
-//! - 最后一轮已是报告：打开 `Resend / Regenerate / Cancel` 二级面板；
+//! - 无上一份报告：发起一次独立总结请求（与 `/compact` 同管线，不落消息）；
+//! - 已有报告检查点：打开 `Resend / Regenerate / Cancel` 二级面板；
 //! - 报告正文以折叠芯片落在主输入框顶部，同源原位替换。
 
 use std::time::Instant;
@@ -14,7 +14,7 @@ use crate::app::update::show_lx_toast;
 use crate::tiling::PaneId;
 use crate::ui::text;
 
-use super::report_fill::{fill_main_input, last_report_body};
+use super::report_fill::{fill_main_input, format_report_body};
 
 /// 提交 `/report [note]`。
 pub(crate) fn submit(state: &mut AppState, pane: PaneId, note: &str) -> bool {
@@ -77,8 +77,7 @@ fn submit_agent(state: &mut AppState, pane: PaneId, note: &str) -> bool {
         show_unavailable(state, pane);
         return true;
     };
-    let message = crate::chat::agent::report_request_message(note);
-    if message.len() > crate::db::chat::MAX_MESSAGE_BYTES {
+    if note.len() > crate::db::chat::MAX_MESSAGE_BYTES {
         super::composer::clear(state, pane);
         show_lx_toast(
             state,
@@ -105,13 +104,13 @@ fn submit_agent(state: &mut AppState, pane: PaneId, note: &str) -> bool {
 fn submit_btw(state: &mut AppState, pane: PaneId, note: &str) -> bool {
     let Some((thread_id, busy, last_report)) = state.pane_anywhere(pane).and_then(|target| {
         let thread = target.lx.btw.active_thread()?;
-        // 尚未提问过的 QA 也能直接 `/report`：报告在 BTW 线程里就地创建。
-        let thread_id = thread.thread_id.clone();
+        // 总结必须有自己的线程会话；新 QA 无历史时没有可总结的内容。
+        let thread_id = thread.thread_id.clone()?;
         let busy = thread.is_loading() || thread.compact.is_running();
         let last_report = if busy { None } else { last_btw_report(thread) };
         Some((thread_id, busy, last_report))
     }) else {
-        show_unavailable(state, pane);
+        show_btw_unavailable(state, pane);
         return true;
     };
     if busy {
@@ -128,9 +127,21 @@ fn submit_btw(state: &mut AppState, pane: PaneId, note: &str) -> bool {
         );
         return true;
     }
-    if let Some(last) = last_report
-        && let Some(thread_id) = thread_id
-    {
+    if note.len() > crate::db::chat::MAX_MESSAGE_BYTES {
+        super::composer::clear(state, pane);
+        show_lx_toast(
+            state,
+            pane,
+            Toast::new(
+                ToastKind::Warning,
+                text::detail::LX_REPORT_NOTE_LIMIT,
+                Some(pane),
+                Instant::now(),
+            ),
+        );
+        return true;
+    }
+    if let Some(last) = last_report {
         return open_panel(state, pane, DetailTarget::Btw(thread_id), note, Some(last));
     }
     super::composer::clear(state, pane);
@@ -240,6 +251,19 @@ fn target_chip(target: &DetailTarget) -> Option<(FoldedKind, &str)> {
     }
 }
 
+fn show_btw_unavailable(state: &mut AppState, pane: PaneId) {
+    show_lx_toast(
+        state,
+        pane,
+        Toast::new(
+            ToastKind::Warning,
+            text::detail::LX_DETAIL_REPORT_UNAVAILABLE_BTW,
+            Some(pane),
+            Instant::now(),
+        ),
+    );
+}
+
 fn show_unavailable(state: &mut AppState, pane: PaneId) {
     show_lx_toast(
         state,
@@ -253,19 +277,23 @@ fn show_unavailable(state: &mut AppState, pane: PaneId) {
     );
 }
 
-/// 最后一轮是 `/report` 时返回带来源头的报告正文（Agents）。
+/// 最近一次 `/report` 报告的芯片正文（Agents）。
 fn last_agent_report(run: &crate::app::state::SubagentRun) -> Option<String> {
-    let messages = &run.chat.messages;
-    let assistant_index = messages
+    let checkpoint = run
+        .compact
+        .checkpoints
         .iter()
-        .rposition(|message| message.role == "assistant")?;
-    let user_index = messages[..assistant_index]
-        .iter()
-        .rposition(|message| message.role == "user")?;
-    if !crate::chat::agent::is_report_request(&messages[user_index].text()) {
-        return None;
-    }
-    let body = last_report_body(&messages[assistant_index..])?;
+        .rev()
+        .find(|checkpoint| checkpoint.report && checkpoint.active)?;
+    Some(format_report_body(
+        &agent_report_header(run),
+        &checkpoint.summary,
+        &[],
+    ))
+}
+
+/// 来源头：`[Subagent report] 名字 · 角色 [· 标题]`。
+fn agent_report_header(run: &crate::app::state::SubagentRun) -> String {
     let name = run
         .nickname
         .as_deref()
@@ -277,30 +305,75 @@ fn last_agent_report(run: &crate::app::state::SubagentRun) -> Option<String> {
         header.push_str(" · ");
         header.push_str(run.title.trim());
     }
-    Some(format!("{header}\n{body}"))
+    header
 }
 
-/// 最后一轮是 `/report` 时返回合并正文（BTW）。
+/// 最近一次 `/report` 报告的芯片正文（BTW）。
 fn last_btw_report(thread: &crate::app::state::lx::BtwThreadState) -> Option<String> {
-    let messages = &thread.chat.messages;
-    let user_index = messages
+    let checkpoint = thread
+        .compact
+        .checkpoints
         .iter()
-        .rposition(|message| message.role == "user")?;
-    if !crate::chat::agent::is_report_request(&messages[user_index].text()) {
-        return None;
-    }
-    let bodies: Vec<String> = messages[user_index + 1..]
-        .iter()
-        .filter(|message| message.role == "assistant")
-        .map(|message| message.text().trim().to_string())
-        .filter(|body| !body.is_empty())
-        .collect();
-    if bodies.is_empty() {
-        return None;
-    }
-    Some(format!(
-        "[BTW report] {}\n{}",
-        thread.title.trim(),
-        bodies.join("\n\n")
+        .rev()
+        .find(|checkpoint| checkpoint.report && checkpoint.active)?;
+    Some(format_report_body(
+        &format!("[BTW report] {}", thread.title.trim()),
+        &checkpoint.summary,
+        &[],
     ))
+}
+
+/// 一次性总结提交成功：把最新报告检查点写成主输入框芯片。
+///
+/// 目标（Agents / BTW）在提交期间可能已被切走；找不到目标时只 Toast，不写错会话。
+pub fn finish_generated(
+    state: &mut AppState,
+    pane: PaneId,
+    session_id: &str,
+    checkpoints: &[crate::db::chat::CompactCheckpoint],
+    changed_paths: Vec<String>,
+) -> bool {
+    let Some(checkpoint) = checkpoints
+        .iter()
+        .rev()
+        .find(|checkpoint| checkpoint.kind.is_report() && checkpoint.is_active())
+    else {
+        show_unavailable(state, pane);
+        return false;
+    };
+    let Some((parent_session, kind, source, header)) =
+        state.pane_anywhere(pane).and_then(|target| {
+            let parent_session = target.lx.chat.session_id.clone()?;
+            if let Some(run) = target.lx.agents.by_session(session_id) {
+                return Some((
+                    parent_session,
+                    FoldedKind::SubagentReport,
+                    run.agent_id.clone(),
+                    agent_report_header(run),
+                ));
+            }
+            let thread = target.lx.btw.thread_by_child_session(session_id)?;
+            Some((
+                parent_session,
+                FoldedKind::BtwReport,
+                thread.thread_id.clone().unwrap_or_default(),
+                format!("[BTW report] {}", thread.title.trim()),
+            ))
+        })
+    else {
+        show_unavailable(state, pane);
+        return false;
+    };
+    crate::app::update::on_generated_report_ready(
+        state,
+        crate::app::update::GeneratedReportReady {
+            pane,
+            parent_session,
+            kind,
+            source,
+            header,
+            body: checkpoint.summary_text.clone(),
+            changed_paths,
+        },
+    )
 }

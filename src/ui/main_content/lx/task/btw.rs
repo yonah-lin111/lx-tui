@@ -193,10 +193,15 @@ fn draw_qa_badge(grid: &mut Grid, rect: Rect, lx: &Lx, marker_w: u16) {
         return;
     }
     let badge = format!(" {prefix}{title} ");
+    let tag = if thread.compact.running_report {
+        text::LX_BTW_REPORTING_TAG
+    } else {
+        text::LX_BTW_COMPACTING_TAG
+    };
     let with_compacting = thread
         .compact
         .is_running()
-        .then(|| format!(" {prefix}{title}{} ", text::LX_BTW_COMPACTING_TAG));
+        .then(|| format!(" {prefix}{title}{tag} "));
     // 先试带 ` · compacting` 的整段；放不下就整段丢弃，退化为原胶囊，不截半截。
     for candidate in with_compacting
         .as_deref()

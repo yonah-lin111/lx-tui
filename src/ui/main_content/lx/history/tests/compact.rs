@@ -13,6 +13,7 @@ fn checkpoint(sequence: i64, active: bool) -> crate::app::state::CompactNoticeVi
         summary: "Condensed context for the earlier work.".into(),
         active,
         auto: false,
+        report: false,
     }
 }
 

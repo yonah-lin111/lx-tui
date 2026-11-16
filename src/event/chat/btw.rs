@@ -108,8 +108,6 @@ pub(crate) struct BtwRun {
     last_checkpoint_ms: i64,
     /// 面板显示用的模型标签。
     pub label: String,
-    /// 报告分节用的回答者名字（默认助手固定为 `BTW`）。
-    pub answerer_label: String,
 }
 
 /// 一条等待启动的回答者。
@@ -119,8 +117,6 @@ struct BtwPending {
     recipient_id: String,
     qa_id: String,
     child_session_id: String,
-    /// 报告分节用的回答者名字（默认助手固定为 `BTW`）。
-    answerer_label: String,
     /// 提交时冻结的 DB 工作区与执行 cwd：关闭源窗格/切换工作区后仍按原归属运行。
     workspace: PathBuf,
     cwd: PathBuf,
@@ -143,53 +139,6 @@ pub(crate) struct BtwStreams {
     generation: u64,
     /// 线程 → 最近的完成状态（停止/失败反馈用）。
     pub last_status: HashMap<String, String>,
-    /// `/report` 批次 → 待聚合的合并报告（按 batch_id）。
-    pub report_batches: HashMap<String, BtwReportBatch>,
-}
-
-/// 一次 `/report` 多目标批次的聚合状态。
-pub(crate) struct BtwReportBatch {
-    pub pane: PaneId,
-    pub parent_session_id: String,
-    pub thread_id: String,
-    pub title: String,
-    pub expected: usize,
-    pub done: usize,
-    pub sections: Vec<(String, String)>,
-    pub failed: Vec<String>,
-}
-
-impl BtwStreams {
-    /// 记录一个报告目标的结算结果；全部收口时返回待填入主输入框的合并报告。
-    ///
-    /// `section` 为 `None` 或空白表示该目标失败，写入失败占位。
-    pub(super) fn record_report_outcome(
-        &mut self,
-        batch_id: &str,
-        label: &str,
-        section: Option<String>,
-    ) -> Option<crate::app::update::BtwReportReady> {
-        let batch = self.report_batches.get_mut(batch_id)?;
-        match section {
-            Some(body) if !body.trim().is_empty() => {
-                batch.sections.push((label.to_string(), body));
-            }
-            _ => batch.failed.push(label.to_string()),
-        }
-        batch.done = batch.done.saturating_add(1);
-        if batch.done < batch.expected {
-            return None;
-        }
-        let batch = self.report_batches.remove(batch_id)?;
-        Some(crate::app::update::BtwReportReady {
-            pane: batch.pane,
-            parent_session: batch.parent_session_id,
-            thread_id: batch.thread_id,
-            title: batch.title,
-            sections: batch.sections,
-            failed: batch.failed,
-        })
-    }
 }
 
 /// 处理一条 BTW 效应；返回状态是否变化。
@@ -201,6 +150,27 @@ pub(crate) fn apply_effect(
     effect: BtwEffect,
 ) -> bool {
     match effect {
+        BtwEffect::Report {
+            pane,
+            parent_session_id,
+            thread_id,
+            note,
+        } => {
+            let current = state
+                .pane_anywhere(pane)
+                .and_then(|target| target.lx.chat.session_id.as_deref());
+            if current != Some(parent_session_id.as_str()) {
+                return false;
+            }
+            super::detail_report::prepare(
+                state,
+                sender,
+                persistence,
+                pane,
+                crate::app::state::DetailTarget::Btw(thread_id),
+                &note,
+            )
+        }
         BtwEffect::LoadQaList {
             pane,
             parent_session_id,
@@ -464,21 +434,6 @@ fn submit(
         .btw
         .sessions
         .insert(accepted.thread.child_session_id.clone());
-    if submission.report_to_main_input {
-        streams.btw.report_batches.insert(
-            accepted.batch_id.clone(),
-            BtwReportBatch {
-                pane: submission.pane,
-                parent_session_id: submission.parent_session_id.clone(),
-                thread_id: accepted.thread.id.clone(),
-                title: accepted.thread.title.clone(),
-                expected: accepted.recipients.len(),
-                done: 0,
-                sections: Vec::new(),
-                failed: Vec::new(),
-            },
-        );
-    }
     let _ = sender.send(AppEvent::Btw(BtwEvent::Accepted {
         pane: submission.pane,
         qa_id: submission.qa_id.clone(),
@@ -489,18 +444,12 @@ fn submit(
         text: submission.text.clone(),
     }));
     for recipient in &accepted.recipients {
-        let answerer_label = if recipient.target_kind == "default" {
-            "BTW".to_string()
-        } else {
-            recipient.display_nickname.clone()
-        };
         streams.btw.pending.push_back(BtwPending {
             thread_id: accepted.thread.id.clone(),
             batch_id: accepted.batch_id.clone(),
             recipient_id: recipient.id.clone(),
             qa_id: submission.qa_id.clone(),
             child_session_id: accepted.thread.child_session_id.clone(),
-            answerer_label,
             workspace: submission.workspace.clone(),
             cwd: submission.cwd.clone(),
             pane: submission.pane,
@@ -580,17 +529,8 @@ pub(crate) fn pump(
         let Some(pending) = streams.btw.pending.remove(position) else {
             break;
         };
-        let batch_id = pending.batch_id.clone();
-        let answerer_label = pending.answerer_label.clone();
         if start_recipient(state, streams, persistence, sender, pending) {
             changed = true;
-        } else if let Some(ready) =
-            streams
-                .btw
-                .record_report_outcome(&batch_id, &answerer_label, None)
-        {
-            // 启动失败也计入批次，避免报告永远等不到最后一个目标。
-            changed |= crate::app::update::on_btw_report_ready(state, ready);
         }
     }
     changed

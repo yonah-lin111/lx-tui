@@ -402,6 +402,8 @@ fn open_panel(state: &mut AppState, pane: PaneId) -> bool {
         crate::app::state::RewindTargetKind::Compact => RewindPanel::for_compact(),
         crate::app::state::RewindTargetKind::ModelSwitch => RewindPanel::for_model_switch(),
         crate::app::state::RewindTargetKind::Recap => RewindPanel::for_recap(),
+        // 报告只走详情 composer，主 `/rewind` 不会选中它。
+        crate::app::state::RewindTargetKind::Report => return false,
     };
     target.lx.rewind.panel = Some(panel.clone());
     target.lx.slash = Some(SlashPanel::Rewind(Box::new(panel)));
@@ -509,6 +511,8 @@ pub fn apply_enter(state: &mut AppState, pane: PaneId) -> bool {
         crate::app::state::RewindTargetKind::Recap => {
             return apply_recap_enter(state, pane, &selected, action);
         }
+        // 报告只走详情 composer，主 `/rewind` 不会选中它。
+        crate::app::state::RewindTargetKind::Report => return false,
         crate::app::state::RewindTargetKind::Turn => {}
     }
     let operation_id = crate::db::new_external_id("rewind-op");

@@ -2,8 +2,7 @@
 
 use super::*;
 use crate::app::paste::FoldedKind;
-use crate::app::update::{BtwReportReady, SubagentReportReady};
-use crate::chat::agent::AgentRole;
+use crate::app::update::GeneratedReportReady;
 
 fn report_state() -> (AppState, PaneId) {
     let mut state = ready_state("");
@@ -16,21 +15,25 @@ fn chips(state: &AppState, pane: PaneId) -> Vec<crate::app::paste::FoldedToken> 
     crate::app::paste::folded_tokens(&state.pane_anywhere(pane).unwrap().lx.input)
 }
 
+fn subagent(body: &str) -> GeneratedReportReady {
+    GeneratedReportReady {
+        pane: PaneId::alloc(),
+        parent_session: "sess-1".into(),
+        kind: FoldedKind::SubagentReport,
+        source: "agent-1".into(),
+        header: "[Subagent report] Curie · executor · Fix login".into(),
+        body: body.into(),
+        changed_paths: vec!["src/a.rs".into(), "src/b.rs".into()],
+    }
+}
+
 #[test]
-fn subagent_report_ready_fills_source_header_and_changed_files() {
+fn generated_report_fills_source_header_and_changed_files() {
     let (mut state, pane) = report_state();
-    assert!(crate::app::update::on_subagent_report_ready(
-        &mut state,
-        SubagentReportReady {
-            pane,
-            parent_session: "sess-1".into(),
-            agent_id: "agent-1".into(),
-            nickname: Some("Curie".into()),
-            title: "Fix login".into(),
-            role: AgentRole::Executor,
-            body: "All done.".into(),
-            changed_paths: vec!["src/a.rs".into(), "src/b.rs".into()],
-        }
+    let mut ready = subagent("All done.");
+    ready.pane = pane;
+    assert!(crate::app::update::on_generated_report_ready(
+        &mut state, ready
     ));
     let chips = chips(&state, pane);
     assert_eq!(chips.len(), 1);
@@ -47,31 +50,26 @@ fn subagent_report_ready_fills_source_header_and_changed_files() {
 #[test]
 fn same_source_replaces_while_different_sources_coexist() {
     let (mut state, pane) = report_state();
-    let subagent = |body: &str| SubagentReportReady {
-        pane,
-        parent_session: "sess-1".into(),
-        agent_id: "agent-1".into(),
-        nickname: Some("Curie".into()),
-        title: "task".into(),
-        role: AgentRole::Executor,
-        body: body.into(),
-        changed_paths: Vec::new(),
-    };
-    crate::app::update::on_subagent_report_ready(&mut state, subagent("old"));
-    crate::app::update::on_btw_report_ready(
+    let mut old = subagent("old");
+    old.pane = pane;
+    crate::app::update::on_generated_report_ready(&mut state, old);
+    crate::app::update::on_generated_report_ready(
         &mut state,
-        BtwReportReady {
+        GeneratedReportReady {
             pane,
             parent_session: "sess-1".into(),
-            thread_id: "thread-1".into(),
-            title: "Side".into(),
-            sections: vec![("BTW".into(), "btw answer".into())],
-            failed: Vec::new(),
+            kind: FoldedKind::BtwReport,
+            source: "thread-1".into(),
+            header: "[BTW report] Side".into(),
+            body: "btw answer".into(),
+            changed_paths: Vec::new(),
         },
     );
     assert_eq!(chips(&state, pane).len(), 2, "不同来源共存");
 
-    crate::app::update::on_subagent_report_ready(&mut state, subagent("new"));
+    let mut new = subagent("new");
+    new.pane = pane;
+    crate::app::update::on_generated_report_ready(&mut state, new);
     let chips = chips(&state, pane);
     assert_eq!(chips.len(), 2, "同源原位替换");
     let report = chips
@@ -83,39 +81,33 @@ fn same_source_replaces_while_different_sources_coexist() {
 }
 
 #[test]
-fn btw_report_merges_sections_and_failed_placeholders() {
+fn btw_report_uses_thread_header() {
     let (mut state, pane) = report_state();
-    assert!(crate::app::update::on_btw_report_ready(
+    assert!(crate::app::update::on_generated_report_ready(
         &mut state,
-        BtwReportReady {
+        GeneratedReportReady {
             pane,
             parent_session: "sess-1".into(),
-            thread_id: "thread-1".into(),
-            title: "Side thread".into(),
-            sections: vec![("Curie".into(), "curie body".into())],
-            failed: vec!["Turing".into()],
+            kind: FoldedKind::BtwReport,
+            source: "thread-1".into(),
+            header: "[BTW report] Side thread".into(),
+            body: "curie body".into(),
+            changed_paths: Vec::new(),
         }
     ));
     let chip = &chips(&state, pane)[0];
     assert_eq!(chip.kind, FoldedKind::BtwReport);
     assert!(chip.body.starts_with("[BTW report] Side thread"));
-    assert!(chip.body.contains("[Curie] curie body"));
-    assert!(chip.body.contains("[Turing] report unavailable (failed)"));
+    assert!(chip.body.contains("curie body"));
 }
 
 #[test]
-fn all_failed_btw_report_only_toasts() {
+fn empty_report_only_toasts() {
     let (mut state, pane) = report_state();
-    assert!(!crate::app::update::on_btw_report_ready(
-        &mut state,
-        BtwReportReady {
-            pane,
-            parent_session: "sess-1".into(),
-            thread_id: "thread-1".into(),
-            title: "Side thread".into(),
-            sections: Vec::new(),
-            failed: vec!["Curie".into()],
-        }
+    let mut ready = subagent("   ");
+    ready.pane = pane;
+    assert!(!crate::app::update::on_generated_report_ready(
+        &mut state, ready
     ));
     assert!(chips(&state, pane).is_empty());
     let toast = state
@@ -127,25 +119,18 @@ fn all_failed_btw_report_only_toasts() {
         .expect("toast");
     assert_eq!(
         toast.message,
-        crate::ui::text::detail::LX_BTW_REPORT_UNAVAILABLE
+        crate::ui::text::detail::LX_REPORT_UNAVAILABLE
     );
 }
 
 #[test]
 fn report_for_another_session_is_dropped() {
     let (mut state, pane) = report_state();
-    assert!(!crate::app::update::on_subagent_report_ready(
-        &mut state,
-        SubagentReportReady {
-            pane,
-            parent_session: "other-session".into(),
-            agent_id: "agent-1".into(),
-            nickname: None,
-            title: String::new(),
-            role: AgentRole::Executor,
-            body: "body".into(),
-            changed_paths: Vec::new(),
-        }
+    let mut ready = subagent("body");
+    ready.pane = pane;
+    ready.parent_session = "other-session".into();
+    assert!(!crate::app::update::on_generated_report_ready(
+        &mut state, ready
     ));
     assert!(chips(&state, pane).is_empty());
 }

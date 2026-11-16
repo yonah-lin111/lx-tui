@@ -195,8 +195,6 @@ pub(super) fn launch_child_turn(
         None => return Err("process runtime unavailable".to_string()),
     };
 
-    let report_to_input = crate::chat::agent::is_report_request(task_text)
-        && streams.report_to_input.remove(&record.agent_id);
     let handle = SubagentHandle {
         parent: parent_key.clone(),
         agent_id: record.agent_id.clone(),
@@ -219,7 +217,6 @@ pub(super) fn launch_child_turn(
         closed_without_report: false,
         stopped_by_user: false,
         notify_parent,
-        report_to_input,
         mutation_user_id: mutation_user_id.clone(),
         chat: child_chat,
         workspace: workspace.to_path_buf(),

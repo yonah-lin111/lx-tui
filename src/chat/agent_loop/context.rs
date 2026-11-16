@@ -94,8 +94,9 @@ impl ModelContext {
                 role.base() == crate::chat::agent::BaseRole::Executor
                     && self.subagent_depth < self.max_subagent_depth
             }
-            crate::chat::events::RequestPurpose::Btw => false,
-            crate::chat::events::RequestPurpose::CompactSummary => false,
+            crate::chat::events::RequestPurpose::Btw
+            | crate::chat::events::RequestPurpose::CompactSummary
+            | crate::chat::events::RequestPurpose::Report => false,
         }
     }
 

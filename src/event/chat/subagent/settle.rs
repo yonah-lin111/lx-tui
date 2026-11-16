@@ -132,48 +132,6 @@ pub(crate) fn finish_subagent_with_billing(
             body: payload.body,
             delivered_at_ms: crate::db::now_ms(),
         });
-        if handle.report_to_input {
-            let complete = matches!(reason, StopReason::Complete);
-            let body = report_body(&handle);
-            if complete && !body.trim().is_empty() {
-                let turn_user_message_ids = if handle.turn_user_message_ids.is_empty() {
-                    vec![handle.child_user_message_id.clone()]
-                } else {
-                    handle.turn_user_message_ids.clone()
-                };
-                let (_, changed_paths) = database
-                    .list_changed_paths_for_turn(
-                        &handle.workspace,
-                        &key.session,
-                        &turn_user_message_ids,
-                    )
-                    .unwrap_or_default();
-                update::on_subagent_report_ready(
-                    state,
-                    update::SubagentReportReady {
-                        pane: handle.parent.pane,
-                        parent_session: handle.parent.session.clone(),
-                        agent_id: handle.agent_id.clone(),
-                        nickname: handle.nickname.clone(),
-                        title: handle.title.clone(),
-                        role: handle.role,
-                        body,
-                        changed_paths,
-                    },
-                );
-            } else {
-                crate::app::update::show_lx_toast(
-                    state,
-                    handle.parent.pane,
-                    crate::app::toast::Toast::new(
-                        crate::app::toast::ToastKind::Warning,
-                        crate::ui::text::detail::LX_REPORT_UNAVAILABLE,
-                        Some(handle.parent.pane),
-                        std::time::Instant::now(),
-                    ),
-                );
-            }
-        }
     }
 
     if matches!(reason, StopReason::Failed { .. }) {

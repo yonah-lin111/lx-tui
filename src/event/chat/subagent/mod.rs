@@ -115,8 +115,6 @@ pub(crate) struct SubagentHandle {
     pub stopped_by_user: bool,
     /// 本轮完成后是否向主 agent 投递报告；人类私聊输入为 false。
     pub notify_parent: bool,
-    /// 本轮是面板 `/report`：完成后只填主输入框，不自动投递、不写 pending report。
-    pub report_to_input: bool,
     /// 当前轮文件 mutation 归属的 user 消息 id；轮内 steer 会切换到新 user 消息。
     pub mutation_user_id: std::sync::Arc<std::sync::RwLock<String>>,
     /// 子会话消息模型（持久化来源；窗格关闭后仍存在）。
@@ -730,7 +728,6 @@ pub fn apply_subagent_effects(
                     | Effect::CancelSubagents { .. }
                     | Effect::StopSubagentsByUser { .. }
                     | Effect::DrainSubagentReports { .. }
-                    | Effect::SendSubagentReport { .. }
                     | Effect::SendSubagentUserInput { .. }
                     | Effect::SteerSubagent { .. }
             )
@@ -748,7 +745,6 @@ pub fn apply_subagent_effects(
                 | Effect::CancelSubagents { .. }
                 | Effect::StopSubagentsByUser { .. }
                 | Effect::DrainSubagentReports { .. }
-                | Effect::SendSubagentReport { .. }
                 | Effect::SendSubagentUserInput { .. }
                 | Effect::SteerSubagent { .. }
         )
@@ -905,22 +901,6 @@ pub fn apply_subagent_effects(
             }
             Effect::DrainSubagentReports { pane } => {
                 changed |= drain_reports(state, persistence, pane);
-            }
-            Effect::SendSubagentReport {
-                pane,
-                session_id,
-                agent_id,
-                note,
-            } => {
-                changed |= panel::submit_report(
-                    state,
-                    streams,
-                    persistence,
-                    pane,
-                    &session_id,
-                    &agent_id,
-                    &note,
-                );
             }
             Effect::SendSubagentUserInput {
                 pane,

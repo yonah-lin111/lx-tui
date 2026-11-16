@@ -144,7 +144,11 @@ pub(crate) fn prepare(
             user_text: String::new(),
             action: RewindAction::RestoreCompact,
             snapshot: SnapshotState::KnownEmpty,
-            kind: crate::app::state::RewindTargetKind::Compact,
+            kind: if checkpoint.kind.is_report() {
+                crate::app::state::RewindTargetKind::Report
+            } else {
+                crate::app::state::RewindTargetKind::Compact
+            },
         };
         return crate::app::update::on_detail_rewind_prepared(state, pane, plan);
     }

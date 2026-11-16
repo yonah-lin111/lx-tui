@@ -62,6 +62,8 @@ pub const LX_BTW_HINTS_EDIT: [crate::ui::text::Hint; 5] = [
 
 /// 侧线程压缩中的胶囊后缀（宽度不足整段丢弃）。
 pub const LX_BTW_COMPACTING_TAG: &str = " · compacting";
+/// 报告生成中的胶囊后缀。
+pub const LX_BTW_REPORTING_TAG: &str = " · reporting";
 
 /// 侧线程状态标签。
 pub fn btw_status_label(status: &str) -> &'static str {

@@ -70,8 +70,9 @@ pub use connect::{
 };
 pub use detail_compact::{
     DetailCompactResult, handle_finished as on_detail_compact_finished,
-    on_started as on_detail_compact_started,
+    on_report_started as on_detail_report_started, on_started as on_detail_compact_started,
 };
+pub use detail_report::finish_generated;
 pub use detail_rewind::{
     on_failed as on_detail_rewind_failed, on_prepared as on_detail_rewind_prepared,
     on_reload_failed as on_detail_rewind_reload_failed, on_succeeded as on_detail_rewind_succeeded,
@@ -92,8 +93,7 @@ pub use recap::{
     recap_command, recap_failed, set_message_recaps, take_pending_recap, tick_recap,
 };
 pub use report_fill::{
-    BtwReportReady, SubagentReportReady, fill_main_input, on_btw_report_ready,
-    on_subagent_report_ready,
+    GeneratedReportReady, fill_main_input, format_report_body, on_generated_report_ready,
 };
 pub use rewind::{
     apply_enter as apply_rewind_enter, apply_input as apply_rewind_input,
