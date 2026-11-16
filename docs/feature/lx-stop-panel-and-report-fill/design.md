@@ -1,6 +1,6 @@
 # 主 agent 停止面板、用户主动打断语义与 subagent/BTW 报告填充 — 详细设计
 
-- **状态**：待用户审核，尚未实施。
+- **状态**：已实施完成（分支 `feature/lx-stop-panel-and-report-fill`）；实施差异见 `task.md` 顶部。
 - **范围**：主 agent 双击 Esc 停止面板；后台任务页 `^d` 的用户主动停止语义；Agents / BTW 面板 `/report`、报告二级面板与主输入框折叠芯片；两类面板的 `/rewind` 报告撤销。
 - **不涉及**：数据库 schema 迁移、模型自动恢复策略之外的 `interrupt_agent` 行为、AI Web 入口、BTW 的 `^d` 停止入口。
 

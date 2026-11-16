@@ -214,6 +214,32 @@ fn stop_shells_keeps_chat_queue() {
 }
 
 #[test]
+fn stop_shells_stops_managed_processes_when_no_user_shell() {
+    let mut state = ready_state("");
+    let pane = focus_pane(&state);
+    state.pane_mut_anywhere(pane).unwrap().lx.background_tasks = 2;
+    open_stop_panel(
+        &mut state,
+        pane,
+        StopAvailability {
+            processes: 2,
+            ..StopAvailability::default()
+        },
+    );
+    if let Some(SlashPanel::Stop(panel)) = state.pane_mut_anywhere(pane).unwrap().lx.slash.as_mut()
+    {
+        panel.window.active = 3;
+    }
+    state.effects.clear();
+    assert!(stop_panel::apply_enter(&mut state, pane));
+    assert!(state.effects.iter().any(|effect| matches!(
+        effect,
+        crate::app::effects::Effect::StopAllSessionProcesses { pane: effect_pane }
+            if *effect_pane == pane
+    )));
+}
+
+#[test]
 fn stop_main_only_stops_response() {
     let (mut state, pane, _key) = streaming_state("sess-stop-main");
     open_stop_panel(

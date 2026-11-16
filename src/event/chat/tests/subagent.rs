@@ -1013,6 +1013,49 @@ async fn user_stop_marks_stopped_and_cancels_queued_inputs() {
 }
 
 #[tokio::test]
+async fn stop_all_does_not_rewrite_completed_agents_as_stopped() {
+    let (_fixture, mut state, key, persistence, mut streams, parent) = fixture_with_parent();
+    let agent_id = spawn_explorer(&mut state, &mut streams, &persistence, &key, "done").await;
+    let child_session = streams
+        .subagents
+        .values()
+        .find(|handle| handle.agent_id == agent_id)
+        .map(|handle| handle.child_session_id.clone())
+        .expect("handle");
+    crate::event::chat::subagent::finish_subagent(
+        &mut state,
+        &mut streams,
+        &persistence,
+        RequestKey {
+            pane: key.pane,
+            session: child_session,
+            generation: key.generation,
+        },
+        crate::chat::events::StopReason::Complete,
+        crate::db::chat::Usage::default(),
+    );
+    let stopped = crate::event::chat::subagent::stop_subagents_by_user(
+        &mut state,
+        &mut streams,
+        &persistence,
+        key.pane,
+        &parent,
+        None,
+    );
+    assert_eq!(stopped, 0, "已完成的 agent 不进入用户停止集合");
+    assert!(streams.user_stopped.is_empty());
+    let run = state
+        .pane_anywhere(key.pane)
+        .unwrap()
+        .lx
+        .agents
+        .by_agent(&agent_id)
+        .expect("run");
+    assert!(!run.stopped_by_user);
+    assert_eq!(run.display_status(), "completed");
+}
+
+#[tokio::test]
 async fn user_stop_produces_no_report_on_settlement() {
     let (fixture, mut state, key, persistence, mut streams, parent) = fixture_with_parent();
     let agent_id = spawn_explorer(&mut state, &mut streams, &persistence, &key, "report?").await;

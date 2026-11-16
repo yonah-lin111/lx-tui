@@ -1,7 +1,13 @@
 # 任务清单：主 agent 停止面板、用户主动打断语义与 subagent/BTW 报告填充
 
-> 状态：**待用户审核 `design.md`，尚未实施**。
+> 状态：**已实施完成（分支 `feature/lx-stop-panel-and-report-fill`），待用户实机验收后合并**。
 > 规则：生产代码禁止 `unwrap()/expect()`；所有用户可见文案集中在 `src/ui/text.rs` / `src/ui/text/detail.rs`；模型可见文本用英文；先补复现测试，再改实现。
+>
+> 实施差异（以代码为准）：
+> - 报告回执由事件层直接调用 `app::update::on_subagent_report_ready` / `on_btw_report_ready`，没有反向 `Effect::ReportReady`。
+> - BTW 报告通过 `BtwSubmission.report_to_main_input` + `event/chat/btw/run.rs` 的批次聚合实现，没有单独的 `SendBtwReport` 效应。
+> - `ChatStreams.report_to_input` 按 `agent_id` 标记；事件层额外校验 DB 队列，确保报告轮排在空闲后的队首。
+> - 用户停止状态通过 `event/chat/subagent/lifecycle.rs` 维护；BTW 起停与结算拆到 `event/chat/btw/run.rs`，满足单文件行数上限。
 
 ---
 

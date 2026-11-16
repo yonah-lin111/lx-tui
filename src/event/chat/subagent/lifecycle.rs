@@ -131,10 +131,25 @@ pub(crate) fn stop_subagents_by_user(
             .iter()
             .any(|target| path.eq_ignore_ascii_case(target))
     };
+    // 只标记真正可停止的记录：已完成/失败/已取消的 agent 不因“Stop all”被改写为 stopped。
+    let queue_states = runner::tree_queue_states(database, &workspace, &tree);
+    let running_ids: std::collections::HashSet<&str> = streams
+        .subagents
+        .values()
+        .filter(|handle| handle.status == STATUS_RUNNING)
+        .map(|handle| handle.agent_id.as_str())
+        .collect();
     let selected_records: Vec<&SubagentRecord> = tree
         .records
         .iter()
-        .filter(|record| selected(&record.agent_path))
+        .filter(|record| {
+            selected(&record.agent_path)
+                && (record.status == STATUS_RUNNING
+                    || running_ids.contains(record.agent_id.as_str())
+                    || queue_states
+                        .get(&record.agent_id)
+                        .is_some_and(|queue| queue.queued_count > 0))
+        })
         .collect();
     if selected_records.is_empty() {
         return 0;
