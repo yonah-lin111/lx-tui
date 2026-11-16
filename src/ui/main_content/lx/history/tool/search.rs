@@ -132,6 +132,36 @@ pub(super) fn rows_with_group(
         .len()
 }
 
+/// 标题行的文字列区间（与 [`draw`] 同文案；帧不影响宽度，固定传 0/true）。
+pub(super) fn header_cols(
+    call: &ToolCallView,
+    view: &SearchDetailView,
+    width: u16,
+) -> Option<(u16, u16)> {
+    let segments = header_with_verb(
+        call,
+        width,
+        0,
+        true,
+        text::agent::VERB_TOOL_SEARCH,
+        status_of(call, view),
+    );
+    super::super::text_cols::segment_cols(&segments)
+}
+
+/// 正文逐行文字列区间（不含标题行）。
+pub(super) fn body_cols(
+    call: &ToolCallView,
+    view: &SearchDetailView,
+    width: u16,
+    expanded: bool,
+    in_group: bool,
+) -> Vec<Option<(u16, u16)>> {
+    layout_with_group(call, view, width, expanded, in_group)
+        .layout
+        .row_cols()
+}
+
 /// 展开后是否真的多出内容（决定是否登记点击面）。
 #[cfg(test)]
 pub(super) fn has_more(call: &ToolCallView, view: &SearchDetailView, width: u16) -> bool {

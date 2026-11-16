@@ -452,6 +452,37 @@ pub(super) fn rows_with_group(
             .len()
 }
 
+/// 标题行的文字列区间（与 [`draw`] 同一分支；帧不影响宽度，固定传 0/true）。
+pub(super) fn header_cols(call: &ToolCallView, width: u16) -> Option<(u16, u16)> {
+    let detail = view(call);
+    let status = detail.and_then(|view| header_status(call, view));
+    let segments = match detail {
+        Some(view) if call.name == "spawn_agent" => header_with_mark(
+            call,
+            width,
+            0,
+            true,
+            verb(&call.name),
+            status,
+            agent_mark(view, call, 0),
+        ),
+        _ => header_with_verb(call, width, 0, true, verb(&call.name), status),
+    };
+    super::super::text_cols::segment_cols(&segments)
+}
+
+/// 正文逐行文字列区间（不含标题行）。
+pub(super) fn body_cols(
+    call: &ToolCallView,
+    width: u16,
+    expanded: bool,
+    in_group: bool,
+) -> Vec<Option<(u16, u16)>> {
+    layout_with_group(call, width, expanded, in_group)
+        .0
+        .row_cols()
+}
+
 /// 展开后行数增加即可展开（报告正文 / close 详情）。
 pub(super) fn has_more_with_group(call: &ToolCallView, width: u16, in_group: bool) -> bool {
     width > 0

@@ -538,17 +538,24 @@ fn web_search_regions(
 ) -> Vec<CardRegion> {
     let layout = web_search::layout_with_group(call, view, width, folds, in_group);
     split_regions(
+        web_search::header_cols(call, view, width),
         layout.queries_rows,
         layout.result_rows,
+        layout.queries_cols,
+        layout.result_cols,
         layout.queries_expandable,
         layout.result_expandable,
     )
 }
 
 /// 两块独立折叠卡片的点击面几何：第一块连同标题行，第二块紧随其后。
+#[allow(clippy::too_many_arguments)]
 fn split_regions(
+    title_cols: Option<(u16, u16)>,
     first_rows: usize,
     second_rows: usize,
+    first_cols: Vec<Option<(u16, u16)>>,
+    second_cols: Vec<Option<(u16, u16)>>,
     first_expandable: bool,
     second_expandable: bool,
 ) -> Vec<CardRegion> {
@@ -556,10 +563,14 @@ fn split_regions(
     let mut offset = 0usize;
     if first_rows > 0 {
         let rows = HEADER_ROWS + first_rows;
+        let mut cols = Vec::with_capacity(rows);
+        cols.push(title_cols);
+        cols.extend(first_cols);
+        cols.resize(rows, None);
         regions.push(CardRegion {
             section: CardSection::Body,
             card: RowSpan { offset: 0, rows },
-            cols: CardCols::Full,
+            cols: CardCols::Text(cols),
             clickable: first_expandable,
         });
         offset = rows;
@@ -570,10 +581,16 @@ fn split_regions(
         } else {
             second_rows
         };
+        let mut cols = Vec::with_capacity(rows);
+        if offset == 0 {
+            cols.push(title_cols);
+        }
+        cols.extend(second_cols);
+        cols.resize(rows, None);
         regions.push(CardRegion {
             section: CardSection::Output,
             card: RowSpan { offset, rows },
-            cols: CardCols::Full,
+            cols: CardCols::Text(cols),
             clickable: second_expandable,
         });
     }
@@ -593,7 +610,7 @@ fn command_regions(
             offset: HEADER_ROWS,
             rows: blocks.params,
         },
-        cols: CardCols::Full,
+        cols: CardCols::Text(blocks.params_cols),
         clickable: command::params_expandable(call, width),
     }];
     if blocks.output > 0 {
@@ -603,7 +620,7 @@ fn command_regions(
                 offset: HEADER_ROWS + blocks.params,
                 rows: blocks.output,
             },
-            cols: CardCols::Full,
+            cols: CardCols::Text(blocks.output_cols),
             clickable: command::output_expandable_with_group(call, width, in_group),
         });
     }
@@ -659,18 +676,41 @@ pub(super) fn card_regions_with_group(
         ),
         Some(crate::app::state::ToolDetailView::Plan(_))
         | Some(crate::app::state::ToolDetailView::Ask(_)) => Vec::new(),
-        Some(crate::app::state::ToolDetailView::Subagent(_))
-        | Some(crate::app::state::ToolDetailView::Search(_)) => {
+        Some(crate::app::state::ToolDetailView::Subagent(_)) => {
             if !has_expandable_content_with_group(call, width, in_group) {
                 return Vec::new();
             }
+            let cols = card_text_cols(
+                subagent::header_cols(call, width),
+                subagent::body_cols(call, width, folds.body, in_group),
+                step_rows,
+            );
             vec![CardRegion {
                 section: CardSection::Body,
                 card: RowSpan {
                     offset: 0,
                     rows: step_rows,
                 },
-                cols: CardCols::Full,
+                cols,
+                clickable: true,
+            }]
+        }
+        Some(crate::app::state::ToolDetailView::Search(view)) => {
+            if !has_expandable_content_with_group(call, width, in_group) {
+                return Vec::new();
+            }
+            let cols = card_text_cols(
+                search::header_cols(call, view, width),
+                search::body_cols(call, view, width, folds.body, in_group),
+                step_rows,
+            );
+            vec![CardRegion {
+                section: CardSection::Body,
+                card: RowSpan {
+                    offset: 0,
+                    rows: step_rows,
+                },
+                cols,
                 clickable: true,
             }]
         }
@@ -683,17 +723,42 @@ pub(super) fn card_regions_with_group(
             if !has_expandable_content_with_group(call, width, in_group) {
                 return Vec::new();
             }
+            let (header, body) = if file_diff::is_card(call) {
+                (
+                    file_diff::header_cols(call, width),
+                    file_diff::body_cols(call, width, folds.body, in_group),
+                )
+            } else {
+                (
+                    file_summary::header_cols(call, width),
+                    file_summary::body_cols(call, width, folds.body, in_group),
+                )
+            };
+            let cols = card_text_cols(header, body, step_rows);
             vec![CardRegion {
                 section: CardSection::Body,
                 card: RowSpan {
                     offset: 0,
                     rows: step_rows,
                 },
-                cols: CardCols::Full,
+                cols,
                 clickable: true,
             }]
         }
     }
+}
+
+/// 整卡点击面的逐行文字列：标题行 + 正文行，长度按登记行数收敛。
+fn card_text_cols(
+    header: Option<(u16, u16)>,
+    body: Vec<Option<(u16, u16)>>,
+    rows: usize,
+) -> CardCols {
+    let mut cols = Vec::with_capacity(rows);
+    cols.push(header);
+    cols.extend(body);
+    cols.resize(rows, None);
+    CardCols::Text(cols)
 }
 
 #[cfg(test)]

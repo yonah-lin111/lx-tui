@@ -494,6 +494,26 @@ pub(super) fn detail(call: &ToolCallView, width: u16, expanded: bool) -> Vec<Vec
     detail_layout(call, width, expanded).segments()
 }
 
+/// 标题行的文字列区间（与通用工具标题同文案）。
+pub(super) fn header_cols(call: &ToolCallView, width: u16) -> Option<(u16, u16)> {
+    let segments = super::header(call, width, 0, true);
+    super::super::text_cols::segment_cols(&segments)
+}
+
+/// 详情逐行文字列区间（不含标题行）。
+pub(super) fn body_cols(
+    call: &ToolCallView,
+    width: u16,
+    expanded: bool,
+    in_group: bool,
+) -> Vec<Option<(u16, u16)>> {
+    detail_layout_with_group(call, width, expanded, in_group)
+        .rows
+        .iter()
+        .map(super::tree::Row::text_cols)
+        .collect()
+}
+
 /// 详情行的物理行数（含省略提示行）。
 pub(super) fn detail_rows_with_group(
     call: &ToolCallView,

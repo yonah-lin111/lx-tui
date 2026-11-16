@@ -25,6 +25,10 @@ pub(super) struct WebSearchLayout {
     pub(super) queries_rows: usize,
     /// 结果块（Output）的物理行数。
     pub(super) result_rows: usize,
+    /// 查询块逐行文字列区间（只含查询行）。
+    pub(super) queries_cols: Vec<Option<(u16, u16)>>,
+    /// 结果块逐行文字列区间（只含结果行）。
+    pub(super) result_cols: Vec<Option<(u16, u16)>>,
     pub(super) queries_expandable: bool,
     pub(super) result_expandable: bool,
 }
@@ -214,28 +218,30 @@ pub(super) fn layout_with_group(
             style::agent_step_detail(),
         )]));
     }
-    let queries_rows = queries.as_ref().map_or(0, |section| {
+    let queries_layout = queries.as_ref().map(|section| {
         if nested_result && result.is_some() {
             tree::layout_in_group(std::slice::from_ref(section), width, 1)
-                .rows
-                .len()
         } else {
             tree::layout(std::slice::from_ref(section), width)
-                .rows
-                .len()
         }
     });
-    let result_rows = result.as_ref().map_or(0, |section| {
+    let result_layout = result.as_ref().map(|section| {
         if nested_result {
             tree::layout_in_group(std::slice::from_ref(section), width, 0)
-                .rows
-                .len()
         } else {
             tree::layout(std::slice::from_ref(section), width)
-                .rows
-                .len()
         }
     });
+    let queries_rows = queries_layout
+        .as_ref()
+        .map_or(0, |layout| layout.rows.len());
+    let result_rows = result_layout.as_ref().map_or(0, |layout| layout.rows.len());
+    let queries_cols = queries_layout
+        .map(|layout| layout.row_cols())
+        .unwrap_or_default();
+    let result_cols = result_layout
+        .map(|layout| layout.row_cols())
+        .unwrap_or_default();
     let sections: Vec<Section> = queries.into_iter().chain(result).collect();
     WebSearchLayout {
         layout: if in_group {
@@ -245,9 +251,28 @@ pub(super) fn layout_with_group(
         },
         queries_rows,
         result_rows,
+        queries_cols,
+        result_cols,
         queries_expandable,
         result_expandable,
     }
+}
+
+/// 标题行的文字列区间（与 [`draw`] 同文案；帧不影响宽度，固定传 0/true）。
+pub(super) fn header_cols(
+    call: &ToolCallView,
+    view: &WebSearchDetailView,
+    width: u16,
+) -> Option<(u16, u16)> {
+    let segments = header_with_verb(
+        call,
+        width,
+        0,
+        true,
+        text::agent::VERB_TOOL_WEB_SEARCH,
+        title_status(call, view),
+    );
+    super::super::text_cols::segment_cols(&segments)
 }
 
 /// 卡片行数（含标题行）。

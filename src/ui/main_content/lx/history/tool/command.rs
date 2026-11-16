@@ -39,11 +39,13 @@ const SAMPLE_CHARS: usize = 512;
 const OUTPUT_PREVIEW_HEAD: usize = 3;
 const OUTPUT_PREVIEW_TAIL: usize = 2;
 
-/// 树体两块的行数（标题之外）：命令参数与「输入 + 输出」块。
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+/// 树体两块的行数与逐行文字列区间（标题之外）：命令参数与「输入 + 输出」块。
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub(super) struct Blocks {
     pub(super) params: usize,
     pub(super) output: usize,
+    pub(super) params_cols: Vec<Option<(u16, u16)>>,
+    pub(super) output_cols: Vec<Option<(u16, u16)>>,
 }
 
 /// 命令卡片占用的渲染行数：标题 + 树体物理行。
@@ -76,17 +78,21 @@ pub(super) fn blocks_with_group(
         return Blocks::default();
     }
     let (params, output) = sections_with_group(call, width, folds, in_group);
+    let params_layout = if in_group && !output.is_empty() {
+        tree::layout_in_group(&params, width, 1)
+    } else {
+        tree::layout(&params, width)
+    };
+    let output_layout = if in_group {
+        tree::layout_in_group(&output, width, 0)
+    } else {
+        tree::layout(&output, width)
+    };
     Blocks {
-        params: if in_group && !output.is_empty() {
-            tree::layout_in_group(&params, width, 1).rows.len()
-        } else {
-            tree::layout(&params, width).rows.len()
-        },
-        output: if in_group {
-            tree::layout_in_group(&output, width, 0).rows.len()
-        } else {
-            tree::layout(&output, width).rows.len()
-        },
+        params: params_layout.rows.len(),
+        output: output_layout.rows.len(),
+        params_cols: params_layout.row_cols(),
+        output_cols: output_layout.row_cols(),
     }
 }
 

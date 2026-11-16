@@ -182,6 +182,7 @@ pub(crate) fn body_card_regions(
                         offset: 0,
                         rows: rows.saturating_sub(super::HEADER_ROWS),
                     },
+                    cols: region.cols.skip_rows(super::HEADER_ROWS),
                     ..region
                 })
             } else {

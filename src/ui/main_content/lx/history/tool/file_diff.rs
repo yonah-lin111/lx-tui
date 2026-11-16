@@ -123,6 +123,25 @@ pub(super) fn draw_body(
     }
 }
 
+/// 标题行的文字列区间（与 [`draw`] 同文案；帧不影响宽度，固定传 0/true）。
+pub(super) fn header_cols(call: &ToolCallView, width: u16) -> Option<(u16, u16)> {
+    let segments = header_with_verb(call, width, 0, true, verb_of(call), None);
+    super::super::text_cols::segment_cols(&segments)
+}
+
+/// 正文逐行文字列区间（不含标题行）。
+pub(super) fn body_cols(
+    call: &ToolCallView,
+    width: u16,
+    expanded: bool,
+    in_group: bool,
+) -> Vec<Option<(u16, u16)>> {
+    layout_with_group(call, width, expanded, in_group.then_some(false))
+        .iter()
+        .map(|row| super::super::text_cols::segment_cols(&row.segments))
+        .collect()
+}
+
 /// 绘制单行：底色从 `└─` 右侧的 1 列空白起铺满至行尾，不覆盖 `└─` 及左侧树连接符。
 fn draw_row(grid: &mut Grid, rect: Rect, y: u16, row: &Row) {
     match row.fill {
