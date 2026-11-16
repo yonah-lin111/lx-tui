@@ -1,9 +1,11 @@
 //! 子 agent 记录类型与行读取：元数据行、逐轮报告行、spawn 回执与报告载荷。
 
+use std::path::Path;
+
 use rusqlite::{Connection, OptionalExtension, params};
 
 use crate::chat::agent::AgentRole;
-use crate::db::{DbError, Result};
+use crate::db::{Database, DbError, Result};
 
 /// 一个 subagent 的元数据行（列表用；不含消息流）。
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -221,4 +223,39 @@ pub(in crate::db::chat) fn ensure_session_owned(
         )
         .optional()?;
     owned.map(|_| ()).ok_or(DbError::SessionMissing)
+}
+
+impl Database {
+    /// 面板私聊输入产生的 user 消息 id（按 child session 查）。
+    ///
+    /// 判据与详情 `/rewind` 一致：`position > 0`（跳过 spawn）、无 `parent_call_id`
+    /// （跳过模型 `send_input`）、`notify_parent = 0`。报告请求也满足这些条件，
+    /// 由调用方按正文 marker 排除。
+    pub fn private_input_user_message_ids(
+        &self,
+        workspace: &Path,
+        child_session: &str,
+    ) -> Result<Vec<String>> {
+        let Some(workspace_external) = self.workspace_external_id(workspace)? else {
+            return Ok(Vec::new());
+        };
+        let mut statement = self.conn.prepare(
+            r#"SELECT i.child_user_message_id
+               FROM agent_subagent_input i
+               JOIN agent_subagent a ON a.external_id = i.agent_id
+               JOIN agent_session s ON s.external_id = a.child_session_id
+               WHERE a.child_session_id = ?1
+                 AND s.workspace_id = ?2
+                 AND i.position > 0
+                 AND i.parent_call_id IS NULL
+                 AND i.notify_parent = 0
+                 AND i.child_user_message_id IS NOT NULL
+               ORDER BY i.position"#,
+        )?;
+        let rows = statement.query_map(params![child_session, workspace_external], |row| {
+            row.get::<_, String>(0)
+        })?;
+        rows.collect::<std::result::Result<Vec<_>, _>>()
+            .map_err(DbError::from)
+    }
 }

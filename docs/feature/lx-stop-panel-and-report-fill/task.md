@@ -409,3 +409,19 @@ cargo test --lib slash_panels
 - [ ] 空闲 `/rewind` 提示已移除。
 - [ ] `cargo fmt` / `cargo clippy --all-targets -- -D warnings` / `cargo test` 全绿。
 - [ ] 用户 `cargo run` 实机验收通过。
+
+---
+
+## 7. 验收修复（2026-11-16）
+
+- **`/report` 不生成**：`Effect::SendSubagentReport` / `StopSubagentsByUser` / `StopAllSessionProcesses`
+  未进入持久化泵的网络效应白名单，被 `Persistence::pump` 静默吞掉；已补入
+  `src/db/service.rs::is_network_effect`，并加事件层回归测试覆盖「先 pump、再执行」顺序。
+- **BTW `/report` 无历史线程**：允许新 QA 直接 `/report`，由事件层就地创建 BTW 线程；
+  启动失败也计入报告批次（失败占位），不会永久等待。
+- **报告轮认领竞态**：`launch_child_turn` 只在被认领输入正文是报告 marker 时才消费
+  `ChatStreams.report_to_input`；普通排队项抢先时保留标记给真正的报告轮。
+- **路径省略**：`read` 工具路径改为中间省略（保留开头目录与末尾文件名），
+  `docs/standards/tui-design-requirements.md` 同步。
+- **消息底色**：Agents 私聊（暗紫）、流中 steer（暗海蓝）、BTW 用户消息（暗琥珀）
+  与主会话用户底色互不相同；私聊标记由 DB `agent_subagent_input` 判据重建。

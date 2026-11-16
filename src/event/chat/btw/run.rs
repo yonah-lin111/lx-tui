@@ -171,11 +171,7 @@ pub(super) fn start_recipient(
             &start.assistant_message_id,
             &model_label,
         ));
-    let answerer_label = if start.target_kind == "default" {
-        "BTW".to_string()
-    } else {
-        start.display_nickname.clone()
-    };
+    let answerer_label = pending.answerer_label.clone();
     let run = BtwRun {
         thread_id: pending.thread_id.clone(),
         batch_id: pending.batch_id.clone(),
@@ -551,31 +547,11 @@ pub(super) fn finish_run(
         }
     }
     // `/report` 批次：记录本节，全部收口后合并填入主输入框。
-    let report_ready = if let Some(batch) = streams.btw.report_batches.get_mut(&run.batch_id) {
-        if matches!(reason, StopReason::Complete) && !report_text.trim().is_empty() {
-            batch
-                .sections
-                .push((run.answerer_label.clone(), report_text));
-        } else {
-            batch.failed.push(run.answerer_label.clone());
-        }
-        batch.done = batch.done.saturating_add(1);
-        if batch.done >= batch.expected {
-            let batch = streams.btw.report_batches.remove(&run.batch_id);
-            batch.map(|batch| crate::app::update::BtwReportReady {
-                pane: batch.pane,
-                parent_session: batch.parent_session_id,
-                thread_id: batch.thread_id,
-                title: batch.title,
-                sections: batch.sections,
-                failed: batch.failed,
-            })
-        } else {
-            None
-        }
-    } else {
-        None
-    };
+    let report_ready = streams.btw.record_report_outcome(
+        &run.batch_id,
+        &run.answerer_label,
+        matches!(reason, StopReason::Complete).then_some(report_text),
+    );
     // 只清本 run 的执行资源；不按 session 清理其他目标的模型。
     streams.cancels.remove(key);
     streams.db_workspaces.remove(key);

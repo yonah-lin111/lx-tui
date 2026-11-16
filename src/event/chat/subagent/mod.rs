@@ -29,7 +29,9 @@ pub(crate) use context::{
     ChildPromptContext, ChildTurnLimits, assemble_child_context, capture_child_prompt_inputs,
     child_tool_names,
 };
-pub(crate) use lifecycle::{cancel_for_session, projected_agent_status, stop_subagents_by_user};
+#[cfg(test)]
+pub(crate) use lifecycle::stop_subagents_by_user;
+pub(crate) use lifecycle::{cancel_for_session, projected_agent_status};
 #[cfg(test)]
 pub(crate) use settle::finish_subagent;
 pub(crate) use settle::{
@@ -826,12 +828,18 @@ pub fn apply_subagent_effects(
                             .iter()
                             .map(crate::app::state::CompactNoticeView::from_record)
                             .collect();
+                        let private_ids = database
+                            .private_input_user_message_ids(&workspace, &child_session)
+                            .unwrap_or_default();
                         changed |= update::on_subagent_loaded(state, pane, &agent_id, &messages);
-                        if !checkpoints.is_empty()
-                            && let Some(target) = state.pane_mut_anywhere(pane)
+                        if let Some(target) = state.pane_mut_anywhere(pane)
                             && let Some(run) = target.lx.agents.by_agent_mut(&agent_id)
                         {
-                            run.compact.replace(checkpoints);
+                            run.chat
+                                .rebuild_private_user_messages(&messages, &private_ids);
+                            if !checkpoints.is_empty() {
+                                run.compact.replace(checkpoints);
+                            }
                             run.rows_dirty = true;
                         }
                     }
@@ -887,46 +895,13 @@ pub fn apply_subagent_effects(
                 session_id,
                 agent_id,
             } => {
-                let pane = state.all_pane_ids().into_iter().find(|pane| {
-                    state
-                        .pane_anywhere(*pane)
-                        .and_then(|target| target.lx.chat.session_id.as_deref())
-                        == Some(session_id.as_str())
-                });
-                if let Some(pane) = pane {
-                    let stopped = stop_subagents_by_user(
-                        state,
-                        streams,
-                        persistence,
-                        pane,
-                        &session_id,
-                        agent_id.as_deref(),
-                    );
-                    if stopped == 0 {
-                        crate::app::update::show_lx_toast(
-                            state,
-                            pane,
-                            crate::app::toast::Toast::new(
-                                crate::app::toast::ToastKind::Warning,
-                                crate::ui::text::LX_NOTHING_TO_STOP,
-                                Some(pane),
-                                std::time::Instant::now(),
-                            ),
-                        );
-                    } else {
-                        crate::app::update::show_lx_toast(
-                            state,
-                            pane,
-                            crate::app::toast::Toast::new(
-                                crate::app::toast::ToastKind::Default,
-                                crate::ui::text::stopped_subagents(stopped),
-                                Some(pane),
-                                std::time::Instant::now(),
-                            ),
-                        );
-                    }
-                    changed = true;
-                }
+                changed |= lifecycle::apply_stop_subagents_by_user(
+                    state,
+                    streams,
+                    persistence,
+                    &session_id,
+                    agent_id.as_deref(),
+                );
             }
             Effect::DrainSubagentReports { pane } => {
                 changed |= drain_reports(state, persistence, pane);

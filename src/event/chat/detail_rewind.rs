@@ -290,7 +290,10 @@ pub(crate) fn handle_finished(
             let checkpoints = database
                 .compact_checkpoints(workspace, &plan.child_session)
                 .unwrap_or_default();
-            crate::app::update::on_detail_rewind_succeeded(
+            let private_ids = database
+                .private_input_user_message_ids(workspace, &plan.child_session)
+                .unwrap_or_default();
+            let changed = crate::app::update::on_detail_rewind_succeeded(
                 state,
                 pane,
                 &plan,
@@ -300,7 +303,16 @@ pub(crate) fn handle_finished(
                 restored_files,
                 already_restored,
                 &user_text,
-            )
+            );
+            if let DetailTarget::Agent(agent_id) = &plan.target
+                && let Some(target) = state.pane_mut_anywhere(pane)
+                && let Some(run) = target.lx.agents.by_agent_mut(agent_id)
+            {
+                run.chat
+                    .rebuild_private_user_messages(&messages, &private_ids);
+                run.rows_dirty = true;
+            }
+            changed
         }
     }
 }

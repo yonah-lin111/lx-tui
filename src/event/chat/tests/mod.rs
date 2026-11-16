@@ -714,6 +714,7 @@ fn view_summary_maps_every_field() {
 
 mod ack;
 mod ask;
+mod btw_report;
 mod compact;
 mod detail_compact;
 mod detail_rewind;

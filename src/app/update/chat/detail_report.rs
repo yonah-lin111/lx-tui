@@ -105,7 +105,8 @@ fn submit_agent(state: &mut AppState, pane: PaneId, note: &str) -> bool {
 fn submit_btw(state: &mut AppState, pane: PaneId, note: &str) -> bool {
     let Some((thread_id, busy, last_report)) = state.pane_anywhere(pane).and_then(|target| {
         let thread = target.lx.btw.active_thread()?;
-        let thread_id = thread.thread_id.clone()?;
+        // 尚未提问过的 QA 也能直接 `/report`：报告在 BTW 线程里就地创建。
+        let thread_id = thread.thread_id.clone();
         let busy = thread.is_loading() || thread.compact.is_running();
         let last_report = if busy { None } else { last_btw_report(thread) };
         Some((thread_id, busy, last_report))
@@ -127,7 +128,9 @@ fn submit_btw(state: &mut AppState, pane: PaneId, note: &str) -> bool {
         );
         return true;
     }
-    if let Some(last) = last_report {
+    if let Some(last) = last_report
+        && let Some(thread_id) = thread_id
+    {
         return open_panel(state, pane, DetailTarget::Btw(thread_id), note, Some(last));
     }
     super::composer::clear(state, pane);

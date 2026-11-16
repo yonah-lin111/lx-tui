@@ -885,6 +885,57 @@ async fn selected_cancel_only_stops_the_target_child() {
 }
 
 #[tokio::test]
+async fn report_effect_survives_persistence_pump_and_launches_a_turn() {
+    let (_fixture, mut state, key, mut persistence, mut streams, parent) = fixture_with_parent();
+    let agent_id = spawn_explorer(&mut state, &mut streams, &persistence, &key, "report").await;
+    let child_session = streams
+        .subagents
+        .values()
+        .find(|handle| handle.agent_id == agent_id)
+        .map(|handle| handle.child_session_id.clone())
+        .expect("handle");
+    crate::event::chat::subagent::finish_subagent(
+        &mut state,
+        &mut streams,
+        &persistence,
+        RequestKey {
+            pane: key.pane,
+            session: child_session,
+            generation: key.generation,
+        },
+        crate::chat::events::StopReason::Complete,
+        crate::db::chat::Usage::default(),
+    );
+    state.effects.clear();
+    state
+        .effects
+        .push(crate::app::effects::Effect::SendSubagentReport {
+            pane: key.pane,
+            session_id: parent,
+            agent_id: agent_id.clone(),
+            note: String::new(),
+        });
+    // 复现用户现场：事件循环先跑持久化泵，再跑子 agent 效应。
+    persistence.pump(&mut state);
+    assert!(
+        state.effects.iter().any(|effect| matches!(
+            effect,
+            crate::app::effects::Effect::SendSubagentReport { .. }
+        )),
+        "持久化泵不得吞掉报告效应：{:?}",
+        state.effects
+    );
+    crate::event::chat::apply_subagent_effects(&mut state, &mut streams, &persistence);
+    assert!(
+        streams
+            .subagents
+            .values()
+            .any(|handle| handle.agent_id == agent_id && handle.report_to_input),
+        "报告轮必须真正启动"
+    );
+}
+
+#[tokio::test]
 async fn panel_report_turn_fills_main_input_without_parent_delivery() {
     let (fixture, mut state, key, persistence, mut streams, parent) = fixture_with_parent();
     let agent_id = spawn_explorer(&mut state, &mut streams, &persistence, &key, "report me").await;

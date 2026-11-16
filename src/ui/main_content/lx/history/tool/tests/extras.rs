@@ -107,10 +107,13 @@ fn read_without_result_line_count_shows_path_only() {
     assert!(!detail.contains("line"), "{detail}");
 }
 
-/// 长路径优先保留区间/行数后缀，路径自身尾部省略。
+/// 长路径优先保留区间/行数后缀，路径自身**中间省略**（保留开头目录与末尾文件名）。
 #[test]
 fn long_read_path_keeps_suffix_and_truncates_path() {
-    let path = "a".repeat(120);
+    let path = format!(
+        "/Users/yonah/projects/agent/lx-tui/.worktrees/lx-stop-panel-and-report-fill/{}",
+        "x".repeat(40)
+    );
     let call = read_call(
         Some(ReadKind::File),
         ToolSummary {
@@ -122,11 +125,30 @@ fn long_read_path_keeps_suffix_and_truncates_path() {
         },
     );
     let detail = detail_text(&call, 40);
-    assert!(detail.contains("…"), "长路径必须省略：{detail}");
+    assert!(detail.contains("/Users/"), "必须保留开头目录：{detail}");
+    assert!(detail.contains('…'), "长路径必须省略：{detail}");
     assert!(
         detail.contains(":12-40 · 29 lines"),
         "后缀必须完整保留：{detail}"
     );
+}
+
+/// 中间省略必须保留末尾文件名，而不是把文件名一起截掉。
+#[test]
+fn long_read_path_keeps_tail_filename() {
+    let path =
+        "/Users/yonah/projects/agent/lx-tui/.worktrees/lx-stop-panel-and-report-fill/REPORT.md";
+    let call = read_call(
+        Some(ReadKind::File),
+        ToolSummary {
+            path: Some(path.into()),
+            ..ToolSummary::default()
+        },
+    );
+    let detail = detail_text(&call, 40);
+    assert!(detail.contains("/Users/yonah"), "{detail}");
+    assert!(detail.contains('…'), "{detail}");
+    assert!(detail.ends_with("REPORT.md"), "文件名必须可见：{detail}");
 }
 
 /// 后缀放不下时整段丢弃，只显示路径。
@@ -181,7 +203,7 @@ fn combining_marks_do_not_wrap_read_path() {
     );
     let detail = detail_text(&call, 18);
     assert_eq!(detail.lines().count(), 1, "路径恒单行：{detail}");
-    assert!(detail.contains('…'), "超长路径应尾部省略：{detail}");
+    assert!(detail.contains('…'), "超长路径应中间省略：{detail}");
 }
 
 /// 目录 `read`：标题 `Read · folder · 18 files`，树体只有路径。
@@ -420,7 +442,7 @@ fn unknown_tool_shows_name_and_summary_only() {
     );
 }
 
-/// `read` 超长路径：单行尾部省略，不软换行成第二行，也不登记可展开点击面（§5.1）。
+/// `read` 超长路径：单行中间省略（保留首尾），不软换行成第二行，也不登记可展开点击面（§5.1）。
 #[test]
 fn long_path_lives_in_the_title_and_never_overflows() {
     let long = "a/very/long/nested/directory/structure/with/many/segments/file.rs".repeat(3);
@@ -449,9 +471,11 @@ fn long_path_lives_in_the_title_and_never_overflows() {
             );
         }
     }
+    let narrow = detail_text(&call, 80);
+    assert!(narrow.contains('…'), "超宽路径单行中间省略：{narrow}");
     assert!(
-        detail_text(&call, 80).ends_with('…'),
-        "超宽路径单行尾部省略"
+        narrow.contains("file.rs"),
+        "中间省略必须保留尾部文件名：{narrow}"
     );
     assert!(
         !has_expandable_content(&call, 80),

@@ -78,6 +78,7 @@ pub(crate) fn cancel_for_session(
         streams.resumed_subagents.remove(&id);
         streams.interrupted_subagents.remove(&id);
         streams.paused_by_interrupt.remove(&id);
+        streams.report_to_input.remove(&id);
     }
     if let Some(target) = agent_id {
         streams.resumed_subagents.remove(target);
@@ -193,6 +194,7 @@ pub(crate) fn stop_subagents_by_user(
         streams.resumed_subagents.remove(id);
         streams.interrupted_subagents.remove(id);
         streams.paused_by_interrupt.remove(id);
+        streams.report_to_input.remove(id);
     }
     for child in dead {
         streams.subagents.remove(&child);
@@ -213,4 +215,40 @@ pub(crate) fn stop_subagents_by_user(
     }
     update::request_subagent_cards_refresh(state, pane);
     stopped
+}
+
+/// 执行用户主动停止效应：定位会话所属窗格、标记并取消目标，给出结果反馈。
+pub(super) fn apply_stop_subagents_by_user(
+    state: &mut AppState,
+    streams: &mut ChatStreams,
+    persistence: &Persistence,
+    session_id: &str,
+    agent_id: Option<&str>,
+) -> bool {
+    let Some(pane) = state.all_pane_ids().into_iter().find(|pane| {
+        state
+            .pane_anywhere(*pane)
+            .and_then(|target| target.lx.chat.session_id.as_deref())
+            == Some(session_id)
+    }) else {
+        return false;
+    };
+    let stopped = stop_subagents_by_user(state, streams, persistence, pane, session_id, agent_id);
+    let (kind, message) = if stopped == 0 {
+        (
+            crate::app::toast::ToastKind::Warning,
+            crate::ui::text::LX_NOTHING_TO_STOP.to_string(),
+        )
+    } else {
+        (
+            crate::app::toast::ToastKind::Default,
+            crate::ui::text::stopped_subagents(stopped),
+        )
+    };
+    crate::app::update::show_lx_toast(
+        state,
+        pane,
+        crate::app::toast::Toast::new(kind, message, Some(pane), Instant::now()),
+    );
+    true
 }

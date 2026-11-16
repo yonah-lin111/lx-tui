@@ -532,7 +532,8 @@ pub(crate) fn submit_report(state: &mut AppState, pane: PaneId, note: &str) -> b
     let Some((qa_id, thread_id, target_choices)) = state.pane_anywhere(pane).and_then(|target| {
         let qa_id = target.lx.btw.active.clone()?;
         let thread = target.lx.btw.active_thread()?;
-        let thread_id = thread.thread_id.clone()?;
+        // 新 QA 也可以直接 `/report`：事件层会就地创建 BTW 线程。
+        let thread_id = thread.thread_id.clone();
         let (previous, _) = previous_targets(&target.lx);
         Some((qa_id, thread_id, previous))
     }) else {
@@ -571,7 +572,7 @@ pub(crate) fn submit_report(state: &mut AppState, pane: PaneId, note: &str) -> b
             qa_id,
             workspace,
             cwd,
-            thread_id: Some(thread_id),
+            thread_id,
             submit_id,
             // 报告不是草稿提交：不动 composer 的修订号。
             draft_revision: 0,

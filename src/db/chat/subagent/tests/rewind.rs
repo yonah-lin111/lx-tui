@@ -13,6 +13,86 @@ fn complete() -> TurnOutcome {
     }
 }
 
+/// 面板私聊与 `/report` 输入都带 child user message id；spawn（position=0）不在候选里。
+#[test]
+fn private_input_ids_return_panel_follow_ups_and_reports() {
+    let fixture = Fixture::new("private-ids");
+    let parent = fixture.parent();
+    let committed = fixture.spawn(&parent, AgentRole::Explorer, "task");
+    fixture.finish_child(&committed, complete(), None);
+    let private = fixture
+        .database
+        .enqueue_input(
+            fixture.workspace(),
+            &parent,
+            &committed.agent_id,
+            "private-1",
+            None,
+            None,
+            &text_item("private question"),
+            false,
+            false,
+        )
+        .expect("enqueue private");
+    let report = fixture
+        .database
+        .enqueue_input(
+            fixture.workspace(),
+            &parent,
+            &committed.agent_id,
+            "report-1",
+            None,
+            None,
+            &text_item("[Report for main agent]\nstatus"),
+            false,
+            false,
+        )
+        .expect("enqueue report");
+    let private = fixture
+        .database
+        .claim_input(
+            fixture.workspace(),
+            &parent,
+            &committed.agent_id,
+            &private.submission_id,
+            &Fixture::model(),
+        )
+        .expect("claim private");
+    fixture
+        .database
+        .finish_subagent_turn(
+            fixture.workspace(),
+            &committed.agent_id,
+            &private.child_assistant_id,
+            &[part(0, "done")],
+            &complete(),
+            Usage::default(),
+            Usage::default(),
+            None,
+        )
+        .expect("finish private turn");
+    let report = fixture
+        .database
+        .claim_input(
+            fixture.workspace(),
+            &parent,
+            &committed.agent_id,
+            &report.submission_id,
+            &Fixture::model(),
+        )
+        .expect("claim report");
+    let ids = fixture
+        .database
+        .private_input_user_message_ids(fixture.workspace(), &committed.child_session_id)
+        .expect("ids");
+    assert_eq!(
+        ids,
+        vec![private.child_user_message_id, report.child_user_message_id],
+        "面板追问与报告都在候选里；spawn 不在"
+    );
+    cleanup(fixture.root);
+}
+
 /// 人类面板私聊追问（position>0、无 parent_call_id、notify_parent=0）可撤回。
 #[test]
 fn latest_undoable_turn_requires_human_panel_follow_up() {

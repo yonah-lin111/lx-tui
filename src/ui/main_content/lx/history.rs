@@ -259,7 +259,7 @@ pub struct HistoryLayout {
 
 pub use sticky::StickyRow;
 mod source;
-pub(crate) use source::{HistorySource, HistoryViewport};
+pub(crate) use source::{HistorySource, HistorySurface, HistoryViewport};
 use sticky::sticky_candidate;
 
 #[cfg(test)]

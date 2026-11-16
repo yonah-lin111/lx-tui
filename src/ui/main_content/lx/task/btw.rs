@@ -253,12 +253,12 @@ pub(crate) fn draw_conversation(
 
 fn detail_view(thread: &crate::app::state::lx::BtwThreadState) -> DetailView<'_> {
     DetailView {
-        source: HistorySource::from_chat(&thread.chat, &thread.compact).with_viewport(
-            HistoryViewport {
+        source: HistorySource::from_chat(&thread.chat, &thread.compact)
+            .with_surface(history::HistorySurface::Btw)
+            .with_viewport(HistoryViewport {
                 scroll: thread.scroll,
                 follow_bottom: thread.follow,
-            },
-        ),
+            }),
         scroll: thread.scroll,
         follow: thread.follow,
     }

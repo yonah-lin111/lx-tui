@@ -384,6 +384,36 @@ fn btw_report_submits_flag_with_report_marker() {
 }
 
 #[test]
+fn btw_report_without_previous_thread_still_emits_submission() {
+    let (mut state, pane) = btw_editing_state();
+    {
+        let thread = state
+            .pane_mut_anywhere(pane)
+            .unwrap()
+            .lx
+            .btw
+            .active_thread_mut()
+            .expect("thread");
+        assert!(thread.thread_id.is_none(), "新 QA 尚无 BTW 线程");
+    }
+    type_str(&mut state, "/report summarize");
+    state.effects.clear();
+    crate::app::update::pane::apply_lx_input(&mut state, LxInput::Enter);
+    let submission = state
+        .effects
+        .iter()
+        .find_map(|effect| match effect {
+            crate::app::effects::Effect::Btw(crate::app::effects::BtwEffect::Submit(
+                submission,
+            )) => Some(submission.as_ref()),
+            _ => None,
+        })
+        .expect("新 QA 的报告提交");
+    assert!(submission.report_to_main_input);
+    assert!(submission.thread_id.is_none(), "线程由事件层按 QA 锚点创建");
+}
+
+#[test]
 fn report_running_agent_is_rejected_without_effect() {
     let (mut state, pane) = agents_editing_state();
     state

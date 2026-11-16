@@ -100,6 +100,9 @@ pub(super) fn launch_child_turn(
         .load_chat_session(workspace, &record.child_session_id)
         .ok()
         .flatten();
+    let private_ids = database
+        .private_input_user_message_ids(workspace, &record.child_session_id)
+        .unwrap_or_default();
     let existing_checkpoints: Vec<crate::app::state::CompactNoticeView> = database
         .compact_checkpoints(workspace, &record.child_session_id)
         .unwrap_or_default()
@@ -116,6 +119,7 @@ pub(super) fn launch_child_turn(
                 .map(|msg| crate::app::update::view_message_of(msg, &models_snapshot))
                 .collect();
             chat.rebuild_steered_user_messages(existing);
+            chat.rebuild_private_user_messages(existing, &private_ids);
             chat.request = RequestState::Streaming {
                 key: child_key.clone(),
                 assistant_id: child_assistant_id.to_string(),
@@ -191,7 +195,8 @@ pub(super) fn launch_child_turn(
         None => return Err("process runtime unavailable".to_string()),
     };
 
-    let report_to_input = streams.report_to_input.remove(&record.agent_id);
+    let report_to_input = crate::chat::agent::is_report_request(task_text)
+        && streams.report_to_input.remove(&record.agent_id);
     let handle = SubagentHandle {
         parent: parent_key.clone(),
         agent_id: record.agent_id.clone(),

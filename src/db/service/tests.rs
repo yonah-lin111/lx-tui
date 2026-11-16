@@ -1471,3 +1471,47 @@ fn pump_defers_subagent_steer_to_the_chat_layer() {
         state.effects
     );
 }
+
+/// `Agents /report`、用户停止 subagent 与停止受管进程都只有事件层能做，持久化泵不得吞掉。
+#[test]
+fn pump_defers_report_stop_and_process_effects_to_the_event_loop() {
+    let (mut service, mut state, _, _) = trusted_service("pump-report-stop");
+    let pane = state.active_tab().layout.focus();
+    state.effects.push(Effect::SendSubagentReport {
+        pane,
+        session_id: "sess".into(),
+        agent_id: "sub".into(),
+        note: "note".into(),
+    });
+    state.effects.push(Effect::StopSubagentsByUser {
+        session_id: "sess".into(),
+        agent_id: None,
+    });
+    state.effects.push(Effect::StopAllSessionProcesses { pane });
+    service.pump(&mut state);
+    assert!(
+        state.effects.iter().any(|effect| matches!(
+            effect,
+            Effect::SendSubagentReport { agent_id, note, .. }
+                if agent_id == "sub" && note == "note"
+        )),
+        "报告效应必须留给事件层：{:?}",
+        state.effects
+    );
+    assert!(
+        state
+            .effects
+            .iter()
+            .any(|effect| matches!(effect, Effect::StopSubagentsByUser { agent_id: None, .. })),
+        "用户停止 subagent 必须留给事件层：{:?}",
+        state.effects
+    );
+    assert!(
+        state
+            .effects
+            .iter()
+            .any(|effect| matches!(effect, Effect::StopAllSessionProcesses { .. })),
+        "停止受管进程必须留给事件层：{:?}",
+        state.effects
+    );
+}

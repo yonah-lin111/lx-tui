@@ -352,6 +352,12 @@ pub const SESSION_TITLE_PALETTE_COUNT: u8 = 8;
 /// 流中 steer 用户消息整块底色与会话标题胶囊槽位 1 共用的低饱和暗海蓝（`#1b2a38`）。
 pub const LX_STEER_USER_BG: Color = Color::Rgb(0x1b, 0x2a, 0x38);
 
+/// 子 agent 面板私聊追问整块底色：低饱和暗夜紫（`#272138`，会话胶囊槽位 3）。
+pub const LX_PRIVATE_USER_BG: Color = Color::Rgb(0x27, 0x21, 0x38);
+
+/// BTW 线程用户消息整块底色：低饱和暗琥珀（`#32261a`，会话胶囊槽位 5）。
+pub const LX_BTW_USER_BG: Color = Color::Rgb(0x32, 0x26, 0x1a);
+
 /// 会话标题胶囊柔和暗色配色池（结合 Claude Code 暗色胶囊风格与 LX 品牌 Logo 色调）。
 pub const SESSION_TITLE_PALETTE: [(Color, Color); 8] = [
     // 0: LX 品牌柔樱粉：暗暮粉紫底 (#2e1e29) + 柔樱粉字 (#e8a6c4)

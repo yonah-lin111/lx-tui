@@ -766,6 +766,16 @@ pub fn chat_user_steer_bg() -> Style {
     Style::default().bg(LX_STEER_USER_BG)
 }
 
+/// 子 agent 面板私聊追问整块底色（低饱和暗夜紫，与普通消息 / steer 区分）。
+pub fn chat_user_private_bg() -> Style {
+    Style::default().bg(LX_PRIVATE_USER_BG)
+}
+
+/// BTW 线程用户消息整块底色（低饱和暗琥珀，与主会话 / steer / 私聊区分）。
+pub fn chat_user_btw_bg() -> Style {
+    Style::default().bg(LX_BTW_USER_BG)
+}
+
 /// 撤销选中的最新用户消息整块底色（深青蓝，与普通用户消息区分）。
 pub fn chat_user_target_bg() -> Style {
     Style::default().bg(Color::Indexed(24))

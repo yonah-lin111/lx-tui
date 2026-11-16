@@ -82,6 +82,12 @@ pub(crate) fn non_stream_signature_source(source: HistorySource<'_>, width: u16)
 fn list_signature(source: HistorySource<'_>, width: u16, skip_streaming_tail: bool) -> u64 {
     let mut hash = Fnv::new();
     hash.write_u16(width);
+    // 面板类型改变用户消息底色；同一 owner 也可能切换（如测试中的只读几何）。
+    hash.write_u8(match source.surface {
+        crate::ui::main_content::lx::history::HistorySurface::Main => 0,
+        crate::ui::main_content::lx::history::HistorySurface::Subagent => 1,
+        crate::ui::main_content::lx::history::HistorySurface::Btw => 2,
+    });
     // 统计行是否可见取决于「是否仍有子 agent 在跑」；状态变化不经过消息本身。
     hash.write_u8(u8::from(source.subagents_running));
     hash.write_usize(source.messages.len());
@@ -96,6 +102,7 @@ fn list_signature(source: HistorySource<'_>, width: u16, skip_streaming_tail: bo
         hash.write_str(&message.status);
         hash.write_str(&message.kind);
         hash.write_u8(u8::from(source.chat.is_steered_user_message(&message.id)));
+        hash.write_u8(u8::from(source.chat.is_private_user_message(&message.id)));
         if skip_streaming_tail
             && index + 1 == source.messages.len()
             && message.status == "streaming"

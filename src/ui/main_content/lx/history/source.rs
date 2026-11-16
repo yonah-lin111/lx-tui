@@ -19,6 +19,17 @@ pub(crate) struct HistoryViewport {
     pub follow_bottom: bool,
 }
 
+/// 历史渲染的会话面板类型：用户消息底色按面板区分。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum HistorySurface {
+    /// 主 lx 会话。
+    Main,
+    /// Agents 详情的子 agent 会话。
+    Subagent,
+    /// BTW 旁路线程。
+    Btw,
+}
+
 /// 历史渲染的只读数据源。
 #[derive(Debug, Clone, Copy)]
 pub(crate) struct HistorySource<'a> {
@@ -51,6 +62,8 @@ pub(crate) struct HistorySource<'a> {
     pub coalesce_offscreen: bool,
     /// 离屏合并的视口锚点；`None` = 不参与合并。
     pub viewport: Option<HistoryViewport>,
+    /// 面板类型：决定用户消息底色（主会话 / 子 agent / BTW）。
+    pub surface: HistorySurface,
     /// 稳定缓存身份：同一数据源跨帧不变；切会话/切 run 时改变。
     ///
     /// 主历史用 session id（无 id 的草稿退回 `LxChat` 地址）；子 agent 详情用
@@ -84,6 +97,7 @@ impl<'a> From<&'a Lx> for HistorySource<'a> {
                 scroll: lx.chat.history_scroll,
                 follow_bottom: lx.chat.follow_bottom,
             }),
+            surface: HistorySurface::Main,
             owner: lx
                 .chat
                 .session_id
@@ -107,6 +121,7 @@ impl<'a> HistorySource<'a> {
     pub(crate) fn from_run(run: &'a SubagentRun) -> Self {
         let mut source = Self::from_chat(&run.chat, &run.compact);
         source.owner = stable_owner("subagent", &run.agent_id, &run.child_session_id);
+        source.surface = HistorySurface::Subagent;
         source
     }
 
@@ -130,9 +145,16 @@ impl<'a> HistorySource<'a> {
             // 详情区默认不参与离屏合并；滚动路径用 `with_viewport` 显式传入。
             coalesce_offscreen: false,
             viewport: None,
+            surface: HistorySurface::Main,
             // 无 run 身份的调用方（测试/只读几何）退回地址；生产详情走 `from_run`。
             owner: chat as *const LxChat as usize,
         }
+    }
+
+    /// 指定面板类型（BTW 详情用）。
+    pub(crate) fn with_surface(mut self, surface: HistorySurface) -> Self {
+        self.surface = surface;
+        self
     }
 
     /// 给数据源绑定真实的滚动视口（Agents 详情用 `SubagentRun` 的滚动状态）。

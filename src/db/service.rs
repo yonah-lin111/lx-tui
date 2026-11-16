@@ -582,10 +582,14 @@ fn is_network_effect(state: &AppState, effect: &Effect) -> bool {
             | Effect::ListSubagents { .. }
             | Effect::LoadSubagentSession { .. }
             | Effect::CancelSubagents { .. }
+            | Effect::StopSubagentsByUser { .. }
             | Effect::DrainSubagentReports { .. }
-            // 面板追问/steer 要由 `apply_subagent_effects` 做 resume + 入队，持久化泵不能吞掉。
+            // 面板追问/steer/报告要由 `apply_subagent_effects` 做 resume + 入队，持久化泵不能吞掉。
             | Effect::SendSubagentUserInput { .. }
             | Effect::SteerSubagent { .. }
+            | Effect::SendSubagentReport { .. }
+            // 停止面板的受管进程同样只有事件层持有句柄。
+            | Effect::StopAllSessionProcesses { .. }
             | Effect::PrepareRewind { .. }
             | Effect::ExecuteRewind(_)
             | Effect::ExecuteCompact(_)
