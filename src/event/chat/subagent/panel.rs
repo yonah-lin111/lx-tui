@@ -28,6 +28,29 @@ pub(super) fn send_from_panel(
     )
 }
 
+/// 目标在 DB 里的排队条数（UI 计数滞后的兜底）。
+fn durability_queued(
+    persistence: &Persistence,
+    state: &AppState,
+    pane: PaneId,
+    session_id: &str,
+    agent_id: &str,
+) -> usize {
+    let Some(database) = persistence.database() else {
+        return 0;
+    };
+    let Some(workspace) = state
+        .chat_session_key_for_pane(pane)
+        .or_else(|| super::workspace_for_pane(state, pane))
+    else {
+        return 0;
+    };
+    let tree = super::runner::load_subagent_tree(database, &workspace, session_id);
+    super::runner::tree_queue_states(database, &workspace, &tree)
+        .get(agent_id)
+        .map_or(0, |queue| queue.queued_count)
+}
+
 /// 面板 `/report`：入队一轮报告请求（`notify_parent=false`），完成后只填主输入框。
 pub(super) fn submit_report(
     state: &mut AppState,
@@ -38,7 +61,7 @@ pub(super) fn submit_report(
     agent_id: &str,
     note: &str,
 ) -> bool {
-    let busy = state.pane_anywhere(pane).is_some_and(|target| {
+    let ui_busy = state.pane_anywhere(pane).is_some_and(|target| {
         target.lx.agents.by_agent(agent_id).is_some_and(|run| {
             run.is_running()
                 || run.queued_count > 0
@@ -46,7 +69,10 @@ pub(super) fn submit_report(
                 || run.compact.is_running()
         })
     });
-    if busy {
+    // UI 队列计数可能落后于 DB：报告必须作为空闲后的第一条输入，
+    // 否则 `report_to_input` 会被前面的普通排队消息误领。
+    let db_queued = durability_queued(persistence, state, pane, session_id, agent_id);
+    if ui_busy || db_queued > 0 {
         crate::app::update::show_lx_toast(
             state,
             pane,

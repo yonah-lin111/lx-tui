@@ -728,7 +728,7 @@ impl Database {
     /// 判据（三者同时成立才是人类面板追问）：
     /// - `agent_subagent_input.position > 0`（spawn 输入固定 position 0）；
     /// - `parent_call_id IS NULL`（模型工具调用必有 call_id）；
-    /// - `notify_parent = 0`（`/report` 轮是 1）。
+    /// - `notify_parent = 0`（新版面板 `/report` 轮也是 0；旧版自动投递轮是 1）。
     ///
     /// 含轮内 steer 的轮次刻意不可撤回：steer 段只覆盖被截断之后的消息与文件，
     /// 按最新段撤销只能回退半个逻辑轮次；`stop_reason = 'steer'` 直接拒绝。

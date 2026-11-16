@@ -1,4 +1,5 @@
-//! 详情 `/rewind` 的可撤回判据：只认人类面板私聊追问；spawn / 父 `send_input` / `/report` / steer 段拒绝。
+//! 详情 `/rewind` 的可撤回判据：认人类面板私聊追问与新版面板 `/report`；
+//! spawn / 父 `send_input` / 旧版自动投递报告 / steer 段拒绝。
 
 use super::*;
 

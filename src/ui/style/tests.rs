@@ -21,6 +21,32 @@ fn styles_stay_palette_native() {
 }
 
 #[test]
+fn pasted_chip_colors_are_distinct_for_reports() {
+    use crate::app::paste::FoldedKind;
+
+    let subagent = pasted_chip(FoldedKind::SubagentReport);
+    assert_eq!(subagent.fg, Some(Color::LightMagenta));
+    assert_eq!(subagent.bg, Some(Color::Indexed(53)));
+    let btw = pasted_chip(FoldedKind::BtwReport);
+    assert_eq!(btw.fg, Some(Color::LightBlue));
+    assert_eq!(btw.bg, Some(Color::Indexed(17)));
+
+    let kinds = [
+        FoldedKind::Text,
+        FoldedKind::Code,
+        FoldedKind::Log,
+        FoldedKind::SubagentReport,
+        FoldedKind::BtwReport,
+    ];
+    let bgs: Vec<_> = kinds.iter().map(|kind| pasted_bg(*kind).bg).collect();
+    for left in 0..bgs.len() {
+        for right in left + 1..bgs.len() {
+            assert_ne!(bgs[left], bgs[right], "五种芯片背景不得重叠");
+        }
+    }
+}
+
+#[test]
 fn template_page_title_maps_all_statuses_consistently() {
     use crate::app::markdown::TemplateStatus;
 

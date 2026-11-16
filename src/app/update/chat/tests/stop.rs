@@ -224,8 +224,7 @@ fn stop_main_only_stops_response() {
             ..StopAvailability::default()
         },
     );
-    if let Some(SlashPanel::Stop(panel)) =
-        state.pane_mut_anywhere(pane).unwrap().lx.slash.as_mut()
+    if let Some(SlashPanel::Stop(panel)) = state.pane_mut_anywhere(pane).unwrap().lx.slash.as_mut()
     {
         panel.window.active = 1;
     }
