@@ -868,6 +868,8 @@ pub fn resize_panes(state: &mut AppState, pane_rects: &[(PaneId, Rect)]) {
             if let Some(workspace_state) = state.workspaces.get_mut(workspace) {
                 workspace_state.prompt_panel.recent_visible = split.visible_entries;
             }
+            // 几何变化只钳制各列表偏移：避免可见行数变化后偏移越界，下一次导航跳位。
+            super::clamp_prompt_list_scroll(state);
             state.prompt_resize_pending = false;
         } else if let Some(pane) = state.pane_mut_anywhere(*id) {
             let (cols, rows) = tiling::pane_inner_size(*rect);
