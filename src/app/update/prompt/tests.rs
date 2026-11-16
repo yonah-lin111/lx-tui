@@ -518,7 +518,6 @@ fn scroll_clamps_and_keeps_selection_visible() {
     assert_eq!(state.workspaces[0].prompt_panel.scroll, 5, "越界钳制到末行");
     move_prompt_selection(&mut state, 3, 2);
     assert!(state.workspaces[0].prompt_panel.scroll <= state.workspaces[0].prompt_panel.selected);
-    assert!(clamp_prompt_tree_scroll(&mut state, 4));
 }
 
 #[test]
@@ -2568,6 +2567,48 @@ fn edit_position_and_scroll_preserved_when_switching_to_tree_and_back() {
         state.prompt.scroll(),
         scroll_before,
         "重新打开当前条目同样恢复滚动位置"
+    );
+}
+
+#[test]
+fn tree_roundtrip_keeps_scroll_when_cursor_out_of_view() {
+    let mut state = demo_state();
+    let content = (0..50)
+        .map(|index| format!("line {index}: content for scroll preservation"))
+        .collect::<Vec<_>>()
+        .join("\n");
+    assert!(edit_prompt_item(&mut state, 0, 10));
+    state.prompt.resize(40, 10);
+    state.prompt.set_text(&content);
+    state.prompt.scroll_to(0);
+    assert!(state.prompt.cursor_cell().is_none(), "前提：光标在视口外");
+
+    show_prompt_tree(&mut state);
+    toggle_prompt_panel_mode(&mut state);
+
+    assert_eq!(state.workspaces[0].prompt_panel.mode, PromptMode::Editor);
+    assert_eq!(state.prompt.scroll(), 0, "返回编辑视图不得回拉光标");
+    assert!(state.prompt.cursor_cell().is_none());
+}
+
+#[test]
+fn show_prompt_tree_preserves_scroll_without_revealing_selection() {
+    let mut state = demo_state();
+    state.workspaces[0].prompt_panel.mode = PromptMode::Editor;
+    state.workspaces[0].prompt_panel.editing =
+        Some(crate::app::prompt::PromptEditing::Item(10));
+    state.workspaces[0].prompt_panel.scroll = 0;
+
+    show_prompt_tree(&mut state);
+
+    assert_eq!(
+        state.workspaces[0].prompt_panel.selected_prompt_id(),
+        Some(10),
+        "选中项落在当前编辑条目"
+    );
+    assert_eq!(
+        state.workspaces[0].prompt_panel.scroll, 0,
+        "进入树视图只钳制，不 reveal 选中项"
     );
 }
 
