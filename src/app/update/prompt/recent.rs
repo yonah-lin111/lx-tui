@@ -373,7 +373,8 @@ pub(crate) fn sync_prompt_recent_selection(
         .min(rows.len() - 1);
     let visible = panel.recent_visible.max(1);
     panel.recent_active = Some(next);
-    panel.recent_scroll = keep_visible(panel.recent_scroll, next, visible, rows.len());
+    // 自动同步只钳制偏移；把选中行拉进视口只发生在用户 ↑↓/滚轮/拖动路径。
+    panel.recent_scroll = panel.recent_scroll.min(rows.len().saturating_sub(visible));
     if state
         .prompt_recent_hover
         .is_some_and(|hover| hover >= rows.len())
