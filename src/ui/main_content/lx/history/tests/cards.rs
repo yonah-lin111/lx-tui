@@ -386,8 +386,23 @@ fn agent_link_wins_over_the_whole_card_fold_region() {
             row,
             &mut cache,
         ),
-        Some(CardTarget::OpenAgent { agent_id }),
+        Some(CardTarget::OpenAgent {
+            agent_id: agent_id.clone()
+        }),
         "点击链接行必须打开 Agents，而不是命中整卡折叠面"
+    );
+    assert_eq!(
+        crate::ui::main_content::lx::card_target_at(
+            area,
+            &lx,
+            view.body
+                .x
+                .saturating_add(super::content_rect(view.body).width.saturating_sub(1)),
+            row,
+            &mut cache,
+        ),
+        Some(CardTarget::OpenAgent { agent_id }),
+        "agent 链接行保持整行可点（Q3 不变）"
     );
 }
 

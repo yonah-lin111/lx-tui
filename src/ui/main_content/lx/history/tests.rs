@@ -27,6 +27,7 @@ mod compact;
 mod model_switch;
 mod rewind;
 mod sticky;
+mod text_hit;
 mod transcript;
 mod turn_tail;
 mod user_folding;
