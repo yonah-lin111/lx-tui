@@ -1,19 +1,21 @@
 # Agents / BTW 详情输入框 `/` 命令与私聊·汇报重做 — 验证报告
 
-- **验证工作区**：`.worktrees/detail-slash-report`（分支 `detail-slash-report`，基线 `dev@909c2e48`）
-- **验证结论**：自动化与 CLI 实机通过；TUI 交互与外观项由用户按 §4 实机确认。
+- **验证工作区**：`.worktrees/detail-slash-report`（分支 `detail-slash-report`，基线 `dev@909c2e48`）；合并后主工作区 `dev@f7d53b9d`。
+- **验证结论**：分支内自动化与 CLI 实机通过；合并到 `dev` 后复跑格式、clippy 与全量测试通过。TUI 交互与外观项由用户按 §4 实机确认。
 - **数据库**：无迁移；复用 `notify_parent`、`delete_btw_thread`、`commit_rewind`、`revert_compact`。
-- **隔离库**：`~/.lx-t-dev/db/worktrees/detail-slash-report-4326b0d1/lx.db`。
+- **隔离库**：分支验证期使用 `~/.lx-t-dev/db/worktrees/detail-slash-report-4326b0d1/lx.db`，worktree 删除时已同步清理。
+- **合并记录**：2026-11-16 以 `--no-ff` 合并 `detail-slash-report` → `dev`，merge commit `f7d53b9d`；无冲突。
 
 ## 1. 自动化与 CLI 概览
 
 | 校验 | 命令 | 结果 |
 | :--- | :--- | :--- |
 | 格式 / 静态检查 | `cargo fmt && cargo clippy --all-targets -- -D warnings` | PASS（0 warning） |
-| 全量测试 | `cargo test` | PASS（lib **5622 passed / 6 ignored**；集成测试全通过） |
+| 全量测试（分支） | `cargo test` | PASS（lib **5622 passed / 6 ignored**；集成测试全通过） |
+| 合并后全量测试 | `cargo fmt --check && cargo clippy --all-targets -- -D warnings && cargo test` | PASS（lib **5641 passed / 6 ignored**；集成测试全通过） |
 | 详情命令模型 | `cargo test --lib app::state::lx::slash::composer` | 7 passed |
 | composer 与命令分派 | `cargo test --lib app::update::chat::tests::detail_commands` | 29 passed |
-| BTW 更新 | `cargo test --lib app::update::chat::btw::tests` | 21 passed |
+| BTW 更新 | `cargo test --lib app::update::chat::btw::tests` | 22 passed |
 | 详情撤销事件层 | `cargo test --lib event::chat::tests::detail_rewind` | 8 passed |
 | 详情压缩事件层 | `cargo test --lib event::chat::tests::detail_compact` | 6 passed |
 | 私聊 / 汇报 | `cargo test --lib event::chat::tests::subagent_private` | 6 passed |

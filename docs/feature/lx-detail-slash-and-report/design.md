@@ -2,7 +2,7 @@
 
 - **特性目录**：`docs/feature/lx-detail-slash-and-report/`
 - **关联任务**：[`task.md`](task.md)
-- **当前状态**：**已在 `detail-slash-report` 分支实现，自动化与 CLI 实机验证通过；TUI 交互/外观待用户确认后合并（含 2026-11-15 T10 修复与 2026-11-16 review 修复）**（见 [`verification.md`](verification.md)、[`review.md`](review.md)）。
+- **当前状态**：**已合并到 `dev`（2026-11-16，merge `f7d53b9d`）；自动化与 CLI 实机验证通过，TUI 交互/外观仍需用户实机确认**（见 [`verification.md`](verification.md)、[`review.md`](review.md)）。
 - **2026-11-15 调整**：详情命令由 `/undo` 更名为 `/rewind`（`/undo` 保留隐藏别名）；确认面板与主聊天四项动作对齐；新增 compact 检查点撤销（`RestoreCompact`）。
 - **2026-11-15 修复**：详情 `/compact` 纳入 `has_streaming_lx` 心跳（耗时与菱形呼吸、聊天栏 `Compacting context... (Ns)`）；后台详情滚动条按下/拖拽上限改用 `ScrollbarLayout` 的 `total`/`visible`，不再读滞后一帧的缓存行数。
 - **2026-11-15 对齐**：历史动画判据收敛到 `LxChat::is_animating()`（流式状态 / 请求在途 / 本地命令 / 流式 assistant 投影），主会话、子 agent 详情与 BTW 线程共用；修复 BTW 不维护 `status.streaming` 导致步骤标记不呼吸。

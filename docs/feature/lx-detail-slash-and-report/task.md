@@ -1,6 +1,6 @@
 # 任务清单：Agents / BTW 详情输入框 `/` 命令与私聊·汇报重做
 
-- **状态**：**T1–T12 已完成（`detail-slash-report` 分支）；自动化与 CLI 实机验证见 [`verification.md`](verification.md)，TUI 交互/外观项待用户按 §4 实机确认。2026-11-15 追加：详情 `/undo` 更名为 `/rewind`（保留 `/undo` 隐藏别名），动作面板与主聊天对齐，并支持 compact 检查点撤销；同日修复详情压缩无心跳/无计时、后台详情滚动条沿用滞后几何两个 bug，并将主会话/子 agent/BTW 的历史动画判据统一到 `LxChat::is_animating()`。2026-11-16 完成代码 review 与 P0–P3 修复，见 [`review.md`](review.md)。**
+- **状态**：**T1–T12 已完成并合并到 `dev`（2026-11-16，merge `f7d53b9d`）；自动化与 CLI 实机验证见 [`verification.md`](verification.md)，TUI 交互/外观项待用户按 §4 实机确认。2026-11-15 追加：详情 `/undo` 更名为 `/rewind`（保留 `/undo` 隐藏别名），动作面板与主聊天对齐，并支持 compact 检查点撤销；同日修复详情压缩无心跳/无计时、后台详情滚动条沿用滞后几何两个 bug，并将主会话/子 agent/BTW 的历史动画判据统一到 `LxChat::is_animating()`。2026-11-16 完成代码 review 与 P0–P3 修复，见 [`review.md`](review.md)。**
 - **设计文档**：[`design.md`](design.md)
 - **范围**：`src/app/state/lx/`、`src/app/update/`、`src/event/chat/`、`src/db/chat/subagent/`、`src/ui/main_content/lx/`、`src/ui/text/`、`src/chat/agent/report.rs`
 - **数据库**：**无迁移**（复用 `notify_parent`、`delete_btw_thread`、`commit_rewind`）。

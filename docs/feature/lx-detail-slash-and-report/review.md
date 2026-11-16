@@ -4,6 +4,7 @@
 - **范围**：`detail-slash-report` 相对 `dev` 的全部改动（详情 `/rewind` `/compact` `/report` `/new`、动画/心跳/滚动修复）。
 - **方法**：逐文件代码路径推演 + codegraph 调用关系 + 定向测试；每条结论都尽量落到现有测试或新增回归测试。
 - **结论**：没有发现崩溃级 P0；但有 6 个会破坏核心语义或造成不可逆副作用的 P0，已在本次修复。P1–P3 中除“遗留项”与明确标注为部分覆盖的条目外均已修复。
+- **合并**：修复已随 `detail-slash-report` 于 2026-11-16 合并进 `dev`（merge `f7d53b9d`）；合并后复跑 `cargo fmt --check`、clippy 与全量测试（lib **5641 passed / 6 ignored**，集成测试全通过）。
 
 ---
 
