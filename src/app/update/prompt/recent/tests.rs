@@ -298,8 +298,8 @@ fn sync_uses_cached_visible_entries() {
     let panel = &state.workspaces[0].prompt_panel;
     assert_eq!(panel.recent_active, Some(2), "选中项跟随目标页");
     assert_eq!(
-        panel.recent_scroll, 1,
-        "按实际可见 2 条而不是旧固定 3 条计算滚动窗口"
+        panel.recent_scroll, 0,
+        "自动同步只钳制偏移，不把选中项滚入视口"
     );
 }
 
@@ -358,4 +358,32 @@ fn scroll_is_clamped_to_entry_window() {
         "已钳制在末尾"
     );
     assert_eq!(state.workspaces[0].prompt_panel.recent_scroll, 2);
+}
+
+#[test]
+fn recent_auto_sync_does_not_scroll_to_active_row() {
+    let mut state = demo_state();
+    let rows = prompt_recent_rows(&state);
+    let target = rows
+        .iter()
+        .position(|row| row.item_id == 10)
+        .expect("目标页在最近列表中");
+    assert!(target > 0, "前提：目标行不在首行");
+
+    state.workspaces[0].prompt_panel.recent_open = true;
+    state.workspaces[0].prompt_panel.recent_visible = 1;
+    state.workspaces[0].prompt_panel.recent_scroll = 0;
+    state.workspaces[0].prompt_panel.recent_active = Some(0);
+
+    sync_prompt_recent_selection(&mut state, Some((10, PromptPageId::Saved(10))));
+
+    assert_eq!(
+        state.workspaces[0].prompt_panel.recent_active,
+        Some(target),
+        "自动同步更新键盘选中项"
+    );
+    assert_eq!(
+        state.workspaces[0].prompt_panel.recent_scroll, 0,
+        "自动同步不得为让选中项可见而滚动"
+    );
 }

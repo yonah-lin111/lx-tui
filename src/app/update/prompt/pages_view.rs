@@ -50,7 +50,6 @@ pub fn show_prompt_pages(state: &mut AppState) -> bool {
     panel.mode = PromptMode::Pages;
     panel.pages_view.search.clear();
     panel.pages_view.selected = selected;
-    panel.pages_view.scroll = 0;
     clamp_page_view(panel, total, visible);
     true
 }
@@ -128,7 +127,7 @@ pub fn move_page_selection(state: &mut AppState, delta: isize, visible: usize) -
         return false;
     }
     panel.pages_view.selected = next;
-    clamp_page_view(panel, len, visible);
+    reveal_page_selection(panel, len, visible);
     true
 }
 
@@ -194,7 +193,7 @@ pub fn apply_page_search(state: &mut AppState, command: &EditorCommand) -> bool 
             .editing_pages()
             .map(|(pages, active)| page_rows(pages, active, panel.pages_view.search.text()).len())
             .unwrap_or(0);
-        clamp_page_view(panel, len, visible);
+        reveal_page_selection(panel, len, visible);
     }
     true
 }
@@ -225,7 +224,7 @@ pub fn clear_page_search(state: &mut AppState) -> bool {
     if let Some(pos) = rows.iter().position(|row| row.page == selected) {
         panel.pages_view.selected = pos;
     }
-    clamp_page_view(panel, rows.len(), visible);
+    reveal_page_selection(panel, rows.len(), visible);
     true
 }
 
@@ -248,7 +247,7 @@ pub fn cut_page_search(state: &mut AppState) -> Option<String> {
         .editing_pages()
         .map(|(pages, active)| page_rows(pages, active, panel.pages_view.search.text()).len())
         .unwrap_or(0);
-    clamp_page_view(panel, len, visible);
+    reveal_page_selection(panel, len, visible);
     Some(text)
 }
 
@@ -428,7 +427,7 @@ pub fn copy_page_content(
     true
 }
 
-/// 钳制页列表选中行与滚动偏移，使选中行在视口内可见。
+/// 钳制页列表选中行与滚动偏移到合法范围；不把选中行滚入视口（自动路径只钳制）。
 pub(crate) fn clamp_page_view(panel: &mut PromptPanel, rows_len: usize, visible: usize) {
     let visible = visible.max(1);
     if rows_len == 0 {
@@ -441,6 +440,15 @@ pub(crate) fn clamp_page_view(panel: &mut PromptPanel, rows_len: usize, visible:
         .pages_view
         .scroll
         .min(rows_len.saturating_sub(visible));
+}
+
+/// 钳制后把选中行滚入视口；仅供用户导航/过滤/显式打开页等路径使用。
+pub(crate) fn reveal_page_selection(panel: &mut PromptPanel, rows_len: usize, visible: usize) {
+    let visible = visible.max(1);
+    clamp_page_view(panel, rows_len, visible);
+    if rows_len == 0 {
+        return;
+    }
     if panel.pages_view.selected < panel.pages_view.scroll {
         panel.pages_view.scroll = panel.pages_view.selected;
     } else if panel.pages_view.selected >= panel.pages_view.scroll + visible {

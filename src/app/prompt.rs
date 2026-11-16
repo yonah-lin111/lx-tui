@@ -308,9 +308,28 @@ impl Prompt {
 
     /// 替换全文（载入提示词条目）：净化文本、清空历史与浮层并回到已保存态；光标落在文末。
     pub fn set_text(&mut self, text: &str) {
-        self.text = sanitize(text);
+        self.replace_text(text);
         self.cursor = self.text.len();
         self.scroll = 0;
+        self.scroll_cursor_into_view();
+    }
+
+    /// 后台同步同一页正文：保留视口滚动与光标位置（只钳制到新正文范围），
+    /// 不按文末重新定位；换文档仍使用 [`Self::set_text`]。
+    pub fn replace_text_preserving_view(&mut self, text: &str) {
+        let scroll = self.scroll;
+        let cursor = self.cursor;
+        self.replace_text(text);
+        self.cursor = crate::app::paste::clamp_cursor(
+            &self.text,
+            self.text.floor_char_boundary(cursor.min(self.text.len())),
+        );
+        self.scroll = scroll.min(self.max_scroll());
+    }
+
+    /// 覆盖正文并重置编辑态；光标与滚动由调用方决定（载入新文档或后台同步）。
+    fn replace_text(&mut self, text: &str) {
+        self.text = sanitize(text);
         self.undo.clear();
         self.redo.clear();
         self.last_edit = None;
@@ -326,7 +345,6 @@ impl Prompt {
         self.panel_suppressed = false;
         self.is_saved = true;
         self.autosave = None;
-        self.scroll_cursor_into_view();
     }
 
     /// 是否存在可撤销的编辑。
@@ -376,14 +394,24 @@ impl Prompt {
         self.is_saved = history.is_saved;
         self.autosave = None;
         self.scroll = history.scroll.min(self.max_scroll());
-        self.scroll_cursor_into_view();
     }
 
-    /// 同步内容区尺寸；光标保持在视口内。
+    /// 同步内容区尺寸；仅在尺寸真实变化时调整滚动。
+    ///
+    /// 尺寸未变直接返回：草稿换入换出的几何重排不得改动视口。
+    /// 尺寸变化时，变化前光标可见才继续保持可见；用户已把光标滚出视口时不回拉。
     pub fn resize(&mut self, cols: u16, rows: u16) {
-        self.width = cols.max(1);
-        self.height = rows.max(1);
-        self.scroll_cursor_into_view();
+        let next = (cols.max(1), rows.max(1));
+        if (self.width, self.height) == next {
+            return;
+        }
+        let cursor_was_visible = self.cursor_cell().is_some();
+        self.width = next.0;
+        self.height = next.1;
+        self.scroll = self.scroll.min(self.max_scroll());
+        if cursor_was_visible && self.cursor_cell().is_none() {
+            self.scroll_cursor_into_view();
+        }
     }
 
     /// 插入一个字符；换行与制表符按编辑器语义处理，其余控制字符忽略。

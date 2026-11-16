@@ -89,6 +89,200 @@ fn apply_tree_loads_rows_and_marks_loaded() {
 }
 
 #[test]
+fn background_parked_refresh_preserves_scroll() {
+    let mut state = demo_state();
+    crate::app::update::create_workspace(&mut state);
+    assert_eq!(state.active_workspace, 1, "前提：切到新工作区");
+    state.workspaces[0].prompt_panel.editing = Some(PromptEditing::Item(10));
+
+    let old_content = (0..50)
+        .map(|index| format!("line {index}: old body for parked draft"))
+        .collect::<Vec<_>>()
+        .join("\n");
+    let new_content = (0..50)
+        .map(|index| format!("line {index}: refreshed body for parked draft"))
+        .collect::<Vec<_>>()
+        .join("\n");
+    {
+        let draft = state.workspaces[0]
+            .prompt
+            .as_mut()
+            .expect("工作区 0 草稿已停泊");
+        draft.editor.resize(40, 10);
+        draft.editor.set_text(&old_content);
+        draft.editor.scroll_to(5);
+        assert_eq!(draft.editor.scroll(), 5);
+    }
+
+    let prompts = vec![PromptRecord {
+        id: 10,
+        folder_id: None,
+        name: "loose".into(),
+        content: new_content.clone(),
+        active_page_id: Some(10),
+        pages: vec![PromptPageRecord {
+            id: 10,
+            position: 0,
+            name: "Page 1".into(),
+            content: new_content.clone(),
+            updated_at: 0,
+        }],
+    }];
+    apply_prompt_tree(
+        &mut state,
+        0,
+        std::path::Path::new("/ws"),
+        Vec::new(),
+        prompts,
+    );
+
+    assert_eq!(state.active_workspace, 1, "前提：切到新工作区");
+    let tree_content = state.workspaces[0]
+        .prompt_panel
+        .tree
+        .item(10)
+        .map(|item| item.active_content().to_string());
+    assert_eq!(
+        tree_content.as_deref(),
+        Some(new_content.as_str()),
+        "前提：树已刷新为同一页的新正文"
+    );
+
+    let draft = state.workspaces[0].prompt.as_ref().expect("停泊草稿仍在");
+    assert_eq!(draft.editor.text(), new_content.as_str(), "后台刷新正文");
+    assert_eq!(draft.editor.scroll(), 5, "同一页后台正文刷新保留视口滚动");
+}
+
+#[test]
+fn parked_page_switch_uses_new_document_view() {
+    let mut state = demo_state();
+    crate::app::update::create_workspace(&mut state);
+    assert_eq!(state.active_workspace, 1, "前提：切到新工作区");
+    state.workspaces[0].prompt_panel.editing = Some(PromptEditing::Item(10));
+
+    let old_content = (0..50)
+        .map(|index| format!("line {index}: old page body for parked draft"))
+        .collect::<Vec<_>>()
+        .join("\n");
+    let new_content = (0..50)
+        .map(|index| format!("line {index}: new page body for parked draft"))
+        .collect::<Vec<_>>()
+        .join("\n");
+    {
+        let draft = state.workspaces[0]
+            .prompt
+            .as_mut()
+            .expect("工作区 0 草稿已停泊");
+        draft.editor.resize(40, 10);
+        draft.editor.set_text(&old_content);
+        draft.editor.set_cursor_offset_for_test(10);
+        draft.editor.scroll_to(5);
+        assert_eq!(draft.editor.scroll(), 5);
+    }
+
+    let prompts = vec![PromptRecord {
+        id: 10,
+        folder_id: None,
+        name: "loose".into(),
+        content: new_content.clone(),
+        active_page_id: Some(11),
+        pages: vec![
+            PromptPageRecord {
+                id: 10,
+                position: 0,
+                name: "Page 1".into(),
+                content: old_content,
+                updated_at: 0,
+            },
+            PromptPageRecord {
+                id: 11,
+                position: 1,
+                name: "Page 2".into(),
+                content: new_content.clone(),
+                updated_at: 0,
+            },
+        ],
+    }];
+    apply_prompt_tree(
+        &mut state,
+        0,
+        std::path::Path::new("/ws"),
+        Vec::new(),
+        prompts,
+    );
+
+    let draft = state.workspaces[0].prompt.as_ref().expect("停泊草稿仍在");
+    assert_eq!(draft.editor.text(), new_content.as_str(), "换页刷新正文");
+    assert_eq!(
+        draft.editor.cursor(),
+        new_content.len(),
+        "页身份变化按新文档把光标放在文末"
+    );
+    assert!(
+        draft.editor.scroll() > 5,
+        "页身份变化滚到光标，而不是保留旧页视口"
+    );
+}
+
+#[test]
+fn resize_panes_clamps_prompt_tree_scroll() {
+    let mut state = demo_state();
+    state.prompt.resize(37, 3);
+    state.workspaces[0].prompt_panel.scroll = 6;
+    let prompt = state.prompt.id();
+
+    crate::app::update::resize_panes(
+        &mut state,
+        &[(prompt, ratatui::layout::Rect::new(0, 0, 40, 30))],
+    );
+
+    assert_eq!(state.prompt.size(), (37, 26));
+    assert_eq!(
+        state.workspaces[0].prompt_panel.scroll, 0,
+        "窗口变高后树偏移钳制到新上限，不留下越界值"
+    );
+}
+
+#[test]
+fn clamp_prompt_list_scroll_clamps_all_views() {
+    let mut state = demo_state();
+    state.prompt.resize(40, 4);
+    {
+        let panel = &mut state.workspaces[0].prompt_panel;
+        panel.scroll = 9;
+        panel.pages_view.scroll = 9;
+        panel.recent_open = true;
+        panel.recent_visible = 2;
+        panel.recent_scroll = 9;
+    }
+
+    clamp_prompt_list_scroll(&mut state);
+
+    let panel = &state.workspaces[0].prompt_panel;
+    assert_eq!(panel.scroll, 5, "树 7 行、可见 2 行时上限为 5");
+    assert_eq!(panel.pages_view.scroll, 0, "页列表按当前目标行数钳制");
+    assert_eq!(panel.recent_scroll, 0, "Recent 按总行数与可见条目钳制");
+}
+
+#[test]
+fn clamp_prompt_list_scroll_keeps_dormant_pages_scroll() {
+    let mut state = demo_state();
+    state.prompt.resize(40, 4);
+    {
+        let panel = &mut state.workspaces[0].prompt_panel;
+        panel.editing = None;
+        panel.pages_view.scroll = 3;
+    }
+
+    clamp_prompt_list_scroll(&mut state);
+
+    assert_eq!(
+        state.workspaces[0].prompt_panel.pages_view.scroll, 3,
+        "树视图下页列表休眠，几何钳制不得把滚动清零"
+    );
+}
+
+#[test]
 fn toggle_mode_and_keyboard_navigation() {
     let mut state = demo_state();
     // 默认编辑视图下 Esc 无绑定不切树。
@@ -518,7 +712,6 @@ fn scroll_clamps_and_keeps_selection_visible() {
     assert_eq!(state.workspaces[0].prompt_panel.scroll, 5, "越界钳制到末行");
     move_prompt_selection(&mut state, 3, 2);
     assert!(state.workspaces[0].prompt_panel.scroll <= state.workspaces[0].prompt_panel.selected);
-    assert!(clamp_prompt_tree_scroll(&mut state, 4));
 }
 
 #[test]
@@ -2569,6 +2762,146 @@ fn edit_position_and_scroll_preserved_when_switching_to_tree_and_back() {
         scroll_before,
         "重新打开当前条目同样恢复滚动位置"
     );
+}
+
+#[test]
+fn tree_roundtrip_keeps_scroll_when_cursor_out_of_view() {
+    let mut state = demo_state();
+    let content = (0..50)
+        .map(|index| format!("line {index}: content for scroll preservation"))
+        .collect::<Vec<_>>()
+        .join("\n");
+    assert!(edit_prompt_item(&mut state, 0, 10));
+    state.prompt.resize(40, 10);
+    state.prompt.set_text(&content);
+    state.prompt.scroll_to(0);
+    assert!(state.prompt.cursor_cell().is_none(), "前提：光标在视口外");
+
+    show_prompt_tree(&mut state);
+    toggle_prompt_panel_mode(&mut state);
+
+    assert_eq!(state.workspaces[0].prompt_panel.mode, PromptMode::Editor);
+    assert_eq!(state.prompt.scroll(), 0, "返回编辑视图不得回拉光标");
+    assert!(state.prompt.cursor_cell().is_none());
+}
+
+#[test]
+fn show_prompt_tree_preserves_scroll_without_revealing_selection() {
+    let mut state = demo_state();
+    state.workspaces[0].prompt_panel.mode = PromptMode::Editor;
+    state.workspaces[0].prompt_panel.editing = Some(crate::app::prompt::PromptEditing::Item(10));
+    state.workspaces[0].prompt_panel.scroll = 0;
+
+    show_prompt_tree(&mut state);
+
+    assert_eq!(
+        state.workspaces[0].prompt_panel.selected_prompt_id(),
+        Some(10),
+        "选中项落在当前编辑条目"
+    );
+    assert_eq!(
+        state.workspaces[0].prompt_panel.scroll, 0,
+        "进入树视图只钳制，不 reveal 选中项"
+    );
+}
+
+#[test]
+fn workspace_switch_preserves_editor_scroll() {
+    let mut state = demo_state();
+    assert!(edit_prompt_item(&mut state, 0, 10));
+    let rect = ratatui::layout::Rect::new(0, 0, 40, 12);
+    let split = crate::app::prompt::geometry::prompt_body_split(rect, false, 0);
+    state.prompt.resize(split.main.width, split.main.height);
+    let content = (0..50)
+        .map(|index| format!("line {index}: content for workspace switch"))
+        .collect::<Vec<_>>()
+        .join("\n");
+    state.prompt.set_text(&content);
+    state.prompt.scroll_to(0);
+    assert!(state.prompt.cursor_cell().is_none(), "前提：光标在视口外");
+
+    crate::app::update::create_workspace(&mut state);
+    let parked_id = state.prompt.id();
+    crate::app::update::resize_panes(&mut state, &[(parked_id, rect)]);
+    crate::app::update::switch_workspace(&mut state, 0);
+    let restored_id = state.prompt.id();
+    crate::app::update::resize_panes(&mut state, &[(restored_id, rect)]);
+
+    assert_eq!(
+        state.prompt.scroll(),
+        0,
+        "切换工作区后草稿视口保持离开时的位置"
+    );
+    assert!(state.prompt.cursor_cell().is_none());
+}
+
+#[test]
+fn workspace_switch_preserves_target_tree_scroll() {
+    let mut state = demo_state();
+    state.prompt.resize(30, 3);
+    state.workspaces[0].prompt_panel.mode = PromptMode::Editor;
+    state.workspaces[0].prompt_panel.editing = Some(PromptEditing::Item(12));
+
+    crate::app::update::create_workspace(&mut state);
+    assert_eq!(state.active_workspace, 1, "前提：切到新工作区");
+    state.workspaces[0].prompt_panel.scroll = 0;
+
+    crate::app::update::switch_workspace(&mut state, 0);
+
+    assert_eq!(state.workspaces[0].prompt_panel.mode, PromptMode::Editor);
+    assert_eq!(
+        state.workspaces[0].prompt_panel.selected_prompt_id(),
+        Some(12),
+        "恢复工作区仍选中当前编辑条目"
+    );
+    assert_eq!(
+        state.workspaces[0].prompt_panel.scroll, 0,
+        "恢复工作区只钳制树滚动，不 reveal 选中项"
+    );
+}
+
+#[test]
+fn parked_save_receipt_preserves_scroll() {
+    let mut state = demo_state();
+    crate::app::update::create_workspace(&mut state);
+    assert_eq!(state.active_workspace, 1, "前提：切到新工作区");
+    state.workspaces[0].prompt_panel.editing = Some(PromptEditing::Item(10));
+
+    let old_content = (0..50)
+        .map(|index| format!("line {index}: old body before save receipt"))
+        .collect::<Vec<_>>()
+        .join("\n");
+    let new_content = (0..50)
+        .map(|index| format!("line {index}: saved body from receipt"))
+        .collect::<Vec<_>>()
+        .join("\n");
+    let (parked, revision) = {
+        let draft = state.workspaces[0]
+            .prompt
+            .as_mut()
+            .expect("工作区 0 草稿已停泊");
+        draft.editor.resize(40, 10);
+        draft.editor.set_text(&old_content);
+        draft.editor.scroll_to(5);
+        (draft.editor.id(), draft.editor.revision())
+    };
+
+    assert!(crate::app::update::mark_prompt_page_persisted(
+        &mut state,
+        10,
+        10,
+        &new_content,
+        parked,
+        revision
+    ));
+
+    let draft = state.workspaces[0].prompt.as_ref().expect("停泊草稿仍在");
+    assert_eq!(
+        draft.editor.text(),
+        new_content.as_str(),
+        "保存回执刷新正文"
+    );
+    assert_eq!(draft.editor.scroll(), 5, "同页保存回执保留视口滚动");
 }
 
 #[test]
