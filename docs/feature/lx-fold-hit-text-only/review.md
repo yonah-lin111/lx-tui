@@ -7,8 +7,8 @@
 > - 任务清单：`docs/feature/lx-fold-hit-text-only/task.md`
 >
 > 审查方式：codegraph + codebase-memory 结构检索；三个只读子代理分别审查核心命中、
-> 快照/系统块、工具卡；主 agent 复现并修复。审查基线为 `dev..fix/fold-hit-text-only`
-> 的 7 个提交。
+> 快照/系统块、工具卡；主 agent 复现并修复。审查基线为分支创建时的 7 个提交
+> （基于 `b5d3eff4`）；review 期间 `dev` 已前进，合并前必须同步 `dev` 并重跑验证。
 
 ---
 
