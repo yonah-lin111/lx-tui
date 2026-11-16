@@ -105,6 +105,8 @@ pub(crate) fn drain_settings_events(
                 state.subagents_config = *subagents;
                 refresh_subagent_mentions(state, persistence);
             }
+            // 沙箱配置按 turn 从磁盘读取，事件只用于唤醒重绘。
+            SettingsEvent::SandboxChanged(_) => {}
         }
         changed = true;
     }

@@ -266,6 +266,9 @@ pub async fn route(request: &Request, state: &ServiceState) -> Response {
         (_, path) if path.starts_with("/api/subagents") => {
             super::subagents::route(request, state).await
         }
+        (_, path) if path.starts_with("/api/sandbox") => {
+            super::sandbox::route(request, state).await
+        }
         (_, path) if path.starts_with("/api/usage") => super::usage::route(request, state),
         (_, path) if path.starts_with("/api/todo") => super::todo::route(request, state),
         _ => Response::error(404, "not found"),

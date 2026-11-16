@@ -33,6 +33,7 @@ function showTab(name) {
   }
   if (name === 'mcp' && (typeof mcpState === 'undefined' || mcpState === null)) { loadMcp(); }
   if (name === 'skills' && (typeof skillsState === 'undefined' || skillsState === null)) { loadSkills(); }
+  if (name === 'sandbox' && (typeof sandboxState === 'undefined' || sandboxState === null)) { loadSandbox(); }
   if (name === 'subagents') {
     if (typeof subagentsState === 'undefined' || subagentsState === null) {
       loadSubagents();
@@ -48,7 +49,7 @@ function showTab(name) {
 // 每个视图注册一个控制器（isDirty/save/reset），标题行右侧只有这一套按钮；
 // 页面内不再有其它保存入口。状态圆点：绿=已保存，白=未保存，红=保存失败，灰脉冲=保存中。
 const actionBars = {};
-const TAB_KEYS = ['general', 'commands', 'model', 'provider', 'mcp', 'skills', 'subagents'];
+const TAB_KEYS = ['general', 'sandbox', 'commands', 'model', 'provider', 'mcp', 'skills', 'subagents'];
 let settingsSaving = false;
 let settingsFailed = false;
 function anySettingsDirty() {
@@ -140,6 +141,7 @@ function refreshActionBars() {
   if (typeof updateMcpDirtyDots === 'function') { updateMcpDirtyDots(); }
   if (typeof updateSkillDirtyDots === 'function') { updateSkillDirtyDots(); }
   if (typeof updateSubagentDirtyDots === 'function') { updateSubagentDirtyDots(); }
+  if (typeof updateSandboxDirtyDots === 'function') { updateSandboxDirtyDots(); }
   const dirtyMap = {};
   let anyDirty = false;
   for (const [key, bar] of Object.entries(actionBars)) {

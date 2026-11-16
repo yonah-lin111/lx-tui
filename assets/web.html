@@ -101,6 +101,7 @@
     <div class="settings-shell">
       <nav class="side">
         <button id="tab-general" class="active" onclick="showTab('general')">General</button>
+        <button id="tab-sandbox" onclick="showTab('sandbox')">Sandbox</button>
         <button id="tab-commands" onclick="showTab('commands')">Commands</button>
         <button id="tab-model" onclick="showTab('model')">Model</button>
         <button id="tab-provider" onclick="showTab('provider')">Provider</button>
@@ -187,6 +188,35 @@
           <div class="actions">
             <button class="ghost" onclick="loadGeneral()">Reload</button>
           </div>
+        </section>
+
+        <section id="view-sandbox" class="view hidden">
+          <div class="view-head">
+            <h2>Sandbox</h2>
+            <div id="actions-sandbox" class="view-actions"></div>
+          </div>
+          <p class="status" id="sandbox-status">Loading…</p>
+          <fieldset>
+            <legend>Defaults</legend>
+            <div class="field-grid">
+              <div>
+                <label>Default mode</label>
+                <div id="sandbox-mode-host" class="select-host"></div>
+              </div>
+              <div>
+                <label>Escalation requests</label>
+                <div id="sandbox-escalation-host" class="select-host"></div>
+              </div>
+              <div class="field-wide">
+                <label class="check-item"><input id="sandbox-network" type="checkbox"> Allow network (read-only and workspace-write)</label>
+              </div>
+              <div class="field-wide">
+                <label for="sandbox-roots">Additional writable roots (one absolute path per line, ~ supported)</label>
+                <textarea id="sandbox-roots" rows="5" placeholder="/path/to/another/repo"></textarea>
+              </div>
+            </div>
+          </fieldset>
+          <p class="status">Built-in write tools follow the same mode. User `!` commands, MCP servers, and terminal panes are not sandboxed.</p>
         </section>
 
         <section id="view-commands" class="view hidden">
@@ -973,6 +1003,7 @@
 <script src="/settings_mcp.js"></script>
 <script src="/settings_skills.js"></script>
 <script src="/settings_subagents.js"></script>
+<script src="/settings_sandbox.js"></script>
 <script src="/usage_charts.js"></script>
 <script src="/usage.js"></script>
 <script src="/todo_charts.js"></script>
