@@ -1,9 +1,10 @@
 # lx 消息列表折叠命中区收窄为文字：设计方案
 
-> 状态：**已实现并通过自动化验证，待用户手工验收**
+> 状态：**已实现并通过 review 修复与自动化验证，待用户手工验收**
 >
 > 关联文档：
 > - 任务清单：`docs/feature/lx-fold-hit-text-only/task.md`
+> - Review 与修复记录：`docs/feature/lx-fold-hit-text-only/review.md`
 > - 项目规范：`docs/standards/code-writing-standards.md`、`docs/standards/project-directory-structure.md`、`docs/standards/tui-design-requirements.md`
 >
 > 适用范围：主 agent 消息列表、BTW 对话列表、Agents（subagent）详情列表。三者共用同一套历史快照与命中入口，改一处即同步生效。
@@ -979,35 +980,38 @@ has_text.then(|| (first.unwrap_or(0), last))
 - 纯树线行 `"  │"` → `None`；
 - 树线 + 正文 `"  ├─ cmd: ls"` → 从 `├` 到 `ls`；
 - `md_line_cols` 的 `indent` 计入列宽；
-- `Layout::row_cols` 行数与 `rows` 严格一致。
+- `Layout::row_cols` 行数与 `rows` 严格一致；
+- 合并组二级行按 8 列前缀取列（`layout_in_group_final`，`last=false/true` 各一条）；
+- 合并组一级根行仍按 5 列前缀取列。
 
 ### 9.2 新增命中回归测试
 
 `src/ui/main_content/lx/history/tests/text_hit.rs`（新文件，`history/tests.rs` 加 `mod text_hit;`）：
 
-- `user_hint_text_toggles_but_row_tail_does_not`；
-- `thinking_header_text_toggles_and_header_tail_does_not`；
-- `thinking_expanded_body_text_toggles_but_blank_does_not`；
-- `command_params_text_toggles_but_row_tail_does_not`；
-- `command_output_blank_row_is_not_clickable`；
-- `report_hint_text_triggers_more_but_hint_tail_does_not`；
-- `compact_body_text_toggles_but_body_tail_does_not`；
-- `running_command_card_whole_row_still_opens_panel`（Q3 回归）；
-- `agent_link_row_whole_row_still_opens_panel`（Q3 回归）；
-- `user_paste_chip_hit_is_unchanged`（现有粘贴芯片行为回归）；
-- `btw_and_agents_detail_share_the_same_text_hit`（BTW / Agents 各一条）。
+- `user_hint_text_toggles_but_row_tail_does_not`（含左侧缩进不命中）；
+- `thinking_header_and_body_hit_text_only`；
+- `folded_thinking_card_is_header_only`；
+- `command_params_and_output_hit_text_only`（含纯 `│` 行硬断言）；
+- `report_hint_and_body_hit_text_only`；
+- `compact_body_hits_text_only`；
+- `running_command_card_keeps_whole_row_hit`（Q3 回归）；
+- `user_paste_chip_keeps_existing_chip_hit`（芯片行为回归）；
+- `agents_history_shares_the_same_text_hit`；
+- `btw_history_shares_the_same_text_hit`；
+- `merged_group_rows_match_rendered_text_columns`（逐 Tool 卡片与真实渲染列对齐）；
+- `web_search_title_targets_the_only_expandable_block`；
+- `expanded_all_blank_output_still_can_collapse`；
+- `shell_params_and_output_hit_text_only`。
 
 ### 9.3 现有测试更新
 
-以下测试使用固定列（如 `area.x + 6`、`view.body.x + 2`）点击整块，需要改成点击文字实际覆盖的列，或增加“行尾空白不命中”的断言：
+实现后实际处理：
 
-- `src/ui/main_content/lx/tests/open_entry.rs`
-- `src/ui/main_content/lx/history/tests/cards.rs`
-- `src/ui/main_content/lx/history/tests/tool_geometry.rs`
-- `src/ui/main_content/lx/history/tests/tool_grouping.rs`
-- `src/ui/main_content/lx/task/tests.rs`
-- `src/event/tests/mouse_click.rs`（如涉及卡片点击）
-- `src/ui/main_content/lx/tests.rs`（如涉及卡片点击）
+- `src/ui/main_content/lx/history/tests/cards.rs`、`tests/user_folding.rs` 已按新列范围调整；
+- `open_entry.rs`、`tool_geometry.rs`、`tool_grouping.rs`、`task/tests.rs`、
+  `event/tests/mouse_click.rs`、`lx/tests.rs` 未逐文件改写，仍通过是因为点击列恰好
+  落在文字上；
+- 收窄行为统一由 `text_hit.rs` 的真实命中入口断言，不依赖上述旧测试的固定列坐标。
 
 ### 9.4 验证命令
 
@@ -1059,3 +1063,23 @@ cargo run
 6. 更新现有测试 + 新增边界测试 + 全量验证。
 
 > 每一步都可以单独编译、单独回归；不要在最后一次性切换所有区域。
+
+---
+
+## 12. Review 修复记录
+
+实现完成后按 `review.md` 做了一轮独立审查，修复了以下偏差：
+
+1. **P1 合并组二级前缀列错位**：新增 `tree::layout_in_group_final`，排版后立即写入
+   最终 8 列连接符，再取 `row_cols()`；`apply_group_connector_with_roots` 允许
+   `roots = 0`。`last` 从 `GroupSlot` 贯穿到各工具模块的列区间。
+2. **P2 web_search 标题死点击面**：查询不可展开、结果可展开时，标题行改挂到
+   `Output` 的独立 1 行点击面。
+3. **P2 合并组状态尾巴不可点**：各工具模块先 `decorate_group_call` 再
+   `row_cols()`，状态文字进入列区间。
+4. **P2 纯空白展开块无法收起**：`CardCols::text_is_blank` + 命中侧退化为整块，
+   只在区域本来 `clickable` 时生效。
+5. **P3 本地命令卡列区间不同源**：`user_shell::blocks` 改用合并 `body_layout` 的
+   `row_cols` 切片。
+
+完整问题清单、错误原因与验证结果见 `review.md`。

@@ -1,9 +1,10 @@
 # lx 消息列表折叠命中区收窄为文字：执行任务清单
 
-> 状态：**已实现并通过自动化验证，待用户手工验收**
+> 状态：**已实现并通过 review 修复与自动化验证，待用户手工验收**
 >
 > 关联文档：
 > - 设计方案：`docs/feature/lx-fold-hit-text-only/design.md`
+> - Review 与修复记录：`docs/feature/lx-fold-hit-text-only/review.md`
 > - 项目规范：`docs/standards/code-writing-standards.md`、`docs/standards/project-directory-structure.md`、`docs/standards/tui-design-requirements.md`
 >
 > 已确认边界：
@@ -33,7 +34,8 @@
   - `Text` 返回当前行的文字矩形；
   - `Chip` / `Full` 保持现有裁剪结果。
 - [x] 所有现有 `CardRegion` 生产者先填 `CardCols::Full`（粘贴芯片与附件填 `Chip`），保证改完可编译、现有测试行为不变。
-- [x] 补 `cards.rs` 或 `history_hit.rs` 的单测：`Full` 整行命中、`Chip` 单行/多行命中、`Text` 空行/越界拒绝。
+- [x] 补 `cards.rs` 单测：`Text::skip_rows` 越界、`text_is_blank`、`Full`/`Chip` 的 `skip_rows` 语义。
+- [x] 补 `text_hit.rs` 命中单测：`Full`/`Chip`/`Text` 的整行、芯片与逐行文字命中。
 
 **验收**：`cargo test ui::main_content::lx::history` 通过；现有“整块可点”测试不回归（此时还没收窄）。
 
@@ -73,7 +75,7 @@
   - `fold_hint` 行改为 `CardCols::Text(vec![Some((USER_INDENT + 起始, USER_INDENT + 结束))])`；
   - 粘贴芯片保持 `CardCols::Chip { first, last }`。
 - [x] `paint.rs::push_card_regions`（附件、原图下载）保持 `CardCols::Chip`。
-- [x] 补测试：提示行文字可点、行尾空白不可点、左侧缩进不可点；粘贴芯片同行多芯片仍独立命中。
+- [x] 补测试：提示行文字可点、行尾空白不可点、左侧缩进不可点；粘贴芯片同行多芯片仍独立命中（`text_hit.rs` / `user_folding.rs`）。
 
 **验收**：
 - 6 行以上用户消息：点 `… N more lines` 文字展开；点同一行右侧空白不展开。
@@ -92,7 +94,7 @@
 - [x] `snapshot/steps.rs` thinking 登记：
   - `CardCols::Text(vec![header, body...])`；
   - 长度等于 `block.rows`。
-- [x] 补测试：头部文字命中、头部右侧空白不命中、正文文字命中、正文空白不命中、折叠态只有头部一行。
+- [x] 补测试：头部文字命中、头部右侧空白不命中、正文文字命中、正文空白不命中、折叠态只有头部一行（`folded_thinking_card_is_header_only`）。
 
 **验收**：
 - `Thought · 6.3s` 文字可折叠；
@@ -127,10 +129,12 @@
 - [x] 补测试：
   - 参数/输出各自独立命中；
   - 输出行尾空白不命中；
-  - 纯树线行不命中；
-  - 文件卡标题仍可点（Q5 保持）；
+  - 纯树线行不命中（硬断言，不再用 `if let` 跳过）；
+  - web_search 标题在查询不可展开时仍挂到可展开的结果块；
   - 命令卡标题仍不可点（Q5 保持）；
-  - 合并组内调用体不覆盖分隔行。
+  - 合并组内调用体不覆盖分隔行（`total_rows = click_rows + 1`）；
+  - 合并组逐行 `CardCols::Text` 与真实渲染 first/last 列一致。
+  - 文件/search/subagent 标题复用同一 `header_cols` 整卡路径，未逐类新增点击用例。
 
 **验收**：命令卡、文件卡、search 卡、subagent 卡、web_search 卡的文字点击行为符合设计；运行中命令卡整卡打开面板不变。
 
@@ -145,7 +149,7 @@
   - 运行中两个区域都用 `CardCols::Full`；
   - 终态参数/输出用 `CardCols::Text`，取 `body_layout().row_cols()` 的对应切片。
 - [x] `snapshot.rs` 的 shell 卡片登记 `cols: span.cols`。
-- [x] 补测试：运行中整卡打开面板不变；终态参数/输出文字命中、空白不命中。
+- [x] 补测试：运行中整卡打开面板不变；终态参数/输出文字命中、空白不命中（`shell_params_and_output_hit_text_only`）；折行参数列区间与合并布局一致。
 
 ### 6.2 子 agent 汇报
 
@@ -176,14 +180,10 @@
 
 ## Task 7：测试更新与回归
 
-- [x] 更新固定列点击的现有测试：
-  - `src/ui/main_content/lx/tests/open_entry.rs`
-  - `src/ui/main_content/lx/history/tests/cards.rs`
-  - `src/ui/main_content/lx/history/tests/tool_geometry.rs`
-  - `src/ui/main_content/lx/history/tests/tool_grouping.rs`
-  - `src/ui/main_content/lx/task/tests.rs`
-  - `src/event/tests/mouse_click.rs`
-  - `src/ui/main_content/lx/tests.rs`
+- [x] 现有固定列点击测试处理：
+  - `src/ui/main_content/lx/history/tests/cards.rs`、`tests/user_folding.rs` 已按新列范围调整；
+  - `open_entry.rs`、`tool_geometry.rs`、`tool_grouping.rs`、`task/tests.rs`、`event/tests/mouse_click.rs`、`lx/tests.rs` 未逐文件改写，仍通过是因为点击列恰好落在文字上；
+  - 收窄行为由新增 `text_hit.rs` 直接断言，不依赖上述旧测试。
 - [x] 新增 `src/ui/main_content/lx/history/tests/text_hit.rs`，并在 `history/tests.rs` 加 `mod text_hit;`：
   - 用户提示行文字 vs 空白；
   - thinking 头部/正文文字 vs 空白；
@@ -237,8 +237,12 @@
 ## 实现与验证记录
 
 - 分支 / worktree：`fix/fold-hit-text-only`（`.worktrees/lx-fold-hit-text-only`，基于 `dev`）。
-- 提交：核心命中模型、用户提示行/thinking、工具卡、本地命令/汇报/系统事件、测试，共 7 个提交。
+- 初始实现：核心命中模型、用户提示行/thinking、工具卡、本地命令/汇报/系统事件、测试，共 7 个提交。
+- Review 修复：合并组二级前缀列错位（P1）、web_search 标题死点击面、合并组状态尾巴、
+  纯空白展开块无法收起、本地命令卡列区间不同源；新增针对性测试。
 - `cargo fmt`：通过。
 - `cargo clippy --all-targets -- -D warnings`：通过。
-- `cargo test`：全量通过（`ui::main_content::lx` 779 项、新增 `text_hit` 9 项，其余测试套件均通过）。
+- `cargo test`：全量通过（`ui::main_content::lx` 791 项、`text_hit` 14 项、`text_cols` 9 项、
+  `cards` 3 项，其余测试套件均通过）。
+- Review 详情与残余风险：见 `review.md`。
 - 手工验收：待用户运行 `cargo run`，按设计文档 9.5 的 9 条步骤确认。
