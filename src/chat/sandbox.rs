@@ -120,6 +120,10 @@ pub struct SandboxPlan {
     pub network_access: bool,
     /// 提权总开关。
     pub escalation: EscalationPolicy,
+    /// 本会话已批准、可直接裸跑的精确命令（token 序列）。
+    pub approved_exact: Vec<Vec<String>>,
+    /// 本会话已批准的前缀规则。
+    pub approved_prefix: Vec<Vec<String>>,
     /// 平台能力。
     pub support: SandboxSupport,
 }
@@ -134,6 +138,8 @@ impl SandboxPlan {
             protected: Vec::new(),
             network_access: settings.network_access,
             escalation: settings.escalation,
+            approved_exact: Vec::new(),
+            approved_prefix: Vec::new(),
             support,
         };
         if settings.mode == SandboxMode::WorkspaceWrite {
@@ -154,6 +160,8 @@ impl SandboxPlan {
             protected: Vec::new(),
             network_access: true,
             escalation: EscalationPolicy::Never,
+            approved_exact: Vec::new(),
+            approved_prefix: Vec::new(),
             support: sandbox::support(),
         }
     }
@@ -173,6 +181,8 @@ impl SandboxPlan {
                 protected: Vec::new(),
                 network_access: true,
                 escalation: self.escalation,
+                approved_exact: self.approved_exact.clone(),
+                approved_prefix: self.approved_prefix.clone(),
                 support: self.support,
             },
             SandboxOverride::Additional {
@@ -190,6 +200,30 @@ impl SandboxPlan {
                 plan
             }
         }
+    }
+
+    /// 注入本会话已批准的精确命令与前缀规则。
+    pub fn with_exact_rules(mut self, exact: Vec<Vec<String>>, prefix: Vec<Vec<String>>) -> Self {
+        self.approved_exact = exact;
+        self.approved_prefix = prefix;
+        self
+    }
+
+    /// 命令 token 是否已在会话内获准裸跑（整条序列全等）。
+    pub fn command_is_approved(&self, command: &str) -> bool {
+        if self.approved_exact.is_empty() && self.approved_prefix.is_empty() {
+            return false;
+        }
+        let Some(tokens) = shlex::split(command) else {
+            return false;
+        };
+        self.approved_exact
+            .iter()
+            .any(|rule| rule.as_slice() == tokens.as_slice())
+            || self
+                .approved_prefix
+                .iter()
+                .any(|rule| tokens.len() >= rule.len() && tokens.starts_with(rule))
     }
 
     /// 本次命令的沙箱处置。
@@ -233,6 +267,17 @@ pub struct SandboxPolicyView {
     pub writable_roots: Vec<PathBuf>,
     /// 保护路径。
     pub protected: Vec<PathBuf>,
+}
+
+pub mod denial;
+
+/// 一次 on-failure 重试的标记。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct SandboxRetry {
+    /// 是否由用户批准。
+    pub approved: bool,
+    /// 会话级规则是否已写入。
+    pub for_session: bool,
 }
 
 #[cfg(test)]

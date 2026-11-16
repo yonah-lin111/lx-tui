@@ -141,6 +141,8 @@ pub fn apply_slash_enter(state: &mut AppState, pane: PaneId) -> bool {
             };
             target.lx.slash = None;
             target.lx.sandbox_mode = Some(mode);
+            target.lx.sandbox_exact_rules.clear();
+            target.lx.sandbox_prefix_rules.clear();
             target.lx.approvals.clear();
             if let (Some(workspace), Some(session_id)) = (workspace, session_id) {
                 state

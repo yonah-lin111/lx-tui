@@ -535,8 +535,21 @@ impl Persistence {
             .with_db(|db| db.session_sandbox_mode(workspace, session_id))
             .flatten()
             .and_then(|text| crate::config::sandbox::SandboxMode::parse(&text));
+        let sandbox_rules = self
+            .with_db(|db| db.sandbox_rules(workspace, session_id))
+            .unwrap_or_default();
         if let Some(target) = state.pane_mut_anywhere(pane) {
             target.lx.sandbox_mode = sandbox_mode;
+            target.lx.sandbox_exact_rules = sandbox_rules
+                .iter()
+                .filter(|rule| rule.kind == crate::db::sandbox::SandboxRuleKind::Exact)
+                .map(|rule| rule.tokens.clone())
+                .collect();
+            target.lx.sandbox_prefix_rules = sandbox_rules
+                .iter()
+                .filter(|rule| rule.kind == crate::db::sandbox::SandboxRuleKind::Prefix)
+                .map(|rule| rule.tokens.clone())
+                .collect();
         }
         // 恢复会话后立即列出子 agent：回投后填充 `pane.lx.agents.runs`，
         // 并把其中 `running` / `idle` / `blocked` 的实例同步进 `@` 面板。

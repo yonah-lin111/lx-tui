@@ -45,6 +45,8 @@ pub fn new_session(state: &mut AppState, pane: PaneId) -> bool {
     target.lx.ai_web_edit_cloud_files.clear();
     target.lx.chat.reset_session_view();
     target.lx.sandbox_mode = None;
+    target.lx.sandbox_exact_rules.clear();
+    target.lx.sandbox_prefix_rules.clear();
     target.lx.btw.clear();
     target.lx.clear_agents();
     target.lx.compact.reset();
@@ -384,6 +386,8 @@ pub fn on_session_deleted(state: &mut AppState, pane: PaneId, session_id: &str) 
     if target.lx.chat.session_id.as_deref() == Some(session_id) {
         target.lx.chat.reset_session_view();
         target.lx.sandbox_mode = None;
+        target.lx.sandbox_exact_rules.clear();
+        target.lx.sandbox_prefix_rules.clear();
         target.lx.btw.clear();
         target.lx.clear_agents();
         target.lx.compact.reset();

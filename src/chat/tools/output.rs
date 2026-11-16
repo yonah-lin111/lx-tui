@@ -104,6 +104,9 @@ pub fn format_for_model(result: &ToolExecutionResult) -> String {
 fn format_process(result: &crate::chat::process::ProcessResult) -> String {
     use crate::chat::process::ProcessState;
     let mut text = String::new();
+    if result.sandbox_retry.is_some() {
+        text.push_str("sandbox denied the first attempt; retried with escalation.\n");
+    }
     match &result.state {
         ProcessState::Exited { code } => {
             text.push_str(&format!(

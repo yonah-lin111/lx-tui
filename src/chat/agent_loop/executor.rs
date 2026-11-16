@@ -378,7 +378,13 @@ impl AgentTools {
                 Err(failure) => return failure.into_result(Vec::new()),
             };
             let mut args = request.args;
-            let plan = self.sandbox.with_override(sandbox);
+            let approved = self.sandbox.command_is_approved(&args.cmd);
+            let plan = if approved {
+                self.sandbox
+                    .with_override(&crate::chat::sandbox::SandboxOverride::Unsandboxed)
+            } else {
+                self.sandbox.with_override(sandbox)
+            };
             // rtk：外部安装优先；否则用内置过滤。包装只改实际执行的脚本，
             // 结果里的 command 仍还原为用户原始命令（卡片/上下文事实不变）。
             let prepared = self.rtk.prepare(&args.cmd);

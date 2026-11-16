@@ -545,6 +545,7 @@ impl ProcessManager {
             wrote_input: false,
             terminate,
             chunk_id: crate::chat::process::generate_chunk_id(),
+            sandbox_retry: None,
             // 与 codex 的 `wall_time_seconds` 同口径：本次调用在等待窗口内真正花掉的墙钟。
             wall_time_ms: u64::try_from(started.elapsed().as_millis()).unwrap_or(u64::MAX),
         }

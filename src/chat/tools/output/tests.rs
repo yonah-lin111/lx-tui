@@ -1054,6 +1054,7 @@ fn process_text_reports_chunk_id_and_wall_time() {
         wrote_input: false,
         terminate: false,
         chunk_id: "a1b2c3".into(),
+        sandbox_retry: None,
         wall_time_ms: 1_250,
     }));
     let text = format_for_model(&result);

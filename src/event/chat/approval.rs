@@ -42,12 +42,19 @@ pub(crate) fn request(
         }));
         return false;
     }
-    pane.lx
-        .approvals
-        .push_back(ApprovalState::new(key.clone(), call_id.clone(), request));
-    streams
-        .approvals
-        .insert(key, PendingApproval { call_id, reply });
+    pane.lx.approvals.push_back(ApprovalState::new(
+        key.clone(),
+        call_id.clone(),
+        request.clone(),
+    ));
+    streams.approvals.insert(
+        key,
+        PendingApproval {
+            call_id,
+            request,
+            reply,
+        },
+    );
     true
 }
 
@@ -55,6 +62,7 @@ pub(crate) fn request(
 pub(crate) fn answer(
     state: &mut AppState,
     streams: &mut ChatStreams,
+    persistence: &crate::db::service::Persistence,
     key: &RequestKey,
     call_id: &str,
     decision: SandboxApprovalDecision,
@@ -68,6 +76,10 @@ pub(crate) fn answer(
     let Some(pending) = streams.approvals.remove(key) else {
         return false;
     };
+    let for_session = decision == SandboxApprovalDecision::ForSession;
+    let kind = pending.request.kind;
+    let command = pending.request.command.clone();
+    let prefix = pending.request.prefix_rule.clone();
     let _ = pending.reply.send(Ok(decision));
     let Some(pane) = state.pane_mut_anywhere(key.pane) else {
         return false;
@@ -76,7 +88,45 @@ pub(crate) fn answer(
     pane.lx
         .approvals
         .retain(|approval| approval.call_id != call_id);
-    pane.lx.approvals.len() != before
+    let mut changed = pane.lx.approvals.len() != before;
+    let mut new_rule = None;
+    if for_session {
+        match kind {
+            crate::chat::sandbox::SandboxApprovalKind::Retry => {
+                if let Some(tokens) = shlex::split(&command)
+                    && !pane.lx.sandbox_exact_rules.contains(&tokens)
+                {
+                    pane.lx.sandbox_exact_rules.push(tokens.clone());
+                    new_rule = Some(crate::db::sandbox::SessionSandboxRule {
+                        kind: crate::db::sandbox::SandboxRuleKind::Exact,
+                        tokens,
+                    });
+                    changed = true;
+                }
+            }
+            crate::chat::sandbox::SandboxApprovalKind::Escalation => {
+                if let Some(prefix) = prefix
+                    && !pane.lx.sandbox_prefix_rules.contains(&prefix)
+                {
+                    pane.lx.sandbox_prefix_rules.push(prefix.clone());
+                    new_rule = Some(crate::db::sandbox::SessionSandboxRule {
+                        kind: crate::db::sandbox::SandboxRuleKind::Prefix,
+                        tokens: prefix,
+                    });
+                    changed = true;
+                }
+            }
+        }
+    }
+    if let Some(rule) = new_rule
+        && let Some(session_id) = pane.lx.chat.session_id.clone()
+        && let Some(workspace) = state.chat_session_key_for_pane(key.pane)
+        && let Some(database) = persistence.database()
+        && let Err(error) = database.insert_sandbox_rule(&workspace, &session_id, &rule)
+    {
+        tracing::warn!(%error, "failed to persist sandbox approval rule");
+    }
+    changed
 }
 
 /// 取走挂起审批并回 `Cancelled`，同时清空该 key 的展示项。

@@ -193,6 +193,10 @@ pub struct Lx {
     pub approvals: std::collections::VecDeque<ApprovalState>,
     /// 本会话的沙箱模式覆盖（None = 跟随全局默认）。
     pub sandbox_mode: Option<crate::config::sandbox::SandboxMode>,
+    /// 本会话已批准裸跑的精确命令（token 序列；`/permission` 切档时清空）。
+    pub sandbox_exact_rules: Vec<Vec<String>>,
+    /// 本会话已批准的前缀规则（模型 `prefix_rule`）。
+    pub sandbox_prefix_rules: Vec<Vec<String>>,
     /// 旁路问答（`/btw`）视图缓存：按主 QA 隔离的线程与独立草稿。
     pub btw: LxBtw,
     /// 纯文本缓冲：不识别 shell 前缀、不弹 markdown/提及/斜杠面板。
@@ -327,6 +331,8 @@ impl Lx {
             ask: None,
             approvals: std::collections::VecDeque::new(),
             sandbox_mode: None,
+            sandbox_exact_rules: Vec::new(),
+            sandbox_prefix_rules: Vec::new(),
             btw: LxBtw::default(),
             plain,
             no_shell: false,

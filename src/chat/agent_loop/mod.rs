@@ -811,6 +811,56 @@ where
                     Err(result) => result,
                 }
             };
+            // on-failure：沙箱拒绝后最多重试一次（design §8.5）。
+            let mut result = result;
+            if let Some(plan) = executor.sandbox_plan()
+                && plan.escalation == crate::config::sandbox::EscalationPolicy::Ask
+                && plan.process_sandbox()
+                && let ToolExecutionResult::Process(process) = &result
+                && crate::chat::sandbox::denial::is_likely_sandbox_denied(process, true)
+                && process.sandbox_retry.is_none()
+            {
+                let excerpt: String = process.output.chars().take(400).collect();
+                let request = crate::chat::sandbox::SandboxApprovalRequest {
+                    kind: crate::chat::sandbox::SandboxApprovalKind::Retry,
+                    command: process.command.clone(),
+                    cwd: process.cwd.clone(),
+                    justification: String::new(),
+                    prefix_rule: None,
+                    additional: None,
+                    denial_excerpt: Some(excerpt),
+                    source: None,
+                };
+                match host.approve_sandbox(call.call_id.clone(), request).await {
+                    Ok(crate::chat::sandbox::SandboxApprovalDecision::Denied) => {}
+                    Ok(decision) => {
+                        let for_session =
+                            decision == crate::chat::sandbox::SandboxApprovalDecision::ForSession;
+                        let retried = executor
+                            .execute_tracked_sandboxed(
+                                context.cwd(),
+                                &call,
+                                &ticket,
+                                crate::chat::sandbox::SandboxOverride::Unsandboxed,
+                            )
+                            .await;
+                        if let ToolExecutionResult::Process(mut retried) = retried {
+                            retried.sandbox_retry = Some(crate::chat::sandbox::SandboxRetry {
+                                approved: true,
+                                for_session,
+                            });
+                            result = ToolExecutionResult::Process(retried);
+                        }
+                    }
+                    Err(HostError::Cancelled) => {
+                        result = ToolFailure::new(ToolErrorCode::Cancelled, "cancelled")
+                            .into_result(Vec::new());
+                    }
+                    Err(HostError::Failed { code }) => {
+                        tracing::warn!(%code, "sandbox retry approval failed");
+                    }
+                }
+            }
             // MCP 取消不是工具结果：按用户取消结算，不再采样。
             if result.error_code() == Some(ToolErrorCode::Cancelled) {
                 let _ = host.finish_tool(ticket, ToolOutcome::Cancelled).await;

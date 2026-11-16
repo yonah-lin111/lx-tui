@@ -150,6 +150,7 @@ pub struct ChatStreams {
 /// 一次等待裁决的沙箱审批。
 pub(crate) struct PendingApproval {
     pub call_id: String,
+    pub request: crate::chat::sandbox::SandboxApprovalRequest,
     pub reply: oneshot::Sender<Result<crate::chat::sandbox::SandboxApprovalDecision, HostError>>,
 }
 
@@ -403,7 +404,7 @@ pub fn pump_chat_streams(
                 call_id,
                 decision,
             } => {
-                changed |= approval::answer(state, streams, &key, &call_id, decision);
+                changed |= approval::answer(state, streams, persistence, &key, &call_id, decision);
             }
             Effect::PersistSandboxMode {
                 workspace,

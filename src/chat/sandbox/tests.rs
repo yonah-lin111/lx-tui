@@ -97,3 +97,17 @@ fn policy_view_matches_plan() {
     assert_eq!(view.protected, plan.protected);
     let _ = std::fs::remove_dir_all(cwd);
 }
+
+#[test]
+fn approved_exact_and_prefix_rules_bypass_the_command() {
+    let cwd = temp_dir("rules");
+    let plan = SandboxPlan::for_turn(&SandboxSettings::default(), &cwd).with_exact_rules(
+        vec![vec!["touch".into(), "~/x".into()]],
+        vec![vec!["cargo".into(), "publish".into()]],
+    );
+    assert!(plan.command_is_approved("touch '~/x'"));
+    assert!(plan.command_is_approved("cargo publish --dry-run"));
+    assert!(!plan.command_is_approved("cargo build"));
+    assert!(!plan.command_is_approved("touch ~/y"));
+    let _ = std::fs::remove_dir_all(cwd);
+}

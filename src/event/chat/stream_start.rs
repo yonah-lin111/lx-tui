@@ -313,19 +313,31 @@ pub(super) fn start_stream(
     let executor = AgentTools::new(runtime.manager.clone(), turn)
         .with_recorder(std::sync::Arc::new(recorder))
         .with_reads(reads)
-        .with_sandbox(crate::chat::sandbox::SandboxPlan::for_turn(
-            &{
-                let mut settings = crate::config::sandbox::load_sandbox_or_default();
-                if let Some(mode) = state
+        .with_sandbox(
+            crate::chat::sandbox::SandboxPlan::for_turn(
+                &{
+                    let mut settings = crate::config::sandbox::load_sandbox_or_default();
+                    if let Some(mode) = state
+                        .pane_anywhere(key.pane)
+                        .and_then(|pane| pane.lx.sandbox_mode)
+                    {
+                        settings.mode = mode;
+                    }
+                    settings
+                },
+                &prepared.cwd,
+            )
+            .with_exact_rules(
+                state
                     .pane_anywhere(key.pane)
-                    .and_then(|pane| pane.lx.sandbox_mode)
-                {
-                    settings.mode = mode;
-                }
-                settings
-            },
-            &prepared.cwd,
-        ))
+                    .map(|pane| pane.lx.sandbox_exact_rules.clone())
+                    .unwrap_or_default(),
+                state
+                    .pane_anywhere(key.pane)
+                    .map(|pane| pane.lx.sandbox_prefix_rules.clone())
+                    .unwrap_or_default(),
+            ),
+        )
         .with_image_support(frozen.supports_image_input)
         .with_web_search_keys(
             state.models.settings.web_search.exa_api_key.clone(),
