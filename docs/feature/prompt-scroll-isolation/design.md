@@ -1,7 +1,8 @@
 # Prompt 容器滚动隔离 — 设计
 
 - 建议分支：`fix/prompt-scroll-isolation`
-- 状态：**已实现，待用户手工验收（2026-11-16）**
+- 状态：**已实现，经 review 修复后待用户手工验收（2026-11-16）**
+- Review 报告：`review.md`
 - 关联文档：`docs/feature/prompt-scroll-guard/`、`docs/feature/prompt-per-workspace/`、`docs/feature/prompt-header-and-recent-pages/`
 
 ## 1. 背景与目标
@@ -181,13 +182,13 @@ self.scroll = history.scroll.min(self.max_scroll());
 pub fn replace_text_preserving_view(&mut self, text: &str) {
     let scroll = self.scroll;
     let cursor = self.cursor;
-    self.set_text(text); // 复用净化、清浮层/历史、置已保存态
+    self.replace_text(text); // 与 set_text 共用净化、清浮层/历史、置已保存态
     self.cursor = clamp_cursor(&self.text, self.text.floor_char_boundary(cursor.min(self.text.len())));
     self.scroll = scroll.min(self.max_scroll());
 }
 ```
 
-说明：`set_text` 仍负责清空撤销/重做、关闭面板、`is_saved = true`、`autosave = None`；随后恢复光标与滚动。`clamp_cursor` 复用于 `src/app/paste.rs`（`viewport.rs` 已在用）。
+说明：实现从 `set_text` 抽出私有 `replace_text` 复用清空撤销/重做、关闭面板、`is_saved = true`、`autosave = None`；`set_text` 在调用后再把光标放文末并滚到光标。`clamp_cursor` 复用于 `src/app/paste.rs`（`viewport.rs` 已在用）。
 
 ### 5.2 树列表（`src/app/update/prompt/tree_view.rs`、`src/app/prompt/tree/panel.rs`）
 
@@ -323,11 +324,21 @@ panel.recent_scroll = panel.recent_scroll.min(max);
 
 ### 5.5 停泊草稿后台刷新
 
-- `src/app/update/prompt/mod.rs:155-169`：`draft.editor.set_text(&active_content)` → `draft.editor.replace_text_preserving_view(&active_content)`。
-- `src/app/update/prompt/save.rs:155-163`：同上。
+- `src/app/update/prompt/mod.rs:155-175`：停泊草稿按页身份分流——`page_switched` 走 `draft.editor.set_text(&active_content)`（换文档，I5），同一页正文更新才走 `replace_text_preserving_view`。
+- `src/app/update/prompt/save.rs:155-163`：保存回执只刷新同一页，使用 `replace_text_preserving_view`。
 - `reload_editor_from_active_page`（`pages.rs:681-708`）不改：它服务页切换/删除当前页等“换文档”路径（决策 8 / I5）。
 
-### 5.6 左侧栏
+### 5.6 几何变化统一钳制
+
+真实尺寸变化（窗口缩放、侧栏拖宽、Recent 开合）会让树 / 页 / Recent 的可见行数变化，`max` 随之变化：
+
+- `src/app/update/pane.rs::resize_panes` 在更新 `state.prompt` 尺寸与 `recent_visible` 后调用
+  `src/app/update/prompt/mod.rs::clamp_prompt_list_scroll`；
+- 该函数只做钳制：树走只钳制版 `PromptPanel::clamp_selection`，页走 `clamp_page_view`，
+  Recent 按 `recent_page_count.min(MAX_RECENT_PAGES) - recent_visible` 钳制 `recent_scroll`；
+- 不 reveal 选中项；越界偏移清理后，下一次 ↑/↓、滚轮或翻页不会先跳回上限。
+
+### 5.7 左侧栏
 
 `src/ui/left_panel/` 与 `src/app/update/workspace_list.rs` 不改：
 
@@ -341,7 +352,7 @@ panel.recent_scroll = panel.recent_scroll.min(max);
 2. **首次显示某草稿且尺寸过期**：草稿在停泊期间窗口被缩放，切回时尺寸确实变化 ⇒ 按 I4：变化前光标可见才跟随；否则仅钳制。
 3. **换文档**：打开另一条目、切换页、页身份变化 ⇒ `set_text` 语义（光标文末 + 滚到光标）。
 4. **搜索过滤**：输入过滤词会改变行集合并把选中落回首项；允许 `reveal_page_selection` / `scroll_selection_into_view`（用户输入路径）。
-5. **渲染层**：`ui/widgets/scrollbar::layout` 已对 offset 做 `min(max)`，无需改动；本次只改状态层。
+5. **渲染层**：`ui/widgets/scrollbar::layout` 已对 offset 做 `min(max)`，无需改动；状态层由 `resize_panes → clamp_prompt_list_scroll` 在几何变化时钳制各容器偏移，不依赖渲染层兜底。
 6. **拖拽中的滚动条**：若切换发生时正在拖拽某容器 thumb，现有代码在几何变化时结束拖拽（`stop_selection_autoscroll`）与各 drag 结束路径保持不变；本次不新增跨容器联动。
 
 ## 7. 测试计划（先红后绿）
@@ -361,8 +372,12 @@ panel.recent_scroll = panel.recent_scroll.min(max);
 - `workspace_switch_preserves_target_pages_scroll`：目标工作区 Pages 模式、`pages_view.scroll = 0`、`selected` 在下方；`swap_display_prompt` 后 `pages_view.scroll == 0`。
 - `tree_roundtrip_keeps_scroll_when_cursor_out_of_view`：在现有 `edit_position_and_scroll_preserved_when_switching_to_tree_and_back` 旁补一条“光标在视口外”的用例。
 - `show_prompt_tree_preserves_scroll` / `show_prompt_pages_preserves_scroll`：进入视图不改 `scroll`（决策 5）。
-- `background_parked_refresh_preserves_scroll`：停泊草稿 `scroll = 5`，同一页正文经 `apply_prompt_tree` / `mark_prompt_page_persisted` 刷新后仍为 5（或被钳制到新 max）。
+- `background_parked_refresh_preserves_scroll`：停泊草稿 `scroll = 5`，同一页正文经 `apply_prompt_tree` 刷新后仍为 5（或被钳制到新 max）。
+- `parked_save_receipt_preserves_scroll`：停泊草稿经 `mark_prompt_page_persisted` 同页刷新后保留 `scroll`。
+- `parked_page_switch_uses_new_document_view`：停泊草稿的页身份切换走 `set_text` 语义（光标文末、滚到光标），不保留旧页视口（I5）。
 - `recent_auto_sync_does_not_scroll`：`recent_open`、`recent_scroll = 0`、目标行在下方，`sync_prompt_recent_selection` 后仍为 0。
+- `resize_panes_clamps_prompt_tree_scroll`：真实尺寸变化后树偏移钳到新上限。
+- `clamp_prompt_list_scroll_clamps_all_views`：树 / 页 / Recent 三个容器同时按新可见行数钳制。
 
 ### 7.3 事件层 `src/event/tests/`
 

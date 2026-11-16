@@ -17,7 +17,7 @@
 
 ## 2. 问题清单
 
-### P0-1 停泊草稿换页仍按“保留视口”刷新，违反 I5
+### P0-1 停泊草稿换页仍按“保留视口”刷新，违反 I5（已修复）
 
 - 位置：`src/app/update/prompt/mod.rs::apply_prompt_tree` 的停泊草稿刷新分支。
 - 现象：同一 prompt 键的另一个面板切换了“上次打开的页”时，后台 `apply_prompt_tree` 把停泊草稿刷新成新页正文，但保留旧页的光标偏移与滚动；切回该工作区后光标落在新页正文中段，滚动停在旧页阅读位置。
@@ -26,7 +26,7 @@
 - 修复：拆分两个分支——`page_switched` 用 `set_text`，同页正文更新才用 `replace_text_preserving_view`。
 - 验证：新增 `parked_page_switch_uses_new_document_view`。
 
-### P1-1 真实尺寸变化后列表滚动未钳制，违反 I2 的“几何变化只钳制”
+### P1-1 真实尺寸变化后列表滚动未钳制，违反 I2 的“几何变化只钳制”（已修复）
 
 - 位置：`src/app/update/pane.rs::resize_panes`（prompt 分支）；涉及 `PromptPanel::scroll`、`PageListView::scroll`、`PromptPanel.recent_scroll`。
 - 现象：窗口变高后树 / 页列表 / Recent 抽屉的可见行数变大、`max` 变小，但滚动偏移保留旧值并可能越界。渲染层 `effective_scroll` 会把越界值按末行显示，表现为“贴底 + 空白”；首次 ↑/↓、滚轮或翻页会从越界状态开始钳制，产生跳位。
@@ -35,7 +35,7 @@
 - 修复：新增 `app::update::prompt::clamp_prompt_list_scroll(state)`：树用只钳制版 `clamp_selection`，页用 `clamp_page_view`，Recent 按 `recent_page_count` 与 `recent_visible` 钳制；在 `resize_panes` 更新 prompt 尺寸与 `recent_visible` 后调用。
 - 验证：新增 `resize_panes_clamps_prompt_tree_scroll` 与 `clamp_prompt_list_scroll_clamps_all_views`。
 
-### P2-1 设计要求的用例缺失，task.md 却标记完成
+### P2-1 设计要求的用例缺失，task.md 却标记完成（已修复）
 
 - 位置：`docs/feature/prompt-scroll-isolation/task.md` §1.2、`design.md` §7.2。
 - 现象：`workspace_switch_preserves_target_tree_scroll` 在实际测试代码中不存在（`workspace_switch_preserves_target_pages_scroll` 存在）；task.md 已勾选。
@@ -43,7 +43,7 @@
 - 影响：目标工作区树滚动在 `swap_display_prompt` 路径上缺少回归保护。
 - 修复：补 `workspace_switch_preserves_target_tree_scroll`；修正 task.md 中的测试名与勾选状态。
 
-### P2-2 停泊草稿保存回执刷新缺少独立用例
+### P2-2 停泊草稿保存回执刷新缺少独立用例（已修复）
 
 - 位置：`src/app/update/prompt/save.rs::mark_prompt_page_persisted`。
 - 现象：`background_parked_refresh_preserves_scroll` 只覆盖 `apply_prompt_tree`；`mark_prompt_page_persisted` 的同页刷新路径没有测试。design §7.2 要求两条路径都覆盖。
@@ -51,7 +51,7 @@
 - 影响：保存回执路径若条件写错（如 `sharing` 判断或修订号）不会被测试发现。
 - 修复：新增 `parked_save_receipt_preserves_scroll`。
 
-### P3-1 文档与实现细节不一致
+### P3-1 文档与实现细节不一致（已修复）
 
 - 位置：`docs/feature/prompt-scroll-isolation/task.md` §2.1、§1.2。
 - 现象：文档写 `replace_text_preserving_view` 内部“调用 `set_text(text)`”，实际实现是抽出私有 `replace_text` 复用共同部分；多处测试名与代码不一致；design 状态仍停留在“已实现，待手工验收”。
@@ -61,10 +61,18 @@
 
 ## 3. 修复记录
 
-- P0-1：`apply_prompt_tree` 拆分换页 / 同页刷新分支；新增回归测试。
-- P1-1：`resize_panes` 接入 `clamp_prompt_list_scroll`；新增两项回归测试。
-- P2-1 / P2-2：补齐缺失测试。
-- P3-1：同步 design / task / review 文档。
+- P0-1（`add1e82d`）：`apply_prompt_tree` 拆分换页 / 同页刷新分支；新增 `parked_page_switch_uses_new_document_view`。
+- P1-1（`add1e82d`）：新增 `clamp_prompt_list_scroll` 并在 `resize_panes` 更新尺寸 / `recent_visible` 后调用；新增 `resize_panes_clamps_prompt_tree_scroll`、`clamp_prompt_list_scroll_clamps_all_views`。
+- P2-1 / P2-2（`add1e82d`）：补 `workspace_switch_preserves_target_tree_scroll`、`parked_save_receipt_preserves_scroll`。
+- P3-1：同步 `design.md` / `task.md` / 本文件。
+
+验证：
+
+- `cargo test --lib -q -- parked_page_switch_uses_new_document_view parked_save_receipt_preserves_scroll workspace_switch_preserves_target_tree_scroll resize_panes_clamps_prompt_tree_scroll clamp_prompt_list_scroll_clamps_all_views`：5 passed。
+- `cargo test --lib -q app::update::prompt`：136 passed。
+- `cargo test --lib`：5659 passed，0 failed，6 ignored。
+- `cargo clippy --all-targets -- -D warnings`、`cargo fmt`：通过。
+- 全量 `cargo test`（含集成测试）：见提交前验证记录。
 
 ## 4. 未覆盖与手工验收
 

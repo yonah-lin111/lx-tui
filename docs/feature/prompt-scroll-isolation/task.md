@@ -1,10 +1,11 @@
 # Prompt 容器滚动隔离 — 执行任务
 
 - 关联设计：`docs/feature/prompt-scroll-isolation/design.md`
+- Review 报告：`docs/feature/prompt-scroll-isolation/review.md`
 - 规则：生产代码禁止 `unwrap()` / `expect()`；本任务无新增用户可见文案；不改 DB/schema。
 - 前置：**用户审核 design.md 与本文档并确认后才能开始改代码。**
 
-## 0. 需求盘问与规格确认（已完成，待审核）
+## 0. 需求盘问与规格确认（已完成）
 
 - [x] 盘问 1：主复现 = 编辑正文视口；树 / Pages / Recent 一并纳入
 - [x] 盘问 2：真实尺寸变化采用混合 C（变化前光标可见才继续保持可见）
@@ -51,6 +52,14 @@
   - 树 `scroll = 0`、`selected` 在下方；`show_prompt_tree` 后断言 `scroll == 0`
 - [x] `background_parked_refresh_preserves_scroll`
   - 停泊草稿 `scroll = 5`；`apply_prompt_tree` 用同一页新正文刷新后仍为 5（或被钳制到新 max）
+- [x] `parked_page_switch_uses_new_document_view`（review P0-1）
+  - 停泊草稿所在页被同键面板切换后，正文刷新按 `set_text` 语义把光标放文末并滚到光标，不保留旧页视口
+- [x] `parked_save_receipt_preserves_scroll`（review P2-2）
+  - 停泊草稿经 `mark_prompt_page_persisted` 同页刷新后仍保留 `scroll`
+- [x] `resize_panes_clamps_prompt_tree_scroll`（review P1-1）
+  - 真实尺寸变化后树偏移钳制到新上限
+- [x] `clamp_prompt_list_scroll_clamps_all_views`（review P1-1）
+  - 树 / 页 / Recent 三个容器同时按新可见行数钳制
 
 #### `src/app/update/prompt/pages_view/tests.rs`
 
@@ -82,7 +91,7 @@
 - [x] `restore_history`：删除 `self.scroll_cursor_into_view();`
 - [x] 新增 `replace_text_preserving_view(&mut self, text: &str)`：
   - 保存旧 `scroll/cursor`
-  - 调用 `set_text(text)` 复用净化/清浮层/清历史/已保存态
+  - 复用私有 `replace_text`（与 `set_text` 相同的净化/清浮层/清历史/已保存态部分）
   - 光标 `floor_char_boundary` + `clamp_cursor`
   - `scroll = old.min(max_scroll())`
 
@@ -116,9 +125,17 @@
 
 ### 2.5 停泊草稿后台刷新
 
-- [x] `src/app/update/prompt/mod.rs:155-169`：`set_text(&active_content)` → `replace_text_preserving_view(&active_content)`
-- [x] `src/app/update/prompt/save.rs:155-163`：同上
+- [x] `src/app/update/prompt/mod.rs`：停泊草稿按页身份分流——`page_switched` 保持 `set_text(&active_content)`（换文档，I5），同一页正文更新才用 `replace_text_preserving_view(&active_content)`（review P0-1）
+- [x] `src/app/update/prompt/save.rs:155-163`：保存回执只服务同页刷新，使用 `replace_text_preserving_view`
 - [x] `reload_editor_from_active_page`（`pages.rs:681-708`）保持 `set_text`（换文档语义）
+
+### 2.6 几何变化统一钳制（review P1-1）
+
+- [x] 新增 `src/app/update/prompt/mod.rs::clamp_prompt_list_scroll(state)`：
+  - 树：只钳制版 `PromptPanel::clamp_selection`
+  - 页：`clamp_page_view`
+  - Recent：`recent_page_count.min(MAX_RECENT_PAGES)` 与 `recent_visible` 钳制 `recent_scroll`
+- [x] `src/app/update/pane.rs::resize_panes` 在更新 prompt 尺寸与 `recent_visible` 后调用；不 reveal 选中项
 
 ## 3. 既有测试调整
 
@@ -146,6 +163,10 @@
   - `cargo test --lib show_prompt_tree_preserves_scroll`
   - `cargo test --lib show_prompt_pages_preserves_scroll`
   - `cargo test --lib background_parked_refresh_preserves_scroll`
+  - `cargo test --lib parked_page_switch_uses_new_document_view`
+  - `cargo test --lib parked_save_receipt_preserves_scroll`
+  - `cargo test --lib resize_panes_clamps_prompt_tree_scroll`
+  - `cargo test --lib clamp_prompt_list_scroll_clamps_all_views`
   - `cargo test --lib recent_auto_sync_does_not_scroll`
   - `cargo test --lib workspace_item_click_keeps_prompt_scroll`
 - [x] 受影响模块回归：
@@ -160,17 +181,19 @@
 
 - 提交 1：状态层（`prompt.rs` / tree / pages / recent）＋对应状态层测试
 - 提交 2：调用点（`editor.rs` / `mod.rs` / `save.rs` / `pages.rs`）＋更新层/事件层测试＋文档
+- 提交 3（review 后）：review.md、P0/P1 修复与补齐测试、design/task 同步
 
 ## 7. 完成定义
 
 - 设计 §9 手工验收全部通过；
 - 新增回归测试覆盖 design §7 全部条目；
 - `cargo fmt` / `cargo clippy --all-targets -- -D warnings` / `cargo test` 全绿；
-- 本文件所有 checkbox 勾选，design.md 状态改为“已完成”。
+- 本文件所有 checkbox 勾选（手工验收项除外），design.md 状态改为“待用户手工验收”。
 
 ## 8. 实现记录与差异
 
-- `clamp_prompt_tree_scroll` 删除（无生产调用方），原测试断言同步移除。
+- `clamp_prompt_tree_scroll` 删除（无生产调用方），原测试断言同步移除；几何变化改由 `clamp_prompt_list_scroll` 统一只钳制。
 - 文件夹折叠/展开在两处 toggle 后显式调用 `scroll_selection_into_view`，保持原有“用户导航跟随选中项”行为。
 - `recent/tests.rs::sync_uses_cached_visible_entries` 原断言按旧 `keep_visible` 语义写成，已按决策 6 改为只钳制。
 - `event/tests/todo.rs::mouse_right_click_prompt_tree_on_todo_opens_todo_menu` 原坐标依赖“进入树视图 reveal 选中项”的旧滚动偏移，改为扫描真实可开菜单的树行。
+- Review 修复：停泊草稿页身份切换改回 `set_text`（P0-1）；`resize_panes` 接入 `clamp_prompt_list_scroll`（P1-1）；补齐目标树滚动、保存回执、页切换、几何钳制测试（P2-1/P2-2）。详见 `review.md`。
