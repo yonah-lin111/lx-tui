@@ -178,6 +178,29 @@ pub fn on_thread_loaded(
     true
 }
 
+/// 乐观投影的下一个展示序号：消息、撤销提示与检查点共用同一编号空间。
+///
+/// 线程里的新问答在回投时只拿得到本地状态，没有 DB 分配的真实序号；若一律写
+/// 0，时间线会把它排到所有既有条目之前（检查点因此永远停在底部）。
+fn next_display_sequence(thread: &crate::app::state::lx::BtwThreadState) -> i64 {
+    thread
+        .chat
+        .messages
+        .iter()
+        .map(|message| message.sequence)
+        .chain(thread.chat.notices.iter().map(|notice| notice.sequence))
+        .chain(
+            thread
+                .compact
+                .checkpoints
+                .iter()
+                .map(|checkpoint| checkpoint.sequence),
+        )
+        .max()
+        .unwrap_or(-1)
+        .saturating_add(1)
+}
+
 /// 提交被接受后的回投字段（事件层 → 应用层）。
 #[derive(Debug, Clone)]
 pub struct AcceptedBtw {
@@ -208,9 +231,10 @@ pub fn on_accepted(state: &mut AppState, pane: PaneId, event: AcceptedBtw) -> bo
     if revision == Some(thread.composer.revision()) {
         thread.composer.clear();
     }
+    let sequence = next_display_sequence(thread);
     thread.chat.messages.push(ChatMessageView {
         id: event.user_message_id.clone(),
-        sequence: 0,
+        sequence,
         kind: "chat".to_string(),
         role: "user".to_string(),
         status: "complete".to_string(),
@@ -286,10 +310,10 @@ pub fn on_recipient_started(
             return false;
         }
         thread.pending_recipients = thread.pending_recipients.saturating_sub(1);
-        thread
-            .chat
-            .messages
-            .push(new_assistant_message(assistant_message_id, label));
+        let sequence = next_display_sequence(thread);
+        let mut message = new_assistant_message(assistant_message_id, label);
+        message.sequence = sequence;
+        thread.chat.messages.push(message);
         thread.rows_dirty = true;
         return true;
     }

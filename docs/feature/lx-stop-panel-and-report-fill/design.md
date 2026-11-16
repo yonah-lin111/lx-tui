@@ -204,7 +204,7 @@
   → 报告正文折叠成 [Pasted subagent report N lines] 放到主输入框顶部
   → 不自动投递主 agent、不自动起父轮
 
-已有报告：
+最近一条时间线事件就是报告：
   输入 /report [note] → 打开二级面板
   ┌ Report ──────────────────────────────┐
   │ ❯ Resend last report                 │
@@ -220,6 +220,8 @@
 - 目标无会话 / 已被移除：Toast `Cannot report from this agent`。
 - 总结失败/取消/正文为空：不填芯片，Toast `Report unavailable`；不写检查点。
 - 报告检查点不参与上下文装配（`active_checkpoint` 只认 `kind = compact`）。
+- 二级面板只在报告检查点仍是时间线最后一条时出现；它后面已有消息、撤销提示或其它检查点时，`/report` 直接发起新的总结。
+- 报告卡片与 compact 卡片共用按 `sequence` 交错的时间线，不固定在消息列表底部；BTW 乐观消息的展示序号取消息/提示/检查点最大值 +1，后续问答自然排在报告之后。
 
 #### BTW composer
 
@@ -227,7 +229,7 @@
 - 只总结当前 BTW 线程已经完成的问答；没有线程（新 QA 尚未提问）时拒绝。
 - 不再按 `@Curie @Turing` 重新查询目标，也不再合并多目标分节。
 - 成功：BTW 线程时间线新增 Report 检查点，正文填主输入框；失败/空：Toast `BTW report unavailable`。
-- 已有报告：同样打开二级面板；`Resend` 复用最近报告，`Regenerate` 重新总结当前线程。
+- 同样只有报告仍是最后一条时才打开二级面板；否则直接重新总结当前线程。
 
 ### 3.4 主输入框报告芯片
 

@@ -26,6 +26,38 @@ fn agent_run(agent_id: &str, child_session: &str) -> SubagentRun {
     })
 }
 
+/// 往详情会话塞一条已完成文本消息（时间线排序用）。
+fn push_text_message(chat: &mut crate::app::state::LxChat, role: &str, text: &str, sequence: i64) {
+    chat.messages.push(crate::app::state::ChatMessageView {
+        id: format!("m{sequence}"),
+        sequence,
+        kind: "chat".into(),
+        role: role.into(),
+        status: "complete".into(),
+        turn_index: 0,
+        shell: None,
+        steps: vec![crate::app::state::AssistantStepView::Part {
+            position: 0,
+            part: crate::app::state::ChatPartView {
+                kind: PartKind::Text,
+                content: text.into(),
+                provider_metadata_json: None,
+                started_at_ms: None,
+                ended_at_ms: None,
+                completed_at_ms: None,
+            },
+        }],
+        model_label: None,
+        error_code: None,
+        input_tokens: None,
+        output_tokens: None,
+        cache_read_tokens: None,
+        duration_ms: None,
+        reports: Vec::new(),
+        attachments: Vec::new(),
+    });
+}
+
 fn seed_last_report(state: &mut AppState, pane: PaneId, agent_id: &str) {
     let run = state
         .pane_mut_anywhere(pane)
@@ -1141,4 +1173,81 @@ fn finish_generated_fills_from_report_checkpoint() {
     );
     assert!(tokens[0].body.contains("one-shot report body"));
     assert!(tokens[0].body.contains("Changed files: src/a.rs"));
+}
+
+#[test]
+fn report_after_a_newer_message_skips_the_resend_panel() {
+    let (mut state, pane) = agents_editing_state();
+    seed_last_report(&mut state, pane, "sub-idle");
+    {
+        let run = state
+            .pane_mut_anywhere(pane)
+            .expect("pane")
+            .lx
+            .agents
+            .by_agent_mut("sub-idle")
+            .expect("run");
+        push_text_message(&mut run.chat, "assistant", "later answer", 3);
+    }
+    type_str(&mut state, "/report focus");
+    state.effects.clear();
+    crate::app::update::pane::apply_lx_input(&mut state, LxInput::Enter);
+    assert!(panel(&state, pane).is_none(), "最后一条不是报告时不弹面板");
+    assert!(
+        state.effects.iter().any(|effect| matches!(
+            effect,
+            crate::app::effects::Effect::SendSubagentReport { agent_id, note, .. }
+                if agent_id == "sub-idle" && note == "focus"
+        )),
+        "必须直接发起新的总结：{:?}",
+        state.effects
+    );
+}
+
+#[test]
+fn btw_report_after_a_newer_message_skips_the_resend_panel() {
+    let (mut state, pane) = btw_editing_state();
+    {
+        let thread = state
+            .pane_mut_anywhere(pane)
+            .expect("pane")
+            .lx
+            .btw
+            .active_thread_mut()
+            .expect("thread");
+        thread.thread_id = Some("thread-1".into());
+        thread.child_session_id = Some("child-1".into());
+        thread.title = "Side thread".into();
+        thread
+            .compact
+            .replace(vec![crate::app::state::CompactNoticeView {
+                id: "report-1".into(),
+                sequence: 2,
+                model_label: "M".into(),
+                created_at_ms: 1_700_000_000_000,
+                start_sequence: 0,
+                end_sequence: 1,
+                summary: "previous report body".into(),
+                active: true,
+                auto: false,
+                report: true,
+            }]);
+        push_text_message(&mut thread.chat, "assistant", "later answer", 3);
+    }
+    type_str(&mut state, "/report summarize");
+    state.effects.clear();
+    crate::app::update::pane::apply_lx_input(&mut state, LxInput::Enter);
+    assert!(panel(&state, pane).is_none(), "最后一条不是报告时不弹面板");
+    assert!(
+        state.effects.iter().any(|effect| matches!(
+            effect,
+            crate::app::effects::Effect::Btw(crate::app::effects::BtwEffect::Report {
+                thread_id,
+                note,
+                ..
+            }) if thread_id == "thread-1" && note == "summarize"
+        )),
+        "必须直接发起新的 BTW 总结：{:?}",
+        state.effects
+    );
 }

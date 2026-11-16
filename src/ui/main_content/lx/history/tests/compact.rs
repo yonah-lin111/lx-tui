@@ -348,3 +348,34 @@ fn compact_range_change_invalidates_cached_card() {
     assert!(second.contains("covered sequence 5–9"), "{second}");
     assert!(!second.contains("covered sequence 1–3"), "{second}");
 }
+
+/// 报告检查点与 compact 一样按 sequence 交错，不得固定在消息列表底部。
+#[test]
+fn report_entry_is_interleaved_by_sequence() {
+    let mut lx = lx_with(vec![message(
+        "assistant",
+        "complete",
+        vec![text_part("after report")],
+    )]);
+    lx.chat.messages[0].sequence = 5;
+    let mut report = checkpoint(2, true);
+    report.report = true;
+    lx.compact.replace(vec![report]);
+    let area = Rect::new(0, 0, 60, 16);
+    let mut grid = Grid::new(area);
+    render(&mut grid, area, &lx, 0, &mut cache());
+    let text: String = (area.y..area.bottom())
+        .map(|y| {
+            (area.x..area.right())
+                .map(|x| grid.cell(x, y).ch)
+                .collect::<String>()
+        })
+        .collect::<Vec<_>>()
+        .join("\n");
+    let report_at = text.find("Report").expect("report title");
+    let message_at = text.find("after report").expect("message body");
+    assert!(
+        report_at < message_at,
+        "sequence 更小的报告检查点必须排在消息之前：{text}"
+    );
+}

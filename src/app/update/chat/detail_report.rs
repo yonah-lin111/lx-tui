@@ -278,6 +278,9 @@ fn show_unavailable(state: &mut AppState, pane: PaneId) {
 }
 
 /// 最近一次 `/report` 报告的芯片正文（Agents）。
+///
+/// 只有报告本身就是时间线最后一条时才返回：它后面若还有消息、撤销提示或其它
+/// 检查点，`/report` 应直接重新总结，而不是弹“重发上一份报告”的二级面板。
 fn last_agent_report(run: &crate::app::state::SubagentRun) -> Option<String> {
     let checkpoint = run
         .compact
@@ -285,6 +288,23 @@ fn last_agent_report(run: &crate::app::state::SubagentRun) -> Option<String> {
         .iter()
         .rev()
         .find(|checkpoint| checkpoint.report && checkpoint.active)?;
+    let latest = run
+        .chat
+        .messages
+        .iter()
+        .map(|message| message.sequence)
+        .chain(run.chat.notices.iter().map(|notice| notice.sequence))
+        .chain(
+            run.compact
+                .checkpoints
+                .iter()
+                .map(|checkpoint| checkpoint.sequence),
+        )
+        .max()
+        .unwrap_or(checkpoint.sequence);
+    if checkpoint.sequence < latest {
+        return None;
+    }
     Some(format_report_body(
         &agent_report_header(run),
         &checkpoint.summary,
@@ -308,7 +328,7 @@ fn agent_report_header(run: &crate::app::state::SubagentRun) -> String {
     header
 }
 
-/// 最近一次 `/report` 报告的芯片正文（BTW）。
+/// 最近一次 `/report` 报告的芯片正文（BTW）；同样只认时间线最后一条。
 fn last_btw_report(thread: &crate::app::state::lx::BtwThreadState) -> Option<String> {
     let checkpoint = thread
         .compact
@@ -316,6 +336,24 @@ fn last_btw_report(thread: &crate::app::state::lx::BtwThreadState) -> Option<Str
         .iter()
         .rev()
         .find(|checkpoint| checkpoint.report && checkpoint.active)?;
+    let latest = thread
+        .chat
+        .messages
+        .iter()
+        .map(|message| message.sequence)
+        .chain(thread.chat.notices.iter().map(|notice| notice.sequence))
+        .chain(
+            thread
+                .compact
+                .checkpoints
+                .iter()
+                .map(|checkpoint| checkpoint.sequence),
+        )
+        .max()
+        .unwrap_or(checkpoint.sequence);
+    if checkpoint.sequence < latest {
+        return None;
+    }
     Some(format_report_body(
         &format!("[BTW report] {}", thread.title.trim()),
         &checkpoint.summary,

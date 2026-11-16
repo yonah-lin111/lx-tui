@@ -443,13 +443,20 @@ cargo test --lib slash_panels
 - [x] `/rewind` 识别报告检查点：`RewindTargetKind::Report` + 报告专用面板文案，执行删除检查点。
 - [x] 旧 `notify_parent=1` 报告轮保持历史行为，不追溯。
 
-### 8.2 输入框 ↓
+### 8.2 报告时间线与二级面板（2026-11-16 验收修复）
+
+- [x] 报告检查点与 compact 共用按 `sequence` 交错的时间线，不固定在消息列表底部。
+- [x] BTW 乐观消息（新问答）使用消息/撤销提示/检查点的最大序号 +1，后续问答排在报告之后。
+- [x] `/report` 只有报告仍是时间线最后一条时才打开二级面板；其后已有新消息时直接重新总结。
+- [x] 回归测试：报告卡片交错、BTW 追问序号、Agents/BTW 最后一条非报告时跳过面板。
+
+### 8.3 输入框 ↓
 
 - [x] 主输入框：光标在正文末尾时 `↓` 打开后台任务页；末行中间先落到行尾，第二次才换页。
 - [x] `apply_editor_edit` 统一处理 `↓`，BTW / Agents composer 同样支持末行中间落行尾。
 - [x] `tui-design-requirements.md` 同步入口文案。
 
-### 8.3 测试
+### 8.4 测试
 
 - [x] `report_commits_a_report_checkpoint_not_context`：报告检查点不参与 `active_checkpoint`，可被 `revert_compact` 删除。
 - [x] `report_generates_one_shot_checkpoint_and_fills_main_input`：真实 mock SSE 端到端，子会话不新增消息，主输入框芯片生成。
@@ -457,7 +464,7 @@ cargo test --lib slash_panels
 - [x] `detail_rewind_targets_the_latest_report_checkpoint`：`/rewind` 选中报告检查点并打开报告专用面板。
 - [x] BTW 一次性总结、无线程拒绝、输入框 ↓ 的回归测试。
 
-### 8.4 验证
+### 8.5 验证
 
 - `cargo fmt --check`
 - `cargo clippy --all-targets -- -D warnings`
