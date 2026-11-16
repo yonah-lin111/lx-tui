@@ -399,7 +399,7 @@ fn built(call: &ToolCallView, width: u16, expanded: bool, in_group: bool) -> Bui
 
 /// 排版（无折叠）：`rows`、`draw`、链接几何共用。
 fn layout(call: &ToolCallView, width: u16, expanded: bool) -> (tree::Layout, Vec<(usize, String)>) {
-    let (layout, links, _) = layout_with_group(call, width, expanded, false);
+    let (layout, links, _) = layout_with_group(call, width, expanded, false, false);
     (layout, links)
 }
 
@@ -408,12 +408,13 @@ fn layout_with_group(
     width: u16,
     expanded: bool,
     in_group: bool,
+    last: bool,
 ) -> (tree::Layout, Vec<(usize, String)>, usize) {
     let in_nested_group = in_group && call.name != "list_agents";
     let built = built(call, width, expanded, in_nested_group);
     let root_nodes = built.root_nodes;
     let layout = if in_nested_group {
-        tree::layout_in_group(&[Section::fixed(built.nodes)], width, root_nodes)
+        tree::layout_in_group_final(&[Section::fixed(built.nodes)], width, root_nodes, last)
     } else {
         tree::layout(&[Section::fixed(built.nodes)], width)
     };
@@ -446,7 +447,7 @@ pub(super) fn rows_with_group(
         return 0;
     }
     super::HEADER_ROWS
-        + layout_with_group(call, width, expanded, in_group)
+        + layout_with_group(call, width, expanded, in_group, false)
             .0
             .rows
             .len()
@@ -477,10 +478,15 @@ pub(super) fn body_cols(
     width: u16,
     expanded: bool,
     in_group: bool,
+    last: bool,
 ) -> Vec<Option<(u16, u16)>> {
-    layout_with_group(call, width, expanded, in_group)
-        .0
-        .row_cols()
+    let (mut layout, _, _) = layout_with_group(call, width, expanded, in_group, last);
+    if in_group {
+        let status = view(call).and_then(|view| header_status(call, view));
+        // 状态尾巴与 draw_body 同源：先追加再取列。
+        super::tree::decorate_group_call(&mut layout.rows, call, status, width);
+    }
+    layout.row_cols()
 }
 
 /// 展开后行数增加即可展开（报告正文 / close 详情）。
@@ -504,7 +510,7 @@ pub(super) fn agent_links_with_group(
     if width == 0 {
         return Vec::new();
     }
-    layout_with_group(call, width, false, in_group).1
+    layout_with_group(call, width, false, in_group, false).1
 }
 
 /// spawn 标题方块跟子 agent 状态走，而不是“spawn 工具已返回”的调用状态。
@@ -600,7 +606,7 @@ pub(super) fn draw_body(
     }
     let in_nested_group = call.name != "list_agents";
     let (mut layout, _, root_nodes) =
-        layout_with_group(call, rect.width, expanded, in_nested_group);
+        layout_with_group(call, rect.width, expanded, in_nested_group, last);
     let status = view(call).and_then(|view| header_status(call, view));
     tree::decorate_group_call(&mut layout.rows, call, status, rect.width);
     if in_nested_group {

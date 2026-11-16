@@ -250,7 +250,10 @@ pub struct HistoryLayout {
     pub area: Rect,
     /// （消息索引, 该消息内**步骤**下标, 头部矩形）。
     pub thinking: Vec<(usize, usize, Rect)>,
-    /// 可折叠块的整块矩形与内容矩形（点击切换折叠；没有 hover 高亮）。
+    /// 可折叠块的**块级**行范围（布局/测试用）。
+    ///
+    /// 真实点击面还受 `CardCols` 的逐行列区间约束；需要判断“点这里会不会折叠”
+    /// 必须走 `history_hit::card_target_at`，不要用这里的整块矩形代替。
     pub cards: Vec<CardHit>,
     /// 每条消息的行区间（置顶行归属判定用）。
     pub messages: Vec<MessageRows>,

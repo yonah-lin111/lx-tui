@@ -408,7 +408,7 @@ pub(super) fn nodes(call: &ToolCallView) -> Vec<Node> {
 /// 结果体确认后追加区间与行数；超宽时单行尾部省略，不软换行成第二行，不显示 `output limited`，
 /// 也不登记可展开点击面。
 fn detail_layout(call: &ToolCallView, width: u16, expanded: bool) -> tree::Layout {
-    detail_layout_with_group(call, width, expanded, false)
+    detail_layout_with_group(call, width, expanded, false, false)
 }
 
 fn detail_layout_with_group(
@@ -416,13 +416,14 @@ fn detail_layout_with_group(
     width: u16,
     expanded: bool,
     in_group: bool,
+    last: bool,
 ) -> tree::Layout {
     if width == 0 {
         return tree::layout(&[], 0);
     }
     let build = |sections: &[Section]| {
         if in_group {
-            tree::layout_in_group(sections, width, 1)
+            tree::layout_in_group_final(sections, width, 1, last)
         } else {
             tree::layout(sections, width)
         }
@@ -506,8 +507,14 @@ pub(super) fn body_cols(
     width: u16,
     expanded: bool,
     in_group: bool,
+    last: bool,
 ) -> Vec<Option<(u16, u16)>> {
-    detail_layout_with_group(call, width, expanded, in_group)
+    let mut layout = detail_layout_with_group(call, width, expanded, in_group, last);
+    if in_group && Kind::of(&call.name) != Kind::Read {
+        // 状态尾巴与 draw_body 同源：先追加再取列。
+        super::tree::decorate_group_call(&mut layout.rows, call, title_status(call), width);
+    }
+    layout
         .rows
         .iter()
         .map(super::tree::Row::text_cols)
@@ -521,7 +528,7 @@ pub(super) fn detail_rows_with_group(
     expanded: bool,
     in_group: bool,
 ) -> usize {
-    detail_layout_with_group(call, width, expanded, in_group)
+    detail_layout_with_group(call, width, expanded, in_group, false)
         .rows
         .len()
 }
@@ -533,7 +540,7 @@ pub(super) fn detail_content_rows_with_group(
     expanded: bool,
     in_group: bool,
 ) -> usize {
-    let layout = detail_layout_with_group(call, width, expanded, in_group);
+    let layout = detail_layout_with_group(call, width, expanded, in_group, false);
     if expanded {
         layout.total
     } else {
@@ -554,7 +561,7 @@ pub(super) fn draw_body(
     if rect.width == 0 {
         return;
     }
-    let mut layout = detail_layout_with_group(call, rect.width, expanded, true);
+    let mut layout = detail_layout_with_group(call, rect.width, expanded, true, last);
     let is_read = Kind::of(&call.name) == Kind::Read;
     if is_read {
         let conn = tree::connector_style_of(call);

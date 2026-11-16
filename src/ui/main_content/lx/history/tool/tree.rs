@@ -219,8 +219,25 @@ pub(crate) fn layout(sections: &[Section], width: u16) -> Layout {
 }
 
 /// 合并组内树体排版：前 `root_nodes` 个节点按一级树（5 列前缀）折行，后续子节点按二级树（8 列前缀）折行。
+///
+/// 只排版、不写最终连接符：行数与折行口径用它，命中列区间必须用
+/// [`layout_in_group_final`]，否则列宽会和绘制后的 8 列前缀错位。
 pub(crate) fn layout_in_group(sections: &[Section], width: u16, root_nodes: usize) -> Layout {
     layout_with_roots(sections, width, Some(root_nodes))
+}
+
+/// 合并组内树体排版并写入最终连接符：命中列区间与绘制共用同一份行。
+///
+/// `last` 决定调用体是否收口（外层 `│` 是否让位给空白），只影响字形不影响行数。
+pub(crate) fn layout_in_group_final(
+    sections: &[Section],
+    width: u16,
+    root_nodes: usize,
+    last: bool,
+) -> Layout {
+    let mut layout = layout_with_roots(sections, width, Some(root_nodes));
+    apply_group_connector_with_roots(&mut layout.rows, last, root_nodes);
+    layout
 }
 
 fn layout_with_roots(sections: &[Section], width: u16, root_nodes: Option<usize>) -> Layout {
@@ -382,7 +399,8 @@ pub(crate) fn apply_group_connector(rows: &mut [Row], last: bool) {
 
 /// 组内调用体（支持前 `root_nodes` 个节点同属一级分支，如多目标 `wait_agent`）。
 pub(crate) fn apply_group_connector_with_roots(rows: &mut [Row], last: bool, root_nodes: usize) {
-    let roots = root_nodes.max(1);
+    // `0` 表示整块都在二级子树里（命令输出单独排版时就是这样）。
+    let roots = root_nodes;
     let Some(last_node) = rows.iter().rev().find_map(|row| row.node) else {
         return;
     };

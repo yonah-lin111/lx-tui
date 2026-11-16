@@ -76,7 +76,11 @@ impl CardCols {
     pub(crate) fn skip_rows(&self, skip: usize) -> Self {
         match self {
             Self::Full => Self::Full,
-            Self::Chip { .. } => self.clone(),
+            Self::Chip { .. } => {
+                // 芯片只出现在用户消息，不会进合并组；真要进来必须先补逐行切片。
+                debug_assert_eq!(skip, 0, "Chip regions are never grouped");
+                self.clone()
+            }
             Self::Text(cols) => Self::Text(cols.get(skip..).unwrap_or(&[]).to_vec()),
         }
     }
@@ -88,17 +92,51 @@ impl CardCols {
             Self::Full | Self::Chip { .. } => 0,
         }
     }
+
+    /// 逐行文字列里没有任何可点文字：展开态的纯空白块会走到这里。
+    ///
+    /// 这种块没有文字可点，若继续按列拒绝，鼠标就再也收不回去；命中侧
+    /// 退化回整块（只在该块本来就 `clickable` 时生效）。
+    pub(crate) fn text_is_blank(&self) -> bool {
+        matches!(self, Self::Text(cols) if cols.iter().all(Option::is_none))
+    }
 }
 
-/// 一个可折叠块的矩形。
+/// 一个可折叠块的命中结果。
 ///
-/// `card` 是点击面：命令卡片的参数区与输出区各自登记一条，点其中一块只切换那一块；
-/// 文件工具是整块一个点击面。折叠内容不再随鼠标悬停提亮（只有思考块保留悬停态）。
+/// `card` 是本次命中对应的屏幕矩形：逐行文字块只覆盖被点那一行，芯片覆盖芯片
+/// 列区间，整行块覆盖块矩形。折叠内容不再随鼠标悬停提亮（只有思考块保留悬停态）。
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct CardHit {
     pub kind: CardKind,
-    /// 点击面：命令卡片是单个分区（参数 / 输出 / 运行中整卡），文件工具是整块。
+    /// 本次命中的矩形（文字块为单行；整行块/芯片为块级裁剪）。
     pub card: Rect,
     /// 点击是否真的会改变内容（`false` 表示点了没反应，不登记点击面）。
     pub clickable: bool,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn text_skip_rows_drops_the_header() {
+        let cols = CardCols::Text(vec![Some((0, 1)), None, Some((2, 3))]);
+        assert_eq!(cols.skip_rows(1), CardCols::Text(vec![None, Some((2, 3))]));
+        assert_eq!(cols.skip_rows(9), CardCols::Text(Vec::new()));
+    }
+
+    #[test]
+    fn text_is_blank_only_when_every_row_is_none() {
+        assert!(CardCols::Text(vec![None, None]).text_is_blank());
+        assert!(!CardCols::Text(vec![None, Some((1, 2))]).text_is_blank());
+        assert!(!CardCols::Full.text_is_blank());
+    }
+
+    #[test]
+    fn full_and_chip_skip_keeps_their_own_semantics() {
+        assert_eq!(CardCols::Full.skip_rows(3), CardCols::Full);
+        let chip = CardCols::Chip { first: 1, last: 9 };
+        assert_eq!(chip.skip_rows(0), chip);
+    }
 }

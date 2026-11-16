@@ -181,7 +181,7 @@ pub(super) fn layout(
     width: u16,
     folds: Folds,
 ) -> WebSearchLayout {
-    layout_with_group(call, view, width, folds, false)
+    layout_with_group(call, view, width, folds, false, false)
 }
 
 pub(super) fn layout_with_group(
@@ -190,6 +190,7 @@ pub(super) fn layout_with_group(
     width: u16,
     folds: Folds,
     in_group: bool,
+    last: bool,
 ) -> WebSearchLayout {
     let folded_queries = queries_section(view, false);
     let nested_result = in_group && folded_queries.is_some();
@@ -218,20 +219,32 @@ pub(super) fn layout_with_group(
             style::agent_step_detail(),
         )]));
     }
-    let queries_layout = queries.as_ref().map(|section| {
+    let mut queries_layout = queries.as_ref().map(|section| {
         if nested_result && result.is_some() {
-            tree::layout_in_group(std::slice::from_ref(section), width, 1)
+            tree::layout_in_group_final(std::slice::from_ref(section), width, 1, last)
         } else {
             tree::layout(std::slice::from_ref(section), width)
         }
     });
-    let result_layout = result.as_ref().map(|section| {
+    let mut result_layout = result.as_ref().map(|section| {
         if nested_result {
-            tree::layout_in_group(std::slice::from_ref(section), width, 0)
+            tree::layout_in_group_final(std::slice::from_ref(section), width, 0, last)
         } else {
             tree::layout(std::slice::from_ref(section), width)
         }
     });
+    if in_group {
+        // 状态尾巴与 draw_body 同源：追加到合并布局的首个节点，再取列。
+        let status = title_status(call, view);
+        if let Some(layout) = queries_layout
+            .as_mut()
+            .filter(|layout| !layout.rows.is_empty())
+        {
+            tree::decorate_group_call(&mut layout.rows, call, status.clone(), width);
+        } else if let Some(layout) = result_layout.as_mut() {
+            tree::decorate_group_call(&mut layout.rows, call, status, width);
+        }
+    }
     let queries_rows = queries_layout
         .as_ref()
         .map_or(0, |layout| layout.rows.len());
@@ -245,7 +258,7 @@ pub(super) fn layout_with_group(
     let sections: Vec<Section> = queries.into_iter().chain(result).collect();
     WebSearchLayout {
         layout: if in_group {
-            tree::layout_in_group(&sections, width, 1)
+            tree::layout_in_group_final(&sections, width, 1, last)
         } else {
             tree::layout(&sections, width)
         },
@@ -296,7 +309,7 @@ pub(super) fn rows_with_group(
     if width == 0 {
         return 0;
     }
-    1 + layout_with_group(call, view, width, folds, in_group)
+    1 + layout_with_group(call, view, width, folds, in_group, false)
         .layout
         .rows
         .len()
@@ -399,7 +412,7 @@ pub(super) fn draw_body(
     if rect.width == 0 {
         return;
     }
-    let mut layout = layout_with_group(call, view, rect.width, folds, true).layout;
+    let mut layout = layout_with_group(call, view, rect.width, folds, true, last).layout;
     tree::decorate_group_call(&mut layout.rows, call, title_status(call, view), rect.width);
     tree::apply_group_connector(&mut layout.rows, last);
     tree::draw(grid, rect, scroll, row_index, &layout.rows);

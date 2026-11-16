@@ -497,7 +497,7 @@ pub(super) fn has_expandable_content_with_group(
         Some(crate::app::state::ToolDetailView::Mcp(_)) => false,
         Some(crate::app::state::ToolDetailView::WebSearch(view)) => {
             let layout =
-                web_search::layout_with_group(call, view, width, Folds::default(), in_group);
+                web_search::layout_with_group(call, view, width, Folds::default(), in_group, false);
             layout.queries_expandable || layout.result_expandable
         }
         Some(crate::app::state::ToolDetailView::File(_)) if file_diff::is_card(call) => {
@@ -535,8 +535,9 @@ fn web_search_regions(
     width: u16,
     folds: Folds,
     in_group: bool,
+    last: bool,
 ) -> Vec<CardRegion> {
-    let layout = web_search::layout_with_group(call, view, width, folds, in_group);
+    let layout = web_search::layout_with_group(call, view, width, folds, in_group, last);
     split_regions(
         web_search::header_cols(call, view, width),
         layout.queries_rows,
@@ -560,6 +561,23 @@ fn split_regions(
     second_expandable: bool,
 ) -> Vec<CardRegion> {
     let mut regions = Vec::new();
+    // 标题行始终属于「真正能展开」的那一块：查询未超预算而结果超预算时，
+    // 标题不能跟着不可展开的查询块变成死点击面。
+    if first_rows > 0
+        && !first_expandable
+        && second_expandable
+        && let Some(cols) = title_cols
+    {
+        regions.push(CardRegion {
+            section: CardSection::Output,
+            card: RowSpan {
+                offset: 0,
+                rows: HEADER_ROWS,
+            },
+            cols: CardCols::Text(vec![Some(cols)]),
+            clickable: true,
+        });
+    }
     let mut offset = 0usize;
     if first_rows > 0 {
         let rows = HEADER_ROWS + first_rows;
@@ -638,7 +656,7 @@ pub(super) fn card_regions(
     folds: Folds,
     step_rows: usize,
 ) -> Vec<CardRegion> {
-    card_regions_with_group(call, width, folds, step_rows, false)
+    card_regions_with_group(call, width, folds, step_rows, false, false)
 }
 
 pub(super) fn card_regions_with_group(
@@ -647,13 +665,14 @@ pub(super) fn card_regions_with_group(
     folds: Folds,
     step_rows: usize,
     in_group: bool,
+    last: bool,
 ) -> Vec<CardRegion> {
     if width == 0 {
         return Vec::new();
     }
     match call.detail.as_deref() {
         Some(crate::app::state::ToolDetailView::Command(view)) => {
-            let blocks = command::blocks_with_group(call, width, folds, in_group);
+            let blocks = command::blocks_with_group(call, width, folds, in_group, last);
             if view.state.is_running() {
                 // 长任务：整卡都是「打开后台任务面板」的点击面。
                 return vec![CardRegion {
@@ -671,7 +690,7 @@ pub(super) fn card_regions_with_group(
         Some(crate::app::state::ToolDetailView::Interaction(_)) => command_regions(
             call,
             width,
-            command::blocks_with_group(call, width, folds, in_group),
+            command::blocks_with_group(call, width, folds, in_group, last),
             in_group,
         ),
         Some(crate::app::state::ToolDetailView::Plan(_))
@@ -682,7 +701,7 @@ pub(super) fn card_regions_with_group(
             }
             let cols = card_text_cols(
                 subagent::header_cols(call, width),
-                subagent::body_cols(call, width, folds.body, in_group),
+                subagent::body_cols(call, width, folds.body, in_group, last),
                 step_rows,
             );
             vec![CardRegion {
@@ -701,7 +720,7 @@ pub(super) fn card_regions_with_group(
             }
             let cols = card_text_cols(
                 search::header_cols(call, view, width),
-                search::body_cols(call, view, width, folds.body, in_group),
+                search::body_cols(call, view, width, folds.body, in_group, last),
                 step_rows,
             );
             vec![CardRegion {
@@ -716,7 +735,10 @@ pub(super) fn card_regions_with_group(
         }
         Some(crate::app::state::ToolDetailView::Mcp(_)) => Vec::new(),
         Some(crate::app::state::ToolDetailView::WebSearch(view)) => {
-            web_search_regions(call, view, width, folds, in_group)
+            if !has_expandable_content_with_group(call, width, in_group) {
+                return Vec::new();
+            }
+            web_search_regions(call, view, width, folds, in_group, last)
         }
         Some(crate::app::state::ToolDetailView::File(_)) | None => {
             // 展开前后行数不变就不登记：留下一个点了没反应的点击面只会误导。
@@ -731,7 +753,7 @@ pub(super) fn card_regions_with_group(
             } else {
                 (
                     file_summary::header_cols(call, width),
-                    file_summary::body_cols(call, width, folds.body, in_group),
+                    file_summary::body_cols(call, width, folds.body, in_group, last),
                 )
             };
             let cols = card_text_cols(header, body, step_rows);

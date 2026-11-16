@@ -103,8 +103,13 @@ impl super::Builder<'_> {
                                 // 分隔行是排版留白：点击面不能覆盖它，否则点空行会展开上一个调用。
                                 let click_rows = rows.saturating_sub(usize::from(!group.is_last()));
                                 let total_rows = click_rows.saturating_add(1);
-                                let regions =
-                                    tool::body_card_regions(call, width, folds, total_rows);
+                                let regions = tool::body_card_regions(
+                                    call,
+                                    width,
+                                    folds,
+                                    total_rows,
+                                    group.is_last(),
+                                );
                                 legacy(rows, regions, folds)
                             },
                         );

@@ -62,7 +62,7 @@ fn layout(
     width: u16,
     expanded: bool,
 ) -> SearchLayout {
-    layout_with_group(call, view, width, expanded, false)
+    layout_with_group(call, view, width, expanded, false, false)
 }
 
 fn layout_with_group(
@@ -71,6 +71,7 @@ fn layout_with_group(
     width: u16,
     expanded: bool,
     in_group: bool,
+    last: bool,
 ) -> SearchLayout {
     let summary = file_summary::nodes(call);
     let mut sections = Vec::new();
@@ -98,7 +99,7 @@ fn layout_with_group(
     }
     SearchLayout {
         layout: if in_group {
-            tree::layout_in_group(&sections, width, 1)
+            tree::layout_in_group_final(&sections, width, 1, last)
         } else {
             tree::layout(&sections, width)
         },
@@ -126,7 +127,7 @@ pub(super) fn rows_with_group(
     if width == 0 {
         return 0;
     }
-    1 + layout_with_group(call, view, width, expanded, in_group)
+    1 + layout_with_group(call, view, width, expanded, in_group, false)
         .layout
         .rows
         .len()
@@ -156,10 +157,14 @@ pub(super) fn body_cols(
     width: u16,
     expanded: bool,
     in_group: bool,
+    last: bool,
 ) -> Vec<Option<(u16, u16)>> {
-    layout_with_group(call, view, width, expanded, in_group)
-        .layout
-        .row_cols()
+    let mut layout = layout_with_group(call, view, width, expanded, in_group, last).layout;
+    if in_group {
+        // 状态尾巴与 draw_body 同源：先追加再取列。
+        super::tree::decorate_group_call(&mut layout.rows, call, status_of(call, view), width);
+    }
+    layout.row_cols()
 }
 
 /// 展开后是否真的多出内容（决定是否登记点击面）。
@@ -177,7 +182,7 @@ pub(super) fn has_more_with_group(
     if width == 0 {
         return false;
     }
-    layout_with_group(call, view, width, false, in_group)
+    layout_with_group(call, view, width, false, in_group, false)
         .layout
         .hidden
         > 0
@@ -252,7 +257,7 @@ pub(super) fn draw_body(
     if rect.width == 0 {
         return;
     }
-    let mut layout = layout_with_group(call, view, rect.width, expanded, true).layout;
+    let mut layout = layout_with_group(call, view, rect.width, expanded, true, last).layout;
     tree::decorate_group_call(&mut layout.rows, call, status_of(call, view), rect.width);
     tree::apply_group_connector(&mut layout.rows, last);
     tree::draw(grid, rect, scroll, row_index, &layout.rows);

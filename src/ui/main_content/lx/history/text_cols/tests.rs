@@ -53,3 +53,30 @@ fn layout_row_cols_matches_rows() {
     assert!(cols[0].is_some());
     assert_eq!(cols[1], None);
 }
+
+#[test]
+fn grouped_nested_rows_include_the_eight_column_prefix() {
+    let sections = [Section::fixed(vec![
+        Node::text("alpha", Style::default()),
+        Node::text("beta", Style::default()),
+    ])];
+    for last in [false, true] {
+        let layout = tree::layout_in_group_final(&sections, 40, 0, last);
+        let cols = layout.row_cols();
+        assert_eq!(cols.len(), 2);
+        assert_eq!(cols[0].map(|(_, end)| end), Some(8 + 5), "last={last}");
+        assert_eq!(cols[1].map(|(_, end)| end), Some(8 + 4), "last={last}");
+    }
+}
+
+#[test]
+fn grouped_root_rows_keep_the_five_column_prefix() {
+    let sections = [Section::fixed(vec![
+        Node::text("root", Style::default()),
+        Node::text("child", Style::default()),
+    ])];
+    let layout = tree::layout_in_group_final(&sections, 40, 1, false);
+    let cols = layout.row_cols();
+    assert_eq!(cols[0].map(|(_, end)| end), Some(5 + 4));
+    assert_eq!(cols[1].map(|(_, end)| end), Some(8 + 5));
+}

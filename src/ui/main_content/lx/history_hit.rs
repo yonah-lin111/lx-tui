@@ -416,31 +416,35 @@ pub(crate) fn card_at_source(
     let snapshot = cache.snapshot_ready_source(width, source);
     let content_row = scroll.saturating_add(usize::from(row.saturating_sub(body.y)));
     let rel_col = column.saturating_sub(body.x);
-    let region =
-        snapshot.cards.iter().find(|region| {
-            if content_row < region.card_start
-                || content_row >= region.card_start.saturating_add(region.card_rows)
-            {
-                return false;
+    let region = snapshot.cards.iter().find(|region| {
+        if content_row < region.card_start
+            || content_row >= region.card_start.saturating_add(region.card_rows)
+        {
+            return false;
+        }
+        let offset = content_row.saturating_sub(region.card_start);
+        match &region.card_cols {
+            CardCols::Full => true,
+            CardCols::Chip { first, last } => {
+                rel_col < width
+                    && chip_cols(*first, *last, offset, region.card_rows).is_some_and(
+                        |(first_col, last_col)| {
+                            rel_col >= first_col && rel_col < last_col.min(width)
+                        },
+                    )
             }
-            let offset = content_row.saturating_sub(region.card_start);
-            match &region.card_cols {
-                CardCols::Full => true,
-                CardCols::Chip { first, last } => {
-                    rel_col < width
-                        && chip_cols(*first, *last, offset, region.card_rows).is_some_and(
-                            |(first_col, last_col)| {
-                                rel_col >= first_col && rel_col < last_col.min(width)
-                            },
-                        )
-                }
-                CardCols::Text(cols) => cols.get(offset).and_then(Option::as_ref).is_some_and(
-                    |(first_col, last_col)| {
-                        rel_col >= *first_col && rel_col < (*last_col).min(width)
-                    },
-                ),
+            CardCols::Text(cols) => {
+                // 整块没有文字时退化回整块：否则展开后的纯空白输出块没有
+                // 任何鼠标路径可以收回去。
+                cols.iter().all(Option::is_none)
+                    || cols.get(offset).and_then(Option::as_ref).is_some_and(
+                        |(first_col, last_col)| {
+                            rel_col >= *first_col && rel_col < (*last_col).min(width)
+                        },
+                    )
             }
-        })?;
+        }
+    })?;
     // 与 `layout(body, ...)` 同一套矩形口径：内容行 0 落在 body 顶。
     //
     // 裁剪必须在 **usize** 空间完成：`card_start` 是内容行绝对下标，直接交给
@@ -471,7 +475,8 @@ pub(crate) fn card_at_source(
     };
     let card = match &region.card_cols {
         // 逐行文字：命中矩形就是被点那一行的文字区间（高度 1）。
-        CardCols::Text(cols) => {
+        // 整块没有文字时退回整块矩形（与上面的退化命中一致）。
+        CardCols::Text(cols) if !region.card_cols.text_is_blank() => {
             let offset = content_row.saturating_sub(region.card_start);
             let (first_col, last_col) = cols.get(offset).and_then(Option::as_ref).copied()?;
             let x0 = first_col.min(width);
@@ -486,6 +491,7 @@ pub(crate) fn card_at_source(
                 )
             })?
         }
+        CardCols::Text(_) => clip(region.card_start, region.card_rows, None)?,
         CardCols::Chip { first, last } => {
             clip(region.card_start, region.card_rows, Some((*first, *last)))?
         }

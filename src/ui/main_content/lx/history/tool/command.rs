@@ -63,28 +63,34 @@ pub(super) fn rows_with_group(
     if width == 0 {
         return 0;
     }
-    let blocks = blocks_with_group(call, width, folds, in_group);
+    let blocks = blocks_with_group(call, width, folds, in_group, false);
     title_rows() + blocks.params + blocks.output
 }
 
 /// 树体两块各自的高度（与 [`draw`] 共用同一份构造）。
+///
+/// `last` 只在合并组内使用：命中列区间必须和绘制后的连接符同源。
 pub(super) fn blocks_with_group(
     call: &ToolCallView,
     width: u16,
     folds: Folds,
     in_group: bool,
+    last: bool,
 ) -> Blocks {
     if width == 0 {
         return Blocks::default();
     }
     let (params, output) = sections_with_group(call, width, folds, in_group);
-    let params_layout = if in_group && !output.is_empty() {
-        tree::layout_in_group(&params, width, 1)
+    let params_layout = if in_group {
+        let mut layout = tree::layout_in_group_final(&params, width, 1, last);
+        // 与 draw_body 同一顺序：状态文字追加在首节点末行，列区间必须包含它。
+        tree::decorate_group_call(&mut layout.rows, call, status_of(call), width);
+        layout
     } else {
         tree::layout(&params, width)
     };
     let output_layout = if in_group {
-        tree::layout_in_group(&output, width, 0)
+        tree::layout_in_group_final(&output, width, 0, last)
     } else {
         tree::layout(&output, width)
     };

@@ -167,8 +167,9 @@ pub(crate) fn body_card_regions(
     width: u16,
     folds: Folds,
     total_rows: usize,
+    last: bool,
 ) -> Vec<super::CardRegion> {
-    super::card_regions_with_group(call, width, folds, total_rows, true)
+    super::card_regions_with_group(call, width, folds, total_rows, true, last)
         .into_iter()
         .filter_map(|region| {
             let offset = region.card.offset;

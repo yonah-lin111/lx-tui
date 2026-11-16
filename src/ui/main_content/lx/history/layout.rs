@@ -1,7 +1,8 @@
 //! 历史布局：把快照的内容行区间映射成屏幕矩形。
 //!
-//! 从 `history.rs` 拆出（单文件行数上限）。行数与卡片几何全部来自
-//! [`PaneCache`] 的快照，`layout` / `render` / 命中读同一份数据，不再各自排版。
+//! 从 `history.rs` 拆出（单文件行数上限）。行数与块级几何全部来自
+//! [`PaneCache`] 的快照；**逐列命中面**由 `history_hit::card_at_source` 解释
+//! `CardCols`，这里的 `cards` 只是块范围，不能拿来当点击矩形。
 
 use ratatui::layout::Rect;
 

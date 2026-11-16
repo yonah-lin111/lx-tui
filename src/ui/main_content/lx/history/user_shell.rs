@@ -142,14 +142,21 @@ pub fn blocks(shell: &UserShellView, width: u16, folds: Folds) -> Blocks {
     if width == 0 {
         return Blocks::default();
     }
-    let (params, output) = sections(shell, width, folds);
-    let params_layout = tree::layout(&params, width);
-    let output_layout = tree::layout(&output, width);
+    // 列区间必须和绘制共用合并后的布局：参数区后面还有输出时，续行画 `│`
+    // 而不是空白，分段 layout 会让列起点偏差。
+    let layout = body_layout(shell, width, folds);
+    let params = layout
+        .node_rows
+        .get(1)
+        .copied()
+        .unwrap_or(layout.rows.len());
+    let mut cols = layout.row_cols();
+    let output_cols = cols.split_off(params);
     Blocks {
-        params: params_layout.rows.len(),
-        output: output_layout.rows.len(),
-        params_cols: params_layout.row_cols(),
-        output_cols: output_layout.row_cols(),
+        params,
+        output: layout.rows.len().saturating_sub(params),
+        params_cols: cols,
+        output_cols,
     }
 }
 
@@ -324,6 +331,19 @@ mod tests {
 
     fn folds(body: bool, output: bool) -> Folds {
         Folds { body, output }
+    }
+
+    #[test]
+    fn wrapped_params_columns_follow_the_combined_layout() {
+        let mut shell = shell("out", ProcessStateView::Exited { code: Some(0) });
+        shell.command = format!("echo {}", "x".repeat(80));
+        let blocks = blocks(&shell, 40, folds(true, true));
+        assert!(blocks.params >= 2, "long command must wrap");
+        assert_eq!(
+            blocks.params_cols[1].map(|(start, _)| start),
+            Some(2),
+            "continuation row must include the `│` prefix"
+        );
     }
 
     /// 把卡片绘制进网格并按行取文本。
