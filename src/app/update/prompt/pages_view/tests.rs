@@ -799,3 +799,51 @@ fn page_search_select_all_covers_query() {
         Some("abc")
     );
 }
+
+#[test]
+fn show_prompt_pages_preserves_previous_scroll() {
+    let mut state = state_with_three_pages();
+    state.prompt.resize(30, 4);
+    state.workspaces[0].prompt_panel.pages_view.scroll = 1;
+    state.workspaces[0].prompt_panel.pages_view.selected = 0;
+
+    assert!(show_prompt_pages(&mut state));
+
+    assert_eq!(
+        state.workspaces[0].prompt_panel.mode,
+        PromptMode::Pages,
+        "前提：进入页列表"
+    );
+    assert_eq!(
+        state.workspaces[0].prompt_panel.pages_view.scroll, 1,
+        "进入页列表保留上次滚动位置，不重置为 0"
+    );
+}
+
+#[test]
+fn workspace_switch_preserves_target_pages_scroll() {
+    let mut state = state_with_three_pages();
+    state.prompt.resize(30, 4);
+    state.workspaces[0].prompt_panel.mode = PromptMode::Pages;
+    state.workspaces[0].prompt_panel.editing = Some(PromptEditing::Item(10));
+
+    crate::app::update::create_workspace(&mut state);
+    assert_eq!(state.active_workspace, 1, "前提：切到新工作区");
+
+    // 停泊的目标工作区：选中行在视口外，滚动停在顶部。
+    state.workspaces[0].prompt_panel.pages_view.scroll = 0;
+    state.workspaces[0].prompt_panel.pages_view.selected = 2;
+
+    crate::app::update::switch_workspace(&mut state, 0);
+
+    assert_eq!(
+        state.workspaces[0].prompt_panel.mode,
+        PromptMode::Pages,
+        "切换工作区保留页列表视图"
+    );
+    assert_eq!(
+        state.workspaces[0].prompt_panel.pages_view.scroll, 0,
+        "恢复页视图只钳制，不 reveal 选中页"
+    );
+}
+
