@@ -134,6 +134,17 @@ pub(crate) struct Row {
     first: bool,
 }
 
+impl Row {
+    /// 该物理行的文字列区间（相对内容区左缘）；纯树线/空白行返回 `None`。
+    pub(crate) fn text_cols(&self) -> Option<(u16, u16)> {
+        super::super::text_cols::cols_from(
+            0,
+            std::iter::once(self.prefix)
+                .chain(self.segments.iter().map(|segment| segment.text.as_str())),
+        )
+    }
+}
+
 /// 一次排版的结果。
 #[derive(Debug, Clone)]
 pub(crate) struct Layout {
@@ -147,6 +158,11 @@ pub(crate) struct Layout {
 }
 
 impl Layout {
+    /// 每个物理行的文字列区间；行数与 `rows` 严格一一对应。
+    pub(crate) fn row_cols(&self) -> Vec<Option<(u16, u16)>> {
+        self.rows.iter().map(Row::text_cols).collect()
+    }
+
     /// 拼成「前缀 + 内容」的段行（沿用旧测试/调用方的 `Vec<Vec<Segment>>` 口径）。
     pub(crate) fn segments(&self) -> Vec<Vec<Segment>> {
         self.rows

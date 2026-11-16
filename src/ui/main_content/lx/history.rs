@@ -45,6 +45,7 @@ mod snapshot;
 mod stats;
 mod sticky;
 mod system_event;
+mod text_cols;
 mod timeline;
 pub(crate) mod tool;
 pub(crate) mod user_shell;
@@ -266,6 +267,7 @@ use sticky::sticky_candidate;
 pub(crate) use sticky::render_sticky_prompt;
 pub(crate) use sticky::{render_sticky_prompt_with_steer, sticky_rect, truncate_with_ellipsis};
 
+pub(crate) use cards::CardCols;
 pub use cards::{CardHit, CardKind};
 
 /// 历史视图：渲染 / 滚轮钳制 / 滚动条 / 命中 / 置顶行的**唯一**几何口径。

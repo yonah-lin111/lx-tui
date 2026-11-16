@@ -60,6 +60,36 @@ pub enum CardKind {
     },
 }
 
+/// 一个点击面的列范围口径。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) enum CardCols {
+    /// 整行宽：运行中的命令/本地命令卡（打开后台任务面板）、agent 链接行。
+    Full,
+    /// 行内芯片：首行起始列、末行结束列；沿用用户粘贴芯片的多行口径。
+    Chip { first: u16, last: u16 },
+    /// 逐物理行的文字列区间（相对内容区左缘）；`None` 行不可点。
+    Text(Vec<Option<(u16, u16)>>),
+}
+
+impl CardCols {
+    /// 合并组调用体：去掉标题行后的区域切片。
+    pub(crate) fn skip_rows(&self, skip: usize) -> Self {
+        match self {
+            Self::Full => Self::Full,
+            Self::Chip { .. } => self.clone(),
+            Self::Text(cols) => Self::Text(cols.get(skip..).unwrap_or(&[]).to_vec()),
+        }
+    }
+
+    /// 仅用于缓存 LRU 记账的近似字节数。
+    pub(crate) fn heap_bytes(&self) -> usize {
+        match self {
+            Self::Text(cols) => cols.len() * std::mem::size_of::<Option<(u16, u16)>>(),
+            Self::Full | Self::Chip { .. } => 0,
+        }
+    }
+}
+
 /// 一个可折叠块的矩形。
 ///
 /// `card` 是点击面：命令卡片的参数区与输出区各自登记一条，点其中一块只切换那一块；

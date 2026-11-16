@@ -24,6 +24,7 @@ use unicode_width::UnicodeWidthChar;
 use crate::app::state::{CardSection, UserShellView};
 use crate::ui::{style, text};
 
+use super::CardCols;
 use super::tool::tree::{self, Node, Preview, Section};
 use super::tool::{
     Folds, Segment, muted_markdown_lines, output_style, put_segments, sample_markdown_source,
@@ -147,11 +148,12 @@ pub fn blocks(shell: &UserShellView, width: u16, folds: Folds) -> Blocks {
 }
 
 /// 卡片内的一个交互区域（行偏移相对卡片首行，标题行是偏移 0）。
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Region {
     pub section: CardSection,
     pub offset: usize,
     pub rows: usize,
+    pub cols: CardCols,
     pub clickable: bool,
 }
 
@@ -164,6 +166,7 @@ pub fn regions(shell: &UserShellView, width: u16, folds: Folds) -> Vec<Region> {
             section: CardSection::Body,
             offset: 0,
             rows: params_end,
+            cols: CardCols::Full,
             clickable: true,
         }];
         if blocks.output > 0 {
@@ -171,6 +174,7 @@ pub fn regions(shell: &UserShellView, width: u16, folds: Folds) -> Vec<Region> {
                 section: CardSection::Output,
                 offset: params_end,
                 rows: blocks.output,
+                cols: CardCols::Full,
                 clickable: true,
             });
         }
@@ -180,6 +184,7 @@ pub fn regions(shell: &UserShellView, width: u16, folds: Folds) -> Vec<Region> {
         section: CardSection::Body,
         offset: 1,
         rows: blocks.params,
+        cols: CardCols::Full,
         clickable: params_expandable(shell, width),
     }];
     if blocks.output > 0 {
@@ -187,6 +192,7 @@ pub fn regions(shell: &UserShellView, width: u16, folds: Folds) -> Vec<Region> {
             section: CardSection::Output,
             offset: params_end,
             rows: blocks.output,
+            cols: CardCols::Full,
             clickable: output_expandable(shell, width),
         });
     }

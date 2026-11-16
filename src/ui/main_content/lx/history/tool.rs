@@ -29,6 +29,7 @@ use crate::app::state::{CardSection, ToolCallView};
 use crate::ui::{style, text};
 
 use super::super::Grid;
+use super::CardCols;
 use super::visible_row;
 
 mod ask;
@@ -89,10 +90,12 @@ pub(crate) struct RowSpan {
 }
 
 /// 卡片内的一个交互区域：点击面与它折叠的是哪一块。
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct CardRegion {
     pub section: CardSection,
     pub card: RowSpan,
+    /// 点击面的列范围口径（整行 / 芯片 / 逐行文字）。
+    pub cols: CardCols,
     /// 点击是否真的会改变内容（false 时不登记点击面）。
     pub clickable: bool,
 }
@@ -556,6 +559,7 @@ fn split_regions(
         regions.push(CardRegion {
             section: CardSection::Body,
             card: RowSpan { offset: 0, rows },
+            cols: CardCols::Full,
             clickable: first_expandable,
         });
         offset = rows;
@@ -569,6 +573,7 @@ fn split_regions(
         regions.push(CardRegion {
             section: CardSection::Output,
             card: RowSpan { offset, rows },
+            cols: CardCols::Full,
             clickable: second_expandable,
         });
     }
@@ -588,6 +593,7 @@ fn command_regions(
             offset: HEADER_ROWS,
             rows: blocks.params,
         },
+        cols: CardCols::Full,
         clickable: command::params_expandable(call, width),
     }];
     if blocks.output > 0 {
@@ -597,6 +603,7 @@ fn command_regions(
                 offset: HEADER_ROWS + blocks.params,
                 rows: blocks.output,
             },
+            cols: CardCols::Full,
             clickable: command::output_expandable_with_group(call, width, in_group),
         });
     }
@@ -638,6 +645,7 @@ pub(super) fn card_regions_with_group(
                         offset: 0,
                         rows: HEADER_ROWS + blocks.params + blocks.output,
                     },
+                    cols: CardCols::Full,
                     clickable: true,
                 }];
             }
@@ -662,6 +670,7 @@ pub(super) fn card_regions_with_group(
                     offset: 0,
                     rows: step_rows,
                 },
+                cols: CardCols::Full,
                 clickable: true,
             }]
         }
@@ -680,6 +689,7 @@ pub(super) fn card_regions_with_group(
                     offset: 0,
                     rows: step_rows,
                 },
+                cols: CardCols::Full,
                 clickable: true,
             }]
         }

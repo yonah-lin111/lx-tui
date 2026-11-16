@@ -427,8 +427,17 @@ fn user_message_inline_paste_chips_record_exact_column_ranges_for_multiple_chips
         .filter(|c| matches!(c.kind, CardKind::UserPaste { .. }))
         .collect();
     assert_eq!(paste_cards.len(), 2);
-    assert_eq!(paste_cards[0].card_cols, Some((8, 28)));
-    assert_eq!(paste_cards[1].card_cols, Some((29, 50)));
+    assert_eq!(
+        paste_cards[0].card_cols,
+        crate::ui::main_content::lx::history::CardCols::Chip { first: 8, last: 28 }
+    );
+    assert_eq!(
+        paste_cards[1].card_cols,
+        crate::ui::main_content::lx::history::CardCols::Chip {
+            first: 29,
+            last: 50
+        }
+    );
     assert_eq!(
         paste_cards[0].kind,
         CardKind::UserPaste {

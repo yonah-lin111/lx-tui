@@ -20,7 +20,7 @@ use crate::ui::style;
 use super::super::Grid;
 use super::rows::{UserPasteSpan, UserSpanKind, UserTextLine};
 use super::tool::{self, Folds};
-use super::{STEP_GUTTER, StepKind, StepMark, USER_INDENT, USER_PREFIX, visible_row};
+use super::{CardCols, STEP_GUTTER, StepKind, StepMark, USER_INDENT, USER_PREFIX, visible_row};
 
 mod legacy;
 
@@ -78,7 +78,7 @@ pub(crate) enum BlockSource {
 /// 它是 `(块内容, 宽度, 折叠态)` 的纯函数结果，因此和绘制数据存在一起、随同一个
 /// `BlockKey` 失效：快照重建每帧都要登记点击面，重算一遍 `card_regions` 在 1400 张
 /// 工具卡片的会话里要 4.7ms/帧（实测）。
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct CardSpan {
     /// 该区域属于块内第几个调用：单工具块恒 0，合并组是组内下标。
     pub call: usize,
@@ -87,6 +87,7 @@ pub(crate) struct CardSpan {
     pub expanded: bool,
     pub offset: usize,
     pub rows: usize,
+    pub cols: CardCols,
     pub clickable: bool,
 }
 
@@ -229,7 +230,10 @@ impl AssistantRefLine {
                 kind: super::CardKind::Attachment { path: path.clone() },
                 card_start: row,
                 card_rows: 1,
-                card_cols: Some((USER_INDENT, prefix_cols.saturating_add(label_cols))),
+                card_cols: CardCols::Chip {
+                    first: USER_INDENT,
+                    last: prefix_cols.saturating_add(label_cols),
+                },
                 clickable: true,
             });
         }
@@ -247,7 +251,10 @@ impl AssistantRefLine {
                 },
                 card_start: row,
                 card_rows: 1,
-                card_cols: Some((btn_col, btn_col.saturating_add(btn_cols))),
+                card_cols: CardCols::Chip {
+                    first: btn_col,
+                    last: btn_col.saturating_add(btn_cols),
+                },
                 clickable,
             });
         }
@@ -348,7 +355,10 @@ impl BlockPaint {
                 .sum::<usize>(),
             // 旧路径没有缓存正文，不占二级缓存预算（行数已在一级快照里）；
             // 点击面几何是小结构，按条数记个近似值。
-            Self::Legacy { spans, .. } => spans.len() * std::mem::size_of::<CardSpan>(),
+            Self::Legacy { spans, .. } => spans
+                .iter()
+                .map(|span| std::mem::size_of::<CardSpan>() + span.cols.heap_bytes())
+                .sum(),
         }
     }
 

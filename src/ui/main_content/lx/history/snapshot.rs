@@ -23,8 +23,8 @@ use super::paint::{AssistantRefLine, BlockPaint, BlockSource, CardSpan, UserRefL
 use super::source::{HistorySource, is_legacy_report_row};
 use super::timeline::{TimelineEntry, timeline};
 use super::{
-    CardKind, Folds, MessageRows, compact, folds_of, model_switch, notice, recap, report_block,
-    rewind, shell_folds, stats_line, tool, tool_rows, user_shell,
+    CardCols, CardKind, Folds, MessageRows, compact, folds_of, model_switch, notice, recap,
+    report_block, rewind, shell_folds, stats_line, tool, tool_rows, user_shell,
 };
 mod steps;
 
@@ -96,8 +96,7 @@ pub(crate) struct CardRegion {
     pub(crate) kind: CardKind,
     pub(crate) card_start: usize,
     pub(crate) card_rows: usize,
-    /// 行内芯片的 `(首行起始列, 末行结束列)`；`None` 表示整行宽。
-    pub(crate) card_cols: Option<(u16, u16)>,
+    pub(crate) card_cols: CardCols,
     pub(crate) clickable: bool,
 }
 
@@ -204,6 +203,7 @@ fn legacy(
                 expanded: folds.of(region.section),
                 offset: region.card.offset,
                 rows: region.card.rows,
+                cols: region.cols,
                 clickable: region.clickable,
             })
             .collect(),
@@ -299,7 +299,7 @@ impl Builder<'_> {
                 },
                 card_start: start + offset,
                 card_rows: height,
-                card_cols: None,
+                card_cols: CardCols::Full,
                 clickable: true,
             });
         }
@@ -374,7 +374,7 @@ impl Builder<'_> {
                 },
                 card_start: start + offset,
                 card_rows: height,
-                card_cols: None,
+                card_cols: CardCols::Full,
                 clickable: true,
             });
         }
@@ -470,7 +470,7 @@ impl Builder<'_> {
                     },
                     card_start: start.saturating_add(offset),
                     card_rows: 1,
-                    card_cols: None,
+                    card_cols: CardCols::Full,
                     clickable: true,
                 });
             }
@@ -484,7 +484,7 @@ impl Builder<'_> {
                     },
                     card_start: start,
                     card_rows: block_rows,
-                    card_cols: None,
+                    card_cols: CardCols::Full,
                     clickable: true,
                 });
             }
@@ -530,6 +530,7 @@ impl Builder<'_> {
                         expanded: folds.of(region.section),
                         offset: region.offset,
                         rows: region.rows,
+                        cols: region.cols,
                         clickable: region.clickable,
                     })
                     .collect(),
@@ -545,7 +546,7 @@ impl Builder<'_> {
                 },
                 card_start: entry_start + span.offset,
                 card_rows: span.rows,
-                card_cols: None,
+                card_cols: span.cols.clone(),
                 clickable: span.clickable,
             });
         }
@@ -717,7 +718,10 @@ impl Builder<'_> {
                             },
                             card_start: start.saturating_add(span.offset),
                             card_rows: visible_rows,
-                            card_cols: Some((span.cols.0, last_col)),
+                            card_cols: CardCols::Chip {
+                                first: span.cols.0,
+                                last: last_col,
+                            },
                             clickable: true,
                         });
                     }
@@ -732,7 +736,7 @@ impl Builder<'_> {
                     },
                     card_start: start.saturating_add(hint_offset),
                     card_rows: 1,
-                    card_cols: None,
+                    card_cols: CardCols::Full,
                     clickable: true,
                 });
             }
@@ -769,7 +773,7 @@ impl Builder<'_> {
                 },
                 card_start: block_start + span.offset,
                 card_rows,
-                card_cols: None,
+                card_cols: span.cols.clone(),
                 clickable: span.clickable,
             });
         }
@@ -908,7 +912,7 @@ impl Builder<'_> {
                     },
                     card_start: start.saturating_add(offset),
                     card_rows: rows,
-                    card_cols: None,
+                    card_cols: CardCols::Full,
                     clickable: true,
                 });
             }

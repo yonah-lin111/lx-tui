@@ -11,6 +11,7 @@ use crate::ui::widgets::scrollbar;
 
 use super::chat_bar;
 use super::history;
+use super::history::CardCols;
 use super::history_rect;
 use super::task;
 use crate::ui::PaneCache;
@@ -415,28 +416,31 @@ pub(crate) fn card_at_source(
     let snapshot = cache.snapshot_ready_source(width, source);
     let content_row = scroll.saturating_add(usize::from(row.saturating_sub(body.y)));
     let rel_col = column.saturating_sub(body.x);
-    let region = snapshot.cards.iter().find(|region| {
-        if content_row < region.card_start
-            || content_row >= region.card_start.saturating_add(region.card_rows)
-        {
-            return false;
-        }
-        let Some((first_col, last_col)) = region.card_cols else {
-            return true;
-        };
-        if rel_col >= width {
-            return false;
-        }
-        if region.card_rows <= 1 {
-            rel_col >= first_col && rel_col < last_col.min(width)
-        } else if content_row == region.card_start {
-            rel_col >= first_col && rel_col < width
-        } else if content_row + 1 == region.card_start.saturating_add(region.card_rows) {
-            rel_col >= history::USER_INDENT && rel_col < last_col.min(width)
-        } else {
-            rel_col >= history::USER_INDENT && rel_col < width
-        }
-    })?;
+    let region =
+        snapshot.cards.iter().find(|region| {
+            if content_row < region.card_start
+                || content_row >= region.card_start.saturating_add(region.card_rows)
+            {
+                return false;
+            }
+            let offset = content_row.saturating_sub(region.card_start);
+            match &region.card_cols {
+                CardCols::Full => true,
+                CardCols::Chip { first, last } => {
+                    rel_col < width
+                        && chip_cols(*first, *last, offset, region.card_rows).is_some_and(
+                            |(first_col, last_col)| {
+                                rel_col >= first_col && rel_col < last_col.min(width)
+                            },
+                        )
+                }
+                CardCols::Text(cols) => cols.get(offset).and_then(Option::as_ref).is_some_and(
+                    |(first_col, last_col)| {
+                        rel_col >= *first_col && rel_col < (*last_col).min(width)
+                    },
+                ),
+            }
+        })?;
     // 与 `layout(body, ...)` 同一套矩形口径：内容行 0 落在 body 顶。
     //
     // 裁剪必须在 **usize** 空间完成：`card_start` 是内容行绝对下标，直接交给
@@ -465,7 +469,28 @@ pub(crate) fn card_at_source(
             )
         })
     };
-    let card = clip(region.card_start, region.card_rows, region.card_cols)?;
+    let card = match &region.card_cols {
+        // 逐行文字：命中矩形就是被点那一行的文字区间（高度 1）。
+        CardCols::Text(cols) => {
+            let offset = content_row.saturating_sub(region.card_start);
+            let (first_col, last_col) = cols.get(offset).and_then(Option::as_ref).copied()?;
+            let x0 = first_col.min(width);
+            let x1 = last_col.min(width);
+            (x1 > x0).then(|| {
+                Rect::new(
+                    body.x.saturating_add(x0),
+                    body.y
+                        .saturating_add(history::rows_to_u16(content_row.saturating_sub(scroll))),
+                    x1 - x0,
+                    1,
+                )
+            })?
+        }
+        CardCols::Chip { first, last } => {
+            clip(region.card_start, region.card_rows, Some((*first, *last)))?
+        }
+        CardCols::Full => clip(region.card_start, region.card_rows, None)?,
+    };
     let mut kind = region.kind.clone();
     // Thinking 是唯一按 message_index 携带目标的卡片；ready 快照的旧下标可能
     // 已指向另一条消息。用条目 ID 解析当前下标，解析失败就当作未命中。
@@ -489,6 +514,20 @@ pub(crate) fn card_at_source(
         clickable: region.clickable,
     };
     card.contains((column, row).into()).then_some(hit)
+}
+
+/// 折叠芯片的列区间：单行直接取区间；多行按首行/中间行/末行分别处理。
+fn chip_cols(first: u16, last: u16, offset: usize, rows: usize) -> Option<(u16, u16)> {
+    if rows <= 1 {
+        return Some((first, last));
+    }
+    if offset == 0 {
+        Some((first, u16::MAX))
+    } else if offset + 1 == rows {
+        Some((history::USER_INDENT, last))
+    } else {
+        Some((history::USER_INDENT, u16::MAX))
+    }
 }
 
 /// 鼠标下的可交互块（工具卡片 / 思考块）的整块屏幕矩形。

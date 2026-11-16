@@ -7,7 +7,7 @@ use super::super::cache::{
 };
 use super::super::paint::{BlockPaint, BlockSource, GroupSlot};
 use super::super::source::HistorySource;
-use super::super::{CardKind, folds_of, tool};
+use super::super::{CardCols, CardKind, folds_of, tool};
 use super::{CardRegion, SnapBlock, legacy};
 
 impl super::Builder<'_> {
@@ -113,7 +113,7 @@ impl super::Builder<'_> {
                                 kind: CardKind::AgentLink { agent_id },
                                 card_start: block_start.saturating_add(offset.saturating_sub(1)),
                                 card_rows: 1,
-                                card_cols: None,
+                                card_cols: CardCols::Full,
                                 clickable: true,
                             });
                         }
@@ -152,7 +152,7 @@ impl super::Builder<'_> {
                         kind: CardKind::AgentLink { agent_id },
                         card_start: block_start.saturating_add(offset),
                         card_rows: 1,
-                        card_cols: None,
+                        card_cols: CardCols::Full,
                         clickable: true,
                     });
                 }
@@ -181,7 +181,7 @@ impl super::Builder<'_> {
                     },
                     card_start: block_start,
                     card_rows: block.rows,
-                    card_cols: None,
+                    card_cols: CardCols::Full,
                     clickable: true,
                 });
             }
