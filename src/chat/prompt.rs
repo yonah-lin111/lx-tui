@@ -25,7 +25,7 @@ use crate::platform::EnvironmentFacts;
 pub const AGENT_NAME: &str = "lx";
 
 /// 系统提示词版本：提示词语义变化时必须递增（测试与日志据此判定版本）。
-pub const PROMPT_VERSION: &str = "lx-14";
+pub const PROMPT_VERSION: &str = "lx-15";
 
 /// 环境快照单字段最大字符数（转义前）。
 const MAX_FIELD_CHARS: usize = 240;
@@ -113,6 +113,17 @@ You are lx, a terminal coding agent working inside the user's workspace. You are
 - Do not paste large file contents or raw tool payloads back to the user; reference the path instead.
 - End with a brief, concrete next step when one is natural (run the app, commit, add tests). State clearly what you could not verify.
 
+# Sandbox
+
+- Model-issued `exec_command` calls run inside the session sandbox, and the built-in `write` / `edit` tools obey the same mode.
+- `workspace-write` is the default: the workspace, the temporary directory, and configured extra roots are writable. `read-only` blocks all writes; `danger-full-access` disables the sandbox.
+- When the sandbox blocks a command, first try a path inside the writable roots or a non-network approach. If the task genuinely needs more, call `exec_command` with `sandbox_permissions: \"require_escalated\"` and a short user-facing `justification`; include `prefix_rule` only when the same prefix should not prompt again this session.
+- `with_additional_permissions` grants extra network or writable roots to that one command only.
+- After a sandbox denial lx may ask the user to retry without the sandbox. If the user declines, you receive the original failure; report it honestly and do not retry the same command.
+- User `!` commands, MCP servers, and terminal panes are not sandboxed. Do not assume otherwise.
+- User rules under `rules/*.rules` can let a matching command skip the sandbox.
+- If escalation is disabled, do not request it; report the boundary instead.
+
 # Subagents
 
 Eight tools coordinate subagents: `spawn_agent`, `send_input`, `interrupt_agent`, `resume_agent`, `wait_agent`, `close_agent`, `list_agents`, and `cancel_agent_input`.
@@ -141,7 +152,7 @@ You can call these tools: `read`, `search`, `web_search`, `edit`, `write`, `exec
 - Every relative path resolves against the workspace root (the session working directory, fixed when the turn started); absolute paths are used as given.
 - `read` returns numbered lines plus a `file_version` token; `search` returns sorted path/line matches.
 - `edit` applies an exact context patch to one or more files; `write` replaces a whole file.
-- `exec_command` runs a shell command without an approval prompt. When the command is still running after the yield window it returns `process_state: running` and a `session_id`; reuse that id with `write_stdin` (empty `chars` reads more output, non-empty writes stdin, `terminate: true` stops it) instead of starting a second copy. `tty: true` uses a dedicated pseudo terminal.
+- `exec_command` runs a shell command inside the session sandbox (escalation requires user approval). When the command is still running after the yield window it returns `process_state: running` and a `session_id`; reuse that id with `write_stdin` (empty `chars` reads more output, non-empty writes stdin, `terminate: true` stops it) instead of starting a second copy. `tty: true` uses a dedicated pseudo terminal.
 - A non-zero exit code means the command ran and failed: report it, do not pretend it succeeded.
 - `update_plan` replaces the whole plan; keep at most one step `in_progress` and mark steps `completed` only when they really are.
 - `curr_time` returns the real-time UTC clock (`YYYY-MM-DD HH:MM:SS UTC`).
@@ -273,10 +284,61 @@ impl EnvironmentSnapshot {
                 escape_field(&cwd.display().to_string())
             ));
         }
-        lines.push(
-            "<filesystem>file tools use UTF-8 text; shell commands are not sandboxed</filesystem>"
-                .to_string(),
-        );
+        lines.push("<filesystem>file tools use UTF-8 text</filesystem>".to_string());
+        let settings = crate::config::sandbox::load_sandbox_or_default();
+        let anchor = cwd.or(workspace);
+        let plan =
+            anchor.map(|anchor| crate::chat::sandbox::SandboxPlan::for_turn(&settings, anchor));
+        match plan {
+            Some(plan) => {
+                lines.push(format!(
+                    "<sandbox mode=\"{}\" platform=\"{}\" network=\"{}\"{}>",
+                    plan.mode.as_str(),
+                    plan.support.as_str(),
+                    if plan.network_access {
+                        "allowed"
+                    } else {
+                        "blocked"
+                    },
+                    if plan.writable_roots.is_empty() {
+                        " /"
+                    } else {
+                        ""
+                    }
+                ));
+                for root in plan.writable_roots.iter().take(8) {
+                    lines.push(format!(
+                        "  <writable_root>{}</writable_root>",
+                        escape_field(&root.display().to_string())
+                    ));
+                }
+                if plan.writable_roots.len() > 8 {
+                    lines.push(format!(
+                        "  <truncated omitted=\"{}\"/>",
+                        plan.writable_roots.len() - 8
+                    ));
+                }
+                for protected in plan.protected.iter().take(8) {
+                    lines.push(format!(
+                        "  <protected>{}</protected>",
+                        escape_field(&protected.display().to_string())
+                    ));
+                }
+                lines.push("</sandbox>".to_string());
+            }
+            None => {
+                lines.push(format!(
+                    "<sandbox mode=\"{}\" platform=\"{}\" network=\"{}\" />",
+                    settings.mode.as_str(),
+                    crate::platform::sandbox::support().as_str(),
+                    if settings.network_access {
+                        "allowed"
+                    } else {
+                        "blocked"
+                    }
+                ));
+            }
+        }
         if background.is_empty() {
             lines.push("<background_tasks>none</background_tasks>".to_string());
         } else {
@@ -557,7 +619,7 @@ mod tests {
                 "提示缺少 ask 规则 `{needle}`"
             );
         }
-        assert_eq!(PROMPT_VERSION, "lx-14");
+        assert_eq!(PROMPT_VERSION, "lx-15");
         assert!(
             LX_SYSTEM_PROMPT.contains("You can call these tools:")
                 && LX_SYSTEM_PROMPT.contains("`ask`"),
@@ -691,9 +753,20 @@ mod tests {
     /// 上限对齐 codex 的结构化提示（约 21 KB），但 lx 只保留自身能力，
     /// 预算压到 12 KiB；再加环境快照与后台任务说明仍不超过 16 KiB。
     #[test]
+    fn snapshot_reports_the_sandbox_mode_and_roots() {
+        let dir = std::env::temp_dir().join(format!("lx-prompt-sandbox-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).expect("temp dir");
+        let snapshot = environment_snapshot(&facts(), Some(&dir), Some(&dir), &[]);
+        assert!(snapshot.contains("<sandbox mode="), "{snapshot}");
+        assert!(!snapshot.contains("shell commands are not sandboxed"));
+        assert!(snapshot.contains("</sandbox>"));
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[test]
     fn prompt_stays_small() {
         assert!(
-            LX_SYSTEM_PROMPT.len() < 12_288,
+            LX_SYSTEM_PROMPT.len() < 13_500,
             "系统提示过大：{} 字节",
             LX_SYSTEM_PROMPT.len()
         );
