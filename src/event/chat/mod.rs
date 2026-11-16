@@ -351,6 +351,7 @@ pub fn pump_chat_streams(
                         | Effect::CancelChatStream { .. }
                         | Effect::AnswerAsk { .. }
                         | Effect::AnswerApproval { .. }
+                        | Effect::PersistSandboxMode { .. }
                         | Effect::Btw(_)
                 )
         })
@@ -371,6 +372,7 @@ pub fn pump_chat_streams(
                         | Effect::CancelChatStream { .. }
                         | Effect::AnswerAsk { .. }
                         | Effect::AnswerApproval { .. }
+                        | Effect::PersistSandboxMode { .. }
                         | Effect::Btw(_)
                 )
         })
@@ -403,6 +405,24 @@ pub fn pump_chat_streams(
             } => {
                 changed |= approval::answer(state, streams, &key, &call_id, decision);
             }
+            Effect::PersistSandboxMode {
+                workspace,
+                session_id,
+                mode,
+            } => match persistence.database() {
+                Some(database) => {
+                    if let Err(error) = database.set_session_sandbox_mode(
+                        &workspace,
+                        &session_id,
+                        mode.map(|mode| mode.as_str()),
+                    ) {
+                        tracing::warn!(%error, "failed to persist session sandbox mode");
+                    }
+                }
+                None => {
+                    tracing::warn!("sandbox mode not persisted: database unavailable");
+                }
+            },
             Effect::Btw(effect) => {
                 changed |= btw::apply_effect(state, streams, persistence, sender, effect);
             }

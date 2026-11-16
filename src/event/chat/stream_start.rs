@@ -284,6 +284,16 @@ pub(super) fn start_stream(
     streams
         .mutation_users
         .insert(key.clone(), mutation_user.clone());
+    // 新会话的首条消息（或 `/permission` 在会话落库前选择）：把 pending 覆盖写入会话列。
+    if let Some(mode) = state
+        .pane_anywhere(key.pane)
+        .and_then(|pane| pane.lx.sandbox_mode)
+        && let Some(database) = persistence.database()
+        && let Err(error) =
+            database.set_session_sandbox_mode(&session_key, &key.session, Some(mode.as_str()))
+    {
+        tracing::warn!(%error, "failed to persist pending sandbox mode");
+    }
     // 运行实例：同一聊天会话跨轮复用同一进程管理器；本轮执行上下文独立。
     let turn_slot = key.session.clone();
     let Some(runtime) = streams.runtime_for(prepared.cwd.clone(), &turn_slot) else {
@@ -304,7 +314,16 @@ pub(super) fn start_stream(
         .with_recorder(std::sync::Arc::new(recorder))
         .with_reads(reads)
         .with_sandbox(crate::chat::sandbox::SandboxPlan::for_turn(
-            &crate::config::sandbox::load_sandbox_or_default(),
+            &{
+                let mut settings = crate::config::sandbox::load_sandbox_or_default();
+                if let Some(mode) = state
+                    .pane_anywhere(key.pane)
+                    .and_then(|pane| pane.lx.sandbox_mode)
+                {
+                    settings.mode = mode;
+                }
+                settings
+            },
             &prepared.cwd,
         ))
         .with_image_support(frozen.supports_image_input)

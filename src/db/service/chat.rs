@@ -530,6 +530,14 @@ impl Persistence {
         let changed = update::on_session_loaded_full(
             state, pane, session_id, &messages, &notices, revision, selection,
         );
+        // 恢复会话的沙箱覆盖（NULL = 跟随全局默认）。
+        let sandbox_mode = self
+            .with_db(|db| db.session_sandbox_mode(workspace, session_id))
+            .flatten()
+            .and_then(|text| crate::config::sandbox::SandboxMode::parse(&text));
+        if let Some(target) = state.pane_mut_anywhere(pane) {
+            target.lx.sandbox_mode = sandbox_mode;
+        }
         // 恢复会话后立即列出子 agent：回投后填充 `pane.lx.agents.runs`，
         // 并把其中 `running` / `idle` / `blocked` 的实例同步进 `@` 面板。
         state.effects.push(Effect::ListSubagents {

@@ -105,11 +105,13 @@ pub enum SlashCommand {
     Mcp,
     /// `/btw [prompt]`：针对当前主 QA 的只读旁路问答。
     Btw,
+    /// `/permission`（别名 `/permissions`、`/sandbox`）：切换本会话沙箱模式。
+    Permission,
 }
 
 impl SlashCommand {
     /// 全部命令（固定顺序）。
-    pub const ALL: [SlashCommand; 12] = [
+    pub const ALL: [SlashCommand; 13] = [
         SlashCommand::Model,
         SlashCommand::Resume,
         SlashCommand::Fork,
@@ -122,6 +124,7 @@ impl SlashCommand {
         SlashCommand::Connect,
         SlashCommand::Mcp,
         SlashCommand::Btw,
+        SlashCommand::Permission,
     ];
 
     /// 命令名（不含 `/`）。
@@ -139,6 +142,7 @@ impl SlashCommand {
             Self::Connect => "connect",
             Self::Mcp => "mcp",
             Self::Btw => "btw",
+            Self::Permission => "permission",
         }
     }
 
@@ -157,6 +161,7 @@ impl SlashCommand {
             Self::Connect => &[],
             Self::Mcp => &["mcps"],
             Self::Btw => &[],
+            Self::Permission => &["permissions", "sandbox"],
         }
     }
 
@@ -175,6 +180,7 @@ impl SlashCommand {
             Self::Connect => "/connect",
             Self::Mcp => "/mcp",
             Self::Btw => "/btw",
+            Self::Permission => "/permission",
         }
     }
 
@@ -193,6 +199,7 @@ impl SlashCommand {
             Self::Connect => crate::ui::text::LX_CONNECT_COMMAND_DESC,
             Self::Mcp => crate::ui::text::LX_MCP_COMMAND_DESC,
             Self::Btw => crate::ui::text::LX_BTW_COMMAND_DESC,
+            Self::Permission => "Switch the sandbox mode for this session",
         }
     }
 
@@ -217,6 +224,63 @@ impl SlashCommand {
             Self::Btw => Some(crate::ui::text::LX_BTW_ARG_HINT),
             _ => None,
         }
+    }
+}
+
+/// `/permission` 的固定候选（顺序与设计一致）。
+pub fn permission_candidates() -> [(
+    crate::config::sandbox::SandboxMode,
+    &'static str,
+    &'static str,
+); 3] {
+    use crate::config::sandbox::SandboxMode;
+    [
+        (
+            SandboxMode::ReadOnly,
+            "Read only",
+            "Model can read, shell cannot write",
+        ),
+        (
+            SandboxMode::WorkspaceWrite,
+            "Workspace write",
+            "Only the workspace is writable (default)",
+        ),
+        (
+            SandboxMode::DangerFullAccess,
+            "Danger full access",
+            "No sandbox at all",
+        ),
+    ]
+}
+
+/// `/permission` 选择面板。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PermissionPicker {
+    /// 全局默认模式（用于展示来源）。
+    pub global: crate::config::sandbox::SandboxMode,
+    /// 当前会话覆盖；None = 跟随全局默认。
+    pub session: Option<crate::config::sandbox::SandboxMode>,
+    /// 高亮与滚动窗口。
+    pub window: PanelWindow,
+}
+
+impl PermissionPicker {
+    /// 当前生效模式。
+    pub fn effective(&self) -> crate::config::sandbox::SandboxMode {
+        self.session.unwrap_or(self.global)
+    }
+
+    /// 当前高亮模式。
+    pub fn active_mode(&self) -> crate::config::sandbox::SandboxMode {
+        permission_candidates()
+            .get(self.window.active)
+            .map(|(mode, _, _)| *mode)
+            .unwrap_or(self.effective())
+    }
+
+    /// 候选数量。
+    pub fn candidate_count(&self) -> usize {
+        permission_candidates().len()
     }
 }
 
@@ -680,6 +744,8 @@ pub enum SlashPanel {
     Rewind(Box<crate::app::state::lx::rewind::RewindPanel>),
     /// `/mcp` 窗格级 MCP 管理面板。
     Mcp(Box<crate::app::state::lx::mcp::McpPanel>),
+    /// `/permission` 沙箱模式选择。
+    Permission(Box<PermissionPicker>),
 }
 
 impl SlashPanel {
@@ -761,6 +827,7 @@ impl SlashPanel {
             // 动作集按目标类型不同（普通轮次四项 / compact 两项），以面板为准。
             Self::Rewind(panel) => panel.len(),
             Self::Mcp(panel) => panel.filtered.len(),
+            Self::Permission(picker) => picker.candidate_count(),
         }
     }
 
@@ -773,6 +840,7 @@ impl SlashPanel {
             Self::Fork(panel) => panel.window,
             Self::Rewind(panel) => panel.window,
             Self::Mcp(panel) => panel.window,
+            Self::Permission(picker) => picker.window,
         }
     }
 
@@ -797,6 +865,12 @@ impl SlashPanel {
             Self::Fork(_) => None,
             Self::Rewind(_) => None,
             Self::Mcp(_) => None,
+            Self::Permission(picker) => {
+                let effective = picker.effective();
+                permission_candidates()
+                    .iter()
+                    .position(|(mode, _, _)| *mode == effective)
+            }
         }
     }
 
@@ -811,6 +885,7 @@ impl SlashPanel {
             Self::Fork(panel) => panel.window = window,
             Self::Rewind(panel) => panel.window = window,
             Self::Mcp(panel) => panel.window = window,
+            Self::Permission(picker) => picker.window = window,
         }
     }
 

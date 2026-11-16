@@ -9,6 +9,7 @@ mod detail_commands;
 mod fork;
 mod history;
 mod model_switch;
+mod permission;
 mod process_cards;
 mod prompt_history;
 mod rewind;

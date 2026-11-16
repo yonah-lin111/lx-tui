@@ -76,6 +76,23 @@ pub fn open_model_picker(state: &mut AppState, pane: PaneId) -> bool {
     true
 }
 
+/// `/permission` 打开沙箱模式选择面板。
+pub fn open_permission_picker(state: &mut AppState, pane: PaneId) -> bool {
+    use crate::app::state::lx::slash::{PanelWindow, PermissionPicker};
+    let Some(target) = state.pane_mut_anywhere(pane) else {
+        return false;
+    };
+    let global = crate::config::sandbox::load_sandbox_or_default().mode;
+    let session = target.lx.sandbox_mode;
+    let picker = PermissionPicker {
+        global,
+        session,
+        window: PanelWindow::new(0),
+    };
+    target.lx.slash = Some(SlashPanel::Permission(Box::new(picker)));
+    true
+}
+
 /// `/resume` 打开历史面板（事件层提供当前工作区分页列表）。
 pub fn open_history(state: &mut AppState, pane: PaneId) -> bool {
     let Some(target) = state.pane_mut_anywhere(pane) else {
@@ -113,6 +130,39 @@ pub fn apply_slash_enter(state: &mut AppState, pane: PaneId) -> bool {
     };
     match panel {
         SlashPanel::Commands { .. } => accept_slash_command(state, pane),
+        SlashPanel::Permission(picker) => {
+            let mode = picker.active_mode();
+            let workspace = state.chat_session_key_for_pane(pane);
+            let session_id = state
+                .pane_anywhere(pane)
+                .and_then(|target| target.lx.chat.session_id.clone());
+            let Some(target) = state.pane_mut_anywhere(pane) else {
+                return true;
+            };
+            target.lx.slash = None;
+            target.lx.sandbox_mode = Some(mode);
+            target.lx.approvals.clear();
+            if let (Some(workspace), Some(session_id)) = (workspace, session_id) {
+                state
+                    .effects
+                    .push(crate::app::effects::Effect::PersistSandboxMode {
+                        workspace,
+                        session_id,
+                        mode: Some(mode),
+                    });
+            }
+            super::super::show_lx_toast(
+                state,
+                pane,
+                crate::app::toast::Toast::new(
+                    crate::app::toast::ToastKind::Default,
+                    format!("Sandbox mode: {mode} (applies to the next turn)"),
+                    Some(pane),
+                    std::time::Instant::now(),
+                ),
+            );
+            true
+        }
         SlashPanel::Model(picker) => match &picker.stage {
             ModelPickerStage::Models => {
                 // 高亮位置是**过滤视图**内的位置，采纳时换算回原始候选索引。
@@ -602,6 +652,7 @@ pub fn apply_slash_command(state: &mut AppState, pane: PaneId, command: SlashCom
         SlashCommand::Subagents => super::session::open_subagents_page(state, pane),
         SlashCommand::Connect => super::connect::open_connect_panel(state, pane),
         SlashCommand::Mcp => super::mcp::open_mcp_panel(state, pane),
+        SlashCommand::Permission => open_permission_picker(state, pane),
         SlashCommand::Rename => {
             if let Some(target) = state.pane_mut_anywhere(pane)
                 && let Some(prefix) = command.echo_prefix()

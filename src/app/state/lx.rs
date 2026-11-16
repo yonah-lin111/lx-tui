@@ -191,6 +191,8 @@ pub struct Lx {
     pub ask: Option<AskState>,
     /// 待处理的沙箱审批（FIFO，队首展示）。
     pub approvals: std::collections::VecDeque<ApprovalState>,
+    /// 本会话的沙箱模式覆盖（None = 跟随全局默认）。
+    pub sandbox_mode: Option<crate::config::sandbox::SandboxMode>,
     /// 旁路问答（`/btw`）视图缓存：按主 QA 隔离的线程与独立草稿。
     pub btw: LxBtw,
     /// 纯文本缓冲：不识别 shell 前缀、不弹 markdown/提及/斜杠面板。
@@ -324,6 +326,7 @@ impl Lx {
             task: None,
             ask: None,
             approvals: std::collections::VecDeque::new(),
+            sandbox_mode: None,
             btw: LxBtw::default(),
             plain,
             no_shell: false,

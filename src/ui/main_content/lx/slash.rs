@@ -79,6 +79,18 @@ pub(super) fn items<'a>(
                 })
                 .collect()
         }
+        SlashPanel::Permission(picker) => crate::app::state::lx::slash::permission_candidates()
+            .iter()
+            .map(|(mode, label, description)| CommandItem::Inline {
+                label,
+                preview: description,
+                tag: if *mode == picker.global {
+                    text::SLASH_TAG_BUILTIN
+                } else {
+                    ""
+                },
+            })
+            .collect(),
         SlashPanel::History(history) => {
             if history.loading {
                 return vec![CommandItem::Inline {
@@ -221,6 +233,7 @@ fn is_placeholder(panel: &crate::app::state::SlashPanel) -> bool {
         crate::app::state::SlashPanel::Commands { .. } => false,
         crate::app::state::SlashPanel::Rewind(_) => false,
         crate::app::state::SlashPanel::Mcp(p) => p.entries.is_empty() || p.is_filter_empty(),
+        crate::app::state::SlashPanel::Permission(_) => false,
     }
 }
 
@@ -261,6 +274,9 @@ fn view<'a>(
             picker.window,
             text::LX_SLASH_PANEL_FOOTER,
         ),
+        SlashPanel::Permission(picker) => {
+            ("Sandbox mode", picker.window, text::LX_SLASH_PANEL_FOOTER)
+        }
         SlashPanel::History(history) => (
             text::LX_HISTORY_PANEL_TITLE,
             history.window,
