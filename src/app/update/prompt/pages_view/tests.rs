@@ -846,4 +846,3 @@ fn workspace_switch_preserves_target_pages_scroll() {
         "恢复页视图只钳制，不 reveal 选中页"
     );
 }
-

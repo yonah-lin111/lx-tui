@@ -769,12 +769,7 @@ fn mouse_right_click_prompt_tree_on_todo_opens_todo_menu() {
                 area.x + 2,
                 row,
             )?;
-            let kind = state
-                .prompt_owner()
-                .prompt_panel
-                .rows()
-                .get(index)?
-                .kind;
+            let kind = state.prompt_owner().prompt_panel.rows().get(index)?.kind;
             matches!(
                 kind,
                 crate::app::prompt::PromptRowKind::Item

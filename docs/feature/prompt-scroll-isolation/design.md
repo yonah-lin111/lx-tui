@@ -1,7 +1,7 @@
 # Prompt 容器滚动隔离 — 设计
 
 - 建议分支：`fix/prompt-scroll-isolation`
-- 状态：**需求边界已确认（Grill Me 收口完成），待用户审核后实现**
+- 状态：**已实现，待用户手工验收（2026-11-16）**
 - 关联文档：`docs/feature/prompt-scroll-guard/`、`docs/feature/prompt-per-workspace/`、`docs/feature/prompt-header-and-recent-pages/`
 
 ## 1. 背景与目标

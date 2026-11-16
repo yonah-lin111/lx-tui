@@ -387,4 +387,3 @@ fn recent_auto_sync_does_not_scroll_to_active_row() {
         "自动同步不得为让选中项可见而滚动"
     );
 }
-

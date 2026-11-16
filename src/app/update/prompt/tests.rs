@@ -148,16 +148,9 @@ fn background_parked_refresh_preserves_scroll() {
         "前提：树已刷新为同一页的新正文"
     );
 
-    let draft = state.workspaces[0]
-        .prompt
-        .as_ref()
-        .expect("停泊草稿仍在");
+    let draft = state.workspaces[0].prompt.as_ref().expect("停泊草稿仍在");
     assert_eq!(draft.editor.text(), new_content.as_str(), "后台刷新正文");
-    assert_eq!(
-        draft.editor.scroll(),
-        5,
-        "同一页后台正文刷新保留视口滚动"
-    );
+    assert_eq!(draft.editor.scroll(), 5, "同一页后台正文刷新保留视口滚动");
 }
 
 #[test]
@@ -2667,8 +2660,7 @@ fn tree_roundtrip_keeps_scroll_when_cursor_out_of_view() {
 fn show_prompt_tree_preserves_scroll_without_revealing_selection() {
     let mut state = demo_state();
     state.workspaces[0].prompt_panel.mode = PromptMode::Editor;
-    state.workspaces[0].prompt_panel.editing =
-        Some(crate::app::prompt::PromptEditing::Item(10));
+    state.workspaces[0].prompt_panel.editing = Some(crate::app::prompt::PromptEditing::Item(10));
     state.workspaces[0].prompt_panel.scroll = 0;
 
     show_prompt_tree(&mut state);
