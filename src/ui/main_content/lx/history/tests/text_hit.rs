@@ -431,6 +431,94 @@ fn user_paste_chip_keeps_existing_chip_hit() {
 }
 
 #[test]
+fn agents_history_shares_the_same_text_hit() {
+    let record = crate::db::chat::SubagentRecord {
+        agent_id: "a1".into(),
+        nickname: None,
+        agent_path: "/root/agent".into(),
+        child_session_id: "s1".into(),
+        parent_session_id: "p".into(),
+        spawn_message_id: None,
+        role: crate::chat::agent::AgentRole::Explorer,
+        model_provider: String::new(),
+        model_id: String::new(),
+        model_variant: None,
+        status: "running".into(),
+        title: "agent detail".into(),
+        created_at_ms: 0,
+        completed_at_ms: None,
+        report_json: None,
+        report_delivered: false,
+    };
+    let mut run = crate::app::state::SubagentRun::from_record(&record);
+    run.loaded = true;
+    run.chat.messages.push(ChatMessageView {
+        sequence: 0,
+        id: "m-1".into(),
+        role: "assistant".into(),
+        status: "complete".into(),
+        turn_index: 0,
+        kind: "chat".into(),
+        shell: None,
+        steps: vec![
+            AssistantStepView::Part {
+                position: 0,
+                part: reasoning_part("thinking about it"),
+            },
+            AssistantStepView::Part {
+                position: 1,
+                part: text_part("answer"),
+            },
+        ],
+        model_label: None,
+        error_code: None,
+        input_tokens: None,
+        output_tokens: None,
+        cache_read_tokens: None,
+        duration_ms: None,
+        reports: Vec::new(),
+        attachments: Vec::new(),
+    });
+    let mut lx = Lx::new();
+    lx.task = Some(crate::app::state::TaskPage {
+        tab: crate::app::state::TaskTab::Agents,
+        ..Default::default()
+    });
+    lx.agents.runs.push(run);
+
+    let area = Rect::new(0, 0, 80, 24);
+    let output =
+        crate::ui::main_content::lx::task::task_output_rect(area, &lx).expect("Agents output rect");
+    let mut cache = PaneCache::default();
+    let mut header_hit = None;
+    for row in output.y..output.bottom() {
+        if let Some(target) = crate::ui::main_content::lx::history_hit::task_agents_card_target_at(
+            area,
+            &lx,
+            output.x + 4,
+            row,
+            &mut cache,
+        ) {
+            header_hit = Some((row, target));
+            break;
+        }
+    }
+    let (row, target) = header_hit.expect("Agents thinking header hit");
+    assert!(matches!(target, CardTarget::Thinking { .. }));
+    assert_eq!(
+        crate::ui::main_content::lx::history_hit::task_agents_card_target_at(
+            area,
+            &lx,
+            output.right().saturating_sub(1),
+            row,
+            &mut cache,
+        ),
+        None,
+        "Agents row tail must not toggle folding"
+    );
+}
+
+#[test]
 fn btw_history_shares_the_same_text_hit() {
     let mut lx = Lx::new();
     lx.task = Some(crate::app::state::TaskPage {
