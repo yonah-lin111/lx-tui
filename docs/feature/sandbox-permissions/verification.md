@@ -32,7 +32,7 @@
 
 - TUI 交互：审批 strip 的 `y/a/n`、`r/a/n`、`Esc`、窄窗格换行；`/permission` 面板视觉效果。测试覆盖了状态与键位，但未在真实终端中人工确认。
 - 设置页的 `Open folder` 实际弹出 Finder；只验证了路由与资源契约。
-- Linux bubblewrap：只做了参数构造单测（Linux 条件编译），未在云主机 `8.138.213.110` 实测。
+- Linux bubblewrap：只做了参数构造单测（Linux 条件编译），未在云主机 `8.138.213.110` 实测。已知限制：`--bind` 要求写根事先存在（不存在的额外写根会被跳过并告警）；deny glob 在启动时扫描现有匹配项，之后新建的匹配文件不会被回溯遮盖。
 - Windows：仅有文件工具闸门；无进程沙箱（设计决策）。
 - 子 agent 的审批尚未转发到父窗格：当前子 agent 的 `ApproveSandbox` 返回稳定失败，不阻塞主 agent；与设计 §8.3 的 FIFO 队列仍有差距。
 - B/C 的真机端到端（模型真实调用 `additional_permissions`、真实规则文件影响下一轮命令）未跑；组件级与决策级测试已覆盖。
