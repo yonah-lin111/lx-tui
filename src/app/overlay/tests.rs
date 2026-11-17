@@ -232,6 +232,8 @@ fn overlay_kind_reports_variant() {
         },
     });
     assert_eq!(trust.kind(), OverlayKind::TrustWorkspace);
+    let new_agent = Overlay::NewAgent(NewAgentDialog::new(0, Vec::new()));
+    assert_eq!(new_agent.kind(), OverlayKind::NewAgent);
 }
 
 /// 构造测试对话框；条目按参数生成，源工作区为 0。

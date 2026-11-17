@@ -50,9 +50,11 @@ pub(crate) fn handle_mouse_down_left(
     // 新的一次按下意味着上一轮 Down→Up 已结束：拖出窗口丢失 Up 后残留的手势与滚动条状态在此清空。
     state.prompt_drag = None;
     state.todo_drag = None;
+    state.drag_autoscroll = None;
     state.connect_scroll_drag = None;
     state.referenced_search_scroll_drag = None;
     state.referenced_menu_scroll_drag = None;
+    state.new_agent_scroll_drag = None;
     state.task_scroll_drag = None;
     state.task_list_scroll_drag = None;
     state.task_agents_scroll_drag = None;
@@ -136,6 +138,23 @@ pub(crate) fn handle_mouse_down_left(
         // 失效工作区确认弹窗的滚动条同上：命中轨道/thumb 时滚动列表视口后再走浮层点击。
         if confirm_close_scrollbar_press(state, *screen, mouse.column, mouse.row) {
             *dirty = true;
+            return;
+        }
+        // New agent 弹窗滚动条：命中轨道/thumb 时滚动视口后再走浮层点击。
+        if let Some(Overlay::NewAgent(dialog)) = state.overlay.as_ref()
+            && let Some(shell) = ui::overlay::new_agent_shell(*screen, dialog.agents.len())
+            && let Some(bar) = ui::overlay::new_agent_scrollbar(&shell, dialog)
+            && bar.track.contains((mouse.column, mouse.row).into())
+        {
+            match ui::widgets::scrollbar::thumb_grab_offset(&bar, mouse.row) {
+                Some(grab) => state.new_agent_scroll_drag = Some(grab),
+                None => {
+                    let offset = ui::widgets::scrollbar::offset_from_track_row(&bar, mouse.row);
+                    if update::set_new_agent_viewport(state, offset, bar.visible) {
+                        *dirty = true;
+                    }
+                }
+            }
             return;
         }
         let was_menu = matches!(state.overlay, Some(Overlay::Menu(_)));
@@ -688,7 +707,18 @@ pub(crate) fn handle_mouse_down_right(
     dirty: &mut bool,
 ) {
     let Geometry { rects, view, .. } = geometry;
-    if state.todo_drag.take().is_some() {
+    let canceled_drag = state.todo_drag.take().is_some()
+        | state.prompt_drag.take().is_some()
+        | state.workspace_drag.take().is_some()
+        | state.workspace_history.drag.take().is_some()
+        | state.drag_autoscroll.take().is_some()
+        | state.selection_autoscroll.take().is_some()
+        | state.lx_selection_autoscroll.take().is_some();
+    state.workspace_dragging = false;
+    state.workspace_drag_moved = false;
+    state.workspace_history.dragging = false;
+    state.workspace_history.drag_moved = false;
+    if canceled_drag {
         *dirty = true;
     }
     // macOS 部分终端/触控板会将 `Ctrl + 左键点击` 映射为带 CONTROL 修饰键的右键事件：

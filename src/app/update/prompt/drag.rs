@@ -150,6 +150,7 @@ fn prompt_drop_mark(state: &AppState, drag: &PromptDrag, hit: PromptDropHit) -> 
 ///
 /// 返回是否产生可见变化（供事件层置脏）。
 pub fn finish_prompt_drag(state: &mut AppState, hit: PromptDropHit) -> bool {
+    state.drag_autoscroll = None;
     let Some(drag) = state.prompt_drag.take() else {
         return false;
     };

@@ -60,6 +60,13 @@ fn user_visible_labels_are_clean_ascii() {
         MENU_AGENT_REMOVE_TITLE,
         MENU_CONFIRM_REMOVE_TITLE,
         MENU_AGENT_CLOSE,
+        MENU_AGENT_NEW,
+        MENU_TITLE_AGENTS,
+        NEW_AGENT_TITLE,
+        NEW_AGENT_SEARCH,
+        NEW_AGENT_EMPTY,
+        NEW_AGENT_NO_MATCH,
+        TOAST_AGENT_LAUNCH_FAILED,
         AGENT_TITLE_PLACEHOLDER,
         CONFIRM_DELETE_PAGE_TITLE,
         RENAME_PROMPT_TITLE,
@@ -199,6 +206,13 @@ fn agent_location_and_menu_labels_are_stable() {
     assert_eq!(MENU_AGENT_REMOVE_TITLE, "Remove title");
     assert_eq!(MENU_CONFIRM_REMOVE_TITLE, "Confirm remove title");
     assert_eq!(MENU_AGENT_CLOSE, "Close");
+    assert_eq!(MENU_AGENT_NEW, "New agent");
+    assert_eq!(MENU_TITLE_AGENTS, "Agents");
+    assert_eq!(NEW_AGENT_TITLE, "New agent");
+    assert_eq!(NEW_AGENT_SEARCH, "search agents");
+    assert_eq!(NEW_AGENT_EMPTY, "No coding agents installed");
+    assert_eq!(NEW_AGENT_NO_MATCH, "No matching agents");
+    assert_eq!(TOAST_AGENT_LAUNCH_FAILED, "Failed to start agent");
     assert_eq!(RENAME_AGENT_TITLE, "Edit title");
     assert_eq!(AGENT_TITLE_PLACEHOLDER, "title or pick recent");
 }
@@ -556,9 +570,11 @@ fn action_words_stay_spelled_out_while_keys_use_symbols() {
     assert!(BUTTON_CANCEL.contains("esc"));
     for hint in [
         BUTTON_SAVE,
+        BUTTON_CREATE,
         BUTTON_CONFIRM,
         BUTTON_CONFIRM_DELETE,
         BUTTON_OPEN,
+        BUTTON_TRUST,
     ] {
         assert!(hint.contains(key::ENTER), "按键用 ↵: {hint}");
         assert!(!hint.to_lowercase().contains("enter"), "不用全拼: {hint}");

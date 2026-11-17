@@ -1,5 +1,6 @@
 //! 鼠标事件分派：按下、拖拽、释放、滚轮与移动悬停。
 
+pub(crate) mod autoscroll;
 pub(crate) mod drag;
 pub(crate) mod hit;
 pub(crate) mod hover;

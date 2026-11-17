@@ -365,12 +365,12 @@ function renderSubagentList() {
   const list = document.getElementById('subagent-role-list');
   while (list.firstChild) { list.removeChild(list.firstChild); }
   for (const [name, base] of subagentBaselines.entries()) {
-    const row = element('button', 'nav-item' + (!subagentsNew && subagentsSelectedName === name ? ' selected' : ''));
+    const row = domEl('button', 'nav-item' + (!subagentsNew && subagentsSelectedName === name ? ' selected' : ''));
     row.type = 'button';
     row.dataset.name = name;
     row.classList.toggle('dirty', isSubagentRoleDirty(name));
-    const title = element('span', 'nav-name', name);
-    const tag = element('span', 'tag', base.isBuiltin ? 'built-in · ' + base.baseRole : 'custom · ' + base.baseRole);
+    const title = domEl('span', 'nav-name', name);
+    const tag = domEl('span', 'tag', base.isBuiltin ? 'built-in · ' + base.baseRole : 'custom · ' + base.baseRole);
     row.appendChild(title);
     row.appendChild(tag);
     row.onclick = () => selectSubagentRole(name);

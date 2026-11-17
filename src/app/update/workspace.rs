@@ -1,11 +1,12 @@
 //! 工作区与标签页生命周期、路径切换与工作区级 Prompt 打开。
 
 use std::path::{Path, PathBuf};
+use std::time::{Duration, Instant};
 
 use crate::app::overlay::{NewWorkspace, Overlay, TextInput};
 use crate::app::state::{
-    AppState, Pane, PaneKind, PaneView, Tab, Workspace, current_workspace_identity, home_dir,
-    unique_workspace_name, workspace_label,
+    AppState, Pane, PaneKind, PaneView, PendingAgentLaunch, Tab, Workspace,
+    current_workspace_identity, home_dir, unique_workspace_name, workspace_label,
 };
 use crate::tiling::PaneId;
 
@@ -177,13 +178,19 @@ pub fn create_workspace(state: &mut AppState) {
 /// 在目标工作区追加终端标签并激活：初始 cwd 为工作区固定根路径，直接进入终端视图；
 /// PTY 由事件循环按状态对齐启动。
 pub fn create_terminal_in_workspace(state: &mut AppState, target: usize) {
+    let _ = create_terminal_tab(state, target);
+}
+
+/// 新建终端标签的共用主体：返回新标签根窗格。
+///
+/// 继承工作区最近模型与 `@` 候选快照，切到目标工作区并聚焦窗格；
+/// 目标工作区不存在返回 None。
+fn create_terminal_tab(state: &mut AppState, target: usize) -> Option<PaneId> {
     let inherited = state
         .workspaces
         .get(target)
         .and_then(|workspace| workspace.lx_model.clone());
-    let Some(workspace) = state.workspaces.get_mut(target) else {
-        return;
-    };
+    let workspace = state.workspaces.get_mut(target)?;
     let mut tab = Tab::single_terminal();
     if let Some(id) = tab.root_pane()
         && let Some(pane) = tab.pane_mut(id)
@@ -202,6 +209,7 @@ pub fn create_terminal_in_workspace(state: &mut AppState, target: usize) {
     {
         pane.copy_mention_inventory_from(source);
     }
+    let created = tab.root_pane();
     workspace.tabs.push(tab);
     workspace.active_tab = workspace.tabs.len().saturating_sub(1);
     let from = state.active_workspace;
@@ -211,6 +219,24 @@ pub fn create_terminal_in_workspace(state: &mut AppState, target: usize) {
     }
     clear_selection(state);
     super::focus::focus_panes(state);
+    created
+}
+
+/// 新 Agent 标签的启动延时：给 shell 留出启动与首屏提示时间，避免命令插进初始化过程。
+pub const AGENT_LAUNCH_DELAY: Duration = Duration::from_millis(150);
+
+/// 新建终端标签并在 PTY 就绪后写入 Agent 启动命令；返回新标签根窗格。
+///
+/// 这里只登记待写入命令，真正的字节由事件循环在 PTY 对齐后写入。
+pub fn create_agent_tab(state: &mut AppState, workspace: usize, command: &str) -> Option<PaneId> {
+    let pane = create_terminal_tab(state, workspace)?;
+    let target = state.pane_mut_anywhere(pane)?;
+    target.agent = None;
+    target.pending_launch = Some(PendingAgentLaunch {
+        command: command.to_string(),
+        at: Instant::now() + AGENT_LAUNCH_DELAY,
+    });
+    Some(pane)
 }
 
 /// 打开 Prompt 并绑定工作区路径：切换激活目标工作区，展开并聚焦；
@@ -476,12 +502,21 @@ pub(crate) fn close_tab(state: &mut AppState, workspace: usize, tab: usize) {
     if workspace_state.tabs.len() <= 1 || tab >= workspace_state.tabs.len() {
         return;
     }
+    let removed_panes = workspace_state.tabs[tab].layout.pane_ids();
     workspace_state.tabs.remove(tab);
     let last = workspace_state.tabs.len() - 1;
     if tab < workspace_state.active_tab {
         workspace_state.active_tab -= 1;
     } else if tab == workspace_state.active_tab {
         workspace_state.active_tab = workspace_state.active_tab.min(last);
+    }
+    if state
+        .toast
+        .as_ref()
+        .and_then(|toast| toast.anchor)
+        .is_some_and(|anchor| removed_panes.contains(&anchor))
+    {
+        state.toast = None;
     }
     if workspace == state.active_workspace {
         state.agent_hover = None;
@@ -520,5 +555,12 @@ pub(crate) fn close_pane(state: &mut AppState, workspace: usize, tab: usize, pan
         .is_some_and(|plan| plan.pane == pane)
     {
         state.selection_autoscroll = None;
+    }
+    super::selection::clear_lx_selection_for(state, pane);
+    if state
+        .lx_selection_autoscroll
+        .is_some_and(|plan| plan.pane == pane)
+    {
+        state.lx_selection_autoscroll = None;
     }
 }

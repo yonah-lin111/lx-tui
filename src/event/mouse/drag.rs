@@ -7,7 +7,7 @@ use crossterm::event::MouseEvent;
 use ratatui::layout::Direction;
 
 use crate::app::overlay::Overlay;
-use crate::app::state::AppState;
+use crate::app::state::{AppState, DragScrollSurface, WorkspaceMode};
 use crate::app::update;
 use crate::config::Config;
 use crate::pty::PtySession;
@@ -138,6 +138,18 @@ pub(crate) fn handle_mouse_drag(
                 if update::set_referenced_menu_viewport(state, offset, layout.visible()) {
                     *dirty = true;
                 }
+            }
+        }
+        return;
+    }
+    if let Some(grab) = state.new_agent_scroll_drag {
+        if let Some(Overlay::NewAgent(dialog)) = state.overlay.as_ref()
+            && let Some(shell) = ui::overlay::new_agent_shell(geometry.screen, dialog.agents.len())
+            && let Some(bar) = ui::overlay::new_agent_scrollbar(&shell, dialog)
+        {
+            let offset = ui::widgets::scrollbar::offset_from_drag_row(&bar, mouse.row, grab);
+            if update::set_new_agent_viewport(state, offset, bar.visible) {
+                *dirty = true;
             }
         }
         return;
@@ -379,32 +391,67 @@ pub(crate) fn handle_mouse_drag(
         return;
     }
     if state.workspace_drag.is_some() {
+        if state.overlay.is_some() || state.workspace_history.mode != WorkspaceMode::Active {
+            update::end_workspace_drag(state);
+            *dirty = true;
+            return;
+        }
         if let Some(target) = ui::workspace_drop_index(view, state, mouse.row)
             && update::drag_workspace_to(state, target)
         {
             *dirty = true;
         }
+        super::autoscroll::arm_drag(
+            state,
+            DragScrollSurface::WorkspaceActive,
+            view,
+            (mouse.column, mouse.row),
+            Instant::now(),
+        );
         return;
     }
     if state.workspace_history.drag.is_some() {
+        if state.overlay.is_some() || state.workspace_history.mode != WorkspaceMode::History {
+            update::end_workspace_history_drag(state);
+            *dirty = true;
+            return;
+        }
         if let Some(target) = ui::workspace_history_drop_index(view, state, mouse.row)
             && update::drag_workspace_history_to(state, target)
         {
             *dirty = true;
         }
+        super::autoscroll::arm_drag(
+            state,
+            DragScrollSurface::WorkspaceHistory,
+            view,
+            (mouse.column, mouse.row),
+            Instant::now(),
+        );
         return;
     }
     // prompt 列表拖拽：必须在窗格转发之前 return，否则拖动会被当成终端选区/输入。
     if state.prompt_drag.is_some() {
-        let hit = ui::right_panel::prompt::tree::drop_hit_at(
-            ui::right_panel::prompt::frame::prompt_main_rect(view.right_panel, state),
-            &state.prompt_owner().prompt_panel,
-            mouse.column,
-            mouse.row,
-        );
+        if state.overlay.is_some()
+            || !update::prompt_panel_active(state)
+            || !update::prompt_tree_mode(state)
+        {
+            state.prompt_drag = None;
+            state.drag_autoscroll = None;
+            *dirty = true;
+            return;
+        }
+        let hit = super::autoscroll::prompt_drag_hit(view, state, mouse.column, mouse.row);
         if update::drag_prompt_to(state, hit) {
             *dirty = true;
         }
+        super::autoscroll::arm_drag(
+            state,
+            DragScrollSurface::PromptTree,
+            view,
+            (mouse.column, mouse.row),
+            Instant::now(),
+        );
         return;
     }
     if state.todo_drag.is_some() {
@@ -413,13 +460,21 @@ pub(crate) fn handle_mouse_drag(
             || state.right_tab != crate::app::state::RightTab::Todo
         {
             state.todo_drag = None;
+            state.drag_autoscroll = None;
             *dirty = true;
             return;
         }
-        let hit = ui::right_panel::todo::row_at(view.right_panel, state, mouse.column, mouse.row);
+        let hit = super::autoscroll::todo_drag_hit(view, state, mouse.column, mouse.row);
         if update::drag_todo_to(state, hit) {
             *dirty = true;
         }
+        super::autoscroll::arm_drag(
+            state,
+            DragScrollSurface::Todo,
+            view,
+            (mouse.column, mouse.row),
+            Instant::now(),
+        );
         return;
     }
     // 没有本地选区时，鼠标上报模式的应用自己处理拖拽（对齐 herdr）。
@@ -487,7 +542,8 @@ pub(crate) fn handle_mouse_drag(
         }
         return;
     }
-    // lx 主内容区选区拖拽：按当前选区粒度更新终点到鼠标所在的内容行与正文列坐标。
+    // lx 主内容区选区拖拽：按当前选区粒度更新终点到鼠标所在的内容行与正文列坐标；
+    // 指针进入上下检测区时登记自动滚动，滚动后按新视口继续延伸选区。
     if let Some(selection) = state.lx_selection
         && selection.is_dragging()
     {
@@ -497,20 +553,26 @@ pub(crate) fn handle_mouse_drag(
             return;
         };
         let inner = tiling::pane_inner_rect(*rect);
-        if let Some((start, end)) = state.pane_anywhere(pane).and_then(|target| {
-            let geom = ui::main_content::lx::content_geom(inner, &target.lx, cache.pane(pane))?;
-            let cell = geom.cell(mouse.column, mouse.row);
-            Some(ui::main_content::lx::unit_cell_range(
-                inner,
-                &target.lx,
-                cell,
-                unit,
-                cache.pane(pane),
-            ))
-        }) {
-            update::drag_lx_selection_range(state, pane, start, end);
-            *dirty = true;
-        }
+        let Some(target) = state.pane_anywhere(pane) else {
+            return;
+        };
+        let Some(geom) = ui::main_content::lx::content_geom(inner, &target.lx, cache.pane(pane))
+        else {
+            return;
+        };
+        let cell = geom.cell(mouse.column, mouse.row);
+        let (start, end) =
+            ui::main_content::lx::unit_cell_range(inner, &target.lx, cell, unit, cache.pane(pane));
+        update::drag_lx_selection_range(state, pane, start, end);
+        super::autoscroll::arm_lx_selection(
+            state,
+            pane,
+            geometry,
+            cache,
+            (mouse.column, mouse.row),
+            Instant::now(),
+        );
+        *dirty = true;
         return;
     }
     if state.prompt.is_preview_dragging() {
@@ -592,6 +654,10 @@ pub(crate) fn handle_mouse_up_left(
         *dirty = true;
         return;
     }
+    if state.new_agent_scroll_drag.take().is_some() {
+        *dirty = true;
+        return;
+    }
     // 失效工作区确认弹窗的滚动条拖拽：必须在 `overlay.is_some()` 早退之前收尾，
     // 否则 thumb 释放后拖拽标记会永久残留。
     if let Some(Overlay::ConfirmClose(confirm)) = state.overlay.as_mut()
@@ -604,12 +670,16 @@ pub(crate) fn handle_mouse_up_left(
     // prompt 列表拖拽：必须在任何更早的早退之前收尾，保证一次 Down 必被一次 Up 清理；
     // 未跨行时这里走点击/双击语义（折叠与打开编辑器都发生在松开）。
     if state.prompt_drag.is_some() {
-        let hit = ui::right_panel::prompt::tree::drop_hit_at(
-            ui::right_panel::prompt::frame::prompt_main_rect(view.right_panel, state),
-            &state.prompt_owner().prompt_panel,
-            mouse.column,
-            mouse.row,
-        );
+        if state.overlay.is_some()
+            || !update::prompt_panel_active(state)
+            || !update::prompt_tree_mode(state)
+        {
+            state.prompt_drag = None;
+            state.drag_autoscroll = None;
+            *dirty = true;
+            return;
+        }
+        let hit = super::autoscroll::prompt_drag_hit(view, state, mouse.column, mouse.row);
         update::finish_prompt_drag(state, hit);
         *dirty = true;
         return;
@@ -620,12 +690,23 @@ pub(crate) fn handle_mouse_up_left(
             || state.right_tab != crate::app::state::RightTab::Todo
         {
             state.todo_drag = None;
+            state.drag_autoscroll = None;
             *dirty = true;
             return;
         }
         if update::finish_todo_drag(state) {
             *dirty = true;
         }
+        return;
+    }
+    if state.workspace_drag.is_some() {
+        update::end_workspace_drag(state);
+        *dirty = true;
+        return;
+    }
+    if state.workspace_history.drag.is_some() {
+        update::end_workspace_history_drag(state);
+        *dirty = true;
         return;
     }
     if state.overlay_input_drag {
@@ -710,16 +791,6 @@ pub(crate) fn handle_mouse_up_left(
     }
     if state.resizing_pane.is_some() {
         update::end_pane_resize(state);
-        *dirty = true;
-        return;
-    }
-    if state.workspace_drag.is_some() {
-        update::end_workspace_drag(state);
-        *dirty = true;
-        return;
-    }
-    if state.workspace_history.drag.is_some() {
-        update::end_workspace_history_drag(state);
         *dirty = true;
         return;
     }

@@ -229,6 +229,7 @@ pub fn drag_workspace_history_to(state: &mut AppState, target_visible_row: usize
 
 /// 结束历史列表拖拽；真正移动过时持久化全局顺序。
 pub fn end_workspace_history_drag(state: &mut AppState) {
+    state.drag_autoscroll = None;
     let persist = state.workspace_history.drag_moved;
     state.workspace_history.drag = None;
     state.workspace_history.dragging = false;

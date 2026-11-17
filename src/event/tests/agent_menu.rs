@@ -102,7 +102,11 @@ fn right_click_agent_first_row_opens_agent_menu() {
         &state,
         expected,
         anchor,
-        &[MenuCommand::EditAgentTitle, MenuCommand::CloseAgent],
+        &[
+            MenuCommand::NewAgent,
+            MenuCommand::EditAgentTitle,
+            MenuCommand::CloseAgent,
+        ],
     );
 }
 
@@ -127,7 +131,11 @@ fn right_click_agent_second_row_opens_same_agent_menu() {
         &state,
         expected,
         anchor,
-        &[MenuCommand::EditAgentTitle, MenuCommand::CloseAgent],
+        &[
+            MenuCommand::NewAgent,
+            MenuCommand::EditAgentTitle,
+            MenuCommand::CloseAgent,
+        ],
     );
 }
 
@@ -163,14 +171,18 @@ fn right_click_terminal_agent_opens_agent_menu_not_pane_menu() {
         &state,
         expected,
         anchor,
-        &[MenuCommand::EditAgentTitle, MenuCommand::CloseAgent],
+        &[
+            MenuCommand::NewAgent,
+            MenuCommand::EditAgentTitle,
+            MenuCommand::CloseAgent,
+        ],
     );
     assert_eq!(state.active_workspace, 0);
     assert_eq!(state.active_workspace().active_tab, 0);
 }
 
 #[test]
-fn terminal_agent_in_sole_pane_offers_only_edit_title() {
+fn terminal_agent_in_sole_pane_offers_edit_title_and_close() {
     let mut state = demo_terminal();
     let pane = mount_agent(&mut state, AgentKind::Codex, AgentState::Idle);
     let config = Config::default();
@@ -190,7 +202,16 @@ fn terminal_agent_in_sole_pane_offers_only_edit_title() {
     );
 
     assert!(dirty);
-    assert_agent_menu(&state, expected, anchor, &[MenuCommand::EditAgentTitle]);
+    assert_agent_menu(
+        &state,
+        expected,
+        anchor,
+        &[
+            MenuCommand::NewAgent,
+            MenuCommand::EditAgentTitle,
+            MenuCommand::CloseAgent,
+        ],
+    );
 }
 
 #[test]
@@ -291,7 +312,16 @@ fn wheel_scroll_then_hover_and_right_click_use_new_row_offset() {
         anchor.1,
     );
     assert!(dirty);
-    assert_agent_menu(&state, expected, anchor, &[MenuCommand::EditAgentTitle]);
+    assert_agent_menu(
+        &state,
+        expected,
+        anchor,
+        &[
+            MenuCommand::NewAgent,
+            MenuCommand::EditAgentTitle,
+            MenuCommand::CloseAgent,
+        ],
+    );
 }
 
 // ===== Agents 标题弹窗与 Open prompt（鼠标路径） =====
@@ -590,6 +620,7 @@ fn save_commits_title_and_menu_offers_open_prompt() {
         entry,
         anchor,
         &[
+            MenuCommand::NewAgent,
             MenuCommand::EditAgentTitle,
             MenuCommand::OpenPrompt,
             MenuCommand::RemoveAgentTitle,
@@ -656,6 +687,7 @@ fn open_prompt_menu_item_opens_bound_page_in_prompt_panel() {
     assert_eq!(
         menu_commands(&fixture.state),
         vec![
+            MenuCommand::NewAgent,
             MenuCommand::EditAgentTitle,
             MenuCommand::OpenPrompt,
             MenuCommand::RemoveAgentTitle,
@@ -686,6 +718,7 @@ fn unbind_recent_menu_item_clears_title_and_binding() {
     assert_eq!(
         menu_commands(&fixture.state),
         vec![
+            MenuCommand::NewAgent,
             MenuCommand::EditAgentTitle,
             MenuCommand::OpenPrompt,
             MenuCommand::RemoveAgentTitle,
@@ -725,6 +758,409 @@ fn unbind_recent_menu_item_clears_title_and_binding() {
         &fixture.state,
         entry,
         anchor,
-        &[MenuCommand::EditAgentTitle, MenuCommand::CloseAgent],
+        &[
+            MenuCommand::NewAgent,
+            MenuCommand::EditAgentTitle,
+            MenuCommand::CloseAgent,
+        ],
     );
+}
+
+/// New agent 场景：终端视图、注入的安装列表与固定屏幕几何。
+fn new_agent_state() -> (AppState, Config, Geometry) {
+    let mut state = demo_terminal();
+    state.installed_agents = vec![
+        crate::detect::InstalledAgent {
+            kind: AgentKind::Claude,
+            command: "claude".to_string(),
+        },
+        crate::detect::InstalledAgent {
+            kind: AgentKind::OpenCode,
+            command: "opencode2".to_string(),
+        },
+    ];
+    let config = Config::default();
+    let geo = geometry(&state, &config, Rect::new(0, 0, 100, 24));
+    (state, config, geo)
+}
+
+fn new_agent_shell(state: &AppState, geo: &Geometry) -> ui::widgets::modal::ModalShell {
+    let Some(Overlay::NewAgent(dialog)) = state.overlay.as_ref() else {
+        panic!("expected new agent dialog");
+    };
+    ui::overlay::new_agent_shell(geo.screen, dialog.agents.len()).expect("new agent shell")
+}
+
+/// 扫描弹窗内容区，取命中指定候选行的真实屏幕坐标。
+fn new_agent_row_point(state: &AppState, geo: &Geometry, index: usize) -> (u16, u16) {
+    let shell = new_agent_shell(state, geo);
+    let Some(Overlay::NewAgent(dialog)) = state.overlay.as_ref() else {
+        panic!("expected new agent dialog");
+    };
+    for row in shell.inner.y..shell.inner.bottom() {
+        for column in shell.inner.x..shell.inner.right() {
+            if ui::overlay::new_agent_row_at(&shell, dialog, column, row) == Some(index) {
+                return (column, row);
+            }
+        }
+    }
+    panic!("new agent row {index} not hit");
+}
+
+/// 扫描弹窗按钮行，取指定按钮的真实屏幕坐标。
+fn new_agent_button_point(
+    state: &AppState,
+    geo: &Geometry,
+    button: ui::overlay::NewAgentButton,
+) -> (u16, u16) {
+    let shell = new_agent_shell(state, geo);
+    for row in shell.inner.y..shell.inner.bottom() {
+        for column in shell.inner.x..shell.inner.right() {
+            if ui::overlay::new_agent_button_at(&shell, column, row) == Some(button) {
+                return (column, row);
+            }
+        }
+    }
+    panic!("new agent button {button:?} not hit");
+}
+
+fn send_click(state: &mut AppState, geo: &Geometry, config: &Config, point: (u16, u16)) -> bool {
+    send_mouse(
+        state,
+        geo,
+        config,
+        MouseEventKind::Down(MouseButton::Left),
+        point.0,
+        point.1,
+    )
+}
+
+#[test]
+fn right_click_agents_blank_menu_opens_new_agent_dialog() {
+    let (mut state, config, geo) = new_agent_state();
+    let agents = agents_section(&geo, &state);
+    let anchor = (agents.x, agents.y);
+    assert!(
+        send_mouse(
+            &mut state,
+            &geo,
+            &config,
+            MouseEventKind::Down(MouseButton::Right),
+            anchor.0,
+            anchor.1,
+        ),
+        "右键空白区域必须置脏"
+    );
+    assert_eq!(menu_commands(&state), vec![MenuCommand::NewAgent]);
+
+    let item = {
+        let Some(Overlay::Menu(menu)) = state.overlay.as_ref() else {
+            panic!("expected agents blank menu");
+        };
+        ui::overlay::menu_layout(&state, geo.screen, menu).item_rects[0]
+    };
+    assert!(send_click(&mut state, &geo, &config, (item.x + 1, item.y)));
+
+    let Some(Overlay::NewAgent(dialog)) = state.overlay.as_ref() else {
+        panic!("New agent 菜单项必须打开弹窗");
+    };
+    assert_eq!(dialog.workspace, 0);
+    assert_eq!(
+        dialog.agents, state.installed_agents,
+        "弹窗候选来自本次右键刷新的安装快照"
+    );
+}
+
+#[test]
+fn right_click_agents_scrollbar_track_does_not_open_menu() {
+    let (mut state, config, geo) = new_agent_state();
+    create_agent_tabs(&mut state, 20);
+    let bar = ui::agent_scrollbar(&geo.view, &state).expect("agents scrollbar");
+    let point = (bar.track.x, bar.track.y + 1);
+    assert!(ui::agents_section_at(&geo.view, &state, point.0, point.1));
+
+    send_mouse(
+        &mut state,
+        &geo,
+        &config,
+        MouseEventKind::Down(MouseButton::Right),
+        point.0,
+        point.1,
+    );
+
+    assert!(state.overlay.is_none(), "滚动条列不属于空白区域");
+}
+
+#[test]
+fn new_agent_dialog_click_selects_and_double_click_creates() {
+    let (mut state, config, geo) = new_agent_state();
+    update::open_new_agent_dialog(&mut state, 0);
+    let point = new_agent_row_point(&state, &geo, 1);
+
+    assert!(send_click(&mut state, &geo, &config, point));
+    match state.overlay.as_ref() {
+        Some(Overlay::NewAgent(dialog)) => assert_eq!(dialog.selected, 1),
+        _ => panic!("单击只选中，不创建"),
+    }
+    assert_eq!(state.workspaces[0].tabs.len(), 1);
+
+    assert!(send_click(&mut state, &geo, &config, point));
+    assert!(state.overlay.is_none(), "双击立即创建并关闭弹窗");
+    assert_eq!(state.workspaces[0].tabs.len(), 2);
+    let pane = state.active_tab().layout.focus();
+    assert_eq!(
+        state
+            .pane_anywhere(pane)
+            .and_then(|target| target.pending_launch.as_ref())
+            .map(|launch| launch.command.as_str()),
+        Some("opencode2")
+    );
+}
+
+#[test]
+fn new_agent_dialog_buttons_create_or_cancel() {
+    let (mut state, config, geo) = new_agent_state();
+    update::open_new_agent_dialog(&mut state, 0);
+    let cancel = new_agent_button_point(&state, &geo, ui::overlay::NewAgentButton::Cancel);
+    send_click(&mut state, &geo, &config, cancel);
+    assert!(state.overlay.is_none(), "Cancel 关闭弹窗");
+    assert_eq!(state.workspaces[0].tabs.len(), 1);
+
+    update::open_new_agent_dialog(&mut state, 0);
+    let create = new_agent_button_point(&state, &geo, ui::overlay::NewAgentButton::Create);
+    send_click(&mut state, &geo, &config, create);
+    assert!(state.overlay.is_none());
+    assert_eq!(state.workspaces[0].tabs.len(), 2);
+}
+
+#[test]
+fn click_outside_new_agent_dialog_closes_it_without_creating() {
+    let (mut state, config, geo) = new_agent_state();
+    update::open_new_agent_dialog(&mut state, 0);
+    let shell = new_agent_shell(&state, &geo);
+    let outside = (shell.area.x.saturating_sub(1), shell.area.y);
+
+    send_click(&mut state, &geo, &config, outside);
+
+    assert!(state.overlay.is_none());
+    assert_eq!(state.workspaces[0].tabs.len(), 1);
+}
+
+#[test]
+fn new_agent_search_supports_click_drag_copy_esc_clear_and_wheel_scroll() {
+    use crossterm::event::{KeyCode, KeyEvent};
+
+    let (mut state, config, _) = new_agent_state();
+    state.installed_agents = crate::detect::ALL_AGENT_KINDS
+        .iter()
+        .map(|kind| crate::detect::InstalledAgent {
+            kind: *kind,
+            command: ui::text::agent_label(*kind).to_string(),
+        })
+        .collect();
+    let short_geo = geometry(&state, &config, Rect::new(0, 0, 100, 11));
+    update::open_new_agent_dialog(&mut state, 0);
+
+    let mut sessions = HashMap::new();
+    let mut cache = ui::RenderCache::default();
+    let mut dirty = false;
+
+    for ch in ['c', 'l', 'a', 'u'] {
+        handle_terminal_event(
+            TerminalEvent::Key(KeyEvent::new(KeyCode::Char(ch), KeyModifiers::NONE)),
+            &mut state,
+            &mut sessions,
+            &short_geo,
+            &config,
+            &mut cache,
+            &mut dirty,
+        );
+    }
+    let shell = new_agent_shell(&state, &short_geo);
+    let search = ui::overlay::new_agent_search_rect(&shell).expect("search rect");
+    // 从前缀 `> ` 右侧第 0 个字符拖选到末尾，命中框内文本选区。
+    handle_terminal_event(
+        mouse(
+            MouseEventKind::Down(MouseButton::Left),
+            search.x + 2,
+            search.y,
+        ),
+        &mut state,
+        &mut sessions,
+        &short_geo,
+        &config,
+        &mut cache,
+        &mut dirty,
+    );
+    handle_terminal_event(
+        mouse(
+            MouseEventKind::Drag(MouseButton::Left),
+            search.x + 6,
+            search.y,
+        ),
+        &mut state,
+        &mut sessions,
+        &short_geo,
+        &config,
+        &mut cache,
+        &mut dirty,
+    );
+    handle_terminal_event(
+        mouse(
+            MouseEventKind::Up(MouseButton::Left),
+            search.x + 6,
+            search.y,
+        ),
+        &mut state,
+        &mut sessions,
+        &short_geo,
+        &config,
+        &mut cache,
+        &mut dirty,
+    );
+    assert!(
+        state
+            .overlay
+            .as_ref()
+            .and_then(|o| o.input())
+            .is_some_and(|i| i.has_selection()),
+        "鼠标拖拽在搜索框建立选区"
+    );
+
+    // Ctrl+C 有选区时复制选区而不是清空搜索框。
+    handle_terminal_event(
+        TerminalEvent::Key(KeyEvent::new(KeyCode::Char('c'), KeyModifiers::CONTROL)),
+        &mut state,
+        &mut sessions,
+        &short_geo,
+        &config,
+        &mut cache,
+        &mut dirty,
+    );
+    assert_eq!(
+        state
+            .overlay
+            .as_ref()
+            .and_then(|o| o.input())
+            .map(|i| i.text()),
+        Some("clau"),
+        "有选区时 Ctrl+C 不得清空输入"
+    );
+
+    // 首次 Esc 先清选区并保留弹窗；再按 Esc 才关闭弹窗。
+    handle_terminal_event(
+        TerminalEvent::Key(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE)),
+        &mut state,
+        &mut sessions,
+        &short_geo,
+        &config,
+        &mut cache,
+        &mut dirty,
+    );
+    assert!(matches!(state.overlay, Some(Overlay::NewAgent(_))));
+    assert!(
+        !state
+            .overlay
+            .as_ref()
+            .and_then(|o| o.input())
+            .is_some_and(|i| i.has_selection()),
+        "首次 Esc 清除搜索框选区"
+    );
+
+    // 清空过滤词后在短屏（8 项、可视 3 行）内用滚轮向下滚视口。
+    handle_terminal_event(
+        TerminalEvent::Key(KeyEvent::new(KeyCode::Char('c'), KeyModifiers::CONTROL)),
+        &mut state,
+        &mut sessions,
+        &short_geo,
+        &config,
+        &mut cache,
+        &mut dirty,
+    );
+    handle_terminal_event(
+        mouse(
+            MouseEventKind::ScrollDown,
+            shell.area.x + 2,
+            shell.area.y + 4,
+        ),
+        &mut state,
+        &mut sessions,
+        &short_geo,
+        &config,
+        &mut cache,
+        &mut dirty,
+    );
+    match state.overlay.as_ref() {
+        Some(Overlay::NewAgent(dialog)) => {
+            assert_eq!(dialog.selected, 0, "滚轮不移动高亮");
+            assert!(dialog.viewport.is_some_and(|v| v > 0), "滚轮滚动弹窗视口");
+        }
+        other => panic!("expected NewAgent, got {other:?}"),
+    }
+
+    handle_terminal_event(
+        TerminalEvent::Key(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE)),
+        &mut state,
+        &mut sessions,
+        &short_geo,
+        &config,
+        &mut cache,
+        &mut dirty,
+    );
+    assert!(state.overlay.is_none());
+}
+
+#[test]
+fn enter_in_new_agent_reveals_newly_created_tab_when_tab_bar_overflows() {
+    use crossterm::event::{KeyCode, KeyEvent};
+
+    let (mut state, config, _) = new_agent_state();
+    for _ in 0..16 {
+        update::create_tab(&mut state);
+    }
+    update::switch_tab(&mut state, 0);
+    state.tab_scroll = 0;
+    let narrow_geo = geometry(&state, &config, Rect::new(0, 0, 80, 24));
+    update::open_new_agent_dialog(&mut state, 0);
+
+    let mut sessions = HashMap::new();
+    let mut cache = ui::RenderCache::default();
+    let mut dirty = false;
+    handle_terminal_event(
+        TerminalEvent::Key(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE)),
+        &mut state,
+        &mut sessions,
+        &narrow_geo,
+        &config,
+        &mut cache,
+        &mut dirty,
+    );
+    assert!(state.overlay.is_none());
+    assert!(
+        state.tab_scroll > 0,
+        "键盘 Enter 新建 Agent 标签后自动滚入标签栏可视区"
+    );
+}
+
+#[test]
+fn right_click_agents_scrollbar_does_not_open_menu_or_rescan_path() {
+    let (mut state, config, geo) = new_agent_state();
+    create_agent_tabs(&mut state, 20);
+    // 写入哨兵：右键滚动条轨道不应触发无用的 PATH 扫描。
+    let sentinel = vec![crate::detect::InstalledAgent {
+        kind: AgentKind::Kimi,
+        command: "sentinel-kimi".into(),
+    }];
+    state.installed_agents = sentinel.clone();
+    let bar = ui::agent_scrollbar(&geo.view, &state).expect("scrollbar");
+    assert!(!send_mouse(
+        &mut state,
+        &geo,
+        &config,
+        MouseEventKind::Down(MouseButton::Right),
+        bar.track.x,
+        bar.track.y,
+    ));
+    assert!(state.overlay.is_none());
+    assert_eq!(state.installed_agents, sentinel);
 }

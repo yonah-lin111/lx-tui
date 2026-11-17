@@ -22,6 +22,8 @@ pub fn open_prompt_item_menu(state: &mut AppState, item_id: i64, anchor: (u16, u
     {
         return;
     }
+    state.prompt_drag = None;
+    state.drag_autoscroll = None;
     let commands = vec![
         MenuCommand::EditPrompt,
         MenuCommand::RenamePrompt,
@@ -49,6 +51,8 @@ pub fn open_prompt_temp_menu(state: &mut AppState, temp_id: u64, anchor: (u16, u
     if !known {
         return;
     }
+    state.prompt_drag = None;
+    state.drag_autoscroll = None;
     state.overlay = Some(Overlay::Menu(Menu {
         anchor,
         target: OverlayTarget::TempPrompt { workspace, temp_id },
@@ -72,6 +76,8 @@ pub fn open_prompt_folder_menu(state: &mut AppState, folder_id: i64, anchor: (u1
     else {
         return;
     };
+    state.prompt_drag = None;
+    state.drag_autoscroll = None;
     let mut commands = vec![MenuCommand::NewPrompt];
     if folder.parent_id.is_none() {
         commands.push(MenuCommand::NewSubFolder);
@@ -93,6 +99,8 @@ pub fn open_prompt_folder_menu(state: &mut AppState, folder_id: i64, anchor: (u1
 /// 打开树空白区域菜单：新建提示词与新建文件夹。
 pub fn open_prompt_tree_menu(state: &mut AppState, anchor: (u16, u16)) {
     let workspace = state.prompt_workspace();
+    state.prompt_drag = None;
+    state.drag_autoscroll = None;
     state.overlay = Some(Overlay::Menu(Menu {
         anchor,
         target: OverlayTarget::PromptTree { workspace },

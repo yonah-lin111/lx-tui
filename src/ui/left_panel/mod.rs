@@ -18,8 +18,8 @@ use super::{PANEL_BUTTON_MARGIN, PANEL_BUTTON_WIDTH, layout, style, text, widget
 
 pub use history::{
     workspace_history_blank_at, workspace_history_drop_index, workspace_history_group_toggle_at,
-    workspace_history_row_at, workspace_history_scrollbar, workspace_history_search_char_at,
-    workspace_history_visible_rows,
+    workspace_history_list_rect, workspace_history_row_at, workspace_history_scrollbar,
+    workspace_history_search_char_at, workspace_history_visible_rows,
 };
 
 /// 工作区列表顶层项的统一缩进列数；子项连接符与父项/普通项名字在此列对齐。
@@ -345,7 +345,7 @@ fn render_add_workspace_button(frame: &mut Frame<'_>, area: Rect) {
 }
 
 /// 工作区列表内容区（不含滚动条列）；分区缺失时退回侧栏内容区。
-fn workspace_list_rect(view: &layout::ViewLayout, state: &AppState) -> Option<Rect> {
+pub fn workspace_list_rect(view: &layout::ViewLayout, state: &AppState) -> Option<Rect> {
     if state.sidebar_collapsed {
         return None;
     }
@@ -618,6 +618,19 @@ pub fn agents_section_at(
     row: u16,
 ) -> bool {
     agents_list_rect(view, state).is_some_and(|list| list.contains((column, row).into()))
+}
+
+/// Agents 列表空白区域命中：内容区内、非条目、非滚动条列。
+///
+/// 折叠按钮在分区表头行，不在列表矩形内；空列表与末条下方的半行/空行都算空白。
+pub fn agents_blank_at(view: &layout::ViewLayout, state: &AppState, column: u16, row: u16) -> bool {
+    if !agents_section_at(view, state, column, row) {
+        return false;
+    }
+    if agent_scrollbar(view, state).is_some_and(|bar| bar.track.contains((column, row).into())) {
+        return false;
+    }
+    agent_item_index_at(view, state, column, row).is_none()
 }
 
 /// Agents 条目槽位命中（含滚动偏移）；两行命中同一条目，滚动条列与底部留空行不命中。

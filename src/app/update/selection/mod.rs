@@ -1,185 +1,31 @@
 //! 选区操作：prompt、终端仿真器与 lx 页选区拖拽、自动滚动与复制。
 
-use std::time::{Duration, Instant};
+mod autoscroll;
+mod lx;
 
-use ratatui::layout::Rect;
+#[cfg(test)]
+mod tests;
+
+pub use autoscroll::{
+    AUTOSCROLL_BAND_ROWS, AUTOSCROLL_INTERVAL, arm_selection_autoscroll, autoscroll_edge,
+    autoscroll_tick_lines, edge_scroll_lines, stop_lx_selection_autoscroll,
+    stop_selection_autoscroll, wheel_prompt_selection,
+};
+pub(crate) use autoscroll::{scroll_prompt_selection, tick_selection_autoscroll};
+pub use lx::{
+    begin_lx_input_selection, begin_lx_input_selection_with_clicks, begin_lx_selection,
+    begin_lx_selection_range, clear_lx_selection, clear_lx_selection_for, drag_lx_input_selection,
+    drag_lx_selection, drag_lx_selection_range, end_lx_input_selection_drag, end_lx_selection_drag,
+    lx_selection_dragging_on, take_lx_input_selection, take_lx_selection,
+};
 
 use crate::app::overlay::Overlay;
 use crate::app::selection::{Selection, SelectionUnit};
-use crate::app::state::{AppState, AutoscrollDirection, PaneKind, SelectionAutoscroll};
+use crate::app::state::{AppState, PaneKind};
 use crate::tiling::PaneId;
-
-use super::editor::place_prompt_cursor;
-use super::pane::scroll_pane_lines;
 
 /// 全局滚轮一格滚动的视觉行数/条目数；对齐 opencode 默认步长。
 pub const WHEEL_LINES: isize = 3;
-
-/// 边缘自动滚动每步的间隔。
-pub(crate) const AUTOSCROLL_INTERVAL: Duration = Duration::from_millis(30);
-
-/// 在 lx 主内容区开始一次文本选择（内容行、正文列坐标）。
-pub fn begin_lx_selection(state: &mut AppState, id: PaneId, row: i32, col: u16) {
-    begin_lx_selection_range(state, id, (row, col), (row, col), SelectionUnit::Character);
-}
-
-/// 按选区粒度（单字 / 双击选词 / 三击选行）在 lx 主内容区开始一次文本选择。
-pub fn begin_lx_selection_range(
-    state: &mut AppState,
-    id: PaneId,
-    start: (i32, u16),
-    end: (i32, u16),
-    unit: SelectionUnit,
-) {
-    clear_selection(state);
-    state.lx_selection = Some(Selection::begin_range(id, start, end, unit));
-}
-
-/// 扩展 lx 主内容区选区（内容行、正文列坐标）；窗格不一致时忽略。
-pub fn drag_lx_selection(state: &mut AppState, id: PaneId, row: i32, col: u16) {
-    drag_lx_selection_range(state, id, (row, col), (row, col));
-}
-
-/// 按粒度区间扩展 lx 主内容区选区；窗格不一致时忽略。
-pub fn drag_lx_selection_range(
-    state: &mut AppState,
-    id: PaneId,
-    start: (i32, u16),
-    end: (i32, u16),
-) {
-    if let Some(selection) = state.lx_selection.as_mut()
-        && selection.pane() == id
-    {
-        selection.drag_range(start, end);
-    }
-}
-
-/// 松开鼠标：结束 lx 主内容区选区拖动；非空选区保留供 Ctrl/Cmd+C 复制，空选区直接清除。
-/// 返回是否存在保留下来的非空选区。
-pub fn end_lx_selection_drag(state: &mut AppState) -> bool {
-    let keep = state
-        .lx_selection
-        .as_ref()
-        .is_some_and(|selection| selection.range().is_some());
-    if keep {
-        if let Some(selection) = state.lx_selection.as_mut() {
-            selection.finish();
-        }
-        true
-    } else {
-        state.lx_selection = None;
-        false
-    }
-}
-
-/// 取走 lx 页选区；无选区返回 None。
-pub fn take_lx_selection(state: &mut AppState) -> Option<Selection> {
-    state.lx_selection.take()
-}
-
-/// 清除 lx 页选区。
-pub fn clear_lx_selection(state: &mut AppState) {
-    state.lx_selection = None;
-}
-
-/// 清除指定窗格上的 lx 选区与卡片按下记录。
-pub fn clear_lx_selection_for(state: &mut AppState, id: PaneId) {
-    if state
-        .lx_selection
-        .is_some_and(|selection| selection.pane() == id)
-    {
-        state.lx_selection = None;
-    }
-    if state
-        .lx_card_press
-        .as_ref()
-        .is_some_and(|(pane, _)| *pane == id)
-    {
-        state.lx_card_press = None;
-    }
-}
-
-/// 在 lx 输入框内开始文本选择（视觉行、内容列）；光标落到该单元格。
-pub fn begin_lx_input_selection(state: &mut AppState, id: PaneId, row: usize, col: u16) {
-    begin_lx_input_selection_with_clicks(state, id, row, col, 1);
-}
-
-/// 按连续点击次数（1=单字、2=选词、3=选逻辑行）在 lx 输入框开始文本选择。
-pub fn begin_lx_input_selection_with_clicks(
-    state: &mut AppState,
-    id: PaneId,
-    row: usize,
-    col: u16,
-    clicks: u8,
-) {
-    clear_selection(state);
-    if let Some(pane) = state.pane_mut_anywhere(id) {
-        // BTW composer 是独立编辑器；命中几何已按 active_editor() 计算，状态也必须
-        // 写回同一个编辑器，不能落到隐藏的主输入框。
-        let hit = pane.lx.active_editor().paste_hit_at(row, col);
-        if let Some(hit) = hit {
-            if !hit.expanded {
-                pane.lx
-                    .with_active_editor(|editor| editor.toggle_paste(hit.id, hit.occurrence));
-            } else {
-                pane.lx
-                    .with_active_editor(|editor| editor.begin_preview_selection(row, col, clicks));
-                state.lx_input_drag = Some(id);
-            }
-            return;
-        }
-        pane.lx
-            .with_active_editor(|editor| editor.begin_text_selection_with_clicks(row, col, clicks));
-        state.lx_input_drag = Some(id);
-    }
-}
-
-/// 拖拽扩展 lx 输入框选区；窗格不一致时忽略。
-pub fn drag_lx_input_selection(state: &mut AppState, id: PaneId, row: usize, col: u16) {
-    if state.lx_input_drag != Some(id) {
-        return;
-    }
-    if let Some(pane) = state.pane_mut_anywhere(id) {
-        pane.lx.with_active_editor(|editor| {
-            if editor.is_preview_dragging() {
-                editor.drag_preview_selection(row, col);
-            } else {
-                editor.drag_text_selection(row, col);
-            }
-        });
-    }
-}
-
-/// 松开鼠标：结束 lx 输入框选区拖动；非空选区保留在输入框中供 Ctrl/Cmd+C 复制，
-/// 空选区直接清除；返回原本是否处于 lx 输入框选区拖动中。
-pub fn end_lx_input_selection_drag(state: &mut AppState) -> bool {
-    let Some(id) = state.lx_input_drag.take() else {
-        return false;
-    };
-    if let Some(pane) = state.pane_mut_anywhere(id) {
-        if pane.lx.active_editor().is_preview_dragging() {
-            pane.lx
-                .with_active_editor(|editor| editor.finish_preview_selection());
-            return true;
-        }
-        if pane.lx.active_editor().text_selection_range().is_none() {
-            pane.lx
-                .with_active_editor(|editor| editor.clear_text_selection());
-        }
-    }
-    true
-}
-
-/// 结束 lx 输入框选区并取走选中文本；空选区或未拖拽返回 None，锚点总是清除。
-pub fn take_lx_input_selection(state: &mut AppState) -> Option<(PaneId, String)> {
-    let id = state.lx_input_drag.take()?;
-    let pane = state.pane_mut_anywhere(id)?;
-    pane.lx.with_active_editor(|editor| {
-        let text = editor.selected_text();
-        editor.clear_text_selection();
-        text.map(|text| (id, text))
-    })
-}
 
 /// 在 prompt 开始一次文本选择；与右栏拖拽、终端选区互斥。
 pub fn begin_selection(state: &mut AppState, pane: PaneId, row: u16, col: u16) {
@@ -346,6 +192,8 @@ pub fn clear_terminal_selection(state: &mut AppState) {
 /// 终止所有正在进行的鼠标选区拖拽、自动滚动与空选区锚点，但保留已成立的静态选区。
 pub fn stop_active_selection_drags(state: &mut AppState) {
     state.selection_autoscroll = None;
+    state.lx_selection_autoscroll = None;
+    state.drag_autoscroll = None;
     state.lx_card_press = None;
     state.lx_scroll_drag = None;
     state.lx_history_scroll_drag = None;
@@ -355,6 +203,7 @@ pub fn stop_active_selection_drags(state: &mut AppState) {
     state.task_btw_scroll_drag = None;
     state.lx_input_drag = None;
     state.overlay_input_drag = false;
+    state.new_agent_scroll_drag = None;
     if let Some(Overlay::ConfirmClose(confirm)) = state.overlay.as_mut() {
         confirm.scroll_drag = None;
     }
@@ -457,17 +306,6 @@ pub fn clear_selection(state: &mut AppState) {
 }
 
 /// 当前界面是否存在对用户可见的非空文本选区。
-///
-/// 规则（对齐 OpenCode 选区拦截与可见性隔离）：
-/// 1. 模态浮层打开时，仅检查该浮层自身的输入框选区；被浮层遮挡的底层容器选区不计入。
-/// 2. 无模态浮层时，按各容器可见性检查：
-///    - 左栏：未折叠且处于工作区历史列表模式时，检查 `workspace_history.search`；
-///    - 右栏：未折叠时，按 `right_tab`（`Prompt` 树/页/正文与展开芯片，或 `Todo` 编辑框）检查；
-///    - 主窗格区：未折叠时，遍历当前活动标签页中的所有可见窗格：
-///      - `PaneView::Lx`：检查主内容区 `state.lx_selection`（含后台任务页输出区选区）；
-///        若后台任务页打开则检查列表搜索框或详情 composer；若 `ask` 处于编辑态则检查 `ask.editor()`；
-///        若 `task` 与 `ask` 均未遮挡输入框，则检查 `lx.preview_selection()` 与 `lx.text_selection_range()`；
-///      - `PaneView::Terminal`：检查 `terminal_has_selection(state, id)`（与渲染高亮同源）。
 pub fn has_visible_selection(state: &AppState) -> bool {
     if let Some(overlay) = state.overlay.as_ref() {
         return overlay.has_selection();
@@ -568,7 +406,7 @@ pub fn has_visible_selection(state: &AppState) -> bool {
 /// 按下 `Esc` 时尝试取消当前可见的文字选区（对齐 OpenCode `handleSelectionKey` 优先级 101）。
 ///
 /// - 若存在可见的非空文本选区：清除选区并终止所有拖选/自动滚动状态，返回 `true`（消费该次 `Esc`）。
-/// - 若不存在可见的非空文本选区：仅终止进行中的拖选、自动滚动与空选区锚点（保留后台 Tab 或被浮层遮挡的静态选区），返回 `false`（不消费 `Esc`，继续后续路由）。
+/// - 若不存在可见的非空文本选区：仅终止进行中的拖选、自动滚动与空选区锚点，返回 `false`（不消费 `Esc`）。
 pub fn escape_clear_selection(state: &mut AppState) -> bool {
     let had_selection = has_visible_selection(state);
     state.selection_click = None;
@@ -599,179 +437,6 @@ pub fn end_selection_drag(state: &mut AppState) {
     } else {
         state.selection = None;
     }
-}
-
-/// 拖拽选择时按鼠标相对窗格内容区的位置安排边缘自动滚动。
-///
-/// 鼠标越出上下边缘：立即按距离滚动并延伸选区，随后进入定时自动滚动；
-/// 停在边缘行：只登记计划；回到内部：清除计划。
-pub fn arm_selection_autoscroll(
-    state: &mut AppState,
-    pane: PaneId,
-    inner: Rect,
-    mouse: (u16, u16),
-    now: Instant,
-) {
-    if !selection_dragging_on(state, pane) {
-        state.selection_autoscroll = None;
-        return;
-    }
-    let top = inner.y;
-    let bottom = inner.bottom().saturating_sub(1);
-    let (direction, distance) = if mouse.1 < top {
-        (AutoscrollDirection::Up, top - mouse.1)
-    } else if mouse.1 > bottom {
-        (AutoscrollDirection::Down, mouse.1 - bottom)
-    } else if mouse.1 == top {
-        (AutoscrollDirection::Up, 0)
-    } else if mouse.1 == bottom {
-        (AutoscrollDirection::Down, 0)
-    } else {
-        state.selection_autoscroll = None;
-        return;
-    };
-    if distance > 0 {
-        autoscroll_step(
-            state,
-            pane,
-            direction,
-            edge_scroll_lines(distance),
-            mouse,
-            inner,
-        );
-    }
-    state.selection_autoscroll = Some(SelectionAutoscroll {
-        pane,
-        direction,
-        mouse,
-        inner,
-        next_at: now + AUTOSCROLL_INTERVAL,
-    });
-}
-
-/// 停止边缘自动滚动。
-pub fn stop_selection_autoscroll(state: &mut AppState) {
-    state.selection_autoscroll = None;
-}
-
-/// 自动滚动到点后补一步；返回是否产生变化。
-pub(crate) fn tick_selection_autoscroll(state: &mut AppState, now: Instant) -> bool {
-    let Some(autoscroll) = state.selection_autoscroll else {
-        return false;
-    };
-    if now < autoscroll.next_at {
-        return false;
-    }
-    if !selection_dragging_on(state, autoscroll.pane) {
-        state.selection_autoscroll = None;
-        return false;
-    }
-    if !autoscroll_step(
-        state,
-        autoscroll.pane,
-        autoscroll.direction,
-        1,
-        autoscroll.mouse,
-        autoscroll.inner,
-    ) {
-        // 到达回滚边界或视口尽头，停止。
-        state.selection_autoscroll = None;
-        return false;
-    }
-    if let Some(autoscroll) = state.selection_autoscroll.as_mut() {
-        autoscroll.next_at = now + AUTOSCROLL_INTERVAL;
-    }
-    true
-}
-
-/// 自动滚动一步：滚动若干行并把选区终点推进到鼠标位置；返回视口是否移动。
-fn autoscroll_step(
-    state: &mut AppState,
-    pane: PaneId,
-    direction: AutoscrollDirection,
-    lines: isize,
-    mouse: (u16, u16),
-    inner: Rect,
-) -> bool {
-    let step = match direction {
-        AutoscrollDirection::Up => -1,
-        AutoscrollDirection::Down => 1,
-    };
-    let terminal = state.terminal_selection == Some(pane);
-    let moved = if terminal {
-        scroll_pane_lines(state, pane, step, lines)
-    } else {
-        // 拖选自动滚动到真实正文边界即停，不进入底部虚拟留白。
-        let cap = state.prompt.text_max_scroll();
-        if state.prompt.scroll() >= cap {
-            false
-        } else {
-            scroll_prompt_selection(state, step, lines);
-            if state.prompt.scroll() > cap {
-                state.prompt.scroll_to(cap);
-            }
-            true
-        }
-    };
-    if !moved {
-        return false;
-    }
-    let row = mouse.1.clamp(inner.y, inner.bottom().saturating_sub(1)) - inner.y;
-    let col = mouse.0.clamp(inner.x, inner.right().saturating_sub(1)) - inner.x;
-    if terminal {
-        drag_terminal_selection(state, pane, row, col);
-    } else {
-        if state
-            .selection
-            .is_none_or(|sel| sel.unit() == SelectionUnit::Character)
-        {
-            place_prompt_cursor(state, row, col);
-        }
-        drag_selection(state, pane, row, col);
-    }
-    true
-}
-
-/// 该窗格上是否存在进行中的选择拖拽。
-fn selection_dragging_on(state: &AppState, pane: PaneId) -> bool {
-    if state.terminal_selection == Some(pane) {
-        return true;
-    }
-    state
-        .selection
-        .is_some_and(|selection| selection.is_dragging() && selection.pane() == pane)
-}
-
-/// 边缘距离对应的立即滚动行数（对齐 herdr：距离 × 3，夹在 3..=15）。
-fn edge_scroll_lines(distance: u16) -> isize {
-    usize::from(distance).saturating_mul(3).clamp(3, 15) as isize
-}
-
-/// 滚动 prompt 视口；选区是内容行坐标，视口滚动天然不影响选区；返回视口是否移动。
-pub(crate) fn scroll_prompt_selection(
-    state: &mut AppState,
-    direction: isize,
-    lines: isize,
-) -> bool {
-    let before = state.prompt.scroll();
-    state.prompt.scroll_by(direction.signum() * lines);
-    state.prompt.scroll() != before
-}
-
-/// prompt 拖拽选区时滚轮：滚动视口并保持选区锚点，终点跟到鼠标单元格；返回视口是否移动。
-pub fn wheel_prompt_selection(state: &mut AppState, direction: isize, row: u16, col: u16) -> bool {
-    if !scroll_prompt_selection(state, direction, WHEEL_LINES) {
-        return false;
-    }
-    let prompt = state.prompt.id();
-    if state
-        .selection
-        .is_none_or(|sel| sel.unit() == SelectionUnit::Character)
-    {
-        place_prompt_cursor(state, row, col);
-    }
-    drag_selection(state, prompt, row, col);
-    true
 }
 
 /// prompt 选区文本（保留选区，供 Ctrl/Cmd+C 复制）；空选区返回 None。
@@ -823,6 +488,3 @@ pub(crate) fn prompt_selection_bounds(state: &AppState) -> Option<(usize, usize)
         .prompt
         .selection_bounds_with(start, end, allow_single_cell)
 }
-
-#[cfg(test)]
-mod tests;

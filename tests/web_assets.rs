@@ -154,3 +154,17 @@ fn browser_scripts_reference_existing_ids() {
         }
     }
 }
+
+#[test]
+fn assets_do_not_call_removed_element_helper() {
+    assert!(
+        read("web.js").contains("function domEl("),
+        "web.js must define the shared domEl() helper"
+    );
+    for name in SCRIPTS {
+        assert!(
+            !read(name).contains("element("),
+            "{name} still calls the removed `element()` helper; use domEl() instead"
+        );
+    }
+}
