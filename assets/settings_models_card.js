@@ -135,8 +135,8 @@ function removeModel(provider, model) {
 }
 
 function labeledInput(captionText, value, onInput, placeholder) {
-  const wrap = element('div');
-  wrap.appendChild(element('label', null, captionText));
+  const wrap = domEl('div');
+  wrap.appendChild(domEl('label', null, captionText));
   const input = document.createElement('input');
   input.type = 'text';
   input.value = value === null || value === undefined ? '' : value;
@@ -151,7 +151,7 @@ function renderModelList() {
   while (list.firstChild) { list.removeChild(list.firstChild); }
   const provider = currentProvider();
   if (!provider || provider.models.length === 0) {
-    list.appendChild(element('p', 'nav-empty', 'No models yet.'));
+    list.appendChild(domEl('p', 'nav-empty', 'No models yet.'));
     return;
   }
   for (const model of provider.models) {
@@ -164,8 +164,8 @@ function modelCard(provider, model) {
     model.pricing = normalizePricing(null);
   }
   let key = provider.key + '\u0000' + model.id;
-  const card = element('div', 'model-card');
-  const head = element('div', 'model-head');
+  const card = domEl('div', 'model-card');
+  const head = domEl('div', 'model-head');
   const idField = labeledInput('Model ID', model.id, (value) => {
     const nextKey = provider.key + '\u0000' + value;
     if (expandedModels.has(key)) {
@@ -179,21 +179,21 @@ function modelCard(provider, model) {
   idField.input.addEventListener('change', () => { renderDefaultModel(); });
   const nameField = labeledInput('Display name', model.name, (value) => { model.name = value; markModelsDirty(); });
   nameField.input.addEventListener('change', () => { renderProviders(); renderDefaultModel(); });
-  const tools = element('div', 'model-tools');
+  const tools = domEl('div', 'model-tools');
   const expanded = expandedModels.has(key);
-  const advanced = element('button', 'ghost', expanded ? 'Hide' : 'Advanced');
+  const advanced = domEl('button', 'ghost', expanded ? 'Hide' : 'Advanced');
   advanced.type = 'button';
-  const more = element('div', 'model-more' + (expanded ? '' : ' hidden'));
+  const more = domEl('div', 'model-more' + (expanded ? '' : ' hidden'));
   advanced.onclick = () => {
     if (expandedModels.has(key)) { expandedModels.delete(key); } else { expandedModels.add(key); }
     const isOpen = expandedModels.has(key);
     advanced.textContent = isOpen ? 'Hide' : 'Advanced';
     more.classList.toggle('hidden', !isOpen);
   };
-  const dup = element('button', 'ghost', 'Duplicate');
+  const dup = domEl('button', 'ghost', 'Duplicate');
   dup.type = 'button';
   dup.onclick = () => duplicateModel(provider, model);
-  const remove = element('button', 'danger', 'Remove');
+  const remove = domEl('button', 'danger', 'Remove');
   remove.type = 'button';
   remove.onclick = () => removeModel(provider, model);
   tools.appendChild(advanced);
@@ -204,12 +204,12 @@ function modelCard(provider, model) {
   head.appendChild(tools);
   card.appendChild(head);
 
-  const grid = element('div', 'model-grid-3');
+  const grid = domEl('div', 'model-grid-3');
   const contextField = labeledInput('Context', model.context, (value) => { model.context = value; markModelsDirty(); });
   const outputField = labeledInput('Output', model.output, (value) => { model.output = value; markModelsDirty(); });
-  const transportWrap = element('div');
-  transportWrap.appendChild(element('label', null, 'Transport'));
-  const transportHost = element('div', 'select-host');
+  const transportWrap = domEl('div');
+  transportWrap.appendChild(domEl('label', null, 'Transport'));
+  const transportHost = domEl('div', 'select-host');
   transportWrap.appendChild(transportHost);
   grid.appendChild(contextField.wrap);
   grid.appendChild(outputField.wrap);
@@ -239,9 +239,9 @@ function pricingSection(model) {
   if (!model.pricing || typeof model.pricing !== 'object') {
     model.pricing = normalizePricing(null);
   }
-  const section = element('div', 'model-sub');
-  section.appendChild(element('div', 'sub-title', 'Pricing (USD / 1M tokens)'));
-  const grid = element('div', 'field-grid model-pricing-grid');
+  const section = domEl('div', 'model-sub');
+  section.appendChild(domEl('div', 'sub-title', 'Pricing (USD / 1M tokens)'));
+  const grid = domEl('div', 'field-grid model-pricing-grid');
   grid.style.gridTemplateColumns = 'repeat(auto-fit, minmax(120px, 1fr))';
   grid.style.gap = '8px';
   const inputField = labeledInput('Input ($/1M)', model.pricing.input, (value) => {
@@ -269,9 +269,9 @@ function pricingSection(model) {
 }
 
 function modalitySection(model) {
-  const section = element('div', 'model-sub');
-  section.appendChild(element('div', 'sub-title', 'Modalities'));
-  const grid = element('div', 'check-grid');
+  const section = domEl('div', 'model-sub');
+  section.appendChild(domEl('div', 'sub-title', 'Modalities'));
+  const grid = domEl('div', 'check-grid');
   grid.appendChild(modalityGroup('Input', 'input', INPUT_MODALITIES, model));
   grid.appendChild(modalityGroup('Output', 'output', OUTPUT_MODALITIES, model));
   section.appendChild(grid);
@@ -279,11 +279,11 @@ function modalitySection(model) {
 }
 
 function modalityGroup(title, key, values, model) {
-  const wrap = element('div');
-  wrap.appendChild(element('div', 'check-title', title));
-  const row = element('div', 'check-row');
+  const wrap = domEl('div');
+  wrap.appendChild(domEl('div', 'check-title', title));
+  const row = domEl('div', 'check-row');
   for (const value of values) {
-    const item = element('label', 'check-item');
+    const item = domEl('label', 'check-item');
     const box = document.createElement('input');
     box.type = 'checkbox';
     box.checked = model.modalities[key].includes(value);
@@ -303,13 +303,13 @@ function modalityGroup(title, key, values, model) {
 }
 
 function thinkingSection(model) {
-  const section = element('div', 'model-sub');
-  const head = element('div', 'sub-head');
-  head.appendChild(element('div', 'sub-title', 'Thinking variants'));
-  const presetHost = element('div', 'select-host preset-host');
+  const section = domEl('div', 'model-sub');
+  const head = domEl('div', 'sub-head');
+  head.appendChild(domEl('div', 'sub-title', 'Thinking variants'));
+  const presetHost = domEl('div', 'select-host preset-host');
   head.appendChild(presetHost);
   section.appendChild(head);
-  const body = element('div', 'variant-body');
+  const body = domEl('div', 'variant-body');
   section.appendChild(body);
   const presetSelect = createSelect(presetHost, {
     ariaLabel: 'Add thinking preset',
@@ -342,12 +342,12 @@ function defaultVariantOptions(model) {
 function renderVariants(body, model) {
   while (body.firstChild) { body.removeChild(body.firstChild); }
   if (model.variantRows.length === 0) {
-    body.appendChild(element('div', 'nav-empty', 'No thinking variants configured.'));
+    body.appendChild(domEl('div', 'nav-empty', 'No thinking variants configured.'));
     return;
   }
-  const defaultRow = element('div', 'variant-default');
-  defaultRow.appendChild(element('div', 'check-title', 'Default variant'));
-  const defaultHost = element('div', 'select-host');
+  const defaultRow = domEl('div', 'variant-default');
+  defaultRow.appendChild(domEl('div', 'check-title', 'Default variant'));
+  const defaultHost = domEl('div', 'select-host');
   defaultRow.appendChild(defaultHost);
   body.appendChild(defaultRow);
   createSelect(defaultHost, {
@@ -362,7 +362,7 @@ function renderVariants(body, model) {
 }
 
 function variantRow(model, row, body) {
-  const wrap = element('div', 'variant-row');
+  const wrap = domEl('div', 'variant-row');
   const keyInput = document.createElement('input');
   keyInput.type = 'text';
   keyInput.value = row.key;
@@ -388,7 +388,7 @@ function variantRow(model, row, body) {
   jsonInput.value = row.text;
   jsonInput.setAttribute('aria-label', 'Variant JSON');
   jsonInput.oninput = () => { row.text = jsonInput.value; markModelsDirty(); };
-  const remove = element('button', 'danger', 'Remove');
+  const remove = domEl('button', 'danger', 'Remove');
   remove.type = 'button';
   remove.onclick = () => {
     const index = model.variantRows.indexOf(row);
@@ -483,13 +483,13 @@ function renderFetchCandidates(models) {
   box.classList.remove('hidden');
   const provider = currentProvider();
   if (!provider || models.length === 0) {
-    box.appendChild(element('p', 'nav-empty', 'No models returned.'));
+    box.appendChild(domEl('p', 'nav-empty', 'No models returned.'));
     return;
   }
   for (const candidate of models) {
-    const row = element('div', 'fetch-row');
-    const label = element('span', null, candidate.id + (candidate.ownedBy ? ' · ' + candidate.ownedBy : ''));
-    const add = element('button', 'ghost', 'Add');
+    const row = domEl('div', 'fetch-row');
+    const label = domEl('span', null, candidate.id + (candidate.ownedBy ? ' · ' + candidate.ownedBy : ''));
+    const add = domEl('button', 'ghost', 'Add');
     add.type = 'button';
     add.onclick = () => {
       if (!provider.models.some((model) => model.id === candidate.id)) {
