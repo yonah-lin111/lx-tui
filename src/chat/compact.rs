@@ -115,9 +115,20 @@ pub fn incremental(messages: &[ChatMessage], after_sequence: Option<i64>) -> Com
 pub fn playable_messages(messages: &[ChatMessage]) -> Vec<ChatMessage> {
     use std::collections::HashMap;
 
+    // 旧版 `/report` 轮（请求标记 + 汇报回答）是元数据而不是工作记录：
+    // 总结不能“总结上一份报告”。
+    let report_turns: std::collections::HashSet<i64> = messages
+        .iter()
+        .filter(|message| {
+            message.role == "user"
+                && message.kind == "chat"
+                && crate::chat::agent::is_report_request(&message_text(message))
+        })
+        .map(|message| message.turn_index)
+        .collect();
     let mut by_turn: HashMap<i64, (bool, bool)> = HashMap::new();
     for message in messages {
-        if message.kind == "user_shell" {
+        if message.kind == "user_shell" || report_turns.contains(&message.turn_index) {
             continue;
         }
         let entry = by_turn.entry(message.turn_index).or_insert((false, false));
@@ -130,6 +141,9 @@ pub fn playable_messages(messages: &[ChatMessage]) -> Vec<ChatMessage> {
     messages
         .iter()
         .filter(|message| {
+            if report_turns.contains(&message.turn_index) {
+                return false;
+            }
             if message.kind == "user_shell" {
                 return message
                     .user_shell
@@ -370,6 +384,74 @@ pub fn summary_request_from_transcript(
     }
 }
 
+/// 面板 `/report` 的独立系统提示：只写面向主 agent 的报告，不进入对话历史。
+pub const REPORT_SYSTEM_PROMPT: &str = "\
+You are writing a report for the main agent. The transcript is the complete context you have. \
+Report only what the main agent needs to act: the user's request, what was done or found, \
+evidence (files, commands, results), current status, blockers, and next steps. Do not include \
+greetings, small talk, or casual conversation. Be concise and factual.";
+
+/// 构造面板 `/report` 总结请求：独立系统提示 + 单条转写消息，不携带工具定义。
+///
+/// 与 `/compact` 共用同一条一次性请求形状，但用途、系统提示与校验错误分开；
+/// 成功结果写成 `kind = report` 的检查点（不参与上下文装配）。
+pub fn report_request_from_transcript(
+    transcript: &str,
+    start_sequence: i64,
+    end_sequence: i64,
+    message_count: usize,
+    omitted_turns: usize,
+    note: &str,
+    model: &ModelSnapshot,
+    variant_params: Option<serde_json::Value>,
+) -> ChatRequest {
+    let mut user = String::new();
+    user.push_str("<transcript>\n");
+    user.push_str(transcript);
+    user.push_str("</transcript>\n\n");
+    user.push_str(&format!(
+        "Write the report for the transcript above. Cover message sequence \
+         {start_sequence}..{end_sequence} ({message_count} message(s))."
+    ));
+    if omitted_turns > 0 {
+        user.push_str(&format!(
+            " {omitted_turns} older turn(s) were omitted from the transcript because of the input limit."
+        ));
+    }
+    user.push_str(
+        "\n\nInclude exact file paths, commands with their exit status and important output, \
+         errors and how they were handled, decisions and constraints, verification results, and \
+         unfinished work or next steps. Write in the language the user used when it is clear. \
+         Do not repeat raw file contents or long logs, and do not include this instruction or \
+         the <transcript> wrapper in your answer.",
+    );
+    let note = note.trim();
+    if !note.is_empty() {
+        user.push_str("\n\nUser note: ");
+        user.push_str(note);
+    }
+    ChatRequest {
+        turns: vec![
+            ChatTurn {
+                role: "system".into(),
+                text: REPORT_SYSTEM_PROMPT.to_string(),
+                reasoning_metadata: None,
+            },
+            ChatTurn {
+                role: "user".into(),
+                text: user.clone(),
+                reasoning_metadata: None,
+            },
+        ],
+        items: vec![ModelItem::UserText(user)],
+        model: model.clone(),
+        variant_params,
+        purpose: crate::chat::events::RequestPurpose::Report,
+        system_prompt: Some(REPORT_SYSTEM_PROMPT.to_string()),
+        tools: std::sync::Arc::new(Vec::new()),
+    }
+}
+
 /// 校验摘要正文：去空白、长度上限与最小长度。
 ///
 /// 超限返回错误码（不截断），空摘要同样是失败——空压缩会静默丢掉整段上下文。
@@ -380,6 +462,18 @@ pub fn validate_summary(text: &str) -> Result<String, &'static str> {
     }
     if trimmed.chars().count() > MAX_SUMMARY_CHARS {
         return Err("compact summary exceeds the output limit");
+    }
+    Ok(trimmed.to_string())
+}
+
+/// 校验报告正文：与摘要共用长度上限，但错误码按报告口径。
+pub fn validate_report(text: &str) -> Result<String, &'static str> {
+    let trimmed = text.trim();
+    if trimmed.is_empty() {
+        return Err("report is empty");
+    }
+    if trimmed.chars().count() > MAX_SUMMARY_CHARS {
+        return Err("report exceeds the output limit");
     }
     Ok(trimmed.to_string())
 }
@@ -633,5 +727,28 @@ Be concise, structured, and focused on helping the next LLM seamlessly continue 
         assert_eq!(input.messages.len(), 1, "运行中的命令不参与压缩");
         assert!(input.transcript.contains("npm run dev"));
         assert!(input.transcript.contains("exit: 0"));
+    }
+
+    /// 旧版 `/report` 轮不得进入新的总结转写：否则报告内容会被再次总结。
+    #[test]
+    fn playable_messages_skip_report_request_turns() {
+        let messages = vec![
+            message("u1", 0, 0, "user", "real question"),
+            message("a1", 1, 0, "assistant", "real answer"),
+            message(
+                "u2",
+                2,
+                1,
+                "user",
+                &format!("{}\nstatus", crate::chat::agent::PANEL_REPORT_MARKER),
+            ),
+            message("a2", 3, 1, "assistant", "old report body"),
+            message("u3", 4, 2, "user", "next question"),
+            message("a3", 5, 2, "assistant", "next answer"),
+        ];
+        let playable = playable_messages(&messages);
+        assert_eq!(playable.len(), 4);
+        assert!(!playable.iter().any(|m| m.external_id == "u2"));
+        assert!(!playable.iter().any(|m| m.external_id == "a2"));
     }
 }

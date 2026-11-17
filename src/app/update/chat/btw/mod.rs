@@ -19,8 +19,8 @@ mod input;
 
 pub use events::{
     AcceptedBtw, BtwToolSettlement, BtwToolUpdate, btw_message_parts, new_assistant_message,
-    on_accepted, on_delta, on_failed, on_finished, on_qa_list_loaded, on_recipient_started,
-    on_thread_deleted, on_thread_loaded, on_tool_state,
+    on_accepted, on_delta, on_failed, on_finished, on_qa_list_loaded, on_recipient_failed,
+    on_recipient_started, on_thread_deleted, on_thread_loaded, on_tool_state,
 };
 pub use input::apply_input;
 
@@ -483,7 +483,6 @@ pub fn submit_current(state: &mut AppState, pane: PaneId) -> bool {
     let revision = thread.composer.revision();
     thread.pending_submit = Some((submit_id.clone(), revision));
     thread.pending_recipients = targets.len().max(1);
-    let thread_id = thread.thread_id.clone();
     state
         .effects
         .push(Effect::Btw(BtwEffect::Submit(Box::new(BtwSubmission {
@@ -492,7 +491,6 @@ pub fn submit_current(state: &mut AppState, pane: PaneId) -> bool {
             qa_id,
             workspace,
             cwd,
-            thread_id,
             submit_id,
             draft_revision: revision,
             text: text_value,
@@ -505,6 +503,24 @@ pub fn submit_current(state: &mut AppState, pane: PaneId) -> bool {
             default_variant_params: frozen.variant_params.clone(),
             idle_timeout_ms: frozen.idle_timeout_ms,
         }))));
+    true
+}
+
+/// 面板 `/report`：对当前线程会话做一次独立总结（正文只填主输入框）。
+pub(crate) fn submit_report(state: &mut AppState, pane: PaneId, note: &str) -> bool {
+    let Some((session_id, thread_id)) = state.pane_anywhere(pane).and_then(|target| {
+        let session_id = target.lx.chat.session_id.clone()?;
+        let thread_id = target.lx.btw.active_thread()?.thread_id.clone()?;
+        Some((session_id, thread_id))
+    }) else {
+        return false;
+    };
+    state.effects.push(Effect::Btw(BtwEffect::Report {
+        pane,
+        parent_session_id: session_id,
+        thread_id,
+        note: note.to_string(),
+    }));
     true
 }
 

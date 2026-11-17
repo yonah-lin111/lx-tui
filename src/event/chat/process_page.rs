@@ -44,7 +44,9 @@ pub fn apply_process_effects(state: &mut AppState, streams: &mut ChatStreams) ->
         .filter(|effect| {
             matches!(
                 effect,
-                Effect::ListSessionProcesses { .. } | Effect::StopSessionProcess { .. }
+                Effect::ListSessionProcesses { .. }
+                    | Effect::StopSessionProcess { .. }
+                    | Effect::StopAllSessionProcesses { .. }
             )
         })
         .cloned()
@@ -55,7 +57,9 @@ pub fn apply_process_effects(state: &mut AppState, streams: &mut ChatStreams) ->
     state.effects.retain(|effect| {
         !matches!(
             effect,
-            Effect::ListSessionProcesses { .. } | Effect::StopSessionProcess { .. }
+            Effect::ListSessionProcesses { .. }
+                | Effect::StopSessionProcess { .. }
+                | Effect::StopAllSessionProcesses { .. }
         )
     });
     let mut changed = false;
@@ -70,6 +74,9 @@ pub fn apply_process_effects(state: &mut AppState, streams: &mut ChatStreams) ->
             } => {
                 stop_session_process(state, streams, pane, process_session_id);
                 changed = true;
+            }
+            Effect::StopAllSessionProcesses { pane } => {
+                changed |= stop_all_session_processes(state, streams, pane);
             }
             _ => {}
         }
@@ -264,6 +271,42 @@ fn process_output_lines(tail: &str) -> Vec<String> {
         lines.pop();
     }
     lines
+}
+
+/// 停止当前会话全部未终态的后台进程（停止面板的 `Stop all shells`）。
+fn stop_all_session_processes(state: &mut AppState, streams: &ChatStreams, pane: PaneId) -> bool {
+    let manager = state
+        .pane_anywhere(pane)
+        .and_then(|target| target.lx.chat.session_id.clone())
+        .and_then(|session_id| streams.runtimes.get(&session_id))
+        .map(|runtime| runtime.manager().clone());
+    let Some(manager) = manager else {
+        return false;
+    };
+    let ids: Vec<u64> = manager
+        .snapshots()
+        .into_iter()
+        .filter(|snapshot| !snapshot.state.is_terminal())
+        .map(|snapshot| snapshot.session_id)
+        .collect();
+    if ids.is_empty() {
+        return false;
+    }
+    let count = ids.len();
+    tokio::spawn(async move {
+        manager.stop_many(ids).await;
+    });
+    update::show_lx_toast(
+        state,
+        pane,
+        crate::app::toast::Toast::new(
+            crate::app::toast::ToastKind::Default,
+            crate::ui::text::stopped_processes(count),
+            Some(pane),
+            std::time::Instant::now(),
+        ),
+    );
+    true
 }
 
 /// 停止后台任务页选中的进程，并给出结果反馈。

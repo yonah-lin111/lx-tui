@@ -28,6 +28,8 @@ pub struct CompactNoticeView {
     /// 自动压缩与手动 `/compact` 共用检查点表；它没有真实的消息 sequence 范围，
     /// 渲染层据此把范围行换成 `auto · this run`，`/rewind` 也会跳过它。
     pub auto: bool,
+    /// 是否为面板 `/report` 总结（不参与上下文装配，只作为可撤销时间线条目）。
+    pub report: bool,
 }
 
 impl CompactNoticeView {
@@ -43,6 +45,7 @@ impl CompactNoticeView {
             summary: record.summary_text.clone(),
             active: record.is_active(),
             auto: record.is_auto(),
+            report: record.kind.is_report(),
         }
     }
 
@@ -64,6 +67,7 @@ impl CompactNoticeView {
             summary,
             active: true,
             auto: true,
+            report: false,
         }
     }
 
@@ -93,6 +97,8 @@ pub struct LxCompact {
     pub started_at_ms: Option<i64>,
     /// 本次压缩已耗时（毫秒），由事件循环每帧刷新（渲染层不取时钟）；空闲为 None。
     pub elapsed_ms: Option<i64>,
+    /// 当前执行的是 `/report` 总结（`running` 共用同一幂等键与计时）。
+    pub running_report: bool,
 }
 
 impl LxCompact {
@@ -126,6 +132,16 @@ impl LxCompact {
         self.running = Some(operation_id);
         self.started_at_ms = Some(started_at_ms);
         self.elapsed_ms = None;
+        self.running_report = false;
+        true
+    }
+
+    /// 开始一次 `/report` 总结；执行态与 compact 共用。
+    pub fn start_report(&mut self, operation_id: String, started_at_ms: i64) -> bool {
+        if !self.start(operation_id, started_at_ms) {
+            return false;
+        }
+        self.running_report = true;
         true
     }
 
@@ -134,6 +150,7 @@ impl LxCompact {
         self.running = None;
         self.started_at_ms = None;
         self.elapsed_ms = None;
+        self.running_report = false;
     }
 
     /// 该检查点是否展开（默认折叠）。
@@ -166,9 +183,12 @@ impl LxCompact {
         self.finish();
     }
 
-    /// 最新仍生效的检查点（上下文起点）。
+    /// 最新仍生效的上下文压缩检查点（报告条目不参与上下文装配）。
     pub fn active(&self) -> Option<&CompactNoticeView> {
-        self.checkpoints.iter().rev().find(|item| item.active)
+        self.checkpoints
+            .iter()
+            .rev()
+            .find(|item| item.active && !item.report)
     }
 
     /// 生效压缩边界覆盖的最后一条原始消息 sequence（无生效检查点时为 None）。

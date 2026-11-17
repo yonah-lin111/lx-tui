@@ -766,6 +766,7 @@ fn thread_loaded_restores_compact_checkpoints() {
         end_sequence: 4,
         summary_text: "summary".into(),
         model_label: "M".into(),
+        kind: crate::db::chat::CompactKind::Compact,
         state: "active".into(),
         created_at_ms: 1,
     };
@@ -905,4 +906,112 @@ fn set_task_btw_scroll_uses_scrollbar_geometry() {
         .expect("thread");
     assert_eq!(thread.scroll, 70);
     assert!(thread.follow);
+}
+
+#[test]
+fn btw_composer_down_jumps_to_the_end_of_the_last_line() {
+    let (mut state, pane) = btw_pane();
+    {
+        let composer = state
+            .pane_mut_anywhere(pane)
+            .expect("pane")
+            .lx
+            .btw
+            .active_composer_mut()
+            .expect("composer");
+        composer.replace_input("first\nsecond");
+        composer.cursor = 9;
+    }
+    apply_input(&mut state, pane, LxInput::Down);
+    let composer = state
+        .pane_anywhere(pane)
+        .expect("pane")
+        .lx
+        .btw
+        .active_composer()
+        .expect("composer");
+    assert_eq!(
+        composer.cursor,
+        composer.input.len(),
+        "BTW composer 末行中间按 ↓ 落到行尾"
+    );
+}
+
+/// 报告之后的追问必须拿到比检查点更大的展示序号：否则时间线按 seq 合并时
+/// 新问答会被当成更早的条目，报告卡片永远沉到底部。
+#[test]
+fn btw_follow_up_after_report_lands_after_the_checkpoint() {
+    let (mut state, pane) = btw_pane();
+    {
+        let thread = state
+            .pane_mut_anywhere(pane)
+            .expect("pane")
+            .lx
+            .btw
+            .active_thread_mut()
+            .expect("thread");
+        thread.thread_id = Some("thread-1".into());
+        thread.child_session_id = Some("child-1".into());
+        thread.pending_submit = Some(("sub-1".into(), 0));
+        thread
+            .compact
+            .replace(vec![crate::app::state::CompactNoticeView {
+                id: "report-1".into(),
+                sequence: 3,
+                model_label: "M".into(),
+                created_at_ms: 1,
+                start_sequence: 0,
+                end_sequence: 2,
+                summary: "report body".into(),
+                active: true,
+                auto: false,
+                report: true,
+            }]);
+    }
+    assert!(on_accepted(
+        &mut state,
+        pane,
+        AcceptedBtw {
+            qa_id: "qa-1".into(),
+            submit_id: "sub-1".into(),
+            thread_id: "thread-1".into(),
+            child_session_id: "child-1".into(),
+            user_message_id: "user-2".into(),
+            text: "follow up".into(),
+        },
+    ));
+    assert!(on_recipient_started(
+        &mut state,
+        "child-1",
+        "assistant-2",
+        "M"
+    ));
+    let thread = state
+        .pane_anywhere(pane)
+        .expect("pane")
+        .lx
+        .btw
+        .active_thread()
+        .expect("thread");
+    let user = thread
+        .chat
+        .messages
+        .iter()
+        .find(|message| message.id == "user-2")
+        .expect("optimistic user message");
+    assert!(
+        user.sequence > 3,
+        "新问答必须排在报告检查点之后：{}",
+        user.sequence
+    );
+    let assistant = thread
+        .chat
+        .messages
+        .iter()
+        .find(|message| message.id == "assistant-2")
+        .expect("optimistic assistant message");
+    assert!(
+        assistant.sequence > user.sequence,
+        "assistant 必须排在同一个问题之后"
+    );
 }

@@ -557,6 +557,7 @@ impl ExecSubagentPool {
                 title: record.title.clone(),
                 role: record.role,
                 status: self.projected_status(record, queues.get(target)),
+                stopped_by_user: false,
                 report: (!bodies.is_empty()).then(|| bodies.join("\n\n")),
             });
         }

@@ -243,7 +243,7 @@ fn stop_selected_subagent_requests_only_that_agent() {
     assert!(update::stop_selected_subagent(&mut state, pane));
     assert!(state.effects.iter().any(|effect| matches!(
         effect,
-        crate::app::effects::Effect::CancelSubagents { session_id, agent_id }
+        crate::app::effects::Effect::StopSubagentsByUser { session_id, agent_id }
             if session_id == "sess-parent" && agent_id.as_deref() == Some("sub-b")
     )));
     assert!(
@@ -253,8 +253,8 @@ fn stop_selected_subagent_requests_only_that_agent() {
             .lx
             .toast
             .as_ref()
-            .is_some_and(|toast| toast.message.contains('1')),
-        "提示只停一个"
+            .is_some_and(|toast| toast.message.starts_with("Stopping ")),
+        "提示点名被停止的 agent"
     );
 }
 

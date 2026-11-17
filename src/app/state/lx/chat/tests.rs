@@ -35,6 +35,7 @@ fn checkpoint(end_sequence: i64, active: bool) -> CompactNoticeView {
         summary: "sum".into(),
         active,
         auto: false,
+        report: false,
     }
 }
 

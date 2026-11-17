@@ -22,6 +22,8 @@ pub const LX_BTW_NO_MATCHING_AGENT: &str = "No matching subagent; start a task f
 pub const LX_BTW_AMBIGUOUS_AGENT: &str = "Multiple subagents match; pick one from the @ list";
 /// 提交失败（保留草稿）。
 pub const LX_BTW_SUBMIT_FAILED: &str = "BTW request failed; your draft was kept";
+/// 单个回答者启动失败（其余目标继续）；草稿已被接受，不能说“草稿保留”。
+pub const LX_BTW_TARGET_FAILED: &str = "BTW target failed to start";
 /// 回答队列已满 / 达到并发上限时的提示。
 pub const LX_BTW_QUEUED: &str = "BTW request queued";
 /// 停止成功。
@@ -62,6 +64,8 @@ pub const LX_BTW_HINTS_EDIT: [crate::ui::text::Hint; 5] = [
 
 /// 侧线程压缩中的胶囊后缀（宽度不足整段丢弃）。
 pub const LX_BTW_COMPACTING_TAG: &str = " · compacting";
+/// 报告生成中的胶囊后缀。
+pub const LX_BTW_REPORTING_TAG: &str = " · reporting";
 
 /// 侧线程状态标签。
 pub fn btw_status_label(status: &str) -> &'static str {

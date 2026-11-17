@@ -103,9 +103,10 @@ fn purge_workspace_history_paths(state: &mut AppState, paths_to_delete: Vec<Path
             })
             .unwrap_or_default();
         for pane_id in pane_ids {
-            state
-                .effects
-                .push(Effect::CancelUserShells { pane: pane_id });
+            state.effects.push(Effect::CancelUserShells {
+                pane: pane_id,
+                scope: crate::app::effects::UserShellStopScope::All,
+            });
             let (streaming_key, committing_gen, session_id) = state
                 .pane_anywhere(pane_id)
                 .map(|pane| {

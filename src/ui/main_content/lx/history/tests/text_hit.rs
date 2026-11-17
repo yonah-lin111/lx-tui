@@ -331,6 +331,7 @@ fn compact_body_hits_text_only() {
             .join("\n"),
         active: true,
         auto: false,
+        report: false,
     }]);
     let area = Rect::new(0, 0, 60, 20);
     let mut cache = cache();

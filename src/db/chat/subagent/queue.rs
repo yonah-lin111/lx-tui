@@ -550,6 +550,31 @@ impl Database {
         Ok(())
     }
 
+    /// 用户主动停止时取消指定 agent 的全部 `queued` 输入；返回取消条数。
+    ///
+    /// 不改 `running` 行：在途轮次由取消信号收敛，结算后自然落库。
+    pub fn cancel_queued_inputs_for_agent(
+        &self,
+        workspace: &Path,
+        parent_session: &str,
+        agent_id: &str,
+    ) -> Result<usize> {
+        let workspace_external = self
+            .workspace_external_id(workspace)?
+            .ok_or(DbError::WorkspaceMissing)?;
+        let now = now_ms();
+        let transaction = self.conn.unchecked_transaction()?;
+        ensure_agent_owned(&transaction, agent_id, parent_session, &workspace_external)?;
+        let cancelled = transaction.execute(
+            r#"UPDATE agent_subagent_input
+               SET status = 'cancelled', completed_at_ms = ?1, error_code = NULL
+               WHERE agent_id = ?2 AND status = 'queued'"#,
+            params![now, agent_id],
+        )?;
+        transaction.commit()?;
+        Ok(cancelled)
+    }
+
     /// 批量读取当前父会话下所有子 agent 的队列统计（`queued_count`、队首 `error_code`、最近输入状态）。
     pub fn subagent_queue_states(
         &self,
@@ -703,7 +728,7 @@ impl Database {
     /// 判据（三者同时成立才是人类面板追问）：
     /// - `agent_subagent_input.position > 0`（spawn 输入固定 position 0）；
     /// - `parent_call_id IS NULL`（模型工具调用必有 call_id）；
-    /// - `notify_parent = 0`（`/report` 轮是 1）。
+    /// - `notify_parent = 0`（新版面板 `/report` 轮也是 0；旧版自动投递轮是 1）。
     ///
     /// 含轮内 steer 的轮次刻意不可撤回：steer 段只覆盖被截断之后的消息与文件，
     /// 按最新段撤销只能回退半个逻辑轮次；`stop_reason = 'steer'` 直接拒绝。

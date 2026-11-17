@@ -1,4 +1,5 @@
-//! 详情 `/rewind` 的可撤回判据：只认人类面板私聊追问；spawn / 父 `send_input` / `/report` / steer 段拒绝。
+//! 详情 `/rewind` 的可撤回判据：认人类面板私聊追问与新版面板 `/report`；
+//! spawn / 父 `send_input` / 旧版自动投递报告 / steer 段拒绝。
 
 use super::*;
 
@@ -10,6 +11,86 @@ fn complete() -> TurnOutcome {
     TurnOutcome::Complete {
         stop_reason: Some("complete".into()),
     }
+}
+
+/// 面板私聊与 `/report` 输入都带 child user message id；spawn（position=0）不在候选里。
+#[test]
+fn private_input_ids_return_panel_follow_ups_and_reports() {
+    let fixture = Fixture::new("private-ids");
+    let parent = fixture.parent();
+    let committed = fixture.spawn(&parent, AgentRole::Explorer, "task");
+    fixture.finish_child(&committed, complete(), None);
+    let private = fixture
+        .database
+        .enqueue_input(
+            fixture.workspace(),
+            &parent,
+            &committed.agent_id,
+            "private-1",
+            None,
+            None,
+            &text_item("private question"),
+            false,
+            false,
+        )
+        .expect("enqueue private");
+    let report = fixture
+        .database
+        .enqueue_input(
+            fixture.workspace(),
+            &parent,
+            &committed.agent_id,
+            "report-1",
+            None,
+            None,
+            &text_item("[Report for main agent]\nstatus"),
+            false,
+            false,
+        )
+        .expect("enqueue report");
+    let private = fixture
+        .database
+        .claim_input(
+            fixture.workspace(),
+            &parent,
+            &committed.agent_id,
+            &private.submission_id,
+            &Fixture::model(),
+        )
+        .expect("claim private");
+    fixture
+        .database
+        .finish_subagent_turn(
+            fixture.workspace(),
+            &committed.agent_id,
+            &private.child_assistant_id,
+            &[part(0, "done")],
+            &complete(),
+            Usage::default(),
+            Usage::default(),
+            None,
+        )
+        .expect("finish private turn");
+    let report = fixture
+        .database
+        .claim_input(
+            fixture.workspace(),
+            &parent,
+            &committed.agent_id,
+            &report.submission_id,
+            &Fixture::model(),
+        )
+        .expect("claim report");
+    let ids = fixture
+        .database
+        .private_input_user_message_ids(fixture.workspace(), &committed.child_session_id)
+        .expect("ids");
+    assert_eq!(
+        ids,
+        vec![private.child_user_message_id, report.child_user_message_id],
+        "面板追问与报告都在候选里；spawn 不在"
+    );
+    cleanup(fixture.root);
 }
 
 /// 人类面板私聊追问（position>0、无 parent_call_id、notify_parent=0）可撤回。
@@ -52,7 +133,47 @@ fn latest_undoable_turn_requires_human_panel_follow_up() {
     cleanup(fixture.root);
 }
 
-/// spawn 初始任务、父 agent `send_input` 与 `/report` 轮都不可撤回。
+/// 新版面板 `/report` 轮（`notify_parent=0`）是可撤回的普通私有轮次。
+#[test]
+fn panel_report_turn_is_undoable() {
+    let fixture = Fixture::new("undo-panel-report");
+    let parent = fixture.parent();
+    let committed = fixture.spawn(&parent, AgentRole::Explorer, "task");
+    fixture.finish_child(&committed, complete(), None);
+    let input = fixture
+        .database
+        .enqueue_input(
+            fixture.workspace(),
+            &parent,
+            &committed.agent_id,
+            "panel-report-1",
+            None,
+            None,
+            &text_item("[Report for main agent]\nstatus"),
+            false,
+            false,
+        )
+        .expect("enqueue report");
+    let claimed = fixture
+        .database
+        .claim_input(
+            fixture.workspace(),
+            &parent,
+            &committed.agent_id,
+            &input.submission_id,
+            &Fixture::model(),
+        )
+        .expect("claim report");
+    let turn = fixture
+        .database
+        .latest_undoable_private_turn(fixture.workspace(), &committed.child_session_id)
+        .expect("query")
+        .expect("panel report is undoable");
+    assert_eq!(turn.user_message_id, claimed.child_user_message_id);
+    cleanup(fixture.root);
+}
+
+/// spawn 初始任务、父 agent `send_input` 与旧版 `/report` 轮都不可撤回。
 #[test]
 fn spawn_input_and_parent_send_input_and_report_turns_are_not_undoable() {
     let fixture = Fixture::new("undo-nonhuman");

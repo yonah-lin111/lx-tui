@@ -632,11 +632,11 @@ fn escape_while_shell_runs_arms_stop_not_rewind() {
     );
     apply_lx_input(&mut state, LxInput::Escape);
     assert!(
-        state
-            .effects
-            .iter()
-            .any(|effect| matches!(effect, crate::app::effects::Effect::CancelUserShells { .. })),
-        "第二次 Esc 必须停止本地命令"
+        matches!(
+            state.pane_anywhere(pane).unwrap().lx.slash,
+            Some(crate::app::state::SlashPanel::Stop(_))
+        ),
+        "第二次 Esc 打开停止面板，由用户选择停止范围"
     );
 }
 
@@ -717,6 +717,7 @@ fn reload_after_rewind_respects_compact_boundary() {
         end_sequence,
         summary_text: "sum".into(),
         model_label: "m".into(),
+        kind: crate::db::chat::CompactKind::Compact,
         state: crate::db::chat::COMPACT_ACTIVE.into(),
         created_at_ms: 0,
     };

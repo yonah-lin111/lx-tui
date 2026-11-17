@@ -17,6 +17,8 @@ pub const RUNNING_TOOLS_LABEL: &str = "Running tools...";
 pub const WAITING_AGENTS_LABEL: &str = "Waiting for agents...";
 /// `/compact` 正在执行时的阶段文案（摘要请求没有流式输出，需要自带进度反馈）。
 pub const COMPACTING_LABEL: &str = "Compacting context...";
+/// `/report` 正在执行时的阶段文案。
+pub const REPORTING_LABEL: &str = "Generating report...";
 /// 当前 assistant 正在联网搜索、但查询词还没解析出来时的阶段文案。
 pub const SEARCHING_WEB_LABEL: &str = "Searching the web...";
 /// 联网搜索阶段文案的前缀（后面接带引号的查询词）。

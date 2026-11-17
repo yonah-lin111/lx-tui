@@ -6,6 +6,15 @@ use std::path::PathBuf;
 
 use super::trust::TrustTrigger;
 
+/// 用户 shell 停止范围。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum UserShellStopScope {
+    /// 双 Esc / 会话清理：pending shell 与整个聊天排队队列都清空。
+    All,
+    /// 停止面板：只停 shell，保留普通聊天排队项。
+    ShellsOnly,
+}
+
 /// 临时提示词升格为正式条目时携带的一页（名称与正文）。
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PromptPageDraft {
@@ -241,8 +250,23 @@ pub enum Effect {
         session_id: String,
         agent_id: Option<String>,
     },
+    /// 用户主动停止 subagent（Agents `^d` / 停止面板）：标记 `stopped_by_user`、
+    /// 取消目标子树排队输入，且不生成报告；主 agent 不得自行恢复。
+    StopSubagentsByUser {
+        session_id: String,
+        agent_id: Option<String>,
+    },
+    /// 停止当前会话全部受管后台进程（停止面板的 `Stop all shells`）。
+    StopAllSessionProcesses { pane: crate::tiling::PaneId },
     /// 父轮次结束后尝试把未投递报告合并成自动轮；用户输入优先。
     DrainSubagentReports { pane: crate::tiling::PaneId },
+    /// Agents 面板 `/report`：对空闲子 agent 做一次独立总结（不落消息），正文填入主输入框。
+    SendSubagentReport {
+        pane: crate::tiling::PaneId,
+        session_id: String,
+        agent_id: String,
+        note: String,
+    },
     /// 在 `Agents` 面板向指定子 agent 直接发送内联追问（若已结束则自动先 `resume` 再触发新轮次）。
     SendSubagentUserInput {
         pane: crate::tiling::PaneId,
@@ -430,8 +454,14 @@ pub enum Effect {
         /// 提交时的输入修订号：只有仍匹配才允许清空草稿。
         draft_revision: u64,
     },
-    /// 停止该窗格当前在途/运行中的本地命令（双 Esc）。
-    CancelUserShells { pane: crate::tiling::PaneId },
+    /// 停止该窗格当前在途/运行中的本地命令。
+    ///
+    /// `scope = All` 保留旧双 Esc 语义（同时清空普通聊天排队项）；
+    /// `ShellsOnly` 只清 shell 相关项，停止面板使用。
+    CancelUserShells {
+        pane: crate::tiling::PaneId,
+        scope: UserShellStopScope,
+    },
     // ===== todo（全局列表）=====
     /// 写入一条（UPSERT：不存在则按 `position` 插入并顺移，存在则只改文本/状态）。
     SaveTodo { record: crate::db::todo::TodoRecord },
@@ -487,6 +517,13 @@ pub enum BtwEffect {
     },
     /// 提交一条旁路问题。
     Submit(Box<BtwSubmission>),
+    /// 面板 `/report`：对线程会话做一次独立总结（不落 user/assistant 消息）。
+    Report {
+        pane: crate::tiling::PaneId,
+        parent_session_id: String,
+        thread_id: String,
+        note: String,
+    },
     /// 删除某 QA 的旁路线程（`/new`）：DB 级联清理线程与 child session。
     DeleteThread {
         pane: crate::tiling::PaneId,
@@ -515,7 +552,6 @@ pub struct BtwSubmission {
     pub workspace: PathBuf,
     /// 工具执行的冻结工作目录。
     pub cwd: PathBuf,
-    pub thread_id: Option<String>,
     pub submit_id: String,
     /// 草稿修订号：ACK 时只有相同修订号才清空输入。
     pub draft_revision: u64,
@@ -562,9 +598,9 @@ pub struct DetailRewindRequest {
     pub request: RewindRequest,
 }
 
-/// 一次压缩请求：会话、冻结的 revision 与当前模型全部在发起时确定。
+/// 一次压缩/报告请求：会话、冻结的 revision 与当前模型全部在发起时确定。
 ///
-/// 摘要请求是**独立请求**（不带工具、不落普通消息）；事件层用它装配请求并执行。
+/// 请求是**独立请求**（不带工具、不落普通消息）；事件层用它装配请求并执行。
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct CompactRequest {
     pub pane: crate::tiling::PaneId,
@@ -584,8 +620,18 @@ pub struct CompactRequest {
     pub api_key: String,
     pub variant_params: Option<serde_json::Value>,
     pub idle_timeout_ms: u64,
-    /// 幂等键（同一次压缩的重复回执只写一次）。
+    /// 幂等键（同一次压缩/报告的重复回执只写一次）。
     pub operation_id: String,
+    /// 用途：上下文压缩或面板 `/report` 总结。
+    pub kind: crate::db::chat::CompactKind,
+    /// 报告备注（compact 为空）。
+    pub note: String,
+    /// 报告来源头（仅 `kind = Report`；提交时拼进持久化正文）。
+    pub report_header: Option<String>,
+    /// 报告发起时已提交的变更文件（最多展示 8 条）。
+    pub report_changed_paths: Vec<String>,
+    /// 变更文件总数（可能大于 `report_changed_paths.len()`）。
+    pub report_changed_total: usize,
 }
 
 /// 一次 compact 撤销请求。

@@ -62,6 +62,26 @@ pub fn on_started(
     target: &DetailTarget,
     operation_id: String,
 ) -> bool {
+    on_started_kind(state, pane, target, operation_id, false)
+}
+
+/// 事件层已受理 `/report` 总结：置执行态（与 compact 共用 running/计时）。
+pub fn on_report_started(
+    state: &mut AppState,
+    pane: PaneId,
+    target: &DetailTarget,
+    operation_id: String,
+) -> bool {
+    on_started_kind(state, pane, target, operation_id, true)
+}
+
+fn on_started_kind(
+    state: &mut AppState,
+    pane: PaneId,
+    target: &DetailTarget,
+    operation_id: String,
+    report: bool,
+) -> bool {
     let now = crate::db::now_ms();
     let Some(target_state) = state.pane_mut_anywhere(pane) else {
         return false;
@@ -72,7 +92,12 @@ pub fn on_started(
             .agents
             .by_agent_mut(agent_id)
             .map(|run| {
-                if !run.compact.start(operation_id.clone(), now) {
+                let started = if report {
+                    run.compact.start_report(operation_id.clone(), now)
+                } else {
+                    run.compact.start(operation_id.clone(), now)
+                };
+                if !started {
                     return false;
                 }
                 run.touch_access();
@@ -87,7 +112,12 @@ pub fn on_started(
             .btw
             .thread_by_thread_id_mut(thread_id)
             .map(|thread| {
-                if !thread.compact.start(operation_id.clone(), now) {
+                let started = if report {
+                    thread.compact.start_report(operation_id.clone(), now)
+                } else {
+                    thread.compact.start(operation_id.clone(), now)
+                };
+                if !started {
                     return false;
                 }
                 thread.rows_dirty = true;
@@ -112,9 +142,16 @@ pub fn handle_finished(
     operation_id: &str,
     outcome: &DetailCompactResult,
     checkpoints: Option<&[crate::db::chat::CompactCheckpoint]>,
+    report: bool,
 ) -> bool {
     let Some(target) = state.pane_mut_anywhere(pane) else {
         return false;
+    };
+    let is_btw = target.lx.btw.thread_by_child_session(session_id).is_some();
+    let report_unavailable = if is_btw {
+        text::detail::LX_BTW_REPORT_UNAVAILABLE
+    } else {
+        text::detail::LX_REPORT_UNAVAILABLE
     };
     let notices = checkpoints.map(|records| {
         records
@@ -156,6 +193,8 @@ pub fn handle_finished(
         return false;
     }
     match outcome {
+        // 报告成功由事件层继续填主输入框，这里不重复 Toast。
+        DetailCompactResult::Committed if report => {}
         DetailCompactResult::Committed => show_lx_toast(
             state,
             pane,
@@ -166,12 +205,32 @@ pub fn handle_finished(
                 std::time::Instant::now(),
             ),
         ),
+        DetailCompactResult::Empty if report => show_lx_toast(
+            state,
+            pane,
+            Toast::new(
+                ToastKind::Warning,
+                report_unavailable,
+                Some(pane),
+                std::time::Instant::now(),
+            ),
+        ),
         DetailCompactResult::Empty => show_lx_toast(
             state,
             pane,
             Toast::new(
                 ToastKind::Default,
                 text::LX_COMPACT_EMPTY,
+                Some(pane),
+                std::time::Instant::now(),
+            ),
+        ),
+        DetailCompactResult::Failed(message) if report => show_lx_toast(
+            state,
+            pane,
+            Toast::new(
+                ToastKind::Warning,
+                format!("{report_unavailable} ({message})"),
                 Some(pane),
                 std::time::Instant::now(),
             ),

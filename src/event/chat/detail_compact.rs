@@ -170,6 +170,11 @@ pub(crate) fn prepare(
             variant_params: frozen.variant_params.clone(),
             idle_timeout_ms: frozen.idle_timeout_ms,
             operation_id,
+            kind: crate::db::chat::CompactKind::Compact,
+            note: String::new(),
+            report_header: None,
+            report_changed_paths: Vec::new(),
+            report_changed_total: 0,
         },
     );
     true
@@ -185,21 +190,35 @@ pub(crate) fn handle_finished(
     operation_id: &str,
     outcome: &CompactOutcome,
 ) -> bool {
-    let running = state.pane_anywhere(pane).is_some_and(|target| {
+    let agent_running = state.pane_anywhere(pane).is_some_and(|target| {
         target
             .lx
             .agents
             .by_session(session_id)
             .is_some_and(|run| run.compact.running.as_deref() == Some(operation_id))
+    });
+    let btw_running = state.pane_anywhere(pane).is_some_and(|target| {
+        target
+            .lx
+            .btw
+            .thread_by_child_session(session_id)
+            .is_some_and(|thread| thread.compact.running.as_deref() == Some(operation_id))
+    });
+    if !agent_running && !btw_running {
+        return false;
+    }
+    let report = state.pane_anywhere(pane).is_some_and(|target| {
+        target
+            .lx
+            .agents
+            .by_session(session_id)
+            .is_some_and(|run| run.compact.running_report)
             || target
                 .lx
                 .btw
                 .thread_by_child_session(session_id)
-                .is_some_and(|thread| thread.compact.running.as_deref() == Some(operation_id))
+                .is_some_and(|thread| thread.compact.running_report)
     });
-    if !running {
-        return false;
-    }
     // 提交已成功；回填读失败时保留现有视图，但必须结束 running，否则
     // `compacting` 会永久占位并让心跳以 10Hz 空转。
     let checkpoints = match outcome {
@@ -215,12 +234,31 @@ pub(crate) fn handle_finished(
             crate::app::update::DetailCompactResult::Failed(message.clone())
         }
     };
-    crate::app::update::on_detail_compact_finished(
+    let changed = crate::app::update::on_detail_compact_finished(
         state,
         pane,
         session_id,
         operation_id,
         &result,
         checkpoints.as_deref(),
-    )
+        report,
+    );
+    if !changed || !report || !matches!(outcome, CompactOutcome::Committed) {
+        return changed;
+    }
+    let Some(checkpoints) = checkpoints.as_deref() else {
+        crate::app::update::show_lx_toast(
+            state,
+            pane,
+            crate::app::toast::Toast::new(
+                crate::app::toast::ToastKind::Warning,
+                crate::ui::text::detail::LX_REPORT_UNAVAILABLE,
+                Some(pane),
+                std::time::Instant::now(),
+            ),
+        );
+        return changed;
+    };
+    crate::app::update::finish_generated(state, pane, session_id, checkpoints);
+    true
 }

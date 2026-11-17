@@ -50,6 +50,7 @@ pub fn new_session(state: &mut AppState, pane: PaneId) -> bool {
     target.lx.model_switch.reset();
     target.lx.recap.reset();
     target.lx.clear_rewind();
+    target.lx.strip_report_chips();
     target.lx.text_paste_cancel();
     target.lx.clear_expanded_pastes();
     crate::app::update::clear_lx_selection_for(state, pane);
@@ -231,6 +232,7 @@ pub fn on_session_loaded_full(
     target.lx.model_switch.reset();
     target.lx.recap.reset();
     target.lx.clear_rewind();
+    target.lx.strip_report_chips();
     target.lx.text_paste_cancel();
     target.lx.clear_expanded_pastes();
     // 切换会话：未执行的命令与排队项不得漂移到新会话。
@@ -301,6 +303,16 @@ pub fn on_session_loaded_full(
     super::restore_plan(state, pane, &restored_messages);
     // 历史会话：spawn 卡片的状态可从已加载的汇报行回填；置位后由事件循环对账。
     super::subagent::request_subagent_cards_refresh(state, pane);
+    // 切回会话时 Agents 列表已被清空，但事件层的子 agent 句柄仍在跑：
+    // 不回投列表会让停止面板看不到它们（双击 Esc 退化到 /rewind）。
+    if session_changed {
+        state
+            .effects
+            .push(crate::app::effects::Effect::ListSubagents {
+                pane,
+                parent_session: session_id.to_string(),
+            });
+    }
     crate::app::update::clear_lx_selection_for(state, pane);
     true
 }

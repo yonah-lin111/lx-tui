@@ -10,6 +10,7 @@ mod history;
 mod model_switch;
 mod process_cards;
 mod prompt_history;
+mod report_fill;
 mod rewind;
 mod session;
 mod slash_panels;
@@ -1233,13 +1234,6 @@ fn streaming_state(session: &str) -> (AppState, PaneId, RequestKey) {
         generation,
     };
     (state, pane, key)
-}
-
-/// 过去 `STOP_ARM_WINDOW` 加 1ms 的时刻（用于待命过期分支）。
-fn expired_arm() -> std::time::Instant {
-    std::time::Instant::now()
-        .checked_sub(STOP_ARM_WINDOW + Duration::from_millis(1))
-        .expect("monotonic clock")
 }
 
 // ===== 发送时的「未知命令」拦截（提示显示在输入框上方）=====

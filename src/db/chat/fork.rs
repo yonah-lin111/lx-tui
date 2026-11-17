@@ -94,6 +94,7 @@ struct CheckpointRow {
     end_sequence: i64,
     summary_text: String,
     model_label: String,
+    kind: String,
     created_at_ms: i64,
 }
 
@@ -838,7 +839,7 @@ fn copy_checkpoints(
 ) -> Result<()> {
     let mut statement = conn.prepare(
         r#"SELECT external_id, sequence, base_checkpoint_id, start_sequence, end_sequence,
-                  summary_text, model_label, created_at_ms
+                  summary_text, model_label, kind, created_at_ms
            FROM agent_compact_checkpoint
            WHERE session_id = ?1 AND state = 'active'
              AND end_sequence >= ?2 AND end_sequence < ?3
@@ -854,7 +855,8 @@ fn copy_checkpoints(
                 end_sequence: row.get(4)?,
                 summary_text: row.get(5)?,
                 model_label: row.get(6)?,
-                created_at_ms: row.get(7)?,
+                kind: row.get(7)?,
+                created_at_ms: row.get(8)?,
             })
         })?
         .collect::<std::result::Result<Vec<_>, _>>()?;
@@ -864,9 +866,9 @@ fn copy_checkpoints(
         conn.execute(
             r#"INSERT INTO agent_compact_checkpoint
                    (external_id, session_id, sequence, operation_id, base_checkpoint_id,
-                    start_sequence, end_sequence, summary_text, model_label, state,
+                    start_sequence, end_sequence, summary_text, model_label, kind, state,
                     reverted_by_operation_id, created_at_ms)
-               VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, 'active', NULL, ?10)"#,
+               VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, 'active', NULL, ?11)"#,
             params![
                 new_id,
                 new_session_id,
@@ -880,6 +882,7 @@ fn copy_checkpoints(
                 row.end_sequence,
                 row.summary_text,
                 row.model_label,
+                row.kind,
                 row.created_at_ms,
             ],
         )?;

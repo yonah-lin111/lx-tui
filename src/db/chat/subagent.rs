@@ -781,6 +781,67 @@ impl Database {
         Ok((total, paths))
     }
 
+    /// 子会话**全部**已提交改动路径（跨轮次去重；报告 chip 尾巴用）。
+    ///
+    /// 与 `list_changed_paths_for_turn` 同口径，只是不再按 user message 过滤：
+    /// 一次性 `/report` 总结覆盖整个子会话，不能只报最后一轮。
+    pub fn list_all_changed_paths(
+        &self,
+        workspace: &Path,
+        session_id: &str,
+    ) -> Result<(usize, Vec<String>)> {
+        let Some(workspace_external) = self.workspace_external_id(workspace)? else {
+            return Ok((0, Vec::new()));
+        };
+        let total: i64 = self.conn.query_row(
+            r#"SELECT COUNT(DISTINCT m.target_path) FROM agent_file_mutation m
+               WHERE m.session_id = ?1 AND m.state = 'committed' AND m.success = 1
+                 AND m.session_id IN (
+                     SELECT external_id FROM agent_session WHERE workspace_id = ?2
+                 )"#,
+            params![session_id, workspace_external],
+            |row| row.get(0),
+        )?;
+        let total = usize::try_from(total).unwrap_or_default();
+        if total == 0 {
+            return Ok((0, Vec::new()));
+        }
+        let mut statement = self.conn.prepare(
+            r#"SELECT m.target_path FROM agent_file_mutation m
+               WHERE m.session_id = ?1 AND m.state = 'committed' AND m.success = 1
+                 AND m.session_id IN (
+                     SELECT external_id FROM agent_session WHERE workspace_id = ?2
+                 )
+               GROUP BY m.target_path
+               ORDER BY MIN(m.id) ASC
+               LIMIT ?3"#,
+        )?;
+        let rows = statement.query_map(
+            params![
+                session_id,
+                workspace_external,
+                crate::chat::agent::MAX_REPORT_CHANGED_PATHS as i64
+            ],
+            |row| row.get::<_, String>(0),
+        )?;
+        let mut paths = Vec::new();
+        for row in rows {
+            let raw = row?;
+            let relative = Path::new(&raw)
+                .strip_prefix(workspace)
+                .map(|path| {
+                    if path.as_os_str().is_empty() {
+                        ".".to_string()
+                    } else {
+                        path.display().to_string()
+                    }
+                })
+                .unwrap_or(raw);
+            paths.push(relative);
+        }
+        Ok((total, paths))
+    }
+
     /// 列表：一条 SQL 联查元数据（不含消息流）。
     pub fn list_subagents(
         &self,

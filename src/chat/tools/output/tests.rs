@@ -1151,6 +1151,36 @@ fn lx_ask_answered(
     }
 }
 
+/// 用户停止的等待目标：结果必须明确告知模型不要再等，而不是让它反复重试。
+#[test]
+fn subagent_wait_marks_user_stopped_targets_and_skips_retry() {
+    use crate::chat::agent::{AgentRole, AgentStatusView, SubagentOutcome, WaitMode};
+
+    let waited = ToolExecutionResult::Subagent(Box::new(SubagentOutcome::Waited {
+        timed_out: false,
+        agents: vec![AgentStatusView {
+            agent_id: "sub-a".into(),
+            nickname: Some("Turing".into()),
+            agent_path: Some("/root/turing".into()),
+            title: "inspect".into(),
+            role: AgentRole::Explorer,
+            status: "stopped".into(),
+            stopped_by_user: true,
+            report: None,
+        }],
+        all: true,
+        mode: WaitMode::All,
+    }));
+    let text = format_for_model(&waited);
+    assert!(
+        text.contains("note: 1 agent(s) were stopped by the user"),
+        "{text}"
+    );
+    assert!(text.contains("do not wait for them again"), "{text}");
+    assert!(text.contains("status=stopped"), "{text}");
+    assert!(text.contains("stopped_by_user=true"), "{text}");
+}
+
 /// `list_agents(include_private=true)` 的私聊转录必须进入模型可见文本。
 #[test]
 fn subagent_list_renders_private_tail_only_when_present() {
@@ -1163,6 +1193,7 @@ fn subagent_list_renders_private_tail_only_when_present() {
         role: AgentRole::Explorer,
         title: "inspect".into(),
         status: "completed".into(),
+        stopped_by_user: false,
         queued_count: 0,
         private_tail: tail.map(str::to_string),
     };
@@ -1185,4 +1216,34 @@ fn subagent_list_renders_private_tail_only_when_present() {
         1,
         "默认列表项不得有转录：{text}"
     );
+}
+
+/// 系统提示承诺 `list_agents` 标记用户停止；模型可见文本必须真的带上该字段。
+#[test]
+fn subagent_list_marks_user_stopped_targets() {
+    use crate::chat::agent::{AgentListItemView, AgentRole, SubagentOutcome};
+
+    let mut item = AgentListItemView {
+        agent_id: "sub-a".into(),
+        nickname: Some("Turing".into()),
+        agent_path: Some("/root/turing".into()),
+        role: AgentRole::Explorer,
+        title: "inspect".into(),
+        status: "stopped".into(),
+        stopped_by_user: true,
+        queued_count: 0,
+        private_tail: None,
+    };
+    let listed = ToolExecutionResult::Subagent(Box::new(SubagentOutcome::Listed {
+        agents: vec![item.clone()],
+    }));
+    let text = format_for_model(&listed);
+    assert!(text.contains("status=stopped"), "{text}");
+    assert!(text.contains("stopped_by_user=true"), "{text}");
+
+    item.stopped_by_user = false;
+    let listed =
+        ToolExecutionResult::Subagent(Box::new(SubagentOutcome::Listed { agents: vec![item] }));
+    let text = format_for_model(&listed);
+    assert!(!text.contains("stopped_by_user=true"), "{text}");
 }

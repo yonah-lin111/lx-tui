@@ -475,6 +475,8 @@ pub const FORKED_CONTEXT_TAG: &str = "forked";
 /// `wait_agent` 摘要里的目标计数单位。
 pub const AGENTS_LABEL: &str = "agents";
 pub const WAIT_TIMED_OUT: &str = "timed out";
+/// 用户主动停止过等待目标：等待已按停止终态结算。
+pub const WAIT_STOPPED: &str = "stopped";
 /// 全部等待时的单行标签。
 pub const WAIT_ALL: &str = "All";
 /// wait 条件：等待本会话全部子 agent。

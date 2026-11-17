@@ -26,10 +26,12 @@ pub mod model_switch;
 mod panels;
 pub mod recap;
 pub mod refer;
+pub mod report;
 pub mod rewind;
 mod selection;
 pub mod shell;
 pub mod slash;
+pub mod stop;
 pub mod task;
 pub mod web;
 
@@ -62,6 +64,7 @@ pub use mcp::{McpCatalogEntry, McpPanel, McpPanelEntry, McpRuntimeState, McpServ
 pub use mention::{LxMention, LxMentionView, SubagentMentionItem, SubagentRunMentionEntry};
 pub use model_switch::{LxModelSwitch, ModelSwitchNoticeView};
 pub use recap::{LxRecap, MessageRecapView, RecapPending};
+pub use report::{ReportAction, ReportPanel};
 pub use rewind::{
     LxRewind, RewindAction, RewindExecution, RewindNoticeView, RewindPanel, RewindScope,
     RewindTarget, RewindTargetKind, SnapshotState,
@@ -70,6 +73,7 @@ pub use slash::{
     ForkEntry, ForkPanel, HistoryEntry, HistoryPanel, ModelCandidate, ModelPicker,
     ModelPickerStage, PanelWindow, SlashCommand, SlashEntry, SlashPanel,
 };
+pub use stop::{StopAction, StopAvailability, StopPanel};
 pub use task::{AgentFilter, ProcessEntry, TaskPage, TaskTab};
 pub use web::{
     AI_WEB_DEEPSEEK_SESSION_PREFIX, AI_WEB_GEMINI_SESSION_PREFIX, AI_WEB_GROK_SESSION_PREFIX,

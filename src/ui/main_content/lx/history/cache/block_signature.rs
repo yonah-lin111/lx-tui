@@ -125,6 +125,7 @@ pub(crate) fn compact_block_signature(
     hash.write_str(&notice.summary);
     hash.write_u8(u8::from(notice.active));
     hash.write_u8(u8::from(notice.auto));
+    hash.write_u8(u8::from(notice.report));
     hash.write_u8(u8::from(expanded));
     hash.finish()
 }
@@ -133,6 +134,7 @@ pub(crate) fn compact_block_signature(
 pub(crate) fn running_compact_block_signature(compact: &crate::app::state::LxCompact) -> u64 {
     let mut hash = Fnv::new();
     hash.write_str(compact.running.as_deref().unwrap_or(""));
+    hash.write_u8(u8::from(compact.running_report));
     hash.write_i64(crate::ui::text::elapsed_seconds(
         compact.elapsed_ms.unwrap_or(0),
     ));

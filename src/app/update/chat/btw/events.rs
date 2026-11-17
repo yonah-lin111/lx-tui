@@ -178,6 +178,29 @@ pub fn on_thread_loaded(
     true
 }
 
+/// 乐观投影的下一个展示序号：消息、撤销提示与检查点共用同一编号空间。
+///
+/// 线程里的新问答在回投时只拿得到本地状态，没有 DB 分配的真实序号；若一律写
+/// 0，时间线会把它排到所有既有条目之前（检查点因此永远停在底部）。
+fn next_display_sequence(thread: &crate::app::state::lx::BtwThreadState) -> i64 {
+    thread
+        .chat
+        .messages
+        .iter()
+        .map(|message| message.sequence)
+        .chain(thread.chat.notices.iter().map(|notice| notice.sequence))
+        .chain(
+            thread
+                .compact
+                .checkpoints
+                .iter()
+                .map(|checkpoint| checkpoint.sequence),
+        )
+        .max()
+        .unwrap_or(-1)
+        .saturating_add(1)
+}
+
 /// 提交被接受后的回投字段（事件层 → 应用层）。
 #[derive(Debug, Clone)]
 pub struct AcceptedBtw {
@@ -208,9 +231,10 @@ pub fn on_accepted(state: &mut AppState, pane: PaneId, event: AcceptedBtw) -> bo
     if revision == Some(thread.composer.revision()) {
         thread.composer.clear();
     }
+    let sequence = next_display_sequence(thread);
     thread.chat.messages.push(ChatMessageView {
         id: event.user_message_id.clone(),
-        sequence: 0,
+        sequence,
         kind: "chat".to_string(),
         role: "user".to_string(),
         status: "complete".to_string(),
@@ -286,11 +310,23 @@ pub fn on_recipient_started(
             return false;
         }
         thread.pending_recipients = thread.pending_recipients.saturating_sub(1);
-        thread
-            .chat
-            .messages
-            .push(new_assistant_message(assistant_message_id, label));
+        let sequence = next_display_sequence(thread);
+        let mut message = new_assistant_message(assistant_message_id, label);
+        message.sequence = sequence;
+        thread.chat.messages.push(message);
         thread.rows_dirty = true;
+        // QA 行状态代表最近批次：新回答者一开始就替换掉上一批次留下的状态
+        // （例如启动恢复标记的 interrupted），不能让列表与新回答自相矛盾。
+        let qa_id = thread.qa_id.clone();
+        if let Some(summary) = target
+            .lx
+            .btw
+            .qa
+            .iter_mut()
+            .find(|summary| summary.qa_id == qa_id)
+        {
+            summary.status = "running".to_string();
+        }
         return true;
     }
     false
@@ -434,6 +470,28 @@ pub fn on_failed(state: &mut AppState, pane: PaneId, qa_id: Option<&str>, messag
     }
     show_lx_hint(state, pane, InputHintLevel::Error, message);
     true
+}
+
+/// 事件层回投：单个回答者启动失败；批次其余目标继续。
+///
+/// 与 [`on_failed`] 的区别：提交已被接受、草稿已清空，不能谎报“草稿保留”，
+/// 也不能把同批次其它目标的等待标记一起清掉。
+pub fn on_recipient_failed(state: &mut AppState, pane: PaneId, qa_id: &str, message: &str) -> bool {
+    let mut changed = false;
+    if let Some(target) = state.pane_mut_anywhere(pane) {
+        if let Some(thread) = target.lx.btw.thread_mut(qa_id) {
+            thread.pending_recipients = thread.pending_recipients.saturating_sub(1);
+            changed = true;
+        }
+        if let Some(session) = target.lx.chat.session_id.clone() {
+            state.effects.push(Effect::Btw(BtwEffect::LoadQaList {
+                pane,
+                parent_session_id: session,
+            }));
+        }
+    }
+    show_lx_hint(state, pane, InputHintLevel::Error, message);
+    changed
 }
 
 /// 读取某回答者 assistant 消息的完整 parts（结算前快照）。

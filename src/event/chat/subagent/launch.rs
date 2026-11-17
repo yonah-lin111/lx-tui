@@ -100,6 +100,9 @@ pub(super) fn launch_child_turn(
         .load_chat_session(workspace, &record.child_session_id)
         .ok()
         .flatten();
+    let private_ids = database
+        .private_input_user_message_ids(workspace, &record.child_session_id)
+        .unwrap_or_default();
     let existing_checkpoints: Vec<crate::app::state::CompactNoticeView> = database
         .compact_checkpoints(workspace, &record.child_session_id)
         .unwrap_or_default()
@@ -116,6 +119,7 @@ pub(super) fn launch_child_turn(
                 .map(|msg| crate::app::update::view_message_of(msg, &models_snapshot))
                 .collect();
             chat.rebuild_steered_user_messages(existing);
+            chat.rebuild_private_user_messages(existing, &private_ids);
             chat.request = RequestState::Streaming {
                 key: child_key.clone(),
                 assistant_id: child_assistant_id.to_string(),
@@ -211,6 +215,7 @@ pub(super) fn launch_child_turn(
         started_at_ms,
         max_tokens: limits.max_tokens,
         closed_without_report: false,
+        stopped_by_user: false,
         notify_parent,
         mutation_user_id: mutation_user_id.clone(),
         chat: child_chat,

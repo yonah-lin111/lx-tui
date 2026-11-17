@@ -52,8 +52,9 @@ pub(crate) fn finish_subagent_with_billing(
     };
     let was_interrupted_by_input = streams.interrupted_subagents.remove(&handle.agent_id);
     let was_paused_by_interrupt = streams.paused_by_interrupt.remove(&handle.agent_id);
-    // `close_agent` / 用户停止 / 会话或应用关闭：即使本轮被取消也不生成报告。
+    // `close_agent` / 用户主动停止 / 会话或应用关闭：即使本轮被取消也不生成报告。
     let was_closed = handle.closed_without_report;
+    let was_stopped_by_user = handle.stopped_by_user;
     handle.status = match reason {
         StopReason::Complete => STATUS_COMPLETED,
         StopReason::Cancelled => STATUS_CANCELLED,
@@ -75,7 +76,7 @@ pub(crate) fn finish_subagent_with_billing(
     let budget_hit = budget_exceeded || max_tokens_hit(&reason, handle.max_tokens, usage);
     let mut report_view = None;
     if let Some(database) = persistence.database() {
-        let report = (!was_closed && handle.notify_parent).then(|| {
+        let report = (!was_closed && !was_stopped_by_user && handle.notify_parent).then(|| {
             let turn_user_message_ids = if handle.turn_user_message_ids.is_empty() {
                 vec![handle.child_user_message_id.clone()]
             } else {
@@ -176,6 +177,7 @@ pub(crate) fn finish_subagent_with_billing(
     // 只有正常完成才自动起新一轮；停止/中断/预算/失败后重启会绕过暂停语义。
     let safe_to_restart = matches!(&reason, StopReason::Complete)
         && !was_closed
+        && !was_stopped_by_user
         && !was_paused_by_interrupt
         && !budget_hit;
     if safe_to_restart {
@@ -290,7 +292,10 @@ pub(crate) fn finish_subagent_with_billing(
             streams.resumed_subagents.remove(&handle.agent_id);
         }
         StopReason::Cancelled => {
-            if was_interrupted_by_input {
+            if was_stopped_by_user {
+                // 用户主动停止：不自动恢复、不消费队列；标记保留到显式 resume/send_input。
+                streams.resumed_subagents.remove(&handle.agent_id);
+            } else if was_interrupted_by_input {
                 streams.resumed_subagents.insert(handle.agent_id.clone());
                 if let Ok(Some(_)) = schedule_next_queued_input_with_done(
                     state,

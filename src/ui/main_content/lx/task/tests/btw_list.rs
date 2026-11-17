@@ -429,3 +429,32 @@ fn btw_streaming_tool_step_breathes_like_main_history() {
     lx.btw.active_thread_mut().expect("thread").chat.messages[0].status = "complete".into();
     assert_eq!(glyph_at(&lx, &mut cache), filled, "终态恒实心");
 }
+
+#[test]
+fn btw_user_message_uses_distinct_background() {
+    let mut lx = Lx::new();
+    lx.task = Some(TaskPage {
+        tab: TaskTab::Btw,
+        ..Default::default()
+    });
+    lx.btw.ensure_thread("qa-1");
+    lx.btw
+        .active_thread_mut()
+        .expect("thread")
+        .chat
+        .messages
+        .push(text_message("u1", "user", "btw question"));
+    let area = Rect::new(0, 0, 60, 20);
+    let output = task_output_rect(area, &lx).expect("output");
+    let mut cache = crate::ui::main_content::lx::PaneCache::default();
+    let mut grid = super::super::super::grid::Grid::new(output);
+    super::btw::draw_conversation(&mut grid, output, &lx, &mut cache);
+    let y = (output.y..output.bottom())
+        .find(|y| (output.x..output.right()).any(|x| grid.cell(x, *y).ch == 'b'))
+        .expect("BTW question row");
+    assert_eq!(
+        grid.cell(output.x.saturating_add(1), y).style.bg,
+        crate::ui::style::chat_user_btw_bg().bg,
+        "BTW 用户消息必须与主会话底色不同"
+    );
+}

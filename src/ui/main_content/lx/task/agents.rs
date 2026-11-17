@@ -188,7 +188,7 @@ fn list_columns(runs: &[&SubagentRun], prefixes: &[Option<String>], now_ms: i64)
         .iter()
         .map(|run| {
             text_width(&text::agent_status_with_queue(
-                &run.status,
+                run.display_status(),
                 run.queued_count,
             ))
         })
@@ -371,12 +371,14 @@ pub(super) fn draw_list(grid: &mut Grid, list: Rect, page: &TaskPage, agents: &A
         let mark = if run.is_running() {
             crate::ui::main_content::lx::history::StepMark::Running
         } else {
-            match run.status.as_str() {
+            match run.display_status() {
                 "failed" => crate::ui::main_content::lx::history::StepMark::Failed,
                 "blocked" | "interrupted" => {
                     crate::ui::main_content::lx::history::StepMark::Interrupted
                 }
-                "cancelled" => crate::ui::main_content::lx::history::StepMark::Cancelled,
+                "cancelled" | "stopped" => {
+                    crate::ui::main_content::lx::history::StepMark::Cancelled
+                }
                 _ => crate::ui::main_content::lx::history::StepMark::Done,
             }
         };
@@ -407,8 +409,8 @@ pub(super) fn draw_list(grid: &mut Grid, list: Rect, page: &TaskPage, agents: &A
         if status_x.saturating_add(columns.status_w) > right {
             continue;
         }
-        let status_label = text::agent_status_with_queue(&run.status, run.queued_count);
-        let status_style = match run.status.as_str() {
+        let status_label = text::agent_status_with_queue(run.display_status(), run.queued_count);
+        let status_style = match run.display_status() {
             "running" | "blocked" | "interrupted" => style::agent_warn(),
             "failed" => style::agent_fail(),
             _ => style::agent_step_detail(),

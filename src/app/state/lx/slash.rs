@@ -678,6 +678,10 @@ pub enum SlashPanel {
     Fork(Box<ForkPanel>),
     /// `/rewind` 四项动作面板。
     Rewind(Box<crate::app::state::lx::rewind::RewindPanel>),
+    /// 双击 Esc 的停止动作面板。
+    Stop(Box<crate::app::state::lx::stop::StopPanel>),
+    /// 详情 composer `/report` 的重发/重新生成面板。
+    Report(Box<crate::app::state::lx::report::ReportPanel>),
     /// `/mcp` 窗格级 MCP 管理面板。
     Mcp(Box<crate::app::state::lx::mcp::McpPanel>),
 }
@@ -760,6 +764,8 @@ impl SlashPanel {
             Self::Fork(panel) => panel.filtered.len(),
             // 动作集按目标类型不同（普通轮次四项 / compact 两项），以面板为准。
             Self::Rewind(panel) => panel.len(),
+            Self::Stop(panel) => panel.len(),
+            Self::Report(panel) => panel.len(),
             Self::Mcp(panel) => panel.filtered.len(),
         }
     }
@@ -772,6 +778,8 @@ impl SlashPanel {
             Self::History(panel) => panel.window,
             Self::Fork(panel) => panel.window,
             Self::Rewind(panel) => panel.window,
+            Self::Stop(panel) => panel.window,
+            Self::Report(panel) => panel.window,
             Self::Mcp(panel) => panel.window,
         }
     }
@@ -796,6 +804,8 @@ impl SlashPanel {
             }
             Self::Fork(_) => None,
             Self::Rewind(_) => None,
+            Self::Stop(_) => None,
+            Self::Report(_) => None,
             Self::Mcp(_) => None,
         }
     }
@@ -810,6 +820,8 @@ impl SlashPanel {
             Self::History(panel) => panel.window = window,
             Self::Fork(panel) => panel.window = window,
             Self::Rewind(panel) => panel.window = window,
+            Self::Stop(panel) => panel.window = window,
+            Self::Report(panel) => panel.window = window,
             Self::Mcp(panel) => panel.window = window,
         }
     }
@@ -827,6 +839,12 @@ impl SlashPanel {
             window.viewport = None;
             return true;
         }
+        // 停止 / 报告面板：跳过禁用项。
+        match self {
+            Self::Stop(panel) => return panel.move_active(delta),
+            Self::Report(panel) => return panel.move_active(delta),
+            _ => {}
+        }
         let mut window = self.window();
         window.move_active(delta, len);
         self.set_window(window);
@@ -838,6 +856,11 @@ impl SlashPanel {
         let len = self.item_count();
         if index >= len {
             return false;
+        }
+        match self {
+            Self::Stop(panel) => return panel.set_active(index),
+            Self::Report(panel) => return panel.set_active(index),
+            _ => {}
         }
         let mut window = self.window();
         if window.active == index {

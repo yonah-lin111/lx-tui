@@ -13,7 +13,7 @@ use unicode_width::UnicodeWidthChar;
 
 use crate::app::state::{AssistantStepView, CardSection, ChatMessageView, ToolCallView};
 
-use super::source::HistorySource;
+use super::source::{HistorySource, HistorySurface};
 use crate::ui::markdown_render::{MdLine, md_bytes};
 use crate::ui::style;
 
@@ -575,6 +575,25 @@ fn folds_at(history: HistorySource<'_>, message_index: usize, call: &ToolCallVie
     super::folds_of(history, &message.id, call)
 }
 
+/// 用户消息整块底色：主会话 / Agents 私聊 / steer / BTW 各用各的色相。
+pub(crate) fn user_message_bg(
+    surface: HistorySurface,
+    selected: bool,
+    steered: bool,
+    private: bool,
+) -> Style {
+    if selected {
+        return style::chat_user_target_bg();
+    }
+    match surface {
+        HistorySurface::Btw => style::chat_user_btw_bg(),
+        HistorySurface::Subagent if steered => style::chat_user_steer_bg(),
+        HistorySurface::Subagent if private => style::chat_user_private_bg(),
+        _ if steered => style::chat_user_steer_bg(),
+        _ => style::chat_user_bg(),
+    }
+}
+
 #[allow(clippy::too_many_arguments)]
 fn draw_user_text(
     grid: &mut Grid,
@@ -596,13 +615,8 @@ fn draw_user_text(
     };
     let selected = history.selected_user_message == Some(message.id.as_str());
     let steered = history.chat.is_steered_user_message(&message.id);
-    let bg = if selected {
-        style::chat_user_target_bg()
-    } else if steered {
-        style::chat_user_steer_bg()
-    } else {
-        style::chat_user_bg()
-    };
+    let private = history.chat.is_private_user_message(&message.id);
+    let bg = user_message_bg(history.surface, selected, steered, private);
     let mut current_row = start;
     let avail_w = rect.width.saturating_sub(USER_INDENT);
     let right_limit = rect.x.saturating_add(USER_INDENT).saturating_add(avail_w);

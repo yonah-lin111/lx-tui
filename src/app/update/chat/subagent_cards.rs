@@ -31,6 +31,8 @@ impl RunCardSnapshot {
             title: self.title.clone(),
             role: self.role,
             status: self.status.clone(),
+            // 实时刷新同样保留“用户停止”语义，等待标题才能在结算前就显示 stopped。
+            stopped_by_user: self.status == "stopped",
             report: self
                 .report
                 .as_ref()
@@ -68,7 +70,8 @@ pub fn refresh_subagent_cards(state: &mut AppState, pane: PaneId) -> bool {
             agent_path: run.agent_path.clone(),
             role: run.role,
             title: run.title.clone(),
-            status: run.status.clone(),
+            // 用户主动停止立即投影为 `stopped`，不等子轮结算完成。
+            status: run.display_status().to_string(),
             report: run.report.clone(),
             live_activity: run.live_activity(),
         })
@@ -222,15 +225,23 @@ fn refresh_messages_with_runs(
             }
             let mut agents: Vec<AgentStatusView> = Vec::new();
             if view.all || view.targets.is_empty() {
-                // 全量等待：先刷新已有条目，再补上等待期间新派发的 run。
+                // 全量等待只覆盖调用者的严格后代：子 agent 自己的 `wait_for=all`
+                // 不能把兄弟/叔伯甚至自己列进卡片；主 agent（/root）则天然覆盖全部 run。
+                let scoped: Vec<&RunCardSnapshot> = runs
+                    .iter()
+                    .filter(|run| {
+                        crate::chat::agent::is_strict_descendant_path(caller_path, &run.agent_path)
+                    })
+                    .collect();
+                // 先刷新已有条目，再补上等待期间新派发的 run。
                 for existing in &view.agents {
-                    if let Some(run) = runs.iter().find(|run| run.agent_id == existing.agent_id) {
+                    if let Some(run) = scoped.iter().find(|run| run.agent_id == existing.agent_id) {
                         agents.push(run.status_view(&reports));
                     } else {
                         agents.push(existing.clone());
                     }
                 }
-                for run in runs {
+                for run in scoped {
                     if !agents.iter().any(|agent| agent.agent_id == run.agent_id) {
                         agents.push(run.status_view(&reports));
                     }

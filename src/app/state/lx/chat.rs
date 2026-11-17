@@ -10,6 +10,7 @@ use crate::db::chat::Usage;
 
 pub mod file_diff;
 mod image;
+pub mod private;
 pub mod shell;
 pub mod steer;
 mod steps;
@@ -590,6 +591,8 @@ pub struct LxChat {
     pub expanded_user_messages: std::collections::HashSet<String>,
     /// 流中 steer 插入的用户消息 ID 集合（用于与普通用户消息区分底色；切会话/重载时同步）。
     pub steered_user_messages: std::collections::HashSet<String>,
+    /// 子 agent 面板私聊追问产生的用户消息 ID 集合（仅详情渲染着色；主会话为空）。
+    pub private_user_messages: std::collections::HashSet<String>,
     /// 子 agent 汇报块已追加的展开批次：每批固定行数，点 `… N more lines` 递增。
     /// 键与汇报块展开状态同口径 `(message_id, "report:<agent_id>")`。
     pub report_expand_steps: Vec<(String, String, usize)>,
@@ -716,6 +719,7 @@ impl LxChat {
             detail_expanded: Vec::new(),
             expanded_user_messages: std::collections::HashSet::new(),
             steered_user_messages: std::collections::HashSet::new(),
+            private_user_messages: std::collections::HashSet::new(),
             report_expand_steps: Vec::new(),
             selected_tool: None,
             selected_compact: None,
@@ -805,6 +809,7 @@ impl LxChat {
         self.promoting_steers = 0;
         self.expanded_user_messages.clear();
         self.steered_user_messages.clear();
+        self.private_user_messages.clear();
         self.session_title = None;
         self.session_title_palette = 0;
         self.loading_session = false;

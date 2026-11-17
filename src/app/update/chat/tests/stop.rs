@@ -1,50 +1,95 @@
-//! Esc 双击停止与流中时间戳测试。
+//! 停止面板与双 Esc 待命测试。
 
+use super::super::stop as stop_panel;
 use super::*;
+use crate::app::state::{
+    QueuedSubmission, SlashPanel, StopAction, StopAvailability, StopPanel, SubagentRun,
+};
+use crate::app::update::pane::apply_lx_input;
+use crate::chat::agent::AgentRole;
+
+/// 最小 subagent run：running + 指定排队数。
+fn agent_run(agent_id: &str, running: bool, queued: usize) -> SubagentRun {
+    let mut run = SubagentRun::from_record(&crate::db::chat::SubagentRecord {
+        agent_id: agent_id.into(),
+        nickname: Some(agent_id.into()),
+        agent_path: format!("/root/{agent_id}"),
+        child_session_id: format!("child-{agent_id}"),
+        parent_session_id: "sess-stop".into(),
+        spawn_message_id: None,
+        role: AgentRole::Executor,
+        model_provider: "p".into(),
+        model_id: "m".into(),
+        model_variant: None,
+        title: "task".into(),
+        status: if running { "running" } else { "idle" }.into(),
+        created_at_ms: 1,
+        completed_at_ms: None,
+        report_json: None,
+        report_delivered: false,
+    });
+    run.queued_count = queued;
+    run
+}
+
+fn open_stop_panel(state: &mut AppState, pane: PaneId, availability: StopAvailability) {
+    state.pane_mut_anywhere(pane).unwrap().lx.slash =
+        Some(SlashPanel::Stop(Box::new(StopPanel::new(availability))));
+}
 
 #[test]
-fn escape_first_press_arms_second_press_stops() {
-    let (mut state, pane, key) = streaming_state("sess-esc");
+fn first_escape_arms_and_second_opens_panel_without_stopping() {
+    let (mut state, pane, _key) = streaming_state("sess-stop-panel");
     state.effects.clear();
-    // 首次 Esc：只待命并提示，不取消请求。
-    assert!(escape_stop(&mut state, pane), "首次 Esc 生效（待命）");
+    assert!(escape_stop(&mut state, pane), "首次 Esc 待命");
+    assert!(state.effects.is_empty(), "首次 Esc 不停止");
+    assert!(escape_stop(&mut state, pane), "二次 Esc 打开面板");
+    let target = state.pane_anywhere(pane).unwrap();
     assert!(
-        state
-            .pane_anywhere(pane)
-            .unwrap()
-            .lx
-            .chat
-            .stop_armed_at
-            .is_some(),
-        "记录待命时刻"
+        matches!(
+            target.lx.slash,
+            Some(SlashPanel::Stop(ref panel)) if panel.active_action() == StopAction::All
+        ),
+        "第二次 Esc 只打开面板，默认 Stop all"
     );
-    assert!(state.effects.is_empty(), "首次 Esc 不取消请求");
-    // 窗口内第二次 Esc：真正停止。
-    assert!(escape_stop(&mut state, pane), "二次 Esc 停止");
     assert!(
-        state
-            .pane_anywhere(pane)
-            .unwrap()
-            .lx
-            .chat
-            .stop_armed_at
-            .is_none(),
-        "停止后清除待命"
+        !state
+            .effects
+            .iter()
+            .any(|effect| matches!(effect, crate::app::effects::Effect::CancelChatStream { .. })),
+        "打开面板本身不得发停止效应"
     );
+}
+
+/// ask 面板期间不能打开停止面板：它既不可见也不接收按键，还会在作答后
+/// 突然变成可执行的全局面板。双击 Esc 保持 ask 的“直接取消整轮”语义。
+#[test]
+fn double_escape_with_pending_ask_stops_the_turn_without_a_hidden_panel() {
+    let (mut state, pane, key) = streaming_state("sess-ask-stop");
+    state.pane_mut_anywhere(pane).unwrap().lx.ask = Some(crate::app::state::AskState::new(
+        key,
+        "call-1".into(),
+        Vec::new(),
+    ));
+    state.effects.clear();
+    assert!(escape_stop(&mut state, pane), "首次 Esc 待命");
+    assert!(escape_stop(&mut state, pane), "二次 Esc 取消整轮");
+    let target = state.pane_anywhere(pane).unwrap();
+    assert!(target.lx.slash.is_none(), "不得留下隐藏的停止面板");
     assert!(
         state
             .effects
             .iter()
-            .any(|effect| matches!(effect, crate::app::effects::Effect::CancelChatStream { key: k } if *k == key)),
-        "发出取消流效应"
+            .any(|effect| matches!(effect, crate::app::effects::Effect::CancelChatStream { .. })),
+        "ask 期间二次 Esc 直接停主轮"
     );
 }
 
 #[test]
-fn escape_is_swallowed_when_idle() {
+fn escape_stays_idle_when_nothing_to_stop() {
     let mut state = ready_state("");
     let pane = focus_pane(&state);
-    assert!(!escape_stop(&mut state, pane), "空闲吞掉 Esc");
+    assert!(!escape_stop(&mut state, pane), "空闲不进入停止待命");
     assert!(
         state
             .pane_anywhere(pane)
@@ -57,78 +102,266 @@ fn escape_is_swallowed_when_idle() {
 }
 
 #[test]
-fn escape_after_window_rearms_without_stopping() {
-    let (mut state, pane, _key) = streaming_state("sess-esc-window");
-    state.effects.clear();
-    // 待命已超窗口：再按只重新待命（不停止）。
-    state.pane_mut_anywhere(pane).unwrap().lx.chat.stop_armed_at = Some(expired_arm());
+fn subagent_only_opens_stop_panel_and_disables_main() {
+    let mut state = ready_state("");
+    let pane = focus_pane(&state);
+    state
+        .pane_mut_anywhere(pane)
+        .unwrap()
+        .lx
+        .agents
+        .runs
+        .push(agent_run("curie", true, 0));
     assert!(escape_stop(&mut state, pane));
-    assert!(state.effects.is_empty(), "过期待命不停止");
+    assert!(escape_stop(&mut state, pane));
+    let target = state.pane_anywhere(pane).unwrap();
+    let Some(SlashPanel::Stop(panel)) = target.lx.slash.as_ref() else {
+        panic!("应打开停止面板");
+    };
+    assert!(!panel.enabled(StopAction::Main));
+    assert!(panel.enabled(StopAction::Subagents));
+}
+
+#[test]
+fn queued_idle_agent_counts_as_stoppable() {
+    let mut state = ready_state("");
+    let pane = focus_pane(&state);
+    state
+        .pane_mut_anywhere(pane)
+        .unwrap()
+        .lx
+        .agents
+        .runs
+        .push(agent_run("curie", false, 2));
+    let target = state.pane_anywhere(pane).unwrap();
+    assert_eq!(target.lx.agents.stoppable_count(), 1);
+    assert!(StopAvailability::from_lx(&target.lx).any());
+}
+
+#[test]
+fn stop_all_emits_main_subagent_and_shell_effects() {
+    let (mut state, pane, _key) = streaming_state("sess-stop-all");
+    {
+        let target = state.pane_mut_anywhere(pane).unwrap();
+        target.lx.agents.runs.push(agent_run("curie", true, 0));
+        target
+            .lx
+            .chat
+            .pending_shells
+            .push(crate::app::state::PendingShell {
+                generation: 1,
+                revision: 0,
+                command: "sleep 1".into(),
+                session: Some("sess-stop-all".into()),
+            });
+    }
+    open_stop_panel(
+        &mut state,
+        pane,
+        StopAvailability {
+            main: true,
+            subagents: 1,
+            shells: 1,
+            processes: 0,
+        },
+    );
+    state.effects.clear();
+    assert!(stop_panel::apply_enter(&mut state, pane));
+    assert!(
+        state
+            .effects
+            .iter()
+            .any(|effect| matches!(effect, crate::app::effects::Effect::CancelChatStream { .. }))
+    );
+    assert!(state.effects.iter().any(|effect| matches!(
+        effect,
+        crate::app::effects::Effect::StopSubagentsByUser { agent_id: None, .. }
+    )));
+    assert!(state.effects.iter().any(|effect| matches!(
+        effect,
+        crate::app::effects::Effect::CancelUserShells {
+            scope: crate::app::effects::UserShellStopScope::All,
+            ..
+        }
+    )));
+    assert!(
+        state.pane_anywhere(pane).unwrap().lx.slash.is_none(),
+        "执行后关闭面板"
+    );
+}
+
+#[test]
+fn stop_all_without_subagents_skips_the_subagent_effect() {
+    let (mut state, pane, _key) = streaming_state("sess-stop-main-only");
+    open_stop_panel(
+        &mut state,
+        pane,
+        StopAvailability {
+            main: true,
+            subagents: 0,
+            shells: 0,
+            processes: 0,
+        },
+    );
+    state.effects.clear();
+    assert!(stop_panel::apply_enter(&mut state, pane));
+    assert!(
+        !state.effects.iter().any(|effect| matches!(
+            effect,
+            crate::app::effects::Effect::StopSubagentsByUser { .. }
+        )),
+        "没有 subagent 时不得触发 Nothing to stop 的空停止"
+    );
+    assert!(
+        state
+            .effects
+            .iter()
+            .any(|effect| matches!(effect, crate::app::effects::Effect::CancelChatStream { .. }))
+    );
+}
+
+#[test]
+fn stop_shells_keeps_chat_queue() {
+    let mut state = ready_state("");
+    let pane = focus_pane(&state);
+    {
+        let target = state.pane_mut_anywhere(pane).unwrap();
+        target.lx.chat.queue.push(QueuedSubmission::Chat {
+            draft: "keep".into(),
+        });
+        target.lx.chat.queue.push(QueuedSubmission::Shell {
+            full_text: "drop".into(),
+            cwd: "/tmp".into(),
+        });
+        target
+            .lx
+            .chat
+            .pending_shells
+            .push(crate::app::state::PendingShell {
+                generation: 1,
+                revision: 0,
+                command: "drop".into(),
+                session: None,
+            });
+    }
+    open_stop_panel(
+        &mut state,
+        pane,
+        StopAvailability {
+            shells: 1,
+            ..StopAvailability::default()
+        },
+    );
+    if let Some(SlashPanel::Stop(panel)) = state.pane_mut_anywhere(pane).unwrap().lx.slash.as_mut()
+    {
+        panel.window.active = 3;
+    }
+    state.effects.clear();
+    assert!(stop_panel::apply_enter(&mut state, pane));
+    let target = state.pane_anywhere(pane).unwrap();
+    assert_eq!(target.lx.chat.queue.len(), 1);
+    assert!(matches!(
+        target.lx.chat.queue.first(),
+        Some(QueuedSubmission::Chat { .. })
+    ));
+    assert!(target.lx.chat.pending_shells.is_empty());
+}
+
+#[test]
+fn stop_shells_stops_managed_processes_when_no_user_shell() {
+    let mut state = ready_state("");
+    let pane = focus_pane(&state);
+    state.pane_mut_anywhere(pane).unwrap().lx.background_tasks = 2;
+    open_stop_panel(
+        &mut state,
+        pane,
+        StopAvailability {
+            processes: 2,
+            ..StopAvailability::default()
+        },
+    );
+    if let Some(SlashPanel::Stop(panel)) = state.pane_mut_anywhere(pane).unwrap().lx.slash.as_mut()
+    {
+        panel.window.active = 3;
+    }
+    state.effects.clear();
+    assert!(stop_panel::apply_enter(&mut state, pane));
+    assert!(state.effects.iter().any(|effect| matches!(
+        effect,
+        crate::app::effects::Effect::StopAllSessionProcesses { pane: effect_pane }
+            if *effect_pane == pane
+    )));
+}
+
+#[test]
+fn stop_main_only_stops_response() {
+    let (mut state, pane, _key) = streaming_state("sess-stop-main");
+    open_stop_panel(
+        &mut state,
+        pane,
+        StopAvailability {
+            main: true,
+            ..StopAvailability::default()
+        },
+    );
+    if let Some(SlashPanel::Stop(panel)) = state.pane_mut_anywhere(pane).unwrap().lx.slash.as_mut()
+    {
+        panel.window.active = 1;
+    }
+    state.effects.clear();
+    assert!(stop_panel::apply_enter(&mut state, pane));
+    assert!(
+        state
+            .effects
+            .iter()
+            .any(|effect| matches!(effect, crate::app::effects::Effect::CancelChatStream { .. }))
+    );
+    assert!(!state.effects.iter().any(|effect| matches!(
+        effect,
+        crate::app::effects::Effect::StopSubagentsByUser { .. }
+    )));
+}
+
+#[test]
+fn expired_panel_target_reports_nothing_to_stop() {
+    let mut state = ready_state("");
+    let pane = focus_pane(&state);
+    open_stop_panel(
+        &mut state,
+        pane,
+        StopAvailability {
+            main: true,
+            ..StopAvailability::default()
+        },
+    );
+    state.effects.clear();
+    assert!(stop_panel::apply_enter(&mut state, pane));
+    assert!(state.effects.is_empty(), "目标已消失不产生停止效应");
     assert!(
         state
             .pane_anywhere(pane)
             .unwrap()
             .lx
-            .chat
-            .stop_armed_at
-            .is_some(),
-        "重新待命"
+            .toast
+            .as_ref()
+            .is_some_and(|toast| toast.message == text::LX_NOTHING_TO_STOP)
     );
 }
 
 #[test]
-fn expired_stop_arm_is_cleared_by_loading_tick() {
-    let (mut state, pane, _key) = streaming_state("sess-esc-expire");
-    state.pane_mut_anywhere(pane).unwrap().lx.chat.stop_armed_at = Some(expired_arm());
-    assert!(advance_lx_loading(&mut state), "流中转轮推进");
-    assert!(
-        state
-            .pane_anywhere(pane)
-            .unwrap()
-            .lx
-            .chat
-            .stop_armed_at
-            .is_none(),
-        "提示随窗口超时消失"
-    );
-}
-
-#[test]
-fn stop_stream_clears_armed_state() {
-    let (mut state, pane, _key) = streaming_state("sess-esc-clear");
-    state.pane_mut_anywhere(pane).unwrap().lx.chat.stop_armed_at = Some(std::time::Instant::now());
-    assert!(stop_stream(&mut state, pane));
-    let target = state.pane_anywhere(pane).unwrap();
-    assert!(target.lx.chat.stop_armed_at.is_none());
-    assert!(target.lx.chat.main_stopped, "显式停止主轮后标记 stopped");
-}
-
-#[test]
-fn stream_parts_record_start_and_end_timestamps() {
-    let (mut state, pane, key) = streaming_state("sess-part-time");
-    on_stream_delta(
+fn stop_panel_escape_closes_without_clearing_draft() {
+    let mut state = ready_state("keep me");
+    let pane = focus_pane(&state);
+    open_stop_panel(
         &mut state,
-        &key,
-        &[ChatDelta::Part(PartDelta {
-            kind: PartKind::Reasoning,
-            text: "思考".into(),
-            metadata: None,
-        })],
+        pane,
+        StopAvailability {
+            main: true,
+            ..StopAvailability::default()
+        },
     );
-    on_stream_delta(
-        &mut state,
-        &key,
-        &[ChatDelta::Part(PartDelta {
-            kind: PartKind::Reasoning,
-            text: "继续".into(),
-            metadata: None,
-        })],
-    );
+    apply_lx_input(&mut state, crate::app::actions::LxInput::Escape);
     let target = state.pane_anywhere(pane).unwrap();
-    let part = target.lx.chat.messages[1].parts().next().expect("part");
-    assert_eq!(part.content, "思考继续", "同 kind 合并");
-    let started = part.started_at_ms.expect("起点时刻");
-    let ended = part.ended_at_ms.expect("终点时刻");
-    assert!(started > 0, "毫秒时刻有效");
-    assert!(ended >= started, "终点不早于起点");
+    assert!(target.lx.slash.is_none());
+    assert_eq!(target.lx.input, "keep me");
 }

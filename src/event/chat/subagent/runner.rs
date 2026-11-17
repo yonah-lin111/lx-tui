@@ -7,6 +7,7 @@ use std::path::Path;
 use tokio::sync::watch;
 
 use super::context::{ChildTurnLimits, assemble_child_context, prepare_input_items};
+use super::lifecycle::{clear_user_stopped_ui, restore_user_stopped};
 use super::*;
 use crate::app::state::RequestKey;
 use crate::chat::agent::{
@@ -410,8 +411,17 @@ pub(super) fn send_input(
         .values()
         .any(|h| h.agent_id == target && h.status == STATUS_RUNNING && !h.closed_without_report);
     let is_resumed = streams.resumed_subagents.contains(target);
-    if !is_running && !is_resumed {
+    // 用户主动停止的 agent：允许 `send_input` 唤醒（用户明确要求继续），
+    // 但系统提示禁止模型自行恢复。标记只在整条入队/调度路径成功后解除，
+    // 任何一步失败都必须保留“停止是终态”，否则面板输入会被误判为已关闭。
+    let was_user_stopped = streams.user_stopped.contains(target);
+    if !is_running && !is_resumed && !was_user_stopped {
         return Err(NOT_ACTIVE_CODE.to_string());
+    }
+    if was_user_stopped && !is_running {
+        database
+            .recover_subagent_for_resume(&workspace, &owner_session, target)
+            .map_err(|err| err.code().to_string())?;
     }
     // `trigger_turn=false` 只入队：`interrupt` 在解析层已禁止与它同传，且不解除 interrupt 暂停态。
     let interrupt = interrupt && trigger_turn;
@@ -483,6 +493,22 @@ pub(super) fn send_input(
         )
         .map_err(|err| err.code().to_string())?;
 
+    // 入队成功：此时才解除用户停止标记，并同步 UI 投影（列表/卡片）。
+    if was_user_stopped {
+        streams.user_stopped.remove(target);
+        if let Some(handle) = streams
+            .subagents
+            .values_mut()
+            .find(|handle| handle.agent_id == target)
+        {
+            handle.stopped_by_user = false;
+        }
+        if !is_running {
+            streams.resumed_subagents.insert(target.to_string());
+        }
+        clear_user_stopped_ui(state, key.pane, target);
+    }
+
     if !trigger_turn {
         super::snapshot::sync_agent_ui_queue(
             state,
@@ -507,7 +533,7 @@ pub(super) fn send_input(
     }
 
     if is_running {
-        if (interrupt || was_cancelling_from_interrupt) && enqueued.created {
+        if (interrupt || was_cancelling_from_interrupt || was_user_stopped) && enqueued.created {
             streams.interrupted_subagents.insert(target.to_string());
             if let Some(handle) = streams.subagents.values().find(|h| h.agent_id == target) {
                 let _ = handle.cancel.send(true);
@@ -543,6 +569,9 @@ pub(super) fn send_input(
         }
         Ok(None) => {}
         Err(err) => {
+            if was_user_stopped {
+                restore_user_stopped(streams, target);
+            }
             super::snapshot::sync_agent_ui_queue(
                 state,
                 streams,
@@ -619,7 +648,16 @@ pub(super) fn resume(
 
     // 已在运行中：幂等返回 running，绝不启动第二个并发轮次。
     if is_running {
+        if let Some(handle) = streams
+            .subagents
+            .values_mut()
+            .find(|handle| handle.agent_id == agent_id)
+        {
+            handle.stopped_by_user = false;
+        }
         streams.resumed_subagents.insert(agent_id.to_string());
+        streams.user_stopped.remove(agent_id);
+        clear_user_stopped_ui(state, key.pane, agent_id);
         return Ok(SubagentOutcome::Resumed {
             agent_id: agent_id.to_string(),
             status: STATUS_RUNNING.to_string(),
@@ -663,6 +701,8 @@ pub(super) fn resume(
         agent_id,
     ) {
         Ok(Some(claimed)) => {
+            streams.user_stopped.remove(agent_id);
+            clear_user_stopped_ui(state, key.pane, agent_id);
             super::snapshot::sync_agent_ui_queue(
                 state,
                 streams,
@@ -678,6 +718,8 @@ pub(super) fn resume(
             })
         }
         Ok(None) => {
+            streams.user_stopped.remove(agent_id);
+            clear_user_stopped_ui(state, key.pane, agent_id);
             super::snapshot::sync_agent_ui_queue(
                 state,
                 streams,
@@ -693,6 +735,8 @@ pub(super) fn resume(
             })
         }
         Err(err) => {
+            // 恢复失败：撤回“已恢复”标记，保留用户停止终态。
+            streams.resumed_subagents.remove(agent_id);
             super::snapshot::sync_agent_ui_queue(
                 state,
                 streams,

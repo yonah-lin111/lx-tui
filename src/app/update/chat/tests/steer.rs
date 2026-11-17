@@ -131,9 +131,14 @@ fn escape_recalls_pending_steers_sequentially_in_lifo_without_merging() {
             .is_some()
     );
 
-    // 第 5 次 Esc：真正停止当前流。
+    // 第 5 次 Esc：打开停止面板，由用户选择范围（不再立即停流）。
     crate::app::update::apply_lx_input(&mut state, crate::app::actions::LxInput::Escape);
-    assert!(state.pane_anywhere(pane).unwrap().lx.chat.main_stopped);
+    let target = state.pane_anywhere(pane).unwrap();
+    assert!(matches!(
+        target.lx.slash,
+        Some(crate::app::state::SlashPanel::Stop(_))
+    ));
+    assert!(!target.lx.chat.main_stopped);
     // 撤回尚未落库的 steer 不应污染持久化 prompt_history。
     assert!(
         !state.effects.iter().any(|effect| matches!(

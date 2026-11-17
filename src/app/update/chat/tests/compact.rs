@@ -16,6 +16,7 @@ fn checkpoint(id: &str, sequence: i64, state: &str) -> CompactCheckpoint {
         end_sequence: sequence - 1,
         summary_text: "summary text".into(),
         model_label: "gpt-5".into(),
+        kind: crate::db::chat::CompactKind::Compact,
         state: state.into(),
         created_at_ms: 1_700_000_640_000,
     }

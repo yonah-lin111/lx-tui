@@ -830,6 +830,65 @@ fn detail_commands_render_inline_labels_and_tags() {
     assert!(lines.matches("Built-in").count() >= 3, "{lines}");
 }
 
+/// 停止面板：五项动作、默认全停、禁用原因与计数。
+#[test]
+fn stop_panel_renders_actions_counts_and_disabled_reasons() {
+    use crate::app::state::{StopAvailability, StopPanel};
+
+    let area = Rect::new(0, 0, 100, 24);
+    let mut lx = Lx::new();
+    lx.slash = Some(SlashPanel::Stop(Box::new(StopPanel::new(
+        StopAvailability {
+            main: false,
+            subagents: 3,
+            shells: 1,
+            processes: 2,
+        },
+    ))));
+    let mut buf = Buffer::empty(area);
+    let _ = render(area, &mut buf, &lx, false, None, &mut PaneCache::default());
+    let lines = buffer_lines(&buf, area).join("\n");
+    for needle in [
+        text::LX_STOP_PANEL_TITLE,
+        text::LX_STOP_ACTION_ALL,
+        text::LX_STOP_ACTION_MAIN,
+        text::LX_STOP_ACTION_SUBAGENTS,
+        text::LX_STOP_ACTION_SHELLS,
+        text::LX_STOP_ACTION_CANCEL,
+        "3 running",
+        "1 shells",
+        text::LX_STOP_UNAVAILABLE_MAIN,
+    ] {
+        assert!(lines.contains(needle), "缺少 {needle}: {lines}");
+    }
+}
+
+/// 报告二级面板：三项动作、默认重发与来源标签。
+#[test]
+fn report_panel_renders_resend_regenerate_and_scope() {
+    use crate::app::state::{DetailTarget, ReportPanel};
+
+    let area = Rect::new(0, 0, 100, 24);
+    let mut lx = Lx::new();
+    lx.slash = Some(SlashPanel::Report(Box::new(ReportPanel::new(
+        DetailTarget::Agent("agent-1".into()),
+        String::new(),
+        Some("previous body".into()),
+    ))));
+    let mut buf = Buffer::empty(area);
+    let _ = render(area, &mut buf, &lx, false, None, &mut PaneCache::default());
+    let lines = buffer_lines(&buf, area).join("\n");
+    for needle in [
+        text::detail::LX_REPORT_PANEL_TITLE,
+        text::detail::LX_REPORT_ACTION_RESEND,
+        text::detail::LX_REPORT_ACTION_REGENERATE,
+        text::detail::LX_REPORT_ACTION_CANCEL,
+        text::detail::LX_REPORT_SCOPE_AGENT,
+    ] {
+        assert!(lines.contains(needle), "缺少 {needle}: {lines}");
+    }
+}
+
 /// 详情 `Rewind` 面板：轮次显示四项动作与范围，compact 只显示恢复与取消。
 #[test]
 fn detail_rewind_panels_render_scope_and_actions() {

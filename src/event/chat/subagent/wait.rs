@@ -49,7 +49,7 @@ pub(super) fn wait(
         });
     let root_session = tree.root_session.clone();
     let records = tree.records.clone();
-    let unique: Vec<String> = if all {
+    let unique: Vec<String> = if all && requested.is_empty() {
         // `wait_for=all` 只等调用者的严格后代：调用者自身的记录也在整树里，
         // 若不排除，嵌套 Executor 等待时会把自己算成目标而永远等不到结束。
         records
@@ -123,10 +123,13 @@ pub(super) fn wait(
             return;
         }
     }
-    // any：调用时已经有一个目标结束（没有 running 句柄），立即结算；
+    // any：调用时已经有一个目标到达终态（结束或已被用户停止），立即结算；
     // 不能再等其它 running 目标。
     if mode == WaitMode::Any
         && unique.iter().any(|target| {
+            if streams.user_stopped.contains(target) {
+                return true;
+            }
             let handle_running = streams
                 .subagents
                 .values()
@@ -142,15 +145,19 @@ pub(super) fn wait(
         let _ = reply.send(outcome);
         return;
     }
-    // 收集运行中句柄的完成接收端；全部已结束则立刻结算。
-    let mut receivers = Vec::new();
+    // 收集运行中句柄的完成接收端；全部已结束或已被用户停止则立刻结算。
+    // 停止是终态：等待绝不能停在已被用户停掉的目标上。
+    let mut receivers: Vec<(String, watch::Receiver<bool>)> = Vec::new();
     for agent_id in &unique {
+        if streams.user_stopped.contains(agent_id) {
+            continue;
+        }
         if let Some(handle) = streams
             .subagents
             .values()
             .find(|handle| handle.agent_id == *agent_id && handle.status == STATUS_RUNNING)
         {
-            receivers.push(handle.done.subscribe());
+            receivers.push((agent_id.clone(), handle.done.subscribe()));
         }
     }
     if receivers.is_empty() {
@@ -162,81 +169,129 @@ pub(super) fn wait(
     // 主轮 Esc 只取消等待本身，不取消被等待的子 agent：子 agent 继续跑，
     // 结果留在 Agents 面板；用户可在面板 `^d` 精确停止选中的那个。
     let mut parent_cancel = streams.cancels.get(&key).map(|sender| sender.subscribe());
+    // 用户主动停止目标时把目标从等待集合剔除并**立即结算**：停止是终态，
+    // 不能让主轮永远停在一个已经不会结束的目标上。订阅必须在 spawn 之前完成，
+    // 避免停止事件落在订阅窗口之外。
+    let mut user_stops = streams.subscribe_user_stop();
+    let watched = unique.clone();
     tokio::spawn(async move {
-        let wait_done = async {
-            match mode {
-                WaitMode::Any => {
-                    // 任意一个 receiver 完成即可。用 JoinSet 持有子任务，超时或
-                    // 父轮取消时统一 abort，避免每次 any 等待都遗留 N 个 detached
-                    // watcher 直到子 agent 自己结束。
-                    let mut set = tokio::task::JoinSet::new();
-                    for mut receiver in receivers {
-                        set.spawn(async move {
-                            loop {
-                                if *receiver.borrow() {
-                                    return;
-                                }
-                                if receiver.changed().await.is_err() {
-                                    return;
-                                }
-                            }
-                        });
-                    }
-                    let timed_out = tokio::time::timeout(timeout, async {
-                        let _ = set.join_next().await;
-                    })
-                    .await
-                    .is_err();
-                    set.abort_all();
-                    timed_out
-                }
-                WaitMode::All => tokio::time::timeout(timeout, async {
-                    for mut receiver in receivers {
-                        if *receiver.borrow() {
-                            continue;
-                        }
-                        while receiver.changed().await.is_ok() {
-                            if *receiver.borrow() {
-                                break;
-                            }
-                        }
-                    }
-                })
-                .await
-                .is_err(),
-            }
-        };
-        let cancelled = async {
-            match parent_cancel.as_mut() {
-                Some(receiver) => loop {
+        // 仍参与等待的目标（有运行句柄、且未被用户停止）。
+        let mut active: std::collections::HashSet<String> =
+            receivers.iter().map(|(target, _)| target.clone()).collect();
+        let mut watchers = tokio::task::JoinSet::new();
+        for (target, mut receiver) in receivers {
+            watchers.spawn(async move {
+                loop {
                     if *receiver.borrow() {
-                        return;
+                        return target;
                     }
                     if receiver.changed().await.is_err() {
+                        return target;
+                    }
+                }
+            });
+        }
+        let sleep = tokio::time::sleep(timeout);
+        tokio::pin!(sleep);
+        loop {
+            tokio::select! {
+                biased;
+                agent_id = next_user_stop(&mut user_stops, &watched) => {
+                    // 停止即终态：Any 立即结算；All 继续等剩余目标，
+                    // 剩余目标全部停止时同样立即结算，绝不挂起主轮。
+                    if !active.remove(&agent_id) {
+                        continue;
+                    }
+                    if mode == WaitMode::Any || active.is_empty() {
+                        let _ = sender.send(AppEvent::SubagentWaitReady {
+                            key,
+                            targets: watched.clone(),
+                            timed_out: false,
+                            all,
+                            mode,
+                            timeout_ms,
+                            auto_continue,
+                            reply,
+                        });
                         return;
                     }
-                },
-                None => std::future::pending::<()>().await,
-            }
-        };
-        tokio::select! {
-            _ = cancelled => {
-                let _ = reply.send(Err(HostError::Cancelled));
-            }
-            timed_out = wait_done => {
-                let _ = sender.send(AppEvent::SubagentWaitReady {
-                    key,
-                    targets: unique,
-                    timed_out,
-                    all,
-                    mode,
-                    timeout_ms,
-                    auto_continue,
-                    reply,
-                });
+                }
+                _ = wait_parent_cancel(&mut parent_cancel) => {
+                    let _ = reply.send(Err(HostError::Cancelled));
+                    return;
+                }
+                _ = &mut sleep => {
+                    // 超时：auto wait 由事件层重派。目标集合保持完整，
+                    // 已停止目标在下一轮 `wait` 中按 `user_stopped` 过滤，
+                    // 最终结算结果仍会带上它们，模型能明确知道谁被停了。
+                    let _ = sender.send(AppEvent::SubagentWaitReady {
+                        key,
+                        targets: watched.clone(),
+                        timed_out: true,
+                        all,
+                        mode,
+                        timeout_ms,
+                        auto_continue,
+                        reply,
+                    });
+                    return;
+                }
+                joined = watchers.join_next() => {
+                    let Some(Ok(target)) = joined else { continue; };
+                    // 已被用户停止的目标：完成事件不参与结算，继续等其它目标。
+                    if !active.remove(&target) {
+                        continue;
+                    }
+                    // Any：第一个真实完成即可结算；All：全部真实目标完成才结算。
+                    if mode == WaitMode::Any || active.is_empty() {
+                        let _ = sender.send(AppEvent::SubagentWaitReady {
+                            key,
+                            targets: watched.clone(),
+                            timed_out: false,
+                            all,
+                            mode,
+                            timeout_ms,
+                            auto_continue,
+                            reply,
+                        });
+                        return;
+                    }
+                }
             }
         }
     });
+}
+
+/// 等待父轮取消信号（Esc / 关窗格 / 切换会话）。
+async fn wait_parent_cancel(cancel: &mut Option<watch::Receiver<bool>>) {
+    match cancel {
+        Some(receiver) => loop {
+            if *receiver.borrow() {
+                return;
+            }
+            if receiver.changed().await.is_err() {
+                return;
+            }
+        },
+        None => std::future::pending::<()>().await,
+    }
+}
+
+/// 取下一条命中等待目标的用户停止通知；无关通知与滞后直接跳过。
+async fn next_user_stop(
+    receiver: &mut tokio::sync::broadcast::Receiver<String>,
+    watched: &[String],
+) -> String {
+    loop {
+        match receiver.recv().await {
+            Ok(agent_id) if watched.contains(&agent_id) => return agent_id,
+            Ok(_) => continue,
+            Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => continue,
+            Err(tokio::sync::broadcast::error::RecvError::Closed) => {
+                std::future::pending::<()>().await;
+            }
+        }
+    }
 }
 
 /// 等待目标本身（调用者自己）不是合法目标：稳定错误、且不进入等待。
@@ -281,7 +336,12 @@ pub(crate) fn settle_wait(
         let mut report_bodies = Vec::new();
         // 只领取调用者自己的直接子报告：祖辈 `wait_agent` 不能把孙 agent 的报告
         // 从它的 depth-1 父 Executor 手里截走（否则父级再也收不到逐轮报告）。
-        if !is_running && record.parent_session_id == key.session {
+        // 用户主动停止的目标不领报告：停止是终态，设计承诺 `report=null`，
+        // 旧轮次遗留的未投递报告留给以后非停止的等待。
+        if !is_running
+            && !streams.user_stopped.contains(target)
+            && record.parent_session_id == key.session
+        {
             let pending = database
                 .pending_reports(workspace, &record.parent_session_id)
                 .unwrap_or_default();
@@ -315,6 +375,7 @@ pub(crate) fn settle_wait(
             title: record.title.clone(),
             role: record.role,
             status,
+            stopped_by_user: streams.user_stopped.contains(target),
             report,
         });
     }
@@ -355,17 +416,20 @@ pub(crate) fn handle_subagent_wait_ready(
                 .map(|(root, _, _)| root)
         })
         .unwrap_or(parent);
-    let still_running = streams
-        .subagents
-        .values()
-        .any(|handle| handle.status == STATUS_RUNNING && targets.contains(&handle.agent_id));
+    // 已停止的目标不再算“仍在跑”：停止是终态，续等/结算都必须跳过它。
+    let still_running = streams.subagents.values().any(|handle| {
+        handle.status == STATUS_RUNNING
+            && targets.contains(&handle.agent_id)
+            && !streams.user_stopped.contains(&handle.agent_id)
+    });
     let any_target_finished = !targets.is_empty()
         && targets.iter().any(|target| {
-            !streams.subagents.values().any(|handle| {
-                handle.root_session == root_session
-                    && handle.agent_id == *target
-                    && handle.status == STATUS_RUNNING
-            })
+            streams.user_stopped.contains(target)
+                || !streams.subagents.values().any(|handle| {
+                    handle.root_session == root_session
+                        && handle.agent_id == *target
+                        && handle.status == STATUS_RUNNING
+                })
         });
     if !reply.is_closed()
         && ((auto_continue && still_running)
@@ -382,7 +446,7 @@ pub(crate) fn handle_subagent_wait_ready(
             streams,
             persistence,
             key,
-            if all { Vec::new() } else { targets },
+            targets,
             all,
             mode,
             next_timeout,

@@ -638,7 +638,10 @@ pub fn enter_task_agent_edit(state: &mut AppState, pane: PaneId) -> bool {
         let Some(run) = page.selected_agent(&target.lx.agents) else {
             return false;
         };
-        (run.status == "cancelled", run.agent_id.clone())
+        (
+            run.status == "cancelled" && !run.stopped_by_user,
+            run.agent_id.clone(),
+        )
     };
     if target_meta.0 {
         crate::app::update::show_lx_toast(
@@ -721,7 +724,7 @@ fn submit_agent_edit(state: &mut AppState, pane: PaneId) -> bool {
             .map(|composer| composer.text().trim().to_string())
             .unwrap_or_default();
         let run = target.lx.agents.by_agent(&agent_id);
-        let closed = run.is_some_and(|run| run.status == "cancelled");
+        let closed = run.is_some_and(|run| run.status == "cancelled" && !run.stopped_by_user);
         let running = run.is_some_and(|run| run.status == "running");
         let pending_steers = run.map_or(0, |run| run.chat.pending_steers.len());
         (

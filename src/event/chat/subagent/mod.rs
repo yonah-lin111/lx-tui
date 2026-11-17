@@ -13,6 +13,7 @@ use super::*;
 
 mod context;
 mod launch;
+mod lifecycle;
 mod model_resolve;
 mod panel;
 mod runner;
@@ -28,6 +29,9 @@ pub(crate) use context::{
     ChildPromptContext, ChildTurnLimits, assemble_child_context, capture_child_prompt_inputs,
     child_tool_names,
 };
+#[cfg(test)]
+pub(crate) use lifecycle::stop_subagents_by_user;
+pub(crate) use lifecycle::{cancel_for_session, projected_agent_status};
 #[cfg(test)]
 pub(crate) use settle::finish_subagent;
 pub(crate) use settle::{
@@ -107,6 +111,8 @@ pub(crate) struct SubagentHandle {
     pub max_tokens: Option<u64>,
     /// `close_agent` / 窗格或应用关闭：结算时不生成半程汇报。
     pub closed_without_report: bool,
+    /// 用户主动停止：不生成报告，等待用户显式恢复。
+    pub stopped_by_user: bool,
     /// 本轮完成后是否向主 agent 投递报告；人类私聊输入为 false。
     pub notify_parent: bool,
     /// 当前轮文件 mutation 归属的 user 消息 id；轮内 steer 会切换到新 user 消息。
@@ -115,36 +121,6 @@ pub(crate) struct SubagentHandle {
     pub chat: crate::app::state::LxChat,
     /// 子会话 DB 工作区键。
     pub workspace: PathBuf,
-}
-
-/// 投影子 agent 对外可见状态（工具结果与 UI 列表同源）。
-pub(crate) fn projected_agent_status(
-    streams: &ChatStreams,
-    record: &SubagentRecord,
-    queue: Option<&SubagentQueueState>,
-) -> String {
-    let running = streams
-        .subagents
-        .values()
-        .any(|handle| handle.agent_id == record.agent_id && handle.status == STATUS_RUNNING);
-    let resumed_or_paused = streams.resumed_subagents.contains(&record.agent_id)
-        || streams.paused_by_interrupt.contains(&record.agent_id)
-        || (record.status != STATUS_FAILED
-            && queue.is_some_and(|q| q.queued_count > 0 && q.head_error_code.is_none()));
-    let has_blocked_head = queue.and_then(|q| q.head_error_code.as_ref()).is_some();
-    let projected = crate::chat::agent::projected_agent_status(
-        running,
-        resumed_or_paused,
-        has_blocked_head,
-        &record.status,
-    );
-    // 崩溃恢复/插队中断留下的 `cancelled + interrupted` 组合投影为中断态。
-    if projected == crate::chat::agent::AgentStatus::Cancelled
-        && queue.and_then(|q| q.last_input_status.as_deref()) == Some(STATUS_INTERRUPTED)
-    {
-        return STATUS_INTERRUPTED.to_string();
-    }
-    projected.as_str().to_string()
 }
 
 /// 处理控制工具请求（测试兼容无 `call_id` 入口）。
@@ -570,6 +546,7 @@ fn list_agents(
                 role: record.role,
                 title: record.title.clone(),
                 status: projected_agent_status(streams, record, q),
+                stopped_by_user: streams.user_stopped.contains(&record.agent_id),
                 queued_count: q.map_or(0, |s| s.queued_count),
                 private_tail: include_private
                     .then(|| {
@@ -734,65 +711,6 @@ pub(crate) fn handle_subagent_net_event(
     }
 }
 
-/// 会话被删除或用户手动停止：取消该根会话树下所有在册子 turn（级联后代，不产报告）。
-pub(crate) fn cancel_for_session(
-    streams: &mut ChatStreams,
-    session_id: &str,
-    agent_id: Option<&str>,
-    agent_path: Option<&str>,
-) -> bool {
-    // 种子：显式 agent 自身，或该会话直接相关的句柄；再沿 `agent_path` 级联后代。
-    // `agent_path` 来自 DB 记录：目标句柄已结算时仍能按路径找到在跑的后代。
-    let seeds: Vec<String> = streams
-        .subagents
-        .values()
-        .filter(|handle| match agent_id {
-            Some(id) => handle.agent_id == id,
-            None => handle.parent.session == session_id || handle.child_session_id == session_id,
-        })
-        .map(|handle| handle.agent_path.clone())
-        .collect();
-    let selected = |path: &str| {
-        agent_path.is_some_and(|target| {
-            path.eq_ignore_ascii_case(target) || is_strict_descendant_path(target, path)
-        }) || seeds
-            .iter()
-            .any(|seed| path.eq_ignore_ascii_case(seed) || is_strict_descendant_path(seed, path))
-    };
-
-    let mut cancelled = false;
-    let mut cleared_agents = Vec::new();
-    let mut dead = Vec::new();
-    for (child, handle) in &mut streams.subagents {
-        if !selected(&handle.agent_path) {
-            continue;
-        }
-        cleared_agents.push(handle.agent_id.clone());
-        // 用户手动停止 / 会话删除 / 退出：不生成半程汇报。
-        handle.closed_without_report = true;
-        if handle.cancel.send(true).is_ok() {
-            cancelled = true;
-        } else {
-            dead.push(child.clone());
-        }
-    }
-    for id in cleared_agents {
-        streams.resumed_subagents.remove(&id);
-        streams.interrupted_subagents.remove(&id);
-        streams.paused_by_interrupt.remove(&id);
-    }
-    if let Some(target) = agent_id {
-        streams.resumed_subagents.remove(target);
-        streams.interrupted_subagents.remove(target);
-        streams.paused_by_interrupt.remove(target);
-    }
-    for child in dead {
-        streams.subagents.remove(&child);
-        streams.frozen.remove(&child);
-    }
-    cancelled
-}
-
 /// 应用子 agent 效应（列表、懒加载、停止、报告投递）。
 pub fn apply_subagent_effects(
     state: &mut AppState,
@@ -808,6 +726,7 @@ pub fn apply_subagent_effects(
                 Effect::ListSubagents { .. }
                     | Effect::LoadSubagentSession { .. }
                     | Effect::CancelSubagents { .. }
+                    | Effect::StopSubagentsByUser { .. }
                     | Effect::DrainSubagentReports { .. }
                     | Effect::SendSubagentUserInput { .. }
                     | Effect::SteerSubagent { .. }
@@ -824,6 +743,7 @@ pub fn apply_subagent_effects(
             Effect::ListSubagents { .. }
                 | Effect::LoadSubagentSession { .. }
                 | Effect::CancelSubagents { .. }
+                | Effect::StopSubagentsByUser { .. }
                 | Effect::DrainSubagentReports { .. }
                 | Effect::SendSubagentUserInput { .. }
                 | Effect::SteerSubagent { .. }
@@ -861,6 +781,15 @@ pub fn apply_subagent_effects(
                             changed = true;
                         }
                     }
+                    // 用户停止状态只在内存 streams 里；列表刷新必须回写，避免被 DB
+                    // 的 `cancelled` 覆盖回普通取消。
+                    for run in &mut target.lx.agents.runs {
+                        let stopped = streams.user_stopped.contains(&run.agent_id);
+                        if run.stopped_by_user != stopped {
+                            run.stopped_by_user = stopped;
+                            changed = true;
+                        }
+                    }
                 }
                 if snapshot::sync_agent_ui_queue(
                     state,
@@ -895,12 +824,18 @@ pub fn apply_subagent_effects(
                             .iter()
                             .map(crate::app::state::CompactNoticeView::from_record)
                             .collect();
+                        let private_ids = database
+                            .private_input_user_message_ids(&workspace, &child_session)
+                            .unwrap_or_default();
                         changed |= update::on_subagent_loaded(state, pane, &agent_id, &messages);
-                        if !checkpoints.is_empty()
-                            && let Some(target) = state.pane_mut_anywhere(pane)
+                        if let Some(target) = state.pane_mut_anywhere(pane)
                             && let Some(run) = target.lx.agents.by_agent_mut(&agent_id)
                         {
-                            run.compact.replace(checkpoints);
+                            run.chat
+                                .rebuild_private_user_messages(&messages, &private_ids);
+                            if !checkpoints.is_empty() {
+                                run.compact.replace(checkpoints);
+                            }
                             run.rows_dirty = true;
                         }
                     }
@@ -951,6 +886,18 @@ pub fn apply_subagent_effects(
                         }
                     }
                 };
+            }
+            Effect::StopSubagentsByUser {
+                session_id,
+                agent_id,
+            } => {
+                changed |= lifecycle::apply_stop_subagents_by_user(
+                    state,
+                    streams,
+                    persistence,
+                    &session_id,
+                    agent_id.as_deref(),
+                );
             }
             Effect::DrainSubagentReports { pane } => {
                 changed |= drain_reports(state, persistence, pane);

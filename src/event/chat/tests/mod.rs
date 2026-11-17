@@ -714,6 +714,8 @@ fn view_summary_maps_every_field() {
 
 mod ack;
 mod ask;
+mod btw;
+mod btw_report;
 mod compact;
 mod detail_compact;
 mod detail_rewind;
@@ -726,6 +728,8 @@ mod skills;
 mod steer;
 mod subagent;
 mod subagent_private;
+mod subagent_report;
 mod subagent_roles;
+mod subagent_stop;
 mod user_shell;
 mod workspace;

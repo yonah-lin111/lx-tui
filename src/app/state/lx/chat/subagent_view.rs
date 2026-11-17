@@ -288,6 +288,10 @@ impl SubagentDetailView {
                                 .and_then(Value::as_str)
                                 .unwrap_or_default()
                                 .to_string(),
+                            stopped_by_user: agent
+                                .get("stopped_by_user")
+                                .and_then(Value::as_bool)
+                                .unwrap_or(false),
                             report: agent
                                 .get("report")
                                 .and_then(Value::as_str)
@@ -395,6 +399,10 @@ impl SubagentDetailView {
                             } else {
                                 status.to_string()
                             },
+                            stopped_by_user: agent
+                                .get("stopped_by_user")
+                                .and_then(Value::as_bool)
+                                .unwrap_or(false),
                             report: None,
                         });
                     }

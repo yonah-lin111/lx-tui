@@ -13,7 +13,7 @@
 //!
 //! - 独立字段之间不再用 ` · ` 拼接：每个字段是一个 [`tree::Node`]；
 //! - `read` 的 file/folder 只来自**结果体**（[`ToolSummary::read_kind`]），不靠路径猜；
-//! - `read` 标题下方只显示一条路径（超宽单行尾部省略）；结果体确认后追加
+//! - `read` 标题下方只显示一条路径（超宽单行中间省略）；结果体确认后追加
 //!   `:12-40 · 29 lines`，不显示 `output limited` 或 `more lines`；
 //! - 渲染热路径不做常规 JSON 解析：只有摘要缺字段时才懒回退解析 `arguments_json`。
 
@@ -80,7 +80,7 @@ fn path_node(call: &ToolCallView, cache: &mut Option<ToolSummary>) -> Option<Nod
     Some(Node::text(path, style::chat_tool_param()))
 }
 
-/// `read` 的详情只有一条路径：按内容列单行尾部省略，不产生第二物理行。
+/// `read` 的详情只有一条路径：按内容列**中间省略**（保留开头目录与末尾文件名），不产生第二物理行。
 ///
 /// 结果体确认过区间与实际行数时追加 `:12-40 · 29 lines`；运行中/旧记录只显示路径，
 /// 参数侧的 `offset` / `limit` 不参与展示。
@@ -104,7 +104,7 @@ fn read_path_node(call: &ToolCallView, width: u16) -> Option<Node> {
     let keep_suffix =
         suffix_width > 0 && remaining > 0 && (path_width <= remaining || remaining >= 2);
     let path_budget = if keep_suffix { remaining } else { available };
-    let path = crate::ui::main_content::lx::history::truncate_with_ellipsis(&path, path_budget);
+    let path = crate::ui::text::ellipsize_middle(&path, path_budget);
     if path.is_empty() {
         return None;
     }
@@ -405,7 +405,7 @@ pub(super) fn nodes(call: &ToolCallView) -> Vec<Node> {
 /// 详情排版：长参数折叠 2 行，事实节点始终可见（展开显示全部已保存摘要）。
 ///
 /// `read` 单体卡片遵循 `lx-message-block-display.md` §5.1：标题下方只显示一条路径（或一条错误/状态词），
-/// 结果体确认后追加区间与行数；超宽时单行尾部省略，不软换行成第二行，不显示 `output limited`，
+/// 结果体确认后追加区间与行数；超宽时单行中间省略，不软换行成第二行，不显示 `output limited`，
 /// 也不登记可展开点击面。
 fn detail_layout(call: &ToolCallView, width: u16, expanded: bool) -> tree::Layout {
     detail_layout_with_group(call, width, expanded, false, false)

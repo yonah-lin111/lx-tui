@@ -187,6 +187,7 @@ fn compact_at_bottom_is_selected_before_recap_or_user_turn() {
                 summary: "sum".into(),
                 active: true,
                 auto: false,
+                report: false,
             }]);
     }
 
@@ -222,6 +223,7 @@ fn inactive_compact_checkpoint_is_ignored_when_selecting_latest() {
                 summary: "sum".into(),
                 active: false,
                 auto: false,
+                report: false,
             }]);
     }
 

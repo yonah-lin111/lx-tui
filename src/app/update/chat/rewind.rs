@@ -132,6 +132,10 @@ fn arm(state: &mut AppState, pane: PaneId) -> Option<()> {
     if target.view != crate::app::state::PaneView::Lx {
         return None;
     }
+    // 有主轮/subagent/shell/受管进程可停时，Esc 归停止面板，不做撤销待命。
+    if crate::app::state::StopAvailability::from_lx(&target.lx).any() {
+        return None;
+    }
     // 忙时保留现有双 Esc 停止语义；草稿非空或根本没有聊天用户轮次时不进入撤销。
     //
     // 本地命令不占用 `RequestState`：命令在跑时仍是 `Idle`，且命令卡片 `role == "user"`。
@@ -158,12 +162,6 @@ fn arm(state: &mut AppState, pane: PaneId) -> Option<()> {
     let target = state.pane_mut_anywhere(pane)?;
     target.lx.rewind.armed_at = Some(Instant::now());
     target.lx.chat.stop_armed_at = None;
-    show_lx_hint(
-        state,
-        pane,
-        InputHintLevel::Warning,
-        text::LX_REWIND_ARMED_HINT,
-    );
     Some(())
 }
 
@@ -404,6 +402,8 @@ fn open_panel(state: &mut AppState, pane: PaneId) -> bool {
         crate::app::state::RewindTargetKind::Compact => RewindPanel::for_compact(),
         crate::app::state::RewindTargetKind::ModelSwitch => RewindPanel::for_model_switch(),
         crate::app::state::RewindTargetKind::Recap => RewindPanel::for_recap(),
+        // 报告只走详情 composer，主 `/rewind` 不会选中它。
+        crate::app::state::RewindTargetKind::Report => return false,
     };
     target.lx.rewind.panel = Some(panel.clone());
     target.lx.slash = Some(SlashPanel::Rewind(Box::new(panel)));
@@ -511,6 +511,8 @@ pub fn apply_enter(state: &mut AppState, pane: PaneId) -> bool {
         crate::app::state::RewindTargetKind::Recap => {
             return apply_recap_enter(state, pane, &selected, action);
         }
+        // 报告只走详情 composer，主 `/rewind` 不会选中它。
+        crate::app::state::RewindTargetKind::Report => return false,
         crate::app::state::RewindTargetKind::Turn => {}
     }
     let operation_id = crate::db::new_external_id("rewind-op");
@@ -902,6 +904,9 @@ pub fn armed_expired(state: &AppState, pane: PaneId) -> bool {
 }
 
 /// 清空已过期的待命（事件循环节拍调用）。
+///
+/// 停止待命与 rewind 待命同一节拍失效：只有子 agent/后台任务在跑时
+/// `advance_lx_loading` 才会推进，不能只靠流中分支清理，否则提示会永久留在输入框上方。
 pub fn clear_expired_arms(state: &mut AppState) -> bool {
     let mut changed = false;
     for pane in state.all_pane_ids() {
@@ -909,6 +914,25 @@ pub fn clear_expired_arms(state: &mut AppState) -> bool {
             && let Some(target) = state.pane_mut_anywhere(pane)
         {
             target.lx.rewind.armed_at = None;
+            changed = true;
+        }
+        let Some(target) = state.pane_mut_anywhere(pane) else {
+            continue;
+        };
+        if target
+            .lx
+            .chat
+            .stop_armed_at
+            .is_some_and(|at| at.elapsed() > super::STOP_ARM_WINDOW)
+        {
+            target.lx.chat.stop_armed_at = None;
+            changed = true;
+        }
+        // 目标在面板打开期间自然结束：别留下一个按 Enter 只会提示 Nothing to stop 的旧面板。
+        if matches!(target.lx.slash, Some(SlashPanel::Stop(_)))
+            && !crate::app::state::StopAvailability::from_lx(&target.lx).any()
+        {
+            target.lx.slash = None;
             changed = true;
         }
     }

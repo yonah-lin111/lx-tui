@@ -1005,12 +1005,13 @@ pub fn stop_selected_subagent(state: &mut AppState, pane: PaneId) -> bool {
     let Some(run) = page.selected_agent(&target.lx.agents) else {
         return false;
     };
-    // 选中的父 run 已结束但仍有后代在跑时，停止操作要沿路径级联下去。
+    // 选中的父 run 已结束但仍有后代在跑时，停止操作要沿路径级联下去；
+    // 空闲但仍有排队输入同样可停（取消队列后保持 stopped）。
     let has_running_descendant = target.lx.agents.runs.iter().any(|other| {
         other.is_running()
             && crate::chat::agent::is_strict_descendant_path(&run.agent_path, &other.agent_path)
     });
-    if !run.is_running() && !has_running_descendant {
+    if !run.is_running() && run.queued_count == 0 && !has_running_descendant {
         crate::app::update::show_lx_toast(
             state,
             pane,
@@ -1024,12 +1025,13 @@ pub fn stop_selected_subagent(state: &mut AppState, pane: PaneId) -> bool {
         return false;
     }
     let agent_id = run.agent_id.clone();
+    let name = run.display_identity();
     let Some(session_id) = target.lx.chat.session_id.clone() else {
         return false;
     };
     state
         .effects
-        .push(crate::app::effects::Effect::CancelSubagents {
+        .push(crate::app::effects::Effect::StopSubagentsByUser {
             session_id,
             agent_id: Some(agent_id),
         });
@@ -1038,7 +1040,7 @@ pub fn stop_selected_subagent(state: &mut AppState, pane: PaneId) -> bool {
         pane,
         crate::app::toast::Toast::new(
             crate::app::toast::ToastKind::Default,
-            crate::ui::text::stopping_subagents(1),
+            crate::ui::text::stopping_agent(&name),
             Some(pane),
             std::time::Instant::now(),
         ),

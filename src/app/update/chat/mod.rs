@@ -28,10 +28,12 @@ pub mod mcp;
 pub mod model_switch;
 mod process;
 pub mod recap;
+pub mod report_fill;
 pub mod rewind;
 mod session;
 mod slash;
 mod steer;
+mod stop;
 pub(crate) mod subagent;
 mod subagent_cards;
 mod task_page;
@@ -49,10 +51,10 @@ pub use btw::{
     apply_input as apply_btw_input, btw_message_parts as btw_parts, enter_btw_edit, leave_btw_edit,
     new_assistant_message as new_btw_assistant_message, on_accepted as on_btw_accepted,
     on_delta as on_btw_delta, on_failed as on_btw_failed, on_finished as on_btw_finished,
-    on_qa_list_loaded, on_recipient_started as on_btw_recipient_started,
-    on_thread_deleted as on_btw_thread_deleted, on_thread_loaded as on_btw_thread_loaded,
-    on_tool_state as on_btw_tool_state, open_btw_tab, scroll_btw_detail, select_btw_qa,
-    set_task_btw_scroll, submit_current as submit_btw,
+    on_qa_list_loaded, on_recipient_failed as on_btw_recipient_failed,
+    on_recipient_started as on_btw_recipient_started, on_thread_deleted as on_btw_thread_deleted,
+    on_thread_loaded as on_btw_thread_loaded, on_tool_state as on_btw_tool_state, open_btw_tab,
+    scroll_btw_detail, select_btw_qa, set_task_btw_scroll, submit_current as submit_btw,
     sync_search_selection as sync_btw_search_selection, toggle_btw_card, try_submit_btw_command,
 };
 pub use compact::{
@@ -68,8 +70,9 @@ pub use connect::{
 };
 pub use detail_compact::{
     DetailCompactResult, handle_finished as on_detail_compact_finished,
-    on_started as on_detail_compact_started,
+    on_report_started as on_detail_report_started, on_started as on_detail_compact_started,
 };
+pub use detail_report::finish_generated;
 pub use detail_rewind::{
     on_failed as on_detail_rewind_failed, on_prepared as on_detail_rewind_prepared,
     on_reload_failed as on_detail_rewind_reload_failed, on_succeeded as on_detail_rewind_succeeded,
@@ -88,6 +91,9 @@ pub use process::{
 pub use recap::{
     apply_recap, cancel_pending_recap, on_terminal_focus_gained, on_terminal_focus_lost,
     recap_command, recap_failed, set_message_recaps, take_pending_recap, tick_recap,
+};
+pub use report_fill::{
+    GeneratedReportReady, fill_main_input, format_report_body, on_generated_report_ready,
 };
 pub use rewind::{
     apply_enter as apply_rewind_enter, apply_input as apply_rewind_input,
@@ -720,8 +726,9 @@ pub(crate) fn request_report_drain_if_idle(state: &mut AppState, pane: PaneId) -
 /// Esc 停止的待命窗口：窗口内再按一次才真正停止（与撤销待命统一为 3 秒）。
 pub const STOP_ARM_WINDOW: Duration = Duration::from_secs(3);
 
-/// 流中按 `Esc`：若存在待生效的 pending steer，单次 `Esc` 优先按 LIFO 弹出最近一条并回显输入框；
-/// 队列为空时（对齐 opencode 的双击停止）首次只**待命**并显示提示，窗口内再按一次才停止。
+/// 有可停止工作时按 `Esc`：若存在待生效的 pending steer，单次 `Esc` 优先按 LIFO
+/// 弹出最近一条并回显输入框；否则首次只**待命**并显示统一提示，窗口内再按一次
+/// **打开停止面板**（不立即执行停止）。
 pub fn escape_stop(state: &mut AppState, pane: PaneId) -> bool {
     if state
         .pane_anywhere(pane)
@@ -730,13 +737,16 @@ pub fn escape_stop(state: &mut AppState, pane: PaneId) -> bool {
     {
         return true;
     }
-    let Some(target) = state.pane_mut_anywhere(pane) else {
+    let Some(target) = state.pane_anywhere(pane) else {
         return false;
     };
-    // 目标集合 = 模型在途 ∪ 本地命令在途（含尚未拿到进程 ID 的 pending）。
-    if !target.lx.chat.request.is_busy() && !target.lx.chat.has_running_shell() {
+    let availability = crate::app::state::StopAvailability::from_lx(&target.lx);
+    if !availability.any() {
         return false;
     }
+    // ask 面板整块接管按键且不渲染 slash 浮层：此时打开停止面板既看不见也操作不了，
+    // 还会在 ask 结束后突然变成可执行的全局面板。保持 ask 自己的双击 Esc 直接取消整轮。
+    let ask_pending = target.lx.ask.is_some();
     let now = Instant::now();
     let armed = target
         .lx
@@ -744,26 +754,24 @@ pub fn escape_stop(state: &mut AppState, pane: PaneId) -> bool {
         .stop_armed_at
         .is_some_and(|at| now.saturating_duration_since(at) <= STOP_ARM_WINDOW);
     if !armed {
-        let shell_only = !target.lx.chat.request.is_busy()
-            && target.lx.chat.has_running_shell()
-            && !target.lx.chat.status.streaming;
+        let Some(target) = state.pane_mut_anywhere(pane) else {
+            return false;
+        };
         target.lx.chat.stop_armed_at = Some(now);
-        // 只有本地命令在跑时没有 loading 行，首次 Esc 必须给出可见提示。
-        if shell_only {
-            show_lx_hint(
-                state,
-                pane,
-                InputHintLevel::Warning,
-                text::LX_SHELL_STOP_ARMED,
-            );
-        }
+        target.lx.rewind.armed_at = None;
+        show_lx_hint(state, pane, InputHintLevel::Warning, text::LX_STOP_ARMED);
         return true;
     }
+    let Some(target) = state.pane_mut_anywhere(pane) else {
+        return false;
+    };
     target.lx.chat.stop_armed_at = None;
-    if target.lx.chat.request.is_busy() {
-        stop_stream(state, pane);
+    if ask_pending {
+        return stop_stream(state, pane);
     }
-    super::user_shell::cancel_user_shells(state, pane);
+    target.lx.slash = Some(crate::app::state::SlashPanel::Stop(Box::new(
+        crate::app::state::StopPanel::new(availability),
+    )));
     true
 }
 

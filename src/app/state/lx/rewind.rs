@@ -85,6 +85,8 @@ pub enum RewindTargetKind {
     ModelSwitch,
     /// 消息 recap（只删除回顾）。
     Recap,
+    /// `/report` 总结检查点（只删除该报告条目）。
+    Report,
 }
 
 /// 冻结的撤销目标：稳定 user message ID（compact 时为检查点 ID）+ 会话 revision。
@@ -179,6 +181,8 @@ pub struct RewindPanel {
     pub actions: Vec<RewindAction>,
     /// Some 表示详情 composer 的撤销确认；执行路由据此走详情链路。
     pub detail: Option<DetailRewindPanel>,
+    /// 目标是否为 `/report` 总结（UI 使用报告专用文案）。
+    pub report: bool,
 }
 
 impl RewindPanel {
@@ -189,6 +193,7 @@ impl RewindPanel {
             snapshot,
             actions: RewindAction::ALL.to_vec(),
             detail: None,
+            report: false,
         }
     }
 
@@ -199,6 +204,7 @@ impl RewindPanel {
             snapshot: SnapshotState::KnownEmpty,
             actions: vec![RewindAction::RestoreCompact, RewindAction::Cancel],
             detail: None,
+            report: false,
         }
     }
 
@@ -209,6 +215,7 @@ impl RewindPanel {
             snapshot: SnapshotState::KnownEmpty,
             actions: vec![RewindAction::RestoreModel, RewindAction::Cancel],
             detail: None,
+            report: false,
         }
     }
 
@@ -219,6 +226,7 @@ impl RewindPanel {
             snapshot: SnapshotState::KnownEmpty,
             actions: vec![RewindAction::DeleteRecap, RewindAction::Cancel],
             detail: None,
+            report: false,
         }
     }
 
@@ -229,6 +237,7 @@ impl RewindPanel {
             snapshot,
             actions: RewindAction::ALL.to_vec(),
             detail: Some(DetailRewindPanel { kind }),
+            report: false,
         }
     }
 
@@ -239,6 +248,18 @@ impl RewindPanel {
             snapshot: SnapshotState::KnownEmpty,
             actions: vec![RewindAction::RestoreCompact, RewindAction::Cancel],
             detail: Some(DetailRewindPanel { kind }),
+            report: false,
+        }
+    }
+
+    /// 详情 composer 的 `/report` 撤销：只删除报告条目与取消。
+    pub fn for_detail_report(kind: super::detail::DetailRewindKind) -> Self {
+        Self {
+            window: PanelWindow::new(0),
+            snapshot: SnapshotState::KnownEmpty,
+            actions: vec![RewindAction::RestoreCompact, RewindAction::Cancel],
+            detail: Some(DetailRewindPanel { kind }),
+            report: true,
         }
     }
 

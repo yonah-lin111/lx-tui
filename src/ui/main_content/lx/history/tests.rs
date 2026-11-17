@@ -30,6 +30,7 @@ mod sticky;
 mod text_hit;
 mod transcript;
 mod turn_tail;
+mod user_bg;
 mod user_folding;
 
 /// 滚动性能回归（`#[ignore]`）。

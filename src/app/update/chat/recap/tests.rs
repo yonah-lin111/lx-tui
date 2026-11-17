@@ -251,6 +251,7 @@ fn recap_is_prohibited_when_compact_is_at_bottom() {
             summary: "summary".into(),
             active: true,
             auto: false,
+            report: false,
         }]);
     for turn in [0, 1, 2] {
         target.lx.recap.on_turn_completed(turn);

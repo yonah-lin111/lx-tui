@@ -4,6 +4,34 @@ use rusqlite::{OptionalExtension, params};
 
 use crate::db::{Database, DbError, Result, now_ms};
 
+/// 回答者终态 → 批次聚合状态。
+pub(super) fn aggregate_batch_status(statuses: &[String]) -> &'static str {
+    let count = |needle: &str| {
+        statuses
+            .iter()
+            .filter(|status| status.as_str() == needle)
+            .count()
+    };
+    let completed = count("completed");
+    let interrupted = count("interrupted");
+    let failed = count("failed");
+    let cancelled = count("cancelled");
+    if completed > 0 && (interrupted > 0 || failed > 0 || cancelled > 0) {
+        "partial"
+    } else if completed > 0 {
+        "completed"
+    } else if failed > 0 {
+        "failed"
+    } else if interrupted > 0 {
+        // 用户停止 / 崩溃恢复截断：与失败区分，列表显示 interrupted 而不是红叉。
+        "interrupted"
+    } else if cancelled > 0 {
+        "cancelled"
+    } else {
+        "failed"
+    }
+}
+
 impl Database {
     /// 需要启动恢复的 BTW child sessions；调用方逐个取跨进程 guard 后再恢复。
     pub fn btw_sessions_needing_recovery(&self) -> Result<Vec<String>> {
@@ -40,10 +68,13 @@ impl Database {
                    WHERE status = 'streaming' AND session_id = ?2"#,
                 params![now, session],
             )?;
+            // 从未启动的 `queued` 回答者不是“被打断”：按取消收敛。只有真正在
+            // running 的轮次才标 interrupted，否则 QA 列表会出现没有执行内容的
+            // 打断标记（多目标批次里第二个目标被文件锁挡掉后尤其明显）。
             transaction.execute(
                 r#"UPDATE agent_btw_recipient
-                   SET status = 'interrupted', completed_at_ms = ?1
-                   WHERE status IN ('queued', 'running') AND batch_id IN (
+                   SET status = 'cancelled', completed_at_ms = ?1
+                   WHERE status = 'queued' AND batch_id IN (
                        SELECT b.external_id FROM agent_btw_batch b
                        JOIN agent_btw_thread t ON t.external_id = b.thread_id
                        WHERE t.child_session_id = ?2
@@ -51,13 +82,42 @@ impl Database {
                 params![now, session],
             )?;
             transaction.execute(
-                r#"UPDATE agent_btw_batch
+                r#"UPDATE agent_btw_recipient
                    SET status = 'interrupted', completed_at_ms = ?1
-                   WHERE status IN ('queued', 'running') AND thread_id IN (
-                       SELECT external_id FROM agent_btw_thread WHERE child_session_id = ?2
+                   WHERE status = 'running' AND batch_id IN (
+                       SELECT b.external_id FROM agent_btw_batch b
+                       JOIN agent_btw_thread t ON t.external_id = b.thread_id
+                       WHERE t.child_session_id = ?2
                    )"#,
                 params![now, session],
             )?;
+            let batches: Vec<String> = {
+                let mut statement = transaction.prepare(
+                    r#"SELECT b.external_id FROM agent_btw_batch b
+                       JOIN agent_btw_thread t ON t.external_id = b.thread_id
+                       WHERE t.child_session_id = ?1 AND b.status IN ('queued', 'running')"#,
+                )?;
+                statement
+                    .query_map(params![session], |row| row.get(0))?
+                    .collect::<std::result::Result<Vec<_>, _>>()?
+            };
+            for batch_id in batches {
+                let statuses: Vec<String> = {
+                    let mut statement = transaction
+                        .prepare("SELECT status FROM agent_btw_recipient WHERE batch_id = ?1")?;
+                    statement
+                        .query_map(params![batch_id], |row| row.get(0))?
+                        .collect::<std::result::Result<Vec<_>, _>>()?
+                };
+                // 统一按回答者聚合：已完成 + 被截断 = partial，全部被截断才 interrupted。
+                // 不能因为存在一个 interrupted 就把整批写成 interrupted，否则同一事实
+                // 会因恢复路径不同而显示不同状态。
+                let aggregate = aggregate_batch_status(&statuses);
+                transaction.execute(
+                    "UPDATE agent_btw_batch SET status = ?1, completed_at_ms = ?2 WHERE external_id = ?3",
+                    params![aggregate, now, batch_id],
+                )?;
+            }
         }
         transaction.commit()?;
         Ok(())
@@ -70,10 +130,12 @@ impl Database {
     }
 
     /// 认领失败时把回答者收敛到 failed，避免永久 queued/running。
+    ///
+    /// 回答者与批次状态在同一事务内收敛；批次进入终态时同步刷新线程排序时间。
     pub fn fail_btw_recipient(&self, recipient_id: &str, error_code: &str) -> Result<()> {
         let now = now_ms();
-        let batch_id: Option<String> = self
-            .conn
+        let transaction = self.conn.unchecked_transaction()?;
+        let batch_id: Option<String> = transaction
             .query_row(
                 "SELECT batch_id FROM agent_btw_recipient WHERE external_id = ?1",
                 params![recipient_id],
@@ -83,10 +145,12 @@ impl Database {
         let Some(batch_id) = batch_id else {
             return Ok(());
         };
-        self.conn.execute(
+        transaction.execute(
             "UPDATE agent_btw_recipient SET status = 'failed', error_code = ?1, completed_at_ms = ?2 WHERE external_id = ?3 AND status IN ('queued', 'running')",
             params![error_code, now, recipient_id],
         )?;
-        self.sync_btw_batch_status(&batch_id)
+        self.sync_btw_batch_status_in_tx(&transaction, &batch_id)?;
+        transaction.commit()?;
+        Ok(())
     }
 }

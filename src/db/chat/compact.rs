@@ -21,12 +21,44 @@ use super::{Database, DbError, Result, new_external_id, now_ms};
 pub const COMPACT_ACTIVE: &str = "active";
 pub const COMPACT_REVERTED: &str = "reverted";
 
-/// 一次压缩的完整记录（装配上下文、时间线与撤销都读它）。
+/// 检查点用途：上下文压缩或面板 `/report` 总结。
+///
+/// 两者共用时间线与 `/rewind` 删除语义；只有 [`CompactKind::Compact`] 参与
+/// 上下文装配（`active_checkpoint`），报告只是可撤销的时间线条目。
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum CompactKind {
+    #[default]
+    Compact,
+    Report,
+}
+
+impl CompactKind {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Compact => "compact",
+            Self::Report => "report",
+        }
+    }
+
+    pub fn parse(value: &str) -> Option<Self> {
+        match value {
+            "compact" => Some(Self::Compact),
+            "report" => Some(Self::Report),
+            _ => None,
+        }
+    }
+
+    pub fn is_report(self) -> bool {
+        self == Self::Report
+    }
+}
+
+/// 一次压缩/报告的完整记录（装配上下文、时间线与撤销都读它）。
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct CompactCheckpoint {
     pub id: String,
     pub sequence: i64,
-    /// 幂等键：同一次压缩的重复完成回执只写一次。
+    /// 幂等键：同一次压缩/报告的重复完成回执只写一次。
     pub operation_id: String,
     /// 增量摘要的上一个生效检查点（首个检查点为 None）。
     pub base_checkpoint_id: Option<String>,
@@ -36,6 +68,8 @@ pub struct CompactCheckpoint {
     pub summary_text: String,
     /// 实际摘要模型的显示名（必须来自真实模型快照，不能是占位）。
     pub model_label: String,
+    /// 用途：上下文压缩或报告总结。
+    pub kind: CompactKind,
     pub state: String,
     pub created_at_ms: i64,
 }
@@ -102,9 +136,9 @@ impl Database {
         self.conn
             .query_row(
                 r#"SELECT external_id, sequence, operation_id, base_checkpoint_id, start_sequence,
-                          end_sequence, summary_text, model_label, state, created_at_ms
+                          end_sequence, summary_text, model_label, kind, state, created_at_ms
                    FROM agent_compact_checkpoint
-                   WHERE session_id = ?1 AND state = 'active'
+                   WHERE session_id = ?1 AND state = 'active' AND kind = 'compact'
                    ORDER BY sequence DESC LIMIT 1"#,
                 params![session_id],
                 read_checkpoint,
@@ -124,7 +158,7 @@ impl Database {
         }
         let mut statement = self.conn.prepare(
             r#"SELECT external_id, sequence, operation_id, base_checkpoint_id, start_sequence,
-                      end_sequence, summary_text, model_label, state, created_at_ms
+                      end_sequence, summary_text, model_label, kind, state, created_at_ms
                FROM agent_compact_checkpoint
                WHERE session_id = ?1 AND state = 'active'
                ORDER BY sequence"#,
@@ -142,6 +176,24 @@ impl Database {
         &self,
         workspace: &Path,
         commit: &CompactCommit,
+    ) -> Result<CompactCommitted> {
+        self.commit_checkpoint(workspace, commit, CompactKind::Compact)
+    }
+
+    /// 提交一次面板 `/report` 总结：检查点 kind = `report`，不参与上下文装配。
+    pub fn commit_report(
+        &self,
+        workspace: &Path,
+        commit: &CompactCommit,
+    ) -> Result<CompactCommitted> {
+        self.commit_checkpoint(workspace, commit, CompactKind::Report)
+    }
+
+    fn commit_checkpoint(
+        &self,
+        workspace: &Path,
+        commit: &CompactCommit,
+        kind: CompactKind,
     ) -> Result<CompactCommitted> {
         if commit.summary_text.trim().is_empty() {
             return Err(DbError::InvalidDraft);
@@ -179,16 +231,32 @@ impl Database {
         if revision != commit.expected_revision {
             return Err(DbError::RewindTargetChanged);
         }
+        // 报告必须覆盖到会话末尾：总结进行期间新落库的消息会让报告落后于时间线，
+        // 不能在更新的问答之后插入旧报告卡片（BTW 写入不推进 revision，需单独校验）。
+        if kind.is_report() {
+            let newer: bool = transaction.query_row(
+                "SELECT EXISTS(SELECT 1 FROM agent_message WHERE session_id = ?1 AND sequence > ?2)",
+                params![commit.session_id, commit.end_sequence],
+                |row| row.get(0),
+            )?;
+            if newer {
+                return Err(DbError::RewindTargetChanged);
+            }
+        }
         // 取号：与消息、撤销提示、模型切换共用同一空间。
         let sequence = super::next_session_sequence(&transaction, &commit.session_id)?;
         let now = now_ms();
-        let id = new_external_id("compact");
+        let id = new_external_id(if kind.is_report() {
+            "report"
+        } else {
+            "compact"
+        });
         transaction.execute(
             r#"INSERT INTO agent_compact_checkpoint
                    (external_id, session_id, sequence, operation_id, base_checkpoint_id,
-                    start_sequence, end_sequence, summary_text, model_label, state,
+                    start_sequence, end_sequence, summary_text, model_label, kind, state,
                     reverted_by_operation_id, created_at_ms)
-               VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, 'active', NULL, ?10)"#,
+               VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, 'active', NULL, ?11)"#,
             params![
                 id,
                 commit.session_id,
@@ -199,6 +267,7 @@ impl Database {
                 commit.end_sequence,
                 commit.summary_text,
                 commit.model_label,
+                kind.as_str(),
                 now,
             ],
         )?;
@@ -215,6 +284,7 @@ impl Database {
             end_sequence: commit.end_sequence,
             summary_text: commit.summary_text.clone(),
             model_label: commit.model_label.clone(),
+            kind,
             state: COMPACT_ACTIVE.to_string(),
             created_at_ms: now,
         };
@@ -273,6 +343,7 @@ impl Database {
                 end_sequence: 0,
                 summary_text: String::new(),
                 model_label: String::new(),
+                kind: CompactKind::Compact,
                 state: COMPACT_REVERTED.to_string(),
                 created_at_ms: 0,
             });
@@ -355,7 +426,7 @@ impl Database {
                SET state = 'active', reverted_by_operation_id = NULL
                WHERE id = (
                    SELECT id FROM agent_compact_checkpoint
-                   WHERE session_id = ?1 AND state = 'active'
+                   WHERE session_id = ?1 AND state = 'active' AND kind = 'compact'
                    ORDER BY sequence DESC, id DESC
                    LIMIT 1
                )"#,
@@ -397,8 +468,13 @@ fn read_checkpoint(row: &rusqlite::Row<'_>) -> rusqlite::Result<CompactCheckpoin
         end_sequence: row.get(5)?,
         summary_text: row.get(6)?,
         model_label: row.get(7)?,
-        state: row.get(8)?,
-        created_at_ms: row.get(9)?,
+        kind: row
+            .get::<_, String>(8)
+            .ok()
+            .and_then(|value| CompactKind::parse(&value))
+            .unwrap_or(CompactKind::Compact),
+        state: row.get(9)?,
+        created_at_ms: row.get(10)?,
     })
 }
 
@@ -407,7 +483,7 @@ fn checkpoint_by_id(connection: &Connection, id: &str) -> Result<Option<CompactC
     Ok(connection
         .query_row(
             r#"SELECT external_id, sequence, operation_id, base_checkpoint_id, start_sequence,
-                      end_sequence, summary_text, model_label, state, created_at_ms
+                      end_sequence, summary_text, model_label, kind, state, created_at_ms
                FROM agent_compact_checkpoint WHERE external_id = ?1"#,
             params![id],
             read_checkpoint,
@@ -423,7 +499,7 @@ fn checkpoint_by_operation(
     Ok(connection
         .query_row(
             r#"SELECT external_id, sequence, operation_id, base_checkpoint_id, start_sequence,
-                      end_sequence, summary_text, model_label, state, created_at_ms
+                      end_sequence, summary_text, model_label, kind, state, created_at_ms
                FROM agent_compact_checkpoint WHERE operation_id = ?1"#,
             params![operation_id],
             read_checkpoint,

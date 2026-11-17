@@ -41,7 +41,10 @@ pub fn apply_compact_effects(
         .filter(|effect| {
             matches!(
                 effect,
-                Effect::ExecuteCompact(_) | Effect::RevertCompact(_) | Effect::CompactDetail { .. }
+                Effect::ExecuteCompact(_)
+                    | Effect::RevertCompact(_)
+                    | Effect::CompactDetail { .. }
+                    | Effect::SendSubagentReport { .. }
             )
         })
         .cloned()
@@ -52,7 +55,10 @@ pub fn apply_compact_effects(
     state.effects.retain(|effect| {
         !matches!(
             effect,
-            Effect::ExecuteCompact(_) | Effect::RevertCompact(_) | Effect::CompactDetail { .. }
+            Effect::ExecuteCompact(_)
+                | Effect::RevertCompact(_)
+                | Effect::CompactDetail { .. }
+                | Effect::SendSubagentReport { .. }
         )
     });
     for effect in effects {
@@ -60,6 +66,26 @@ pub fn apply_compact_effects(
             Effect::ExecuteCompact(request) => execute_compact(sender, persistence, request),
             Effect::CompactDetail { pane, target } => {
                 super::detail_compact::prepare(state, sender, persistence, pane, target);
+            }
+            Effect::SendSubagentReport {
+                pane,
+                session_id,
+                agent_id,
+                note,
+            } => {
+                let current = state
+                    .pane_anywhere(pane)
+                    .and_then(|target| target.lx.chat.session_id.as_deref());
+                if current == Some(session_id.as_str()) {
+                    super::detail_report::prepare(
+                        state,
+                        sender,
+                        persistence,
+                        pane,
+                        crate::app::state::DetailTarget::Agent(agent_id),
+                        &note,
+                    );
+                }
             }
             Effect::RevertCompact(request) => execute_revert(sender, persistence, request),
             _ => {}
@@ -90,7 +116,8 @@ pub(super) fn execute_compact(
             return;
         }
     };
-    let start_after = match request.base_checkpoint_id.as_deref() {
+    let report = request.kind.is_report();
+    let start_after = match request.base_checkpoint_id.as_deref().filter(|_| !report) {
         Some(id) => match db
             .compact_checkpoints(&request.workspace, &request.session_id)
             .map(|checkpoints| {
@@ -119,8 +146,20 @@ pub(super) fn execute_compact(
         });
         return;
     }
-    let chat_request =
-        compact::summary_request(&input, &request.model, request.variant_params.clone());
+    let chat_request = if report {
+        compact::report_request_from_transcript(
+            &input.transcript,
+            input.start_sequence,
+            input.end_sequence,
+            input.messages.len(),
+            input.omitted_turns,
+            &request.note,
+            &request.model,
+            request.variant_params.clone(),
+        )
+    } else {
+        compact::summary_request(&input, &request.model, request.variant_params.clone())
+    };
     let sender = sender.clone();
     let persistence_path = persistence.database_path();
     tokio::spawn(async move {
@@ -150,7 +189,11 @@ async fn run_compact(
     // （历史 bug：`summary request failed: cancelled`）。
     let (_cancel_sender, cancel) = crate::chat::client::uncancellable();
     let stream_log = crate::chat::client::StreamLog {
-        kind: "compact",
+        kind: if request.kind.is_report() {
+            "report"
+        } else {
+            "compact"
+        },
         pane: Some(request.pane.raw()),
         session_id: Some(request.session_id.clone()),
         ..crate::chat::client::StreamLog::default()
@@ -167,8 +210,13 @@ async fn run_compact(
     )
     .await;
     if outcome.stop != crate::chat::events::StopReason::Complete {
+        let what = if request.kind.is_report() {
+            "report"
+        } else {
+            "summary"
+        };
         return CompactOutcome::Failed {
-            message: format!("summary request failed: {}", outcome.stop.as_str()),
+            message: format!("{what} request failed: {}", outcome.stop.as_str()),
         };
     }
     // 只接受纯文本：出现工具调用说明请求形状被误读，直接失败（不执行任何调用）。
@@ -184,20 +232,43 @@ async fn run_compact(
             crate::chat::events::ChatDelta::ToolInputStarted { .. }
             | crate::chat::events::ChatDelta::ToolInputDelta { .. }
             | crate::chat::events::ChatDelta::ToolInputEnded { .. } => {
+                let what = if request.kind.is_report() {
+                    "report"
+                } else {
+                    "summary"
+                };
                 return CompactOutcome::Failed {
-                    message: "summary request returned tool calls".to_string(),
+                    message: format!("{what} request returned tool calls"),
                 };
             }
             _ => {}
         }
     }
-    let summary = match compact::validate_summary(&text) {
+    let summary = match if request.kind.is_report() {
+        compact::validate_report(&text)
+    } else {
+        compact::validate_summary(&text)
+    } {
         Ok(summary) => summary,
         Err(message) => {
             return CompactOutcome::Failed {
                 message: message.to_string(),
             };
         }
+    };
+    // 报告正文在提交前定型：来源头与变更文件写进检查点，卡片、芯片与 Resend
+    // 读取同一份文本；同时剥离控制字符并执行报告专用 8 KiB 上限。
+    let summary = if request.kind.is_report() {
+        let body = crate::app::update::format_report_body(
+            request.report_header.as_deref().unwrap_or_default(),
+            &summary,
+            &request.report_changed_paths,
+            request.report_changed_total,
+        );
+        let body = crate::chat::agent::sanitize_report_text(&body);
+        crate::chat::agent::truncate_report_body(&body)
+    } else {
+        summary
     };
     let Some(path) = persistence_path else {
         return CompactOutcome::Failed {
@@ -217,7 +288,11 @@ async fn run_compact(
     };
     match tokio::task::spawn_blocking(move || {
         let database = crate::db::Database::open(&path)?;
-        database.commit_compact(&request.workspace, &commit)
+        if request.kind.is_report() {
+            database.commit_report(&request.workspace, &commit)
+        } else {
+            database.commit_compact(&request.workspace, &commit)
+        }
     })
     .await
     {

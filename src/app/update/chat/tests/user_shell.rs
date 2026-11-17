@@ -297,14 +297,23 @@ fn double_escape_stops_shell_only_runs() {
             .stop_armed_at
             .is_some()
     );
-    assert!(chat::escape_stop(&mut state, pane), "第二次停止");
+    assert!(chat::escape_stop(&mut state, pane), "第二次打开停止面板");
+    assert!(matches!(
+        state.pane_anywhere(pane).unwrap().lx.slash,
+        Some(crate::app::state::SlashPanel::Stop(_))
+    ));
     assert!(
-        state
+        !state
             .effects
             .iter()
-            .any(|effect| matches!(effect, Effect::CancelUserShells { .. }))
+            .any(|effect| matches!(effect, Effect::CancelUserShells { .. })),
+        "打开面板不立即停止"
     );
-    assert!(state.pane_anywhere(pane).unwrap().lx.chat.queue.is_empty());
+    assert_eq!(
+        state.pane_anywhere(pane).unwrap().lx.chat.queue.len(),
+        1,
+        "执行 Stop all 前排队项保留"
+    );
 }
 
 #[test]
