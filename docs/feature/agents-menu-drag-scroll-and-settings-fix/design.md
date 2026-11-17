@@ -1,18 +1,19 @@
-# Agents 菜单、拖拽滚轮与设置页加载修复 — 设计
+# Agents 菜单、拖拽滚动与设置页加载修复 — 设计
 
-> 状态：**已实现，待用户确认合并**
-> 关联任务：[task.md](task.md)
+> 状态：**已完成实现与代码审查修复，待用户确认合并**
+> 关联任务：[task.md](task.md) · [review.md](review.md)
 > 基线：`.worktrees/agents-menu-drag-scroll`（分支 `feature/agents-menu-drag-scroll`，切自 `dev`）
-> 范围：侧栏 `Agents` 右键菜单、新建 Agent 模态、可拖拽列表滚轮、浏览器设置页 JS 修复
+> 范围：侧栏 `Agents` 右键菜单、新建 Agent 模态（含实时搜索与滚动）、列表拖拽滚轮与边缘自动滚动、`lx` 选区边缘自动滚动、浏览器设置页 JS 修复
 
 ## 1. 背景与目标
 
-本次包含四个相互独立但同属一个交互面的改动：
+本次包含以下同属交互与稳定性闭环的改动：
 
 1. **终端 Agent 也能 Close**：当前只有 lx 条目稳定提供 `Close`；opencode/claude/codex 等终端 Agent 在“标签内唯一窗格”时没有 `Close`，因为底层禁止删除最后一个窗格。
-2. **新增 `New agent` 入口与模态**：右侧 Agents 条目菜单与 Agents 空白区域都能右键新建 Agent；弹窗只列本机 PATH 中已安装的 CLI coding agent，选中后新建标签并启动。
-3. **拖拽列表允许滚轮**：左侧工作区活跃/历史列表、右侧 Todo、右侧 Prompt 树在拖拽过程中允许用滚轮滚动视口，并按指针当前位置刷新落点。
-4. **修复设置页 `element is not defined`**：模型/供应商、Quick connect、模型卡片与 Subagents 页面共用的 `element()` 全局函数已在重构中删除，调用点漏改。
+2. **新增 `New agent` 入口与可搜索模态**：左侧 Agents 条目菜单与 Agents 空白区域都能右键新建 Agent；弹窗按本机 `PATH` 探测 8 类 CLI coding agent，顶部提供单行搜索框（按实际命令与启动别名/稳定名不区分大小写子串过滤，支持点击拖选、粘贴/剪切、滚轮与溢出滚动条），选中后新建标签并启动。
+3. **拖拽列表允许滚轮与边缘自动滚动**：左侧工作区活跃/历史列表、右侧 Todo、右侧 Prompt 树在拖拽过程中允许滚轮滚动视口，并在上下各 2 行检测区与外溢区域支持 30ms 节拍边缘自动滚动，滚动后按指针当前位置刷新落点。
+4. **`lx` 主内容区选区边缘自动滚动**：`lx` 主消息列表与后台任务页（`Processes` 输出、`Agents` 详情、`BTW` 对话）支持在上下各 2 行检测区与外溢区域自动滚动并保持多击（`Word` / `Line` / 表格 / 代码块）选区粒度。
+5. **修复设置页 `element is not defined`**：模型/供应商、Quick connect、模型卡片与 Subagents 页面共用的 `element()` 全局函数已在重构中删除，调用点漏改。
 
 目标不是重写侧栏或终端架构，而是在现有 `app/` 纯状态、`ui/` 纯渲染、`event/` 只分派的结构内做最小闭环。
 
@@ -21,11 +22,11 @@
 | 编号 | 问题 | 最终结论 |
 |---|---|---|
 | Q1 | 终端 Agent 的 `Close` 语义 | 关窗格 → 唯一窗格则关标签 → 唯一标签则先新建空白标签再关旧标签；工作区始终保留至少一个 tab |
-| Q2 | 新建弹窗候选列表 | 只列 PATH 中真实安装的 8 类 CLI Agent；同一 Agent 只出现一次；不列 lx；空列表显示 `No coding agents installed` |
-| Q3 | `New agent` 菜单位置 | Agent 条目菜单第一项；Agents 列表空白区域右键只弹单项 `New agent`；滚动条列与折叠按钮不算空白 |
-| Q4 | 新建弹窗交互 | 单选列表；↑/↓ 或单击只移动高亮；`Enter` / `Create` 创建；`Esc` / `Cancel` 关闭；双击行等价于创建；默认高亮第一项 |
-| Q5 | 拖拽滚轮覆盖范围 | 工作区活跃列表、工作区历史列表、Todo 列表、Prompt 树；只改视口、不改选中项；滚轮后按指针当前位置刷新落点 |
-| Q6 | Agent 启动方式 | 新标签先起普通 shell，PTY 就绪后写入 `<可执行文件名>\r`；agent 退出后回到 shell，窗格不自动关闭 |
+| Q2 | 新建弹窗候选列表 | 只列 PATH 中真实安装的 8 类 CLI Agent；同一 Agent 只出现一次；不列 lx；空列表显示 `No coding agents installed`，过滤无命中显示 `No matching agents` |
+| Q3 | `New agent` 菜单位置 | Agent 条目菜单第一项；Agents 列表空白区域右键只弹单项 `New agent`；滚动条列与折叠按钮不算空白（且仅真正打开菜单时扫描 PATH） |
+| Q4 | 新建弹窗交互 | 顶部单行搜索框（匹配实际命令与启动别名/稳定名称）+ 分割线 + 单选列表 + 呼吸行 + 按钮；文本变化高亮回首行、重置 `viewport` 与双击记录；支持鼠标点击/拖选/粘贴/剪切/滚轮/滚动条；`↑/↓` 移动高亮；`Enter`/`Create`/双击创建并在标签栏溢出时自动滚入可见；`Esc` 有选区先清选区、再按关闭 |
+| Q5 | 拖拽与选区自动滚动 | 工作区活跃/历史、Todo、Prompt 树支持拖拽滚轮与边缘自动滚动；`lx` 主消息列表与后台任务页（Processes/Agents/BTW）选区支持边缘自动滚动；上下各 2 行检测区、30ms 一步、越靠外越快（1..=3 行），同向横向移动不推迟 `next_at`；Todo/Prompt 拖出右栏水平外取消，右栏内（含滚动条列）纵向钳位保持落点 |
+| Q6 | Agent 启动方式 | 新标签先起普通 shell，150ms 后 PTY 就绪写入 `<可执行文件名>\r`（`next_deadline` 纳入唤醒）；agent 退出后回到 shell，窗格不自动关闭 |
 | Q7 | 设置页修复范围 | 四个 JS 文件全部把 `element(` 改为 `domEl(`；补资源回归测试；错误提示双写行为不变 |
 | Q8 | 实现位置 | 在 `.worktrees/agents-menu-drag-scroll` 的 `feature/agents-menu-drag-scroll` 分支实现；每个任务（P1-P4）完成后提交一次；全部完成后由用户决定是否合并回 `dev` |
 
@@ -257,21 +258,19 @@ pub fn agents_blank_at(
 事件层在 `open_right_click_menu` 中：
 
 ```rust
-if ui::agents_section_at(view, state, column, row) {
-    // 每次右键都刷新安装快照，避免长时间运行后 PATH 变化不生效。
-    state.installed_agents = crate::detect::installed_agents();
-}
 if let Some(index) = ui::agent_item_index_at(view, state, column, row) {
+    state.installed_agents = crate::detect::installed_agents();
     update::open_agent_menu(state, index, (column, row));
     return true;
 }
 if ui::agents_blank_at(view, state, column, row) {
+    state.installed_agents = crate::detect::installed_agents();
     update::open_agents_blank_menu(state, state.active_workspace, (column, row));
     return true;
 }
 ```
 
-顺序必须保持在 Prompt/Todo/窗格分支之前，避免 Agents 空白点击穿透到底层主区。
+顺序必须保持在 Prompt/Todo/窗格分支之前，避免 Agents 空白点击穿透到底层主区；且仅在真正打开 Agents 菜单时扫描 `PATH`，避免右键滚动条列触发无效磁盘探测。
 
 ### 4.3 已安装 Agent 探测
 
@@ -329,44 +328,9 @@ pub fn installed_agents() -> Vec<InstalledAgent> {
 
 `src/platform/executable.rs`（新文件，OS 分支只在这里）：
 
-```rust
-/// 在 PATH 中查找第一个可执行的候选名；返回命中候选名与绝对路径。
-pub fn find_executable(names: &[&str]) -> Option<(String, PathBuf)> {
-    let path = std::env::var_os("PATH")?;
-    find_executable_in(names, &path)
-}
-
-fn find_executable_in(names: &[&str], path: &OsStr) -> Option<(String, PathBuf)> {
-    for dir in std::env::split_paths(path) {
-        for name in names {
-            #[cfg(unix)]
-            {
-                let candidate = dir.join(name);
-                if is_executable_file(&candidate) {
-                    return Some(((*name).to_string(), candidate));
-                }
-            }
-            #[cfg(windows)]
-            {
-                // 依次尝试 `.exe` / `.cmd` / `.bat` / `.com` 与无扩展名。
-                for candidate in windows_candidates(&dir, name) {
-                    if candidate.is_file() {
-                        return Some(((*name).to_string(), candidate));
-                    }
-                }
-            }
-        }
-    }
-    None
-}
-
-#[cfg(unix)]
-fn is_executable_file(path: &Path) -> bool {
-    use std::os::unix::fs::PermissionsExt;
-    path.metadata()
-        .is_ok_and(|meta| meta.is_file() && meta.permissions().mode() & 0o111 != 0)
-}
-```
+- 跳过 `PATH` 中由前后或连续分隔符产生的空段，避免退化成按 TUI 进程当前工作目录查找相对路径。
+- 非 Windows 平台（`#[cfg(not(windows))]`）：先校验 `metadata().is_file()`，再用 `libc::access(c_path, libc::X_OK) == 0` 检验当前有效用户的实际可执行权限（避免 root 属主 `0o700` 等情况误判）。
+- Windows 平台（`#[cfg(windows)]`）：在遍历 `PATH` 前单次解析 `PATHEXT`（默认 `.exe`/`.cmd`/`.bat`/`.com`），显式带扩展名按原样校验 `is_file()`，无扩展名依次拼接扩展名校验。
 
 不把绝对路径写进启动命令：新标签的 shell 继承同一 `PATH`，写候选名即可；这样用户移动安装目录后行为不变。
 
@@ -383,7 +347,7 @@ pub installed_agents: Vec<crate::detect::InstalledAgent>,
 - `AppState::demo()` / `new()` 默认空列表；弹窗测试直接注入固定列表，不依赖开发机 PATH。
 - 右键之外的入口不重新扫描；弹窗生命周期很短，可接受。
 
-### 4.4 New agent 模态
+### 4.4 New agent 模态（含实时搜索与滚动）
 
 #### 4.4.1 状态
 
@@ -394,114 +358,41 @@ pub installed_agents: Vec<crate::detect::InstalledAgent>,
 pub struct NewAgentDialog {
     pub workspace: usize,
     pub agents: Vec<crate::detect::InstalledAgent>,
+    pub query: TextInput,
     pub selected: usize,
-}
-
-impl NewAgentDialog {
-    pub fn new(workspace: usize, agents: Vec<InstalledAgent>) -> Self {
-        Self { workspace, agents, selected: 0 }
-    }
-
-    pub fn selected_agent(&self) -> Option<&InstalledAgent> {
-        self.agents.get(self.selected)
-    }
+    pub viewport: Option<usize>,
 }
 ```
 
-`OverlayKind::NewAgent`、`Overlay::NewAgent(NewAgentDialog)`、`Overlay::kind()` 同步增加。该弹窗没有文本输入，`input()/input_mut()/clear_selection()` 不新增分支（现有通配臂返回 None/空操作）。
+- `filtered_indices()`：对 `agent.command` 与 `detect::launch_names(agent.kind)` 全部别名（含稳定小写名称，避免 `app -> ui::text` 依赖扩散）做大小写不敏感子串匹配。
+- `OverlayKind::NewAgent`、`Overlay::NewAgent(NewAgentDialog)`、`Overlay::kind()` 同步增加，并完整接入 `Overlay::input()`、`Overlay::input_mut()`、`Overlay::clear_selection()`（支持终端粘贴、剪切、选区复制、`Esc` 先清选区及搜索框内鼠标点击/拖选）。
 
 #### 4.4.2 打开
 
 `src/app/update/new_agent.rs`（新文件）：
 
-```rust
-pub fn open_new_agent_dialog(state: &mut AppState, workspace: usize) {
-    if state.workspaces.get(workspace).is_none() {
-        return;
-    }
-    state.overlay = Some(Overlay::NewAgent(NewAgentDialog::new(
-        workspace,
-        state.installed_agents.clone(),
-    )));
-}
-```
+- `open_new_agent_dialog(state, workspace)`：校验工作区，快照 `installed_agents`，重置 `new_agent_click` 与 `new_agent_scroll_drag`。
+- `activate_menu` 增加 `(Some(MenuCommand::NewAgent), OverlayTarget::Agent { workspace, .. } | OverlayTarget::AgentsBlank { workspace }) => open_new_agent_dialog(state, *workspace)`。
 
-`activate_menu` 增加：
+#### 4.4.3 键盘与粘贴/剪切
 
-```rust
-(
-    Some(MenuCommand::NewAgent),
-    OverlayTarget::Agent { workspace, .. } | OverlayTarget::AgentsBlank { workspace },
-) => {
-    open_new_agent_dialog(state, *workspace);
-}
-```
-
-#### 4.4.3 键盘
-
-`src/input/mod.rs` `overlay_key`：
-
-```rust
-OverlayKind::NewAgent => match key.code {
-    KeyCode::Esc => Some(OverlayKey::Esc),
-    KeyCode::Enter => Some(OverlayKey::Enter),
-    KeyCode::Up => Some(OverlayKey::Up),
-    KeyCode::Down => Some(OverlayKey::Down),
-    _ => None,
-},
-```
-
-`src/app/update/dialog.rs` 在通用分派之前拦截：
-
-```rust
-if matches!(state.overlay, Some(Overlay::NewAgent(_))) {
-    apply_new_agent_key(state, key);
-    return None;
-}
-```
-
-`apply_new_agent_key`：
-
-```rust
-match key {
-    OverlayKey::Esc => close_overlay(state),
-    OverlayKey::Up => { move_new_agent_selection(state, -1); }
-    OverlayKey::Down => { move_new_agent_selection(state, 1); }
-    OverlayKey::Enter => create_selected_agent(state),
-    _ => {}
-}
-```
+- `src/input/mod.rs` `overlay_key`：`OverlayKind::NewAgent` 映射 `Esc` / `Enter` / `Up` / `Down`，其余走 `overlay_text_edit_key(key)` 支持完整单行编辑与词/剪切快捷键。
+- `src/app/update/dialog.rs`：前置分支拦截 `Overlay::NewAgent` 交由 `apply_new_agent_key`；文本编辑、`apply_overlay_paste` 与 `cut_overlay_selected_text` 改变搜索词时均调用 `dialog.normalize_selection()`（`selected = 0; viewport = None`）并清空 `state.new_agent_click` 与 `state.new_agent_scroll_drag`。
+- `src/event/input.rs`：键盘 `Enter` 创建并激活新标签后调用 `ensure_workspace_visible` 与 `reveal_active_tab`，标签栏溢出时自动滚入可见。
 
 #### 4.4.4 鼠标
 
-`src/event/overlay.rs` 增加 `Some(Overlay::NewAgent(dialog))` 分支：
-
-- 点击 `shell.area` 外：关闭。
-- 点击行：`set_new_agent_selection`；用 `new_agent_click` 记录 400ms 内同一下标双击，双击立即 `apply_overlay_key(Enter)`。
-- 点击 `Create`：`apply_overlay_key(Enter)`。
-- 点击 `Cancel`：`close_overlay`。
-- 弹窗内部空白：保持打开。
-
-`AppState` 增加：
-
-```rust
-/// New agent 弹窗行双击判定。
-pub new_agent_click: Option<(usize, Instant)>,
-```
-
-默认 `None`；`open_new_agent_dialog` 重置。
+- `src/event/overlay.rs`：`overlay_input_rect` 返回 `new_agent_search_rect(&shell)`，复用公共输入框点击/拖选处理。点击行单选、400ms 同行双击立即创建；点击 `Create` 创建；点击 `Cancel` 或弹窗外关闭；点击内部空白保持打开。
+- `src/event/mouse/wheel.rs` / `press.rs` / `drag.rs`：支持弹窗内滚轮滚动（不改 `selected`）与矮屏溢出滚动条点击/拖拽（`new_agent_scroll_drag`）。
 
 #### 4.4.5 渲染与几何
 
 `src/ui/overlay/new_agent.rs`（新文件）：
 
-- 宽度固定 48；高度 `行数 + 5`，行数夹在 1..=8；短屏由 `widgets::modal::layout` 自动夹取。
-- 标题 `New agent`；内容行首列显示 `text::agent_label(kind)`，右侧可选显示实际命令名（与标签不同才显示，例如 `cursor` / `cursor-agent`）。
-- 选中行整行高亮；无 agent 时显示 `No coding agents installed`，`Create` 按钮压暗且不响应。
-- 底部按钮 `Create` / `Cancel`；按钮与行命中函数与 `AgentTitle` 一样走 `widgets::modal`。
-- 返回 `None`（无硬件光标）。
-
-`src/ui/overlay.rs` 增加模块声明、导出与 `render` 分支。
+- 宽度固定 48；高度随快照条目总数计算为 `rows.clamp(1, 8) + 8`（内框依次为搜索行 + `DIVIDER_MID` 分隔线 + 候选列表 + 呼吸空行 + 底部 `create` / `cancel` 按钮；矮屏下逐级省略呼吸行与分隔线）。
+- 列表窗口起点 `new_agent_visible_start` 按过滤结果数夹紧高亮或取显式 `viewport`；内容溢出时右侧 1 列绘制 `widgets::scrollbar` thumb。
+- 左侧显示 `text::agent_label(kind)`，右侧在 `command != label` 时压暗显示实际命令名；无安装显示 `No coding agents installed`，有安装无命中显示 `No matching agents`（均居中截断）且 `create` 按钮置灰。
+- 经公共 `render_input` 返回硬件光标位置。
 
 #### 4.4.6 创建与启动
 
@@ -513,7 +404,6 @@ pub(crate) const AGENT_LAUNCH_DELAY: Duration = Duration::from_millis(150);
 pub fn create_agent_tab(
     state: &mut AppState,
     workspace: usize,
-    kind: AgentKind,
     command: &str,
 ) -> Option<PaneId> {
     let pane = create_terminal_tab(state, workspace)?;
@@ -527,18 +417,8 @@ pub fn create_agent_tab(
 }
 ```
 
-- 把 `create_terminal_in_workspace` 的主体抽成 `create_terminal_tab(...) -> Option<PaneId>`，原函数保留为薄包装，行为不变。
-- `PendingAgentLaunch` 放在 `src/app/state/pane.rs`：
-
-```rust
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct PendingAgentLaunch {
-    pub command: String,
-    pub at: Instant,
-}
-```
-
-- `Pane` 增加 `pub pending_launch: Option<PendingAgentLaunch>`，`Pane::new()` 初始化为 `None`。
+- `PendingAgentLaunch` 放在 `src/app/state/pane.rs`，`Pane::new()` 初始化为 `None`。
+- `src/app/update/interaction.rs` 的 `next_deadline` 纳入 `pending_launch.at` 确保空闲时按时唤醒写入命令。
 
 `create_selected_agent`：
 
@@ -748,82 +628,85 @@ fn assets_do_not_call_removed_element_helper() {
 
 `assets/settings_models.js` 的错误双写行为不动：真实加载失败时仍同时更新两个状态位，本次只修 `ReferenceError`。
 
+### 4.7 列表拖拽与 `lx` 选区的边缘自动滚动
+
+新增 `src/event/mouse/autoscroll.rs` 并在 `src/app/state/interaction.rs` / `src/app/update/selection/` 统一提供边界计算与自动滚动调度：
+
+- **检测区与节拍**：
+  - `autoscroll_edge(rect, row)` 将视口上下各 2 行（`AUTOSCROLL_BAND_ROWS = 2`）作为检测区；越出视口时 `distance > 0`，先在首次越界/距离增大时立即按 `edge_scroll_lines`（`3..=15` 行）步进一次，随后每 `30ms` 步进 `1 + distance / 3`（夹在 `1..=3` 行）。
+  - 同方向边缘内横向移动或抖动**保留原有 `next_at`**，避免不断重置节拍导致自动滚动饥饿或反复暴跳。
+  - `next_deadline` 纳入 `drag_autoscroll.next_at` 与 `lx_selection_autoscroll.next_at`，空闲等待时按时唤醒事件循环。
+- **四个列表拖拽表面**（`DragScrollSurface`：`WorkspaceActive`、`WorkspaceHistory`、`Todo`、`PromptTree`）：
+  - `WorkspaceActive`/`WorkspaceHistory` 横向不限；`Todo`/`PromptTree` 仅要求指针横向留在 `view.right_panel`（包含滚动条列）内、纵向越出列表时按列表首/末行钳位保持目标反馈，横向拖出右栏进入主区时返回 `None` / `Outside` 取消落点并停止自动滚动。
+  - `Todo` 与 `PromptTree` 仅在已进入 `dragging`（或已垂直越出列表且 `enabled`）时才激活自动滚动，防止边缘两行内的普通点击/双击因 1 列横向抖动被误升级为合并/移动。
+  - `wheel.rs` 与 `tick_drag` 统一检查 `state.overlay.is_none()`、`WorkspaceMode`、`RightTab::Todo && !prompt_collapsed` 与 `prompt_panel_active && prompt_tree_mode`；`handle_mouse_down_right`、`open_prompt_*_menu`、`open_pane_menu`、`close_pane` 与 `close_tab` 对称清理在途拖拽、自动滚动与锚定 toast。
+- **`lx` 主内容区选区自动滚动**（`LxScrollSurface`：`History`、`TaskOutput`、`TaskAgents`、`TaskBtw`）：
+  - 统一放在 `event/mouse/autoscroll.rs` 执行，每次步进前先校验 `overlay.is_none()`、窗格视图与活动页签匹配，并调用 `history_rows` 或 `resolve_task_{output,agents,btw}_visible` 解析实时可见行数与总行数（解决 `rows_dirty` / `visible == 0` 失效及 `chat_bar`/`sticky` 高度冻结问题）。
+  - 滚动后实时调用 `content_geom` + `unit_cell_range` + `drag_lx_selection_range` 推进终点，完整保留 `Character` / `Word` / `Line` / 表格 / 代码块选区粒度。
+  - 修复 `scroll_lx_history` 在 `follow_bottom == true` 时恒返回 `true` 的贴底判定 bug（并同步修复 Prompt 选区 `autoscroll_step` 在底部无法上滚、顶部死循环的对称缺陷），触底/触顶立即返回 `false` 并清空计划。
+
 ## 5. 文件变更清单
 
 ### 新增
 
-- `src/app/update/new_agent.rs`
-- `src/ui/overlay/new_agent.rs`
-- `src/platform/executable.rs`
-- （可能）`src/platform/executable/tests.rs` 或在 `src/platform/tests.rs` 内补测试
-- `docs/feature/agents-menu-drag-scroll-and-settings-fix/design.md`、`task.md`
+- `src/app/state/interaction.rs`（自 `state.rs` 拆出交互/拖拽/自动滚动类型）
+- `src/app/update/selection/{mod.rs, lx.rs, autoscroll.rs}`（自 `selection.rs` 按职责拆分）
+- `src/app/update/new_agent.rs`、`src/app/update/new_agent/tests.rs`
+- `src/ui/overlay/new_agent.rs`、`src/ui/overlay/new_agent/tests.rs`
+- `src/platform/executable.rs`、`src/platform/executable/tests.rs`
+- `src/event/mouse/autoscroll.rs`
+- `src/event/tests/session_launch.rs`、`src/event/tests/mouse_drag.rs`
+- `src/input/tests/{mod.rs, overlay.rs}`（自超限 `src/input/tests.rs` 拆分）
+- `docs/feature/agents-menu-drag-scroll-and-settings-fix/{design.md, task.md, review.md}`
 
 ### 修改
 
-- `src/app/state.rs`：`installed_agents`、`new_agent_click`
-- `src/app/state/pane.rs`：`PendingAgentLaunch`、`Pane.pending_launch`
-- `src/app/overlay.rs`：`OverlayKind::NewAgent`、`Overlay::NewAgent`、`MenuCommand::NewAgent`、`OverlayTarget::AgentsBlank`、`NewAgentDialog`
-- `src/app/update/menu.rs`：菜单命令顺序、空白菜单、`NewAgent` 分派
-- `src/app/update/workspace.rs`：`create_terminal_tab`、`create_agent_tab`
-- `src/app/update/dialog.rs`：NewAgent 按键前置分支与穷尽列表
-- `src/app/update.rs`：导出 `new_agent`、`create_agent_tab`
-- `src/detect/mod.rs`：`ALL_AGENT_KINDS`、`launch_names`、`InstalledAgent`、`installed_agents`
-- `src/platform/mod.rs`：导出 `executable::find_executable`
-- `src/event/mod.rs`：事件循环调用 `flush_pending_agent_launches`
-- `src/event/session.rs`：`flush_pending_agent_launches`
-- `src/event/overlay.rs`：Agents 空白分支、NewAgent 点击、安装快照刷新
-- `src/event/mouse/wheel.rs`：四个拖拽滚轮分支
-- `src/input/mod.rs`：`OverlayKind::NewAgent` 按键映射
-- `src/ui/left_panel/mod.rs`：`agents_blank_at`
-- `src/ui/overlay.rs`：NewAgent 渲染分派与导出
-- `src/ui/text.rs`：菜单、弹窗、toast 文案
-- `assets/settings_models.js`
-- `assets/settings_models_card.js`
-- `assets/settings_connect.js`
-- `assets/settings_subagents.js`
+- `src/app/state.rs`、`src/app/state/lx.rs`、`src/app/state/pane.rs`
+- `src/app/overlay.rs`、`src/app/overlay/tests.rs`
+- `src/app/update.rs`、`src/app/update/dialog.rs`、`src/app/update/interaction.rs`、`src/app/update/menu.rs`、`src/app/update/menu/tests.rs`、`src/app/update/prompt/drag.rs`、`src/app/update/prompt/menu.rs`、`src/app/update/quit.rs`、`src/app/update/todo/drag.rs`、`src/app/update/workspace.rs`、`src/app/update/workspace_history/mod.rs`、`src/app/update/workspace_list.rs`
+- `src/app/update/chat/viewport.rs`、`src/app/update/chat/tests/history.rs`、`src/app/update/selection/tests.rs`
+- `src/detect/mod.rs`、`src/detect/tests.rs`
+- `src/platform/mod.rs`
+- `src/event/mod.rs`、`src/event/session.rs`、`src/event/overlay.rs`、`src/event/input.rs`
+- `src/event/mouse/{mod.rs, press.rs, drag.rs, wheel.rs}`
+- `src/event/tests.rs`、`src/event/tests/{agent_menu.rs, overlay.rs, prompt_tree.rs, todo.rs, workspace_history.rs}`
+- `src/input/mod.rs`
+- `src/ui/left_panel/{mod.rs, history.rs, tests.rs}`、`src/ui/main_content/tests.rs`、`src/ui/mod.rs`、`src/ui/overlay.rs`、`src/ui/text.rs`、`src/ui/text/workspace.rs`、`src/ui/text/tests.rs`
+- `assets/settings_{models, models_card, connect, subagents}.js`
 - `tests/web_assets.rs`
+- `docs/standards/tui-design-requirements.md`
 
 ## 6. 异常与边界
 
 | 场景 | 行为 |
 |---|---|
-| PATH 中没有任何支持的 Agent | 弹窗显示 `No coding agents installed`，`Create` 不可用，`Cancel` 可关 |
+| PATH 中没有任何支持的 Agent | 弹窗显示 `No coding agents installed`，`create` 不可用，`cancel` 可关 |
+| 搜索过滤无命中 | 弹窗显示 `No matching agents`，`create` 不可用；改词/粘贴/剪切回到首行 |
 | `opencode` 与 `opencode2` 同时安装 | 只显示一个 `opencode` 条目，启动命中的第一个候选名 |
+| 右键 Agents 滚动条列 | 不打开菜单，不触发无效 PATH 扫描 |
 | 菜单打开后目标工作区消失 | `open_new_agent_dialog` 校验 workspace，失败不打开 |
 | 弹窗打开后工作区消失 | `create_agent_tab` 返回 None，弹窗关闭但不创建标签 |
 | PTY spawn/写入失败 | 清 pending，保留空白终端，显示 danger toast |
 | 终端 Agent 是唯一窗格 | 关标签；唯一标签则替换为空白 lx 标签 |
 | 终端 Agent 是唯一窗格且 lx 同窗格有会话 | 关闭窗格/标签会销毁 lx 视图，DB 会话仍可通过 `/resume` 恢复（沿用现有 D3 语义） |
-| 拖拽滚轮到达列表边界 | `scroll_*` 钳制，落点不越界；工作区落点空白吸附末条 |
-| 拖拽中指针移出列表后滚轮 | 该次滚轮被拖拽分支吞掉，不滚动其他面板；拖拽现场保留 |
-| 弹窗打开时滚轮 | overlay 分支优先，拖拽分支不拦截 |
+| 拖拽滚轮/自动滚动到达列表边界 | 钳制停止不空转；`Workspace` 落点吸附首/末条，`Todo`/`Prompt` 在右栏内钳位保持落点、拖出右栏取消 |
+| `lx` 选区自动滚动贴底/触顶 | 立即返回 `false` 并停止计划；保留多击 `Word`/`Line`/表格/代码块选区粒度 |
+| 弹窗打开时滚轮或定时 tick | overlay 优先，拖拽与选区自动滚动不拦截且自愈停止 |
 | 设置页真实 API 加载失败 | 仍显示 `Failed to load: ...`，但不再是 `element is not defined` |
 
 ## 7. 测试计划
 
 ### 7.1 状态/更新层
 
-- `open_agent_menu` 对 lx 与终端 Agent 都包含 `NewAgent` 与 `CloseAgent`。
-- 终端 Agent 唯一窗格菜单仍包含 `CloseAgent`。
-- `close_terminal_agent` 三条路径：多窗格、唯一窗格多标签、唯一标签。
-- `open_agents_blank_menu` 命令只有 `NewAgent`，目标为 `AgentsBlank { workspace }`。
-- `open_new_agent_dialog` 空列表、多列表、目标失效。
-- `create_selected_agent` 设置 `pending_launch`、`view = Terminal`、激活新标签。
-- `flush_pending_agent_launches` 在 `at` 之前不写、之后写入 `command\r`；session 缺失时清队列并 toast。
+- `open_agent_menu`、`close_terminal_agent`、`open_agents_blank_menu`、`open_new_agent_dialog`、`create_selected_agent`、搜索过滤（命令 + 别名）、粘贴/剪切/双击重置、`scroll_lx_history` 贴底不死循环与非消息历史滚动、Prompt 选区上下边界、同方向 `next_at` 不推迟、`flush_pending_agent_launches`。
 
 ### 7.2 UI 层
 
-- `agents_blank_at`：条目行、滚动条列、折叠按钮、空列表、条目下方空白。
-- NewAgent 弹窗几何：0/1/8 行、短屏夹取、行命中、按钮命中、选中高亮、空态。
-- 菜单标题与标签：`Agents`、`New agent`。
+- `agents_blank_at`、NewAgent 弹窗几何（含分隔线、呼吸行、短屏降级、滚动条与 `filtered` 边界夹取）、`BUTTON_CREATE`/`NEW_AGENT_*` 文案。
 
-### 7.3 事件层
+### 7.3 事件层与集成
 
-- 右键条目第一/第二行都打开条目菜单，首项 `New agent`。
-- 右键 Agents 空白打开单项菜单；右键滚动条列不打开。
-- 点击 `New agent` 打开弹窗；↑/↓/Enter/Esc；单击选中、双击创建；Create/Cancel 按钮。
-- 拖拽滚轮：工作区活跃、历史、Todo、Prompt 树各一条；断言视口变化与落点刷新。
-- 设置页资源测试：四文件不再含 `element(`。
+- 右键条目/空白/滚动条列（不扫 PATH）、点击 `New agent` 打开弹窗、搜索框点击拖选/`Ctrl+C`/首次 `Esc` 清选区、滚轮滚动、键盘 `Enter` 露出溢出标签、列表拖拽滚轮与边缘自动滚动（防抖、滚动条列、纵向钳位、右栏外取消、右键清理）、`lx` 主消息与后台任务页 `Processes`/`Agents`/`BTW` 选区自动滚动（含 `Word`/`Line` 保留与 `rows_dirty` 解析）、`platform/executable` 空 PATH 段过滤、`tests/web_assets.rs`。
 
 ### 7.4 验证命令
 
@@ -840,7 +723,6 @@ TUI 交互与外观由用户运行 `cargo run` 确认；浏览器设置页由用
 - 不引入新依赖（不引入 `which`/`tempfile`）。
 - 不改 `PtySession::spawn` 的“只起 shell”语义。
 - 不把 lx 放进 New agent 列表。
-- 不做拖拽边缘自动滚动（本次只做滚轮）。
 - 不做 Agent 安装/卸载管理，只做 PATH 探测与启动。
 - 不修改设置页错误提示的双写行为。
 - 不自动合并回 `dev`：完成后先询问用户。
