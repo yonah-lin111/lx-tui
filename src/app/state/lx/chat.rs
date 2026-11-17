@@ -424,7 +424,7 @@ pub struct ChatStatus {
     pub streaming: bool,
     /// 上下文裁剪省略提示（一次性）。
     pub omitted_turns: Option<usize>,
-    /// 阻塞（队首输入校验失败）的子 agent 数（底边框异常提醒）。
+    /// 阻塞（队首输入校验失败）的子 agent 数（底部状态行异常提醒）。
     pub blocked_subagents: usize,
 }
 
@@ -578,7 +578,7 @@ pub struct LxChat {
     /// （对齐 opencode 的双击停止）；超时或流结束清除。
     pub stop_armed_at: Option<std::time::Instant>,
     /// 主轮是否被用户显式停止（Esc 双击）：停止后常驻后台的子 agent 不撑 loading，
-    /// 仍在底边框计数；下一次用户发送或自动报告轮开始时清为 false。
+    /// 仍在底部状态行计数；下一次用户发送或自动报告轮开始时清为 false。
     pub main_stopped: bool,
     /// 置顶行抑制记忆（跨帧状态，唯一必须落库到 app 侧的部分）；见 [`StickySuppression`]。
     /// 由事件循环每轮 `resolve_lx_history` 写入，渲染层只读（渲染不改状态）。

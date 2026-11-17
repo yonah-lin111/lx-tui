@@ -1,6 +1,6 @@
-//! 语义样式 Token：沿用 codex 的终端原生 ANSI 配色。
+//! 语义样式 Token：默认沿用 codex 的终端原生 ANSI 配色（部分高亮/阅读色板除外）。
 //! 默认不铺自绘背景；标签栏的选中行使用 ANSI-16 背景（`selected_item`），
-//! 悬停行使用明确的深色高亮背景（`selection`）；浮层面板使用自包含深底浅字（`overlay_panel`），
+//! 悬停行使用明确的深色高亮背景（`selection`）；浮层面板不铺背景色、配合清底保留终端透明（`overlay_panel`），
 //! 浮层选中项使用显式高亮灰底白字（`overlay_selection`）。
 //! 组件禁止直接写死颜色与修饰符。
 
@@ -801,8 +801,8 @@ pub fn chat_provider() -> Style {
 /// 状态行思考等级（variant）：**加粗黄字**，对齐 opencode 的
 /// `theme.text.feedback.warning.base` + `BOLD`。
 ///
-/// 用终端原生 `Color::Yellow` 而非 RGB：本项目配色层只有 16 色语义 token，
-/// 单独塞一个 RGB 琥珀会在不同终端主题下失控。
+/// 用终端原生 `Color::Yellow` 而非 RGB 琥珀：状态行文字随终端主题适配，
+/// 避免额外引入与终端冲突的暖色 RGB。
 pub fn chat_variant() -> Style {
     Style::default()
         .fg(Color::Yellow)

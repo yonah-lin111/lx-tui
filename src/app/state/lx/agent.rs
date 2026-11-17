@@ -495,7 +495,7 @@ impl AgentsState {
         self.runs.is_empty()
     }
 
-    /// 仍在运行的子 agent 数（底边框运行指标）。
+    /// 仍在运行的子 agent 数（底部状态行运行指标）。
     pub fn running_count(&self) -> usize {
         self.runs.iter().filter(|run| run.is_running()).count()
     }
@@ -508,7 +508,7 @@ impl AgentsState {
             .count()
     }
 
-    /// 阻塞（队首输入校验失败）的子 agent 数（底边框异常提醒）。
+    /// 阻塞（队首输入校验失败）的子 agent 数（底部状态行异常提醒）。
     pub fn blocked_count(&self) -> usize {
         self.runs
             .iter()

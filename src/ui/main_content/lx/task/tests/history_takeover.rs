@@ -83,7 +83,7 @@ fn lx_with_messages() -> Lx {
     lx
 }
 
-/// 整块渲染并返回文本行（**含**底边框那一行）。
+/// 整块渲染并返回文本行（末行为内容区外底边框行，倒数第二行为 `bottom_bar` 行）。
 fn render_lines(lx: &Lx, width: u16, height: u16) -> Vec<String> {
     let area = Rect::new(0, 0, width, height);
     let mut buf = Buffer::empty(Rect::new(0, 0, width, height + 1));

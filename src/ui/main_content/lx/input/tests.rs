@@ -219,3 +219,145 @@ fn lx_input_renders_folded_chip_and_expanded_preview_with_selection() {
             .contains(Modifier::REVERSED)
     );
 }
+
+#[test]
+fn lx_input_top_and_bottom_rules_use_explicit_gray_while_preserving_rule_badges() {
+    let area = Rect::new(0, 0, 60, 14);
+    let mut lx = Lx::new();
+    lx.chat.session_id = Some("sess-rule".into());
+    lx.chat.set_session_title(Some("Title".into()));
+    lx.chat
+        .queue
+        .push(crate::app::state::lx::chat::QueuedSubmission::Chat {
+            draft: "next".into(),
+        });
+
+    let input = layout(area, &lx).input.expect("input rect");
+    let mut buf = Buffer::empty(area);
+    let _ = render(area, &mut buf, &lx, true, None, &mut PaneCache::default());
+
+    let expected_fg = crate::ui::style::lx_input_rule().fg.expect("explicit gray");
+    let top_y = input.y;
+    let bottom_y = input.bottom() - 1;
+
+    // 顶/底分割线除右侧胶囊/`1 queued` 之外的每一列均为显式灰、透明底且无 DIM。
+    let badge_w = display_width(" Title ") as u16;
+    let badge_x = input.right() - 1 - badge_w;
+    for x in input.x..input.right() {
+        if x >= badge_x && x < badge_x + badge_w {
+            continue;
+        }
+        let cell = &buf[(x, top_y)];
+        assert_eq!(cell.symbol(), "─", "top rule at ({x},{top_y})");
+        assert_eq!(cell.fg, expected_fg, "top rule fg at ({x},{top_y})");
+        assert_eq!(cell.bg, Color::Reset, "top rule bg at ({x},{top_y})");
+        assert!(
+            !cell.modifier.contains(Modifier::DIM),
+            "top rule no DIM at ({x},{top_y})"
+        );
+    }
+
+    let queued_w = display_width("1 queued") as u16;
+    let queued_x = input.right() - 1 - queued_w;
+    for x in input.x..input.right() {
+        if x >= queued_x && x < queued_x + queued_w {
+            continue;
+        }
+        let cell = &buf[(x, bottom_y)];
+        assert_eq!(cell.symbol(), "─", "bottom rule at ({x},{bottom_y})");
+        assert_eq!(cell.fg, expected_fg, "bottom rule fg at ({x},{bottom_y})");
+        assert_eq!(cell.bg, Color::Reset, "bottom rule bg at ({x},{bottom_y})");
+        assert!(
+            !cell.modifier.contains(Modifier::DIM),
+            "bottom rule no DIM at ({x},{bottom_y})"
+        );
+    }
+
+    // 顶分割线胶囊与底分割线 `1 queued` 保持各自原有样式。
+    assert_ne!(buf[(badge_x, top_y)].fg, expected_fg);
+    assert_eq!(buf[(queued_x, bottom_y)].symbol(), "1");
+    assert!(buf[(queued_x, bottom_y)].modifier.contains(Modifier::DIM));
+
+    // Shell mode 与排队同时存在：宽屏显示完整 `Shell mode · 1 queued`，窄屏降级保 `Shell mode`。
+    lx.replace_input("!ls");
+    let mut shell_buf = Buffer::empty(area);
+    let _ = render(
+        area,
+        &mut shell_buf,
+        &lx,
+        true,
+        None,
+        &mut PaneCache::default(),
+    );
+    let shell_bottom: String = (input.x..input.right())
+        .map(|x| shell_buf[(x, bottom_y)].symbol())
+        .collect();
+    assert!(
+        shell_bottom.contains("Shell mode · 1 queued"),
+        "shell+queue={shell_bottom:?}"
+    );
+    assert_eq!(
+        shell_buf[(input.x, bottom_y)].fg,
+        expected_fg,
+        "shell 模式左端分割线仍保持显式灰"
+    );
+
+    let narrow = Rect::new(0, 0, 20, 14);
+    let narrow_input = layout(narrow, &lx).input.expect("narrow input");
+    let mut narrow_buf = Buffer::empty(narrow);
+    let _ = render(
+        narrow,
+        &mut narrow_buf,
+        &lx,
+        true,
+        None,
+        &mut PaneCache::default(),
+    );
+    let narrow_bottom: String = (narrow_input.x..narrow_input.right())
+        .map(|x| narrow_buf[(x, narrow_input.bottom() - 1)].symbol())
+        .collect();
+    assert!(
+        narrow_bottom.contains("Shell mode") && !narrow_bottom.contains("queued"),
+        "窄宽下优先保留 Shell mode 指示: {narrow_bottom:?}"
+    );
+}
+
+#[test]
+fn input_draw_rejects_degenerate_rects_without_panicking_or_overflowing() {
+    let lx = Lx::new();
+    for rect in [
+        Rect::new(0, 0, 0, 0),
+        Rect::new(0, 0, 1, 1),
+        Rect::new(2, 2, 8, 2),
+        Rect::new(2, 2, 1, 3),
+    ] {
+        let grid_area = Rect::new(0, 0, 20, 10);
+        let mut grid = Grid::new(grid_area);
+        let cursor = draw(&mut grid, rect, &lx, true, 0, 5);
+        assert!(cursor.is_none(), "退化矩形 {rect:?} 不得返回光标");
+        if rect.height < 3 || rect.width == 0 {
+            for y in grid_area.y..grid_area.bottom() {
+                for x in grid_area.x..grid_area.right() {
+                    assert_eq!(
+                        grid.cell(x, y).ch,
+                        ' ',
+                        "height < 3 或 width == 0 不得写入网格 at ({x},{y}) for {rect:?}"
+                    );
+                }
+            }
+        } else {
+            // width == 1, height == 3：不越过 rect.right() 写入外边距列。
+            assert_eq!(grid.cell(rect.right(), rect.y + 1).ch, ' ');
+        }
+    }
+
+    // visible 超过 rect.height - 2 时必须钳制，绝不覆盖底分割线或下沿外侧行。
+    let mut multi = Lx::new();
+    multi.resize(20, 10);
+    multi.insert_str("line1\nline2\nline3\nline4");
+    let mut grid = Grid::new(Rect::new(0, 0, 30, 8));
+    let box_rect = Rect::new(2, 1, 20, 4);
+    let _ = draw(&mut grid, box_rect, &multi, true, 0, 10);
+    assert_eq!(grid.cell(box_rect.x + 2, box_rect.bottom() - 1).ch, '─');
+    assert_eq!(grid.cell(box_rect.x + 2, box_rect.bottom()).ch, ' ');
+}

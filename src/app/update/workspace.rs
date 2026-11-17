@@ -400,7 +400,7 @@ pub fn create_tab(state: &mut AppState) {
     clear_selection(state);
     super::focus::focus_panes(state);
     // 新标签默认落在 lx 欢迎页；先继承本工作区最近使用的模型，再解析状态。
-    // 否则底边框会停在 `no model`，或错误落到全局 default/recent。
+    // 否则底部状态行会停在 `no model`，或错误落到全局 default/recent。
     if let Some(selection) = inherited
         && let Some(pane) = created
         && let Some(target) = state.pane_mut_anywhere(pane)

@@ -79,6 +79,8 @@ const ENTRY_VGAP: u16 = 1;
 const SECTION_GAP: u16 = 1;
 /// 输入框上下分割线字符。
 const RULE: char = '─';
+/// 底部状态/提示行高度（位于输入框/任务列表下方、窗格底边框上方）。
+const BOTTOM_BAR_HEIGHT: u16 = 1;
 
 /// 控制字符不得直接写入 ratatui cell（`cell_width` 会 panic），统一落为空格。
 fn drawable_char(ch: char) -> char {
@@ -99,7 +101,12 @@ pub fn render(
     if area.width == 0 || area.height == 0 {
         return None;
     }
-    let (grid, cursor, sticky) = build(area, lx, focused, cache);
+    let BuiltPage {
+        grid,
+        cursor,
+        sticky,
+        bottom_bar,
+    } = build(area, lx, focused, cache);
     for dy in 0..area.height {
         for dx in 0..area.width {
             let glyph = grid.cell(area.x + dx, area.y + dy);
@@ -129,11 +136,14 @@ pub fn render(
         let steered = lx.chat.is_steered_user_message(&message.id);
         history::render_sticky_prompt_with_steer(buf, row, message, steered);
     }
-    // 窗格底边框：面板打开时整行归面板的键位提示（不显示模型名 / 用量 / 进程计数）；
+    // 底部状态/提示栏（位于输入框/任务列表下方、窗格底边框上方；`ask` 或退化态不绘制）。
+    // 面板打开时整行归面板的键位提示（不显示模型名 / 用量 / 进程计数）；
     // 否则照旧画状态（模型 · 上下文占用 · 后台任务计数）。
-    match lx.task.as_ref() {
-        Some(page) => task::draw_footer(buf, area, page, lx),
-        None => status::render(buf, area, lx),
+    if let Some(bar) = bottom_bar {
+        match lx.task.as_ref() {
+            Some(page) => task::draw_footer(buf, bar, page, lx),
+            None => status::render(buf, bar, lx),
+        }
     }
     // 提及面板浮于基础内容之上、贴输入框上沿；与粘贴面板互斥。
     mention::render(area, buf, lx);
@@ -250,6 +260,8 @@ struct Layout {
     inventory: Option<Rect>,
     icon: Option<(u16, u16)>,
     description: Option<TextRect>,
+    /// 底部状态/提示栏矩形（位于输入框/任务列表下方、窗格底边框上方）；`ask` 或退化态为 None。
+    bottom_bar: Option<Rect>,
     /// 空间不足时退化为居中字标。
     fallback: bool,
 }
@@ -271,6 +283,7 @@ impl Layout {
             inventory: None,
             icon: None,
             description: None,
+            bottom_bar: None,
             fallback,
         }
     }
@@ -306,21 +319,37 @@ fn layout(area: Rect, lx: &Lx) -> Layout {
     let content_x = area.x + margin;
     let content_w = area.width.saturating_sub(margin.saturating_mul(2));
 
-    if area.height < INPUT_MIN_BOX + 1 || content_w < MIN_INPUT_WIDTH {
+    let ask_active = lx.ask.is_some();
+    let hides_bottom_bar = ask_active && lx.task.is_none();
+    let min_height = if hides_bottom_bar {
+        INPUT_MIN_BOX + 1
+    } else {
+        INPUT_MIN_BOX + BOTTOM_BAR_HEIGHT + 1
+    };
+    if area.height < min_height || content_w < MIN_INPUT_WIDTH {
         return Layout::empty(true);
     }
 
     // 输入框：高度随软换行后的视觉行数增长，最多占内容区高度的一定比例（避免挤掉上方内容）。
-    // 输入框下沿贴窗格底部；状态（模型 · 供应商 · 上下文占用）绘制在其底边框上。
+    // 输入框下沿紧贴底部状态行（状态绘制在输入框下方、窗格底边框上方，`ask` 激活时隐藏）。
     //
     // 后台任务面板打开时输入框**仍在原位**（不参与面板布局）：面板接管的是上方
     // 历史区，这样退出面板后消息列表与草稿都还是离开时的样子。
     // 面板打开时这一块改由 item 列表占用：高度固定（顶边框 + tab 行 + LIST_MAX），
     // 不随草稿行数变化——否则开关面板会让上方输出容器跳动。
-    // `ask` 面板占用输入框的位置并替换它（design §8.1）；后台任务页优先级更高。
-    let ask_active = lx.ask.is_some();
+    // `ask` 面板占用输入框与底栏位置并自带提示底栏（design §8.1）；后台任务页优先级更高。
+    let (bottom_anchor, bottom_bar) = if hides_bottom_bar {
+        (area.bottom(), None)
+    } else {
+        let y = area.bottom().saturating_sub(BOTTOM_BAR_HEIGHT);
+        (
+            y,
+            Some(Rect::new(content_x, y, content_w, BOTTOM_BAR_HEIGHT)),
+        )
+    };
     let (box_h, visible, scroll) = if lx.task.is_some() {
-        (task::task_panel_height(lx), 0, 0)
+        let max_task = bottom_anchor.saturating_sub(area.y);
+        (task::task_panel_height(lx).min(max_task), 0, 0)
     } else if ask_active {
         (ask::height(area.height, content_w, lx), 0, 0)
     } else {
@@ -335,12 +364,13 @@ fn layout(area: Rect, lx: &Lx) -> Layout {
     };
     let input = Rect::new(
         content_x,
-        area.bottom().saturating_sub(box_h),
+        bottom_anchor.saturating_sub(box_h),
         content_w,
         box_h,
     );
 
     let mut out = Layout::empty(false);
+    out.bottom_bar = bottom_bar;
     // 后台任务页打开时输入框被 `task_list` 替换，`out.input` 与 `out.ask` 一律置 None，
     // 保证锚定在 `input_rect` 上的 `@` 提及 / `/` 斜杠 / `refer` / `paste` 浮层同时隐藏，
     // 不会叠画在后台任务页上或拦截 `↓ jump to bottom` 点击。
@@ -558,23 +588,39 @@ fn place_entries(
     out
 }
 
-/// 构建整页网格；返回网格、聚焦时的输入光标相对坐标与置顶行绘制目标。
-fn build(
-    area: Rect,
-    lx: &Lx,
-    focused: bool,
-    cache: &mut PaneCache,
-) -> (Grid, Option<(u16, u16)>, Option<history::StickyRow>) {
+/// `build` 的输出结果：网格、光标相对坐标、置顶行与底部状态/提示栏矩形。
+struct BuiltPage {
+    grid: Grid,
+    cursor: Option<(u16, u16)>,
+    sticky: Option<history::StickyRow>,
+    bottom_bar: Option<Rect>,
+}
+
+/// 构建整页网格；返回网格、聚焦时的输入光标相对坐标、置顶行与底部状态/提示栏矩形。
+fn build(area: Rect, lx: &Lx, focused: bool, cache: &mut PaneCache) -> BuiltPage {
     let lay = layout(area, lx);
-    if history::has_history(lx) || lx.chat.loading_session {
-        return build_chat(area, lx, focused, &lay, cache);
-    }
-    let mut grid = Grid::new(area);
     if lay.fallback {
+        let mut grid = Grid::new(area);
         let y = area.y + area.height.saturating_sub(1) / 2;
         grid.put_centered(area.x, area.width, y, text::LX_TITLE, style::strong());
-        return (grid, None, None);
+        return BuiltPage {
+            grid,
+            cursor: None,
+            sticky: None,
+            bottom_bar: None,
+        };
     }
+    let bottom_bar = lay.bottom_bar;
+    if history::has_history(lx) || lx.chat.loading_session {
+        let (grid, cursor, sticky) = build_chat(area, lx, focused, &lay, cache);
+        return BuiltPage {
+            grid,
+            cursor,
+            sticky,
+            bottom_bar,
+        };
+    }
+    let mut grid = Grid::new(area);
 
     if let Some((ix, iy)) = lay.icon {
         brand::draw_icon(&mut grid, ix, iy, lx.entry);
@@ -632,10 +678,15 @@ fn build(
     if let (Some(rect), Some(panel)) = (lay.panel, lx.panel.as_ref()) {
         draw_panel(&mut grid, rect, panel);
     }
-    (grid, cursor, None)
+    BuiltPage {
+        grid,
+        cursor,
+        sticky: None,
+        bottom_bar,
+    }
 }
 
-/// 聊天模式构建：历史区 + 输入框（状态在**窗格底边框**上，由 `render` 覆盖绘制）。
+/// 聊天模式构建：历史区 + 输入框（底部状态/提示行在 `bottom_bar` 上，由 `render` 绘制）。
 fn build_chat(
     area: Rect,
     lx: &Lx,
@@ -734,12 +785,15 @@ fn build_chat(
     (grid, cursor, sticky)
 }
 
-/// 聊天历史区矩形（与输入框同宽对齐；无消息返回 None）；滚轮/命中/滚动条用。
+/// 聊天历史区矩形（与输入框同宽对齐；无消息或退化态返回 None）；滚轮/命中/滚动条用。
 pub fn history_rect(area: Rect, lx: &Lx) -> Option<Rect> {
     if !history::has_history(lx) {
         return None;
     }
     let lay = layout(area, lx);
+    if lay.fallback {
+        return None;
+    }
     let bottom_box = lay.input.or(lay.ask).or(lay.task_list);
     // pending 提示区 > 聊天栏 > 输入框上沿。
     let bottom = history_bottom(area, &lay);
@@ -764,6 +818,9 @@ pub fn history_wheel_region(area: Rect, lx: &Lx) -> Option<Rect> {
         return None;
     }
     let lay = layout(area, lx);
+    if lay.fallback {
+        return None;
+    }
     let bottom_box = lay.input.or(lay.ask);
     let (x, width) = match bottom_box {
         Some(input) => (input.x, input.width),

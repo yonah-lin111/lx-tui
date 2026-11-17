@@ -4,7 +4,7 @@
 //! 只保留 composer，退出时退回列表并保留草稿。
 
 use ratatui::layout::Rect;
-use unicode_width::UnicodeWidthStr;
+use unicode_width::UnicodeWidthChar;
 
 use crate::app::state::Lx;
 use crate::ui::main_content::lx::history::{self, HistorySource, HistoryViewport};
@@ -74,11 +74,11 @@ pub(crate) fn draw_qa_list(grid: &mut Grid, rect: Rect, lx: &Lx) {
         };
         let label = format!("QA {} · {title}", index + 1);
         let (mut right, right_style) = row_status(lx, summary);
-        let right_w = u16::try_from(right.width()).unwrap_or(u16::MAX);
+        let right_w = display_width(right);
         if right_w.saturating_add(ROW_GAP) >= row_w {
             right = "";
         }
-        let right_w = u16::try_from(right.width()).unwrap_or(0);
+        let right_w = display_width(right);
         let gap = if right.is_empty() { 0 } else { ROW_GAP };
         let title_w = row_w.saturating_sub(right_w.saturating_add(gap));
         let label = text::truncate_to_width(&label, usize::from(title_w));
@@ -122,6 +122,33 @@ fn row_status(
     ("", style::muted())
 }
 
+/// 逐字符宽度与截断：与 [`Grid::put`] 写入口径一致，避免 ZWJ emoji 或控制字符撑破右边框。
+fn display_width(value: &str) -> u16 {
+    let width: usize = value.chars().map(|ch| ch.width().unwrap_or(0)).sum();
+    u16::try_from(width).unwrap_or(u16::MAX)
+}
+
+fn truncate_display_width(value: &str, max: usize) -> String {
+    if usize::from(display_width(value)) <= max {
+        return value.to_string();
+    }
+    if max == 0 {
+        return String::new();
+    }
+    let mut out = String::new();
+    let mut width = 0usize;
+    for ch in value.chars() {
+        let cell = ch.width().unwrap_or(0);
+        if width + cell > max.saturating_sub(1) {
+            break;
+        }
+        out.push(ch);
+        width += cell;
+    }
+    out.push('…');
+    out
+}
+
 /// 编辑态绘制：composer 占满传入矩形（高度由 `task_panel_height` 决定）。
 pub(crate) fn draw_edit(grid: &mut Grid, rect: Rect, lx: &Lx, focused: bool) -> Option<(u16, u16)> {
     if rect.width == 0 || rect.height < 3 {
@@ -135,7 +162,7 @@ pub(crate) fn draw_edit(grid: &mut Grid, rect: Rect, lx: &Lx, focused: bool) -> 
     let scroll = editor.scroll().min(max_scroll);
     let dims = super::super::input::draw(grid, rect, editor, focused, scroll, visible);
     let marker = format!(" {} ", text::LX_BTW_INPUT_MARK);
-    let marker_w = u16::try_from(marker.width()).unwrap_or(u16::MAX);
+    let marker_w = display_width(&marker);
     if rect.width >= marker_w.saturating_add(2) {
         grid.put_clipped(
             rect.x.saturating_add(1),
@@ -168,27 +195,29 @@ fn draw_qa_badge(grid: &mut Grid, rect: Rect, lx: &Lx, marker_w: u16) {
         .iter()
         .position(|summary| summary.qa_id == thread.qa_id)
         .map(|index| index.saturating_add(1));
-    let title = lx
+    let raw_title = lx
         .btw
         .qa
         .iter()
         .find(|summary| summary.qa_id == thread.qa_id)
         .map(|summary| summary.title.as_str())
-        .filter(|title| !title.trim().is_empty())
-        .unwrap_or(text::LX_BTW_QA_UNTITLED);
+        .unwrap_or("");
+    let clean_title = text::chat::single_line_label(raw_title);
+    let title = if clean_title.is_empty() {
+        text::LX_BTW_QA_UNTITLED
+    } else {
+        clean_title.as_ref()
+    };
     let prefix = match index {
         Some(index) => format!("QA {index} · "),
         None => "QA · ".to_string(),
     };
-    let width = |value: &str| {
-        u16::try_from(unicode_width::UnicodeWidthStr::width(value)).unwrap_or(u16::MAX)
-    };
     let max = rect.width.saturating_sub(12).min(QA_BADGE_MAX_COLS);
-    let room = max.saturating_sub(width(prefix.as_str()));
+    let room = max.saturating_sub(display_width(prefix.as_str()));
     if room < 4 {
         return;
     }
-    let title = text::truncate_to_width(title, usize::from(room));
+    let title = truncate_display_width(title, usize::from(room));
     if title.is_empty() {
         return;
     }
@@ -208,7 +237,7 @@ fn draw_qa_badge(grid: &mut Grid, rect: Rect, lx: &Lx, marker_w: u16) {
         .into_iter()
         .chain([badge.as_str()])
     {
-        let candidate_w = width(candidate);
+        let candidate_w = display_width(candidate);
         if rect.width <= candidate_w.saturating_add(marker_w).saturating_add(2) {
             continue;
         }
@@ -216,7 +245,7 @@ fn draw_qa_badge(grid: &mut Grid, rect: Rect, lx: &Lx, marker_w: u16) {
         if x <= rect.x.saturating_add(marker_w) {
             continue;
         }
-        grid.put(x, rect.y, candidate, style::btw_qa_badge());
+        grid.put_clipped(x, rect.y, candidate, style::btw_qa_badge(), candidate_w);
         return;
     }
 }
@@ -304,6 +333,5 @@ fn put_grid(
 ) -> u16 {
     let width = limit.saturating_sub(x);
     grid.put_clipped(x, y, content, style, width);
-    x.saturating_add(u16::try_from(content.width()).unwrap_or(0))
-        .min(limit)
+    x.saturating_add(display_width(content)).min(limit)
 }

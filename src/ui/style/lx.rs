@@ -387,6 +387,15 @@ pub fn btw_qa_badge() -> Style {
         .remove_modifier(Modifier::BOLD | Modifier::DIM | Modifier::REVERSED | Modifier::HIDDEN)
 }
 
+/// lx 输入框上下 `─` 分割线的显式灰色（独立于 `github_dark` 阅读色板；仅作用于真彩支持终端，
+/// 非真彩终端由 ratatui 量化或回落终端处理），避免 `Modifier::DIM` 作用在密集横线字符上仍偏亮抢眼。
+const LX_INPUT_RULE_GRAY: Color = Color::Rgb(0x7d, 0x85, 0x90);
+
+/// lx 输入框上下 `─` 分割线：显式灰色 `#7d8590`，不叠加 `DIM`。
+pub fn lx_input_rule() -> Style {
+    Style::default().fg(LX_INPUT_RULE_GRAY)
+}
+
 /// 按会话配色槽位生成标题胶囊样式：使用柔和暗底 + 柔和亮字。
 pub fn session_title_badge(palette_index: u8) -> Style {
     let (bg, fg) = SESSION_TITLE_PALETTE[usize::from(palette_index) % SESSION_TITLE_PALETTE.len()];

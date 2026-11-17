@@ -46,14 +46,14 @@ pub const LX_BTW_LIST_EMPTY: &str = "No main questions yet";
 pub const LX_BTW_LIST_THREAD_MARK: &str = "● side thread";
 /// 空对话提示。
 pub const LX_BTW_EMPTY_THREAD: &str = "No side conversation yet";
-/// 列表态底边框提示。
+/// 列表态底部提示行。
 pub const LX_BTW_HINTS_LIST: [crate::ui::text::Hint; 4] = [
     crate::ui::text::hint("select", "↑↓"),
     crate::ui::text::hint("enter", "⇧↵"),
     crate::ui::text::hint("tabs", "←→"),
     crate::ui::text::hint("close", "esc"),
 ];
-/// 编辑态底边框提示。
+/// 编辑态底部提示行。
 pub const LX_BTW_HINTS_EDIT: [crate::ui::text::Hint; 5] = [
     crate::ui::text::hint("send", "↵"),
     crate::ui::text::hint("newline", "⇧↵"),

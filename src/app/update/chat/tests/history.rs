@@ -479,12 +479,13 @@ fn resolve_writes_sticky_suppression_memory_from_pure_view() {
             target.lx.chat.follow_bottom = true;
         }
         let target = state.pane_anywhere(pane).expect("pane");
-        let probe = crate::ui::main_content::lx::history_view(
+        let Some(probe) = crate::ui::main_content::lx::history_view(
             probe_inner,
             &target.lx,
             crate::ui::RenderCache::default().pane(pane),
-        )
-        .expect("view");
+        ) else {
+            continue;
+        };
         if probe.suppressed.is_some() {
             scenario = Some((probe_rect, probe.suppressed));
             break;

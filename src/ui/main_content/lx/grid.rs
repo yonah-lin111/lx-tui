@@ -216,7 +216,7 @@ impl Grid {
         }
     }
 
-    /// 把整段（`width` 列）铺成空格并套用 `style`（用户消息整块底色 / 状态覆盖底边框）。
+    /// 把整段（`width` 列）铺成空格并套用 `style`（用户消息整块底色）。
     pub(super) fn background_row(&mut self, x: u16, y: u16, width: u16, style: Style) {
         for offset in 0..width {
             self.set(x.saturating_add(offset), y, ' ', style);

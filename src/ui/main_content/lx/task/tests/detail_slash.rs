@@ -107,12 +107,16 @@ fn btw_badge_appends_compacting_only_when_it_fits() {
 fn edit_footer_shows_commands_hint() {
     let lx = agent_composer_lx("completed");
     let lines = render_lines(&lx, 90, 20);
-    let footer = lines.last().expect("footer");
+    let footer = &lines[lines.len() - 2];
     assert!(footer.contains("commands"), "底栏含 / 命令提示：{footer}");
     assert!(footer.contains("/"), "提示键位是 `/`：{footer}");
     assert!(
         !footer.contains("mode"),
         "不再显示 Shift+Tab 模式：{footer}"
+    );
+    assert!(
+        lines.last().expect("outer").trim().is_empty(),
+        "窗格底边框行保持纯净"
     );
 }
 
@@ -136,4 +140,33 @@ fn slash_panel_anchors_above_composer() {
     let panel = crate::ui::main_content::lx::slash_layout(area, &lx).expect("slash layout");
     assert_eq!(panel.rect.bottom(), input.y, "面板底边贴 composer 上沿");
     assert!(panel.rect.height >= 3, "至少标题 + 一条候选");
+}
+
+#[test]
+fn badges_with_zwj_emoji_and_controls_never_overwrite_right_rule() {
+    // Agents 昵称含 ZWJ emoji + 换行控制符：顶边最右列必须保持为 `─`。
+    let mut lx = agent_composer_lx("completed");
+    lx.agents.runs[0].nickname = Some("👨‍👩‍👧\nTuring".into());
+    let lines = render_lines(&lx, 40, 14);
+    let top_rule = lines
+        .iter()
+        .find(|line| line.contains(crate::ui::text::LX_TASK_AGENT_INPUT_MARK))
+        .expect("agents composer top rule");
+    assert!(
+        top_rule.trim().ends_with('─'),
+        "Agents 右侧胶囊不得覆盖最右分割线: {top_rule:?}"
+    );
+
+    // BTW 标题含 ZWJ emoji + 换行控制符：顶边最右列必须保持为 `─`。
+    let mut btw = btw_composer_lx();
+    btw.btw.qa[0].title = "👨‍👩‍👧\tquestion\nnext".into();
+    let btw_lines = render_lines(&btw, 40, 14);
+    let btw_top = btw_lines
+        .iter()
+        .find(|line| line.contains(crate::ui::text::LX_BTW_INPUT_MARK))
+        .expect("btw composer top rule");
+    assert!(
+        btw_top.trim().ends_with('─'),
+        "BTW 右侧胶囊不得覆盖最右分割线: {btw_top:?}"
+    );
 }

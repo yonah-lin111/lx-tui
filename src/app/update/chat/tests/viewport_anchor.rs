@@ -197,6 +197,10 @@ fn reading_scroll_is_clamped_when_view_shrinks() {
     let rects = [(pane, rect)];
     let inner = crate::tiling::pane_inner_rect(rect);
     let mut cache = crate::ui::RenderCache::default();
+    {
+        let chat = &mut state.pane_mut_anywhere(pane).expect("pane").lx.chat;
+        chat.follow_bottom = false;
+    }
     resolve_lx_history(&mut state, &rects, &mut cache);
     let max_top = {
         let target = state.pane_anywhere(pane).expect("pane");
@@ -208,7 +212,6 @@ fn reading_scroll_is_clamped_when_view_shrinks() {
 
     {
         let chat = &mut state.pane_mut_anywhere(pane).expect("pane").lx.chat;
-        chat.follow_bottom = false;
         chat.history_scroll = max_top.saturating_add(50);
     }
     resolve_lx_history(&mut state, &rects, &mut cache);
@@ -598,5 +601,49 @@ fn toggling_file_diff_card_while_following_keeps_the_viewport() {
             .lx
             .chat
             .detail_is_expanded("assistant-1", "call-1")
+    );
+}
+
+#[test]
+fn cramped_task_composer_still_resizes_when_output_container_is_hidden() {
+    let mut state = AppState::demo();
+    let pane = state.active_tab().layout.focus();
+    {
+        let target = state.pane_mut_anywhere(pane).expect("pane");
+        target.view = crate::app::state::PaneView::Lx;
+        target.lx.task = Some(crate::app::state::TaskPage {
+            tab: crate::app::state::TaskTab::Btw,
+            ..crate::app::state::TaskPage::default()
+        });
+        target
+            .lx
+            .btw
+            .qa
+            .push(crate::app::state::lx::btw::BtwQaSummary {
+                qa_id: "qa-1".into(),
+                title: "Short".into(),
+                has_thread: true,
+                status: "idle".into(),
+            });
+        target.lx.btw.editing = true;
+        target
+            .lx
+            .btw
+            .ensure_thread("qa-1")
+            .composer
+            .editor_mut()
+            .insert_str("line1\nline2\nline3");
+    }
+    // 窗格高 8 -> inner 高 6（bottom_bar 1 + composer 5，task_output 为 None）：仍必须同步 composer 尺寸。
+    let rect = ratatui::layout::Rect::new(0, 0, 44, 8);
+    let mut cache = crate::ui::RenderCache::default();
+    resolve_task_btw_visible(&mut state, &[(pane, rect)], &mut cache);
+    let target = state.pane_anywhere(pane).expect("pane");
+    let thread = target.lx.btw.active_thread().expect("thread");
+    assert_eq!(thread.composer.editor().scroll(), 0);
+    assert_eq!(thread.composer.editor().visual_rows().len(), 3);
+    assert!(
+        thread.composer.editor().cursor_visual().0 < 3,
+        "缩矮窗口且无输出区时仍同步 composer 尺寸"
     );
 }

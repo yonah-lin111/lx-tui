@@ -733,3 +733,11 @@ fn pasted_chip_and_bg_provide_distinct_foreground_and_background_per_kind() {
     assert!(log_chip.add_modifier.contains(Modifier::BOLD));
     assert_eq!(pasted_bg(FoldedKind::Log).bg, Some(Color::Indexed(22)));
 }
+
+#[test]
+fn lx_input_rule_uses_explicit_fg_muted_gray_without_dim() {
+    let rule = lx_input_rule();
+    assert_eq!(rule.fg, Some(Color::Rgb(0x7d, 0x85, 0x90)));
+    assert_eq!(rule.bg, None);
+    assert!(!rule.add_modifier.contains(Modifier::DIM));
+}

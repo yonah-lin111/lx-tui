@@ -6,23 +6,25 @@
 //!
 //! - 上方**消息列表照旧**：置顶行、滚动条、聊天栏全部走原本的 `history` 路径；
 //! - 面板只占输入框那一块，不覆盖整个 pane；
-//! - 键位提示内嵌到**窗格底边框**（`status.rs` 画模型名的同一条边线），
-//!   面板打开期间不显示模型名 / 用量 / 进程计数。
+//! - 键位提示绘制在**面板下方、窗格底边框上方**的底行（与 `status.rs` 共用 `bottom_bar`），
+//!   面板打开期间不显示模型名 / 用量 / 进程计数，窗格底边框保持纯净。
 //!
 //! ```text
 //! ╭─ lx-[Native Agent] ─────────────────────── ws:…command-plan-tools ─╮
 //! │ 我是 Claude，一个由 Anthropic 开发的 AI 助手…                        │
 //! │ Build · deepseek-v4.1 · 2.1s · 50.3 tok/s                          │
 //! │                                                                     │
+//! │ ─────────────────────────────────────────────────────────────────── │
 //! │ Processes · Agents                                            esc   │
-//! │ ❯ while read -r line              /workspace/web        running 32s  │
-//! ╰─ ↑↓ select  ^d stop  tabs ←→  esc ─────────────────────────────────╯
+//! │ ❯ while read -r line              /workspace/web        running 32s │
+//! │ [select ↑↓]  [stop ^d]  [tabs ←→]  [close esc]                      │
+//! ╰─────────────────────────────────────────────────────────────────────╯
 //! ```
 //!
 //! 列表封顶 [`LIST_MAX`] 行，与 opencode composer 的 `maxHeight={5}` 同值；
 //! 不额外加 padding / gap 空行——那是 Web 布局的呼吸感，在字符终端里会白吃对话空间。
 
-use ratatui::buffer::Buffer;
+use ratatui::buffer::{Buffer, CellDiffOption};
 use ratatui::layout::Rect;
 use ratatui::style::{Modifier, Style};
 use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
@@ -468,23 +470,21 @@ pub(super) fn draw_agents_detail(
     }
 }
 
-/// 窗格底边框上的键位提示（`╰─ ↑↓ select  ^d stop  tabs ←→  esc ─╯`）。
+/// 底部提示行（位于面板下方、窗格底边框上方，与 `status.rs` 共用 `bottom_bar`）。
 ///
-/// 与 `status.rs` 同一套做法：**只改写文字实际落到的单元格**，其余底边线保留 `─`，
-/// 两端角字符不动，因此边框始终连续。放不下时从尾部截断，不显示半截键位。
+/// 放不下时整项从尾部丢弃，不显示半截键位。
 pub(super) fn draw_footer(
     buf: &mut Buffer,
-    area: Rect,
+    bar: Rect,
     page: &TaskPage,
     lx: &crate::app::state::Lx,
 ) {
-    // 底边框行：内容区下沿之外那一行（`status.rs` 用的是同一个 y）。
-    let y = area.bottom();
-    let left = area.x.saturating_add(2);
-    let right = area.right().saturating_sub(1);
-    if right <= left {
+    if bar.width == 0 || bar.height == 0 {
         return;
     }
+    let y = bar.y;
+    let left = bar.x;
+    let right = bar.right();
     // 按项拼接：窄窗格里**整项丢弃**（从右往左），绝不把 `[back esc]` 截成半截。
     let hints: &[text::Hint] = match page.tab {
         TaskTab::Processes => &text::LX_TASK_HINTS_PROCESSES,
@@ -506,18 +506,17 @@ pub(super) fn draw_footer(
         }
         rendered.push_str(&label);
     }
-    if rendered.is_empty() {
-        return;
-    }
-    let width = u16::try_from(rendered.width()).unwrap_or(0);
-    // 先清成空格再写文字；未覆盖的部分保持底边线。
-    for x in left..left.saturating_add(width) {
+    for x in left..right {
         if let Some(cell) = buf.cell_mut((x, y)) {
             cell.reset();
             cell.set_char(' ');
             cell.set_style(Style::default());
         }
     }
+    if rendered.is_empty() {
+        return;
+    }
+    let width = u16::try_from(rendered.width()).unwrap_or(0);
     put_buf(
         buf,
         left,
@@ -869,14 +868,15 @@ fn put_buf(buf: &mut Buffer, x: u16, y: u16, content: &str, style: Style, limit:
             cell.reset();
             cell.set_char(ch);
             cell.set_style(style);
+            cell.set_diff_option(CellDiffOption::None);
         }
         for offset in 1..width {
             if let Some(cell) = buf.cell_mut((cx.saturating_add(offset), y)) {
                 cell.reset();
-                // 写空格而不是网格私有的 `CONTINUATION`（`'\0'`）：这条路径直接
-                // 操作 `Buffer`，没有 blit 的 `Skip` 处理，NUL 会被原样送给终端。
+                // 写空格而不是网格私有的 `CONTINUATION`（`'\0'`），并标 Skip 防止 diff 擦掉宽字符右半格。
                 cell.set_char(' ');
                 cell.set_style(style);
+                cell.set_diff_option(CellDiffOption::Skip);
             }
         }
         cx = cx.saturating_add(width);

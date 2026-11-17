@@ -683,6 +683,15 @@ pub(crate) fn handle_mouse_wheel(
                 }
                 return;
             }
+            // 后台任务面板或 `ask` 面板激活时，未命中其滚动分区的边缘行（如 `bottom_bar` 任务提示行、
+            // 左右 `MARGIN` 或无输出容器的 `chat_bar` 间隙）也必须直接消费滚轮，严禁穿透滚动隐藏的主输入框。
+            if vertical_wheel_delta(mouse.kind).is_some()
+                && state
+                    .pane_anywhere(pane)
+                    .is_some_and(|target| target.lx.task.is_some() || target.lx.ask.is_some())
+            {
+                return;
+            }
             // 聊天历史区滚轮：滚动历史视口；即使触顶/触底未产生位移也必须在此消费并返回，
             // 严禁向下穿透滚动底部输入框。
             if let Some(delta) = vertical_wheel_delta(mouse.kind)
