@@ -395,7 +395,7 @@ fn compact_view() -> ViewLayout {
 }
 
 #[test]
-fn compact_toast_is_a_single_bottom_banner() {
+fn compact_toast_uses_global_floating_box_in_screen_top_center_when_unanchored() {
     let mut state = AppState::demo();
     let prompt = state.prompt.id();
     show(&mut state, Some(prompt));
@@ -410,19 +410,31 @@ fn compact_toast_is_a_single_bottom_banner() {
         &crate::ui::test_support::desktop_config(),
     )
     .expect("toast area");
-    assert_eq!(area, Rect::new(0, 19, 60, 1));
+    // 紧凑 Chat 下右栏不可见，退回桌面同款全局顶部居中（y = 1）。
+    assert_eq!(area.y, 1);
+    assert!(area.height >= 3);
+    assert!(area.width < screen.width);
 }
 
 #[test]
-fn compact_toast_renders_title_message_and_dot_on_one_row() {
+fn compact_toast_anchors_inside_visible_pane_and_renders_bordered_box() {
     let mut state = AppState::demo();
-    update::show_toast(
-        &mut state,
-        Toast::new(ToastKind::Warning, text::TOAST_COPIED, None, Instant::now())
-            .with_title(text::TOAST_CLIPBOARD_TITLE),
-    );
+    let pane = state.active_tab().layout.focus();
+    show(&mut state, Some(pane));
     let view = compact_view();
+    let pane_rects = vec![(pane, view.main_content)];
     let screen = Rect::new(0, 0, 60, 20);
+    let area = rect(
+        &state,
+        &view,
+        &pane_rects,
+        screen,
+        &crate::ui::test_support::desktop_config(),
+    )
+    .expect("toast area");
+    assert_eq!(area.y, view.main_content.y + 1);
+    assert_eq!(area.height, 3);
+
     let mut terminal = Terminal::new(TestBackend::new(60, 20)).expect("test backend is infallible");
     terminal
         .draw(|frame| {
@@ -431,14 +443,16 @@ fn compact_toast_renders_title_message_and_dot_on_one_row() {
                 screen,
                 &state,
                 &view,
-                &[],
+                &pane_rects,
                 &crate::ui::test_support::desktop_config(),
             );
         })
         .expect("draw succeeds");
     let buffer = terminal.backend().buffer();
-    let row: String = (0..60).map(|x| buffer[(x, 19)].symbol()).collect();
+    assert_eq!(buffer[(area.x, area.y)].symbol(), "┌");
+    let row: String = (area.x..area.right())
+        .map(|x| buffer[(x, area.y + 1)].symbol())
+        .collect();
     assert!(row.contains('●'), "{row}");
-    assert!(row.contains(text::TOAST_CLIPBOARD_TITLE), "{row}");
     assert!(row.contains(text::TOAST_COPIED), "{row}");
 }

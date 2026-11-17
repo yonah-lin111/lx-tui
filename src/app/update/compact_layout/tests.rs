@@ -11,11 +11,11 @@ fn update_sync(state: &mut AppState, config: &Config) {
 }
 
 #[test]
-fn threshold_is_inclusive_at_120() {
+fn threshold_is_inclusive_at_160() {
     let config = Config::default();
-    assert_eq!(config.narrow_width, 120);
-    assert!(is_compact(120, &config));
-    assert!(!is_compact(121, &config));
+    assert_eq!(config.narrow_width, 160);
+    assert!(is_compact(160, &config));
+    assert!(!is_compact(161, &config));
     assert!(!is_compact(0, &config));
 }
 
@@ -53,7 +53,7 @@ fn sync_exit_restores_snapshot_when_focus_panes() {
         panes_collapsed: true,
     });
     state.set_focus(FocusedContainer::Panes);
-    crate::app::update::sync_compact_layout(&mut state, 121, &config);
+    crate::app::update::sync_compact_layout(&mut state, 161, &config);
     assert_eq!(state.compact_restore, None);
     assert!(state.sidebar_collapsed);
     assert!(state.prompt_collapsed);
@@ -72,7 +72,7 @@ fn sync_exit_keeps_panel_expanded_when_focus_prompt() {
     state.prompt_collapsed = false;
     state.set_focus(FocusedContainer::Prompt);
     state.right_tab = RightTab::Prompt;
-    crate::app::update::sync_compact_layout(&mut state, 121, &config);
+    crate::app::update::sync_compact_layout(&mut state, 161, &config);
     assert_eq!(state.compact_restore, None);
     assert!(!state.prompt_collapsed, "正在编辑的面板不能被重新折叠");
     assert_eq!(state.focus(), FocusedContainer::Prompt);
@@ -88,7 +88,7 @@ fn sync_exit_moves_focus_off_collapsed_sidebar() {
         panes_collapsed: false,
     });
     state.set_focus(FocusedContainer::Sidebar);
-    crate::app::update::sync_compact_layout(&mut state, 121, &config);
+    crate::app::update::sync_compact_layout(&mut state, 161, &config);
     assert!(state.sidebar_collapsed);
     assert_eq!(state.focus(), FocusedContainer::Panes);
 }

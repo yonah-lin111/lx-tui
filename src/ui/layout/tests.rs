@@ -183,11 +183,11 @@ fn compact_fullscreen_left_panel_uses_body() {
 }
 
 #[test]
-fn default_threshold_is_120_columns() {
+fn default_threshold_is_160_columns() {
     let config = Config::default();
-    assert_eq!(config.narrow_width, 120);
+    assert_eq!(config.narrow_width, 160);
     let compact = compute_with_panel(
-        Rect::new(0, 0, 120, 24),
+        Rect::new(0, 0, 160, 24),
         &config,
         false,
         config.sidebar_width,
@@ -199,7 +199,7 @@ fn default_threshold_is_120_columns() {
     );
     assert!(compact.compact);
     let desktop = compute_with_panel(
-        Rect::new(0, 0, 121, 24),
+        Rect::new(0, 0, 161, 24),
         &config,
         false,
         config.sidebar_width,

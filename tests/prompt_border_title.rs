@@ -21,7 +21,11 @@ const PANEL_WIDTH: u16 = 64;
 
 /// 构造已同步几何的 prompt 场景（140x30，右栏展开到足够宽）。
 fn ready_state() -> (AppState, Config, ui::layout::ViewLayout) {
-    let config = Config::default();
+    // 集成测试固定 140 列桌面几何：压低紧凑阈值，避免默认 160 列进入单列。
+    let config = Config {
+        narrow_width: 80,
+        ..Config::default()
+    };
     let mut state = AppState::demo();
     state.prompt_width = PANEL_WIDTH;
     let screen = Rect::new(0, 0, 140, 30);

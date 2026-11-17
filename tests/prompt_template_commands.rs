@@ -27,7 +27,11 @@ fn wide_spacer(buffer: &ratatui::buffer::Buffer, x: u16, y: u16) -> bool {
 
 /// 构造已同步几何的宽屏 prompt 场景；prompt 加宽保证模板块按钮可见。
 fn ready_state() -> (AppState, Config, ui::layout::ViewLayout) {
-    let config = Config::default();
+    // 固定 140 列桌面几何：压低紧凑阈值，避免默认 160 列进入单列。
+    let config = Config {
+        narrow_width: 80,
+        ..Config::default()
+    };
     let mut state = AppState::demo();
     state.prompt_width = 80;
     let screen = Rect::new(0, 0, WIDTH, HEIGHT);
@@ -176,7 +180,10 @@ fn slash_command_inserts_template_with_highlight_and_buttons() {
 
 #[test]
 fn narrow_prompt_keeps_buttons_and_ellipsizes_header() {
-    let config = Config::default();
+    let config = Config {
+        narrow_width: 80,
+        ..Config::default()
+    };
     let mut state = AppState::demo();
     state.prompt_width = 32;
     let screen = Rect::new(0, 0, WIDTH, HEIGHT);

@@ -73,7 +73,10 @@ fn run_menu_command(state: &mut AppState, target: OverlayTarget, command: MenuCo
 
 /// 渲染一帧，确保树视图可正常绘制（无 panic）。
 fn draw_tree(state: &AppState) {
-    let config = Config::default();
+    let config = Config {
+        narrow_width: 80,
+        ..Config::default()
+    };
     let mut terminal =
         Terminal::new(TestBackend::new(100, 24)).expect("test backend is infallible");
     terminal

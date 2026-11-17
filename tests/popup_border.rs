@@ -24,7 +24,11 @@ const MENU_WIDTH: u16 = 72;
 
 /// 场景：100x24，终端窗格聚焦，几何已同步。
 fn ready_state() -> (AppState, Config, Rect) {
-    let config = Config::default();
+    // 固定 160 列桌面几何：压低紧凑阈值，避免默认 160 列恰好进入单列。
+    let config = Config {
+        narrow_width: 80,
+        ..Config::default()
+    };
     let mut state = AppState::demo();
     let screen = Rect::new(0, 0, WIDTH, HEIGHT);
     let view = ui::layout::compute(

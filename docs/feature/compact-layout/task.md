@@ -5,14 +5,14 @@
 
 ## 阶段 1：阈值与布局模型
 
-- [x] `Config.narrow_width` 默认值 80 → 120（对齐 opencode-dev）
+- [x] `Config.narrow_width` 默认值 80 → 160（覆盖半屏偏宽终端）
 - [x] `resolved_sidebar_width` 宽屏判断改为 `width > narrow_width`
 - [x] `compute_with_panel` 参数改为 `Option<CompactPanel>`
 - [x] `ViewLayout` 新增 `compact_left_button` / `compact_right_button` / `compact_status`
 - [x] 紧凑模式 `view.tab_bar` 指向顶部栏中间 strip，复用原 tab 栏
 - [x] 顶部栏 2 行/1 行高度规则
 - [x] 左栏全屏 body / 右栏全屏 body / Chat body 三种几何
-- [x] `src/ui/layout/tests.rs`：120/121 阈值、按钮位置、两行/一行、左右面板
+- [x] `src/ui/layout/tests.rs`：160/161 阈值、按钮位置、两行/一行、左右面板
 
 ## 阶段 2：状态机
 
@@ -50,7 +50,7 @@
 
 ## 阶段 5：Toast 与文档
 
-- [x] 紧凑全局 Toast 改底部单行横幅
+- [x] 紧凑全局 Toast 取消底部横幅，复用桌面带边框浮框与顶部位置
 - [x] 紧凑 Toast 点击关闭
 - [x] `pane.lx.toast` 保持在 lx 窗格内
 - [x] `assets/web.html` 文案 `Narrow layout width`
@@ -62,23 +62,23 @@
 - [x] `cargo fmt`
 - [x] `cargo clippy --all-targets -- -D warnings`
 - [x] `cargo test --lib`（5814 通过，6 ignored；去掉旧 switcher 测试后数量减少）
-- [x] 集成测试（`prompt_editor` / `prompt_short_ref` / `terminal_cursor` 已显式使用桌面阈值）
+- [x] 集成测试（`prompt_editor` / `prompt_short_ref` / `terminal_cursor` / `prompt_border_title` / `popup_border` / `prompt_management` / `prompt_template_commands` 已显式使用桌面阈值）
 - [ ] 用户 `cargo run` 手动验收
 
 ## 手动验收清单
 
-- [ ] 120x30：紧凑单列 + 2 行顶部栏
-- [ ] 121x30：桌面三栏
+- [ ] 160x30：紧凑单列 + 2 行顶部栏
+- [ ] 161x30：桌面三栏
 - [ ] 40x12：1 行顶部栏，`[ws]`/`[panel]`/tab 均可点
 - [ ] `[ws]` 打开全屏左栏，工作区/Agents/历史列表可点，Esc 返回
 - [ ] `[panel]` 打开全屏右栏，Prompt/Todo 边框 tab 可切，再点按钮返回
 - [ ] 中间 tab 点击切换、`[+]` 新建、多 tab 溢出滚动、右键菜单
 - [ ] 左栏/右栏打开时拉宽缩窄，焦点与面板保持
-- [ ] 复制终端内容，Toast 在底部单行显示
+- [ ] 复制终端内容，Toast 复用桌面全局带边框浮框（顶部），不在底部
 - [ ] 退出紧凑后侧栏/右栏折叠状态恢复
 
 ## 风险提醒
 
-- 120 列以下大量桌面测试已切到显式 `desktop_config()`（`narrow_width = 80`）；新增桌面测试不得再依赖默认配置在 120 列下保持三栏。
+- 160 列以下大量桌面测试已切到显式 `desktop_config()`（`narrow_width = 80`）；新增桌面测试不得再依赖默认配置在 160 列及以下保持三栏。
 - 紧凑模式复用真实侧栏/右栏，其内部控件仍按桌面规则渲染；新增侧栏/右栏控件时必须同时检查紧凑全屏宽度下的命中与截断。
 - 全屏右栏的 Esc 不关闭整栏；不要把“返回 Chat”误加到 Prompt/Todo 的 Esc 分支。

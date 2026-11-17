@@ -74,15 +74,15 @@ fn key(state: &mut AppState, config: &Config, geo: &Geometry, code: KeyCode) -> 
 }
 
 #[test]
-fn threshold_120_enters_compact_and_121_stays_desktop() {
+fn threshold_160_enters_compact_and_161_stays_desktop() {
     let config = Config::default();
     let mut state = demo_terminal();
-    let geo = compact_geometry(&mut state, &config, 120, 24);
+    let geo = compact_geometry(&mut state, &config, 160, 24);
     assert!(geo.view.compact);
     assert_eq!(geo.view.compact_header.height, 2);
 
     let mut state = demo_terminal();
-    let geo = compact_geometry(&mut state, &config, 121, 24);
+    let geo = compact_geometry(&mut state, &config, 161, 24);
     assert!(!geo.view.compact);
     assert_eq!(geo.view.tab_bar.height, 1);
     assert!(geo.view.left_panel.width > 0);

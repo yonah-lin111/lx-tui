@@ -49,7 +49,7 @@ impl Default for Config {
             sidebar_width: 24,
             sidebar_min_width: 18,
             sidebar_max_width: 40,
-            narrow_width: 120,
+            narrow_width: 160,
             min_width: 40,
             min_height: 10,
             min_pane_width: 10,

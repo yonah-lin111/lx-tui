@@ -2,7 +2,7 @@
 
 > 状态：**已实现，待用户 `cargo run` 手动验收**
 >
-> 参考：opencode-dev TUI 以 `dimensions().width - verticalTabsWidth > 120` 判定宽屏；lx 直接采用 **总宽 120** 作为紧凑阈值。
+> 参考：opencode-dev TUI 以 `dimensions().width - verticalTabsWidth > 120`（总宽约 162 列）判定宽屏；lx 采用 **总宽 160** 作为紧凑阈值，使半屏偏宽终端也能触发紧凑布局。
 
 ## 1. 目标
 
@@ -22,7 +22,7 @@
 
 ### 2.1 阈值
 
-`Config.narrow_width` 默认值改为 `120`：
+`Config.narrow_width` 默认值改为 `160`：
 
 ```rust
 pub fn is_compact(width: u16, config: &Config) -> bool {
@@ -30,8 +30,8 @@ pub fn is_compact(width: u16, config: &Config) -> bool {
 }
 ```
 
-- `width <= 120`：紧凑布局；
-- `width >= 121`：桌面三栏。
+- `width <= 160`：紧凑布局；
+- `width >= 161`：桌面三栏。
 
 `resolved_sidebar_width` 的宽屏判断同步改为 `area.width > config.narrow_width`。
 
@@ -156,8 +156,10 @@ pub enum CompactPanel {
 
 ## 8. Toast
 
-- 紧凑模式全局 Toast 固定为屏幕底部单行横幅：`● title · message`；
-- 点击横幅关闭；
+- 紧凑模式全局 Toast 完全复用桌面同款带边框浮框（不再使用底部单行横幅）：
+  - 锚点容器可见且放得下时贴容器顶边框下方居中；
+  - 无锚点、容器不可见（如全屏左栏时）或放不下时，降级到屏幕顶部 `y = 1` 居中；
+- 点击 Toast 盒或外部关闭；
 - `pane.lx.toast` 仍绘制在 lx 窗格内。
 
 ## 9. 删除旧 switcher
@@ -211,26 +213,27 @@ pub enum CompactPanel {
 - `src/config/mod.rs`
 - `assets/web.html`
 - `docs/standards/tui-design-requirements.md`
-- 测试夹具：`src/ui/test_support.rs`、`src/event/tests/test_support.rs`、`tests/prompt_editor.rs`、`tests/prompt_short_ref.rs`、`tests/terminal_cursor.rs`
+- 测试夹具：`src/ui/test_support.rs`、`src/event/tests/test_support.rs`、`tests/prompt_editor.rs`、`tests/prompt_short_ref.rs`、`tests/terminal_cursor.rs`、`tests/prompt_border_title.rs`、`tests/popup_border.rs`、`tests/prompt_management.rs`、`tests/prompt_template_commands.rs`
 
 ## 11. 测试覆盖
 
-- 阈值：120 → compact，121 → desktop；
+- 阈值：160 → compact，161 → desktop；
 - 几何：2 行/1 行顶部栏、按钮位于两端、tab strip 位于中间、左/右全屏 body；
 - 状态：进入快照三项、退出恢复、右栏焦点保留、折叠侧栏退出交回主区；
 - 按钮：左/右 toggle、tab 点击返回并切换、Esc 仅关左栏；
 - tab 条：紧凑模式无 `[EXIT]`、`[+]` 新建、溢出滚动；
 - 命中：状态行吞点击、隐藏控件无命中、全屏侧栏行仍可点；
+- Toast：紧凑模式复用桌面浮框（锚点容器内居中 / 屏幕顶部 `y=1` 居中）；
 - 渲染：`[ws]`/`[panel]`、tab、状态行、Agent 摘要、活动按钮实心高亮。
 
 ## 12. 手动验收
 
 在 worktree 运行 `cargo run`，检查：
 
-- 120x30 进入紧凑，121x30 恢复三栏；
+- 160x30 进入紧凑，161x30 恢复三栏；
 - `[ws]` 打开/关闭全屏左栏，工作区/Agents 可点；
 - `[panel]` 打开/关闭全屏右栏，Prompt/Todo 切换正常；
 - 中间 tab 切换、`[+]`、多 tab 滚动、右键菜单；
 - 左栏 Esc 返回，右栏 Esc 不清空编辑；
-- 复制终端内容 Toast 在底部单行显示；
+- 复制终端内容 Toast 复用桌面全局带边框浮框（顶部居中/容器顶部），不在底部；
 - 拉宽/缩窄后焦点与折叠状态正确恢复。
