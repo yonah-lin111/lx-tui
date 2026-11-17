@@ -422,54 +422,65 @@ fn parse_additional_permissions(raw: &Value) -> ToolResultPublic<AdditionalPermi
                 "unknown network permission '{unknown}'"
             )));
         }
-        permissions.network = network
+        let enabled = network
             .get("enabled")
-            .and_then(Value::as_bool)
+            .map(|value| {
+                value
+                    .as_bool()
+                    .ok_or_else(|| ToolFailure::invalid("'network.enabled' must be a boolean"))
+            })
+            .transpose()?
             .unwrap_or(false);
+        permissions.network = Some(enabled);
     }
     if let Some(file_system) = object.get("file_system") {
         let Some(file_system) = file_system.as_object() else {
             return Err(ToolFailure::invalid("'file_system' must be an object"));
         };
-        if let Some(unknown) = file_system.keys().find(|key| key.as_str() != "write") {
+        if let Some(unknown) = file_system
+            .keys()
+            .find(|key| !matches!(key.as_str(), "read" | "write" | "deny"))
+        {
             return Err(ToolFailure::invalid(format!(
-                "unsupported file_system permission '{unknown}' in this release; only 'write' is supported"
+                "unknown file_system permission '{unknown}'; allowed: read, write, deny"
             )));
         }
-        if let Some(write) = file_system.get("write") {
-            let Some(items) = write.as_array() else {
-                return Err(ToolFailure::invalid("'file_system.write' must be an array"));
+        let mut request = crate::chat::sandbox::FileSystemRequest::default();
+        for (key, target) in [
+            ("read", &mut request.read),
+            ("write", &mut request.write),
+            ("deny", &mut request.deny),
+        ] {
+            let Some(items) = file_system.get(key) else {
+                continue;
             };
-            if items.len() > 8 {
-                return Err(ToolFailure::invalid(
-                    "'file_system.write' must contain at most 8 paths",
-                ));
-            }
+            let Some(items) = items.as_array() else {
+                return Err(ToolFailure::invalid(format!(
+                    "'file_system.{key}' must be an array"
+                )));
+            };
             for item in items {
-                let Some(path) = item.as_str() else {
-                    return Err(ToolFailure::invalid(
-                        "'file_system.write' must contain only strings",
-                    ));
-                };
-                let path = std::path::Path::new(path);
-                if !path.is_absolute() {
+                let Some(raw) = item.as_str() else {
                     return Err(ToolFailure::invalid(format!(
-                        "write path '{}' must be absolute",
-                        path.display()
+                        "'file_system.{key}' must contain only strings"
                     )));
-                }
-                if path.to_string_lossy().chars().any(char::is_control) {
-                    return Err(ToolFailure::invalid(
-                        "write paths must not contain control characters",
-                    ));
-                }
-                permissions.write_roots.push(std::path::PathBuf::from(path));
+                };
+                target.push(raw.to_string());
             }
         }
+        request
+            .validate()
+            .map_err(|error| ToolFailure::invalid(error.to_string()))?;
+        permissions.file_system = Some(request);
     }
-    if !permissions.network && permissions.write_roots.is_empty() {
+    let grants = permissions.network == Some(true)
+        || permissions
+            .file_system
+            .as_ref()
+            .is_some_and(|request| !request.is_empty());
+    if !grants {
         return Err(ToolFailure::invalid(
-            "'additional_permissions' must request network or at least one write path",
+            "'additional_permissions' must request network or at least one file system entry",
         ));
     }
     Ok(permissions)

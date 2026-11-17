@@ -1,11 +1,12 @@
 //! macOS seatbelt 后端：生成 SBPL profile 并用 `/usr/bin/sandbox-exec` 包装命令。
 //!
 //! 基础策略与网络策略来自 OpenAI Codex（Apache-2.0），见 `assets/sandbox/`。
-//! 路径一律通过 `-D` 参数传入，不拼进 profile 字符串。
+//! 路径一律通过 `-D` 参数传入，不拼进 profile 字符串；glob 走 SBPL regex。
 
 use std::ffi::{OsStr, OsString};
 use std::path::{Path, PathBuf};
 
+use super::glob::{self, sbpl_regex_literal};
 use super::{SandboxError, SandboxSpec, Wrapped};
 
 const BASE_POLICY: &str = include_str!("../../../assets/sandbox/seatbelt_base_policy.sbpl");
@@ -17,72 +18,107 @@ pub(super) fn build_profile(
     spec: &SandboxSpec<'_>,
 ) -> Result<(String, Vec<(String, PathBuf)>), SandboxError> {
     let mut params: Vec<(String, PathBuf)> = Vec::new();
-    let mut write_rules = Vec::new();
+    let mut sections: Vec<String> = vec![BASE_POLICY.to_string(), "(allow file-read*)".to_string()];
 
-    for (index, root) in spec.writable_roots.iter().enumerate() {
+    // 显式 Deny：读与写都拒绝；字面路径覆盖自身与后代。
+    for (index, denied) in spec.deny_paths.iter().enumerate() {
+        validate_path(denied)?;
+        let key = param_for(&mut params, "DENY", denied);
+        sections.push(format!("(deny file-read* (literal (param \"{key}\")))"));
+        sections.push(format!("(deny file-read* (subpath (param \"{key}\")))"));
+        sections.push(format!("(deny file-write* (literal (param \"{key}\")))"));
+        sections.push(format!("(deny file-write* (subpath (param \"{key}\")))"));
+        let _ = index;
+    }
+
+    // Deny glob：正则拒绝读与写（deny 优先于 allow）。
+    let mut deny_glob_rules = Vec::new();
+    for pattern in spec.deny_globs {
+        let Some(regex) = glob::to_regex(pattern, true) else {
+            return Err(SandboxError::Invalid(format!(
+                "deny glob '{pattern}' cannot be translated to a seatbelt regex"
+            )));
+        };
+        let literal = sbpl_regex_literal(&regex);
+        deny_glob_rules.push(literal);
+    }
+    for literal in &deny_glob_rules {
+        sections.push(format!("(deny file-read* (regex #\"{literal}\"))"));
+        sections.push(format!("(deny file-write* (regex #\"{literal}\"))"));
+    }
+
+    // 写根：允许写入，但排除只读 carveout、Deny 路径与 Deny glob。
+    for root in spec.writable_roots {
         validate_path(root)?;
-        let key = format!("WRITE{index}");
-        params.push((key.clone(), root.clone()));
-
-        let mut require_parts = vec![format!("(subpath (param \"{key}\"))")];
-        for (protect_index, protected) in spec.protected.iter().enumerate() {
+        let write_key = param_for(&mut params, "WRITE", root);
+        let mut require_parts = vec![format!("(subpath (param \"{write_key}\"))")];
+        for protected in spec.read_only_paths {
             if !protected.starts_with(root) {
                 continue;
             }
             validate_path(protected)?;
-            let protect_key = format!("PROTECT{protect_index}");
-            if !params.iter().any(|(existing, _)| existing == &protect_key) {
-                params.push((protect_key.clone(), protected.clone()));
-            }
-            require_parts.push(format!("(require-not (literal (param \"{protect_key}\")))"));
-            require_parts.push(format!("(require-not (subpath (param \"{protect_key}\")))"));
+            let key = param_for(&mut params, "READONLY", protected);
+            require_parts.push(format!("(require-not (literal (param \"{key}\")))"));
+            require_parts.push(format!("(require-not (subpath (param \"{key}\")))"));
         }
-        write_rules.push(format!(
+        for denied in spec.deny_paths {
+            if !denied.starts_with(root) {
+                continue;
+            }
+            let key = param_for(&mut params, "DENY", denied);
+            require_parts.push(format!("(require-not (literal (param \"{key}\")))"));
+            require_parts.push(format!("(require-not (subpath (param \"{key}\")))"));
+        }
+        for literal in &deny_glob_rules {
+            require_parts.push(format!("(require-not (regex #\"{literal}\"))"));
+        }
+        sections.push(format!(
             "(allow file-write* (require-all {}))",
             require_parts.join(" ")
         ));
     }
 
-    // 保护祖先目录重新挂载：重命名可写父目录会绕过子路径 carveout。
-    let mut ancestor_params: Vec<(String, PathBuf)> = Vec::new();
-    for root in spec.writable_roots {
-        for protected in spec.protected {
-            if !protected.starts_with(root) {
-                continue;
+    // 保护祖先目录：重命名可写父目录会绕过子路径 carveout。
+    let mut protected_paths: Vec<&PathBuf> = spec
+        .read_only_paths
+        .iter()
+        .chain(spec.deny_paths.iter())
+        .collect();
+    protected_paths.sort();
+    protected_paths.dedup();
+    for protected in protected_paths {
+        let Some(root) = spec
+            .writable_roots
+            .iter()
+            .find(|root| protected.starts_with(root))
+        else {
+            continue;
+        };
+        if protected == root {
+            continue;
+        }
+        for ancestor in protected.ancestors().skip(1) {
+            if ancestor == root {
+                break;
             }
-            for ancestor in protected.ancestors().skip(1) {
-                if !ancestor.starts_with(root) {
-                    break;
-                }
-                if ancestor_params.iter().any(|(_, path)| path == ancestor) {
-                    continue;
-                }
-                let key = format!("PROTECT_ANCESTOR{}", ancestor_params.len());
-                ancestor_params.push((key, ancestor.to_path_buf()));
+            if !ancestor.starts_with(root) {
+                break;
             }
+            let key = param_for(&mut params, "PROTECT_ANCESTOR", ancestor);
+            sections.push(format!(
+                "(deny file-write-unlink (require-all (vnode-type DIRECTORY) (literal (param \"{key}\"))))"
+            ));
         }
     }
 
-    let mut sections: Vec<String> = vec![BASE_POLICY.to_string(), "(allow file-read*)".to_string()];
-    sections.extend(write_rules);
     if spec.network_access {
         sections.push(NETWORK_POLICY.to_string());
         sections.push("(allow network-outbound)".to_string());
         sections.push("(allow network-inbound)".to_string());
     }
     sections.push("(deny mach-lookup (xpc-service-name-prefix \"\"))".to_string());
-    sections.extend(
-        ancestor_params
-            .iter()
-            .map(|(key, _)| {
-                format!(
-                    "(deny file-write-unlink (require-all (vnode-type DIRECTORY) (literal (param \"{key}\"))))"
-                )
-            }),
-    );
     sections.push("(deny system-fcntl (fcntl-command 80 110))".to_string());
 
-    params.extend(ancestor_params);
     Ok((sections.join("\n"), params))
 }
 
@@ -111,6 +147,16 @@ pub(super) fn wrap(
         program: PathBuf::from(SANDBOX_EXEC),
         args: argv,
     })
+}
+
+/// 同一路径复用同一个 `-D` 键（避免 profile 里重复参数）。
+fn param_for(params: &mut Vec<(String, PathBuf)>, prefix: &str, path: &Path) -> String {
+    if let Some((key, _)) = params.iter().find(|(_, existing)| existing == path) {
+        return key.clone();
+    }
+    let key = format!("{prefix}{}", params.len());
+    params.push((key.clone(), path.to_path_buf()));
+    key
 }
 
 /// 路径必须是绝对路径且不含控制字符（`-D` 可承载空格与引号）。

@@ -1,13 +1,20 @@
-//! 一次执行的沙箱计划：模式、可写根、保护路径、网络与平台能力。
+//! 一次执行的沙箱计划：模式、权限档案、网络与平台能力。
 //!
 //! 计划在 turn 起点冻结；`/permission` 只影响下一个 turn。平台层只读计划，
-//! 不访问全局状态。
+//! 不访问全局状态。完整文件系统档案见 [`permissions`]。
 
 use std::path::PathBuf;
 
 use crate::config::sandbox::SandboxSettings;
 use crate::config::sandbox::{EscalationPolicy, SandboxMode};
 use crate::platform::sandbox::{self, SandboxSpec, SandboxSupport};
+
+pub use permissions::{
+    AdditionalPermissions, FileSystemAccessMode, FileSystemEntry, FileSystemPath, FileSystemPolicy,
+    FileSystemRequest, PermissionError,
+};
+
+pub mod permissions;
 
 /// 本次命令的沙箱处置。
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -20,15 +27,6 @@ pub enum CommandSandbox {
     Unavailable,
 }
 
-/// `with_additional_permissions` 的请求内容（A 批只支持网络与可写根）。
-#[derive(Debug, Clone, PartialEq, Eq, Default)]
-pub struct AdditionalPermissions {
-    /// 是否允许网络。
-    pub network: bool,
-    /// 追加的可写根（绝对路径）。
-    pub write_roots: Vec<PathBuf>,
-}
-
 /// 审批种类。
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum SandboxApprovalKind {
@@ -36,6 +34,8 @@ pub enum SandboxApprovalKind {
     Escalation,
     /// 沙箱拒绝后的重试申请（A 批 §8.5）。
     Retry,
+    /// 规则文件命中的 `prompt`（C 批 §18.3）。
+    Rule,
 }
 
 impl SandboxApprovalKind {
@@ -44,6 +44,7 @@ impl SandboxApprovalKind {
         match self {
             Self::Escalation => "escalation",
             Self::Retry => "retry",
+            Self::Rule => "rule",
         }
     }
 }
@@ -57,7 +58,7 @@ pub struct SandboxApprovalRequest {
     pub command: String,
     /// 实际工作目录。
     pub cwd: String,
-    /// 模型给出的理由（仅显式申请；不回过模型）。
+    /// 模型给出的理由或规则 justification（不回过模型）。
     pub justification: String,
     /// 可申请的会话前缀规则。
     pub prefix_rule: Option<Vec<String>>,
@@ -74,7 +75,7 @@ impl SandboxApprovalRequest {
     pub fn can_approve_for_session(&self) -> bool {
         match self.kind {
             SandboxApprovalKind::Escalation => self.prefix_rule.is_some(),
-            SandboxApprovalKind::Retry => true,
+            SandboxApprovalKind::Retry | SandboxApprovalKind::Rule => true,
         }
     }
 }
@@ -96,14 +97,14 @@ pub enum SandboxOverride {
     /// 按会话模式执行。
     #[default]
     None,
-    /// 追加本次命令的网络与可写根（`with_additional_permissions`）。
+    /// 追加本次命令的网络与文件系统权限（`with_additional_permissions`）。
     Additional {
-        /// 是否允许网络。
-        network: bool,
-        /// 追加的可写根（绝对路径）。
-        write_roots: Vec<PathBuf>,
+        /// 是否允许网络（None = 不改变）。
+        network: Option<bool>,
+        /// 文件系统请求。
+        file_system: Option<FileSystemRequest>,
     },
-    /// 完全绕过沙箱（已审批的 `require_escalated` 或会话精确规则）。
+    /// 完全绕过沙箱（已审批的 `require_escalated` 或会话规则）。
     Unsandboxed,
 }
 
@@ -112,10 +113,16 @@ pub enum SandboxOverride {
 pub struct SandboxPlan {
     /// 生效模式。
     pub mode: SandboxMode,
-    /// 可写根（已规范化）。
+    /// 完整文件系统档案（基准 + 本次命令追加）。
+    pub policy: FileSystemPolicy,
+    /// 可写根（由 `policy` 派生）。
     pub writable_roots: Vec<PathBuf>,
-    /// 保护路径（只读）。
+    /// 写根内的只读保护路径（`.git` 等 + 显式 `read` carveout）。
     pub protected: Vec<PathBuf>,
+    /// 显式拒绝的字面路径。
+    pub deny_paths: Vec<PathBuf>,
+    /// 显式拒绝的 glob。
+    pub deny_globs: Vec<String>,
     /// 是否允许网络。
     pub network_access: bool,
     /// 提权总开关。
@@ -131,21 +138,20 @@ pub struct SandboxPlan {
 impl SandboxPlan {
     /// 按全局配置与工作区构建计划。
     pub fn for_turn(settings: &SandboxSettings, cwd: &std::path::Path) -> Self {
-        let support = sandbox::support();
         let mut plan = Self {
             mode: settings.mode,
+            policy: FileSystemPolicy::baseline(settings.mode, cwd, &settings.writable_roots),
             writable_roots: Vec::new(),
             protected: Vec::new(),
+            deny_paths: Vec::new(),
+            deny_globs: Vec::new(),
             network_access: settings.network_access,
             escalation: settings.escalation,
             approved_exact: Vec::new(),
             approved_prefix: Vec::new(),
-            support,
+            support: sandbox::support(),
         };
-        if settings.mode == SandboxMode::WorkspaceWrite {
-            plan.writable_roots = sandbox::roots::writable_roots(cwd, &settings.writable_roots);
-            plan.protected = sandbox::roots::protected_paths(&plan.writable_roots);
-        }
+        plan.refresh_derived();
         if settings.mode == SandboxMode::DangerFullAccess {
             plan.network_access = true;
         }
@@ -154,16 +160,21 @@ impl SandboxPlan {
 
     /// 不套沙箱的计划（用户 `!` 命令、危险模式）。
     pub fn unsandboxed() -> Self {
-        Self {
+        let mut plan = Self {
             mode: SandboxMode::DangerFullAccess,
+            policy: FileSystemPolicy::empty(),
             writable_roots: Vec::new(),
             protected: Vec::new(),
+            deny_paths: Vec::new(),
+            deny_globs: Vec::new(),
             network_access: true,
             escalation: EscalationPolicy::Never,
             approved_exact: Vec::new(),
             approved_prefix: Vec::new(),
             support: sandbox::support(),
-        }
+        };
+        plan.refresh_derived();
+        plan
     }
 
     /// 本次命令是否真的套进程沙箱。
@@ -175,28 +186,26 @@ impl SandboxPlan {
     pub fn with_override(&self, overridden: &SandboxOverride) -> Self {
         match overridden {
             SandboxOverride::None => self.clone(),
-            SandboxOverride::Unsandboxed => Self {
-                mode: SandboxMode::DangerFullAccess,
-                writable_roots: Vec::new(),
-                protected: Vec::new(),
-                network_access: true,
-                escalation: self.escalation,
-                approved_exact: self.approved_exact.clone(),
-                approved_prefix: self.approved_prefix.clone(),
-                support: self.support,
-            },
+            SandboxOverride::Unsandboxed => {
+                let mut plan = self.clone();
+                plan.mode = SandboxMode::DangerFullAccess;
+                plan.policy = FileSystemPolicy::empty();
+                plan.network_access = true;
+                plan.refresh_derived();
+                plan
+            }
             SandboxOverride::Additional {
                 network,
-                write_roots,
+                file_system,
             } => {
                 let mut plan = self.clone();
-                for root in write_roots {
-                    if !plan.writable_roots.contains(root) {
-                        plan.writable_roots.push(root.clone());
-                    }
+                if let Some(request) = file_system
+                    && let Ok(policy) = self.policy.with_request(request)
+                {
+                    plan.policy = policy;
                 }
-                plan.protected = sandbox::roots::protected_paths(&plan.writable_roots);
-                plan.network_access = plan.network_access || *network;
+                plan.network_access = plan.network_access || network.unwrap_or(false);
+                plan.refresh_derived();
                 plan
             }
         }
@@ -209,7 +218,7 @@ impl SandboxPlan {
         self
     }
 
-    /// 命令 token 是否已在会话内获准裸跑（整条序列全等）。
+    /// 命令 token 是否已在会话内获准裸跑（整条序列全等或前缀命中）。
     pub fn command_is_approved(&self, command: &str) -> bool {
         if self.approved_exact.is_empty() && self.approved_prefix.is_empty() {
             return false;
@@ -243,7 +252,10 @@ impl SandboxPlan {
         SandboxSpec {
             cwd,
             writable_roots: &self.writable_roots,
-            protected: &self.protected,
+            read_only_paths: &self.protected,
+            deny_paths: &self.deny_paths,
+            deny_globs: &self.deny_globs,
+            glob_scan_max_depth: self.policy.glob_scan_max_depth,
             network_access: self.network_access,
         }
     }
@@ -252,9 +264,15 @@ impl SandboxPlan {
     pub fn policy_view(&self) -> SandboxPolicyView {
         SandboxPolicyView {
             mode: self.mode,
-            writable_roots: self.writable_roots.clone(),
-            protected: self.protected.clone(),
+            policy: self.policy.clone(),
         }
+    }
+
+    fn refresh_derived(&mut self) {
+        self.writable_roots = self.policy.writable_roots();
+        self.protected = self.policy.protected_paths();
+        self.deny_paths = self.policy.deny_paths();
+        self.deny_globs = self.policy.deny_globs();
     }
 }
 
@@ -263,10 +281,8 @@ impl SandboxPlan {
 pub struct SandboxPolicyView {
     /// 生效模式。
     pub mode: SandboxMode,
-    /// 可写根。
-    pub writable_roots: Vec<PathBuf>,
-    /// 保护路径。
-    pub protected: Vec<PathBuf>,
+    /// 完整文件系统档案。
+    pub policy: FileSystemPolicy,
 }
 
 pub mod denial;

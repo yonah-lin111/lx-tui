@@ -220,7 +220,7 @@ fn additional_permissions_accept_network_and_absolute_write_roots() {
     let request = parse_exec_request(
         r#"{"cmd":"make","sandbox_permissions":"with_additional_permissions",
             "justification":"write build output",
-            "additional_permissions":{"network":{"enabled":true},"file_system":{"write":["/tmp/out"]}}}"#,
+            "additional_permissions":{"network":{"enabled":true},"file_system":{"write":["/tmp/out"],"read":["/tmp/src"],"deny":["/tmp/**/*.env"]}}}"#,
     )
     .expect("valid");
     let additional = request
@@ -228,16 +228,17 @@ fn additional_permissions_accept_network_and_absolute_write_roots() {
         .expect("escalation")
         .additional
         .expect("additional");
-    assert!(additional.network);
-    assert_eq!(
-        additional.write_roots,
-        vec![std::path::PathBuf::from("/tmp/out")]
-    );
+    assert_eq!(additional.network, Some(true));
+    let file_system = additional.file_system.expect("file system");
+    assert_eq!(file_system.write, vec!["/tmp/out".to_string()]);
+    assert_eq!(file_system.read, vec!["/tmp/src".to_string()]);
+    assert_eq!(file_system.deny, vec!["/tmp/**/*.env".to_string()]);
 
     for bad in [
         r#"{"file_system":{"write":["relative"]}}"#,
-        r#"{"file_system":{"read":["/x"]}}"#,
+        r#"{"file_system":{"write":["~/x"]}}"#,
         r#"{"file_system":{"write":[]}}"#,
+        r#"{"file_system":{"write":["/tmp/x"],"unknown":["/x"]}}"#,
         r#"{}"#,
     ] {
         let body = format!(

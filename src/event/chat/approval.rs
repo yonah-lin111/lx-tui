@@ -104,6 +104,7 @@ pub(crate) fn answer(
                     changed = true;
                 }
             }
+            crate::chat::sandbox::SandboxApprovalKind::Rule => {}
             crate::chat::sandbox::SandboxApprovalKind::Escalation => {
                 if let Some(prefix) = prefix
                     && !pane.lx.sandbox_prefix_rules.contains(&prefix)

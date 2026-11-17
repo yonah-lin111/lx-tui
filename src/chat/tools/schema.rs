@@ -534,7 +534,7 @@ fn exec_command_parameters() -> Value {
             },
             "additional_permissions": {
                 "type": "object",
-                "description": "Extra permissions for this command only; only valid with `with_additional_permissions`.",
+                "description": "Extra permissions for this command only; only valid with `with_additional_permissions`. Each list allows at most 16 entries and 4096 bytes; deny-only requests are applied without approval.",
                 "properties": {
                     "network": {
                         "type": "object",
@@ -544,10 +544,20 @@ fn exec_command_parameters() -> Value {
                     "file_system": {
                         "type": "object",
                         "properties": {
+                            "read": {
+                                "type": "array",
+                                "items": {"type": "string"},
+                                "description": "Absolute paths or globs to grant read access inside writable roots for this command."
+                            },
                             "write": {
                                 "type": "array",
                                 "items": {"type": "string"},
-                                "description": "Absolute paths to grant write access for this command."
+                                "description": "Absolute paths or globs to grant write access for this command (max 16 entries)."
+                            },
+                            "deny": {
+                                "type": "array",
+                                "items": {"type": "string"},
+                                "description": "Absolute paths or globs to deny for this command; deny wins over read/write and needs no approval."
                             }
                         },
                         "additionalProperties": false

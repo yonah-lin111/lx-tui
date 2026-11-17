@@ -367,10 +367,10 @@ fn layout(area: Rect, lx: &Lx) -> Layout {
     // task/ask 打开时 `height` 为 0；上方放不下的极小窗格整块隐藏，避免压到顶边。
     let bar_top = out.chat_bar.map_or(input.y, |bar| bar.y);
     if approval::visible(lx)
-        && let Some(y) = bar_top.checked_sub(approval::HEIGHT)
+        && let Some(y) = bar_top.checked_sub(approval::height(lx))
         && y >= area.y
     {
-        out.approval = Some(Rect::new(input.x, y, input.width, approval::HEIGHT));
+        out.approval = Some(Rect::new(input.x, y, input.width, approval::height(lx)));
     }
     let pending_base = out.approval.map_or(bar_top, |rect| rect.y);
     let pending_h = steer_strip::height(lx);

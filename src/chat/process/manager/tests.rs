@@ -120,7 +120,10 @@ async fn exec_observed_wraps_commands_in_seatbelt() {
     let spec = crate::platform::sandbox::SandboxSpec {
         cwd: &root,
         writable_roots: std::slice::from_ref(&root),
-        protected: &[],
+        read_only_paths: &[],
+        deny_paths: &[],
+        deny_globs: &[],
+        glob_scan_max_depth: 16,
         network_access: false,
     };
     let script = format!("echo ok > inside.txt; echo bad > '{}'", outside.display());
@@ -156,7 +159,10 @@ async fn pty_commands_are_also_sandboxed() {
     let spec = crate::platform::sandbox::SandboxSpec {
         cwd: &root,
         writable_roots: std::slice::from_ref(&root),
-        protected: &[],
+        read_only_paths: &[],
+        deny_paths: &[],
+        deny_globs: &[],
+        glob_scan_max_depth: 16,
         network_access: false,
     };
     let mut args = exec(

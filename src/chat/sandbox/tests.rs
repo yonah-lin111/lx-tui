@@ -1,4 +1,4 @@
-//! `chat::sandbox` 单元测试：计划构建、覆盖与文件工具视图。
+//! `chat::sandbox` 单元测试：计划构建、覆盖、会话规则与文件工具视图。
 
 use std::path::PathBuf;
 
@@ -28,6 +28,7 @@ fn read_only_has_no_writable_roots() {
     assert!(plan.writable_roots.is_empty());
     assert!(plan.protected.is_empty());
     assert!(!plan.network_access);
+    assert_eq!(plan.policy.access_for(&cwd), FileSystemAccessMode::Read);
     let _ = std::fs::remove_dir_all(cwd);
 }
 
@@ -40,6 +41,10 @@ fn workspace_write_includes_cwd_and_protects_git() {
     assert!(plan.writable_roots.contains(&cwd));
     assert!(plan.protected.contains(&cwd.join(".git")));
     assert_eq!(plan.mode, SandboxMode::WorkspaceWrite);
+    assert_eq!(
+        plan.policy.access_for(&cwd.join(".git/config")),
+        FileSystemAccessMode::Read
+    );
     let _ = std::fs::remove_dir_all(cwd);
 }
 
@@ -75,15 +80,48 @@ fn additional_permissions_extend_roots_and_network() {
     std::fs::create_dir_all(&extra).expect("extra root");
     let plan = SandboxPlan::for_turn(&SandboxSettings::default(), &cwd);
     let extended = plan.with_override(&SandboxOverride::Additional {
-        network: true,
-        write_roots: vec![extra.clone()],
+        network: Some(true),
+        file_system: Some(FileSystemRequest {
+            write: vec![extra.display().to_string()],
+            ..FileSystemRequest::default()
+        }),
     });
     assert!(extended.writable_roots.contains(&extra));
     assert!(extended.network_access);
     assert!(extended.process_sandbox());
+    assert_eq!(
+        extended.policy.access_for(&extra.join("x")),
+        FileSystemAccessMode::Write
+    );
     // 原计划不被修改（turn 起点冻结语义）。
     assert!(!plan.writable_roots.contains(&extra));
     assert!(!plan.network_access);
+    let _ = std::fs::remove_dir_all(cwd);
+}
+
+#[test]
+fn additional_deny_and_read_apply_to_the_command_policy() {
+    let cwd = temp_dir("additional-deny");
+    std::fs::create_dir_all(cwd.join("sealed")).expect("sealed");
+    let plan = SandboxPlan::for_turn(&SandboxSettings::default(), &cwd);
+    let extended = plan.with_override(&SandboxOverride::Additional {
+        network: None,
+        file_system: Some(FileSystemRequest {
+            read: vec![cwd.join("sealed").display().to_string()],
+            deny: vec![format!("{}/**/.env", cwd.display())],
+            ..FileSystemRequest::default()
+        }),
+    });
+    assert!(extended.protected.contains(&cwd.join("sealed")));
+    assert_eq!(extended.deny_globs.len(), 1);
+    assert_eq!(
+        extended.policy.access_for(&cwd.join("sealed/x")),
+        FileSystemAccessMode::Read
+    );
+    assert_eq!(
+        extended.policy.access_for(&cwd.join("a/.env")),
+        FileSystemAccessMode::Deny
+    );
     let _ = std::fs::remove_dir_all(cwd);
 }
 
@@ -93,8 +131,7 @@ fn policy_view_matches_plan() {
     let plan = SandboxPlan::for_turn(&SandboxSettings::default(), &cwd);
     let view = plan.policy_view();
     assert_eq!(view.mode, plan.mode);
-    assert_eq!(view.writable_roots, plan.writable_roots);
-    assert_eq!(view.protected, plan.protected);
+    assert_eq!(view.policy, plan.policy);
     let _ = std::fs::remove_dir_all(cwd);
 }
 

@@ -3,6 +3,7 @@
 use std::ffi::{OsStr, OsString};
 use std::path::{Path, PathBuf};
 
+pub mod glob;
 pub mod roots;
 
 #[cfg(target_os = "linux")]
@@ -17,8 +18,14 @@ pub struct SandboxSpec<'a> {
     pub cwd: &'a Path,
     /// 可写根（已规范化）。
     pub writable_roots: &'a [PathBuf],
-    /// 保护路径（只读）。
-    pub protected: &'a [PathBuf],
+    /// 写根内的只读保护路径（`.git` 等 + `read` carveout）。
+    pub read_only_paths: &'a [PathBuf],
+    /// 显式拒绝的字面路径（读写都禁止）。
+    pub deny_paths: &'a [PathBuf],
+    /// 显式拒绝的 glob（读写都禁止）。
+    pub deny_globs: &'a [String],
+    /// glob 扫描深度上限。
+    pub glob_scan_max_depth: usize,
     /// 是否允许网络。
     pub network_access: bool,
 }

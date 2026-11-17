@@ -84,8 +84,7 @@ impl Default for ToolContext {
 fn danger_view() -> crate::chat::sandbox::SandboxPolicyView {
     crate::chat::sandbox::SandboxPolicyView {
         mode: crate::config::sandbox::SandboxMode::DangerFullAccess,
-        writable_roots: Vec::new(),
-        protected: Vec::new(),
+        policy: crate::chat::sandbox::FileSystemPolicy::empty(),
     }
 }
 

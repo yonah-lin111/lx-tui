@@ -1096,6 +1096,19 @@ where
     let Some(plan) = executor.sandbox_plan() else {
         return Ok(crate::chat::sandbox::SandboxOverride::None);
     };
+    // 仅收缩权限的 deny 不需要审批，也不受 escalation=never 影响。
+    if escalation.kind == crate::chat::tools::EscalationKind::Additional
+        && escalation
+            .additional
+            .as_ref()
+            .is_some_and(crate::chat::sandbox::AdditionalPermissions::denies_only)
+    {
+        let additional = escalation.additional.unwrap_or_default();
+        return Ok(crate::chat::sandbox::SandboxOverride::Additional {
+            network: additional.network,
+            file_system: additional.file_system,
+        });
+    }
     if plan.mode == crate::config::sandbox::SandboxMode::DangerFullAccess {
         return Ok(crate::chat::sandbox::SandboxOverride::None);
     }
@@ -1144,7 +1157,7 @@ where
                 let additional = escalation.additional.unwrap_or_default();
                 crate::chat::sandbox::SandboxOverride::Additional {
                     network: additional.network,
-                    write_roots: additional.write_roots,
+                    file_system: additional.file_system,
                 }
             }
         }),

@@ -61,7 +61,7 @@ fn protected_git_path_is_rejected_but_sibling_prefix_is_not() {
     std::fs::create_dir_all(dir.join(".git")).expect("git dir");
     let ctx = ctx(&dir, SandboxMode::WorkspaceWrite);
     let failure = ensure_writable(&ctx, &[&dir.join(".git").join("config")]).expect_err("denied");
-    assert!(failure.message.contains("protected"));
+    assert!(failure.message.contains("read-only"));
     ensure_writable(&ctx, &[&dir.join(".gitlab").join("x")]).expect("not protected");
     let _ = std::fs::remove_dir_all(dir);
 }
@@ -110,6 +110,46 @@ fn write_tool_respects_read_only_mode() {
         other => panic!("expected failure, got {other:?}"),
     }
     assert!(!target.exists());
+    let _ = std::fs::remove_dir_all(dir);
+}
+
+#[test]
+fn deny_glob_blocks_writes_inside_the_workspace() {
+    let dir = temp_dir("deny-glob");
+    std::fs::create_dir_all(dir.join("nested")).expect("nested");
+    let settings = SandboxSettings::default();
+    let plan = SandboxPlan::for_turn(&settings, &dir).with_override(
+        &crate::chat::sandbox::SandboxOverride::Additional {
+            network: None,
+            file_system: Some(crate::chat::sandbox::FileSystemRequest {
+                deny: vec![format!("{}/**/*.env", dir.display())],
+                ..crate::chat::sandbox::FileSystemRequest::default()
+            }),
+        },
+    );
+    let ctx = ToolContext::new(dir.clone()).with_sandbox(plan.policy_view());
+    assert!(ensure_writable(&ctx, &[&dir.join("nested/app.env")]).is_err());
+    ensure_writable(&ctx, &[&dir.join("nested/app.txt")]).expect("sibling");
+    let _ = std::fs::remove_dir_all(dir);
+}
+
+#[test]
+fn read_carveout_blocks_writes() {
+    let dir = temp_dir("carveout");
+    std::fs::create_dir_all(dir.join("sealed")).expect("sealed");
+    let settings = SandboxSettings::default();
+    let plan = SandboxPlan::for_turn(&settings, &dir).with_override(
+        &crate::chat::sandbox::SandboxOverride::Additional {
+            network: None,
+            file_system: Some(crate::chat::sandbox::FileSystemRequest {
+                read: vec![dir.join("sealed").display().to_string()],
+                ..crate::chat::sandbox::FileSystemRequest::default()
+            }),
+        },
+    );
+    let ctx = ToolContext::new(dir.clone()).with_sandbox(plan.policy_view());
+    assert!(ensure_writable(&ctx, &[&dir.join("sealed/x.txt")]).is_err());
+    ensure_writable(&ctx, &[&dir.join("open.txt")]).expect("outside carveout");
     let _ = std::fs::remove_dir_all(dir);
 }
 

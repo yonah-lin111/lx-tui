@@ -1019,6 +1019,8 @@ mod tests;
 pub const LX_APPROVAL_ESCALATION: &str = "Sandbox escalation";
 /// 沙箱审批 strip：on-failure 重试标题。
 pub const LX_APPROVAL_RETRY: &str = "Sandbox blocked command";
+/// 沙箱审批 strip：规则文件 `prompt` 标题。
+pub const LX_APPROVAL_RULE: &str = "Sandbox rule requires approval";
 /// 显式提权：可申请会话级前缀时的动作提示。
 pub const LX_APPROVAL_ACTIONS_ESCALATION: &str = "y approve once · a approve for session · n deny";
 /// 显式提权：无前缀规则（仅一次）时的动作提示。
