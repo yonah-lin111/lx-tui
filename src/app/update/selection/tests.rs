@@ -751,3 +751,35 @@ fn btw_composer_selection_and_scroll_stay_in_the_active_editor() {
     );
     assert_eq!(target.lx.scroll(), 0, "主输入框滚动不能被 BTW 滚轮改变");
 }
+
+#[test]
+fn has_visible_selection_isolates_hidden_containers_in_compact_mode() {
+    let mut state = AppState::demo();
+    let pane = state.active_tab().layout.focus();
+    let prompt_id = state.prompt.id();
+    state.prompt.set_text("hello prompt");
+    crate::app::update::begin_selection(&mut state, prompt_id, 0, 0);
+    crate::app::update::drag_selection(&mut state, prompt_id, 0, 5);
+    assert!(has_visible_selection(&state));
+
+    // 进入紧凑 Chat：Prompt 被隐藏，其选区不得计入“当前可见选区”。
+    crate::app::update::sync_compact_layout(&mut state, 100, &crate::config::Config::default());
+    assert_eq!(state.compact_panel(), None);
+    assert!(!has_visible_selection(&state));
+
+    // 打开全屏右栏：Prompt 选区重新可见；再打开全屏左栏时又不可见。
+    state.set_focus(crate::app::state::FocusedContainer::Prompt);
+    assert!(has_visible_selection(&state));
+    state.set_focus(crate::app::state::FocusedContainer::Sidebar);
+    assert!(!has_visible_selection(&state));
+
+    // 处于紧凑左栏时，隐藏在 Chat lx 输入框中的选区也不得吞掉 Esc。
+    if let Some(target) = state.pane_mut_anywhere(pane) {
+        target.lx.insert_str("draft");
+        target.lx.begin_text_selection(0, 0);
+        target.lx.drag_text_selection(0, 3);
+    }
+    assert!(!has_visible_selection(&state));
+    state.set_focus(crate::app::state::FocusedContainer::Panes);
+    assert!(has_visible_selection(&state));
+}

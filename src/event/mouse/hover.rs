@@ -126,12 +126,13 @@ pub(crate) fn handle_mouse_moved(
         if update::set_workspace_history_hover(state, None) {
             *dirty = true;
         }
-        // 引用文件夹内容弹窗的边框按钮可提示；其余浮层抑制 tooltip。
-        let tooltip_target = if matches!(state.overlay, Some(Overlay::ReferencedFolderSearch(_))) {
-            ui::tooltip::target_at(view, state, rects, *screen, mouse.column, mouse.row)
-        } else {
-            None
-        };
+        // 引用文件夹内容弹窗的边框按钮可提示；其余浮层与紧凑模式一律抑制 tooltip。
+        let tooltip_target =
+            if !view.compact && matches!(state.overlay, Some(Overlay::ReferencedFolderSearch(_))) {
+                ui::tooltip::target_at(view, state, rects, *screen, mouse.column, mouse.row)
+            } else {
+                None
+            };
         if update::set_tooltip_target(state, tooltip_target, Instant::now()) {
             *dirty = true;
         }
@@ -351,8 +352,9 @@ pub(crate) fn handle_mouse_moved(
     if update::set_prompt_recent_hover(state, recent_hover) {
         *dirty = true;
     }
-    // 按钮 tooltip：拖拽排序/列表拖拽或指针在 toast 上时不触发；目标变化重置显示计时。
-    let tooltip_target = if hovering_toast
+    // 按钮 tooltip：紧凑模式、拖拽排序/列表拖拽或指针在 toast 上时不触发；目标变化重置显示计时。
+    let tooltip_target = if view.compact
+        || hovering_toast
         || state.workspace_drag.is_some()
         || state.workspace_history.drag.is_some()
         || state.prompt_drag.is_some()

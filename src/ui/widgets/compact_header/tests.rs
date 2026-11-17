@@ -75,12 +75,17 @@ fn left_button_is_filled_when_sidebar_focused() {
 }
 
 #[test]
-fn right_button_is_filled_when_prompt_focused() {
+fn right_button_is_filled_when_prompt_or_todo_focused() {
     let mut state = AppState::demo();
     state.set_focus(FocusedContainer::Prompt);
     let buffer = draw(&state, 120, 24);
     assert_eq!(buffer[(113, 0)].bg, ratatui::style::Color::Cyan);
     assert_ne!(buffer[(0, 0)].bg, ratatui::style::Color::Cyan);
+
+    state.right_tab = crate::app::state::RightTab::Todo;
+    state.set_focus(FocusedContainer::Todo);
+    let buffer = draw(&state, 120, 24);
+    assert_eq!(buffer[(113, 0)].bg, ratatui::style::Color::Cyan);
 }
 
 #[test]
@@ -96,11 +101,30 @@ fn fullscreen_right_panel_keeps_nav_row_and_body_from_row_1() {
 }
 
 #[test]
-fn long_workspace_name_does_not_push_buttons_off_screen() {
+fn long_tab_titles_do_not_push_buttons_off_screen() {
     let mut state = AppState::demo();
-    state.workspaces[0].name = "w".repeat(300);
+    state.workspaces[0].tabs[0].name = Some("t".repeat(120));
     let buffer = draw(&state, 120, 24);
     let nav = row(&buffer, 0, 120);
     assert!(nav.ends_with(text::COMPACT_RIGHT_LABEL), "got: {nav}");
     assert!(nav.starts_with(text::COMPACT_LEFT_LABEL), "got: {nav}");
+    let v = view(&state, 120, 24);
+    assert_eq!(
+        buffer[(v.compact_left_button.right(), 0)].symbol(),
+        text::TAB_SEPARATOR
+    );
+    assert_eq!(buffer[(v.tab_bar.right(), 0)].symbol(), text::TAB_SEPARATOR);
+}
+
+#[test]
+fn ultra_narrow_header_without_tab_space_skips_separators() {
+    let state = AppState::demo();
+    let v = view(&state, 11, 10);
+    assert_eq!(v.tab_bar.width, 0);
+    let mut terminal = Terminal::new(TestBackend::new(11, 10)).expect("backend");
+    terminal
+        .draw(|frame| render(frame, &v, &state))
+        .expect("draw header");
+    let nav = row(terminal.backend().buffer(), 0, 11);
+    assert_eq!(nav, "[ws][panel]", "分隔符不得覆盖 [panel]: {nav:?}");
 }

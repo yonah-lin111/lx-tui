@@ -57,22 +57,22 @@ fn render_buttons(buf: &mut Buffer, view: &ViewLayout, state: &AppState) {
             style::accent()
         },
     );
-    if view.tab_bar.x > view.compact_left_button.right() {
+    if view.tab_bar.width > 0 && view.tab_bar.x > view.compact_left_button.right() {
         write(
             buf,
             view.compact_left_button.right(),
             view.compact_left_button.y,
-            "│",
+            text::TAB_SEPARATOR,
             1,
             style::muted(),
         );
     }
-    if view.tab_bar.right() < view.compact_right_button.x {
+    if view.tab_bar.width > 0 && view.tab_bar.right() < view.compact_right_button.x {
         write(
             buf,
             view.tab_bar.right(),
             view.compact_right_button.y,
-            "│",
+            text::TAB_SEPARATOR,
             1,
             style::muted(),
         );

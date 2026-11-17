@@ -366,13 +366,13 @@ pub(crate) fn handle_mouse_drag(
         }
         return;
     }
-    if state.resizing_sidebar {
+    if !view.compact && state.resizing_sidebar {
         let width = ui::layout::sidebar_width_at(view, config, mouse.column);
         update::drag_sidebar(state, width);
         *dirty = true;
         return;
     }
-    if state.resizing_prompt {
+    if !view.compact && state.resizing_prompt {
         let width = ui::layout::prompt_width_at(view, mouse.column, config.min_pane_width);
         update::drag_prompt(state, width);
         *dirty = true;

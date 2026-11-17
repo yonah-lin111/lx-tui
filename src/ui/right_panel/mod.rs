@@ -82,7 +82,7 @@ pub(crate) fn render(
     if area.width == 0 || area.height == 0 {
         return None;
     }
-    if state.prompt_collapsed {
+    if state.prompt_collapsed && !view.compact {
         render_collapsed_strip(frame, area, false);
         return None;
     }
@@ -103,7 +103,7 @@ pub(crate) fn render(
         state.right_tab,
         state.right_tab_hover,
     );
-    render_bottom(frame, area, state);
+    render_bottom(frame, area, view.compact, state);
     match state.right_tab {
         // Prompt 体：功能按钮行 + 标题行 + 正文/树 + 滚动条 + 硬件光标
         RightTab::Prompt => frame::render_body(frame, area, state),
@@ -148,8 +148,8 @@ fn prompt_identity(state: &AppState) -> Option<WorkspaceIdentity> {
 }
 
 /// 容器底边框：整段左对齐的身份标签 `项目 · b:分支 · wt:工作区名`（与 lx 窗格同款），
-/// 右侧保留钉住按钮与折叠按钮；放不下时按同一降级阶梯省略。不随标签页变化。
-fn render_bottom(frame: &mut Frame<'_>, area: Rect, state: &AppState) {
+/// 桌面态右侧保留钉住按钮与折叠按钮；紧凑态右侧按钮已隐藏，仅保留边框边距。
+fn render_bottom(frame: &mut Frame<'_>, area: Rect, compact: bool, state: &AppState) {
     if area.height == 0 || area.width == 0 {
         return;
     }
@@ -158,11 +158,15 @@ fn render_bottom(frame: &mut Frame<'_>, area: Rect, state: &AppState) {
     };
     let row = area.bottom().saturating_sub(1);
     let start = area.x.saturating_add(2);
-    let end = super::controls::prompt_pin_button(area, state.prompt_pinned.is_some()).map_or(
-        area.right()
-            .saturating_sub(PANEL_BUTTON_WIDTH + PANEL_BUTTON_MARGIN),
-        |pin| pin.x.saturating_sub(1),
-    );
+    let end = if compact {
+        area.right().saturating_sub(2)
+    } else {
+        super::controls::prompt_pin_button(area, state.prompt_pinned.is_some()).map_or(
+            area.right()
+                .saturating_sub(PANEL_BUTTON_WIDTH + PANEL_BUTTON_MARGIN),
+            |pin| pin.x.saturating_sub(1),
+        )
+    };
     if end <= start {
         return;
     }

@@ -140,6 +140,7 @@ pub fn open_prompt_page(state: &mut AppState, item_id: i64, page_id: PromptPageI
         if let Some(workspace_state) = state.workspaces.get_mut(workspace) {
             workspace_state.prompt_panel.mode = PromptMode::Editor;
         }
+        super::super::selection::clear_selection(state);
         state.prompt_collapsed = false;
         state.prompt_recent_hover = None;
         // 抽屉可能由鼠标从窗格焦点打开；关闭后键盘焦点交还 prompt。
@@ -188,7 +189,7 @@ pub fn open_prompt_page(state: &mut AppState, item_id: i64, page_id: PromptPageI
         &content,
     );
     state.prompt.clear_panel();
-    state.selection = None;
+    super::super::selection::clear_selection(state);
     state.prompt_collapsed = false;
     crate::app::update::focus_prompt(state);
     state.prompt_recent_hover = None;

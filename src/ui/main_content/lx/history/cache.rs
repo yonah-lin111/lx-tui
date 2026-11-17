@@ -166,6 +166,11 @@ impl RenderCache {
         self.share_budget();
     }
 
+    #[cfg(test)]
+    pub(crate) fn has_pane(&self, id: PaneId) -> bool {
+        self.panes.contains_key(&id)
+    }
+
     /// 把 [`MAX_CACHED_BYTES`] 平摊给当前所有窗格。
     ///
     /// 平摊是**记账口径**：预算本就是总量，各窗格按份数收着，超出的部分在下一次

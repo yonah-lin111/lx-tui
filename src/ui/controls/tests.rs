@@ -186,3 +186,39 @@ fn tooltip_target_points_at_web_button() {
         column += 1;
     }
 }
+
+#[test]
+fn compact_fullscreen_left_panel_keeps_agents_toggle_and_web_button() {
+    let mut state = AppState::demo();
+    state.settings_available = true;
+    state.sidebar_collapsed = true;
+    state.set_focus(crate::app::state::FocusedContainer::Sidebar);
+    let config = crate::config::Config::default();
+    let view = layout::compute_with_panel(
+        Rect::new(0, 0, 100, 24),
+        &config,
+        state.sidebar_collapsed,
+        state.sidebar_width,
+        state.prompt_collapsed,
+        state.prompt_width,
+        state.prompt_left,
+        state.panes_collapsed,
+        state.compact_panel(),
+    );
+    assert!(view.compact);
+    let buttons = collapse_buttons(&view, state.agents_collapsed);
+    assert_eq!(buttons.len(), 1);
+    assert_eq!(buttons[0].target, CollapseTarget::Agents);
+    assert!(web_button(&view, &state).is_some());
+
+    let mut terminal =
+        RatatuiTerminal::new(TestBackend::new(100, 24)).expect("test backend is infallible");
+    terminal
+        .draw(|frame| render(frame, &state, &config))
+        .expect("draw compact left");
+    let buffer = terminal.backend().buffer();
+    let agents_row: String = (buttons[0].area.x..buttons[0].area.right())
+        .map(|x| buffer[(x, buttons[0].area.y)].symbol())
+        .collect();
+    assert_eq!(agents_row, text::AGENTS_COLLAPSE_LABEL);
+}

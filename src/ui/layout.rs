@@ -154,7 +154,7 @@ fn compact_layout(area: Rect, panel: Option<CompactPanel>) -> ViewLayout {
         .min(area.width);
     let right_width = u16::try_from(text::COMPACT_RIGHT_LABEL.width())
         .unwrap_or(u16::MAX)
-        .min(area.width);
+        .min(area.width.saturating_sub(left_width));
     let nav_height = header_height;
     let left_button = Rect::new(area.x, area.y, left_width, nav_height);
     let right_button = Rect::new(
@@ -166,12 +166,8 @@ fn compact_layout(area: Rect, panel: Option<CompactPanel>) -> ViewLayout {
     let tab_x = left_button
         .right()
         .saturating_add(COMPACT_HEADER_GAP)
-        .min(area.right());
-    let tab_right = right_button
-        .x
-        .saturating_sub(COMPACT_HEADER_GAP)
-        .max(tab_x)
-        .min(area.right());
+        .min(right_button.x);
+    let tab_right = right_button.x.saturating_sub(COMPACT_HEADER_GAP).max(tab_x);
     let tab_bar = Rect::new(tab_x, area.y, tab_right.saturating_sub(tab_x), nav_height);
 
     let zero = Rect::new(body.x, body.y, 0, body.height);

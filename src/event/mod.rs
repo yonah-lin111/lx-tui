@@ -277,6 +277,8 @@ async fn run_loop(
     // lx loading 转轮的下一帧时刻；无流中窗格时为 None（空闲不轮询）。
     let mut spinner_at: Option<Instant> = None;
     let mut last_rects: Vec<(PaneId, Rect)> = Vec::new();
+    let mut last_screen = Rect::ZERO;
+    let mut last_compact = state.compact_restore.is_some();
     // UI 渲染缓存：跨帧复用历史几何快照；按窗格隔离，窗格集合变化时清理。
     let mut ui_cache = ui::RenderCache::default();
     // PTY 输出后的 cwd 去抖检查时刻；空闲时不设置、不轮询。
@@ -471,25 +473,16 @@ async fn run_loop(
                 dirty = true;
             }
         }
-        if geometry.rects != last_rects || state.prompt_resize_pending {
-            update::resize_panes(state, &geometry.rects);
-            update::invalidate_task_agent_rows(state);
-            state.prompt_resize_pending = false;
-            // 窗格集合变化：清掉已关闭窗格的历史缓存，避免泄漏。
-            let alive: Vec<PaneId> = geometry.rects.iter().map(|(id, _)| *id).collect();
-            ui_cache.retain_panes(&alive);
-            // 几何变化使自动滚动登记的坐标失效，停止拖拽滚动。
-            update::stop_selection_autoscroll(state);
-            session::resize_sessions(&mut sessions, &geometry.rects);
-            last_rects.clone_from(&geometry.rects);
-            if let Some(rows) = ui::workspace_list_rows(&geometry.view, state) {
-                update::clamp_workspace_scroll(state, rows);
-            }
-            let tab_bar =
-                ui::tab_bar::layout(&geometry.view, state.active_workspace(), state.tab_scroll);
-            update::set_tab_scroll(state, state.tab_scroll, tab_bar.max_scroll);
-            dirty = true;
-        }
+        session::sync_layout_geometry(
+            state,
+            &mut sessions,
+            &mut ui_cache,
+            &geometry,
+            &mut last_rects,
+            &mut last_screen,
+            &mut last_compact,
+            &mut dirty,
+        );
         let now = Instant::now();
         if update::tick(state, now) {
             dirty = true;
@@ -523,7 +516,13 @@ async fn run_loop(
             update::resolve_task_agents_visible(state, &geometry.rects, &mut ui_cache);
             update::resolve_task_btw_visible(state, &geometry.rects, &mut ui_cache);
             update::resolve_ask_list_window(state, &geometry.rects);
-            update::resolve_todo_viewport(state, geometry.view.right_panel);
+            if geometry.view.right_panel.width > crate::tiling::COLLAPSED_STRIP
+                && geometry.view.right_panel.height > 2
+                && (!state.prompt_collapsed || geometry.view.compact)
+                && state.right_tab == crate::app::state::RightTab::Todo
+            {
+                update::resolve_todo_viewport(state, geometry.view.right_panel);
+            }
             ui_cache.begin_frame();
             let drawn = tui.draw(|frame| ui::render_cached(frame, state, &config, &mut ui_cache));
             // 绘制结束即关闭指纹记忆：draw 之后到达的鼠标事件必须按最新状态取几何。

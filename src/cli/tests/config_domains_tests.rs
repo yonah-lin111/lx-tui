@@ -257,7 +257,18 @@ fn mcp_skill_command_subagent_and_settings_crud_work() {
         "--log-payload",
         "true",
     ]));
-    assert_exit_ok(env.exec(&["settings", "show", "--json"]));
+    let shown = env
+        .exec_captured(&["settings", "show", "--json"])
+        .expect("settings show json");
+    assert!(
+        !shown.contains("narrowWidth") && !shown.contains("narrow_width"),
+        "settings JSON must not expose narrow_width: {shown}"
+    );
+    assert!(
+        env.exec(&["settings", "set", "--narrow-width", "80"])
+            .is_err(),
+        "removed --narrow-width flag must be rejected"
+    );
     let cfg = crate::config::load_settings().expect("load settings");
     assert_eq!(cfg.sidebar_width, 32);
     assert_eq!(cfg.log_level, "debug");

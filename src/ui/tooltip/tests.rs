@@ -477,3 +477,27 @@ fn hits_block_buttons_via_prompt_text_area() {
         })
     );
 }
+
+#[test]
+fn target_at_returns_none_in_compact_mode() {
+    let mut state = AppState::demo();
+    state.settings_available = true;
+    state.set_focus(crate::app::state::FocusedContainer::Sidebar);
+    let config = crate::config::Config::default();
+    let view = crate::ui::layout::compute_with_panel(
+        Rect::new(0, 0, 100, 24),
+        &config,
+        false,
+        24,
+        false,
+        30,
+        false,
+        false,
+        state.compact_panel(),
+    );
+    let web = ui::web_button(&view, &state).expect("web button visible");
+    assert_eq!(
+        target_at(&view, &state, &[], Rect::new(0, 0, 100, 24), web.x, web.y),
+        None
+    );
+}

@@ -95,21 +95,30 @@ pub fn layout(view: &ViewLayout, workspace: &Workspace, scroll: usize) -> TabBar
         };
     }
 
-    // 溢出：`[<]` 贴标签区左缘，`[+] [>]` 依次贴 `[exit]` 左侧，标签在中间视口内滚动。
+    // 溢出：`[<]` 贴标签区左缘，`[+] [>]` 依次贴 `[exit]` 左侧，标签在中间视口内滚动；
+    // 极窄宽度下按 `[>]` -> `[+]` -> `[<]` 顺序让位，防止按钮矩形相互重叠。
     let button_width = text::TAB_SCROLL_LEFT_LABEL.chars().count() as u16;
-    let scroll_right = Rect::new(
-        right.saturating_sub(button_width),
-        area.y,
-        button_width.min(available),
-        1,
-    );
-    let add = Rect::new(
-        scroll_right.x.saturating_sub(add_width),
-        area.y,
-        add_width.min(scroll_right.x.saturating_sub(area.x)),
-        1,
-    );
-    let viewport_x = area.x.saturating_add(button_width).min(add.x);
+    let scroll_right_width = if available >= button_width {
+        button_width
+    } else {
+        0
+    };
+    let scroll_right_x = right.saturating_sub(scroll_right_width);
+    let add_btn_width = if scroll_right_x.saturating_sub(area.x) >= add_width {
+        add_width
+    } else {
+        0
+    };
+    let add_x = scroll_right_x.saturating_sub(add_btn_width);
+    let scroll_left_width = if add_x.saturating_sub(area.x) >= button_width {
+        button_width
+    } else {
+        0
+    };
+    let scroll_right = Rect::new(scroll_right_x, area.y, scroll_right_width, 1);
+    let add = Rect::new(add_x, area.y, add_btn_width, 1);
+    let scroll_left = Rect::new(area.x, area.y, scroll_left_width, 1);
+    let viewport_x = scroll_left.right().min(add.x);
     let viewport = Rect::new(viewport_x, area.y, add.x.saturating_sub(viewport_x), 1);
     let max_scroll = max_scroll(&widths, viewport.width);
     let scroll = scroll.min(max_scroll);
@@ -127,7 +136,7 @@ pub fn layout(view: &ViewLayout, workspace: &Workspace, scroll: usize) -> TabBar
         tabs,
         tab_widths: widths,
         add: (add.width > 0).then_some(add),
-        scroll_left: Some(Rect::new(area.x, area.y, button_width.min(available), 1)),
+        scroll_left: (scroll_left.width > 0).then_some(scroll_left),
         scroll_right: (scroll_right.width > 0).then_some(scroll_right),
         scroll,
         max_scroll,

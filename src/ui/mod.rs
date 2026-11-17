@@ -103,7 +103,7 @@ pub(crate) fn render_cached(
         controls::render_exit_button(frame, &view);
     }
     // 主区折叠：只画右缘窄条，不渲染窗格内容（PTY 尺寸保持折叠前）。
-    let pane_cursor = if state.prompt_left && state.panes_collapsed {
+    let pane_cursor = if state.prompt_left && state.panes_collapsed && !view.compact {
         controls::render_collapsed_strip(frame, view.main_content, false);
         None
     } else {
@@ -114,9 +114,9 @@ pub(crate) fn render_cached(
         .or(sidebar_cursor);
     if !view.compact {
         controls::render_swap_button(frame, &view);
-        controls::render_panel_buttons(frame, &view, state);
         controls::render_resize_hint(frame, &view, state);
     }
+    controls::render_panel_buttons(frame, &view, state);
     // 引用文件夹浮层的边框按钮 tooltip 需绘制在浮层之上（常规 tooltip 早于浮层绘制会被盖住）。
     let border_tooltip_open = matches!(
         state.overlay,

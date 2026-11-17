@@ -15,7 +15,7 @@ use ratatui::style::{Color, Modifier};
 
 /// 构造已同步几何的 prompt 场景（100x24，右栏展开）。
 fn ready_state() -> (AppState, Config, ui::layout::ViewLayout) {
-    // 集成测试固定 100 列桌面几何：压低紧凑阈值，避免默认 120 列进入单列。
+    // 集成测试固定 100 列桌面几何：压低紧凑阈值，避免默认 160 列进入单列。
     let config = Config {
         narrow_width: 80,
         ..Config::default()

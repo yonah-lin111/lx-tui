@@ -460,7 +460,8 @@ pub fn clear_selection(state: &mut AppState) {
 ///
 /// 规则（对齐 OpenCode 选区拦截与可见性隔离）：
 /// 1. 模态浮层打开时，仅检查该浮层自身的输入框选区；被浮层遮挡的底层容器选区不计入。
-/// 2. 无模态浮层时，按各容器可见性检查：
+/// 2. 紧凑模式下，三栏始终只有一个容器可见，仅检查当前 `compact_panel()` 对应的可见容器。
+/// 3. 无模态浮层且处于桌面三栏时，按各容器展开状态检查：
 ///    - 左栏：未折叠且处于工作区历史列表模式时，检查 `workspace_history.search`；
 ///    - 右栏：未折叠时，按 `right_tab`（`Prompt` 树/页/正文与展开芯片，或 `Todo` 编辑框）检查；
 ///    - 主窗格区：未折叠时，遍历当前活动标签页中的所有可见窗格：
@@ -473,14 +474,28 @@ pub fn has_visible_selection(state: &AppState) -> bool {
         return overlay.has_selection();
     }
 
-    if !state.sidebar_collapsed
+    let (left_visible, right_visible, panes_visible) = if state.compact_restore.is_some() {
+        match state.compact_panel() {
+            Some(crate::app::state::CompactPanel::Left) => (true, false, false),
+            Some(crate::app::state::CompactPanel::Right) => (false, true, false),
+            None => (false, false, true),
+        }
+    } else {
+        (
+            !state.sidebar_collapsed,
+            !state.prompt_collapsed,
+            !state.panes_collapsed,
+        )
+    };
+
+    if left_visible
         && super::workspace_history_mode(state)
         && state.workspace_history.search.has_selection()
     {
         return true;
     }
 
-    if !state.prompt_collapsed {
+    if right_visible {
         match state.right_tab {
             crate::app::state::RightTab::Prompt => {
                 if super::prompt_tree_mode(state) {
@@ -515,7 +530,7 @@ pub fn has_visible_selection(state: &AppState) -> bool {
         }
     }
 
-    if !state.panes_collapsed {
+    if panes_visible {
         for id in state.active_tab().layout.pane_ids() {
             let Some(pane) = state.pane_anywhere(id) else {
                 continue;

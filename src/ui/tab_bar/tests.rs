@@ -273,3 +273,38 @@ fn tab_with_pending_ask_is_two_columns_wider_and_shows_marker() {
         "`?` 字体颜色必须使用深琥珀色，不得与背景或普通黑字混同"
     );
 }
+
+#[test]
+fn overflow_in_very_narrow_tab_bar_never_overlaps_controls() {
+    let state = state_with_tabs(10);
+    for width in 1..=12u16 {
+        let mut view = crate::ui::layout::compute_with_panel(
+            Rect::new(0, 0, 40, 24),
+            &crate::config::Config::default(),
+            false,
+            20,
+            false,
+            30,
+            false,
+            false,
+            None,
+        );
+        view.tab_bar = Rect::new(5, 0, width, 1);
+        let bar = layout(&view, state.active_workspace(), 0);
+        let buttons: Vec<Rect> = [bar.scroll_left, bar.add, bar.scroll_right]
+            .into_iter()
+            .flatten()
+            .collect();
+        for pair in buttons.windows(2) {
+            assert!(
+                pair[0].right() <= pair[1].x,
+                "width {width}: button {:?} overlaps {:?}",
+                pair[0],
+                pair[1]
+            );
+        }
+        if let (Some((_, last_tab)), Some(add)) = (bar.tabs.last(), bar.add) {
+            assert!(last_tab.right() <= add.x);
+        }
+    }
+}

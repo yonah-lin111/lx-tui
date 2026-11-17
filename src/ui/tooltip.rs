@@ -25,6 +25,9 @@ pub fn target_at(
     column: u16,
     row: u16,
 ) -> Option<TooltipTarget> {
+    if view.compact {
+        return None;
+    }
     targets(view, state, pane_rects, screen)
         .into_iter()
         .find_map(|(target, area)| area.contains((column, row).into()).then_some(target))
@@ -85,6 +88,9 @@ fn targets(
     pane_rects: &[(PaneId, Rect)],
     screen: Rect,
 ) -> Vec<(TooltipTarget, Rect)> {
+    if view.compact {
+        return Vec::new();
+    }
     if let Some(Overlay::ReferencedFolderSearch(search)) = &state.overlay {
         let Some(layout) = ui::overlay::referenced_search_layout(screen, search) else {
             return Vec::new();

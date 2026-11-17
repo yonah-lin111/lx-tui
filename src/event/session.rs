@@ -69,7 +69,10 @@ pub(crate) fn current_geometry(
     );
     // 折叠的右列面板不参与命中与尺寸同步：主区折叠时窗格 PTY 保持原尺寸。
     // 紧凑全屏面板下主区宽度为 0，同样不重排窗格。
-    let mut rects = if view.main_content.width == 0 || view.main_content.height == 0 {
+    let mut rects = if view.main_content.width == 0
+        || view.main_content.height == 0
+        || (!view.compact && state.prompt_left && state.panes_collapsed)
+    {
         Vec::new()
     } else {
         tiling::pane_rects(
@@ -87,6 +90,55 @@ pub(crate) fn current_geometry(
         rects,
         view,
     })
+}
+
+/// 同步每帧几何变化：更新窗格尺寸、保留存活窗格缓存、钳制滚动并处理紧凑态切换。
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn sync_layout_geometry(
+    state: &mut AppState,
+    sessions: &mut HashMap<PaneId, PtySession>,
+    ui_cache: &mut ui::RenderCache,
+    geometry: &Geometry,
+    last_rects: &mut Vec<(PaneId, Rect)>,
+    last_screen: &mut Rect,
+    last_compact: &mut bool,
+    dirty: &mut bool,
+) {
+    let mode_changed = geometry.view.compact != *last_compact;
+    if mode_changed {
+        super::mouse::hover::reset_pointer_shape();
+        *last_compact = geometry.view.compact;
+        *dirty = true;
+    }
+    let view_changed = geometry.screen != *last_screen || mode_changed;
+    let rects_changed = geometry.rects != *last_rects || state.prompt_resize_pending;
+    if !rects_changed && !view_changed {
+        return;
+    }
+    if rects_changed {
+        update::resize_panes(state, &geometry.rects);
+        update::invalidate_task_agent_rows(state);
+        state.prompt_resize_pending = false;
+        // 仅清理真正关闭的窗格缓存，全屏左/右栏期间暂时隐藏的 lx 窗格保留快照。
+        let alive = state.all_pane_ids();
+        ui_cache.retain_panes(&alive);
+        // 几何变化使自动滚动登记的坐标失效，停止拖拽滚动。
+        update::stop_selection_autoscroll(state);
+        resize_sessions(sessions, &geometry.rects);
+        last_rects.clone_from(&geometry.rects);
+    }
+    if let Some(rows) = ui::workspace_list_rows(&geometry.view, state) {
+        update::clamp_workspace_scroll(state, rows);
+    }
+    if view_changed {
+        reveal_active_tab(state, &geometry.view);
+        *last_screen = geometry.screen;
+    } else {
+        let tab_bar =
+            ui::tab_bar::layout(&geometry.view, state.active_workspace(), state.tab_scroll);
+        update::set_tab_scroll(state, state.tab_scroll, tab_bar.max_scroll);
+    }
+    *dirty = true;
 }
 
 /// 轮询窗格 shell 进程的 cwd：更新各窗格的 cwd 与标题标签；返回是否有变化。

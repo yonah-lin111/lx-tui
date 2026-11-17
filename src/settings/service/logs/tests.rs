@@ -145,7 +145,7 @@ async fn config_save_validates_origin_values_and_preserves_partial_fields() {
         "invalid log level not written"
     );
 
-    // 合法值保存并投递事件。
+    // 合法值保存并投递事件（若旧前端附带历史 narrow_width 字段，必须被忽略且不落盘）。
     let valid = request(
         port,
         &write(
@@ -157,14 +157,17 @@ async fn config_save_validates_origin_values_and_preserves_partial_fields() {
     )
     .await;
     assert_eq!(status(&valid), 200);
+    assert!(!valid.contains("narrow_width"), "{valid}");
     let saved = std::fs::read_to_string(dir.join("settings.json")).expect("settings written");
     assert!(saved.contains("\"sidebar_width\": 30"), "{saved}");
+    assert!(!saved.contains("narrow_width"), "{saved}");
     assert!(saved.contains("\"log_level\": \"debug\""), "{saved}");
     assert!(saved.contains("\"log_payload\": true"), "{saved}");
     let event = events.try_recv().expect("config event");
     match event {
         SettingsEvent::ConfigChanged(config) => {
             assert_eq!(config.sidebar_width, 30);
+            assert_eq!(config.narrow_width, 160);
             assert_eq!(config.log_level, "debug");
             assert!(config.log_payload);
         }

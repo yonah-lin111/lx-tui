@@ -438,3 +438,46 @@ fn title_row_colors_page_title_by_template_status_in_editor_view() {
     let row = panel_row(&buffer, &view, row_y);
     assert!(!row.contains("· T"), "{row}");
 }
+
+#[test]
+fn compact_fullscreen_right_panel_uses_full_bottom_border_for_identity() {
+    let mut state = AppState::demo();
+    state.workspaces[0].name = "compact-wt".into();
+    state.workspaces[0].cwd = Some(std::path::PathBuf::from("/tmp/project-repo/.wt"));
+    state.workspaces[0].git = Some(crate::app::state::WorkspaceGit {
+        repo_root: std::path::PathBuf::from("/tmp/project-repo"),
+        checkout_path: std::path::PathBuf::from("/tmp/project-repo/.wt"),
+        is_linked: true,
+        branch: Some("feat".into()),
+        main_branch: Some("dev".into()),
+    });
+    state.set_focus(crate::app::state::FocusedContainer::Prompt);
+    let config = crate::config::Config::default();
+    // "project-repo · b:feat · wt:compact-wt" 占 37 列；总宽 42 时去左右边距余 38 列，
+    // 若仍为隐藏的 [pin]/[▶] 预留 10–12 列则必截断 wt:。
+    let view = crate::ui::layout::compute_with_panel(
+        Rect::new(0, 0, 42, 20),
+        &config,
+        false,
+        24,
+        false,
+        30,
+        false,
+        false,
+        state.compact_panel(),
+    );
+    assert!(view.compact);
+    let mut terminal = Terminal::new(TestBackend::new(42, 20)).expect("backend");
+    terminal
+        .draw(|frame| {
+            render(frame, &view, &state);
+        })
+        .expect("draw right panel");
+    let buffer = terminal.backend().buffer();
+    let bottom = view.right_panel.bottom() - 1;
+    let row: String = (0..42).map(|x| buffer[(x, bottom)].symbol()).collect();
+    assert!(
+        row.contains("wt:compact-wt"),
+        "紧凑模式底边框应利用全部可用宽度完整显示 wt: {row}"
+    );
+}

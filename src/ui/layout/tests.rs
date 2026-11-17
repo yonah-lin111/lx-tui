@@ -572,3 +572,34 @@ fn prompt_width_at_mirrors_for_left_prompt() {
         100 - config.sidebar_width - config.min_pane_width
     );
 }
+
+#[test]
+fn ultra_narrow_compact_header_buttons_never_overlap() {
+    let config = Config::default();
+    for width in 1..=16 {
+        let view = compute_with_panel(
+            Rect::new(0, 0, width, 12),
+            &config,
+            false,
+            config.sidebar_width,
+            false,
+            30,
+            false,
+            false,
+            None,
+        );
+        assert!(view.compact);
+        assert!(
+            view.compact_left_button.right() <= view.compact_right_button.x,
+            "width {width}: left {:?} overlaps right {:?}",
+            view.compact_left_button,
+            view.compact_right_button
+        );
+        assert!(
+            view.tab_bar.right() <= view.compact_right_button.x,
+            "width {width}: tab_bar {:?} overlaps right {:?}",
+            view.tab_bar,
+            view.compact_right_button
+        );
+    }
+}

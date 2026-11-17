@@ -456,3 +456,38 @@ fn compact_toast_anchors_inside_visible_pane_and_renders_bordered_box() {
     assert!(row.contains('●'), "{row}");
     assert!(row.contains(text::TOAST_COPIED), "{row}");
 }
+
+#[test]
+fn compact_fullscreen_right_panel_anchors_prompt_toast_inside_panel_and_modal_uses_top_center() {
+    let mut state = AppState::demo();
+    state.set_focus(crate::app::state::FocusedContainer::Prompt);
+    let config = crate::config::Config::default();
+    let view = crate::ui::layout::compute_with_panel(
+        Rect::new(0, 0, 60, 20),
+        &config,
+        false,
+        24,
+        false,
+        30,
+        false,
+        false,
+        state.compact_panel(),
+    );
+    let prompt = state.prompt.id();
+    show(&mut state, Some(prompt));
+    let screen = Rect::new(0, 0, 60, 20);
+    let area = rect(&state, &view, &[], screen, &config).expect("right panel toast");
+    assert_eq!(area.y, view.right_panel.y + 1);
+    assert_eq!(area.y, 2);
+
+    // 弹窗在屏时全局 Toast（anchor = None）显示在屏幕顶部居中 y = 1。
+    state.overlay = Some(crate::app::overlay::Overlay::ConfirmClose(
+        crate::app::overlay::ConfirmClose::new(crate::app::overlay::OverlayTarget::Tab {
+            workspace: 0,
+            tab: 0,
+        }),
+    ));
+    show(&mut state, None);
+    let modal_toast = rect(&state, &view, &[], screen, &config).expect("modal global toast");
+    assert_eq!(modal_toast.y, 1);
+}

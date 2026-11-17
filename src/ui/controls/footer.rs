@@ -12,7 +12,7 @@ use crate::ui::{layout, style, text};
 pub fn web_button(view: &layout::ViewLayout, state: &AppState) -> Option<Rect> {
     let area = view.left_panel;
     if !state.settings_available
-        || state.sidebar_collapsed
+        || (state.sidebar_collapsed && !view.compact)
         || area.width < WEB_BUTTON_MIN_WIDTH
         || area.height < 2
     {

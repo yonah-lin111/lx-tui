@@ -32,20 +32,19 @@ pub struct CollapseButton {
 /// 左栏、右列与 agents 表头内的折叠按钮；渲染与鼠标命中共用同一几何。
 /// 位置模型下只有右列面板可折叠：prompt 在右折叠 prompt，prompt 在左折叠主区。
 pub fn collapse_buttons(view: &layout::ViewLayout, agents_collapsed: bool) -> Vec<CollapseButton> {
-    if view.compact {
-        return Vec::new();
-    }
     let mut buttons = Vec::new();
-    if let Some(button) = panel_button(CollapseTarget::Sidebar, view.left_panel) {
-        buttons.push(button);
-    }
-    let (target, panel) = if view.right_panel_left {
-        (CollapseTarget::Panes, view.main_content)
-    } else {
-        (CollapseTarget::Prompt, view.right_panel)
-    };
-    if let Some(button) = panel_button(target, panel) {
-        buttons.push(button);
+    if !view.compact {
+        if let Some(button) = panel_button(CollapseTarget::Sidebar, view.left_panel) {
+            buttons.push(button);
+        }
+        let (target, panel) = if view.right_panel_left {
+            (CollapseTarget::Panes, view.main_content)
+        } else {
+            (CollapseTarget::Prompt, view.right_panel)
+        };
+        if let Some(button) = panel_button(target, panel) {
+            buttons.push(button);
+        }
     }
     if let Some(button) = agents_button(view, agents_collapsed) {
         buttons.push(button);
@@ -171,7 +170,9 @@ pub(crate) fn render_panel_buttons(
             }
         }
     }
-    render_prompt_pin(frame, view, state);
+    if !view.compact {
+        render_prompt_pin(frame, view, state);
+    }
 }
 
 /// 绘制 prompt 底边钉住按钮：未钉 `[pin]`、已钉 `[unpin]`，逐格强调色。

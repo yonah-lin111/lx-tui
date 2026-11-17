@@ -309,6 +309,7 @@ pub fn commit_worktree_open(state: &mut AppState) {
 
     if let Some(index) = open_workspace_for_checkout(state, &entry.path) {
         switch_workspace(state, index);
+        super::focus::focus_panes(state);
         ensure_main_workspace(state, index);
         return;
     }
@@ -339,6 +340,7 @@ pub(super) fn open_worktree_checkout(
 ) {
     if let Some(index) = open_workspace_for_checkout(state, &entry.path) {
         switch_workspace(state, index);
+        super::focus::focus_panes(state);
         ensure_main_workspace(state, index);
         return;
     }

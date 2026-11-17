@@ -238,6 +238,7 @@ pub fn open_prompt_for_pane(state: &mut AppState, pane: PaneId) {
         .and_then(|target| target.cwd.clone())
         .or_else(|| state.active_workspace().cwd.clone());
     release_prompt_pin(state);
+    clear_selection(state);
     state.prompt_root = root;
     state.prompt_collapsed = false;
     focus_prompt(state);

@@ -16,7 +16,7 @@ use crate::ui::right_panel::prompt::geometry::{
     PromptToolbarButton, prompt_text_rect, prompt_toolbar_button_rect,
 };
 
-/// 桌面三栏测试配置：固定 80 列阈值，避免默认 120 列把 120 宽度的
+/// 桌面三栏测试配置：固定 80 列阈值，避免默认 160 列把 100/120 宽度的
 /// 事件几何测试变成紧凑布局。紧凑行为由 `compact` 测试覆盖。
 pub(crate) fn desktop_config() -> Config {
     Config {
@@ -26,7 +26,7 @@ pub(crate) fn desktop_config() -> Config {
 }
 
 pub(crate) fn geometry(state: &AppState, config: &Config, screen: Rect) -> Geometry {
-    let view = ui::layout::compute(
+    let view = ui::layout::compute_with_panel(
         screen,
         config,
         state.sidebar_collapsed,
@@ -35,8 +35,12 @@ pub(crate) fn geometry(state: &AppState, config: &Config, screen: Rect) -> Geome
         state.prompt_width,
         state.prompt_left,
         state.panes_collapsed,
+        state.compact_panel(),
     );
-    let mut rects = if state.prompt_left && state.panes_collapsed {
+    let mut rects = if view.main_content.width == 0
+        || view.main_content.height == 0
+        || (!view.compact && state.prompt_left && state.panes_collapsed)
+    {
         Vec::new()
     } else {
         tiling::pane_rects(
@@ -46,7 +50,7 @@ pub(crate) fn geometry(state: &AppState, config: &Config, screen: Rect) -> Geome
             config.min_pane_height,
         )
     };
-    if !state.prompt_collapsed {
+    if !state.prompt_collapsed && view.right_panel.width > 0 {
         rects.push((state.prompt.id(), view.right_panel));
     }
     Geometry {
