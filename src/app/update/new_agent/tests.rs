@@ -185,3 +185,99 @@ fn double_click_requires_same_row_within_window() {
         "超出窗口不算双击"
     );
 }
+
+fn type_query(state: &mut AppState, query: &str) {
+    for ch in query.chars() {
+        apply_new_agent_key(state, OverlayKey::Char(ch));
+    }
+}
+
+fn filtered(state: &AppState) -> Option<Vec<usize>> {
+    match state.overlay.as_ref() {
+        Some(Overlay::NewAgent(dialog)) => Some(dialog.filtered_indices()),
+        _ => None,
+    }
+}
+
+#[test]
+fn query_filters_by_label_command_and_alias() {
+    let mut state = AppState::demo();
+    state.installed_agents = vec![
+        agent(AgentKind::Claude, "claude"),
+        agent(AgentKind::OpenCode, "opencode2"),
+        agent(AgentKind::Antigravity, "agy"),
+        agent(AgentKind::Kimi, "kimi"),
+    ];
+    open_new_agent_dialog(&mut state, 0);
+
+    type_query(&mut state, "open");
+    assert_eq!(filtered(&state), Some(vec![1]), "命令命中");
+    assert_eq!(selected(&state), Some(0), "过滤后高亮回到首行");
+
+    apply_new_agent_key(&mut state, OverlayKey::Clear);
+    type_query(&mut state, "agy");
+    assert_eq!(filtered(&state), Some(vec![2]), "稳定名称命中");
+
+    apply_new_agent_key(&mut state, OverlayKey::Clear);
+    type_query(&mut state, "antigravity");
+    assert_eq!(filtered(&state), Some(vec![2]), "启动别名命中");
+
+    apply_new_agent_key(&mut state, OverlayKey::Clear);
+    type_query(&mut state, "kimi");
+    assert_eq!(filtered(&state), Some(vec![3]));
+}
+
+#[test]
+fn enter_creates_only_the_filtered_selection() {
+    let mut state = AppState::demo();
+    with_dialog(&mut state);
+
+    type_query(&mut state, "kimi");
+    apply_new_agent_key(&mut state, OverlayKey::Enter);
+
+    assert!(state.overlay.is_none());
+    assert_eq!(state.workspaces[0].tabs.len(), 2);
+    let pane = state.active_tab().layout.focus();
+    assert_eq!(
+        state
+            .pane_anywhere(pane)
+            .and_then(|target| target.pending_launch.as_ref())
+            .map(|launch| launch.command.as_str()),
+        Some("kimi")
+    );
+}
+
+#[test]
+fn enter_with_no_matches_keeps_dialog_open() {
+    let mut state = AppState::demo();
+    with_dialog(&mut state);
+
+    type_query(&mut state, "zzz");
+    assert_eq!(filtered(&state), Some(Vec::new()));
+    apply_new_agent_key(&mut state, OverlayKey::Enter);
+
+    assert!(
+        matches!(state.overlay, Some(Overlay::NewAgent(_))),
+        "无匹配时回车不得创建或关闭"
+    );
+    assert_eq!(state.workspaces[0].tabs.len(), 1);
+}
+
+#[test]
+fn backspace_edits_query_and_selection_returns_to_first_match() {
+    let mut state = AppState::demo();
+    with_dialog(&mut state);
+
+    type_query(&mut state, "openx");
+    assert_eq!(filtered(&state), Some(Vec::new()));
+    apply_new_agent_key(&mut state, OverlayKey::Backspace);
+    assert_eq!(filtered(&state), Some(vec![1]), "退格恢复命中");
+    assert_eq!(selected(&state), Some(0));
+
+    move_new_agent_selection(&mut state, 1);
+    assert_eq!(selected(&state), Some(0), "单条结果无法下移");
+
+    apply_new_agent_key(&mut state, OverlayKey::Clear);
+    assert_eq!(filtered(&state).map(|rows| rows.len()), Some(3));
+    assert_eq!(selected(&state), Some(0));
+}

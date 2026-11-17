@@ -582,7 +582,9 @@ impl AgentTitleDialog {
 pub struct NewAgentDialog {
     pub workspace: usize,
     pub agents: Vec<crate::detect::InstalledAgent>,
-    /// 当前高亮行；空列表时为 0 且不指向任何条目。
+    /// 搜索输入；空串显示全部候选。
+    pub query: TextInput,
+    /// 当前高亮行（`filtered_indices` 中的下标）；空列表时为 0 且不指向任何条目。
     pub selected: usize,
 }
 
@@ -592,21 +594,44 @@ impl NewAgentDialog {
         Self {
             workspace,
             agents,
+            query: TextInput::new(String::new()),
             selected: 0,
         }
     }
 
-    /// 当前高亮的候选；空列表返回 None。
+    /// 搜索命中的候选下标：稳定名称、实际命令与启动别名均参与大小写不敏感子串匹配。
+    pub fn filtered_indices(&self) -> Vec<usize> {
+        let query = self.query.text().trim().to_lowercase();
+        self.agents
+            .iter()
+            .enumerate()
+            .filter(|(_, agent)| {
+                query.is_empty()
+                    || crate::ui::text::agent_label(agent.kind)
+                        .to_lowercase()
+                        .contains(&query)
+                    || agent.command.to_lowercase().contains(&query)
+                    || crate::detect::launch_names(agent.kind)
+                        .iter()
+                        .any(|name| name.to_lowercase().contains(&query))
+            })
+            .map(|(index, _)| index)
+            .collect()
+    }
+
+    /// 当前高亮的候选；空列表或无匹配返回 None。
     pub fn selected_agent(&self) -> Option<&crate::detect::InstalledAgent> {
-        self.agents.get(self.selected)
+        let index = *self.filtered_indices().get(self.selected)?;
+        self.agents.get(index)
     }
 
     /// 按步长移动高亮（钳制，不循环）；返回是否变化。
     pub fn move_selection(&mut self, delta: isize) -> bool {
-        if self.agents.is_empty() {
+        let len = self.filtered_indices().len();
+        if len == 0 {
             return false;
         }
-        let last = self.agents.len() - 1;
+        let last = len - 1;
         let next = if delta.is_negative() {
             self.selected.saturating_sub(delta.unsigned_abs())
         } else {
@@ -621,7 +646,7 @@ impl NewAgentDialog {
 
     /// 选中一行（越界忽略）；返回是否变化。
     pub fn select(&mut self, index: usize) -> bool {
-        if index >= self.agents.len() || index == self.selected {
+        if index >= self.filtered_indices().len() || index == self.selected {
             return false;
         }
         self.selected = index;

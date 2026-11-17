@@ -63,7 +63,9 @@ fn user_visible_labels_are_clean_ascii() {
         MENU_AGENT_NEW,
         MENU_TITLE_AGENTS,
         NEW_AGENT_TITLE,
+        NEW_AGENT_SEARCH,
         NEW_AGENT_EMPTY,
+        NEW_AGENT_NO_MATCH,
         TOAST_AGENT_LAUNCH_FAILED,
         AGENT_TITLE_PLACEHOLDER,
         CONFIRM_DELETE_PAGE_TITLE,
@@ -207,7 +209,9 @@ fn agent_location_and_menu_labels_are_stable() {
     assert_eq!(MENU_AGENT_NEW, "New agent");
     assert_eq!(MENU_TITLE_AGENTS, "Agents");
     assert_eq!(NEW_AGENT_TITLE, "New agent");
+    assert_eq!(NEW_AGENT_SEARCH, "search agents");
     assert_eq!(NEW_AGENT_EMPTY, "No coding agents installed");
+    assert_eq!(NEW_AGENT_NO_MATCH, "No matching agents");
     assert_eq!(TOAST_AGENT_LAUNCH_FAILED, "Failed to start agent");
     assert_eq!(RENAME_AGENT_TITLE, "Edit title");
     assert_eq!(AGENT_TITLE_PLACEHOLDER, "title or pick recent");

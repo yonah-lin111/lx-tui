@@ -304,9 +304,11 @@ pub const MENU_AGENT_CLOSE: &str = "Close";
 pub const MENU_AGENT_NEW: &str = "New agent";
 /// Agents 列表空白区域右键菜单标题。
 pub const MENU_TITLE_AGENTS: &str = "Agents";
-/// New agent 弹窗标题与空态。
+/// New agent 弹窗标题、搜索占位与空态。
 pub const NEW_AGENT_TITLE: &str = "New agent";
+pub const NEW_AGENT_SEARCH: &str = "search agents";
 pub const NEW_AGENT_EMPTY: &str = "No coding agents installed";
+pub const NEW_AGENT_NO_MATCH: &str = "No matching agents";
 
 /// 提示词树右键菜单项。
 pub const MENU_PROMPT_NEW_PROMPT: &str = "New prompt";

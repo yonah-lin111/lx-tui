@@ -23,7 +23,7 @@ pub fn open_new_agent_dialog(state: &mut AppState, workspace: usize) {
     )));
 }
 
-/// 上下移动弹窗高亮；空列表 no-op。返回是否变化。
+/// 上下移动弹窗高亮（按搜索过滤后的列表）；无匹配 no-op。返回是否变化。
 pub fn move_new_agent_selection(state: &mut AppState, delta: isize) -> bool {
     let Some(Overlay::NewAgent(dialog)) = state.overlay.as_mut() else {
         return false;
@@ -68,7 +68,8 @@ pub fn create_selected_agent(state: &mut AppState) {
     create_agent_tab(state, workspace, &agent.command);
 }
 
-/// New agent 弹窗按键：Esc 关闭、上下移动、Enter 创建；其余按键忽略。
+/// New agent 弹窗按键：Esc 关闭、上下移动、Enter 创建；其余按键编辑搜索框，
+/// 文本变化后高亮回到过滤结果首行。
 pub fn apply_new_agent_key(state: &mut AppState, key: OverlayKey) {
     match key {
         OverlayKey::Esc => close_overlay(state),
@@ -79,7 +80,15 @@ pub fn apply_new_agent_key(state: &mut AppState, key: OverlayKey) {
             move_new_agent_selection(state, 1);
         }
         OverlayKey::Enter => create_selected_agent(state),
-        _ => {}
+        _ => {
+            let Some(Overlay::NewAgent(dialog)) = state.overlay.as_mut() else {
+                return;
+            };
+            let before = dialog.query.text().to_string();
+            if dialog.query.apply_edit_key(key) && dialog.query.text() != before {
+                dialog.selected = 0;
+            }
+        }
     }
 }
 

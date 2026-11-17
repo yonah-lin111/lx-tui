@@ -433,13 +433,13 @@ fn overlay_key(key: KeyEvent, kind: OverlayKind) -> Option<OverlayKey> {
             KeyCode::Char('d' | 'D') if ctrl => Some(OverlayKey::Remove),
             _ => overlay_text_edit_key(key),
         },
-        // New agent 单选列表：无文本输入，未知按键直接吞掉。
+        // New agent 单选列表：搜索框接受文本编辑，Enter 创建当前高亮，Esc 关闭。
         OverlayKind::NewAgent => match key.code {
             KeyCode::Esc => Some(OverlayKey::Esc),
             KeyCode::Enter => Some(OverlayKey::Enter),
             KeyCode::Up => Some(OverlayKey::Up),
             KeyCode::Down => Some(OverlayKey::Down),
-            _ => None,
+            _ => overlay_text_edit_key(key),
         },
         OverlayKind::Connect => match key.code {
             KeyCode::Esc => Some(OverlayKey::Esc),
