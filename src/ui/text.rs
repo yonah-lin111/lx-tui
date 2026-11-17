@@ -229,6 +229,9 @@ pub fn toast_copied_chars(count: usize) -> String {
 /// Web 控制台服务不可用时的提示。
 pub const TOAST_WEB_UNAVAILABLE: &str = "Web console unavailable";
 
+/// 新建 Agent 标签的启动命令写入 PTY 失败。
+pub const TOAST_AGENT_LAUNCH_FAILED: &str = "Failed to start agent";
+
 /// 提示词保存失败：内容保留脏状态，自动保存将重试。
 pub const TOAST_PROMPT_SAVE_FAILED: &str = "Prompt save failed; will retry";
 /// 提示词/文件夹移动失败（写库失败）。

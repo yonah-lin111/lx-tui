@@ -125,15 +125,15 @@ function renderPresetList() {
     return String(left.name || left.id).localeCompare(String(right.name || right.id), undefined, {sensitivity: 'base'});
   });
   if (items.length === 0) {
-    list.appendChild(element('p', 'nav-empty', 'No matching providers.'));
+    list.appendChild(domEl('p', 'nav-empty', 'No matching providers.'));
     return;
   }
   for (const preset of items) {
-    const row = element('button', 'nav-item' + (preset.id === selectedPresetId ? ' selected' : '') + (isPresetDirty(preset) ? ' dirty' : ''));
+    const row = domEl('button', 'nav-item' + (preset.id === selectedPresetId ? ' selected' : '') + (isPresetDirty(preset) ? ' dirty' : ''));
     row.type = 'button';
     row.dataset.key = preset.id;
-    row.appendChild(element('span', 'nav-name', preset.name || preset.id));
-    const status = element('span', 'nav-status' + (preset.connected ? ' connected' : ''), preset.connectionLabel || 'Not connected');
+    row.appendChild(domEl('span', 'nav-name', preset.name || preset.id));
+    const status = domEl('span', 'nav-status' + (preset.connected ? ' connected' : ''), preset.connectionLabel || 'Not connected');
     row.appendChild(status);
     row.onclick = () => selectPreset(preset.id);
     list.appendChild(row);
@@ -194,11 +194,11 @@ function renderPresetFormFields(preset) {
 }
 
 function presetField(preset, field, answers) {
-  const wrap = element('div');
-  wrap.appendChild(element('label', null, field.label + (field.required ? ' *' : '')));
+  const wrap = domEl('div');
+  wrap.appendChild(domEl('label', null, field.label + (field.required ? ' *' : '')));
   const options = Array.isArray(field.options) ? field.options : [];
   if (options.length) {
-    const selectHost = element('div', 'select-host');
+    const selectHost = domEl('div', 'select-host');
     wrap.appendChild(selectHost);
     createSelect(selectHost, {
       ariaLabel: field.label,
@@ -277,7 +277,7 @@ function renderPresetOAuth(preset) {
   const host = document.getElementById('preset-oauth-methods');
   while (host.firstChild) { host.removeChild(host.firstChild); }
   for (const method of presetMethods(preset, 'oauth')) {
-    const button = element('button', 'primary', 'Sign in with ' + (method.label || 'OAuth'));
+    const button = domEl('button', 'primary', 'Sign in with ' + (method.label || 'OAuth'));
     button.type = 'button';
     button.onclick = () => startPresetOAuth(method.id);
     host.appendChild(button);
@@ -293,9 +293,9 @@ function renderPresetOAuthPending() {
     return;
   }
   box.classList.remove('hidden');
-  box.appendChild(element('div', null, presetOAuth.instructions || 'Continue in your browser.'));
-  const row = element('div', 'preset-oauth-row');
-  const open = element('button', 'ghost', 'Open Browser');
+  box.appendChild(domEl('div', null, presetOAuth.instructions || 'Continue in your browser.'));
+  const row = domEl('div', 'preset-oauth-row');
+  const open = domEl('button', 'ghost', 'Open Browser');
   open.type = 'button';
   open.onclick = () => {
     if (presetOAuth && presetOAuth.url) {
@@ -304,34 +304,34 @@ function renderPresetOAuthPending() {
   };
   row.appendChild(open);
   if (presetOAuth.userCode) {
-    row.appendChild(element('span', 'preset-oauth-code', presetOAuth.userCode));
-    const copyCode = element('button', 'ghost', 'Copy Code');
+    row.appendChild(domEl('span', 'preset-oauth-code', presetOAuth.userCode));
+    const copyCode = domEl('button', 'ghost', 'Copy Code');
     copyCode.type = 'button';
     copyCode.onclick = () => copyPresetOAuth(presetOAuth.userCode);
     row.appendChild(copyCode);
   }
-  const copyLink = element('button', 'ghost', 'Copy Link');
+  const copyLink = domEl('button', 'ghost', 'Copy Link');
   copyLink.type = 'button';
   copyLink.onclick = () => copyPresetOAuth(presetOAuth.url);
   row.appendChild(copyLink);
-  const cancel = element('button', 'danger', 'Cancel');
+  const cancel = domEl('button', 'danger', 'Cancel');
   cancel.type = 'button';
   cancel.onclick = () => cancelPresetOAuth();
   row.appendChild(cancel);
   box.appendChild(row);
   if (presetOAuth.mode === 'code') {
-    const inline = element('div', 'preset-oauth-inline');
+    const inline = domEl('div', 'preset-oauth-inline');
     const input = document.createElement('input');
     input.type = 'text';
     input.placeholder = 'Paste authorization code';
     inline.appendChild(input);
-    const submit = element('button', 'primary', 'Submit Code');
+    const submit = domEl('button', 'primary', 'Submit Code');
     submit.type = 'button';
     submit.onclick = () => submitPresetOAuthCode(input.value);
     inline.appendChild(submit);
     box.appendChild(inline);
   }
-  box.appendChild(element('div', 'preset-oauth-url', presetOAuth.url || ''));
+  box.appendChild(domEl('div', 'preset-oauth-url', presetOAuth.url || ''));
 }
 
 function startPresetOAuth(methodId) {

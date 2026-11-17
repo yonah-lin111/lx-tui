@@ -1,4 +1,4 @@
-//! Agent 探测：前台进程名定身份、终端尾部文本定状态；纯算法、无 IO、无终端依赖。
+//! Agent 探测：前台进程名定身份、终端尾部文本定状态；安装探测经 platform 层查 PATH。
 
 /// 支持识别的 Agent 类型。
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -38,19 +38,67 @@ pub struct PaneAgentSnapshot {
 /// 状态仲裁扫描的尾部行数上限：Agent 状态提示总在屏幕尾部。
 pub const STATE_TAIL_LINES: usize = 24;
 
+/// 支持识别的 Agent 全量顺序：进程识别、安装探测与新建弹窗共用，避免各处枚举漂移。
+pub const ALL_AGENT_KINDS: [AgentKind; 8] = [
+    AgentKind::Claude,
+    AgentKind::Codex,
+    AgentKind::Gemini,
+    AgentKind::Antigravity,
+    AgentKind::OpenCode,
+    AgentKind::Cursor,
+    AgentKind::Pi,
+    AgentKind::Kimi,
+];
+
+/// 启动命令候选名（按优先级）：进程识别、安装探测与新建弹窗共用同一张表。
+pub const fn launch_names(kind: AgentKind) -> &'static [&'static str] {
+    match kind {
+        AgentKind::Claude => &["claude", "claude-code"],
+        AgentKind::Codex => &["codex"],
+        AgentKind::Gemini => &["gemini", "gemini-cli"],
+        AgentKind::Antigravity => &["agy", "antigravity", "antigravity-cli"],
+        AgentKind::OpenCode => &["opencode", "opencode2", "open-code"],
+        AgentKind::Cursor => &["cursor-agent", "cursor"],
+        AgentKind::Pi => &["pi", "pi-coding-agent"],
+        AgentKind::Kimi => &["kimi", "kimi-code"],
+    }
+}
+
+/// PATH 中已安装的 CLI Agent：种类与命中的可执行文件名。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct InstalledAgent {
+    pub kind: AgentKind,
+    /// PATH 中实际命中的候选名（如 `opencode2`），直接作为 shell 命令写入。
+    pub command: String,
+}
+
+/// 扫描 PATH 中已安装的 CLI Agent：按 [`ALL_AGENT_KINDS`] 固定顺序，每种至多一条。
+pub fn installed_agents() -> Vec<InstalledAgent> {
+    installed_agents_with(crate::platform::find_executable)
+}
+
+/// 安装探测的纯函数骨架：`find` 注入查找策略，测试不依赖开发机 PATH。
+fn installed_agents_with(
+    mut find: impl FnMut(&[&str]) -> Option<(String, std::path::PathBuf)>,
+) -> Vec<InstalledAgent> {
+    ALL_AGENT_KINDS
+        .iter()
+        .filter_map(|kind| {
+            let (command, _path) = find(launch_names(*kind))?;
+            Some(InstalledAgent {
+                kind: *kind,
+                command,
+            })
+        })
+        .collect()
+}
+
 /// 进程名识别 Agent 身份：按基名匹配，忽略大小写与脚本包装扩展名。
 pub fn identify_agent(process_name: &str) -> Option<AgentKind> {
-    match normalized_process_name(process_name).as_str() {
-        "claude" | "claude-code" => Some(AgentKind::Claude),
-        "codex" => Some(AgentKind::Codex),
-        "gemini" | "gemini-cli" => Some(AgentKind::Gemini),
-        "agy" | "antigravity" | "antigravity-cli" => Some(AgentKind::Antigravity),
-        "opencode" | "opencode2" | "open-code" => Some(AgentKind::OpenCode),
-        "cursor" | "cursor-agent" => Some(AgentKind::Cursor),
-        "pi" | "pi-coding-agent" => Some(AgentKind::Pi),
-        "kimi" | "kimi-code" => Some(AgentKind::Kimi),
-        _ => None,
-    }
+    let name = normalized_process_name(process_name);
+    ALL_AGENT_KINDS
+        .into_iter()
+        .find(|kind| launch_names(*kind).contains(&name.as_str()))
 }
 
 /// 由前台进程名与终端尾部行构造快照；进程不是已知 Agent 时返回 None。

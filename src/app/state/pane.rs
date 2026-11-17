@@ -2,6 +2,7 @@
 
 use std::collections::BTreeMap;
 use std::path::PathBuf;
+use std::time::Instant;
 
 pub use ratatui::layout::Direction;
 
@@ -29,6 +30,15 @@ pub struct Tab {
 pub enum PaneKind {
     Terminal,
     Placeholder,
+}
+
+/// 新建 Agent 标签的待写入命令：PTY 就绪前挂在窗格上，由事件循环到点写入 shell。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PendingAgentLaunch {
+    /// 写入 shell 的命令行（不含回车）。
+    pub command: String,
+    /// 计划写入时刻；给 shell 留出启动与首屏提示时间。
+    pub at: Instant,
 }
 
 /// 窗格主内容视图：lx 欢迎页与终端网格互斥。
@@ -118,6 +128,8 @@ pub struct Pane {
     /// 侧栏 Agents 中终端 Agent 的临时显示标题（仅内存；Agent 种类变化、
     /// 退出或窗格关闭时清除）。
     pub terminal_agent_title: Option<(AgentKind, AgentTitleOverride)>,
+    /// 新建 Agent 标签待写入的启动命令；PTY 就绪后由事件循环清空。
+    pub pending_launch: Option<PendingAgentLaunch>,
 }
 
 impl Tab {
@@ -202,6 +214,7 @@ impl Pane {
             cwd: None,
             agent: None,
             terminal_agent_title: None,
+            pending_launch: None,
         }
     }
 

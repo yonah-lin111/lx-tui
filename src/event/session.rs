@@ -2,12 +2,13 @@
 
 use std::collections::HashMap;
 use std::io;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use ratatui::layout::Rect;
 use tokio::sync::mpsc;
 
 use crate::app::state::{AppState, PaneKind, home_dir, workspace_label};
+use crate::app::toast::{Toast, ToastKind};
 use crate::app::update;
 use crate::config::Config;
 use crate::detect::{STATE_TAIL_LINES, pane_agent_snapshot};
@@ -15,6 +16,7 @@ use crate::pty::{PtyEvent, PtySession};
 use crate::tiling::{self, PaneId};
 use crate::tui::Tui;
 use crate::ui;
+use crate::ui::text;
 
 use super::AppEvent;
 
@@ -261,6 +263,71 @@ pub(crate) fn write_to_pane(sessions: &mut HashMap<PaneId, PtySession>, id: Pane
     {
         tracing::error!(pane = id.raw(), %error, "pty write failed");
     }
+}
+
+/// 到点向新建 Agent 标签的 shell 写入启动命令；返回状态是否变化。
+///
+/// 新建标签的 PTY 由 `reconcile_sessions` 懒启动，因此命令必须排队等待；写入失败
+/// 时清掉队列并提示，保留空白终端供用户手动输入。
+pub(crate) fn flush_pending_agent_launches(
+    state: &mut AppState,
+    sessions: &mut HashMap<PaneId, PtySession>,
+) -> bool {
+    flush_pending_agent_launches_at(state, sessions, Instant::now())
+}
+
+/// 到期判断与写入的显式时刻版本：测试不依赖真实时钟。
+pub(crate) fn flush_pending_agent_launches_at(
+    state: &mut AppState,
+    sessions: &mut HashMap<PaneId, PtySession>,
+    now: Instant,
+) -> bool {
+    let mut launches = Vec::new();
+    for id in state.all_pane_ids() {
+        let Some(pane) = state.pane_mut_anywhere(id) else {
+            continue;
+        };
+        if pane.kind != PaneKind::Terminal {
+            continue;
+        }
+        let Some(launch) = pane.pending_launch.as_ref() else {
+            continue;
+        };
+        if launch.at > now {
+            continue;
+        }
+        let command = launch.command.clone();
+        pane.pending_launch = None;
+        launches.push((id, command));
+    }
+    if launches.is_empty() {
+        return false;
+    }
+    for (id, command) in launches {
+        let bytes = agent_launch_bytes(&command);
+        let written = sessions
+            .get_mut(&id)
+            .is_some_and(|session| session.write(&bytes).is_ok());
+        if !written {
+            tracing::warn!(pane = id.raw(), %command, "agent launch write failed");
+            update::show_toast_at(
+                state,
+                Some(id),
+                Toast::new(
+                    ToastKind::Danger,
+                    text::TOAST_AGENT_LAUNCH_FAILED,
+                    Some(id),
+                    Instant::now(),
+                ),
+            );
+        }
+    }
+    true
+}
+
+/// 启动命令的写入字节：命令 + 回车（与 `input/encode.rs` 的 Enter 编码一致）。
+pub(crate) fn agent_launch_bytes(command: &str) -> Vec<u8> {
+    format!("{command}\r").into_bytes()
 }
 
 /// 保证当前工作区在列表可见范围内（创建/切换/关闭后调用）。

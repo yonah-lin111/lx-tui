@@ -201,6 +201,38 @@ pub(crate) fn handle_overlay_click(
                 None => None,
             }
         }
+        Some(Overlay::NewAgent(dialog)) => {
+            let Some(shell) = ui::overlay::new_agent_shell(screen, dialog.agents.len()) else {
+                update::close_overlay(state);
+                return None;
+            };
+            if modal_dismissed(state, &shell, column, row) {
+                return None;
+            }
+            let Some(Overlay::NewAgent(dialog)) = state.overlay.as_ref() else {
+                return None;
+            };
+            if let Some(index) = ui::overlay::new_agent_row_at(&shell, dialog, column, row) {
+                // 与 Prompt 列表一致：单击只选中，双击立即创建。
+                let double = update::new_agent_double_click(state, index, Instant::now());
+                update::set_new_agent_selection(state, index);
+                if double {
+                    return update::apply_overlay_key(state, OverlayKey::Enter);
+                }
+                return None;
+            }
+            match ui::overlay::new_agent_button_at(&shell, column, row) {
+                Some(ui::overlay::NewAgentButton::Create) => {
+                    update::apply_overlay_key(state, OverlayKey::Enter)
+                }
+                Some(ui::overlay::NewAgentButton::Cancel) => {
+                    update::close_overlay(state);
+                    None
+                }
+                // 内部空白：保持打开。
+                None => None,
+            }
+        }
         Some(Overlay::NewNode(_)) => {
             let Some(shell) = ui::overlay::new_node_shell(screen) else {
                 update::cancel_new_node(state);
@@ -533,6 +565,10 @@ pub(crate) fn overlay_input_rect(state: &AppState, screen: Rect) -> Option<Rect>
                 1,
             ))
         }
+        Overlay::NewAgent(d) => {
+            let shell = ui::overlay::new_agent_shell(screen, d.agents.len())?;
+            ui::overlay::new_agent_search_rect(&shell)
+        }
         Overlay::ReferencedFolderInput(i) if !i.validating => {
             let shell = ui::overlay::referenced_input_shell(screen)?;
             Some(Rect::new(
@@ -620,7 +656,15 @@ pub(crate) fn open_right_click_menu(
     }
     // 侧栏 Agents 条目：两行命中同一条目，打开编辑标题/关闭菜单。
     if let Some(index) = ui::agent_item_index_at(view, state, column, row) {
+        // 仅在真正打开 Agents 菜单时刷新安装快照，避免右键滚动条列触发无效 PATH 扫描。
+        state.installed_agents = crate::detect::installed_agents();
         update::open_agent_menu(state, index, (column, row));
+        return true;
+    }
+    // Agents 列表空白区域：只提供 `New agent`；滚动条列与折叠按钮不算空白。
+    if ui::agents_blank_at(view, state, column, row) {
+        state.installed_agents = crate::detect::installed_agents();
+        update::open_agents_blank_menu(state, state.active_workspace, (column, row));
         return true;
     }
     // 底部 recent 抽屉区域：右键一律吞掉，不穿透打开上方树/页列表/编辑器菜单。

@@ -13,6 +13,7 @@ use crate::ui::text;
 use super::agent_title::apply_agent_title_key;
 use super::interaction::show_toast;
 use super::menu::{activate_menu, close_overlay, move_menu_selection};
+use super::new_agent::apply_new_agent_key;
 use super::prompt::{apply_new_node_key, apply_save_draft_key, commit_prompt_rename};
 use super::trust::apply_trust_decision;
 use super::workspace::{create_workspace_with_cwd, parse_workspace_path};
@@ -40,6 +41,11 @@ pub fn apply_overlay_key(state: &mut AppState, key: OverlayKey) -> Option<(PaneI
     // Agents 标题：上下浏览 Recent 并回填，直接编辑转自定义，Enter 提交。
     if matches!(state.overlay, Some(Overlay::AgentTitle(_))) {
         apply_agent_title_key(state, key);
+        return None;
+    }
+    // New agent：搜索过滤、上下选择、Enter 创建、Esc 关闭。
+    if matches!(state.overlay, Some(Overlay::NewAgent(_))) {
+        apply_new_agent_key(state, key);
         return None;
     }
     // `/resume` 会话编辑模态：Enter 保存、^D 删除（二次确认）、Esc 关闭/退回。
@@ -204,7 +210,8 @@ pub fn apply_overlay_key(state: &mut AppState, key: OverlayKey) -> Option<(PaneI
                 | OverlayKind::ReferencedFolderDelete
                 | OverlayKind::ResumeSessionEdit
                 | OverlayKind::Connect
-                | OverlayKind::AgentTitle,
+                | OverlayKind::AgentTitle
+                | OverlayKind::NewAgent,
             )
             | None => None,
         },
@@ -559,6 +566,9 @@ pub fn apply_overlay_paste(state: &mut AppState, text: &str) -> bool {
             Overlay::AgentTitle(dialog) if inserted && dialog.input.text() != before => {
                 dialog.mark_custom();
             }
+            Overlay::NewAgent(dialog) if inserted && dialog.query.text() != before => {
+                dialog.normalize_selection();
+            }
             _ => {}
         }
         (
@@ -577,6 +587,10 @@ pub fn apply_overlay_paste(state: &mut AppState, text: &str) -> bool {
     }
     if matches!(state.overlay, Some(Overlay::NewWorkspace(_))) {
         state.workspace_history.new_workspace_confirming = false;
+    }
+    if matches!(state.overlay, Some(Overlay::NewAgent(_))) {
+        state.new_agent_click = None;
+        state.new_agent_scroll_drag = None;
     }
     true
 }
@@ -603,6 +617,7 @@ pub fn cut_overlay_selected_text(state: &mut AppState) -> Option<String> {
             Overlay::WorktreeOpen(dialog) => dialog.normalize_selection(),
             Overlay::Connect(panel) => panel.clear_error(),
             Overlay::AgentTitle(dialog) => dialog.mark_custom(),
+            Overlay::NewAgent(dialog) => dialog.normalize_selection(),
             _ => {}
         }
         (
@@ -622,6 +637,10 @@ pub fn cut_overlay_selected_text(state: &mut AppState) -> Option<String> {
     }
     if matches!(state.overlay, Some(Overlay::NewWorkspace(_))) {
         state.workspace_history.new_workspace_confirming = false;
+    }
+    if matches!(state.overlay, Some(Overlay::NewAgent(_))) {
+        state.new_agent_click = None;
+        state.new_agent_scroll_drag = None;
     }
     Some(text)
 }

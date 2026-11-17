@@ -3,7 +3,7 @@
 > 审查范围：`1efb9292..HEAD`（共 7 个提交：`396add67`、`66bc6345`、`4615dbb7`、`4ed1abbd`、`246b0b8b`、`02da544b`、`615ab627`），并对照 `dev`（`d5bf1251`）合入后的增量漂移
 > 工作区：`.worktrees/compact-layout`（分支 `feature/compact-layout`）
 > 依据规范：`AGENTS.md`、`docs/standards/code-writing-standards.md`、`docs/standards/project-directory-structure.md`、`docs/standards/tui-design-requirements.md`
-> 状态：**分支内 P0/P1/P2/P3-1 已修复并通过全量验证（5832 lib + 63 集成测试）；`P0-2` 留待合并 `dev` 时按清单对齐、`P3-2` 记录为既有超限债务；待用户 `cargo run` 手动验收**
+> 状态：**全部 P0/P1/P2/P3-1（含 `dev@d5bf1251` 合并冲突、`P0-2` 与边缘自动滚动面板宽度守卫）已解决并通过全量自动化验证（5901 lib + 64 集成测试），`P3-2` 记录为既有超限债务；用户授权按全量自动化验证通过合入 `dev`**
 
 ---
 
@@ -169,7 +169,7 @@
 | 级别 | 编号 | 修复内容 | 状态 | 关键回归测试 |
 |---|---|---|---|---|
 | P0 | P0-1 | `session::current_geometry` 与测试夹具恢复 `(!view.compact && state.prompt_left && state.panes_collapsed)` | 已修复并验证 | `desktop_collapsed_panes_exclude_panes_from_geometry_rects` |
-| P0 | P0-2 | 记录合入 `dev@d5bf1251` 时 `agent_menu`/`mouse_drag`/`overlay`/`workspace_history` 测试切 `desktop_config()` 与 `state.rs` 冲突清单 | 合并前清单（不擅改 `dev`） | — |
+| P0 | P0-2 | 合入 `dev@d5bf1251`：解决 `state.rs`/`selection/mod.rs`/`selection/tests.rs`/`overlay.rs` 冲突；`agent_menu`/`mouse_drag`/`workspace_history` 新增桌面用例切至 `desktop_config()`（`enter_in_new_agent_reveals_newly_created_tab_when_tab_bar_overflows` 固定 90 列桌面）；`autoscroll`/`wheel`/`drag`/`workspace_list_rect` 补齐面板宽度守卫与过渡清理 | 已修复并验证 | `new_agent_from_compact_left_panel_returns_to_chat_and_reveals_new_tab`、`compact_hidden_panel_ignores_drag_autoscroll_and_transition_clears_plans`、`event::tests::{agent_menu,mouse_drag,overlay,workspace_history}` |
 | P1 | P1-1 | `sync_compact_layout` 退出保留主动交互区展开及安全交还焦点；`ui/mod.rs`、`right_panel/mod.rs`、`footer.rs` 补 `!view.compact` | 已修复并验证 | `sync_exit_keeps_panes_expanded_when_prompt_left_and_panes_focused`、`sync_exit_from_collapsed_sidebar_moves_focus_to_right_when_panes_collapsed` |
 | P1 | P1-2 | `has_visible_selection` 按紧凑唯一可见容器隔离；切面板与打开页/Prompt 统一 `clear_selection` | 已修复并验证 | `has_visible_selection_isolates_hidden_containers_in_compact_mode`、`hidden_chat_selection_does_not_swallow_escape_in_fullscreen_left_panel` |
 | P1 | P1-3 | `controls::collapse_buttons` 与 `ui/mod.rs` 在全屏左栏保留 `Agents` 分区 `[▼]`/`[▲]` 折叠按钮 | 已修复并验证 | `compact_fullscreen_left_panel_keeps_agents_toggle_and_web_button`、`fullscreen_left_panel_keeps_agents_toggle_clickable` |
@@ -194,6 +194,6 @@ cargo test
 
 - `cargo fmt --check`：通过
 - `cargo clippy --all-targets -- -D warnings`：无警告通过
-- `cargo test`：
-  - 库测试（`src/lib.rs`）：**5832 passed; 0 failed; 6 ignored**
-  - 集成测试：**63 passed; 0 failed; 2 ignored**（覆盖 `cursor_steady`、`lx_paste`、`popup_border`、`prompt_border_title`、`prompt_copy`、`prompt_editor`、`prompt_management`、`prompt_panel_interaction`、`prompt_short_ref`、`prompt_template_commands`、`terminal_cursor`、`terminal_wheel`、`trust_prompt`、`web_assets`、`btw_verify`）
+- `cargo test`（合并 `dev@d5bf1251` 并完成冲突与 `P0-2` 对齐后）：
+  - 库测试（`src/lib.rs`）：**5901 passed; 0 failed; 6 ignored**
+  - 集成测试：**64 passed; 0 failed; 2 ignored**（覆盖 `cursor_steady`、`lx_paste`、`popup_border`、`prompt_border_title`、`prompt_copy`、`prompt_editor`、`prompt_management`、`prompt_panel_interaction`、`prompt_short_ref`、`prompt_template_commands`、`terminal_cursor`、`terminal_wheel`、`trust_prompt`、`web_assets`、`btw_verify`）

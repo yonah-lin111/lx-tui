@@ -1,4 +1,5 @@
 use std::path::PathBuf;
+use std::time::{Duration, Instant};
 
 use crate::app::actions::{EditorCommand, LxInput, OverlayKey};
 use crate::app::overlay::{
@@ -9,7 +10,7 @@ use crate::app::paste::encode_pasted_text;
 use crate::app::selection::{Selection, SelectionUnit};
 use crate::app::state::lx::chat::RequestKey;
 use crate::app::state::lx::{AskState, TaskPage, TaskTab};
-use crate::app::state::{AppState, ConnectPanel, PaneView, RightTab};
+use crate::app::state::{AppState, AutoscrollDirection, ConnectPanel, PaneView, RightTab};
 use crate::app::tooltip::TodoButton;
 use crate::app::update::{
     apply_editor, apply_lx_input, apply_overlay_key, apply_page_search, apply_prompt_search,
@@ -782,4 +783,115 @@ fn has_visible_selection_isolates_hidden_containers_in_compact_mode() {
     assert!(!has_visible_selection(&state));
     state.set_focus(crate::app::state::FocusedContainer::Panes);
     assert!(has_visible_selection(&state));
+}
+
+#[test]
+fn autoscroll_edge_has_two_row_bands_and_outside_distance() {
+    let rect = ratatui::layout::Rect::new(0, 10, 40, 20);
+    assert!(matches!(
+        crate::app::update::autoscroll_edge(rect, 10),
+        Some((AutoscrollDirection::Up, 0))
+    ));
+    assert!(matches!(
+        crate::app::update::autoscroll_edge(rect, 11),
+        Some((AutoscrollDirection::Up, 0))
+    ));
+    assert!(crate::app::update::autoscroll_edge(rect, 12).is_none());
+    assert!(crate::app::update::autoscroll_edge(rect, 27).is_none());
+    assert!(matches!(
+        crate::app::update::autoscroll_edge(rect, 28),
+        Some((AutoscrollDirection::Down, 0))
+    ));
+    assert!(matches!(
+        crate::app::update::autoscroll_edge(rect, 29),
+        Some((AutoscrollDirection::Down, 0))
+    ));
+    assert!(matches!(
+        crate::app::update::autoscroll_edge(rect, 7),
+        Some((AutoscrollDirection::Up, 3))
+    ));
+    assert!(matches!(
+        crate::app::update::autoscroll_edge(rect, 33),
+        Some((AutoscrollDirection::Down, 4))
+    ));
+}
+
+#[test]
+fn prompt_autoscroll_up_works_from_bottom_and_stops_at_top() {
+    let mut state = AppState::demo();
+    let prompt_id = state.prompt.id();
+    let content = (0..30)
+        .map(|index| format!("line {index}"))
+        .collect::<Vec<_>>()
+        .join("\n");
+    state.prompt.insert_str(&content);
+    state.prompt.resize(40, 6);
+    let cap = state.prompt.text_max_scroll();
+    assert!(cap > 0);
+    state.prompt.scroll_to(cap);
+
+    crate::app::update::begin_selection(&mut state, prompt_id, 4, 0);
+    crate::app::update::drag_selection(&mut state, prompt_id, 4, 2);
+
+    let inner = ratatui::layout::Rect::new(0, 0, 40, 6);
+    let now = Instant::now();
+    crate::app::update::arm_selection_autoscroll(&mut state, prompt_id, inner, (2, 0), now);
+    assert!(state.selection_autoscroll.is_some());
+
+    // 处于底部 (scroll == cap) 时，向上边缘自动滚动必须能成功上滚。
+    assert!(crate::app::update::tick_selection_autoscroll(
+        &mut state,
+        now + Duration::from_millis(31)
+    ));
+    assert_eq!(state.prompt.scroll(), cap - 1, "底部向上自动滚动不被卡死");
+
+    // 一直滚到顶部 scroll == 0 后，下一次 tick 必须返回 false 并停止，不得在顶部空转。
+    let mut t = now + Duration::from_millis(62);
+    let mut guard = 100;
+    while state.selection_autoscroll.is_some() && guard > 0 {
+        crate::app::update::tick_selection_autoscroll(&mut state, t);
+        t += Duration::from_millis(31);
+        guard -= 1;
+    }
+    assert_eq!(state.prompt.scroll(), 0);
+    assert!(
+        state.selection_autoscroll.is_none(),
+        "到达顶部后停止自动滚动"
+    );
+}
+
+#[test]
+fn arm_selection_autoscroll_preserves_next_at_on_lateral_move() {
+    let mut state = AppState::demo();
+    let prompt_id = state.prompt.id();
+    let content = (0..20)
+        .map(|index| format!("line {index}"))
+        .collect::<Vec<_>>()
+        .join("\n");
+    state.prompt.insert_str(&content);
+    state.prompt.resize(40, 6);
+    crate::app::update::begin_selection(&mut state, prompt_id, 1, 0);
+    let inner = ratatui::layout::Rect::new(0, 0, 40, 6);
+    let t0 = Instant::now();
+
+    crate::app::update::arm_selection_autoscroll(&mut state, prompt_id, inner, (2, 0), t0);
+    let expected_next = t0 + Duration::from_millis(30);
+    assert_eq!(
+        state.selection_autoscroll.expect("armed").next_at,
+        expected_next
+    );
+
+    // 10ms 后指针沿顶边横向移动，不得推迟已定下的 next_at。
+    crate::app::update::arm_selection_autoscroll(
+        &mut state,
+        prompt_id,
+        inner,
+        (10, 0),
+        t0 + Duration::from_millis(10),
+    );
+    assert_eq!(
+        state.selection_autoscroll.expect("still armed").next_at,
+        expected_next,
+        "同方向边缘内横向移动不得重置节拍"
+    );
 }

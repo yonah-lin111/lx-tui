@@ -544,6 +544,47 @@ fn agent_scrollbar_column_is_not_hittable() {
 }
 
 #[test]
+fn agents_blank_at_covers_empty_rows_but_not_items_or_scrollbar() {
+    let mut state = AppState::demo();
+    let view = view_for(&state);
+    let sections = layout::sidebar_sections(view.left_panel, false).expect("sections are visible");
+    assert!(
+        agents_blank_at(&view, &state, sections.agents.x, sections.agents.y),
+        "空列表的整块内容区都是空白"
+    );
+    assert!(agents_blank_at(
+        &view,
+        &state,
+        sections.agents.x,
+        sections.agents.bottom() - 1
+    ));
+    assert!(
+        !agents_blank_at(
+            &view,
+            &state,
+            sections.agents.x,
+            sections.agents.y.saturating_sub(1)
+        ),
+        "分区外不命中"
+    );
+
+    add_agent_tabs(&mut state, 20);
+    let bar = agent_scrollbar(&view, &state).expect("scrollbar is visible");
+    assert!(
+        !agents_blank_at(&view, &state, sections.agents.x, sections.agents.y),
+        "条目行不是空白"
+    );
+    assert!(
+        !agents_blank_at(&view, &state, bar.track.x, sections.agents.y),
+        "滚动条列不是空白"
+    );
+    assert!(
+        !agents_blank_at(&view, &state, sections.agents.right(), sections.agents.y),
+        "分区右边界外不命中"
+    );
+}
+
+#[test]
 fn collapsed_agents_section_is_not_hittable() {
     let mut state = AppState::demo();
     add_agent(&mut state, AgentKind::Kimi, AgentState::Idle);

@@ -85,6 +85,7 @@ pub(crate) fn menu_title(state: &AppState, menu: &Menu) -> String {
         OverlayTarget::TodoBlank => text::MENU_TITLE_TODO_BLANK.to_string(),
         // 标题可能被用户改成很长或与第二行重复；边框标题保持稳定身份名，便于识别目标。
         OverlayTarget::Agent { kind, .. } => text::sidebar_agent_label(*kind).to_string(),
+        OverlayTarget::AgentsBlank { .. } => text::MENU_TITLE_AGENTS.to_string(),
     }
 }
 
@@ -186,6 +187,7 @@ pub(crate) fn menu_labels(menu: &Menu) -> Vec<&'static str> {
                 }
                 MenuCommand::DeleteMissingWorkspaces => text::MENU_DELETE_MISSING_WORKSPACES,
                 MenuCommand::EditAgentTitle => text::MENU_AGENT_EDIT_TITLE,
+                MenuCommand::NewAgent => text::MENU_AGENT_NEW,
                 MenuCommand::RemoveAgentTitle => {
                     let bound = matches!(menu.target, OverlayTarget::Agent { bound: true, .. });
                     if bound {

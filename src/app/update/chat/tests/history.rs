@@ -44,17 +44,27 @@ fn history_scroll_clamps_and_tracks_follow_bottom() {
     let mut state = AppState::demo();
     lx_with_messages(&mut state, 3);
     let pane = state.active_tab().layout.focus();
-    // 总行数 3 条消息 + 3 个消息间空行 = 6；视口 2 行 → 最大顶部行 4。
-    assert!(scroll_lx_history(&mut state, pane, 999, 6, 2), "向下滚动");
-    let chat = &state.pane_anywhere(pane).expect("pane").lx.chat;
-    assert_eq!(chat.history_scroll, 4, "钳到最大顶部行");
-    assert!(chat.follow_bottom, "滚到底恢复跟随");
+    // 初始已处于 follow_bottom == true：在底部继续向下滚应返回 false（防止自动滚动在底部死循环）。
+    assert!(
+        !scroll_lx_history(&mut state, pane, 999, 6, 2),
+        "已贴底时向下滚动不得伪造移动"
+    );
+    // 单屏（total <= visible）贴底时向下滚动同样返回 false。
+    assert!(!scroll_lx_history(&mut state, pane, 1, 2, 6));
     // 向上滚动离开底部。
     assert!(scroll_lx_history(&mut state, pane, -1, 6, 2));
     let chat = &state.pane_anywhere(pane).expect("pane").lx.chat;
     assert_eq!(chat.history_scroll, 3);
     assert!(!chat.follow_bottom, "离开底部不再跟随");
-    // 再向上到顶。
+    // 从非贴底位置向下滚动到底，应返回 true 并恢复跟随。
+    assert!(
+        scroll_lx_history(&mut state, pane, 999, 6, 2),
+        "滚到底恢复跟随"
+    );
+    let chat = &state.pane_anywhere(pane).expect("pane").lx.chat;
+    assert_eq!(chat.history_scroll, 4, "钳到最大顶部行");
+    assert!(chat.follow_bottom, "滚到底恢复跟随");
+    // 再次向上到顶。
     assert!(scroll_lx_history(&mut state, pane, -999, 6, 2));
     assert_eq!(
         state
@@ -65,6 +75,29 @@ fn history_scroll_clamps_and_tracks_follow_bottom() {
             .history_scroll,
         0
     );
+}
+
+#[test]
+fn history_scroll_supports_non_message_history_such_as_notices() {
+    let mut state = AppState::demo();
+    let pane = state.active_tab().layout.focus();
+    state
+        .pane_mut_anywhere(pane)
+        .expect("pane")
+        .lx
+        .chat
+        .notices
+        .push(crate::app::state::RewindNoticeView {
+            id: "notice-1".into(),
+            sequence: 0,
+            kind: "rewind".into(),
+            restored_file_count: 1,
+            files_already_restored: false,
+        });
+    assert!(scroll_lx_history(&mut state, pane, -1, 10, 4));
+    let chat = &state.pane_anywhere(pane).expect("pane").lx.chat;
+    assert_eq!(chat.history_scroll, 5);
+    assert!(!chat.follow_bottom);
 }
 
 #[test]

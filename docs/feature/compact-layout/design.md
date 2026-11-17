@@ -1,6 +1,6 @@
 # 窄终端紧凑布局（Compact Layout）— 详细设计（v2）
 
-> 状态：**已完成实现与 Review 修复（P0–P3），待全量验证与用户 `cargo run` 手动验收**
+> 状态：**已完成实现、Review 修复、`dev@d5bf1251` 合并冲突与 `P0-2` 对齐，全量自动化验证通过并合入 `dev`**
 >
 > 参考：opencode-dev TUI 以 `dimensions().width - verticalTabsWidth > 120`（总宽约 162 列）判定宽屏；lx 采用 **总宽 160** 作为紧凑阈值，使半屏偏宽终端也能触发紧凑布局。
 
@@ -149,9 +149,10 @@ pub enum CompactPanel {
 
 - 鼠标按下：顶部栏内先判 `[ws]` / `[panel]`；点在 tab strip 内继续走原 tab 命中，点在间隙或空白则吞掉；
 - 悬停：原 tab hover 逻辑直接复用；紧凑模式不产生侧栏/prompt 分割线 hover，不触发 `tooltip::target_at`；
-- 滚轮与 Todo 视口：原 tab 条不处理滚轮；`event/mod.rs` 仅在右栏展开且为 `RightTab::Todo` 时调用 `resolve_todo_viewport`，避免隐藏状态下按 1 列宽度污染 `state.todo.scroll`；
+- 滚轮与 Todo 视口：原 tab 条不处理滚轮；`event/mod.rs` 仅在右栏展开且为 `RightTab::Todo` 时调用 `resolve_todo_viewport`，避免隐藏状态下按 1 列宽度污染 `state.todo.scroll`；`autoscroll`、`drag.rs`、`wheel.rs` 与 `workspace_list_rect` 按可见面板宽度（`> COLLAPSED_STRIP`）守卫，防止隐藏面板触发拖拽/滚轮自动滚动；
 - 缓存与缩放：`session::sync_layout_geometry` 按 `state.all_pane_ids()` 保留 `ui_cache`（全屏左/右栏期间不误清隐藏 `lx` 窗格缓存），并在终端尺寸或 `compact` 状态变化时钳制 `workspace_scroll`、调用 `reveal_active_tab` 及重置指针形状；
 - 键盘：`event/input.rs` 在 workspace history 处理后、通用 `input::route` 前拦截左栏裸 Esc；
+- 模态创建 Agent：全屏左栏右键 `Agents` 空白区打开 `New agent` 菜单/弹窗创建新终端标签后，焦点交回 `Panes` 自动返回 Chat 并滚入激活标签；
 - `Resize` 事件置 dirty，下一帧重新同步紧凑状态与 PTY 几何。
 
 ## 8. Toast
@@ -179,9 +180,9 @@ pub enum CompactPanel {
 
 ### 修改
 
-- 布局与 UI 渲染：`src/ui/layout.rs`、`src/ui/mod.rs`、`src/ui/tab_bar.rs`、`src/ui/controls/{exit,footer,panels}.rs`、`src/ui/left_panel/history.rs`、`src/ui/right_panel/mod.rs`、`src/ui/main_content/lx/history/cache.rs`、`src/ui/tooltip.rs`、`src/ui/text.rs`
-- 状态与更新：`src/app/state.rs`、`src/app/update.rs`、`src/app/update/{editor,selection,workspace,worktree}.rs`、`src/app/update/prompt/recent.rs`
-- 事件循环与输入：`src/event/mod.rs`、`src/event/session.rs`、`src/event/input.rs`、`src/event/mouse/{press,hover,drag}.rs`
+- 布局与 UI 渲染：`src/ui/layout.rs`、`src/ui/mod.rs`、`src/ui/tab_bar.rs`、`src/ui/controls/{exit,footer,panels}.rs`、`src/ui/left_panel/{mod,history}.rs`、`src/ui/right_panel/mod.rs`、`src/ui/main_content/lx/history/cache.rs`、`src/ui/tooltip.rs`、`src/ui/text.rs`
+- 状态与更新：`src/app/state.rs`、`src/app/update.rs`、`src/app/update/{editor,workspace,worktree}.rs`、`src/app/update/prompt/recent.rs`、`src/app/update/selection/mod.rs`
+- 事件循环与输入：`src/event/mod.rs`、`src/event/session.rs`、`src/event/input.rs`、`src/event/mouse/{autoscroll,drag,hover,press,wheel}.rs`
 - 配置与设置：`src/config/mod.rs`、`src/settings/service/handlers.rs`、`src/cli/{args,help,settings}.rs`、`assets/{web.html,settings.js}`
 - 规范文档：`docs/standards/tui-design-requirements.md`
 - 单元测试与测试夹具：`src/config/tests.rs`、`src/settings/service/logs/tests.rs`、`src/cli/tests/config_domains_tests.rs`、`src/app/update/selection/tests.rs`、`src/ui/{test_support,tests}.rs`、`src/ui/controls/tests.rs`、`src/ui/layout/tests.rs`、`src/ui/left_panel/tests.rs`、`src/ui/right_panel/{tests,todo/tests}.rs`、`src/ui/tab_bar/tests.rs`、`src/ui/text/tests.rs`、`src/ui/toast/tests.rs`、`src/ui/tooltip/tests.rs`、`src/event/tests.rs`、`src/event/tests/{test_support,agent_menu,focus_and_paste,lx_ask_task,lx_toast,lx_view,mouse_click,mouse_drag,overlay,prompt_editor,prompt_pages,prompt_recent,prompt_tree,terminal,todo,workspace_history}.rs`
@@ -191,10 +192,10 @@ pub enum CompactPanel {
 
 - 阈值：160 → compact，161 → desktop；忽略旧配置 `narrow_width`；CLI/API 不暴露且拒绝 `--narrow-width`；
 - 几何：单行顶部栏、按钮位于两端、极窄 `< 11`/`< 9` 按钮与分隔符互不重叠、tab strip 位于中间、左/右全屏 body、右栏底边框全宽身份标签；
-- 状态：进入快照三项并清拖拽、退出恢复（含 `prompt_left && panes_collapsed` 与折叠侧栏交回右栏）、`Toggle*` 紧凑忽略、`commit_worktree_open` 回 Chat、`focus_prompt` 提交 Todo 编辑、`has_visible_selection` 隔离隐藏容器选区；
-- 按钮与控制：左/右 toggle、左栏保留 `Agents` 折叠按钮与 `[WEB]`、tab 点击返回并切换、Esc 仅关左栏（历史模式下双次 Esc）；
+- 状态：进入快照三项并清拖拽（含 `drag_autoscroll`/`lx_selection_autoscroll`）、退出恢复（含 `prompt_left && panes_collapsed` 与折叠侧栏交回右栏）、`Toggle*` 紧凑忽略、`commit_worktree_open` 回 Chat、`focus_prompt` 提交 Todo 编辑、`has_visible_selection` 隔离隐藏容器选区；
+- 按钮与控制：左/右 toggle、左栏保留 `Agents` 折叠按钮与 `[WEB]`、全屏左栏 `New agent` 创建返回 Chat 并滚入激活标签、tab 点击返回并切换、Esc 仅关左栏（历史模式下双次 Esc）；
 - tab 条：紧凑模式无 `[EXIT]`、`[+]` 新建、溢出滚动、缩窄自动 reveal 激活标签；
-- 命中与缓存：顶部栏间隙吞点击、隐藏外框控件无命中、`tooltip::target_at`/hover 禁用、桌面折叠主区不入 PTY 几何、全屏面板不误删 `lx` 缓存、隐藏 Todo 不写乱滚动；
+- 命中与缓存：顶部栏间隙吞点击、隐藏外框控件无命中、`tooltip::target_at`/hover 禁用、隐藏右栏忽略 `drag_autoscroll`、桌面折叠主区不入 PTY 几何、全屏面板不误删 `lx` 缓存、隐藏 Todo 不写乱滚动；
 - Toast：紧凑模式复用桌面浮框（锚点容器内居中 / 屏幕顶部 `y=1` 居中 / 模态打开时全局顶部 `y=1`）；
 - 渲染：`[ws]`/`[panel]`、分隔符 `│`、tab、活动按钮实心高亮。
 

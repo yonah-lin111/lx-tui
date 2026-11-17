@@ -17,6 +17,9 @@ pub use environment::{
     timezone_name,
 };
 
+mod executable;
+pub use executable::find_executable;
+
 mod mcp_process;
 pub use mcp_process::mcp_command;
 

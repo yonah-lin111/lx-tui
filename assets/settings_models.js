@@ -205,15 +205,15 @@ function renderProviders() {
       || String(provider.id || '').toLowerCase().includes(query);
   });
   if (providers.length === 0) {
-    list.appendChild(element('p', 'nav-empty', query ? 'No matching providers.' : 'No providers configured.'));
+    list.appendChild(domEl('p', 'nav-empty', query ? 'No matching providers.' : 'No providers configured.'));
   }
   for (const provider of providers) {
     const dirty = isProviderDirty(provider);
-    const row = element('button', 'nav-item' + (provider.key === selectedProviderKey ? ' selected' : '') + (dirty ? ' dirty' : ''));
+    const row = domEl('button', 'nav-item' + (provider.key === selectedProviderKey ? ' selected' : '') + (dirty ? ' dirty' : ''));
     row.type = 'button';
     row.dataset.key = provider.key;
-    const name = element('span', 'nav-name', provider.name || provider.id);
-    const tag = element('span', 'tag', provider.type + (provider.apiKey ? '' : ' · no key') + (provider.enabled ? '' : ' · off'));
+    const name = domEl('span', 'nav-name', provider.name || provider.id);
+    const tag = domEl('span', 'tag', provider.type + (provider.apiKey ? '' : ' · no key') + (provider.enabled ? '' : ' · off'));
     row.appendChild(name);
     row.appendChild(tag);
     row.onclick = () => selectProvider(provider.key);

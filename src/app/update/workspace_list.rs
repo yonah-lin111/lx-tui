@@ -166,6 +166,7 @@ pub fn drag_workspace_to(state: &mut AppState, target: usize) -> bool {
 
 /// 结束拖动排序；真正移动过时把相对次序回写历史条目并持久化全局顺序。
 pub fn end_workspace_drag(state: &mut AppState) {
+    state.drag_autoscroll = None;
     let persist = state.workspace_drag_moved;
     state.workspace_drag = None;
     state.workspace_dragging = false;

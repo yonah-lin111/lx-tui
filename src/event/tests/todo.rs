@@ -1176,7 +1176,7 @@ fn mouse_drag_todo_onto_another_row_merges_into_group_without_breaking_double_cl
 }
 
 #[test]
-fn tab_switch_collapse_wheel_and_right_click_abort_todo_drag_cleanly() {
+fn tab_switch_collapse_wheel_and_right_click_handle_todo_drag_cleanly() {
     let mut state = demo_terminal();
     let (config, geo) = toolbar_geometry(&mut state);
     let visible = crate::ui::right_panel::todo::visible_rows(geo.view.right_panel);
@@ -1201,7 +1201,7 @@ fn tab_switch_collapse_wheel_and_right_click_abort_todo_drag_cleanly() {
     let mut cache = ui::RenderCache::default();
     let mut dirty = false;
 
-    // 1. 按下第 0 行并拖到第 1 行，期间滚轮事件被拦截、不改变 scroll。
+    // 1. 按下第 0 行并拖到第 1 行；滚轮只滚视口，落点按滚动后的指针行重算。
     handle_terminal_event(
         mouse(MouseEventKind::Down(MouseButton::Left), list.x + 1, list.y),
         &mut state,
@@ -1234,7 +1234,20 @@ fn tab_switch_collapse_wheel_and_right_click_abort_todo_drag_cleanly() {
         &mut cache,
         &mut dirty,
     );
-    assert_eq!(state.todo.scroll(), 0, "拖拽待办行期间禁止滚轮改写视口");
+    assert_eq!(
+        state.todo.scroll(),
+        usize::try_from(crate::app::update::WHEEL_LINES).expect("wheel lines"),
+        "拖拽待办行期间滚轮只改视口"
+    );
+    assert_eq!(
+        state.todo_drag.as_ref().and_then(|drag| drag.target_index),
+        Some(4),
+        "落点按滚动后的指针行重算"
+    );
+    assert!(
+        state.todo_drag.as_ref().is_some_and(|drag| drag.dragging),
+        "滚动让指针原地跨行，拖拽保持置臂"
+    );
 
     // 2. 拖动期间右键点击：立即取消 todo_drag，后续左键松开不会把两行合并。
     handle_terminal_event(

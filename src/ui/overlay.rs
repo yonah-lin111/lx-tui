@@ -4,6 +4,7 @@ mod agent_title;
 mod connect;
 pub mod dialog;
 pub mod menu;
+mod new_agent;
 mod referenced;
 pub mod save_draft;
 mod worktree;
@@ -16,6 +17,10 @@ pub use connect::{
 };
 pub use dialog::*;
 pub use menu::*;
+pub use new_agent::{
+    NewAgentButton, new_agent_button_at, new_agent_max_rows, new_agent_row_at, new_agent_scrollbar,
+    new_agent_search_rect, new_agent_shell, new_agent_visible_start,
+};
 pub use referenced::{
     ReferencedInputButton, ReferencedMenuLayout, ReferencedSearchLayout,
     referenced_input_button_at, referenced_input_shell, referenced_menu_layout,
@@ -34,6 +39,7 @@ pub(crate) use dialog::BUTTON_GAP;
 pub(crate) use save_draft::SAVE_DRAFT_BUTTONS;
 
 use agent_title::render_agent_title;
+use new_agent::render_new_agent;
 use referenced::{
     render_referenced_input, render_referenced_menu, render_referenced_menu_footer,
     render_referenced_search, render_referenced_search_footer,
@@ -94,6 +100,7 @@ pub fn render(frame: &mut Frame<'_>, screen: Rect, state: &AppState) -> Option<(
         }
         Overlay::Connect(panel) => render_connect(frame, screen, panel),
         Overlay::AgentTitle(dialog) => render_agent_title(frame, screen, dialog),
+        Overlay::NewAgent(dialog) => render_new_agent(frame, screen, dialog),
     }
 }
 

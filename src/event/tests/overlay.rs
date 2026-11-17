@@ -1,6 +1,8 @@
 use super::test_support::*;
 use super::*;
 
+use crate::app::overlay::{MenuCommand, OverlayTarget};
+
 #[test]
 fn mouse_right_click_tab_opens_tab_menu() {
     let config = desktop_config();
@@ -152,7 +154,7 @@ fn mouse_right_click_workspace_blank_retargets_open_menu() {
 }
 
 #[test]
-fn mouse_right_click_agents_blank_does_not_open_menu() {
+fn mouse_right_click_agents_blank_opens_new_agent_menu() {
     let config = desktop_config();
     let mut state = demo_terminal();
     let geo = geometry(&state, &config, Rect::new(0, 0, 120, 30));
@@ -172,8 +174,17 @@ fn mouse_right_click_agents_blank_does_not_open_menu() {
         &mut dirty,
     );
 
-    assert!(state.overlay.is_none());
-    assert!(!dirty);
+    let Some(Overlay::Menu(menu)) = state.overlay.as_ref() else {
+        panic!("agents blank menu overlay expected");
+    };
+    assert_eq!(
+        menu.target,
+        OverlayTarget::AgentsBlank { workspace: 0 },
+        "空白区域右键必须固化当前工作区"
+    );
+    assert_eq!(menu.commands, vec![MenuCommand::NewAgent]);
+    assert_eq!(menu.anchor, (column, row));
+    assert!(dirty);
 }
 
 #[test]

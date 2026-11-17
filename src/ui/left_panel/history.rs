@@ -250,6 +250,10 @@ fn history_section_rect(view: &layout::ViewLayout, state: &AppState) -> Option<R
 }
 
 /// 历史列表条目区矩形（扣除顶部搜索框与分割线 2 行）。
+pub fn workspace_history_list_rect(view: &layout::ViewLayout, state: &AppState) -> Option<Rect> {
+    history_list_rect(view, state)
+}
+
 fn history_list_rect(view: &layout::ViewLayout, state: &AppState) -> Option<Rect> {
     let section = history_section_rect(view, state)?;
     if section.height <= LIST_HEADER_HEIGHT {

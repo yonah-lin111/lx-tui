@@ -79,6 +79,7 @@ pub fn drag_todo_to(state: &mut AppState, display: Option<usize>) -> bool {
 
 /// 列表行鼠标左键释放：若已跨行拖拽且落点有效则将源条目并入目标条目/聚合组。
 pub fn finish_todo_drag(state: &mut AppState) -> bool {
+    state.drag_autoscroll = None;
     let Some(drag) = state.todo_drag.take() else {
         return false;
     };

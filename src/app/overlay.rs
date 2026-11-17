@@ -43,6 +43,8 @@ pub enum OverlayKind {
     Connect,
     /// 侧栏 Agents 标题编辑：自定义输入 + Recent 页选择。
     AgentTitle,
+    /// 侧栏 Agents：选择已安装的 CLI Agent 新建标签。
+    NewAgent,
 }
 
 /// 浮层：同一时刻最多一个，由 `Option` 保证。
@@ -66,6 +68,8 @@ pub enum Overlay {
     Connect(Box<crate::app::state::ConnectPanel>),
     /// 侧栏 Agents 标题编辑：自定义输入 + Recent 页选择。
     AgentTitle(AgentTitleDialog),
+    /// 侧栏 Agents：选择已安装的 CLI Agent 新建标签。
+    NewAgent(NewAgentDialog),
 }
 
 impl Overlay {
@@ -87,6 +91,7 @@ impl Overlay {
             Self::ResumeSessionEdit(_) => OverlayKind::ResumeSessionEdit,
             Self::Connect(_) => OverlayKind::Connect,
             Self::AgentTitle(_) => OverlayKind::AgentTitle,
+            Self::NewAgent(_) => OverlayKind::NewAgent,
         }
     }
 
@@ -104,6 +109,7 @@ impl Overlay {
             Self::ResumeSessionEdit(r) => Some(&r.input),
             Self::Connect(panel) if panel.has_text_input() => Some(&panel.input),
             Self::AgentTitle(dialog) => Some(&dialog.input),
+            Self::NewAgent(dialog) => Some(&dialog.query),
             _ => None,
         }
     }
@@ -124,6 +130,7 @@ impl Overlay {
                 Some(&mut panel.input)
             }
             Self::AgentTitle(dialog) => Some(&mut dialog.input),
+            Self::NewAgent(dialog) => Some(&mut dialog.query),
             _ => None,
         }
     }
@@ -147,6 +154,7 @@ impl Overlay {
             Self::ResumeSessionEdit(r) => r.input.clear_selection(),
             Self::Connect(panel) => panel.input.clear_selection(),
             Self::AgentTitle(dialog) => dialog.input.clear_selection(),
+            Self::NewAgent(dialog) => dialog.query.clear_selection(),
             _ => {}
         }
     }
@@ -380,6 +388,10 @@ pub enum OverlayTarget {
         /// 打开菜单时是否带 Recent 绑定；固化移除项文案，避免菜单存续期间翻转。
         bound: bool,
     },
+    /// 侧栏 Agents 列表空白区域。
+    AgentsBlank {
+        workspace: usize,
+    },
 }
 
 /// 菜单命令；文案由 `ui/text.rs` 按命令映射，app 层不持有用户可见字符串。
@@ -445,6 +457,8 @@ pub enum MenuCommand {
     EditAgentTitle,
     /// 侧栏 Agents：移除标题覆盖（含 Recent 页绑定）。
     RemoveAgentTitle,
+    /// 侧栏 Agents：选择已安装的 CLI Agent 并新建标签启动。
+    NewAgent,
     /// 侧栏 Agents：关闭条目（lx 关会话视图，终端 Agent 关窗格）。
     CloseAgent,
 }
@@ -561,6 +575,121 @@ impl AgentTitleDialog {
     pub fn clear_input(&mut self) {
         self.input.clear();
         self.mark_custom();
+    }
+}
+
+/// 侧栏 Agents：选择已安装的 CLI Agent 新建标签。
+///
+/// 候选在打开时按 PATH 扫描结果快照，弹窗存续期间不重新扫描；目标工作区随菜单固定。
+#[derive(Debug)]
+pub struct NewAgentDialog {
+    pub workspace: usize,
+    pub agents: Vec<crate::detect::InstalledAgent>,
+    /// 搜索输入；空串显示全部候选。
+    pub query: TextInput,
+    /// 当前高亮行（`filtered_indices` 中的下标）；空列表时为 0 且不指向任何条目。
+    pub selected: usize,
+    /// 滚轮/滚动条滚动后的显式窗口起点；键盘移动、点选或改搜索词后清空。
+    pub viewport: Option<usize>,
+}
+
+impl NewAgentDialog {
+    /// 构造弹窗：默认高亮第一项。
+    pub fn new(workspace: usize, agents: Vec<crate::detect::InstalledAgent>) -> Self {
+        Self {
+            workspace,
+            agents,
+            query: TextInput::new(String::new()),
+            selected: 0,
+            viewport: None,
+        }
+    }
+
+    /// 搜索命中的候选下标：实际命令与全部启动别名（含稳定名称）参与大小写不敏感子串匹配。
+    pub fn filtered_indices(&self) -> Vec<usize> {
+        let query = self.query.text().trim().to_lowercase();
+        self.agents
+            .iter()
+            .enumerate()
+            .filter(|(_, agent)| {
+                query.is_empty()
+                    || agent.command.to_lowercase().contains(&query)
+                    || crate::detect::launch_names(agent.kind)
+                        .iter()
+                        .any(|name| name.to_lowercase().contains(&query))
+            })
+            .map(|(index, _)| index)
+            .collect()
+    }
+
+    /// 搜索词变更后重置高亮到过滤结果首行，并恢复窗口自动跟随。
+    pub fn normalize_selection(&mut self) {
+        self.selected = 0;
+        self.viewport = None;
+    }
+
+    /// 当前高亮的候选；空列表或无匹配返回 None。
+    pub fn selected_agent(&self) -> Option<&crate::detect::InstalledAgent> {
+        let index = *self.filtered_indices().get(self.selected)?;
+        self.agents.get(index)
+    }
+
+    /// 按步长移动高亮（钳制，不循环）；返回是否变化。
+    pub fn move_selection(&mut self, delta: isize) -> bool {
+        let len = self.filtered_indices().len();
+        if len == 0 {
+            self.viewport = None;
+            return false;
+        }
+        let last = len - 1;
+        let next = if delta.is_negative() {
+            self.selected.min(last).saturating_sub(delta.unsigned_abs())
+        } else {
+            self.selected
+                .min(last)
+                .saturating_add(delta.unsigned_abs())
+                .min(last)
+        };
+        let moved = next != self.selected || self.viewport.is_some();
+        self.selected = next;
+        self.viewport = None;
+        moved
+    }
+
+    /// 选中一行（越界忽略）；返回是否变化。
+    pub fn select(&mut self, index: usize) -> bool {
+        if index >= self.filtered_indices().len() {
+            return false;
+        }
+        let changed = index != self.selected || self.viewport.is_some();
+        self.selected = index;
+        self.viewport = None;
+        changed
+    }
+
+    /// 滚轮滚动过滤列表视口（高亮不变，越界钳制）；返回是否变化。
+    pub fn scroll_viewport(&mut self, delta: isize, start: usize, visible: usize) -> bool {
+        let visible = visible.max(1);
+        let max_start = self.filtered_indices().len().saturating_sub(visible);
+        let current = self.viewport.unwrap_or(start).min(max_start);
+        let next = (current as isize + delta).clamp(0, max_start as isize) as usize;
+        if next == current && self.viewport.is_some() {
+            return false;
+        }
+        self.viewport = Some(next);
+        next != current
+    }
+
+    /// 直接设置列表视口起点（滚动条点击/拖拽）；返回是否变化。
+    pub fn set_viewport(&mut self, offset: usize, visible: usize) -> bool {
+        let visible = visible.max(1);
+        let max_start = self.filtered_indices().len().saturating_sub(visible);
+        let next = offset.min(max_start);
+        if self.viewport == Some(next) {
+            return false;
+        }
+        self.viewport = Some(next);
+        true
     }
 }
 

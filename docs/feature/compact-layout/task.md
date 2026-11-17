@@ -1,6 +1,6 @@
 # 窄终端紧凑布局（Compact Layout）— 执行清单（v2）
 
-- **状态**：已完成实现与 Review（P0–P3）修复，待全量测试验收与用户 `cargo run` 手动确认；合并回 `dev` 前需完成下方「合并前必做清单」。
+- **状态**：已完成实现、Review（P0–P3）修复、`dev@d5bf1251` 合入冲突与 `P0-2` 对齐，并通过全量自动化测试验证；按用户授权合入 `dev` 并清理 worktree。
 - **工程约束**：遵守 `AGENTS.md` 与 `docs/standards/*`；保持 `app/` 纯状态/更新、`ui/` 纯渲染；生产代码禁止 `unwrap()`/`expect()`；用户可见文案统一收敛到 `src/ui/text`。
 
 ## 阶段 1：阈值与布局模型
@@ -72,16 +72,16 @@
 
 ## 合并前必做清单（`dev@d5bf1251` — `P0-2`）
 
-- [ ] 合并或 rebase `dev` 时，解决 `src/app/state.rs` 与 `src/event/tests/overlay.rs` 冲突
-- [ ] 将 `dev` 新增的 `80~120` 列桌面测试（`src/event/tests/{agent_menu,mouse_drag,overlay,workspace_history}.rs`）切换为 `desktop_config()`（其中 `enter_in_new_agent_reveals_newly_created_tab_when_tab_bar_overflows` 确认测试口径）
-- [ ] 合并后全量执行 `cargo fmt --check`、`cargo clippy --all-targets -- -D warnings`、`cargo test`
+- [x] 合并 `dev@d5bf1251`，解决 `src/app/state.rs`、`src/app/update/selection/{mod.rs,tests.rs}` 与 `src/event/tests/overlay.rs` 冲突
+- [x] 将 `dev` 新增的 `80~120` 列桌面测试（`src/event/tests/{agent_menu,mouse_drag,overlay,workspace_history}.rs`）切换为 `desktop_config()`（`enter_in_new_agent_reveals_newly_created_tab_when_tab_bar_overflows` 固定 `90x24` 桌面并额外补齐紧凑全屏左栏 `New agent` 回归测试），并为 `autoscroll`/`wheel`/`drag`/`workspace_list_rect` 补齐面板宽度守卫
+- [x] 合并后全量执行 `cargo fmt --check`、`cargo clippy --all-targets -- -D warnings`、`cargo test`
 
 ## 验证
 
 - [x] `cargo fmt --check`
 - [x] `cargo clippy --all-targets -- -D warnings`
-- [x] `cargo test` 全量通过（lib `5832 passed / 6 ignored` + 集成测试 `63 passed / 2 ignored`，含 PTY 真实交互与 Web 资源契约测试）
-- [ ] 用户 `cargo run` 手动验收
+- [x] `cargo test` 全量通过（合并 `dev@d5bf1251` 后：lib `5901 passed / 6 ignored` + 集成测试 `64 passed / 2 ignored`，含 PTY 真实交互与 Web 资源契约测试）
+- [ ] 用户 `cargo run` 手动验收（用户已授权在全量自动化校验通过后直接合入 `dev` 并清理 worktree；如需复核外观交互可在 `dev` 运行 `cargo run`）
 
 ## 手动验收清单
 

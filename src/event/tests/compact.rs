@@ -6,7 +6,7 @@ use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 
 use super::test_support::*;
 use super::*;
-use crate::app::state::{CompactRestore, FocusedContainer, RightTab};
+use crate::app::state::{CompactPanel, CompactRestore, FocusedContainer, RightTab};
 use crate::event::session::Geometry;
 
 fn compact_geometry(state: &mut AppState, config: &Config, width: u16, height: u16) -> Geometry {
@@ -506,4 +506,130 @@ fn sync_layout_geometry_preserves_lx_cache_and_reveals_active_tab_on_narrow_resi
         ui_cache.has_pane(pane),
         "全屏左栏期间不得误删隐藏窗格的渲染缓存"
     );
+}
+
+#[test]
+fn new_agent_from_compact_left_panel_returns_to_chat_and_reveals_new_tab() {
+    let config = Config::default();
+    let mut state = demo_terminal();
+    for _ in 0..16 {
+        update::create_tab(&mut state);
+    }
+    update::switch_tab(&mut state, 0);
+    state.tab_scroll = 0;
+    state.set_focus(FocusedContainer::Sidebar);
+    let geo = compact_geometry(&mut state, &config, 80, 24);
+    assert_eq!(state.compact_panel(), Some(CompactPanel::Left));
+    let agents = ui::layout::sidebar_sections(geo.view.left_panel, state.agents_collapsed)
+        .expect("fullscreen left panel sections")
+        .agents;
+
+    let mut sessions = HashMap::new();
+    let mut cache = ui::RenderCache::default();
+    let mut dirty = false;
+    handle_terminal_event(
+        mouse(MouseEventKind::Down(MouseButton::Right), agents.x, agents.y),
+        &mut state,
+        &mut sessions,
+        &geo,
+        &config,
+        &mut cache,
+        &mut dirty,
+    );
+    assert!(matches!(
+        state.overlay,
+        Some(Overlay::Menu(ref menu)) if menu.commands == vec![crate::app::overlay::MenuCommand::NewAgent]
+    ));
+
+    // 直接打开 NewAgent（跳过 PATH 结果空依赖）并按 Enter 创建：自动返回 Chat 且滚入标签栏。
+    state.installed_agents = vec![crate::detect::InstalledAgent {
+        kind: crate::detect::AgentKind::Claude,
+        command: "claude".into(),
+    }];
+    update::open_new_agent_dialog(&mut state, 0);
+    handle_terminal_event(
+        TerminalEvent::Key(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE)),
+        &mut state,
+        &mut sessions,
+        &geo,
+        &config,
+        &mut cache,
+        &mut dirty,
+    );
+    assert!(state.overlay.is_none());
+    assert_eq!(
+        state.compact_panel(),
+        None,
+        "创建新 Agent 后应自动回到 Chat"
+    );
+    assert_eq!(state.active_workspace().tabs.len(), 18);
+    assert!(
+        state.tab_scroll > 0,
+        "紧凑顶栏溢出时新建 Agent 标签应自动滚入可见区"
+    );
+}
+
+#[test]
+fn compact_hidden_panel_ignores_drag_autoscroll_and_transition_clears_plans() {
+    let config = Config::default();
+    let mut state = demo_terminal();
+    let pane = state.active_tab().layout.focus();
+    let records: Vec<crate::db::todo::TodoRecord> = (0..30)
+        .map(|index| {
+            crate::db::todo::TodoRecord::new(
+                format!("todo {index}"),
+                crate::db::todo::TodoStatus::Todo,
+                index as i64,
+            )
+        })
+        .collect();
+    state.todo.replace(records.clone());
+    state.right_tab = RightTab::Todo;
+    state.todo.set_viewport_rows(8);
+
+    // 处于紧凑 Chat（right_panel 宽 0）时，即使残留了 todo drag_autoscroll，tick_drag 也必须拒绝滚屏并清理。
+    let chat_geo = compact_geometry(&mut state, &config, 80, 24);
+    assert_eq!(chat_geo.view.right_panel.width, 0);
+    let now = Instant::now();
+    state.todo_drag = Some(crate::app::state::TodoDrag {
+        source_id: records[0].id.clone(),
+        from_display: 0,
+        pressed_at: now,
+        dragging: true,
+        target_index: None,
+    });
+    state.drag_autoscroll = Some(crate::app::state::DragAutoscroll {
+        surface: crate::app::state::DragScrollSurface::Todo,
+        direction: crate::app::state::AutoscrollDirection::Down,
+        distance: 1,
+        mouse: (10, 10),
+        next_at: now - std::time::Duration::from_millis(50),
+    });
+    assert!(!crate::event::mouse::autoscroll::tick_drag(
+        &mut state,
+        &chat_geo.view,
+        now,
+    ));
+    assert!(state.drag_autoscroll.is_none());
+    assert_eq!(state.todo.scroll(), 0);
+
+    // 跨 160/161 阈值切换时，drag_autoscroll 与 lx_selection_autoscroll 一并清空。
+    state.drag_autoscroll = Some(crate::app::state::DragAutoscroll {
+        surface: crate::app::state::DragScrollSurface::WorkspaceActive,
+        direction: crate::app::state::AutoscrollDirection::Down,
+        distance: 0,
+        mouse: (2, 4),
+        next_at: now,
+    });
+    state.lx_selection_autoscroll = Some(crate::app::state::LxSelectionAutoscroll {
+        pane,
+        surface: crate::app::state::LxScrollSurface::History,
+        direction: crate::app::state::AutoscrollDirection::Up,
+        distance: 0,
+        mouse: (5, 5),
+        next_at: now,
+    });
+    update::sync_compact_layout(&mut state, 161, &config);
+    assert!(state.drag_autoscroll.is_none());
+    assert!(state.lx_selection_autoscroll.is_none());
 }
