@@ -173,9 +173,10 @@
 
 ## 紧凑布局（窄终端单列）
 
-- **触发与几何**：终端宽度 `<= config.narrow_width`（默认 80，且 `>= min_width`）自动进入单列紧凑布局：隐藏左侧栏、标签栏与右侧 Prompt/Todo 容器，只保留顶部状态条 + 主区窗格；宽度 `> narrow_width` 恢复桌面三栏。80 列恰好进入紧凑，桌面断言不得继续使用 `<= 80` 的宽度。
-- **状态条**：终端高度 `>= 16` 显示 2 行（工作区状态点/名称 + 右侧 tab，第二行全局 Agent 摘要 `blocked → working → idle`），否则只显示 1 行；右侧 `[switch]` 占满状态条高度。全屏面板时状态条固定 1 行：左侧 `[back]` + 面板名，不劫持 `Esc`。
-- **切换器**：`[switch]` 打开全屏 switcher，顺序固定为 `Agents → Spaces → Tabs → Panels → Actions`；Agents 为跨工作区全局条目，选中后一次切到对应工作区、标签与焦点窗格；含 `+ new workspace`、`+ new tab`；`↑/↓/Enter/Esc/PageUp/PageDown` 导航，分区标题不可选中。
-- **全屏面板**：焦点在 `Prompt`/`Todo` 时对应面板占满主区，`[back]` 返回并把焦点交回主区；焦点是面板屏幕的唯一真源，不新增 `compact_screen` 状态。全屏面板下窗格 PTY 不 resize（几何中不含窗格）。
-- **隐藏控件与 Toast**：紧凑模式禁止保留不可见控件的命中矩形（折叠/钉住/交换/退出/Web/拖拽提示/tooltip 一律失效）；全局 Toast 改为屏幕底部单行横幅 `● title · message`，`pane.lx.toast` 仍在 lx 窗格内。
-- **缩放恢复**：进入紧凑时快照 `prompt_collapsed` / `panes_collapsed` 并临时展开，退出时恢复；退出时焦点仍在 Prompt/Todo 则保留展开，不得把正在编辑的面板重新折叠。
+- **触发与几何**：终端宽度 `<= config.narrow_width`（默认 120，对齐 opencode-dev 的 120 列断点）自动进入单列紧凑布局；宽度 `> narrow_width` 恢复桌面三栏。120 列恰好进入紧凑，桌面测试必须使用 121+ 或显式压低阈值。紧凑布局只保留顶部栏 + 主区，隐藏桌面左栏/标签栏/右栏。
+- **顶部栏**：终端高度 `>= 16` 时两行：第一行 `[ws] + tab 列表 + [panel]`，第二行为工作区状态点/名称 + 全局 Agent 摘要（`blocked → working → idle`）；高度不足时只保留第一行。`[ws]`/`[panel]` 各占 1 行高，打开对应全屏栏时使用实心强调色。
+- **左右全屏栏**：`[ws]` 聚焦左侧栏并全屏渲染现有工作区/Agents 内容；`[panel]` 聚焦右栏当前页（Prompt 或 Todo）并全屏渲染现有右栏（含边框 Prompt/Todo tab）。再点同一按钮、点中间任一 tab 返回 Chat。焦点是面板屏幕的唯一真源，不新增 `compact_screen` 状态。全屏栏下窗格 PTY 不 resize（几何中不含窗格）。
+- **返回语义**：仅全屏左栏允许裸 `Esc` 返回 Chat（左侧栏本身无键盘交互）；右栏 Prompt/Todo 的 `Esc` 保留原有清瞬态面板/选区语义，不整栏关闭。
+- **中间 tab 条**：复用原标签栏全部交互：点击切换、右键菜单、悬停高亮、`[+]` 新建、`[<]/[>]` 滚动；紧凑模式不显示 `[EXIT]`，退出仍可用 `Ctrl+Q`。
+- **隐藏控件与 Toast**：紧凑模式禁止保留不可见控件的命中矩形（折叠/钉住/交换/退出/拖拽提示/tooltip 一律失效）；全局 Toast 改为屏幕底部单行横幅 `● title · message`，`pane.lx.toast` 仍在 lx 窗格内。
+- **缩放恢复**：进入紧凑时快照 `sidebar_collapsed` / `prompt_collapsed` / `panes_collapsed` 并临时展开，退出时恢复；退出时焦点仍在 Prompt/Todo 则保留右栏展开；若侧栏恢复为折叠态且焦点仍在侧栏，把焦点交回主区。
