@@ -119,10 +119,10 @@ impl FileSystemRequest {
 
     /// 校验列表长度、总字节数与条目格式。
     pub fn validate(&self) -> Result<(), PermissionError> {
-        for (name, list) in [
-            ("read", &self.read),
-            ("write", &self.write),
-            ("deny", &self.deny),
+        for (name, list, globs_allowed) in [
+            ("read", &self.read, false),
+            ("write", &self.write, false),
+            ("deny", &self.deny, true),
         ] {
             if list.len() > MAX_REQUEST_ENTRIES {
                 return Err(PermissionError::Invalid(format!(
@@ -136,7 +136,12 @@ impl FileSystemRequest {
                 )));
             }
             for raw in list {
-                parse_entry(raw)?;
+                let entry = parse_entry(raw)?;
+                if !globs_allowed && matches!(entry, FileSystemPath::Glob(_)) {
+                    return Err(PermissionError::Invalid(format!(
+                        "'{name}' entries must be literal paths; globs are supported for 'deny'"
+                    )));
+                }
             }
         }
         Ok(())

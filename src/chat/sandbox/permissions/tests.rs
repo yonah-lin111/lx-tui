@@ -57,7 +57,7 @@ fn literal_path_beats_glob_and_deny_beats_write_on_ties() {
     let cwd = temp_dir("specificity");
     let policy = FileSystemPolicy::baseline(SandboxMode::WorkspaceWrite, &cwd, &[])
         .with_request(&FileSystemRequest {
-            read: vec![format!("{}/secret/**", cwd.display())],
+            read: vec![format!("{}/secret", cwd.display())],
             write: vec![format!("{}/secret/deep", cwd.display())],
             deny: vec![format!("{}/secret/deep/blocked.txt", cwd.display())],
         })
@@ -68,12 +68,12 @@ fn literal_path_beats_glob_and_deny_beats_write_on_ties() {
         policy.access_for(&cwd.join("secret/deep/blocked.txt")),
         FileSystemAccessMode::Deny
     );
-    // 更具体的 write 覆盖较浅的 read glob。
+    // 更具体的 write 覆盖较浅的 read 条目。
     assert_eq!(
         policy.access_for(&cwd.join("secret/deep/ok.txt")),
         FileSystemAccessMode::Write
     );
-    // 其余仍由 read glob 限制。
+    // 其余仍由 read 条目限制。
     assert_eq!(
         policy.access_for(&cwd.join("secret/other.txt")),
         FileSystemAccessMode::Read
@@ -128,6 +128,17 @@ fn request_limits_are_enforced() {
         ..FileSystemRequest::default()
     };
     assert!(too_long.validate().is_err());
+
+    let write_glob = FileSystemRequest {
+        write: vec!["/tmp/out/**".into()],
+        ..FileSystemRequest::default()
+    };
+    assert!(write_glob.validate().is_err(), "write 不接受 glob");
+    let read_glob = FileSystemRequest {
+        read: vec!["/tmp/src/**".into()],
+        ..FileSystemRequest::default()
+    };
+    assert!(read_glob.validate().is_err(), "read 不接受 glob");
 
     let denies_only = FileSystemRequest {
         deny: vec!["/tmp/secret".into()],

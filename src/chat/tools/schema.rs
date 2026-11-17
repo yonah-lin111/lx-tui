@@ -547,12 +547,12 @@ fn exec_command_parameters() -> Value {
                             "read": {
                                 "type": "array",
                                 "items": {"type": "string"},
-                                "description": "Absolute paths or globs to grant read access inside writable roots for this command."
+                                "description": "Absolute paths to grant read access inside writable roots for this command."
                             },
                             "write": {
                                 "type": "array",
                                 "items": {"type": "string"},
-                                "description": "Absolute paths or globs to grant write access for this command (max 16 entries)."
+                                "description": "Absolute paths to grant write access for this command (max 16 entries)."
                             },
                             "deny": {
                                 "type": "array",
