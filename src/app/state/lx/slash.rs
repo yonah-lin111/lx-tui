@@ -204,7 +204,7 @@ impl SlashCommand {
             Self::Connect => crate::ui::text::LX_CONNECT_COMMAND_DESC,
             Self::Mcp => crate::ui::text::LX_MCP_COMMAND_DESC,
             Self::Btw => crate::ui::text::LX_BTW_COMMAND_DESC,
-            Self::Permission => "Switch the sandbox mode for this session",
+            Self::Permission => crate::ui::text::LX_PERMISSION_COMMAND_DESC,
         }
     }
 

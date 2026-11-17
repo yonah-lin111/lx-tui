@@ -49,11 +49,19 @@ pub(crate) fn render_panes(
             title.push_str(" (exited)");
         }
         // 边框标题统一淡蓝色（Cyan + dim）；焦点只由边框颜色区分，按钮除外。
-        // lx 页入口名按 logo 粉→蓝渐变着色，其余保持标题色。
-        let title_line = if pane.view == PaneView::Lx && !pane.exited {
-            lx_title_line(pane.lx.entry, permission)
+        // lx 页入口名按 logo 粉→蓝渐变着色，其余保持标题色；超宽时避让右侧 `[>_]` 按钮（至少留 1 列间隔）。
+        let max_title = max_title_width(*rect, pane.kind == PaneKind::Terminal);
+        let (title_line, displayed_title_width) = if pane.view == PaneView::Lx && !pane.exited {
+            lx_title_line(pane.lx.entry, permission, max_title)
+        } else if max_title == 0 {
+            (Line::default(), 0)
         } else {
-            Line::from(Span::styled(format!(" {title} "), style::border_title()))
+            let clipped = text::truncate_to_width(&title, max_title);
+            let width = clipped.width();
+            (
+                Line::from(Span::styled(format!(" {clipped} "), style::border_title())),
+                width,
+            )
         };
         let block = Block::bordered()
             .border_style(style::border(focused))
@@ -63,10 +71,10 @@ pub(crate) fn render_panes(
         // 顶边框右侧标签：终端视图显示 Agent 标记，lx 视图显示工作区身份标签（不并存）。
         match (pane.kind, pane.view) {
             (PaneKind::Terminal, PaneView::Lx) => {
-                render_pane_identity_label(frame, *rect, &title, state, *id);
+                render_pane_identity_label(frame, *rect, displayed_title_width, state, *id);
             }
             (PaneKind::Terminal, PaneView::Terminal) => {
-                render_pane_agent_label(frame, *rect, &title, pane);
+                render_pane_agent_label(frame, *rect, displayed_title_width, pane);
             }
             (PaneKind::Placeholder, _) => {}
         }
@@ -99,9 +107,28 @@ pub(crate) fn render_panes(
     cursor
 }
 
+/// 窗格顶边框标题内文的最大显示列数（不含两侧包裹空格）；
+/// 当右侧存在 `[>_]` / `[lx]` 切换按钮时，与按钮之间至少保留 1 列边框 `─`。
+fn max_title_width(rect: Rect, has_toggle: bool) -> usize {
+    let available = if has_toggle {
+        match main_content::toggle_button(rect) {
+            Some(button) => usize::from(button.x.saturating_sub(rect.x.saturating_add(2))),
+            None => usize::from(rect.width.saturating_sub(2)),
+        }
+    } else {
+        usize::from(rect.width.saturating_sub(2))
+    };
+    available.saturating_sub(2)
+}
+
 /// 窗格顶边框右侧 Agent 标记 ` agent:xxx`：前缀强调色、值恒为默认灰
 /// （不随窗格焦点变色）；右端与切换按钮间隔 1 列；按钮缺失、空间不足或会覆盖左侧标题时不绘制。
-fn render_pane_agent_label(frame: &mut Frame<'_>, rect: Rect, title: &str, pane: &Pane) {
+fn render_pane_agent_label(
+    frame: &mut Frame<'_>,
+    rect: Rect,
+    displayed_title_width: usize,
+    pane: &Pane,
+) {
     let Some(agent) = pane.agent.as_ref() else {
         return;
     };
@@ -116,21 +143,74 @@ fn render_pane_agent_label(frame: &mut Frame<'_>, rect: Rect, title: &str, pane:
             style::border_label_value(),
         ),
     ];
-    render_border_right_label(frame, rect, title, &spans);
+    render_border_right_label(frame, rect, displayed_title_width, &spans);
 }
 
 /// lx 窗格顶边框标题：` lx-<入口名> `（非 Web 入口附带 `[<权限短名>]`），入口名按该 logo 粉→蓝渐变着色、权限按风险三色着色。
 fn lx_title_line(
     entry: LxEntry,
     permission: Option<crate::config::sandbox::SandboxMode>,
-) -> Line<'static> {
+    max_width: usize,
+) -> (Line<'static>, usize) {
+    if max_width == 0 {
+        return (Line::default(), 0);
+    }
     let label = text::lx_entry_label(entry);
-    let length = label.chars().count();
+    let prefix = "lx-";
+    let prefix_w = prefix.width();
+    let mode_suffix_w = permission.map_or(0, |mode| mode.short_label().width() + 3);
+    let full_entry_w = prefix_w + label.width();
+    let full_w = full_entry_w + mode_suffix_w;
+
+    if full_w <= max_width {
+        return (
+            build_lx_title_spans(entry, label, label, permission),
+            full_w,
+        );
+    }
+    if permission.is_some() && max_width >= prefix_w + 2 + mode_suffix_w {
+        let avail_entry = max_width - prefix_w - mode_suffix_w;
+        let clipped_entry = text::truncate_to_width(label, avail_entry);
+        let used = prefix_w + clipped_entry.width() + mode_suffix_w;
+        return (
+            build_lx_title_spans(entry, label, &clipped_entry, permission),
+            used,
+        );
+    }
+    if full_entry_w <= max_width {
+        return (
+            build_lx_title_spans(entry, label, label, None),
+            full_entry_w,
+        );
+    }
+    if max_width > prefix_w {
+        let clipped_entry = text::truncate_to_width(label, max_width - prefix_w);
+        let used = prefix_w + clipped_entry.width();
+        return (
+            build_lx_title_spans(entry, label, &clipped_entry, None),
+            used,
+        );
+    }
+    let clipped = text::truncate_to_width(prefix, max_width);
+    let used = clipped.width();
+    (
+        Line::from(Span::styled(format!(" {clipped} "), style::border_title())),
+        used,
+    )
+}
+
+fn build_lx_title_spans(
+    entry: LxEntry,
+    full_label: &str,
+    rendered_label: &str,
+    permission: Option<crate::config::sandbox::SandboxMode>,
+) -> Line<'static> {
+    let length = full_label.chars().count().max(1);
     let mut spans = vec![Span::styled(" lx-".to_string(), style::border_title())];
-    for (position, ch) in label.chars().enumerate() {
+    for (position, ch) in rendered_label.chars().enumerate() {
         spans.push(Span::styled(
             ch.to_string(),
-            style::lx_entry_label_style(entry, position, length, false),
+            style::lx_entry_label_style(entry, position.min(length - 1), length, false),
         ));
     }
     if let Some(mode) = permission {
@@ -152,7 +232,7 @@ fn lx_title_line(
 fn render_pane_identity_label(
     frame: &mut Frame<'_>,
     rect: Rect,
-    title: &str,
+    displayed_title_width: usize,
     state: &AppState,
     id: PaneId,
 ) {
@@ -167,9 +247,13 @@ fn render_pane_identity_label(
         return;
     };
     // 两侧各留 1 列空档：右端贴 anchor 左侧，左界不越过标题后的 1 列间隔。
-    let title_width = u16::try_from(title.width())
-        .unwrap_or(u16::MAX)
-        .saturating_add(2);
+    let title_width = if displayed_title_width == 0 {
+        0
+    } else {
+        u16::try_from(displayed_title_width)
+            .unwrap_or(u16::MAX)
+            .saturating_add(2)
+    };
     let left = rect.x.saturating_add(title_width).saturating_add(1);
     if anchor <= left {
         return;
@@ -206,7 +290,7 @@ fn render_pane_identity_label(
 fn render_border_right_label(
     frame: &mut Frame<'_>,
     rect: Rect,
-    title: &str,
+    displayed_title_width: usize,
     spans: &[(String, Style)],
 ) {
     let Some(button) = main_content::toggle_button(rect) else {
@@ -226,9 +310,13 @@ fn render_border_right_label(
         return;
     };
     // " {title} " 与标记之间至少留 1 列，避免覆盖左侧标题。
-    let title_width = u16::try_from(title.width())
-        .unwrap_or(u16::MAX)
-        .saturating_add(2);
+    let title_width = if displayed_title_width == 0 {
+        0
+    } else {
+        u16::try_from(displayed_title_width)
+            .unwrap_or(u16::MAX)
+            .saturating_add(2)
+    };
     if start < rect.x.saturating_add(title_width).saturating_add(1) {
         return;
     }
@@ -249,4 +337,91 @@ fn render_border_right_label(
 /// 窗格标题：空占位与终端走通用标题规则。
 fn pane_display_title(id: PaneId, pane: &Pane) -> String {
     text::pane_title(id, pane.terminal.title(), pane.cwd_label.as_deref())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::config::sandbox::SandboxMode;
+    use ratatui::Terminal as RatatuiTerminal;
+    use ratatui::backend::TestBackend;
+
+    fn render_top_row(state: &AppState, width: u16) -> String {
+        let mut terminal =
+            RatatuiTerminal::new(TestBackend::new(width, 10)).expect("test backend is infallible");
+        let id = state.active_tab().layout.focus();
+        let rect = Rect::new(0, 0, width, 10);
+        let mut cache = crate::ui::RenderCache::default();
+        terminal
+            .draw(|frame| {
+                render_panes(frame, &[(id, rect)], state, &mut cache);
+            })
+            .expect("draw succeeds");
+        let buf = terminal.backend().buffer();
+        (0..width).map(|x| buf[(x, 0)].symbol()).collect()
+    }
+
+    #[test]
+    fn narrow_lx_pane_titles_never_collide_with_toggle_button() {
+        for width in [8u16, 12, 24, 28] {
+            let mut state = AppState::demo();
+            let id = state.active_tab().layout.focus();
+            if let Some(pane) = state.pane_mut_anywhere(id) {
+                pane.lx.entry = LxEntry::Automation;
+                pane.lx.sandbox_mode = Some(SandboxMode::WorkspaceWrite);
+            }
+            let top = render_top_row(&state, width);
+            let rect = Rect::new(0, 0, width, 10);
+            let button = main_content::toggle_button(rect).expect("toggle fits");
+            let chars: Vec<char> = top.chars().collect();
+            assert_eq!(chars[0], '┌', "width={width}: {top:?}");
+            assert_eq!(chars[usize::from(width - 1)], '┐', "width={width}: {top:?}");
+            let rendered_btn: String = chars[usize::from(button.x)..usize::from(button.right())]
+                .iter()
+                .collect();
+            assert_eq!(
+                rendered_btn,
+                text::LX_TOGGLE_TERMINAL,
+                "width={width}: {top:?}"
+            );
+            assert_eq!(
+                chars[usize::from(button.x - 1)],
+                '─',
+                "按钮左侧至少保留 1 列边框间隔 (width={width}): {top:?}"
+            );
+            if width == 28 {
+                assert!(
+                    top.contains("[Workspace]"),
+                    "28 列优先保留权限短名并截断入口 (width={width}): {top:?}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn narrow_terminal_and_exited_titles_keep_toggle_gap() {
+        for exited in [false, true] {
+            let mut state = AppState::demo();
+            let id = state.active_tab().layout.focus();
+            if let Some(pane) = state.pane_mut_anywhere(id) {
+                pane.view = PaneView::Terminal;
+                pane.exited = exited;
+                let _ = pane
+                    .terminal
+                    .feed(b"\x1b]0;Very Long Terminal Window Title\x07");
+            }
+            let top = render_top_row(&state, 24);
+            let button = main_content::toggle_button(Rect::new(0, 0, 24, 10)).expect("toggle fits");
+            let chars: Vec<char> = top.chars().collect();
+            let rendered_btn: String = chars[usize::from(button.x)..usize::from(button.right())]
+                .iter()
+                .collect();
+            assert_eq!(rendered_btn, text::LX_TOGGLE_LX, "exited={exited}: {top:?}");
+            assert_eq!(
+                chars[usize::from(button.x - 1)],
+                '─',
+                "终端与退出标题同样在按钮前留 1 列边框间隔: {top:?}"
+            );
+        }
+    }
 }

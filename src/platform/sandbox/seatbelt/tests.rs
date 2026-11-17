@@ -309,3 +309,116 @@ fn sandbox_exec_path_is_fixed() {
     assert_eq!(SANDBOX_EXEC, "/usr/bin/sandbox-exec");
     assert!(Path::new(SANDBOX_EXEC).exists());
 }
+
+#[cfg(target_os = "macos")]
+#[test]
+fn uncanonicalized_tmp_symlink_paths_enforce_carveout_and_deny() {
+    let raw_base = PathBuf::from(format!(
+        "/tmp/lx-seatbelt-raw-{}-{}",
+        std::process::id(),
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_nanos())
+            .unwrap_or_default()
+    ));
+    let raw_sealed = raw_base.join("sealed");
+    let raw_secret = raw_base.join("secret");
+    let raw_env_dir = raw_base.join("nested");
+    std::fs::create_dir_all(&raw_sealed).expect("sealed");
+    std::fs::create_dir_all(&raw_secret).expect("secret");
+    std::fs::create_dir_all(&raw_env_dir).expect("nested");
+    std::fs::write(raw_sealed.join("data.txt"), "readable").expect("seed sealed");
+    std::fs::write(raw_secret.join("key.txt"), "hunter2").expect("seed secret");
+    std::fs::write(raw_env_dir.join(".env"), "TOKEN=1").expect("seed env");
+
+    let canonical_base = std::fs::canonicalize(&raw_base).expect("canonical");
+    let specs = Specs {
+        // 写根故意给规范路径，而 carveout / deny / glob 给未规范化的 `/tmp/...`。
+        roots: vec![canonical_base.clone()],
+        read_only: vec![raw_sealed.clone()],
+        deny: vec![raw_secret.clone()],
+        globs: vec![format!("{}/**/.env", raw_base.display())],
+        ..Specs::default()
+    };
+    let script = format!(
+        "cat '{raw}/sealed/data.txt' > '{raw}/copy.txt'; \
+         printf bad > '{raw}/sealed/data.txt' 2>/dev/null; \
+         cat '{raw}/secret/key.txt' > '{raw}/leak1.txt' 2>/dev/null; \
+         cat '{raw}/nested/.env' > '{raw}/leak2.txt' 2>/dev/null; \
+         printf ok > '{raw}/ok.txt'",
+        raw = raw_base.display()
+    );
+    let _status = run(&canonical_base, &specs, &script);
+    assert_eq!(
+        std::fs::read_to_string(raw_base.join("copy.txt")).expect("copy"),
+        "readable"
+    );
+    assert_eq!(
+        std::fs::read_to_string(raw_sealed.join("data.txt")).expect("sealed intact"),
+        "readable"
+    );
+    assert_eq!(
+        std::fs::read_to_string(raw_base.join("leak1.txt")).unwrap_or_default(),
+        ""
+    );
+    assert_eq!(
+        std::fs::read_to_string(raw_base.join("leak2.txt")).unwrap_or_default(),
+        ""
+    );
+    assert!(raw_base.join("ok.txt").exists());
+    let _ = std::fs::remove_dir_all(&raw_base);
+}
+
+#[cfg(target_os = "macos")]
+#[test]
+fn protect_anchor_and_glob_ancestor_unlink_and_directory_glob_descendants() {
+    let base = temp_dir("p2-4");
+    let ws = base.join("ws");
+    let sec = ws.join("sec");
+    let brace_a = ws.join("a");
+    let env_dir = ws.join("sub/.env");
+    std::fs::create_dir_all(&sec).expect("sec");
+    std::fs::create_dir_all(&brace_a).expect("brace_a");
+    std::fs::create_dir_all(&env_dir).expect("env_dir");
+    std::fs::write(sec.join("app.env"), "SECRET=1").expect("sec env");
+    std::fs::write(brace_a.join("key.txt"), "BRACE=1").expect("brace key");
+    std::fs::write(env_dir.join("nested.txt"), "NESTED=1").expect("dir env");
+
+    let specs = Specs {
+        // 同时把 `base` 和 `ws` 设为可写根：若未保护写根锚点，可 `mv ws ws2`。
+        roots: vec![base.clone(), ws.clone()],
+        globs: vec![
+            format!("{}/sec/*.env", ws.display()),
+            format!("{}/{{a,b}}", ws.display()),
+            format!("{}/**/.env", ws.display()),
+        ],
+        ..Specs::default()
+    };
+    let script = format!(
+        "mv '{ws}' '{base}/ws-moved' 2>/dev/null; \
+         mv '{sec}' '{ws}/sec-moved' 2>/dev/null; \
+         cat '{brace}/key.txt' > '{ws}/leak-brace.txt' 2>/dev/null; \
+         cat '{env_dir}/nested.txt' > '{ws}/leak-envdir.txt' 2>/dev/null",
+        ws = ws.display(),
+        base = base.display(),
+        sec = sec.display(),
+        brace = brace_a.display(),
+        env_dir = env_dir.display(),
+    );
+    let _status = run(&ws, &specs, &script);
+    assert!(ws.exists(), "writable root dir 自身禁止被重命名");
+    assert!(!base.join("ws-moved").exists());
+    assert!(sec.exists(), "deny_glob 静态前缀目录禁止被重命名");
+    assert!(!ws.join("sec-moved").exists());
+    assert_eq!(
+        std::fs::read_to_string(ws.join("leak-brace.txt")).unwrap_or_default(),
+        "",
+        "{{a,b}} 目录形态必须拦截后代读取"
+    );
+    assert_eq!(
+        std::fs::read_to_string(ws.join("leak-envdir.txt")).unwrap_or_default(),
+        "",
+        "/**/.env 目录形态必须拦截后代读取"
+    );
+    let _ = std::fs::remove_dir_all(base);
+}

@@ -1,128 +1,119 @@
 # Agent 沙箱与权限模式执行任务
 
-状态：A/B/C 三批实现完成，等待用户统一验收。
+状态：A/B/C 三批、D 批补充功能与 `review.md` P0–P3 审查修复已实现并通过 macOS 全量自动化测试；远程 Linux/Windows 实测与人工 TUI 验收已收口至 `/Users/yonah/projects/agent/lx-tui/docs/undo/sandbox-permissions.md`。
 
 - A 批：配置模型、macOS seatbelt、Linux bwrap 参数、进程接入、文件工具闸门、显式提权审批、on-failure 重试、`/permission`、DB v31、提示词、设置页/API。
 - B 批：完整 `additional_permissions` 档案（read/write/deny/glob）、seatbelt/bwrap 投影、文件工具条目解析器。
 - C 批：Starlark `rules/*.rules`、决策优先级、保守分段、热加载、`Always` 落盘、设置页只读状态。
-- 验证结果见同目录 `verification.md`。交互外观、Linux bwrap 与真实端到端仍需用户验收。
+- D 批：审批与 `/permission` 统一迁移至无边框 `CommandPanelView`、左上角 `lx-<Entry> [<Mode>]` 配色显示、DB v32 `agent_permission_switch` 与时间线 `Permission switched` 卡片、subagent/`/btw` 权限动态继承、`lx-18` 子 agent 提权引导及 `lx::agent::approval` 审计日志。
+- 验证结果见同目录 `verification.md`，审查发现见 `review.md`。
 
 ## 0. 开工门槛
 
-- [ ] 用户审核并明确确认 `design.md` / `task.md`（含决策 #18 分 A/B/C 三批、#19 完整权限档案、#20 Starlark 规则）；审核要求改动时先更新文档再实施。
-- [ ] 确认三批的独立验收：A 未通过不得进入 B；B 未通过不得进入 C；不得把三批混成一个无法逐段验证的变更。
-- [ ] 重读当前 `AGENTS.md` 与 `docs/standards/` 四份规范，核对未提交改动；不得修改 Git 状态。
-- [ ] 复核 `src/db/mod.rs::SCHEMA_VERSION`（当前 29）与其他分支迁移；冲突时顺延并保留旧库升级路径。
-- [ ] 用 codegraph + codebase-memory 复核每个拟改关键函数的调用关系与覆盖；codex 仓库只读。
-- [ ] 已完成的 macOS 预验证（本机 macOS 26.2 arm64）：`sandbox-exec` 可用；最小 profile 会打断 rustc/cargo；Codex 基础策略 + `(allow file-read*)` 后 `cargo`/`rustc`/`git`/`zsh -l` 正常；`-D` 参数可传带空格路径；`.git` 保护"先允许后拒绝"生效；拒绝网络时 DNS 失败；加固行 `(deny mach-lookup (xpc-service-name-prefix ""))` 与 `(deny system-fcntl (fcntl-command 80 110))` 不影响工具链。
+- [x] 用户审核并明确确认 `design.md` / `task.md`（含决策 #18 分 A/B/C 三批、#19 完整权限档案、#20 Starlark 规则）；审核要求改动时先更新文档再实施。
+- [x] 确认三批的独立验收：A → B → C 逐批验证推进。
+- [x] 重读当前 `AGENTS.md` 与 `docs/standards/` 四份规范，核对改动；未授权不擅改 Git 状态。
+- [x] 复核 `src/db/mod.rs::SCHEMA_VERSION` 与 `dev` 分支迁移（`dev` 已占 v30，本分支顺延为 v31/v32；`review.md` P0-10 已登记合入时 `v33` 幂等兜底要求）。
+- [x] 用 codegraph + codebase-memory 复核关键函数调用关系与覆盖；codex 仓库只读。
+- [x] 已完成的 macOS 预验证（macOS arm64）：`sandbox-exec` 可用；Codex 基础策略 + `(allow file-read*)` 后 `cargo`/`rustc`/`git`/`zsh -l` 正常；`-D` 参数可传带空格路径；`.git` 保护生效；拒绝网络时 DNS 失败。
 
 ## 1. 配置与策略模型
 
-- [ ] 新建 `src/config/sandbox.rs`：`SandboxMode`（`read-only`/`workspace-write`/`danger-full-access`）、`EscalationPolicy`（`ask`/`never`）、`SandboxSettings`；serde 默认值与校验。
-- [ ] `config/sandbox.json`：缺失→默认、损坏→报错但回落默认 + 告警、保存走 `0700/0600` + 临时文件 + 原子 rename。
-- [ ] `writable_roots`：绝对路径、去重、最多 16 条、无控制字符；不存在允许保存但执行期跳过并警告。
-- [ ] 新建 `src/chat/sandbox.rs`：`SandboxPlan`（mode、可写根、保护路径、network、platform 能力）、`SandboxOverride`、根解析（cwd + `$TMPDIR` + `/tmp` + 额外根；`.git`/`.agents`/`.aws` 保护）。
-- [ ] 单测：默认值、未知键、非法值、往返、0600、根去重与 `.git` 文件形态。
+- [x] 新建 `src/config/sandbox.rs`：`SandboxMode`、`EscalationPolicy`、`SandboxSettings`；serde 默认值与校验。
+- [x] `config/sandbox.json`：缺失→默认、损坏→报错回落默认 + 告警、保存走 `0700/0600` + 临时文件 + 原子 rename。
+- [x] `writable_roots`：绝对路径、去重、最多 16 条、无控制字符；不存在允许保存但执行期跳过并警告。
+- [x] 新建 `src/chat/sandbox.rs`：`SandboxPlan`、`SandboxOverride`、根解析（cwd + `$TMPDIR` + `/tmp` + 额外根；`.git`/`.agents`/`.aws` 保护）。
+- [x] 单测：默认值、未知键、非法值、往返、0600、根去重与 `.git` 文件形态。
 
 ## 2. macOS Seatbelt
 
-- [ ] 复制 `assets/sandbox/seatbelt_base_policy.sbpl` 与 `seatbelt_network_policy.sbpl`（保留来源与许可证注释），`include_str!` 进二进制。
-- [ ] `src/platform/sandbox/seatbelt.rs`：profile 拼接（基础策略 → `(allow file-read*)` → 写策略 → 保护 → 网络 → 加固行）；路径走 `-D` 参数；固定 `/usr/bin/sandbox-exec -p <profile> -- <shell> <args>`。
-- [ ] 写策略用 `require-all` + `require-not (literal/subpath)` 排除保护路径；保护祖先追加 `deny file-write-unlink`；`deny system-fcntl` 与 `deny mach-lookup` 必须存在。
-- [ ] `read-only` 不生成写规则；`danger-full-access` 不包装；`network_access=true` 追加网络策略。
-- [ ] 失败：`sandbox-exec` 缺失/参数生成失败 → `sandbox_unavailable`（fail-closed）。
-- [ ] 单测：profile 快照（四种组合）、带空格路径、控制字符拒绝；macOS 集成测试真实阻断写/网络（`#[cfg(target_os = "macos")]`）。
+- [x] 复制 `assets/sandbox/seatbelt_base_policy.sbpl` 与 `seatbelt_network_policy.sbpl`（保留来源注释），`include_str!` 进二进制。
+- [x] `src/platform/sandbox/seatbelt.rs`：profile 拼接、`-D` 参数传递与 `/usr/bin/sandbox-exec` 包装。
+- [x] 写策略用 `require-all` + `require-not (literal/subpath)` 排除保护路径；保护祖先追加 `deny file-write-unlink`；加固行存在。
+- [x] `read-only` 不生成写规则；`danger-full-access` 不包装；`network_access=true` 追加网络策略。
+- [x] 失败：`sandbox-exec` 缺失/参数生成失败 → `sandbox_unavailable`（fail-closed）。
+- [x] 单测与 macOS 集成测试：`#[cfg(target_os = "macos")]` 真实阻断写/网络。
 
 ## 3. Linux Bubblewrap
 
-- [ ] `src/platform/sandbox/bwrap.rs`：参数构造（`--ro-bind / /`、`--dev /dev`、`--unshare-user/pid/ipc`、`--unshare-net`、浅→深 `--bind`、保护路径 `--ro-bind`、`--proc /proc`、`--chdir`、`--cap-drop ALL`、`--new-session --die-with-parent`）。
-- [ ] 能力探测：`bwrap` 缺失或无法建 user namespace → `Unavailable`，受限档 fail-closed。
-- [ ] 单测：参数快照；云主机（8.138.213.110）安装 bwrap 后实测并写 `verification.md`。
+- [x] `src/platform/sandbox/bwrap.rs`：参数构造（`--ro-bind / /`、`--dev /dev`、`--unshare-user/pid/ipc`、`--unshare-net`、浅→深 `--bind`、保护路径 `--ro-bind`、`--proc /proc`、`--chdir`、`--cap-drop ALL`、`--new-session --die-with-parent`）。
+- [x] 能力探测：`bwrap` 缺失、不支持 `--perms` 的目录 `deny`、userns 不可用（含 CentOS 7 setuid 回退）探测逻辑与单测已补齐（`review.md` P0-1）。
+- [ ] 远程 Linux 主机实机构建并跑通 `bwrap` 与沙箱单测（已按决策延后，记录于 `/Users/yonah/projects/agent/lx-tui/docs/undo/sandbox-permissions.md`）。
 
 ## 4. 进程接入
 
-- [ ] `ProcessManager::exec_observed` 增加 `&SandboxPlan` 参数；`spawn_pipe` 与 `spawn_pty` 统一改为调用 `platform::sandbox::wrap` 得到程序与 argv；`ToolContext`/执行器不直接拼沙箱命令。
-- [ ] 用户 `!` 命令（`src/event/chat/user_shell.rs`）传 `SandboxPlan::none()`；MCP/终端不接入。
-- [ ] `src/chat/agent/exec/mod.rs` 与 `src/event/chat/stream_start.rs` 在 turn 起点冻结 `SandboxPlan`（会话覆盖优先级：session → global）。
-- [ ] 子 agent 创建时冻结父会话当前 plan 并写入子会话 `sandbox_mode`。
-- [ ] 保留 process group、停止、超时、输出上限语义；macOS 退出码/信号透传（已实测）。
-- [ ] 单测：包装命令、danger 直通、用户 shell 不包装、停止回归。
+- [x] `ProcessManager::exec_observed` 增加 `&SandboxPlan` 参数；`spawn_pipe` 与 `spawn_pty` 统一调用 `platform::sandbox::wrap`。
+- [x] 用户 `!` 命令（`src/event/chat/user_shell.rs`）传 `SandboxPlan::none()`；MCP/终端不接入。
+- [x] `src/chat/agent/exec/mod.rs` 与 `src/event/chat/stream_start.rs` 在 turn 起点冻结 `SandboxPlan`。
+- [x] 子 agent 启动与每轮续跑动态继承主会话最新 `SandboxMode` 与规则。
+- [x] 保留 process group、停止、超时、输出上限与 macOS 退出码/信号透传语义。
+- [x] 单测：包装命令、danger 直通、用户 shell 不包装、停止回归。
 
 ## 5. 文件工具闸门
 
-- [ ] 新建 `src/chat/tools/sandbox_gate.rs`：`ensure_writable` / `ensure_writable_resolved`；`ToolContext` 增加 `SandboxPolicyView`。
-- [ ] `write` / `edit` / `apply_patch` 所有磁盘变更前调用；多目标逐个校验，任一失败不产生部分写入。
-- [ ] `read-only` 一律 `sandbox_denied`；`workspace-write` 限可写根并保护 `.git`/`.agents`/`.aws`；`danger-full-access` 放行。
-- [ ] 判定逻辑路径 + 解析路径；不存在目标用最近存在祖先 canonicalize + 剩余组件；按组件边界匹配保护路径。
-- [ ] 单测：越界绝对路径、`..`、符号链接、`.git` 内写入、工作区正常写、danger 全通。
+- [x] 新建 `src/chat/tools/sandbox_gate.rs`：`ensure_writable` / `ensure_writable_resolved`；`ToolContext` 增加 `SandboxPolicyView`。
+- [x] `write` / `edit` / `apply_patch` 磁盘变更前统一校验，任一失败不产生部分写入。
+- [x] `read-only` 一律 `sandbox_denied`；`workspace-write` 限可写根并保护 `.git`/`.agents`/`.aws`；`danger-full-access` 放行。
+- [x] 判定路径边界、不存在祖先 canonicalize 与保护路径组件边界。
+- [x] 单测：越界绝对路径、`..`、符号链接、`.git` 内写入、工作区正常写、danger 全通。
 
 ## 6. 提权与审批
 
-- [ ] `process_args.rs`：`ExecRequest` / `SandboxEscalation` / `AdditionalPermissions` 解析与严格校验（`justification`、`prefix_rule` 危险前缀与元字符、`additional_permissions` 仅 network + write）。
-- [ ] `schema.rs`：`exec_command` 增加四个参数；`escalation=never` 时生成 `ToolDecl` 后裁剪；同步 transport/工具声明测试。
-- [ ] `AgentHostRequest::ApproveSandbox` + `AgentHost::approve_sandbox` 默认方法；`AgentHostEvent` 新增变体。
-- [ ] `agent_loop/mod.rs`：`parse_exec_request` → 规则命中/策略检查/审批 → `SandboxOverride` 传给执行器；拒绝文本固定英文；审批结果写入工具结果。
-- [ ] 规则：`shlex` token 精确前缀；`ForSession` 落库 + 内存；`/permission` 切档清空；fork 不复制。
-- [ ] 决策优先级严格按 design §18.4：规则 `Forbidden` → 规则 `Allow` → 会话精确规则 → 模型请求 → 规则 `Prompt` → 默认沙箱；先命中者生效。
-- [ ] 无头 `lx exec`：escalation 一律 `sandbox_denied: escalation requires an interactive session`。
-- [ ] 单测：参数校验、前缀匹配、危险前缀拒绝、Once/Session/Deny/Cancelled、规则命中后免审批。
+- [x] `process_args.rs`：`ExecRequest` / `SandboxEscalation` / `AdditionalPermissions` 解析与校验。
+- [x] `schema.rs`：`exec_command` 增加四个参数；`escalation=never` 时裁剪；同步工具声明测试。
+- [x] `AgentHostRequest::ApproveSandbox` + `AgentHost::approve_sandbox`；`AgentHostEvent` 新增变体。
+- [x] `agent_loop/sandbox_decision.rs`：规则命中/策略检查/审批 → `SandboxOverride` 传给执行器；拒绝文本英文。
+- [x] 规则：`shlex` token 前缀/精确规则、`ForSession` 落库 + 内存、`/permission` 切档清空、fork 不复制。
+- [x] 决策优先级：`Forbidden` → `Allow` → 会话规则 → 模型请求 → `Prompt` → 默认沙箱。
+- [x] 单测：参数校验、前缀匹配、Once/Session/Deny/Cancelled、规则命中后免审批。
 
 ## 7. 审批 UI
 
-- [ ] `pane.lx.approval` FIFO 状态 + `src/event/chat/approval.rs` 请求处理；找不到 lx 窗格立即 Denied。
-- [ ] `src/ui/main_content/lx/approval.rs`：输入框上方固定 strip（宽度与输入框一致、命令/理由截断、三动作、子 agent 来源标签）。
-- [ ] 布局集成 `src/ui/main_content/lx.rs`（steer 之上）；`apply_lx_input` 优先级 `task > approval > ask`；`y/a/n`、`Esc=Deny`、等待期间 Enter 不提交、`Ctrl+C` 取消。
-- [ ] 文案入 `ui::text`；失败/拒绝走现有工具结果与 toast，不新增 part 类型。
-- [ ] 单测：队列、键位、Esc、与 ask/steer 共存、窄窗渲染不重叠。
+- [x] `pane.lx.approvals` FIFO 队列（`ApprovalState`）+ `src/event/chat/approval.rs`；找不到窗格立即 `Denied`。
+- [x] `src/ui/main_content/lx/approval.rs`：复用无边框 `CommandPanelView`（顶栏蓝线、子 agent `[Subagent]` 与高亮 `Subagent:` 行、选项高亮）。
+- [x] `apply_lx_input` 优先级 `task > approval > ask`、`↑`/`↓`/`Enter`/`Tab`/`Esc`/`y/r/a/n`。
+- [x] 文案迁入 `src/ui/text/sandbox.rs`；`Effect::AnswerApproval` 经 `is_network_effect` 放行至事件循环唤醒。
+- [x] 单测：队列、键位、Esc、CommandPanelView 布局与授权唤醒端到端回归。
 
 ## 8. `/permission`
 
-- [ ] `SlashCommand::Permission`（第 13 项）、别名、描述；`commands_matching` 与面板测试同步。
-- [ ] `open_permission_picker`：三项候选、当前档标记、session override/global default 文案。
-- [ ] 选择落库 `agent_session.sandbox_mode`；未落库会话存 pending override 并在首条消息写入；`/new` 清空；fork 复制模式、不复制规则。
-- [ ] toast：`Sandbox mode: <mode> (applies to the next turn)`，切档时清空规则并提示。
-- [ ] 单测：候选、持久化、pending override、fork 语义、非法值。
+- [x] `SlashCommand::Permission`、别名 `["permissions", "sandbox"]`、`commands_matching` 与面板测试同步。
+- [x] `open_permission_picker`：复用 `CommandPanelView`，`Read-only` / `Workspace` / `Full`、`[Default]` 标记与初始高亮当前项。
+- [x] 落库 `agent_session.sandbox_mode` + `pending_sandbox_mode`；`/new` 清空；fork 复制模式、不复制规则。
+- [x] 窗格内 toast：`Permission: <short_label> (applies to the next turn)`，切档清空会话规则。
+- [x] 单测：候选、持久化、pending override、fork 语义、非法值。
 
 ## 9. 数据库
 
-- [ ] 迁移 v31（以实际版本为准）：`agent_session.sandbox_mode TEXT`、`agent_session_sandbox_rule` 表与索引；只增表/列，旧库可升级。
-- [ ] DB API：读取/写入会话模式、加载/插入/清空规则；fork 复制 `sandbox_mode`。
-- [ ] 单测：旧库升级、NULL 默认、规则唯一约束、级联删除、fork。
+- [x] 迁移 v31（`agent_session.sandbox_mode` + `agent_session_sandbox_rule`）与 v32（`agent_permission_switch`）。
+- [x] DB API：读取/写入会话模式、加载/插入/清空规则、读写权限切换记录；fork 复制 `sandbox_mode` 与分叉边界前切换记录。
+- [x] 单测：旧库升级、NULL 默认、规则唯一约束、级联删除、fork。
 
 ## 10. 提示词与环境快照
 
-- [ ] `EnvironmentSnapshot` 增加 `<sandbox mode platform network>` + `<writable_root>` + `<protected>`；8 条截断；整体 4096 字节预算。
-- [ ] 删除 `shell commands are not sandboxed`；`## Sandbox` 段说明边界、提权参数、`escalation=never` 行为、用户 `!` 不受沙箱约束。
-- [ ] `PROMPT_VERSION` → `lx-17`；跑现有提示预算/分段/transport 测试。
+- [x] `EnvironmentSnapshot` 增加 `<sandbox mode platform network>` + `<writable_root>` + `<protected>`；8 条截断；整体 4096 字节预算。
+- [x] 删除 `shell commands are not sandboxed`；`# Sandbox` 段说明边界、提权参数、`escalation=never`、子 agent 提权与用户 `!` 不受约束。
+- [x] `PROMPT_VERSION` 递增至 `lx-18`（含 `EXECUTOR_PROMPT`/`MONITOR_PROMPT`/`spawn_agent` 子 agent 提权说明）。
 
 ## 11. 设置页与 API
 
-- [ ] `src/settings/service/sandbox.rs`：`GET/PUT /api/sandbox`、校验、原子保存、`SettingsEvent::SandboxChanged`。
-- [ ] `handlers.rs` 路由与 `state_json` 能力信息（platform/process_sandbox/reason）。
-- [ ] `web.html` Sandbox tab + 表单（模式、网络、escalation、额外可写根、能力提示）；`settings.js` 懒加载/脏检查/保存；`settings.css` 复用现有类。
-- [ ] Windows 显示 `file tools only`；Linux 缺 bwrap 显示 `Unavailable`。
-- [ ] 若新增 JS 文件：同步 `page::asset` 与 `tests/web_assets.rs::SCRIPTS`。
-- [ ] 测试：API 校验/往返/权限、前端资源存在性与 `getElementById` 契约。
+- [x] `src/settings/service/sandbox.rs`：`GET/PUT /api/sandbox`、`POST /api/sandbox/open-rules`、`SettingsEvent::SandboxChanged`。
+- [x] `handlers.rs` 路由与能力信息（`platform`/`process_sandbox`/`reason`）。
+- [x] `web.html` Sandbox tab + `assets/settings_sandbox.js` 独立脚本（`page::asset` 与 `tests/web_assets.rs::SCRIPTS` 同步）。
+- [x] 测试：API 校验/往返、前端资源与 `getElementById` 契约。
 
-## 12. 验证与交付
+## 12. 静态检查与本地验证
 
-- [ ] `cargo fmt`、`cargo clippy --all-targets -- -D warnings`、受影响模块 `cargo test`。
-- [ ] macOS 端到端：workspace-write 内写成功/外写失败、断网失败、read-only 禁写、danger 全通、PTY 同样受限、审批 Once/Session/Deny、Esc 停止无残留。
-- [ ] A 批端到端：`touch ~/x` 被拒绝 → 弹出 `Sandbox blocked command` → `r` 重试成功；`n` 后模型看到原始 `Operation not permitted`；同命令二次调用在 `a` 后不再询问。
-- [ ] B 批端到端：`additional_permissions.file_system={read:["..."], write:["..."], deny:[".../**"]}` 批准后，命令只能在授权范围内读写；glob deny 命中项不可读写；未批准的路径仍失败。
-- [ ] C 批端到端：写 `rules/default.rules` 的 `prefix_rule(["echo"], decision="allow")` 后，`echo hi` 不套沙箱；`forbidden` 规则直接拒绝；非法规则文件只告警不阻塞启动。
-- [ ] Linux 云主机实测 bwrap（安装允许时）；记录版本、内核、userns 状态与断言结果。
-- [ ] 文档记录未验证项：Windows 进程沙箱（后续实现）、Linux 若无法实测。
-- [ ] 更新 `verification.md`（新建）与 `review.md`（如项目惯例要求）。
+- [x] `cargo fmt`、`cargo clippy --all-targets -- -D warnings`、受影响模块 `cargo test` 全部通过（提交 `08a8bc6c` 前）。
+- [x] macOS 真实沙箱与 CLI `exec` 实测（`verification.md` A/B/C/D 及 Review 修复项）。
+- [x] 更新 `review.md`、`verification.md`、`docs/standards/html-assets.md` 与 `/Users/yonah/projects/agent/lx-tui/docs/undo/sandbox-permissions.md`；登记延后项与合入迁移注意事项。
 
 ## 13. 验收命令与判定
 
 ```bash
-# 1) 受影响模块单测（按实施顺序逐个跑，避免全量拖时间）
 cargo test config::sandbox
 cargo test platform::sandbox
 cargo test chat::sandbox
-cargo test chat::sandbox::permissions
 cargo test chat::exec_policy
 cargo test chat::tools::process_args
 cargo test chat::tools::sandbox_gate
@@ -131,73 +122,51 @@ cargo test event::chat::approval
 cargo test app::state::lx::slash
 cargo test db::migration
 cargo test settings
-
-# 2) 静态检查
 cargo fmt --check
 cargo clippy --all-targets -- -D warnings
-
-# 3) macOS 真实沙箱（可用临时目录脚本或 ignored 集成测试）
-#    断言：workspace 内写成功；$HOME 写失败；curl 解析失败；read-only 连 workspace 内也失败；
-#    danger-full-access 全部成功；pty=true 同样失败；Esc 后 ps 无残留进程。
 ```
-
-判定标准：
-
-- 所有新增单测通过，既有 `chat::process` / `event::chat::user_shell` / `settings` 回归通过。
-- macOS 端到端七条断言全部符合 §14.2。
-- 设置页表现：切换模式后 `/api/sandbox` 往返稳定；Windows/Linux 能力提示正确；无中文泄漏。
-- 提示词：`cargo test chat::prompt` 通过，`PROMPT_VERSION` 已递增，环境快照不含 `not sandboxed` 旧文案。
 
 ## 14. 实施约束
 
-- 除新增 `shlex = "1"`、`globset`（已在依赖树）、C 批的 `starlark = "0.14"` 外不引入新依赖；不引入 `tree-sitter`。
-- OS 专属代码只放 `src/platform/sandbox/` 并按 `#[cfg(...)]` 门控；`chat/` 与 `app/` 不出现 `cfg(target_os)`。
-- 生产代码禁止 `unwrap()` / `expect()`；错误用 `Result` + `?`；日志用 `tracing`。
-- 用户可见文案一律英文，集中在 `src/ui/text.rs`；中文只用于注释与文档。
-- 不修改 Git 状态；不创建无关目录/空抽象；单文件 ≤1000 行，超限按职责拆分。
-- 审批是安全决策：默认拒绝、Esc=拒绝、拒绝路径不得执行任何命令。
-- 任何"沙箱不可用"场景必须 fail-closed，禁止静默裸跑。
+- 仅新增 `shlex = "1"`、`globset`、`starlark = { version = "0.14", default-features = false }`；OS 专属代码只放 `src/platform/`（`review.md` P2-1 修复 `denial.rs` 残留）。
+- 生产代码禁止 `unwrap()`/`expect()`；用户可见文案与模型提示词一律英文。
+- 审批遵循默认拒绝、Esc/Ctrl+C 拒绝；任何沙箱不可用场景 fail-closed。
 
 ## 15. A 批：on-failure 重试与审批
 
-- [ ] `src/chat/sandbox/denial.rs`：`is_likely_sandbox_denied(result, plan)`；关键词、退出码排除、Linux `128+SIGSYS`、状态过滤。
-- [ ] `ProcessResult` 增加 `sandbox_retry: Option<SandboxRetry>`（`mode`、`attempt`、`approved_by`），`to_json` 与 `format_for_model` 同步；旧数据反序列化保持兼容。
-- [ ] `agent_loop/mod.rs`：executor 返回后识别拒绝；`escalation=ask` 且未重试过 → `host.approve_retry`；批准后调用 `executor.retry_process`（复用原 `ExecArgs` + rtk 预处理命令）。
-- [ ] 重试只发生一次；重试结果加 `sandbox denied the first attempt; retried with escalation.` 前缀；拒绝时返回第一次结果原文。
-- [ ] 会话精确命令规则：`kind='exact'`、token 全等；命中后直接裸跑；`/permission` 切换清空。
-- [ ] 审批种类 `Retry`：`r/a/n`，`Esc=n`；与显式 `Escalation` 共用 FIFO，但标题/选项不同。
-- [ ] 无头 `lx exec`、Windows、`danger-full-access`、`escalation=never` 全部跳过该流程。
-- [ ] 单测：误报排除、停止/超时、重试一次上限、规则命中、拒绝原文、子 agent 审批排队。
+- [x] `src/chat/sandbox/denial.rs`：`is_likely_sandbox_denied(result, plan)` 与退出码排除。
+- [x] `ProcessResult.sandbox_retry: Option<SandboxRetry>` 与 JSON/模型格式化同步。
+- [x] `agent_loop/{mod,sandbox_decision}.rs`：单次重试、拒批返回原始失败、裸跑跳过重试。
+- [x] 会话精确规则 `kind='exact'` 与 `SandboxApprovalKind::Retry` 交互。
 
 ## 16. B 批：完整权限档案
 
-- [ ] `src/chat/sandbox/permissions.rs`：`FileSystemAccessMode`/`FileSystemPath`/`FileSystemEntry`/`FileSystemPolicy`/`AdditionalPermissions`。
-- [ ] 基准条目生成（§17.2）；`workspace-write` 的保护路径为 `Read` carveout，`additional_permissions` 可追加 `Read/Write/Deny`。
-- [ ] 解析器：字面路径按组件边界前缀匹配；glob 用 `globset`（`literal_separator(true)`）；具体度 + `Deny > Write > Read`；单测覆盖边界与冲突。
-- [ ] 工具 schema：`additional_permissions.file_system.{read,write,deny}` + `network.enabled`；每列表 ≤16 条、总长 ≤4096；拒绝相对路径、`~`、控制字符。
-- [ ] 审批 UI 展示请求的路径与网络；批准后仅本次命令生效；`Always` 不用于 additional permissions（只允许 once）。
-- [ ] Seatbelt：写根 carveout、`Deny` 字面/glob 的读与写拒绝、`globset` regex 转义、祖先 unlink 拒绝。
-- [ ] Bwrap：`--ro-bind / /` + 写根 bind + `Read` carveout `--ro-bind` + `Deny` 字面/扫描后挂载；深度上限；跨符号链接拒绝。
-- [ ] 文件工具闸门改用条目解析器；基准 `Read` 不阻止读，`Write` 才允许写。
-- [ ] 单测：glob 语法、具体度、deny 优先、seatbelt/bwrap 投影快照、越界拒绝、批准后仅本次生效。
+- [x] `src/chat/sandbox/permissions.rs`：条目模型与解析器（字面路径、`globset`、`Deny > Write > Read`）。
+- [x] schema 支持 `additional_permissions.file_system.{read,write,deny}` + `network.enabled`；仅 `deny` 接受 glob，且仅 `deny` 变更免审批。
+- [x] 审批面板展示摘要；`Additional` 仅限 `Once`；Seatbelt/bwrap 投影与 `sandbox_gate` 对齐。
 
 ## 17. C 批：Starlark 规则
 
-- [ ] `Cargo.toml` 增加 `shlex`、`globset`、`starlark`（`default-features=false`）；确认编译时间与二进制体积可接受。
-- [ ] 移植 `src/chat/exec_policy/{decision,error,rule,parser,policy,mod}.rs`；去掉 CLI/amend/migration；单文件 ≤1000 行。
-- [ ] 规则目录 `<user_data_root>/rules/*.rules`：加载排序、语法错误跳过并告警、空目录不报错。
-- [ ] 决策：`Allow < Prompt < PromptUser < Forbidden` 取最严格；`match`/`not_match` 加载期自检；空 justification 拒绝。
-- [ ] 保守分段 `split_shell_segments`：无元字符才允许 `allow` 绕过；含元字符时仅整串 `Prompt`/`Forbidden` 生效。
-- [ ] 接入执行链：`Forbidden` → `sandbox_denied`；`Allow` → 裸跑；`Prompt` → 审批 strip（once/always/deny）；无匹配 → 沙箱 + A 批 on-failure。
-- [ ] 决策优先级严格按 design §18.4；规则优先于模型请求；`escalation=never` 只降级审批、不关闭规则 `allow`。
-- [ ] `Always` 写入 `rules/default.rules`（`prefix_rule(..., decision="allow")`），加锁、`0600`、reload；先过 banned prefix 与元字符校验。
-- [ ] `escalation=never`：`Prompt`→拒绝；`Allow` 仍生效；文档与提示词说明。
-- [ ] 热加载：turn 起点比较 mtime/文件集合；失败保留旧策略并告警。
-- [ ] 设置页只读状态：规则文件数量、目录路径、`Open folder`；不提供网页编辑器。
-- [ ] 单测：解析、匹配、最严格决策、banned prefix、分段保守性、落盘与 reload、非法文件跳过。
+- [x] 移植 `src/chat/exec_policy/{decision,error,rule,parser,policy,mod}.rs`。
+- [x] `<user_data_root>/rules/*.rules` 加载、自检、保守分段、热加载、`Always` 落盘 `default.rules` 与设置页只读状态。
 
 ## 18. 批次验收线
 
-- **A 批完成**：被沙箱拒绝的命令能弹出重试审批；批准后成功，拒绝后模型看到原始失败；不产生重复 tool call；既有停止/超时回归通过。
-- **B 批完成**：`additional_permissions` 的 read/write/deny/glob 在 seatbelt 与 bwrap 上都按解析结果生效；文件工具闸门与命令沙箱结果一致；glob 扫描有深度上限。
-- **C 批完成**：`rules/*.rules` 能被加载并影响决策；`allow` 可跳过沙箱（仅在无 shell 元字符时）；模型提议的规则经审批后落盘并立即生效；非法规则不阻塞启动。
+- [x] A/B/C 三批本地实现与基础单测验收线通过（`bwrap` 与审查修复见 §20）。
+
+## 19. D 批补充交付（命令面板 / 状态标识 / 切档感知与跟随 / 审计日志）
+
+- [x] 审批与 `/permission` 面板统一样式与键鼠交互（`CommandPanelView`、`↑/↓`、`Enter`/`Tab`/鼠标、禁用普通键）。
+- [x] subagent 申请审批时顶栏右侧标注 `[Subagent]`、上下文首行强调展示 `Subagent: <nickname> [role]`。
+- [x] `lx` 非 `Web` 窗格左上角展示 `lx-<Entry> [<Mode>]`（`Read-only` 绿、`Workspace` 黄、`Full` 红，方括号暗灰，`lx-Web` 省略）。
+- [x] DB v32 `agent_permission_switch` 表、`<system-update>` 按 `sequence` 注入、可折叠 `◆ Permission switched` 卡片及 `/fork` `/rewind` 链路接入。
+- [x] subagent 每轮动态继承主会话最新模式（变更注入 `<system-update>`）与 `/btw` 只读面继承最新 `SandboxSettings`。
+- [x] `lx::agent::approval` 审计日志覆盖规则绕过/拒绝、审批入队、裁决（`wait_ms`/`decision`）、取消与孤儿清理。
+
+## 20. 代码审查修复与延后验证（`review.md` P0–P3）
+
+- [x] **P0 修复**：`bwrap` 能力探测（userns / setuid 回退 / `--perms` 检测）与 `denial.rs` 排除启动错误（P0-1）、`read-only`/写根外 `deny` 挂载（P0-2）、`command_is_approved` 禁元字符绕过（P0-3）、`exec_policy::decide` 拆元字符子段防绕过（P0-4）、Seatbelt/档案符号链接规范化（P0-5）、`Rule` `Always` 写会话前缀压制 `Prompt` 循环（P0-6）、`ask` vs `approval` 键鼠与渲染优先级统一（P0-7）、审批拦截下层浮层与鼠标全矩形（P0-8）、`answer` 按 `(key, call_id)` 清理（P0-9）、合入 `dev` v30/v33 门控锁定（P0-10）。
+- [x] **P1 修复**：`bwrap` 传真实 `workdir`（P1-1）、写根/carveout/符号链接/嵌套 `deny`/防 `/tmp/.git` 残留（P1-2）、`is_banned_prefix` basename+大小写防绕过（P1-3）、`sandbox_gate` 逻辑+解析双重判定（P1-4）、`maybe_retry_on_denial` 限 `exec_command`（P1-5）、`lx exec` 强制 `never`/裁剪/加载规则及 Windows 免弹窗（P1-6）、审批 `Ctrl+C` 与粘贴拦截（P1-7）、`/rewind` 回滚 `sandbox_mode` 与规则（P1-8；独立 `LatestKind::PermissionSwitch` 转 undo）、`fork` 按 `before` 推导 `sandbox_mode`（P1-9）、`PersistSandboxMode` 多窗格同步与错误处理+入口切站重置（P1-10）、`db/sandbox.rs` JSON 数组编码（P1-11）、上下文 `kept.is_empty()` 与动态切换/skill 预算（P1-12）、设置 API 损坏回落/500/`user_root`（P1-13）、窄窗格顶栏防撞 `[>_]`（P1-14）。
+- [x] **P2 修复**：`denial.rs` 去除 `cfg(target_os)`（P2-1）、`append_allow_rule` 补前导换行（P2-2）、`save_sandbox` 先归一化后校验（P2-3）、Seatbelt `deny_globs` 祖先/写根/目录 glob 修复（P2-4）、`sweep_orphans` 二轮全检（P2-5）、审批队列 `+N pending` 与窄宽 `[Subagent]`/`[role]` 保留（P2-6）、`Permission switched xN` 折叠收敛（P2-7）、`SandboxChanged` 刷新 `/permission` + `#view-sandbox` 滚动与 `reason` 展示（P2-8）、`fork_completed_history_window_to_child` 去无效切档复制（P2-9）、`Lx::agent_state()` 待审批 `Blocked` 状态（P2-10）。
+- [x] **P3 修复**：`LX_SYSTEM_PROMPT` 压回 12 KiB / 修文档与 `<truncated>` / 空串与摘要回显（P3-1）、收口文案到 `ui/text/sandbox.rs` / 清死常量 / 修单测名与 HTML 反引号（P3-2）、登记超行文件并保持增量受控（P3-3）、同步 `design.md`/`task.md`/`verification.md`/`html-assets.md` 与 `docs/undo/sandbox-permissions.md`（P3-4）。
+- [ ] **远程 Linux / Windows 实机验证（延后）**：已按决策暂缓执行，具体步骤与环境前提见 `/Users/yonah/projects/agent/lx-tui/docs/undo/sandbox-permissions.md`。

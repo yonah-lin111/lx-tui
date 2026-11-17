@@ -115,3 +115,175 @@ fn new_session_clears_the_override() {
         None
     );
 }
+
+#[test]
+fn apply_sandbox_changed_refreshes_open_permission_pickers() {
+    let mut state = ready_state("");
+    let pane_default = focus_pane(&state);
+    let pane_override = state
+        .active_tab_mut()
+        .split_pane(pane_default, ratatui::layout::Direction::Horizontal)
+        .expect("split");
+    assert_ne!(pane_default, pane_override);
+
+    if let Some(target) = state.pane_mut_anywhere(pane_override) {
+        target.lx.sandbox_mode = Some(SandboxMode::DangerFullAccess);
+    }
+    assert!(super::super::slash::open_permission_picker(
+        &mut state,
+        pane_default
+    ));
+    assert!(super::super::slash::open_permission_picker(
+        &mut state,
+        pane_override
+    ));
+
+    let mut updated = state.sandbox.clone();
+    updated.mode = SandboxMode::ReadOnly;
+    assert!(crate::app::update::apply_sandbox_changed(
+        &mut state,
+        updated.clone()
+    ));
+    assert_eq!(state.sandbox, updated);
+
+    let Some(SlashPanel::Permission(picker_default)) = state
+        .pane_anywhere(pane_default)
+        .and_then(|target| target.lx.slash.as_ref())
+    else {
+        panic!("default picker expected");
+    };
+    assert_eq!(picker_default.global, SandboxMode::ReadOnly);
+    assert_eq!(picker_default.effective(), SandboxMode::ReadOnly);
+    assert_eq!(picker_default.current, 0);
+
+    let Some(SlashPanel::Permission(picker_override)) = state
+        .pane_anywhere(pane_override)
+        .and_then(|target| target.lx.slash.as_ref())
+    else {
+        panic!("override picker expected");
+    };
+    assert_eq!(picker_override.global, SandboxMode::ReadOnly);
+    assert_eq!(picker_override.effective(), SandboxMode::DangerFullAccess);
+    assert_eq!(picker_override.current, 2);
+}
+
+#[test]
+fn sync_session_sandbox_mode_and_set_sandbox_rules_update_matching_panes() {
+    use crate::db::sandbox::{SandboxRuleKind, SessionSandboxRule};
+
+    let mut state = ready_state("");
+    let pane_a = focus_pane(&state);
+    let pane_b = state
+        .active_tab_mut()
+        .split_pane(pane_a, ratatui::layout::Direction::Horizontal)
+        .expect("split");
+    for pane in [pane_a, pane_b] {
+        let target = state.pane_mut_anywhere(pane).expect("pane");
+        target.lx.chat.session_id = Some("sess-shared".into());
+        target.lx.sandbox_exact_rules = vec![vec!["ls".into()]];
+        target.lx.sandbox_prefix_rules = vec![vec!["git".into()]];
+    }
+
+    assert!(crate::app::update::sync_session_sandbox_mode(
+        &mut state,
+        "sess-shared",
+        Some(SandboxMode::ReadOnly),
+        true
+    ));
+    for pane in [pane_a, pane_b] {
+        let target = state.pane_anywhere(pane).expect("pane");
+        assert_eq!(target.lx.sandbox_mode, Some(SandboxMode::ReadOnly));
+        assert!(target.lx.sandbox_exact_rules.is_empty());
+        assert!(target.lx.sandbox_prefix_rules.is_empty());
+    }
+
+    let rules = vec![
+        SessionSandboxRule {
+            kind: SandboxRuleKind::Exact,
+            tokens: vec!["touch".into(), "/tmp/x".into()],
+        },
+        SessionSandboxRule {
+            kind: SandboxRuleKind::Prefix,
+            tokens: vec!["cargo".into(), "publish".into()],
+        },
+    ];
+    assert!(crate::app::update::set_sandbox_rules(
+        &mut state, pane_a, &rules
+    ));
+    assert!(!crate::app::update::set_sandbox_rules(
+        &mut state, pane_a, &rules
+    ));
+    let target_a = state.pane_anywhere(pane_a).expect("pane_a");
+    assert_eq!(
+        target_a.lx.sandbox_exact_rules,
+        vec![vec!["touch".to_string(), "/tmp/x".to_string()]]
+    );
+    assert_eq!(
+        target_a.lx.sandbox_prefix_rules,
+        vec![vec!["cargo".to_string(), "publish".to_string()]]
+    );
+}
+
+#[test]
+fn entry_and_ai_web_site_switch_reset_session_sandbox_state() {
+    use crate::app::state::{AiWebSite, ApprovalState, LxEntry, PermissionSwitchNoticeView};
+    use crate::chat::sandbox::{SandboxApprovalKind, SandboxApprovalRequest};
+
+    let mut state = ready_state("");
+    let pane = focus_pane(&state);
+    {
+        let target = state.pane_mut_anywhere(pane).expect("pane");
+        target.lx.chat.session_id = Some("sess-native".into());
+        target.lx.sandbox_mode = Some(SandboxMode::ReadOnly);
+        target.lx.sandbox_exact_rules = vec![vec!["echo".into()]];
+        target.lx.sandbox_prefix_rules = vec![vec!["cargo".into()]];
+        target.lx.approvals.push_back(ApprovalState::new(
+            RequestKey {
+                pane,
+                session: "sess-native".into(),
+                generation: 1,
+            },
+            "call-1".into(),
+            SandboxApprovalRequest {
+                kind: SandboxApprovalKind::Escalation,
+                command: "echo hi".into(),
+                cwd: "/ws".into(),
+                justification: "need".into(),
+                prefix_rule: None,
+                additional: None,
+                denial_excerpt: None,
+                source: None,
+            },
+        ));
+        target
+            .lx
+            .permission_switch
+            .switches
+            .push(PermissionSwitchNoticeView {
+                id: "psw-1".into(),
+                sequence: 1,
+                from_mode: "workspace-write".into(),
+                to_mode: "read-only".into(),
+                injected_prompt: "switched".into(),
+                created_at_ms: 1_000,
+            });
+    }
+
+    crate::app::update::set_lx_entry(&mut state, pane, LxEntry::AiWeb);
+    let target = state.pane_anywhere(pane).expect("pane");
+    assert_eq!(target.lx.sandbox_mode, None);
+    assert!(target.lx.sandbox_exact_rules.is_empty());
+    assert!(target.lx.sandbox_prefix_rules.is_empty());
+    assert!(target.lx.approvals.is_empty());
+    assert!(target.lx.permission_switch.is_empty());
+
+    if let Some(target) = state.pane_mut_anywhere(pane) {
+        target.lx.sandbox_mode = Some(SandboxMode::DangerFullAccess);
+        target.lx.sandbox_exact_rules = vec![vec!["x".into()]];
+    }
+    crate::app::update::set_ai_web_site(&mut state, pane, AiWebSite::Gemini);
+    let target = state.pane_anywhere(pane).expect("pane");
+    assert_eq!(target.lx.sandbox_mode, None);
+    assert!(target.lx.sandbox_exact_rules.is_empty());
+    assert!(target.lx.permission_switch.is_empty());
+}

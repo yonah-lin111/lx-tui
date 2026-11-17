@@ -214,6 +214,12 @@ fn append_allow_rule_writes_0600_file_and_reloads() {
     );
     for prefix in [
         vec!["sh".to_string()],
+        vec!["/bin/sh".to_string()],
+        vec!["./python3".to_string()],
+        vec!["Bash".to_string()],
+        vec!["Git".to_string()],
+        vec!["osascript".to_string()],
+        vec!["/usr/bin/npm".to_string(), "run".to_string()],
         vec!["git".to_string()],
         vec!["echo;rm".to_string()],
         Vec::new(),
@@ -223,5 +229,64 @@ fn append_allow_rule_writes_0600_file_and_reloads() {
             "prefix {prefix:?}"
         );
     }
+    let _ = std::fs::remove_dir_all(dir);
+}
+
+#[test]
+fn metacharacter_subcommands_still_enforce_forbidden_and_prompt_without_allowing() {
+    let rules = parse(
+        r#"
+prefix_rule(pattern = ["echo"], decision = "allow")
+prefix_rule(pattern = ["make"], decision = "prompt", justification = "confirm build")
+prefix_rule(pattern = ["rm"], decision = "forbidden", justification = "no deletes")
+"#,
+    );
+    let policy = Policy::from_rules(rules);
+    for blocked in [
+        "true && rm -rf /",
+        "echo ok; rm -rf /",
+        "rm;true",
+        "rm>/dev/null",
+        "(rm -rf /)",
+        "echo $(rm -rf /)",
+        "echo \"$(rm -rf /)\"",
+        "echo `rm -rf /`",
+        "make all && rm -rf /",
+        "echo ok\nrm -rf /",
+        "{ rm -rf /; }",
+    ] {
+        assert!(
+            matches!(decide(&policy, blocked), RuleDecision::Forbidden(_)),
+            "expected Forbidden for {blocked}"
+        );
+    }
+    for prompted in ["true && make all", "echo ok | make all", "(make all)"] {
+        assert!(
+            matches!(decide(&policy, prompted), RuleDecision::Prompt(_)),
+            "expected Prompt for {prompted}"
+        );
+    }
+    assert_eq!(decide(&policy, "echo 'rm;true'"), RuleDecision::None);
+    assert_eq!(decide(&policy, "echo ok && echo bye"), RuleDecision::None);
+}
+
+#[test]
+fn append_allow_rule_inserts_leading_newline_when_file_lacks_trailing_newline() {
+    let dir = temp_dir("missing-eol");
+    let path = dir.join(DEFAULT_RULE_FILE);
+    std::fs::write(
+        &path,
+        r#"prefix_rule(pattern = ["echo"], decision = "allow")"#,
+    )
+    .expect("seed without trailing newline");
+    let store = PolicyStore::new(dir.clone());
+    store
+        .append_allow_rule(&["cargo".to_string(), "test".to_string()], None)
+        .expect("append");
+    let status = rules_status_for_dir(&dir);
+    assert_eq!(status.loaded_files, 1);
+    assert!(status.errors.is_empty(), "errors: {:?}", status.errors);
+    assert_eq!(decide(&store.current(), "echo ok"), RuleDecision::Allow);
+    assert_eq!(decide(&store.current(), "cargo test"), RuleDecision::Allow);
     let _ = std::fs::remove_dir_all(dir);
 }

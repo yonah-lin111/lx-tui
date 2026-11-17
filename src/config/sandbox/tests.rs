@@ -119,3 +119,20 @@ fn control_characters_are_rejected() {
     };
     assert!(settings.normalized().is_err());
 }
+
+#[test]
+fn save_sandbox_expands_tilde_before_validating() {
+    let Some(home) = std::env::var_os("HOME").map(PathBuf::from) else {
+        return;
+    };
+    let dir = temp_dir("tilde-save");
+    let path = dir.join("config").join("sandbox.json");
+    let settings = SandboxSettings {
+        writable_roots: vec![PathBuf::from("~/extra")],
+        ..SandboxSettings::default()
+    };
+    save_sandbox(&path, &settings).expect("save tilde root");
+    let loaded = load_sandbox(&path).expect("load").expect("file");
+    assert_eq!(loaded.writable_roots, vec![home.join("extra")]);
+    let _ = std::fs::remove_dir_all(dir);
+}

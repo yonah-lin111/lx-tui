@@ -37,6 +37,8 @@ pub struct Wrapped {
     pub program: PathBuf,
     /// 完整参数（含原程序与参数）。
     pub args: Vec<OsString>,
+    /// `bwrap` 为不存在挂载目标占位的空文件路径；子进程退出后按需清理。
+    pub synthetic_targets: Vec<PathBuf>,
 }
 
 /// 沙箱包装失败。
@@ -112,7 +114,7 @@ impl SandboxSupport {
     }
 }
 
-/// 探测当前平台的沙箱能力（不启动子进程）。
+/// 探测当前平台的沙箱能力（Linux 首次调用经 `bwrap` `OnceLock` 缓存真实能力探测）。
 pub fn support() -> SandboxSupport {
     #[cfg(target_os = "macos")]
     {
@@ -124,7 +126,7 @@ pub fn support() -> SandboxSupport {
     }
     #[cfg(target_os = "linux")]
     {
-        if command_on_path("bwrap") {
+        if bwrap::is_available() {
             SandboxSupport::Bubblewrap
         } else {
             SandboxSupport::Unavailable
@@ -140,15 +142,17 @@ pub fn support() -> SandboxSupport {
     }
 }
 
-#[cfg(target_os = "linux")]
-fn command_on_path(name: &str) -> bool {
-    std::env::var_os("PATH")
-        .map(|paths| {
-            std::env::split_paths(&paths)
-                .map(|dir| dir.join(name))
-                .any(|candidate| candidate.is_file())
-        })
-        .unwrap_or(false)
+/// 退出码是否表示平台沙箱系统调用拦截（如 Linux seccomp `SIGSYS`）。
+pub const fn is_seccomp_exit_code(code: i32) -> bool {
+    #[cfg(target_os = "linux")]
+    {
+        code == 128 + 31
+    }
+    #[cfg(not(target_os = "linux"))]
+    {
+        let _ = code;
+        false
+    }
 }
 
 #[cfg(test)]

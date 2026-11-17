@@ -3,6 +3,7 @@ let sandboxState = null;
 let sandboxBaseline = null;
 let sandboxCapabilities = null;
 let sandboxRules = null;
+let sandboxWarning = null;
 let sandboxModeSelect = null;
 let sandboxEscalationSelect = null;
 
@@ -51,9 +52,16 @@ function renderSandbox() {
   document.getElementById('sandbox-roots').value = (sandboxState.writable_roots || []).join('\n');
   const status = document.getElementById('sandbox-status');
   if (status) {
-    status.textContent = sandboxCapabilities
+    let text = sandboxCapabilities
       ? 'Process sandbox: ' + sandboxCapabilities.process_sandbox
       : '';
+    if (sandboxCapabilities && sandboxCapabilities.reason) {
+      text += (text ? ' — ' : '') + sandboxCapabilities.reason;
+    }
+    if (sandboxWarning) {
+      text += (text ? ' · Warning: ' : 'Warning: ') + sandboxWarning;
+    }
+    status.textContent = text;
   }
   const rules = document.getElementById('sandbox-rules');
   if (rules) {
@@ -83,6 +91,7 @@ function resetSandbox() {
   if (!sandboxBaseline) { return; }
   sandboxState = JSON.parse(JSON.stringify(sandboxBaseline));
   renderSandbox();
+  if (typeof refreshActionBars === 'function') { refreshActionBars(); }
 }
 
 async function loadSandbox(force) {
@@ -95,7 +104,12 @@ async function loadSandbox(force) {
     sandboxBaseline = JSON.parse(JSON.stringify(sandboxState));
     sandboxCapabilities = payload.capabilities || null;
     sandboxRules = payload.rules || null;
+    sandboxWarning = payload.warning || null;
     renderSandbox();
+    if (typeof refreshActionBars === 'function') { refreshActionBars(); }
+    if (sandboxWarning) {
+      showToast(sandboxWarning, 'error');
+    }
   } catch (error) {
     if (host) { host.textContent = error.message; }
     showToast(error.message, 'error');
@@ -112,7 +126,9 @@ async function saveSandbox() {
     sandboxBaseline = JSON.parse(JSON.stringify(sandboxState));
     sandboxCapabilities = payload.capabilities || sandboxCapabilities;
     sandboxRules = payload.rules || sandboxRules;
+    sandboxWarning = payload.warning || null;
     renderSandbox();
+    if (typeof refreshActionBars === 'function') { refreshActionBars(); }
     showToast('Sandbox settings saved', 'ok');
   } catch (error) {
     showToast(error.message, 'error');

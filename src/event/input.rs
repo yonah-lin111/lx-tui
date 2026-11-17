@@ -382,6 +382,13 @@ pub(crate) fn handle_paste_event(
         }
         if state
             .pane_anywhere(id)
+            .is_some_and(|pane| pane.lx.task.is_none() && !pane.lx.approvals.is_empty())
+        {
+            // 沙箱审批打开期间吞掉粘贴，绝不改写底层草稿或隐藏的 `ask` 缓冲。
+            return;
+        }
+        if state
+            .pane_anywhere(id)
             .is_some_and(|pane| pane.lx.ask.is_some())
         {
             if update::apply_ask_paste(state, id, &text) {
@@ -556,8 +563,8 @@ fn cut_lx_selection(state: &mut AppState) -> bool {
                     .and_then(|editor| editor.cut_selected()),
                 true,
             )
-        } else if target.lx.ask.is_some() {
-            // ask 面板非编辑态：隐藏的草稿不是用户当前操作对象，禁止剪切。
+        } else if target.lx.ask.is_some() || !target.lx.approvals.is_empty() {
+            // ask 面板非编辑态或审批打开期间：隐藏/被遮挡的草稿不是用户当前操作对象，禁止剪切。
             return false;
         } else {
             let text = target.lx.cut_selected();

@@ -129,7 +129,15 @@ async fn prompt_rule_uses_the_rule_approval_kind() {
     )
     .await
     .expect("approved");
-    assert_eq!(result, SandboxOverride::Unsandboxed);
+    assert_eq!(
+        result,
+        SandboxOverride::Approved {
+            effect: Box::new(SandboxOverride::Unsandboxed),
+            kind: SandboxApprovalKind::Rule,
+            for_session: false,
+            prefix: None,
+        }
+    );
     assert_eq!(
         host.trace.lock().expect("trace").as_slice(),
         &[HostTrace::Approval(SandboxApprovalKind::Rule)]
@@ -178,7 +186,15 @@ async fn explicit_escalation_still_approves_without_rules() {
     let result = decide(&mut host, plan(EscalationPolicy::Ask), &rules, &call)
         .await
         .expect("approved");
-    assert_eq!(result, SandboxOverride::Unsandboxed);
+    assert_eq!(
+        result,
+        SandboxOverride::Approved {
+            effect: Box::new(SandboxOverride::Unsandboxed),
+            kind: SandboxApprovalKind::Escalation,
+            for_session: false,
+            prefix: None,
+        }
+    );
     assert_eq!(
         host.trace.lock().expect("trace").as_slice(),
         &[HostTrace::Approval(SandboxApprovalKind::Escalation)]
@@ -194,7 +210,7 @@ async fn session_exact_rule_runs_before_asking() {
     let result = decide(&mut host, plan, &rules, &exec_call("touch /tmp/x", ""))
         .await
         .expect("session rule");
-    assert_eq!(result, SandboxOverride::None);
+    assert_eq!(result, SandboxOverride::Unsandboxed);
     assert!(host.trace.lock().expect("trace").is_empty());
 }
 
@@ -223,7 +239,7 @@ async fn session_exact_rule_beats_rule_prompt() {
     let result = decide(&mut host, plan, &rules, &exec_call("make all", ""))
         .await
         .expect("session rule");
-    assert_eq!(result, SandboxOverride::None);
+    assert_eq!(result, SandboxOverride::Unsandboxed);
     assert!(
         host.trace.lock().expect("trace").is_empty(),
         "规则 prompt 不得覆盖会话精确规则"
@@ -241,7 +257,15 @@ async fn model_request_beats_rule_prompt() {
     let result = decide(&mut host, plan(EscalationPolicy::Ask), &rules, &call)
         .await
         .expect("approved");
-    assert_eq!(result, SandboxOverride::Unsandboxed);
+    assert_eq!(
+        result,
+        SandboxOverride::Approved {
+            effect: Box::new(SandboxOverride::Unsandboxed),
+            kind: SandboxApprovalKind::Escalation,
+            for_session: false,
+            prefix: None,
+        }
+    );
     assert_eq!(
         host.trace.lock().expect("trace").as_slice(),
         &[HostTrace::Approval(SandboxApprovalKind::Escalation)],
@@ -379,4 +403,140 @@ async fn maybe_retry_skips_already_unsandboxed_or_session_approved_commands() {
         host.trace.lock().expect("trace").is_empty(),
         "会话已放行命令不应再问 retry"
     );
+}
+
+#[tokio::test]
+async fn session_prefix_rule_skips_rule_prompt_while_forbidden_still_blocks() {
+    let rules = policy(
+        r#"
+prefix_rule(pattern = ["make"], decision = "prompt", justification = "confirm build")
+prefix_rule(pattern = ["make", "danger"], decision = "forbidden", justification = "blocked target")
+"#,
+    );
+    let mut host = RecordingHost::new();
+    let approved_plan =
+        plan(EscalationPolicy::Ask).with_exact_rules(Vec::new(), vec![vec!["make".into()]]);
+    let ok = decide(
+        &mut host,
+        approved_plan.clone(),
+        &rules,
+        &exec_call("make all", ""),
+    )
+    .await
+    .expect("prefix rule bypasses prompt");
+    assert_eq!(ok, SandboxOverride::Unsandboxed);
+    assert!(
+        host.trace.lock().expect("trace").is_empty(),
+        "已记住的会话前缀规则不得再次触发 Rule 弹窗"
+    );
+
+    let blocked = decide(
+        &mut host,
+        approved_plan,
+        &rules,
+        &exec_call("make danger", ""),
+    )
+    .await;
+    let Err(blocked) = blocked else {
+        panic!("forbidden must beat session prefix rule");
+    };
+    assert_eq!(failure_code(blocked), ToolErrorCode::SandboxDenied);
+}
+
+#[tokio::test]
+async fn maybe_retry_skips_write_stdin_even_with_permission_denied() {
+    use super::super::sandbox_decision::maybe_retry_on_denial;
+    use crate::chat::process::{ProcessResult, ProcessResultKind, ProcessState};
+    use crate::db::chat::ToolCallTicket;
+
+    let mut host = RecordingHost::approving(SandboxApprovalDecision::Once);
+    let mut test_plan = plan(EscalationPolicy::Ask);
+    test_plan.support = crate::platform::sandbox::SandboxSupport::Seatbelt;
+    let executor = PolicyExecutor { plan: test_plan };
+    let stdin_call = ReadyToolCall {
+        call_id: "call-stdin".into(),
+        name: "write_stdin".into(),
+        arguments_json: r#"{"session_id":1,"chars":"x\n"}"#.into(),
+        ordinal: 0,
+    };
+    let ticket = ToolCallTicket {
+        session_id: "s".into(),
+        message_id: "m".into(),
+        call_id: "c".into(),
+        position: 0,
+        started_at_ms: 0,
+    };
+    let process_result = ToolExecutionResult::Process(Box::new(ProcessResult {
+        kind: ProcessResultKind::WriteStdin,
+        session_id: 1,
+        command: "cat".into(),
+        cwd: "/".into(),
+        state: ProcessState::Exited { code: Some(1) },
+        exit_code: Some(1),
+        output: "Permission denied".into(),
+        output_start: 0,
+        output_end: 17,
+        dropped_bytes: 0,
+        truncated: false,
+        wrote_input: true,
+        input: Some("x\\n".into()),
+        terminate: false,
+        tty: false,
+        chunk_id: "000001".into(),
+        wall_time_ms: 5,
+        sandbox_retry: None,
+    }));
+
+    let out = maybe_retry_on_denial(
+        &mut host,
+        &executor,
+        &stdin_call,
+        &ticket,
+        Path::new("/"),
+        Some(&SandboxOverride::None),
+        process_result,
+    )
+    .await;
+    assert!(matches!(out, ToolExecutionResult::Process(_)));
+    assert!(
+        host.trace.lock().expect("trace").is_empty(),
+        "write_stdin 不得触发 on-failure 重试审批"
+    );
+}
+
+#[tokio::test]
+async fn file_tools_only_skips_unsandboxed_escalation_approval() {
+    let rules = Policy::empty();
+    let mut host = RecordingHost::approving(SandboxApprovalDecision::Denied);
+    let mut win_plan = plan(EscalationPolicy::Ask);
+    win_plan.support = crate::platform::sandbox::SandboxSupport::FileToolsOnly;
+    let call = exec_call(
+        "cargo test",
+        r#","sandbox_permissions":"require_escalated","justification":"run test""#,
+    );
+    let result = decide(&mut host, win_plan, &rules, &call)
+        .await
+        .expect("file-tools-only skips require_escalated prompt");
+    assert_eq!(result, SandboxOverride::None);
+    assert!(host.trace.lock().expect("trace").is_empty());
+}
+
+#[tokio::test]
+async fn approved_for_session_produces_summary_on_override() {
+    let rules = policy(r#"prefix_rule(pattern = ["cargo", "publish"], decision = "prompt")"#);
+    let mut host = RecordingHost::approving(SandboxApprovalDecision::ForSession);
+    let result = decide(
+        &mut host,
+        plan(EscalationPolicy::Ask),
+        &rules,
+        &exec_call("cargo publish --dry-run", ""),
+    )
+    .await
+    .expect("approved for session");
+    let summary = result
+        .approval_summary("cargo publish --dry-run")
+        .expect("summary");
+    assert!(summary.for_session);
+    assert_eq!(summary.kind, SandboxApprovalKind::Rule);
+    assert_eq!(summary.prefix_range, Some((0, 13)));
 }

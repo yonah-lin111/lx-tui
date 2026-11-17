@@ -202,6 +202,20 @@ fn require_escalated_needs_justification_and_accepts_safe_prefix() {
 fn prefix_rule_rejects_shell_metacharacters_and_banned_prefixes() {
     for prefix in [
         r#"["sh","-c"]"#,
+        r#"["/bin/sh","-c"]"#,
+        r#"["/usr/bin/env","python3"]"#,
+        r#"["./python3"]"#,
+        r#"["Bash"]"#,
+        r#"["Git","push"]"#,
+        r#"["Rscript"]"#,
+        r#"["osascript"]"#,
+        r#"["nodejs"]"#,
+        r#"["pypy"]"#,
+        r#"["pypy3"]"#,
+        r#"["pythonw"]"#,
+        r#"["pyw"]"#,
+        r#"["/usr/local/bin/npm","run","dev"]"#,
+        r#"["C:\\Windows\\System32\\cmd.exe"]"#,
         r#"["rm"]"#,
         r#"["sudo"]"#,
         r#"["echo;rm"]"#,
@@ -213,6 +227,28 @@ fn prefix_rule_rejects_shell_metacharacters_and_banned_prefixes() {
         );
         assert!(parse_exec_request(&body).is_err(), "prefix {prefix}");
     }
+    assert!(
+        parse_exec_request(
+            r#"{"cmd":"npm test","sandbox_permissions":"require_escalated","justification":"run tests","prefix_rule":["/usr/local/bin/npm","test"]}"#
+        )
+        .is_ok(),
+        "non-run npm subcommand remains allowed"
+    );
+}
+
+#[test]
+fn empty_sandbox_permissions_string_is_rejected() {
+    for raw in [
+        r#"{"cmd":"ls","sandbox_permissions":""}"#,
+        r#"{"cmd":"ls","sandbox_permissions":"   "}"#,
+    ] {
+        assert!(
+            parse_exec_request(raw).is_err(),
+            "empty sandbox_permissions must fail: {raw}"
+        );
+    }
+    let null_perm = parse_exec_request(r#"{"cmd":"ls","sandbox_permissions":null}"#).expect("null");
+    assert!(null_perm.escalation.is_none());
 }
 
 #[test]

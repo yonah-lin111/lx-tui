@@ -33,6 +33,21 @@ pub fn apply_input(state: &mut AppState, pane: PaneId, command: LxInput) -> bool
         LxInput::Escape | LxInput::Char('n') => {
             commit_decision(state, pane, SandboxApprovalDecision::Denied)
         }
+        LxInput::Clear => {
+            if !commit_decision(state, pane, SandboxApprovalDecision::Denied) {
+                return false;
+            }
+            let matches_active_stream = state.pane_anywhere(pane).is_some_and(|target| {
+                matches!(
+                    &target.lx.chat.request,
+                    crate::app::state::RequestState::Streaming { key, .. } if *key == front.key
+                )
+            });
+            if matches_active_stream {
+                super::stop_stream(state, pane);
+            }
+            true
+        }
         LxInput::Char('y')
             if matches!(
                 front.request.kind,

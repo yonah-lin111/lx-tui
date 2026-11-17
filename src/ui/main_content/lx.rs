@@ -20,7 +20,9 @@ mod panels;
 mod refer;
 mod selection;
 
-pub(crate) use approval::item_at as approval_item_at;
+pub(crate) use approval::{
+    item_at as approval_item_at, layout as approval_layout, visible as approval_visible,
+};
 pub(crate) use ask::{ask_editor_cell_at, ask_editor_drag_cell_at, rect as ask_rect};
 pub(crate) use mention::{
     item_at as mention_item_at, layout as mention_layout, tab_at as mention_tab_at,
@@ -395,9 +397,10 @@ fn layout(area: Rect, lx: &Lx) -> Layout {
         out.task_list = Some(input);
     }
 
-    // md 格式面板：贴输入框上方（聊天栏与 pending 提示区之上）；后台任务页打开时或放不下则省略。
+    // md 格式面板：贴输入框上方（聊天栏与 pending 提示区之上）；后台任务页、审批打开或放不下则省略。
     let panel_base = stack_top(&out, input);
     if lx.task.is_none()
+        && !approval::visible(lx)
         && let Some(panel) = lx.panel.as_ref()
     {
         let rows = panel.items().len();

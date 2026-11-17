@@ -74,7 +74,7 @@ where
         RuleDecision::None => None,
     };
 
-    // 3. 会话精确命令规则：执行器会识别并裸跑，这里不再询问。
+    // 3. 会话精确/前缀命令规则：跳过沙箱与规则 Prompt 询问（已在步骤 1 检查 Forbidden）。
     if plan.command_is_approved(&request.args.cmd) {
         tracing::info!(
             target: "lx::agent::approval",
@@ -82,7 +82,7 @@ where
             command = %crate::chat::sandbox::command_preview(&request.args.cmd),
             "session approval rule bypassed sandbox"
         );
-        return Ok(SandboxOverride::None);
+        return Ok(SandboxOverride::Unsandboxed);
     }
 
     // 4. 模型显式提权。
@@ -108,6 +108,18 @@ where
                 network: additional.network,
                 file_system: additional.file_system,
             });
+        }
+        // Windows 仅文件工具受限、无进程沙箱：`require_escalated` 直接按默认直通，不弹无意义审批。
+        if plan.support == crate::platform::sandbox::SandboxSupport::FileToolsOnly
+            && escalation.kind == crate::chat::tools::EscalationKind::Unsandboxed
+        {
+            tracing::info!(
+                target: "lx::agent::approval",
+                call_id = %call.call_id,
+                command = %crate::chat::sandbox::command_preview(&request.args.cmd),
+                "skipping unsandboxed escalation approval on file-tools-only platform"
+            );
+            return Ok(SandboxOverride::None);
         }
         if plan.command_sandbox() == crate::chat::sandbox::CommandSandbox::Unavailable {
             return Err(ToolFailure::new(
@@ -150,7 +162,7 @@ where
             )
             .into_result(Vec::new()));
         }
-        return Ok(match escalation.kind {
+        let effect = match escalation.kind {
             crate::chat::tools::EscalationKind::Unsandboxed => SandboxOverride::Unsandboxed,
             crate::chat::tools::EscalationKind::Additional => {
                 let additional = escalation.additional.unwrap_or_default();
@@ -159,6 +171,19 @@ where
                     file_system: additional.file_system,
                 }
             }
+        };
+        let for_session = decision == SandboxApprovalDecision::ForSession
+            && escalation.kind == crate::chat::tools::EscalationKind::Unsandboxed
+            && escalation.prefix_rule.is_some();
+        return Ok(SandboxOverride::Approved {
+            effect: Box::new(effect),
+            kind: SandboxApprovalKind::Escalation,
+            for_session,
+            prefix: if for_session {
+                escalation.prefix_rule
+            } else {
+                None
+            },
         });
     }
 
@@ -187,7 +212,7 @@ where
             command: request.args.cmd.clone(),
             cwd: cwd.display().to_string(),
             justification: evaluation.justification.unwrap_or_default(),
-            prefix_rule: Some(evaluation.matched_prefix),
+            prefix_rule: Some(evaluation.matched_prefix.clone()),
             additional: None,
             denial_excerpt: None,
             source: None,
@@ -202,7 +227,13 @@ where
             )
             .into_result(Vec::new()));
         }
-        return Ok(SandboxOverride::Unsandboxed);
+        let for_session = decision == SandboxApprovalDecision::ForSession;
+        return Ok(SandboxOverride::Approved {
+            effect: Box::new(SandboxOverride::Unsandboxed),
+            kind: SandboxApprovalKind::Rule,
+            for_session,
+            prefix: for_session.then_some(evaluation.matched_prefix),
+        });
     }
 
     // 6. 默认沙箱执行。
@@ -253,26 +284,31 @@ where
     H: AgentHost,
     E: ToolExecutor,
 {
+    if call.name != "exec_command" {
+        return result;
+    }
     let Some(plan) = executor.sandbox_plan() else {
         return result;
     };
     if plan.escalation != crate::config::sandbox::EscalationPolicy::Ask || !plan.process_sandbox() {
         return result;
     }
-    if matches!(
-        applied_override,
-        Some(crate::chat::sandbox::SandboxOverride::Unsandboxed)
-    ) {
+    if applied_override.is_some_and(crate::chat::sandbox::SandboxOverride::is_unsandboxed) {
         return result;
     }
     let crate::chat::tools::ToolExecutionResult::Process(process) = &result else {
         return result;
     };
+    if process.kind != crate::chat::process::ProcessResultKind::ExecCommand {
+        return result;
+    }
     if plan.command_is_approved(&process.command) {
         return result;
     }
     if !crate::chat::sandbox::denial::is_likely_sandbox_denied(process, true)
-        || process.sandbox_retry.is_some()
+        || process
+            .sandbox_retry
+            .is_some_and(|retry| retry.kind == crate::chat::sandbox::SandboxApprovalKind::Retry)
     {
         return result;
     }
@@ -309,6 +345,9 @@ where
                 retried.sandbox_retry = Some(crate::chat::sandbox::SandboxRetry {
                     approved: true,
                     for_session,
+                    kind: crate::chat::sandbox::SandboxApprovalKind::Retry,
+                    additional: false,
+                    prefix_range: None,
                 });
                 crate::chat::tools::ToolExecutionResult::Process(retried)
             } else {

@@ -181,6 +181,8 @@ pub(crate) fn assemble_exec_turn_with_snapshot(
         None => Vec::new(),
     };
     let mut sandbox_settings = crate::config::sandbox::load_sandbox_or_default();
+    // 无头 `exec` 模式没有交互审批界面：强制禁止提权，并裁剪相应工具参数。
+    sandbox_settings.escalation = crate::config::sandbox::EscalationPolicy::Never;
     if let Some(session_id) = existing_session
         && let Some(mode) = db
             .session_sandbox_mode(workspace, session_id)

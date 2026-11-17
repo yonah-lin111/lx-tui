@@ -547,3 +547,128 @@ async fn nested_executor_wait_all_and_grandchild_queued_input_succeed() {
         "root wait_agent results: {waited:?}"
     );
 }
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn exec_subagent_trims_escalation_schema_forces_never_and_loads_root_db_rules() {
+    use crate::db::sandbox::{SandboxRuleKind, SessionSandboxRule};
+
+    let dir = TestDir::new("subagent-sandbox");
+    let db = Database::open_in_memory().expect("in-memory db");
+    let seed_config = assemble(&db, &dir, "delegate sandboxed command", None);
+    let session_id = seed_config.session_id.clone();
+
+    let mut seed_stdout = Vec::new();
+    let mut seed_stderr = Vec::new();
+    let mut seed_processor =
+        HumanOutputProcessor::new(&mut seed_stdout, &mut seed_stderr, false, false, None);
+    let (_cancel_tx, cancel_rx) = watch::channel(false);
+    let seed_summary = run_exec_turn(
+        &db,
+        seed_config,
+        &mut seed_processor,
+        ScriptedFactory::new(vec![text_step("seeded")], Vec::new()),
+        cancel_rx,
+    )
+    .await;
+    assert_eq!(seed_summary.outcome, TurnOutcome::Complete);
+
+    db.set_session_sandbox_mode(&dir.path, &session_id, Some("read-only"))
+        .expect("set read-only");
+    let allowed = dir.join("child-allowed.txt");
+    db.insert_sandbox_rule(
+        &dir.path,
+        &session_id,
+        &SessionSandboxRule {
+            kind: SandboxRuleKind::Exact,
+            tokens: vec!["touch".into(), allowed.display().to_string()],
+        },
+    )
+    .expect("insert exact rule");
+
+    let config = assemble(&db, &dir, "delegate to executor", Some(&session_id));
+    let spawn_args = r#"{"role":"executor","title":"run commands","task":"run approved and escalated cmds","task_name":"worker"}"#;
+    let wait_args = r#"{"timeout_ms":10000}"#;
+    let approved_args = serde_json::json!({
+        "cmd": format!("touch {}", allowed.display()),
+        "login": false,
+        "yield_time_ms": 2000
+    })
+    .to_string();
+    let escalated_args = serde_json::json!({
+        "cmd": "echo nope",
+        "login": false,
+        "sandbox_permissions": "require_escalated",
+        "justification": "not allowed"
+    })
+    .to_string();
+
+    let factory = ScriptedFactory::new(
+        vec![
+            tool_step(&[("call-spawn", "spawn_agent", spawn_args)]),
+            tool_step(&[("call-wait", "wait_agent", wait_args)]),
+            text_step("parent finished"),
+        ],
+        vec![
+            tool_step(&[
+                ("child-approved", "exec_command", approved_args.as_str()),
+                ("child-escalated", "exec_command", escalated_args.as_str()),
+            ]),
+            text_step("worker finished"),
+        ],
+    );
+
+    let mut stdout = Vec::new();
+    let mut stderr = Vec::new();
+    let mut processor = HumanOutputProcessor::new(&mut stdout, &mut stderr, false, false, None);
+    let (_cancel_tx, cancel_rx) = watch::channel(false);
+    let summary = run_exec_turn(&db, config, &mut processor, factory.clone(), cancel_rx).await;
+    assert_eq!(summary.outcome, TurnOutcome::Complete);
+    assert!(
+        allowed.exists(),
+        "subagent must load root session DB sandbox rules"
+    );
+
+    let requests = factory.requests();
+    let child_requests: Vec<&ChatRequest> = requests
+        .iter()
+        .filter(|request| matches!(request.purpose, RequestPurpose::Subagent(_)))
+        .collect();
+    assert_eq!(child_requests.len(), 2);
+
+    let child_sys = child_requests[0].system_prompt.as_deref().unwrap_or("");
+    assert!(
+        child_sys.contains(r#"escalation="never""#),
+        "subagent system prompt must declare escalation=never: {child_sys}"
+    );
+    let exec_tool = child_requests[0]
+        .tools
+        .iter()
+        .find(|decl| decl.name == "exec_command")
+        .expect("executor exec_command tool");
+    let props = exec_tool
+        .parameters
+        .get("properties")
+        .and_then(serde_json::Value::as_object)
+        .expect("properties");
+    for hidden in [
+        "sandbox_permissions",
+        "justification",
+        "prefix_rule",
+        "additional_permissions",
+    ] {
+        assert!(
+            !props.contains_key(hidden),
+            "subagent must trim {hidden} from exec_command schema"
+        );
+    }
+
+    let child_results = tool_result_texts(child_requests[1]);
+    if crate::platform::sandbox::support().supports_process_sandbox() {
+        assert!(
+            child_results
+                .iter()
+                .any(|text| text.contains("sandbox escalation is disabled by settings")),
+            "subagent escalation must fail when escalation=never: {child_results:?}"
+        );
+    }
+}

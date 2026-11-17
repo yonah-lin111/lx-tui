@@ -1,4 +1,4 @@
-//! 会话级沙箱覆盖与审批规则（v30）。
+//! 会话级沙箱覆盖与审批规则（v31/v32）。
 
 use std::path::Path;
 
@@ -134,15 +134,24 @@ impl Database {
         })?;
         let mut rules = Vec::new();
         for row in rows {
-            let (kind, tokens) = row?;
+            let (kind, prefix_json) = row?;
             let Some(kind) = SandboxRuleKind::parse(&kind) else {
                 continue;
             };
-            let tokens = tokens
-                .split('\u{0}')
-                .filter(|token| !token.is_empty())
-                .map(str::to_string)
-                .collect();
+            let tokens = if prefix_json.trim_start().starts_with('[') {
+                match serde_json::from_str::<Vec<String>>(&prefix_json) {
+                    Ok(parsed) => parsed,
+                    Err(error) => {
+                        tracing::warn!(%error, "skipping malformed sandbox rule prefix_json");
+                        continue;
+                    }
+                }
+            } else if prefix_json.is_empty() {
+                Vec::new()
+            } else {
+                // 兼容历史测试/旧库用 `\u{0}` 拼接的数据（保留空参数 token）。
+                prefix_json.split('\u{0}').map(str::to_string).collect()
+            };
             rules.push(SessionSandboxRule { kind, tokens });
         }
         Ok(rules)
@@ -169,11 +178,14 @@ impl Database {
         if owned.is_none() {
             return Err(DbError::SessionMissing);
         }
-        let tokens = rule.tokens.join("\u{0}");
+        let prefix_json = serde_json::to_string(&rule.tokens).unwrap_or_else(|error| {
+            tracing::warn!(%error, "failed to serialize sandbox rule tokens");
+            "[]".to_string()
+        });
         self.conn.execute(
             "INSERT OR IGNORE INTO agent_session_sandbox_rule (session_id, kind, prefix_json, created_at_ms)
              VALUES (?1, ?2, ?3, ?4)",
-            params![session_id, rule.kind.as_str(), tokens, now_ms()],
+            params![session_id, rule.kind.as_str(), prefix_json, now_ms()],
         )?;
         Ok(())
     }

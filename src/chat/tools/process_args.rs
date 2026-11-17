@@ -243,9 +243,16 @@ pub fn parse_exec_request(arguments_json: &str) -> ToolResultPublic<ExecRequest>
     ];
     reject_unknown(&value, &allowed)?;
     let args = parse_exec_args_from(&value)?;
-    let permissions = optional_string(&value, "sandbox_permissions")?
-        .unwrap_or_else(|| "use_default".to_string());
-    match permissions.as_str() {
+    let permissions = match value.get("sandbox_permissions") {
+        None | Some(Value::Null) => "use_default",
+        Some(Value::String(text)) => text.as_str(),
+        Some(_) => {
+            return Err(ToolFailure::invalid(
+                "'sandbox_permissions' must be a string",
+            ));
+        }
+    };
+    match permissions {
         "use_default" => {
             for key in ["justification", "prefix_rule", "additional_permissions"] {
                 if value.get(key).is_some_and(|field| !field.is_null()) {
@@ -510,9 +517,14 @@ pub(crate) fn is_banned_prefix(tokens: &[String]) -> bool {
         &["pwsh"],
         &["node"],
         &["node", "-e"],
+        &["nodejs"],
         &["python"],
         &["python3"],
+        &["pythonw"],
         &["py"],
+        &["pyw"],
+        &["pypy"],
+        &["pypy3"],
         &["ruby"],
         &["perl"],
         &["php"],
@@ -520,7 +532,8 @@ pub(crate) fn is_banned_prefix(tokens: &[String]) -> bool {
         &["deno"],
         &["bun"],
         &["julia"],
-        &["Rscript"],
+        &["rscript"],
+        &["osascript"],
         &["git"],
         &["npm", "run"],
         &["pnpm", "run"],
@@ -529,11 +542,30 @@ pub(crate) fn is_banned_prefix(tokens: &[String]) -> bool {
         &["sudo"],
         &["rm"],
     ];
+    let Some(first) = tokens.first() else {
+        return false;
+    };
+    let normalized_first = normalize_program_token(first);
     BANNED.iter().any(|prefix| {
         tokens.len() >= prefix.len()
-            && tokens
+            && normalized_first == prefix[0]
+            && tokens[1..]
                 .iter()
-                .zip(*prefix)
+                .zip(&prefix[1..])
                 .all(|(token, expected)| token.as_str() == *expected)
     })
+}
+
+fn normalize_program_token(token: &str) -> String {
+    let base = std::path::Path::new(token)
+        .file_name()
+        .and_then(|name| name.to_str())
+        .unwrap_or(token);
+    // 兼容非 Windows 宿主传入 `C:\...\cmd.exe` 这类反斜杠路径。
+    let base = base
+        .rsplit('\\')
+        .next()
+        .filter(|part| !part.is_empty())
+        .unwrap_or(base);
+    base.to_ascii_lowercase()
 }

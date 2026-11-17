@@ -3,7 +3,7 @@
 //! 语法兼容 Codex `prefix_rule(...)`；`allow` 只在本条命令不含 shell 元字符时生效。
 //! 规则文件是用户显式维护的高权限配置：`allow` 会跳过沙箱。
 
-use std::io::Write;
+use std::io::{Read, Seek, SeekFrom, Write};
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::sync::Mutex;
@@ -69,21 +69,15 @@ pub fn split_shell_segments(command: &str) -> Option<Vec<Vec<String>>> {
 
 /// 对整条命令应用规则（安全分段全部 allow 才返回 [`RuleDecision::Allow`]）。
 pub fn decide(policy: &Policy, command: &str) -> RuleDecision {
-    let Some(segments) = split_shell_segments(command) else {
-        let Some(tokens) = shlex::split(command) else {
-            return RuleDecision::None;
-        };
-        return match policy.evaluate(&tokens) {
-            Some(eval) if eval.decision == Decision::Forbidden => RuleDecision::Forbidden(eval),
-            Some(eval) if eval.decision.needs_approval() => RuleDecision::Prompt(eval),
-            // 含元字符时 allow 不生效。
-            _ => RuleDecision::None,
-        };
+    let (segments, allow_allowed) = match split_shell_segments(command) {
+        Some(segments) => (segments, true),
+        // 含元字符时按引号外控制符拆分子命令分别评估，但禁止 Allow 放行。
+        None => (extract_metachar_segments(command), false),
     };
 
     let mut forbidden: Option<Evaluation> = None;
     let mut prompt: Option<Evaluation> = None;
-    let mut all_allow = true;
+    let mut all_allow = allow_allowed && !segments.is_empty();
     for segment in &segments {
         match policy.evaluate(segment) {
             Some(eval) if eval.decision == Decision::Forbidden => {
@@ -107,6 +101,216 @@ pub fn decide(policy: &Policy, command: &str) -> RuleDecision {
     } else {
         RuleDecision::None
     }
+}
+
+fn extract_metachar_segments(command: &str) -> Vec<Vec<String>> {
+    let mut raw_segments = Vec::new();
+    collect_raw_segments(command, &mut raw_segments);
+    raw_segments
+        .into_iter()
+        .filter_map(|segment| {
+            let tokens = shlex::split(&segment)?;
+            (!tokens.is_empty()).then_some(tokens)
+        })
+        .collect()
+}
+
+fn flush_segment(current: &mut String, out: &mut Vec<String>) {
+    let trimmed = current.trim();
+    if !trimmed.is_empty() {
+        out.push(trimmed.to_string());
+    }
+    current.clear();
+}
+
+fn collect_raw_segments(input: &str, out: &mut Vec<String>) {
+    let mut current = String::new();
+    let mut i = 0usize;
+    let mut in_single = false;
+    let mut in_double = false;
+
+    while i < input.len() {
+        let rest = &input[i..];
+        let Some(ch) = rest.chars().next() else {
+            break;
+        };
+
+        if in_single {
+            current.push(ch);
+            i += ch.len_utf8();
+            if ch == '\'' {
+                in_single = false;
+            }
+            continue;
+        }
+
+        if in_double {
+            if ch == '\\' {
+                current.push(ch);
+                i += 1;
+                if let Some(escaped) = input[i..].chars().next() {
+                    current.push(escaped);
+                    i += escaped.len_utf8();
+                }
+                continue;
+            }
+            if rest.starts_with("$(") {
+                current.push(' ');
+                let (inner, consumed) = extract_paren_command_sub(&input[i + 2..]);
+                collect_raw_segments(inner, out);
+                i += 2 + consumed;
+                continue;
+            }
+            if ch == '`' {
+                current.push(' ');
+                let (inner, consumed) = extract_backtick_command_sub(&input[i + 1..]);
+                collect_raw_segments(inner, out);
+                i += 1 + consumed;
+                continue;
+            }
+            current.push(ch);
+            i += ch.len_utf8();
+            if ch == '"' {
+                in_double = false;
+            }
+            continue;
+        }
+
+        if ch == '\\' {
+            current.push(ch);
+            i += 1;
+            if let Some(escaped) = input[i..].chars().next() {
+                current.push(escaped);
+                i += escaped.len_utf8();
+            }
+            continue;
+        }
+        if ch == '\'' {
+            in_single = true;
+            current.push(ch);
+            i += 1;
+            continue;
+        }
+        if ch == '"' {
+            in_double = true;
+            current.push(ch);
+            i += 1;
+            continue;
+        }
+        if rest.starts_with("$(") {
+            flush_segment(&mut current, out);
+            let (inner, consumed) = extract_paren_command_sub(&input[i + 2..]);
+            collect_raw_segments(inner, out);
+            i += 2 + consumed;
+            continue;
+        }
+        if ch == '`' {
+            flush_segment(&mut current, out);
+            let (inner, consumed) = extract_backtick_command_sub(&input[i + 1..]);
+            collect_raw_segments(inner, out);
+            i += 1 + consumed;
+            continue;
+        }
+        if rest.starts_with("&&") || rest.starts_with("||") {
+            flush_segment(&mut current, out);
+            i += 2;
+            continue;
+        }
+        if matches!(
+            ch,
+            ';' | '|' | '&' | '\n' | '(' | ')' | '{' | '}' | '<' | '>'
+        ) {
+            flush_segment(&mut current, out);
+            i += 1;
+            continue;
+        }
+        current.push(ch);
+        i += ch.len_utf8();
+    }
+    flush_segment(&mut current, out);
+}
+
+fn extract_paren_command_sub(input: &str) -> (&str, usize) {
+    let mut depth = 1usize;
+    let mut i = 0usize;
+    let mut in_single = false;
+    let mut in_double = false;
+    while i < input.len() {
+        let Some(ch) = input[i..].chars().next() else {
+            break;
+        };
+        if in_single {
+            i += ch.len_utf8();
+            if ch == '\'' {
+                in_single = false;
+            }
+            continue;
+        }
+        if in_double {
+            if ch == '\\' {
+                i += 1;
+                if let Some(escaped) = input[i..].chars().next() {
+                    i += escaped.len_utf8();
+                }
+                continue;
+            }
+            i += ch.len_utf8();
+            if ch == '"' {
+                in_double = false;
+            }
+            continue;
+        }
+        match ch {
+            '\\' => {
+                i += 1;
+                if let Some(escaped) = input[i..].chars().next() {
+                    i += escaped.len_utf8();
+                }
+            }
+            '\'' => {
+                in_single = true;
+                i += 1;
+            }
+            '"' => {
+                in_double = true;
+                i += 1;
+            }
+            '(' => {
+                depth += 1;
+                i += 1;
+            }
+            ')' => {
+                depth -= 1;
+                if depth == 0 {
+                    return (&input[..i], i + 1);
+                }
+                i += 1;
+            }
+            _ => i += ch.len_utf8(),
+        }
+    }
+    (input, input.len())
+}
+
+fn extract_backtick_command_sub(input: &str) -> (&str, usize) {
+    let mut i = 0usize;
+    while i < input.len() {
+        let Some(ch) = input[i..].chars().next() else {
+            break;
+        };
+        if ch == '\\' {
+            i += 1;
+            if let Some(escaped) = input[i..].chars().next() {
+                i += escaped.len_utf8();
+            }
+            continue;
+        }
+        if ch == '`' {
+            return (&input[..i], i + 1);
+        }
+        i += ch.len_utf8();
+    }
+    (input, input.len())
 }
 
 fn stricter(current: Option<Evaluation>, candidate: Evaluation) -> Evaluation {
@@ -279,11 +483,45 @@ impl PolicyStore {
             line.push_str(&format!(", justification = {escaped}"));
         }
         line.push_str(")\n");
+        let needs_leading_newline = match std::fs::File::open(&path) {
+            Ok(mut reader) => {
+                let len = reader
+                    .metadata()
+                    .map_err(|error| {
+                        Error::InvalidRule(format!("stat {}: {error}", path.display()))
+                    })?
+                    .len();
+                if len > 0 {
+                    reader.seek(SeekFrom::End(-1)).map_err(|error| {
+                        Error::InvalidRule(format!("seek {}: {error}", path.display()))
+                    })?;
+                    let mut last = [0u8; 1];
+                    reader.read_exact(&mut last).map_err(|error| {
+                        Error::InvalidRule(format!("read {}: {error}", path.display()))
+                    })?;
+                    last[0] != b'\n'
+                } else {
+                    false
+                }
+            }
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => false,
+            Err(error) => {
+                return Err(Error::InvalidRule(format!(
+                    "open {}: {error}",
+                    path.display()
+                )));
+            }
+        };
         let mut file = std::fs::OpenOptions::new()
             .create(true)
             .append(true)
             .open(&path)
             .map_err(|error| Error::InvalidRule(format!("open {}: {error}", path.display())))?;
+        if needs_leading_newline {
+            file.write_all(b"\n").map_err(|error| {
+                Error::InvalidRule(format!("append {}: {error}", path.display()))
+            })?;
+        }
         file.write_all(line.as_bytes())
             .map_err(|error| Error::InvalidRule(format!("append {}: {error}", path.display())))?;
         let _ = crate::platform::restrict_file_permissions(&path);
@@ -305,6 +543,11 @@ impl PolicyStore {
         }
         self.append_allow_rule(prefix, justification)
     }
+}
+
+/// 读取指定目录的规则加载状态（不依赖进程级全局仓库）。
+pub fn rules_status_for_dir(dir: &std::path::Path) -> RulesStatus {
+    load_dir(dir).2
 }
 
 fn load_dir(dir: &std::path::Path) -> (Policy, Signature, RulesStatus, bool) {

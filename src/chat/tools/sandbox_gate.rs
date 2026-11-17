@@ -21,16 +21,16 @@ pub(crate) fn ensure_writable(ctx: &ToolContext, targets: &[&Path]) -> Result<()
         return Err(read_only());
     }
     for target in targets {
-        let resolved = roots::resolve_write_target(target).ok_or_else(|| outside(target))?;
-        ensure_path(ctx, &resolved)?;
+        let resolved = super::path::write_target(target);
+        ensure_writable_resolved(ctx, target, &resolved)?;
     }
     Ok(())
 }
 
-/// 解析后的目标判定（符号链接指向根外时由解析路径拒绝）。
+/// 逻辑路径（父目录规范化、不跟随末段符号链接）与解析后目标双重判定。
 pub(crate) fn ensure_writable_resolved(
     ctx: &ToolContext,
-    _logical: &Path,
+    logical: &Path,
     resolved: &Path,
 ) -> Result<(), ToolFailure> {
     if ctx.sandbox.mode == SandboxMode::DangerFullAccess {
@@ -39,8 +39,14 @@ pub(crate) fn ensure_writable_resolved(
     if ctx.sandbox.mode == SandboxMode::ReadOnly {
         return Err(read_only());
     }
-    let resolved = roots::resolve_write_target(resolved).ok_or_else(|| outside(resolved))?;
-    ensure_path(ctx, &resolved)
+    let logical_entry =
+        roots::canonical_parent_or_ancestor(logical).ok_or_else(|| outside(logical))?;
+    ensure_path(ctx, &logical_entry)?;
+    let resolved_target = roots::resolve_write_target(resolved).ok_or_else(|| outside(resolved))?;
+    if resolved_target != logical_entry {
+        ensure_path(ctx, &resolved_target)?;
+    }
+    Ok(())
 }
 
 fn ensure_path(ctx: &ToolContext, path: &Path) -> Result<(), ToolFailure> {

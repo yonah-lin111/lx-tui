@@ -86,7 +86,10 @@ pub use mcp::{
     refresh_all_open_mcp_panels, refresh_pane_mcp_panel, toggle_mcp_entry,
 };
 pub use model_switch::{set_switches as set_model_switches, toggle_model_switch};
-pub use permission_switch::{set_switches as set_permission_switches, toggle_permission_switch};
+pub use permission_switch::{
+    apply_sandbox_changed, set_sandbox_rules, set_switches as set_permission_switches,
+    sync_session_sandbox_mode, toggle_permission_switch,
+};
 pub use process::{
     activate_tool_card, apply_interaction_exit, apply_process_exit, apply_process_output,
     apply_process_snapshot, commit_plan, open_task_for_selected_tool, reconcile_process_records,

@@ -745,6 +745,7 @@ pub fn set_lx_entry(state: &mut AppState, id: PaneId, entry: crate::app::state::
                 pane.lx.clear_agents();
                 pane.lx.compact.reset();
                 pane.lx.model_switch.reset();
+                pane.lx.reset_session_sandbox_state();
             }
             pane.lx.recap.reset();
             pane.lx.clear_rewind();
@@ -786,6 +787,7 @@ pub fn set_ai_web_site(state: &mut AppState, id: PaneId, site: crate::app::state
         pane.lx.clear_agents();
         pane.lx.compact.reset();
         pane.lx.model_switch.reset();
+        pane.lx.reset_session_sandbox_state();
         pane.lx.recap.reset();
         pane.lx.clear_rewind();
         pane.lx.ai_web_edit_user_index = None;

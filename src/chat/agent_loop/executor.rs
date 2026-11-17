@@ -416,6 +416,9 @@ impl AgentTools {
             {
                 Ok(mut result) => {
                     result.command = prepared.original.clone();
+                    if !approved && let Some(retry) = sandbox.approval_summary(&prepared.original) {
+                        result.sandbox_retry = Some(retry);
+                    }
                     // 只有真实终态才过滤：等待窗口到期仍 Running 时返回的是半截输出，
                     // 不能把“还在编译”压缩成“ok”；后续 write_stdin 继续读原始增量。
                     if result.state.is_terminal() && self.rtk.should_filter_builtin(&prepared) {

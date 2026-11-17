@@ -763,3 +763,42 @@ async fn tail_snapshot_tracks_the_newest_output_past_the_budget() {
         &tail[tail.len().saturating_sub(48)..]
     );
 }
+
+#[tokio::test]
+async fn exec_observed_with_sandbox_uses_resolved_workdir_and_cleans_synthetic_git() {
+    if !crate::platform::sandbox::support().supports_process_sandbox() {
+        return;
+    }
+    let dir = TempDir::new("sandbox-workdir");
+    let root = std::fs::canonicalize(&dir.path).expect("canonical root");
+    let sub = root.join("sub");
+    std::fs::create_dir_all(&sub).expect("sub");
+    let missing_git = root.join(".git");
+    let spec = crate::platform::sandbox::SandboxSpec {
+        cwd: &root,
+        writable_roots: std::slice::from_ref(&root),
+        read_only_paths: std::slice::from_ref(&missing_git),
+        deny_paths: &[],
+        deny_globs: &[],
+        glob_scan_max_depth: 16,
+        network_access: false,
+    };
+    let manager = manager(&dir);
+    let mut args = exec("pwd", 5_000);
+    args.workdir = Some("sub".to_string());
+    let result = manager
+        .exec_observed(args, &root, "call-sandbox-workdir", Some(&spec), &|_| {})
+        .await
+        .expect("exec");
+    assert_eq!(result.exit_code, Some(0));
+    assert!(
+        result.output.trim().ends_with("sub"),
+        "沙箱内工作目录必须切换到 workdir=sub: {:?}",
+        result.output
+    );
+    assert!(result.cwd.ends_with("sub"));
+    assert!(
+        std::fs::symlink_metadata(&missing_git).is_err(),
+        "进程退出后工作区不得残留 0 字节 .git 占位文件"
+    );
+}

@@ -148,6 +148,7 @@ impl SandboxSettings {
     /// 归一化并校验：展开 `~`、要求绝对路径、去重、限长。
     pub fn normalized(mut self) -> Result<Self, SandboxConfigError> {
         self.writable_roots = normalize_roots(&self.writable_roots)?;
+        self.validate()?;
         Ok(self)
     }
 
@@ -255,9 +256,7 @@ pub fn parse_sandbox(text: &str) -> Result<SandboxSettings, SandboxConfigError> 
 
 /// 原子保存：先归一化并校验，再写临时文件 → 0600 → `rename`。
 pub fn save_sandbox(path: &Path, settings: &SandboxSettings) -> Result<(), SandboxConfigError> {
-    settings.validate()?;
     let normalized = settings.clone().normalized()?;
-    normalized.validate()?;
     let body = serde_json::to_string_pretty(&normalized)
         .map_err(|error| SandboxConfigError::Invalid(format!("serialize failed: {error}")))?;
     let body = format!("{body}\n");

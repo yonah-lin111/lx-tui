@@ -4,7 +4,7 @@
 分支：`feature/sandbox-permissions`（worktree `.worktrees/sandbox-permissions`）
 环境：macOS 26.2 arm64；`/usr/bin/sandbox-exec` 可用；默认 `workspace-write`、`network_access=false`、`escalation=ask`。
 
-结论：A/B/C 及补充交互与多 agent 权限跟随改动已全部实现并通过自动化检查；已在当前 worktree 用 CLI 新建 session 完成 v32 库与真实沙箱验证。TUI 实际渲染/手感、Linux bwrap 实机与 Windows 仍待验收。
+结论：A/B/C、补充交互与多 agent 权限跟随及 `review.md` P0–P3 审查修复已全部实现并通过 macOS 全量自动化测试（5854 lib + 全部集成测试全绿）；TUI 人工交互、真实 LLM 端到端、Linux `bwrap` 与 Windows 实机验证已统一转入 `/Users/yonah/projects/agent/lx-tui/docs/undo/sandbox-permissions.md` 后续跟进。
 
 ## 1. 自动化检查
 
@@ -12,7 +12,7 @@
 |---|---|---|---|---|
 | AUTO-1 | 工作区全部 Rust 源码 | `cargo fmt --check` | 无格式差异 | 通过 |
 | AUTO-2 | 全部 target | `cargo clippy --all-targets -- -D warnings` | 0 警告 | 通过 |
-| AUTO-3 | 单元与集成测试 | `cargo test` | 0 失败 | 通过：5799 lib 测试 + 集成测试全绿 |
+| AUTO-3 | 单元与集成测试 | `cargo test` | 0 失败 | 通过：5854 lib 测试 + 全部集成测试全绿（6 ignored） |
 | AUTO-4 | `assets/web.html`、`assets/settings*.js` | `cargo test --test web_assets` | 脚本可解析，引用的 DOM id 存在 | 通过 |
 | AUTO-5 | 模拟 dev v30 库（已含 `agent_compact_checkpoint.kind`） | `cargo test --lib db::sandbox::tests` | 依次升到 v31/v32；新增 `sandbox_mode`、规则表与 `agent_permission_switch` 表 | 通过 |
 
@@ -110,14 +110,25 @@
 | P-1 | TUI 审批命令面板与快捷键 | `cargo run` 后触发一次拒绝与一次提权 | 无边框蓝线面板；`↑/↓/Enter` 与 `y/r/a/n` 一致；不遮挡输入框 | 待人工 |
 | P-2 | `/permission` 面板与左上角 `lx-Native [<Mode>]` | TUI 输入 `/permission` 切换三档并观察左上角及对话卡片 | 初始高亮当前项；左上角同步变更为带绿/黄/红三色的 `[Read-only]`/`[Workspace]`/`[Full]`；时间线出现 `Permission switched` 卡片 | 待人工 |
 | P-3 | 设置页 Sandbox tab 与 `Open folder` | `cargo run` → 设置页修改默认模式 | 保存后 `lx` 左上角默认标签实时刷新；`Open folder` 弹出规则目录 | 待人工 |
-| P-4 | Linux 云主机 `8.138.213.110` | 安装 bwrap 后跑 `platform::sandbox::bwrap` 与真实写入/断网 | 与 macOS 同等阻断；无 bwrap 时 fail-closed | 未执行 |
-| P-5 | Windows | 文件工具写入工作区外 | 文件工具被闸门拒绝；进程沙箱不启用（v1 设计） | 未执行 |
+| P-4 | Linux 云主机 `8.138.213.110` | 已安装 setuid `bwrap 0.3.0` 并探明 `userns=0`/无 `--perms`；`bwrap.rs` 能力探测与参数修复已合入代码 | 与 macOS 同等阻断；无 bwrap/userns 时 fail-closed | 延后实测（已转 `docs/undo/sandbox-permissions.md`） |
+| P-5 | Windows | 文件工具写入工作区外；`FileToolsOnly` 跳过 `require_escalated` 弹窗 | 文件工具被闸门拒绝；进程沙箱后续实现 | 延后实测（已转 `docs/undo/sandbox-permissions.md`） |
 | P-6 | 子 agent 提权端到端交互 | 主 agent 派生 `executor` 触发工作区外写命令 | 审批面板显示子 agent 来源；批准后子 agent 继续完成 | 单测通过；端到端待人工 |
+
+## 7.5 Review 修复回归覆盖（`review.md` P0–P3）
+
+| # | 审查项 | 验证用例 / 检查点 | 结果 |
+|---|---|---|---|
+| R-1 | P0-1/P0-2/P1-1/P1-2/P2-1 `bwrap` 能力探测、`deny`、`workdir` 与 `denial.rs` | `platform::sandbox::bwrap::tests`（源码/Linux 门控待实机跑）、`chat::sandbox::denial::tests`、`chat::process::manager::tests` | `denial`/`manager` 通过；Linux 跑测转 undo |
+| R-2 | P0-3/P0-4/P1-3/P2-2 会话前缀元字符、复合规则、`is_banned_prefix` 与换行追加 | `chat::sandbox::tests`、`chat::exec_policy::tests`、`chat::tools::process_args::tests` | 通过 |
+| R-3 | P0-5/P1-4/P2-4 `/tmp` 软链规范化、`sandbox_gate` 逻辑+解析双检与 Seatbelt 加固 | `platform::sandbox::seatbelt::tests`、`platform::sandbox::glob::tests`、`chat::sandbox::permissions::tests`、`chat::tools::sandbox_gate::tests` | 通过（macOS 真实 `sandbox-exec`） |
+| R-4 | P0-6/P1-5/P1-6/P3-1 `Rule` 前缀免循环、`write_stdin` 过滤、`lx exec`/Windows 边界与 12 KiB 预算 | `chat::agent_loop::tests::sandbox_rules`、`chat::agent::exec::tests`、`chat::prompt::tests`、`chat::tools::output::tests` | 通过 |
+| R-5 | P0-7/P0-8/P0-9/P1-7/P2-5/P2-6/P2-10 审批优先级、鼠标全矩形抑制、双键清理、`Ctrl+C`/粘贴、排队与 Blocked | `app::update::chat::tests::approval`、`event::tests::lx_ask_task`、`event::chat::subagent::tests_sandbox`、`ui::main_content::lx::tests::slash_panels` | 通过 |
+| R-6 | P1-8/P1-9/P1-10/P1-11/P1-12/P1-14/P2-7/P2-8/P2-9/P3-2 Rewind/Fork/多窗格同步/JSON 规则/预算/设置页与窄窗格 | `db::sandbox::tests`、`db::service::sandbox_tests`、`chat::context::tests::model_switch`、`settings::service::sandbox::tests`、`ui::main_content::panes::tests`、`permission_switch` | 通过 |
 
 ## 8. 合并注意
 
-- 分支基于 `dev@41d5977b`；`dev` 之后已合入 stop/report 分支（含独立 v30 迁移）。
-- 沙箱迁移现为 **v31**（`sandbox_mode` + 规则表）与 **v32**（`agent_permission_switch` 表），提示词版本为 **`lx-18`**；合并时保留 dev 的 v30 `agent_compact_checkpoint.kind`，再依次接 v31 / v32。
+- 分支基于 `dev@41d5977b`；`dev` 之后已合入 stop/report 与 agents-menu 分支（含独立 v30 迁移 `agent_compact_checkpoint.kind`）。
+- 沙箱迁移现为 **v31**（`sandbox_mode` + 规则表）与 **v32**（`agent_permission_switch` 表），提示词版本为 **`lx-18`**；**合并时必须**保留 `dev` 的 v30、依次接 v31/v32 并追加 **v33 幂等补丁迁移**（检测并补齐已在工作树升到 v31/v32 库中缺失的 `agent_compact_checkpoint.kind`），同时对齐 `dev` 的 `write_transaction()` 与既有超限文件拆解计划（详见 `/Users/yonah/projects/agent/lx-tui/docs/undo/sandbox-permissions.md`）。
 - `git merge-tree --write-tree dev HEAD` 需重点核对：`src/db/migration.rs`（v30/v31/v32 顺序）、`src/chat/prompt.rs`、`src/app/state.rs`。
 
 ## 9. 回滚

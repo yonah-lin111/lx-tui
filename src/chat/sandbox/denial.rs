@@ -16,6 +16,14 @@ const DENIAL_KEYWORDS: [&str; 7] = [
     "failed to write file",
 ];
 
+/// 沙箱启动器自身报错（并非沙箱拦截了命令行为），绝不能误判成可无沙箱重试的拒绝。
+const LAUNCHER_ERROR_PATTERNS: [&str; 4] = [
+    "bwrap:",
+    "creating new namespace failed",
+    "setting up uid map",
+    "no permissions to create a new namespace",
+];
+
 /// 本次命令是否很可能被沙箱拒绝。
 pub(crate) fn is_likely_sandbox_denied(result: &ProcessResult, process_sandboxed: bool) -> bool {
     if !process_sandboxed {
@@ -34,12 +42,16 @@ pub(crate) fn is_likely_sandbox_denied(result: &ProcessResult, process_sandboxed
     if matches!(code, 2 | 126 | 127) {
         return false;
     }
-    // Linux seccomp SIGSYS 直接判定。
-    #[cfg(target_os = "linux")]
-    if code == 128 + 31 {
+    let output = result.output.to_lowercase();
+    if LAUNCHER_ERROR_PATTERNS
+        .iter()
+        .any(|pattern| output.contains(pattern))
+    {
+        return false;
+    }
+    if crate::platform::sandbox::is_seccomp_exit_code(code) {
         return true;
     }
-    let output = result.output.to_lowercase();
     DENIAL_KEYWORDS
         .iter()
         .any(|keyword| output.contains(keyword))

@@ -154,6 +154,12 @@ pub(crate) fn request(
     true
 }
 
+struct AnswerTarget<'a> {
+    key: &'a RequestKey,
+    call_id: &'a str,
+    decision: SandboxApprovalDecision,
+}
+
 /// 提交一次裁决：`call_id` 与当前挂起项不一致时丢弃（防串台）。
 pub(crate) fn answer(
     state: &mut AppState,
@@ -163,6 +169,80 @@ pub(crate) fn answer(
     call_id: &str,
     decision: SandboxApprovalDecision,
 ) -> bool {
+    #[cfg(not(test))]
+    let store = Some(crate::chat::exec_policy::global());
+    #[cfg(test)]
+    let store: Option<&crate::chat::exec_policy::PolicyStore> = None;
+    answer_with_store(
+        state,
+        streams,
+        persistence,
+        AnswerTarget {
+            key,
+            call_id,
+            decision,
+        },
+        store,
+    )
+}
+
+#[cfg(test)]
+pub(crate) fn answer_in_store(
+    state: &mut AppState,
+    streams: &mut ChatStreams,
+    persistence: &crate::db::service::Persistence,
+    target: (&RequestKey, &str, SandboxApprovalDecision),
+    store: &crate::chat::exec_policy::PolicyStore,
+) -> bool {
+    let (key, call_id, decision) = target;
+    answer_with_store(
+        state,
+        streams,
+        persistence,
+        AnswerTarget {
+            key,
+            call_id,
+            decision,
+        },
+        Some(store),
+    )
+}
+
+fn append_exec_policy_rule(
+    store: Option<&crate::chat::exec_policy::PolicyStore>,
+    kind: crate::chat::sandbox::SandboxApprovalKind,
+    prefix: &[String],
+    justification: Option<&str>,
+) {
+    let Some(store) = store else {
+        return;
+    };
+    let result = match kind {
+        crate::chat::sandbox::SandboxApprovalKind::Rule => {
+            store.append_allow_rule(prefix, justification)
+        }
+        crate::chat::sandbox::SandboxApprovalKind::Escalation => {
+            store.append_model_allow_rule(prefix, justification)
+        }
+        crate::chat::sandbox::SandboxApprovalKind::Retry => return,
+    };
+    if let Err(error) = result {
+        tracing::warn!(%error, "failed to append exec policy rule");
+    }
+}
+
+fn answer_with_store(
+    state: &mut AppState,
+    streams: &mut ChatStreams,
+    persistence: &crate::db::service::Persistence,
+    target: AnswerTarget<'_>,
+    store: Option<&crate::chat::exec_policy::PolicyStore>,
+) -> bool {
+    let AnswerTarget {
+        key,
+        call_id,
+        decision,
+    } = target;
     let Some(pending) = streams.approvals.get(key) else {
         tracing::debug!(
             target: "lx::agent::approval",
@@ -231,7 +311,7 @@ pub(crate) fn answer(
     let before = pane.lx.approvals.len();
     pane.lx
         .approvals
-        .retain(|approval| approval.call_id != call_id);
+        .retain(|approval| !(&approval.key == key && approval.call_id == call_id));
     let mut changed = pane.lx.approvals.len() != before;
     let mut new_rule = None;
     if for_session {
@@ -248,25 +328,16 @@ pub(crate) fn answer(
                     });
                 }
             }
-            crate::chat::sandbox::SandboxApprovalKind::Rule => {
-                if let Some(prefix) = prefix.clone()
-                    && let Err(error) = crate::chat::exec_policy::global().append_allow_rule(
-                        &prefix,
-                        Some(justification.as_str()).filter(|text| !text.is_empty()),
-                    )
-                {
-                    tracing::warn!(%error, "failed to append exec policy rule");
-                }
-            }
-            crate::chat::sandbox::SandboxApprovalKind::Escalation => {
+            crate::chat::sandbox::SandboxApprovalKind::Rule
+            | crate::chat::sandbox::SandboxApprovalKind::Escalation => {
                 if let Some(prefix) = prefix {
-                    // 规则文件是跨会话通道；DB 前缀规则保证当前会话 resume 后仍生效。
-                    if let Err(error) = crate::chat::exec_policy::global().append_model_allow_rule(
+                    // 规则文件是跨会话通道；同步记录到会话前缀规则与 DB，保证本会话及 resume 后立即放行不再重复弹窗。
+                    append_exec_policy_rule(
+                        store,
+                        kind,
                         &prefix,
                         Some(justification.as_str()).filter(|text| !text.is_empty()),
-                    ) {
-                        tracing::warn!(%error, "failed to append exec policy rule");
-                    }
+                    );
                     if same_main_session && !pane.lx.sandbox_prefix_rules.contains(&prefix) {
                         pane.lx.sandbox_prefix_rules.push(prefix.clone());
                         changed = true;
@@ -317,6 +388,28 @@ pub(crate) fn cancel(state: &mut AppState, streams: &mut ChatStreams, key: &Requ
     before != pane.lx.approvals.len() || had_pending
 }
 
+/// 判断审批归属的主请求或子 agent 是否仍在当前会话中存活。
+fn is_approval_key_live(state: &AppState, streams: &ChatStreams, key: &RequestKey) -> bool {
+    let main_live = active_assistant_id(state, key).is_some()
+        && !streams
+            .cancels
+            .get(key)
+            .is_some_and(|cancel| *cancel.borrow());
+    if main_live {
+        return true;
+    }
+    let pane_session = state
+        .pane_anywhere(key.pane)
+        .and_then(|target| target.lx.chat.session_id.as_deref());
+    streams.subagents.get(&key.session).is_some_and(|handle| {
+        handle.parent.pane == key.pane
+            && handle.parent.generation == key.generation
+            && handle.status == super::subagent::STATUS_RUNNING
+            && !*handle.cancel.borrow()
+            && pane_session == Some(handle.root_session.as_str())
+    })
+}
+
 /// 防御 sweep：审批条目所属主请求与子 agent 都已不在途/不在当前会话时清除并唤醒。
 pub(crate) fn sweep_orphans(state: &mut AppState, streams: &mut ChatStreams) -> bool {
     let mut orphaned: Vec<RequestKey> = Vec::new();
@@ -324,39 +417,16 @@ pub(crate) fn sweep_orphans(state: &mut AppState, streams: &mut ChatStreams) -> 
         let Some(target) = state.pane_anywhere(pane) else {
             continue;
         };
-        let pane_session = target.lx.chat.session_id.as_deref();
         for approval in &target.lx.approvals {
-            let main_live = active_assistant_id(state, &approval.key).is_some()
-                && !streams
-                    .cancels
-                    .get(&approval.key)
-                    .is_some_and(|cancel| *cancel.borrow());
-            let subagent_live =
-                streams
-                    .subagents
-                    .get(&approval.key.session)
-                    .is_some_and(|handle| {
-                        handle.parent.pane == approval.key.pane
-                            && handle.parent.generation == approval.key.generation
-                            && handle.status == super::subagent::STATUS_RUNNING
-                            && !*handle.cancel.borrow()
-                            && pane_session == Some(handle.root_session.as_str())
-                    });
-            if !main_live && !subagent_live {
+            if !is_approval_key_live(state, streams, &approval.key)
+                && !orphaned.contains(&approval.key)
+            {
                 orphaned.push(approval.key.clone());
             }
         }
     }
     for key in streams.approvals.keys() {
-        let pane_session = state
-            .pane_anywhere(key.pane)
-            .and_then(|target| target.lx.chat.session_id.as_deref());
-        let main_live = active_assistant_id(state, key).is_some();
-        let subagent_live = streams.subagents.get(&key.session).is_some_and(|handle| {
-            handle.status == super::subagent::STATUS_RUNNING
-                && pane_session == Some(handle.root_session.as_str())
-        });
-        if (!main_live && !subagent_live) && !orphaned.contains(key) {
+        if !is_approval_key_live(state, streams, key) && !orphaned.contains(key) {
             orphaned.push(key.clone());
         }
     }

@@ -712,6 +712,21 @@ impl Database {
             )
             .optional()?
             .unwrap_or_default();
+        let deleted_first_from_mode: Option<String> = if commit.delete_conversation {
+            transaction
+                .query_row(
+                    r#"SELECT from_mode
+                       FROM agent_permission_switch
+                       WHERE session_id = ?1 AND sequence >= ?2
+                       ORDER BY sequence ASC, id ASC
+                       LIMIT 1"#,
+                    params![commit.session_id, target_sequence],
+                    |row| row.get(0),
+                )
+                .optional()?
+        } else {
+            None
+        };
         if commit.delete_conversation {
             transaction.execute(
                 "DELETE FROM agent_message WHERE session_id = ?1 AND turn_index >= ?2",
@@ -780,6 +795,28 @@ impl Database {
                 transaction.execute(
                     "UPDATE agent_session SET model_provider = ?1, model_id = ?2, variant = ?3 WHERE external_id = ?4",
                     params![provider, model, variant, commit.session_id],
+                )?;
+            }
+            // 会话存活但历史被截断：同步回滚 `sandbox_mode` 并清理被撤销作用域的会话规则。
+            let surviving_permission_mode: Option<String> = transaction
+                .query_row(
+                    r#"SELECT to_mode
+                       FROM agent_permission_switch
+                       WHERE session_id = ?1
+                       ORDER BY sequence DESC, id DESC
+                       LIMIT 1"#,
+                    params![commit.session_id],
+                    |row| row.get(0),
+                )
+                .optional()?;
+            if let Some(mode) = surviving_permission_mode.or(deleted_first_from_mode) {
+                transaction.execute(
+                    "UPDATE agent_session SET sandbox_mode = ?1 WHERE external_id = ?2",
+                    params![mode, commit.session_id],
+                )?;
+                transaction.execute(
+                    "DELETE FROM agent_session_sandbox_rule WHERE session_id = ?1",
+                    params![commit.session_id],
                 )?;
             }
         }

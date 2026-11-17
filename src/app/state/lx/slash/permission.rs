@@ -10,17 +10,17 @@ pub fn permission_candidates() -> [(SandboxMode, &'static str, &'static str); 3]
         (
             SandboxMode::ReadOnly,
             SandboxMode::ReadOnly.short_label(),
-            "Model can read, shell cannot write",
+            crate::ui::text::LX_PERMISSION_READ_ONLY_DESC,
         ),
         (
             SandboxMode::WorkspaceWrite,
             SandboxMode::WorkspaceWrite.short_label(),
-            "Only the workspace is writable (default)",
+            crate::ui::text::LX_PERMISSION_WORKSPACE_DESC,
         ),
         (
             SandboxMode::DangerFullAccess,
             SandboxMode::DangerFullAccess.short_label(),
-            "No sandbox at all",
+            crate::ui::text::LX_PERMISSION_FULL_DESC,
         ),
     ]
 }
@@ -64,6 +64,22 @@ impl PermissionPicker {
     /// 当前生效模式。
     pub fn effective(&self) -> SandboxMode {
         self.session.unwrap_or(self.global)
+    }
+
+    /// 同步全局默认与会话覆盖模式（设置页热更新或同会话多窗格同步时使用）。
+    pub fn sync_modes(&mut self, global: SandboxMode, session: Option<SandboxMode>) -> bool {
+        let effective = session.unwrap_or(global);
+        let next_current = permission_candidates()
+            .iter()
+            .position(|(mode, _, _)| *mode == effective)
+            .unwrap_or(1);
+        if self.global == global && self.session == session && self.current == next_current {
+            return false;
+        }
+        self.global = global;
+        self.session = session;
+        self.current = next_current;
+        true
     }
 
     /// 按输入框全文过滤候选；空过滤恢复全部并定位回当前生效项。

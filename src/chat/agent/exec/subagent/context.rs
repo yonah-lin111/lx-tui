@@ -199,6 +199,7 @@ impl ExecSubagentPool {
             .map(|(root, _, _)| root)
             .unwrap_or_else(|_| parent_session_id.to_string());
         let mut sandbox_settings = crate::config::sandbox::load_sandbox_or_default();
+        sandbox_settings.escalation = crate::config::sandbox::EscalationPolicy::Never;
         if let Some(mode) = db
             .session_sandbox_mode(&self.workspace, &root_session)
             .ok()
@@ -247,6 +248,13 @@ impl ExecSubagentPool {
                 compact: None,
             },
         );
+        let mut tools = crate::chat::tools::turn_tools_for_subagent(
+            ToolSurface::from_role_at_depth(role, depth, max_depth),
+            capabilities,
+            mcp,
+            Some(&self.subagents_config),
+        );
+        crate::chat::tools::trim_escalation_parameters(&mut tools);
         let request = ChatRequest {
             turns,
             items,
@@ -254,12 +262,7 @@ impl ExecSubagentPool {
             variant_params: child_model.variant_params.clone(),
             purpose: RequestPurpose::Subagent(role),
             system_prompt: Some(system_prompt),
-            tools: Arc::new(crate::chat::tools::turn_tools_for_subagent(
-                ToolSurface::from_role_at_depth(role, depth, max_depth),
-                capabilities,
-                mcp,
-                Some(&self.subagents_config),
-            )),
+            tools: Arc::new(tools),
         };
         let context = ModelContext::new(request, self.cwd.clone())
             .with_context_limit(child_model.context_limit)

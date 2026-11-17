@@ -256,6 +256,39 @@ impl Database {
             params![source_session, boundary],
             |row| row.get(0),
         )?;
+        // 按边界推算该节点生效的沙箱模式：优先取边界之前最后一次切换后的 `to_mode`，
+        // 其次取边界及之后首次切换前的 `from_mode`，都没有切换记录再沿用源会话当前值。
+        let effective_sandbox_mode = if boundary < i64::MAX {
+            let prior_to: Option<String> = transaction
+                .query_row(
+                    r#"SELECT to_mode
+                       FROM agent_permission_switch
+                       WHERE session_id = ?1 AND sequence < ?2
+                       ORDER BY sequence DESC, id DESC
+                       LIMIT 1"#,
+                    params![source_session, boundary],
+                    |row| row.get(0),
+                )
+                .optional()?;
+            if let Some(mode) = prior_to {
+                Some(mode)
+            } else {
+                let next_from: Option<String> = transaction
+                    .query_row(
+                        r#"SELECT from_mode
+                           FROM agent_permission_switch
+                           WHERE session_id = ?1 AND sequence >= ?2
+                           ORDER BY sequence ASC, id ASC
+                           LIMIT 1"#,
+                        params![source_session, boundary],
+                        |row| row.get(0),
+                    )
+                    .optional()?;
+                next_from.or(sandbox_mode)
+            }
+        } else {
+            sandbox_mode
+        };
         transaction.execute(
             r#"INSERT INTO agent_session
                    (external_id, workspace_id, source, title, first_user_message,
@@ -272,7 +305,7 @@ impl Database {
                 model_provider,
                 model_id,
                 variant,
-                sandbox_mode,
+                effective_sandbox_mode,
                 now,
                 last_message_at_ms.unwrap_or(now),
                 total_input,
@@ -573,13 +606,6 @@ pub(super) fn copy_completed_history_window_to_child(
             transaction,
             child_session_id,
             source_session,
-            start_seq,
-            boundary,
-        )?;
-        crate::db::sandbox::copy_permission_switches_for_fork(
-            transaction,
-            source_session,
-            child_session_id,
             start_seq,
             boundary,
         )?;

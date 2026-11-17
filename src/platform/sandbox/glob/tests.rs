@@ -34,6 +34,15 @@ fn regex_covers_star_double_star_question_and_braces() {
         Some("^/a/(b|c)\\.txt$")
     );
     assert_eq!(to_regex("/a/b", true).as_deref(), Some("^/a/b(/.*)?$"));
+    assert_eq!(
+        to_regex("/ws/{a,b}", true).as_deref(),
+        Some("^/ws/(a|b)(/.*)?$")
+    );
+    assert_eq!(
+        to_regex("/ws/**/.env", true).as_deref(),
+        Some("^/ws/(.*/)?\\.env(/.*)?$")
+    );
+    assert_eq!(to_regex("/ws/**", true).as_deref(), Some("^/ws/.*$"));
     assert_eq!(to_regex("", false), None);
 }
 

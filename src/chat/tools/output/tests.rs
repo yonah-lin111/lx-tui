@@ -1187,3 +1187,93 @@ fn subagent_list_renders_private_tail_only_when_present() {
         "默认列表项不得有转录：{text}"
     );
 }
+
+#[test]
+fn process_text_includes_sandbox_approval_summaries() {
+    use crate::chat::process::{ProcessResult, ProcessResultKind, ProcessState};
+    use crate::chat::sandbox::{SandboxApprovalKind, SandboxRetry};
+
+    let make = |cmd: &str, retry: SandboxRetry| {
+        ToolExecutionResult::Process(Box::new(ProcessResult {
+            kind: ProcessResultKind::ExecCommand,
+            session_id: 1,
+            command: cmd.into(),
+            cwd: "/ws".into(),
+            tty: false,
+            state: ProcessState::Exited { code: Some(0) },
+            exit_code: Some(0),
+            output: "ok\n".into(),
+            output_start: 0,
+            output_end: 3,
+            dropped_bytes: 0,
+            truncated: false,
+            input: None,
+            wrote_input: false,
+            terminate: false,
+            chunk_id: "a1b2c3".into(),
+            sandbox_retry: Some(retry),
+            wall_time_ms: 5,
+        }))
+    };
+
+    let once_escalation = format_for_model(&make(
+        "cargo publish --dry-run",
+        SandboxRetry {
+            approved: true,
+            for_session: false,
+            kind: SandboxApprovalKind::Escalation,
+            additional: false,
+            prefix_range: None,
+        },
+    ));
+    assert!(
+        once_escalation.contains("approved once"),
+        "{once_escalation}"
+    );
+
+    let session_escalation = format_for_model(&make(
+        "cargo publish --dry-run",
+        SandboxRetry {
+            approved: true,
+            for_session: true,
+            kind: SandboxApprovalKind::Escalation,
+            additional: false,
+            prefix_range: Some((0, 13)),
+        },
+    ));
+    assert!(
+        session_escalation.contains("approved for session: cargo publish"),
+        "{session_escalation}"
+    );
+
+    let additional_once = format_for_model(&make(
+        "curl https://example.com",
+        SandboxRetry {
+            approved: true,
+            for_session: false,
+            kind: SandboxApprovalKind::Escalation,
+            additional: true,
+            prefix_range: None,
+        },
+    ));
+    assert!(
+        additional_once.contains("additional sandbox permissions approved once"),
+        "{additional_once}"
+    );
+
+    let retry_session = format_for_model(&make(
+        "touch ~/x",
+        SandboxRetry {
+            approved: true,
+            for_session: true,
+            kind: SandboxApprovalKind::Retry,
+            additional: false,
+            prefix_range: None,
+        },
+    ));
+    assert!(
+        retry_session.contains("sandbox denied the first attempt; retried with escalation")
+            && retry_session.contains("approved for session: touch ~/x"),
+        "{retry_session}"
+    );
+}

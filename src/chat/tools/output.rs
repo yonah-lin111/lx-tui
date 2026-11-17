@@ -103,9 +103,55 @@ pub fn format_for_model(result: &ToolExecutionResult) -> String {
 /// 非零退出、超时与中断都写成明确的失败行，绝不让模型把它读成「命令成功」。
 fn format_process(result: &crate::chat::process::ProcessResult) -> String {
     use crate::chat::process::ProcessState;
+    use crate::chat::sandbox::SandboxApprovalKind;
     let mut text = String::new();
-    if result.sandbox_retry.is_some() {
-        text.push_str("sandbox denied the first attempt; retried with escalation.\n");
+    if let Some(retry) = result.sandbox_retry {
+        let prefix = retry
+            .prefix_range
+            .and_then(|(start, end)| result.command.get(start as usize..end as usize))
+            .filter(|part| !part.is_empty());
+        match retry.kind {
+            SandboxApprovalKind::Retry => {
+                if retry.for_session {
+                    text.push_str(&format!(
+                        "sandbox denied the first attempt; retried with escalation (approved for session: {}).\n",
+                        crate::chat::sandbox::command_preview(&result.command)
+                    ));
+                } else {
+                    text.push_str(
+                        "sandbox denied the first attempt; retried with escalation (approved once).\n",
+                    );
+                }
+            }
+            SandboxApprovalKind::Escalation => {
+                let scope = if retry.additional {
+                    "additional sandbox permissions"
+                } else {
+                    "sandbox escalation"
+                };
+                if retry.for_session {
+                    match prefix {
+                        Some(prefix) => {
+                            text.push_str(&format!("{scope} approved for session: {prefix}.\n"))
+                        }
+                        None => text.push_str(&format!("{scope} approved for session.\n")),
+                    }
+                } else {
+                    text.push_str(&format!("{scope} approved once.\n"));
+                }
+            }
+            SandboxApprovalKind::Rule => {
+                if retry.for_session {
+                    match prefix {
+                        Some(prefix) => text
+                            .push_str(&format!("sandbox rule approved for session: {prefix}.\n")),
+                        None => text.push_str("sandbox rule approved for session.\n"),
+                    }
+                } else {
+                    text.push_str("sandbox rule approved once.\n");
+                }
+            }
+        }
     }
     match &result.state {
         ProcessState::Exited { code } => {

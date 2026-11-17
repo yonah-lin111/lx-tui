@@ -90,6 +90,27 @@ pub fn resolve_write_target(path: &Path) -> Option<PathBuf> {
     }
 }
 
+/// 解析逻辑父目录并保留末段文件名（不跟随末段符号链接）。
+///
+/// 非绝对路径或含 `..` 时返回 None。
+pub fn canonical_parent_or_ancestor(path: &Path) -> Option<PathBuf> {
+    if !path.is_absolute()
+        || path
+            .components()
+            .any(|part| matches!(part, Component::ParentDir))
+    {
+        return None;
+    }
+    let Some(parent) = path.parent() else {
+        return Some(PathBuf::from("/"));
+    };
+    let Some(name) = path.file_name() else {
+        return Some(PathBuf::from("/"));
+    };
+    let resolved_parent = resolve_write_target(parent)?;
+    Some(resolved_parent.join(name))
+}
+
 /// 读取 `.git` 指针文件的 `gitdir:` 目标（相对路径以工作区根为基准）。
 pub fn gitdir_target(git_file: &Path) -> Option<PathBuf> {
     let text = std::fs::read_to_string(git_file).ok()?;

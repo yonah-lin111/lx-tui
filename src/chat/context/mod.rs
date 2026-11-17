@@ -231,6 +231,12 @@ pub fn assemble(input: &AssemblyInput<'_>) -> Assembly {
         count * 1600
     };
     let draft_tokens = (estimate_tokens(input.draft) as u64).saturating_add(draft_image_tokens);
+    let skill_block_tokens: u64 = input
+        .skill_blocks
+        .iter()
+        .map(|block| estimate_tokens(block) as u64)
+        .sum();
+    let current_turn_tokens = draft_tokens.saturating_add(skill_block_tokens);
     // 系统提示词动态注入段（model_identity / AGENTS.md / skills / mcp / compact）也占上下文窗口：
     // 先装配出真实系统提示词，并将动态注入段的 token 开销从历史预算扣除。
     let system_prompt =
@@ -268,7 +274,7 @@ pub fn assemble(input: &AssemblyInput<'_>) -> Assembly {
     });
     // 从近到远纳入，直到预算耗尽；整轮为最小单位（丢一轮即丢该轮全部 items）。
     let mut kept: Vec<&PlannedTurn> = Vec::new();
-    let mut used = draft_tokens;
+    let mut used = current_turn_tokens;
     for turn in planned.iter().rev() {
         if let Some(budget) = budget
             && used.saturating_add(turn.tokens) > budget
@@ -279,30 +285,53 @@ pub fn assemble(input: &AssemblyInput<'_>) -> Assembly {
         kept.push(turn);
     }
     kept.reverse();
-    let omitted_turns = planned.len() - kept.len();
+    let select_updates = |kept_slice: &[&PlannedTurn]| {
+        let omitted_turns = planned.len() - kept_slice.len();
+        // 预算窄到全部历史轮均被裁剪（`omitted_turns > 0 && kept.is_empty()`）时，
+        // 只保留最后一条模型切换与最后一条权限切换，绝不能回退成倾倒整段历史切换。
+        let min_switch_sequence = if omitted_turns > 0 && kept_slice.is_empty() {
+            i64::MAX
+        } else if omitted_turns > 0 {
+            kept_slice
+                .first()
+                .map_or(start_after, |first| first.user_sequence)
+        } else {
+            start_after
+        };
+        let updates = switches::collect_retained_updates(
+            input.model_switches,
+            input.permission_switches,
+            omitted_turns,
+            start_after,
+            min_switch_sequence,
+        );
+        (omitted_turns, updates)
+    };
+    let mut kept_start = 0usize;
+    let (mut omitted_turns, mut retained_updates) = select_updates(&kept[kept_start..]);
+    // 纳入保留的 `<system-update>` 切换开销：若总开销超出预算，继续从最老轮次起整轮裁掉。
+    if let Some(budget) = budget {
+        while kept_start < kept.len() {
+            let update_tokens = switches::retained_update_tokens(&retained_updates);
+            if used.saturating_add(update_tokens) <= budget {
+                break;
+            }
+            used = used.saturating_sub(kept[kept_start].tokens);
+            kept_start += 1;
+            let (next_omitted, next_updates) = select_updates(&kept[kept_start..]);
+            omitted_turns = next_omitted;
+            retained_updates = next_updates;
+        }
+    }
+    let kept = &kept[kept_start..];
     // 两条视图同步装配：turns 保持旧纯文本形态，items 承载结构化步骤。
     let mut turns: Vec<ChatTurn> = Vec::with_capacity(kept.len() * 2 + 1);
     let mut items: Vec<ModelItem> = Vec::new();
     let mut groups = Vec::with_capacity(kept.len());
     let mut item_image_attachments: Vec<(usize, Vec<ItemImageAttachment>)> = Vec::new();
-    let min_switch_sequence = if omitted_turns > 0 {
-        kept.first()
-            .map_or(start_after, |first| first.user_sequence)
-    } else {
-        start_after
-    };
-    // 首轮之前的切换记录即使随旧轮次被裁掉，也要保留最后一条：接管当前历史的新模型/新权限
-    // 必须收到 `<system-update>`，否则它不知道中途发生了切换。
-    let retained_updates = switches::collect_retained_updates(
-        input.model_switches,
-        input.permission_switches,
-        omitted_turns,
-        start_after,
-        min_switch_sequence,
-    );
     let mut switch_cursor = 0usize;
 
-    for turn in &kept {
+    for turn in kept {
         let turn_start = turns.len();
         let item_start = items.len();
         while switch_cursor < retained_updates.len()
@@ -367,8 +396,8 @@ pub fn assemble(input: &AssemblyInput<'_>) -> Assembly {
         }
         switch_cursor += 1;
     }
-    // 当前用户消息必须保留（不因预算截断用户输入）。
-    let draft_exceeds = budget.is_some_and(|budget| draft_tokens > budget);
+    // 当前用户消息（含本轮点名注入的 skill_blocks）必须保留，不因预算截断用户输入。
+    let draft_exceeds = budget.is_some_and(|budget| current_turn_tokens > budget);
     turns.push(ChatTurn {
         role: "user".into(),
         text: input.draft.to_string(),

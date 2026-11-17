@@ -255,7 +255,7 @@ impl FileSystemPolicy {
         }
     }
 
-    /// 追加一次命令的请求条目；重复条目幂等。
+    /// 追加一次命令的请求条目；重复条目幂等，并自动补全 `/tmp` → `/private/tmp` 等规范化路径别名。
     pub fn with_request(&self, request: &FileSystemRequest) -> Result<Self, PermissionError> {
         request.validate()?;
         let mut policy = self.clone();
@@ -265,7 +265,31 @@ impl FileSystemPolicy {
             (&request.deny, FileSystemAccessMode::Deny),
         ] {
             for raw in list {
-                policy.push(parse_entry(raw)?, access);
+                match parse_entry(raw)? {
+                    FileSystemPath::Path(path) => match access {
+                        FileSystemAccessMode::Write => {
+                            let canonical = roots::resolve_write_target(&path).unwrap_or(path);
+                            policy.push(FileSystemPath::Path(canonical), access);
+                        }
+                        FileSystemAccessMode::Read | FileSystemAccessMode::Deny => {
+                            policy.push(FileSystemPath::Path(path.clone()), access);
+                            if let Some(parent_canon) = roots::canonical_parent_or_ancestor(&path) {
+                                policy.push(FileSystemPath::Path(parent_canon), access);
+                            }
+                            if let Some(canon) = roots::resolve_write_target(&path) {
+                                policy.push(FileSystemPath::Path(canon), access);
+                            }
+                        }
+                    },
+                    FileSystemPath::Glob(pattern) => {
+                        policy.push(FileSystemPath::Glob(pattern.clone()), access);
+                        if let Some(aliased) =
+                            crate::platform::sandbox::glob::canonical_glob_alias(&pattern)
+                        {
+                            policy.push(FileSystemPath::Glob(aliased), access);
+                        }
+                    }
+                }
             }
         }
         Ok(policy)
@@ -283,6 +307,18 @@ impl FileSystemPolicy {
     /// `Deny` 是收缩型安全规则：任何命中都优先于 Read/Write，避免后端投影
     /// （deny 规则无法被更具体的 allow 覆盖）与文件工具闸门给出不同结果。
     pub fn explain(&self, path: &Path) -> Option<(FileSystemAccessMode, FileSystemPath)> {
+        let mut candidates = vec![path.to_path_buf()];
+        if let Some(parent_canon) = roots::canonical_parent_or_ancestor(path)
+            && !candidates.contains(&parent_canon)
+        {
+            candidates.push(parent_canon);
+        }
+        if let Some(canon) = roots::resolve_write_target(path)
+            && !candidates.contains(&canon)
+        {
+            candidates.push(canon);
+        }
+
         let mut best: Option<(usize, FileSystemAccessMode, FileSystemPath)> = None;
         let mut deny: Option<(usize, FileSystemPath)> = None;
         for entry in &self.entries {
@@ -293,27 +329,30 @@ impl FileSystemPolicy {
                 },
                 FileSystemPath::Path(_) => None,
             };
-            let Some(specificity) = entry.path.match_specificity(path, matcher.as_ref()) else {
-                continue;
-            };
-            if entry.access == FileSystemAccessMode::Deny {
-                if deny
-                    .as_ref()
-                    .is_none_or(|(current, _)| specificity > *current)
-                {
-                    deny = Some((specificity, entry.path.clone()));
+            for candidate in &candidates {
+                let Some(specificity) = entry.path.match_specificity(candidate, matcher.as_ref())
+                else {
+                    continue;
+                };
+                if entry.access == FileSystemAccessMode::Deny {
+                    if deny
+                        .as_ref()
+                        .is_none_or(|(current, _)| specificity > *current)
+                    {
+                        deny = Some((specificity, entry.path.clone()));
+                    }
+                    continue;
                 }
-                continue;
-            }
-            let better = match &best {
-                None => true,
-                Some((current, access, _)) => {
-                    specificity > *current
-                        || (specificity == *current && entry.access.rank() > access.rank())
+                let better = match &best {
+                    None => true,
+                    Some((current, access, _)) => {
+                        specificity > *current
+                            || (specificity == *current && entry.access.rank() > access.rank())
+                    }
+                };
+                if better {
+                    best = Some((specificity, entry.access, entry.path.clone()));
                 }
-            };
-            if better {
-                best = Some((specificity, entry.access, entry.path.clone()));
             }
         }
         deny.map(|(_, path)| (FileSystemAccessMode::Deny, path))

@@ -106,6 +106,52 @@ pub enum SandboxOverride {
     },
     /// 完全绕过沙箱（已审批的 `require_escalated` 或会话规则）。
     Unsandboxed,
+    /// 经用户显式审批通过后的提权覆盖（供执行层在结果文本中回显批准摘要）。
+    Approved {
+        /// 实际生效的沙箱覆盖。
+        effect: Box<SandboxOverride>,
+        /// 审批种类（`Escalation` / `Rule`）。
+        kind: SandboxApprovalKind,
+        /// 本次是否记入会话级规则。
+        for_session: bool,
+        /// 已批准的会话前缀（若有）。
+        prefix: Option<Vec<String>>,
+    },
+}
+
+impl SandboxOverride {
+    /// 该覆盖是否将命令转为完全不套进程沙箱执行。
+    pub fn is_unsandboxed(&self) -> bool {
+        match self {
+            Self::Unsandboxed => true,
+            Self::Approved { effect, .. } => effect.is_unsandboxed(),
+            Self::None | Self::Additional { .. } => false,
+        }
+    }
+
+    /// 构造带批准摘要的 [`SandboxRetry`]（仅在用户显式批准过该调用时返回 `Some`）。
+    pub fn approval_summary(&self, command: &str) -> Option<SandboxRetry> {
+        let Self::Approved {
+            effect,
+            kind,
+            for_session,
+            prefix,
+        } = self
+        else {
+            return None;
+        };
+        let additional = matches!(effect.as_ref(), Self::Additional { .. });
+        let prefix_range = prefix
+            .as_deref()
+            .and_then(|tokens| find_prefix_range(command, tokens));
+        Some(SandboxRetry {
+            approved: true,
+            for_session: *for_session,
+            kind: *kind,
+            additional,
+            prefix_range,
+        })
+    }
 }
 
 /// 冻结后的沙箱计划。
@@ -211,6 +257,7 @@ impl SandboxPlan {
                 plan.refresh_derived();
                 plan
             }
+            SandboxOverride::Approved { effect, .. } => self.with_override(effect),
         }
     }
 
@@ -221,7 +268,25 @@ impl SandboxPlan {
         self
     }
 
+    /// 从数据库会话规则记录注入精确命令与前缀规则。
+    pub fn with_rules(mut self, rules: &[crate::db::sandbox::SessionSandboxRule]) -> Self {
+        let mut exact = Vec::new();
+        let mut prefix = Vec::new();
+        for rule in rules {
+            match rule.kind {
+                crate::db::sandbox::SandboxRuleKind::Exact => exact.push(rule.tokens.clone()),
+                crate::db::sandbox::SandboxRuleKind::Prefix => prefix.push(rule.tokens.clone()),
+            }
+        }
+        self.approved_exact = exact;
+        self.approved_prefix = prefix;
+        self
+    }
+
     /// 命令 token 是否已在会话内获准裸跑（整条序列全等或前缀命中）。
+    ///
+    /// 前缀规则仅在命令不含任何 shell 元字符时生效，防止 `"cargo publish && evil"` 绕过沙箱；
+    /// 精确命令规则仍匹配完整的 token 序列。
     pub fn command_is_approved(&self, command: &str) -> bool {
         if self.approved_exact.is_empty() && self.approved_prefix.is_empty() {
             return false;
@@ -229,13 +294,24 @@ impl SandboxPlan {
         let Some(tokens) = shlex::split(command) else {
             return false;
         };
-        self.approved_exact
+        if self
+            .approved_exact
             .iter()
             .any(|rule| rule.as_slice() == tokens.as_slice())
-            || self
-                .approved_prefix
+        {
+            return true;
+        }
+        if self.approved_prefix.is_empty() {
+            return false;
+        }
+        let Some(segments) = crate::chat::exec_policy::split_shell_segments(command) else {
+            return false;
+        };
+        segments.iter().all(|segment| {
+            self.approved_prefix
                 .iter()
-                .any(|rule| tokens.len() >= rule.len() && tokens.starts_with(rule))
+                .any(|rule| segment.len() >= rule.len() && segment.starts_with(rule))
+        })
     }
 
     /// 本次命令的沙箱处置。
@@ -290,13 +366,62 @@ pub struct SandboxPolicyView {
 
 pub mod denial;
 
-/// 一次 on-failure 重试的标记。
+/// 一次沙箱重试或显式审批的标记（保持 `Copy` 以兼容 `ProcessResult::to_json`）。
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct SandboxRetry {
     /// 是否由用户批准。
     pub approved: bool,
     /// 会话级规则是否已写入。
     pub for_session: bool,
+    /// 审批种类（重试 / 显式提权 / 规则询问）。
+    pub kind: SandboxApprovalKind,
+    /// 是否为 `with_additional_permissions`。
+    pub additional: bool,
+    /// 已批准的会话前缀在 `ProcessResult.command` 中的字节区间。
+    pub prefix_range: Option<(u16, u16)>,
+}
+
+fn find_prefix_range(command: &str, prefix: &[String]) -> Option<(u16, u16)> {
+    if prefix.is_empty() {
+        return None;
+    }
+    let joined = prefix.join(" ");
+    if let Some(start) = command.find(&joined) {
+        let end = start.saturating_add(joined.len());
+        if command.is_char_boundary(start)
+            && command.is_char_boundary(end)
+            && let (Ok(start), Ok(end)) = (u16::try_from(start), u16::try_from(end))
+        {
+            return Some((start, end));
+        }
+    }
+    let mut spans: Vec<(usize, usize, &str)> = Vec::new();
+    let mut start: Option<usize> = None;
+    for (idx, ch) in command.char_indices() {
+        if ch.is_whitespace() {
+            if let Some(begin) = start.take() {
+                spans.push((begin, idx, &command[begin..idx]));
+            }
+        } else if start.is_none() {
+            start = Some(idx);
+        }
+    }
+    if let Some(begin) = start {
+        spans.push((begin, command.len(), &command[begin..]));
+    }
+    spans.windows(prefix.len()).find_map(|window| {
+        if window
+            .iter()
+            .zip(prefix.iter())
+            .all(|((_, _, word), expected)| *word == expected.as_str())
+        {
+            let first_start = u16::try_from(window.first()?.0).ok()?;
+            let last_end = u16::try_from(window.last()?.1).ok()?;
+            Some((first_start, last_end))
+        } else {
+            None
+        }
+    })
 }
 
 /// 把可能包含换行与多余空白的命令折叠为单行截断摘要，供审计日志安全输出。

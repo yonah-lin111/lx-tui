@@ -85,3 +85,21 @@ fn non_exited_states_and_unsandboxed_commands_are_ignored() {
         false
     ));
 }
+
+#[test]
+fn bwrap_launcher_and_namespace_errors_are_not_classified_as_denials() {
+    for output in [
+        "bwrap: Creating new namespace failed: Operation not permitted",
+        "bwrap: setting up uid map: Permission denied",
+        "No permissions to create a new namespace, likely because the kernel does not allow non-privileged user namespaces",
+        "Creating new namespace failed, likely because the kernel does not support user namespaces",
+    ] {
+        assert!(
+            !is_likely_sandbox_denied(
+                &result(ProcessState::Exited { code: Some(1) }, output),
+                true
+            ),
+            "启动器失败绝不可触发无沙箱重试: {output}"
+        );
+    }
+}

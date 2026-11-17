@@ -1,8 +1,8 @@
 # Agent 沙箱与权限模式设计
 
-状态：草案（待用户审核）。参考仓库：`/Users/yonah/projects/agent/codex-main`（只读）。目标仓库：`/Users/yonah/projects/agent/lx-tui` 当前 checkout。
+状态：已实现（含补充交付与 Review 修复，待最终实机与合入验收）。参考仓库：`/Users/yonah/projects/agent/codex-main`（只读）。目标仓库：`/Users/yonah/projects/agent/lx-tui` 当前 checkout。
 
-本文中的实现细节、文件路径与关键代码在用户确认后作为 `task.md` 的实施依据。
+本文与 `task.md`、`review.md`、`verification.md` 同步维护，反映代码库的真实设计边界与实现落点。
 
 ## 1. 目标与边界
 
@@ -44,11 +44,11 @@
 | 8 | 能力阶段 | 分 A/B/C 三批：A on-failure 重试与审批；B 完整 `additional_permissions`（read/write/deny/glob）；C Starlark 规则文件 |
 | 9 | 审批缓存 | 会话级落库，随 resume 恢复；不跨会话/工作区；fork 不继承 |
 | 10 | 配置载体 | 新建 `config/sandbox.json` + `/api/sandbox` + 设置页 Sandbox 分区 |
-| 11 | Linux 后端 | 只走系统 `bwrap`；缺失时 fail-closed |
-| 12 | Linux 验证 | 在云主机实测 bwrap 行为，输出记录进验证章节 |
+| 11 | Linux 后端 | 只走系统 `bwrap`；按内核探测 userns 或 setuid 回退模式，不可用时 fail-closed |
+| 12 | Linux 验证 | 在远程 Linux 主机实测 `bwrap` 行为与沙箱单测，输出记录进 `verification.md` |
 | 13 | Windows 后端 | v1 仅文件工具闸门，明确标注 `file tools only`，进程沙箱后续实现 |
-| 14 | `/permission` 交互 | 一级选择面板，选中立即生效 + toast；不常驻状态栏 |
-| 15 | 审批 UI | 输入框上方固定 strip，`y/a/n` 键位，Esc=Deny |
+| 14 | `/permission` 交互 | 复用无边框 `CommandPanelView` 一级选择面板（`[Default]` 标记、初始高亮当前档），选中立即生效 + 窗格内 toast |
+| 15 | 审批 UI | 复用输入框上方 `CommandPanelView`（无边框顶蓝线），支持 `↑/↓`/`Enter`/`Tab`/悬停点击/`Esc=Deny`/`y/r/a/n`/`Ctrl+C` |
 | 16 | 提权总开关 | `escalation: "ask" | "never"`，默认 `ask` |
 | 17 | 凭据读取 | 不做读取限制（完全对齐 Codex）；风险显式记录 |
 | 18 | 交付方式 | 同一设计分 A/B/C 三批：A on-failure、B 完整权限档案、C Starlark 规则 |
@@ -192,38 +192,40 @@ pub fn wrap(spec: &SandboxSpec, program: &OsStr, args: &[OsString]) -> Result<Wr
 ### 5.1 依赖与能力探测
 
 - 只使用系统 `PATH` 上的 `bwrap`；lx 不打包 bwrap。
-- 启动/首次使用时探测 `bwrap --version` 与 `bwrap --unshare-user --dev-bind / / true` 是否可用（user namespace 被 AppArmor 限制时后者失败）。
-- 不可用时 `SandboxSupport::Unavailable`，受限档的 `exec_command` **fail-closed**（`sandbox_unavailable: install bubblewrap and enable unprivileged user namespaces`），不静默裸跑。
+- 首次使用时经 `OnceLock` 缓存真实能力探测（并支持按显式能力结构单测）：
+  1. 执行 `bwrap --help` 探测 `--perms` 支持度（`bwrap >= 0.5.0` 支持）；
+  2. 先探测 `bwrap --unshare-user --ro-bind / / -- /bin/true`；若内核禁用非特权 userns（如 CentOS 7 `user.max_user_namespaces=0`），再回退探测 `bwrap --ro-bind / / --unshare-pid --unshare-ipc -- /bin/true`（仅当 `bwrap` 具备 setuid 或特权能力时成功，进入 `NoUserns` 回退模式）；
+  3. 两者均失败或 `bwrap` 缺失时，`support()` 返回 `SandboxSupport::Unavailable`，受限档的 `exec_command` **fail-closed**，不静默裸跑。
 
 ### 5.2 参数构造（对齐 Codex `bwrap.rs`）
 
-`workspace-write` 基线（Codex `linux-sandbox/src/bwrap.rs:334-378` 的裁剪版）：
+`workspace-write` 基线（Codex `linux-sandbox/src/bwrap.rs` 的适配版）：
 
 ```
 bwrap
   --new-session --die-with-parent
   --ro-bind / /
   --dev /dev
-  --unshare-user --unshare-pid --unshare-ipc
-  --unshare-net                # network_access=false 时
-  --bind <root> <root>         # 每个可写根（浅→深排序）
-  --ro-bind <root>/.git <root>/.git   # 保护路径，排在 writable bind 之后
+  [--unshare-user] --unshare-pid --unshare-ipc   # 仅 UnshareUser 能力时传 --unshare-user
+  --unshare-net                                  # network_access=false 时
+  --bind <root> <root>                           # 每个存在的可写根（浅→深排序，含其自身读保护层排序）
+  --ro-bind <protected> <protected>              # 保护路径，排在对应写根 bind 之后（不覆盖更深层写根）
   --proc /proc
-  --chdir <cwd>
+  --chdir <command_cwd>                          # 使用 exec_command 解析后的真实 workdir，而非固定工作区根
   --cap-drop ALL
   -- <shell> <args>
 ```
 
-`read-only`：去掉所有 `--bind`（`/` 保持只读）。
+`read-only`：去掉所有 `--bind`（`/` 保持只读），但对写根之外**已存在**的 `deny` 目标仍执行遮盖挂载（否则 `--ro-bind / /` 允许读）。
 
 `danger-full-access`：不包装。
 
-- 可写根的浅→深排序是必须的：先 bind 父根再 bind 子根，避免后者的父目录被前者覆盖时丢失（Codex `:608-643`）。
-- 保护路径通过 `--ro-bind <p> <p>` 重新只读挂载（Codex `:682-708`）；路径是符号链接时先解析到真实目标，拒绝跨可写符号链接（TOCTOU）。
+- 写根与 `read_only` carveout 按层排序，保证 `Write("/ws") -> Read("/ws/a") -> Write("/ws/a/b")` 中 `/ws/a/b` 保持可写；`read_only` 与 `deny` 均校验 `writable_symlink_component` 拒绝跨可写符号链接（TOCTOU）。
+- `deny` 目录使用 `--perms 000 --tmpfs <p> --remount-ro <p>`（并过滤已处于被屏蔽父目录下的子条目防止嵌套挂载报错）；若宿主 `bwrap` 不支持 `--perms`（如 `bwrap 0.3.0`）且存在需要拦截的 `deny` 目录，**fail-closed** 返回 `SandboxError::Unavailable`。
+- 自动保护元数据对系统共享目录（`/tmp`、`$TMPDIR`）以及非 git 工作区不向宿主机写入 0 字节 `.git` 残留文件。
 - 不引入 seccomp 过滤器（Codex 另有 `seccomp.rs`）：v1 依赖 bwrap 的 namespace + `--cap-drop ALL` + `no_new_privs`；`--unshare-net` 断网。此差异在风险章节标注。
-- 根不存在时跳过并警告；`/tmp`、`$TMPDIR` 作为普通可写根参与排序，不额外 `--tmpfs /tmp`（避免遮蔽宿主已有内容）。
 - `--new-session` 同时用于 pipe 与 PTY，保证进程组/信号语义一致；停止仍按进程组终止。
-- 失败（bwrap 非 0 退出且 stderr 指向 userns 创建失败）→ 原样返回输出，工具错误码保持进程语义，不伪造"沙箱拒绝"。
+- 失败（bwrap 启动/namespace 报错，如 `Creating new namespace failed`、`setting up uid map`）→ 原样返回输出且不被 `denial.rs` 误判为可跳过沙箱的拒绝，避免把坏沙箱降级为无沙箱重试。
 
 ## 6. 文件工具闸门
 
@@ -348,9 +350,9 @@ parse_exec_request(arguments_json)
 - 模型 `prefix_rule` 的会话规则用 `shlex` 分词后的 token 前缀比较；on-failure 的会话规则用**完整 token 序列**全等比较（不做大小写折叠，避免 `GIT` 绕过）。
 - `a`（Approve for session）仅在 `require_escalated` 且模型给出合法 `prefix_rule` 时可用；`with_additional_permissions` 只能批准一次。
 - 审批等待不设超时：turn 保持阻塞，用户处理或按 `Esc` 拒绝；应用退出时回执通道丢弃，按 `Cancelled` 结算。
-- 审批前发送的 `BeginTool` 已落库，审批结果进入同一工具结果文本：`approved once` / `approved for session: git push` / `denied by user`。
+- 审批结果写入工具结果文本（`approved once` / `approved for session: git push` / `retried without sandbox` / `denied by user`），随工具卡持久化，不新增 part 类型。
 - `danger-full-access` 会话：参数可被接受但无实际作用，**不弹审批**（命令本来就裸跑）。
-- 无头 `lx exec`：没有交互 UI，任何 escalation 直接返回 `sandbox_denied: escalation requires an interactive session`；CLI 的 `escalation` 按 `never` 处理。
+- 无头 `lx exec`：强制 `escalation = never` 并对主/子 agent 均裁剪提权参数，`resume` 加载 DB 会话规则；触发规则 `prompt` 时返回 `sandbox_denied`。
 - Windows（file tools only）：`require_escalated` 不弹审批，按默认执行；`with_additional_permissions` 的网络/写根仍可通过文件工具闸门生效（shell 无沙箱）。
 - 受保护路径同样覆盖 `git` 元数据：`git commit`、`git checkout` 等需要写 `.git` 的命令会被沙箱拒绝，模型应申请提权；这是对齐 Codex 的预期行为，不是缺陷。
 
@@ -358,10 +360,10 @@ parse_exec_request(arguments_json)
 
 - `AgentHostRequest` 新增 `ApproveSandbox { call_id, request, reply: oneshot::Sender<SandboxApprovalDecision> }`，`AgentHost` 增加默认异步方法（与 `ask_user` 同构，回执丢失按 `Cancelled`）。
 - `AgentHostEvent` 新增对应变体；`src/event/chat/mod.rs` 分派到新模块 `src/event/chat/approval.rs`。
-- `approval::request` 定位会话所属 lx 窗格，把请求推入 `pane.lx.approval`（FIFO），返回需要重绘；找不到窗格（headless/已关闭）→ 立即 `Denied`。
-- 键盘：`apply_lx_input` 的优先级改为 `task > approval > ask`；`y`/`a`/`n` 与 `Esc=Deny`；等待期间 `Enter` 不提交输入。`Ctrl+C` 走现有取消路径（拒绝队首并中断对应轮次）。
-- 审批状态挂在窗格而非消息：`ApprovalState { kind, call_id, request, highlight, scroll }`；`kind` 区分 `Escalation`（显式申请）与 `Retry`（on-failure）；`ask` 与审批同时存在时 approval 先显示，结束后继续 ask。
-- 显式申请键位 `y/a/n`（`a` 仅在有 `prefix_rule` 时可用）；on-failure 重试键位 `r/a/n`（`a` 为"本会话同命令自动重试"）；`Esc` 一律等同拒绝。
+- `approval::request` 定位会话所属 lx 窗格，把请求推入 `pane.lx.approvals`（FIFO），返回需要重绘；找不到窗格（headless/已关闭）→ 立即 `Denied`；`approval::answer` 严格按 `(RequestKey, call_id)` 双键从队首/队列移除，避免并发子 agent 同 `call_id` 串删。
+- 键盘：`apply_lx_input` 的优先级严格为 `task > approval > ask`；`↑`/`↓`/`Enter`/`Tab`/`Esc=Deny` 与 `y`/`r`/`a`/`n`；等待期间 `Enter` 不提交输入；`Ctrl+C`（无选区 `LxInput::Clear`）拒绝队首审批并停止对应主轮。
+- 渲染与鼠标优先级同样严格对齐 `task > approval > ask`：审批可见期间抑制 `mention` / `refer` / `paste` / `slash` / `lx.panel` 等下层输入浮层，且审批命令面板全矩形拦截点击、悬停与滚轮，避免穿透。
+- 审批状态挂在窗格而非消息：`ApprovalState { kind, key, call_id, request, window }`；`kind` 区分 `Escalation`、`Retry` 与 `Rule`；当 `lx.approvals.len() > 1` 时顶栏右侧显示排队提示；审批等待中侧栏 `Agents` 记为 `Blocked`。
 - 子 agent 的审批进入父窗格队列；来源格式化为 `<nickname> [<role>]`（无昵称时用 `<role>`），审批面板顶栏右侧标注 `[Subagent]`、上下文首行高亮展示 `Subagent: <source>`，避免误以为是主 agent。
 
 ### 8.4 规则生命周期
@@ -403,7 +405,7 @@ if is_likely_sandbox_denied(result, plan) && !already_retried && escalation == A
 - 重试结果在模型可见文本前加一行：`sandbox denied the first attempt; retried with escalation.\n`，其余输出原样；`ProcessResult` 增加 `sandbox_retry: Option<SandboxRetry>` 供 UI 卡片标注。
 - 会话规则为**精确 token 序列**（codex `ApprovalStore` 的 `ExecCommand` 键语义），不是前缀；下次同命令直接裸跑，不再先撞沙箱。表结构增加 `kind` 列区分 `exact` / `prefix`（§11）。
 - 若 `escalation = never`、模式为 `danger-full-access`、或平台无进程沙箱（Windows）：不识别、不询问。
-- 审批 strip 标题为 `Sandbox blocked command`，选项 `r Retry once` / `a Always retry this command (session)` / `n Keep blocked`；`Esc = n`。
+- 审批命令面板标题为 `Sandbox blocked command`，选项 `Retry once` (`r`) / `Always retry this command` (`a`) / `Keep blocked` (`n`)；`Esc = n`。
 
 ### 8.6 仍与 Codex 不同的部分
 
@@ -448,14 +450,14 @@ if is_likely_sandbox_denied(result, plan) && !already_retried && escalation == A
   - `Allow network`（checkbox，附说明"Applies to read-only and workspace-write"）；
   - `Escalation requests`（select：Ask / Never）；
   - `Additional writable roots`（textarea，一行一个绝对路径，支持 `~`）；
-  - 平台能力提示条：macOS `Process sandbox: seatbelt`；Linux `Process sandbox: bubblewrap` 或 `Unavailable: install bubblewrap`；Windows `Process sandbox: file tools only`.
+  - 平台能力提示条：macOS `Process sandbox: seatbelt`；Linux `Process sandbox: bubblewrap` 或 `Process sandbox: unavailable — install the platform sandbox backend or switch to danger-full-access`；Windows `Process sandbox: file-tools-only — process sandbox is not implemented on Windows yet`（统一消费 `capabilities.process_sandbox` 与 `capabilities.reason`）。
   - C 批追加只读状态：`Rules: N files loaded` + `Open folder`（目录 `<user_data_root>/rules`）；不在网页里编辑规则。
-- `assets/settings.js`：`TAB_KEYS` 加 `sandbox`，`showTab` 懒加载，`sandboxBaseline/sandboxDirty/resetSandbox/saveSandbox`，注册 `createActionBar('actions-sandbox', ...)`。
-- 新增文件若拆分 JS，必须同步 `src/settings/service/page.rs::asset` 与 `tests/web_assets.rs::SCRIPTS`。
+- `assets/settings.js` & `assets/settings_sandbox.js`：`TAB_KEYS` 加 `sandbox`，`showTab` 懒加载，`sandboxBaseline/sandboxDirty/resetSandbox/saveSandbox`，注册 `createActionBar('actions-sandbox', ...)`；`#view-sandbox` 在 `assets/settings.css` 启用 `overflow-y: auto`。
+- 新增文件拆分了 `assets/settings_sandbox.js`，已同步 `src/settings/service/page.rs::asset` 与 `tests/web_assets.rs::SCRIPTS`。
 
 ## 11. 数据库迁移
 
-实施时以 `src/db/mod.rs::SCHEMA_VERSION` 实际值为准；若已被其他分支占用则顺延（当前 29 → 预计 30）。
+当前分支 Schema 已推进至 **v32**（`v31` 为沙箱模式与规则表，`v32` 为 `agent_permission_switch` 权限切换时间线表；跳过 `dev` 已占用的 `v30` `agent_compact_checkpoint.kind`，合入 `dev` 时需补 `v33` 幂等检查以确保工作区库亦补全 `kind` 列）。
 
 ```sql
 ALTER TABLE agent_session ADD COLUMN sandbox_mode TEXT;
@@ -470,13 +472,25 @@ CREATE TABLE IF NOT EXISTS agent_session_sandbox_rule (
 );
 CREATE INDEX IF NOT EXISTS idx_agent_session_sandbox_rule_session
     ON agent_session_sandbox_rule(session_id);
+
+CREATE TABLE IF NOT EXISTS agent_permission_switch (
+    id TEXT PRIMARY KEY,
+    session_id TEXT NOT NULL REFERENCES agent_session(external_id) ON DELETE CASCADE,
+    sequence INTEGER NOT NULL,
+    from_mode TEXT NOT NULL,
+    to_mode TEXT NOT NULL,
+    injected_prompt TEXT NOT NULL,
+    created_at_ms INTEGER NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_agent_permission_switch_session_seq
+    ON agent_permission_switch(session_id, sequence, id);
 ```
 
-- `sandbox_mode` 允许 `NULL`；写入前校验枚举字符串。
-- `kind = exact` 由 on-failure 重试的 `Always retry this command` 写入；`kind = prefix` 由模型 `prefix_rule` 的 `Approve for session` 写入（C 批后模型提议优先写规则文件，DB 前缀规则仅作会话缓存）。
-- fork 的会话复制 SQL 增加该列；规则表不复制。
-- 删除会话时规则随外键级联删除。
-- 旧库升级：`PRAGMA user_version` 顺延；迁移单测覆盖旧版本、空表与重复规则约束。
+- `sandbox_mode` 允许 `NULL`；写入前校验枚举字符串；`prefix_json` 统一存 JSON 字符串数组（兼容读取旧 `\u{0}` 格式）。
+- `kind = exact` 由 on-failure 重试的 `Always retry this command` 写入；`kind = prefix` 由 `Approve for session` / 规则 `Always allow prefix` 写入（除写规则文件外同步记录会话前缀以压制当前会话同前缀 `Prompt`，绝不覆盖 `Forbidden`）。
+- fork 的会话复制 SQL 按 `before` 边界精确推导当时有效的 `sandbox_mode`，仅复制 `sequence < boundary` 的 `agent_permission_switch`；规则表不复制；派生子会话窗口不再写入无消费方的 `agent_permission_switch`。
+- `/rewind` 删对话时回滚 `agent_session.sandbox_mode` 与清理会话规则，删空会话同步复位窗格模式与规则。
+- 删除会话时规则与权限切换行随外键级联删除。
 
 ## 12. 提示词与 UI
 
@@ -556,7 +570,7 @@ shell 内部被沙箱拒绝**不新增错误码**：命令以真实退出码结�
 
 ### 13.3 用户可见文案
 
-统一放 `src/ui/text.rs`；toast 走 lx 窗格内 toast；审批结果只写入工具结果文本（`approved once` / `approved for session: <prefix>` / `denied by user`），随工具卡持久化，不新增 notice/part 类型。
+统一放 `src/ui/text/sandbox.rs`（经 `src/ui/text.rs` 重导出）；toast 走 lx 窗格内 toast；审批结果只写入工具结果文本（`approved once` / `approved for session: <prefix>` / `denied by user`），随工具卡持久化，不新增 notice/part 类型。
 
 ## 14. 测试与验证
 
@@ -622,21 +636,21 @@ shell 内部被沙箱拒绝**不新增错误码**：命令以真实退出码结�
 |---|---|---|
 | 配置 | 新建 `src/config/sandbox.rs`；`src/config/mod.rs` 加 `pub mod sandbox;` | 类型、默认、校验、`config/sandbox.json` 读写 |
 | 策略运行时 | 新建 `src/chat/sandbox.rs` | `SandboxPlan`（turn 冻结：mode/roots/network/platform）、`SandboxOverride`、根解析、规则匹配 |
-| 平台沙箱 | 新建 `src/platform/sandbox/{mod.rs,roots.rs,seatbelt.rs,bwrap.rs,windows.rs}` | 能力探测、命令包装、profile/参数生成 |
+| 平台沙箱 | 新建 `src/platform/sandbox/{mod.rs,roots.rs,seatbelt.rs,bwrap.rs,glob.rs}` | 能力探测（含 `OnceLock` userns/setuid/`--perms`）、命令包装、profile/参数生成 |
 | 策略资源 | 新建 `assets/sandbox/seatbelt_base_policy.sbpl`、`assets/sandbox/seatbelt_network_policy.sbpl` | 从 Codex 复制（保留来源注释） |
-| 进程 | `src/chat/process/manager/mod.rs`、`spawn.rs`、`src/event/chat/user_shell.rs` | `exec_observed` 增加 `&SandboxPlan`；pipe/PTY 统一包装；用户 shell 传 `SandboxPlan::none()` |
+| 进程 | `src/chat/process/manager/mod.rs`、`spawn.rs`、`src/event/chat/user_shell.rs` | `exec_observed` 增加 `&SandboxPlan`；pipe/PTY 统一包装；传解析后 `command_cwd`；用户 shell 传 `SandboxPlan::none()` |
 | 工具参数 | `src/chat/tools/process_args.rs`、`src/chat/tools/schema.rs` | `ExecRequest`/`SandboxEscalation` 解析；schema 动态裁剪 |
-| 文件闸门 | 新建 `src/chat/tools/sandbox_gate.rs`；`src/chat/tools/{write,edit,patch}.rs` | 写前统一判定；`ToolContext` 增加 `SandboxPolicyView` |
-| 执行器 | `src/chat/agent_loop/executor.rs` | `AgentTools` 增加策略字段；`execute_process` 传 plan/override；`execute_file` 注入 view |
-| 提权 | `src/chat/agent_loop/mod.rs`、`src/chat/agent_loop/host.rs` 或 `mod.rs` 中的 `AgentHost` | `parse_exec_request`、`approve_sandbox`、决策分支 |
-| 事件 | `src/event/chat/host.rs`、`src/event/chat/mod.rs`、新建 `src/event/chat/approval.rs` | Host 请求/事件、FIFO 队列、决策回执 |
-| 状态/UI | `src/app/state/lx.rs`（或 `lx/approval.rs`）、`src/app/update/pane.rs`、新建 `src/ui/main_content/lx/approval.rs`、`src/ui/main_content/lx.rs` | 审批状态、优先级路由、strip 布局与渲染 |
-| Slash | `src/app/state/lx/slash.rs`、`src/app/update/chat/slash.rs`、`src/ui/main_content/lx/slash.rs` | `/permission` 命令与选择面板 |
-| 提示词 | `src/chat/prompt.rs`、`src/chat/agent/prompts.rs`、`src/chat/tools/subagent.rs` | 环境快照 `<sandbox>`、`## Sandbox` 段、子 agent 提权引导、`PROMPT_VERSION` → `lx-18` |
-| 设置服务 | 新建 `src/settings/service/sandbox.rs`；`src/settings/service/handlers.rs`、`src/settings/service.rs`、`src/settings/service/page.rs` | `/api/sandbox`、`SettingsEvent::SandboxChanged`（新变体） |
-| 设置前端 | `assets/web.html`、`assets/settings.js`、`assets/settings.css` | Sandbox tab 与表单 |
-| 数据库 | `src/db/migration/schema.rs`、`src/db/migration.rs`、`src/db/mod.rs`、`src/db/chat/mod.rs`、`src/db/chat/fork.rs` | v31 迁移与会话模式/规则 API |
-| 文案 | `src/ui/text.rs` | 审批与 `/permission` 英文文案 |
+| 文件闸门 | 新建 `src/chat/tools/sandbox_gate.rs`；`src/chat/tools/{write,edit,patch}.rs` | 逻辑+解析双重判定；`ToolContext` 增加 `SandboxPolicyView` |
+| 执行器 | `src/chat/agent_loop/executor.rs`、`tool_executor.rs` | `AgentTools` 增加策略字段；`execute_process` 传 plan/override；`execute_file` 注入 view |
+| 提权 | `src/chat/agent_loop/{mod.rs,sandbox_decision.rs}` | `parse_exec_request`、`approve_sandbox`、规则/提权/重试决策与审计日志 |
+| 事件 | `src/event/chat/{host.rs,mod.rs,approval.rs,rewind.rs,stream_start.rs,btw.rs}`、`src/event/chat/subagent/*` | Host 请求/事件、FIFO 队列、双键回答与孤儿回收、subagent/btw 权限动态跟随 |
+| 状态/UI | `src/app/state/lx/{mod,approval,permission_switch}.rs`、`src/app/update/chat/{approval,permission_switch}.rs`、`src/ui/main_content/{panes.rs,lx.rs,lx/approval.rs}`、`src/ui/main_content/lx/history/{permission_switch.rs,snapshot/switches.rs}`、`src/ui/widgets/command_panel/*` | `CommandPanelView` 审批面板、左上角 `lx-<Entry> [<Mode>]`、`Permission switched` 时间线卡片 |
+| Slash | `src/app/state/lx/slash/{mod,parse,permission}.rs`、`src/app/update/chat/slash.rs`、`src/ui/main_content/lx/slash.rs` | `/permission` 命令与 `CommandPanelView` 选择面板 |
+| 提示词/上下文 | `src/chat/prompt.rs`、`src/chat/agent/{prompts.rs,permission_switch.rs}`、`src/chat/context/{mod.rs,switches.rs}`、`src/chat/tools/subagent.rs` | 环境快照 `<sandbox>`、`## Sandbox` 段、子 agent 提权引导、`PROMPT_VERSION` → `lx-18`、切档 `<system-update>` |
+| 设置服务 | 新建 `src/settings/service/sandbox.rs`；`src/settings/service/{handlers,page}.rs`、`src/settings/service.rs` | `/api/sandbox`、`SettingsEvent::SandboxChanged`（支持 `user_root` 与损坏回落） |
+| 设置前端 | `assets/web.html`、`assets/settings.js`、`assets/settings_sandbox.js`、`assets/settings.css` | Sandbox tab、表单、能力说明、`overflow-y: auto` |
+| 数据库 | `src/db/migration/{mod,schema}.rs`、`src/db/{mod.rs,sandbox.rs}`、`src/db/chat/{mod,fork,rewind}.rs`、`src/db/service/{mod,chat}.rs` | v31/v32 迁移、规则存取、切档持久化与 fork/rewind 回滚 |
+| 文案 | `src/ui/text/sandbox.rs`、`src/ui/text.rs` | 审批、`/permission` 与权限切换卡片英文文案 |
 | A 批：拒绝识别 | 新建 `src/chat/sandbox/denial.rs`；`src/chat/process/mod.rs` | `is_likely_sandbox_denied`、`ProcessResult.sandbox_retry` |
 | A 批：重试 | `src/chat/agent_loop/mod.rs`、`executor.rs`、`src/event/chat/approval.rs` | `retry_process`、`Retry` 审批、精确命令规则 |
 | B 批：权限档案 | 新建 `src/chat/sandbox/permissions.rs`；`src/chat/sandbox.rs`、`src/platform/sandbox/{seatbelt,bwrap}.rs`、`src/chat/tools/sandbox_gate.rs` | 条目模型、解析与投影、glob |
@@ -773,8 +787,8 @@ segments = split_shell_segments(cmd)     // 保守解析；含 && || ; | & $( ` 
 decision = policy.evaluate(tokens, segments)
 ├─ Forbidden → ToolFailure(sandbox_denied, rule.justification)
 ├─ Allow（且 segments 全部命中 allow）→ 直接裸跑，不弹审批
-├─ Prompt/PromptUser → 审批 strip：Run once / Always allow this prefix / Deny
-│    └─ Always → append prefix_rule(decision="allow", justification=...) 到 default.rules + reload
+├─ Prompt/PromptUser → 审批面板：`Approve once` / `Always allow prefix` / `Deny`
+│    └─ Always → append prefix_rule(decision="allow", justification=...) 到 default.rules + reload + 写入会话前缀规则（压制当前会话同前缀 Prompt，不压制 Forbidden）
 └─ 无匹配 → 按 sandbox_mode 跑；失败后走 §8.5 on-failure
 ```
 
@@ -793,7 +807,7 @@ decision = policy.evaluate(tokens, segments)
 2. **规则文件 `Allow`**（且命令可安全分段、所有段命中 allow）→ 不套沙箱、不弹审批。
 3. **会话精确命令规则**（on-failure 的 `Always retry this command`）→ 不套沙箱、不弹审批。
 4. **模型显式 `require_escalated` / `with_additional_permissions`** → 审批（§8.2）。
-5. **规则文件 `Prompt` / `PromptUser`** → 审批 strip；`Always` 写入规则文件。
+5. **规则文件 `Prompt` / `PromptUser`** → 审批命令面板；`Always` 写入规则文件并写入会话前缀规则。
 6. **默认沙箱执行** → 失败后走 on-failure 重试审批（§8.5）。
 
 说明：

@@ -201,3 +201,53 @@ fn deny_is_absolute_over_deeper_write() {
     );
     let _ = std::fs::remove_dir_all(cwd);
 }
+
+#[test]
+fn symlink_ancestor_aliases_match_canonical_writable_roots_and_deny_globs() {
+    let base = temp_dir("symlink-alias");
+    let real_ws = base.join("real_ws");
+    let sealed = real_ws.join("sealed");
+    let secret = real_ws.join("secret");
+    std::fs::create_dir_all(&sealed).expect("sealed");
+    std::fs::create_dir_all(&secret).expect("secret");
+    let alias_ws = base.join("alias_ws");
+    #[cfg(unix)]
+    std::os::unix::fs::symlink(&real_ws, &alias_ws).expect("symlink ws");
+    #[cfg(not(unix))]
+    let alias_ws = real_ws.clone();
+
+    let policy = FileSystemPolicy::baseline(SandboxMode::WorkspaceWrite, &alias_ws, &[])
+        .with_request(&FileSystemRequest {
+            read: vec![alias_ws.join("sealed").display().to_string()],
+            deny: vec![
+                alias_ws.join("secret").display().to_string(),
+                format!("{}/**/*.env", alias_ws.display()),
+            ],
+            ..FileSystemRequest::default()
+        })
+        .expect("request");
+
+    assert!(policy.writable_roots().contains(&real_ws));
+    assert!(policy.protected_paths().contains(&sealed));
+    assert_eq!(
+        policy.access_for(&real_ws.join("sealed/file.txt")),
+        FileSystemAccessMode::Read
+    );
+    assert_eq!(
+        policy.access_for(&alias_ws.join("sealed/file.txt")),
+        FileSystemAccessMode::Read
+    );
+    assert_eq!(
+        policy.access_for(&real_ws.join("secret/key.txt")),
+        FileSystemAccessMode::Deny
+    );
+    assert_eq!(
+        policy.access_for(&real_ws.join("nested/.env")),
+        FileSystemAccessMode::Deny
+    );
+    assert_eq!(
+        policy.access_for(&alias_ws.join("open.txt")),
+        FileSystemAccessMode::Write
+    );
+    let _ = std::fs::remove_dir_all(base);
+}

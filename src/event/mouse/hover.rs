@@ -18,11 +18,30 @@ use crate::ui;
 use super::super::paste;
 use super::super::session::Geometry;
 use super::hit::{
-    lx_mention_item_at, lx_paste_item_at, lx_refer_item_at, lx_slash_item_at, lx_toast_at,
-    mention_item_at, pane_at, pane_boundary_draggable, pane_content_inner, panel_item_at,
-    prompt_boundary_hit, slash_item_at,
+    lx_mention_item_at, lx_pane_at, lx_paste_item_at, lx_refer_item_at, lx_slash_item_at,
+    lx_toast_at, mention_item_at, pane_at, pane_boundary_draggable, pane_content_inner,
+    panel_item_at, prompt_boundary_hit, slash_item_at,
 };
 use super::wheel::forward_pane_mouse_event;
+
+/// 指针进入顶部浮动命令面板时，清除可能残留的下层折叠卡片、回到底部按钮与 tooltip 悬停。
+fn clear_lx_under_panel_hover(
+    state: &mut AppState,
+    rects: &[(PaneId, ratatui::layout::Rect)],
+    dirty: &mut bool,
+) {
+    if update::clear_tooltip(state) {
+        *dirty = true;
+    }
+    for (id, _) in rects {
+        if update::hover_lx_jump_bottom(state, *id, false) {
+            *dirty = true;
+        }
+        if update::hover_lx_chat(state, *id, None) {
+            *dirty = true;
+        }
+    }
+}
 
 /// 设置鼠标指针形状；终端不支持时静默回退。
 pub(crate) fn set_pointer_shape(shape: PointerShape) {
@@ -192,45 +211,59 @@ pub(crate) fn handle_mouse_moved(
             if update::hover_lx_approval(state, pane, index) {
                 *dirty = true;
             }
-            if update::clear_tooltip(state) {
-                *dirty = true;
-            }
+            clear_lx_under_panel_hover(state, rects, dirty);
+            return;
+        }
+        if let Some((pane, inner)) = lx_pane_at(state, rects, mouse.column, mouse.row)
+            && state.pane_anywhere(pane).is_some_and(|target| {
+                ui::main_content::lx::approval_visible(&target.lx)
+                    && ui::main_content::lx::approval_layout(inner, &target.lx).is_some_and(
+                        |layout| layout.rect.contains((mouse.column, mouse.row).into()),
+                    )
+            })
+        {
+            clear_lx_under_panel_hover(state, rects, dirty);
             return;
         }
         if let Some((pane, index)) = lx_paste_item_at(state, rects, mouse.column, mouse.row) {
             if update::hover_lx_paste(state, pane, index) {
                 *dirty = true;
             }
-            if update::clear_tooltip(state) {
-                *dirty = true;
-            }
+            clear_lx_under_panel_hover(state, rects, dirty);
             return;
         }
         if let Some((pane, index)) = lx_mention_item_at(state, rects, mouse.column, mouse.row) {
             if update::hover_lx_mention(state, pane, index) {
                 *dirty = true;
             }
-            if update::clear_tooltip(state) {
-                *dirty = true;
-            }
+            clear_lx_under_panel_hover(state, rects, dirty);
             return;
         }
         if let Some((pane, index)) = lx_refer_item_at(state, rects, mouse.column, mouse.row) {
             if update::hover_lx_refer(state, pane, index) {
                 *dirty = true;
             }
-            if update::clear_tooltip(state) {
-                *dirty = true;
-            }
+            clear_lx_under_panel_hover(state, rects, dirty);
             return;
         }
         if let Some((pane, index)) = lx_slash_item_at(state, rects, mouse.column, mouse.row) {
             if update::hover_lx_slash(state, pane, index) {
                 *dirty = true;
             }
-            if update::clear_tooltip(state) {
-                *dirty = true;
-            }
+            clear_lx_under_panel_hover(state, rects, dirty);
+            return;
+        }
+        if let Some((pane, inner)) = lx_pane_at(state, rects, mouse.column, mouse.row)
+            && state.pane_anywhere(pane).is_some_and(|target| {
+                ui::main_content::lx::command_panel_contains(
+                    inner,
+                    &target.lx,
+                    mouse.column,
+                    mouse.row,
+                )
+            })
+        {
+            clear_lx_under_panel_hover(state, rects, dirty);
             return;
         }
     }

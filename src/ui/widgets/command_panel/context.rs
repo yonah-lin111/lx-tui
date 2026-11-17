@@ -73,7 +73,7 @@ pub(super) fn render_lines(
                 style::muted(),
             ))
         } else {
-            let value = text::truncate_to_width(item.value, max_w - prefix_w);
+            let value = truncate_context_value(item, max_w - prefix_w);
             let value_style = if item.emphasized {
                 style::accent()
             } else {
@@ -86,4 +86,29 @@ pub(super) fn render_lines(
         };
         line.render(Rect::new(x, y, max_w as u16, 1), buf);
     }
+}
+
+/// 窄宽下对突出来源值优先保留尾部 `[role]` 标签、缩短前方昵称；其余值常规尾部省略。
+fn truncate_context_value(item: &PanelContextLine<'_>, max_w: usize) -> String {
+    if item.value.width() <= max_w {
+        return item.value.to_string();
+    }
+    if item.emphasized
+        && let Some(bracket) = item.value.rfind(" [")
+        && item.value.ends_with(']')
+    {
+        let nick = &item.value[..bracket];
+        let suffix = &item.value[bracket + 1..];
+        let suffix_w = suffix.width();
+        if max_w >= suffix_w.saturating_add(2) {
+            let nick_budget = max_w - suffix_w - 1;
+            let short_nick = text::truncate_to_width(nick, nick_budget);
+            return format!("{short_nick} {suffix}");
+        }
+        if max_w >= suffix_w {
+            return suffix.to_string();
+        }
+        return text::truncate_to_width(suffix, max_w);
+    }
+    text::truncate_to_width(item.value, max_w)
 }

@@ -1,4 +1,4 @@
-//! 沙箱审批 strip 的键位路由：y/a/n、r/a/n、Esc、Enter 与草稿不变量。
+//! 沙箱审批命令面板的键位路由：y/a/n、r/a/n、Ctrl+C、Esc、Enter 与草稿不变量。
 
 use super::*;
 use crate::app::actions::LxInput;
@@ -166,11 +166,12 @@ fn escape_denies_and_mouse_click_commits_selected_option() {
 }
 
 #[test]
-fn unrelated_keys_still_edit_the_draft_while_pending() {
+fn unrelated_keys_do_not_edit_the_draft_while_pending() {
     let (mut state, pane, _) = pending(SandboxApprovalKind::Escalation, None);
     crate::app::update::apply_lx_input(&mut state, LxInput::Char('x'));
     let target = state.pane_anywhere(pane).expect("pane");
     assert_eq!(target.lx.approvals.len(), 1);
+    assert_eq!(target.lx.input, "draft");
     assert!(decision(&state).is_none());
 }
 
@@ -186,5 +187,104 @@ fn rule_prompt_approves_once_with_y() {
             .lx
             .approvals
             .is_empty()
+    );
+}
+
+#[test]
+fn ctrl_c_denies_approval_and_stops_matching_main_stream() {
+    let (mut state, pane, key) = pending(SandboxApprovalKind::Escalation, None);
+    if let Some(target) = state.pane_mut_anywhere(pane) {
+        target.lx.chat.request = RequestState::Streaming {
+            key: key.clone(),
+            assistant_id: "a1".into(),
+        };
+    }
+    assert!(pressed(&mut state, LxInput::Clear));
+    assert_eq!(decision(&state), Some(SandboxApprovalDecision::Denied));
+    assert!(
+        state
+            .effects
+            .iter()
+            .any(|effect| matches!(effect, Effect::CancelChatStream { key: cancelled } if cancelled == &key)),
+        "主轮在途审批被 Ctrl+C 拒绝时应同步取消对应流"
+    );
+    assert_eq!(state.pane_anywhere(pane).expect("pane").lx.input, "draft");
+
+    // 子 agent 审批（不同 RequestKey）：只拒绝审批，不得误停主轮流。
+    let mut state_sub = ready_state("draft");
+    let pane_sub = focus_pane(&state_sub);
+    let main_key = key_for(pane_sub);
+    let sub_key = RequestKey {
+        pane: pane_sub,
+        session: "sess-subagent".into(),
+        generation: 2,
+    };
+    if let Some(target) = state_sub.pane_mut_anywhere(pane_sub) {
+        target.lx.chat.request = RequestState::Streaming {
+            key: main_key,
+            assistant_id: "a1".into(),
+        };
+        target.lx.approvals.push_back(ApprovalState::new(
+            sub_key,
+            "call-sub".into(),
+            approval(SandboxApprovalKind::Escalation, None),
+        ));
+    }
+    assert!(pressed(&mut state_sub, LxInput::Clear));
+    assert_eq!(decision(&state_sub), Some(SandboxApprovalDecision::Denied));
+    assert!(
+        !state_sub
+            .effects
+            .iter()
+            .any(|effect| matches!(effect, Effect::CancelChatStream { .. })),
+        "子 agent 审批被 Ctrl+C 拒绝时不得取消主轮"
+    );
+}
+
+#[test]
+fn approval_takes_keyboard_priority_over_pending_ask() {
+    use crate::app::state::AskState;
+    use crate::chat::tools::ask::{AskOption, AskQuestion};
+
+    let (mut state, pane, key) = pending(SandboxApprovalKind::Escalation, None);
+    let question = AskQuestion {
+        id: "q1".into(),
+        header: "Choice".into(),
+        question: "Pick one".into(),
+        multi_select: false,
+        options: vec![AskOption {
+            label: "Opt A".into(),
+            description: String::new(),
+            preview: None,
+        }],
+    };
+    state.pane_mut_anywhere(pane).expect("pane").lx.ask =
+        Some(AskState::new(key, "call-ask".into(), vec![question]));
+
+    assert!(pressed(&mut state, LxInput::Enter));
+    assert_eq!(decision(&state), Some(SandboxApprovalDecision::Once));
+    let target = state.pane_anywhere(pane).expect("pane");
+    assert!(target.lx.approvals.is_empty());
+    assert!(target.lx.ask.is_some(), "审批未消耗 ask 面板");
+    assert!(
+        !state
+            .effects
+            .iter()
+            .any(|effect| matches!(effect, Effect::AnswerAsk { .. })),
+        "审批按键不得透传提交 ask"
+    );
+}
+
+#[test]
+fn pending_approval_marks_lx_agent_state_as_blocked() {
+    let (mut state, pane, _) = pending(SandboxApprovalKind::Escalation, None);
+    assert_eq!(
+        state.pane_anywhere(pane).expect("pane").lx.agent_state(),
+        crate::detect::AgentState::Blocked
+    );
+    assert!(pressed(&mut state, LxInput::Char('y')));
+    assert_eq!(
+        state.pane_anywhere(pane).expect("pane").lx.agent_state(),
+        crate::detect::AgentState::Idle
     );
 }

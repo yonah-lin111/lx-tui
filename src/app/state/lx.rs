@@ -398,6 +398,15 @@ impl Lx {
         }
     }
 
+    /// 重置会话级沙箱状态（模式覆盖、精确/前缀规则、待决审批与权限切换记录）。
+    pub fn reset_session_sandbox_state(&mut self) {
+        self.sandbox_mode = None;
+        self.sandbox_exact_rules.clear();
+        self.sandbox_prefix_rules.clear();
+        self.approvals.clear();
+        self.permission_switch.reset();
+    }
+
     /// 同步输入框内容宽度（列）与可视高度（内容行）；用于软换行、视觉行移动与滚动。
     pub fn resize(&mut self, width: u16, height: u16) {
         self.width = width.max(1);
@@ -444,7 +453,7 @@ impl Lx {
             }
             _ => self.chat.status.streaming,
         };
-        if self.has_pending_ask() || self.agents.blocked_count() > 0 {
+        if self.has_pending_ask() || !self.approvals.is_empty() || self.agents.blocked_count() > 0 {
             AgentState::Blocked
         } else if streaming
             || request_busy

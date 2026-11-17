@@ -100,9 +100,18 @@ impl Builder<'_> {
         );
         self.rows += block.rows;
         if let Some(span) = click {
+            let switch_id = if expanded {
+                slice
+                    .iter()
+                    .find(|item| source.permission_switch.is_expanded(&item.id))
+                    .map(|item| item.id.clone())
+                    .unwrap_or_else(|| source.perm_switches[first].id.clone())
+            } else {
+                source.perm_switches[first].id.clone()
+            };
             self.snapshot.cards.push(CardRegion {
                 kind: CardKind::PermissionSwitch {
-                    switch_id: source.perm_switches[first].id.clone(),
+                    switch_id,
                     expanded,
                 },
                 card_start: start + span.offset,

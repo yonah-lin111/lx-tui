@@ -24,13 +24,11 @@ pub fn to_regex(pattern: &str, subtree: bool) -> Option<String> {
     }
     let mut regex = String::from("^");
     let mut chars = pattern.chars().collect::<std::collections::VecDeque<_>>();
-    let mut saw_glob = false;
     let mut alternate_depth = 0;
 
     while let Some(ch) = chars.pop_front() {
         match ch {
             '*' => {
-                saw_glob = true;
                 if chars.front() == Some(&'*') {
                     chars.pop_front();
                     if chars.front() == Some(&'/') {
@@ -44,7 +42,6 @@ pub fn to_regex(pattern: &str, subtree: bool) -> Option<String> {
                 }
             }
             '?' => {
-                saw_glob = true;
                 regex.push_str("[^/]");
             }
             '\\' => {
@@ -55,7 +52,6 @@ pub fn to_regex(pattern: &str, subtree: bool) -> Option<String> {
                 }
             }
             '{' => {
-                saw_glob = true;
                 alternate_depth += 1;
                 regex.push('(');
             }
@@ -65,7 +61,6 @@ pub fn to_regex(pattern: &str, subtree: bool) -> Option<String> {
             }
             ',' if alternate_depth > 0 => regex.push('|'),
             '[' => {
-                saw_glob = true;
                 let mut class = Vec::new();
                 let mut closed = false;
                 while let Some(class_ch) = chars.pop_front() {
@@ -100,7 +95,6 @@ pub fn to_regex(pattern: &str, subtree: bool) -> Option<String> {
                 regex.push(']');
             }
             ']' => {
-                saw_glob = true;
                 regex.push_str("\\]");
             }
             _ => regex.push_str(&regex::escape(&ch.to_string())),
@@ -111,7 +105,7 @@ pub fn to_regex(pattern: &str, subtree: bool) -> Option<String> {
     for _ in 0..alternate_depth {
         regex.push(')');
     }
-    if !saw_glob && subtree {
+    if subtree && !regex.ends_with(".*") {
         regex.push_str("(/.*)?");
     }
     regex.push('$');
@@ -141,6 +135,40 @@ pub fn scan_root(pattern: &str) -> Option<PathBuf> {
         return None;
     }
     Some(PathBuf::from(root))
+}
+
+/// 把 glob 静态目录前缀规范化（支持存在目录或最近存在祖先）。
+///
+/// 无变化、全局根 glob 或静态目录含 `..` 时返回 None。
+pub fn canonical_glob_alias(pattern: &str) -> Option<String> {
+    let first = pattern.char_indices().find_map(|(index, ch)| {
+        matches!(ch, '*' | '?' | '[' | ']' | '{' | '}' | '\\').then_some(index)
+    });
+    let static_part = match first {
+        Some(index) => &pattern[..index],
+        None => pattern,
+    };
+    let slash_idx = static_part.rfind('/')?;
+    if slash_idx == 0 {
+        return None;
+    }
+    let static_dir = Path::new(&pattern[..slash_idx]);
+    let tail = &pattern[slash_idx..];
+    let canonical_dir = super::roots::resolve_write_target(static_dir)
+        .or_else(|| super::roots::canonical_parent_or_ancestor(static_dir))?;
+    if canonical_dir == static_dir {
+        return None;
+    }
+    let dir_str = canonical_dir.to_string_lossy();
+    let mut escaped = String::with_capacity(dir_str.len());
+    for ch in dir_str.chars() {
+        if matches!(ch, '*' | '?' | '[' | ']' | '{' | '}' | '\\') {
+            escaped.push('\\');
+        }
+        escaped.push(ch);
+    }
+    escaped.push_str(tail);
+    Some(escaped)
 }
 
 /// 在写根下按深度上限扫描 glob 匹配项（含符号链接的规范目标）。

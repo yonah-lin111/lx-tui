@@ -253,7 +253,7 @@ fn snapshot_reports_the_sandbox_mode_and_roots() {
 #[test]
 fn prompt_stays_small() {
     assert!(
-        LX_SYSTEM_PROMPT.len() < 14_000,
+        LX_SYSTEM_PROMPT.len() < 12_288,
         "系统提示过大：{} 字节",
         LX_SYSTEM_PROMPT.len()
     );
@@ -262,6 +262,44 @@ fn prompt_stays_small() {
         "完整系统提示过大：{} 字节",
         system_prompt().len()
     );
+}
+
+#[test]
+fn sandbox_prompt_distinguishes_literal_read_write_from_deny_globs() {
+    assert!(LX_SYSTEM_PROMPT.contains("`read` and `write` accept literal absolute paths"));
+    assert!(LX_SYSTEM_PROMPT.contains("`deny` accepts absolute paths or globs"));
+}
+
+#[test]
+fn sandbox_snapshot_emits_truncated_marker_when_protected_exceeds_eight() {
+    let base = std::env::temp_dir().join(format!("lx-prompt-prot-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&base);
+    let mut roots = Vec::new();
+    for idx in 0..9 {
+        let root = base.join(format!("r{idx}"));
+        std::fs::create_dir_all(root.join(".git")).expect("create git dir");
+        roots.push(root);
+    }
+    let settings = crate::config::sandbox::SandboxSettings {
+        writable_roots: roots.clone(),
+        ..Default::default()
+    };
+    let plan = crate::chat::sandbox::SandboxPlan::for_turn(&settings, &roots[0]);
+    assert!(plan.writable_roots.len() > 8);
+    assert!(plan.protected.len() > 8);
+    let xml = sandbox_context_xml(&settings, Some(&roots[0]), Some(&roots[0]));
+    let expected_roots_trunc =
+        format!("<truncated omitted=\"{}\"/>", plan.writable_roots.len() - 8);
+    let expected_prot_trunc = format!("<truncated omitted=\"{}\"/>", plan.protected.len() - 8);
+    assert!(
+        xml.contains(&expected_roots_trunc),
+        "missing writable_roots truncated tag in {xml}"
+    );
+    assert!(
+        xml.contains(&expected_prot_trunc),
+        "missing protected truncated tag in {xml}"
+    );
+    let _ = std::fs::remove_dir_all(base);
 }
 
 /// 组装后的提示必须带上当前平台，否则模型会假设 Linux 工具齐备。

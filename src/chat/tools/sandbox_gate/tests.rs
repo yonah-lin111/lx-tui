@@ -168,3 +168,72 @@ fn write_tool_allows_a_new_file_inside_the_workspace() {
     assert!(target.exists());
     let _ = std::fs::remove_dir_all(dir);
 }
+
+#[cfg(unix)]
+#[test]
+fn symlink_inside_protected_git_dir_is_rejected_by_write_and_edit() {
+    let dir = temp_dir("git-link");
+    std::fs::create_dir_all(dir.join(".git")).expect("git dir");
+    let ok = dir.join("ok.txt");
+    std::fs::write(&ok, "alpha\n").expect("seed ok");
+    let git_link = dir.join(".git/link");
+    std::os::unix::fs::symlink("../ok.txt", &git_link).expect("symlink");
+
+    let ctx = ctx(&dir, SandboxMode::WorkspaceWrite);
+    let write_args = serde_json::json!({
+        "path": git_link.display().to_string(),
+        "content": "hacked\n"
+    })
+    .to_string();
+    let write_res = crate::chat::tools::execute(&ctx, "write", &write_args);
+    assert_eq!(
+        write_res.error_code(),
+        Some(crate::chat::tools::ToolErrorCode::SandboxDenied),
+        "write through .git/link must be denied: {write_res:?}"
+    );
+
+    let update_patch =
+        "*** Begin Patch\n*** Update File: .git/link\n@@\n-alpha\n+hacked\n*** End Patch";
+    let update_res = crate::chat::tools::execute(
+        &ctx,
+        "edit",
+        &serde_json::json!({ "patch": update_patch }).to_string(),
+    );
+    assert_eq!(
+        update_res.error_code(),
+        Some(crate::chat::tools::ToolErrorCode::SandboxDenied),
+        "edit Update on .git/link must be denied: {update_res:?}"
+    );
+
+    let delete_patch = "*** Begin Patch\n*** Delete File: .git/link\n*** End Patch";
+    let delete_res = crate::chat::tools::execute(
+        &ctx,
+        "edit",
+        &serde_json::json!({ "patch": delete_patch }).to_string(),
+    );
+    assert_eq!(
+        delete_res.error_code(),
+        Some(crate::chat::tools::ToolErrorCode::SandboxDenied),
+        "edit Delete on .git/link must be denied: {delete_res:?}"
+    );
+
+    let move_patch = "*** Begin Patch\n*** Update File: .git/link\n*** Move to: moved.txt\n@@\n-alpha\n+alpha\n*** End Patch";
+    let move_res = crate::chat::tools::execute(
+        &ctx,
+        "edit",
+        &serde_json::json!({ "patch": move_patch }).to_string(),
+    );
+    assert_eq!(
+        move_res.error_code(),
+        Some(crate::chat::tools::ToolErrorCode::SandboxDenied),
+        "edit Move on .git/link must be denied: {move_res:?}"
+    );
+
+    assert!(
+        std::fs::symlink_metadata(&git_link).is_ok(),
+        ".git/link must remain untouched"
+    );
+    assert!(!dir.join("moved.txt").exists());
+    assert_eq!(std::fs::read_to_string(&ok).expect("ok intact"), "alpha\n");
+    let _ = std::fs::remove_dir_all(dir);
+}

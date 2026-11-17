@@ -64,10 +64,9 @@ impl PermissionSwitchNoticeView {
 
     /// 展开态首行前后对比摘要。
     pub fn transition_line(&self) -> String {
-        format!(
-            "switched {} -> {}",
+        crate::ui::text::permission_switch_transition(
             self.from_short_label(),
-            self.to_short_label()
+            self.to_short_label(),
         )
     }
 }
@@ -112,6 +111,23 @@ impl LxPermissionSwitch {
             self.expanded.remove(pos);
         } else {
             self.expanded.push(id.to_string());
+        }
+        true
+    }
+
+    /// 切换一组连续合并切换记录的展开状态：区间内任一条已展开时全部收起，否则展开首条。
+    pub fn toggle_range(&mut self, ids: &[String]) -> bool {
+        let Some(first) = ids
+            .iter()
+            .find(|id| self.switches.iter().any(|item| &item.id == *id))
+        else {
+            return false;
+        };
+        if ids.iter().any(|id| self.is_expanded(id)) {
+            self.expanded
+                .retain(|id| !ids.iter().any(|target| target == id));
+        } else {
+            self.expanded.push(first.clone());
         }
         true
     }

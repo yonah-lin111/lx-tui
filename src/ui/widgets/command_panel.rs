@@ -493,11 +493,29 @@ fn render_top_rule(
     let mut left_end = rect.x;
     if let Some(title) = view.title {
         let x = rect.x.saturating_add(1);
-        let max_w = usize::from(rect.right().saturating_sub(1).saturating_sub(x));
-        if max_w > 0 {
-            let draw_w = u16::try_from(title.width().min(max_w)).unwrap_or(u16::MAX);
-            buf.set_stringn(x, header_y, title, max_w, style::strong());
-            left_end = x.saturating_add(draw_w);
+        let right_edge = rect.right().saturating_sub(1);
+        let line_avail = usize::from(right_edge.saturating_sub(x));
+        if line_avail > 0 {
+            let title_budget = if !has_tabs && let Some(right_title) = view.right_title {
+                let title_w = title.width();
+                let right_w = right_title.width();
+                if title_w + 1 + right_w <= line_avail {
+                    line_avail
+                } else if right_w + 1 < line_avail && line_avail - right_w > title_w.min(3) {
+                    // 优先保留完整的右标题角标（如 `[Subagent]` / `+N pending`），必要时截断左标题。
+                    line_avail - right_w - 1
+                } else {
+                    title_w.min(line_avail)
+                }
+            } else {
+                line_avail
+            };
+            let clipped = text::truncate_to_width(title, title_budget);
+            let draw_w = u16::try_from(clipped.width()).unwrap_or(u16::MAX);
+            if draw_w > 0 {
+                buf.set_stringn(x, header_y, &clipped, title_budget, style::strong());
+                left_end = x.saturating_add(draw_w);
+            }
         }
     }
     if has_tabs {

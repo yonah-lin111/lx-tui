@@ -3,6 +3,7 @@
 //! 基础策略与网络策略来自 OpenAI Codex（Apache-2.0），见 `assets/sandbox/`。
 //! 路径一律通过 `-D` 参数传入，不拼进 profile 字符串；glob 走 SBPL regex。
 
+use std::collections::BTreeSet;
 use std::ffi::{OsStr, OsString};
 use std::path::{Path, PathBuf};
 
@@ -20,20 +21,24 @@ pub(super) fn build_profile(
     let mut params: Vec<(String, PathBuf)> = Vec::new();
     let mut sections: Vec<String> = vec![BASE_POLICY.to_string(), "(allow file-read*)".to_string()];
 
+    // 同时保留逻辑路径与规范化路径别名，避免 `/tmp` → `/private/tmp` 等软链前缀导致规则失效。
+    let writable_roots = expand_path_aliases(spec.writable_roots)?;
+    let read_only_paths = expand_path_aliases(spec.read_only_paths)?;
+    let deny_paths = expand_path_aliases(spec.deny_paths)?;
+    let deny_globs = expand_glob_aliases(spec.deny_globs);
+
     // 显式 Deny：读与写都拒绝；字面路径覆盖自身与后代。
-    for (index, denied) in spec.deny_paths.iter().enumerate() {
-        validate_path(denied)?;
+    for denied in &deny_paths {
         let key = param_for(&mut params, "DENY", denied);
         sections.push(format!("(deny file-read* (literal (param \"{key}\")))"));
         sections.push(format!("(deny file-read* (subpath (param \"{key}\")))"));
         sections.push(format!("(deny file-write* (literal (param \"{key}\")))"));
         sections.push(format!("(deny file-write* (subpath (param \"{key}\")))"));
-        let _ = index;
     }
 
     // Deny glob：正则拒绝读与写（deny 优先于 allow）。
     let mut deny_glob_rules = Vec::new();
-    for pattern in spec.deny_globs {
+    for pattern in &deny_globs {
         let Some(regex) = glob::to_regex(pattern, true) else {
             return Err(SandboxError::Invalid(format!(
                 "deny glob '{pattern}' cannot be translated to a seatbelt regex"
@@ -48,20 +53,18 @@ pub(super) fn build_profile(
     }
 
     // 写根：允许写入，但排除只读 carveout、Deny 路径与 Deny glob。
-    for root in spec.writable_roots {
-        validate_path(root)?;
+    for root in &writable_roots {
         let write_key = param_for(&mut params, "WRITE", root);
         let mut require_parts = vec![format!("(subpath (param \"{write_key}\"))")];
-        for protected in spec.read_only_paths {
+        for protected in &read_only_paths {
             if !protected.starts_with(root) {
                 continue;
             }
-            validate_path(protected)?;
             let key = param_for(&mut params, "READONLY", protected);
             require_parts.push(format!("(require-not (literal (param \"{key}\")))"));
             require_parts.push(format!("(require-not (subpath (param \"{key}\")))"));
         }
-        for denied in spec.deny_paths {
+        for denied in &deny_paths {
             if !denied.starts_with(root) {
                 continue;
             }
@@ -78,37 +81,42 @@ pub(super) fn build_profile(
         ));
     }
 
-    // 保护祖先目录：重命名可写父目录会绕过子路径 carveout。
-    let mut protected_paths: Vec<&PathBuf> = spec
-        .read_only_paths
-        .iter()
-        .chain(spec.deny_paths.iter())
-        .collect();
-    protected_paths.sort();
-    protected_paths.dedup();
-    for protected in protected_paths {
-        let Some(root) = spec
-            .writable_roots
-            .iter()
-            .find(|root| protected.starts_with(root))
-        else {
+    // 保护可写根自身与全部保护子路径/glob 静态前缀的祖先目录，防止通过重命名父目录绕过。
+    for root in &writable_roots {
+        let key = param_for(&mut params, "PROTECT_ANCHOR", root);
+        sections.push(format!(
+            "(deny file-write-unlink (require-all (vnode-type DIRECTORY) (literal (param \"{key}\"))))"
+        ));
+    }
+    let mut ancestor_dirs: BTreeSet<PathBuf> = BTreeSet::new();
+    for protected in read_only_paths.iter().chain(deny_paths.iter()) {
+        for ancestor in protected.ancestors().skip(1) {
+            if writable_roots.iter().any(|root| root == ancestor) {
+                continue;
+            }
+            if writable_roots.iter().any(|root| ancestor.starts_with(root)) {
+                ancestor_dirs.insert(ancestor.to_path_buf());
+            }
+        }
+    }
+    for pattern in &deny_globs {
+        let Some(static_root) = glob::scan_root(pattern) else {
             continue;
         };
-        if protected == root {
-            continue;
-        }
-        for ancestor in protected.ancestors().skip(1) {
-            if ancestor == root {
-                break;
+        for ancestor in static_root.ancestors() {
+            if writable_roots.iter().any(|root| root == ancestor) {
+                continue;
             }
-            if !ancestor.starts_with(root) {
-                break;
+            if writable_roots.iter().any(|root| ancestor.starts_with(root)) {
+                ancestor_dirs.insert(ancestor.to_path_buf());
             }
-            let key = param_for(&mut params, "PROTECT_ANCESTOR", ancestor);
-            sections.push(format!(
-                "(deny file-write-unlink (require-all (vnode-type DIRECTORY) (literal (param \"{key}\"))))"
-            ));
         }
+    }
+    for ancestor in ancestor_dirs {
+        let key = param_for(&mut params, "PROTECT_ANCESTOR", &ancestor);
+        sections.push(format!(
+            "(deny file-write-unlink (require-all (vnode-type DIRECTORY) (literal (param \"{key}\"))))"
+        ));
     }
 
     if spec.network_access {
@@ -120,6 +128,44 @@ pub(super) fn build_profile(
     sections.push("(deny system-fcntl (fcntl-command 80 110))".to_string());
 
     Ok((sections.join("\n"), params))
+}
+
+fn expand_path_aliases(paths: &[PathBuf]) -> Result<Vec<PathBuf>, SandboxError> {
+    let mut expanded = Vec::with_capacity(paths.len());
+    for path in paths {
+        validate_path(path)?;
+        if !expanded.contains(path) {
+            expanded.push(path.clone());
+        }
+        if let Some(parent_canon) = super::roots::canonical_parent_or_ancestor(path) {
+            validate_path(&parent_canon)?;
+            if !expanded.contains(&parent_canon) {
+                expanded.push(parent_canon);
+            }
+        }
+        if let Some(canon) = super::roots::resolve_write_target(path) {
+            validate_path(&canon)?;
+            if !expanded.contains(&canon) {
+                expanded.push(canon);
+            }
+        }
+    }
+    Ok(expanded)
+}
+
+fn expand_glob_aliases(patterns: &[String]) -> Vec<String> {
+    let mut expanded = Vec::with_capacity(patterns.len());
+    for pattern in patterns {
+        if !expanded.contains(pattern) {
+            expanded.push(pattern.clone());
+        }
+        if let Some(aliased) = glob::canonical_glob_alias(pattern)
+            && !expanded.contains(&aliased)
+        {
+            expanded.push(aliased);
+        }
+    }
+    expanded
 }
 
 /// 包装为 `sandbox-exec -p <profile> -D... -- <program> <args>`。
@@ -146,6 +192,7 @@ pub(super) fn wrap(
     Ok(Wrapped {
         program: PathBuf::from(SANDBOX_EXEC),
         args: argv,
+        synthetic_targets: Vec::new(),
     })
 }
 

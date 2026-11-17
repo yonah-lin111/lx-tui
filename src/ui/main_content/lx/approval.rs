@@ -14,18 +14,23 @@ use crate::ui::widgets::command_panel::{
 
 use super::mention;
 
-/// 当前是否展示审批命令面板（后台任务页优先，ask 面板不叠加）。
+/// 当前是否展示审批命令面板（后台任务页优先；高于 `ask` 面板）。
 pub(crate) fn visible(lx: &Lx) -> bool {
-    lx.task.is_none() && lx.ask.is_none() && !lx.approvals.is_empty()
+    lx.task.is_none() && !lx.approvals.is_empty()
 }
 
-/// 审批面板布局（贴输入框上沿、与输入框等宽）；未激活或空间不足返回 None。
+/// 审批面板锚点矩形：输入框优先，挂起 `ask` 时锚定在 `ask` 面板上方。
+fn anchor_rect(area: Rect, lx: &Lx) -> Option<Rect> {
+    super::input_rect(area, lx).or_else(|| super::ask_rect(area, lx))
+}
+
+/// 审批面板布局（贴输入框或 ask 上沿、与底部容器等宽）；未激活或空间不足返回 None。
 pub(crate) fn layout(area: Rect, lx: &Lx) -> Option<PanelLayout> {
     if !visible(lx) {
         return None;
     }
     let front = lx.approvals.front()?;
-    let input = super::input_rect(area, lx)?;
+    let anchor = anchor_rect(area, lx)?;
     let options = front.options();
     let additional = front
         .request
@@ -33,8 +38,14 @@ pub(crate) fn layout(area: Rect, lx: &Lx) -> Option<PanelLayout> {
         .as_ref()
         .map(|item| item.summary())
         .filter(|summary| !summary.is_empty());
-    let prepared =
-        PreparedApproval::new(&front.request, additional.as_deref(), &options, input, area);
+    let prepared = PreparedApproval::new(
+        &front.request,
+        additional.as_deref(),
+        &options,
+        lx.approvals.len(),
+        anchor,
+        area,
+    );
     let view = prepared.view(front.window.active);
     command_panel::layout(prepared.panel_area, &view)
 }
@@ -45,7 +56,7 @@ pub(crate) fn item_at(area: Rect, lx: &Lx, column: u16, row: u16) -> Option<usiz
         return None;
     }
     let front = lx.approvals.front()?;
-    let input = super::input_rect(area, lx)?;
+    let anchor = anchor_rect(area, lx)?;
     let options = front.options();
     let additional = front
         .request
@@ -53,14 +64,20 @@ pub(crate) fn item_at(area: Rect, lx: &Lx, column: u16, row: u16) -> Option<usiz
         .as_ref()
         .map(|item| item.summary())
         .filter(|summary| !summary.is_empty());
-    let prepared =
-        PreparedApproval::new(&front.request, additional.as_deref(), &options, input, area);
+    let prepared = PreparedApproval::new(
+        &front.request,
+        additional.as_deref(),
+        &options,
+        lx.approvals.len(),
+        anchor,
+        area,
+    );
     let view = prepared.view(front.window.active);
     let lay = command_panel::layout(prepared.panel_area, &view)?;
     command_panel::item_at(&lay, &prepared.items, column, row)
 }
 
-/// 绘制审批命令面板（锚定输入框上沿、复用无边框蓝色分割线命令面板）。
+/// 绘制审批命令面板（锚定输入框或 ask 上沿、复用无边框蓝色分割线命令面板）。
 pub(super) fn render(area: Rect, buf: &mut Buffer, lx: &Lx) {
     if !visible(lx) {
         return;
@@ -68,7 +85,7 @@ pub(super) fn render(area: Rect, buf: &mut Buffer, lx: &Lx) {
     let Some(front) = lx.approvals.front() else {
         return;
     };
-    let Some(input) = super::input_rect(area, lx) else {
+    let Some(anchor) = anchor_rect(area, lx) else {
         return;
     };
     let options = front.options();
@@ -78,8 +95,14 @@ pub(super) fn render(area: Rect, buf: &mut Buffer, lx: &Lx) {
         .as_ref()
         .map(|item| item.summary())
         .filter(|summary| !summary.is_empty());
-    let prepared =
-        PreparedApproval::new(&front.request, additional.as_deref(), &options, input, area);
+    let prepared = PreparedApproval::new(
+        &front.request,
+        additional.as_deref(),
+        &options,
+        lx.approvals.len(),
+        anchor,
+        area,
+    );
     let view = prepared.view(front.window.active);
     command_panel::render(prepared.panel_area, buf, &view);
 }
@@ -87,7 +110,7 @@ pub(super) fn render(area: Rect, buf: &mut Buffer, lx: &Lx) {
 struct PreparedApproval<'a> {
     panel_area: Rect,
     title: &'static str,
-    right_title: Option<&'a str>,
+    right_title: Option<String>,
     footer: &'static str,
     context_lines: Vec<PanelContextLine<'a>>,
     items: Vec<CommandItem<'a>>,
@@ -101,6 +124,7 @@ impl<'a> PreparedApproval<'a> {
         request: &'a SandboxApprovalRequest,
         additional_summary: Option<&'a str>,
         options: &'a [ApprovalOption],
+        queue_len: usize,
         input: Rect,
         area: Rect,
     ) -> Self {
@@ -133,9 +157,9 @@ impl<'a> PreparedApproval<'a> {
             ));
         }
         let reason_label = if request.kind == SandboxApprovalKind::Retry {
-            "Blocked:"
+            text::LX_APPROVAL_BLOCKED_LABEL
         } else {
-            "Reason:"
+            text::LX_APPROVAL_REASON_LABEL
         };
         let reason_value = match request.kind {
             SandboxApprovalKind::Escalation | SandboxApprovalKind::Rule => {
@@ -144,14 +168,20 @@ impl<'a> PreparedApproval<'a> {
             SandboxApprovalKind::Retry => request
                 .denial_excerpt
                 .as_deref()
-                .unwrap_or("sandbox denied"),
+                .unwrap_or(text::LX_APPROVAL_DENIED_FALLBACK),
         };
         if !reason_value.trim().is_empty() {
             context_lines.push(PanelContextLine::new(reason_label, reason_value));
         }
-        context_lines.push(PanelContextLine::new("Command:", request.command.as_str()));
+        context_lines.push(PanelContextLine::new(
+            text::LX_APPROVAL_COMMAND_LABEL,
+            request.command.as_str(),
+        ));
         if let Some(summary) = additional_summary {
-            context_lines.push(PanelContextLine::new("Requested:", summary));
+            context_lines.push(PanelContextLine::new(
+                text::LX_APPROVAL_REQUESTED_LABEL,
+                summary,
+            ));
         }
 
         let above = input.y.saturating_sub(area.y);
@@ -184,7 +214,10 @@ impl<'a> PreparedApproval<'a> {
         Self {
             panel_area: Rect::new(input.x, area.y, input.width, above),
             title,
-            right_title: subagent_source.map(|_| text::LX_APPROVAL_SUBAGENT_TAG),
+            right_title: text::approval_right_title(
+                subagent_source.is_some(),
+                queue_len.saturating_sub(1),
+            ),
             footer,
             context_lines,
             items,
@@ -206,7 +239,7 @@ impl<'a> PreparedApproval<'a> {
             fixed_height: false,
             title: Some(self.title),
             tabs: None,
-            right_title: self.right_title,
+            right_title: self.right_title.as_deref(),
             footer: Some(self.footer),
             width: Some(self.width),
             placement: PanelPlacement::Above,
