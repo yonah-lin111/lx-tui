@@ -65,7 +65,7 @@ fn narrow_width_enters_compact_single_column() {
     assert_eq!(view.compact_left_button, Rect::new(0, 0, 4, 1));
     assert_eq!(view.compact_right_button.height, 1);
     assert_eq!(view.right_panel.width, 0);
-    assert_eq!(view.main_content, Rect::new(0, 2, 60, 28));
+    assert_eq!(view.main_content, Rect::new(0, 1, 60, 29));
 }
 
 #[test]
@@ -105,7 +105,7 @@ fn collapsed_narrow_sidebar_stays_compact() {
 }
 
 #[test]
-fn compact_header_uses_two_rows_on_tall_screen() {
+fn compact_header_stays_one_row_on_tall_screen() {
     let config = crate::ui::test_support::desktop_config();
     let view = compute_with_panel(
         Rect::new(0, 0, 80, 24),
@@ -119,8 +119,8 @@ fn compact_header_uses_two_rows_on_tall_screen() {
         None,
     );
     assert!(view.compact);
-    assert_eq!(view.compact_header, Rect::new(0, 0, 80, 2));
-    assert_eq!(view.main_content, Rect::new(0, 2, 80, 22));
+    assert_eq!(view.compact_header, Rect::new(0, 0, 80, 1));
+    assert_eq!(view.main_content, Rect::new(0, 1, 80, 23));
 }
 
 #[test]
@@ -156,10 +156,10 @@ fn compact_fullscreen_panel_uses_body() {
         Some(CompactPanel::Right),
     );
     assert!(view.compact);
-    assert_eq!(view.compact_header, Rect::new(0, 0, 60, 2));
+    assert_eq!(view.compact_header, Rect::new(0, 0, 60, 1));
     assert_eq!(view.main_content.width, 0);
     assert_eq!(view.left_panel.width, 0);
-    assert_eq!(view.right_panel, Rect::new(0, 2, 60, 18));
+    assert_eq!(view.right_panel, Rect::new(0, 1, 60, 19));
 }
 
 #[test]
@@ -177,7 +177,7 @@ fn compact_fullscreen_left_panel_uses_body() {
         Some(CompactPanel::Left),
     );
     assert!(view.compact);
-    assert_eq!(view.left_panel, Rect::new(0, 2, 60, 18));
+    assert_eq!(view.left_panel, Rect::new(0, 1, 60, 19));
     assert_eq!(view.main_content.width, 0);
     assert_eq!(view.right_panel.width, 0);
 }
@@ -230,7 +230,7 @@ fn compact_nav_row_places_buttons_at_both_edges() {
     assert_eq!(view.compact_right_button.right(), 120);
     assert!(view.compact_left_button.right() < view.tab_bar.x);
     assert!(view.tab_bar.right() < view.compact_right_button.x);
-    assert_eq!(view.compact_status, Rect::new(0, 1, 120, 1));
+    assert_eq!(view.compact_header, Rect::new(0, 0, 120, 1));
 }
 
 #[test]

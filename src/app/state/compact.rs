@@ -1,6 +1,4 @@
-//! 紧凑布局的派生数据：进入前的折叠快照、全屏面板与全局 Agent 状态。
-
-use crate::detect::AgentState;
+//! 紧凑布局的派生数据：进入前的折叠快照与全屏面板。
 
 use super::{AppState, SidebarAgentEntry};
 
@@ -57,19 +55,6 @@ impl AppState {
             }
         }
         entries
-    }
-
-    /// 所有工作区的 Agent 状态；顶部状态行只做聚合计数。
-    pub fn global_agent_states(&self) -> Vec<AgentState> {
-        let mut states = Vec::new();
-        for workspace in 0..self.workspaces.len() {
-            states.extend(
-                self.agent_entries_for_workspace(workspace)
-                    .into_iter()
-                    .map(|entry| entry.state),
-            );
-        }
-        states
     }
 }
 

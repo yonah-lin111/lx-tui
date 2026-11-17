@@ -79,7 +79,7 @@ fn threshold_160_enters_compact_and_161_stays_desktop() {
     let mut state = demo_terminal();
     let geo = compact_geometry(&mut state, &config, 160, 24);
     assert!(geo.view.compact);
-    assert_eq!(geo.view.compact_header.height, 2);
+    assert_eq!(geo.view.compact_header.height, 1);
 
     let mut state = demo_terminal();
     let geo = compact_geometry(&mut state, &config, 161, 24);
@@ -94,7 +94,7 @@ fn compact_chat_gives_full_width_to_panes() {
     let mut state = demo_terminal();
     let geo = compact_geometry(&mut state, &config, 100, 24);
     assert!(geo.view.compact);
-    assert_eq!(geo.view.main_content, Rect::new(0, 2, 100, 22));
+    assert_eq!(geo.view.main_content, Rect::new(0, 1, 100, 23));
     assert_eq!(geo.rects.len(), 1, "only the pane is interactive");
     assert_eq!(geo.rects[0].1.width, 100);
     assert_eq!(
@@ -113,7 +113,6 @@ fn short_terminal_uses_one_nav_row() {
     let mut state = demo_terminal();
     let geo = compact_geometry(&mut state, &config, 40, 10);
     assert_eq!(geo.view.compact_header, Rect::new(0, 0, 40, 1));
-    assert_eq!(geo.view.compact_status.height, 0);
     assert_eq!(geo.view.main_content, Rect::new(0, 1, 40, 9));
 }
 
@@ -151,7 +150,7 @@ fn left_button_opens_fullscreen_sidebar_and_toggles_back() {
     );
 
     let geo = compact_geometry(&mut state, &config, 100, 24);
-    assert_eq!(geo.view.left_panel, Rect::new(0, 2, 100, 22));
+    assert_eq!(geo.view.left_panel, Rect::new(0, 1, 100, 23));
     assert_eq!(geo.view.main_content.width, 0);
     assert!(
         geo.rects.is_empty(),
@@ -162,7 +161,7 @@ fn left_button_opens_fullscreen_sidebar_and_toggles_back() {
     assert!(click(&mut state, &config, &geo, left.x, left.y));
     assert_eq!(state.focus(), FocusedContainer::Panes);
     let geo = compact_geometry(&mut state, &config, 100, 24);
-    assert_eq!(geo.view.main_content, Rect::new(0, 2, 100, 22));
+    assert_eq!(geo.view.main_content, Rect::new(0, 1, 100, 23));
 }
 
 #[test]
@@ -175,7 +174,7 @@ fn right_button_opens_fullscreen_right_panel() {
     assert_eq!(state.focus(), FocusedContainer::Prompt);
 
     let geo = compact_geometry(&mut state, &config, 100, 24);
-    assert_eq!(geo.view.right_panel, Rect::new(0, 2, 100, 22));
+    assert_eq!(geo.view.right_panel, Rect::new(0, 1, 100, 23));
     assert_eq!(geo.view.main_content.width, 0);
     assert!(geo.rects.iter().all(|(id, _)| *id == state.prompt.id()));
     assert!(geo.view.right_panel.contains((30, 10).into()));
@@ -258,11 +257,17 @@ fn escape_closes_fullscreen_sidebar_only() {
 }
 
 #[test]
-fn status_row_click_is_swallowed() {
+fn header_gap_click_is_swallowed() {
     let config = Config::default();
     let mut state = demo_terminal();
     let geo = compact_geometry(&mut state, &config, 100, 24);
-    assert!(!click(&mut state, &config, &geo, 50, 1));
+    assert!(!click(
+        &mut state,
+        &config,
+        &geo,
+        geo.view.tab_bar.right() - 1,
+        0
+    ));
     assert_eq!(state.focus(), FocusedContainer::Panes);
     assert!(state.overlay.is_none());
 }

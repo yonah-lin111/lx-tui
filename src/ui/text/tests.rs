@@ -732,5 +732,4 @@ fn ellipsize_width_counts_display_columns() {
 fn compact_labels_are_stable_and_bracketed() {
     assert_eq!(COMPACT_LEFT_LABEL, "[ws]");
     assert_eq!(COMPACT_RIGHT_LABEL, "[panel]");
-    assert_eq!(COMPACT_NO_AGENTS, "no agents");
 }

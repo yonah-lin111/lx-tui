@@ -8,7 +8,7 @@
 
 窄终端下不再维护桌面三栏的最小宽度，而是切换为单列布局：
 
-- 顶部栏一行导航、一行状态；
+- 顶部单行导航栏：`[ws]` + tab 条 + `[panel]`；
 - 中间内容默认是 Chat/窗格；
 - 左侧栏与右侧栏按需全屏打开，内容复用桌面实现。
 
@@ -46,10 +46,9 @@ pub struct ViewLayout {
     pub main_content: Rect,
     pub right_panel: Rect,
     pub right_panel_left: bool,
-    pub compact_header: Rect,   // 紧凑顶部栏整体（1 或 2 行）
+    pub compact_header: Rect,   // 紧凑顶部导航栏（固定 1 行）
     pub compact_left_button: Rect,
     pub compact_right_button: Rect,
-    pub compact_status: Rect,   // 第二行；短屏为 0
     pub compact: bool,
 }
 ```
@@ -58,7 +57,6 @@ pub struct ViewLayout {
 
 ```text
 ┌ [ws] │ tab 1 │ tab 2 │ [+] ───────────── [panel] ┐   row 0
-│ ● workspace          ○ 1 working · 2 idle          │   row 1（高度 >= 16）
 ├────────────────────────────────────────────────────┤
 │                                                    │
 │  Chat / 全屏左栏 / 全屏右栏                         │
@@ -66,7 +64,7 @@ pub struct ViewLayout {
 └────────────────────────────────────────────────────┘
 ```
 
-- 顶部栏高度：`height >= 16` 为 2，否则为 1；
+- 顶部栏高度：固定 1 行（高度 0 时为 0）；
 - `[ws]` 宽 4、`[panel]` 宽 7，各留 1 列分隔；
 - `view.tab_bar` 指向两按钮之间的 strip（高度 1），直接复用原标签栏布局/渲染/命中；
 - `CompactPanel::Left`：`left_panel = body`，主区与右栏为 0；
@@ -124,8 +122,6 @@ pub enum CompactPanel {
 - 清空 `compact_header`；
 - `[ws]` 在 `compact_left_button`，`[panel]` 在 `compact_right_button`；
 - 打开对应栏时按钮使用 `style::selected_item()`（Cyan 底黑字），否则 `style::accent()`；
-- 第二行左侧：当前工作区 Agent 聚合状态点 + 工作区名（按可用宽度截断）；
-- 第二行右侧：全局 Agent 摘要 `N blocked · N working · N idle`，无 Agent 时 `○ no agents`；空间不足时优先省略摘要；
 - 中间 tab 条由 `tab_bar::render` 在同一帧随后绘制。
 
 ## 5. 中间 tab 条
@@ -220,13 +216,13 @@ pub enum CompactPanel {
 ## 11. 测试覆盖
 
 - 阈值：160 → compact，161 → desktop；
-- 几何：2 行/1 行顶部栏、按钮位于两端、tab strip 位于中间、左/右全屏 body；
+- 几何：单行顶部栏、按钮位于两端、tab strip 位于中间、左/右全屏 body；
 - 状态：进入快照三项、退出恢复、右栏焦点保留、折叠侧栏退出交回主区；
 - 按钮：左/右 toggle、tab 点击返回并切换、Esc 仅关左栏；
 - tab 条：紧凑模式无 `[EXIT]`、`[+]` 新建、溢出滚动；
-- 命中：状态行吞点击、隐藏控件无命中、全屏侧栏行仍可点；
+- 命中：顶部栏间隙吞点击、隐藏控件无命中、全屏侧栏行仍可点；
 - Toast：紧凑模式复用桌面浮框（锚点容器内居中 / 屏幕顶部 `y=1` 居中）；
-- 渲染：`[ws]`/`[panel]`、tab、状态行、Agent 摘要、活动按钮实心高亮。
+- 渲染：`[ws]`/`[panel]`、tab、活动按钮实心高亮。
 
 ## 12. 手动验收
 

@@ -8,9 +8,6 @@ use crate::config::Config;
 use crate::tiling::COLLAPSED_STRIP;
 use crate::ui::text;
 
-/// 紧凑布局下显示状态行所需的最小终端高度。
-const COMPACT_HEADER_TALL_MIN_HEIGHT: u16 = 16;
-
 /// 导航按钮与 tab 条之间的留白列数。
 const COMPACT_HEADER_GAP: u16 = 1;
 
@@ -24,14 +21,12 @@ pub struct ViewLayout {
     pub right_panel: Rect,
     /// 右栏是否位于主内容左侧（与 main_content 互换）。
     pub right_panel_left: bool,
-    /// 紧凑模式顶部栏；桌面布局为 0。
+    /// 紧凑模式顶部导航栏（单行）；桌面布局为 0。
     pub compact_header: Rect,
     /// 紧凑模式左栏入口按钮；桌面布局为 0。
     pub compact_left_button: Rect,
     /// 紧凑模式右栏入口按钮；桌面布局为 0。
     pub compact_right_button: Rect,
-    /// 紧凑模式第二行状态区；高度不足或桌面布局为 0。
-    pub compact_status: Rect,
     /// 当前是否为紧凑单列布局。
     pub compact: bool,
 }
@@ -137,22 +132,15 @@ pub fn compute_with_panel(
         compact_header: zero,
         compact_left_button: zero,
         compact_right_button: zero,
-        compact_status: zero,
         compact: false,
     }
 }
 
-/// 紧凑单列布局：顶部导航/状态栏 + Chat 或全屏侧栏。
+/// 紧凑单列布局：单行顶部导航栏 + Chat 或全屏侧栏。
 ///
-/// 第一行固定为 `[ws] + tabs + [panel]`；高度 `>= 16` 时第二行为工作区与
-/// 全局 Agent 状态。全屏侧栏不改变顶部栏高度，避免切换面板时整屏跳动。
+/// 顶部行固定为 `[ws] + tabs + [panel]`，不渲染第二行状态摘要。
 fn compact_layout(area: Rect, panel: Option<CompactPanel>) -> ViewLayout {
-    let header_height = if area.height >= COMPACT_HEADER_TALL_MIN_HEIGHT {
-        2
-    } else {
-        1
-    }
-    .min(area.height);
+    let header_height = 1.min(area.height);
     let header = Rect::new(area.x, area.y, area.width, header_height);
     let body = Rect::new(
         area.x,
@@ -167,7 +155,7 @@ fn compact_layout(area: Rect, panel: Option<CompactPanel>) -> ViewLayout {
     let right_width = u16::try_from(text::COMPACT_RIGHT_LABEL.width())
         .unwrap_or(u16::MAX)
         .min(area.width);
-    let nav_height = 1.min(area.height);
+    let nav_height = header_height;
     let left_button = Rect::new(area.x, area.y, left_width, nav_height);
     let right_button = Rect::new(
         area.right().saturating_sub(right_width),
@@ -185,11 +173,6 @@ fn compact_layout(area: Rect, panel: Option<CompactPanel>) -> ViewLayout {
         .max(tab_x)
         .min(area.right());
     let tab_bar = Rect::new(tab_x, area.y, tab_right.saturating_sub(tab_x), nav_height);
-    let compact_status = if header_height >= 2 {
-        Rect::new(area.x, area.y.saturating_add(1), area.width, 1)
-    } else {
-        Rect::new(area.x, area.y, 0, 0)
-    };
 
     let zero = Rect::new(body.x, body.y, 0, body.height);
     let (left_panel, main_content, right_panel) = match panel {
@@ -206,7 +189,6 @@ fn compact_layout(area: Rect, panel: Option<CompactPanel>) -> ViewLayout {
         compact_header: header,
         compact_left_button: left_button,
         compact_right_button: right_button,
-        compact_status,
         compact: true,
     }
 }

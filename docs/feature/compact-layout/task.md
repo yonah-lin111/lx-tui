@@ -8,11 +8,11 @@
 - [x] `Config.narrow_width` 固定默认 160，去掉 `settings.json` / Web UI / `settings` CLI 持久化配置（忽略旧配置中的 `narrow_width`）
 - [x] `resolved_sidebar_width` 宽屏判断改为 `width > narrow_width`
 - [x] `compute_with_panel` 参数改为 `Option<CompactPanel>`
-- [x] `ViewLayout` 新增 `compact_left_button` / `compact_right_button` / `compact_status`
+- [x] `ViewLayout` 新增 `compact_left_button` / `compact_right_button`
 - [x] 紧凑模式 `view.tab_bar` 指向顶部栏中间 strip，复用原 tab 栏
-- [x] 顶部栏 2 行/1 行高度规则
+- [x] 顶部栏固定单行高度规则
 - [x] 左栏全屏 body / 右栏全屏 body / Chat body 三种几何
-- [x] `src/ui/layout/tests.rs`：160/161 阈值、按钮位置、两行/一行、左右面板
+- [x] `src/ui/layout/tests.rs`：160/161 阈值、按钮位置、单行顶部栏、左右面板
 
 ## 阶段 2：状态机
 
@@ -29,10 +29,8 @@
 
 ## 阶段 3：顶部栏
 
-- [x] 第一行 `[ws] + tab 条 + [panel]`
+- [x] 单行 `[ws] + tab 条 + [panel]`（无第二行工作区/Agent 状态摘要）
 - [x] `[ws]`/`[panel]` 打开对应全屏栏时实心强调色
-- [x] 第二行工作区状态点/名称 + 全局 Agent 摘要
-- [x] 长工作区名截断，不挤掉左右按钮
 - [x] 中间 tab 条复用原渲染；紧凑模式不显示 `[EXIT]`
 - [x] `src/ui/widgets/compact_header/tests.rs`
 
@@ -42,7 +40,7 @@
 - [x] 中间 tab 条点击切换、`[+]`、滚动按钮、右键菜单、悬停
 - [x] 点击 tab 从全屏栏返回 Chat
 - [x] 左栏裸 `Esc` 返回 Chat；右栏 Esc 保留原语义
-- [x] 状态行/顶部栏空白点击吞掉
+- [x] 顶部栏间隙/空白点击吞掉
 - [x] 紧凑模式禁用折叠/钉住/交换/退出/分割线拖拽与 hover/tooltip
 - [x] 全屏栏下窗格不进入几何，PTY 不 resize
 - [x] `Resize` 事件置 dirty
@@ -67,7 +65,7 @@
 
 ## 手动验收清单
 
-- [ ] 160x30：紧凑单列 + 2 行顶部栏
+- [ ] 160x30：紧凑单列 + 单行顶部栏
 - [ ] 161x30：桌面三栏
 - [ ] 40x12：1 行顶部栏，`[ws]`/`[panel]`/tab 均可点
 - [ ] `[ws]` 打开全屏左栏，工作区/Agents/历史列表可点，Esc 返回

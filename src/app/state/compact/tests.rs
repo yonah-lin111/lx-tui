@@ -49,20 +49,3 @@ fn agent_entries_stay_in_active_workspace() {
     assert!(state.agent_entries().is_empty());
     assert_eq!(state.agent_entries_for_workspace(0).len(), 1);
 }
-
-#[test]
-fn global_agent_states_span_workspaces() {
-    let mut state = AppState::demo();
-    set_agent(&mut state, 0, AgentState::Blocked);
-    update::create_workspace(&mut state);
-    set_agent(&mut state, 1, AgentState::Working);
-
-    let states = state.global_agent_states();
-    assert_eq!(states, vec![AgentState::Blocked, AgentState::Working]);
-}
-
-#[test]
-fn global_agent_states_empty_without_agents() {
-    let state = AppState::demo();
-    assert!(state.global_agent_states().is_empty());
-}
