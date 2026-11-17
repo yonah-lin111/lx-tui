@@ -620,6 +620,19 @@ pub fn agents_section_at(
     agents_list_rect(view, state).is_some_and(|list| list.contains((column, row).into()))
 }
 
+/// Agents 列表空白区域命中：内容区内、非条目、非滚动条列。
+///
+/// 折叠按钮在分区表头行，不在列表矩形内；空列表与末条下方的半行/空行都算空白。
+pub fn agents_blank_at(view: &layout::ViewLayout, state: &AppState, column: u16, row: u16) -> bool {
+    if !agents_section_at(view, state, column, row) {
+        return false;
+    }
+    if agent_scrollbar(view, state).is_some_and(|bar| bar.track.contains((column, row).into())) {
+        return false;
+    }
+    agent_item_index_at(view, state, column, row).is_none()
+}
+
 /// Agents 条目槽位命中（含滚动偏移）；两行命中同一条目，滚动条列与底部留空行不命中。
 pub fn agent_item_index_at(
     view: &layout::ViewLayout,

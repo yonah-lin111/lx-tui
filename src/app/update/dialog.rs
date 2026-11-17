@@ -13,6 +13,7 @@ use crate::ui::text;
 use super::agent_title::apply_agent_title_key;
 use super::interaction::show_toast;
 use super::menu::{activate_menu, close_overlay, move_menu_selection};
+use super::new_agent::apply_new_agent_key;
 use super::prompt::{apply_new_node_key, apply_save_draft_key, commit_prompt_rename};
 use super::trust::apply_trust_decision;
 use super::workspace::{create_workspace_with_cwd, parse_workspace_path};
@@ -40,6 +41,11 @@ pub fn apply_overlay_key(state: &mut AppState, key: OverlayKey) -> Option<(PaneI
     // Agents 标题：上下浏览 Recent 并回填，直接编辑转自定义，Enter 提交。
     if matches!(state.overlay, Some(Overlay::AgentTitle(_))) {
         apply_agent_title_key(state, key);
+        return None;
+    }
+    // New agent：上下选择、Enter 创建、Esc 关闭；无文本输入。
+    if matches!(state.overlay, Some(Overlay::NewAgent(_))) {
+        apply_new_agent_key(state, key);
         return None;
     }
     // `/resume` 会话编辑模态：Enter 保存、^D 删除（二次确认）、Esc 关闭/退回。
@@ -204,7 +210,8 @@ pub fn apply_overlay_key(state: &mut AppState, key: OverlayKey) -> Option<(PaneI
                 | OverlayKind::ReferencedFolderDelete
                 | OverlayKind::ResumeSessionEdit
                 | OverlayKind::Connect
-                | OverlayKind::AgentTitle,
+                | OverlayKind::AgentTitle
+                | OverlayKind::NewAgent,
             )
             | None => None,
         },

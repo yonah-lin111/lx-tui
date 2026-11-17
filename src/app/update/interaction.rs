@@ -413,6 +413,14 @@ pub fn next_deadline(state: &AppState) -> Option<Instant> {
         .filter_map(|pane| state.pane_anywhere(pane))
         .any(|target| target.lx.recap.pending.is_some())
         .then(|| Instant::now() + std::time::Duration::from_secs(1));
+    // 新建 Agent 标签的启动命令：空闲等待必须由这个到期点唤醒，否则会睡到下一个事件。
+    let agent_launch = state
+        .all_pane_ids()
+        .into_iter()
+        .filter_map(|pane| state.pane_anywhere(pane))
+        .filter_map(|target| target.pending_launch.as_ref())
+        .map(|launch| launch.at)
+        .min();
     [
         toast,
         lx_toast,
@@ -422,6 +430,7 @@ pub fn next_deadline(state: &AppState) -> Option<Instant> {
         slash_clock,
         recap,
         recap_elapsed,
+        agent_launch,
     ]
     .into_iter()
     .flatten()

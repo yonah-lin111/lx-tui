@@ -154,7 +154,11 @@ fn lx_agent_menu_offers_edit_and_close_without_binding() {
 
     assert_eq!(
         menu_commands(&state),
-        vec![MenuCommand::EditAgentTitle, MenuCommand::CloseAgent]
+        vec![
+            MenuCommand::NewAgent,
+            MenuCommand::EditAgentTitle,
+            MenuCommand::CloseAgent
+        ]
     );
     assert_eq!(state.agent_scroll_drag, None, "打开菜单必须结束滚动条拖拽");
     match state.overlay.as_ref() {
@@ -196,7 +200,11 @@ fn terminal_agent_menu_offers_close_with_multiple_panes() {
 
     assert_eq!(
         menu_commands(&state),
-        vec![MenuCommand::EditAgentTitle, MenuCommand::CloseAgent]
+        vec![
+            MenuCommand::NewAgent,
+            MenuCommand::EditAgentTitle,
+            MenuCommand::CloseAgent
+        ]
     );
 }
 
@@ -215,7 +223,11 @@ fn terminal_agent_menu_offers_close_for_last_pane() {
 
     assert_eq!(
         menu_commands(&state),
-        vec![MenuCommand::EditAgentTitle, MenuCommand::CloseAgent]
+        vec![
+            MenuCommand::NewAgent,
+            MenuCommand::EditAgentTitle,
+            MenuCommand::CloseAgent
+        ]
     );
 }
 
@@ -239,6 +251,7 @@ fn bound_title_adds_open_prompt_after_edit_title() {
     assert_eq!(
         menu_commands(&state),
         vec![
+            MenuCommand::NewAgent,
             MenuCommand::EditAgentTitle,
             MenuCommand::OpenPrompt,
             MenuCommand::RemoveAgentTitle,
@@ -280,6 +293,7 @@ fn terminal_bound_title_adds_open_prompt_and_opens_page() {
     assert_eq!(
         menu_commands(&state),
         vec![
+            MenuCommand::NewAgent,
             MenuCommand::EditAgentTitle,
             MenuCommand::OpenPrompt,
             MenuCommand::RemoveAgentTitle,
@@ -322,6 +336,7 @@ fn custom_title_offers_remove_title_without_open_prompt() {
     assert_eq!(
         menu_commands(&state),
         vec![
+            MenuCommand::NewAgent,
             MenuCommand::EditAgentTitle,
             MenuCommand::RemoveAgentTitle,
             MenuCommand::CloseAgent
@@ -369,6 +384,7 @@ fn stale_binding_does_not_add_open_prompt() {
     assert_eq!(
         menu_commands(&state),
         vec![
+            MenuCommand::NewAgent,
             MenuCommand::EditAgentTitle,
             MenuCommand::RemoveAgentTitle,
             MenuCommand::CloseAgent
@@ -577,6 +593,7 @@ fn enter_commits_recent_binding_and_enables_open_prompt() {
     assert_eq!(
         menu_commands(&state),
         vec![
+            MenuCommand::NewAgent,
             MenuCommand::EditAgentTitle,
             MenuCommand::OpenPrompt,
             MenuCommand::RemoveAgentTitle,
@@ -635,7 +652,11 @@ fn unbind_recent_clears_title_and_binding() {
     open_agent_menu(&mut state, 0, (0, 0));
     assert_eq!(
         menu_commands(&state),
-        vec![MenuCommand::EditAgentTitle, MenuCommand::CloseAgent],
+        vec![
+            MenuCommand::NewAgent,
+            MenuCommand::EditAgentTitle,
+            MenuCommand::CloseAgent
+        ],
         "解绑后不再提供 Open prompt / Unbind recent"
     );
 }
@@ -1205,4 +1226,81 @@ fn terminal_agent_edit_title_commits_without_effects_or_snapshot_changes() {
         "不得修改终端 OSC 快照"
     );
     assert!(state.effects.is_empty(), "标题编辑不得产生任何 Effect");
+}
+
+#[test]
+fn agents_blank_menu_offers_only_new_agent() {
+    let mut state = AppState::demo();
+    state.agent_scroll_drag = Some(2);
+    state.agent_hover = Some(3);
+
+    open_agents_blank_menu(&mut state, 0, (4, 5));
+
+    assert_eq!(menu_commands(&state), vec![MenuCommand::NewAgent]);
+    assert_eq!(state.agent_scroll_drag, None, "打开菜单必须结束滚动条拖拽");
+    assert_eq!(state.agent_hover, None);
+    match state.overlay.as_ref() {
+        Some(Overlay::Menu(menu)) => {
+            assert_eq!(menu.target, OverlayTarget::AgentsBlank { workspace: 0 });
+            assert_eq!(menu.anchor, (4, 5));
+            assert_eq!(menu.selected, 0);
+            assert!(!menu.confirming);
+        }
+        _ => panic!("expected menu overlay"),
+    }
+}
+
+#[test]
+fn new_agent_menu_command_opens_dialog_with_installed_snapshot() {
+    let mut state = AppState::demo();
+    let pane = state.active_tab().layout.focus();
+    set_lx_session(&mut state, pane, "session-1");
+    state.installed_agents = vec![
+        crate::detect::InstalledAgent {
+            kind: AgentKind::Claude,
+            command: "claude".to_string(),
+        },
+        crate::detect::InstalledAgent {
+            kind: AgentKind::Pi,
+            command: "pi".to_string(),
+        },
+    ];
+    open_agent_menu(&mut state, 0, (0, 0));
+    select_command(&mut state, MenuCommand::NewAgent);
+
+    assert_eq!(activate_menu(&mut state), None);
+
+    match state.overlay.as_ref() {
+        Some(Overlay::NewAgent(dialog)) => {
+            assert_eq!(dialog.workspace, 0);
+            assert_eq!(dialog.agents, state.installed_agents);
+            assert_eq!(dialog.selected, 0);
+        }
+        _ => panic!("New agent 命令必须打开弹窗"),
+    }
+}
+
+#[test]
+fn agents_blank_menu_new_agent_uses_frozen_workspace() {
+    let mut state = AppState::demo();
+    state.installed_agents = vec![crate::detect::InstalledAgent {
+        kind: AgentKind::Codex,
+        command: "codex".to_string(),
+    }];
+    open_agents_blank_menu(&mut state, 0, (0, 0));
+    crate::app::update::create_workspace(&mut state);
+    assert_ne!(state.active_workspace, 0);
+
+    select_command(&mut state, MenuCommand::NewAgent);
+    assert_eq!(activate_menu(&mut state), None);
+
+    match state.overlay.as_ref() {
+        Some(Overlay::NewAgent(dialog)) => {
+            assert_eq!(
+                dialog.workspace, 0,
+                "菜单打开时固化的目标工作区不随切换改动"
+            );
+        }
+        _ => panic!("New agent 命令必须打开弹窗"),
+    }
 }

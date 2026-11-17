@@ -28,6 +28,7 @@ mod prompt_menu;
 mod prompt_pages;
 mod prompt_recent;
 mod prompt_tree;
+mod session_launch;
 mod terminal;
 mod todo;
 mod workspace_history;

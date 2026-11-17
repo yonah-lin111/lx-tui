@@ -14,6 +14,7 @@ use super::agent_title::{
     agent_title_prompt, open_agent_prompt, open_agent_title_dialog, remove_agent_title,
 };
 use super::focus_prompt;
+use super::new_agent::open_new_agent_dialog;
 use super::pane::toggle_pane_view;
 use super::prompt::{
     commit_editing_prompt, copy_page_content, copy_prompt_content, copy_prompt_temp_content,
@@ -237,7 +238,7 @@ pub fn open_agent_menu(state: &mut AppState, index: usize, anchor: (u16, u16)) {
     state.agent_scroll_drag = None;
     let workspace = state.active_workspace;
     let bound = state.agent_title_has_binding(entry.pane_id, entry.kind);
-    let mut commands = vec![MenuCommand::EditAgentTitle];
+    let mut commands = vec![MenuCommand::NewAgent, MenuCommand::EditAgentTitle];
     if agent_title_prompt(state, workspace, entry.tab_index, entry.pane_id, entry.kind).is_some() {
         commands.push(MenuCommand::OpenPrompt);
     }
@@ -258,6 +259,21 @@ pub fn open_agent_menu(state: &mut AppState, index: usize, anchor: (u16, u16)) {
             bound,
         },
         commands,
+        selected: 0,
+        confirming: false,
+    }));
+}
+
+/// 打开 Agents 列表空白区域的右键菜单：只提供 `New agent`。
+///
+/// `workspace` 在打开时固化，菜单存续期间切工作区也不会串目标。
+pub fn open_agents_blank_menu(state: &mut AppState, workspace: usize, anchor: (u16, u16)) {
+    state.agent_scroll_drag = None;
+    state.agent_hover = None;
+    state.overlay = Some(Overlay::Menu(Menu {
+        anchor,
+        target: OverlayTarget::AgentsBlank { workspace },
+        commands: vec![MenuCommand::NewAgent],
         selected: 0,
         confirming: false,
     }));
@@ -718,6 +734,12 @@ pub fn activate_menu(state: &mut AppState) -> Option<(PaneId, Vec<u8>)> {
         ) => {
             perform_delete_page(state, workspace, owner, page);
             focus_prompt_when_editor(state);
+        }
+        (
+            Some(MenuCommand::NewAgent),
+            OverlayTarget::Agent { workspace, .. } | OverlayTarget::AgentsBlank { workspace },
+        ) => {
+            open_new_agent_dialog(state, workspace);
         }
         (
             Some(MenuCommand::OpenPrompt),

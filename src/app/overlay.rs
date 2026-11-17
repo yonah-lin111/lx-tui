@@ -43,6 +43,8 @@ pub enum OverlayKind {
     Connect,
     /// 侧栏 Agents 标题编辑：自定义输入 + Recent 页选择。
     AgentTitle,
+    /// 侧栏 Agents：选择已安装的 CLI Agent 新建标签。
+    NewAgent,
 }
 
 /// 浮层：同一时刻最多一个，由 `Option` 保证。
@@ -66,6 +68,8 @@ pub enum Overlay {
     Connect(Box<crate::app::state::ConnectPanel>),
     /// 侧栏 Agents 标题编辑：自定义输入 + Recent 页选择。
     AgentTitle(AgentTitleDialog),
+    /// 侧栏 Agents：选择已安装的 CLI Agent 新建标签。
+    NewAgent(NewAgentDialog),
 }
 
 impl Overlay {
@@ -87,6 +91,7 @@ impl Overlay {
             Self::ResumeSessionEdit(_) => OverlayKind::ResumeSessionEdit,
             Self::Connect(_) => OverlayKind::Connect,
             Self::AgentTitle(_) => OverlayKind::AgentTitle,
+            Self::NewAgent(_) => OverlayKind::NewAgent,
         }
     }
 
@@ -380,6 +385,10 @@ pub enum OverlayTarget {
         /// 打开菜单时是否带 Recent 绑定；固化移除项文案，避免菜单存续期间翻转。
         bound: bool,
     },
+    /// 侧栏 Agents 列表空白区域。
+    AgentsBlank {
+        workspace: usize,
+    },
 }
 
 /// 菜单命令；文案由 `ui/text.rs` 按命令映射，app 层不持有用户可见字符串。
@@ -445,6 +454,8 @@ pub enum MenuCommand {
     EditAgentTitle,
     /// 侧栏 Agents：移除标题覆盖（含 Recent 页绑定）。
     RemoveAgentTitle,
+    /// 侧栏 Agents：选择已安装的 CLI Agent 并新建标签启动。
+    NewAgent,
     /// 侧栏 Agents：关闭条目（lx 关会话视图，终端 Agent 关窗格）。
     CloseAgent,
 }
@@ -561,6 +572,60 @@ impl AgentTitleDialog {
     pub fn clear_input(&mut self) {
         self.input.clear();
         self.mark_custom();
+    }
+}
+
+/// 侧栏 Agents：选择已安装的 CLI Agent 新建标签。
+///
+/// 候选在打开时按 PATH 扫描结果快照，弹窗存续期间不重新扫描；目标工作区随菜单固定。
+#[derive(Debug)]
+pub struct NewAgentDialog {
+    pub workspace: usize,
+    pub agents: Vec<crate::detect::InstalledAgent>,
+    /// 当前高亮行；空列表时为 0 且不指向任何条目。
+    pub selected: usize,
+}
+
+impl NewAgentDialog {
+    /// 构造弹窗：默认高亮第一项。
+    pub fn new(workspace: usize, agents: Vec<crate::detect::InstalledAgent>) -> Self {
+        Self {
+            workspace,
+            agents,
+            selected: 0,
+        }
+    }
+
+    /// 当前高亮的候选；空列表返回 None。
+    pub fn selected_agent(&self) -> Option<&crate::detect::InstalledAgent> {
+        self.agents.get(self.selected)
+    }
+
+    /// 按步长移动高亮（钳制，不循环）；返回是否变化。
+    pub fn move_selection(&mut self, delta: isize) -> bool {
+        if self.agents.is_empty() {
+            return false;
+        }
+        let last = self.agents.len() - 1;
+        let next = if delta.is_negative() {
+            self.selected.saturating_sub(delta.unsigned_abs())
+        } else {
+            self.selected.saturating_add(delta.unsigned_abs()).min(last)
+        };
+        if next == self.selected {
+            return false;
+        }
+        self.selected = next;
+        true
+    }
+
+    /// 选中一行（越界忽略）；返回是否变化。
+    pub fn select(&mut self, index: usize) -> bool {
+        if index >= self.agents.len() || index == self.selected {
+            return false;
+        }
+        self.selected = index;
+        true
     }
 }
 

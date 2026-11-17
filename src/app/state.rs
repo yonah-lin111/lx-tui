@@ -49,8 +49,8 @@ pub use lx::{
     is_ai_web_session,
 };
 pub use pane::{
-    AgentPromptRef, AgentTitleOverride, Direction, Pane, PaneKind, PaneView, SidebarAgentEntry,
-    SidebarAgentKind, Tab,
+    AgentPromptRef, AgentTitleOverride, Direction, Pane, PaneKind, PaneView, PendingAgentLaunch,
+    SidebarAgentEntry, SidebarAgentKind, Tab,
 };
 pub use prompt_history::{PROMPT_HISTORY_LIMIT, PROMPT_HISTORY_MAX_BYTES, PromptHistory};
 pub use todo::{TodoEdit, TodoEditTarget, TodoGroupRole, TodoPanel, WeekDayView};
@@ -331,6 +331,10 @@ pub struct AppState {
     pub agent_scroll: usize,
     /// 拖拽 Agents 滚动条 thumb 时相对顶部的抓取偏移。
     pub agent_scroll_drag: Option<u16>,
+    /// 最近一次右键 Agents 分区时扫描到的已安装 CLI Agent 快照。
+    pub installed_agents: Vec<crate::detect::InstalledAgent>,
+    /// New agent 弹窗行双击判定：`(行下标, 时刻)`。
+    pub new_agent_click: Option<(usize, Instant)>,
     /// 正在拖动排序的工作区当前索引；None 表示未拖拽。
     pub workspace_drag: Option<usize>,
     /// 拖拽是否已产生指针移动；按下未移动时不整块反显。
@@ -521,6 +525,8 @@ impl AppState {
             agent_hover: None,
             agent_scroll: 0,
             agent_scroll_drag: None,
+            installed_agents: Vec::new(),
+            new_agent_click: None,
             workspace_drag: None,
             workspace_dragging: false,
             workspace_drag_moved: false,

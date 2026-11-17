@@ -307,6 +307,10 @@ async fn run_loop(
     while !state.should_quit {
         // 会话按状态对齐：新建工作区的窗格在此启动，被移除工作区的会话在此终止。
         session::reconcile_sessions(state, &mut sessions, &sender);
+        // 新建 Agent 标签等到 PTY 就绪且延时到点后再写入启动命令。
+        if session::flush_pending_agent_launches(state, &mut sessions) {
+            dirty = true;
+        }
         // 新打开的工作区或 GitRefreshed 解析出的新仓库根也要立即预热 MCP 与 Skills。
         let roots = chat::mcp::project_roots(state);
         if roots != mcp_roots {
