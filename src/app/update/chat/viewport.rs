@@ -22,7 +22,7 @@ pub fn scroll_lx_history(
     let Some(target) = state.pane_mut_anywhere(pane) else {
         return false;
     };
-    if target.view != crate::app::state::PaneView::Lx || target.lx.chat.messages.is_empty() {
+    if target.view != crate::app::state::PaneView::Lx || !target.lx.has_history_content() {
         return cancelled;
     }
     let max_top = total.saturating_sub(visible);
@@ -32,10 +32,14 @@ pub fn scroll_lx_history(
         target.lx.chat.history_scroll.min(max_top)
     };
     let next = (current as isize + delta).clamp(0, max_top as isize) as usize;
-    let moved = next != current || target.lx.chat.follow_bottom;
+    let next_follow = next >= max_top;
+    let moved = next != current || target.lx.chat.follow_bottom != next_follow;
+    if !moved {
+        return cancelled;
+    }
     target.lx.chat.history_scroll = next;
-    target.lx.chat.follow_bottom = next >= max_top;
-    moved || cancelled
+    target.lx.chat.follow_bottom = next_follow;
+    true
 }
 
 /// 直接设置历史视口顶部行偏移（滚动条点击/拖拽）；`total`/`visible` 为渲染行数与视口行数。
@@ -52,7 +56,7 @@ pub fn set_lx_history_scroll(
     let Some(target) = state.pane_mut_anywhere(pane) else {
         return false;
     };
-    if target.view != crate::app::state::PaneView::Lx || target.lx.chat.messages.is_empty() {
+    if target.view != crate::app::state::PaneView::Lx || !target.lx.has_history_content() {
         return cancelled;
     }
     let max_top = total.saturating_sub(visible);

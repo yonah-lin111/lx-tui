@@ -945,3 +945,222 @@ fn click_outside_new_agent_dialog_closes_it_without_creating() {
     assert!(state.overlay.is_none());
     assert_eq!(state.workspaces[0].tabs.len(), 1);
 }
+
+#[test]
+fn new_agent_search_supports_click_drag_copy_esc_clear_and_wheel_scroll() {
+    use crossterm::event::{KeyCode, KeyEvent};
+
+    let (mut state, config, _) = new_agent_state();
+    state.installed_agents = crate::detect::ALL_AGENT_KINDS
+        .iter()
+        .map(|kind| crate::detect::InstalledAgent {
+            kind: *kind,
+            command: ui::text::agent_label(*kind).to_string(),
+        })
+        .collect();
+    let short_geo = geometry(&state, &config, Rect::new(0, 0, 100, 11));
+    update::open_new_agent_dialog(&mut state, 0);
+
+    let mut sessions = HashMap::new();
+    let mut cache = ui::RenderCache::default();
+    let mut dirty = false;
+
+    for ch in ['c', 'l', 'a', 'u'] {
+        handle_terminal_event(
+            TerminalEvent::Key(KeyEvent::new(KeyCode::Char(ch), KeyModifiers::NONE)),
+            &mut state,
+            &mut sessions,
+            &short_geo,
+            &config,
+            &mut cache,
+            &mut dirty,
+        );
+    }
+    let shell = new_agent_shell(&state, &short_geo);
+    let search = ui::overlay::new_agent_search_rect(&shell).expect("search rect");
+    // 从前缀 `> ` 右侧第 0 个字符拖选到末尾，命中框内文本选区。
+    handle_terminal_event(
+        mouse(
+            MouseEventKind::Down(MouseButton::Left),
+            search.x + 2,
+            search.y,
+        ),
+        &mut state,
+        &mut sessions,
+        &short_geo,
+        &config,
+        &mut cache,
+        &mut dirty,
+    );
+    handle_terminal_event(
+        mouse(
+            MouseEventKind::Drag(MouseButton::Left),
+            search.x + 6,
+            search.y,
+        ),
+        &mut state,
+        &mut sessions,
+        &short_geo,
+        &config,
+        &mut cache,
+        &mut dirty,
+    );
+    handle_terminal_event(
+        mouse(
+            MouseEventKind::Up(MouseButton::Left),
+            search.x + 6,
+            search.y,
+        ),
+        &mut state,
+        &mut sessions,
+        &short_geo,
+        &config,
+        &mut cache,
+        &mut dirty,
+    );
+    assert!(
+        state
+            .overlay
+            .as_ref()
+            .and_then(|o| o.input())
+            .is_some_and(|i| i.has_selection()),
+        "鼠标拖拽在搜索框建立选区"
+    );
+
+    // Ctrl+C 有选区时复制选区而不是清空搜索框。
+    handle_terminal_event(
+        TerminalEvent::Key(KeyEvent::new(KeyCode::Char('c'), KeyModifiers::CONTROL)),
+        &mut state,
+        &mut sessions,
+        &short_geo,
+        &config,
+        &mut cache,
+        &mut dirty,
+    );
+    assert_eq!(
+        state
+            .overlay
+            .as_ref()
+            .and_then(|o| o.input())
+            .map(|i| i.text()),
+        Some("clau"),
+        "有选区时 Ctrl+C 不得清空输入"
+    );
+
+    // 首次 Esc 先清选区并保留弹窗；再按 Esc 才关闭弹窗。
+    handle_terminal_event(
+        TerminalEvent::Key(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE)),
+        &mut state,
+        &mut sessions,
+        &short_geo,
+        &config,
+        &mut cache,
+        &mut dirty,
+    );
+    assert!(matches!(state.overlay, Some(Overlay::NewAgent(_))));
+    assert!(
+        !state
+            .overlay
+            .as_ref()
+            .and_then(|o| o.input())
+            .is_some_and(|i| i.has_selection()),
+        "首次 Esc 清除搜索框选区"
+    );
+
+    // 清空过滤词后在短屏（8 项、可视 3 行）内用滚轮向下滚视口。
+    handle_terminal_event(
+        TerminalEvent::Key(KeyEvent::new(KeyCode::Char('c'), KeyModifiers::CONTROL)),
+        &mut state,
+        &mut sessions,
+        &short_geo,
+        &config,
+        &mut cache,
+        &mut dirty,
+    );
+    handle_terminal_event(
+        mouse(
+            MouseEventKind::ScrollDown,
+            shell.area.x + 2,
+            shell.area.y + 4,
+        ),
+        &mut state,
+        &mut sessions,
+        &short_geo,
+        &config,
+        &mut cache,
+        &mut dirty,
+    );
+    match state.overlay.as_ref() {
+        Some(Overlay::NewAgent(dialog)) => {
+            assert_eq!(dialog.selected, 0, "滚轮不移动高亮");
+            assert!(dialog.viewport.is_some_and(|v| v > 0), "滚轮滚动弹窗视口");
+        }
+        other => panic!("expected NewAgent, got {other:?}"),
+    }
+
+    handle_terminal_event(
+        TerminalEvent::Key(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE)),
+        &mut state,
+        &mut sessions,
+        &short_geo,
+        &config,
+        &mut cache,
+        &mut dirty,
+    );
+    assert!(state.overlay.is_none());
+}
+
+#[test]
+fn enter_in_new_agent_reveals_newly_created_tab_when_tab_bar_overflows() {
+    use crossterm::event::{KeyCode, KeyEvent};
+
+    let (mut state, config, _) = new_agent_state();
+    for _ in 0..16 {
+        update::create_tab(&mut state);
+    }
+    update::switch_tab(&mut state, 0);
+    state.tab_scroll = 0;
+    let narrow_geo = geometry(&state, &config, Rect::new(0, 0, 80, 24));
+    update::open_new_agent_dialog(&mut state, 0);
+
+    let mut sessions = HashMap::new();
+    let mut cache = ui::RenderCache::default();
+    let mut dirty = false;
+    handle_terminal_event(
+        TerminalEvent::Key(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE)),
+        &mut state,
+        &mut sessions,
+        &narrow_geo,
+        &config,
+        &mut cache,
+        &mut dirty,
+    );
+    assert!(state.overlay.is_none());
+    assert!(
+        state.tab_scroll > 0,
+        "键盘 Enter 新建 Agent 标签后自动滚入标签栏可视区"
+    );
+}
+
+#[test]
+fn right_click_agents_scrollbar_does_not_open_menu_or_rescan_path() {
+    let (mut state, config, geo) = new_agent_state();
+    create_agent_tabs(&mut state, 20);
+    // 写入哨兵：右键滚动条轨道不应触发无用的 PATH 扫描。
+    let sentinel = vec![crate::detect::InstalledAgent {
+        kind: AgentKind::Kimi,
+        command: "sentinel-kimi".into(),
+    }];
+    state.installed_agents = sentinel.clone();
+    let bar = ui::agent_scrollbar(&geo.view, &state).expect("scrollbar");
+    assert!(!send_mouse(
+        &mut state,
+        &geo,
+        &config,
+        MouseEventKind::Down(MouseButton::Right),
+        bar.track.x,
+        bar.track.y,
+    ));
+    assert!(state.overlay.is_none());
+    assert_eq!(state.installed_agents, sentinel);
+}

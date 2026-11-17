@@ -106,3 +106,18 @@ fn empty_or_missing_path_returns_none() {
     assert!(find_in(&["agent"], OsStr::new("")).is_none());
     assert!(find_executable_in(&["agent"], OsStr::new("")).is_none());
 }
+
+#[cfg(unix)]
+#[test]
+fn skips_empty_path_segments_instead_of_resolving_process_cwd() {
+    let dir = TempDir::new("empty-segment");
+    write_script(dir.path(), "Cargo.toml", true);
+    // 前导 `:` 会由 split_paths 产生空段 `""`；不得解析当前仓库根目录下的相对路径。
+    let mut raw = OsString::from(":");
+    raw.push(dir.path());
+    assert!(
+        find_in(&["Cargo.toml"], &raw)
+            .is_some_and(|(_, path)| path == dir.path().join("Cargo.toml"))
+    );
+    assert!(find_in(&["src"], OsStr::new(":")).is_none());
+}

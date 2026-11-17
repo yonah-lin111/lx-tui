@@ -11,7 +11,7 @@ use crate::tiling::{BoundaryHit, PaneId};
 
 use super::editor::prompt_item_editing;
 use super::prompt::commit_editing_prompt;
-use super::selection::{clear_selection, tick_lx_selection_autoscroll, tick_selection_autoscroll};
+use super::selection::{clear_selection, tick_selection_autoscroll};
 
 /// prompt 自动保存静置时长：条目编辑停止输入约 800ms 后提交落库。
 const PROMPT_AUTOSAVE_DELAY: Duration = Duration::from_millis(800);
@@ -325,11 +325,10 @@ pub fn tick(state: &mut AppState, now: Instant) -> bool {
         .is_some_and(|tooltip| tooltip.reveal(now));
     let saved = tick_prompt_autosave(state, now);
     let scrolled = tick_selection_autoscroll(state, now);
-    let lx_scrolled = tick_lx_selection_autoscroll(state, now);
     // `/resume` 面板停留期间刷新"现在"，相对时间随之自然推进。
     let retimed = tick_slash_panel_clock(state);
     let recapped = super::chat::recap::tick_recap(state, now);
-    expired || lx_expired || revealed || saved || scrolled || lx_scrolled || retimed || recapped
+    expired || lx_expired || revealed || saved || scrolled || retimed || recapped
 }
 
 /// 刷新打开中的 `/resume` / `/fork` 面板时间戳；返回是否有面板需要重绘。

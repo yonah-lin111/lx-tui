@@ -753,32 +753,6 @@ fn btw_composer_selection_and_scroll_stay_in_the_active_editor() {
     assert_eq!(target.lx.scroll(), 0, "主输入框滚动不能被 BTW 滚轮改变");
 }
 
-fn push_history_message(state: &mut AppState, pane: crate::tiling::PaneId) {
-    let target = state.pane_mut_anywhere(pane).expect("pane");
-    target
-        .lx
-        .chat
-        .messages
-        .push(crate::app::state::ChatMessageView {
-            id: "msg-autoscroll".into(),
-            sequence: 0,
-            kind: "chat".into(),
-            role: "user".into(),
-            status: "complete".into(),
-            turn_index: 0,
-            shell: None,
-            steps: Vec::new(),
-            model_label: None,
-            error_code: None,
-            input_tokens: None,
-            output_tokens: None,
-            cache_read_tokens: None,
-            duration_ms: None,
-            reports: Vec::new(),
-            attachments: Vec::new(),
-        });
-}
-
 #[test]
 fn autoscroll_edge_has_two_row_bands_and_outside_distance() {
     let rect = ratatui::layout::Rect::new(0, 10, 40, 20);
@@ -811,171 +785,81 @@ fn autoscroll_edge_has_two_row_bands_and_outside_distance() {
 }
 
 #[test]
-fn lx_history_selection_autoscroll_repeats_until_content_edge() {
+fn prompt_autoscroll_up_works_from_bottom_and_stops_at_top() {
     let mut state = AppState::demo();
-    let pane = state.active_tab().layout.focus();
-    push_history_message(&mut state, pane);
-    crate::app::update::begin_lx_selection(&mut state, pane, 4, 0);
-    crate::app::update::drag_lx_selection(&mut state, pane, 4, 3);
-    let rect = ratatui::layout::Rect::new(0, 0, 40, 6);
+    let prompt_id = state.prompt.id();
+    let content = (0..30)
+        .map(|index| format!("line {index}"))
+        .collect::<Vec<_>>()
+        .join("\n");
+    state.prompt.insert_str(&content);
+    state.prompt.resize(40, 6);
+    let cap = state.prompt.text_max_scroll();
+    assert!(cap > 0);
+    state.prompt.scroll_to(cap);
+
+    crate::app::update::begin_selection(&mut state, prompt_id, 4, 0);
+    crate::app::update::drag_selection(&mut state, prompt_id, 4, 2);
+
+    let inner = ratatui::layout::Rect::new(0, 0, 40, 6);
     let now = Instant::now();
+    crate::app::update::arm_selection_autoscroll(&mut state, prompt_id, inner, (2, 0), now);
+    assert!(state.selection_autoscroll.is_some());
 
-    crate::app::update::arm_lx_selection_autoscroll(
-        &mut state,
-        pane,
-        rect,
-        100,
-        crate::app::state::LxScrollSurface::History,
-        (20, rect.y),
-        now,
-    );
-    assert!(state.lx_selection_autoscroll.is_some(), "顶边检测区已登记");
-
-    assert!(crate::app::update::tick_lx_selection_autoscroll(
+    // 处于底部 (scroll == cap) 时，向上边缘自动滚动必须能成功上滚。
+    assert!(crate::app::update::tick_selection_autoscroll(
         &mut state,
         now + Duration::from_millis(31)
     ));
-    let top = 100 - 6;
-    assert_eq!(
-        state
-            .pane_anywhere(pane)
-            .expect("pane")
-            .lx
-            .chat
-            .history_scroll,
-        top - 1,
-        "按 30ms 一步向上滚动"
-    );
-    let cursor = state.lx_selection.expect("selection").cursor();
-    assert_eq!(cursor.0, (top - 1) as i32, "选区终点跟随新视口顶行");
+    assert_eq!(state.prompt.scroll(), cap - 1, "底部向上自动滚动不被卡死");
 
-    assert!(
-        crate::app::update::tick_lx_selection_autoscroll(
-            &mut state,
-            now + Duration::from_millis(70)
-        ),
-        "未到内容顶边时继续滚动"
-    );
-    assert_eq!(
-        state
-            .pane_anywhere(pane)
-            .expect("pane")
-            .lx
-            .chat
-            .history_scroll,
-        top - 2
-    );
-}
-
-#[test]
-fn lx_history_selection_autoscroll_outside_viewport_scrolls_immediately() {
-    let mut state = AppState::demo();
-    let pane = state.active_tab().layout.focus();
-    push_history_message(&mut state, pane);
-    crate::app::update::begin_lx_selection(&mut state, pane, 4, 0);
-    crate::app::update::drag_lx_selection(&mut state, pane, 4, 3);
-    let rect = ratatui::layout::Rect::new(0, 5, 40, 8);
-    let now = Instant::now();
-
-    crate::app::update::arm_lx_selection_autoscroll(
-        &mut state,
-        pane,
-        rect,
-        100,
-        crate::app::state::LxScrollSurface::History,
-        (2, rect.y.saturating_sub(2)),
-        now,
-    );
-
-    assert_eq!(
-        state
-            .pane_anywhere(pane)
-            .expect("pane")
-            .lx
-            .chat
-            .history_scroll,
-        92 - 6,
-        "越出两行的距离立即滚 6 行"
-    );
-    assert!(state.lx_selection_autoscroll.is_some());
-}
-
-#[test]
-fn lx_history_selection_autoscroll_stops_in_middle_or_on_release() {
-    let mut state = AppState::demo();
-    let pane = state.active_tab().layout.focus();
-    push_history_message(&mut state, pane);
-    crate::app::update::begin_lx_selection(&mut state, pane, 4, 0);
-    let rect = ratatui::layout::Rect::new(0, 0, 40, 10);
-    let now = Instant::now();
-
-    crate::app::update::arm_lx_selection_autoscroll(
-        &mut state,
-        pane,
-        rect,
-        100,
-        crate::app::state::LxScrollSurface::History,
-        (2, 5),
-        now,
-    );
-    assert!(state.lx_selection_autoscroll.is_none(), "中部不自动滚动");
-
-    crate::app::update::arm_lx_selection_autoscroll(
-        &mut state,
-        pane,
-        rect,
-        100,
-        crate::app::state::LxScrollSurface::History,
-        (2, rect.bottom() - 1),
-        now,
-    );
-    assert!(state.lx_selection_autoscroll.is_some());
-    crate::app::update::end_lx_selection_drag(&mut state);
-    assert!(state.lx_selection_autoscroll.is_none(), "松开清理自动滚动");
-}
-
-#[test]
-fn task_output_selection_autoscroll_scrolls_output_and_extends_cursor() {
-    let mut state = AppState::demo();
-    let pane = state.active_tab().layout.focus();
-    {
-        let target = state.pane_mut_anywhere(pane).expect("pane");
-        let page = crate::app::state::lx::TaskPage {
-            tab: crate::app::state::lx::TaskTab::Processes,
-            output: (0..30).map(|index| format!("line {index}")).collect(),
-            output_visible: 6,
-            output_scroll: 20,
-            ..Default::default()
-        };
-        target.lx.task = Some(page);
+    // 一直滚到顶部 scroll == 0 后，下一次 tick 必须返回 false 并停止，不得在顶部空转。
+    let mut t = now + Duration::from_millis(62);
+    let mut guard = 100;
+    while state.selection_autoscroll.is_some() && guard > 0 {
+        crate::app::update::tick_selection_autoscroll(&mut state, t);
+        t += Duration::from_millis(31);
+        guard -= 1;
     }
-    crate::app::update::begin_lx_selection(&mut state, pane, 20, 0);
-    crate::app::update::drag_lx_selection(&mut state, pane, 20, 3);
-    let rect = ratatui::layout::Rect::new(0, 0, 40, 6);
-    let now = Instant::now();
-
-    crate::app::update::arm_lx_selection_autoscroll(
-        &mut state,
-        pane,
-        rect,
-        30,
-        crate::app::state::LxScrollSurface::TaskOutput,
-        (20, rect.y),
-        now,
+    assert_eq!(state.prompt.scroll(), 0);
+    assert!(
+        state.selection_autoscroll.is_none(),
+        "到达顶部后停止自动滚动"
     );
-    assert!(crate::app::update::tick_lx_selection_autoscroll(
-        &mut state,
-        now + Duration::from_millis(31)
-    ));
+}
 
-    let page = state
-        .pane_anywhere(pane)
-        .and_then(|target| target.lx.task.as_ref())
-        .expect("task page");
-    assert_eq!(page.output_scroll, 19);
+#[test]
+fn arm_selection_autoscroll_preserves_next_at_on_lateral_move() {
+    let mut state = AppState::demo();
+    let prompt_id = state.prompt.id();
+    let content = (0..20)
+        .map(|index| format!("line {index}"))
+        .collect::<Vec<_>>()
+        .join("\n");
+    state.prompt.insert_str(&content);
+    state.prompt.resize(40, 6);
+    crate::app::update::begin_selection(&mut state, prompt_id, 1, 0);
+    let inner = ratatui::layout::Rect::new(0, 0, 40, 6);
+    let t0 = Instant::now();
+
+    crate::app::update::arm_selection_autoscroll(&mut state, prompt_id, inner, (2, 0), t0);
+    let expected_next = t0 + Duration::from_millis(30);
     assert_eq!(
-        state.lx_selection.expect("selection").cursor().0,
-        19,
-        "选区终点跟随输出视口"
+        state.selection_autoscroll.expect("armed").next_at,
+        expected_next
+    );
+
+    // 10ms 后指针沿顶边横向移动，不得推迟已定下的 next_at。
+    crate::app::update::arm_selection_autoscroll(
+        &mut state,
+        prompt_id,
+        inner,
+        (10, 0),
+        t0 + Duration::from_millis(10),
+    );
+    assert_eq!(
+        state.selection_autoscroll.expect("still armed").next_at,
+        expected_next,
+        "同方向边缘内横向移动不得重置节拍"
     );
 }

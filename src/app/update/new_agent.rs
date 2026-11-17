@@ -17,6 +17,7 @@ pub fn open_new_agent_dialog(state: &mut AppState, workspace: usize) {
         return;
     }
     state.new_agent_click = None;
+    state.new_agent_scroll_drag = None;
     state.overlay = Some(Overlay::NewAgent(NewAgentDialog::new(
         workspace,
         state.installed_agents.clone(),
@@ -65,11 +66,28 @@ pub fn create_selected_agent(state: &mut AppState) {
     let workspace = dialog.workspace;
     state.overlay = None;
     state.new_agent_click = None;
+    state.new_agent_scroll_drag = None;
     create_agent_tab(state, workspace, &agent.command);
 }
 
+/// 滚轮滚动 New agent 弹窗列表视口；返回是否变化。
+pub fn scroll_new_agent(state: &mut AppState, delta: isize, start: usize, visible: usize) -> bool {
+    let Some(Overlay::NewAgent(dialog)) = state.overlay.as_mut() else {
+        return false;
+    };
+    dialog.scroll_viewport(delta, start, visible)
+}
+
+/// 直接设置 New agent 弹窗列表视口起点；返回是否变化。
+pub fn set_new_agent_viewport(state: &mut AppState, offset: usize, visible: usize) -> bool {
+    let Some(Overlay::NewAgent(dialog)) = state.overlay.as_mut() else {
+        return false;
+    };
+    dialog.set_viewport(offset, visible)
+}
+
 /// New agent 弹窗按键：Esc 关闭、上下移动、Enter 创建；其余按键编辑搜索框，
-/// 文本变化后高亮回到过滤结果首行。
+/// 文本变化后高亮回到过滤结果首行并清除双击判定。
 pub fn apply_new_agent_key(state: &mut AppState, key: OverlayKey) {
     match key {
         OverlayKey::Esc => close_overlay(state),
@@ -81,12 +99,21 @@ pub fn apply_new_agent_key(state: &mut AppState, key: OverlayKey) {
         }
         OverlayKey::Enter => create_selected_agent(state),
         _ => {
-            let Some(Overlay::NewAgent(dialog)) = state.overlay.as_mut() else {
-                return;
+            let changed = {
+                let Some(Overlay::NewAgent(dialog)) = state.overlay.as_mut() else {
+                    return;
+                };
+                let before = dialog.query.text().to_string();
+                if dialog.query.apply_edit_key(key) && dialog.query.text() != before {
+                    dialog.normalize_selection();
+                    true
+                } else {
+                    false
+                }
             };
-            let before = dialog.query.text().to_string();
-            if dialog.query.apply_edit_key(key) && dialog.query.text() != before {
-                dialog.selected = 0;
+            if changed {
+                state.new_agent_click = None;
+                state.new_agent_scroll_drag = None;
             }
         }
     }

@@ -502,12 +502,21 @@ pub(crate) fn close_tab(state: &mut AppState, workspace: usize, tab: usize) {
     if workspace_state.tabs.len() <= 1 || tab >= workspace_state.tabs.len() {
         return;
     }
+    let removed_panes = workspace_state.tabs[tab].layout.pane_ids();
     workspace_state.tabs.remove(tab);
     let last = workspace_state.tabs.len() - 1;
     if tab < workspace_state.active_tab {
         workspace_state.active_tab -= 1;
     } else if tab == workspace_state.active_tab {
         workspace_state.active_tab = workspace_state.active_tab.min(last);
+    }
+    if state
+        .toast
+        .as_ref()
+        .and_then(|toast| toast.anchor)
+        .is_some_and(|anchor| removed_panes.contains(&anchor))
+    {
+        state.toast = None;
     }
     if workspace == state.active_workspace {
         state.agent_hover = None;
@@ -546,5 +555,12 @@ pub(crate) fn close_pane(state: &mut AppState, workspace: usize, tab: usize, pan
         .is_some_and(|plan| plan.pane == pane)
     {
         state.selection_autoscroll = None;
+    }
+    super::selection::clear_lx_selection_for(state, pane);
+    if state
+        .lx_selection_autoscroll
+        .is_some_and(|plan| plan.pane == pane)
+    {
+        state.lx_selection_autoscroll = None;
     }
 }

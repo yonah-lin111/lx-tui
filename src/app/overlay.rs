@@ -109,6 +109,7 @@ impl Overlay {
             Self::ResumeSessionEdit(r) => Some(&r.input),
             Self::Connect(panel) if panel.has_text_input() => Some(&panel.input),
             Self::AgentTitle(dialog) => Some(&dialog.input),
+            Self::NewAgent(dialog) => Some(&dialog.query),
             _ => None,
         }
     }
@@ -129,6 +130,7 @@ impl Overlay {
                 Some(&mut panel.input)
             }
             Self::AgentTitle(dialog) => Some(&mut dialog.input),
+            Self::NewAgent(dialog) => Some(&mut dialog.query),
             _ => None,
         }
     }
@@ -152,6 +154,7 @@ impl Overlay {
             Self::ResumeSessionEdit(r) => r.input.clear_selection(),
             Self::Connect(panel) => panel.input.clear_selection(),
             Self::AgentTitle(dialog) => dialog.input.clear_selection(),
+            Self::NewAgent(dialog) => dialog.query.clear_selection(),
             _ => {}
         }
     }
@@ -586,6 +589,8 @@ pub struct NewAgentDialog {
     pub query: TextInput,
     /// 当前高亮行（`filtered_indices` 中的下标）；空列表时为 0 且不指向任何条目。
     pub selected: usize,
+    /// 滚轮/滚动条滚动后的显式窗口起点；键盘移动、点选或改搜索词后清空。
+    pub viewport: Option<usize>,
 }
 
 impl NewAgentDialog {
@@ -596,10 +601,11 @@ impl NewAgentDialog {
             agents,
             query: TextInput::new(String::new()),
             selected: 0,
+            viewport: None,
         }
     }
 
-    /// 搜索命中的候选下标：稳定名称、实际命令与启动别名均参与大小写不敏感子串匹配。
+    /// 搜索命中的候选下标：实际命令与全部启动别名（含稳定名称）参与大小写不敏感子串匹配。
     pub fn filtered_indices(&self) -> Vec<usize> {
         let query = self.query.text().trim().to_lowercase();
         self.agents
@@ -607,9 +613,6 @@ impl NewAgentDialog {
             .enumerate()
             .filter(|(_, agent)| {
                 query.is_empty()
-                    || crate::ui::text::agent_label(agent.kind)
-                        .to_lowercase()
-                        .contains(&query)
                     || agent.command.to_lowercase().contains(&query)
                     || crate::detect::launch_names(agent.kind)
                         .iter()
@@ -617,6 +620,12 @@ impl NewAgentDialog {
             })
             .map(|(index, _)| index)
             .collect()
+    }
+
+    /// 搜索词变更后重置高亮到过滤结果首行，并恢复窗口自动跟随。
+    pub fn normalize_selection(&mut self) {
+        self.selected = 0;
+        self.viewport = None;
     }
 
     /// 当前高亮的候选；空列表或无匹配返回 None。
@@ -629,27 +638,57 @@ impl NewAgentDialog {
     pub fn move_selection(&mut self, delta: isize) -> bool {
         let len = self.filtered_indices().len();
         if len == 0 {
+            self.viewport = None;
             return false;
         }
         let last = len - 1;
         let next = if delta.is_negative() {
-            self.selected.saturating_sub(delta.unsigned_abs())
+            self.selected.min(last).saturating_sub(delta.unsigned_abs())
         } else {
-            self.selected.saturating_add(delta.unsigned_abs()).min(last)
+            self.selected
+                .min(last)
+                .saturating_add(delta.unsigned_abs())
+                .min(last)
         };
-        if next == self.selected {
-            return false;
-        }
+        let moved = next != self.selected || self.viewport.is_some();
         self.selected = next;
-        true
+        self.viewport = None;
+        moved
     }
 
     /// 选中一行（越界忽略）；返回是否变化。
     pub fn select(&mut self, index: usize) -> bool {
-        if index >= self.filtered_indices().len() || index == self.selected {
+        if index >= self.filtered_indices().len() {
             return false;
         }
+        let changed = index != self.selected || self.viewport.is_some();
         self.selected = index;
+        self.viewport = None;
+        changed
+    }
+
+    /// 滚轮滚动过滤列表视口（高亮不变，越界钳制）；返回是否变化。
+    pub fn scroll_viewport(&mut self, delta: isize, start: usize, visible: usize) -> bool {
+        let visible = visible.max(1);
+        let max_start = self.filtered_indices().len().saturating_sub(visible);
+        let current = self.viewport.unwrap_or(start).min(max_start);
+        let next = (current as isize + delta).clamp(0, max_start as isize) as usize;
+        if next == current && self.viewport.is_some() {
+            return false;
+        }
+        self.viewport = Some(next);
+        next != current
+    }
+
+    /// 直接设置列表视口起点（滚动条点击/拖拽）；返回是否变化。
+    pub fn set_viewport(&mut self, offset: usize, visible: usize) -> bool {
+        let visible = visible.max(1);
+        let max_start = self.filtered_indices().len().saturating_sub(visible);
+        let next = offset.min(max_start);
+        if self.viewport == Some(next) {
+            return false;
+        }
+        self.viewport = Some(next);
         true
     }
 }

@@ -281,3 +281,29 @@ fn backspace_edits_query_and_selection_returns_to_first_match() {
     assert_eq!(filtered(&state).map(|rows| rows.len()), Some(3));
     assert_eq!(selected(&state), Some(0));
 }
+
+#[test]
+fn paste_cut_and_query_edit_reset_selection_viewport_and_double_click() {
+    let mut state = AppState::demo();
+    with_dialog(&mut state);
+
+    assert!(!new_agent_double_click(&mut state, 0, Instant::now()));
+    assert!(state.new_agent_click.is_some());
+
+    // 改词必须清空双击计数，避免过滤后换了 Agent 被误判双击创建。
+    type_query(&mut state, "k");
+    assert!(state.new_agent_click.is_none());
+
+    // 粘贴进搜索框并重置高亮与视口。
+    assert!(crate::app::update::apply_overlay_paste(&mut state, "imi"));
+    assert_eq!(filtered(&state), Some(vec![2]));
+    assert_eq!(selected(&state), Some(0));
+
+    // 全选并剪切：返回选中文本、清空过滤、恢复全部候选。
+    apply_new_agent_key(&mut state, OverlayKey::SelectAll);
+    assert!(crate::app::update::has_visible_selection(&state));
+    let cut = crate::app::update::cut_overlay_selected_text(&mut state);
+    assert_eq!(cut.as_deref(), Some("kimi"));
+    assert_eq!(filtered(&state).map(|rows| rows.len()), Some(3));
+    assert_eq!(selected(&state), Some(0));
+}

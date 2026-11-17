@@ -245,7 +245,10 @@ pub(crate) fn handle_mouse_wheel(
     let Geometry { rects, view, .. } = geometry;
     // 拖拽中的滚轮只改视口、不改选中；滚动后立即按指针当前位置重算落点。
     // 拖拽现场优先于常规分支，并在末尾 `return` 防止滚轮穿透到窗格或别的面板。
-    if state.overlay.is_none() && state.workspace_drag.is_some() {
+    if state.overlay.is_none()
+        && state.workspace_drag.is_some()
+        && state.workspace_history.mode == crate::app::state::WorkspaceMode::Active
+    {
         if ui::workspace_section_at(view, state, mouse.column, mouse.row)
             && let Some(delta) = vertical_wheel_delta(mouse.kind)
             && let Some(rows) = ui::workspace_list_rows(view, state)
@@ -258,7 +261,10 @@ pub(crate) fn handle_mouse_wheel(
         }
         return;
     }
-    if state.overlay.is_none() && state.workspace_history.drag.is_some() {
+    if state.overlay.is_none()
+        && state.workspace_history.drag.is_some()
+        && state.workspace_history.mode == crate::app::state::WorkspaceMode::History
+    {
         if ui::workspace_section_at(view, state, mouse.column, mouse.row)
             && let Some(delta) = vertical_wheel_delta(mouse.kind)
             && let Some(rows) = ui::workspace_history_visible_rows(view, state)
@@ -271,34 +277,42 @@ pub(crate) fn handle_mouse_wheel(
         }
         return;
     }
-    if state.overlay.is_none() && state.prompt_drag.is_some() {
+    if state.overlay.is_none()
+        && state.prompt_drag.is_some()
+        && update::prompt_panel_active(state)
+        && update::prompt_tree_mode(state)
+    {
         let area = ui::right_panel::prompt::frame::prompt_main_rect(view.right_panel, state);
-        if area.contains((mouse.column, mouse.row).into())
+        if mouse.column >= view.right_panel.x
+            && mouse.column < view.right_panel.right()
+            && mouse.row >= area.y
+            && mouse.row < area.bottom()
             && let Some(direction) = vertical_wheel_direction(mouse.kind)
         {
-            let visible = update::prompt_tree_visible_rows(state);
+            let visible = usize::from(area.height.saturating_sub(2).max(1));
             if update::scroll_prompt_tree(state, direction.saturating_mul(WHEEL_LINES), visible) {
                 *dirty = true;
-                let hit = {
-                    let panel = &state.prompt_owner().prompt_panel;
-                    ui::right_panel::prompt::tree::drop_hit_at(area, panel, mouse.column, mouse.row)
-                };
+                let hit = super::autoscroll::prompt_drag_hit(view, state, mouse.column, mouse.row);
                 update::drag_prompt_to(state, hit);
             }
         }
         return;
     }
-    if state.overlay.is_none() && state.todo_drag.is_some() {
+    if state.overlay.is_none()
+        && state.todo_drag.is_some()
+        && state.right_tab == crate::app::state::RightTab::Todo
+        && !state.prompt_collapsed
+    {
         let list = ui::right_panel::todo::effective_list_rect(view.right_panel, state);
-        if state.right_tab == crate::app::state::RightTab::Todo
-            && !state.prompt_collapsed
-            && list.contains((mouse.column, mouse.row).into())
+        if mouse.column >= view.right_panel.x
+            && mouse.column < view.right_panel.right()
+            && mouse.row >= list.y
+            && mouse.row < list.bottom()
             && let Some(direction) = vertical_wheel_direction(mouse.kind)
             && update::scroll_todo(state, direction)
         {
             *dirty = true;
-            let hit =
-                ui::right_panel::todo::row_at(view.right_panel, state, mouse.column, mouse.row);
+            let hit = super::autoscroll::todo_drag_hit(view, state, mouse.column, mouse.row);
             update::drag_todo_to(state, hit);
         }
         return;
@@ -346,6 +360,18 @@ pub(crate) fn handle_mouse_wheel(
     {
         // 失效工作区列表在模态内滚动（列表高度受限），不穿透到底层。
         if update::scroll_confirm_close_with_rows(state, delta, layout.visible_rows) {
+            *dirty = true;
+        }
+        return;
+    }
+    if let Some(delta) = vertical_wheel_delta(mouse.kind)
+        && let Some(crate::app::overlay::Overlay::NewAgent(dialog)) = state.overlay.as_ref()
+        && let Some(shell) = ui::overlay::new_agent_shell(geometry.screen, dialog.agents.len())
+        && shell.area.contains((mouse.column, mouse.row).into())
+    {
+        let visible = ui::overlay::new_agent_max_rows(&shell);
+        let start = ui::overlay::new_agent_visible_start(dialog, visible);
+        if update::scroll_new_agent(state, delta, start, visible) {
             *dirty = true;
         }
         return;

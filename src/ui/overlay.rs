@@ -17,7 +17,10 @@ pub use connect::{
 };
 pub use dialog::*;
 pub use menu::*;
-pub use new_agent::{NewAgentButton, new_agent_button_at, new_agent_row_at, new_agent_shell};
+pub use new_agent::{
+    NewAgentButton, new_agent_button_at, new_agent_max_rows, new_agent_row_at, new_agent_scrollbar,
+    new_agent_search_rect, new_agent_shell, new_agent_visible_start,
+};
 pub use referenced::{
     ReferencedInputButton, ReferencedMenuLayout, ReferencedSearchLayout,
     referenced_input_button_at, referenced_input_shell, referenced_menu_layout,

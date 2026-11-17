@@ -188,6 +188,7 @@ pub(crate) fn handle_key_event(
             }
             let was_menu = matches!(state.overlay, Some(Overlay::Menu(_)));
             let was_worktree = matches!(state.overlay, Some(Overlay::WorktreeOpen(_)));
+            let was_new_agent = matches!(state.overlay, Some(Overlay::NewAgent(_)));
             let was_new_ws = matches!(
                 state.overlay,
                 Some(Overlay::NewWorkspace(_) | Overlay::TrustWorkspace(_))
@@ -198,7 +199,7 @@ pub(crate) fn handle_key_event(
             }
             let menu_stays_open = matches!(state.overlay, Some(Overlay::Menu(_)));
             if key == OverlayKey::Enter
-                && ((was_menu && !menu_stays_open) || was_worktree || was_new_ws)
+                && ((was_menu && !menu_stays_open) || was_worktree || was_new_agent || was_new_ws)
             {
                 ensure_workspace_visible(state, view);
                 reveal_active_tab(state, view);

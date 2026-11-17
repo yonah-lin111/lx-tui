@@ -498,7 +498,7 @@ async fn run_loop(
         if update::tick(state, now) {
             dirty = true;
         }
-        if mouse::autoscroll::tick_drag(state, &geometry.view, now) {
+        if mouse::autoscroll::tick(state, &geometry, &mut ui_cache, now) {
             dirty = true;
         }
         update::retry_git_queries(state, now);

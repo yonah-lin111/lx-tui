@@ -167,6 +167,8 @@ pub fn open_pane_menu(state: &mut AppState, pane: PaneId, anchor: (u16, u16)) {
     };
     state.workspace_scroll_drag = None;
     state.terminal_scroll_drag = None;
+    state.selection_autoscroll = None;
+    state.lx_selection_autoscroll = None;
     let mut commands = vec![
         MenuCommand::SplitRight,
         MenuCommand::SplitDown,

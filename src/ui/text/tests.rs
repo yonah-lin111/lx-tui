@@ -570,9 +570,11 @@ fn action_words_stay_spelled_out_while_keys_use_symbols() {
     assert!(BUTTON_CANCEL.contains("esc"));
     for hint in [
         BUTTON_SAVE,
+        BUTTON_CREATE,
         BUTTON_CONFIRM,
         BUTTON_CONFIRM_DELETE,
         BUTTON_OPEN,
+        BUTTON_TRUST,
     ] {
         assert!(hint.contains(key::ENTER), "按键用 ↵: {hint}");
         assert!(!hint.to_lowercase().contains("enter"), "不用全拼: {hint}");

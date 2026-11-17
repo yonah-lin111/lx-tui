@@ -40,6 +40,7 @@ fn make_dialog(agents: Vec<InstalledAgent>, selected: usize) -> NewAgentDialog {
         agents,
         query: TextInput::new(String::new()),
         selected,
+        viewport: None,
     }
 }
 
@@ -74,11 +75,11 @@ fn shell_height_follows_row_count_and_clamps() {
             .area
             .height
     };
-    assert_eq!(height(0), 7);
-    assert_eq!(height(1), 7);
-    assert_eq!(height(2), 8);
-    assert_eq!(height(8), 14);
-    assert_eq!(height(100), 14, "超过 8 条按 8 条计算");
+    assert_eq!(height(0), 9);
+    assert_eq!(height(1), 9);
+    assert_eq!(height(2), 10);
+    assert_eq!(height(8), 16);
+    assert_eq!(height(100), 16, "超过 8 条按 8 条计算");
 
     let narrow = new_agent_shell(Rect::new(0, 0, 20, 8), 8).expect("narrow shell");
     assert_eq!(narrow.area.width, 20);
@@ -86,10 +87,14 @@ fn shell_height_follows_row_count_and_clamps() {
 }
 
 #[test]
-fn max_rows_reserves_search_and_button_rows() {
+fn max_rows_reserves_search_divider_breathing_and_button_rows() {
     let shell = new_agent_shell(SCREEN, 3).expect("shell fits");
-    assert_eq!(shell.inner.height, 5);
-    assert_eq!(new_agent_max_rows(&shell), 3, "首行搜索、末行按钮");
+    assert_eq!(shell.inner.height, 7);
+    assert_eq!(
+        new_agent_max_rows(&shell),
+        3,
+        "常规高度预留搜索行、分割线、呼吸行与按钮行"
+    );
 
     let mut dialog = make_dialog(agents(8), 5);
     assert_eq!(new_agent_visible_start(&dialog, 8), 0);
@@ -97,13 +102,18 @@ fn max_rows_reserves_search_and_button_rows() {
     dialog.selected = 0;
     assert_eq!(new_agent_visible_start(&dialog, 3), 0);
     assert_eq!(new_agent_visible_start(&dialog, 0), 0);
+
+    // 过滤结果缩窄后即使 selected 尚未归零，窗口起点仍钳到合法边界。
+    dialog.query = TextInput::new("claude".to_string());
+    dialog.selected = 5;
+    assert_eq!(new_agent_visible_start(&dialog, 3), 0);
 }
 
 #[test]
 fn row_hit_maps_visible_offset_into_filtered_index() {
     let dialog = make_dialog(agents(8), 0);
-    let shell = new_agent_shell(Rect::new(0, 0, 80, 8), dialog.agents.len()).expect("shell");
-    assert_eq!(new_agent_max_rows(&shell), 2);
+    let shell = new_agent_shell(SCREEN, dialog.agents.len()).expect("shell");
+    assert_eq!(new_agent_max_rows(&shell), 8);
     let x = shell.inner.x;
     assert_eq!(
         new_agent_row_at(&shell, &dialog, x, shell.inner.y),
@@ -112,28 +122,51 @@ fn row_hit_maps_visible_offset_into_filtered_index() {
     );
     assert_eq!(
         new_agent_row_at(&shell, &dialog, x, shell.inner.y + 1),
-        Some(0)
+        None,
+        "分割线不是候选行"
     );
     assert_eq!(
         new_agent_row_at(&shell, &dialog, x, shell.inner.y + 2),
-        Some(1)
+        Some(0)
     );
     assert_eq!(
-        new_agent_row_at(&shell, &dialog, x, shell.inner.y + 3),
+        new_agent_row_at(&shell, &dialog, x, shell.inner.y + 9),
+        Some(7)
+    );
+    assert_eq!(
+        new_agent_row_at(&shell, &dialog, x, shell.inner.y + 10),
+        None,
+        "呼吸行不是候选行"
+    );
+    assert_eq!(
+        new_agent_row_at(&shell, &dialog, x, shell.inner.y + 11),
         None,
         "按钮行不是候选行"
     );
     assert_eq!(
-        new_agent_row_at(&shell, &dialog, shell.inner.x - 1, shell.inner.y + 1),
+        new_agent_row_at(&shell, &dialog, shell.inner.x - 1, shell.inner.y + 2),
         None,
         "内框外不命中"
     );
 
+    // 短屏窗口：列表溢出时窗口跟随高亮，且滚动条列不命中候选行。
+    let short = new_agent_shell(Rect::new(0, 0, 80, 9), dialog.agents.len()).expect("short");
+    assert_eq!(new_agent_max_rows(&short), 2);
     let scrolled = make_dialog(agents(8), 5);
     assert_eq!(
-        new_agent_row_at(&shell, &scrolled, x, shell.inner.y + 1),
+        new_agent_row_at(&short, &scrolled, short.inner.x, short.inner.y + 2),
         Some(4),
         "窗口起点跟随高亮"
+    );
+    assert_eq!(
+        new_agent_row_at(
+            &short,
+            &scrolled,
+            short.inner.right() - 1,
+            short.inner.y + 2
+        ),
+        None,
+        "滚动条列不命中候选行"
     );
 }
 
@@ -151,12 +184,12 @@ fn filtered_row_hit_maps_to_filtered_positions() {
     assert_eq!(dialog.filtered_indices(), vec![1]);
     let shell = new_agent_shell(SCREEN, 3).expect("shell");
     assert_eq!(
-        new_agent_row_at(&shell, &dialog, shell.inner.x, shell.inner.y + 1),
+        new_agent_row_at(&shell, &dialog, shell.inner.x, shell.inner.y + 2),
         Some(0),
         "命中下标是过滤结果中的位置"
     );
     assert_eq!(
-        new_agent_row_at(&shell, &dialog, shell.inner.x, shell.inner.y + 2),
+        new_agent_row_at(&shell, &dialog, shell.inner.x, shell.inner.y + 3),
         None
     );
 }
@@ -206,6 +239,10 @@ fn render_lists_agents_and_highlights_selected_row() {
         lines.iter().any(|line| line.contains("search agents")),
         "搜索框渲染占位符"
     );
+    assert!(
+        lines.iter().any(|line| line.contains(text::DIVIDER_MID)),
+        "搜索框与列表之间存在分隔线"
+    );
     let opencode = lines
         .iter()
         .find(|line| line.contains("opencode2"))
@@ -213,7 +250,7 @@ fn render_lists_agents_and_highlights_selected_row() {
     assert!(opencode.contains("opencode"), "左侧仍是稳定 Agent 标签");
 
     let shell = new_agent_shell(SCREEN, 3).expect("shell");
-    let selected_y = shell.inner.y + 2;
+    let selected_y = shell.inner.y + 3;
     let selected_x = shell.inner.x;
     assert_eq!(
         buffer[(selected_x, selected_y)].bg,
@@ -221,7 +258,7 @@ fn render_lists_agents_and_highlights_selected_row() {
         "选中行整行铺选中底色"
     );
     assert_eq!(
-        buffer[(selected_x, shell.inner.y + 1)].bg,
+        buffer[(selected_x, shell.inner.y + 2)].bg,
         Color::Reset,
         "未选中行不上底色"
     );
@@ -315,10 +352,10 @@ fn render_empty_state_and_muted_create_button() {
 #[test]
 fn hidden_row_below_window_is_not_hit() {
     let dialog = make_dialog(agents(8), 0);
-    let shell = new_agent_shell(Rect::new(0, 0, 80, 7), 8).expect("shell");
+    let shell = new_agent_shell(Rect::new(0, 0, 80, 8), 8).expect("shell");
     assert_eq!(new_agent_max_rows(&shell), 1);
     assert_eq!(
-        new_agent_row_at(&shell, &dialog, shell.inner.x, shell.inner.y + 2),
+        new_agent_row_at(&shell, &dialog, shell.inner.x, shell.inner.y + 3),
         None,
         "窗口外的行不命中"
     );

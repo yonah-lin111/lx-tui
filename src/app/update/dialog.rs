@@ -43,7 +43,7 @@ pub fn apply_overlay_key(state: &mut AppState, key: OverlayKey) -> Option<(PaneI
         apply_agent_title_key(state, key);
         return None;
     }
-    // New agent：上下选择、Enter 创建、Esc 关闭；无文本输入。
+    // New agent：搜索过滤、上下选择、Enter 创建、Esc 关闭。
     if matches!(state.overlay, Some(Overlay::NewAgent(_))) {
         apply_new_agent_key(state, key);
         return None;
@@ -566,6 +566,9 @@ pub fn apply_overlay_paste(state: &mut AppState, text: &str) -> bool {
             Overlay::AgentTitle(dialog) if inserted && dialog.input.text() != before => {
                 dialog.mark_custom();
             }
+            Overlay::NewAgent(dialog) if inserted && dialog.query.text() != before => {
+                dialog.normalize_selection();
+            }
             _ => {}
         }
         (
@@ -584,6 +587,10 @@ pub fn apply_overlay_paste(state: &mut AppState, text: &str) -> bool {
     }
     if matches!(state.overlay, Some(Overlay::NewWorkspace(_))) {
         state.workspace_history.new_workspace_confirming = false;
+    }
+    if matches!(state.overlay, Some(Overlay::NewAgent(_))) {
+        state.new_agent_click = None;
+        state.new_agent_scroll_drag = None;
     }
     true
 }
@@ -610,6 +617,7 @@ pub fn cut_overlay_selected_text(state: &mut AppState) -> Option<String> {
             Overlay::WorktreeOpen(dialog) => dialog.normalize_selection(),
             Overlay::Connect(panel) => panel.clear_error(),
             Overlay::AgentTitle(dialog) => dialog.mark_custom(),
+            Overlay::NewAgent(dialog) => dialog.normalize_selection(),
             _ => {}
         }
         (
@@ -629,6 +637,10 @@ pub fn cut_overlay_selected_text(state: &mut AppState) -> Option<String> {
     }
     if matches!(state.overlay, Some(Overlay::NewWorkspace(_))) {
         state.workspace_history.new_workspace_confirming = false;
+    }
+    if matches!(state.overlay, Some(Overlay::NewAgent(_))) {
+        state.new_agent_click = None;
+        state.new_agent_scroll_drag = None;
     }
     Some(text)
 }

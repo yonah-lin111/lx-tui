@@ -13,9 +13,20 @@ pub fn find_executable(names: &[&str]) -> Option<(String, PathBuf)> {
 
 /// 在给定的 `PATH` 值中查找；不读取进程环境，便于测试。
 pub(crate) fn find_executable_in(names: &[&str], path: &OsStr) -> Option<(String, PathBuf)> {
+    #[cfg(windows)]
+    let extensions = windows_extensions();
+
     for dir in std::env::split_paths(path) {
+        // 跳过空 PATH 段（如 `:/usr/bin`），避免退化成按 TUI 进程 CWD 查相对路径。
+        if dir.as_os_str().is_empty() {
+            continue;
+        }
         for name in names {
-            if let Some(candidate) = executable_candidate(&dir, name) {
+            #[cfg(not(windows))]
+            let hit = executable_candidate(&dir, name);
+            #[cfg(windows)]
+            let hit = executable_candidate(&dir, name, &extensions);
+            if let Some(candidate) = hit {
                 return Some(((*name).to_string(), candidate));
             }
         }
@@ -31,21 +42,28 @@ fn executable_candidate(dir: &Path, name: &str) -> Option<PathBuf> {
 
 #[cfg(not(windows))]
 fn is_executable_file(path: &Path) -> bool {
-    use std::os::unix::fs::PermissionsExt;
-    path.metadata()
-        .is_ok_and(|meta| meta.is_file() && meta.permissions().mode() & 0o111 != 0)
+    use std::ffi::CString;
+    use std::os::unix::ffi::OsStrExt;
+    if !path.metadata().is_ok_and(|meta| meta.is_file()) {
+        return false;
+    }
+    let Ok(c_path) = CString::new(path.as_os_str().as_bytes()) else {
+        return false;
+    };
+    // SAFETY: `c_path` 是以 NUL 结尾的合法 C 字符串，`libc::X_OK` 只读检验有效用户的执行权限。
+    unsafe { libc::access(c_path.as_ptr(), libc::X_OK) == 0 }
 }
 
 #[cfg(windows)]
-fn executable_candidate(dir: &Path, name: &str) -> Option<PathBuf> {
+fn executable_candidate(dir: &Path, name: &str, extensions: &[String]) -> Option<PathBuf> {
     // 显式带扩展名的候选名按原样匹配；其余补 `PATHEXT`（缺省 .exe/.cmd/.bat/.com）。
     if Path::new(name).extension().is_some() {
         let candidate = dir.join(name);
         return candidate.is_file().then_some(candidate);
     }
-    for suffix in windows_extensions() {
+    for suffix in extensions {
         let mut file = std::ffi::OsString::from(name);
-        file.push(&suffix);
+        file.push(suffix);
         let candidate = dir.join(file);
         if candidate.is_file() {
             return Some(candidate);

@@ -565,6 +565,10 @@ pub(crate) fn overlay_input_rect(state: &AppState, screen: Rect) -> Option<Rect>
                 1,
             ))
         }
+        Overlay::NewAgent(d) => {
+            let shell = ui::overlay::new_agent_shell(screen, d.agents.len())?;
+            ui::overlay::new_agent_search_rect(&shell)
+        }
         Overlay::ReferencedFolderInput(i) if !i.validating => {
             let shell = ui::overlay::referenced_input_shell(screen)?;
             Some(Rect::new(
@@ -651,16 +655,15 @@ pub(crate) fn open_right_click_menu(
         return true;
     }
     // 侧栏 Agents 条目：两行命中同一条目，打开编辑标题/关闭菜单。
-    if ui::agents_section_at(view, state, column, row) {
-        // 每次右键都刷新安装快照，避免长时间运行后 PATH 变化不生效。
-        state.installed_agents = crate::detect::installed_agents();
-    }
     if let Some(index) = ui::agent_item_index_at(view, state, column, row) {
+        // 仅在真正打开 Agents 菜单时刷新安装快照，避免右键滚动条列触发无效 PATH 扫描。
+        state.installed_agents = crate::detect::installed_agents();
         update::open_agent_menu(state, index, (column, row));
         return true;
     }
     // Agents 列表空白区域：只提供 `New agent`；滚动条列与折叠按钮不算空白。
     if ui::agents_blank_at(view, state, column, row) {
+        state.installed_agents = crate::detect::installed_agents();
         update::open_agents_blank_menu(state, state.active_workspace, (column, row));
         return true;
     }

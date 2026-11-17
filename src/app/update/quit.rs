@@ -85,6 +85,7 @@ fn clear_active_gestures(state: &mut AppState) {
     state.workspace_history.drag_moved = false;
     state.workspace_history.search_drag = false;
     state.overlay_input_drag = false;
+    state.new_agent_scroll_drag = None;
     state.lx_input_drag = None;
     state.todo_input_drag = false;
     state.prompt_search_drag = false;

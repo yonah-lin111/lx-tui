@@ -262,6 +262,16 @@ impl Lx {
         Self::build(false)
     }
 
+    /// 当前会话是否存在可滚动的历史内容（对齐渲染层的 `HistorySource::has_history`）。
+    pub fn has_history_content(&self) -> bool {
+        !self.chat.messages.is_empty()
+            || !self.chat.notices.is_empty()
+            || !self.compact.is_empty()
+            || self.compact.is_running()
+            || !self.model_switch.is_empty()
+            || !self.recap.is_empty()
+    }
+
     /// 纯文本缓冲：`!` 只是普通字符，也不触发任何面板（`ask` 手写答案用）。
     pub fn plain() -> Self {
         Self::build(true)
