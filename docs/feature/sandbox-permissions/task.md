@@ -1,6 +1,6 @@
 # Agent 沙箱与权限模式执行任务
 
-状态：A/B/C 三批、D 批补充功能与 `review.md` P0–P3 审查修复已实现并通过 macOS 全量自动化测试；远程 Linux/Windows 实测与人工 TUI 验收已收口至 `/Users/yonah/projects/agent/lx-tui/docs/undo/sandbox-permissions.md`。
+状态：A/B/C 三批、D 批补充功能与 `review.md` P0–P3 审查修复已实现，并已合入 `dev`（合并提交 `9e9d0ae6`）；远程 Linux/Windows 实测与人工 TUI 验收已收口至 `/Users/yonah/projects/agent/lx-tui/docs/undo/sandbox-permissions.md`。
 
 - A 批：配置模型、macOS seatbelt、Linux bwrap 参数、进程接入、文件工具闸门、显式提权审批、on-failure 重试、`/permission`、DB v31、提示词、设置页/API。
 - B 批：完整 `additional_permissions` 档案（read/write/deny/glob）、seatbelt/bwrap 投影、文件工具条目解析器。
@@ -13,7 +13,7 @@
 - [x] 用户审核并明确确认 `design.md` / `task.md`（含决策 #18 分 A/B/C 三批、#19 完整权限档案、#20 Starlark 规则）；审核要求改动时先更新文档再实施。
 - [x] 确认三批的独立验收：A → B → C 逐批验证推进。
 - [x] 重读当前 `AGENTS.md` 与 `docs/standards/` 四份规范，核对改动；未授权不擅改 Git 状态。
-- [x] 复核 `src/db/mod.rs::SCHEMA_VERSION` 与 `dev` 分支迁移（`dev` 已占 v30，本分支顺延为 v31/v32；`review.md` P0-10 已登记合入时 `v33` 幂等兜底要求）。
+- [x] 复核 `src/db/mod.rs::SCHEMA_VERSION` 与 `dev` 分支迁移（`dev` 已占 v30，本分支顺延为 v31/v32；合入时已新增 v33 幂等兜底并推进至 v33）。
 - [x] 用 codegraph + codebase-memory 复核关键函数调用关系与覆盖；codex 仓库只读。
 - [x] 已完成的 macOS 预验证（macOS arm64）：`sandbox-exec` 可用；Codex 基础策略 + `(allow file-read*)` 后 `cargo`/`rustc`/`git`/`zsh -l` 正常；`-D` 参数可传带空格路径；`.git` 保护生效；拒绝网络时 DNS 失败。
 
@@ -85,7 +85,7 @@
 
 ## 9. 数据库
 
-- [x] 迁移 v31（`agent_session.sandbox_mode` + `agent_session_sandbox_rule`）与 v32（`agent_permission_switch`）。
+- [x] 迁移 v31（`agent_session.sandbox_mode` + `agent_session_sandbox_rule`）、v32（`agent_permission_switch`）与 v33（合并兜底：幂等补全 `agent_compact_checkpoint.kind` 与沙箱表/列）。
 - [x] DB API：读取/写入会话模式、加载/插入/清空规则、读写权限切换记录；fork 复制 `sandbox_mode` 与分叉边界前切换记录。
 - [x] 单测：旧库升级、NULL 默认、规则唯一约束、级联删除、fork。
 
@@ -165,7 +165,7 @@ cargo clippy --all-targets -- -D warnings
 
 ## 20. 代码审查修复与延后验证（`review.md` P0–P3）
 
-- [x] **P0 修复**：`bwrap` 能力探测（userns / setuid 回退 / `--perms` 检测）与 `denial.rs` 排除启动错误（P0-1）、`read-only`/写根外 `deny` 挂载（P0-2）、`command_is_approved` 禁元字符绕过（P0-3）、`exec_policy::decide` 拆元字符子段防绕过（P0-4）、Seatbelt/档案符号链接规范化（P0-5）、`Rule` `Always` 写会话前缀压制 `Prompt` 循环（P0-6）、`ask` vs `approval` 键鼠与渲染优先级统一（P0-7）、审批拦截下层浮层与鼠标全矩形（P0-8）、`answer` 按 `(key, call_id)` 清理（P0-9）、合入 `dev` v30/v33 门控锁定（P0-10）。
+- [x] **P0 修复**：`bwrap` 能力探测（userns / setuid 回退 / `--perms` 检测）与 `denial.rs` 排除启动错误（P0-1）、`read-only`/写根外 `deny` 挂载（P0-2）、`command_is_approved` 禁元字符绕过（P0-3）、`exec_policy::decide` 拆元字符子段防绕过（P0-4）、Seatbelt/档案符号链接规范化（P0-5）、`Rule` `Always` 写会话前缀压制 `Prompt` 循环（P0-6）、`ask` vs `approval` 键鼠与渲染优先级统一（P0-7）、审批拦截下层浮层与鼠标全矩形（P0-8）、`answer` 按 `(key, call_id)` 清理（P0-9）、v33 幂等迁移兜底（P0-10）。
 - [x] **P1 修复**：`bwrap` 传真实 `workdir`（P1-1）、写根/carveout/符号链接/嵌套 `deny`/防 `/tmp/.git` 残留（P1-2）、`is_banned_prefix` basename+大小写防绕过（P1-3）、`sandbox_gate` 逻辑+解析双重判定（P1-4）、`maybe_retry_on_denial` 限 `exec_command`（P1-5）、`lx exec` 强制 `never`/裁剪/加载规则及 Windows 免弹窗（P1-6）、审批 `Ctrl+C` 与粘贴拦截（P1-7）、`/rewind` 回滚 `sandbox_mode` 与规则（P1-8；独立 `LatestKind::PermissionSwitch` 转 undo）、`fork` 按 `before` 推导 `sandbox_mode`（P1-9）、`PersistSandboxMode` 多窗格同步与错误处理+入口切站重置（P1-10）、`db/sandbox.rs` JSON 数组编码（P1-11）、上下文 `kept.is_empty()` 与动态切换/skill 预算（P1-12）、设置 API 损坏回落/500/`user_root`（P1-13）、窄窗格顶栏防撞 `[>_]`（P1-14）。
 - [x] **P2 修复**：`denial.rs` 去除 `cfg(target_os)`（P2-1）、`append_allow_rule` 补前导换行（P2-2）、`save_sandbox` 先归一化后校验（P2-3）、Seatbelt `deny_globs` 祖先/写根/目录 glob 修复（P2-4）、`sweep_orphans` 二轮全检（P2-5）、审批队列 `+N pending` 与窄宽 `[Subagent]`/`[role]` 保留（P2-6）、`Permission switched xN` 折叠收敛（P2-7）、`SandboxChanged` 刷新 `/permission` + `#view-sandbox` 滚动与 `reason` 展示（P2-8）、`fork_completed_history_window_to_child` 去无效切档复制（P2-9）、`Lx::agent_state()` 待审批 `Blocked` 状态（P2-10）。
 - [x] **P3 修复**：`LX_SYSTEM_PROMPT` 压回 12 KiB / 修文档与 `<truncated>` / 空串与摘要回显（P3-1）、收口文案到 `ui/text/sandbox.rs` / 清死常量 / 修单测名与 HTML 反引号（P3-2）、登记超行文件并保持增量受控（P3-3）、同步 `design.md`/`task.md`/`verification.md`/`html-assets.md` 与 `docs/undo/sandbox-permissions.md`（P3-4）。

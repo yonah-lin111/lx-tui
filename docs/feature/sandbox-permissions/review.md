@@ -1,7 +1,7 @@
 # Agent 沙箱与权限模式 — 代码审查报告（Review）
 
-- **审查对象**：`feature/sandbox-permissions`（`.worktrees/sandbox-permissions`，分叉基线 `dev` @ `41d5977b` 至提交 `08a8bc6c` 及本次 P0–P3 修复，含 A/B/C 三批功能与补充交付：审批/`/permission` 命令面板、左上角 `lx-<Entry> [<Mode>]` 标记、v32 权限切换持久化与 `<system-update>`、subagent/`/btw` 权限跟随、`lx-18` 提示词及 `lx::agent::approval` 审计日志）
-- **实测参考环境**：macOS（本机 arm64，全量 `cargo test` 5854 lib + 全部集成测试全绿）；远程 Linux 主机 `8.138.213.110` 探明为 CentOS Linux 7.9（内核 `3.10.0-1160.119.1.el7.x86_64`、`glibc 2.17`、`user.max_user_namespaces = 0`、setuid `/usr/bin/bwrap 0.3.0`，无 `--perms`），实机跑测已转入 `/Users/yonah/projects/agent/lx-tui/docs/undo/sandbox-permissions.md`。
+- **审查对象**：`feature/sandbox-permissions`（分叉基线 `dev` @ `41d5977b` 至提交 `08a8bc6c` 及本次 P0–P3 修复；已于 `9e9d0ae6` 合入 `dev`。含 A/B/C 三批功能与补充交付：审批/`/permission` 命令面板、左上角 `lx-<Entry> [<Mode>]` 标记、v32 权限切换持久化与 `<system-update>`、subagent/`/btw` 权限跟随、`lx-18` 提示词及 `lx::agent::approval` 审计日志）
+- **实测参考环境**：macOS（本机 arm64，合并后全量 `cargo test` 6089 lib + 全部集成测试全绿）；远程 Linux 主机 `8.138.213.110` 探明为 CentOS Linux 7.9（内核 `3.10.0-1160.119.1.el7.x86_64`、`glibc 2.17`、`user.max_user_namespaces = 0`、setuid `/usr/bin/bwrap 0.3.0`，无 `--perms`），实机跑测已转入 `/Users/yonah/projects/agent/lx-tui/docs/undo/sandbox-permissions.md`。
 - **记录口径**：严格收录会导致沙箱绕过、平台执行崩溃、UI/键盘裂脑死锁、状态或数据库不一致、规范越界及文档漂移的真实问题；按 `P0 -> P1 -> P2 -> P3` 排序并已逐项修复锁回归。
 
 ---
@@ -10,7 +10,7 @@
 
 | 严重度 | 数量 | 涵盖核心风险 | 状态 |
 | --- | ---: | --- | --- |
-| P0 | 10 | Linux `bwrap` 能力探测缺失/强传 `--unshare-user` 与 `--perms`、`read-only`/写根外 `deny` 失效、会话前缀未检元字符绕过、`exec_policy` 拼接绕过、Seatbelt 软链路径失效、`Rule` `Always` 无限弹窗死循环、`ask` 与 `approval` 键鼠/UI 裂脑、浮层未抑制且鼠标穿透、`answer` 按单 `call_id` 误删并发审批、`dev` v30 合入丢列风险 | P0-1~P0-9 代码与单测已修复（Linux `bwrap` 实机跑测转 undo）；P0-10 已锁定为合入门控 |
+| P0 | 10 | Linux `bwrap` 能力探测缺失/强传 `--unshare-user` 与 `--perms`、`read-only`/写根外 `deny` 失效、会话前缀未检元字符绕过、`exec_policy` 拼接绕过、Seatbelt 软链路径失效、`Rule` `Always` 无限弹窗死循环、`ask` 与 `approval` 键鼠/UI 裂脑、浮层未抑制且鼠标穿透、`answer` 按单 `call_id` 误删并发审批、`dev` v30 合入丢列风险 | P0-1~P0-10 已修复并锁回归（Linux `bwrap` 实机跑测转 undo） |
 | P1 | 14 | `bwrap` `--chdir` 覆盖 `workdir`、挂载顺序与宿主机残留、`is_banned_prefix` 路径/大小写绕过、`sandbox_gate` 符号链接篡改、`write_stdin` 误触发重试、`lx exec` 与 Windows 提权边界、`Ctrl+C`/粘贴拦截、`/rewind` 未回滚、`fork` 复制未来模式、多窗格同步/入口切换重置、DB `\0` 丢空参数、上下文预算与 `kept.is_empty()`、设置 API 错误码与 `user_root`、窄窗格顶栏撞 `[>_]` | 已修复并锁回归（`bwrap` Linux 实机及 `LatestKind` 独立撤销见 undo） |
 | P2 | 10 | `chat/` 内违规 `cfg(target_os)`、rules 追加缺换行破坏语法、`save_sandbox` 校验顺序错、Seatbelt 缺 `deny_globs` 祖先与写根保护、`sweep_orphans` 漏检、审批排队计数与窄栏标签保留、合并切换卡折叠锁死、`SandboxChanged` 未刷新 `/permission` 与设置页缺滚动/`reason`、子会话无效复制切换行、主会话审批 `Blocked` 状态 | 已修复并锁回归 |
 | P3 | 4 | 系统提示词超 12 KiB/文案矛盾与截断标签缺失、硬编码文案与死常量/失真测试/字面反引号、超限文件清单登记、设计/任务/结构文档漂移 | 已修复并锁回归（既有超行文件拆解留合入 `dev` 后统筹） |
@@ -120,15 +120,14 @@
 - **状态**：已修复并锁回归
 
 ### P0-10：DB 版本跳过 `dev` 的 `v30` 直接标至 `v32`，合入 `dev` 后停在 `v31/v32` 的库将永久缺失 `agent_compact_checkpoint.kind`（合入门控项）
-
-- **位置**：`src/db/mod.rs:33`、`src/db/migration.rs:285-293, 314-345`（对比 `dev` 的 `migrate_v30_report_checkpoint`）
-- **关键点**：`dev` 已用 `v30` 给 `agent_compact_checkpoint` 加 `kind` 列，本分支从 `< 29` 跳到 `< 31`、`v32`，因此本 worktree 隔离库当前 `user_version = 32` 但不含 `kind` 列。
-- **错误原因**：未来合并回 `dev` 时，若仅仅把 `if version < 30 { migrate_v30_report_checkpoint()?; }` 放回 `v31` 之前，已升到 `v31/v32` 的开发库会跳过 `version < 30` 检查，导致 `/report`/compact 查询因缺少 `kind` 列直接报错。
-- **修复方案**（合入 `dev` 必执行）：
-  1. 本分支先修正注释及测试口径（见 P3-2）并确保 `v31`/`v32` 迁移全部幂等；
-  2. 合入 `dev` 时保留 `dev` 的 `v30` 与本分支的 `v31`/`v32`，并追加 `v33` 幂等兜底迁移（对已有库检查并补全 `agent_compact_checkpoint.kind` 与沙箱表/列），将 `SCHEMA_VERSION` 推进至 `33`。
-- **回归测试**：已在 `review.md` 与 `verification.md` 锁定为合入 `dev` 阻断门控项；合入时在 `db::sandbox::tests` 覆盖“仅缺 `kind` 的 v32 库直升 v33”。
-- **状态**：合入门控（已在文档锁定，本分支不跨线引入 `dev` 未合入代码）
+- **位置**：`src/db/mod.rs:33`、`src/db/migration.rs`（v30/v31/v32/v33）
+- **关键点**：`dev` 已用 `v30` 给 `agent_compact_checkpoint` 加 `kind` 列，本分支从 `< 29` 跳到 `< 31`、`v32`，因此合入前的 worktree 隔离库 `user_version = 32` 但不含 `kind` 列。
+- **错误原因**：若直接把 `if version < 30 { migrate_v30_report_checkpoint()?; }` 放回 `v31` 之前，已升到 `v31/v32` 的开发库会跳过 `version < 30` 检查，导致 `/report`/compact 查询因缺少 `kind` 列直接报错。
+- **修复方案**（已完成）：
+  1. 修正注释及测试口径（见 P3-2），确保 `v31`/`v32` 迁移全部幂等并使用 `write_transaction()`；
+  2. 保留 `dev` 的 `v30` 与本分支的 `v31`/`v32`，追加 `v33` 幂等兜底迁移（对已有库检查并补全 `agent_compact_checkpoint.kind` 与沙箱表/列），`SCHEMA_VERSION` 推进至 `33`。
+- **回归测试**：`db::sandbox::tests::v30_database_upgrades_to_v31_with_sandbox_schema` 与 `v32_database_without_report_kind_upgrades_to_v33` 覆盖两条升级路径。
+- **状态**：已修复并锁回归（合入 `dev` 时已完成 v33）
 
 ---
 

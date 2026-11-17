@@ -1,10 +1,10 @@
 # 沙箱与权限模式验证报告
 
 日期：2026-11-17
-分支：`feature/sandbox-permissions`（worktree `.worktrees/sandbox-permissions`）
+分支：已合入 `dev`（合并提交 `9e9d0ae6`；原 `feature/sandbox-permissions` worktree 已移除）
 环境：macOS 26.2 arm64；`/usr/bin/sandbox-exec` 可用；默认 `workspace-write`、`network_access=false`、`escalation=ask`。
 
-结论：A/B/C、补充交互与多 agent 权限跟随及 `review.md` P0–P3 审查修复已全部实现并通过 macOS 全量自动化测试（5854 lib + 全部集成测试全绿）；TUI 人工交互、真实 LLM 端到端、Linux `bwrap` 与 Windows 实机验证已统一转入 `/Users/yonah/projects/agent/lx-tui/docs/undo/sandbox-permissions.md` 后续跟进。
+结论：A/B/C、补充交互与多 agent 权限跟随及 `review.md` P0–P3 审查修复已全部实现，通过 macOS 全量自动化测试（6089 lib + 全部集成测试全绿）并合入 `dev`；v33 合并兜底迁移已落地。TUI 人工交互、真实 LLM 端到端、Linux `bwrap` 与 Windows 实机验证已统一转入 `/Users/yonah/projects/agent/lx-tui/docs/undo/sandbox-permissions.md` 后续跟进。
 
 ## 1. 自动化检查
 
@@ -12,11 +12,14 @@
 |---|---|---|---|---|
 | AUTO-1 | 工作区全部 Rust 源码 | `cargo fmt --check` | 无格式差异 | 通过 |
 | AUTO-2 | 全部 target | `cargo clippy --all-targets -- -D warnings` | 0 警告 | 通过 |
-| AUTO-3 | 单元与集成测试 | `cargo test` | 0 失败 | 通过：5854 lib 测试 + 全部集成测试全绿（6 ignored） |
+| AUTO-3 | 单元与集成测试 | `cargo test` | 0 失败 | 通过：6089 lib 测试 + 全部集成测试全绿（6 ignored） |
 | AUTO-4 | `assets/web.html`、`assets/settings*.js` | `cargo test --test web_assets` | 脚本可解析，引用的 DOM id 存在 | 通过 |
-| AUTO-5 | 模拟 dev v30 库（已含 `agent_compact_checkpoint.kind`） | `cargo test --lib db::sandbox::tests` | 依次升到 v31/v32；新增 `sandbox_mode`、规则表与 `agent_permission_switch` 表 | 通过 |
+| AUTO-5 | 模拟 dev v30 库（已含 `agent_compact_checkpoint.kind`） | `cargo test --lib db::sandbox::tests` | 依次升到 v31/v32/v33；新增 `sandbox_mode`、规则表与 `agent_permission_switch` 表 | 通过 |
+| AUTO-6 | 模拟仅缺 `kind` 的沙箱 v32 库 | `cargo test --lib db::sandbox::tests::v32_database_without_report_kind_upgrades_to_v33` | 直升 v33 并补全 `kind` 与沙箱结构 | 通过 |
 
-## 2. CLI 实测（当前 worktree）
+## 2. CLI 实测（合并前 worktree，历史记录）
+
+> 以下 CLI 跑测发生在合并前的隔离 worktree；worktree 与隔离库已删除，结果仅作为当时行为证据保留。合并后的自动化验证见 §1、§7.5 与 AUTO-6。
 
 ### CLI-1 新建 session 并执行沙箱内命令
 - 输入：`./target/debug/lx-tui exec --json -C . "Use the exec_command tool exactly once to run 'pwd && uname -s'. Then reply with the command output on a single line. Do not run any other command and do not modify any file."`
@@ -42,11 +45,11 @@
 - 期望：返回 `mode=workspace-write`、`network_access=false`、`escalation=ask`、平台能力 `seatbelt`、规则目录与加载计数。
 - 结果：通过。返回 `platform=macos`、`process_sandbox=seatbelt`、规则目录 `~/.lx-t-dev/rules`、`total_files=0`。
 
-### CLI-5 session 持久化、v32 升级与隔离库
+### CLI-5 session 持久化、v32 升级与隔离库（历史）
 - 输入：`./target/debug/lx-tui exec --json -C . "Use the exec_command tool exactly once to run 'echo v32-ok'. Reply with the exact output on one line."` 及 `session list --json`。
-- 步骤：以升级至 Schema v32 的二进制在 worktree 执行；核对输出与列表。
+- 步骤：合并前以升级至 Schema v32 的二进制在隔离 worktree 执行；核对输出与列表。
 - 期望：exit 0，隔离库平滑升级到 v32，新建 session 可列出且工具输出 `v32-ok`。
-- 结果：通过。session `sess-18e8c991a16d9180-0` 输出 `v32-ok`；数据库为 `~/.lx-t-dev/db/worktrees/sandbox-permissions-0d844551/lx.db`。
+- 结果：通过。session `sess-18e8c991a16d9180-0` 输出 `v32-ok`；数据库为 `~/.lx-t-dev/db/worktrees/sandbox-permissions-0d844551/lx.db`（该库已随 worktree 删除）。v32→v33 由 AUTO-6 覆盖。
 
 ## 3. A 批覆盖
 
@@ -63,7 +66,7 @@
 | A-9 | 审批命令面板：`↑/↓`、`Enter`、`Esc`、鼠标点击与 `y/r/a/n` | `cargo test --lib app::update::chat::tests::approval`；`slash_panels` | 方向键/回车/点击/快捷键均可裁决；普通字符不进草稿；压制 slash | 单测通过；视觉/手感待人工 |
 | A-10 | 沙箱拒绝后 Once/ForSession/Denied/Cancelled | `cargo test --lib chat::agent_loop`；CLI-2 | `r` 重试；`a` 写入会话规则；`n`/Esc 保留原失败；无头不挂起 | 单测与 CLI-2 通过；TUI 手工待人工 |
 | A-11 | `/permission` 三项模式（`Read-only` / `Workspace` / `Full`） | `app::update::chat::tests::permission`；`slash_panels` | 初始高亮当前项；`[Default]` 标记；输入可过滤；切档清空旧规则 | 单测通过；视觉待人工 |
-| A-12 | dev v30/v31 库 | 见 AUTO-5 | 升至 v32；`sandbox_mode`、规则表、`agent_permission_switch` 齐全 | 通过 |
+| A-12 | dev v30/v31 库 | 见 AUTO-5/AUTO-6 | 升至 v33；`sandbox_mode`、规则表、`agent_permission_switch` 与 `kind` 齐全 | 通过 |
 | A-13 | 系统提示与环境快照 | `cargo test --lib chat::prompt`、`chat::agent::tests`、`chat::tools::schema::tests` | `PROMPT_VERSION=lx-18`；自闭合标签无重复闭合；按会话模式输出 `<sandbox>`；主/子 agent 均明确子 agent 可发起提权审批 | 通过 |
 | A-14 | `GET/PUT /api/sandbox`、Sandbox tab 资源 | `cargo test --lib settings::service::sandbox`；CLI-4；AUTO-4 | 往返、校验、能力与规则状态正确；`SandboxChanged` 热更新 `AppState` | API 通过；页面视觉待人工 |
 
@@ -125,12 +128,15 @@
 | R-5 | P0-7/P0-8/P0-9/P1-7/P2-5/P2-6/P2-10 审批优先级、鼠标全矩形抑制、双键清理、`Ctrl+C`/粘贴、排队与 Blocked | `app::update::chat::tests::approval`、`event::tests::lx_ask_task`、`event::chat::subagent::tests_sandbox`、`ui::main_content::lx::tests::slash_panels` | 通过 |
 | R-6 | P1-8/P1-9/P1-10/P1-11/P1-12/P1-14/P2-7/P2-8/P2-9/P3-2 Rewind/Fork/多窗格同步/JSON 规则/预算/设置页与窄窗格 | `db::sandbox::tests`、`db::service::sandbox_tests`、`chat::context::tests::model_switch`、`settings::service::sandbox::tests`、`ui::main_content::panes::tests`、`permission_switch` | 通过 |
 
-## 8. 合并注意
+## 8. 合并记录
 
-- 分支基于 `dev@41d5977b`；`dev` 之后已合入 stop/report 与 agents-menu 分支（含独立 v30 迁移 `agent_compact_checkpoint.kind`）。
-- 沙箱迁移现为 **v31**（`sandbox_mode` + 规则表）与 **v32**（`agent_permission_switch` 表），提示词版本为 **`lx-18`**；**合并时必须**保留 `dev` 的 v30、依次接 v31/v32 并追加 **v33 幂等补丁迁移**（检测并补齐已在工作树升到 v31/v32 库中缺失的 `agent_compact_checkpoint.kind`），同时对齐 `dev` 的 `write_transaction()` 与既有超限文件拆解计划（详见 `/Users/yonah/projects/agent/lx-tui/docs/undo/sandbox-permissions.md`）。
-- `git merge-tree --write-tree dev HEAD` 需重点核对：`src/db/migration.rs`（v30/v31/v32 顺序）、`src/chat/prompt.rs`、`src/app/state.rs`。
+- 分支基于 `dev@41d5977b`；`dev` 已合入 stop/report 与 agents-menu 分支（含独立 v30 迁移 `agent_compact_checkpoint.kind`）。
+- 已于 `9e9d0ae6` 以 `--no-ff` 合入 `dev`，解决 `src/db/{migration.rs,mod.rs}`、`src/chat/prompt.rs`、`src/app/state.rs`、`src/event/chat/btw.rs`、`src/event/chat/subagent/mod.rs`、`src/event/tests/lx_ask_task.rs` 与 `src/chat/tools/output/tests.rs` 的冲突，并保留 dev 的 `stopped_by_user` 子 agent 语义。
+- Schema 现为 **v33**（v30 `kind` + v31 沙箱模式/规则 + v32 权限切换 + v33 幂等兜底），提示词版本为 **`lx-18`**；v31/v32/v33 均使用 `write_transaction()`。
+- 合并后 `cargo fmt --check`、`cargo clippy --all-targets -- -D warnings`、`cargo test` 全部通过（6089 lib + 全部集成测试）。
+- 原 worktree 隔离库 `~/.lx-t-dev/db/worktrees/sandbox-permissions-0d844551/` 已按规范随 worktree 删除；主开发库在下次启动时升级到 v33。
 
 ## 9. 回滚
 
-所有改动在独立 worktree 与分支；未修改主 checkout 的 Git 状态。数据库迁移 v31/v32 只增列/表，回退二进制后旧库仍可使用（新列/表保留但不被旧版本读取）。规则文件是用户数据，不在二进制回滚范围内。
+- 合并前数据库如需回退到旧二进制，必须使用迁移前的备份；旧版本发现 `user_version > SCHEMA_VERSION` 会拒绝启动，不能直接读取 v33 库。
+- v31/v32/v33 迁移只增列/表，不会删除既有数据；规则文件是用户数据，不在二进制回滚范围内。

@@ -1,6 +1,6 @@
 # Agent 沙箱与权限模式设计
 
-状态：已实现（含补充交付与 Review 修复，待最终实机与合入验收）。参考仓库：`/Users/yonah/projects/agent/codex-main`（只读）。目标仓库：`/Users/yonah/projects/agent/lx-tui` 当前 checkout。
+状态：已实现并合入 `dev`（合并提交 `9e9d0ae6`，含补充交付与 Review 修复；v33 Schema 兜底已完成）。Linux/Windows 实机与 TUI 人工端到端验收见 `docs/undo/sandbox-permissions.md`。参考仓库：`/Users/yonah/projects/agent/codex-main`（只读）。目标仓库：`/Users/yonah/projects/agent/lx-tui` 当前 checkout。
 
 本文与 `task.md`、`review.md`、`verification.md` 同步维护，反映代码库的真实设计边界与实现落点。
 
@@ -457,7 +457,7 @@ if is_likely_sandbox_denied(result, plan) && !already_retried && escalation == A
 
 ## 11. 数据库迁移
 
-当前分支 Schema 已推进至 **v32**（`v31` 为沙箱模式与规则表，`v32` 为 `agent_permission_switch` 权限切换时间线表；跳过 `dev` 已占用的 `v30` `agent_compact_checkpoint.kind`，合入 `dev` 时需补 `v33` 幂等检查以确保工作区库亦补全 `kind` 列）。
+当前 Schema 为 **v33**（`v30` 为 `agent_compact_checkpoint.kind`，`v31` 为沙箱模式与规则表，`v32` 为 `agent_permission_switch` 权限切换时间线表，`v33` 为合并兜底：对已升到 v31/v32 但缺少 `kind` 列的库做幂等补全）。
 
 ```sql
 ALTER TABLE agent_session ADD COLUMN sandbox_mode TEXT;
@@ -649,7 +649,7 @@ shell 内部被沙箱拒绝**不新增错误码**：命令以真实退出码结�
 | 提示词/上下文 | `src/chat/prompt.rs`、`src/chat/agent/{prompts.rs,permission_switch.rs}`、`src/chat/context/{mod.rs,switches.rs}`、`src/chat/tools/subagent.rs` | 环境快照 `<sandbox>`、`## Sandbox` 段、子 agent 提权引导、`PROMPT_VERSION` → `lx-18`、切档 `<system-update>` |
 | 设置服务 | 新建 `src/settings/service/sandbox.rs`；`src/settings/service/{handlers,page}.rs`、`src/settings/service.rs` | `/api/sandbox`、`SettingsEvent::SandboxChanged`（支持 `user_root` 与损坏回落） |
 | 设置前端 | `assets/web.html`、`assets/settings.js`、`assets/settings_sandbox.js`、`assets/settings.css` | Sandbox tab、表单、能力说明、`overflow-y: auto` |
-| 数据库 | `src/db/migration/{mod,schema}.rs`、`src/db/{mod.rs,sandbox.rs}`、`src/db/chat/{mod,fork,rewind}.rs`、`src/db/service/{mod,chat}.rs` | v31/v32 迁移、规则存取、切档持久化与 fork/rewind 回滚 |
+| 数据库 | `src/db/migration/{mod,schema}.rs`、`src/db/{mod.rs,sandbox.rs}`、`src/db/chat/{mod,fork,rewind}.rs`、`src/db/service/{mod,chat}.rs` | v31/v32 迁移、v33 合并兜底、规则存取、切档持久化与 fork/rewind 回滚 |
 | 文案 | `src/ui/text/sandbox.rs`、`src/ui/text.rs` | 审批、`/permission` 与权限切换卡片英文文案 |
 | A 批：拒绝识别 | 新建 `src/chat/sandbox/denial.rs`；`src/chat/process/mod.rs` | `is_likely_sandbox_denied`、`ProcessResult.sandbox_retry` |
 | A 批：重试 | `src/chat/agent_loop/mod.rs`、`executor.rs`、`src/event/chat/approval.rs` | `retry_process`、`Retry` 审批、精确命令规则 |
