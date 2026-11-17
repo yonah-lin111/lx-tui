@@ -49,7 +49,7 @@ impl Database {
             .workspace_external_id(workspace)?
             .ok_or(DbError::WorkspaceMissing)?;
         let now = now_ms();
-        let transaction = self.conn.unchecked_transaction()?;
+        let transaction = self.write_transaction()?;
         super::record::ensure_session_owned(&transaction, session_id, &workspace_external)?;
         let user_sequence = super::super::next_session_sequence(&transaction, session_id)?;
         let turn_index: i64 = transaction.query_row(
@@ -164,7 +164,7 @@ impl Database {
             return Ok(0);
         };
         let now = now_ms();
-        let transaction = self.conn.unchecked_transaction()?;
+        let transaction = self.write_transaction()?;
         super::record::ensure_session_owned(&transaction, parent_session, &workspace_external)?;
         let mut count = 0usize;
         let mut touched_agents = std::collections::BTreeSet::new();
@@ -204,7 +204,7 @@ impl Database {
             return Ok(false);
         };
         let now = now_ms();
-        let transaction = self.conn.unchecked_transaction()?;
+        let transaction = self.write_transaction()?;
         let parent_session: Option<String> = transaction
             .query_row(
                 r#"SELECT a.parent_session_id FROM agent_subagent a

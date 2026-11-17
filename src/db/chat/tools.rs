@@ -118,7 +118,7 @@ impl Database {
             .workspace_external_id(workspace)?
             .ok_or(DbError::WorkspaceMissing)?;
         let started_at_ms = now_ms();
-        let transaction = self.conn.unchecked_transaction()?;
+        let transaction = self.write_transaction()?;
         ensure_owned_message(&transaction, &workspace_external, session_id, message_id)?;
         let duplicate: Option<i64> = transaction
             .query_row(
@@ -188,7 +188,7 @@ impl Database {
         let workspace_external = self
             .workspace_external_id(workspace)?
             .ok_or(DbError::WorkspaceMissing)?;
-        let transaction = self.conn.unchecked_transaction()?;
+        let transaction = self.write_transaction()?;
         let updated = transaction.execute(
             r#"UPDATE agent_tool_call SET status = 'running'
                WHERE session_id = ?1 AND message_id = ?2 AND call_id = ?3 AND status = 'pending'"#,
@@ -230,7 +230,7 @@ impl Database {
             .workspace_external_id(workspace)?
             .ok_or(DbError::WorkspaceMissing)?;
         let now = now_ms();
-        let transaction = self.conn.unchecked_transaction()?;
+        let transaction = self.write_transaction()?;
         let duration_ms = now.saturating_sub(ticket.started_at_ms).max(0);
         let mut updated = transaction.execute(
             r#"UPDATE agent_tool_call

@@ -126,7 +126,7 @@ impl super::Database {
             .workspace_external_id(workspace)?
             .ok_or(DbError::WorkspaceMissing)?;
         let now = now_ms();
-        let transaction = self.conn.unchecked_transaction()?;
+        let transaction = self.write_transaction()?;
         let (session_id, sequence, turn_index) = match existing_session {
             Some(session_id) => {
                 let owned: Option<i64> = transaction
@@ -222,7 +222,7 @@ impl super::Database {
         let workspace_external = self
             .workspace_external_id(workspace)?
             .ok_or(DbError::WorkspaceMissing)?;
-        let transaction = self.conn.unchecked_transaction()?;
+        let transaction = self.write_transaction()?;
         let existing: Option<(String, Option<String>)> = transaction
             .query_row(
                 r#"SELECT m.status, m.user_shell_json
@@ -336,7 +336,7 @@ impl super::Database {
     /// 不重跑任何命令；重复调用幂等。
     pub fn recover_interrupted_user_shells(&self, sessions: &[String]) -> Result<usize> {
         let now = now_ms();
-        let transaction = self.conn.unchecked_transaction()?;
+        let transaction = self.write_transaction()?;
         // 通用流恢复可能已把 status 改成 interrupted，但 JSON 仍写着 running；
         // 因此按 JSON 状态判断，而不是只看 status='streaming'。
         let rows: Vec<(String, String, Option<String>)> = {

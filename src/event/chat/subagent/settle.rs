@@ -553,19 +553,43 @@ fn turn_messages(handle: &SubagentHandle) -> &[crate::app::state::ChatMessageVie
     &handle.chat.messages[index..]
 }
 
-/// 报告正文：本轮所有 assistant 片段（含 steer 截断的前半段），超限截断。
+/// 报告正文：本轮各 assistant 片段末尾非空正文段（保留轮内 steer 多段，去掉同消息工具调用前的独白），超限截断。
 fn report_body(handle: &SubagentHandle) -> String {
     let mut texts = Vec::new();
     for message in turn_messages(handle) {
         if message.role != "assistant" {
             continue;
         }
-        let text = message.text();
-        if !text.trim().is_empty() {
-            texts.push(text);
+        if let Some(segment) = last_text_segment(message) {
+            texts.push(segment);
         }
     }
     crate::chat::agent::truncate_report_body(&texts.join("\n\n"))
+}
+
+/// 取单条 assistant 消息末尾连续 `Text` part（遇工具或思考块即止，若结尾全是工具则回退最近文本块）。
+fn last_text_segment(message: &crate::app::state::ChatMessageView) -> Option<String> {
+    let mut chunks = Vec::new();
+    let mut found = false;
+    for step in message.steps.iter().rev() {
+        match step {
+            crate::app::state::AssistantStepView::Part { part, .. }
+                if part.kind == crate::chat::events::PartKind::Text
+                    && (!part.content.trim().is_empty() || found) =>
+            {
+                chunks.push(part.content.as_str());
+                found = true;
+            }
+            _ if found => break,
+            _ => {}
+        }
+    }
+    if !found {
+        return None;
+    }
+    chunks.reverse();
+    let joined = chunks.concat();
+    (!joined.trim().is_empty()).then_some(joined)
 }
 
 /// 本轮已结算的工具调用数（跨 steer 片段；半程汇报正文用）。

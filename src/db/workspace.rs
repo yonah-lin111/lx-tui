@@ -196,7 +196,7 @@ impl Database {
                 rows.push((key, name.clone()));
             }
         }
-        let transaction = self.conn.unchecked_transaction()?;
+        let transaction = self.write_transaction()?;
         for (position, (path, name)) in rows.iter().enumerate() {
             transaction.execute(
                 r#"INSERT INTO workspace (external_id, name, "type", path, is_trusted, position, created_at, updated_at)
@@ -507,7 +507,7 @@ impl Database {
         if keys.is_empty() {
             return Ok(());
         }
-        let transaction = self.conn.unchecked_transaction()?;
+        let transaction = self.write_transaction()?;
         for key in keys {
             transaction.execute(
                 "DELETE FROM workspace WHERE path = ?1",

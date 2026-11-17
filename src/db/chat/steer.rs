@@ -37,7 +37,7 @@ impl Database {
             .workspace_external_id(workspace)?
             .ok_or(DbError::WorkspaceMissing)?;
         let now = now_ms();
-        let transaction = self.conn.unchecked_transaction()?;
+        let transaction = self.write_transaction()?;
         // 双条件校验 session 归属，并读取本轮提交前的 revision。
         let revision: Option<i64> = transaction
             .query_row(

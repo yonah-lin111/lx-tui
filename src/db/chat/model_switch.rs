@@ -100,7 +100,7 @@ impl Database {
         let workspace_external = self
             .workspace_external_id(workspace)?
             .ok_or(DbError::WorkspaceMissing)?;
-        let transaction = self.conn.unchecked_transaction()?;
+        let transaction = self.write_transaction()?;
         let current: Option<(Option<String>, Option<String>, Option<String>)> = transaction
             .query_row(
                 r#"SELECT model_provider, model_id, variant
@@ -196,7 +196,7 @@ impl Database {
         let workspace_external = self
             .workspace_external_id(workspace)?
             .ok_or(DbError::WorkspaceMissing)?;
-        let transaction = self.conn.unchecked_transaction()?;
+        let transaction = self.write_transaction()?;
         let owned: Option<i64> = transaction
             .query_row(
                 "SELECT id FROM agent_session WHERE external_id = ?1 AND workspace_id = ?2",

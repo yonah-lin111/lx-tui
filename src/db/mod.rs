@@ -276,10 +276,26 @@ impl Database {
         let conn = Connection::open(path)?;
         // 多实例并发（多个 lx 进程/测试）时等待短暂锁，而不是立刻失败。
         conn.busy_timeout(std::time::Duration::from_secs(5))?;
-        conn.execute_batch("PRAGMA foreign_keys = ON; PRAGMA journal_mode = WAL;")?;
+        conn.execute_batch("PRAGMA foreign_keys = ON;")?;
+        let journal_mode: String = conn.query_row("PRAGMA journal_mode", [], |row| row.get(0))?;
+        if !journal_mode.eq_ignore_ascii_case("wal") {
+            conn.execute_batch("PRAGMA journal_mode = WAL;")?;
+        }
         let mut database = Self { conn };
         database.migrate()?;
         Ok(database)
+    }
+
+    /// 开启立即写事务（`BEGIN IMMEDIATE`），在任何 `SELECT` 之前先占写锁。
+    ///
+    /// SQLite WAL 下若用 `BEGIN DEFERRED` 先读后写，期间另一连接提交写入推进 WAL 帧后，
+    /// 升级写锁会直接返回 `SQLITE_BUSY_SNAPSHOT` 而不等待 `busy_timeout`。写事务统一从
+    /// 此处开启，确保并发写入按 `busy_timeout` 排队而非瞬时失败。
+    pub(crate) fn write_transaction(&self) -> Result<rusqlite::Transaction<'_>> {
+        Ok(rusqlite::Transaction::new_unchecked(
+            &self.conn,
+            rusqlite::TransactionBehavior::Immediate,
+        )?)
     }
 
     /// 打开纯内存数据库并完成迁移（供 `exec --ephemeral` 与无盘测试使用）。
@@ -658,7 +674,7 @@ impl Database {
         } else {
             pages.iter().collect()
         };
-        let transaction = self.conn.unchecked_transaction()?;
+        let transaction = self.write_transaction()?;
         transaction.execute(
             r#"INSERT INTO workspace_prompt (external_id, workspace_id, folder_id, name, content, created_at, updated_at)
                VALUES (?1, ?2, ?3, ?4, ?5, datetime('now'), datetime('now'))"#,
@@ -701,7 +717,7 @@ impl Database {
 
     /// 更新一页正文；该页为第一页（最小 `position`）时同一事务同步镜像列。
     pub fn update_page_content(&self, id: i64, content: &str) -> Result<()> {
-        let transaction = self.conn.unchecked_transaction()?;
+        let transaction = self.write_transaction()?;
         let updated = transaction.execute(
             "UPDATE workspace_prompt_page SET content = ?1, updated_at = datetime('now') WHERE id = ?2",
             params![content, id],
@@ -724,7 +740,7 @@ impl Database {
 
     /// 追加一页到末尾（`position` 取最大加一）并设为当前页，返回新页 id。
     pub fn create_prompt_page(&self, prompt_id: i64, name: &str, content: &str) -> Result<i64> {
-        let transaction = self.conn.unchecked_transaction()?;
+        let transaction = self.write_transaction()?;
         let exists: Option<i64> = transaction
             .query_row(
                 "SELECT id FROM workspace_prompt WHERE id = ?1",
@@ -770,7 +786,7 @@ impl Database {
     ///
     /// 返回删除后应显示的页 id；删除的不是当前页时为 None。
     pub fn delete_prompt_page(&self, id: i64) -> Result<Option<i64>> {
-        let transaction = self.conn.unchecked_transaction()?;
+        let transaction = self.write_transaction()?;
         let row: Option<(i64, i64)> = transaction
             .query_row(
                 "SELECT prompt_id, position FROM workspace_prompt_page WHERE id = ?1",

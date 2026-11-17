@@ -400,7 +400,7 @@ impl Database {
             .workspace_external_id(workspace)?
             .ok_or(DbError::WorkspaceMissing)?;
         let now = now_ms();
-        let transaction = self.conn.unchecked_transaction()?;
+        let transaction = self.write_transaction()?;
         // 校验 session 归属并读取下一个 sequence/turn。sequence 与独立提示共用编号空间，
         // 必须联合取号；轮次身份仍以稳定 user message id 为准，不依赖可复用的 turn_index。
         let (session_id, next_sequence, turn_index, revision) = match existing_session {
@@ -565,7 +565,7 @@ impl Database {
             .workspace_external_id(workspace)?
             .ok_or(DbError::WorkspaceMissing)?;
         let now = now_ms();
-        let transaction = self.conn.unchecked_transaction()?;
+        let transaction = self.write_transaction()?;
         let session_id =
             ensure_streaming_message(&transaction, &workspace_external, assistant_message_id)?;
         replace_parts(&transaction, assistant_message_id, parts, now)?;
@@ -634,7 +634,7 @@ impl Database {
         let workspace_external = self
             .workspace_external_id(workspace)?
             .ok_or(DbError::WorkspaceMissing)?;
-        let transaction = self.conn.unchecked_transaction()?;
+        let transaction = self.write_transaction()?;
         self.finish_with_optional_parts_in_tx(
             &transaction,
             &workspace_external,
@@ -737,7 +737,7 @@ impl Database {
         let workspace_external = self
             .workspace_external_id(workspace)?
             .ok_or(DbError::WorkspaceMissing)?;
-        let transaction = self.conn.unchecked_transaction()?;
+        let transaction = self.write_transaction()?;
         update_session_selection(
             &transaction,
             session_id,
@@ -811,7 +811,7 @@ impl Database {
             .workspace_external_id(workspace)?
             .ok_or(DbError::WorkspaceMissing)?;
         let descendants = self.descendant_session_ids(session_id)?;
-        let transaction = self.conn.unchecked_transaction()?;
+        let transaction = self.write_transaction()?;
         for child in descendants.iter().rev() {
             transaction.execute(
                 "DELETE FROM agent_session WHERE external_id = ?1 AND workspace_id = ?2",
@@ -869,7 +869,7 @@ impl Database {
             return Ok(0);
         }
         let now = now_ms();
-        let transaction = self.conn.unchecked_transaction()?;
+        let transaction = self.write_transaction()?;
         let mut updated = 0usize;
         for session in sessions {
             updated += transaction.execute(

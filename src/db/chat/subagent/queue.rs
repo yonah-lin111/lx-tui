@@ -166,7 +166,7 @@ impl Database {
             .workspace_external_id(workspace)?
             .ok_or(DbError::WorkspaceMissing)?;
         let now = now_ms();
-        let transaction = self.conn.unchecked_transaction()?;
+        let transaction = self.write_transaction()?;
         ensure_agent_owned(&transaction, agent_id, parent_session, &workspace_external)?;
 
         if let Some((existing_id, existing_agent, existing_status)) = transaction
@@ -310,7 +310,7 @@ impl Database {
             .workspace_external_id(workspace)?
             .ok_or(DbError::WorkspaceMissing)?;
         let now = now_ms();
-        let transaction = self.conn.unchecked_transaction()?;
+        let transaction = self.write_transaction()?;
         let child_session_id =
             ensure_agent_owned(&transaction, agent_id, parent_session, &workspace_external)?;
 
@@ -455,7 +455,7 @@ impl Database {
             .workspace_external_id(workspace)?
             .ok_or(DbError::WorkspaceMissing)?;
         let now = now_ms();
-        let transaction = self.conn.unchecked_transaction()?;
+        let transaction = self.write_transaction()?;
         ensure_agent_owned(&transaction, agent_id, parent_session, &workspace_external)?;
         let updated = match submission_id {
             Some(id) => transaction.execute(
@@ -489,7 +489,7 @@ impl Database {
             return Ok(None);
         };
         let now = now_ms();
-        let transaction = self.conn.unchecked_transaction()?;
+        let transaction = self.write_transaction()?;
         let row: Option<(String, String)> = transaction
             .query_row(
                 r#"SELECT i.agent_id, i.status
@@ -531,7 +531,7 @@ impl Database {
             .workspace_external_id(workspace)?
             .ok_or(DbError::WorkspaceMissing)?;
         let now = now_ms();
-        let transaction = self.conn.unchecked_transaction()?;
+        let transaction = self.write_transaction()?;
         let child_session_id =
             ensure_agent_owned(&transaction, agent_id, parent_session, &workspace_external)?;
         transaction.execute(
@@ -563,7 +563,7 @@ impl Database {
             .workspace_external_id(workspace)?
             .ok_or(DbError::WorkspaceMissing)?;
         let now = now_ms();
-        let transaction = self.conn.unchecked_transaction()?;
+        let transaction = self.write_transaction()?;
         ensure_agent_owned(&transaction, agent_id, parent_session, &workspace_external)?;
         let cancelled = transaction.execute(
             r#"UPDATE agent_subagent_input

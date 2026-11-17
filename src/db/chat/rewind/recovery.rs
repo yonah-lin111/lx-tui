@@ -86,7 +86,7 @@ impl Database {
 
     /// 结算一条 prepared mutation：记录实际结果并计入本轮快照用量。
     pub fn settle_mutation(&self, mutation_id: i64, actual: &ImageWrite) -> Result<()> {
-        let transaction = self.conn.unchecked_transaction()?;
+        let transaction = self.write_transaction()?;
         let row: Option<(String, String)> = transaction
             .query_row(
                 "SELECT session_id, user_message_id FROM agent_file_mutation WHERE id = ?1 AND state = 'prepared'",

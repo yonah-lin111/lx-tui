@@ -60,7 +60,7 @@ impl Database {
             return Ok(());
         }
         let now = now_ms();
-        let transaction = self.conn.unchecked_transaction()?;
+        let transaction = self.write_transaction()?;
         for session in sessions {
             transaction.execute(
                 r#"UPDATE agent_message
@@ -134,7 +134,7 @@ impl Database {
     /// 回答者与批次状态在同一事务内收敛；批次进入终态时同步刷新线程排序时间。
     pub fn fail_btw_recipient(&self, recipient_id: &str, error_code: &str) -> Result<()> {
         let now = now_ms();
-        let transaction = self.conn.unchecked_transaction()?;
+        let transaction = self.write_transaction()?;
         let batch_id: Option<String> = transaction
             .query_row(
                 "SELECT batch_id FROM agent_btw_recipient WHERE external_id = ?1",

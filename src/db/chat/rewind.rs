@@ -381,7 +381,7 @@ impl Database {
         if owned.is_none() {
             return Err(DbError::SessionMissing);
         }
-        let transaction = self.conn.unchecked_transaction()?;
+        let transaction = self.write_transaction()?;
         let scope: Option<(String, i64)> = transaction
             .query_row(
                 "SELECT state, snapshot_bytes FROM agent_turn_file_scope WHERE user_message_id = ?1 AND session_id = ?2",
@@ -489,7 +489,7 @@ impl Database {
         let workspace_external = self
             .workspace_external_id(workspace)?
             .ok_or(DbError::WorkspaceMissing)?;
-        let transaction = self.conn.unchecked_transaction()?;
+        let transaction = self.write_transaction()?;
         let owned: Option<i64> = transaction
             .query_row(
                 "SELECT id FROM agent_session WHERE external_id = ?1 AND workspace_id = ?2",
@@ -558,7 +558,7 @@ impl Database {
         let workspace_external = self
             .workspace_external_id(workspace)?
             .ok_or(DbError::WorkspaceMissing)?;
-        let transaction = self.conn.unchecked_transaction()?;
+        let transaction = self.write_transaction()?;
         let owned: Option<i64> = transaction
             .query_row(
                 "SELECT id FROM agent_session WHERE external_id = ?1 AND workspace_id = ?2",
@@ -654,7 +654,7 @@ impl Database {
         let workspace_external = self
             .workspace_external_id(workspace)?
             .ok_or(DbError::WorkspaceMissing)?;
-        let transaction = self.conn.unchecked_transaction()?;
+        let transaction = self.write_transaction()?;
         let owned: Option<i64> = transaction
             .query_row(
                 "SELECT id FROM agent_session WHERE external_id = ?1 AND workspace_id = ?2",

@@ -29,7 +29,7 @@ impl Database {
         }
         if version < SCHEMA_VERSION {
             if version < 4 {
-                let transaction = self.conn.transaction()?;
+                let transaction = self.write_transaction()?;
                 transaction.execute_batch(SCHEMA)?;
                 transaction.execute_batch(SCHEMA_V4)?;
                 // 老库的 workspace_prompt 由历史 SCHEMA 建立，缺 active_page_id 列。
@@ -67,7 +67,7 @@ impl Database {
             if column_exists(&self.conn, "workspace_prompt", "status")? {
                 self.rebuild_prompt_without_status()?;
             }
-            let transaction = self.conn.transaction()?;
+            let transaction = self.write_transaction()?;
             transaction.execute_batch(SCHEMA)?;
             // v7：聊天会话五表；建表与索引成功后才推进 user_version。
             if version < 7 {
@@ -117,7 +117,7 @@ impl Database {
         }
         // v12 发布前补列：已经停在 v12 的开发库也要拿到路径锚点列（不推进版本）。
         if !column_exists(&self.conn, "agent_file_mutation", "anchor_path")? {
-            let transaction = self.conn.unchecked_transaction()?;
+            let transaction = self.write_transaction()?;
             transaction.execute_batch(
                 "ALTER TABLE agent_file_mutation ADD COLUMN anchor_path TEXT;
                  ALTER TABLE agent_file_mutation ADD COLUMN anchor_canonical TEXT;",
@@ -129,7 +129,7 @@ impl Database {
         }
         if version < 14 {
             // 只增表：不触碰既有消息与会话数据，失败整体回滚（版本保持 v13）。
-            let transaction = self.conn.unchecked_transaction()?;
+            let transaction = self.write_transaction()?;
             transaction.execute_batch(SCHEMA_V14)?;
             ensure_no_foreign_key_violation(&transaction)?;
             // 只推进到本分支的版本：后续分支失败时不能把库标成更高版本，
@@ -139,7 +139,7 @@ impl Database {
         }
         if version < 15 {
             // 只增表：全局 todo 列表，不触碰既有数据，失败整体回滚（版本不推进）。
-            let transaction = self.conn.unchecked_transaction()?;
+            let transaction = self.write_transaction()?;
             transaction.execute_batch(SCHEMA_V15_TODO)?;
             ensure_no_foreign_key_violation(&transaction)?;
             transaction.pragma_update(None, "user_version", 15)?;
@@ -148,7 +148,7 @@ impl Database {
         if version < 16 {
             // 只加列：subagent 报告与报告行标记。不重建任何表；`column_exists` 守卫
             // 让重复迁移幂等（旧库可能已被更早的二进制补过其中一列）。
-            let transaction = self.conn.unchecked_transaction()?;
+            let transaction = self.write_transaction()?;
             for (table, column, ddl) in [
                 (
                     "agent_subagent",
@@ -177,7 +177,7 @@ impl Database {
         }
         if version < 17 {
             // 只加列：subagent 的短标题。旧记录留空，UI 不拿 task 首行冒充标题。
-            let transaction = self.conn.unchecked_transaction()?;
+            let transaction = self.write_transaction()?;
             if !column_exists(&transaction, "agent_subagent", "title")? {
                 transaction.execute_batch(
                     "ALTER TABLE agent_subagent ADD COLUMN title TEXT NOT NULL DEFAULT '';",
@@ -189,7 +189,7 @@ impl Database {
         }
         if version < 18 {
             // 只增表：消息附件（可见引用元数据，图片本体存本地路径）。
-            let transaction = self.conn.unchecked_transaction()?;
+            let transaction = self.write_transaction()?;
             transaction.execute_batch(SCHEMA_V18)?;
             ensure_no_foreign_key_violation(&transaction)?;
             transaction.pragma_update(None, "user_version", 18)?;
@@ -199,7 +199,7 @@ impl Database {
         if column_exists(&self.conn, "agent_message_attachment", "image_bytes")? {
             self.conn.execute_batch("PRAGMA foreign_keys = OFF;")?;
             let result = (|| -> Result<()> {
-                let transaction = self.conn.unchecked_transaction()?;
+                let transaction = self.write_transaction()?;
                 transaction.execute_batch("DROP TABLE IF EXISTS agent_message_attachment;")?;
                 transaction.execute_batch(SCHEMA_V18)?;
                 ensure_no_foreign_key_violation(&transaction)?;
@@ -211,7 +211,7 @@ impl Database {
         }
         if version < 19 {
             // 只增表 + 旧单条报告数据迁移：不重建旧表。
-            let transaction = self.conn.unchecked_transaction()?;
+            let transaction = self.write_transaction()?;
             transaction.execute_batch(SCHEMA_V19)?;
             let legacy_count: i64 = transaction.query_row(
                 "SELECT COUNT(*) FROM agent_subagent WHERE report_json IS NOT NULL AND report_json <> ''",
@@ -293,7 +293,7 @@ impl Database {
     /// 两者共用检查点表（sequence、revision、`/rewind` 删除语义一致），但只有
     /// `compact` 参与上下文装配；旧行默认 `compact`。
     fn migrate_v30_report_checkpoint(&mut self) -> Result<()> {
-        let transaction = self.conn.unchecked_transaction()?;
+        let transaction = self.write_transaction()?;
         if !column_exists(&transaction, "agent_compact_checkpoint", "kind")? {
             transaction.execute_batch(
                 "ALTER TABLE agent_compact_checkpoint
@@ -311,7 +311,7 @@ impl Database {
     ///
     /// 旧库默认 1（沿用原来的自动汇报语义）；面板私聊写入 0，结算时不生成逐轮报告。
     fn migrate_v29_private_followup(&mut self) -> Result<()> {
-        let transaction = self.conn.unchecked_transaction()?;
+        let transaction = self.write_transaction()?;
         if !column_exists(&transaction, "agent_subagent_input", "notify_parent")? {
             transaction.execute_batch(
                 "ALTER TABLE agent_subagent_input ADD COLUMN notify_parent INTEGER NOT NULL DEFAULT 1
@@ -331,7 +331,7 @@ impl Database {
     fn migrate_v28_btw(&mut self) -> Result<()> {
         self.conn.execute_batch("PRAGMA foreign_keys = OFF;")?;
         let result = (|| -> Result<()> {
-            let transaction = self.conn.unchecked_transaction()?;
+            let transaction = self.write_transaction()?;
             // 合成/回退的旧库可能停在 v14 但缺少 revision 列（v12 未执行）；先补齐再复制。
             if !column_exists(&transaction, "agent_session", "revision")? {
                 transaction.execute_batch(
@@ -362,7 +362,7 @@ impl Database {
     ///
     /// 兼容并行开发期曾将 v26 用于 `todo.group_id` 的旧工作区库：幂等确保 `usage_log` 表亦已补齐。
     fn migrate_v27_todo_group(&mut self) -> Result<()> {
-        let transaction = self.conn.unchecked_transaction()?;
+        let transaction = self.write_transaction()?;
         transaction.execute_batch(SCHEMA_V26)?;
         if !column_exists(&transaction, "todo", "group_id")? {
             transaction.execute_batch("ALTER TABLE todo ADD COLUMN group_id TEXT;")?;
@@ -376,7 +376,7 @@ impl Database {
 
     /// v26：新增模型调用统计流水表 `usage_log` 及历史 `agent_message` 幂等回填。
     fn migrate_v26_usage_log(&mut self) -> Result<()> {
-        let transaction = self.conn.unchecked_transaction()?;
+        let transaction = self.write_transaction()?;
         transaction.execute_batch(SCHEMA_V26)?;
         ensure_no_foreign_key_violation(&transaction)?;
         transaction.pragma_update(None, "user_version", 26)?;
@@ -386,7 +386,7 @@ impl Database {
 
     /// v25：每条 assistant 消息的回顾表（消息删除时级联清理），并清理旧版遗留的已撤销 compact 行。
     fn migrate_v25_recap(&mut self) -> Result<()> {
-        let transaction = self.conn.unchecked_transaction()?;
+        let transaction = self.write_transaction()?;
         transaction.execute_batch(SCHEMA_V25_RECAP)?;
         ensure_no_foreign_key_violation(&transaction)?;
         transaction.pragma_update(None, "user_version", 25)?;
@@ -396,7 +396,7 @@ impl Database {
 
     /// v24：持久化历史列表隐藏路径；旧库与新建库都幂等建表。
     fn migrate_v24_workspace_hidden(&mut self) -> Result<()> {
-        let transaction = self.conn.unchecked_transaction()?;
+        let transaction = self.write_transaction()?;
         transaction.execute_batch(SCHEMA_V24)?;
         ensure_no_foreign_key_violation(&transaction)?;
         transaction.pragma_update(None, "user_version", 24)?;
@@ -409,7 +409,7 @@ impl Database {
     /// 旧库按当时的历史顺序（`updated_at DESC, id DESC`）回填，升级后列表不跳序；
     /// 新库由 `SCHEMA` 直接建出该列，回填 0 行。拖拽排序后续写回为 0..n 的连续值。
     fn migrate_v23_workspace_position(&mut self) -> Result<()> {
-        let transaction = self.conn.unchecked_transaction()?;
+        let transaction = self.write_transaction()?;
         if !column_exists(&transaction, "workspace", "position")? {
             transaction.execute_batch(
                 "ALTER TABLE workspace ADD COLUMN position INTEGER NOT NULL DEFAULT 0;",
@@ -430,7 +430,7 @@ impl Database {
 
     /// v22：创建会话中途模型切换时间线表 `agent_model_switch`。
     fn migrate_v22_model_switch(&mut self) -> Result<()> {
-        let transaction = self.conn.unchecked_transaction()?;
+        let transaction = self.write_transaction()?;
         transaction.execute_batch(SCHEMA_V22_MODEL_SWITCH)?;
         ensure_no_foreign_key_violation(&transaction)?;
         transaction.pragma_update(None, "user_version", 22)?;
@@ -441,7 +441,7 @@ impl Database {
     /// v21：todo 表扩展日期与优先级字段（`entry_date`, `priority`, `completed_date`），
     /// 并将唯一位置索引从全局 `(position)` 升级为按日 `(entry_date, position)`。
     fn migrate_v21_todo_schedule(&mut self) -> Result<()> {
-        let transaction = self.conn.unchecked_transaction()?;
+        let transaction = self.write_transaction()?;
         if !column_exists(&transaction, "todo", "entry_date")? {
             transaction.execute_batch(
                 "ALTER TABLE todo ADD COLUMN entry_date TEXT NOT NULL DEFAULT '';",
@@ -478,7 +478,7 @@ impl Database {
     fn rebuild_attachment_with_skill_kind(&mut self) -> Result<()> {
         self.conn.execute_batch("PRAGMA foreign_keys = OFF;")?;
         let result = (|| -> Result<()> {
-            let transaction = self.conn.unchecked_transaction()?;
+            let transaction = self.write_transaction()?;
             let before: i64 = transaction.query_row(
                 "SELECT COUNT(*) FROM agent_message_attachment",
                 [],
@@ -509,7 +509,7 @@ impl Database {
     fn migrate_v13(&mut self) -> Result<()> {
         self.conn.execute_batch("PRAGMA foreign_keys = OFF;")?;
         let result = (|| -> Result<()> {
-            let transaction = self.conn.transaction()?;
+            let transaction = self.write_transaction()?;
             // 旧 shell v12 库没有 revision 列（该分支的 v12 早于 rewind 合并）。
             // 必须先补列：下面的整表重建会 `SELECT revision FROM agent_session`。
             if !column_exists(&transaction, "agent_session", "revision")? {
@@ -552,7 +552,7 @@ impl Database {
     fn rebuild_prompt_without_status(&mut self) -> Result<()> {
         self.conn.execute_batch("PRAGMA foreign_keys = OFF;")?;
         let result = (|| -> Result<()> {
-            let transaction = self.conn.transaction()?;
+            let transaction = self.write_transaction()?;
             transaction.execute_batch(SCHEMA_V5_PROMPT)?;
             ensure_no_foreign_key_violation(&transaction)?;
             transaction.commit()?;

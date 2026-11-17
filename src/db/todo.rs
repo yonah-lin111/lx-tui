@@ -278,7 +278,7 @@ impl Database {
         } else {
             None
         };
-        let transaction = self.conn.unchecked_transaction()?;
+        let transaction = self.write_transaction()?;
         let existing_date: Option<String> = transaction
             .query_row(
                 "SELECT entry_date FROM todo WHERE id = ?1",
@@ -360,7 +360,7 @@ impl Database {
     /// 删除单条；`affected == 0` 不算错误（幂等）。删除后把所属日期剩余位置重排为 `0..n`，
     /// 并将该日因删除而只剩 1 条成员的聚合组自动退化为独立条目（`group_id = NULL`）。
     pub fn delete_todo(&self, id: &str) -> Result<()> {
-        let transaction = self.conn.unchecked_transaction()?;
+        let transaction = self.write_transaction()?;
         let entry_date: Option<String> = transaction
             .query_row(
                 "SELECT entry_date FROM todo WHERE id = ?1",
@@ -379,7 +379,7 @@ impl Database {
 
     /// 单事务同步指定日期下全部条目的顺序、聚合组归属、状态与优先级。
     pub fn sync_date_todos(&self, entry_date: &str, records: &[TodoRecord]) -> Result<()> {
-        let transaction = self.conn.unchecked_transaction()?;
+        let transaction = self.write_transaction()?;
         transaction.execute(
             "UPDATE todo SET position = position + ?1 WHERE entry_date = ?2",
             params![RESTORE_OFFSET, entry_date],
@@ -432,7 +432,7 @@ impl Database {
                 record.entry_date.clone()
             });
         }
-        let transaction = self.conn.unchecked_transaction()?;
+        let transaction = self.write_transaction()?;
         for date in dates {
             let mut restored: Vec<&TodoRecord> = records
                 .iter()
@@ -510,7 +510,7 @@ impl Database {
 
     /// 按指定 ID 顺序重排某日期下的条目位置。
     pub fn reorder_todos(&self, entry_date: &str, ordered_ids: &[String]) -> Result<()> {
-        let transaction = self.conn.unchecked_transaction()?;
+        let transaction = self.write_transaction()?;
         transaction.execute(
             "UPDATE todo SET position = position + ?1 WHERE entry_date = ?2",
             params![RENUMBER_OFFSET, entry_date],
@@ -542,7 +542,7 @@ impl Database {
         if ids.is_empty() {
             return Ok(());
         }
-        let transaction = self.conn.unchecked_transaction()?;
+        let transaction = self.write_transaction()?;
         let mut source_dates = BTreeSet::new();
         for (offset, id) in ids.iter().enumerate() {
             let old_date: Option<String> = transaction

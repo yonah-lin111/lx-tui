@@ -295,7 +295,7 @@ impl Database {
         let now = now_ms();
         let child_session_id = new_external_id("sess");
         let thread_id = new_external_id("btw");
-        let transaction = self.conn.unchecked_transaction()?;
+        let transaction = self.write_transaction()?;
         transaction.execute(
             r#"INSERT INTO agent_session
                    (external_id, workspace_id, source, title, first_user_message,
@@ -489,7 +489,7 @@ impl Database {
         }
         let thread = self.ensure_btw_thread(workspace, parent_session_id, qa_message_id, title)?;
         let now = now_ms();
-        let transaction = self.conn.unchecked_transaction()?;
+        let transaction = self.write_transaction()?;
         let turn_index: i64 = transaction.query_row(
             "SELECT COALESCE(MAX(turn_index) + 1, 0) FROM agent_message WHERE session_id = ?1",
             params![thread.child_session_id],
@@ -602,7 +602,7 @@ impl Database {
             return Ok(None);
         };
         let now = now_ms();
-        let transaction = self.conn.unchecked_transaction()?;
+        let transaction = self.write_transaction()?;
         let row: Option<RecipientStartRow> = transaction
             .query_row(
                 r#"SELECT r.status, b.thread_id, t.child_session_id,
@@ -737,7 +737,7 @@ impl Database {
             .workspace_external_id(workspace)?
             .ok_or(DbError::WorkspaceMissing)?;
         let now = now_ms();
-        let transaction = self.conn.unchecked_transaction()?;
+        let transaction = self.write_transaction()?;
         self.finish_with_optional_parts_in_tx(
             &transaction,
             &workspace_external,
@@ -802,7 +802,7 @@ impl Database {
     /// 批次仍 running”的永久不一致。
     pub fn cancel_btw_queued(&self, batch_id: &str) -> Result<()> {
         let now = now_ms();
-        let transaction = self.conn.unchecked_transaction()?;
+        let transaction = self.write_transaction()?;
         transaction.execute(
             "UPDATE agent_btw_recipient SET status = 'cancelled', completed_at_ms = ?1 WHERE batch_id = ?2 AND status = 'queued'",
             params![now, batch_id],
@@ -814,7 +814,7 @@ impl Database {
 
     /// 批次状态按当前回答者收敛（取消/中断后调用）。
     pub fn sync_btw_batch_status(&self, batch_id: &str) -> Result<()> {
-        let transaction = self.conn.unchecked_transaction()?;
+        let transaction = self.write_transaction()?;
         self.sync_btw_batch_status_in_tx(&transaction, batch_id)?;
         transaction.commit()?;
         Ok(())
@@ -860,7 +860,7 @@ impl Database {
         let Some(thread) = self.btw_thread(workspace, thread_id)? else {
             return Ok(());
         };
-        let transaction = self.conn.unchecked_transaction()?;
+        let transaction = self.write_transaction()?;
         transaction.execute(
             "DELETE FROM agent_session WHERE external_id = ?1 AND source = 'btw'",
             params![thread.child_session_id],

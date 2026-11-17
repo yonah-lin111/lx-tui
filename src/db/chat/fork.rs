@@ -227,7 +227,7 @@ impl Database {
         boundary: i64,
         image_rewrite: &Option<(String, String)>,
     ) -> Result<()> {
-        let transaction = self.conn.unchecked_transaction()?;
+        let transaction = self.write_transaction()?;
         // 事务内再检查一次：应用层忙判定与跨进程写入之间仍有窗口。
         ensure_no_streaming(&transaction, source_session)?;
         let owned: Option<i64> = transaction

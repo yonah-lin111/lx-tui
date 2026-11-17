@@ -17,7 +17,6 @@ use crate::chat::agent::{
 };
 use crate::db::chat::{ModelSnapshot, PersistedInputItem, SubagentQueueState, SubagentRecord};
 use crate::db::{Database, new_external_id};
-use crate::tiling::PaneId;
 
 /// 根会话树快照：根会话、调用者深度/路径与整树子 agent 记录。
 pub(super) struct SubagentTree {
@@ -191,7 +190,7 @@ pub(super) fn spawn(
         .frozen
         .get(&parent_session)
         .cloned()
-        .or_else(|| resolve_frozen_for_pane(state, key.pane))
+        .or_else(|| super::model_resolve::resolve_frozen_for_pane(state, key.pane))
         .ok_or_else(|| "subagent model snapshot unavailable".to_string())?;
     let resolved_model = super::model_resolve::resolve_subagent_model(
         &state.models,
@@ -292,7 +291,13 @@ pub(super) fn spawn(
         Ok(committed) => committed,
         Err(error) => {
             crate::platform::remove_session_images(&child_session_id);
-            return Err(error.code().to_string());
+            return Err(super::db_err(
+                "spawn",
+                &parent_session,
+                None,
+                call_id,
+                &error,
+            ));
         }
     };
 
@@ -421,7 +426,15 @@ pub(super) fn send_input(
     if was_user_stopped && !is_running {
         database
             .recover_subagent_for_resume(&workspace, &owner_session, target)
-            .map_err(|err| err.code().to_string())?;
+            .map_err(|err| {
+                super::db_err(
+                    "send_input_recover",
+                    &owner_session,
+                    Some(target),
+                    call_id,
+                    &err,
+                )
+            })?;
     }
     // `trigger_turn=false` 只入队：`interrupt` 在解析层已禁止与它同传，且不解除 interrupt 暂停态。
     let interrupt = interrupt && trigger_turn;
@@ -444,7 +457,7 @@ pub(super) fn send_input(
     }
 
     let frozen = {
-        let parent_frozen = resolve_parent_frozen_for_session(
+        let parent_frozen = super::model_resolve::resolve_parent_frozen_for_session(
             state,
             streams,
             key.pane,
@@ -491,7 +504,15 @@ pub(super) fn send_input(
             interrupt,
             notify_parent,
         )
-        .map_err(|err| err.code().to_string())?;
+        .map_err(|err| {
+            super::db_err(
+                "send_input_enqueue",
+                &owner_session,
+                Some(target),
+                call_id,
+                &err,
+            )
+        })?;
 
     // 入队成功：此时才解除用户停止标记，并同步 UI 投影（列表/卡片）。
     if was_user_stopped {
@@ -675,14 +696,16 @@ pub(super) fn resume(
 
     database
         .recover_subagent_for_resume(&workspace, &owner_session, agent_id)
-        .map_err(|err| err.code().to_string())?;
+        .map_err(|err| {
+            super::db_err("resume_recover", &owner_session, Some(agent_id), None, &err)
+        })?;
     streams.resumed_subagents.insert(agent_id.to_string());
 
     if let Some(parent_frozen) = streams
         .frozen
         .get(&owner_session)
         .cloned()
-        .or_else(|| resolve_frozen_for_pane(state, key.pane))
+        .or_else(|| super::model_resolve::resolve_frozen_for_pane(state, key.pane))
         .or_else(|| streams.frozen.get(&record.child_session_id).cloned())
     {
         let frozen =
@@ -793,11 +816,21 @@ pub(crate) fn schedule_next_queued_input_with_done(
         .ok_or_else(|| "subagent persistence unavailable".to_string())?;
     let record = database
         .owned_subagent(workspace, &parent_session, agent_id)
-        .map_err(|err| err.code().to_string())?
+        .map_err(|err| {
+            super::db_err(
+                "schedule_owned",
+                &parent_session,
+                Some(agent_id),
+                None,
+                &err,
+            )
+        })?
         .ok_or_else(|| NOT_FOUND_CODE.to_string())?;
     let Some(next_input) = database
         .next_queued_input(workspace, &parent_session, agent_id)
-        .map_err(|err| err.code().to_string())?
+        .map_err(|err| {
+            super::db_err("schedule_next", &parent_session, Some(agent_id), None, &err)
+        })?
     else {
         return Ok(None);
     };
@@ -841,7 +874,7 @@ pub(crate) fn schedule_next_queued_input_with_done(
 
     // 若该子会话有显式/角色绑定的固定模型，优先沿用固定模型；
     // 否则继承父会话最新模型，再回退到数据库里持久化的子 agent 模型快照。
-    let parent_frozen = resolve_parent_frozen_for_session(
+    let parent_frozen = super::model_resolve::resolve_parent_frozen_for_session(
         state,
         streams,
         parent_key.pane,
@@ -927,7 +960,15 @@ pub(crate) fn schedule_next_queued_input_with_done(
             &next_input.submission_id,
             &model,
         )
-        .map_err(|err| err.code().to_string())?;
+        .map_err(|err| {
+            super::db_err(
+                "schedule_claim",
+                &parent_session,
+                Some(agent_id),
+                None,
+                &err,
+            )
+        })?;
 
     let task_text = PersistedInputItem::joined_text(&claimed.items);
     super::launch::launch_child_turn(
@@ -952,46 +993,4 @@ pub(crate) fn schedule_next_queued_input_with_done(
     )?;
 
     Ok(Some(claimed))
-}
-
-/// 解析父会话的最新模型快照：
-/// - 若 `owner_session` 即窗格当前主会话，优先读窗格最新模型选择（支持用户在主窗格切换模型后被恢复的子 agent 继承）；
-/// - 若 `owner_session` 是嵌套的父子 agent 会话，优先读该父子会话的冻结模型快照。
-fn resolve_parent_frozen_for_session(
-    state: &AppState,
-    streams: &ChatStreams,
-    pane: PaneId,
-    owner_session: &str,
-    child_session_id: &str,
-) -> Option<crate::app::state::FrozenModel> {
-    let is_pane_root = state
-        .pane_anywhere(pane)
-        .and_then(|target| target.lx.chat.session_id.as_deref())
-        .is_some_and(|root| root == owner_session);
-    if is_pane_root {
-        resolve_frozen_for_pane(state, pane)
-            .or_else(|| streams.frozen.get(owner_session).cloned())
-            .or_else(|| streams.frozen.get(child_session_id).cloned())
-    } else {
-        streams
-            .frozen
-            .get(owner_session)
-            .cloned()
-            .or_else(|| resolve_frozen_for_pane(state, pane))
-            .or_else(|| streams.frozen.get(child_session_id).cloned())
-    }
-}
-
-/// 从窗格当前模型配置解析 `FrozenModel`。
-pub(super) fn resolve_frozen_for_pane(
-    state: &AppState,
-    pane: PaneId,
-) -> Option<crate::app::state::FrozenModel> {
-    let target = state.pane_anywhere(pane)?;
-    let selection = target
-        .lx
-        .chat
-        .effective_selection(&state.models)
-        .or_else(|| state.models.default_selection())?;
-    crate::app::state::FrozenModel::resolve(&state.models, &selection)
 }

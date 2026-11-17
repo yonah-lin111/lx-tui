@@ -164,7 +164,7 @@ impl Database {
             .workspace_external_id(workspace)?
             .ok_or(DbError::WorkspaceMissing)?;
         let now = now_ms();
-        let transaction = self.conn.unchecked_transaction()?;
+        let transaction = self.write_transaction()?;
         ensure_session_owned(&transaction, parent_session, &workspace_external)?;
         let child_session_id = child_session_id
             .filter(|id| !id.trim().is_empty())
@@ -359,7 +359,7 @@ impl Database {
             _ => None,
         };
         let now = now_ms();
-        let transaction = self.conn.unchecked_transaction()?;
+        let transaction = self.write_transaction()?;
         let row = transaction
             .query_row(
                 r#"SELECT a.role, a.agent_path, a.nickname, a.child_session_id FROM agent_subagent a
@@ -1019,7 +1019,7 @@ impl Database {
     /// 运行中的输入 → interrupted（保留 queued 输入不丢、不自动重跑）。
     pub fn recover_running_subagents(&self) -> Result<usize> {
         let now = now_ms();
-        let transaction = self.conn.unchecked_transaction()?;
+        let transaction = self.write_transaction()?;
         let updated = transaction.execute(
             r#"UPDATE agent_subagent
                SET status = 'cancelled', completed_at_ms = ?1, updated_at_ms = ?1
@@ -1053,7 +1053,7 @@ impl Database {
             .workspace_external_id(workspace)?
             .ok_or(DbError::WorkspaceMissing)?;
         let now = now_ms();
-        let transaction = self.conn.unchecked_transaction()?;
+        let transaction = self.write_transaction()?;
         ensure_session_owned(&transaction, parent_session_id, &workspace_external)?;
         let updated = transaction.execute(
             r#"UPDATE agent_subagent

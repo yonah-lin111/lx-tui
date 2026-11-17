@@ -590,3 +590,185 @@ async fn undelivered_steer_after_report_is_resent_privately() {
         .expect("pending steer must be resent");
     assert!(!resent, "steer 重投必须保持私聊");
 }
+
+/// 同一条 assistant 消息里工具调用前的过渡独白与最终正文不再粘连，只取末尾正文段。
+#[tokio::test]
+async fn report_body_drops_pre_tool_preamble_and_avoids_concatenation() {
+    let (_fixture, mut state, key, persistence, mut streams, _parent) = fixture_with_parent();
+    let agent_id = spawn_explorer(&mut state, &mut streams, &persistence, &key, "probe").await;
+    let child_session = streams
+        .subagents
+        .values()
+        .find(|handle| handle.agent_id == agent_id)
+        .expect("handle")
+        .child_session_id
+        .clone();
+    let assistant_id = streams.subagents[&child_session].child_assistant_id.clone();
+    if let Some(handle) = streams.subagents.get_mut(&child_session) {
+        push_text(
+            &mut handle.chat,
+            &assistant_id,
+            "I'll read the Cargo manifests directly.",
+        );
+        let msg = handle
+            .chat
+            .messages
+            .iter_mut()
+            .find(|message| message.id == assistant_id)
+            .expect("assistant");
+        msg.push_tool(crate::app::state::ToolCallView::new(
+            "call-read-1",
+            "read",
+            0,
+        ));
+        msg.push_part(crate::app::state::ChatPartView {
+            kind: crate::chat::events::PartKind::Reasoning,
+            content: "checking Cargo.lock".into(),
+            provider_metadata_json: None,
+            started_at_ms: None,
+            ended_at_ms: None,
+            completed_at_ms: None,
+        });
+        push_text(
+            &mut handle.chat,
+            &assistant_id,
+            "**答案**\n\nratatui 0.30.2",
+        );
+    }
+
+    crate::event::chat::finish_subagent(
+        &mut state,
+        &mut streams,
+        &persistence,
+        RequestKey {
+            pane: key.pane,
+            session: child_session,
+            generation: key.generation,
+        },
+        StopReason::Complete,
+        Usage::default(),
+    );
+    let report = state
+        .pane_anywhere(key.pane)
+        .expect("pane")
+        .lx
+        .agents
+        .by_agent(&agent_id)
+        .and_then(|run| run.report.as_ref())
+        .expect("report");
+    assert_eq!(report.body, "**答案**\n\nratatui 0.30.2");
+    assert!(
+        !report
+            .body
+            .contains("I'll read the Cargo manifests directly."),
+        "不应保留工具调用前的前导独白：{}",
+        report.body
+    );
+}
+
+/// 末尾连续 `Text` part（例如带 `provider_metadata_json` 切分）应完整保留，不能被拆丢前半句。
+#[tokio::test]
+async fn report_body_joins_trailing_contiguous_text_parts_and_falls_back_before_tool() {
+    let (_fixture, mut state, key, persistence, mut streams, _parent) = fixture_with_parent();
+    let agent_a = spawn_explorer(&mut state, &mut streams, &persistence, &key, "probe a").await;
+    let session_a = streams
+        .subagents
+        .values()
+        .find(|handle| handle.agent_id == agent_a)
+        .expect("handle a")
+        .child_session_id
+        .clone();
+    let assistant_a = streams.subagents[&session_a].child_assistant_id.clone();
+    if let Some(handle) = streams.subagents.get_mut(&session_a) {
+        push_text(&mut handle.chat, &assistant_a, "Preamble.");
+        let msg = handle
+            .chat
+            .messages
+            .iter_mut()
+            .find(|message| message.id == assistant_a)
+            .expect("assistant");
+        msg.push_tool(crate::app::state::ToolCallView::new("call-1", "read", 0));
+        push_text(&mut handle.chat, &assistant_a, "Hello ");
+        let msg = handle
+            .chat
+            .messages
+            .iter_mut()
+            .find(|message| message.id == assistant_a)
+            .expect("assistant");
+        msg.push_part(crate::app::state::ChatPartView {
+            kind: crate::chat::events::PartKind::Text,
+            content: "world".into(),
+            provider_metadata_json: Some(r#"{"sig":"x"}"#.into()),
+            started_at_ms: None,
+            ended_at_ms: None,
+            completed_at_ms: None,
+        });
+    }
+    crate::event::chat::finish_subagent(
+        &mut state,
+        &mut streams,
+        &persistence,
+        RequestKey {
+            pane: key.pane,
+            session: session_a,
+            generation: key.generation,
+        },
+        StopReason::Complete,
+        Usage::default(),
+    );
+    let report_a = state
+        .pane_anywhere(key.pane)
+        .expect("pane")
+        .lx
+        .agents
+        .by_agent(&agent_a)
+        .and_then(|run| run.report.as_ref())
+        .expect("report a");
+    assert_eq!(report_a.body, "Hello world");
+
+    // 若在工具调用之后尚未产出正文就中断，仍回退保留工具前的文本段。
+    let agent_b = spawn_explorer(&mut state, &mut streams, &persistence, &key, "probe b").await;
+    let session_b = streams
+        .subagents
+        .values()
+        .find(|handle| handle.agent_id == agent_b)
+        .expect("handle b")
+        .child_session_id
+        .clone();
+    let assistant_b = streams.subagents[&session_b].child_assistant_id.clone();
+    if let Some(handle) = streams.subagents.get_mut(&session_b) {
+        push_text(&mut handle.chat, &assistant_b, "Checking files...");
+        let msg = handle
+            .chat
+            .messages
+            .iter_mut()
+            .find(|message| message.id == assistant_b)
+            .expect("assistant");
+        msg.push_tool(crate::app::state::ToolCallView::new("call-2", "read", 0));
+    }
+    crate::event::chat::finish_subagent(
+        &mut state,
+        &mut streams,
+        &persistence,
+        RequestKey {
+            pane: key.pane,
+            session: session_b,
+            generation: key.generation,
+        },
+        StopReason::Cancelled,
+        Usage::default(),
+    );
+    let report_b = state
+        .pane_anywhere(key.pane)
+        .expect("pane")
+        .lx
+        .agents
+        .by_agent(&agent_b)
+        .and_then(|run| run.report.as_ref())
+        .expect("report b");
+    assert!(
+        report_b.body.contains("Checking files..."),
+        "工具后无正文时回退保留前置文本：{}",
+        report_b.body
+    );
+}

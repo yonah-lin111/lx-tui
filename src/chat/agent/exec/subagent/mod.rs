@@ -897,6 +897,12 @@ fn failed(code: &str) -> HostError {
 }
 
 fn db_failed(error: crate::db::DbError) -> HostError {
+    tracing::warn!(
+        target: "lx::agent::subagent",
+        code = error.code(),
+        %error,
+        "exec subagent database operation failed"
+    );
     failed(error.code())
 }
 

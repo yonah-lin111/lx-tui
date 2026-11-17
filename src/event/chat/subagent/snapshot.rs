@@ -413,7 +413,7 @@ pub(super) fn send_user_input_from_panel(
         streams.db_workspaces.insert(key.clone(), workspace);
     }
     if !streams.frozen.contains_key(session_id)
-        && let Some(frozen) = runner::resolve_frozen_for_pane(state, pane)
+        && let Some(frozen) = super::model_resolve::resolve_frozen_for_pane(state, pane)
     {
         streams.frozen.insert(session_id.to_string(), frozen);
     }

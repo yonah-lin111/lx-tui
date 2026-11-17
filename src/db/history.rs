@@ -50,7 +50,7 @@ impl Database {
         if limit == 0 {
             return Ok(());
         }
-        let transaction = self.conn.unchecked_transaction()?;
+        let transaction = self.write_transaction()?;
         // 先删同文本旧行再插入：`id` 单调递增，可作同毫秒内的排序决胜键
         // （`updated_at_ms` 只有毫秒精度，快速连续记录会撞同一时刻）。
         transaction.execute("DELETE FROM prompt_history WHERE text = ?1", params![text])?;

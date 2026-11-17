@@ -419,7 +419,7 @@ impl Database {
         }
         sql.push(')');
 
-        let tx = self.conn.unchecked_transaction()?;
+        let tx = self.write_transaction()?;
         let updated = tx.execute(&sql, params_from_iter(params.iter()))?;
         tx.commit()?;
         Ok(updated)
@@ -452,7 +452,7 @@ impl Database {
             return Ok(0);
         }
 
-        let tx = self.conn.unchecked_transaction()?;
+        let tx = self.write_transaction()?;
         let mut updated = 0usize;
         for (provider, model, pricing) in priced_pairs {
             let in_rate = pricing.input.unwrap_or(0.0).max(0.0);

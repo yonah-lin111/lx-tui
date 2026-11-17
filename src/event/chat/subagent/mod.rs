@@ -948,3 +948,24 @@ pub(super) fn workspace_for_pane(state: &AppState, pane: PaneId) -> Option<PathB
         .chat_session_key_for_pane(pane)
         .or_else(|| state.workspace_cwd_for_pane(pane))
 }
+
+/// 记录子 agent 持久层错误并收敛为稳定错误码（日志保留底层 SQLite 明细，工具结果只回传稳定错误码）。
+pub(super) fn db_err(
+    op: &str,
+    session: &str,
+    agent_id: Option<&str>,
+    call_id: Option<&str>,
+    error: &crate::db::DbError,
+) -> String {
+    tracing::warn!(
+        target: "lx::agent::subagent",
+        op,
+        session,
+        agent_id = agent_id.unwrap_or("-"),
+        call_id = call_id.unwrap_or("-"),
+        code = error.code(),
+        %error,
+        "subagent database operation failed"
+    );
+    error.code().to_string()
+}

@@ -8,6 +8,7 @@ use crate::config::ai::ModelSelection;
 use crate::config::subagents::BaseRole;
 use crate::db::chat::SubagentRecord;
 use crate::event::chat::ChatStreams;
+use crate::tiling::PaneId;
 
 /// 恢复子 agent 持久化的模型快照（TUI/exec 重启后子会话仍用自己的模型）。
 ///
@@ -372,4 +373,43 @@ pub(super) fn child_frozen_for(
         return recovered;
     }
     parent_frozen.clone()
+}
+
+/// 解析父会话的最新模型快照：
+/// - 若 `owner_session` 即窗格当前主会话，优先读窗格最新模型选择（支持用户在主窗格切换模型后被恢复的子 agent 继承）；
+/// - 若 `owner_session` 是嵌套的父子 agent 会话，优先读该父子会话的冻结模型快照。
+pub(super) fn resolve_parent_frozen_for_session(
+    state: &AppState,
+    streams: &ChatStreams,
+    pane: PaneId,
+    owner_session: &str,
+    child_session_id: &str,
+) -> Option<FrozenModel> {
+    let is_pane_root = state
+        .pane_anywhere(pane)
+        .and_then(|target| target.lx.chat.session_id.as_deref())
+        .is_some_and(|root| root == owner_session);
+    if is_pane_root {
+        resolve_frozen_for_pane(state, pane)
+            .or_else(|| streams.frozen.get(owner_session).cloned())
+            .or_else(|| streams.frozen.get(child_session_id).cloned())
+    } else {
+        streams
+            .frozen
+            .get(owner_session)
+            .cloned()
+            .or_else(|| resolve_frozen_for_pane(state, pane))
+            .or_else(|| streams.frozen.get(child_session_id).cloned())
+    }
+}
+
+/// 从窗格当前模型配置解析 `FrozenModel`。
+pub(super) fn resolve_frozen_for_pane(state: &AppState, pane: PaneId) -> Option<FrozenModel> {
+    let target = state.pane_anywhere(pane)?;
+    let selection = target
+        .lx
+        .chat
+        .effective_selection(&state.models)
+        .or_else(|| state.models.default_selection())?;
+    FrozenModel::resolve(&state.models, &selection)
 }
