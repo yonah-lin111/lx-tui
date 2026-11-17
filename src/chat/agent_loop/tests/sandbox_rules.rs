@@ -212,3 +212,68 @@ async fn default_command_keeps_the_sandbox() {
     assert_eq!(result, SandboxOverride::None);
     assert!(host.trace.lock().expect("trace").is_empty());
 }
+
+#[tokio::test]
+async fn session_exact_rule_beats_rule_prompt() {
+    let rules = policy(r#"prefix_rule(pattern = ["make"], decision = "prompt")"#);
+    let mut host = RecordingHost::new();
+    let plan = plan(EscalationPolicy::Ask)
+        .with_exact_rules(vec![vec!["make".into(), "all".into()]], Vec::new());
+    let result = decide(&mut host, plan, &rules, &exec_call("make all", ""))
+        .await
+        .expect("session rule");
+    assert_eq!(result, SandboxOverride::None);
+    assert!(
+        host.trace.lock().expect("trace").is_empty(),
+        "规则 prompt 不得覆盖会话精确规则"
+    );
+}
+
+#[tokio::test]
+async fn model_request_beats_rule_prompt() {
+    let rules = policy(r#"prefix_rule(pattern = ["make"], decision = "prompt")"#);
+    let mut host = RecordingHost::approving(SandboxApprovalDecision::Once);
+    let call = exec_call(
+        "make all",
+        r#","sandbox_permissions":"require_escalated","justification":"build""#,
+    );
+    let result = decide(&mut host, plan(EscalationPolicy::Ask), &rules, &call)
+        .await
+        .expect("approved");
+    assert_eq!(result, SandboxOverride::Unsandboxed);
+    assert_eq!(
+        host.trace.lock().expect("trace").as_slice(),
+        &[HostTrace::Approval(SandboxApprovalKind::Escalation)],
+        "模型请求优先于规则 prompt"
+    );
+}
+
+#[tokio::test]
+async fn forbidden_rule_beats_session_exact_rule() {
+    let rules = policy(r#"prefix_rule(pattern = ["rm"], decision = "forbidden")"#);
+    let mut host = RecordingHost::new();
+    let plan = plan(EscalationPolicy::Ask).with_exact_rules(
+        vec![vec!["rm".into(), "-rf".into(), "/".into()]],
+        Vec::new(),
+    );
+    let result = decide(&mut host, plan, &rules, &exec_call("rm -rf /", "")).await;
+    let Err(result) = result else {
+        panic!("expected denial");
+    };
+    assert_eq!(failure_code(result), ToolErrorCode::SandboxDenied);
+}
+
+#[tokio::test]
+async fn allow_rule_survives_escalation_never() {
+    let rules = policy(r#"prefix_rule(pattern = ["echo"], decision = "allow")"#);
+    let mut host = RecordingHost::new();
+    let result = decide(
+        &mut host,
+        plan(EscalationPolicy::Never),
+        &rules,
+        &exec_call("echo hi", ""),
+    )
+    .await
+    .expect("allow");
+    assert_eq!(result, SandboxOverride::Unsandboxed);
+}

@@ -122,6 +122,10 @@ fn additional_deny_and_read_apply_to_the_command_policy() {
         extended.policy.access_for(&cwd.join("a/.env")),
         FileSystemAccessMode::Deny
     );
+    let spec = extended.spec(&cwd);
+    assert!(spec.read_only_paths.contains(&cwd.join("sealed")));
+    assert_eq!(spec.deny_globs.len(), 1);
+    assert_eq!(spec.glob_scan_max_depth, 16);
     let _ = std::fs::remove_dir_all(cwd);
 }
 

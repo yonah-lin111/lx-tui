@@ -1105,7 +1105,7 @@ where
     };
 
     // 1–2. 规则文件：Forbidden 直接拒绝；安全分段全部命中 Allow 才跳过沙箱。
-    match crate::chat::exec_policy::decide(policy, &request.args.cmd) {
+    let prompt_evaluation = match crate::chat::exec_policy::decide(policy, &request.args.cmd) {
         RuleDecision::Allow => return Ok(SandboxOverride::Unsandboxed),
         RuleDecision::Forbidden(evaluation) => {
             let reason = evaluation
@@ -1117,51 +1117,9 @@ where
             )
             .into_result(Vec::new()));
         }
-        RuleDecision::Prompt(evaluation) => {
-            if plan.escalation == EscalationPolicy::Never {
-                return Err(ToolFailure::new(
-                    ToolErrorCode::SandboxDenied,
-                    "sandbox escalation is disabled by settings",
-                )
-                .into_result(Vec::new()));
-            }
-            // 危险模式本来就不套沙箱：规则 Prompt 无额外意义。
-            if plan.mode != SandboxMode::DangerFullAccess {
-                let approval = SandboxApprovalRequest {
-                    kind: SandboxApprovalKind::Rule,
-                    command: request.args.cmd.clone(),
-                    cwd: cwd.display().to_string(),
-                    justification: evaluation.justification.unwrap_or_default(),
-                    prefix_rule: Some(evaluation.matched_prefix),
-                    additional: None,
-                    denial_excerpt: None,
-                    source: None,
-                };
-                let decision = host
-                    .approve_sandbox(call.call_id.clone(), approval)
-                    .await
-                    .map_err(|error| match error {
-                        HostError::Cancelled => {
-                            ToolFailure::new(ToolErrorCode::Cancelled, "cancelled")
-                                .into_result(Vec::new())
-                        }
-                        HostError::Failed { code } => {
-                            ToolFailure::new(ToolErrorCode::SandboxDenied, code)
-                                .into_result(Vec::new())
-                        }
-                    })?;
-                if decision == SandboxApprovalDecision::Denied {
-                    return Err(ToolFailure::new(
-                        ToolErrorCode::SandboxDenied,
-                        "the user denied the exec policy prompt.",
-                    )
-                    .into_result(Vec::new()));
-                }
-            }
-            return Ok(SandboxOverride::Unsandboxed);
-        }
-        RuleDecision::None => {}
-    }
+        RuleDecision::Prompt(evaluation) => Some(evaluation),
+        RuleDecision::None => None,
+    };
 
     // 3. 会话精确命令规则：执行器会识别并裸跑，这里不再询问。
     if plan.command_is_approved(&request.args.cmd) {
@@ -1169,51 +1127,112 @@ where
     }
 
     // 4. 模型显式提权。
-    let Some(escalation) = request.escalation else {
-        return Ok(SandboxOverride::None);
-    };
-    if plan.mode == SandboxMode::DangerFullAccess {
-        return Ok(SandboxOverride::None);
-    }
-    // 仅收缩权限的 deny 不需要审批，也不受 escalation=never 影响。
-    if escalation.kind == crate::chat::tools::EscalationKind::Additional
-        && escalation
-            .additional
-            .as_ref()
-            .is_some_and(crate::chat::sandbox::AdditionalPermissions::denies_only)
-    {
-        let additional = escalation.additional.unwrap_or_default();
-        return Ok(SandboxOverride::Additional {
-            network: additional.network,
-            file_system: additional.file_system,
+    if let Some(escalation) = request.escalation {
+        if plan.mode == SandboxMode::DangerFullAccess {
+            return Ok(SandboxOverride::None);
+        }
+        // 仅收缩权限的 deny 不需要审批，也不受 escalation=never 影响。
+        if escalation.kind == crate::chat::tools::EscalationKind::Additional
+            && escalation
+                .additional
+                .as_ref()
+                .is_some_and(crate::chat::sandbox::AdditionalPermissions::denies_only)
+        {
+            let additional = escalation.additional.unwrap_or_default();
+            return Ok(SandboxOverride::Additional {
+                network: additional.network,
+                file_system: additional.file_system,
+            });
+        }
+        if plan.command_sandbox() == crate::chat::sandbox::CommandSandbox::Unavailable {
+            return Err(ToolFailure::new(
+                ToolErrorCode::SandboxUnavailable,
+                "process sandbox is unavailable on this platform; install the backend or switch to danger-full-access",
+            )
+            .into_result(Vec::new()));
+        }
+        if plan.escalation == EscalationPolicy::Never {
+            return Err(ToolFailure::new(
+                ToolErrorCode::SandboxDenied,
+                "sandbox escalation is disabled by settings",
+            )
+            .into_result(Vec::new()));
+        }
+        let approval = SandboxApprovalRequest {
+            kind: SandboxApprovalKind::Escalation,
+            command: request.args.cmd.clone(),
+            cwd: cwd.display().to_string(),
+            justification: escalation.justification.clone(),
+            prefix_rule: escalation.prefix_rule.clone(),
+            additional: escalation.additional.clone(),
+            denial_excerpt: None,
+            source: None,
+        };
+        let decision = approve(host, call, approval).await?;
+        if decision == SandboxApprovalDecision::Denied {
+            return Err(ToolFailure::new(
+                ToolErrorCode::SandboxDenied,
+                "the user denied sandbox escalation.",
+            )
+            .into_result(Vec::new()));
+        }
+        return Ok(match escalation.kind {
+            crate::chat::tools::EscalationKind::Unsandboxed => SandboxOverride::Unsandboxed,
+            crate::chat::tools::EscalationKind::Additional => {
+                let additional = escalation.additional.unwrap_or_default();
+                SandboxOverride::Additional {
+                    network: additional.network,
+                    file_system: additional.file_system,
+                }
+            }
         });
     }
-    if plan.command_sandbox() == crate::chat::sandbox::CommandSandbox::Unavailable {
-        return Err(ToolFailure::new(
-            ToolErrorCode::SandboxUnavailable,
-            "process sandbox is unavailable on this platform; install the backend or switch to danger-full-access",
-        )
-        .into_result(Vec::new()));
+
+    // 5. 规则文件 `prompt`。
+    if let Some(evaluation) = prompt_evaluation {
+        if plan.escalation == EscalationPolicy::Never {
+            return Err(ToolFailure::new(
+                ToolErrorCode::SandboxDenied,
+                "sandbox escalation is disabled by settings",
+            )
+            .into_result(Vec::new()));
+        }
+        // 危险模式本来就不套沙箱：规则 Prompt 无额外意义。
+        if plan.mode == SandboxMode::DangerFullAccess {
+            return Ok(SandboxOverride::None);
+        }
+        let approval = SandboxApprovalRequest {
+            kind: SandboxApprovalKind::Rule,
+            command: request.args.cmd.clone(),
+            cwd: cwd.display().to_string(),
+            justification: evaluation.justification.unwrap_or_default(),
+            prefix_rule: Some(evaluation.matched_prefix),
+            additional: None,
+            denial_excerpt: None,
+            source: None,
+        };
+        let decision = approve(host, call, approval).await?;
+        if decision == SandboxApprovalDecision::Denied {
+            return Err(ToolFailure::new(
+                ToolErrorCode::SandboxDenied,
+                "the user denied the exec policy prompt.",
+            )
+            .into_result(Vec::new()));
+        }
+        return Ok(SandboxOverride::Unsandboxed);
     }
-    if plan.escalation == EscalationPolicy::Never {
-        return Err(ToolFailure::new(
-            ToolErrorCode::SandboxDenied,
-            "sandbox escalation is disabled by settings",
-        )
-        .into_result(Vec::new()));
-    }
-    let approval = SandboxApprovalRequest {
-        kind: SandboxApprovalKind::Escalation,
-        command: request.args.cmd.clone(),
-        cwd: cwd.display().to_string(),
-        justification: escalation.justification.clone(),
-        prefix_rule: escalation.prefix_rule.clone(),
-        additional: escalation.additional.clone(),
-        denial_excerpt: None,
-        source: None,
-    };
-    let decision = host
-        .approve_sandbox(call.call_id.clone(), approval)
+
+    // 6. 默认沙箱执行。
+    Ok(SandboxOverride::None)
+}
+
+/// 请求一次沙箱审批；取消/事件层失败映射为稳定工具失败。
+async fn approve<H: AgentHost>(
+    host: &mut H,
+    call: &ReadyToolCall,
+    approval: crate::chat::sandbox::SandboxApprovalRequest,
+) -> Result<crate::chat::sandbox::SandboxApprovalDecision, ToolExecutionResult> {
+    host.approve_sandbox(call.call_id.clone(), approval)
         .await
         .map_err(|error| match error {
             HostError::Cancelled => {
@@ -1222,24 +1241,5 @@ where
             HostError::Failed { code } => {
                 ToolFailure::new(ToolErrorCode::SandboxDenied, code).into_result(Vec::new())
             }
-        })?;
-    match decision {
-        SandboxApprovalDecision::Once | SandboxApprovalDecision::ForSession => {
-            Ok(match escalation.kind {
-                crate::chat::tools::EscalationKind::Unsandboxed => SandboxOverride::Unsandboxed,
-                crate::chat::tools::EscalationKind::Additional => {
-                    let additional = escalation.additional.unwrap_or_default();
-                    SandboxOverride::Additional {
-                        network: additional.network,
-                        file_system: additional.file_system,
-                    }
-                }
-            })
-        }
-        SandboxApprovalDecision::Denied => Err(ToolFailure::new(
-            ToolErrorCode::SandboxDenied,
-            "the user denied sandbox escalation.",
-        )
-        .into_result(Vec::new())),
-    }
+        })
 }
