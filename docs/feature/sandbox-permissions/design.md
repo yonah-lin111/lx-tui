@@ -696,6 +696,8 @@ pub struct FileSystemRequest {
 3. 结果：`Deny` → 不可读写；`Write` → 可读可写；`Read` → 只读；无匹配 → 继承基准（基准已含 `/ Read`，因此默认只读）。
 4. 写根（用于沙箱投影）= 有效权限为 `Write` 且不是 glob 的路径；`Read` 条目作为写根内的只读 carveout；`Deny` 条目作为读写双重拒绝。
 
+v1 实现说明：`Deny` 命中视为**绝对优先**（不能被更具体的 Read/Write 重新打开）。原因是 seatbelt/bwrap 的 deny 规则无法可靠地被更具体的 allow 覆盖，若解析器允许而投影不允许，会造成文件工具闸门与命令沙箱结果不一致。Read/Write 的具体度只用于非 Deny 条目。
+
 ### 17.4 工具 schema 扩展
 
 ```json

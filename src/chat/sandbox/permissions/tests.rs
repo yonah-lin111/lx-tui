@@ -172,3 +172,21 @@ fn additional_deny_shrinks_existing_write_access() {
     assert!(!policy.writable_roots().is_empty());
     let _ = std::fs::remove_dir_all(cwd);
 }
+
+#[test]
+fn deny_is_absolute_over_deeper_write() {
+    let cwd = temp_dir("deny-absolute");
+    let policy = FileSystemPolicy::baseline(SandboxMode::WorkspaceWrite, &cwd, &[])
+        .with_request(&FileSystemRequest {
+            write: vec![format!("{}/out", cwd.display())],
+            deny: vec![format!("{}/**", cwd.display())],
+            ..FileSystemRequest::default()
+        })
+        .expect("request");
+    assert_eq!(
+        policy.access_for(&cwd.join("out/x.txt")),
+        FileSystemAccessMode::Deny,
+        "Deny 命中的路径不能被更具体的 Write 重新打开"
+    );
+    let _ = std::fs::remove_dir_all(cwd);
+}

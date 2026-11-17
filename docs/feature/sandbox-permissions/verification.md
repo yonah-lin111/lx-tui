@@ -18,7 +18,7 @@
 | B 批：Deny 字面路径 | 通过：seatbelt 内读、写均被拒绝，兄弟路径不受影响 |
 | B 批：Deny glob | 通过：`**/.env` 在多层目录内同时阻断读与写 |
 | B 批：Read carveout | 通过：可读但不可写 |
-| B 批：解析器 | 通过：上下文长度、`Deny > Write > Read`、glob 不跨 `/`、条目上限 |
+| B 批：解析器 | 通过：上下文长度、`Deny` 绝对优先、glob 不跨 `/`、条目上限 |
 | C 批：规则解析/匹配 | 通过：`allow` / `prompt` / `forbidden`、备选 token、最严格决策 |
 | C 批：`match` / `not_match` | 通过：加载期自检，违反即拒绝该文件 |
 | C 批：保守分段 | 通过：含 `&&`/`|`/重定向/`$`/反引号时 `allow` 不生效，`forbidden` 仍生效 |

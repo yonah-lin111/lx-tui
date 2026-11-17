@@ -273,9 +273,13 @@ impl FileSystemPolicy {
             .unwrap_or(FileSystemAccessMode::Read)
     }
 
-    /// 计算有效权限并给出最具体的命中条目。
+    /// 计算有效权限并给出命中的最具体条目。
+    ///
+    /// `Deny` 是收缩型安全规则：任何命中都优先于 Read/Write，避免后端投影
+    /// （deny 规则无法被更具体的 allow 覆盖）与文件工具闸门给出不同结果。
     pub fn explain(&self, path: &Path) -> Option<(FileSystemAccessMode, FileSystemPath)> {
         let mut best: Option<(usize, FileSystemAccessMode, FileSystemPath)> = None;
+        let mut deny: Option<(usize, FileSystemPath)> = None;
         for entry in &self.entries {
             let matcher = match &entry.path {
                 FileSystemPath::Glob(pattern) => match compile_glob(pattern) {
@@ -287,6 +291,15 @@ impl FileSystemPolicy {
             let Some(specificity) = entry.path.match_specificity(path, matcher.as_ref()) else {
                 continue;
             };
+            if entry.access == FileSystemAccessMode::Deny {
+                if deny
+                    .as_ref()
+                    .is_none_or(|(current, _)| specificity > *current)
+                {
+                    deny = Some((specificity, entry.path.clone()));
+                }
+                continue;
+            }
             let better = match &best {
                 None => true,
                 Some((current, access, _)) => {
@@ -298,7 +311,8 @@ impl FileSystemPolicy {
                 best = Some((specificity, entry.access, entry.path.clone()));
             }
         }
-        best.map(|(_, access, path)| (access, path))
+        deny.map(|(_, path)| (FileSystemAccessMode::Deny, path))
+            .or_else(|| best.map(|(_, access, path)| (access, path)))
     }
 
     /// 可用于写绑定/写规则的路径（非 glob 的 `Write` 条目）。
