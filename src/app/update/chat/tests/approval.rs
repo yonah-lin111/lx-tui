@@ -148,3 +148,18 @@ fn unrelated_keys_still_edit_the_draft_while_pending() {
     assert_eq!(target.lx.approvals.len(), 1);
     assert!(decision(&state).is_none());
 }
+
+#[test]
+fn rule_prompt_approves_once_with_y() {
+    let (mut state, pane, _) = pending(SandboxApprovalKind::Rule, Some(vec!["make".into()]));
+    assert!(pressed(&mut state, LxInput::Char('y')));
+    assert_eq!(decision(&state), Some(SandboxApprovalDecision::Once));
+    assert!(
+        state
+            .pane_anywhere(pane)
+            .expect("pane")
+            .lx
+            .approvals
+            .is_empty()
+    );
+}

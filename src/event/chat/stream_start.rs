@@ -315,6 +315,8 @@ pub(super) fn start_stream(
     );
     // 读后版本保护：登记表按会话隔离，跨轮保留（读过的文件在后续轮次仍可用同一 token）。
     let reads = crate::chat::tools::read_registry(&key.session);
+    // turn 起点：规则文件变化时重载（不阻塞启动；坏文件只告警）。
+    crate::chat::exec_policy::reload_if_changed();
     let executor = AgentTools::new(runtime.manager.clone(), turn)
         .with_recorder(std::sync::Arc::new(recorder))
         .with_reads(reads)

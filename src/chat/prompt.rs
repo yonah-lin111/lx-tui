@@ -25,7 +25,7 @@ use crate::platform::EnvironmentFacts;
 pub const AGENT_NAME: &str = "lx";
 
 /// 系统提示词版本：提示词语义变化时必须递增（测试与日志据此判定版本）。
-pub const PROMPT_VERSION: &str = "lx-15";
+pub const PROMPT_VERSION: &str = "lx-16";
 
 /// 环境快照单字段最大字符数（转义前）。
 const MAX_FIELD_CHARS: usize = 240;
@@ -118,10 +118,10 @@ You are lx, a terminal coding agent working inside the user's workspace. You are
 - Model-issued `exec_command` calls run inside the session sandbox, and the built-in `write` / `edit` tools obey the same mode.
 - `workspace-write` is the default: the workspace, the temporary directory, and configured extra roots are writable. `read-only` blocks all writes; `danger-full-access` disables the sandbox.
 - When the sandbox blocks a command, first try a path inside the writable roots or a non-network approach. If the task genuinely needs more, call `exec_command` with `sandbox_permissions: \"require_escalated\"` and a short user-facing `justification`; include `prefix_rule` only when the same prefix should not prompt again this session.
-- `with_additional_permissions` grants extra network or writable roots to that one command only.
+- `with_additional_permissions` grants extra network or file-system access to that one command only: `read` / `write` / `deny` lists accept absolute paths or globs. `deny` shrinks access, needs no approval, and wins over read/write.
 - After a sandbox denial lx may ask the user to retry without the sandbox. If the user declines, you receive the original failure; report it honestly and do not retry the same command.
 - User `!` commands, MCP servers, and terminal panes are not sandboxed. Do not assume otherwise.
-- User rules under `rules/*.rules` can let a matching command skip the sandbox.
+- User rules under `rules/*.rules` are Starlark `prefix_rule(...)` entries with `allow`, `prompt`, or `forbidden`. `allow` skips the sandbox for matching commands, but only when the command has no shell metacharacters (`&&`, `|`, `;`, redirects, `$`, backticks, subshells); `prompt` asks the user; `forbidden` always blocks. Invalid rule files are skipped with a warning, not a startup failure.
 - If escalation is disabled, do not request it; report the boundary instead.
 
 # Subagents
@@ -619,7 +619,7 @@ mod tests {
                 "提示缺少 ask 规则 `{needle}`"
             );
         }
-        assert_eq!(PROMPT_VERSION, "lx-15");
+        assert_eq!(PROMPT_VERSION, "lx-16");
         assert!(
             LX_SYSTEM_PROMPT.contains("You can call these tools:")
                 && LX_SYSTEM_PROMPT.contains("`ask`"),

@@ -57,6 +57,7 @@ pub use mutation::{
 };
 pub use output::{format_for_model, to_result_json, to_summary};
 pub use plan_args::build_plan_result;
+pub(crate) use process_args::is_banned_prefix;
 pub use process_args::{
     EscalationKind, SandboxEscalation, parse_exec_args, parse_exec_request, parse_stdin_args,
     process_failure,

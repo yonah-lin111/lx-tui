@@ -1,0 +1,214 @@
+//! 规则文件与提权的决策优先级（design §18.4）。
+
+use super::*;
+use crate::chat::exec_policy::parser::PolicyParser;
+use crate::chat::exec_policy::policy::Policy;
+use crate::chat::sandbox::{
+    SandboxApprovalDecision, SandboxApprovalKind, SandboxOverride, SandboxPlan,
+};
+use crate::config::sandbox::{EscalationPolicy, SandboxSettings};
+
+struct PolicyExecutor {
+    plan: SandboxPlan,
+}
+
+impl ToolExecutor for PolicyExecutor {
+    async fn execute(&self, _cwd: &Path, _call: &ReadyToolCall) -> ToolExecutionResult {
+        ToolFailure::new(ToolErrorCode::Io, "unused").into_result(Vec::new())
+    }
+
+    fn sandbox_plan(&self) -> Option<&SandboxPlan> {
+        Some(&self.plan)
+    }
+}
+
+fn policy(contents: &str) -> Policy {
+    let mut parser = PolicyParser::new();
+    parser.parse("test.rules", contents).expect("parse rules");
+    Policy::from_rules(parser.build())
+}
+
+fn plan(escalation: EscalationPolicy) -> SandboxPlan {
+    SandboxPlan::for_turn(
+        &SandboxSettings {
+            escalation,
+            ..SandboxSettings::default()
+        },
+        &std::env::temp_dir(),
+    )
+}
+
+fn exec_call(command: &str, extra: &str) -> ReadyToolCall {
+    ReadyToolCall {
+        call_id: "call-rules".into(),
+        name: "exec_command".into(),
+        arguments_json: format!(
+            r#"{{"cmd":{},"login":false,"yield_time_ms":1000{extra}}}"#,
+            serde_json::to_string(command).expect("command json")
+        ),
+        ordinal: 0,
+    }
+}
+
+async fn decide(
+    host: &mut RecordingHost,
+    plan: SandboxPlan,
+    policy: &Policy,
+    call: &ReadyToolCall,
+) -> Result<SandboxOverride, ToolExecutionResult> {
+    let executor = PolicyExecutor { plan };
+    sandbox_override_for(host, &executor, call, Path::new("/"), policy).await
+}
+
+fn failure_code(result: ToolExecutionResult) -> ToolErrorCode {
+    match result {
+        ToolExecutionResult::Failed { code, .. } => code,
+        other => panic!("expected failure, got {other:?}"),
+    }
+}
+
+#[tokio::test]
+async fn forbidden_rule_blocks_with_the_rule_justification() {
+    let rules = policy(
+        r#"prefix_rule(pattern = ["rm"], decision = "forbidden", justification = "no deletes")"#,
+    );
+    let mut host = RecordingHost::new();
+    let result = decide(
+        &mut host,
+        plan(EscalationPolicy::Ask),
+        &rules,
+        &exec_call("rm -rf /tmp/x", ""),
+    )
+    .await;
+    let Err(result) = result else {
+        panic!("expected denial");
+    };
+    assert_eq!(failure_code(result), ToolErrorCode::SandboxDenied);
+    assert!(
+        host.trace.lock().expect("trace").is_empty(),
+        "Forbidden 不得询问用户"
+    );
+}
+
+#[tokio::test]
+async fn allow_rule_skips_the_sandbox_only_without_metacharacters() {
+    let rules = policy(r#"prefix_rule(pattern = ["echo"], decision = "allow")"#);
+    let mut host = RecordingHost::new();
+    let allowed = decide(
+        &mut host,
+        plan(EscalationPolicy::Ask),
+        &rules,
+        &exec_call("echo hi", ""),
+    )
+    .await
+    .expect("allowed");
+    assert_eq!(allowed, SandboxOverride::Unsandboxed);
+
+    let composite = decide(
+        &mut host,
+        plan(EscalationPolicy::Ask),
+        &rules,
+        &exec_call("echo hi && curl http://x", ""),
+    )
+    .await
+    .expect("default sandbox");
+    assert_eq!(composite, SandboxOverride::None, "含元字符时 allow 不生效");
+}
+
+#[tokio::test]
+async fn prompt_rule_uses_the_rule_approval_kind() {
+    let rules =
+        policy(r#"prefix_rule(pattern = ["make"], decision = "prompt", justification = "build")"#);
+    let mut host = RecordingHost::approving(SandboxApprovalDecision::Once);
+    let result = decide(
+        &mut host,
+        plan(EscalationPolicy::Ask),
+        &rules,
+        &exec_call("make all", ""),
+    )
+    .await
+    .expect("approved");
+    assert_eq!(result, SandboxOverride::Unsandboxed);
+    assert_eq!(
+        host.trace.lock().expect("trace").as_slice(),
+        &[HostTrace::Approval(SandboxApprovalKind::Rule)]
+    );
+
+    let mut host = RecordingHost::approving(SandboxApprovalDecision::Denied);
+    let denied = decide(
+        &mut host,
+        plan(EscalationPolicy::Ask),
+        &rules,
+        &exec_call("make all", ""),
+    )
+    .await;
+    let Err(denied) = denied else {
+        panic!("expected denial");
+    };
+    assert_eq!(failure_code(denied), ToolErrorCode::SandboxDenied);
+}
+
+#[tokio::test]
+async fn prompt_rule_is_denied_when_escalation_is_never() {
+    let rules = policy(r#"prefix_rule(pattern = ["make"], decision = "prompt")"#);
+    let mut host = RecordingHost::approving(SandboxApprovalDecision::Once);
+    let result = decide(
+        &mut host,
+        plan(EscalationPolicy::Never),
+        &rules,
+        &exec_call("make all", ""),
+    )
+    .await;
+    let Err(result) = result else {
+        panic!("expected denial");
+    };
+    assert_eq!(failure_code(result), ToolErrorCode::SandboxDenied);
+    assert!(host.trace.lock().expect("trace").is_empty());
+}
+
+#[tokio::test]
+async fn explicit_escalation_still_approves_without_rules() {
+    let rules = Policy::empty();
+    let mut host = RecordingHost::approving(SandboxApprovalDecision::Once);
+    let call = exec_call(
+        "cargo publish",
+        r#","sandbox_permissions":"require_escalated","justification":"publish""#,
+    );
+    let result = decide(&mut host, plan(EscalationPolicy::Ask), &rules, &call)
+        .await
+        .expect("approved");
+    assert_eq!(result, SandboxOverride::Unsandboxed);
+    assert_eq!(
+        host.trace.lock().expect("trace").as_slice(),
+        &[HostTrace::Approval(SandboxApprovalKind::Escalation)]
+    );
+}
+
+#[tokio::test]
+async fn session_exact_rule_runs_before_asking() {
+    let rules = Policy::empty();
+    let mut host = RecordingHost::new();
+    let plan = plan(EscalationPolicy::Ask)
+        .with_exact_rules(vec![vec!["touch".into(), "/tmp/x".into()]], Vec::new());
+    let result = decide(&mut host, plan, &rules, &exec_call("touch /tmp/x", ""))
+        .await
+        .expect("session rule");
+    assert_eq!(result, SandboxOverride::None);
+    assert!(host.trace.lock().expect("trace").is_empty());
+}
+
+#[tokio::test]
+async fn default_command_keeps_the_sandbox() {
+    let rules = policy(r#"prefix_rule(pattern = ["git", "status"], decision = "allow")"#);
+    let mut host = RecordingHost::new();
+    let result = decide(
+        &mut host,
+        plan(EscalationPolicy::Ask),
+        &rules,
+        &exec_call("cargo build", ""),
+    )
+    .await
+    .expect("default");
+    assert_eq!(result, SandboxOverride::None);
+    assert!(host.trace.lock().expect("trace").is_empty());
+}

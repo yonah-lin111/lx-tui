@@ -216,6 +216,12 @@
               </div>
             </div>
           </fieldset>
+          <fieldset>
+            <legend>Command rules</legend>
+            <p class="status" id="sandbox-rules">Loading…</p>
+            <p class="status">`rules/*.rules` are Starlark files. `allow` skips the sandbox for matching commands; `prompt` asks; `forbidden` blocks. Invalid files are skipped with a warning.</p>
+            <button type="button" class="ghost" onclick="openSandboxRules()">Open folder</button>
+          </fieldset>
           <p class="status">Built-in write tools follow the same mode. User `!` commands, MCP servers, and terminal panes are not sandboxed.</p>
         </section>
 

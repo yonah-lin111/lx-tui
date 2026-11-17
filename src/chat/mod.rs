@@ -11,6 +11,7 @@ pub mod client;
 pub mod compact;
 pub mod context;
 pub mod events;
+pub mod exec_policy;
 pub mod plan;
 pub mod prepare;
 pub mod process;

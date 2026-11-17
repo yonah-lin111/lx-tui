@@ -115,6 +115,8 @@ impl ExecSubagentPool {
             .get(child_session_id)
             .cloned()
             .unwrap_or_else(|| self.model.clone());
+        // 子 agent 轮次起点也检查一次（父轮通常已重载，成本仅 stat）。
+        crate::chat::exec_policy::reload_if_changed();
         let executor = AgentTools::new(
             Arc::clone(&processes),
             Arc::new(Mutex::new(TurnExecution::default())),

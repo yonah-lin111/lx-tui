@@ -80,6 +80,7 @@ pub(crate) fn answer(
     let kind = pending.request.kind;
     let command = pending.request.command.clone();
     let prefix = pending.request.prefix_rule.clone();
+    let justification = pending.request.justification.clone();
     let _ = pending.reply.send(Ok(decision));
     let Some(pane) = state.pane_mut_anywhere(key.pane) else {
         return false;
@@ -104,17 +105,33 @@ pub(crate) fn answer(
                     changed = true;
                 }
             }
-            crate::chat::sandbox::SandboxApprovalKind::Rule => {}
-            crate::chat::sandbox::SandboxApprovalKind::Escalation => {
-                if let Some(prefix) = prefix
-                    && !pane.lx.sandbox_prefix_rules.contains(&prefix)
+            crate::chat::sandbox::SandboxApprovalKind::Rule => {
+                if let Some(prefix) = prefix.clone()
+                    && let Err(error) = crate::chat::exec_policy::global().append_allow_rule(
+                        &prefix,
+                        Some(justification.as_str()).filter(|text| !text.is_empty()),
+                    )
                 {
-                    pane.lx.sandbox_prefix_rules.push(prefix.clone());
-                    new_rule = Some(crate::db::sandbox::SessionSandboxRule {
-                        kind: crate::db::sandbox::SandboxRuleKind::Prefix,
-                        tokens: prefix,
-                    });
-                    changed = true;
+                    tracing::warn!(%error, "failed to append exec policy rule");
+                }
+            }
+            crate::chat::sandbox::SandboxApprovalKind::Escalation => {
+                if let Some(prefix) = prefix {
+                    // 规则文件是跨会话通道；DB 前缀规则保证当前会话 resume 后仍生效。
+                    if let Err(error) = crate::chat::exec_policy::global().append_allow_rule(
+                        &prefix,
+                        Some(justification.as_str()).filter(|text| !text.is_empty()),
+                    ) {
+                        tracing::warn!(%error, "failed to append exec policy rule");
+                    }
+                    if !pane.lx.sandbox_prefix_rules.contains(&prefix) {
+                        pane.lx.sandbox_prefix_rules.push(prefix.clone());
+                        new_rule = Some(crate::db::sandbox::SessionSandboxRule {
+                            kind: crate::db::sandbox::SandboxRuleKind::Prefix,
+                            tokens: prefix,
+                        });
+                        changed = true;
+                    }
                 }
             }
         }

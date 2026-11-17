@@ -16,6 +16,7 @@ pub async fn route(request: &Request, state: &ServiceState) -> Response {
             let _guard = state.config_write_lock().lock().await;
             put_sandbox(request, state)
         }
+        ("POST", "/api/sandbox/open-rules") => open_rules().await,
         _ => Response::error(404, "not found"),
     }
 }
@@ -66,6 +67,7 @@ fn put_sandbox(request: &Request, state: &ServiceState) -> Response {
 fn body(settings: &SandboxSettings) -> String {
     let support = crate::platform::sandbox::support();
     let config = serde_json::to_value(settings).unwrap_or_else(|_| json!({}));
+    let rules = crate::chat::exec_policy::global().status();
     json!({
         "config": config,
         "effective_default": settings.mode.as_str(),
@@ -83,8 +85,29 @@ fn body(settings: &SandboxSettings) -> String {
             },
         },
         "path": path_display(),
+        "rules": {
+            "directory": rules.directory,
+            "total_files": rules.total_files,
+            "loaded_files": rules.loaded_files,
+            "errors": rules.errors,
+        },
     })
     .to_string()
+}
+
+/// `POST /api/sandbox/open-rules`：在系统文件管理器中打开规则目录。
+async fn open_rules() -> Response {
+    let dir = match crate::chat::exec_policy::rules_dir() {
+        Ok(dir) => dir,
+        Err(error) => return Response::error(500, &error.to_string()),
+    };
+    let _ = std::fs::create_dir_all(&dir);
+    let _ = crate::platform::restrict_dir_permissions(&dir);
+    match tokio::task::spawn_blocking(move || crate::platform::reveal_in_file_manager(&dir)).await {
+        Ok(Ok(())) => Response::json(200, "{\"ok\":true}"),
+        Ok(Err(error)) => Response::error(500, &error.to_string()),
+        Err(error) => Response::error(500, &error.to_string()),
+    }
 }
 
 fn path_display() -> String {

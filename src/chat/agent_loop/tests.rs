@@ -15,6 +15,8 @@ use crate::chat::client::StreamOutcome;
 use crate::chat::events::{PartDelta, PartKind};
 use crate::chat::tools::ToolErrorCode;
 
+mod sandbox_rules;
+
 /// 一次 host 往返的记录（可观测的执行顺序）。
 #[derive(Debug, Clone, PartialEq, Eq)]
 enum HostTrace {
@@ -23,6 +25,8 @@ enum HostTrace {
     Ask(String, usize),
     /// call ID + 是否为「未执行就取消」结算。
     Finish(String, bool),
+    /// 沙箱审批（种类）。
+    Approval(crate::chat::sandbox::SandboxApprovalKind),
 }
 
 /// 脚本化的 `take_steer_inputs` 回执队列；用尽后返回空批次。
@@ -66,6 +70,8 @@ struct RecordingHost {
     steer_trace: Arc<Mutex<Vec<SteerTrace>>>,
     /// 第 N 次 begin 成功后触发取消（模拟批次 begin 期间按 Esc）。
     cancel_on_begin: Arc<Mutex<BeginCancel>>,
+    /// 沙箱审批回执（默认事件层不可用）。
+    sandbox_result: Arc<Mutex<Result<crate::chat::sandbox::SandboxApprovalDecision, HostError>>>,
 }
 
 impl Default for RecordingHost {
@@ -82,6 +88,9 @@ impl Default for RecordingHost {
             pending_steers: Arc::new(Mutex::new(VecDeque::new())),
             steer_trace: Arc::new(Mutex::new(Vec::new())),
             cancel_on_begin: Arc::new(Mutex::new(None)),
+            sandbox_result: Arc::new(Mutex::new(Err(HostError::Failed {
+                code: "approval not scripted".into(),
+            }))),
         }
     }
 }
@@ -89,6 +98,13 @@ impl Default for RecordingHost {
 impl RecordingHost {
     fn new() -> Self {
         Self::default()
+    }
+
+    /// 沙箱审批回给定裁决。
+    fn approving(decision: crate::chat::sandbox::SandboxApprovalDecision) -> Self {
+        let host = Self::new();
+        *host.sandbox_result.lock().expect("lock") = Ok(decision);
+        host
     }
 
     /// 提问时回这些答案（按题目 id 映射）。
@@ -186,10 +202,13 @@ impl RecordingHost {
 impl AgentHost for RecordingHost {
     fn send(&mut self, request: AgentHostRequest) {
         match request {
-            AgentHostRequest::ApproveSandbox { reply, .. } => {
-                let _ = reply.send(Err(HostError::Failed {
-                    code: "approval not scripted".into(),
-                }));
+            AgentHostRequest::ApproveSandbox { request, reply, .. } => {
+                self.trace
+                    .lock()
+                    .expect("lock")
+                    .push(HostTrace::Approval(request.kind));
+                let result = self.sandbox_result.lock().expect("lock").clone();
+                let _ = reply.send(result);
             }
             AgentHostRequest::UserShellUpdates { reply } => {
                 let _ = reply.send(Vec::new());

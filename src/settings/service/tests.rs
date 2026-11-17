@@ -1892,6 +1892,11 @@ async fn sandbox_api_round_trips_and_validates_absolute_roots() {
     let initial = request(port, &get(&url)).await;
     assert_eq!(status(&initial), 200, "{initial}");
     assert!(body(&initial).contains("\"workspace-write\""));
+    assert!(
+        body(&initial).contains("\"rules\""),
+        "rules status: {initial}"
+    );
+    assert!(body(&initial).contains("\"loaded_files\""));
 
     let invalid = request(
         port,

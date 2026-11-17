@@ -390,7 +390,7 @@ fn parse_prefix_rule(value: &Value) -> ToolResultPublic<Option<Vec<String>>> {
         }
         tokens.push(token.to_string());
     }
-    if banned_prefix(&tokens) {
+    if is_banned_prefix(&tokens) {
         return Err(ToolFailure::invalid(
             "'prefix_rule' must not name a shell, interpreter, git, package runner, rm, or sudo",
         ));
@@ -486,7 +486,8 @@ fn parse_additional_permissions(raw: &Value) -> ToolResultPublic<AdditionalPermi
     Ok(permissions)
 }
 
-fn banned_prefix(tokens: &[String]) -> bool {
+/// 禁止作为会话/规则前缀的危险命令（shell、解释器、git、包管理器、rm、sudo）。
+pub(crate) fn is_banned_prefix(tokens: &[String]) -> bool {
     const BANNED: &[&[&str]] = &[
         &["bash"],
         &["bash", "-c"],

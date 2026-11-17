@@ -1,9 +1,11 @@
 # Agent 沙箱与权限模式执行任务
 
-状态：A 批实现完成，等待用户交互验收；B/C 未开始。
+状态：A/B/C 三批实现完成，等待用户统一验收。
 
-- A 批（配置模型、macOS seatbelt、Linux bwrap 参数、进程接入、文件工具闸门、显式提权审批、on-failure 重试、`/permission`、DB v30、提示词、设置页/API）已落地并提交。
-- 验证结果见同目录 `verification.md`。交互外观与真实 on-failure 链路仍需用户运行 `cargo run` 确认。
+- A 批：配置模型、macOS seatbelt、Linux bwrap 参数、进程接入、文件工具闸门、显式提权审批、on-failure 重试、`/permission`、DB v30、提示词、设置页/API。
+- B 批：完整 `additional_permissions` 档案（read/write/deny/glob）、seatbelt/bwrap 投影、文件工具条目解析器。
+- C 批：Starlark `rules/*.rules`、决策优先级、保守分段、热加载、`Always` 落盘、设置页只读状态。
+- 验证结果见同目录 `verification.md`。交互外观、Linux bwrap 与真实端到端仍需用户验收。
 
 ## 0. 开工门槛
 

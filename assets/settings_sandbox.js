@@ -2,6 +2,7 @@
 let sandboxState = null;
 let sandboxBaseline = null;
 let sandboxCapabilities = null;
+let sandboxRules = null;
 let sandboxModeSelect = null;
 let sandboxEscalationSelect = null;
 
@@ -54,6 +55,28 @@ function renderSandbox() {
       ? 'Process sandbox: ' + sandboxCapabilities.process_sandbox
       : '';
   }
+  const rules = document.getElementById('sandbox-rules');
+  if (rules) {
+    if (sandboxRules) {
+      const loaded = sandboxRules.loaded_files || 0;
+      const total = sandboxRules.total_files || 0;
+      rules.textContent = 'Rules: ' + sandboxRules.directory + ' (' + loaded + '/' + total + ' files loaded)';
+      if (sandboxRules.errors && sandboxRules.errors.length > 0) {
+        rules.textContent += ' — ' + sandboxRules.errors.join('; ');
+      }
+    } else {
+      rules.textContent = 'Rules: unavailable';
+    }
+  }
+}
+
+async function openSandboxRules() {
+  try {
+    await api('/api/sandbox/open-rules', {method: 'POST'});
+    showToast('Opened rules folder', 'ok');
+  } catch (error) {
+    showToast(error.message, 'error');
+  }
 }
 
 function resetSandbox() {
@@ -71,6 +94,7 @@ async function loadSandbox(force) {
     sandboxState = payload.config || {};
     sandboxBaseline = JSON.parse(JSON.stringify(sandboxState));
     sandboxCapabilities = payload.capabilities || null;
+    sandboxRules = payload.rules || null;
     renderSandbox();
   } catch (error) {
     if (host) { host.textContent = error.message; }
@@ -87,6 +111,7 @@ async function saveSandbox() {
     sandboxState = payload.config || sandboxValues();
     sandboxBaseline = JSON.parse(JSON.stringify(sandboxState));
     sandboxCapabilities = payload.capabilities || sandboxCapabilities;
+    sandboxRules = payload.rules || sandboxRules;
     renderSandbox();
     showToast('Sandbox settings saved', 'ok');
   } catch (error) {

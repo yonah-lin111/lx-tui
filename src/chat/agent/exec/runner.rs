@@ -483,6 +483,8 @@ pub async fn run_exec_turn(
         },
         None,
     ));
+    // turn 起点：规则文件变化时重载。
+    crate::chat::exec_policy::reload_if_changed();
     let executor = AgentTools::new(
         Arc::clone(&process_manager),
         Arc::new(tokio::sync::Mutex::new(TurnExecution::default())),

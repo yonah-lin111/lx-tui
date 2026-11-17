@@ -23,7 +23,12 @@ pub fn apply_input(state: &mut AppState, pane: PaneId, command: LxInput) -> bool
     let decision = match command {
         LxInput::Escape => Some(SandboxApprovalDecision::Denied),
         LxInput::Char('n') => Some(SandboxApprovalDecision::Denied),
-        LxInput::Char('y') if kind == SandboxApprovalKind::Escalation => {
+        LxInput::Char('y')
+            if matches!(
+                kind,
+                SandboxApprovalKind::Escalation | SandboxApprovalKind::Rule
+            ) =>
+        {
             Some(SandboxApprovalDecision::Once)
         }
         LxInput::Char('r') if kind == SandboxApprovalKind::Retry => {
