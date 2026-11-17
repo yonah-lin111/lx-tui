@@ -3,6 +3,7 @@
 //! 语法兼容 Codex `prefix_rule(...)`；`allow` 只在本条命令不含 shell 元字符时生效。
 //! 规则文件是用户显式维护的高权限配置：`allow` 会跳过沙箱。
 
+use std::io::Write;
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::sync::Mutex;
@@ -283,7 +284,6 @@ impl PolicyStore {
             .append(true)
             .open(&path)
             .map_err(|error| Error::InvalidRule(format!("open {}: {error}", path.display())))?;
-        use std::io::Write;
         file.write_all(line.as_bytes())
             .map_err(|error| Error::InvalidRule(format!("append {}: {error}", path.display())))?;
         let _ = crate::platform::restrict_file_permissions(&path);
