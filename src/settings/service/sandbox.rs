@@ -117,10 +117,4 @@ fn path_display() -> String {
 }
 
 #[cfg(test)]
-mod tests {
-    #[test]
-    fn capabilities_name_the_platform_backend() {
-        let support = crate::platform::sandbox::support();
-        assert!(!support.as_str().is_empty());
-    }
-}
+mod tests;
