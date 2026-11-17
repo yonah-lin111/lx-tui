@@ -17,49 +17,64 @@ pub(super) fn start_recipient(
     let workspace = pending.workspace.clone();
     // BTW child session 与主轮共用跨进程 guard：启动恢复只处理拿得到 guard 的
     // session，不能把另一个 lx 实例仍在流式输出的回答标成 interrupted。
-    let guard = match crate::platform::try_lock_session(&pending.child_session_id) {
-        Ok(Some(guard)) => guard,
-        Ok(None) => {
-            tracing::warn!(
-                session = %pending.child_session_id,
-                "btw recipient skipped: session is owned by another instance"
-            );
-            let _ = sender.send(AppEvent::Btw(BtwEvent::Failed {
-                pane: pending.pane,
-                qa_id: Some(pending.qa_id.clone()),
-                message: crate::ui::text::LX_BTW_SUBMIT_FAILED.to_string(),
-            }));
-            return false;
-        }
-        Err(error) => {
-            tracing::warn!(%error, session = %pending.child_session_id, "btw session guard unavailable");
-            let _ = sender.send(AppEvent::Btw(BtwEvent::Failed {
-                pane: pending.pane,
-                qa_id: Some(pending.qa_id.clone()),
-                message: crate::ui::text::LX_BTW_SUBMIT_FAILED.to_string(),
-            }));
-            return false;
-        }
+    // 同一线程的多个回答者共享一把 guard（文件锁不可重入）：若每个回答者各自
+    // `try_lock_session`，第二个目标会拿不到锁、永远停在 queued。
+    let guard = match streams
+        .btw
+        .runs
+        .values()
+        .find(|run| run.child_session_id == pending.child_session_id)
+        .map(|run| std::sync::Arc::clone(&run._guard))
+    {
+        Some(guard) => guard,
+        None => match crate::platform::try_lock_session(&pending.child_session_id) {
+            Ok(Some(guard)) => std::sync::Arc::new(guard),
+            Ok(None) => {
+                tracing::warn!(
+                    session = %pending.child_session_id,
+                    "btw recipient skipped: session is owned by another instance"
+                );
+                // 不能留下永远 queued 的孤儿回答者（重启恢复会把它误标为 interrupted）。
+                let _ = database.fail_btw_recipient(&pending.recipient_id, "session busy");
+                let _ = sender.send(AppEvent::Btw(BtwEvent::RecipientFailed {
+                    pane: pending.pane,
+                    qa_id: pending.qa_id.clone(),
+                    message: crate::ui::text::LX_BTW_TARGET_FAILED.to_string(),
+                }));
+                return false;
+            }
+            Err(error) => {
+                tracing::warn!(%error, session = %pending.child_session_id, "btw session guard unavailable");
+                let _ =
+                    database.fail_btw_recipient(&pending.recipient_id, "session guard unavailable");
+                let _ = sender.send(AppEvent::Btw(BtwEvent::RecipientFailed {
+                    pane: pending.pane,
+                    qa_id: pending.qa_id.clone(),
+                    message: crate::ui::text::LX_BTW_TARGET_FAILED.to_string(),
+                }));
+                return false;
+            }
+        },
     };
     let start = match database.start_btw_recipient(&workspace, &pending.recipient_id) {
         Ok(Some(start)) => start,
         Ok(None) => {
             // 已被恢复流程/其它路径结算：收敛批次状态，避免永久停在 queued/running。
             let _ = database.sync_btw_batch_status(&pending.batch_id);
-            let _ = sender.send(AppEvent::Btw(BtwEvent::Failed {
+            let _ = sender.send(AppEvent::Btw(BtwEvent::RecipientFailed {
                 pane: pending.pane,
-                qa_id: Some(pending.qa_id.clone()),
-                message: crate::ui::text::LX_BTW_SUBMIT_FAILED.to_string(),
+                qa_id: pending.qa_id.clone(),
+                message: crate::ui::text::LX_BTW_TARGET_FAILED.to_string(),
             }));
             return false;
         }
         Err(error) => {
             tracing::warn!(code = error.code(), "btw recipient claim failed");
             let _ = database.fail_btw_recipient(&pending.recipient_id, "recipient claim failed");
-            let _ = sender.send(AppEvent::Btw(BtwEvent::Failed {
+            let _ = sender.send(AppEvent::Btw(BtwEvent::RecipientFailed {
                 pane: pending.pane,
-                qa_id: Some(pending.qa_id.clone()),
-                message: crate::ui::text::LX_BTW_SUBMIT_FAILED.to_string(),
+                qa_id: pending.qa_id.clone(),
+                message: crate::ui::text::LX_BTW_TARGET_FAILED.to_string(),
             }));
             return false;
         }
@@ -85,10 +100,10 @@ pub(super) fn start_recipient(
             Default::default(),
             Default::default(),
         );
-        let _ = sender.send(AppEvent::Btw(BtwEvent::Failed {
+        let _ = sender.send(AppEvent::Btw(BtwEvent::RecipientFailed {
             pane: pending.pane,
-            qa_id: Some(pending.qa_id.clone()),
-            message: crate::ui::text::LX_BTW_SUBMIT_FAILED.to_string(),
+            qa_id: pending.qa_id.clone(),
+            message: crate::ui::text::LX_BTW_TARGET_FAILED.to_string(),
         }));
         return false;
     };
@@ -131,17 +146,15 @@ pub(super) fn start_recipient(
                 Default::default(),
                 Default::default(),
             );
-            let _ = sender.send(AppEvent::Btw(BtwEvent::Failed {
+            let _ = sender.send(AppEvent::Btw(BtwEvent::RecipientFailed {
                 pane: pending.pane,
-                qa_id: Some(pending.qa_id.clone()),
-                message: crate::ui::text::LX_BTW_SUBMIT_FAILED.to_string(),
+                qa_id: pending.qa_id.clone(),
+                message: crate::ui::text::LX_BTW_TARGET_FAILED.to_string(),
             }));
             return false;
         }
     };
-    let Some(sender) = Some(sender.clone()) else {
-        return false;
-    };
+    let sender = sender.clone();
     let (manager, turn) = match streams.runtime_for(cwd.clone(), &start.child_session_id) {
         Some(runtime) => (runtime.manager.clone(), runtime.turn(&pending.recipient_id)),
         None => return false,
@@ -331,7 +344,6 @@ fn agent_references(
 
 /// 停止某线程的全部活动与排队回答；不影响原任务。
 pub(super) fn stop_thread(
-    state: &mut AppState,
     streams: &mut ChatStreams,
     persistence: &Persistence,
     thread_id: Option<&str>,
@@ -362,10 +374,8 @@ pub(super) fn stop_thread(
             let _ = database.cancel_btw_queued(&batch);
         }
     }
-    let _ = state;
     changed || !keys.is_empty()
 }
-
 /// 取消若干线程的在途回答与排队项（不写库）。
 pub(super) fn cancel_threads(streams: &mut ChatStreams, thread_ids: &[String]) -> bool {
     let keys: Vec<RequestKey> = streams
@@ -529,18 +539,41 @@ pub(super) fn finish_run(
         ) {
             Ok(completion) => {
                 batch_terminal = completion.batch_terminal;
-                streams
-                    .btw
-                    .last_status
-                    .insert(run.thread_id.clone(), completion.recipient_status);
             }
-            Err(error) => tracing::warn!(code = error.code(), "btw settle failed"),
+            Err(error) => {
+                tracing::warn!(code = error.code(), "btw settle failed");
+                // 结算失败不能把线程永久锁在 active_batches 上：清掉本批次占位并刷新
+                // QA 列表，让后续提交继续；DB 侧由启动恢复兜底。
+                if streams
+                    .btw
+                    .active_batches
+                    .get(&run.thread_id)
+                    .is_some_and(|batch| batch == &run.batch_id)
+                {
+                    streams.btw.active_batches.remove(&run.thread_id);
+                }
+                state.effects.push(crate::app::effects::Effect::Btw(
+                    crate::app::effects::BtwEffect::LoadQaList {
+                        pane: key.pane,
+                        parent_session_id: run.parent_session_id.clone(),
+                    },
+                ));
+            }
         }
+    }
+    // 批次终态：QA 列表右侧状态取自最近批次，必须刷新；否则行里会一直保留
+    // 上一个批次（可能是启动恢复留下的 interrupted），与新回答自相矛盾。
+    if batch_terminal {
+        state.effects.push(crate::app::effects::Effect::Btw(
+            crate::app::effects::BtwEffect::LoadQaList {
+                pane: key.pane,
+                parent_session_id: run.parent_session_id.clone(),
+            },
+        ));
     }
     // 只清本 run 的执行资源；不按 session 清理其他目标的模型。
     streams.cancels.remove(key);
     streams.db_workspaces.remove(key);
-    streams.btw.runs.remove(key);
     if batch_terminal
         && streams
             .btw

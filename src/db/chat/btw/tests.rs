@@ -423,3 +423,180 @@ fn finishing_without_in_memory_parts_keeps_checkpoint_text() {
     assert_eq!(assistant.parts.len(), 1);
     assert_eq!(assistant.parts[0].content, "streamed answer");
 }
+
+/// 启动恢复不得把从未启动的回答者标成“被打断”：多目标批次里第二个目标
+/// 若一直排队，恢复后应为 cancelled，批次按已完成/已取消聚合为 partial。
+#[test]
+fn startup_recovery_cancels_queued_recipients_instead_of_interrupting_them() {
+    fn subagent_target(key: &str, name: &str) -> BtwTargetSpec {
+        BtwTargetSpec {
+            target_kind: "subagent".to_string(),
+            target_key: key.to_string(),
+            agent_id: Some(key.to_string()),
+            source_child_session_id: Some(format!("{key}-session")),
+            display_nickname: name.to_string(),
+            role_name: Some("explorer".to_string()),
+            model: model(),
+        }
+    }
+
+    let workspace = workspace("recover-queued");
+    let database = Database::open_in_memory().expect("db");
+    database.ensure_workspace(&workspace).expect("ws");
+    let (session, qa) = seeded_session(&database, &workspace);
+    let accepted = database
+        .accept_btw_batch(
+            &workspace,
+            &session,
+            &qa,
+            "side",
+            "submit-recover-queued",
+            "why?",
+            &[subagent_target("sub-a", "A"), subagent_target("sub-b", "B")],
+        )
+        .expect("accept");
+    // 只有第一个目标真正执行并完成；第二个一直排队（例如被文件锁挡掉）。
+    let first = accepted.recipients[0].id.clone();
+    let start = database
+        .start_btw_recipient(&workspace, &first)
+        .expect("start")
+        .expect("claimed");
+    database
+        .finish_btw_recipient(
+            &workspace,
+            &first,
+            &start.assistant_message_id,
+            Some(&[]),
+            &TurnOutcome::Complete {
+                stop_reason: Some("complete".into()),
+            },
+            Usage::default(),
+            Usage::default(),
+        )
+        .expect("finish");
+
+    database.recover_btw_startup().expect("recover");
+    let view = database
+        .load_btw_thread(&workspace, &accepted.thread.id)
+        .expect("load")
+        .expect("thread");
+    assert_eq!(view.batches[0].recipients[0].status, "completed");
+    assert_eq!(
+        view.batches[0].recipients[1].status, "cancelled",
+        "从未启动的目标不得标成 interrupted"
+    );
+    assert_eq!(
+        view.batches[0].status, "partial",
+        "已完成 + 从未启动应按 partial 聚合"
+    );
+}
+
+/// 用户停止 BTW 回答：回答者与批次都是 interrupted，不能显示成 failed（红叉）。
+#[test]
+fn interrupted_recipient_marks_batch_interrupted_not_failed() {
+    let workspace = workspace("interrupted-batch");
+    let database = Database::open_in_memory().expect("db");
+    database.ensure_workspace(&workspace).expect("ws");
+    let (session, qa) = seeded_session(&database, &workspace);
+    let accepted = database
+        .accept_btw_batch(
+            &workspace,
+            &session,
+            &qa,
+            "side",
+            "submit-interrupted",
+            "why?",
+            &[default_target()],
+        )
+        .expect("accept");
+    let recipient = accepted.recipients[0].id.clone();
+    let start = database
+        .start_btw_recipient(&workspace, &recipient)
+        .expect("start")
+        .expect("claimed");
+    database
+        .finish_btw_recipient(
+            &workspace,
+            &recipient,
+            &start.assistant_message_id,
+            None,
+            &TurnOutcome::Interrupted,
+            Usage::default(),
+            Usage::default(),
+        )
+        .expect("finish");
+    let view = database
+        .load_btw_thread(&workspace, &accepted.thread.id)
+        .expect("load")
+        .expect("thread");
+    assert_eq!(view.batches[0].recipients[0].status, "interrupted");
+    assert_eq!(
+        view.batches[0].status, "interrupted",
+        "停止不是失败，批次不得折叠成 failed"
+    );
+}
+
+/// 恢复时「已完成 + 运行中被截断」与「已完成 + 从未启动」同属 partial，
+/// 不能因为存在 interrupted 就把整批写成 interrupted。
+#[test]
+fn startup_recovery_keeps_mixed_completed_and_interrupted_batch_partial() {
+    let workspace = workspace("recover-mixed-interrupted");
+    let database = Database::open_in_memory().expect("db");
+    database.ensure_workspace(&workspace).expect("ws");
+    let (session, qa) = seeded_session(&database, &workspace);
+    let target = |key: &str| BtwTargetSpec {
+        target_kind: "subagent".to_string(),
+        target_key: key.to_string(),
+        agent_id: Some(key.to_string()),
+        source_child_session_id: Some(format!("{key}-session")),
+        display_nickname: key.to_string(),
+        role_name: Some("explorer".to_string()),
+        model: model(),
+    };
+    let accepted = database
+        .accept_btw_batch(
+            &workspace,
+            &session,
+            &qa,
+            "side",
+            "submit-recover-mixed",
+            "why?",
+            &[target("sub-a"), target("sub-b")],
+        )
+        .expect("accept");
+    let first = accepted.recipients[0].id.clone();
+    let second = accepted.recipients[1].id.clone();
+    let start = database
+        .start_btw_recipient(&workspace, &first)
+        .expect("start first")
+        .expect("claimed first");
+    database
+        .finish_btw_recipient(
+            &workspace,
+            &first,
+            &start.assistant_message_id,
+            None,
+            &TurnOutcome::Complete {
+                stop_reason: Some("complete".into()),
+            },
+            Usage::default(),
+            Usage::default(),
+        )
+        .expect("finish first");
+    database
+        .start_btw_recipient(&workspace, &second)
+        .expect("start second")
+        .expect("claimed second");
+
+    database.recover_btw_startup().expect("recover");
+    let view = database
+        .load_btw_thread(&workspace, &accepted.thread.id)
+        .expect("load")
+        .expect("thread");
+    assert_eq!(view.batches[0].recipients[0].status, "completed");
+    assert_eq!(view.batches[0].recipients[1].status, "interrupted");
+    assert_eq!(
+        view.batches[0].status, "partial",
+        "混合批次必须按回答者聚合，不得整批写成 interrupted"
+    );
+}

@@ -70,6 +70,12 @@ pub enum BtwEvent {
         qa_id: Option<String>,
         message: String,
     },
+    /// 单个回答者启动失败；同批次其它目标照常运行，不得清空提交态或谎报草稿保留。
+    RecipientFailed {
+        pane: PaneId,
+        qa_id: String,
+        message: String,
+    },
     /// 回答者开始（assistant 占位已落库）。
     RecipientStarted {
         child_session_id: String,
@@ -101,8 +107,10 @@ pub(crate) struct BtwRun {
     pub parent_session_id: String,
     /// 独立于 pane 投影的流缓冲：切主会话/关 pane 后仍能结算完整正文。
     pub buffer: crate::app::state::LxChat,
-    /// 本 recipient 的跨进程 session guard；保持到 finish，避免启动恢复误伤。
-    _guard: crate::platform::FileGuard,
+    /// 本回答者所属 child session 的跨进程 session guard；保持到 finish，
+    /// 避免启动恢复误伤。同一线程的多个目标共享同一把 guard：文件锁不可重入，
+    /// 每个回答者各自加锁会让同线程的第二个目标永远停在 `queued`。
+    _guard: std::sync::Arc<crate::platform::FileGuard>,
     pub started_at_ms: i64,
     /// 上一次流中 checkpoint 的时刻（面板关闭后仍能在库里留下已生成正文）。
     last_checkpoint_ms: i64,
@@ -137,8 +145,6 @@ pub(crate) struct BtwStreams {
     pub sessions: HashSet<String>,
     /// 回答者代次计数器。
     generation: u64,
-    /// 线程 → 最近的完成状态（停止/失败反馈用）。
-    pub last_status: HashMap<String, String>,
 }
 
 /// 处理一条 BTW 效应；返回状态是否变化。
@@ -201,8 +207,16 @@ pub(crate) fn apply_effect(
             qa_id,
             thread_id,
         } => {
-            let _ = (pane, parent_session_id, qa_id);
-            stop_thread(state, streams, persistence, thread_id.as_deref())
+            let _ = qa_id;
+            let changed = stop_thread(streams, persistence, thread_id.as_deref());
+            // 只有排队项被取消时不会再有回答者结算：立即刷新 QA 列表状态。
+            if changed {
+                state.effects.push(Effect::Btw(BtwEffect::LoadQaList {
+                    pane,
+                    parent_session_id,
+                }));
+            }
+            changed
         }
         BtwEffect::CancelOwner { parent_session_id } => {
             let mut thread_ids: Vec<String> = streams
@@ -514,6 +528,10 @@ pub(crate) fn pump(
     persistence: &Persistence,
     sender: &mpsc::UnboundedSender<AppEvent>,
 ) -> bool {
+    // 终态批次可能由失败/恢复路径结算而没有经过 `finish_run`：陈旧占位会让该线程
+    // 之后所有提交被 `active_batches` 过滤掉并永久停在 queued。开泵前按“同批次是否
+    // 还有在途 run / 待启动项”回收，只清真正无人持有的批次。
+    release_finished_batches(streams);
     let mut changed = false;
     while streams.btw.runs.len() < BTW_CONCURRENCY {
         let position = streams.btw.pending.iter().position(|pending| {
@@ -534,6 +552,34 @@ pub(crate) fn pump(
         }
     }
     changed
+}
+
+/// 回收没有任何在途 run、也没有待启动项的批次占位。
+///
+/// `active_batches` 防止同一线程并发跑多个批次；但失败/恢复路径可能已把批次结算为
+/// 终态却没有清掉占位。只按 `(thread, batch)` 精确判断，避免误删仍在排队的批次。
+fn release_finished_batches(streams: &mut ChatStreams) {
+    let stale: Vec<String> = streams
+        .btw
+        .active_batches
+        .iter()
+        .filter(|(thread, batch)| {
+            !streams
+                .btw
+                .runs
+                .values()
+                .any(|run| &run.thread_id == *thread && &run.batch_id == *batch)
+                && !streams
+                    .btw
+                    .pending
+                    .iter()
+                    .any(|pending| &pending.thread_id == *thread && &pending.batch_id == *batch)
+        })
+        .map(|(thread, _)| thread.clone())
+        .collect();
+    for thread in stale {
+        streams.btw.active_batches.remove(&thread);
+    }
 }
 
 /// BTW 工具握手：BeginTool。
@@ -790,6 +836,13 @@ pub(crate) fn apply_event_to_state(state: &mut AppState, event: BtwEvent) {
             message,
         } => {
             crate::app::update::on_btw_failed(state, pane, qa_id.as_deref(), &message);
+        }
+        BtwEvent::RecipientFailed {
+            pane,
+            qa_id,
+            message,
+        } => {
+            crate::app::update::on_btw_recipient_failed(state, pane, &qa_id, &message);
         }
         BtwEvent::RecipientStarted {
             child_session_id,

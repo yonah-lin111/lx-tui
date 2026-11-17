@@ -373,10 +373,12 @@ pub(super) fn draw_list(grid: &mut Grid, list: Rect, page: &TaskPage, agents: &A
         } else {
             match run.display_status() {
                 "failed" => crate::ui::main_content::lx::history::StepMark::Failed,
-                "blocked" | "interrupted" | "stopped" => {
+                "blocked" | "interrupted" => {
                     crate::ui::main_content::lx::history::StepMark::Interrupted
                 }
-                "cancelled" => crate::ui::main_content::lx::history::StepMark::Cancelled,
+                "cancelled" | "stopped" => {
+                    crate::ui::main_content::lx::history::StepMark::Cancelled
+                }
                 _ => crate::ui::main_content::lx::history::StepMark::Done,
             }
         };

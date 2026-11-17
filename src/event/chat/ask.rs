@@ -67,6 +67,10 @@ pub(crate) fn request(
         .saturating_sub(crate::tiling::LX_ASK_EDITOR_INSET)
         .max(1);
     ask.resize_editor(editor_width, crate::tiling::LX_ASK_EDITOR_ROWS);
+    // ask 面板整块接管输入且不绘制 slash 浮层：旧停止面板必须关闭，避免作答后突然可执行。
+    if matches!(pane.lx.slash, Some(crate::app::state::SlashPanel::Stop(_))) {
+        pane.lx.slash = None;
+    }
     pane.lx.ask = Some(ask);
     streams.asks.insert(key, PendingAsk { call_id, reply });
     true

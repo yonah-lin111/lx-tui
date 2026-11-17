@@ -308,6 +308,14 @@ fn format_subagent(outcome: &crate::chat::agent::SubagentOutcome) -> String {
             timed_out, agents, ..
         } => {
             let mut text = format!("timed_out: {timed_out}\n");
+            // 用户停止是终态而不是“继续等”：明确告诉模型别再对同一目标发起等待。
+            let stopped = agents.iter().filter(|agent| agent.stopped_by_user).count();
+            if stopped > 0 {
+                text.push_str(&format!(
+                    "note: {stopped} agent(s) were stopped by the user and produced no report. \
+                     Continue without them; do not wait for them again.\n"
+                ));
+            }
             for agent in agents {
                 let nick_part = agent
                     .nickname
@@ -322,12 +330,17 @@ fn format_subagent(outcome: &crate::chat::agent::SubagentOutcome) -> String {
                     .map(|path| format!(" agent_path={path}"))
                     .unwrap_or_default();
                 text.push_str(&format!(
-                    "- agent_id={}{}{} role={} status={}\n",
+                    "- agent_id={}{}{} role={} status={}{}\n",
                     agent.agent_id,
                     nick_part,
                     path_part,
                     agent.role.as_str(),
-                    agent.status
+                    agent.status,
+                    if agent.stopped_by_user {
+                        " stopped_by_user=true"
+                    } else {
+                        ""
+                    }
                 ));
                 if let Some(report) = &agent.report {
                     text.push_str("report:\n");
@@ -363,15 +376,21 @@ fn format_subagent(outcome: &crate::chat::agent::SubagentOutcome) -> String {
                     .filter(|s| !s.is_empty())
                     .map(|path| format!(" agent_path={path}"))
                     .unwrap_or_default();
+                let stopped_part = if agent.stopped_by_user {
+                    " stopped_by_user=true"
+                } else {
+                    ""
+                };
                 text.push_str(&format!(
-                    "- agent_id={}{}{} role={} status={} queued_count={} title={:?}\n",
+                    "- agent_id={}{}{} role={} status={} queued_count={} title={:?}{}\n",
                     agent.agent_id,
                     nick_part,
                     path_part,
                     agent.role.as_str(),
                     agent.status,
                     agent.queued_count,
-                    agent.title
+                    agent.title,
+                    stopped_part
                 ));
                 // 只有 `include_private=true` 才会带上私聊转录；默认列表没有该字段。
                 if let Some(tail) = agent.private_tail.as_deref() {

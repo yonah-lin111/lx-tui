@@ -14,7 +14,7 @@ use crate::app::update::show_lx_toast;
 use crate::tiling::PaneId;
 use crate::ui::text;
 
-use super::report_fill::{fill_main_input, format_report_body};
+use super::report_fill::fill_main_input;
 
 /// 提交 `/report [note]`。
 pub(crate) fn submit(state: &mut AppState, pane: PaneId, note: &str) -> bool {
@@ -70,13 +70,6 @@ fn submit_agent(state: &mut AppState, pane: PaneId, note: &str) -> bool {
         );
         return true;
     }
-    if let Some(last) = last_report {
-        return open_panel(state, pane, DetailTarget::Agent(agent_id), note, Some(last));
-    }
-    let Some(session_id) = session_id else {
-        show_unavailable(state, pane);
-        return true;
-    };
     if note.len() > crate::db::chat::MAX_MESSAGE_BYTES {
         super::composer::clear(state, pane);
         show_lx_toast(
@@ -91,6 +84,13 @@ fn submit_agent(state: &mut AppState, pane: PaneId, note: &str) -> bool {
         );
         return true;
     }
+    if let Some(last) = last_report {
+        return open_panel(state, pane, DetailTarget::Agent(agent_id), note, Some(last));
+    }
+    let Some(session_id) = session_id else {
+        show_unavailable(state, pane);
+        return true;
+    };
     super::composer::clear(state, pane);
     state.effects.push(Effect::SendSubagentReport {
         pane,
@@ -211,6 +211,19 @@ pub(crate) fn apply_confirm(state: &mut AppState, pane: PaneId, panel: &ReportPa
         }
         ReportAction::Regenerate => {
             let note = panel.note.clone();
+            if note.len() > crate::db::chat::MAX_MESSAGE_BYTES {
+                show_lx_toast(
+                    state,
+                    pane,
+                    Toast::new(
+                        ToastKind::Warning,
+                        text::detail::LX_REPORT_NOTE_LIMIT,
+                        Some(pane),
+                        Instant::now(),
+                    ),
+                );
+                return true;
+            }
             match &panel.target {
                 DetailTarget::Agent(agent_id) => {
                     let agent_id = agent_id.clone();
@@ -305,27 +318,8 @@ fn last_agent_report(run: &crate::app::state::SubagentRun) -> Option<String> {
     if checkpoint.sequence < latest {
         return None;
     }
-    Some(format_report_body(
-        &agent_report_header(run),
-        &checkpoint.summary,
-        &[],
-    ))
-}
-
-/// 来源头：`[Subagent report] 名字 · 角色 [· 标题]`。
-fn agent_report_header(run: &crate::app::state::SubagentRun) -> String {
-    let name = run
-        .nickname
-        .as_deref()
-        .map(str::trim)
-        .filter(|name| !name.is_empty())
-        .unwrap_or(run.agent_id.as_str());
-    let mut header = format!("[Subagent report] {name} · {}", run.role.as_str());
-    if !run.title.trim().is_empty() {
-        header.push_str(" · ");
-        header.push_str(run.title.trim());
-    }
-    header
+    // 检查点正文在提交时已包含来源头与变更文件；Resend 必须与首次生成完全一致。
+    Some(checkpoint.summary.clone())
 }
 
 /// 最近一次 `/report` 报告的芯片正文（BTW）；同样只认时间线最后一条。
@@ -354,11 +348,8 @@ fn last_btw_report(thread: &crate::app::state::lx::BtwThreadState) -> Option<Str
     if checkpoint.sequence < latest {
         return None;
     }
-    Some(format_report_body(
-        &format!("[BTW report] {}", thread.title.trim()),
-        &checkpoint.summary,
-        &[],
-    ))
+    // 检查点正文在提交时已包含来源头与变更文件。
+    Some(checkpoint.summary.clone())
 }
 
 /// 一次性总结提交成功：把最新报告检查点写成主输入框芯片。
@@ -369,7 +360,6 @@ pub fn finish_generated(
     pane: PaneId,
     session_id: &str,
     checkpoints: &[crate::db::chat::CompactCheckpoint],
-    changed_paths: Vec<String>,
 ) -> bool {
     let Some(checkpoint) = checkpoints
         .iter()
@@ -379,26 +369,22 @@ pub fn finish_generated(
         show_unavailable(state, pane);
         return false;
     };
-    let Some((parent_session, kind, source, header)) =
-        state.pane_anywhere(pane).and_then(|target| {
-            let parent_session = target.lx.chat.session_id.clone()?;
-            if let Some(run) = target.lx.agents.by_session(session_id) {
-                return Some((
-                    parent_session,
-                    FoldedKind::SubagentReport,
-                    run.agent_id.clone(),
-                    agent_report_header(run),
-                ));
-            }
-            let thread = target.lx.btw.thread_by_child_session(session_id)?;
-            Some((
+    let Some((parent_session, kind, source)) = state.pane_anywhere(pane).and_then(|target| {
+        let parent_session = target.lx.chat.session_id.clone()?;
+        if let Some(run) = target.lx.agents.by_session(session_id) {
+            return Some((
                 parent_session,
-                FoldedKind::BtwReport,
-                thread.thread_id.clone().unwrap_or_default(),
-                format!("[BTW report] {}", thread.title.trim()),
-            ))
-        })
-    else {
+                FoldedKind::SubagentReport,
+                run.agent_id.clone(),
+            ));
+        }
+        let thread = target.lx.btw.thread_by_child_session(session_id)?;
+        Some((
+            parent_session,
+            FoldedKind::BtwReport,
+            thread.thread_id.clone().unwrap_or_default(),
+        ))
+    }) else {
         show_unavailable(state, pane);
         return false;
     };
@@ -409,9 +395,7 @@ pub fn finish_generated(
             parent_session,
             kind,
             source,
-            header,
             body: checkpoint.summary_text.clone(),
-            changed_paths,
         },
     )
 }

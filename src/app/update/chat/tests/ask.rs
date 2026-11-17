@@ -684,18 +684,15 @@ fn escape_arms_then_cancels_on_second_press() {
     assert!(ask_present(&state, pane), "待命不清面板");
     press(&mut state, LxInput::Escape);
     assert!(
-        matches!(
-            state.pane_anywhere(pane).unwrap().lx.slash,
-            Some(crate::app::state::SlashPanel::Stop(_))
-        ),
-        "第二次 Esc 打开停止面板"
+        state.pane_anywhere(pane).unwrap().lx.slash.is_none(),
+        "ask 期间不得打开不可见的停止面板"
     );
     assert!(
-        !state
+        state
             .effects
             .iter()
             .any(|effect| matches!(effect, crate::app::effects::Effect::CancelChatStream { .. })),
-        "打开面板不立即取消"
+        "第二次 Esc 直接取消整轮"
     );
 }
 

@@ -231,6 +231,18 @@ impl Database {
         if revision != commit.expected_revision {
             return Err(DbError::RewindTargetChanged);
         }
+        // 报告必须覆盖到会话末尾：总结进行期间新落库的消息会让报告落后于时间线，
+        // 不能在更新的问答之后插入旧报告卡片（BTW 写入不推进 revision，需单独校验）。
+        if kind.is_report() {
+            let newer: bool = transaction.query_row(
+                "SELECT EXISTS(SELECT 1 FROM agent_message WHERE session_id = ?1 AND sequence > ?2)",
+                params![commit.session_id, commit.end_sequence],
+                |row| row.get(0),
+            )?;
+            if newer {
+                return Err(DbError::RewindTargetChanged);
+            }
+        }
         // 取号：与消息、撤销提示、模型切换共用同一空间。
         let sequence = super::next_session_sequence(&transaction, &commit.session_id)?;
         let now = now_ms();

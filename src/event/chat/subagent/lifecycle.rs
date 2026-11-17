@@ -8,6 +8,11 @@ pub(crate) fn projected_agent_status(
     record: &SubagentRecord,
     queue: Option<&SubagentQueueState>,
 ) -> String {
+    // 用户主动停止是独立终态：优先于尚在结算中的 running 句柄与
+    // “cancelled + interrupted” 崩溃恢复投影，避免界面显示成 interrupted。
+    if streams.user_stopped.contains(&record.agent_id) {
+        return "stopped".to_string();
+    }
     let running = streams
         .subagents
         .values()
@@ -78,17 +83,43 @@ pub(crate) fn cancel_for_session(
         streams.resumed_subagents.remove(&id);
         streams.interrupted_subagents.remove(&id);
         streams.paused_by_interrupt.remove(&id);
+        // 关闭/删除后不再需要“用户停止”闸门：目标已不可唤醒，避免集合随会话增长。
+        streams.user_stopped.remove(&id);
     }
     if let Some(target) = agent_id {
         streams.resumed_subagents.remove(target);
         streams.interrupted_subagents.remove(target);
         streams.paused_by_interrupt.remove(target);
+        streams.user_stopped.remove(target);
     }
     for child in dead {
         streams.subagents.remove(&child);
         streams.frozen.remove(&child);
     }
     cancelled
+}
+
+/// 唤醒成功后同步 UI 投影：列表/卡片立即不再显示 `stopped`。
+pub(super) fn clear_user_stopped_ui(state: &mut AppState, pane: PaneId, agent_id: &str) {
+    if let Some(target) = state.pane_mut_anywhere(pane)
+        && let Some(run) = target.lx.agents.by_agent_mut(agent_id)
+        && run.stopped_by_user
+    {
+        run.stopped_by_user = false;
+        run.rows_dirty = true;
+    }
+}
+
+/// 唤醒失败：恢复用户停止终态（标记 + 句柄）。
+pub(super) fn restore_user_stopped(streams: &mut ChatStreams, agent_id: &str) {
+    streams.user_stopped.insert(agent_id.to_string());
+    if let Some(handle) = streams
+        .subagents
+        .values_mut()
+        .find(|handle| handle.agent_id == agent_id)
+    {
+        handle.stopped_by_user = true;
+    }
 }
 
 /// 用户主动停止：标记目标子树 `stopped_by_user`、取消在途轮次与排队输入。
@@ -159,6 +190,9 @@ pub(crate) fn stop_subagents_by_user(
     let mut stopped = 0usize;
     for record in &selected_records {
         streams.user_stopped.insert(record.agent_id.clone());
+        // 通知在途 `wait_agent` 把该目标从等待集合剔除：主轮保持运行，
+        // 但不会再因为“被停止的目标结束了”而结算或继续派活。
+        streams.notify_user_stop(&record.agent_id);
         stopped += 1;
         // 2. 取消该 agent 自己的排队输入（孙 agent 各自有独立父会话）。
         if let Err(error) = database.cancel_queued_inputs_for_agent(
@@ -186,7 +220,13 @@ pub(crate) fn stop_subagents_by_user(
         }
         handle.stopped_by_user = true;
         if handle.cancel.send(true).is_err() {
-            dead.push(child.clone());
+            // 子 loop 已退出但 Finished 事件可能仍在队列里：不能直接删句柄，
+            // 否则迟到的结算找不到 handle，DB 会永久停在 running。
+            dead.push(crate::app::state::RequestKey {
+                pane: handle.parent.pane,
+                session: child.clone(),
+                generation: handle.parent.generation,
+            });
         }
     }
     for id in selected_agent_ids {
@@ -194,9 +234,18 @@ pub(crate) fn stop_subagents_by_user(
         streams.interrupted_subagents.remove(id);
         streams.paused_by_interrupt.remove(id);
     }
-    for child in dead {
-        streams.subagents.remove(&child);
-        streams.frozen.remove(&child);
+    for key in dead {
+        // 直接按取消结算（已有 stopped_by_user，不产报告），并唤醒等待者。
+        super::finish_subagent_with_billing(
+            state,
+            streams,
+            persistence,
+            key,
+            crate::chat::events::StopReason::Cancelled,
+            false,
+            crate::db::chat::Usage::default(),
+            crate::db::chat::Usage::default(),
+        );
     }
 
     // 4. 立刻把 UI 标成 stopped、队列清零；结算回执随后只更新正文与终态。

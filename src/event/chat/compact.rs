@@ -256,6 +256,20 @@ async fn run_compact(
             };
         }
     };
+    // 报告正文在提交前定型：来源头与变更文件写进检查点，卡片、芯片与 Resend
+    // 读取同一份文本；同时剥离控制字符并执行报告专用 8 KiB 上限。
+    let summary = if request.kind.is_report() {
+        let body = crate::app::update::format_report_body(
+            request.report_header.as_deref().unwrap_or_default(),
+            &summary,
+            &request.report_changed_paths,
+            request.report_changed_total,
+        );
+        let body = crate::chat::agent::sanitize_report_text(&body);
+        crate::chat::agent::truncate_report_body(&body)
+    } else {
+        summary
+    };
     let Some(path) = persistence_path else {
         return CompactOutcome::Failed {
             message: "compact requires persistent storage".to_string(),

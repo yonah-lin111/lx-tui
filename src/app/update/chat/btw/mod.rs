@@ -19,8 +19,8 @@ mod input;
 
 pub use events::{
     AcceptedBtw, BtwToolSettlement, BtwToolUpdate, btw_message_parts, new_assistant_message,
-    on_accepted, on_delta, on_failed, on_finished, on_qa_list_loaded, on_recipient_started,
-    on_thread_deleted, on_thread_loaded, on_tool_state,
+    on_accepted, on_delta, on_failed, on_finished, on_qa_list_loaded, on_recipient_failed,
+    on_recipient_started, on_thread_deleted, on_thread_loaded, on_tool_state,
 };
 pub use input::apply_input;
 
@@ -483,7 +483,6 @@ pub fn submit_current(state: &mut AppState, pane: PaneId) -> bool {
     let revision = thread.composer.revision();
     thread.pending_submit = Some((submit_id.clone(), revision));
     thread.pending_recipients = targets.len().max(1);
-    let thread_id = thread.thread_id.clone();
     state
         .effects
         .push(Effect::Btw(BtwEffect::Submit(Box::new(BtwSubmission {
@@ -492,7 +491,6 @@ pub fn submit_current(state: &mut AppState, pane: PaneId) -> bool {
             qa_id,
             workspace,
             cwd,
-            thread_id,
             submit_id,
             draft_revision: revision,
             text: text_value,

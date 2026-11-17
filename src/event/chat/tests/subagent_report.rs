@@ -172,12 +172,15 @@ async fn report_generates_one_shot_checkpoint_and_fills_main_input() {
         .by_agent(&agent_id)
         .expect("run");
     assert!(!run.compact.is_running());
+    let checkpoint = run
+        .compact
+        .checkpoints
+        .iter()
+        .find(|checkpoint| checkpoint.report)
+        .expect("report checkpoint");
     assert!(
-        run.compact
-            .checkpoints
-            .iter()
-            .any(|checkpoint| checkpoint.report),
-        "报告必须作为可撤销检查点出现在面板"
+        checkpoint.summary.contains("[Subagent report]"),
+        "报告卡片正文必须包含来源头，而不是只有模型原始正文"
     );
     let input = state
         .pane_anywhere(key.pane)
@@ -193,4 +196,8 @@ async fn report_generates_one_shot_checkpoint_and_fills_main_input() {
     );
     assert!(tokens[0].body.contains("[Subagent report]"));
     assert!(tokens[0].body.contains("ship the harness"));
+    assert_eq!(
+        tokens[0].body, checkpoint.summary,
+        "卡片与芯片必须读取同一份持久化正文"
+    );
 }

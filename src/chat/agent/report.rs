@@ -13,6 +13,30 @@ pub const PANEL_REPORT_MARKER: &str = "[Report for main agent]";
 /// 旧版自动汇报标记；仅用于识别历史报告轮。
 pub const REPORT_REQUEST_MARKER: &str = "[Report to parent agent]";
 
+/// 面板 `/report` 的来源头：`[Subagent report] 名字 · 角色 [· 标题]`。
+pub fn subagent_report_header(
+    nickname: Option<&str>,
+    role: crate::chat::agent::AgentRole,
+    title: &str,
+) -> String {
+    let name = nickname
+        .map(str::trim)
+        .filter(|name| !name.is_empty())
+        .unwrap_or("agent");
+    let mut header = format!("[Subagent report] {name} · {}", role.as_str());
+    let title = title.trim();
+    if !title.is_empty() {
+        header.push_str(" · ");
+        header.push_str(title);
+    }
+    header
+}
+
+/// BTW 报告来源头。
+pub fn btw_report_header(title: &str) -> String {
+    format!("[BTW report] {}", title.trim())
+}
+
 /// 人类在详情面板显式要求汇报时注入的用户消息。
 ///
 /// 指令只约束“写什么”，不把闲聊原文转发；报告正文仍由本轮 assistant 输出生成。
@@ -287,6 +311,11 @@ fn sanitize_control(text: &str) -> String {
         }
     }
     out
+}
+
+/// 报告正文净化：一次性 `/report` 的模型输出在写入输入框前走同一套规则。
+pub fn sanitize_report_text(text: &str) -> String {
+    sanitize_control(text)
 }
 
 /// 正文 XML 元字符转义（防止伪造信封边界）。

@@ -135,7 +135,7 @@ async fn btw_report_starts_without_creating_messages() {
         .expect("toast");
     assert_eq!(
         toast.message,
-        crate::ui::text::detail::LX_REPORT_UNAVAILABLE
+        crate::ui::text::detail::LX_BTW_REPORT_UNAVAILABLE
     );
 }
 

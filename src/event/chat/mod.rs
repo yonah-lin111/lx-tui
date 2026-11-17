@@ -65,9 +65,10 @@ pub use title::{TitleGeneratedEvent, apply_title_effects, handle_title_generated
 
 use std::collections::HashMap;
 use std::path::PathBuf;
+use std::sync::OnceLock;
 use std::time::{Duration, Instant};
 
-use tokio::sync::{mpsc, oneshot, watch};
+use tokio::sync::{broadcast, mpsc, oneshot, watch};
 
 use crate::app::effects::Effect;
 use crate::app::state::{AppState, RequestKey, RequestState};
@@ -138,6 +139,9 @@ pub struct ChatStreams {
     pub(crate) paused_by_interrupt: std::collections::HashSet<String>,
     /// 被用户从面板主动停止、尚待显式恢复的 `agent_id`（仅内存）。
     pub(crate) user_stopped: std::collections::HashSet<String>,
+    /// 用户主动停止的广播：正在 `wait_agent` 等待该目标的父轮据此中断，
+    /// 而不是被等待结果唤醒后继续执行（惰性创建，容量只需覆盖瞬间积压）。
+    user_stop_tx: OnceLock<broadcast::Sender<String>>,
     /// spawn 时冻结的模型（父会话与子会话各登记一份）。
     pub(crate) frozen: HashMap<String, crate::app::state::FrozenModel>,
     /// 显式覆写或角色绑定了专属模型的子会话（`child_session_id -> FrozenModel`）。
@@ -181,6 +185,20 @@ impl ChatStreams {
     /// 注入应用事件通道（子 agent 的异步等待与终态回投用）。
     pub fn set_event_sender(&mut self, sender: mpsc::UnboundedSender<AppEvent>) {
         self.event_sender = Some(sender);
+    }
+
+    /// 订阅用户主动停止通知（`wait_agent` 在等待期间据此中断父轮）。
+    pub(crate) fn subscribe_user_stop(&self) -> broadcast::Receiver<String> {
+        self.user_stop_sender().subscribe()
+    }
+
+    /// 广播一次用户主动停止；没有等待者时静默丢弃。
+    pub(crate) fn notify_user_stop(&self, agent_id: &str) {
+        let _ = self.user_stop_sender().send(agent_id.to_string());
+    }
+
+    fn user_stop_sender(&self) -> &broadcast::Sender<String> {
+        self.user_stop_tx.get_or_init(|| broadcast::channel(64).0)
     }
 
     /// 该进程本次输出快照是否到落库时间（每进程最多一个待合并快照）。

@@ -69,7 +69,8 @@ pub struct SubagentRun {
     pub completed_at_ms: Option<i64>,
     /// 完整消息模型：与主历史同一套字段与增量方法。
     pub chat: LxChat,
-    /// 子会话无 compact，恒为空（`HistorySource` 需要）。
+    /// 子 agent 的检查点时间线：`/compact` 与 `/report` 共用，只用于面板展示/撤销
+    /// （报告的正文不会作为子会话上下文装配）。
     pub compact: LxCompact,
     /// 消息流是否已从 DB 懒加载（历史 run）。
     pub loaded: bool,

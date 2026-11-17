@@ -578,7 +578,7 @@ impl Database {
             params![json_array(&answerers), now, thread.id],
         )?;
         transaction.execute(
-            "UPDATE agent_session SET updated_at_ms = ?1, last_message_at_ms = ?1 WHERE external_id = ?2",
+            "UPDATE agent_session SET updated_at_ms = ?1, last_message_at_ms = ?1, revision = revision + 1 WHERE external_id = ?2",
             params![now, thread.child_session_id],
         )?;
         transaction.commit()?;
@@ -777,7 +777,7 @@ impl Database {
             .iter()
             .all(|status| !matches!(status.as_str(), "queued" | "running"));
         if batch_terminal {
-            let aggregate = aggregate_batch_status(&statuses);
+            let aggregate = recovery::aggregate_batch_status(&statuses);
             transaction.execute(
                 "UPDATE agent_btw_batch SET status = ?1, completed_at_ms = ?2 WHERE external_id = ?3",
                 params![aggregate, now, batch_id],
@@ -797,20 +797,38 @@ impl Database {
     }
 
     /// 取消一批尚未开始的回答者（运行中的由事件层取消执行流后自行结算）。
+    ///
+    /// 回答者与批次状态必须在同一事务内收敛：中间失败会留下“回答者已终态、
+    /// 批次仍 running”的永久不一致。
     pub fn cancel_btw_queued(&self, batch_id: &str) -> Result<()> {
         let now = now_ms();
-        self.conn.execute(
+        let transaction = self.conn.unchecked_transaction()?;
+        transaction.execute(
             "UPDATE agent_btw_recipient SET status = 'cancelled', completed_at_ms = ?1 WHERE batch_id = ?2 AND status = 'queued'",
             params![now, batch_id],
         )?;
-        self.sync_btw_batch_status(batch_id)
+        self.sync_btw_batch_status_in_tx(&transaction, batch_id)?;
+        transaction.commit()?;
+        Ok(())
     }
 
     /// 批次状态按当前回答者收敛（取消/中断后调用）。
     pub fn sync_btw_batch_status(&self, batch_id: &str) -> Result<()> {
-        let mut statement = self
-            .conn
-            .prepare("SELECT status FROM agent_btw_recipient WHERE batch_id = ?1")?;
+        let transaction = self.conn.unchecked_transaction()?;
+        self.sync_btw_batch_status_in_tx(&transaction, batch_id)?;
+        transaction.commit()?;
+        Ok(())
+    }
+
+    /// 事务内的批次收敛：只在批次确实离开 queued/running 时写终态与完成时间，
+    /// 重复收敛不会改写已完成批次的 `completed_at_ms`，也不会漏掉线程排序时间。
+    fn sync_btw_batch_status_in_tx(
+        &self,
+        transaction: &rusqlite::Transaction<'_>,
+        batch_id: &str,
+    ) -> Result<()> {
+        let mut statement =
+            transaction.prepare("SELECT status FROM agent_btw_recipient WHERE batch_id = ?1")?;
         let statuses: Vec<String> = statement
             .query_map(params![batch_id], |row| row.get(0))?
             .collect::<std::result::Result<Vec<_>, _>>()?;
@@ -820,11 +838,20 @@ impl Database {
         {
             return Ok(());
         }
-        let aggregate = aggregate_batch_status(&statuses);
-        self.conn.execute(
-            "UPDATE agent_btw_batch SET status = ?1, completed_at_ms = ?2 WHERE external_id = ?3",
-            params![aggregate, now_ms(), batch_id],
+        let now = now_ms();
+        let aggregate = recovery::aggregate_batch_status(&statuses);
+        let changed = transaction.execute(
+            "UPDATE agent_btw_batch SET status = ?1, completed_at_ms = ?2 \
+             WHERE external_id = ?3 AND status IN ('queued', 'running')",
+            params![aggregate, now, batch_id],
         )?;
+        if changed > 0 {
+            transaction.execute(
+                "UPDATE agent_btw_thread SET updated_at_ms = ?1 \
+                 WHERE external_id = (SELECT thread_id FROM agent_btw_batch WHERE external_id = ?2)",
+                params![now, batch_id],
+            )?;
+        }
         Ok(())
     }
 
@@ -947,33 +974,6 @@ type RecipientStartRow = (
     String,
     String,
 );
-
-/// 回答者终态 → 批次聚合状态。
-fn aggregate_batch_status(statuses: &[String]) -> &'static str {
-    let completed = statuses
-        .iter()
-        .filter(|s| s.as_str() == "completed")
-        .count();
-    let failed = statuses
-        .iter()
-        .filter(|s| matches!(s.as_str(), "failed" | "interrupted"))
-        .count();
-    let cancelled = statuses
-        .iter()
-        .filter(|s| s.as_str() == "cancelled")
-        .count();
-    if completed > 0 && (failed > 0 || cancelled > 0) {
-        "partial"
-    } else if completed > 0 {
-        "completed"
-    } else if failed > 0 {
-        "failed"
-    } else if cancelled > 0 {
-        "cancelled"
-    } else {
-        "failed"
-    }
-}
 
 #[cfg(test)]
 mod tests;

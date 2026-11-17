@@ -53,7 +53,11 @@ pub fn apply_enter(state: &mut AppState, pane: PaneId) -> bool {
             if availability.main {
                 super::stop_stream(state, pane);
             }
-            push_stop_all_subagents_by_user(state, pane);
+            // 没有可停 subagent 时不要入队：事件层会对空集合回 `Nothing to stop`，
+            // 覆盖主轮/shell 已经成功的反馈。
+            if availability.subagents > 0 {
+                push_stop_all_subagents_by_user(state, pane);
+            }
             stop_shells(state, pane, UserShellStopScope::All);
         }
         StopAction::Main => {

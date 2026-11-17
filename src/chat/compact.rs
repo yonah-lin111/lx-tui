@@ -115,9 +115,20 @@ pub fn incremental(messages: &[ChatMessage], after_sequence: Option<i64>) -> Com
 pub fn playable_messages(messages: &[ChatMessage]) -> Vec<ChatMessage> {
     use std::collections::HashMap;
 
+    // 旧版 `/report` 轮（请求标记 + 汇报回答）是元数据而不是工作记录：
+    // 总结不能“总结上一份报告”。
+    let report_turns: std::collections::HashSet<i64> = messages
+        .iter()
+        .filter(|message| {
+            message.role == "user"
+                && message.kind == "chat"
+                && crate::chat::agent::is_report_request(&message_text(message))
+        })
+        .map(|message| message.turn_index)
+        .collect();
     let mut by_turn: HashMap<i64, (bool, bool)> = HashMap::new();
     for message in messages {
-        if message.kind == "user_shell" {
+        if message.kind == "user_shell" || report_turns.contains(&message.turn_index) {
             continue;
         }
         let entry = by_turn.entry(message.turn_index).or_insert((false, false));
@@ -130,6 +141,9 @@ pub fn playable_messages(messages: &[ChatMessage]) -> Vec<ChatMessage> {
     messages
         .iter()
         .filter(|message| {
+            if report_turns.contains(&message.turn_index) {
+                return false;
+            }
             if message.kind == "user_shell" {
                 return message
                     .user_shell
@@ -713,5 +727,28 @@ Be concise, structured, and focused on helping the next LLM seamlessly continue 
         assert_eq!(input.messages.len(), 1, "运行中的命令不参与压缩");
         assert!(input.transcript.contains("npm run dev"));
         assert!(input.transcript.contains("exit: 0"));
+    }
+
+    /// 旧版 `/report` 轮不得进入新的总结转写：否则报告内容会被再次总结。
+    #[test]
+    fn playable_messages_skip_report_request_turns() {
+        let messages = vec![
+            message("u1", 0, 0, "user", "real question"),
+            message("a1", 1, 0, "assistant", "real answer"),
+            message(
+                "u2",
+                2,
+                1,
+                "user",
+                &format!("{}\nstatus", crate::chat::agent::PANEL_REPORT_MARKER),
+            ),
+            message("a2", 3, 1, "assistant", "old report body"),
+            message("u3", 4, 2, "user", "next question"),
+            message("a3", 5, 2, "assistant", "next answer"),
+        ];
+        let playable = playable_messages(&messages);
+        assert_eq!(playable.len(), 4);
+        assert!(!playable.iter().any(|m| m.external_id == "u2"));
+        assert!(!playable.iter().any(|m| m.external_id == "a2"));
     }
 }

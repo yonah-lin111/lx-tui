@@ -97,6 +97,9 @@ pub fn compact_command(state: &mut AppState, pane: PaneId) -> bool {
         operation_id,
         kind: crate::db::chat::CompactKind::Compact,
         note: String::new(),
+        report_header: None,
+        report_changed_paths: Vec::new(),
+        report_changed_total: 0,
     }));
     true
 }

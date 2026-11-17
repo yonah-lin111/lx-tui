@@ -545,3 +545,30 @@ fn revert_rejects_when_a_later_user_turn_exists() {
         Err(DbError::RewindTargetChanged)
     ));
 }
+
+/// 报告提交必须拒绝“总结开始后又落了新消息”的旧正文：BTW/其它写入不推进
+/// revision 时，靠 `end_sequence` 之后的序号检查兜底。
+#[test]
+fn report_commit_rejects_messages_after_the_summarized_range() {
+    let (database, workspace) = temp("report-stale");
+    let first = turn(&database, &workspace, None, "q", "a");
+    let revision = database
+        .session_revision(&first.session_id)
+        .expect("revision");
+    let mut commit = commit_of(&first.session_id, revision, 0, 1, "report-stale");
+    commit.summary_text = "[Subagent report] Curie\nold body".into();
+    // 模拟报告进行期间的新消息：序号前进，但 revision 不变（BTW 写入路径）。
+    database
+        .conn
+        .execute(
+            r#"INSERT INTO agent_message
+                   (external_id, session_id, sequence, turn_index, role, status, kind, created_at_ms)
+               VALUES ('msg-newer', ?1, 2, 1, 'user', 'complete', 'chat', 0)"#,
+            rusqlite::params![first.session_id],
+        )
+        .expect("insert newer message");
+    assert!(matches!(
+        database.commit_report(&workspace, &commit),
+        Err(DbError::RewindTargetChanged)
+    ));
+}

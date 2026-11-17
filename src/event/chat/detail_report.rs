@@ -77,7 +77,7 @@ pub(crate) fn prepare(
         toast(state, pane, text::detail::LX_REPORT_UNAVAILABLE, true);
         return true;
     };
-    let child_session = match &target {
+    let (child_session, report_header) = match &target {
         DetailTarget::Agent(agent_id) => {
             let Some(main) = state
                 .pane_anywhere(pane)
@@ -98,7 +98,12 @@ pub(crate) fn prepare(
                 toast(state, pane, text::detail::LX_DETAIL_REPORT_BUSY, true);
                 return true;
             }
-            record.child_session_id
+            let header = crate::chat::agent::subagent_report_header(
+                record.nickname.as_deref(),
+                record.role,
+                &record.title,
+            );
+            (record.child_session_id, header)
         }
         DetailTarget::Btw(thread_id) => {
             let Some(thread) = database.btw_thread(&workspace, thread_id).ok().flatten() else {
@@ -109,9 +114,14 @@ pub(crate) fn prepare(
                 toast(state, pane, text::detail::LX_DETAIL_REPORT_BUSY, true);
                 return true;
             }
-            thread.child_session_id
+            let header = crate::chat::agent::btw_report_header(&thread.title);
+            (thread.child_session_id, header)
         }
     };
+    // 变更文件在发起时冻结并随检查点持久化：卡片、芯片与 Resend 必须读同一份正文。
+    let (changed_total, changed_paths) = database
+        .list_all_changed_paths(&workspace, &child_session)
+        .unwrap_or((0, Vec::new()));
     // 模型：优先 child session 持久化模型；BTW 会话通常为空，回退当前窗格/默认模型。
     let selection = database
         .chat_session_model(&workspace, &child_session)
@@ -176,6 +186,9 @@ pub(crate) fn prepare(
             operation_id,
             kind: CompactKind::Report,
             note: note.to_string(),
+            report_header: Some(report_header),
+            report_changed_paths: changed_paths,
+            report_changed_total: changed_total,
         },
     );
     true

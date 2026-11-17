@@ -38,8 +38,9 @@ pub use path::*;
 pub use prompts::*;
 pub use report::{
     MAX_REPORT_CHANGED_PATHS, PANEL_REPORT_MARKER, REPORT_REQUEST_MARKER, SubagentReportView,
-    format_report_envelope, is_report_request, report_request_message, reports_from_json,
-    reports_to_json, synthesize_partial_report_body, truncate_report_body,
+    btw_report_header, format_report_envelope, is_report_request, report_request_message,
+    reports_from_json, reports_to_json, sanitize_report_text, subagent_report_header,
+    synthesize_partial_report_body, truncate_report_body,
 };
 pub use role::{AgentRole, BaseRole, MAX_ROLE_NAME_LEN, is_valid_role_name};
 pub use status::*;
@@ -485,7 +486,7 @@ pub struct AgentStatusView {
     pub title: String,
     /// 角色。
     pub role: AgentRole,
-    /// `running` / `completed` / `failed` / `cancelled`。
+    /// `running` / `completed` / `failed` / `cancelled`；用户主动停止投影为 `stopped`。
     pub status: String,
     /// 是否由用户主动停止（模型据此不得自行恢复）。
     pub stopped_by_user: bool,

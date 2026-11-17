@@ -260,7 +260,7 @@ pub enum Effect {
     StopAllSessionProcesses { pane: crate::tiling::PaneId },
     /// 父轮次结束后尝试把未投递报告合并成自动轮；用户输入优先。
     DrainSubagentReports { pane: crate::tiling::PaneId },
-    /// Agents 面板 `/report`：让空闲子 agent 生成一轮报告，正文只填入主输入框。
+    /// Agents 面板 `/report`：对空闲子 agent 做一次独立总结（不落消息），正文填入主输入框。
     SendSubagentReport {
         pane: crate::tiling::PaneId,
         session_id: String,
@@ -552,7 +552,6 @@ pub struct BtwSubmission {
     pub workspace: PathBuf,
     /// 工具执行的冻结工作目录。
     pub cwd: PathBuf,
-    pub thread_id: Option<String>,
     pub submit_id: String,
     /// 草稿修订号：ACK 时只有相同修订号才清空输入。
     pub draft_revision: u64,
@@ -627,6 +626,12 @@ pub struct CompactRequest {
     pub kind: crate::db::chat::CompactKind,
     /// 报告备注（compact 为空）。
     pub note: String,
+    /// 报告来源头（仅 `kind = Report`；提交时拼进持久化正文）。
+    pub report_header: Option<String>,
+    /// 报告发起时已提交的变更文件（最多展示 8 条）。
+    pub report_changed_paths: Vec<String>,
+    /// 变更文件总数（可能大于 `report_changed_paths.len()`）。
+    pub report_changed_total: usize,
 }
 
 /// 一次 compact 撤销请求。

@@ -315,6 +315,18 @@ pub fn on_recipient_started(
         message.sequence = sequence;
         thread.chat.messages.push(message);
         thread.rows_dirty = true;
+        // QA 行状态代表最近批次：新回答者一开始就替换掉上一批次留下的状态
+        // （例如启动恢复标记的 interrupted），不能让列表与新回答自相矛盾。
+        let qa_id = thread.qa_id.clone();
+        if let Some(summary) = target
+            .lx
+            .btw
+            .qa
+            .iter_mut()
+            .find(|summary| summary.qa_id == qa_id)
+        {
+            summary.status = "running".to_string();
+        }
         return true;
     }
     false
@@ -458,6 +470,28 @@ pub fn on_failed(state: &mut AppState, pane: PaneId, qa_id: Option<&str>, messag
     }
     show_lx_hint(state, pane, InputHintLevel::Error, message);
     true
+}
+
+/// 事件层回投：单个回答者启动失败；批次其余目标继续。
+///
+/// 与 [`on_failed`] 的区别：提交已被接受、草稿已清空，不能谎报“草稿保留”，
+/// 也不能把同批次其它目标的等待标记一起清掉。
+pub fn on_recipient_failed(state: &mut AppState, pane: PaneId, qa_id: &str, message: &str) -> bool {
+    let mut changed = false;
+    if let Some(target) = state.pane_mut_anywhere(pane) {
+        if let Some(thread) = target.lx.btw.thread_mut(qa_id) {
+            thread.pending_recipients = thread.pending_recipients.saturating_sub(1);
+            changed = true;
+        }
+        if let Some(session) = target.lx.chat.session_id.clone() {
+            state.effects.push(Effect::Btw(BtwEffect::LoadQaList {
+                pane,
+                parent_session_id: session,
+            }));
+        }
+    }
+    show_lx_hint(state, pane, InputHintLevel::Error, message);
+    changed
 }
 
 /// 读取某回答者 assistant 消息的完整 parts（结算前快照）。

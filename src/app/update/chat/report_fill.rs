@@ -15,21 +15,27 @@ use crate::ui::text;
 /// 报告正文里最多列出的变更文件数。
 const MAX_REPORT_CHANGED_PATHS: usize = 8;
 
-/// 一次性 `/report` 总结完成：来源头 + 正文 + 变更文件摘要。
+/// 一次性 `/report` 总结完成：正文已经在提交时拼好来源头与变更文件。
 #[derive(Debug, Clone)]
 pub struct GeneratedReportReady {
     pub pane: PaneId,
     pub parent_session: String,
     pub kind: FoldedKind,
     pub source: String,
-    /// 来源头首行（如 `[Subagent report] Curie · explorer · Title`）。
-    pub header: String,
+    /// 已包含来源头、正文与变更文件的完整芯片正文。
     pub body: String,
-    pub changed_paths: Vec<String>,
 }
 
 /// 组装报告芯片正文：来源头 + 总结正文 + 变更文件（最多 8 条）。
-pub fn format_report_body(header: &str, body: &str, changed_paths: &[String]) -> String {
+///
+/// `total` 是会话内已提交变更文件总数；展示列表可能被 SQL LIMIT 截断，
+/// `(+N more)` 必须用总数计算，不能拿截断后的长度冒充。
+pub fn format_report_body(
+    header: &str,
+    body: &str,
+    changed_paths: &[String],
+    changed_total: usize,
+) -> String {
     let mut out = format!("{}\n{}", header.trim_end(), body.trim_end());
     if !changed_paths.is_empty() {
         let shown = changed_paths
@@ -40,11 +46,9 @@ pub fn format_report_body(header: &str, body: &str, changed_paths: &[String]) ->
             .join(", ");
         out.push_str("\nChanged files: ");
         out.push_str(&shown);
-        if changed_paths.len() > MAX_REPORT_CHANGED_PATHS {
-            out.push_str(&format!(
-                " (+{} more)",
-                changed_paths.len() - MAX_REPORT_CHANGED_PATHS
-            ));
+        let total = changed_total.max(changed_paths.len());
+        if total > MAX_REPORT_CHANGED_PATHS {
+            out.push_str(&format!(" (+{} more)", total - MAX_REPORT_CHANGED_PATHS));
         }
     }
     out
@@ -65,7 +69,7 @@ pub fn on_generated_report_ready(state: &mut AppState, ready: GeneratedReportRea
         );
         return false;
     }
-    let body = format_report_body(&ready.header, &ready.body, &ready.changed_paths);
+    let body = ready.body;
     if !fill_main_input(
         state,
         ready.pane,
@@ -107,6 +111,15 @@ pub fn fill_main_input(
         return false;
     };
     if target.lx.chat.session_id.as_deref() != Some(parent_session) {
+        return false;
+    }
+    // `/resume` 选会话或历史加载期间草稿仍属于旧会话：此时填芯片会被带进新会话。
+    if target.lx.chat.loading_session
+        || matches!(
+            target.lx.slash,
+            Some(crate::app::state::SlashPanel::History(_))
+        )
+    {
         return false;
     }
     target.lx.insert_report_chip(kind, source, body)

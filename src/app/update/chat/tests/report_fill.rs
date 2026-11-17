@@ -21,9 +21,12 @@ fn subagent(body: &str) -> GeneratedReportReady {
         parent_session: "sess-1".into(),
         kind: FoldedKind::SubagentReport,
         source: "agent-1".into(),
-        header: "[Subagent report] Curie · executor · Fix login".into(),
-        body: body.into(),
-        changed_paths: vec!["src/a.rs".into(), "src/b.rs".into()],
+        body: crate::app::update::format_report_body(
+            "[Subagent report] Curie · executor · Fix login",
+            body,
+            &["src/a.rs".into(), "src/b.rs".into()],
+            2,
+        ),
     }
 }
 
@@ -60,9 +63,7 @@ fn same_source_replaces_while_different_sources_coexist() {
             parent_session: "sess-1".into(),
             kind: FoldedKind::BtwReport,
             source: "thread-1".into(),
-            header: "[BTW report] Side".into(),
-            body: "btw answer".into(),
-            changed_paths: Vec::new(),
+            body: "[BTW report] Side\nbtw answer".into(),
         },
     );
     assert_eq!(chips(&state, pane).len(), 2, "不同来源共存");
@@ -90,9 +91,7 @@ fn btw_report_uses_thread_header() {
             parent_session: "sess-1".into(),
             kind: FoldedKind::BtwReport,
             source: "thread-1".into(),
-            header: "[BTW report] Side thread".into(),
-            body: "curie body".into(),
-            changed_paths: Vec::new(),
+            body: "[BTW report] Side thread\ncurie body".into(),
         }
     ));
     let chip = &chips(&state, pane)[0];
@@ -104,8 +103,9 @@ fn btw_report_uses_thread_header() {
 #[test]
 fn empty_report_only_toasts() {
     let (mut state, pane) = report_state();
-    let mut ready = subagent("   ");
+    let mut ready = subagent("");
     ready.pane = pane;
+    ready.body = String::new();
     assert!(!crate::app::update::on_generated_report_ready(
         &mut state, ready
     ));

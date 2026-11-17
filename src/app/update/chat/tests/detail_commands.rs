@@ -1146,7 +1146,9 @@ fn finish_generated_fills_from_report_checkpoint() {
         base_checkpoint_id: None,
         start_sequence: 0,
         end_sequence: 1,
-        summary_text: "one-shot report body".into(),
+        summary_text:
+            "[Subagent report] sub-idle · explorer\none-shot report body\nChanged files: src/a.rs"
+                .into(),
         model_label: "M".into(),
         kind: crate::db::chat::CompactKind::Report,
         state: crate::db::chat::COMPACT_ACTIVE.into(),
@@ -1157,7 +1159,6 @@ fn finish_generated_fills_from_report_checkpoint() {
         pane,
         "sess-idle",
         &checkpoints,
-        vec!["src/a.rs".into()],
     ));
     let input = state.pane_anywhere(pane).expect("pane").lx.input.clone();
     let tokens = crate::app::paste::folded_tokens(&input);

@@ -46,7 +46,12 @@ impl StopAvailability {
     /// 从当前窗格状态采集。
     pub fn from_lx(lx: &super::Lx) -> Self {
         Self {
-            main: lx.chat.request.is_busy(),
+            // `Finishing` 只是等 DB ack，取消流是 no-op；不能显示成可停止。
+            main: matches!(
+                lx.chat.request,
+                super::chat::RequestState::Streaming { .. }
+                    | super::chat::RequestState::Committing { .. }
+            ),
             subagents: lx.agents.stoppable_count(),
             shells: usize::from(lx.chat.has_running_shell()),
             processes: lx.background_tasks,

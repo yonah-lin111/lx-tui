@@ -148,6 +148,9 @@ fn compact_request(
         operation_id: crate::db::new_external_id("compact-op"),
         kind: crate::db::chat::CompactKind::Compact,
         note: String::new(),
+        report_header: None,
+        report_changed_paths: Vec::new(),
+        report_changed_total: 0,
     }
 }
 

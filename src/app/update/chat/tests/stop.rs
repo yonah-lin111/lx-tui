@@ -61,6 +61,30 @@ fn first_escape_arms_and_second_opens_panel_without_stopping() {
     );
 }
 
+/// ask 面板期间不能打开停止面板：它既不可见也不接收按键，还会在作答后
+/// 突然变成可执行的全局面板。双击 Esc 保持 ask 的“直接取消整轮”语义。
+#[test]
+fn double_escape_with_pending_ask_stops_the_turn_without_a_hidden_panel() {
+    let (mut state, pane, key) = streaming_state("sess-ask-stop");
+    state.pane_mut_anywhere(pane).unwrap().lx.ask = Some(crate::app::state::AskState::new(
+        key,
+        "call-1".into(),
+        Vec::new(),
+    ));
+    state.effects.clear();
+    assert!(escape_stop(&mut state, pane), "首次 Esc 待命");
+    assert!(escape_stop(&mut state, pane), "二次 Esc 取消整轮");
+    let target = state.pane_anywhere(pane).unwrap();
+    assert!(target.lx.slash.is_none(), "不得留下隐藏的停止面板");
+    assert!(
+        state
+            .effects
+            .iter()
+            .any(|effect| matches!(effect, crate::app::effects::Effect::CancelChatStream { .. })),
+        "ask 期间二次 Esc 直接停主轮"
+    );
+}
+
 #[test]
 fn escape_stays_idle_when_nothing_to_stop() {
     let mut state = ready_state("");
@@ -163,6 +187,36 @@ fn stop_all_emits_main_subagent_and_shell_effects() {
     assert!(
         state.pane_anywhere(pane).unwrap().lx.slash.is_none(),
         "执行后关闭面板"
+    );
+}
+
+#[test]
+fn stop_all_without_subagents_skips_the_subagent_effect() {
+    let (mut state, pane, _key) = streaming_state("sess-stop-main-only");
+    open_stop_panel(
+        &mut state,
+        pane,
+        StopAvailability {
+            main: true,
+            subagents: 0,
+            shells: 0,
+            processes: 0,
+        },
+    );
+    state.effects.clear();
+    assert!(stop_panel::apply_enter(&mut state, pane));
+    assert!(
+        !state.effects.iter().any(|effect| matches!(
+            effect,
+            crate::app::effects::Effect::StopSubagentsByUser { .. }
+        )),
+        "没有 subagent 时不得触发 Nothing to stop 的空停止"
+    );
+    assert!(
+        state
+            .effects
+            .iter()
+            .any(|effect| matches!(effect, crate::app::effects::Effect::CancelChatStream { .. }))
     );
 }
 

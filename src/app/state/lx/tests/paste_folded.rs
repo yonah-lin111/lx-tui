@@ -72,6 +72,29 @@ fn report_chip_inserts_at_top_with_blank_line_and_keeps_draft() {
     assert_eq!(lx.input, "先看登录流程");
 }
 
+/// Shell 模式下报告正文不能进入输入框：Enter 会把整段报告当命令执行。
+#[test]
+fn report_chip_is_rejected_in_shell_mode() {
+    let mut lx = Lx::new();
+    lx.insert_char('!');
+    assert!(lx.shell_mode());
+    assert!(!lx.insert_report_chip(FoldedKind::SubagentReport, "agent-1", "body"));
+    assert!(lx.input.is_empty(), "只留下 shell 前缀，不写报告");
+}
+
+/// 切会话：报告芯片属于原会话，必须从草稿中剥除且不留在撤销栈。
+#[test]
+fn strip_report_chips_removes_all_report_tokens_and_keeps_draft() {
+    let mut lx = Lx::new();
+    lx.insert_str("keep me");
+    assert!(lx.insert_report_chip(FoldedKind::SubagentReport, "agent-1", "one"));
+    assert!(lx.insert_report_chip(FoldedKind::BtwReport, "thread-1", "two"));
+    assert!(lx.strip_report_chips());
+    assert_eq!(lx.input, "keep me");
+    assert!(folded_tokens(&lx.input).is_empty());
+    assert!(lx.undo.is_empty(), "旧会话报告不得通过撤销回来");
+}
+
 #[test]
 fn report_chip_replaces_same_source_in_place_and_keeps_other_sources() {
     let mut lx = Lx::new();

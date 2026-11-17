@@ -107,6 +107,17 @@ impl Lx {
         if body.trim().is_empty() {
             return false;
         }
+        // 报告正文常含命令/代码块：Shell 模式下按 Enter 会把它当命令执行。
+        // 与 `begin_text_paste` 一致，拒绝程序化写入，保留检查点等待用户切回 Chat。
+        if self.plain || self.input_mode == LxInputMode::Shell {
+            return false;
+        }
+        // 程序化改写 buffer 后，依赖旧字节偏移的浮层必须失效：
+        // 旧 `@` 区间继续替换会把芯片开标签/正文切坏。
+        self.panel = None;
+        self.slash = None;
+        self.refer = None;
+        self.mention.suppress();
         let token = encode_report(kind, source, body);
         let existing = folded_tokens(&self.input)
             .into_iter()
@@ -132,6 +143,43 @@ impl Lx {
         }
         self.touch();
         self.scroll_cursor_into_view();
+        true
+    }
+
+    /// 切会话：报告芯片属于原会话，不能随草稿带进新会话。
+    ///
+    /// 撤销栈一并清空：旧会话的报告不应通过 Undo 重新出现在新会话输入框里。
+    pub(crate) fn strip_report_chips(&mut self) -> bool {
+        let ranges: Vec<std::ops::Range<usize>> = folded_tokens(&self.input)
+            .into_iter()
+            .filter(|token| {
+                matches!(
+                    token.kind,
+                    FoldedKind::SubagentReport | FoldedKind::BtwReport
+                )
+            })
+            .map(|token| token.range.clone())
+            .collect();
+        if ranges.is_empty() {
+            return false;
+        }
+        let mut shift = 0usize;
+        for range in ranges.into_iter().rev() {
+            if range.end <= self.cursor {
+                shift = shift.saturating_add(range.len());
+            }
+            self.input.replace_range(range, "");
+        }
+        self.cursor = self.cursor.saturating_sub(shift).min(self.input.len());
+        // 芯片插入时固定带了两个换行，去掉后同步清掉顶部空行。
+        let leading = self.input.len() - self.input.trim_start_matches('\n').len();
+        if leading > 0 {
+            self.input.drain(..leading);
+            self.cursor = self.cursor.saturating_sub(leading);
+        }
+        self.undo.clear();
+        self.redo.clear();
+        self.touch();
         true
     }
 

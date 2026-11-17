@@ -147,6 +147,12 @@ pub fn handle_finished(
     let Some(target) = state.pane_mut_anywhere(pane) else {
         return false;
     };
+    let is_btw = target.lx.btw.thread_by_child_session(session_id).is_some();
+    let report_unavailable = if is_btw {
+        text::detail::LX_BTW_REPORT_UNAVAILABLE
+    } else {
+        text::detail::LX_REPORT_UNAVAILABLE
+    };
     let notices = checkpoints.map(|records| {
         records
             .iter()
@@ -204,7 +210,7 @@ pub fn handle_finished(
             pane,
             Toast::new(
                 ToastKind::Warning,
-                text::detail::LX_REPORT_UNAVAILABLE,
+                report_unavailable,
                 Some(pane),
                 std::time::Instant::now(),
             ),
@@ -224,7 +230,7 @@ pub fn handle_finished(
             pane,
             Toast::new(
                 ToastKind::Warning,
-                format!("{} ({message})", text::detail::LX_REPORT_UNAVAILABLE),
+                format!("{report_unavailable} ({message})"),
                 Some(pane),
                 std::time::Instant::now(),
             ),

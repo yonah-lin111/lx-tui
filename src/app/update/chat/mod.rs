@@ -51,10 +51,10 @@ pub use btw::{
     apply_input as apply_btw_input, btw_message_parts as btw_parts, enter_btw_edit, leave_btw_edit,
     new_assistant_message as new_btw_assistant_message, on_accepted as on_btw_accepted,
     on_delta as on_btw_delta, on_failed as on_btw_failed, on_finished as on_btw_finished,
-    on_qa_list_loaded, on_recipient_started as on_btw_recipient_started,
-    on_thread_deleted as on_btw_thread_deleted, on_thread_loaded as on_btw_thread_loaded,
-    on_tool_state as on_btw_tool_state, open_btw_tab, scroll_btw_detail, select_btw_qa,
-    set_task_btw_scroll, submit_current as submit_btw,
+    on_qa_list_loaded, on_recipient_failed as on_btw_recipient_failed,
+    on_recipient_started as on_btw_recipient_started, on_thread_deleted as on_btw_thread_deleted,
+    on_thread_loaded as on_btw_thread_loaded, on_tool_state as on_btw_tool_state, open_btw_tab,
+    scroll_btw_detail, select_btw_qa, set_task_btw_scroll, submit_current as submit_btw,
     sync_search_selection as sync_btw_search_selection, toggle_btw_card, try_submit_btw_command,
 };
 pub use compact::{
@@ -744,6 +744,9 @@ pub fn escape_stop(state: &mut AppState, pane: PaneId) -> bool {
     if !availability.any() {
         return false;
     }
+    // ask 面板整块接管按键且不渲染 slash 浮层：此时打开停止面板既看不见也操作不了，
+    // 还会在 ask 结束后突然变成可执行的全局面板。保持 ask 自己的双击 Esc 直接取消整轮。
+    let ask_pending = target.lx.ask.is_some();
     let now = Instant::now();
     let armed = target
         .lx
@@ -763,6 +766,9 @@ pub fn escape_stop(state: &mut AppState, pane: PaneId) -> bool {
         return false;
     };
     target.lx.chat.stop_armed_at = None;
+    if ask_pending {
+        return stop_stream(state, pane);
+    }
     target.lx.slash = Some(crate::app::state::SlashPanel::Stop(Box::new(
         crate::app::state::StopPanel::new(availability),
     )));

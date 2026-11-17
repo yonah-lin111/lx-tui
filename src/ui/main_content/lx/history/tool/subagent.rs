@@ -177,6 +177,9 @@ fn wait_condition(view: &SubagentDetailView) -> String {
     if view.timed_out {
         parts.push(text::agent::WAIT_TIMED_OUT.to_string());
     }
+    if view.agents.iter().any(|agent| agent.stopped_by_user) {
+        parts.push(text::agent::WAIT_STOPPED.to_string());
+    }
     parts.join(text::agent::SPAWN_ROLE_SEP)
 }
 
@@ -482,7 +485,7 @@ fn agent_mark(view: &SubagentDetailView, call: &ToolCallView, loading_frame: usi
         Some("completed" | "running" | "pending") => StepMark::Done,
         Some("blocked" | "interrupted") => StepMark::Interrupted,
         Some("failed") => StepMark::Failed,
-        Some("cancelled") => StepMark::Cancelled,
+        Some("cancelled" | "stopped") => StepMark::Cancelled,
         _ => mark_of(call.status, loading_frame),
     }
 }
@@ -874,6 +877,22 @@ mod tests {
         view.agent_status = Some("interrupted".into());
         let call = call("spawn_agent", view.clone());
         assert_eq!(agent_mark(&view, &call, 0), StepMark::Interrupted);
+    }
+
+    #[test]
+    fn user_stopped_agent_status_uses_the_cancelled_mark() {
+        let mut view = wait_view();
+        view.agent_status = Some("stopped".into());
+        let call = call("spawn_agent", view.clone());
+        assert_eq!(agent_mark(&view, &call, 0), StepMark::Cancelled);
+    }
+
+    #[test]
+    fn wait_header_labels_user_stopped_targets() {
+        let mut view = wait_view();
+        view.agents[0].stopped_by_user = true;
+        let text = flat(&call("wait_agent", view), 80, false);
+        assert!(text.contains("stopped"), "等待标题必须标明已停止：{text}");
     }
 
     #[test]
