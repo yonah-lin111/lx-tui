@@ -9,7 +9,7 @@
 |---|---|
 | `cargo fmt --check` | 通过 |
 | `cargo clippy --lib --all-targets -- -D warnings` | 通过 |
-| `cargo test` | 全部通过（5781 lib 测试 + 集成测试；0 失败） |
+| `cargo test` | 全部通过（5786 lib 测试 + 集成测试；0 失败） |
 | macOS seatbelt 真实写入阻断 | 通过：工作区内写成功、`$HOME`/根外写失败、退出码非 0 |
 | macOS seatbelt 保护 `.git` | 通过：`.git/config` 不可写，原内容保留 |
 | macOS seatbelt read-only | 通过：工作区内写也被拒绝 |
