@@ -362,7 +362,7 @@ parse_exec_request(arguments_json)
 - 键盘：`apply_lx_input` 的优先级改为 `task > approval > ask`；`y`/`a`/`n` 与 `Esc=Deny`；等待期间 `Enter` 不提交输入。`Ctrl+C` 走现有取消路径（拒绝队首并中断对应轮次）。
 - 审批状态挂在窗格而非消息：`ApprovalState { kind, call_id, request, highlight, scroll }`；`kind` 区分 `Escalation`（显式申请）与 `Retry`（on-failure）；`ask` 与审批同时存在时 approval 先显示，结束后继续 ask。
 - 显式申请键位 `y/a/n`（`a` 仅在有 `prefix_rule` 时可用）；on-failure 重试键位 `r/a/n`（`a` 为"本会话同命令自动重试"）；`Esc` 一律等同拒绝。
-- 子 agent 的审批进入父窗格队列；标签显示来源（如 `explorer · Sandbox escalation`），避免误以为是主 agent。
+- 子 agent 的审批进入父窗格队列；来源格式化为 `<nickname> [<role>]`（无昵称时用 `<role>`），审批面板顶栏右侧标注 `[Subagent]`、上下文首行高亮展示 `Subagent: <source>`，避免误以为是主 agent。
 
 ### 8.4 规则生命周期
 
@@ -417,20 +417,19 @@ if is_likely_sandbox_denied(result, plan) && !already_retried && escalation == A
 
 - `SlashCommand` 增加 `Permission`（`ALL` 变 13 项），`name = "permission"`，别名 `["permissions", "sandbox"]`，描述 `Switch the sandbox mode for this session`。
 - `/permission` 不加入 AI Web 的 5 条白名单（`command_entries_for`），AI Web 窗格不可用。
-- 复用 `/model` 的一级选择面板机制（候选 + 选中回调），候选固定三项：
-  - `Read only` — model 只能读，shell 不能写；
-  - `Workspace write` — 仅工作区可写（默认）；
-  - `Danger full access` — 无沙箱。
-- 面板内显示当前档位：`session override` / `global default`；当前生效项打勾/高亮。
-- 选中后立即写入会话覆盖并 toast：`Sandbox mode: workspace-write (applies to the next turn)`；运行中的 turn 保持起点冻结的策略（确定性优先），不常驻状态栏（决策 #14）。
+- 复用 `/model` 的一级选择面板机制（候选 + 过滤 + 初始高亮当前生效项 + 选中回调），候选固定三项（简短展示名）：
+  - `Read-only` — model 只能读，shell 不能写；
+  - `Workspace` — 仅工作区可写（默认）；
+  - `Full` — 无沙箱。
+- 面板内用 `[Default]` 标记全局默认项，当前生效项打 `❯` 高亮；`lx` 窗格左上角非 `Web` 入口同步显示 `lx-<Entry> [<Read-only|Workspace|Full>]`（暗灰方括号，模式名按风险三色着色：绿/黄/红）。
+- 选中后清空过滤输入、立即写入会话覆盖并 toast：`Permission: Workspace (applies to the next turn)`；运行中的 turn 保持起点冻结的策略（确定性优先）。
 
 ### 9.2 会话覆盖
 
-- 会话已落库：写 `agent_session.sandbox_mode`（`NULL` = 跟随全局默认）。
+- 会话已落库且已有消息、模式真实改变时：同事务写入 `agent_session.sandbox_mode`、清空该会话旧审批规则并记录 `agent_permission_switch`（与消息共用 `sequence`，时间线渲染 `◆ Permission switched` 可折叠卡片，下一 turn 在对应位置注入英文 `<system-update>`）；`environment_snapshot_with_sandbox` 同步输出当前生效模式的 `<sandbox>` 快照。
 - 尚未落库（新会话还没有第一条消息）：在 `Lx` 窗格保存 pending override，首条消息创建会话时写入；`/new` 清空。
-- `/permission` 切档时**清空该会话的审批规则**（`exact` + `prefix`，避免旧规则在新档位下继续放行未沙箱命令）；toast 之后追加 `session approvals cleared`。规则文件不清理。
-- fork：复制当前 `sandbox_mode`（保持安全姿态），不复制审批规则；子 agent 创建时冻结父会话当前模式并写入子会话列，resume 后沿用。
-- 全局默认变更（设置页）：只影响 `sandbox_mode IS NULL` 的会话；已在运行的 turn 使用 turn 起点冻结的策略，**下一个 turn 取最新**。
+- fork：复制当前 `sandbox_mode` 与分叉边界之前的 `agent_permission_switch`；规则表不复制。子 agent 在每次启动子轮（`spawn` / `send_input` / `resume` / 排队）时**动态继承主会话当前最新模式**，若同一子 agent 之前已跑过轮次且模式发生变化则同步注入 `<system-update>` 并更新 `<environment_context>`；`/btw` 保持只读工具面，每次新轮次继承主会话最新 `SandboxSettings` 到 `<environment_context>` 与 `AgentTools::with_sandbox`。
+- 全局默认变更（设置页）：经 `SettingsEvent::SandboxChanged` 热更新到 `AppState.sandbox`，立即刷新左上角标题并影响所有未覆盖（`sandbox_mode IS NULL`）会话的下一轮。
 
 ## 10. 配置与设置页
 
@@ -509,8 +508,8 @@ CREATE INDEX IF NOT EXISTS idx_agent_session_sandbox_rule_session
   - `rules/*.rules` 中用户配置的 `allow` 规则会让匹配命令直接跳过沙箱，模型不应假设所有命令都被沙箱约束；
   - `escalation = never` 时不要申请，直接报告边界；
   - 用户 `!` 命令不受沙箱约束（模型不应假设用户命令也在沙箱内）。
-- `exec_command` 描述：把 "runs directly without an approval prompt" 改为 "runs inside the session sandbox; escalation requires user approval"（按 `escalation` 动态）。
-- `PROMPT_VERSION` 从 `lx-14` 递增到 `lx-17`，跑提示预算与分段测试。
+- `exec_command` 描述：把 "runs directly without an approval prompt" 改为 "runs inside the session sandbox; escalation requires user approval"（按 `escalation` 动态）；`spawn_agent`、主/子 agent 提示（`LX_SYSTEM_PROMPT`、`EXECUTOR_PROMPT`、`MONITOR_PROMPT`）明确子 agent 虽无 `ask` 工具，但在 `escalation = ask` 时仍可通过 `exec_command` 发起提权审批（路由至父窗格），防止主 agent 自我设限禁止子 agent 提权。
+- `PROMPT_VERSION` 递增到 `lx-18`，跑提示预算与分段测试。
 
 ### 12.3 工具 schema
 
@@ -526,13 +525,12 @@ CREATE INDEX IF NOT EXISTS idx_agent_session_sandbox_rule_session
 - `escalation = never` 时从 `exec_command` schema 中移除上述属性（通过 `builtin_tools` 生成 `ToolDecl` 后按策略裁剪，避免改 18 个静态 `ToolSpec`）。
 - 参数解析在 `src/chat/tools/process_args.rs` 扩展，严格 `reject_unknown`，校验失败返回 `invalid_arguments`。
 
-### 12.4 审批 strip
+### 12.4 审批命令面板
 
-- 新状态 `Lx.approval: Option<ApprovalState>`（FIFO 队列 + 当前项），布局在 steer strip 之上、输入框之下（固定 2~3 行）。
-- 两种形态：
-  - 显式申请：`Sandbox escalation  <justification>` + 截断命令 + `y Approve once / a Approve for session (prefix) / n Deny`；
-  - on-failure 重试：`Sandbox blocked command` + 被拒绝的输出摘录 + `r Retry once / a Always retry this command (session) / n Keep blocked`。
-- `Esc = Deny`；等待期间 `chat_bar` 不提交新消息；编辑仍允许；`Ctrl+C` 取消本轮（拒绝当前审批）。
+- 新状态 `Lx.approvals: VecDeque<ApprovalState>`（FIFO 队列 + `PanelWindow` 高亮），复用 `CommandPanelView`（无边框顶部蓝线，固定在输入框上方，不遮挡或替换输入框；打开期间压制 `/` 面板防重叠）。
+- 顶栏标题为 `Sandbox escalation` / `Sandbox blocked command` / `Sandbox rule requires approval`，来自子 agent 时右侧显示 `[Subagent]` 标记；上下文区优先高亮展示 `Subagent: <nickname> [role]`，其后展示 `Reason:` / `Blocked:`、`Command:` 与可选 `Requested:` 摘要；下方展示 2–3 个可选项（`Approve once` / `Approve for session` / `Deny` 及其 Retry/Rule 对应项）。
+- 交互对齐 `/model`：`↑`/`↓` 循环选择、`Enter`/`Tab`/鼠标点击确认、鼠标悬停移动高亮、`Esc` 拒绝，同时保留 `y`/`r`/`a`/`n` 单键快捷裁决；审批打开期间拦截普通字符输入不落入草稿；`Ctrl+C` 取消本轮（拒绝当前审批）；`Effect::AnswerApproval` 由持久化泵 `is_network_effect` 放行至 `pump_chat_streams` 唤醒 `agent_loop`。
+- 审批审计日志：通过 `target: "lx::agent::approval"` 输出 `INFO`/`WARN` 结构化事件，记录规则绕过/拦截、审批入队（`pane`/`session`/`parent_session`/`agent_id`/`source`/`kind`/`command` 单行摘要）、裁决（`decision`/`wait_ms`）、取消与孤儿清理。
 - 审批结果写入工具结果文本（`approved once` / `approved for session: git push` / `retried without sandbox` / `denied by user`），随工具卡持久化，不新增 part 类型。
 
 
@@ -634,7 +632,7 @@ shell 内部被沙箱拒绝**不新增错误码**：命令以真实退出码结�
 | 事件 | `src/event/chat/host.rs`、`src/event/chat/mod.rs`、新建 `src/event/chat/approval.rs` | Host 请求/事件、FIFO 队列、决策回执 |
 | 状态/UI | `src/app/state/lx.rs`（或 `lx/approval.rs`）、`src/app/update/pane.rs`、新建 `src/ui/main_content/lx/approval.rs`、`src/ui/main_content/lx.rs` | 审批状态、优先级路由、strip 布局与渲染 |
 | Slash | `src/app/state/lx/slash.rs`、`src/app/update/chat/slash.rs`、`src/ui/main_content/lx/slash.rs` | `/permission` 命令与选择面板 |
-| 提示词 | `src/chat/prompt.rs` | 环境快照 `<sandbox>`、`## Sandbox` 段、`PROMPT_VERSION` → `lx-17` |
+| 提示词 | `src/chat/prompt.rs`、`src/chat/agent/prompts.rs`、`src/chat/tools/subagent.rs` | 环境快照 `<sandbox>`、`## Sandbox` 段、子 agent 提权引导、`PROMPT_VERSION` → `lx-18` |
 | 设置服务 | 新建 `src/settings/service/sandbox.rs`；`src/settings/service/handlers.rs`、`src/settings/service.rs`、`src/settings/service/page.rs` | `/api/sandbox`、`SettingsEvent::SandboxChanged`（新变体） |
 | 设置前端 | `assets/web.html`、`assets/settings.js`、`assets/settings.css` | Sandbox tab 与表单 |
 | 数据库 | `src/db/migration/schema.rs`、`src/db/migration.rs`、`src/db/mod.rs`、`src/db/chat/mod.rs`、`src/db/chat/fork.rs` | v31 迁移与会话模式/规则 API |

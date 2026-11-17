@@ -608,6 +608,13 @@ fn start_recipient(
             .or(Some(workspace.as_path())),
         &std::collections::BTreeSet::new(),
     );
+    let (effective_sandbox, _, _) = super::subagent::effective_sandbox_for_session(
+        state,
+        Some(database),
+        &workspace,
+        pane,
+        &start.parent_session_id,
+    );
     let references = agent_references(persistence, &workspace, &start, &pending.thread_id);
     let context = match assemble_btw_context(BtwContextInput {
         database,
@@ -624,6 +631,7 @@ fn start_recipient(
         cwd: &cwd,
         context_limit: frozen.context_limit,
         mcp: &mcp_snapshot,
+        sandbox: &effective_sandbox,
     }) {
         Ok(context) => context,
         Err(error) => {
@@ -702,16 +710,19 @@ fn start_recipient(
         start.child_session_id.clone(),
         std::sync::Arc::new(std::sync::RwLock::new(start.user_message_id.clone())),
     );
-    let mut executor = AgentTools::new(manager, turn)
+    let executor = AgentTools::new(manager, turn)
         .with_recorder(std::sync::Arc::new(recorder))
         .with_reads(reads)
+        .with_sandbox(crate::chat::sandbox::SandboxPlan::for_turn(
+            &effective_sandbox,
+            &cwd,
+        ))
         .with_image_support(frozen.supports_image_input)
         .with_mcp(
             crate::mcp::global_manager().clone(),
             mcp_snapshot,
             start.child_session_id.clone(),
         );
-    let _ = &mut executor;
     let transport = frozen.transport.clone();
     let base_url = frozen.base_url.clone();
     let api_key = frozen.api_key.clone();

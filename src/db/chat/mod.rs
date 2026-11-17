@@ -24,6 +24,7 @@ pub use btw::{
     BtwTargetSpec, BtwThreadRecord, BtwThreadSummary, BtwThreadView, QaAnchor,
 };
 
+pub use super::sandbox::{PermissionSwitchCommit, PermissionSwitchRecord};
 pub use compact::{
     COMPACT_ACTIVE, COMPACT_REVERTED, CompactCheckpoint, CompactCommit, CompactCommitted,
     CompactRevert,
@@ -1059,13 +1060,14 @@ pub fn initial_session_title_for_meta(
     compute_initial_title(&display_text, user_text, image_count, first_label, 60)
 }
 
-/// 联合分配会话内下一个单调递增 `sequence`（消息、撤销提示、compact 检查点、模型切换共用编号空间）。
-pub(super) fn next_session_sequence(transaction: &Connection, session_id: &str) -> Result<i64> {
+/// 联合分配会话内下一个单调递增 `sequence`（消息、撤销提示、compact 检查点、模型/权限切换共用编号空间）。
+pub(crate) fn next_session_sequence(transaction: &Connection, session_id: &str) -> Result<i64> {
     const SQL: &str = "SELECT COALESCE(MAX(sequence) + 1, 0) FROM (\
         SELECT sequence FROM agent_message WHERE session_id = ?1 UNION ALL \
         SELECT sequence FROM agent_session_notice WHERE session_id = ?1 UNION ALL \
         SELECT sequence FROM agent_compact_checkpoint WHERE session_id = ?1 UNION ALL \
-        SELECT sequence FROM agent_model_switch WHERE session_id = ?1)";
+        SELECT sequence FROM agent_model_switch WHERE session_id = ?1 UNION ALL \
+        SELECT sequence FROM agent_permission_switch WHERE session_id = ?1)";
     transaction
         .query_row(SQL, params![session_id], |row| row.get(0))
         .map_err(DbError::from)

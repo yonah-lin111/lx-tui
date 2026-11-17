@@ -77,6 +77,8 @@ pub(crate) const MODEL_SWITCH_SLOT_BLOCK: usize = usize::MAX - 6;
 /// 时间线里的正在压缩 loading 条目。
 pub(crate) const RUNNING_COMPACT_SLOT_MESSAGE: usize = usize::MAX;
 pub(crate) const RUNNING_COMPACT_SLOT_BLOCK: usize = usize::MAX - 7;
+/// 时间线里的沙箱权限切换提示。
+pub(crate) const PERMISSION_SWITCH_SLOT_BLOCK: usize = usize::MAX - 8;
 /// 助手消息末尾附件引用树（独立基数，避开报告块的 `MAX - 5 - index` 区间）。
 pub(crate) const ATTACHMENTS_SLOT_BLOCK: usize = usize::MAX / 2;
 /// 连续工具组的组头块：按 `base - first_step` 取槽，避开普通步骤下标。

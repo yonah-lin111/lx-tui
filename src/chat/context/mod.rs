@@ -26,6 +26,7 @@
 use crate::chat::events::{ChatRequest, ChatTurn, ModelItem};
 use crate::db::chat::{ChatMessage, ModelSnapshot, ToolCallRecord};
 
+mod switches;
 mod user_shell;
 pub use user_shell::format_user_shell;
 
@@ -76,6 +77,8 @@ pub struct AssemblyInput<'a> {
     pub mcp: Option<&'a str>,
     /// 会话内已持久化的模型切换记录（按 `sequence` 注入 `<system-update>`）。
     pub model_switches: &'a [crate::db::chat::ModelSwitchRecord],
+    /// 会话内已持久化的沙箱权限切换记录（按 `sequence` 注入 `<system-update>`）。
+    pub permission_switches: &'a [crate::db::chat::PermissionSwitchRecord],
     /// 用户点名的 skill 全文块（只注入当前轮，不落库）。
     pub skill_blocks: &'a [String],
     /// 当前模型是否支持图片输入；false 时工具图片降级为文本占位。
@@ -288,36 +291,27 @@ pub fn assemble(input: &AssemblyInput<'_>) -> Assembly {
     } else {
         start_after
     };
-    // 首轮之前的切换记录即使随旧轮次被裁掉，也要保留最后一条：接管当前历史的新模型
-    // 必须收到 `<system-update>`，否则它不知道自己是从中途开始接手的。
-    let prior_switch = if omitted_turns > 0 {
-        input
-            .model_switches
-            .iter()
-            .rfind(|sw| sw.sequence > start_after && sw.sequence < min_switch_sequence)
-    } else {
-        None
-    };
-    let mut retained_switches: Vec<&crate::db::chat::ModelSwitchRecord> = input
-        .model_switches
-        .iter()
-        .filter(|sw| sw.sequence > min_switch_sequence)
-        .collect();
-    if let Some(prior) = prior_switch {
-        retained_switches.insert(0, prior);
-    }
+    // 首轮之前的切换记录即使随旧轮次被裁掉，也要保留最后一条：接管当前历史的新模型/新权限
+    // 必须收到 `<system-update>`，否则它不知道中途发生了切换。
+    let retained_updates = switches::collect_retained_updates(
+        input.model_switches,
+        input.permission_switches,
+        omitted_turns,
+        start_after,
+        min_switch_sequence,
+    );
     let mut switch_cursor = 0usize;
 
     for turn in &kept {
         let turn_start = turns.len();
         let item_start = items.len();
-        while switch_cursor < retained_switches.len()
-            && retained_switches[switch_cursor].sequence < turn.user_sequence
+        while switch_cursor < retained_updates.len()
+            && retained_updates[switch_cursor].sequence < turn.user_sequence
         {
-            let sw = retained_switches[switch_cursor];
+            let sw = retained_updates[switch_cursor];
             if !sw.injected_prompt.trim().is_empty() {
                 items.push(ModelItem::UserText(crate::chat::agent::wrap_system_update(
-                    &sw.injected_prompt,
+                    sw.injected_prompt,
                 )));
             }
             switch_cursor += 1;
@@ -363,12 +357,12 @@ pub fn assemble(input: &AssemblyInput<'_>) -> Assembly {
             item_end: items.len(),
         });
     }
-    // 冲刷最新一轮完成之后、当前草稿之前发生的模型切换 `<system-update>`（必须在 draft 之前，保持当前轮图片索引不变量）。
-    while switch_cursor < retained_switches.len() {
-        let sw = retained_switches[switch_cursor];
+    // 冲刷最新一轮完成之后、当前草稿之前发生的模型/权限切换 `<system-update>`（必须在 draft 之前，保持当前轮图片索引不变量）。
+    while switch_cursor < retained_updates.len() {
+        let sw = retained_updates[switch_cursor];
         if !sw.injected_prompt.trim().is_empty() {
             items.push(ModelItem::UserText(crate::chat::agent::wrap_system_update(
-                &sw.injected_prompt,
+                sw.injected_prompt,
             )));
         }
         switch_cursor += 1;

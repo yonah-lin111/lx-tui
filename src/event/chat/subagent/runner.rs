@@ -509,8 +509,17 @@ pub(super) fn send_input(
     if is_running {
         if (interrupt || was_cancelling_from_interrupt) && enqueued.created {
             streams.interrupted_subagents.insert(target.to_string());
+            let mut cancel_key = None;
             if let Some(handle) = streams.subagents.values().find(|h| h.agent_id == target) {
+                cancel_key = Some(RequestKey {
+                    pane: handle.parent.pane,
+                    session: handle.child_session_id.clone(),
+                    generation: handle.parent.generation,
+                });
                 let _ = handle.cancel.send(true);
+            }
+            if let Some(child_key) = cancel_key {
+                super::super::approval::cancel(state, streams, &child_key);
             }
         }
         super::snapshot::sync_agent_ui_queue(

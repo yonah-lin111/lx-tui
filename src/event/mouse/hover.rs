@@ -186,6 +186,17 @@ pub(crate) fn handle_mouse_moved(
         return;
     }
     if hovering_lx_toast.is_none() {
+        if let Some((pane, index)) =
+            super::hit::lx_approval_item_at(state, rects, mouse.column, mouse.row)
+        {
+            if update::hover_lx_approval(state, pane, index) {
+                *dirty = true;
+            }
+            if update::clear_tooltip(state) {
+                *dirty = true;
+            }
+            return;
+        }
         if let Some((pane, index)) = lx_paste_item_at(state, rects, mouse.column, mouse.row) {
             if update::hover_lx_paste(state, pane, index) {
                 *dirty = true;

@@ -502,6 +502,19 @@ pub(crate) fn lx_slash_item_at(
     ui::main_content::lx::slash_item_at(inner, &target.lx, column, row).map(|index| (pane, index))
 }
 
+/// lx 沙箱审批命令面板命中：返回 (窗格, 选项索引)；未命中返回 None。
+pub(crate) fn lx_approval_item_at(
+    state: &AppState,
+    rects: &[(PaneId, Rect)],
+    column: u16,
+    row: u16,
+) -> Option<(PaneId, usize)> {
+    let (pane, inner) = lx_pane_at(state, rects, column, row)?;
+    let target = state.pane_anywhere(pane)?;
+    ui::main_content::lx::approval_item_at(inner, &target.lx, column, row)
+        .map(|index| (pane, index))
+}
+
 /// lx `/` 命令面板布局；用于滚轮命中与视口滚动。
 pub(crate) fn lx_slash_panel_layout(
     state: &AppState,

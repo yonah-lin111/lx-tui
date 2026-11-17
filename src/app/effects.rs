@@ -189,11 +189,12 @@ pub enum Effect {
         call_id: String,
         answers: crate::chat::tools::AskAnswers,
     },
-    /// 持久化会话沙箱模式覆盖（`None` = 跟随全局默认）。
+    /// 持久化会话沙箱模式覆盖（`None` = 跟随全局默认）；已有消息且模式变化时记录切换时间线。
     PersistSandboxMode {
         workspace: PathBuf,
         session_id: String,
         mode: Option<crate::config::sandbox::SandboxMode>,
+        switch_commit: Option<crate::db::chat::PermissionSwitchCommit>,
     },
     /// 提交一次沙箱审批裁决；事件层据此唤醒 agent loop。
     AnswerApproval {

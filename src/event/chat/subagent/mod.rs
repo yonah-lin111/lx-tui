@@ -20,6 +20,8 @@ mod settle;
 pub(crate) mod snapshot;
 #[cfg(test)]
 mod tests;
+#[cfg(test)]
+mod tests_sandbox;
 mod tools;
 mod wait;
 
@@ -28,6 +30,8 @@ pub(crate) use context::{
     ChildPromptContext, ChildTurnLimits, assemble_child_context, capture_child_prompt_inputs,
     child_tool_names,
 };
+use launch::wake_subagent_approvals;
+pub(crate) use launch::{effective_sandbox_for_session, stop_all_subagents_for_pane};
 #[cfg(test)]
 pub(crate) use settle::finish_subagent;
 pub(crate) use settle::{
@@ -314,7 +318,7 @@ pub(crate) fn handle_subagent_op_with_call(
 
 /// `interrupt_agent`：中止目标及其正在运行的后代，保留已生成内容与半程汇报，维持 `idle`。
 fn interrupt(
-    _state: &mut AppState,
+    state: &mut AppState,
     streams: &mut ChatStreams,
     persistence: &Persistence,
     key: &RequestKey,
@@ -362,6 +366,7 @@ fn interrupt(
     }
 
     let mut previous_status = None;
+    let mut cancelled_keys = Vec::new();
     for handle in streams.subagents.values_mut() {
         if handle.status != STATUS_RUNNING || !subtree.contains(&handle.agent_path) {
             continue;
@@ -372,8 +377,14 @@ fn interrupt(
         if handle.agent_id == canonical_id {
             previous_status = Some(STATUS_RUNNING.to_string());
         }
+        cancelled_keys.push(RequestKey {
+            pane: handle.parent.pane,
+            session: handle.child_session_id.clone(),
+            generation: handle.parent.generation,
+        });
         let _ = handle.cancel.send(true);
     }
+    wake_subagent_approvals(state, streams, cancelled_keys);
     if let Some(previous) = previous_status {
         return Ok(SubagentOutcome::Interrupted {
             agent_id: canonical_id,
@@ -447,6 +458,7 @@ fn close(
     let previous_status = handle_status.unwrap_or(STATUS_IDLE).to_string();
 
     // 级联：目标自身及其所有存活后代都标记「关闭不产报告」并取消在途轮次。
+    let mut cancelled_keys = Vec::new();
     for handle in streams.subagents.values_mut() {
         if !subtree.contains(&handle.agent_path)
             && !is_strict_descendant_path(&record.agent_path, &handle.agent_path)
@@ -457,8 +469,14 @@ fn close(
         streams.interrupted_subagents.remove(&handle.agent_id);
         streams.paused_by_interrupt.remove(&handle.agent_id);
         handle.closed_without_report = true;
+        cancelled_keys.push(RequestKey {
+            pane: handle.parent.pane,
+            session: handle.child_session_id.clone(),
+            generation: handle.parent.generation,
+        });
         let _ = handle.cancel.send(true);
     }
+    wake_subagent_approvals(state, streams, cancelled_keys);
     let targets: Vec<SubagentRecord> = tree
         .records
         .iter()
@@ -484,53 +502,6 @@ fn close(
         agent_id: canonical_id,
         previous_status,
     })
-}
-
-/// 停止窗格所属整棵会话树里全部正在运行的子 agent（会话删除/退出路径使用）。
-pub(crate) fn stop_all_subagents_for_pane(
-    state: &mut AppState,
-    streams: &mut ChatStreams,
-    persistence: &Persistence,
-    pane: PaneId,
-) -> usize {
-    let Some(session) = state
-        .pane_anywhere(pane)
-        .and_then(|target| target.lx.chat.session_id.clone())
-    else {
-        return 0;
-    };
-    let root_session = persistence
-        .database()
-        .zip(workspace_for_pane(state, pane))
-        .and_then(|(database, workspace)| {
-            database
-                .resolve_session_tree_root(&workspace, &session)
-                .ok()
-                .map(|(root, _, _)| root)
-        })
-        .unwrap_or_else(|| session.clone());
-
-    let mut stopped = 0usize;
-    let mut dead = Vec::new();
-    for (child, handle) in &mut streams.subagents {
-        if handle.root_session != root_session || handle.status != STATUS_RUNNING {
-            continue;
-        }
-        handle.closed_without_report = true;
-        streams.resumed_subagents.remove(&handle.agent_id);
-        streams.interrupted_subagents.remove(&handle.agent_id);
-        streams.paused_by_interrupt.remove(&handle.agent_id);
-        if handle.cancel.send(true).is_ok() {
-            stopped = stopped.saturating_add(1);
-        } else {
-            dead.push(child.clone());
-        }
-    }
-    for child in dead {
-        streams.subagents.remove(&child);
-        streams.frozen.remove(&child);
-    }
-    stopped
 }
 
 /// `list_agents`：列出根会话树下的子 agent 概览，可按 `path_prefix` 过滤。
@@ -763,6 +734,7 @@ pub(crate) fn cancel_for_session(
     let mut cancelled = false;
     let mut cleared_agents = Vec::new();
     let mut dead = Vec::new();
+    let mut cancelled_keys = Vec::new();
     for (child, handle) in &mut streams.subagents {
         if !selected(&handle.agent_path) {
             continue;
@@ -770,11 +742,19 @@ pub(crate) fn cancel_for_session(
         cleared_agents.push(handle.agent_id.clone());
         // 用户手动停止 / 会话删除 / 退出：不生成半程汇报。
         handle.closed_without_report = true;
+        cancelled_keys.push(RequestKey {
+            pane: handle.parent.pane,
+            session: handle.child_session_id.clone(),
+            generation: handle.parent.generation,
+        });
         if handle.cancel.send(true).is_ok() {
             cancelled = true;
         } else {
             dead.push(child.clone());
         }
+    }
+    for child_key in cancelled_keys {
+        streams.wake_approval(&child_key);
     }
     for id in cleared_agents {
         streams.resumed_subagents.remove(&id);

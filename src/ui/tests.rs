@@ -2029,6 +2029,7 @@ fn rendered_area(lines: &[String], area: Rect) -> String {
 #[test]
 fn lx_pane_top_border_shows_workspace_identity() {
     let mut state = AppState::demo();
+    state.sidebar_collapsed = true;
     state.workspaces[0].name = "w".to_string();
     state.workspaces[0].cwd = Some(PathBuf::from("/work/lx"));
     state.workspaces[0].git = Some(WorkspaceGit {
@@ -2049,6 +2050,10 @@ fn lx_pane_top_border_shows_workspace_identity() {
     let (_, rect) = rects[0];
     let lines = render_lines(&state);
     let top = &lines[usize::from(rect.y)];
+    assert!(
+        top.contains("lx-Native [Workspace]"),
+        "左上角显示入口与权限短名: {top}"
+    );
     assert!(
         top.contains("lx · b:dev · wt:w"),
         "顶边框显示身份标签: {top}"
@@ -2093,6 +2098,77 @@ fn lx_pane_top_border_shows_workspace_identity() {
     let lines = render_lines(&state);
     let top = &lines[usize::from(rect.y)];
     assert!(!top.contains("b:dev"), "终端视图不显示身份标签: {top}");
+}
+
+#[test]
+fn lx_pane_top_border_shows_short_permission_and_omits_ai_web() {
+    let mut state = AppState::demo();
+    let pane = state.active_tab().layout.focus();
+    let view = view_for(&state);
+    let config = Config::default();
+    let rects = crate::tiling::pane_rects(
+        &state.active_tab().layout,
+        view.main_content,
+        config.min_pane_width,
+        config.min_pane_height,
+    );
+    let rect = rects[0].1;
+
+    // 默认 Workspace（黄）、brackets（默认灰 + dim）。
+    let lines = render_lines(&state);
+    let buffer = render_buffer(&state);
+    let top = &lines[usize::from(rect.y)];
+    assert!(top.contains("lx-Native [Workspace]"), "{top}");
+    assert_eq!(
+        border_label_cell(&buffer, &lines, rect.y, "[Workspace]", 0),
+        (ratatui::style::Color::Reset, ratatui::style::Modifier::DIM),
+        "左方括号使用边框暗灰"
+    );
+    assert_eq!(
+        border_label_cell(&buffer, &lines, rect.y, "[Workspace]", 1),
+        (
+            ratatui::style::Color::Yellow,
+            ratatui::style::Modifier::empty()
+        ),
+        "Workspace 使用黄色且不带 DIM/BOLD"
+    );
+
+    // 切到 Read-only（绿）/ Full（红）。
+    state.pane_mut_anywhere(pane).expect("pane").lx.sandbox_mode =
+        Some(crate::config::sandbox::SandboxMode::ReadOnly);
+    let lines_ro = render_lines(&state);
+    let buffer_ro = render_buffer(&state);
+    let top_ro = &lines_ro[usize::from(rect.y)];
+    assert!(top_ro.contains("lx-Native [Read-only]"), "{top_ro}");
+    assert_eq!(
+        border_label_cell(&buffer_ro, &lines_ro, rect.y, "[Read-only]", 1),
+        (
+            ratatui::style::Color::Green,
+            ratatui::style::Modifier::empty()
+        ),
+        "Read-only 使用绿色且不带 DIM/BOLD"
+    );
+
+    state.pane_mut_anywhere(pane).expect("pane").lx.sandbox_mode =
+        Some(crate::config::sandbox::SandboxMode::DangerFullAccess);
+    let lines_full = render_lines(&state);
+    let buffer_full = render_buffer(&state);
+    let top_full = &lines_full[usize::from(rect.y)];
+    assert!(top_full.contains("lx-Native [Full]"), "{top_full}");
+    assert_eq!(
+        border_label_cell(&buffer_full, &lines_full, rect.y, "[Full]", 1),
+        (
+            ratatui::style::Color::Red,
+            ratatui::style::Modifier::empty()
+        ),
+        "Full 使用红色且不带 DIM/BOLD"
+    );
+
+    // AiWeb 无本地沙箱，省略权限后缀。
+    state.pane_mut_anywhere(pane).expect("pane").lx.entry = LxEntry::AiWeb;
+    let top_web = render_lines(&state)[usize::from(rect.y)].clone();
+    assert!(top_web.contains("lx-Web"), "{top_web}");
+    assert!(!top_web.contains("Full"), "{top_web}");
 }
 
 /// 边框上某个标签内部单元格的 `(fg, modifier)`：`label` 是完整标签文本，

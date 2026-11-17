@@ -47,10 +47,12 @@ pub fn new_session(state: &mut AppState, pane: PaneId) -> bool {
     target.lx.sandbox_mode = None;
     target.lx.sandbox_exact_rules.clear();
     target.lx.sandbox_prefix_rules.clear();
+    target.lx.approvals.clear();
     target.lx.btw.clear();
     target.lx.clear_agents();
     target.lx.compact.reset();
     target.lx.model_switch.reset();
+    target.lx.permission_switch.reset();
     target.lx.recap.reset();
     target.lx.clear_rewind();
     target.lx.text_paste_cancel();
@@ -216,6 +218,7 @@ pub fn on_session_loaded_full(
     target.lx.chat.loading_session = false;
     if session_changed {
         // Agents 面板属于会话：不清理会把上一会话的 run、计数和 ^d 目标带过来。
+        target.lx.approvals.clear();
         target.lx.btw.clear();
         target.lx.clear_agents();
         target.lx.chat.main_stopped = false;
@@ -232,6 +235,7 @@ pub fn on_session_loaded_full(
     // 切会话：先清空 compact / model_switch / recap 状态（列表随后由加载回执回填）。
     target.lx.compact.reset();
     target.lx.model_switch.reset();
+    target.lx.permission_switch.reset();
     target.lx.recap.reset();
     target.lx.clear_rewind();
     target.lx.text_paste_cancel();
@@ -388,10 +392,12 @@ pub fn on_session_deleted(state: &mut AppState, pane: PaneId, session_id: &str) 
         target.lx.sandbox_mode = None;
         target.lx.sandbox_exact_rules.clear();
         target.lx.sandbox_prefix_rules.clear();
+        target.lx.approvals.clear();
         target.lx.btw.clear();
         target.lx.clear_agents();
         target.lx.compact.reset();
         target.lx.model_switch.reset();
+        target.lx.permission_switch.reset();
         target.lx.recap.reset();
         target.lx.clear_rewind();
         target.lx.ai_web_edit_user_index = None;

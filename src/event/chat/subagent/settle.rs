@@ -50,6 +50,7 @@ pub(crate) fn finish_subagent_with_billing(
     let Some(mut handle) = streams.subagents.remove(&key.session) else {
         return false;
     };
+    super::super::approval::cancel(state, streams, &key);
     let was_interrupted_by_input = streams.interrupted_subagents.remove(&handle.agent_id);
     let was_paused_by_interrupt = streams.paused_by_interrupt.remove(&handle.agent_id);
     // `close_agent` / 用户停止 / 会话或应用关闭：即使本轮被取消也不生成报告。

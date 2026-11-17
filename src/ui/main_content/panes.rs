@@ -32,8 +32,17 @@ pub(crate) fn render_panes(
         };
         // prompt 持有键盘焦点时窗格让出焦点表现，避免双焦点指示。
         let focused = *id == focus && state.panes_focused();
+        let permission = (pane.view == PaneView::Lx && pane.lx.entry != LxEntry::AiWeb)
+            .then(|| pane.lx.sandbox_mode.unwrap_or(state.sandbox.mode));
         let mut title = match pane.view {
-            PaneView::Lx => format!("lx-{}", text::lx_entry_label(pane.lx.entry)),
+            PaneView::Lx => match permission {
+                Some(mode) => format!(
+                    "lx-{} [{}]",
+                    text::lx_entry_label(pane.lx.entry),
+                    mode.short_label()
+                ),
+                None => format!("lx-{}", text::lx_entry_label(pane.lx.entry)),
+            },
             PaneView::Terminal => pane_display_title(*id, pane),
         };
         if pane.exited {
@@ -42,7 +51,7 @@ pub(crate) fn render_panes(
         // 边框标题统一淡蓝色（Cyan + dim）；焦点只由边框颜色区分，按钮除外。
         // lx 页入口名按 logo 粉→蓝渐变着色，其余保持标题色。
         let title_line = if pane.view == PaneView::Lx && !pane.exited {
-            lx_title_line(pane.lx.entry)
+            lx_title_line(pane.lx.entry, permission)
         } else {
             Line::from(Span::styled(format!(" {title} "), style::border_title()))
         };
@@ -110,8 +119,11 @@ fn render_pane_agent_label(frame: &mut Frame<'_>, rect: Rect, title: &str, pane:
     render_border_right_label(frame, rect, title, &spans);
 }
 
-/// lx 窗格顶边框标题：` lx-<入口名> `，入口名按该 logo 粉→蓝渐变着色、其余用标题色。
-fn lx_title_line(entry: LxEntry) -> Line<'static> {
+/// lx 窗格顶边框标题：` lx-<入口名> `（非 Web 入口附带 `[<权限短名>]`），入口名按该 logo 粉→蓝渐变着色、权限按风险三色着色。
+fn lx_title_line(
+    entry: LxEntry,
+    permission: Option<crate::config::sandbox::SandboxMode>,
+) -> Line<'static> {
     let label = text::lx_entry_label(entry);
     let length = label.chars().count();
     let mut spans = vec![Span::styled(" lx-".to_string(), style::border_title())];
@@ -120,6 +132,14 @@ fn lx_title_line(entry: LxEntry) -> Line<'static> {
             ch.to_string(),
             style::lx_entry_label_style(entry, position, length, false),
         ));
+    }
+    if let Some(mode) = permission {
+        spans.push(Span::styled(" [".to_string(), style::muted_on_border()));
+        spans.push(Span::styled(
+            mode.short_label().to_string(),
+            style::sandbox_mode_on_border(mode),
+        ));
+        spans.push(Span::styled("]".to_string(), style::muted_on_border()));
     }
     spans.push(Span::styled(" ".to_string(), style::border_title()));
     Line::from(spans)

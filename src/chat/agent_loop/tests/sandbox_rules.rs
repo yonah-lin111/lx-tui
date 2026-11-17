@@ -305,3 +305,78 @@ async fn allow_rule_survives_escalation_never() {
     .expect("allow");
     assert_eq!(result, SandboxOverride::Unsandboxed);
 }
+
+#[tokio::test]
+async fn maybe_retry_skips_already_unsandboxed_or_session_approved_commands() {
+    use super::super::sandbox_decision::maybe_retry_on_denial;
+    use crate::chat::process::{ProcessResult, ProcessResultKind, ProcessState};
+    use crate::db::chat::ToolCallTicket;
+
+    let mut host = RecordingHost::approving(SandboxApprovalDecision::Once);
+    let executor = PolicyExecutor {
+        plan: plan(EscalationPolicy::Ask)
+            .with_exact_rules(vec![vec!["ls".into(), "/root".into()]], Vec::new()),
+    };
+    let call = exec_call("ls /root", "");
+    let ticket = ToolCallTicket {
+        session_id: "s".into(),
+        message_id: "m".into(),
+        call_id: "c".into(),
+        position: 0,
+        started_at_ms: 0,
+    };
+    let denied_output = ToolExecutionResult::Process(Box::new(ProcessResult {
+        kind: ProcessResultKind::ExecCommand,
+        session_id: 1,
+        command: "ls /root".into(),
+        cwd: "/".into(),
+        state: ProcessState::Exited { code: Some(1) },
+        exit_code: Some(1),
+        output: "Permission denied".into(),
+        output_start: 0,
+        output_end: 17,
+        dropped_bytes: 0,
+        truncated: false,
+        wrote_input: false,
+        input: None,
+        terminate: false,
+        tty: false,
+        chunk_id: "000001".into(),
+        wall_time_ms: 5,
+        sandbox_retry: None,
+    }));
+
+    // 已按 Unsandboxed 跑过的命令不得再次弹 retry 审批。
+    let out1 = maybe_retry_on_denial(
+        &mut host,
+        &executor,
+        &call,
+        &ticket,
+        Path::new("/"),
+        Some(&SandboxOverride::Unsandboxed),
+        denied_output.clone(),
+    )
+    .await;
+    assert!(matches!(out1, ToolExecutionResult::Process(_)));
+    assert!(
+        host.trace.lock().expect("trace").is_empty(),
+        "Unsandboxed 失败不应再问 retry"
+    );
+
+    // 命中会话精确批准规则（裸跑）的命令同样不得再次弹 retry 审批。
+    let out2 = maybe_retry_on_denial(
+        &mut host,
+        &executor,
+        &call,
+        &ticket,
+        Path::new("/"),
+        Some(&SandboxOverride::None),
+        denied_output,
+    )
+    .await;
+    assert!(matches!(out2, ToolExecutionResult::Process(_)));
+    assert!(
+        host.trace.lock().expect("trace").is_empty(),
+        "会话已放行命令不应再问 retry"
+    );
+}

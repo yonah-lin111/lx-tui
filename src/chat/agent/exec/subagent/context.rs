@@ -194,11 +194,25 @@ impl ExecSubagentPool {
             supports_image_input: child_model.supports_image_input,
         }
         .render_prompt_section();
-        let environment = crate::chat::prompt::environment_snapshot(
+        let root_session = db
+            .resolve_session_tree_root(&self.workspace, parent_session_id)
+            .map(|(root, _, _)| root)
+            .unwrap_or_else(|_| parent_session_id.to_string());
+        let mut sandbox_settings = crate::config::sandbox::load_sandbox_or_default();
+        if let Some(mode) = db
+            .session_sandbox_mode(&self.workspace, &root_session)
+            .ok()
+            .flatten()
+            .and_then(|text| crate::config::sandbox::SandboxMode::parse(&text))
+        {
+            sandbox_settings.mode = mode;
+        }
+        let environment = crate::chat::prompt::environment_snapshot_with_sandbox(
             &crate::platform::EnvironmentFacts::capture(),
             Some(&self.workspace),
             Some(&self.cwd),
             &[],
+            &sandbox_settings,
         );
         let instructions = crate::chat::agent::load_instructions(
             crate::config::user_data_root().ok().as_deref(),

@@ -221,6 +221,15 @@ fn list_signature(source: HistorySource<'_>, width: u16, skip_streaming_tail: bo
         }
         hash.write_u8(u8::from(source.model_switch.is_expanded(&sw.id)));
     }
+    for sw in source.perm_switches {
+        hash.write_str(&sw.id);
+        hash.write_i64(sw.sequence);
+        hash.write_str(&sw.from_mode);
+        hash.write_str(&sw.to_mode);
+        hash.write_i64(sw.created_at_ms);
+        hash.write_str(&sw.injected_prompt);
+        hash.write_u8(u8::from(source.permission_switch.is_expanded(&sw.id)));
+    }
     hash.finish()
 }
 

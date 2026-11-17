@@ -162,3 +162,21 @@ pub(crate) fn model_switch_block_signature(
     hash.write_u8(u8::from(expanded));
     hash.finish()
 }
+
+/// 权限切换提示条目的指纹。
+pub(crate) fn permission_switch_block_signature(
+    slice: &[crate::app::state::PermissionSwitchNoticeView],
+    expanded: bool,
+) -> u64 {
+    let mut hash = Fnv::new();
+    for notice in slice {
+        hash.write_str(&notice.id);
+        hash.write_str(&notice.from_mode);
+        hash.write_str(&notice.to_mode);
+        hash.write_i64(notice.created_at_ms);
+        hash.write_str(&notice.injected_prompt);
+    }
+    hash.write_usize(slice.len());
+    hash.write_u8(u8::from(expanded));
+    hash.finish()
+}

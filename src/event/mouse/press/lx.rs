@@ -143,6 +143,15 @@ pub(super) fn handle_lx_pane_mouse_down_left(
         *dirty = true;
         return;
     }
+    // 审批命令面板候选：优先于一切输入浮层与聊天控件。
+    let approval_hit = state.pane_anywhere(pane).and_then(|target| {
+        ui::main_content::lx::approval_item_at(inner, &target.lx, mouse.column, mouse.row)
+    });
+    if let Some(index) = approval_hit {
+        update::select_lx_approval(state, pane, index);
+        *dirty = true;
+        return;
+    }
     let paste_hit = state.pane_anywhere(pane).and_then(|target| {
         ui::main_content::lx::paste_item_at(inner, &target.lx, mouse.column, mouse.row)
     });

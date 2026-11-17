@@ -1,9 +1,9 @@
-//! 沙箱审批 strip 的按键路由：只做状态迁移并登记效应，不碰 IO。
+//! 沙箱审批命令面板的按键与鼠标路由：只做状态迁移并登记效应，不碰 IO。
 //!
-//! 键位：
-//! - 显式申请：`y` 批准一次、`a` 本会话批准（有 `prefix_rule` 时）、`n` 拒绝；
-//! - on-failure 重试：`r` 重试一次、`a` 本会话同命令自动重试、`n` 保持拒绝；
-//! - `Esc` 一律拒绝；`Enter` 被吞掉（等待期间不提交输入）。
+//! 交互对齐 `/model` / `/rewind`：
+//! - `↑`/`↓` 循环高亮选项，`Enter`/`Tab`/鼠标点击确认当前选中裁决；
+//! - `Esc` 一律等价拒绝；
+//! - 同步保留 `y`/`r`/`a`/`n` 单键快捷裁决；审批打开期间拦截普通字符输入。
 
 use crate::app::actions::LxInput;
 use crate::app::effects::Effect;
@@ -11,39 +11,67 @@ use crate::app::state::{AppState, RequestKey};
 use crate::chat::sandbox::{SandboxApprovalDecision, SandboxApprovalKind};
 use crate::tiling::PaneId;
 
-/// 审批 strip 接管按键；返回是否产生状态变化。
+/// 审批命令面板接管按键；返回是否产生状态变化。
 pub fn apply_input(state: &mut AppState, pane: PaneId, command: LxInput) -> bool {
     let Some(front) = state
         .pane_anywhere(pane)
         .and_then(|target| target.lx.approvals.front())
+        .cloned()
     else {
         return false;
     };
-    let kind = front.request.kind;
-    let decision = match command {
-        LxInput::Escape => Some(SandboxApprovalDecision::Denied),
-        LxInput::Char('n') => Some(SandboxApprovalDecision::Denied),
+    match command {
+        LxInput::Up => state
+            .pane_mut_anywhere(pane)
+            .and_then(|target| target.lx.approvals.front_mut())
+            .is_some_and(|item| item.move_active(-1)),
+        LxInput::Down => state
+            .pane_mut_anywhere(pane)
+            .and_then(|target| target.lx.approvals.front_mut())
+            .is_some_and(|item| item.move_active(1)),
+        LxInput::Enter | LxInput::Tab => commit_decision(state, pane, front.active_decision()),
+        LxInput::Escape | LxInput::Char('n') => {
+            commit_decision(state, pane, SandboxApprovalDecision::Denied)
+        }
         LxInput::Char('y')
             if matches!(
-                kind,
+                front.request.kind,
                 SandboxApprovalKind::Escalation | SandboxApprovalKind::Rule
             ) =>
         {
-            Some(SandboxApprovalDecision::Once)
+            commit_decision(state, pane, SandboxApprovalDecision::Once)
         }
-        LxInput::Char('r') if kind == SandboxApprovalKind::Retry => {
-            Some(SandboxApprovalDecision::Once)
+        LxInput::Char('r') if front.request.kind == SandboxApprovalKind::Retry => {
+            commit_decision(state, pane, SandboxApprovalDecision::Once)
         }
         LxInput::Char('a') if front.request.can_approve_for_session() => {
-            Some(SandboxApprovalDecision::ForSession)
+            commit_decision(state, pane, SandboxApprovalDecision::ForSession)
         }
-        // 等待审批期间 Enter 不得提交输入。
-        LxInput::Enter => return true,
-        _ => return false,
-    };
-    let Some(decision) = decision else {
+        _ => false,
+    }
+}
+
+/// 鼠标悬停审批命令面板条目：只移动高亮、不改变窗口滚动。
+pub fn hover_approval(state: &mut AppState, pane: PaneId, index: usize) -> bool {
+    state
+        .pane_mut_anywhere(pane)
+        .and_then(|target| target.lx.approvals.front_mut())
+        .is_some_and(|item| item.set_active(index))
+}
+
+/// 鼠标点击审批命令面板条目：直接采纳该条目对应裁决。
+pub fn select_approval(state: &mut AppState, pane: PaneId, index: usize) -> bool {
+    let Some(decision) = state
+        .pane_anywhere(pane)
+        .and_then(|target| target.lx.approvals.front())
+        .and_then(|front| front.decision_at(index))
+    else {
         return false;
     };
+    commit_decision(state, pane, decision)
+}
+
+fn commit_decision(state: &mut AppState, pane: PaneId, decision: SandboxApprovalDecision) -> bool {
     let Some(target) = state.pane_mut_anywhere(pane) else {
         return false;
     };

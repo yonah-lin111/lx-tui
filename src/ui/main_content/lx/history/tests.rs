@@ -25,6 +25,7 @@ mod anchor;
 mod cards;
 mod compact;
 mod model_switch;
+mod permission_switch;
 mod rewind;
 mod sticky;
 mod text_hit;

@@ -18,6 +18,13 @@ fn temp_dir(label: &str) -> PathBuf {
 }
 
 #[test]
+fn short_labels_are_compact_english_names() {
+    assert_eq!(SandboxMode::ReadOnly.short_label(), "Read-only");
+    assert_eq!(SandboxMode::WorkspaceWrite.short_label(), "Workspace");
+    assert_eq!(SandboxMode::DangerFullAccess.short_label(), "Full");
+}
+
+#[test]
 fn defaults_are_workspace_write_without_network_and_ask_escalation() {
     let settings = SandboxSettings::default();
     assert_eq!(settings.mode, SandboxMode::WorkspaceWrite);

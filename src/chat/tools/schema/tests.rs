@@ -496,3 +496,17 @@ fn escalation_parameters_can_be_trimmed_for_never_policy() {
     }
     assert!(properties.contains_key("cmd"));
 }
+
+#[test]
+fn spawn_agent_spec_explains_subagent_sandbox_escalation() {
+    let spawn = super::available_tools()
+        .iter()
+        .find(|spec| spec.name == "spawn_agent")
+        .expect("spawn_agent");
+    assert!(spawn.description.contains("shares the session sandbox"));
+    assert!(
+        spawn
+            .description
+            .contains("can request `exec_command` approval")
+    );
+}

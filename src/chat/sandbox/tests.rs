@@ -152,3 +152,15 @@ fn approved_exact_and_prefix_rules_bypass_the_command() {
     assert!(!plan.command_is_approved("touch ~/y"));
     let _ = std::fs::remove_dir_all(cwd);
 }
+
+#[test]
+fn command_preview_collapses_newlines_and_truncates_long_scripts() {
+    assert_eq!(
+        super::command_preview("cat > x <<'EOF'\n  hello   world\nEOF"),
+        "cat > x <<'EOF' hello world EOF"
+    );
+    let long = "a".repeat(200);
+    let preview = super::command_preview(&long);
+    assert!(preview.ends_with('…'));
+    assert_eq!(preview.chars().count(), 121);
+}

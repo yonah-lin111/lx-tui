@@ -97,21 +97,6 @@ struct CheckpointRow {
     created_at_ms: i64,
 }
 
-struct SwitchRow {
-    sequence: i64,
-    from_provider: Option<String>,
-    from_model: Option<String>,
-    from_variant: Option<String>,
-    to_provider: String,
-    to_model: String,
-    to_variant: Option<String>,
-    from_label: Option<String>,
-    to_label: String,
-    updated_sources_json: String,
-    injected_prompt: String,
-    created_at_ms: i64,
-}
-
 impl Database {
     /// 从 `session_id` 的 `before` 消息之前分叉新会话。
     ///
@@ -127,10 +112,10 @@ impl Database {
         let workspace_external = self
             .workspace_external_id(workspace)?
             .ok_or(DbError::WorkspaceMissing)?;
-        let Some((parent_title, model_provider, model_id, variant)) = self
+        let Some((parent_title, model_provider, model_id, variant, sandbox_mode)) = self
             .conn
             .query_row(
-                r#"SELECT title, model_provider, model_id, variant
+                r#"SELECT title, model_provider, model_id, variant, sandbox_mode
                    FROM agent_session
                    WHERE external_id = ?1 AND workspace_id = ?2 AND source = 'native'"#,
                 params![session_id, workspace_external],
@@ -140,6 +125,7 @@ impl Database {
                         row.get::<_, Option<String>>(1)?,
                         row.get::<_, Option<String>>(2)?,
                         row.get::<_, Option<String>>(3)?,
+                        row.get::<_, Option<String>>(4)?,
                     ))
                 },
             )
@@ -198,6 +184,7 @@ impl Database {
             model_provider,
             model_id,
             variant,
+            sandbox_mode,
             boundary,
             &image_rewrite,
         );
@@ -223,6 +210,7 @@ impl Database {
         model_provider: Option<String>,
         model_id: Option<String>,
         variant: Option<String>,
+        sandbox_mode: Option<String>,
         boundary: i64,
         image_rewrite: &Option<(String, String)>,
     ) -> Result<()> {
@@ -271,11 +259,11 @@ impl Database {
         transaction.execute(
             r#"INSERT INTO agent_session
                    (external_id, workspace_id, source, title, first_user_message,
-                    model_provider, model_id, variant, status, archived,
+                    model_provider, model_id, variant, sandbox_mode, status, archived,
                     created_at_ms, updated_at_ms, last_message_at_ms,
                     total_input_tokens, total_output_tokens, revision)
-               VALUES (?1, ?2, 'native', ?3, ?4, ?5, ?6, ?7, 'active', 0,
-                       ?8, ?8, ?9, ?10, ?11, 0)"#,
+               VALUES (?1, ?2, 'native', ?3, ?4, ?5, ?6, ?7, ?8, 'active', 0,
+                       ?9, ?9, ?10, ?11, ?12, 0)"#,
             params![
                 new_session_id,
                 workspace_external,
@@ -284,6 +272,7 @@ impl Database {
                 model_provider,
                 model_id,
                 variant,
+                sandbox_mode,
                 now,
                 last_message_at_ms.unwrap_or(now),
                 total_input,
@@ -354,7 +343,20 @@ impl Database {
         )?;
         recap::copy_recaps(&transaction, new_session_id, &message_ids, source_session)?;
         copy_checkpoints(&transaction, new_session_id, source_session, 0, boundary)?;
-        copy_switches(&transaction, new_session_id, source_session, 0, boundary)?;
+        super::model_switch::copy_model_switches_for_fork(
+            &transaction,
+            new_session_id,
+            source_session,
+            0,
+            boundary,
+        )?;
+        crate::db::sandbox::copy_permission_switches_for_fork(
+            &transaction,
+            source_session,
+            new_session_id,
+            0,
+            boundary,
+        )?;
         transaction.commit()?;
         Ok(())
     }
@@ -567,10 +569,17 @@ pub(super) fn copy_completed_history_window_to_child(
             start_seq,
             boundary,
         )?;
-        copy_switches(
+        super::model_switch::copy_model_switches_for_fork(
             transaction,
             child_session_id,
             source_session,
+            start_seq,
+            boundary,
+        )?;
+        crate::db::sandbox::copy_permission_switches_for_fork(
+            transaction,
+            source_session,
+            child_session_id,
             start_seq,
             boundary,
         )?;
@@ -884,67 +893,6 @@ fn copy_checkpoints(
             ],
         )?;
         ids.insert(row.external_id.clone(), new_id);
-    }
-    Ok(())
-}
-
-fn copy_switches(
-    conn: &Connection,
-    new_session_id: &str,
-    source_session: &str,
-    start_seq: i64,
-    boundary: i64,
-) -> Result<()> {
-    let mut statement = conn.prepare(
-        r#"SELECT sequence, from_provider, from_model, from_variant, to_provider, to_model,
-                  to_variant, from_label, to_label, updated_sources_json, injected_prompt,
-                  created_at_ms
-           FROM agent_model_switch
-           WHERE session_id = ?1 AND sequence >= ?2 AND sequence < ?3
-           ORDER BY sequence"#,
-    )?;
-    let rows = statement
-        .query_map(params![source_session, start_seq, boundary], |row| {
-            Ok(SwitchRow {
-                sequence: row.get(0)?,
-                from_provider: row.get(1)?,
-                from_model: row.get(2)?,
-                from_variant: row.get(3)?,
-                to_provider: row.get(4)?,
-                to_model: row.get(5)?,
-                to_variant: row.get(6)?,
-                from_label: row.get(7)?,
-                to_label: row.get(8)?,
-                updated_sources_json: row.get(9)?,
-                injected_prompt: row.get(10)?,
-                created_at_ms: row.get(11)?,
-            })
-        })?
-        .collect::<std::result::Result<Vec<_>, _>>()?;
-    for row in rows {
-        conn.execute(
-            r#"INSERT INTO agent_model_switch
-                   (external_id, session_id, sequence, from_provider, from_model, from_variant,
-                    to_provider, to_model, to_variant, from_label, to_label,
-                    updated_sources_json, injected_prompt, created_at_ms)
-               VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14)"#,
-            params![
-                new_external_id("msw"),
-                new_session_id,
-                row.sequence,
-                row.from_provider,
-                row.from_model,
-                row.from_variant,
-                row.to_provider,
-                row.to_model,
-                row.to_variant,
-                row.from_label,
-                row.to_label,
-                row.updated_sources_json,
-                row.injected_prompt,
-                row.created_at_ms,
-            ],
-        )?;
     }
     Ok(())
 }

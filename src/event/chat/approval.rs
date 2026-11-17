@@ -7,12 +7,33 @@ use tokio::sync::oneshot;
 
 use crate::app::state::{AppState, ApprovalState, RequestKey};
 use crate::chat::agent_loop::HostError;
-use crate::chat::sandbox::{SandboxApprovalDecision, SandboxApprovalRequest};
+use crate::chat::sandbox::{SandboxApprovalDecision, SandboxApprovalRequest, command_preview};
 
 use super::{ChatStreams, PendingApproval, active_assistant_id};
 
 /// 已有挂起审批时的稳定失败码。
 pub const APPROVAL_BUSY_CODE: &str = "another sandbox approval is already pending";
+
+const fn decision_str(decision: SandboxApprovalDecision) -> &'static str {
+    match decision {
+        SandboxApprovalDecision::Once => "once",
+        SandboxApprovalDecision::ForSession => "for_session",
+        SandboxApprovalDecision::Denied => "denied",
+    }
+}
+
+fn format_subagent_source(handle: &super::subagent::SubagentHandle) -> String {
+    let role = handle.role.as_str();
+    match handle
+        .nickname
+        .as_deref()
+        .map(str::trim)
+        .filter(|name| !name.is_empty())
+    {
+        Some(nickname) => format!("{nickname} [{role}]"),
+        None => role.to_string(),
+    }
+}
 
 /// 挂起一次审批；返回是否写入了 UI 状态。
 pub(crate) fn request(
@@ -20,23 +41,68 @@ pub(crate) fn request(
     streams: &mut ChatStreams,
     key: RequestKey,
     call_id: String,
-    request: SandboxApprovalRequest,
+    mut request: SandboxApprovalRequest,
     reply: oneshot::Sender<Result<SandboxApprovalDecision, HostError>>,
 ) -> bool {
-    if active_assistant_id(state, &key).is_none()
-        || streams
+    let main_live = active_assistant_id(state, &key).is_some()
+        && !streams
             .cancels
             .get(&key)
-            .is_some_and(|cancel| *cancel.borrow())
-    {
+            .is_some_and(|cancel| *cancel.borrow());
+    let subagent_meta = (!main_live)
+        .then(|| {
+            let pane_session = state
+                .pane_anywhere(key.pane)
+                .and_then(|pane| pane.lx.chat.session_id.as_deref());
+            streams
+                .subagents
+                .get(&key.session)
+                .filter(|handle| {
+                    handle.parent.pane == key.pane
+                        && handle.parent.generation == key.generation
+                        && handle.status == super::subagent::STATUS_RUNNING
+                        && !*handle.cancel.borrow()
+                        && pane_session == Some(handle.root_session.as_str())
+                })
+                .map(|handle| {
+                    (
+                        format_subagent_source(handle),
+                        handle.agent_id.clone(),
+                        handle.root_session.clone(),
+                    )
+                })
+        })
+        .flatten();
+    if !main_live && subagent_meta.is_none() {
+        tracing::debug!(
+            target: "lx::agent::approval",
+            pane = key.pane.raw(),
+            session = %key.session,
+            generation = key.generation,
+            call_id = %call_id,
+            kind = request.kind.as_str(),
+            "sandbox approval dropped (inactive target)"
+        );
         let _ = reply.send(Err(HostError::Cancelled));
         return false;
+    }
+    if request.source.is_none() {
+        request.source = subagent_meta.as_ref().map(|(source, _, _)| source.clone());
     }
     let Some(pane) = state.pane_mut_anywhere(key.pane) else {
         let _ = reply.send(Err(HostError::Cancelled));
         return false;
     };
     if streams.approvals.contains_key(&key) {
+        tracing::warn!(
+            target: "lx::agent::approval",
+            pane = key.pane.raw(),
+            session = %key.session,
+            call_id = %call_id,
+            kind = request.kind.as_str(),
+            source = request.source.as_deref().unwrap_or("main"),
+            "sandbox approval rejected (another approval pending)"
+        );
         let _ = reply.send(Err(HostError::Failed {
             code: APPROVAL_BUSY_CODE.to_string(),
         }));
@@ -47,12 +113,42 @@ pub(crate) fn request(
         call_id.clone(),
         request.clone(),
     ));
+    let queue_len = pane.lx.approvals.len();
+    let kind = request.kind;
+    let source_label = request.source.clone().unwrap_or_else(|| "main".to_string());
+    let has_prefix_rule = request.prefix_rule.is_some();
+    let has_additional = request.additional.is_some();
+    let preview = command_preview(&request.command);
+    let agent_id = subagent_meta
+        .as_ref()
+        .map(|(_, id, _)| id.as_str())
+        .unwrap_or("-");
+    let parent_session = subagent_meta
+        .as_ref()
+        .map(|(_, _, root)| root.as_str())
+        .unwrap_or("-");
+    tracing::info!(
+        target: "lx::agent::approval",
+        pane = key.pane.raw(),
+        session = %key.session,
+        parent_session,
+        agent_id,
+        call_id = %call_id,
+        kind = kind.as_str(),
+        source = %source_label,
+        has_prefix_rule,
+        has_additional,
+        queue_len,
+        command = %preview,
+        "sandbox approval requested"
+    );
     streams.approvals.insert(
         key,
         PendingApproval {
             call_id,
             request,
             reply,
+            requested_at: std::time::Instant::now(),
         },
     );
     true
@@ -68,23 +164,70 @@ pub(crate) fn answer(
     decision: SandboxApprovalDecision,
 ) -> bool {
     let Some(pending) = streams.approvals.get(key) else {
+        tracing::debug!(
+            target: "lx::agent::approval",
+            pane = key.pane.raw(),
+            session = %key.session,
+            call_id = %call_id,
+            decision = decision_str(decision),
+            "sandbox approval answer ignored (missing pending)"
+        );
         return false;
     };
     if pending.call_id != call_id {
+        tracing::debug!(
+            target: "lx::agent::approval",
+            pane = key.pane.raw(),
+            session = %key.session,
+            call_id = %call_id,
+            pending_call_id = %pending.call_id,
+            "sandbox approval answer ignored (call_id mismatch)"
+        );
         return false;
     }
     let Some(pending) = streams.approvals.remove(key) else {
         return false;
     };
+    let wait_ms = pending.requested_at.elapsed().as_millis() as u64;
     let for_session = decision == SandboxApprovalDecision::ForSession;
     let kind = pending.request.kind;
     let command = pending.request.command.clone();
     let prefix = pending.request.prefix_rule.clone();
     let justification = pending.request.justification.clone();
+    let source_label = pending
+        .request
+        .source
+        .clone()
+        .unwrap_or_else(|| "main".to_string());
+    let (agent_id, rule_session) = match streams.subagents.get(&key.session) {
+        Some(handle) => (
+            Some(handle.agent_id.clone()),
+            Some(handle.root_session.clone()),
+        ),
+        None => (None, None),
+    };
+    let stream_workspace = streams.db_workspaces.get(key).cloned();
+    tracing::info!(
+        target: "lx::agent::approval",
+        pane = key.pane.raw(),
+        session = %key.session,
+        parent_session = rule_session.as_deref().unwrap_or("-"),
+        agent_id = agent_id.as_deref().unwrap_or("-"),
+        call_id = %call_id,
+        kind = kind.as_str(),
+        source = %source_label,
+        decision = decision_str(decision),
+        wait_ms,
+        command = %command_preview(&command),
+        "sandbox approval answered"
+    );
     let _ = pending.reply.send(Ok(decision));
     let Some(pane) = state.pane_mut_anywhere(key.pane) else {
         return false;
     };
+    let target_session = rule_session.or_else(|| pane.lx.chat.session_id.clone());
+    let same_main_session =
+        target_session.as_deref() == pane.lx.chat.session_id.as_deref() && target_session.is_some();
     let before = pane.lx.approvals.len();
     pane.lx
         .approvals
@@ -94,15 +237,15 @@ pub(crate) fn answer(
     if for_session {
         match kind {
             crate::chat::sandbox::SandboxApprovalKind::Retry => {
-                if let Some(tokens) = shlex::split(&command)
-                    && !pane.lx.sandbox_exact_rules.contains(&tokens)
-                {
-                    pane.lx.sandbox_exact_rules.push(tokens.clone());
+                if let Some(tokens) = shlex::split(&command) {
+                    if same_main_session && !pane.lx.sandbox_exact_rules.contains(&tokens) {
+                        pane.lx.sandbox_exact_rules.push(tokens.clone());
+                        changed = true;
+                    }
                     new_rule = Some(crate::db::sandbox::SessionSandboxRule {
                         kind: crate::db::sandbox::SandboxRuleKind::Exact,
                         tokens,
                     });
-                    changed = true;
                 }
             }
             crate::chat::sandbox::SandboxApprovalKind::Rule => {
@@ -124,21 +267,22 @@ pub(crate) fn answer(
                     ) {
                         tracing::warn!(%error, "failed to append exec policy rule");
                     }
-                    if !pane.lx.sandbox_prefix_rules.contains(&prefix) {
+                    if same_main_session && !pane.lx.sandbox_prefix_rules.contains(&prefix) {
                         pane.lx.sandbox_prefix_rules.push(prefix.clone());
-                        new_rule = Some(crate::db::sandbox::SessionSandboxRule {
-                            kind: crate::db::sandbox::SandboxRuleKind::Prefix,
-                            tokens: prefix,
-                        });
                         changed = true;
                     }
+                    new_rule = Some(crate::db::sandbox::SessionSandboxRule {
+                        kind: crate::db::sandbox::SandboxRuleKind::Prefix,
+                        tokens: prefix,
+                    });
                 }
             }
         }
     }
     if let Some(rule) = new_rule
-        && let Some(session_id) = pane.lx.chat.session_id.clone()
-        && let Some(workspace) = state.chat_session_key_for_pane(key.pane)
+        && let Some(session_id) = target_session
+        && let Some(workspace) =
+            stream_workspace.or_else(|| state.chat_session_key_for_pane(key.pane))
         && let Some(database) = persistence.database()
         && let Err(error) = database.insert_sandbox_rule(&workspace, &session_id, &rule)
     {
@@ -152,6 +296,17 @@ pub(crate) fn cancel(state: &mut AppState, streams: &mut ChatStreams, key: &Requ
     let pending = streams.approvals.remove(key);
     let had_pending = pending.is_some();
     if let Some(pending) = pending {
+        let wait_ms = pending.requested_at.elapsed().as_millis() as u64;
+        tracing::info!(
+            target: "lx::agent::approval",
+            pane = key.pane.raw(),
+            session = %key.session,
+            call_id = %pending.call_id,
+            kind = pending.request.kind.as_str(),
+            source = pending.request.source.as_deref().unwrap_or("main"),
+            wait_ms,
+            "sandbox approval cancelled"
+        );
         let _ = pending.reply.send(Err(HostError::Cancelled));
     }
     let Some(pane) = state.pane_mut_anywhere(key.pane) else {
@@ -160,4 +315,61 @@ pub(crate) fn cancel(state: &mut AppState, streams: &mut ChatStreams, key: &Requ
     let before = pane.lx.approvals.len();
     pane.lx.approvals.retain(|approval| &approval.key != key);
     before != pane.lx.approvals.len() || had_pending
+}
+
+/// 防御 sweep：审批条目所属主请求与子 agent 都已不在途/不在当前会话时清除并唤醒。
+pub(crate) fn sweep_orphans(state: &mut AppState, streams: &mut ChatStreams) -> bool {
+    let mut orphaned: Vec<RequestKey> = Vec::new();
+    for pane in state.all_pane_ids() {
+        let Some(target) = state.pane_anywhere(pane) else {
+            continue;
+        };
+        let pane_session = target.lx.chat.session_id.as_deref();
+        for approval in &target.lx.approvals {
+            let main_live = active_assistant_id(state, &approval.key).is_some()
+                && !streams
+                    .cancels
+                    .get(&approval.key)
+                    .is_some_and(|cancel| *cancel.borrow());
+            let subagent_live =
+                streams
+                    .subagents
+                    .get(&approval.key.session)
+                    .is_some_and(|handle| {
+                        handle.parent.pane == approval.key.pane
+                            && handle.parent.generation == approval.key.generation
+                            && handle.status == super::subagent::STATUS_RUNNING
+                            && !*handle.cancel.borrow()
+                            && pane_session == Some(handle.root_session.as_str())
+                    });
+            if !main_live && !subagent_live {
+                orphaned.push(approval.key.clone());
+            }
+        }
+    }
+    for key in streams.approvals.keys() {
+        let pane_session = state
+            .pane_anywhere(key.pane)
+            .and_then(|target| target.lx.chat.session_id.as_deref());
+        let main_live = active_assistant_id(state, key).is_some();
+        let subagent_live = streams.subagents.get(&key.session).is_some_and(|handle| {
+            handle.status == super::subagent::STATUS_RUNNING
+                && pane_session == Some(handle.root_session.as_str())
+        });
+        if (!main_live && !subagent_live) && !orphaned.contains(key) {
+            orphaned.push(key.clone());
+        }
+    }
+    if !orphaned.is_empty() {
+        tracing::info!(
+            target: "lx::agent::approval",
+            count = orphaned.len(),
+            "sweeping orphan sandbox approvals"
+        );
+    }
+    let mut changed = false;
+    for key in orphaned {
+        changed |= cancel(state, streams, &key);
+    }
+    changed
 }

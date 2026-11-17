@@ -287,6 +287,9 @@ impl Database {
         if version < 31 {
             self.migrate_v31_sandbox()?;
         }
+        if version < 32 {
+            self.migrate_v32_permission_switch()?;
+        }
         Ok(())
     }
 
@@ -327,6 +330,16 @@ impl Database {
         )?;
         ensure_no_foreign_key_violation(&transaction)?;
         transaction.pragma_update(None, "user_version", 31)?;
+        transaction.commit()?;
+        Ok(())
+    }
+
+    /// v32：会话中途沙箱权限切换记录表（只增表）。
+    fn migrate_v32_permission_switch(&mut self) -> Result<()> {
+        let transaction = self.conn.unchecked_transaction()?;
+        transaction.execute_batch(SCHEMA_V32_PERMISSION_SWITCH)?;
+        ensure_no_foreign_key_violation(&transaction)?;
+        transaction.pragma_update(None, "user_version", 32)?;
         transaction.commit()?;
         Ok(())
     }

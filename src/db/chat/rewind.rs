@@ -722,6 +722,10 @@ impl Database {
                 params![commit.session_id, target_sequence],
             )?;
             transaction.execute(
+                "DELETE FROM agent_permission_switch WHERE session_id = ?1 AND sequence >= ?2",
+                params![commit.session_id, target_sequence],
+            )?;
+            transaction.execute(
                 "DELETE FROM agent_compact_checkpoint WHERE session_id = ?1 AND sequence >= ?2",
                 params![commit.session_id, target_sequence],
             )?;

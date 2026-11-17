@@ -2,9 +2,29 @@
 
 use std::path::Path;
 
-use rusqlite::{OptionalExtension, params};
+use rusqlite::{Connection, OptionalExtension, params};
 
-use super::{Database, DbError, now_ms};
+use super::{Database, DbError, new_external_id, now_ms};
+
+/// 一条已持久化的权限模式切换记录。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PermissionSwitchRecord {
+    pub id: String,
+    pub sequence: i64,
+    pub from_mode: String,
+    pub to_mode: String,
+    pub injected_prompt: String,
+    pub created_at_ms: i64,
+}
+
+/// 一次权限模式切换的写入请求。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PermissionSwitchCommit {
+    pub session_id: String,
+    pub from_mode: String,
+    pub to_mode: String,
+    pub injected_prompt: String,
+}
 
 /// 规则种类：`exact` 为整条命令全等，`prefix` 为 token 前缀。
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -166,6 +186,158 @@ impl Database {
         )?;
         Ok(())
     }
+
+    /// 按 `sequence` 升序加载会话的全部权限切换记录（双条件校验工作区归属）。
+    pub fn permission_switches(
+        &self,
+        workspace: &Path,
+        session_id: &str,
+    ) -> Result<Vec<PermissionSwitchRecord>, DbError> {
+        let Some(workspace) = self.workspace_external_id(workspace)? else {
+            return Ok(Vec::new());
+        };
+        let owned: Option<i64> = self
+            .conn
+            .query_row(
+                "SELECT id FROM agent_session WHERE external_id = ?1 AND workspace_id = ?2",
+                params![session_id, workspace],
+                |row| row.get(0),
+            )
+            .optional()?;
+        if owned.is_none() {
+            return Ok(Vec::new());
+        }
+        let mut statement = self.conn.prepare(
+            r#"SELECT external_id, sequence, from_mode, to_mode, injected_prompt, created_at_ms
+               FROM agent_permission_switch
+               WHERE session_id = ?1
+               ORDER BY sequence ASC, id ASC"#,
+        )?;
+        let rows = statement.query_map(params![session_id], |row| {
+            Ok(PermissionSwitchRecord {
+                id: row.get(0)?,
+                sequence: row.get(1)?,
+                from_mode: row.get(2)?,
+                to_mode: row.get(3)?,
+                injected_prompt: row.get(4)?,
+                created_at_ms: row.get(5)?,
+            })
+        })?;
+        rows.collect::<std::result::Result<Vec<_>, _>>()
+            .map_err(DbError::from)
+    }
+
+    /// 同事务写入会话 `sandbox_mode`，并在已有消息且模式真实变化时记录 `agent_permission_switch` 并清空旧会话规则。
+    pub fn record_permission_switch(
+        &self,
+        workspace: &Path,
+        commit: &PermissionSwitchCommit,
+    ) -> Result<Option<PermissionSwitchRecord>, DbError> {
+        let workspace = self
+            .workspace_external_id(workspace)?
+            .ok_or(DbError::WorkspaceMissing)?;
+        let transaction = self.conn.unchecked_transaction()?;
+        let owned: Option<i64> = transaction
+            .query_row(
+                "SELECT id FROM agent_session WHERE external_id = ?1 AND workspace_id = ?2",
+                params![commit.session_id, workspace],
+                |row| row.get(0),
+            )
+            .optional()?;
+        if owned.is_none() {
+            return Err(DbError::SessionMissing);
+        }
+        transaction.execute(
+            "UPDATE agent_session SET sandbox_mode = ?1 WHERE external_id = ?2 AND workspace_id = ?3",
+            params![commit.to_mode, commit.session_id, workspace],
+        )?;
+        let changed = commit.from_mode != commit.to_mode;
+        if changed {
+            transaction.execute(
+                "DELETE FROM agent_session_sandbox_rule WHERE session_id = ?1",
+                params![commit.session_id],
+            )?;
+        }
+        let message_count: i64 = transaction.query_row(
+            "SELECT COUNT(*) FROM agent_message WHERE session_id = ?1",
+            params![commit.session_id],
+            |row| row.get(0),
+        )?;
+        if !changed || message_count == 0 {
+            transaction.commit()?;
+            return Ok(None);
+        }
+        let sequence = super::chat::next_session_sequence(&transaction, &commit.session_id)?;
+        let id = new_external_id("psw");
+        let created_at_ms = now_ms();
+        transaction.execute(
+            r#"INSERT INTO agent_permission_switch
+                   (external_id, session_id, sequence, from_mode, to_mode, injected_prompt, created_at_ms)
+               VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)"#,
+            params![
+                id,
+                commit.session_id,
+                sequence,
+                commit.from_mode,
+                commit.to_mode,
+                commit.injected_prompt,
+                created_at_ms,
+            ],
+        )?;
+        transaction.commit()?;
+        Ok(Some(PermissionSwitchRecord {
+            id,
+            sequence,
+            from_mode: commit.from_mode.clone(),
+            to_mode: commit.to_mode.clone(),
+            injected_prompt: commit.injected_prompt.clone(),
+            created_at_ms,
+        }))
+    }
+}
+
+/// 分叉会话时复制边界之前的权限切换记录。
+pub(super) fn copy_permission_switches_for_fork(
+    conn: &Connection,
+    source_session: &str,
+    new_session_id: &str,
+    start_seq: i64,
+    boundary: i64,
+) -> Result<(), DbError> {
+    let mut statement = conn.prepare(
+        r#"SELECT sequence, from_mode, to_mode, injected_prompt, created_at_ms
+           FROM agent_permission_switch
+           WHERE session_id = ?1 AND sequence >= ?2 AND sequence < ?3
+           ORDER BY sequence"#,
+    )?;
+    let rows = statement
+        .query_map(params![source_session, start_seq, boundary], |row| {
+            Ok((
+                row.get::<_, i64>(0)?,
+                row.get::<_, String>(1)?,
+                row.get::<_, String>(2)?,
+                row.get::<_, String>(3)?,
+                row.get::<_, i64>(4)?,
+            ))
+        })?
+        .collect::<std::result::Result<Vec<_>, _>>()?;
+    for (sequence, from_mode, to_mode, injected_prompt, created_at_ms) in rows {
+        conn.execute(
+            r#"INSERT INTO agent_permission_switch
+                   (external_id, session_id, sequence, from_mode, to_mode, injected_prompt, created_at_ms)
+               VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)"#,
+            params![
+                new_external_id("psw"),
+                new_session_id,
+                sequence,
+                from_mode,
+                to_mode,
+                injected_prompt,
+                created_at_ms,
+            ],
+        )?;
+    }
+    Ok(())
 }
 
 #[cfg(test)]

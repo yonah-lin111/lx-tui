@@ -205,6 +205,7 @@ impl Persistence {
         let notices = db.load_notices(workspace, session_id)?;
         let checkpoints = db.compact_checkpoints(workspace, session_id)?;
         let switches = db.model_switches(workspace, session_id)?;
+        let permission_switches = db.permission_switches(workspace, session_id)?;
         let recaps = db.load_recaps(workspace, session_id)?;
         let revision = db.session_revision(session_id)?;
         Ok(super::RewindView {
@@ -212,6 +213,7 @@ impl Persistence {
             notices,
             checkpoints,
             switches,
+            permission_switches,
             recaps,
             revision,
         })
@@ -560,9 +562,14 @@ impl Persistence {
         let title_changed = state
             .pane_mut_anywhere(pane)
             .is_some_and(|target| target.lx.chat.set_session_title(session_title));
-        // 检查点与模型切换列表随会话一起回填（渲染与撤销都依赖它）。
+        // 检查点、模型/权限切换列表随会话一起回填（渲染与撤销都依赖它）。
         let checkpoints_changed = update::set_compact_checkpoints(state, pane, &checkpoints);
         let switches_changed = update::set_model_switches(state, pane, &switches);
+        let permission_switches = self
+            .with_db(|db| db.permission_switches(workspace, session_id))
+            .unwrap_or_default();
+        let perm_switches_changed =
+            update::set_permission_switches(state, pane, &permission_switches);
         let recaps_changed = update::set_message_recaps(state, pane, &recaps);
         // 会话视图建好之后再按进程记录校正（需要卡片已存在）。
         let drains = update::request_report_drain_if_idle(state, pane);
@@ -571,6 +578,7 @@ impl Persistence {
             | title_changed
             | checkpoints_changed
             | switches_changed
+            | perm_switches_changed
             | recaps_changed
             | drains
     }
@@ -865,6 +873,40 @@ impl Persistence {
                 }
                 false
             }
+            Effect::PersistSandboxMode {
+                workspace,
+                session_id,
+                mode,
+                switch_commit,
+            } => {
+                if let Some(commit) = switch_commit {
+                    let recorded = self.with_db(|db| {
+                        let _ = db.record_permission_switch(&workspace, &commit);
+                        db.permission_switches(&workspace, &session_id)
+                    });
+                    if let Some(switches) = recorded {
+                        let mut changed = false;
+                        for target_pane in state.all_pane_ids() {
+                            if state.pane_anywhere(target_pane).is_some_and(|target| {
+                                target.lx.chat.session_id.as_deref() == Some(session_id.as_str())
+                            }) {
+                                changed |=
+                                    update::set_permission_switches(state, target_pane, &switches);
+                            }
+                        }
+                        return changed;
+                    }
+                } else {
+                    self.with_db(|db| {
+                        db.set_session_sandbox_mode(
+                            &workspace,
+                            &session_id,
+                            mode.map(|mode| mode.as_str()),
+                        )
+                    });
+                }
+                false
+            }
             other => {
                 tracing::warn!(?other, "non-chat effect reached chat handler");
                 false
@@ -887,5 +929,6 @@ pub(super) fn handles(effect: &Effect) -> bool {
             | Effect::RenameChatSession { .. }
             | Effect::DeleteChatSession { .. }
             | Effect::SetChatSessionModel { .. }
+            | Effect::PersistSandboxMode { .. }
     )
 }

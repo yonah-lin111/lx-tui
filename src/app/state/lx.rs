@@ -25,6 +25,7 @@ pub mod mcp;
 pub mod mention;
 pub mod model_switch;
 mod panels;
+pub mod permission_switch;
 pub mod recap;
 pub mod refer;
 pub mod rewind;
@@ -39,7 +40,7 @@ pub(crate) use history::HistoryMove;
 pub use shell::LxInputMode;
 
 pub use agent::{AgentsState, MAX_RESIDENT_SUBAGENT_CHATS, SubagentReportView, SubagentRun};
-pub use approval::ApprovalState;
+pub use approval::{ApprovalOption, ApprovalState};
 pub use ask::{AskEditor, AskHit, AskState, AskWheelZone};
 pub use btw::{BtwTargetView, BtwThreadState, LxBtw};
 pub use chat::SHELL_SLOT;
@@ -63,6 +64,7 @@ pub use detail::{
 pub use mcp::{McpCatalogEntry, McpPanel, McpPanelEntry, McpRuntimeState, McpServerState};
 pub use mention::{LxMention, LxMentionView, SubagentMentionItem, SubagentRunMentionEntry};
 pub use model_switch::{LxModelSwitch, ModelSwitchNoticeView};
+pub use permission_switch::{LxPermissionSwitch, PermissionSwitchNoticeView};
 pub use recap::{LxRecap, MessageRecapView, RecapPending};
 pub use rewind::{
     LxRewind, RewindAction, RewindExecution, RewindNoticeView, RewindPanel, RewindScope,
@@ -70,7 +72,8 @@ pub use rewind::{
 };
 pub use slash::{
     ForkEntry, ForkPanel, HistoryEntry, HistoryPanel, ModelCandidate, ModelPicker,
-    ModelPickerStage, PanelWindow, SlashCommand, SlashEntry, SlashPanel,
+    ModelPickerStage, PanelWindow, PermissionPicker, SlashCommand, SlashEntry, SlashPanel,
+    permission_candidates,
 };
 pub use task::{AgentFilter, ProcessEntry, TaskPage, TaskTab};
 pub use web::{
@@ -181,6 +184,8 @@ pub struct Lx {
     pub compact: LxCompact,
     /// 会话中途模型切换记录与展开状态。
     pub model_switch: LxModelSwitch,
+    /// 会话中途沙箱权限切换记录与展开状态。
+    pub permission_switch: LxPermissionSwitch,
     /// 本会话回顾：已生成条目、在途请求与自动触发进度。
     pub recap: LxRecap,
     /// 本页自己的 toast 槽；`Some` 时覆盖绘制在**窗格内容区内部**。
@@ -325,6 +330,7 @@ impl Lx {
             detail_rewind: DetailRewindState::default(),
             compact: LxCompact::default(),
             model_switch: LxModelSwitch::default(),
+            permission_switch: LxPermissionSwitch::default(),
             recap: LxRecap::default(),
             toast: None,
             task: None,

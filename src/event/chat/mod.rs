@@ -152,6 +152,7 @@ pub(crate) struct PendingApproval {
     pub call_id: String,
     pub request: crate::chat::sandbox::SandboxApprovalRequest,
     pub reply: oneshot::Sender<Result<crate::chat::sandbox::SandboxApprovalDecision, HostError>>,
+    pub requested_at: std::time::Instant,
 }
 
 /// 一次等待作答的提问：回执通道 + 归属用的 `call_id`。
@@ -251,11 +252,22 @@ impl ChatStreams {
         true
     }
 
-    /// 取走挂起的提问并回 `Cancelled`；无挂起项返回 `false`。
+    /// 取走挂起的审批并回 `Cancelled`；无挂起项返回 `false`。
     pub(crate) fn wake_approval(&mut self, key: &RequestKey) -> bool {
         let Some(pending) = self.approvals.remove(key) else {
             return false;
         };
+        let wait_ms = pending.requested_at.elapsed().as_millis() as u64;
+        tracing::info!(
+            target: "lx::agent::approval",
+            pane = key.pane.raw(),
+            session = %key.session,
+            call_id = %pending.call_id,
+            kind = pending.request.kind.as_str(),
+            source = pending.request.source.as_deref().unwrap_or("main"),
+            wait_ms,
+            "sandbox approval woken on turn end"
+        );
         let _ = pending.reply.send(Err(HostError::Cancelled));
         true
     }
@@ -352,7 +364,6 @@ pub fn pump_chat_streams(
                         | Effect::CancelChatStream { .. }
                         | Effect::AnswerAsk { .. }
                         | Effect::AnswerApproval { .. }
-                        | Effect::PersistSandboxMode { .. }
                         | Effect::Btw(_)
                 )
         })
@@ -373,7 +384,6 @@ pub fn pump_chat_streams(
                         | Effect::CancelChatStream { .. }
                         | Effect::AnswerAsk { .. }
                         | Effect::AnswerApproval { .. }
-                        | Effect::PersistSandboxMode { .. }
                         | Effect::Btw(_)
                 )
         })
@@ -406,24 +416,6 @@ pub fn pump_chat_streams(
             } => {
                 changed |= approval::answer(state, streams, persistence, &key, &call_id, decision);
             }
-            Effect::PersistSandboxMode {
-                workspace,
-                session_id,
-                mode,
-            } => match persistence.database() {
-                Some(database) => {
-                    if let Err(error) = database.set_session_sandbox_mode(
-                        &workspace,
-                        &session_id,
-                        mode.map(|mode| mode.as_str()),
-                    ) {
-                        tracing::warn!(%error, "failed to persist session sandbox mode");
-                    }
-                }
-                None => {
-                    tracing::warn!("sandbox mode not persisted: database unavailable");
-                }
-            },
             Effect::Btw(effect) => {
                 changed |= btw::apply_effect(state, streams, persistence, sender, effect);
             }
@@ -546,10 +538,11 @@ fn reap_stale_streams(
         .collect();
     let mut changed = false;
     for key in stale {
-        // 取消通道与挂起提问一并唤醒（`cancel` 内部会取走 `asks` 并回 Cancelled）。
+        // 取消通道与挂起提问/审批一并唤醒（`cancel` 内部会取走回执并回 Cancelled）。
         streams.cancel(&key);
-        // 归属已失效：面板也必须跟着消失，否则用户会对一个已无人接收的提问作答。
+        // 归属已失效：面板也必须跟着消失，否则用户会对一个已无人接收的提问/审批作答。
         changed |= ask::clear(state, &key);
+        changed |= approval::cancel(state, streams, &key);
         // 已提交 pending 的调用必须落成 cancelled，否则库里永久停在 `pending`。
         for pending in streams.take_pending(&key) {
             changed |= tool_calls::settle_begin(state, streams, persistence, pending);
@@ -557,7 +550,7 @@ fn reap_stale_streams(
         // 窗格关闭/会话切换：取消已不足以表达“清理进程”，这里按本轮范围停止。
         stop_turn_processes(streams, &key);
     }
-    changed | ask::sweep_orphans(state, streams)
+    changed | ask::sweep_orphans(state, streams) | approval::sweep_orphans(state, streams)
 }
 
 /// 该 request key 仍是窗格的在途流时，返回本轮 assistant 消息 id。

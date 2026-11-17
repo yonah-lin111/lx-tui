@@ -105,8 +105,10 @@ pub(crate) fn drain_settings_events(
                 state.subagents_config = *subagents;
                 refresh_subagent_mentions(state, persistence);
             }
-            // 沙箱配置按 turn 从磁盘读取，事件只用于唤醒重绘。
-            SettingsEvent::SandboxChanged(_) => {}
+            // 沙箱配置热更新到 `AppState`（供 `ui/` 渲染左上角权限与下一轮继承）。
+            SettingsEvent::SandboxChanged(sandbox) => {
+                state.sandbox = *sandbox;
+            }
         }
         changed = true;
     }

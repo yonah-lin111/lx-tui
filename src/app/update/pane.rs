@@ -117,7 +117,7 @@ pub fn apply_lx_input(state: &mut AppState, command: LxInput) {
         task_page::apply_task_page_input(state, pane_id, command);
         return;
     }
-    // 沙箱审批 strip：只吞决策键与 Enter，其余键仍可编辑草稿。
+    // 沙箱审批命令面板：拦截按键（↑/↓/Enter/Tab/Esc 与 y/r/a/n），普通字符不落入草稿。
     if state
         .pane_anywhere(pane_id)
         .is_some_and(|pane| !pane.lx.approvals.is_empty())

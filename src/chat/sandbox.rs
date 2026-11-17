@@ -299,5 +299,20 @@ pub struct SandboxRetry {
     pub for_session: bool,
 }
 
+/// 把可能包含换行与多余空白的命令折叠为单行截断摘要，供审计日志安全输出。
+pub fn command_preview(command: &str) -> String {
+    const MAX_LOG_CMD_CHARS: usize = 120;
+    let collapsed = command.split_whitespace().collect::<Vec<_>>().join(" ");
+    let mut out = String::with_capacity(collapsed.len().min(MAX_LOG_CMD_CHARS));
+    for (idx, ch) in collapsed.chars().enumerate() {
+        if idx >= MAX_LOG_CMD_CHARS {
+            out.push('…');
+            break;
+        }
+        out.push(ch);
+    }
+    out
+}
+
 #[cfg(test)]
 mod tests;

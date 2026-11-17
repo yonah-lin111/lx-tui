@@ -5,7 +5,7 @@ use std::time::Duration;
 
 use tokio::sync::watch;
 
-use super::context::{ChildTurnLimits, assemble_child_context};
+use super::context::{ChildTurnLimits, assemble_child_context_with_permission};
 use super::*;
 use crate::app::state::lx::agent::{SubagentRun, seed_chat_model};
 use crate::app::state::{RequestKey, RequestState};
@@ -53,7 +53,41 @@ pub(super) fn launch_child_turn(
         Some(cwd),
         workspace_trusted,
     );
-    let inputs = super::context::capture_child_prompt_inputs(
+    let (effective_sandbox, exact_rules, prefix_rules) = super::effective_sandbox_for_session(
+        state,
+        Some(database),
+        workspace,
+        parent_key.pane,
+        root_session,
+    );
+    let prev_child_mode = database
+        .session_sandbox_mode(workspace, &record.child_session_id)
+        .ok()
+        .flatten()
+        .and_then(|text| crate::config::sandbox::SandboxMode::parse(&text));
+    if let Err(error) = database.set_session_sandbox_mode(
+        workspace,
+        &record.child_session_id,
+        Some(effective_sandbox.mode.as_str()),
+    ) {
+        tracing::warn!(%error, session = %record.child_session_id, "failed to sync child sandbox mode");
+    }
+    let permission_update = if !is_new_agent
+        && let Some(prev) = prev_child_mode
+        && prev != effective_sandbox.mode
+    {
+        Some(crate::chat::agent::render_permission_switch_update(
+            prev,
+            effective_sandbox.mode,
+            &effective_sandbox,
+            Some(workspace),
+            Some(cwd),
+            false,
+        ))
+    } else {
+        None
+    };
+    let inputs = super::context::capture_child_prompt_inputs_with_sandbox(
         state,
         persistence,
         parent_key.pane,
@@ -61,8 +95,9 @@ pub(super) fn launch_child_turn(
         cwd,
         frozen,
         record.role,
+        &effective_sandbox,
     );
-    let context = assemble_child_context(
+    let context = assemble_child_context_with_permission(
         database,
         workspace,
         &parent_key.session,
@@ -87,6 +122,8 @@ pub(super) fn launch_child_turn(
         items,
         &effective_subagents,
         limits,
+        permission_update.as_deref(),
+        effective_sandbox.escalation == crate::config::sandbox::EscalationPolicy::Never,
     )?;
     let mcp_snapshot = inputs.mcp;
 
@@ -251,9 +288,14 @@ pub(super) fn launch_child_turn(
         record.child_session_id.clone(),
         mutation_user_id,
     );
+    crate::chat::exec_policy::reload_if_changed();
     let executor = AgentTools::new(manager, turn)
         .with_recorder(std::sync::Arc::new(recorder))
         .with_reads(reads)
+        .with_sandbox(
+            crate::chat::sandbox::SandboxPlan::for_turn(&effective_sandbox, cwd)
+                .with_exact_rules(exact_rules, prefix_rules),
+        )
         .with_image_support(frozen.supports_image_input)
         .with_web_search_keys(
             state.models.settings.web_search.exa_api_key.clone(),
@@ -335,4 +377,118 @@ pub(super) fn launch_child_turn(
         }));
     });
     Ok(())
+}
+
+/// 解析会话当前生效的沙箱配置与会话级规则（实时窗格状态优先，否则回查 DB）。
+pub(crate) fn effective_sandbox_for_session(
+    state: &AppState,
+    database: Option<&crate::db::Database>,
+    workspace: &Path,
+    pane: crate::tiling::PaneId,
+    session_id: &str,
+) -> (
+    crate::config::sandbox::SandboxSettings,
+    Vec<Vec<String>>,
+    Vec<Vec<String>>,
+) {
+    let mut settings = state.sandbox.clone();
+    if let Some(target) = state.pane_anywhere(pane)
+        && target.lx.chat.session_id.as_deref() == Some(session_id)
+    {
+        if let Some(mode) = target.lx.sandbox_mode {
+            settings.mode = mode;
+        }
+        return (
+            settings,
+            target.lx.sandbox_exact_rules.clone(),
+            target.lx.sandbox_prefix_rules.clone(),
+        );
+    }
+    if let Some(db) = database {
+        if let Some(mode) = db
+            .session_sandbox_mode(workspace, session_id)
+            .ok()
+            .flatten()
+            .and_then(|text| crate::config::sandbox::SandboxMode::parse(&text))
+        {
+            settings.mode = mode;
+        }
+        let rules = db.sandbox_rules(workspace, session_id).unwrap_or_default();
+        let exact = rules
+            .iter()
+            .filter(|rule| rule.kind == crate::db::sandbox::SandboxRuleKind::Exact)
+            .map(|rule| rule.tokens.clone())
+            .collect();
+        let prefix = rules
+            .iter()
+            .filter(|rule| rule.kind == crate::db::sandbox::SandboxRuleKind::Prefix)
+            .map(|rule| rule.tokens.clone())
+            .collect();
+        return (settings, exact, prefix);
+    }
+    (settings, Vec::new(), Vec::new())
+}
+
+pub(super) fn wake_subagent_approvals(
+    state: &mut AppState,
+    streams: &mut ChatStreams,
+    keys: Vec<RequestKey>,
+) {
+    for child_key in keys {
+        super::super::approval::cancel(state, streams, &child_key);
+    }
+}
+
+/// 停止窗格所属整棵会话树里全部正在运行的子 agent（会话删除/退出路径使用）。
+pub(crate) fn stop_all_subagents_for_pane(
+    state: &mut AppState,
+    streams: &mut ChatStreams,
+    persistence: &Persistence,
+    pane: crate::tiling::PaneId,
+) -> usize {
+    let Some(session) = state
+        .pane_anywhere(pane)
+        .and_then(|target| target.lx.chat.session_id.clone())
+    else {
+        return 0;
+    };
+    let root_session = persistence
+        .database()
+        .zip(super::workspace_for_pane(state, pane))
+        .and_then(|(database, workspace)| {
+            database
+                .resolve_session_tree_root(&workspace, &session)
+                .ok()
+                .map(|(root, _, _)| root)
+        })
+        .unwrap_or_else(|| session.clone());
+
+    let mut stopped = 0usize;
+    let mut dead = Vec::new();
+    let mut cancelled_keys = Vec::new();
+    for (child, handle) in &mut streams.subagents {
+        if handle.root_session != root_session || handle.status != STATUS_RUNNING {
+            continue;
+        }
+        handle.closed_without_report = true;
+        streams.resumed_subagents.remove(&handle.agent_id);
+        streams.interrupted_subagents.remove(&handle.agent_id);
+        streams.paused_by_interrupt.remove(&handle.agent_id);
+        cancelled_keys.push(RequestKey {
+            pane: handle.parent.pane,
+            session: handle.child_session_id.clone(),
+            generation: handle.parent.generation,
+        });
+        if handle.cancel.send(true).is_ok() {
+            stopped = stopped.saturating_add(1);
+        } else {
+            dead.push(child.clone());
+        }
+    }
+    wake_subagent_approvals(state, streams, cancelled_keys);
+    for child in dead {
+        streams.subagents.remove(&child);
+        streams.frozen.remove(&child);
+    }
+    stopped
 }

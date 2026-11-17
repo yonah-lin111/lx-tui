@@ -350,6 +350,7 @@ pub(crate) fn command_panel_contains(area: Rect, lx: &Lx, column: u16, row: u16)
         || mention_layout(area, lx).is_some_and(|l| l.rect.contains(pos))
         || refer_layout(area, lx).is_some_and(|l| l.rect.contains(pos))
         || slash_layout(area, lx).is_some_and(|l| l.rect.contains(pos))
+        || super::approval::layout(area, lx).is_some_and(|l| l.rect.contains(pos))
         || layout(area, lx).panel.is_some_and(|r| r.contains(pos))
 }
 

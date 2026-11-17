@@ -314,5 +314,6 @@ fn view<'a>(
         borderless: true,
         hide_active_marker: !data.interactive,
         disabled: None,
+        context_lines: &[],
     }
 }

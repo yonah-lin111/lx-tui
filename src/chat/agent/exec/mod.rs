@@ -174,6 +174,22 @@ pub(crate) fn assemble_exec_turn_with_snapshot(
             .map_err(|error| format!("database error: {error}"))?,
         None => Vec::new(),
     };
+    let permission_switches = match existing_session {
+        Some(session_id) => db
+            .permission_switches(workspace, session_id)
+            .map_err(|error| format!("database error: {error}"))?,
+        None => Vec::new(),
+    };
+    let mut sandbox_settings = crate::config::sandbox::load_sandbox_or_default();
+    if let Some(session_id) = existing_session
+        && let Some(mode) = db
+            .session_sandbox_mode(workspace, session_id)
+            .ok()
+            .flatten()
+            .and_then(|text| crate::config::sandbox::SandboxMode::parse(&text))
+    {
+        sandbox_settings.mode = mode;
+    }
     // 恢复会话时沿用仍生效的压缩摘要；否则历史会重新灌满上下文窗口。
     let compact = match existing_session {
         Some(session_id) => db
@@ -197,11 +213,12 @@ pub(crate) fn assemble_exec_turn_with_snapshot(
         )
         .map_err(|error| format!("failed to start turn: {error}"))?;
 
-    let environment = crate::chat::prompt::environment_snapshot(
+    let environment = crate::chat::prompt::environment_snapshot_with_sandbox(
         &crate::platform::EnvironmentFacts::capture(),
         Some(workspace),
         Some(cwd),
         &[],
+        &sandbox_settings,
     );
     let model_identity = model_identity(model).render_prompt_section();
     let mcp_prompt = mcp_snapshot.instructions_prompt();
@@ -222,6 +239,7 @@ pub(crate) fn assemble_exec_turn_with_snapshot(
         skills: skills.as_deref(),
         mcp: mcp_prompt.as_deref(),
         model_switches: &model_switches,
+        permission_switches: &permission_switches,
         skill_blocks: &skill_blocks,
         supports_image_input: model.supports_image_input,
     });
@@ -251,11 +269,15 @@ pub(crate) fn assemble_exec_turn_with_snapshot(
     );
     request.purpose = RequestPurpose::ExecTurn;
     request.system_prompt = Some(assembly.system_prompt);
-    request.tools = Arc::new(crate::chat::tools::turn_tools_with_subagents(
+    let mut tool_decls = crate::chat::tools::turn_tools_with_subagents(
         crate::chat::agent::ToolSurface::ExecMain,
         &mcp_snapshot,
         Some(&subagents_config),
-    ));
+    );
+    if sandbox_settings.escalation == crate::config::sandbox::EscalationPolicy::Never {
+        crate::chat::tools::trim_escalation_parameters(&mut tool_decls);
+    }
+    request.tools = Arc::new(tool_decls);
     let mut runtime_summary: Option<String> = None;
     if let Some(guidance) = crate::chat::agent::delegation_mode_guidance(
         subagents_config.delegation_mode,

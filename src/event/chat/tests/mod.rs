@@ -714,6 +714,7 @@ fn view_summary_maps_every_field() {
 }
 
 mod ack;
+mod approval;
 mod ask;
 mod compact;
 mod detail_compact;

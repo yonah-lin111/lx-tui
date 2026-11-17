@@ -680,7 +680,7 @@ where
                 result
             } else {
                 let exec_policy = crate::chat::exec_policy::current_policy();
-                match sandbox_decision::override_for(
+                let (result, applied_override) = match sandbox_decision::override_for(
                     &mut host,
                     &executor,
                     &call,
@@ -689,24 +689,31 @@ where
                 )
                 .await
                 {
-                    Ok(sandbox) => {
+                    Ok(sandbox) => (
                         executor
-                            .execute_tracked_sandboxed(context.cwd(), &call, &ticket, sandbox)
-                            .await
-                    }
-                    Err(result) => result,
-                }
+                            .execute_tracked_sandboxed(
+                                context.cwd(),
+                                &call,
+                                &ticket,
+                                sandbox.clone(),
+                            )
+                            .await,
+                        Some(sandbox),
+                    ),
+                    Err(result) => (result, None),
+                };
+                // on-failure：沙箱拒绝后最多重试一次（design §8.5；已裸跑的命令不再二次询问）。
+                sandbox_decision::maybe_retry_on_denial(
+                    &mut host,
+                    &executor,
+                    &call,
+                    &ticket,
+                    context.cwd(),
+                    applied_override.as_ref(),
+                    result,
+                )
+                .await
             };
-            // on-failure：沙箱拒绝后最多重试一次（design §8.5）。
-            let result = sandbox_decision::maybe_retry_on_denial(
-                &mut host,
-                &executor,
-                &call,
-                &ticket,
-                context.cwd(),
-                result,
-            )
-            .await;
             // MCP 取消不是工具结果：按用户取消结算，不再采样。
             if result.error_code() == Some(ToolErrorCode::Cancelled) {
                 let _ = host.finish_tool(ticket, ToolOutcome::Cancelled).await;

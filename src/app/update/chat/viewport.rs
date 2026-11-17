@@ -701,6 +701,9 @@ pub fn toggle_lx_card(state: &mut AppState, pane: PaneId, target: CardTarget) ->
         CardTarget::ModelSwitch { switch_id } => {
             super::model_switch::toggle_model_switch(state, pane, &switch_id)
         }
+        CardTarget::PermissionSwitch { switch_id } => {
+            super::permission_switch::toggle_permission_switch(state, pane, &switch_id)
+        }
         CardTarget::Attachment { path } => {
             if !path.is_empty() {
                 state

@@ -78,18 +78,15 @@ pub fn open_model_picker(state: &mut AppState, pane: PaneId) -> bool {
 
 /// `/permission` 打开沙箱模式选择面板。
 pub fn open_permission_picker(state: &mut AppState, pane: PaneId) -> bool {
-    use crate::app::state::lx::slash::{PanelWindow, PermissionPicker};
+    use crate::app::state::lx::slash::PermissionPicker;
+    let global = state.sandbox.mode;
     let Some(target) = state.pane_mut_anywhere(pane) else {
         return false;
     };
-    let global = crate::config::sandbox::load_sandbox_or_default().mode;
     let session = target.lx.sandbox_mode;
-    let picker = PermissionPicker {
-        global,
-        session,
-        window: PanelWindow::new(0),
-    };
-    target.lx.slash = Some(SlashPanel::Permission(Box::new(picker)));
+    target.lx.slash = Some(SlashPanel::Permission(Box::new(PermissionPicker::new(
+        global, session,
+    ))));
     true
 }
 
@@ -131,39 +128,11 @@ pub fn apply_slash_enter(state: &mut AppState, pane: PaneId) -> bool {
     match panel {
         SlashPanel::Commands { .. } => accept_slash_command(state, pane),
         SlashPanel::Permission(picker) => {
-            let mode = picker.active_mode();
-            let workspace = state.chat_session_key_for_pane(pane);
-            let session_id = state
-                .pane_anywhere(pane)
-                .and_then(|target| target.lx.chat.session_id.clone());
-            let Some(target) = state.pane_mut_anywhere(pane) else {
+            let Some(mode) = picker.active_mode() else {
                 return true;
             };
-            target.lx.slash = None;
-            target.lx.sandbox_mode = Some(mode);
-            target.lx.sandbox_exact_rules.clear();
-            target.lx.sandbox_prefix_rules.clear();
-            target.lx.approvals.clear();
-            if let (Some(workspace), Some(session_id)) = (workspace, session_id) {
-                state
-                    .effects
-                    .push(crate::app::effects::Effect::PersistSandboxMode {
-                        workspace,
-                        session_id,
-                        mode: Some(mode),
-                    });
-            }
-            super::super::show_lx_toast(
-                state,
-                pane,
-                crate::app::toast::Toast::new(
-                    crate::app::toast::ToastKind::Default,
-                    format!("Sandbox mode: {mode} (applies to the next turn)"),
-                    Some(pane),
-                    std::time::Instant::now(),
-                ),
-            );
-            true
+            clear_lx_input(state, pane);
+            super::permission_switch::apply_permission_selection(state, pane, mode)
         }
         SlashPanel::Model(picker) => match &picker.stage {
             ModelPickerStage::Models => {
@@ -502,11 +471,23 @@ pub(crate) fn next_pane_sequence(lx: &crate::app::state::Lx) -> i64 {
     let max_notice = lx.chat.notices.iter().map(|n| n.sequence).max();
     let max_compact = lx.compact.checkpoints.iter().map(|c| c.sequence).max();
     let max_switch = lx.model_switch.switches.iter().map(|s| s.sequence).max();
-    [max_msg, max_notice, max_compact, max_switch]
-        .into_iter()
-        .flatten()
-        .max()
-        .map_or(0, |max| max.saturating_add(1))
+    let max_perm_switch = lx
+        .permission_switch
+        .switches
+        .iter()
+        .map(|s| s.sequence)
+        .max();
+    [
+        max_msg,
+        max_notice,
+        max_compact,
+        max_switch,
+        max_perm_switch,
+    ]
+    .into_iter()
+    .flatten()
+    .max()
+    .map_or(0, |max| max.saturating_add(1))
 }
 
 /// 模型的 variants 键列表。
@@ -839,6 +820,7 @@ fn refresh_slash_filter(state: &mut AppState, pane: PaneId) {
         Some(crate::app::state::SlashPanel::Model(picker)) => picker.refilter(&query),
         Some(crate::app::state::SlashPanel::Fork(panel)) => panel.refilter(&query),
         Some(crate::app::state::SlashPanel::Mcp(panel)) => panel.refilter(&query),
+        Some(crate::app::state::SlashPanel::Permission(picker)) => picker.refilter(&query),
         _ => {}
     }
 }

@@ -113,25 +113,50 @@ fn retry_uses_r_and_always_can_approve_for_session() {
 }
 
 #[test]
-fn escape_denies_and_enter_is_swallowed() {
+fn arrows_navigate_and_enter_confirms_selected_option() {
+    let (mut state, pane, _) = pending(
+        SandboxApprovalKind::Escalation,
+        Some(vec!["cargo".into(), "publish".into()]),
+    );
+    crate::app::update::apply_lx_input(&mut state, LxInput::Down);
+    assert_eq!(
+        state
+            .pane_anywhere(pane)
+            .and_then(|p| p.lx.approvals.front())
+            .map(|item| item.window.active),
+        Some(1)
+    );
+    assert!(pressed(&mut state, LxInput::Enter));
+    assert_eq!(decision(&state), Some(SandboxApprovalDecision::ForSession));
+}
+
+#[test]
+fn escape_denies_and_mouse_click_commits_selected_option() {
     let (mut state, mut pane, _) = pending(SandboxApprovalKind::Escalation, None);
     let draft = state.pane_anywhere(pane).expect("pane").lx.input.clone();
-    crate::app::update::apply_lx_input(&mut state, LxInput::Enter);
-    assert_eq!(
-        state.pane_anywhere(pane).expect("pane").lx.approvals.len(),
-        1,
-        "Enter 不得提交或关闭审批"
-    );
+    assert!(crate::app::update::hover_lx_approval(&mut state, pane, 1));
     assert_eq!(
         state.pane_anywhere(pane).expect("pane").lx.input,
         draft,
         "草稿不变"
     );
-    pane = focus_pane(&state);
-    assert!(pressed(&mut state, LxInput::Escape));
+    assert!(crate::app::update::select_lx_approval(&mut state, pane, 1));
     assert_eq!(decision(&state), Some(SandboxApprovalDecision::Denied));
     assert!(
         state
+            .pane_anywhere(pane)
+            .expect("pane")
+            .lx
+            .approvals
+            .is_empty()
+    );
+
+    let (mut state2, pane2, _) = pending(SandboxApprovalKind::Escalation, None);
+    pane = pane2;
+    assert!(pressed(&mut state2, LxInput::Escape));
+    assert_eq!(decision(&state2), Some(SandboxApprovalDecision::Denied));
+    assert!(
+        state2
             .pane_anywhere(pane)
             .expect("pane")
             .lx

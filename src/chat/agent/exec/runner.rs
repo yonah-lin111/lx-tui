@@ -485,6 +485,15 @@ pub async fn run_exec_turn(
     ));
     // turn 起点：规则文件变化时重载。
     crate::chat::exec_policy::reload_if_changed();
+    let mut sandbox_settings = crate::config::sandbox::load_sandbox_or_default();
+    if let Some(mode) = db
+        .session_sandbox_mode(&workspace, &session_id)
+        .ok()
+        .flatten()
+        .and_then(|text| crate::config::sandbox::SandboxMode::parse(&text))
+    {
+        sandbox_settings.mode = mode;
+    }
     let executor = AgentTools::new(
         Arc::clone(&process_manager),
         Arc::new(tokio::sync::Mutex::new(TurnExecution::default())),
@@ -497,7 +506,7 @@ pub async fn run_exec_turn(
     ))
     .with_reads(read_registry(&session_id))
     .with_sandbox(crate::chat::sandbox::SandboxPlan::for_turn(
-        &crate::config::sandbox::load_sandbox_or_default(),
+        &sandbox_settings,
         &cwd,
     ))
     .with_image_support(model.supports_image_input)

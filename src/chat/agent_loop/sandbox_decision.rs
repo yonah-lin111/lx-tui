@@ -44,11 +44,26 @@ where
 
     // 1–2. 规则文件：Forbidden 直接拒绝；安全分段全部命中 Allow 才跳过沙箱。
     let prompt_evaluation = match crate::chat::exec_policy::decide(policy, &request.args.cmd) {
-        RuleDecision::Allow => return Ok(SandboxOverride::Unsandboxed),
+        RuleDecision::Allow => {
+            tracing::info!(
+                target: "lx::agent::approval",
+                call_id = %call.call_id,
+                command = %crate::chat::sandbox::command_preview(&request.args.cmd),
+                "exec policy allow rule bypassed sandbox"
+            );
+            return Ok(SandboxOverride::Unsandboxed);
+        }
         RuleDecision::Forbidden(evaluation) => {
             let reason = evaluation
                 .justification
                 .unwrap_or_else(|| "command is blocked by an exec policy rule".into());
+            tracing::warn!(
+                target: "lx::agent::approval",
+                call_id = %call.call_id,
+                command = %crate::chat::sandbox::command_preview(&request.args.cmd),
+                reason = %reason,
+                "exec policy forbidden rule blocked command"
+            );
             return Err(ToolFailure::new(
                 ToolErrorCode::SandboxDenied,
                 format!("blocked by exec policy: {reason}"),
@@ -61,6 +76,12 @@ where
 
     // 3. 会话精确命令规则：执行器会识别并裸跑，这里不再询问。
     if plan.command_is_approved(&request.args.cmd) {
+        tracing::info!(
+            target: "lx::agent::approval",
+            call_id = %call.call_id,
+            command = %crate::chat::sandbox::command_preview(&request.args.cmd),
+            "session approval rule bypassed sandbox"
+        );
         return Ok(SandboxOverride::None);
     }
 
@@ -76,6 +97,12 @@ where
                 .as_ref()
                 .is_some_and(crate::chat::sandbox::AdditionalPermissions::denies_only)
         {
+            tracing::info!(
+                target: "lx::agent::approval",
+                call_id = %call.call_id,
+                command = %crate::chat::sandbox::command_preview(&request.args.cmd),
+                "applied deny-only additional sandbox permissions"
+            );
             let additional = escalation.additional.unwrap_or_default();
             return Ok(SandboxOverride::Additional {
                 network: additional.network,
@@ -90,6 +117,13 @@ where
             .into_result(Vec::new()));
         }
         if plan.escalation == EscalationPolicy::Never {
+            tracing::info!(
+                target: "lx::agent::approval",
+                call_id = %call.call_id,
+                kind = "escalation",
+                command = %crate::chat::sandbox::command_preview(&request.args.cmd),
+                "sandbox escalation rejected (policy never)"
+            );
             return Err(ToolFailure::new(
                 ToolErrorCode::SandboxDenied,
                 "sandbox escalation is disabled by settings",
@@ -131,6 +165,13 @@ where
     // 5. 规则文件 `prompt`。
     if let Some(evaluation) = prompt_evaluation {
         if plan.escalation == EscalationPolicy::Never {
+            tracing::info!(
+                target: "lx::agent::approval",
+                call_id = %call.call_id,
+                kind = "rule",
+                command = %crate::chat::sandbox::command_preview(&request.args.cmd),
+                "sandbox rule prompt rejected (policy never)"
+            );
             return Err(ToolFailure::new(
                 ToolErrorCode::SandboxDenied,
                 "sandbox escalation is disabled by settings",
@@ -198,12 +239,14 @@ fn approval_failure(error: HostError) -> ToolExecutionResult {
 }
 
 /// on-failure：识别沙箱拒绝并请求一次重试（design §8.5）。
+#[allow(clippy::too_many_arguments)]
 pub(super) async fn maybe_retry_on_denial<H, E>(
     host: &mut H,
     executor: &E,
     call: &ReadyToolCall,
     ticket: &ToolCallTicket,
     cwd: &Path,
+    applied_override: Option<&crate::chat::sandbox::SandboxOverride>,
     result: ToolExecutionResult,
 ) -> ToolExecutionResult
 where
@@ -216,15 +259,30 @@ where
     if plan.escalation != crate::config::sandbox::EscalationPolicy::Ask || !plan.process_sandbox() {
         return result;
     }
+    if matches!(
+        applied_override,
+        Some(crate::chat::sandbox::SandboxOverride::Unsandboxed)
+    ) {
+        return result;
+    }
     let crate::chat::tools::ToolExecutionResult::Process(process) = &result else {
         return result;
     };
+    if plan.command_is_approved(&process.command) {
+        return result;
+    }
     if !crate::chat::sandbox::denial::is_likely_sandbox_denied(process, true)
         || process.sandbox_retry.is_some()
     {
         return result;
     }
     let excerpt: String = process.output.chars().take(400).collect();
+    tracing::info!(
+        target: "lx::agent::approval",
+        call_id = %call.call_id,
+        command = %crate::chat::sandbox::command_preview(&process.command),
+        "sandbox denial detected; requesting retry approval"
+    );
     let request = crate::chat::sandbox::SandboxApprovalRequest {
         kind: crate::chat::sandbox::SandboxApprovalKind::Retry,
         command: process.command.clone(),

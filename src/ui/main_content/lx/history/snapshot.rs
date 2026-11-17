@@ -15,19 +15,19 @@ use crate::ui::markdown_render;
 
 use super::cache::{
     BlockKey, PaneCache, SHELL_SLOT_BLOCK, attachments_block_signature, compact_block_signature,
-    model_switch_block_signature, notice_block_signature, part_block_signature,
-    recap_block_signature, report_block_signature, rewind_block_signature, shell_block_signature,
-    stats_block_signature,
+    notice_block_signature, part_block_signature, recap_block_signature, report_block_signature,
+    rewind_block_signature, shell_block_signature, stats_block_signature,
 };
 use super::paint::{AssistantRefLine, BlockPaint, BlockSource, CardSpan, UserRefLine};
 use super::source::{HistorySource, is_legacy_report_row};
 use super::text_cols;
 use super::timeline::{TimelineEntry, timeline};
 use super::{
-    CardCols, CardKind, Folds, MessageRows, compact, folds_of, model_switch, notice, recap,
-    report_block, rewind, shell_folds, stats_line, tool, tool_rows, user_shell,
+    CardCols, CardKind, Folds, MessageRows, compact, folds_of, notice, recap, report_block, rewind,
+    shell_folds, stats_line, tool, tool_rows, user_shell,
 };
 mod steps;
+mod switches;
 
 /// 时间线条目类别（与 [`TimelineEntry`] 一一对应，但可跨帧独立持有）。
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -40,6 +40,11 @@ pub(crate) enum SnapEntryKind {
     Compact(usize),
     RunningCompact,
     ModelSwitch {
+        first: usize,
+        last: usize,
+        count: usize,
+    },
+    PermissionSwitch {
         first: usize,
         last: usize,
         count: usize,
@@ -159,6 +164,9 @@ pub(crate) fn build(
             TimelineEntry::RunningCompact => builder.running_compact(source),
             TimelineEntry::ModelSwitch { first, last, count } => {
                 builder.model_switch(source, *first, *last, *count)
+            }
+            TimelineEntry::PermissionSwitch { first, last, count } => {
+                builder.permission_switch(source, *first, *last, *count)
             }
             TimelineEntry::Message(message_index) => builder.message(source, *message_index),
         }
@@ -335,55 +343,6 @@ impl Builder<'_> {
             end: self.rows,
             kind: SnapEntryKind::RunningCompact,
             id: None,
-            blocks: vec![block],
-        });
-    }
-
-    /// 模型切换提示条目（连续多条合并为一条 `xN`）。
-    fn model_switch(&mut self, source: HistorySource<'_>, first: usize, last: usize, count: usize) {
-        let start = self.rows;
-        let slice = &source.switches[first..=last];
-        let expanded = source.model_switch.is_range_expanded(slice);
-        let key = BlockKey {
-            message_index: last,
-            step_index: super::cache::MODEL_SWITCH_SLOT_BLOCK,
-            width: self.width,
-            sig: model_switch_block_signature(slice, expanded),
-        };
-        let card = model_switch::build(slice, self.width, expanded);
-        let click = card.click_span();
-        let block = self.block(
-            key,
-            BlockSource::ModelSwitch {
-                first,
-                last,
-                expanded,
-            },
-            start,
-            || BlockPaint::SystemEvent {
-                card: Arc::new(card),
-            },
-        );
-        self.rows += block.rows;
-        // 点击面只覆盖注入提示词（标题、模型与跃迁链不响应）。
-        if let Some(span) = click {
-            self.snapshot.cards.push(CardRegion {
-                kind: CardKind::ModelSwitch {
-                    // 锚定区间首条：追加切换时 `first` 不变，展开态天然保持。
-                    switch_id: source.switches[first].id.clone(),
-                    expanded,
-                },
-                card_start: start + span.offset,
-                card_rows: span.rows,
-                card_cols: CardCols::Text(span.cols),
-                clickable: true,
-            });
-        }
-        self.snapshot.entries.push(SnapEntry {
-            start,
-            end: self.rows,
-            kind: SnapEntryKind::ModelSwitch { first, last, count },
-            id: source.switches.get(last).map(|item| item.id.clone()),
             blocks: vec![block],
         });
     }

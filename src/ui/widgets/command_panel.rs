@@ -12,12 +12,13 @@ use crate::ui::text;
 use crate::ui::widgets::clear;
 use crate::ui::widgets::scrollbar::{self, ScrollbarLayout};
 
+mod context;
+pub use context::PanelContextLine;
+
 /// 面板最小可用宽度（含边框）。
 const MIN_WIDTH: u16 = 3;
 /// 无边框面板顶部块的行数：1 行上方空行间隔 + 1 行顶部分割线。
 const TOP_BLOCK_ROWS: u16 = 2;
-/// 无边框面板最小高度（顶部 2 行 + 1 行内容）。
-const MIN_BORDERLESS_HEIGHT: u16 = TOP_BLOCK_ROWS + 1;
 /// 无边框面板底部提示块的行数：1 行空行间隔 + 1 行快捷键提示。
 const FOOTER_BLOCK_ROWS: u16 = 2;
 
@@ -115,6 +116,8 @@ pub struct CommandPanelView<'a> {
     pub hide_active_marker: bool,
     /// 禁用项掩码（下标与 `items` 对齐）：`true` 时该行用 `style::muted()` 置灰且不显示选择高亮与 `❯`。
     pub disabled: Option<&'a [bool]>,
+    /// 顶栏标题下方、可选项上方的只读上下文行（当前仅无边框模式使用）。
+    pub context_lines: &'a [PanelContextLine<'a>],
 }
 
 /// 顶边栏 Tab 布局槽位：`rect` 为绘制/命中矩形，`index` 为在 `tabs` 中的原始下标。
@@ -162,8 +165,15 @@ pub fn layout(area: Rect, view: &CommandPanelView<'_>) -> Option<PanelLayout> {
     // 有边框面板（对齐 herdr）：空间充裕（≥ 7 行）时，有标题占顶部 3 行（`┌──┐` + 粗体标题行 + 1 行呼吸空白），
     // 有底栏占底部 3 行（1 行呼吸空白 + `│ footer │` + `└──┘`）；极窄矮空间（< 7 行）时退化为仅保留上下边框以优先展示候选。
     let roomy = available_rows >= 7;
+    let context_rows: u16 = if view.borderless && !view.context_lines.is_empty() {
+        u16::try_from(view.context_lines.len())
+            .unwrap_or(u16::MAX)
+            .saturating_add(1)
+    } else {
+        0
+    };
     let top_rows: u16 = if view.borderless {
-        TOP_BLOCK_ROWS
+        TOP_BLOCK_ROWS.saturating_add(context_rows)
     } else if has_header && roomy {
         3
     } else {
@@ -178,7 +188,7 @@ pub fn layout(area: Rect, view: &CommandPanelView<'_>) -> Option<PanelLayout> {
     };
     let frame_rows: u16 = top_rows + bottom_rows;
     let min_height = if view.borderless {
-        MIN_BORDERLESS_HEIGHT + bottom_rows
+        top_rows.saturating_add(1).saturating_add(bottom_rows)
     } else {
         frame_rows.saturating_add(1)
     };
@@ -242,7 +252,7 @@ pub fn layout(area: Rect, view: &CommandPanelView<'_>) -> Option<PanelLayout> {
     };
     let rect = Rect::new(area.x, y, width, height);
     let inner = if view.borderless {
-        borderless_inner_rect(rect, bottom_rows)
+        borderless_inner_rect(rect, top_rows, bottom_rows)
     } else {
         inner_rect(rect, top_rows, bottom_rows)
     };
@@ -351,6 +361,7 @@ pub fn render(area: Rect, buf: &mut Buffer, view: &CommandPanelView<'_>) -> Opti
     let has_header = has_tabs || view.title.is_some() || view.right_title.is_some();
     if view.borderless {
         render_top_rule(buf, &layout, view, has_tabs);
+        context::render_lines(buf, layout.rect, TOP_BLOCK_ROWS, view.context_lines);
     } else {
         let block = Block::bordered().border_style(style::accent());
         block.render(layout.rect, buf);
@@ -635,8 +646,15 @@ fn panel_width(available: u16, view: &CommandPanelView<'_>) -> u16 {
         footer.width() + if view.borderless { 0 } else { 2 }
     });
     let frame_pad = if view.borderless { 0 } else { 4 };
+    let context_w = view
+        .context_lines
+        .iter()
+        .map(PanelContextLine::display_width)
+        .max()
+        .unwrap_or(0);
     let content = content
         .max(tabs_header)
+        .max(context_w)
         .max(footer)
         .min(usize::from(available));
     ((content + frame_pad) as u16).min(available).max(MIN_WIDTH)
@@ -935,14 +953,14 @@ fn inner_rect(rect: Rect, top_rows: u16, bottom_rows: u16) -> Rect {
     )
 }
 
-/// 无边框面板内容区矩形：扣除顶部两行（1 行空行 + 1 行分割线）与底部可选快捷键提示行，左右不留边框。
-fn borderless_inner_rect(rect: Rect, footer_rows: u16) -> Rect {
+/// 无边框面板内容区矩形：扣除顶部标题与上下文摘要行数、底部可选快捷键提示行，左右不留边框。
+fn borderless_inner_rect(rect: Rect, top_rows: u16, footer_rows: u16) -> Rect {
     Rect::new(
         rect.x,
-        rect.y.saturating_add(TOP_BLOCK_ROWS),
+        rect.y.saturating_add(top_rows),
         rect.width,
         rect.height
-            .saturating_sub(TOP_BLOCK_ROWS)
+            .saturating_sub(top_rows)
             .saturating_sub(footer_rows),
     )
 }

@@ -138,6 +138,11 @@ fn revert_model_switch(
                 match &loaded {
                     Ok(view) => {
                         crate::app::update::set_model_switches(state, pane, &view.switches);
+                        crate::app::update::set_permission_switches(
+                            state,
+                            pane,
+                            &view.permission_switches,
+                        );
                         if let Some(target) = state.pane_mut_anywhere(pane) {
                             target.lx.chat.revision = u64::try_from(view.revision).unwrap_or(0);
                         }
@@ -396,6 +401,7 @@ pub fn handle_rewind_finished(
                         target.lx.clear_agents();
                         target.lx.compact.reset();
                         target.lx.model_switch.reset();
+                        target.lx.permission_switch.reset();
                         target.lx.recap.reset();
                         target.lx.clear_rewind();
                     }
@@ -442,6 +448,11 @@ pub fn handle_rewind_finished(
                                 &view.checkpoints,
                             );
                             crate::app::update::set_model_switches(state, other, &view.switches);
+                            crate::app::update::set_permission_switches(
+                                state,
+                                other,
+                                &view.permission_switches,
+                            );
                             crate::app::update::set_message_recaps(state, other, &view.recaps);
                             if let Some(selection) = &restored_selection
                                 && let Some(target) = state.pane_mut_anywhere(other)

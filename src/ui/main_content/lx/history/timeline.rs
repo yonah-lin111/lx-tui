@@ -24,6 +24,12 @@ pub(super) enum TimelineEntry {
         last: usize,
         count: usize,
     },
+    /// 连续权限切换合并为一条；`first` 取初始起点权限，`last` 取最终目标权限与提示词，`count` 用于 `xN`。
+    PermissionSwitch {
+        first: usize,
+        last: usize,
+        count: usize,
+    },
     /// 正在执行的 compact 压缩请求（动态 loading 条目）。
     RunningCompact,
 }
@@ -46,16 +52,19 @@ pub(super) fn timeline(source: HistorySource<'_>) -> Vec<TimelineEntry> {
         source.messages.len()
             + source.notices.len()
             + source.checkpoints.len()
-            + source.switches.len(),
+            + source.switches.len()
+            + source.perm_switches.len(),
     );
     let mut message = 0usize;
     let mut notice = 0usize;
     let mut checkpoint = 0usize;
     let mut switch_idx = 0usize;
+    let mut perm_idx = 0usize;
     while message < source.messages.len()
         || notice < source.notices.len()
         || checkpoint < source.checkpoints.len()
         || switch_idx < source.switches.len()
+        || perm_idx < source.perm_switches.len()
     {
         // 旧版 wait 残留：没有同轮 assistant 的报告 user 消息不进入时间线。
         while message < source.messages.len() && is_legacy_report_row(source.messages, message) {
@@ -65,11 +74,17 @@ pub(super) fn timeline(source: HistorySource<'_>) -> Vec<TimelineEntry> {
         let next_notice = source.notices.get(notice).map(|item| item.sequence);
         let next_checkpoint = source.checkpoints.get(checkpoint).map(|item| item.sequence);
         let next_switch = source.switches.get(switch_idx).map(|item| item.sequence);
-        let Some(smallest) = [next_message, next_notice, next_checkpoint, next_switch]
-            .into_iter()
-            .flatten()
-            .min()
-        else {
+        let next_perm = source.perm_switches.get(perm_idx).map(|item| item.sequence);
+        let Some(smallest) = [
+            next_message,
+            next_notice,
+            next_checkpoint,
+            next_switch,
+            next_perm,
+        ]
+        .into_iter()
+        .flatten()
+        .min() else {
             break;
         };
         if next_message == Some(smallest) {
@@ -83,7 +98,7 @@ pub(super) fn timeline(source: HistorySource<'_>) -> Vec<TimelineEntry> {
             let mut count = 1;
             while notice < source.notices.len() {
                 let next = source.notices[notice].sequence;
-                let blocked = [next_message, next_checkpoint, next_switch]
+                let blocked = [next_message, next_checkpoint, next_switch, next_perm]
                     .into_iter()
                     .flatten()
                     .any(|sequence| sequence <= next);
@@ -104,13 +119,37 @@ pub(super) fn timeline(source: HistorySource<'_>) -> Vec<TimelineEntry> {
             checkpoint += 1;
             continue;
         }
-        // 连续模型切换合并为一条 `xN`
-        let first = switch_idx;
-        switch_idx += 1;
+        if next_switch == Some(smallest) {
+            // 连续模型切换合并为一条 `xN`
+            let first = switch_idx;
+            switch_idx += 1;
+            let mut count = 1;
+            while switch_idx < source.switches.len() {
+                let next = source.switches[switch_idx].sequence;
+                let blocked = [next_message, next_notice, next_checkpoint, next_perm]
+                    .into_iter()
+                    .flatten()
+                    .any(|sequence| sequence <= next);
+                if blocked {
+                    break;
+                }
+                count += 1;
+                switch_idx += 1;
+            }
+            out.push(TimelineEntry::ModelSwitch {
+                first,
+                last: switch_idx - 1,
+                count,
+            });
+            continue;
+        }
+        // 连续权限切换合并为一条 `xN`
+        let first = perm_idx;
+        perm_idx += 1;
         let mut count = 1;
-        while switch_idx < source.switches.len() {
-            let next = source.switches[switch_idx].sequence;
-            let blocked = [next_message, next_notice, next_checkpoint]
+        while perm_idx < source.perm_switches.len() {
+            let next = source.perm_switches[perm_idx].sequence;
+            let blocked = [next_message, next_notice, next_checkpoint, next_switch]
                 .into_iter()
                 .flatten()
                 .any(|sequence| sequence <= next);
@@ -118,11 +157,11 @@ pub(super) fn timeline(source: HistorySource<'_>) -> Vec<TimelineEntry> {
                 break;
             }
             count += 1;
-            switch_idx += 1;
+            perm_idx += 1;
         }
-        out.push(TimelineEntry::ModelSwitch {
+        out.push(TimelineEntry::PermissionSwitch {
             first,
-            last: switch_idx - 1,
+            last: perm_idx - 1,
             count,
         });
     }

@@ -31,6 +31,91 @@ fn v31_adds_session_mode_column_and_rule_table() {
         )
         .expect("rule table");
     assert_eq!(tables, 1);
+
+    let switch_tables: i64 = database
+        .conn
+        .query_row(
+            "SELECT COUNT(*) FROM sqlite_master WHERE type = 'table' AND name = 'agent_permission_switch'",
+            [],
+            |row| row.get(0),
+        )
+        .expect("switch table");
+    assert_eq!(switch_tables, 1);
+}
+
+#[test]
+fn permission_switch_records_follow_sequence_and_survive_fork_and_rewind() {
+    use crate::db::chat::{ModelSnapshot, TurnOutcome, Usage};
+    let root = std::env::temp_dir().join(format!(
+        "lx-db-perm-switch-{}-{}",
+        std::process::id(),
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|duration| duration.as_nanos())
+            .unwrap_or_default()
+    ));
+    std::fs::create_dir_all(&root).expect("temp dir");
+    let database = Database::open(&root.join("lx.db")).expect("open");
+    database.trust_workspace(&root, "ws").expect("trust");
+    let model = ModelSnapshot {
+        provider: "p".into(),
+        model: "m".into(),
+        variant: None,
+    };
+    let turn1 = database
+        .begin_turn(&root, None, "turn 1", &model)
+        .expect("turn1");
+    database
+        .finish(
+            &root,
+            &turn1.assistant_message_id,
+            &[],
+            &TurnOutcome::Complete {
+                stop_reason: Some("stop".into()),
+            },
+            Usage::default(),
+        )
+        .expect("finish1");
+    let recorded = database
+        .record_permission_switch(
+            &root,
+            &PermissionSwitchCommit {
+                session_id: turn1.session_id.clone(),
+                from_mode: "workspace-write".into(),
+                to_mode: "danger-full-access".into(),
+                injected_prompt: "Switched to Full".into(),
+            },
+        )
+        .expect("record")
+        .expect("created");
+    assert_eq!(recorded.to_mode, "danger-full-access");
+    let loaded = database
+        .permission_switches(&root, &turn1.session_id)
+        .expect("load");
+    assert_eq!(loaded.len(), 1);
+    assert_eq!(
+        database
+            .session_sandbox_mode(&root, &turn1.session_id)
+            .expect("mode"),
+        Some("danger-full-access".into())
+    );
+    let forked = database
+        .fork_chat_session(&root, &turn1.session_id, None)
+        .expect("fork");
+    assert_eq!(
+        database
+            .session_sandbox_mode(&root, &forked.session_id)
+            .expect("fork mode"),
+        Some("danger-full-access".into())
+    );
+    assert_eq!(
+        database
+            .permission_switches(&root, &forked.session_id)
+            .expect("fork switches")
+            .len(),
+        1
+    );
+    let _ = std::fs::remove_dir_all(root);
 }
 
 #[test]

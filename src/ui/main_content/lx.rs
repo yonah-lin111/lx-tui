@@ -20,6 +20,7 @@ mod panels;
 mod refer;
 mod selection;
 
+pub(crate) use approval::item_at as approval_item_at;
 pub(crate) use ask::{ask_editor_cell_at, ask_editor_drag_cell_at, rect as ask_rect};
 pub(crate) use mention::{
     item_at as mention_item_at, layout as mention_layout, tab_at as mention_tab_at,
@@ -141,6 +142,7 @@ pub fn render(
     render_paste_panel(area, buf, lx);
     refer::render(area, buf, lx);
     render_slash_panel(area, buf, lx);
+    approval::render(area, buf, lx);
     // 本页 toast 最后画：盖住历史、输入框与上述所有浮层，但**只在窗格内容区内**。
     // 全局 toast 覆盖层不再承载 lx 反馈（见 `app::state::Lx::toast`）。
     let toast_box = lx
@@ -238,8 +240,6 @@ struct Layout {
     input_visible: usize,
     /// 输入框上方聊天栏（loading 转轮 + 右端回到底部按钮）；无则为 None。
     chat_bar: Option<Rect>,
-    /// 沙箱审批 strip（输入框上方固定 3 行）；无则为 None。
-    approval: Option<Rect>,
     /// 聊天栏上方的 pending steer 提示区（每条一行，最多 `MAX_VISIBLE` 行）；无则为 None。
     pending: Option<Rect>,
     /// 后台任务**输出容器**矩形：占用原历史区（消息列表的位置）；未打开时为 None。
@@ -265,7 +265,6 @@ impl Layout {
             input_scroll: 0,
             input_visible: 0,
             chat_bar: None,
-            approval: None,
             pending: None,
             task_output: None,
             task_list: None,
@@ -366,16 +365,9 @@ fn layout(area: Rect, lx: &Lx) -> Layout {
     // pending steer 提示区：贴在聊天栏（无聊天栏时贴输入框）上沿，最多 `MAX_VISIBLE` 行。
     // task/ask 打开时 `height` 为 0；上方放不下的极小窗格整块隐藏，避免压到顶边。
     let bar_top = out.chat_bar.map_or(input.y, |bar| bar.y);
-    if approval::visible(lx)
-        && let Some(y) = bar_top.checked_sub(approval::height(lx))
-        && y >= area.y
-    {
-        out.approval = Some(Rect::new(input.x, y, input.width, approval::height(lx)));
-    }
-    let pending_base = out.approval.map_or(bar_top, |rect| rect.y);
     let pending_h = steer_strip::height(lx);
     if pending_h > 0
-        && let Some(y) = pending_base.checked_sub(pending_h)
+        && let Some(y) = bar_top.checked_sub(pending_h)
         && y >= area.y
     {
         out.pending = Some(Rect::new(input.x, y, input.width, pending_h));
@@ -518,9 +510,6 @@ fn stack_top(lay: &Layout, input: Rect) -> u16 {
     if let Some(pending) = lay.pending {
         return pending.y;
     }
-    if let Some(approval) = lay.approval {
-        return approval.y;
-    }
     lay.chat_bar.map_or(input.y, |bar| bar.y)
 }
 
@@ -528,9 +517,6 @@ fn stack_top(lay: &Layout, input: Rect) -> u16 {
 fn history_bottom(area: Rect, lay: &Layout) -> u16 {
     if let Some(pending) = lay.pending {
         return pending.y;
-    }
-    if let Some(approval) = lay.approval {
-        return approval.y;
     }
     let bottom_box = lay.input.or(lay.ask).or(lay.task_list);
     if bottom_box.is_some() {
@@ -613,13 +599,7 @@ fn build(
         }
     }
 
-    if let Some(rect) = lay.approval {
-        approval::draw(&mut grid, rect, lx);
-    }
     chat_bar::draw(&mut grid, lay.chat_bar, lx);
-    if let Some(rect) = lay.approval {
-        approval::draw(&mut grid, rect, lx);
-    }
     let mut cursor = None;
     // 后台任务面板打开时输入框已被替换：与 `build_chat` 同一条路径，
     // 否则会画出上下两条`─`和一个空占位，而面板本身不画——按键却全被
@@ -717,9 +697,6 @@ fn build_chat(
         steer_strip::draw(&mut grid, rect, lx);
     }
     chat_bar::draw(&mut grid, lay.chat_bar, lx);
-    if let Some(rect) = lay.approval {
-        approval::draw(&mut grid, rect, lx);
-    }
     let mut cursor = None;
     // 后台任务面板：输出容器占原消息列表位置，item 列表仍在原输入框位置。
     if let Some(page) = lx.task.as_ref() {

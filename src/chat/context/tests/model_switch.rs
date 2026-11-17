@@ -51,6 +51,7 @@ fn model_switch_injects_system_update_in_sequence_order_before_draft() {
         skills: None,
         mcp: None,
         model_switches: &switches,
+        permission_switches: &[],
         skill_blocks: &[],
         supports_image_input: true,
     });
@@ -126,6 +127,7 @@ fn trimmed_history_retains_latest_prior_model_switch_and_accounts_for_system_pro
         skills: None,
         mcp: None,
         model_switches: &switches,
+        permission_switches: &[],
         skill_blocks: &[],
         supports_image_input: true,
     });
@@ -183,6 +185,7 @@ fn compact_checkpoint_filters_earlier_model_switches() {
         skills: None,
         mcp: None,
         model_switches: &switches,
+        permission_switches: &[],
         skill_blocks: &[],
         supports_image_input: true,
     });
@@ -190,4 +193,52 @@ fn compact_checkpoint_filters_earlier_model_switches() {
     let serialized = format!("{:?}", assembly.request.items);
     assert!(!serialized.contains("Before compact"));
     assert!(serialized.contains("After compact"));
+}
+
+#[test]
+fn permission_switches_interleave_with_model_switches_in_sequence_order() {
+    let messages = vec![
+        message("u0", 0, 0, "user", "complete", "turn 1"),
+        message("a0", 1, 0, "assistant", "complete", "ans 1"),
+    ];
+    let model_switches = vec![switch_record(3, "GPT-5", "Model switched at 3")];
+    let perm_switches = vec![crate::db::chat::PermissionSwitchRecord {
+        id: "psw-1".into(),
+        sequence: 2,
+        from_mode: "workspace-write".into(),
+        to_mode: "read-only".into(),
+        injected_prompt: "Permission switched at 2".into(),
+        created_at_ms: 0,
+    }];
+    let assembly = assemble(&AssemblyInput {
+        messages: &messages,
+        draft: "next",
+        draft_attachments: &[],
+        model: &model(),
+        context_limit: None,
+        output_limit: None,
+        variant_params: None,
+        compact: None,
+        model_identity: None,
+        environment: None,
+        instructions: None,
+        skills: None,
+        mcp: None,
+        model_switches: &model_switches,
+        permission_switches: &perm_switches,
+        skill_blocks: &[],
+        supports_image_input: true,
+    });
+    assert_eq!(
+        assembly.request.items,
+        vec![
+            ModelItem::UserText("turn 1".into()),
+            ModelItem::AssistantText("ans 1".into()),
+            ModelItem::UserText(
+                "<system-update>\nPermission switched at 2\n</system-update>".into()
+            ),
+            ModelItem::UserText("<system-update>\nModel switched at 3\n</system-update>".into()),
+            ModelItem::UserText("next".into()),
+        ]
+    );
 }

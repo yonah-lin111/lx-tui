@@ -89,13 +89,15 @@ pub(super) fn start_stream(
                 summary: checkpoint.summary.clone(),
                 model_label: checkpoint.model_label.clone(),
             });
-        // 环境快照：工作区根 + 冻结 cwd + 受管后台任务摘要（不含任何凭据/环境变量值）。
+        // 环境快照：工作区根 + 冻结 cwd + 受管后台任务摘要 + 会话生效的沙箱配置。
         let workspace_root = state.workspace_cwd_for_pane(key.pane);
-        let environment = crate::chat::prompt::environment_snapshot(
+        let effective_sandbox = state.effective_sandbox_for_pane(key.pane);
+        let environment = crate::chat::prompt::environment_snapshot_with_sandbox(
             &crate::platform::EnvironmentFacts::capture(),
             workspace_root.as_deref(),
             workspace_root.as_deref(),
             &background_tasks(pane.lx.chat.session_id.as_deref(), streams),
+            &effective_sandbox,
         );
         // skill 目录与 MCP 快照在 turn 起点冻结（配置根取仓库主 checkout，执行 cwd 为 workspace_root）。
         let config_root = state
@@ -159,6 +161,13 @@ pub(super) fn start_stream(
             .iter()
             .map(crate::app::state::ModelSwitchNoticeView::to_record)
             .collect();
+        let permission_switches: Vec<crate::db::chat::PermissionSwitchRecord> = pane
+            .lx
+            .permission_switch
+            .switches
+            .iter()
+            .map(crate::app::state::PermissionSwitchNoticeView::to_record)
+            .collect();
         let mut assembled = assemble_turn_request_with_context(
             &pane.lx.chat.messages,
             &frozen,
@@ -169,6 +178,7 @@ pub(super) fn start_stream(
             skills.as_deref(),
             mcp_prompt.as_deref(),
             &model_switches,
+            &permission_switches,
             &skill_blocks,
         );
         let mut tool_decls = crate::chat::tools::turn_tools_with_subagents(
@@ -176,9 +186,7 @@ pub(super) fn start_stream(
             &mcp_snapshot,
             Some(&effective_subagents),
         );
-        if crate::config::sandbox::load_sandbox_or_default().escalation
-            == crate::config::sandbox::EscalationPolicy::Never
-        {
+        if effective_sandbox.escalation == crate::config::sandbox::EscalationPolicy::Never {
             crate::chat::tools::trim_escalation_parameters(&mut tool_decls);
         }
         assembled.request.tools = std::sync::Arc::new(tool_decls);
@@ -322,16 +330,7 @@ pub(super) fn start_stream(
         .with_reads(reads)
         .with_sandbox(
             crate::chat::sandbox::SandboxPlan::for_turn(
-                &{
-                    let mut settings = crate::config::sandbox::load_sandbox_or_default();
-                    if let Some(mode) = state
-                        .pane_anywhere(key.pane)
-                        .and_then(|pane| pane.lx.sandbox_mode)
-                    {
-                        settings.mode = mode;
-                    }
-                    settings
-                },
+                &state.effective_sandbox_for_pane(key.pane),
                 &prepared.cwd,
             )
             .with_exact_rules(

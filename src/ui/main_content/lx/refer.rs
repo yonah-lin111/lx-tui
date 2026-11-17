@@ -136,6 +136,7 @@ fn view<'a>(
         borderless: true,
         hide_active_marker: false,
         disabled: None,
+        context_lines: &[],
     }
 }
 

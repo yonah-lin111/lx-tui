@@ -36,6 +36,7 @@ mod compact;
 mod layout;
 mod model_switch;
 mod paint;
+mod permission_switch;
 mod recap;
 mod render;
 pub(crate) mod report;

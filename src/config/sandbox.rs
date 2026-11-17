@@ -41,6 +41,15 @@ impl SandboxMode {
         }
     }
 
+    /// 界面简短展示名（用于窗格左上角标题与 `/permission` 候选列表）。
+    pub const fn short_label(self) -> &'static str {
+        match self {
+            Self::ReadOnly => "Read-only",
+            Self::WorkspaceWrite => "Workspace",
+            Self::DangerFullAccess => "Full",
+        }
+    }
+
     /// 解析稳定值；仅接受三个 kebab-case 名称。
     pub fn parse(text: &str) -> Option<Self> {
         match text.trim() {

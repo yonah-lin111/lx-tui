@@ -866,3 +866,124 @@ fn detail_rewind_panels_render_scope_and_actions() {
         "{lines}"
     );
 }
+
+#[test]
+fn approval_command_panel_renders_context_options_and_hit_tests() {
+    use crate::app::state::{ApprovalState, RequestKey};
+    use crate::chat::sandbox::{
+        AdditionalPermissions, FileSystemRequest, SandboxApprovalKind, SandboxApprovalRequest,
+    };
+    use crate::ui::main_content::lx::{approval_item_at, command_panel_contains};
+
+    let area = Rect::new(0, 0, 100, 24);
+    let mut lx = Lx::new();
+    let pane = crate::tiling::PaneId::alloc();
+    lx.approvals.push_back(ApprovalState::new(
+        RequestKey {
+            pane,
+            session: "sess-1".into(),
+            generation: 1,
+        },
+        "call-1".into(),
+        SandboxApprovalRequest {
+            kind: SandboxApprovalKind::Escalation,
+            command: "cargo publish --dry-run".into(),
+            cwd: "/ws".into(),
+            justification: "needs network registry".into(),
+            prefix_rule: Some(vec!["cargo".into(), "publish".into()]),
+            additional: Some(AdditionalPermissions {
+                network: Some(true),
+                file_system: Some(FileSystemRequest {
+                    write: vec!["/tmp/out".into()],
+                    ..Default::default()
+                }),
+            }),
+            denial_excerpt: None,
+            source: Some("Turing [executor]".into()),
+        },
+    ));
+    // 同时打开 slash 时，审批面板必须压制 slash、独占地盘。
+    lx.slash = Some(SlashPanel::Permission(Box::new(
+        crate::app::state::PermissionPicker::new(
+            crate::config::sandbox::SandboxMode::WorkspaceWrite,
+            None,
+        ),
+    )));
+    let mut buf = Buffer::empty(area);
+    let _ = render(area, &mut buf, &lx, true, None, &mut PaneCache::default());
+    let lines = buffer_lines(&buf, area);
+    let joined = lines.join("\n");
+    for needle in [
+        text::LX_APPROVAL_ESCALATION,
+        text::LX_APPROVAL_SUBAGENT_TAG,
+        text::LX_APPROVAL_SUBAGENT_LABEL,
+        "Turing [executor]",
+        "Reason:",
+        "needs network registry",
+        "Command:",
+        "cargo publish --dry-run",
+        "Requested:",
+        text::LX_APPROVAL_OPT_ONCE,
+        text::LX_APPROVAL_OPT_SESSION,
+        text::LX_APPROVAL_OPT_DENY,
+        text::LX_APPROVAL_FOOTER_ESCALATION,
+    ] {
+        assert!(joined.contains(needle), "缺少 {needle}: {joined}");
+    }
+    let (sub_y, sub_x) = lines
+        .iter()
+        .enumerate()
+        .find_map(|(y, line)| line.find("Turing [executor]").map(|x| (y as u16, x as u16)))
+        .expect("subagent context row");
+    assert_eq!(
+        buf[(sub_x, sub_y)].fg,
+        ratatui::style::Color::Cyan,
+        "Subagent 来源值应以强调色突出"
+    );
+    assert!(!joined.contains("Read-only"), "slash 面板应被审批抑制");
+    assert!(slash_layout(area, &lx).is_none());
+
+    let (opt_y, opt_x) = lines
+        .iter()
+        .enumerate()
+        .find_map(|(y, line)| {
+            line.find(text::LX_APPROVAL_OPT_SESSION)
+                .map(|x| (y as u16, x as u16))
+        })
+        .expect("session option row");
+    assert_eq!(approval_item_at(area, &lx, opt_x, opt_y), Some(1));
+    assert!(command_panel_contains(area, &lx, opt_x, opt_y));
+}
+
+#[test]
+fn permission_panel_highlights_effective_marks_default_and_filters() {
+    use crate::config::sandbox::SandboxMode;
+
+    let area = Rect::new(0, 0, 90, 24);
+    let mut lx = Lx::new();
+    let mut picker = crate::app::state::PermissionPicker::new(
+        SandboxMode::WorkspaceWrite,
+        Some(SandboxMode::ReadOnly),
+    );
+    assert_eq!(picker.window.active, 0, "打开时高亮当前生效项 Read-only");
+    lx.slash = Some(SlashPanel::Permission(Box::new(picker.clone())));
+    let mut buf = Buffer::empty(area);
+    let _ = render(area, &mut buf, &lx, true, None, &mut PaneCache::default());
+    let joined = buffer_lines(&buf, area).join("\n");
+    assert!(joined.contains(text::LX_PERMISSION_PANEL_TITLE), "{joined}");
+    assert!(joined.contains("Read-only"), "{joined}");
+    assert!(joined.contains("Workspace"), "{joined}");
+    assert!(joined.contains("Full"), "{joined}");
+    assert!(joined.contains(text::SLASH_TAG_DEFAULT), "{joined}");
+    assert!(!joined.contains(text::SLASH_TAG_BUILTIN), "{joined}");
+
+    picker.refilter("zzz");
+    lx.slash = Some(SlashPanel::Permission(Box::new(picker)));
+    let mut buf2 = Buffer::empty(area);
+    let _ = render(area, &mut buf2, &lx, true, None, &mut PaneCache::default());
+    let empty_text = buffer_lines(&buf2, area).join("\n");
+    assert!(
+        empty_text.contains(text::LX_SLASH_NO_MATCHES),
+        "{empty_text}"
+    );
+}

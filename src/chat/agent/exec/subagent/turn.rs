@@ -115,6 +115,19 @@ impl ExecSubagentPool {
             .get(child_session_id)
             .cloned()
             .unwrap_or_else(|| self.model.clone());
+        let root_session = db
+            .resolve_session_tree_root(&self.workspace, parent_session_id)
+            .map(|(root, _, _)| root)
+            .unwrap_or_else(|_| parent_session_id.to_string());
+        let mut sandbox_settings = crate::config::sandbox::load_sandbox_or_default();
+        if let Some(mode) = db
+            .session_sandbox_mode(&self.workspace, &root_session)
+            .ok()
+            .flatten()
+            .and_then(|text| crate::config::sandbox::SandboxMode::parse(&text))
+        {
+            sandbox_settings.mode = mode;
+        }
         // 子 agent 轮次起点也检查一次（父轮通常已重载，成本仅 stat）。
         crate::chat::exec_policy::reload_if_changed();
         let executor = AgentTools::new(
@@ -129,7 +142,7 @@ impl ExecSubagentPool {
         ))
         .with_reads(crate::chat::tools::read_registry(child_session_id))
         .with_sandbox(crate::chat::sandbox::SandboxPlan::for_turn(
-            &crate::config::sandbox::load_sandbox_or_default(),
+            &sandbox_settings,
             &self.cwd,
         ))
         .with_image_support(child_model.supports_image_input)
