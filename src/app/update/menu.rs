@@ -228,8 +228,8 @@ pub fn close_overlay(state: &mut AppState) {
 
 /// 打开 Agents 条目右键菜单：绑定有效 Recent 页时提供 `Open prompt`；有标题
 /// 覆盖时提供移除项（绑定标题 `Unbind recent`、自定义标题 `Remove title`）；
-/// `Edit title` 恒可用；`Close` 对 lx 恒可用，终端 Agent 仅在其窗格不是当前
-/// 标签页唯一窗格时可用。
+/// `Edit title` 恒可用；`Close` 对所有条目可用——lx 重置会话视图，终端 Agent
+/// 关闭所属窗格/标签。
 pub fn open_agent_menu(state: &mut AppState, index: usize, anchor: (u16, u16)) {
     let Some(entry) = state.agent_entries().get(index).copied() else {
         return;
@@ -247,17 +247,7 @@ pub fn open_agent_menu(state: &mut AppState, index: usize, anchor: (u16, u16)) {
     {
         commands.push(MenuCommand::RemoveAgentTitle);
     }
-    let closable = match entry.kind {
-        SidebarAgentKind::Lx { .. } => true,
-        SidebarAgentKind::Terminal(_) => state
-            .workspaces
-            .get(workspace)
-            .and_then(|workspace| workspace.tabs.get(entry.tab_index))
-            .is_some_and(|tab| tab.layout.pane_ids().len() > 1),
-    };
-    if closable {
-        commands.push(MenuCommand::CloseAgent);
-    }
+    commands.push(MenuCommand::CloseAgent);
     state.overlay = Some(Overlay::Menu(Menu {
         anchor,
         target: OverlayTarget::Agent {
@@ -295,10 +285,37 @@ fn close_agent(
             // 等价 `/new`：停流、解绑当前会话、回空白欢迎页；DB 历史保留。
             super::chat::new_session(state, pane);
         }
-        SidebarAgentKind::Terminal(_) => {
-            // 菜单只在该窗格可关闭时提供 Close；close_pane 仍保留最后窗格保护。
-            close_pane(state, workspace, tab, pane);
-        }
+        SidebarAgentKind::Terminal(_) => close_terminal_agent(state, workspace, tab, pane),
+    }
+}
+
+/// 关闭终端 Agent：多窗格只删窗格；唯一窗格删标签；唯一标签先建空白标签再删旧标签。
+/// 工作区始终保留至少一个标签。
+fn close_terminal_agent(state: &mut AppState, workspace: usize, tab: usize, pane: PaneId) {
+    let Some(pane_count) = state
+        .workspaces
+        .get(workspace)
+        .and_then(|workspace| workspace.tabs.get(tab))
+        .map(|tab_state| tab_state.layout.pane_ids().len())
+    else {
+        return;
+    };
+    let Some(tab_count) = state
+        .workspaces
+        .get(workspace)
+        .map(|workspace| workspace.tabs.len())
+    else {
+        return;
+    };
+    if pane_count > 1 {
+        close_pane(state, workspace, tab, pane);
+    } else if tab_count > 1 {
+        close_tab(state, workspace, tab);
+    } else {
+        // 唯一标签：先建空白标签（默认 lx 欢迎页）并激活，再删旧标签；
+        // 旧标签索引在唯一标签场景下必为 0，新标签删后回落到索引 0。
+        create_tab(state);
+        close_tab(state, workspace, tab);
     }
 }
 

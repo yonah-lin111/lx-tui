@@ -173,7 +173,7 @@ fn lx_agent_menu_offers_edit_and_close_without_binding() {
 }
 
 #[test]
-fn terminal_agent_menu_offers_close_only_with_multiple_panes() {
+fn terminal_agent_menu_offers_close_with_multiple_panes() {
     let mut state = AppState::demo();
     let first = state.active_tab().layout.focus();
     let second = split_pane(&mut state, first);
@@ -201,7 +201,7 @@ fn terminal_agent_menu_offers_close_only_with_multiple_panes() {
 }
 
 #[test]
-fn terminal_agent_menu_omits_close_for_last_pane() {
+fn terminal_agent_menu_offers_close_for_last_pane() {
     let mut state = AppState::demo();
     let pane = state.active_tab().layout.focus();
     update_pane_agent(
@@ -213,7 +213,10 @@ fn terminal_agent_menu_omits_close_for_last_pane() {
 
     open_agent_menu(&mut state, index, (0, 0));
 
-    assert_eq!(menu_commands(&state), vec![MenuCommand::EditAgentTitle]);
+    assert_eq!(
+        menu_commands(&state),
+        vec![MenuCommand::EditAgentTitle, MenuCommand::CloseAgent]
+    );
 }
 
 #[test]
@@ -279,9 +282,10 @@ fn terminal_bound_title_adds_open_prompt_and_opens_page() {
         vec![
             MenuCommand::EditAgentTitle,
             MenuCommand::OpenPrompt,
-            MenuCommand::RemoveAgentTitle
+            MenuCommand::RemoveAgentTitle,
+            MenuCommand::CloseAgent
         ],
-        "唯一窗格的终端 Agent 不提供 Close，但绑定后提供 Open prompt 与解绑"
+        "唯一窗格的终端 Agent 也提供 Close，绑定后同时提供 Open prompt 与解绑"
     );
     select_command(&mut state, MenuCommand::OpenPrompt);
 
@@ -850,6 +854,71 @@ fn terminal_close_agent_removes_only_target_pane() {
     let tab = state.active_tab();
     assert!(tab.pane(second).is_none());
     assert!(tab.pane(first).is_some());
+}
+
+/// 终端 Agent 是标签唯一窗格但工作区还有其他标签：关闭标签，保留其他标签。
+#[test]
+fn terminal_close_agent_in_sole_pane_closes_tab() {
+    let mut state = AppState::demo();
+    let pane = state.active_tab().layout.focus();
+    update_pane_agent(
+        &mut state,
+        pane,
+        Some(snapshot(
+            AgentKind::Claude,
+            AgentState::Idle,
+            Some("claude"),
+        )),
+    );
+    create_tab(&mut state);
+    state.active_workspace_mut().active_tab = 0;
+    let index = agent_entry_index(&state, pane, SidebarAgentKind::Terminal(AgentKind::Claude));
+    open_agent_menu(&mut state, index, (0, 0));
+    select_command(&mut state, MenuCommand::CloseAgent);
+
+    activate_menu(&mut state);
+    activate_menu(&mut state);
+
+    let workspace = &state.workspaces[0];
+    assert_eq!(workspace.tabs.len(), 1, "唯一窗格应关闭整个标签");
+    assert_eq!(workspace.active_tab, 0);
+    assert!(state.pane_anywhere(pane).is_none());
+    let root = workspace.tabs[0].root_pane().expect("remaining root pane");
+    assert_eq!(
+        state.pane_anywhere(root).expect("root pane").view,
+        PaneView::Lx,
+        "保留的是新建的空白 lx 标签"
+    );
+}
+
+/// 终端 Agent 是工作区唯一标签的唯一窗格：替换为空白 lx 标签，工作区仍有一个标签。
+#[test]
+fn terminal_close_agent_in_last_tab_replaces_with_blank_tab() {
+    let mut state = AppState::demo();
+    let pane = state.active_tab().layout.focus();
+    update_pane_agent(
+        &mut state,
+        pane,
+        Some(snapshot(AgentKind::Codex, AgentState::Idle, Some("codex"))),
+    );
+    let index = agent_entry_index(&state, pane, SidebarAgentKind::Terminal(AgentKind::Codex));
+    open_agent_menu(&mut state, index, (0, 0));
+    select_command(&mut state, MenuCommand::CloseAgent);
+
+    activate_menu(&mut state);
+    activate_menu(&mut state);
+
+    let workspace = &state.workspaces[0];
+    assert_eq!(workspace.tabs.len(), 1);
+    assert_eq!(workspace.active_tab, 0);
+    assert!(state.pane_anywhere(pane).is_none());
+    let root = workspace.tabs[0]
+        .root_pane()
+        .expect("replacement root pane");
+    assert_eq!(
+        state.pane_anywhere(root).expect("root pane").view,
+        PaneView::Lx
+    );
 }
 
 #[test]

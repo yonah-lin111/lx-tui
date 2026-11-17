@@ -170,7 +170,7 @@ fn right_click_terminal_agent_opens_agent_menu_not_pane_menu() {
 }
 
 #[test]
-fn terminal_agent_in_sole_pane_offers_only_edit_title() {
+fn terminal_agent_in_sole_pane_offers_edit_title_and_close() {
     let mut state = demo_terminal();
     let pane = mount_agent(&mut state, AgentKind::Codex, AgentState::Idle);
     let config = Config::default();
@@ -190,7 +190,12 @@ fn terminal_agent_in_sole_pane_offers_only_edit_title() {
     );
 
     assert!(dirty);
-    assert_agent_menu(&state, expected, anchor, &[MenuCommand::EditAgentTitle]);
+    assert_agent_menu(
+        &state,
+        expected,
+        anchor,
+        &[MenuCommand::EditAgentTitle, MenuCommand::CloseAgent],
+    );
 }
 
 #[test]
@@ -291,7 +296,12 @@ fn wheel_scroll_then_hover_and_right_click_use_new_row_offset() {
         anchor.1,
     );
     assert!(dirty);
-    assert_agent_menu(&state, expected, anchor, &[MenuCommand::EditAgentTitle]);
+    assert_agent_menu(
+        &state,
+        expected,
+        anchor,
+        &[MenuCommand::EditAgentTitle, MenuCommand::CloseAgent],
+    );
 }
 
 // ===== Agents 标题弹窗与 Open prompt（鼠标路径） =====
