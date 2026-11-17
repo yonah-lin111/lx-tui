@@ -22,7 +22,6 @@
 //! ```
 
 use std::future::Future;
-use std::path::Path;
 
 use tokio::sync::{oneshot, watch};
 
@@ -32,13 +31,16 @@ use crate::chat::events::{
     ChatDelta, ChatRequest, ModelStepStop, PartKind, StopReason, TOOL_ARGUMENTS_INVALID_CODE,
 };
 use crate::chat::tools::ask::{AskAnswers, AskQuestion};
-use crate::chat::tools::{self, ToolContext, ToolErrorCode, ToolExecutionResult, ToolFailure};
+use crate::chat::tools::{self, ToolErrorCode, ToolExecutionResult, ToolFailure};
 use crate::chat::transport::tools::{TOOL_INPUT_TRUNCATED_CODE, TOOL_PROTOCOL_ERROR_CODE};
 use crate::db::chat::{ToolCallTicket, Usage};
 
 mod auto_compact;
 mod context;
 mod executor;
+mod sandbox_decision;
+mod tool_executor;
+pub use tool_executor::{FileTools, ToolExecutor};
 mod tool_batch;
 
 #[cfg(test)]
@@ -238,29 +240,6 @@ pub trait AgentHost: Send {
         }
     }
 
-    /// 请求用户审批一次沙箱提权；回执丢失等价于取消。
-    fn approve_sandbox(
-        &mut self,
-        call_id: String,
-        request: crate::chat::sandbox::SandboxApprovalRequest,
-    ) -> impl Future<Output = Result<crate::chat::sandbox::SandboxApprovalDecision, HostError>> + Send
-    where
-        Self: Sized,
-    {
-        async move {
-            let (reply, receiver) = oneshot::channel();
-            self.send(AgentHostRequest::ApproveSandbox {
-                call_id,
-                request,
-                reply,
-            });
-            match receiver.await {
-                Ok(result) => result,
-                Err(_) => Err(HostError::Cancelled),
-            }
-        }
-    }
-
     /// 执行一次子 agent 控制操作；回执丢失（事件循环退出）等价于取消。
     fn subagent(
         &mut self,
@@ -353,108 +332,6 @@ pub trait AgentHost: Send {
 }
 
 /// 工具执行入口：生产实现走 `spawn_blocking`；测试可注入可控执行器。
-pub trait ToolExecutor: Send + Sync {
-    /// 执行一次调用（同步实现必须自行移出事件循环线程）。
-    fn execute(
-        &self,
-        cwd: &Path,
-        call: &ReadyToolCall,
-    ) -> impl Future<Output = ToolExecutionResult> + Send;
-
-    /// 带 BeginTool 票据的执行入口：生产执行器据此把 mutation 绑定到真实
-    /// session / message / call；默认实现忽略票据（测试执行器无需关心快照）。
-    fn execute_tracked(
-        &self,
-        cwd: &Path,
-        call: &ReadyToolCall,
-        _ticket: &ToolCallTicket,
-    ) -> impl Future<Output = ToolExecutionResult> + Send
-    where
-        Self: Sized,
-    {
-        self.execute(cwd, call)
-    }
-
-    /// 带沙箱覆盖的执行入口（显式提权/on-failure 重试）。
-    fn execute_tracked_sandboxed(
-        &self,
-        cwd: &Path,
-        call: &ReadyToolCall,
-        ticket: &ToolCallTicket,
-        sandbox: crate::chat::sandbox::SandboxOverride,
-    ) -> impl Future<Output = ToolExecutionResult> + Send
-    where
-        Self: Sized,
-    {
-        async move {
-            let _ = sandbox;
-            self.execute_tracked(cwd, call, ticket).await
-        }
-    }
-
-    /// 本执行器冻结的沙箱计划（测试执行器返回 None）。
-    fn sandbox_plan(&self) -> Option<&crate::chat::sandbox::SandboxPlan> {
-        None
-    }
-
-    /// 可取消的 MCP 调用；非 MCP 工具返回 None，由调用方走通用执行入口。
-    ///
-    /// Esc 取消必须直达 `notifications/cancelled`，不能只丢弃 future 让 server
-    /// 继续执行副作用。
-    fn execute_mcp_cancellable(
-        &self,
-        _cwd: &Path,
-        _call: &ReadyToolCall,
-        _cancel: watch::Receiver<bool>,
-    ) -> impl Future<Output = Option<ToolExecutionResult>> + Send
-    where
-        Self: Sized,
-    {
-        async { None }
-    }
-
-    /// 当前模型是否支持图片输入；测试执行器默认支持。
-    fn supports_image_input(&self) -> bool {
-        true
-    }
-}
-
-/// 生产执行器：文件工具是阻塞 IO，必须放入阻塞线程池。
-#[derive(Debug, Clone, Copy, Default)]
-pub struct FileTools;
-
-impl ToolExecutor for FileTools {
-    async fn execute(&self, cwd: &Path, call: &ReadyToolCall) -> ToolExecutionResult {
-        let context = ToolContext::new(cwd.to_path_buf());
-        let name = call.name.clone();
-        let arguments_json = call.arguments_json.clone();
-        let call_id = call.call_id.clone();
-        let worker_name = name.clone();
-        match tokio::task::spawn_blocking(move || {
-            tools::execute(&context, &worker_name, &arguments_json)
-        })
-        .await
-        {
-            Ok(result) => result,
-            Err(error) => {
-                // 只记 call_id/工具名/错误类别：不打印参数全文与文件内容。
-                tracing::warn!(
-                    target: "lx::agent",
-                    call_id = %call_id,
-                    name = %name,
-                    %error,
-                    "tool execution task failed"
-                );
-                ToolExecutionResult::Failed {
-                    code: ToolErrorCode::Io,
-                    message: TOOL_EXECUTION_ABORTED_CODE.to_string(),
-                    changes: Vec::new(),
-                }
-            }
-        }
-    }
-}
-
 /// 一轮的最终结局（映射到 `StopReason`：Complete / Cancelled / Failed）。
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum TurnOutcome {
@@ -803,8 +680,14 @@ where
                 result
             } else {
                 let exec_policy = crate::chat::exec_policy::current_policy();
-                match sandbox_override_for(&mut host, &executor, &call, context.cwd(), &exec_policy)
-                    .await
+                match sandbox_decision::override_for(
+                    &mut host,
+                    &executor,
+                    &call,
+                    context.cwd(),
+                    &exec_policy,
+                )
+                .await
                 {
                     Ok(sandbox) => {
                         executor
@@ -815,55 +698,15 @@ where
                 }
             };
             // on-failure：沙箱拒绝后最多重试一次（design §8.5）。
-            let mut result = result;
-            if let Some(plan) = executor.sandbox_plan()
-                && plan.escalation == crate::config::sandbox::EscalationPolicy::Ask
-                && plan.process_sandbox()
-                && let ToolExecutionResult::Process(process) = &result
-                && crate::chat::sandbox::denial::is_likely_sandbox_denied(process, true)
-                && process.sandbox_retry.is_none()
-            {
-                let excerpt: String = process.output.chars().take(400).collect();
-                let request = crate::chat::sandbox::SandboxApprovalRequest {
-                    kind: crate::chat::sandbox::SandboxApprovalKind::Retry,
-                    command: process.command.clone(),
-                    cwd: process.cwd.clone(),
-                    justification: String::new(),
-                    prefix_rule: None,
-                    additional: None,
-                    denial_excerpt: Some(excerpt),
-                    source: None,
-                };
-                match host.approve_sandbox(call.call_id.clone(), request).await {
-                    Ok(crate::chat::sandbox::SandboxApprovalDecision::Denied) => {}
-                    Ok(decision) => {
-                        let for_session =
-                            decision == crate::chat::sandbox::SandboxApprovalDecision::ForSession;
-                        let retried = executor
-                            .execute_tracked_sandboxed(
-                                context.cwd(),
-                                &call,
-                                &ticket,
-                                crate::chat::sandbox::SandboxOverride::Unsandboxed,
-                            )
-                            .await;
-                        if let ToolExecutionResult::Process(mut retried) = retried {
-                            retried.sandbox_retry = Some(crate::chat::sandbox::SandboxRetry {
-                                approved: true,
-                                for_session,
-                            });
-                            result = ToolExecutionResult::Process(retried);
-                        }
-                    }
-                    Err(HostError::Cancelled) => {
-                        result = ToolFailure::new(ToolErrorCode::Cancelled, "cancelled")
-                            .into_result(Vec::new());
-                    }
-                    Err(HostError::Failed { code }) => {
-                        tracing::warn!(%code, "sandbox retry approval failed");
-                    }
-                }
-            }
+            let result = sandbox_decision::maybe_retry_on_denial(
+                &mut host,
+                &executor,
+                &call,
+                &ticket,
+                context.cwd(),
+                result,
+            )
+            .await;
             // MCP 取消不是工具结果：按用户取消结算，不再采样。
             if result.error_code() == Some(ToolErrorCode::Cancelled) {
                 let _ = host.finish_tool(ticket, ToolOutcome::Cancelled).await;
@@ -1070,176 +913,4 @@ fn add_optional(total: Option<i64>, step: Option<i64>) -> Option<i64> {
         (None, None) => None,
         (total, step) => Some(total.unwrap_or(0).saturating_add(step.unwrap_or(0))),
     }
-}
-
-/// 解析本次 `exec_command` 的执行裁决并请求审批。
-///
-/// 决策优先级（design §18.4）：规则 `Forbidden` → 规则 `Allow` → 会话精确规则
-/// → 模型显式提权 → 规则 `Prompt` → 默认沙箱（失败后走 on-failure）。
-async fn sandbox_override_for<H, E>(
-    host: &mut H,
-    executor: &E,
-    call: &ReadyToolCall,
-    cwd: &Path,
-    policy: &crate::chat::exec_policy::policy::Policy,
-) -> Result<crate::chat::sandbox::SandboxOverride, ToolExecutionResult>
-where
-    H: AgentHost,
-    E: ToolExecutor,
-{
-    use crate::chat::exec_policy::RuleDecision;
-    use crate::chat::sandbox::{
-        SandboxApprovalDecision, SandboxApprovalKind, SandboxApprovalRequest, SandboxOverride,
-    };
-    use crate::config::sandbox::{EscalationPolicy, SandboxMode};
-
-    if call.name != "exec_command" {
-        return Ok(SandboxOverride::None);
-    }
-    let request = match crate::chat::tools::parse_exec_request(&call.arguments_json) {
-        Ok(request) => request,
-        Err(failure) => return Err(failure.into_result(Vec::new())),
-    };
-    let Some(plan) = executor.sandbox_plan() else {
-        return Ok(SandboxOverride::None);
-    };
-
-    // 1–2. 规则文件：Forbidden 直接拒绝；安全分段全部命中 Allow 才跳过沙箱。
-    let prompt_evaluation = match crate::chat::exec_policy::decide(policy, &request.args.cmd) {
-        RuleDecision::Allow => return Ok(SandboxOverride::Unsandboxed),
-        RuleDecision::Forbidden(evaluation) => {
-            let reason = evaluation
-                .justification
-                .unwrap_or_else(|| "command is blocked by an exec policy rule".into());
-            return Err(ToolFailure::new(
-                ToolErrorCode::SandboxDenied,
-                format!("blocked by exec policy: {reason}"),
-            )
-            .into_result(Vec::new()));
-        }
-        RuleDecision::Prompt(evaluation) => Some(evaluation),
-        RuleDecision::None => None,
-    };
-
-    // 3. 会话精确命令规则：执行器会识别并裸跑，这里不再询问。
-    if plan.command_is_approved(&request.args.cmd) {
-        return Ok(SandboxOverride::None);
-    }
-
-    // 4. 模型显式提权。
-    if let Some(escalation) = request.escalation {
-        if plan.mode == SandboxMode::DangerFullAccess {
-            return Ok(SandboxOverride::None);
-        }
-        // 仅收缩权限的 deny 不需要审批，也不受 escalation=never 影响。
-        if escalation.kind == crate::chat::tools::EscalationKind::Additional
-            && escalation
-                .additional
-                .as_ref()
-                .is_some_and(crate::chat::sandbox::AdditionalPermissions::denies_only)
-        {
-            let additional = escalation.additional.unwrap_or_default();
-            return Ok(SandboxOverride::Additional {
-                network: additional.network,
-                file_system: additional.file_system,
-            });
-        }
-        if plan.command_sandbox() == crate::chat::sandbox::CommandSandbox::Unavailable {
-            return Err(ToolFailure::new(
-                ToolErrorCode::SandboxUnavailable,
-                "process sandbox is unavailable on this platform; install the backend or switch to danger-full-access",
-            )
-            .into_result(Vec::new()));
-        }
-        if plan.escalation == EscalationPolicy::Never {
-            return Err(ToolFailure::new(
-                ToolErrorCode::SandboxDenied,
-                "sandbox escalation is disabled by settings",
-            )
-            .into_result(Vec::new()));
-        }
-        let approval = SandboxApprovalRequest {
-            kind: SandboxApprovalKind::Escalation,
-            command: request.args.cmd.clone(),
-            cwd: cwd.display().to_string(),
-            justification: escalation.justification.clone(),
-            prefix_rule: escalation.prefix_rule.clone(),
-            additional: escalation.additional.clone(),
-            denial_excerpt: None,
-            source: None,
-        };
-        let decision = approve(host, call, approval).await?;
-        if decision == SandboxApprovalDecision::Denied {
-            return Err(ToolFailure::new(
-                ToolErrorCode::SandboxDenied,
-                "the user denied sandbox escalation.",
-            )
-            .into_result(Vec::new()));
-        }
-        return Ok(match escalation.kind {
-            crate::chat::tools::EscalationKind::Unsandboxed => SandboxOverride::Unsandboxed,
-            crate::chat::tools::EscalationKind::Additional => {
-                let additional = escalation.additional.unwrap_or_default();
-                SandboxOverride::Additional {
-                    network: additional.network,
-                    file_system: additional.file_system,
-                }
-            }
-        });
-    }
-
-    // 5. 规则文件 `prompt`。
-    if let Some(evaluation) = prompt_evaluation {
-        if plan.escalation == EscalationPolicy::Never {
-            return Err(ToolFailure::new(
-                ToolErrorCode::SandboxDenied,
-                "sandbox escalation is disabled by settings",
-            )
-            .into_result(Vec::new()));
-        }
-        // 危险模式本来就不套沙箱：规则 Prompt 无额外意义。
-        if plan.mode == SandboxMode::DangerFullAccess {
-            return Ok(SandboxOverride::None);
-        }
-        let approval = SandboxApprovalRequest {
-            kind: SandboxApprovalKind::Rule,
-            command: request.args.cmd.clone(),
-            cwd: cwd.display().to_string(),
-            justification: evaluation.justification.unwrap_or_default(),
-            prefix_rule: Some(evaluation.matched_prefix),
-            additional: None,
-            denial_excerpt: None,
-            source: None,
-        };
-        let decision = approve(host, call, approval).await?;
-        if decision == SandboxApprovalDecision::Denied {
-            return Err(ToolFailure::new(
-                ToolErrorCode::SandboxDenied,
-                "the user denied the exec policy prompt.",
-            )
-            .into_result(Vec::new()));
-        }
-        return Ok(SandboxOverride::Unsandboxed);
-    }
-
-    // 6. 默认沙箱执行。
-    Ok(SandboxOverride::None)
-}
-
-/// 请求一次沙箱审批；取消/事件层失败映射为稳定工具失败。
-async fn approve<H: AgentHost>(
-    host: &mut H,
-    call: &ReadyToolCall,
-    approval: crate::chat::sandbox::SandboxApprovalRequest,
-) -> Result<crate::chat::sandbox::SandboxApprovalDecision, ToolExecutionResult> {
-    host.approve_sandbox(call.call_id.clone(), approval)
-        .await
-        .map_err(|error| match error {
-            HostError::Cancelled => {
-                ToolFailure::new(ToolErrorCode::Cancelled, "cancelled").into_result(Vec::new())
-            }
-            HostError::Failed { code } => {
-                ToolFailure::new(ToolErrorCode::SandboxDenied, code).into_result(Vec::new())
-            }
-        })
 }

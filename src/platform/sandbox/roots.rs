@@ -53,16 +53,6 @@ pub fn protected_paths(roots: &[PathBuf]) -> Vec<PathBuf> {
     protected
 }
 
-/// `path` 是否位于 `root` 内（按路径组件边界，`/a/bc` 不属于 `/a/b`）。
-pub fn path_within(path: &Path, root: &Path) -> bool {
-    path == root || path.starts_with(root)
-}
-
-/// `path` 是否命中任一保护路径（含其子路径）。
-pub fn is_protected(path: &Path, protected: &[PathBuf]) -> bool {
-    protected.iter().any(|entry| path_within(path, entry))
-}
-
 /// 解析写目标：存在的路径直接 canonicalize；不存在时取最近存在祖先拼接剩余组件。
 ///
 /// 剩余组件含 `..` 时返回 None（禁止逃逸），调用方按拒绝处理。

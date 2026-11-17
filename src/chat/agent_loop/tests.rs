@@ -13,7 +13,7 @@ use tokio::sync::watch;
 use super::*;
 use crate::chat::client::StreamOutcome;
 use crate::chat::events::{PartDelta, PartKind};
-use crate::chat::tools::ToolErrorCode;
+use crate::chat::tools::{ToolContext, ToolErrorCode};
 
 mod sandbox_rules;
 

@@ -1,5 +1,6 @@
 //! 规则文件与提权的决策优先级（design §18.4）。
 
+use super::super::sandbox_decision::override_for;
 use super::*;
 use crate::chat::exec_policy::parser::PolicyParser;
 use crate::chat::exec_policy::policy::Policy;
@@ -57,7 +58,7 @@ async fn decide(
     call: &ReadyToolCall,
 ) -> Result<SandboxOverride, ToolExecutionResult> {
     let executor = PolicyExecutor { plan };
-    sandbox_override_for(host, &executor, call, Path::new("/"), policy).await
+    override_for(host, &executor, call, Path::new("/"), policy).await
 }
 
 fn failure_code(result: ToolExecutionResult) -> ToolErrorCode {

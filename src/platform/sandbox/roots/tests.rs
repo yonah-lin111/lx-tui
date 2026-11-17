@@ -67,16 +67,6 @@ fn git_file_pointer_protects_target_directory() {
 }
 
 #[test]
-fn path_boundaries_do_not_confuse_prefixes() {
-    assert!(path_within(Path::new("/ws/a"), Path::new("/ws")));
-    assert!(!path_within(Path::new("/ws2/a"), Path::new("/ws")));
-    assert!(!path_within(
-        Path::new("/ws/.gitlab/x"),
-        Path::new("/ws/.git")
-    ));
-}
-
-#[test]
 fn write_target_rejects_parent_escape_and_resolves_missing_children() {
     let cwd = temp_dir("write-target");
     let resolved = resolve_write_target(&cwd.join("a").join("b")).expect("resolve");
