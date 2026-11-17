@@ -243,9 +243,64 @@ pub(crate) fn handle_mouse_wheel(
     dirty: &mut bool,
 ) {
     let Geometry { rects, view, .. } = geometry;
-    // 拖动中禁止改视口：落点与阈值都按绝对行号换算，滚动会让指针原地"跨行"
-    // （design §1.3 明确不做边缘自动滚动）。
-    if state.prompt_drag.is_some() || state.todo_drag.is_some() {
+    // 拖拽中的滚轮只改视口、不改选中；滚动后立即按指针当前位置重算落点。
+    // 拖拽现场优先于常规分支，并在末尾 `return` 防止滚轮穿透到窗格或别的面板。
+    if state.overlay.is_none() && state.workspace_drag.is_some() {
+        if ui::workspace_section_at(view, state, mouse.column, mouse.row)
+            && let Some(delta) = vertical_wheel_delta(mouse.kind)
+            && let Some(rows) = ui::workspace_list_rows(view, state)
+            && update::scroll_workspace_list(state, delta, rows)
+        {
+            *dirty = true;
+            if let Some(target) = ui::workspace_drop_index(view, state, mouse.row) {
+                update::drag_workspace_to(state, target);
+            }
+        }
+        return;
+    }
+    if state.overlay.is_none() && state.workspace_history.drag.is_some() {
+        if ui::workspace_section_at(view, state, mouse.column, mouse.row)
+            && let Some(delta) = vertical_wheel_delta(mouse.kind)
+            && let Some(rows) = ui::workspace_history_visible_rows(view, state)
+            && update::scroll_workspace_history(state, delta, rows)
+        {
+            *dirty = true;
+            if let Some(target) = ui::workspace_history_drop_index(view, state, mouse.row) {
+                update::drag_workspace_history_to(state, target);
+            }
+        }
+        return;
+    }
+    if state.overlay.is_none() && state.prompt_drag.is_some() {
+        let area = ui::right_panel::prompt::frame::prompt_main_rect(view.right_panel, state);
+        if area.contains((mouse.column, mouse.row).into())
+            && let Some(direction) = vertical_wheel_direction(mouse.kind)
+        {
+            let visible = update::prompt_tree_visible_rows(state);
+            if update::scroll_prompt_tree(state, direction.saturating_mul(WHEEL_LINES), visible) {
+                *dirty = true;
+                let hit = {
+                    let panel = &state.prompt_owner().prompt_panel;
+                    ui::right_panel::prompt::tree::drop_hit_at(area, panel, mouse.column, mouse.row)
+                };
+                update::drag_prompt_to(state, hit);
+            }
+        }
+        return;
+    }
+    if state.overlay.is_none() && state.todo_drag.is_some() {
+        let list = ui::right_panel::todo::effective_list_rect(view.right_panel, state);
+        if state.right_tab == crate::app::state::RightTab::Todo
+            && !state.prompt_collapsed
+            && list.contains((mouse.column, mouse.row).into())
+            && let Some(direction) = vertical_wheel_direction(mouse.kind)
+            && update::scroll_todo(state, direction)
+        {
+            *dirty = true;
+            let hit =
+                ui::right_panel::todo::row_at(view.right_panel, state, mouse.column, mouse.row);
+            update::drag_todo_to(state, hit);
+        }
         return;
     }
     if let Some(delta) = vertical_wheel_delta(mouse.kind)

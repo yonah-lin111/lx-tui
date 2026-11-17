@@ -819,3 +819,77 @@ fn deleted_missing_linked_worktree_stays_hidden_after_reload() {
     );
     let _ = std::fs::remove_dir_all(&base);
 }
+
+/// 拖动历史条目期间滚轮只滚视口；落点按滚动后的指针行重排。
+#[test]
+fn wheel_during_history_drag_scrolls_list_and_moves_drop_target() {
+    let config = Config::default();
+    let mut state = demo_terminal();
+    let entries = (0..20)
+        .map(|index| crate::app::state::WorkspaceHistoryEntry {
+            name: format!("history {index}"),
+            path: std::env::temp_dir().join(format!("lx-history-wheel-{index}")),
+            exists: true,
+            name_is_manual: true,
+            position: index,
+            trusted: true,
+            git: None,
+        })
+        .collect();
+    update::apply_workspace_history(&mut state, entries);
+    let geo = geometry(&state, &config, Rect::new(0, 0, 120, 30));
+    let mode_btn = ui::workspace_mode_button(&geo.view).expect("mode button");
+    press_mouse(
+        &mut state,
+        &geo,
+        &config,
+        MouseButton::Left,
+        (mode_btn.x, mode_btn.y),
+    );
+    assert_eq!(state.workspace_history.mode, WorkspaceMode::History);
+
+    let section = ui::layout::sidebar_sections(geo.view.left_panel, false)
+        .expect("sidebar sections")
+        .workspaces;
+    let point = (section.y..section.bottom())
+        .flat_map(|row| (section.x..section.right()).map(move |column| (column, row)))
+        .find(|(column, row)| {
+            ui::workspace_history_row_at(&geo.view, &state, *column, *row) == Some(0)
+        })
+        .expect("first history row is visible");
+
+    let mut sessions = HashMap::new();
+    let mut dirty = false;
+    handle_terminal_event(
+        mouse(MouseEventKind::Down(MouseButton::Left), point.0, point.1),
+        &mut state,
+        &mut sessions,
+        &geo,
+        &config,
+        &mut ui::RenderCache::default(),
+        &mut dirty,
+    );
+    assert_eq!(state.workspace_history.drag, Some(0));
+
+    handle_terminal_event(
+        mouse(MouseEventKind::ScrollDown, point.0, point.1),
+        &mut state,
+        &mut sessions,
+        &geo,
+        &config,
+        &mut ui::RenderCache::default(),
+        &mut dirty,
+    );
+
+    let step = usize::try_from(crate::app::update::WHEEL_LINES).expect("wheel lines");
+    assert_eq!(
+        state.workspace_history.scroll, step,
+        "拖动中滚轮滚动历史列表视口"
+    );
+    assert_eq!(
+        state.workspace_history.drag,
+        Some(step),
+        "被拖条目跟随滚动后的指针落点"
+    );
+    assert!(state.workspace_history.dragging);
+}

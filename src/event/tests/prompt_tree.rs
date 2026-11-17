@@ -642,11 +642,12 @@ fn mouse_drag_prompt_item_into_folder_queues_move_effect() {
     );
 }
 
-/// 拖动中滚轮不得改视口：落点与跨行阈值都按绝对行号换算，滚动会让指针原地"跨行"，
-/// 松手时把条目静默移进此时指针所在行的容器。
+/// 拖动中滚轮只改视口：滚动后落点按指针当前行重算，松手按新落点移动。
 #[test]
-fn mouse_wheel_during_prompt_drag_keeps_viewport_and_state() {
+fn mouse_wheel_during_prompt_drag_scrolls_viewport_and_refreshes_drop_mark() {
     use crate::app::prompt::{PromptFolder, PromptItem};
+    use crate::app::state::PromptDropMark;
+
     let mut state = demo_terminal();
     let (config, geo) = toolbar_geometry(&mut state);
     // 文件夹内一个条目 + 一批根层条目，使可见行超过视口（panel.scroll 可动）。
@@ -672,36 +673,78 @@ fn mouse_wheel_during_prompt_drag_keeps_viewport_and_state() {
     assert_eq!(state.prompt_owner().prompt_panel.scroll, 0);
 
     let mut sessions = HashMap::new();
+    let mut cache = ui::RenderCache::default();
     let mut dirty = false;
-    for kind in [
-        MouseEventKind::Down(MouseButton::Left),
-        MouseEventKind::ScrollDown,
-        MouseEventKind::Up(MouseButton::Left),
-    ] {
+    let send = |state: &mut AppState,
+                sessions: &mut HashMap<_, _>,
+                cache: &mut ui::RenderCache,
+                dirty: &mut bool,
+                kind| {
         handle_terminal_event(
             mouse(kind, item_point.0, item_point.1),
-            &mut state,
-            &mut sessions,
+            state,
+            sessions,
             &geo,
             &config,
-            &mut ui::RenderCache::default(),
-            &mut dirty,
+            cache,
+            dirty,
         );
-    }
+    };
 
+    send(
+        &mut state,
+        &mut sessions,
+        &mut cache,
+        &mut dirty,
+        MouseEventKind::Down(MouseButton::Left),
+    );
+    let from_row = state
+        .prompt_drag
+        .as_ref()
+        .map(|drag| drag.from_row)
+        .expect("drag armed on press");
+
+    send(
+        &mut state,
+        &mut sessions,
+        &mut cache,
+        &mut dirty,
+        MouseEventKind::ScrollDown,
+    );
+
+    let step = usize::try_from(crate::app::update::WHEEL_LINES).expect("wheel lines");
     assert_eq!(
         state.prompt_owner().prompt_panel.scroll,
-        0,
-        "拖动中滚轮不改视口"
+        step,
+        "拖动中滚轮滚动 Prompt 树视口"
     );
+    let drag = state.prompt_drag.as_ref().expect("drag still alive");
+    assert!(drag.dragging, "滚动让指针原地跨行，拖拽保持置臂");
+    assert_eq!(
+        drag.drop_mark,
+        PromptDropMark::Row(from_row + step),
+        "落点跟随滚动后的指针行"
+    );
+
+    send(
+        &mut state,
+        &mut sessions,
+        &mut cache,
+        &mut dirty,
+        MouseEventKind::Up(MouseButton::Left),
+    );
+
     assert!(state.prompt_drag.is_none(), "松开清理拖拽现场");
     assert!(
-        !state.effects.iter().any(|effect| matches!(
+        state.effects.iter().any(|effect| matches!(
             effect,
-            crate::app::effects::Effect::MovePrompt { .. }
-                | crate::app::effects::Effect::MoveFolder { .. }
+            crate::app::effects::Effect::MovePrompt {
+                id: 7,
+                folder_id: None,
+                ..
+            }
         )),
-        "指针未动，不得登记移动效应: {:?}",
+        "松手按刷新后的落点把条目移回根层: {:?}",
         state.effects
     );
 }

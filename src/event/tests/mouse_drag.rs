@@ -396,3 +396,97 @@ fn mouse_reporting_pane_does_not_steal_boundary_drag() {
     );
     assert!(state.resizing_pane.is_some());
 }
+
+/// 拖动工作区条目期间滚轮只滚视口；落点按滚动后的指针行立即重排。
+#[test]
+fn wheel_during_workspace_drag_scrolls_list_and_moves_drop_target() {
+    let config = Config::default();
+    let mut state = demo_terminal();
+    for _ in 0..20 {
+        crate::app::update::create_workspace(&mut state);
+    }
+    let geo = geometry(&state, &config, Rect::new(0, 0, 120, 30));
+    let sections = crate::ui::layout::sidebar_sections(geo.view.left_panel, false)
+        .expect("sidebar sections are visible");
+    let list_y = sections.workspaces.y;
+    let mut sessions = HashMap::new();
+    let mut dirty = false;
+
+    handle_terminal_event(
+        mouse(MouseEventKind::Down(MouseButton::Left), 2, list_y),
+        &mut state,
+        &mut sessions,
+        &geo,
+        &config,
+        &mut ui::RenderCache::default(),
+        &mut dirty,
+    );
+    assert_eq!(state.workspace_drag, Some(0));
+
+    handle_terminal_event(
+        mouse(MouseEventKind::ScrollDown, 2, list_y),
+        &mut state,
+        &mut sessions,
+        &geo,
+        &config,
+        &mut ui::RenderCache::default(),
+        &mut dirty,
+    );
+
+    assert_eq!(
+        state.workspace_scroll,
+        usize::try_from(crate::app::update::WHEEL_LINES).expect("wheel lines"),
+        "拖动中滚轮滚动工作区列表视口"
+    );
+    assert_eq!(
+        state.workspace_drag,
+        Some(usize::try_from(crate::app::update::WHEEL_LINES).expect("wheel lines")),
+        "被拖条目跟随滚动后的指针落点"
+    );
+    assert!(state.workspace_dragging, "重排后保持拖拽态");
+}
+
+/// 指针离开列表后滚轮被拖拽现场吞掉：不改视口，也不清拖拽。
+#[test]
+fn wheel_outside_workspace_list_keeps_drag_and_scroll() {
+    let config = Config::default();
+    let mut state = demo_terminal();
+    for _ in 0..20 {
+        crate::app::update::create_workspace(&mut state);
+    }
+    let geo = geometry(&state, &config, Rect::new(0, 0, 120, 30));
+    let sections = crate::ui::layout::sidebar_sections(geo.view.left_panel, false)
+        .expect("sidebar sections are visible");
+    let list_y = sections.workspaces.y;
+    let mut sessions = HashMap::new();
+    let mut dirty = false;
+
+    handle_terminal_event(
+        mouse(MouseEventKind::Down(MouseButton::Left), 2, list_y),
+        &mut state,
+        &mut sessions,
+        &geo,
+        &config,
+        &mut ui::RenderCache::default(),
+        &mut dirty,
+    );
+    assert_eq!(state.workspace_drag, Some(0));
+
+    handle_terminal_event(
+        mouse(
+            MouseEventKind::ScrollDown,
+            geo.view.main_content.x + 2,
+            geo.view.main_content.y + 1,
+        ),
+        &mut state,
+        &mut sessions,
+        &geo,
+        &config,
+        &mut ui::RenderCache::default(),
+        &mut dirty,
+    );
+
+    assert_eq!(state.workspace_scroll, 0, "列表外滚轮不改列表视口");
+    assert_eq!(state.workspace_drag, Some(0), "拖拽现场保留");
+    assert!(!state.workspace_dragging);
+}
