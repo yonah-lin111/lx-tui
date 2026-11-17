@@ -265,6 +265,33 @@ async fn forbidden_rule_beats_session_exact_rule() {
 }
 
 #[tokio::test]
+async fn deny_only_additional_permissions_skip_approval() {
+    let rules = Policy::empty();
+    let mut host = RecordingHost::new();
+    let call = exec_call(
+        "printf x > /tmp/deny-probe",
+        r#","sandbox_permissions":"with_additional_permissions","justification":"shrink","additional_permissions":{"file_system":{"deny":["/tmp/deny-probe"]}}"#,
+    );
+    let result = decide(&mut host, plan(EscalationPolicy::Ask), &rules, &call)
+        .await
+        .expect("deny-only request");
+    assert_eq!(
+        result,
+        SandboxOverride::Additional {
+            network: None,
+            file_system: Some(crate::chat::sandbox::FileSystemRequest {
+                deny: vec!["/tmp/deny-probe".into()],
+                ..crate::chat::sandbox::FileSystemRequest::default()
+            }),
+        }
+    );
+    assert!(
+        host.trace.lock().expect("trace").is_empty(),
+        "deny-only 不得弹审批"
+    );
+}
+
+#[tokio::test]
 async fn allow_rule_survives_escalation_never() {
     let rules = policy(r#"prefix_rule(pattern = ["echo"], decision = "allow")"#);
     let mut host = RecordingHost::new();
