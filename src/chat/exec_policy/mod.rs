@@ -412,7 +412,7 @@ fn signature_of(dir: &std::path::Path) -> std::io::Result<Signature> {
 
 static GLOBAL: OnceLock<PolicyStore> = OnceLock::new();
 
-/// 进程级规则仓库（目录来自 `user_data_root`）。
+/// 进程级规则仓库（目录来自 `user_data_root`）；目录缺失时为空策略。
 pub fn global() -> &'static PolicyStore {
     GLOBAL.get_or_init(|| PolicyStore::new(rules_dir().unwrap_or_default()))
 }
