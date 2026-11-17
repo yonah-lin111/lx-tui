@@ -6,7 +6,10 @@ use ratatui::layout::Rect;
 
 use crate::app::overlay::Overlay;
 use crate::app::selection::{Selection, SelectionUnit};
-use crate::app::state::{AppState, AutoscrollDirection, PaneKind, SelectionAutoscroll};
+use crate::app::state::{
+    AppState, AutoscrollDirection, LxScrollSurface, LxSelectionAutoscroll, PaneKind,
+    SelectionAutoscroll,
+};
 use crate::tiling::PaneId;
 
 use super::editor::place_prompt_cursor;
@@ -17,6 +20,40 @@ pub const WHEEL_LINES: isize = 3;
 
 /// 边缘自动滚动每步的间隔。
 pub(crate) const AUTOSCROLL_INTERVAL: Duration = Duration::from_millis(30);
+
+/// 视口上下两端各两行作为自动滚动检测区。
+pub const AUTOSCROLL_BAND_ROWS: u16 = 2;
+
+/// 指针相对视口的位置：返回滚动方向与越出视口的行数（0 表示仍在检测区内）。
+pub fn autoscroll_edge(rect: Rect, row: u16) -> Option<(AutoscrollDirection, u16)> {
+    if rect.height == 0 {
+        return None;
+    }
+    let band = AUTOSCROLL_BAND_ROWS.min(rect.height / 2).max(1);
+    if row < rect.y {
+        return Some((AutoscrollDirection::Up, rect.y - row));
+    }
+    if row >= rect.bottom() {
+        return Some((AutoscrollDirection::Down, row - (rect.bottom() - 1)));
+    }
+    if row < rect.y.saturating_add(band) {
+        return Some((AutoscrollDirection::Up, 0));
+    }
+    if row >= rect.bottom().saturating_sub(band) {
+        return Some((AutoscrollDirection::Down, 0));
+    }
+    None
+}
+
+/// 每 tick 的滚动行数：越靠外越快，夹在 1..=3 行。
+pub fn autoscroll_tick_lines(distance: u16) -> isize {
+    (1 + distance / 3).clamp(1, 3) as isize
+}
+
+/// 边缘距离对应的立即滚动行数（对齐 herdr：距离 × 3，夹在 3..=15）。
+pub fn edge_scroll_lines(distance: u16) -> isize {
+    usize::from(distance).saturating_mul(3).clamp(3, 15) as isize
+}
 
 /// 在 lx 主内容区开始一次文本选择（内容行、正文列坐标）。
 pub fn begin_lx_selection(state: &mut AppState, id: PaneId, row: i32, col: u16) {
@@ -57,6 +94,7 @@ pub fn drag_lx_selection_range(
 /// 松开鼠标：结束 lx 主内容区选区拖动；非空选区保留供 Ctrl/Cmd+C 复制，空选区直接清除。
 /// 返回是否存在保留下来的非空选区。
 pub fn end_lx_selection_drag(state: &mut AppState) -> bool {
+    state.lx_selection_autoscroll = None;
     let keep = state
         .lx_selection
         .as_ref()
@@ -80,6 +118,7 @@ pub fn take_lx_selection(state: &mut AppState) -> Option<Selection> {
 /// 清除 lx 页选区。
 pub fn clear_lx_selection(state: &mut AppState) {
     state.lx_selection = None;
+    state.lx_selection_autoscroll = None;
 }
 
 /// 清除指定窗格上的 lx 选区与卡片按下记录。
@@ -89,6 +128,7 @@ pub fn clear_lx_selection_for(state: &mut AppState, id: PaneId) {
         .is_some_and(|selection| selection.pane() == id)
     {
         state.lx_selection = None;
+        state.lx_selection_autoscroll = None;
     }
     if state
         .lx_card_press
@@ -346,6 +386,8 @@ pub fn clear_terminal_selection(state: &mut AppState) {
 /// 终止所有正在进行的鼠标选区拖拽、自动滚动与空选区锚点，但保留已成立的静态选区。
 pub fn stop_active_selection_drags(state: &mut AppState) {
     state.selection_autoscroll = None;
+    state.lx_selection_autoscroll = None;
+    state.drag_autoscroll = None;
     state.lx_card_press = None;
     state.lx_scroll_drag = None;
     state.lx_history_scroll_drag = None;
@@ -649,9 +691,179 @@ pub fn arm_selection_autoscroll(
     });
 }
 
-/// 停止边缘自动滚动。
+/// 停止边缘自动滚动（prompt/终端、lx 主内容区与拖拽列表共用的清理入口）。
 pub fn stop_selection_autoscroll(state: &mut AppState) {
     state.selection_autoscroll = None;
+    state.lx_selection_autoscroll = None;
+    state.drag_autoscroll = None;
+}
+
+/// 拖选时按指针相对 lx 正文区的位置安排边缘自动滚动。
+///
+/// 指针进入上下各两行检测区：登记定时滚动；越出正文区：立即按距离滚动一次。
+/// 回到中部：清除计划。
+pub fn arm_lx_selection_autoscroll(
+    state: &mut AppState,
+    pane: PaneId,
+    rect: Rect,
+    total_rows: usize,
+    surface: LxScrollSurface,
+    mouse: (u16, u16),
+    now: Instant,
+) {
+    if !lx_selection_dragging_on(state, pane) {
+        state.lx_selection_autoscroll = None;
+        return;
+    }
+    let Some((direction, distance)) = autoscroll_edge(rect, mouse.1) else {
+        state.lx_selection_autoscroll = None;
+        return;
+    };
+    if distance > 0 {
+        lx_autoscroll_step(
+            state,
+            pane,
+            surface,
+            direction,
+            edge_scroll_lines(distance),
+            mouse,
+            rect,
+            total_rows,
+        );
+    }
+    state.lx_selection_autoscroll = Some(LxSelectionAutoscroll {
+        pane,
+        surface,
+        direction,
+        distance,
+        mouse,
+        rect,
+        total_rows,
+        next_at: now + AUTOSCROLL_INTERVAL,
+    });
+}
+
+/// 停止 lx 主内容区拖选的边缘自动滚动。
+pub fn stop_lx_selection_autoscroll(state: &mut AppState) {
+    state.lx_selection_autoscroll = None;
+}
+
+/// 自动滚动到点后补一步并推进选区终点；返回是否产生变化。
+pub(crate) fn tick_lx_selection_autoscroll(state: &mut AppState, now: Instant) -> bool {
+    let Some(autoscroll) = state.lx_selection_autoscroll else {
+        return false;
+    };
+    if now < autoscroll.next_at {
+        return false;
+    }
+    if !lx_selection_dragging_on(state, autoscroll.pane) {
+        state.lx_selection_autoscroll = None;
+        return false;
+    }
+    if !lx_autoscroll_step(
+        state,
+        autoscroll.pane,
+        autoscroll.surface,
+        autoscroll.direction,
+        autoscroll_tick_lines(autoscroll.distance),
+        autoscroll.mouse,
+        autoscroll.rect,
+        autoscroll.total_rows,
+    ) {
+        // 到达内容边界，停止。
+        state.lx_selection_autoscroll = None;
+        return false;
+    }
+    if let Some(autoscroll) = state.lx_selection_autoscroll.as_mut() {
+        autoscroll.next_at = now + AUTOSCROLL_INTERVAL;
+    }
+    true
+}
+
+/// 自动滚动一步并重新推进 lx 选区终点；返回视口是否移动。
+fn lx_autoscroll_step(
+    state: &mut AppState,
+    pane: PaneId,
+    surface: LxScrollSurface,
+    direction: AutoscrollDirection,
+    lines: isize,
+    mouse: (u16, u16),
+    rect: Rect,
+    total_rows: usize,
+) -> bool {
+    let delta = match direction {
+        AutoscrollDirection::Up => -lines,
+        AutoscrollDirection::Down => lines,
+    };
+    let moved = match surface {
+        LxScrollSurface::History => {
+            super::chat::scroll_lx_history(state, pane, delta, total_rows, usize::from(rect.height))
+        }
+        LxScrollSurface::TaskOutput => super::chat::scroll_task_output(state, pane, delta),
+        LxScrollSurface::TaskAgents => super::chat::scroll_agents_detail(state, pane, delta),
+        LxScrollSurface::TaskBtw => super::chat::scroll_btw_detail(state, pane, delta),
+    };
+    if !moved {
+        return false;
+    }
+    let Some(top) = lx_scroll_top(state, pane, surface, total_rows, rect) else {
+        return true;
+    };
+    let row = mouse.1.clamp(rect.y, rect.bottom().saturating_sub(1)) - rect.y;
+    let col = mouse
+        .0
+        .clamp(rect.x, rect.right().saturating_sub(1))
+        .saturating_sub(rect.x);
+    let content_row = i32::try_from(top.saturating_add(usize::from(row))).unwrap_or(i32::MAX);
+    drag_lx_selection(state, pane, content_row, col);
+    true
+}
+
+/// 滚动后的视口顶部内容行（与各 surface 的渲染口径一致）。
+fn lx_scroll_top(
+    state: &AppState,
+    pane: PaneId,
+    surface: LxScrollSurface,
+    total_rows: usize,
+    rect: Rect,
+) -> Option<usize> {
+    let target = state.pane_anywhere(pane)?;
+    match surface {
+        LxScrollSurface::History => {
+            let max = total_rows.saturating_sub(usize::from(rect.height));
+            Some(if target.lx.chat.follow_bottom {
+                max
+            } else {
+                target.lx.chat.history_scroll.min(max)
+            })
+        }
+        LxScrollSurface::TaskOutput => target.lx.task.as_ref().map(|page| page.output_scroll),
+        LxScrollSurface::TaskAgents => {
+            let page = target.lx.task.as_ref()?;
+            let index = page.detail_agent_index(&target.lx.agents)?;
+            let run = target.lx.agents.runs.get(index)?;
+            let visible = run.visible.max(1);
+            let max = run.total_rows.saturating_sub(visible);
+            Some(if run.follow { max } else { run.scroll.min(max) })
+        }
+        LxScrollSurface::TaskBtw => {
+            let thread = target.lx.btw.active_thread()?;
+            let visible = thread.visible.max(1);
+            let max = thread.total_rows.saturating_sub(visible);
+            Some(if thread.follow {
+                max
+            } else {
+                thread.scroll.min(max)
+            })
+        }
+    }
+}
+
+/// 该窗格上是否存在进行中的 lx 主内容区选择拖拽。
+fn lx_selection_dragging_on(state: &AppState, pane: PaneId) -> bool {
+    state
+        .lx_selection
+        .is_some_and(|selection| selection.is_dragging() && selection.pane() == pane)
 }
 
 /// 自动滚动到点后补一步；返回是否产生变化。
@@ -740,11 +952,6 @@ fn selection_dragging_on(state: &AppState, pane: PaneId) -> bool {
     state
         .selection
         .is_some_and(|selection| selection.is_dragging() && selection.pane() == pane)
-}
-
-/// 边缘距离对应的立即滚动行数（对齐 herdr：距离 × 3，夹在 3..=15）。
-fn edge_scroll_lines(distance: u16) -> isize {
-    usize::from(distance).saturating_mul(3).clamp(3, 15) as isize
 }
 
 /// 滚动 prompt 视口；选区是内容行坐标，视口滚动天然不影响选区；返回视口是否移动。

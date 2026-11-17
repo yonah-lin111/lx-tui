@@ -7,7 +7,7 @@ use crossterm::event::MouseEvent;
 use ratatui::layout::Direction;
 
 use crate::app::overlay::Overlay;
-use crate::app::state::AppState;
+use crate::app::state::{AppState, DragScrollSurface, LxScrollSurface, TaskTab};
 use crate::app::update;
 use crate::config::Config;
 use crate::pty::PtySession;
@@ -384,6 +384,13 @@ pub(crate) fn handle_mouse_drag(
         {
             *dirty = true;
         }
+        super::autoscroll::arm_drag(
+            state,
+            DragScrollSurface::WorkspaceActive,
+            view,
+            (mouse.column, mouse.row),
+            Instant::now(),
+        );
         return;
     }
     if state.workspace_history.drag.is_some() {
@@ -392,6 +399,13 @@ pub(crate) fn handle_mouse_drag(
         {
             *dirty = true;
         }
+        super::autoscroll::arm_drag(
+            state,
+            DragScrollSurface::WorkspaceHistory,
+            view,
+            (mouse.column, mouse.row),
+            Instant::now(),
+        );
         return;
     }
     // prompt 列表拖拽：必须在窗格转发之前 return，否则拖动会被当成终端选区/输入。
@@ -405,6 +419,13 @@ pub(crate) fn handle_mouse_drag(
         if update::drag_prompt_to(state, hit) {
             *dirty = true;
         }
+        super::autoscroll::arm_drag(
+            state,
+            DragScrollSurface::PromptTree,
+            view,
+            (mouse.column, mouse.row),
+            Instant::now(),
+        );
         return;
     }
     if state.todo_drag.is_some() {
@@ -420,6 +441,13 @@ pub(crate) fn handle_mouse_drag(
         if update::drag_todo_to(state, hit) {
             *dirty = true;
         }
+        super::autoscroll::arm_drag(
+            state,
+            DragScrollSurface::Todo,
+            view,
+            (mouse.column, mouse.row),
+            Instant::now(),
+        );
         return;
     }
     // 没有本地选区时，鼠标上报模式的应用自己处理拖拽（对齐 herdr）。
@@ -487,7 +515,8 @@ pub(crate) fn handle_mouse_drag(
         }
         return;
     }
-    // lx 主内容区选区拖拽：按当前选区粒度更新终点到鼠标所在的内容行与正文列坐标。
+    // lx 主内容区选区拖拽：按当前选区粒度更新终点到鼠标所在的内容行与正文列坐标；
+    // 指针进入上下检测区时登记自动滚动，滚动后按新视口继续延伸选区。
     if let Some(selection) = state.lx_selection
         && selection.is_dragging()
     {
@@ -497,20 +526,33 @@ pub(crate) fn handle_mouse_drag(
             return;
         };
         let inner = tiling::pane_inner_rect(*rect);
-        if let Some((start, end)) = state.pane_anywhere(pane).and_then(|target| {
-            let geom = ui::main_content::lx::content_geom(inner, &target.lx, cache.pane(pane))?;
-            let cell = geom.cell(mouse.column, mouse.row);
-            Some(ui::main_content::lx::unit_cell_range(
-                inner,
-                &target.lx,
-                cell,
-                unit,
-                cache.pane(pane),
-            ))
-        }) {
-            update::drag_lx_selection_range(state, pane, start, end);
-            *dirty = true;
-        }
+        let Some(target) = state.pane_anywhere(pane) else {
+            return;
+        };
+        let Some(geom) = ui::main_content::lx::content_geom(inner, &target.lx, cache.pane(pane))
+        else {
+            return;
+        };
+        let cell = geom.cell(mouse.column, mouse.row);
+        let (start, end) =
+            ui::main_content::lx::unit_cell_range(inner, &target.lx, cell, unit, cache.pane(pane));
+        let surface = match target.lx.task.as_ref().map(|page| page.tab) {
+            None => LxScrollSurface::History,
+            Some(TaskTab::Processes) => LxScrollSurface::TaskOutput,
+            Some(TaskTab::Agents) => LxScrollSurface::TaskAgents,
+            Some(TaskTab::Btw) => LxScrollSurface::TaskBtw,
+        };
+        update::drag_lx_selection_range(state, pane, start, end);
+        update::arm_lx_selection_autoscroll(
+            state,
+            pane,
+            geom.rect,
+            geom.total_rows,
+            surface,
+            (mouse.column, mouse.row),
+            Instant::now(),
+        );
+        *dirty = true;
         return;
     }
     if state.prompt.is_preview_dragging() {

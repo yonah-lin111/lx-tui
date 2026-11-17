@@ -490,3 +490,180 @@ fn wheel_outside_workspace_list_keeps_drag_and_scroll() {
     assert_eq!(state.workspace_drag, Some(0), "拖拽现场保留");
     assert!(!state.workspace_dragging);
 }
+
+/// 工作区活跃列表：指针停在底部检测区，定时器在没有鼠标移动时持续滚动。
+#[test]
+fn workspace_drag_autoscroll_runs_from_bottom_band() {
+    let config = Config::default();
+    let mut state = demo_terminal();
+    for _ in 0..20 {
+        crate::app::update::create_workspace(&mut state);
+    }
+    let geo = geometry(&state, &config, Rect::new(0, 0, 120, 30));
+    let list = ui::workspace_list_rect(&geo.view, &state).expect("workspace list");
+    state.workspace_drag = Some(0);
+    state.workspace_dragging = true;
+    let now = std::time::Instant::now();
+
+    crate::event::mouse::autoscroll::arm_drag(
+        &mut state,
+        crate::app::state::DragScrollSurface::WorkspaceActive,
+        &geo.view,
+        (list.x + 1, list.bottom() - 1),
+        now,
+    );
+    assert!(state.drag_autoscroll.is_some(), "底部检测区已登记");
+    assert!(crate::event::mouse::autoscroll::tick_drag(
+        &mut state,
+        &geo.view,
+        now + std::time::Duration::from_millis(31)
+    ));
+    assert!(state.workspace_scroll > 0, "定时器推进列表视口");
+    assert!(state.workspace_drag.is_some(), "拖拽现场保留");
+}
+
+/// 工作区历史列表：底部检测区滚动后落点按新视口重算。
+#[test]
+fn history_drag_autoscroll_runs_from_bottom_band() {
+    let config = Config::default();
+    let mut state = demo_terminal();
+    let entries = (0..20)
+        .map(|index| crate::app::state::WorkspaceHistoryEntry {
+            name: format!("history {index}"),
+            path: std::env::temp_dir().join(format!("lx-autoscroll-history-{index}")),
+            exists: true,
+            name_is_manual: true,
+            position: index,
+            trusted: true,
+            git: None,
+        })
+        .collect();
+    crate::app::update::apply_workspace_history(&mut state, entries);
+    state.workspace_history.mode = crate::app::state::WorkspaceMode::History;
+    let geo = geometry(&state, &config, Rect::new(0, 0, 120, 30));
+    let list = ui::workspace_history_list_rect(&geo.view, &state).expect("history list");
+    state.workspace_history.drag = Some(0);
+    state.workspace_history.dragging = true;
+    let now = std::time::Instant::now();
+
+    crate::event::mouse::autoscroll::arm_drag(
+        &mut state,
+        crate::app::state::DragScrollSurface::WorkspaceHistory,
+        &geo.view,
+        (list.x + 1, list.bottom() - 1),
+        now,
+    );
+    assert!(crate::event::mouse::autoscroll::tick_drag(
+        &mut state,
+        &geo.view,
+        now + std::time::Duration::from_millis(31)
+    ));
+    assert!(state.workspace_history.scroll > 0);
+    assert_ne!(
+        state.workspace_history.drag,
+        Some(0),
+        "落点跟随滚动后的指针行"
+    );
+}
+
+/// Todo：底部检测区滚动视口并刷新合并目标。
+#[test]
+fn todo_drag_autoscroll_runs_from_bottom_band() {
+    let config = Config::default();
+    let mut state = demo_terminal();
+    let mut records: Vec<crate::db::todo::TodoRecord> = (0..60)
+        .map(|index| {
+            crate::db::todo::TodoRecord::new(
+                format!("todo {index}"),
+                crate::db::todo::TodoStatus::Todo,
+                index as i64,
+            )
+        })
+        .collect();
+    state.todo.replace(records.clone());
+    assert!(crate::app::update::select_right_tab(
+        &mut state,
+        crate::app::state::RightTab::Todo
+    ));
+    let geo = geometry(&state, &config, Rect::new(0, 0, 120, 30));
+    let list = crate::ui::right_panel::todo::effective_list_rect(geo.view.right_panel, &state);
+    state.todo.set_viewport_rows(usize::from(list.height));
+    let first = records.remove(0);
+    state.todo_drag = Some(crate::app::state::TodoDrag {
+        source_id: first.id,
+        from_display: 0,
+        pressed_at: std::time::Instant::now(),
+        dragging: true,
+        target_index: None,
+    });
+    let now = std::time::Instant::now();
+
+    crate::event::mouse::autoscroll::arm_drag(
+        &mut state,
+        crate::app::state::DragScrollSurface::Todo,
+        &geo.view,
+        (list.x + 1, list.bottom() - 1),
+        now,
+    );
+    assert!(crate::event::mouse::autoscroll::tick_drag(
+        &mut state,
+        &geo.view,
+        now + std::time::Duration::from_millis(31)
+    ));
+    assert!(state.todo.scroll() > 0, "定时器推进 Todo 视口");
+    assert!(
+        state
+            .todo_drag
+            .as_ref()
+            .is_some_and(|drag| drag.target_index.is_some()),
+        "落点按滚动后的指针行重算"
+    );
+}
+
+/// Prompt 树：底部检测区滚动视口。
+#[test]
+fn prompt_drag_autoscroll_runs_from_bottom_band() {
+    use crate::app::prompt::PromptItem;
+
+    let config = Config::default();
+    let mut state = demo_terminal();
+    let items: Vec<PromptItem> = (0..30)
+        .map(|index| PromptItem::single(100 + index, None, format!("item {index}"), "body"))
+        .collect();
+    state.active_workspace_mut().prompt_panel.tree = crate::app::prompt::PromptTree::new();
+    state
+        .active_workspace_mut()
+        .prompt_panel
+        .tree
+        .replace(Vec::new(), items);
+    let geo = geometry(&state, &config, Rect::new(0, 0, 120, 30));
+    let area =
+        crate::ui::right_panel::prompt::frame::prompt_main_rect(geo.view.right_panel, &state);
+    state.prompt_drag = Some(crate::app::state::PromptDrag {
+        workspace: 0,
+        source: Some(crate::app::state::PromptDragSource::Item(100)),
+        from_row: 0,
+        pressed_at: std::time::Instant::now(),
+        dragging: true,
+        drop_mark: crate::app::state::PromptDropMark::None,
+        enabled: true,
+    });
+    let now = std::time::Instant::now();
+
+    crate::event::mouse::autoscroll::arm_drag(
+        &mut state,
+        crate::app::state::DragScrollSurface::PromptTree,
+        &geo.view,
+        (area.x + 1, area.bottom().saturating_sub(1)),
+        now,
+    );
+    assert!(crate::event::mouse::autoscroll::tick_drag(
+        &mut state,
+        &geo.view,
+        now + std::time::Duration::from_millis(31)
+    ));
+    assert!(
+        state.prompt_owner().prompt_panel.scroll > 0,
+        "定时器推进 Prompt 树视口"
+    );
+}

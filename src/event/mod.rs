@@ -498,6 +498,9 @@ async fn run_loop(
         if update::tick(state, now) {
             dirty = true;
         }
+        if mouse::autoscroll::tick_drag(state, &geometry.view, now) {
+            dirty = true;
+        }
         update::retry_git_queries(state, now);
         // lx loading 转轮：流中/压缩中每 `LX_LOADING_FRAME_MS` 推进一帧（空闲不计时）。
         let streaming = state.has_streaming_lx();

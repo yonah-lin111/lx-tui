@@ -18,8 +18,8 @@ use super::{PANEL_BUTTON_MARGIN, PANEL_BUTTON_WIDTH, layout, style, text, widget
 
 pub use history::{
     workspace_history_blank_at, workspace_history_drop_index, workspace_history_group_toggle_at,
-    workspace_history_row_at, workspace_history_scrollbar, workspace_history_search_char_at,
-    workspace_history_visible_rows,
+    workspace_history_list_rect, workspace_history_row_at, workspace_history_scrollbar,
+    workspace_history_search_char_at, workspace_history_visible_rows,
 };
 
 /// 工作区列表顶层项的统一缩进列数；子项连接符与父项/普通项名字在此列对齐。
@@ -345,7 +345,7 @@ fn render_add_workspace_button(frame: &mut Frame<'_>, area: Rect) {
 }
 
 /// 工作区列表内容区（不含滚动条列）；分区缺失时退回侧栏内容区。
-fn workspace_list_rect(view: &layout::ViewLayout, state: &AppState) -> Option<Rect> {
+pub fn workspace_list_rect(view: &layout::ViewLayout, state: &AppState) -> Option<Rect> {
     if state.sidebar_collapsed {
         return None;
     }

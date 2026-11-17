@@ -102,6 +102,56 @@ pub struct SelectionAutoscroll {
     pub next_at: Instant,
 }
 
+/// lx 主内容区（主消息列表或后台任务页）选区拖拽的边缘自动滚动计划。
+///
+/// `rect` 是正文可视区（已扣除置顶行与滚动条列），`total_rows` 为登记时的内容总行数；
+/// 每次 tick 滚动后按鼠标位置重新推进选区终点。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct LxSelectionAutoscroll {
+    pub pane: PaneId,
+    pub surface: LxScrollSurface,
+    pub direction: AutoscrollDirection,
+    /// 指针距最近边缘的行数；越靠外每 tick 滚得越多。
+    pub distance: u16,
+    pub mouse: (u16, u16),
+    pub rect: Rect,
+    pub total_rows: usize,
+    pub next_at: Instant,
+}
+
+/// lx 主内容区当前可由拖选自动滚动的视口。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum LxScrollSurface {
+    /// 主 agent 消息历史。
+    History,
+    /// 后台任务页 Processes 输出。
+    TaskOutput,
+    /// 后台任务页 Agents 详情。
+    TaskAgents,
+    /// 后台任务页 BTW 对话。
+    TaskBtw,
+}
+
+/// 拖拽排序列表的边缘自动滚动计划。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct DragAutoscroll {
+    pub surface: DragScrollSurface,
+    pub direction: AutoscrollDirection,
+    /// 指针距最近边缘的行数；越靠外每 tick 滚得越多。
+    pub distance: u16,
+    pub mouse: (u16, u16),
+    pub next_at: Instant,
+}
+
+/// 支持边缘自动滚动的拖拽排序列表。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum DragScrollSurface {
+    WorkspaceActive,
+    WorkspaceHistory,
+    Todo,
+    PromptTree,
+}
+
 /// 右侧统一容器的当前面板。
 ///
 /// 纯视图偏好：不落库、不写配置，启动恒为 `Prompt`（与 `prompt_left` 同级）。
@@ -246,6 +296,10 @@ pub struct AppState {
     pub task_list_click: Option<(crate::tiling::PaneId, usize, Instant)>,
     /// 选区拖拽边缘自动滚动计划；None 表示未激活。
     pub selection_autoscroll: Option<SelectionAutoscroll>,
+    /// lx 主内容区选区拖拽的边缘自动滚动计划。
+    pub lx_selection_autoscroll: Option<LxSelectionAutoscroll>,
+    /// 拖拽排序列表的边缘自动滚动计划。
+    pub drag_autoscroll: Option<DragAutoscroll>,
     /// 终端失焦后自动 recap 的到期时刻；None 表示未计时/已取消。
     pub recap_due_at: Option<Instant>,
     pub resizing_prompt: bool,
@@ -470,6 +524,8 @@ impl AppState {
             selection_click: None,
             task_list_click: None,
             selection_autoscroll: None,
+            lx_selection_autoscroll: None,
+            drag_autoscroll: None,
             recap_due_at: None,
             resizing_prompt: false,
             prompt_hover: false,

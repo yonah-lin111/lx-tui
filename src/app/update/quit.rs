@@ -91,6 +91,8 @@ fn clear_active_gestures(state: &mut AppState) {
     state.ask_input_drag = None;
     state.lx_card_press = None;
     state.selection_autoscroll = None;
+    state.lx_selection_autoscroll = None;
+    state.drag_autoscroll = None;
     state.workspace_scroll_drag = None;
     state.prompt_scroll_drag = None;
     state.prompt_recent_scroll_drag = None;
