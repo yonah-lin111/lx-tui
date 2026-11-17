@@ -510,7 +510,7 @@ CREATE INDEX IF NOT EXISTS idx_agent_session_sandbox_rule_session
   - `escalation = never` 时不要申请，直接报告边界；
   - 用户 `!` 命令不受沙箱约束（模型不应假设用户命令也在沙箱内）。
 - `exec_command` 描述：把 "runs directly without an approval prompt" 改为 "runs inside the session sandbox; escalation requires user approval"（按 `escalation` 动态）。
-- `PROMPT_VERSION` 从 `lx-14` 递增到 `lx-15`，跑提示预算与分段测试。
+- `PROMPT_VERSION` 从 `lx-14` 递增到 `lx-17`，跑提示预算与分段测试。
 
 ### 12.3 工具 schema
 
@@ -634,10 +634,10 @@ shell 内部被沙箱拒绝**不新增错误码**：命令以真实退出码结�
 | 事件 | `src/event/chat/host.rs`、`src/event/chat/mod.rs`、新建 `src/event/chat/approval.rs` | Host 请求/事件、FIFO 队列、决策回执 |
 | 状态/UI | `src/app/state/lx.rs`（或 `lx/approval.rs`）、`src/app/update/pane.rs`、新建 `src/ui/main_content/lx/approval.rs`、`src/ui/main_content/lx.rs` | 审批状态、优先级路由、strip 布局与渲染 |
 | Slash | `src/app/state/lx/slash.rs`、`src/app/update/chat/slash.rs`、`src/ui/main_content/lx/slash.rs` | `/permission` 命令与选择面板 |
-| 提示词 | `src/chat/prompt.rs` | 环境快照 `<sandbox>`、`## Sandbox` 段、`PROMPT_VERSION` → `lx-15` |
+| 提示词 | `src/chat/prompt.rs` | 环境快照 `<sandbox>`、`## Sandbox` 段、`PROMPT_VERSION` → `lx-17` |
 | 设置服务 | 新建 `src/settings/service/sandbox.rs`；`src/settings/service/handlers.rs`、`src/settings/service.rs`、`src/settings/service/page.rs` | `/api/sandbox`、`SettingsEvent::SandboxChanged`（新变体） |
 | 设置前端 | `assets/web.html`、`assets/settings.js`、`assets/settings.css` | Sandbox tab 与表单 |
-| 数据库 | `src/db/migration/schema.rs`、`src/db/migration.rs`、`src/db/mod.rs`、`src/db/chat/mod.rs`、`src/db/chat/fork.rs` | v30 迁移与会话模式/规则 API |
+| 数据库 | `src/db/migration/schema.rs`、`src/db/migration.rs`、`src/db/mod.rs`、`src/db/chat/mod.rs`、`src/db/chat/fork.rs` | v31 迁移与会话模式/规则 API |
 | 文案 | `src/ui/text.rs` | 审批与 `/permission` 英文文案 |
 | A 批：拒绝识别 | 新建 `src/chat/sandbox/denial.rs`；`src/chat/process/mod.rs` | `is_likely_sandbox_denied`、`ProcessResult.sandbox_retry` |
 | A 批：重试 | `src/chat/agent_loop/mod.rs`、`executor.rs`、`src/event/chat/approval.rs` | `retry_process`、`Retry` 审批、精确命令规则 |

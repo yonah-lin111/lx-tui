@@ -282,8 +282,10 @@ impl Database {
         if version < 29 {
             self.migrate_v29_private_followup()?;
         }
-        if version < 30 {
-            self.migrate_v30_sandbox()?;
+        // 注意：dev 已将 v30 用于 `agent_compact_checkpoint.kind`；
+        // 本分支顺延为 v31，避免同一版本号指向不同迁移。
+        if version < 31 {
+            self.migrate_v31_sandbox()?;
         }
         Ok(())
     }
@@ -305,8 +307,8 @@ impl Database {
         Ok(())
     }
 
-    /// v30：会话沙箱模式覆盖 + 会话级审批规则（只增列/表）。
-    fn migrate_v30_sandbox(&mut self) -> Result<()> {
+    /// v31：会话沙箱模式覆盖 + 会话级审批规则（只增列/表）。
+    fn migrate_v31_sandbox(&mut self) -> Result<()> {
         let transaction = self.conn.unchecked_transaction()?;
         if !column_exists(&transaction, "agent_session", "sandbox_mode")? {
             transaction.execute_batch("ALTER TABLE agent_session ADD COLUMN sandbox_mode TEXT;")?;
@@ -324,7 +326,7 @@ impl Database {
                    ON agent_session_sandbox_rule(session_id);"#,
         )?;
         ensure_no_foreign_key_violation(&transaction)?;
-        transaction.pragma_update(None, "user_version", 30)?;
+        transaction.pragma_update(None, "user_version", 31)?;
         transaction.commit()?;
         Ok(())
     }

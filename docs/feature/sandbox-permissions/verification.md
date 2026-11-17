@@ -38,6 +38,12 @@
 - B/C 的真机端到端（模型真实调用 `additional_permissions`、真实规则文件影响下一轮命令）未跑；组件级与决策级测试已覆盖。
 - 规则 `prompt` 的 `Always` 会把前缀写入 `default.rules`（全局生效）；用户需知悉这是跨会话的高权限配置。
 
+## 合并注意
+
+- 分支基于 `dev@41d5977b`；`dev` 之后已合入 stop/report 分支（含独立的 v30 迁移）。
+- 本分支的沙箱迁移已顺延为 **v31**，`PROMPT_VERSION` 顺延为 **`lx-17`**；合并时保留 dev 的 v30 `agent_compact_checkpoint.kind`，再接 v31。
+- `git merge-tree --write-tree dev HEAD` 预演冲突：`src/db/migration.rs`（v30/v31 顺序）、`src/chat/prompt.rs`（提示词版本与新增段）、`src/app/state.rs`（导出列表）。三处均为可并集解决，未自动修改 Git 状态。
+
 ## 回滚
 
-所有改动在独立 worktree 与分支；未修改主 checkout 的 Git 状态。数据库迁移 v30 只增列/表，可通过 `git` 回退二进制后继续使用旧库（旧库不会自动降级，`sandbox_mode` 列与规则表保留但不被旧版本读取）。规则文件是用户数据，不在二进制回滚范围内。
+所有改动在独立 worktree 与分支；未修改主 checkout 的 Git 状态。数据库迁移 v31 只增列/表，可通过 `git` 回退二进制后继续使用旧库（旧库不会自动降级，`sandbox_mode` 列与规则表保留但不被旧版本读取）。规则文件是用户数据，不在二进制回滚范围内。

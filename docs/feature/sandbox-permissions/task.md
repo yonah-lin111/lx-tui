@@ -2,7 +2,7 @@
 
 状态：A/B/C 三批实现完成，等待用户统一验收。
 
-- A 批：配置模型、macOS seatbelt、Linux bwrap 参数、进程接入、文件工具闸门、显式提权审批、on-failure 重试、`/permission`、DB v30、提示词、设置页/API。
+- A 批：配置模型、macOS seatbelt、Linux bwrap 参数、进程接入、文件工具闸门、显式提权审批、on-failure 重试、`/permission`、DB v31、提示词、设置页/API。
 - B 批：完整 `additional_permissions` 档案（read/write/deny/glob）、seatbelt/bwrap 投影、文件工具条目解析器。
 - C 批：Starlark `rules/*.rules`、决策优先级、保守分段、热加载、`Always` 落盘、设置页只读状态。
 - 验证结果见同目录 `verification.md`。交互外观、Linux bwrap 与真实端到端仍需用户验收。
@@ -85,7 +85,7 @@
 
 ## 9. 数据库
 
-- [ ] 迁移 v30（以实际版本为准）：`agent_session.sandbox_mode TEXT`、`agent_session_sandbox_rule` 表与索引；只增表/列，旧库可升级。
+- [ ] 迁移 v31（以实际版本为准）：`agent_session.sandbox_mode TEXT`、`agent_session_sandbox_rule` 表与索引；只增表/列，旧库可升级。
 - [ ] DB API：读取/写入会话模式、加载/插入/清空规则；fork 复制 `sandbox_mode`。
 - [ ] 单测：旧库升级、NULL 默认、规则唯一约束、级联删除、fork。
 
@@ -93,7 +93,7 @@
 
 - [ ] `EnvironmentSnapshot` 增加 `<sandbox mode platform network>` + `<writable_root>` + `<protected>`；8 条截断；整体 4096 字节预算。
 - [ ] 删除 `shell commands are not sandboxed`；`## Sandbox` 段说明边界、提权参数、`escalation=never` 行为、用户 `!` 不受沙箱约束。
-- [ ] `PROMPT_VERSION` → `lx-15`；跑现有提示预算/分段/transport 测试。
+- [ ] `PROMPT_VERSION` → `lx-17`；跑现有提示预算/分段/transport 测试。
 
 ## 11. 设置页与 API
 
