@@ -1,8 +1,10 @@
 # Review：停止面板、用户停止语义与 subagent/BTW 报告填充
 
+> 状态：**P0–P3 已修复并通过自动化验证，已合并到 `dev`（merge commit `4580ba3a`），待用户实机验收**。
+
 ## 0. 范围与方法
 
-- 分支：`feature/lx-stop-panel-and-report-fill`（含未提交的二次验收修复）。
+- 分支：`feature/lx-stop-panel-and-report-fill`（含 review 修复；分支与 worktree 已移除，内容在 `dev`）。
 - 范围：双击 Esc 停止面板、用户主动停止 subagent、`wait_agent` 等待语义、Agents/BTW `/report` 一次性总结、报告检查点/芯片/`/rewind`、BTW 多目标执行与启动恢复。
 - 方法：按「停止与等待」「报告管线」「BTW 与恢复」三条链路并行静态审查，再逐项在 worktree 内复核代码、补回归测试并修复。
 - 基线：`cargo fmt --check`、`cargo clippy --all-targets -- -D warnings`、`cargo test`（5725 passed / 6 ignored）。
@@ -257,3 +259,11 @@ cargo test
 2. **P3-12 既有 flaky 测试**：进程输出 drain 竞态，与本功能无关但会影响全量验证的稳定性。
 3. **停止不产生半程报告**：用户停止后主 agent 只能看到 `status=stopped`，拿不到停止前的部分输出；若需要，需另开“停止时生成半程报告”的语义。
 4. **恢复 subagent 后不会自动续上已结算的等待**：用户恢复后需要重新 `wait_agent`；当前未实现等待自动重连。
+
+---
+
+## 8. 合并与并行迁移提醒
+
+- 已合并到 `dev`（merge commit `4580ba3a`）；合并后全量验证 5771 passed / 6 ignored。
+- 合并时补齐 `dev` 新增测试的 `CompactNoticeView.report` 字段（语义冲突，无文本冲突）。
+- 并行分支 `feature/sandbox-permissions` 同样声明 `SCHEMA_VERSION = 30`；该分支合并前必须先顺延为 31，否则先启动的二进制会把库标成 30，sandbox 迁移会被静默跳过。

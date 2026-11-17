@@ -1,6 +1,6 @@
 # 任务清单：主 agent 停止面板、用户主动打断语义与 subagent/BTW 报告填充
 
-> 状态：**已实施完成（分支 `feature/lx-stop-panel-and-report-fill`），待用户实机验收后合并**。
+> 状态：**已合并到 `dev`（merge commit `4580ba3a`，自动化验证通过），待用户实机验收**。
 > 规则：生产代码禁止 `unwrap()/expect()`；所有用户可见文案集中在 `src/ui/text.rs` / `src/ui/text/detail.rs`；模型可见文本用英文；先补复现测试，再改实现。
 >
 > **2026-11-16 修订**：`/report` 已改为与 `/compact` 同管线的一次性总结（§8）。下方 §1-§7 中关于“报告轮 / report_to_input / BTW 多目标批次”的描述仅保留为实施历史，以 §8 与代码为准。
@@ -493,3 +493,12 @@ cargo test --lib slash_panels
 - **P3**：停止目标不领旧报告、`user_stopped` 清理、统一 `stopped` 步骤标记、批次时间戳事务化、`(+N more)` 总数、BTW 报告文案、报告长度上限、备注校验顺序、提示词措辞、报告轮 transcript 过滤、死代码清理。
 - **保留**：跨实例 `queued` BTW 恢复仍无 guard（review.md P2-13）；`user_shell` 全量并行 flaky 为既有问题（P3-12）。
 - 验证：`cargo fmt --check`、`cargo clippy --all-targets -- -D warnings`、`cargo test`（5725 passed / 6 ignored）。
+
+## 10. 合并记录
+
+- `dev` 在 feature 分支期间从 `b5d3eff4` 前进到 `41d5977b`（prompt-scroll / fold-hit 合并）。
+- 主工作区 `dev` 以 `--no-ff` 合并 `feature/lx-stop-panel-and-report-fill`（merge commit `4580ba3a`），无文本冲突。
+- 合并后补齐一处语义冲突：`dev` 新增的 `history/tests/text_hit.rs` 构造 `CompactNoticeView` 时缺少本分支新增的 `report` 字段，已补 `report: false` 并 amend 进 merge commit。
+- 合并后重跑：`cargo fmt --check`、`cargo clippy --all-targets -- -D warnings`、`cargo test` 全量通过（5771 passed，0 failed，6 ignored）。
+- worktree `.worktrees/lx-stop-panel-and-report-fill`、分支 `feature/lx-stop-panel-and-report-fill` 与隔离库 `~/.lx-t-dev/db/worktrees/lx-stop-panel-and-report-fill-99f49752/` 已移除。
+- `SCHEMA_VERSION`：本分支占用 v30；并行分支 `feature/sandbox-permissions` 也声明 v30，合并前必须顺延为 v31（先合并方占用版本号，避免旧库跳过迁移）。
