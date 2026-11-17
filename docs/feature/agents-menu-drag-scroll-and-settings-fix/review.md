@@ -1,7 +1,8 @@
 # Agents 菜单、拖拽滚动、New agent 搜索与设置页修复 — 代码审查（Review）
 
-> 审查范围：`dev..HEAD`（`1efb9292..150de2f2`，共 9 个提交：`df1e1ec1`、`87c9fbcb`、`e5f8823b`、`6fabb6a9`、`e8742e7c`、`a30c6a1e`、`65fdc1f3`、`8435fb78`、`150de2f2`）
-> 工作区：`.worktrees/agents-menu-drag-scroll`（分支 `feature/agents-menu-drag-scroll`）
+> 状态：**P0–P2 已修复并通过自动化验证，已合并到 `dev`（merge commit `1664fa8a`），待用户实机验收**
+> 审查范围：`1efb9292..150de2f2` 及其审查修复提交 `007716a9`、`abbe06e4`
+> 原工作区：`.worktrees/agents-menu-drag-scroll`（分支 `feature/agents-menu-drag-scroll`，已合并并移除）
 > 依据规范：`docs/standards/code-writing-standards.md`、`docs/standards/project-directory-structure.md`、`docs/standards/tui-design-requirements.md`、`docs/standards/html-assets.md`
 
 ---
@@ -215,4 +216,12 @@
 | P2 | P2-3 | 拆分 `state.rs`、`selection.rs`、`input/tests.rs` 满足行数规范，清理过期注释并补全回归测试 | 已修复并验证 |
 | P2 | P2-4 | 同步更新 `design.md`、`task.md` 与 `docs/standards/tui-design-requirements.md` | 已完成 |
 
-验证结果：`cargo fmt`、`cargo clippy --all-targets -- -D warnings`、`cargo test`（lib `5838 passed` + 全部集成测试）及 `cargo test --test web_assets`（`3 passed`）均全绿通过。
+验证结果：`cargo fmt --check`、`cargo clippy --all-targets -- -D warnings`、`cargo test`（lib `5838 passed` + 全部集成测试）及 `cargo test --test web_assets`（`3 passed`）均全绿通过。
+
+---
+
+## 合并与清理记录
+
+- 已以 `--no-ff` 合并到 `dev`（merge commit `1664fa8a`）；合并前已核对并清理主工作区冲突的旧未跟踪草稿 `docs/feature/agents-menu-drag-scroll-and-settings-fix/{design.md,task.md}`，无代码冲突；`SCHEMA_VERSION` 保持 `30`，未引入数据库迁移冲突。
+- 合并后在主工作区 `dev` 重跑 `cargo fmt --check`、`cargo clippy --all-targets -- -D warnings`、`cargo test`（lib `5838 passed`、0 failed、6 ignored + 全部集成测试）与 `cargo test --test web_assets`（`3 passed`），全部通过。
+- worktree `.worktrees/agents-menu-drag-scroll`、分支 `feature/agents-menu-drag-scroll` 与隔离库 `~/.lx-t-dev/db/worktrees/agents-menu-drag-scroll-532d28ac/` 已移除。

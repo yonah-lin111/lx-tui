@@ -1,8 +1,8 @@
 # Agents 菜单、拖拽滚动与设置页加载修复 — 设计
 
-> 状态：**已完成实现与代码审查修复，待用户确认合并**
+> 状态：**已通过 review 修复与自动化验证，已合并到 `dev`（merge commit `1664fa8a`），待用户实机验收**
 > 关联任务：[task.md](task.md) · [review.md](review.md)
-> 基线：`.worktrees/agents-menu-drag-scroll`（分支 `feature/agents-menu-drag-scroll`，切自 `dev`）
+> 基线：`dev`（原 worktree `.worktrees/agents-menu-drag-scroll` 与分支 `feature/agents-menu-drag-scroll` 已清理移除）
 > 范围：侧栏 `Agents` 右键菜单、新建 Agent 模态（含实时搜索与滚动）、列表拖拽滚轮与边缘自动滚动、`lx` 选区边缘自动滚动、浏览器设置页 JS 修复
 
 ## 1. 背景与目标
@@ -28,7 +28,7 @@
 | Q5 | 拖拽与选区自动滚动 | 工作区活跃/历史、Todo、Prompt 树支持拖拽滚轮与边缘自动滚动；`lx` 主消息列表与后台任务页（Processes/Agents/BTW）选区支持边缘自动滚动；上下各 2 行检测区、30ms 一步、越靠外越快（1..=3 行），同向横向移动不推迟 `next_at`；Todo/Prompt 拖出右栏水平外取消，右栏内（含滚动条列）纵向钳位保持落点 |
 | Q6 | Agent 启动方式 | 新标签先起普通 shell，150ms 后 PTY 就绪写入 `<可执行文件名>\r`（`next_deadline` 纳入唤醒）；agent 退出后回到 shell，窗格不自动关闭 |
 | Q7 | 设置页修复范围 | 四个 JS 文件全部把 `element(` 改为 `domEl(`；补资源回归测试；错误提示双写行为不变 |
-| Q8 | 实现位置 | 在 `.worktrees/agents-menu-drag-scroll` 的 `feature/agents-menu-drag-scroll` 分支实现；每个任务（P1-P4）完成后提交一次；全部完成后由用户决定是否合并回 `dev` |
+| Q8 | 实现位置 | 在 `.worktrees/agents-menu-drag-scroll` 的 `feature/agents-menu-drag-scroll` 分支分步实现并完成 review 修复，已通过 `--no-ff` 合并回 `dev`（`1664fa8a`），worktree 与分支已清理 |
 
 ## 3. 现状核对
 
@@ -725,4 +725,4 @@ TUI 交互与外观由用户运行 `cargo run` 确认；浏览器设置页由用
 - 不把 lx 放进 New agent 列表。
 - 不做 Agent 安装/卸载管理，只做 PATH 探测与启动。
 - 不修改设置页错误提示的双写行为。
-- 不自动合并回 `dev`：完成后先询问用户。
+- 合并完成后仅清理本 feature 对应的旧未跟踪草稿目录与已合并 worktree/分支，不触碰其他并行 worktree 与未跟踪目录。

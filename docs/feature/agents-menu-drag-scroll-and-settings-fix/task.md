@@ -1,8 +1,8 @@
 # Agents 菜单、拖拽滚动与设置页加载修复 — 执行任务
 
-> 状态：**已完成实现与代码审查修复，待用户手动验收后确认合并**
+> 状态：**已合并到 `dev`（merge commit `1664fa8a`，自动化验证通过），待用户实机验收**
 > 设计依据：[design.md](design.md) · 审查记录：[review.md](review.md)
-> 基线：`.worktrees/agents-menu-drag-scroll`（分支 `feature/agents-menu-drag-scroll`）；不自动合并回 `dev`
+> 基线：`dev`（原 worktree `.worktrees/agents-menu-drag-scroll` 与分支 `feature/agents-menu-drag-scroll` 已移除）
 > 规则：生产代码禁止 `unwrap()` / `expect()`；用户可见文案全部收敛到 `src/ui/text.rs`；`app/` 管状态与更新、`ui/` 只读渲染、`event/` 只分派；OS 专属代码只进 `src/platform/`。
 
 ## P0. 基线核对
@@ -133,11 +133,11 @@
 - [x] `cargo test`（lib `5838 passed` + 全部集成测试通过）
 - [x] `cargo test --test web_assets`（3 passed）
 - [x] 生产代码无新增 `unwrap()`/`expect()`、可见文案集中 `src/ui/text.rs` 且为英文、OS 代码仅在 `src/platform/`。
-- [ ] **手动验收与合并**：待用户退出旧进程并 `cargo run` 验证 TUI 与 `/settings`，确认后合并回 `dev`。
+- [x] **合并与清理**：清理主工作区同名旧草稿目录冲突后以 `--no-ff` 合并回 `dev`（`1664fa8a`），合并后全量 `cargo fmt --check`、`cargo clippy --all-targets -- -D warnings`、`cargo test` 与 `cargo test --test web_assets` 全绿，并移除 worktree `.worktrees/agents-menu-drag-scroll`、分支 `feature/agents-menu-drag-scroll` 及隔离库 `~/.lx-t-dev/db/worktrees/agents-menu-drag-scroll-532d28ac/`。
+- [ ] **手动验收**：用户重编并运行 `cargo run` 验证 TUI 交互与 `/settings`。
 
 ## 执行记录
 
-- 分支：`feature/agents-menu-drag-scroll`（worktree `.worktrees/agents-menu-drag-scroll`）。
-- 已提交历史：`87c9fbcb`（P1）、`e5f8823b`（P2）、`6fabb6a9`（P3）、`e8742e7c`（P4）、`a30c6a1e`（文档）、`65fdc1f3`（New agent 搜索）、`8435fb78`（边缘自动滚动）、`150de2f2`（按键路由测试）。
-- Review 修复（当前工作区未提交修改）：按 [review.md](review.md) 完成全部 P0–P2 修复与文件拆分，并更新对应设计/任务/规范文档；全量 `cargo fmt`、`cargo clippy --all-targets -- -D warnings`、`cargo test` 与 `cargo test --test web_assets` 全绿。
-- 合并回 `dev` 前需用户明确确认。
+- 分支：`feature/agents-menu-drag-scroll`（worktree `.worktrees/agents-menu-drag-scroll`），按 `87c9fbcb`（P1）、`e5f8823b`（P2）、`6fabb6a9`（P3）、`e8742e7c`（P4）、`a30c6a1e`（文档）、`65fdc1f3`（New agent 搜索）、`8435fb78`（边缘自动滚动）、`150de2f2`（按键路由测试）、`007716a9`（P0–P2 review 修复与模块拆分）、`abbe06e4`（审查与文档更新）依次提交。
+- 合并记录：主工作区 `dev`（`1efb9292`）移除冲突的旧未跟踪草稿 `docs/feature/agents-menu-drag-scroll-and-settings-fix/{design.md,task.md}`（经逐字核对不含额外改动）后，以 `--no-ff` 合并为 `1664fa8a`，无代码文本冲突；合并后在 `dev` 重跑 `cargo fmt --check`、`cargo clippy --all-targets -- -D warnings`、`cargo test`（lib `5838 passed`、0 failed、6 ignored + 全部集成测试通过）与 `cargo test --test web_assets`（`3 passed`）。
+- 清理记录：已删除 worktree `.worktrees/agents-menu-drag-scroll`、分支 `feature/agents-menu-drag-scroll` 与隔离库 `~/.lx-t-dev/db/worktrees/agents-menu-drag-scroll-532d28ac/`；未触碰并行 worktree 对应的 `compact-layout` 与 `sandbox-permissions` 目录。
