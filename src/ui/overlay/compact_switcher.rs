@@ -107,12 +107,15 @@ pub fn render(frame: &mut Frame<'_>, screen: Rect, state: &AppState, switcher: &
             );
         }
         let visible = usize::from(layout.viewport.height);
+        let row_width = screen
+            .width
+            .saturating_sub(u16::from(layout.scrollbar.is_some()));
         for (offset, row_index) in (switcher.scroll..switcher.rows.len())
             .take(visible)
             .enumerate()
         {
             let y = layout.viewport.y.saturating_add(offset as u16);
-            let area = Rect::new(screen.x, y, screen.width, 1);
+            let area = Rect::new(screen.x, y, row_width, 1);
             draw_row(buf, area, row_index, state, switcher);
         }
     }

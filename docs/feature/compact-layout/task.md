@@ -375,6 +375,7 @@
 - `src/app/overlay.rs`
 - `src/input/mod.rs`
 - `src/event/session.rs`
+- `src/event/mod.rs`（Resize 触发重绘）
 - `src/event/mouse/press.rs`
 - `src/event/mouse/hover.rs`
 - `src/event/mouse/wheel.rs`
