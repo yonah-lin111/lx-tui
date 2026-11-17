@@ -364,3 +364,53 @@ fn inactive_tab_pane_toast_does_not_leak_to_global_top_center() {
         "非活动标签页的窗格 toast 不得降级泄漏到当前屏幕顶部居中"
     );
 }
+
+fn compact_view() -> ViewLayout {
+    let config = Config::default();
+    crate::ui::layout::compute_with_panel(
+        Rect::new(0, 0, 60, 20),
+        &config,
+        false,
+        config.sidebar_width,
+        false,
+        30,
+        false,
+        false,
+        None,
+    )
+}
+
+#[test]
+fn compact_toast_is_a_single_bottom_banner() {
+    let mut state = AppState::demo();
+    let prompt = state.prompt.id();
+    show(&mut state, Some(prompt));
+    let view = compact_view();
+    assert!(view.compact);
+    let screen = Rect::new(0, 0, 60, 20);
+    let area = rect(&state, &view, &[], screen, &Config::default()).expect("toast area");
+    assert_eq!(area, Rect::new(0, 19, 60, 1));
+}
+
+#[test]
+fn compact_toast_renders_title_message_and_dot_on_one_row() {
+    let mut state = AppState::demo();
+    update::show_toast(
+        &mut state,
+        Toast::new(ToastKind::Warning, text::TOAST_COPIED, None, Instant::now())
+            .with_title(text::TOAST_CLIPBOARD_TITLE),
+    );
+    let view = compact_view();
+    let screen = Rect::new(0, 0, 60, 20);
+    let mut terminal = Terminal::new(TestBackend::new(60, 20)).expect("test backend is infallible");
+    terminal
+        .draw(|frame| {
+            render(frame, screen, &state, &view, &[], &Config::default());
+        })
+        .expect("draw succeeds");
+    let buffer = terminal.backend().buffer();
+    let row: String = (0..60).map(|x| buffer[(x, 19)].symbol()).collect();
+    assert!(row.contains('●'), "{row}");
+    assert!(row.contains(text::TOAST_CLIPBOARD_TITLE), "{row}");
+    assert!(row.contains(text::TOAST_COPIED), "{row}");
+}

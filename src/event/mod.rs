@@ -681,7 +681,8 @@ fn handle_terminal_event(
         }
         TerminalEvent::FocusLost => update::on_terminal_focus_lost(state, Instant::now()),
         TerminalEvent::FocusGained => *dirty |= update::on_terminal_focus_gained(state),
-        TerminalEvent::Resize(..) => {}
+        // 尺寸变化会改变紧凑布局与 PTY 几何：下一轮必须重绘并重新对齐。
+        TerminalEvent::Resize(..) => *dirty = true,
     }
 }
 

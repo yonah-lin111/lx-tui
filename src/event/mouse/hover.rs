@@ -117,6 +117,19 @@ pub(crate) fn handle_mouse_moved(
                 *dirty = true;
             }
         }
+        if let Some(Overlay::CompactSwitcher(switcher)) = state.overlay.as_ref() {
+            let hover =
+                ui::overlay::compact_switcher_row_at(*screen, switcher, mouse.column, mouse.row)
+                    .filter(|index| {
+                        switcher
+                            .rows
+                            .get(*index)
+                            .is_some_and(crate::app::state::CompactRow::is_selectable)
+                    });
+            if update::hover_compact_switcher(state, hover) {
+                *dirty = true;
+            }
+        }
         if update::set_prompt_tree_hover(state, None) {
             *dirty = true;
         }

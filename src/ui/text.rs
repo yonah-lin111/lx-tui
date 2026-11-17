@@ -3,6 +3,7 @@
 pub mod agent;
 pub mod btw;
 pub mod chat;
+pub mod compact;
 pub mod connect;
 pub mod detail;
 pub mod mcp;
@@ -22,6 +23,7 @@ use crate::app::tooltip::{BlockButtonKind, TemplateButtonKind, TooltipTarget};
 use crate::tiling::PaneId;
 
 pub use btw::*;
+pub use compact::*;
 pub use connect::*;
 pub use steer::*;
 pub use todo::*;

@@ -2,6 +2,7 @@
 
 pub mod clear;
 pub mod command_panel;
+pub mod compact_header;
 pub mod input;
 pub mod menu;
 pub mod modal;

@@ -39,6 +39,9 @@ pub fn render(
     view: &ViewLayout,
     pane_rects: &[(PaneId, Rect)],
 ) -> Option<Rect> {
+    if view.compact {
+        return None;
+    }
     let command_panel_open = state.prompt.mention().is_some()
         || state.prompt.slash_panel().is_some()
         || state.prompt.panel().is_some();

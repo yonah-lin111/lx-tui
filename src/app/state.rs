@@ -17,6 +17,7 @@ use super::toast::Toast;
 use super::tooltip::Tooltip;
 use super::trust::TrustResolution;
 
+pub mod compact;
 pub mod lx;
 pub mod pane;
 pub mod prompt_history;
@@ -24,6 +25,7 @@ pub mod todo;
 pub mod workspace;
 pub mod workspace_history;
 
+pub use compact::{CompactAgentRow, CompactRestore, CompactRow, CompactSection};
 pub use lx::LxInputMode;
 pub use lx::{
     AI_WEB_DEEPSEEK_SESSION_PREFIX, AI_WEB_GEMINI_SESSION_PREFIX, AI_WEB_GROK_SESSION_PREFIX,
@@ -253,6 +255,10 @@ pub struct AppState {
     pub prompt_collapsed: bool,
     /// 主区是否折叠为右缘窄条；仅 prompt 在左（右列为主区）时有效，交换即复位。
     pub panes_collapsed: bool,
+    /// 进入紧凑布局前的桌面折叠状态；Some 表示当前处于紧凑布局。
+    pub compact_restore: Option<CompactRestore>,
+    /// 紧凑切换器滚动条 thumb 拖拽抓取偏移；None 表示未拖拽。
+    pub compact_switcher_scroll_drag: Option<u16>,
     /// 当前持有键盘焦点的容器（**唯一真源**）。
     ///
     /// 高亮、硬件光标归属与按键去向全部由它决定：同一时刻只有一个容器算聚焦，
@@ -439,6 +445,17 @@ impl AppState {
         self.focused == FocusedContainer::Panes
     }
 
+    /// 紧凑模式下当前应全屏显示的面板；None 表示显示 Chat。
+    ///
+    /// 焦点是唯一真源：焦点在 Prompt/Todo 就是对应全屏面板，回到主区即回到 Chat。
+    pub fn compact_panel(&self) -> Option<RightTab> {
+        match self.focused {
+            FocusedContainer::Prompt => Some(RightTab::Prompt),
+            FocusedContainer::Todo => Some(RightTab::Todo),
+            _ => None,
+        }
+    }
+
     /// 构造初始状态：单个工作区（以当前路径末段命名），单个自动命名终端标签，
     /// 加全局 prompt 右栏。
     pub fn demo() -> Self {
@@ -471,6 +488,8 @@ impl AppState {
             prompt_hover: false,
             prompt_collapsed: false,
             panes_collapsed: false,
+            compact_restore: None,
+            compact_switcher_scroll_drag: None,
             focused: FocusedContainer::Panes,
             prompt: Prompt::new(PaneId::alloc()),
             prompt_root: None,
@@ -826,38 +845,7 @@ impl AppState {
     ///
     /// Agents 分区渲染、命中与滚动计数共用唯一数据源。
     pub fn agent_entries(&self) -> Vec<SidebarAgentEntry> {
-        let workspace = self.active_workspace();
-        let mut entries = Vec::new();
-        for (tab_index, tab) in workspace.tabs.iter().enumerate() {
-            for (pane_offset, pane_id) in tab.layout.pane_ids().into_iter().enumerate() {
-                let Some(pane) = tab.pane(pane_id) else {
-                    continue;
-                };
-                let pane_index = pane_offset;
-                if pane.lx.has_active_session() {
-                    entries.push(SidebarAgentEntry {
-                        tab_index,
-                        pane_index,
-                        pane_id,
-                        kind: SidebarAgentKind::Lx {
-                            entry: pane.lx.entry,
-                            ai_web_site: pane.lx.ai_web_site,
-                        },
-                        state: pane.lx.agent_state(),
-                    });
-                }
-                if let Some(snapshot) = pane.agent.as_ref() {
-                    entries.push(SidebarAgentEntry {
-                        tab_index,
-                        pane_index,
-                        pane_id,
-                        kind: SidebarAgentKind::Terminal(snapshot.kind),
-                        state: snapshot.state,
-                    });
-                }
-            }
-        }
-        entries
+        self.agent_entries_for_workspace(self.active_workspace)
     }
 
     /// 指定 Agent 的侧栏标题覆盖；无覆盖返回 None。

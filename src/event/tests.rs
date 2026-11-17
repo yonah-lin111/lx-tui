@@ -16,6 +16,7 @@ use super::*;
 pub(crate) mod test_support;
 
 mod agent_menu;
+mod compact;
 mod focus_and_paste;
 mod lx_ask_task;
 mod lx_toast;

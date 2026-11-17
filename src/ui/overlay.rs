@@ -1,6 +1,7 @@
 //! 浮层渲染：右键菜单、重命名与关闭确认；几何与命中供事件循环复用。
 
 mod agent_title;
+mod compact_switcher;
 mod connect;
 pub mod dialog;
 pub mod menu;
@@ -10,6 +11,10 @@ mod worktree;
 
 pub use agent_title::{
     AgentTitleButton, agent_title_button_at, agent_title_row_at, agent_title_shell,
+};
+pub use compact_switcher::{
+    CompactSwitcherLayout, close_at as compact_switcher_close_at,
+    layout as compact_switcher_layout, row_at as compact_switcher_row_at,
 };
 pub use connect::{
     CONNECT_HEIGHT, CONNECT_WIDTH, ConnectLayout, connect_layout, connect_row_at, render_connect,
@@ -94,6 +99,10 @@ pub fn render(frame: &mut Frame<'_>, screen: Rect, state: &AppState) -> Option<(
         }
         Overlay::Connect(panel) => render_connect(frame, screen, panel),
         Overlay::AgentTitle(dialog) => render_agent_title(frame, screen, dialog),
+        Overlay::CompactSwitcher(switcher) => {
+            compact_switcher::render(frame, screen, state, switcher);
+            None
+        }
     }
 }
 

@@ -23,7 +23,7 @@ pub struct Config {
     pub sidebar_min_width: u16,
     /// 侧栏展开最大宽度（列，herdr 默认上限再放大）。
     pub sidebar_max_width: u16,
-    /// 低于该宽度隐藏侧栏。
+    /// 低于等于该宽度进入紧凑单列布局（隐藏侧栏、标签栏与右栏）。
     pub narrow_width: u16,
     /// 最小可用宽度。
     pub min_width: u16,

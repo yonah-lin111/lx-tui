@@ -50,12 +50,13 @@ pub(crate) struct Geometry {
 /// 主区折叠时窗格 PTY 不重排（网格保持折叠前尺寸）。
 pub(crate) fn current_geometry(
     tui: &mut Tui,
-    state: &AppState,
+    state: &mut AppState,
     config: &Config,
 ) -> io::Result<Geometry> {
     let size = tui.terminal().size()?;
+    update::sync_compact_layout(state, size.width, size.height, config);
     let screen = Rect::new(0, 0, size.width, size.height);
-    let view = ui::layout::compute(
+    let view = ui::layout::compute_with_panel(
         screen,
         config,
         state.sidebar_collapsed,
@@ -64,9 +65,11 @@ pub(crate) fn current_geometry(
         state.prompt_width,
         state.prompt_left,
         state.panes_collapsed,
+        state.compact_panel(),
     );
     // 折叠的右列面板不参与命中与尺寸同步：主区折叠时窗格 PTY 保持原尺寸。
-    let mut rects = if state.prompt_left && state.panes_collapsed {
+    // 紧凑全屏面板下主区宽度为 0，同样不重排窗格。
+    let mut rects = if view.main_content.width == 0 || view.main_content.height == 0 {
         Vec::new()
     } else {
         tiling::pane_rects(
@@ -76,7 +79,7 @@ pub(crate) fn current_geometry(
             config.min_pane_height,
         )
     };
-    if !state.prompt_collapsed {
+    if !state.prompt_collapsed && view.right_panel.width > 0 {
         rects.push((state.prompt.id(), view.right_panel));
     }
     Ok(Geometry {

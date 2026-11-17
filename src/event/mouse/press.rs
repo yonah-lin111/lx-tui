@@ -58,6 +58,7 @@ pub(crate) fn handle_mouse_down_left(
     state.task_agents_scroll_drag = None;
     state.task_btw_scroll_drag = None;
     state.overlay_input_drag = false;
+    state.compact_switcher_scroll_drag = None;
     if let Some(Overlay::ConfirmClose(confirm)) = state.overlay.as_mut() {
         confirm.scroll_drag = None;
     }
@@ -138,6 +139,23 @@ pub(crate) fn handle_mouse_down_left(
             *dirty = true;
             return;
         }
+        // 紧凑切换器滚动条：命中轨道跳转、命中 thumb 进入拖拽。
+        if let Some(Overlay::CompactSwitcher(switcher)) = state.overlay.as_ref() {
+            let layout = ui::overlay::compact_switcher_layout(*screen, switcher);
+            if let Some(bar) = layout.scrollbar
+                && bar.track.contains((mouse.column, mouse.row).into())
+            {
+                match ui::widgets::scrollbar::thumb_grab_offset(&bar, mouse.row) {
+                    Some(grab) => state.compact_switcher_scroll_drag = Some(grab),
+                    None => {
+                        let offset = ui::widgets::scrollbar::offset_from_track_row(&bar, mouse.row);
+                        update::set_compact_switcher_scroll(state, offset);
+                    }
+                }
+                *dirty = true;
+                return;
+            }
+        }
         let was_menu = matches!(state.overlay, Some(Overlay::Menu(_)));
         let menu_item_clicked = if let Some(Overlay::Menu(menu)) = state.overlay.as_ref() {
             let layout = ui::overlay::menu_layout(state, *screen, menu);
@@ -162,6 +180,24 @@ pub(crate) fn handle_mouse_down_left(
             reveal_active_tab(state, view);
         }
         *dirty = true;
+        return;
+    }
+    // 紧凑状态条：switch/back 是模态入口，其余区域吞掉，不穿透到主区。
+    if view.compact
+        && view
+            .compact_header
+            .contains((mouse.column, mouse.row).into())
+    {
+        if ui::widgets::compact_header::switch_at(view, state, mouse.column, mouse.row) {
+            update::open_compact_switcher(state, update::switcher_viewport_rows(screen.height));
+            *dirty = true;
+            return;
+        }
+        if ui::widgets::compact_header::back_at(view, state, mouse.column, mouse.row) {
+            update::back_to_compact_chat(state);
+            *dirty = true;
+            return;
+        }
         return;
     }
     // lx 页自己的 toast 盒：点击盒内关闭并消费点击，点击盒外关闭后继续处理本次点击。

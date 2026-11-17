@@ -61,7 +61,7 @@ pub(crate) fn render_cached(
         return;
     }
 
-    let view = layout::compute(
+    let view = layout::compute_with_panel(
         area,
         config,
         state.sidebar_collapsed,
@@ -70,13 +70,21 @@ pub(crate) fn render_cached(
         state.prompt_width,
         state.prompt_left,
         state.panes_collapsed,
+        state.compact_panel(),
     );
-    let pane_rects = crate::tiling::pane_rects(
-        &state.active_tab().layout,
-        view.main_content,
-        config.min_pane_width,
-        config.min_pane_height,
-    );
+    let pane_rects = if view.main_content.width == 0 || view.main_content.height == 0 {
+        Vec::new()
+    } else {
+        crate::tiling::pane_rects(
+            &state.active_tab().layout,
+            view.main_content,
+            config.min_pane_width,
+            config.min_pane_height,
+        )
+    };
+    if view.compact {
+        widgets::compact_header::render(frame, &view, state);
+    }
 
     let sidebar_cursor = if view.left_panel.width > 0 {
         if state.sidebar_collapsed {
@@ -91,7 +99,9 @@ pub(crate) fn render_cached(
         None
     };
     tab_bar::render(frame, &view, state);
-    controls::render_exit_button(frame, &view);
+    if !view.compact {
+        controls::render_exit_button(frame, &view);
+    }
     // 主区折叠：只画右缘窄条，不渲染窗格内容（PTY 尺寸保持折叠前）。
     let pane_cursor = if state.prompt_left && state.panes_collapsed {
         controls::render_collapsed_strip(frame, view.main_content, false);
@@ -102,9 +112,11 @@ pub(crate) fn render_cached(
     let prompt_cursor = right_panel::render(frame, &view, state)
         .or(pane_cursor)
         .or(sidebar_cursor);
-    controls::render_swap_button(frame, &view);
-    controls::render_panel_buttons(frame, &view, state);
-    controls::render_resize_hint(frame, &view, state);
+    if !view.compact {
+        controls::render_swap_button(frame, &view);
+        controls::render_panel_buttons(frame, &view, state);
+        controls::render_resize_hint(frame, &view, state);
+    }
     // 引用文件夹浮层的边框按钮 tooltip 需绘制在浮层之上（常规 tooltip 早于浮层绘制会被盖住）。
     let border_tooltip_open = matches!(
         state.overlay,
@@ -113,12 +125,12 @@ pub(crate) fn render_cached(
                 | crate::app::overlay::Overlay::ReferencedFolderSearch(_)
         )
     );
-    let tooltip_area = (!border_tooltip_open)
+    let tooltip_area = (!view.compact && !border_tooltip_open)
         .then(|| tooltip::render(frame, area, state, &view, &pane_rects))
         .flatten();
     let overlay_cursor = overlay::render(frame, area, state);
     let toast_area = toast::render(frame, area, state, &view, &pane_rects, config);
-    let menu_tooltip_area = border_tooltip_open
+    let menu_tooltip_area = (!view.compact && border_tooltip_open)
         .then(|| tooltip::render(frame, area, state, &view, &pane_rects))
         .flatten();
 

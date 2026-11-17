@@ -170,3 +170,12 @@
 - **外部 rtk**：仅当命令首段是受支持的短时工具时才前缀 `rtk`（`cargo build/test/check/clippy/install/nextest`、`git diff/log/status/show/add/commit/push/pull/branch/fetch/stash/worktree`、`ls/tree/grep/rg/find/wc/diff/gh/glab/aws/psql/dotnet/jest/vitest/prisma/tsc/prettier/playwright/curl/wget`、`npm|pnpm test`、`npx tsc|eslint|prisma`）。带前导赋值、`cd &&`、换行、已带 rtk 或长驻/交互形态的命令不包装，避免把流式输出改成结束才返回。
 - **内置兜底**：未包装或没有外部 rtk 时，按命令类别过滤（测试只留失败/摘要；构建去掉编译进度、保留警告/错误块；git status 限制文件数；diff 只留增删与 hunk 头；grep/rg 按文件与总量限制；ls/tree/find 限制行数；通用输出保留首尾并按字符兜底）。所有裁剪都写入显式省略标记，绝不静默丢数据。
 - **归属**：模型 `exec_command` 由执行器在 spawn 前包装、返回结果前内置过滤；`!` 本地命令在事件层预登记后同样处理。卡片与上下文里的 `command` 始终是用户原始命令，包装只存在于实际执行的脚本。
+
+## 紧凑布局（窄终端单列）
+
+- **触发与几何**：终端宽度 `<= config.narrow_width`（默认 80，且 `>= min_width`）自动进入单列紧凑布局：隐藏左侧栏、标签栏与右侧 Prompt/Todo 容器，只保留顶部状态条 + 主区窗格；宽度 `> narrow_width` 恢复桌面三栏。80 列恰好进入紧凑，桌面断言不得继续使用 `<= 80` 的宽度。
+- **状态条**：终端高度 `>= 16` 显示 2 行（工作区状态点/名称 + 右侧 tab，第二行全局 Agent 摘要 `blocked → working → idle`），否则只显示 1 行；右侧 `[switch]` 占满状态条高度。全屏面板时状态条固定 1 行：左侧 `[back]` + 面板名，不劫持 `Esc`。
+- **切换器**：`[switch]` 打开全屏 switcher，顺序固定为 `Agents → Spaces → Tabs → Panels → Actions`；Agents 为跨工作区全局条目，选中后一次切到对应工作区、标签与焦点窗格；含 `+ new workspace`、`+ new tab`；`↑/↓/Enter/Esc/PageUp/PageDown` 导航，分区标题不可选中。
+- **全屏面板**：焦点在 `Prompt`/`Todo` 时对应面板占满主区，`[back]` 返回并把焦点交回主区；焦点是面板屏幕的唯一真源，不新增 `compact_screen` 状态。全屏面板下窗格 PTY 不 resize（几何中不含窗格）。
+- **隐藏控件与 Toast**：紧凑模式禁止保留不可见控件的命中矩形（折叠/钉住/交换/退出/Web/拖拽提示/tooltip 一律失效）；全局 Toast 改为屏幕底部单行横幅 `● title · message`，`pane.lx.toast` 仍在 lx 窗格内。
+- **缩放恢复**：进入紧凑时快照 `prompt_collapsed` / `panes_collapsed` 并临时展开，退出时恢复；退出时焦点仍在 Prompt/Todo 则保留展开，不得把正在编辑的面板重新折叠。

@@ -37,6 +37,15 @@ pub fn rect(
     if screen.width < config.min_width || screen.height < config.min_height {
         return None;
     }
+    if view.compact {
+        // 紧凑布局没有稳定的侧栏/右栏锚点：统一落到底部单行横幅。
+        return Some(Rect::new(
+            screen.x,
+            screen.y + screen.height.saturating_sub(1),
+            screen.width,
+            1,
+        ));
+    }
     let (width, height) = box_size(toast);
     let width = width.min(screen.width);
     let container = match toast.anchor {
@@ -117,6 +126,9 @@ pub fn render(
 ) -> Option<Rect> {
     let area = rect(state, view, pane_rects, screen, config)?;
     let toast = state.toast.as_ref()?;
+    if view.compact {
+        return Some(draw_compact_banner(frame, area, toast));
+    }
     clear::render(frame, area);
     let buf = frame.buffer_mut();
     let has_title = draw_frame(buf, area, toast);
@@ -139,6 +151,57 @@ pub fn render(
         body_style,
     );
     Some(area)
+}
+
+/// 紧凑布局底部单行横幅：` ● <title> · <message>`；超宽截断不换行。
+fn draw_compact_banner(frame: &mut Frame<'_>, area: Rect, toast: &Toast) -> Rect {
+    clear::render(frame, area);
+    let buf = frame.buffer_mut();
+    let dot_style = border_style(toast.kind);
+    buf.set_stringn(
+        area.x.saturating_add(1),
+        area.y,
+        text::AGENT_STATUS_DOT,
+        1,
+        dot_style,
+    );
+    let text_x = area.x.saturating_add(3);
+    let max_width = usize::from(area.width.saturating_sub(4));
+    if max_width == 0 {
+        return area;
+    }
+    let mut used = 0usize;
+    if let Some(title) = toast.title.as_deref() {
+        let fitted = text::truncate_to_width(title, max_width);
+        buf.set_stringn(text_x, area.y, &fitted, max_width, title_style(toast.kind));
+        used = fitted.width();
+        if used < max_width {
+            let separator = text::IDENTITY_SEPARATOR;
+            buf.set_stringn(
+                text_x.saturating_add(used as u16),
+                area.y,
+                separator,
+                max_width - used,
+                style::muted(),
+            );
+            used += separator.width();
+        }
+    }
+    if used < max_width {
+        let fitted = text::truncate_to_width(&toast.message, max_width - used);
+        buf.set_stringn(
+            text_x.saturating_add(used as u16),
+            area.y,
+            &fitted,
+            max_width - used,
+            if toast.title.is_some() {
+                style::muted()
+            } else {
+                style::strong()
+            },
+        );
+    }
+    area
 }
 
 /// 边框与首行状态圆点语义色（Cyan / Yellow / Red）。

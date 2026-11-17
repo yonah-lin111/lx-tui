@@ -32,6 +32,9 @@ pub struct CollapseButton {
 /// 左栏、右列与 agents 表头内的折叠按钮；渲染与鼠标命中共用同一几何。
 /// 位置模型下只有右列面板可折叠：prompt 在右折叠 prompt，prompt 在左折叠主区。
 pub fn collapse_buttons(view: &layout::ViewLayout, agents_collapsed: bool) -> Vec<CollapseButton> {
+    if view.compact {
+        return Vec::new();
+    }
     let mut buttons = Vec::new();
     if let Some(button) = panel_button(CollapseTarget::Sidebar, view.left_panel) {
         buttons.push(button);
@@ -129,7 +132,8 @@ pub fn prompt_pin_button(panel: Rect, pinned: bool) -> Option<Rect> {
 
 /// 钉住按钮命中：坐标是否落在右侧容器底边钉住按钮内。
 pub fn prompt_pin_at(view: &layout::ViewLayout, state: &AppState, column: u16, row: u16) -> bool {
-    !state.prompt_collapsed
+    !view.compact
+        && !state.prompt_collapsed
         && prompt_pin_button(view.right_panel, state.prompt_pinned.is_some())
             .is_some_and(|area| area.contains((column, row).into()))
 }

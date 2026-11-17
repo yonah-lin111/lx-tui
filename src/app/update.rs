@@ -2,6 +2,7 @@
 
 mod agent_title;
 mod chat;
+mod compact_layout;
 mod dialog;
 mod editor;
 mod focus;
@@ -23,6 +24,7 @@ mod worktree;
 
 pub use agent_title::*;
 pub use chat::*;
+pub use compact_layout::*;
 pub use dialog::*;
 pub use editor::*;
 pub use focus::*;
@@ -55,6 +57,10 @@ pub fn apply(action: Action, state: &mut AppState) {
         Action::RequestQuit => quit::request_quit(state),
         Action::ToggleSidebar => state.sidebar_collapsed = !state.sidebar_collapsed,
         Action::TogglePrompt => {
+            // 紧凑模式没有可见的折叠按钮；忽略快捷键，避免退出后状态莫名其妙改变。
+            if state.compact_restore.is_some() {
+                return;
+            }
             state.prompt_collapsed = !state.prompt_collapsed;
             if state.prompt_collapsed {
                 commit_todo_edit(state);
@@ -69,7 +75,11 @@ pub fn apply(action: Action, state: &mut AppState) {
                 state.todo_hover = None;
             }
         }
-        Action::TogglePanes => state.panes_collapsed = !state.panes_collapsed,
+        Action::TogglePanes => {
+            if state.compact_restore.is_none() {
+                state.panes_collapsed = !state.panes_collapsed;
+            }
+        }
         Action::ToggleAgents => state.agents_collapsed = !state.agents_collapsed,
     }
 }

@@ -45,7 +45,7 @@ fn tab_bar_spans_main_area_and_prompt() {
 }
 
 #[test]
-fn narrow_width_hides_sidebar_but_keeps_prompt() {
+fn narrow_width_enters_compact_single_column() {
     let config = Config::default();
     let view = compute(
         Rect::new(0, 0, 60, 30),
@@ -57,9 +57,11 @@ fn narrow_width_hides_sidebar_but_keeps_prompt() {
         false,
         false,
     );
+    assert!(view.compact);
     assert_eq!(view.left_panel.width, 0);
-    assert_eq!(view.right_panel.width, 30);
-    assert_eq!(view.main_content.width, 30);
+    assert_eq!(view.tab_bar.height, 0);
+    assert_eq!(view.right_panel.width, 0);
+    assert_eq!(view.main_content, Rect::new(0, 2, 60, 28));
 }
 
 #[test]
@@ -81,7 +83,7 @@ fn collapsed_sidebar_keeps_strip() {
 }
 
 #[test]
-fn collapsed_narrow_sidebar_is_hidden() {
+fn collapsed_narrow_sidebar_stays_compact() {
     let config = Config::default();
     let view = compute(
         Rect::new(0, 0, 60, 30),
@@ -93,8 +95,86 @@ fn collapsed_narrow_sidebar_is_hidden() {
         false,
         false,
     );
+    assert!(view.compact);
     assert_eq!(view.left_panel.width, 0);
-    assert_eq!(view.right_panel.width, 30);
+    assert_eq!(view.right_panel.width, 0);
+}
+
+#[test]
+fn compact_header_uses_two_rows_on_tall_screen() {
+    let config = Config::default();
+    let view = compute_with_panel(
+        Rect::new(0, 0, 80, 24),
+        &config,
+        false,
+        config.sidebar_width,
+        false,
+        30,
+        false,
+        false,
+        None,
+    );
+    assert!(view.compact);
+    assert_eq!(view.compact_header, Rect::new(0, 0, 80, 2));
+    assert_eq!(view.main_content, Rect::new(0, 2, 80, 22));
+}
+
+#[test]
+fn compact_header_uses_one_row_on_short_screen() {
+    let config = Config::default();
+    let view = compute_with_panel(
+        Rect::new(0, 0, 60, 12),
+        &config,
+        false,
+        config.sidebar_width,
+        false,
+        30,
+        false,
+        false,
+        None,
+    );
+    assert_eq!(view.compact_header, Rect::new(0, 0, 60, 1));
+    assert_eq!(view.main_content, Rect::new(0, 1, 60, 11));
+}
+
+#[test]
+fn compact_fullscreen_panel_uses_body() {
+    let config = Config::default();
+    let view = compute_with_panel(
+        Rect::new(0, 0, 60, 20),
+        &config,
+        false,
+        config.sidebar_width,
+        false,
+        30,
+        false,
+        false,
+        Some(RightTab::Prompt),
+    );
+    assert!(view.compact);
+    assert_eq!(view.compact_header, Rect::new(0, 0, 60, 1));
+    assert_eq!(view.main_content.width, 0);
+    assert_eq!(view.right_panel, Rect::new(0, 1, 60, 19));
+}
+
+#[test]
+fn desktop_layout_starts_above_narrow_width() {
+    let config = Config::default();
+    let view = compute_with_panel(
+        Rect::new(0, 0, config.narrow_width + 1, 24),
+        &config,
+        false,
+        config.sidebar_width,
+        false,
+        30,
+        false,
+        false,
+        None,
+    );
+    assert!(!view.compact);
+    assert_eq!(view.compact_header.width, 0);
+    assert_eq!(view.tab_bar.height, 1);
+    assert_eq!(view.left_panel.width, config.sidebar_width);
 }
 
 #[test]
@@ -177,18 +257,8 @@ fn prompt_width_is_clamped_both_sides() {
 #[test]
 fn prompt_splits_evenly_when_area_is_tiny() {
     let config = Config::default();
-    let view = compute(
-        Rect::new(0, 0, 10, 30),
-        &config,
-        false,
-        config.sidebar_width,
-        false,
-        30,
-        false,
-        false,
-    );
-    assert_eq!(view.right_panel.width, 5);
-    assert_eq!(view.main_content.width, 5);
+    assert_eq!(clamp_prompt_width(10, 30, config.min_pane_width), 5);
+    assert_eq!(10 - clamp_prompt_width(10, 30, config.min_pane_width), 5);
 }
 
 #[test]

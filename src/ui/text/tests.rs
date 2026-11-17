@@ -727,3 +727,19 @@ fn ellipsize_width_counts_display_columns() {
     assert_eq!(ellipsize_width("中文", 4), "中文");
     assert_eq!(ellipsize_width("中文", 0), "");
 }
+
+#[test]
+fn compact_labels_are_stable_and_bracketed() {
+    assert_eq!(COMPACT_SWITCH_LABEL, "[switch]");
+    assert_eq!(COMPACT_BACK_LABEL, "[back]");
+    assert_eq!(COMPACT_CLOSE_LABEL, "[close]");
+    assert_eq!(COMPACT_TITLE, "switch");
+    assert_eq!(COMPACT_SECTION_AGENTS, "Agents");
+    assert_eq!(COMPACT_SECTION_SPACES, "Spaces");
+    assert_eq!(COMPACT_SECTION_TABS, "Tabs");
+    assert_eq!(COMPACT_SECTION_PANELS, "Panels");
+    assert_eq!(COMPACT_SECTION_ACTIONS, "Actions");
+    assert_eq!(COMPACT_NEW_WORKSPACE, "+ new workspace");
+    assert_eq!(COMPACT_NEW_TAB, "+ new tab");
+    assert_eq!(COMPACT_NO_AGENTS, "no agents");
+}

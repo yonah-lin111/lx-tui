@@ -2,10 +2,14 @@
 
 use ratatui::layout::Rect;
 
+use crate::app::state::RightTab;
 use crate::config::Config;
 use crate::tiling::COLLAPSED_STRIP;
 
-/// 主界面四个区域的矩形。
+/// 紧凑布局下显示第二行 agent 摘要所需的最小终端高度。
+const COMPACT_HEADER_TALL_MIN_HEIGHT: u16 = 16;
+
+/// 主界面各区域的矩形。
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct ViewLayout {
     pub left_panel: Rect,
@@ -15,11 +19,17 @@ pub struct ViewLayout {
     pub right_panel: Rect,
     /// 右栏是否位于主内容左侧（与 main_content 互换）。
     pub right_panel_left: bool,
+    /// 紧凑模式顶部状态条；桌面布局为 0。
+    pub compact_header: Rect,
+    /// 当前是否为紧凑单列布局。
+    pub compact: bool,
 }
 
 /// 划分主界面；标签栏横跨主区与 prompt 栏，prompt 与窗格同顶同底；
 /// 侧栏折叠且宽度充足时保留窄条，prompt 始终可见；`prompt_left` 为真时
 /// prompt 紧贴侧栏、窗格在主区右侧；右列面板折叠时收为 `COLLAPSED_STRIP` 窄条。
+///
+/// 紧凑布局固定显示 Chat；需要全屏面板的调用方使用 [`compute_with_panel`]。
 pub fn compute(
     area: Rect,
     config: &Config,
@@ -30,6 +40,35 @@ pub fn compute(
     prompt_left: bool,
     panes_collapsed: bool,
 ) -> ViewLayout {
+    compute_with_panel(
+        area,
+        config,
+        sidebar_collapsed,
+        sidebar_width,
+        prompt_collapsed,
+        prompt_width,
+        prompt_left,
+        panes_collapsed,
+        None,
+    )
+}
+
+/// 划分主界面；`compact_panel` 在紧凑模式下决定显示 Chat 还是全屏 `Prompt`/`Todo`。
+#[allow(clippy::too_many_arguments)]
+pub fn compute_with_panel(
+    area: Rect,
+    config: &Config,
+    sidebar_collapsed: bool,
+    sidebar_width: u16,
+    prompt_collapsed: bool,
+    prompt_width: u16,
+    prompt_left: bool,
+    panes_collapsed: bool,
+    compact_panel: Option<RightTab>,
+) -> ViewLayout {
+    if area.width > 0 && area.width <= config.narrow_width {
+        return compact_layout(area, compact_panel);
+    }
     let sidebar_width = resolved_sidebar_width(area, config, sidebar_collapsed, sidebar_width);
     let left_panel = Rect {
         width: sidebar_width,
@@ -83,6 +122,40 @@ pub fn compute(
         main_content,
         right_panel,
         right_panel_left: prompt_left,
+        compact_header: Rect::new(area.x, area.y, 0, 0),
+        compact: false,
+    }
+}
+
+/// 紧凑单列布局：顶部状态条 + 主区，或顶部 1 行返回条 + 全屏面板。
+fn compact_layout(area: Rect, panel: Option<RightTab>) -> ViewLayout {
+    let header_height = if panel.is_some() {
+        1
+    } else if area.height >= COMPACT_HEADER_TALL_MIN_HEIGHT {
+        2
+    } else {
+        1
+    }
+    .min(area.height);
+    let header = Rect::new(area.x, area.y, area.width, header_height);
+    let body = Rect::new(
+        area.x,
+        area.y + header_height,
+        area.width,
+        area.height.saturating_sub(header_height),
+    );
+    let (main_content, right_panel) = match panel {
+        Some(_) => (Rect::new(body.x, body.y, 0, body.height), body),
+        None => (body, Rect::new(body.x, body.y, 0, body.height)),
+    };
+    ViewLayout {
+        left_panel: Rect::new(area.x, area.y, 0, area.height),
+        tab_bar: Rect::new(area.x, area.y, 0, 0),
+        main_content,
+        right_panel,
+        right_panel_left: false,
+        compact_header: header,
+        compact: true,
     }
 }
 
@@ -188,6 +261,9 @@ pub fn prompt_width_at(view: &ViewLayout, boundary_x: u16, min_width: u16) -> u1
 }
 
 /// 左栏宽度：展开取运行时值并钳制配置边界，折叠且宽度充足取窄条，否则隐藏。
+///
+/// 仅桌面分支调用：紧凑阈值内的宽度已在 [`compute_with_panel`] 提前返回，因此这里
+/// `wide_enough` 在正常布局路径中恒为真；保留判断用于启动宽度推算与直接调用方。
 fn resolved_sidebar_width(area: Rect, config: &Config, sidebar_collapsed: bool, width: u16) -> u16 {
     let wide_enough = area.width >= config.narrow_width;
     if !sidebar_collapsed && wide_enough {
