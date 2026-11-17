@@ -105,8 +105,8 @@ fn empty_input_box_is_minimal_height() {
     let input = lay.input.expect("input block");
     assert_eq!(input.height, INPUT_MIN_BOX);
     assert_eq!(input.x, area.x + MARGIN);
-    // 输入框下沿贴窗格底部（状态绘制在底边框上，不再单独占行）。
-    assert_eq!(input.bottom(), area.bottom());
+    // 输入框下沿紧贴底部状态行（位于 `area.bottom() - 1`）。
+    assert_eq!(input.bottom(), area.bottom() - BOTTOM_BAR_HEIGHT);
 }
 
 #[test]
@@ -118,7 +118,7 @@ fn multiline_input_grows_the_box() {
     lx.insert_char('b');
     let input = layout(area, &lx).input.expect("input block");
     assert_eq!(input.height, INPUT_MIN_BOX + 1, "两行内容");
-    assert_eq!(input.bottom(), area.bottom());
+    assert_eq!(input.bottom(), area.bottom() - BOTTOM_BAR_HEIGHT);
 }
 
 #[test]
@@ -602,7 +602,7 @@ fn markdown_line_is_styled() {
     }
     let mut buf = Buffer::empty(area);
     let _ = render(area, &mut buf, &lx, false, None, &mut PaneCache::default());
-    let row = area.bottom() - 2;
+    let row = area.bottom() - 3;
     let content_x = area.x + MARGIN + 2;
     // 输入框走**编辑器**高亮色板（`markdown_*`，独立于阅读渲染的 `md_read_*`）：
     // `#` 为标题专用标记（Yellow + dim），`Title` 为 Yellow 加粗标题。
@@ -625,8 +625,8 @@ fn cursor_is_relative_to_content_area() {
     let cursor =
         render(area, &mut buf, &lx, true, None, &mut PaneCache::default()).expect("cursor");
     assert!(buffer_text(&buf).contains("hi"));
-    // 行相对内容区：输入框下沿贴底，内容行即倒数第 2 行（底边框为最后一行）。
-    assert_eq!(cursor.0, area.height - 2);
+    // 行相对内容区：最末行为状态行，输入框底分割线在倒数第 2 行，正文行在倒数第 3 行。
+    assert_eq!(cursor.0, area.height - 3);
     assert_eq!(cursor.1, MARGIN + 2 + 2);
 }
 
@@ -640,8 +640,8 @@ fn cursor_follows_the_active_line() {
     let mut buf = Buffer::empty(area);
     let cursor =
         render(area, &mut buf, &lx, true, None, &mut PaneCache::default()).expect("cursor");
-    // 行相对内容区：输入框高 4，末行内容在倒数第 2 行（最后一行是底边框）。
-    assert_eq!(cursor.0, area.height - 2);
+    // 行相对内容区：最末行为状态行，输入框高 4，末行正文在倒数第 3 行。
+    assert_eq!(cursor.0, area.height - 3);
     assert_eq!(cursor.1, MARGIN + 2 + 1);
 }
 
@@ -655,7 +655,7 @@ fn cursor_aligns_after_wide_chars() {
     let mut buf = Buffer::empty(area);
     let cursor =
         render(area, &mut buf, &lx, true, None, &mut PaneCache::default()).expect("cursor");
-    let row = area.bottom() - 2;
+    let row = area.bottom() - 3;
     let content_x = area.x + MARGIN + 2;
     assert_eq!(buf[(content_x, row)].symbol(), "你");
     assert_eq!(
@@ -664,7 +664,7 @@ fn cursor_aligns_after_wide_chars() {
         "宽字符后续列标记跳过"
     );
     assert_eq!(buf[(content_x + 2, row)].symbol(), "谁");
-    assert_eq!(cursor, (area.height - 2, MARGIN + 2 + 4));
+    assert_eq!(cursor, (area.height - 3, MARGIN + 2 + 4));
 }
 
 #[test]
@@ -1100,17 +1100,15 @@ fn mention_panel_absent_without_trigger() {
 #[test]
 fn mention_layout_hidden_when_not_enough_room_above_input() {
     // 输入框贴近内容区顶部：上方放不下顶部分割线 + 一行，不绘制（不移动输入框）。
-    let area = Rect::new(0, 0, 40, 4);
+    let area = Rect::new(0, 0, 40, 5);
     let mut lx = mention_lx(vec![MentionEntry {
         path: "file.rs".into(),
         is_directory: false,
     }]);
-    // 输入框内容框至少 3 行，此时上方仅 1 行：放不下面板（需至少 2 行）。
-    let input = layout(area, &lx).input;
-    if let Some(input) = input {
-        assert!(mention::layout(area, &lx).is_none(), "空间不足不绘制面板");
-        assert_eq!(layout(area, &lx).input, Some(input), "输入框位置不变");
-    }
+    // 底部状态行占 1 行、输入框至少 3 行，此时上方仅 1 行：放不下面板（需至少 2 行）。
+    let input = layout(area, &lx).input.expect("5 行高仍保留输入框");
+    assert!(mention::layout(area, &lx).is_none(), "空间不足不绘制面板");
+    assert_eq!(layout(area, &lx).input, Some(input), "输入框位置不变");
     // 强制触发刷新，避免 lint 未用。
     lx.refresh_panel();
 }
@@ -1313,7 +1311,7 @@ fn mention_panel_renders_top_rule_with_title_and_tabs_and_borderless_footer() {
 #[test]
 fn mention_panel_height_limited_by_space_above_input() {
     // 输入框贴顶：可用行数小于上限时，面板高度受可用空间约束。
-    let area = Rect::new(0, 0, 60, 8);
+    let area = Rect::new(0, 0, 60, 9);
     let entries: Vec<MentionEntry> = (0..100)
         .map(|index| MentionEntry {
             path: format!("file{index:03}.rs"),
@@ -1483,7 +1481,7 @@ fn slash_panel_renders_ascii_only() {
     let area = Rect::new(0, 0, 80, 24);
     let lx = slash_commands_lx(0);
     let mut buf = Buffer::empty(area);
-    let (built, _cursor, _sticky) = build(area, &lx, true, &mut PaneCache::default());
+    let built = build(area, &lx, true, &mut PaneCache::default()).grid;
     blit_grid(area, &mut buf, &built);
     for y in 0..area.height {
         for x in 0..area.width {
@@ -1518,7 +1516,7 @@ fn slash_panel_renders_ascii_only() {
 }
 
 #[test]
-fn initial_page_shows_status_on_pane_bottom_border() {
+fn initial_page_shows_status_above_pane_bottom_border() {
     // 模拟窗格：内容区 `inner` + 底边框行（`inner.bottom()`，位于 inner 之外）。
     let rect = Rect::new(0, 0, 80, 24);
     let inner = crate::tiling::pane_inner_rect(rect);
@@ -1536,28 +1534,40 @@ fn initial_page_shows_status_on_pane_bottom_border() {
     };
     let lay = layout(inner, &lx);
     let input = lay.input.expect("input");
-    // 输入框保留自己的上下分割线，下沿仍贴内容区底部（状态改画在窗格底边框上）。
-    assert_eq!(input.bottom(), inner.bottom());
-    // 底边框行预铺 `─`（保留两角）后渲染状态，检查覆盖效果。
+    // 输入框下沿紧贴底部状态行（状态画在输入框下方、窗格底边框上方）。
+    assert_eq!(input.bottom(), inner.bottom() - BOTTOM_BAR_HEIGHT);
+    // 底边框行预铺 `─` 后渲染，检查状态在 `inner.bottom() - 1` 且底边框保持纯净。
     let mut buf = Buffer::empty(rect);
-    let row = inner.bottom();
+    let border_row = inner.bottom();
     for x in rect.x..rect.right() {
-        if let Some(cell) = buf.cell_mut((x, row)) {
+        if let Some(cell) = buf.cell_mut((x, border_row)) {
             cell.set_char('─');
         }
     }
     render(inner, &mut buf, &lx, false, None, &mut PaneCache::default());
+    let status_row = inner.bottom() - 1;
+    let status_line: String = (rect.x..rect.right())
+        .map(|x| buf.cell((x, status_row)).map(|c| c.symbol()).unwrap_or(" "))
+        .collect();
     let border: String = (rect.x..rect.right())
-        .map(|x| buf.cell((x, row)).map(|c| c.symbol()).unwrap_or(" "))
+        .map(|x| buf.cell((x, border_row)).map(|c| c.symbol()).unwrap_or(" "))
         .collect();
     assert!(
-        border.contains("deepseek-v4.1-flash"),
-        "底边框显示模型名：{border}"
+        status_line.contains("deepseek-v4.1-flash"),
+        "状态行显示模型名：{status_line}"
     );
-    assert!(!border.contains("9router-lx-t"), "供应商不再显示：{border}");
     assert!(
-        border.contains("720k(72%)"),
-        "底边框显示上下文占用 `720k(72%)`（无 context: 前缀）：{border}"
+        !status_line.contains("9router-lx-t"),
+        "供应商不再显示：{status_line}"
+    );
+    assert!(
+        status_line.contains("720k(72%)"),
+        "状态行显示上下文占用 `720k(72%)`（无 context: 前缀）：{status_line}"
+    );
+    assert_eq!(
+        border,
+        "─".repeat(usize::from(rect.width)),
+        "窗格底边框必须保持纯净：{border}"
     );
 }
 
@@ -1748,7 +1758,7 @@ fn idle_following_hides_chat_bar() {
     );
 }
 
-/// 主轮自然结束、后台子 agent 仍在跑：继续显示 waiting loading，并在底边框计数。
+/// 主轮自然结束、后台子 agent 仍在跑：继续显示 waiting loading，并在底部状态行计数。
 #[test]
 fn idle_main_with_running_subagent_shows_loading_and_counts() {
     let lx = lx_with_running_subagent(false);
@@ -1765,11 +1775,11 @@ fn idle_main_with_running_subagent_shows_loading_and_counts() {
     );
     assert!(
         text.contains("1 process · 1 subagent"),
-        "运行指标在底边框显示：{text}"
+        "运行指标在底部状态行显示：{text}"
     );
 }
 
-/// 用户显式停止主轮后、后台子 agent 仍在跑：不显示 loading，只在底边框计数。
+/// 用户显式停止主轮后、后台子 agent 仍在跑：不显示 loading，只在底部状态行计数。
 #[test]
 fn stopped_main_with_running_subagent_shows_only_counts() {
     let lx = lx_with_running_subagent(true);
@@ -1786,7 +1796,7 @@ fn stopped_main_with_running_subagent_shows_only_counts() {
     );
     assert!(
         text.contains("1 process · 1 subagent"),
-        "运行指标仍在底边框显示：{text}"
+        "运行指标仍在底部状态行显示：{text}"
     );
 }
 
@@ -2179,6 +2189,7 @@ fn idle_chat_bar_has_no_loading_mark() {
     assert!(!text.contains(text::chat::LOADING_LABEL), "{text}");
 }
 
+mod bottom_bar;
 mod fork_panels;
 mod open_entry;
 mod slash_panels;

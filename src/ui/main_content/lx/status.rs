@@ -1,7 +1,7 @@
-//! 聊天状态：模型名 · 思考等级 · 上下文占用 · 缓存命中率，绘制在**窗格底边框**上。
+//! 聊天状态：模型名 · 思考等级 · 上下文占用 · 缓存命中率，绘制在**输入框下方、窗格底边框上方**的状态行上。
 //!
-//! 输入框保留自己的上下 `─` 分割线；状态数据**覆盖**在 main content 的底边框（`╰──╯`）上：
-//! 只改写文字落到的单元格，其余底边线保留为 `─`（边框始终可见）。
+//! 输入框保留自己的上下 `─` 分割线；状态行独立位于底分割线下方、窗格底边框（`╰──╯`）上方，
+//! 不嵌进边框线内（窗格底边框始终保持纯净）。
 //! 左端依次画 `模型名 · 思考等级 · 上下文占用 · 缓存命中率`（模型名用入口标签同款
 //! 粉→蓝渐变，上下文占用用次要信息色；形如 `258.7k(26%)`——**不带 `context:` 前缀**，
 //! 紧跟模型名之后即语义明确）；运行指标（后台任务 / 子 agent，形如
@@ -16,7 +16,7 @@
 //! 右侧一次性 `omitted turns` 提示优先占位，左段在扣除它之后的预算内降级；
 //! 运行指标优先于模型名保留。
 //! 停止生成不再有按钮：流中按 `Esc`（单击待命提示、双击停止，对齐 opencode）。
-//! 两端角字符保留，各控件矩形由同一布局函数派生。
+//! 各控件矩形由同一布局函数派生，左右边距与输入框对齐。
 
 use ratatui::buffer::Buffer;
 use ratatui::layout::Rect;
@@ -29,14 +29,12 @@ use crate::ui::{style, text};
 
 /// 各段之间的空档（列）。
 const GAP: u16 = 1;
-/// 底边框两端角内侧各留的空白列。
-const EDGE_PAD: u16 = 1;
 
-/// 底边框状态布局：绘制行（零高表示空间不足不绘制）、左端运行指标、
+/// 底部状态行布局：绘制行（零高表示空间不足不绘制）、左端运行指标、
 /// 模型 · 上下文可用矩形。
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(super) struct StatusLayout {
-    /// 状态绘制行（窗格底边框）；`height == 0` 表示不绘制。
+    /// 状态绘制行（位于输入框下方、窗格底边框上方）；`height == 0` 表示不绘制。
     pub area: Rect,
     /// 左端运行指标矩形（零宽表示没有运行中的后台任务/子 agent）。
     pub activity: Rect,
@@ -65,23 +63,21 @@ fn hidden(left: u16, y: u16) -> StatusLayout {
     }
 }
 
-/// 计算底边框状态布局；`inner` 为窗格内容区（边框行 = `inner.bottom()`，
-/// 可写区间为两端角内侧，角字符保留）。
+/// 计算底部状态行布局；`bar` 为底行可用矩形（通常由 `lx::layout` 给出，与输入框同宽对齐）。
 ///
 /// 左段先放 `模型 · 思考等级 · 上下文占用`，运行指标（后台任务 / 子 agent）
 /// 紧凑贴在其右侧；运行指标为 0 时整段不占位。模型名在剩余宽度内硬切，
 /// 可选字段按单一降级链取舍。
 pub(super) fn layout(
-    inner: Rect,
+    bar: Rect,
     status: &ChatStatus,
     tasks: usize,
     subagents: usize,
 ) -> StatusLayout {
-    let y = inner.bottom();
-    let left = inner.x.saturating_add(EDGE_PAD);
-    // 可写列区间 `[left, end)`（右端避让角字符）。
-    let end = inner.right().saturating_sub(EDGE_PAD);
-    if inner.width < 8 || end <= left {
+    let y = bar.y;
+    let left = bar.x;
+    let end = bar.right();
+    if bar.height == 0 || bar.width < 6 || end <= left {
         return hidden(left, y);
     }
     let space = end.saturating_sub(left);
@@ -186,7 +182,7 @@ pub(super) fn layout(
                 0
             });
     StatusLayout {
-        area: Rect::new(inner.x, y, inner.width, 1),
+        area: Rect::new(bar.x, y, bar.width, 1),
         activity: if activity_w > 0 {
             Rect::new(activity_x, y, activity_w, 1)
         } else {
@@ -246,8 +242,11 @@ fn variant_text(status: &ChatStatus) -> Option<String> {
         .map(str::to_string)
 }
 
-/// 在窗格底边框行上覆盖绘制状态（两端角与未被覆盖的底边线保留为 `─`）。
-pub(crate) fn render(buf: &mut Buffer, inner: Rect, lx: &Lx) {
+/// 在底部状态行 `bar` 内绘制状态（位于输入框下方、窗格底边框上方）。
+pub(crate) fn render(buf: &mut Buffer, bar: Rect, lx: &Lx) {
+    if bar.height == 0 {
+        return;
+    }
     let status = &lx.chat.status;
     // 右侧一次性省略提示先占位：布局只在扣除后的有效宽度内跑降级链，
     // 避免提示右对齐绘制时覆盖已经画出的上下文/缓存字段。
@@ -257,17 +256,17 @@ pub(crate) fn render(buf: &mut Buffer, inner: Rect, lx: &Lx) {
     let notice_w = notice
         .as_ref()
         .map_or(0, |value| u16::try_from(value.width()).unwrap_or(u16::MAX));
-    let usable = inner.width.saturating_sub(EDGE_PAD.saturating_mul(2));
+    let usable = bar.width;
     let notice_reserve = if notice_w > 0 && notice_w.saturating_add(GAP) <= usable {
         notice_w.saturating_add(GAP)
     } else {
         0
     };
     let effective = Rect::new(
-        inner.x,
-        inner.y,
-        inner.width.saturating_sub(notice_reserve),
-        inner.height,
+        bar.x,
+        bar.y,
+        bar.width.saturating_sub(notice_reserve),
+        bar.height,
     );
     let lay = layout(
         effective,
@@ -279,8 +278,7 @@ pub(crate) fn render(buf: &mut Buffer, inner: Rect, lx: &Lx) {
         return;
     }
     let y = lay.area.y;
-    // 左端角内侧留 1 列空格（`╰ `）；其余底边线保留 `─`（边框始终可见）。
-    for x in inner.x..inner.x.saturating_add(EDGE_PAD) {
+    for x in bar.x..bar.right() {
         if let Some(cell) = buf.cell_mut((x, y)) {
             cell.reset();
             cell.set_char(' ');
@@ -351,7 +349,7 @@ pub(crate) fn render(buf: &mut Buffer, inner: Rect, lx: &Lx) {
         let value = format!("{}{cache}", text::LX_CHAT_MODEL_SEP);
         put(buf, x, y, &value, style::chat_provider(), limit);
     }
-    let end = inner.right().saturating_sub(EDGE_PAD);
+    let end = bar.right();
     let notice_x = end.saturating_sub(notice_w);
     let notice_left = if lay.activity.width > 0 {
         lay.activity.right().saturating_add(GAP)
@@ -434,6 +432,13 @@ fn put_model(buf: &mut Buffer, mut x: u16, y: u16, model: &str, limit: u16) {
             cell.reset();
             cell.set_char(ch);
             cell.set_style(style::model_label_style(position, length));
+        }
+        for offset in 1..width {
+            if let Some(cell) = buf.cell_mut((x.saturating_add(offset), y)) {
+                cell.reset();
+                cell.set_char(' ');
+                cell.set_style(style::model_label_style(position, length));
+            }
         }
         x = x.saturating_add(width);
     }

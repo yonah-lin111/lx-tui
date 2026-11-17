@@ -197,6 +197,10 @@ fn reading_scroll_is_clamped_when_view_shrinks() {
     let rects = [(pane, rect)];
     let inner = crate::tiling::pane_inner_rect(rect);
     let mut cache = crate::ui::RenderCache::default();
+    {
+        let chat = &mut state.pane_mut_anywhere(pane).expect("pane").lx.chat;
+        chat.follow_bottom = false;
+    }
     resolve_lx_history(&mut state, &rects, &mut cache);
     let max_top = {
         let target = state.pane_anywhere(pane).expect("pane");
@@ -208,7 +212,6 @@ fn reading_scroll_is_clamped_when_view_shrinks() {
 
     {
         let chat = &mut state.pane_mut_anywhere(pane).expect("pane").lx.chat;
-        chat.follow_bottom = false;
         chat.history_scroll = max_top.saturating_add(50);
     }
     resolve_lx_history(&mut state, &rects, &mut cache);

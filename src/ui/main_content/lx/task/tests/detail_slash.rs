@@ -107,12 +107,16 @@ fn btw_badge_appends_compacting_only_when_it_fits() {
 fn edit_footer_shows_commands_hint() {
     let lx = agent_composer_lx("completed");
     let lines = render_lines(&lx, 90, 20);
-    let footer = lines.last().expect("footer");
+    let footer = &lines[lines.len() - 2];
     assert!(footer.contains("commands"), "底栏含 / 命令提示：{footer}");
     assert!(footer.contains("/"), "提示键位是 `/`：{footer}");
     assert!(
         !footer.contains("mode"),
         "不再显示 Shift+Tab 模式：{footer}"
+    );
+    assert!(
+        lines.last().expect("outer").trim().is_empty(),
+        "窗格底边框行保持纯净"
     );
 }
 

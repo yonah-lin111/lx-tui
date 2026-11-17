@@ -1,7 +1,7 @@
 //! 状态测试：上下文右侧运行指标（后台任务 / 子 agent，圆点分隔）、
 //! `模型名 · 当前用量(百分比)`（**不带 `context:` 前缀、不显示供应商**）、
 //! 显示与隐藏（无消耗整段隐藏）、窄宽度降级（丢上下文占用）、
-//! 模型名硬切不省略号、底边线保留（均绘制在窗格底边框上）。
+//! 模型名硬切不省略号、窗格底边框保持纯净（均绘制在输入框下方、窗格底边框上方）。
 
 use ratatui::buffer::Buffer;
 use ratatui::layout::Rect;
@@ -42,12 +42,24 @@ fn pane(rect: Rect) -> Rect {
     crate::tiling::pane_inner_rect(rect)
 }
 
-/// 在内容区上模拟窗格边框：底边框行铺 `─` 与两角 `╰`/`╯`，再渲染状态，返回底边框整行文本。
-fn render_border(lx: &Lx, width: u16) -> String {
+/// 模拟 `lx::layout` 给底部状态行分配的矩形（位于内容区最底行，与输入框同宽对齐）。
+fn bar_rect(inner: Rect) -> Rect {
+    let margin = if inner.width >= 24 { 1 } else { 0 };
+    Rect::new(
+        inner.x + margin,
+        inner.bottom().saturating_sub(1),
+        inner.width.saturating_sub(margin * 2),
+        1,
+    )
+}
+
+/// 模拟带底边框的窗格：底边框行 `inner.bottom()` 铺 `╰─…─╯`，状态画在 `inner.bottom() - 1`；
+/// 同时断言底边框行未被污染，最后返回状态行文本。
+fn render_bar(lx: &Lx, width: u16) -> String {
     let rect = Rect::new(0, 0, width, 5);
     let inner = pane(rect);
     let mut buf = Buffer::empty(rect);
-    let row = inner.bottom();
+    let border_row = inner.bottom();
     for x in rect.x..rect.right() {
         let ch = if x == rect.x {
             '╰'
@@ -56,13 +68,22 @@ fn render_border(lx: &Lx, width: u16) -> String {
         } else {
             '─'
         };
-        if let Some(cell) = buf.cell_mut((x, row)) {
+        if let Some(cell) = buf.cell_mut((x, border_row)) {
             cell.set_char(ch);
         }
     }
-    render(&mut buf, inner, lx);
-    (rect.x..rect.right())
-        .map(|x| buf.cell((x, row)).map(|c| c.symbol()).unwrap_or(" "))
+    let bar = bar_rect(inner);
+    render(&mut buf, bar, lx);
+    let border: String = (rect.x..rect.right())
+        .map(|x| buf.cell((x, border_row)).map(|c| c.symbol()).unwrap_or(" "))
+        .collect();
+    assert_eq!(
+        border,
+        format!("╰{}╯", "─".repeat(usize::from(width.saturating_sub(2)))),
+        "窗格底边框必须保持纯净，不得内嵌任何状态文本"
+    );
+    (bar.x..bar.right())
+        .map(|x| buf.cell((x, bar.y)).map(|c| c.symbol()).unwrap_or(" "))
         .collect::<String>()
         .trim_end()
         .to_string()
@@ -111,12 +132,12 @@ fn context_without_usage_is_hidden_entirely() {
         assert_eq!(context_text_for_test(&value), None, "无消耗整段隐藏");
     }
     let lx = lx_with_status(status(Some("M"), Some("P"), Some(1_000), Some(0), false));
-    let line = render_border(&lx, 60);
+    let line = render_bar(&lx, 60);
     assert!(!line.contains("(0%)"), "整段隐藏：{line}");
 }
 
 #[test]
-fn context_usage_shows_usage_with_percent_on_border() {
+fn context_usage_shows_usage_with_percent_on_status_bar() {
     let lx = lx_with_status(status(
         Some("M"),
         Some("P"),
@@ -124,7 +145,7 @@ fn context_usage_shows_usage_with_percent_on_border() {
         Some(258_700),
         false,
     ));
-    let line = render_border(&lx, 60);
+    let line = render_bar(&lx, 60);
     assert!(
         line.contains("258.7k(26%)"),
         "占用显示 `258.7k(26%)`（无 `context:` 前缀）：{line}"
@@ -138,11 +159,12 @@ fn context_follows_model_name_with_secondary_style() {
     let lx = lx_with_status(status(Some("M"), Some("P"), Some(100), Some(50), false));
     let rect = Rect::new(0, 0, 60, 5);
     let inner = pane(rect);
+    let bar = bar_rect(inner);
     let mut buf = Buffer::empty(rect);
-    render(&mut buf, inner, &lx);
-    // `╰ M · 50(50%)…`：模型名 1 列 + 分隔 3 列 → 占用从第 6 列起（`╰` 与内缩各占 1 列）。
-    let row = inner.bottom();
-    let usage_x = rect.x + 2 + "M · ".width() as u16;
+    render(&mut buf, bar, &lx);
+    // `M · 50(50%)`：模型名 1 列 + 分隔 3 列 → 占用从第 4 列起。
+    let row = bar.y;
+    let usage_x = bar.x + "M · ".width() as u16;
     let cell = &buf[(usage_x, row)];
     assert_eq!(cell.symbol(), "5", "占用紧跟在模型名之后");
     assert_eq!(cell.fg, Color::Reset, "占用文字用默认前景");
@@ -158,9 +180,10 @@ fn model_name_uses_entry_label_gradient() {
     let lx = lx_with_status(status(Some("model"), Some("prov"), None, None, false));
     let rect = Rect::new(0, 0, 60, 5);
     let inner = pane(rect);
+    let bar = bar_rect(inner);
     let mut buf = Buffer::empty(rect);
-    render(&mut buf, inner, &lx);
-    let lay = layout(inner, &lx.chat.status, lx.background_tasks, 0);
+    render(&mut buf, bar, &lx);
+    let lay = layout(bar, &lx.chat.status, lx.background_tasks, 0);
     let row = lay.label.y;
     let first = &buf[(lay.label.x, row)];
     assert_eq!(first.symbol(), "m");
@@ -172,7 +195,7 @@ fn model_name_uses_entry_label_gradient() {
 
 #[test]
 fn provider_name_is_not_rendered() {
-    // 供应商已移除：底边框只显示模型名与上下文占用。
+    // 供应商已移除：状态行只显示模型名与上下文占用。
     let lx = lx_with_status(status(
         Some("deepseek-v4.1-flash"),
         Some("9router-lx-t"),
@@ -180,38 +203,35 @@ fn provider_name_is_not_rendered() {
         Some(720_000),
         false,
     ));
-    let line = render_border(&lx, 80);
+    let line = render_bar(&lx, 80);
     assert!(!line.contains("9router"), "不显示供应商：{line}");
     assert!(line.contains("deepseek-v4.1-flash"), "显示模型名：{line}");
     assert!(line.contains("720k(72%)"), "显示上下文占用：{line}");
 }
 
 #[test]
-fn border_line_stays_visible_between_segments() {
-    // 未显示各控件时，两者之间的底边线保留 `─`（不被整段清成空格）。
+fn pane_bottom_border_stays_clean_and_status_has_no_border_rules() {
+    // 状态行独立于边框之外，不带 `╰` 或 `─` 边框符。
     let lx = lx_with_status(status(Some("M"), Some("P"), Some(1_000), Some(500), false));
-    let line = render_border(&lx, 60);
-    assert!(line.contains('─'), "底边线保留：{line}");
-    assert!(
-        line.starts_with("╰ M · 500(50%)─"),
-        "模型 · 上下文占用之后为底边线：{line}"
-    );
+    let line = render_bar(&lx, 60);
+    assert!(!line.contains('─'), "状态行本身不画边框线：{line}");
+    assert_eq!(line, "M · 500(50%)");
 }
 
 #[test]
 fn narrow_drops_context_keeps_model() {
     let lx = lx_with_status(status(Some("M"), Some("P"), Some(100), Some(50), true));
-    // 宽：上下文占用 + 供应商。
-    let inner = Rect::new(0, 0, 40, 3);
-    let lay = layout(inner, &lx.chat.status, lx.background_tasks, 0);
-    assert!(lay.context.width > 0, "40 列显示上下文占用");
-    let inner = Rect::new(0, 0, 23, 3);
-    let lay = layout(inner, &lx.chat.status, lx.background_tasks, 0);
-    assert!(lay.context.width > 0, "23 列仍保留上下文占用");
+    // 宽：上下文占用。
+    let bar = Rect::new(0, 0, 38, 1);
+    let lay = layout(bar, &lx.chat.status, lx.background_tasks, 0);
+    assert!(lay.context.width > 0, "38 列显示上下文占用");
+    let bar = Rect::new(0, 0, 21, 1);
+    let lay = layout(bar, &lx.chat.status, lx.background_tasks, 0);
+    assert!(lay.context.width > 0, "21 列仍保留上下文占用");
     assert!(lay.label.width > 0, "保留模型名区");
     // 更窄：连上下文占用（7 列 `50(50%)`）也放不下时只留模型名（仍硬切保留）。
-    let inner = Rect::new(0, 0, 10, 3);
-    let lay = layout(inner, &lx.chat.status, lx.background_tasks, 0);
+    let bar = Rect::new(0, 0, 8, 1);
+    let lay = layout(bar, &lx.chat.status, lx.background_tasks, 0);
     assert_eq!(lay.context.width, 0, "更窄时丢弃上下文占用");
     assert!(lay.label.width > 0, "仍保留模型名区");
 }
@@ -225,14 +245,14 @@ fn narrow_keeps_context_next_to_hard_cut_model() {
         Some(50),
         false,
     ));
-    let line = render_border(&lx, 34);
+    let line = render_bar(&lx, 34);
     assert!(!line.contains('…'), "不使用省略号：{line}");
     assert!(!line.contains("Provider"), "供应商不显示：{line}");
     assert!(line.contains("50(50%)"), "保留上下文占用：{line}");
 }
 
 #[test]
-fn wide_status_on_border_with_provider_and_context() {
+fn wide_status_renders_above_pane_bottom_border() {
     let lx = lx_with_status(status(
         Some("deepseek-v4.1-flash"),
         Some("9router-lx-t"),
@@ -240,36 +260,39 @@ fn wide_status_on_border_with_provider_and_context() {
         Some(720_000),
         true,
     ));
-    let inner = Rect::new(0, 0, 80, 3);
-    let lay = layout(inner, &lx.chat.status, lx.background_tasks, 0);
+    let bar = Rect::new(1, 2, 78, 1);
+    let lay = layout(bar, &lx.chat.status, lx.background_tasks, 0);
     assert_eq!(lay.area.height, 1);
-    assert_eq!(lay.area.y, inner.bottom(), "绘制在边框行");
-    let line = render_border(&lx, 80);
-    assert!(
-        line.starts_with("╰ deepseek-v4.1-flash · 720k(72%)"),
-        "左角后模型 · 上下文占用：{line}"
-    );
-    assert!(line.ends_with("─╯"), "右端只剩底边线与角：{line}");
+    assert_eq!(lay.area.y, bar.y, "绘制在底栏矩形行");
+    let line = render_bar(&lx, 80);
+    assert_eq!(line, "deepseek-v4.1-flash · 720k(72%)");
 }
 
 #[test]
-fn no_stop_button_on_border() {
-    // 停止交互改为 Esc 双击，底边框上不再有任何按钮文案。
+fn no_stop_button_on_status_bar() {
+    // 停止交互改为 Esc 双击，状态行不再有任何按钮文案。
     let lx = lx_with_status(status(Some("M"), Some("P"), Some(1_000), Some(500), true));
-    let line = render_border(&lx, 80);
+    let line = render_bar(&lx, 80);
     assert!(!line.contains("[■]"), "不再渲染停止按钮：{line}");
 }
 
 #[test]
-fn tiny_inner_yields_no_status() {
+fn tiny_bar_yields_no_status() {
     let lx = lx_with_status(status(Some("M"), Some("P"), None, None, false));
     let lay = layout(
-        Rect::new(0, 0, 7, 3),
+        Rect::new(0, 0, 5, 1),
         &lx.chat.status,
         lx.background_tasks,
         0,
     );
     assert_eq!(lay.area.height, 0);
+    let zero_h = layout(
+        Rect::new(0, 0, 40, 0),
+        &lx.chat.status,
+        lx.background_tasks,
+        0,
+    );
+    assert_eq!(zero_h.area.height, 0);
 }
 
 #[test]
@@ -281,7 +304,7 @@ fn long_model_name_is_hard_cut_without_ellipsis() {
         None,
         false,
     ));
-    let line = render_border(&lx, 34);
+    let line = render_bar(&lx, 34);
     assert!(!line.contains('…'), "模型名不使用省略号：{line}");
     assert!(
         line.contains("very-long-model-name"),
@@ -289,11 +312,11 @@ fn long_model_name_is_hard_cut_without_ellipsis() {
     );
 }
 
-// ===== 运行指标（输入框底部：后台任务 / 子 agent，贴上下文右侧）=====
+// ===== 运行指标（输入框下方状态行：后台任务 / 子 agent，贴上下文右侧）=====
 
-/// 设置后台任务计数后取底边框整行文本。
-fn border_with_tasks(count: usize, width: u16) -> String {
-    border_with_runs(count, 0, width)
+/// 设置后台任务计数后取底部状态行文本。
+fn bar_with_tasks(count: usize, width: u16) -> String {
+    bar_with_runs(count, 0, width)
 }
 
 /// 一个 running 子 agent 的展示记录。
@@ -318,8 +341,8 @@ fn running_subagent(id: &str) -> crate::app::state::SubagentRun {
     })
 }
 
-/// 设置后台任务与子 agent 计数后取底边框整行文本。
-fn border_with_runs(tasks: usize, subagents: usize, width: u16) -> String {
+/// 设置后台任务与子 agent 计数后取底部状态行文本。
+fn bar_with_runs(tasks: usize, subagents: usize, width: u16) -> String {
     let mut lx = lx_with_status(status(Some("M"), Some("P"), Some(1_000), Some(500), false));
     lx.background_tasks = tasks;
     for index in 0..subagents {
@@ -327,15 +350,15 @@ fn border_with_runs(tasks: usize, subagents: usize, width: u16) -> String {
             .runs
             .push(running_subagent(&format!("sub-{index}")));
     }
-    render_border(&lx, width)
+    render_bar(&lx, width)
 }
 
 #[test]
 fn task_count_is_hidden_when_zero() {
-    // 为 0 时整段不渲染：不留空占位、底边线照常延伸（对齐 opencode 的 `N shell`）。
-    let line = border_with_tasks(0, 60);
+    // 为 0 时整段不渲染：不留空占位（对齐 opencode 的 `N shell`）。
+    let line = bar_with_tasks(0, 60);
     assert!(!line.contains("process"), "0 个不显示指标：{line}");
-    assert!(line.contains('─'), "底边线保留：{line}");
+    assert_eq!(line, "M · 500(50%)");
 }
 
 #[test]
@@ -347,32 +370,31 @@ fn task_count_uses_singular_and_plural() {
 
 #[test]
 fn task_count_sits_right_of_context() {
-    // 指标贴在上下文占用右侧，右端只剩底边线。
-    let line = border_with_tasks(3, 60);
-    assert!(
-        line.starts_with("╰ M · 500(50%) · 3 processes"),
+    // 指标贴在上下文占用右侧。
+    let line = bar_with_tasks(3, 60);
+    assert_eq!(
+        line, "M · 500(50%) · 3 processes",
         "指标贴上下文右侧：{line}"
     );
     let tasks = line.find("3 processes").expect("指标");
     let used = line.find("500(50%)").expect("用量");
     assert!(used < tasks, "指标在用量之后：{line}");
-    assert!(line.trim_end().ends_with("─╯"), "右端只剩底边线：{line}");
 }
 
 #[test]
 fn subagent_count_sits_next_to_task_count_right_of_context() {
-    let line = border_with_runs(2, 1, 80);
-    assert!(
-        line.starts_with("╰ M · 500(50%) · 2 processes · 1 subagent"),
+    let line = bar_with_runs(2, 1, 80);
+    assert_eq!(
+        line, "M · 500(50%) · 2 processes · 1 subagent",
         "后台任务与子 agent 用圆点分隔贴上下文右侧：{line}"
     );
 }
 
 #[test]
 fn subagent_count_shows_without_background_tasks() {
-    let line = border_with_runs(0, 2, 80);
-    assert!(
-        line.starts_with("╰ M · 500(50%) · 2 subagents"),
+    let line = bar_with_runs(0, 2, 80);
+    assert_eq!(
+        line, "M · 500(50%) · 2 subagents",
         "没有后台任务时也显示子 agent：{line}"
     );
 }
@@ -380,7 +402,7 @@ fn subagent_count_shows_without_background_tasks() {
 #[test]
 fn task_count_hides_when_too_narrow() {
     // 极窄时指标整段让位，不与模型名抢位置。
-    let line = border_with_tasks(3, 9);
+    let line = bar_with_tasks(3, 9);
     assert!(!line.contains("process"), "窄到放不下时不画：{line}");
 }
 
@@ -390,14 +412,10 @@ fn variant_sits_between_model_and_context() {
     let mut st = status(Some("M"), Some("P"), Some(1_000), Some(500), false);
     st.variant = Some("high".into());
     let lx = lx_with_status(st);
-    let line = render_border(&lx, 60);
-    assert!(
-        line.starts_with("╰ M · high · 500(50%)"),
+    let line = render_bar(&lx, 60);
+    assert_eq!(
+        line, "M · high · 500(50%)",
         "顺序为 模型 · 思考等级 · 上下文：{line}"
-    );
-    assert!(
-        !line.contains("high · ─"),
-        "思考等级后紧跟上下文，不落空：{line}"
     );
 }
 
@@ -409,10 +427,11 @@ fn variant_is_bold_yellow_while_separator_is_muted() {
     let lx = lx_with_status(st);
     let rect = Rect::new(0, 0, 40, 5);
     let inner = pane(rect);
+    let bar = bar_rect(inner);
     let mut buf = Buffer::empty(rect);
-    render(&mut buf, inner, &lx);
-    let row = inner.bottom();
-    let cells: Vec<(u16, char, ratatui::style::Style)> = (rect.x..rect.right())
+    render(&mut buf, bar, &lx);
+    let row = bar.y;
+    let cells: Vec<(u16, char, ratatui::style::Style)> = (bar.x..bar.right())
         .filter_map(|x| {
             buf.cell((x, row))
                 .map(|cell| (x, cell.symbol().chars().next().unwrap_or(' '), cell.style()))
@@ -442,7 +461,7 @@ fn variant_is_bold_yellow_while_separator_is_muted() {
     );
     // `·` 用次要信息色（与上下文占用的分隔符一致）。
     let sep_cell = cells.iter().find(|(_, ch, _)| *ch == '·').expect("分隔符");
-    // `muted()` 只有 DIM、无前景色；单元格 fg 的 Reset 来自底边线底色。
+    // `muted()` 只有 DIM、无前景色；单元格 fg 的 Reset 来自普通空白底色。
     assert!(
         sep_cell
             .2
@@ -461,23 +480,20 @@ fn variant_is_bold_yellow_while_separator_is_muted() {
 #[test]
 fn no_variant_leaves_no_gap() {
     let lx = lx_with_status(status(Some("M"), Some("P"), Some(1_000), Some(500), false));
-    let line = render_border(&lx, 60);
-    assert!(
-        line.starts_with("╰ M · 500(50%)"),
-        "无 variant 时无空洞：{line}"
-    );
+    let line = render_bar(&lx, 60);
+    assert_eq!(line, "M · 500(50%)", "无 variant 时无空洞：{line}");
     assert!(!line.contains("·  ·"), "不留下双分隔符：{line}");
 }
 
 /// 宽度不足时先丢上下文占用，再丢思考等级，模型名始终保留。
 #[test]
-fn blocked_subagents_show_on_border() {
+fn blocked_subagents_show_above_border() {
     let mut lx = lx_with_status(status(Some("M"), Some("P"), None, None, false));
     let mut blocked = running_subagent("blocked");
     blocked.status = "blocked".into();
     lx.agents.runs.push(blocked);
     lx.chat.status.blocked_subagents = 1;
-    let line = render_border(&lx, 80);
+    let line = render_bar(&lx, 80);
     assert!(
         line.contains(text::lx_subagent_blocked_label(1).as_str()),
         "阻塞子 agent 显示 `1 blocked`：{line}"
@@ -485,7 +501,7 @@ fn blocked_subagents_show_on_border() {
 
     // 同时有运行中的子 agent：两段用圆点分隔。
     lx.agents.runs.push(running_subagent("running"));
-    let line = render_border(&lx, 80);
+    let line = render_bar(&lx, 80);
     assert!(
         line.contains("1 subagent · 1 blocked"),
         "运行与阻塞指标并列：{line}"
@@ -497,16 +513,16 @@ fn narrow_drops_context_before_variant() {
     let mut st = status(Some("M"), Some("P"), Some(1_000), Some(500), false);
     st.variant = Some("high".into());
     let lx = lx_with_status(st);
-    // 14 列内容区：`M · high` 放得下，` · 500(50%)` 放不下。
-    let inner = Rect::new(0, 0, 14, 3);
-    let lay = layout(inner, &lx.chat.status, lx.background_tasks, 0);
+    // 12 列状态行：`M · high` 放得下，` · 500(50%)` 放不下。
+    let bar = Rect::new(0, 0, 12, 1);
+    let lay = layout(bar, &lx.chat.status, lx.background_tasks, 0);
     assert!(lay.variant.width > 0, "思考等级保留");
     assert_eq!(lay.context.width, 0, "上下文占用先被丢弃");
     assert!(lay.label.width > 0, "模型名仍在");
 
-    // 更窄：连思考等级也放不下（`M · high` 需 8 列，可用只有 5）。
-    let inner = Rect::new(0, 0, 9, 3);
-    let lay = layout(inner, &lx.chat.status, lx.background_tasks, 0);
+    // 更窄：连思考等级也放不下（`M · high` 需 8 列，可用只有 7）。
+    let bar = Rect::new(0, 0, 7, 1);
+    let lay = layout(bar, &lx.chat.status, lx.background_tasks, 0);
     assert_eq!(lay.variant.width, 0, "更窄时丢弃思考等级");
     assert!(lay.label.width > 0, "模型名仍在");
 }
@@ -518,7 +534,7 @@ fn cache_hit_renders_after_context_and_drops_first() {
     st.cache_hit_percent = Some(70);
     assert_eq!(cache_text_for_test(&st).as_deref(), Some("70% cached"));
     let lx = lx_with_status(st);
-    let line = render_border(&lx, 80);
+    let line = render_bar(&lx, 80);
     assert!(line.contains("500(50%)"), "上下文占用仍在：{line}");
     assert!(
         line.contains("70% cached"),
@@ -526,8 +542,8 @@ fn cache_hit_renders_after_context_and_drops_first() {
     );
 
     // 宽度不足时 cached 最先丢，上下文与 variant 保留。
-    let inner = Rect::new(0, 0, 21, 3);
-    let lay = layout(inner, &lx.chat.status, lx.background_tasks, 0);
+    let bar = Rect::new(0, 0, 19, 1);
+    let lay = layout(bar, &lx.chat.status, lx.background_tasks, 0);
     assert_eq!(lay.cache.width, 0, "cached 先被丢弃");
     assert!(lay.context.width > 0, "上下文保留");
     assert!(lay.variant.width > 0, "variant 保留");
@@ -540,8 +556,8 @@ fn omitted_turns_notice_does_not_overwrite_context_or_cache() {
     st.cache_hit_percent = Some(70);
     st.omitted_turns = Some(3);
     let lx = lx_with_status(st);
-    // 32 列内容区：不预留提示时布局会保留 `70% cached`，提示右对齐后正好压在它上面。
-    let line = render_border(&lx, 34);
+    // 30 列状态行：不预留提示时布局会保留 `70% cached`，提示右对齐后正好压在它上面。
+    let line = render_bar(&lx, 34);
     assert!(line.contains("500(50%)"), "上下文占用保留：{line}");
     assert!(line.contains("omitted turns: 3"), "省略提示显示：{line}");
     assert!(!line.contains("70% cached"), "缓存让位给省略提示：{line}");
@@ -552,7 +568,7 @@ fn omitted_turns_notice_does_not_overwrite_context_or_cache() {
     let notice_start = line.find("omitted turns: 3").unwrap_or(0);
     assert!(notice_start > context_end, "提示在上下文之后：{line}");
     assert!(
-        line[context_end..notice_start].chars().all(|ch| ch == '─'),
-        "提示与上下文之间只剩底边线，不得覆盖字段：{line}"
+        line[context_end..notice_start].chars().all(|ch| ch == ' '),
+        "提示与上下文之间为空白间距，不得覆盖字段：{line}"
     );
 }

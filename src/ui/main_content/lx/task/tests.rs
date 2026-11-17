@@ -1,9 +1,9 @@
-//! 后台任务面板：接管历史区、输入框原位，键位内嵌底边框。
+//! 后台任务面板：接管历史区、输入框原位，键位提示位于面板下方、窗格底边框上方。
 //!
 //! 断言口径来自用户要求：
 //! 1. 面板占用**原消息列表矩形**（`[open]` 打开后在这里看任务与输出）；
 //! 2. 输入框仍在原位，退出面板后消息列表原样恢复；
-//! 3. 底边框只显示 hints，**不出现**模型名 / 用量 / 进程计数；
+//! 3. 底部提示行只显示 hints，**不出现**模型名 / 用量 / 进程计数，窗格底边框保持纯净；
 //! 4. `↑` 在顶部或空列表时回到输入框。
 
 use ratatui::buffer::Buffer;
@@ -68,10 +68,10 @@ fn page_with(entries: Vec<ProcessEntry>, now_ms: i64) -> TaskPage {
     page
 }
 
-/// 整块渲染并返回文本行（**含**底边框那一行）。
+/// 整块渲染并返回文本行（末行为内容区外底边框行，倒数第二行为 `bottom_bar` 提示/状态行）。
 ///
-/// 底边框画在 `area.bottom()`，是内容区之外的一行（`status::render` 与面板 hints
-/// 都在那里落笔），所以缓冲区要多留一行才看得到它。返回的行数 = `height + 1`。
+/// 内容区高度为 `height`（`0..height`），额外保留第 `height` 行用于断言 `area.bottom()` 未被写入。
+/// 返回的行数 = `height + 1`。
 fn render_lines(lx: &Lx, width: u16, height: u16) -> Vec<String> {
     let area = Rect::new(0, 0, width, height);
     let mut buf = Buffer::empty(Rect::new(0, 0, width, height + 1));
@@ -126,8 +126,8 @@ fn panel_replaces_messages_with_output_and_keeps_the_input_slot() {
         .expect("面板 tab 行");
     assert_eq!(
         tab_row,
-        after.len() - 1 - usize::from(TAB_ROW + LIST_MAX as u16),
-        "item 列表占满固定高度并紧贴底边框：{after:#?}"
+        after.len() - 2 - usize::from(TAB_ROW + LIST_MAX as u16),
+        "item 列表占满固定高度并紧贴底部提示行上方：{after:#?}"
     );
     // 关闭态里输入框所在的那一块，打开后由 item 列表占用（行数一致，不挤动布局）。
     let input_row = before
@@ -148,7 +148,7 @@ fn item_list_sits_at_the_input_box_position() {
     // 用户要求：输出容器占消息列表位置，**item 列表仍在输入框位置**（窗格下半部）。
     let mut lx = lx_with_messages();
     lx.task = Some(page_with(vec![entry(1, "npm run dev", "/w/web")], 0));
-    let lines = render_lines(&lx, 70, 16);
+    let lines = render_lines(&lx, 70, 18);
     let tab_row = lines
         .iter()
         .position(|line| line.contains(TaskTab::Processes.label()))
@@ -173,17 +173,22 @@ fn item_list_sits_at_the_input_box_position() {
 
 #[test]
 fn footer_shows_hints_and_hides_model_name() {
-    // 用户要求：快捷键内嵌 pane 底边框，且不显示模型名等数据。
+    // 快捷键提示位于面板下方、窗格底边框上方，且不显示模型名等数据。
     let mut lx = lx_with_messages();
     lx.chat.status.model_name = Some("deepseek-v4.1".into());
     lx.background_tasks = 2;
     lx.task = Some(page_with(vec![entry(1, "npm run dev", "/w/web")], 0));
     let lines = render_lines(&lx, 70, 16);
-    let bottom = lines.last().expect("底边框行");
+    let bottom = &lines[lines.len() - 2];
+    let outer_border = lines.last().expect("底边框行");
+    assert!(
+        outer_border.trim().is_empty(),
+        "窗格底边框行不得被写入任何提示：{outer_border:?}"
+    );
     // 每一项都是 `[功能 键]`；首项 `[select ↑↓]`。
     assert!(
         bottom.contains(&text::LX_TASK_HINTS_PROCESSES[0].label()),
-        "底边框是键位提示：{bottom}"
+        "底栏是键位提示：{bottom}"
     );
     assert!(
         !bottom.contains("deepseek"),
@@ -193,26 +198,25 @@ fn footer_shows_hints_and_hides_model_name() {
         !bottom.contains(text::LX_TASK_COUNT_NOUN_MANY),
         "面板打开时不显示进程计数：{bottom}"
     );
-    // 该行是窗格底边框：hints 从内侧起，行首仍是边线或其内侧空白
-    // （角字符由窗格边框负责，渲染层不画）。
     assert!(
         bottom
             .trim_start()
             .starts_with(&text::LX_TASK_HINTS_PROCESSES[0].label()),
-        "hints 从左边框内侧起：{bottom}"
+        "hints 与面板内容左缘对齐：{bottom}"
     );
 }
 
 #[test]
 fn model_name_returns_when_the_panel_closes() {
-    // `status::render` 与面板 hints 都写在 `area.bottom()` 那一行（内容区之外的
-    // 窗格底边框），所以缓冲区要比内容区多留一行才看得到。
+    // `status::render` 与面板 hints 都写在内容区最底行（`area.bottom() - 1`）。
     let mut lx = lx_with_messages();
     lx.chat.status.model_name = Some("deepseek-v4.1".into());
-    let border = render_lines(&lx, 70, 16).last().cloned().expect("底边框");
+    let lines = render_lines(&lx, 70, 16);
+    let bar = &lines[lines.len() - 2];
+    assert!(bar.contains("deepseek"), "面板关闭后模型名回来：{bar}");
     assert!(
-        border.contains("deepseek"),
-        "面板关闭后模型名回来：{border}"
+        lines.last().expect("outer").trim().is_empty(),
+        "窗格底边框行保持空白"
     );
 }
 
@@ -497,11 +501,12 @@ fn close_button_uses_the_same_action_key_syntax() {
 fn footer_renders_every_hint_as_action_key() {
     let mut lx = lx_with_messages();
     lx.task = Some(page_with(vec![entry(1, "npm run dev", "/w")], 0));
-    let bottom = render_lines(&lx, 70, 20).last().cloned().expect("底边框");
+    let lines = render_lines(&lx, 70, 20);
+    let bottom = &lines[lines.len() - 2];
     for hint in text::LX_TASK_HINTS_PROCESSES {
         assert!(
             bottom.contains(&hint.label()),
-            "底边框缺少 `{}`：{bottom}",
+            "底栏缺少 `{}`：{bottom}",
             hint.label()
         );
     }
@@ -512,7 +517,8 @@ fn narrow_pane_drops_whole_hints_instead_of_truncating() {
     // 窄窗格整项丢弃，绝不把 `[back esc]` 截成半截。
     let mut lx = lx_with_messages();
     lx.task = Some(page_with(vec![entry(1, "npm run dev", "/w")], 0));
-    let bottom = render_lines(&lx, 34, 20).last().cloned().expect("底边框");
+    let lines = render_lines(&lx, 34, 20);
+    let bottom = &lines[lines.len() - 2];
     let kept = text::LX_TASK_HINTS_PROCESSES
         .iter()
         .filter(|hint| bottom.contains(&hint.label()))
