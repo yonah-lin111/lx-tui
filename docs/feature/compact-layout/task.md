@@ -5,7 +5,7 @@
 
 ## 阶段 1：阈值与布局模型
 
-- [x] `Config.narrow_width` 默认值 80 → 160（覆盖半屏偏宽终端）
+- [x] `Config.narrow_width` 固定默认 160，去掉 `settings.json` / Web UI / `settings` CLI 持久化配置（忽略旧配置中的 `narrow_width`）
 - [x] `resolved_sidebar_width` 宽屏判断改为 `width > narrow_width`
 - [x] `compute_with_panel` 参数改为 `Option<CompactPanel>`
 - [x] `ViewLayout` 新增 `compact_left_button` / `compact_right_button` / `compact_status`
@@ -62,7 +62,7 @@
 - [x] `cargo fmt`
 - [x] `cargo clippy --all-targets -- -D warnings`
 - [x] `cargo test --lib`（5814 通过，6 ignored；去掉旧 switcher 测试后数量减少）
-- [x] 集成测试（`prompt_editor` / `prompt_short_ref` / `terminal_cursor` / `prompt_border_title` / `popup_border` / `prompt_management` / `prompt_template_commands` 已显式使用桌面阈值）
+- [x] 集成测试（`prompt_editor` / `prompt_short_ref` / `terminal_cursor` / `prompt_border_title` / `popup_border` / `prompt_management` / `prompt_template_commands` 已显式使用桌面阈值；`prompt_copy` / `prompt_panel_interaction` / `terminal_wheel` 真实 PTY 测试调整为 180 列桌面宽）
 - [ ] 用户 `cargo run` 手动验收
 
 ## 手动验收清单

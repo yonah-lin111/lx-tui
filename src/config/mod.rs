@@ -23,7 +23,7 @@ pub struct Config {
     pub sidebar_min_width: u16,
     /// 侧栏展开最大宽度（列，herdr 默认上限再放大）。
     pub sidebar_max_width: u16,
-    /// 低于等于该宽度进入紧凑单列布局（隐藏桌面左右栏，tab 条并入顶部栏）。
+    /// 低于等于该宽度进入紧凑单列布局（固定默认 160，不从 `settings.json` 持久化读取）。
     pub narrow_width: u16,
     /// 最小可用宽度。
     pub min_width: u16,
@@ -136,7 +136,6 @@ impl Config {
                 "  \"sidebar_width\": {},\n",
                 "  \"sidebar_min_width\": {},\n",
                 "  \"sidebar_max_width\": {},\n",
-                "  \"narrow_width\": {},\n",
                 "  \"min_width\": {},\n",
                 "  \"min_height\": {},\n",
                 "  \"min_pane_width\": {},\n",
@@ -150,7 +149,6 @@ impl Config {
             self.sidebar_width,
             self.sidebar_min_width,
             self.sidebar_max_width,
-            self.narrow_width,
             self.min_width,
             self.min_height,
             self.min_pane_width,
@@ -221,7 +219,6 @@ impl Config {
                 "sidebar_width" => &mut config.sidebar_width,
                 "sidebar_min_width" => &mut config.sidebar_min_width,
                 "sidebar_max_width" => &mut config.sidebar_max_width,
-                "narrow_width" => &mut config.narrow_width,
                 "min_width" => &mut config.min_width,
                 "min_height" => &mut config.min_height,
                 "min_pane_width" => &mut config.min_pane_width,

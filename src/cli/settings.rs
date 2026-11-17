@@ -36,7 +36,6 @@ pub struct SetArgs {
     pub sidebar_width: Option<u16>,
     pub sidebar_min_width: Option<u16>,
     pub sidebar_max_width: Option<u16>,
-    pub narrow_width: Option<u16>,
     pub min_width: Option<u16>,
     pub min_height: Option<u16>,
     pub min_pane_width: Option<u16>,
@@ -120,11 +119,10 @@ fn parse_open(args: &[String]) -> Result<bool, String> {
     Ok(no_open)
 }
 
-const SET_FLAGS: [&str; 8] = [
+const SET_FLAGS: [&str; 7] = [
     "--sidebar-width",
     "--sidebar-min-width",
     "--sidebar-max-width",
-    "--narrow-width",
     "--min-width",
     "--min-height",
     "--min-pane-width",
@@ -183,7 +181,6 @@ fn parse_set(args: &[String]) -> Result<SetArgs, String> {
             "--sidebar-width" => parsed.sidebar_width = Some(value),
             "--sidebar-min-width" => parsed.sidebar_min_width = Some(value),
             "--sidebar-max-width" => parsed.sidebar_max_width = Some(value),
-            "--narrow-width" => parsed.narrow_width = Some(value),
             "--min-width" => parsed.min_width = Some(value),
             "--min-height" => parsed.min_height = Some(value),
             "--min-pane-width" => parsed.min_pane_width = Some(value),
@@ -200,7 +197,6 @@ fn config_json(config: &Config) -> serde_json::Value {
             "sidebarWidth": config.sidebar_width,
             "sidebarMinWidth": config.sidebar_min_width,
             "sidebarMaxWidth": config.sidebar_max_width,
-            "narrowWidth": config.narrow_width,
             "minWidth": config.min_width,
             "minHeight": config.min_height,
             "minPaneWidth": config.min_pane_width,
@@ -258,7 +254,6 @@ fn run_show(ctx: &WorkspaceContext, out: &Output) -> Result<(), String> {
             "{:<22}{}",
             "Sidebar max width:", config.sidebar_max_width
         )?;
-        writeln!(w, "{:<22}{}", "Narrow width:", config.narrow_width)?;
         writeln!(w, "{:<22}{}", "Min width:", config.min_width)?;
         writeln!(w, "{:<22}{}", "Min height:", config.min_height)?;
         writeln!(w, "{:<22}{}", "Min pane width:", config.min_pane_width)?;
@@ -293,9 +288,6 @@ fn run_set(out: &Output, args: &SetArgs) -> Result<(), String> {
     if let Some(value) = args.sidebar_max_width {
         config.sidebar_max_width = value;
     }
-    if let Some(value) = args.narrow_width {
-        config.narrow_width = value;
-    }
     if let Some(value) = args.min_width {
         config.min_width = value;
     }
@@ -323,7 +315,6 @@ fn run_set(out: &Output, args: &SetArgs) -> Result<(), String> {
     out.emit(&value, |_, w| {
         writeln!(w, "Settings saved.")?;
         writeln!(w, "{:<22}{}", "Sidebar width:", config.sidebar_width)?;
-        writeln!(w, "{:<22}{}", "Narrow width:", config.narrow_width)?;
         writeln!(w, "{:<22}{}", "Min width:", config.min_width)?;
         writeln!(w, "{:<22}{}", "Min height:", config.min_height)?;
         writeln!(
@@ -343,8 +334,7 @@ fn run_reset(out: &Output) -> Result<(), String> {
     let value = config_json(&config);
     out.emit(&value, |_, w| {
         writeln!(w, "Settings reset to defaults.")?;
-        writeln!(w, "{:<22}{}", "Sidebar width:", config.sidebar_width)?;
-        writeln!(w, "{:<22}{}", "Narrow width:", config.narrow_width)
+        writeln!(w, "{:<22}{}", "Sidebar width:", config.sidebar_width)
     })
 }
 

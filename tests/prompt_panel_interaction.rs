@@ -15,7 +15,7 @@ use lx_tui::terminal::Terminal;
 use lx_tui::ui::text;
 use portable_pty::{Child, CommandBuilder, PtySize, native_pty_system};
 
-const COLS: u16 = 100;
+const COLS: u16 = 180;
 const ROWS: u16 = 30;
 const WAIT: Duration = Duration::from_secs(10);
 

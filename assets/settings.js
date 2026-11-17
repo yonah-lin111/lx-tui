@@ -160,7 +160,7 @@ document.addEventListener('change', refreshActionBars);
 
 // ===== General view =====
 
-const CONFIG_KEYS = ['sidebar_width','sidebar_min_width','sidebar_max_width','narrow_width','min_width','min_height','min_pane_width','min_pane_height'];
+const CONFIG_KEYS = ['sidebar_width','sidebar_min_width','sidebar_max_width','min_width','min_height','min_pane_width','min_pane_height'];
 const WEB_SEARCH_KEYS = ['web_search_exa_api_key', 'web_search_tavily_api_key'];
 let generalBaseline = null;
 let currentLogPath = '';

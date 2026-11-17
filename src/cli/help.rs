@@ -388,7 +388,7 @@ Subcommands:
   show
       Show layout settings and configuration file paths
   set [--sidebar-width <N>] [--sidebar-min-width <N>] [--sidebar-max-width <N>]
-      [--narrow-width <N>] [--min-width <N>] [--min-height <N>]
+      [--min-width <N>] [--min-height <N>]
       [--min-pane-width <N>] [--min-pane-height <N>]
       [--image-download-dir <DIR>]
       [--log-level <trace|debug|info|warn|error|off>] [--log-payload <true|false>]

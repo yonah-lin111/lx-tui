@@ -10,7 +10,7 @@ use portable_pty::{Child, CommandBuilder, PtySize, native_pty_system};
 
 mod common;
 
-const COLS: u16 = 100;
+const COLS: u16 = 180;
 const ROWS: u16 = 30;
 /// 等应用启动、shell 输出与滚轮重绘的上限；慢机器也够用。
 const WAIT: Duration = Duration::from_secs(10);

@@ -22,7 +22,7 @@
 
 ### 2.1 阈值
 
-`Config.narrow_width` 默认值改为 `160`：
+`Config.narrow_width` 运行期固定默认 `160`（不再持久化到 `settings.json`，且忽略旧文件中的 `narrow_width` 字段；Web 设置页与 `settings` CLI 不再暴露该项）：
 
 ```rust
 pub fn is_compact(width: u16, config: &Config) -> bool {
@@ -210,8 +210,10 @@ pub enum CompactPanel {
 - `src/event/mod.rs`
 - `src/event/mouse/{press,hover,wheel,drag}.rs`
 - `src/event/overlay.rs`
-- `src/config/mod.rs`
-- `assets/web.html`
+- `src/config/mod.rs` + `src/config/tests.rs`
+- `src/settings/service/handlers.rs`
+- `src/cli/{args,help,settings}.rs`
+- `assets/{web.html,settings.js}`
 - `docs/standards/tui-design-requirements.md`
 - 测试夹具：`src/ui/test_support.rs`、`src/event/tests/test_support.rs`、`tests/prompt_editor.rs`、`tests/prompt_short_ref.rs`、`tests/terminal_cursor.rs`、`tests/prompt_border_title.rs`、`tests/popup_border.rs`、`tests/prompt_management.rs`、`tests/prompt_template_commands.rs`
 

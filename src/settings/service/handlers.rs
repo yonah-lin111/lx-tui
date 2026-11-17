@@ -528,7 +528,6 @@ fn config_from_json(
             "sidebar_width" => &mut config.sidebar_width,
             "sidebar_min_width" => &mut config.sidebar_min_width,
             "sidebar_max_width" => &mut config.sidebar_max_width,
-            "narrow_width" => &mut config.narrow_width,
             "min_width" => &mut config.min_width,
             "min_height" => &mut config.min_height,
             "min_pane_width" => &mut config.min_pane_width,
@@ -743,11 +742,10 @@ fn command_view_json(view: &CommandView) -> String {
 /// 配置 → JSON（键序固定）。
 fn config_json(config: &Config) -> String {
     format!(
-        "{{\"sidebar_width\":{},\"sidebar_min_width\":{},\"sidebar_max_width\":{},\"narrow_width\":{},\"min_width\":{},\"min_height\":{},\"min_pane_width\":{},\"min_pane_height\":{},\"image_download_dir\":{},\"log_level\":{},\"log_payload\":{},\"web_theme\":{}}}",
+        "{{\"sidebar_width\":{},\"sidebar_min_width\":{},\"sidebar_max_width\":{},\"min_width\":{},\"min_height\":{},\"min_pane_width\":{},\"min_pane_height\":{},\"image_download_dir\":{},\"log_level\":{},\"log_payload\":{},\"web_theme\":{}}}",
         config.sidebar_width,
         config.sidebar_min_width,
         config.sidebar_max_width,
-        config.narrow_width,
         config.min_width,
         config.min_height,
         config.min_pane_width,

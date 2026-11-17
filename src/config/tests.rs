@@ -35,6 +35,13 @@ fn missing_keys_fall_back_to_defaults() {
 }
 
 #[test]
+fn legacy_narrow_width_in_json_is_ignored_and_stays_160() {
+    let parsed = Config::from_json(r#"{"narrow_width": 80}"#).expect("legacy key ignored");
+    assert_eq!(parsed.narrow_width, 160);
+    assert!(!parsed.to_json().contains("narrow_width"));
+}
+
+#[test]
 fn unknown_keys_are_ignored() {
     let parsed = Config::from_json(r#"{"future_option": true, "min_width": 50}"#)
         .expect("unknown key ignored");
@@ -166,7 +173,6 @@ fn save_then_load_round_trip_and_no_temp_left() {
     let path = dir.join("settings.json");
     let config = Config {
         sidebar_width: 32,
-        narrow_width: 90,
         image_download_dir: "~/Pictures/lx".into(),
         ..Config::default()
     };

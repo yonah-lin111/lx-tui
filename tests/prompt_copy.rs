@@ -19,10 +19,10 @@ use portable_pty::{Child, CommandBuilder, PtySize, native_pty_system};
 
 mod common;
 
-const COLS: u16 = 100;
+const COLS: u16 = 180;
 const ROWS: u16 = 30;
 /// prompt 面板内容区坐标（0 基），右栏中部空白处。
-const PROMPT_X: u16 = 80;
+const PROMPT_X: u16 = 135;
 const PROMPT_Y: u16 = 20;
 
 /// 临时 `pbcopy` 桩：把 stdin 落盘到 `copied.txt`，避免测试写真实剪贴板。

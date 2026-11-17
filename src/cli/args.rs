@@ -250,7 +250,6 @@ const VALUE_OPTIONS: &[&str] = &[
     "--sidebar-width",
     "--sidebar-min-width",
     "--sidebar-max-width",
-    "--narrow-width",
     "--min-width",
     "--min-height",
     "--min-pane-width",
