@@ -28,11 +28,6 @@ pub fn apply_overlay_key(state: &mut AppState, key: OverlayKey) -> Option<(PaneI
     if key == OverlayKey::SelectAll {
         super::clear_selection(state);
     }
-    // 紧凑布局全屏切换器：自己消费导航键，其余浮层分支不参与。
-    if matches!(state.overlay, Some(Overlay::CompactSwitcher(_))) {
-        super::compact_layout::apply_compact_switcher_key(state, key);
-        return None;
-    }
     // `/connect` 居中模态：导航、提交、刷新与输入编辑都在连接状态机内部处理。
     if matches!(state.overlay, Some(Overlay::Connect(_))) {
         super::chat::apply_connect_overlay_key(state, key);
@@ -209,8 +204,7 @@ pub fn apply_overlay_key(state: &mut AppState, key: OverlayKey) -> Option<(PaneI
                 | OverlayKind::ReferencedFolderDelete
                 | OverlayKind::ResumeSessionEdit
                 | OverlayKind::Connect
-                | OverlayKind::AgentTitle
-                | OverlayKind::CompactSwitcher,
+                | OverlayKind::AgentTitle,
             )
             | None => None,
         },

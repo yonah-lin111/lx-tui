@@ -7,11 +7,10 @@ use ratatui::layout::Rect;
 use super::*;
 use crate::app::state::AppState;
 use crate::app::tooltip::TooltipTarget;
-use crate::config::Config;
 use crate::ui::{layout, render, text};
 
 fn render_lines(state: &AppState) -> Vec<String> {
-    let config = Config::default();
+    let config = crate::ui::test_support::desktop_config();
     let mut terminal =
         RatatuiTerminal::new(TestBackend::new(100, 24)).expect("test backend is infallible");
     if let Err(error) = terminal.draw(|frame| render(frame, state, &config)) {
@@ -30,7 +29,7 @@ fn render_lines(state: &AppState) -> Vec<String> {
 fn view_for(state: &AppState) -> layout::ViewLayout {
     layout::compute(
         Rect::new(0, 0, 100, 24),
-        &Config::default(),
+        &crate::ui::test_support::desktop_config(),
         state.sidebar_collapsed,
         state.sidebar_width,
         state.prompt_collapsed,
@@ -157,8 +156,8 @@ fn tooltip_target_points_at_web_button() {
     let rects = crate::tiling::pane_rects(
         &state.active_tab().layout,
         view.main_content,
-        Config::default().min_pane_width,
-        Config::default().min_pane_height,
+        crate::ui::test_support::desktop_config().min_pane_width,
+        crate::ui::test_support::desktop_config().min_pane_height,
     );
     let screen = Rect::new(0, 0, 100, 24);
     let web = web_button(&view, &state).expect("web button fits");

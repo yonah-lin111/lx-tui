@@ -727,7 +727,7 @@ fn ctrl_q_wins_over_todo_focus() {
 fn pane_content_inner_is_zero_on_todo_tab() {
     // 兜底口径：Todo 下 prompt 没有可交互内容区，按内容区坐标换算必须拿到零矩形，
     // 否则残留路径会把鼠标位置写进一个看不见的编辑器光标。
-    let config = Config::default();
+    let config = desktop_config();
     let mut state = demo_terminal();
     let geo = geometry(&state, &config, Rect::new(0, 0, 120, 30));
     let prompt = state.prompt.id();
@@ -752,7 +752,7 @@ fn mouse_right_click_prompt_tree_on_todo_opens_todo_menu() {
     // 正向对照在前提里：同一坐标在 Prompt 态确实能打开提示词树菜单。
     use crate::app::overlay::OverlayTarget;
     use crate::app::prompt::PromptItem;
-    let config = Config::default();
+    let config = desktop_config();
     let mut state = demo_terminal();
     update::show_prompt_tree(&mut state);
     state.workspaces[0]
@@ -829,7 +829,7 @@ fn mouse_right_click_prompt_tree_on_todo_opens_todo_menu() {
 #[test]
 fn mouse_drag_on_todo_does_not_move_hidden_cursor() {
     // 拖拽光标跟随的闸门：Todo 下拖动不得改写隐藏编辑器的光标。
-    let config = Config::default();
+    let config = desktop_config();
     let mut state = demo_terminal();
     state.prompt.set_text("alpha beta gamma\nsecond line");
     state.prompt.resize(40, 8);
@@ -892,7 +892,7 @@ fn mouse_drag_on_todo_does_not_move_hidden_cursor() {
 
 #[test]
 fn mouse_click_title_row_focuses_without_moving_cursor() {
-    let config = Config::default();
+    let config = desktop_config();
     let mut state = paged_prompt_state();
     state.set_focus(crate::app::state::FocusedContainer::Panes);
     state.prompt.set_cursor_offset_for_test(0);

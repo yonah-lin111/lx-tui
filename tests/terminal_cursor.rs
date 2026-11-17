@@ -13,7 +13,11 @@ use ratatui::layout::{Position, Rect};
 
 /// 构造已同步几何的场景（100x24，右栏展开），返回终端窗格与 prompt 的内容区。
 fn ready_state() -> (AppState, Config, Rect, Rect) {
-    let config = Config::default();
+    // 固定 100 列桌面几何：压低紧凑阈值，避免默认 120 列进入单列。
+    let config = Config {
+        narrow_width: 80,
+        ..Config::default()
+    };
     let mut state = AppState::demo();
     let screen = Rect::new(0, 0, 100, 24);
     let view = ui::layout::compute(

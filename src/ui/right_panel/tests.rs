@@ -5,7 +5,6 @@
 
 use super::*;
 use crate::app::state::AppState;
-use crate::config::Config;
 use ratatui::Terminal;
 use ratatui::backend::TestBackend;
 use ratatui::style::{Color, Modifier};
@@ -20,7 +19,7 @@ const SCREEN: Rect = Rect {
 fn view_for(state: &AppState) -> crate::ui::layout::ViewLayout {
     crate::ui::layout::compute(
         SCREEN,
-        &Config::default(),
+        &crate::ui::test_support::desktop_config(),
         state.sidebar_collapsed,
         state.sidebar_width,
         state.prompt_collapsed,
@@ -31,7 +30,7 @@ fn view_for(state: &AppState) -> crate::ui::layout::ViewLayout {
 }
 
 fn render_buffer(state: &AppState) -> ratatui::buffer::Buffer {
-    let config = Config::default();
+    let config = crate::ui::test_support::desktop_config();
     let mut terminal =
         Terminal::new(TestBackend::new(100, 24)).expect("test backend is infallible");
     if let Err(error) = terminal.draw(|frame| crate::ui::render(frame, state, &config)) {

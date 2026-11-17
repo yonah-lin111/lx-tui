@@ -5,7 +5,7 @@ use super::*;
 use crate::event::session::Geometry;
 
 fn key(state: &mut AppState, geo: &Geometry, code: KeyCode, modifiers: KeyModifiers) -> bool {
-    let config = Config::default();
+    let config = desktop_config();
     let mut sessions = HashMap::new();
     let mut dirty = false;
     handle_terminal_event(
@@ -21,7 +21,7 @@ fn key(state: &mut AppState, geo: &Geometry, code: KeyCode, modifiers: KeyModifi
 }
 
 fn click(state: &mut AppState, geo: &Geometry, column: u16, row: u16) {
-    let config = Config::default();
+    let config = desktop_config();
     let mut sessions = HashMap::new();
     let mut dirty = false;
     handle_terminal_event(
@@ -50,7 +50,7 @@ fn drawer_rects(state: &AppState, geo: &Geometry) -> (Rect, Rect) {
 
 #[test]
 fn ctrl_r_toggles_drawer_in_every_prompt_mode() {
-    let config = Config::default();
+    let config = desktop_config();
     for mode in [PromptMode::Editor, PromptMode::Tree, PromptMode::Pages] {
         let mut state = paged_prompt_state();
         update::focus_prompt(&mut state);
@@ -76,7 +76,7 @@ fn ctrl_r_toggles_drawer_in_every_prompt_mode() {
 
 #[test]
 fn clicking_rec_button_toggles_drawer() {
-    let config = Config::default();
+    let config = desktop_config();
     let mut state = paged_prompt_state();
     update::focus_prompt(&mut state);
     let geo = geometry(&state, &config, Rect::new(0, 0, 140, 30));
@@ -95,7 +95,7 @@ fn clicking_rec_button_toggles_drawer() {
 
 #[test]
 fn clicking_recent_entry_opens_page_and_closes_drawer() {
-    let config = Config::default();
+    let config = desktop_config();
     let mut state = paged_prompt_state();
     update::focus_prompt(&mut state);
     let geo = geometry(&state, &config, Rect::new(0, 0, 140, 30));
@@ -125,7 +125,7 @@ fn clicking_recent_entry_opens_page_and_closes_drawer() {
 
 #[test]
 fn clicking_recent_entry_opens_from_tree_and_pages() {
-    let config = Config::default();
+    let config = desktop_config();
     for mode in [PromptMode::Tree, PromptMode::Pages] {
         let mut state = paged_prompt_state();
         update::focus_prompt(&mut state);
@@ -159,7 +159,7 @@ fn clicking_recent_entry_opens_from_tree_and_pages() {
 #[test]
 fn recent_scrollbar_supports_track_click_and_thumb_drag() {
     use crate::app::prompt::{PromptItem, PromptPage};
-    let config = Config::default();
+    let config = desktop_config();
     let mut state = demo_terminal();
     let mut item = PromptItem::single(7, None, "paged", "alpha");
     for index in 1..6 {
@@ -230,7 +230,7 @@ fn recent_scrollbar_supports_track_click_and_thumb_drag() {
 
 #[test]
 fn keyboard_defaults_to_current_page_and_navigates_to_open() {
-    let config = Config::default();
+    let config = desktop_config();
     let mut state = paged_prompt_state();
     update::focus_prompt(&mut state);
     let geo = geometry(&state, &config, Rect::new(0, 0, 140, 30));
@@ -261,7 +261,7 @@ fn keyboard_defaults_to_current_page_and_navigates_to_open() {
 
 #[test]
 fn keyboard_takes_over_and_swallows_editor_keys() {
-    let config = Config::default();
+    let config = desktop_config();
     let mut state = paged_prompt_state();
     update::focus_prompt(&mut state);
     let geo = geometry(&state, &config, Rect::new(0, 0, 140, 30));
@@ -285,7 +285,7 @@ fn keyboard_takes_over_and_swallows_editor_keys() {
 
 #[test]
 fn close_button_and_escape_restore_previous_view() {
-    let config = Config::default();
+    let config = desktop_config();
     let mut state = paged_prompt_state();
     update::focus_prompt(&mut state);
     update::show_prompt_tree(&mut state);
@@ -306,7 +306,7 @@ fn close_button_and_escape_restore_previous_view() {
 
 #[test]
 fn escape_closes_drawer_without_changing_text() {
-    let config = Config::default();
+    let config = desktop_config();
     let mut state = paged_prompt_state();
     update::focus_prompt(&mut state);
     let geo = geometry(&state, &config, Rect::new(0, 0, 140, 30));
@@ -323,7 +323,7 @@ fn escape_closes_drawer_without_changing_text() {
 #[test]
 fn keyboard_navigation_keeps_selection_visible() {
     use crate::app::prompt::{PromptItem, PromptPage};
-    let config = Config::default();
+    let config = desktop_config();
     let mut state = demo_terminal();
     let mut item = PromptItem::single(7, None, "paged", "alpha");
     for index in 1..6 {
@@ -362,7 +362,7 @@ fn keyboard_navigation_keeps_selection_visible() {
 
 #[test]
 fn hovering_recent_entry_sets_and_clears_highlight() {
-    let config = Config::default();
+    let config = desktop_config();
     let mut state = paged_prompt_state();
     update::focus_prompt(&mut state);
     let geo = geometry(&state, &config, Rect::new(0, 0, 140, 30));
@@ -399,7 +399,7 @@ fn hovering_recent_entry_sets_and_clears_highlight() {
 #[test]
 fn wheel_over_drawer_scrolls_entries_without_touching_editor() {
     use crate::app::prompt::{PromptItem, PromptPage};
-    let config = Config::default();
+    let config = desktop_config();
     let mut state = demo_terminal();
     let mut item = PromptItem::single(7, None, "paged", "alpha");
     for index in 1..5 {
@@ -436,7 +436,7 @@ fn wheel_over_drawer_scrolls_entries_without_touching_editor() {
 
 #[test]
 fn drawer_blocks_ghost_template_buttons_and_right_click_menu() {
-    let config = Config::default();
+    let config = desktop_config();
     let mut state = paged_prompt_state();
     update::focus_prompt(&mut state);
     // 构造一条落入底部 recent 抽屉遮挡区的模板块起始行。
@@ -482,7 +482,7 @@ fn drawer_blocks_ghost_template_buttons_and_right_click_menu() {
 
 #[test]
 fn short_terminal_suppresses_drawer_without_swallowing_typing() {
-    let config = Config::default();
+    let config = desktop_config();
     let mut state = paged_prompt_state();
     update::focus_prompt(&mut state);
     // 矮屏：body.height / 2 < 5，抽屉被半屏规则压制不可见。
@@ -513,7 +513,7 @@ fn short_terminal_suppresses_drawer_without_swallowing_typing() {
 #[test]
 fn deleting_item_clamps_recent_active_into_bounds() {
     use crate::app::prompt::PromptItem;
-    let config = Config::default();
+    let config = desktop_config();
     let mut state = demo_terminal();
     let item1 = PromptItem::single(1, None, "first", "one");
     let item2 = PromptItem::single(2, None, "second", "two");

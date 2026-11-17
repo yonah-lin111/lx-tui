@@ -117,19 +117,6 @@ pub(crate) fn handle_mouse_moved(
                 *dirty = true;
             }
         }
-        if let Some(Overlay::CompactSwitcher(switcher)) = state.overlay.as_ref() {
-            let hover =
-                ui::overlay::compact_switcher_row_at(*screen, switcher, mouse.column, mouse.row)
-                    .filter(|index| {
-                        switcher
-                            .rows
-                            .get(*index)
-                            .is_some_and(crate::app::state::CompactRow::is_selectable)
-                    });
-            if update::hover_compact_switcher(state, hover) {
-                *dirty = true;
-            }
-        }
         if update::set_prompt_tree_hover(state, None) {
             *dirty = true;
         }
@@ -379,11 +366,15 @@ pub(crate) fn handle_mouse_moved(
         *dirty = true;
     }
     let boundary = tiling::resize_boundary_at(rects, mouse.column, mouse.row);
-    let left_panel_hover =
-        !hovering_toast && ui::left_panel_boundary_at(view, mouse.column, mouse.row);
+    // 紧凑模式没有可见的桌面分割线/交换按钮：不显示拖拽指针，也不建立 hover 状态。
+    let left_panel_hover = !view.compact
+        && !hovering_toast
+        && ui::left_panel_boundary_at(view, mouse.column, mouse.row);
     // 交换按钮是控件：悬停它不视为分割线悬停（不高亮、不显示拖拽指针）。
-    let swap_hover = !hovering_toast && ui::swap_button_at(view, mouse.column, mouse.row);
-    let prompt_hover = !hovering_toast
+    let swap_hover =
+        !view.compact && !hovering_toast && ui::swap_button_at(view, mouse.column, mouse.row);
+    let prompt_hover = !view.compact
+        && !hovering_toast
         && !left_panel_hover
         && !swap_hover
         && boundary.is_some_and(|hit| prompt_boundary_hit(state, hit));

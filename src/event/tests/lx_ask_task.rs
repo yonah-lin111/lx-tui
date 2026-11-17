@@ -5,7 +5,7 @@ use super::*;
 fn lx_task_output_and_agents_detail_selection_scroll_and_copy() {
     use crate::app::state::{ProcessEntry, TaskPage, TaskTab};
 
-    let config = Config::default();
+    let config = desktop_config();
     let mut state = AppState::demo();
     let geo = geometry(&state, &config, Rect::new(0, 0, 120, 22));
     let pane = state.active_tab().layout.focus();
@@ -345,7 +345,7 @@ fn lx_task_output_and_agents_detail_selection_scroll_and_copy() {
 
 #[test]
 fn ask_click_submits_a_single_select_question_and_does_not_reach_history() {
-    let config = Config::default();
+    let config = desktop_config();
     let (mut state, pane) = busy_ask_state();
     let geo = geometry(&state, &config, Rect::new(0, 0, 120, 30));
     let (column, row) = ask_option_point(&state, pane, &geo);
@@ -386,7 +386,7 @@ fn ask_click_submits_a_single_select_question_and_does_not_reach_history() {
 fn resolving_the_ask_list_window_feeds_page_scrolling() {
     // `PageUp`/`PageDown` 在 app 层拿不到窗格几何：事件循环必须把渲染层的窗口
     // （起点、总行数、可视行数）落进状态，否则翻页永远不动。
-    let config = Config::default();
+    let config = desktop_config();
     let (mut state, pane) = busy_ask_state();
     let geo = geometry(&state, &config, Rect::new(0, 0, 120, 30));
     assert!(update::resolve_ask_list_window(&mut state, &geo.rects));
@@ -411,7 +411,7 @@ fn resolving_the_ask_list_window_feeds_page_scrolling() {
 fn task_page_swallows_ask_hits_so_the_list_stays_clickable() {
     // 后台任务页与 ask 面板共用输入框矩形：页打开时面板不可见，点击必须落在
     // 任务列表上，绝不能命中隐藏面板改一个看不见的答案。
-    let config = Config::default();
+    let config = desktop_config();
     let (mut state, pane) = busy_ask_state();
     let geo = geometry(&state, &config, Rect::new(0, 0, 120, 30));
     let (column, row) = ask_option_point(&state, pane, &geo);
@@ -462,7 +462,7 @@ fn task_page_swallows_ask_hits_so_the_list_stays_clickable() {
 
 #[test]
 fn ask_paste_only_enters_the_custom_buffer() {
-    let config = Config::default();
+    let config = desktop_config();
     let (mut state, pane) = busy_ask_state();
     let geo = geometry(&state, &config, Rect::new(0, 0, 120, 30));
     let mut sessions = HashMap::new();
@@ -512,7 +512,7 @@ fn ask_paste_only_enters_the_custom_buffer() {
 
 #[test]
 fn task_page_hides_input_popups_and_routes_chat_bar_wheel_to_output() {
-    let config = Config::default();
+    let config = desktop_config();
     let mut state = AppState::demo();
     seed_lx_mention(
         &mut state,
@@ -581,7 +581,7 @@ fn task_page_hides_input_popups_and_routes_chat_bar_wheel_to_output() {
 
 #[test]
 fn processes_first_row_wheel_scrolls_the_list() {
-    let config = Config::default();
+    let config = desktop_config();
     let mut state = AppState::demo();
     let geo = geometry(&state, &config, Rect::new(0, 0, 120, 24));
     let pane = state.active_tab().layout.focus();
@@ -694,7 +694,7 @@ fn lx_paste_image_path_opens_panel_and_confirms_refer_image() {
 fn task_page_does_not_cut_or_copy_hidden_composer_selection() {
     use crate::app::state::{PaneView, TaskPage};
 
-    let config = Config::default();
+    let config = desktop_config();
     let mut state = AppState::demo();
     let geo = geometry(&state, &config, Rect::new(0, 0, 120, 22));
     let pane = state.active_tab().layout.focus();
@@ -731,7 +731,7 @@ fn task_page_does_not_cut_or_copy_hidden_composer_selection() {
 fn agents_composer_supports_copy_cut_and_esc() {
     use crate::app::state::{PaneView, TaskPage, TaskTab};
 
-    let config = Config::default();
+    let config = desktop_config();
     let mut state = AppState::demo();
     let geo = geometry(&state, &config, Rect::new(0, 0, 120, 22));
     let pane = state.active_tab().layout.focus();
@@ -813,7 +813,7 @@ fn agents_composer_supports_copy_cut_and_esc() {
 
 #[test]
 fn task_list_scrollbar_mouse_press_and_drag_events() {
-    let config = Config::default();
+    let config = desktop_config();
     let mut state = AppState::demo();
     let geo = geometry(&state, &config, Rect::new(0, 0, 120, 24));
     let pane = state.active_tab().layout.focus();
@@ -935,7 +935,7 @@ fn task_list_scrollbar_mouse_press_and_drag_events() {
 
 #[test]
 fn task_agents_list_scrollbar_preserves_viewport_across_refresh_and_selection() {
-    let config = Config::default();
+    let config = desktop_config();
     let mut state = AppState::demo();
     let geo = geometry(&state, &config, Rect::new(0, 0, 120, 24));
     let pane = state.active_tab().layout.focus();

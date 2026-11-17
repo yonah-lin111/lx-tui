@@ -458,13 +458,12 @@ mod tests {
     use super::*;
     use crate::app::state::{WorkspaceGit, WorkspaceHistoryEntry};
     use crate::app::update::show_workspace_history;
-    use crate::config::Config;
     use crate::ui;
 
     #[test]
     fn workspace_mode_button_sits_right_of_add_button_and_flips_label() {
         let mut state = AppState::demo();
-        let config = Config::default();
+        let config = crate::ui::test_support::desktop_config();
         let area = Rect::new(0, 0, 100, 30);
         let view = ui::layout::compute(
             area,
@@ -511,7 +510,7 @@ mod tests {
     #[test]
     fn missing_directory_entry_renders_in_error_color_and_git_tree_renders_connectors() {
         let mut state = AppState::demo();
-        let config = Config::default();
+        let config = crate::ui::test_support::desktop_config();
         let repo_root = PathBuf::from("/tmp/lx-tui");
         let wt_path = PathBuf::from("/tmp/lx-tui/.worktrees/workspace-history-list");
         state.workspace_history.entries = vec![
@@ -608,7 +607,7 @@ mod tests {
     #[test]
     fn dragged_history_item_renders_selection_across_full_row() {
         let mut state = AppState::demo();
-        let config = Config::default();
+        let config = crate::ui::test_support::desktop_config();
         state.workspace_history.entries = vec![
             WorkspaceHistoryEntry {
                 name: "alpha".into(),
@@ -682,7 +681,7 @@ mod tests {
     #[test]
     fn history_marks_entries_after_group_parent() {
         let mut state = AppState::demo();
-        let config = Config::default();
+        let config = crate::ui::test_support::desktop_config();
         let repo = PathBuf::from("/tmp/lx-flat-group");
         let child_path = repo.join(".worktrees/detached");
         let flat_repo = PathBuf::from("/tmp/lx-git-flat");
@@ -866,7 +865,6 @@ mod tests {
 mod drop_tests {
     use super::*;
     use crate::app::state::{WorkspaceHistoryEntry, WorkspaceMode};
-    use crate::config::Config;
     use crate::ui;
 
     #[test]
@@ -884,7 +882,7 @@ mod drop_tests {
             })
             .collect();
         state.workspace_history.mode = WorkspaceMode::History;
-        let config = Config::default();
+        let config = crate::ui::test_support::desktop_config();
         let view = ui::layout::compute(
             Rect::new(0, 0, 100, 30),
             &config,
@@ -943,7 +941,7 @@ mod drop_tests {
             },
         ];
         state.workspace_history.mode = WorkspaceMode::History;
-        let config = Config::default();
+        let config = crate::ui::test_support::desktop_config();
         let view = ui::layout::compute(
             Rect::new(0, 0, 100, 30),
             &config,

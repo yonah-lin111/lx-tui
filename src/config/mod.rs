@@ -23,7 +23,7 @@ pub struct Config {
     pub sidebar_min_width: u16,
     /// 侧栏展开最大宽度（列，herdr 默认上限再放大）。
     pub sidebar_max_width: u16,
-    /// 低于等于该宽度进入紧凑单列布局（隐藏侧栏、标签栏与右栏）。
+    /// 低于等于该宽度进入紧凑单列布局（隐藏桌面左右栏，tab 条并入顶部栏）。
     pub narrow_width: u16,
     /// 最小可用宽度。
     pub min_width: u16,
@@ -49,7 +49,7 @@ impl Default for Config {
             sidebar_width: 24,
             sidebar_min_width: 18,
             sidebar_max_width: 40,
-            narrow_width: 80,
+            narrow_width: 120,
             min_width: 40,
             min_height: 10,
             min_pane_width: 10,

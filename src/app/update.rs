@@ -55,7 +55,12 @@ use super::state::{AppState, FocusedContainer};
 pub fn apply(action: Action, state: &mut AppState) {
     match action {
         Action::RequestQuit => quit::request_quit(state),
-        Action::ToggleSidebar => state.sidebar_collapsed = !state.sidebar_collapsed,
+        Action::ToggleSidebar => {
+            // 紧凑模式的左栏是全屏面板；折叠态只属于桌面三栏，忽略快捷键。
+            if state.compact_restore.is_none() {
+                state.sidebar_collapsed = !state.sidebar_collapsed;
+            }
+        }
         Action::TogglePrompt => {
             // 紧凑模式没有可见的折叠按钮；忽略快捷键，避免退出后状态莫名其妙改变。
             if state.compact_restore.is_some() {

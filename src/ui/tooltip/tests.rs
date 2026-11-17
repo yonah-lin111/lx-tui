@@ -9,7 +9,6 @@ use ratatui::style::Color;
 use super::*;
 use crate::app::prompt::PromptMode;
 use crate::app::tooltip::{BlockButtonKind, TOOLTIP_DELAY, TemplateButtonKind, Tooltip};
-use crate::config::Config;
 use crate::ui::right_panel::prompt::geometry;
 
 /// 测试屏幕矩形（与 `view_for` 一致）。
@@ -18,7 +17,7 @@ const SCREEN: Rect = Rect::new(0, 0, 100, 24);
 fn view_for(state: &AppState) -> ViewLayout {
     crate::ui::layout::compute(
         SCREEN,
-        &Config::default(),
+        &crate::ui::test_support::desktop_config(),
         state.sidebar_collapsed,
         state.sidebar_width,
         state.prompt_collapsed,
@@ -32,14 +31,14 @@ fn pane_rects(state: &AppState, view: &ViewLayout) -> Vec<(PaneId, Rect)> {
     crate::tiling::pane_rects(
         &state.active_tab().layout,
         view.main_content,
-        Config::default().min_pane_width,
-        Config::default().min_pane_height,
+        crate::ui::test_support::desktop_config().min_pane_width,
+        crate::ui::test_support::desktop_config().min_pane_height,
     )
 }
 
 /// 渲染一帧并返回缓冲。
 fn render_buffer(state: &AppState) -> ratatui::buffer::Buffer {
-    let config = Config::default();
+    let config = crate::ui::test_support::desktop_config();
     let mut terminal =
         Terminal::new(TestBackend::new(100, 24)).expect("test backend is infallible");
     if let Err(error) = terminal.draw(|frame| crate::ui::render(frame, state, &config)) {

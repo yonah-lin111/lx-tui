@@ -3,6 +3,16 @@
 use std::path::PathBuf;
 
 use crate::app::state::{AppState, Workspace, WorkspaceGit};
+use crate::config::Config;
+
+/// 桌面三栏测试配置：固定 80 列阈值，避免默认 120 列把 100/120 宽度的
+/// 桌面几何测试变成紧凑布局。紧凑行为由专门测试覆盖。
+pub(crate) fn desktop_config() -> Config {
+    Config {
+        narrow_width: 80,
+        ..Config::default()
+    }
+}
 
 /// 构造工作区 git 元数据。
 pub(crate) fn git_info(

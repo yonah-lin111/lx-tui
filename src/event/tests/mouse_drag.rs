@@ -3,7 +3,7 @@ use super::*;
 
 #[test]
 fn mouse_drag_resizes_sidebar() {
-    let config = Config::default();
+    let config = desktop_config();
     let mut state = demo_terminal();
     let geo = geometry(&state, &config, Rect::new(0, 0, 120, 30));
     let mut sessions = HashMap::new();
@@ -46,7 +46,7 @@ fn mouse_drag_resizes_sidebar() {
 
 #[test]
 fn mouse_drag_resizes_prompt() {
-    let config = Config::default();
+    let config = desktop_config();
     let mut state = demo_terminal();
     let geo = geometry(&state, &config, Rect::new(0, 0, 120, 30));
     let mut sessions = HashMap::new();
@@ -78,7 +78,7 @@ fn mouse_drag_resizes_prompt() {
 
 #[test]
 fn swapped_divider_drag_resizes_prompt_from_left() {
-    let config = Config::default();
+    let config = desktop_config();
     let mut state = demo_terminal();
     update::swap_prompt_side(&mut state, 96, 38);
     let geo = geometry(&state, &config, Rect::new(0, 0, 120, 30));
@@ -113,7 +113,7 @@ fn swapped_divider_drag_resizes_prompt_from_left() {
 
 #[test]
 fn mouse_move_over_swap_button_is_not_divider_hover() {
-    let config = Config::default();
+    let config = desktop_config();
     let mut state = demo_terminal();
     let geo = geometry(&state, &config, Rect::new(0, 0, 120, 30));
     let mut sessions = HashMap::new();
@@ -148,7 +148,7 @@ fn mouse_move_over_swap_button_is_not_divider_hover() {
 
 #[test]
 fn mouse_drag_reorders_workspaces() {
-    let config = Config::default();
+    let config = desktop_config();
     let mut state = demo_terminal();
     crate::app::update::create_workspace(&mut state);
     crate::app::update::create_workspace(&mut state);
@@ -210,7 +210,7 @@ fn mouse_drag_reorders_workspaces() {
 
 #[test]
 fn mouse_drag_resizes_pane_boundary() {
-    let config = Config::default();
+    let config = desktop_config();
     let mut state = demo_terminal();
     let left = state.active_tab().layout.focus();
     let right = state
@@ -270,7 +270,7 @@ fn mouse_drag_resizes_pane_boundary() {
 
 #[test]
 fn mouse_drag_resizes_vertical_pane_boundary() {
-    let config = Config::default();
+    let config = desktop_config();
     let mut state = demo_terminal();
     let top = state.active_tab().layout.focus();
     let bottom = state
@@ -334,7 +334,7 @@ fn mouse_drag_resizes_vertical_pane_boundary() {
 
 #[test]
 fn mouse_down_on_collapsed_pane_boundary_does_not_start_resize() {
-    let config = Config::default();
+    let config = desktop_config();
     let mut state = demo_terminal();
     let left = state.active_tab().layout.focus();
     let right = state
@@ -364,7 +364,7 @@ fn mouse_down_on_collapsed_pane_boundary_does_not_start_resize() {
 
 #[test]
 fn mouse_reporting_pane_does_not_steal_boundary_drag() {
-    let config = Config::default();
+    let config = desktop_config();
     let mut state = demo_terminal();
     let left = state.active_tab().layout.focus();
     let right = state

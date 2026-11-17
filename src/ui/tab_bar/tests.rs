@@ -3,7 +3,6 @@
 use super::*;
 use crate::app::state::AppState;
 use crate::app::update;
-use crate::config::Config;
 use ratatui::Terminal;
 use ratatui::backend::TestBackend;
 use ratatui::style::Color;
@@ -18,7 +17,7 @@ const SCREEN: Rect = Rect {
 fn view_for(state: &AppState) -> ViewLayout {
     crate::ui::layout::compute(
         SCREEN,
-        &Config::default(),
+        &crate::ui::test_support::desktop_config(),
         state.sidebar_collapsed,
         state.sidebar_width,
         state.prompt_collapsed,
@@ -111,6 +110,31 @@ fn overflow_shows_scroll_buttons_and_clips_add_before_exit() {
     assert_eq!(add.right(), right.x);
     let last_visible = bar.tabs.last().expect("visible tabs");
     assert!(last_visible.1.right() <= add.x);
+}
+
+#[test]
+fn compact_tab_bar_uses_header_strip_without_exit() {
+    let state = state_with_tabs(20);
+    let view = crate::ui::layout::compute_with_panel(
+        Rect::new(0, 0, 120, 24),
+        &crate::config::Config::default(),
+        false,
+        20,
+        false,
+        30,
+        false,
+        false,
+        None,
+    );
+    assert!(view.compact);
+    assert_eq!(crate::ui::exit_button(&view), None);
+    let bar = layout(&view, state.active_workspace(), 0);
+    assert!(bar.overflow);
+    let left = bar.scroll_left.expect("left button");
+    let right = bar.scroll_right.expect("right button");
+    assert_eq!(left.x, view.tab_bar.x);
+    assert_eq!(right.right(), view.tab_bar.right());
+    assert!(bar.add.expect("add button").right() == right.x);
 }
 
 #[test]

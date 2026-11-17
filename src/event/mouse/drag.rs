@@ -130,18 +130,6 @@ pub(crate) fn handle_mouse_drag(
         }
         return;
     }
-    if let Some(grab) = state.compact_switcher_scroll_drag {
-        if let Some(Overlay::CompactSwitcher(switcher)) = state.overlay.as_ref() {
-            let layout = ui::overlay::compact_switcher_layout(geometry.screen, switcher);
-            if let Some(bar) = layout.scrollbar {
-                let offset = ui::widgets::scrollbar::offset_from_drag_row(&bar, mouse.row, grab);
-                if update::set_compact_switcher_scroll(state, offset) {
-                    *dirty = true;
-                }
-            }
-        }
-        return;
-    }
     if let Some(grab) = state.referenced_menu_scroll_drag {
         if let Some(Overlay::ReferencedFolderMenu(menu)) = state.overlay.as_ref() {
             let layout = ui::overlay::referenced_menu_layout(geometry.screen, menu);
@@ -593,10 +581,6 @@ pub(crate) fn handle_mouse_up_left(
     // （滚动条拖拽、浮层、其它窗格）都必须丢弃它，绝不能让它在下一次松开时误折叠。
     let card_press = state.lx_card_press.take();
     if state.referenced_search_scroll_drag.take().is_some() {
-        *dirty = true;
-        return;
-    }
-    if state.compact_switcher_scroll_drag.take().is_some() {
         *dirty = true;
         return;
     }

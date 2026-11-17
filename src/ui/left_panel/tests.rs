@@ -5,7 +5,6 @@ use crate::app::markdown::TemplateStatus;
 use crate::app::prompt::{PromptItem, PromptPage, PromptPageId, PromptTree};
 use crate::app::state::{AgentPromptRef, AgentTitleOverride, AppState, Workspace};
 use crate::app::update;
-use crate::config::Config;
 use crate::detect::{AgentKind, AgentState, PaneAgentSnapshot};
 use crate::tiling::PaneId;
 use crate::ui::render;
@@ -17,7 +16,7 @@ use ratatui::style::{Color, Modifier};
 fn view_for(state: &AppState) -> layout::ViewLayout {
     layout::compute(
         Rect::new(0, 0, 100, 24),
-        &Config::default(),
+        &crate::ui::test_support::desktop_config(),
         state.sidebar_collapsed,
         state.sidebar_width,
         state.prompt_collapsed,
@@ -28,7 +27,7 @@ fn view_for(state: &AppState) -> layout::ViewLayout {
 }
 
 fn render_buffer(state: &AppState) -> ratatui::buffer::Buffer {
-    let config = Config::default();
+    let config = crate::ui::test_support::desktop_config();
     let mut terminal =
         RatatuiTerminal::new(TestBackend::new(100, 24)).expect("test backend is infallible");
     if let Err(error) = terminal.draw(|frame| render(frame, state, &config)) {

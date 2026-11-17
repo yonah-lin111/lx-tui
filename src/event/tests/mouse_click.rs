@@ -3,7 +3,7 @@ use super::*;
 
 #[test]
 fn mouse_down_on_swap_button_swaps_sides_without_resize() {
-    let config = Config::default();
+    let config = desktop_config();
     let mut state = demo_terminal();
     let geo = geometry(&state, &config, Rect::new(0, 0, 120, 30));
     let mut sessions = HashMap::new();
@@ -34,7 +34,7 @@ fn mouse_down_on_swap_button_swaps_sides_without_resize() {
 
 #[test]
 fn mouse_down_on_panes_collapse_button_collapses_panes() {
-    let config = Config::default();
+    let config = desktop_config();
     let mut state = demo_terminal();
     update::swap_prompt_side(&mut state, 96, 38);
     let geo = geometry(&state, &config, Rect::new(0, 0, 120, 30));
@@ -78,7 +78,7 @@ fn mouse_down_on_panes_collapse_button_collapses_panes() {
 
 #[test]
 fn mouse_click_switches_tab_and_add_creates_one() {
-    let config = Config::default();
+    let config = desktop_config();
     let mut state = demo_terminal();
     crate::app::update::create_tab(&mut state);
     let geo = geometry(&state, &config, Rect::new(0, 0, 120, 30));
@@ -116,7 +116,7 @@ fn mouse_click_switches_tab_and_add_creates_one() {
 
 #[test]
 fn mouse_click_scroll_buttons_scrolls_tab_bar() {
-    let config = Config::default();
+    let config = desktop_config();
     let mut state = demo_terminal();
     for _ in 1..30 {
         crate::app::update::create_tab(&mut state);
@@ -156,7 +156,7 @@ fn mouse_click_scroll_buttons_scrolls_tab_bar() {
 
 #[test]
 fn toggle_button_click_flips_view_without_stealing_focus() {
-    let config = Config::default();
+    let config = desktop_config();
     let mut state = AppState::demo();
     let geo = geometry(&state, &config, Rect::new(0, 0, 120, 30));
     let pane = state.active_tab().layout.focus();
@@ -192,7 +192,7 @@ fn toggle_button_click_flips_view_without_stealing_focus() {
 
 #[test]
 fn mouse_motion_tracks_workspace_and_tab_hover() {
-    let config = Config::default();
+    let config = desktop_config();
     let mut state = demo_terminal();
     crate::app::update::create_workspace(&mut state);
     let geo = geometry(&state, &config, Rect::new(0, 0, 120, 30));
@@ -270,7 +270,7 @@ fn mouse_motion_tracks_workspace_and_tab_hover() {
 
 #[test]
 fn workspace_item_click_keeps_prompt_scroll() {
-    let config = Config::default();
+    let config = desktop_config();
     let mut state = demo_terminal();
     crate::app::update::create_workspace(&mut state);
     crate::app::update::switch_workspace(&mut state, 0);
@@ -353,7 +353,7 @@ fn workspace_item_click_keeps_prompt_scroll() {
 
 #[test]
 fn wheel_over_workspace_list_rescrolls_hover() {
-    let config = Config::default();
+    let config = desktop_config();
     let mut state = demo_terminal();
     for _ in 1..30 {
         crate::app::update::create_workspace(&mut state);
@@ -388,7 +388,7 @@ fn mouse_click_agent_item_switches_tab_and_terminal_view() {
 
     let mut state = demo_terminal();
     let mut sessions = HashMap::new();
-    let config = Config::default();
+    let config = desktop_config();
     let screen = Rect::new(0, 0, 100, 24);
     let first = mount_agent(&mut state, AgentKind::Claude, AgentState::Working);
     update::create_tab(&mut state);
@@ -433,7 +433,7 @@ fn clicking_dual_agent_rows_on_same_pane_switches_between_lx_and_terminal_views(
 
     let mut state = demo_terminal();
     let mut sessions = HashMap::new();
-    let config = Config::default();
+    let config = desktop_config();
     let screen = Rect::new(0, 0, 100, 24);
 
     let pane = mount_agent(&mut state, AgentKind::Claude, AgentState::Working);
@@ -509,7 +509,7 @@ fn mouse_hover_agent_item_tracks_hover() {
 
     let mut state = demo_terminal();
     let mut sessions = HashMap::new();
-    let config = Config::default();
+    let config = desktop_config();
     let screen = Rect::new(0, 0, 100, 24);
     mount_agent(&mut state, AgentKind::Gemini, AgentState::Blocked);
     let geo = geometry(&state, &config, screen);
@@ -548,7 +548,7 @@ fn mouse_hover_agent_item_tracks_hover() {
 fn wheel_over_agents_section_scrolls_list() {
     let mut state = demo_terminal();
     let mut sessions = HashMap::new();
-    let config = Config::default();
+    let config = desktop_config();
     let screen = Rect::new(0, 0, 100, 24);
     create_agent_tabs(&mut state, 20);
     let geo = geometry(&state, &config, screen);
@@ -577,7 +577,7 @@ fn wheel_over_agents_section_scrolls_list() {
 fn mouse_drag_agent_scrollbar_thumb_scrolls_list() {
     let mut state = demo_terminal();
     let mut sessions = HashMap::new();
-    let config = Config::default();
+    let config = desktop_config();
     let screen = Rect::new(0, 0, 100, 24);
     create_agent_tabs(&mut state, 20);
     let geo = geometry(&state, &config, screen);
@@ -654,7 +654,7 @@ fn poll_active_agents_ignores_plain_shell() {
 fn mouse_motion_over_button_arms_tooltip_and_leaving_clears() {
     use crate::app::tooltip::TooltipTarget;
 
-    let config = Config::default();
+    let config = desktop_config();
     let mut state = demo_terminal();
     let geo = geometry(&state, &config, Rect::new(0, 0, 120, 30));
     let mut sessions = HashMap::new();
@@ -695,7 +695,7 @@ fn mouse_motion_over_button_arms_tooltip_and_leaving_clears() {
 
 #[test]
 fn mouse_down_clears_tooltip() {
-    let config = Config::default();
+    let config = desktop_config();
     let mut state = demo_terminal();
     let geo = geometry(&state, &config, Rect::new(0, 0, 120, 30));
     let mut sessions = HashMap::new();
@@ -731,7 +731,7 @@ fn mouse_down_clears_tooltip() {
 
 #[test]
 fn mouse_motion_during_workspace_drag_does_not_arm_tooltip() {
-    let config = Config::default();
+    let config = desktop_config();
     let mut state = demo_terminal();
     crate::app::update::create_workspace(&mut state);
     let geo = geometry(&state, &config, Rect::new(0, 0, 120, 30));
@@ -754,7 +754,7 @@ fn mouse_motion_during_workspace_drag_does_not_arm_tooltip() {
 
 #[test]
 fn mouse_motion_with_overlay_open_keeps_tooltip_clear() {
-    let config = Config::default();
+    let config = desktop_config();
     let mut state = demo_terminal();
     let geo = geometry(&state, &config, Rect::new(0, 0, 120, 30));
     let mut sessions = HashMap::new();
@@ -979,7 +979,7 @@ fn copy_toast_anchors_to_right_panel_for_template_and_todo_and_global_for_overla
 
 #[test]
 fn mouse_down_on_web_button_requests_browser_open() {
-    let config = Config::default();
+    let config = desktop_config();
     let mut state = demo_terminal();
     state.settings_available = true;
     state.sidebar_collapsed = false;
@@ -1013,7 +1013,7 @@ fn ctrl_click_opens_markdown_link_on_both_left_and_macos_ctrl_right_mouse_down()
     use crate::chat::events::PartKind;
 
     let mut state = AppState::demo();
-    let config = Config::default();
+    let config = desktop_config();
     let mut sessions = HashMap::new();
     let mut cache = ui::RenderCache::default();
     let mut dirty = false;

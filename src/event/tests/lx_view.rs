@@ -3,7 +3,7 @@ use super::*;
 
 #[test]
 fn lx_view_edits_input_and_pastes_text() {
-    let config = Config::default();
+    let config = desktop_config();
     let mut state = AppState::demo();
     let geo = geometry(&state, &config, Rect::new(0, 0, 120, 30));
     let pane = state.active_tab().layout.focus();
@@ -104,7 +104,7 @@ fn lx_view_edits_input_and_pastes_text() {
 
 #[test]
 fn lx_view_path_paste_opens_reference_panel() {
-    let config = Config::default();
+    let config = desktop_config();
     let mut state = AppState::demo();
     let geo = geometry(&state, &config, Rect::new(0, 0, 120, 30));
     let pane = state.active_tab().layout.focus();
@@ -143,7 +143,7 @@ fn lx_view_path_paste_opens_reference_panel() {
 
 #[test]
 fn lx_view_content_click_focuses_and_starts_selection() {
-    let config = Config::default();
+    let config = desktop_config();
     let mut state = AppState::demo();
     let geo = geometry(&state, &config, Rect::new(0, 0, 120, 30));
     let pane = state.active_tab().layout.focus();
@@ -212,7 +212,7 @@ fn lx_view_content_click_focuses_and_starts_selection() {
 
 #[test]
 fn lx_input_click_places_cursor_and_starts_text_selection() {
-    let config = Config::default();
+    let config = desktop_config();
     let mut state = AppState::demo();
     let geo = geometry(&state, &config, Rect::new(0, 0, 120, 30));
     let pane = state.active_tab().layout.focus();
@@ -249,7 +249,7 @@ fn lx_input_click_places_cursor_and_starts_text_selection() {
 
 #[test]
 fn lx_view_ignores_wheel_and_mouse_report() {
-    let config = Config::default();
+    let config = desktop_config();
     let mut state = AppState::demo();
     let geo = geometry(&state, &config, Rect::new(0, 0, 120, 30));
     let pane = state.active_tab().layout.focus();
@@ -292,7 +292,7 @@ fn lx_view_ignores_wheel_and_mouse_report() {
 #[test]
 fn lx_entry_click_switches_selection() {
     use crate::app::state::LxEntry;
-    let config = Config::default();
+    let config = desktop_config();
     let mut state = AppState::demo();
     let geo = geometry(&state, &config, Rect::new(0, 0, 160, 40));
     let pane = state.active_tab().layout.focus();
@@ -330,7 +330,7 @@ fn lx_entry_click_switches_selection() {
 
 #[test]
 fn lx_mention_panel_click_accepts_candidate_before_page_selection() {
-    let config = Config::default();
+    let config = desktop_config();
     let mut state = AppState::demo();
     seed_lx_mention(
         &mut state,
@@ -373,7 +373,7 @@ fn lx_mention_panel_click_accepts_candidate_before_page_selection() {
 
 #[test]
 fn lx_mention_wheel_scrolls_panel_not_input() {
-    let config = Config::default();
+    let config = desktop_config();
     let mut state = AppState::demo();
     let entries: Vec<crate::app::markdown::MentionEntry> = (0..10)
         .map(|i| crate::app::markdown::MentionEntry {
@@ -424,7 +424,7 @@ fn lx_mention_wheel_scrolls_panel_not_input() {
 /// 早期代码先记 press 再 begin，等于记了个寂寞——每次松开都被当成拖拽，卡片永远展不开。
 #[test]
 fn lx_card_click_toggles_expansion_on_release() {
-    let config = Config::default();
+    let config = desktop_config();
     let mut state = AppState::demo();
     let geo = geometry(&state, &config, Rect::new(0, 0, 120, 30));
     let pane = state.active_tab().layout.focus();
@@ -538,7 +538,7 @@ fn lx_card_click_toggles_expansion_on_release() {
 
 #[test]
 fn lx_history_selection_waits_for_copy_shortcut_and_follows_wheel_scroll() {
-    let config = Config::default();
+    let config = desktop_config();
     let mut state = AppState::demo();
     let geo = geometry(&state, &config, Rect::new(0, 0, 120, 18));
     let pane = state.active_tab().layout.focus();
@@ -708,7 +708,7 @@ fn lx_history_selection_waits_for_copy_shortcut_and_follows_wheel_scroll() {
 
 #[test]
 fn lx_mention_left_right_keys_and_mouse_switch_tabs_and_insert_ref_folder() {
-    let config = Config::default();
+    let config = desktop_config();
     let mut state = AppState::demo();
     seed_lx_mention(
         &mut state,
@@ -812,7 +812,7 @@ fn lx_mention_left_right_keys_and_mouse_switch_tabs_and_insert_ref_folder() {
 
 #[test]
 fn lx_command_panel_non_item_clicks_do_not_penetrate_to_underlying_entries() {
-    let config = Config::default();
+    let config = desktop_config();
     let mut state = AppState::demo();
     // 空候选（显示 no matches 状态行，非交互行）：面板位于欢迎页入口区上方或重叠处。
     seed_lx_mention(&mut state, "@nomatch", Vec::new());
@@ -864,7 +864,7 @@ fn lx_command_panel_non_item_clicks_do_not_penetrate_to_underlying_entries() {
 
 #[test]
 fn lx_history_wheel_scrolls_by_wheel_lines_and_clamps() {
-    let config = Config::default();
+    let config = desktop_config();
     let mut state = AppState::demo();
     let geo = geometry(&state, &config, Rect::new(0, 0, 120, 18));
     let pane = state.active_tab().layout.focus();
@@ -1006,7 +1006,7 @@ fn lx_history_wheel_scrolls_by_wheel_lines_and_clamps() {
 
 #[test]
 fn lx_expanded_thinking_table_double_click_selects_word_without_collapsing_card() {
-    let config = Config::default();
+    let config = desktop_config();
     let mut state = AppState::demo();
     let geo = geometry(&state, &config, Rect::new(0, 0, 120, 30));
     let pane = state.active_tab().layout.focus();
@@ -1113,7 +1113,7 @@ fn lx_expanded_thinking_table_double_click_selects_word_without_collapsing_card(
 
 #[test]
 fn lx_code_block_copy_button_click_shows_pane_toast_keeps_selection_and_ignores_empty_block() {
-    let config = Config::default();
+    let config = desktop_config();
     let mut state = AppState::demo();
     let geo = geometry(&state, &config, Rect::new(0, 0, 120, 30));
     let pane = state.active_tab().layout.focus();
@@ -1246,7 +1246,7 @@ fn lx_code_block_copy_button_click_shows_pane_toast_keeps_selection_and_ignores_
 
 #[test]
 fn code_block_chrome_double_or_triple_click_does_not_leave_invisible_selection() {
-    let config = Config::default();
+    let config = desktop_config();
     let mut state = AppState::demo();
     let geo = geometry(&state, &config, Rect::new(0, 0, 120, 30));
     let pane = state.active_tab().layout.focus();

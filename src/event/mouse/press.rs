@@ -58,7 +58,6 @@ pub(crate) fn handle_mouse_down_left(
     state.task_agents_scroll_drag = None;
     state.task_btw_scroll_drag = None;
     state.overlay_input_drag = false;
-    state.compact_switcher_scroll_drag = None;
     if let Some(Overlay::ConfirmClose(confirm)) = state.overlay.as_mut() {
         confirm.scroll_drag = None;
     }
@@ -139,23 +138,6 @@ pub(crate) fn handle_mouse_down_left(
             *dirty = true;
             return;
         }
-        // 紧凑切换器滚动条：命中轨道跳转、命中 thumb 进入拖拽。
-        if let Some(Overlay::CompactSwitcher(switcher)) = state.overlay.as_ref() {
-            let layout = ui::overlay::compact_switcher_layout(*screen, switcher);
-            if let Some(bar) = layout.scrollbar
-                && bar.track.contains((mouse.column, mouse.row).into())
-            {
-                match ui::widgets::scrollbar::thumb_grab_offset(&bar, mouse.row) {
-                    Some(grab) => state.compact_switcher_scroll_drag = Some(grab),
-                    None => {
-                        let offset = ui::widgets::scrollbar::offset_from_track_row(&bar, mouse.row);
-                        update::set_compact_switcher_scroll(state, offset);
-                    }
-                }
-                *dirty = true;
-                return;
-            }
-        }
         let was_menu = matches!(state.overlay, Some(Overlay::Menu(_)));
         let menu_item_clicked = if let Some(Overlay::Menu(menu)) = state.overlay.as_ref() {
             let layout = ui::overlay::menu_layout(state, *screen, menu);
@@ -182,23 +164,25 @@ pub(crate) fn handle_mouse_down_left(
         *dirty = true;
         return;
     }
-    // 紧凑状态条：switch/back 是模态入口，其余区域吞掉，不穿透到主区。
+    // 紧凑顶部栏：左右按钮切换全屏侧栏；中间 tab 条交给下方原 tab 命中逻辑。
     if view.compact
         && view
             .compact_header
             .contains((mouse.column, mouse.row).into())
     {
-        if ui::widgets::compact_header::switch_at(view, state, mouse.column, mouse.row) {
-            update::open_compact_switcher(state, update::switcher_viewport_rows(screen.height));
+        if ui::widgets::compact_header::left_at(view, mouse.column, mouse.row) {
+            update::toggle_compact_left(state);
             *dirty = true;
             return;
         }
-        if ui::widgets::compact_header::back_at(view, state, mouse.column, mouse.row) {
-            update::back_to_compact_chat(state);
+        if ui::widgets::compact_header::right_at(view, mouse.column, mouse.row) {
+            update::toggle_compact_right(state);
             *dirty = true;
             return;
         }
-        return;
+        if !view.tab_bar.contains((mouse.column, mouse.row).into()) {
+            return;
+        }
     }
     // lx 页自己的 toast 盒：点击盒内关闭并消费点击，点击盒外关闭后继续处理本次点击。
     if let Some((pane, _toast)) = lx_toast_at(rects, state, mouse.column, mouse.row) {
@@ -248,6 +232,11 @@ pub(crate) fn handle_mouse_down_left(
         *dirty = true;
         return;
     }
+    // 紧凑顶部栏的 tab strip 到此已处理完 tab/加号/滚动按钮：其余空白吞掉，
+    // 不能继续穿透到底下的窗格。
+    if view.compact && view.tab_bar.contains((mouse.column, mouse.row).into()) {
+        return;
+    }
     if ui::web_button_at(view, state, mouse.column, mouse.row) {
         state.web_open_requested = true;
         *dirty = true;
@@ -274,7 +263,7 @@ pub(crate) fn handle_mouse_down_left(
             reset_pointer_shape();
         }
         *dirty = true;
-    } else if ui::left_panel_boundary_at(view, mouse.column, mouse.row) {
+    } else if !view.compact && ui::left_panel_boundary_at(view, mouse.column, mouse.row) {
         update::begin_sidebar_resize(state);
         *dirty = true;
     } else if handle_workspace_scrollbar_press(state, view, mouse.column, mouse.row)
@@ -285,7 +274,7 @@ pub(crate) fn handle_mouse_down_left(
     {
         *dirty = true;
     } else if handle_sidebar_press(state, view, mouse.column, mouse.row, dirty) {
-    } else if ui::swap_button_at(view, mouse.column, mouse.row) {
+    } else if !view.compact && ui::swap_button_at(view, mouse.column, mouse.row) {
         // 交换按钮是控件：命中优先于分割线拖拽与面板点击；
         // 宽度按位置模型重置：右列取侧栏默认宽、左列占其余。
         let available = view
@@ -295,8 +284,9 @@ pub(crate) fn handle_mouse_down_left(
         let side = ui::layout::side_width(available, config.min_pane_width);
         update::swap_prompt_side(state, available, side);
         *dirty = true;
-    } else if tiling::resize_boundary_at(rects, mouse.column, mouse.row)
-        .is_some_and(|hit| prompt_boundary_hit(state, hit))
+    } else if !view.compact
+        && tiling::resize_boundary_at(rects, mouse.column, mouse.row)
+            .is_some_and(|hit| prompt_boundary_hit(state, hit))
     {
         update::begin_prompt_resize(state);
         *dirty = true;

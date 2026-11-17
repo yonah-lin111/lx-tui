@@ -1,4 +1,5 @@
 use super::*;
+use crate::app::state::{FocusedContainer, RightTab};
 use crate::app::update;
 use crate::detect::{AgentKind, AgentState, PaneAgentSnapshot};
 
@@ -27,10 +28,14 @@ fn set_agent(state: &mut AppState, workspace: usize, agent_state: AgentState) {
 fn compact_panel_follows_focus() {
     let mut state = AppState::demo();
     assert_eq!(state.compact_panel(), None);
-    state.set_focus(crate::app::state::FocusedContainer::Prompt);
-    assert_eq!(state.compact_panel(), Some(RightTab::Prompt));
-    state.set_focus(crate::app::state::FocusedContainer::Todo);
-    assert_eq!(state.compact_panel(), Some(RightTab::Todo));
+    state.set_focus(FocusedContainer::Sidebar);
+    assert_eq!(state.compact_panel(), Some(CompactPanel::Left));
+    state.set_focus(FocusedContainer::Prompt);
+    assert_eq!(state.compact_panel(), Some(CompactPanel::Right));
+    state.set_focus(FocusedContainer::Todo);
+    assert_eq!(state.compact_panel(), Some(CompactPanel::Right));
+    state.right_tab = RightTab::Todo;
+    assert_eq!(state.right_tab, RightTab::Todo);
 }
 
 #[test]
@@ -46,44 +51,18 @@ fn agent_entries_stay_in_active_workspace() {
 }
 
 #[test]
-fn global_agent_entries_span_workspaces() {
+fn global_agent_states_span_workspaces() {
     let mut state = AppState::demo();
     set_agent(&mut state, 0, AgentState::Blocked);
     update::create_workspace(&mut state);
     set_agent(&mut state, 1, AgentState::Working);
 
-    let entries = state.global_agent_entries();
-    assert_eq!(entries.len(), 2);
-    assert_eq!(entries[0].workspace, 0);
-    assert_eq!(entries[0].entry.state, AgentState::Blocked);
-    assert_eq!(entries[1].workspace, 1);
-    assert_eq!(entries[1].entry.state, AgentState::Working);
+    let states = state.global_agent_states();
+    assert_eq!(states, vec![AgentState::Blocked, AgentState::Working]);
 }
 
 #[test]
-fn compact_rows_order_and_empty_agents_are_skipped() {
-    let mut state = AppState::demo();
-    let rows = state.compact_rows();
-    assert!(matches!(
-        rows.first(),
-        Some(CompactRow::Section(CompactSection::Spaces))
-    ));
-    assert!(
-        rows.iter()
-            .any(|row| matches!(row, CompactRow::Workspace(0)))
-    );
-    assert!(rows.iter().any(|row| matches!(row, CompactRow::Tab(0))));
-    assert!(rows.iter().any(|row| matches!(
-        row,
-        CompactRow::Panel(RightTab::Prompt) | CompactRow::Panel(RightTab::Todo)
-    )));
-    assert!(matches!(rows.last(), Some(CompactRow::NewTab)));
-
-    set_agent(&mut state, 0, AgentState::Working);
-    let rows = state.compact_rows();
-    assert!(matches!(
-        rows.first(),
-        Some(CompactRow::Section(CompactSection::Agents))
-    ));
-    assert!(matches!(rows.get(1), Some(CompactRow::Agent(_))));
+fn global_agent_states_empty_without_agents() {
+    let state = AppState::demo();
+    assert!(state.global_agent_states().is_empty());
 }

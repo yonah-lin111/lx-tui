@@ -4,7 +4,7 @@ use super::*;
 
 #[test]
 fn normal_width_shows_all_regions() {
-    let config = Config::default();
+    let config = crate::ui::test_support::desktop_config();
     let view = compute(
         Rect::new(0, 0, 100, 30),
         &config,
@@ -27,7 +27,7 @@ fn normal_width_shows_all_regions() {
 
 #[test]
 fn tab_bar_spans_main_area_and_prompt() {
-    let config = Config::default();
+    let config = crate::ui::test_support::desktop_config();
     let view = compute(
         Rect::new(0, 0, 100, 30),
         &config,
@@ -46,7 +46,7 @@ fn tab_bar_spans_main_area_and_prompt() {
 
 #[test]
 fn narrow_width_enters_compact_single_column() {
-    let config = Config::default();
+    let config = crate::ui::test_support::desktop_config();
     let view = compute(
         Rect::new(0, 0, 60, 30),
         &config,
@@ -59,14 +59,18 @@ fn narrow_width_enters_compact_single_column() {
     );
     assert!(view.compact);
     assert_eq!(view.left_panel.width, 0);
-    assert_eq!(view.tab_bar.height, 0);
+    assert_eq!(view.tab_bar.height, 1);
+    assert_eq!(view.tab_bar.y, 0);
+    assert!(view.tab_bar.width > 0);
+    assert_eq!(view.compact_left_button, Rect::new(0, 0, 4, 1));
+    assert_eq!(view.compact_right_button.height, 1);
     assert_eq!(view.right_panel.width, 0);
     assert_eq!(view.main_content, Rect::new(0, 2, 60, 28));
 }
 
 #[test]
 fn collapsed_sidebar_keeps_strip() {
-    let config = Config::default();
+    let config = crate::ui::test_support::desktop_config();
     let view = compute(
         Rect::new(0, 0, 120, 30),
         &config,
@@ -84,7 +88,7 @@ fn collapsed_sidebar_keeps_strip() {
 
 #[test]
 fn collapsed_narrow_sidebar_stays_compact() {
-    let config = Config::default();
+    let config = crate::ui::test_support::desktop_config();
     let view = compute(
         Rect::new(0, 0, 60, 30),
         &config,
@@ -102,7 +106,7 @@ fn collapsed_narrow_sidebar_stays_compact() {
 
 #[test]
 fn compact_header_uses_two_rows_on_tall_screen() {
-    let config = Config::default();
+    let config = crate::ui::test_support::desktop_config();
     let view = compute_with_panel(
         Rect::new(0, 0, 80, 24),
         &config,
@@ -121,7 +125,7 @@ fn compact_header_uses_two_rows_on_tall_screen() {
 
 #[test]
 fn compact_header_uses_one_row_on_short_screen() {
-    let config = Config::default();
+    let config = crate::ui::test_support::desktop_config();
     let view = compute_with_panel(
         Rect::new(0, 0, 60, 12),
         &config,
@@ -139,7 +143,7 @@ fn compact_header_uses_one_row_on_short_screen() {
 
 #[test]
 fn compact_fullscreen_panel_uses_body() {
-    let config = Config::default();
+    let config = crate::ui::test_support::desktop_config();
     let view = compute_with_panel(
         Rect::new(0, 0, 60, 20),
         &config,
@@ -149,17 +153,89 @@ fn compact_fullscreen_panel_uses_body() {
         30,
         false,
         false,
-        Some(RightTab::Prompt),
+        Some(CompactPanel::Right),
     );
     assert!(view.compact);
-    assert_eq!(view.compact_header, Rect::new(0, 0, 60, 1));
+    assert_eq!(view.compact_header, Rect::new(0, 0, 60, 2));
     assert_eq!(view.main_content.width, 0);
-    assert_eq!(view.right_panel, Rect::new(0, 1, 60, 19));
+    assert_eq!(view.left_panel.width, 0);
+    assert_eq!(view.right_panel, Rect::new(0, 2, 60, 18));
+}
+
+#[test]
+fn compact_fullscreen_left_panel_uses_body() {
+    let config = crate::ui::test_support::desktop_config();
+    let view = compute_with_panel(
+        Rect::new(0, 0, 60, 20),
+        &config,
+        false,
+        config.sidebar_width,
+        false,
+        30,
+        false,
+        false,
+        Some(CompactPanel::Left),
+    );
+    assert!(view.compact);
+    assert_eq!(view.left_panel, Rect::new(0, 2, 60, 18));
+    assert_eq!(view.main_content.width, 0);
+    assert_eq!(view.right_panel.width, 0);
+}
+
+#[test]
+fn default_threshold_is_120_columns() {
+    let config = Config::default();
+    assert_eq!(config.narrow_width, 120);
+    let compact = compute_with_panel(
+        Rect::new(0, 0, 120, 24),
+        &config,
+        false,
+        config.sidebar_width,
+        false,
+        30,
+        false,
+        false,
+        None,
+    );
+    assert!(compact.compact);
+    let desktop = compute_with_panel(
+        Rect::new(0, 0, 121, 24),
+        &config,
+        false,
+        config.sidebar_width,
+        false,
+        30,
+        false,
+        false,
+        None,
+    );
+    assert!(!desktop.compact);
+}
+
+#[test]
+fn compact_nav_row_places_buttons_at_both_edges() {
+    let config = Config::default();
+    let view = compute_with_panel(
+        Rect::new(0, 0, 120, 24),
+        &config,
+        false,
+        config.sidebar_width,
+        false,
+        30,
+        false,
+        false,
+        None,
+    );
+    assert_eq!(view.compact_left_button.x, 0);
+    assert_eq!(view.compact_right_button.right(), 120);
+    assert!(view.compact_left_button.right() < view.tab_bar.x);
+    assert!(view.tab_bar.right() < view.compact_right_button.x);
+    assert_eq!(view.compact_status, Rect::new(0, 1, 120, 1));
 }
 
 #[test]
 fn desktop_layout_starts_above_narrow_width() {
-    let config = Config::default();
+    let config = crate::ui::test_support::desktop_config();
     let view = compute_with_panel(
         Rect::new(0, 0, config.narrow_width + 1, 24),
         &config,
@@ -179,7 +255,7 @@ fn desktop_layout_starts_above_narrow_width() {
 
 #[test]
 fn collapsed_prompt_becomes_right_strip() {
-    let config = Config::default();
+    let config = crate::ui::test_support::desktop_config();
     let view = compute(
         Rect::new(0, 0, 100, 30),
         &config,
@@ -199,7 +275,7 @@ fn collapsed_prompt_becomes_right_strip() {
 
 #[test]
 fn collapsing_prompt_keeps_stored_width() {
-    let config = Config::default();
+    let config = crate::ui::test_support::desktop_config();
     let collapsed = compute(
         Rect::new(0, 0, 100, 30),
         &config,
@@ -226,7 +302,7 @@ fn collapsing_prompt_keeps_stored_width() {
 
 #[test]
 fn prompt_width_is_clamped_both_sides() {
-    let config = Config::default();
+    let config = crate::ui::test_support::desktop_config();
     let too_narrow = compute(
         Rect::new(0, 0, 100, 30),
         &config,
@@ -256,14 +332,14 @@ fn prompt_width_is_clamped_both_sides() {
 
 #[test]
 fn prompt_splits_evenly_when_area_is_tiny() {
-    let config = Config::default();
+    let config = crate::ui::test_support::desktop_config();
     assert_eq!(clamp_prompt_width(10, 30, config.min_pane_width), 5);
     assert_eq!(10 - clamp_prompt_width(10, 30, config.min_pane_width), 5);
 }
 
 #[test]
 fn tiny_area_does_not_overflow() {
-    let config = Config::default();
+    let config = crate::ui::test_support::desktop_config();
     let view = compute(
         Rect::new(0, 0, 10, 2),
         &config,
@@ -306,7 +382,7 @@ fn sidebar_sections_need_room_for_content() {
 
 #[test]
 fn default_side_width_is_two_fifths_of_main_area() {
-    let config = Config::default();
+    let config = crate::ui::test_support::desktop_config();
     let area = Rect::new(0, 0, 100, 30);
     assert_eq!(default_side_width(area, &config, false), 30);
     assert_eq!(
@@ -327,7 +403,7 @@ fn side_width_is_two_fifths_and_splits_when_tiny() {
 
 #[test]
 fn prompt_width_at_follows_boundary_and_clamps() {
-    let config = Config::default();
+    let config = crate::ui::test_support::desktop_config();
     let view = compute(
         Rect::new(0, 0, 100, 30),
         &config,
@@ -348,7 +424,7 @@ fn prompt_width_at_follows_boundary_and_clamps() {
 
 #[test]
 fn sidebar_width_is_clamped_to_config_bounds() {
-    let config = Config::default();
+    let config = crate::ui::test_support::desktop_config();
     let too_narrow = compute(
         Rect::new(0, 0, 100, 30),
         &config,
@@ -386,7 +462,7 @@ fn sidebar_width_is_clamped_to_config_bounds() {
 
 #[test]
 fn sidebar_width_at_follows_boundary_and_keeps_pane_minimum() {
-    let config = Config::default();
+    let config = crate::ui::test_support::desktop_config();
     let view = compute(
         Rect::new(0, 0, 100, 30),
         &config,
@@ -424,7 +500,7 @@ fn sidebar_width_at_follows_boundary_and_keeps_pane_minimum() {
 
 #[test]
 fn prompt_left_places_prompt_next_to_sidebar() {
-    let config = Config::default();
+    let config = crate::ui::test_support::desktop_config();
     let view = compute(
         Rect::new(0, 0, 100, 30),
         &config,
@@ -443,7 +519,7 @@ fn prompt_left_places_prompt_next_to_sidebar() {
 
 #[test]
 fn collapsed_panes_dock_to_right_edge() {
-    let config = Config::default();
+    let config = crate::ui::test_support::desktop_config();
     let view = compute(
         Rect::new(0, 0, 100, 30),
         &config,
@@ -460,7 +536,7 @@ fn collapsed_panes_dock_to_right_edge() {
 
 #[test]
 fn collapsed_prompt_ignored_when_prompt_left() {
-    let config = Config::default();
+    let config = crate::ui::test_support::desktop_config();
     let view = compute(
         Rect::new(0, 0, 100, 30),
         &config,
@@ -477,7 +553,7 @@ fn collapsed_prompt_ignored_when_prompt_left() {
 
 #[test]
 fn prompt_width_at_mirrors_for_left_prompt() {
-    let config = Config::default();
+    let config = crate::ui::test_support::desktop_config();
     let view = compute(
         Rect::new(0, 0, 100, 30),
         &config,

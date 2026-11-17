@@ -40,7 +40,7 @@ fn hint(state: &mut AppState, level: crate::app::state::InputHintLevel, message:
 /// 画一帧并取回缓冲区。
 fn draw(state: &AppState, width: u16, height: u16) -> ratatui::buffer::Buffer {
     let mut terminal = Terminal::new(TestBackend::new(width, height)).expect("backend");
-    let config = Config::default();
+    let config = desktop_config();
     terminal
         .draw(|frame| crate::ui::render(frame, state, &config))
         .expect("draw");
@@ -84,7 +84,7 @@ fn compact_failure_stays_inside_the_pane() {
         crate::app::state::InputHintLevel::Error,
         &message,
     );
-    let config = Config::default();
+    let config = desktop_config();
     let screen = Rect::new(0, 0, 140, 34);
     let view = crate::ui::layout::compute(
         screen,
@@ -131,7 +131,7 @@ fn lx_toast_is_painted_inside_the_pane() {
         crate::app::state::InputHintLevel::Error,
         message,
     );
-    let config = Config::default();
+    let config = desktop_config();
     let screen = Rect::new(0, 0, 120, 30);
     let view = crate::ui::layout::compute(
         screen,
@@ -185,7 +185,7 @@ fn lx_toast_click_closes_it() {
         crate::app::state::InputHintLevel::Warning,
         "watch out",
     );
-    let config = Config::default();
+    let config = desktop_config();
     let geo = geometry(&state, &config, Rect::new(0, 0, 120, 30));
     let inner = geo
         .rects
@@ -256,7 +256,7 @@ fn hovering_the_lx_toast_freezes_its_expiry() {
         crate::app::state::InputHintLevel::Warning,
         "watch out",
     );
-    let config = Config::default();
+    let config = desktop_config();
     let geo = geometry(&state, &config, Rect::new(0, 0, 120, 30));
     let inner = geo
         .rects
@@ -416,7 +416,7 @@ fn lx_toast_hover_takes_priority_over_slash_panel_and_clears_on_overlay() {
         )
         .with_title(text::TOAST_CLIPBOARD_TITLE),
     );
-    let config = Config::default();
+    let config = desktop_config();
     let geo = geometry(&state, &config, Rect::new(0, 0, 120, 14));
     let inner = geo
         .rects

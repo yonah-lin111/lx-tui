@@ -4,7 +4,7 @@ use super::*;
 #[test]
 fn mouse_wheel_over_short_prompt_does_not_scroll_without_scrollbar() {
     // 回归：正文不溢出、滚动条不出现时，滚轮不得移动视口，也不产生多余重绘。
-    let config = Config::default();
+    let config = desktop_config();
     let mut state = demo_terminal();
     let geo = geometry(&state, &config, Rect::new(0, 0, 120, 30));
     let inner = crate::ui::right_panel::prompt::geometry::prompt_text_rect(geo.view.right_panel);
@@ -32,7 +32,7 @@ fn mouse_wheel_over_short_prompt_does_not_scroll_without_scrollbar() {
 
 #[test]
 fn mouse_track_click_prompt_scrollbar_scrolls_without_focus() {
-    let config = Config::default();
+    let config = desktop_config();
     let mut state = demo_terminal();
     let geo = geometry(&state, &config, Rect::new(0, 0, 120, 30));
     overflow_prompt(&mut state, &geo.view);
@@ -66,7 +66,7 @@ fn mouse_track_click_prompt_scrollbar_scrolls_without_focus() {
 #[test]
 fn mouse_track_click_prompt_tree_scrollbar_scrolls_list() {
     use crate::app::prompt::PromptItem;
-    let config = Config::default();
+    let config = desktop_config();
     let mut state = demo_terminal();
     let geo = geometry(&state, &config, Rect::new(0, 0, 120, 30));
     update::show_prompt_tree(&mut state);
@@ -107,7 +107,7 @@ fn mouse_track_click_prompt_tree_scrollbar_scrolls_list() {
 
 #[test]
 fn mouse_drag_prompt_scrollbar_thumb() {
-    let config = Config::default();
+    let config = desktop_config();
     let mut state = demo_terminal();
     let geo = geometry(&state, &config, Rect::new(0, 0, 120, 30));
     overflow_prompt(&mut state, &geo.view);
@@ -166,7 +166,7 @@ fn mouse_drag_prompt_scrollbar_thumb() {
 
 #[test]
 fn mouse_wheel_during_prompt_selection_scrolls_viewport() {
-    let config = Config::default();
+    let config = desktop_config();
     let mut state = demo_terminal();
     let geo = geometry(&state, &config, Rect::new(0, 0, 120, 30));
     overflow_prompt(&mut state, &geo.view);
@@ -230,7 +230,7 @@ fn mouse_wheel_during_prompt_selection_scrolls_viewport() {
 
 #[test]
 fn mouse_motion_tracks_prompt_tree_hover() {
-    let config = Config::default();
+    let config = desktop_config();
     let mut state = demo_terminal();
     crate::app::update::show_prompt_tree(&mut state);
     let geo = geometry(&state, &config, Rect::new(0, 0, 120, 30));
@@ -308,7 +308,7 @@ fn mouse_motion_tracks_prompt_tree_hover() {
 
 #[test]
 fn mouse_interacts_with_block_command_panel() {
-    let config = Config::default();
+    let config = desktop_config();
     let mut state = AppState::demo();
     state.prompt.resize(40, 8);
     crate::app::update::focus_prompt(&mut state);
@@ -376,7 +376,7 @@ fn mouse_interacts_with_block_command_panel() {
 
 #[test]
 fn mouse_wheel_over_mention_panel_scrolls_viewport_only() {
-    let config = Config::default();
+    let config = desktop_config();
     let mut state = AppState::demo();
     state.prompt.resize(40, 8);
     crate::app::update::focus_prompt(&mut state);

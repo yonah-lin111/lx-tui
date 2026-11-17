@@ -114,7 +114,7 @@ fn terminal_paste_shell_escaped_path_builds_proposal_from_real_file() {
 #[test]
 fn event_input_paste_overlay_and_prompt_routing() {
     let mut state = demo_terminal();
-    let config = Config::default();
+    let config = desktop_config();
     let geo = geometry(&state, &config, Rect::new(0, 0, 80, 24));
     let mut sessions = HashMap::new();
     let mut dirty = false;
@@ -466,7 +466,7 @@ fn paste_panel_swallows_mouse_wheel_without_scrolling_underlying_views() {
     std::fs::write(&file_path, "fn main() {}\n").expect("write");
     let path_str = file_path.to_string_lossy().into_owned();
 
-    let config = Config::default();
+    let config = desktop_config();
     let mut state = AppState::demo();
     let geo = geometry(&state, &config, Rect::new(0, 0, 120, 20));
     let area = crate::ui::right_panel::prompt::geometry::prompt_text_rect(geo.view.right_panel);
@@ -504,7 +504,7 @@ fn paste_panel_swallows_mouse_wheel_without_scrolling_underlying_views() {
 #[test]
 fn overlay_cut_event_deletes_selection_and_emits_toast() {
     let mut state = AppState::demo();
-    let config = Config::default();
+    let config = desktop_config();
     let geo = geometry(&state, &config, Rect::new(0, 0, 80, 24));
     let mut sessions = HashMap::new();
     let mut dirty = false;
@@ -539,7 +539,7 @@ fn overlay_cut_event_deletes_selection_and_emits_toast() {
 
 #[test]
 fn long_text_paste_opens_panel_in_prompt_and_lx_and_up_key_does_not_trigger_history() {
-    let config = Config::default();
+    let config = desktop_config();
     let mut state = AppState::demo();
     let geo = geometry(&state, &config, Rect::new(0, 0, 120, 24));
     let area = crate::ui::right_panel::prompt::geometry::prompt_text_rect(geo.view.right_panel);

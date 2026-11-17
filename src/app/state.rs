@@ -25,7 +25,7 @@ pub mod todo;
 pub mod workspace;
 pub mod workspace_history;
 
-pub use compact::{CompactAgentRow, CompactRestore, CompactRow, CompactSection};
+pub use compact::{CompactPanel, CompactRestore};
 pub use lx::LxInputMode;
 pub use lx::{
     AI_WEB_DEEPSEEK_SESSION_PREFIX, AI_WEB_GEMINI_SESSION_PREFIX, AI_WEB_GROK_SESSION_PREFIX,
@@ -257,8 +257,6 @@ pub struct AppState {
     pub panes_collapsed: bool,
     /// 进入紧凑布局前的桌面折叠状态；Some 表示当前处于紧凑布局。
     pub compact_restore: Option<CompactRestore>,
-    /// 紧凑切换器滚动条 thumb 拖拽抓取偏移；None 表示未拖拽。
-    pub compact_switcher_scroll_drag: Option<u16>,
     /// 当前持有键盘焦点的容器（**唯一真源**）。
     ///
     /// 高亮、硬件光标归属与按键去向全部由它决定：同一时刻只有一个容器算聚焦，
@@ -445,14 +443,15 @@ impl AppState {
         self.focused == FocusedContainer::Panes
     }
 
-    /// 紧凑模式下当前应全屏显示的面板；None 表示显示 Chat。
+    /// 紧凑模式下当前应全屏显示的侧栏；None 表示显示 Chat。
     ///
-    /// 焦点是唯一真源：焦点在 Prompt/Todo 就是对应全屏面板，回到主区即回到 Chat。
-    pub fn compact_panel(&self) -> Option<RightTab> {
+    /// 焦点是唯一真源：焦点在侧栏就是全屏左栏，焦点在 Prompt/Todo 就是全屏右栏，
+    /// 回到主区即回到 Chat。
+    pub fn compact_panel(&self) -> Option<CompactPanel> {
         match self.focused {
-            FocusedContainer::Prompt => Some(RightTab::Prompt),
-            FocusedContainer::Todo => Some(RightTab::Todo),
-            _ => None,
+            FocusedContainer::Sidebar => Some(CompactPanel::Left),
+            FocusedContainer::Prompt | FocusedContainer::Todo => Some(CompactPanel::Right),
+            FocusedContainer::Panes => None,
         }
     }
 
@@ -489,7 +488,6 @@ impl AppState {
             prompt_collapsed: false,
             panes_collapsed: false,
             compact_restore: None,
-            compact_switcher_scroll_drag: None,
             focused: FocusedContainer::Panes,
             prompt: Prompt::new(PaneId::alloc()),
             prompt_root: None,

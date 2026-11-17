@@ -5,7 +5,6 @@
 
 use super::*;
 use crate::app::state::{RightTab, TodoEdit};
-use crate::config::Config;
 use crate::db::todo::{TodoPriority, TodoStatus};
 use ratatui::Terminal;
 use ratatui::backend::TestBackend;
@@ -43,7 +42,7 @@ fn render_panel(state: &AppState, area: Rect) -> (Buffer, Option<(u16, u16)>) {
 fn view_for(state: &AppState) -> crate::ui::layout::ViewLayout {
     crate::ui::layout::compute(
         SCREEN,
-        &Config::default(),
+        &crate::ui::test_support::desktop_config(),
         state.sidebar_collapsed,
         state.sidebar_width,
         state.prompt_collapsed,
@@ -54,7 +53,7 @@ fn view_for(state: &AppState) -> crate::ui::layout::ViewLayout {
 }
 
 fn render_screen(state: &AppState) -> Buffer {
-    let config = Config::default();
+    let config = crate::ui::test_support::desktop_config();
     let mut terminal =
         Terminal::new(TestBackend::new(SCREEN.width, SCREEN.height)).expect("test backend");
     if let Err(error) = terminal.draw(|frame| crate::ui::render(frame, state, &config)) {

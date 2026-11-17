@@ -1,13 +1,11 @@
 //! 浮层模型：右键菜单、重命名输入、关闭确认与 worktree 对话框；同一时刻最多存在一个浮层。
 
-mod compact_switcher;
 mod text_input;
 
 use std::path::PathBuf;
 
 use crate::tiling::PaneId;
 
-pub use compact_switcher::CompactSwitcher;
 pub use text_input::TextInput;
 
 use super::prompt::{PromptEditing, PromptPageId, RecentPageRow};
@@ -45,8 +43,6 @@ pub enum OverlayKind {
     Connect,
     /// 侧栏 Agents 标题编辑：自定义输入 + Recent 页选择。
     AgentTitle,
-    /// 紧凑布局全屏切换器。
-    CompactSwitcher,
 }
 
 /// 浮层：同一时刻最多一个，由 `Option` 保证。
@@ -70,8 +66,6 @@ pub enum Overlay {
     Connect(Box<crate::app::state::ConnectPanel>),
     /// 侧栏 Agents 标题编辑：自定义输入 + Recent 页选择。
     AgentTitle(AgentTitleDialog),
-    /// 紧凑布局全屏切换器。
-    CompactSwitcher(CompactSwitcher),
 }
 
 impl Overlay {
@@ -93,7 +87,6 @@ impl Overlay {
             Self::ResumeSessionEdit(_) => OverlayKind::ResumeSessionEdit,
             Self::Connect(_) => OverlayKind::Connect,
             Self::AgentTitle(_) => OverlayKind::AgentTitle,
-            Self::CompactSwitcher(_) => OverlayKind::CompactSwitcher,
         }
     }
 

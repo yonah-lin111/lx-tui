@@ -87,7 +87,7 @@ pub(crate) fn render_cached(
     }
 
     let sidebar_cursor = if view.left_panel.width > 0 {
-        if state.sidebar_collapsed {
+        if state.sidebar_collapsed && !view.compact {
             controls::render_collapsed_strip(frame, view.left_panel, true);
             None
         } else {

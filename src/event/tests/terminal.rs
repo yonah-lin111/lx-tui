@@ -3,7 +3,7 @@ use super::*;
 
 #[test]
 fn mouse_wheel_over_terminal_pane_scrolls_backlog() {
-    let config = Config::default();
+    let config = desktop_config();
     let mut state = demo_terminal();
     let geo = geometry(&state, &config, Rect::new(0, 0, 120, 30));
     let pane = state.active_tab().layout.focus();
@@ -41,7 +41,7 @@ fn mouse_wheel_over_terminal_pane_scrolls_backlog() {
 
 #[test]
 fn mouse_wheel_extends_in_progress_selection() {
-    let config = Config::default();
+    let config = desktop_config();
     let mut state = demo_terminal();
     let geo = geometry(&state, &config, Rect::new(0, 0, 120, 30));
     let pane = state.active_tab().layout.focus();
@@ -93,7 +93,7 @@ fn mouse_wheel_extends_in_progress_selection() {
 
 #[test]
 fn mouse_drag_to_pane_edge_arms_autoscroll() {
-    let config = Config::default();
+    let config = desktop_config();
     let mut state = demo_terminal();
     let geo = geometry(&state, &config, Rect::new(0, 0, 120, 30));
     let pane = state.active_tab().layout.focus();
@@ -157,7 +157,7 @@ fn mouse_drag_to_pane_edge_arms_autoscroll() {
 
 #[test]
 fn mouse_wheel_in_mouse_report_mode_leaves_local_view_at_bottom() {
-    let config = Config::default();
+    let config = desktop_config();
     let mut state = demo_terminal();
     let geo = geometry(&state, &config, Rect::new(0, 0, 120, 30));
     let pane = state.active_tab().layout.focus();
@@ -184,7 +184,7 @@ fn mouse_wheel_in_mouse_report_mode_leaves_local_view_at_bottom() {
 
 #[test]
 fn terminal_scrollbar_thumb_drag_moves_viewport() {
-    let config = Config::default();
+    let config = desktop_config();
     let mut state = demo_terminal();
     let geo = geometry(&state, &config, Rect::new(0, 0, 120, 30));
     let pane = state.active_tab().layout.focus();
@@ -253,7 +253,7 @@ fn terminal_scrollbar_thumb_drag_moves_viewport() {
 
 #[test]
 fn mouse_drag_on_mouse_report_pane_skips_local_selection() {
-    let config = Config::default();
+    let config = desktop_config();
     let mut state = demo_terminal();
     let geo = geometry(&state, &config, Rect::new(0, 0, 120, 30));
     let pane = state.active_tab().layout.focus();
@@ -292,7 +292,7 @@ fn mouse_drag_on_mouse_report_pane_skips_local_selection() {
 
 #[test]
 fn mouse_down_on_plain_pane_starts_local_selection() {
-    let config = Config::default();
+    let config = desktop_config();
     let mut state = demo_terminal();
     let geo = geometry(&state, &config, Rect::new(0, 0, 120, 30));
     let pane = state.active_tab().layout.focus();
@@ -320,7 +320,7 @@ fn mouse_down_on_plain_pane_starts_local_selection() {
 
 #[test]
 fn mouse_wheel_on_alternate_screen_consumes_without_local_scroll() {
-    let config = Config::default();
+    let config = desktop_config();
     let mut state = demo_terminal();
     let geo = geometry(&state, &config, Rect::new(0, 0, 120, 30));
     let pane = state.active_tab().layout.focus();
@@ -346,7 +346,7 @@ fn mouse_wheel_on_alternate_screen_consumes_without_local_scroll() {
 
 #[test]
 fn key_and_paste_snap_scrolled_pane_back_to_bottom() {
-    let config = Config::default();
+    let config = desktop_config();
     let mut state = demo_terminal();
     let geo = geometry(&state, &config, Rect::new(0, 0, 120, 30));
     let pane = state.active_tab().layout.focus();
@@ -390,7 +390,7 @@ fn key_and_paste_snap_scrolled_pane_back_to_bottom() {
 
 #[test]
 fn esc_clears_active_terminal_selection_and_stops_drag_without_forwarding_to_pty() {
-    let config = Config::default();
+    let config = desktop_config();
     let mut state = demo_terminal();
     let geo = geometry(&state, &config, Rect::new(0, 0, 120, 30));
     let pane = state.active_tab().layout.focus();
@@ -503,7 +503,7 @@ fn esc_clears_active_terminal_selection_and_stops_drag_without_forwarding_to_pty
 
 #[test]
 fn terminal_selection_retains_on_mouse_up_scrolls_and_copies_on_ctrl_c() {
-    let config = Config::default();
+    let config = desktop_config();
     let mut state = demo_terminal();
     let geo = geometry(&state, &config, Rect::new(0, 0, 120, 20));
     let pane = state.active_tab().layout.focus();
@@ -625,7 +625,7 @@ fn terminal_selection_retains_on_mouse_up_scrolls_and_copies_on_ctrl_c() {
 
 #[test]
 fn double_and_triple_click_select_word_and_line_across_all_views() {
-    let config = Config::default();
+    let config = desktop_config();
     let mut state = AppState::demo();
     let geo = geometry(&state, &config, Rect::new(0, 0, 120, 24));
     let pane = state.active_tab().layout.focus();

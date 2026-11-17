@@ -18,7 +18,7 @@ fn dual_agent_state() -> (AppState, Config, Geometry, PaneId) {
     if let Some(target) = state.active_tab_mut().pane_mut(pane) {
         target.lx.chat.session_id = Some("ses-agent-menu".to_string());
     }
-    let config = Config::default();
+    let config = desktop_config();
     let geo = geometry(&state, &config, Rect::new(0, 0, 100, 24));
     (state, config, geo, pane)
 }
@@ -173,7 +173,7 @@ fn right_click_terminal_agent_opens_agent_menu_not_pane_menu() {
 fn terminal_agent_in_sole_pane_offers_only_edit_title() {
     let mut state = demo_terminal();
     let pane = mount_agent(&mut state, AgentKind::Codex, AgentState::Idle);
-    let config = Config::default();
+    let config = desktop_config();
     let geo = geometry(&state, &config, Rect::new(0, 0, 100, 24));
     let agents = agents_section(&geo, &state);
     let expected = state.agent_entries()[0];
@@ -251,7 +251,7 @@ fn clicking_each_agent_row_focuses_pane_and_switches_view() {
 fn wheel_scroll_then_hover_and_right_click_use_new_row_offset() {
     let mut state = demo_terminal();
     create_agent_tabs(&mut state, 20);
-    let config = Config::default();
+    let config = desktop_config();
     let geo = geometry(&state, &config, Rect::new(0, 0, 100, 24));
     let agents = agents_section(&geo, &state);
 
@@ -338,7 +338,7 @@ fn title_fixture(pages: &[SeededPage]) -> TitleFixture {
         .chat
         .session_id = Some("ses-agent-title".to_string());
     seed_recent_pages(&mut state, pages);
-    let config = Config::default();
+    let config = desktop_config();
     let geo = geometry(&state, &config, Rect::new(0, 0, 120, 30));
     let index = state
         .agent_entries()

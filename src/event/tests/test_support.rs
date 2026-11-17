@@ -16,6 +16,15 @@ use crate::ui::right_panel::prompt::geometry::{
     PromptToolbarButton, prompt_text_rect, prompt_toolbar_button_rect,
 };
 
+/// 桌面三栏测试配置：固定 80 列阈值，避免默认 120 列把 120 宽度的
+/// 事件几何测试变成紧凑布局。紧凑行为由 `compact` 测试覆盖。
+pub(crate) fn desktop_config() -> Config {
+    Config {
+        narrow_width: 80,
+        ..Config::default()
+    }
+}
+
 pub(crate) fn geometry(state: &AppState, config: &Config, screen: Rect) -> Geometry {
     let view = ui::layout::compute(
         screen,
@@ -383,7 +392,7 @@ pub(crate) fn referenced_menu_overflow_state(count: usize) -> AppState {
 
 /// 构造 prompt 工具栏测试场景：宽右栏、已同步几何。
 pub(crate) fn toolbar_geometry(state: &mut AppState) -> (Config, Geometry) {
-    let config = Config::default();
+    let config = desktop_config();
     state.prompt_width = 40;
     let geo = geometry(state, &config, Rect::new(0, 0, 120, 30));
     crate::app::update::resize_panes(state, &geo.rects);

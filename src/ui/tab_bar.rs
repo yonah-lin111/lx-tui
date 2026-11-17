@@ -57,9 +57,13 @@ pub fn layout(view: &ViewLayout, workspace: &Workspace, scroll: usize) -> TabBar
             overflow: false,
         };
     }
-    let right = exit_button(view)
-        .map(|exit| exit.x)
-        .unwrap_or_else(|| area.right());
+    let right = if view.compact {
+        area.right()
+    } else {
+        exit_button(view)
+            .map(|exit| exit.x)
+            .unwrap_or_else(|| area.right())
+    };
     let available = right.saturating_sub(area.x);
     let widths: Vec<u16> = workspace
         .tabs

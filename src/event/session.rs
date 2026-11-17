@@ -54,7 +54,7 @@ pub(crate) fn current_geometry(
     config: &Config,
 ) -> io::Result<Geometry> {
     let size = tui.terminal().size()?;
-    update::sync_compact_layout(state, size.width, size.height, config);
+    update::sync_compact_layout(state, size.width, config);
     let screen = Rect::new(0, 0, size.width, size.height);
     let view = ui::layout::compute_with_panel(
         screen,

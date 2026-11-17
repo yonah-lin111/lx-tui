@@ -3,7 +3,7 @@ use super::*;
 
 #[test]
 fn ctrl_s_saves_prompt_from_editor() {
-    let config = Config::default();
+    let config = desktop_config();
     let mut state = demo_terminal();
     let geo = geometry(&state, &config, Rect::new(0, 0, 120, 30));
     let mut sessions = HashMap::new();
@@ -46,7 +46,7 @@ fn ctrl_s_saves_prompt_from_editor() {
 #[test]
 fn ctrl_s_saves_open_item_immediately() {
     use crate::app::prompt::PromptItem;
-    let config = Config::default();
+    let config = desktop_config();
     let mut state = demo_terminal();
     let geo = geometry(&state, &config, Rect::new(0, 0, 120, 30));
     let mut sessions = HashMap::new();
@@ -79,7 +79,7 @@ fn ctrl_s_saves_open_item_immediately() {
 
 #[test]
 fn ctrl_s_ignores_empty_prompt_content() {
-    let config = Config::default();
+    let config = desktop_config();
     let mut state = demo_terminal();
     let geo = geometry(&state, &config, Rect::new(0, 0, 120, 30));
     let mut sessions = HashMap::new();
@@ -122,7 +122,7 @@ fn ctrl_s_ignores_empty_prompt_content() {
 
 #[test]
 fn mouse_interacts_with_slash_panel() {
-    let config = Config::default();
+    let config = desktop_config();
     let mut state = AppState::demo();
     state.prompt.resize(40, 8);
     crate::app::update::focus_prompt(&mut state);
@@ -275,7 +275,7 @@ fn mouse_template_status_label_and_block_buttons() {
 
 #[test]
 fn unclosed_template_block_hides_status_label_and_falls_back_to_outdent() {
-    let config = Config::default();
+    let config = desktop_config();
     let mut state = AppState::demo();
     state.prompt_width = 80;
     state.prompt.resize(78, 16);
@@ -360,7 +360,7 @@ fn mouse_status_label_and_clean_button_clear_selection() {
 
 #[test]
 fn page_control_hit_requires_prompt_tab() {
-    let config = Config::default();
+    let config = desktop_config();
     let mut state = paged_prompt_state();
     let geo = geometry(&state, &config, Rect::new(0, 0, 140, 30));
     let bar = crate::ui::right_panel::prompt::geometry::prompt_toolbar_rect(geo.view.right_panel)
@@ -405,7 +405,7 @@ fn pages_header_shows_zero_when_filter_has_no_match() {
 
 #[test]
 fn mouse_supple_copy_button_writes_clipboard_toast() {
-    let config = Config::default();
+    let config = desktop_config();
     let mut state = AppState::demo();
     state.prompt_width = 80;
     state.prompt.resize(78, 16);
@@ -468,7 +468,7 @@ fn mouse_supple_copy_button_writes_clipboard_toast() {
 
 #[test]
 fn mouse_click_prompt_page_arrows_switch_and_counter_opens_menu() {
-    let config = Config::default();
+    let config = desktop_config();
     let mut state = paged_prompt_state();
     let geo = geometry(&state, &config, Rect::new(0, 0, 140, 30));
     let mut sessions = HashMap::new();
@@ -547,7 +547,7 @@ fn mouse_click_prompt_page_arrows_switch_and_counter_opens_menu() {
 
 #[test]
 fn mouse_click_prompt_padding_only_focuses_without_moving_cursor() {
-    let config = Config::default();
+    let config = desktop_config();
     let mut state = paged_prompt_state();
     state.prompt.set_text("short");
     state.prompt.set_cursor_offset_for_test(0);
@@ -630,7 +630,7 @@ fn mouse_click_current_tab_focuses_panel_and_dirties() {
 fn mouse_click_prompt_collapse_button_works_on_todo_tab() {
     // 折叠按钮在容器底边框、位于"Todo 整块吞掉"分支之前；这条用例锁住顺序：
     // 一旦把吞掉分支提到折叠按钮之前，Todo 下面板就再也折不起来。
-    let config = Config::default();
+    let config = desktop_config();
     let mut state = demo_terminal();
     assert!(crate::app::update::select_right_tab(
         &mut state,
@@ -668,7 +668,7 @@ fn mouse_click_prompt_collapse_button_works_on_todo_tab() {
 
 #[test]
 fn lx_slash_wheel_prioritizes_over_history_and_clamped_history_never_leaks_to_input() {
-    let config = Config::default();
+    let config = desktop_config();
     let mut state = AppState::demo();
     let geo = geometry(&state, &config, Rect::new(0, 0, 120, 22));
     let pane = state.active_tab().layout.focus();
@@ -796,7 +796,7 @@ fn lx_slash_wheel_prioritizes_over_history_and_clamped_history_never_leaks_to_in
 
 #[test]
 fn prompt_refer_panel_wheel_scrolls_by_wheel_lines_without_scrolling_editor() {
-    let config = Config::default();
+    let config = desktop_config();
     let mut state = AppState::demo();
     let geo = geometry(&state, &config, Rect::new(0, 0, 120, 30));
     let area = crate::ui::right_panel::prompt::geometry::prompt_text_rect(geo.view.right_panel);
@@ -852,7 +852,7 @@ fn prompt_refer_panel_wheel_scrolls_by_wheel_lines_without_scrolling_editor() {
 
 #[test]
 fn clicking_prompt_command_panel_chrome_does_not_penetrate_to_editor_cursor() {
-    let config = Config::default();
+    let config = desktop_config();
     let mut state = demo_terminal();
     update::focus_prompt(&mut state);
     state.prompt.insert_str("line 0\nline 1\nline 2\n@");
@@ -891,7 +891,7 @@ fn clicking_prompt_command_panel_chrome_does_not_penetrate_to_editor_cursor() {
 
 #[test]
 fn right_click_prompt_editor_opens_menu_and_select_all_replaces_text() {
-    let config = Config::default();
+    let config = desktop_config();
     let mut state = demo_terminal();
     state.prompt.insert_str("first\nsecond");
     let geo = geometry(&state, &config, Rect::new(0, 0, 120, 30));
@@ -939,7 +939,7 @@ fn right_click_prompt_editor_opens_menu_and_select_all_replaces_text() {
 
 #[test]
 fn right_click_prompt_editor_keeps_pending_paste_proposal() {
-    let config = Config::default();
+    let config = desktop_config();
     let mut state = demo_terminal();
     let dir = paste_temp_dir("prompt-editor-menu");
     let file = dir.join("note.txt");

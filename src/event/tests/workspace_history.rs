@@ -126,7 +126,7 @@ fn confirm_button_point(shell: &ui::widgets::modal::ModalShell) -> (u16, u16) {
 
 #[test]
 fn mouse_click_mode_button_toggles_history_and_typing_filters_rows() {
-    let config = Config::default();
+    let config = desktop_config();
     let mut state = demo_terminal();
     let existing = std::env::temp_dir();
     let missing = PathBuf::from("/tmp/lx-event-history-missing-dir-12345");
@@ -206,7 +206,7 @@ fn mouse_click_mode_button_toggles_history_and_typing_filters_rows() {
 
 #[test]
 fn double_click_history_row_opens_workspace_and_right_click_missing_cascades_delete() {
-    let config = Config::default();
+    let config = desktop_config();
     let mut state = demo_terminal();
     let db = Database::open_in_memory().expect("in-memory db");
     let existing = std::env::temp_dir();
@@ -349,7 +349,7 @@ fn missing_entry_index(state: &AppState, path: &std::path::Path) -> usize {
 
 #[test]
 fn right_click_blank_delete_missing_removes_only_missing_entries() {
-    let config = Config::default();
+    let config = desktop_config();
     let mut state = demo_terminal();
     let db = Database::open_in_memory().expect("in-memory db");
     let existing = std::env::temp_dir();
@@ -441,7 +441,7 @@ fn right_click_blank_delete_missing_removes_only_missing_entries() {
 
 #[test]
 fn confirm_close_list_scrolls_with_wheel_and_deletes_all_missing() {
-    let config = Config::default();
+    let config = desktop_config();
     let mut state = demo_terminal();
     let db = Database::open_in_memory().expect("in-memory db");
     let existing = std::env::temp_dir();
@@ -564,7 +564,7 @@ fn confirm_scroll(state: &AppState) -> usize {
 
 #[test]
 fn confirm_close_wheel_reaches_tail_on_small_screen() {
-    let config = Config::default();
+    let config = desktop_config();
     let mut state = demo_terminal();
     state.workspace_history.entries = missing_history_entries();
     state.overlay = Some(Overlay::ConfirmClose(ConfirmClose::new(
@@ -615,7 +615,7 @@ fn confirm_close_wheel_reaches_tail_on_small_screen() {
 
 #[test]
 fn mouse_down_clears_stale_confirm_scroll_drag_and_selects_input() {
-    let config = Config::default();
+    let config = desktop_config();
     let mut state = demo_terminal();
     state.workspace_history.entries = missing_history_entries();
     let mut confirm = ConfirmClose::new(OverlayTarget::MissingWorkspaces);
@@ -758,7 +758,7 @@ fn deleted_missing_linked_worktree_stays_hidden_after_reload() {
     // `git worktree list` 仍会列出该 prunable 条目。
     std::fs::remove_dir_all(&canon_wt).expect("remove worktree dir");
 
-    let config = Config::default();
+    let config = desktop_config();
     update::show_workspace_history(&mut state);
     let geo = geometry(&state, &config, Rect::new(0, 0, 120, 30));
     let sections = ui::layout::sidebar_sections(geo.view.left_panel, state.agents_collapsed)

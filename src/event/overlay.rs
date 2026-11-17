@@ -58,17 +58,6 @@ pub(crate) fn handle_overlay_click(
         return None;
     }
     match state.overlay.as_ref() {
-        Some(Overlay::CompactSwitcher(switcher)) => {
-            if ui::overlay::compact_switcher_close_at(screen, switcher, column, row) {
-                update::close_compact_switcher(state);
-                return None;
-            }
-            if let Some(index) = ui::overlay::compact_switcher_row_at(screen, switcher, column, row)
-            {
-                update::select_compact_switcher_row(state, index);
-            }
-            None
-        }
         Some(Overlay::Menu(menu)) => {
             let layout = ui::overlay::menu_layout(state, screen, menu);
             match ui::widgets::menu::item_at(&layout, column, row) {

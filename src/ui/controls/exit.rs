@@ -7,6 +7,9 @@ use crate::ui::{layout, style, text};
 
 /// 退出按钮矩形：标签栏最右端贴右缘，右缘与右栏折叠态按钮对齐；空间不足时不显示。
 pub fn exit_button(view: &layout::ViewLayout) -> Option<Rect> {
+    if view.compact {
+        return None;
+    }
     let width = text::EXIT_LABEL.chars().count() as u16;
     let bar = view.tab_bar;
     if bar.height == 0 || bar.width < width {

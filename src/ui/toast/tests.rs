@@ -10,7 +10,7 @@ use std::time::Instant;
 fn view_for(state: &AppState) -> ViewLayout {
     crate::ui::layout::compute(
         Rect::new(0, 0, 100, 24),
-        &Config::default(),
+        &crate::ui::test_support::desktop_config(),
         state.sidebar_collapsed,
         state.sidebar_width,
         state.prompt_collapsed,
@@ -24,8 +24,8 @@ fn pane_rects(state: &AppState, view: &ViewLayout) -> Vec<(PaneId, Rect)> {
     crate::tiling::pane_rects(
         &state.active_tab().layout,
         view.main_content,
-        Config::default().min_pane_width,
-        Config::default().min_pane_height,
+        crate::ui::test_support::desktop_config().min_pane_width,
+        crate::ui::test_support::desktop_config().min_pane_height,
     )
 }
 
@@ -53,7 +53,7 @@ fn anchored_toast_centers_below_container_top_border() {
         &view,
         &rects,
         Rect::new(0, 0, 100, 24),
-        &Config::default(),
+        &crate::ui::test_support::desktop_config(),
     )
     .expect("toast area is resolvable");
     assert_eq!(rect.y, view.right_panel.y + 1);
@@ -83,7 +83,7 @@ fn titled_toast_keeps_four_rows_and_fits_title() {
         &view,
         &rects,
         Rect::new(0, 0, 100, 24),
-        &Config::default(),
+        &crate::ui::test_support::desktop_config(),
     )
     .expect("toast area is resolvable");
     assert_eq!(rect.height, 4);
@@ -103,7 +103,7 @@ fn titled_toast_renders_dot_title_and_indented_context_without_divider() {
     );
     let view = view_for(&state);
     let rects = pane_rects(&state, &view);
-    let config = Config::default();
+    let config = crate::ui::test_support::desktop_config();
     let area = rect(&state, &view, &rects, Rect::new(0, 0, 100, 24), &config)
         .expect("toast area is resolvable");
     let mut terminal = Terminal::new(TestBackend::new(100, 24)).expect("backend");
@@ -139,7 +139,7 @@ fn toast_has_transparent_background_after_clearing_underlying_cells() {
     show(&mut state, None);
     let view = view_for(&state);
     let rects = pane_rects(&state, &view);
-    let config = Config::default();
+    let config = crate::ui::test_support::desktop_config();
     let area = rect(&state, &view, &rects, Rect::new(0, 0, 100, 24), &config)
         .expect("toast area is resolvable");
     let mut terminal = ratatui::Terminal::new(ratatui::backend::TestBackend::new(100, 24))
@@ -175,7 +175,7 @@ fn pane_anchored_toast_targets_that_pane() {
         &view,
         &rects,
         Rect::new(0, 0, 100, 24),
-        &Config::default(),
+        &crate::ui::test_support::desktop_config(),
     )
     .expect("toast area is resolvable");
     assert_eq!(rect.y, container.y + 1);
@@ -195,7 +195,7 @@ fn narrow_container_falls_back_to_screen_top_center() {
         &view,
         &rects,
         Rect::new(0, 0, 100, 24),
-        &Config::default(),
+        &crate::ui::test_support::desktop_config(),
     )
     .expect("toast area is resolvable");
     assert_eq!(rect.y, 1);
@@ -213,7 +213,7 @@ fn missing_anchor_falls_back_to_screen_top_center() {
         &view,
         &rects,
         Rect::new(0, 0, 100, 24),
-        &Config::default(),
+        &crate::ui::test_support::desktop_config(),
     )
     .expect("toast area is resolvable");
     assert_eq!(rect.y, 1);
@@ -232,7 +232,7 @@ fn below_minimum_screen_has_no_toast() {
             &view,
             &rects,
             Rect::new(0, 0, 30, 8),
-            &Config::default()
+            &crate::ui::test_support::desktop_config()
         )
         .is_none()
     );
@@ -245,12 +245,26 @@ fn toast_renders_leading_dot_and_message() {
     let view = view_for(&state);
     let rects = pane_rects(&state, &view);
     let screen = Rect::new(0, 0, 100, 24);
-    let area = rect(&state, &view, &rects, screen, &Config::default()).expect("toast area");
+    let area = rect(
+        &state,
+        &view,
+        &rects,
+        screen,
+        &crate::ui::test_support::desktop_config(),
+    )
+    .expect("toast area");
     let mut terminal =
         Terminal::new(TestBackend::new(100, 24)).expect("test backend is infallible");
     terminal
         .draw(|frame| {
-            render(frame, screen, &state, &view, &rects, &Config::default());
+            render(
+                frame,
+                screen,
+                &state,
+                &view,
+                &rects,
+                &crate::ui::test_support::desktop_config(),
+            );
         })
         .expect("draw succeeds");
     let buffer = terminal.backend().buffer();
@@ -306,7 +320,7 @@ fn warning_toast_paints_yellow_border() {
         &view,
         &rects,
         Rect::new(0, 0, 100, 24),
-        &Config::default(),
+        &crate::ui::test_support::desktop_config(),
     )
     .expect("toast area");
     let mut terminal = Terminal::new(TestBackend::new(100, 24)).expect("terminal");
@@ -318,7 +332,7 @@ fn warning_toast_paints_yellow_border() {
                 &state,
                 &view,
                 &rects,
-                &Config::default(),
+                &crate::ui::test_support::desktop_config(),
             );
         })
         .expect("draw");
@@ -358,7 +372,7 @@ fn inactive_tab_pane_toast_does_not_leak_to_global_top_center() {
             &view,
             &rects,
             Rect::new(0, 0, 100, 24),
-            &Config::default(),
+            &crate::ui::test_support::desktop_config(),
         )
         .is_none(),
         "非活动标签页的窗格 toast 不得降级泄漏到当前屏幕顶部居中"
@@ -366,7 +380,7 @@ fn inactive_tab_pane_toast_does_not_leak_to_global_top_center() {
 }
 
 fn compact_view() -> ViewLayout {
-    let config = Config::default();
+    let config = crate::ui::test_support::desktop_config();
     crate::ui::layout::compute_with_panel(
         Rect::new(0, 0, 60, 20),
         &config,
@@ -388,7 +402,14 @@ fn compact_toast_is_a_single_bottom_banner() {
     let view = compact_view();
     assert!(view.compact);
     let screen = Rect::new(0, 0, 60, 20);
-    let area = rect(&state, &view, &[], screen, &Config::default()).expect("toast area");
+    let area = rect(
+        &state,
+        &view,
+        &[],
+        screen,
+        &crate::ui::test_support::desktop_config(),
+    )
+    .expect("toast area");
     assert_eq!(area, Rect::new(0, 19, 60, 1));
 }
 
@@ -405,7 +426,14 @@ fn compact_toast_renders_title_message_and_dot_on_one_row() {
     let mut terminal = Terminal::new(TestBackend::new(60, 20)).expect("test backend is infallible");
     terminal
         .draw(|frame| {
-            render(frame, screen, &state, &view, &[], &Config::default());
+            render(
+                frame,
+                screen,
+                &state,
+                &view,
+                &[],
+                &crate::ui::test_support::desktop_config(),
+            );
         })
         .expect("draw succeeds");
     let buffer = terminal.backend().buffer();

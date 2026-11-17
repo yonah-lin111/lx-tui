@@ -20,7 +20,7 @@ use std::path::{Path, PathBuf};
 use std::time::Instant;
 
 fn render_lines(state: &AppState) -> Vec<String> {
-    let config = Config::default();
+    let config = crate::ui::test_support::desktop_config();
     let mut terminal =
         RatatuiTerminal::new(TestBackend::new(100, 24)).expect("test backend is infallible");
     if let Err(error) = terminal.draw(|frame| render(frame, state, &config)) {
@@ -38,7 +38,7 @@ fn render_lines(state: &AppState) -> Vec<String> {
 
 /// 渲染一帧并返回缓冲；单元格样式断言使用。
 fn render_buffer(state: &AppState) -> ratatui::buffer::Buffer {
-    let config = Config::default();
+    let config = crate::ui::test_support::desktop_config();
     let mut terminal =
         RatatuiTerminal::new(TestBackend::new(100, 24)).expect("test backend is infallible");
     if let Err(error) = terminal.draw(|frame| render(frame, state, &config)) {
@@ -59,7 +59,7 @@ fn prompt_line(lines: &[String], view: &layout::ViewLayout, y: u16) -> String {
 fn view_for(state: &AppState) -> layout::ViewLayout {
     layout::compute(
         Rect::new(0, 0, 100, 24),
-        &Config::default(),
+        &crate::ui::test_support::desktop_config(),
         state.sidebar_collapsed,
         state.sidebar_width,
         state.prompt_collapsed,
@@ -476,7 +476,9 @@ fn collapse_button_cells_use_pure_accent_style() {
     let view = view_for(&state);
     let mut terminal =
         RatatuiTerminal::new(TestBackend::new(100, 24)).expect("test backend is infallible");
-    if let Err(error) = terminal.draw(|frame| render(frame, &state, &Config::default())) {
+    if let Err(error) =
+        terminal.draw(|frame| render(frame, &state, &crate::ui::test_support::desktop_config()))
+    {
         panic!("draw failed: {error}");
     }
     let buffer = terminal.backend().buffer().clone();
@@ -493,7 +495,7 @@ fn collapse_button_cells_use_pure_accent_style() {
 #[test]
 fn resize_hint_highlights_divider_on_hover() {
     let mut state = AppState::demo();
-    let config = Config::default();
+    let config = crate::ui::test_support::desktop_config();
     let view = view_for(&state);
     let mut terminal =
         RatatuiTerminal::new(TestBackend::new(100, 24)).expect("test backend is infallible");
@@ -588,7 +590,7 @@ fn expired_toast_is_not_rendered() {
 
 /// 渲染一帧并返回硬件光标状态：可见性与位置（TestBackend 记录 Hide/Show 与 MoveTo）。
 fn render_cursor(state: &AppState) -> (bool, (u16, u16)) {
-    let config = Config::default();
+    let config = crate::ui::test_support::desktop_config();
     let mut terminal =
         RatatuiTerminal::new(TestBackend::new(100, 24)).expect("test backend is infallible");
     if let Err(error) = terminal.draw(|frame| render(frame, state, &config)) {
@@ -683,7 +685,7 @@ fn error_toast_uses_danger_red_border() {
             Instant::now(),
         ),
     );
-    let config = Config::default();
+    let config = crate::ui::test_support::desktop_config();
     let view = view_for(&state);
     let pane_rects = crate::tiling::pane_rects(
         &state.active_tab().layout,
@@ -922,7 +924,7 @@ fn initial_workspace_marker_uses_accent_style() {
             .any(|line| line.contains(&created) && !line.contains(&format!("{created} *")))
     );
 
-    let config = Config::default();
+    let config = crate::ui::test_support::desktop_config();
     let mut terminal =
         RatatuiTerminal::new(TestBackend::new(100, 24)).expect("test backend is infallible");
     if let Err(error) = terminal.draw(|frame| render(frame, &state, &config)) {
@@ -1028,7 +1030,7 @@ fn workspace_rows_mark_selected_and_fill_hover_backgrounds() {
     update::create_workspace(&mut state);
     state.workspace_hover = Some(1);
 
-    let config = Config::default();
+    let config = crate::ui::test_support::desktop_config();
     let mut terminal =
         RatatuiTerminal::new(TestBackend::new(100, 24)).expect("test backend is infallible");
     if let Err(error) = terminal.draw(|frame| render(frame, &state, &config)) {
@@ -1077,7 +1079,7 @@ fn hovered_parent_workspace_item_uses_selection_background() {
     // 激活子项，使父项处于非激活状态。
     state.active_workspace = 1;
 
-    let config = Config::default();
+    let config = crate::ui::test_support::desktop_config();
     let mut terminal =
         RatatuiTerminal::new(TestBackend::new(100, 24)).expect("test backend is infallible");
 
@@ -1157,7 +1159,7 @@ fn dragged_workspace_item_renders_selection() {
     update::create_workspace(&mut state);
     state.workspace_drag = Some(0);
     state.workspace_dragging = true;
-    let config = Config::default();
+    let config = crate::ui::test_support::desktop_config();
     let mut terminal =
         RatatuiTerminal::new(TestBackend::new(100, 24)).expect("test backend is infallible");
     if let Err(error) = terminal.draw(|frame| render(frame, &state, &config)) {
@@ -1201,7 +1203,7 @@ fn drag_highlight_marks_group_only_after_pointer_move() {
     );
     state.workspace_drag = Some(0);
 
-    let config = Config::default();
+    let config = crate::ui::test_support::desktop_config();
     let mut terminal =
         RatatuiTerminal::new(TestBackend::new(100, 24)).expect("test backend is infallible");
     let view = view_for(&state);
@@ -1308,7 +1310,7 @@ fn swap_button_renders_between_panels_and_moves_prompt() {
 
 #[test]
 fn swap_button_needs_vertical_room() {
-    let config = Config::default();
+    let config = crate::ui::test_support::desktop_config();
     let short = layout::compute(
         Rect::new(0, 0, 100, 2),
         &config,
@@ -2038,7 +2040,7 @@ fn lx_pane_top_border_shows_workspace_identity() {
         branch: Some("feat/x".to_string()),
         main_branch: Some("dev".to_string()),
     });
-    let config = Config::default();
+    let config = crate::ui::test_support::desktop_config();
     let view = view_for(&state);
     let rects = crate::tiling::pane_rects(
         &state.active_tab().layout,
@@ -2120,7 +2122,7 @@ fn lx_pane_identity_value_ignores_focus() {
     state.workspaces[0].name = "demo".to_string();
     state.workspaces[0].cwd = Some(PathBuf::from("/work/demo"));
     state.workspaces[0].git = Some(git_info("/work/demo", "/work/demo", false, Some("main")));
-    let config = Config::default();
+    let config = crate::ui::test_support::desktop_config();
     let view = view_for(&state);
     let rects = crate::tiling::pane_rects(
         &state.active_tab().layout,
@@ -2179,7 +2181,7 @@ fn lx_pane_identity_hidden_for_agent_pane() {
             title: None,
         }),
     );
-    let config = Config::default();
+    let config = crate::ui::test_support::desktop_config();
     let view = view_for(&state);
     let rects = crate::tiling::pane_rects(
         &state.active_tab().layout,
@@ -2211,7 +2213,7 @@ fn pane_agent_value_ignores_focus() {
             title: None,
         }),
     );
-    let config = Config::default();
+    let config = crate::ui::test_support::desktop_config();
     let view = view_for(&state);
     let rects = crate::tiling::pane_rects(
         &state.active_tab().layout,
@@ -2370,7 +2372,7 @@ fn prompt_page_name_ignores_focus() {
 fn lx_pane_top_border_keeps_corners_with_long_path() {
     let mut state = AppState::demo();
     let pane = state.active_tab().layout.focus();
-    let config = Config::default();
+    let config = crate::ui::test_support::desktop_config();
     let view = view_for(&state);
     let rects = crate::tiling::pane_rects(
         &state.active_tab().layout,
@@ -2391,7 +2393,7 @@ fn lx_pane_top_border_keeps_corners_with_long_path() {
 #[test]
 fn pane_title_and_toggle_label_follow_view() {
     let mut state = AppState::demo();
-    let config = Config::default();
+    let config = crate::ui::test_support::desktop_config();
     let view = view_for(&state);
     let rects = crate::tiling::pane_rects(
         &state.active_tab().layout,
@@ -2445,7 +2447,7 @@ fn pane_border_shows_agent_label_separated_from_toggle_button() {
             title: None,
         }),
     );
-    let config = Config::default();
+    let config = crate::ui::test_support::desktop_config();
     let view = view_for(&state);
     let rects = crate::tiling::pane_rects(
         &state.active_tab().layout,
@@ -2519,7 +2521,7 @@ fn assert_modal_header_title(buffer: &ratatui::buffer::Buffer, area: Rect) {
 #[test]
 fn focused_pane_title_uses_soft_blue_style() {
     let state = AppState::demo();
-    let config = Config::default();
+    let config = crate::ui::test_support::desktop_config();
     let view = view_for(&state);
     let rects = crate::tiling::pane_rects(
         &state.active_tab().layout,

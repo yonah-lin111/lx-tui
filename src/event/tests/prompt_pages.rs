@@ -21,7 +21,7 @@ fn multi_page_state() -> AppState {
 
 #[test]
 fn single_click_selects_page_row_without_switching_page() {
-    let config = Config::default();
+    let config = desktop_config();
     let mut state = multi_page_state();
     assert!(crate::app::update::show_prompt_pages(&mut state));
     assert_eq!(state.workspaces[0].prompt_panel.mode, PromptMode::Pages);
@@ -54,7 +54,7 @@ fn single_click_selects_page_row_without_switching_page() {
 
 #[test]
 fn double_click_within_window_opens_selected_page() {
-    let config = Config::default();
+    let config = desktop_config();
     let mut state = multi_page_state();
     assert!(crate::app::update::show_prompt_pages(&mut state));
 
@@ -89,7 +89,7 @@ fn double_click_within_window_opens_selected_page() {
 
 #[test]
 fn tree_click_history_does_not_bleed_into_pages_single_click() {
-    let config = Config::default();
+    let config = desktop_config();
     let mut state = multi_page_state();
     // 模拟在 Tree 视图刚刚点击过第 1 行。
     state.prompt_row_click = Some((1, std::time::Instant::now()));
@@ -125,7 +125,7 @@ fn tree_click_history_does_not_bleed_into_pages_single_click() {
 
 #[test]
 fn wheel_scrolls_page_list_without_moving_selection() {
-    let config = Config::default();
+    let config = desktop_config();
     let mut state = multi_page_state();
     state.prompt.resize(40, 6);
     assert!(crate::app::update::show_prompt_pages(&mut state));
@@ -154,7 +154,7 @@ fn wheel_scrolls_page_list_without_moving_selection() {
 
 #[test]
 fn clicking_title_counter_toggles_between_editor_and_pages() {
-    let config = Config::default();
+    let config = desktop_config();
     let mut state = paged_prompt_state();
     let geo = geometry(&state, &config, Rect::new(0, 0, 140, 30));
     let bar = crate::ui::right_panel::prompt::geometry::prompt_toolbar_rect(geo.view.right_panel)

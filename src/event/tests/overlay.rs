@@ -3,7 +3,7 @@ use super::*;
 
 #[test]
 fn mouse_right_click_tab_opens_tab_menu() {
-    let config = Config::default();
+    let config = desktop_config();
     let mut state = demo_terminal();
     crate::app::update::create_tab(&mut state);
     let geo = geometry(&state, &config, Rect::new(0, 0, 120, 30));
@@ -36,7 +36,7 @@ fn mouse_right_click_tab_opens_tab_menu() {
 
 #[test]
 fn mouse_right_click_workspace_item_opens_workspace_menu() {
-    let config = Config::default();
+    let config = desktop_config();
     let mut state = demo_terminal();
     let geo = geometry(&state, &config, Rect::new(0, 0, 120, 30));
     let sections = ui::layout::sidebar_sections(geo.view.left_panel, state.agents_collapsed)
@@ -68,7 +68,7 @@ fn mouse_right_click_workspace_item_opens_workspace_menu() {
 
 #[test]
 fn mouse_right_click_workspace_list_blank_opens_new_workspace_menu() {
-    let config = Config::default();
+    let config = desktop_config();
     let mut state = demo_terminal();
     let geo = geometry(&state, &config, Rect::new(0, 0, 120, 30));
     let sections = ui::layout::sidebar_sections(geo.view.left_panel, state.agents_collapsed)
@@ -104,7 +104,7 @@ fn mouse_right_click_workspace_list_blank_opens_new_workspace_menu() {
 
 #[test]
 fn mouse_right_click_workspace_blank_retargets_open_menu() {
-    let config = Config::default();
+    let config = desktop_config();
     let mut state = demo_terminal();
     let geo = geometry(&state, &config, Rect::new(0, 0, 120, 30));
     let pane = state.active_tab().layout.focus();
@@ -153,7 +153,7 @@ fn mouse_right_click_workspace_blank_retargets_open_menu() {
 
 #[test]
 fn mouse_right_click_agents_blank_does_not_open_menu() {
-    let config = Config::default();
+    let config = desktop_config();
     let mut state = demo_terminal();
     let geo = geometry(&state, &config, Rect::new(0, 0, 120, 30));
     let sections = ui::layout::sidebar_sections(geo.view.left_panel, state.agents_collapsed)
@@ -178,7 +178,7 @@ fn mouse_right_click_agents_blank_does_not_open_menu() {
 
 #[test]
 fn mouse_right_click_pane_opens_pane_menu_at_pointer() {
-    let config = Config::default();
+    let config = desktop_config();
     let mut state = demo_terminal();
     let geo = geometry(&state, &config, Rect::new(0, 0, 120, 30));
     let pane = state.active_tab().layout.focus();
@@ -214,7 +214,7 @@ fn mouse_right_click_pane_opens_pane_menu_at_pointer() {
 
 #[test]
 fn mouse_right_click_prompt_does_not_open_menu() {
-    let config = Config::default();
+    let config = desktop_config();
     let mut state = demo_terminal();
     let geo = geometry(&state, &config, Rect::new(0, 0, 120, 30));
     let inner = tiling::pane_inner_rect(geo.view.right_panel);
@@ -241,7 +241,7 @@ fn mouse_right_click_prompt_does_not_open_menu() {
 
 #[test]
 fn mouse_right_click_other_pane_retargets_open_menu() {
-    let config = Config::default();
+    let config = desktop_config();
     let mut state = demo_terminal();
     let first = state.active_tab().layout.focus();
     let second = state
@@ -283,7 +283,7 @@ fn mouse_right_click_other_pane_retargets_open_menu() {
 
 #[test]
 fn mouse_right_click_prompt_closes_open_pane_menu() {
-    let config = Config::default();
+    let config = desktop_config();
     let mut state = demo_terminal();
     let geo = geometry(&state, &config, Rect::new(0, 0, 120, 30));
     let pane = state.active_tab().layout.focus();
@@ -326,7 +326,7 @@ fn mouse_right_click_prompt_closes_open_pane_menu() {
 
 #[test]
 fn mouse_click_pane_menu_split_item_creates_pane() {
-    let config = Config::default();
+    let config = desktop_config();
     let mut state = demo_terminal();
     let geo = geometry(&state, &config, Rect::new(0, 0, 120, 30));
     let pane = state.active_tab().layout.focus();
@@ -369,7 +369,7 @@ fn mouse_click_pane_menu_split_item_creates_pane() {
 
 #[test]
 fn switch_cwd_menu_item_first_click_arms_confirm_second_click_returns_cd_command() {
-    let config = Config::default();
+    let config = desktop_config();
     let mut state = demo_terminal();
     state.workspaces[0].cwd = Some(PathBuf::from("/tmp/target"));
     let pane = state.active_tab().layout.focus();
@@ -410,7 +410,7 @@ fn switch_cwd_menu_item_first_click_arms_confirm_second_click_returns_cd_command
 
 #[test]
 fn switch_cwd_menu_item_click_outside_cancels_without_command() {
-    let config = Config::default();
+    let config = desktop_config();
     let mut state = demo_terminal();
     state.workspaces[0].cwd = Some(PathBuf::from("/tmp/target"));
     let pane = state.active_tab().layout.focus();
@@ -447,7 +447,7 @@ fn switch_cwd_menu_item_click_outside_cancels_without_command() {
 
 #[test]
 fn mouse_click_close_tab_menu_item_twice_closes_tab_inline() {
-    let config = Config::default();
+    let config = desktop_config();
     let mut state = demo_terminal();
     crate::app::update::create_tab(&mut state);
     let geo = geometry(&state, &config, Rect::new(0, 0, 120, 30));
@@ -509,7 +509,7 @@ fn mouse_click_close_tab_menu_item_twice_closes_tab_inline() {
 
 #[test]
 fn hover_in_widened_confirm_region_clears_hover_when_menu_shrinks_back() {
-    let config = Config::default();
+    let config = desktop_config();
     let mut state = demo_terminal();
     state.workspaces[0].cwd = Some(PathBuf::from("/tmp/target"));
     let pane = state.active_tab().layout.focus();
@@ -571,7 +571,7 @@ fn hover_in_widened_confirm_region_clears_hover_when_menu_shrinks_back() {
 
 #[test]
 fn first_click_on_confirm_item_does_not_yank_sidebar_scroll_to_active_workspace() {
-    let config = Config::default();
+    let config = desktop_config();
     let mut state = demo_terminal();
     for _ in 0..15 {
         crate::app::update::create_workspace(&mut state);
@@ -616,7 +616,7 @@ fn first_click_on_confirm_item_does_not_yank_sidebar_scroll_to_active_workspace(
 
 #[test]
 fn mouse_leaving_overlay_menu_clears_hover_feedback() {
-    let config = Config::default();
+    let config = desktop_config();
     let mut state = demo_terminal();
     let geo = geometry(&state, &config, Rect::new(0, 0, 120, 30));
     let mut sessions = HashMap::new();
@@ -709,7 +709,7 @@ fn trust_overlay_inside_click_keeps_open_and_outside_refuses() {
 
 #[test]
 fn exit_button_requests_quit_toast() {
-    let config = Config::default();
+    let config = desktop_config();
     let mut state = demo_terminal();
     let geo = geometry(&state, &config, Rect::new(0, 0, 120, 30));
     let exit = ui::exit_button(&geo.view).expect("exit button visible");
@@ -737,7 +737,7 @@ fn exit_button_requests_quit_toast() {
 
 #[test]
 fn second_exit_click_confirms_after_guard() {
-    let config = Config::default();
+    let config = desktop_config();
     let mut state = demo_terminal();
     let geo = geometry(&state, &config, Rect::new(0, 0, 120, 30));
     let exit = ui::exit_button(&geo.view).expect("exit button visible");
@@ -763,7 +763,7 @@ fn second_exit_click_confirms_after_guard() {
 
 #[test]
 fn ctrl_q_over_existing_overlay_shows_global_toast_and_keeps_it() {
-    let config = Config::default();
+    let config = desktop_config();
     let mut state = demo_terminal();
     let geo = geometry(&state, &config, Rect::new(0, 0, 120, 30));
     state.overlay = Some(Overlay::Rename(crate::app::overlay::Rename {
@@ -806,7 +806,7 @@ fn ctrl_q_over_existing_overlay_shows_global_toast_and_keeps_it() {
 
 #[test]
 fn ctrl_q_auto_repeat_does_not_exit() {
-    let config = Config::default();
+    let config = desktop_config();
     let mut state = demo_terminal();
     let geo = geometry(&state, &config, Rect::new(0, 0, 120, 30));
     let mut sessions = HashMap::new();

@@ -106,6 +106,18 @@ pub(crate) fn handle_key_event(
         }
         return;
     }
+    // 紧凑全屏左栏没有键盘交互：裸 Esc 关闭左栏回 Chat。右栏不在此列，
+    // Prompt/Todo 的 Esc 继续服务清瞬态面板与选区，避免编辑中误关整栏。
+    if key.code == KeyCode::Esc
+        && key.modifiers.is_empty()
+        && view.compact
+        && state.sidebar_focused()
+        && state.overlay.is_none()
+    {
+        update::back_to_compact_chat(state);
+        *dirty = true;
+        return;
+    }
     let Some(routed) = input::route(key, mode, state.focus(), overlay, pane_lx) else {
         return;
     };

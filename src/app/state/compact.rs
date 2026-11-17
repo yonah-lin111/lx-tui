@@ -1,49 +1,24 @@
-//! 紧凑布局的派生数据：进入前的折叠快照、全局 Agent 条目与切换器行模型。
+//! 紧凑布局的派生数据：进入前的折叠快照、全屏面板与全局 Agent 状态。
 
-use super::{AppState, RightTab, SidebarAgentEntry};
+use crate::detect::AgentState;
+
+use super::{AppState, SidebarAgentEntry};
 
 /// 进入紧凑布局前的桌面折叠状态；`Some` 表示当前处于紧凑布局。
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct CompactRestore {
+    pub sidebar_collapsed: bool,
     pub prompt_collapsed: bool,
     pub panes_collapsed: bool,
 }
 
-/// 紧凑切换器分区。
+/// 紧凑布局下由焦点推导出的全屏面板。
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum CompactSection {
-    Agents,
-    Spaces,
-    Tabs,
-    Panels,
-    Actions,
-}
-
-/// 跨工作区的 Agent 条目：侧栏条目 + 所属工作区与可选标题。
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct CompactAgentRow {
-    pub workspace: usize,
-    pub entry: SidebarAgentEntry,
-    pub title: Option<String>,
-}
-
-/// 紧凑切换器的一行。
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub enum CompactRow {
-    Section(CompactSection),
-    Agent(CompactAgentRow),
-    Workspace(usize),
-    Tab(usize),
-    Panel(RightTab),
-    NewWorkspace,
-    NewTab,
-}
-
-impl CompactRow {
-    /// 分区标题行不可选中。
-    pub const fn is_selectable(&self) -> bool {
-        !matches!(self, Self::Section(_))
-    }
+pub enum CompactPanel {
+    /// 左侧栏：工作区与 Agents。
+    Left,
+    /// 右侧栏：Prompt 或 Todo（具体页由 `right_tab` 决定）。
+    Right,
 }
 
 impl AppState {
@@ -84,50 +59,17 @@ impl AppState {
         entries
     }
 
-    /// 所有工作区的 Agent 条目；紧凑切换器使用。
-    pub fn global_agent_entries(&self) -> Vec<CompactAgentRow> {
-        let mut rows = Vec::new();
+    /// 所有工作区的 Agent 状态；顶部状态行只做聚合计数。
+    pub fn global_agent_states(&self) -> Vec<AgentState> {
+        let mut states = Vec::new();
         for workspace in 0..self.workspaces.len() {
-            for entry in self.agent_entries_for_workspace(workspace) {
-                let title = self
-                    .pane_anywhere(entry.pane_id)
-                    .and_then(|pane| pane.agent_display_title(entry.kind))
-                    .map(str::to_string);
-                rows.push(CompactAgentRow {
-                    workspace,
-                    entry,
-                    title,
-                });
-            }
+            states.extend(
+                self.agent_entries_for_workspace(workspace)
+                    .into_iter()
+                    .map(|entry| entry.state),
+            );
         }
-        rows
-    }
-
-    /// 紧凑切换器的完整行序：Agents（有条目时）→ Spaces → Tabs → Panels → Actions。
-    pub fn compact_rows(&self) -> Vec<CompactRow> {
-        let mut rows = Vec::new();
-
-        let agents = self.global_agent_entries();
-        if !agents.is_empty() {
-            rows.push(CompactRow::Section(CompactSection::Agents));
-            rows.extend(agents.into_iter().map(CompactRow::Agent));
-        }
-
-        rows.push(CompactRow::Section(CompactSection::Spaces));
-        rows.extend((0..self.workspaces.len()).map(CompactRow::Workspace));
-
-        rows.push(CompactRow::Section(CompactSection::Tabs));
-        rows.extend((0..self.active_workspace().tabs.len()).map(CompactRow::Tab));
-
-        rows.push(CompactRow::Section(CompactSection::Panels));
-        rows.push(CompactRow::Panel(RightTab::Prompt));
-        rows.push(CompactRow::Panel(RightTab::Todo));
-
-        rows.push(CompactRow::Section(CompactSection::Actions));
-        rows.push(CompactRow::NewWorkspace);
-        rows.push(CompactRow::NewTab);
-
-        rows
+        states
     }
 }
 

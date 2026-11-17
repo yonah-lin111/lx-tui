@@ -295,14 +295,6 @@ pub(crate) fn handle_mouse_wheel(
         }
         return;
     }
-    if let Some(delta) = vertical_wheel_delta(mouse.kind)
-        && let Some(crate::app::overlay::Overlay::CompactSwitcher(_)) = state.overlay.as_ref()
-    {
-        if update::scroll_compact_switcher(state, delta) {
-            *dirty = true;
-        }
-        return;
-    }
     if state.overlay.is_some() {
         return;
     }
