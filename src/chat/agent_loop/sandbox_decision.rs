@@ -106,7 +106,9 @@ where
             denial_excerpt: None,
             source: None,
         };
-        let decision = approve(host, call, approval).await?;
+        let decision = approve(host, call, approval)
+            .await
+            .map_err(approval_failure)?;
         if decision == SandboxApprovalDecision::Denied {
             return Err(ToolFailure::new(
                 ToolErrorCode::SandboxDenied,
@@ -149,7 +151,9 @@ where
             denial_excerpt: None,
             source: None,
         };
-        let decision = approve(host, call, approval).await?;
+        let decision = approve(host, call, approval)
+            .await
+            .map_err(approval_failure)?;
         if decision == SandboxApprovalDecision::Denied {
             return Err(ToolFailure::new(
                 ToolErrorCode::SandboxDenied,
@@ -169,7 +173,7 @@ async fn approve<H: AgentHost>(
     host: &mut H,
     call: &ReadyToolCall,
     approval: crate::chat::sandbox::SandboxApprovalRequest,
-) -> Result<crate::chat::sandbox::SandboxApprovalDecision, ToolExecutionResult> {
+) -> Result<crate::chat::sandbox::SandboxApprovalDecision, HostError> {
     let (reply, receiver) = oneshot::channel();
     host.send(AgentHostRequest::ApproveSandbox {
         call_id: call.call_id.clone(),
@@ -177,9 +181,8 @@ async fn approve<H: AgentHost>(
         reply,
     });
     match receiver.await {
-        Ok(Ok(decision)) => Ok(decision),
-        Ok(Err(error)) => Err(approval_failure(error)),
-        Err(_) => Err(approval_failure(HostError::Cancelled)),
+        Ok(result) => result,
+        Err(_) => Err(HostError::Cancelled),
     }
 }
 
@@ -254,6 +257,11 @@ where
                 result
             }
         }
-        Err(failure) => failure,
+        Err(HostError::Cancelled) => approval_failure(HostError::Cancelled),
+        Err(HostError::Failed { code }) => {
+            // 审批通道繁忙/不可用：保留第一次的沙箱失败原文，不伪装成审批拒绝。
+            tracing::warn!(%code, "sandbox retry approval failed");
+            result
+        }
     }
 }
