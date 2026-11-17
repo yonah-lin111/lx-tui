@@ -1189,6 +1189,7 @@ fn all_text_overlays_route_word_ops_and_cut() {
         OverlayKind::ResumeSessionEdit,
         OverlayKind::Connect,
         OverlayKind::AgentTitle,
+        OverlayKind::NewAgent,
     ];
     let cases = [
         (
@@ -1228,6 +1229,30 @@ fn all_text_overlays_route_word_ops_and_cut() {
             );
         }
     }
+}
+
+#[test]
+fn new_agent_overlay_routes_text_and_navigation_keys() {
+    let key =
+        |code, modifiers| super::overlay_key(KeyEvent::new(code, modifiers), OverlayKind::NewAgent);
+    assert_eq!(
+        key(KeyCode::Char('o'), KeyModifiers::NONE),
+        Some(OverlayKey::Char('o'))
+    );
+    assert_eq!(
+        key(KeyCode::Backspace, KeyModifiers::NONE),
+        Some(OverlayKey::Backspace)
+    );
+    assert_eq!(key(KeyCode::Esc, KeyModifiers::NONE), Some(OverlayKey::Esc));
+    assert_eq!(
+        key(KeyCode::Enter, KeyModifiers::NONE),
+        Some(OverlayKey::Enter)
+    );
+    assert_eq!(key(KeyCode::Up, KeyModifiers::NONE), Some(OverlayKey::Up));
+    assert_eq!(
+        key(KeyCode::Down, KeyModifiers::NONE),
+        Some(OverlayKey::Down)
+    );
 }
 
 #[test]
