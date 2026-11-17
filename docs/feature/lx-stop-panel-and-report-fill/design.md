@@ -169,13 +169,14 @@
   - 本轮 `StopReason::Cancelled`，不生成报告；
   - 状态持久化为 `cancelled`；
   - `user_stopped` 保留在内存；
-  - `wait_agent` / `list_agents` 结果带 `stopped_by_user: true`；
-  - 主 agent 提示词明确“用户主动停止，不要自动恢复”。
+  - 在途 `wait_agent` **立即结算**该目标：`status=stopped`、`stopped_by_user=true`、无报告；`wait_for=all` 继续等剩余目标，全部停止时立即返回；
+  - `wait_agent` / `list_agents` 的模型可见文本都带 `stopped_by_user: true`；
+  - 主 agent 提示词明确“停止是终态，不要再次等待/自动恢复”。
 - 恢复：
   - `send_input` 允许把目标从 `user_stopped` 唤醒并投递（用户明确要求时）；
   - `resume_agent` 允许不带新话恢复；
   - Agents 面板输入框直接发送允许自动恢复；
-  - 任意成功唤醒后从 `user_stopped` 移除，状态回到 `idle/running`。
+  - 任意成功唤醒后从 `user_stopped` 移除，状态回到 `idle/running`，并同步清除列表/卡片上的 `stopped` 投影；唤醒失败（DB/并发/图片校验）保留停止终态。
 - 不自动恢复：
   - 停止本身不启动主轮、不投递报告、不自动 resume；
   - 主 agent 下一轮看到 `stopped_by_user` 后，只有用户明确点名继续才可调用 `send_input`/`resume_agent`。
@@ -219,6 +220,9 @@
 - `/report` 忙碌（目标 running / queued / compacting，或正有报告在跑）拒绝，不产生效应。
 - 目标无会话 / 已被移除：Toast `Cannot report from this agent`。
 - 总结失败/取消/正文为空：不填芯片，Toast `Report unavailable`；不写检查点。
+- 报告正文在提交时定型：来源头、总结正文与变更文件一并写入 `summary_text`；卡片、芯片与 `Resend` 读取同一份文本。
+- 提交时校验 `end_sequence` 之后没有新消息（并让 BTW 新问答推进 revision）：总结期间的问答不会让旧报告排到时间线末尾。
+- 主输入框处于 Shell 模式时拒绝写芯片（避免报告正文被当作命令执行）；切会话时剥除旧会话的报告芯片。
 - 报告检查点不参与上下文装配（`active_checkpoint` 只认 `kind = compact`）。
 - 二级面板只在报告检查点仍是时间线最后一条时出现；它后面已有消息、撤销提示或其它检查点时，`/report` 直接发起新的总结。
 - 报告卡片与 compact 卡片共用按 `sequence` 交错的时间线，不固定在消息列表底部；BTW 乐观消息的展示序号取消息/提示/检查点最大值 +1，后续问答自然排在报告之后。
@@ -1127,10 +1131,10 @@ impl Lx {
 在 subagent 控制工具说明附近新增英文规则：
 
 ```text
-- A subagent may be stopped by the user from the task panel. That stop is an explicit user decision: do not resume it or send it more work unless the user explicitly asks you to continue that subagent. Results from `wait_agent` and `list_agents` mark such agents with `stopped_by_user: true`.
+- A subagent may be stopped by the user from the task panel. Treat that as final: do not resume it or send it more work unless the user explicitly asks. A pending `wait_agent` treats that target as final: it returns `status=stopped` with no report, while `wait_for=all` still waits for the other targets. Continue without it and do not wait again. `list_agents` marks it `stopped_by_user: true`.
 ```
 
-- `PROMPT_VERSION` 从 `lx-14` 递增到 `lx-15`。
+- `PROMPT_VERSION` 从 `lx-14` 递增到 `lx-15`；§10.2 把等待语义改为“停止即结算”后，最终版本为 `lx-16`。
 - 更新 `src/chat/prompt.rs` 中锁定版本的测试。
 - 不改工具 schema；只改系统提示。
 
@@ -1323,7 +1327,7 @@ impl Lx {
 ### 8.2 用户主动停止
 
 1. Agents 页签 `^d` 停 Curie：状态显示 `stopped`；Curie 消息保留；不生成报告。
-2. 主 agent 等待 Curie 的 `wait_agent` 返回 `stopped_by_user: true`；主 agent 不自动恢复。
+2. 主 agent 正在等待 Curie 的 `wait_agent`：等待**立即结算**，Curie 以 `status=stopped`、`stopped_by_user=true`、无报告返回；主轮不中断、不挂起，继续本轮（自行接手、换人或向用户说明）。`all` 模式还有其它目标时继续等剩余目标。
 3. 用户在主 agent 输入“让 Curie 继续检查 auth.rs”：Curie 被唤醒并收到这句话。
 4. 用户在 Agents 面板 Curie 输入框直接发送：Curie 被唤醒并处理。
 5. 用户不说继续：主 agent 不调用 `send_input`/`resume_agent`。
@@ -1361,3 +1365,41 @@ impl Lx {
 2. BTW 不再按 `@目标` 重新查询，只总结线程已有问答；新 QA 无线程时拒绝。
 3. 报告检查点使用 schema v30 的 `kind` 列；旧 `notify_parent=1` 报告轮不追溯。
 4. 主输入框/所有输入框的 `↓`：非末行下移；末行中间落到行尾；主输入框已在末尾时打开后台任务面板。
+
+---
+
+## 10. 二次验收修复（2026-11-16）
+
+### 10.1 BTW 多目标只执行第一个
+
+- **现象**：`@Turing @Curie` 的同一批次里，Turing 正常回答，Curie 始终 `queued`（没有 assistant 消息），重启后列表显示 `interrupted`。
+- **根因**：每个回答者各自 `try_lock_session(child_session_id)`；POSIX 文件锁不可重入，同一进程内第二个回答者必然拿不到锁，被 `start_recipient` 丢弃在 pending 队列之外。
+- **修复**：同一 child session 的回答者共享同一把 `Arc<FileGuard>`（`BtwRun._guard`）。守卫失败（真正跨实例冲突）时把回答者收敛为 `failed`，不再留下永久 `queued`。
+- **恢复语义**：启动恢复只把真正 `running` 的回答者标 `interrupted`；`queued`（从未启动）标 `cancelled`。批次状态按回答者聚合（`completed + cancelled = partial`），不再整批写 `interrupted`。
+- **列表刷新**：批次进入终态、`/btw` 停止后重新加载 QA 列表；新回答者启动时立即把该 QA 行状态改为 `running`，不再显示上一批次的旧状态。
+
+### 10.2 用户停止 subagent 后的等待语义
+
+- **根因（第一次）**：用户停止只取消子 agent 的 handle；主 agent 阻塞在 `wait_agent` 上，子 agent 结算触发 `done`，等待把 `stopped_by_user: true` 交回模型，主 agent 随即继续生成。
+- **已废弃的方案**：把目标从等待集合剔除后让等待无限挂起。实测主轮永久停在 `Waiting for agents...`，唯一出口是 Esc，属于更差的体验。
+- **最终语义：停止是终态，不是挂起。**
+  - 等待任务监听用户停止广播；命中后把目标从活跃集合剔除，并按 `Any` / `All` 立即结算：`Any` 直接返回；`All` 继续等剩余目标，剩余目标全部停止时立即返回。
+  - 等待发起前目标就已经停止：同样立即结算，不进入等待。
+  - 结算结果覆盖全部原目标：被停止者 `status=stopped`、`stopped_by_user=true`、`report=null`；工具结果首行给出 `note`，明确要求模型“不要再次等待该目标”。
+  - 主轮不取消、不置 `main_stopped`；模型拿回工具结果后继续本轮，自行决定接手、换人或向用户说明缺了什么。
+  - 超时续等保留完整目标集合；`wait` 每轮按 `user_stopped` 过滤，已停止目标不会重新进入活跃集合，也不会再次造成挂起。
+- **UI**：`spawn_agent` / Agents 面板在停止瞬间投影 `stopped`（不再显示 `interrupted`）；`wait_agent` 标题追加 `stopped`；等待卡片立即收尾，不再出现无法结束的 spinner。
+- 系统提示同步说明该行为，`PROMPT_VERSION` 递增为 `lx-16`。
+
+---
+
+## 11. Review 修订（2026-11-17）
+
+完整分级见 `review.md`；对设计语义有影响的修订：
+
+1. **报告正文定型**：`CompactRequest` 在发起时冻结来源头与变更文件，提交前组装成最终正文写入检查点；卡片、主输入框芯片、`Resend` 读取同一份 `summary_text`，不再二次拼装。
+2. **报告提交约束**：`kind = report` 额外校验 `end_sequence` 之后没有新消息；BTW 新问答推进子会话 revision。总结期间的新问答不会让旧报告排到时间线末尾。
+3. **输入框保护**：Shell 模式拒绝写报告芯片；程序化插入后清空依赖字节偏移的 `@`/slash/refer 浮层；会话切换/`/new` 剥除报告芯片并清空撤销栈。
+4. **停止即结算的补充**：取消信号发送失败不删句柄，直接按取消结算；`settle_wait` 对被停止目标不领取旧报告；唤醒成功才解除 `user_stopped`，失败保留终态并回滚 UI/`resumed` 标记。
+5. **BTW 批次收敛**：批次占位按 `(thread, batch)` 回收；回答者与批次状态同事务收敛；停止聚合为 `interrupted`；单目标启动失败使用独立事件，不谎报“草稿保留”。
+6. **可用性投影**：`Finishing` 不算可停止主轮；`/resume` 后主动回投 subagent 列表；嵌套 `wait_for=all` 卡片只展示严格后代；`list_agents` 文本带 `stopped_by_user`。

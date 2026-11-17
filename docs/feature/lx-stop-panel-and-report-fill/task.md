@@ -17,7 +17,7 @@
 
 - [ ] 用户审核 `design.md` 的 21 项决策与 §9 三项待确认。
 - [ ] 确认只改当前 `dev` 工作区，不新建 worktree、不改 Git 状态。
-- [ ] 确认无数据库迁移；`user_stopped`、`report_to_input`、`stopped_by_user` 仅内存。
+- [x] 报告检查点需要 schema v30（`kind` 列）；`user_stopped`、`stopped_by_user` 仅内存。
 
 ---
 
@@ -340,7 +340,7 @@
 ### `src/chat/prompt.rs` tests
 
 - `prompt_documents_user_stopped_subagents`
-- `prompt_version_is_lx_15`
+- `prompt_version_is_lx_16`
 
 ---
 
@@ -401,7 +401,7 @@ cargo test --lib slash_panels
 ## 6. 完成定义（DoD）
 
 - [ ] `design.md` 的 21 项决策全部落实，无未决边界。
-- [ ] 无数据库迁移，`SCHEMA_VERSION` 不变。
+- [x] 报告检查点使用 v30 `kind` 迁移；`SCHEMA_VERSION = 30`，旧行默认 `compact`。
 - [ ] 停止面板五项动作、默认 `Stop all`、禁用态、作用域正确。
 - [ ] 用户主动停止：不自动恢复、等待结果标记、队列取消、面板/主 agent 带话唤醒均可用。
 - [ ] `/report` 只填主输入框，不自动起父轮；二级面板三项；同源芯片替换；顶部空行规则。
@@ -469,3 +469,27 @@ cargo test --lib slash_panels
 - `cargo fmt --check`
 - `cargo clippy --all-targets -- -D warnings`
 - `cargo test`
+
+### 8.6 BTW 多目标执行与用户停止唤醒（2026-11-16 二次验收）
+
+- [x] BTW 同线程多回答者共享 `Arc<FileGuard>`，解决第二个目标永远 `queued`、重启后被误标 `interrupted` 的问题。
+- [x] 启动恢复：`queued` 回答者标 `cancelled`，仅 `running` 标 `interrupted`；批次按聚合状态收敛（已完成 + 未启动 = `partial`）。
+- [x] QA 列表状态刷新：批次终态、停止排队回答、新回答者启动时同步。
+- [x] 用户主动停止正在被 `wait_agent` 等待的 subagent：停止是终态，等待立即结算为 `status=stopped`（`All` 继续等剩余目标），主轮不取消、不挂起。
+- [x] 等待发起前目标已停止：立即结算；超时续等按 `user_stopped` 过滤，不重新进入活跃集合。
+- [x] 工具结果首行给出停止说明，逐目标输出 `stopped_by_user=true`；`spawn_agent` / Agents 面板立即显示 `stopped`，`wait_agent` 标题追加 `stopped`。
+- [x] 系统提示补充等待语义，`PROMPT_VERSION` → `lx-16`。
+- [x] 回归测试：多目标 BTW 全部进入 running、启动恢复不误标 queued、停止即结算且主轮不取消、多目标继续等剩余、已停止目标立即返回。
+
+---
+
+## 9. 代码 Review 与修复（2026-11-17）
+
+完整分级、根因与验证见 `review.md`。本轮修复：
+
+- **P0**：Shell 模式下拒绝写入报告芯片，避免报告正文被当命令执行。
+- **P1**：报告正文提交前定型（来源头 + 变更文件 + 净化 + 8 KiB），卡片/芯片/Resend 同源；报告提交校验 `end_sequence` 后无新消息并推进 BTW revision；ask 期间双击 Esc 不再打开不可见停止面板；BTW 失败路径回收 `active_batches`；停止 BTW 聚合为 `interrupted` 而非 `failed`；死句柄直接结算，避免 DB 永久 `streaming`。
+- **P2**：报告芯片会话隔离、浮层偏移失效、唤醒 UI/失败回滚、`Stop all` 空集合、停止待命过期、`/resume` 后 subagent 可见性、嵌套 wait 卡片过滤、`Finishing` 可用性、`list_agents` 文本、BTW 单目标失败文案。
+- **P3**：停止目标不领旧报告、`user_stopped` 清理、统一 `stopped` 步骤标记、批次时间戳事务化、`(+N more)` 总数、BTW 报告文案、报告长度上限、备注校验顺序、提示词措辞、报告轮 transcript 过滤、死代码清理。
+- **保留**：跨实例 `queued` BTW 恢复仍无 guard（review.md P2-13）；`user_shell` 全量并行 flaky 为既有问题（P3-12）。
+- 验证：`cargo fmt --check`、`cargo clippy --all-targets -- -D warnings`、`cargo test`（5725 passed / 6 ignored）。
