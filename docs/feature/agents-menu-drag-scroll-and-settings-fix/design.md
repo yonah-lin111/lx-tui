@@ -1,6 +1,6 @@
 # Agents 菜单、拖拽滚轮与设置页加载修复 — 设计
 
-> 状态：**待用户审核，未开始实现**
+> 状态：**已实现，待用户确认合并**
 > 关联任务：[task.md](task.md)
 > 基线：`.worktrees/agents-menu-drag-scroll`（分支 `feature/agents-menu-drag-scroll`，切自 `dev`）
 > 范围：侧栏 `Agents` 右键菜单、新建 Agent 模态、可拖拽列表滚轮、浏览器设置页 JS 修复

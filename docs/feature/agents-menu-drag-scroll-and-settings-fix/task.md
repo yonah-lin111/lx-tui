@@ -330,3 +330,15 @@
 - [ ] 列出未自动验证的 TUI/浏览器交互点，交由用户 `cargo run` 确认。
 - [ ] 每个任务完成后单独提交（P1、P2、P3、P4 各一次）。
 - [ ] 全部完成后询问用户是否把 `feature/agents-menu-drag-scroll` 合并回 `dev`；用户确认前不合并。
+
+## 执行记录
+
+- 分支：`feature/agents-menu-drag-scroll`（worktree `.worktrees/agents-menu-drag-scroll`）。
+- 提交：
+  - `87c9fbcb` P1 终端 Agent 菜单 Close 与关闭语义
+  - `e5f8823b` P2 New agent 菜单、PATH 探测、弹窗与启动队列
+  - `6fabb6a9` P3 拖拽中的滚轮（工作区活跃/历史、Todo、Prompt 树）
+  - `e8742e7c` P4 设置页 `element(` → `domEl(` 与资源回归测试
+- 验证：`cargo fmt`、`cargo clippy --all-targets -- -D warnings`、`cargo test` 全部通过（5811 lib + 各集成测试）。
+- 未自动验证：TUI 菜单/弹窗/拖拽交互外观，浏览器 `/settings` 三个标签的真实渲染，需用户 `cargo run` 确认。
+- 合并回 `dev` 前需用户确认。
