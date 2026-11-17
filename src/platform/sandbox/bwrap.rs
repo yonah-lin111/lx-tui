@@ -69,10 +69,20 @@ fn build_args(
     read_only.sort_by_key(|path| path.components().count());
     read_only.dedup();
     for path in read_only {
-        if !path.exists() || !roots.iter().any(|root| path.starts_with(root)) {
+        if !roots.iter().any(|root| path.starts_with(root)) {
             continue;
         }
-        push_bind(&mut argv, "--ro-bind", path, path);
+        if path.exists() {
+            push_bind(&mut argv, "--ro-bind", path, path);
+        } else if let Some(first_missing) = first_missing_component(path) {
+            // 不存在的只读 carveout 也要阻止被创建（空文件占位）。
+            push_bind(
+                &mut argv,
+                "--ro-bind",
+                Path::new("/dev/null"),
+                &first_missing,
+            );
+        }
     }
 
     // Deny：字面路径 + 有界 glob 展开，统一在可写 bind 之后遮盖。

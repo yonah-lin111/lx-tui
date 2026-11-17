@@ -413,6 +413,21 @@ pub fn reload_if_changed() -> bool {
     global().reload_if_changed()
 }
 
+/// 本次执行使用的规则集。
+///
+/// 单元测试不读用户真实规则目录（避免测试依赖开发者本机状态），一律返回空策略；
+/// 需要规则的测试直接构造 `Policy` 传入决策函数。
+pub fn current_policy() -> Arc<Policy> {
+    #[cfg(test)]
+    {
+        Arc::new(Policy::empty())
+    }
+    #[cfg(not(test))]
+    {
+        global().current()
+    }
+}
+
 fn lock<T>(mutex: &Mutex<T>) -> std::sync::MutexGuard<'_, T> {
     match mutex.lock() {
         Ok(guard) => guard,

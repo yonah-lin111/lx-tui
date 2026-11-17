@@ -802,7 +802,7 @@ where
             {
                 result
             } else {
-                let exec_policy = crate::chat::exec_policy::global().current();
+                let exec_policy = crate::chat::exec_policy::current_policy();
                 match sandbox_override_for(&mut host, &executor, &call, context.cwd(), &exec_policy)
                     .await
                 {

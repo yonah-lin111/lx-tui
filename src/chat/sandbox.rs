@@ -199,10 +199,13 @@ impl SandboxPlan {
                 file_system,
             } => {
                 let mut plan = self.clone();
-                if let Some(request) = file_system
-                    && let Ok(policy) = self.policy.with_request(request)
-                {
-                    plan.policy = policy;
+                if let Some(request) = file_system {
+                    match self.policy.with_request(request) {
+                        Ok(policy) => plan.policy = policy,
+                        Err(error) => {
+                            tracing::warn!(%error, "invalid additional permissions; keeping the base policy");
+                        }
+                    }
                 }
                 plan.network_access = plan.network_access || network.unwrap_or(false);
                 plan.refresh_derived();
