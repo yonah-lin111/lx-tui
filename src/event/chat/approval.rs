@@ -118,7 +118,7 @@ pub(crate) fn answer(
             crate::chat::sandbox::SandboxApprovalKind::Escalation => {
                 if let Some(prefix) = prefix {
                     // 规则文件是跨会话通道；DB 前缀规则保证当前会话 resume 后仍生效。
-                    if let Err(error) = crate::chat::exec_policy::global().append_allow_rule(
+                    if let Err(error) = crate::chat::exec_policy::global().append_model_allow_rule(
                         &prefix,
                         Some(justification.as_str()).filter(|text| !text.is_empty()),
                     ) {

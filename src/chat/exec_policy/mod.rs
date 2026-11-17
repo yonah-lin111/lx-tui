@@ -256,12 +256,6 @@ impl PolicyStore {
                 ));
             }
         }
-        if crate::chat::tools::is_banned_prefix(prefix) {
-            return Err(Error::InvalidRule(
-                "prefix must not name a shell, interpreter, git, package runner, rm, or sudo"
-                    .into(),
-            ));
-        }
         let _guard = lock(&self.write_lock);
         std::fs::create_dir_all(&self.dir)
             .map_err(|error| Error::InvalidRule(format!("create rules directory: {error}")))?;
@@ -295,6 +289,21 @@ impl PolicyStore {
         let _ = crate::platform::restrict_file_permissions(&path);
         self.force_reload();
         Ok(())
+    }
+
+    /// 追加模型提议的 `allow` 前缀：先走 banned prefix 校验。
+    pub fn append_model_allow_rule(
+        &self,
+        prefix: &[String],
+        justification: Option<&str>,
+    ) -> Result<()> {
+        if crate::chat::tools::is_banned_prefix(prefix) {
+            return Err(Error::InvalidRule(
+                "prefix must not name a shell, interpreter, git, package runner, rm, or sudo"
+                    .into(),
+            ));
+        }
+        self.append_allow_rule(prefix, justification)
     }
 }
 

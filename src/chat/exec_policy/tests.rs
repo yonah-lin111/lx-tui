@@ -204,6 +204,14 @@ fn append_allow_rule_writes_0600_file_and_reloads() {
         RuleDecision::Allow
     );
 
+    // 用户规则允许 git 等前缀；模型提议必须过 banned 校验。
+    store
+        .append_allow_rule(&["git".to_string(), "push".to_string()], None)
+        .expect("user rule");
+    assert_eq!(
+        decide(&store.current(), "git push origin main"),
+        RuleDecision::Allow
+    );
     for prefix in [
         vec!["sh".to_string()],
         vec!["git".to_string()],
@@ -211,7 +219,7 @@ fn append_allow_rule_writes_0600_file_and_reloads() {
         Vec::new(),
     ] {
         assert!(
-            store.append_allow_rule(&prefix, None).is_err(),
+            store.append_model_allow_rule(&prefix, None).is_err(),
             "prefix {prefix:?}"
         );
     }
