@@ -1,6 +1,6 @@
 # `lx` 底部状态/提示行与输入框灰线调整 — 执行任务
 
-> 状态：**已完成开发与 Review 修复，待合入 `dev` 并清理 worktree**
+> 状态：**已合并到 `dev`（merge commit `7ea86119`，全量自动化验证通过：5921 lib + 64 集成 = 5985 passed, 8 ignored），原 worktree 与分支已移除，待用户实机验收**
 > 设计依据：[design.md](design.md) · 审查记录：[review.md](review.md)
 
 ## 阶段 1：`bottom_bar` 布局重构（`3e5714cb`）
@@ -28,6 +28,7 @@
 
 ## 阶段 4：合入 `dev` 与 worktree 清理
 
-- [ ] 在分支内提交全部未提交修复与文档，合并到 `dev` 并解决与 `compact-layout` 的合并冲突。
-- [ ] 在 `dev` 运行全量 `cargo fmt --check`、`cargo clippy --all-targets -- -D warnings` 与 `cargo test`。
-- [ ] 更新本目录文档记录合入 commit 与全量验证结果，移除 `.worktrees/lx-status-above-border`、`feature/lx-status-above-border` 及对应隔离库 `~/.lx-t-dev/db/worktrees/lx-status-above-border-b03d203f/`。
+- [x] 在分支内提交全部未提交修复与文档（`6d66f788`），以 `--no-ff` 合并到 `dev`（`7ea86119`）并对齐 `compact-layout` 测试与设计文档。
+- [x] 在 `dev` 运行全量 `cargo fmt --check`、`cargo clippy --all-targets -- -D warnings` 与 `cargo test --all-targets`（`5921` lib + `64` integration = `5985 passed; 0 failed; 8 ignored`）。
+- [x] 更新本目录文档记录合入 commit 与全量验证结果，移除 `.worktrees/lx-status-above-border`、`feature/lx-status-above-border` 及对应隔离库 `~/.lx-t-dev/db/worktrees/lx-status-above-border-b03d203f/`。
+- [ ] **手动确认**：用户运行 `cargo run` 实机确认 `#7d8590` 分割线、`bottom_bar` 与纯净底边框、窄高窗格退化与 `task`/`ask` 滚轮隔离效果。

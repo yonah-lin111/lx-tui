@@ -1,7 +1,8 @@
 # `lx` 底部状态/提示行与输入框灰线调整 — 代码审查（Review）
 
-> 状态：**P0–P2 全部审查发现已修复并完成分支内验证，待合入 `dev` 后补充合入记录**
-> 审查范围：`feature/lx-status-above-border`（commit `3e5714cb` 与后续工作区改动）
+> 状态：**P0–P2 已修复并通过合入后全量自动化验证，已合并到 `dev`（merge commit `7ea86119`），待用户实机验收**
+> 审查范围：`feature/lx-status-above-border`（`3e5714cb`、`6d66f788` 及合入 commit `7ea86119`）
+> 原工作区：`.worktrees/lx-status-above-border`（分支 `feature/lx-status-above-border` 及隔离库 `lx-status-above-border-b03d203f` 已移除）
 > 依据规范：`docs/standards/code-writing-standards.md`、`docs/standards/project-directory-structure.md`、`docs/standards/tui-design-requirements.md`
 
 ---

@@ -1,8 +1,8 @@
 # `lx` 底部状态/提示行上移至窗格底边框上方与输入框灰线调整 — 设计
 
-> 状态：**已完成实现与 P0–P2 Review 修复，待合入 `dev` 后收尾记录**
+> 状态：**已通过 review 修复与合入后全量验证，已合并到 `dev`（merge commit `7ea86119`），原 worktree 与分支已清理，待用户实机验收**
 > 关联文档：[task.md](task.md) · [review.md](review.md)
-> 分支：`feature/lx-status-above-border`（基于 `dev@d5bf1251`）
+> 基线：`dev`（原 worktree `.worktrees/lx-status-above-border`、分支 `feature/lx-status-above-border` 与隔离库 `lx-status-above-border-b03d203f` 已清理移除）
 
 ## 1. 背景与目标
 
