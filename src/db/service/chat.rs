@@ -10,6 +10,7 @@ use crate::app::state::AppState;
 use crate::app::toast::{Toast, ToastKind};
 use crate::app::update;
 use crate::config::ai::ModelSelection;
+use crate::config::sandbox::SandboxMode;
 use crate::ui::text;
 
 use super::Persistence;
@@ -205,6 +206,7 @@ impl Persistence {
         let notices = db.load_notices(workspace, session_id)?;
         let checkpoints = db.compact_checkpoints(workspace, session_id)?;
         let switches = db.model_switches(workspace, session_id)?;
+        let permission_switches = db.permission_switches(workspace, session_id)?;
         let recaps = db.load_recaps(workspace, session_id)?;
         let revision = db.session_revision(session_id)?;
         Ok(super::RewindView {
@@ -212,6 +214,7 @@ impl Persistence {
             notices,
             checkpoints,
             switches,
+            permission_switches,
             recaps,
             revision,
         })
@@ -530,6 +533,18 @@ impl Persistence {
         let changed = update::on_session_loaded_full(
             state, pane, session_id, &messages, &notices, revision, selection,
         );
+        // 恢复会话的沙箱覆盖（NULL = 跟随全局默认）。
+        let sandbox_mode = self
+            .with_db(|db| db.session_sandbox_mode(workspace, session_id))
+            .flatten()
+            .and_then(|text| SandboxMode::parse(&text));
+        let sandbox_rules = self
+            .with_db(|db| db.sandbox_rules(workspace, session_id))
+            .unwrap_or_default();
+        if let Some(target) = state.pane_mut_anywhere(pane) {
+            target.lx.sandbox_mode = sandbox_mode;
+        }
+        let sandbox_rules_changed = update::set_sandbox_rules(state, pane, &sandbox_rules);
         // 恢复会话后立即列出子 agent：回投后填充 `pane.lx.agents.runs`，
         // 并把其中 `running` / `idle` / `blocked` 的实例同步进 `@` 面板。
         state.effects.push(Effect::ListSubagents {
@@ -539,17 +554,24 @@ impl Persistence {
         let title_changed = state
             .pane_mut_anywhere(pane)
             .is_some_and(|target| target.lx.chat.set_session_title(session_title));
-        // 检查点与模型切换列表随会话一起回填（渲染与撤销都依赖它）。
+        // 检查点、模型/权限切换列表随会话一起回填（渲染与撤销都依赖它）。
         let checkpoints_changed = update::set_compact_checkpoints(state, pane, &checkpoints);
         let switches_changed = update::set_model_switches(state, pane, &switches);
+        let permission_switches = self
+            .with_db(|db| db.permission_switches(workspace, session_id))
+            .unwrap_or_default();
+        let perm_switches_changed =
+            update::set_permission_switches(state, pane, &permission_switches);
         let recaps_changed = update::set_message_recaps(state, pane, &recaps);
         // 会话视图建好之后再按进程记录校正（需要卡片已存在）。
         let drains = update::request_report_drain_if_idle(state, pane);
         update::reconcile_process_records(state, pane, &processes)
             | changed
+            | sandbox_rules_changed
             | title_changed
             | checkpoints_changed
             | switches_changed
+            | perm_switches_changed
             | recaps_changed
             | drains
     }
@@ -844,6 +866,112 @@ impl Persistence {
                 }
                 false
             }
+            Effect::PersistSandboxMode {
+                workspace,
+                session_id,
+                mode,
+                switch_commit,
+            } => {
+                let default_mode = state.sandbox.mode;
+                let commit_backup = switch_commit.clone();
+                let result = self.db_result(|db| {
+                    if let Some(commit) = switch_commit {
+                        let cleared = commit.from_mode != commit.to_mode;
+                        db.record_permission_switch(&workspace, &commit)?;
+                        let switches = db.permission_switches(&workspace, &session_id)?;
+                        Ok((Some(switches), cleared))
+                    } else {
+                        let prev = db
+                            .session_sandbox_mode(&workspace, &session_id)?
+                            .as_deref()
+                            .and_then(SandboxMode::parse);
+                        let cleared = mode.is_some_and(|next| next != prev.unwrap_or(default_mode))
+                            || (mode.is_none() && prev.is_some());
+                        db.set_session_sandbox_mode(
+                            &workspace,
+                            &session_id,
+                            mode.map(SandboxMode::as_str),
+                        )?;
+                        if cleared {
+                            db.clear_sandbox_rules(&session_id)?;
+                        }
+                        Ok((None, cleared))
+                    }
+                });
+                match result {
+                    Ok((switches, cleared)) => {
+                        let mut changed =
+                            update::sync_session_sandbox_mode(state, &session_id, mode, cleared);
+                        if let Some(switches) = switches {
+                            for target_pane in state.all_pane_ids() {
+                                if state.pane_anywhere(target_pane).is_some_and(|target| {
+                                    target.lx.chat.session_id.as_deref()
+                                        == Some(session_id.as_str())
+                                }) {
+                                    changed |= update::set_permission_switches(
+                                        state,
+                                        target_pane,
+                                        &switches,
+                                    );
+                                }
+                            }
+                        }
+                        changed
+                    }
+                    Err(error) => {
+                        tracing::warn!(%error, session = %session_id, "failed to persist sandbox mode");
+                        let reverted = self.with_db(|db| {
+                            let auth_mode = db
+                                .session_sandbox_mode(&workspace, &session_id)?
+                                .as_deref()
+                                .and_then(SandboxMode::parse);
+                            let switches = db.permission_switches(&workspace, &session_id)?;
+                            let rules = db.sandbox_rules(&workspace, &session_id)?;
+                            Ok((auth_mode, switches, rules))
+                        });
+                        if let Some((auth_mode, switches, rules)) = reverted {
+                            update::sync_session_sandbox_mode(state, &session_id, auth_mode, true);
+                            for target_pane in state.all_pane_ids() {
+                                if state.pane_anywhere(target_pane).is_some_and(|target| {
+                                    target.lx.chat.session_id.as_deref()
+                                        == Some(session_id.as_str())
+                                }) {
+                                    update::set_permission_switches(state, target_pane, &switches);
+                                    update::set_sandbox_rules(state, target_pane, &rules);
+                                }
+                            }
+                        } else if let Some(commit) = commit_backup.as_ref() {
+                            let fallback = SandboxMode::parse(&commit.from_mode);
+                            update::sync_session_sandbox_mode(state, &session_id, fallback, false);
+                            for target_pane in state.all_pane_ids() {
+                                if let Some(target) = state.pane_mut_anywhere(target_pane)
+                                    && target.lx.chat.session_id.as_deref()
+                                        == Some(session_id.as_str())
+                                    && target.lx.permission_switch.switches.last().is_some_and(
+                                        |last| {
+                                            last.from_mode == commit.from_mode
+                                                && last.to_mode == commit.to_mode
+                                                && last.injected_prompt == commit.injected_prompt
+                                        },
+                                    )
+                                {
+                                    target.lx.permission_switch.switches.pop();
+                                }
+                            }
+                        }
+                        let toast = Toast::new(
+                            ToastKind::Warning,
+                            "Failed to save permission mode; reverted to previous state",
+                            None,
+                            Instant::now(),
+                        );
+                        if !update::show_lx_toast_for_session(state, &session_id, toast.clone()) {
+                            update::show_toast(state, toast);
+                        }
+                        true
+                    }
+                }
+            }
             other => {
                 tracing::warn!(?other, "non-chat effect reached chat handler");
                 false
@@ -866,5 +994,6 @@ pub(super) fn handles(effect: &Effect) -> bool {
             | Effect::RenameChatSession { .. }
             | Effect::DeleteChatSession { .. }
             | Effect::SetChatSessionModel { .. }
+            | Effect::PersistSandboxMode { .. }
     )
 }

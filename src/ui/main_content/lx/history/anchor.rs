@@ -44,6 +44,10 @@ pub(crate) enum AnchorEntry {
         last: usize,
         id: String,
     },
+    PermissionSwitch {
+        last: usize,
+        id: String,
+    },
     /// 正在压缩的临时条目等没有稳定身份的条目：只记录，不补偿。
     Raw,
 }
@@ -164,6 +168,10 @@ fn entry_key(entry: &SnapEntry) -> Option<AnchorEntry> {
             last,
             id: entry.id.clone()?,
         }),
+        SnapEntryKind::PermissionSwitch { last, .. } => Some(AnchorEntry::PermissionSwitch {
+            last,
+            id: entry.id.clone()?,
+        }),
         SnapEntryKind::RunningCompact => Some(AnchorEntry::Raw),
     }
 }
@@ -208,6 +216,16 @@ fn find_entry<'a>(
                 matches!(
                     entry.kind,
                     SnapEntryKind::ModelSwitch { first, last, .. }
+                        if index >= first && index <= last
+                )
+            })
+        }
+        AnchorEntry::PermissionSwitch { last, id } => {
+            let index = resolve_index(source.perm_switches, *last, id, |item| item.id.as_str())?;
+            snapshot.entries.iter().find(|entry| {
+                matches!(
+                    entry.kind,
+                    SnapEntryKind::PermissionSwitch { first, last, .. }
                         if index >= first && index <= last
                 )
             })

@@ -66,6 +66,9 @@ impl PanelData {
 /// 以输入框为唯一定位依据：`x` 与 `width` 等于输入框，底边紧贴输入框顶边，向上占用
 /// 可用行；空间不足（放不下顶线 + 一行）或面板不存在时返回 None。
 pub(crate) fn layout(area: Rect, lx: &Lx) -> Option<PanelLayout> {
+    if super::approval::visible(lx) {
+        return None;
+    }
     let editor = lx.active_editor();
     let input = super::input_rect(area, lx)?;
     let data = panel_data(editor, input.width)?;
@@ -78,12 +81,18 @@ pub(crate) fn layout(area: Rect, lx: &Lx) -> Option<PanelLayout> {
 
 /// 提及面板顶部 Tab 命中：返回被点中的 Tab 索引；面板未打开或未命中返回 None。
 pub(crate) fn tab_at(area: Rect, lx: &Lx, column: u16, row: u16) -> Option<usize> {
+    if super::approval::visible(lx) {
+        return None;
+    }
     let layout = layout(area, lx)?;
     command_panel::tab_at(&layout, column, row)
 }
 
 /// 提及条目命中：返回可见条目索引；面板未打开、状态行或未命中返回 None。
 pub(crate) fn item_at(area: Rect, lx: &Lx, column: u16, row: u16) -> Option<usize> {
+    if super::approval::visible(lx) {
+        return None;
+    }
     let editor = lx.active_editor();
     let input = super::input_rect(area, lx)?;
     let data = panel_data(editor, input.width)?;
@@ -100,6 +109,9 @@ pub(crate) fn item_at(area: Rect, lx: &Lx, column: u16, row: u16) -> Option<usiz
 
 /// 绘制提及面板；面板未打开或空间不足时不绘制。
 pub(crate) fn render(area: Rect, buf: &mut Buffer, lx: &Lx) {
+    if super::approval::visible(lx) {
+        return;
+    }
     let editor = lx.active_editor();
     let Some(input) = super::input_rect(area, lx) else {
         return;
@@ -314,5 +326,6 @@ fn view<'a>(
         borderless: true,
         hide_active_marker: !data.interactive,
         disabled: None,
+        context_lines: &[],
     }
 }

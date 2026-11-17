@@ -461,6 +461,7 @@ fn cross_provider_history_replays_normalized_fields_only() {
         skills: None,
         mcp: None,
         model_switches: &[],
+        permission_switches: &[],
         skill_blocks: &[],
         supports_image_input: true,
     });

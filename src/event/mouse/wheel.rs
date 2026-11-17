@@ -544,6 +544,16 @@ pub(crate) fn handle_mouse_wheel(
             .pane_anywhere(pane)
             .is_some_and(|target| target.view == PaneView::Lx)
         {
+            // lx 页：审批命令面板打开且指针在其上时吞掉纵向滚轮，不穿透到下层浮层、ask、历史区或输入框。
+            if vertical_wheel_direction(mouse.kind).is_some()
+                && let Some(bar) = state
+                    .pane_anywhere(pane)
+                    .filter(|target| ui::main_content::lx::approval_visible(&target.lx))
+                    .and_then(|target| ui::main_content::lx::approval_layout(inner, &target.lx))
+                && bar.rect.contains((mouse.column, mouse.row).into())
+            {
+                return;
+            }
             // lx 页：粘贴选择面板打开且指针在其上时吞掉滚轮，不穿透到历史区与输入框。
             if vertical_wheel_direction(mouse.kind).is_some()
                 && let Some(bar) = state
@@ -585,6 +595,19 @@ pub(crate) fn handle_mouse_wheel(
                 if update::scroll_lx_slash(state, pane, delta, bar.start) {
                     *dirty = true;
                 }
+                return;
+            }
+            // lx 页：其余可见命令面板非条目区（如 md 块面板、边框或空态行）吞掉纵向滚轮。
+            if vertical_wheel_direction(mouse.kind).is_some()
+                && state.pane_anywhere(pane).is_some_and(|target| {
+                    ui::main_content::lx::command_panel_contains(
+                        inner,
+                        &target.lx,
+                        mouse.column,
+                        mouse.row,
+                    )
+                })
+            {
                 return;
             }
             // 后台任务面板的输出容器（含下方一行的聊天栏「回到底部」）：
@@ -664,7 +687,10 @@ pub(crate) fn handle_mouse_wheel(
             if let Some(direction) = vertical_wheel_direction(mouse.kind)
                 && let Some((zone, window)) = state
                     .pane_anywhere(pane)
-                    .filter(|target| target.lx.task.is_none())
+                    .filter(|target| {
+                        target.lx.task.is_none()
+                            && !ui::main_content::lx::approval_visible(&target.lx)
+                    })
                     .and_then(|target| {
                         let zone = ui::main_content::lx::ask_wheel_zone(
                             inner,

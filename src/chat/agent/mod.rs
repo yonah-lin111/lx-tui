@@ -16,6 +16,7 @@ mod model_switch;
 mod nickname;
 mod parse;
 mod path;
+mod permission_switch;
 mod prompts;
 mod report;
 mod role;
@@ -35,6 +36,7 @@ pub use model_switch::{
 pub use nickname::{DEFAULT_NICKNAME_CANDIDATES, allocate_nickname, format_agent_identity};
 pub use parse::parse_control;
 pub use path::*;
+pub use permission_switch::render_permission_switch_update;
 pub use prompts::*;
 pub use report::{
     MAX_REPORT_CHANGED_PATHS, PANEL_REPORT_MARKER, REPORT_REQUEST_MARKER, SubagentReportView,

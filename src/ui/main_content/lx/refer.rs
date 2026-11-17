@@ -44,6 +44,9 @@ impl ReferData {
 
 /// 快捷面板纯几何。
 pub(crate) fn layout(area: Rect, lx: &Lx) -> Option<PanelLayout> {
+    if super::approval::visible(lx) {
+        return None;
+    }
     let editor = lx.active_editor();
     let input = super::input_rect(area, lx)?;
     let data = panel_data(editor)?;
@@ -53,6 +56,9 @@ pub(crate) fn layout(area: Rect, lx: &Lx) -> Option<PanelLayout> {
 
 /// 快捷面板条目命中：返回候选索引；面板未打开或未命中返回 None。
 pub(crate) fn item_at(area: Rect, lx: &Lx, column: u16, row: u16) -> Option<usize> {
+    if super::approval::visible(lx) {
+        return None;
+    }
     let editor = lx.active_editor();
     let input = super::input_rect(area, lx)?;
     let data = panel_data(editor)?;
@@ -63,6 +69,9 @@ pub(crate) fn item_at(area: Rect, lx: &Lx, column: u16, row: u16) -> Option<usiz
 
 /// 绘制快捷输入面板；面板未打开或空间不足时不绘制。
 pub(crate) fn render(area: Rect, buf: &mut Buffer, lx: &Lx) {
+    if super::approval::visible(lx) {
+        return;
+    }
     let editor = lx.active_editor();
     let Some(input) = super::input_rect(area, lx) else {
         return;
@@ -136,6 +145,7 @@ fn view<'a>(
         borderless: true,
         hide_active_marker: false,
         disabled: None,
+        context_lines: &[],
     }
 }
 

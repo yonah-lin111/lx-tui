@@ -189,11 +189,36 @@ pub(crate) fn capture_child_prompt_inputs(
     frozen: &crate::app::state::FrozenModel,
     role: AgentRole,
 ) -> CapturedChildPromptInputs {
-    let environment = crate::chat::prompt::environment_snapshot(
+    let sandbox = state.effective_sandbox_for_pane(parent_pane);
+    capture_child_prompt_inputs_with_sandbox(
+        state,
+        persistence,
+        parent_pane,
+        workspace,
+        cwd,
+        frozen,
+        role,
+        &sandbox,
+    )
+}
+
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn capture_child_prompt_inputs_with_sandbox(
+    state: &crate::app::state::AppState,
+    persistence: &crate::db::service::Persistence,
+    parent_pane: crate::tiling::PaneId,
+    workspace: &Path,
+    cwd: &Path,
+    frozen: &crate::app::state::FrozenModel,
+    role: AgentRole,
+    sandbox: &crate::config::sandbox::SandboxSettings,
+) -> CapturedChildPromptInputs {
+    let environment = crate::chat::prompt::environment_snapshot_with_sandbox(
         &crate::platform::EnvironmentFacts::capture(),
         Some(cwd),
         Some(cwd),
         &[],
+        sandbox,
     );
     let workspace_trusted = persistence.is_trusted(cwd) || persistence.is_trusted(workspace);
     let effective_subagents = crate::config::subagents::merge_project_roles_for_paths(
@@ -383,6 +408,52 @@ pub(crate) fn assemble_child_context(
     subagents: &crate::config::subagents::SubagentsSection,
     limits: ChildTurnLimits,
 ) -> Result<ModelContext, String> {
+    assemble_child_context_with_permission(
+        database,
+        workspace,
+        parent_session,
+        agent_id,
+        child_session_id,
+        current_user_message_id,
+        role,
+        prompt_ctx,
+        cwd,
+        model,
+        variant_params,
+        context_limit,
+        output_limit,
+        supports_image_input,
+        current_items,
+        subagents,
+        limits,
+        None,
+        false,
+    )
+}
+
+/// 组装子会话新一轮的完整 `ModelContext`，并在主会话权限切换后于当前输入前注入 `<system-update>`。
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn assemble_child_context_with_permission(
+    database: &Database,
+    workspace: &Path,
+    parent_session: &str,
+    agent_id: &str,
+    child_session_id: &str,
+    current_user_message_id: &str,
+    role: AgentRole,
+    prompt_ctx: ChildPromptContext<'_>,
+    cwd: &Path,
+    model: &ModelSnapshot,
+    variant_params: Option<serde_json::Value>,
+    context_limit: Option<u64>,
+    output_limit: Option<u64>,
+    supports_image_input: bool,
+    current_items: &[PersistedInputItem],
+    subagents: &crate::config::subagents::SubagentsSection,
+    limits: ChildTurnLimits,
+    permission_update: Option<&str>,
+    trim_escalation: bool,
+) -> Result<ModelContext, String> {
     let checkpoint = database
         .active_checkpoint(workspace, child_session_id)
         .map_err(|err| err.code().to_string())?;
@@ -491,6 +562,11 @@ pub(crate) fn assemble_child_context(
         items.extend(user_items);
         items.extend(turn.assistant_items.iter().cloned());
     }
+    if let Some(update) = permission_update.filter(|text| !text.trim().is_empty()) {
+        items.push(ModelItem::UserText(crate::chat::agent::wrap_system_update(
+            update,
+        )));
+    }
     turns.push(ChatTurn {
         role: "user".into(),
         text: current_text,
@@ -516,6 +592,15 @@ pub(crate) fn assemble_child_context(
             compact: None,
         },
     );
+    let mut decls = child_tool_decls(
+        crate::chat::agent::ToolSurface::from_role_at_depth(role, limits.depth, limits.max_depth),
+        capabilities,
+        prompt_ctx.mcp,
+        subagents,
+    );
+    if trim_escalation {
+        crate::chat::tools::trim_escalation_parameters(&mut decls);
+    }
     let request = ChatRequest {
         turns,
         items,
@@ -523,16 +608,7 @@ pub(crate) fn assemble_child_context(
         variant_params,
         purpose: RequestPurpose::Subagent(role),
         system_prompt: Some(system_prompt),
-        tools: std::sync::Arc::new(child_tool_decls(
-            crate::chat::agent::ToolSurface::from_role_at_depth(
-                role,
-                limits.depth,
-                limits.max_depth,
-            ),
-            capabilities,
-            prompt_ctx.mcp,
-            subagents,
-        )),
+        tools: std::sync::Arc::new(decls),
     };
     Ok(ModelContext::new(request, cwd.to_path_buf())
         .with_context_limit(context_limit)

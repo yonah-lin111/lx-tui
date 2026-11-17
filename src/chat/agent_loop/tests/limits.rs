@@ -190,6 +190,11 @@ async fn cancel_after_begin_ack_settles_cancelled_without_execution() {
     impl AgentHost for CancellingHost {
         fn send(&mut self, request: AgentHostRequest) {
             match request {
+                AgentHostRequest::ApproveSandbox { reply, .. } => {
+                    let _ = reply.send(Err(HostError::Failed {
+                        code: "approval not scripted".into(),
+                    }));
+                }
                 AgentHostRequest::UserShellUpdates { reply } => {
                     let _ = reply.send(Vec::new());
                 }

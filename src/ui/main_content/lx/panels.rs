@@ -228,8 +228,11 @@ fn text_paste_panel_rows(area: Rect, lx: &Lx) -> Option<PastePanelData> {
     })
 }
 
-/// 构造粘贴面板的条目列表与可用区域；面板未打开或空间不足返回 None。
+/// 构造粘贴面板的条目列表与可用区域；面板未打开、审批优先或空间不足返回 None。
 fn paste_panel_rows(area: Rect, lx: &Lx) -> Option<PastePanelData> {
+    if super::approval::visible(lx) {
+        return None;
+    }
     if let Some(data) = text_paste_panel_rows(area, lx) {
         return Some(data);
     }
@@ -295,6 +298,9 @@ fn paste_view<'a>(
 
 /// `lx` 路径粘贴面板布局；面板未打开或空间不足返回 None。
 pub(crate) fn paste_layout(area: Rect, lx: &Lx) -> Option<command_panel::PanelLayout> {
+    if super::approval::visible(lx) {
+        return None;
+    }
     let data = paste_panel_rows(area, lx)?;
     let items: Vec<CommandItem<'_>> = data
         .rows
@@ -318,6 +324,9 @@ pub(crate) fn paste_layout(area: Rect, lx: &Lx) -> Option<command_panel::PanelLa
 
 /// `lx` 路径粘贴面板条目命中：返回被点中的操作索引；未打开或未命中返回 None。
 pub(crate) fn paste_item_at(area: Rect, lx: &Lx, column: u16, row: u16) -> Option<usize> {
+    if super::approval::visible(lx) {
+        return None;
+    }
     let data = paste_panel_rows(area, lx)?;
     let items: Vec<CommandItem<'_>> = data
         .rows
@@ -350,11 +359,15 @@ pub(crate) fn command_panel_contains(area: Rect, lx: &Lx, column: u16, row: u16)
         || mention_layout(area, lx).is_some_and(|l| l.rect.contains(pos))
         || refer_layout(area, lx).is_some_and(|l| l.rect.contains(pos))
         || slash_layout(area, lx).is_some_and(|l| l.rect.contains(pos))
+        || super::approval::layout(area, lx).is_some_and(|l| l.rect.contains(pos))
         || layout(area, lx).panel.is_some_and(|r| r.contains(pos))
 }
 
 /// 绘制路径粘贴参照面板：锚定输入框上沿、复用命令面板渲染（只读状态）。
 pub(super) fn render_paste_panel(area: Rect, buf: &mut Buffer, lx: &Lx) {
+    if super::approval::visible(lx) {
+        return;
+    }
     let Some(data) = paste_panel_rows(area, lx) else {
         return;
     };

@@ -115,6 +115,12 @@ impl ExecSubagentPool {
             .get(child_session_id)
             .cloned()
             .unwrap_or_else(|| self.model.clone());
+        let root_session = db
+            .resolve_session_tree_root(&self.workspace, parent_session_id)
+            .map(|(root, _, _)| root)
+            .unwrap_or_else(|_| parent_session_id.to_string());
+        // 子 agent 轮次起点也检查一次（父轮通常已重载，成本仅 stat）。
+        crate::chat::exec_policy::reload_if_changed();
         let executor = AgentTools::new(
             Arc::clone(&processes),
             Arc::new(Mutex::new(TurnExecution::default())),
@@ -126,6 +132,12 @@ impl ExecSubagentPool {
             child_user_message_id.to_string(),
         ))
         .with_reads(crate::chat::tools::read_registry(child_session_id))
+        .with_sandbox(exec_subagent_sandbox_plan(
+            db,
+            &self.workspace,
+            &root_session,
+            &self.cwd,
+        ))
         .with_image_support(child_model.supports_image_input)
         .with_web_search_keys(self.exa_api_key.clone(), self.tavily_api_key.clone())
         .with_mcp(
@@ -368,6 +380,12 @@ impl ExecSubagentPool {
                     }
                 };
                 let _ = reply.send(sent);
+            }
+            AgentHostRequest::ApproveSandbox { reply, .. } => {
+                // 无头/子 agent 路径没有交互审批面：拒绝并让模型如实报告。
+                let _ = reply.send(Err(HostError::Failed {
+                    code: "sandbox_escalation_unavailable".to_string(),
+                }));
             }
             AgentHostRequest::AskUser { reply, .. } => {
                 let _ = reply.send(Err(failed("unsupported in subagent")));
@@ -739,6 +757,29 @@ impl ExecSubagentPool {
             .get(&record.child_session_id)
             .unwrap_or(&self.model)
     }
+}
+
+/// 装配无头子轮的冻结沙箱计划：强制 `escalation = never` 并继承根会话 DB 规则。
+pub(in crate::chat::agent::exec) fn exec_subagent_sandbox_plan(
+    db: &Database,
+    workspace: &Path,
+    root_session: &str,
+    cwd: &Path,
+) -> crate::chat::sandbox::SandboxPlan {
+    let mut sandbox_settings = crate::config::sandbox::load_sandbox_or_default();
+    sandbox_settings.escalation = crate::config::sandbox::EscalationPolicy::Never;
+    if let Some(mode) = db
+        .session_sandbox_mode(workspace, root_session)
+        .ok()
+        .flatten()
+        .and_then(|text| crate::config::sandbox::SandboxMode::parse(&text))
+    {
+        sandbox_settings.mode = mode;
+    }
+    let rules = db
+        .sandbox_rules(workspace, root_session)
+        .unwrap_or_default();
+    crate::chat::sandbox::SandboxPlan::for_turn(&sandbox_settings, cwd).with_rules(&rules)
 }
 
 fn resolve_image_path(cwd: &Path, raw: &str) -> Result<PathBuf, HostError> {

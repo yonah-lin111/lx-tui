@@ -20,6 +20,7 @@ const SCRIPTS: &[&str] = &[
     "settings_mcp.js",
     "settings_skills.js",
     "settings_subagents.js",
+    "settings_sandbox.js",
     "usage_charts.js",
     "usage.js",
     "todo_charts.js",

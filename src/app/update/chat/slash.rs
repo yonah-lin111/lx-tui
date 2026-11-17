@@ -76,6 +76,20 @@ pub fn open_model_picker(state: &mut AppState, pane: PaneId) -> bool {
     true
 }
 
+/// `/permission` 打开沙箱模式选择面板。
+pub fn open_permission_picker(state: &mut AppState, pane: PaneId) -> bool {
+    use crate::app::state::lx::slash::PermissionPicker;
+    let global = state.sandbox.mode;
+    let Some(target) = state.pane_mut_anywhere(pane) else {
+        return false;
+    };
+    let session = target.lx.sandbox_mode;
+    target.lx.slash = Some(SlashPanel::Permission(Box::new(PermissionPicker::new(
+        global, session,
+    ))));
+    true
+}
+
 /// `/resume` 打开历史面板（事件层提供当前工作区分页列表）。
 pub fn open_history(state: &mut AppState, pane: PaneId) -> bool {
     let Some(target) = state.pane_mut_anywhere(pane) else {
@@ -113,6 +127,13 @@ pub fn apply_slash_enter(state: &mut AppState, pane: PaneId) -> bool {
     };
     match panel {
         SlashPanel::Commands { .. } => accept_slash_command(state, pane),
+        SlashPanel::Permission(picker) => {
+            let Some(mode) = picker.active_mode() else {
+                return true;
+            };
+            clear_lx_input(state, pane);
+            super::permission_switch::apply_permission_selection(state, pane, mode)
+        }
         SlashPanel::Model(picker) => match &picker.stage {
             ModelPickerStage::Models => {
                 // 高亮位置是**过滤视图**内的位置，采纳时换算回原始候选索引。
@@ -454,11 +475,23 @@ pub(crate) fn next_pane_sequence(lx: &crate::app::state::Lx) -> i64 {
     let max_notice = lx.chat.notices.iter().map(|n| n.sequence).max();
     let max_compact = lx.compact.checkpoints.iter().map(|c| c.sequence).max();
     let max_switch = lx.model_switch.switches.iter().map(|s| s.sequence).max();
-    [max_msg, max_notice, max_compact, max_switch]
-        .into_iter()
-        .flatten()
-        .max()
-        .map_or(0, |max| max.saturating_add(1))
+    let max_perm_switch = lx
+        .permission_switch
+        .switches
+        .iter()
+        .map(|s| s.sequence)
+        .max();
+    [
+        max_msg,
+        max_notice,
+        max_compact,
+        max_switch,
+        max_perm_switch,
+    ]
+    .into_iter()
+    .flatten()
+    .max()
+    .map_or(0, |max| max.saturating_add(1))
 }
 
 /// 模型的 variants 键列表。
@@ -606,6 +639,7 @@ pub fn apply_slash_command(state: &mut AppState, pane: PaneId, command: SlashCom
         SlashCommand::Subagents => super::session::open_subagents_page(state, pane),
         SlashCommand::Connect => super::connect::open_connect_panel(state, pane),
         SlashCommand::Mcp => super::mcp::open_mcp_panel(state, pane),
+        SlashCommand::Permission => open_permission_picker(state, pane),
         SlashCommand::Rename => {
             if let Some(target) = state.pane_mut_anywhere(pane)
                 && let Some(prefix) = command.echo_prefix()
@@ -790,6 +824,7 @@ fn refresh_slash_filter(state: &mut AppState, pane: PaneId) {
         Some(crate::app::state::SlashPanel::Model(picker)) => picker.refilter(&query),
         Some(crate::app::state::SlashPanel::Fork(panel)) => panel.refilter(&query),
         Some(crate::app::state::SlashPanel::Mcp(panel)) => panel.refilter(&query),
+        Some(crate::app::state::SlashPanel::Permission(picker)) => picker.refilter(&query),
         _ => {}
     }
 }

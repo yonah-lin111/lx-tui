@@ -9,6 +9,7 @@ mod logs;
 mod mcp;
 mod models;
 mod page;
+mod sandbox;
 mod skills;
 mod subagents;
 mod todo;
@@ -75,6 +76,8 @@ pub enum SettingsEvent {
     SkillsChanged,
     /// 子 agent 角色或并发上限配置已保存。
     SubagentsChanged(Box<crate::config::subagents::SubagentsSection>),
+    /// 沙箱配置已保存（下一个 turn 生效）。
+    SandboxChanged(Box<crate::config::sandbox::SandboxSettings>),
 }
 
 /// 服务共享状态：token、事件发送端、命令快照与关闭标记。

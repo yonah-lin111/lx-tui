@@ -1329,4 +1329,8 @@ fn prompts_have_no_cjk_and_are_composed() {
         ),
         format!("{}\n\n\n", EXECUTOR_PROMPT)
     );
+    assert!(EXECUTOR_PROMPT.contains(r#"sandbox_permissions: "require_escalated""#));
+    assert!(EXECUTOR_PROMPT.contains("parent conversation"));
+    assert!(MONITOR_PROMPT.contains(r#"escalation="ask""#));
+    assert!(MONITOR_PROMPT.contains("parent conversation"));
 }

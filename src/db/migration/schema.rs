@@ -895,3 +895,20 @@ BEGIN
     WHERE external_id = OLD.child_session_id AND source = 'btw';
 END;
 "#;
+
+/// v32：会话中途沙箱权限切换记录表（与消息/notice/compact/model_switch 共用 sequence）。
+pub(super) const SCHEMA_V32_PERMISSION_SWITCH: &str = r#"
+CREATE TABLE IF NOT EXISTS agent_permission_switch (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    external_id TEXT NOT NULL UNIQUE,
+    session_id TEXT NOT NULL REFERENCES agent_session(external_id) ON DELETE CASCADE,
+    sequence INTEGER NOT NULL,
+    from_mode TEXT NOT NULL,
+    to_mode TEXT NOT NULL,
+    injected_prompt TEXT NOT NULL DEFAULT '',
+    created_at_ms INTEGER NOT NULL,
+    UNIQUE(session_id, sequence)
+);
+CREATE INDEX IF NOT EXISTS idx_agent_permission_switch_session_seq
+    ON agent_permission_switch(session_id, sequence);
+"#;

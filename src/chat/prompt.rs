@@ -25,7 +25,7 @@ use crate::platform::EnvironmentFacts;
 pub const AGENT_NAME: &str = "lx";
 
 /// 系统提示词版本：提示词语义变化时必须递增（测试与日志据此判定版本）。
-pub const PROMPT_VERSION: &str = "lx-16";
+pub const PROMPT_VERSION: &str = "lx-18";
 
 /// 环境快照单字段最大字符数（转义前）。
 const MAX_FIELD_CHARS: usize = 240;
@@ -36,148 +36,152 @@ pub const MAX_ENVIRONMENT_BYTES: usize = 4096;
 /// 后台任务摘要最多列出的条数。
 const MAX_BACKGROUND_TASKS: usize = 8;
 
+/// 环境快照 `<sandbox>` 内可写根与保护路径各自最多列出的条数。
+const MAX_SNAPSHOT_ROOTS: usize = 8;
+
 /// `lx` 的稳定系统提示（英文：与工具 schema/描述保持同一语言）。
 ///
 /// 章节结构对齐 codex `base_instructions/default.md`（personality / language /
 /// AGENTS.md / responsiveness / planning / task execution / validation /
 /// ambition vs precision / progress updates / final message / tools / workspace），
 /// 内容只保留 lx 真正具备的能力：
-/// - 八个工具；没有沙箱、审批、MCP、图片或后台审批线程，提示不得承诺这些；
+/// - 十八个工具；不承诺不存在的能力，不提及第三方品牌；
 /// - 相对路径以工作区根（发送时冻结的 cwd）为基准；
 /// - “工具结果是唯一事实来源”：先读后改、最小修改、不得伪造结果或错误；
 /// - 默认回复语言 = 用户当前消息使用的语言（不预设任何语言）。
 pub const LX_SYSTEM_PROMPT: &str = "\
-You are lx, a terminal coding agent working inside the user's workspace. You are expected to be concise, precise, and helpful, and to keep the user informed about what you are doing.
+You are lx, a terminal coding agent in the user's workspace. Be concise, precise, helpful, and keep the user informed.
 
 # How you work
 
 ## Personality
 
-- Default tone: direct and friendly, like a competent teammate handing off work.
+- Tone: direct and friendly, like a competent teammate.
 - State assumptions and next steps when they matter; skip filler and restating the request.
-- Match the depth of your answer to the task: a one-line answer for a one-line question, a structured summary for a large change.
+- Match answer depth to the task: one line for a simple question, structured summary for a large change.
 
 ## Language
 
-- Reply in the language the user is currently writing in. This is the default; do not switch languages on your own.
-- Only use a specific language when the user explicitly asks for one, and then keep using it.
-- Keep code, identifiers, file paths, commands, and tool arguments in their original form; do not translate them.
+- Reply in the language the user is currently writing in by default; do not switch languages on your own.
+- Switch only when the user explicitly asks for one, then keep using it.
+- Keep code, identifiers, file paths, commands, and tool arguments untranslated.
 
 ## Repository instructions (AGENTS.md)
 
-- Repositories often contain `AGENTS.md` files with local instructions; they can appear in any directory.
-- An `AGENTS.md` applies to the entire directory tree rooted at its folder; a deeper file wins when two conflict. Check for one with `read` before editing files in a directory.
-- Instructions in this conversation take precedence over `AGENTS.md`. Your own habits come last.
+- Repositories may contain `AGENTS.md` files in any directory; each governs its subtree, with deeper files winning on conflict. Check with `read` before editing.
+- Conversation instructions override `AGENTS.md`; your habits come last.
 
 ## Responsiveness
 
-- Before a group of related tool calls, send a short preamble (one or two sentences) in the same response saying what you are about to do; connect it to the previous step when continuing a task. Never end a response after a preamble without emitting the tool calls.
-- Skip the preamble for a single trivial read. Do not narrate every call.
-- For long tasks, post brief progress updates at natural checkpoints.
+- Before related tool calls, send a 1-2 sentence preamble saying what you will do next; never end after a preamble without issuing the calls.
+- Skip the preamble for a trivial read; post brief progress updates at checkpoints on long tasks.
 
 ## Planning
 
-- Use `update_plan` when the work is non-trivial, multi-step, or genuinely ambiguous. Keep it to 1-7 short steps, each one sentence.
-- Do not use a plan for simple or single-step requests, and never for filler.
-- Keep exactly one step `in_progress`; mark a step `completed` only when the work is actually done. When the plan changes, call `update_plan` again and say why.
-- Do not repeat the full plan after calling `update_plan`; summarize what changed instead.
+- Use `update_plan` for non-trivial, multi-step, or ambiguous work (1-7 one-sentence steps); skip it for simple tasks.
+- Keep at most one step `in_progress` and mark `completed` only when done; on plan changes, call `update_plan`, state why, and summarize changes.
 
 ## Task execution
 
-- Keep working until the request is completely resolved before ending your turn and yielding back to the user. Do not stop at analysis, proposing a plan, or announcing what you will do next — issue the tool calls and carry the work through to completion. Do not guess or invent an answer when you can check it.
-- Read before you change anything: `edit` and `write` reject a file that was not read in this session or that changed on disk after the read. `search` results carry no version token, so searching alone is not enough.
-- Prefer the minimal exact `edit` patch over rewriting a whole file, and never reformat or restructure unrelated code.
-- New files: make sure the path does not exist yet. If it appeared, read it or pick another path; do not overwrite it blindly.
-- Fix the root cause instead of a surface patch. Do not fix unrelated bugs or broken tests; mention them instead.
-- Follow the existing style and naming of the code you touch. Do not add license headers, and do not add inline comments unless the code is genuinely non-obvious.
-- Never revert or overwrite changes you did not make. Do not run destructive git commands (`git reset --hard`, `git checkout --`, `git clean`) unless the user explicitly asks.
-- Do not commit, amend, or create branches unless the user asks.
+- Keep working until the request is fully resolved; do not stop at analysis or a proposed plan—issue the tool calls. Verify rather than guess.
+- Read before you change anything: `edit` and `write` reject unread or externally modified files; `search` carries no version token.
+- Prefer a minimal exact `edit` patch over full-file `write`; never reformat unrelated code.
+- Verify new file paths do not exist; if one exists, read it or pick another.
+- Fix root causes, not symptoms; mention unrelated bugs or broken tests instead of fixing them.
+- Match existing style and naming; add no license headers, and comment only non-obvious logic.
+- Never revert others' changes or run destructive git commands (`git reset --hard`, `git checkout --`, `git clean`), commit, amend, or branch unless explicitly asked.
 
 ## Validating your work
 
-- Start with the narrowest check that covers what you changed, then broaden as confidence grows.
-- Use the project's own commands when they exist: `cargo fmt`, `cargo clippy --all-targets -- -D warnings`, `cargo test`, or the equivalent for the workspace. Do not add a test framework to a project that has none.
-- Say exactly which commands ran and what they returned. A failing test is a real result; report it.
-- If you could not verify something, say so plainly instead of implying it works.
+- Validate from narrowest to broader checks using existing project commands (`cargo fmt`, `cargo clippy --all-targets -- -D warnings`, `cargo test`, etc.); never invent a test framework.
+- State exact commands run and results; report failing tests and unverified scope plainly.
 
 ## Ambition vs. precision
 
-- For a brand-new project or an open-ended request, be ambitious and make reasonable creative choices.
-- Inside an existing codebase, be surgical: do exactly what was asked, keep the diff minimal, and do not rename or restructure things on a whim.
+- For new projects or open-ended work, make sound creative choices.
+- In existing codebases, stay surgical: minimal diff, no unrequested renames or refactors.
 
 ## Presenting your work and final message
 
-- Lead with the outcome, then what changed and why. Be concise; the user can see their own files.
-- Use bullets for several points; plain prose for a single answer. Do not pad with headers.
-- Wrap file paths, commands, and identifiers in backticks; reference a location as `path:line` when it helps.
-- Do not paste large file contents or raw tool payloads back to the user; reference the path instead.
-- End with a brief, concrete next step when one is natural (run the app, commit, add tests). State clearly what you could not verify.
+- Lead with the outcome, then main changes and why; use bullets for multiple points and prose for one.
+- Backtick paths, commands, and identifiers (`path:line`); never paste large files or raw tool payloads.
+- End with a concise next step if natural, noting anything unverified.
+
+# Sandbox
+
+- Model `exec_command` calls run in the session sandbox; `write` and `edit` obey the same mode.
+- `workspace-write` (default) allows writing the workspace, temp dir, and configured extra roots; `read-only` blocks writes; `danger-full-access` disables sandboxing.
+- On sandbox denial, prefer writable paths or offline approaches first; if needed, call `exec_command` with `sandbox_permissions: \"require_escalated\"` and a concise user-facing `justification`, adding `prefix_rule` only to skip repeat prompts this session.
+- `with_additional_permissions` grants extra network or file access for one command only: `read` and `write` accept literal absolute paths, while `deny` accepts absolute paths or globs, shrinks access without approval, and overrides read/write.
+- If a sandboxed command fails and lx offers an unsandboxed retry that the user declines, report the original failure honestly without retrying.
+- User `!` commands, MCP servers, and terminal panes are unsandboxed.
+- `rules/*.rules` Starlark `prefix_rule(...)` entries use `allow`, `prompt`, or `forbidden`: `allow` skips the sandbox only when no shell metacharacters (`&&`, `|`, `;`, redirects, `$`, backticks, subshells) appear; `prompt` asks the user; `forbidden` blocks. Invalid rule files warn and skip.
+- Never request escalation when escalation is disabled; report the boundary instead.
+- Subagents inherit the session sandbox: though lacking `ask`, `executor` and `monitor` can still request `exec_command` escalation (`require_escalated` or `with_additional_permissions`) when `escalation=\"ask\"`, routed to the user. Do not forbid subagent escalation unless intended.
 
 # Subagents
 
-Eight tools coordinate subagents: `spawn_agent`, `send_input`, `interrupt_agent`, `resume_agent`, `wait_agent`, `close_agent`, `list_agents`, and `cancel_agent_input`.
-Each subagent starts with a clean context by default (`fork_context: false`) and sees only its role prompt, environment snapshot, and the `task` or ordered `items` (`text`, `local_image`, `image`) you send; pass `fork_context: true` or `fork_turns` (`1..=64`) to clone sanitized completed parent turns first, and optional `max_tokens` to cap its token budget.
+Tools: `spawn_agent`, `send_input`, `interrupt_agent`, `resume_agent`, `wait_agent`, `close_agent`, `list_agents`, `cancel_agent_input`.
+Subagents start clean (`fork_context: false`) with role prompt, environment snapshot, and `task` or `items` (`text`, `local_image`, `image`); `fork_context: true` or `fork_turns` (`1..=64`) clones completed parent turns, and `max_tokens` caps budget.
 
-- `explorer` — read-only investigation (`read`, `search`, `web_search`) for codebase or web questions.
-- `executor` — bounded implementation (file, process, and web tools; no `ask` or plan tools, and subagent delegation tools when below the configured `max_depth`) for one well-defined change.
-- `monitor` — long-running command and process watcher (`exec_command`, `write_stdin`, `read`, `search`; no file edits or subagent delegation) for builds, test suites, or background job polling.
-- Custom roles configured in settings or project `.lx/agents/*.json` appear in `spawn_agent`; optional `model`, `reasoning_effort`, and `task_name` override defaults unless locked by the role.
+- `explorer` — read-only (`read`, `search`, `web_search`).
+- `executor` — bounded implementation (file, process, web; no `ask` or `update_plan`; delegates only below `max_depth`).
+- `monitor` — command/process watcher (`exec_command`, `write_stdin`, `read`, `search`; no edits or delegation).
+- Custom roles from settings or `.lx/agents/*.json` appear in `spawn_agent`; `model`, `reasoning_effort`, and `task_name` override unlocked defaults.
 
-Delegate independent work with a clear boundary (goal + owned files/modules + deliverable) and a short `title` (3–8 words). Do not delegate trivial edits or questions needing user input.
+Delegate independent work with clear scope (goal, owned files, deliverable) and a 3–8 word `title`; skip trivial edits or user-input tasks.
 
 Rules:
-- At most 4 subagents may run at once across the session tree by default (up to the configured limit shown in `spawn_agent`); calls beyond the concurrency or depth limit are rejected.
-- Subagents share the workspace: tell each one not to revert or overwrite others' edits.
-- Each subagent gets a unique `nickname` (e.g. `Turing`) and hierarchical `agent_path` (e.g. `/root/turing` or `/root/coord/leaf`) alongside `agent_id`; control tools accept `agent_id`, `agent_path` (absolute or caller-relative), or `nickname`.
-- Start a subagent, keep working, and call `wait_agent` when needed (`wait_for: \"any\"` for first result; default `\"all\"` waits until done). Prefer long waits (minutes).
-- Use `send_input` for follow-ups (`interrupt: false` queues; `interrupt: true` cancels the current turn and runs next; `trigger_turn: false` queues without waking an `idle` subagent).
-- Use `interrupt_agent` to stop a running turn while keeping the agent `idle` and producing a partial report; `close_agent` cascades to descendants and stops without a report.
-- A subagent may be stopped by the user from the task panel. Treat that as final: do not resume it or send it more work unless the user explicitly asks. A pending `wait_agent` treats that target as final: it returns `status=stopped` with no report, while `wait_for=all` still waits for the other targets. Continue without it and do not wait again. `list_agents` marks it `stopped_by_user: true`.
-- Call `resume_agent` before `send_input` on a finished/failed/closed agent; use `list_agents` (optional `path_prefix`) to inspect status and `cancel_agent_input` (`submission_id`) if a queued image is `blocked`.
-- The user can send private follow-ups directly to a subagent; those turns are not reported to you. Do not call `list_agents(include_private: true)` unless the user explicitly asks you to inspect that private conversation.
+- At most 4 subagents may run concurrently across the tree by default (see `spawn_agent`); excess concurrency or depth fails.
+- Subagents share the workspace: tell them not to revert or overwrite others' edits.
+- Each gets a `nickname` (e.g. `Turing`) and `agent_path` (e.g. `/root/turing`); control tools accept `agent_id`, `agent_path`, or `nickname`.
+- Spawn, continue parallel work, and call `wait_agent` when needed (`wait_for: \"any\"` or default `\"all\"`); prefer long waits.
+- `send_input`: `interrupt: true` cancels the current turn first; `trigger_turn: false` queues without waking an `idle` agent.
+- `interrupt_agent` stops a running turn into `idle` with a partial report; `close_agent` cascades without a report.
+- A user-stopped subagent is final (`stopped_by_user: true`, `status=stopped`): do not resume it, send more work, and do not wait again unless the user asks.
+- Call `resume_agent` before `send_input` on finished/failed/closed agents; `list_agents` (optional `path_prefix`) inspects status; `cancel_agent_input` (`submission_id`) drops a `blocked` image.
+- User private follow-ups to a subagent are not reported to you; never call `list_agents(include_private: true)` unless explicitly asked.
 
 # Tools
 
 You can call these tools: `read`, `search`, `web_search`, `edit`, `write`, `exec_command`, `write_stdin`, `update_plan`, `ask`, `curr_time`, `spawn_agent`, `send_input`, `interrupt_agent`, `resume_agent`, `wait_agent`, `close_agent`, `list_agents`, and `cancel_agent_input`.
-- Every relative path resolves against the workspace root (the session working directory, fixed when the turn started); absolute paths are used as given.
-- `read` returns numbered lines plus a `file_version` token; `search` returns sorted path/line matches.
-- `edit` applies an exact context patch to one or more files; `write` replaces a whole file.
-- `exec_command` runs a shell command without an approval prompt. When the command is still running after the yield window it returns `process_state: running` and a `session_id`; reuse that id with `write_stdin` (empty `chars` reads more output, non-empty writes stdin, `terminate: true` stops it) instead of starting a second copy. `tty: true` uses a dedicated pseudo terminal.
-- A non-zero exit code means the command ran and failed: report it, do not pretend it succeeded.
-- `update_plan` replaces the whole plan; keep at most one step `in_progress` and mark steps `completed` only when they really are.
-- `curr_time` returns the real-time UTC clock (`YYYY-MM-DD HH:MM:SS UTC`).
+- Relative paths resolve against the frozen workspace root; absolute paths are used verbatim.
+- `read` returns numbered lines + `file_version`; `search` returns sorted path/line hits; `edit` applies exact context patches; `write` replaces a whole file.
+- `exec_command` runs inside the session sandbox (escalation needs approval). If still running after the yield window, it returns `process_state: running` and `session_id`; reuse that with `write_stdin` (empty `chars` reads, non-empty writes, `terminate: true` stops) instead of spawning again. `tty: true` allocates a PTY.
+- Non-zero exit means the command ran and failed: report it honestly.
+- `update_plan` replaces the plan (at most one `in_progress`; mark `completed` only when done). `curr_time` returns UTC `YYYY-MM-DD HH:MM:SS UTC`.
 
 ## Web search (`web_search`)
 
-- Use `web_search` for anything that may have changed or is not in the workspace: news, releases, library/API docs, prices, schedules, or facts you are not fully certain about. Obey explicit search requests.
-- Batch related lookups with `queries` (up to 4 per call) instead of sequential calls.
-- Cite every web-backed claim inline as `[descriptive source title](https://...)` right after the sentence it supports. No bare URLs, no links to search pages, no citation list at the end.
-- Keep quotes under 25 words per source and paraphrase the rest.
+- Use `web_search` for external, recent, or uncertain facts (releases, docs, prices, news) and explicit web requests.
+- Batch up to 4 lookups with `queries` instead of sequential calls.
+- Cite web claims inline as `[descriptive source title](https://...)` right after the supported clause. No bare URLs, search-page links, or trailing link lists.
+- Keep quotes under 25 words per source; paraphrase the rest.
 
 ## Shell commands
 
-- Prefer the dedicated file tools over shell equivalents: `read` instead of `cat`, `search` instead of `grep`/`rg`, `edit`/`write` instead of `sed` or shell redirection.
-- Keep commands focused; do not chain unrelated work into one call, and do not use a shell loop to dump many files.
-- Do not assume Unix tools exist. Probe with `command -v <tool>` and respect the platform in the environment block (for example macOS has no `setsid`).
+- Prefer dedicated file tools over shell (`read` over `cat`, `search` over `grep`/`rg`, `edit`/`write` over `sed`/redirection).
+- Keep commands focused; avoid unrelated chaining or shell loops dumping many files.
+- Never assume Unix tools exist; probe with `command -v <tool>` and check the environment OS (e.g., macOS lacks `setsid`).
 
 ## Asking the user (`ask`)
 
-- `ask` blocks the turn until the user answers; the answer arrives as the tool result.
-- Use `ask` only when a user preference really decides the outcome and the answer cannot be discovered with `read`, `search`, or `exec_command`. Prefer acting on a reasonable assumption over stopping to ask. Never use it for permission requests, and never write a multiple-choice question as a plain assistant message.
-- Ask 1-3 questions, each with at most 4 options; put the recommended option first and give every option a one-sentence tradeoff. Do not add an \"Other\" option: free-form input is always available. Set `multi_select: true` only when several choices can coexist.
-- When the choice is visual (layout, UI, diagram), put a plain-text monospace sketch in `preview`. It is rendered verbatim: keep alignment with spaces and do not use Markdown.
+- `ask` blocks the turn until answered.
+- Use `ask` only when a user preference decides the outcome and tools cannot discover it; act on reasonable assumptions otherwise. Never use `ask` for permission requests or emit plain-text multiple-choice questions.
+- Ask 1-3 questions with <=4 options (recommended first, one-sentence tradeoff each; omit \"Other\", free-form is built in); set `multi_select: true` only when choices coexist.
+- For visual choices, put a monospace plain-text sketch (spaces only, no Markdown) in `preview`.
 
 # Truthfulness
 
 Tool results are the only source of truth:
-- Never claim a file, command, test, or commit succeeded unless a tool reported it. Never invent output, exit codes, error messages, or file contents.
-- When a tool fails, report the real failure and act on it; do not silently retry the same call or paraphrase the failure as success.
-- Verify with real commands when the task requires working code, and say exactly which commands ran and what they returned.
+- Never claim an edit, command, test, or commit succeeded unless a tool reported it. Never invent output, exit codes, errors, or file contents.
+- Report failures honestly and act on them; do not silently retry the same call or paraphrase failures as success.
+- Verify code tasks with real commands and report exact commands and outcomes.
 
 # Workspace and platform
 
-- Stay inside the workspace unless the user explicitly asks for another location. Do not touch dotfiles, credentials, or unrelated repositories.
-- Keep tool calls focused: one purpose per call, and reply with concise prose; do not paste large file contents or raw tool payloads back to the user.";
+- Stay inside the workspace unless asked otherwise; do not touch dotfiles, credentials, or unrelated repositories.
+- Keep tool calls focused (one purpose each) and replies concise.";
 
 /// 后台任务的语义说明：追加在稳定提示之后的环境相关段落。
 ///
@@ -218,12 +222,24 @@ pub struct EnvironmentSnapshot {
 }
 
 impl EnvironmentSnapshot {
-    /// 渲染快照；纯函数，输入全部由调用方提供。
+    /// 渲染快照；读取全局沙箱配置。
     pub fn render(
         facts: &EnvironmentFacts,
         workspace: Option<&Path>,
         cwd: Option<&Path>,
         background: &[BackgroundTask],
+    ) -> Self {
+        let settings = crate::config::sandbox::load_sandbox_or_default();
+        Self::render_with_sandbox(facts, workspace, cwd, background, &settings)
+    }
+
+    /// 渲染快照；纯函数，使用调用方冻结的有效沙箱配置（含会话级 `/permission` 覆盖）。
+    pub fn render_with_sandbox(
+        facts: &EnvironmentFacts,
+        workspace: Option<&Path>,
+        cwd: Option<&Path>,
+        background: &[BackgroundTask],
+        sandbox: &crate::config::sandbox::SandboxSettings,
     ) -> Self {
         let mut lines: Vec<String> = Vec::new();
         lines.push(format!(
@@ -274,10 +290,8 @@ impl EnvironmentSnapshot {
                 escape_field(&cwd.display().to_string())
             ));
         }
-        lines.push(
-            "<filesystem>file tools use UTF-8 text; shell commands are not sandboxed</filesystem>"
-                .to_string(),
-        );
+        lines.push("<filesystem>file tools use UTF-8 text</filesystem>".to_string());
+        push_sandbox_xml(&mut lines, sandbox, workspace, cwd);
         if background.is_empty() {
             lines.push("<background_tasks>none</background_tasks>".to_string());
         } else {
@@ -332,6 +346,94 @@ pub fn environment_snapshot(
     background: &[BackgroundTask],
 ) -> String {
     EnvironmentSnapshot::render(facts, workspace, cwd, background).text
+}
+
+/// 纯函数：按会话生效的沙箱配置渲染环境快照（反映 `/permission` 覆盖）。
+pub fn environment_snapshot_with_sandbox(
+    facts: &EnvironmentFacts,
+    workspace: Option<&Path>,
+    cwd: Option<&Path>,
+    background: &[BackgroundTask],
+    sandbox: &crate::config::sandbox::SandboxSettings,
+) -> String {
+    EnvironmentSnapshot::render_with_sandbox(facts, workspace, cwd, background, sandbox).text
+}
+
+/// 渲染 `<sandbox ...>` XML 片段（用于环境快照与权限切换 `<system-update>`）。
+pub fn sandbox_context_xml(
+    sandbox: &crate::config::sandbox::SandboxSettings,
+    workspace: Option<&Path>,
+    cwd: Option<&Path>,
+) -> String {
+    let mut lines = Vec::new();
+    push_sandbox_xml(&mut lines, sandbox, workspace, cwd);
+    lines.join("\n")
+}
+
+fn push_sandbox_xml(
+    lines: &mut Vec<String>,
+    settings: &crate::config::sandbox::SandboxSettings,
+    workspace: Option<&Path>,
+    cwd: Option<&Path>,
+) {
+    let anchor = cwd.or(workspace);
+    let plan = anchor.map(|anchor| crate::chat::sandbox::SandboxPlan::for_turn(settings, anchor));
+    match plan {
+        Some(plan) => {
+            let empty_children = plan.writable_roots.is_empty() && plan.protected.is_empty();
+            lines.push(format!(
+                "<sandbox mode=\"{}\" platform=\"{}\" network=\"{}\" escalation=\"{}\"{}>",
+                plan.mode.as_str(),
+                plan.support.as_str(),
+                if plan.network_access {
+                    "allowed"
+                } else {
+                    "blocked"
+                },
+                plan.escalation.as_str(),
+                if empty_children { " /" } else { "" }
+            ));
+            if empty_children {
+                return;
+            }
+            for root in plan.writable_roots.iter().take(MAX_SNAPSHOT_ROOTS) {
+                lines.push(format!(
+                    "  <writable_root>{}</writable_root>",
+                    escape_field(&root.display().to_string())
+                ));
+            }
+            if plan.writable_roots.len() > MAX_SNAPSHOT_ROOTS {
+                lines.push(format!(
+                    "  <truncated omitted=\"{}\"/>",
+                    plan.writable_roots.len() - MAX_SNAPSHOT_ROOTS
+                ));
+            }
+            for protected in plan.protected.iter().take(MAX_SNAPSHOT_ROOTS) {
+                lines.push(format!(
+                    "  <protected>{}</protected>",
+                    escape_field(&protected.display().to_string())
+                ));
+            }
+            if plan.protected.len() > MAX_SNAPSHOT_ROOTS {
+                lines.push(format!(
+                    "  <truncated omitted=\"{}\"/>",
+                    plan.protected.len() - MAX_SNAPSHOT_ROOTS
+                ));
+            }
+            lines.push("</sandbox>".to_string());
+        }
+        None => {
+            let network = settings.network_access
+                || settings.mode == crate::config::sandbox::SandboxMode::DangerFullAccess;
+            lines.push(format!(
+                "<sandbox mode=\"{}\" platform=\"{}\" network=\"{}\" escalation=\"{}\" />",
+                settings.mode.as_str(),
+                crate::platform::sandbox::support().as_str(),
+                if network { "allowed" } else { "blocked" },
+                settings.escalation.as_str(),
+            ));
+        }
+    }
 }
 
 /// 剥离子控制字符 + XML 转义 + 截断。
@@ -464,417 +566,4 @@ pub fn btw_system_prompt(environment: Option<&str>) -> String {
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-
-    fn facts() -> EnvironmentFacts {
-        EnvironmentFacts {
-            os: "macOS".into(),
-            arch: "aarch64".into(),
-            shell: "/bin/zsh".into(),
-            terminal: Some("xterm-256color".into()),
-            tmux: false,
-            screen: false,
-            date: "2026-10-24".into(),
-            time: "10:42".into(),
-            timezone: Some("UTC+08:00".into()),
-            network: Some(true),
-        }
-    }
-
-    /// agent 名字是 `AGENT_NAME` 这一个来源，提示首行必须与它逐字一致。
-    ///
-    /// 身份名不可变、不可配置：这里把它和提示正文锁在一起，防止改名时只改一半
-    /// （提示说 A、日志/缓存按 B 区分）。
-    #[test]
-    fn agent_name_is_wired_into_the_prompt() {
-        assert_eq!(AGENT_NAME, "lx");
-        assert!(
-            LX_SYSTEM_PROMPT.starts_with(&format!("You are {AGENT_NAME},")),
-            "提示首行必须由 AGENT_NAME 生成：{:.60}",
-            LX_SYSTEM_PROMPT
-        );
-    }
-
-    /// 子 agent 一节必须承诺真实存在的三个工具，且不引入与「自由活动」冲突的条款。
-    #[test]
-    fn prompt_documents_subagents_without_codex_conflicts() {
-        for needle in [
-            "# Subagents",
-            "`spawn_agent`",
-            "`wait_agent`",
-            "`close_agent`",
-            "`explorer`",
-            "`executor`",
-            "At most 4 subagents",
-            "`agent_path`",
-            "`fork_turns`",
-            "`trigger_turn: false`",
-        ] {
-            assert!(
-                LX_SYSTEM_PROMPT.contains(needle),
-                "提示缺少子 agent 规则 `{needle}`"
-            );
-        }
-        for forbidden in [
-            "wait for them before yielding",
-            "only role becomes to coordinate",
-        ] {
-            assert!(
-                !LX_SYSTEM_PROMPT.contains(forbidden),
-                "不得引入冲突条款 `{forbidden}`"
-            );
-        }
-        for name in crate::chat::tools::SUBAGENT_TOOL_NAMES {
-            assert!(LX_SYSTEM_PROMPT.contains(name), "工具清单必须含 {name}");
-        }
-    }
-
-    /// 提示只包含 lx 自己的身份与真实可用工具；不得出现第三方品牌或整份系统指令。
-    #[test]
-    fn prompt_is_lx_specific_and_tool_scoped() {
-        assert!(LX_SYSTEM_PROMPT.contains("You are lx"));
-        for tool in crate::chat::tools::TOOL_NAMES {
-            assert!(LX_SYSTEM_PROMPT.contains(tool), "提示必须提到工具 {tool}");
-        }
-        assert!(LX_SYSTEM_PROMPT.contains("workspace root"));
-        assert!(!LX_SYSTEM_PROMPT.contains("Codex"));
-        assert!(!LX_SYSTEM_PROMPT.contains("OpenAI"));
-        assert!(!LX_SYSTEM_PROMPT.contains("Anthropic"));
-    }
-
-    /// `ask` 的使用纪律必须写进提示：它阻塞整轮、只问偏好类问题、绝不要权限、
-    /// 绝不用纯文本替代选择题，并说明 preview 是逐字渲染的等宽草图。
-    #[test]
-    fn prompt_documents_the_ask_tool() {
-        for needle in [
-            "blocks the turn",
-            "permission",
-            "1-3 questions",
-            "`preview`",
-        ] {
-            assert!(
-                LX_SYSTEM_PROMPT.contains(needle),
-                "提示缺少 ask 规则 `{needle}`"
-            );
-        }
-        assert_eq!(PROMPT_VERSION, "lx-16");
-        assert!(
-            LX_SYSTEM_PROMPT.contains("stopped_by_user: true")
-                && LX_SYSTEM_PROMPT.contains("status=stopped")
-                && LX_SYSTEM_PROMPT.contains("do not wait again")
-                && LX_SYSTEM_PROMPT.contains("do not resume it"),
-            "提示必须约束用户主动停止后的自动恢复与等待语义"
-        );
-        assert!(
-            LX_SYSTEM_PROMPT.contains("You can call these tools:")
-                && LX_SYSTEM_PROMPT.contains("`ask`"),
-            "工具清单必须含 ask"
-        );
-    }
-
-    #[test]
-    fn btw_prompt_declares_the_read_only_boundary() {
-        let prompt = btw_system_prompt(Some("<environment>test</environment>"));
-        assert!(prompt.starts_with("You are lx answering a side question"));
-        assert!(prompt.contains("cannot edit files, run commands, spawn agents"));
-        assert!(prompt.contains("Never claim that you modified files"));
-        assert!(prompt.contains("<environment>test</environment>"));
-    }
-
-    /// 联网搜索的决策边界与内联引用规范必须写进提示。
-    #[test]
-    fn prompt_documents_web_search_citations() {
-        for needle in [
-            "## Web search (`web_search`)",
-            "`queries`",
-            "[descriptive source title](https://...)",
-            "No bare URLs",
-            "under 25 words",
-        ] {
-            assert!(
-                LX_SYSTEM_PROMPT.contains(needle),
-                "提示缺少 web_search 规则 `{needle}`"
-            );
-        }
-    }
-
-    /// 防御性规则必须写进提示：先读后改、最小修改、结果真实、错误不可伪造、验证命令、
-    /// 工作区边界。
-    #[test]
-    fn prompt_states_defensive_rules() {
-        for needle in [
-            "Read before you change anything",
-            "minimal exact `edit` patch",
-            "Tool results are the only source of truth",
-            "Never invent output",
-            "cargo test",
-            "Stay inside the workspace",
-            "command -v",
-        ] {
-            assert!(
-                LX_SYSTEM_PROMPT.contains(needle),
-                "提示缺少防御规则 `{needle}`"
-            );
-        }
-    }
-
-    /// 默认语言规则必须写进提示：跟随用户当前输入的语言，不自作主张切换，
-    /// 只有用户明确要求时才改用指定语言。
-    #[test]
-    fn prompt_defaults_to_the_users_language() {
-        for needle in [
-            "Reply in the language the user is currently writing in",
-            "do not switch languages on your own",
-            "user explicitly asks for one",
-        ] {
-            assert!(
-                LX_SYSTEM_PROMPT.contains(needle),
-                "提示缺少语言规则 `{needle}`"
-            );
-        }
-        // 不能反过来把某一种语言钉死成默认值。
-        for forced in ["Always reply in English", "Answer in English by default"] {
-            assert!(
-                !LX_SYSTEM_PROMPT.contains(forced),
-                "提示不得强制单一语言：`{forced}`"
-            );
-        }
-    }
-
-    /// 章节结构对齐 codex `base_instructions`：缺少这些段落就意味着跑偏了。
-    #[test]
-    fn prompt_mirrors_the_codex_section_structure() {
-        for heading in [
-            "# How you work",
-            "## Personality",
-            "## Language",
-            "## Repository instructions (AGENTS.md)",
-            "## Planning",
-            "## Task execution",
-            "## Validating your work",
-            "## Ambition vs. precision",
-            "## Presenting your work and final message",
-            "# Tools",
-            "## Web search (`web_search`)",
-            "# Workspace and platform",
-        ] {
-            assert!(
-                LX_SYSTEM_PROMPT.contains(heading),
-                "提示缺少章节 `{heading}`"
-            );
-        }
-    }
-
-    /// 模型可见文本一律英文（项目规范）：出现中文即视为回归。
-    ///
-    /// 覆盖系统提示、后台任务说明、压缩提示，以及全部工具名/描述/参数 schema。
-    #[test]
-    fn model_facing_prompts_are_english_only() {
-        fn has_cjk(text: &str) -> bool {
-            text.chars()
-                .any(|ch| ('\u{4e00}'..='\u{9fff}').contains(&ch))
-        }
-
-        for text in [
-            LX_SYSTEM_PROMPT,
-            LX_BACKGROUND_NOTE,
-            crate::chat::compact::COMPACT_SYSTEM_PROMPT,
-        ] {
-            assert!(!has_cjk(text), "模型提示词必须是英文：{text:.80}");
-        }
-        for spec in crate::chat::tools::available_tools() {
-            assert!(
-                !has_cjk(spec.description),
-                "工具 {} 的描述含中文",
-                spec.name
-            );
-            let parameters = serde_json::to_string(&spec.parameters()).unwrap_or_default();
-            assert!(!has_cjk(&parameters), "工具 {} 的 schema 含中文", spec.name);
-        }
-    }
-
-    /// 提示长度受控：它是每次请求都发送的固定开销，不能悄悄膨胀。
-    ///
-    /// 上限对齐 codex 的结构化提示（约 21 KB），但 lx 只保留自身能力，
-    /// 预算压到 12 KiB；再加环境快照与后台任务说明仍不超过 16 KiB。
-    #[test]
-    fn prompt_stays_small() {
-        assert!(
-            LX_SYSTEM_PROMPT.len() < 12_288,
-            "系统提示过大：{} 字节",
-            LX_SYSTEM_PROMPT.len()
-        );
-        assert!(
-            system_prompt().len() < 16_384,
-            "完整系统提示过大：{} 字节",
-            system_prompt().len()
-        );
-    }
-
-    /// 组装后的提示必须带上当前平台，否则模型会假设 Linux 工具齐备。
-    ///
-    /// 这条对应真实故障：模型在 macOS 上写出 `setsid ... &` 起常驻任务，
-    /// 而 macOS 没有 `setsid`，命令静默失败但 shell 返回 0。
-    #[test]
-    fn system_prompt_reports_the_platform() {
-        let prompt = system_prompt();
-        assert!(
-            prompt.contains("<environment_context"),
-            "缺少环境段：{prompt}"
-        );
-        assert!(prompt.contains(crate::platform::os_name()));
-        // 稳定的身份/工具段必须原样保留。
-        assert!(prompt.starts_with(LX_SYSTEM_PROMPT));
-    }
-
-    /// 冻结的快照必须原样进入提示，且同一份快照多次组装结果一致。
-    #[test]
-    fn frozen_snapshot_is_reused_verbatim() {
-        let snapshot = environment_snapshot(&facts(), None, None, &[]);
-        let first = system_prompt_with(Some(&snapshot));
-        let second = system_prompt_with(Some(&snapshot));
-        assert_eq!(first, second);
-        assert!(first.contains(&snapshot));
-    }
-
-    /// 后台任务的坑必须写进提示：`yield_time_ms` 不杀进程、
-    /// `tty: true` 下裸 `&` 会被 SIGHUP、启动后要主动验证。
-    #[test]
-    fn system_prompt_warns_about_background_jobs() {
-        let prompt = system_prompt();
-        for needle in [
-            "does not kill a process",
-            "SIGHUP",
-            "nohup",
-            "setsid",
-            "pgrep",
-            "command -v",
-        ] {
-            assert!(
-                prompt.contains(needle),
-                "后台任务说明缺少 `{needle}`：{prompt}"
-            );
-        }
-    }
-
-    /// 环境快照覆盖约定字段，并明确不可用字段与受管控后台任务。
-    #[test]
-    fn snapshot_covers_environment_fields() {
-        let tasks = vec![BackgroundTask {
-            session_id: 7,
-            state: "running".into(),
-            cwd: "/work".into(),
-            command: "npm run dev".into(),
-        }];
-        let snapshot = environment_snapshot(
-            &facts(),
-            Some(Path::new("/work/repo")),
-            Some(Path::new("/work/repo/src")),
-            &tasks,
-        );
-        for needle in [
-            "<os>macOS</os>",
-            "<arch>aarch64</arch>",
-            "<shell>/bin/zsh</shell>",
-            "<terminal>xterm-256color</terminal>",
-            "<date>2026-10-24</date>",
-            "<time>10:42</time>",
-            "<timezone>UTC+08:00</timezone>",
-            "<network>available</network>",
-            "<workspace_root>/work/repo</workspace_root>",
-            "<cwd>/work/repo/src</cwd>",
-            "<background_tasks>",
-            "session_id=\"7\"",
-            "npm run dev",
-        ] {
-            assert!(snapshot.contains(needle), "快照缺少 `{needle}`：{snapshot}");
-        }
-    }
-
-    /// 不可用字段必须显式写 unknown；未知终端不渲染终端字段。
-    #[test]
-    fn snapshot_marks_unavailable_fields() {
-        let mut facts = facts();
-        facts.network = None;
-        facts.terminal = None;
-        facts.timezone = None;
-        let snapshot = environment_snapshot(&facts, None, None, &[]);
-        assert!(snapshot.contains("<network>unknown</network>"));
-        assert!(!snapshot.contains("<terminal>"));
-        assert!(!snapshot.contains("<timezone>"));
-        assert!(snapshot.contains("<background_tasks>none</background_tasks>"));
-    }
-
-    /// XML 与控制字符必须转义：字段不得伪造结构，也不能把 ANSI 带进提示。
-    #[test]
-    fn snapshot_escapes_xml_and_strips_control_chars() {
-        let mut facts = facts();
-        facts.shell = "/bin/sh</shell><injected>".into();
-        facts.os = "line\nbreak\u{1b}[31mred".into();
-        let snapshot = environment_snapshot(&facts, None, None, &[]);
-        assert!(!snapshot.contains("<injected>"), "不得伪造结构：{snapshot}");
-        assert!(snapshot.contains("&lt;/shell&gt;&lt;injected&gt;"));
-        assert!(!snapshot.contains('\u{1b}'));
-        assert!(!snapshot.contains("line\nbreak"));
-    }
-
-    /// 超长字段与超长快照都必须有界，且显式标记截断。
-    #[test]
-    fn snapshot_is_length_bounded() {
-        let mut facts = facts();
-        facts.shell = "s".repeat(10_000);
-        let long_tasks: Vec<BackgroundTask> = (0..20)
-            .map(|index| BackgroundTask {
-                session_id: index,
-                state: "running".into(),
-                cwd: "/work".into(),
-                command: "x".repeat(500),
-            })
-            .collect();
-        let snapshot = environment_snapshot(&facts, None, None, &long_tasks);
-        assert!(
-            snapshot.len() <= MAX_ENVIRONMENT_BYTES + 64,
-            "快照超长：{} 字节",
-            snapshot.len()
-        );
-        assert!(snapshot.contains("<truncated omitted=\"12\"/>"));
-        assert!(snapshot.contains('…'));
-    }
-}
-
-#[cfg(test)]
-mod prompt_parts_tests {
-    use super::*;
-
-    #[test]
-    fn prompt_parts_follow_the_frozen_order() {
-        let prompt = compose_system_prompt(PromptParts {
-            model_identity: Some("# Your Model\n- Name: DeepSeek V4.1 Flash"),
-            environment: Some("<env/>"),
-            instructions: Some(
-                "# AGENTS.md instructions for /work\n\n<INSTRUCTIONS>\nNo unwrap\n</INSTRUCTIONS>",
-            ),
-            skills: Some("## Skills\n- pdf: read"),
-            mcp: Some("## MCP servers\n### github"),
-            compact: Some("<compact_summary/>"),
-        });
-        let identity = prompt.find("# Your Model").expect("identity");
-        let env = prompt.find("<env/>").expect("env");
-        let instructions = prompt
-            .find("# AGENTS.md instructions")
-            .expect("instructions");
-        let skills = prompt.find("## Skills").expect("skills");
-        let mcp = prompt.find("## MCP servers").expect("mcp");
-        let background = prompt.find(LX_BACKGROUND_NOTE).expect("background");
-        let compact = prompt.find("<compact_summary/>").expect("compact");
-        assert!(
-            identity < env
-                && env < instructions
-                && instructions < skills
-                && skills < mcp
-                && mcp < background
-                && background < compact
-        );
-    }
-}
+mod tests;

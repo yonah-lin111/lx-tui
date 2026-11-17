@@ -10,6 +10,7 @@ use crate::app::prompt::text;
 use crate::app::selection::SelectionUnit;
 
 pub mod agent;
+pub mod approval;
 pub mod ask;
 pub mod btw;
 pub mod chat;
@@ -24,6 +25,7 @@ pub mod mcp;
 pub mod mention;
 pub mod model_switch;
 mod panels;
+pub mod permission_switch;
 pub mod recap;
 pub mod refer;
 pub mod report;
@@ -40,6 +42,7 @@ pub(crate) use history::HistoryMove;
 pub use shell::LxInputMode;
 
 pub use agent::{AgentsState, MAX_RESIDENT_SUBAGENT_CHATS, SubagentReportView, SubagentRun};
+pub use approval::{ApprovalOption, ApprovalState};
 pub use ask::{AskEditor, AskHit, AskState, AskWheelZone};
 pub use btw::{BtwTargetView, BtwThreadState, LxBtw};
 pub use chat::SHELL_SLOT;
@@ -63,6 +66,7 @@ pub use detail::{
 pub use mcp::{McpCatalogEntry, McpPanel, McpPanelEntry, McpRuntimeState, McpServerState};
 pub use mention::{LxMention, LxMentionView, SubagentMentionItem, SubagentRunMentionEntry};
 pub use model_switch::{LxModelSwitch, ModelSwitchNoticeView};
+pub use permission_switch::{LxPermissionSwitch, PermissionSwitchNoticeView};
 pub use recap::{LxRecap, MessageRecapView, RecapPending};
 pub use report::{ReportAction, ReportPanel};
 pub use rewind::{
@@ -71,7 +75,8 @@ pub use rewind::{
 };
 pub use slash::{
     ForkEntry, ForkPanel, HistoryEntry, HistoryPanel, ModelCandidate, ModelPicker,
-    ModelPickerStage, PanelWindow, SlashCommand, SlashEntry, SlashPanel,
+    ModelPickerStage, PanelWindow, PermissionPicker, SlashCommand, SlashEntry, SlashPanel,
+    permission_candidates,
 };
 pub use stop::{StopAction, StopAvailability, StopPanel};
 pub use task::{AgentFilter, ProcessEntry, TaskPage, TaskTab};
@@ -183,6 +188,8 @@ pub struct Lx {
     pub compact: LxCompact,
     /// 会话中途模型切换记录与展开状态。
     pub model_switch: LxModelSwitch,
+    /// 会话中途沙箱权限切换记录与展开状态。
+    pub permission_switch: LxPermissionSwitch,
     /// 本会话回顾：已生成条目、在途请求与自动触发进度。
     pub recap: LxRecap,
     /// 本页自己的 toast 槽；`Some` 时覆盖绘制在**窗格内容区内部**。
@@ -191,6 +198,14 @@ pub struct Lx {
     pub task: Option<TaskPage>,
     /// 当前挂起的 ask 面板；`None` 表示输入框正常显示。
     pub ask: Option<AskState>,
+    /// 待处理的沙箱审批（FIFO，队首展示）。
+    pub approvals: std::collections::VecDeque<ApprovalState>,
+    /// 本会话的沙箱模式覆盖（None = 跟随全局默认）。
+    pub sandbox_mode: Option<crate::config::sandbox::SandboxMode>,
+    /// 本会话已批准裸跑的精确命令（token 序列；`/permission` 切档时清空）。
+    pub sandbox_exact_rules: Vec<Vec<String>>,
+    /// 本会话已批准的前缀规则（模型 `prefix_rule`）。
+    pub sandbox_prefix_rules: Vec<Vec<String>>,
     /// 旁路问答（`/btw`）视图缓存：按主 QA 隔离的线程与独立草稿。
     pub btw: LxBtw,
     /// 纯文本缓冲：不识别 shell 前缀、不弹 markdown/提及/斜杠面板。
@@ -329,10 +344,15 @@ impl Lx {
             detail_rewind: DetailRewindState::default(),
             compact: LxCompact::default(),
             model_switch: LxModelSwitch::default(),
+            permission_switch: LxPermissionSwitch::default(),
             recap: LxRecap::default(),
             toast: None,
             task: None,
             ask: None,
+            approvals: std::collections::VecDeque::new(),
+            sandbox_mode: None,
+            sandbox_exact_rules: Vec::new(),
+            sandbox_prefix_rules: Vec::new(),
             btw: LxBtw::default(),
             plain,
             no_shell: false,
@@ -392,6 +412,15 @@ impl Lx {
         }
     }
 
+    /// 重置会话级沙箱状态（模式覆盖、精确/前缀规则、待决审批与权限切换记录）。
+    pub fn reset_session_sandbox_state(&mut self) {
+        self.sandbox_mode = None;
+        self.sandbox_exact_rules.clear();
+        self.sandbox_prefix_rules.clear();
+        self.approvals.clear();
+        self.permission_switch.reset();
+    }
+
     /// 同步输入框内容宽度（列）与可视高度（内容行）；用于软换行、视觉行移动与滚动。
     pub fn resize(&mut self, width: u16, height: u16) {
         self.width = width.max(1);
@@ -438,7 +467,7 @@ impl Lx {
             }
             _ => self.chat.status.streaming,
         };
-        if self.has_pending_ask() || self.agents.blocked_count() > 0 {
+        if self.has_pending_ask() || !self.approvals.is_empty() || self.agents.blocked_count() > 0 {
             AgentState::Blocked
         } else if streaming
             || request_busy

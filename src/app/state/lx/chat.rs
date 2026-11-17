@@ -481,6 +481,8 @@ pub enum CardTarget {
     Compact { checkpoint_id: String },
     /// 模型切换提示条目（按切换记录 ID 定位；默认折叠）。
     ModelSwitch { switch_id: String },
+    /// 沙箱权限切换提示条目（按切换记录 ID 定位；默认折叠）。
+    PermissionSwitch { switch_id: String },
     /// 消息末尾的预览图片附件文件名（点击在系统文件管理器中定位该文件）。
     Attachment { path: String },
     /// 助手生成图片右侧的原图下载按钮（点击下载原图到配置目录，已下载则定位原图）。

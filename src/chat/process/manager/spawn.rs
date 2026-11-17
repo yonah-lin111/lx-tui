@@ -3,12 +3,15 @@
 //! 拆成独立子模块的原因：这部分只与 OS/子进程句柄打交道，和「管理器状态与生命周期」
 //! 是两类职责；单文件行数上限也要求分开。
 
-use std::path::Path;
+use std::ffi::{OsStr, OsString};
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::Duration;
 
 use tokio::io::AsyncWriteExt;
 use tokio::sync::{mpsc, oneshot};
+
+use crate::platform::sandbox::SandboxSpec;
 
 use super::super::output::OutputSource;
 use super::super::{ExecArgs, ProcessState};
@@ -61,12 +64,14 @@ impl ProcessManager {
         shell: &str,
         args: &ExecArgs,
         cwd: &Path,
+        sandbox: Option<&SandboxSpec<'_>>,
     ) -> Result<(), ProcessError> {
-        let mut command = tokio::process::Command::new(shell);
+        let (program, shell_args, synthetic_targets) = spawn_command(shell, args, cwd, sandbox)?;
+        let mut command = tokio::process::Command::new(program);
         // shell 参数由 platform 决定（POSIX `-l -c` / Windows `/C`）：在 chat/ 里
         // 硬编码 `-l`/`-c` 会让 Windows 上的 exec_command 全部启动失败。
         command
-            .args(crate::platform::shell_arguments(args.login, &args.cmd))
+            .args(shell_args)
             .current_dir(cwd)
             .stdin(std::process::Stdio::piped())
             .stdout(std::process::Stdio::piped())
@@ -75,6 +80,7 @@ impl ProcessManager {
         #[cfg(unix)]
         command.process_group(0); // OS 专属：见 `platform::SUPPORTS_PROCESS_GROUP`
         let mut child = command.spawn().map_err(|error| {
+            cleanup_synthetic_targets(&synthetic_targets);
             ProcessError::new("spawn_failed", format!("failed to start shell: {error}"))
         })?;
         let pid = child.id();
@@ -94,7 +100,7 @@ impl ProcessManager {
         if let Some(stderr) = stderr {
             spawn_pipe_reader(Arc::clone(handle), stderr, OutputSource::Stderr);
         }
-        self.spawn_pipe_supervisor(handle, child, pid);
+        self.spawn_pipe_supervisor(handle, child, pid, synthetic_targets);
         Ok(())
     }
 
@@ -105,6 +111,7 @@ impl ProcessManager {
         shell: &str,
         args: &ExecArgs,
         cwd: &Path,
+        sandbox: Option<&SandboxSpec<'_>>,
     ) -> Result<(), ProcessError> {
         use portable_pty::{CommandBuilder, PtySize, native_pty_system};
 
@@ -119,13 +126,15 @@ impl ProcessManager {
             .map_err(|error| {
                 ProcessError::new("spawn_failed", format!("failed to open pty: {error}"))
             })?;
-        let mut builder = CommandBuilder::new(shell);
+        let (program, shell_args, synthetic_targets) = spawn_command(shell, args, cwd, sandbox)?;
+        let mut builder = CommandBuilder::new(program);
         builder.env("TERM", "xterm-256color");
         builder.cwd(cwd);
-        for arg in crate::platform::shell_arguments(args.login, &args.cmd) {
+        for arg in shell_args {
             builder.arg(arg);
         }
         let mut child = pair.slave.spawn_command(builder).map_err(|error| {
+            cleanup_synthetic_targets(&synthetic_targets);
             ProcessError::new("spawn_failed", format!("failed to start shell: {error}"))
         })?;
         drop(pair.slave);
@@ -136,6 +145,7 @@ impl ProcessManager {
             Ok(reader) => reader,
             Err(error) => {
                 reap_unmanaged_pty_child(child.as_mut());
+                cleanup_synthetic_targets(&synthetic_targets);
                 return Err(ProcessError::new(
                     "spawn_failed",
                     format!("failed to read pty: {error}"),
@@ -146,6 +156,7 @@ impl ProcessManager {
             Ok(writer) => writer,
             Err(error) => {
                 reap_unmanaged_pty_child(child.as_mut());
+                cleanup_synthetic_targets(&synthetic_targets);
                 return Err(ProcessError::new(
                     "spawn_failed",
                     format!("failed to write pty: {error}"),
@@ -176,11 +187,12 @@ impl ProcessManager {
                 });
             if let Err(error) = spawned {
                 reap_unmanaged_pty_child(child.as_mut());
+                cleanup_synthetic_targets(&synthetic_targets);
                 return Err(error);
             }
         }
         self.spawn_pty_stdin_task(handle, writer);
-        self.spawn_pty_supervisor(handle, child);
+        self.spawn_pty_supervisor(handle, child, synthetic_targets);
         Ok(())
     }
 
@@ -259,6 +271,7 @@ impl ProcessManager {
         handle: &Arc<ProcessHandle>,
         mut child: tokio::process::Child,
         pid: Option<u32>,
+        synthetic_targets: Vec<PathBuf>,
     ) {
         // 注册停止通道：**绝不能静默丢弃** sender。丢弃后 supervisor 永远等不到
         // 停止请求，而 `stop_handle` 会因 `None` 落 `Interrupted` 却不杀进程 ——
@@ -270,6 +283,7 @@ impl ProcessManager {
             tokio::select! {
                 status = child.wait() => {
                     let next = exit_state(status.ok().and_then(|status| status.code()));
+                    cleanup_synthetic_targets(&synthetic_targets);
                     handle.settle(next);
                 }
                 reason = &mut stop_receiver => {
@@ -285,6 +299,7 @@ impl ProcessManager {
                         let _ = child.start_kill();
                         let _ = child.wait().await;
                     }
+                    cleanup_synthetic_targets(&synthetic_targets);
                     handle.settle(match reason {
                         StopReason::Stopped => ProcessState::Stopped,
                         StopReason::TimedOut => ProcessState::TimedOut,
@@ -299,6 +314,7 @@ impl ProcessManager {
         &self,
         handle: &Arc<ProcessHandle>,
         mut child: Box<dyn portable_pty::Child + Send + Sync>,
+        synthetic_targets: Vec<PathBuf>,
     ) {
         let killer = child.clone_killer();
         let (stop_sender, mut stop_receiver) = oneshot::channel::<StopReason>();
@@ -313,11 +329,13 @@ impl ProcessManager {
                     match child.try_wait() {
                         Ok(Some(status)) => {
                             let code = i32::try_from(status.exit_code()).ok();
+                            cleanup_synthetic_targets(&synthetic_targets);
                             handle.settle(exit_state(code));
                             return;
                         }
                         Ok(None) => {}
                         Err(_) => {
+                            cleanup_synthetic_targets(&synthetic_targets);
                             handle.settle(ProcessState::Interrupted);
                             return;
                         }
@@ -337,6 +355,7 @@ impl ProcessManager {
                                 Err(_) => break,
                             }
                         }
+                        cleanup_synthetic_targets(&synthetic_targets);
                         handle.settle(state);
                         return;
                     }
@@ -344,5 +363,42 @@ impl ProcessManager {
                 }
             })
             .ok();
+    }
+}
+
+/// 解析实际启动的程序与参数：需要沙箱时用解析后的命令 `cwd` 交给平台后端包装，否则直接启动 shell。
+fn spawn_command(
+    shell: &str,
+    args: &ExecArgs,
+    cwd: &Path,
+    sandbox: Option<&SandboxSpec<'_>>,
+) -> Result<(OsString, Vec<OsString>, Vec<PathBuf>), ProcessError> {
+    let shell_args = crate::platform::shell_arguments(args.login, &args.cmd);
+    match sandbox {
+        None => Ok((OsString::from(shell), shell_args, Vec::new())),
+        Some(spec) => {
+            let mut command_spec = *spec;
+            command_spec.cwd = cwd;
+            let wrapped =
+                crate::platform::sandbox::wrap(&command_spec, OsStr::new(shell), &shell_args)
+                    .map_err(|error| ProcessError::new("sandbox_unavailable", error.to_string()))?;
+            Ok((
+                wrapped.program.into_os_string(),
+                wrapped.args,
+                wrapped.synthetic_targets,
+            ))
+        }
+    }
+}
+
+/// 清理 `bwrap` 为缺失只读/拒绝挂载点创建的 0 字节占位文件，避免宿主机残留。
+fn cleanup_synthetic_targets(targets: &[PathBuf]) {
+    for path in targets {
+        let Ok(metadata) = std::fs::symlink_metadata(path) else {
+            continue;
+        };
+        if !metadata.file_type().is_symlink() && metadata.is_file() && metadata.len() == 0 {
+            let _ = std::fs::remove_file(path);
+        }
     }
 }

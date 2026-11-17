@@ -242,6 +242,7 @@ fn bound_model_output_clips_long_lines_and_caps_lines_and_escaped_bytes() {
         wrote_input: false,
         terminate: false,
         chunk_id: "123456".into(),
+        sandbox_retry: None,
         wall_time_ms: 10,
     };
     result.enforce_output_bounds();

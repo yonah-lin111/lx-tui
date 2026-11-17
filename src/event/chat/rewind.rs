@@ -138,6 +138,11 @@ fn revert_model_switch(
                 match &loaded {
                     Ok(view) => {
                         crate::app::update::set_model_switches(state, pane, &view.switches);
+                        crate::app::update::set_permission_switches(
+                            state,
+                            pane,
+                            &view.permission_switches,
+                        );
                         if let Some(target) = state.pane_mut_anywhere(pane) {
                             target.lx.chat.revision = u64::try_from(view.revision).unwrap_or(0);
                         }
@@ -396,8 +401,11 @@ pub fn handle_rewind_finished(
                         target.lx.clear_agents();
                         target.lx.compact.reset();
                         target.lx.model_switch.reset();
+                        target.lx.permission_switch.reset();
                         target.lx.recap.reset();
                         target.lx.clear_rewind();
+                        target.lx.reset_session_sandbox_state();
+                        crate::app::update::refresh_lx_status(state, target_pane);
                     }
                 }
                 return true;
@@ -405,8 +413,8 @@ pub fn handle_rewind_finished(
             // 先重载数据库真相，再回填；其他绑定 pane 保留各自草稿。
             // workspace 必须用请求里的冻结值：执行期间切换工作区不能让已成功的撤销误报失败。
             let loaded = persistence.load_rewind_view(workspace, session_id);
-            // 删除对话后 `agent_session` 的模型列已回滚到剩余历史：把窗格选择同步回来，
-            // 否则状态行仍显示被删轮次的模型。
+            // 删除对话后 `agent_session` 的模型列与沙箱状态已回滚到剩余历史：把窗格选择同步回来，
+            // 否则状态行仍显示被删轮次的模型与权限。
             let restored_selection = if deleted {
                 persistence
                     .with_db(|db| db.chat_session_model(workspace, session_id))
@@ -420,8 +428,24 @@ pub fn handle_rewind_finished(
             } else {
                 None
             };
+            let restored_sandbox = if deleted {
+                persistence.with_db(|db| {
+                    let mode = db
+                        .session_sandbox_mode(workspace, session_id)?
+                        .and_then(|text| crate::config::sandbox::SandboxMode::parse(&text));
+                    let rules = db.sandbox_rules(workspace, session_id)?;
+                    Ok((mode, rules))
+                })
+            } else {
+                None
+            };
             match loaded {
                 Ok(view) => {
+                    if let Some((mode, _)) = &restored_sandbox {
+                        crate::app::update::sync_session_sandbox_mode(
+                            state, session_id, *mode, true,
+                        );
+                    }
                     let panes = state.all_pane_ids();
                     for other in panes {
                         if state.pane_anywhere(other).is_some_and(|target| {
@@ -442,6 +466,14 @@ pub fn handle_rewind_finished(
                                 &view.checkpoints,
                             );
                             crate::app::update::set_model_switches(state, other, &view.switches);
+                            crate::app::update::set_permission_switches(
+                                state,
+                                other,
+                                &view.permission_switches,
+                            );
+                            if let Some((_, rules)) = &restored_sandbox {
+                                crate::app::update::set_sandbox_rules(state, other, rules);
+                            }
                             crate::app::update::set_message_recaps(state, other, &view.recaps);
                             if let Some(selection) = &restored_selection
                                 && let Some(target) = state.pane_mut_anywhere(other)

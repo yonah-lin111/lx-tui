@@ -51,6 +51,7 @@ fn model_switch_injects_system_update_in_sequence_order_before_draft() {
         skills: None,
         mcp: None,
         model_switches: &switches,
+        permission_switches: &[],
         skill_blocks: &[],
         supports_image_input: true,
     });
@@ -126,6 +127,7 @@ fn trimmed_history_retains_latest_prior_model_switch_and_accounts_for_system_pro
         skills: None,
         mcp: None,
         model_switches: &switches,
+        permission_switches: &[],
         skill_blocks: &[],
         supports_image_input: true,
     });
@@ -183,6 +185,7 @@ fn compact_checkpoint_filters_earlier_model_switches() {
         skills: None,
         mcp: None,
         model_switches: &switches,
+        permission_switches: &[],
         skill_blocks: &[],
         supports_image_input: true,
     });
@@ -190,4 +193,223 @@ fn compact_checkpoint_filters_earlier_model_switches() {
     let serialized = format!("{:?}", assembly.request.items);
     assert!(!serialized.contains("Before compact"));
     assert!(serialized.contains("After compact"));
+}
+
+#[test]
+fn permission_switches_interleave_with_model_switches_in_sequence_order() {
+    let messages = vec![
+        message("u0", 0, 0, "user", "complete", "turn 1"),
+        message("a0", 1, 0, "assistant", "complete", "ans 1"),
+    ];
+    let model_switches = vec![switch_record(3, "GPT-5", "Model switched at 3")];
+    let perm_switches = vec![crate::db::chat::PermissionSwitchRecord {
+        id: "psw-1".into(),
+        sequence: 2,
+        from_mode: "workspace-write".into(),
+        to_mode: "read-only".into(),
+        injected_prompt: "Permission switched at 2".into(),
+        created_at_ms: 0,
+    }];
+    let assembly = assemble(&AssemblyInput {
+        messages: &messages,
+        draft: "next",
+        draft_attachments: &[],
+        model: &model(),
+        context_limit: None,
+        output_limit: None,
+        variant_params: None,
+        compact: None,
+        model_identity: None,
+        environment: None,
+        instructions: None,
+        skills: None,
+        mcp: None,
+        model_switches: &model_switches,
+        permission_switches: &perm_switches,
+        skill_blocks: &[],
+        supports_image_input: true,
+    });
+    assert_eq!(
+        assembly.request.items,
+        vec![
+            ModelItem::UserText("turn 1".into()),
+            ModelItem::AssistantText("ans 1".into()),
+            ModelItem::UserText(
+                "<system-update>\nPermission switched at 2\n</system-update>".into()
+            ),
+            ModelItem::UserText("<system-update>\nModel switched at 3\n</system-update>".into()),
+            ModelItem::UserText("next".into()),
+        ]
+    );
+}
+
+#[test]
+fn narrow_budget_with_empty_kept_retains_only_latest_switches() {
+    let long_turn = "x".repeat(4_000);
+    let messages = vec![
+        message("u0", 0, 0, "user", "complete", &long_turn),
+        message("a0", 1, 0, "assistant", "complete", "ok"),
+        message("u1", 4, 1, "user", "complete", &long_turn),
+        message("a1", 5, 1, "assistant", "complete", "ok"),
+    ];
+    let model_switches = vec![
+        switch_record(2, "Early Model", "Early model switch"),
+        switch_record(6, "Latest Model", "Latest model switch"),
+    ];
+    let perm_switches = vec![
+        crate::db::chat::PermissionSwitchRecord {
+            id: "psw-1".into(),
+            sequence: 3,
+            from_mode: "workspace-write".into(),
+            to_mode: "read-only".into(),
+            injected_prompt: "Early perm switch".into(),
+            created_at_ms: 0,
+        },
+        crate::db::chat::PermissionSwitchRecord {
+            id: "psw-2".into(),
+            sequence: 7,
+            from_mode: "read-only".into(),
+            to_mode: "danger-full-access".into(),
+            injected_prompt: "Latest perm switch".into(),
+            created_at_ms: 0,
+        },
+    ];
+    let context_limit = super::super::ENVELOPE_RESERVE_TOKENS
+        + super::super::USER_SHELL_INJECTION_RESERVE_TOKENS
+        + 500;
+    let assembly = assemble(&AssemblyInput {
+        messages: &messages,
+        draft: "go",
+        draft_attachments: &[],
+        model: &model(),
+        context_limit: Some(context_limit),
+        output_limit: Some(0),
+        variant_params: None,
+        compact: None,
+        model_identity: None,
+        environment: None,
+        instructions: None,
+        skills: None,
+        mcp: None,
+        model_switches: &model_switches,
+        permission_switches: &perm_switches,
+        skill_blocks: &[],
+        supports_image_input: true,
+    });
+
+    assert_eq!(assembly.omitted_turns, 2);
+    assert_eq!(
+        assembly.request.items,
+        vec![
+            ModelItem::UserText("<system-update>\nLatest model switch\n</system-update>".into()),
+            ModelItem::UserText("<system-update>\nLatest perm switch\n</system-update>".into()),
+            ModelItem::UserText("go".into()),
+        ],
+        "kept 为空但裁剪过旧轮次时，只保留最新一条模型切换与最新一条权限切换"
+    );
+}
+
+#[test]
+fn skill_blocks_and_retained_updates_deduct_from_context_budget() {
+    let base_reserve =
+        super::super::ENVELOPE_RESERVE_TOKENS + super::super::USER_SHELL_INJECTION_RESERVE_TOKENS;
+
+    // 1. skill_blocks 计入预算扣除与超限判定。
+    let messages_skill = vec![
+        message("u0", 0, 0, "user", "complete", &"q".repeat(4_000)),
+        message("a0", 1, 0, "assistant", "complete", "ok"),
+    ];
+    let skill_blocks = vec!["s".repeat(2_000)];
+    let assembly_skill = assemble(&AssemblyInput {
+        messages: &messages_skill,
+        draft: "go",
+        draft_attachments: &[],
+        model: &model(),
+        context_limit: Some(base_reserve + 1_200),
+        output_limit: Some(0),
+        variant_params: None,
+        compact: None,
+        model_identity: None,
+        environment: None,
+        instructions: None,
+        skills: None,
+        mcp: None,
+        model_switches: &[],
+        permission_switches: &[],
+        skill_blocks: &skill_blocks,
+        supports_image_input: true,
+    });
+    assert_eq!(
+        assembly_skill.omitted_turns, 1,
+        "计入 skill_blocks 后历史轮次应被裁剪"
+    );
+    assert!(!assembly_skill.draft_exceeds);
+
+    let assembly_skill_exceeds = assemble(&AssemblyInput {
+        messages: &messages_skill,
+        draft: "go",
+        draft_attachments: &[],
+        model: &model(),
+        context_limit: Some(base_reserve + 400),
+        output_limit: Some(0),
+        variant_params: None,
+        compact: None,
+        model_identity: None,
+        environment: None,
+        instructions: None,
+        skills: None,
+        mcp: None,
+        model_switches: &[],
+        permission_switches: &[],
+        skill_blocks: &skill_blocks,
+        supports_image_input: true,
+    });
+    assert!(
+        assembly_skill_exceeds.draft_exceeds,
+        "skill_blocks 与草稿合计超限必须触发 draft_exceeds"
+    );
+
+    // 2. 体积较大的 `<system-update>` 计入预算：两轮本身放得下，但加上切换块后会再裁掉最老一轮。
+    let turn_text = "t".repeat(1_600);
+    let messages_sw = vec![
+        message("u0", 0, 0, "user", "complete", &turn_text),
+        message("a0", 1, 0, "assistant", "complete", "ok"),
+        message("u1", 3, 1, "user", "complete", &"n".repeat(1_600)),
+        message("a1", 4, 1, "assistant", "complete", "ok"),
+    ];
+    let perm_switches = vec![crate::db::chat::PermissionSwitchRecord {
+        id: "psw-big".into(),
+        sequence: 2,
+        from_mode: "workspace-write".into(),
+        to_mode: "read-only".into(),
+        injected_prompt: "p".repeat(1_600),
+        created_at_ms: 0,
+    }];
+    let assembly_sw = assemble(&AssemblyInput {
+        messages: &messages_sw,
+        draft: "go",
+        draft_attachments: &[],
+        model: &model(),
+        context_limit: Some(base_reserve + 900),
+        output_limit: Some(0),
+        variant_params: None,
+        compact: None,
+        model_identity: None,
+        environment: None,
+        instructions: None,
+        skills: None,
+        mcp: None,
+        model_switches: &[],
+        permission_switches: &perm_switches,
+        skill_blocks: &[],
+        supports_image_input: true,
+    });
+    assert_eq!(
+        assembly_sw.omitted_turns, 1,
+        "计入 `<system-update>` 开销后必须再裁掉最老一轮"
+    );
+    let serialized = format!("{:?}", assembly_sw.request.items);
+    assert!(!serialized.contains(&turn_text));
+    assert!(serialized.contains(&"n".repeat(1_600)));
+    assert!(serialized.contains(&"p".repeat(1_600)));
 }

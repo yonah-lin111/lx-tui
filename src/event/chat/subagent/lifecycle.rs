@@ -66,6 +66,7 @@ pub(crate) fn cancel_for_session(
     let mut cancelled = false;
     let mut cleared_agents = Vec::new();
     let mut dead = Vec::new();
+    let mut cancelled_keys = Vec::new();
     for (child, handle) in &mut streams.subagents {
         if !selected(&handle.agent_path) {
             continue;
@@ -73,11 +74,19 @@ pub(crate) fn cancel_for_session(
         cleared_agents.push(handle.agent_id.clone());
         // 用户手动停止 / 会话删除 / 退出：不生成半程汇报。
         handle.closed_without_report = true;
+        cancelled_keys.push(RequestKey {
+            pane: handle.parent.pane,
+            session: handle.child_session_id.clone(),
+            generation: handle.parent.generation,
+        });
         if handle.cancel.send(true).is_ok() {
             cancelled = true;
         } else {
             dead.push(child.clone());
         }
+    }
+    for child_key in cancelled_keys {
+        streams.wake_approval(&child_key);
     }
     for id in cleared_agents {
         streams.resumed_subagents.remove(&id);

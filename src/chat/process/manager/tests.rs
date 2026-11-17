@@ -103,6 +103,81 @@ async fn short_command_returns_real_exit_code_and_output() {
 ///
 /// 真实案例：`pgrep -af ... ; ... | grep -c ...` 的 `grep -c` 在没有匹配时返回 1，
 /// 这是"没找到"这个答案的正常表达，把它标成失败会让界面显示红叉。
+#[cfg(target_os = "macos")]
+#[tokio::test]
+async fn exec_observed_wraps_commands_in_seatbelt() {
+    let dir = TempDir::new("seatbelt");
+    let manager = manager(&dir);
+    let root = std::fs::canonicalize(&dir.path).expect("canonical workspace");
+    let outside = std::env::temp_dir().join(format!(
+        "lx-seatbelt-outside-{}-{}.txt",
+        std::process::id(),
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_nanos())
+            .unwrap_or_default()
+    ));
+    let spec = crate::platform::sandbox::SandboxSpec {
+        cwd: &root,
+        writable_roots: std::slice::from_ref(&root),
+        read_only_paths: &[],
+        deny_paths: &[],
+        deny_globs: &[],
+        glob_scan_max_depth: 16,
+        network_access: false,
+    };
+    let script = format!("echo ok > inside.txt; echo bad > '{}'", outside.display());
+    let result = manager
+        .exec_observed(
+            exec(&script, 5_000),
+            &dir.path,
+            "call-sandbox",
+            Some(&spec),
+            &|_| {},
+        )
+        .await
+        .expect("exec");
+    assert!(dir.path.join("inside.txt").exists());
+    assert!(!outside.exists());
+    assert_ne!(result.exit_code, Some(0));
+}
+
+#[cfg(target_os = "macos")]
+#[tokio::test]
+async fn pty_commands_are_also_sandboxed() {
+    let dir = TempDir::new("seatbelt-pty");
+    let manager = manager(&dir);
+    let root = std::fs::canonicalize(&dir.path).expect("canonical workspace");
+    let outside = std::env::temp_dir().join(format!(
+        "lx-seatbelt-pty-outside-{}-{}.txt",
+        std::process::id(),
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_nanos())
+            .unwrap_or_default()
+    ));
+    let spec = crate::platform::sandbox::SandboxSpec {
+        cwd: &root,
+        writable_roots: std::slice::from_ref(&root),
+        read_only_paths: &[],
+        deny_paths: &[],
+        deny_globs: &[],
+        glob_scan_max_depth: 16,
+        network_access: false,
+    };
+    let mut args = exec(
+        &format!("echo bad > '{}'; exit 3", outside.display()),
+        5_000,
+    );
+    args.tty = true;
+    let result = manager
+        .exec_observed(args, &dir.path, "call-pty", Some(&spec), &|_| {})
+        .await
+        .expect("exec");
+    assert!(!outside.exists());
+    assert_ne!(result.exit_code, Some(0));
+}
+
 #[tokio::test]
 async fn non_zero_exit_is_a_result_not_a_failure() {
     let dir = TempDir::new("nonzero");
@@ -686,5 +761,44 @@ async fn tail_snapshot_tracks_the_newest_output_past_the_budget() {
         tail.contains("TAIL-MARKER"),
         "快照必须是最新输出的尾部，实际尾部 {:?}",
         &tail[tail.len().saturating_sub(48)..]
+    );
+}
+
+#[tokio::test]
+async fn exec_observed_with_sandbox_uses_resolved_workdir_and_cleans_synthetic_git() {
+    if !crate::platform::sandbox::support().supports_process_sandbox() {
+        return;
+    }
+    let dir = TempDir::new("sandbox-workdir");
+    let root = std::fs::canonicalize(&dir.path).expect("canonical root");
+    let sub = root.join("sub");
+    std::fs::create_dir_all(&sub).expect("sub");
+    let missing_git = root.join(".git");
+    let spec = crate::platform::sandbox::SandboxSpec {
+        cwd: &root,
+        writable_roots: std::slice::from_ref(&root),
+        read_only_paths: std::slice::from_ref(&missing_git),
+        deny_paths: &[],
+        deny_globs: &[],
+        glob_scan_max_depth: 16,
+        network_access: false,
+    };
+    let manager = manager(&dir);
+    let mut args = exec("pwd", 5_000);
+    args.workdir = Some("sub".to_string());
+    let result = manager
+        .exec_observed(args, &root, "call-sandbox-workdir", Some(&spec), &|_| {})
+        .await
+        .expect("exec");
+    assert_eq!(result.exit_code, Some(0));
+    assert!(
+        result.output.trim().ends_with("sub"),
+        "沙箱内工作目录必须切换到 workdir=sub: {:?}",
+        result.output
+    );
+    assert!(result.cwd.ends_with("sub"));
+    assert!(
+        std::fs::symlink_metadata(&missing_git).is_err(),
+        "进程退出后工作区不得残留 0 字节 .git 占位文件"
     );
 }

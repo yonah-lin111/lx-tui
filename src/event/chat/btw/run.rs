@@ -115,6 +115,13 @@ pub(super) fn start_recipient(
             .or(Some(workspace.as_path())),
         &std::collections::BTreeSet::new(),
     );
+    let (effective_sandbox, _, _) = super::subagent::effective_sandbox_for_session(
+        state,
+        Some(database),
+        &workspace,
+        pane,
+        &start.parent_session_id,
+    );
     let references = agent_references(persistence, &workspace, &start, &pending.thread_id);
     let context = match assemble_btw_context(BtwContextInput {
         database,
@@ -131,6 +138,7 @@ pub(super) fn start_recipient(
         cwd: &cwd,
         context_limit: frozen.context_limit,
         mcp: &mcp_snapshot,
+        sandbox: &effective_sandbox,
     }) {
         Ok(context) => context,
         Err(error) => {
@@ -210,6 +218,10 @@ pub(super) fn start_recipient(
     let mut executor = AgentTools::new(manager, turn)
         .with_recorder(std::sync::Arc::new(recorder))
         .with_reads(reads)
+        .with_sandbox(crate::chat::sandbox::SandboxPlan::for_turn(
+            &effective_sandbox,
+            &cwd,
+        ))
         .with_image_support(frozen.supports_image_input)
         .with_mcp(
             crate::mcp::global_manager().clone(),

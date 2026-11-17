@@ -29,6 +29,7 @@ mod plan_args;
 mod process_args;
 mod read;
 mod read_version;
+mod sandbox_gate;
 mod schema;
 mod search;
 mod subagent;
@@ -56,7 +57,11 @@ pub use mutation::{
 };
 pub use output::{format_for_model, to_result_json, to_summary};
 pub use plan_args::build_plan_result;
-pub use process_args::{parse_exec_args, parse_stdin_args, process_failure};
+pub(crate) use process_args::is_banned_prefix;
+pub use process_args::{
+    EscalationKind, SandboxEscalation, parse_exec_args, parse_exec_request, parse_stdin_args,
+    process_failure,
+};
 pub use read_version::{
     ReadRegistry, ReadVersion, canonical_key as read_canonical_key, drop_registry as drop_reads,
     registry as read_registry, require_missing as require_new_target,
@@ -64,7 +69,8 @@ pub use read_version::{
 };
 pub use schema::{
     available_tools, builtin_tools, builtin_tools_with_subagents, resource_tools, tools_for,
-    turn_tools, turn_tools_for_btw, turn_tools_for_subagent, turn_tools_with_subagents,
+    trim_escalation_parameters, turn_tools, turn_tools_for_btw, turn_tools_for_subagent,
+    turn_tools_with_subagents,
 };
 pub use subagent::{build_spawn_role_guidance, enrich_spawn_tool_decl};
 pub use types::{

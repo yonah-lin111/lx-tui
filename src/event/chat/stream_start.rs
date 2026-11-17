@@ -89,13 +89,15 @@ pub(super) fn start_stream(
                 summary: checkpoint.summary.clone(),
                 model_label: checkpoint.model_label.clone(),
             });
-        // 环境快照：工作区根 + 冻结 cwd + 受管后台任务摘要（不含任何凭据/环境变量值）。
+        // 环境快照：工作区根 + 冻结 cwd + 受管后台任务摘要 + 会话生效的沙箱配置。
         let workspace_root = state.workspace_cwd_for_pane(key.pane);
-        let environment = crate::chat::prompt::environment_snapshot(
+        let effective_sandbox = state.effective_sandbox_for_pane(key.pane);
+        let environment = crate::chat::prompt::environment_snapshot_with_sandbox(
             &crate::platform::EnvironmentFacts::capture(),
             workspace_root.as_deref(),
             workspace_root.as_deref(),
             &background_tasks(pane.lx.chat.session_id.as_deref(), streams),
+            &effective_sandbox,
         );
         // skill 目录与 MCP 快照在 turn 起点冻结（配置根取仓库主 checkout，执行 cwd 为 workspace_root）。
         let config_root = state
@@ -159,6 +161,13 @@ pub(super) fn start_stream(
             .iter()
             .map(crate::app::state::ModelSwitchNoticeView::to_record)
             .collect();
+        let permission_switches: Vec<crate::db::chat::PermissionSwitchRecord> = pane
+            .lx
+            .permission_switch
+            .switches
+            .iter()
+            .map(crate::app::state::PermissionSwitchNoticeView::to_record)
+            .collect();
         let mut assembled = assemble_turn_request_with_context(
             &pane.lx.chat.messages,
             &frozen,
@@ -169,14 +178,18 @@ pub(super) fn start_stream(
             skills.as_deref(),
             mcp_prompt.as_deref(),
             &model_switches,
+            &permission_switches,
             &skill_blocks,
         );
-        assembled.request.tools =
-            std::sync::Arc::new(crate::chat::tools::turn_tools_with_subagents(
-                crate::chat::agent::ToolSurface::Main,
-                &mcp_snapshot,
-                Some(&effective_subagents),
-            ));
+        let mut tool_decls = crate::chat::tools::turn_tools_with_subagents(
+            crate::chat::agent::ToolSurface::Main,
+            &mcp_snapshot,
+            Some(&effective_subagents),
+        );
+        if effective_sandbox.escalation == crate::config::sandbox::EscalationPolicy::Never {
+            crate::chat::tools::trim_escalation_parameters(&mut tool_decls);
+        }
+        assembled.request.tools = std::sync::Arc::new(tool_decls);
         // 计划快照先克隆：运行上下文摘要要在后面的可变借用窗外拼装。
         let current_plan = pane.lx.chat.plan.clone();
         (
@@ -284,6 +297,16 @@ pub(super) fn start_stream(
     streams
         .mutation_users
         .insert(key.clone(), mutation_user.clone());
+    // 新会话的首条消息（或 `/permission` 在会话落库前选择）：把 pending 覆盖写入会话列。
+    if let Some(mode) = state
+        .pane_anywhere(key.pane)
+        .and_then(|pane| pane.lx.sandbox_mode)
+        && let Some(database) = persistence.database()
+        && let Err(error) =
+            database.set_session_sandbox_mode(&session_key, &key.session, Some(mode.as_str()))
+    {
+        tracing::warn!(%error, "failed to persist pending sandbox mode");
+    }
     // 运行实例：同一聊天会话跨轮复用同一进程管理器；本轮执行上下文独立。
     let turn_slot = key.session.clone();
     let Some(runtime) = streams.runtime_for(prepared.cwd.clone(), &turn_slot) else {
@@ -300,9 +323,27 @@ pub(super) fn start_stream(
     );
     // 读后版本保护：登记表按会话隔离，跨轮保留（读过的文件在后续轮次仍可用同一 token）。
     let reads = crate::chat::tools::read_registry(&key.session);
+    // turn 起点：规则文件变化时重载（不阻塞启动；坏文件只告警）。
+    crate::chat::exec_policy::reload_if_changed();
     let executor = AgentTools::new(runtime.manager.clone(), turn)
         .with_recorder(std::sync::Arc::new(recorder))
         .with_reads(reads)
+        .with_sandbox(
+            crate::chat::sandbox::SandboxPlan::for_turn(
+                &state.effective_sandbox_for_pane(key.pane),
+                &prepared.cwd,
+            )
+            .with_exact_rules(
+                state
+                    .pane_anywhere(key.pane)
+                    .map(|pane| pane.lx.sandbox_exact_rules.clone())
+                    .unwrap_or_default(),
+                state
+                    .pane_anywhere(key.pane)
+                    .map(|pane| pane.lx.sandbox_prefix_rules.clone())
+                    .unwrap_or_default(),
+            ),
+        )
         .with_image_support(frozen.supports_image_input)
         .with_web_search_keys(
             state.models.settings.web_search.exa_api_key.clone(),

@@ -683,3 +683,128 @@ async fn tool_preamble_text_is_not_reused_as_the_final_message() {
 fn real_factory_is_object_safe() -> Arc<dyn ExecStreamFactory> {
     Arc::new(RealStreamFactory)
 }
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn exec_forces_escalation_never_trims_schema_and_loads_db_sandbox_rules() {
+    use crate::config::sandbox::EscalationPolicy;
+    use crate::db::sandbox::{SandboxRuleKind, SessionSandboxRule};
+
+    let dir = TestDir::new("exec-sandbox-never");
+    let db = Database::open_in_memory().expect("in-memory db");
+    let config = assemble(&db, &dir, "check sandbox config", None);
+    let session_id = config.session_id.clone();
+
+    let system = config.context.system_prompt_text().unwrap_or("");
+    assert!(
+        system.contains(r#"escalation="never""#),
+        "exec system prompt must declare escalation=never: {system}"
+    );
+    let exec_tool = config
+        .context
+        .tools_for_tests()
+        .iter()
+        .find(|decl| decl.name == "exec_command")
+        .expect("exec_command tool");
+    let props = exec_tool
+        .parameters
+        .get("properties")
+        .and_then(serde_json::Value::as_object)
+        .expect("properties");
+    for hidden in [
+        "sandbox_permissions",
+        "justification",
+        "prefix_rule",
+        "additional_permissions",
+    ] {
+        assert!(
+            !props.contains_key(hidden),
+            "exec must trim {hidden} from exec_command schema"
+        );
+    }
+
+    db.set_session_sandbox_mode(&dir.path, &session_id, Some("read-only"))
+        .expect("set read-only");
+    let allowed = dir.join("allowed.txt");
+    let allowed_rule = SessionSandboxRule {
+        kind: SandboxRuleKind::Exact,
+        tokens: vec!["touch".into(), allowed.display().to_string()],
+    };
+    let prefix_rule = SessionSandboxRule {
+        kind: SandboxRuleKind::Prefix,
+        tokens: vec!["cargo".into(), "check".into()],
+    };
+    db.insert_sandbox_rule(&dir.path, &session_id, &allowed_rule)
+        .expect("insert exact rule");
+    db.insert_sandbox_rule(&dir.path, &session_id, &prefix_rule)
+        .expect("insert prefix rule");
+
+    let loaded_plan =
+        super::super::runner::exec_sandbox_plan(&db, &dir.path, &session_id, &dir.path);
+    assert_eq!(loaded_plan.escalation, EscalationPolicy::Never);
+    assert!(loaded_plan.command_is_approved(&format!("touch {}", allowed.display())));
+    assert!(loaded_plan.command_is_approved("cargo check --all"));
+
+    let mut seed_stdout = Vec::new();
+    let mut seed_stderr = Vec::new();
+    let mut seed_processor =
+        HumanOutputProcessor::new(&mut seed_stdout, &mut seed_stderr, false, false, None);
+    let (_cancel_tx, cancel_rx) = watch::channel(false);
+    let seed_summary = run_exec_turn(
+        &db,
+        config,
+        &mut seed_processor,
+        ScriptedFactory::new(vec![text_step("seeded")], Vec::new()),
+        cancel_rx,
+    )
+    .await;
+    assert_eq!(seed_summary.outcome, TurnOutcome::Complete);
+
+    let config = assemble(
+        &db,
+        &dir,
+        "run preapproved and escalated commands",
+        Some(&session_id),
+    );
+    let approved_cmd = format!("touch {}", allowed.display());
+    let escalated_cmd = "echo blocked".to_string();
+    let step = tool_step(&[
+        (
+            "call-approved",
+            "exec_command",
+            &serde_json::json!({ "cmd": approved_cmd, "login": false, "yield_time_ms": 2000 })
+                .to_string(),
+        ),
+        (
+            "call-escalated",
+            "exec_command",
+            &serde_json::json!({
+                "cmd": escalated_cmd,
+                "login": false,
+                "sandbox_permissions": "require_escalated",
+                "justification": "should fail"
+            })
+            .to_string(),
+        ),
+    ]);
+    let factory = ScriptedFactory::new(vec![step, text_step("done")], Vec::new());
+    let mut stdout = Vec::new();
+    let mut stderr = Vec::new();
+    let mut processor = HumanOutputProcessor::new(&mut stdout, &mut stderr, false, false, None);
+    let (_cancel_tx, cancel_rx) = watch::channel(false);
+    let summary = run_exec_turn(&db, config, &mut processor, factory.clone(), cancel_rx).await;
+    assert_eq!(summary.outcome, TurnOutcome::Complete);
+    assert!(
+        allowed.exists(),
+        "loaded DB exact rule must bypass read-only sandbox"
+    );
+
+    let results = tool_result_texts(&factory.main_requests()[1]);
+    if crate::platform::sandbox::support().supports_process_sandbox() {
+        assert!(
+            results
+                .iter()
+                .any(|text| text.contains("sandbox escalation is disabled by settings")),
+            "escalated call must fail when escalation=never: {results:?}"
+        );
+    }
+}

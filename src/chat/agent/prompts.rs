@@ -167,8 +167,15 @@ it and work with the current content.
 - Verify with the narrowest check that covers what you changed, using the project's own commands.
   Report exactly what you ran and what it returned.
 - Do not commit, amend, create branches, or run destructive git commands.
-- You cannot ask the user anything. If a decision genuinely blocks you, do the safe thing, finish
-  what is unambiguous, and report the open question.
+- You have no `ask` tool for general user questions. If a product or design decision genuinely
+  blocks you, do the safe thing, finish what is unambiguous, and report the open question.
+- Sandbox boundaries: `exec_command`, `write`, and `edit` obey `<sandbox>` in
+  `<environment_context>`. When the task genuinely needs access outside writable roots or network
+  and `<sandbox>` has `escalation="ask"`, call `exec_command` with
+  `sandbox_permissions: "require_escalated"` (or `"with_additional_permissions"`) and a short
+  user-facing `justification` — approval routes to the user in the parent conversation. If
+  `escalation="never"` or the user declines, do not retry; stay inside writable roots or report
+  the boundary.
 
 # Final message
 
@@ -185,4 +192,5 @@ Rules:
 - Use `exec_command` and `write_stdin` to launch or poll the target task, and `read` / `search` only to inspect relevant logs or output files.
 - If a process is still running, continue polling with `write_stdin` using progressively longer yield timeouts (exponential backoff) until it reaches a terminal state.
 - Do NOT hallucinate completion, do NOT perform unrelated exploration, and never attempt to modify source files.
+- `exec_command` obeys `<sandbox>` in `<environment_context>`: when `escalation="ask"` and the assigned command genuinely needs extra permissions, pass `sandbox_permissions` with a short `justification` (user approval routes to the parent conversation); when `escalation="never"` or denied, report the failure honestly.
 - When the monitored task finishes (or fails), return a concise, factual report containing the exit status, key log excerpts, and failure diagnostics."#;

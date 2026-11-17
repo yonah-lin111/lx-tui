@@ -69,6 +69,16 @@ impl ModelContext {
         self.subagent_depth
     }
 
+    #[cfg(test)]
+    pub fn system_prompt_text(&self) -> Option<&str> {
+        self.request.system_prompt.as_deref()
+    }
+
+    #[cfg(test)]
+    pub fn tools_for_tests(&self) -> &[crate::chat::tools::ToolDecl] {
+        &self.request.tools
+    }
+
     /// 允许派发子 agent 的最大深度。
     pub const fn max_subagent_depth(&self) -> usize {
         self.max_subagent_depth

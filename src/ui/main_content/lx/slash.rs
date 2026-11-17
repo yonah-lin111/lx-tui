@@ -81,6 +81,30 @@ pub(super) fn items<'a>(
                 })
                 .collect()
         }
+        SlashPanel::Permission(picker) => {
+            if picker.is_filter_empty() {
+                return vec![CommandItem::Inline {
+                    label: text::LX_SLASH_NO_MATCHES,
+                    preview: "",
+                    tag: "",
+                }];
+            }
+            let all = crate::app::state::lx::slash::permission_candidates();
+            picker
+                .filtered
+                .iter()
+                .filter_map(|index| all.get(*index))
+                .map(|(mode, label, description)| CommandItem::Inline {
+                    label,
+                    preview: description,
+                    tag: if *mode == picker.global {
+                        text::SLASH_TAG_DEFAULT
+                    } else {
+                        ""
+                    },
+                })
+                .collect()
+        }
         SlashPanel::History(history) => {
             if history.loading {
                 return vec![CommandItem::Inline {
@@ -318,6 +342,7 @@ fn is_placeholder(panel: &crate::app::state::SlashPanel) -> bool {
         crate::app::state::SlashPanel::Stop(_) => false,
         crate::app::state::SlashPanel::Report(_) => false,
         crate::app::state::SlashPanel::Mcp(p) => p.entries.is_empty() || p.is_filter_empty(),
+        crate::app::state::SlashPanel::Permission(p) => p.is_filter_empty(),
     }
 }
 
@@ -368,6 +393,11 @@ fn view<'a>(
             } else {
                 text::LX_MODEL_VARIANT_PANEL_TITLE
             },
+            picker.window,
+            text::LX_SLASH_PANEL_FOOTER,
+        ),
+        SlashPanel::Permission(picker) => (
+            text::LX_PERMISSION_PANEL_TITLE,
             picker.window,
             text::LX_SLASH_PANEL_FOOTER,
         ),
@@ -475,6 +505,7 @@ fn view<'a>(
         borderless: true,
         hide_active_marker: is_placeholder(panel),
         disabled,
+        context_lines: &[],
     }
 }
 
@@ -485,6 +516,9 @@ fn area_of(input: Rect, area: Rect) -> Rect {
 
 /// `/` 命令面板纯几何（与 `render_slash_panel` 同源）；供滚轮与命中复用。
 pub(crate) fn layout(area: Rect, lx: &Lx) -> Option<PanelLayout> {
+    if super::approval::visible(lx) {
+        return None;
+    }
     let editor = lx.active_editor();
     let panel = editor.slash.as_ref()?;
     let input = super::input_rect(area, lx)?;
@@ -500,6 +534,9 @@ pub(crate) fn layout(area: Rect, lx: &Lx) -> Option<PanelLayout> {
 
 /// `/` 命令面板命中：返回被点/悬停的条目索引；未命中返回 None。
 pub(crate) fn item_at(area: Rect, lx: &Lx, column: u16, row: u16) -> Option<usize> {
+    if super::approval::visible(lx) {
+        return None;
+    }
     let editor = lx.active_editor();
     let panel = editor.slash.as_ref()?;
     // 空态占位行不可选（真无数据，或过滤后无命中）。
@@ -520,6 +557,9 @@ pub(crate) fn item_at(area: Rect, lx: &Lx, column: u16, row: u16) -> Option<usiz
 
 /// 绘制 `/` 命令面板（复用 `layout` 的矩形口径）。
 pub(super) fn render(area: Rect, buf: &mut ratatui::buffer::Buffer, lx: &Lx) {
+    if super::approval::visible(lx) {
+        return;
+    }
     let editor = lx.active_editor();
     let Some(panel) = editor.slash.as_ref() else {
         return;

@@ -70,6 +70,21 @@ pub fn border_title() -> Style {
         .remove_modifier(Modifier::BOLD)
 }
 
+/// lx 窗格顶边框沙箱权限模式色（显式去掉继承的 DIM/BOLD）：
+/// `Read-only` 绿、`Workspace` 黄、`Full` 红，与粉→蓝标题拉开层级。
+pub fn sandbox_mode_on_border(mode: crate::config::sandbox::SandboxMode) -> Style {
+    use crate::config::sandbox::SandboxMode;
+    let fg = match mode {
+        SandboxMode::ReadOnly => Color::Green,
+        SandboxMode::WorkspaceWrite => Color::Yellow,
+        SandboxMode::DangerFullAccess => Color::Red,
+    };
+    Style::default()
+        .fg(fg)
+        .remove_modifier(Modifier::DIM)
+        .remove_modifier(Modifier::BOLD)
+}
+
 /// 边框上的正文（页重命名输入、页控件空白位）：显式重置前景，
 /// 避免继承聚焦态边框的强调色；不带 dim，保证可编辑内容清晰。
 pub fn text_on_border() -> Style {

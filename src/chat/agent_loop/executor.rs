@@ -19,9 +19,10 @@ use tokio::sync::Mutex;
 
 use crate::chat::plan::PlanSnapshot;
 use crate::chat::process::{ProcessManager, ProcessResultKind, Rtk};
+use crate::chat::sandbox::{CommandSandbox, SandboxPlan};
 use crate::chat::tools::{
-    MutationRecorder, MutationRecorderFactory, ToolExecutionResult, build_plan_result,
-    parse_exec_args, parse_stdin_args, process_failure,
+    MutationRecorder, MutationRecorderFactory, ToolErrorCode, ToolExecutionResult, ToolFailure,
+    build_plan_result, parse_stdin_args, process_failure,
 };
 use crate::db::chat::ToolCallTicket;
 
@@ -105,6 +106,8 @@ pub struct AgentTools {
     mcp: Option<McpRuntime>,
     /// 会话 id：工具结果图片归档目录。
     session_id: String,
+    /// 本轮冻结的沙箱计划。
+    sandbox: SandboxPlan,
 }
 
 /// 本轮 MCP 依赖。
@@ -138,7 +141,14 @@ impl AgentTools {
             rtk: Rtk::detect(),
             mcp: None,
             session_id: String::new(),
+            sandbox: SandboxPlan::unsandboxed(),
         }
+    }
+
+    /// 注入本轮冻结的沙箱计划（生产入口必须调用）。
+    pub fn with_sandbox(mut self, sandbox: SandboxPlan) -> Self {
+        self.sandbox = sandbox;
+        self
     }
 
     /// 注入每轮 mutation recorder 工厂（生产路径必须调用）。
@@ -299,7 +309,8 @@ impl AgentTools {
     ) -> ToolExecutionResult {
         let mut context = crate::chat::tools::ToolContext::new(cwd.to_path_buf())
             .with_image_support(self.supports_image_input)
-            .with_session_id(self.session_id.clone());
+            .with_session_id(self.session_id.clone())
+            .with_sandbox(self.sandbox.policy_view());
         if let Some(reads) = self.reads.as_ref() {
             context = context.with_reads(Arc::clone(reads));
         }
@@ -359,16 +370,36 @@ impl AgentTools {
         name: &str,
         arguments_json: &str,
         call_id: &str,
+        sandbox: &crate::chat::sandbox::SandboxOverride,
     ) -> ToolExecutionResult {
         if name == "exec_command" {
-            let mut args = match parse_exec_args(arguments_json) {
-                Ok(args) => args,
+            let request = match crate::chat::tools::parse_exec_request(arguments_json) {
+                Ok(request) => request,
                 Err(failure) => return failure.into_result(Vec::new()),
+            };
+            let mut args = request.args;
+            let approved = self.sandbox.command_is_approved(&args.cmd);
+            let plan = if approved {
+                self.sandbox
+                    .with_override(&crate::chat::sandbox::SandboxOverride::Unsandboxed)
+            } else {
+                self.sandbox.with_override(sandbox)
             };
             // rtk：外部安装优先；否则用内置过滤。包装只改实际执行的脚本，
             // 结果里的 command 仍还原为用户原始命令（卡片/上下文事实不变）。
             let prepared = self.rtk.prepare(&args.cmd);
             args.cmd = prepared.command.clone();
+            let spec = match plan.command_sandbox() {
+                CommandSandbox::Wrap => Some(plan.spec(cwd)),
+                CommandSandbox::None => None,
+                CommandSandbox::Unavailable => {
+                    return ToolFailure::new(
+                        ToolErrorCode::SandboxUnavailable,
+                        "process sandbox is unavailable on this platform; install the backend or switch to danger-full-access",
+                    )
+                    .into_result(Vec::new());
+                }
+            };
             // 用 `exec_observed` 提前登记：等待窗口期间也能被本轮停止杀掉。
             let turn = Arc::clone(&self.turn);
             let on_spawn = move |session_id: u64| {
@@ -380,11 +411,14 @@ impl AgentTools {
             };
             return match self
                 .processes
-                .exec_observed(args, cwd, call_id, &on_spawn)
+                .exec_observed(args, cwd, call_id, spec.as_ref(), &on_spawn)
                 .await
             {
                 Ok(mut result) => {
                     result.command = prepared.original.clone();
+                    if !approved && let Some(retry) = sandbox.approval_summary(&prepared.original) {
+                        result.sandbox_retry = Some(retry);
+                    }
                     // 只有真实终态才过滤：等待窗口到期仍 Running 时返回的是半截输出，
                     // 不能把“还在编译”压缩成“ok”；后续 write_stdin 继续读原始增量。
                     if result.state.is_terminal() && self.rtk.should_filter_builtin(&prepared) {
@@ -422,7 +456,8 @@ impl AgentTools {
 
 impl ToolExecutor for AgentTools {
     async fn execute(&self, cwd: &Path, call: &ReadyToolCall) -> ToolExecutionResult {
-        self.run(cwd, call, None).await
+        self.run(cwd, call, None, crate::chat::sandbox::SandboxOverride::None)
+            .await
     }
 
     async fn execute_tracked(
@@ -431,7 +466,27 @@ impl ToolExecutor for AgentTools {
         call: &ReadyToolCall,
         ticket: &ToolCallTicket,
     ) -> ToolExecutionResult {
-        self.run(cwd, call, Some(ticket)).await
+        self.run(
+            cwd,
+            call,
+            Some(ticket),
+            crate::chat::sandbox::SandboxOverride::None,
+        )
+        .await
+    }
+
+    async fn execute_tracked_sandboxed(
+        &self,
+        cwd: &Path,
+        call: &ReadyToolCall,
+        ticket: &ToolCallTicket,
+        sandbox: crate::chat::sandbox::SandboxOverride,
+    ) -> ToolExecutionResult {
+        self.run(cwd, call, Some(ticket), sandbox).await
+    }
+
+    fn sandbox_plan(&self) -> Option<&crate::chat::sandbox::SandboxPlan> {
+        Some(&self.sandbox)
     }
 
     async fn execute_mcp_cancellable(
@@ -476,11 +531,18 @@ impl AgentTools {
         cwd: &Path,
         call: &ReadyToolCall,
         ticket: Option<&ToolCallTicket>,
+        sandbox: crate::chat::sandbox::SandboxOverride,
     ) -> ToolExecutionResult {
         let result = match call.name.as_str() {
             "exec_command" | "write_stdin" => {
-                self.execute_process(cwd, &call.name, &call.arguments_json, &call.call_id)
-                    .await
+                self.execute_process(
+                    cwd,
+                    &call.name,
+                    &call.arguments_json,
+                    &call.call_id,
+                    &sandbox,
+                )
+                .await
             }
             name if crate::mcp::is_mcp_tool(name) => {
                 // 无取消信号的测试入口：通道永不取消，由 manager 超时兜底。

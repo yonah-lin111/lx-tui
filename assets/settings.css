@@ -10,7 +10,7 @@ nav.side button:hover { color: var(--text); background: var(--hover); }
 nav.side button.active { background: var(--active); color: var(--text); font-weight: 600; }
 .view { display: flex; flex: 1 1 auto; min-height: 0; flex-direction: column; }
 .view.hidden { display: none; }
-#view-general, #view-model { overflow-y: auto; }
+#view-general, #view-model, #view-sandbox { overflow-y: auto; }
 h2 { font-size: 16px; margin: 0 0 16px; }
 .view-head { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 8px 12px; margin-bottom: 12px; }
 .view-head h2 { margin: 0; }

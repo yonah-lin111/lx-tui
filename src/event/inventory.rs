@@ -105,6 +105,10 @@ pub(crate) fn drain_settings_events(
                 state.subagents_config = *subagents;
                 refresh_subagent_mentions(state, persistence);
             }
+            // 沙箱配置热更新到 `AppState` 并刷新已打开 `/permission` 面板 `[Default]` 标记。
+            SettingsEvent::SandboxChanged(sandbox) => {
+                update::apply_sandbox_changed(state, *sandbox);
+            }
         }
         changed = true;
     }

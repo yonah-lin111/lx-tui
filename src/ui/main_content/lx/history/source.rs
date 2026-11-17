@@ -6,8 +6,8 @@
 use crate::app::state::RewindNoticeView;
 use crate::app::state::lx::LxRecap;
 use crate::app::state::{
-    ChatMessageView, CompactNoticeView, Lx, LxChat, LxCompact, LxModelSwitch,
-    ModelSwitchNoticeView, SubagentRun,
+    ChatMessageView, CompactNoticeView, Lx, LxChat, LxCompact, LxModelSwitch, LxPermissionSwitch,
+    ModelSwitchNoticeView, PermissionSwitchNoticeView, SubagentRun,
 };
 
 /// 离屏流式合并判定用的视口锚点。
@@ -41,6 +41,8 @@ pub(crate) struct HistorySource<'a> {
     pub checkpoints: &'a [CompactNoticeView],
     /// 模型切换提示。
     pub switches: &'a [ModelSwitchNoticeView],
+    /// 权限切换提示。
+    pub perm_switches: &'a [PermissionSwitchNoticeView],
     /// 折叠状态 / loading 相位。
     pub chat: &'a LxChat,
     /// 呼吸动画是否推进：`ask` 等待用户作答时冻结（方块保持静态实心）。
@@ -49,6 +51,8 @@ pub(crate) struct HistorySource<'a> {
     pub compact: &'a LxCompact,
     /// 模型切换状态。
     pub model_switch: &'a LxModelSwitch,
+    /// 权限切换状态。
+    pub permission_switch: &'a LxPermissionSwitch,
     /// recap 状态；子 agent 详情没有独立 recap，使用 None。
     pub recap: Option<&'a LxRecap>,
     /// 撤销面板当前选中的用户消息（渲染高亮用；无则 None）。
@@ -79,12 +83,14 @@ impl<'a> From<&'a Lx> for HistorySource<'a> {
             notices: &lx.chat.notices,
             checkpoints: &lx.compact.checkpoints,
             switches: &lx.model_switch.switches,
+            perm_switches: &lx.permission_switch.switches,
             chat: &lx.chat,
             // ask 等待用户作答期间不推进呼吸相位：步骤方块保持静态实心，
             // 不再一闪一闪（用户思考的时间不属于 Agent 执行过程）。
             animating: (lx.chat.is_animating() || lx.compact.is_running()) && lx.ask.is_none(),
             compact: &lx.compact,
             model_switch: &lx.model_switch,
+            permission_switch: &lx.permission_switch,
             recap: Some(&lx.recap),
             selected_user_message: lx
                 .rewind
@@ -128,17 +134,20 @@ impl<'a> HistorySource<'a> {
     /// 只有一份 `LxChat` 的数据源（`Agents` 详情区）。
     pub(crate) fn from_chat(chat: &'a LxChat, compact: &'a LxCompact) -> HistorySource<'a> {
         static EMPTY_MODEL_SWITCH: LxModelSwitch = LxModelSwitch::EMPTY;
+        static EMPTY_PERM_SWITCH: LxPermissionSwitch = LxPermissionSwitch::EMPTY;
         HistorySource {
             messages: &chat.messages,
             notices: &chat.notices,
             checkpoints: &compact.checkpoints,
             switches: &[],
+            perm_switches: &[],
             chat,
             // 与主历史同一判据：BTW 的在途回答只体现在消息状态上，没有
             // `status.streaming`；漏掉它会让详情步骤标记整段不呼吸。
             animating: chat.is_animating() || compact.is_running(),
             compact,
             model_switch: &EMPTY_MODEL_SWITCH,
+            permission_switch: &EMPTY_PERM_SWITCH,
             recap: None,
             selected_user_message: None,
             subagents_running: false,
@@ -174,6 +183,7 @@ impl<'a> HistorySource<'a> {
             || !self.compact.is_empty()
             || self.compact.is_running()
             || !self.model_switch.is_empty()
+            || !self.permission_switch.is_empty()
             || self.recap.is_some_and(|recap| !recap.is_empty())
     }
 }

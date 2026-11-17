@@ -29,15 +29,35 @@ pub(super) fn handle_lx_pane_mouse_down_left(
 ) {
     // lx 页：提及面板候选 > 聊天控件 > 后台任务面板控件 > 入口按钮 > …
     update::focus_pane(state, pane);
+    // 审批命令面板优先于 `ask` 与其它输入浮层（task > approval > ask）：
+    // 面板可见时先判候选项命中，否则落在面板矩形内的非选项区直接吞掉，防止穿透到下层浮层/ask/历史。
+    if state
+        .pane_anywhere(pane)
+        .is_some_and(|target| ui::main_content::lx::approval_visible(&target.lx))
+    {
+        let approval_hit = state.pane_anywhere(pane).and_then(|target| {
+            ui::main_content::lx::approval_item_at(inner, &target.lx, mouse.column, mouse.row)
+        });
+        if let Some(index) = approval_hit {
+            update::select_lx_approval(state, pane, index);
+            *dirty = true;
+            return;
+        }
+        if state.pane_anywhere(pane).is_some_and(|target| {
+            ui::main_content::lx::approval_layout(inner, &target.lx)
+                .is_some_and(|layout| layout.rect.contains((mouse.column, mouse.row).into()))
+        }) {
+            *dirty = true;
+            return;
+        }
+    }
     // `ask` 面板优先于其它一切：面板内点击一律吞掉，绝不穿透到历史/输入框。
     //
-    // 后台任务页打开时 ask 面板**不可见**（task 与 ask 共用输入框矩形，
-    // 绘制由 task 接管）：此时绝不能命中隐藏面板，否则点任务列表会
-    // 静默改一个看不见的答案，而列表本身永远点不动。
-    if let Some(target) = state
-        .pane_anywhere(pane)
-        .filter(|target| target.lx.task.is_none())
-        && target.lx.ask.as_ref().is_some_and(|ask| ask.editing)
+    // 后台任务页或审批面板打开时 ask 面板**不可见**：此时绝不能命中隐藏面板，
+    // 否则会静默改写看不见的答案。
+    if let Some(target) = state.pane_anywhere(pane).filter(|target| {
+        target.lx.task.is_none() && !ui::main_content::lx::approval_visible(&target.lx)
+    }) && target.lx.ask.as_ref().is_some_and(|ask| ask.editing)
         && let Some((visual_row, col)) =
             ui::main_content::lx::ask_editor_cell_at(inner, &target.lx, mouse.column, mouse.row)
     {
@@ -60,7 +80,9 @@ pub(super) fn handle_lx_pane_mouse_down_left(
     }
     let ask_hit = state
         .pane_anywhere(pane)
-        .filter(|target| target.lx.task.is_none())
+        .filter(|target| {
+            target.lx.task.is_none() && !ui::main_content::lx::approval_visible(&target.lx)
+        })
         .and_then(|target| {
             let rect = ui::main_content::lx::ask_rect(inner, &target.lx)?;
             if !rect.contains((mouse.column, mouse.row).into()) {
@@ -193,6 +215,9 @@ pub(super) fn handle_lx_pane_mouse_down_left(
         return;
     }
     if state.pane_mut_anywhere(pane).is_some_and(|target| {
+        if ui::main_content::lx::approval_visible(&target.lx) {
+            return false;
+        }
         let canceled_text = target.lx.text_paste_cancel();
         let canceled_path = target.lx.paste_cancel();
         canceled_text || canceled_path
@@ -341,6 +366,7 @@ pub(super) fn handle_lx_ctrl_right_click(
                 mouse.row,
             );
             let in_ask = target.lx.task.is_none()
+                && !ui::main_content::lx::approval_visible(&target.lx)
                 && ui::main_content::lx::ask_rect(inner, &target.lx)
                     .is_some_and(|rect| rect.contains((mouse.column, mouse.row).into()));
             !in_cmd && !in_ask

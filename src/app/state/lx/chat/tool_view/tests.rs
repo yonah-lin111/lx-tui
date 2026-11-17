@@ -22,6 +22,7 @@ fn running_result() -> ProcessResult {
         wrote_input: false,
         terminate: false,
         chunk_id: "abc123".into(),
+        sandbox_retry: None,
         wall_time_ms: 5,
     }
 }

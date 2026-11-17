@@ -15,6 +15,7 @@ use crate::db::chat::{ModelSnapshot, TurnOutcome, Usage};
 use crate::tiling::PaneId;
 use crate::ui::text;
 
+pub mod approval;
 pub mod ask;
 pub mod btw;
 pub mod compact;
@@ -26,6 +27,7 @@ mod detail_rewind;
 mod fork;
 pub mod mcp;
 pub mod model_switch;
+pub mod permission_switch;
 mod process;
 pub mod recap;
 pub mod report_fill;
@@ -43,6 +45,10 @@ mod view;
 mod viewport;
 pub mod web;
 
+pub use approval::{
+    apply_input as apply_approval_input, hover_approval as hover_lx_approval,
+    select_approval as select_lx_approval,
+};
 pub use ask::{
     apply_ask_click, apply_ask_paste, apply_ask_wheel, apply_input as apply_ask_input, submit_all,
 };
@@ -83,6 +89,10 @@ pub use mcp::{
     refresh_all_open_mcp_panels, refresh_pane_mcp_panel, toggle_mcp_entry,
 };
 pub use model_switch::{set_switches as set_model_switches, toggle_model_switch};
+pub use permission_switch::{
+    apply_sandbox_changed, set_sandbox_rules, set_switches as set_permission_switches,
+    sync_session_sandbox_mode, toggle_permission_switch,
+};
 pub use process::{
     activate_tool_card, apply_interaction_exit, apply_process_exit, apply_process_output,
     apply_process_snapshot, commit_plan, open_task_for_selected_tool, reconcile_process_records,

@@ -123,6 +123,7 @@ pub(super) fn draw_legacy(
         BlockSource::Rewind { .. }
         | BlockSource::Compact { .. }
         | BlockSource::ModelSwitch { .. }
+        | BlockSource::PermissionSwitch { .. }
         | BlockSource::Recap { .. } => {}
         BlockSource::RunningCompact => {
             super::super::compact::draw_running(

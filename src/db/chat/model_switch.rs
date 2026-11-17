@@ -300,3 +300,80 @@ fn read_model_switch(row: &Row<'_>) -> rusqlite::Result<ModelSwitchRecord> {
 
 #[cfg(test)]
 mod tests;
+
+/// 分叉会话时复制边界之前的模型切换记录。
+pub(super) fn copy_model_switches_for_fork(
+    conn: &rusqlite::Connection,
+    new_session_id: &str,
+    source_session: &str,
+    start_seq: i64,
+    boundary: i64,
+) -> Result<()> {
+    let mut statement = conn.prepare(
+        r#"SELECT sequence, from_provider, from_model, from_variant, to_provider, to_model,
+                  to_variant, from_label, to_label, updated_sources_json, injected_prompt,
+                  created_at_ms
+           FROM agent_model_switch
+           WHERE session_id = ?1 AND sequence >= ?2 AND sequence < ?3
+           ORDER BY sequence"#,
+    )?;
+    #[allow(clippy::type_complexity)]
+    let rows = statement
+        .query_map(params![source_session, start_seq, boundary], |row| {
+            Ok((
+                row.get::<_, i64>(0)?,
+                row.get::<_, Option<String>>(1)?,
+                row.get::<_, Option<String>>(2)?,
+                row.get::<_, Option<String>>(3)?,
+                row.get::<_, String>(4)?,
+                row.get::<_, String>(5)?,
+                row.get::<_, Option<String>>(6)?,
+                row.get::<_, Option<String>>(7)?,
+                row.get::<_, String>(8)?,
+                row.get::<_, String>(9)?,
+                row.get::<_, String>(10)?,
+                row.get::<_, i64>(11)?,
+            ))
+        })?
+        .collect::<std::result::Result<Vec<_>, _>>()?;
+    for (
+        sequence,
+        from_provider,
+        from_model,
+        from_variant,
+        to_provider,
+        to_model,
+        to_variant,
+        from_label,
+        to_label,
+        updated_sources_json,
+        injected_prompt,
+        created_at_ms,
+    ) in rows
+    {
+        conn.execute(
+            r#"INSERT INTO agent_model_switch
+                   (external_id, session_id, sequence, from_provider, from_model, from_variant,
+                    to_provider, to_model, to_variant, from_label, to_label,
+                    updated_sources_json, injected_prompt, created_at_ms)
+               VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14)"#,
+            params![
+                new_external_id("msw"),
+                new_session_id,
+                sequence,
+                from_provider,
+                from_model,
+                from_variant,
+                to_provider,
+                to_model,
+                to_variant,
+                from_label,
+                to_label,
+                updated_sources_json,
+                injected_prompt,
+                created_at_ms,
+            ],
+        )?;
+    }
+    Ok(())
+}

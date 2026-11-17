@@ -33,6 +33,8 @@ pub enum CardKind {
     },
     /// 模型切换提示条目：整块可点击展开/折叠详情与注入提示词。
     ModelSwitch { switch_id: String, expanded: bool },
+    /// 沙箱权限切换提示条目：整块可点击展开/折叠详情与注入提示词。
+    PermissionSwitch { switch_id: String, expanded: bool },
     /// 消息末尾的预览图片附件文件名（点击在系统文件管理器中定位该文件）。
     Attachment { path: String },
     /// 助手生成图片右侧的原图下载按钮（点击下载原图或定位已下载原图）。

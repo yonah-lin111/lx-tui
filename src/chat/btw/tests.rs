@@ -96,6 +96,7 @@ fn btw_context_stops_at_the_owning_qa() {
         cwd: &workspace,
         context_limit: None,
         mcp: &mcp,
+        sandbox: &crate::config::sandbox::SandboxSettings::default(),
     })
     .expect("context");
 
@@ -180,6 +181,7 @@ fn btw_context_renders_prior_side_turns_but_not_the_current_one() {
         cwd: &workspace,
         context_limit: None,
         mcp: &mcp,
+        sandbox: &crate::config::sandbox::SandboxSettings::default(),
     })
     .expect("context");
     let reference = text_of(&context.items()[0]);
@@ -188,5 +190,59 @@ fn btw_context_renders_prior_side_turns_but_not_the_current_one() {
     assert!(
         !reference.contains("second side question"),
         "current batch must stay the last user item, not duplicated in history"
+    );
+}
+
+#[test]
+fn btw_context_inherits_parent_sandbox_settings() {
+    let workspace = workspace("sandbox-btw");
+    let database = Database::open_in_memory().expect("db");
+    database.ensure_workspace(&workspace).expect("ws");
+    let qa = database
+        .begin_turn(&workspace, None, "main question", &model())
+        .expect("qa");
+    finish(&database, &workspace, &qa.assistant_message_id);
+    let accepted = database
+        .accept_btw_batch(
+            &workspace,
+            &qa.session_id,
+            &qa.user_message_id,
+            "side",
+            "btw-sb",
+            "what is my sandbox?",
+            &[BtwTargetSpec::default_assistant(model())],
+        )
+        .expect("accept");
+    let start = database
+        .start_btw_recipient(&workspace, &accepted.recipients[0].id)
+        .expect("start")
+        .expect("claim");
+    let mcp = crate::mcp::McpToolSnapshot::default();
+    let ro = crate::config::sandbox::SandboxSettings {
+        mode: crate::config::sandbox::SandboxMode::ReadOnly,
+        ..Default::default()
+    };
+    let context = assemble_btw_context(BtwContextInput {
+        database: &database,
+        workspace: &workspace,
+        parent_session_id: &qa.session_id,
+        qa_anchor_id: &qa.user_message_id,
+        child_session_id: &start.child_session_id,
+        current_user_message_id: &start.user_message_id,
+        question: "what is my sandbox?",
+        answerer_label: "lx",
+        references: &[],
+        model: &model(),
+        variant_params: None,
+        cwd: &workspace,
+        context_limit: None,
+        mcp: &mcp,
+        sandbox: &ro,
+    })
+    .expect("context");
+    let system_prompt = context.system_prompt_text().expect("system prompt");
+    assert!(
+        system_prompt.contains(r#"<sandbox mode="read-only""#),
+        "btw 环境快照应继承主会话沙箱模式: {system_prompt}"
     );
 }

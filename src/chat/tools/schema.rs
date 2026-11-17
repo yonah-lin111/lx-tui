@@ -92,7 +92,7 @@ static TOOLS: [ToolSpec; 18] = [
     ToolSpec::new(
         "exec_command",
         "Run a shell command in the workspace and return its output. The command runs \
-         directly without an approval prompt. `workdir` defaults to the frozen workspace \
+         inside the session sandbox; escalation requires user approval. `workdir` defaults to the frozen workspace \
          directory and relative paths in it resolve against that directory. `tty: true` \
          runs the command in a dedicated pseudo terminal (fixed 120x40) so that it can be \
          driven with `write_stdin`; the default is a plain pipe. The call returns as soon \
@@ -229,6 +229,32 @@ pub fn resource_tools() -> Vec<super::types::ToolDecl> {
             }),
         },
     ]
+}
+
+/// `escalation = never` 时从 `exec_command` 声明里移除提权参数。
+///
+/// 静态 `ToolSpec` 不感知配置；这里在生成 `ToolDecl` 之后裁剪，避免改 18 个 spec。
+pub fn trim_escalation_parameters(decls: &mut [super::types::ToolDecl]) {
+    for decl in decls {
+        if decl.name != "exec_command" {
+            continue;
+        }
+        let Some(properties) = decl
+            .parameters
+            .get_mut("properties")
+            .and_then(serde_json::Value::as_object_mut)
+        else {
+            continue;
+        };
+        for key in [
+            "sandbox_permissions",
+            "justification",
+            "prefix_rule",
+            "additional_permissions",
+        ] {
+            properties.remove(key);
+        }
+    }
 }
 
 /// 一轮的完整工具声明：内置（按 surface 白名单）→ MCP（按 server/tool 排序）→ resources。
@@ -491,6 +517,53 @@ fn exec_command_parameters() -> Value {
                 "minimum": 1,
                 "maximum": MAX_OUTPUT_TOKENS,
                 "description": format!("Approximate token budget for the returned output (max {MAX_OUTPUT_TOKENS}); the rest stays readable with `write_stdin`.")
+            },
+            "sandbox_permissions": {
+                "type": "string",
+                "enum": ["use_default", "with_additional_permissions", "require_escalated"],
+                "description": "Sandbox posture for this command. `require_escalated` asks the user to run it without the sandbox; `with_additional_permissions` asks for extra network or writable roots for this command only."
+            },
+            "justification": {
+                "type": "string",
+                "description": "Short user-facing reason for the escalation request; required for both request kinds and never shown back to the model."
+            },
+            "prefix_rule": {
+                "type": "array",
+                "items": {"type": "string"},
+                "description": "Optional command prefix (1-6 tokens) that may be approved for the rest of the session; only valid with `require_escalated`."
+            },
+            "additional_permissions": {
+                "type": "object",
+                "description": "Extra permissions for this command only; only valid with `with_additional_permissions`. Each list allows at most 16 entries and 4096 bytes; deny-only requests are applied without approval.",
+                "properties": {
+                    "network": {
+                        "type": "object",
+                        "properties": {"enabled": {"type": "boolean"}},
+                        "additionalProperties": false
+                    },
+                    "file_system": {
+                        "type": "object",
+                        "properties": {
+                            "read": {
+                                "type": "array",
+                                "items": {"type": "string"},
+                                "description": "Absolute paths to grant read access inside writable roots for this command."
+                            },
+                            "write": {
+                                "type": "array",
+                                "items": {"type": "string"},
+                                "description": "Absolute paths to grant write access for this command (max 16 entries)."
+                            },
+                            "deny": {
+                                "type": "array",
+                                "items": {"type": "string"},
+                                "description": "Absolute paths or globs to deny for this command; deny wins over read/write and needs no approval."
+                            }
+                        },
+                        "additionalProperties": false
+                    }
+                },
+                "additionalProperties": false
             }
         },
         "required": ["cmd"],

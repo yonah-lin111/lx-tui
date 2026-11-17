@@ -24,6 +24,7 @@ fn exited_result(command: &str, tty: bool) -> ProcessResult {
         wrote_input: false,
         terminate: false,
         chunk_id: "abcdef".to_string(),
+        sandbox_retry: None,
         wall_time_ms: 0,
     }
 }

@@ -29,7 +29,7 @@ fn make_test_png(w: u32, h: u32, seed: u8) -> Vec<u8> {
     bytes
 }
 
-fn setup_parent() -> (
+pub(super) fn setup_parent() -> (
     Fixture,
     AppState,
     RequestKey,
@@ -76,7 +76,7 @@ fn setup_parent() -> (
     (fixture, state, key, persistence, streams, parent)
 }
 
-async fn run_op(
+pub(super) async fn run_op(
     state: &mut AppState,
     streams: &mut ChatStreams,
     persistence: &Persistence,
@@ -90,7 +90,7 @@ async fn run_op(
 }
 
 /// 无额外选项的 `spawn_agent` 操作（选项字段默认继承父会话）。
-fn spawn_op(role: AgentRole, title: impl Into<String>, task: &str) -> SubagentOp {
+pub(super) fn spawn_op(role: AgentRole, title: impl Into<String>, task: &str) -> SubagentOp {
     spawn_op_with(role, title, task, None, None)
 }
 
@@ -178,7 +178,7 @@ fn spawned(outcome: &SubagentOutcome) -> (&str, &str) {
     (agent_id, nickname)
 }
 
-fn child_of(streams: &ChatStreams, agent_id: &str) -> String {
+pub(super) fn child_of(streams: &ChatStreams, agent_id: &str) -> String {
     streams
         .subagents
         .values()
@@ -188,7 +188,7 @@ fn child_of(streams: &ChatStreams, agent_id: &str) -> String {
         .clone()
 }
 
-fn finish(
+pub(super) fn finish(
     state: &mut AppState,
     streams: &mut ChatStreams,
     persistence: &Persistence,

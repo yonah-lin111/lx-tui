@@ -53,6 +53,7 @@ fn command_detail(session_id: u64) -> ToolDetailView {
         wrote_input: false,
         terminate: false,
         chunk_id: "abc123".into(),
+        sandbox_retry: None,
         wall_time_ms: 5,
     };
     ToolDetailView::from_process(&result)
@@ -681,6 +682,7 @@ fn interaction_cards_settle_when_the_process_exits() {
         wrote_input: true,
         terminate: false,
         chunk_id: "c1".into(),
+        sandbox_retry: None,
         wall_time_ms: 3,
     };
     {
@@ -739,6 +741,7 @@ fn interaction_detail(session_id: u64) -> ToolDetailView {
         wrote_input: true,
         terminate: false,
         chunk_id: "c".into(),
+        sandbox_retry: None,
         wall_time_ms: 5,
     };
     ToolDetailView::from_process(&result)

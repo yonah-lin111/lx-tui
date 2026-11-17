@@ -22,8 +22,9 @@ pub(crate) const fn spawn_agent_spec() -> ToolSpec {
          parent conversation before appending this task, or pass `fork_turns` (1-64) to clone \
          only the most recent completed turns. Built-in roles are `explorer` (read-only \
          `read`/`search`/`web_search`), `executor` (file and process tools, no `ask`, no plan \
-         tool), and `monitor` (command polling `read`/`search`/`exec_command`/`write_stdin`, \
-         leaf-only), plus any custom roles configured in settings or discovered from \
+         tool; shares the session sandbox and can request `exec_command` approval when \
+         `escalation=\"ask\"`), and `monitor` (command polling `read`/`search`/`exec_command`/`write_stdin`, \
+         leaf-only; shares the session sandbox), plus any custom roles configured in settings or discovered from \
          `.lx/agents/*.json` and `.agents/roles/*.json`. Optionally pass `model` \
          ('provider/model' or 'model'), `reasoning_effort`, and `max_tokens` to override the role \
          or parent model and cap the subagent's token budget. Always give it a short \

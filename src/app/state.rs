@@ -30,18 +30,19 @@ pub use interaction::*;
 pub use lx::LxInputMode;
 pub use lx::{
     AI_WEB_DEEPSEEK_SESSION_PREFIX, AI_WEB_GEMINI_SESSION_PREFIX, AI_WEB_GROK_SESSION_PREFIX,
-    AI_WEB_SESSION_PREFIX, AgentFilter, AgentsState, AiWebConfig, AiWebSite, AskAnsweredView,
-    AskDetailView, AskEditor, AskHit, AskState, AskWheelZone, AssistantStepView, CardSection,
-    CardTarget, ChatMessageView, ChatPartView, CommandView, CompactNoticeView, ConnectManageAction,
-    ConnectPanel, ConnectPromptStep, ConnectProviderEntry, ConnectStage, DeepseekThinkingMode,
-    DetailRewindExecution, DetailRewindKind, DetailRewindPlan, DetailTarget, DiffHunkView,
-    DiffLineView, FileChangeView, FileDiffDetailView, FileDiffView, ForkEntry, ForkPanel,
-    FrozenModel, GeminiThinkingLevel, GeminiWebModel, GeneratedImageOriginal, GrokWebModel,
-    HistoryEntry, HistoryPanel, InputHintLevel, InteractionAction, Lx, LxChat, LxCompact, LxEntry,
-    LxModelSwitch, MAX_RESIDENT_SUBAGENT_CHATS, McpCatalogEntry, McpDetailView, McpImageView,
-    McpPanel, McpPanelEntry, McpRuntimeState, McpServerState, ModelCandidate, ModelPicker,
-    ModelPickerStage, ModelSwitchNoticeView, ModelsSnapshot, OriginalImageDownloadState,
-    PanelWindow, PendingShell, PlanSnapshotView, PlanStepView, ProcessEntry,
+    AI_WEB_SESSION_PREFIX, AgentFilter, AgentsState, AiWebConfig, AiWebSite, ApprovalOption,
+    ApprovalState, AskAnsweredView, AskDetailView, AskEditor, AskHit, AskState, AskWheelZone,
+    AssistantStepView, CardSection, CardTarget, ChatMessageView, ChatPartView, CommandView,
+    CompactNoticeView, ConnectManageAction, ConnectPanel, ConnectPromptStep, ConnectProviderEntry,
+    ConnectStage, DeepseekThinkingMode, DetailRewindExecution, DetailRewindKind, DetailRewindPlan,
+    DetailTarget, DiffHunkView, DiffLineView, FileChangeView, FileDiffDetailView, FileDiffView,
+    ForkEntry, ForkPanel, FrozenModel, GeminiThinkingLevel, GeminiWebModel, GeneratedImageOriginal,
+    GrokWebModel, HistoryEntry, HistoryPanel, InputHintLevel, InteractionAction, Lx, LxChat,
+    LxCompact, LxEntry, LxModelSwitch, LxPermissionSwitch, MAX_RESIDENT_SUBAGENT_CHATS,
+    McpCatalogEntry, McpDetailView, McpImageView, McpPanel, McpPanelEntry, McpRuntimeState,
+    McpServerState, ModelCandidate, ModelPicker, ModelPickerStage, ModelSwitchNoticeView,
+    ModelsSnapshot, OriginalImageDownloadState, PanelWindow, PendingShell, PermissionPicker,
+    PermissionSwitchNoticeView, PlanSnapshotView, PlanStepView, ProcessEntry,
     ProcessInteractionView, ProcessStateView, QueuedSubmission, ReportAction, ReportPanel,
     RequestKey, RequestState, RewindAction, RewindExecution, RewindNoticeView, RewindPanel,
     RewindScope, RewindTarget, RewindTargetKind, SHELL_SLOT, SearchDetailView, SearchMatchView,
@@ -49,7 +50,7 @@ pub use lx::{
     StopAvailability, StopPanel, SubagentDetailView, SubagentMentionItem, SubagentReportView,
     SubagentRun, SubagentRunMentionEntry, TaskPage, TaskTab, ToolCallView, ToolDetailView,
     ToolStatus, ToolSummary, UserShellView, WebSearchDetailView, ai_web_remote_session,
-    is_ai_web_session,
+    is_ai_web_session, permission_candidates,
 };
 pub use pane::{
     AgentPromptRef, AgentTitleOverride, Direction, Pane, PaneKind, PaneView, PendingAgentLaunch,
@@ -270,6 +271,8 @@ pub struct AppState {
     pub last_connect_provider: Option<String>,
     /// 子 agent 角色与并发配置快照（`config/subagents.json`）：设置页保存后由事件层热更新。
     pub subagents_config: crate::config::subagents::SubagentsSection,
+    /// 全局沙箱配置快照（`config/sandbox.json`）：启动加载、设置页保存后热更新；`ui/` 只读它。
+    pub sandbox: crate::config::sandbox::SandboxSettings,
     /// 在途的新会话自动标题生成（session_id 集合；手动 `/rename`、`/resume` 改名或删除立即移除）。
     pub pending_session_titles: std::collections::HashSet<String>,
     /// 在途的 Prompt 模板块 `/title` 生成请求映射（按 `request_id` 索引）。
@@ -457,6 +460,7 @@ impl AppState {
             connect_env: BTreeMap::new(),
             last_connect_provider: None,
             subagents_config: crate::config::subagents::SubagentsSection::default(),
+            sandbox: crate::config::sandbox::SandboxSettings::default(),
             pending_session_titles: std::collections::HashSet::new(),
             pending_prompt_titles: std::collections::HashMap::new(),
             prompt_title_request_counter: 0,
@@ -691,6 +695,18 @@ impl AppState {
             }
         }
         None
+    }
+
+    /// 窗格当前生效的沙箱配置（用会话级 `/permission` 覆盖全局默认模式）。
+    pub fn effective_sandbox_for_pane(
+        &self,
+        id: PaneId,
+    ) -> crate::config::sandbox::SandboxSettings {
+        let mut settings = self.sandbox.clone();
+        if let Some(mode) = self.pane_anywhere(id).and_then(|pane| pane.lx.sandbox_mode) {
+            settings.mode = mode;
+        }
+        settings
     }
 
     /// 全部可运行 PTY 的窗格标识；prompt 编辑器不启动进程，不在其中。

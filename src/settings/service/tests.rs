@@ -1880,3 +1880,35 @@ async fn page_preserves_subtab_drafts_and_dirty_dots_across_views() {
     );
     service.shutdown();
 }
+
+#[tokio::test]
+async fn sandbox_view_assets_support_scroll_capabilities_reason_and_warnings() {
+    let (service, _events, _dir) = start("sandbox-assets").await;
+    let port = service.port();
+    let token = service.token().to_string();
+
+    let html = body(&request(port, &get(&format!("/?token={token}"))).await).to_string();
+    let css = body(&request(port, &get("/settings.css")).await).to_string();
+    let sandbox_js = body(&request(port, &get("/settings_sandbox.js")).await).to_string();
+
+    assert!(
+        css.contains("#view-general, #view-model, #view-sandbox { overflow-y: auto; }"),
+        "sandbox view must support vertical scrolling"
+    );
+    assert!(
+        html.contains("<code>rules/*.rules</code>") && !html.contains("`rules/*.rules`"),
+        "sandbox help text must use <code> tags instead of literal backticks"
+    );
+    assert!(
+        sandbox_js.contains("sandboxCapabilities.reason")
+            && sandbox_js.contains("payload.warning")
+            && sandbox_js.contains("textContent")
+            && !sandbox_js.contains(".innerHTML"),
+        "sandbox script must safely render capabilities.reason and load warnings via textContent"
+    );
+    assert!(
+        !sandbox_js.contains("https://") && !sandbox_js.contains("http://"),
+        "sandbox_js has no external resources"
+    );
+    service.shutdown();
+}

@@ -29,6 +29,7 @@ pub struct RewindView {
     pub notices: Vec<crate::db::chat::NoticeRecord>,
     pub checkpoints: Vec<crate::db::chat::CompactCheckpoint>,
     pub switches: Vec<crate::db::chat::ModelSwitchRecord>,
+    pub permission_switches: Vec<crate::db::chat::PermissionSwitchRecord>,
     pub recaps: Vec<crate::db::chat::MessageRecap>,
     pub revision: i64,
 }
@@ -485,7 +486,8 @@ impl Persistence {
             | Effect::RevealInFileManager { .. }
             | Effect::DownloadAiWebOriginalImage { .. }
             | Effect::CancelChatStream { .. }
-            | Effect::AnswerAsk { .. } => {
+            | Effect::AnswerAsk { .. }
+            | Effect::AnswerApproval { .. } => {
                 tracing::warn!("chat network effect reached persistence pump");
                 false
             }
@@ -575,6 +577,7 @@ fn is_network_effect(state: &AppState, effect: &Effect) -> bool {
             | Effect::DownloadAiWebOriginalImage { .. }
             | Effect::CancelChatStream { .. }
             | Effect::AnswerAsk { .. }
+            | Effect::AnswerApproval { .. }
             | Effect::Btw(_)
             // 进程效应与网络效应同一处置：持久化泵不碰，交给事件层。
             | Effect::ListSessionProcesses { .. }
@@ -592,6 +595,9 @@ fn is_network_effect(state: &AppState, effect: &Effect) -> bool {
             | Effect::StopAllSessionProcesses { .. }
             | Effect::PrepareRewind { .. }
             | Effect::ExecuteRewind(_)
+            | Effect::PrepareDetailRewind { .. }
+            | Effect::ExecuteDetailRewind(_)
+            | Effect::CompactDetail { .. }
             | Effect::ExecuteCompact(_)
             | Effect::RevertCompact(_)
             | Effect::RevertModelSwitch(_)
@@ -632,5 +638,7 @@ fn session_busy_feedback(state: &mut AppState, session_id: &str) {
 mod fork_tests;
 #[cfg(test)]
 mod resume_tests;
+#[cfg(test)]
+mod sandbox_tests;
 #[cfg(test)]
 mod tests;

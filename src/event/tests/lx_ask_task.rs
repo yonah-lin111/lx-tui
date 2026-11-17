@@ -1071,3 +1071,358 @@ fn wheel_on_task_footer_bottom_bar_does_not_scroll_hidden_main_input() {
         assert!(!dirty, "未产生有效滚动时不得置 dirty");
     }
 }
+
+#[test]
+fn approval_takes_priority_over_ask_for_clicks_hover_wheel_and_swallows_paste() {
+    use crate::app::state::{ApprovalState, CardTarget};
+    use crate::chat::sandbox::{
+        SandboxApprovalDecision, SandboxApprovalKind, SandboxApprovalRequest,
+    };
+
+    let config = Config::default();
+    let (mut state, pane) = busy_ask_state();
+    let geo = geometry(&state, &config, Rect::new(0, 0, 120, 30));
+    let inner = pane_inner(&geo, pane);
+    // 在批准入队前记录 ask 选项坐标（即使 ask 被审批隐藏，坐标仍代表下方原 ask 区域）。
+    let (ask_col, ask_row) = ask_option_point(&state, pane, &geo);
+    let key = match &state.pane_anywhere(pane).expect("pane").lx.chat.request {
+        crate::app::state::RequestState::Streaming { key, .. } => key.clone(),
+        _ => panic!("expected streaming"),
+    };
+    {
+        let target = state.pane_mut_anywhere(pane).expect("pane");
+        target.lx.chat.jump_bottom_hover = true;
+        target.lx.chat.hover = Some(CardTarget::Thinking {
+            message_index: 0,
+            step_index: 0,
+        });
+        target.lx.approvals.push_back(ApprovalState::new(
+            key,
+            "call-approval".into(),
+            SandboxApprovalRequest {
+                kind: SandboxApprovalKind::Escalation,
+                command: "cargo publish".into(),
+                cwd: "/ws".into(),
+                justification: "publish crate".into(),
+                prefix_rule: Some(vec!["cargo".into(), "publish".into()]),
+                additional: None,
+                denial_excerpt: None,
+                source: None,
+            },
+        ));
+    }
+
+    let mut sessions = HashMap::new();
+    let mut cache = ui::RenderCache::default();
+
+    // 1. 粘贴被审批面板吞掉：不修改草稿，也不写入 ask 手写缓冲。
+    let mut dirty = false;
+    handle_terminal_event(
+        TerminalEvent::Paste("ignored".into()),
+        &mut state,
+        &mut sessions,
+        &geo,
+        &config,
+        &mut cache,
+        &mut dirty,
+    );
+    assert!(!dirty);
+    let lx = &state.pane_anywhere(pane).expect("pane").lx;
+    assert_eq!(lx.input, "draft");
+    assert_eq!(lx.ask.as_ref().expect("ask").custom[0].text(), "");
+
+    let lay = ui::main_content::lx::approval_layout(inner, lx).expect("approval layout");
+
+    // 2. 悬停在审批面板非选项行（如标题/上下文行）：清掉下层 jump_bottom 与 fold 悬停，不穿透。
+    dirty = false;
+    handle_terminal_event(
+        mouse(MouseEventKind::Moved, lay.rect.x + 2, lay.rect.y + 1),
+        &mut state,
+        &mut sessions,
+        &geo,
+        &config,
+        &mut cache,
+        &mut dirty,
+    );
+    let lx = &state.pane_anywhere(pane).expect("pane").lx;
+    assert!(dirty);
+    assert!(!lx.chat.jump_bottom_hover);
+    assert!(lx.chat.hover.is_none());
+
+    // 3. 在审批面板内滚轮：吞掉，不滚动下层 ask 列表或输入区。
+    let ask_scroll_before = lx.ask.as_ref().expect("ask").list_scroll;
+    dirty = false;
+    handle_terminal_event(
+        mouse(MouseEventKind::ScrollDown, lay.rect.x + 2, lay.rect.y + 1),
+        &mut state,
+        &mut sessions,
+        &geo,
+        &config,
+        &mut cache,
+        &mut dirty,
+    );
+    assert!(!dirty);
+    assert_eq!(
+        state
+            .pane_anywhere(pane)
+            .expect("pane")
+            .lx
+            .ask
+            .as_ref()
+            .expect("ask")
+            .list_scroll,
+        ask_scroll_before
+    );
+
+    // 4. 点击审批面板非选项区（上下文行）：吞掉不提交审批、不触发 ask、不建选区。
+    handle_terminal_event(
+        mouse(
+            MouseEventKind::Down(MouseButton::Left),
+            lay.rect.x + 2,
+            lay.rect.y + 1,
+        ),
+        &mut state,
+        &mut sessions,
+        &geo,
+        &config,
+        &mut cache,
+        &mut dirty,
+    );
+    assert_eq!(
+        state.pane_anywhere(pane).expect("pane").lx.approvals.len(),
+        1
+    );
+    assert!(state.effects.is_empty());
+    assert!(state.lx_selection.is_none());
+
+    // 5. 点击 ask 原选项坐标：审批可见时 ask 被门控，绝不盲目提交 ask。
+    handle_terminal_event(
+        mouse(MouseEventKind::Down(MouseButton::Left), ask_col, ask_row),
+        &mut state,
+        &mut sessions,
+        &geo,
+        &config,
+        &mut cache,
+        &mut dirty,
+    );
+    assert!(
+        state.pane_anywhere(pane).expect("pane").lx.ask.is_some(),
+        "审批激活期间点击不得误触发 ask 提交"
+    );
+    assert!(
+        !state
+            .effects
+            .iter()
+            .any(|effect| matches!(effect, crate::app::effects::Effect::AnswerAsk { .. }))
+    );
+
+    // 6. 点击审批面板第一行候选项：提交裁决。
+    handle_terminal_event(
+        mouse(
+            MouseEventKind::Down(MouseButton::Left),
+            lay.content.x + 1,
+            lay.content.y,
+        ),
+        &mut state,
+        &mut sessions,
+        &geo,
+        &config,
+        &mut cache,
+        &mut dirty,
+    );
+    assert!(
+        state
+            .pane_anywhere(pane)
+            .expect("pane")
+            .lx
+            .approvals
+            .is_empty()
+    );
+    assert!(state.effects.iter().any(|effect| matches!(
+        effect,
+        crate::app::effects::Effect::AnswerApproval {
+            call_id,
+            decision: SandboxApprovalDecision::Once,
+            ..
+        } if call_id == "call-approval"
+    )));
+}
+
+#[test]
+fn approval_non_item_wheel_and_hover_do_not_penetrate_history_or_mention() {
+    use crate::app::state::{ApprovalState, RequestKey};
+    use crate::chat::sandbox::{SandboxApprovalKind, SandboxApprovalRequest};
+
+    let config = Config::default();
+    let mut state = AppState::demo();
+    seed_lx_mention(
+        &mut state,
+        "@ma",
+        vec![
+            crate::app::markdown::MentionEntry {
+                path: "main.rs".into(),
+                is_directory: false,
+            },
+            crate::app::markdown::MentionEntry {
+                path: "mod.rs".into(),
+                is_directory: false,
+            },
+        ],
+    );
+    let pane = state.active_tab().layout.focus();
+    {
+        let target = state.pane_mut_anywhere(pane).expect("pane");
+        target.view = PaneView::Lx;
+        for index in 0..20 {
+            target
+                .lx
+                .chat
+                .messages
+                .push(crate::app::state::ChatMessageView {
+                    sequence: index,
+                    id: format!("m-{index}"),
+                    role: "assistant".into(),
+                    status: "complete".into(),
+                    turn_index: index,
+                    kind: "chat".into(),
+                    shell: None,
+                    steps: vec![crate::app::state::AssistantStepView::Part {
+                        position: 0,
+                        part: crate::app::state::ChatPartView {
+                            kind: crate::chat::events::PartKind::Reasoning,
+                            content: format!("thought-{index:02}"),
+                            provider_metadata_json: None,
+                            started_at_ms: Some(0),
+                            ended_at_ms: Some(100),
+                            completed_at_ms: Some(100),
+                        },
+                    }],
+                    model_label: None,
+                    error_code: None,
+                    input_tokens: None,
+                    output_tokens: None,
+                    cache_read_tokens: None,
+                    duration_ms: None,
+                    reports: Vec::new(),
+                    attachments: Vec::new(),
+                });
+        }
+        target.lx.chat.follow_bottom = false;
+        target.lx.chat.history_scroll = 0;
+        target.lx.approvals.push_back(ApprovalState::new(
+            RequestKey {
+                pane,
+                session: "sess-h".into(),
+                generation: 1,
+            },
+            "call-h".into(),
+            SandboxApprovalRequest {
+                kind: SandboxApprovalKind::Rule,
+                command: "make build".into(),
+                cwd: "/ws".into(),
+                justification: "confirm make".into(),
+                prefix_rule: Some(vec!["make".into()]),
+                additional: None,
+                denial_excerpt: None,
+                source: None,
+            },
+        ));
+    }
+
+    let geo = geometry(&state, &config, Rect::new(0, 0, 120, 24));
+    let inner = pane_inner(&geo, pane);
+    let lay =
+        ui::main_content::lx::approval_layout(inner, &state.pane_anywhere(pane).expect("pane").lx)
+            .expect("approval layout");
+    let mut sessions = HashMap::new();
+    let mut cache = ui::RenderCache::default();
+    let mut dirty = false;
+
+    // 悬停审批面板顶栏/上下文行：绝不穿透点亮背后的历史 thinking 卡片。
+    handle_terminal_event(
+        mouse(MouseEventKind::Moved, lay.rect.x + 2, lay.rect.y + 1),
+        &mut state,
+        &mut sessions,
+        &geo,
+        &config,
+        &mut cache,
+        &mut dirty,
+    );
+    assert!(
+        state
+            .pane_anywhere(pane)
+            .expect("pane")
+            .lx
+            .chat
+            .hover
+            .is_none(),
+        "审批面板非条目区悬停不得穿透到历史折叠卡片"
+    );
+
+    // 滚轮滚动审批面板矩形：绝不滚动背后历史或输入区。
+    dirty = false;
+    handle_terminal_event(
+        mouse(MouseEventKind::ScrollDown, lay.rect.x + 2, lay.rect.y + 1),
+        &mut state,
+        &mut sessions,
+        &geo,
+        &config,
+        &mut cache,
+        &mut dirty,
+    );
+    assert!(!dirty);
+    assert_eq!(
+        state
+            .pane_anywhere(pane)
+            .expect("pane")
+            .lx
+            .chat
+            .history_scroll,
+        0
+    );
+}
+
+#[test]
+fn settings_sandbox_changed_updates_state_and_refreshes_open_permission_panel() {
+    use crate::app::state::SlashPanel;
+    use crate::app::state::lx::slash::PermissionPicker;
+    use crate::config::sandbox::{SandboxMode, SandboxSettings};
+    use crate::settings::service::SettingsEvent;
+    use std::collections::BTreeMap;
+
+    let mut state = AppState::demo();
+    let pane = state.active_tab().layout.focus();
+    state.pane_mut_anywhere(pane).expect("pane").lx.slash = Some(SlashPanel::Permission(Box::new(
+        PermissionPicker::new(SandboxMode::WorkspaceWrite, None),
+    )));
+
+    let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel();
+    let updated = SandboxSettings {
+        mode: SandboxMode::ReadOnly,
+        ..SandboxSettings::default()
+    };
+    tx.send(SettingsEvent::SandboxChanged(Box::new(updated.clone())))
+        .expect("send");
+
+    let persistence = crate::db::service::Persistence::without_database();
+    let mut config = Config::default();
+    let mut commands_reload = false;
+    let mut skills_reload = false;
+    let mut mcp_statuses = BTreeMap::new();
+    assert!(crate::event::inventory::drain_settings_events(
+        &mut rx,
+        &mut state,
+        &persistence,
+        &mut config,
+        &mut commands_reload,
+        &mut skills_reload,
+        &mut mcp_statuses,
+    ));
+    assert_eq!(state.sandbox, updated);
+    match state.pane_anywhere(pane).expect("pane").lx.slash.as_ref() {
+        Some(SlashPanel::Permission(picker)) => {
+            assert_eq!(picker.global, SandboxMode::ReadOnly);
+        }
+        other => panic!("expected open Permission panel, got {other:?}"),
+    }
+}

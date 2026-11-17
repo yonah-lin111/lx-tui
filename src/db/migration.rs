@@ -285,6 +285,16 @@ impl Database {
         if version < 30 {
             self.migrate_v30_report_checkpoint()?;
         }
+        // dev 已占用 v30；沙箱相关迁移顺延为 v31/v32，合并分支再用 v33 幂等补全。
+        if version < 31 {
+            self.migrate_v31_sandbox()?;
+        }
+        if version < 32 {
+            self.migrate_v32_permission_switch()?;
+        }
+        if version < 33 {
+            self.migrate_v33_merge_gate()?;
+        }
         Ok(())
     }
 
@@ -320,6 +330,76 @@ impl Database {
         }
         ensure_no_foreign_key_violation(&transaction)?;
         transaction.pragma_update(None, "user_version", 29)?;
+        transaction.commit()?;
+        Ok(())
+    }
+
+    /// v31：会话沙箱模式覆盖 + 会话级审批规则（只增列/表）。
+    fn migrate_v31_sandbox(&mut self) -> Result<()> {
+        let transaction = self.write_transaction()?;
+        if !column_exists(&transaction, "agent_session", "sandbox_mode")? {
+            transaction.execute_batch("ALTER TABLE agent_session ADD COLUMN sandbox_mode TEXT;")?;
+        }
+        transaction.execute_batch(
+            r#"CREATE TABLE IF NOT EXISTS agent_session_sandbox_rule (
+                   id INTEGER PRIMARY KEY AUTOINCREMENT,
+                   session_id TEXT NOT NULL REFERENCES agent_session(external_id) ON DELETE CASCADE,
+                   kind TEXT NOT NULL CHECK (kind IN ('exact', 'prefix')),
+                   prefix_json TEXT NOT NULL,
+                   created_at_ms INTEGER NOT NULL,
+                   UNIQUE(session_id, kind, prefix_json)
+               );
+               CREATE INDEX IF NOT EXISTS idx_agent_session_sandbox_rule_session
+                   ON agent_session_sandbox_rule(session_id);"#,
+        )?;
+        ensure_no_foreign_key_violation(&transaction)?;
+        transaction.pragma_update(None, "user_version", 31)?;
+        transaction.commit()?;
+        Ok(())
+    }
+
+    /// v32：会话中途沙箱权限切换记录表（只增表）。
+    fn migrate_v32_permission_switch(&mut self) -> Result<()> {
+        let transaction = self.write_transaction()?;
+        transaction.execute_batch(SCHEMA_V32_PERMISSION_SWITCH)?;
+        ensure_no_foreign_key_violation(&transaction)?;
+        transaction.pragma_update(None, "user_version", 32)?;
+        transaction.commit()?;
+        Ok(())
+    }
+
+    /// v33：合并兜底——补齐被独立分支标到 v31/v32、却缺少 dev v30 列的库。
+    ///
+    /// `v30` 与 `v31/v32` 曾分别在不同分支推进：先升到 v31/v32 的库会跳过
+    /// `version < 30` 检查，导致 `agent_compact_checkpoint.kind` 永久缺失。
+    /// 本迁移对三类结构全部做幂等检查，保证工作树库与 dev 库并轨后一致。
+    fn migrate_v33_merge_gate(&mut self) -> Result<()> {
+        let transaction = self.write_transaction()?;
+        if !column_exists(&transaction, "agent_compact_checkpoint", "kind")? {
+            transaction.execute_batch(
+                "ALTER TABLE agent_compact_checkpoint
+                     ADD COLUMN kind TEXT NOT NULL DEFAULT 'compact'
+                     CHECK (kind IN ('compact', 'report'));",
+            )?;
+        }
+        if !column_exists(&transaction, "agent_session", "sandbox_mode")? {
+            transaction.execute_batch("ALTER TABLE agent_session ADD COLUMN sandbox_mode TEXT;")?;
+        }
+        transaction.execute_batch(
+            r#"CREATE TABLE IF NOT EXISTS agent_session_sandbox_rule (
+                   id INTEGER PRIMARY KEY AUTOINCREMENT,
+                   session_id TEXT NOT NULL REFERENCES agent_session(external_id) ON DELETE CASCADE,
+                   kind TEXT NOT NULL CHECK (kind IN ('exact', 'prefix')),
+                   prefix_json TEXT NOT NULL,
+                   created_at_ms INTEGER NOT NULL,
+                   UNIQUE(session_id, kind, prefix_json)
+               );
+               CREATE INDEX IF NOT EXISTS idx_agent_session_sandbox_rule_session
+                   ON agent_session_sandbox_rule(session_id);"#,
+        )?;
+        transaction.execute_batch(SCHEMA_V32_PERMISSION_SWITCH)?;
+        ensure_no_foreign_key_violation(&transaction)?;
+        transaction.pragma_update(None, "user_version", 33)?;
         transaction.commit()?;
         Ok(())
     }

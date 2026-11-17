@@ -50,6 +50,7 @@ pub struct BtwContextInput<'a> {
     pub cwd: &'a Path,
     pub context_limit: Option<u64>,
     pub mcp: &'a crate::mcp::McpToolSnapshot,
+    pub sandbox: &'a crate::config::sandbox::SandboxSettings,
 }
 
 /// 装配 BTW 的只读上下文。
@@ -110,11 +111,12 @@ pub fn assemble_btw_context(input: BtwContextInput<'_>) -> Result<ModelContext, 
     reference.push_str("</btw-context>");
     let reference = trim_reference(reference);
 
-    let environment = crate::chat::prompt::environment_snapshot(
+    let environment = crate::chat::prompt::environment_snapshot_with_sandbox(
         &crate::platform::EnvironmentFacts::capture(),
         Some(input.cwd),
         Some(input.cwd),
         &[],
+        input.sandbox,
     );
     let system_prompt = crate::chat::prompt::btw_system_prompt(Some(&environment));
     let items = vec![

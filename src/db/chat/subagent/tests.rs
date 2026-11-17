@@ -383,6 +383,7 @@ fn report_message_and_turn_replay_in_one_turn() {
         skills: None,
         mcp: None,
         model_switches: &[],
+        permission_switches: &[],
         skill_blocks: &[],
         supports_image_input: true,
     });

@@ -117,6 +117,14 @@ pub fn apply_lx_input(state: &mut AppState, command: LxInput) {
         task_page::apply_task_page_input(state, pane_id, command);
         return;
     }
+    // 沙箱审批命令面板：拦截按键（↑/↓/Enter/Tab/Esc 与 y/r/a/n），普通字符不落入草稿。
+    if state
+        .pane_anywhere(pane_id)
+        .is_some_and(|pane| !pane.lx.approvals.is_empty())
+    {
+        super::chat::apply_approval_input(state, pane_id, command);
+        return;
+    }
     // 挂起的 ask 面板：整块接管按键（不回落到输入框，也不改草稿）。
     if state
         .pane_anywhere(pane_id)
@@ -745,6 +753,7 @@ pub fn set_lx_entry(state: &mut AppState, id: PaneId, entry: crate::app::state::
                 pane.lx.clear_agents();
                 pane.lx.compact.reset();
                 pane.lx.model_switch.reset();
+                pane.lx.reset_session_sandbox_state();
             }
             pane.lx.recap.reset();
             pane.lx.clear_rewind();
@@ -786,6 +795,7 @@ pub fn set_ai_web_site(state: &mut AppState, id: PaneId, site: crate::app::state
         pane.lx.clear_agents();
         pane.lx.compact.reset();
         pane.lx.model_switch.reset();
+        pane.lx.reset_session_sandbox_state();
         pane.lx.recap.reset();
         pane.lx.clear_rewind();
         pane.lx.ai_web_edit_user_index = None;

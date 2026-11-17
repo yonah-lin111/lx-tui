@@ -148,11 +148,12 @@ pub(crate) fn assemble_turn_request(
         skills,
         mcp,
         &[],
+        &[],
         skill_blocks,
     )
 }
 
-/// 由窗格消息视图装配本轮完整请求（含模型身份声明、AGENTS.md 指令段与模型切换记录）。
+/// 由窗格消息视图装配本轮完整请求（含模型身份声明、AGENTS.md 指令段与模型/权限切换记录）。
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn assemble_turn_request_with_context(
     messages: &[crate::app::state::ChatMessageView],
@@ -164,6 +165,7 @@ pub(crate) fn assemble_turn_request_with_context(
     skills: Option<&str>,
     mcp: Option<&str>,
     model_switches: &[crate::db::chat::ModelSwitchRecord],
+    permission_switches: &[crate::db::chat::PermissionSwitchRecord],
     skill_blocks: &[String],
 ) -> AssembledTurn {
     let (draft, draft_attachments) = latest_user_draft_and_attachments(messages);
@@ -188,6 +190,7 @@ pub(crate) fn assemble_turn_request_with_context(
         skills,
         mcp,
         model_switches,
+        permission_switches,
         skill_blocks,
         supports_image_input: frozen.supports_image_input,
     });

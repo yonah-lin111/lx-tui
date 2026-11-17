@@ -1,6 +1,7 @@
 //! lx 聊天状态机纯状态测试：首轮/续轮、重复 Enter、并发窗格、模型切换、
 //! 流终态、命令面板与过期结果过滤。
 
+mod approval;
 mod ask;
 mod compact;
 mod connect;
@@ -8,6 +9,7 @@ mod detail_commands;
 mod fork;
 mod history;
 mod model_switch;
+mod permission;
 mod process_cards;
 mod prompt_history;
 mod report_fill;

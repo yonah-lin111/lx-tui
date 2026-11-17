@@ -171,6 +171,8 @@ pub struct ProcessResult {
     ///
     /// 同一次调用内稳定，模型可用它把「这次读到的输出」与后续轮次区分开。
     pub chunk_id: String,
+    /// on-failure 重试标记（None = 未发生重试）。
+    pub sandbox_retry: Option<crate::chat::sandbox::SandboxRetry>,
     /// 本次调用在等待窗口内实际花掉的墙钟时间（毫秒）。
     ///
     /// 与 `yield_time_ms` 不同：后者是**允许等待的上限**，这是**真正等了多久**，
@@ -308,6 +310,10 @@ impl ProcessResult {
             "terminate": self.terminate,
             "chunk_id": self.chunk_id,
             "wall_time_seconds": self.wall_time_ms as f64 / 1_000.0,
+            "sandbox_retry": self.sandbox_retry.map(|retry| serde_json::json!({
+                "approved": retry.approved,
+                "for_session": retry.for_session,
+            })),
             "warning": self.background_job_warning(),
         })
     }

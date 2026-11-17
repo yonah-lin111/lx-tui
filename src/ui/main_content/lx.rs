@@ -12,6 +12,7 @@ use crate::app::state::{Lx, LxEntry};
 use crate::ui::widgets::scrollbar;
 use crate::ui::{style, text};
 
+mod approval;
 mod ask;
 mod input;
 mod mention;
@@ -19,6 +20,9 @@ mod panels;
 mod refer;
 mod selection;
 
+pub(crate) use approval::{
+    item_at as approval_item_at, layout as approval_layout, visible as approval_visible,
+};
 pub(crate) use ask::{ask_editor_cell_at, ask_editor_drag_cell_at, rect as ask_rect};
 pub(crate) use mention::{
     item_at as mention_item_at, layout as mention_layout, tab_at as mention_tab_at,
@@ -150,6 +154,7 @@ pub fn render(
     render_paste_panel(area, buf, lx);
     refer::render(area, buf, lx);
     render_slash_panel(area, buf, lx);
+    approval::render(area, buf, lx);
     // 本页 toast 最后画：盖住历史、输入框与上述所有浮层，但**只在窗格内容区内**。
     // 全局 toast 覆盖层不再承载 lx 反馈（见 `app::state::Lx::toast`）。
     let toast_box = lx
@@ -422,9 +427,10 @@ fn layout(area: Rect, lx: &Lx) -> Layout {
         out.task_list = Some(input);
     }
 
-    // md 格式面板：贴输入框上方（聊天栏与 pending 提示区之上）；后台任务页打开时或放不下则省略。
+    // md 格式面板：贴输入框上方（聊天栏与 pending 提示区之上）；后台任务页、审批打开或放不下则省略。
     let panel_base = stack_top(&out, input);
     if lx.task.is_none()
+        && !approval::visible(lx)
         && let Some(panel) = lx.panel.as_ref()
     {
         let rows = panel.items().len();
@@ -534,10 +540,10 @@ fn layout(area: Rect, lx: &Lx) -> Layout {
 
 /// 输入框上方堆叠区（pending 提示区 → 聊天栏 → 输入框）的最上沿。
 fn stack_top(lay: &Layout, input: Rect) -> u16 {
-    lay.pending.map_or_else(
-        || lay.chat_bar.map_or(input.y, |bar| bar.y),
-        |pending| pending.y,
-    )
+    if let Some(pending) = lay.pending {
+        return pending.y;
+    }
+    lay.chat_bar.map_or(input.y, |bar| bar.y)
 }
 
 /// 历史区底边：pending 提示区上沿 > 聊天栏上沿 > 输入框/ask/task 列表上沿。

@@ -925,3 +925,402 @@ fn detail_rewind_panels_render_scope_and_actions() {
         "{lines}"
     );
 }
+
+#[test]
+fn approval_command_panel_renders_context_options_and_hit_tests() {
+    use crate::app::state::{ApprovalState, RequestKey};
+    use crate::chat::sandbox::{
+        AdditionalPermissions, FileSystemRequest, SandboxApprovalKind, SandboxApprovalRequest,
+    };
+    use crate::ui::main_content::lx::{approval_item_at, command_panel_contains};
+
+    let area = Rect::new(0, 0, 100, 24);
+    let mut lx = Lx::new();
+    let pane = crate::tiling::PaneId::alloc();
+    lx.approvals.push_back(ApprovalState::new(
+        RequestKey {
+            pane,
+            session: "sess-1".into(),
+            generation: 1,
+        },
+        "call-1".into(),
+        SandboxApprovalRequest {
+            kind: SandboxApprovalKind::Escalation,
+            command: "cargo publish --dry-run".into(),
+            cwd: "/ws".into(),
+            justification: "needs network registry".into(),
+            prefix_rule: Some(vec!["cargo".into(), "publish".into()]),
+            additional: Some(AdditionalPermissions {
+                network: Some(true),
+                file_system: Some(FileSystemRequest {
+                    write: vec!["/tmp/out".into()],
+                    ..Default::default()
+                }),
+            }),
+            denial_excerpt: None,
+            source: Some("Turing [executor]".into()),
+        },
+    ));
+    // 同时打开 slash 时，审批面板必须压制 slash、独占地盘。
+    lx.slash = Some(SlashPanel::Permission(Box::new(
+        crate::app::state::PermissionPicker::new(
+            crate::config::sandbox::SandboxMode::WorkspaceWrite,
+            None,
+        ),
+    )));
+    let mut buf = Buffer::empty(area);
+    let _ = render(area, &mut buf, &lx, true, None, &mut PaneCache::default());
+    let lines = buffer_lines(&buf, area);
+    let joined = lines.join("\n");
+    for needle in [
+        text::LX_APPROVAL_ESCALATION,
+        text::LX_APPROVAL_SUBAGENT_TAG,
+        text::LX_APPROVAL_SUBAGENT_LABEL,
+        "Turing [executor]",
+        "Reason:",
+        "needs network registry",
+        "Command:",
+        "cargo publish --dry-run",
+        "Requested:",
+        text::LX_APPROVAL_OPT_ONCE,
+        text::LX_APPROVAL_OPT_SESSION,
+        text::LX_APPROVAL_OPT_DENY,
+        text::LX_APPROVAL_FOOTER_ESCALATION,
+    ] {
+        assert!(joined.contains(needle), "缺少 {needle}: {joined}");
+    }
+    let (sub_y, sub_x) = lines
+        .iter()
+        .enumerate()
+        .find_map(|(y, line)| line.find("Turing [executor]").map(|x| (y as u16, x as u16)))
+        .expect("subagent context row");
+    assert_eq!(
+        buf[(sub_x, sub_y)].fg,
+        ratatui::style::Color::Cyan,
+        "Subagent 来源值应以强调色突出"
+    );
+    assert!(!joined.contains("Read-only"), "slash 面板应被审批抑制");
+    assert!(slash_layout(area, &lx).is_none());
+
+    let (opt_y, opt_x) = lines
+        .iter()
+        .enumerate()
+        .find_map(|(y, line)| {
+            line.find(text::LX_APPROVAL_OPT_SESSION)
+                .map(|x| (y as u16, x as u16))
+        })
+        .expect("session option row");
+    assert_eq!(approval_item_at(area, &lx, opt_x, opt_y), Some(1));
+    assert!(command_panel_contains(area, &lx, opt_x, opt_y));
+}
+
+#[test]
+fn permission_panel_highlights_effective_marks_default_and_filters() {
+    use crate::config::sandbox::SandboxMode;
+
+    let area = Rect::new(0, 0, 90, 24);
+    let mut lx = Lx::new();
+    let mut picker = crate::app::state::PermissionPicker::new(
+        SandboxMode::WorkspaceWrite,
+        Some(SandboxMode::ReadOnly),
+    );
+    assert_eq!(picker.window.active, 0, "打开时高亮当前生效项 Read-only");
+    lx.slash = Some(SlashPanel::Permission(Box::new(picker.clone())));
+    let mut buf = Buffer::empty(area);
+    let _ = render(area, &mut buf, &lx, true, None, &mut PaneCache::default());
+    let joined = buffer_lines(&buf, area).join("\n");
+    assert!(joined.contains(text::LX_PERMISSION_PANEL_TITLE), "{joined}");
+    assert!(joined.contains("Read-only"), "{joined}");
+    assert!(joined.contains("Workspace"), "{joined}");
+    assert!(joined.contains("Full"), "{joined}");
+    assert!(joined.contains(text::SLASH_TAG_DEFAULT), "{joined}");
+    assert!(!joined.contains(text::SLASH_TAG_BUILTIN), "{joined}");
+
+    picker.refilter("zzz");
+    lx.slash = Some(SlashPanel::Permission(Box::new(picker)));
+    let mut buf2 = Buffer::empty(area);
+    let _ = render(area, &mut buf2, &lx, true, None, &mut PaneCache::default());
+    let empty_text = buffer_lines(&buf2, area).join("\n");
+    assert!(
+        empty_text.contains(text::LX_SLASH_NO_MATCHES),
+        "{empty_text}"
+    );
+}
+
+#[test]
+fn approval_renders_above_ask_when_both_are_pending() {
+    use crate::app::state::{ApprovalState, AskState, RequestKey};
+    use crate::chat::sandbox::{SandboxApprovalKind, SandboxApprovalRequest};
+    use crate::chat::tools::ask::{AskOption, AskQuestion};
+    use crate::ui::main_content::lx::{
+        approval_item_at, approval_layout, approval_visible, ask_rect,
+    };
+
+    let area = Rect::new(0, 0, 100, 24);
+    let mut lx = Lx::new();
+    let pane = crate::tiling::PaneId::alloc();
+    let key = RequestKey {
+        pane,
+        session: "sess-1".into(),
+        generation: 1,
+    };
+    lx.ask = Some(AskState::new(
+        key.clone(),
+        "call-ask".into(),
+        vec![AskQuestion {
+            id: "q1".into(),
+            header: "Mode".into(),
+            question: "Which target?".into(),
+            multi_select: false,
+            options: vec![AskOption {
+                label: "Local".into(),
+                description: String::new(),
+                preview: None,
+            }],
+        }],
+    ));
+    lx.approvals.push_back(ApprovalState::new(
+        key,
+        "call-app".into(),
+        SandboxApprovalRequest {
+            kind: SandboxApprovalKind::Escalation,
+            command: "touch ~/x".into(),
+            cwd: "/ws".into(),
+            justification: "needs home write".into(),
+            prefix_rule: None,
+            additional: None,
+            denial_excerpt: None,
+            source: Some("Turing [executor]".into()),
+        },
+    ));
+
+    assert!(approval_visible(&lx));
+    let ask_box = ask_rect(area, &lx).expect("ask rect");
+    let app_layout = approval_layout(area, &lx).expect("approval layout above ask");
+    assert_eq!(app_layout.rect.bottom(), ask_box.y);
+
+    let mut buf = Buffer::empty(area);
+    let _ = render(area, &mut buf, &lx, true, None, &mut PaneCache::default());
+    let lines = buffer_lines(&buf, area);
+    let joined = lines.join("\n");
+    assert!(joined.contains(text::LX_APPROVAL_ESCALATION), "{joined}");
+    assert!(joined.contains("Which target?"), "{joined}");
+    assert!(joined.contains("Local"), "{joined}");
+
+    let (opt_y, opt_x) = lines
+        .iter()
+        .enumerate()
+        .find_map(|(y, line)| {
+            line.find(text::LX_APPROVAL_OPT_ONCE)
+                .map(|x| (y as u16, x as u16))
+        })
+        .expect("approval option visible");
+    assert_eq!(approval_item_at(area, &lx, opt_x, opt_y), Some(0));
+}
+
+#[test]
+fn approval_suppresses_mention_refer_paste_and_markdown_panels() {
+    use crate::app::paste::{PasteCandidate, PasteCandidateKind};
+    use crate::app::state::{
+        ApprovalState, AssistantStepView, ChatMessageView, ChatPartView, RequestKey,
+    };
+    use crate::chat::events::PartKind;
+    use crate::chat::sandbox::{SandboxApprovalKind, SandboxApprovalRequest};
+    use crate::ui::main_content::lx::{
+        mention_item_at, mention_layout, mention_tab_at, paste_item_at, paste_layout,
+        refer_item_at, refer_layout,
+    };
+
+    let area = Rect::new(0, 0, 100, 24);
+    let pane = crate::tiling::PaneId::alloc();
+    let app_state = ApprovalState::new(
+        RequestKey {
+            pane,
+            session: "sess-1".into(),
+            generation: 1,
+        },
+        "call-1".into(),
+        SandboxApprovalRequest {
+            kind: SandboxApprovalKind::Escalation,
+            command: "echo hi".into(),
+            cwd: "/ws".into(),
+            justification: "need".into(),
+            prefix_rule: None,
+            additional: None,
+            denial_excerpt: None,
+            source: None,
+        },
+    );
+
+    // 1. Mention 面板在审批入队前可见，入队后全部几何、命中与绘制均被抑制。
+    let mut mention_state = mention_lx(vec![MentionEntry {
+        path: "src/main.rs".into(),
+        is_directory: false,
+    }]);
+    let m_lay = mention_layout(area, &mention_state).expect("mention armed");
+    mention_state.approvals.push_back(app_state.clone());
+    assert!(mention_layout(area, &mention_state).is_none());
+    assert!(mention_item_at(area, &mention_state, m_lay.content.x, m_lay.content.y).is_none());
+    assert!(mention_tab_at(area, &mention_state, m_lay.tabs[0].x, m_lay.tabs[0].y).is_none());
+    let mut m_buf = Buffer::empty(area);
+    let _ = render(
+        area,
+        &mut m_buf,
+        &mention_state,
+        true,
+        None,
+        &mut PaneCache::default(),
+    );
+    let m_joined = buffer_lines(&m_buf, area).join("\n");
+    assert!(
+        !m_joined.contains("src/main.rs"),
+        "mention 应被抑制: {m_joined}"
+    );
+
+    // 2. Markdown 块面板在审批入队前可见，入队后 layout.panel 与绘制均被抑制。
+    let mut md_lx = Lx::new();
+    md_lx.resize(80, 24);
+    md_lx.insert_char('#');
+    assert!(layout(area, &md_lx).panel.is_some(), "md block panel armed");
+    md_lx.approvals.push_back(app_state.clone());
+    assert!(layout(area, &md_lx).panel.is_none());
+    let mut md_buf = Buffer::empty(area);
+    let _ = render(
+        area,
+        &mut md_buf,
+        &md_lx,
+        true,
+        None,
+        &mut PaneCache::default(),
+    );
+    let md_joined = buffer_lines(&md_buf, area).join("\n");
+    assert!(
+        !md_joined.contains("Heading 1"),
+        "md 块面板应被抑制: {md_joined}"
+    );
+
+    // 3. 快捷引用面板在审批入队前可见，入队后全部几何、命中与绘制均被抑制。
+    let mut refer_lx = Lx::new();
+    refer_lx.resize(80, 24);
+    refer_lx.chat.messages.push(ChatMessageView {
+        sequence: 0,
+        id: "1".into(),
+        role: "user".into(),
+        status: "complete".into(),
+        turn_index: 0,
+        kind: "chat".into(),
+        shell: None,
+        steps: vec![AssistantStepView::Part {
+            position: 0,
+            part: ChatPartView {
+                kind: PartKind::Text,
+                content: "@src/main.rs".into(),
+                provider_metadata_json: None,
+                started_at_ms: None,
+                ended_at_ms: None,
+                completed_at_ms: None,
+            },
+        }],
+        model_label: None,
+        error_code: None,
+        input_tokens: None,
+        output_tokens: None,
+        cache_read_tokens: None,
+        duration_ms: None,
+        reports: Vec::new(),
+        attachments: Vec::new(),
+    });
+    refer_lx.insert_char('m');
+    refer_lx.insert_char('a');
+    let r_lay = refer_layout(area, &refer_lx).expect("refer panel armed");
+    refer_lx.approvals.push_back(app_state.clone());
+    assert!(refer_layout(area, &refer_lx).is_none());
+    assert!(refer_item_at(area, &refer_lx, r_lay.content.x, r_lay.content.y).is_none());
+
+    // 4. 粘贴面板在审批入队前可见，入队后全部几何、命中与绘制均被抑制。
+    let mut paste_lx = Lx::new();
+    paste_lx.paste_open(vec![PasteCandidate::external(
+        std::path::PathBuf::from("/tmp/file.txt"),
+        PasteCandidateKind::File,
+    )]);
+    let p_lay = paste_layout(area, &paste_lx).expect("paste panel armed");
+    paste_lx.approvals.push_back(app_state);
+    assert!(paste_layout(area, &paste_lx).is_none());
+    assert!(paste_item_at(area, &paste_lx, p_lay.content.x, p_lay.content.y).is_none());
+}
+
+#[test]
+fn approval_panel_shows_queue_count_and_preserves_subagent_tags_in_narrow_pane() {
+    use crate::app::state::{ApprovalState, RequestKey};
+    use crate::chat::sandbox::{SandboxApprovalKind, SandboxApprovalRequest};
+
+    let pane = crate::tiling::PaneId::alloc();
+    let req = |cmd: &str| SandboxApprovalRequest {
+        kind: SandboxApprovalKind::Rule,
+        command: cmd.into(),
+        cwd: "/ws".into(),
+        justification: "prompt rule".into(),
+        prefix_rule: Some(vec!["cargo".into()]),
+        additional: None,
+        denial_excerpt: None,
+        source: Some("Turing [executor]".into()),
+    };
+
+    let mut lx = Lx::new();
+    lx.approvals.push_back(ApprovalState::new(
+        RequestKey {
+            pane,
+            session: "s1".into(),
+            generation: 1,
+        },
+        "call-1".into(),
+        req("cargo publish"),
+    ));
+    lx.approvals.push_back(ApprovalState::new(
+        RequestKey {
+            pane,
+            session: "s2".into(),
+            generation: 1,
+        },
+        "call-2".into(),
+        req("cargo push"),
+    ));
+
+    let wide = Rect::new(0, 0, 80, 24);
+    let mut wide_buf = Buffer::empty(wide);
+    let _ = render(
+        wide,
+        &mut wide_buf,
+        &lx,
+        true,
+        None,
+        &mut PaneCache::default(),
+    );
+    let wide_text = buffer_lines(&wide_buf, wide).join("\n");
+    assert!(
+        wide_text.contains("[Subagent] +1 pending"),
+        "多条审批排队应展示 +1 pending: {wide_text}"
+    );
+
+    // 32 列窄窗格下（内容 panel 宽 28 列）：长标题与长昵称都不得挤没 `[Subagent]` 与 `[executor]`。
+    lx.approvals.pop_back();
+    let narrow = Rect::new(0, 0, 32, 24);
+    let mut narrow_buf = Buffer::empty(narrow);
+    let _ = render(
+        narrow,
+        &mut narrow_buf,
+        &lx,
+        true,
+        None,
+        &mut PaneCache::default(),
+    );
+    let narrow_text = buffer_lines(&narrow_buf, narrow).join("\n");
+    assert!(
+        narrow_text.contains(text::LX_APPROVAL_SUBAGENT_TAG),
+        "32 列窄窗格应完整保留 [Subagent]: {narrow_text}"
+    );
+    assert!(
+        narrow_text.contains("[executor]"),
+        "32 列窄窗格应完整保留 [executor]: {narrow_text}"
+    );
+}

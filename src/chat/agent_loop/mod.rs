@@ -22,7 +22,6 @@
 //! ```
 
 use std::future::Future;
-use std::path::Path;
 
 use tokio::sync::{oneshot, watch};
 
@@ -32,13 +31,16 @@ use crate::chat::events::{
     ChatDelta, ChatRequest, ModelStepStop, PartKind, StopReason, TOOL_ARGUMENTS_INVALID_CODE,
 };
 use crate::chat::tools::ask::{AskAnswers, AskQuestion};
-use crate::chat::tools::{self, ToolContext, ToolErrorCode, ToolExecutionResult, ToolFailure};
+use crate::chat::tools::{self, ToolErrorCode, ToolExecutionResult, ToolFailure};
 use crate::chat::transport::tools::{TOOL_INPUT_TRUNCATED_CODE, TOOL_PROTOCOL_ERROR_CODE};
 use crate::db::chat::{ToolCallTicket, Usage};
 
 mod auto_compact;
 mod context;
 mod executor;
+mod sandbox_decision;
+mod tool_executor;
+pub use tool_executor::{FileTools, ToolExecutor};
 mod tool_batch;
 
 #[cfg(test)]
@@ -131,6 +133,12 @@ pub enum AgentHostRequest {
         ticket: ToolCallTicket,
         outcome: ToolOutcome,
         reply: oneshot::Sender<Result<(), HostError>>,
+    },
+    /// 把沙箱提权申请交给 UI；回执丢失（窗格关闭）等价于取消。
+    ApproveSandbox {
+        call_id: String,
+        request: crate::chat::sandbox::SandboxApprovalRequest,
+        reply: oneshot::Sender<Result<crate::chat::sandbox::SandboxApprovalDecision, HostError>>,
     },
     /// 把提问交给 UI 并等待作答；回执携带用户答案（`id -> 答案数组`）。
     ///
@@ -324,86 +332,6 @@ pub trait AgentHost: Send {
 }
 
 /// 工具执行入口：生产实现走 `spawn_blocking`；测试可注入可控执行器。
-pub trait ToolExecutor: Send + Sync {
-    /// 执行一次调用（同步实现必须自行移出事件循环线程）。
-    fn execute(
-        &self,
-        cwd: &Path,
-        call: &ReadyToolCall,
-    ) -> impl Future<Output = ToolExecutionResult> + Send;
-
-    /// 带 BeginTool 票据的执行入口：生产执行器据此把 mutation 绑定到真实
-    /// session / message / call；默认实现忽略票据（测试执行器无需关心快照）。
-    fn execute_tracked(
-        &self,
-        cwd: &Path,
-        call: &ReadyToolCall,
-        _ticket: &ToolCallTicket,
-    ) -> impl Future<Output = ToolExecutionResult> + Send
-    where
-        Self: Sized,
-    {
-        self.execute(cwd, call)
-    }
-
-    /// 可取消的 MCP 调用；非 MCP 工具返回 None，由调用方走通用执行入口。
-    ///
-    /// Esc 取消必须直达 `notifications/cancelled`，不能只丢弃 future 让 server
-    /// 继续执行副作用。
-    fn execute_mcp_cancellable(
-        &self,
-        _cwd: &Path,
-        _call: &ReadyToolCall,
-        _cancel: watch::Receiver<bool>,
-    ) -> impl Future<Output = Option<ToolExecutionResult>> + Send
-    where
-        Self: Sized,
-    {
-        async { None }
-    }
-
-    /// 当前模型是否支持图片输入；测试执行器默认支持。
-    fn supports_image_input(&self) -> bool {
-        true
-    }
-}
-
-/// 生产执行器：文件工具是阻塞 IO，必须放入阻塞线程池。
-#[derive(Debug, Clone, Copy, Default)]
-pub struct FileTools;
-
-impl ToolExecutor for FileTools {
-    async fn execute(&self, cwd: &Path, call: &ReadyToolCall) -> ToolExecutionResult {
-        let context = ToolContext::new(cwd.to_path_buf());
-        let name = call.name.clone();
-        let arguments_json = call.arguments_json.clone();
-        let call_id = call.call_id.clone();
-        let worker_name = name.clone();
-        match tokio::task::spawn_blocking(move || {
-            tools::execute(&context, &worker_name, &arguments_json)
-        })
-        .await
-        {
-            Ok(result) => result,
-            Err(error) => {
-                // 只记 call_id/工具名/错误类别：不打印参数全文与文件内容。
-                tracing::warn!(
-                    target: "lx::agent",
-                    call_id = %call_id,
-                    name = %name,
-                    %error,
-                    "tool execution task failed"
-                );
-                ToolExecutionResult::Failed {
-                    code: ToolErrorCode::Io,
-                    message: TOOL_EXECUTION_ABORTED_CODE.to_string(),
-                    changes: Vec::new(),
-                }
-            }
-        }
-    }
-}
-
 /// 一轮的最终结局（映射到 `StopReason`：Complete / Cancelled / Failed）。
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum TurnOutcome {
@@ -751,9 +679,40 @@ where
             {
                 result
             } else {
-                executor
-                    .execute_tracked(context.cwd(), &call, &ticket)
-                    .await
+                let exec_policy = crate::chat::exec_policy::current_policy();
+                let (result, applied_override) = match sandbox_decision::override_for(
+                    &mut host,
+                    &executor,
+                    &call,
+                    context.cwd(),
+                    &exec_policy,
+                )
+                .await
+                {
+                    Ok(sandbox) => (
+                        executor
+                            .execute_tracked_sandboxed(
+                                context.cwd(),
+                                &call,
+                                &ticket,
+                                sandbox.clone(),
+                            )
+                            .await,
+                        Some(sandbox),
+                    ),
+                    Err(result) => (result, None),
+                };
+                // on-failure：沙箱拒绝后最多重试一次（design §8.5；已裸跑的命令不再二次询问）。
+                sandbox_decision::maybe_retry_on_denial(
+                    &mut host,
+                    &executor,
+                    &call,
+                    &ticket,
+                    context.cwd(),
+                    applied_override.as_ref(),
+                    result,
+                )
+                .await
             };
             // MCP 取消不是工具结果：按用户取消结算，不再采样。
             if result.error_code() == Some(ToolErrorCode::Cancelled) {

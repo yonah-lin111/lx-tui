@@ -66,6 +66,7 @@ pub(super) fn process_result(state: ProcessState) -> ToolExecutionResult {
         wrote_input: false,
         terminate: false,
         chunk_id: "0a1b2c".to_string(),
+        sandbox_retry: None,
         wall_time_ms: 420,
     }))
 }

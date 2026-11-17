@@ -164,6 +164,15 @@ fn target_row_range(
             {
                 return Some((entry.start, entry.end));
             }
+            history::SnapEntryKind::PermissionSwitch { last, .. }
+                if lx
+                    .permission_switch
+                    .switches
+                    .get(last)
+                    .is_some_and(|item| item.id == target_id) =>
+            {
+                return Some((entry.start, entry.end));
+            }
             _ => {}
         }
     }
@@ -734,6 +743,9 @@ fn target_of(kind: &history::CardKind) -> CardTarget {
             checkpoint_id: checkpoint_id.clone(),
         },
         history::CardKind::ModelSwitch { switch_id, .. } => CardTarget::ModelSwitch {
+            switch_id: switch_id.clone(),
+        },
+        history::CardKind::PermissionSwitch { switch_id, .. } => CardTarget::PermissionSwitch {
             switch_id: switch_id.clone(),
         },
         history::CardKind::Attachment { path } => CardTarget::Attachment { path: path.clone() },
