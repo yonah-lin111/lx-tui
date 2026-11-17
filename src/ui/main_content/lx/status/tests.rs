@@ -572,3 +572,50 @@ fn omitted_turns_notice_does_not_overwrite_context_or_cache() {
         "提示与上下文之间为空白间距，不得覆盖字段：{line}"
     );
 }
+
+#[test]
+fn omitted_turns_narrow_bar_keeps_model_name_and_never_blanks_or_overwrites() {
+    let mut st = status(Some("deepseek-chat"), Some("P"), None, None, false);
+    st.omitted_turns = Some(3);
+    let lx = lx_with_status(st);
+
+    // 窗格宽 18..=24 对应 bar.width = 16..=22（< 23），必须放弃右侧提示、优先显示模型名，
+    // 既不整行空白也不从行首覆写模型名。
+    for pane_width in [18u16, 19, 22, 24] {
+        let line = render_bar(&lx, pane_width);
+        assert!(
+            line.starts_with("deepseek"),
+            "窗格宽 {pane_width} 必须保留模型名且不被省略提示覆盖或清空: {line:?}"
+        );
+        assert!(
+            !line.contains("omitted"),
+            "窗格宽 {pane_width} 未足额预留时不得强行绘制省略提示: {line:?}"
+        );
+    }
+
+    // 窗格宽 25（inner.width == 23, margin == 0 -> bar.width == 23, 23 - 17 = 6 >= 6）：
+    // 模型名与省略提示同时存在且互不重叠。
+    let line_25 = render_bar(&lx, 25);
+    assert!(line_25.starts_with("deepse"), "pane_width=25: {line_25:?}");
+    assert!(
+        line_25.ends_with("omitted turns: 3"),
+        "pane_width=25 notice: {line_25:?}"
+    );
+    assert_eq!(&line_25[6..7], " ", "两者之间保留 GAP 空格: {line_25:?}");
+}
+
+#[test]
+fn wide_char_in_model_marks_continuation_cell_diff_skip() {
+    use ratatui::buffer::CellDiffOption;
+
+    let st = status(Some("中M"), None, None, None, false);
+    let lx = lx_with_status(st);
+    let bar = Rect::new(0, 0, 10, 1);
+    let mut buf = Buffer::empty(bar);
+    render(&mut buf, bar, &lx);
+    assert_eq!(buf[(0, 0)].symbol(), "中");
+    assert_eq!(buf[(0, 0)].diff_option, CellDiffOption::None);
+    assert_eq!(buf[(1, 0)].symbol(), " ");
+    assert_eq!(buf[(1, 0)].diff_option, CellDiffOption::Skip);
+    assert_eq!(buf[(2, 0)].symbol(), "M");
+}

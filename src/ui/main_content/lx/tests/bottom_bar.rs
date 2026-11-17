@@ -365,3 +365,119 @@ fn task_panel_list_and_btw_edit_render_footer_above_clean_pane_border() {
         expected_clean_bottom_border(pane_rect.width)
     );
 }
+
+#[test]
+fn tiny_height_with_history_and_task_or_ask_degrades_to_centered_wordmark() {
+    use crate::app::state::{AssistantStepView, ChatMessageView, ChatPartView, LxChat};
+
+    let tiny_pane = Rect::new(0, 0, 42, 6);
+    let tiny_inner = pane_inner_rect(tiny_pane);
+    assert_eq!(tiny_inner.height, 4);
+
+    let mut chat = LxChat::new();
+    chat.messages.push(ChatMessageView {
+        sequence: 0,
+        id: "u0".into(),
+        role: "user".into(),
+        status: "complete".into(),
+        turn_index: 0,
+        kind: "chat".into(),
+        shell: None,
+        steps: vec![AssistantStepView::Part {
+            position: 0,
+            part: ChatPartView {
+                kind: crate::chat::events::PartKind::Text,
+                content: "hello".into(),
+                provider_metadata_json: None,
+                started_at_ms: None,
+                ended_at_ms: None,
+                completed_at_ms: None,
+            },
+        }],
+        model_label: None,
+        error_code: None,
+        input_tokens: None,
+        output_tokens: None,
+        cache_read_tokens: None,
+        duration_ms: None,
+        reports: Vec::new(),
+        attachments: Vec::new(),
+    });
+
+    // 1. 有历史且 task 打开在内容高 4 行时：必须退化为居中 lx 字标，不得渲染出整块空白。
+    let mut lx = Lx::new();
+    lx.chat = chat;
+    lx.task = Some(TaskPage::default());
+    assert!(layout(tiny_inner, &lx).fallback);
+    assert!(history_rect(tiny_inner, &lx).is_none());
+    assert!(history_wheel_region(tiny_inner, &lx).is_none());
+    let (buf, _, _) = render_bordered_pane(tiny_pane, &lx);
+    let text = buffer_text(&buf);
+    assert!(
+        text.contains("lx"),
+        "高 4 含历史+task 必须显示居中字标而非空白：{text}"
+    );
+    assert_eq!(
+        row_string(&buf, tiny_pane, tiny_pane.bottom() - 1),
+        expected_clean_bottom_border(tiny_pane.width)
+    );
+
+    // 2. ask 与 task 同时存在在内容高 4 行时：同样一致退化（task 优先级更高，不放行 3 行无列表的残缺面板）。
+    lx.ask = Some(sample_ask());
+    assert!(
+        layout(tiny_inner, &lx).fallback,
+        "ask 与 task 共存高 4 时必须一致退化"
+    );
+    let (both_buf, _, _) = render_bordered_pane(tiny_pane, &lx);
+    assert!(buffer_text(&both_buf).contains("lx"));
+}
+
+#[test]
+fn agents_editing_renders_footer_above_clean_pane_border() {
+    let pane_rect = Rect::new(0, 0, 72, 16);
+    let mut lx = Lx::new();
+    lx.chat.status = sample_status();
+    lx.agents
+        .runs
+        .push(crate::app::state::SubagentRun::from_record(
+            &crate::db::chat::SubagentRecord {
+                agent_id: "ag-1".into(),
+                child_session_id: "child-1".into(),
+                parent_session_id: "parent".into(),
+                spawn_message_id: None,
+                role: crate::chat::agent::AgentRole::Explorer,
+                status: "completed".into(),
+                title: "Explore".into(),
+                created_at_ms: 0,
+                completed_at_ms: Some(1),
+                report_json: None,
+                report_delivered: true,
+                nickname: Some("Turing".into()),
+                agent_path: "/root/turing".into(),
+                model_provider: String::new(),
+                model_id: String::new(),
+                model_variant: None,
+            },
+        ));
+    lx.task = Some(TaskPage {
+        tab: TaskTab::Agents,
+        agent_edit: Some("ag-1".into()),
+        ..TaskPage::default()
+    });
+    lx.agents.ensure_composer("ag-1");
+
+    let (buf, inner, cursor) = render_bordered_pane(pane_rect, &lx);
+    let lay = layout(inner, &lx);
+    let composer = lay.task_list.expect("agents composer");
+    let bar = lay.bottom_bar.expect("agents bottom bar");
+    assert_eq!(composer.bottom(), bar.y);
+    assert!(cursor.is_some());
+    assert!(
+        row_string(&buf, inner, bar.y).contains(&text::LX_TASK_HINTS_AGENTS_EDIT[0].label()),
+        "Agents 编辑态底部提示在 bottom_bar"
+    );
+    assert_eq!(
+        row_string(&buf, pane_rect, pane_rect.bottom() - 1),
+        expected_clean_bottom_border(pane_rect.width)
+    );
+}

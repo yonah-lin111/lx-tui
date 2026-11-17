@@ -320,7 +320,8 @@ fn layout(area: Rect, lx: &Lx) -> Layout {
     let content_w = area.width.saturating_sub(margin.saturating_mul(2));
 
     let ask_active = lx.ask.is_some();
-    let min_height = if ask_active {
+    let hides_bottom_bar = ask_active && lx.task.is_none();
+    let min_height = if hides_bottom_bar {
         INPUT_MIN_BOX + 1
     } else {
         INPUT_MIN_BOX + BOTTOM_BAR_HEIGHT + 1
@@ -337,7 +338,7 @@ fn layout(area: Rect, lx: &Lx) -> Layout {
     // 面板打开时这一块改由 item 列表占用：高度固定（顶边框 + tab 行 + LIST_MAX），
     // 不随草稿行数变化——否则开关面板会让上方输出容器跳动。
     // `ask` 面板占用输入框与底栏位置并自带提示底栏（design §8.1）；后台任务页优先级更高。
-    let (bottom_anchor, bottom_bar) = if ask_active && lx.task.is_none() {
+    let (bottom_anchor, bottom_bar) = if hides_bottom_bar {
         (area.bottom(), None)
     } else {
         let y = area.bottom().saturating_sub(BOTTOM_BAR_HEIGHT);
@@ -598,6 +599,17 @@ struct BuiltPage {
 /// 构建整页网格；返回网格、聚焦时的输入光标相对坐标、置顶行与底部状态/提示栏矩形。
 fn build(area: Rect, lx: &Lx, focused: bool, cache: &mut PaneCache) -> BuiltPage {
     let lay = layout(area, lx);
+    if lay.fallback {
+        let mut grid = Grid::new(area);
+        let y = area.y + area.height.saturating_sub(1) / 2;
+        grid.put_centered(area.x, area.width, y, text::LX_TITLE, style::strong());
+        return BuiltPage {
+            grid,
+            cursor: None,
+            sticky: None,
+            bottom_bar: None,
+        };
+    }
     let bottom_bar = lay.bottom_bar;
     if history::has_history(lx) || lx.chat.loading_session {
         let (grid, cursor, sticky) = build_chat(area, lx, focused, &lay, cache);
@@ -609,16 +621,6 @@ fn build(area: Rect, lx: &Lx, focused: bool, cache: &mut PaneCache) -> BuiltPage
         };
     }
     let mut grid = Grid::new(area);
-    if lay.fallback {
-        let y = area.y + area.height.saturating_sub(1) / 2;
-        grid.put_centered(area.x, area.width, y, text::LX_TITLE, style::strong());
-        return BuiltPage {
-            grid,
-            cursor: None,
-            sticky: None,
-            bottom_bar: None,
-        };
-    }
 
     if let Some((ix, iy)) = lay.icon {
         brand::draw_icon(&mut grid, ix, iy, lx.entry);
@@ -783,12 +785,15 @@ fn build_chat(
     (grid, cursor, sticky)
 }
 
-/// 聊天历史区矩形（与输入框同宽对齐；无消息返回 None）；滚轮/命中/滚动条用。
+/// 聊天历史区矩形（与输入框同宽对齐；无消息或退化态返回 None）；滚轮/命中/滚动条用。
 pub fn history_rect(area: Rect, lx: &Lx) -> Option<Rect> {
     if !history::has_history(lx) {
         return None;
     }
     let lay = layout(area, lx);
+    if lay.fallback {
+        return None;
+    }
     let bottom_box = lay.input.or(lay.ask).or(lay.task_list);
     // pending 提示区 > 聊天栏 > 输入框上沿。
     let bottom = history_bottom(area, &lay);
@@ -813,6 +818,9 @@ pub fn history_wheel_region(area: Rect, lx: &Lx) -> Option<Rect> {
         return None;
     }
     let lay = layout(area, lx);
+    if lay.fallback {
+        return None;
+    }
     let bottom_box = lay.input.or(lay.ask);
     let (x, width) = match bottom_box {
         Some(input) => (input.x, input.width),

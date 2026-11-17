@@ -745,7 +745,7 @@ impl Hint {
 
 /// 面板 tab 行右端的关闭按钮（`[close esc]`）。
 pub const LX_TASK_CLOSE: Hint = hint("close", "esc");
-/// 进程 tab 的底边框键位提示（按顺序从左到右，窄窗格整项丢弃）。
+/// 进程 tab 的底部提示行键位提示（按顺序从左到右，窄窗格整项丢弃）。
 pub const LX_TASK_HINTS_PROCESSES: [Hint; 4] = [
     hint("select", "↑↓"),
     hint("stop", "^d"),
@@ -761,7 +761,7 @@ pub const LX_TASK_HINTS_AGENTS: [Hint; 6] = [
     hint("tabs", "←→"),
     hint("close", "esc"),
 ];
-/// Agents 编辑态的底边框键位提示。
+/// Agents 编辑态的底部提示行键位提示。
 pub const LX_TASK_HINTS_AGENTS_EDIT: [Hint; 5] = [
     hint("send", "↵"),
     hint("newline", "⇧↵"),
@@ -774,7 +774,7 @@ pub const LX_TASK_TAB_SEP: &str = " · ";
 /// 行尾的运行时长前缀（`running 1m 30s`）。
 pub const LX_TASK_AGE_PREFIX: &str = "running ";
 
-/// 输入框底边框左端的后台任务计数指标：`1 process` / `3 processes`。
+/// 底部状态行的后台任务计数指标：`1 process` / `3 processes`。
 ///
 /// 与 opencode 的 `N shell` 同一口径：数量为 0 时整段不渲染；单复数随数量变化。
 pub fn lx_task_count_label(count: usize) -> String {
@@ -787,12 +787,12 @@ pub fn lx_task_count_label(count: usize) -> String {
 pub const LX_TASK_COUNT_NOUN_ONE: &str = "process";
 pub const LX_TASK_COUNT_NOUN_MANY: &str = "processes";
 
-/// 输入框底边框左端的阻塞子 agent 指标：`1 blocked` / `3 blocked`。
+/// 底部状态行的阻塞子 agent 指标：`1 blocked` / `3 blocked`。
 pub fn lx_subagent_blocked_label(count: usize) -> String {
     format!("{count} blocked")
 }
 
-/// 输入框底边框左端的运行中子 agent 计数指标：`1 subagent` / `3 subagents`。
+/// 底部状态行的运行中子 agent 计数指标：`1 subagent` / `3 subagents`。
 pub fn lx_subagent_count_label(count: usize) -> String {
     if count == 1 {
         format!("1 {}", LX_SUBAGENT_COUNT_NOUN_ONE)

@@ -5,7 +5,7 @@
 //! 绝不把关键段截成半截。
 
 use ratatui::layout::Rect;
-use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
+use unicode_width::UnicodeWidthChar;
 
 use crate::app::state::{AgentsState, SubagentRun, TaskPage};
 use crate::ui::main_content::lx::history::{self, HistorySource, HistoryViewport};
@@ -245,7 +245,7 @@ pub(super) fn draw_edit(
     let scroll = editor.scroll().min(total.saturating_sub(visible));
     let dims = super::super::input::draw(grid, rect, editor, focused, scroll, visible);
     let marker = format!(" {} ", text::LX_TASK_AGENT_INPUT_MARK);
-    let marker_w = u16::try_from(marker.width()).unwrap_or(u16::MAX);
+    let marker_w = text_width(&marker);
     // 标记要么完整显示，要么整块不画；绝不把 "Subagent" 截成半截。
     if rect.width >= marker_w.saturating_add(2) {
         grid.put_clipped(
@@ -282,15 +282,17 @@ pub(crate) fn composer_rect(rect: Rect, lx: &crate::app::state::Lx) -> Option<Re
 
 /// 右侧目标胶囊：` <nickname> [role] · private|steer N|compacting `；左侧必须给 `Subagent` 标记留位。
 fn draw_agent_badge(grid: &mut Grid, rect: Rect, run: &SubagentRun, marker_w: u16, mode: &str) {
-    let name = run
-        .nickname
-        .as_deref()
-        .filter(|nickname| !nickname.is_empty())
-        .unwrap_or_else(|| run.role.as_str());
+    let raw_name = run.nickname.as_deref().unwrap_or("");
+    let clean_name = text::chat::single_line_label(raw_name);
+    let name = if clean_name.is_empty() {
+        run.role.as_str()
+    } else {
+        clean_name.as_ref()
+    };
     let with_mode = format!(" {name} [{}] · {mode} ", run.role.as_str());
     let base = format!(" {name} [{}] ", run.role.as_str());
     for label in [with_mode.as_str(), base.as_str()] {
-        let width = u16::try_from(label.width()).unwrap_or(u16::MAX);
+        let width = text_width(label);
         if rect.width <= width.saturating_add(marker_w).saturating_add(2) {
             continue;
         }
@@ -298,7 +300,7 @@ fn draw_agent_badge(grid: &mut Grid, rect: Rect, run: &SubagentRun, marker_w: u1
         if x <= rect.x.saturating_add(marker_w) {
             continue;
         }
-        grid.put(x, rect.y, label, style::btw_qa_badge());
+        grid.put_clipped(x, rect.y, label, style::btw_qa_badge(), width);
         return;
     }
 }

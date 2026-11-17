@@ -18,7 +18,7 @@
 //! 停止生成不再有按钮：流中按 `Esc`（单击待命提示、双击停止，对齐 opencode）。
 //! 各控件矩形由同一布局函数派生，左右边距与输入框对齐。
 
-use ratatui::buffer::Buffer;
+use ratatui::buffer::{Buffer, CellDiffOption};
 use ratatui::layout::Rect;
 use ratatui::style::Style;
 use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
@@ -257,8 +257,11 @@ pub(crate) fn render(buf: &mut Buffer, bar: Rect, lx: &Lx) {
         .as_ref()
         .map_or(0, |value| u16::try_from(value.width()).unwrap_or(u16::MAX));
     let usable = bar.width;
-    let notice_reserve = if notice_w > 0 && notice_w.saturating_add(GAP) <= usable {
-        notice_w.saturating_add(GAP)
+    let notice_need = notice_w.saturating_add(GAP);
+    // 预留提示后仍需留出最小状态宽度（6 列），否则放弃右侧提示优先保留模型名，
+    // 避免 17..=22 列宽度下触发 `layout` 退化导致整行空白。
+    let notice_reserve = if notice_w > 0 && usable.saturating_sub(notice_need) >= 6 {
+        notice_need
     } else {
         0
     };
@@ -348,15 +351,20 @@ pub(crate) fn render(buf: &mut Buffer, bar: Rect, lx: &Lx) {
     if let Some(cache) = cache_text(status).filter(|_| lay.cache.width > 0 && x < limit) {
         let value = format!("{}{cache}", text::LX_CHAT_MODEL_SEP);
         put(buf, x, y, &value, style::chat_provider(), limit);
+        x = x
+            .saturating_add(sep_w())
+            .saturating_add(u16::try_from(cache.width()).unwrap_or(u16::MAX));
     }
     let end = bar.right();
     let notice_x = end.saturating_sub(notice_w);
     let notice_left = if lay.activity.width > 0 {
         lay.activity.right().saturating_add(GAP)
     } else {
-        lay.label.x
+        x.saturating_add(GAP)
     };
-    if let Some(notice) = notice.filter(|_| notice_w > 0 && notice_x >= notice_left) {
+    if let Some(notice) =
+        notice.filter(|_| notice_reserve > 0 && notice_w > 0 && notice_x >= notice_left)
+    {
         put(buf, notice_x, y, &notice, style::muted(), end);
     }
 }
@@ -432,12 +440,14 @@ fn put_model(buf: &mut Buffer, mut x: u16, y: u16, model: &str, limit: u16) {
             cell.reset();
             cell.set_char(ch);
             cell.set_style(style::model_label_style(position, length));
+            cell.set_diff_option(CellDiffOption::None);
         }
         for offset in 1..width {
             if let Some(cell) = buf.cell_mut((x.saturating_add(offset), y)) {
                 cell.reset();
                 cell.set_char(' ');
                 cell.set_style(style::model_label_style(position, length));
+                cell.set_diff_option(CellDiffOption::Skip);
             }
         }
         x = x.saturating_add(width);
@@ -458,12 +468,14 @@ fn put(buf: &mut Buffer, mut x: u16, y: u16, content: &str, style: Style, limit:
             cell.reset();
             cell.set_char(ch);
             cell.set_style(style);
+            cell.set_diff_option(CellDiffOption::None);
         }
         for offset in 1..width {
             if let Some(cell) = buf.cell_mut((x.saturating_add(offset), y)) {
                 cell.reset();
                 cell.set_char(' ');
                 cell.set_style(style);
+                cell.set_diff_option(CellDiffOption::Skip);
             }
         }
         x = x.saturating_add(width);

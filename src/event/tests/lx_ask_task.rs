@@ -1029,3 +1029,44 @@ fn task_agents_list_scrollbar_preserves_viewport_across_refresh_and_selection() 
         "后台刷新与点选条目保持当前滚动视口"
     );
 }
+
+#[test]
+fn wheel_on_task_footer_bottom_bar_does_not_scroll_hidden_main_input() {
+    use crate::app::state::{PaneView, TaskPage};
+
+    let config = Config::default();
+    let mut state = AppState::demo();
+    let geo = geometry(&state, &config, Rect::new(0, 0, 80, 20));
+    let pane = state.active_tab().layout.focus();
+    let inner = pane_inner(&geo, pane);
+    {
+        let target = state.pane_mut_anywhere(pane).expect("pane");
+        target.view = PaneView::Lx;
+        target.lx.resize(40, 4);
+        target
+            .lx
+            .insert_str("r1\nr2\nr3\nr4\nr5\nr6\nr7\nr8\nr9\nr10");
+        assert!(target.lx.scroll() > 0, "主输入框溢出时应处于非零滚动位置");
+        target.lx.task = Some(TaskPage::default());
+    }
+    let before_scroll = state.pane_anywhere(pane).expect("pane").lx.scroll();
+    let bottom_bar_row = inner.bottom() - 1;
+    let mut sessions = HashMap::new();
+    let mut cache = ui::RenderCache::default();
+    let mut dirty = false;
+    handle_terminal_event(
+        mouse(MouseEventKind::ScrollUp, inner.x + 2, bottom_bar_row),
+        &mut state,
+        &mut sessions,
+        &geo,
+        &config,
+        &mut cache,
+        &mut dirty,
+    );
+    assert_eq!(
+        state.pane_anywhere(pane).expect("pane").lx.scroll(),
+        before_scroll,
+        "任务面板打开时在 bottom_bar 行滚轮不得穿透滚动隐藏的主输入框"
+    );
+    assert!(!dirty, "未产生有效滚动时不得置 dirty");
+}

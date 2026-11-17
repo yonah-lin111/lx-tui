@@ -766,7 +766,7 @@ pub fn set_lx_entry(state: &mut AppState, id: PaneId, entry: crate::app::state::
     super::chat::refresh_lx_status(state, id);
 }
 
-/// 切换 AI Web 目标站点；切换站点时停止在途流、清空跨站点残留会话与编辑态，并更新底边框状态行。
+/// 切换 AI Web 目标站点；切换站点时停止在途流、清空跨站点残留会话与编辑态，并更新底部状态行。
 pub fn set_ai_web_site(state: &mut AppState, id: PaneId, site: crate::app::state::AiWebSite) {
     let changed = state
         .pane_anywhere(id)

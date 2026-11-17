@@ -266,6 +266,24 @@ pub(crate) fn resolve_task_btw_visible(
     let mut changed = false;
     for (pane, rect) in rects {
         let inner = crate::tiling::pane_inner_rect(*rect);
+        // 即使高度极矮导致 `task_output_inner` 为 None（5..=6 行），只要编辑态 composer 仍可见，
+        // 也要同步软换行宽度与可视行数，避免缩窄/缩矮后光标与视口脱节。
+        let composer = state
+            .pane_anywhere(*pane)
+            .filter(|target| {
+                target.view == crate::app::state::PaneView::Lx && target.lx.is_btw_tab()
+            })
+            .and_then(|target| {
+                crate::ui::main_content::lx::task_btw_composer_rect(inner, &target.lx)
+            });
+        if let Some(composer) = composer
+            && let Some(target) = state.pane_mut_anywhere(*pane)
+            && let Some(thread) = target.lx.btw.active_thread_mut()
+        {
+            let width = composer.width.saturating_sub(3).max(1);
+            let rows = composer.height.saturating_sub(2).max(1);
+            thread.composer.editor_mut().resize(width, rows);
+        }
         let Some((needs_measure, visible, anchor)) = state
             .pane_anywhere(*pane)
             .filter(|target| target.view == crate::app::state::PaneView::Lx)
@@ -309,20 +327,9 @@ pub(crate) fn resolve_task_btw_visible(
                 )
             })
         });
-        // 只有编辑态才需要同步 composer 的软换行宽度/可见行。
-        let composer = state.pane_anywhere(*pane).and_then(|target| {
-            crate::ui::main_content::lx::task_btw_composer_rect(inner, &target.lx)
-        });
         let Some(target) = state.pane_mut_anywhere(*pane) else {
             continue;
         };
-        if let Some(composer) = composer {
-            let width = composer.width.saturating_sub(3).max(1);
-            let rows = composer.height.saturating_sub(2).max(1);
-            if let Some(thread) = target.lx.btw.active_thread_mut() {
-                thread.composer.editor_mut().resize(width, rows);
-            }
-        }
         let Some(thread) = target.lx.btw.active_thread_mut() else {
             continue;
         };
@@ -395,6 +402,30 @@ pub(crate) fn resolve_task_agents_visible(
     let mut changed = false;
     for (pane, rect) in rects {
         let inner = crate::tiling::pane_inner_rect(*rect);
+        // Agents composer 与 BTW 同源：即使极矮时 `task_output_inner` 为 None，只要 composer 可见
+        // 也要同步软换行宽度与行数，否则 `Lx` 会一直停在旧宽度/旧行数。
+        let composer = state
+            .pane_anywhere(*pane)
+            .filter(|target| target.view == crate::app::state::PaneView::Lx)
+            .filter(|target| {
+                target
+                    .lx
+                    .task
+                    .as_ref()
+                    .is_some_and(|page| page.tab == crate::app::state::TaskTab::Agents)
+            })
+            .and_then(|target| {
+                crate::ui::main_content::lx::task_agent_composer_rect(inner, &target.lx)
+            });
+        if let Some(composer) = composer
+            && let Some(target) = state.pane_mut_anywhere(*pane)
+            && let Some(agent_id) = target.lx.agent_edit_id().map(str::to_string)
+            && let Some(composer_state) = target.lx.agents.composer_mut(&agent_id)
+        {
+            let width = composer.width.saturating_sub(3).max(1);
+            let rows = composer.height.saturating_sub(2).max(1);
+            composer_state.editor_mut().resize(width, rows);
+        }
         let Some((needs_measure, visible, anchor)) = state
             .pane_anywhere(*pane)
             .filter(|target| target.view == crate::app::state::PaneView::Lx)
@@ -449,23 +480,9 @@ pub(crate) fn resolve_task_agents_visible(
                 )
             })
         });
-        // Agents composer 与 BTW 同源：编辑态必须用实际 composer 宽度/正文行数
-        // 驱动软换行与光标可见性，否则 `Lx` 会一直停在构造时的 `u16::MAX`。
-        let composer = state.pane_anywhere(*pane).and_then(|target| {
-            crate::ui::main_content::lx::task_agent_composer_rect(inner, &target.lx)
-        });
         let Some(target) = state.pane_mut_anywhere(*pane) else {
             continue;
         };
-        if let Some(composer) = composer {
-            let width = composer.width.saturating_sub(3).max(1);
-            let rows = composer.height.saturating_sub(2).max(1);
-            if let Some(agent_id) = target.lx.agent_edit_id().map(str::to_string)
-                && let Some(composer) = target.lx.agents.composer_mut(&agent_id)
-            {
-                composer.editor_mut().resize(width, rows);
-            }
-        }
         let Some(page) = target.lx.task.as_mut() else {
             continue;
         };

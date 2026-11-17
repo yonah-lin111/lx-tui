@@ -128,7 +128,7 @@ pub fn restore_selected_task_agent(
     );
 }
 
-/// 同步底边框的 blocked 计数（子 agent 状态变化后调用）。
+/// 同步底部状态行的 blocked 计数（子 agent 状态变化后调用）。
 fn refresh_status(state: &mut AppState, pane: PaneId) -> bool {
     let Some(target) = state.pane_mut_anywhere(pane) else {
         return false;

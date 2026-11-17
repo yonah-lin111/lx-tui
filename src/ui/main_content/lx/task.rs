@@ -24,7 +24,7 @@
 //! 列表封顶 [`LIST_MAX`] 行，与 opencode composer 的 `maxHeight={5}` 同值；
 //! 不额外加 padding / gap 空行——那是 Web 布局的呼吸感，在字符终端里会白吃对话空间。
 
-use ratatui::buffer::Buffer;
+use ratatui::buffer::{Buffer, CellDiffOption};
 use ratatui::layout::Rect;
 use ratatui::style::{Modifier, Style};
 use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
@@ -868,14 +868,15 @@ fn put_buf(buf: &mut Buffer, x: u16, y: u16, content: &str, style: Style, limit:
             cell.reset();
             cell.set_char(ch);
             cell.set_style(style);
+            cell.set_diff_option(CellDiffOption::None);
         }
         for offset in 1..width {
             if let Some(cell) = buf.cell_mut((cx.saturating_add(offset), y)) {
                 cell.reset();
-                // 写空格而不是网格私有的 `CONTINUATION`（`'\0'`）：这条路径直接
-                // 操作 `Buffer`，没有 blit 的 `Skip` 处理，NUL 会被原样送给终端。
+                // 写空格而不是网格私有的 `CONTINUATION`（`'\0'`），并标 Skip 防止 diff 擦掉宽字符右半格。
                 cell.set_char(' ');
                 cell.set_style(style);
+                cell.set_diff_option(CellDiffOption::Skip);
             }
         }
         cx = cx.saturating_add(width);

@@ -138,7 +138,7 @@ pub(super) fn task_loading(lx: &Lx) -> Option<TaskLoading> {
 /// loading 都该冻结），后者这一行只承载「回到底部」。
 ///
 /// **后台任务 / 子 agent 单独运行**时，只要主 agent 不是被用户显式停止，
-/// 就继续显示等待 loading；用户按 Esc 停止主 agent 后不再显示（它们仍在底边框计数）。
+/// 就继续显示等待 loading；用户按 Esc 停止主 agent 后不再显示（它们仍在底部状态行计数）。
 fn loading_visible(lx: &Lx) -> bool {
     if lx.ask.is_some() || lx.task.is_some() {
         return false;

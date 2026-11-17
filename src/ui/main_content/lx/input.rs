@@ -52,7 +52,7 @@ fn draw_session_title_badge(grid: &mut Grid, rect: ratatui::layout::Rect, lx: &L
     grid.put(x, rect.y, &badge, badge_style);
 }
 
-/// 绘制输入框并返回光标绝对坐标（`(row, column)`）；未聚焦时为 None。
+/// 绘制输入框并返回光标绝对坐标（`(row, column)`）；未聚焦或空间不足（宽 0 / 高 < 3）时为 None。
 pub(super) fn draw(
     grid: &mut Grid,
     rect: ratatui::layout::Rect,
@@ -61,15 +61,19 @@ pub(super) fn draw(
     scroll: usize,
     visible: usize,
 ) -> Option<(u16, u16)> {
+    if rect.width == 0 || rect.height < 3 {
+        return None;
+    }
     let text_top = rect.y + 1;
     let bottom_rule = rect.bottom() - 1;
+    let rule_style = style::lx_input_rule();
     for x in rect.x..rect.right() {
-        grid.set(x, rect.y, RULE, style::muted());
-        grid.set(x, bottom_rule, RULE, style::muted());
+        grid.set(x, rect.y, RULE, rule_style);
+        grid.set(x, bottom_rule, RULE, rule_style);
     }
     draw_session_title_badge(grid, rect, lx);
 
-    let content_x = rect.x + INPUT_PREFIX;
+    let content_x = rect.x.saturating_add(INPUT_PREFIX);
     let content_w = rect
         .width
         .saturating_sub(INPUT_PREFIX)
@@ -90,15 +94,18 @@ pub(super) fn draw(
         raw_line_starts.push(offset);
         offset += line.len() + 1;
     }
-    // 规则行右端的模式/排队提示：窄宽度先隐藏，绝不改变输入框高度。
+    // 规则行右端的模式/排队提示：窄宽度先丢弃队列后缀保留 `Shell mode`，再窄才整体隐藏，绝不改变输入框高度。
     let queued = lx.chat.queue.len();
-    let label = match (shell, queued) {
-        (true, 0) => Some(text::LX_INPUT_SHELL_MODE.to_string()),
-        (true, n) => Some(format!("{} · {n} queued", text::LX_INPUT_SHELL_MODE)),
-        (false, 0) => None,
-        (false, n) => Some(format!("{n} queued")),
+    let candidates: Vec<String> = match (shell, queued) {
+        (true, 0) => vec![text::LX_INPUT_SHELL_MODE.to_string()],
+        (true, n) => vec![
+            format!("{} · {n} queued", text::LX_INPUT_SHELL_MODE),
+            text::LX_INPUT_SHELL_MODE.to_string(),
+        ],
+        (false, 0) => Vec::new(),
+        (false, n) => vec![format!("{n} queued")],
     };
-    if let Some(label) = label {
+    for label in candidates {
         let width = u16::try_from(display_width(&label)).unwrap_or(u16::MAX);
         if rect.width > width.saturating_add(INPUT_PREFIX).saturating_add(2) {
             let x = rect.right().saturating_sub(width).saturating_sub(1);
@@ -107,15 +114,17 @@ pub(super) fn draw(
             } else {
                 style::muted()
             };
-            grid.put(x, bottom_rule, &label, label_style);
+            grid.put_clipped(x, bottom_rule, &label, label_style, width);
+            break;
         }
     }
     let (cursor_row, _) = lx.cursor_visual();
     let selection = lx.text_selection_range();
     let preview_sel = lx.preview_selection();
 
+    let max_rows = usize::from(rect.height.saturating_sub(2));
     let mut cursor = None;
-    for i in 0..visible {
+    for i in 0..visible.min(max_rows) {
         let Some(row_index) = scroll.checked_add(i) else {
             break;
         };
@@ -125,14 +134,21 @@ pub(super) fn draw(
         let y = text_top + i as u16;
         if row_index == 0 {
             if shell {
-                grid.put(
+                grid.put_clipped(
                     rect.x,
                     y,
                     text::LX_INPUT_SHELL_PROMPT,
                     style::shell_prompt(),
+                    rect.width,
                 );
             } else {
-                grid.put(rect.x, y, text::LX_INPUT_PROMPT, style::accent());
+                grid.put_clipped(
+                    rect.x,
+                    y,
+                    text::LX_INPUT_PROMPT,
+                    style::accent(),
+                    rect.width,
+                );
             }
         }
         paint_line(
@@ -147,7 +163,7 @@ pub(super) fn draw(
             selection,
             preview_sel,
         );
-        if row_index == cursor_row && focused {
+        if row_index == cursor_row && focused && content_w > 0 {
             let disp_cursor = proj.raw_to_display(lx.cursor).clamp(row.start, row.end);
             let col = content_x.saturating_add(
                 u16::try_from(display_width(&proj.text()[row.start..disp_cursor]))
@@ -157,7 +173,7 @@ pub(super) fn draw(
         }
     }
 
-    if lx.input.is_empty() {
+    if content_w > 0 && lx.input.is_empty() {
         let placeholder = text::truncate_to_width(
             if shell {
                 text::LX_INPUT_SHELL_PLACEHOLDER
@@ -166,8 +182,9 @@ pub(super) fn draw(
             },
             usize::from(content_w),
         );
-        grid.put(content_x, text_top, &placeholder, style::muted());
-    } else if !shell
+        grid.put_clipped(content_x, text_top, &placeholder, style::muted(), content_w);
+    } else if content_w > 0
+        && !shell
         && scroll == 0
         && rows.len() == 1
         && let Some(hint) = crate::app::state::lx::slash::active_argument_hint(&lx.input)
@@ -179,11 +196,12 @@ pub(super) fn draw(
         if offset_u16 < content_w {
             let avail = usize::from(content_w - offset_u16);
             let placeholder = text::truncate_to_width(hint, avail);
-            grid.put(
+            grid.put_clipped(
                 content_x.saturating_add(offset_u16),
                 text_top,
                 &placeholder,
                 style::muted(),
+                content_w - offset_u16,
             );
         }
     }
